@@ -1,0 +1,58 @@
+local constants = {}
+
+constants.roles = {
+  MASTER = "MASTER",
+  RT_NODE = "RT-NODE",
+  ENERGY_NODE = "ENERGY-NODE",
+  FUEL_NODE = "FUEL-NODE",
+  WATER_NODE = "WATER-NODE",
+  REPROCESSOR_NODE = "REPROCESSOR-NODE"
+}
+
+constants.message_types = {
+  HELLO = "HELLO",
+  HEARTBEAT = "HEARTBEAT",
+  STATUS = "STATUS",
+  COMMAND = "COMMAND",
+  ALERT = "ALERT",
+  ACK = "ACK",
+  ERROR = "ERROR"
+}
+
+constants.node_states = {
+  OFF = "OFF",
+  STARTUP = "STARTUP",
+  RUNNING = "RUNNING",
+  LIMITED = "LIMITED",
+  AUTONOM = "AUTONOM",
+  MANUAL = "MANUAL",
+  EMERGENCY = "EMERGENCY"
+}
+
+constants.status_levels = {
+  OK = "OK",
+  LIMITED = "LIMITED",
+  WARNING = "WARNING",
+  EMERGENCY = "EMERGENCY",
+  OFFLINE = "OFFLINE",
+  MANUAL = "MANUAL"
+}
+
+constants.command_targets = {
+  POWER_TARGET = "POWER_TARGET",
+  STEAM_TARGET = "STEAM_TARGET",
+  TURBINE_RPM = "TURBINE_RPM",
+  SCRAM = "SCRAM",
+  MODE = "MODE",
+  REQUEST_STATUS = "REQUEST_STATUS",
+  SET_RESERVE = "SET_RESERVE",
+  REQUEST_STARTUP_MODULE = "REQUEST_STARTUP_MODULE",
+  REQUEST_SHUTDOWN_MODULE = "REQUEST_SHUTDOWN_MODULE"
+}
+
+constants.channels = {
+  CONTROL = 6500,
+  STATUS = 6501
+}
+
+return constants
