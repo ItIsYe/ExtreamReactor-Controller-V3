@@ -1,0 +1,70 @@
+package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
+local constants = require("shared.constants")
+local protocol = require("core.protocol")
+local utils = require("core.utils")
+local network_lib = require("core.network")
+local safety = require("core.safety")
+local config = require("nodes.water.config")
+
+local network
+local tanks = {}
+local last_heartbeat = 0
+
+local function cache()
+  tanks = utils.cache_peripherals(config.loop_tanks)
+end
+
+local function hello()
+  network:broadcast(protocol.hello(network.id, network.role, { tanks = #config.loop_tanks }))
+end
+
+local function total_water()
+  local total = 0
+  local buffers = {}
+  for name, tank in pairs(tanks) do
+    local level = tank.getFluidAmount and tank.getFluidAmount() or 0
+    total = total + level
+    table.insert(buffers, { id = name, level = level })
+  end
+  return total, buffers
+end
+
+local function balance_loop()
+  local total, _ = total_water()
+  if total < config.target_volume then
+    utils.log("WATER", "Refill requested: " .. (config.target_volume - total))
+  elseif total > config.target_volume * 1.1 then
+    utils.log("WATER", "Bleed excess: " .. (total - config.target_volume))
+  end
+end
+
+local function send_status()
+  local total, buffers = total_water()
+  local payload = { total_water = total, buffers = buffers }
+  network:send(constants.channels.STATUS, protocol.status(network.id, network.role, payload))
+  last_heartbeat = os.epoch("utc")
+end
+
+local function main_loop()
+  while true do
+    balance_loop()
+    if os.epoch("utc") - last_heartbeat > config.heartbeat_interval * 1000 then
+      send_status()
+    end
+    local msg = network:receive(0.5)
+    if msg and msg.type == constants.message_types.HELLO then
+      -- acknowledgement only
+    end
+  end
+end
+
+local function init()
+  cache()
+  network = network_lib.init(config)
+  hello()
+  send_status()
+  utils.log("WATER", "Node ready: " .. network.id)
+end
+
+init()
+main_loop()
