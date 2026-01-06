@@ -1,39 +1,28 @@
+local ui = require("core.ui")
 local colorset = require("shared.colors")
 local constants = require("shared.constants")
 
-local function draw_banner(mon, title)
-  mon.setBackgroundColor(colorset.get("background"))
-  mon.setTextColor(colorset.get("accent"))
-  mon.clear()
-  mon.setCursorPos(1,1)
-  mon.write("[SYSTEM OVERVIEW] " .. title)
-end
+local cache = {}
 
 local function render_node(mon, index, node)
-  local status_color = colorset.get("offline")
-  if node.status == constants.status_levels.OK then status_color = colorset.get("ok")
-  elseif node.status == constants.status_levels.LIMITED then status_color = colorset.get("limited")
-  elseif node.status == constants.status_levels.WARNING then status_color = colorset.get("warning")
-  elseif node.status == constants.status_levels.EMERGENCY then status_color = colorset.get("emergency")
-  elseif node.status == constants.status_levels.MANUAL then status_color = colorset.get("manual") end
-
-  mon.setCursorPos(1, index + 1)
-  mon.setTextColor(colorset.get("text"))
-  mon.write(string.format("%s (%s)", node.id, node.role))
-  mon.setCursorPos(25, index + 1)
-  mon.setTextColor(status_color)
-  mon.write(node.status)
+  local status_color = colorset.get(node.status) or colorset.get("OFFLINE")
+  ui.text(mon, 1, index, string.format("%s (%s)", node.id, node.role), colorset.text, colorset.background)
+  ui.text(mon, 24, index, node.status or "OFFLINE", status_color, colorset.background)
 end
 
-local function draw(monitors, snapshot)
-  for _, mon in ipairs(monitors) do
-    draw_banner(mon, snapshot.power_target and ("Target: " .. tostring(snapshot.power_target) .. " RF/t") or "")
-    local i = 1
-    for _, node in ipairs(snapshot.nodes) do
-      render_node(mon, i, node)
-      i = i + 1
-    end
+local function render(mon, model)
+  local key = textutils.serialize(model)
+  if cache[mon] == key then return end
+  cache[mon] = key
+  ui.panel(mon, 1, 1, 50, 18, "SYSTEM OVERVIEW", colorset.get("accent"), colorset.get("background"))
+  ui.text(mon, 2, 2, "Power Target: " .. tostring(model.power_target or 0) .. " RF/t", colorset.get("text"), colorset.get("background"))
+  local alarm_line = "Alarms: " .. tostring(#(model.alarms or {}))
+  ui.text(mon, 2, 3, alarm_line, colorset.get("text"), colorset.get("background"))
+  local i = 0
+  for _, node in ipairs(model.nodes or {}) do
+    render_node(mon, 5 + i, node)
+    i = i + 1
   end
 end
 
-return { draw = draw }
+return { render = render }

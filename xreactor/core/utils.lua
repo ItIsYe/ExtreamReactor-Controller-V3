@@ -66,4 +66,9 @@ function utils.merge(a, b)
   return merged
 end
 
+function utils.trim(text)
+  if not text then return "" end
+  return text:match("^%s*(.-)%s*$")
+end
+
 return utils

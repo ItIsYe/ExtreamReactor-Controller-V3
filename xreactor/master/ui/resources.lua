@@ -1,36 +1,21 @@
+local ui = require("core.ui")
 local colorset = require("shared.colors")
+local cache = {}
 
-local function draw(monitors, data)
-  for _, mon in ipairs(monitors) do
-    mon.setBackgroundColor(colorset.get("background"))
-    mon.setTextColor(colorset.get("accent"))
-    mon.clear()
-    mon.setCursorPos(1,1)
-    mon.write("[FUEL & WATER]")
-    mon.setTextColor(colorset.get("text"))
-    mon.setCursorPos(1,3)
-    mon.write(string.format("Fuel Reserve: %s mB (min %s)", data.fuel.reserve or 0, data.fuel.minimum or 0))
-    mon.setCursorPos(1,4)
-    mon.write(string.format("Water Loop: %s mB", data.water.total or 0))
-    local row = 6
-    mon.setCursorPos(1, row)
-    mon.write("Fuel Sources:")
+local function render(mon, model)
+  local key = textutils.serialize(model)
+  if cache[mon] == key then return end
+  cache[mon] = key
+  ui.panel(mon, 1, 1, 60, 18, "RESOURCES", colorset.get("accent"), colorset.get("background"))
+  ui.text(mon, 2, 2, "Fuel Reserve: " .. tostring(model.fuel.reserve or 0), colorset.get("text"), colorset.get("background"))
+  ui.text(mon, 2, 3, "Minimum: " .. tostring(model.fuel.minimum or 0), colorset.get("text"), colorset.get("background"))
+  ui.text(mon, 2, 4, "Water Total: " .. tostring(model.water.total or 0), colorset.get("text"), colorset.get("background"))
+  ui.text(mon, 2, 5, "Water State: " .. tostring(model.water.state or "UNKNOWN"), colorset.get("text"), colorset.get("background"))
+  local row = 0
+  for name, buf in pairs(model.water.buffers or {}) do
+    ui.text(mon, 2, 7 + row, name .. ": " .. tostring(buf.level or 0), colorset.get("text"), colorset.get("background"))
     row = row + 1
-    for _, src in ipairs(data.fuel.sources) do
-      mon.setCursorPos(2, row)
-      mon.write(src.id .. " -> " .. src.amount .. " mB")
-      row = row + 1
-    end
-    row = row + 1
-    mon.setCursorPos(1, row)
-    mon.write("Water Buffers:")
-    row = row + 1
-    for _, buf in ipairs(data.water.buffers) do
-      mon.setCursorPos(2, row)
-      mon.write(buf.id .. " -> " .. buf.level .. " mB")
-      row = row + 1
-    end
   end
 end
 
-return { draw = draw }
+return { render = render }

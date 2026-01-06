@@ -1,14 +1,12 @@
-local term = term or {}
-
 local palette = {
   background = colors.black,
   text = colors.white,
-  ok = colors.green,
-  limited = colors.yellow,
-  warning = colors.orange,
-  emergency = colors.red,
-  offline = colors.gray,
-  manual = colors.blue,
+  OK = colors.green,
+  LIMITED = colors.yellow,
+  WARNING = colors.orange,
+  EMERGENCY = colors.red,
+  OFFLINE = colors.gray,
+  MANUAL = colors.blue,
   accent = colors.cyan
 }
 

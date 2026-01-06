@@ -1,33 +1,34 @@
+local ui = require("core.ui")
 local colorset = require("shared.colors")
-local constants = require("shared.constants")
+local cache = {}
 
-local function draw(monitors, data)
-  for _, mon in ipairs(monitors) do
-    mon.setBackgroundColor(colorset.get("background"))
-    mon.setTextColor(colorset.get("accent"))
-    mon.clear()
-    mon.setCursorPos(1,1)
-    mon.write("[RT BLOCK / STARTUP SEQUENCER]")
-    mon.setTextColor(colorset.get("text"))
-    mon.setCursorPos(1,3)
-    mon.write("Ramp: " .. data.ramp_profile)
-    mon.setCursorPos(1,4)
-    mon.write("Sequence: " .. data.sequence_state)
-    local row = 6
-    for _, rt in ipairs(data.rt_nodes) do
-      mon.setCursorPos(1, row)
-      mon.write(rt.id)
-      mon.setCursorPos(15, row)
-      mon.setTextColor(colorset.get("text"))
-      mon.write(rt.state)
-      mon.setCursorPos(30, row)
-      mon.write("Output: " .. tostring(rt.output or 0) .. " RF/t")
-      mon.setCursorPos(1, row+1)
-      mon.setTextColor(colorset.get("accent"))
-      mon.write("Turbine: " .. tostring(rt.turbine_rpm or 0) .. " RPM | Steam: " .. tostring(rt.steam or 0))
-      row = row + 2
+local function render(mon, model)
+  local key = textutils.serialize(model)
+  if cache[mon] == key then return end
+  cache[mon] = key
+  ui.panel(mon, 1, 1, 60, 18, "RT DASHBOARD", colorset.get("accent"), colorset.get("background"))
+  ui.text(mon, 2, 2, "Ramp: " .. tostring(model.ramp_profile or "NORMAL"), colorset.get("text"), colorset.get("background"))
+  ui.text(mon, 2, 3, "Sequence: " .. tostring(model.sequence_state or "IDLE"), colorset.get("text"), colorset.get("background"))
+  local row = 0
+  for _, rt in ipairs(model.rt_nodes or {}) do
+    ui.text(mon, 2, 5 + row, rt.id .. " " .. tostring(rt.state), colorset.get("text"), colorset.get("background"))
+    local modules = rt.modules or {}
+    local sub = 1
+    for name, mod in pairs(modules) do
+      ui.text(mon, 4, 5 + row + sub, string.format("%s %s %.0f%%", name, mod.state or "OFF", (mod.progress or 0)*100), colorset.get("text"), colorset.get("background"))
+      sub = sub + 1
     end
+    row = row + sub + 1
+  end
+  if model.queue then
+    local qy = 16
+    ui.text(mon, 2, qy, "Queue:", colorset.get("text"), colorset.get("background"))
+    local qline = {}
+    for _, step in ipairs(model.queue) do
+      table.insert(qline, step.module_id or step.node_id)
+    end
+    ui.text(mon, 10, qy, table.concat(qline, ", "), colorset.get("text"), colorset.get("background"))
   end
 end
 
-return { draw = draw }
+return { render = render }
