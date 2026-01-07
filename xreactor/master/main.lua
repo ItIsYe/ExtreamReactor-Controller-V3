@@ -108,8 +108,11 @@ local function update_node(message)
   elseif message.type == constants.message_types.STATUS then
     nodes[id] = utils.merge(nodes[id], message.payload)
     nodes[id].status = message.payload.status or nodes[id].status
-    if nodes[id].state == constants.node_states.RUNNING then
-      sequencer:notify_stable(id)
+    if message.payload.modules and sequencer.active and sequencer.active.node_id == id then
+      local module = message.payload.modules[sequencer.active.module_id]
+      if module and module.state == "STABLE" then
+        sequencer:notify_stable(id, sequencer.active.module_id)
+      end
     end
   elseif message.type == constants.message_types.ACK then
     sequencer:notify_ack(id, message.payload and message.payload.module_id)

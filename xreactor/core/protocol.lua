@@ -34,8 +34,8 @@ function protocol.command(sender_id, role, target_node, command)
   return base_message(constants.message_types.COMMAND, sender_id, role, { target = target_node, command = command })
 end
 
-function protocol.ack(sender_id, role, command_id, detail)
-  return base_message(constants.message_types.ACK, sender_id, role, { command_id = command_id, detail = detail })
+function protocol.ack(sender_id, role, command_id, detail, module_id)
+  return base_message(constants.message_types.ACK, sender_id, role, { command_id = command_id, detail = detail, module_id = module_id })
 end
 
 function protocol.error(sender_id, role, message)

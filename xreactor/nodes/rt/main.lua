@@ -11,8 +11,17 @@ local network
 local peripherals = {}
 local targets = { power = 0, steam = 0, rpm = 0 }
 local current_state
+local modules = {}
+local active_startup = nil
+local startup_queue = {}
 local master_seen = os.epoch("utc")
 local last_heartbeat = 0
+
+local ramp_profiles = {
+  FAST = 4000,
+  NORMAL = 8000,
+  SLOW = 12000
+}
 
 local function cache()
   peripherals.reactors = utils.cache_peripherals(config.reactors)
@@ -22,8 +31,64 @@ local function cache()
   end
 end
 
+local function build_modules()
+  modules = {}
+  for i, name in ipairs(config.turbines) do
+    local id = "turbine:" .. i
+    modules[id] = { id = id, type = "turbine", state = "OFF", progress = 0, limits = {}, name = name, stable_since = nil }
+  end
+  for i, name in ipairs(config.reactors) do
+    local id = "reactor:" .. i
+    modules[id] = { id = id, type = "reactor", state = "OFF", progress = 0, limits = {}, name = name, stable_since = nil }
+  end
+end
+
+local function refresh_module_peripherals()
+  for _, module in pairs(modules) do
+    if module.type == "turbine" then
+      module.peripheral = peripherals.turbines[module.name]
+    else
+      module.peripheral = peripherals.reactors[module.name]
+    end
+  end
+end
+
+local function get_steam_amount()
+  local buffer = peripherals.steam_buffer
+  if not buffer then return nil end
+  if buffer.getAmount then
+    local ok, amount = pcall(buffer.getAmount)
+    if ok then return amount end
+  end
+  if buffer.getFluidAmount then
+    local ok, amount = pcall(buffer.getFluidAmount)
+    if ok then return amount end
+  end
+  if buffer.getStored then
+    local ok, amount = pcall(buffer.getStored)
+    if ok then return amount end
+  end
+  return nil
+end
+
+local function ramp_duration(profile)
+  return ramp_profiles[profile] or ramp_profiles.NORMAL
+end
+
 local function add_alarm(sender, severity, message)
   network:send(constants.channels.CONTROL, protocol.alert(sender, config.role, severity, message))
+end
+
+local function module_payload()
+  local snapshot = {}
+  for id, module in pairs(modules) do
+    snapshot[id] = {
+      state = module.state,
+      progress = module.progress,
+      limits = module.limits
+    }
+  end
+  return snapshot
 end
 
 local function broadcast_status(status_level)
@@ -33,7 +98,8 @@ local function broadcast_status(status_level)
     output = targets.power,
     turbine_rpm = targets.rpm,
     steam = targets.steam,
-    capabilities = { reactors = #config.reactors, turbines = #config.turbines }
+    capabilities = { reactors = #config.reactors, turbines = #config.turbines },
+    modules = module_payload()
   }
   network:send(constants.channels.STATUS, protocol.status(network.id, network.role, payload))
 end
@@ -53,32 +119,201 @@ local function scram()
   set_reactors_active(false)
 end
 
-local function adjust_reactors()
-  for _, reactor in pairs(peripherals.reactors) do
-    local temp = reactor.getCasingTemperature and reactor.getCasingTemperature() or 0
-    if temp > config.safety.max_temperature then
-      scram()
-      current_state:transition(constants.node_states.EMERGENCY)
-      return
+local function update_module_limits(module)
+  local limits = {}
+  if module.type == "turbine" then
+    local water = get_steam_amount()
+    if water and water < config.safety.reserve_steam then
+      table.insert(limits, "WATER")
     end
-    if reactor.setControlRodsLevels then
-      local level = 100 - math.min(100, targets.power / (#config.reactors * 10))
-      reactor.setControlRodsLevels(level)
+    local rpm = module.peripheral and module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
+    if targets.rpm > 0 and rpm > 0 and rpm < targets.rpm * 0.7 then
+      table.insert(limits, "RPM")
+    end
+  elseif module.type == "reactor" then
+    local water = get_steam_amount()
+    if water and water < config.safety.reserve_steam then
+      table.insert(limits, "WATER")
+    end
+    local temp = module.peripheral and module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
+    if temp > config.safety.max_temperature then
+      table.insert(limits, "TEMP")
+    end
+  end
+  module.limits = limits
+  return limits
+end
+
+local function adjust_reactors()
+  local active = 0
+  for _, module in pairs(modules) do
+    if module.type == "reactor" and module.peripheral and module.state ~= "OFF" and module.state ~= "ERROR" then
+      active = active + 1
+    end
+  end
+  for _, module in pairs(modules) do
+    if module.type == "reactor" and module.peripheral then
+      if module.state == "OFF" or module.state == "ERROR" then
+        if module.peripheral.setActive then module.peripheral.setActive(false) end
+      else
+        local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
+        if temp > config.safety.max_temperature then
+          scram()
+          module.state = "ERROR"
+          module.progress = 0
+          module.limits = { "TEMP" }
+          current_state:transition(constants.node_states.EMERGENCY)
+          return
+        end
+        if module.peripheral.setControlRodsLevels then
+          local level = 100 - math.min(100, targets.power / (math.max(1, active) * 10))
+          module.peripheral.setControlRodsLevels(level)
+        end
+      end
     end
   end
 end
 
 local function adjust_turbines()
-  for _, turbine in pairs(peripherals.turbines) do
-    if turbine.setInductorEngaged then turbine.setInductorEngaged(true) end
-    if turbine.setActive then turbine.setActive(true) end
-    local rpm = turbine.getRotorSpeed and turbine.getRotorSpeed() or 0
-    if turbine.setFlowRate then
-      local request = safety.safe_steam_request(targets.steam, 4000)
-      turbine.setFlowRate(request)
+  for _, module in pairs(modules) do
+    if module.type == "turbine" and module.peripheral then
+      if module.state == "OFF" or module.state == "ERROR" then
+        if module.peripheral.setActive then module.peripheral.setActive(false) end
+      else
+        if module.peripheral.setInductorEngaged then module.peripheral.setInductorEngaged(true) end
+        if module.peripheral.setActive then module.peripheral.setActive(true) end
+        local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
+        if module.peripheral.setFlowRate then
+          local request = safety.safe_steam_request(targets.steam, 4000)
+          module.peripheral.setFlowRate(request)
+        end
+        if rpm > targets.rpm * 1.1 and module.peripheral.setFlowRate then
+          module.peripheral.setFlowRate(targets.steam * 0.8)
+        end
+      end
     end
-    if rpm > targets.rpm * 1.1 then
-      turbine.setFlowRate(targets.steam * 0.8)
+  end
+end
+
+local function check_interlocks(module)
+  local limits = update_module_limits(module)
+  if module.type == "turbine" then
+    for _, limit in ipairs(limits) do
+      if limit == "WATER" then
+        return false, limits
+      end
+    end
+  elseif module.type == "reactor" then
+    for _, limit in ipairs(limits) do
+      if limit == "TEMP" or limit == "WATER" then
+        return false, limits
+      end
+    end
+  end
+  if not module.peripheral then
+    return false, limits
+  end
+  return true, limits
+end
+
+local function mark_stable(module, now)
+  module.state = "STABLE"
+  module.progress = 1
+  module.stable_since = now
+end
+
+local function start_module(module_id, module_type, ramp_profile)
+  local module = modules[module_id]
+  if not module or module.type ~= module_type then
+    return nil, "Unknown module"
+  end
+  if active_startup and active_startup ~= module_id then
+    return nil, "Startup busy"
+  end
+  if module.state == "STARTING" then
+    return module, "Starting"
+  end
+  if module.state == "STABLE" or module.state == "RUNNING" then
+    return module, "Already running"
+  end
+  module.state = "STARTING"
+  module.progress = 0
+  module.limits = {}
+  module.start_time = os.epoch("utc")
+  module.ramp_profile = ramp_profile or "NORMAL"
+  module.stable_since = nil
+  active_startup = module_id
+  return module, "Starting"
+end
+
+local function process_startup()
+  if not active_startup then return end
+  local module = modules[active_startup]
+  if not module then
+    active_startup = nil
+    return
+  end
+  local ok, limits = check_interlocks(module)
+  if not ok then
+    module.state = "ERROR"
+    module.progress = 0
+    module.limits = limits
+    active_startup = nil
+    add_alarm(network.id, "EMERGENCY", "Startup blocked for " .. module.id)
+    return
+  end
+  local now = os.epoch("utc")
+  local duration = ramp_duration(module.ramp_profile)
+  local progress = safety.clamp((now - module.start_time) / duration, 0, 1)
+  module.progress = progress
+  if module.type == "turbine" then
+    if module.peripheral.setActive then module.peripheral.setActive(true) end
+    if module.peripheral.setInductorEngaged then module.peripheral.setInductorEngaged(true) end
+    if module.peripheral.setFlowRate then
+      local request = safety.safe_steam_request(4000 * progress, 4000)
+      module.peripheral.setFlowRate(request)
+    end
+    local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
+    if progress >= 1 and rpm >= 1600 then
+      mark_stable(module, now)
+      active_startup = nil
+    end
+  elseif module.type == "reactor" then
+    if module.peripheral.setActive then module.peripheral.setActive(true) end
+    if module.peripheral.setControlRodsLevels then
+      local level = 100 - math.floor(progress * 100)
+      module.peripheral.setControlRodsLevels(level)
+    end
+    local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
+    if progress >= 1 and temp > 0 and temp < config.safety.max_temperature then
+      mark_stable(module, now)
+      active_startup = nil
+    end
+  end
+end
+
+local function update_module_states()
+  local now = os.epoch("utc")
+  for _, module in pairs(modules) do
+    local limits = update_module_limits(module)
+    if module.type == "reactor" and module.state ~= "OFF" then
+      for _, limit in ipairs(limits) do
+        if limit == "TEMP" then
+          module.state = "ERROR"
+          module.progress = 0
+          scram()
+        end
+      end
+    end
+    if module.state == "STABLE" and module.stable_since and (now - module.stable_since > 3000) then
+      if current_state.state() == constants.node_states.RUNNING then
+        module.state = "RUNNING"
+      end
+    end
+    if module.state == "RUNNING" and #module.limits > 0 then
+      module.state = "LIMITED"
+    elseif module.state == "LIMITED" and #module.limits == 0 then
+      module.state = "RUNNING"
     end
   end
 end
@@ -104,15 +339,30 @@ local states = {
   },
   [constants.node_states.STARTUP] = {
     on_enter = function()
-      set_reactors_active(true)
       targets.steam = 500
       targets.rpm = 900
+      startup_queue = {}
+      for i = 1, #config.turbines do
+        table.insert(startup_queue, "turbine:" .. i)
+      end
+      for i = 1, #config.reactors do
+        table.insert(startup_queue, "reactor:" .. i)
+      end
     end,
     on_tick = function()
+      if not active_startup and #startup_queue > 0 then
+        local next_id = table.remove(startup_queue, 1)
+        local module = modules[next_id]
+        if module then
+          start_module(module.id, module.type, "NORMAL")
+        end
+      end
       adjust_turbines()
       adjust_reactors()
       monitor_master()
-      current_state:transition(constants.node_states.RUNNING)
+      if not active_startup and #startup_queue == 0 then
+        current_state:transition(constants.node_states.RUNNING)
+      end
     end
   },
   [constants.node_states.RUNNING] = {
@@ -174,6 +424,16 @@ local function handle_command(message)
     if states[command.value] then
       current_state:transition(command.value)
     end
+  elseif command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
+    local value = command.value or {}
+    local module, detail = start_module(value.module_id, value.module_type, value.ramp_profile)
+    if not module then
+      add_alarm(network.id, "WARNING", "Startup rejected: " .. (detail or "unknown"))
+      network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, detail or "ack"))
+      return
+    end
+    network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, detail or "ack", module.id))
+    return
   elseif command.target == constants.command_targets.SCRAM then
     current_state:transition(constants.node_states.EMERGENCY)
   end
@@ -188,6 +448,9 @@ end
 
 local function tick_loop()
   while true do
+    refresh_module_peripherals()
+    process_startup()
+    update_module_states()
     current_state:tick()
     local message = network:receive(0.2)
     if message then
@@ -205,6 +468,8 @@ end
 
 local function init()
   cache()
+  build_modules()
+  refresh_module_peripherals()
   network = network_lib.init(config)
   current_state = machine.new(states, constants.node_states.OFF)
   hello()
