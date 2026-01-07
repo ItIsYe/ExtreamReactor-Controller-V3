@@ -83,9 +83,9 @@ function sequencer.new(network, ramp_profile)
     end
   end
 
-  function self.notify_stable(node_id, module_id)
+  function self.notify_stable(node_id, module_id, state)
     if self.active and self.active.node_id == node_id and self.active.module_id == module_id then
-      utils.log("SEQ", node_id .. " stable")
+      utils.log("SEQ", ("Startup step complete: %s (%s)"):format(module_id, state or "UNKNOWN"))
       self.active = nil
       self.state = states.idle
     end

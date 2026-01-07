@@ -108,10 +108,20 @@ local function update_node(message)
   elseif message.type == constants.message_types.STATUS then
     nodes[id] = utils.merge(nodes[id], message.payload)
     nodes[id].status = message.payload.status or nodes[id].status
-    if message.payload.modules and sequencer.active and sequencer.active.node_id == id then
-      local module = message.payload.modules[sequencer.active.module_id]
-      if module and module.state == "STABLE" then
-        sequencer:notify_stable(id, sequencer.active.module_id)
+    if sequencer.active and sequencer.active.node_id == id then
+      if message.payload.modules then
+        local module = message.payload.modules[sequencer.active.module_id]
+        if not module then
+          utils.log("SEQ", ("WARN: module %s missing from status, waiting"):format(sequencer.active.module_id))
+          return
+        end
+        if module.state == "STABLE" then
+          sequencer:notify_stable(id, sequencer.active.module_id, module.state)
+        else
+          utils.log("SEQ", ("Waiting for module %s, state=%s"):format(sequencer.active.module_id, module.state or "UNKNOWN"))
+        end
+      elseif nodes[id].state == constants.node_states.RUNNING then
+        sequencer:notify_stable(id, sequencer.active.module_id, nodes[id].state)
       end
     end
   elseif message.type == constants.message_types.ACK then
