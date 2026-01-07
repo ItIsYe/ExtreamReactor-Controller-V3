@@ -25,6 +25,8 @@ config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
 config.safety.min_water = config.safety.min_water or 0.2
+config.heartbeat_interval = config.heartbeat_interval or 2
+local hb = config.heartbeat_interval
 
 local network
 local peripherals = {}
@@ -338,7 +340,7 @@ local function update_module_states()
 end
 
 local function monitor_master()
-  if os.epoch("utc") - master_seen > config.heartbeat_interval * 5000 then
+  if os.epoch("utc") - master_seen > hb * 5000 then
     if current_state.state() ~= constants.node_states.AUTONOM then
       utils.log("RT", "Master timeout, entering AUTONOM")
       current_state:transition(constants.node_states.AUTONOM)
@@ -406,7 +408,7 @@ local states = {
     on_tick = function()
       adjust_reactors()
       adjust_turbines()
-      if os.epoch("utc") - master_seen < config.heartbeat_interval * 2000 then
+      if os.epoch("utc") - master_seen < hb * 2000 then
         current_state:transition(constants.node_states.RUNNING)
       end
     end
@@ -479,7 +481,7 @@ local function tick_loop()
         master_seen = os.epoch("utc")
       end
     end
-    if os.epoch("utc") - last_heartbeat > config.heartbeat_interval * 1000 then
+    if os.epoch("utc") - last_heartbeat > hb * 1000 then
       send_heartbeat()
     end
   end
