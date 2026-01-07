@@ -21,6 +21,10 @@ local function loadConfig()
 end
 
 local config = loadConfig()
+config.safety = config.safety or {}
+config.safety.max_temperature = config.safety.max_temperature or 2000
+config.safety.max_rpm = config.safety.max_rpm or 1800
+config.safety.min_water = config.safety.min_water or 0.2
 
 local network
 local peripherals = {}
