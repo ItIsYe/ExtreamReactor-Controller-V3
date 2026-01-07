@@ -83,6 +83,13 @@ local function read_config(path, defaults)
   end
   local content = file.readAll()
   file.close()
+  local loader = load(content, "config", "t", {})
+  if loader then
+    local ok, data = pcall(loader)
+    if ok and type(data) == "table" then
+      return data
+    end
+  end
   local ok, data = pcall(textutils.unserialize, content)
   if ok and type(data) == "table" then
     return data
@@ -96,7 +103,7 @@ local function write_config_file(path, tbl)
   if not file then
     error("Unable to write config at " .. path)
   end
-  file.write(textutils.serialize(tbl))
+  file.write("return " .. textutils.serialize(tbl))
   file.close()
 end
 
