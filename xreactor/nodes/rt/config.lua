@@ -1,15 +1,19 @@
-local constants = require("shared.constants")
-
 return {
-  role = constants.roles.RT_NODE,
-  wireless_modem = "right",
-  wired_modem = "left",
-  reactors = { "reactor_0" },
-  turbines = { "turbine_0" },
-  steam_buffer = "steam_tank",
-  heartbeat_interval = 3,
-  safety = {
-    max_temperature = 950,
-    reserve_steam = 1000
+  node_id = "RT-1",
+
+  reactors = {
+    "BigReactors-Reactor_6"
+  },
+
+  turbines = {
+    "BigReactors-Turbine_327",
+    "BigReactors-Turbine_426"
+  },
+
+  modem = "right",
+
+  channels = {
+    control = 6500,
+    status = 6501
   }
 }
