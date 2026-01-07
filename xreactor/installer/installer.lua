@@ -162,13 +162,39 @@ local function write_startup(role)
   file.close()
 end
 
-local function scan_peripherals()
-  local list = {}
-  for _, name in ipairs(peripheral.getNames()) do
-    table.insert(list, string.format("%s (%s)", name, peripheral.getType(name)))
+local function print_detected(label, items)
+  print(label .. ":")
+  if #items == 0 then
+    print(" - (none)")
+    return
   end
-  print("Peripherals detected:")
-  for _, line in ipairs(list) do print(" - " .. line) end
+  for _, name in ipairs(items) do
+    print(" - " .. name)
+  end
+end
+
+local function detect_rt_peripherals()
+  local reactors = {}
+  local turbines = {}
+  for _, name in ipairs(peripheral.getNames()) do
+    local peripheral_type = peripheral.getType(name)
+    if peripheral_type == "BigReactors-Reactor" then
+      table.insert(reactors, name)
+    elseif peripheral_type == "BigReactors-Turbine" then
+      table.insert(turbines, name)
+    end
+  end
+  print_detected("Detected Reactors", reactors)
+  print_detected("Detected Turbines", turbines)
+  return reactors, turbines
+end
+
+local function confirm(prompt_text, default)
+  local hint = default and "Y/n" or "y/N"
+  local input = prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
+  input = input:lower()
+  if input == "" then return default end
+  return input == "y" or input == "yes"
 end
 
 local function confirm(prompt_text, default)
@@ -218,13 +244,28 @@ local function main()
   if role == roles.MASTER then
     extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
   elseif role == roles.RT_NODE then
-    scan_peripherals()
-    local reactors = prompt("Reactor peripheral names (comma separated)", "")
-    local turbines = prompt("Turbine peripheral names (comma separated)", "")
-    extras.reactors = {}
-    extras.turbines = {}
-    for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
-    for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
+    local detected_reactors, detected_turbines = detect_rt_peripherals()
+    local use_detected = #detected_reactors > 0
+    if not use_detected then
+      print("Warning: No reactors detected. Switching to manual entry.")
+    else
+      use_detected = confirm("Use detected peripherals?", true)
+    end
+
+    if use_detected then
+      extras.reactors = detected_reactors
+      extras.turbines = detected_turbines
+      if #detected_turbines == 0 then
+        print("No turbines detected. Reactor-only setup will be used.")
+      end
+    else
+      local reactors = prompt("Reactor peripheral names (comma separated)", "")
+      local turbines = prompt("Turbine peripheral names (comma separated)", "")
+      extras.reactors = {}
+      extras.turbines = {}
+      for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
+      for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
+    end
   end
   write_config(role, wireless, wired, extras)
   write_startup(role)
