@@ -5,7 +5,26 @@ local utils = require("core.utils")
 local safety = require("core.safety")
 local network_lib = require("core.network")
 local machine = require("core.state_machine")
-local config = require("xreactor.nodes.rt.config")
+
+local function loadConfig()
+  local path = "/xreactor/nodes/rt/config.lua"
+  if not fs.exists(path) then
+    error("RT config.lua not found: " .. path)
+  end
+  local f = fs.open(path, "r")
+  local content = f.readAll()
+  f.close()
+
+  local fn, err = load(content, "rt_config", "t", {})
+  if not fn then error(err) end
+  return fn()
+end
+
+local config = loadConfig()
+config.safety = config.safety or {}
+config.safety.max_temperature = config.safety.max_temperature or 2000
+config.safety.max_rpm = config.safety.max_rpm or 1800
+config.safety.min_water = config.safety.min_water or 0.2
 
 local network
 local peripherals = {}
