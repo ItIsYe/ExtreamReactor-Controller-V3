@@ -3,26 +3,99 @@ local colorset = require("shared.colors")
 local constants = require("shared.constants")
 
 local cache = {}
+local button_cache = setmetatable({}, { __mode = "k" })
 
-local function render_node(mon, index, node)
-  local status_color = colorset.get(node.status) or colorset.get("OFFLINE")
-  ui.text(mon, 1, index, string.format("%s (%s)", node.id, node.role), colorset.text, colorset.background)
-  ui.text(mon, 24, index, node.status or "OFFLINE", status_color, colorset.background)
+local severity_rank = {
+  EMERGENCY = 1,
+  WARNING = 2,
+  LIMITED = 3,
+  OK = 4,
+  OFFLINE = 5
+}
+
+local function sort_alarms(alarms)
+  local sorted = {}
+  for _, alarm in ipairs(alarms or {}) do
+    table.insert(sorted, alarm)
+  end
+  table.sort(sorted, function(a, b)
+    local ar = severity_rank[a.severity] or 99
+    local br = severity_rank[b.severity] or 99
+    if ar == br then
+      return (a.timestamp or "") > (b.timestamp or "")
+    end
+    return ar < br
+  end)
+  return sorted
+end
+
+local function build_profile_buttons(mon, x, y, profiles, active, auto_enabled)
+  local buttons = {}
+  local cursor = x
+  ui.text(mon, cursor, y, "PROFILE:", colorset.get("text"), colorset.get("background"))
+  cursor = cursor + 9
+  for _, name in ipairs(profiles) do
+    local status = (active == name) and "OK" or "OFFLINE"
+    local label = name
+    ui.badge(mon, cursor, y, label, status)
+    table.insert(buttons, { type = "profile", name = name, x1 = cursor, x2 = cursor + #label + 1, y = y })
+    cursor = cursor + #label + 3
+  end
+  local auto_status = auto_enabled and "LIMITED" or "OFFLINE"
+  ui.badge(mon, cursor, y, "AUTO", auto_status)
+  table.insert(buttons, { type = "auto", name = "AUTO", x1 = cursor, x2 = cursor + 5, y = y })
+  return buttons
 end
 
 local function render(mon, model)
   local key = textutils.serialize(model)
   if cache[mon] == key then return end
   cache[mon] = key
-  ui.panel(mon, 1, 1, 50, 18, "SYSTEM OVERVIEW", colorset.get("accent"), colorset.get("background"))
-  ui.text(mon, 2, 2, "Power Target: " .. tostring(model.power_target or 0) .. " RF/t", colorset.get("text"), colorset.get("background"))
-  local alarm_line = "Alarms: " .. tostring(#(model.alarms or {}))
-  ui.text(mon, 2, 3, alarm_line, colorset.get("text"), colorset.get("background"))
-  local i = 0
-  for _, node in ipairs(model.nodes or {}) do
-    render_node(mon, 5 + i, node)
-    i = i + 1
+  local w, h = mon.getSize()
+  ui.panel(mon, 1, 1, w, h, nil, model.system_status)
+
+  ui.text(mon, 2, 1, "SYSTEM", colorset.get("text"), colorset.get("background"))
+  ui.badge(mon, 10, 1, model.system_status or "OK", model.system_status or "OK")
+
+  local tiles = model.tiles or {}
+  local tile_y = 3
+  local tile_h = 4
+  local tile_w = math.floor((w - 2) / math.max(1, #tiles))
+  for idx, tile in ipairs(tiles) do
+    local x = 2 + (idx - 1) * tile_w
+    ui.panel(mon, x, tile_y, tile_w - 1, tile_h, tile.label, tile.status)
+    ui.text(mon, x + 1, tile_y + 1, tile.detail or "", colorset.get("text"), colorset.get("background"))
+    ui.badge(mon, x + 1, tile_y + 2, tile.status or "OFFLINE", tile.status or "OFFLINE")
   end
+
+  local profile_y = h - 6
+  button_cache[mon] = build_profile_buttons(mon, 2, profile_y, model.profile_list or {}, model.active_profile, model.auto_profile)
+
+  local power_y = profile_y + 1
+  ui.text(mon, 2, power_y, "Power Target", colorset.get("text"), colorset.get("background"))
+  ui.bigNumber(mon, 16, power_y, "", string.format("%.0f", model.power_target or 0), "RF/t", model.system_status)
+
+  local alarm_rows = {}
+  for i = 1, 3 do
+    local alarm = sort_alarms(model.alarms or {})[i]
+    if alarm then
+      table.insert(alarm_rows, { text = string.format("%s %s", alarm.timestamp or "--:--", alarm.message or ""), status = alarm.severity })
+    else
+      table.insert(alarm_rows, { text = "--", status = "OFFLINE" })
+    end
+  end
+  ui.text(mon, 2, h - 3, "Top Alarms", colorset.get("text"), colorset.get("background"))
+  ui.list(mon, 2, h - 2, w - 2, alarm_rows, { max_rows = 3 })
 end
 
-return { render = render }
+local function hit_test(mon, x, y)
+  local buttons = button_cache[mon] or {}
+  for _, btn in ipairs(buttons) do
+    if y == btn.y and x >= btn.x1 and x <= btn.x2 then
+      return btn
+    end
+  end
+  return nil
+end
+
+return { render = render, hit_test = hit_test }

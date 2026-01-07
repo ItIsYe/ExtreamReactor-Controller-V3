@@ -10,6 +10,8 @@ local rt_ui = require("master.ui.rt_dashboard")
 local energy_ui = require("master.ui.energy")
 local resources_ui = require("master.ui.resources")
 local alarms_ui = require("master.ui.alarms")
+local profiles = require("master.profiles")
+local trends_lib = require("core.trends")
 local ui = require("core.ui")
 local config = require("master.config")
 
@@ -28,6 +30,11 @@ local sequencer
 local network
 local last_draw = 0
 local monitor_scan_last = 0
+local trends = trends_lib.new(600)
+local last_trend_sample = 0
+local active_profile = "BASELOAD"
+local auto_profile = profiles.AUTO_ENABLED or false
+local critical_blink_until = 0
 
 local function discover_monitors()
   local names = {}
@@ -91,6 +98,9 @@ local function add_alarm(sender, severity, message)
     timestamp = textutils.formatTime(os.time(), true)
   })
   if #alarms > 50 then table.remove(alarms) end
+  if severity == constants.status_levels.EMERGENCY then
+    critical_blink_until = os.epoch("utc") + 5000
+  end
 end
 
 local function update_node(message)
@@ -139,19 +149,111 @@ local function check_timeouts()
   end
 end
 
+local function estimate_base_power()
+  local total = 0
+  for _, node in pairs(nodes) do
+    if node.role == constants.roles.RT_NODE then
+      total = total + (node.output or 0)
+    end
+  end
+  if total > 0 then return total end
+  if power_target > 0 then return power_target end
+  return 0
+end
+
+local function apply_profile(name)
+  local profile = profiles[name]
+  if not profile then return end
+  active_profile = name
+  sequencer.ramp_profile = profile.ramp or sequencer.ramp_profile
+  local base = estimate_base_power()
+  if base > 0 then
+    power_target = base * profile.target
+    for _, node in pairs(nodes) do
+      if node.role == constants.roles.RT_NODE then
+        network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
+          target = constants.command_targets.POWER_TARGET,
+          value = power_target
+        }))
+      end
+    end
+  end
+end
+
+local function sample_trends()
+  local now = os.epoch("utc")
+  if now - last_trend_sample < 1000 then return end
+  last_trend_sample = now
+  local power = 0
+  local stored, capacity = 0, 0
+  local water_total = 0
+  for _, node in pairs(nodes) do
+    if node.role == constants.roles.RT_NODE then
+      power = power + (node.output or 0)
+    elseif node.role == constants.roles.ENERGY_NODE then
+      stored = stored + (node.stored or 0)
+      capacity = capacity + (node.capacity or 0)
+    elseif node.role == constants.roles.WATER_NODE then
+      water_total = node.total_water or water_total
+    end
+  end
+  local energy_pct = capacity > 0 and (stored / capacity) * 100 or 0
+  trends.power:push(power)
+  trends.energy:push(energy_pct)
+  trends.water:push(water_total)
+
+  if auto_profile then
+    if energy_pct > 90 and active_profile ~= "IDLE" then
+      apply_profile("IDLE")
+    elseif energy_pct < 30 and active_profile ~= "PEAK" then
+      apply_profile("PEAK")
+    end
+  end
+end
+
+local function compute_system_status()
+  local status = constants.status_levels.OK
+  for _, node in pairs(nodes) do
+    if node.status == constants.status_levels.EMERGENCY then
+      return constants.status_levels.EMERGENCY
+    elseif node.status == constants.status_levels.LIMITED then
+      status = constants.status_levels.LIMITED
+    elseif node.status == constants.status_levels.WARNING then
+      status = constants.status_levels.WARNING
+    end
+  end
+  for _, alarm in ipairs(alarms) do
+    if alarm.severity == constants.status_levels.EMERGENCY then
+      return constants.status_levels.EMERGENCY
+    elseif alarm.severity == constants.status_levels.WARNING then
+      status = constants.status_levels.WARNING
+    end
+  end
+  return status
+end
+
 local function draw()
   local now = os.epoch("utc")
   if now - last_draw < 400 then return end
   last_draw = now
-  local overview_data = { nodes = {}, power_target = power_target, alarms = alarms }
-  local rt_data = { rt_nodes = {}, ramp_profile = sequencer.ramp_profile, sequence_state = sequencer.state, queue = sequencer.queue }
-  local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {} }
-  local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {} }, water = { total = 0, buffers = {} }, reprocessor = {} }
+  local overview_data = {
+    nodes = {},
+    power_target = power_target,
+    alarms = alarms,
+    tiles = {},
+    system_status = compute_system_status(),
+    profile_list = { "BASELOAD", "PEAK", "IDLE" },
+    active_profile = active_profile,
+    auto_profile = auto_profile
+  }
+  local rt_data = { rt_nodes = {}, ramp_profile = sequencer.ramp_profile, sequence_state = sequencer.state, queue = sequencer.queue, active_step = sequencer.active }
+  local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {}, trend_values = trends.energy:values() }
+  local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {} }
 
   for _, node in pairs(nodes) do
     table.insert(overview_data.nodes, { id = node.id, role = node.role, status = node.status or constants.status_levels.OFFLINE })
     if node.role == constants.roles.RT_NODE then
-      table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits })
+      table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status })
     elseif node.role == constants.roles.ENERGY_NODE and node.capacity then
       energy_data.stored = energy_data.stored + (node.stored or 0)
       energy_data.capacity = energy_data.capacity + (node.capacity or 0)
@@ -171,6 +273,61 @@ local function draw()
     end
   end
 
+  table.sort(rt_data.rt_nodes, function(a, b) return (a.id or "") < (b.id or "") end)
+  table.sort(energy_data.stores, function(a, b) return (a.id or "") < (b.id or "") end)
+  table.sort(resource_data.fuel.sources, function(a, b) return (a.id or "") < (b.id or "") end)
+
+  local fuel_total = 0
+  for _, src in ipairs(resource_data.fuel.sources or {}) do
+    fuel_total = fuel_total + (src.amount or 0)
+  end
+  resource_data.fuel.total = fuel_total
+  resource_data.fuel.mix_status = (#(resource_data.fuel.sources or {}) > 1) and "MIXED" or "SINGLE"
+  energy_data.status = energy_data.capacity > 0 and (energy_data.stored / energy_data.capacity < 0.2 and "WARNING" or "OK") or "OFFLINE"
+  local trend_values = trends.energy:values()
+  energy_data.trend_values = trend_values
+  if #trend_values >= 2 then
+    local last = trend_values[#trend_values]
+    local prev = trend_values[#trend_values - 1]
+    if last > prev + 0.5 then
+      energy_data.trend_arrow = "↑"
+    elseif last < prev - 0.5 then
+      energy_data.trend_arrow = "↓"
+    else
+      energy_data.trend_arrow = "→"
+    end
+  else
+    energy_data.trend_arrow = "→"
+  end
+
+  local tile_map = {
+    { label = "RT", role = constants.roles.RT_NODE },
+    { label = "ENERGY", role = constants.roles.ENERGY_NODE },
+    { label = "FUEL", role = constants.roles.FUEL_NODE },
+    { label = "WATER", role = constants.roles.WATER_NODE },
+    { label = "REPROCESSOR", role = constants.roles.REPROCESSOR_NODE }
+  }
+  local status_rank = {
+    [constants.status_levels.EMERGENCY] = 1,
+    [constants.status_levels.WARNING] = 2,
+    [constants.status_levels.LIMITED] = 3,
+    [constants.status_levels.OK] = 4,
+    [constants.status_levels.OFFLINE] = 5,
+    [constants.status_levels.MANUAL] = 6
+  }
+  for _, entry in ipairs(tile_map) do
+    local tile_status = constants.status_levels.OFFLINE
+    for _, node in pairs(nodes) do
+      if node.role == entry.role then
+        local node_status = node.status or constants.status_levels.OFFLINE
+        if (status_rank[node_status] or 99) < (status_rank[tile_status] or 99) then
+          tile_status = node_status
+        end
+      end
+    end
+    table.insert(overview_data.tiles, { label = entry.label, status = tile_status, detail = entry.role })
+  end
+
   local function render(role, drawer, model)
     for _, entry in ipairs(monitor_roles[role] or {}) do
       drawer.render(entry.mon, model)
@@ -181,7 +338,7 @@ local function draw()
   render("RT", rt_ui, rt_data)
   render("ENERGY", energy_ui, energy_data)
   render("RESOURCES", resources_ui, resource_data)
-  render("ALARMS", alarms_ui, alarms)
+  render("ALARMS", alarms_ui, { alarms = alarms, header_blink = os.epoch("utc") < critical_blink_until and math.floor(os.epoch("utc") / 400) % 2 == 0 })
 end
 
 local function init()
@@ -192,15 +349,42 @@ local function init()
   utils.log("MASTER", "Initialized as " .. network.id)
 end
 
+local function handle_monitor_touch(name, x, y)
+  for _, entry in ipairs(monitor_roles.OVERVIEW or {}) do
+    if entry.name == name then
+      local hit = overview_ui.hit_test(entry.mon, x, y)
+      if hit then
+        if hit.type == "profile" then
+          apply_profile(hit.name)
+        elseif hit.type == "auto" then
+          auto_profile = not auto_profile
+        end
+      end
+      return
+    end
+  end
+end
+
 local function main_loop()
   while true do
     refresh_monitors(false)
     sequencer:tick(nodes)
     check_timeouts()
+    sample_trends()
     draw()
-    local message = network:receive(0.5)
-    if message then
-      update_node(message)
+    local timer = os.startTimer(0.5)
+    while true do
+      local event = { os.pullEvent() }
+      if event[1] == "modem_message" then
+        local _, _, _, _, message = table.unpack(event)
+        if protocol.validate(message) then
+          update_node(message)
+        end
+      elseif event[1] == "monitor_touch" then
+        handle_monitor_touch(event[2], event[3], event[4])
+      elseif event[1] == "timer" and event[2] == timer then
+        break
+      end
     end
   end
 end
