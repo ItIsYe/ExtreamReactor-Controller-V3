@@ -118,7 +118,7 @@ local function download_file(remote_path)
   write_file("/" .. remote_path, content)
 end
 
-local function install_files()
+local function install_files(is_update)
   ensure_dir(BASE_DIR)
   ensure_dir(BASE_DIR .. "/core")
   ensure_dir(BASE_DIR .. "/master")
@@ -133,12 +133,22 @@ local function install_files()
   ensure_dir(BASE_DIR .. "/installer")
 
   for _, file in ipairs(files_to_download) do
-    print("Downloading " .. file .. "...")
-    download_file(file)
+    if is_update and file:match("/config%.lua$") then
+      print("Skipping config " .. file .. " (update mode)")
+    else
+      print("Downloading " .. file .. "...")
+      download_file(file)
+    end
   end
 end
 
 local last_detection = { reactors = {}, turbines = {}, modems = {} }
+
+local function is_wireless_modem(name)
+  local ok, result = pcall(peripheral.call, name, "isWireless")
+  if ok then return result end
+  return false
+end
 
 local function scan_peripherals()
   local reactors = {}
@@ -156,6 +166,29 @@ local function scan_peripherals()
   end
   last_detection = { reactors = reactors, turbines = turbines, modems = modems }
   return last_detection
+end
+
+local function detect_modems()
+  local wireless = {}
+  local wired = {}
+  for _, name in ipairs(scan_peripherals().modems) do
+    if is_wireless_modem(name) then
+      table.insert(wireless, name)
+    else
+      table.insert(wired, name)
+    end
+  end
+  return { wireless = wireless, wired = wired }
+end
+
+local function select_primary_modem(modems)
+  if #modems.wireless > 0 then
+    return modems.wireless[1]
+  end
+  if #modems.wired > 0 then
+    return modems.wired[1]
+  end
+  return nil
 end
 
 local function prompt(msg, default)
@@ -231,7 +264,9 @@ local function write_config(role, wireless, wired, extras)
   defaults.role = role
   defaults.wireless_modem = wireless
   defaults.wired_modem = wired
-  defaults.node_id = os.getComputerLabel() or os.getComputerID()
+  if defaults.node_id == nil then
+    defaults.node_id = os.getComputerLabel() or os.getComputerID()
+  end
   if role == roles.MASTER then
     defaults.monitor_auto = true
     defaults.ui_scale_default = extras.ui_scale_default or 0.5
@@ -239,8 +274,29 @@ local function write_config(role, wireless, wired, extras)
     defaults.reactors = extras.reactors
     defaults.turbines = extras.turbines
     defaults.modem = extras.modem
+    if extras.node_id then
+      defaults.node_id = extras.node_id
+    end
   end
   write_config_file(cfg_path, defaults)
+end
+
+local function build_rt_node_id()
+  local id_str = tostring(os.getComputerID())
+  local suffix = id_str:sub(-4)
+  return "RT-" .. suffix
+end
+
+local function detect_update()
+  if fs.exists(BASE_DIR) then
+    print("Existing installation detected.")
+    print("Update existing installation? [Y/n]")
+    local input = read():lower()
+    if input == "" or input == "y" or input == "yes" then
+      return true
+    end
+  end
+  return false
 end
 
 local function main()
@@ -248,44 +304,74 @@ local function main()
     error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
   end
   print("=== XReactor Installer ===")
-  install_files()
+  local is_update = detect_update()
+  install_files(is_update)
   local role = choose_role()
-  local wireless = prompt("Wireless modem side", "right")
-  local wired = prompt("Wired modem side", "left")
-  local label = prompt("Node ID", os.getComputerLabel() or os.getComputerID())
-  os.setComputerLabel(label)
+  local cfg_path = BASE_DIR .. "/" .. role_targets[role].config
+  local should_write_config = not (is_update and fs.exists(cfg_path))
+  local wireless
+  local wired
   local extras = {}
-  if role == roles.MASTER then
-    extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
-  elseif role == roles.RT_NODE then
-    local detected = scan_peripherals()
-    extras.modem = detected.modems[1]
-    local use_detected = #detected.reactors > 0
-    if use_detected then
-      print_detected("Detected Reactors", detected.reactors)
-      print_detected("Detected Turbines", detected.turbines)
-      print_detected("Detected Modems", detected.modems)
-      use_detected = prompt_use_detected()
-    else
-      print("Warning: No reactors detected. Switching to manual entry.")
+
+  if should_write_config then
+    local modems = detect_modems()
+    wireless = select_primary_modem(modems)
+    wired = modems.wired[1]
+    if not wireless then
+      wireless = prompt("Primary modem side", nil)
+    end
+    if wireless and wired == wireless then
+      wired = nil
     end
 
-    if use_detected then
-      extras.reactors = detected.reactors
-      extras.turbines = detected.turbines
-      if #detected.turbines == 0 then
-        print("No turbines detected. Reactor-only setup will be used.")
-      end
-    else
-      local reactors = prompt("Reactor peripheral names (comma separated)", "")
-      local turbines = prompt("Turbine peripheral names (comma separated)", "")
-      extras.reactors = {}
-      extras.turbines = {}
-      for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
-      for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
+    if role == roles.RT_NODE and not is_update then
+      local label = build_rt_node_id()
+      os.setComputerLabel(label)
     end
+
+    if role == roles.MASTER then
+      extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
+    elseif role == roles.RT_NODE then
+      local detected = scan_peripherals()
+      extras.modem = wireless
+      local use_detected = #detected.reactors > 0
+      if use_detected then
+        print_detected("Detected Reactors", detected.reactors)
+        print_detected("Detected Turbines", detected.turbines)
+        print_detected("Detected Modems", detected.modems)
+        use_detected = prompt_use_detected()
+      else
+        print("Warning: No reactors detected. Switching to manual entry.")
+      end
+
+      if use_detected then
+        extras.reactors = detected.reactors
+        extras.turbines = detected.turbines
+        if #detected.turbines == 0 then
+          print("No turbines detected. Reactor-only setup will be used.")
+        end
+      else
+        local reactors = prompt("Reactor peripheral names (comma separated)", "")
+        local turbines = prompt("Turbine peripheral names (comma separated)", "")
+        extras.reactors = {}
+        extras.turbines = {}
+        for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
+        for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
+      end
+      if not wireless then
+        extras.modem = prompt("Modem peripheral name", nil)
+      end
+    end
+  else
+    print("Keeping existing config: " .. cfg_path)
   end
-  write_config(role, wireless, wired, extras)
+
+  if should_write_config then
+    if role == roles.RT_NODE and not is_update then
+      extras.node_id = build_rt_node_id()
+    end
+    write_config(role, wireless, wired, extras)
+  end
   write_startup(role)
   print("Installation complete. Rebooting into role " .. role)
   os.sleep(1)
