@@ -131,7 +131,28 @@ local function install_files()
   end
 end
 
+local last_detection = { reactors = {}, turbines = {}, modems = {} }
+
+local function scan_peripherals()
+  local reactors = {}
+  local turbines = {}
+  local modems = {}
+  for _, name in ipairs(peripheral.getNames()) do
+    local peripheral_type = peripheral.getType(name)
+    if peripheral_type == "BigReactors-Reactor" then
+      table.insert(reactors, name)
+    elseif peripheral_type == "BigReactors-Turbine" then
+      table.insert(turbines, name)
+    elseif peripheral_type == "modem" then
+      table.insert(modems, name)
+    end
+  end
+  last_detection = { reactors = reactors, turbines = turbines, modems = modems }
+  return last_detection
+end
+
 local function prompt(msg, default)
+  scan_peripherals()
   write(msg .. (default and (" [" .. default .. "]") or "") .. ": ")
   local input = read()
   if input == "" then return default end
@@ -173,27 +194,12 @@ local function print_detected(label, items)
   end
 end
 
-local function detect_rt_peripherals()
-  local reactors = {}
-  local turbines = {}
-  for _, name in ipairs(peripheral.getNames()) do
-    local peripheral_type = peripheral.getType(name)
-    if peripheral_type == "BigReactors-Reactor" then
-      table.insert(reactors, name)
-    elseif peripheral_type == "BigReactors-Turbine" then
-      table.insert(turbines, name)
-    end
-  end
-  print_detected("Detected Reactors", reactors)
-  print_detected("Detected Turbines", turbines)
-  return reactors, turbines
-end
-
-local function confirm(prompt_text, default)
-  local hint = default and "Y/n" or "y/N"
-  local input = prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
+local function prompt_use_detected()
+  scan_peripherals()
+  write("Use detected peripherals? [Y/n]: ")
+  local input = read()
   input = input:lower()
-  if input == "" then return default end
+  if input == "" then return true end
   return input == "y" or input == "yes"
 end
 
@@ -225,6 +231,7 @@ local function write_config(role, wireless, wired, extras)
   elseif role == roles.RT_NODE then
     defaults.reactors = extras.reactors
     defaults.turbines = extras.turbines
+    defaults.modem = extras.modem
   end
   write_config_file(cfg_path, defaults)
 end
@@ -244,18 +251,22 @@ local function main()
   if role == roles.MASTER then
     extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
   elseif role == roles.RT_NODE then
-    local detected_reactors, detected_turbines = detect_rt_peripherals()
-    local use_detected = #detected_reactors > 0
-    if not use_detected then
-      print("Warning: No reactors detected. Switching to manual entry.")
+    local detected = scan_peripherals()
+    extras.modem = detected.modems[1]
+    local use_detected = #detected.reactors > 0
+    if use_detected then
+      print_detected("Detected Reactors", detected.reactors)
+      print_detected("Detected Turbines", detected.turbines)
+      print_detected("Detected Modems", detected.modems)
+      use_detected = prompt_use_detected()
     else
-      use_detected = confirm("Use detected peripherals?", true)
+      print("Warning: No reactors detected. Switching to manual entry.")
     end
 
     if use_detected then
-      extras.reactors = detected_reactors
-      extras.turbines = detected_turbines
-      if #detected_turbines == 0 then
+      extras.reactors = detected.reactors
+      extras.turbines = detected.turbines
+      if #detected.turbines == 0 then
         print("No turbines detected. Reactor-only setup will be used.")
       end
     else
