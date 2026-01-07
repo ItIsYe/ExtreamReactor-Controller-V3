@@ -5,7 +5,7 @@ local utils = require("core.utils")
 local safety = require("core.safety")
 local network_lib = require("core.network")
 local machine = require("core.state_machine")
-local config = require("nodes.rt.config")
+local config = require("xreactor.nodes.rt.config")
 
 local network
 local peripherals = {}
