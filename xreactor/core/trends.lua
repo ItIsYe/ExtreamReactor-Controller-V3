@@ -1,5 +1,11 @@
 local trends = {}
 
+local EPSILON = {
+  power = 0.01,
+  energy = 0.005,
+  water = 0.005
+}
+
 local RingBuffer = {}
 RingBuffer.__index = RingBuffer
 
@@ -31,11 +37,45 @@ end
 
 function trends.new(sample_size)
   local size = sample_size or 600
-  return {
-    power = RingBuffer.new(size),
-    energy = RingBuffer.new(size),
-    water = RingBuffer.new(size)
+  local self = {
+    buffers = {
+      power = RingBuffer.new(size),
+      energy = RingBuffer.new(size),
+      water = RingBuffer.new(size)
+    },
+    last = {},
+    dirty = {}
   }
+
+  function self:push(name, value)
+    local buffer = self.buffers[name]
+    if not buffer then return false end
+    local last_value = self.last[name]
+    local epsilon = EPSILON[name] or 0
+    if last_value == nil or math.abs(value - last_value) >= epsilon then
+      buffer:push(value)
+      self.last[name] = value
+      self.dirty[name] = true
+      return true
+    end
+    return false
+  end
+
+  function self:values(name)
+    local buffer = self.buffers[name]
+    if not buffer then return {} end
+    return buffer:values()
+  end
+
+  function self:is_dirty(name)
+    return self.dirty[name] == true
+  end
+
+  function self:clear_dirty(name)
+    self.dirty[name] = false
+  end
+
+  return self
 end
 
 trends.RingBuffer = RingBuffer

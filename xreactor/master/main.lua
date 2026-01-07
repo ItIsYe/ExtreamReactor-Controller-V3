@@ -35,6 +35,7 @@ local last_trend_sample = 0
 local active_profile = "BASELOAD"
 local auto_profile = profiles.AUTO_ENABLED or false
 local critical_blink_until = 0
+local trend_cache = { energy = {}, energy_arrow = "→" }
 
 local function discover_monitors()
   local names = {}
@@ -198,9 +199,25 @@ local function sample_trends()
     end
   end
   local energy_pct = capacity > 0 and (stored / capacity) * 100 or 0
-  trends.power:push(power)
-  trends.energy:push(energy_pct)
-  trends.water:push(water_total)
+  trends:push("power", power)
+  if trends:push("energy", energy_pct) then
+    local trend_values = trends:values("energy")
+    trend_cache.energy = trend_values
+    if #trend_values >= 2 then
+      local last = trend_values[#trend_values]
+      local prev = trend_values[#trend_values - 1]
+      if last > prev + 0.5 then
+        trend_cache.energy_arrow = "↑"
+      elseif last < prev - 0.5 then
+        trend_cache.energy_arrow = "↓"
+      else
+        trend_cache.energy_arrow = "→"
+      end
+    else
+      trend_cache.energy_arrow = "→"
+    end
+  end
+  trends:push("water", water_total)
 
   if auto_profile then
     if energy_pct > 90 and active_profile ~= "IDLE" then
@@ -247,7 +264,7 @@ local function draw()
     auto_profile = auto_profile
   }
   local rt_data = { rt_nodes = {}, ramp_profile = sequencer.ramp_profile, sequence_state = sequencer.state, queue = sequencer.queue, active_step = sequencer.active }
-  local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {}, trend_values = trends.energy:values() }
+  local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {}, trend_values = trend_cache.energy, trend_arrow = trend_cache.energy_arrow, trend_dirty = trends:is_dirty("energy") }
   local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {} }
 
   for _, node in pairs(nodes) do
@@ -284,22 +301,6 @@ local function draw()
   resource_data.fuel.total = fuel_total
   resource_data.fuel.mix_status = (#(resource_data.fuel.sources or {}) > 1) and "MIXED" or "SINGLE"
   energy_data.status = energy_data.capacity > 0 and (energy_data.stored / energy_data.capacity < 0.2 and "WARNING" or "OK") or "OFFLINE"
-  local trend_values = trends.energy:values()
-  energy_data.trend_values = trend_values
-  if #trend_values >= 2 then
-    local last = trend_values[#trend_values]
-    local prev = trend_values[#trend_values - 1]
-    if last > prev + 0.5 then
-      energy_data.trend_arrow = "↑"
-    elseif last < prev - 0.5 then
-      energy_data.trend_arrow = "↓"
-    else
-      energy_data.trend_arrow = "→"
-    end
-  else
-    energy_data.trend_arrow = "→"
-  end
-
   local tile_map = {
     { label = "RT", role = constants.roles.RT_NODE },
     { label = "ENERGY", role = constants.roles.ENERGY_NODE },
@@ -329,16 +330,22 @@ local function draw()
   end
 
   local function render(role, drawer, model)
+    local rendered = false
     for _, entry in ipairs(monitor_roles[role] or {}) do
       drawer.render(entry.mon, model)
+      rendered = true
     end
+    return rendered
   end
 
   render("OVERVIEW", overview_ui, overview_data)
   render("RT", rt_ui, rt_data)
-  render("ENERGY", energy_ui, energy_data)
+  local energy_rendered = render("ENERGY", energy_ui, energy_data)
   render("RESOURCES", resources_ui, resource_data)
   render("ALARMS", alarms_ui, { alarms = alarms, header_blink = os.epoch("utc") < critical_blink_until and math.floor(os.epoch("utc") / 400) % 2 == 0 })
+  if energy_rendered and trends:is_dirty("energy") then
+    trends:clear_dirty("energy")
+  end
 end
 
 local function init()
