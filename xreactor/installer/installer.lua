@@ -197,6 +197,14 @@ local function confirm(prompt_text, default)
   return input == "y" or input == "yes"
 end
 
+local function confirm(prompt_text, default)
+  local hint = default and "Y/n" or "y/N"
+  local input = prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
+  input = input:lower()
+  if input == "" then return default end
+  return input == "y" or input == "yes"
+end
+
 local function write_config(role, wireless, wired, extras)
   local cfg_path = BASE_DIR .. "/" .. role_targets[role].config
   if fs.exists(cfg_path) then
