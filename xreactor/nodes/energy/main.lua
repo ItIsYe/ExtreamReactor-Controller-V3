@@ -12,7 +12,12 @@ local last_heartbeat = 0
 local function cache()
   devices.cubes = utils.cache_peripherals(config.cubes)
   if config.matrix and peripheral.isPresent(config.matrix) then
-    devices.matrix = peripheral.wrap(config.matrix)
+    local wrapped, err = utils.safe_wrap(config.matrix)
+    if wrapped then
+      devices.matrix = wrapped
+    else
+      utils.log("ENERGY", "WARN: matrix wrap failed: " .. tostring(err))
+    end
   end
 end
 

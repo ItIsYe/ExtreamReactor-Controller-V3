@@ -1,5 +1,6 @@
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
 local constants = require("shared.constants")
+local colors = require("shared.colors")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
 local safety = require("core.safety")
@@ -40,6 +41,8 @@ config.autonom.rpm_step = config.autonom.rpm_step or 25
 config.autonom.target_steam = config.autonom.target_steam or 1000
 config.autonom.max_steam = config.autonom.max_steam or 1500
 config.autonom.steam_step = config.autonom.steam_step or 50
+config.monitor_interval = config.monitor_interval or 2
+config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
 
 local network
@@ -53,6 +56,11 @@ local last_heartbeat = 0
 local mode = constants.roles.MASTER
 local status_snapshot = nil
 local last_snapshot = 0
+local monitor = nil
+local last_monitor_update = 0
+local last_actuator_update = 0
+local missing_warned = {}
+local autonom_state = { reactors = {}, turbines = {} }
 
 local STATE = {
   INIT = "INIT",
@@ -101,6 +109,112 @@ local function update_autonom_control_rods(module)
   module.peripheral.setControlRodsLevels(next_level)
 end
 
+local function warn_once(key, message)
+  local now = os.epoch("utc")
+  local last = missing_warned[key] or 0
+  if now - last < 60000 then
+    return
+  end
+  missing_warned[key] = now
+  log("WARN", message)
+end
+
+local function updateActuators()
+  if current_state ~= STATE.AUTONOM then
+    return
+  end
+  for _, name in ipairs(config.reactors) do
+    local reactor
+    if peripheral.isPresent(name) then
+      local wrapped, err = utils.safe_wrap(name)
+      if wrapped then
+        reactor = wrapped
+      else
+        warn_once("reactor_wrap:" .. name, "Reactor wrap failed for " .. name .. ": " .. tostring(err))
+      end
+    else
+      warn_once("reactor_missing:" .. name, "Reactor missing: " .. name)
+    end
+    if reactor then
+      if reactor.setActive then
+        pcall(reactor.setActive, true)
+      end
+      local level = autonom_state.reactors[name]
+      if level == nil and reactor.getControlRodLevel then
+        local ok, current = pcall(reactor.getControlRodLevel)
+        if ok and type(current) == "number" then
+          level = current
+        end
+      end
+      local target = safety.clamp(config.autonom.control_rod_level, 0, 100)
+      local next_level = ramp_towards(level or target, target, config.autonom.control_rod_step)
+      autonom_state.reactors[name] = next_level
+      if reactor.setControlRodsLevels then
+        local ok, err = pcall(reactor.setControlRodsLevels, next_level)
+        if not ok then
+          warn_once("reactor_rods:" .. name, "Reactor rods update failed for " .. name .. ": " .. tostring(err))
+        end
+      end
+    end
+  end
+
+  for _, name in ipairs(config.turbines) do
+    local turbine
+    if peripheral.isPresent(name) then
+      local wrapped, err = utils.safe_wrap(name)
+      if wrapped then
+        turbine = wrapped
+      else
+        warn_once("turbine_wrap:" .. name, "Turbine wrap failed for " .. name .. ": " .. tostring(err))
+      end
+    else
+      warn_once("turbine_missing:" .. name, "Turbine missing: " .. name)
+    end
+    if turbine then
+      if turbine.setActive then
+        pcall(turbine.setActive, true)
+      end
+      if turbine.setInductorEngaged then
+        pcall(turbine.setInductorEngaged, true)
+      end
+      local rpm = nil
+      if turbine.getRotorSpeed then
+        local ok, value = pcall(turbine.getRotorSpeed)
+        if ok and type(value) == "number" then
+          rpm = value
+        end
+      end
+      local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+      local state = autonom_state.turbines[name] or {}
+      local current_target = state.target_rpm or rpm or target_rpm
+      local next_target = ramp_towards(current_target, target_rpm, config.autonom.rpm_step)
+      state.target_rpm = next_target
+      local flow = state.flow
+      if flow == nil and turbine.getFlowRate then
+        local ok, value = pcall(turbine.getFlowRate)
+        if ok and type(value) == "number" then
+          flow = value
+        end
+      end
+      flow = flow or config.autonom.target_steam
+      if rpm and rpm < next_target - 1 then
+        flow = flow + config.autonom.steam_step
+      elseif rpm and rpm > next_target + 1 then
+        flow = flow - config.autonom.steam_step
+      end
+      flow = safety.clamp(flow, 0, config.autonom.max_steam)
+      state.flow = flow
+      autonom_state.turbines[name] = state
+      if turbine.setFlowRate then
+        local ok, err = pcall(turbine.setFlowRate, flow)
+        if not ok then
+          warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(err))
+        end
+      end
+    end
+  end
+end
+
 local allowed_transitions = {
   [STATE.INIT] = { [STATE.AUTONOM] = true, [STATE.MASTER] = true, [STATE.SAFE] = true },
   [STATE.MASTER] = { [STATE.AUTONOM] = true, [STATE.SAFE] = true },
@@ -137,7 +251,12 @@ local function cache()
   peripherals.reactors = utils.cache_peripherals(config.reactors)
   peripherals.turbines = utils.cache_peripherals(config.turbines)
   if config.steam_buffer and peripheral.isPresent(config.steam_buffer) then
-    peripherals.steam_buffer = peripheral.wrap(config.steam_buffer)
+    local wrapped, err = utils.safe_wrap(config.steam_buffer)
+    if wrapped then
+      peripherals.steam_buffer = wrapped
+    else
+      log("WARN", "Steam buffer wrap failed: " .. tostring(err))
+    end
   end
 end
 
@@ -539,6 +658,45 @@ local function update_status_snapshot()
   return status_snapshot
 end
 
+local function init_monitor()
+  local ok, found = pcall(peripheral.find, "monitor")
+  if ok then
+    monitor = found
+  end
+  if monitor then
+    pcall(monitor.setTextScale, config.monitor_scale)
+    pcall(monitor.setBackgroundColor, colors.black)
+    pcall(monitor.setTextColor, colors.white)
+    pcall(monitor.clear)
+  end
+end
+
+local function update_monitor()
+  if not monitor then return end
+  local now = os.epoch("utc")
+  if now - last_monitor_update < (config.monitor_interval * 1000) then
+    return
+  end
+  last_monitor_update = now
+  local snapshot = update_status_snapshot()
+  local avg_temp = snapshot and snapshot.avg_temp or 0
+  local lines = {
+    "RT Node: " .. (network and network.id or config.node_id or "RT"),
+    "State: " .. tostring(current_state),
+    "Reactors: " .. tostring(#config.reactors),
+    "Turbines: " .. tostring(#config.turbines),
+    string.format("Avg Temp: %.1f", avg_temp),
+    "Target RPM: " .. tostring(config.autonom.target_rpm)
+  }
+  pcall(monitor.setBackgroundColor, colors.black)
+  pcall(monitor.setTextColor, colors.white)
+  pcall(monitor.clear)
+  for i, line in ipairs(lines) do
+    pcall(monitor.setCursorPos, 1, i)
+    pcall(monitor.write, line)
+  end
+end
+
 local states = {
   [constants.node_states.OFF] = {
     on_enter = function()
@@ -700,6 +858,11 @@ local function tick_loop()
     if os.epoch("utc") - last_heartbeat > hb * 1000 then
       send_heartbeat()
     end
+    if os.epoch("utc") - last_actuator_update > 1000 then
+      updateActuators()
+      last_actuator_update = os.epoch("utc")
+    end
+    update_monitor()
     update_status_snapshot()
   end
 end
@@ -710,6 +873,7 @@ local function init()
   refresh_module_peripherals()
   network = network_lib.init(config)
   node_state_machine = machine.new(states, constants.node_states.OFF)
+  init_monitor()
   hello()
   send_heartbeat()
   log("INFO", "Node ready: " .. network.id)

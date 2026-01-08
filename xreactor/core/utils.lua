@@ -49,11 +49,23 @@ function utils.safe_peripheral_call(name, method, ...)
   return result
 end
 
+function utils.safe_wrap(name)
+  if not name or not peripheral.isPresent(name) then
+    return nil, "peripheral missing"
+  end
+  local ok, wrapped = pcall(peripheral.wrap, name)
+  if not ok then
+    return nil, wrapped
+  end
+  return wrapped
+end
+
 function utils.cache_peripherals(names)
   local cache = {}
   for _, name in ipairs(names) do
-    if peripheral.isPresent(name) then
-      cache[name] = peripheral.wrap(name)
+    local wrapped = utils.safe_wrap(name)
+    if wrapped then
+      cache[name] = wrapped
     end
   end
   return cache

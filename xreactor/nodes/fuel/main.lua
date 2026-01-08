@@ -13,7 +13,12 @@ local reserve = config.minimum_reserve
 
 local function cache()
   if config.storage_bus and peripheral.isPresent(config.storage_bus) then
-    storage = peripheral.wrap(config.storage_bus)
+    local wrapped, err = utils.safe_wrap(config.storage_bus)
+    if wrapped then
+      storage = wrapped
+    else
+      utils.log("FUEL", "WARN: storage bus wrap failed: " .. tostring(err))
+    end
   end
 end
 
