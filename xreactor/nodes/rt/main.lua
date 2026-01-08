@@ -45,6 +45,7 @@ local active_startup = nil
 local startup_queue = {}
 local master_seen = os.epoch("utc")
 local last_heartbeat = 0
+local mode = constants.roles.MASTER
 
 local STATE = {
   INIT = "INIT",
@@ -461,6 +462,25 @@ local function note_master_seen()
   if setState(STATE.MASTER) then
     if node_state_machine.state() == constants.node_states.AUTONOM then
       node_state_machine:transition(constants.node_states.RUNNING)
+    end
+  end
+end
+
+local function clamp_autonom_targets()
+  targets.power = 0
+  local rpm_target = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+  local steam_target = safety.clamp(config.autonom.target_steam, 0, config.autonom.max_steam)
+  targets.rpm = ramp_towards(targets.rpm, rpm_target, config.autonom.rpm_step)
+  targets.steam = ramp_towards(targets.steam, steam_target, config.autonom.steam_step)
+end
+
+local function note_master_seen()
+  master_seen = os.epoch("utc")
+  if mode == "AUTONOM" then
+    mode = constants.roles.MASTER
+    utils.log("RT", "Master reconnected")
+    if current_state.state() == constants.node_states.AUTONOM then
+      current_state:transition(constants.node_states.RUNNING)
     end
   end
 end
