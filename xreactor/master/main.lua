@@ -47,10 +47,12 @@ local function discover_monitors()
   table.sort(names)
   local monitors = {}
   for _, name in ipairs(names) do
-    local mon = peripheral.wrap(name)
+    local mon, err = utils.safe_wrap(name)
     if mon then
       ui.setScale(mon, config.ui_scale_default or 0.5)
       table.insert(monitors, { name = name, mon = mon })
+    elseif err then
+      utils.log("MASTER", "WARN: monitor wrap failed for " .. tostring(name) .. ": " .. tostring(err))
     end
   end
   return monitors

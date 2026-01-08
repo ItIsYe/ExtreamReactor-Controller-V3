@@ -8,7 +8,10 @@ local function open_modem(name, channels)
   if not name or not peripheral.isPresent(name) then
     error("Modem " .. tostring(name) .. " missing")
   end
-  local modem = peripheral.wrap(name)
+  local modem, err = utils.safe_wrap(name)
+  if not modem then
+    error("Modem " .. tostring(name) .. " wrap failed: " .. tostring(err))
+  end
   for _, channel in ipairs(channels) do
     modem.open(channel)
   end
@@ -17,7 +20,10 @@ end
 
 function network.init(config)
   local modem = open_modem(config.wireless_modem, { constants.channels.CONTROL, constants.channels.STATUS })
-  local wired = config.wired_modem and peripheral.isPresent(config.wired_modem) and peripheral.wrap(config.wired_modem) or nil
+  local wired = nil
+  if config.wired_modem and peripheral.isPresent(config.wired_modem) then
+    wired = select(1, utils.safe_wrap(config.wired_modem))
+  end
   return {
     modem = modem,
     wired = wired,
