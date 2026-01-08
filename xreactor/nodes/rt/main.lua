@@ -26,23 +26,104 @@ config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
 config.safety.min_water = config.safety.min_water or 0.2
 config.heartbeat_interval = config.heartbeat_interval or 2
+config.autonom = config.autonom or {}
+config.autonom.control_rod_level = config.autonom.control_rod_level or 85
+config.autonom.control_rod_step = config.autonom.control_rod_step or 1
+config.autonom.target_rpm = config.autonom.target_rpm or 900
+config.autonom.max_rpm = config.autonom.max_rpm or 1000
+config.autonom.rpm_step = config.autonom.rpm_step or 25
+config.autonom.target_steam = config.autonom.target_steam or 1000
+config.autonom.max_steam = config.autonom.max_steam or 1500
+config.autonom.steam_step = config.autonom.steam_step or 50
 local hb = config.heartbeat_interval
 
 local network
 local peripherals = {}
 local targets = { power = 0, steam = 0, rpm = 0 }
-local current_state
 local modules = {}
 local active_startup = nil
 local startup_queue = {}
 local master_seen = os.epoch("utc")
 local last_heartbeat = 0
 
+local STATE = {
+  INIT = "INIT",
+  AUTONOM = "AUTONOM",
+  MASTER = "MASTER",
+  SAFE = "SAFE"
+}
+
+local current_state = STATE.INIT
+local node_state_machine
+
 local ramp_profiles = {
   FAST = 4000,
   NORMAL = 8000,
   SLOW = 12000
 }
+
+local function ramp_towards(current, target, step)
+  if current == nil then return target end
+  local delta = target - current
+  if math.abs(delta) <= step then
+    return target
+  end
+  if delta > 0 then
+    return current + step
+  end
+  return current - step
+end
+
+local function update_autonom_control_rods(module)
+  if not module.peripheral or not module.peripheral.setControlRodsLevels then
+    return
+  end
+  if not module.autonom_control_rod then
+    if module.peripheral.getControlRodLevel then
+      local ok, level = pcall(module.peripheral.getControlRodLevel)
+      if ok then
+        module.autonom_control_rod = level
+      end
+    end
+  end
+  local target = safety.clamp(config.autonom.control_rod_level, 0, 100)
+  local current = module.autonom_control_rod or target
+  local next_level = ramp_towards(current, target, config.autonom.control_rod_step)
+  module.autonom_control_rod = next_level
+  module.peripheral.setControlRodsLevels(next_level)
+end
+
+local allowed_transitions = {
+  [STATE.INIT] = { [STATE.AUTONOM] = true, [STATE.MASTER] = true, [STATE.SAFE] = true },
+  [STATE.MASTER] = { [STATE.AUTONOM] = true, [STATE.SAFE] = true },
+  [STATE.AUTONOM] = { [STATE.MASTER] = true, [STATE.SAFE] = true },
+  [STATE.SAFE] = {}
+}
+
+local function setState(new_state)
+  if current_state == new_state then
+    return false
+  end
+  if not allowed_transitions[current_state] or not allowed_transitions[current_state][new_state] then
+    return false
+  end
+  local previous_state = current_state
+  current_state = new_state
+  if new_state == STATE.AUTONOM then
+    utils.log("RT", "Entering AUTONOM mode")
+  elseif new_state == STATE.MASTER then
+    if previous_state == STATE.AUTONOM then
+      utils.log("RT", "Master reconnected")
+    else
+      utils.log("RT", "Entering MASTER mode")
+    end
+  elseif new_state == STATE.SAFE then
+    utils.log("RT", "Entering SAFE mode")
+  else
+    utils.log("RT", "Entering INIT mode")
+  end
+  return true
+end
 
 local function cache()
   peripherals.reactors = utils.cache_peripherals(config.reactors)
@@ -60,7 +141,16 @@ local function build_modules()
   end
   for i, name in ipairs(config.reactors) do
     local id = "reactor:" .. i
-    modules[id] = { id = id, type = "reactor", state = "OFF", progress = 0, limits = {}, name = name, stable_since = nil }
+    modules[id] = {
+      id = id,
+      type = "reactor",
+      state = "OFF",
+      progress = 0,
+      limits = {},
+      name = name,
+      stable_since = nil,
+      autonom_control_rod = nil
+    }
   end
 end
 
@@ -115,7 +205,8 @@ end
 local function broadcast_status(status_level)
   local payload = {
     status = status_level,
-    state = current_state.state(),
+    state = node_state_machine.state(),
+    mode = current_state,
     output = targets.power,
     turbine_rpm = targets.rpm,
     steam = targets.steam,
@@ -179,16 +270,23 @@ local function adjust_reactors()
       else
         local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
         if temp > config.safety.max_temperature then
-          scram()
           module.state = "ERROR"
           module.progress = 0
           module.limits = { "TEMP" }
-          current_state:transition(constants.node_states.EMERGENCY)
+          setState(STATE.SAFE)
+          if node_state_machine.state() ~= constants.node_states.EMERGENCY then
+            node_state_machine:transition(constants.node_states.EMERGENCY)
+          end
           return
         end
         if module.peripheral.setControlRodsLevels then
-          local level = 100 - math.min(100, targets.power / (math.max(1, active) * 10))
-          module.peripheral.setControlRodsLevels(level)
+          if current_state == STATE.AUTONOM then
+            update_autonom_control_rods(module)
+          else
+            local level = 100 - math.min(100, targets.power / (math.max(1, active) * 10))
+            module.autonom_control_rod = nil
+            module.peripheral.setControlRodsLevels(level)
+          end
         end
       end
     end
@@ -322,12 +420,15 @@ local function update_module_states()
         if limit == "TEMP" then
           module.state = "ERROR"
           module.progress = 0
-          scram()
+          setState(STATE.SAFE)
+          if node_state_machine.state() ~= constants.node_states.EMERGENCY then
+            node_state_machine:transition(constants.node_states.EMERGENCY)
+          end
         end
       end
     end
     if module.state == "STABLE" and module.stable_since and (now - module.stable_since > 3000) then
-      if current_state.state() == constants.node_states.RUNNING then
+      if node_state_machine.state() == constants.node_states.RUNNING then
         module.state = "RUNNING"
       end
     end
@@ -341,9 +442,25 @@ end
 
 local function monitor_master()
   if os.epoch("utc") - master_seen > hb * 5000 then
-    if current_state.state() ~= constants.node_states.AUTONOM then
-      utils.log("RT", "Master timeout, entering AUTONOM")
-      current_state:transition(constants.node_states.AUTONOM)
+    if setState(STATE.AUTONOM) then
+      node_state_machine:transition(constants.node_states.AUTONOM)
+    end
+  end
+end
+
+local function clamp_autonom_targets()
+  targets.power = 0
+  local rpm_target = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+  local steam_target = safety.clamp(config.autonom.target_steam, 0, config.autonom.max_steam)
+  targets.rpm = ramp_towards(targets.rpm, rpm_target, config.autonom.rpm_step)
+  targets.steam = ramp_towards(targets.steam, steam_target, config.autonom.steam_step)
+end
+
+local function note_master_seen()
+  master_seen = os.epoch("utc")
+  if setState(STATE.MASTER) then
+    if node_state_machine.state() == constants.node_states.AUTONOM then
+      node_state_machine:transition(constants.node_states.RUNNING)
     end
   end
 end
@@ -382,7 +499,7 @@ local states = {
       adjust_reactors()
       monitor_master()
       if not active_startup and #startup_queue == 0 then
-        current_state:transition(constants.node_states.RUNNING)
+        node_state_machine:transition(constants.node_states.RUNNING)
       end
     end
   },
@@ -403,13 +520,16 @@ local states = {
   },
   [constants.node_states.AUTONOM] = {
     on_enter = function()
-      targets.power = math.min(targets.power, 5000)
+      active_startup = nil
+      startup_queue = {}
+      clamp_autonom_targets()
     end,
     on_tick = function()
+      clamp_autonom_targets()
       adjust_reactors()
       adjust_turbines()
-      if os.epoch("utc") - master_seen < hb * 2000 then
-        current_state:transition(constants.node_states.RUNNING)
+      if current_state == STATE.MASTER then
+        node_state_machine:transition(constants.node_states.RUNNING)
       end
     end
   },
@@ -434,7 +554,22 @@ local function handle_command(message)
   if not protocol.is_for_node(message, network.id) then return end
   local command = message.payload.command
   if not command then return end
-  master_seen = os.epoch("utc")
+  if current_state == STATE.SAFE then
+    network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "safe: ignoring commands"))
+    return
+  end
+  local was_autonom = current_state == STATE.AUTONOM
+  note_master_seen()
+  if was_autonom then
+    if command.target == constants.command_targets.POWER_TARGET
+      or command.target == constants.command_targets.STEAM_TARGET
+      or command.target == constants.command_targets.TURBINE_RPM
+      or command.target == constants.command_targets.REQUEST_STARTUP_MODULE
+      or command.target == constants.command_targets.MODE then
+      network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "autonom: holding safe targets"))
+      return
+    end
+  end
   if command.target == constants.command_targets.POWER_TARGET then
     targets.power = command.value
   elseif command.target == constants.command_targets.STEAM_TARGET then
@@ -443,7 +578,7 @@ local function handle_command(message)
     targets.rpm = command.value
   elseif command.target == constants.command_targets.MODE then
     if states[command.value] then
-      current_state:transition(command.value)
+      node_state_machine:transition(command.value)
     end
   elseif command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
     local value = command.value or {}
@@ -456,13 +591,16 @@ local function handle_command(message)
     network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, detail or "ack", module.id))
     return
   elseif command.target == constants.command_targets.SCRAM then
-    current_state:transition(constants.node_states.EMERGENCY)
+    setState(STATE.SAFE)
+    if node_state_machine.state() ~= constants.node_states.EMERGENCY then
+      node_state_machine:transition(constants.node_states.EMERGENCY)
+    end
   end
   network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "ack"))
 end
 
 local function send_heartbeat()
-  network:send(constants.channels.STATUS, protocol.heartbeat(network.id, network.role, current_state.state()))
+  network:send(constants.channels.STATUS, protocol.heartbeat(network.id, network.role, node_state_machine.state()))
   broadcast_status(constants.status_levels.OK)
   last_heartbeat = os.epoch("utc")
 end
@@ -472,13 +610,16 @@ local function tick_loop()
     refresh_module_peripherals()
     process_startup()
     update_module_states()
-    current_state:tick()
+    if current_state == STATE.SAFE and node_state_machine.state() ~= constants.node_states.EMERGENCY then
+      node_state_machine:transition(constants.node_states.EMERGENCY)
+    end
+    node_state_machine:tick()
     local message = network:receive(0.2)
     if message then
       if message.type == constants.message_types.COMMAND then
         handle_command(message)
       elseif message.type == constants.message_types.HELLO then
-        master_seen = os.epoch("utc")
+        note_master_seen()
       end
     end
     if os.epoch("utc") - last_heartbeat > hb * 1000 then
@@ -492,7 +633,7 @@ local function init()
   build_modules()
   refresh_module_peripherals()
   network = network_lib.init(config)
-  current_state = machine.new(states, constants.node_states.OFF)
+  node_state_machine = machine.new(states, constants.node_states.OFF)
   hello()
   send_heartbeat()
   utils.log("RT", "Node ready: " .. network.id)
