@@ -6,6 +6,11 @@ local safety = require("core.safety")
 local network_lib = require("core.network")
 local machine = require("core.state_machine")
 
+local function log(level, message)
+  local stamp = textutils.formatTime(os.epoch("utc") / 1000, true)
+  print(string.format("[%s] RT | %s | %s", stamp, level, message))
+end
+
 local function loadConfig()
   local path = "/xreactor/nodes/rt/config.lua"
   if not fs.exists(path) then
@@ -46,6 +51,8 @@ local startup_queue = {}
 local master_seen = os.epoch("utc")
 local last_heartbeat = 0
 local mode = constants.roles.MASTER
+local status_snapshot = nil
+local last_snapshot = 0
 
 local STATE = {
   INIT = "INIT",
@@ -111,17 +118,17 @@ local function setState(new_state)
   local previous_state = current_state
   current_state = new_state
   if new_state == STATE.AUTONOM then
-    utils.log("RT", "Entering AUTONOM mode")
+    log("INFO", "Entering AUTONOM mode")
   elseif new_state == STATE.MASTER then
     if previous_state == STATE.AUTONOM then
-      utils.log("RT", "Master reconnected")
+      log("INFO", "Master reconnected")
     else
-      utils.log("RT", "Entering MASTER mode")
+      log("INFO", "Entering MASTER mode")
     end
   elseif new_state == STATE.SAFE then
-    utils.log("RT", "Entering SAFE mode")
+    log("INFO", "Entering SAFE mode")
   else
-    utils.log("RT", "Entering INIT mode")
+    log("INFO", "Entering INIT mode")
   end
   return true
 end
@@ -212,7 +219,8 @@ local function broadcast_status(status_level)
     turbine_rpm = targets.rpm,
     steam = targets.steam,
     capabilities = { reactors = #config.reactors, turbines = #config.turbines },
-    modules = module_payload()
+    modules = module_payload(),
+    snapshot = status_snapshot
   }
   network:send(constants.channels.STATUS, protocol.status(network.id, network.role, payload))
 end
@@ -274,7 +282,10 @@ local function adjust_reactors()
           module.state = "ERROR"
           module.progress = 0
           module.limits = { "TEMP" }
-          setState(STATE.SAFE)
+          if current_state ~= STATE.SAFE then
+            log("ERROR", "Safety trigger: reactor temperature limit exceeded")
+            setState(STATE.SAFE)
+          end
           if node_state_machine.state() ~= constants.node_states.EMERGENCY then
             node_state_machine:transition(constants.node_states.EMERGENCY)
           end
@@ -421,7 +432,10 @@ local function update_module_states()
         if limit == "TEMP" then
           module.state = "ERROR"
           module.progress = 0
-          setState(STATE.SAFE)
+          if current_state ~= STATE.SAFE then
+            log("ERROR", "Safety trigger: reactor temperature limit exceeded")
+            setState(STATE.SAFE)
+          end
           if node_state_machine.state() ~= constants.node_states.EMERGENCY then
             node_state_machine:transition(constants.node_states.EMERGENCY)
           end
@@ -444,6 +458,7 @@ end
 local function monitor_master()
   if os.epoch("utc") - master_seen > hb * 5000 then
     if setState(STATE.AUTONOM) then
+      log("WARN", "Master timeout detected, switching to AUTONOM")
       node_state_machine:transition(constants.node_states.AUTONOM)
     end
   end
@@ -466,23 +481,62 @@ local function note_master_seen()
   end
 end
 
-local function clamp_autonom_targets()
-  targets.power = 0
-  local rpm_target = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
-  local steam_target = safety.clamp(config.autonom.target_steam, 0, config.autonom.max_steam)
-  targets.rpm = ramp_towards(targets.rpm, rpm_target, config.autonom.rpm_step)
-  targets.steam = ramp_towards(targets.steam, steam_target, config.autonom.steam_step)
-end
+local function update_status_snapshot()
+  local now = os.epoch("utc")
+  local interval = (config.status_interval or 5) * 1000
+  if now - last_snapshot < interval then
+    return status_snapshot
+  end
+  last_snapshot = now
 
-local function note_master_seen()
-  master_seen = os.epoch("utc")
-  if mode == "AUTONOM" then
-    mode = constants.roles.MASTER
-    utils.log("RT", "Master reconnected")
-    if current_state.state() == constants.node_states.AUTONOM then
-      current_state:transition(constants.node_states.RUNNING)
+  local temp_sum, temp_count, temp_max = 0, 0, 0
+  for _, name in ipairs(config.reactors) do
+    local reactor = peripherals.reactors[name]
+    if reactor and reactor.getCasingTemperature then
+      local ok, temp = pcall(reactor.getCasingTemperature)
+      if ok and type(temp) == "number" then
+        temp_sum = temp_sum + temp
+        temp_count = temp_count + 1
+        if temp > temp_max then
+          temp_max = temp
+        end
+      end
     end
   end
+
+  local rpm_sum, rpm_count = 0, 0
+  for _, name in ipairs(config.turbines) do
+    local turbine = peripherals.turbines[name]
+    if turbine and turbine.getRotorSpeed then
+      local ok, rpm = pcall(turbine.getRotorSpeed)
+      if ok and type(rpm) == "number" then
+        rpm_sum = rpm_sum + rpm
+        rpm_count = rpm_count + 1
+      end
+    end
+  end
+
+  local avg_temp = temp_count > 0 and (temp_sum / temp_count) or 0
+  local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
+  local master_connected = (os.epoch("utc") - master_seen) <= hb * 5000
+
+  status_snapshot = {
+    node_id = network and network.id or config.role,
+    state = current_state,
+    master_connected = master_connected,
+    reactor_count = #config.reactors,
+    turbine_count = #config.turbines,
+    avg_temp = avg_temp,
+    max_temp = temp_max,
+    avg_rpm = avg_rpm,
+    timestamp = now
+  }
+
+  if config.status_log then
+    log("INFO", "Status snapshot updated")
+  end
+
+  return status_snapshot
 end
 
 local states = {
@@ -620,6 +674,7 @@ local function handle_command(message)
 end
 
 local function send_heartbeat()
+  update_status_snapshot()
   network:send(constants.channels.STATUS, protocol.heartbeat(network.id, network.role, node_state_machine.state()))
   broadcast_status(constants.status_levels.OK)
   last_heartbeat = os.epoch("utc")
@@ -645,6 +700,7 @@ local function tick_loop()
     if os.epoch("utc") - last_heartbeat > hb * 1000 then
       send_heartbeat()
     end
+    update_status_snapshot()
   end
 end
 
@@ -656,7 +712,7 @@ local function init()
   node_state_machine = machine.new(states, constants.node_states.OFF)
   hello()
   send_heartbeat()
-  utils.log("RT", "Node ready: " .. network.id)
+  log("INFO", "Node ready: " .. network.id)
 end
 
 init()
