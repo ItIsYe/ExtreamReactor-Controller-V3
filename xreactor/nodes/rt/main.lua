@@ -62,6 +62,7 @@ local last_actuator_update = 0
 local missing_warned = {}
 local autonom_state = { reactors = {}, turbines = {} }
 local autonom_control_logged = false
+local capability_cache = { reactors = {}, turbines = {} }
 
 local STATE = {
   INIT = "INIT",
@@ -91,8 +92,82 @@ local function ramp_towards(current, target, step)
   return current - step
 end
 
+local function has_method(methods, method)
+  for _, name in ipairs(methods or {}) do
+    if name == method then
+      return true
+    end
+  end
+  return false
+end
+
+local function build_capabilities(name)
+  local ok, methods = pcall(peripheral.getMethods, name)
+  if not ok or type(methods) ~= "table" then
+    methods = {}
+  end
+  return {
+    setAllControlRodLevels = has_method(methods, "setAllControlRodLevels"),
+    setActive = has_method(methods, "setActive"),
+    setFluidFlowRate = has_method(methods, "setFluidFlowRate"),
+    setFluidFlowRateMax = has_method(methods, "setFluidFlowRateMax"),
+    setInductorEngaged = has_method(methods, "setInductorEngaged")
+  }
+end
+
+local function get_device_caps(kind, name)
+  capability_cache[kind] = capability_cache[kind] or {}
+  if not capability_cache[kind][name] or peripheral.isPresent(name) then
+    capability_cache[kind][name] = build_capabilities(name)
+  end
+  return capability_cache[kind][name]
+end
+
+local function setReactorRods(reactor, caps, level)
+  if caps.setAllControlRodLevels then
+    reactor.setAllControlRodLevels(level)
+    return true
+  end
+  return false
+end
+
+local function setReactorActive(reactor, caps, active)
+  if caps.setActive then
+    reactor.setActive(active)
+    return true
+  end
+  return false
+end
+
+local function setTurbineFlow(turbine, caps, rate)
+  if caps.setFluidFlowRate then
+    turbine.setFluidFlowRate(rate)
+    return true
+  elseif caps.setFluidFlowRateMax then
+    turbine.setFluidFlowRateMax(rate)
+    return true
+  end
+  return false
+end
+
+local function engageInductor(turbine, caps)
+  if caps.setInductorEngaged then
+    turbine.setInductorEngaged(true)
+    return true
+  end
+  return false
+end
+
+local function setTurbineActive(turbine, caps, active)
+  if caps.setActive then
+    turbine.setActive(active)
+    return true
+  end
+  return false
+end
+
 local function update_autonom_control_rods(module)
-  if not module.peripheral or not module.peripheral.setAllControlRodLevels then
+  if not module.peripheral or not module.caps or not module.caps.setAllControlRodLevels then
     return
   end
   if not module.autonom_control_rod then
@@ -107,7 +182,7 @@ local function update_autonom_control_rods(module)
   local current = module.autonom_control_rod or target
   local next_level = ramp_towards(current, target, config.autonom.control_rod_step)
   module.autonom_control_rod = next_level
-  local ok, err = pcall(module.peripheral.setAllControlRodLevels, next_level)
+  local ok, err = pcall(setReactorRods, module.peripheral, module.caps, next_level)
   if not ok then
     warn_once("reactor_rods:" .. module.name, "Reactor rods update failed for " .. module.name .. ": " .. tostring(err))
   end
@@ -121,6 +196,10 @@ local function warn_once(key, message)
   end
   missing_warned[key] = now
   log("WARN", message)
+end
+
+local function warn_unsupported(name)
+  warn_once("device_unsupported:" .. name, "Device unsupported by API: " .. name)
 end
 
 local set_reactors_active
@@ -143,12 +222,19 @@ local function updateActuators()
       warn_once("reactor_missing:" .. name, "Reactor missing: " .. name)
     end
     if reactor then
-      if not reactor.setAllControlRodLevels then
-        warn_once("reactor_capability:" .. name, "Reactor missing setAllControlRodLevels: " .. name)
+      local caps = get_device_caps("reactors", name)
+      if not caps.setAllControlRodLevels then
+        warn_unsupported(name)
         goto continue_reactor
       end
-      if reactor.setActive then
-        pcall(reactor.setActive, true)
+      local ok_active, active_result = pcall(setReactorActive, reactor, caps, true)
+      if not ok_active then
+        warn_once("reactor_active:" .. name, "Reactor activate failed for " .. name .. ": " .. tostring(active_result))
+        goto continue_reactor
+      end
+      if not active_result then
+        warn_unsupported(name)
+        goto continue_reactor
       end
       local level = autonom_state.reactors[name]
       if level == nil and reactor.getControlRodLevel then
@@ -160,9 +246,14 @@ local function updateActuators()
       local target = safety.clamp(config.autonom.control_rod_level, 0, 100)
       local next_level = ramp_towards(level or target, target, config.autonom.control_rod_step)
       autonom_state.reactors[name] = next_level
-      local ok, err = pcall(reactor.setAllControlRodLevels, next_level)
+      local ok, result = pcall(setReactorRods, reactor, caps, next_level)
       if not ok then
-        warn_once("reactor_rods:" .. name, "Reactor rods update failed for " .. name .. ": " .. tostring(err))
+        warn_once("reactor_rods:" .. name, "Reactor rods update failed for " .. name .. ": " .. tostring(result))
+        goto continue_reactor
+      end
+      if not result then
+        warn_unsupported(name)
+        goto continue_reactor
       end
       ::continue_reactor::
     end
@@ -181,18 +272,33 @@ local function updateActuators()
       warn_once("turbine_missing:" .. name, "Turbine missing: " .. name)
     end
     if turbine then
-      if not turbine.setInductorEngaged then
-        warn_once("turbine_capability_inductor:" .. name, "Turbine missing setInductorEngaged: " .. name)
+      local caps = get_device_caps("turbines", name)
+      if not caps.setInductorEngaged then
+        warn_unsupported(name)
         goto continue_turbine
       end
-      if not turbine.setFluidFlowRate then
-        warn_once("turbine_capability_flow:" .. name, "Turbine missing setFluidFlowRate: " .. name)
+      if not (caps.setFluidFlowRate or caps.setFluidFlowRateMax) then
+        warn_unsupported(name)
         goto continue_turbine
       end
-      if turbine.setActive then
-        pcall(turbine.setActive, true)
+      local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
+      if not ok_active then
+        warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(active_result))
+        goto continue_turbine
       end
-      pcall(turbine.setInductorEngaged, true)
+      if not active_result then
+        warn_unsupported(name)
+        goto continue_turbine
+      end
+      local ok_inductor, inductor_result = pcall(engageInductor, turbine, caps)
+      if not ok_inductor then
+        warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
+        goto continue_turbine
+      end
+      if not inductor_result then
+        warn_unsupported(name)
+        goto continue_turbine
+      end
       local rpm = nil
       if turbine.getRotorSpeed then
         local ok, value = pcall(turbine.getRotorSpeed)
@@ -221,9 +327,13 @@ local function updateActuators()
       flow = safety.clamp(flow, 0, config.autonom.max_steam)
       state.flow = flow
       autonom_state.turbines[name] = state
-      local ok, err = pcall(turbine.setFluidFlowRate, flow)
+      local ok, result = pcall(setTurbineFlow, turbine, caps, flow)
       if not ok then
-        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(err))
+        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
+        goto continue_turbine
+      end
+      if not result then
+        warn_unsupported(name)
       end
       ::continue_turbine::
     end
@@ -238,16 +348,31 @@ local function updateControl()
   for _, name in ipairs(config.reactors or {}) do
     local ok, reactor = pcall(peripheral.wrap, name)
     if ok and reactor then
-      if not reactor.setAllControlRodLevels then
-        warn_once("reactor_capability:" .. name, "Reactor missing setAllControlRodLevels: " .. name)
+      local caps = get_device_caps("reactors", name)
+      if not caps.setAllControlRodLevels then
+        warn_unsupported(name)
         goto continue_control_reactor
       end
-      if reactor.setActive then
-        pcall(reactor.setActive, true)
+      local ok_active, active_result = pcall(setReactorActive, reactor, caps, true)
+      if not ok_active then
+        warn_once("reactor_active:" .. name, "Reactor activate failed for " .. name .. ": " .. tostring(active_result))
+        goto continue_control_reactor
+      end
+      if not active_result then
+        warn_unsupported(name)
+        goto continue_control_reactor
       end
       local target = safety.clamp(config.autonom.control_rod_level, 0, 100)
-      local set_ok = pcall(reactor.setAllControlRodLevels, target)
-      if set_ok and not autonom_control_logged then
+      local set_ok, result = pcall(setReactorRods, reactor, caps, target)
+      if not set_ok then
+        warn_once("reactor_rods:" .. name, "Reactor rods update failed for " .. name .. ": " .. tostring(result))
+        goto continue_control_reactor
+      end
+      if not result then
+        warn_unsupported(name)
+        goto continue_control_reactor
+      end
+      if not autonom_control_logged then
         autonom_control_logged = true
         log("INFO", "AUTONOM actuator control active")
       end
@@ -258,21 +383,44 @@ local function updateControl()
   for _, name in ipairs(config.turbines or {}) do
     local ok, turbine = pcall(peripheral.wrap, name)
     if ok and turbine then
-      if not turbine.setInductorEngaged then
-        warn_once("turbine_capability_inductor:" .. name, "Turbine missing setInductorEngaged: " .. name)
+      local caps = get_device_caps("turbines", name)
+      if not caps.setInductorEngaged then
+        warn_unsupported(name)
         goto continue_control_turbine
       end
-      if not turbine.setFluidFlowRate then
-        warn_once("turbine_capability_flow:" .. name, "Turbine missing setFluidFlowRate: " .. name)
+      if not (caps.setFluidFlowRate or caps.setFluidFlowRateMax) then
+        warn_unsupported(name)
         goto continue_control_turbine
       end
-      if turbine.setActive then
-        pcall(turbine.setActive, true)
+      local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
+      if not ok_active then
+        warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(active_result))
+        goto continue_control_turbine
       end
-      pcall(turbine.setInductorEngaged, true)
+      if not active_result then
+        warn_unsupported(name)
+        goto continue_control_turbine
+      end
+      local ok_inductor, inductor_result = pcall(engageInductor, turbine, caps)
+      if not ok_inductor then
+        warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
+        goto continue_control_turbine
+      end
+      if not inductor_result then
+        warn_unsupported(name)
+        goto continue_control_turbine
+      end
       local target = safety.clamp(config.autonom.target_steam, 0, config.autonom.max_steam)
-      local set_ok = pcall(turbine.setFluidFlowRate, target)
-      if set_ok and not autonom_control_logged then
+      local set_ok, result = pcall(setTurbineFlow, turbine, caps, target)
+      if not set_ok then
+        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
+        goto continue_control_turbine
+      end
+      if not result then
+        warn_unsupported(name)
+        goto continue_control_turbine
+      end
+      if not autonom_control_logged then
         autonom_control_logged = true
         log("INFO", "AUTONOM actuator control active")
       end
@@ -318,6 +466,12 @@ end
 local function cache()
   peripherals.reactors = utils.cache_peripherals(config.reactors)
   peripherals.turbines = utils.cache_peripherals(config.turbines)
+  for _, name in ipairs(config.reactors) do
+    capability_cache.reactors[name] = build_capabilities(name)
+  end
+  for _, name in ipairs(config.turbines) do
+    capability_cache.turbines[name] = build_capabilities(name)
+  end
   if config.steam_buffer and peripheral.isPresent(config.steam_buffer) then
     local wrapped, err = utils.safe_wrap(config.steam_buffer)
     if wrapped then
@@ -353,8 +507,10 @@ local function refresh_module_peripherals()
   for _, module in pairs(modules) do
     if module.type == "turbine" then
       module.peripheral = peripherals.turbines[module.name]
+      module.caps = module.peripheral and get_device_caps("turbines", module.name) or nil
     else
       module.peripheral = peripherals.reactors[module.name]
+      module.caps = module.peripheral and get_device_caps("reactors", module.name) or nil
     end
   end
 end
@@ -418,15 +574,25 @@ local function hello()
 end
 
 set_reactors_active = function(active)
-  for _, reactor in pairs(peripherals.reactors) do
-    pcall(reactor.setActive, active)
+  for name, reactor in pairs(peripherals.reactors) do
+    local caps = get_device_caps("reactors", name)
+    local ok, result = pcall(setReactorActive, reactor, caps, active)
+    if not ok then
+      warn_once("reactor_active:" .. name, "Reactor activate failed for " .. name .. ": " .. tostring(result))
+    elseif not result then
+      warn_unsupported(name)
+    end
   end
 end
 
 set_turbines_active = function(active)
-  for _, turbine in pairs(peripherals.turbines) do
-    if turbine.setActive then
-      pcall(turbine.setActive, active)
+  for name, turbine in pairs(peripherals.turbines) do
+    local caps = get_device_caps("turbines", name)
+    local ok, result = pcall(setTurbineActive, turbine, caps, active)
+    if not ok then
+      warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(result))
+    elseif not result then
+      warn_unsupported(name)
     end
   end
 end
@@ -471,10 +637,18 @@ local function adjust_reactors()
   for _, module in pairs(modules) do
     if module.type == "reactor" and module.peripheral then
       if module.state == "OFF" or module.state == "ERROR" then
-        if module.peripheral.setActive then module.peripheral.setActive(false) end
+        if module.caps then
+          local ok_active, active_result = pcall(setReactorActive, module.peripheral, module.caps, false)
+          if ok_active and not active_result then
+            warn_unsupported(module.name)
+          end
+        end
       else
-        if (current_state == STATE.AUTONOM or current_state == STATE.MASTER) and module.peripheral.setActive then
-          module.peripheral.setActive(true)
+        if (current_state == STATE.AUTONOM or current_state == STATE.MASTER) and module.caps then
+          local ok_active, active_result = pcall(setReactorActive, module.peripheral, module.caps, true)
+          if ok_active and not active_result then
+            warn_unsupported(module.name)
+          end
         end
         local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
         if temp > config.safety.max_temperature then
@@ -490,18 +664,20 @@ local function adjust_reactors()
           end
           return
         end
-        if not module.peripheral.setAllControlRodLevels then
-          warn_once("reactor_capability:" .. module.name, "Reactor missing setAllControlRodLevels: " .. module.name)
+        if not module.caps or not module.caps.setAllControlRodLevels then
+          warn_unsupported(module.name)
           goto continue_adjust_reactor
-        elseif module.peripheral.setAllControlRodLevels then
+        elseif module.caps and module.caps.setAllControlRodLevels then
           if current_state == STATE.AUTONOM then
             update_autonom_control_rods(module)
           else
             local level = 100 - math.min(100, targets.power / (math.max(1, active) * 10))
             module.autonom_control_rod = nil
-            local ok, err = pcall(module.peripheral.setAllControlRodLevels, level)
+            local ok, result = pcall(setReactorRods, module.peripheral, module.caps, level)
             if not ok then
-              warn_once("reactor_rods:" .. module.name, "Reactor rods update failed for " .. module.name .. ": " .. tostring(err))
+              warn_once("reactor_rods:" .. module.name, "Reactor rods update failed for " .. module.name .. ": " .. tostring(result))
+            elseif not result then
+              warn_unsupported(module.name)
             end
           end
         end
@@ -515,25 +691,57 @@ local function adjust_turbines()
   for _, module in pairs(modules) do
     if module.type == "turbine" and module.peripheral then
       if module.state == "OFF" or module.state == "ERROR" then
-        if module.peripheral.setActive then module.peripheral.setActive(false) end
+        if module.caps then
+          local ok_active, active_result = pcall(setTurbineActive, module.peripheral, module.caps, false)
+          if ok_active and not active_result then
+            warn_unsupported(module.name)
+          end
+        end
       else
-        if not module.peripheral.setInductorEngaged then
-          warn_once("turbine_capability_inductor:" .. module.name, "Turbine missing setInductorEngaged: " .. module.name)
+        if not module.caps or not module.caps.setInductorEngaged then
+          warn_unsupported(module.name)
           goto continue_adjust_turbine
         end
-        if not module.peripheral.setFluidFlowRate then
-          warn_once("turbine_capability_flow:" .. module.name, "Turbine missing setFluidFlowRate: " .. module.name)
+        if not module.caps or not (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
+          warn_unsupported(module.name)
           goto continue_adjust_turbine
         end
-        module.peripheral.setInductorEngaged(true)
-        if (current_state == STATE.AUTONOM or current_state == STATE.MASTER) and module.peripheral.setActive then
-          module.peripheral.setActive(true)
+        local ok_inductor, inductor_result = pcall(engageInductor, module.peripheral, module.caps)
+        if not ok_inductor then
+          warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
+          goto continue_adjust_turbine
+        end
+        if not inductor_result then
+          warn_unsupported(module.name)
+          goto continue_adjust_turbine
+        end
+        if (current_state == STATE.AUTONOM or current_state == STATE.MASTER) and module.caps then
+          local ok_active, active_result = pcall(setTurbineActive, module.peripheral, module.caps, true)
+          if ok_active and not active_result then
+            warn_unsupported(module.name)
+          end
         end
         local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
         local request = safety.safe_steam_request(targets.steam, 4000)
-        module.peripheral.setFluidFlowRate(request)
+        local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, request)
+        if not ok_flow then
+          warn_once("turbine_flow:" .. module.name, "Turbine flow update failed for " .. module.name .. ": " .. tostring(flow_result))
+          goto continue_adjust_turbine
+        end
+        if not flow_result then
+          warn_unsupported(module.name)
+          goto continue_adjust_turbine
+        end
         if rpm > targets.rpm * 1.1 then
-          module.peripheral.setFluidFlowRate(targets.steam * 0.8)
+          local ok_adjust, adjust_result = pcall(setTurbineFlow, module.peripheral, module.caps, targets.steam * 0.8)
+          if not ok_adjust then
+            warn_once("turbine_flow:" .. module.name, "Turbine flow update failed for " .. module.name .. ": " .. tostring(adjust_result))
+            goto continue_adjust_turbine
+          end
+          if not adjust_result then
+            warn_unsupported(module.name)
+            goto continue_adjust_turbine
+          end
         end
       end
     end
@@ -613,27 +821,64 @@ local function process_startup()
   local progress = safety.clamp((now - module.start_time) / duration, 0, 1)
   module.progress = progress
   if module.type == "turbine" then
-    if module.peripheral.setActive then module.peripheral.setActive(true) end
-    if not module.peripheral.setInductorEngaged then
-      warn_once("turbine_capability_inductor:" .. module.name, "Turbine missing setInductorEngaged: " .. module.name)
+    if module.caps then
+      local ok_active, active_result = pcall(setTurbineActive, module.peripheral, module.caps, true)
+      if ok_active and not active_result then
+        warn_unsupported(module.name)
+      end
+    end
+    if not module.caps or not module.caps.setInductorEngaged then
+      warn_unsupported(module.name)
       module.state = "ERROR"
       module.progress = 0
       module.limits = { "CONTROL" }
       active_startup = nil
       return
     end
-    if not module.peripheral.setFluidFlowRate then
-      warn_once("turbine_capability_flow:" .. module.name, "Turbine missing setFluidFlowRate: " .. module.name)
+    if not module.caps or not (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
+      warn_unsupported(module.name)
       module.state = "ERROR"
       module.progress = 0
       module.limits = { "CONTROL" }
       active_startup = nil
       return
     end
-    module.peripheral.setInductorEngaged(true)
-    if module.peripheral.setFluidFlowRate then
+    local ok_inductor, inductor_result = pcall(engageInductor, module.peripheral, module.caps)
+    if not ok_inductor then
+      warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
+      module.state = "ERROR"
+      module.progress = 0
+      module.limits = { "CONTROL" }
+      active_startup = nil
+      return
+    end
+    if not inductor_result then
+      warn_unsupported(module.name)
+      module.state = "ERROR"
+      module.progress = 0
+      module.limits = { "CONTROL" }
+      active_startup = nil
+      return
+    end
+    if module.caps and (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
       local request = safety.safe_steam_request(4000 * progress, 4000)
-      module.peripheral.setFluidFlowRate(request)
+      local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, request)
+      if not ok_flow then
+        warn_once("turbine_flow:" .. module.name, "Turbine flow update failed for " .. module.name .. ": " .. tostring(flow_result))
+        module.state = "ERROR"
+        module.progress = 0
+        module.limits = { "CONTROL" }
+        active_startup = nil
+        return
+      end
+      if not flow_result then
+        warn_unsupported(module.name)
+        module.state = "ERROR"
+        module.progress = 0
+        module.limits = { "CONTROL" }
+        active_startup = nil
+        return
+      end
     end
     local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
     if progress >= 1 and rpm >= 1600 then
@@ -641,18 +886,39 @@ local function process_startup()
       active_startup = nil
     end
   elseif module.type == "reactor" then
-    if module.peripheral.setActive then module.peripheral.setActive(true) end
-    if not module.peripheral.setAllControlRodLevels then
-      warn_once("reactor_capability:" .. module.name, "Reactor missing setAllControlRodLevels: " .. module.name)
+    if module.caps then
+      local ok_active, active_result = pcall(setReactorActive, module.peripheral, module.caps, true)
+      if ok_active and not active_result then
+        warn_unsupported(module.name)
+      end
+    end
+    if not module.caps or not module.caps.setAllControlRodLevels then
+      warn_unsupported(module.name)
       module.state = "ERROR"
       module.progress = 0
       module.limits = { "CONTROL" }
       active_startup = nil
       return
     end
-    if module.peripheral.setAllControlRodLevels then
+    if module.caps and module.caps.setAllControlRodLevels then
       local level = 100 - math.floor(progress * 100)
-      module.peripheral.setAllControlRodLevels(level)
+      local ok_rods, rods_result = pcall(setReactorRods, module.peripheral, module.caps, level)
+      if not ok_rods then
+        warn_once("reactor_rods:" .. module.name, "Reactor rods update failed for " .. module.name .. ": " .. tostring(rods_result))
+        module.state = "ERROR"
+        module.progress = 0
+        module.limits = { "CONTROL" }
+        active_startup = nil
+        return
+      end
+      if not rods_result then
+        warn_unsupported(module.name)
+        module.state = "ERROR"
+        module.progress = 0
+        module.limits = { "CONTROL" }
+        active_startup = nil
+        return
+      end
     end
     local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
     if progress >= 1 and temp > 0 and temp < config.safety.max_temperature then
