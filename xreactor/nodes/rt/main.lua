@@ -61,6 +61,11 @@ local last_monitor_update = 0
 local last_actuator_update = 0
 local missing_warned = {}
 local autonom_state = { reactors = {}, turbines = {} }
+local autonom_targets = {
+  rod_level = 85,
+  turbine_rpm = 900
+}
+local autonom_control_logged = false
 
 local STATE = {
   INIT = "INIT",
@@ -210,6 +215,34 @@ local function updateActuators()
         if not ok then
           warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(err))
         end
+      end
+    end
+  end
+end
+
+local function updateControl()
+  if current_state ~= STATE.AUTONOM then
+    return
+  end
+
+  for _, name in ipairs(config.reactors or {}) do
+    local ok, reactor = pcall(peripheral.wrap, name)
+    if ok and reactor and reactor.setControlRodLevel then
+      local set_ok = pcall(reactor.setControlRodLevel, autonom_targets.rod_level)
+      if set_ok and not autonom_control_logged then
+        autonom_control_logged = true
+        log("INFO", "AUTONOM control loop active")
+      end
+    end
+  end
+
+  for _, name in ipairs(config.turbines or {}) do
+    local ok, turbine = pcall(peripheral.wrap, name)
+    if ok and turbine and turbine.setRPM then
+      local set_ok = pcall(turbine.setRPM, autonom_targets.turbine_rpm)
+      if set_ok and not autonom_control_logged then
+        autonom_control_logged = true
+        log("INFO", "AUTONOM control loop active")
       end
     end
   end
@@ -838,7 +871,7 @@ local function send_heartbeat()
   last_heartbeat = os.epoch("utc")
 end
 
-local function tick_loop()
+local function mainEventLoop()
   while true do
     refresh_module_peripherals()
     process_startup()
@@ -858,10 +891,6 @@ local function tick_loop()
     if os.epoch("utc") - last_heartbeat > hb * 1000 then
       send_heartbeat()
     end
-    if os.epoch("utc") - last_actuator_update > 1000 then
-      updateActuators()
-      last_actuator_update = os.epoch("utc")
-    end
     update_monitor()
     update_status_snapshot()
   end
@@ -880,4 +909,12 @@ local function init()
 end
 
 init()
-tick_loop()
+parallel.waitForAny(
+  function()
+    while true do
+      updateControl()
+      sleep(1)
+    end
+  end,
+  mainEventLoop
+)
