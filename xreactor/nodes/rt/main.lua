@@ -7,6 +7,29 @@ local safety = require("core.safety")
 local network_lib = require("core.network")
 local machine = require("core.state_machine")
 
+-- === Reactor demand evaluation (GLOBAL) ===
+function get_reactor_demand()
+  local need_more = false
+  local need_less = true
+
+  for _, ctrl in pairs(turbine_ctrl or {}) do
+    local rpm = ctrl.rpm or 0
+    local flow = ctrl.flow or 0
+
+    if rpm < TARGET_RPM - 40 and flow >= MAX_FLOW * 0.8 then
+      need_more = true
+      need_less = false
+      break
+    end
+
+    if rpm < TARGET_RPM + 30 then
+      need_less = false
+    end
+  end
+
+  return need_more, need_less
+end
+
 local function log(level, message)
   local stamp = textutils.formatTime(os.epoch("utc") / 1000, true)
   print(string.format("[%s] RT | %s | %s", stamp, level, message))
@@ -619,28 +642,6 @@ local function get_turbine_stats(target_rpm)
     need_more_steam = need_more_steam,
     need_less_steam = need_less_steam
   }
-end
-
-local function get_reactor_demand()
-  local need_more = false
-  local need_less = true
-
-  for _, ctrl in pairs(turbine_ctrl) do
-    local rpm = ctrl.rpm or 0
-    local flow = ctrl.flow or 0
-
-    if rpm < TARGET_RPM - 40 and flow >= MAX_FLOW * 0.8 then
-      need_more = true
-      need_less = false
-      break
-    end
-
-    if rpm < TARGET_RPM + 30 then
-      need_less = false
-    end
-  end
-
-  return need_more, need_less
 end
 
 compute_reactor_target_level = function(current_rods, need_more, need_less)
