@@ -88,7 +88,7 @@ local last_snapshot = 0
 local monitor = nil
 local last_monitor_update = 0
 local last_actuator_update = 0
-local missing_warned = {}
+local warned = {}
 local autonom_state = { reactors = {}, turbines = {} }
 local autonom_control_logged = false
 local capability_cache = { reactors = {}, turbines = {} }
@@ -404,87 +404,6 @@ local function log_reactor_control_state()
   log("DEBUG", "ReactorCtrl state=" .. tostring(current_state) .. " rods=" .. tostring(sample_rods) .. " base=" .. tostring(BASELOAD_RODS) .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
 end
 
-local function forceSteamRecovery()
-  for name, ctrl in pairs(reactor_ctrl) do
-    local reactor = peripheral.wrap(name)
-    if reactor then
-      local desired = math.min(ctrl.rods or BASELOAD_RODS, BASELOAD_RODS)
-      desired = clamp_rods(desired, false)
-      local ok, result = pcall(reactor.setAllControlRodLevels, desired)
-      if ok then
-        ctrl.rods = desired
-        ctrl.last_applied = desired
-        autonom_state.reactor_target = desired
-        log("INFO", "Forced steam recovery rods -> " .. tostring(desired) .. "%")
-      else
-        log("ERROR", "Steam recovery failed for " .. name .. ": " .. tostring(result))
-      end
-    end
-  end
-end
-
-local function check_turbine_starvation()
-  local starved = false
-  local now = os.clock()
-  local rpm_threshold = TARGET_RPM * 0.6
-  local flow_threshold = MAX_FLOW * 0.8
-  for _, name in ipairs(config.turbines or {}) do
-    local turbine = peripherals.turbines and peripherals.turbines[name] or nil
-    local ctrl = ensure_turbine_ctrl(name)
-    if turbine then
-      local rpm = turbine.getRotorSpeed and turbine.getRotorSpeed() or nil
-      local flow = nil
-      if turbine.getFluidFlowRate then
-        local ok, value = pcall(turbine.getFluidFlowRate)
-        if ok and type(value) == "number" then
-          flow = value
-        end
-      end
-      if flow == nil then
-        flow = ctrl.flow
-      end
-      local starving = type(rpm) == "number"
-        and type(flow) == "number"
-        and rpm < rpm_threshold
-        and flow >= flow_threshold
-      if starving then
-        ctrl.starve_since = ctrl.starve_since or now
-        local duration = now - ctrl.starve_since
-        if duration >= 10 then
-          starved = true
-          local last_log = ctrl.starve_logged_at or 0
-          if now - last_log >= 5 then
-            ctrl.starve_logged_at = now
-            log("WARN", "STARVED turbine " .. name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " seconds=" .. tostring(math.floor(duration)))
-          end
-        end
-      else
-        ctrl.starve_since = nil
-        ctrl.starve_logged_at = nil
-      end
-    else
-      ctrl.starve_since = nil
-      ctrl.starve_logged_at = nil
-    end
-  end
-  return starved
-end
-
-local function log_reactor_control_state()
-  local now = os.clock()
-  if now - last_reactor_debug_log < 5 then
-    return
-  end
-  last_reactor_debug_log = now
-  local sample_rods = BASELOAD_RODS
-  for _, ctrl in pairs(reactor_ctrl) do
-    sample_rods = ctrl.rods or sample_rods
-    break
-  end
-  local tick_age = now - last_reactor_tick
-  log("DEBUG", "ReactorCtrl state=" .. tostring(current_state) .. " rods=" .. tostring(sample_rods) .. " base=" .. tostring(BASELOAD_RODS) .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
-end
-
 local function update_reactor_setpoints()
   if current_state == STATE.SAFE then
     return
@@ -523,13 +442,11 @@ local function updateReactorControl()
   applyReactorRods(autonom_state.reactor_target, false)
 end
 
-local function warn_once(key, message)
-  local now = os.epoch("utc")
-  local last = missing_warned[key] or 0
-  if now - last < 60000 then
+function warn_once(key, message)
+  if warned[key] then
     return
   end
-  missing_warned[key] = now
+  warned[key] = true
   log("WARN", message)
 end
 
