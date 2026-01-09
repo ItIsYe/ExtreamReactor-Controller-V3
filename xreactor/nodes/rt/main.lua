@@ -367,6 +367,9 @@ local function get_turbine_stats(target_rpm)
   local near_max, below_max = 0, 0
   local total = 0
   local at_target = 0
+  local steam_demand = false
+  local hungry = 0
+  local flow_high = MAX_FLOW * 0.85
   target_rpm = target_rpm or safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
   local max_flow = config.autonom.max_flow
   local near_threshold = max_flow * config.autonom.flow_near_max
@@ -404,6 +407,12 @@ local function get_turbine_stats(target_rpm)
           below_max = below_max + 1
         end
       end
+      if type(rpm) == "number" and type(flow) == "number" then
+        if rpm < (TARGET_RPM - 30) and flow >= flow_high then
+          steam_demand = true
+          hungry = hungry + 1
+        end
+      end
     end
   end
   local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
@@ -414,7 +423,9 @@ local function get_turbine_stats(target_rpm)
     near_max = near_max,
     below_max = below_max,
     turbines_at_target_rpm = at_target,
-    total_turbines = total
+    total_turbines = total,
+    steam_demand = steam_demand,
+    hungry_turbines = hungry
   }
 end
 
@@ -429,7 +440,6 @@ compute_reactor_target_level = function()
   local target_rpm = targets.rpm > 0
     and safety.clamp(targets.rpm, 0, max_rpm)
     or safety.clamp(config.autonom.target_rpm, 0, max_rpm)
-  local demand_ratio = max_rpm > 0 and (target_rpm / max_rpm) or 0
   local stats = get_turbine_stats(target_rpm)
   if stats.total_turbines == 0 then
     local clamped = clamp_rods(target, false)
@@ -442,22 +452,12 @@ compute_reactor_target_level = function()
   if now - last_adjust < interval then
     return target
   end
-  local tol = config.autonom.rpm_tolerance or 0
-  local rpm_stable = math.abs(stats.avg_rpm - target_rpm) <= tol
-  local max_flow = config.autonom.max_flow
-  local flow_target = max_flow * demand_ratio
-  local flow_high = stats.avg_flow > (flow_target * 0.9)
-  local flow_low = stats.avg_flow < (flow_target * 0.6)
-  local rpm_low = stats.avg_rpm < (target_rpm * 0.9)
-  if flow_high or rpm_low then
+  if stats.steam_demand then
     target = target - config.autonom.reactor_step_up
     autonom_state.reactor_adjust_at = now
-  elseif rpm_stable and flow_low then
+  else
     target = target + config.autonom.reactor_step_down
     autonom_state.reactor_adjust_at = now
-  end
-  if stats.avg_rpm < (TARGET_RPM * 0.8) or stats.avg_flow > (MAX_FLOW * 0.8) then
-    target = math.min(target, BASELOAD_RODS)
   end
   target = clamp_rods(safety.clamp(target, min_rods, max_rods), false)
   autonom_state.reactor_target = target
