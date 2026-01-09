@@ -77,6 +77,9 @@ local active_startup = nil
 local startup_queue = {}
 local master_seen = os.epoch("utc")
 local last_heartbeat = 0
+local last_reactor_tick = 0
+local last_reactor_debug_log = 0
+local last_reactor_watchdog = 0
 local mode = constants.roles.MASTER
 local status_snapshot = nil
 local last_snapshot = 0
@@ -293,6 +296,87 @@ local function apply_initial_reactor_rods()
   applyReactorRods(false)
 end
 
+local function forceSteamRecovery()
+  for name, ctrl in pairs(reactor_ctrl) do
+    local reactor = peripheral.wrap(name)
+    if reactor then
+      local desired = math.min(ctrl.rods or BASELOAD_RODS, BASELOAD_RODS)
+      desired = clamp_rods(desired, false)
+      local ok, result = pcall(reactor.setAllControlRodLevels, desired)
+      if ok then
+        ctrl.rods = desired
+        ctrl.last_applied = desired
+        autonom_state.reactor_target = desired
+        log("INFO", "Forced steam recovery rods -> " .. tostring(desired) .. "%")
+      else
+        log("ERROR", "Steam recovery failed for " .. name .. ": " .. tostring(result))
+      end
+    end
+  end
+end
+
+local function check_turbine_starvation()
+  local starved = false
+  local now = os.clock()
+  local rpm_threshold = TARGET_RPM * 0.6
+  local flow_threshold = MAX_FLOW * 0.8
+  for _, name in ipairs(config.turbines or {}) do
+    local turbine = peripherals.turbines and peripherals.turbines[name] or nil
+    local ctrl = ensure_turbine_ctrl(name)
+    if turbine then
+      local rpm = turbine.getRotorSpeed and turbine.getRotorSpeed() or nil
+      local flow = nil
+      if turbine.getFluidFlowRate then
+        local ok, value = pcall(turbine.getFluidFlowRate)
+        if ok and type(value) == "number" then
+          flow = value
+        end
+      end
+      if flow == nil then
+        flow = ctrl.flow
+      end
+      local starving = type(rpm) == "number"
+        and type(flow) == "number"
+        and rpm < rpm_threshold
+        and flow >= flow_threshold
+      if starving then
+        ctrl.starve_since = ctrl.starve_since or now
+        local duration = now - ctrl.starve_since
+        if duration >= 10 then
+          starved = true
+          local last_log = ctrl.starve_logged_at or 0
+          if now - last_log >= 5 then
+            ctrl.starve_logged_at = now
+            log("WARN", "STARVED turbine " .. name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " seconds=" .. tostring(math.floor(duration)))
+          end
+        end
+      else
+        ctrl.starve_since = nil
+        ctrl.starve_logged_at = nil
+      end
+    else
+      ctrl.starve_since = nil
+      ctrl.starve_logged_at = nil
+    end
+  end
+  return starved
+end
+
+local function log_reactor_control_state()
+  local now = os.clock()
+  if now - last_reactor_debug_log < 5 then
+    return
+  end
+  last_reactor_debug_log = now
+  local sample_rods = BASELOAD_RODS
+  for _, ctrl in pairs(reactor_ctrl) do
+    sample_rods = ctrl.rods or sample_rods
+    break
+  end
+  local tick_age = now - last_reactor_tick
+  log("DEBUG", "ReactorCtrl state=" .. tostring(current_state) .. " rods=" .. tostring(sample_rods) .. " base=" .. tostring(BASELOAD_RODS) .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
+end
+
 local function update_reactor_setpoints()
   if current_state == STATE.SAFE then
     return
@@ -317,11 +401,16 @@ local function update_reactor_setpoints()
 end
 
 local function updateReactorControl()
+  last_reactor_tick = os.clock()
   log("DEBUG", "Reactor control tick")
   if current_state == STATE.SAFE then
     applyReactorRods(true)
     return
   end
+  if check_turbine_starvation() then
+    forceSteamRecovery()
+  end
+  log_reactor_control_state()
   update_reactor_setpoints()
   applyReactorRods(false)
 end
@@ -1545,6 +1634,13 @@ local function mainEventLoop()
     process_startup()
     update_module_states()
     updateReactorControl()
+    if os.clock() - last_reactor_watchdog > 2 then
+      last_reactor_watchdog = os.clock()
+      if os.clock() - last_reactor_tick > 6 then
+        log("ERROR", "Reactor control tick stalled -> forcing recovery")
+        forceSteamRecovery()
+      end
+    end
     if current_state == STATE.SAFE and node_state_machine.state() ~= constants.node_states.EMERGENCY then
       node_state_machine:transition(constants.node_states.EMERGENCY)
     end
