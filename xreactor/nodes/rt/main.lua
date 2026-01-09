@@ -29,7 +29,7 @@ end
 local config = loadConfig()
 local MIN_FLOW = 300
 local MAX_FLOW = 1900
-local TARGET_RPM = 1800
+local TARGET_RPM = 900
 local START_FLOW = 500
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
