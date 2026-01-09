@@ -260,9 +260,20 @@ local function warn_unsupported(name)
   warn_once("device_unsupported:" .. name, "Device unsupported by API: " .. name)
 end
 
-local function update_inductor_for_rpm(turbine, caps, rpm)
-  local min_rpm = config.autonom.min_rpm_for_inductor or 0
-  local engaged = rpm and rpm >= min_rpm
+local function update_inductor_for_rpm(name, turbine, caps, rpm)
+  local ctrl = ensure_turbine_ctrl(name)
+  local engaged = ctrl.inductor_engaged or false
+  local on_rpm = TARGET_RPM * 0.95
+  local off_rpm = TARGET_RPM * 0.85
+  if rpm and rpm >= on_rpm and not engaged then
+    engaged = true
+  elseif (not rpm or rpm <= off_rpm) and engaged then
+    engaged = false
+  end
+  if engaged == ctrl.inductor_engaged then
+    return true, true
+  end
+  ctrl.inductor_engaged = engaged
   return pcall(setInductor, turbine, caps, engaged)
 end
 
@@ -489,7 +500,7 @@ local function updateActuators()
           rpm = value
         end
       end
-      local ok_inductor, inductor_result = update_inductor_for_rpm(turbine, caps, rpm)
+      local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
       if not ok_inductor then
         warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
         goto continue_turbine
@@ -590,7 +601,7 @@ local function updateControl()
           rpm = value
         end
       end
-      local ok_inductor, inductor_result = update_inductor_for_rpm(turbine, caps, rpm)
+      local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
       if not ok_inductor then
         warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
         goto continue_control_turbine
@@ -805,7 +816,7 @@ apply_safe_controls = function()
     local caps = get_device_caps("turbines", name)
     local rpm = turbine.getRotorSpeed and turbine.getRotorSpeed() or nil
     if caps.setInductorEngaged then
-      local ok, result = update_inductor_for_rpm(turbine, caps, rpm)
+      local ok, result = update_inductor_for_rpm(name, turbine, caps, rpm)
       if not ok then
         warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(result))
       elseif not result then
@@ -941,7 +952,7 @@ local function adjust_turbines()
       if module.state == "OFF" or module.state == "ERROR" then
         local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or nil
         if module.caps and module.caps.setInductorEngaged then
-          local ok_inductor, inductor_result = update_inductor_for_rpm(module.peripheral, module.caps, rpm)
+          local ok_inductor, inductor_result = update_inductor_for_rpm(module.name, module.peripheral, module.caps, rpm)
           if not ok_inductor then
             warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
           elseif not inductor_result then
@@ -979,7 +990,7 @@ local function adjust_turbines()
           end
         end
         local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or nil
-        local ok_inductor, inductor_result = update_inductor_for_rpm(module.peripheral, module.caps, rpm)
+        local ok_inductor, inductor_result = update_inductor_for_rpm(module.name, module.peripheral, module.caps, rpm)
         if not ok_inductor then
           warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
           goto continue_adjust_turbine
@@ -1102,7 +1113,7 @@ local function process_startup()
       return
     end
     local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or nil
-    local ok_inductor, inductor_result = update_inductor_for_rpm(module.peripheral, module.caps, rpm)
+    local ok_inductor, inductor_result = update_inductor_for_rpm(module.name, module.peripheral, module.caps, rpm)
     if not ok_inductor then
       warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
       module.state = "ERROR"
