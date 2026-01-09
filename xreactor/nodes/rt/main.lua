@@ -31,7 +31,6 @@ local MIN_FLOW = 300
 local MAX_FLOW = 1900
 local TARGET_RPM = 900
 local START_FLOW = 500
-local ROD_STEP = 2
 local ROD_TICK = 2.0
 local ROD_DEADBAND = 1
 config.safety = config.safety or {}
@@ -42,6 +41,8 @@ config.heartbeat_interval = config.heartbeat_interval or 2
 config.autonom = config.autonom or {}
 config.autonom.control_rod_level = config.autonom.control_rod_level or 70
 config.autonom.control_rod_step = config.autonom.control_rod_step or 1
+local ROD_STEP_UP = config.autonom.control_rod_step
+local ROD_STEP_DOWN = config.autonom.control_rod_step
 config.autonom.target_rpm = TARGET_RPM
 config.autonom.max_rpm = math.max(config.autonom.max_rpm or TARGET_RPM, TARGET_RPM)
 config.autonom.rpm_step = config.autonom.rpm_step or 25
@@ -237,6 +238,8 @@ local function ensure_reactor_ctrl(name)
   return ctrl
 end
 
+local compute_reactor_target_level
+
 local function init_reactor_ctrl()
   reactor_ctrl = {}
   for _, name in ipairs(config.reactors or {}) do
@@ -249,19 +252,18 @@ local function init_reactor_ctrl()
 end
 
 local function update_reactor_setpoints()
-  local steam = get_steam_amount()
-  local reserve = config.safety.reserve_steam or config.autonom.target_steam or 0
-  if steam == nil then
-    return
-  end
   local now = os.epoch("utc")
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
     if now - last_adjust >= (ROD_TICK * 1000) then
-      if steam < reserve then
-        ctrl.rods = ctrl.rods - ROD_STEP
-      elseif steam > reserve then
-        ctrl.rods = ctrl.rods + 1
+      local target = compute_reactor_target_level()
+      -- ACHTUNG:
+      -- Niedrigerer Rod-Wert = mehr Leistung
+      -- Höherer Rod-Wert     = weniger Leistung
+      if ctrl.rods > target then
+        ctrl.rods = math.max(ctrl.rods - ROD_STEP_UP, target)
+      elseif ctrl.rods < target then
+        ctrl.rods = math.min(ctrl.rods + ROD_STEP_DOWN, target)
       end
       ctrl.rods = safety.clamp(ctrl.rods, 0, 100)
       ctrl.last_adjust = now
@@ -380,14 +382,18 @@ local function get_turbine_stats(target_rpm)
   }
 end
 
-local function compute_reactor_target_level()
+compute_reactor_target_level = function()
   local min_rods = safety.clamp(config.autonom.min_rods, 0, 100)
   local max_rods = safety.clamp(config.autonom.max_rods, 0, 100)
   if min_rods > max_rods then
     min_rods, max_rods = max_rods, min_rods
   end
   local target = autonom_state.reactor_target or safety.clamp(config.autonom.control_rod_level, min_rods, max_rods)
-  local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+  local max_rpm = config.autonom.max_rpm
+  local target_rpm = targets.rpm > 0
+    and safety.clamp(targets.rpm, 0, max_rpm)
+    or safety.clamp(config.autonom.target_rpm, 0, max_rpm)
+  local demand_ratio = max_rpm > 0 and (target_rpm / max_rpm) or 0
   local stats = get_turbine_stats(target_rpm)
   if stats.total_turbines == 0 then
     autonom_state.reactor_target = target
@@ -402,8 +408,9 @@ local function compute_reactor_target_level()
   local tol = config.autonom.rpm_tolerance or 0
   local rpm_stable = math.abs(stats.avg_rpm - target_rpm) <= tol
   local max_flow = config.autonom.max_flow
-  local flow_high = stats.avg_flow > (max_flow * 0.7)
-  local flow_low = stats.avg_flow < (max_flow * 0.4)
+  local flow_target = max_flow * demand_ratio
+  local flow_high = stats.avg_flow > (flow_target * 0.9)
+  local flow_low = stats.avg_flow < (flow_target * 0.6)
   local rpm_low = stats.avg_rpm < (target_rpm * 0.9)
   if flow_high or rpm_low then
     target = target - config.autonom.reactor_step_up
@@ -725,24 +732,6 @@ local function refresh_module_peripherals()
   end
 end
 
-local function get_steam_amount()
-  local buffer = peripherals.steam_buffer
-  if not buffer then return nil end
-  if buffer.getAmount then
-    local ok, amount = pcall(buffer.getAmount)
-    if ok then return amount end
-  end
-  if buffer.getFluidAmount then
-    local ok, amount = pcall(buffer.getFluidAmount)
-    if ok then return amount end
-  end
-  if buffer.getStored then
-    local ok, amount = pcall(buffer.getStored)
-    if ok then return amount end
-  end
-  return nil
-end
-
 local function ramp_duration(profile)
   return ramp_profiles[profile] or ramp_profiles.NORMAL
 end
@@ -858,19 +847,11 @@ end
 local function update_module_limits(module)
   local limits = {}
   if module.type == "turbine" then
-    local water = get_steam_amount()
-    if water and water < config.safety.reserve_steam then
-      table.insert(limits, "WATER")
-    end
     local rpm = module.peripheral and module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
     if targets.rpm > 0 and rpm > 0 and rpm < targets.rpm * 0.7 then
       table.insert(limits, "RPM")
     end
   elseif module.type == "reactor" then
-    local water = get_steam_amount()
-    if water and water < config.safety.reserve_steam then
-      table.insert(limits, "WATER")
-    end
     local temp = module.peripheral and module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
     if temp > config.safety.max_temperature then
       table.insert(limits, "TEMP")
