@@ -49,7 +49,7 @@ config.autonom.flow_near_max = config.autonom.flow_near_max or 0.9
 config.autonom.flow_below_max = config.autonom.flow_below_max or 0.75
 config.autonom.min_rods = config.autonom.min_rods or 0
 config.autonom.max_rods = config.autonom.max_rods or 100
-config.autonom.reactor_step_up = config.autonom.reactor_step_up or 2
+config.autonom.reactor_step_up = config.autonom.reactor_step_up or 3
 config.autonom.reactor_step_down = config.autonom.reactor_step_down or 1
 config.autonom.rpm_tolerance = config.autonom.rpm_tolerance or 5
 config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or 2
@@ -225,12 +225,13 @@ local function update_inductor_for_rpm(turbine, caps, rpm)
   return pcall(setInductor, turbine, caps, engaged)
 end
 
-local function get_turbine_stats()
+local function get_turbine_stats(target_rpm)
   local rpm_sum, rpm_count = 0, 0
   local flow_sum, flow_count = 0, 0
   local near_max, below_max = 0, 0
   local total = 0
-  local regulate = 0
+  local at_target = 0
+  target_rpm = target_rpm or safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
   local max_flow = config.autonom.max_flow
   local near_threshold = max_flow * config.autonom.flow_near_max
   local below_threshold = max_flow * config.autonom.flow_below_max
@@ -242,6 +243,9 @@ local function get_turbine_stats()
       if type(rpm) == "number" then
         rpm_sum = rpm_sum + rpm
         rpm_count = rpm_count + 1
+        if target_rpm > 0 and rpm >= target_rpm then
+          at_target = at_target + 1
+        end
       end
       local flow = nil
       if turbine.getFluidFlowRate then
@@ -253,10 +257,6 @@ local function get_turbine_stats()
       if flow == nil then
         local state = autonom_state.turbines[name]
         flow = state and state.flow or nil
-      end
-      local state = autonom_state.turbines[name]
-      if state and state.mode == TURBINE_MODE.REGULATE then
-        regulate = regulate + 1
       end
       if type(flow) == "number" then
         flow_sum = flow_sum + flow
@@ -277,8 +277,8 @@ local function get_turbine_stats()
     avg_flow = avg_flow,
     near_max = near_max,
     below_max = below_max,
-    regulate = regulate,
-    count = total
+    turbines_at_target_rpm = at_target,
+    total_turbines = total
   }
 end
 
@@ -289,8 +289,9 @@ local function compute_reactor_target_level()
     min_rods, max_rods = max_rods, min_rods
   end
   local target = autonom_state.reactor_target or safety.clamp(config.autonom.control_rod_level, min_rods, max_rods)
-  local stats = get_turbine_stats()
-  if stats.count == 0 then
+  local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+  local stats = get_turbine_stats(target_rpm)
+  if stats.total_turbines == 0 then
     autonom_state.reactor_target = target
     return target
   end
@@ -300,15 +301,13 @@ local function compute_reactor_target_level()
   if now - last_adjust < interval then
     return target
   end
-  local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
   local tol = config.autonom.rpm_tolerance or 0
-  local rpm_low = stats.avg_rpm < (target_rpm - tol)
   local rpm_stable = math.abs(stats.avg_rpm - target_rpm) <= tol
-  local in_regulate = stats.regulate == stats.count
   local max_flow = config.autonom.max_flow
-  local flow_high = stats.avg_flow > (max_flow * 0.8)
-  local flow_low = stats.avg_flow < (max_flow * 0.5)
-  if in_regulate and rpm_low and flow_high then
+  local flow_high = stats.avg_flow > (max_flow * 0.7)
+  local flow_low = stats.avg_flow < (max_flow * 0.4)
+  local rpm_low = stats.avg_rpm < (target_rpm * 0.9)
+  if flow_high or rpm_low then
     target = target - config.autonom.reactor_step_up
     autonom_state.reactor_adjust_at = now
   elseif rpm_stable and flow_low then
@@ -320,15 +319,12 @@ local function compute_reactor_target_level()
   return target
 end
 
-local function update_turbine_flow_state(rpm, target_rpm, state)
+local function update_turbine_flow_state(rpm, target_rpm, state, all_at_target)
   local flow = state.flow
   if flow == nil then
     flow = config.autonom.min_flow
   end
-  local mode = state.mode or TURBINE_MODE.RAMP
-  if mode == TURBINE_MODE.RAMP and rpm and rpm >= target_rpm then
-    mode = TURBINE_MODE.REGULATE
-  end
+  local mode = all_at_target and TURBINE_MODE.REGULATE or TURBINE_MODE.RAMP
   if mode == TURBINE_MODE.RAMP then
     if not rpm or rpm < target_rpm then
       flow = flow + config.autonom.flow_step
@@ -406,6 +402,9 @@ local function updateActuators()
     end
   end
 
+  local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+  local stats = get_turbine_stats(target_rpm)
+  local all_at_target = stats.total_turbines > 0 and stats.turbines_at_target_rpm == stats.total_turbines
   for _, name in ipairs(config.turbines) do
     local turbine
     if peripheral.isPresent(name) then
@@ -453,7 +452,6 @@ local function updateActuators()
         warn_unsupported(name)
         goto continue_turbine
       end
-      local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
       local state = autonom_state.turbines[name] or {}
       local flow = state.flow
       if flow == nil and turbine.getFluidFlowRate then
@@ -463,7 +461,7 @@ local function updateActuators()
         end
       end
       state.flow = flow or config.autonom.min_flow
-      flow = update_turbine_flow_state(rpm, target_rpm, state)
+      flow = update_turbine_flow_state(rpm, target_rpm, state, all_at_target)
       autonom_state.turbines[name] = state
       local ok, result = pcall(setTurbineFlow, turbine, caps, flow)
       if not ok then
@@ -528,6 +526,9 @@ local function updateControl()
     end
   end
 
+  local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+  local stats = get_turbine_stats(target_rpm)
+  local all_at_target = stats.total_turbines > 0 and stats.turbines_at_target_rpm == stats.total_turbines
   for _, name in ipairs(config.turbines or {}) do
     local ok, turbine = pcall(peripheral.wrap, name)
     if ok and turbine then
@@ -565,7 +566,6 @@ local function updateControl()
         warn_unsupported(name)
         goto continue_control_turbine
       end
-      local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
       local state = autonom_state.turbines[name] or {}
       local flow = state.flow
       if flow == nil and turbine.getFluidFlowRate then
@@ -575,7 +575,7 @@ local function updateControl()
         end
       end
       state.flow = flow or config.autonom.min_flow
-      flow = update_turbine_flow_state(rpm, target_rpm, state)
+      flow = update_turbine_flow_state(rpm, target_rpm, state, all_at_target)
       autonom_state.turbines[name] = state
       local set_ok, result = pcall(setTurbineFlow, turbine, caps, flow)
       if not set_ok then
@@ -909,6 +909,10 @@ local function adjust_reactors()
 end
 
 local function adjust_turbines()
+  local max_rpm = config.safety.max_rpm or config.autonom.max_rpm
+  local target_rpm = targets.rpm > 0 and safety.clamp(targets.rpm, 0, max_rpm) or safety.clamp(config.autonom.target_rpm, 0, max_rpm)
+  local stats = get_turbine_stats(target_rpm)
+  local all_at_target = stats.total_turbines > 0 and stats.turbines_at_target_rpm == stats.total_turbines
   for _, module in pairs(modules) do
     if module.type == "turbine" and module.peripheral then
       if module.state == "OFF" or module.state == "ERROR" then
@@ -959,8 +963,6 @@ local function adjust_turbines()
           warn_unsupported(module.name)
           goto continue_adjust_turbine
         end
-        local max_rpm = config.safety.max_rpm or config.autonom.max_rpm
-        local target_rpm = targets.rpm > 0 and safety.clamp(targets.rpm, 0, max_rpm) or safety.clamp(config.autonom.target_rpm, 0, max_rpm)
         local state = autonom_state.turbines[module.name] or {}
         local flow = state.flow
         if flow == nil and module.peripheral.getFluidFlowRate then
@@ -970,7 +972,7 @@ local function adjust_turbines()
           end
         end
         state.flow = flow or config.autonom.min_flow
-        flow = update_turbine_flow_state(rpm, target_rpm, state)
+        flow = update_turbine_flow_state(rpm, target_rpm, state, all_at_target)
         autonom_state.turbines[module.name] = state
         local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, flow)
         if not ok_flow then
