@@ -31,7 +31,6 @@ local MIN_FLOW = 300
 local MAX_FLOW = 1900
 local TARGET_RPM = 900
 local START_FLOW = 500
-local ROD_STEP = 2
 local ROD_TICK = 2.0
 local ROD_DEADBAND = 1
 config.safety = config.safety or {}
@@ -42,6 +41,8 @@ config.heartbeat_interval = config.heartbeat_interval or 2
 config.autonom = config.autonom or {}
 config.autonom.control_rod_level = config.autonom.control_rod_level or 70
 config.autonom.control_rod_step = config.autonom.control_rod_step or 1
+local ROD_STEP_UP = config.autonom.control_rod_step
+local ROD_STEP_DOWN = config.autonom.control_rod_step
 config.autonom.target_rpm = TARGET_RPM
 config.autonom.max_rpm = math.max(config.autonom.max_rpm or TARGET_RPM, TARGET_RPM)
 config.autonom.rpm_step = config.autonom.rpm_step or 25
@@ -258,10 +259,13 @@ local function update_reactor_setpoints()
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
     if now - last_adjust >= (ROD_TICK * 1000) then
+      -- ACHTUNG:
+      -- Niedrigerer Rod-Wert = mehr Leistung
+      -- Höherer Rod-Wert     = weniger Leistung
       if steam < reserve then
-        ctrl.rods = ctrl.rods - ROD_STEP
+        ctrl.rods = ctrl.rods - ROD_STEP_UP
       elseif steam > reserve then
-        ctrl.rods = ctrl.rods + 1
+        ctrl.rods = ctrl.rods + ROD_STEP_DOWN
       end
       ctrl.rods = safety.clamp(ctrl.rods, 0, 100)
       ctrl.last_adjust = now
