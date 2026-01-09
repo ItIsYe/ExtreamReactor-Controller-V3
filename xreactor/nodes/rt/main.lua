@@ -56,6 +56,7 @@ config.autonom.min_rpm_for_inductor = config.autonom.min_rpm_for_inductor or 600
 config.autonom.min_flow = math.max(config.autonom.min_flow or MIN_FLOW, MIN_FLOW)
 config.autonom.max_flow = math.min(config.autonom.max_flow or MAX_FLOW, MAX_FLOW)
 config.autonom.flow_step = config.autonom.flow_step or 50
+config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
 config.autonom.flow_near_max = config.autonom.flow_near_max or 0.9
 config.autonom.flow_below_max = config.autonom.flow_below_max or 0.75
 config.autonom.min_rods = config.autonom.min_rods or ROD_MIN
@@ -465,18 +466,20 @@ end
 
 local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   local mode = ctrl.mode or TURBINE_MODE.RAMP
+  local ramp_step = config.autonom.ramp_step or config.autonom.flow_step
+  local flow_step = config.autonom.flow_step
   if mode == TURBINE_MODE.RAMP then
     if not rpm or rpm < target_rpm then
-      ctrl.flow = ctrl.flow + config.autonom.flow_step
+      ctrl.flow = ctrl.flow + ramp_step
     else
       ctrl.mode = TURBINE_MODE.REGULATE
     end
   else
     local tol = config.autonom.rpm_tolerance or 0
     if rpm and rpm < target_rpm - tol then
-      ctrl.flow = ctrl.flow + config.autonom.flow_step
+      ctrl.flow = ctrl.flow + flow_step
     elseif rpm and rpm > target_rpm + tol then
-      ctrl.flow = ctrl.flow - config.autonom.flow_step
+      ctrl.flow = ctrl.flow - flow_step
     end
   end
   ctrl.flow = clamp_turbine_flow(ctrl.flow)
@@ -485,8 +488,9 @@ end
 
 local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local ctrl = ensure_turbine_ctrl(name)
-  local flow = update_turbine_flow_state(rpm, target_rpm, ctrl)
+  local flow, mode = update_turbine_flow_state(rpm, target_rpm, ctrl)
   local ok, result = pcall(setTurbineFlow, turbine, caps, flow)
+  log("DEBUG", "Turbine " .. name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " mode=" .. tostring(mode))
   if not ctrl.logged then
     log("INFO", "Turbine " .. name .. " active, initial flow " .. tostring(ctrl.flow))
     ctrl.logged = true
@@ -1152,11 +1156,7 @@ local function process_startup()
     if module.caps and (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
       local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
       local ctrl = ensure_turbine_ctrl(module.name)
-      local flow = ctrl.flow
-      if not rpm or rpm < target_rpm then
-        flow = flow + config.autonom.flow_step
-      end
-      ctrl.flow = clamp_turbine_flow(flow)
+      local flow, mode = update_turbine_flow_state(rpm, target_rpm, ctrl)
       local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, ctrl.flow)
       if not ok_flow then
         warn_once("turbine_flow:" .. module.name, "Turbine flow update failed for " .. module.name .. ": " .. tostring(flow_result))
@@ -1178,6 +1178,7 @@ local function process_startup()
         log("INFO", "Turbine " .. module.name .. " active, initial flow " .. tostring(ctrl.flow))
         ctrl.logged = true
       end
+      log("DEBUG", "Turbine " .. module.name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " mode=" .. tostring(mode))
     end
     local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
     rpm = rpm or 0
