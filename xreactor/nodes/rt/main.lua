@@ -60,14 +60,16 @@ local ROD_MAX = 98
 local BASELOAD_RODS = 70
 local INITIAL_ROD_LEVEL = ROD_MAX
 local MIN_APPLY_INTERVAL = 1.5
-local MIN_HOLD_TIME = 8
-local RECOVERY_HOLD = 12
+local STEAM_CRIT = 25
+local STEAM_RELEASE = 40
+local RECOVERY_HOLD = 10
+local RECOVERY_RODS = 30
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
 local last_rod_change_ts = 0
 local last_rod_direction = nil
 local steam_recovery_active = false
-local steam_recovery_until = 0
+local steam_recovery_start = 0
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
@@ -370,70 +372,29 @@ local function apply_initial_reactor_rods()
   applyReactorRods(INITIAL_ROD_LEVEL, false)
 end
 
-local function forceSteamRecovery()
-  steam_recovery_active = true
-  steam_recovery_until = os.clock() + RECOVERY_HOLD
-  local desired = BASELOAD_RODS
-  for name, ctrl in pairs(reactor_ctrl) do
-    local current = type(ctrl.rods) == "number" and ctrl.rods or BASELOAD_RODS
-    desired = math.min(desired, current)
-  end
-  desired = clamp_rods(desired, false)
-  for _, ctrl in pairs(reactor_ctrl) do
-    ctrl.rods = desired
-    ctrl.last_applied = nil
-  end
-  autonom_state.reactor_target = desired
-  applyReactorRods(desired, false)
-  log("WARN", "Steam recovery active for " .. tostring(RECOVERY_HOLD) .. "s")
-  log("INFO", "Forced steam recovery rods -> " .. tostring(desired) .. "%")
-end
-
-local function check_turbine_starvation()
-  local starved = false
-  local now = os.clock()
-  local rpm_threshold = TARGET_RPM * 0.6
-  local flow_threshold = MAX_FLOW * 0.8
-  for _, name in ipairs(config.turbines or {}) do
-    local turbine = peripherals.turbines and peripherals.turbines[name] or nil
-    local ctrl = ensure_turbine_ctrl(name)
-    if turbine then
-      local rpm = turbine.getRotorSpeed and turbine.getRotorSpeed() or nil
-      local flow = nil
-      if turbine.getFluidFlowRate then
-        local ok, value = pcall(turbine.getFluidFlowRate)
-        if ok and type(value) == "number" then
-          flow = value
-        end
-      end
-      if flow == nil then
-        flow = ctrl.flow
-      end
-      local starving = type(rpm) == "number"
-        and type(flow) == "number"
-        and rpm < rpm_threshold
-        and flow >= flow_threshold
-      if starving then
-        ctrl.starve_since = ctrl.starve_since or now
-        local duration = now - ctrl.starve_since
-        if duration >= 10 then
-          starved = true
-          local last_log = ctrl.starve_logged_at or 0
-          if now - last_log >= 5 then
-            ctrl.starve_logged_at = now
-            log("WARN", "STARVED turbine " .. name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " seconds=" .. tostring(math.floor(duration)))
-          end
-        end
-      else
-        ctrl.starve_since = nil
-        ctrl.starve_logged_at = nil
-      end
-    else
-      ctrl.starve_since = nil
-      ctrl.starve_logged_at = nil
+local function read_reactor_steam_pct(name)
+  local reactor = peripherals.reactors and peripherals.reactors[name] or nil
+  if reactor and reactor.getHotFluidAmount and reactor.getHotFluidCapacity then
+    local ok_amount, amount = pcall(reactor.getHotFluidAmount)
+    local ok_capacity, capacity = pcall(reactor.getHotFluidCapacity)
+    if ok_amount and ok_capacity and type(amount) == "number" and type(capacity) == "number" and capacity > 0 then
+      return (amount / capacity) * 100
     end
   end
-  return starved
+  return nil
+end
+
+local function collect_reactor_steam()
+  local steam = {}
+  local min_steam = nil
+  for name, _ in pairs(reactor_ctrl) do
+    local pct = read_reactor_steam_pct(name)
+    steam[name] = pct
+    if type(pct) == "number" then
+      min_steam = min_steam and math.min(min_steam, pct) or pct
+    end
+  end
+  return steam, min_steam
 end
 
 local function log_reactor_control_state()
@@ -453,8 +414,10 @@ end
 
 local function log_reactor_control_tick()
   local sample_rods = BASELOAD_RODS
+  local sample_steam = nil
   for _, ctrl in pairs(reactor_ctrl) do
     sample_rods = ctrl.rods or sample_rods
+    sample_steam = ctrl.last_steam_pct
     break
   end
   local age = os.clock() - last_rod_change_ts
@@ -462,24 +425,19 @@ local function log_reactor_control_tick()
     "DEBUG",
     "ReactorCtrl rods="
       .. tostring(sample_rods)
-      .. " need_more="
-      .. tostring(autonom_state.reactor_need_more)
-      .. " need_less="
-      .. tostring(autonom_state.reactor_need_less)
-      .. " dir="
+      .. " steam="
+      .. tostring(sample_steam)
+      .. "% dir="
       .. tostring(last_rod_direction)
       .. " age="
       .. string.format("%.1f", age)
   )
 end
 
-local function update_reactor_setpoints()
+local function update_reactor_setpoints(steam_by_reactor)
   if current_state == STATE.SAFE then
     return
   end
-  local need_more, need_less = get_reactor_demand()
-  autonom_state.reactor_need_more = need_more
-  autonom_state.reactor_need_less = need_less
   local now = os.epoch("utc")
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
@@ -488,7 +446,9 @@ local function update_reactor_setpoints()
         ctrl.rods = clamp_rods(ctrl.rods - 5, false)
         ctrl.initialized = true
       end
-      local target = compute_reactor_target_level(ctrl.rods, need_more, need_less)
+      local steam_pct = steam_by_reactor and steam_by_reactor[name] or read_reactor_steam_pct(name)
+      ctrl.last_steam_pct = steam_pct
+      local target = compute_reactor_target_level(ctrl.rods, steam_pct)
       -- ACHTUNG:
       -- Niedrigerer Rod-Wert = mehr Leistung
       -- Höherer Rod-Wert     = weniger Leistung
@@ -503,23 +463,28 @@ local function updateReactorControl()
   last_reactor_tick = os.clock()
   log("DEBUG", "Reactor control tick")
   local now = os.clock()
-  if steam_recovery_active then
-    if now < steam_recovery_until then
-      log("DEBUG", "ReactorCtrl recovery hold active")
-      return
-    end
-    steam_recovery_active = false
-    log("INFO", "Steam recovery ended")
-  end
   if current_state == STATE.SAFE then
     applyReactorRods(ROD_MAX, true)
     return
   end
-  if check_turbine_starvation() then
-    forceSteamRecovery()
+  local steam_by_reactor, min_steam_pct = collect_reactor_steam()
+  if not steam_recovery_active and type(min_steam_pct) == "number" and min_steam_pct < STEAM_CRIT then
+    steam_recovery_active = true
+    steam_recovery_start = now
+    log("WARN", "Steam recovery triggered")
+  end
+  if steam_recovery_active then
+    local recovery_rods = clamp_rods(RECOVERY_RODS, false)
+    applyReactorRods(recovery_rods, false)
+    if (type(min_steam_pct) == "number" and min_steam_pct >= STEAM_RELEASE)
+      or (now - steam_recovery_start > RECOVERY_HOLD) then
+      steam_recovery_active = false
+      log("INFO", "Steam recovery released")
+    end
+    return
   end
   log_reactor_control_state()
-  update_reactor_setpoints()
+  update_reactor_setpoints(steam_by_reactor)
   log_reactor_control_tick()
   applyReactorRods(autonom_state.reactor_target, false)
 end
@@ -659,7 +624,7 @@ local function get_turbine_stats(target_rpm)
   }
 end
 
-compute_reactor_target_level = function(current_rods, need_more, need_less)
+compute_reactor_target_level = function(current_rods, steam_pct)
   local min_rods = safety.clamp(config.autonom.min_rods, ROD_MIN, ROD_MAX)
   local max_rods = safety.clamp(config.autonom.max_rods, ROD_MIN, ROD_MAX)
   if min_rods > max_rods then
@@ -670,29 +635,30 @@ compute_reactor_target_level = function(current_rods, need_more, need_less)
     target = type(current_rods) == "number" and current_rods or BASELOAD_RODS
   end
   target = safety.clamp(target, min_rods, max_rods)
-  if need_more == nil or need_less == nil then
-    need_more, need_less = get_reactor_demand()
-  end
-  if not need_more and not need_less then
+  local current = type(current_rods) == "number" and current_rods or target
+  if type(steam_pct) ~= "number" then
     autonom_state.reactor_target = clamp_rods(target, false)
     return autonom_state.reactor_target
   end
-  local new_direction = need_more and "DOWN" or "UP"
-  local now = os.clock()
-  if last_rod_direction ~= nil and new_direction ~= last_rod_direction then
-    if now - last_rod_change_ts < MIN_HOLD_TIME then
-      autonom_state.reactor_target = clamp_rods(target, false)
-      return autonom_state.reactor_target
-    end
-  end
+  local step = 5
   local previous_target = target
-  if need_more then
-    target = target - 5
-  elseif need_less then
-    target = target + 2
+  if steam_pct < 30 then
+    target = current - (step * 2)
+  elseif steam_pct < 60 then
+    target = current - step
+  elseif steam_pct < 80 then
+    target = current
+  elseif steam_pct < 95 then
+    target = current + step
+  else
+    target = current + (step * 2)
   end
   target = clamp_rods(safety.clamp(target, min_rods, max_rods), false)
+  if target >= max_rods then
+    target = max_rods
+  end
   if target ~= previous_target then
+    local new_direction = target < previous_target and "DOWN" or "UP"
     autonom_state.pending_rod_direction = new_direction
   end
   autonom_state.reactor_target = target
