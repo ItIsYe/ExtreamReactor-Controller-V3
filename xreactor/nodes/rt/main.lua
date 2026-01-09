@@ -33,6 +33,7 @@ local TARGET_RPM = 900
 local START_FLOW = 500
 local ROD_TICK = 2.0
 local ROD_DEADBAND = 1
+local INITIAL_ROD_LEVEL = 80
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
@@ -232,7 +233,7 @@ end
 local function ensure_reactor_ctrl(name)
   local ctrl = reactor_ctrl[name]
   if not ctrl then
-    ctrl = { rods = safety.clamp(config.autonom.control_rod_level or 70, 0, 100), last_applied = nil, last_adjust = 0 }
+    ctrl = { rods = INITIAL_ROD_LEVEL, last_applied = nil, last_adjust = 0, initialized = false }
     reactor_ctrl[name] = ctrl
   end
   return ctrl
@@ -244,10 +245,31 @@ local function init_reactor_ctrl()
   reactor_ctrl = {}
   for _, name in ipairs(config.reactors or {}) do
     reactor_ctrl[name] = {
-      rods = safety.clamp(config.autonom.control_rod_level or 70, 0, 100),
+      rods = INITIAL_ROD_LEVEL,
       last_applied = nil,
-      last_adjust = 0
+      last_adjust = 0,
+      initialized = false
     }
+  end
+end
+
+local function apply_initial_reactor_rods()
+  for name, ctrl in pairs(reactor_ctrl) do
+    local reactor = peripherals.reactors and peripherals.reactors[name] or nil
+    if reactor then
+      local caps = get_device_caps("reactors", name)
+      if caps.setAllControlRodLevels then
+        local ok, err = pcall(setReactorRods, reactor, caps, ctrl.rods)
+        if ok then
+          ctrl.last_applied = ctrl.rods
+          log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(ctrl.rods) .. "%")
+        else
+          warn_once("reactor_rods_init:" .. name, "Reactor rods init failed for " .. name .. ": " .. tostring(err))
+        end
+      else
+        warn_unsupported(name)
+      end
+    end
   end
 end
 
@@ -256,6 +278,10 @@ local function update_reactor_setpoints()
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
     if now - last_adjust >= (ROD_TICK * 1000) then
+      if not ctrl.initialized then
+        ctrl.rods = ctrl.rods - 5
+        ctrl.initialized = true
+      end
       local target = compute_reactor_target_level()
       -- ACHTUNG:
       -- Niedrigerer Rod-Wert = mehr Leistung
@@ -269,6 +295,12 @@ local function update_reactor_setpoints()
       ctrl.last_adjust = now
     end
   end
+end
+
+local function updateReactorControl()
+  log("DEBUG", "Reactor control tick")
+  update_reactor_setpoints()
+  applyReactorRods()
 end
 
 local function applyReactorRods()
@@ -1466,6 +1498,7 @@ local function mainEventLoop()
     refresh_module_peripherals()
     process_startup()
     update_module_states()
+    updateReactorControl()
     if current_state == STATE.SAFE and node_state_machine.state() ~= constants.node_states.EMERGENCY then
       node_state_machine:transition(constants.node_states.EMERGENCY)
     end
@@ -1494,6 +1527,7 @@ local function init()
   refresh_module_peripherals()
   set_reactors_active(true)
   set_turbines_active(true)
+  apply_initial_reactor_rods()
   network = network_lib.init(config)
   node_state_machine = machine.new(states, constants.node_states.OFF)
   init_monitor()
