@@ -186,14 +186,6 @@ local function get_device_caps(kind, name)
   return capability_cache[kind][name]
 end
 
-local function setReactorRods(reactor, caps, level)
-  if caps.setAllControlRodLevels then
-    reactor.setAllControlRodLevels(level)
-    return true
-  end
-  return false
-end
-
 local function setReactorActive(reactor, caps, active)
   if caps.setActive then
     reactor.setActive(active)
@@ -253,24 +245,26 @@ local function init_reactor_ctrl()
   end
 end
 
-local function apply_initial_reactor_rods()
+function applyReactorRods()
   for name, ctrl in pairs(reactor_ctrl) do
-    local reactor = peripherals.reactors and peripherals.reactors[name] or nil
+    local reactor = peripheral.wrap(name)
     if reactor then
-      local caps = get_device_caps("reactors", name)
-      if caps.setAllControlRodLevels then
-        local ok, err = pcall(setReactorRods, reactor, caps, ctrl.rods)
-        if ok then
-          ctrl.last_applied = ctrl.rods
-          log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(ctrl.rods) .. "%")
-        else
-          warn_once("reactor_rods_init:" .. name, "Reactor rods init failed for " .. name .. ": " .. tostring(err))
-        end
-      else
-        warn_unsupported(name)
+      local last_applied = ctrl.last_applied
+      if last_applied == nil or math.abs(ctrl.rods - last_applied) >= ROD_DEADBAND then
+        reactor.setAllControlRodLevels(ctrl.rods)
+        ctrl.last_applied = ctrl.rods
+        log("INFO", "Applied rods " .. tostring(ctrl.rods) .. "% to reactor " .. name)
       end
     end
   end
+end
+
+local function apply_initial_reactor_rods()
+  for name, ctrl in pairs(reactor_ctrl) do
+    ctrl.last_applied = nil
+    log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(ctrl.rods) .. "%")
+  end
+  applyReactorRods()
 end
 
 local function update_reactor_setpoints()
@@ -301,29 +295,6 @@ local function updateReactorControl()
   log("DEBUG", "Reactor control tick")
   update_reactor_setpoints()
   applyReactorRods()
-end
-
-local function applyReactorRods()
-  for name, ctrl in pairs(reactor_ctrl) do
-    local reactor = peripherals.reactors and peripherals.reactors[name] or nil
-    if reactor then
-      local caps = get_device_caps("reactors", name)
-      if not caps.setAllControlRodLevels then
-        warn_unsupported(name)
-        goto continue_reactor_rods
-      end
-      local last_applied = ctrl.last_applied
-      if last_applied == nil or math.abs(ctrl.rods - last_applied) >= ROD_DEADBAND then
-        local ok, err = pcall(setReactorRods, reactor, caps, ctrl.rods)
-        if not ok then
-          warn_once("reactor_rods:" .. name, "Reactor rods update failed for " .. name .. ": " .. tostring(err))
-          goto continue_reactor_rods
-        end
-        ctrl.last_applied = ctrl.rods
-      end
-    end
-    ::continue_reactor_rods::
-  end
 end
 
 local function warn_once(key, message)
