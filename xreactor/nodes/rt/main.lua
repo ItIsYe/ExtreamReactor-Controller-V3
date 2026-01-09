@@ -52,6 +52,7 @@ config.autonom.max_rods = config.autonom.max_rods or 100
 config.autonom.reactor_step_up = config.autonom.reactor_step_up or 2
 config.autonom.reactor_step_down = config.autonom.reactor_step_down or 1
 config.autonom.rpm_tolerance = config.autonom.rpm_tolerance or 5
+config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or 2
 config.monitor_interval = config.monitor_interval or 2
 config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
@@ -89,6 +90,11 @@ local ramp_profiles = {
   FAST = 4000,
   NORMAL = 8000,
   SLOW = 12000
+}
+
+local TURBINE_MODE = {
+  RAMP = "RAMP",
+  REGULATE = "REGULATE"
 }
 
 local function ramp_towards(current, target, step)
@@ -221,8 +227,10 @@ end
 
 local function get_turbine_stats()
   local rpm_sum, rpm_count = 0, 0
+  local flow_sum, flow_count = 0, 0
   local near_max, below_max = 0, 0
   local total = 0
+  local regulate = 0
   local max_flow = config.autonom.max_flow
   local near_threshold = max_flow * config.autonom.flow_near_max
   local below_threshold = max_flow * config.autonom.flow_below_max
@@ -246,7 +254,13 @@ local function get_turbine_stats()
         local state = autonom_state.turbines[name]
         flow = state and state.flow or nil
       end
+      local state = autonom_state.turbines[name]
+      if state and state.mode == TURBINE_MODE.REGULATE then
+        regulate = regulate + 1
+      end
       if type(flow) == "number" then
+        flow_sum = flow_sum + flow
+        flow_count = flow_count + 1
         if flow >= near_threshold then
           near_max = near_max + 1
         end
@@ -257,10 +271,13 @@ local function get_turbine_stats()
     end
   end
   local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
+  local avg_flow = flow_count > 0 and (flow_sum / flow_count) or 0
   return {
     avg_rpm = avg_rpm,
+    avg_flow = avg_flow,
     near_max = near_max,
     below_max = below_max,
+    regulate = regulate,
     count = total
   }
 end
@@ -277,19 +294,57 @@ local function compute_reactor_target_level()
     autonom_state.reactor_target = target
     return target
   end
+  local now = os.epoch("utc")
+  local last_adjust = autonom_state.reactor_adjust_at or 0
+  local interval = (config.autonom.reactor_adjust_interval or 2) * 1000
+  if now - last_adjust < interval then
+    return target
+  end
   local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
   local tol = config.autonom.rpm_tolerance or 0
   local rpm_low = stats.avg_rpm < (target_rpm - tol)
-  local rpm_high = stats.avg_rpm > (target_rpm + tol)
-  local majority = math.max(1, math.ceil(stats.count / 2))
-  if rpm_low and stats.near_max >= majority then
+  local rpm_stable = math.abs(stats.avg_rpm - target_rpm) <= tol
+  local in_regulate = stats.regulate == stats.count
+  local max_flow = config.autonom.max_flow
+  local flow_high = stats.avg_flow > (max_flow * 0.8)
+  local flow_low = stats.avg_flow < (max_flow * 0.5)
+  if in_regulate and rpm_low and flow_high then
     target = target - config.autonom.reactor_step_up
-  elseif (not rpm_low and not rpm_high) and stats.below_max >= majority then
+    autonom_state.reactor_adjust_at = now
+  elseif rpm_stable and flow_low then
     target = target + config.autonom.reactor_step_down
+    autonom_state.reactor_adjust_at = now
   end
   target = safety.clamp(target, min_rods, max_rods)
   autonom_state.reactor_target = target
   return target
+end
+
+local function update_turbine_flow_state(rpm, target_rpm, state)
+  local flow = state.flow
+  if flow == nil then
+    flow = config.autonom.min_flow
+  end
+  local mode = state.mode or TURBINE_MODE.RAMP
+  if mode == TURBINE_MODE.RAMP and rpm and rpm >= target_rpm then
+    mode = TURBINE_MODE.REGULATE
+  end
+  if mode == TURBINE_MODE.RAMP then
+    if not rpm or rpm < target_rpm then
+      flow = flow + config.autonom.flow_step
+    end
+  else
+    local tol = config.autonom.rpm_tolerance or 0
+    if rpm and rpm < target_rpm - tol then
+      flow = flow + config.autonom.flow_step
+    elseif rpm and rpm > target_rpm + tol then
+      flow = flow - config.autonom.flow_step
+    end
+  end
+  flow = safety.clamp(flow, config.autonom.min_flow, config.autonom.max_flow)
+  state.flow = flow
+  state.mode = mode
+  return flow, mode
 end
 
 local set_reactors_active
@@ -400,9 +455,6 @@ local function updateActuators()
       end
       local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
       local state = autonom_state.turbines[name] or {}
-      local current_target = state.target_rpm or rpm or target_rpm
-      local next_target = ramp_towards(current_target, target_rpm, config.autonom.rpm_step)
-      state.target_rpm = next_target
       local flow = state.flow
       if flow == nil and turbine.getFluidFlowRate then
         local ok, value = pcall(turbine.getFluidFlowRate)
@@ -410,14 +462,8 @@ local function updateActuators()
           flow = value
         end
       end
-      flow = flow or config.autonom.min_flow
-      if rpm and rpm < next_target - 1 then
-        flow = flow + config.autonom.flow_step
-      elseif rpm and rpm > next_target + 1 then
-        flow = flow - config.autonom.flow_step
-      end
-      flow = safety.clamp(flow, config.autonom.min_flow, config.autonom.max_flow)
-      state.flow = flow
+      state.flow = flow or config.autonom.min_flow
+      flow = update_turbine_flow_state(rpm, target_rpm, state)
       autonom_state.turbines[name] = state
       local ok, result = pcall(setTurbineFlow, turbine, caps, flow)
       if not ok then
@@ -528,14 +574,8 @@ local function updateControl()
           flow = value
         end
       end
-      flow = flow or config.autonom.min_flow
-      if rpm and rpm < target_rpm - 1 then
-        flow = flow + config.autonom.flow_step
-      elseif rpm and rpm > target_rpm + 1 then
-        flow = flow - config.autonom.flow_step
-      end
-      flow = safety.clamp(flow, config.autonom.min_flow, config.autonom.max_flow)
-      state.flow = flow
+      state.flow = flow or config.autonom.min_flow
+      flow = update_turbine_flow_state(rpm, target_rpm, state)
       autonom_state.turbines[name] = state
       local set_ok, result = pcall(setTurbineFlow, turbine, caps, flow)
       if not set_ok then
@@ -889,6 +929,9 @@ local function adjust_turbines()
             warn_unsupported(module.name)
           end
         end
+        local state = autonom_state.turbines[module.name] or {}
+        state.mode = TURBINE_MODE.RAMP
+        autonom_state.turbines[module.name] = state
       elseif module.state == "STARTING" then
         goto continue_adjust_turbine
       else
@@ -926,14 +969,8 @@ local function adjust_turbines()
             flow = value
           end
         end
-        flow = flow or config.autonom.min_flow
-        if rpm and rpm < target_rpm - 1 then
-          flow = flow + config.autonom.flow_step
-        elseif rpm and rpm > target_rpm + 1 then
-          flow = flow - config.autonom.flow_step
-        end
-        flow = safety.clamp(flow, config.autonom.min_flow, config.autonom.max_flow)
-        state.flow = flow
+        state.flow = flow or config.autonom.min_flow
+        flow = update_turbine_flow_state(rpm, target_rpm, state)
         autonom_state.turbines[module.name] = state
         local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, flow)
         if not ok_flow then
@@ -999,6 +1036,11 @@ local function start_module(module_id, module_type, ramp_profile)
   module.stable_since = nil
   module.start_flow = nil
   active_startup = module_id
+  if module.type == "turbine" then
+    local state = autonom_state.turbines[module.name] or {}
+    state.mode = TURBINE_MODE.RAMP
+    autonom_state.turbines[module.name] = state
+  end
   return module, "Starting"
 end
 
