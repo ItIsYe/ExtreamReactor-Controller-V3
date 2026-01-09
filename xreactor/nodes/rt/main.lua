@@ -37,8 +37,11 @@ local ROD_MAX = 98
 local BASELOAD_RODS = 70
 local INITIAL_ROD_LEVEL = ROD_MAX
 local MIN_APPLY_INTERVAL = 1.5
+local MIN_HOLD_TIME = 8
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
+local last_rod_change_ts = 0
+local last_rod_direction = nil
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
@@ -291,6 +294,7 @@ function applyReactorRods(target, allow_overmax)
   end
   local clamped = clamp_rods(target, allow_overmax)
   if last_applied_rods == clamped then
+    autonom_state.pending_rod_direction = nil
     return
   end
   for name, ctrl in pairs(reactor_ctrl) do
@@ -312,8 +316,22 @@ function applyReactorRods(target, allow_overmax)
       warn_once("reactor_rods:" .. name, "Reactor control rods unsupported for " .. name)
     end
   end
+  local previous_applied = last_applied_rods
   last_applied_rods = clamped
   last_rod_apply_ts = now
+  local applied_direction = autonom_state.pending_rod_direction
+  if applied_direction == nil and type(previous_applied) == "number" then
+    if clamped < previous_applied then
+      applied_direction = "DOWN"
+    elseif clamped > previous_applied then
+      applied_direction = "UP"
+    end
+  end
+  if applied_direction ~= nil then
+    last_rod_change_ts = now
+    last_rod_direction = applied_direction
+  end
+  autonom_state.pending_rod_direction = nil
   log("INFO", "Applied rods " .. tostring(clamped) .. "% (per-rod)")
 end
 
@@ -404,10 +422,33 @@ local function log_reactor_control_state()
   log("DEBUG", "ReactorCtrl state=" .. tostring(current_state) .. " rods=" .. tostring(sample_rods) .. " base=" .. tostring(BASELOAD_RODS) .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
 end
 
+local function log_reactor_control_tick()
+  local sample_rods = BASELOAD_RODS
+  for _, ctrl in pairs(reactor_ctrl) do
+    sample_rods = ctrl.rods or sample_rods
+    break
+  end
+  local age = os.clock() - last_rod_change_ts
+  log(
+    "DEBUG",
+    "ReactorCtrl rods="
+      .. tostring(sample_rods)
+      .. " need_more="
+      .. tostring(autonom_state.reactor_need_more)
+      .. " need_less="
+      .. tostring(autonom_state.reactor_need_less)
+      .. " dir="
+      .. tostring(last_rod_direction)
+      .. " age="
+      .. string.format("%.1f", age)
+  )
+end
+
 local function update_reactor_setpoints()
   if current_state == STATE.SAFE then
     return
   end
+  local need_more, need_less = get_reactor_demand()
   local now = os.epoch("utc")
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
@@ -416,7 +457,7 @@ local function update_reactor_setpoints()
         ctrl.rods = clamp_rods(ctrl.rods - 5, false)
         ctrl.initialized = true
       end
-      local target = compute_reactor_target_level(ctrl.rods)
+      local target = compute_reactor_target_level(ctrl.rods, need_more, need_less)
       -- ACHTUNG:
       -- Niedrigerer Rod-Wert = mehr Leistung
       -- Höherer Rod-Wert     = weniger Leistung
@@ -439,6 +480,7 @@ local function updateReactorControl()
   end
   log_reactor_control_state()
   update_reactor_setpoints()
+  log_reactor_control_tick()
   applyReactorRods(autonom_state.reactor_target, false)
 end
 
@@ -477,6 +519,8 @@ local function get_turbine_stats(target_rpm)
   local near_max, below_max = 0, 0
   local total = 0
   local at_target = 0
+  local need_more_steam = false
+  local need_less_steam = true
   local steam_demand = false
   local hungry = 0
   local flow_high = MAX_FLOW * 0.85
@@ -542,8 +586,19 @@ local function get_turbine_stats(target_rpm)
         if rpm < up_rpm_threshold and flow >= up_flow_threshold then
           any_low_rpm_high_flow = true
         end
+        if rpm < (TARGET_RPM - 40) and flow >= (MAX_FLOW * 0.8) then
+          need_more_steam = true
+        end
+        if not (rpm > (TARGET_RPM + 50) and flow < (MAX_FLOW * 0.5)) then
+          need_less_steam = false
+        end
+      else
+        need_less_steam = false
       end
     end
+  end
+  if total == 0 then
+    need_less_steam = false
   end
   local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
   local avg_flow = flow_count > 0 and (flow_sum / flow_count) or 0
@@ -558,11 +613,22 @@ local function get_turbine_stats(target_rpm)
     hungry_turbines = hungry,
     all_above_target = all_above_target,
     all_flow_below_limit = all_flow_below_limit,
-    any_low_rpm_high_flow = any_low_rpm_high_flow
+    any_low_rpm_high_flow = any_low_rpm_high_flow,
+    need_more_steam = need_more_steam,
+    need_less_steam = need_less_steam
   }
 end
 
-compute_reactor_target_level = function(current_rods)
+local function get_reactor_demand()
+  local stats = get_turbine_stats(TARGET_RPM)
+  local need_more = stats.need_more_steam
+  local need_less = stats.need_less_steam
+  autonom_state.reactor_need_more = need_more
+  autonom_state.reactor_need_less = need_less
+  return need_more, need_less
+end
+
+compute_reactor_target_level = function(current_rods, need_more, need_less)
   local min_rods = safety.clamp(config.autonom.min_rods, ROD_MIN, ROD_MAX)
   local max_rods = safety.clamp(config.autonom.max_rods, ROD_MIN, ROD_MAX)
   if min_rods > max_rods then
@@ -573,25 +639,31 @@ compute_reactor_target_level = function(current_rods)
     target = type(current_rods) == "number" and current_rods or BASELOAD_RODS
   end
   target = safety.clamp(target, min_rods, max_rods)
-  local max_rpm = config.autonom.max_rpm
-  local target_rpm = targets.rpm > 0
-    and safety.clamp(targets.rpm, 0, max_rpm)
-    or safety.clamp(config.autonom.target_rpm, 0, max_rpm)
-  local stats = get_turbine_stats(target_rpm)
-  if stats.total_turbines == 0 then
-    local clamped = clamp_rods(target, false)
-    autonom_state.reactor_target = clamped
-    return clamped
+  if need_more == nil or need_less == nil then
+    need_more, need_less = get_reactor_demand()
   end
-  if stats.any_low_rpm_high_flow then
+  if not need_more and not need_less then
+    autonom_state.reactor_target = clamp_rods(target, false)
+    return autonom_state.reactor_target
+  end
+  local new_direction = need_more and "DOWN" or "UP"
+  local now = os.clock()
+  if last_rod_direction ~= nil and new_direction ~= last_rod_direction then
+    if now - last_rod_change_ts < MIN_HOLD_TIME then
+      autonom_state.reactor_target = clamp_rods(target, false)
+      return autonom_state.reactor_target
+    end
+  end
+  local previous_target = target
+  if need_more then
     target = target - 5
-  elseif stats.all_above_target and stats.all_flow_below_limit then
-    target = target + 1
-  end
-  if not stats.all_above_target then
-    target = math.min(target, BASELOAD_RODS)
+  elseif need_less then
+    target = target + 2
   end
   target = clamp_rods(safety.clamp(target, min_rods, max_rods), false)
+  if target ~= previous_target then
+    autonom_state.pending_rod_direction = new_direction
+  end
   autonom_state.reactor_target = target
   return target
 end
