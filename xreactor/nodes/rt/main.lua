@@ -673,6 +673,16 @@ compute_reactor_target_level = function(current_rods, need_more, need_less)
   if need_more == nil or need_less == nil then
     need_more, need_less = get_reactor_demand()
   end
+  local current = type(current_rods) == "number" and current_rods or target
+  local at_ceiling = current >= max_rods
+  local at_floor = current <= min_rods
+  if at_ceiling then
+    need_less = false
+    need_more = true
+  end
+  if at_floor then
+    need_more = false
+  end
   if not need_more and not need_less then
     autonom_state.reactor_target = clamp_rods(target, false)
     return autonom_state.reactor_target
