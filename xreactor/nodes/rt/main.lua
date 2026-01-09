@@ -61,10 +61,13 @@ local BASELOAD_RODS = 70
 local INITIAL_ROD_LEVEL = ROD_MAX
 local MIN_APPLY_INTERVAL = 1.5
 local MIN_HOLD_TIME = 8
+local RECOVERY_HOLD = 12
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
 local last_rod_change_ts = 0
 local last_rod_direction = nil
+local steam_recovery_active = false
+local steam_recovery_until = 0
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
@@ -368,6 +371,8 @@ local function apply_initial_reactor_rods()
 end
 
 local function forceSteamRecovery()
+  steam_recovery_active = true
+  steam_recovery_until = os.clock() + RECOVERY_HOLD
   local desired = BASELOAD_RODS
   for name, ctrl in pairs(reactor_ctrl) do
     local current = type(ctrl.rods) == "number" and ctrl.rods or BASELOAD_RODS
@@ -380,6 +385,7 @@ local function forceSteamRecovery()
   end
   autonom_state.reactor_target = desired
   applyReactorRods(desired, false)
+  log("WARN", "Steam recovery active for " .. tostring(RECOVERY_HOLD) .. "s")
   log("INFO", "Forced steam recovery rods -> " .. tostring(desired) .. "%")
 end
 
@@ -496,6 +502,15 @@ end
 local function updateReactorControl()
   last_reactor_tick = os.clock()
   log("DEBUG", "Reactor control tick")
+  local now = os.clock()
+  if steam_recovery_active then
+    if now < steam_recovery_until then
+      log("DEBUG", "ReactorCtrl recovery hold active")
+      return
+    end
+    steam_recovery_active = false
+    log("INFO", "Steam recovery ended")
+  end
   if current_state == STATE.SAFE then
     applyReactorRods(ROD_MAX, true)
     return
