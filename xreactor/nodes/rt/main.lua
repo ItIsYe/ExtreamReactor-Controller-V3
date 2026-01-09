@@ -33,7 +33,10 @@ local TARGET_RPM = 900
 local START_FLOW = 500
 local ROD_TICK = 2.0
 local ROD_DEADBAND = 1
-local INITIAL_ROD_LEVEL = 80
+local ROD_MIN = 0
+local ROD_MAX = 80
+local BASELOAD_RODS = 60
+local INITIAL_ROD_LEVEL = ROD_MAX
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
@@ -41,9 +44,8 @@ config.safety.min_water = config.safety.min_water or 0.2
 config.heartbeat_interval = config.heartbeat_interval or 2
 config.autonom = config.autonom or {}
 config.autonom.control_rod_level = config.autonom.control_rod_level or 70
-config.autonom.control_rod_step = config.autonom.control_rod_step or 1
-local ROD_STEP_UP = config.autonom.control_rod_step
-local ROD_STEP_DOWN = config.autonom.control_rod_step
+local ROD_STEP_UP = 4
+local ROD_STEP_DOWN = 1
 config.autonom.target_rpm = TARGET_RPM
 config.autonom.max_rpm = math.max(config.autonom.max_rpm or TARGET_RPM, TARGET_RPM)
 config.autonom.rpm_step = config.autonom.rpm_step or 25
@@ -56,8 +58,8 @@ config.autonom.max_flow = math.min(config.autonom.max_flow or MAX_FLOW, MAX_FLOW
 config.autonom.flow_step = config.autonom.flow_step or 50
 config.autonom.flow_near_max = config.autonom.flow_near_max or 0.9
 config.autonom.flow_below_max = config.autonom.flow_below_max or 0.75
-config.autonom.min_rods = config.autonom.min_rods or 0
-config.autonom.max_rods = config.autonom.max_rods or 100
+config.autonom.min_rods = config.autonom.min_rods or ROD_MIN
+config.autonom.max_rods = config.autonom.max_rods or ROD_MAX
 config.autonom.reactor_step_up = config.autonom.reactor_step_up or 3
 config.autonom.reactor_step_down = config.autonom.reactor_step_down or 1
 config.autonom.rpm_tolerance = config.autonom.rpm_tolerance or 5
@@ -113,6 +115,26 @@ local function clamp_turbine_flow(rate)
     rate = config.autonom.min_flow
   end
   return safety.clamp(rate, MIN_FLOW, MAX_FLOW)
+end
+
+local function clamp_rods(level, allow_overmax)
+  if type(level) ~= "number" then
+    level = ROD_MAX
+  end
+  local max_limit = allow_overmax and 100 or ROD_MAX
+  return safety.clamp(level, ROD_MIN, max_limit)
+end
+
+local function reactor_low_water(reactor)
+  if not reactor or not reactor.getCoolantAmount or not reactor.getCoolantAmountMax then
+    return false
+  end
+  local ok_amount, amount = pcall(reactor.getCoolantAmount)
+  local ok_max, max = pcall(reactor.getCoolantAmountMax)
+  if not ok_amount or not ok_max or type(amount) ~= "number" or type(max) ~= "number" or max <= 0 then
+    return false
+  end
+  return (amount / max) <= config.safety.min_water
 end
 
 local function ramp_towards(current, target, step)
@@ -245,15 +267,17 @@ local function init_reactor_ctrl()
   end
 end
 
-function applyReactorRods()
+function applyReactorRods(allow_overmax)
   for name, ctrl in pairs(reactor_ctrl) do
     local reactor = peripheral.wrap(name)
     if reactor then
       local last_applied = ctrl.last_applied
-      if last_applied == nil or math.abs(ctrl.rods - last_applied) >= ROD_DEADBAND then
-        reactor.setAllControlRodLevels(ctrl.rods)
-        ctrl.last_applied = ctrl.rods
-        log("INFO", "Applied rods " .. tostring(ctrl.rods) .. "% to reactor " .. name)
+      local clamped = clamp_rods(ctrl.rods, allow_overmax)
+      if last_applied == nil or math.abs(clamped - last_applied) >= ROD_DEADBAND then
+        reactor.setAllControlRodLevels(clamped)
+        ctrl.last_applied = clamped
+        ctrl.rods = clamped
+        log("INFO", "Applied rods " .. tostring(clamped) .. "% to reactor " .. name)
       end
     end
   end
@@ -261,19 +285,23 @@ end
 
 local function apply_initial_reactor_rods()
   for name, ctrl in pairs(reactor_ctrl) do
+    ctrl.rods = clamp_rods(ctrl.rods, false)
     ctrl.last_applied = nil
     log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(ctrl.rods) .. "%")
   end
-  applyReactorRods()
+  applyReactorRods(false)
 end
 
 local function update_reactor_setpoints()
+  if current_state == STATE.SAFE then
+    return
+  end
   local now = os.epoch("utc")
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
     if now - last_adjust >= (ROD_TICK * 1000) then
       if not ctrl.initialized then
-        ctrl.rods = ctrl.rods - 5
+        ctrl.rods = clamp_rods(ctrl.rods - 5, false)
         ctrl.initialized = true
       end
       local target = compute_reactor_target_level()
@@ -285,7 +313,7 @@ local function update_reactor_setpoints()
       elseif ctrl.rods < target then
         ctrl.rods = math.min(ctrl.rods + ROD_STEP_DOWN, target)
       end
-      ctrl.rods = safety.clamp(ctrl.rods, 0, 100)
+      ctrl.rods = clamp_rods(ctrl.rods, false)
       ctrl.last_adjust = now
     end
   end
@@ -293,8 +321,12 @@ end
 
 local function updateReactorControl()
   log("DEBUG", "Reactor control tick")
+  if current_state == STATE.SAFE then
+    applyReactorRods(true)
+    return
+  end
   update_reactor_setpoints()
-  applyReactorRods()
+  applyReactorRods(false)
 end
 
 local function warn_once(key, message)
@@ -386,8 +418,8 @@ local function get_turbine_stats(target_rpm)
 end
 
 compute_reactor_target_level = function()
-  local min_rods = safety.clamp(config.autonom.min_rods, 0, 100)
-  local max_rods = safety.clamp(config.autonom.max_rods, 0, 100)
+  local min_rods = safety.clamp(config.autonom.min_rods, ROD_MIN, ROD_MAX)
+  local max_rods = safety.clamp(config.autonom.max_rods, ROD_MIN, ROD_MAX)
   if min_rods > max_rods then
     min_rods, max_rods = max_rods, min_rods
   end
@@ -399,8 +431,9 @@ compute_reactor_target_level = function()
   local demand_ratio = max_rpm > 0 and (target_rpm / max_rpm) or 0
   local stats = get_turbine_stats(target_rpm)
   if stats.total_turbines == 0 then
-    autonom_state.reactor_target = target
-    return target
+    local clamped = clamp_rods(target, false)
+    autonom_state.reactor_target = clamped
+    return clamped
   end
   local now = os.epoch("utc")
   local last_adjust = autonom_state.reactor_adjust_at or 0
@@ -422,7 +455,10 @@ compute_reactor_target_level = function()
     target = target + config.autonom.reactor_step_down
     autonom_state.reactor_adjust_at = now
   end
-  target = safety.clamp(target, min_rods, max_rods)
+  if stats.avg_rpm < (TARGET_RPM * 0.8) or stats.avg_flow > (MAX_FLOW * 0.8) then
+    target = math.min(target, BASELOAD_RODS)
+  end
+  target = clamp_rods(safety.clamp(target, min_rods, max_rods), false)
   autonom_state.reactor_target = target
   return target
 end
@@ -804,13 +840,13 @@ apply_safe_controls = function()
     local caps = get_device_caps("reactors", name)
     if caps.setAllControlRodLevels then
       local ctrl = ensure_reactor_ctrl(name)
-      ctrl.rods = 100
+      ctrl.rods = clamp_rods(100, true)
       ctrl.last_applied = nil
     else
       warn_unsupported(name)
     end
   end
-  applyReactorRods()
+  applyReactorRods(true)
 
   for name, turbine in pairs(peripherals.turbines) do
     local caps = get_device_caps("turbines", name)
@@ -859,6 +895,9 @@ local function update_module_limits(module)
     if temp > config.safety.max_temperature then
       table.insert(limits, "TEMP")
     end
+    if reactor_low_water(module.peripheral) then
+      table.insert(limits, "WATER")
+    end
   end
   module.limits = limits
   return limits
@@ -876,7 +915,7 @@ local function adjust_reactors()
     if module.type == "reactor" and module.peripheral then
       if module.state == "OFF" or module.state == "ERROR" then
         local ctrl = ensure_reactor_ctrl(module.name)
-        ctrl.rods = 100
+        ctrl.rods = clamp_rods(ROD_MAX, false)
       else
         if (current_state == STATE.AUTONOM or current_state == STATE.MASTER) and module.caps then
           local ok_active, active_result = pcall(setReactorActive, module.peripheral, module.caps, true)
@@ -898,6 +937,19 @@ local function adjust_reactors()
           end
           return
         end
+        if reactor_low_water(module.peripheral) then
+          module.state = "ERROR"
+          module.progress = 0
+          module.limits = { "WATER" }
+          if current_state ~= STATE.SAFE then
+            log("ERROR", "Safety trigger: reactor coolant level too low")
+            setState(STATE.SAFE)
+          end
+          if node_state_machine.state() ~= constants.node_states.EMERGENCY then
+            node_state_machine:transition(constants.node_states.EMERGENCY)
+          end
+          return
+        end
         if not module.caps or not module.caps.setAllControlRodLevels then
           warn_unsupported(module.name)
           goto continue_adjust_reactor
@@ -908,7 +960,7 @@ local function adjust_reactors()
     end
     ::continue_adjust_reactor::
   end
-  applyReactorRods()
+  applyReactorRods(false)
 end
 
 local function adjust_turbines()
@@ -1156,9 +1208,9 @@ local function process_startup()
     if module.caps and module.caps.setAllControlRodLevels then
       local level = 100 - math.floor(progress * 100)
       local ctrl = ensure_reactor_ctrl(module.name)
-      ctrl.rods = safety.clamp(level, 0, 100)
+      ctrl.rods = clamp_rods(level, false)
       ctrl.last_applied = nil
-      applyReactorRods()
+      applyReactorRods(false)
     end
     local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
     if progress >= 1 and temp > 0 and temp < config.safety.max_temperature then
@@ -1174,11 +1226,15 @@ local function update_module_states()
     local limits = update_module_limits(module)
     if module.type == "reactor" and module.state ~= "OFF" then
       for _, limit in ipairs(limits) do
-        if limit == "TEMP" then
+        if limit == "TEMP" or limit == "WATER" then
           module.state = "ERROR"
           module.progress = 0
           if current_state ~= STATE.SAFE then
-            log("ERROR", "Safety trigger: reactor temperature limit exceeded")
+            if limit == "WATER" then
+              log("ERROR", "Safety trigger: reactor coolant level too low")
+            else
+              log("ERROR", "Safety trigger: reactor temperature limit exceeded")
+            end
             setState(STATE.SAFE)
           end
           if node_state_machine.state() ~= constants.node_states.EMERGENCY then
