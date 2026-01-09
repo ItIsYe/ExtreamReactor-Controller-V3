@@ -449,6 +449,8 @@ local function update_reactor_setpoints()
     return
   end
   local need_more, need_less = get_reactor_demand()
+  autonom_state.reactor_need_more = need_more
+  autonom_state.reactor_need_less = need_less
   local now = os.epoch("utc")
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
@@ -620,11 +622,24 @@ local function get_turbine_stats(target_rpm)
 end
 
 local function get_reactor_demand()
-  local stats = get_turbine_stats(TARGET_RPM)
-  local need_more = stats.need_more_steam
-  local need_less = stats.need_less_steam
-  autonom_state.reactor_need_more = need_more
-  autonom_state.reactor_need_less = need_less
+  local need_more = false
+  local need_less = true
+
+  for _, ctrl in pairs(turbine_ctrl) do
+    local rpm = ctrl.rpm or 0
+    local flow = ctrl.flow or 0
+
+    if rpm < TARGET_RPM - 40 and flow >= MAX_FLOW * 0.8 then
+      need_more = true
+      need_less = false
+      break
+    end
+
+    if rpm < TARGET_RPM + 30 then
+      need_less = false
+    end
+  end
+
   return need_more, need_less
 end
 
@@ -692,6 +707,9 @@ end
 
 local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local ctrl = ensure_turbine_ctrl(name)
+  if type(rpm) == "number" then
+    ctrl.rpm = rpm
+  end
   local flow, mode = update_turbine_flow_state(rpm, target_rpm, ctrl)
   local ok, result = pcall(setTurbineFlow, turbine, caps, flow)
   log("DEBUG", "Turbine " .. name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " mode=" .. tostring(mode))
