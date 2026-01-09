@@ -404,8 +404,10 @@ end
 
 local function log_reactor_control_tick()
   local sample_rods = BASELOAD_RODS
+  local sample_steam = nil
   for _, ctrl in pairs(reactor_ctrl) do
     sample_rods = ctrl.rods or sample_rods
+    sample_steam = ctrl.last_steam_pct
     break
   end
   local age = os.clock() - last_rod_change_ts
@@ -425,7 +427,7 @@ local function log_reactor_control_tick()
   )
 end
 
-local function update_reactor_setpoints()
+local function update_reactor_setpoints(steam_by_reactor)
   if current_state == STATE.SAFE then
     return
   end
@@ -457,7 +459,7 @@ local function updateReactorControl()
     return
   end
   log_reactor_control_state()
-  update_reactor_setpoints()
+  update_reactor_setpoints(steam_by_reactor)
   log_reactor_control_tick()
   applyReactorRods(autonom_state.reactor_target, false)
 end
@@ -620,6 +622,9 @@ compute_reactor_target_level = function(current_rods, total_need, active_turbine
     end
   end
   target = clamp_rods(safety.clamp(target, min_rods, max_rods), false)
+  if target >= max_rods then
+    target = max_rods
+  end
   if target ~= previous_target then
     local new_direction = target < previous_target and "DOWN" or "UP"
     autonom_state.pending_rod_direction = new_direction
