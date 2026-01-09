@@ -453,8 +453,10 @@ end
 
 local function log_reactor_control_tick()
   local sample_rods = BASELOAD_RODS
+  local sample_steam = nil
   for _, ctrl in pairs(reactor_ctrl) do
     sample_rods = ctrl.rods or sample_rods
+    sample_steam = ctrl.last_steam_pct
     break
   end
   local age = os.clock() - last_rod_change_ts
@@ -462,11 +464,9 @@ local function log_reactor_control_tick()
     "DEBUG",
     "ReactorCtrl rods="
       .. tostring(sample_rods)
-      .. " need_more="
-      .. tostring(autonom_state.reactor_need_more)
-      .. " need_less="
-      .. tostring(autonom_state.reactor_need_less)
-      .. " dir="
+      .. " steam="
+      .. tostring(sample_steam)
+      .. "% dir="
       .. tostring(last_rod_direction)
       .. " age="
       .. string.format("%.1f", age)
@@ -477,9 +477,6 @@ local function update_reactor_setpoints()
   if current_state == STATE.SAFE then
     return
   end
-  local need_more, need_less = get_reactor_demand()
-  autonom_state.reactor_need_more = need_more
-  autonom_state.reactor_need_less = need_less
   local now = os.epoch("utc")
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
@@ -488,7 +485,17 @@ local function update_reactor_setpoints()
         ctrl.rods = clamp_rods(ctrl.rods - 5, false)
         ctrl.initialized = true
       end
-      local target = compute_reactor_target_level(ctrl.rods, need_more, need_less)
+      local reactor = peripherals.reactors and peripherals.reactors[name] or nil
+      local steam_pct = nil
+      if reactor and reactor.getHotFluidAmount and reactor.getHotFluidCapacity then
+        local ok_amount, amount = pcall(reactor.getHotFluidAmount)
+        local ok_capacity, capacity = pcall(reactor.getHotFluidCapacity)
+        if ok_amount and ok_capacity and type(amount) == "number" and type(capacity) == "number" and capacity > 0 then
+          steam_pct = (amount / capacity) * 100
+        end
+      end
+      ctrl.last_steam_pct = steam_pct
+      local target = compute_reactor_target_level(ctrl.rods, steam_pct)
       -- ACHTUNG:
       -- Niedrigerer Rod-Wert = mehr Leistung
       -- Höherer Rod-Wert     = weniger Leistung
@@ -659,7 +666,7 @@ local function get_turbine_stats(target_rpm)
   }
 end
 
-compute_reactor_target_level = function(current_rods, need_more, need_less)
+compute_reactor_target_level = function(current_rods, steam_pct)
   local min_rods = safety.clamp(config.autonom.min_rods, ROD_MIN, ROD_MAX)
   local max_rods = safety.clamp(config.autonom.max_rods, ROD_MIN, ROD_MAX)
   if min_rods > max_rods then
@@ -670,29 +677,30 @@ compute_reactor_target_level = function(current_rods, need_more, need_less)
     target = type(current_rods) == "number" and current_rods or BASELOAD_RODS
   end
   target = safety.clamp(target, min_rods, max_rods)
-  if need_more == nil or need_less == nil then
-    need_more, need_less = get_reactor_demand()
-  end
-  if not need_more and not need_less then
+  local current = type(current_rods) == "number" and current_rods or target
+  if type(steam_pct) ~= "number" then
     autonom_state.reactor_target = clamp_rods(target, false)
     return autonom_state.reactor_target
   end
-  local new_direction = need_more and "DOWN" or "UP"
-  local now = os.clock()
-  if last_rod_direction ~= nil and new_direction ~= last_rod_direction then
-    if now - last_rod_change_ts < MIN_HOLD_TIME then
-      autonom_state.reactor_target = clamp_rods(target, false)
-      return autonom_state.reactor_target
-    end
-  end
+  local step = 5
   local previous_target = target
-  if need_more then
-    target = target - 5
-  elseif need_less then
-    target = target + 2
+  if steam_pct < 30 then
+    target = current - (step * 2)
+  elseif steam_pct < 60 then
+    target = current - step
+  elseif steam_pct < 80 then
+    target = current
+  elseif steam_pct < 95 then
+    target = current + step
+  else
+    target = current + (step * 2)
   end
   target = clamp_rods(safety.clamp(target, min_rods, max_rods), false)
+  if target >= max_rods then
+    target = max_rods
+  end
   if target ~= previous_target then
+    local new_direction = target < previous_target and "DOWN" or "UP"
     autonom_state.pending_rod_direction = new_direction
   end
   autonom_state.reactor_target = target
