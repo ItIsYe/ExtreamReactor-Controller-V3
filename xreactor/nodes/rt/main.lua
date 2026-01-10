@@ -7,6 +7,10 @@ local safety = require("core.safety")
 local network_lib = require("core.network")
 local machine = require("core.state_machine")
 
+local INFO = "INFO"
+local DEBUG = "DEBUG"
+local WARN = "WARN"
+
 local function log(level, message)
   local stamp = textutils.formatTime(os.epoch("utc") / 1000, true)
   print(string.format("[%s] RT | %s | %s", stamp, level, message))
@@ -385,19 +389,24 @@ local function log_reactor_control_tick()
 end
 
 function getSteamFillPercent()
-  if not steamTank then return nil end
+  if not steamTank then
+    return nil
+  end
 
-  local t = steamTank.tanks()
-  if not t or not t[1] then return nil end
-  if not t[1].capacity or t[1].capacity <= 0 then return nil end
+  local ok, data = pcall(function()
+    return steamTank.tanks()
+  end)
 
-  return t[1].amount / t[1].capacity
+  if not ok or not data or not data[1] or not data[1].capacity then
+    return nil
+  end
+
+  return data[1].amount / data[1].capacity
 end
 
 local function controlReactor()
   local fill = getSteamFillPercent()
   if not fill then
-    log("WARN", "Steam tank unreadable – reactor hold")
     return
   end
 
@@ -408,9 +417,9 @@ local function controlReactor()
       if ok_rods and type(current_rods) == "number" then
         local rods = current_rods
 
-        if fill < 0.20 then
+        if fill < 0.10 then
           rods = rods - 5
-        elseif fill > 0.80 then
+        elseif fill > 0.90 then
           rods = rods + 5
         else
           goto continue_reactor
@@ -747,15 +756,33 @@ end
 function detectSteamTank()
   for _, name in ipairs(peripheral.getNames()) do
     local p = peripheral.wrap(name)
-    if p and type(p.tanks) == "function" then
-      local t = p.tanks()
-      if t and t[1] and t[1].capacity then
-        log("INFO", "Steam tank detected: " .. name)
-        return p
+    if p then
+      local methods = peripheral.getMethods(name)
+      if methods then
+        for _, m in ipairs(methods) do
+          if m == "tanks" then
+            log(INFO, "Steam-capable tank found: " .. name)
+            return p
+          end
+        end
       end
     end
   end
   return nil
+end
+
+function dumpPeripherals()
+  for _, name in ipairs(peripheral.getNames()) do
+    local pType = peripheral.getType(name)
+    log(INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
+
+    local methods = peripheral.getMethods(name)
+    if methods then
+      for _, m in ipairs(methods) do
+        log(DEBUG, "  method: " .. m)
+      end
+    end
+  end
 end
 
 local function build_modules()
@@ -1556,6 +1583,7 @@ local function mainEventLoop()
 end
 
 local function init()
+  dumpPeripherals()
   steamTank = detectSteamTank()
   if not steamTank then
     log("WARN", "Steam tank unreadable")
