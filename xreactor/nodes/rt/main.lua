@@ -384,27 +384,29 @@ local function log_reactor_control_tick()
   end
 end
 
-local function read_steam_pct()
-  if not steam_tank or not steam_tank.getStored or not steam_tank.getCapacity then
-    return 0
+function readSteamTank(tank)
+  if not tank or type(tank.getTanks) ~= "function" then
+    return nil, nil
   end
-  local ok_fluids, fluids = pcall(steam_tank.getStored)
-  local ok_capacity, capacity = pcall(steam_tank.getCapacity)
-  if not ok_fluids or not ok_capacity or type(capacity) ~= "number" or capacity <= 0 or type(fluids) ~= "table" then
-    return 0
+  local tanks = tank.getTanks()
+  if not tanks then
+    return nil, nil
   end
-  local steam = 0
-  for _, f in pairs(fluids) do
-    if f and (f.name == "mekanism:steam" or f.name == "steam") then
-      steam = f.amount or 0
-      break
+  for _, t in pairs(tanks) do
+    if t.name and string.find(t.name, "steam") then
+      return t.amount or 0, t.capacity or 0
     end
   end
-  local steam_pct = steam / capacity
-  if steam == 0 and steam_pct == 0 then
-    steam_pct = 0
+  return nil, nil
+end
+
+local function read_steam_pct()
+  local steamAmount, steamCapacity = readSteamTank(steam_tank)
+  if not steamAmount or not steamCapacity or steamCapacity == 0 then
+    log("WARN", "Steam tank unreadable")
+    return nil
   end
-  return steam_pct
+  return steamAmount / steamCapacity
 end
 
 local function update_reactor_setpoints()
@@ -413,6 +415,9 @@ local function update_reactor_setpoints()
   end
   local now = os.clock()
   local steam_pct = read_steam_pct()
+  if steam_pct == nil then
+    return
+  end
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
     ctrl.initialized = true
