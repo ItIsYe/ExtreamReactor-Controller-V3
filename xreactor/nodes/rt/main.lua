@@ -45,12 +45,11 @@ local ROD_MAX = 98
 local INITIAL_ROD_LEVEL = ROD_MAX
 local MIN_APPLY_INTERVAL = 1.5
 local REACTOR_STEP = 5
-local STEAM_LOW = 0.25
-local STEAM_HIGH = 0.75
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
 local last_rod_change_ts = 0
 local last_rod_direction = nil
+local last_reactor_demand = 0
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
@@ -363,61 +362,44 @@ local function log_reactor_control_state()
 end
 
 local function log_reactor_control_tick()
-  local sample_rods = read_current_rods() or ROD_MAX
-  local sample_steam = nil
-  for _, ctrl in pairs(reactor_ctrl) do
-    sample_steam = ctrl.last_steam_pct
-    break
-  end
+  local sample_demand = last_reactor_demand
   local age = os.clock() - last_rod_change_ts
   log(
     "DEBUG",
-    "ReactorCtrl rods="
-      .. tostring(sample_rods)
-      .. " steam="
-      .. tostring(sample_steam)
+    "ReactorCtrl demand="
+      .. tostring(sample_demand)
       .. " dir="
       .. tostring(last_rod_direction)
       .. " age="
       .. string.format("%.1f", age)
   )
-  if sample_steam ~= nil then
-    log("INFO", "ReactorCtrl steam=" .. tostring(math.floor(sample_steam * 100)) .. "% rods=" .. tostring(sample_rods))
-  end
-end
-
-local function getReactorSteamPercent(reactor, name)
-  if not reactor or not reactor.getHotFluidAmount or not reactor.getHotFluidCapacity then
-    log("ERROR", "Reactor steam API unavailable: " .. tostring(name))
-    return nil
-  end
-  local ok_amount, amount = pcall(reactor.getHotFluidAmount)
-  local ok_capacity, capacity = pcall(reactor.getHotFluidCapacity)
-  if not ok_amount or not ok_capacity or type(amount) ~= "number" or type(capacity) ~= "number" or capacity <= 0 then
-    log("ERROR", "Reactor steam unreadable: " .. tostring(name))
-    return nil
-  end
-  return amount / capacity
+  log("INFO", "ReactorCtrl demand=" .. tostring(sample_demand))
 end
 
 local function controlReactor()
-  local fill = nil
-  for _, name in ipairs(config.reactors or {}) do
-    local reactor = peripheral.wrap(name)
-    local percent = getReactorSteamPercent(reactor, name)
-    if percent ~= nil then
-      fill = percent
-      break
-    end
-  end
-
-  if fill == nil then
+  local turbine_count = #config.turbines
+  if turbine_count == 0 then
     return
   end
 
-  for _, ctrl in pairs(reactor_ctrl) do
-    ctrl.last_steam_pct = fill
+  local demand = 0
+  local target_rpm = config.autonom.target_rpm or TARGET_RPM
+  for _, name in ipairs(config.turbines) do
+    local turbine = peripheral.wrap(name)
+    if turbine and turbine.getRotorSpeed then
+      local ok_rpm, rpm = pcall(turbine.getRotorSpeed)
+      if ok_rpm and type(rpm) == "number" then
+        if rpm < target_rpm then
+          demand = demand + 1
+        elseif rpm > target_rpm then
+          demand = demand - 1
+        end
+      end
+    end
   end
+
+  demand = safety.clamp(demand, -turbine_count, turbine_count)
+  last_reactor_demand = demand
 
   local current_rods = read_current_rods()
   if type(current_rods) ~= "number" then
@@ -426,9 +408,9 @@ local function controlReactor()
   end
 
   local target_rods = current_rods
-  if fill < STEAM_LOW then
+  if demand > 0 then
     target_rods = current_rods - REACTOR_STEP
-  elseif fill > STEAM_HIGH then
+  elseif demand < 0 then
     target_rods = current_rods + REACTOR_STEP
   end
 
@@ -439,7 +421,7 @@ local function controlReactor()
 
   local applied = applyReactorRods(target_rods, false)
   if applied then
-    log("INFO", string.format("ReactorCtrl steam=%d%% rods=%d", math.floor(fill * 100), target_rods))
+    log("INFO", string.format("ReactorCtrl demand=%d rods=%d", demand, target_rods))
   end
 end
 
