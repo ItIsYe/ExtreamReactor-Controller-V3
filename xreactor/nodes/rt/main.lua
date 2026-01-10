@@ -118,6 +118,15 @@ local TURBINE_MODE = {
   REGULATE = "REGULATE"
 }
 
+function ensure_turbine_ctr(name)
+  local ctrl = turbine_ctrl[name]
+  if not ctrl then
+    ctrl = { flow = clamp_turbine_flow(START_FLOW), mode = TURBINE_MODE.RAMP }
+    turbine_ctrl[name] = ctrl
+  end
+  return ctrl
+end
+
 local function clamp_turbine_flow(rate)
   if type(rate) ~= "number" then
     rate = config.autonom.min_flow
