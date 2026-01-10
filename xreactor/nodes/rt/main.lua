@@ -35,7 +35,7 @@ local FLOW_STEP = 50
 local COIL_ENGAGE_RPM = 850
 local COIL_DISENG_RPM = 750
 local START_FLOW = MIN_FLOW
-local ROD_TICK = 2.0
+local ROD_TICK = 5.0
 local ROD_MIN = 0
 local ROD_MAX = 98
 local INITIAL_ROD_LEVEL = ROD_MAX
@@ -62,7 +62,7 @@ config.autonom.flow_step = config.autonom.flow_step or FLOW_STEP
 config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
 config.autonom.min_rods = config.autonom.min_rods or ROD_MIN
 config.autonom.max_rods = config.autonom.max_rods or ROD_MAX
-config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or 2
+config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or ROD_TICK
 config.monitor_interval = config.monitor_interval or 2
 config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
@@ -384,35 +384,30 @@ local function log_reactor_control_tick()
   end
 end
 
-local function read_steam_pct()
-  if not steam_tank or not steam_tank.getStored or not steam_tank.getCapacity then
-    return 0
+function getSteamFillPercent()
+  if not steam_tank then
+    return nil
   end
-  local ok_fluids, fluids = pcall(steam_tank.getStored)
-  local ok_capacity, capacity = pcall(steam_tank.getCapacity)
-  if not ok_fluids or not ok_capacity or type(capacity) ~= "number" or capacity <= 0 or type(fluids) ~= "table" then
-    return 0
+  local tanks = steam_tank.getTanks()
+  if not tanks or not tanks[1] then
+    return nil
   end
-  local steam = 0
-  for _, f in pairs(fluids) do
-    if f and (f.name == "mekanism:steam" or f.name == "steam") then
-      steam = f.amount or 0
-      break
-    end
+  if not tanks[1].capacity or tanks[1].capacity == 0 then
+    return nil
   end
-  local steam_pct = steam / capacity
-  if steam == 0 and steam_pct == 0 then
-    steam_pct = 0
-  end
-  return steam_pct
+  return tanks[1].amount / tanks[1].capacity
 end
 
-local function update_reactor_setpoints()
+local function controlReactor()
   if current_state == STATE.SAFE then
     return
   end
-  local now = os.epoch("utc")
-  local steam_pct = read_steam_pct()
+  local now = os.clock()
+  local fill = getSteamFillPercent()
+  if not fill then
+    log("WARN", "Steam tank unreadable")
+    return
+  end
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
     ctrl.initialized = true
@@ -420,27 +415,30 @@ local function update_reactor_setpoints()
     if reactor and reactor.getControlRodLevel and reactor.setAllControlRodLevels then
       local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
       if ok_rods and type(current_rods) == "number" then
-        ctrl.last_steam_pct = steam_pct
-        if now - last_adjust >= (ROD_TICK * 1000) then
-          local target_rods = current_rods
-          if steam_pct < STEAM_LOW then
-            target_rods = current_rods - REACTOR_STEP
-            autonom_state.pending_rod_direction = "DOWN"
-          elseif steam_pct > STEAM_HIGH then
-            target_rods = current_rods + REACTOR_STEP
-            autonom_state.pending_rod_direction = "UP"
+        ctrl.last_steam_pct = fill
+        if now - last_adjust < ROD_TICK then
+          goto continue_reactor
+        end
+        ctrl.last_adjust = now
+        local rods = current_rods
+        if fill < STEAM_LOW then
+          rods = rods - REACTOR_STEP
+          autonom_state.pending_rod_direction = "DOWN"
+        elseif fill > STEAM_HIGH then
+          rods = rods + REACTOR_STEP
+          autonom_state.pending_rod_direction = "UP"
+        else
+          goto continue_reactor
+        end
+        rods = math.max(ROD_MIN, math.min(ROD_MAX, rods))
+        if rods ~= current_rods then
+          local ok_set, set_result = pcall(reactor.setAllControlRodLevels, rods)
+          if ok_set and set_result ~= false then
+            autonom_state.reactor_target = rods
+            log("INFO", string.format("ReactorCtrl tank=%d%% rods=%d", math.floor(fill * 100), rods))
+          else
+            warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
           end
-          target_rods = clamp_rods(target_rods, false)
-          if target_rods ~= current_rods then
-            local ok_set, set_result = pcall(reactor.setAllControlRodLevels, target_rods)
-            if ok_set and set_result ~= false then
-              autonom_state.reactor_target = target_rods
-              log("INFO", "Reactor rods " .. tostring(current_rods) .. " -> " .. tostring(target_rods) .. " (steam " .. tostring(math.floor(steam_pct * 100)) .. "%)")
-            else
-              warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
-            end
-          end
-          ctrl.last_adjust = now
         end
       else
         warn_once("reactor_rods:" .. name, "Reactor control rod read failed for " .. name)
@@ -448,6 +446,7 @@ local function update_reactor_setpoints()
     else
       warn_once("reactor_rods:" .. name, "Reactor control rods unsupported for " .. name)
     end
+    ::continue_reactor::
   end
 end
 
@@ -459,7 +458,7 @@ local function updateReactorControl()
     return
   end
   log_reactor_control_state()
-  update_reactor_setpoints()
+  controlReactor()
   log_reactor_control_tick()
 end
 
@@ -762,16 +761,18 @@ local function cache()
   end
 end
 
-local function detect_steam_tank()
-  local ok_find, found = pcall(peripheral.find, "mekanism:ultimate_fluid_tank")
-  if ok_find and found then
-    return found
-  end
+function detectSteamTank()
   for _, name in ipairs(peripheral.getNames()) do
-    if peripheral.hasType(name, "fluid_storage") then
-      local ok_wrap, wrapped = pcall(peripheral.wrap, name)
-      if ok_wrap and wrapped then
-        return wrapped
+    local p = peripheral.wrap(name)
+    if p and type(p.getTanks) == "function" then
+      local tanks = p.getTanks()
+      if tanks then
+        for _, t in pairs(tanks) do
+          if t.name and string.find(string.lower(t.name), "steam") then
+            log("INFO", "Steam tank detected: " .. name)
+            return p
+          end
+        end
       end
     end
   end
@@ -1577,11 +1578,9 @@ local function mainEventLoop()
 end
 
 local function init()
-  steam_tank = detect_steam_tank()
-  if steam_tank then
-    log("INFO", "Steam tank detected")
-  else
-    log("WARN", "Steam tank not detected")
+  steam_tank = detectSteamTank()
+  if not steam_tank then
+    log("WARN", "Steam tank unreadable")
   end
   cache()
   init_turbine_ctrl()
