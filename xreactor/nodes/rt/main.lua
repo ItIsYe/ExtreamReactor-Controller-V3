@@ -69,7 +69,7 @@ local hb = config.heartbeat_interval
 
 local network
 local peripherals = {}
-local steam_tank = nil
+local steamTank = nil
 local targets = { power = 0, steam = 0, rpm = 0 }
 local modules = {}
 local active_startup = nil
@@ -385,15 +385,13 @@ local function log_reactor_control_tick()
 end
 
 function getSteamFillPercent()
-  if not steam_tank then return nil end
-  local tanks = steam_tank.getTanks()
-  if not tanks or not tanks[1] then return nil end
+  if not steamTank then return nil end
 
-  local amount = tanks[1].amount or 0
-  local capacity = tanks[1].capacity or 0
-  if capacity <= 0 then return nil end
+  local t = steamTank.tanks()
+  if not t or not t[1] then return nil end
+  if not t[1].capacity or t[1].capacity <= 0 then return nil end
 
-  return amount / capacity
+  return t[1].amount / t[1].capacity
 end
 
 local function controlReactor()
@@ -749,9 +747,9 @@ end
 function detectSteamTank()
   for _, name in ipairs(peripheral.getNames()) do
     local p = peripheral.wrap(name)
-    if p and type(p.getTanks) == "function" then
-      local tanks = p.getTanks()
-      if tanks and tanks[1] and tanks[1].capacity then
+    if p and type(p.tanks) == "function" then
+      local t = p.tanks()
+      if t and t[1] and t[1].capacity then
         log("INFO", "Steam tank detected: " .. name)
         return p
       end
@@ -1558,8 +1556,8 @@ local function mainEventLoop()
 end
 
 local function init()
-  steam_tank = detectSteamTank()
-  if not steam_tank then
+  steamTank = detectSteamTank()
+  if not steamTank then
     log("WARN", "Steam tank unreadable")
   end
   cache()
