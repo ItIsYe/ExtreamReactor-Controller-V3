@@ -785,6 +785,26 @@ function dumpPeripherals()
   end
 end
 
+function debugTankScan()
+  log(INFO, "=== TANK SCAN START ===")
+
+  for _, name in ipairs(peripheral.getNames()) do
+    local pType = peripheral.getType(name)
+    log(INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
+
+    local methods = peripheral.getMethods(name)
+    if methods then
+      for _, m in ipairs(methods) do
+        if m == "tanks" then
+          log(INFO, ">>> FOUND FLUID TANK: " .. name)
+        end
+      end
+    end
+  end
+
+  log(INFO, "=== TANK SCAN END ===")
+end
+
 local function build_modules()
   modules = {}
   for i, name in ipairs(config.turbines) do
@@ -1583,6 +1603,7 @@ local function mainEventLoop()
 end
 
 local function init()
+  debugTankScan()
   dumpPeripherals()
   steamTank = detectSteamTank()
   if not steamTank then
