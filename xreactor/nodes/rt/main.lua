@@ -35,14 +35,14 @@ local FLOW_STEP = 50
 local COIL_ENGAGE_RPM = 850
 local COIL_DISENG_RPM = 750
 local START_FLOW = MIN_FLOW
-local ROD_TICK = 2.0
+local ROD_TICK = 5.0
 local ROD_MIN = 0
 local ROD_MAX = 98
 local INITIAL_ROD_LEVEL = ROD_MAX
 local MIN_APPLY_INTERVAL = 1.5
 local REACTOR_STEP = 5
-local STEAM_LOW = 0.20
-local STEAM_HIGH = 0.80
+local STEAM_LOW = 0.25
+local STEAM_HIGH = 0.75
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
 local last_rod_change_ts = 0
@@ -62,7 +62,7 @@ config.autonom.flow_step = config.autonom.flow_step or FLOW_STEP
 config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
 config.autonom.min_rods = config.autonom.min_rods or ROD_MIN
 config.autonom.max_rods = config.autonom.max_rods or ROD_MAX
-config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or 2
+config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or ROD_TICK
 config.monitor_interval = config.monitor_interval or 2
 config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
@@ -411,7 +411,7 @@ local function update_reactor_setpoints()
   if current_state == STATE.SAFE then
     return
   end
-  local now = os.epoch("utc")
+  local now = os.clock()
   local steam_pct = read_steam_pct()
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
@@ -421,26 +421,37 @@ local function update_reactor_setpoints()
       local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
       if ok_rods and type(current_rods) == "number" then
         ctrl.last_steam_pct = steam_pct
-        if now - last_adjust >= (ROD_TICK * 1000) then
-          local target_rods = current_rods
-          if steam_pct < STEAM_LOW then
-            target_rods = current_rods - REACTOR_STEP
-            autonom_state.pending_rod_direction = "DOWN"
-          elseif steam_pct > STEAM_HIGH then
-            target_rods = current_rods + REACTOR_STEP
-            autonom_state.pending_rod_direction = "UP"
+        if now - last_adjust < ROD_TICK then
+          goto continue_reactor
+        end
+        ctrl.last_adjust = now
+        local target_rods = current_rods
+        if steam_pct < STEAM_LOW then
+          target_rods = current_rods - REACTOR_STEP
+          autonom_state.pending_rod_direction = "DOWN"
+        elseif steam_pct > STEAM_HIGH then
+          target_rods = current_rods + REACTOR_STEP
+          autonom_state.pending_rod_direction = "UP"
+        else
+          goto continue_reactor
+        end
+        target_rods = clamp_rods(target_rods, false)
+        if target_rods ~= current_rods then
+          local ok_set, set_result = pcall(reactor.setAllControlRodLevels, target_rods)
+          if ok_set and set_result ~= false then
+            autonom_state.reactor_target = target_rods
+            log(
+              "INFO",
+              "ReactorCtrl tank="
+                .. tostring(math.floor(steam_pct * 100))
+                .. "% rods "
+                .. tostring(current_rods)
+                .. " -> "
+                .. tostring(target_rods)
+            )
+          else
+            warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
           end
-          target_rods = clamp_rods(target_rods, false)
-          if target_rods ~= current_rods then
-            local ok_set, set_result = pcall(reactor.setAllControlRodLevels, target_rods)
-            if ok_set and set_result ~= false then
-              autonom_state.reactor_target = target_rods
-              log("INFO", "Reactor rods " .. tostring(current_rods) .. " -> " .. tostring(target_rods) .. " (steam " .. tostring(math.floor(steam_pct * 100)) .. "%)")
-            else
-              warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
-            end
-          end
-          ctrl.last_adjust = now
         end
       else
         warn_once("reactor_rods:" .. name, "Reactor control rod read failed for " .. name)
@@ -448,6 +459,7 @@ local function update_reactor_setpoints()
     else
       warn_once("reactor_rods:" .. name, "Reactor control rods unsupported for " .. name)
     end
+    ::continue_reactor::
   end
 end
 
