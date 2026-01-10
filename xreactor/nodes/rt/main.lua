@@ -45,11 +45,13 @@ local ROD_MAX = 98
 local INITIAL_ROD_LEVEL = ROD_MAX
 local MIN_APPLY_INTERVAL = 1.5
 local REACTOR_STEP = 5
+local MIN_ACTIVE_RPM = 100
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
 local last_rod_change_ts = 0
 local last_rod_direction = nil
 local last_reactor_demand = 0
+local steam_tank_name = nil
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
@@ -66,6 +68,8 @@ config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
 config.autonom.min_rods = config.autonom.min_rods or ROD_MIN
 config.autonom.max_rods = config.autonom.max_rods or ROD_MAX
 config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or ROD_TICK
+config.autonom.steam_reserve = config.autonom.steam_reserve or 5000
+config.autonom.steam_deficit = config.autonom.steam_deficit or 5000
 config.monitor_interval = config.monitor_interval or 2
 config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
@@ -127,6 +131,108 @@ local function clamp_rods(level, allow_overmax)
   end
   local max_limit = allow_overmax and 100 or ROD_MAX
   return safety.clamp(level, ROD_MIN, max_limit)
+end
+
+local function resolve_steam_tank_name()
+  if steam_tank_name and peripheral.isPresent(steam_tank_name) then
+    return steam_tank_name
+  end
+  for _, name in ipairs(peripheral.getNames()) do
+    local ptype = peripheral.getType(name)
+    if ptype and string.find(ptype, "ultimate_fluid_tank") then
+      steam_tank_name = name
+      return steam_tank_name
+    end
+  end
+  for _, name in ipairs(peripheral.getNames()) do
+    if string.find(string.lower(name), "steam") then
+      local tank = peripheral.wrap(name)
+      if tank and tank.getFluidAmount then
+        steam_tank_name = name
+        return steam_tank_name
+      end
+    end
+  end
+  return nil
+end
+
+local function read_steam_tank_amount()
+  local name = resolve_steam_tank_name()
+  if not name then
+    return nil
+  end
+  local tank = peripheral.wrap(name)
+  if tank and tank.getFluidAmount then
+    local ok, amount = pcall(tank.getFluidAmount)
+    if ok and type(amount) == "number" then
+      return amount
+    end
+  end
+  return nil
+end
+
+local function read_reactor_steam_amount()
+  local total = 0
+  local found = false
+  for _, name in ipairs(config.reactors or {}) do
+    local reactor = peripherals.reactors[name] or peripheral.wrap(name)
+    if reactor then
+      local amount = nil
+      if reactor.getHotFluidAmount then
+        local ok, value = pcall(reactor.getHotFluidAmount)
+        if ok and type(value) == "number" then
+          amount = value
+        end
+      elseif reactor.getSteamAmount then
+        local ok, value = pcall(reactor.getSteamAmount)
+        if ok and type(value) == "number" then
+          amount = value
+        end
+      elseif reactor.getSteam then
+        local ok, value = pcall(reactor.getSteam)
+        if ok and type(value) == "number" then
+          amount = value
+        end
+      end
+      if type(amount) == "number" then
+        total = total + amount
+        found = true
+      end
+    end
+  end
+  if found then
+    return total
+  end
+  return nil
+end
+
+local function get_available_steam()
+  local tank_amount = read_steam_tank_amount()
+  if type(tank_amount) == "number" then
+    return tank_amount
+  end
+  return read_reactor_steam_amount()
+end
+
+local function get_total_steam_demand()
+  local total = 0
+  for _, name in ipairs(config.turbines or {}) do
+    local ctrl = ensure_turbine_ctrl(name)
+    local rpm = ctrl.rpm
+    if type(rpm) ~= "number" then
+      local turbine = peripherals.turbines[name] or peripheral.wrap(name)
+      if turbine and turbine.getRotorSpeed then
+        local ok, value = pcall(turbine.getRotorSpeed)
+        if ok and type(value) == "number" then
+          rpm = value
+        end
+      end
+    end
+    if type(rpm) == "number" and rpm > MIN_ACTIVE_RPM then
+      total = total + (ctrl.flow or 0)
+    end
+  end
+  return total
 end
 
 local function reactor_low_water(reactor)
@@ -382,24 +488,14 @@ local function controlReactor()
     return
   end
 
-  local demand = 0
-  local target_rpm = config.autonom.target_rpm or TARGET_RPM
-  for _, name in ipairs(config.turbines) do
-    local turbine = peripheral.wrap(name)
-    if turbine and turbine.getRotorSpeed then
-      local ok_rpm, rpm = pcall(turbine.getRotorSpeed)
-      if ok_rpm and type(rpm) == "number" then
-        if rpm < target_rpm then
-          demand = demand + 1
-        elseif rpm > target_rpm then
-          demand = demand - 1
-        end
-      end
-    end
+  local total_steam_demand = get_total_steam_demand()
+  local available_steam = get_available_steam()
+  if type(available_steam) ~= "number" then
+    return
   end
 
-  demand = safety.clamp(demand, -turbine_count, turbine_count)
-  last_reactor_demand = demand
+  local steam_margin = available_steam - total_steam_demand
+  last_reactor_demand = steam_margin
 
   local current_rods = read_current_rods()
   if type(current_rods) ~= "number" then
@@ -408,10 +504,10 @@ local function controlReactor()
   end
 
   local target_rods = current_rods
-  if demand > 0 then
-    target_rods = current_rods - REACTOR_STEP
-  elseif demand < 0 then
+  if steam_margin > config.autonom.steam_reserve then
     target_rods = current_rods + REACTOR_STEP
+  elseif steam_margin < -config.autonom.steam_deficit then
+    target_rods = current_rods - REACTOR_STEP
   end
 
   target_rods = safety.clamp(target_rods, ROD_MIN, ROD_MAX)
@@ -421,17 +517,21 @@ local function controlReactor()
 
   local applied = applyReactorRods(target_rods, false)
   if applied then
-    log("INFO", string.format("ReactorCtrl demand=%d rods=%d", demand, target_rods))
+    log("INFO", string.format("ReactorCtrl margin=%.1f rods=%d", steam_margin, target_rods))
   end
 end
 
 local function updateReactorControl()
-  last_reactor_tick = os.clock()
+  local now = os.clock()
   log("DEBUG", "Reactor control tick")
   if current_state == STATE.SAFE then
     applyReactorRods(ROD_MAX, true)
     return
   end
+  if now - last_reactor_tick < config.autonom.reactor_adjust_interval then
+    return
+  end
+  last_reactor_tick = now
   log_reactor_control_state()
   controlReactor()
   log_reactor_control_tick()
