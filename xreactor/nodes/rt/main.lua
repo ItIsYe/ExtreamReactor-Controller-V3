@@ -10,20 +10,18 @@ local machine = require("core.state_machine")
 -- === Reactor demand evaluation (GLOBAL) ===
 function get_reactor_demand()
   local need_more = false
-  local need_less = true
+  local need_less = false
+  local low_rpm = TARGET_RPM * 0.9
+  local high_rpm = TARGET_RPM * 1.05
 
   for _, ctrl in pairs(turbine_ctrl or {}) do
     local rpm = ctrl.rpm or 0
-    local flow = ctrl.flow or 0
-
-    if rpm < TARGET_RPM - 40 and flow >= MAX_FLOW * 0.8 then
-      need_more = true
-      need_less = false
-      break
-    end
-
-    if rpm < TARGET_RPM + 30 then
-      need_less = false
+    if rpm > 0 then
+      if rpm < low_rpm then
+        need_more = true
+      elseif rpm > high_rpm then
+        need_less = true
+      end
     end
   end
 
@@ -57,6 +55,7 @@ local START_FLOW = 500
 local ROD_TICK = 2.0
 local ROD_MIN = 0
 local ROD_MAX = 98
+local MIN_ACTIVE_TURBINES = 1
 local BASELOAD_RODS = 70
 local INITIAL_ROD_LEVEL = ROD_MAX
 local MIN_APPLY_INTERVAL = 1.5
@@ -372,14 +371,16 @@ local function compute_turbine_need()
   local need_less = 0
   local active = 0
   local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+  local low_rpm = target_rpm * 0.9
+  local high_rpm = target_rpm * 1.05
   for _, name in ipairs(config.turbines or {}) do
     local ctrl = turbine_ctrl[name]
     local rpm = ctrl and ctrl.rpm or nil
-    if type(rpm) == "number" then
+    if type(rpm) == "number" and rpm > 0 then
       active = active + 1
-      if rpm < target_rpm * 0.9 then
+      if rpm < low_rpm then
         need_more = need_more + 1
-      elseif rpm > target_rpm * 1.05 then
+      elseif rpm > high_rpm then
         need_less = need_less + 1
       end
     end
@@ -416,7 +417,7 @@ local function log_reactor_control_tick()
     "DEBUG",
     "ReactorCtrl rods="
       .. tostring(sample_rods)
-      .. " need="
+      .. " demand="
       .. tostring(total_need)
       .. " active="
       .. tostring(active)
@@ -612,7 +613,7 @@ compute_reactor_target_level = function(current_rods, total_need, active_turbine
   target = safety.clamp(target, min_rods, max_rods)
   local current = type(current_rods) == "number" and current_rods or target
   local previous_target = target
-  if type(active_turbines) == "number" and active_turbines == 0 then
+  if type(active_turbines) == "number" and active_turbines < MIN_ACTIVE_TURBINES then
     target = current + REACTOR_STEP
   elseif type(total_need) == "number" then
     if total_need > 0 then
