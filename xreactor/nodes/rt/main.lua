@@ -7,6 +7,10 @@ local safety = require("core.safety")
 local network_lib = require("core.network")
 local machine = require("core.state_machine")
 
+local INFO = "INFO"
+local DEBUG = "DEBUG"
+local WARN = "WARN"
+
 local function log(level, message)
   local stamp = textutils.formatTime(os.epoch("utc") / 1000, true)
   print(string.format("[%s] RT | %s | %s", stamp, level, message))
@@ -69,7 +73,7 @@ local hb = config.heartbeat_interval
 
 local network
 local peripherals = {}
-local steam_tank = nil
+local steamTank = nil
 local targets = { power = 0, steam = 0, rpm = 0 }
 local modules = {}
 local active_startup = nil
@@ -385,60 +389,51 @@ local function log_reactor_control_tick()
 end
 
 function getSteamFillPercent()
-  if not steam_tank then
+  if not steamTank then
     return nil
   end
-  local tanks = steam_tank.getTanks()
-  if not tanks or not tanks[1] then
+
+  local ok, data = pcall(function()
+    return steamTank.tanks()
+  end)
+
+  if not ok or not data or not data[1] or not data[1].capacity then
     return nil
   end
-  if not tanks[1].capacity or tanks[1].capacity == 0 then
-    return nil
-  end
-  return tanks[1].amount / tanks[1].capacity
+
+  return data[1].amount / data[1].capacity
 end
 
 local function controlReactor()
-  if current_state == STATE.SAFE then
-    return
-  end
-  local now = os.clock()
   local fill = getSteamFillPercent()
   if not fill then
-    log("WARN", "Steam tank unreadable")
     return
   end
-  for name, ctrl in pairs(reactor_ctrl) do
-    local last_adjust = ctrl.last_adjust or 0
-    ctrl.initialized = true
+
+  for name in pairs(reactor_ctrl) do
     local reactor = peripheral.wrap(name)
     if reactor and reactor.getControlRodLevel and reactor.setAllControlRodLevels then
       local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
       if ok_rods and type(current_rods) == "number" then
-        ctrl.last_steam_pct = fill
-        if now - last_adjust < ROD_TICK then
-          goto continue_reactor
-        end
-        ctrl.last_adjust = now
         local rods = current_rods
-        if fill < STEAM_LOW then
-          rods = rods - REACTOR_STEP
-          autonom_state.pending_rod_direction = "DOWN"
-        elseif fill > STEAM_HIGH then
-          rods = rods + REACTOR_STEP
-          autonom_state.pending_rod_direction = "UP"
+
+        if fill < 0.10 then
+          rods = rods - 5
+        elseif fill > 0.90 then
+          rods = rods + 5
         else
           goto continue_reactor
         end
-        rods = math.max(ROD_MIN, math.min(ROD_MAX, rods))
-        if rods ~= current_rods then
-          local ok_set, set_result = pcall(reactor.setAllControlRodLevels, rods)
-          if ok_set and set_result ~= false then
-            autonom_state.reactor_target = rods
-            log("INFO", string.format("ReactorCtrl tank=%d%% rods=%d", math.floor(fill * 100), rods))
-          else
-            warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
-          end
+
+        rods = math.max(0, math.min(98, rods))
+        local ok_set, set_result = pcall(reactor.setAllControlRodLevels, rods)
+        if ok_set and set_result ~= false then
+          log("INFO", string.format(
+            "ReactorCtrl tank=%d%% rods=%d",
+            math.floor(fill * 100), rods
+          ))
+        else
+          warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
         end
       else
         warn_once("reactor_rods:" .. name, "Reactor control rod read failed for " .. name)
@@ -533,7 +528,6 @@ local function updateActuators()
   if current_state ~= STATE.AUTONOM then
     return
   end
-  update_reactor_setpoints()
   for _, name in ipairs(config.reactors) do
     local reactor
     if peripheral.isPresent(name) then
@@ -631,8 +625,6 @@ local function updateControl()
   if current_state ~= STATE.AUTONOM then
     return
   end
-
-  update_reactor_setpoints()
   for _, name in ipairs(config.reactors or {}) do
     local ok, reactor = pcall(peripheral.wrap, name)
     if ok and reactor then
@@ -764,12 +756,12 @@ end
 function detectSteamTank()
   for _, name in ipairs(peripheral.getNames()) do
     local p = peripheral.wrap(name)
-    if p and type(p.getTanks) == "function" then
-      local tanks = p.getTanks()
-      if tanks then
-        for _, t in pairs(tanks) do
-          if t.name and string.find(string.lower(t.name), "steam") then
-            log("INFO", "Steam tank detected: " .. name)
+    if p then
+      local methods = peripheral.getMethods(name)
+      if methods then
+        for _, m in ipairs(methods) do
+          if m == "tanks" then
+            log(INFO, "Steam-capable tank found: " .. name)
             return p
           end
         end
@@ -777,6 +769,40 @@ function detectSteamTank()
     end
   end
   return nil
+end
+
+function dumpPeripherals()
+  for _, name in ipairs(peripheral.getNames()) do
+    local pType = peripheral.getType(name)
+    log(INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
+
+    local methods = peripheral.getMethods(name)
+    if methods then
+      for _, m in ipairs(methods) do
+        log(DEBUG, "  method: " .. m)
+      end
+    end
+  end
+end
+
+function debugTankScan()
+  log(INFO, "=== TANK SCAN START ===")
+
+  for _, name in ipairs(peripheral.getNames()) do
+    local pType = peripheral.getType(name)
+    log(INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
+
+    local methods = peripheral.getMethods(name)
+    if methods then
+      for _, m in ipairs(methods) do
+        if m == "tanks" then
+          log(INFO, ">>> FOUND FLUID TANK: " .. name)
+        end
+      end
+    end
+  end
+
+  log(INFO, "=== TANK SCAN END ===")
 end
 
 local function build_modules()
@@ -950,7 +976,6 @@ local function adjust_reactors()
       active = active + 1
     end
   end
-  update_reactor_setpoints()
   for _, module in pairs(modules) do
     if module.type == "reactor" and module.peripheral then
       if module.state == "OFF" or module.state == "ERROR" then
@@ -1578,8 +1603,10 @@ local function mainEventLoop()
 end
 
 local function init()
-  steam_tank = detectSteamTank()
-  if not steam_tank then
+  debugTankScan()
+  dumpPeripherals()
+  steamTank = detectSteamTank()
+  if not steamTank then
     log("WARN", "Steam tank unreadable")
   end
   cache()
