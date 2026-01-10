@@ -385,60 +385,48 @@ local function log_reactor_control_tick()
 end
 
 function getSteamFillPercent()
-  if not steam_tank then
-    return nil
-  end
+  if not steam_tank then return nil end
   local tanks = steam_tank.getTanks()
-  if not tanks or not tanks[1] then
-    return nil
-  end
-  if not tanks[1].capacity or tanks[1].capacity == 0 then
-    return nil
-  end
-  return tanks[1].amount / tanks[1].capacity
+  if not tanks or not tanks[1] then return nil end
+
+  local amount = tanks[1].amount or 0
+  local capacity = tanks[1].capacity or 0
+  if capacity <= 0 then return nil end
+
+  return amount / capacity
 end
 
 local function controlReactor()
-  if current_state == STATE.SAFE then
-    return
-  end
-  local now = os.clock()
   local fill = getSteamFillPercent()
   if not fill then
-    log("WARN", "Steam tank unreadable")
+    log("WARN", "Steam tank unreadable – reactor hold")
     return
   end
-  for name, ctrl in pairs(reactor_ctrl) do
-    local last_adjust = ctrl.last_adjust or 0
-    ctrl.initialized = true
+
+  for name in pairs(reactor_ctrl) do
     local reactor = peripheral.wrap(name)
     if reactor and reactor.getControlRodLevel and reactor.setAllControlRodLevels then
       local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
       if ok_rods and type(current_rods) == "number" then
-        ctrl.last_steam_pct = fill
-        if now - last_adjust < ROD_TICK then
-          goto continue_reactor
-        end
-        ctrl.last_adjust = now
         local rods = current_rods
-        if fill < STEAM_LOW then
-          rods = rods - REACTOR_STEP
-          autonom_state.pending_rod_direction = "DOWN"
-        elseif fill > STEAM_HIGH then
-          rods = rods + REACTOR_STEP
-          autonom_state.pending_rod_direction = "UP"
+
+        if fill < 0.20 then
+          rods = rods - 5
+        elseif fill > 0.80 then
+          rods = rods + 5
         else
           goto continue_reactor
         end
-        rods = math.max(ROD_MIN, math.min(ROD_MAX, rods))
-        if rods ~= current_rods then
-          local ok_set, set_result = pcall(reactor.setAllControlRodLevels, rods)
-          if ok_set and set_result ~= false then
-            autonom_state.reactor_target = rods
-            log("INFO", string.format("ReactorCtrl tank=%d%% rods=%d", math.floor(fill * 100), rods))
-          else
-            warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
-          end
+
+        rods = math.max(0, math.min(98, rods))
+        local ok_set, set_result = pcall(reactor.setAllControlRodLevels, rods)
+        if ok_set and set_result ~= false then
+          log("INFO", string.format(
+            "ReactorCtrl tank=%d%% rods=%d",
+            math.floor(fill * 100), rods
+          ))
+        else
+          warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
         end
       else
         warn_once("reactor_rods:" .. name, "Reactor control rod read failed for " .. name)
@@ -533,7 +521,6 @@ local function updateActuators()
   if current_state ~= STATE.AUTONOM then
     return
   end
-  update_reactor_setpoints()
   for _, name in ipairs(config.reactors) do
     local reactor
     if peripheral.isPresent(name) then
@@ -631,8 +618,6 @@ local function updateControl()
   if current_state ~= STATE.AUTONOM then
     return
   end
-
-  update_reactor_setpoints()
   for _, name in ipairs(config.reactors or {}) do
     local ok, reactor = pcall(peripheral.wrap, name)
     if ok and reactor then
@@ -766,13 +751,9 @@ function detectSteamTank()
     local p = peripheral.wrap(name)
     if p and type(p.getTanks) == "function" then
       local tanks = p.getTanks()
-      if tanks then
-        for _, t in pairs(tanks) do
-          if t.name and string.find(string.lower(t.name), "steam") then
-            log("INFO", "Steam tank detected: " .. name)
-            return p
-          end
-        end
+      if tanks and tanks[1] and tanks[1].capacity then
+        log("INFO", "Steam tank detected: " .. name)
+        return p
       end
     end
   end
@@ -950,7 +931,6 @@ local function adjust_reactors()
       active = active + 1
     end
   end
-  update_reactor_setpoints()
   for _, module in pairs(modules) do
     if module.type == "reactor" and module.peripheral then
       if module.state == "OFF" or module.state == "ERROR" then
