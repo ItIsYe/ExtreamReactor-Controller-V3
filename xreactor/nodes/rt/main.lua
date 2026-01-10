@@ -73,7 +73,6 @@ local hb = config.heartbeat_interval
 
 local network
 local peripherals = {}
-local steamTank = nil
 local targets = { power = 0, steam = 0, rpm = 0 }
 local modules = {}
 local active_startup = nil
@@ -275,15 +274,15 @@ end
 function applyReactorRods(target, allow_overmax)
   local now = os.clock()
   if now - last_rod_apply_ts < MIN_APPLY_INTERVAL then
-    return
+    return false
   end
   if type(target) ~= "number" then
-    return
+    return false
   end
   local clamped = clamp_rods(target, allow_overmax)
   if last_applied_rods == clamped then
     autonom_state.pending_rod_direction = nil
-    return
+    return false
   end
   for name, ctrl in pairs(reactor_ctrl) do
     local reactor = peripheral.wrap(name)
@@ -328,6 +327,7 @@ function applyReactorRods(target, allow_overmax)
   end
   autonom_state.pending_rod_direction = nil
   log("INFO", "Applied rods " .. tostring(clamped) .. "%")
+  return true
 end
 
 local function apply_initial_reactor_rods()
@@ -383,65 +383,63 @@ local function log_reactor_control_tick()
   )
   if sample_steam ~= nil then
     log("INFO", "ReactorCtrl steam=" .. tostring(math.floor(sample_steam * 100)) .. "% rods=" .. tostring(sample_rods))
-  else
-    log("INFO", "ReactorCtrl steam=nil rods=" .. tostring(sample_rods))
   end
 end
 
-function getSteamFillPercent()
-  if not steamTank then
+local function getReactorSteamPercent(reactor, name)
+  if not reactor or not reactor.getHotFluidAmount or not reactor.getHotFluidCapacity then
+    log("ERROR", "Reactor steam API unavailable: " .. tostring(name))
     return nil
   end
-
-  local ok, data = pcall(function()
-    return steamTank.tanks()
-  end)
-
-  if not ok or not data or not data[1] or not data[1].capacity then
+  local ok_amount, amount = pcall(reactor.getHotFluidAmount)
+  local ok_capacity, capacity = pcall(reactor.getHotFluidCapacity)
+  if not ok_amount or not ok_capacity or type(amount) ~= "number" or type(capacity) ~= "number" or capacity <= 0 then
+    log("ERROR", "Reactor steam unreadable: " .. tostring(name))
     return nil
   end
-
-  return data[1].amount / data[1].capacity
+  return amount / capacity
 end
 
 local function controlReactor()
-  local fill = getSteamFillPercent()
-  if not fill then
+  local fill = nil
+  for _, name in ipairs(config.reactors or {}) do
+    local reactor = peripheral.wrap(name)
+    local percent = getReactorSteamPercent(reactor, name)
+    if percent ~= nil then
+      fill = percent
+      break
+    end
+  end
+
+  if fill == nil then
     return
   end
 
-  for name in pairs(reactor_ctrl) do
-    local reactor = peripheral.wrap(name)
-    if reactor and reactor.getControlRodLevel and reactor.setAllControlRodLevels then
-      local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
-      if ok_rods and type(current_rods) == "number" then
-        local rods = current_rods
+  for _, ctrl in pairs(reactor_ctrl) do
+    ctrl.last_steam_pct = fill
+  end
 
-        if fill < 0.10 then
-          rods = rods - 5
-        elseif fill > 0.90 then
-          rods = rods + 5
-        else
-          goto continue_reactor
-        end
+  local current_rods = read_current_rods()
+  if type(current_rods) ~= "number" then
+    log("ERROR", "Reactor control rods unreadable")
+    return
+  end
 
-        rods = math.max(0, math.min(98, rods))
-        local ok_set, set_result = pcall(reactor.setAllControlRodLevels, rods)
-        if ok_set and set_result ~= false then
-          log("INFO", string.format(
-            "ReactorCtrl tank=%d%% rods=%d",
-            math.floor(fill * 100), rods
-          ))
-        else
-          warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
-        end
-      else
-        warn_once("reactor_rods:" .. name, "Reactor control rod read failed for " .. name)
-      end
-    else
-      warn_once("reactor_rods:" .. name, "Reactor control rods unsupported for " .. name)
-    end
-    ::continue_reactor::
+  local target_rods = current_rods
+  if fill < STEAM_LOW then
+    target_rods = current_rods - REACTOR_STEP
+  elseif fill > STEAM_HIGH then
+    target_rods = current_rods + REACTOR_STEP
+  end
+
+  target_rods = safety.clamp(target_rods, ROD_MIN, ROD_MAX)
+  if target_rods == current_rods then
+    return
+  end
+
+  local applied = applyReactorRods(target_rods, false)
+  if applied then
+    log("INFO", string.format("ReactorCtrl steam=%d%% rods=%d", math.floor(fill * 100), target_rods))
   end
 end
 
@@ -753,24 +751,6 @@ local function cache()
   end
 end
 
-function detectSteamTank()
-  for _, name in ipairs(peripheral.getNames()) do
-    local p = peripheral.wrap(name)
-    if p then
-      local methods = peripheral.getMethods(name)
-      if methods then
-        for _, m in ipairs(methods) do
-          if m == "tanks" then
-            log(INFO, "Steam-capable tank found: " .. name)
-            return p
-          end
-        end
-      end
-    end
-  end
-  return nil
-end
-
 function dumpPeripherals()
   for _, name in ipairs(peripheral.getNames()) do
     local pType = peripheral.getType(name)
@@ -783,26 +763,6 @@ function dumpPeripherals()
       end
     end
   end
-end
-
-function debugTankScan()
-  log(INFO, "=== TANK SCAN START ===")
-
-  for _, name in ipairs(peripheral.getNames()) do
-    local pType = peripheral.getType(name)
-    log(INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
-
-    local methods = peripheral.getMethods(name)
-    if methods then
-      for _, m in ipairs(methods) do
-        if m == "tanks" then
-          log(INFO, ">>> FOUND FLUID TANK: " .. name)
-        end
-      end
-    end
-  end
-
-  log(INFO, "=== TANK SCAN END ===")
 end
 
 local function build_modules()
@@ -1603,12 +1563,7 @@ local function mainEventLoop()
 end
 
 local function init()
-  debugTankScan()
   dumpPeripherals()
-  steamTank = detectSteamTank()
-  if not steamTank then
-    log("WARN", "Steam tank unreadable")
-  end
   cache()
   init_turbine_ctrl()
   init_reactor_ctrl()
