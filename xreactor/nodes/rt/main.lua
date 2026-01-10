@@ -251,7 +251,7 @@ end
 local function ensure_reactor_ctrl(name)
   local ctrl = reactor_ctrl[name]
   if not ctrl then
-    ctrl = { rods = INITIAL_ROD_LEVEL, last_steam_pct = nil, last_applied = nil, last_adjust = 0, initialized = false }
+    ctrl = { last_steam_pct = nil, last_applied = nil, last_adjust = 0, initialized = false }
     reactor_ctrl[name] = ctrl
   end
   return ctrl
@@ -261,7 +261,6 @@ local function init_reactor_ctrl()
   reactor_ctrl = {}
   for _, name in ipairs(config.reactors or {}) do
     reactor_ctrl[name] = {
-      rods = INITIAL_ROD_LEVEL,
       last_steam_pct = nil,
       last_applied = nil,
       last_adjust = 0,
@@ -274,14 +273,6 @@ function applyReactorRods(target, allow_overmax)
   local now = os.clock()
   if now - last_rod_apply_ts < MIN_APPLY_INTERVAL then
     return
-  end
-  if type(target) ~= "number" then
-    for _, ctrl in pairs(reactor_ctrl) do
-      if type(ctrl.rods) == "number" then
-        target = ctrl.rods
-        break
-      end
-    end
   end
   if type(target) ~= "number" then
     return
@@ -298,7 +289,6 @@ function applyReactorRods(target, allow_overmax)
       local ok, result = pcall(reactor.setAllControlRodLevels, clamped)
       if ok and result ~= false then
         ctrl.last_applied = clamped
-        ctrl.rods = clamped
       else
         warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
       end
@@ -311,7 +301,6 @@ function applyReactorRods(target, allow_overmax)
           end
         end
         ctrl.last_applied = clamped
-        ctrl.rods = clamped
       else
         warn_once("reactor_rods:" .. name, "Reactor control rod read failed for " .. name)
       end
@@ -340,11 +329,23 @@ end
 
 local function apply_initial_reactor_rods()
   for name, ctrl in pairs(reactor_ctrl) do
-    ctrl.rods = clamp_rods(ctrl.rods, false)
     ctrl.last_applied = nil
-    log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(ctrl.rods) .. "%")
+    log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(INITIAL_ROD_LEVEL) .. "%")
   end
   applyReactorRods(INITIAL_ROD_LEVEL, false)
+end
+
+local function read_current_rods()
+  for _, name in ipairs(config.reactors or {}) do
+    local reactor = peripheral.wrap(name)
+    if reactor and reactor.getControlRodLevel then
+      local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
+      if ok_rods and type(current_rods) == "number" then
+        return current_rods
+      end
+    end
+  end
+  return nil
 end
 
 local function log_reactor_control_state()
@@ -353,20 +354,15 @@ local function log_reactor_control_state()
     return
   end
   last_reactor_debug_log = now
-  local sample_rods = ROD_MAX
-  for _, ctrl in pairs(reactor_ctrl) do
-    sample_rods = ctrl.rods or sample_rods
-    break
-  end
+  local sample_rods = read_current_rods() or ROD_MAX
   local tick_age = now - last_reactor_tick
   log("DEBUG", "ReactorCtrl state=" .. tostring(current_state) .. " rods=" .. tostring(sample_rods) .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
 end
 
 local function log_reactor_control_tick()
-  local sample_rods = ROD_MAX
+  local sample_rods = read_current_rods() or ROD_MAX
   local sample_steam = nil
   for _, ctrl in pairs(reactor_ctrl) do
-    sample_rods = ctrl.rods or sample_rods
     sample_steam = ctrl.last_steam_pct
     break
   end
@@ -412,34 +408,50 @@ local function update_reactor_setpoints()
   local steam_pct, steam_err = read_steam_pct()
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
-    if now - last_adjust >= (ROD_TICK * 1000) then
-      if not ctrl.initialized then
-        ctrl.rods = clamp_rods(ctrl.rods, false)
-        ctrl.initialized = true
-      end
-      if steam_pct ~= nil then
-        ctrl.last_steam_pct = steam_pct
-        if steam_pct < LOW_CRIT then
-          ctrl.rods = ctrl.rods - (REACTOR_STEP * 2)
-          autonom_state.pending_rod_direction = "DOWN"
-        elseif steam_pct < LOW_OK then
-          ctrl.rods = ctrl.rods - REACTOR_STEP
-          autonom_state.pending_rod_direction = "DOWN"
-        elseif steam_pct <= HIGH_OK then
-          ctrl.rods = ctrl.rods
-        elseif steam_pct < HIGH_CRIT then
-          ctrl.rods = ctrl.rods + REACTOR_STEP
-          autonom_state.pending_rod_direction = "UP"
-        else
-          ctrl.rods = ctrl.rods + (REACTOR_STEP * 2)
-          autonom_state.pending_rod_direction = "UP"
+    ctrl.initialized = true
+    local reactor = peripheral.wrap(name)
+    if reactor and reactor.getControlRodLevel and reactor.setAllControlRodLevels then
+      local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
+      if ok_rods and type(current_rods) == "number" then
+        if steam_pct ~= nil then
+          ctrl.last_steam_pct = steam_pct
+          if now - last_adjust >= (ROD_TICK * 1000) then
+            local target_rods = current_rods
+            if steam_pct < LOW_CRIT then
+              target_rods = current_rods - (REACTOR_STEP * 2)
+              autonom_state.pending_rod_direction = "DOWN"
+            elseif steam_pct < LOW_OK then
+              target_rods = current_rods - REACTOR_STEP
+              autonom_state.pending_rod_direction = "DOWN"
+            elseif steam_pct <= HIGH_OK then
+              target_rods = current_rods
+            elseif steam_pct < HIGH_CRIT then
+              target_rods = current_rods + REACTOR_STEP
+              autonom_state.pending_rod_direction = "UP"
+            else
+              target_rods = current_rods + (REACTOR_STEP * 2)
+              autonom_state.pending_rod_direction = "UP"
+            end
+            target_rods = clamp_rods(target_rods, false)
+            if target_rods ~= current_rods then
+              local ok_set, set_result = pcall(reactor.setAllControlRodLevels, target_rods)
+              if ok_set and set_result ~= false then
+                autonom_state.reactor_target = target_rods
+                log("INFO", "Reactor rods " .. tostring(current_rods) .. " -> " .. tostring(target_rods))
+              else
+                warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
+              end
+            end
+            ctrl.last_adjust = now
+          end
+        elseif steam_err then
+          warn_once("steam_buffer", "Steam buffer unavailable: " .. tostring(steam_err))
         end
-        ctrl.rods = clamp_rods(ctrl.rods, false)
-        autonom_state.reactor_target = ctrl.rods
-      elseif steam_err then
-        warn_once("steam_buffer", "Steam buffer unavailable: " .. tostring(steam_err))
+      else
+        warn_once("reactor_rods:" .. name, "Reactor control rod read failed for " .. name)
       end
-      ctrl.last_adjust = now
+    else
+      warn_once("reactor_rods:" .. name, "Reactor control rods unsupported for " .. name)
     end
   end
 end
@@ -454,7 +466,6 @@ local function updateReactorControl()
   log_reactor_control_state()
   update_reactor_setpoints()
   log_reactor_control_tick()
-  applyReactorRods(autonom_state.reactor_target, false)
 end
 
 function warn_once(key, message)
@@ -866,7 +877,6 @@ apply_safe_controls = function()
     local caps = get_device_caps("reactors", name)
     if caps.getControlRods or caps.setAllControlRodLevels then
       local ctrl = ensure_reactor_ctrl(name)
-      ctrl.rods = clamp_rods(100, true)
       ctrl.last_applied = nil
     else
       warn_unsupported(name)
@@ -940,8 +950,7 @@ local function adjust_reactors()
   for _, module in pairs(modules) do
     if module.type == "reactor" and module.peripheral then
       if module.state == "OFF" or module.state == "ERROR" then
-        local ctrl = ensure_reactor_ctrl(module.name)
-        ctrl.rods = clamp_rods(ROD_MAX, false)
+        ensure_reactor_ctrl(module.name)
       else
         if (current_state == STATE.AUTONOM or current_state == STATE.MASTER) and module.caps then
           local ok_active, active_result = pcall(setReactorActive, module.peripheral, module.caps, true)
@@ -986,7 +995,6 @@ local function adjust_reactors()
     end
     ::continue_adjust_reactor::
   end
-  applyReactorRods(autonom_state.reactor_target, false)
 end
 
 local function adjust_turbines()
@@ -1230,7 +1238,6 @@ local function process_startup()
     if module.caps and (module.caps.getControlRods or module.caps.setAllControlRodLevels) then
       local level = 100 - math.floor(progress * 100)
       local ctrl = ensure_reactor_ctrl(module.name)
-      ctrl.rods = clamp_rods(level, false)
       ctrl.last_applied = nil
       applyReactorRods(level, false)
     end
