@@ -60,16 +60,11 @@ local ROD_MAX = 98
 local BASELOAD_RODS = 70
 local INITIAL_ROD_LEVEL = ROD_MAX
 local MIN_APPLY_INTERVAL = 1.5
-local STEAM_CRIT = 25
-local STEAM_RELEASE = 40
-local RECOVERY_HOLD = 10
-local RECOVERY_RODS = 30
+local REACTOR_STEP = 5
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
 local last_rod_change_ts = 0
 local last_rod_direction = nil
-local steam_recovery_active = false
-local steam_recovery_start = 0
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or 2000
 config.safety.max_rpm = config.safety.max_rpm or 1800
@@ -372,29 +367,24 @@ local function apply_initial_reactor_rods()
   applyReactorRods(INITIAL_ROD_LEVEL, false)
 end
 
-local function read_reactor_steam_pct(name)
-  local reactor = peripherals.reactors and peripherals.reactors[name] or nil
-  if reactor and reactor.getHotFluidAmount and reactor.getHotFluidCapacity then
-    local ok_amount, amount = pcall(reactor.getHotFluidAmount)
-    local ok_capacity, capacity = pcall(reactor.getHotFluidCapacity)
-    if ok_amount and ok_capacity and type(amount) == "number" and type(capacity) == "number" and capacity > 0 then
-      return (amount / capacity) * 100
+local function compute_turbine_need()
+  local need_more = 0
+  local need_less = 0
+  local active = 0
+  local target_rpm = safety.clamp(config.autonom.target_rpm, 0, config.autonom.max_rpm)
+  for _, name in ipairs(config.turbines or {}) do
+    local ctrl = turbine_ctrl[name]
+    local rpm = ctrl and ctrl.rpm or nil
+    if type(rpm) == "number" then
+      active = active + 1
+      if rpm < target_rpm * 0.9 then
+        need_more = need_more + 1
+      elseif rpm > target_rpm * 1.05 then
+        need_less = need_less + 1
+      end
     end
   end
-  return nil
-end
-
-local function collect_reactor_steam()
-  local steam = {}
-  local min_steam = nil
-  for name, _ in pairs(reactor_ctrl) do
-    local pct = read_reactor_steam_pct(name)
-    steam[name] = pct
-    if type(pct) == "number" then
-      min_steam = min_steam and math.min(min_steam, pct) or pct
-    end
-  end
-  return steam, min_steam
+  return need_more - need_less, active
 end
 
 local function log_reactor_control_state()
@@ -421,13 +411,16 @@ local function log_reactor_control_tick()
     break
   end
   local age = os.clock() - last_rod_change_ts
+  local total_need, active = compute_turbine_need()
   log(
     "DEBUG",
     "ReactorCtrl rods="
       .. tostring(sample_rods)
-      .. " steam="
-      .. tostring(sample_steam)
-      .. "% dir="
+      .. " need="
+      .. tostring(total_need)
+      .. " active="
+      .. tostring(active)
+      .. " dir="
       .. tostring(last_rod_direction)
       .. " age="
       .. string.format("%.1f", age)
@@ -438,6 +431,7 @@ local function update_reactor_setpoints(steam_by_reactor)
   if current_state == STATE.SAFE then
     return
   end
+  local total_need, active = compute_turbine_need()
   local now = os.epoch("utc")
   for name, ctrl in pairs(reactor_ctrl) do
     local last_adjust = ctrl.last_adjust or 0
@@ -446,9 +440,7 @@ local function update_reactor_setpoints(steam_by_reactor)
         ctrl.rods = clamp_rods(ctrl.rods - 5, false)
         ctrl.initialized = true
       end
-      local steam_pct = steam_by_reactor and steam_by_reactor[name] or read_reactor_steam_pct(name)
-      ctrl.last_steam_pct = steam_pct
-      local target = compute_reactor_target_level(ctrl.rods, steam_pct)
+      local target = compute_reactor_target_level(ctrl.rods, total_need, active)
       -- ACHTUNG:
       -- Niedrigerer Rod-Wert = mehr Leistung
       -- Höherer Rod-Wert     = weniger Leistung
@@ -462,25 +454,8 @@ end
 local function updateReactorControl()
   last_reactor_tick = os.clock()
   log("DEBUG", "Reactor control tick")
-  local now = os.clock()
   if current_state == STATE.SAFE then
     applyReactorRods(ROD_MAX, true)
-    return
-  end
-  local steam_by_reactor, min_steam_pct = collect_reactor_steam()
-  if not steam_recovery_active and type(min_steam_pct) == "number" and min_steam_pct < STEAM_CRIT then
-    steam_recovery_active = true
-    steam_recovery_start = now
-    log("WARN", "Steam recovery triggered")
-  end
-  if steam_recovery_active then
-    local recovery_rods = clamp_rods(RECOVERY_RODS, false)
-    applyReactorRods(recovery_rods, false)
-    if (type(min_steam_pct) == "number" and min_steam_pct >= STEAM_RELEASE)
-      or (now - steam_recovery_start > RECOVERY_HOLD) then
-      steam_recovery_active = false
-      log("INFO", "Steam recovery released")
-    end
     return
   end
   log_reactor_control_state()
@@ -624,7 +599,7 @@ local function get_turbine_stats(target_rpm)
   }
 end
 
-compute_reactor_target_level = function(current_rods, steam_pct)
+compute_reactor_target_level = function(current_rods, total_need, active_turbines)
   local min_rods = safety.clamp(config.autonom.min_rods, ROD_MIN, ROD_MAX)
   local max_rods = safety.clamp(config.autonom.max_rods, ROD_MIN, ROD_MAX)
   if min_rods > max_rods then
@@ -636,22 +611,15 @@ compute_reactor_target_level = function(current_rods, steam_pct)
   end
   target = safety.clamp(target, min_rods, max_rods)
   local current = type(current_rods) == "number" and current_rods or target
-  if type(steam_pct) ~= "number" then
-    autonom_state.reactor_target = clamp_rods(target, false)
-    return autonom_state.reactor_target
-  end
-  local step = 5
   local previous_target = target
-  if steam_pct < 30 then
-    target = current - (step * 2)
-  elseif steam_pct < 60 then
-    target = current - step
-  elseif steam_pct < 80 then
-    target = current
-  elseif steam_pct < 95 then
-    target = current + step
-  else
-    target = current + (step * 2)
+  if type(active_turbines) == "number" and active_turbines == 0 then
+    target = current + REACTOR_STEP
+  elseif type(total_need) == "number" then
+    if total_need > 0 then
+      target = current - REACTOR_STEP
+    elseif total_need < 0 then
+      target = current + REACTOR_STEP
+    end
   end
   target = clamp_rods(safety.clamp(target, min_rods, max_rods), false)
   if target >= max_rods then
