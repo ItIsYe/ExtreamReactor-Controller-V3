@@ -1,3 +1,23 @@
+_G = _G or {}
+_G.turbine_ctrl = _G.turbine_ctrl or {}
+
+if type(_G.ensure_turbine_ctr) ~= "function" then
+  function _G.ensure_turbine_ctr(name)
+    if not name then return nil end
+    _G.turbine_ctrl = _G.turbine_ctrl or {}
+    if not _G.turbine_ctrl[name] then
+      _G.turbine_ctrl[name] = {
+        mode = "INIT",
+        flow = 0,
+        target_flow = 0,
+        last_rpm = 0,
+        last_update = os.clock()
+      }
+    end
+    return _G.turbine_ctrl[name]
+  end
+end
+
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
 local constants = require("shared.constants")
 local colors = require("shared.colors")
