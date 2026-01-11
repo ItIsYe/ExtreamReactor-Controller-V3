@@ -119,12 +119,19 @@ local TURBINE_MODE = {
 }
 
 function ensure_turbine_ctr(name)
-  local ctrl = turbine_ctrl[name]
-  if not ctrl then
-    ctrl = { flow = clamp_turbine_flow(START_FLOW), mode = TURBINE_MODE.RAMP }
-    turbine_ctrl[name] = ctrl
+  turbines = turbines or {}
+
+  if not turbines[name] then
+    turbines[name] = {
+      flow = 0,
+      mode = "INIT",
+      target_rpm = TARGET_RPM,
+      last_adjust = 0,
+      coil = false
+    }
   end
-  return ctrl
+
+  return turbines[name]
 end
 
 local function clamp_turbine_flow(rate)
