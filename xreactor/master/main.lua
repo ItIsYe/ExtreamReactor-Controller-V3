@@ -1,25 +1,38 @@
 _G = _G or {}
-_G.turbine_ctrl = _G.turbine_ctrl or {}
+_G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
-if type(_G.ensure_turbine_ctr) ~= "function" then
-  function _G.ensure_turbine_ctr(name)
-    if not name then return nil end
-    _G.turbine_ctrl = _G.turbine_ctrl or {}
-    if not _G.turbine_ctrl[name] then
-      _G.turbine_ctrl[name] = {
-        mode = "INIT",
-        flow = 0,
-        target_flow = 0,
-        last_rpm = 0,
-        last_update = os.clock()
-      }
-    end
-    return _G.turbine_ctrl[name]
+local function ensure_turbine_ctrl(name)
+  _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
+  _G.ensure_turbine_ctrl = ensure_turbine_ctrl
+  if not name then
+    name = "__unknown__"
   end
+  local ctrl = _G.turbine_ctrl[name]
+  if type(ctrl) ~= "table" then
+    ctrl = {}
+    _G.turbine_ctrl[name] = ctrl
+  end
+  if ctrl.mode == nil then
+    ctrl.mode = "INIT"
+  end
+  if ctrl.flow == nil then
+    ctrl.flow = 0
+  end
+  if ctrl.target_flow == nil then
+    ctrl.target_flow = 0
+  end
+  if ctrl.last_rpm == nil then
+    ctrl.last_rpm = 0
+  end
+  if ctrl.last_update == nil then
+    ctrl.last_update = os.clock()
+  end
+  return ctrl
 end
 
+_G.ensure_turbine_ctrl = ensure_turbine_ctrl
+
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
-require("core.turbine_ctrl")
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local protocol = require("core.protocol")
