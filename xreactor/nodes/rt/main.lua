@@ -74,42 +74,18 @@ config.monitor_interval = config.monitor_interval or 2
 config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
 
--- === SAFETY STUBS ===
+-- === SAFETY: turbine controller ensure ===
 if not ensure_turbine_ctr then
   function ensure_turbine_ctr(name)
-    turbines = turbines or {}
-    turbines[name] = turbines[name] or {}
-    return turbines[name]
-  end
-end
-
-if not update_reactor_setpoints then
-  function update_reactor_setpoints()
-    return
-  end
-end
-
-if not get_reactor_demand then
-  function get_reactor_demand()
-    return false, false
-  end
-end
-
-if not warn_once then
-  function warn_once(...)
-    return
-  end
-end
-
-if not get_steam_amount then
-  function get_steam_amount()
-    return nil
-  end
-end
-
-if not applyReactorRods then
-  function applyReactorRods(...)
-    return
+    if not name then return nil end
+    _G.turbine_ctrl = _G.turbine_ctrl or {}
+    _G.turbine_ctrl[name] = _G.turbine_ctrl[name] or {
+      mode = "INIT",
+      flow = 0,
+      last_rpm = 0,
+      last_update = os.clock()
+    }
+    return _G.turbine_ctrl[name]
   end
 end
 
