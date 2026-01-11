@@ -1,4 +1,5 @@
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
+local get_turbine_ctrl = require("core.turbine_ctrl")
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local protocol = require("core.protocol")
@@ -74,21 +75,6 @@ config.monitor_interval = config.monitor_interval or 2
 config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
 
-function ensure_turbine_ctr(name)
-  if not name then return nil end
-  _G.turbine_ctrl = _G.turbine_ctrl or {}
-  if not _G.turbine_ctrl[name] then
-    _G.turbine_ctrl[name] = {
-      mode = "INIT",
-      flow = 0,
-      target_flow = 0,
-      last_rpm = 0,
-      last_update = os.clock()
-    }
-  end
-  return _G.turbine_ctrl[name]
-end
-
 local network
 local peripherals = {}
 local targets = { power = 0, steam = 0, rpm = 0 }
@@ -109,7 +95,8 @@ local warned = {}
 local autonom_state = { reactors = {}, turbines = {} }
 local autonom_control_logged = false
 local capability_cache = { reactors = {}, turbines = {} }
-local turbine_ctrl = {}
+local turbine_ctrl = _G.turbine_ctrl or {}
+_G.turbine_ctrl = turbine_ctrl
 local reactor_ctrl = {}
 
 local STATE = {
@@ -232,7 +219,7 @@ end
 local function get_total_steam_demand()
   local total = 0
   for _, name in ipairs(config.turbines or {}) do
-    local ctrl = ensure_turbine_ctrl(name)
+    local ctrl = get_turbine_ctrl(name)
     local rpm = ctrl.rpm
     if type(rpm) ~= "number" then
       local turbine = peripherals.turbines[name] or peripheral.wrap(name)
@@ -298,17 +285,10 @@ local function build_capabilities(name)
   }
 end
 
-local function ensure_turbine_ctrl(name)
-  local ctrl = turbine_ctrl[name]
-  if not ctrl then
-    ctrl = { flow = clamp_turbine_flow(START_FLOW), mode = TURBINE_MODE.RAMP }
-    turbine_ctrl[name] = ctrl
-  end
-  return ctrl
-end
-
 local function init_turbine_ctrl()
-  turbine_ctrl = {}
+  for key in pairs(turbine_ctrl) do
+    turbine_ctrl[key] = nil
+  end
   autonom_state.turbines = turbine_ctrl
   local turbines = config.turbines or {}
   log("INFO", "Detected " .. tostring(#turbines) .. " turbines")
@@ -317,11 +297,10 @@ local function init_turbine_ctrl()
     return
   end
   for _, name in ipairs(turbines) do
-    turbine_ctrl[name] = {
-      flow = clamp_turbine_flow(START_FLOW),
-      mode = TURBINE_MODE.RAMP,
-      logged = false
-    }
+    local ctrl = get_turbine_ctrl(name)
+    ctrl.flow = clamp_turbine_flow(START_FLOW)
+    ctrl.mode = TURBINE_MODE.RAMP
+    ctrl.logged = false
     log("INFO", "Controlling turbine: " .. name)
   end
 end
@@ -565,7 +544,7 @@ local function warn_unsupported(name)
 end
 
 local function update_inductor_for_rpm(name, turbine, caps, rpm)
-  local ctrl = ensure_turbine_ctrl(name)
+  local ctrl = get_turbine_ctrl(name)
   local engaged = ctrl.inductor_engaged or false
   if rpm and rpm >= COIL_ENGAGE_RPM and not engaged then
     engaged = true
@@ -601,7 +580,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
 end
 
 local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
-  local ctrl = ensure_turbine_ctrl(name)
+  local ctrl = get_turbine_ctrl(name)
   if type(rpm) == "number" then
     ctrl.rpm = rpm
   end
@@ -983,7 +962,7 @@ apply_safe_controls = function()
       end
     end
     if caps.setFluidFlowRate or caps.setFluidFlowRateMax then
-      local ctrl = ensure_turbine_ctrl(name)
+      local ctrl = get_turbine_ctrl(name)
       ctrl.mode = TURBINE_MODE.RAMP
       ctrl.flow = clamp_turbine_flow(ctrl.flow)
       local ok, result = pcall(setTurbineFlow, turbine, caps, ctrl.flow)
@@ -1098,7 +1077,7 @@ local function adjust_turbines()
           end
         end
         if module.caps and (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
-          local ctrl = ensure_turbine_ctrl(module.name)
+          local ctrl = get_turbine_ctrl(module.name)
           ctrl.mode = TURBINE_MODE.RAMP
           ctrl.flow = clamp_turbine_flow(ctrl.flow)
           local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, ctrl.flow)
@@ -1108,7 +1087,7 @@ local function adjust_turbines()
             warn_unsupported(module.name)
           end
         end
-        local ctrl = ensure_turbine_ctrl(module.name)
+        local ctrl = get_turbine_ctrl(module.name)
         ctrl.mode = TURBINE_MODE.RAMP
       elseif module.state == "STARTING" then
         goto continue_adjust_turbine
@@ -1201,7 +1180,7 @@ local function start_module(module_id, module_type, ramp_profile)
   module.stable_since = nil
   active_startup = module_id
   if module.type == "turbine" then
-    local ctrl = ensure_turbine_ctrl(module.name)
+    local ctrl = get_turbine_ctrl(module.name)
     ctrl.mode = TURBINE_MODE.RAMP
   end
   return module, "Starting"
@@ -1270,7 +1249,7 @@ local function process_startup()
     end
     if module.caps and (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
       local target_rpm = TARGET_RPM
-      local ctrl = ensure_turbine_ctrl(module.name)
+      local ctrl = get_turbine_ctrl(module.name)
       local flow, mode = update_turbine_flow_state(rpm, target_rpm, ctrl)
       local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, ctrl.flow)
       if not ok_flow then
