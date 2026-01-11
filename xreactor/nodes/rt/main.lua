@@ -74,6 +74,21 @@ config.monitor_interval = config.monitor_interval or 2
 config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
 
+function ensure_turbine_ctr(name)
+  if not name then return nil end
+  _G.turbine_ctrl = _G.turbine_ctrl or {}
+  if not _G.turbine_ctrl[name] then
+    _G.turbine_ctrl[name] = {
+      mode = "INIT",
+      flow = 0,
+      target_flow = 0,
+      last_rpm = 0,
+      last_update = os.clock()
+    }
+  end
+  return _G.turbine_ctrl[name]
+end
+
 local network
 local peripherals = {}
 local targets = { power = 0, steam = 0, rpm = 0 }
@@ -117,15 +132,6 @@ local TURBINE_MODE = {
   RAMP = "RAMP",
   REGULATE = "REGULATE"
 }
-
-function ensure_turbine_ctr(name)
-  local ctrl = turbine_ctrl[name]
-  if not ctrl then
-    ctrl = { flow = clamp_turbine_flow(START_FLOW), mode = TURBINE_MODE.RAMP }
-    turbine_ctrl[name] = ctrl
-  end
-  return ctrl
-end
 
 local function clamp_turbine_flow(rate)
   if type(rate) ~= "number" then
