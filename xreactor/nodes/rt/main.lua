@@ -74,6 +74,21 @@ config.monitor_interval = config.monitor_interval or 2
 config.monitor_scale = config.monitor_scale or 0.5
 local hb = config.heartbeat_interval
 
+-- === SAFETY: turbine controller ensure ===
+if not ensure_turbine_ctr then
+  function ensure_turbine_ctr(name)
+    if not name then return nil end
+    _G.turbine_ctrl = _G.turbine_ctrl or {}
+    _G.turbine_ctrl[name] = _G.turbine_ctrl[name] or {
+      mode = "INIT",
+      flow = 0,
+      last_rpm = 0,
+      last_update = os.clock()
+    }
+    return _G.turbine_ctrl[name]
+  end
+end
+
 local network
 local peripherals = {}
 local targets = { power = 0, steam = 0, rpm = 0 }
@@ -119,12 +134,19 @@ local TURBINE_MODE = {
 }
 
 function ensure_turbine_ctr(name)
-  local ctrl = turbine_ctrl[name]
-  if not ctrl then
-    ctrl = { flow = clamp_turbine_flow(START_FLOW), mode = TURBINE_MODE.RAMP }
-    turbine_ctrl[name] = ctrl
+  turbines = turbines or {}
+
+  if not turbines[name] then
+    turbines[name] = {
+      flow = 0,
+      mode = "INIT",
+      target_rpm = TARGET_RPM,
+      last_adjust = 0,
+      coil = false
+    }
   end
-  return ctrl
+
+  return turbines[name]
 end
 
 local function clamp_turbine_flow(rate)
