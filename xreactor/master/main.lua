@@ -1,4 +1,5 @@
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
+require("core.turbine_ctrl")
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local protocol = require("core.protocol")
