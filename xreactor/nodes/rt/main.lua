@@ -594,16 +594,20 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   local mode = ctrl.mode or TURBINE_MODE.RAMP
   local ramp_step = FLOW_STEP
   local flow_step = FLOW_STEP
+  local target = target_rpm or TARGET_RPM
   if mode == TURBINE_MODE.RAMP then
-    if not rpm or rpm < TARGET_RPM then
+    if not rpm or rpm < target then
       ctrl.flow = ctrl.flow + ramp_step
     else
       ctrl.mode = TURBINE_MODE.REGULATE
+      if rpm and rpm > target + RPM_TOL then
+        ctrl.flow = ctrl.flow - flow_step
+      end
     end
   else
-    if rpm and rpm < TARGET_RPM - RPM_TOL then
+    if rpm and rpm < target - RPM_TOL then
       ctrl.flow = ctrl.flow + flow_step
-    elseif rpm and rpm > TARGET_RPM + RPM_TOL then
+    elseif rpm and rpm > target + RPM_TOL then
       ctrl.flow = ctrl.flow - flow_step
     end
   end
