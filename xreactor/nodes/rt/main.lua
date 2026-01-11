@@ -1,5 +1,37 @@
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
-local get_turbine_ctrl = require("core.turbine_ctrl")
+_G = _G or {}
+_G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
+
+local function ensure_turbine_ctrl(name)
+  _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
+  _G.ensure_turbine_ctrl = ensure_turbine_ctrl
+  if not name then
+    name = "__unknown__"
+  end
+  local ctrl = _G.turbine_ctrl[name]
+  if type(ctrl) ~= "table" then
+    ctrl = {}
+    _G.turbine_ctrl[name] = ctrl
+  end
+  if ctrl.mode == nil then
+    ctrl.mode = "INIT"
+  end
+  if ctrl.flow == nil then
+    ctrl.flow = 0
+  end
+  if ctrl.target_flow == nil then
+    ctrl.target_flow = 0
+  end
+  if ctrl.last_rpm == nil then
+    ctrl.last_rpm = 0
+  end
+  if ctrl.last_update == nil then
+    ctrl.last_update = os.clock()
+  end
+  return ctrl
+end
+
+local get_turbine_ctrl = ensure_turbine_ctrl
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local protocol = require("core.protocol")
@@ -562,16 +594,20 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   local mode = ctrl.mode or TURBINE_MODE.RAMP
   local ramp_step = FLOW_STEP
   local flow_step = FLOW_STEP
+  local target = target_rpm or TARGET_RPM
   if mode == TURBINE_MODE.RAMP then
-    if not rpm or rpm < TARGET_RPM then
+    if not rpm or rpm < target then
       ctrl.flow = ctrl.flow + ramp_step
     else
       ctrl.mode = TURBINE_MODE.REGULATE
+      if rpm and rpm > target + RPM_TOL then
+        ctrl.flow = ctrl.flow - flow_step
+      end
     end
   else
-    if rpm and rpm < TARGET_RPM - RPM_TOL then
+    if rpm and rpm < target - RPM_TOL then
       ctrl.flow = ctrl.flow + flow_step
-    elseif rpm and rpm > TARGET_RPM + RPM_TOL then
+    elseif rpm and rpm > target + RPM_TOL then
       ctrl.flow = ctrl.flow - flow_step
     end
   end
