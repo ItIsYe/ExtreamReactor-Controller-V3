@@ -1,8 +1,10 @@
 local BASE_DIR = "/xreactor"
 local REPO_BASE_URL_MAIN = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main"
+local REPO_BASE_URL_FALLBACK = "https://raw.github.com/ItIsYe/ExtreamReactor-Controller-V3/main"
 local RELEASE_REMOTE = "xreactor/installer/release.lua"
 local MANIFEST_REMOTE = "xreactor/installer/manifest.lua"
 local MANIFEST_LOCAL = BASE_DIR .. "/.manifest"
+local MANIFEST_CACHE = BASE_DIR .. "/.manifest_cache"
 local BACKUP_BASE = "/xreactor_backup"
 local NODE_ID_PATH = BASE_DIR .. "/config/node_id.txt"
 local UPDATE_STAGING = "/xreactor_update_tmp"
@@ -185,62 +187,153 @@ local function is_html_payload(content)
   return false
 end
 
-local function download_content_checked(base_url, remote_path)
-  local url = string.format("%s/%s", base_url, remote_path)
+local function download_url_checked(url)
   local response = http.get(url)
   if not response then
-    return nil, { url = url, code = nil, html = false, message = "request failed" }
+    return nil, { url = url, code = nil, reason = "timeout", html = false }
   end
   local code = response.getResponseCode and response.getResponseCode() or nil
   local content = response.readAll()
   response.close()
-  local html = is_html_payload(content)
-  if (code and code ~= 200) or html then
-    return nil, { url = url, code = code, html = html, message = "invalid response" }
+  if not content or content == "" then
+    return nil, { url = url, code = code, reason = "empty", html = false }
   end
-  return content, { url = url, code = code, html = html }
+  local html = is_html_payload(content)
+  if html then
+    return nil, { url = url, code = code, reason = "html", html = true }
+  end
+  if code and code ~= 200 then
+    return nil, { url = url, code = code, reason = "status", html = html }
+  end
+  return content, { url = url, code = code, reason = nil, html = html }
+end
+
+local function download_content_checked(base_url, remote_path)
+  local url = string.format("%s/%s", base_url, remote_path)
+  return download_url_checked(url)
+end
+
+local function download_with_retries(urls, attempts, backoff_seconds)
+  local last_meta = nil
+  for attempt = 1, attempts do
+    for _, url in ipairs(urls) do
+      local content, meta = download_url_checked(url)
+      if content then
+        return content, meta
+      end
+      last_meta = meta
+      print(("Download failed: %s (code=%s reason=%s)"):format(
+        tostring(meta.url),
+        tostring(meta.code),
+        tostring(meta.reason)
+      ))
+    end
+    if attempt < attempts then
+      os.sleep(backoff_seconds * attempt)
+    end
+  end
+  return nil, last_meta
+end
+
+local function read_manifest_cache()
+  if not fs.exists(MANIFEST_CACHE) then
+    return nil
+  end
+  local content = read_file(MANIFEST_CACHE)
+  if not content then
+    return nil
+  end
+  local ok, data = pcall(textutils.unserialize, content)
+  if not ok or type(data) ~= "table" then
+    return nil
+  end
+  if type(data.manifest_content) ~= "string" then
+    return nil
+  end
+  if type(data.release) ~= "table" or type(data.release.commit_sha) ~= "string" then
+    return nil
+  end
+  if type(data.base_url) ~= "string" then
+    return nil
+  end
+  return data
+end
+
+local function write_manifest_cache(manifest_content, release, base_url)
+  local payload = {
+    manifest_content = manifest_content,
+    release = release,
+    base_url = base_url
+  }
+  write_atomic(MANIFEST_CACHE, textutils.serialize(payload))
 end
 
 local function download_release()
-  local content, meta = download_content_checked(REPO_BASE_URL_MAIN, RELEASE_REMOTE)
+  local urls = {
+    string.format("%s/%s", REPO_BASE_URL_MAIN, RELEASE_REMOTE),
+    string.format("%s/%s", REPO_BASE_URL_FALLBACK, RELEASE_REMOTE)
+  }
+  local content = select(1, download_with_retries(urls, 3, 1))
   if not content then
-    error("Release download failed")
+    return nil, "Release download failed"
   end
   local loader = load(content, "release", "t", {})
   if not loader then
-    error("Release load failed")
+    return nil, "Release load failed"
   end
   local ok, data = pcall(loader)
   if not ok or type(data) ~= "table" then
-    error("Release parse failed")
+    return nil, "Release parse failed"
   end
   if type(data.commit_sha) ~= "string" then
-    error("Release missing commit_sha")
+    return nil, "Release missing commit_sha"
   end
   if type(data.hash_algo) ~= "string" then
-    error("Release missing hash_algo")
+    return nil, "Release missing hash_algo"
   end
   data.manifest_path = data.manifest_path or MANIFEST_REMOTE
   return data
 end
 
-local function download_manifest()
-  local release = download_release()
-  local base_url = ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha)
-  local content, meta = download_content_checked(base_url, release.manifest_path)
-  if not content then
-    error("Manifest download failed")
-  end
+local function parse_manifest(content)
   local loader = load(content, "manifest", "t", {})
   if not loader then
-    error("Manifest load failed")
+    return nil, "Manifest load failed"
   end
   local ok, data = pcall(loader)
   if not ok or type(data) ~= "table" or type(data.files) ~= "table" then
-    error("Manifest parse failed")
+    return nil, "Manifest parse failed"
   end
-  validate_hash_algo(data, release)
-  return content, data, release, base_url
+  return data
+end
+
+local function download_manifest()
+  local release, release_err = download_release()
+  if not release then
+    return nil, release_err
+  end
+  local base_urls = {
+    ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha),
+    ("https://raw.github.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha)
+  }
+  local urls = {
+    string.format("%s/%s", base_urls[1], release.manifest_path),
+    string.format("%s/%s", base_urls[2], release.manifest_path)
+  }
+  local content, meta = download_with_retries(urls, 3, 1)
+  if not content then
+    return nil, "Manifest download failed"
+  end
+  local manifest, manifest_err = parse_manifest(content)
+  if not manifest then
+    return nil, manifest_err
+  end
+  validate_hash_algo(manifest, release)
+  local base_url = base_urls[1]
+  if meta and meta.url then
+    base_url = meta.url:gsub("/" .. release.manifest_path .. "$", "")
+  end
+  return content, manifest, release, base_url
 end
 
 local function ensure_base_dirs()
@@ -524,10 +617,11 @@ local function stage_updates(entries, base_url)
   for _, entry in ipairs(entries) do
     local content, meta = download_content_checked(base_url, entry.path)
     if not content then
-      return nil, ("Download failed for %s (url=%s code=%s html=%s)"):format(
+      return nil, ("Download failed for %s (url=%s code=%s reason=%s html=%s)"):format(
         entry.path,
         tostring(meta.url),
         tostring(meta.code),
+        tostring(meta.reason),
         tostring(meta.html)
       )
     end
@@ -539,12 +633,13 @@ local function stage_updates(entries, base_url)
         actual = checksum(content)
       end
       if actual ~= entry.hash then
-        return nil, ("Checksum mismatch for %s (expected=%s actual=%s url=%s code=%s html=%s)"):format(
+        return nil, ("Checksum mismatch for %s (expected=%s actual=%s url=%s code=%s reason=%s html=%s)"):format(
           entry.path,
           entry.hash,
           actual,
           tostring((retry_meta and retry_meta.url) or meta.url),
           tostring((retry_meta and retry_meta.code) or meta.code),
+          tostring((retry_meta and retry_meta.reason) or meta.reason),
           tostring((retry_meta and retry_meta.html) or meta.html)
         )
       end
@@ -599,9 +694,10 @@ local function update_installer_if_required(manifest, base_url)
     end
     local content, meta = download_content_checked(base_url, installer_path)
     if not content then
-      print(("SAFE UPDATE aborted: installer download failed (url=%s code=%s html=%s)"):format(
+      print(("SAFE UPDATE aborted: installer download failed (url=%s code=%s reason=%s html=%s)"):format(
         tostring(meta.url),
         tostring(meta.code),
+        tostring(meta.reason),
         tostring(meta.html)
       ))
       return false
@@ -625,9 +721,10 @@ local function migrate_config(role, cfg_path, manifest, base_url)
   end
   local content, meta = download_content_checked(base_url, remote_path)
   if not content then
-    error(("Config download failed (url=%s code=%s html=%s)"):format(
+    error(("Config download failed (url=%s code=%s reason=%s html=%s)"):format(
       tostring(meta.url),
       tostring(meta.code),
+      tostring(meta.reason),
       tostring(meta.html)
     ))
   end
@@ -685,6 +782,36 @@ local function safe_update()
   end
 
   local manifest_content, manifest, release, base_url = download_manifest()
+  while not manifest_content do
+    local cache = read_manifest_cache()
+    if not cache then
+      print("SAFE UPDATE: manifest download failed and no cache available.")
+      return
+    end
+    print("SAFE UPDATE: manifest download failed.")
+    print("1) Use cached manifest (offline update)")
+    print("2) Retry download")
+    print("3) Cancel")
+    local choice = tonumber(prompt("Select option", "2")) or 2
+    if choice == 1 then
+      manifest_content = cache.manifest_content
+      local parsed, parse_err = parse_manifest(manifest_content)
+      if not parsed then
+        print("Cached manifest invalid: " .. tostring(parse_err))
+        return
+      end
+      manifest = parsed
+      release = cache.release
+      base_url = cache.base_url
+      validate_hash_algo(manifest, release)
+      break
+    elseif choice == 2 then
+      manifest_content, manifest, release, base_url = download_manifest()
+    else
+      print("SAFE UPDATE cancelled.")
+      return
+    end
+  end
   ensure_base_dirs()
 
   local can_continue = update_installer_if_required(manifest, base_url)
@@ -746,6 +873,13 @@ local function safe_update()
       err = result
     end
   end
+  if ok then
+    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, release, base_url)
+    if not cache_ok then
+      ok = false
+      err = cache_err
+    end
+  end
 
   if not ok then
     local rollback_paths = {}
@@ -779,6 +913,10 @@ end
 
 local function full_reinstall()
   local manifest_content, manifest, release, base_url = download_manifest()
+  if not manifest_content then
+    print("FULL REINSTALL failed: manifest download failed.")
+    return
+  end
   ensure_base_dirs()
   local updates = {}
   for path in pairs(manifest.files) do
@@ -788,10 +926,11 @@ local function full_reinstall()
   for _, path in ipairs(updates) do
     local content, meta = download_content_checked(base_url, path)
     if not content then
-      error(("Download failed for %s (url=%s code=%s html=%s)"):format(
+      error(("Download failed for %s (url=%s code=%s reason=%s html=%s)"):format(
         path,
         tostring(meta.url),
         tostring(meta.code),
+        tostring(meta.reason),
         tostring(meta.html)
       ))
     end
@@ -804,9 +943,10 @@ local function full_reinstall()
   if manifest.installer_path and manifest.installer_hash then
     local content, meta = download_content_checked(base_url, manifest.installer_path)
     if not content then
-      error(("Installer download failed (url=%s code=%s html=%s)"):format(
+      error(("Installer download failed (url=%s code=%s reason=%s html=%s)"):format(
         tostring(meta.url),
         tostring(meta.code),
+        tostring(meta.reason),
         tostring(meta.html)
       ))
     end
@@ -875,6 +1015,7 @@ local function full_reinstall()
   write_config(role, wireless, wired, extras)
   write_startup(role)
   write_atomic(MANIFEST_LOCAL, manifest_content)
+  write_manifest_cache(manifest_content, release, base_url)
 
   print("FULL REINSTALL complete.")
   print("Next steps: reboot or run the role entrypoint.")
