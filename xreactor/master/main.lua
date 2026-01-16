@@ -49,6 +49,7 @@ local trends_lib = require("core.trends")
 local ui = require("core.ui")
 local config = require("master.config")
 
+config.heartbeat_interval = config.heartbeat_interval or 5
 config.rt_default_mode = config.rt_default_mode or "AUTONOM"
 config.rt_setpoints = config.rt_setpoints or {}
 config.rt_setpoints.target_rpm = config.rt_setpoints.target_rpm or 900
