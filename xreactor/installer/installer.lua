@@ -1,5 +1,11 @@
 local BASE_DIR = "/xreactor"
 local REPO_BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main"
+local MANIFEST_REMOTE = "xreactor/installer/manifest.lua"
+local MANIFEST_LOCAL = BASE_DIR .. "/.manifest"
+local BACKUP_BASE = "/xreactor_backup"
+local NODE_ID_PATH = BASE_DIR .. "/config/node_id.txt"
+local UPDATE_STAGING = "/xreactor_update_tmp"
+local INSTALLER_VERSION = "1.1"
 
 local roles = {
   MASTER = "MASTER",
@@ -19,38 +25,6 @@ local role_targets = {
   [roles.REPROCESSOR_NODE] = { path = "nodes/reprocessor", config = "nodes/reprocessor/config.lua" }
 }
 
-local files_to_download = {
-  "xreactor/core/network.lua",
-  "xreactor/core/trends.lua",
-  "xreactor/core/utils.lua",
-  "xreactor/core/ui.lua",
-  "xreactor/core/protocol.lua",
-  "xreactor/core/safety.lua",
-  "xreactor/core/state_machine.lua",
-  "xreactor/nodes/rt/config.lua",
-  "xreactor/nodes/rt/main.lua",
-  "xreactor/nodes/reprocessor/config.lua",
-  "xreactor/nodes/reprocessor/main.lua",
-  "xreactor/nodes/water/config.lua",
-  "xreactor/nodes/water/main.lua",
-  "xreactor/nodes/fuel/config.lua",
-  "xreactor/nodes/fuel/main.lua",
-  "xreactor/nodes/energy/config.lua",
-  "xreactor/nodes/energy/main.lua",
-  "xreactor/master/config.lua",
-  "xreactor/master/startup_sequencer.lua",
-  "xreactor/master/profiles.lua",
-  "xreactor/master/main.lua",
-  "xreactor/master/ui/alarms.lua",
-  "xreactor/master/ui/resources.lua",
-  "xreactor/master/ui/rt_dashboard.lua",
-  "xreactor/master/ui/overview.lua",
-  "xreactor/master/ui/energy.lua",
-  "xreactor/shared/colors.lua",
-  "xreactor/shared/constants.lua",
-  "xreactor/installer/installer.lua"
-}
-
 local function ensure_dir(path)
   if path == "" then return end
   if not fs.exists(path) then
@@ -58,31 +32,83 @@ local function ensure_dir(path)
   end
 end
 
-local function write_file(path, content)
+local function trim(text)
+  if not text then return "" end
+  return text:match("^%s*(.-)%s*$")
+end
+
+local function read_file(path)
+  if not fs.exists(path) then return nil end
+  local file = fs.open(path, "r")
+  if not file then return nil end
+  local content = file.readAll()
+  file.close()
+  return content
+end
+
+local function write_atomic(path, content)
   ensure_dir(fs.getDir(path))
-  local file = fs.open(path, "w")
+  local tmp = path .. ".tmp"
+  local file = fs.open(tmp, "w")
   if not file then
     error("Unable to write file at " .. path)
   end
   file.write(content)
   file.close()
+  if fs.exists(path) then
+    fs.delete(path)
+  end
+  fs.move(tmp, path)
 end
 
-local function trim(text)
-  if not text then return "" end
-  return text:match("^%s*(.-)%s*$")
+local function normalize_newlines(content)
+  if not content then return "" end
+  return content:gsub("\r\n", "\n")
+end
+
+local function copy_file(src, dst)
+  local content = read_file(src)
+  if content == nil then return false end
+  write_atomic(dst, content)
+  return true
+end
+
+local function checksum(content)
+  content = normalize_newlines(content)
+  local sum = 0
+  for i = 1, #content do
+    sum = (sum + string.byte(content, i)) % 1000000007
+  end
+  return tostring(sum) .. ":" .. tostring(#content)
+end
+
+local function file_checksum(path)
+  local content = read_file(path)
+  if not content then return nil end
+  return checksum(content)
+end
+
+local function compare_version(a, b)
+  local function parse(version)
+    local major, minor = tostring(version or "0"):match("^(%d+)%.?(%d*)$")
+    return tonumber(major) or 0, tonumber(minor) or 0
+  end
+  local a_major, a_minor = parse(a)
+  local b_major, b_minor = parse(b)
+  if a_major ~= b_major then
+    return a_major - b_major
+  end
+  return a_minor - b_minor
 end
 
 local function read_config(path, defaults)
   if not fs.exists(path) then
     return defaults or {}
   end
-  local file = fs.open(path, "r")
-  if not file then
+  local content = read_file(path)
+  if not content then
     return defaults or {}
   end
-  local content = file.readAll()
-  file.close()
   local loader = load(content, "config", "t", {})
   if loader then
     local ok, data = pcall(loader)
@@ -97,17 +123,41 @@ local function read_config(path, defaults)
   return defaults or {}
 end
 
-local function write_config_file(path, tbl)
-  ensure_dir(fs.getDir(path))
-  local file = fs.open(path, "w")
-  if not file then
-    error("Unable to write config at " .. path)
+local function read_config_from_content(content)
+  if not content then return {} end
+  local loader = load(content, "config", "t", {})
+  if loader then
+    local ok, data = pcall(loader)
+    if ok and type(data) == "table" then
+      return data
+    end
   end
-  file.write("return " .. textutils.serialize(tbl))
-  file.close()
+  local ok, data = pcall(textutils.unserialize, content)
+  if ok and type(data) == "table" then
+    return data
+  end
+  return {}
 end
 
-local function download_file(remote_path)
+local function write_config_file(path, tbl)
+  write_atomic(path, "return " .. textutils.serialize(tbl))
+end
+
+local function merge_defaults(target, defaults)
+  local changed = false
+  for key, value in pairs(defaults or {}) do
+    if target[key] == nil then
+      target[key] = value
+      changed = true
+    elseif type(target[key]) == "table" and type(value) == "table" then
+      local inner_changed = merge_defaults(target[key], value)
+      changed = changed or inner_changed
+    end
+  end
+  return changed
+end
+
+local function download_content(remote_path)
   local url = string.format("%s/%s", REPO_BASE_URL, remote_path)
   local response = http.get(url)
   if not response then
@@ -115,11 +165,25 @@ local function download_file(remote_path)
   end
   local content = response.readAll()
   response.close()
-  write_file("/" .. remote_path, content)
+  return content
 end
 
-local function install_files(is_update)
+local function download_manifest()
+  local content = download_content(MANIFEST_REMOTE)
+  local loader = load(content, "manifest", "t", {})
+  if not loader then
+    error("Manifest load failed")
+  end
+  local ok, data = pcall(loader)
+  if not ok or type(data) ~= "table" or type(data.files) ~= "table" then
+    error("Manifest parse failed")
+  end
+  return content, data
+end
+
+local function ensure_base_dirs()
   ensure_dir(BASE_DIR)
+  ensure_dir(BASE_DIR .. "/config")
   ensure_dir(BASE_DIR .. "/core")
   ensure_dir(BASE_DIR .. "/master")
   ensure_dir(BASE_DIR .. "/master/ui")
@@ -131,15 +195,25 @@ local function install_files(is_update)
   ensure_dir(BASE_DIR .. "/nodes/reprocessor")
   ensure_dir(BASE_DIR .. "/shared")
   ensure_dir(BASE_DIR .. "/installer")
+end
 
-  for _, file in ipairs(files_to_download) do
-    if is_update and file:match("/config%.lua$") then
-      print("Skipping config " .. file .. " (update mode)")
-    else
-      print("Downloading " .. file .. "...")
-      download_file(file)
-    end
-  end
+local function is_config_file(path)
+  return path:match("/config%.lua$") ~= nil
+end
+
+local function prompt(msg, default)
+  write(msg .. (default and (" [" .. default .. "]") or "") .. ": ")
+  local input = read()
+  if input == "" then return default end
+  return input
+end
+
+local function confirm(prompt_text, default)
+  local hint = default and "Y/n" or "y/N"
+  local input = prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
+  input = input:lower()
+  if input == "" then return default end
+  return input == "y" or input == "yes"
 end
 
 local last_detection = { reactors = {}, turbines = {}, modems = {} }
@@ -191,14 +265,6 @@ local function select_primary_modem(modems)
   return nil
 end
 
-local function prompt(msg, default)
-  scan_peripherals()
-  write(msg .. (default and (" [" .. default .. "]") or "") .. ": ")
-  local input = read()
-  if input == "" then return default end
-  return input
-end
-
 local function choose_role()
   print("Select role:")
   local list = {
@@ -218,9 +284,7 @@ end
 
 local function write_startup(role)
   local target = role_targets[role]
-  local file = fs.open("/startup.lua", "w")
-  file.write([[shell.run("/xreactor/]] .. target.path .. [[/main.lua")]])
-  file.close()
+  write_atomic("/startup.lua", [[shell.run("/xreactor/]] .. target.path .. [[/main.lua")]])
 end
 
 local function print_detected(label, items)
@@ -243,23 +307,8 @@ local function prompt_use_detected()
   return input == "y" or input == "yes"
 end
 
-local function confirm(prompt_text, default)
-  local hint = default and "Y/n" or "y/N"
-  local input = prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
-  input = input:lower()
-  if input == "" then return default end
-  return input == "y" or input == "yes"
-end
-
 local function write_config(role, wireless, wired, extras)
   local cfg_path = BASE_DIR .. "/" .. role_targets[role].config
-  if fs.exists(cfg_path) then
-    local overwrite = confirm("Config exists at " .. cfg_path .. ". Overwrite?", false)
-    if not overwrite then
-      print("Keeping existing config: " .. cfg_path)
-      return
-    end
-  end
   local defaults = read_config(cfg_path, {})
   defaults.role = role
   defaults.wireless_modem = wireless
@@ -287,16 +336,429 @@ local function build_rt_node_id()
   return "RT-" .. suffix
 end
 
-local function detect_update()
-  if fs.exists(BASE_DIR) then
-    print("Existing installation detected.")
-    print("Update existing installation? [Y/n]")
-    local input = read():lower()
-    if input == "" or input == "y" or input == "yes" then
-      return true
+local function find_existing_role()
+  for role, target in pairs(role_targets) do
+    local cfg_path = BASE_DIR .. "/" .. target.config
+    if fs.exists(cfg_path) then
+      local cfg = read_config(cfg_path, {})
+      if cfg.role == role then
+        return role, cfg_path, cfg
+      end
     end
   end
+  return nil, nil, nil
+end
+
+local function collect_known_node_id_sources(role, cfg_path)
+  local sources = {
+    { label = "legacy_file", path = BASE_DIR .. "/data/node_id.txt" },
+    { label = "legacy_file", path = BASE_DIR .. "/node_id.txt" },
+    { label = "legacy_file", path = BASE_DIR .. "/config/node_id.txt" }
+  }
+  if cfg_path then
+    table.insert(sources, { label = "config", path = cfg_path })
+  end
+  for _, target in pairs(role_targets) do
+    local path = BASE_DIR .. "/" .. target.config
+    if path ~= cfg_path then
+      table.insert(sources, { label = "config", path = path })
+    end
+  end
+  return sources
+end
+
+local function ensure_node_id(role, cfg_path)
+  if fs.exists(NODE_ID_PATH) then
+    return true
+  end
+  print("node_id missing → attempting migration")
+  local sources = collect_known_node_id_sources(role, cfg_path)
+  for _, source in ipairs(sources) do
+    if fs.exists(source.path) then
+      if source.label == "config" then
+        local cfg = read_config(source.path, {})
+        if cfg.node_id and type(cfg.node_id) == "string" then
+          write_atomic(NODE_ID_PATH, cfg.node_id)
+          print("migrated node_id from config")
+          return true
+        end
+      else
+        local content = trim(read_file(source.path))
+        if content ~= "" then
+          write_atomic(NODE_ID_PATH, content)
+          print("migrated node_id from legacy_file")
+          return true
+        end
+      end
+    end
+  end
+
+  local has_role_config = cfg_path and fs.exists(cfg_path)
+  if has_role_config then
+    print("unable to recover node_id safely → aborting SAFE UPDATE")
+    return false
+  end
+
+  local generated = os.getComputerLabel() or tostring(os.getComputerID())
+  write_atomic(NODE_ID_PATH, generated)
+  print("generated new node_id")
+  return true
+end
+
+local function create_backup_dir()
+  ensure_dir(BACKUP_BASE)
+  local stamp = os.date("%Y%m%d_%H%M%S")
+  local path = BACKUP_BASE .. "/" .. stamp
+  ensure_dir(path)
+  return path
+end
+
+local function backup_files(base_dir, paths)
+  for _, path in ipairs(paths) do
+    if fs.exists(path) then
+      local target = base_dir .. path
+      ensure_dir(fs.getDir(target))
+      copy_file(path, target)
+    end
+  end
+end
+
+local function rollback_from_backup(base_dir, paths, created)
+  for _, path in ipairs(paths) do
+    local backup_path = base_dir .. path
+    if fs.exists(backup_path) then
+      ensure_dir(fs.getDir(path))
+      copy_file(backup_path, path)
+    end
+  end
+  for _, path in ipairs(created) do
+    if fs.exists(path) then
+      fs.delete(path)
+    end
+  end
+end
+
+local function update_files(manifest)
+  local updates = {}
+  for path, expected_hash in pairs(manifest.files) do
+    if not is_config_file(path) then
+      local local_hash = file_checksum("/" .. path)
+      if local_hash ~= expected_hash then
+        table.insert(updates, { path = path, hash = expected_hash })
+      end
+    end
+  end
+  table.sort(updates, function(a, b) return a.path < b.path end)
+  return updates
+end
+
+local function build_staging_path(path)
+  return UPDATE_STAGING .. "/" .. path
+end
+
+local function stage_updates(entries)
+  ensure_dir(UPDATE_STAGING)
+  local staged = {}
+  for _, entry in ipairs(entries) do
+    local content
+    local success, result = pcall(download_content, entry.path)
+    if success then
+      content = result
+    else
+      return nil, result
+    end
+    if checksum(content) ~= entry.hash then
+      local retry_ok, retry_content = pcall(download_content, entry.path)
+      if retry_ok then
+        content = retry_content
+      end
+      if checksum(content) ~= entry.hash then
+        return nil, "Checksum mismatch for " .. entry.path
+      end
+    end
+    local staging_path = build_staging_path(entry.path)
+    write_atomic(staging_path, content)
+    staged[entry.path] = staging_path
+  end
+  return staged
+end
+
+local function apply_staged(entries, staged, created)
+  for _, entry in ipairs(entries) do
+    local target_path = "/" .. entry.path
+    local staging_path = staged[entry.path]
+    local content = read_file(staging_path)
+    if content == nil then
+      return false, "Missing staged file for " .. entry.path
+    end
+    if not fs.exists(target_path) then
+      table.insert(created, target_path)
+    end
+    local write_ok, write_err = pcall(write_atomic, target_path, content)
+    if not write_ok then
+      return false, write_err
+    end
+  end
+  return true
+end
+
+local function update_installer_if_required(manifest)
+  local required = manifest.installer_min_version
+  if required and compare_version(INSTALLER_VERSION, required) < 0 then
+    print("Installer update required.")
+    if not confirm("Update installer now?", true) then
+      print("SAFE UPDATE aborted: installer update required.")
+      return false
+    end
+    local installer_path = manifest.installer_path or "xreactor/installer/installer.lua"
+    local expected = manifest.installer_hash
+    if not expected then
+      print("SAFE UPDATE aborted: installer hash missing.")
+      return false
+    end
+    local content = download_content(installer_path)
+    if checksum(content) ~= expected then
+      print("SAFE UPDATE aborted: installer checksum mismatch.")
+      return false
+    end
+    write_atomic("/" .. installer_path, content)
+    print("Installer updated. Please re-run installer.")
+    return false
+  end
+  return true
+end
+
+local function migrate_config(role, cfg_path, manifest)
+  local remote_path = "xreactor/" .. role_targets[role].config
+  local expected_hash = manifest.files[remote_path]
+  if not expected_hash then
+    return false
+  end
+  local content = download_content(remote_path)
+  if checksum(content) ~= expected_hash then
+    error("Config checksum mismatch for " .. remote_path)
+  end
+  local defaults = read_config_from_content(content)
+  local existing = read_config(cfg_path, {})
+  local original = textutils.serialize(existing)
+  merge_defaults(existing, defaults)
+  if existing.role ~= role then
+    existing.role = role
+  end
+  if existing.node_id == nil then
+    existing.node_id = os.getComputerLabel() or os.getComputerID()
+  end
+  if textutils.serialize(existing) ~= original then
+    write_config_file(cfg_path, existing)
+    return true
+  end
   return false
+end
+
+local function verify_integrity(manifest, role, cfg_path)
+  local required = {
+    "xreactor/core/network.lua",
+    "xreactor/core/protocol.lua",
+    "xreactor/shared/constants.lua",
+    "xreactor/installer/installer.lua"
+  }
+  if role == roles.MASTER then
+    table.insert(required, "xreactor/master/main.lua")
+  else
+    table.insert(required, "xreactor/nodes/rt/main.lua")
+  end
+  for _, path in ipairs(required) do
+    if not fs.exists("/" .. path) then
+      return false, "Missing " .. path
+    end
+  end
+  if role and cfg_path and not fs.exists(cfg_path) then
+    return false, "Missing config"
+  end
+  if not fs.exists(NODE_ID_PATH) then
+    return false, "Missing node_id"
+  end
+  return true
+end
+
+local function safe_update()
+  local role, cfg_path = find_existing_role()
+  if not role then
+    print("No existing role config found. Use FULL REINSTALL.")
+    return
+  end
+
+  local manifest_content, manifest = download_manifest()
+  ensure_base_dirs()
+
+  local can_continue = update_installer_if_required(manifest)
+  if not can_continue then
+    return
+  end
+
+  local node_ok = ensure_node_id(role, cfg_path)
+  if not node_ok then
+    return
+  end
+
+  local updates = update_files(manifest)
+  local staged, stage_err = stage_updates(updates)
+  if not staged then
+    print("SAFE UPDATE failed. Error: " .. tostring(stage_err))
+    return
+  end
+  local backup_dir = create_backup_dir()
+  local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL }
+  local update_paths = {}
+  local created = {}
+  for _, entry in ipairs(updates) do
+    table.insert(update_paths, "/" .. entry.path)
+  end
+
+  backup_files(backup_dir, update_paths)
+  backup_files(backup_dir, protected)
+
+  local changed = 0
+  local ok, err = apply_staged(updates, staged, created)
+  if ok then
+    changed = #updates
+  end
+
+  local migrated = false
+  if ok then
+    local success, result = pcall(migrate_config, role, cfg_path, manifest)
+    if success then
+      migrated = result
+    else
+      ok = false
+      err = result
+    end
+  end
+
+  if ok then
+    local success, result = pcall(write_atomic, MANIFEST_LOCAL, manifest_content)
+    if not success then
+      ok = false
+      err = result
+    end
+  end
+
+  if not ok then
+    local rollback_paths = {}
+    for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
+    for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
+    rollback_from_backup(backup_dir, rollback_paths, created)
+    print("SAFE UPDATE failed. Rolled back. Error: " .. tostring(err))
+    print("Backup: " .. backup_dir)
+    return
+  end
+
+  local integrity_ok, integrity_err = verify_integrity(manifest, role, cfg_path)
+  if not integrity_ok then
+    local rollback_paths = {}
+    for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
+    for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
+    rollback_from_backup(backup_dir, rollback_paths, created)
+    print("Integrity check failed: " .. tostring(integrity_err))
+    print("Rollback complete. Backup: " .. backup_dir)
+    return
+  end
+
+  print("SAFE UPDATE complete.")
+  print("Changed files: " .. tostring(changed))
+  if migrated then
+    print("Config migration: updated defaults")
+  end
+  print("Backup: " .. backup_dir)
+  print("Next steps: reboot or run the role entrypoint.")
+end
+
+local function full_reinstall()
+  local manifest_content, manifest = download_manifest()
+  ensure_base_dirs()
+  local updates = {}
+  for path in pairs(manifest.files) do
+    table.insert(updates, path)
+  end
+  table.sort(updates)
+  for _, path in ipairs(updates) do
+    local content = download_content(path)
+    local expected = manifest.files[path]
+    if checksum(content) ~= expected then
+      error("Checksum mismatch for " .. path)
+    end
+    write_atomic("/" .. path, content)
+  end
+  if manifest.installer_path and manifest.installer_hash then
+    local content = download_content(manifest.installer_path)
+    if checksum(content) ~= manifest.installer_hash then
+      error("Checksum mismatch for " .. manifest.installer_path)
+    end
+    write_atomic("/" .. manifest.installer_path, content)
+  end
+
+  local role = choose_role()
+  local cfg_path = BASE_DIR .. "/" .. role_targets[role].config
+  local modems = detect_modems()
+  local wireless = select_primary_modem(modems)
+  local wired = modems.wired[1]
+  local extras = {}
+
+  if not wireless then
+    wireless = prompt("Primary modem side", nil)
+  end
+  if wireless and wired == wireless then
+    wired = nil
+  end
+
+  if role == roles.RT_NODE then
+    local label = build_rt_node_id()
+    os.setComputerLabel(label)
+  end
+
+  if role == roles.MASTER then
+    extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
+  elseif role == roles.RT_NODE then
+    local detected = scan_peripherals()
+    extras.modem = wireless
+    local use_detected = #detected.reactors > 0
+    if use_detected then
+      print_detected("Detected Reactors", detected.reactors)
+      print_detected("Detected Turbines", detected.turbines)
+      print_detected("Detected Modems", detected.modems)
+      use_detected = prompt_use_detected()
+    else
+      print("Warning: No reactors detected. Switching to manual entry.")
+    end
+
+    if use_detected then
+      extras.reactors = detected.reactors
+      extras.turbines = detected.turbines
+      if #detected.turbines == 0 then
+        print("No turbines detected. Reactor-only setup will be used.")
+      end
+    else
+      local reactors = prompt("Reactor peripheral names (comma separated)", "")
+      local turbines = prompt("Turbine peripheral names (comma separated)", "")
+      extras.reactors = {}
+      extras.turbines = {}
+      for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
+      for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
+    end
+    if not wireless then
+      extras.modem = prompt("Modem peripheral name", nil)
+    end
+  end
+
+  if role == roles.RT_NODE then
+    extras.node_id = build_rt_node_id()
+  end
+  write_config(role, wireless, wired, extras)
+  write_startup(role)
+  write_atomic(MANIFEST_LOCAL, manifest_content)
+
+  print("FULL REINSTALL complete.")
+  print("Next steps: reboot or run the role entrypoint.")
 end
 
 local function main()
@@ -304,78 +766,22 @@ local function main()
     error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
   end
   print("=== XReactor Installer ===")
-  local is_update = detect_update()
-  install_files(is_update)
-  local role = choose_role()
-  local cfg_path = BASE_DIR .. "/" .. role_targets[role].config
-  local should_write_config = not (is_update and fs.exists(cfg_path))
-  local wireless
-  local wired
-  local extras = {}
-
-  if should_write_config then
-    local modems = detect_modems()
-    wireless = select_primary_modem(modems)
-    wired = modems.wired[1]
-    if not wireless then
-      wireless = prompt("Primary modem side", nil)
-    end
-    if wireless and wired == wireless then
-      wired = nil
-    end
-
-    if role == roles.RT_NODE and not is_update then
-      local label = build_rt_node_id()
-      os.setComputerLabel(label)
-    end
-
-    if role == roles.MASTER then
-      extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
-    elseif role == roles.RT_NODE then
-      local detected = scan_peripherals()
-      extras.modem = wireless
-      local use_detected = #detected.reactors > 0
-      if use_detected then
-        print_detected("Detected Reactors", detected.reactors)
-        print_detected("Detected Turbines", detected.turbines)
-        print_detected("Detected Modems", detected.modems)
-        use_detected = prompt_use_detected()
-      else
-        print("Warning: No reactors detected. Switching to manual entry.")
-      end
-
-      if use_detected then
-        extras.reactors = detected.reactors
-        extras.turbines = detected.turbines
-        if #detected.turbines == 0 then
-          print("No turbines detected. Reactor-only setup will be used.")
-        end
-      else
-        local reactors = prompt("Reactor peripheral names (comma separated)", "")
-        local turbines = prompt("Turbine peripheral names (comma separated)", "")
-        extras.reactors = {}
-        extras.turbines = {}
-        for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
-        for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
-      end
-      if not wireless then
-        extras.modem = prompt("Modem peripheral name", nil)
-      end
+  if fs.exists(BASE_DIR) then
+    print("Existing installation detected.")
+    print("1) SAFE UPDATE")
+    print("2) FULL REINSTALL")
+    print("3) CANCEL")
+    local choice = tonumber(prompt("Select option", "1")) or 1
+    if choice == 1 then
+      safe_update()
+    elseif choice == 2 then
+      full_reinstall()
+    else
+      print("Cancelled.")
     end
   else
-    print("Keeping existing config: " .. cfg_path)
+    full_reinstall()
   end
-
-  if should_write_config then
-    if role == roles.RT_NODE and not is_update then
-      extras.node_id = build_rt_node_id()
-    end
-    write_config(role, wireless, wired, extras)
-  end
-  write_startup(role)
-  print("Installation complete. Rebooting into role " .. role)
-  os.sleep(1)
-  os.reboot()
 end
 
 main()

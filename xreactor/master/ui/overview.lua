@@ -68,7 +68,24 @@ local function render(mon, model)
     ui.badge(mon, x + 1, tile_y + 2, tile.status or "OFFLINE", tile.status or "OFFLINE")
   end
 
+  local node_y = tile_y + tile_h + 1
   local profile_y = h - 6
+  local node_rows = math.max(0, profile_y - node_y - 1)
+  if node_rows > 0 then
+    ui.text(mon, 2, node_y, "Nodes", colorset.get("text"), colorset.get("background"))
+    local rows = {}
+    for _, node in ipairs(model.nodes or {}) do
+      local mode = "-"
+      if node.role == constants.roles.RT_NODE then
+        mode = (node.mode == "MASTER" and "MANAGED") or (node.mode or "AUTONOM")
+      end
+      local last_seen = node.last_seen or "--:--"
+      local label = string.format("%s %s %s %s", node.id or "NODE", node.status or "OFFLINE", mode, last_seen)
+      table.insert(rows, { text = label, status = node.status })
+    end
+    ui.list(mon, 2, node_y + 1, w - 3, rows, { max_rows = node_rows })
+  end
+
   button_cache[mon] = build_profile_buttons(mon, 2, profile_y, model.profile_list or {}, model.active_profile, model.auto_profile)
 
   local power_y = profile_y + 1
