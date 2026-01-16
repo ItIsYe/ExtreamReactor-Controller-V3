@@ -784,16 +784,18 @@ local function safe_update()
   local manifest_content, manifest, release, base_url = download_manifest()
   while not manifest_content do
     local cache = read_manifest_cache()
-    if not cache then
-      print("SAFE UPDATE: manifest download failed and no cache available.")
-      return
-    end
     print("SAFE UPDATE: manifest download failed.")
-    print("1) Use cached manifest (offline update)")
-    print("2) Retry download")
-    print("3) Cancel")
-    local choice = tonumber(prompt("Select option", "2")) or 2
-    if choice == 1 then
+    if cache then
+      print("1) Use cached manifest (offline update)")
+      print("2) Retry download")
+      print("3) Cancel")
+    else
+      print("1) Retry download")
+      print("2) Cancel")
+    end
+    local default_choice = cache and "2" or "1"
+    local choice = tonumber(prompt("Select option", default_choice)) or tonumber(default_choice)
+    if cache and choice == 1 then
       manifest_content = cache.manifest_content
       local parsed, parse_err = parse_manifest(manifest_content)
       if not parsed then
@@ -805,7 +807,7 @@ local function safe_update()
       base_url = cache.base_url
       validate_hash_algo(manifest, release)
       break
-    elseif choice == 2 then
+    elseif (cache and choice == 2) or (not cache and choice == 1) then
       manifest_content, manifest, release, base_url = download_manifest()
     else
       print("SAFE UPDATE cancelled.")
