@@ -15,7 +15,7 @@ local function resolve_node_id(config)
   if config.node_id and type(config.node_id) == "string" then
     return config.node_id
   end
-  local path = "/xreactor/data/node_id.txt"
+  local path = "/xreactor/config/node_id.txt"
   if fs.exists(path) then
     local file = fs.open(path, "r")
     if file then

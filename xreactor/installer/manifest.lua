@@ -1,7 +1,7 @@
 return {
   version = 1,
   files = {
-    ["xreactor/core/network.lua"] = "248431:3037",
+    ["xreactor/core/network.lua"] = "248651:3039",
     ["xreactor/core/trends.lua"] = "147554:1791",
     ["xreactor/core/utils.lua"] = "163817:1935",
     ["xreactor/core/ui.lua"] = "496501:6038",
@@ -29,6 +29,6 @@ return {
     ["xreactor/master/ui/energy.lua"] = "112049:1365",
     ["xreactor/shared/colors.lua"] = "27639:332",
     ["xreactor/shared/constants.lua"] = "87495:1295",
-    ["xreactor/installer/installer.lua"] = "1484819:17855"
+    ["xreactor/installer/installer.lua"] = "1637024:19723"
   }
 }

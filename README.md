@@ -73,7 +73,7 @@ Wireless Modem (Control/Status)
   - `wireless_modem`, `wired_modem`: Modem-Seiten.
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
 - **Persistenz**:
-  - `node_id`: `/xreactor/data/node_id.txt`
+  - `node_id`: `/xreactor/config/node_id.txt`
   - Manifest: `/xreactor/.manifest`
 
 ## Betrieb (Modi)
@@ -86,6 +86,8 @@ Wireless Modem (Control/Status)
 - **Falsche Modem-Seite**: `wireless_modem`/`wired_modem` in `config.lua` prüfen.
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
+- **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien).
+- **SAFE UPDATE Abbruch**: Wenn keine sichere node_id-Recovery möglich ist, wird SAFE UPDATE abgebrochen, ohne Änderungen zu übernehmen.
 - **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
 - **Peripherals fehlen**: Namen in `config.lua` prüfen, Wired-Modem korrekt angeschlossen?
 - **Node bleibt in SAFE**: Temperatur/Water-Limits prüfen, ggf. Ursache beseitigen und Modus wechseln.

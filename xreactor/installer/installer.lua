@@ -3,7 +3,7 @@ local REPO_BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-C
 local MANIFEST_REMOTE = "xreactor/installer/manifest.lua"
 local MANIFEST_LOCAL = BASE_DIR .. "/.manifest"
 local BACKUP_BASE = "/xreactor_backup"
-local NODE_ID_PATH = BASE_DIR .. "/data/node_id.txt"
+local NODE_ID_PATH = BASE_DIR .. "/config/node_id.txt"
 
 local roles = {
   MASTER = "MASTER",
@@ -162,6 +162,7 @@ end
 
 local function ensure_base_dirs()
   ensure_dir(BASE_DIR)
+  ensure_dir(BASE_DIR .. "/config")
   ensure_dir(BASE_DIR .. "/core")
   ensure_dir(BASE_DIR .. "/master")
   ensure_dir(BASE_DIR .. "/master/ui")
@@ -173,7 +174,6 @@ local function ensure_base_dirs()
   ensure_dir(BASE_DIR .. "/nodes/reprocessor")
   ensure_dir(BASE_DIR .. "/shared")
   ensure_dir(BASE_DIR .. "/installer")
-  ensure_dir(BASE_DIR .. "/data")
 end
 
 local function is_config_file(path)
@@ -328,6 +328,62 @@ local function find_existing_role()
   return nil, nil, nil
 end
 
+local function collect_known_node_id_sources(role, cfg_path)
+  local sources = {
+    { label = "legacy_file", path = BASE_DIR .. "/data/node_id.txt" },
+    { label = "legacy_file", path = BASE_DIR .. "/node_id.txt" },
+    { label = "legacy_file", path = BASE_DIR .. "/config/node_id.txt" }
+  }
+  if cfg_path then
+    table.insert(sources, { label = "config", path = cfg_path })
+  end
+  for _, target in pairs(role_targets) do
+    local path = BASE_DIR .. "/" .. target.config
+    if path ~= cfg_path then
+      table.insert(sources, { label = "config", path = path })
+    end
+  end
+  return sources
+end
+
+local function ensure_node_id(role, cfg_path)
+  if fs.exists(NODE_ID_PATH) then
+    return true
+  end
+  print("node_id missing → attempting migration")
+  local sources = collect_known_node_id_sources(role, cfg_path)
+  for _, source in ipairs(sources) do
+    if fs.exists(source.path) then
+      if source.label == "config" then
+        local cfg = read_config(source.path, {})
+        if cfg.node_id and type(cfg.node_id) == "string" then
+          write_atomic(NODE_ID_PATH, cfg.node_id)
+          print("migrated node_id from config")
+          return true
+        end
+      else
+        local content = trim(read_file(source.path))
+        if content ~= "" then
+          write_atomic(NODE_ID_PATH, content)
+          print("migrated node_id from legacy_file")
+          return true
+        end
+      end
+    end
+  end
+
+  local has_role_config = cfg_path and fs.exists(cfg_path)
+  if has_role_config then
+    print("unable to recover node_id safely → aborting SAFE UPDATE")
+    return false
+  end
+
+  local generated = os.getComputerLabel() or tostring(os.getComputerID())
+  write_atomic(NODE_ID_PATH, generated)
+  print("generated new node_id")
+  return true
+end
+
 local function create_backup_dir()
   ensure_dir(BACKUP_BASE)
   local stamp = os.date("%Y%m%d_%H%M%S")
@@ -437,6 +493,11 @@ local function safe_update()
 
   local manifest_content, manifest = download_manifest()
   ensure_base_dirs()
+
+  local node_ok = ensure_node_id(role, cfg_path)
+  if not node_ok then
+    return
+  end
 
   local updates = update_files(manifest)
   local backup_dir = create_backup_dir()
