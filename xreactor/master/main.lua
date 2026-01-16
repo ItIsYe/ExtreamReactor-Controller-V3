@@ -131,48 +131,6 @@ local function send_rt_setpoints(node, setpoints)
   node.last_setpoints_ts = os.epoch("utc")
 end
 
-local function normalize_setpoints(setpoints)
-  local payload = setpoints or {}
-  return {
-    target_rpm = payload.target_rpm,
-    power_target = payload.power_target,
-    steam_target = payload.steam_target,
-    enable_reactors = payload.enable_reactors,
-    enable_turbines = payload.enable_turbines
-  }
-end
-
-local function build_rt_setpoints()
-  return normalize_setpoints({
-    target_rpm = config.rt_setpoints.target_rpm,
-    power_target = power_target,
-    steam_target = config.rt_setpoints.steam_target,
-    enable_reactors = config.rt_setpoints.enable_reactors,
-    enable_turbines = config.rt_setpoints.enable_turbines
-  })
-end
-
-local function send_rt_mode(node, mode)
-  if not node or not mode then return end
-  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
-    target = constants.command_targets.SET_MODE or constants.command_targets.MODE,
-    value = mode
-  }))
-  node.last_mode_request = os.epoch("utc")
-  node.desired_mode = mode
-end
-
-local function send_rt_setpoints(node, setpoints)
-  if not node then return end
-  local payload = normalize_setpoints(setpoints)
-  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
-    target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET,
-    value = payload
-  }))
-  node.last_setpoints = payload
-  node.last_setpoints_ts = os.epoch("utc")
-end
-
 local function discover_monitors()
   local names = {}
   for _, name in ipairs(peripheral.getNames()) do

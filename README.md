@@ -44,7 +44,8 @@ Wireless Modem (Control/Status)
 - **Protokoll**: `proto_ver = 1` (bei Mismatch ignorieren Nodes/Master die Nachricht).
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
 
-## Installation & Start
+## Installation, Safe Update & Full Reinstall
+**Erstinstallation / Vollinstallation**
 1. Ordner `xreactor` auf die jeweiligen Computer kopieren.
 2. Installer ausführen:
    ```
@@ -52,8 +53,16 @@ Wireless Modem (Control/Status)
    lua installer/installer.lua
    ```
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
-4. MASTER starten, danach Nodes starten. Nodes melden sich automatisch per REGISTER/HELLO.
-5. MASTER zeigt die Nodes automatisch an (inkl. lastSeen + Modus).
+4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
+
+**SAFE UPDATE (inkrementell, ohne Config-Reset)**
+- Installer erneut ausführen → Menü **SAFE UPDATE** wählen.
+- Lädt nur geänderte Dateien laut Manifest, macht ein Backup, schützt lokale Config/Node-ID.
+- Bei Fehler: automatischer Rollback aus dem Backup.
+
+**FULL REINSTALL (alles neu)**
+- Installer erneut ausführen → Menü **FULL REINSTALL** wählen.
+- Rolle wird neu abgefragt, Config wird neu geschrieben, `startup.lua` wird gesetzt.
 
 ## Konfiguration & Autodetection
 - **MASTER**: `xreactor/master/config.lua`
@@ -63,6 +72,9 @@ Wireless Modem (Control/Status)
   - `reactors`, `turbines`: Namen der Peripherals.
   - `wireless_modem`, `wired_modem`: Modem-Seiten.
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
+- **Persistenz**:
+  - `node_id`: `/xreactor/data/node_id.txt`
+  - Manifest: `/xreactor/.manifest`
 
 ## Betrieb (Modi)
 - **AUTONOM**: RT-Node regelt lokal (bestehende Standalone-Logik bleibt aktiv).
@@ -73,6 +85,8 @@ Wireless Modem (Control/Status)
 - **Timeout/Offline**: Prüfe Heartbeat-Intervalle und Wireless-Reichweite.
 - **Falsche Modem-Seite**: `wireless_modem`/`wired_modem` in `config.lua` prüfen.
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
+- **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
+- **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
 - **Peripherals fehlen**: Namen in `config.lua` prüfen, Wired-Modem korrekt angeschlossen?
 - **Node bleibt in SAFE**: Temperatur/Water-Limits prüfen, ggf. Ursache beseitigen und Modus wechseln.
 
