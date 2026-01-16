@@ -60,6 +60,7 @@ Wireless Modem (Control/Status)
 - Lädt nur geänderte Dateien laut Manifest, macht ein Backup, schützt lokale Config/Node-ID.
 - Bei Fehler: automatischer Rollback aus dem Backup.
 - Der Installer selbst wird nur aktualisiert, wenn `installer_min_version` dies verlangt.
+- SAFE UPDATE lädt Dateien erst in ein Staging-Verzeichnis, prüft Hashes, und aktualisiert erst nach erfolgreicher Verifikation (mit einmaligem Retry bei Fehlern).
 
 **FULL REINSTALL (alles neu)**
 - Installer erneut ausführen → Menü **FULL REINSTALL** wählen.

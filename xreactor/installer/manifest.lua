@@ -2,7 +2,7 @@ return {
   version = 1,
   installer_min_version = "1.1",
   installer_path = "xreactor/installer/installer.lua",
-  installer_hash = "1890326:22652",
+  installer_hash = "2100275:25267",
   files = {
     ["xreactor/core/network.lua"] = "264972:3241",
     ["xreactor/core/trends.lua"] = "147554:1791",

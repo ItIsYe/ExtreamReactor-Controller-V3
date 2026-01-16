@@ -168,8 +168,35 @@ local function download_content(remote_path)
   return content
 end
 
+local function is_html_payload(content)
+  if not content then return false end
+  local head = content:sub(1, 200)
+  if head:match("^%s*<!DOCTYPE") then return true end
+  if head:match("^%s*<html") then return true end
+  if head:find("<body") then return true end
+  return false
+end
+
+local function download_content_checked(remote_path)
+  local url = string.format("%s/%s", REPO_BASE_URL, remote_path)
+  local response = http.get(url)
+  if not response then
+    return nil, { url = url, code = nil, html = false, message = "request failed" }
+  end
+  local code = response.getResponseCode and response.getResponseCode() or nil
+  local content = response.readAll()
+  response.close()
+  local html = is_html_payload(content)
+  if (code and code ~= 200) or html then
+    return nil, { url = url, code = code, html = html, message = "invalid response" }
+  end
+  return content, { url = url, code = code, html = html }
+end
 local function download_manifest()
-  local content = download_content(MANIFEST_REMOTE)
+  local content, meta = download_content_checked(MANIFEST_REMOTE)
+  if not content then
+    error("Manifest download failed")
+  end
   local loader = load(content, "manifest", "t", {})
   if not loader then
     error("Manifest load failed")
@@ -460,24 +487,43 @@ local function stage_updates(entries)
   ensure_dir(UPDATE_STAGING)
   local staged = {}
   for _, entry in ipairs(entries) do
-    local content
-    local success, result = pcall(download_content, entry.path)
-    if success then
-      content = result
-    else
-      return nil, result
+    local content, meta = download_content_checked(entry.path)
+    if not content then
+      return nil, ("Download failed for %s (url=%s code=%s html=%s)"):format(
+        entry.path,
+        tostring(meta.url),
+        tostring(meta.code),
+        tostring(meta.html)
+      )
     end
-    if checksum(content) ~= entry.hash then
-      local retry_ok, retry_content = pcall(download_content, entry.path)
-      if retry_ok then
+    local actual = checksum(content)
+    if actual ~= entry.hash then
+      local retry_content, retry_meta = download_content_checked(entry.path)
+      if retry_content then
         content = retry_content
+        actual = checksum(content)
       end
-      if checksum(content) ~= entry.hash then
-        return nil, "Checksum mismatch for " .. entry.path
+      if actual ~= entry.hash then
+        return nil, ("Checksum mismatch for %s (expected=%s actual=%s url=%s code=%s html=%s)"):format(
+          entry.path,
+          entry.hash,
+          actual,
+          tostring((retry_meta and retry_meta.url) or meta.url),
+          tostring((retry_meta and retry_meta.code) or meta.code),
+          tostring((retry_meta and retry_meta.html) or meta.html)
+        )
       end
     end
     local staging_path = build_staging_path(entry.path)
     write_atomic(staging_path, content)
+    local verify = file_checksum(staging_path)
+    if verify ~= entry.hash then
+      return nil, ("Staged hash mismatch for %s (expected=%s actual=%s)"):format(
+        entry.path,
+        entry.hash,
+        verify
+      )
+    end
     staged[entry.path] = staging_path
   end
   return staged
@@ -516,7 +562,15 @@ local function update_installer_if_required(manifest)
       print("SAFE UPDATE aborted: installer hash missing.")
       return false
     end
-    local content = download_content(installer_path)
+    local content, meta = download_content_checked(installer_path)
+    if not content then
+      print(("SAFE UPDATE aborted: installer download failed (url=%s code=%s html=%s)"):format(
+        tostring(meta.url),
+        tostring(meta.code),
+        tostring(meta.html)
+      ))
+      return false
+    end
     if checksum(content) ~= expected then
       print("SAFE UPDATE aborted: installer checksum mismatch.")
       return false
@@ -534,7 +588,14 @@ local function migrate_config(role, cfg_path, manifest)
   if not expected_hash then
     return false
   end
-  local content = download_content(remote_path)
+  local content, meta = download_content_checked(remote_path)
+  if not content then
+    error(("Config download failed (url=%s code=%s html=%s)"):format(
+      tostring(meta.url),
+      tostring(meta.code),
+      tostring(meta.html)
+    ))
+  end
   if checksum(content) ~= expected_hash then
     error("Config checksum mismatch for " .. remote_path)
   end
@@ -682,7 +743,15 @@ local function full_reinstall()
   end
   table.sort(updates)
   for _, path in ipairs(updates) do
-    local content = download_content(path)
+    local content, meta = download_content_checked(path)
+    if not content then
+      error(("Download failed for %s (url=%s code=%s html=%s)"):format(
+        path,
+        tostring(meta.url),
+        tostring(meta.code),
+        tostring(meta.html)
+      ))
+    end
     local expected = manifest.files[path]
     if checksum(content) ~= expected then
       error("Checksum mismatch for " .. path)
@@ -690,7 +759,14 @@ local function full_reinstall()
     write_atomic("/" .. path, content)
   end
   if manifest.installer_path and manifest.installer_hash then
-    local content = download_content(manifest.installer_path)
+    local content, meta = download_content_checked(manifest.installer_path)
+    if not content then
+      error(("Installer download failed (url=%s code=%s html=%s)"):format(
+        tostring(meta.url),
+        tostring(meta.code),
+        tostring(meta.html)
+      ))
+    end
     if checksum(content) ~= manifest.installer_hash then
       error("Checksum mismatch for " .. manifest.installer_path)
     end
