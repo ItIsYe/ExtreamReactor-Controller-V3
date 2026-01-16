@@ -83,4 +83,24 @@ function utils.trim(text)
   return text:match("^%s*(.-)%s*$")
 end
 
+function utils.normalize_node_id(value)
+  local value_type = type(value)
+  if value_type == "string" then
+    return value
+  end
+  if value_type == "number" then
+    return tostring(value)
+  end
+  if value_type == "table" then
+    local candidates = { "node_id", "id", "name", "uuid", "uid" }
+    for _, key in ipairs(candidates) do
+      local candidate = value[key]
+      if type(candidate) == "string" or type(candidate) == "number" then
+        return tostring(candidate)
+      end
+    end
+  end
+  return "UNKNOWN"
+end
+
 return utils
