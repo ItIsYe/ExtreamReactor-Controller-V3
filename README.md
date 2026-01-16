@@ -1,72 +1,108 @@
 # XReactor Controller V3
 
-A modular, SCADA-inspired control stack for **Minecraft 1.21** with **ComputerCraft**, **Extreme Reactors**, **Mekanism**, and optional **Applied Energistics 2** storage. The project provides a MASTER station with multi-monitor GUI and a fleet of autonomous nodes that manage reactors, turbines, water loops, fuel reserves, reprocessing, and energy telemetry.
+SCADA-ähnlicher Steuerungs-Stack für Minecraft mit **CC:Tweaked**, **Extreme Reactors** und optional **Mekanism** (Energiespeicher/Fluids). Der Stack besteht aus einem MASTER, der Telemetrie sammelt, Sequenzen orchestriert und Visualisierung liefert, sowie spezialisierten Nodes, die lokale Peripherals steuern.
 
-## Unterstützte Mods & Versionen
+## Projektziel & Überblick
+- **MASTER** sammelt Statusdaten, koordiniert RT-Nodes (Reactor/Turbine) und verteilt Setpoints.
+- **Nodes** kapseln die lokale Peripherie-Steuerung und Sicherheitslogik.
+- **RT-Node** läuft autonom weiter, wenn der MASTER nicht erreichbar ist.
+
+## Unterstützte Versionen / Mods
 - Minecraft 1.21
-- ComputerCraft (CC:Tweaked recommended)
-- Extreme Reactors
-- Mekanism (Energy Cubes & Induction Matrix)
-- Applied Energistics 2 (Fuel storage optional)
+- **CC:Tweaked** (ComputerCraft)
+- **Extreme Reactors** (Reaktoren/Turbinen)
+- **Mekanism** (optional, Energy Cubes/Induction Matrix)
+- **Applied Energistics 2** (optional, Fuel-Storage)
 
-## Architektur
+## Architektur (Kurz)
 ```
-xreactor
-├─ MASTER (Wireless control) ──┐
-│                              │
-│   ┌────────────┐             │
-│   │ Monitors   │ (wired)     │
-│   └────────────┘             │
-│          ▲                   │
-│          │ status/commands   │
-└──► Wireless Modem ◄──────────┘
-           │
-           ▼
-   ┌───────────────┬──────────────┬──────────────┬───────────────┬────────────────┐
-   │ RT-NODE       │ WATER-NODE   │ ENERGY-NODE  │ FUEL-NODE     │ REPROCESSOR    │
-   │ (reactor/turb)│ (closed loop)│ (telemetry)  │ (reserve mgr) │ (waste ctrl)   │
-   └───────────────┴──────────────┴──────────────┴───────────────┴────────────────┘
-           │ (wired)
-           ▼
-   Connected peripherals (machines, buffers, valves)
+MASTER (Wireless Modem)
+  ├─ Multi-Monitor UI (wired)
+  └─ Sequencer/Setpoints
+        │
+        ▼
+Wireless Modem (Control/Status)
+        │
+        ├─ RT-NODE (Reactor/Turbine)
+        ├─ ENERGY-NODE (Mekanism Telemetrie)
+        ├─ WATER-NODE (Kreislauf/Buffer)
+        ├─ FUEL-NODE (Fuel-Reserve/AE2)
+        └─ REPROCESSOR-NODE (Waste/Output)
 ```
 
-## Rollenbeschreibung
-- **MASTER**: Aggregiert Status, trifft Entscheidungen, orchestriert Startup-Sequenzen und rendert Multi-Monitor-GUIs (Overview, RT Dashboard, Energy, Fuel/Water, Alarm Wall).
-- **RT-NODE**: Steuert 1..N Reaktoren und 0..M Turbinen, folgt Master-Zielen, schützt lokal (SCRAM, Steam-Drossel, Leistungsbegrenzung) und geht bei Master-Ausfall in AUTONOM.
-- **WATER-NODE**: Hält geschlossenen Wasser-/Dampfkreislauf stabil und gleicht Defizite/Überschüsse aus.
-- **ENERGY-NODE**: Liest Mekanism Energy Cubes / Induction Matrix und liefert Kapazität, Lade- und Entladeraten.
-- **FUEL-NODE**: Verwaltert Fuel-Bestände (z. B. AE2), erzwingt Mindestreserve und führt Transfers nur per Master-Command aus.
-- **REPROCESSOR-NODE**: Überwacht Waste-Puffer, meldet Outputs an FUEL-NODE und geht bei Master-Ausfall in sicheren Standby.
+## Rollen & Aufgaben
+- **MASTER**: Aggregiert Status, startet Sequenzen, verteilt Setpoints, rendert UI.
+- **RT-NODE**: Steuert Reaktoren/Turbinen, lokalen Schutz (SCRAM/Flow-Limits), Moduswechsel (AUTONOM/MASTER/SAFE).
+- **ENERGY-NODE**: Liest Energie-Speicherstände/IO-Raten.
+- **FUEL-NODE**: Überwacht Fuel-Reserven (z. B. AE2), berichtet Engpässe.
+- **WATER-NODE**: Stabilisiert Wasser-/Dampfkreislauf.
+- **REPROCESSOR-NODE**: Überwacht Waste-Reprocessing.
 
-## Installationsanleitung
-1. Kopiere den Ordner `xreactor` auf den Ziel-Computer.
-2. Führe den Installer aus:
+## Netzwerk-Setup
+- **Wireless Modem**: Kommunikation MASTER ↔ Nodes (Control/Status, Kanäle 6500/6501).
+- **Wired Modem**: MASTER zu Monitoren, Nodes zu lokalen Maschinen.
+- **Protokoll**: `proto_ver = 1.0` (bei Mismatch ignorieren Nodes/Master die Nachricht).
+- **Protokoll-Versionierung**: `proto_ver` nutzt `major.minor` (z. B. `1.0`). Gleiche Major-Versionen sind kompatibel, Minor-Abweichungen werden toleriert.
+- **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
+
+## Installation, Safe Update & Full Reinstall
+**Erstinstallation / Vollinstallation**
+1. Ordner `xreactor` auf die jeweiligen Computer kopieren.
+2. Root-Installer ausführen (`/installer.lua` bleibt stabil und wird nicht im SAFE UPDATE ersetzt; bei korruptem Download wird einmal automatisch neu geladen):
    ```
-   cd /xreactor
-   lua installer/installer.lua
+   lua /installer.lua
    ```
-3. Wähle die gewünschte Rolle, Modem-Seiten und eine Node-ID. Der Installer schreibt die passende `config.lua` und erstellt `startup.lua` für den Autostart.
-4. Starte oder boote das System neu. MASTER kann ohne verbundene Nodes hochfahren.
+3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
+4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
 
-## Erststart & Setup
-1. Stelle sicher, dass alle Wireless- und Wired-Modems angebracht sind (MASTER nur Wireless zu Nodes, Wired zu Monitoren; Nodes Wired zu ihren Maschinen).
-2. Verbinde MASTER per Kabel mit bis zu fünf Monitoren (Overview, RT Dashboard, Energy, Fuel/Water, Alarme).
-3. Starte MASTER zuerst. RT-Nodes melden sich per `HELLO`, werden sequenziell hochgefahren (ACK → STABLE), danach folgen Telemetrie- und Alarmmeldungen.
-4. Prüfe auf dem System Overview den Online-Status aller Nodes. Bei Bedarf Ziele (Power/Steam/RPM) anpassen.
+**SAFE UPDATE (inkrementell, ohne Config-Reset)**
+- Installer erneut ausführen → Menü **SAFE UPDATE** wählen.
+- Lädt nur geänderte Dateien laut Manifest, macht ein Backup, schützt lokale Config/Node-ID.
+- Bei Fehler: automatischer Rollback aus dem Backup.
+- Der Installer selbst wird nur aktualisiert, wenn `installer_min_version` dies verlangt.
+- SAFE UPDATE lädt Dateien erst in ein Staging-Verzeichnis, prüft Hashes, und aktualisiert erst nach erfolgreicher Verifikation (mit einmaligem Retry bei Fehlern).
+- Updates sind commit-gepinnt (Manifest + Dateien kommen aus derselben Commit-SHA), um Hash-Mismatches durch parallele Änderungen zu verhindern.
 
-## Sicherheitsprinzipien
-- Zustandsmaschinen statt Event-Spam, Heartbeats mit Timeouts.
-- Idempotente Commands (`SET_TARGET`-Logik, keine inkrementellen Befehle).
-- Lokale Sicherheit hat Vorrang: RT-NODE darf immer limitieren, drosseln oder SCRAM auslösen.
-- MASTER greift nie direkt auf Maschinen zu; Nodes kontrollieren nur ihre eigenen Peripherals.
-- Caching von Peripherals, begrenzte Redraws der GUIs und minimale Polling-Intervalle.
+**FULL REINSTALL (alles neu)**
+- Installer erneut ausführen → Menü **FULL REINSTALL** wählen.
+- Rolle wird neu abgefragt, Config wird neu geschrieben, `startup.lua` wird gesetzt.
+
+## Konfiguration & Autodetection
+- **MASTER**: `xreactor/master/config.lua`
+  - `rt_default_mode`: Standardmodus für RT-Nodes (`AUTONOM`, `MASTER`, `SAFE`).
+  - `rt_setpoints`: Zielwerte (z. B. `target_rpm`, `enable_reactors`, `enable_turbines`).
+- **RT-NODE**: `xreactor/nodes/rt/config.lua`
+  - `reactors`, `turbines`: Namen der Peripherals.
+  - `wireless_modem`, `wired_modem`: Modem-Seiten.
+- Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
+- **Persistenz**:
+  - `node_id`: `/xreactor/config/node_id.txt` (immer String)
+  - Manifest: `/xreactor/.manifest`
+
+## Betrieb (Modi)
+- **AUTONOM**: RT-Node regelt lokal (bestehende Standalone-Logik bleibt aktiv).
+- **MASTER**: MASTER gibt Setpoints vor (z. B. Ziel-RPM); lokale Schutzlogik bleibt immer Vorrang.
+- **SAFE**: RT-Node fährt in sicheren Zustand (Rods hoch, Turbinen aus).
 
 ## Troubleshooting
-- **Keine Anzeige auf Monitor**: Prüfe Wired-Modem-Verbindung und Monitor-Side in `master/config.lua`.
-- **Nodes offline**: Stelle sicher, dass Wireless-Kanal frei ist (Control 6500 / Status 6501) und Heartbeat-Intervalle nicht zu klein sind.
-- **Reaktor-SCRAM**: RT-NODE ist in EMERGENCY; Temperaturgrenzen prüfen und ggf. `MODE=STARTUP` erneut senden.
-- **Fuel unter Reserve**: Mindestreserve wird erzwungen; erhöhe Vorrat im Storage oder passe `minimum_reserve` an.
+- **Timeout/Offline**: Prüfe Heartbeat-Intervalle und Wireless-Reichweite.
+- **Falsche Modem-Seite**: `wireless_modem`/`wired_modem` in `config.lua` prüfen.
+- **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
+- **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
+- **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
+- **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien).
+- **SAFE UPDATE Abbruch**: Wenn keine sichere node_id-Recovery möglich ist, wird SAFE UPDATE abgebrochen, ohne Änderungen zu übernehmen.
+- **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
+- **Peripherals fehlen**: Namen in `config.lua` prüfen, Wired-Modem korrekt angeschlossen?
+- **Node bleibt in SAFE**: Temperatur/Water-Limits prüfen, ggf. Ursache beseitigen und Modus wechseln.
+
+## Wie teste ich das System? (6 Szenarien)
+1. **RT-Node startet ohne MASTER** → läuft stabil in **AUTONOM**.
+2. **MASTER startet später** → RT-Node registriert sich und sendet Status.
+3. **MASTER setzt Modus auf MASTER** → Setpoints greifen (z. B. `target_rpm`).
+4. **MASTER fällt aus** → RT-Node wechselt automatisch zurück auf **AUTONOM**.
+5. **Mehrere RT-Nodes** → MASTER zeigt/verwaltet alle Nodes parallel.
+6. **Startup-Sequencer** → Module/Turbinen werden nacheinander hochgefahren.
 
 ## Lizenz
-Dieses Projekt steht unter der MIT-Lizenz. Details siehe `LICENSE`.
+MIT-Lizenz – siehe `LICENSE`.

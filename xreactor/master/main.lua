@@ -49,6 +49,17 @@ local trends_lib = require("core.trends")
 local ui = require("core.ui")
 local config = require("master.config")
 
+config.heartbeat_interval = config.heartbeat_interval or 5
+config.rt_default_mode = config.rt_default_mode or "MASTER"
+config.rt_setpoints = config.rt_setpoints or {}
+config.rt_setpoints.target_rpm = config.rt_setpoints.target_rpm or 900
+if config.rt_setpoints.enable_reactors == nil then
+  config.rt_setpoints.enable_reactors = true
+end
+if config.rt_setpoints.enable_turbines == nil then
+  config.rt_setpoints.enable_turbines = true
+end
+
 local monitor_roles = {
   OVERVIEW = {},
   RT = {},
@@ -70,6 +81,55 @@ local active_profile = "BASELOAD"
 local auto_profile = profiles.AUTO_ENABLED or false
 local critical_blink_until = 0
 local trend_cache = { energy = {}, energy_arrow = "→" }
+local warned = {}
+
+local function warn_once(key, message)
+  if warned[key] then return end
+  warned[key] = true
+  utils.log("MASTER", message)
+end
+
+local function normalize_setpoints(setpoints)
+  local payload = setpoints or {}
+  return {
+    target_rpm = payload.target_rpm,
+    power_target = payload.power_target,
+    steam_target = payload.steam_target,
+    enable_reactors = payload.enable_reactors,
+    enable_turbines = payload.enable_turbines
+  }
+end
+
+local function build_rt_setpoints()
+  return normalize_setpoints({
+    target_rpm = config.rt_setpoints.target_rpm,
+    power_target = power_target,
+    steam_target = config.rt_setpoints.steam_target,
+    enable_reactors = config.rt_setpoints.enable_reactors,
+    enable_turbines = config.rt_setpoints.enable_turbines
+  })
+end
+
+local function send_rt_mode(node, mode)
+  if not node or not mode then return end
+  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, utils.normalize_node_id(node.id), {
+    target = constants.command_targets.SET_MODE or constants.command_targets.MODE,
+    value = mode
+  }))
+  node.last_mode_request = os.epoch("utc")
+  node.desired_mode = mode
+end
+
+local function send_rt_setpoints(node, setpoints)
+  if not node then return end
+  local payload = normalize_setpoints(setpoints)
+  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, utils.normalize_node_id(node.id), {
+    target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET,
+    value = payload
+  }))
+  node.last_setpoints = payload
+  node.last_setpoints_ts = os.epoch("utc")
+end
 
 local function discover_monitors()
   local names = {}
@@ -115,7 +175,14 @@ local function refresh_monitors(force)
   if not force and now - monitor_scan_last < 5000 then return end
   monitor_scan_last = now
   local monitors = discover_monitors()
-  local signature = textutils.serialize(monitors)
+  if #monitors == 0 then
+    monitors = { { name = "term", mon = term } }
+  end
+  local signature_parts = {}
+  for _, entry in ipairs(monitors) do
+    table.insert(signature_parts, entry.name)
+  end
+  local signature = table.concat(signature_parts, "|")
   if monitor_cache.signature ~= signature or force then
     monitor_cache = { list = monitors, signature = signature }
     assign_roles(monitors)
@@ -140,21 +207,76 @@ local function add_alarm(sender, severity, message)
   end
 end
 
+local function set_default_mode(node)
+  if not node.desired_mode then
+    node.desired_mode = config.rt_default_mode
+  end
+end
+
+local function same_setpoints(a, b)
+  if not a or not b then return false end
+  return a.target_rpm == b.target_rpm
+    and a.power_target == b.power_target
+    and a.steam_target == b.steam_target
+    and a.enable_reactors == b.enable_reactors
+    and a.enable_turbines == b.enable_turbines
+end
+
+local function sync_rt_node(node)
+  if not node or node.role ~= constants.roles.RT_NODE then return end
+  set_default_mode(node)
+  local now = os.epoch("utc")
+  if node.desired_mode and node.mode ~= node.desired_mode then
+    if not node.last_mode_request or now - node.last_mode_request > 5000 then
+      send_rt_mode(node, node.desired_mode)
+    end
+    return
+  end
+  if node.mode == "MASTER" then
+    local desired = build_rt_setpoints()
+    if not node.last_setpoints or not same_setpoints(node.last_setpoints, desired) then
+      send_rt_setpoints(node, desired)
+    end
+  end
+end
+
 local function update_node(message)
-  local id = message.sender_id
-  nodes[id] = nodes[id] or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
+  local id = utils.normalize_node_id(message.sender_id)
+  local existing = nodes[id]
+  nodes[id] = existing or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
+  if nodes[id].id ~= id then
+    nodes[id].id = id
+  end
+  if message.node_id then
+    local normalized = utils.normalize_node_id(message.node_id)
+    if normalized ~= "UNKNOWN" then
+      nodes[id].node_id = normalized
+    end
+  end
   nodes[id].last_seen = os.epoch("utc")
-  if message.type == constants.message_types.HELLO then
+  nodes[id].last_seen_str = textutils.formatTime(os.time(), true)
+  nodes[id].proto_ver = message.proto_ver
+  if message.type == constants.message_types.HELLO or message.type == constants.message_types.REGISTER then
+    if nodes[id].status == constants.status_levels.OFFLINE then
+      utils.log("MASTER", "Node online: " .. tostring(id))
+    end
     nodes[id].status = constants.status_levels.OK
     nodes[id].state = constants.node_states.OFF
     if message.role == constants.roles.RT_NODE then
       sequencer:enqueue(id)
     end
+    sync_rt_node(nodes[id])
   elseif message.type == constants.message_types.HEARTBEAT then
     nodes[id].state = message.payload.state
+    sync_rt_node(nodes[id])
   elseif message.type == constants.message_types.STATUS then
+    local previous_mode = nodes[id].mode
     nodes[id] = utils.merge(nodes[id], message.payload)
     nodes[id].status = message.payload.status or nodes[id].status
+    nodes[id].mode = message.payload.mode or nodes[id].mode
+    if previous_mode and nodes[id].mode and previous_mode ~= nodes[id].mode then
+      utils.log("MASTER", ("Node %s mode: %s"):format(id, tostring(nodes[id].mode)))
+    end
     if sequencer.active and sequencer.active.node_id == id then
       if message.payload.modules then
         local module = message.payload.modules[sequencer.active.module_id]
@@ -171,6 +293,7 @@ local function update_node(message)
         sequencer:notify_stable(id, sequencer.active.module_id, nodes[id].state)
       end
     end
+    sync_rt_node(nodes[id])
   elseif message.type == constants.message_types.ACK then
     sequencer:notify_ack(id, message.payload and message.payload.module_id)
   elseif message.type == constants.message_types.ALERT then
@@ -181,6 +304,9 @@ end
 local function check_timeouts()
   for _, node in pairs(nodes) do
     if node.last_seen and (os.epoch("utc") - node.last_seen > config.heartbeat_interval * 4000) then
+      if node.status ~= constants.status_levels.OFFLINE then
+        utils.log("MASTER", "Node offline: " .. tostring(node.id))
+      end
       node.status = constants.status_levels.OFFLINE
     end
   end
@@ -208,10 +334,14 @@ local function apply_profile(name)
     power_target = base * profile.target
     for _, node in pairs(nodes) do
       if node.role == constants.roles.RT_NODE then
-        network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
-          target = constants.command_targets.POWER_TARGET,
-          value = power_target
-        }))
+        if node.mode == "MASTER" then
+          send_rt_setpoints(node, build_rt_setpoints())
+        else
+          network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
+            target = constants.command_targets.POWER_TARGET,
+            value = power_target
+          }))
+        end
       end
     end
   end
@@ -304,7 +434,13 @@ local function draw()
   local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {} }
 
   for _, node in pairs(nodes) do
-    table.insert(overview_data.nodes, { id = node.id, role = node.role, status = node.status or constants.status_levels.OFFLINE })
+    table.insert(overview_data.nodes, {
+      id = node.id,
+      role = node.role,
+      status = node.status or constants.status_levels.OFFLINE,
+      last_seen = node.last_seen_str,
+      mode = node.mode
+    })
     if node.role == constants.roles.RT_NODE then
       table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status })
     elseif node.role == constants.roles.ENERGY_NODE and node.capacity then
@@ -389,6 +525,11 @@ local function init()
   network = network_lib.init(config)
   sequencer = sequencer_lib.new(network, config.startup_ramp)
   network:broadcast(protocol.hello(network.id, network.role, { monitors = monitor_cache.list and #monitor_cache.list or 0 }))
+  local normalized_id = utils.normalize_node_id(network.id)
+  if normalized_id ~= network.id then
+    utils.log("MASTER", "WARN: normalized node_id to string")
+    network.id = normalized_id
+  end
   utils.log("MASTER", "Initialized as " .. network.id)
 end
 
@@ -420,8 +561,11 @@ local function main_loop()
       local event = { os.pullEvent() }
       if event[1] == "modem_message" then
         local _, _, _, _, message = table.unpack(event)
-        if protocol.validate(message) then
-          update_node(message)
+        local ok, err = protocol.validateMessage(message)
+        if ok then
+          update_node(protocol.sanitize_message(message))
+        else
+          warn_once("schema:" .. tostring(err), "WARN: invalid message ignored (" .. tostring(err) .. ")")
         end
       elseif event[1] == "monitor_touch" then
         handle_monitor_touch(event[2], event[3], event[4])
