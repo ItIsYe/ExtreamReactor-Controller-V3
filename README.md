@@ -41,6 +41,7 @@ Wireless Modem (Control/Status)
 ## Netzwerk-Setup
 - **Wireless Modem**: Kommunikation MASTER ↔ Nodes (Control/Status, Kanäle 6500/6501).
 - **Wired Modem**: MASTER zu Monitoren, Nodes zu lokalen Maschinen.
+- **Protokoll**: `proto_ver = 1` (bei Mismatch ignorieren Nodes/Master die Nachricht).
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
 
 ## Installation & Start
@@ -51,7 +52,8 @@ Wireless Modem (Control/Status)
    lua installer/installer.lua
    ```
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
-4. Neustart oder Start via `startup.lua` (Installer legt diese an).
+4. MASTER starten, danach Nodes starten. Nodes melden sich automatisch per REGISTER/HELLO.
+5. MASTER zeigt die Nodes automatisch an (inkl. lastSeen + Modus).
 
 ## Konfiguration & Autodetection
 - **MASTER**: `xreactor/master/config.lua`
@@ -68,10 +70,11 @@ Wireless Modem (Control/Status)
 - **SAFE**: RT-Node fährt in sicheren Zustand (Rods hoch, Turbinen aus).
 
 ## Troubleshooting
-- **Keine Verbindung**: Wireless-Modem prüfen, Kanäle 6500/6501 frei.
+- **Timeout/Offline**: Prüfe Heartbeat-Intervalle und Wireless-Reichweite.
+- **Falsche Modem-Seite**: `wireless_modem`/`wired_modem` in `config.lua` prüfen.
+- **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
 - **Peripherals fehlen**: Namen in `config.lua` prüfen, Wired-Modem korrekt angeschlossen?
 - **Node bleibt in SAFE**: Temperatur/Water-Limits prüfen, ggf. Ursache beseitigen und Modus wechseln.
-- **Sequencer wartet**: RT-Node muss ACK und STABLE melden; Modul-Status prüfen.
 
 ## Wie teste ich das System? (6 Szenarien)
 1. **RT-Node startet ohne MASTER** → läuft stabil in **AUTONOM**.

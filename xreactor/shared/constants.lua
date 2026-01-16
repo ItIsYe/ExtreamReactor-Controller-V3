@@ -9,6 +9,8 @@ constants.roles = {
   REPROCESSOR_NODE = "REPROCESSOR-NODE"
 }
 
+constants.proto_ver = 1
+
 constants.message_types = {
   HELLO = "HELLO",
   REGISTER = "REGISTER",
