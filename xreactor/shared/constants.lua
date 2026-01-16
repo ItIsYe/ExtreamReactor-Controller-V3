@@ -9,8 +9,11 @@ constants.roles = {
   REPROCESSOR_NODE = "REPROCESSOR-NODE"
 }
 
+constants.proto_ver = 1
+
 constants.message_types = {
   HELLO = "HELLO",
+  REGISTER = "REGISTER",
   HEARTBEAT = "HEARTBEAT",
   STATUS = "STATUS",
   COMMAND = "COMMAND",
@@ -42,6 +45,9 @@ constants.command_targets = {
   POWER_TARGET = "POWER_TARGET",
   STEAM_TARGET = "STEAM_TARGET",
   TURBINE_RPM = "TURBINE_RPM",
+  SET_MODE = "SET_MODE",
+  SET_SETPOINTS = "SET_SETPOINTS",
+  STARTUP_STAGE = "STARTUP_STAGE",
   SCRAM = "SCRAM",
   MODE = "MODE",
   REQUEST_STATUS = "REQUEST_STATUS",
