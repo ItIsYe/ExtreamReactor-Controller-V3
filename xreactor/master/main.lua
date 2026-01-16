@@ -49,6 +49,16 @@ local trends_lib = require("core.trends")
 local ui = require("core.ui")
 local config = require("master.config")
 
+config.rt_default_mode = config.rt_default_mode or "AUTONOM"
+config.rt_setpoints = config.rt_setpoints or {}
+config.rt_setpoints.target_rpm = config.rt_setpoints.target_rpm or 900
+if config.rt_setpoints.enable_reactors == nil then
+  config.rt_setpoints.enable_reactors = true
+end
+if config.rt_setpoints.enable_turbines == nil then
+  config.rt_setpoints.enable_turbines = true
+end
+
 local monitor_roles = {
   OVERVIEW = {},
   RT = {},
@@ -70,6 +80,48 @@ local active_profile = "BASELOAD"
 local auto_profile = profiles.AUTO_ENABLED or false
 local critical_blink_until = 0
 local trend_cache = { energy = {}, energy_arrow = "→" }
+
+local function normalize_setpoints(setpoints)
+  local payload = setpoints or {}
+  return {
+    target_rpm = payload.target_rpm,
+    power_target = payload.power_target,
+    steam_target = payload.steam_target,
+    enable_reactors = payload.enable_reactors,
+    enable_turbines = payload.enable_turbines
+  }
+end
+
+local function build_rt_setpoints()
+  return normalize_setpoints({
+    target_rpm = config.rt_setpoints.target_rpm,
+    power_target = power_target,
+    steam_target = config.rt_setpoints.steam_target,
+    enable_reactors = config.rt_setpoints.enable_reactors,
+    enable_turbines = config.rt_setpoints.enable_turbines
+  })
+end
+
+local function send_rt_mode(node, mode)
+  if not node or not mode then return end
+  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
+    target = constants.command_targets.SET_MODE or constants.command_targets.MODE,
+    value = mode
+  }))
+  node.last_mode_request = os.epoch("utc")
+  node.desired_mode = mode
+end
+
+local function send_rt_setpoints(node, setpoints)
+  if not node then return end
+  local payload = normalize_setpoints(setpoints)
+  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
+    target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET,
+    value = payload
+  }))
+  node.last_setpoints = payload
+  node.last_setpoints_ts = os.epoch("utc")
+end
 
 local function discover_monitors()
   local names = {}
@@ -140,21 +192,57 @@ local function add_alarm(sender, severity, message)
   end
 end
 
+local function set_default_mode(node)
+  if not node.desired_mode then
+    node.desired_mode = config.rt_default_mode
+  end
+end
+
+local function same_setpoints(a, b)
+  if not a or not b then return false end
+  return a.target_rpm == b.target_rpm
+    and a.power_target == b.power_target
+    and a.steam_target == b.steam_target
+    and a.enable_reactors == b.enable_reactors
+    and a.enable_turbines == b.enable_turbines
+end
+
+local function sync_rt_node(node)
+  if not node or node.role ~= constants.roles.RT_NODE then return end
+  set_default_mode(node)
+  local now = os.epoch("utc")
+  if node.desired_mode and node.mode ~= node.desired_mode then
+    if not node.last_mode_request or now - node.last_mode_request > 5000 then
+      send_rt_mode(node, node.desired_mode)
+    end
+    return
+  end
+  if node.mode == "MASTER" then
+    local desired = build_rt_setpoints()
+    if not node.last_setpoints or not same_setpoints(node.last_setpoints, desired) then
+      send_rt_setpoints(node, desired)
+    end
+  end
+end
+
 local function update_node(message)
   local id = message.sender_id
   nodes[id] = nodes[id] or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
   nodes[id].last_seen = os.epoch("utc")
-  if message.type == constants.message_types.HELLO then
+  if message.type == constants.message_types.HELLO or message.type == constants.message_types.REGISTER then
     nodes[id].status = constants.status_levels.OK
     nodes[id].state = constants.node_states.OFF
     if message.role == constants.roles.RT_NODE then
       sequencer:enqueue(id)
     end
+    sync_rt_node(nodes[id])
   elseif message.type == constants.message_types.HEARTBEAT then
     nodes[id].state = message.payload.state
+    sync_rt_node(nodes[id])
   elseif message.type == constants.message_types.STATUS then
     nodes[id] = utils.merge(nodes[id], message.payload)
     nodes[id].status = message.payload.status or nodes[id].status
+    nodes[id].mode = message.payload.mode or nodes[id].mode
     if sequencer.active and sequencer.active.node_id == id then
       if message.payload.modules then
         local module = message.payload.modules[sequencer.active.module_id]
@@ -171,6 +259,7 @@ local function update_node(message)
         sequencer:notify_stable(id, sequencer.active.module_id, nodes[id].state)
       end
     end
+    sync_rt_node(nodes[id])
   elseif message.type == constants.message_types.ACK then
     sequencer:notify_ack(id, message.payload and message.payload.module_id)
   elseif message.type == constants.message_types.ALERT then
@@ -208,10 +297,14 @@ local function apply_profile(name)
     power_target = base * profile.target
     for _, node in pairs(nodes) do
       if node.role == constants.roles.RT_NODE then
-        network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
-          target = constants.command_targets.POWER_TARGET,
-          value = power_target
-        }))
+        if node.mode == "MASTER" then
+          send_rt_setpoints(node, build_rt_setpoints())
+        else
+          network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
+            target = constants.command_targets.POWER_TARGET,
+            value = power_target
+          }))
+        end
       end
     end
   end
