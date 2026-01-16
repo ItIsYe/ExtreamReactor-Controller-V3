@@ -1,8 +1,9 @@
 return {
   version = 1,
+  hash_algo = "sumlen-v1",
   installer_min_version = "1.1",
   installer_path = "xreactor/installer/installer.lua",
-  installer_hash = "2100275:25267",
+  installer_hash = "2243870:26919",
   files = {
     ["xreactor/core/network.lua"] = "264972:3241",
     ["xreactor/core/trends.lua"] = "147554:1791",
@@ -31,6 +32,7 @@ return {
     ["xreactor/master/ui/overview.lua"] = "341127:4222",
     ["xreactor/master/ui/energy.lua"] = "112049:1365",
     ["xreactor/shared/colors.lua"] = "27639:332",
-    ["xreactor/shared/constants.lua"] = "89267:1318"
+    ["xreactor/shared/constants.lua"] = "89267:1318",
+    ["xreactor/installer/release.lua"] = "11805:149"
   }
 }

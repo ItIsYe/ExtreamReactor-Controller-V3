@@ -1,5 +1,6 @@
 local BASE_DIR = "/xreactor"
-local REPO_BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main"
+local REPO_BASE_URL_MAIN = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main"
+local RELEASE_REMOTE = "xreactor/installer/release.lua"
 local MANIFEST_REMOTE = "xreactor/installer/manifest.lua"
 local MANIFEST_LOCAL = BASE_DIR .. "/.manifest"
 local BACKUP_BASE = "/xreactor_backup"
@@ -82,6 +83,13 @@ local function checksum(content)
   return tostring(sum) .. ":" .. tostring(#content)
 end
 
+local function validate_hash_algo(manifest, release)
+  local algo = manifest.hash_algo or release.hash_algo
+  if algo ~= "sumlen-v1" then
+    error("Unsupported hash algo: " .. tostring(algo))
+  end
+end
+
 local function file_checksum(path)
   local content = read_file(path)
   if not content then return nil end
@@ -157,8 +165,8 @@ local function merge_defaults(target, defaults)
   return changed
 end
 
-local function download_content(remote_path)
-  local url = string.format("%s/%s", REPO_BASE_URL, remote_path)
+local function download_content(base_url, remote_path)
+  local url = string.format("%s/%s", base_url, remote_path)
   local response = http.get(url)
   if not response then
     error("Failed to download " .. url)
@@ -177,8 +185,8 @@ local function is_html_payload(content)
   return false
 end
 
-local function download_content_checked(remote_path)
-  local url = string.format("%s/%s", REPO_BASE_URL, remote_path)
+local function download_content_checked(base_url, remote_path)
+  local url = string.format("%s/%s", base_url, remote_path)
   local response = http.get(url)
   if not response then
     return nil, { url = url, code = nil, html = false, message = "request failed" }
@@ -192,8 +200,34 @@ local function download_content_checked(remote_path)
   end
   return content, { url = url, code = code, html = html }
 end
+
+local function download_release()
+  local content, meta = download_content_checked(REPO_BASE_URL_MAIN, RELEASE_REMOTE)
+  if not content then
+    error("Release download failed")
+  end
+  local loader = load(content, "release", "t", {})
+  if not loader then
+    error("Release load failed")
+  end
+  local ok, data = pcall(loader)
+  if not ok or type(data) ~= "table" then
+    error("Release parse failed")
+  end
+  if type(data.commit_sha) ~= "string" then
+    error("Release missing commit_sha")
+  end
+  if type(data.hash_algo) ~= "string" then
+    error("Release missing hash_algo")
+  end
+  data.manifest_path = data.manifest_path or MANIFEST_REMOTE
+  return data
+end
+
 local function download_manifest()
-  local content, meta = download_content_checked(MANIFEST_REMOTE)
+  local release = download_release()
+  local base_url = ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha)
+  local content, meta = download_content_checked(base_url, release.manifest_path)
   if not content then
     error("Manifest download failed")
   end
@@ -205,7 +239,8 @@ local function download_manifest()
   if not ok or type(data) ~= "table" or type(data.files) ~= "table" then
     error("Manifest parse failed")
   end
-  return content, data
+  validate_hash_algo(data, release)
+  return content, data, release, base_url
 end
 
 local function ensure_base_dirs()
@@ -483,11 +518,11 @@ local function build_staging_path(path)
   return UPDATE_STAGING .. "/" .. path
 end
 
-local function stage_updates(entries)
+local function stage_updates(entries, base_url)
   ensure_dir(UPDATE_STAGING)
   local staged = {}
   for _, entry in ipairs(entries) do
-    local content, meta = download_content_checked(entry.path)
+    local content, meta = download_content_checked(base_url, entry.path)
     if not content then
       return nil, ("Download failed for %s (url=%s code=%s html=%s)"):format(
         entry.path,
@@ -498,7 +533,7 @@ local function stage_updates(entries)
     end
     local actual = checksum(content)
     if actual ~= entry.hash then
-      local retry_content, retry_meta = download_content_checked(entry.path)
+      local retry_content, retry_meta = download_content_checked(base_url, entry.path)
       if retry_content then
         content = retry_content
         actual = checksum(content)
@@ -548,7 +583,7 @@ local function apply_staged(entries, staged, created)
   return true
 end
 
-local function update_installer_if_required(manifest)
+local function update_installer_if_required(manifest, base_url)
   local required = manifest.installer_min_version
   if required and compare_version(INSTALLER_VERSION, required) < 0 then
     print("Installer update required.")
@@ -562,7 +597,7 @@ local function update_installer_if_required(manifest)
       print("SAFE UPDATE aborted: installer hash missing.")
       return false
     end
-    local content, meta = download_content_checked(installer_path)
+    local content, meta = download_content_checked(base_url, installer_path)
     if not content then
       print(("SAFE UPDATE aborted: installer download failed (url=%s code=%s html=%s)"):format(
         tostring(meta.url),
@@ -582,13 +617,13 @@ local function update_installer_if_required(manifest)
   return true
 end
 
-local function migrate_config(role, cfg_path, manifest)
+local function migrate_config(role, cfg_path, manifest, base_url)
   local remote_path = "xreactor/" .. role_targets[role].config
   local expected_hash = manifest.files[remote_path]
   if not expected_hash then
     return false
   end
-  local content, meta = download_content_checked(remote_path)
+  local content, meta = download_content_checked(base_url, remote_path)
   if not content then
     error(("Config download failed (url=%s code=%s html=%s)"):format(
       tostring(meta.url),
@@ -649,10 +684,10 @@ local function safe_update()
     return
   end
 
-  local manifest_content, manifest = download_manifest()
+  local manifest_content, manifest, release, base_url = download_manifest()
   ensure_base_dirs()
 
-  local can_continue = update_installer_if_required(manifest)
+  local can_continue = update_installer_if_required(manifest, base_url)
   if not can_continue then
     return
   end
@@ -661,12 +696,43 @@ local function safe_update()
   if not node_ok then
     return
   end
+  if wireless and wired == wireless then
+    wired = nil
+  end
+
+  if role == roles.RT_NODE then
+    local label = build_rt_node_id()
+    os.setComputerLabel(label)
+  end
+
+  if role == roles.MASTER then
+    extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
+  elseif role == roles.RT_NODE then
+    local detected = scan_peripherals()
+    extras.modem = wireless
+    local use_detected = #detected.reactors > 0
+    if use_detected then
+      print_detected("Detected Reactors", detected.reactors)
+      print_detected("Detected Turbines", detected.turbines)
+      print_detected("Detected Modems", detected.modems)
+      use_detected = prompt_use_detected()
+    else
+      print("Warning: No reactors detected. Switching to manual entry.")
+    end
 
   local updates = update_files(manifest)
-  local staged, stage_err = stage_updates(updates)
+  local staged, stage_err = stage_updates(updates, base_url)
   if not staged then
-    print("SAFE UPDATE failed. Error: " .. tostring(stage_err))
-    return
+    local retry_release = download_release()
+    if retry_release.commit_sha ~= release.commit_sha then
+      manifest_content, manifest, release, base_url = download_manifest()
+      updates = update_files(manifest)
+      staged, stage_err = stage_updates(updates, base_url)
+    end
+    if not staged then
+      print("SAFE UPDATE failed. Error: " .. tostring(stage_err))
+      return
+    end
   end
   local backup_dir = create_backup_dir()
   local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL }
@@ -687,7 +753,7 @@ local function safe_update()
 
   local migrated = false
   if ok then
-    local success, result = pcall(migrate_config, role, cfg_path, manifest)
+    local success, result = pcall(migrate_config, role, cfg_path, manifest, base_url)
     if success then
       migrated = result
     else
@@ -735,7 +801,7 @@ local function safe_update()
 end
 
 local function full_reinstall()
-  local manifest_content, manifest = download_manifest()
+  local manifest_content, manifest, release, base_url = download_manifest()
   ensure_base_dirs()
   local updates = {}
   for path in pairs(manifest.files) do
@@ -743,7 +809,7 @@ local function full_reinstall()
   end
   table.sort(updates)
   for _, path in ipairs(updates) do
-    local content, meta = download_content_checked(path)
+    local content, meta = download_content_checked(base_url, path)
     if not content then
       error(("Download failed for %s (url=%s code=%s html=%s)"):format(
         path,
@@ -759,7 +825,7 @@ local function full_reinstall()
     write_atomic("/" .. path, content)
   end
   if manifest.installer_path and manifest.installer_hash then
-    local content, meta = download_content_checked(manifest.installer_path)
+    local content, meta = download_content_checked(base_url, manifest.installer_path)
     if not content then
       error(("Installer download failed (url=%s code=%s html=%s)"):format(
         tostring(meta.url),

@@ -61,6 +61,7 @@ Wireless Modem (Control/Status)
 - Bei Fehler: automatischer Rollback aus dem Backup.
 - Der Installer selbst wird nur aktualisiert, wenn `installer_min_version` dies verlangt.
 - SAFE UPDATE lädt Dateien erst in ein Staging-Verzeichnis, prüft Hashes, und aktualisiert erst nach erfolgreicher Verifikation (mit einmaligem Retry bei Fehlern).
+- Updates sind commit-gepinnt (Manifest + Dateien kommen aus derselben Commit-SHA), um Hash-Mismatches durch parallele Änderungen zu verhindern.
 
 **FULL REINSTALL (alles neu)**
 - Installer erneut ausführen → Menü **FULL REINSTALL** wählen.
