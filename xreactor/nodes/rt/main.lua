@@ -109,7 +109,7 @@ local hb = config.heartbeat_interval
 
 local network
 local peripherals = {}
-local targets = { power = 0, steam = 0, rpm = 0 }
+local targets = { power = 0, steam = 0, rpm = TARGET_RPM, enable_reactors = true, enable_turbines = true }
 local modules = {}
 local active_startup = nil
 local startup_queue = {}
@@ -117,7 +117,6 @@ local master_seen = os.epoch("utc")
 local last_heartbeat = 0
 local last_reactor_tick = 0
 local last_reactor_debug_log = 0
-local mode = constants.roles.MASTER
 local status_snapshot = nil
 local last_snapshot = 0
 local monitor = nil
@@ -151,6 +150,13 @@ local TURBINE_MODE = {
   RAMP = "RAMP",
   REGULATE = "REGULATE"
 }
+
+local function get_target_rpm()
+  if current_state == STATE.MASTER and type(targets.rpm) == "number" and targets.rpm > 0 then
+    return targets.rpm
+  end
+  return TARGET_RPM
+end
 
 local function clamp_turbine_flow(rate)
   if type(rate) ~= "number" then
@@ -670,7 +676,7 @@ local function updateActuators()
     end
   end
 
-  local target_rpm = TARGET_RPM
+  local target_rpm = get_target_rpm()
   for name, ctrl in pairs(turbine_ctrl) do
     local turbine
     if peripheral.isPresent(name) then
@@ -761,7 +767,7 @@ local function updateControl()
     end
   end
 
-  local target_rpm = TARGET_RPM
+  local target_rpm = get_target_rpm()
   for name, ctrl in pairs(turbine_ctrl) do
     local ok, turbine = pcall(peripheral.wrap, name)
     if ok and turbine then
@@ -850,6 +856,26 @@ local function setState(new_state)
     log("INFO", "Entering INIT mode")
   end
   return true
+end
+
+local function apply_mode(mode)
+  if mode == STATE.AUTONOM then
+    if setState(STATE.AUTONOM) then
+      node_state_machine:transition(constants.node_states.AUTONOM)
+    end
+  elseif mode == STATE.MASTER then
+    if setState(STATE.MASTER) then
+      local current = node_state_machine.state()
+      if current == constants.node_states.OFF or current == constants.node_states.AUTONOM then
+        node_state_machine:transition(constants.node_states.RUNNING)
+      end
+    end
+  elseif mode == STATE.SAFE then
+    setState(STATE.SAFE)
+    if node_state_machine.state() ~= constants.node_states.EMERGENCY then
+      node_state_machine:transition(constants.node_states.EMERGENCY)
+    end
+  end
 end
 
 local function cache()
@@ -947,7 +973,7 @@ end
 
 local function hello()
   local caps = { reactors = #config.reactors, turbines = #config.turbines }
-  network:broadcast(protocol.hello(network.id, network.role, caps))
+  network:broadcast(protocol.register(network.id, network.role, caps))
 end
 
 set_reactors_active = function(active)
@@ -1025,7 +1051,8 @@ local function update_module_limits(module)
   local limits = {}
   if module.type == "turbine" then
     local rpm = module.peripheral and module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
-    if TARGET_RPM > 0 and rpm > 0 and rpm < TARGET_RPM * 0.7 then
+    local target_rpm = get_target_rpm()
+    if target_rpm > 0 and rpm > 0 and rpm < target_rpm * 0.7 then
       table.insert(limits, "RPM")
     end
   elseif module.type == "reactor" then
@@ -1042,6 +1069,11 @@ local function update_module_limits(module)
 end
 
 local function adjust_reactors()
+  if current_state == STATE.MASTER and targets.enable_reactors == false then
+    applyReactorRods(100, true)
+    set_reactors_active(false)
+    return
+  end
   local active = 0
   for _, module in pairs(modules) do
     if module.type == "reactor" and module.peripheral and module.state ~= "OFF" and module.state ~= "ERROR" then
@@ -1099,7 +1131,11 @@ local function adjust_reactors()
 end
 
 local function adjust_turbines()
-  local target_rpm = TARGET_RPM
+  if current_state == STATE.MASTER and targets.enable_turbines == false then
+    set_turbines_active(false)
+    return
+  end
+  local target_rpm = get_target_rpm()
   for _, module in pairs(modules) do
     if module.type == "turbine" and module.peripheral then
       if module.state == "OFF" or module.state == "ERROR" then
@@ -1284,7 +1320,7 @@ local function process_startup()
       return
     end
     if module.caps and (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
-      local target_rpm = TARGET_RPM
+      local target_rpm = get_target_rpm()
       local ctrl = get_turbine_ctrl(module.name)
       local flow, mode = update_turbine_flow_state(rpm, target_rpm, ctrl)
       local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, ctrl.flow)
@@ -1310,7 +1346,7 @@ local function process_startup()
       end
       log("DEBUG", "Turbine " .. module.name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " mode=" .. tostring(mode))
     end
-    local target_rpm = TARGET_RPM
+    local target_rpm = get_target_rpm()
     rpm = rpm or 0
     if target_rpm > 0 then
       module.progress = safety.clamp(rpm / target_rpm, 0, 1)
@@ -1403,11 +1439,6 @@ end
 
 local function note_master_seen()
   master_seen = os.epoch("utc")
-  if setState(STATE.MASTER) then
-    if node_state_machine.state() == constants.node_states.AUTONOM then
-      node_state_machine:transition(constants.node_states.RUNNING)
-    end
-  end
 end
 
 local function update_status_snapshot()
@@ -1448,6 +1479,70 @@ local function update_status_snapshot()
   local avg_temp = temp_count > 0 and (temp_sum / temp_count) or 0
   local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
   local master_connected = (os.epoch("utc") - master_seen) <= hb * 5000
+  local turbine_details = {}
+  for _, name in ipairs(config.turbines) do
+    local turbine = peripherals.turbines[name]
+    local ctrl = get_turbine_ctrl(name)
+    local rpm = nil
+    local active = nil
+    local coil = ctrl.inductor_engaged
+    if turbine and turbine.getRotorSpeed then
+      local ok, value = pcall(turbine.getRotorSpeed)
+      if ok and type(value) == "number" then
+        rpm = value
+      end
+    end
+    if turbine and turbine.getActive then
+      local ok, value = pcall(turbine.getActive)
+      if ok then
+        active = value
+      end
+    end
+    if turbine and turbine.getInductorEngaged then
+      local ok, value = pcall(turbine.getInductorEngaged)
+      if ok then
+        coil = value
+      end
+    end
+    turbine_details[name] = {
+      rpm = rpm,
+      flow = ctrl.flow,
+      coil = coil,
+      mode = ctrl.mode,
+      active = active
+    }
+  end
+
+  local reactor_details = {}
+  for _, name in ipairs(config.reactors) do
+    local reactor = peripherals.reactors[name]
+    local rods = nil
+    local temp = nil
+    local active = nil
+    if reactor and reactor.getControlRodLevel then
+      local ok, value = pcall(reactor.getControlRodLevel, 0)
+      if ok and type(value) == "number" then
+        rods = value
+      end
+    end
+    if reactor and reactor.getCasingTemperature then
+      local ok, value = pcall(reactor.getCasingTemperature)
+      if ok and type(value) == "number" then
+        temp = value
+      end
+    end
+    if reactor and reactor.getActive then
+      local ok, value = pcall(reactor.getActive)
+      if ok then
+        active = value
+      end
+    end
+    reactor_details[name] = {
+      rods = rods,
+      temp = temp,
+      active = active
+    }
+  end
 
   status_snapshot = {
     node_id = network and network.id or config.role,
@@ -1458,6 +1553,8 @@ local function update_status_snapshot()
     avg_temp = avg_temp,
     max_temp = temp_max,
     avg_rpm = avg_rpm,
+    turbines = turbine_details,
+    reactors = reactor_details,
     timestamp = now
   }
 
@@ -1496,7 +1593,7 @@ local function update_monitor()
     "Reactors: " .. tostring(#config.reactors),
     "Turbines: " .. tostring(#config.turbines),
     string.format("Avg Temp: %.1f", avg_temp),
-    "Target RPM: " .. tostring(TARGET_RPM)
+    "Target RPM: " .. tostring(get_target_rpm())
   }
   pcall(monitor.setBackgroundColor, colors.black)
   pcall(monitor.setTextColor, colors.white)
@@ -1600,29 +1697,53 @@ local function handle_command(message)
     network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "safe: ignoring commands"))
     return
   end
-  local was_autonom = current_state == STATE.AUTONOM
   note_master_seen()
-  if was_autonom then
-    if command.target == constants.command_targets.POWER_TARGET
-      or command.target == constants.command_targets.STEAM_TARGET
-      or command.target == constants.command_targets.TURBINE_RPM
-      or command.target == constants.command_targets.REQUEST_STARTUP_MODULE
-      or command.target == constants.command_targets.MODE then
-      network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "autonom: holding safe targets"))
+  if command.target == constants.command_targets.SET_MODE then
+    local desired = command.value
+    apply_mode(desired)
+  elseif command.target == constants.command_targets.SET_SETPOINTS then
+    if current_state ~= STATE.MASTER then
+      network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "autonom: ignoring setpoints"))
       return
     end
-  end
-  if command.target == constants.command_targets.POWER_TARGET then
-    targets.power = command.value
+    local value = command.value or {}
+    if type(value.target_rpm) == "number" then
+      targets.rpm = value.target_rpm
+    end
+    if type(value.power_target) == "number" then
+      targets.power = value.power_target
+    end
+    if type(value.steam_target) == "number" then
+      targets.steam = value.steam_target
+    end
+    if value.enable_reactors ~= nil then
+      targets.enable_reactors = value.enable_reactors and true or false
+    end
+    if value.enable_turbines ~= nil then
+      targets.enable_turbines = value.enable_turbines and true or false
+    end
+  elseif command.target == constants.command_targets.POWER_TARGET then
+    if current_state == STATE.MASTER then
+      targets.power = command.value
+    end
   elseif command.target == constants.command_targets.STEAM_TARGET then
-    targets.steam = command.value
+    if current_state == STATE.MASTER then
+      targets.steam = command.value
+    end
   elseif command.target == constants.command_targets.TURBINE_RPM then
-    targets.rpm = TARGET_RPM
+    if current_state == STATE.MASTER then
+      targets.rpm = command.value or TARGET_RPM
+    end
   elseif command.target == constants.command_targets.MODE then
-    if states[command.value] then
+    if current_state == STATE.MASTER and states[command.value] then
       node_state_machine:transition(command.value)
     end
-  elseif command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
+  elseif command.target == constants.command_targets.STARTUP_STAGE
+    or command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
+    if current_state ~= STATE.MASTER then
+      network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "autonom: ignoring startup"))
+      return
+    end
     local value = command.value or {}
     local module, detail = start_module(value.module_id, value.module_type, value.ramp_profile)
     if not module then
@@ -1633,10 +1754,7 @@ local function handle_command(message)
     network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, detail or "ack", module.id))
     return
   elseif command.target == constants.command_targets.SCRAM then
-    setState(STATE.SAFE)
-    if node_state_machine.state() ~= constants.node_states.EMERGENCY then
-      node_state_machine:transition(constants.node_states.EMERGENCY)
-    end
+    apply_mode(STATE.SAFE)
   end
   network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "ack"))
 end
@@ -1662,7 +1780,8 @@ local function mainEventLoop()
     if message then
       if message.type == constants.message_types.COMMAND then
         handle_command(message)
-      elseif message.type == constants.message_types.HELLO then
+      elseif message.type == constants.message_types.HELLO
+        or message.type == constants.message_types.REGISTER then
         note_master_seen()
       end
     end
@@ -1686,6 +1805,7 @@ local function init()
   apply_initial_reactor_rods()
   network = network_lib.init(config)
   node_state_machine = machine.new(states, constants.node_states.OFF)
+  apply_mode(STATE.AUTONOM)
   init_monitor()
   hello()
   send_heartbeat()
@@ -1693,12 +1813,4 @@ local function init()
 end
 
 init()
-parallel.waitForAny(
-  function()
-    while true do
-      updateControl()
-      sleep(1)
-    end
-  end,
-  mainEventLoop
-)
+mainEventLoop()

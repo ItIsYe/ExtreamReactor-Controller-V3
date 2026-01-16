@@ -17,6 +17,10 @@ function protocol.hello(sender_id, role, capabilities)
   return base_message(constants.message_types.HELLO, sender_id, role, { capabilities = capabilities })
 end
 
+function protocol.register(sender_id, role, capabilities)
+  return base_message(constants.message_types.REGISTER, sender_id, role, { capabilities = capabilities })
+end
+
 function protocol.heartbeat(sender_id, role, state)
   return base_message(constants.message_types.HEARTBEAT, sender_id, role, { state = state })
 end

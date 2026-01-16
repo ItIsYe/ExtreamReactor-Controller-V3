@@ -60,7 +60,7 @@ function sequencer.new(network, ramp_profile)
       end
       self.active = table.remove(self.queue, 1)
       local payload = {
-        target = constants.command_targets.REQUEST_STARTUP_MODULE,
+        target = constants.command_targets.STARTUP_STAGE or constants.command_targets.REQUEST_STARTUP_MODULE,
         value = {
           module_id = self.active.module_id,
           module_type = self.active.module_type,
