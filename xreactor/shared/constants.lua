@@ -9,7 +9,7 @@ constants.roles = {
   REPROCESSOR_NODE = "REPROCESSOR-NODE"
 }
 
-constants.proto_ver = 1
+constants.proto_ver = { major = 1, minor = 0 }
 
 constants.message_types = {
   HELLO = "HELLO",

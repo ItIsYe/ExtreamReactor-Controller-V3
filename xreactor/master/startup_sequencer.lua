@@ -34,7 +34,8 @@ function sequencer.new(network, ramp_profile)
   }
 
   function self.enqueue(node_id)
-    table.insert(self.queue, { node_id = node_id })
+    local normalized = utils.normalize_node_id(node_id)
+    table.insert(self.queue, { node_id = normalized })
   end
 
   function self.build_steps(nodes)
@@ -67,9 +68,10 @@ function sequencer.new(network, ramp_profile)
           ramp_profile = self.ramp_profile
         }
       }
-      network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, self.active.node_id, payload))
+      local safe_node_id = utils.normalize_node_id(self.active and self.active.node_id)
+      network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, safe_node_id, payload))
       self.state = states.waiting_ack
-      utils.log("SEQ", "Request startup " .. self.active.module_id .. " on " .. self.active.node_id)
+      utils.log("SEQ", "Request startup " .. tostring(self.active.module_id) .. " on " .. safe_node_id)
     elseif self.state == states.waiting_ack then
       -- wait
     elseif self.state == states.waiting_stable then
@@ -78,13 +80,15 @@ function sequencer.new(network, ramp_profile)
   end
 
   function self.notify_ack(node_id, module_id)
-    if self.active and self.active.node_id == node_id and self.active.module_id == module_id then
+    local safe_node_id = utils.normalize_node_id(node_id)
+    if self.active and self.active.node_id == safe_node_id and self.active.module_id == module_id then
       self.state = states.waiting_stable
     end
   end
 
   function self.notify_stable(node_id, module_id, state)
-    if self.active and self.active.node_id == node_id and self.active.module_id == module_id then
+    local safe_node_id = utils.normalize_node_id(node_id)
+    if self.active and self.active.node_id == safe_node_id and self.active.module_id == module_id then
       utils.log("SEQ", ("Startup step complete: %s (%s)"):format(module_id, state or "UNKNOWN"))
       self.active = nil
       self.state = states.idle

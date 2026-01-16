@@ -1804,6 +1804,11 @@ local function init()
   set_turbines_active(true)
   apply_initial_reactor_rods()
   network = network_lib.init(config)
+  local normalized_id = utils.normalize_node_id(network.id)
+  if normalized_id ~= network.id then
+    log("WARN", "Normalized node_id to string")
+    network.id = normalized_id
+  end
   node_state_machine = machine.new(states, constants.node_states.OFF)
   apply_mode(STATE.AUTONOM)
   init_monitor()

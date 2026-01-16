@@ -12,8 +12,14 @@ local function warn_once(key, message)
 end
 
 local function resolve_node_id(config)
-  if config.node_id and type(config.node_id) == "string" then
-    return config.node_id
+  if config.node_id then
+    local normalized = utils.normalize_node_id(config.node_id)
+    if normalized ~= "UNKNOWN" then
+      if type(config.node_id) ~= "string" then
+        warn_once("node_id.normalize", "WARN: normalized node_id to string")
+      end
+      return normalized
+    end
   end
   local path = "/xreactor/config/node_id.txt"
   if fs.exists(path) then

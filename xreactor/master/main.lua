@@ -112,7 +112,7 @@ end
 
 local function send_rt_mode(node, mode)
   if not node or not mode then return end
-  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
+  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, utils.normalize_node_id(node.id), {
     target = constants.command_targets.SET_MODE or constants.command_targets.MODE,
     value = mode
   }))
@@ -123,7 +123,7 @@ end
 local function send_rt_setpoints(node, setpoints)
   if not node then return end
   local payload = normalize_setpoints(setpoints)
-  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
+  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, utils.normalize_node_id(node.id), {
     target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET,
     value = payload
   }))
@@ -241,9 +241,18 @@ local function sync_rt_node(node)
 end
 
 local function update_node(message)
-  local id = message.sender_id
+  local id = utils.normalize_node_id(message.sender_id)
   local existing = nodes[id]
   nodes[id] = existing or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
+  if nodes[id].id ~= id then
+    nodes[id].id = id
+  end
+  if message.node_id then
+    local normalized = utils.normalize_node_id(message.node_id)
+    if normalized ~= "UNKNOWN" then
+      nodes[id].node_id = normalized
+    end
+  end
   nodes[id].last_seen = os.epoch("utc")
   nodes[id].last_seen_str = textutils.formatTime(os.time(), true)
   nodes[id].proto_ver = message.proto_ver
@@ -516,6 +525,11 @@ local function init()
   network = network_lib.init(config)
   sequencer = sequencer_lib.new(network, config.startup_ramp)
   network:broadcast(protocol.hello(network.id, network.role, { monitors = monitor_cache.list and #monitor_cache.list or 0 }))
+  local normalized_id = utils.normalize_node_id(network.id)
+  if normalized_id ~= network.id then
+    utils.log("MASTER", "WARN: normalized node_id to string")
+    network.id = normalized_id
+  end
   utils.log("MASTER", "Initialized as " .. network.id)
 end
 

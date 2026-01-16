@@ -41,7 +41,8 @@ Wireless Modem (Control/Status)
 ## Netzwerk-Setup
 - **Wireless Modem**: Kommunikation MASTER ↔ Nodes (Control/Status, Kanäle 6500/6501).
 - **Wired Modem**: MASTER zu Monitoren, Nodes zu lokalen Maschinen.
-- **Protokoll**: `proto_ver = 1` (bei Mismatch ignorieren Nodes/Master die Nachricht).
+- **Protokoll**: `proto_ver = 1.0` (bei Mismatch ignorieren Nodes/Master die Nachricht).
+- **Protokoll-Versionierung**: `proto_ver` nutzt `major.minor` (z. B. `1.0`). Gleiche Major-Versionen sind kompatibel, Minor-Abweichungen werden toleriert.
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
 
 ## Installation, Safe Update & Full Reinstall
@@ -73,7 +74,7 @@ Wireless Modem (Control/Status)
   - `wireless_modem`, `wired_modem`: Modem-Seiten.
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
 - **Persistenz**:
-  - `node_id`: `/xreactor/config/node_id.txt`
+  - `node_id`: `/xreactor/config/node_id.txt` (immer String)
   - Manifest: `/xreactor/.manifest`
 
 ## Betrieb (Modi)
@@ -85,6 +86,7 @@ Wireless Modem (Control/Status)
 - **Timeout/Offline**: Prüfe Heartbeat-Intervalle und Wireless-Reichweite.
 - **Falsche Modem-Seite**: `wireless_modem`/`wired_modem` in `config.lua` prüfen.
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
+- **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
 - **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien).
 - **SAFE UPDATE Abbruch**: Wenn keine sichere node_id-Recovery möglich ist, wird SAFE UPDATE abgebrochen, ohne Änderungen zu übernehmen.
