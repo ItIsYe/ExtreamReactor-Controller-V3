@@ -167,7 +167,11 @@ local function refresh_monitors(force)
   if not force and now - monitor_scan_last < 5000 then return end
   monitor_scan_last = now
   local monitors = discover_monitors()
-  local signature = textutils.serialize(monitors)
+  local signature_parts = {}
+  for _, entry in ipairs(monitors) do
+    table.insert(signature_parts, entry.name)
+  end
+  local signature = table.concat(signature_parts, "|")
   if monitor_cache.signature ~= signature or force then
     monitor_cache = { list = monitors, signature = signature }
     assign_roles(monitors)
