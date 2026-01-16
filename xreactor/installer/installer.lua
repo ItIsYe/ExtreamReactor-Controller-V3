@@ -4,6 +4,8 @@ local MANIFEST_REMOTE = "xreactor/installer/manifest.lua"
 local MANIFEST_LOCAL = BASE_DIR .. "/.manifest"
 local BACKUP_BASE = "/xreactor_backup"
 local NODE_ID_PATH = BASE_DIR .. "/config/node_id.txt"
+local UPDATE_STAGING = "/xreactor_update_tmp"
+local INSTALLER_VERSION = "1.1"
 
 local roles = {
   MASTER = "MASTER",
@@ -59,6 +61,11 @@ local function write_atomic(path, content)
   fs.move(tmp, path)
 end
 
+local function normalize_newlines(content)
+  if not content then return "" end
+  return content:gsub("\r\n", "\n")
+end
+
 local function copy_file(src, dst)
   local content = read_file(src)
   if content == nil then return false end
@@ -67,6 +74,7 @@ local function copy_file(src, dst)
 end
 
 local function checksum(content)
+  content = normalize_newlines(content)
   local sum = 0
   for i = 1, #content do
     sum = (sum + string.byte(content, i)) % 1000000007
@@ -78,6 +86,19 @@ local function file_checksum(path)
   local content = read_file(path)
   if not content then return nil end
   return checksum(content)
+end
+
+local function compare_version(a, b)
+  local function parse(version)
+    local major, minor = tostring(version or "0"):match("^(%d+)%.?(%d*)$")
+    return tonumber(major) or 0, tonumber(minor) or 0
+  end
+  local a_major, a_minor = parse(a)
+  local b_major, b_minor = parse(b)
+  if a_major ~= b_major then
+    return a_major - b_major
+  end
+  return a_minor - b_minor
 end
 
 local function read_config(path, defaults)
@@ -431,6 +452,82 @@ local function update_files(manifest)
   return updates
 end
 
+local function build_staging_path(path)
+  return UPDATE_STAGING .. "/" .. path
+end
+
+local function stage_updates(entries)
+  ensure_dir(UPDATE_STAGING)
+  local staged = {}
+  for _, entry in ipairs(entries) do
+    local content
+    local success, result = pcall(download_content, entry.path)
+    if success then
+      content = result
+    else
+      return nil, result
+    end
+    if checksum(content) ~= entry.hash then
+      local retry_ok, retry_content = pcall(download_content, entry.path)
+      if retry_ok then
+        content = retry_content
+      end
+      if checksum(content) ~= entry.hash then
+        return nil, "Checksum mismatch for " .. entry.path
+      end
+    end
+    local staging_path = build_staging_path(entry.path)
+    write_atomic(staging_path, content)
+    staged[entry.path] = staging_path
+  end
+  return staged
+end
+
+local function apply_staged(entries, staged, created)
+  for _, entry in ipairs(entries) do
+    local target_path = "/" .. entry.path
+    local staging_path = staged[entry.path]
+    local content = read_file(staging_path)
+    if content == nil then
+      return false, "Missing staged file for " .. entry.path
+    end
+    if not fs.exists(target_path) then
+      table.insert(created, target_path)
+    end
+    local write_ok, write_err = pcall(write_atomic, target_path, content)
+    if not write_ok then
+      return false, write_err
+    end
+  end
+  return true
+end
+
+local function update_installer_if_required(manifest)
+  local required = manifest.installer_min_version
+  if required and compare_version(INSTALLER_VERSION, required) < 0 then
+    print("Installer update required.")
+    if not confirm("Update installer now?", true) then
+      print("SAFE UPDATE aborted: installer update required.")
+      return false
+    end
+    local installer_path = manifest.installer_path or "xreactor/installer/installer.lua"
+    local expected = manifest.installer_hash
+    if not expected then
+      print("SAFE UPDATE aborted: installer hash missing.")
+      return false
+    end
+    local content = download_content(installer_path)
+    if checksum(content) ~= expected then
+      print("SAFE UPDATE aborted: installer checksum mismatch.")
+      return false
+    end
+    write_atomic("/" .. installer_path, content)
+    print("Installer updated. Please re-run installer.")
+    return false
+  end
+  return true
+end
+
 local function migrate_config(role, cfg_path, manifest)
   local remote_path = "xreactor/" .. role_targets[role].config
   local expected_hash = manifest.files[remote_path]
@@ -494,12 +591,22 @@ local function safe_update()
   local manifest_content, manifest = download_manifest()
   ensure_base_dirs()
 
+  local can_continue = update_installer_if_required(manifest)
+  if not can_continue then
+    return
+  end
+
   local node_ok = ensure_node_id(role, cfg_path)
   if not node_ok then
     return
   end
 
   local updates = update_files(manifest)
+  local staged, stage_err = stage_updates(updates)
+  if not staged then
+    print("SAFE UPDATE failed. Error: " .. tostring(stage_err))
+    return
+  end
   local backup_dir = create_backup_dir()
   local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL }
   local update_paths = {}
@@ -512,34 +619,9 @@ local function safe_update()
   backup_files(backup_dir, protected)
 
   local changed = 0
-  local ok = true
-  local err
-  for _, entry in ipairs(updates) do
-    local target_path = "/" .. entry.path
-    local content
-    local success, result = pcall(download_content, entry.path)
-    if success then
-      content = result
-    else
-      ok = false
-      err = result
-      break
-    end
-    if checksum(content) ~= entry.hash then
-      ok = false
-      err = "Checksum mismatch for " .. entry.path
-      break
-    end
-    if not fs.exists(target_path) then
-      table.insert(created, target_path)
-    end
-    local write_ok, write_err = pcall(write_atomic, target_path, content)
-    if not write_ok then
-      ok = false
-      err = write_err
-      break
-    end
-    changed = changed + 1
+  local ok, err = apply_staged(updates, staged, created)
+  if ok then
+    changed = #updates
   end
 
   local migrated = false
@@ -606,6 +688,13 @@ local function full_reinstall()
       error("Checksum mismatch for " .. path)
     end
     write_atomic("/" .. path, content)
+  end
+  if manifest.installer_path and manifest.installer_hash then
+    local content = download_content(manifest.installer_path)
+    if checksum(content) ~= manifest.installer_hash then
+      error("Checksum mismatch for " .. manifest.installer_path)
+    end
+    write_atomic("/" .. manifest.installer_path, content)
   end
 
   local role = choose_role()
