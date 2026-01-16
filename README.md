@@ -48,7 +48,7 @@ Wireless Modem (Control/Status)
 ## Installation, Safe Update & Full Reinstall
 **Erstinstallation / Vollinstallation**
 1. Ordner `xreactor` auf die jeweiligen Computer kopieren.
-2. Root-Installer ausführen (`/installer.lua` bleibt stabil und wird nicht im SAFE UPDATE ersetzt):
+2. Root-Installer ausführen (`/installer.lua` bleibt stabil und wird nicht im SAFE UPDATE ersetzt; bei korruptem Download wird einmal automatisch neu geladen):
    ```
    lua /installer.lua
    ```

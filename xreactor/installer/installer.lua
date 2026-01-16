@@ -696,29 +696,6 @@ local function safe_update()
   if not node_ok then
     return
   end
-  if wireless and wired == wireless then
-    wired = nil
-  end
-
-  if role == roles.RT_NODE then
-    local label = build_rt_node_id()
-    os.setComputerLabel(label)
-  end
-
-  if role == roles.MASTER then
-    extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
-  elseif role == roles.RT_NODE then
-    local detected = scan_peripherals()
-    extras.modem = wireless
-    local use_detected = #detected.reactors > 0
-    if use_detected then
-      print_detected("Detected Reactors", detected.reactors)
-      print_detected("Detected Turbines", detected.turbines)
-      print_detected("Detected Modems", detected.modems)
-      use_detected = prompt_use_detected()
-    else
-      print("Warning: No reactors detected. Switching to manual entry.")
-    end
 
   local updates = update_files(manifest)
   local staged, stage_err = stage_updates(updates, base_url)
