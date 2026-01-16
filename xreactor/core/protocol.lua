@@ -1,5 +1,4 @@
 local constants = require("shared.constants")
-local utils = require("core.utils")
 
 local protocol = {}
 
