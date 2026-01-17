@@ -61,8 +61,8 @@ Wireless Modem (Control/Status)
 - SAFE UPDATE fragt **keine** Rolle neu ab und überschreibt keine Configs.
 - Bei Fehler: automatischer Rollback aus dem Backup.
 - Der Installer selbst wird nur aktualisiert, wenn `installer_min_version` dies verlangt.
-- Manifest-Download nutzt Retries mit kurzer Backoff-Wartezeit und fallbackt auf einen zweiten Raw-Host (bei Statuscode/Timeout/HTML-Fehlern).
-- Manifest-Cache wird lokal gespeichert (`/xreactor/.manifest_cache`). Bei Download-Problemen bietet der Installer **Retry**, **Cached Manifest (Offline Update)** oder **Cancel** an.
+- Manifest-Download nutzt Retries mit Backoff, Host-Fallbacks (raw.githubusercontent.com, raw.github.com, cdn.jsdelivr.net) und Content-Sanity-Checks.
+- Manifest-Cache wird lokal gespeichert (`/xreactor/cache/manifest.lua`). Bei Download-Problemen bietet der Installer **Retry**, **Cached Manifest (Offline Update)** oder **Cancel** an (Default: Cache, falls vorhanden).
 - SAFE UPDATE lädt Dateien erst in ein Staging-Verzeichnis, prüft Hashes, und aktualisiert erst nach erfolgreicher Verifikation (mit einmaligem Retry bei Fehlern).
 - Updates sind commit-gepinnt (Manifest + Dateien kommen aus derselben Commit-SHA), um Hash-Mismatches durch parallele Änderungen zu verhindern.
 - Wenn sich die Release-Commit-SHA während des Updates ändert, wird Manifest + Update-Plan einmalig neu geladen.
@@ -73,7 +73,7 @@ Wireless Modem (Control/Status)
 
 **Offline/Fehlerfälle**
 - **HTTP disabled**: HTTP in der CC:Tweaked-Config aktivieren, dann Installer erneut starten.
-- **GitHub Timeout**: Installer bietet Retry und ggf. Cached Manifest an; bei erneutem Fehlschlag sauberer Abbruch ohne Änderungen.
+- **GitHub Timeout**: Installer nutzt Fallback-Hosts + Retry; falls weiter fehlschlägt, kann ein Cached Manifest verwendet werden oder der Installer bricht sauber ohne Änderungen ab.
 
 **Installer starten (ohne Neu-Download)**
 - Root-Installer (`/installer.lua`) ist nur ein Bootstrap. Er startet `/xreactor/installer/installer.lua`, falls vorhanden.
