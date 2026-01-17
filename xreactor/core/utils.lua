@@ -1,4 +1,12 @@
+-- CONFIG
+local CONFIG = {
+  LOGGER_DEFAULT_PREFIX = "LOG" -- Fallback prefix when none is provided.
+}
+
+-- Utility helpers shared across nodes.
 local utils = {}
+
+local logger = require("core.logger")
 
 function utils.ensure_dir(path)
   if not fs.exists(path) then
@@ -33,9 +41,14 @@ function utils.write_config(path, tbl)
   file.close()
 end
 
-function utils.log(prefix, message)
-  local stamp = textutils.formatTime(os.epoch("utc") / 1000, true)
-  print(string.format("[%s] %s | %s", stamp, prefix, message))
+-- Initialize file logging for the current runtime.
+function utils.init_logger(opts)
+  logger.init(opts)
+end
+
+-- Log a message using the shared logger (no terminal spam).
+function utils.log(prefix, message, level)
+  logger.log(prefix or CONFIG.LOGGER_DEFAULT_PREFIX, message, level)
 end
 
 function utils.safe_peripheral_call(name, method, ...)
