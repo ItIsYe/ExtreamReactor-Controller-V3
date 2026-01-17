@@ -80,6 +80,8 @@ local function fallback_node_id()
   return tostring(os.getComputerLabel() or os.getComputerID())
 end
 
+local fetch_url_seeded = false
+
 local function read_file(path)
   if not fs.exists(path) then return nil end
   local file = fs.open(path, "r")
@@ -285,9 +287,9 @@ local function fetch_url(urls, opts)
   local marker = opts and opts.marker
   local last_meta = nil
   local hosts = collect_hosts(urls)
-  if not fetch_url._seeded then
+  if not fetch_url_seeded then
     math.randomseed(os.time())
-    fetch_url._seeded = true
+    fetch_url_seeded = true
   end
   for _, url in ipairs(urls) do
     for attempt = 1, attempts do
