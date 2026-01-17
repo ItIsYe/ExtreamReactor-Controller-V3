@@ -1,7 +1,9 @@
 -- CONFIG
 local CONFIG = {
   LOG_NAME = "master", -- Log file name for this role.
-  LOG_PREFIX = "MASTER" -- Default log prefix for master events.
+  LOG_PREFIX = "MASTER", -- Default log prefix for master events.
+  DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
+  NODE_ID_PATH = "/xreactor/config/node_id.txt" -- Node ID storage path.
 }
 
 _G = _G or {}
@@ -56,7 +58,13 @@ local ui = require("core.ui")
 local config = require("master.config")
 
 -- Initialize file logging early to capture startup events.
-utils.init_logger({ log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX, enabled = config.debug_logging })
+local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
+local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
+local debug_enabled = config.debug_logging
+if CONFIG.DEBUG_LOG_ENABLED ~= nil then
+  debug_enabled = CONFIG.DEBUG_LOG_ENABLED
+end
+utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled })
 utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
 
 config.heartbeat_interval = config.heartbeat_interval or 5

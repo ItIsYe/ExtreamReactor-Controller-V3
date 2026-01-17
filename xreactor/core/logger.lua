@@ -4,7 +4,9 @@ local CONFIG = {
   SETTINGS_KEY = "xreactor.debug_logging", -- settings API key for enabling debug logs.
   DEFAULT_ENABLED = false, -- Default debug logging state when no config/setting exists.
   FLUSH_LINES = 8, -- Buffer size before flushing to disk.
-  FLUSH_INTERVAL = 2 -- Seconds between flushes during active logging.
+  FLUSH_INTERVAL = 2, -- Seconds between flushes during active logging.
+  MAX_BYTES = 200000, -- Rotate log files after this size.
+  ROTATE_SUFFIX = ".1" -- Suffix for rotated log.
 }
 
 -- Lightweight file logger for CC:Tweaked.
@@ -26,6 +28,23 @@ local function ensure_dir(path)
   if not fs.exists(path) then
     fs.makeDir(path)
   end
+end
+
+local function rotate_log_if_needed(path)
+  if not CONFIG.MAX_BYTES or CONFIG.MAX_BYTES <= 0 then
+    return
+  end
+  if not fs.exists(path) then
+    return
+  end
+  if fs.getSize(path) < CONFIG.MAX_BYTES then
+    return
+  end
+  local backup = path .. (CONFIG.ROTATE_SUFFIX or ".1")
+  if fs.exists(backup) then
+    fs.delete(backup)
+  end
+  fs.move(path, backup)
 end
 
 local function resolve_enabled(current)
@@ -63,6 +82,7 @@ local function flush_if_needed(force)
   local ok, err = pcall(function()
     ensure_dir(CONFIG.LOG_DIR)
     local path = string.format("%s/%s.log", CONFIG.LOG_DIR, state.log_name or "xreactor")
+    rotate_log_if_needed(path)
     local file = fs.open(path, "a")
     if not file then
       error("Unable to open log file: " .. path)

@@ -1,6 +1,8 @@
 -- CONFIG
 local CONFIG = {
-  LOGGER_DEFAULT_PREFIX = "LOG" -- Fallback prefix when none is provided.
+  LOGGER_DEFAULT_PREFIX = "LOG", -- Fallback prefix when none is provided.
+  NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Default node_id storage path.
+  LOG_NAME_SEPARATOR = "_" -- Separator for log file names.
 }
 
 -- Utility helpers shared across nodes.
@@ -132,6 +134,32 @@ end
 function utils.trim(text)
   if not text then return "" end
   return text:match("^%s*(.-)%s*$")
+end
+
+function utils.read_node_id(path)
+  local target = path or CONFIG.NODE_ID_PATH
+  if not target or not fs.exists(target) then
+    return nil
+  end
+  local file = fs.open(target, "r")
+  if not file then
+    return nil
+  end
+  local content = file.readAll()
+  file.close()
+  local trimmed = utils.trim(content)
+  if trimmed == "" then
+    return nil
+  end
+  return trimmed
+end
+
+function utils.build_log_name(base, node_id)
+  local name = tostring(base or "xreactor")
+  if node_id and node_id ~= "" then
+    return name .. CONFIG.LOG_NAME_SEPARATOR .. tostring(node_id)
+  end
+  return name
 end
 
 function utils.normalize_node_id(value)
