@@ -29,6 +29,7 @@ local CONFIG = {
   MANIFEST_MENU_RETRY_LIMIT = 5, -- Retry rounds from menu before auto-cancel.
   FILE_RETRY_ROUNDS = 3, -- Retry rounds for file download failures.
   FILE_RETRY_BACKOFF = 1, -- Backoff seconds for file download retry rounds.
+  BASE_CACHE_PATH = "/xreactor/.cache/source.lua", -- Cache for last good base URL.
   LOG_ENABLED = false, -- Enables installer file logging to /xreactor_installer.log.
   LOG_PATH = "/xreactor_installer.log", -- Installer log file path.
   LOG_NAME = "installer", -- Installer log file name.
@@ -58,6 +59,11 @@ local RELEASE_SANITY_MARKER = CONFIG.RELEASE_SANITY_MARKER
 local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
 local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
 local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
+
+-- Download base tracking (main vs pinned commit).
+local current_base_url = nil
+local current_base_source = "main"
+local current_base_sha = nil
 
 -- UI helpers (centralized input).
 local function ui_prompt(label, default, min, max)
@@ -614,15 +620,9 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds)
   return false, nil, { tried = tried, last = last_entry }
 end
 
-local function build_repo_urls(ref, path)
-  local safe_ref = tostring(ref)
-  return {
-    string.format("%s/%s/%s/%s/%s", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, safe_ref, path)
-  }
-end
-
 local function fetch_repo_file(ref, path, opts)
-  local urls = build_repo_urls(ref, path)
+  local base = current_base_url or build_main_base_url()
+  local urls = { base .. path }
   local ok, body, info = fetch_with_retries(urls, opts and opts.attempts, opts and opts.backoff)
   if not ok then
     return false, nil, info
@@ -749,6 +749,91 @@ local function print_download_failure(label, info, fallback_urls)
     tostring(last.err or "timeout or http error"),
     tostring(last.url or urls[1])
   ))
+end
+
+local function is_valid_sha(sha)
+  return type(sha) == "string" and sha:match("^[a-fA-F0-9]+$") and #sha == 40
+end
+
+local function build_main_base_url()
+  return string.format("%s/%s/%s/main/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME)
+end
+
+local function build_commit_base_url(sha)
+  return string.format("%s/%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, sha)
+end
+
+local function read_base_cache()
+  if not fs.exists(CONFIG.BASE_CACHE_PATH) then
+    return nil
+  end
+  local content = read_file(CONFIG.BASE_CACHE_PATH)
+  if not content then
+    return nil
+  end
+  local ok, data = pcall(textutils.unserialize, content)
+  if ok and type(data) == "table" then
+    return data
+  end
+  return nil
+end
+
+local function write_base_cache(payload)
+  write_atomic(CONFIG.BASE_CACHE_PATH, textutils.serialize(payload))
+end
+
+local function set_base_source(base_url, source, sha)
+  current_base_url = base_url
+  current_base_source = source or "main"
+  current_base_sha = sha
+  write_base_cache({
+    last_good_base_url = current_base_url,
+    last_good_source = current_base_source,
+    last_good_sha = current_base_sha
+  })
+end
+
+local function validate_base_url(base_url)
+  local probe_url = base_url .. MANIFEST_REMOTE
+  local ok, _, err, meta = fetch_url(probe_url, { timeout = DOWNLOAD_TIMEOUT })
+  if ok then
+    return true
+  end
+  return false, { err = err, last = { url = probe_url, err = err, code = meta and meta.code or nil } }
+end
+
+local function resolve_base_source(release)
+  local main_base = build_main_base_url()
+  local cache = read_base_cache()
+  local sha = release and release.commit_sha
+  if is_valid_sha(sha) then
+    local commit_base = build_commit_base_url(sha)
+    local ok, info = validate_base_url(commit_base)
+    if ok then
+      set_base_source(commit_base, "sha", sha)
+      return
+    end
+    print("Pinned commit invalid, falling back to main.")
+    log("WARN", "Pinned commit invalid; falling back to main")
+  else
+    if sha then
+      log("WARN", "Invalid commit SHA; falling back to main")
+    end
+  end
+  if cache and cache.last_good_base_url then
+    local ok = validate_base_url(cache.last_good_base_url)
+    if ok then
+      set_base_source(cache.last_good_base_url, cache.last_good_source, cache.last_good_sha)
+      return
+    end
+  end
+  set_base_source(main_base, "main", nil)
+end
+
+local function is_404_error(info)
+  local err = info and info.last and info.last.err or ""
+  err = tostring(err):lower()
+  return err:find("404", 1, true) or err:find("not found", 1, true)
 end
 
 local function download_release()
@@ -1406,6 +1491,7 @@ local function safe_update()
   if not manifest_content then
     return
   end
+  resolve_base_source(release)
   local hash_algo = resolve_hash_algo(manifest, release)
   ensure_base_dirs()
 
@@ -1425,11 +1511,27 @@ local function safe_update()
   local staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
   local retry_rounds = 0
   while not staged do
-    print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
-    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
-    if choice ~= 1 then
-      log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
-      return
+    local choice = 1
+    if current_base_source == "sha" and is_404_error(stage_meta) then
+      print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
+      choice = ui_menu(nil, { "Try fallback to main", "Cancel" }, 1)
+      if choice == 1 then
+        set_base_source(build_main_base_url(), "main", nil)
+        staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
+        if staged then
+          break
+        end
+      else
+        log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
+        return
+      end
+    else
+      print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
+      choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+      if choice ~= 1 then
+        log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
+        return
+      end
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
@@ -1521,6 +1623,7 @@ local function full_reinstall()
   if not manifest_content then
     return
   end
+  resolve_base_source(release)
   local hash_algo = resolve_hash_algo(manifest, release)
   ensure_base_dirs()
   log("INFO", "FULL REINSTALL started")
@@ -1539,11 +1642,27 @@ local function full_reinstall()
   local staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
   local retry_rounds = 0
   while not staged do
-    print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
-    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
-    if choice ~= 1 then
-      log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
-      return
+    local choice = 1
+    if current_base_source == "sha" and is_404_error(stage_meta) then
+      print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
+      choice = ui_menu(nil, { "Try fallback to main", "Cancel" }, 1)
+      if choice == 1 then
+        set_base_source(build_main_base_url(), "main", nil)
+        staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
+        if staged then
+          break
+        end
+      else
+        log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
+        return
+      end
+    else
+      print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
+      choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+      if choice ~= 1 then
+        log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
+        return
+      end
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then

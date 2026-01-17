@@ -122,6 +122,7 @@ Wireless Modem (Control/Status)
 - **Installer-Details**: Der Fehlerdialog zeigt die tatsächlich verwendeten RAW-URLs (Tried) und den letzten Fehler (z. B. Timeout, HTTP-Status, HTML-Response).
 - **HTTP API**: Wenn der Installer meldet, dass HTTP nicht verfügbar ist, aktiviere es in der CC:Tweaked-Konfiguration.
 - **HTML-Response**: Weist auf falsche URL (z. B. GitHub-Blob) oder Proxy hin – der Installer erwartet RAW-Links.
+- **404 bei Dateien**: Wenn ein gepinnter Commit nicht mehr passt, fällt der Installer automatisch auf `main` zurück, statt weiter 404s zu produzieren.
 - **HTML statt Lua**: Installer bricht ab (meist falscher Link oder GitHub-Rate-Limit).
 - **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien) und normalisiert auf String.
 - **SAFE UPDATE Abbruch**: Bei Download-Problemen kann der Nutzer abbrechen; das System bleibt unverändert.
