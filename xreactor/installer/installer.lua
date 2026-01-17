@@ -22,6 +22,7 @@ local CONFIG = {
   DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts.
   DOWNLOAD_BACKOFF = 0.5, -- Backoff base (seconds) between retries.
   DOWNLOAD_TIMEOUT = 6, -- HTTP timeout in seconds.
+  LOG_ENABLED = false, -- Enables installer file logging to /xreactor/logs/installer.log.
   LOG_NAME = "installer", -- Installer log file name.
   LOG_PREFIX = "INSTALLER", -- Installer log prefix.
   LOG_SETTINGS_KEY = "xreactor.debug_logging" -- settings key for debug logs.
@@ -50,11 +51,84 @@ local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
 local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
 local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
 
-package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
-local logger = require("core.logger")
+-- Internal standalone logger for the installer (no project dependencies).
+local active_logger = {}
+local internal_log_enabled = false
 
--- Initialize installer logging early to capture download decisions.
-logger.init({ log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX })
+local function resolve_log_enabled()
+  if CONFIG.LOG_ENABLED == true then
+    return true
+  end
+  if settings and settings.get and CONFIG.LOG_SETTINGS_KEY then
+    return settings.get(CONFIG.LOG_SETTINGS_KEY) == true
+  end
+  return false
+end
+
+local function log_stamp()
+  return textutils.formatTime(os.epoch("utc") / 1000, true)
+end
+
+local function ensure_log_dir()
+  local dir = CONFIG.BASE_DIR .. "/logs"
+  if not fs.exists(dir) then
+    fs.makeDir(dir)
+  end
+end
+
+local function internal_log(level, message)
+  if not internal_log_enabled then
+    return
+  end
+  local ok = pcall(function()
+    ensure_log_dir()
+    local path = string.format("%s/%s.log", CONFIG.BASE_DIR .. "/logs", CONFIG.LOG_NAME)
+    local file = fs.open(path, "a")
+    if not file then
+      return
+    end
+    local line = string.format("[%s] %s | %s | %s", log_stamp(), CONFIG.LOG_PREFIX, tostring(level), tostring(message))
+    file.write(line .. "\n")
+    file.close()
+  end)
+  if not ok then
+    internal_log_enabled = false
+  end
+end
+
+local function init_internal_logger()
+  internal_log_enabled = resolve_log_enabled()
+  active_logger.log = internal_log
+  active_logger.set_enabled = function(enabled)
+    if enabled == true then
+      internal_log_enabled = true
+      return
+    end
+    if enabled == false then
+      internal_log_enabled = false
+      return
+    end
+    internal_log_enabled = resolve_log_enabled()
+  end
+end
+
+local function switch_to_project_logger()
+  local logger_path = CONFIG.BASE_DIR .. "/core/logger.lua"
+  if not fs.exists(logger_path) then
+    return false
+  end
+  local ok, module = pcall(dofile, logger_path)
+  if not ok or type(module) ~= "table" or type(module.log) ~= "function" then
+    return false
+  end
+  active_logger = module
+  if active_logger.init then
+    pcall(active_logger.init, { log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX, enabled = internal_log_enabled })
+  end
+  return true
+end
+
+init_internal_logger()
 
 local roles = {
   MASTER = "MASTER",
@@ -76,7 +150,9 @@ local role_targets = {
 
 -- Centralized installer logging helper.
 local function log(level, message)
-  logger.log(CONFIG.LOG_PREFIX, message, level)
+  if active_logger and active_logger.log then
+    active_logger.log(CONFIG.LOG_PREFIX, message, level)
+  end
 end
 
 local function ensure_dir(path)
@@ -1174,8 +1250,8 @@ local function safe_update()
     return
   end
   local existing_cfg = read_config(cfg_path, {})
-  if existing_cfg.debug_logging == true then
-    logger.set_enabled(true)
+  if existing_cfg.debug_logging == true and active_logger.set_enabled then
+    active_logger.set_enabled(true)
   end
 
   local manifest_content, manifest, release, manifest_meta = acquire_manifest()
@@ -1230,6 +1306,9 @@ local function safe_update()
   local ok, err = apply_staged(updates, staged, created)
   if ok then
     changed = #updates
+  end
+  if ok then
+    switch_to_project_logger()
   end
 
   local migrated = false
@@ -1305,8 +1384,8 @@ local function full_reinstall()
   local keep_config = false
   if existing_role then
     local existing_cfg = read_config(existing_cfg_path, {})
-    if existing_cfg.debug_logging == true then
-      logger.set_enabled(true)
+    if existing_cfg.debug_logging == true and active_logger.set_enabled then
+      active_logger.set_enabled(true)
     end
     keep_config = confirm("Keep existing config + role?", true)
   end
@@ -1343,6 +1422,7 @@ local function full_reinstall()
     log("ERROR", "FULL REINSTALL apply failed: " .. tostring(err))
     return
   end
+  switch_to_project_logger()
 
   local role
   local cfg_path

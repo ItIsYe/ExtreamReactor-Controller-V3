@@ -52,8 +52,9 @@ Wireless Modem (Control/Status)
    lua /installer.lua
    ```
    (Der Root-Installer ist nur ein Bootstrap und startet `/xreactor/installer/installer.lua`.)
-2. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
-3. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
+2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
+3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
+4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
 
 **SAFE UPDATE (inkrementell, ohne Config-Reset)**
 - Installer erneut ausführen → Menü **SAFE UPDATE** wählen.

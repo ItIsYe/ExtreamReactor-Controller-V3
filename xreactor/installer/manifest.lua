@@ -4,7 +4,7 @@ return {
   hash_algo = "sumlen-v1",
   installer_min_version = "1.2",
   installer_path = "xreactor/installer/installer.lua",
-  installer_hash = "3745538:45687",
+  installer_hash = "3923075:47797",
   files = {
     ["xreactor/core/network.lua"] = "264972:3241",
     ["xreactor/core/trends.lua"] = "147554:1791",
