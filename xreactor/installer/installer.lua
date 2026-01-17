@@ -22,8 +22,11 @@ local CONFIG = {
   DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts.
   DOWNLOAD_BACKOFF = 0.5, -- Backoff base (seconds) between retries.
   DOWNLOAD_TIMEOUT = 6, -- HTTP timeout in seconds.
+  MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main/xreactor/installer/manifest.lua", -- Primary manifest URL.
+  MANIFEST_URL_FALLBACK = nil, -- Optional fallback manifest URL (raw.githubusercontent.com).
   MANIFEST_RETRY_ATTEMPTS = 3, -- Retry attempts for manifest acquisition menu.
   MANIFEST_RETRY_BACKOFF = 1, -- Backoff seconds for manifest retry menu.
+  MANIFEST_MENU_RETRY_LIMIT = 5, -- Retry rounds from menu before auto-cancel.
   LOG_ENABLED = false, -- Enables installer file logging to /xreactor/logs/installer.log.
   LOG_NAME = "installer", -- Installer log file name.
   LOG_PREFIX = "INSTALLER", -- Installer log prefix.
@@ -502,51 +505,6 @@ local function is_html_payload(content)
   return false
 end
 
-local function collect_hosts(urls)
-  local hosts = {}
-  local seen = {}
-  for _, url in ipairs(urls) do
-    local host = url:match("^https?://([^/]+)")
-    if host and not seen[host] then
-      seen[host] = true
-      table.insert(hosts, host)
-    end
-  end
-  return hosts
-end
-
-local function http_fetch(url, timeout_s)
-  if not http.request then
-    local response = http.get(url)
-    if not response then
-      return nil, { url = url, code = nil, reason = "timeout", html = false }
-    end
-    local code = response.getResponseCode and response.getResponseCode() or nil
-    local content = response.readAll()
-    response.close()
-    return content, { url = url, code = code }
-  end
-  local ok, err = pcall(http.request, url)
-  if not ok then
-    return nil, { url = url, code = nil, reason = err or "request failed", html = false }
-  end
-  local timer = os.startTimer(timeout_s)
-  while true do
-    local event, p1, p2 = os.pullEvent()
-    if event == "http_success" and p1 == url then
-      local response = p2
-      local code = response.getResponseCode and response.getResponseCode() or nil
-      local content = response.readAll()
-      response.close()
-      return content, { url = url, code = code }
-    elseif event == "http_failure" and p1 == url then
-      return nil, { url = url, code = nil, reason = p2 or "failure", html = false }
-    elseif event == "timer" and p1 == timer then
-      return nil, { url = url, code = nil, reason = "timeout", html = false }
-    end
-  end
-end
-
 local function sanity_check(content, min_bytes, marker)
   if not content or content == "" then
     return false, "empty"
@@ -563,52 +521,101 @@ local function sanity_check(content, min_bytes, marker)
   return true
 end
 
-local function fetch_url(urls, opts)
-  local attempts = (opts and opts.attempts) or DOWNLOAD_ATTEMPTS
-  local backoff = (opts and opts.backoff) or DOWNLOAD_BACKOFF
-  local timeout_s = (opts and opts.timeout_s) or DOWNLOAD_TIMEOUT
-  local min_bytes = opts and opts.min_bytes
-  local marker = opts and opts.marker
-  local last_meta = nil
-  local hosts = collect_hosts(urls)
+local function is_html_response(body)
+  if not body or body == "" then
+    return false
+  end
+  if body:find("<!DOCTYPE", 1, true) then
+    return true
+  end
+  if body:match("^%s*<") then
+    return true
+  end
+  return false
+end
+
+-- Single download function used by all network requests.
+local function fetch_url(url, opts)
+  if not http then
+    return false, nil, { url = url, err = "no http api" }
+  end
+  local timeout = (opts and opts.timeout) or DOWNLOAD_TIMEOUT
+  local response
+  local err
+  local ok, result = pcall(function()
+    return http.get(url, nil, false, timeout)
+  end)
+  if ok then
+    response = result
+  else
+    err = result
+    response = nil
+  end
+  if response == nil then
+    local reason = "http.get returned nil"
+    if err then
+      reason = reason .. " (" .. tostring(err) .. ")"
+    end
+    return false, nil, { url = url, err = reason }
+  end
+  local code = response.getResponseCode and response.getResponseCode() or nil
+  local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
+  local body = response.readAll()
+  response.close()
+  if not body or body == "" then
+    return false, nil, { url = url, err = "empty body", code = code, headers = headers }
+  end
+  if is_html_response(body) then
+    return false, nil, { url = url, err = "html response (wrong url)", code = code, headers = headers }
+  end
+  if code and code ~= 200 then
+    return false, nil, { url = url, err = "http status " .. tostring(code), code = code, headers = headers }
+  end
+  return true, body, { url = url, code = code, headers = headers }
+end
+
+-- Download helper with retries per URL and full tried list tracking.
+local function fetch_with_retries(urls, max_attempts, backoff_seconds)
+  local attempts = max_attempts or DOWNLOAD_ATTEMPTS
+  local backoff = backoff_seconds or DOWNLOAD_BACKOFF
+  local tried = {}
   if not fetch_url_seeded then
     math.randomseed(os.time())
     fetch_url_seeded = true
   end
-  for _, url in ipairs(urls) do
+  local list = {}
+  for _, url in ipairs(urls or {}) do
+    if url and url ~= "" then
+      table.insert(list, url)
+    end
+  end
+  if #list == 0 then
+    list = { CONFIG.MANIFEST_URL_PRIMARY }
+  end
+  for _, url in ipairs(list) do
     for attempt = 1, attempts do
-      local content, meta = http_fetch(url, timeout_s)
-      if not meta then
-        meta = { url = url, code = nil, reason = "timeout or http error", html = false }
+      local ok, body, info = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
+      local err = info and info.err or (ok and nil or "timeout or http error")
+      local entry = {
+        url = url,
+        ok = ok,
+        err = err,
+        bytes = body and #body or 0,
+        code = info and info.code or nil,
+        headers = info and info.headers or nil,
+        attempt = attempt
+      }
+      table.insert(tried, entry)
+      if ok then
+        return true, body, { tried = tried, last = entry }
       end
-      if content and meta and meta.code and meta.code ~= 200 then
-        meta.reason = "status"
-        last_meta = meta
-      elseif content then
-        local ok, reason = sanity_check(content, min_bytes, marker)
-        if ok then
-          meta.tried_hosts = hosts
-          return content, meta
-        end
-        meta.reason = reason
-        meta.html = reason == "html"
-      end
-      meta.attempt = attempt
-      last_meta = meta
       if attempt < attempts then
-        local sleep_for = backoff * (2 ^ (attempt - 1)) + math.random() * 0.2
-        os.sleep(sleep_for)
+        os.sleep(backoff * attempt)
       end
     end
   end
-  if last_meta then
-    last_meta.tried_hosts = hosts
-    last_meta.tried_urls = urls
-    if not last_meta.reason then
-      last_meta.reason = "timeout or http error"
-    end
-  end
-  return nil, last_meta
+  local last_entry = tried[#tried] or { url = list[1], ok = false, err = "timeout or http error", bytes = 0 }
+  return false, nil, { tried = tried, last = last_entry }
 end
 
 local function build_repo_urls(ref, path)
@@ -620,7 +627,18 @@ end
 
 local function fetch_repo_file(ref, path, opts)
   local urls = build_repo_urls(ref, path)
-  return fetch_url(urls, opts)
+  local ok, body, info = fetch_with_retries(urls, opts and opts.attempts, opts and opts.backoff)
+  if not ok then
+    return false, nil, info
+  end
+  local ok_sanity, reason = sanity_check(body, opts and opts.min_bytes, opts and opts.marker)
+  if not ok_sanity then
+    local entry = info and info.last or { url = urls[1], ok = false, err = reason, bytes = body and #body or 0 }
+    entry.ok = false
+    entry.err = reason
+    return false, nil, { tried = info and info.tried or { entry }, last = entry }
+  end
+  return true, body, info
 end
 
 local function validate_installer_content(content)
@@ -680,26 +698,37 @@ local function write_manifest_cache(manifest_content, release, source)
 end
 
 local function format_manifest_failure(meta)
-  local reason = meta and meta.reason or "timeout or http error"
-  local tried = "unknown"
-  if meta then
-    if meta.tried_urls and #meta.tried_urls > 0 then
-      tried = table.concat(meta.tried_urls, ", ")
-    elseif meta.url then
-      tried = tostring(meta.url)
-    elseif meta.tried_hosts and #meta.tried_hosts > 0 then
-      tried = table.concat(meta.tried_hosts, ", ")
+  local reason = "timeout or http error"
+  local tried_list = {}
+  if meta and meta.tried then
+    for _, entry in ipairs(meta.tried) do
+      if entry.url then
+        table.insert(tried_list, entry.url)
+      end
+      if entry.err then
+        reason = entry.err
+      end
     end
   end
+  if meta and meta.last and meta.last.err then
+    reason = meta.last.err
+  end
+  if #tried_list == 0 then
+    tried_list = { CONFIG.MANIFEST_URL_PRIMARY }
+    if CONFIG.MANIFEST_URL_FALLBACK then
+      table.insert(tried_list, CONFIG.MANIFEST_URL_FALLBACK)
+    end
+  end
+  local tried = table.concat(tried_list, ", ")
   return ("Manifest download failed (%s). Tried: %s"):format(reason, tried)
 end
 
 local function download_release()
-  local content, meta = fetch_repo_file("main", RELEASE_REMOTE, {
+  local ok, content, meta = fetch_repo_file("main", RELEASE_REMOTE, {
     min_bytes = RELEASE_MIN_BYTES,
     marker = RELEASE_SANITY_MARKER
   })
-  if not content then
+  if not ok then
     return nil, "Release download failed", meta
   end
   local loader = load(content, "release", "t", {})
@@ -738,11 +767,17 @@ local function download_manifest()
   if not release then
     return nil, release_err, release_meta
   end
-  local content, meta = fetch_repo_file(release.commit_sha, release.manifest_path, {
-    min_bytes = MANIFEST_MIN_BYTES,
-    marker = MANIFEST_SANITY_MARKER
-  })
-  if not content then
+  local urls = { CONFIG.MANIFEST_URL_PRIMARY, CONFIG.MANIFEST_URL_FALLBACK }
+  local ok, content, meta = fetch_with_retries(urls, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
+  if not ok then
+    return nil, "Manifest download failed", meta
+  end
+  local ok_sanity, reason = sanity_check(content, MANIFEST_MIN_BYTES, MANIFEST_SANITY_MARKER)
+  if not ok_sanity then
+    local entry = meta and meta.last or { url = urls[1], ok = false, err = reason, bytes = content and #content or 0 }
+    entry.ok = false
+    entry.err = reason
+    meta = { tried = meta and meta.tried or { entry }, last = entry }
     return nil, "Manifest download failed", meta
   end
   local manifest, manifest_err = parse_manifest(content)
@@ -767,8 +802,16 @@ local function download_manifest_with_retries(attempts, backoff)
       end
       return content, manifest, release, meta
     end
-    last_meta = meta or { reason = "timeout or http error", attempted = attempt }
-    last_meta.attempt = attempt
+    if meta then
+      meta.attempt = attempt
+      last_meta = meta
+    else
+      last_meta = {
+        tried = { { url = CONFIG.MANIFEST_URL_PRIMARY, ok = false, err = "timeout or http error", bytes = 0, attempt = attempt } },
+        last = { url = CONFIG.MANIFEST_URL_PRIMARY, ok = false, err = "timeout or http error", bytes = 0, attempt = attempt },
+        attempt = attempt
+      }
+    end
     if attempt < max_attempts then
       os.sleep(delay * attempt)
     end
@@ -778,10 +821,15 @@ end
 
 local function acquire_manifest()
   local manifest_content, manifest, release, manifest_meta = download_manifest_with_retries(1, 0)
+  local retry_rounds = 0
   while not manifest_content do
     local cache = read_manifest_cache()
     local failure = format_manifest_failure(manifest_meta)
     print(failure)
+    if manifest_meta and manifest_meta.last then
+      local last = manifest_meta.last
+      print(("Last error: %s (url=%s)"):format(tostring(last.err or "timeout or http error"), tostring(last.url or "unknown")))
+    end
     log("WARN", failure)
     local default_choice = cache and 1 or 1
     local choice = ui_menu(nil, cache and {
@@ -806,6 +854,12 @@ local function acquire_manifest()
       validate_hash_algo(manifest, release)
       break
     elseif (cache and choice == 2) or (not cache and choice == 1) then
+      retry_rounds = retry_rounds + 1
+      if retry_rounds > CONFIG.MANIFEST_MENU_RETRY_LIMIT then
+        print("Retry limit reached. Installer cancelled.")
+        log("WARN", "Manifest retry limit reached; cancelling")
+        return nil
+      end
       manifest_content, manifest, release, manifest_meta = download_manifest_with_retries()
     else
       print("Installer cancelled.")
@@ -1109,14 +1163,13 @@ local function stage_updates(entries, release, hash_algo)
   ensure_dir(UPDATE_STAGING)
   local staged = {}
   for _, entry in ipairs(entries) do
-    local content, meta = fetch_repo_file(release.commit_sha, entry.path)
-    if not content then
-      return nil, ("Download failed for %s (url=%s code=%s reason=%s html=%s)"):format(
+    local ok, content, meta = fetch_repo_file(release.commit_sha, entry.path)
+    if not ok then
+      local last = meta and meta.last or {}
+      return nil, ("Download failed for %s (url=%s reason=%s)"):format(
         entry.path,
-        tostring(meta.url),
-        tostring(meta.code),
-        tostring(meta.reason),
-        tostring(meta.html)
+        tostring(last.url or entry.path),
+        tostring(last.err or "timeout or http error")
       )
     end
     if is_html_payload(content) then
@@ -1124,8 +1177,8 @@ local function stage_updates(entries, release, hash_algo)
     end
     local actual = compute_hash(content, hash_algo)
     if actual ~= entry.hash then
-      local retry_content, retry_meta = fetch_repo_file(release.commit_sha, entry.path)
-      if retry_content then
+      local retry_ok, retry_content, retry_meta = fetch_repo_file(release.commit_sha, entry.path)
+      if retry_ok and retry_content then
         content = retry_content
         if is_html_payload(content) then
           return nil, ("Download failed for %s (html response)"):format(entry.path)
@@ -1133,14 +1186,15 @@ local function stage_updates(entries, release, hash_algo)
         actual = compute_hash(content, hash_algo)
       end
       if actual ~= entry.hash then
+        local last = retry_meta and retry_meta.last or meta and meta.last or {}
         return nil, ("Checksum mismatch for %s (expected=%s actual=%s url=%s code=%s reason=%s html=%s)"):format(
           entry.path,
           entry.hash,
           actual,
-          tostring((retry_meta and retry_meta.url) or meta.url),
-          tostring((retry_meta and retry_meta.code) or meta.code),
-          tostring((retry_meta and retry_meta.reason) or meta.reason),
-          tostring((retry_meta and retry_meta.html) or meta.html)
+          tostring(last.url or entry.path),
+          tostring(last.code or "unknown"),
+          tostring(last.err or "checksum mismatch"),
+          tostring(last.html or false)
         )
       end
     end
@@ -1194,16 +1248,15 @@ local function update_installer_if_required(manifest, release, hash_algo)
       print("SAFE UPDATE aborted: installer hash missing.")
       return false
     end
-    local content, meta = fetch_repo_file(release.commit_sha, installer_path, {
+    local ok, content, meta = fetch_repo_file(release.commit_sha, installer_path, {
       min_bytes = INSTALLER_MIN_BYTES,
       marker = INSTALLER_SANITY_MARKER
     })
-    if not content then
-      print(("SAFE UPDATE aborted: installer download failed (url=%s code=%s reason=%s html=%s)"):format(
-        tostring(meta.url),
-        tostring(meta.code),
-        tostring(meta.reason),
-        tostring(meta.html)
+    if not ok then
+      local last = meta and meta.last or {}
+      print(("SAFE UPDATE aborted: installer download failed (url=%s reason=%s)"):format(
+        tostring(last.url or installer_path),
+        tostring(last.err or "timeout or http error")
       ))
       return false
     end
@@ -1248,13 +1301,12 @@ local function migrate_config(role, cfg_path, manifest, release, hash_algo)
   if not expected_hash then
     return false
   end
-  local content, meta = fetch_repo_file(release.commit_sha, remote_path)
-  if not content then
-    error(("Config download failed (url=%s code=%s reason=%s html=%s)"):format(
-      tostring(meta.url),
-      tostring(meta.code),
-      tostring(meta.reason),
-      tostring(meta.html)
+  local ok, content, meta = fetch_repo_file(release.commit_sha, remote_path)
+  if not ok then
+    local last = meta and meta.last or {}
+    error(("Config download failed (url=%s reason=%s)"):format(
+      tostring(last.url or remote_path),
+      tostring(last.err or "timeout or http error")
     ))
   end
   if compute_hash(content, hash_algo) ~= expected_hash then

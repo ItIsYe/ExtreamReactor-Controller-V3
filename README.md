@@ -119,6 +119,7 @@ Wireless Modem (Control/Status)
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
 - **Manifest-Download fehlgeschlagen**: Retry nutzen oder Cache verwenden (falls vorhanden).
 - **Retry-Menü**: Bei Download-Fehlern gibt es immer ein Retry/Cancel-Menü; Retry versucht den Download erneut mit kurzer Wartezeit.
+- **Installer-Details**: Der Fehlerdialog zeigt die tatsächlich verwendeten RAW-URLs (Tried) und den letzten Fehler (z. B. Timeout, HTTP-Status, HTML-Response).
 - **HTML statt Lua**: Installer bricht ab (meist falscher Link oder GitHub-Rate-Limit).
 - **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien) und normalisiert auf String.
 - **SAFE UPDATE Abbruch**: Bei Download-Problemen kann der Nutzer abbrechen; das System bleibt unverändert.
