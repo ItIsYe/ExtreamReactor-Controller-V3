@@ -263,6 +263,40 @@ local function normalize_newlines(content)
   return content:gsub("\r\n", "\n")
 end
 
+local function sanitize_snapshot(value, active)
+  local value_type = type(value)
+  if value_type == "string" or value_type == "number" or value_type == "boolean" or value_type == "nil" then
+    return value
+  end
+  if value_type ~= "table" then
+    return tostring(value)
+  end
+  active = active or {}
+  if active[value] then
+    return "<cycle>"
+  end
+  active[value] = true
+  local out = {}
+  for key, val in next, value do
+    local key_type = type(key)
+    if key_type ~= "string" and key_type ~= "number" and key_type ~= "boolean" then
+      key = tostring(key)
+    end
+    out[key] = sanitize_snapshot(val, active)
+  end
+  active[value] = nil
+  return out
+end
+
+local function safe_serialize(value)
+  local sanitized = sanitize_snapshot(value)
+  local ok, result = pcall(textutils.serialize, sanitized)
+  if not ok then
+    return nil, result
+  end
+  return result
+end
+
 local function copy_file(src, dst)
   local content = read_file(src)
   if content == nil then return false end
@@ -464,7 +498,11 @@ local function read_config_from_content(content)
 end
 
 local function write_config_file(path, tbl)
-  write_atomic(path, "return " .. textutils.serialize(tbl))
+  local serialized, err = safe_serialize(tbl)
+  if not serialized then
+    error("Config serialize failed: " .. tostring(err))
+  end
+  write_atomic(path, "return " .. serialized)
 end
 
 local function merge_defaults(target, defaults)
@@ -693,7 +731,12 @@ local function read_base_cache()
 end
 
 local function write_base_cache(payload)
-  write_atomic(CONFIG.BASE_CACHE_PATH, textutils.serialize(payload))
+  local serialized, err = safe_serialize(payload)
+  if not serialized then
+    log("WARN", "Unable to serialize base cache: " .. tostring(err))
+    return
+  end
+  write_atomic(CONFIG.BASE_CACHE_PATH, serialized)
 end
 
 local function set_base_source(base_url, source, sha)
@@ -797,7 +840,21 @@ local function write_manifest_cache(manifest_content, release, source, base_info
     base_sha = base_info and base_info.sha,
     saved_at = os.time()
   }
-  write_atomic(MANIFEST_CACHE, textutils.serialize(payload))
+  local serialized, err = safe_serialize(payload)
+  if not serialized then
+    local fallback = safe_serialize({
+      manifest_content = manifest_content,
+      saved_at = os.time()
+    })
+    if fallback then
+      write_atomic(MANIFEST_CACHE, fallback)
+    else
+      print("Warning: unable to save manifest cache.")
+      log("WARN", "Unable to serialize manifest cache: " .. tostring(err))
+    end
+    return
+  end
+  write_atomic(MANIFEST_CACHE, serialized)
 end
 
 local function format_manifest_failure(meta)
@@ -1503,7 +1560,7 @@ local function migrate_config(role, cfg_path, manifest, release, hash_algo)
   end
   local defaults = read_config_from_content(content)
   local existing = read_config(cfg_path, {})
-  local original = textutils.serialize(existing)
+  local original = safe_serialize(existing) or ""
   merge_defaults(existing, defaults)
   if existing.role ~= role then
     existing.role = role
@@ -1513,7 +1570,8 @@ local function migrate_config(role, cfg_path, manifest, release, hash_algo)
     normalized_node_id = fallback_node_id()
   end
   existing.node_id = normalized_node_id
-  if textutils.serialize(existing) ~= original then
+  local updated = safe_serialize(existing) or ""
+  if updated ~= original then
     write_config_file(cfg_path, existing)
     return true
   end
@@ -1659,7 +1717,7 @@ local function safe_update()
     end
   end
   if ok then
-    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, release, manifest_meta, {
+    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, release, current_base_source, {
       base_url = current_base_url,
       source = current_base_source,
       sha = current_base_sha
@@ -1852,7 +1910,7 @@ local function full_reinstall()
   ensure_node_id(role, cfg_path)
   write_startup(role)
   write_atomic(MANIFEST_LOCAL, manifest_content)
-  write_manifest_cache(manifest_content, release, manifest_meta, {
+  write_manifest_cache(manifest_content, release, current_base_source, {
     base_url = current_base_url,
     source = current_base_source,
     sha = current_base_sha
