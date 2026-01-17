@@ -65,6 +65,7 @@ local current_base_url = nil
 local current_base_source = "main"
 local current_base_sha = nil
 
+-- BOOTSTRAP HELPERS (standalone, no external dependencies).
 -- UI helpers (centralized input).
 local function ui_prompt(label, default, min, max)
   local suffix = default and (" [" .. tostring(default) .. "]") or ""
@@ -620,6 +621,91 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds)
   return false, nil, { tried = tried, last = last_entry }
 end
 
+local function is_valid_sha(sha)
+  return type(sha) == "string" and sha:match("^[a-fA-F0-9]+$") and #sha == 40
+end
+
+local function build_main_base_url()
+  return string.format("%s/%s/%s/main/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME)
+end
+
+local function build_commit_base_url(sha)
+  return string.format("%s/%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, sha)
+end
+
+local function read_base_cache()
+  if not fs.exists(CONFIG.BASE_CACHE_PATH) then
+    return nil
+  end
+  local content = read_file(CONFIG.BASE_CACHE_PATH)
+  if not content then
+    return nil
+  end
+  local ok, data = pcall(textutils.unserialize, content)
+  if ok and type(data) == "table" then
+    return data
+  end
+  return nil
+end
+
+local function write_base_cache(payload)
+  write_atomic(CONFIG.BASE_CACHE_PATH, textutils.serialize(payload))
+end
+
+local function set_base_source(base_url, source, sha)
+  current_base_url = base_url
+  current_base_source = source or "main"
+  current_base_sha = sha
+  write_base_cache({
+    last_good_base_url = current_base_url,
+    last_good_source = current_base_source,
+    last_good_sha = current_base_sha
+  })
+end
+
+local function validate_base_url(base_url)
+  local probe_url = base_url .. MANIFEST_REMOTE
+  local ok, _, err, meta = fetch_url(probe_url, { timeout = DOWNLOAD_TIMEOUT })
+  if ok then
+    return true
+  end
+  return false, { err = err, last = { url = probe_url, err = err, code = meta and meta.code or nil } }
+end
+
+local function resolve_base_source(release)
+  local main_base = build_main_base_url()
+  local cache = read_base_cache()
+  local sha = release and release.commit_sha
+  if is_valid_sha(sha) then
+    local commit_base = build_commit_base_url(sha)
+    local ok, info = validate_base_url(commit_base)
+    if ok then
+      set_base_source(commit_base, "sha", sha)
+      return
+    end
+    print("Pinned commit invalid, falling back to main.")
+    log("WARN", "Pinned commit invalid; falling back to main")
+  else
+    if sha then
+      log("WARN", "Invalid commit SHA; falling back to main")
+    end
+  end
+  if cache and cache.last_good_base_url then
+    local ok = validate_base_url(cache.last_good_base_url)
+    if ok then
+      set_base_source(cache.last_good_base_url, cache.last_good_source, cache.last_good_sha)
+      return
+    end
+  end
+  set_base_source(main_base, "main", nil)
+end
+
+local function is_404_error(info)
+  local err = info and info.last and info.last.err or ""
+  err = tostring(err):lower()
+  return err:find("404", 1, true) or err:find("not found", 1, true)
+end
+
 local function fetch_repo_file(ref, path, opts)
   local base = current_base_url or build_main_base_url()
   local urls = { base .. path }
@@ -749,91 +835,6 @@ local function print_download_failure(label, info, fallback_urls)
     tostring(last.err or "timeout or http error"),
     tostring(last.url or urls[1])
   ))
-end
-
-local function is_valid_sha(sha)
-  return type(sha) == "string" and sha:match("^[a-fA-F0-9]+$") and #sha == 40
-end
-
-local function build_main_base_url()
-  return string.format("%s/%s/%s/main/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME)
-end
-
-local function build_commit_base_url(sha)
-  return string.format("%s/%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, sha)
-end
-
-local function read_base_cache()
-  if not fs.exists(CONFIG.BASE_CACHE_PATH) then
-    return nil
-  end
-  local content = read_file(CONFIG.BASE_CACHE_PATH)
-  if not content then
-    return nil
-  end
-  local ok, data = pcall(textutils.unserialize, content)
-  if ok and type(data) == "table" then
-    return data
-  end
-  return nil
-end
-
-local function write_base_cache(payload)
-  write_atomic(CONFIG.BASE_CACHE_PATH, textutils.serialize(payload))
-end
-
-local function set_base_source(base_url, source, sha)
-  current_base_url = base_url
-  current_base_source = source or "main"
-  current_base_sha = sha
-  write_base_cache({
-    last_good_base_url = current_base_url,
-    last_good_source = current_base_source,
-    last_good_sha = current_base_sha
-  })
-end
-
-local function validate_base_url(base_url)
-  local probe_url = base_url .. MANIFEST_REMOTE
-  local ok, _, err, meta = fetch_url(probe_url, { timeout = DOWNLOAD_TIMEOUT })
-  if ok then
-    return true
-  end
-  return false, { err = err, last = { url = probe_url, err = err, code = meta and meta.code or nil } }
-end
-
-local function resolve_base_source(release)
-  local main_base = build_main_base_url()
-  local cache = read_base_cache()
-  local sha = release and release.commit_sha
-  if is_valid_sha(sha) then
-    local commit_base = build_commit_base_url(sha)
-    local ok, info = validate_base_url(commit_base)
-    if ok then
-      set_base_source(commit_base, "sha", sha)
-      return
-    end
-    print("Pinned commit invalid, falling back to main.")
-    log("WARN", "Pinned commit invalid; falling back to main")
-  else
-    if sha then
-      log("WARN", "Invalid commit SHA; falling back to main")
-    end
-  end
-  if cache and cache.last_good_base_url then
-    local ok = validate_base_url(cache.last_good_base_url)
-    if ok then
-      set_base_source(cache.last_good_base_url, cache.last_good_source, cache.last_good_sha)
-      return
-    end
-  end
-  set_base_source(main_base, "main", nil)
-end
-
-local function is_404_error(info)
-  local err = info and info.last and info.last.err or ""
-  err = tostring(err):lower()
-  return err:find("404", 1, true) or err:find("not found", 1, true)
 end
 
 local function download_release()
@@ -1775,6 +1776,42 @@ local function full_reinstall()
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "FULL REINSTALL complete")
 end
+
+local function bootstrap_self_check()
+  local required = {
+    { name = "ui_prompt", fn = ui_prompt },
+    { name = "ui_menu", fn = ui_menu },
+    { name = "ui_pause", fn = ui_pause },
+    { name = "prompt", fn = prompt },
+    { name = "ensure_dir", fn = ensure_dir },
+    { name = "read_file", fn = read_file },
+    { name = "write_atomic", fn = write_atomic },
+    { name = "compute_hash", fn = compute_hash },
+    { name = "file_checksum", fn = file_checksum },
+    { name = "fetch_url", fn = fetch_url },
+    { name = "fetch_with_retries", fn = fetch_with_retries },
+    { name = "fetch_repo_file", fn = fetch_repo_file },
+    { name = "build_main_base_url", fn = build_main_base_url },
+    { name = "build_commit_base_url", fn = build_commit_base_url },
+    { name = "read_manifest_cache", fn = read_manifest_cache },
+    { name = "write_manifest_cache", fn = write_manifest_cache },
+    { name = "ensure_base_dirs", fn = ensure_base_dirs },
+    { name = "stage_updates", fn = stage_updates },
+    { name = "apply_staged", fn = apply_staged },
+    { name = "rollback_from_backup", fn = rollback_from_backup }
+  }
+  local missing = {}
+  for _, entry in ipairs(required) do
+    if type(entry.fn) ~= "function" then
+      table.insert(missing, entry.name)
+    end
+  end
+  if #missing > 0 then
+    error("Installer bootstrap failed: missing helpers: " .. table.concat(missing, ", "))
+  end
+end
+
+bootstrap_self_check()
 
 local function main()
   if not http then
