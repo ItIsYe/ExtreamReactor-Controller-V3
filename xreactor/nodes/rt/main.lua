@@ -1,3 +1,25 @@
+-- CONFIG
+local CONFIG = {
+  LOG_NAME = "rt", -- Log file name for this node.
+  LOG_PREFIX = "RT", -- Default log prefix for RT events.
+  TARGET_RPM = 900, -- Default turbine RPM target.
+  RPM_TOLERANCE = 20, -- RPM tolerance for control loops.
+  MIN_FLOW = 200, -- Minimum turbine flow.
+  MAX_FLOW = 1900, -- Maximum turbine flow.
+  FLOW_STEP = 50, -- Flow adjustment step size.
+  COIL_ENGAGE_RPM = 850, -- RPM at which coils engage.
+  COIL_DISENGAGE_RPM = 750, -- RPM at which coils disengage.
+  START_FLOW = 200, -- Starting flow value when enabling turbines.
+  ROD_TICK = 5.0, -- Control rod adjustment interval (seconds).
+  ROD_MIN = 0, -- Minimum control rod insertion.
+  ROD_MAX = 98, -- Maximum control rod insertion.
+  INITIAL_ROD_LEVEL = 98, -- Initial rod level on startup.
+  MIN_APPLY_INTERVAL = 1.5, -- Minimum interval between rod applications.
+  REACTOR_STEP = 5, -- Reactor rod step adjustment.
+  MIN_ACTIVE_RPM = 100, -- Minimum RPM to consider turbine active.
+  RECEIVE_TIMEOUT = 0.2 -- Network receive timeout (seconds).
+}
+
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
 _G = _G or {}
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
@@ -45,8 +67,7 @@ local DEBUG = "DEBUG"
 local WARN = "WARN"
 
 local function log(level, message)
-  local stamp = textutils.formatTime(os.epoch("utc") / 1000, true)
-  print(string.format("[%s] RT | %s | %s", stamp, level, message))
+  utils.log(CONFIG.LOG_PREFIX, message, level)
 end
 
 local function loadConfig()
@@ -64,21 +85,24 @@ local function loadConfig()
 end
 
 local config = loadConfig()
-local TARGET_RPM = 900
-local RPM_TOL = 20
-local MIN_FLOW = 200
-local MAX_FLOW = 1900
-local FLOW_STEP = 50
-local COIL_ENGAGE_RPM = 850
-local COIL_DISENG_RPM = 750
-local START_FLOW = MIN_FLOW
-local ROD_TICK = 5.0
-local ROD_MIN = 0
-local ROD_MAX = 98
-local INITIAL_ROD_LEVEL = ROD_MAX
-local MIN_APPLY_INTERVAL = 1.5
-local REACTOR_STEP = 5
-local MIN_ACTIVE_RPM = 100
+-- Initialize file logging early to capture startup events.
+utils.init_logger({ log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX, enabled = config.debug_logging })
+log(INFO, "Startup")
+local TARGET_RPM = CONFIG.TARGET_RPM
+local RPM_TOL = CONFIG.RPM_TOLERANCE
+local MIN_FLOW = CONFIG.MIN_FLOW
+local MAX_FLOW = CONFIG.MAX_FLOW
+local FLOW_STEP = CONFIG.FLOW_STEP
+local COIL_ENGAGE_RPM = CONFIG.COIL_ENGAGE_RPM
+local COIL_DISENG_RPM = CONFIG.COIL_DISENGAGE_RPM
+local START_FLOW = CONFIG.START_FLOW
+local ROD_TICK = CONFIG.ROD_TICK
+local ROD_MIN = CONFIG.ROD_MIN
+local ROD_MAX = CONFIG.ROD_MAX
+local INITIAL_ROD_LEVEL = CONFIG.INITIAL_ROD_LEVEL
+local MIN_APPLY_INTERVAL = CONFIG.MIN_APPLY_INTERVAL
+local REACTOR_STEP = CONFIG.REACTOR_STEP
+local MIN_ACTIVE_RPM = CONFIG.MIN_ACTIVE_RPM
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
 local last_rod_change_ts = 0
@@ -1776,7 +1800,7 @@ local function mainEventLoop()
       node_state_machine:transition(constants.node_states.EMERGENCY)
     end
     node_state_machine:tick()
-    local message = network:receive(0.2)
+    local message = network:receive(CONFIG.RECEIVE_TIMEOUT)
     if message then
       if message.type == constants.message_types.COMMAND then
         handle_command(message)
