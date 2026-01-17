@@ -1,3 +1,9 @@
+-- CONFIG
+local CONFIG = {
+  LOG_NAME = "master", -- Log file name for this role.
+  LOG_PREFIX = "MASTER" -- Default log prefix for master events.
+}
+
 _G = _G or {}
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
@@ -48,6 +54,10 @@ local profiles = require("master.profiles")
 local trends_lib = require("core.trends")
 local ui = require("core.ui")
 local config = require("master.config")
+
+-- Initialize file logging early to capture startup events.
+utils.init_logger({ log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX, enabled = config.debug_logging })
+utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
 
 config.heartbeat_interval = config.heartbeat_interval or 5
 config.rt_default_mode = config.rt_default_mode or "MASTER"

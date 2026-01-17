@@ -1,3 +1,10 @@
+-- CONFIG
+local CONFIG = {
+  LOG_NAME = "fuel", -- Log file name for this node.
+  LOG_PREFIX = "FUEL", -- Default log prefix for fuel events.
+  RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
+}
+
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
@@ -5,6 +12,10 @@ local utils = require("core.utils")
 local network_lib = require("core.network")
 local safety = require("core.safety")
 local config = require("nodes.fuel.config")
+
+-- Initialize file logging early to capture startup events.
+utils.init_logger({ log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX, enabled = config.debug_logging })
+utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
 
 local network
 local storage
@@ -65,7 +76,7 @@ local function main_loop()
     if os.epoch("utc") - last_heartbeat > config.heartbeat_interval * 1000 then
       send_status()
     end
-    local message = network:receive(0.5)
+    local message = network:receive(CONFIG.RECEIVE_TIMEOUT)
     if message then
       if message.type == constants.message_types.COMMAND then
         handle_command(message)
