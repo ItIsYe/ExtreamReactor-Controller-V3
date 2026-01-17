@@ -9,6 +9,8 @@ local BACKUP_BASE = "/xreactor_backup"
 local NODE_ID_PATH = BASE_DIR .. "/config/node_id.txt"
 local UPDATE_STAGING = "/xreactor_update_tmp"
 local INSTALLER_VERSION = "1.1"
+local INSTALLER_MIN_BYTES = 200
+local INSTALLER_SANITY_MARKER = "local function main"
 
 local roles = {
   MASTER = "MASTER",
@@ -38,6 +40,33 @@ end
 local function trim(text)
   if not text then return "" end
   return text:match("^%s*(.-)%s*$")
+end
+
+local function normalize_node_id(value)
+  if type(value) == "string" then
+    local trimmed = trim(value)
+    if trimmed ~= "" then
+      return trimmed
+    end
+  elseif type(value) == "number" then
+    return tostring(value)
+  elseif type(value) == "table" then
+    local candidate = value.id or value.node_id or value.value
+    if type(candidate) == "string" then
+      local trimmed = trim(candidate)
+      if trimmed ~= "" then
+        return trimmed
+      end
+    elseif type(candidate) == "number" then
+      return tostring(candidate)
+    end
+    return tostring(value)
+  end
+  return nil
+end
+
+local function fallback_node_id()
+  return tostring(os.getComputerLabel() or os.getComputerID())
 end
 
 local function read_file(path)
@@ -167,17 +196,6 @@ local function merge_defaults(target, defaults)
   return changed
 end
 
-local function download_content(base_url, remote_path)
-  local url = string.format("%s/%s", base_url, remote_path)
-  local response = http.get(url)
-  if not response then
-    error("Failed to download " .. url)
-  end
-  local content = response.readAll()
-  response.close()
-  return content
-end
-
 local function is_html_payload(content)
   if not content then return false end
   local head = content:sub(1, 200)
@@ -208,11 +226,6 @@ local function download_url_checked(url)
   return content, { url = url, code = code, reason = nil, html = html }
 end
 
-local function download_content_checked(base_url, remote_path)
-  local url = string.format("%s/%s", base_url, remote_path)
-  return download_url_checked(url)
-end
-
 local function download_with_retries(urls, attempts, backoff_seconds)
   local last_meta = nil
   for attempt = 1, attempts do
@@ -233,6 +246,25 @@ local function download_with_retries(urls, attempts, backoff_seconds)
     end
   end
   return nil, last_meta
+end
+
+local function download_file_with_retries(base_url, remote_path)
+  local url = string.format("%s/%s", base_url, remote_path)
+  return download_with_retries({ url }, 3, 1)
+end
+
+local function validate_installer_content(content)
+  if not content or #content < INSTALLER_MIN_BYTES then
+    return false, "content too short"
+  end
+  if not content:find(INSTALLER_SANITY_MARKER, 1, true) then
+    return false, "sanity check failed"
+  end
+  local loader, err = load(content, "installer", "t", {})
+  if not loader then
+    return false, err or "syntax error"
+  end
+  return true
 end
 
 local function read_manifest_cache()
@@ -469,8 +501,13 @@ local function write_config(role, wireless, wired, extras)
   defaults.wireless_modem = wireless
   defaults.wired_modem = wired
   if defaults.node_id == nil then
-    defaults.node_id = os.getComputerLabel() or os.getComputerID()
+    defaults.node_id = fallback_node_id()
   end
+  local normalized_node_id = normalize_node_id(defaults.node_id)
+  if not normalized_node_id then
+    normalized_node_id = fallback_node_id()
+  end
+  defaults.node_id = normalized_node_id
   if role == roles.MASTER then
     defaults.monitor_auto = true
     defaults.ui_scale_default = extras.ui_scale_default or 0.5
@@ -479,7 +516,7 @@ local function write_config(role, wireless, wired, extras)
     defaults.turbines = extras.turbines
     defaults.modem = extras.modem
     if extras.node_id then
-      defaults.node_id = extras.node_id
+      defaults.node_id = normalize_node_id(extras.node_id) or fallback_node_id()
     end
   end
   write_config_file(cfg_path, defaults)
@@ -524,7 +561,15 @@ end
 
 local function ensure_node_id(role, cfg_path)
   if fs.exists(NODE_ID_PATH) then
-    return true
+    local existing = trim(read_file(NODE_ID_PATH))
+    local normalized = normalize_node_id(existing)
+    if normalized then
+      if normalized ~= existing then
+        write_atomic(NODE_ID_PATH, normalized)
+        print("normalized node_id from file")
+      end
+      return true
+    end
   end
   print("node_id missing → attempting migration")
   local sources = collect_known_node_id_sources(role, cfg_path)
@@ -532,15 +577,17 @@ local function ensure_node_id(role, cfg_path)
     if fs.exists(source.path) then
       if source.label == "config" then
         local cfg = read_config(source.path, {})
-        if cfg.node_id and type(cfg.node_id) == "string" then
-          write_atomic(NODE_ID_PATH, cfg.node_id)
+        local normalized = normalize_node_id(cfg.node_id)
+        if normalized then
+          write_atomic(NODE_ID_PATH, normalized)
           print("migrated node_id from config")
           return true
         end
       else
         local content = trim(read_file(source.path))
-        if content ~= "" then
-          write_atomic(NODE_ID_PATH, content)
+        local normalized = normalize_node_id(content)
+        if normalized then
+          write_atomic(NODE_ID_PATH, normalized)
           print("migrated node_id from legacy_file")
           return true
         end
@@ -548,13 +595,7 @@ local function ensure_node_id(role, cfg_path)
     end
   end
 
-  local has_role_config = cfg_path and fs.exists(cfg_path)
-  if has_role_config then
-    print("unable to recover node_id safely → aborting SAFE UPDATE")
-    return false
-  end
-
-  local generated = os.getComputerLabel() or tostring(os.getComputerID())
+  local generated = fallback_node_id()
   write_atomic(NODE_ID_PATH, generated)
   print("generated new node_id")
   return true
@@ -615,7 +656,7 @@ local function stage_updates(entries, base_url)
   ensure_dir(UPDATE_STAGING)
   local staged = {}
   for _, entry in ipairs(entries) do
-    local content, meta = download_content_checked(base_url, entry.path)
+    local content, meta = download_file_with_retries(base_url, entry.path)
     if not content then
       return nil, ("Download failed for %s (url=%s code=%s reason=%s html=%s)"):format(
         entry.path,
@@ -627,7 +668,7 @@ local function stage_updates(entries, base_url)
     end
     local actual = checksum(content)
     if actual ~= entry.hash then
-      local retry_content, retry_meta = download_content_checked(base_url, entry.path)
+      local retry_content, retry_meta = download_file_with_retries(base_url, entry.path)
       if retry_content then
         content = retry_content
         actual = checksum(content)
@@ -692,7 +733,8 @@ local function update_installer_if_required(manifest, base_url)
       print("SAFE UPDATE aborted: installer hash missing.")
       return false
     end
-    local content, meta = download_content_checked(base_url, installer_path)
+    local url = string.format("%s/%s", base_url, installer_path)
+    local content, meta = download_with_retries({ url }, 3, 1)
     if not content then
       print(("SAFE UPDATE aborted: installer download failed (url=%s code=%s reason=%s html=%s)"):format(
         tostring(meta.url),
@@ -706,8 +748,29 @@ local function update_installer_if_required(manifest, base_url)
       print("SAFE UPDATE aborted: installer checksum mismatch.")
       return false
     end
-    write_atomic("/" .. installer_path, content)
-    print("Installer updated. Please re-run installer.")
+    local valid, valid_err = validate_installer_content(content)
+    if not valid then
+      print("SAFE UPDATE aborted: installer invalid (" .. tostring(valid_err) .. ").")
+      return false
+    end
+    local target = "/" .. installer_path
+    local temp = target .. ".new"
+    write_atomic(temp, content)
+    if fs.exists(target) then
+      fs.delete(target)
+    end
+    fs.move(temp, target)
+    print("Installer updated.")
+    if not _G.__xreactor_installer_restarted then
+      _G.__xreactor_installer_restarted = true
+      local loader = loadfile(target)
+      if loader then
+        print("Restarting installer...")
+        loader()
+      else
+        print("Installer updated, but restart failed. Please re-run installer.")
+      end
+    end
     return false
   end
   return true
@@ -719,7 +782,7 @@ local function migrate_config(role, cfg_path, manifest, base_url)
   if not expected_hash then
     return false
   end
-  local content, meta = download_content_checked(base_url, remote_path)
+  local content, meta = download_file_with_retries(base_url, remote_path)
   if not content then
     error(("Config download failed (url=%s code=%s reason=%s html=%s)"):format(
       tostring(meta.url),
@@ -738,9 +801,11 @@ local function migrate_config(role, cfg_path, manifest, base_url)
   if existing.role ~= role then
     existing.role = role
   end
-  if existing.node_id == nil then
-    existing.node_id = os.getComputerLabel() or os.getComputerID()
+  local normalized_node_id = normalize_node_id(existing.node_id)
+  if not normalized_node_id then
+    normalized_node_id = fallback_node_id()
   end
+  existing.node_id = normalized_node_id
   if textutils.serialize(existing) ~= original then
     write_config_file(cfg_path, existing)
     return true
@@ -830,10 +895,12 @@ local function safe_update()
   local staged, stage_err = stage_updates(updates, base_url)
   if not staged then
     local retry_release = download_release()
-    if retry_release.commit_sha ~= release.commit_sha then
+    if retry_release and retry_release.commit_sha ~= release.commit_sha then
       manifest_content, manifest, release, base_url = download_manifest()
-      updates = update_files(manifest)
-      staged, stage_err = stage_updates(updates, base_url)
+      if manifest_content then
+        updates = update_files(manifest)
+        staged, stage_err = stage_updates(updates, base_url)
+      end
     end
     if not staged then
       print("SAFE UPDATE failed. Error: " .. tostring(stage_err))
@@ -841,7 +908,7 @@ local function safe_update()
     end
   end
   local backup_dir = create_backup_dir()
-  local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL }
+  local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
   local update_paths = {}
   local created = {}
   for _, entry in ipairs(updates) do
@@ -926,7 +993,7 @@ local function full_reinstall()
   end
   table.sort(updates)
   for _, path in ipairs(updates) do
-    local content, meta = download_content_checked(base_url, path)
+    local content, meta = download_file_with_retries(base_url, path)
     if not content then
       error(("Download failed for %s (url=%s code=%s reason=%s html=%s)"):format(
         path,
@@ -943,7 +1010,7 @@ local function full_reinstall()
     write_atomic("/" .. path, content)
   end
   if manifest.installer_path and manifest.installer_hash then
-    local content, meta = download_content_checked(base_url, manifest.installer_path)
+    local content, meta = download_file_with_retries(base_url, manifest.installer_path)
     if not content then
       error(("Installer download failed (url=%s code=%s reason=%s html=%s)"):format(
         tostring(meta.url),
