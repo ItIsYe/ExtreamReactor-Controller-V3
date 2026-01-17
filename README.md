@@ -64,7 +64,8 @@ Wireless Modem (Control/Status)
 - Bei Fehler: Rollback aus `/xreactor_backup/<timestamp>/`, keine halbfertigen Updates.
 - Manifest-Download nutzt Retries mit Backoff, RAW-Links (`raw.githubusercontent.com`) und HTML-Sanity-Checks.
 - Manifest-Cache: `/xreactor/.cache/manifest.lua`. Bei Problemen: **Cached Manifest**, **Retry** oder **Cancel**.
-- Updates sind commit-gepinnt (Manifest + Dateien aus derselben Commit-SHA), um Hash-Mismatches zu vermeiden.
+- Updates sind source_ref-gepinnt: Manifest und Dateien kommen aus derselben Base-URL (Commit-SHA bevorzugt, `main` nur Fallback).
+- Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
 
 **FULL REINSTALL (alles neu)**
 - Installer erneut ausführen → Menü **FULL REINSTALL** wählen.
