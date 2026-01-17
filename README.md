@@ -51,7 +51,7 @@ Wireless Modem (Control/Status)
    ```
    lua /installer.lua
    ```
-   (Der Root-Installer ist nur ein Bootstrap und startet `/xreactor/installer/installer.lua`.)
+   (Der Root-Installer ist ein Bootstrap: Er aktualisiert bei Bedarf `/xreactor/installer/installer_core.lua` und startet anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
@@ -60,9 +60,10 @@ Wireless Modem (Control/Status)
 - Installer erneut ausführen → Menü **SAFE UPDATE** wählen.
 - Lädt nur **geänderte/fehlende** Dateien laut Manifest (dateiweise).
 - SAFE UPDATE fragt **keine** Rolle neu ab und überschreibt keine Configs/Node-ID.
-- Downloads werden zuerst in Temp/Staging geschrieben, verifiziert und erst danach atomar ersetzt.
+- Downloads werden zuerst in ein **Staging-Verzeichnis** (`/xreactor_stage/<timestamp>`) geschrieben, per Checksum verifiziert und erst danach atomar ersetzt.
 - Bei Fehler: Rollback aus `/xreactor_backup/<timestamp>/`, keine halbfertigen Updates.
-- Manifest-Download nutzt Retries mit Backoff, RAW-Links (`raw.githubusercontent.com`) und HTML-Sanity-Checks.
+- Downloader nutzt **Retries + Backoff**, prüft HTTP-Status/HTML-Fehler und nutzt RAW-Mirrors (`raw.githubusercontent.com`, `raw.github.com`).
+- **Size mismatch** gilt nur als Transport-Warnung; die Entscheidung trifft die Checksum. Bei Problemen: Retry.
 - Manifest-Cache: `/xreactor/.cache/manifest.lua`. Bei Problemen: **Cached Manifest**, **Retry** oder **Cancel**.
 - Updates sind source_ref-gepinnt: Manifest und Dateien kommen aus derselben Base-URL (Commit-SHA bevorzugt, `main` nur Fallback).
 - Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
@@ -78,8 +79,15 @@ Wireless Modem (Control/Status)
 - **GitHub Timeout**: Installer nutzt Retry; falls weiter fehlschlägt, kann ein Cached Manifest verwendet werden oder der Installer bricht sauber ohne Änderungen ab.
 
 **Installer starten (ohne Neu-Download)**
-- Root-Installer (`/installer.lua`) ist nur ein Bootstrap. Er startet `/xreactor/installer/installer.lua`, falls vorhanden.
-- SAFE UPDATE läuft immer mit dem lokalen Installer; nur bei notwendigem Versionssprung wird der Installer ersetzt und automatisch neu gestartet.
+- Root-Installer (`/installer.lua`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
+- Der Core-Installer kann auch direkt via `/xreactor/installer/installer.lua` gestartet werden (Shim, falls vorhanden).
+- SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
+
+**Logging & Debugging**
+- Installer-Log: `/xreactor/logs/installer.log` (mit Rotation `.1`).
+- Node-Logs: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
+- Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen.
+- Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
 
 ## Konfiguration & Autodetection
 - **MASTER**: `xreactor/master/config.lua`
@@ -99,13 +107,8 @@ Wireless Modem (Control/Status)
   - Config-Datei der Rolle (`debug_logging = true`), oder
   - Settings API: `settings.set("xreactor.debug_logging", true)` + `settings.save()`.
 - Logfiles:
-  - Installer: `/xreactor/logs/installer.log`
-  - MASTER: `/xreactor/logs/master.log`
-  - RT: `/xreactor/logs/rt.log`
-  - ENERGY: `/xreactor/logs/energy.log`
-  - FUEL: `/xreactor/logs/fuel.log`
-  - WATER: `/xreactor/logs/water.log`
-  - REPROCESSOR: `/xreactor/logs/reprocessor.log`
+  - Installer: `/xreactor/logs/installer.log` (Rotation `.1`)
+  - Nodes: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
 
 ## Betrieb (Modi)
