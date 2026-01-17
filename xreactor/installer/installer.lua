@@ -1,25 +1,60 @@
-local BASE_DIR = "/xreactor"
-local REPO_OWNER = "ItIsYe"
-local REPO_NAME = "ExtreamReactor-Controller-V3"
-local REPO_BASE_URL_MAIN = "https://raw.githubusercontent.com"
-local RELEASE_REMOTE = "xreactor/installer/release.lua"
-local MANIFEST_REMOTE = "xreactor/installer/manifest.lua"
-local MANIFEST_LOCAL = BASE_DIR .. "/.manifest"
-local MANIFEST_CACHE = BASE_DIR .. "/.cache/manifest.lua"
-local MANIFEST_CACHE_LEGACY = BASE_DIR .. "/.manifest_cache"
-local BACKUP_BASE = "/xreactor_backup"
-local NODE_ID_PATH = BASE_DIR .. "/config/node_id.txt"
-local UPDATE_STAGING = "/xreactor_update_tmp"
-local INSTALLER_VERSION = "1.1"
-local INSTALLER_MIN_BYTES = 200
-local INSTALLER_SANITY_MARKER = "local function main"
-local MANIFEST_MIN_BYTES = 50
-local MANIFEST_SANITY_MARKER = "return"
-local RELEASE_MIN_BYTES = 50
-local RELEASE_SANITY_MARKER = "commit_sha"
-local DOWNLOAD_ATTEMPTS = 4
-local DOWNLOAD_BACKOFF = 0.5
-local DOWNLOAD_TIMEOUT = 6
+-- CONFIG
+local CONFIG = {
+  BASE_DIR = "/xreactor", -- Base install directory.
+  REPO_OWNER = "ItIsYe", -- GitHub repository owner.
+  REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
+  REPO_BASE_URL = "https://raw.githubusercontent.com", -- Raw GitHub base URL.
+  RELEASE_REMOTE = "xreactor/installer/release.lua", -- Release metadata path.
+  MANIFEST_REMOTE = "xreactor/installer/manifest.lua", -- Manifest path (fallback).
+  MANIFEST_LOCAL = "/xreactor/.manifest", -- Cached manifest in install dir.
+  MANIFEST_CACHE = "/xreactor/.cache/manifest.lua", -- Serialized manifest cache.
+  MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path.
+  BACKUP_BASE = "/xreactor_backup", -- Backup base directory.
+  NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
+  UPDATE_STAGING = "/xreactor_update_tmp", -- Temp staging folder for updates.
+  INSTALLER_VERSION = "1.2", -- Installer version for min-version checks.
+  INSTALLER_MIN_BYTES = 200, -- Min bytes to accept installer download.
+  INSTALLER_SANITY_MARKER = "local function main", -- Installer sanity marker.
+  MANIFEST_MIN_BYTES = 50, -- Min bytes to accept manifest download.
+  MANIFEST_SANITY_MARKER = "return", -- Manifest sanity marker.
+  RELEASE_MIN_BYTES = 50, -- Min bytes to accept release download.
+  RELEASE_SANITY_MARKER = "commit_sha", -- Release sanity marker.
+  DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts.
+  DOWNLOAD_BACKOFF = 0.5, -- Backoff base (seconds) between retries.
+  DOWNLOAD_TIMEOUT = 6, -- HTTP timeout in seconds.
+  LOG_NAME = "installer", -- Installer log file name.
+  LOG_PREFIX = "INSTALLER", -- Installer log prefix.
+  LOG_SETTINGS_KEY = "xreactor.debug_logging" -- settings key for debug logs.
+}
+
+local BASE_DIR = CONFIG.BASE_DIR
+local REPO_OWNER = CONFIG.REPO_OWNER
+local REPO_NAME = CONFIG.REPO_NAME
+local REPO_BASE_URL_MAIN = CONFIG.REPO_BASE_URL
+local RELEASE_REMOTE = CONFIG.RELEASE_REMOTE
+local MANIFEST_REMOTE = CONFIG.MANIFEST_REMOTE
+local MANIFEST_LOCAL = CONFIG.MANIFEST_LOCAL
+local MANIFEST_CACHE = CONFIG.MANIFEST_CACHE
+local MANIFEST_CACHE_LEGACY = CONFIG.MANIFEST_CACHE_LEGACY
+local BACKUP_BASE = CONFIG.BACKUP_BASE
+local NODE_ID_PATH = CONFIG.NODE_ID_PATH
+local UPDATE_STAGING = CONFIG.UPDATE_STAGING
+local INSTALLER_VERSION = CONFIG.INSTALLER_VERSION
+local INSTALLER_MIN_BYTES = CONFIG.INSTALLER_MIN_BYTES
+local INSTALLER_SANITY_MARKER = CONFIG.INSTALLER_SANITY_MARKER
+local MANIFEST_MIN_BYTES = CONFIG.MANIFEST_MIN_BYTES
+local MANIFEST_SANITY_MARKER = CONFIG.MANIFEST_SANITY_MARKER
+local RELEASE_MIN_BYTES = CONFIG.RELEASE_MIN_BYTES
+local RELEASE_SANITY_MARKER = CONFIG.RELEASE_SANITY_MARKER
+local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
+local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
+local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
+
+package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
+local logger = require("core.logger")
+
+-- Initialize installer logging early to capture download decisions.
+logger.init({ log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX })
 
 local roles = {
   MASTER = "MASTER",
@@ -38,6 +73,11 @@ local role_targets = {
   [roles.WATER_NODE] = { path = "nodes/water", config = "nodes/water/config.lua" },
   [roles.REPROCESSOR_NODE] = { path = "nodes/reprocessor", config = "nodes/reprocessor/config.lua" }
 }
+
+-- Centralized installer logging helper.
+local function log(level, message)
+  logger.log(CONFIG.LOG_PREFIX, message, level)
+end
 
 local function ensure_dir(path)
   if path == "" then return end
@@ -116,8 +156,7 @@ local function copy_file(src, dst)
   return true
 end
 
-local function checksum(content)
-  content = normalize_newlines(content)
+local function sumlen_hash(content)
   local sum = 0
   for i = 1, #content do
     sum = (sum + string.byte(content, i)) % 1000000007
@@ -125,17 +164,138 @@ local function checksum(content)
   return tostring(sum) .. ":" .. tostring(#content)
 end
 
+local crc32_table
+
+local function build_crc32_table()
+  local table_out = {}
+  for i = 0, 255 do
+    local crc = i
+    for _ = 1, 8 do
+      if bit32.band(crc, 1) == 1 then
+        crc = bit32.bxor(bit32.rshift(crc, 1), 0xEDB88320)
+      else
+        crc = bit32.rshift(crc, 1)
+      end
+    end
+    table_out[i] = crc
+  end
+  return table_out
+end
+
+local function crc32_hash(content)
+  if not crc32_table then
+    crc32_table = build_crc32_table()
+  end
+  local crc = 0xFFFFFFFF
+  for i = 1, #content do
+    local byte = string.byte(content, i)
+    local idx = bit32.band(bit32.bxor(crc, byte), 0xFF)
+    crc = bit32.bxor(bit32.rshift(crc, 8), crc32_table[idx])
+  end
+  crc = bit32.bxor(crc, 0xFFFFFFFF)
+  return string.format("%08x", crc)
+end
+
+local function sha1_hash(content)
+  local function left_rotate(value, bits)
+    return bit32.lrotate(value, bits)
+  end
+
+  local h0, h1, h2, h3, h4 = 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0
+  local ml = #content * 8
+  content = content .. string.char(0x80)
+  while (#content % 64) ~= 56 do
+    content = content .. string.char(0x00)
+  end
+  local high = math.floor(ml / 2^32)
+  local low = ml % 2^32
+  content = content .. string.char(
+    bit32.band(bit32.rshift(high, 24), 0xFF),
+    bit32.band(bit32.rshift(high, 16), 0xFF),
+    bit32.band(bit32.rshift(high, 8), 0xFF),
+    bit32.band(high, 0xFF),
+    bit32.band(bit32.rshift(low, 24), 0xFF),
+    bit32.band(bit32.rshift(low, 16), 0xFF),
+    bit32.band(bit32.rshift(low, 8), 0xFF),
+    bit32.band(low, 0xFF)
+  )
+
+  for chunk = 1, #content, 64 do
+    local w = {}
+    for i = 0, 15 do
+      local offset = chunk + (i * 4)
+      w[i] = bit32.bor(
+        bit32.lshift(string.byte(content, offset), 24),
+        bit32.lshift(string.byte(content, offset + 1), 16),
+        bit32.lshift(string.byte(content, offset + 2), 8),
+        string.byte(content, offset + 3)
+      )
+    end
+    for i = 16, 79 do
+      w[i] = left_rotate(bit32.bxor(w[i - 3], w[i - 8], w[i - 14], w[i - 16]), 1)
+    end
+    local a, b, c, d, e = h0, h1, h2, h3, h4
+    for i = 0, 79 do
+      local f, k
+      if i < 20 then
+        f = bit32.bor(bit32.band(b, c), bit32.band(bit32.bnot(b), d))
+        k = 0x5A827999
+      elseif i < 40 then
+        f = bit32.bxor(b, c, d)
+        k = 0x6ED9EBA1
+      elseif i < 60 then
+        f = bit32.bor(bit32.band(b, c), bit32.band(b, d), bit32.band(c, d))
+        k = 0x8F1BBCDC
+      else
+        f = bit32.bxor(b, c, d)
+        k = 0xCA62C1D6
+      end
+      local temp = bit32.band(left_rotate(a, 5) + f + e + k + w[i], 0xFFFFFFFF)
+      e = d
+      d = c
+      c = left_rotate(b, 30)
+      b = a
+      a = temp
+    end
+    h0 = bit32.band(h0 + a, 0xFFFFFFFF)
+    h1 = bit32.band(h1 + b, 0xFFFFFFFF)
+    h2 = bit32.band(h2 + c, 0xFFFFFFFF)
+    h3 = bit32.band(h3 + d, 0xFFFFFFFF)
+    h4 = bit32.band(h4 + e, 0xFFFFFFFF)
+  end
+  return string.format("%08x%08x%08x%08x%08x", h0, h1, h2, h3, h4)
+end
+
+local function resolve_hash_algo(manifest, release)
+  return manifest.hash_algo or release.hash_algo
+end
+
 local function validate_hash_algo(manifest, release)
-  local algo = manifest.hash_algo or release.hash_algo
-  if algo ~= "sumlen-v1" then
+  local algo = resolve_hash_algo(manifest, release)
+  local allowed = { ["sumlen-v1"] = true, ["crc32"] = true, ["sha1"] = true }
+  if not allowed[algo] then
     error("Unsupported hash algo: " .. tostring(algo))
   end
 end
 
-local function file_checksum(path)
+local function compute_hash(content, algo)
+  content = normalize_newlines(content)
+  if algo == "sumlen-v1" then
+    return sumlen_hash(content)
+  end
+  if algo == "crc32" then
+    return crc32_hash(content)
+  end
+  if algo == "sha1" then
+    return sha1_hash(content)
+  end
+  error("Unsupported hash algo: " .. tostring(algo))
+end
+
+local function file_checksum(path, algo)
   local content = read_file(path)
   if not content then return nil end
-  return checksum(content)
+  return compute_hash(content, algo)
 end
 
 local function compare_version(a, b)
@@ -371,9 +531,14 @@ local function read_manifest_cache()
 end
 
 local function write_manifest_cache(manifest_content, release, source)
+  local safe_release = {
+    commit_sha = release and release.commit_sha,
+    hash_algo = release and release.hash_algo,
+    manifest_path = release and release.manifest_path
+  }
   local payload = {
     manifest_content = manifest_content,
-    release = release,
+    release = safe_release,
     source = source,
     saved_at = os.time()
   }
@@ -409,6 +574,7 @@ local function download_release()
     return nil, "Release missing hash_algo", meta
   end
   data.manifest_path = data.manifest_path or MANIFEST_REMOTE
+  log("INFO", "Release fetched: " .. data.commit_sha)
   return data, meta
 end
 
@@ -441,7 +607,49 @@ local function download_manifest()
     return nil, manifest_err, meta
   end
   validate_hash_algo(manifest, release)
+  log("INFO", "Manifest fetched from " .. tostring(release.commit_sha))
   return content, manifest, release, meta
+end
+
+local function acquire_manifest()
+  local manifest_content, manifest, release, manifest_meta = download_manifest()
+  while not manifest_content do
+    local cache = read_manifest_cache()
+    local failure = format_manifest_failure(manifest_meta)
+    print(failure)
+    log("WARN", failure)
+    if cache then
+      print("1) Use cached manifest (offline update)")
+      print("2) Retry download")
+      print("3) Cancel")
+    else
+      print("1) Retry download")
+      print("2) Cancel")
+    end
+    local default_choice = cache and "1" or "1"
+    local choice = tonumber(prompt("Select option", default_choice)) or tonumber(default_choice)
+    if cache and choice == 1 then
+      manifest_content = cache.manifest_content
+      local parsed, parse_err = parse_manifest(manifest_content)
+      if not parsed then
+        print("Cached manifest invalid: " .. tostring(parse_err))
+        log("ERROR", "Cached manifest invalid: " .. tostring(parse_err))
+        return nil
+      end
+      manifest = parsed
+      release = cache.release
+      manifest_meta = cache.source
+      validate_hash_algo(manifest, release)
+      break
+    elseif (cache and choice == 2) or (not cache and choice == 1) then
+      manifest_content, manifest, release, manifest_meta = download_manifest()
+    else
+      print("Installer cancelled.")
+      log("INFO", "User cancelled manifest acquisition")
+      return nil
+    end
+  end
+  return manifest_content, manifest, release, manifest_meta
 end
 
 local function ensure_base_dirs()
@@ -459,6 +667,7 @@ local function ensure_base_dirs()
   ensure_dir(BASE_DIR .. "/shared")
   ensure_dir(BASE_DIR .. "/installer")
   ensure_dir(BASE_DIR .. "/.cache")
+  ensure_dir(BASE_DIR .. "/logs")
 end
 
 local function is_config_file(path)
@@ -644,11 +853,13 @@ local function ensure_node_id(role, cfg_path)
       if normalized ~= existing then
         write_atomic(NODE_ID_PATH, normalized)
         print("normalized node_id from file")
+        log("INFO", "Normalized node_id from file")
       end
       return true
     end
   end
   print("node_id missing → attempting migration")
+  log("WARN", "node_id missing; attempting migration")
   local sources = collect_known_node_id_sources(role, cfg_path)
   for _, source in ipairs(sources) do
     if fs.exists(source.path) then
@@ -658,6 +869,7 @@ local function ensure_node_id(role, cfg_path)
         if normalized then
           write_atomic(NODE_ID_PATH, normalized)
           print("migrated node_id from config")
+          log("INFO", "Migrated node_id from config")
           return true
         end
       else
@@ -666,6 +878,7 @@ local function ensure_node_id(role, cfg_path)
         if normalized then
           write_atomic(NODE_ID_PATH, normalized)
           print("migrated node_id from legacy_file")
+          log("INFO", "Migrated node_id from legacy file")
           return true
         end
       end
@@ -675,6 +888,7 @@ local function ensure_node_id(role, cfg_path)
   local generated = fallback_node_id()
   write_atomic(NODE_ID_PATH, generated)
   print("generated new node_id")
+  log("INFO", "Generated new node_id")
   return true
 end
 
@@ -711,11 +925,21 @@ local function rollback_from_backup(base_dir, paths, created)
   end
 end
 
-local function update_files(manifest)
+local function restore_from_backup(base_dir, paths)
+  for _, path in ipairs(paths) do
+    local backup_path = base_dir .. path
+    if fs.exists(backup_path) then
+      ensure_dir(fs.getDir(path))
+      copy_file(backup_path, path)
+    end
+  end
+end
+
+local function update_files(manifest, hash_algo)
   local updates = {}
   for path, expected_hash in pairs(manifest.files) do
     if not is_config_file(path) then
-      local local_hash = file_checksum("/" .. path)
+      local local_hash = file_checksum("/" .. path, hash_algo)
       if local_hash ~= expected_hash then
         table.insert(updates, { path = path, hash = expected_hash })
       end
@@ -729,7 +953,7 @@ local function build_staging_path(path)
   return UPDATE_STAGING .. "/" .. path
 end
 
-local function stage_updates(entries, release)
+local function stage_updates(entries, release, hash_algo)
   ensure_dir(UPDATE_STAGING)
   local staged = {}
   for _, entry in ipairs(entries) do
@@ -743,12 +967,18 @@ local function stage_updates(entries, release)
         tostring(meta.html)
       )
     end
-    local actual = checksum(content)
+    if is_html_payload(content) then
+      return nil, ("Download failed for %s (html response)"):format(entry.path)
+    end
+    local actual = compute_hash(content, hash_algo)
     if actual ~= entry.hash then
       local retry_content, retry_meta = fetch_repo_file(release.commit_sha, entry.path)
       if retry_content then
         content = retry_content
-        actual = checksum(content)
+        if is_html_payload(content) then
+          return nil, ("Download failed for %s (html response)"):format(entry.path)
+        end
+        actual = compute_hash(content, hash_algo)
       end
       if actual ~= entry.hash then
         return nil, ("Checksum mismatch for %s (expected=%s actual=%s url=%s code=%s reason=%s html=%s)"):format(
@@ -764,7 +994,7 @@ local function stage_updates(entries, release)
     end
     local staging_path = build_staging_path(entry.path)
     write_atomic(staging_path, content)
-    local verify = file_checksum(staging_path)
+    local verify = file_checksum(staging_path, hash_algo)
     if verify ~= entry.hash then
       return nil, ("Staged hash mismatch for %s (expected=%s actual=%s)"):format(
         entry.path,
@@ -796,12 +1026,14 @@ local function apply_staged(entries, staged, created)
   return true
 end
 
-local function update_installer_if_required(manifest, release)
+local function update_installer_if_required(manifest, release, hash_algo)
   local required = manifest.installer_min_version
   if required and compare_version(INSTALLER_VERSION, required) < 0 then
     print("Installer update required.")
+    log("WARN", "Installer update required (min " .. tostring(required) .. ")")
     if not confirm("Update installer now?", true) then
       print("SAFE UPDATE aborted: installer update required.")
+      log("WARN", "Installer update declined by user")
       return false
     end
     local installer_path = manifest.installer_path or "xreactor/installer/installer.lua"
@@ -823,7 +1055,7 @@ local function update_installer_if_required(manifest, release)
       ))
       return false
     end
-    if checksum(content) ~= expected then
+    if compute_hash(content, hash_algo) ~= expected then
       print("SAFE UPDATE aborted: installer checksum mismatch.")
       return false
     end
@@ -840,14 +1072,17 @@ local function update_installer_if_required(manifest, release)
     end
     fs.move(temp, target)
     print("Installer updated.")
+    log("INFO", "Installer updated on disk")
     if not _G.__xreactor_installer_restarted then
       _G.__xreactor_installer_restarted = true
       local loader = loadfile(target)
       if loader then
         print("Restarting installer...")
+        log("INFO", "Restarting installer after update")
         loader()
       else
         print("Installer updated, but restart failed. Please re-run installer.")
+        log("ERROR", "Installer restart failed after update")
       end
     end
     return false
@@ -855,7 +1090,7 @@ local function update_installer_if_required(manifest, release)
   return true
 end
 
-local function migrate_config(role, cfg_path, manifest, release)
+local function migrate_config(role, cfg_path, manifest, release, hash_algo)
   local remote_path = "xreactor/" .. role_targets[role].config
   local expected_hash = manifest.files[remote_path]
   if not expected_hash then
@@ -870,7 +1105,7 @@ local function migrate_config(role, cfg_path, manifest, release)
       tostring(meta.html)
     ))
   end
-  if checksum(content) ~= expected_hash then
+  if compute_hash(content, hash_algo) ~= expected_hash then
     error("Config checksum mismatch for " .. remote_path)
   end
   local defaults = read_config_from_content(content)
@@ -918,49 +1153,40 @@ local function verify_integrity(manifest, role, cfg_path)
   return true
 end
 
+local function build_manifest_entries(manifest)
+  local entries = {}
+  for path, expected_hash in pairs(manifest.files) do
+    table.insert(entries, { path = path, hash = expected_hash })
+  end
+  if manifest.installer_path and manifest.installer_hash then
+    table.insert(entries, { path = manifest.installer_path, hash = manifest.installer_hash })
+  end
+  table.sort(entries, function(a, b) return a.path < b.path end)
+  return entries
+end
+
+-- SAFE UPDATE keeps role/config/node_id intact and updates only changed files.
 local function safe_update()
   local role, cfg_path = find_existing_role()
   if not role then
     print("No existing role config found. Use FULL REINSTALL.")
+    log("WARN", "SAFE UPDATE aborted: no existing role config")
     return
   end
-
-  local manifest_content, manifest, release, manifest_meta = download_manifest()
-  while not manifest_content do
-    local cache = read_manifest_cache()
-    print(format_manifest_failure(manifest_meta))
-    if cache then
-      print("1) Use cached manifest (offline update)")
-      print("2) Retry download")
-      print("3) Cancel")
-    else
-      print("1) Retry download")
-      print("2) Cancel")
-    end
-    local default_choice = cache and "1" or "1"
-    local choice = tonumber(prompt("Select option", default_choice)) or tonumber(default_choice)
-    if cache and choice == 1 then
-      manifest_content = cache.manifest_content
-      local parsed, parse_err = parse_manifest(manifest_content)
-      if not parsed then
-        print("Cached manifest invalid: " .. tostring(parse_err))
-        return
-      end
-      manifest = parsed
-      release = cache.release
-      manifest_meta = cache.source
-      validate_hash_algo(manifest, release)
-      break
-    elseif (cache and choice == 2) or (not cache and choice == 1) then
-      manifest_content, manifest, release, manifest_meta = download_manifest()
-    else
-      print("SAFE UPDATE cancelled.")
-      return
-    end
+  local existing_cfg = read_config(cfg_path, {})
+  if existing_cfg.debug_logging == true then
+    logger.set_enabled(true)
   end
+
+  local manifest_content, manifest, release, manifest_meta = acquire_manifest()
+  if not manifest_content then
+    return
+  end
+  local hash_algo = resolve_hash_algo(manifest, release)
   ensure_base_dirs()
 
-  local can_continue = update_installer_if_required(manifest, release)
+  log("INFO", "SAFE UPDATE started for role " .. tostring(role))
+  local can_continue = update_installer_if_required(manifest, release, hash_algo)
   if not can_continue then
     return
   end
@@ -970,19 +1196,22 @@ local function safe_update()
     return
   end
 
-  local updates = update_files(manifest)
-  local staged, stage_err = stage_updates(updates, release)
+  local updates = update_files(manifest, hash_algo)
+  log("INFO", "Files needing update: " .. tostring(#updates))
+  local staged, stage_err = stage_updates(updates, release, hash_algo)
   if not staged then
     local retry_release = download_release()
     if retry_release and retry_release.commit_sha ~= release.commit_sha then
       manifest_content, manifest, release, manifest_meta = download_manifest()
       if manifest_content then
-        updates = update_files(manifest)
-        staged, stage_err = stage_updates(updates, release)
+        hash_algo = resolve_hash_algo(manifest, release)
+        updates = update_files(manifest, hash_algo)
+        staged, stage_err = stage_updates(updates, release, hash_algo)
       end
     end
     if not staged then
       print("SAFE UPDATE failed. Error: " .. tostring(stage_err))
+      log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
       return
     end
   end
@@ -1005,7 +1234,7 @@ local function safe_update()
 
   local migrated = false
   if ok then
-    local success, result = pcall(migrate_config, role, cfg_path, manifest, release)
+    local success, result = pcall(migrate_config, role, cfg_path, manifest, release, hash_algo)
     if success then
       migrated = result
     else
@@ -1036,6 +1265,7 @@ local function safe_update()
     rollback_from_backup(backup_dir, rollback_paths, created)
     print("SAFE UPDATE failed. Rolled back. Error: " .. tostring(err))
     print("Backup: " .. backup_dir)
+    log("ERROR", "SAFE UPDATE rolled back: " .. tostring(err))
     return
   end
 
@@ -1047,6 +1277,7 @@ local function safe_update()
     rollback_from_backup(backup_dir, rollback_paths, created)
     print("Integrity check failed: " .. tostring(integrity_err))
     print("Rollback complete. Backup: " .. backup_dir)
+    log("ERROR", "SAFE UPDATE integrity failure: " .. tostring(integrity_err))
     return
   end
 
@@ -1057,116 +1288,138 @@ local function safe_update()
   end
   print("Backup: " .. backup_dir)
   print("Next steps: reboot or run the role entrypoint.")
+  log("INFO", "SAFE UPDATE complete. Backup: " .. backup_dir)
 end
 
+-- FULL REINSTALL overwrites all files and optionally restores existing config.
 local function full_reinstall()
-  local manifest_content, manifest, release, manifest_meta = download_manifest()
+  local manifest_content, manifest, release, manifest_meta = acquire_manifest()
   if not manifest_content then
-    print("FULL REINSTALL failed: manifest download failed.")
     return
   end
+  local hash_algo = resolve_hash_algo(manifest, release)
   ensure_base_dirs()
-  local updates = {}
-  for path in pairs(manifest.files) do
-    table.insert(updates, path)
-  end
-  table.sort(updates)
-  for _, path in ipairs(updates) do
-    local content, meta = fetch_repo_file(release.commit_sha, path)
-    if not content then
-      error(("Download failed for %s (url=%s code=%s reason=%s html=%s)"):format(
-        path,
-        tostring(meta.url),
-        tostring(meta.code),
-        tostring(meta.reason),
-        tostring(meta.html)
-      ))
+  log("INFO", "FULL REINSTALL started")
+
+  local existing_role, existing_cfg_path = find_existing_role()
+  local keep_config = false
+  if existing_role then
+    local existing_cfg = read_config(existing_cfg_path, {})
+    if existing_cfg.debug_logging == true then
+      logger.set_enabled(true)
     end
-    local expected = manifest.files[path]
-    if checksum(content) ~= expected then
-      error("Checksum mismatch for " .. path)
-    end
-    write_atomic("/" .. path, content)
-  end
-  if manifest.installer_path and manifest.installer_hash then
-    local content, meta = fetch_repo_file(release.commit_sha, manifest.installer_path)
-    if not content then
-      error(("Installer download failed (url=%s code=%s reason=%s html=%s)"):format(
-        tostring(meta.url),
-        tostring(meta.code),
-        tostring(meta.reason),
-        tostring(meta.html)
-      ))
-    end
-    if checksum(content) ~= manifest.installer_hash then
-      error("Checksum mismatch for " .. manifest.installer_path)
-    end
-    write_atomic("/" .. manifest.installer_path, content)
+    keep_config = confirm("Keep existing config + role?", true)
   end
 
-  local role = choose_role()
-  local cfg_path = BASE_DIR .. "/" .. role_targets[role].config
-  local modems = detect_modems()
-  local wireless = select_primary_modem(modems)
-  local wired = modems.wired[1]
-  local extras = {}
-
-  if not wireless then
-    wireless = prompt("Primary modem side", nil)
-  end
-  if wireless and wired == wireless then
-    wired = nil
+  local entries = build_manifest_entries(manifest)
+  local staged, stage_err = stage_updates(entries, release, hash_algo)
+  if not staged then
+    print("FULL REINSTALL failed. Error: " .. tostring(stage_err))
+    log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
+    return
   end
 
-  if role == roles.RT_NODE then
-    local label = build_rt_node_id()
-    os.setComputerLabel(label)
+  local backup_dir = create_backup_dir()
+  local update_paths = {}
+  local created = {}
+  for _, entry in ipairs(entries) do
+    table.insert(update_paths, "/" .. entry.path)
+  end
+  local protected = { NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
+  for _, target in pairs(role_targets) do
+    table.insert(protected, BASE_DIR .. "/" .. target.config)
   end
 
-  if role == roles.MASTER then
-    extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
-  elseif role == roles.RT_NODE then
-    local detected = scan_peripherals()
-    extras.modem = wireless
-    local use_detected = #detected.reactors > 0
-    if use_detected then
-      print_detected("Detected Reactors", detected.reactors)
-      print_detected("Detected Turbines", detected.turbines)
-      print_detected("Detected Modems", detected.modems)
-      use_detected = prompt_use_detected()
-    else
-      print("Warning: No reactors detected. Switching to manual entry.")
-    end
+  backup_files(backup_dir, update_paths)
+  backup_files(backup_dir, protected)
 
-    if use_detected then
-      extras.reactors = detected.reactors
-      extras.turbines = detected.turbines
-      if #detected.turbines == 0 then
-        print("No turbines detected. Reactor-only setup will be used.")
-      end
-    else
-      local reactors = prompt("Reactor peripheral names (comma separated)", "")
-      local turbines = prompt("Turbine peripheral names (comma separated)", "")
-      extras.reactors = {}
-      extras.turbines = {}
-      for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
-      for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
-    end
+  local ok, err = apply_staged(entries, staged, created)
+  if not ok then
+    local rollback_paths = {}
+    for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
+    for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
+    rollback_from_backup(backup_dir, rollback_paths, created)
+    print("FULL REINSTALL failed. Rolled back. Error: " .. tostring(err))
+    log("ERROR", "FULL REINSTALL apply failed: " .. tostring(err))
+    return
+  end
+
+  local role
+  local cfg_path
+
+  if keep_config and existing_role then
+    restore_from_backup(backup_dir, protected)
+    role = existing_role
+    cfg_path = existing_cfg_path
+    log("INFO", "Restored existing config for role " .. tostring(role))
+  else
+    role = choose_role()
+    cfg_path = BASE_DIR .. "/" .. role_targets[role].config
+    local modems = detect_modems()
+    local wireless = select_primary_modem(modems)
+    local wired = modems.wired[1]
+    local extras = {}
+
     if not wireless then
-      extras.modem = prompt("Modem peripheral name", nil)
+      wireless = prompt("Primary modem side", nil)
     end
+    if wireless and wired == wireless then
+      wired = nil
+    end
+
+    if role == roles.RT_NODE then
+      local label = build_rt_node_id()
+      os.setComputerLabel(label)
+    end
+
+    if role == roles.MASTER then
+      extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
+    elseif role == roles.RT_NODE then
+      local detected = scan_peripherals()
+      extras.modem = wireless
+      local use_detected = #detected.reactors > 0
+      if use_detected then
+        print_detected("Detected Reactors", detected.reactors)
+        print_detected("Detected Turbines", detected.turbines)
+        print_detected("Detected Modems", detected.modems)
+        use_detected = prompt_use_detected()
+      else
+        print("Warning: No reactors detected. Switching to manual entry.")
+      end
+
+      if use_detected then
+        extras.reactors = detected.reactors
+        extras.turbines = detected.turbines
+        if #detected.turbines == 0 then
+          print("No turbines detected. Reactor-only setup will be used.")
+        end
+      else
+        local reactors = prompt("Reactor peripheral names (comma separated)", "")
+        local turbines = prompt("Turbine peripheral names (comma separated)", "")
+        extras.reactors = {}
+        extras.turbines = {}
+        for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
+        for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
+      end
+      if not wireless then
+        extras.modem = prompt("Modem peripheral name", nil)
+      end
+    end
+
+    if role == roles.RT_NODE then
+      extras.node_id = build_rt_node_id()
+    end
+    write_config(role, wireless, wired, extras)
   end
 
-  if role == roles.RT_NODE then
-    extras.node_id = build_rt_node_id()
-  end
-  write_config(role, wireless, wired, extras)
+  ensure_node_id(role, cfg_path)
   write_startup(role)
   write_atomic(MANIFEST_LOCAL, manifest_content)
   write_manifest_cache(manifest_content, release, manifest_meta)
 
   print("FULL REINSTALL complete.")
   print("Next steps: reboot or run the role entrypoint.")
+  log("INFO", "FULL REINSTALL complete")
 end
 
 local function main()
@@ -1174,8 +1427,10 @@ local function main()
     error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
   end
   print("=== XReactor Installer ===")
+  log("INFO", "Installer started")
   if fs.exists(BASE_DIR) then
     print("Existing installation detected.")
+    log("INFO", "Existing installation detected")
     print("1) SAFE UPDATE")
     print("2) FULL REINSTALL")
     print("3) CANCEL")
@@ -1186,8 +1441,10 @@ local function main()
       full_reinstall()
     else
       print("Cancelled.")
+      log("INFO", "Installer cancelled by user")
     end
   else
+    log("INFO", "No existing installation found; running full reinstall")
     full_reinstall()
   end
 end
