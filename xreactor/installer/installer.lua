@@ -1,12 +1,25 @@
 local BASE_DIR = "/xreactor"
-local REPO_BASE_URL_MAIN = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main"
+local REPO_OWNER = "ItIsYe"
+local REPO_NAME = "ExtreamReactor-Controller-V3"
+local REPO_BASE_URL_MAIN = "https://raw.githubusercontent.com"
 local RELEASE_REMOTE = "xreactor/installer/release.lua"
 local MANIFEST_REMOTE = "xreactor/installer/manifest.lua"
 local MANIFEST_LOCAL = BASE_DIR .. "/.manifest"
+local MANIFEST_CACHE = BASE_DIR .. "/.cache/manifest.lua"
+local MANIFEST_CACHE_LEGACY = BASE_DIR .. "/.manifest_cache"
 local BACKUP_BASE = "/xreactor_backup"
 local NODE_ID_PATH = BASE_DIR .. "/config/node_id.txt"
 local UPDATE_STAGING = "/xreactor_update_tmp"
 local INSTALLER_VERSION = "1.1"
+local INSTALLER_MIN_BYTES = 200
+local INSTALLER_SANITY_MARKER = "local function main"
+local MANIFEST_MIN_BYTES = 50
+local MANIFEST_SANITY_MARKER = "return"
+local RELEASE_MIN_BYTES = 50
+local RELEASE_SANITY_MARKER = "commit_sha"
+local DOWNLOAD_ATTEMPTS = 4
+local DOWNLOAD_BACKOFF = 0.5
+local DOWNLOAD_TIMEOUT = 6
 
 local roles = {
   MASTER = "MASTER",
@@ -37,6 +50,35 @@ local function trim(text)
   if not text then return "" end
   return text:match("^%s*(.-)%s*$")
 end
+
+local function normalize_node_id(value)
+  if type(value) == "string" then
+    local trimmed = trim(value)
+    if trimmed ~= "" then
+      return trimmed
+    end
+  elseif type(value) == "number" then
+    return tostring(value)
+  elseif type(value) == "table" then
+    local candidate = value.id or value.node_id or value.value
+    if type(candidate) == "string" then
+      local trimmed = trim(candidate)
+      if trimmed ~= "" then
+        return trimmed
+      end
+    elseif type(candidate) == "number" then
+      return tostring(candidate)
+    end
+    return tostring(value)
+  end
+  return nil
+end
+
+local function fallback_node_id()
+  return tostring(os.getComputerLabel() or os.getComputerID())
+end
+
+local fetch_url_seeded = false
 
 local function read_file(path)
   if not fs.exists(path) then return nil end
@@ -165,17 +207,6 @@ local function merge_defaults(target, defaults)
   return changed
 end
 
-local function download_content(base_url, remote_path)
-  local url = string.format("%s/%s", base_url, remote_path)
-  local response = http.get(url)
-  if not response then
-    error("Failed to download " .. url)
-  end
-  local content = response.readAll()
-  response.close()
-  return content
-end
-
 local function is_html_payload(content)
   if not content then return false end
   local head = content:sub(1, 200)
@@ -185,62 +216,232 @@ local function is_html_payload(content)
   return false
 end
 
-local function download_content_checked(base_url, remote_path)
-  local url = string.format("%s/%s", base_url, remote_path)
-  local response = http.get(url)
-  if not response then
-    return nil, { url = url, code = nil, html = false, message = "request failed" }
+local function collect_hosts(urls)
+  local hosts = {}
+  local seen = {}
+  for _, url in ipairs(urls) do
+    local host = url:match("^https?://([^/]+)")
+    if host and not seen[host] then
+      seen[host] = true
+      table.insert(hosts, host)
+    end
   end
-  local code = response.getResponseCode and response.getResponseCode() or nil
-  local content = response.readAll()
-  response.close()
-  local html = is_html_payload(content)
-  if (code and code ~= 200) or html then
-    return nil, { url = url, code = code, html = html, message = "invalid response" }
+  return hosts
+end
+
+local function http_fetch(url, timeout_s)
+  if not http.request then
+    local response = http.get(url)
+    if not response then
+      return nil, { url = url, code = nil, reason = "timeout", html = false }
+    end
+    local code = response.getResponseCode and response.getResponseCode() or nil
+    local content = response.readAll()
+    response.close()
+    return content, { url = url, code = code }
   end
-  return content, { url = url, code = code, html = html }
+  local ok, err = pcall(http.request, url)
+  if not ok then
+    return nil, { url = url, code = nil, reason = err or "request failed", html = false }
+  end
+  local timer = os.startTimer(timeout_s)
+  while true do
+    local event, p1, p2 = os.pullEvent()
+    if event == "http_success" and p1 == url then
+      local response = p2
+      local code = response.getResponseCode and response.getResponseCode() or nil
+      local content = response.readAll()
+      response.close()
+      return content, { url = url, code = code }
+    elseif event == "http_failure" and p1 == url then
+      return nil, { url = url, code = nil, reason = p2 or "failure", html = false }
+    elseif event == "timer" and p1 == timer then
+      return nil, { url = url, code = nil, reason = "timeout", html = false }
+    end
+  end
+end
+
+local function sanity_check(content, min_bytes, marker)
+  if not content or content == "" then
+    return false, "empty"
+  end
+  if min_bytes and #content < min_bytes then
+    return false, "too short"
+  end
+  if marker and not content:find(marker, 1, true) then
+    return false, "sanity check failed"
+  end
+  if is_html_payload(content) then
+    return false, "html"
+  end
+  return true
+end
+
+local function fetch_url(urls, opts)
+  local attempts = (opts and opts.attempts) or DOWNLOAD_ATTEMPTS
+  local backoff = (opts and opts.backoff) or DOWNLOAD_BACKOFF
+  local timeout_s = (opts and opts.timeout_s) or DOWNLOAD_TIMEOUT
+  local min_bytes = opts and opts.min_bytes
+  local marker = opts and opts.marker
+  local last_meta = nil
+  local hosts = collect_hosts(urls)
+  if not fetch_url_seeded then
+    math.randomseed(os.time())
+    fetch_url_seeded = true
+  end
+  for _, url in ipairs(urls) do
+    for attempt = 1, attempts do
+      local content, meta = http_fetch(url, timeout_s)
+      if content and meta and meta.code and meta.code ~= 200 then
+        meta.reason = "status"
+        last_meta = meta
+      elseif content then
+        local ok, reason = sanity_check(content, min_bytes, marker)
+        if ok then
+          meta.tried_hosts = hosts
+          return content, meta
+        end
+        meta.reason = reason
+        meta.html = reason == "html"
+      end
+      last_meta = meta
+      if attempt < attempts then
+        local sleep_for = backoff * (2 ^ (attempt - 1)) + math.random() * 0.2
+        os.sleep(sleep_for)
+      end
+    end
+  end
+  if last_meta then
+    last_meta.tried_hosts = hosts
+  end
+  return nil, last_meta
+end
+
+local function build_repo_urls(ref, path)
+  local safe_ref = tostring(ref)
+  return {
+    string.format("%s/%s/%s/%s/%s", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, safe_ref, path)
+  }
+end
+
+local function fetch_repo_file(ref, path, opts)
+  local urls = build_repo_urls(ref, path)
+  return fetch_url(urls, opts)
+end
+
+local function validate_installer_content(content)
+  if not content or #content < INSTALLER_MIN_BYTES then
+    return false, "content too short"
+  end
+  if not content:find(INSTALLER_SANITY_MARKER, 1, true) then
+    return false, "sanity check failed"
+  end
+  local loader, err = load(content, "installer", "t", {})
+  if not loader then
+    return false, err or "syntax error"
+  end
+  return true
+end
+
+local function read_manifest_cache()
+  local path = nil
+  if fs.exists(MANIFEST_CACHE) then
+    path = MANIFEST_CACHE
+  elseif fs.exists(MANIFEST_CACHE_LEGACY) then
+    path = MANIFEST_CACHE_LEGACY
+  end
+  if not path then
+    return nil
+  end
+  local content = read_file(path)
+  if not content then
+    return nil
+  end
+  local ok, data = pcall(textutils.unserialize, content)
+  if not ok or type(data) ~= "table" then
+    return nil
+  end
+  if type(data.manifest_content) ~= "string" then
+    return nil
+  end
+  if type(data.release) ~= "table" or type(data.release.commit_sha) ~= "string" then
+    return nil
+  end
+  return data
+end
+
+local function write_manifest_cache(manifest_content, release, source)
+  local payload = {
+    manifest_content = manifest_content,
+    release = release,
+    source = source,
+    saved_at = os.time()
+  }
+  write_atomic(MANIFEST_CACHE, textutils.serialize(payload))
+end
+
+local function format_manifest_failure(meta)
+  local reason = meta and meta.reason or "unknown"
+  local hosts = meta and meta.tried_hosts and table.concat(meta.tried_hosts, ", ") or "unknown"
+  return ("Manifest download failed (%s). Tried: %s"):format(reason, hosts)
 end
 
 local function download_release()
-  local content, meta = download_content_checked(REPO_BASE_URL_MAIN, RELEASE_REMOTE)
+  local content, meta = fetch_repo_file("main", RELEASE_REMOTE, {
+    min_bytes = RELEASE_MIN_BYTES,
+    marker = RELEASE_SANITY_MARKER
+  })
   if not content then
-    error("Release download failed")
+    return nil, "Release download failed", meta
   end
   local loader = load(content, "release", "t", {})
   if not loader then
-    error("Release load failed")
+    return nil, "Release load failed", meta
   end
   local ok, data = pcall(loader)
   if not ok or type(data) ~= "table" then
-    error("Release parse failed")
+    return nil, "Release parse failed", meta
   end
   if type(data.commit_sha) ~= "string" then
-    error("Release missing commit_sha")
+    return nil, "Release missing commit_sha", meta
   end
   if type(data.hash_algo) ~= "string" then
-    error("Release missing hash_algo")
+    return nil, "Release missing hash_algo", meta
   end
   data.manifest_path = data.manifest_path or MANIFEST_REMOTE
+  return data, meta
+end
+
+local function parse_manifest(content)
+  local loader = load(content, "manifest", "t", {})
+  if not loader then
+    return nil, "Manifest load failed"
+  end
+  local ok, data = pcall(loader)
+  if not ok or type(data) ~= "table" or type(data.files) ~= "table" then
+    return nil, "Manifest parse failed"
+  end
   return data
 end
 
 local function download_manifest()
-  local release = download_release()
-  local base_url = ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha)
-  local content, meta = download_content_checked(base_url, release.manifest_path)
+  local release, release_err, release_meta = download_release()
+  if not release then
+    return nil, release_err, release_meta
+  end
+  local content, meta = fetch_repo_file(release.commit_sha, release.manifest_path, {
+    min_bytes = MANIFEST_MIN_BYTES,
+    marker = MANIFEST_SANITY_MARKER
+  })
   if not content then
-    error("Manifest download failed")
+    return nil, "Manifest download failed", meta
   end
-  local loader = load(content, "manifest", "t", {})
-  if not loader then
-    error("Manifest load failed")
+  local manifest, manifest_err = parse_manifest(content)
+  if not manifest then
+    return nil, manifest_err, meta
   end
-  local ok, data = pcall(loader)
-  if not ok or type(data) ~= "table" or type(data.files) ~= "table" then
-    error("Manifest parse failed")
-  end
-  validate_hash_algo(data, release)
-  return content, data, release, base_url
+  validate_hash_algo(manifest, release)
+  return content, manifest, release, meta
 end
 
 local function ensure_base_dirs()
@@ -257,6 +458,7 @@ local function ensure_base_dirs()
   ensure_dir(BASE_DIR .. "/nodes/reprocessor")
   ensure_dir(BASE_DIR .. "/shared")
   ensure_dir(BASE_DIR .. "/installer")
+  ensure_dir(BASE_DIR .. "/.cache")
 end
 
 local function is_config_file(path)
@@ -376,8 +578,13 @@ local function write_config(role, wireless, wired, extras)
   defaults.wireless_modem = wireless
   defaults.wired_modem = wired
   if defaults.node_id == nil then
-    defaults.node_id = os.getComputerLabel() or os.getComputerID()
+    defaults.node_id = fallback_node_id()
   end
+  local normalized_node_id = normalize_node_id(defaults.node_id)
+  if not normalized_node_id then
+    normalized_node_id = fallback_node_id()
+  end
+  defaults.node_id = normalized_node_id
   if role == roles.MASTER then
     defaults.monitor_auto = true
     defaults.ui_scale_default = extras.ui_scale_default or 0.5
@@ -386,7 +593,7 @@ local function write_config(role, wireless, wired, extras)
     defaults.turbines = extras.turbines
     defaults.modem = extras.modem
     if extras.node_id then
-      defaults.node_id = extras.node_id
+      defaults.node_id = normalize_node_id(extras.node_id) or fallback_node_id()
     end
   end
   write_config_file(cfg_path, defaults)
@@ -431,7 +638,15 @@ end
 
 local function ensure_node_id(role, cfg_path)
   if fs.exists(NODE_ID_PATH) then
-    return true
+    local existing = trim(read_file(NODE_ID_PATH))
+    local normalized = normalize_node_id(existing)
+    if normalized then
+      if normalized ~= existing then
+        write_atomic(NODE_ID_PATH, normalized)
+        print("normalized node_id from file")
+      end
+      return true
+    end
   end
   print("node_id missing → attempting migration")
   local sources = collect_known_node_id_sources(role, cfg_path)
@@ -439,15 +654,17 @@ local function ensure_node_id(role, cfg_path)
     if fs.exists(source.path) then
       if source.label == "config" then
         local cfg = read_config(source.path, {})
-        if cfg.node_id and type(cfg.node_id) == "string" then
-          write_atomic(NODE_ID_PATH, cfg.node_id)
+        local normalized = normalize_node_id(cfg.node_id)
+        if normalized then
+          write_atomic(NODE_ID_PATH, normalized)
           print("migrated node_id from config")
           return true
         end
       else
         local content = trim(read_file(source.path))
-        if content ~= "" then
-          write_atomic(NODE_ID_PATH, content)
+        local normalized = normalize_node_id(content)
+        if normalized then
+          write_atomic(NODE_ID_PATH, normalized)
           print("migrated node_id from legacy_file")
           return true
         end
@@ -455,13 +672,7 @@ local function ensure_node_id(role, cfg_path)
     end
   end
 
-  local has_role_config = cfg_path and fs.exists(cfg_path)
-  if has_role_config then
-    print("unable to recover node_id safely → aborting SAFE UPDATE")
-    return false
-  end
-
-  local generated = os.getComputerLabel() or tostring(os.getComputerID())
+  local generated = fallback_node_id()
   write_atomic(NODE_ID_PATH, generated)
   print("generated new node_id")
   return true
@@ -518,33 +729,35 @@ local function build_staging_path(path)
   return UPDATE_STAGING .. "/" .. path
 end
 
-local function stage_updates(entries, base_url)
+local function stage_updates(entries, release)
   ensure_dir(UPDATE_STAGING)
   local staged = {}
   for _, entry in ipairs(entries) do
-    local content, meta = download_content_checked(base_url, entry.path)
+    local content, meta = fetch_repo_file(release.commit_sha, entry.path)
     if not content then
-      return nil, ("Download failed for %s (url=%s code=%s html=%s)"):format(
+      return nil, ("Download failed for %s (url=%s code=%s reason=%s html=%s)"):format(
         entry.path,
         tostring(meta.url),
         tostring(meta.code),
+        tostring(meta.reason),
         tostring(meta.html)
       )
     end
     local actual = checksum(content)
     if actual ~= entry.hash then
-      local retry_content, retry_meta = download_content_checked(base_url, entry.path)
+      local retry_content, retry_meta = fetch_repo_file(release.commit_sha, entry.path)
       if retry_content then
         content = retry_content
         actual = checksum(content)
       end
       if actual ~= entry.hash then
-        return nil, ("Checksum mismatch for %s (expected=%s actual=%s url=%s code=%s html=%s)"):format(
+        return nil, ("Checksum mismatch for %s (expected=%s actual=%s url=%s code=%s reason=%s html=%s)"):format(
           entry.path,
           entry.hash,
           actual,
           tostring((retry_meta and retry_meta.url) or meta.url),
           tostring((retry_meta and retry_meta.code) or meta.code),
+          tostring((retry_meta and retry_meta.reason) or meta.reason),
           tostring((retry_meta and retry_meta.html) or meta.html)
         )
       end
@@ -583,7 +796,7 @@ local function apply_staged(entries, staged, created)
   return true
 end
 
-local function update_installer_if_required(manifest, base_url)
+local function update_installer_if_required(manifest, release)
   local required = manifest.installer_min_version
   if required and compare_version(INSTALLER_VERSION, required) < 0 then
     print("Installer update required.")
@@ -597,11 +810,15 @@ local function update_installer_if_required(manifest, base_url)
       print("SAFE UPDATE aborted: installer hash missing.")
       return false
     end
-    local content, meta = download_content_checked(base_url, installer_path)
+    local content, meta = fetch_repo_file(release.commit_sha, installer_path, {
+      min_bytes = INSTALLER_MIN_BYTES,
+      marker = INSTALLER_SANITY_MARKER
+    })
     if not content then
-      print(("SAFE UPDATE aborted: installer download failed (url=%s code=%s html=%s)"):format(
+      print(("SAFE UPDATE aborted: installer download failed (url=%s code=%s reason=%s html=%s)"):format(
         tostring(meta.url),
         tostring(meta.code),
+        tostring(meta.reason),
         tostring(meta.html)
       ))
       return false
@@ -610,24 +827,46 @@ local function update_installer_if_required(manifest, base_url)
       print("SAFE UPDATE aborted: installer checksum mismatch.")
       return false
     end
-    write_atomic("/" .. installer_path, content)
-    print("Installer updated. Please re-run installer.")
+    local valid, valid_err = validate_installer_content(content)
+    if not valid then
+      print("SAFE UPDATE aborted: installer invalid (" .. tostring(valid_err) .. ").")
+      return false
+    end
+    local target = "/" .. installer_path
+    local temp = target .. ".new"
+    write_atomic(temp, content)
+    if fs.exists(target) then
+      fs.delete(target)
+    end
+    fs.move(temp, target)
+    print("Installer updated.")
+    if not _G.__xreactor_installer_restarted then
+      _G.__xreactor_installer_restarted = true
+      local loader = loadfile(target)
+      if loader then
+        print("Restarting installer...")
+        loader()
+      else
+        print("Installer updated, but restart failed. Please re-run installer.")
+      end
+    end
     return false
   end
   return true
 end
 
-local function migrate_config(role, cfg_path, manifest, base_url)
+local function migrate_config(role, cfg_path, manifest, release)
   local remote_path = "xreactor/" .. role_targets[role].config
   local expected_hash = manifest.files[remote_path]
   if not expected_hash then
     return false
   end
-  local content, meta = download_content_checked(base_url, remote_path)
+  local content, meta = fetch_repo_file(release.commit_sha, remote_path)
   if not content then
-    error(("Config download failed (url=%s code=%s html=%s)"):format(
+    error(("Config download failed (url=%s code=%s reason=%s html=%s)"):format(
       tostring(meta.url),
       tostring(meta.code),
+      tostring(meta.reason),
       tostring(meta.html)
     ))
   end
@@ -641,9 +880,11 @@ local function migrate_config(role, cfg_path, manifest, base_url)
   if existing.role ~= role then
     existing.role = role
   end
-  if existing.node_id == nil then
-    existing.node_id = os.getComputerLabel() or os.getComputerID()
+  local normalized_node_id = normalize_node_id(existing.node_id)
+  if not normalized_node_id then
+    normalized_node_id = fallback_node_id()
   end
+  existing.node_id = normalized_node_id
   if textutils.serialize(existing) ~= original then
     write_config_file(cfg_path, existing)
     return true
@@ -684,10 +925,42 @@ local function safe_update()
     return
   end
 
-  local manifest_content, manifest, release, base_url = download_manifest()
+  local manifest_content, manifest, release, manifest_meta = download_manifest()
+  while not manifest_content do
+    local cache = read_manifest_cache()
+    print(format_manifest_failure(manifest_meta))
+    if cache then
+      print("1) Use cached manifest (offline update)")
+      print("2) Retry download")
+      print("3) Cancel")
+    else
+      print("1) Retry download")
+      print("2) Cancel")
+    end
+    local default_choice = cache and "1" or "1"
+    local choice = tonumber(prompt("Select option", default_choice)) or tonumber(default_choice)
+    if cache and choice == 1 then
+      manifest_content = cache.manifest_content
+      local parsed, parse_err = parse_manifest(manifest_content)
+      if not parsed then
+        print("Cached manifest invalid: " .. tostring(parse_err))
+        return
+      end
+      manifest = parsed
+      release = cache.release
+      manifest_meta = cache.source
+      validate_hash_algo(manifest, release)
+      break
+    elseif (cache and choice == 2) or (not cache and choice == 1) then
+      manifest_content, manifest, release, manifest_meta = download_manifest()
+    else
+      print("SAFE UPDATE cancelled.")
+      return
+    end
+  end
   ensure_base_dirs()
 
-  local can_continue = update_installer_if_required(manifest, base_url)
+  local can_continue = update_installer_if_required(manifest, release)
   if not can_continue then
     return
   end
@@ -698,13 +971,15 @@ local function safe_update()
   end
 
   local updates = update_files(manifest)
-  local staged, stage_err = stage_updates(updates, base_url)
+  local staged, stage_err = stage_updates(updates, release)
   if not staged then
     local retry_release = download_release()
-    if retry_release.commit_sha ~= release.commit_sha then
-      manifest_content, manifest, release, base_url = download_manifest()
-      updates = update_files(manifest)
-      staged, stage_err = stage_updates(updates, base_url)
+    if retry_release and retry_release.commit_sha ~= release.commit_sha then
+      manifest_content, manifest, release, manifest_meta = download_manifest()
+      if manifest_content then
+        updates = update_files(manifest)
+        staged, stage_err = stage_updates(updates, release)
+      end
     end
     if not staged then
       print("SAFE UPDATE failed. Error: " .. tostring(stage_err))
@@ -712,7 +987,7 @@ local function safe_update()
     end
   end
   local backup_dir = create_backup_dir()
-  local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL }
+  local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
   local update_paths = {}
   local created = {}
   for _, entry in ipairs(updates) do
@@ -730,7 +1005,7 @@ local function safe_update()
 
   local migrated = false
   if ok then
-    local success, result = pcall(migrate_config, role, cfg_path, manifest, base_url)
+    local success, result = pcall(migrate_config, role, cfg_path, manifest, release)
     if success then
       migrated = result
     else
@@ -744,6 +1019,13 @@ local function safe_update()
     if not success then
       ok = false
       err = result
+    end
+  end
+  if ok then
+    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, release, manifest_meta)
+    if not cache_ok then
+      ok = false
+      err = cache_err
     end
   end
 
@@ -778,7 +1060,11 @@ local function safe_update()
 end
 
 local function full_reinstall()
-  local manifest_content, manifest, release, base_url = download_manifest()
+  local manifest_content, manifest, release, manifest_meta = download_manifest()
+  if not manifest_content then
+    print("FULL REINSTALL failed: manifest download failed.")
+    return
+  end
   ensure_base_dirs()
   local updates = {}
   for path in pairs(manifest.files) do
@@ -786,12 +1072,13 @@ local function full_reinstall()
   end
   table.sort(updates)
   for _, path in ipairs(updates) do
-    local content, meta = download_content_checked(base_url, path)
+    local content, meta = fetch_repo_file(release.commit_sha, path)
     if not content then
-      error(("Download failed for %s (url=%s code=%s html=%s)"):format(
+      error(("Download failed for %s (url=%s code=%s reason=%s html=%s)"):format(
         path,
         tostring(meta.url),
         tostring(meta.code),
+        tostring(meta.reason),
         tostring(meta.html)
       ))
     end
@@ -802,11 +1089,12 @@ local function full_reinstall()
     write_atomic("/" .. path, content)
   end
   if manifest.installer_path and manifest.installer_hash then
-    local content, meta = download_content_checked(base_url, manifest.installer_path)
+    local content, meta = fetch_repo_file(release.commit_sha, manifest.installer_path)
     if not content then
-      error(("Installer download failed (url=%s code=%s html=%s)"):format(
+      error(("Installer download failed (url=%s code=%s reason=%s html=%s)"):format(
         tostring(meta.url),
         tostring(meta.code),
+        tostring(meta.reason),
         tostring(meta.html)
       ))
     end
@@ -875,6 +1163,7 @@ local function full_reinstall()
   write_config(role, wireless, wired, extras)
   write_startup(role)
   write_atomic(MANIFEST_LOCAL, manifest_content)
+  write_manifest_cache(manifest_content, release, manifest_meta)
 
   print("FULL REINSTALL complete.")
   print("Next steps: reboot or run the role entrypoint.")
