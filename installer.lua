@@ -14,8 +14,8 @@ local CONFIG = {
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
   MIN_CORE_BYTES = 200, -- Minimum bytes to accept core download.
   CORE_SANITY_MARKER = "local function main", -- Core sanity marker.
-  LOG_ENABLED = false, -- Enable bootstrap logging.
-  LOG_PATH = "/xreactor/logs/installer.log", -- Bootstrap log file path.
+  LOG_ENABLED = true, -- Enable bootstrap logging.
+  LOG_PATH = "/xreactor/logs/installer_bootstrap.log", -- Bootstrap log file path.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1" -- Suffix for rotated log.
 }
@@ -375,9 +375,10 @@ if release and needs_core_update(release) then
   print("Checking installer core update...")
   local ok, _, meta = download_core(release)
   while not ok do
-    print("Installer core download failed. Using local installer core if available.")
+    print("Installer core download failed.")
     log_line("WARN", "Core download failed: " .. tostring(meta and meta.err))
-    if not fs.exists(CONFIG.CORE_PATH) then
+    if fs.exists(CONFIG.CORE_PATH) then
+      print("Using existing installer core.")
       break
     end
     if not confirm("Retry download?", true) then
@@ -392,7 +393,8 @@ end
 
 local loader = load_local_core()
 if not loader then
-  print("Installer core missing or corrupted.")
+  print("Installer core missing and could not be loaded.")
+  log_line("ERROR", "Installer core missing after bootstrap attempt.")
   return
 end
 

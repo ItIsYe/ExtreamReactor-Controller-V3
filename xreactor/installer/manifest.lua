@@ -37,7 +37,7 @@ return {
     { path = "xreactor/master/ui/energy.lua", size_bytes = 1365, hash = "dde1b1ae" },
     { path = "xreactor/shared/colors.lua", size_bytes = 332, hash = "445d12af" },
     { path = "xreactor/shared/constants.lua", size_bytes = 1318, hash = "10abc7ee" },
-    { path = "xreactor/installer/installer.lua", size_bytes = 1149, hash = "2ce9dce3" },
+    { path = "xreactor/installer/installer.lua", size_bytes = 11419, hash = "10cce295" },
     { path = "xreactor/installer/installer_core.lua", size_bytes = 68007, hash = "911d7886" },
     { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "bc1c8639" }
   }

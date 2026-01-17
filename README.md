@@ -47,11 +47,11 @@ Wireless Modem (Control/Status)
 
 ## Installation, Safe Update & Full Reinstall
 **Erstinstallation / Vollinstallation**
-1. Root-Installer herunterladen und ausführen:
+1. Installer herunterladen und ausführen:
    ```
    lua /installer.lua
    ```
-   (Der Root-Installer ist ein Bootstrap: Er aktualisiert bei Bedarf `/xreactor/installer/installer_core.lua` und startet anschließend den Core-Installer.)
+   (Beide Einstiegspunkte sind Bootstrapper: `/installer.lua` und `/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
@@ -80,11 +80,12 @@ Wireless Modem (Control/Status)
 
 **Installer starten (ohne Neu-Download)**
 - Root-Installer (`/installer.lua`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
-- Der Core-Installer kann auch direkt via `/xreactor/installer/installer.lua` gestartet werden (Shim, falls vorhanden).
+- Der Installer unter `/xreactor/installer/installer.lua` ist ebenfalls ein Bootstrap und verhält sich identisch.
 - SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
 
 **Logging & Debugging**
-- Installer-Log: `/xreactor/logs/installer.log` (mit Rotation `.1`).
+- Bootstrap-Log: `/xreactor/logs/installer_bootstrap.log` (mit Rotation `.1`).
+- Installer-Core-Log: `/xreactor/logs/installer.log` (mit Rotation `.1`).
 - Node-Logs: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
 - Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
@@ -107,7 +108,8 @@ Wireless Modem (Control/Status)
   - Config-Datei der Rolle (`debug_logging = true`), oder
   - Settings API: `settings.set("xreactor.debug_logging", true)` + `settings.save()`.
 - Logfiles:
-  - Installer: `/xreactor/logs/installer.log` (Rotation `.1`)
+  - Bootstrap: `/xreactor/logs/installer_bootstrap.log` (Rotation `.1`)
+  - Installer-Core: `/xreactor/logs/installer.log` (Rotation `.1`)
   - Nodes: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
 
