@@ -2,12 +2,10 @@ local BASE_DIR = "/xreactor"
 local REPO_OWNER = "ItIsYe"
 local REPO_NAME = "ExtreamReactor-Controller-V3"
 local REPO_BASE_URL_MAIN = "https://raw.githubusercontent.com"
-local REPO_BASE_URL_FALLBACK = "https://raw.github.com"
-local REPO_BASE_URL_CDN = "https://cdn.jsdelivr.net/gh"
 local RELEASE_REMOTE = "xreactor/installer/release.lua"
 local MANIFEST_REMOTE = "xreactor/installer/manifest.lua"
 local MANIFEST_LOCAL = BASE_DIR .. "/.manifest"
-local MANIFEST_CACHE = BASE_DIR .. "/cache/manifest.lua"
+local MANIFEST_CACHE = BASE_DIR .. "/.cache/manifest.lua"
 local MANIFEST_CACHE_LEGACY = BASE_DIR .. "/.manifest_cache"
 local BACKUP_BASE = "/xreactor_backup"
 local NODE_ID_PATH = BASE_DIR .. "/config/node_id.txt"
@@ -322,9 +320,7 @@ end
 local function build_repo_urls(ref, path)
   local safe_ref = tostring(ref)
   return {
-    string.format("%s/%s/%s/%s/%s", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, safe_ref, path),
-    string.format("%s/%s/%s/%s/%s", REPO_BASE_URL_FALLBACK, REPO_OWNER, REPO_NAME, safe_ref, path),
-    string.format("%s/%s/%s@%s/%s", REPO_BASE_URL_CDN, REPO_OWNER, REPO_NAME, safe_ref, path)
+    string.format("%s/%s/%s/%s/%s", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, safe_ref, path)
   }
 end
 
@@ -462,7 +458,7 @@ local function ensure_base_dirs()
   ensure_dir(BASE_DIR .. "/nodes/reprocessor")
   ensure_dir(BASE_DIR .. "/shared")
   ensure_dir(BASE_DIR .. "/installer")
-  ensure_dir(BASE_DIR .. "/cache")
+  ensure_dir(BASE_DIR .. "/.cache")
 end
 
 local function is_config_file(path)

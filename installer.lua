@@ -1,5 +1,4 @@
 local BASE_URL_MAIN = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main"
-local BASE_URL_FALLBACK = "https://raw.github.com/ItIsYe/ExtreamReactor-Controller-V3/main"
 local RELEASE_PATH = "xreactor/installer/release.lua"
 local INSTALLER_PATH = "/xreactor/installer/installer.lua"
 local INSTALLER_MIN_BYTES = 200
@@ -73,8 +72,7 @@ end
 
 local function load_release()
   local urls = {
-    string.format("%s/%s", BASE_URL_MAIN, RELEASE_PATH),
-    string.format("%s/%s", BASE_URL_FALLBACK, RELEASE_PATH)
+    string.format("%s/%s", BASE_URL_MAIN, RELEASE_PATH)
   }
   local content = select(1, download_with_retries(urls, 3, 1))
   if not content then
@@ -114,12 +112,10 @@ end
 
 local function fetch_installer(release)
   local base_urls = {
-    ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha),
-    ("https://raw.github.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha)
+    ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha)
   }
   local urls = {
-    string.format("%s/xreactor/installer/installer.lua", base_urls[1]),
-    string.format("%s/xreactor/installer/installer.lua", base_urls[2])
+    string.format("%s/xreactor/installer/installer.lua", base_urls[1])
   }
   local content = select(1, download_with_retries(urls, 3, 1))
   if not content then
