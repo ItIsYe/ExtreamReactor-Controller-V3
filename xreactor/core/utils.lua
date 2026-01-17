@@ -8,6 +8,40 @@ local utils = {}
 
 local logger = require("core.logger")
 
+local function sanitize_snapshot(value, active)
+  local value_type = type(value)
+  if value_type == "string" or value_type == "number" or value_type == "boolean" or value_type == "nil" then
+    return value
+  end
+  if value_type ~= "table" then
+    return tostring(value)
+  end
+  active = active or {}
+  if active[value] then
+    return "<cycle>"
+  end
+  active[value] = true
+  local out = {}
+  for key, val in next, value do
+    local key_type = type(key)
+    if key_type ~= "string" and key_type ~= "number" and key_type ~= "boolean" then
+      key = tostring(key)
+    end
+    out[key] = sanitize_snapshot(val, active)
+  end
+  active[value] = nil
+  return out
+end
+
+local function safe_serialize(value)
+  local sanitized = sanitize_snapshot(value)
+  local ok, result = pcall(textutils.serialize, sanitized)
+  if not ok then
+    return nil, result
+  end
+  return result
+end
+
 function utils.ensure_dir(path)
   if not fs.exists(path) then
     fs.makeDir(path)
@@ -37,7 +71,11 @@ function utils.write_config(path, tbl)
   if not file then
     error("Unable to write config at " .. path)
   end
-  file.write(textutils.serialize(tbl))
+  local serialized, err = safe_serialize(tbl)
+  if not serialized then
+    error("Config serialize failed: " .. tostring(err))
+  end
+  file.write(serialized)
   file.close()
 end
 
