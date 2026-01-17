@@ -1,9 +1,20 @@
+-- CONFIG
+local CONFIG = {
+  LOG_NAME = "reprocessor", -- Log file name for this node.
+  LOG_PREFIX = "REPROC", -- Default log prefix for reprocessor events.
+  RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
+}
+
 package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
 local network_lib = require("core.network")
 local config = require("nodes.reprocessor.config")
+
+-- Initialize file logging early to capture startup events.
+utils.init_logger({ log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX, enabled = config.debug_logging })
+utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
 
 local network
 local buffers = {}
@@ -57,7 +68,7 @@ local function main_loop()
     if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
       standby = true
     end
-    local msg = network:receive(0.5)
+    local msg = network:receive(CONFIG.RECEIVE_TIMEOUT)
     if msg then
       if msg.type == constants.message_types.HELLO then
         master_seen = os.epoch("utc")
