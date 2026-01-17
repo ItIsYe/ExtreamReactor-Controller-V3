@@ -2,6 +2,8 @@
 local CONFIG = {
   LOG_NAME = "rt", -- Log file name for this node.
   LOG_PREFIX = "RT", -- Default log prefix for RT events.
+  DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
+  NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
   TARGET_RPM = 900, -- Default turbine RPM target.
   RPM_TOLERANCE = 20, -- RPM tolerance for control loops.
   MIN_FLOW = 200, -- Minimum turbine flow.
@@ -86,7 +88,13 @@ end
 
 local config = loadConfig()
 -- Initialize file logging early to capture startup events.
-utils.init_logger({ log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX, enabled = config.debug_logging })
+local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
+local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
+local debug_enabled = config.debug_logging
+if CONFIG.DEBUG_LOG_ENABLED ~= nil then
+  debug_enabled = CONFIG.DEBUG_LOG_ENABLED
+end
+utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled })
 log(INFO, "Startup")
 local TARGET_RPM = CONFIG.TARGET_RPM
 local RPM_TOL = CONFIG.RPM_TOLERANCE
