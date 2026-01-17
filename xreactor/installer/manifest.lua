@@ -5,8 +5,8 @@ return {
   hash_algo = "crc32",
   installer_min_version = "1.3",
   installer_path = "xreactor/installer/installer_core.lua",
-  installer_hash = "911d7886",
-  installer_size_bytes = 68007,
+  installer_hash = "aed3ff79",
+  installer_size_bytes = 69551,
   files = {
     { path = "xreactor/core/network.lua", size_bytes = 3241, hash = "870f6483" },
     { path = "xreactor/core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
@@ -38,7 +38,7 @@ return {
     { path = "xreactor/shared/colors.lua", size_bytes = 332, hash = "445d12af" },
     { path = "xreactor/shared/constants.lua", size_bytes = 1318, hash = "10abc7ee" },
     { path = "xreactor/installer/installer.lua", size_bytes = 11419, hash = "10cce295" },
-    { path = "xreactor/installer/installer_core.lua", size_bytes = 68007, hash = "911d7886" },
-    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "bc1c8639" }
+    { path = "xreactor/installer/installer_core.lua", size_bytes = 69551, hash = "aed3ff79" },
+    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "0481881d" }
   }
 }

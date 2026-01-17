@@ -68,6 +68,7 @@ Wireless Modem (Control/Status)
 - Updates sind source_ref-gepinnt: Manifest und Dateien kommen aus derselben Base-URL (Commit-SHA bevorzugt, `main` nur Fallback).
 - Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
 - Installer speichert nur sichere Plain-Data-Snapshots (keine shared refs); Backup/Cache-Indizes sind textbasiert.
+- **Protokoll-Änderung**: Wenn das Update eine neue Major-Protokollversion enthält, bricht SAFE UPDATE ab, um inkonsistente Master/Node-Versionen zu vermeiden.
 
 **FULL REINSTALL (alles neu)**
 - Installer erneut ausführen → Menü **FULL REINSTALL** wählen.
@@ -100,7 +101,12 @@ Wireless Modem (Control/Status)
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
 - **Persistenz**:
   - `node_id`: `/xreactor/config/node_id.txt` (immer String)
-  - Manifest: `/xreactor/.manifest`
+- Manifest: `/xreactor/.manifest`
+
+## Recovery & Rollback
+- Backups liegen unter `/xreactor_backup/<timestamp>/`.
+- SAFE UPDATE führt bei Fehlern automatisch Rollback durch und lässt den alten Stand bestehen.
+- Manuelles Rollback: Dateien aus dem Backup-Verzeichnis zurück nach `/xreactor/` kopieren (z. B. bei Stromausfall während Updates).
 
 ## Debug-Logging
 - **Standardmäßig AUS**.

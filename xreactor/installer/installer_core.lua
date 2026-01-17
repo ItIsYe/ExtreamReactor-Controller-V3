@@ -37,6 +37,7 @@ local CONFIG = {
   FILE_RETRY_ROUNDS = 3, -- Retry rounds for file download failures.
   FILE_RETRY_BACKOFF = 1, -- Backoff seconds for file download retry rounds.
   BASE_CACHE_PATH = "/xreactor/.cache/source.lua", -- Cache for last good base URL.
+  PROTOCOL_ABORT_ON_MAJOR_CHANGE = true, -- Abort SAFE UPDATE if protocol major version changes.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = false, -- Enables installer file logging to /xreactor/logs/installer.log.
   LOG_PATH = "/xreactor/logs/installer.log", -- Installer log file path.
@@ -1302,6 +1303,37 @@ local function is_config_file(path)
   return false
 end
 
+local function parse_proto_version_from_content(content)
+  if not content or content == "" then
+    return nil
+  end
+  local block = content:match("proto_ver%s*=%s*(%b{})")
+  if not block then
+    return nil
+  end
+  local major = tonumber(block:match("major%s*=%s*(%d+)"))
+  local minor = tonumber(block:match("minor%s*=%s*(%d+)"))
+  if not major or not minor then
+    return nil
+  end
+  return { major = major, minor = minor }
+end
+
+local function load_proto_version(path)
+  if not path or not fs.exists(path) then
+    return nil
+  end
+  local content = read_file(path)
+  return parse_proto_version_from_content(content)
+end
+
+local function format_proto_version(ver)
+  if not ver then
+    return "unknown"
+  end
+  return tostring(ver.major) .. "." .. tostring(ver.minor)
+end
+
 local function confirm(prompt_text, default)
   local hint = default and "Y/n" or "y/N"
   local input = ui_prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
@@ -1859,6 +1891,24 @@ local function safe_update()
 
   backup_files(backup_dir, update_paths)
   backup_files(backup_dir, protected)
+
+  local local_proto = load_proto_version("/xreactor/shared/constants.lua")
+  local staged_proto = nil
+  if staged["xreactor/shared/constants.lua"] then
+    staged_proto = load_proto_version(staged["xreactor/shared/constants.lua"])
+  end
+  if CONFIG.PROTOCOL_ABORT_ON_MAJOR_CHANGE and local_proto and staged_proto then
+    if local_proto.major ~= staged_proto.major then
+      local message = ("Protocol major change detected (%s -> %s). SAFE UPDATE aborted."):format(
+        format_proto_version(local_proto),
+        format_proto_version(staged_proto)
+      )
+      print(message)
+      log("WARN", message)
+      cleanup_staging(stage_dir)
+      return
+    end
+  end
 
   local changed = 0
   local ok, err = apply_staged(updates, staged, created)
