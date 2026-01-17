@@ -65,6 +65,7 @@ local current_base_url = nil
 local current_base_source = "main"
 local current_base_sha = nil
 
+-- BOOTSTRAP HELPERS (standalone, no external dependencies).
 -- UI helpers (centralized input).
 local function ui_prompt(label, default, min, max)
   local suffix = default and (" [" .. tostring(default) .. "]") or ""
@@ -620,6 +621,106 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds)
   return false, nil, { tried = tried, last = last_entry }
 end
 
+local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
+  local attempts = max_attempts or DOWNLOAD_ATTEMPTS
+  local backoff = backoff_seconds or DOWNLOAD_BACKOFF
+  local tried = {}
+  local list = {}
+  for _, url in ipairs(urls or {}) do
+    if url and url ~= "" then
+      table.insert(list, url)
+    end
+  end
+  if #list == 0 then
+    return false, nil, { tried = {}, last = { url = nil, ok = false, err = "no urls" } }
+  end
+  for attempt = 1, attempts do
+    for _, url in ipairs(list) do
+      local ok, body, err, meta = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
+      local entry = {
+        url = url,
+        ok = ok,
+        err = err,
+        bytes = body and #body or 0,
+        code = meta and meta.code or nil,
+        headers = meta and meta.headers or nil,
+        attempt = attempt
+      }
+      if ok and opts and opts.expected_size and opts.expected_size > 0 then
+        if #body ~= opts.expected_size then
+          entry.ok = false
+          entry.err = "size mismatch"
+        end
+      end
+      table.insert(tried, entry)
+      if entry.ok then
+        return true, body, { tried = tried, last = entry }
+      end
+    end
+    if attempt < attempts then
+      os.sleep(backoff * attempt)
+    end
+  end
+  local last_entry = tried[#tried] or { url = list[1], ok = false, err = "timeout or http error", bytes = 0 }
+  return false, nil, { tried = tried, last = last_entry }
+end
+
+local function is_valid_sha(sha)
+  return type(sha) == "string" and sha:match("^[a-fA-F0-9]+$") and #sha == 40
+end
+
+local function build_main_base_url()
+  return string.format("%s/%s/%s/main/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME)
+end
+
+local function build_commit_base_url(sha)
+  return string.format("%s/%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, sha)
+end
+
+local function read_base_cache()
+  if not fs.exists(CONFIG.BASE_CACHE_PATH) then
+    return nil
+  end
+  local content = read_file(CONFIG.BASE_CACHE_PATH)
+  if not content then
+    return nil
+  end
+  local ok, data = pcall(textutils.unserialize, content)
+  if ok and type(data) == "table" then
+    return data
+  end
+  return nil
+end
+
+local function write_base_cache(payload)
+  write_atomic(CONFIG.BASE_CACHE_PATH, textutils.serialize(payload))
+end
+
+local function set_base_source(base_url, source, sha)
+  current_base_url = base_url
+  current_base_source = source or "main"
+  current_base_sha = sha
+  write_base_cache({
+    last_good_base_url = current_base_url,
+    last_good_source = current_base_source,
+    last_good_sha = current_base_sha
+  })
+end
+
+local function build_manifest_sources(release)
+  local sources = {}
+  local sha = release and release.commit_sha
+  if is_valid_sha(sha) then
+    table.insert(sources, { base_url = build_commit_base_url(sha), source = "sha", sha = sha })
+  else
+    if sha then
+      log("WARN", "Invalid commit SHA format; falling back to main")
+    end
+  end
+  table.insert(sources, { base_url = build_main_base_url(), source = "main", sha = nil })
+  return sources
+end
+
 local function fetch_repo_file(ref, path, opts)
   local base = current_base_url or build_main_base_url()
   local urls = { base .. path }
@@ -675,10 +776,13 @@ local function read_manifest_cache()
   if type(data.release) ~= "table" or type(data.release.commit_sha) ~= "string" then
     return nil
   end
+  if type(data.base_url) ~= "string" then
+    return nil
+  end
   return data
 end
 
-local function write_manifest_cache(manifest_content, release, source)
+local function write_manifest_cache(manifest_content, release, source, base_info)
   local safe_release = {
     commit_sha = release and release.commit_sha,
     hash_algo = release and release.hash_algo,
@@ -688,6 +792,9 @@ local function write_manifest_cache(manifest_content, release, source)
     manifest_content = manifest_content,
     release = safe_release,
     source = source,
+    base_url = base_info and base_info.base_url,
+    base_source = base_info and base_info.source,
+    base_sha = base_info and base_info.sha,
     saved_at = os.time()
   }
   write_atomic(MANIFEST_CACHE, textutils.serialize(payload))
@@ -751,97 +858,18 @@ local function print_download_failure(label, info, fallback_urls)
   ))
 end
 
-local function is_valid_sha(sha)
-  return type(sha) == "string" and sha:match("^[a-fA-F0-9]+$") and #sha == 40
-end
-
-local function build_main_base_url()
-  return string.format("%s/%s/%s/main/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME)
-end
-
-local function build_commit_base_url(sha)
-  return string.format("%s/%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, sha)
-end
-
-local function read_base_cache()
-  if not fs.exists(CONFIG.BASE_CACHE_PATH) then
-    return nil
-  end
-  local content = read_file(CONFIG.BASE_CACHE_PATH)
-  if not content then
-    return nil
-  end
-  local ok, data = pcall(textutils.unserialize, content)
-  if ok and type(data) == "table" then
-    return data
-  end
-  return nil
-end
-
-local function write_base_cache(payload)
-  write_atomic(CONFIG.BASE_CACHE_PATH, textutils.serialize(payload))
-end
-
-local function set_base_source(base_url, source, sha)
-  current_base_url = base_url
-  current_base_source = source or "main"
-  current_base_sha = sha
-  write_base_cache({
-    last_good_base_url = current_base_url,
-    last_good_source = current_base_source,
-    last_good_sha = current_base_sha
-  })
-end
-
-local function validate_base_url(base_url)
-  local probe_url = base_url .. MANIFEST_REMOTE
-  local ok, _, err, meta = fetch_url(probe_url, { timeout = DOWNLOAD_TIMEOUT })
-  if ok then
-    return true
-  end
-  return false, { err = err, last = { url = probe_url, err = err, code = meta and meta.code or nil } }
-end
-
-local function resolve_base_source(release)
-  local main_base = build_main_base_url()
-  local cache = read_base_cache()
-  local sha = release and release.commit_sha
-  if is_valid_sha(sha) then
-    local commit_base = build_commit_base_url(sha)
-    local ok, info = validate_base_url(commit_base)
-    if ok then
-      set_base_source(commit_base, "sha", sha)
-      return
-    end
-    print("Pinned commit invalid, falling back to main.")
-    log("WARN", "Pinned commit invalid; falling back to main")
-  else
-    if sha then
-      log("WARN", "Invalid commit SHA; falling back to main")
-    end
-  end
-  if cache and cache.last_good_base_url then
-    local ok = validate_base_url(cache.last_good_base_url)
-    if ok then
-      set_base_source(cache.last_good_base_url, cache.last_good_source, cache.last_good_sha)
-      return
-    end
-  end
-  set_base_source(main_base, "main", nil)
-end
-
-local function is_404_error(info)
-  local err = info and info.last and info.last.err or ""
-  err = tostring(err):lower()
-  return err:find("404", 1, true) or err:find("not found", 1, true)
-end
-
 local function download_release()
-  local ok, content, meta = fetch_repo_file("main", RELEASE_REMOTE, {
-    min_bytes = RELEASE_MIN_BYTES,
-    marker = RELEASE_SANITY_MARKER
-  })
+  local url = build_main_base_url() .. RELEASE_REMOTE
+  local ok, content, meta = download_with_retry({ url }, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
   if not ok then
+    return nil, "Release download failed", meta
+  end
+  local ok_sanity, reason = sanity_check(content, RELEASE_MIN_BYTES, RELEASE_SANITY_MARKER)
+  if not ok_sanity then
+    local entry = meta and meta.last or { url = url, ok = false, err = reason, bytes = content and #content or 0 }
+    entry.ok = false
+    entry.err = reason
+    meta = { tried = meta and meta.tried or { entry }, last = entry }
     return nil, "Release download failed", meta
   end
   local loader = load(content, "release", "t", {})
@@ -872,16 +900,49 @@ local function parse_manifest(content)
   if not ok or type(data) ~= "table" or type(data.files) ~= "table" then
     return nil, "Manifest parse failed"
   end
+  if type(data.manifest_version) ~= "number" then
+    return nil, "Manifest missing manifest_version"
+  end
+  if type(data.source_ref) ~= "string" then
+    return nil, "Manifest missing source_ref"
+  end
+  local entries = {}
+  for _, entry in ipairs(data.files) do
+    if type(entry) ~= "table" then
+      return nil, "Manifest entry invalid"
+    end
+    if type(entry.path) ~= "string" or entry.path == "" then
+      return nil, "Manifest entry missing path"
+    end
+    if type(entry.hash) ~= "string" or entry.hash == "" then
+      return nil, "Manifest entry missing hash"
+    end
+    if type(entry.size_bytes) ~= "number" or entry.size_bytes < 1 then
+      return nil, "Manifest entry missing size"
+    end
+    table.insert(entries, {
+      path = entry.path,
+      hash = entry.hash,
+      size_bytes = entry.size_bytes
+    })
+  end
+  table.sort(entries, function(a, b) return a.path < b.path end)
+  local lookup = {}
+  for _, entry in ipairs(entries) do
+    lookup[entry.path] = entry
+  end
+  data.entries = entries
+  data.lookup = lookup
   return data
 end
 
-local function download_manifest()
-  local release, release_err, release_meta = download_release()
-  if not release then
-    return nil, release_err, release_meta
+local function download_manifest_from_source(release, base_info)
+  local manifest_path = release.manifest_path or MANIFEST_REMOTE
+  local urls = { base_info.base_url .. manifest_path }
+  if base_info.source == "main" and CONFIG.MANIFEST_URL_FALLBACK then
+    table.insert(urls, CONFIG.MANIFEST_URL_FALLBACK)
   end
-  local urls = { CONFIG.MANIFEST_URL_PRIMARY, CONFIG.MANIFEST_URL_FALLBACK }
-  local ok, content, meta = fetch_with_retries(urls, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
+  local ok, content, meta = download_with_retry(urls, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
   if not ok then
     return nil, "Manifest download failed", meta
   end
@@ -897,9 +958,11 @@ local function download_manifest()
   if not manifest then
     return nil, manifest_err, meta
   end
+  if base_info.source == "sha" and manifest.source_ref ~= base_info.sha then
+    return nil, "Manifest source_ref mismatch", meta
+  end
   validate_hash_algo(manifest, release)
-  log("INFO", "Manifest fetched from " .. tostring(release.commit_sha))
-  return content, manifest, release, meta
+  return content, manifest, meta
 end
 
 local function download_manifest_with_retries(attempts, backoff)
@@ -908,22 +971,31 @@ local function download_manifest_with_retries(attempts, backoff)
   local last_meta
   for attempt = 1, max_attempts do
     log("WARN", ("Manifest download attempt %d/%d"):format(attempt, max_attempts))
-    local content, manifest, release, meta = download_manifest()
-    if content then
-      if meta then
-        meta.attempt = attempt
-      end
-      return content, manifest, release, meta
-    end
-    if meta then
-      meta.attempt = attempt
-      last_meta = meta
+    local release, release_err, release_meta = download_release()
+    if not release then
+      last_meta = release_meta
     else
-      last_meta = {
-        tried = { { url = CONFIG.MANIFEST_URL_PRIMARY, ok = false, err = "timeout or http error", bytes = 0, attempt = attempt } },
-        last = { url = CONFIG.MANIFEST_URL_PRIMARY, ok = false, err = "timeout or http error", bytes = 0, attempt = attempt },
-        attempt = attempt
-      }
+      local sources = build_manifest_sources(release)
+      for _, base_info in ipairs(sources) do
+        if base_info.source == "sha" then
+          log("INFO", "Attempting pinned manifest download")
+        end
+        local content, manifest, meta = download_manifest_from_source(release, base_info)
+        if content then
+          set_base_source(base_info.base_url, base_info.source, base_info.sha)
+          write_manifest_cache(content, release, base_info.source, base_info)
+          if meta then
+            meta.attempt = attempt
+          end
+          log("INFO", "Manifest fetched from " .. tostring(base_info.source))
+          return content, manifest, release, meta
+        end
+        last_meta = meta
+        if base_info.source == "sha" then
+          print("Pinned commit download failed, falling back to main.")
+          log("WARN", "Pinned manifest download failed; falling back to main")
+        end
+      end
     end
     if attempt < max_attempts then
       os.sleep(delay * attempt)
@@ -961,9 +1033,15 @@ local function acquire_manifest()
         log("ERROR", "Cached manifest invalid: " .. tostring(parse_err))
         return nil
       end
+      if type(cache.base_url) ~= "string" then
+        print("Cached manifest missing base URL.")
+        log("ERROR", "Cached manifest missing base URL")
+        return nil
+      end
       manifest = parsed
       release = cache.release
       manifest_meta = cache.source
+      set_base_source(cache.base_url, cache.base_source, cache.base_sha)
       validate_hash_algo(manifest, release)
       break
     elseif (cache and choice == 2) or (not cache and choice == 1) then
@@ -1256,11 +1334,25 @@ end
 
 local function update_files(manifest, hash_algo)
   local updates = {}
-  for path, expected_hash in pairs(manifest.files) do
+  for _, entry in ipairs(manifest.entries or {}) do
+    local path = entry.path
     if not is_config_file(path) then
-      local local_hash = file_checksum("/" .. path, hash_algo)
-      if local_hash ~= expected_hash then
-        table.insert(updates, { path = path, hash = expected_hash })
+      local full_path = "/" .. path
+      local needs_update = false
+      if not fs.exists(full_path) then
+        needs_update = true
+      else
+        if entry.size_bytes and fs.getSize(full_path) ~= entry.size_bytes then
+          needs_update = true
+        else
+          local local_hash = file_checksum(full_path, hash_algo)
+          if local_hash ~= entry.hash then
+            needs_update = true
+          end
+        end
+      end
+      if needs_update then
+        table.insert(updates, { path = entry.path, hash = entry.hash, size_bytes = entry.size_bytes })
       end
     end
   end
@@ -1276,42 +1368,30 @@ local function stage_updates(entries, release, hash_algo)
   ensure_dir(UPDATE_STAGING)
   local staged = {}
   for _, entry in ipairs(entries) do
-    local ok, content, meta = fetch_repo_file(release.commit_sha, entry.path)
+    local url = (current_base_url or build_main_base_url()) .. entry.path
+    local ok, content, meta = download_with_retry({ url }, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF, {
+      expected_size = entry.size_bytes
+    })
     if not ok then
-      local last = meta and meta.last or {}
-      return nil, ("Download failed for %s"):format(entry.path), meta
-    end
-    if is_html_payload(content) then
-      return nil, ("Download failed for %s (html response)"):format(entry.path), meta
+      return nil, ("Download failed for %s"):format(entry.path), meta, "download"
     end
     local actual = compute_hash(content, hash_algo)
     if actual ~= entry.hash then
-      local retry_ok, retry_content, retry_meta = fetch_repo_file(release.commit_sha, entry.path)
-      if retry_ok and retry_content then
-        content = retry_content
-        if is_html_payload(content) then
-          return nil, ("Download failed for %s (html response)"):format(entry.path)
-        end
-        actual = compute_hash(content, hash_algo)
-      end
-      if actual ~= entry.hash then
-        local last = retry_meta and retry_meta.last or meta and meta.last or {}
-        return nil, ("Checksum mismatch for %s (expected=%s actual=%s)"):format(
-          entry.path,
-          entry.hash,
-          actual
-        ), retry_meta or meta
-      end
+      return nil, ("Integrity check failed for %s (expected=%s actual=%s)"):format(
+        entry.path,
+        entry.hash,
+        actual
+      ), meta, "integrity"
     end
     local staging_path = build_staging_path(entry.path)
     write_atomic(staging_path, content)
     local verify = file_checksum(staging_path, hash_algo)
     if verify ~= entry.hash then
-      return nil, ("Staged hash mismatch for %s (expected=%s actual=%s)"):format(
+      return nil, ("Integrity check failed for %s (staged mismatch expected=%s actual=%s)"):format(
         entry.path,
         entry.hash,
         verify
-      )
+      ), nil, "integrity"
     end
     staged[entry.path] = staging_path
   end
@@ -1349,13 +1429,13 @@ local function update_installer_if_required(manifest, release, hash_algo)
     end
     local installer_path = manifest.installer_path or "xreactor/installer/installer.lua"
     local expected = manifest.installer_hash
-    if not expected then
+    if not expected or not manifest.installer_size_bytes then
       print("SAFE UPDATE aborted: installer hash missing.")
       return false
     end
-    local ok, content, meta = fetch_repo_file(release.commit_sha, installer_path, {
-      min_bytes = INSTALLER_MIN_BYTES,
-      marker = INSTALLER_SANITY_MARKER
+    local url = (current_base_url or build_main_base_url()) .. installer_path
+    local ok, content, meta = download_with_retry({ url }, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF, {
+      expected_size = manifest.installer_size_bytes
     })
     if not ok then
       local last = meta and meta.last or {}
@@ -1402,11 +1482,15 @@ end
 
 local function migrate_config(role, cfg_path, manifest, release, hash_algo)
   local remote_path = "xreactor/" .. role_targets[role].config
-  local expected_hash = manifest.files[remote_path]
+  local entry = manifest.lookup and manifest.lookup[remote_path] or nil
+  local expected_hash = entry and entry.hash or nil
   if not expected_hash then
     return false
   end
-  local ok, content, meta = fetch_repo_file(release.commit_sha, remote_path)
+  local url = (current_base_url or build_main_base_url()) .. remote_path
+  local ok, content, meta = download_with_retry({ url }, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF, {
+    expected_size = entry.size_bytes
+  })
   if not ok then
     local last = meta and meta.last or {}
     error(("Config download failed (url=%s reason=%s)"):format(
@@ -1464,11 +1548,15 @@ end
 
 local function build_manifest_entries(manifest)
   local entries = {}
-  for path, expected_hash in pairs(manifest.files) do
-    table.insert(entries, { path = path, hash = expected_hash })
+  for _, entry in ipairs(manifest.entries or {}) do
+    table.insert(entries, { path = entry.path, hash = entry.hash, size_bytes = entry.size_bytes })
   end
-  if manifest.installer_path and manifest.installer_hash then
-    table.insert(entries, { path = manifest.installer_path, hash = manifest.installer_hash })
+  if manifest.installer_path and manifest.installer_hash and manifest.installer_size_bytes then
+    table.insert(entries, {
+      path = manifest.installer_path,
+      hash = manifest.installer_hash,
+      size_bytes = manifest.installer_size_bytes
+    })
   end
   table.sort(entries, function(a, b) return a.path < b.path end)
   return entries
@@ -1487,51 +1575,46 @@ local function safe_update()
     active_logger.set_enabled(true)
   end
 
-  local manifest_content, manifest, release, manifest_meta = acquire_manifest()
-  if not manifest_content then
-    return
-  end
-  resolve_base_source(release)
-  local hash_algo = resolve_hash_algo(manifest, release)
-  ensure_base_dirs()
-
-  log("INFO", "SAFE UPDATE started for role " .. tostring(role))
-  local can_continue = update_installer_if_required(manifest, release, hash_algo)
-  if not can_continue then
-    return
-  end
-
-  local node_ok = ensure_node_id(role, cfg_path)
-  if not node_ok then
-    return
-  end
-
-  local updates = update_files(manifest, hash_algo)
-  log("INFO", "Files needing update: " .. tostring(#updates))
-  local staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
+  local manifest_content
+  local manifest
+  local release
+  local manifest_meta
+  local hash_algo
+  local updates
+  local staged
   local retry_rounds = 0
-  while not staged do
-    local choice = 1
-    if current_base_source == "sha" and is_404_error(stage_meta) then
-      print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
-      choice = ui_menu(nil, { "Try fallback to main", "Cancel" }, 1)
-      if choice == 1 then
-        set_base_source(build_main_base_url(), "main", nil)
-        staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
-        if staged then
-          break
-        end
-      else
-        log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
-        return
-      end
-    else
-      print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
-      choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
-      if choice ~= 1 then
-        log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
-        return
-      end
+  while true do
+    manifest_content, manifest, release, manifest_meta = acquire_manifest()
+    if not manifest_content then
+      return
+    end
+    hash_algo = resolve_hash_algo(manifest, release)
+    ensure_base_dirs()
+
+    log("INFO", "SAFE UPDATE started for role " .. tostring(role))
+    local can_continue = update_installer_if_required(manifest, release, hash_algo)
+    if not can_continue then
+      return
+    end
+
+    local node_ok = ensure_node_id(role, cfg_path)
+    if not node_ok then
+      return
+    end
+
+    updates = update_files(manifest, hash_algo)
+    log("INFO", "Files needing update: " .. tostring(#updates))
+    local stage_err
+    local stage_meta
+    staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
+    if staged then
+      break
+    end
+    print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
+    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+    if choice ~= 1 then
+      log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
+      return
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
@@ -1540,7 +1623,6 @@ local function safe_update()
       return
     end
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
-    staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
   end
   local backup_dir = create_backup_dir()
   local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
@@ -1577,7 +1659,11 @@ local function safe_update()
     end
   end
   if ok then
-    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, release, manifest_meta)
+    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, release, manifest_meta, {
+      base_url = current_base_url,
+      source = current_base_source,
+      sha = current_base_sha
+    })
     if not cache_ok then
       ok = false
       err = cache_err
@@ -1619,50 +1705,47 @@ end
 
 -- FULL REINSTALL overwrites all files and optionally restores existing config.
 local function full_reinstall()
-  local manifest_content, manifest, release, manifest_meta = acquire_manifest()
-  if not manifest_content then
-    return
-  end
-  resolve_base_source(release)
-  local hash_algo = resolve_hash_algo(manifest, release)
-  ensure_base_dirs()
-  log("INFO", "FULL REINSTALL started")
-
-  local existing_role, existing_cfg_path = find_existing_role()
-  local keep_config = false
-  if existing_role then
-    local existing_cfg = read_config(existing_cfg_path, {})
-    if existing_cfg.debug_logging == true and active_logger.set_enabled then
-      active_logger.set_enabled(true)
-    end
-    keep_config = confirm("Keep existing config + role?", true)
-  end
-
-  local entries = build_manifest_entries(manifest)
-  local staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
+  local manifest_content
+  local manifest
+  local release
+  local manifest_meta
+  local hash_algo
+  local staged
   local retry_rounds = 0
-  while not staged do
-    local choice = 1
-    if current_base_source == "sha" and is_404_error(stage_meta) then
-      print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
-      choice = ui_menu(nil, { "Try fallback to main", "Cancel" }, 1)
-      if choice == 1 then
-        set_base_source(build_main_base_url(), "main", nil)
-        staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
-        if staged then
-          break
-        end
-      else
-        log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
-        return
+  local existing_role
+  local existing_cfg_path
+  local keep_config = false
+  while true do
+    manifest_content, manifest, release, manifest_meta = acquire_manifest()
+    if not manifest_content then
+      return
+    end
+    hash_algo = resolve_hash_algo(manifest, release)
+    ensure_base_dirs()
+    log("INFO", "FULL REINSTALL started")
+
+    existing_role, existing_cfg_path = find_existing_role()
+    keep_config = false
+    if existing_role then
+      local existing_cfg = read_config(existing_cfg_path, {})
+      if existing_cfg.debug_logging == true and active_logger.set_enabled then
+        active_logger.set_enabled(true)
       end
-    else
-      print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
-      choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
-      if choice ~= 1 then
-        log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
-        return
-      end
+      keep_config = confirm("Keep existing config + role?", true)
+    end
+
+    local entries = build_manifest_entries(manifest)
+    local stage_err
+    local stage_meta
+    staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
+    if staged then
+      break
+    end
+    print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
+    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+    if choice ~= 1 then
+      log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
+      return
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
@@ -1671,12 +1754,12 @@ local function full_reinstall()
       return
     end
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
-    staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
   end
 
   local backup_dir = create_backup_dir()
   local update_paths = {}
   local created = {}
+  local entries = build_manifest_entries(manifest)
   for _, entry in ipairs(entries) do
     table.insert(update_paths, "/" .. entry.path)
   end
@@ -1769,12 +1852,53 @@ local function full_reinstall()
   ensure_node_id(role, cfg_path)
   write_startup(role)
   write_atomic(MANIFEST_LOCAL, manifest_content)
-  write_manifest_cache(manifest_content, release, manifest_meta)
+  write_manifest_cache(manifest_content, release, manifest_meta, {
+    base_url = current_base_url,
+    source = current_base_source,
+    sha = current_base_sha
+  })
 
   print("FULL REINSTALL complete.")
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "FULL REINSTALL complete")
 end
+
+local function bootstrap_self_check()
+  local required = {
+    { name = "ui_prompt", fn = ui_prompt },
+    { name = "ui_menu", fn = ui_menu },
+    { name = "ui_pause", fn = ui_pause },
+    { name = "prompt", fn = prompt },
+    { name = "ensure_dir", fn = ensure_dir },
+    { name = "read_file", fn = read_file },
+    { name = "write_atomic", fn = write_atomic },
+    { name = "compute_hash", fn = compute_hash },
+    { name = "file_checksum", fn = file_checksum },
+    { name = "fetch_url", fn = fetch_url },
+    { name = "fetch_with_retries", fn = fetch_with_retries },
+    { name = "download_with_retry", fn = download_with_retry },
+    { name = "fetch_repo_file", fn = fetch_repo_file },
+    { name = "build_main_base_url", fn = build_main_base_url },
+    { name = "build_commit_base_url", fn = build_commit_base_url },
+    { name = "read_manifest_cache", fn = read_manifest_cache },
+    { name = "write_manifest_cache", fn = write_manifest_cache },
+    { name = "ensure_base_dirs", fn = ensure_base_dirs },
+    { name = "stage_updates", fn = stage_updates },
+    { name = "apply_staged", fn = apply_staged },
+    { name = "rollback_from_backup", fn = rollback_from_backup }
+  }
+  local missing = {}
+  for _, entry in ipairs(required) do
+    if type(entry.fn) ~= "function" then
+      table.insert(missing, entry.name)
+    end
+  end
+  if #missing > 0 then
+    error("Installer bootstrap failed: missing helpers: " .. table.concat(missing, ", "))
+  end
+end
+
+bootstrap_self_check()
 
 local function main()
   if not http then
