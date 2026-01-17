@@ -60,9 +60,10 @@ Wireless Modem (Control/Status)
 - Installer erneut ausführen → Menü **SAFE UPDATE** wählen.
 - Lädt nur **geänderte/fehlende** Dateien laut Manifest (dateiweise).
 - SAFE UPDATE fragt **keine** Rolle neu ab und überschreibt keine Configs/Node-ID.
-- Downloads werden zuerst in Temp/Staging geschrieben, verifiziert und erst danach atomar ersetzt.
+- Downloads werden zuerst in ein **Staging-Verzeichnis** (`/xreactor_stage/<timestamp>`) geschrieben, per Checksum verifiziert und erst danach atomar ersetzt.
 - Bei Fehler: Rollback aus `/xreactor_backup/<timestamp>/`, keine halbfertigen Updates.
-- Manifest-Download nutzt Retries mit Backoff, RAW-Links (`raw.githubusercontent.com`) und HTML-Sanity-Checks.
+- Downloader nutzt **Retries + Backoff**, prüft HTTP-Status/HTML-Fehler und nutzt RAW-Mirrors (`raw.githubusercontent.com`, `raw.github.com`).
+- **Size mismatch** gilt nur als Transport-Warnung; die Entscheidung trifft die Checksum. Bei Problemen: Retry.
 - Manifest-Cache: `/xreactor/.cache/manifest.lua`. Bei Problemen: **Cached Manifest**, **Retry** oder **Cancel**.
 - Updates sind source_ref-gepinnt: Manifest und Dateien kommen aus derselben Base-URL (Commit-SHA bevorzugt, `main` nur Fallback).
 - Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.

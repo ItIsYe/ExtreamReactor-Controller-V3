@@ -11,7 +11,7 @@ local CONFIG = {
   MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path.
   BACKUP_BASE = "/xreactor_backup", -- Backup base directory.
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
-  UPDATE_STAGING = "/xreactor_update_tmp", -- Temp staging folder for updates.
+  UPDATE_STAGING_BASE = "/xreactor_stage", -- Base staging folder for updates.
   INSTALLER_VERSION = "1.2", -- Installer version for min-version checks.
   INSTALLER_MIN_BYTES = 200, -- Min bytes to accept installer download.
   INSTALLER_SANITY_MARKER = "local function main", -- Installer sanity marker.
@@ -22,6 +22,11 @@ local CONFIG = {
   DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts (per URL).
   DOWNLOAD_BACKOFF = 1, -- Backoff base (seconds) between retries.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (used when http.request is available).
+  DOWNLOAD_MIRRORS = { -- Download mirrors (raw content only).
+    "https://raw.githubusercontent.com",
+    "https://raw.github.com"
+  },
+  DOWNLOAD_HTML_SUSPECT_BYTES = 256, -- Treat small HTML-like responses as errors.
   MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main/xreactor/installer/manifest.lua", -- Primary manifest URL.
   MANIFEST_URL_FALLBACK = "https://cdn.jsdelivr.net/gh/ItIsYe/ExtreamReactor-Controller-V3@main/xreactor/installer/manifest.lua", -- Optional fallback manifest URL.
   MANIFEST_RETRY_ATTEMPTS = 3, -- Retry attempts for manifest acquisition menu.
@@ -48,7 +53,7 @@ local MANIFEST_CACHE = CONFIG.MANIFEST_CACHE
 local MANIFEST_CACHE_LEGACY = CONFIG.MANIFEST_CACHE_LEGACY
 local BACKUP_BASE = CONFIG.BACKUP_BASE
 local NODE_ID_PATH = CONFIG.NODE_ID_PATH
-local UPDATE_STAGING = CONFIG.UPDATE_STAGING
+local UPDATE_STAGING_BASE = CONFIG.UPDATE_STAGING_BASE
 local INSTALLER_VERSION = CONFIG.INSTALLER_VERSION
 local INSTALLER_MIN_BYTES = CONFIG.INSTALLER_MIN_BYTES
 local INSTALLER_SANITY_MARKER = CONFIG.INSTALLER_SANITY_MARKER
@@ -548,13 +553,79 @@ local function is_html_response(body)
   if not body or body == "" then
     return false
   end
-  if body:find("<!DOCTYPE", 1, true) or body:find("<html", 1, true) then
+  local head = body:sub(1, 512)
+  local lower = head:lower()
+  if lower:find("<!doctype", 1, true) or lower:find("<html", 1, true) then
     return true
   end
-  if body:match("^%s*<") then
+  if lower:find("<body", 1, true) or lower:find("<head", 1, true) or lower:find("<title", 1, true) then
+    return true
+  end
+  if lower:find("rate limit", 1, true) or lower:find("not found", 1, true) then
+    return true
+  end
+  if head:match("^%s*<") then
     return true
   end
   return false
+end
+
+local function is_suspect_html(body)
+  if not body then
+    return false
+  end
+  if #body <= (CONFIG.DOWNLOAD_HTML_SUSPECT_BYTES or 0) and is_html_response(body) then
+    return true
+  end
+  return false
+end
+
+local function join_url(base, path)
+  if not base or base == "" then
+    return path
+  end
+  if not path or path == "" then
+    return base
+  end
+  local cleaned_path = path:gsub("^/", "")
+  if base:sub(-1) ~= "/" then
+    return base .. "/" .. cleaned_path
+  end
+  return base .. cleaned_path
+end
+
+local function build_mirror_base_urls(base_url)
+  local list = {}
+  local seen = {}
+  local function add(url)
+    if url and url ~= "" and not seen[url] then
+      table.insert(list, url)
+      seen[url] = true
+    end
+  end
+  add(base_url)
+  local host, rest = base_url:match("^(https?://[^/]+)(/.*)$")
+  if host and rest then
+    for _, mirror in ipairs(CONFIG.DOWNLOAD_MIRRORS or {}) do
+      if mirror ~= host then
+        add(mirror .. rest)
+      end
+    end
+  end
+  return list
+end
+
+local function build_mirror_urls(base_url, path)
+  local urls = {}
+  local seen = {}
+  for _, base in ipairs(build_mirror_base_urls(base_url)) do
+    local url = join_url(base, path)
+    if url and not seen[url] then
+      table.insert(urls, url)
+      seen[url] = true
+    end
+  end
+  return urls
 end
 
 -- Single download function used by all network requests.
@@ -604,20 +675,35 @@ local function fetch_url(url, opts)
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
   local body = response.readAll()
   response.close()
+  local meta = { url = url, code = code, status = code, headers = headers, bytes = body and #body or 0 }
   if not body or body == "" then
-    return false, nil, "empty body", { url = url, code = code, headers = headers }
+    meta.reason = "empty body"
+    return false, nil, "empty body", meta
   end
-  if is_html_response(body) then
-    return false, nil, "html response (wrong url)", { url = url, code = code, headers = headers }
+  if is_html_response(body) or is_suspect_html(body) then
+    meta.reason = "html response"
+    return false, nil, "html response", meta
   end
   if code and code ~= 200 then
-    return false, nil, "http " .. tostring(code), { url = url, code = code, headers = headers }
+    meta.reason = "http " .. tostring(code)
+    return false, nil, meta.reason, meta
   end
-  return true, body, nil, { url = url, code = code, headers = headers, bytes = #body }
+  local content_length
+  if headers then
+    content_length = headers["Content-Length"] or headers["content-length"]
+  end
+  if content_length then
+    local expected = tonumber(content_length)
+    if expected and expected >= 0 and expected ~= #body then
+      meta.size_mismatch = true
+      meta.reason = "size mismatch"
+    end
+  end
+  return true, body, nil, meta
 end
 
 -- Download helper with retries per URL and full tried list tracking.
-local function fetch_with_retries(urls, max_attempts, backoff_seconds)
+local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
   local attempts = max_attempts or DOWNLOAD_ATTEMPTS
   local backoff = backoff_seconds or DOWNLOAD_BACKOFF
   local tried = {}
@@ -644,8 +730,17 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds)
         bytes = body and #body or 0,
         code = meta and meta.code or nil,
         headers = meta and meta.headers or nil,
+        reason = meta and meta.reason or nil,
+        size_mismatch = meta and meta.size_mismatch or nil,
         attempt = attempt
       }
+      if not entry.ok then
+        entry.err = entry.err or entry.reason
+      end
+      if ok and entry.size_mismatch and not (opts and opts.allow_size_mismatch) then
+        entry.ok = false
+        entry.err = "size mismatch"
+      end
       table.insert(tried, entry)
       if ok then
         return true, body, { tried = tried, last = entry }
@@ -682,12 +777,22 @@ local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
         bytes = body and #body or 0,
         code = meta and meta.code or nil,
         headers = meta and meta.headers or nil,
+        reason = meta and meta.reason or nil,
+        size_mismatch = meta and meta.size_mismatch or nil,
         attempt = attempt
       }
-      if ok and opts and opts.expected_size and opts.expected_size > 0 then
-        if #body ~= opts.expected_size then
+      if not entry.ok then
+        entry.err = entry.err or entry.reason
+      end
+      if ok and entry.size_mismatch and not (opts and opts.allow_size_mismatch) then
+        entry.ok = false
+        entry.err = "size mismatch"
+      end
+      if entry.ok and opts and opts.validate then
+        local valid, reason = opts.validate(body, meta, entry)
+        if not valid then
           entry.ok = false
-          entry.err = "size mismatch"
+          entry.err = reason or "validation failed"
         end
       end
       table.insert(tried, entry)
@@ -701,6 +806,27 @@ local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
   end
   local last_entry = tried[#tried] or { url = list[1], ok = false, err = "timeout or http error", bytes = 0 }
   return false, nil, { tried = tried, last = last_entry }
+end
+
+local function download_file_with_retry(urls, expected_hash, hash_algo, opts)
+  local function validate(body, meta, entry)
+    if expected_hash then
+      local actual = compute_hash(body, hash_algo)
+      if actual ~= expected_hash then
+        return false, "checksum mismatch"
+      end
+    end
+    return true
+  end
+  return download_with_retry(
+    urls,
+    opts and opts.attempts or DOWNLOAD_ATTEMPTS,
+    opts and opts.backoff or DOWNLOAD_BACKOFF,
+    {
+      allow_size_mismatch = true,
+      validate = validate
+    }
+  )
 end
 
 local function is_valid_sha(sha)
@@ -766,8 +892,10 @@ end
 
 local function fetch_repo_file(ref, path, opts)
   local base = current_base_url or build_main_base_url()
-  local urls = { base .. path }
-  local ok, body, info = fetch_with_retries(urls, opts and opts.attempts, opts and opts.backoff)
+  local urls = build_mirror_urls(base, path)
+  local ok, body, info = fetch_with_retries(urls, opts and opts.attempts, opts and opts.backoff, {
+    allow_size_mismatch = opts and opts.allow_size_mismatch
+  })
   if not ok then
     return false, nil, info
   end
@@ -908,7 +1036,6 @@ local function print_download_failure(label, info, fallback_urls)
   local urls = collect_tried_urls(info, fallback_urls)
   local last = info and info.last or {}
   print(label)
-  print("Tried: " .. table.concat(urls, ", "))
   print(("Last error: %s (url=%s)"):format(
     tostring(last.err or "timeout or http error"),
     tostring(last.url or urls[1])
@@ -916,8 +1043,8 @@ local function print_download_failure(label, info, fallback_urls)
 end
 
 local function download_release()
-  local url = build_main_base_url() .. RELEASE_REMOTE
-  local ok, content, meta = download_with_retry({ url }, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
+  local urls = build_mirror_urls(build_main_base_url(), RELEASE_REMOTE)
+  local ok, content, meta = download_with_retry(urls, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
   if not ok then
     return nil, "Release download failed", meta
   end
@@ -995,7 +1122,7 @@ end
 
 local function download_manifest_from_source(release, base_info)
   local manifest_path = release.manifest_path or MANIFEST_REMOTE
-  local urls = { base_info.base_url .. manifest_path }
+  local urls = build_mirror_urls(base_info.base_url, manifest_path)
   if base_info.source == "main" and CONFIG.MANIFEST_URL_FALLBACK then
     table.insert(urls, CONFIG.MANIFEST_URL_FALLBACK)
   end
@@ -1417,33 +1544,44 @@ local function update_files(manifest, hash_algo)
   return updates
 end
 
-local function build_staging_path(path)
-  return UPDATE_STAGING .. "/" .. path
+local function build_staging_dir()
+  ensure_dir(UPDATE_STAGING_BASE)
+  if not fetch_url_seeded then
+    math.randomseed(os.time())
+    fetch_url_seeded = true
+  end
+  local stamp = os.epoch and os.epoch("utc") or os.time()
+  local dir = string.format("%s/%s-%d", UPDATE_STAGING_BASE, tostring(stamp), math.random(1000, 9999))
+  ensure_dir(dir)
+  return dir
+end
+
+local function cleanup_staging(dir)
+  if dir and fs.exists(dir) then
+    fs.delete(dir)
+  end
+end
+
+local function build_staging_path(stage_dir, path)
+  return stage_dir .. "/" .. path
 end
 
 local function stage_updates(entries, release, hash_algo)
-  ensure_dir(UPDATE_STAGING)
+  local stage_dir = build_staging_dir()
   local staged = {}
   for _, entry in ipairs(entries) do
-    local url = (current_base_url or build_main_base_url()) .. entry.path
-    local ok, content, meta = download_with_retry({ url }, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF, {
-      expected_size = entry.size_bytes
-    })
+    local base = current_base_url or build_main_base_url()
+    local urls = build_mirror_urls(base, entry.path)
+    local ok, content, meta = download_file_with_retry(urls, entry.hash, hash_algo)
     if not ok then
+      cleanup_staging(stage_dir)
       return nil, ("Download failed for %s"):format(entry.path), meta, "download"
     end
-    local actual = compute_hash(content, hash_algo)
-    if actual ~= entry.hash then
-      return nil, ("Integrity check failed for %s (expected=%s actual=%s)"):format(
-        entry.path,
-        entry.hash,
-        actual
-      ), meta, "integrity"
-    end
-    local staging_path = build_staging_path(entry.path)
+    local staging_path = build_staging_path(stage_dir, entry.path)
     write_atomic(staging_path, content)
     local verify = file_checksum(staging_path, hash_algo)
     if verify ~= entry.hash then
+      cleanup_staging(stage_dir)
       return nil, ("Integrity check failed for %s (staged mismatch expected=%s actual=%s)"):format(
         entry.path,
         entry.hash,
@@ -1452,7 +1590,7 @@ local function stage_updates(entries, release, hash_algo)
     end
     staged[entry.path] = staging_path
   end
-  return staged
+  return staged, nil, nil, stage_dir
 end
 
 local function apply_staged(entries, staged, created)
@@ -1486,24 +1624,19 @@ local function update_installer_if_required(manifest, release, hash_algo)
     end
     local installer_path = manifest.installer_path or "xreactor/installer/installer.lua"
     local expected = manifest.installer_hash
-    if not expected or not manifest.installer_size_bytes then
+    if not expected then
       print("SAFE UPDATE aborted: installer hash missing.")
       return false
     end
-    local url = (current_base_url or build_main_base_url()) .. installer_path
-    local ok, content, meta = download_with_retry({ url }, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF, {
-      expected_size = manifest.installer_size_bytes
-    })
+    local base = current_base_url or build_main_base_url()
+    local urls = build_mirror_urls(base, installer_path)
+    local ok, content, meta = download_file_with_retry(urls, expected, hash_algo)
     if not ok then
       local last = meta and meta.last or {}
       print(("SAFE UPDATE aborted: installer download failed (url=%s reason=%s)"):format(
         tostring(last.url or installer_path),
         tostring(last.err or "timeout or http error")
       ))
-      return false
-    end
-    if compute_hash(content, hash_algo) ~= expected then
-      print("SAFE UPDATE aborted: installer checksum mismatch.")
       return false
     end
     local valid, valid_err = validate_installer_content(content)
@@ -1544,19 +1677,15 @@ local function migrate_config(role, cfg_path, manifest, release, hash_algo)
   if not expected_hash then
     return false
   end
-  local url = (current_base_url or build_main_base_url()) .. remote_path
-  local ok, content, meta = download_with_retry({ url }, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF, {
-    expected_size = entry.size_bytes
-  })
+  local base = current_base_url or build_main_base_url()
+  local urls = build_mirror_urls(base, remote_path)
+  local ok, content, meta = download_file_with_retry(urls, expected_hash, hash_algo)
   if not ok then
     local last = meta and meta.last or {}
     error(("Config download failed (url=%s reason=%s)"):format(
       tostring(last.url or remote_path),
       tostring(last.err or "timeout or http error")
     ))
-  end
-  if compute_hash(content, hash_algo) ~= expected_hash then
-    error("Config checksum mismatch for " .. remote_path)
   end
   local defaults = read_config_from_content(content)
   local existing = read_config(cfg_path, {})
@@ -1640,6 +1769,7 @@ local function safe_update()
   local hash_algo
   local updates
   local staged
+  local stage_dir
   local retry_rounds = 0
   while true do
     manifest_content, manifest, release, manifest_meta = acquire_manifest()
@@ -1664,7 +1794,7 @@ local function safe_update()
     log("INFO", "Files needing update: " .. tostring(#updates))
     local stage_err
     local stage_meta
-    staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
+    staged, stage_err, stage_meta, stage_dir = stage_updates(updates, release, hash_algo)
     if staged then
       break
     end
@@ -1672,12 +1802,14 @@ local function safe_update()
     local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
     if choice ~= 1 then
       log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
+      cleanup_staging(stage_dir)
       return
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
       print("Retry limit reached. Installer cancelled.")
       log("WARN", "File retry limit reached; cancelling")
+      cleanup_staging(stage_dir)
       return
     end
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
@@ -1733,6 +1865,7 @@ local function safe_update()
     for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
     for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
     rollback_from_backup(backup_dir, rollback_paths, created)
+    cleanup_staging(stage_dir)
     print("SAFE UPDATE failed. Rolled back. Error: " .. tostring(err))
     print("Backup: " .. backup_dir)
     log("ERROR", "SAFE UPDATE rolled back: " .. tostring(err))
@@ -1748,6 +1881,7 @@ local function safe_update()
     print("Integrity check failed: " .. tostring(integrity_err))
     print("Rollback complete. Backup: " .. backup_dir)
     log("ERROR", "SAFE UPDATE integrity failure: " .. tostring(integrity_err))
+    cleanup_staging(stage_dir)
     return
   end
 
@@ -1759,6 +1893,7 @@ local function safe_update()
   print("Backup: " .. backup_dir)
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "SAFE UPDATE complete. Backup: " .. backup_dir)
+  cleanup_staging(stage_dir)
 end
 
 -- FULL REINSTALL overwrites all files and optionally restores existing config.
@@ -1769,6 +1904,7 @@ local function full_reinstall()
   local manifest_meta
   local hash_algo
   local staged
+  local stage_dir
   local retry_rounds = 0
   local existing_role
   local existing_cfg_path
@@ -1795,7 +1931,7 @@ local function full_reinstall()
     local entries = build_manifest_entries(manifest)
     local stage_err
     local stage_meta
-    staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
+    staged, stage_err, stage_meta, stage_dir = stage_updates(entries, release, hash_algo)
     if staged then
       break
     end
@@ -1803,12 +1939,14 @@ local function full_reinstall()
     local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
     if choice ~= 1 then
       log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
+      cleanup_staging(stage_dir)
       return
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
       print("Retry limit reached. Installer cancelled.")
       log("WARN", "File retry limit reached; cancelling")
+      cleanup_staging(stage_dir)
       return
     end
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
@@ -1835,6 +1973,7 @@ local function full_reinstall()
     for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
     for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
     rollback_from_backup(backup_dir, rollback_paths, created)
+    cleanup_staging(stage_dir)
     print("FULL REINSTALL failed. Rolled back. Error: " .. tostring(err))
     log("ERROR", "FULL REINSTALL apply failed: " .. tostring(err))
     return
@@ -1919,6 +2058,7 @@ local function full_reinstall()
   print("FULL REINSTALL complete.")
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "FULL REINSTALL complete")
+  cleanup_staging(stage_dir)
 end
 
 local function bootstrap_self_check()
@@ -1935,6 +2075,7 @@ local function bootstrap_self_check()
     { name = "fetch_url", fn = fetch_url },
     { name = "fetch_with_retries", fn = fetch_with_retries },
     { name = "download_with_retry", fn = download_with_retry },
+    { name = "download_file_with_retry", fn = download_file_with_retry },
     { name = "fetch_repo_file", fn = fetch_repo_file },
     { name = "build_main_base_url", fn = build_main_base_url },
     { name = "build_commit_base_url", fn = build_commit_base_url },
