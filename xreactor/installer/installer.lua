@@ -22,6 +22,8 @@ local CONFIG = {
   DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts.
   DOWNLOAD_BACKOFF = 0.5, -- Backoff base (seconds) between retries.
   DOWNLOAD_TIMEOUT = 6, -- HTTP timeout in seconds.
+  MANIFEST_RETRY_ATTEMPTS = 3, -- Retry attempts for manifest acquisition menu.
+  MANIFEST_RETRY_BACKOFF = 1, -- Backoff seconds for manifest retry menu.
   LOG_ENABLED = false, -- Enables installer file logging to /xreactor/logs/installer.log.
   LOG_NAME = "installer", -- Installer log file name.
   LOG_PREFIX = "INSTALLER", -- Installer log prefix.
@@ -50,6 +52,49 @@ local RELEASE_SANITY_MARKER = CONFIG.RELEASE_SANITY_MARKER
 local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
 local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
 local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
+
+-- UI helpers (centralized input).
+local function ui_prompt(label, default, min, max)
+  local suffix = default and (" [" .. tostring(default) .. "]") or ""
+  write(label .. suffix .. ": ")
+  local input = read()
+  if input == "" then
+    input = default
+  end
+  if min or max then
+    local num = tonumber(input)
+    if not num then
+      return nil
+    end
+    if min and num < min then
+      return nil
+    end
+    if max and num > max then
+      return nil
+    end
+    return num
+  end
+  return input
+end
+
+local function ui_menu(title, options, default)
+  if title and title ~= "" then
+    print(title)
+  end
+  for idx, label in ipairs(options or {}) do
+    print(string.format("%d) %s", idx, label))
+  end
+  local choice = ui_prompt("Select option", default or 1, 1, #options)
+  if not choice then
+    return default or 1
+  end
+  return choice
+end
+
+local function ui_pause(msg)
+  print(msg or "Press Enter to continue.")
+  read()
+end
 
 -- Internal standalone logger for the installer (no project dependencies).
 local active_logger = {}
@@ -129,6 +174,11 @@ local function switch_to_project_logger()
 end
 
 init_internal_logger()
+
+-- Defensive wrapper for legacy calls.
+local function prompt(label, default)
+  return ui_prompt(label, default)
+end
 
 local roles = {
   MASTER = "MASTER",
@@ -528,6 +578,9 @@ local function fetch_url(urls, opts)
   for _, url in ipairs(urls) do
     for attempt = 1, attempts do
       local content, meta = http_fetch(url, timeout_s)
+      if not meta then
+        meta = { url = url, code = nil, reason = "timeout or http error", html = false }
+      end
       if content and meta and meta.code and meta.code ~= 200 then
         meta.reason = "status"
         last_meta = meta
@@ -540,6 +593,7 @@ local function fetch_url(urls, opts)
         meta.reason = reason
         meta.html = reason == "html"
       end
+      meta.attempt = attempt
       last_meta = meta
       if attempt < attempts then
         local sleep_for = backoff * (2 ^ (attempt - 1)) + math.random() * 0.2
@@ -549,6 +603,10 @@ local function fetch_url(urls, opts)
   end
   if last_meta then
     last_meta.tried_hosts = hosts
+    last_meta.tried_urls = urls
+    if not last_meta.reason then
+      last_meta.reason = "timeout or http error"
+    end
   end
   return nil, last_meta
 end
@@ -622,9 +680,18 @@ local function write_manifest_cache(manifest_content, release, source)
 end
 
 local function format_manifest_failure(meta)
-  local reason = meta and meta.reason or "unknown"
-  local hosts = meta and meta.tried_hosts and table.concat(meta.tried_hosts, ", ") or "unknown"
-  return ("Manifest download failed (%s). Tried: %s"):format(reason, hosts)
+  local reason = meta and meta.reason or "timeout or http error"
+  local tried = "unknown"
+  if meta then
+    if meta.tried_urls and #meta.tried_urls > 0 then
+      tried = table.concat(meta.tried_urls, ", ")
+    elseif meta.url then
+      tried = tostring(meta.url)
+    elseif meta.tried_hosts and #meta.tried_hosts > 0 then
+      tried = table.concat(meta.tried_hosts, ", ")
+    end
+  end
+  return ("Manifest download failed (%s). Tried: %s"):format(reason, tried)
 end
 
 local function download_release()
@@ -687,23 +754,44 @@ local function download_manifest()
   return content, manifest, release, meta
 end
 
+local function download_manifest_with_retries(attempts, backoff)
+  local max_attempts = attempts or CONFIG.MANIFEST_RETRY_ATTEMPTS or 1
+  local delay = backoff or CONFIG.MANIFEST_RETRY_BACKOFF or 1
+  local last_meta
+  for attempt = 1, max_attempts do
+    log("WARN", ("Manifest download attempt %d/%d"):format(attempt, max_attempts))
+    local content, manifest, release, meta = download_manifest()
+    if content then
+      if meta then
+        meta.attempt = attempt
+      end
+      return content, manifest, release, meta
+    end
+    last_meta = meta or { reason = "timeout or http error", attempted = attempt }
+    last_meta.attempt = attempt
+    if attempt < max_attempts then
+      os.sleep(delay * attempt)
+    end
+  end
+  return nil, nil, nil, last_meta
+end
+
 local function acquire_manifest()
-  local manifest_content, manifest, release, manifest_meta = download_manifest()
+  local manifest_content, manifest, release, manifest_meta = download_manifest_with_retries(1, 0)
   while not manifest_content do
     local cache = read_manifest_cache()
     local failure = format_manifest_failure(manifest_meta)
     print(failure)
     log("WARN", failure)
-    if cache then
-      print("1) Use cached manifest (offline update)")
-      print("2) Retry download")
-      print("3) Cancel")
-    else
-      print("1) Retry download")
-      print("2) Cancel")
-    end
-    local default_choice = cache and "1" or "1"
-    local choice = tonumber(prompt("Select option", default_choice)) or tonumber(default_choice)
+    local default_choice = cache and 1 or 1
+    local choice = ui_menu(nil, cache and {
+      "Use cached manifest (offline update)",
+      "Retry download",
+      "Cancel"
+    } or {
+      "Retry download",
+      "Cancel"
+    }, default_choice)
     if cache and choice == 1 then
       manifest_content = cache.manifest_content
       local parsed, parse_err = parse_manifest(manifest_content)
@@ -718,7 +806,7 @@ local function acquire_manifest()
       validate_hash_algo(manifest, release)
       break
     elseif (cache and choice == 2) or (not cache and choice == 1) then
-      manifest_content, manifest, release, manifest_meta = download_manifest()
+      manifest_content, manifest, release, manifest_meta = download_manifest_with_retries()
     else
       print("Installer cancelled.")
       log("INFO", "User cancelled manifest acquisition")
@@ -750,16 +838,9 @@ local function is_config_file(path)
   return path:match("/config%.lua$") ~= nil
 end
 
-local function prompt(msg, default)
-  write(msg .. (default and (" [" .. default .. "]") or "") .. ": ")
-  local input = read()
-  if input == "" then return default end
-  return input
-end
-
 local function confirm(prompt_text, default)
   local hint = default and "Y/n" or "y/N"
-  local input = prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
+  local input = ui_prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
   input = input:lower()
   if input == "" then return default end
   return input == "y" or input == "yes"
@@ -815,7 +896,6 @@ local function select_primary_modem(modems)
 end
 
 local function choose_role()
-  print("Select role:")
   local list = {
     roles.MASTER,
     roles.RT_NODE,
@@ -824,10 +904,7 @@ local function choose_role()
     roles.WATER_NODE,
     roles.REPROCESSOR_NODE
   }
-  for i, r in ipairs(list) do
-    print(string.format("%d) %s", i, r))
-  end
-  local choice = tonumber(prompt("Role number", 1)) or 1
+  local choice = ui_menu("Select role:", list, 1)
   return list[choice] or roles.MASTER
 end
 
@@ -849,9 +926,8 @@ end
 
 local function prompt_use_detected()
   scan_peripherals()
-  write("Use detected peripherals? [Y/n]: ")
-  local input = read()
-  input = input:lower()
+  local input = ui_prompt("Use detected peripherals? [Y/n]", "y")
+  input = tostring(input or ""):lower()
   if input == "" then return true end
   return input == "y" or input == "yes"
 end
@@ -1441,7 +1517,7 @@ local function full_reinstall()
     local extras = {}
 
     if not wireless then
-      wireless = prompt("Primary modem side", nil)
+      wireless = ui_prompt("Primary modem side", nil)
     end
     if wireless and wired == wireless then
       wired = nil
@@ -1453,7 +1529,7 @@ local function full_reinstall()
     end
 
     if role == roles.MASTER then
-      extras.ui_scale_default = tonumber(prompt("UI scale (0.5/1)", "0.5")) or 0.5
+      extras.ui_scale_default = tonumber(ui_prompt("UI scale (0.5/1)", "0.5")) or 0.5
     elseif role == roles.RT_NODE then
       local detected = scan_peripherals()
       extras.modem = wireless
@@ -1474,15 +1550,15 @@ local function full_reinstall()
           print("No turbines detected. Reactor-only setup will be used.")
         end
       else
-        local reactors = prompt("Reactor peripheral names (comma separated)", "")
-        local turbines = prompt("Turbine peripheral names (comma separated)", "")
+      local reactors = ui_prompt("Reactor peripheral names (comma separated)", "")
+      local turbines = ui_prompt("Turbine peripheral names (comma separated)", "")
         extras.reactors = {}
         extras.turbines = {}
         for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
         for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
       end
       if not wireless then
-        extras.modem = prompt("Modem peripheral name", nil)
+        extras.modem = ui_prompt("Modem peripheral name", nil)
       end
     end
 
@@ -1511,10 +1587,7 @@ local function main()
   if fs.exists(BASE_DIR) then
     print("Existing installation detected.")
     log("INFO", "Existing installation detected")
-    print("1) SAFE UPDATE")
-    print("2) FULL REINSTALL")
-    print("3) CANCEL")
-    local choice = tonumber(prompt("Select option", "1")) or 1
+    local choice = ui_menu(nil, { "SAFE UPDATE", "FULL REINSTALL", "CANCEL" }, 1)
     if choice == 1 then
       safe_update()
     elseif choice == 2 then
