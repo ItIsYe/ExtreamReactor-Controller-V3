@@ -19,15 +19,18 @@ local CONFIG = {
   MANIFEST_SANITY_MARKER = "return", -- Manifest sanity marker.
   RELEASE_MIN_BYTES = 50, -- Min bytes to accept release download.
   RELEASE_SANITY_MARKER = "commit_sha", -- Release sanity marker.
-  DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts.
-  DOWNLOAD_BACKOFF = 0.5, -- Backoff base (seconds) between retries.
-  DOWNLOAD_TIMEOUT = 6, -- HTTP timeout in seconds.
+  DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts (per URL).
+  DOWNLOAD_BACKOFF = 1, -- Backoff base (seconds) between retries.
+  DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (used when http.request is available).
   MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main/xreactor/installer/manifest.lua", -- Primary manifest URL.
-  MANIFEST_URL_FALLBACK = nil, -- Optional fallback manifest URL (raw.githubusercontent.com).
+  MANIFEST_URL_FALLBACK = "https://cdn.jsdelivr.net/gh/ItIsYe/ExtreamReactor-Controller-V3@main/xreactor/installer/manifest.lua", -- Optional fallback manifest URL.
   MANIFEST_RETRY_ATTEMPTS = 3, -- Retry attempts for manifest acquisition menu.
   MANIFEST_RETRY_BACKOFF = 1, -- Backoff seconds for manifest retry menu.
   MANIFEST_MENU_RETRY_LIMIT = 5, -- Retry rounds from menu before auto-cancel.
-  LOG_ENABLED = false, -- Enables installer file logging to /xreactor/logs/installer.log.
+  FILE_RETRY_ROUNDS = 3, -- Retry rounds for file download failures.
+  FILE_RETRY_BACKOFF = 1, -- Backoff seconds for file download retry rounds.
+  LOG_ENABLED = false, -- Enables installer file logging to /xreactor_installer.log.
+  LOG_PATH = "/xreactor_installer.log", -- Installer log file path.
   LOG_NAME = "installer", -- Installer log file name.
   LOG_PREFIX = "INSTALLER", -- Installer log prefix.
   LOG_SETTINGS_KEY = "xreactor.debug_logging" -- settings key for debug logs.
@@ -117,21 +120,12 @@ local function log_stamp()
   return textutils.formatTime(os.epoch("utc") / 1000, true)
 end
 
-local function ensure_log_dir()
-  local dir = CONFIG.BASE_DIR .. "/logs"
-  if not fs.exists(dir) then
-    fs.makeDir(dir)
-  end
-end
-
 local function internal_log(level, message)
   if not internal_log_enabled then
     return
   end
   local ok = pcall(function()
-    ensure_log_dir()
-    local path = string.format("%s/%s.log", CONFIG.BASE_DIR .. "/logs", CONFIG.LOG_NAME)
-    local file = fs.open(path, "a")
+    local file = fs.open(CONFIG.LOG_PATH, "a")
     if not file then
       return
     end
@@ -158,22 +152,6 @@ local function init_internal_logger()
     end
     internal_log_enabled = resolve_log_enabled()
   end
-end
-
-local function switch_to_project_logger()
-  local logger_path = CONFIG.BASE_DIR .. "/core/logger.lua"
-  if not fs.exists(logger_path) then
-    return false
-  end
-  local ok, module = pcall(dofile, logger_path)
-  if not ok or type(module) ~= "table" or type(module.log) ~= "function" then
-    return false
-  end
-  active_logger = module
-  if active_logger.init then
-    pcall(active_logger.init, { log_name = CONFIG.LOG_NAME, prefix = CONFIG.LOG_PREFIX, enabled = internal_log_enabled })
-  end
-  return true
 end
 
 init_internal_logger()
@@ -525,7 +503,7 @@ local function is_html_response(body)
   if not body or body == "" then
     return false
   end
-  if body:find("<!DOCTYPE", 1, true) then
+  if body:find("<!DOCTYPE", 1, true) or body:find("<html", 1, true) then
     return true
   end
   if body:match("^%s*<") then
@@ -536,42 +514,61 @@ end
 
 -- Single download function used by all network requests.
 local function fetch_url(url, opts)
-  if not http then
-    return false, nil, { url = url, err = "no http api" }
+  if not http or not http.get then
+    return false, nil, "HTTP API unavailable (enable in CC:Tweaked config/server)", { url = url }
   end
   local timeout = (opts and opts.timeout) or DOWNLOAD_TIMEOUT
   local response
   local err
-  local ok, result = pcall(function()
-    return http.get(url, nil, false, timeout)
-  end)
-  if ok then
-    response = result
-  else
-    err = result
-    response = nil
-  end
-  if response == nil then
-    local reason = "http.get returned nil"
-    if err then
-      reason = reason .. " (" .. tostring(err) .. ")"
+  if http.request and timeout then
+    local ok, req_err = pcall(http.request, url, nil, nil, false)
+    if not ok then
+      return false, nil, "http.request failed (" .. tostring(req_err) .. ")", { url = url }
     end
-    return false, nil, { url = url, err = reason }
+    local timer = os.startTimer(timeout)
+    while true do
+      local event, p1, p2 = os.pullEvent()
+      if event == "http_success" and p1 == url then
+        response = p2
+        break
+      elseif event == "http_failure" and p1 == url then
+        return false, nil, "http failure (" .. tostring(p2) .. ")", { url = url }
+      elseif event == "timer" and p1 == timer then
+        return false, nil, "timeout", { url = url }
+      end
+    end
+  else
+    local ok, result = pcall(function()
+      return http.get(url)
+    end)
+    if ok then
+      response = result
+    else
+      err = result
+      response = nil
+    end
+    if response == nil then
+      local reason = "http.get returned nil"
+      if err then
+        reason = reason .. " (" .. tostring(err) .. ")"
+      end
+      return false, nil, reason, { url = url }
+    end
   end
   local code = response.getResponseCode and response.getResponseCode() or nil
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
   local body = response.readAll()
   response.close()
   if not body or body == "" then
-    return false, nil, { url = url, err = "empty body", code = code, headers = headers }
+    return false, nil, "empty body", { url = url, code = code, headers = headers }
   end
   if is_html_response(body) then
-    return false, nil, { url = url, err = "html response (wrong url)", code = code, headers = headers }
+    return false, nil, "html response (wrong url)", { url = url, code = code, headers = headers }
   end
   if code and code ~= 200 then
-    return false, nil, { url = url, err = "http status " .. tostring(code), code = code, headers = headers }
+    return false, nil, "http " .. tostring(code), { url = url, code = code, headers = headers }
   end
-  return true, body, { url = url, code = code, headers = headers }
+  return true, body, nil, { url = url, code = code, headers = headers, bytes = #body }
 end
 
 -- Download helper with retries per URL and full tried list tracking.
@@ -594,15 +591,14 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds)
   end
   for _, url in ipairs(list) do
     for attempt = 1, attempts do
-      local ok, body, info = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
-      local err = info and info.err or (ok and nil or "timeout or http error")
+      local ok, body, err, meta = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
       local entry = {
         url = url,
         ok = ok,
         err = err,
         bytes = body and #body or 0,
-        code = info and info.code or nil,
-        headers = info and info.headers or nil,
+        code = meta and meta.code or nil,
+        headers = meta and meta.headers or nil,
         attempt = attempt
       }
       table.insert(tried, entry)
@@ -721,6 +717,38 @@ local function format_manifest_failure(meta)
   end
   local tried = table.concat(tried_list, ", ")
   return ("Manifest download failed (%s). Tried: %s"):format(reason, tried)
+end
+
+local function collect_tried_urls(info, fallback_urls)
+  local urls = {}
+  if info and info.tried then
+    for _, entry in ipairs(info.tried) do
+      if entry.url then
+        table.insert(urls, entry.url)
+      end
+    end
+  end
+  if #urls == 0 and info and info.last and info.last.url then
+    urls = { info.last.url }
+  end
+  if #urls == 0 and fallback_urls and #fallback_urls > 0 then
+    urls = fallback_urls
+  end
+  if #urls == 0 then
+    urls = { CONFIG.MANIFEST_URL_PRIMARY }
+  end
+  return urls
+end
+
+local function print_download_failure(label, info, fallback_urls)
+  local urls = collect_tried_urls(info, fallback_urls)
+  local last = info and info.last or {}
+  print(label)
+  print("Tried: " .. table.concat(urls, ", "))
+  print(("Last error: %s (url=%s)"):format(
+    tostring(last.err or "timeout or http error"),
+    tostring(last.url or urls[1])
+  ))
 end
 
 local function download_release()
@@ -1166,14 +1194,10 @@ local function stage_updates(entries, release, hash_algo)
     local ok, content, meta = fetch_repo_file(release.commit_sha, entry.path)
     if not ok then
       local last = meta and meta.last or {}
-      return nil, ("Download failed for %s (url=%s reason=%s)"):format(
-        entry.path,
-        tostring(last.url or entry.path),
-        tostring(last.err or "timeout or http error")
-      )
+      return nil, ("Download failed for %s"):format(entry.path), meta
     end
     if is_html_payload(content) then
-      return nil, ("Download failed for %s (html response)"):format(entry.path)
+      return nil, ("Download failed for %s (html response)"):format(entry.path), meta
     end
     local actual = compute_hash(content, hash_algo)
     if actual ~= entry.hash then
@@ -1187,15 +1211,11 @@ local function stage_updates(entries, release, hash_algo)
       end
       if actual ~= entry.hash then
         local last = retry_meta and retry_meta.last or meta and meta.last or {}
-        return nil, ("Checksum mismatch for %s (expected=%s actual=%s url=%s code=%s reason=%s html=%s)"):format(
+        return nil, ("Checksum mismatch for %s (expected=%s actual=%s)"):format(
           entry.path,
           entry.hash,
-          actual,
-          tostring(last.url or entry.path),
-          tostring(last.code or "unknown"),
-          tostring(last.err or "checksum mismatch"),
-          tostring(last.html or false)
-        )
+          actual
+        ), retry_meta or meta
       end
     end
     local staging_path = build_staging_path(entry.path)
@@ -1402,22 +1422,23 @@ local function safe_update()
 
   local updates = update_files(manifest, hash_algo)
   log("INFO", "Files needing update: " .. tostring(#updates))
-  local staged, stage_err = stage_updates(updates, release, hash_algo)
-  if not staged then
-    local retry_release = download_release()
-    if retry_release and retry_release.commit_sha ~= release.commit_sha then
-      manifest_content, manifest, release, manifest_meta = download_manifest()
-      if manifest_content then
-        hash_algo = resolve_hash_algo(manifest, release)
-        updates = update_files(manifest, hash_algo)
-        staged, stage_err = stage_updates(updates, release, hash_algo)
-      end
-    end
-    if not staged then
-      print("SAFE UPDATE failed. Error: " .. tostring(stage_err))
+  local staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
+  local retry_rounds = 0
+  while not staged do
+    print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
+    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+    if choice ~= 1 then
       log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
       return
     end
+    retry_rounds = retry_rounds + 1
+    if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
+      print("Retry limit reached. Installer cancelled.")
+      log("WARN", "File retry limit reached; cancelling")
+      return
+    end
+    os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
+    staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
   end
   local backup_dir = create_backup_dir()
   local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
@@ -1435,10 +1456,6 @@ local function safe_update()
   if ok then
     changed = #updates
   end
-  if ok then
-    switch_to_project_logger()
-  end
-
   local migrated = false
   if ok then
     local success, result = pcall(migrate_config, role, cfg_path, manifest, release, hash_algo)
@@ -1519,11 +1536,23 @@ local function full_reinstall()
   end
 
   local entries = build_manifest_entries(manifest)
-  local staged, stage_err = stage_updates(entries, release, hash_algo)
-  if not staged then
-    print("FULL REINSTALL failed. Error: " .. tostring(stage_err))
-    log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
-    return
+  local staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
+  local retry_rounds = 0
+  while not staged do
+    print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
+    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+    if choice ~= 1 then
+      log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
+      return
+    end
+    retry_rounds = retry_rounds + 1
+    if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
+      print("Retry limit reached. Installer cancelled.")
+      log("WARN", "File retry limit reached; cancelling")
+      return
+    end
+    os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
+    staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
   end
 
   local backup_dir = create_backup_dir()
@@ -1550,8 +1579,6 @@ local function full_reinstall()
     log("ERROR", "FULL REINSTALL apply failed: " .. tostring(err))
     return
   end
-  switch_to_project_logger()
-
   local role
   local cfg_path
 
