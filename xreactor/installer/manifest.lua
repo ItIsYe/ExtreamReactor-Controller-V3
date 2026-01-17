@@ -1,10 +1,13 @@
 -- Manifest for the XReactor installer (hashes and required files).
 return {
   version = 1,
+  source = {
+    channel = "main"
+  },
   hash_algo = "sumlen-v1",
-  installer_min_version = "1.2",
+  installer_min_version = "1.3",
   installer_path = "xreactor/installer/installer.lua",
-  installer_hash = "4385485:53482",
+  installer_hash = "5065399:61648",
   files = {
     ["xreactor/core/network.lua"] = "264972:3241",
     ["xreactor/core/trends.lua"] = "147554:1791",

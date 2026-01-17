@@ -1,5 +1,4 @@
 local BASE_URL_MAIN = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main"
-local RELEASE_PATH = "xreactor/installer/release.lua"
 local INSTALLER_PATH = "/xreactor/installer/installer.lua"
 local INSTALLER_MIN_BYTES = 200
 local INSTALLER_SANITY_MARKER = "local function main"
@@ -70,32 +69,6 @@ local function validate_installer_content(content)
   return true
 end
 
-local function load_release()
-  local urls = {
-    string.format("%s/%s", BASE_URL_MAIN, RELEASE_PATH)
-  }
-  local content = select(1, download_with_retries(urls, 3, 1))
-  if not content then
-    print("Installer download failed.")
-    return nil
-  end
-  local loader = load(content, "release", "t", {})
-  if not loader then
-    print("Installer download corrupted.")
-    return nil
-  end
-  local ok, data = pcall(loader)
-  if not ok or type(data) ~= "table" then
-    print("Installer download corrupted.")
-    return nil
-  end
-  if type(data.commit_sha) ~= "string" then
-    print("Installer download corrupted.")
-    return nil
-  end
-  return data
-end
-
 local function write_file(path, content)
   local dir = fs.getDir(path)
   if dir and dir ~= "" and not fs.exists(dir) then
@@ -110,12 +83,9 @@ local function write_file(path, content)
   return true
 end
 
-local function fetch_installer(release)
-  local base_urls = {
-    ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/%s"):format(release.commit_sha)
-  }
+local function fetch_installer()
   local urls = {
-    string.format("%s/xreactor/installer/installer.lua", base_urls[1])
+    string.format("%s/xreactor/installer/installer.lua", BASE_URL_MAIN)
   }
   local content = select(1, download_with_retries(urls, 3, 1))
   if not content then
@@ -149,14 +119,9 @@ if not http then
   error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
 end
 
-local release = load_release()
-if not release then
-  return
-end
-
 if not fs.exists(INSTALLER_PATH) then
-  if not fetch_installer(release) then
-    if not fetch_installer(release) then
+  if not fetch_installer() then
+    if not fetch_installer() then
       print("Installer download corrupted.")
       return
     end
@@ -165,7 +130,7 @@ end
 
 local loader = loadfile(INSTALLER_PATH)
 if not loader then
-  if not fetch_installer(release) then
+  if not fetch_installer() then
     print("Installer download corrupted.")
     return
   end

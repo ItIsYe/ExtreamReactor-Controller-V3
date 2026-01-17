@@ -63,8 +63,9 @@ Wireless Modem (Control/Status)
 - Downloads werden zuerst in Temp/Staging geschrieben, verifiziert und erst danach atomar ersetzt.
 - Bei Fehler: Rollback aus `/xreactor_backup/<timestamp>/`, keine halbfertigen Updates.
 - Manifest-Download nutzt Retries mit Backoff, RAW-Links (`raw.githubusercontent.com`) und HTML-Sanity-Checks.
-- Manifest-Cache: `/xreactor/.cache/manifest.lua`. Bei Problemen: **Cached Manifest**, **Retry** oder **Cancel**.
-- Updates sind commit-gepinnt (Manifest + Dateien aus derselben Commit-SHA), um Hash-Mismatches zu vermeiden.
+- Manifest-Cache: `/xreactor/.cache/cached_manifest.lua` + `/xreactor/.cache/manifest.lua`. Bei Problemen: Cached Manifest oder Retry/Cancel.
+- SAFE UPDATE nutzt standardmäßig **main** und fällt automatisch auf **main** zurück, wenn eine gepinnte Commit-SHA nicht existiert.
+- 404 führt nicht zu sinnlosen Retry-Schleifen: Bei gepinnten Commits wird einmalig der Wechsel auf **main** angeboten.
 
 **FULL REINSTALL (alles neu)**
 - Installer erneut ausführen → Menü **FULL REINSTALL** wählen.
@@ -74,10 +75,13 @@ Wireless Modem (Control/Status)
 **Offline/Fehlerfälle**
 - **HTTP disabled**: HTTP in der CC:Tweaked-Config aktivieren, dann Installer erneut starten.
 - **GitHub Timeout**: Installer nutzt Retry; falls weiter fehlschlägt, kann ein Cached Manifest verwendet werden oder der Installer bricht sauber ohne Änderungen ab.
+- **404 bei Downloads**: Bedeutet ungültiger gepinnter Commit oder falscher Manifest-Pfad; der Installer bietet den Wechsel auf **main** an.
 
 **Installer starten (ohne Neu-Download)**
 - Root-Installer (`/installer.lua`) ist nur ein Bootstrap. Er startet `/xreactor/installer/installer.lua`, falls vorhanden.
 - SAFE UPDATE läuft immer mit dem lokalen Installer; nur bei notwendigem Versionssprung wird der Installer ersetzt und automatisch neu gestartet.
+- Für Updates muss der Installer **nicht** manuell neu heruntergeladen werden.
+- SAFE UPDATE nutzt gespeicherte Quellen in `/xreactor/.cache/` (u. a. `last_good_base_url`, `last_good_source`, `last_good_sha`) und aktualisiert diese nach erfolgreichem Update.
 
 ## Konfiguration & Autodetection
 - **MASTER**: `xreactor/master/config.lua`
@@ -118,7 +122,7 @@ Wireless Modem (Control/Status)
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
 - **Manifest-Download fehlgeschlagen**: Retry nutzen oder Cache verwenden (falls vorhanden).
-- **Retry-Menü**: Bei Download-Fehlern gibt es immer ein Retry/Cancel-Menü; Retry versucht den Download erneut mit kurzer Wartezeit.
+- **Retry-Menü**: Bei Timeout/HTTP-Fehlern gibt es ein Retry/Cancel-Menü; bei 404 wird kein sinnloses Retry angeboten.
 - **Installer-Details**: Der Fehlerdialog zeigt die tatsächlich verwendeten RAW-URLs (Tried) und den letzten Fehler (z. B. Timeout, HTTP-Status, HTML-Response).
 - **HTTP API**: Wenn der Installer meldet, dass HTTP nicht verfügbar ist, aktiviere es in der CC:Tweaked-Konfiguration.
 - **HTML-Response**: Weist auf falsche URL (z. B. GitHub-Blob) oder Proxy hin – der Installer erwartet RAW-Links.

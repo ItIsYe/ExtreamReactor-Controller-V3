@@ -4,31 +4,31 @@ local CONFIG = {
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
   REPO_BASE_URL = "https://raw.githubusercontent.com", -- Raw GitHub base URL.
-  RELEASE_REMOTE = "xreactor/installer/release.lua", -- Release metadata path.
   MANIFEST_REMOTE = "xreactor/installer/manifest.lua", -- Manifest path (fallback).
   MANIFEST_LOCAL = "/xreactor/.manifest", -- Cached manifest in install dir.
   MANIFEST_CACHE = "/xreactor/.cache/manifest.lua", -- Serialized manifest cache.
+  MANIFEST_CACHE_RAW = "/xreactor/.cache/cached_manifest.lua", -- Raw manifest cache.
+  CACHE_LAST_BASE = "/xreactor/.cache/last_good_base_url", -- Last known good base URL.
+  CACHE_LAST_SOURCE = "/xreactor/.cache/last_good_source", -- Last known good source (main/sha).
+  CACHE_LAST_SHA = "/xreactor/.cache/last_good_sha", -- Last known good sha (if pinned).
   MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path.
   BACKUP_BASE = "/xreactor_backup", -- Backup base directory.
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
   UPDATE_STAGING = "/xreactor_update_tmp", -- Temp staging folder for updates.
-  INSTALLER_VERSION = "1.2", -- Installer version for min-version checks.
+  INSTALLER_VERSION = "1.3", -- Installer version for min-version checks.
   INSTALLER_MIN_BYTES = 200, -- Min bytes to accept installer download.
   INSTALLER_SANITY_MARKER = "local function main", -- Installer sanity marker.
   MANIFEST_MIN_BYTES = 50, -- Min bytes to accept manifest download.
   MANIFEST_SANITY_MARKER = "return", -- Manifest sanity marker.
-  RELEASE_MIN_BYTES = 50, -- Min bytes to accept release download.
-  RELEASE_SANITY_MARKER = "commit_sha", -- Release sanity marker.
-  DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts (per URL).
   DOWNLOAD_BACKOFF = 1, -- Backoff base (seconds) between retries.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (used when http.request is available).
-  MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main/xreactor/installer/manifest.lua", -- Primary manifest URL.
-  MANIFEST_URL_FALLBACK = "https://cdn.jsdelivr.net/gh/ItIsYe/ExtreamReactor-Controller-V3@main/xreactor/installer/manifest.lua", -- Optional fallback manifest URL.
-  MANIFEST_RETRY_ATTEMPTS = 3, -- Retry attempts for manifest acquisition menu.
+  MANIFEST_RETRY_ATTEMPTS = 2, -- Retry attempts for manifest acquisition menu.
   MANIFEST_RETRY_BACKOFF = 1, -- Backoff seconds for manifest retry menu.
   MANIFEST_MENU_RETRY_LIMIT = 5, -- Retry rounds from menu before auto-cancel.
   FILE_RETRY_ROUNDS = 3, -- Retry rounds for file download failures.
   FILE_RETRY_BACKOFF = 1, -- Backoff seconds for file download retry rounds.
+  FILE_DOWNLOAD_ATTEMPTS = 2, -- Retry attempts per file for timeout/http.get nil.
+  BASE_VALIDATE_ATTEMPTS = 2, -- Retry attempts for base validation on timeout.
   LOG_ENABLED = false, -- Enables installer file logging to /xreactor_installer.log.
   LOG_PATH = "/xreactor_installer.log", -- Installer log file path.
   LOG_NAME = "installer", -- Installer log file name.
@@ -40,10 +40,13 @@ local BASE_DIR = CONFIG.BASE_DIR
 local REPO_OWNER = CONFIG.REPO_OWNER
 local REPO_NAME = CONFIG.REPO_NAME
 local REPO_BASE_URL_MAIN = CONFIG.REPO_BASE_URL
-local RELEASE_REMOTE = CONFIG.RELEASE_REMOTE
 local MANIFEST_REMOTE = CONFIG.MANIFEST_REMOTE
 local MANIFEST_LOCAL = CONFIG.MANIFEST_LOCAL
 local MANIFEST_CACHE = CONFIG.MANIFEST_CACHE
+local MANIFEST_CACHE_RAW = CONFIG.MANIFEST_CACHE_RAW
+local CACHE_LAST_BASE = CONFIG.CACHE_LAST_BASE
+local CACHE_LAST_SOURCE = CONFIG.CACHE_LAST_SOURCE
+local CACHE_LAST_SHA = CONFIG.CACHE_LAST_SHA
 local MANIFEST_CACHE_LEGACY = CONFIG.MANIFEST_CACHE_LEGACY
 local BACKUP_BASE = CONFIG.BACKUP_BASE
 local NODE_ID_PATH = CONFIG.NODE_ID_PATH
@@ -53,11 +56,10 @@ local INSTALLER_MIN_BYTES = CONFIG.INSTALLER_MIN_BYTES
 local INSTALLER_SANITY_MARKER = CONFIG.INSTALLER_SANITY_MARKER
 local MANIFEST_MIN_BYTES = CONFIG.MANIFEST_MIN_BYTES
 local MANIFEST_SANITY_MARKER = CONFIG.MANIFEST_SANITY_MARKER
-local RELEASE_MIN_BYTES = CONFIG.RELEASE_MIN_BYTES
-local RELEASE_SANITY_MARKER = CONFIG.RELEASE_SANITY_MARKER
-local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
 local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
 local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
+local FILE_DOWNLOAD_ATTEMPTS = CONFIG.FILE_DOWNLOAD_ATTEMPTS
+local BASE_VALIDATE_ATTEMPTS = CONFIG.BASE_VALIDATE_ATTEMPTS
 
 -- UI helpers (centralized input).
 local function ui_prompt(label, default, min, max)
@@ -225,8 +227,6 @@ local function fallback_node_id()
   return tostring(os.getComputerLabel() or os.getComputerID())
 end
 
-local fetch_url_seeded = false
-
 local function read_file(path)
   if not fs.exists(path) then return nil end
   local file = fs.open(path, "r")
@@ -249,6 +249,31 @@ local function write_atomic(path, content)
     fs.delete(path)
   end
   fs.move(tmp, path)
+end
+
+local function read_text(path)
+  if not fs.exists(path) then
+    return nil
+  end
+  local content = read_file(path)
+  if not content then
+    return nil
+  end
+  local trimmed = trim(content)
+  if trimmed == "" then
+    return nil
+  end
+  return trimmed
+end
+
+local function write_text(path, content)
+  if content == nil then
+    if fs.exists(path) then
+      fs.delete(path)
+    end
+    return
+  end
+  write_atomic(path, tostring(content))
 end
 
 local function normalize_newlines(content)
@@ -374,13 +399,19 @@ local function sha1_hash(content)
 end
 
 local function resolve_hash_algo(manifest, release)
-  return manifest.hash_algo or release.hash_algo
+  if manifest and manifest.hash_algo then
+    return manifest.hash_algo
+  end
+  if release and release.hash_algo then
+    return release.hash_algo
+  end
+  return nil
 end
 
 local function validate_hash_algo(manifest, release)
   local algo = resolve_hash_algo(manifest, release)
   local allowed = { ["sumlen-v1"] = true, ["crc32"] = true, ["sha1"] = true }
-  if not allowed[algo] then
+  if not algo or not allowed[algo] then
     error("Unsupported hash algo: " .. tostring(algo))
   end
 end
@@ -512,6 +543,88 @@ local function is_html_response(body)
   return false
 end
 
+local function is_valid_sha(value)
+  return type(value) == "string" and value:match("^[0-9a-fA-F]{40}$") ~= nil
+end
+
+local function build_base_url(ref)
+  return string.format("%s/%s/%s/%s", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, tostring(ref))
+end
+
+local function build_repo_url(base_url, path)
+  return string.format("%s/%s", tostring(base_url), tostring(path))
+end
+
+local function source_from_base_url(base_url)
+  local prefix = string.format("%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME)
+  if type(base_url) ~= "string" then
+    return { channel = "main", sha = nil }
+  end
+  if base_url:sub(1, #prefix) ~= prefix then
+    return { channel = "main", sha = nil }
+  end
+  local ref = base_url:sub(#prefix + 1)
+  if ref == "main" then
+    return { channel = "main", sha = nil }
+  end
+  if is_valid_sha(ref) then
+    return { channel = "sha", sha = ref }
+  end
+  return { channel = "main", sha = nil }
+end
+
+local function normalize_source_spec(source)
+  local channel = "main"
+  local sha = nil
+  if type(source) == "string" then
+    channel = source
+  elseif type(source) == "table" then
+    if type(source.channel) == "string" then
+      channel = source.channel
+    end
+    if type(source.sha) == "string" then
+      sha = source.sha
+    end
+  end
+  if channel ~= "main" and channel ~= "sha" then
+    channel = "main"
+  end
+  if channel == "sha" and not is_valid_sha(sha) then
+    channel = "main"
+    sha = nil
+  end
+  return { channel = channel, sha = sha }
+end
+
+local function source_to_ref(source)
+  if source and source.channel == "sha" and source.sha then
+    return source.sha
+  end
+  return "main"
+end
+
+local function source_to_base_url(source)
+  return build_base_url(source_to_ref(source))
+end
+
+local function error_is_timeout(err)
+  if not err then
+    return false
+  end
+  local text = tostring(err):lower()
+  return text:find("timeout", 1, true) ~= nil or text:find("http.get returned nil", 1, true) ~= nil
+end
+
+local function error_is_not_found(err, meta)
+  if meta and tonumber(meta.code) == 404 then
+    return true
+  end
+  if err and tostring(err):find("404", 1, true) then
+    return true
+  end
+  return false
+end
+
 -- Single download function used by all network requests.
 local function fetch_url(url, opts)
   if not http or not http.get then
@@ -571,70 +684,42 @@ local function fetch_url(url, opts)
   return true, body, nil, { url = url, code = code, headers = headers, bytes = #body }
 end
 
--- Download helper with retries per URL and full tried list tracking.
-local function fetch_with_retries(urls, max_attempts, backoff_seconds)
-  local attempts = max_attempts or DOWNLOAD_ATTEMPTS
-  local backoff = backoff_seconds or DOWNLOAD_BACKOFF
+local function download_repo_file(base_url, path, opts)
+  local url = build_repo_url(base_url, path)
+  local attempts = (opts and opts.attempts) or FILE_DOWNLOAD_ATTEMPTS
+  local backoff = (opts and opts.backoff) or DOWNLOAD_BACKOFF
   local tried = {}
-  if not fetch_url_seeded then
-    math.randomseed(os.time())
-    fetch_url_seeded = true
-  end
-  local list = {}
-  for _, url in ipairs(urls or {}) do
-    if url and url ~= "" then
-      table.insert(list, url)
+  for attempt = 1, attempts do
+    local ok, body, err, meta = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
+    local entry = {
+      url = url,
+      ok = ok,
+      err = err,
+      bytes = body and #body or 0,
+      code = meta and meta.code or nil,
+      headers = meta and meta.headers or nil,
+      attempt = attempt
+    }
+    table.insert(tried, entry)
+    if ok then
+      local ok_sanity, reason = sanity_check(body, opts and opts.min_bytes, opts and opts.marker)
+      if not ok_sanity then
+        entry.ok = false
+        entry.err = reason
+        return nil, "invalid", { tried = tried, last = entry }
+      end
+      return body, nil, { tried = tried, last = entry }
+    end
+    if error_is_not_found(err, meta) then
+      return nil, "not_found", { tried = tried, last = entry }
+    end
+    if attempt < attempts and error_is_timeout(err) then
+      os.sleep(backoff * attempt)
+    else
+      return nil, "error", { tried = tried, last = entry }
     end
   end
-  if #list == 0 then
-    list = { CONFIG.MANIFEST_URL_PRIMARY }
-  end
-  for _, url in ipairs(list) do
-    for attempt = 1, attempts do
-      local ok, body, err, meta = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
-      local entry = {
-        url = url,
-        ok = ok,
-        err = err,
-        bytes = body and #body or 0,
-        code = meta and meta.code or nil,
-        headers = meta and meta.headers or nil,
-        attempt = attempt
-      }
-      table.insert(tried, entry)
-      if ok then
-        return true, body, { tried = tried, last = entry }
-      end
-      if attempt < attempts then
-        os.sleep(backoff * attempt)
-      end
-    end
-  end
-  local last_entry = tried[#tried] or { url = list[1], ok = false, err = "timeout or http error", bytes = 0 }
-  return false, nil, { tried = tried, last = last_entry }
-end
-
-local function build_repo_urls(ref, path)
-  local safe_ref = tostring(ref)
-  return {
-    string.format("%s/%s/%s/%s/%s", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, safe_ref, path)
-  }
-end
-
-local function fetch_repo_file(ref, path, opts)
-  local urls = build_repo_urls(ref, path)
-  local ok, body, info = fetch_with_retries(urls, opts and opts.attempts, opts and opts.backoff)
-  if not ok then
-    return false, nil, info
-  end
-  local ok_sanity, reason = sanity_check(body, opts and opts.min_bytes, opts and opts.marker)
-  if not ok_sanity then
-    local entry = info and info.last or { url = urls[1], ok = false, err = reason, bytes = body and #body or 0 }
-    entry.ok = false
-    entry.err = reason
-    return false, nil, { tried = info and info.tried or { entry }, last = entry }
-  end
-  return true, body, info
+  return nil, "error", { tried = tried, last = tried[#tried] }
 end
 
 local function validate_installer_content(content)
@@ -658,39 +743,64 @@ local function read_manifest_cache()
   elseif fs.exists(MANIFEST_CACHE_LEGACY) then
     path = MANIFEST_CACHE_LEGACY
   end
-  if not path then
-    return nil
+  if path then
+    local content = read_file(path)
+    if content then
+      local ok, data = pcall(textutils.unserialize, content)
+      if ok and type(data) == "table" and type(data.manifest_content) == "string" then
+        if type(data.source) ~= "nil" then
+          data.source = normalize_source_spec(data.source)
+        elseif type(data.release) == "table" and is_valid_sha(data.release.commit_sha) then
+          data.source = normalize_source_spec({ channel = "sha", sha = data.release.commit_sha })
+        end
+        return data
+      end
+    end
   end
-  local content = read_file(path)
-  if not content then
-    return nil
+  if fs.exists(MANIFEST_CACHE_RAW) then
+    local raw = read_file(MANIFEST_CACHE_RAW)
+    if raw and raw ~= "" then
+      return { manifest_content = raw }
+    end
   end
-  local ok, data = pcall(textutils.unserialize, content)
-  if not ok or type(data) ~= "table" then
-    return nil
-  end
-  if type(data.manifest_content) ~= "string" then
-    return nil
-  end
-  if type(data.release) ~= "table" or type(data.release.commit_sha) ~= "string" then
-    return nil
-  end
-  return data
+  return nil
 end
 
-local function write_manifest_cache(manifest_content, release, source)
-  local safe_release = {
-    commit_sha = release and release.commit_sha,
-    hash_algo = release and release.hash_algo,
-    manifest_path = release and release.manifest_path
-  }
+local function write_manifest_cache(manifest_content, source, base_url)
   local payload = {
     manifest_content = manifest_content,
-    release = safe_release,
     source = source,
+    base_url = base_url,
     saved_at = os.time()
   }
   write_atomic(MANIFEST_CACHE, textutils.serialize(payload))
+  write_atomic(MANIFEST_CACHE_RAW, manifest_content)
+end
+
+local function read_cached_base_url()
+  return read_text(CACHE_LAST_BASE)
+end
+
+local function read_cached_source()
+  local cached_source = read_text(CACHE_LAST_SOURCE)
+  local cached_sha = read_text(CACHE_LAST_SHA)
+  if cached_source == "sha" and is_valid_sha(cached_sha) then
+    return { channel = "sha", sha = cached_sha }
+  end
+  if cached_source == "main" then
+    return { channel = "main", sha = nil }
+  end
+  return nil
+end
+
+local function write_source_cache(base_url, source)
+  write_text(CACHE_LAST_BASE, base_url)
+  write_text(CACHE_LAST_SOURCE, source and source.channel or nil)
+  if source and source.channel == "sha" and source.sha then
+    write_text(CACHE_LAST_SHA, source.sha)
+  else
+    write_text(CACHE_LAST_SHA, nil)
+  end
 end
 
 local function format_manifest_failure(meta)
@@ -710,10 +820,7 @@ local function format_manifest_failure(meta)
     reason = meta.last.err
   end
   if #tried_list == 0 then
-    tried_list = { CONFIG.MANIFEST_URL_PRIMARY }
-    if CONFIG.MANIFEST_URL_FALLBACK then
-      table.insert(tried_list, CONFIG.MANIFEST_URL_FALLBACK)
-    end
+    tried_list = { "unknown" }
   end
   local tried = table.concat(tried_list, ", ")
   return ("Manifest download failed (%s). Tried: %s"):format(reason, tried)
@@ -735,7 +842,7 @@ local function collect_tried_urls(info, fallback_urls)
     urls = fallback_urls
   end
   if #urls == 0 then
-    urls = { CONFIG.MANIFEST_URL_PRIMARY }
+    urls = { "unknown" }
   end
   return urls
 end
@@ -751,33 +858,6 @@ local function print_download_failure(label, info, fallback_urls)
   ))
 end
 
-local function download_release()
-  local ok, content, meta = fetch_repo_file("main", RELEASE_REMOTE, {
-    min_bytes = RELEASE_MIN_BYTES,
-    marker = RELEASE_SANITY_MARKER
-  })
-  if not ok then
-    return nil, "Release download failed", meta
-  end
-  local loader = load(content, "release", "t", {})
-  if not loader then
-    return nil, "Release load failed", meta
-  end
-  local ok, data = pcall(loader)
-  if not ok or type(data) ~= "table" then
-    return nil, "Release parse failed", meta
-  end
-  if type(data.commit_sha) ~= "string" then
-    return nil, "Release missing commit_sha", meta
-  end
-  if type(data.hash_algo) ~= "string" then
-    return nil, "Release missing hash_algo", meta
-  end
-  data.manifest_path = data.manifest_path or MANIFEST_REMOTE
-  log("INFO", "Release fetched: " .. data.commit_sha)
-  return data, meta
-end
-
 local function parse_manifest(content)
   local loader = load(content, "manifest", "t", {})
   if not loader then
@@ -787,115 +867,248 @@ local function parse_manifest(content)
   if not ok or type(data) ~= "table" or type(data.files) ~= "table" then
     return nil, "Manifest parse failed"
   end
+  data.source = normalize_source_spec(data.source)
   return data
 end
 
-local function download_manifest()
-  local release, release_err, release_meta = download_release()
-  if not release then
-    return nil, release_err, release_meta
+local function download_manifest_from_base(base_url)
+  local url = build_repo_url(base_url, MANIFEST_REMOTE)
+  local tried = {}
+  for attempt = 1, BASE_VALIDATE_ATTEMPTS do
+    log("WARN", ("Manifest download attempt %d/%d"):format(attempt, BASE_VALIDATE_ATTEMPTS))
+    local ok, body, err, meta = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
+    local entry = {
+      url = url,
+      ok = ok,
+      err = err,
+      bytes = body and #body or 0,
+      code = meta and meta.code or nil,
+      headers = meta and meta.headers or nil,
+      attempt = attempt
+    }
+    table.insert(tried, entry)
+    if ok then
+      local ok_sanity, reason = sanity_check(body, MANIFEST_MIN_BYTES, MANIFEST_SANITY_MARKER)
+      if not ok_sanity then
+        entry.ok = false
+        entry.err = reason
+        return nil, "invalid", { tried = tried, last = entry }
+      end
+      local manifest, manifest_err = parse_manifest(body)
+      if not manifest then
+        entry.ok = false
+        entry.err = manifest_err
+        return nil, "invalid", { tried = tried, last = entry }
+      end
+      validate_hash_algo(manifest, nil)
+      return { content = body, manifest = manifest, meta = { tried = tried, last = entry } }
+    end
+    if error_is_not_found(err, meta) then
+      return nil, "not_found", { tried = tried, last = entry }
+    end
+    if not error_is_timeout(err) or attempt >= BASE_VALIDATE_ATTEMPTS then
+      return nil, "error", { tried = tried, last = entry }
+    end
+    os.sleep(CONFIG.MANIFEST_RETRY_BACKOFF * attempt)
   end
-  local urls = { CONFIG.MANIFEST_URL_PRIMARY, CONFIG.MANIFEST_URL_FALLBACK }
-  local ok, content, meta = fetch_with_retries(urls, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
-  if not ok then
-    return nil, "Manifest download failed", meta
-  end
-  local ok_sanity, reason = sanity_check(content, MANIFEST_MIN_BYTES, MANIFEST_SANITY_MARKER)
-  if not ok_sanity then
-    local entry = meta and meta.last or { url = urls[1], ok = false, err = reason, bytes = content and #content or 0 }
-    entry.ok = false
-    entry.err = reason
-    meta = { tried = meta and meta.tried or { entry }, last = entry }
-    return nil, "Manifest download failed", meta
-  end
-  local manifest, manifest_err = parse_manifest(content)
-  if not manifest then
-    return nil, manifest_err, meta
-  end
-  validate_hash_algo(manifest, release)
-  log("INFO", "Manifest fetched from " .. tostring(release.commit_sha))
-  return content, manifest, release, meta
+  return nil, "error", { tried = tried, last = tried[#tried] }
 end
 
-local function download_manifest_with_retries(attempts, backoff)
-  local max_attempts = attempts or CONFIG.MANIFEST_RETRY_ATTEMPTS or 1
-  local delay = backoff or CONFIG.MANIFEST_RETRY_BACKOFF or 1
-  local last_meta
-  for attempt = 1, max_attempts do
-    log("WARN", ("Manifest download attempt %d/%d"):format(attempt, max_attempts))
-    local content, manifest, release, meta = download_manifest()
-    if content then
-      if meta then
-        meta.attempt = attempt
+local function build_candidate_bases(cached_base_url, requested_source)
+  local candidates = {}
+  local function add(base_url)
+    if not base_url then
+      return
+    end
+    for _, existing in ipairs(candidates) do
+      if existing == base_url then
+        return
       end
-      return content, manifest, release, meta
     end
-    if meta then
-      meta.attempt = attempt
-      last_meta = meta
-    else
-      last_meta = {
-        tried = { { url = CONFIG.MANIFEST_URL_PRIMARY, ok = false, err = "timeout or http error", bytes = 0, attempt = attempt } },
-        last = { url = CONFIG.MANIFEST_URL_PRIMARY, ok = false, err = "timeout or http error", bytes = 0, attempt = attempt },
-        attempt = attempt
-      }
+    table.insert(candidates, base_url)
+  end
+  add(cached_base_url)
+  if requested_source then
+    add(source_to_base_url(requested_source))
+  end
+  add(build_base_url("main"))
+  return candidates
+end
+
+local function validate_base_url(base_url)
+  local url = build_repo_url(base_url, MANIFEST_REMOTE)
+  local tried = {}
+  for attempt = 1, BASE_VALIDATE_ATTEMPTS do
+    local ok, _, err, meta = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
+    local entry = {
+      url = url,
+      ok = ok,
+      err = err,
+      code = meta and meta.code or nil,
+      headers = meta and meta.headers or nil,
+      attempt = attempt
+    }
+    table.insert(tried, entry)
+    if ok then
+      return true, { tried = tried, last = entry }
     end
-    if attempt < max_attempts then
-      os.sleep(delay * attempt)
+    if error_is_not_found(err, meta) then
+      return false, "not_found", { tried = tried, last = entry }
+    end
+    if not error_is_timeout(err) then
+      return false, "error", { tried = tried, last = entry }
+    end
+    if attempt < BASE_VALIDATE_ATTEMPTS then
+      os.sleep(CONFIG.MANIFEST_RETRY_BACKOFF * attempt)
     end
   end
-  return nil, nil, nil, last_meta
+  return false, "error", { tried = tried, last = tried[#tried] }
+end
+
+local function resolve_download_base(manifest)
+  local cached_base_url = read_cached_base_url()
+  local requested_source = manifest and manifest.source or { channel = "main" }
+  local candidates = build_candidate_bases(cached_base_url, requested_source)
+  local last_meta = nil
+  for _, base_url in ipairs(candidates) do
+    local ok, kind, meta = validate_base_url(base_url)
+    last_meta = meta
+    if ok then
+      return base_url, source_from_base_url(base_url), meta
+    end
+    if kind == "not_found" then
+      log("WARN", "Base validation failed (404) for " .. tostring(base_url))
+    else
+      log("WARN", "Base validation failed for " .. tostring(base_url))
+    end
+  end
+  return build_base_url("main"), { channel = "main", sha = nil }, last_meta
+end
+
+local function create_source_state(base_url, source)
+  return {
+    base_url = base_url,
+    source = source or { channel = "main", sha = nil },
+    fallback_used = false
+  }
+end
+
+local function switch_source_to_main(state)
+  state.base_url = build_base_url("main")
+  state.source = { channel = "main", sha = nil }
+  state.fallback_used = true
+end
+
+local function prompt_switch_to_main(path)
+  print(("Pinned source returned 404 for %s."):format(path))
+  local choice = ui_menu(nil, { "Switch to main (recommended)", "Cancel" }, 1)
+  return choice == 1
+end
+
+local function download_with_source_fallback(state, path, opts)
+  local content, kind, meta = download_repo_file(state.base_url, path, opts)
+  if content then
+    return content, nil, meta
+  end
+  if kind == "not_found" then
+    if state.source.channel ~= "main" and not state.fallback_used then
+      if not prompt_switch_to_main(path) then
+        return nil, "cancelled", meta
+      end
+      switch_source_to_main(state)
+      local fallback_content, fallback_kind, fallback_meta = download_repo_file(state.base_url, path, opts)
+      if fallback_content then
+        return fallback_content, nil, fallback_meta
+      end
+      if fallback_kind == "not_found" then
+        return nil, "missing", fallback_meta
+      end
+      return nil, "error", fallback_meta
+    end
+    return nil, "missing", meta
+  end
+  return nil, "error", meta
 end
 
 local function acquire_manifest()
-  local manifest_content, manifest, release, manifest_meta = download_manifest_with_retries(1, 0)
-  local retry_rounds = 0
-  while not manifest_content do
-    local cache = read_manifest_cache()
-    local failure = format_manifest_failure(manifest_meta)
-    print(failure)
-    if manifest_meta and manifest_meta.last then
-      local last = manifest_meta.last
-      print(("Last error: %s (url=%s)"):format(tostring(last.err or "timeout or http error"), tostring(last.url or "unknown")))
+  local cache = read_manifest_cache()
+  local cached_base_url = read_cached_base_url()
+  local cached_source = read_cached_source()
+  local cached_manifest_source = cache and cache.source or nil
+  if not cached_manifest_source and cache and cache.manifest_content then
+    local parsed = parse_manifest(cache.manifest_content)
+    if parsed then
+      cached_manifest_source = parsed.source
     end
-    log("WARN", failure)
-    local default_choice = cache and 1 or 1
-    local choice = ui_menu(nil, cache and {
-      "Use cached manifest (offline update)",
-      "Retry download",
-      "Cancel"
-    } or {
-      "Retry download",
-      "Cancel"
-    }, default_choice)
-    if cache and choice == 1 then
-      manifest_content = cache.manifest_content
-      local parsed, parse_err = parse_manifest(manifest_content)
+  end
+  local requested_source = cached_manifest_source or cached_source
+  local retry_rounds = 0
+
+  while true do
+    local candidates = build_candidate_bases(cached_base_url, requested_source)
+    local last_meta = nil
+    local last_kind = nil
+    for _, base_url in ipairs(candidates) do
+      local result, kind, meta = download_manifest_from_base(base_url)
+      if result and result.content then
+        log("INFO", "Manifest fetched from base " .. tostring(base_url))
+        return result.content, result.manifest, base_url, result.meta
+      end
+      last_meta = meta
+      last_kind = kind
+      if kind == "not_found" then
+        log("WARN", "Manifest not found at base " .. tostring(base_url))
+      else
+        log("WARN", "Manifest download failed at base " .. tostring(base_url))
+        if kind ~= "not_found" then
+          break
+        end
+      end
+    end
+
+    if cache and cache.manifest_content then
+      if last_kind == "not_found" then
+        print("Manifest not found on remote base. Using cached manifest.")
+        log("WARN", "Manifest 404; using cached manifest")
+      else
+        print("Manifest download failed (offline/timeout). Using cached manifest.")
+        log("WARN", "Manifest download failed; using cached manifest")
+      end
+      local parsed, parse_err = parse_manifest(cache.manifest_content)
       if not parsed then
         print("Cached manifest invalid: " .. tostring(parse_err))
         log("ERROR", "Cached manifest invalid: " .. tostring(parse_err))
         return nil
       end
-      manifest = parsed
-      release = cache.release
-      manifest_meta = cache.source
-      validate_hash_algo(manifest, release)
-      break
-    elseif (cache and choice == 2) or (not cache and choice == 1) then
-      retry_rounds = retry_rounds + 1
-      if retry_rounds > CONFIG.MANIFEST_MENU_RETRY_LIMIT then
-        print("Retry limit reached. Installer cancelled.")
-        log("WARN", "Manifest retry limit reached; cancelling")
-        return nil
-      end
-      manifest_content, manifest, release, manifest_meta = download_manifest_with_retries()
-    else
+      return cache.manifest_content, parsed, cache.base_url or cached_base_url or source_to_base_url(requested_source or { channel = "main" }), last_meta
+    end
+
+    if last_kind == "not_found" then
+      print("Manifest not found on any base. Installer cancelled.")
+      log("ERROR", "Manifest 404 on all bases; cancelling")
+      return nil
+    end
+
+    local failure = format_manifest_failure(last_meta)
+    print(failure)
+    if last_meta and last_meta.last then
+      local last = last_meta.last
+      print(("Last error: %s (url=%s)"):format(tostring(last.err or "timeout or http error"), tostring(last.url or "unknown")))
+    end
+    log("WARN", failure)
+    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+    if choice ~= 1 then
       print("Installer cancelled.")
       log("INFO", "User cancelled manifest acquisition")
       return nil
     end
+    retry_rounds = retry_rounds + 1
+    if retry_rounds > CONFIG.MANIFEST_MENU_RETRY_LIMIT then
+      print("Retry limit reached. Installer cancelled.")
+      log("WARN", "Manifest retry limit reached; cancelling")
+      return nil
+    end
   end
-  return manifest_content, manifest, release, manifest_meta
 end
 
 local function ensure_base_dirs()
@@ -1187,27 +1400,30 @@ local function build_staging_path(path)
   return UPDATE_STAGING .. "/" .. path
 end
 
-local function stage_updates(entries, release, hash_algo)
+local function stage_updates(entries, source_state, hash_algo)
   ensure_dir(UPDATE_STAGING)
   local staged = {}
   for _, entry in ipairs(entries) do
-    local ok, content, meta = fetch_repo_file(release.commit_sha, entry.path)
-    if not ok then
-      local last = meta and meta.last or {}
-      return nil, ("Download failed for %s"):format(entry.path), meta
-    end
-    if is_html_payload(content) then
-      return nil, ("Download failed for %s (html response)"):format(entry.path), meta
+    local content, err_kind, meta = download_with_source_fallback(source_state, entry.path)
+    if not content then
+      if err_kind == "missing" then
+        return nil, ("Manifest references missing file: %s"):format(entry.path), { kind = "missing", meta = meta }
+      end
+      if err_kind == "cancelled" then
+        return nil, "Installer cancelled.", { kind = "cancelled", meta = meta }
+      end
+      return nil, ("Download failed for %s"):format(entry.path), { kind = "download", meta = meta }
     end
     local actual = compute_hash(content, hash_algo)
     if actual ~= entry.hash then
-      local retry_ok, retry_content, retry_meta = fetch_repo_file(release.commit_sha, entry.path)
-      if retry_ok and retry_content then
+      local retry_content, retry_kind, retry_meta = download_with_source_fallback(source_state, entry.path)
+      if retry_content then
         content = retry_content
-        if is_html_payload(content) then
-          return nil, ("Download failed for %s (html response)"):format(entry.path)
-        end
         actual = compute_hash(content, hash_algo)
+      elseif retry_kind == "missing" then
+        return nil, ("Manifest references missing file: %s"):format(entry.path), { kind = "missing", meta = retry_meta }
+      elseif retry_kind == "cancelled" then
+        return nil, "Installer cancelled.", { kind = "cancelled", meta = retry_meta }
       end
       if actual ~= entry.hash then
         local last = retry_meta and retry_meta.last or meta and meta.last or {}
@@ -1215,7 +1431,7 @@ local function stage_updates(entries, release, hash_algo)
           entry.path,
           entry.hash,
           actual
-        ), retry_meta or meta
+        ), { kind = "checksum", meta = retry_meta or meta }
       end
     end
     local staging_path = build_staging_path(entry.path)
@@ -1252,7 +1468,7 @@ local function apply_staged(entries, staged, created)
   return true
 end
 
-local function update_installer_if_required(manifest, release, hash_algo)
+local function update_installer_if_required(manifest, source_state, hash_algo)
   local required = manifest.installer_min_version
   if required and compare_version(INSTALLER_VERSION, required) < 0 then
     print("Installer update required.")
@@ -1268,16 +1484,22 @@ local function update_installer_if_required(manifest, release, hash_algo)
       print("SAFE UPDATE aborted: installer hash missing.")
       return false
     end
-    local ok, content, meta = fetch_repo_file(release.commit_sha, installer_path, {
+    local content, err_kind, meta = download_with_source_fallback(source_state, installer_path, {
       min_bytes = INSTALLER_MIN_BYTES,
       marker = INSTALLER_SANITY_MARKER
     })
-    if not ok then
-      local last = meta and meta.last or {}
-      print(("SAFE UPDATE aborted: installer download failed (url=%s reason=%s)"):format(
-        tostring(last.url or installer_path),
-        tostring(last.err or "timeout or http error")
-      ))
+    if not content then
+      if err_kind == "missing" then
+        print("SAFE UPDATE aborted: manifest references missing installer.")
+      elseif err_kind == "cancelled" then
+        print("SAFE UPDATE cancelled.")
+      else
+        local last = meta and meta.last or {}
+        print(("SAFE UPDATE aborted: installer download failed (url=%s reason=%s)"):format(
+          tostring(last.url or installer_path),
+          tostring(last.err or "timeout or http error")
+        ))
+      end
       return false
     end
     if compute_hash(content, hash_algo) ~= expected then
@@ -1315,19 +1537,25 @@ local function update_installer_if_required(manifest, release, hash_algo)
   return true
 end
 
-local function migrate_config(role, cfg_path, manifest, release, hash_algo)
+local function migrate_config(role, cfg_path, manifest, source_state, hash_algo)
   local remote_path = "xreactor/" .. role_targets[role].config
   local expected_hash = manifest.files[remote_path]
   if not expected_hash then
     return false
   end
-  local ok, content, meta = fetch_repo_file(release.commit_sha, remote_path)
-  if not ok then
-    local last = meta and meta.last or {}
-    error(("Config download failed (url=%s reason=%s)"):format(
-      tostring(last.url or remote_path),
-      tostring(last.err or "timeout or http error")
-    ))
+  local content, err_kind, meta = download_with_source_fallback(source_state, remote_path)
+  if not content then
+    if err_kind == "missing" then
+      error("Manifest references missing config: " .. remote_path)
+    elseif err_kind == "cancelled" then
+      error("Installer cancelled.")
+    else
+      local last = meta and meta.last or {}
+      error(("Config download failed (url=%s reason=%s)"):format(
+        tostring(last.url or remote_path),
+        tostring(last.err or "timeout or http error")
+      ))
+    end
   end
   if compute_hash(content, hash_algo) ~= expected_hash then
     error("Config checksum mismatch for " .. remote_path)
@@ -1402,15 +1630,17 @@ local function safe_update()
     active_logger.set_enabled(true)
   end
 
-  local manifest_content, manifest, release, manifest_meta = acquire_manifest()
+  local manifest_content, manifest = acquire_manifest()
   if not manifest_content then
     return
   end
-  local hash_algo = resolve_hash_algo(manifest, release)
+  local hash_algo = resolve_hash_algo(manifest, nil)
+  local resolved_base, resolved_source = resolve_download_base(manifest)
+  local source_state = create_source_state(resolved_base, resolved_source)
   ensure_base_dirs()
 
   log("INFO", "SAFE UPDATE started for role " .. tostring(role))
-  local can_continue = update_installer_if_required(manifest, release, hash_algo)
+  local can_continue = update_installer_if_required(manifest, source_state, hash_algo)
   if not can_continue then
     return
   end
@@ -1422,14 +1652,23 @@ local function safe_update()
 
   local updates = update_files(manifest, hash_algo)
   log("INFO", "Files needing update: " .. tostring(#updates))
-  local staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
+  local staged, stage_err, stage_meta = stage_updates(updates, source_state, hash_algo)
   local retry_rounds = 0
   while not staged do
-    print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
-    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
-    if choice ~= 1 then
-      log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
+    if stage_meta and stage_meta.kind == "missing" then
+      print("SAFE UPDATE aborted: " .. tostring(stage_err))
+      log("ERROR", "SAFE UPDATE aborted: " .. tostring(stage_err))
       return
+    elseif stage_meta and stage_meta.kind == "cancelled" then
+      log("INFO", "SAFE UPDATE cancelled by user")
+      return
+    else
+      print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta and stage_meta.meta or stage_meta, nil)
+      local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+      if choice ~= 1 then
+        log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
+        return
+      end
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
@@ -1438,7 +1677,7 @@ local function safe_update()
       return
     end
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
-    staged, stage_err, stage_meta = stage_updates(updates, release, hash_algo)
+    staged, stage_err, stage_meta = stage_updates(updates, source_state, hash_algo)
   end
   local backup_dir = create_backup_dir()
   local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
@@ -1458,7 +1697,7 @@ local function safe_update()
   end
   local migrated = false
   if ok then
-    local success, result = pcall(migrate_config, role, cfg_path, manifest, release, hash_algo)
+    local success, result = pcall(migrate_config, role, cfg_path, manifest, source_state, hash_algo)
     if success then
       migrated = result
     else
@@ -1475,7 +1714,7 @@ local function safe_update()
     end
   end
   if ok then
-    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, release, manifest_meta)
+    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, source_state.source, source_state.base_url)
     if not cache_ok then
       ok = false
       err = cache_err
@@ -1513,15 +1752,18 @@ local function safe_update()
   print("Backup: " .. backup_dir)
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "SAFE UPDATE complete. Backup: " .. backup_dir)
+  write_source_cache(source_state.base_url, source_state.source)
 end
 
 -- FULL REINSTALL overwrites all files and optionally restores existing config.
 local function full_reinstall()
-  local manifest_content, manifest, release, manifest_meta = acquire_manifest()
+  local manifest_content, manifest = acquire_manifest()
   if not manifest_content then
     return
   end
-  local hash_algo = resolve_hash_algo(manifest, release)
+  local hash_algo = resolve_hash_algo(manifest, nil)
+  local resolved_base, resolved_source = resolve_download_base(manifest)
+  local source_state = create_source_state(resolved_base, resolved_source)
   ensure_base_dirs()
   log("INFO", "FULL REINSTALL started")
 
@@ -1536,14 +1778,23 @@ local function full_reinstall()
   end
 
   local entries = build_manifest_entries(manifest)
-  local staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
+  local staged, stage_err, stage_meta = stage_updates(entries, source_state, hash_algo)
   local retry_rounds = 0
   while not staged do
-    print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
-    local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
-    if choice ~= 1 then
-      log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
+    if stage_meta and stage_meta.kind == "missing" then
+      print("FULL REINSTALL aborted: " .. tostring(stage_err))
+      log("ERROR", "FULL REINSTALL aborted: " .. tostring(stage_err))
       return
+    elseif stage_meta and stage_meta.kind == "cancelled" then
+      log("INFO", "FULL REINSTALL cancelled by user")
+      return
+    else
+      print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta and stage_meta.meta or stage_meta, nil)
+      local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
+      if choice ~= 1 then
+        log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
+        return
+      end
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
@@ -1552,7 +1803,7 @@ local function full_reinstall()
       return
     end
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
-    staged, stage_err, stage_meta = stage_updates(entries, release, hash_algo)
+    staged, stage_err, stage_meta = stage_updates(entries, source_state, hash_algo)
   end
 
   local backup_dir = create_backup_dir()
@@ -1650,7 +1901,8 @@ local function full_reinstall()
   ensure_node_id(role, cfg_path)
   write_startup(role)
   write_atomic(MANIFEST_LOCAL, manifest_content)
-  write_manifest_cache(manifest_content, release, manifest_meta)
+  write_manifest_cache(manifest_content, source_state.source, source_state.base_url)
+  write_source_cache(source_state.base_url, source_state.source)
 
   print("FULL REINSTALL complete.")
   print("Next steps: reboot or run the role entrypoint.")
