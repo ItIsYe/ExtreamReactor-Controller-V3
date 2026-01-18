@@ -3,12 +3,18 @@ local CONFIG = {
   LOG_NAME = "reprocessor", -- Log file name for this node.
   LOG_PREFIX = "REPROC", -- Default log prefix for reprocessor events.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
+  BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
+  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor_logs/loader_reprocessor.log).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
   RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
 }
 
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup()
+bootstrap.setup({
+  role = "reprocessor",
+  log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
+  log_path = CONFIG.BOOTSTRAP_LOG_PATH
+})
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
