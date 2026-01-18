@@ -15,7 +15,7 @@ local CONFIG = {
   MIN_CORE_BYTES = 200, -- Minimum bytes to accept core download.
   CORE_SANITY_MARKER = "local function main", -- Core sanity marker.
   LOG_ENABLED = true, -- Enable bootstrap logging.
-  LOG_PATH = "/xreactor/logs/installer_bootstrap.log", -- Bootstrap log file path.
+  LOG_PATH = "/xreactor_logs/installer_bootstrap.log", -- Bootstrap log file path.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1" -- Suffix for rotated log.
 }

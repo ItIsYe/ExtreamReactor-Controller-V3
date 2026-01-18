@@ -4,7 +4,7 @@ local CONFIG = {
   LOG_PREFIX = "FUEL", -- Default log prefix for fuel events.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
   BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
-  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file.
+  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor_logs/loader_fuel.log).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
   RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
 }

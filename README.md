@@ -55,7 +55,7 @@ Wireless Modem (Control/Status)
   - `xreactor/master/*` (z. B. `master.main`)
   - `xreactor/nodes/*` (z. B. `nodes.rt.main`)
 - **Keine globalen Injects**: Alle Module nutzen lokale Requires, z. B. `local utils = require("core.utils")`.
-- **Debug-Log**: In den jeweiligen `main.lua`-Dateien kann `BOOTSTRAP_LOG_ENABLED = true` gesetzt werden (Konfig ganz oben). Dann schreibt der Bootstrap eine Datei `/xreactor/logs/loader_<role>.log` (z. B. `loader_master.log`) mit Environment-Infos, Root-Pfad, `package.path` und jedem Modul-Ladeversuch. Optional kann `BOOTSTRAP_LOG_PATH` das Logziel überschreiben. Bei Require-Fehlern werden die tatsächlich geprüften Pfade protokolliert.
+- **Debug-Log**: In den jeweiligen `main.lua`-Dateien kann `BOOTSTRAP_LOG_ENABLED = true` gesetzt werden (Konfig ganz oben). Dann schreibt der Bootstrap eine Datei `/xreactor_logs/loader_<role>.log` (z. B. `loader_master.log`) mit Environment-Infos, Root-Pfad, `package.path`, `shell.dir()` und jedem Modul-Ladeversuch. Optional kann `BOOTSTRAP_LOG_PATH` das Logziel überschreiben. Bei Require-Fehlern werden die tatsächlich geprüften Pfade protokolliert.
 - **Warum das wichtig ist**: Ohne Bootstrap nutzt Lua die Standard-`package.path`, die relativ zum aktuellen Programmverzeichnis ist (z. B. `/xreactor/master/?.lua`). Dadurch werden Module wie `shared.constants` fälschlich unter `/xreactor/master/shared/...` gesucht. Der Bootstrap überschreibt `require`, ergänzt `package.path` und installiert einen `package.searcher`, der immer unter `/xreactor` lädt.
 - **Empfohlene Nutzung**:
   ```
@@ -88,7 +88,7 @@ Wireless Modem (Control/Status)
 - Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
 - Installer speichert nur sichere Plain-Data-Snapshots (keine shared refs); Backup/Cache-Indizes sind textbasiert.
 - **Protokoll-Änderung**: Wenn das Update eine neue Major-Protokollversion enthält, bricht SAFE UPDATE ab, um inkonsistente Master/Node-Versionen zu vermeiden.
-- **Core-Dateien Pflicht**: SAFE UPDATE bricht mit klarer Meldung ab, falls das Manifest essentielle Core-Files (z. B. `xreactor/core/utils.lua`) nicht enthält oder Pfade falsch sind.
+- **Core-Dateien Pflicht**: SAFE UPDATE bricht mit klarer Meldung ab, falls das Manifest essentielle Core-/Shared-Files (z. B. `xreactor/core/utils.lua`, `xreactor/shared/constants.lua`) nicht enthält oder Pfade falsch sind.
 - **Datei-Renames/Migrationen**: Wenn Dateien umbenannt/verschoben werden, müssen Migrationsregeln hinterlegt sein – andernfalls wird der Update-Lauf abgebrochen, um halbfertige Zustände zu verhindern.
 - **Loader-Garantie**: SAFE UPDATE stellt sicher, dass der Loader (`xreactor/core/bootstrap.lua`) und alle abhängigen Core-Module aus dem Manifest vorhanden sind, bevor ein Start empfohlen wird.
 
@@ -107,8 +107,8 @@ Wireless Modem (Control/Status)
 - SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
 
 **Logging & Debugging**
-- Bootstrap-Log: `/xreactor/logs/installer_bootstrap.log` (mit Rotation `.1`).
-- Installer-Core-Log: `/xreactor/logs/installer.log` (mit Rotation `.1`).
+- Bootstrap-Log: `/xreactor_logs/installer_bootstrap.log` (mit Rotation `.1`).
+- Installer-Core-Log: `/xreactor_logs/installer.log` (mit Rotation `.1`).
 - Node-Logs: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
 - Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
@@ -136,8 +136,8 @@ Wireless Modem (Control/Status)
   - Config-Datei der Rolle (`debug_logging = true`), oder
   - Settings API: `settings.set("xreactor.debug_logging", true)` + `settings.save()`.
 - Logfiles:
-  - Bootstrap: `/xreactor/logs/installer_bootstrap.log` (Rotation `.1`)
-  - Installer-Core: `/xreactor/logs/installer.log` (Rotation `.1`)
+- Bootstrap: `/xreactor_logs/installer_bootstrap.log` (Rotation `.1`)
+- Installer-Core: `/xreactor_logs/installer.log` (Rotation `.1`)
   - Nodes: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
 

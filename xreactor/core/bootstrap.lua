@@ -3,7 +3,7 @@ local bootstrap = {}
 
 local CONFIG = {
   BASE_DIR = "/xreactor",
-  LOG_PATH = "/xreactor/logs/bootstrap.log",
+  LOG_PATH = "/xreactor_logs/bootstrap.log",
   LOG_SETTINGS_KEY = "xreactor.debug_logging"
 }
 
@@ -127,6 +127,9 @@ local function log_environment()
   if rawget(_G, "package") and package.path then
     log_line("INFO", "package.path=" .. tostring(package.path))
   end
+  if rawget(_G, "shell") and shell.dir then
+    log_line("INFO", "shell.dir=" .. tostring(shell.dir()))
+  end
   log_line("INFO", "root=" .. tostring(state.base_dir or CONFIG.BASE_DIR))
 end
 
@@ -174,7 +177,9 @@ local function ensure_package_path()
   local base = state.base_dir or CONFIG.BASE_DIR
   local additions = {
     base .. "/?.lua",
-    base .. "/?/init.lua"
+    base .. "/?/init.lua",
+    base .. "/shared/?.lua",
+    base .. "/shared/?/init.lua"
   }
   local current = package.path or ""
   for i = #additions, 1, -1 do
@@ -259,7 +264,7 @@ function bootstrap.setup(opts)
   if opts.log_path then
     state.log_path = opts.log_path
   elseif opts.role then
-    state.log_path = string.format("/xreactor/logs/loader_%s.log", tostring(opts.role):lower())
+    state.log_path = string.format("/xreactor_logs/loader_%s.log", tostring(opts.role):lower())
   end
   resolve_global()
   rawset(_G, "require", bootstrap.require)
