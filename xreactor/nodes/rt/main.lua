@@ -22,8 +22,8 @@ local CONFIG = {
   RECEIVE_TIMEOUT = 0.2 -- Network receive timeout (seconds).
 }
 
-package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
-_G = _G or {}
+local bootstrap = dofile("/xreactor/core/bootstrap.lua")
+bootstrap.setup()
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
 local function ensure_turbine_ctrl(name)

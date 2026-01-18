@@ -45,6 +45,25 @@ Wireless Modem (Control/Status)
 - **Protokoll-Versionierung**: `proto_ver` nutzt `major.minor` (z. B. `1.0`). Gleiche Major-Versionen sind kompatibel, Minor-Abweichungen werden toleriert.
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
 
+## Modul-Loading & Require-Konzept
+- **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
+- **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Das `require` wird zentral überschrieben und lädt Module deterministisch aus `/xreactor/<modul>.lua`.
+- **Projekt-Root**: Alle Module werden relativ zum festen Root `/xreactor` geladen.
+- **Module-Struktur**:
+  - `xreactor/shared/*` (z. B. `shared.constants`)
+  - `xreactor/core/*` (z. B. `core.utils`)
+  - `xreactor/master/*` (z. B. `master.main`)
+  - `xreactor/nodes/*` (z. B. `nodes.rt.main`)
+- **Keine globalen Injects**: Alle Module nutzen lokale Requires, z. B. `local utils = require("core.utils")`.
+- **Debug-Log**: Bei aktiviertem Debug-Logging schreibt der Bootstrap eine Datei `/xreactor/logs/bootstrap.log` mit Environment-Infos, Root-Pfad und jedem Modul-Ladeversuch. Wenn vorhanden, wird auch `package.path` mitgeloggt.
+- **Warum das wichtig ist**: Ohne Bootstrap nutzt Lua die Standard-`package.path`, die relativ zum aktuellen Programmverzeichnis ist (z. B. `/xreactor/master/?.lua`). Dadurch werden Module wie `shared.constants` fälschlich unter `/xreactor/master/shared/...` gesucht. Der Bootstrap installiert daher einen eigenen Loader und einen `package.searcher`, der immer unter `/xreactor` lädt.
+- **Empfohlene Nutzung**:
+  ```
+  local bootstrap = dofile("/xreactor/core/bootstrap.lua")
+  bootstrap.setup()
+  local utils = require("core.utils")
+  ```
+
 ## Installation, Safe Update & Full Reinstall
 **Erstinstallation / Vollinstallation**
 1. Installer herunterladen und ausführen:
@@ -69,6 +88,9 @@ Wireless Modem (Control/Status)
 - Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
 - Installer speichert nur sichere Plain-Data-Snapshots (keine shared refs); Backup/Cache-Indizes sind textbasiert.
 - **Protokoll-Änderung**: Wenn das Update eine neue Major-Protokollversion enthält, bricht SAFE UPDATE ab, um inkonsistente Master/Node-Versionen zu vermeiden.
+- **Core-Dateien Pflicht**: SAFE UPDATE bricht mit klarer Meldung ab, falls das Manifest essentielle Core-Files (z. B. `xreactor/core/utils.lua`) nicht enthält oder Pfade falsch sind.
+- **Datei-Renames/Migrationen**: Wenn Dateien umbenannt/verschoben werden, müssen Migrationsregeln hinterlegt sein – andernfalls wird der Update-Lauf abgebrochen, um halbfertige Zustände zu verhindern.
+- **Loader-Garantie**: SAFE UPDATE stellt sicher, dass der Loader (`xreactor/core/bootstrap.lua`) und alle abhängigen Core-Module aus dem Manifest vorhanden sind, bevor ein Start empfohlen wird.
 
 **FULL REINSTALL (alles neu)**
 - Installer erneut ausführen → Menü **FULL REINSTALL** wählen.

@@ -44,7 +44,21 @@ local CONFIG = {
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER", -- Installer log prefix.
-  LOG_SETTINGS_KEY = "xreactor.debug_logging" -- settings key for debug logs.
+  LOG_SETTINGS_KEY = "xreactor.debug_logging", -- settings key for debug logs.
+  REQUIRED_CORE_FILES = { -- Core files that must exist in the manifest.
+    "xreactor/core/bootstrap.lua",
+    "xreactor/core/logger.lua",
+    "xreactor/core/network.lua",
+    "xreactor/core/protocol.lua",
+    "xreactor/core/safety.lua",
+    "xreactor/core/state_machine.lua",
+    "xreactor/core/trends.lua",
+    "xreactor/core/ui.lua",
+    "xreactor/core/utils.lua"
+  },
+  FILE_MIGRATIONS = { -- Optional migrations for renamed files.
+    -- { from = "xreactor/core/old.lua", to = "xreactor/core/new.lua" }
+  }
 }
 
 local BASE_DIR = CONFIG.BASE_DIR
@@ -69,6 +83,8 @@ local RELEASE_SANITY_MARKER = CONFIG.RELEASE_SANITY_MARKER
 local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
 local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
 local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
+local REQUIRED_CORE_FILES = CONFIG.REQUIRED_CORE_FILES
+local FILE_MIGRATIONS = CONFIG.FILE_MIGRATIONS
 
 -- Download base tracking (main vs pinned commit).
 local current_base_url = nil
@@ -1102,6 +1118,28 @@ local function download_release()
   return data, meta
 end
 
+local function validate_manifest_required(manifest)
+  local missing = {}
+  for _, path in ipairs(REQUIRED_CORE_FILES or {}) do
+    if not manifest.lookup or not manifest.lookup[path] then
+      table.insert(missing, path)
+    end
+  end
+  if #missing > 0 then
+    return nil, "Manifest missing required files: " .. table.concat(missing, ", ")
+  end
+  for _, migration in ipairs(FILE_MIGRATIONS or {}) do
+    if type(migration) == "table" then
+      local to_path = migration.to
+      local from_path = migration.from
+      if to_path and from_path and not manifest.lookup[to_path] then
+        return nil, ("Manifest missing migration target %s (from %s)"):format(to_path, from_path)
+      end
+    end
+  end
+  return true
+end
+
 local function parse_manifest(content)
   local loader = load(content, "manifest", "t", {})
   if not loader then
@@ -1144,6 +1182,10 @@ local function parse_manifest(content)
   end
   data.entries = entries
   data.lookup = lookup
+  local ok, err = validate_manifest_required(data)
+  if not ok then
+    return nil, err
+  end
   return data
 end
 
@@ -1679,6 +1721,34 @@ local function apply_staged(entries, staged, created)
   return true
 end
 
+local function build_migration_paths()
+  local paths = {}
+  for _, migration in ipairs(FILE_MIGRATIONS or {}) do
+    if type(migration) == "table" and migration.from then
+      table.insert(paths, "/" .. migration.from)
+    end
+  end
+  return paths
+end
+
+local function apply_file_migrations()
+  local applied = {}
+  for _, migration in ipairs(FILE_MIGRATIONS or {}) do
+    if type(migration) == "table" and migration.from and migration.to then
+      local from_path = "/" .. migration.from
+      local to_path = "/" .. migration.to
+      if fs.exists(from_path) then
+        if not fs.exists(to_path) then
+          return false, ("Migration target missing: %s (from %s)"):format(migration.to, migration.from)
+        end
+        fs.delete(from_path)
+        table.insert(applied, migration.from)
+      end
+    end
+  end
+  return true, applied
+end
+
 local function update_installer_if_required(manifest, release, hash_algo)
   local required = manifest.installer_min_version
   if required and compare_version(INSTALLER_VERSION, required) < 0 then
@@ -1776,8 +1846,10 @@ end
 
 local function verify_integrity(manifest, role, cfg_path)
   local required = {
+    "xreactor/core/bootstrap.lua",
     "xreactor/core/network.lua",
     "xreactor/core/protocol.lua",
+    "xreactor/core/utils.lua",
     "xreactor/shared/constants.lua",
     "xreactor/installer/installer.lua"
   }
@@ -1885,11 +1957,13 @@ local function safe_update()
   local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
   local update_paths = {}
   local created = {}
+  local migration_paths = build_migration_paths()
   for _, entry in ipairs(updates) do
     table.insert(update_paths, "/" .. entry.path)
   end
 
   backup_files(backup_dir, update_paths)
+  backup_files(backup_dir, migration_paths)
   backup_files(backup_dir, protected)
 
   local local_proto = load_proto_version("/xreactor/shared/constants.lua")
@@ -1914,6 +1988,13 @@ local function safe_update()
   local ok, err = apply_staged(updates, staged, created)
   if ok then
     changed = #updates
+  end
+  if ok then
+    local migrate_ok, migrate_err = apply_file_migrations()
+    if not migrate_ok then
+      ok = false
+      err = migrate_err
+    end
   end
   local migrated = false
   if ok then
@@ -1948,6 +2029,7 @@ local function safe_update()
   if not ok then
     local rollback_paths = {}
     for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
+    for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
     for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
     rollback_from_backup(backup_dir, rollback_paths, created)
     cleanup_staging(stage_dir)
@@ -1961,6 +2043,7 @@ local function safe_update()
   if not integrity_ok then
     local rollback_paths = {}
     for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
+    for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
     for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
     rollback_from_backup(backup_dir, rollback_paths, created)
     print("Integrity check failed: " .. tostring(integrity_err))
@@ -2040,6 +2123,7 @@ local function full_reinstall()
   local backup_dir = create_backup_dir()
   local update_paths = {}
   local created = {}
+  local migration_paths = build_migration_paths()
   local entries = build_manifest_entries(manifest)
   for _, entry in ipairs(entries) do
     table.insert(update_paths, "/" .. entry.path)
@@ -2050,12 +2134,21 @@ local function full_reinstall()
   end
 
   backup_files(backup_dir, update_paths)
+  backup_files(backup_dir, migration_paths)
   backup_files(backup_dir, protected)
 
   local ok, err = apply_staged(entries, staged, created)
+  if ok then
+    local migrate_ok, migrate_err = apply_file_migrations()
+    if not migrate_ok then
+      ok = false
+      err = migrate_err
+    end
+  end
   if not ok then
     local rollback_paths = {}
     for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
+    for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
     for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
     rollback_from_backup(backup_dir, rollback_paths, created)
     cleanup_staging(stage_dir)
