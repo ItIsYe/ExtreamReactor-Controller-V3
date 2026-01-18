@@ -47,20 +47,21 @@ Wireless Modem (Control/Status)
 
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
-- **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Das `require` wird zentral überschrieben und lädt Module deterministisch aus `/xreactor/<modul>.lua`.
-- **Projekt-Root**: Alle Module werden relativ zum festen Root `/xreactor` geladen.
+- **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Zusätzlich ergänzt er `package.path` um `/xreactor/?.lua` und `/xreactor/?/init.lua`, damit auch native `require`-Aufrufe immer aus dem Projekt-Root auflösen.
+- **Package-Sicherheit**: Falls `package` nicht existiert (einige CC:Tweaked-Umgebungen), erstellt der Bootstrap ein minimales `package`-Objekt, damit `require` zuverlässig funktioniert.
+- **Projekt-Root**: Alle Module werden relativ zum festen Root `/xreactor` geladen (z. B. `/xreactor/shared/constants.lua`).
 - **Module-Struktur**:
   - `xreactor/shared/*` (z. B. `shared.constants`)
   - `xreactor/core/*` (z. B. `core.utils`)
   - `xreactor/master/*` (z. B. `master.main`)
   - `xreactor/nodes/*` (z. B. `nodes.rt.main`)
 - **Keine globalen Injects**: Alle Module nutzen lokale Requires, z. B. `local utils = require("core.utils")`.
-- **Debug-Log**: Bei aktiviertem Debug-Logging schreibt der Bootstrap eine Datei `/xreactor/logs/bootstrap.log` mit Environment-Infos, Root-Pfad und jedem Modul-Ladeversuch. Wenn vorhanden, wird auch `package.path` mitgeloggt.
-- **Warum das wichtig ist**: Ohne Bootstrap nutzt Lua die Standard-`package.path`, die relativ zum aktuellen Programmverzeichnis ist (z. B. `/xreactor/master/?.lua`). Dadurch werden Module wie `shared.constants` fälschlich unter `/xreactor/master/shared/...` gesucht. Der Bootstrap installiert daher einen eigenen Loader und einen `package.searcher`, der immer unter `/xreactor` lädt.
+- **Debug-Log**: In den jeweiligen `main.lua`-Dateien kann `BOOTSTRAP_LOG_ENABLED = true` gesetzt werden (Konfig ganz oben). Dann schreibt der Bootstrap eine Datei `/xreactor_logs/loader_<role>.log` (z. B. `loader_master.log`) mit Environment-Infos, Root-Pfad, `package.path`, `shell.dir()` und jedem Modul-Ladeversuch. Optional kann `BOOTSTRAP_LOG_PATH` das Logziel überschreiben. Bei Require-Fehlern werden die tatsächlich geprüften Pfade protokolliert.
+- **Warum das wichtig ist**: Ohne Bootstrap nutzt Lua die Standard-`package.path`, die relativ zum aktuellen Programmverzeichnis ist (z. B. `/xreactor/master/?.lua`). Dadurch werden Module wie `shared.constants` fälschlich unter `/xreactor/master/shared/...` gesucht. Der Bootstrap überschreibt `require`, ergänzt `package.path` und installiert einen `package.searcher`, der immer unter `/xreactor` lädt.
 - **Empfohlene Nutzung**:
   ```
   local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-  bootstrap.setup()
+  bootstrap.setup({ role = "master" })
   local utils = require("core.utils")
   ```
 
@@ -88,7 +89,7 @@ Wireless Modem (Control/Status)
 - Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
 - Installer speichert nur sichere Plain-Data-Snapshots (keine shared refs); Backup/Cache-Indizes sind textbasiert.
 - **Protokoll-Änderung**: Wenn das Update eine neue Major-Protokollversion enthält, bricht SAFE UPDATE ab, um inkonsistente Master/Node-Versionen zu vermeiden.
-- **Core-Dateien Pflicht**: SAFE UPDATE bricht mit klarer Meldung ab, falls das Manifest essentielle Core-Files (z. B. `xreactor/core/utils.lua`) nicht enthält oder Pfade falsch sind.
+- **Core-Dateien Pflicht**: SAFE UPDATE bricht mit klarer Meldung ab, falls das Manifest essentielle Core-/Shared-Files (z. B. `xreactor/core/utils.lua`, `xreactor/shared/constants.lua`) nicht enthält oder Pfade falsch sind.
 - **Datei-Renames/Migrationen**: Wenn Dateien umbenannt/verschoben werden, müssen Migrationsregeln hinterlegt sein – andernfalls wird der Update-Lauf abgebrochen, um halbfertige Zustände zu verhindern.
 - **Loader-Garantie**: SAFE UPDATE stellt sicher, dass der Loader (`xreactor/core/bootstrap.lua`) und alle abhängigen Core-Module aus dem Manifest vorhanden sind, bevor ein Start empfohlen wird.
 
@@ -107,8 +108,8 @@ Wireless Modem (Control/Status)
 - SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
 
 **Logging & Debugging**
-- Bootstrap-Log: `/xreactor/logs/installer_bootstrap.log` (mit Rotation `.1`).
-- Installer-Core-Log: `/xreactor/logs/installer.log` (mit Rotation `.1`).
+- Bootstrap-Log: `/xreactor_logs/installer_bootstrap.log` (mit Rotation `.1`).
+- Installer-Core-Log: `/xreactor_logs/installer.log` (mit Rotation `.1`).
 - Node-Logs: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
 - Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
@@ -136,8 +137,8 @@ Wireless Modem (Control/Status)
   - Config-Datei der Rolle (`debug_logging = true`), oder
   - Settings API: `settings.set("xreactor.debug_logging", true)` + `settings.save()`.
 - Logfiles:
-  - Bootstrap: `/xreactor/logs/installer_bootstrap.log` (Rotation `.1`)
-  - Installer-Core: `/xreactor/logs/installer.log` (Rotation `.1`)
+- Bootstrap: `/xreactor_logs/installer_bootstrap.log` (Rotation `.1`)
+- Installer-Core: `/xreactor_logs/installer.log` (Rotation `.1`)
   - Nodes: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
 
@@ -149,6 +150,7 @@ Wireless Modem (Control/Status)
 ## Troubleshooting
 - **Timeout/Offline**: Prüfe Heartbeat-Intervalle und Wireless-Reichweite.
 - **Falsche Modem-Seite**: `wireless_modem`/`wired_modem` in `config.lua` prüfen.
+- **Module not found**: Prüfe, ob `/xreactor/shared/constants.lua` vorhanden ist und ob der Bootstrap vor allen `require`-Aufrufen läuft (Entry-File lädt `/xreactor/core/bootstrap.lua` zuerst). Bei aktivem `BOOTSTRAP_LOG_ENABLED` kontrolliere `/xreactor_logs/loader_<role>.log` für `package.path`, `shell.dir()` und die tatsächlich versuchten Pfade.
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
@@ -159,6 +161,7 @@ Wireless Modem (Control/Status)
 - **HTML-Response**: Weist auf falsche URL (z. B. GitHub-Blob) oder Proxy hin – der Installer erwartet RAW-Links.
 - **404 bei Dateien**: Wenn ein gepinnter Commit nicht mehr passt, fällt der Installer automatisch auf `main` zurück, statt weiter 404s zu produzieren.
 - **HTML statt Lua**: Installer bricht ab (meist falscher Link oder GitHub-Rate-Limit).
+- **Installer core download failed**: Prüfe HTTP-API/Timeouts und ob `xreactor/installer/release.lua` (Hash/Size) zum tatsächlichen `installer_core.lua` passt.
 - **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien) und normalisiert auf String.
 - **SAFE UPDATE Abbruch**: Bei Download-Problemen kann der Nutzer abbrechen; das System bleibt unverändert.
 - **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
