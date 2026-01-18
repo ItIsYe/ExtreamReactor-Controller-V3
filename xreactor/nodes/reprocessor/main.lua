@@ -8,7 +8,7 @@ local CONFIG = {
 }
 
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup()
+bootstrap.setup({ role = "reprocessor" })
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")

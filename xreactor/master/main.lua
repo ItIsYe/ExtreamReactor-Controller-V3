@@ -7,7 +7,7 @@ local CONFIG = {
 }
 
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup()
+bootstrap.setup({ role = "master" })
 
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
