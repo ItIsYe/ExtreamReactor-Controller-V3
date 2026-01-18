@@ -24,7 +24,6 @@ local CONFIG = {
 
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
 bootstrap.setup()
-_G = _G or {}
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
 local function ensure_turbine_ctrl(name)

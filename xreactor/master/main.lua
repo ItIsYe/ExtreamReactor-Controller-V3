@@ -6,7 +6,9 @@ local CONFIG = {
   NODE_ID_PATH = "/xreactor/config/node_id.txt" -- Node ID storage path.
 }
 
-_G = _G or {}
+local bootstrap = dofile("/xreactor/core/bootstrap.lua")
+bootstrap.setup()
+
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
 local function ensure_turbine_ctrl(name)
@@ -39,9 +41,6 @@ local function ensure_turbine_ctrl(name)
 end
 
 _G.ensure_turbine_ctrl = ensure_turbine_ctrl
-
-local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup()
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local protocol = require("core.protocol")

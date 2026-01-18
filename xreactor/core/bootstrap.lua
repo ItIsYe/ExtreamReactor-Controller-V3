@@ -8,6 +8,7 @@ local CONFIG = {
 }
 
 local native_require = rawget(_G, "require")
+local searcher_installed = false
 
 local function resolve_log_enabled()
   if settings and settings.get and CONFIG.LOG_SETTINGS_KEY then
@@ -44,6 +45,23 @@ local function log_line(level, message)
   end
 end
 
+local function resolve_global()
+  local global = _G
+  if type(global) ~= "table" then
+    global = _ENV
+  end
+  if type(global) ~= "table" then
+    global = {}
+  end
+  if _G ~= global then
+    _G = global
+  end
+  if type(_ENV) == "table" then
+    _ENV._G = global
+  end
+  return global
+end
+
 local function module_to_path(module_name)
   if type(module_name) ~= "string" then
     return nil
@@ -67,7 +85,7 @@ local function load_module(path, module_name)
   if not content then
     return nil, "module not found"
   end
-  local env = setmetatable({ require = bootstrap.require }, { __index = _G })
+  local env = setmetatable({ require = bootstrap.require }, { __index = resolve_global() })
   local loader, err = load(content, "=" .. path, "t", env)
   if not loader then
     return nil, err
@@ -99,7 +117,28 @@ local function log_environment()
   log_line("INFO", "root=" .. CONFIG.BASE_DIR)
 end
 
+local function xreactor_searcher(module_name)
+  local path = module_to_path(module_name)
+  if not (path and fs and fs.exists and fs.exists(path)) then
+    log_line("WARN", "searcher miss " .. module_name .. " -> " .. tostring(path))
+    return nil, "\n\tno file '" .. tostring(path) .. "'"
+  end
+  local content = read_file(path)
+  if not content then
+    log_line("WARN", "searcher unreadable " .. module_name .. " -> " .. path)
+    return nil, "\n\tno file '" .. path .. "'"
+  end
+  local env = setmetatable({ require = bootstrap.require }, { __index = resolve_global() })
+  local loader, err = load(content, "=" .. path, "t", env)
+  if not loader then
+    return nil, "\n\tload error '" .. path .. "': " .. tostring(err)
+  end
+  log_line("INFO", "searcher load " .. module_name .. " -> " .. path)
+  return loader, path
+end
+
 function bootstrap.require(module_name)
+  resolve_global()
   local loaded = rawget(_G, "__xreactor_loaded")
   if not loaded then
     loaded = {}
@@ -142,9 +181,14 @@ function bootstrap.require(module_name)
 end
 
 function bootstrap.setup()
+  resolve_global()
   rawset(_G, "require", bootstrap.require)
   if type(_ENV) == "table" then
     _ENV.require = bootstrap.require
+  end
+  if rawget(_G, "package") and type(package.searchers) == "table" and not searcher_installed then
+    table.insert(package.searchers, 1, xreactor_searcher)
+    searcher_installed = true
   end
   log_environment()
 end
