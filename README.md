@@ -48,8 +48,14 @@ Wireless Modem (Control/Status)
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
 - **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Das `require` wird zentral überschrieben und lädt Module deterministisch aus `/xreactor/<modul>.lua`.
+- **Projekt-Root**: Alle Module werden relativ zum festen Root `/xreactor` geladen.
+- **Module-Struktur**:
+  - `xreactor/shared/*` (z. B. `shared.constants`)
+  - `xreactor/core/*` (z. B. `core.utils`)
+  - `xreactor/master/*` (z. B. `master.main`)
+  - `xreactor/nodes/*` (z. B. `nodes.rt.main`)
 - **Keine globalen Injects**: Alle Module nutzen lokale Requires, z. B. `local utils = require("core.utils")`.
-- **Debug-Log**: Bei aktiviertem Debug-Logging schreibt der Bootstrap eine Datei `/xreactor/logs/bootstrap.log` mit Environment-Infos.
+- **Debug-Log**: Bei aktiviertem Debug-Logging schreibt der Bootstrap eine Datei `/xreactor/logs/bootstrap.log` mit Environment-Infos, Root-Pfad und jedem Modul-Ladeversuch. Wenn vorhanden, wird auch `package.path` mitgeloggt.
 - **Empfohlene Nutzung**:
   ```
   local bootstrap = dofile("/xreactor/core/bootstrap.lua")
@@ -83,6 +89,7 @@ Wireless Modem (Control/Status)
 - **Protokoll-Änderung**: Wenn das Update eine neue Major-Protokollversion enthält, bricht SAFE UPDATE ab, um inkonsistente Master/Node-Versionen zu vermeiden.
 - **Core-Dateien Pflicht**: SAFE UPDATE bricht mit klarer Meldung ab, falls das Manifest essentielle Core-Files (z. B. `xreactor/core/utils.lua`) nicht enthält oder Pfade falsch sind.
 - **Datei-Renames/Migrationen**: Wenn Dateien umbenannt/verschoben werden, müssen Migrationsregeln hinterlegt sein – andernfalls wird der Update-Lauf abgebrochen, um halbfertige Zustände zu verhindern.
+- **Loader-Garantie**: SAFE UPDATE stellt sicher, dass der Loader (`xreactor/core/bootstrap.lua`) und alle abhängigen Core-Module aus dem Manifest vorhanden sind, bevor ein Start empfohlen wird.
 
 **FULL REINSTALL (alles neu)**
 - Installer erneut ausführen → Menü **FULL REINSTALL** wählen.

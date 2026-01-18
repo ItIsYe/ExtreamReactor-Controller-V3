@@ -67,7 +67,8 @@ local function load_module(path, module_name)
   if not content then
     return nil, "module not found"
   end
-  local loader, err = load(content, "=" .. path, "t", _G)
+  local env = setmetatable({ require = bootstrap.require }, { __index = _G })
+  local loader, err = load(content, "=" .. path, "t", env)
   if not loader then
     return nil, err
   end
@@ -92,6 +93,10 @@ local function log_environment()
     "shell=" .. tostring(rawget(_G, "shell") ~= nil)
   }
   log_line("INFO", "env: " .. table.concat(entries, ", "))
+  if rawget(_G, "package") and package.path then
+    log_line("INFO", "package.path=" .. tostring(package.path))
+  end
+  log_line("INFO", "root=" .. CONFIG.BASE_DIR)
 end
 
 function bootstrap.require(module_name)
@@ -119,6 +124,7 @@ function bootstrap.require(module_name)
     local value, err = load_module(path, module_name)
     if value == nil then
       loading[module_name] = nil
+      log_line("ERROR", "load failed " .. module_name .. ": " .. tostring(err))
       error("Failed loading " .. module_name .. ": " .. tostring(err))
     end
     result = value
@@ -127,6 +133,7 @@ function bootstrap.require(module_name)
     result = native_require(module_name)
   else
     loading[module_name] = nil
+    log_line("ERROR", "resolve failed " .. module_name)
     error("Unable to resolve module " .. tostring(module_name))
   end
   loaded[module_name] = result
@@ -136,6 +143,9 @@ end
 
 function bootstrap.setup()
   rawset(_G, "require", bootstrap.require)
+  if type(_ENV) == "table" then
+    _ENV.require = bootstrap.require
+  end
   log_environment()
 end
 
