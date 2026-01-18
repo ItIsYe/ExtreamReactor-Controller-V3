@@ -15,6 +15,7 @@ bootstrap.setup({
   log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
   log_path = CONFIG.BOOTSTRAP_LOG_PATH
 })
+local require = bootstrap.require
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
