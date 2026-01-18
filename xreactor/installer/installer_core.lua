@@ -39,8 +39,8 @@ local CONFIG = {
   BASE_CACHE_PATH = "/xreactor/.cache/source.lua", -- Cache for last good base URL.
   PROTOCOL_ABORT_ON_MAJOR_CHANGE = true, -- Abort SAFE UPDATE if protocol major version changes.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
-  LOG_ENABLED = false, -- Enables installer file logging to /xreactor/logs/installer.log.
-  LOG_PATH = "/xreactor/logs/installer.log", -- Installer log file path.
+  LOG_ENABLED = false, -- Enables installer file logging to /xreactor_logs/installer.log.
+  LOG_PATH = "/xreactor_logs/installer.log", -- Installer log file path.
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER", -- Installer log prefix.
@@ -54,7 +54,9 @@ local CONFIG = {
     "xreactor/core/state_machine.lua",
     "xreactor/core/trends.lua",
     "xreactor/core/ui.lua",
-    "xreactor/core/utils.lua"
+    "xreactor/core/utils.lua",
+    "xreactor/shared/colors.lua",
+    "xreactor/shared/constants.lua"
   },
   FILE_MIGRATIONS = { -- Optional migrations for renamed files.
     -- { from = "xreactor/core/old.lua", to = "xreactor/core/new.lua" }
@@ -1850,6 +1852,7 @@ local function verify_integrity(manifest, role, cfg_path)
     "xreactor/core/network.lua",
     "xreactor/core/protocol.lua",
     "xreactor/core/utils.lua",
+    "xreactor/shared/colors.lua",
     "xreactor/shared/constants.lua",
     "xreactor/installer/installer.lua"
   }
