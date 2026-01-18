@@ -3,6 +3,8 @@ local CONFIG = {
   LOG_NAME = "rt", -- Log file name for this node.
   LOG_PREFIX = "RT", -- Default log prefix for RT events.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
+  BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
+  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file.
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
   TARGET_RPM = 900, -- Default turbine RPM target.
   RPM_TOLERANCE = 20, -- RPM tolerance for control loops.
@@ -23,7 +25,11 @@ local CONFIG = {
 }
 
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup()
+bootstrap.setup({
+  role = "rt",
+  log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
+  log_path = CONFIG.BOOTSTRAP_LOG_PATH
+})
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
 local function ensure_turbine_ctrl(name)

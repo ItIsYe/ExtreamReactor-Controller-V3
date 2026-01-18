@@ -3,11 +3,17 @@ local CONFIG = {
   LOG_NAME = "master", -- Log file name for this role.
   LOG_PREFIX = "MASTER", -- Default log prefix for master events.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
+  BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
+  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file.
   NODE_ID_PATH = "/xreactor/config/node_id.txt" -- Node ID storage path.
 }
 
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup()
+bootstrap.setup({
+  role = "master",
+  log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
+  log_path = CONFIG.BOOTSTRAP_LOG_PATH
+})
 
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
