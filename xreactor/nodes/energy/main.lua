@@ -21,6 +21,7 @@ local protocol = require("core.protocol")
 local utils = require("core.utils")
 local network_lib = require("core.network")
 local config = require("nodes.energy.config")
+config.heartbeat_interval = config.heartbeat_interval or 2
 
 -- Initialize file logging early to capture startup events.
 local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
