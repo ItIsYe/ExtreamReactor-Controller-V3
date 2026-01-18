@@ -47,8 +47,9 @@ Wireless Modem (Control/Status)
 
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
-- **Bootstrap-Aufgabe**: Setzt **einheitlich** `package.path` (inkl. `/xreactor/?.lua`, `/xreactor/?/?.lua`, `/xreactor/?/init.lua`), damit `require("core.*")`, `require("shared.*")`, `require("master.*")` und `require("nodes.*")` immer funktionieren.
+- **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Das `require` wird zentral überschrieben und lädt Module deterministisch aus `/xreactor/<modul>.lua`.
 - **Keine globalen Injects**: Alle Module nutzen lokale Requires, z. B. `local utils = require("core.utils")`.
+- **Debug-Log**: Bei aktiviertem Debug-Logging schreibt der Bootstrap eine Datei `/xreactor/logs/bootstrap.log` mit Environment-Infos.
 - **Empfohlene Nutzung**:
   ```
   local bootstrap = dofile("/xreactor/core/bootstrap.lua")
