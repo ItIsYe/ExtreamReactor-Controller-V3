@@ -121,6 +121,13 @@ Wireless Modem (Control/Status)
 - **RT-NODE**: `xreactor/nodes/rt/config.lua`
   - `reactors`, `turbines`: Namen der Peripherals.
   - `wireless_modem`, `wired_modem`: Modem-Seiten.
+- **ENERGY/WATER/FUEL/REPROCESSOR**: `xreactor/nodes/<role>/config.lua`
+  - `heartbeat_interval`: Sekunden zwischen Status-Heartbeats (Default: **2** bei Nodes, **5** beim MASTER).
+  - `wireless_modem`: Wireless-Modem-Seite (Default: `right`).
+  - **ENERGY**: `matrix`, `cubes` (Mekanism Energy-Peripherals).
+  - **WATER**: `loop_tanks`, `target_volume` (Tank-Setpoint).
+  - **FUEL**: `storage_bus`, `minimum_reserve` (Default: **2000**, kompatibel mit `target`).
+  - **REPROCESSOR**: `buffers` (Buffer-Peripherals).
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
 - **Persistenz**:
   - `node_id`: `/xreactor/config/node_id.txt` (immer String)
@@ -136,6 +143,7 @@ Wireless Modem (Control/Status)
 - Aktivieren über:
   - Config-Datei der Rolle (`debug_logging = true`), oder
   - Settings API: `settings.set("xreactor.debug_logging", true)` + `settings.save()`.
+- **Config-Fallback-Logs**: Falls eine Config fehlt/invalid ist, schreibt der Node automatisch eine Warnung ins Log und nutzt Defaults, um Start-Crashes zu vermeiden.
 - Logfiles:
 - Bootstrap: `/xreactor_logs/installer_bootstrap.log` (Rotation `.1`)
 - Installer-Core: `/xreactor_logs/installer.log` (Rotation `.1`)

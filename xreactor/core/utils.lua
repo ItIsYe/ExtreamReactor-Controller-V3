@@ -10,6 +10,19 @@ local utils = {}
 
 local logger = require("core.logger")
 
+local function read_file(path)
+  if not path or not fs.exists(path) then
+    return nil
+  end
+  local file = fs.open(path, "r")
+  if not file then
+    return nil
+  end
+  local content = file.readAll()
+  file.close()
+  return content
+end
+
 local function sanitize_snapshot(value, active)
   local value_type = type(value)
   if value_type == "string" or value_type == "number" or value_type == "boolean" or value_type == "nil" then
@@ -65,6 +78,77 @@ function utils.read_config(path, defaults)
     return data
   end
   return defaults or {}
+end
+
+function utils.deep_copy(value, seen)
+  if type(value) ~= "table" then
+    return value
+  end
+  seen = seen or {}
+  if seen[value] then
+    return seen[value]
+  end
+  local copy = {}
+  seen[value] = copy
+  for key, item in pairs(value) do
+    copy[utils.deep_copy(key, seen)] = utils.deep_copy(item, seen)
+  end
+  return copy
+end
+
+function utils.merge_defaults(target, defaults)
+  local changed = false
+  for key, value in pairs(defaults or {}) do
+    if target[key] == nil then
+      target[key] = value
+      changed = true
+    elseif type(target[key]) == "table" and type(value) == "table" then
+      local inner_changed = utils.merge_defaults(target[key], value)
+      changed = changed or inner_changed
+    end
+  end
+  return changed
+end
+
+function utils.load_config(path, defaults)
+  local meta = { path = path, source = "defaults" }
+  local fallback = utils.deep_copy(defaults or {})
+  if not path then
+    meta.reason = "missing path"
+    return fallback, meta
+  end
+  if not fs.exists(path) then
+    meta.reason = "missing"
+    return fallback, meta
+  end
+  local content = read_file(path)
+  if not content then
+    meta.reason = "unreadable"
+    return fallback, meta
+  end
+  local loader, err = load(content, "config", "t", {})
+  if loader then
+    local ok, data = pcall(loader)
+    if ok and type(data) == "table" then
+      utils.merge_defaults(data, defaults)
+      meta.source = "lua"
+      return data, meta
+    end
+    if not ok then
+      err = data
+    end
+  end
+  if textutils and textutils.unserialize then
+    local ok, data = pcall(textutils.unserialize, content)
+    if ok and type(data) == "table" then
+      utils.merge_defaults(data, defaults)
+      meta.source = "serialized"
+      meta.reason = "lua invalid"
+      return data, meta
+    end
+  end
+  meta.reason = err or "invalid"
+  return fallback, meta
 end
 
 function utils.write_config(path, tbl)
