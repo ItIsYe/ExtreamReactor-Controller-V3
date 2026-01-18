@@ -45,6 +45,18 @@ Wireless Modem (Control/Status)
 - **Protokoll-Versionierung**: `proto_ver` nutzt `major.minor` (z. B. `1.0`). Gleiche Major-Versionen sind kompatibel, Minor-Abweichungen werden toleriert.
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
 
+## Modul-Loading & Require-Konzept
+- **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
+- **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Das `require` wird zentral überschrieben und lädt Module deterministisch aus `/xreactor/<modul>.lua`.
+- **Keine globalen Injects**: Alle Module nutzen lokale Requires, z. B. `local utils = require("core.utils")`.
+- **Debug-Log**: Bei aktiviertem Debug-Logging schreibt der Bootstrap eine Datei `/xreactor/logs/bootstrap.log` mit Environment-Infos.
+- **Empfohlene Nutzung**:
+  ```
+  local bootstrap = dofile("/xreactor/core/bootstrap.lua")
+  bootstrap.setup()
+  local utils = require("core.utils")
+  ```
+
 ## Installation, Safe Update & Full Reinstall
 **Erstinstallation / Vollinstallation**
 1. Installer herunterladen und ausführen:
@@ -69,6 +81,8 @@ Wireless Modem (Control/Status)
 - Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
 - Installer speichert nur sichere Plain-Data-Snapshots (keine shared refs); Backup/Cache-Indizes sind textbasiert.
 - **Protokoll-Änderung**: Wenn das Update eine neue Major-Protokollversion enthält, bricht SAFE UPDATE ab, um inkonsistente Master/Node-Versionen zu vermeiden.
+- **Core-Dateien Pflicht**: SAFE UPDATE bricht mit klarer Meldung ab, falls das Manifest essentielle Core-Files (z. B. `xreactor/core/utils.lua`) nicht enthält oder Pfade falsch sind.
+- **Datei-Renames/Migrationen**: Wenn Dateien umbenannt/verschoben werden, müssen Migrationsregeln hinterlegt sein – andernfalls wird der Update-Lauf abgebrochen, um halbfertige Zustände zu verhindern.
 
 **FULL REINSTALL (alles neu)**
 - Installer erneut ausführen → Menü **FULL REINSTALL** wählen.

@@ -40,7 +40,8 @@ end
 
 _G.ensure_turbine_ctrl = ensure_turbine_ctrl
 
-package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
+local bootstrap = dofile("/xreactor/core/bootstrap.lua")
+bootstrap.setup()
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local protocol = require("core.protocol")
