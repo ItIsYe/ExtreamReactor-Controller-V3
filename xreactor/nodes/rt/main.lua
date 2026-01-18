@@ -30,6 +30,7 @@ bootstrap.setup({
   log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
   log_path = CONFIG.BOOTSTRAP_LOG_PATH
 })
+local require = bootstrap.require
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
 local function ensure_turbine_ctrl(name)

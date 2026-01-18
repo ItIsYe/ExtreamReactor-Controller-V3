@@ -858,7 +858,7 @@ local function download_file_with_retry(urls, expected_hash, hash_algo, opts)
     if expected_hash then
       local actual = compute_hash(body, hash_algo)
       if actual ~= expected_hash then
-        return false, "checksum mismatch"
+        return false, ("checksum mismatch expected=%s actual=%s"):format(expected_hash, actual)
       end
     end
     return true
@@ -1919,6 +1919,11 @@ local function safe_update()
       return
     end
     hash_algo = resolve_hash_algo(manifest, release)
+    print(("Debug: manifest source=%s base=%s hash=%s"):format(
+      tostring(current_base_source or "unknown"),
+      tostring(current_base_url or "unknown"),
+      tostring(hash_algo or "unknown")
+    ))
     ensure_base_dirs()
 
     log("INFO", "SAFE UPDATE started for role " .. tostring(role))
@@ -2086,6 +2091,11 @@ local function full_reinstall()
       return
     end
     hash_algo = resolve_hash_algo(manifest, release)
+    print(("Debug: manifest source=%s base=%s hash=%s"):format(
+      tostring(current_base_source or "unknown"),
+      tostring(current_base_url or "unknown"),
+      tostring(hash_algo or "unknown")
+    ))
     ensure_base_dirs()
     log("INFO", "FULL REINSTALL started")
 
