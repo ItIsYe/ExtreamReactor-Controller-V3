@@ -7,7 +7,8 @@ local CONFIG = {
   RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
 }
 
-package.path = (package.path or "") .. ";/xreactor/?.lua;/xreactor/?/?.lua;/xreactor/?/init.lua"
+local bootstrap = dofile("/xreactor/core/bootstrap.lua")
+bootstrap.setup()
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
