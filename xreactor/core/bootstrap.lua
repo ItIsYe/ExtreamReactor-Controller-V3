@@ -9,13 +9,17 @@ local CONFIG = {
 
 local state = {
   base_dir = CONFIG.BASE_DIR,
-  log_path = CONFIG.LOG_PATH
+  log_path = CONFIG.LOG_PATH,
+  log_enabled_override = nil
 }
 
 local native_require = rawget(_G, "require")
 local searcher_installed = false
 
 local function resolve_log_enabled()
+  if state.log_enabled_override ~= nil then
+    return state.log_enabled_override == true
+  end
   if settings and settings.get and CONFIG.LOG_SETTINGS_KEY then
     return settings.get(CONFIG.LOG_SETTINGS_KEY) == true
   end
@@ -248,6 +252,9 @@ function bootstrap.setup(opts)
   opts = opts or {}
   if opts.base_dir then
     state.base_dir = opts.base_dir
+  end
+  if opts.log_enabled ~= nil then
+    state.log_enabled_override = opts.log_enabled == true
   end
   if opts.log_path then
     state.log_path = opts.log_path

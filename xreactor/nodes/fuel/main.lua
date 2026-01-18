@@ -3,12 +3,18 @@ local CONFIG = {
   LOG_NAME = "fuel", -- Log file name for this node.
   LOG_PREFIX = "FUEL", -- Default log prefix for fuel events.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
+  BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
+  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file.
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
   RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
 }
 
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup({ role = "fuel" })
+bootstrap.setup({
+  role = "fuel",
+  log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
+  log_path = CONFIG.BOOTSTRAP_LOG_PATH
+})
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
