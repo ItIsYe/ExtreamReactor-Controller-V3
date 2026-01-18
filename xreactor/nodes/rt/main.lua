@@ -6,6 +6,7 @@ local CONFIG = {
   BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
   BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor_logs/loader_rt.log).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
+  CONFIG_PATH = "/xreactor/nodes/rt/config.lua", -- Config file path.
   TARGET_RPM = 900, -- Default turbine RPM target.
   RPM_TOLERANCE = 20, -- RPM tolerance for control loops.
   MIN_FLOW = 200, -- Minimum turbine flow.
@@ -79,21 +80,186 @@ local function log(level, message)
   utils.log(CONFIG.LOG_PREFIX, message, level)
 end
 
-local function loadConfig()
-  local path = "/xreactor/nodes/rt/config.lua"
-  if not fs.exists(path) then
-    error("RT config.lua not found: " .. path)
-  end
-  local f = fs.open(path, "r")
-  local content = f.readAll()
-  f.close()
+local DEFAULT_CONFIG = {
+  role = constants.roles.RT_NODE, -- Node role identifier.
+  node_id = "RT-1", -- Default node_id used if none is set.
+  debug_logging = false, -- Enable debug logging to /xreactor/logs/rt.log.
+  wireless_modem = "right", -- Default wireless modem side.
+  wired_modem = nil, -- Optional wired modem side.
+  modem = "right", -- Default modem side or peripheral name.
+  reactors = { "BigReactors-Reactor_6" }, -- Default reactor peripheral names.
+  turbines = { "BigReactors-Turbine_327", "BigReactors-Turbine_426" }, -- Default turbine peripheral names.
+  heartbeat_interval = 2, -- Seconds between status heartbeats.
+  channels = {
+    control = constants.channels.CONTROL, -- Control channel for MASTER commands.
+    status = constants.channels.STATUS -- Status channel for telemetry.
+  },
+  safety = {
+    max_temperature = 2000, -- Maximum reactor temperature before SCRAM.
+    max_rpm = 1800, -- Maximum turbine RPM.
+    min_water = 0.2 -- Minimum water ratio before SCRAM.
+  },
+  autonom = {
+    control_rod_level = 70, -- Default rod level in autonom mode.
+    max_rpm = CONFIG.TARGET_RPM, -- Max RPM in autonom mode.
+    min_flow = CONFIG.MIN_FLOW, -- Min flow in autonom mode.
+    max_flow = CONFIG.MAX_FLOW, -- Max flow in autonom mode.
+    flow_step = CONFIG.FLOW_STEP, -- Flow step in autonom mode.
+    ramp_step = CONFIG.FLOW_STEP, -- Ramp step in autonom mode.
+    min_rods = CONFIG.ROD_MIN, -- Minimum rod insertion.
+    max_rods = CONFIG.ROD_MAX, -- Maximum rod insertion.
+    reactor_adjust_interval = CONFIG.ROD_TICK, -- Reactor adjust interval.
+    steam_reserve = 5000, -- Steam reserve threshold.
+    steam_deficit = 5000 -- Steam deficit threshold.
+  },
+  monitor_interval = 2, -- Monitor update interval (seconds).
+  monitor_scale = 0.5, -- Monitor UI scale.
+  status_interval = 5, -- Status log interval (seconds).
+  status_log = false -- Enable periodic status log output.
+}
 
-  local fn, err = load(content, "rt_config", "t", {})
-  if not fn then error(err) end
-  return fn()
+local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
+local config_warnings = {}
+
+local function add_config_warning(message)
+  table.insert(config_warnings, message)
 end
 
-local config = loadConfig()
+local function validate_config(config_values, defaults)
+  local normalized = utils.normalize_node_id(config_values.node_id)
+  if normalized == "UNKNOWN" then
+    config_values.node_id = defaults.node_id
+    add_config_warning("node_id missing/invalid; defaulting to " .. tostring(defaults.node_id))
+  else
+    config_values.node_id = normalized
+  end
+  if type(config_values.role) ~= "string" then
+    config_values.role = defaults.role
+    add_config_warning("role missing/invalid; defaulting to " .. tostring(defaults.role))
+  end
+  if type(config_values.debug_logging) ~= "boolean" then
+    config_values.debug_logging = defaults.debug_logging
+    add_config_warning("debug_logging missing/invalid; defaulting to " .. tostring(defaults.debug_logging))
+  end
+  if type(config_values.wireless_modem) ~= "string" then
+    config_values.wireless_modem = defaults.wireless_modem
+    add_config_warning("wireless_modem missing/invalid; defaulting to " .. tostring(defaults.wireless_modem))
+  end
+  if config_values.wired_modem ~= nil and type(config_values.wired_modem) ~= "string" then
+    config_values.wired_modem = defaults.wired_modem
+    add_config_warning("wired_modem invalid; defaulting to " .. tostring(defaults.wired_modem))
+  end
+  if config_values.modem ~= nil and type(config_values.modem) ~= "string" then
+    config_values.modem = defaults.modem
+    add_config_warning("modem invalid; defaulting to " .. tostring(defaults.modem))
+  end
+  if type(config_values.reactors) ~= "table" then
+    config_values.reactors = utils.deep_copy(defaults.reactors)
+    add_config_warning("reactors missing/invalid; defaulting to configured list")
+  end
+  if type(config_values.turbines) ~= "table" then
+    config_values.turbines = utils.deep_copy(defaults.turbines)
+    add_config_warning("turbines missing/invalid; defaulting to configured list")
+  end
+  if type(config_values.heartbeat_interval) ~= "number" or config_values.heartbeat_interval <= 0 then
+    config_values.heartbeat_interval = defaults.heartbeat_interval
+    add_config_warning("heartbeat_interval missing/invalid; defaulting to " .. tostring(defaults.heartbeat_interval))
+  end
+  if type(config_values.channels) ~= "table" then
+    config_values.channels = utils.deep_copy(defaults.channels)
+    add_config_warning("channels missing/invalid; defaulting to control/status defaults")
+  end
+  if type(config_values.channels.control) ~= "number" then
+    config_values.channels.control = defaults.channels.control
+    add_config_warning("channels.control missing/invalid; defaulting to " .. tostring(defaults.channels.control))
+  end
+  if type(config_values.channels.status) ~= "number" then
+    config_values.channels.status = defaults.channels.status
+    add_config_warning("channels.status missing/invalid; defaulting to " .. tostring(defaults.channels.status))
+  end
+  if type(config_values.safety) ~= "table" then
+    config_values.safety = utils.deep_copy(defaults.safety)
+    add_config_warning("safety missing/invalid; defaulting to safety defaults")
+  end
+  if type(config_values.safety.max_temperature) ~= "number" then
+    config_values.safety.max_temperature = defaults.safety.max_temperature
+    add_config_warning("safety.max_temperature missing/invalid; defaulting to " .. tostring(defaults.safety.max_temperature))
+  end
+  if type(config_values.safety.max_rpm) ~= "number" then
+    config_values.safety.max_rpm = defaults.safety.max_rpm
+    add_config_warning("safety.max_rpm missing/invalid; defaulting to " .. tostring(defaults.safety.max_rpm))
+  end
+  if type(config_values.safety.min_water) ~= "number" then
+    config_values.safety.min_water = defaults.safety.min_water
+    add_config_warning("safety.min_water missing/invalid; defaulting to " .. tostring(defaults.safety.min_water))
+  end
+  if type(config_values.autonom) ~= "table" then
+    config_values.autonom = utils.deep_copy(defaults.autonom)
+    add_config_warning("autonom missing/invalid; defaulting to autonom defaults")
+  end
+  if type(config_values.autonom.control_rod_level) ~= "number" then
+    config_values.autonom.control_rod_level = defaults.autonom.control_rod_level
+    add_config_warning("autonom.control_rod_level missing/invalid; defaulting to " .. tostring(defaults.autonom.control_rod_level))
+  end
+  if type(config_values.autonom.max_rpm) ~= "number" then
+    config_values.autonom.max_rpm = defaults.autonom.max_rpm
+    add_config_warning("autonom.max_rpm missing/invalid; defaulting to " .. tostring(defaults.autonom.max_rpm))
+  end
+  if type(config_values.autonom.min_flow) ~= "number" then
+    config_values.autonom.min_flow = defaults.autonom.min_flow
+    add_config_warning("autonom.min_flow missing/invalid; defaulting to " .. tostring(defaults.autonom.min_flow))
+  end
+  if type(config_values.autonom.max_flow) ~= "number" then
+    config_values.autonom.max_flow = defaults.autonom.max_flow
+    add_config_warning("autonom.max_flow missing/invalid; defaulting to " .. tostring(defaults.autonom.max_flow))
+  end
+  if type(config_values.autonom.flow_step) ~= "number" then
+    config_values.autonom.flow_step = defaults.autonom.flow_step
+    add_config_warning("autonom.flow_step missing/invalid; defaulting to " .. tostring(defaults.autonom.flow_step))
+  end
+  if type(config_values.autonom.ramp_step) ~= "number" then
+    config_values.autonom.ramp_step = defaults.autonom.ramp_step
+    add_config_warning("autonom.ramp_step missing/invalid; defaulting to " .. tostring(defaults.autonom.ramp_step))
+  end
+  if type(config_values.autonom.min_rods) ~= "number" then
+    config_values.autonom.min_rods = defaults.autonom.min_rods
+    add_config_warning("autonom.min_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.min_rods))
+  end
+  if type(config_values.autonom.max_rods) ~= "number" then
+    config_values.autonom.max_rods = defaults.autonom.max_rods
+    add_config_warning("autonom.max_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.max_rods))
+  end
+  if type(config_values.autonom.reactor_adjust_interval) ~= "number" then
+    config_values.autonom.reactor_adjust_interval = defaults.autonom.reactor_adjust_interval
+    add_config_warning("autonom.reactor_adjust_interval missing/invalid; defaulting to " .. tostring(defaults.autonom.reactor_adjust_interval))
+  end
+  if type(config_values.autonom.steam_reserve) ~= "number" then
+    config_values.autonom.steam_reserve = defaults.autonom.steam_reserve
+    add_config_warning("autonom.steam_reserve missing/invalid; defaulting to " .. tostring(defaults.autonom.steam_reserve))
+  end
+  if type(config_values.autonom.steam_deficit) ~= "number" then
+    config_values.autonom.steam_deficit = defaults.autonom.steam_deficit
+    add_config_warning("autonom.steam_deficit missing/invalid; defaulting to " .. tostring(defaults.autonom.steam_deficit))
+  end
+  if type(config_values.monitor_interval) ~= "number" or config_values.monitor_interval <= 0 then
+    config_values.monitor_interval = defaults.monitor_interval
+    add_config_warning("monitor_interval missing/invalid; defaulting to " .. tostring(defaults.monitor_interval))
+  end
+  if type(config_values.monitor_scale) ~= "number" or config_values.monitor_scale <= 0 then
+    config_values.monitor_scale = defaults.monitor_scale
+    add_config_warning("monitor_scale missing/invalid; defaulting to " .. tostring(defaults.monitor_scale))
+  end
+  if type(config_values.status_interval) ~= "number" or config_values.status_interval <= 0 then
+    config_values.status_interval = defaults.status_interval
+    add_config_warning("status_interval missing/invalid; defaulting to " .. tostring(defaults.status_interval))
+  end
+  if config_values.status_log ~= nil and type(config_values.status_log) ~= "boolean" then
+    config_values.status_log = defaults.status_log
+    add_config_warning("status_log invalid; defaulting to " .. tostring(defaults.status_log))
+  end
+end
+
+validate_config(config, DEFAULT_CONFIG)
 -- Initialize file logging early to capture startup events.
 local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
 local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
@@ -101,8 +267,17 @@ local debug_enabled = config.debug_logging
 if CONFIG.DEBUG_LOG_ENABLED ~= nil then
   debug_enabled = CONFIG.DEBUG_LOG_ENABLED
 end
+if (config_meta and config_meta.reason) or #config_warnings > 0 then
+  debug_enabled = true
+end
 utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled })
 log(INFO, "Startup")
+if config_meta and config_meta.reason then
+  log(WARN, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.")
+end
+for _, warning in ipairs(config_warnings) do
+  log(WARN, warning)
+end
 local TARGET_RPM = CONFIG.TARGET_RPM
 local RPM_TOL = CONFIG.RPM_TOLERANCE
 local MIN_FLOW = CONFIG.MIN_FLOW
@@ -125,12 +300,12 @@ local last_rod_direction = nil
 local last_reactor_demand = 0
 local steam_tank_name = nil
 config.safety = config.safety or {}
-config.safety.max_temperature = config.safety.max_temperature or 2000
-config.safety.max_rpm = config.safety.max_rpm or 1800
-config.safety.min_water = config.safety.min_water or 0.2
-config.heartbeat_interval = config.heartbeat_interval or 2
+config.safety.max_temperature = config.safety.max_temperature or DEFAULT_CONFIG.safety.max_temperature
+config.safety.max_rpm = config.safety.max_rpm or DEFAULT_CONFIG.safety.max_rpm
+config.safety.min_water = config.safety.min_water or DEFAULT_CONFIG.safety.min_water
+config.heartbeat_interval = config.heartbeat_interval or DEFAULT_CONFIG.heartbeat_interval
 config.autonom = config.autonom or {}
-config.autonom.control_rod_level = config.autonom.control_rod_level or 70
+config.autonom.control_rod_level = config.autonom.control_rod_level or DEFAULT_CONFIG.autonom.control_rod_level
 config.autonom.target_rpm = TARGET_RPM
 config.autonom.max_rpm = math.max(config.autonom.max_rpm or TARGET_RPM, TARGET_RPM)
 config.autonom.min_flow = math.max(config.autonom.min_flow or MIN_FLOW, MIN_FLOW)
@@ -140,10 +315,10 @@ config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
 config.autonom.min_rods = config.autonom.min_rods or ROD_MIN
 config.autonom.max_rods = config.autonom.max_rods or ROD_MAX
 config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or ROD_TICK
-config.autonom.steam_reserve = config.autonom.steam_reserve or 5000
-config.autonom.steam_deficit = config.autonom.steam_deficit or 5000
-config.monitor_interval = config.monitor_interval or 2
-config.monitor_scale = config.monitor_scale or 0.5
+config.autonom.steam_reserve = config.autonom.steam_reserve or DEFAULT_CONFIG.autonom.steam_reserve
+config.autonom.steam_deficit = config.autonom.steam_deficit or DEFAULT_CONFIG.autonom.steam_deficit
+config.monitor_interval = config.monitor_interval or DEFAULT_CONFIG.monitor_interval
+config.monitor_scale = config.monitor_scale or DEFAULT_CONFIG.monitor_scale
 local hb = config.heartbeat_interval
 
 local network
