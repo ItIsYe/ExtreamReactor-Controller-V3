@@ -8,7 +8,7 @@ return {
   installer_hash = "a629c17c",
   installer_size_bytes = 72760,
   files = {
-    { path = "xreactor/core/bootstrap.lua", size_bytes = 8103, hash = "d06b4623" },
+    { path = "xreactor/core/bootstrap.lua", size_bytes = 8346, hash = "9a3af341" },
     { path = "xreactor/core/network.lua", size_bytes = 3241, hash = "870f6483" },
     { path = "xreactor/core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
     { path = "xreactor/core/utils.lua", size_bytes = 4487, hash = "f9f8e6e5" },

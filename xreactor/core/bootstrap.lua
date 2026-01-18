@@ -72,6 +72,19 @@ local function resolve_global()
   return global
 end
 
+local function ensure_package_table()
+  resolve_global()
+  if rawget(_G, "package") ~= nil then
+    return
+  end
+  rawset(_G, "package", {
+    path = "",
+    preload = {},
+    loaded = {},
+    searchers = {}
+  })
+end
+
 local function module_to_paths(module_name)
   if type(module_name) ~= "string" then
     return nil
@@ -267,6 +280,7 @@ function bootstrap.setup(opts)
     state.log_path = string.format("/xreactor_logs/loader_%s.log", tostring(opts.role):lower())
   end
   resolve_global()
+  ensure_package_table()
   rawset(_G, "require", bootstrap.require)
   if type(_ENV) == "table" then
     _ENV.require = bootstrap.require
