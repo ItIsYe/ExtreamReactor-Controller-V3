@@ -41,6 +41,6 @@ return {
     { path = "xreactor/shared/constants.lua", size_bytes = 1318, hash = "10abc7ee" },
     { path = "xreactor/installer/installer.lua", size_bytes = 11419, hash = "9d23fe3c" },
     { path = "xreactor/installer/installer_core.lua", size_bytes = 72760, hash = "a629c17c" },
-    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "0481881d" }
+    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "9dfe2e4a" }
   }
 }

@@ -161,6 +161,7 @@ Wireless Modem (Control/Status)
 - **HTML-Response**: Weist auf falsche URL (z. B. GitHub-Blob) oder Proxy hin – der Installer erwartet RAW-Links.
 - **404 bei Dateien**: Wenn ein gepinnter Commit nicht mehr passt, fällt der Installer automatisch auf `main` zurück, statt weiter 404s zu produzieren.
 - **HTML statt Lua**: Installer bricht ab (meist falscher Link oder GitHub-Rate-Limit).
+- **Installer core download failed**: Prüfe HTTP-API/Timeouts und ob `xreactor/installer/release.lua` (Hash/Size) zum tatsächlichen `installer_core.lua` passt.
 - **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien) und normalisiert auf String.
 - **SAFE UPDATE Abbruch**: Bei Download-Problemen kann der Nutzer abbrechen; das System bleibt unverändert.
 - **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
