@@ -124,7 +124,15 @@ Wireless Modem (Control/Status)
 - **ENERGY/WATER/FUEL/REPROCESSOR**: `xreactor/nodes/<role>/config.lua`
   - `heartbeat_interval`: Sekunden zwischen Status-Heartbeats (Default: **2** bei Nodes, **5** beim MASTER).
   - `wireless_modem`: Wireless-Modem-Seite (Default: `right`).
-  - **ENERGY**: `matrix`, `cubes` (Mekanism Energy-Peripherals).
+  - **ENERGY**:
+    - Autodetection für **Energy-Storage** über Method-Signaturen (`getEnergy/getMaxEnergy`, `getEnergyStored/getMaxEnergyStored`, `getStoredPower/getMaxStoredPower`).
+    - Monitor-Erkennung (lokal oder wired) mit Auswahl per **größtem Monitor** oder **erstem**.
+    - Config-Keys:
+      - `scan_interval` (Sekunden zwischen Discovery-Scans).
+      - `ui_refresh_interval`, `ui_scale` (ENERGY-Node Monitor UI).
+      - `monitor.preferred_name`, `monitor.strategy` (`largest`/`first`).
+      - `storage_filters.include_names` (Allow-List), `storage_filters.exclude_names` (Deny-List), `storage_filters.prefer_names` (Priorisierung).
+      - `matrix`, `matrix_names`, `matrix_aliases` sowie `cubes` bleiben als Legacy-Overrides erhalten.
   - **WATER**: `loop_tanks`, `target_volume` (Tank-Setpoint).
   - **FUEL**: `storage_bus`, `minimum_reserve` (Default: **2000**, kompatibel mit `target`).
   - **REPROCESSOR**: `buffers` (Buffer-Peripherals).
@@ -132,6 +140,15 @@ Wireless Modem (Control/Status)
 - **Persistenz**:
   - `node_id`: `/xreactor/config/node_id.txt` (immer String)
 - Manifest: `/xreactor/.manifest`
+
+## ENERGY Node Monitor UI
+- Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
+- Inhalte:
+  - Induction Matrices: **pro Matrix** Stored/Capacity/% + IN/OUT (falls API verfügbar), inkl. Füllstand-Balken.
+  - **GESAMT**-Block: Summe Stored/Capacity/% + optional Summe IN/OUT.
+  - Storages-Seite: Liste der erkannten Storages (optional zweite Seite).
+- Paging: Touch auf `<`/`>` in der Fußzeile oder Pfeiltasten links/rechts.
+- Werte, die die API nicht liefert, werden als **`n/a`** angezeigt.
 
 ## Recovery & Rollback
 - Backups liegen unter `/xreactor_backup/<timestamp>/`.
@@ -148,6 +165,8 @@ Wireless Modem (Control/Status)
 - Bootstrap: `/xreactor_logs/installer_bootstrap.log` (Rotation `.1`)
 - Installer-Core: `/xreactor_logs/installer.log` (Rotation `.1`)
   - Nodes: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
+- ENERGY-Node schreibt bei aktiviertem Debug einmal pro Discovery-Scan einen **Discovery Snapshot** (Peripherie-Liste + Types + Methoden der Kandidaten).
+- Matrix-Debug: Wenn Component-Counts fehlen, loggt der ENERGY-Node die verfügbaren Matrix-Methoden (kein Terminal-Spam).
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
 
 ## Betrieb (Modi)
@@ -174,6 +193,14 @@ Wireless Modem (Control/Status)
 - **SAFE UPDATE Abbruch**: Bei Download-Problemen kann der Nutzer abbrechen; das System bleibt unverändert.
 - **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
 - **Peripherals fehlen**: Namen in `config.lua` prüfen, Wired-Modem korrekt angeschlossen?
+- **ENERGY ok aber keine Storages/Monitor gebunden**:
+  - Discovery-Log prüfen: `/xreactor/logs/energy_<node_id>.log`
+  - `storage_filters.include_names`/`exclude_names` checken.
+  - Wired-Modem korrekt verbunden? `peripheral.getNames()` sollte Remote-Peripherals listen.
+  - Peripherals müssen Energy-Methoden anbieten (siehe Autodetection-Methoden).
+- **ENERGY Monitor zeigt “n/a”**:
+  - Die API liefert diese Werte nicht (z. B. Matrix-Komponenten-Counts).
+  - Debug-Log zeigt die verfügbaren Methoden am Matrix-Peripheral.
 - **Node bleibt in SAFE**: Temperatur/Water-Limits prüfen, ggf. Ursache beseitigen und Modus wechseln.
 
 ## Wie teste ich das System? (6 Szenarien)
