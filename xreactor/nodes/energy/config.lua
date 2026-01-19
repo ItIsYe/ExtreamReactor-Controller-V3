@@ -6,6 +6,8 @@ local CONFIG = {
   DEFAULT_MATRIX = nil, -- Optional induction matrix peripheral name (legacy override).
   DEFAULT_CUBES = {}, -- Optional list of energy cube names (legacy override).
   DEFAULT_SCAN_INTERVAL = 15, -- Seconds between discovery scans.
+  DEFAULT_UI_REFRESH_INTERVAL = 1.0, -- Seconds between monitor UI refreshes.
+  DEFAULT_UI_SCALE = 0.5, -- Monitor text scale for ENERGY node UI.
   DEFAULT_MONITOR_PREFERRED = nil, -- Optional monitor name to pin.
   DEFAULT_MONITOR_STRATEGY = "largest", -- "largest" or "first".
   DEFAULT_STORAGE_INCLUDE = nil, -- Optional allow-list of storage peripheral names.
@@ -25,6 +27,8 @@ return {
   matrix = CONFIG.DEFAULT_MATRIX,
   cubes = CONFIG.DEFAULT_CUBES,
   scan_interval = CONFIG.DEFAULT_SCAN_INTERVAL,
+  ui_refresh_interval = CONFIG.DEFAULT_UI_REFRESH_INTERVAL,
+  ui_scale = CONFIG.DEFAULT_UI_SCALE,
   monitor = {
     preferred_name = CONFIG.DEFAULT_MONITOR_PREFERRED,
     strategy = CONFIG.DEFAULT_MONITOR_STRATEGY

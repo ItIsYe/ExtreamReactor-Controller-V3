@@ -129,6 +129,7 @@ Wireless Modem (Control/Status)
     - Monitor-Erkennung (lokal oder wired) mit Auswahl per **größtem Monitor** oder **erstem**.
     - Config-Keys:
       - `scan_interval` (Sekunden zwischen Discovery-Scans).
+      - `ui_refresh_interval`, `ui_scale` (ENERGY-Node Monitor UI).
       - `monitor.preferred_name`, `monitor.strategy` (`largest`/`first`).
       - `storage_filters.include_names` (Allow-List), `storage_filters.exclude_names` (Deny-List), `storage_filters.prefer_names` (Priorisierung).
       - `matrix`, `cubes` bleiben als Legacy-Overrides erhalten.
@@ -139,6 +140,14 @@ Wireless Modem (Control/Status)
 - **Persistenz**:
   - `node_id`: `/xreactor/config/node_id.txt` (immer String)
 - Manifest: `/xreactor/.manifest`
+
+## ENERGY Node Monitor UI
+- Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
+- Inhalte:
+  - Induction Matrix: Stored/Capacity/% sowie Input/Output (falls API verfügbar).
+  - Matrix-Komponenten (Cells/Providers/Ports), falls die API die Counts liefert.
+  - Storages: Anzahl + Top-3 nach Kapazität.
+- Werte, die die API nicht liefert, werden als **`n/a`** angezeigt.
 
 ## Recovery & Rollback
 - Backups liegen unter `/xreactor_backup/<timestamp>/`.
@@ -156,6 +165,7 @@ Wireless Modem (Control/Status)
 - Installer-Core: `/xreactor_logs/installer.log` (Rotation `.1`)
   - Nodes: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
 - ENERGY-Node schreibt bei aktiviertem Debug einmal pro Discovery-Scan einen **Discovery Snapshot** (Peripherie-Liste + Types + Methoden der Kandidaten).
+- Matrix-Debug: Wenn Component-Counts fehlen, loggt der ENERGY-Node die verfügbaren Matrix-Methoden (kein Terminal-Spam).
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
 
 ## Betrieb (Modi)
@@ -187,6 +197,9 @@ Wireless Modem (Control/Status)
   - `storage_filters.include_names`/`exclude_names` checken.
   - Wired-Modem korrekt verbunden? `peripheral.getNames()` sollte Remote-Peripherals listen.
   - Peripherals müssen Energy-Methoden anbieten (siehe Autodetection-Methoden).
+- **ENERGY Monitor zeigt “n/a”**:
+  - Die API liefert diese Werte nicht (z. B. Matrix-Komponenten-Counts).
+  - Debug-Log zeigt die verfügbaren Methoden am Matrix-Peripheral.
 - **Node bleibt in SAFE**: Temperatur/Water-Limits prüfen, ggf. Ursache beseitigen und Modus wechseln.
 
 ## Wie teste ich das System? (6 Szenarien)
