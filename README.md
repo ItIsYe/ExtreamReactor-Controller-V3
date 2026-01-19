@@ -132,7 +132,7 @@ Wireless Modem (Control/Status)
       - `ui_refresh_interval`, `ui_scale` (ENERGY-Node Monitor UI).
       - `monitor.preferred_name`, `monitor.strategy` (`largest`/`first`).
       - `storage_filters.include_names` (Allow-List), `storage_filters.exclude_names` (Deny-List), `storage_filters.prefer_names` (Priorisierung).
-      - `matrix`, `cubes` bleiben als Legacy-Overrides erhalten.
+      - `matrix`, `matrix_names`, `matrix_aliases` sowie `cubes` bleiben als Legacy-Overrides erhalten.
   - **WATER**: `loop_tanks`, `target_volume` (Tank-Setpoint).
   - **FUEL**: `storage_bus`, `minimum_reserve` (Default: **2000**, kompatibel mit `target`).
   - **REPROCESSOR**: `buffers` (Buffer-Peripherals).
@@ -144,9 +144,10 @@ Wireless Modem (Control/Status)
 ## ENERGY Node Monitor UI
 - Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
 - Inhalte:
-  - Induction Matrix: Stored/Capacity/% sowie Input/Output (falls API verfügbar).
-  - Matrix-Komponenten (Cells/Providers/Ports), falls die API die Counts liefert.
-  - Storages: Anzahl + Top-3 nach Kapazität.
+  - Induction Matrices: **pro Matrix** Stored/Capacity/% + IN/OUT (falls API verfügbar), inkl. Füllstand-Balken.
+  - **GESAMT**-Block: Summe Stored/Capacity/% + optional Summe IN/OUT.
+  - Storages-Seite: Liste der erkannten Storages (optional zweite Seite).
+- Paging: Touch auf `<`/`>` in der Fußzeile oder Pfeiltasten links/rechts.
 - Werte, die die API nicht liefert, werden als **`n/a`** angezeigt.
 
 ## Recovery & Rollback

@@ -31,6 +31,8 @@ local DEFAULT_CONFIG = {
   wireless_modem = "right", -- Default wireless modem side.
   wired_modem = nil, -- Optional wired modem side.
   matrix = nil, -- Optional induction matrix peripheral name (legacy override).
+  matrix_names = {}, -- Optional list of matrix peripheral names (legacy override).
+  matrix_aliases = {}, -- Optional mapping of matrix peripheral name -> display label.
   cubes = {}, -- Optional list of energy cube names (legacy override).
   scan_interval = 15, -- Seconds between peripheral discovery scans.
   ui_refresh_interval = 1.0, -- Seconds between monitor UI refreshes.
@@ -85,6 +87,14 @@ local function validate_config(config_values, defaults)
   if config_values.matrix ~= nil and type(config_values.matrix) ~= "string" then
     config_values.matrix = defaults.matrix
     add_config_warning("matrix invalid; defaulting to " .. tostring(defaults.matrix))
+  end
+  if type(config_values.matrix_names) ~= "table" then
+    config_values.matrix_names = utils.deep_copy(defaults.matrix_names)
+    add_config_warning("matrix_names missing/invalid; defaulting to configured list")
+  end
+  if type(config_values.matrix_aliases) ~= "table" then
+    config_values.matrix_aliases = utils.deep_copy(defaults.matrix_aliases)
+    add_config_warning("matrix_aliases missing/invalid; defaulting to configured mapping")
   end
   if type(config_values.cubes) ~= "table" then
     config_values.cubes = utils.deep_copy(defaults.cubes)
@@ -172,11 +182,9 @@ end
 local network
 local devices = {
   storages = {},
+  matrices = {},
   monitor = nil,
   monitor_name = nil,
-  matrix = nil,
-  matrix_name = nil,
-  matrix_methods = nil,
   bound_storage_names = {},
   degraded_reason = nil,
   last_scan_ts = nil,
@@ -184,7 +192,7 @@ local devices = {
 }
 local last_heartbeat = 0
 local last_scan = 0
-local ui_state = { last_snapshot = nil, last_draw = 0 }
+local ui_state = { last_snapshot = nil, last_draw = 0, page = 1, pages = {} }
 
 local function to_set(list)
   local out = {}
@@ -228,19 +236,36 @@ local function resolve_first_method(methods, candidates)
   return nil
 end
 
-local function score_matrix_candidate(name, methods)
-  local score = 0
-  if config.matrix and name == config.matrix then
-    score = score + 100
+local function is_matrix_method_set(methods)
+  local keys = {
+    "getInstalledCells",
+    "getInstalledProviders",
+    "getInstalledPorts",
+    "getCells",
+    "getProviders",
+    "getPorts",
+    "getInductionCells",
+    "getInductionProviders",
+    "getInductionPorts"
+  }
+  for _, key in ipairs(keys) do
+    if methods[key] then
+      return true
+    end
   end
-  if methods.getInstalledCells then score = score + 20 end
-  if methods.getInstalledProviders then score = score + 20 end
-  if methods.getInstalledPorts then score = score + 10 end
-  if methods.getCells then score = score + 5 end
-  if methods.getProviders then score = score + 5 end
-  if methods.getPorts then score = score + 5 end
-  if methods.getEnergy and methods.getMaxEnergy then score = score + 2 end
-  return score
+  return false
+end
+
+local function is_matrix_override(name)
+  if config.matrix and name == config.matrix then
+    return true
+  end
+  for _, entry in ipairs(config.matrix_names or {}) do
+    if entry == name then
+      return true
+    end
+  end
+  return false
 end
 
 local function is_blocked_type(name)
@@ -290,7 +315,7 @@ local function pick_monitor()
   return candidates[1].name
 end
 
-local function log_discovery_snapshot(names, candidates, monitor_name, matrix_name, matrix_methods)
+local function log_discovery_snapshot(names, candidates, monitor_name, matrices)
   if not debug_enabled then
     return
   end
@@ -304,8 +329,8 @@ local function log_discovery_snapshot(names, candidates, monitor_name, matrix_na
   if monitor_name then
     utils.log("ENERGY", ("Discovery monitor selection: %s"):format(tostring(monitor_name)))
   end
-  if matrix_name then
-    utils.log("ENERGY", ("Discovery matrix selection: %s methods=%s"):format(tostring(matrix_name), textutils.serialize(matrix_methods or {})))
+  for _, matrix in ipairs(matrices or {}) do
+    utils.log("ENERGY", ("Discovery matrix: %s methods=%s"):format(tostring(matrix.name), textutils.serialize(matrix.method_list or {})))
   end
 end
 
@@ -340,8 +365,7 @@ local function discover()
   local storages = {}
   local bound_names = {}
   local candidates = {}
-  local matrix_candidate
-  local matrix_methods
+  local matrices = {}
 
   local function consider_name(name)
     if exclude_set[name] then
@@ -357,10 +381,9 @@ local function discover()
     local methods = build_method_set(method_list)
     local profile = resolve_storage_profile(methods)
     if profile then
-      local score = score_matrix_candidate(name, methods)
-      if score > 0 and (not matrix_candidate or score > matrix_candidate.score) then
-        matrix_candidate = { name = name, score = score }
-        matrix_methods = method_list
+      local is_matrix = is_matrix_method_set(methods) or is_matrix_override(name)
+      if is_matrix then
+        table.insert(matrices, { name = name, profile = profile, method_list = method_list })
       end
       table.insert(candidates, { name = name, profile = profile, methods = methods, method_list = method_list })
     end
@@ -375,16 +398,20 @@ local function discover()
     end
   end
 
+  local matrix_set = {}
+  table.sort(matrices, function(a, b) return a.name < b.name end)
+  for _, matrix in ipairs(matrices) do
+    matrix_set[matrix.name] = true
+  end
   local seen = {}
   for _, candidate in ipairs(candidates) do
-    if not seen[candidate.name] then
+    if not seen[candidate.name] and not matrix_set[candidate.name] then
       seen[candidate.name] = true
       local wrapped = utils.safe_wrap(candidate.name)
       if wrapped then
         table.insert(storages, {
           name = candidate.name,
-          profile = candidate.profile,
-          is_matrix = matrix_candidate and candidate.name == matrix_candidate.name
+          profile = candidate.profile
         })
         table.insert(bound_names, candidate.name)
       end
@@ -410,14 +437,13 @@ local function discover()
   devices.monitor = monitor
   devices.monitor_name = monitor_name
   devices.storages = storages
-  devices.matrix_name = matrix_candidate and matrix_candidate.name or nil
-  devices.matrix_methods = matrix_methods
+  devices.matrices = matrices
   devices.bound_storage_names = bound_names
   devices.degraded_reason = degraded_reason
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
 
-  log_discovery_snapshot(names, candidates, monitor_name, devices.matrix_name, matrix_methods)
+  log_discovery_snapshot(names, candidates, monitor_name, matrices)
 end
 
 local function hello()
@@ -464,61 +490,78 @@ local function read_storage_stats()
 end
 
 local function read_matrix_stats()
-  local matrix_name = devices.matrix_name
-  if not matrix_name then
-    return {
-      present = false,
-      stored = 0,
-      capacity = 0,
-      percent = 0,
-      input = nil,
-      output = nil,
-      cells = nil,
-      providers = nil,
-      ports = nil
-    }
-  end
-  local methods = build_method_set(devices.matrix_methods or {})
-  local profile = resolve_storage_profile(methods)
-  local function read_metric(method)
-    if not method then
-      return nil
+  local matrices = {}
+  local total = { stored = 0, capacity = 0, input = 0, output = 0, has_flow = false }
+  for idx, matrix in ipairs(devices.matrices or {}) do
+    local methods = build_method_set(matrix.method_list or {})
+    local profile = resolve_storage_profile(methods)
+    local function read_metric(method)
+      if not method then
+        return nil, "missing method"
+      end
+      local value, err = utils.safe_peripheral_call(matrix.name, method)
+      return tonumber(value), err
     end
-    local value = utils.safe_peripheral_call(matrix_name, method)
-    return tonumber(value) or nil
+    local stored, stored_err = read_metric(profile and profile.stored)
+    local capacity, cap_err = read_metric(profile and profile.capacity)
+    stored = stored or 0
+    capacity = capacity or stored
+    local input = select(1, read_metric(profile and profile.input))
+    local output = select(1, read_metric(profile and profile.output))
+    local cells_method = resolve_first_method(methods, { "getInstalledCells", "getCells", "getInductionCells" })
+    local providers_method = resolve_first_method(methods, { "getInstalledProviders", "getProviders", "getInductionProviders" })
+    local ports_method = resolve_first_method(methods, { "getInstalledPorts", "getPorts", "getInductionPorts" })
+    local cells = select(1, read_metric(cells_method))
+    local providers = select(1, read_metric(providers_method))
+    local ports = select(1, read_metric(ports_method))
+    local degraded = stored_err or cap_err
+    if debug_enabled and (cells == nil or providers == nil or ports == nil) then
+      utils.log("ENERGY", ("Matrix component counts unavailable (%s). Methods=%s"):format(
+        matrix.name, textutils.serialize(matrix.method_list or {})
+      ))
+    end
+    if input ~= nil or output ~= nil then
+      total.has_flow = true
+      total.input = total.input + (input or 0)
+      total.output = total.output + (output or 0)
+    end
+    total.stored = total.stored + stored
+    total.capacity = total.capacity + capacity
+    local display = config.matrix_aliases and config.matrix_aliases[matrix.name] or matrix.name or ("Matrix " .. tostring(idx))
+    table.insert(matrices, {
+      id = matrix.name,
+      name = display,
+      stored = stored,
+      capacity = capacity,
+      percent = capacity > 0 and (stored / capacity) or 0,
+      input = input,
+      output = output,
+      cells = cells,
+      providers = providers,
+      ports = ports,
+      status = degraded and "DEGRADED" or "OK"
+    })
   end
-  local stored = read_metric(profile and profile.stored) or 0
-  local capacity = read_metric(profile and profile.capacity) or stored
-  local input = read_metric(profile and profile.input)
-  local output = read_metric(profile and profile.output)
-  local cells_method = resolve_first_method(methods, { "getInstalledCells", "getCells", "getInductionCells" })
-  local providers_method = resolve_first_method(methods, { "getInstalledProviders", "getProviders", "getInductionProviders" })
-  local ports_method = resolve_first_method(methods, { "getInstalledPorts", "getPorts", "getInductionPorts" })
-  local cells = read_metric(cells_method)
-  local providers = read_metric(providers_method)
-  local ports = read_metric(ports_method)
-  if debug_enabled and (cells == nil or providers == nil or ports == nil) then
-    utils.log("ENERGY", ("Matrix component counts unavailable (cells=%s providers=%s ports=%s). Methods=%s"):format(
-      tostring(cells_method), tostring(providers_method), tostring(ports_method), textutils.serialize(devices.matrix_methods or {})
-    ))
-  end
-  local percent = capacity > 0 and (stored / capacity) or 0
+  local percent = total.capacity > 0 and (total.stored / total.capacity) or 0
   return {
-    present = true,
-    stored = stored,
-    capacity = capacity,
-    percent = percent,
-    input = input,
-    output = output,
-    cells = cells,
-    providers = providers,
-    ports = ports
+    matrices = matrices,
+    total = {
+      stored = total.stored,
+      capacity = total.capacity,
+      percent = percent,
+      input = total.has_flow and total.input or nil,
+      output = total.has_flow and total.output or nil
+    }
   }
 end
 
 local function send_status()
   local energy = read_storage_stats()
   local matrix = read_matrix_stats()
+  local total_stored = energy.stored + (matrix.total.stored or 0)
+  local total_capacity = energy.capacity + (matrix.total.capacity or 0)
+  local total_input = energy.input + (matrix.total.input or 0)
+  local total_output = energy.output + (matrix.total.output or 0)
   energy.monitor_bound = devices.monitor ~= nil
   energy.storage_bound_count = #(devices.storages or {})
   energy.bound_storage_names = devices.bound_storage_names or {}
@@ -528,16 +571,19 @@ local function send_status()
   else
     energy.status = constants.status_levels.OK
   end
-  energy.matrix_present = matrix.present
-  energy.matrix_energy = matrix.stored
-  energy.matrix_capacity = matrix.capacity
-  energy.matrix_percent = matrix.percent
-  energy.matrix_in = matrix.input
-  energy.matrix_out = matrix.output
-  energy.matrix_cells_count = matrix.cells
-  energy.matrix_providers_count = matrix.providers
-  energy.matrix_ports_count = matrix.ports
+  energy.matrices = matrix.matrices
+  energy.total = matrix.total
+  energy.matrix_present = #(matrix.matrices or {}) > 0
+  energy.matrix_energy = matrix.total.stored
+  energy.matrix_capacity = matrix.total.capacity
+  energy.matrix_percent = matrix.total.percent
+  energy.matrix_in = matrix.total.input
+  energy.matrix_out = matrix.total.output
   energy.storages_count = energy.storage_bound_count
+  energy.stored = total_stored
+  energy.capacity = total_capacity
+  energy.input = total_input
+  energy.output = total_output
   local summary = {}
   table.sort(energy.stores, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
   for i = 1, math.min(3, #energy.stores) do
@@ -559,11 +605,68 @@ local function format_value(value)
   return string.format("%.0f", value)
 end
 
+local function format_energy(value)
+  if value == nil then
+    return "n/a"
+  end
+  local suffixes = { "", "k", "M", "G", "T", "P", "E" }
+  local v = math.abs(value)
+  local idx = 1
+  while v >= 1000 and idx < #suffixes do
+    v = v / 1000
+    idx = idx + 1
+  end
+  local formatted = v >= 100 and string.format("%.0f", v) or string.format("%.1f", v)
+  if value < 0 then
+    formatted = "-" .. formatted
+  end
+  return formatted .. suffixes[idx]
+end
+
 local function format_percent(value)
   if value == nil then
     return "n/a"
   end
   return string.format("%.0f%%", value * 100)
+end
+
+local function build_pages(matrices, storages, height)
+  local pages = {}
+  local header_lines = 3
+  local footer_lines = 1
+  local card_lines = 4
+  local total_lines = 4
+  local available = math.max(1, height - header_lines - footer_lines - total_lines)
+  local per_page = math.max(1, math.floor(available / card_lines))
+  local count = #matrices
+  local total_pages = math.max(1, math.ceil(count / per_page))
+  for page = 1, total_pages do
+    table.insert(pages, { type = "matrices", start_index = (page - 1) * per_page + 1, end_index = math.min(count, page * per_page) })
+  end
+  if #storages > 0 then
+    table.insert(pages, { type = "storages" })
+  end
+  return pages
+end
+
+local function update_page(delta)
+  local total = #ui_state.pages
+  if total == 0 then
+    return
+  end
+  local next_page = ui_state.page + delta
+  if next_page < 1 then
+    next_page = total
+  elseif next_page > total then
+    next_page = 1
+  end
+  if next_page ~= ui_state.page then
+    ui_state.page = next_page
+    ui_state.last_snapshot = nil
+    if debug_enabled then
+      utils.log("ENERGY", ("UI page -> %d/%d"):format(ui_state.page, total))
+    end
+  end
 end
 
 local function render_monitor()
@@ -577,14 +680,17 @@ local function render_monitor()
   local energy = read_storage_stats()
   local matrix = read_matrix_stats()
   local degraded = devices.degraded_reason ~= nil
+  local matrices = matrix.matrices or {}
+  local storages = energy.stores or {}
   local model = {
     node_id = network and network.id or config.node_id,
     degraded_reason = devices.degraded_reason,
     last_scan_ts = devices.last_scan_ts,
     scan_result = devices.last_scan_result,
     storages_count = #(devices.storages or {}),
-    storages = energy.stores or {},
-    matrix = matrix
+    storages = storages,
+    matrices = matrices,
+    total = matrix.total
   }
   local snapshot = textutils.serialize(model)
   if ui_state.last_snapshot == snapshot then
@@ -596,42 +702,74 @@ local function render_monitor()
   local mon = devices.monitor
   local w, h = mon.getSize()
   local status = degraded and "WARNING" or "OK"
+  ui_state.pages = build_pages(matrices, storages, h)
+  local pages = ui_state.pages
+  if ui_state.page > #pages then
+    ui_state.page = #pages
+  end
+  local page = pages[ui_state.page] or { type = "matrices", start_index = 1, end_index = 0 }
   ui.panel(mon, 1, 1, w, h, "ENERGY NODE", status)
   ui.text(mon, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
-  ui.rightText(mon, 2, 2, w - 2, degraded and "DEGRADED" or "OK", colors.get(status), colors.get("background"))
+  local status_label = degraded and "DEGRADED" or "OK"
+  ui.rightText(mon, 2, 2, w - 2, status_label, colors.get(status), colors.get("background"))
 
   local line = 4
-  ui.text(mon, 2, line, "Induction Matrix", colors.get("text"), colors.get("background"))
-  line = line + 1
-  if matrix.present then
-    ui.text(mon, 2, line, ("Energy %s / %s (%s)"):format(format_value(matrix.stored), format_value(matrix.capacity), format_percent(matrix.percent)), colors.get("text"), colors.get("background"))
+  if page.type == "matrices" then
+    ui.text(mon, 2, line, ("Induction Matrices (%d)"):format(#matrices), colors.get("text"), colors.get("background"))
     line = line + 1
-    ui.progress(mon, 2, line, w - 4, matrix.percent or 0, status)
+    local start_idx = page.start_index
+    local end_idx = page.end_index
+    if #matrices == 0 then
+      ui.text(mon, 2, line, "No matrices detected", colors.get("WARNING"), colors.get("background"))
+      line = line + 2
+    else
+      for idx = start_idx, end_idx do
+        local entry = matrices[idx]
+        local pct = entry and entry.percent or 0
+        if entry then
+          local label = string.format("%s", entry.name or ("Matrix " .. tostring(idx)))
+          ui.text(mon, 2, line, label, colors.get("text"), colors.get("background"))
+          ui.rightText(mon, 2, line, w - 2, format_percent(pct), colors.get(entry.status == "DEGRADED" and "WARNING" or status), colors.get("background"))
+          line = line + 1
+          ui.progress(mon, 2, line, w - 4, pct or 0, entry.status == "DEGRADED" and "WARNING" or status)
+          line = line + 1
+          ui.text(mon, 2, line, ("E: %s / %s"):format(format_energy(entry.stored), format_energy(entry.capacity)), colors.get("text"), colors.get("background"))
+          line = line + 1
+          local in_text = entry.input and format_energy(entry.input) or "n/a"
+          local out_text = entry.output and format_energy(entry.output) or "n/a"
+          ui.text(mon, 2, line, ("IN %s  OUT %s"):format(in_text, out_text), colors.get("text"), colors.get("background"))
+          line = line + 1
+        end
+      end
+    end
+    ui.text(mon, 2, line, ("GESAMT (%d)"):format(#matrices), colors.get("text"), colors.get("background"))
     line = line + 1
-    local in_text = matrix.input and format_value(matrix.input) or "n/a"
-    local out_text = matrix.output and format_value(matrix.output) or "n/a"
-    ui.text(mon, 2, line, ("In %s  Out %s"):format(in_text, out_text), colors.get("text"), colors.get("background"))
+    ui.progress(mon, 2, line, w - 4, model.total and model.total.percent or 0, status)
     line = line + 1
-    ui.text(mon, 2, line, ("Cells %s  Providers %s  Ports %s"):format(format_value(matrix.cells), format_value(matrix.providers), format_value(matrix.ports)), colors.get("text"), colors.get("background"))
+    ui.text(mon, 2, line, ("E: %s / %s (%s)"):format(
+      format_energy(model.total and model.total.stored),
+      format_energy(model.total and model.total.capacity),
+      format_percent(model.total and model.total.percent)
+    ), colors.get("text"), colors.get("background"))
     line = line + 1
+    local total_in = model.total and model.total.input or nil
+    local total_out = model.total and model.total.output or nil
+    local total_flow = (total_in ~= nil or total_out ~= nil) and ("IN " .. format_energy(total_in) .. "  OUT " .. format_energy(total_out)) or "IN/OUT n/a"
+    ui.text(mon, 2, line, total_flow, colors.get("text"), colors.get("background"))
   else
-    ui.text(mon, 2, line, "No matrix detected", colors.get("WARNING"), colors.get("background"))
-    line = line + 2
+    ui.text(mon, 2, line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
+    line = line + 1
+    local rows = {}
+    table.sort(storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
+    for _, s in ipairs(storages) do
+      local pct = s.capacity and s.capacity > 0 and (s.stored / s.capacity) or 0
+      table.insert(rows, { text = string.format("%s %s", s.id, format_percent(pct)), status = status })
+    end
+    if #rows == 0 then
+      table.insert(rows, { text = "none", status = "WARNING" })
+    end
+    ui.list(mon, 2, line, w - 2, rows, { max_rows = math.max(1, h - line - 2) })
   end
-
-  ui.text(mon, 2, line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
-  line = line + 1
-  local rows = {}
-  table.sort(model.storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
-  for i = 1, math.min(3, #model.storages) do
-    local s = model.storages[i]
-    local pct = s.capacity and s.capacity > 0 and (s.stored / s.capacity) or 0
-    table.insert(rows, { text = string.format("%s %s", s.id, format_percent(pct)), status = status })
-  end
-  if #rows == 0 then
-    table.insert(rows, { text = "none", status = "WARNING" })
-  end
-  ui.list(mon, 2, line, w - 2, rows, { max_rows = math.max(1, h - line - 2) })
 
   local footer = h
   local scan_age = ""
@@ -639,7 +777,34 @@ local function render_monitor()
     scan_age = string.format("scan %ds", math.max(0, math.floor((now - model.last_scan_ts) / 1000)))
   end
   local warning = degraded and ("WARN: " .. tostring(model.degraded_reason)) or ""
-  ui.text(mon, 2, footer, string.format("%s %s %s", textutils.formatTime(os.time(), true), scan_age, warning), colors.get("text"), colors.get("background"))
+  local page_text = ("< Page %d/%d >"):format(ui_state.page, math.max(1, #pages))
+  local footer_text = string.format("%s  %s  %s", textutils.formatTime(os.time(), true), scan_age, warning)
+  ui.text(mon, 2, footer, footer_text, colors.get("text"), colors.get("background"))
+  ui.rightText(mon, 2, footer, w - 2, page_text, colors.get("text"), colors.get("background"))
+  local start = 2 + math.max(0, (w - 2) - #page_text)
+  ui_state.controls = {
+    prev = { x = start, y = footer },
+    next = { x = start + #page_text - 1, y = footer }
+  }
+end
+
+local function handle_monitor_touch(name, x, y)
+  if not devices.monitor_name or name ~= devices.monitor_name then
+    return
+  end
+  local controls = ui_state.controls or {}
+  if controls.prev and y == controls.prev.y and x == controls.prev.x then
+    update_page(-1)
+  elseif controls.next and y == controls.next.y and x == controls.next.x then
+    update_page(1)
+  end
+end
+
+local warned = {}
+local function warn_once(key, message)
+  if warned[key] then return end
+  warned[key] = true
+  utils.log("ENERGY", message, "WARN")
 end
 
 local function main_loop()
@@ -652,9 +817,31 @@ local function main_loop()
     if os.epoch("utc") - last_heartbeat > config.heartbeat_interval * 1000 then
       send_status()
     end
-    local message = network:receive(CONFIG.RECEIVE_TIMEOUT)
-    if message and message.type == constants.message_types.HELLO then
-      -- master seen
+    local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
+    while true do
+      local event = { os.pullEvent() }
+      if event[1] == "modem_message" then
+        local _, _, _, _, message = table.unpack(event)
+        local ok, err = protocol.validateMessage(message)
+        if ok then
+          local sanitized = protocol.sanitize_message(message)
+          if sanitized and sanitized.type == constants.message_types.HELLO then
+            -- master seen
+          end
+        else
+          warn_once("schema:" .. tostring(err), "WARN: invalid message ignored (" .. tostring(err) .. ")")
+        end
+      elseif event[1] == "monitor_touch" then
+        handle_monitor_touch(event[2], event[3], event[4])
+      elseif event[1] == "key" then
+        if event[2] == keys.left then
+          update_page(-1)
+        elseif event[2] == keys.right then
+          update_page(1)
+        end
+      elseif event[1] == "timer" and event[2] == timer then
+        break
+      end
     end
   end
 end

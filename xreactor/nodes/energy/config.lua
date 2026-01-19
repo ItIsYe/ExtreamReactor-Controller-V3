@@ -4,6 +4,8 @@ local CONFIG = {
   DEFAULT_NODE_ID = "ENERGY-1", -- Default node_id used if none is set.
   DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
   DEFAULT_MATRIX = nil, -- Optional induction matrix peripheral name (legacy override).
+  DEFAULT_MATRIX_NAMES = {}, -- Optional list of induction matrix peripheral names (legacy override).
+  DEFAULT_MATRIX_ALIASES = {}, -- Optional mapping of peripheral name -> display label.
   DEFAULT_CUBES = {}, -- Optional list of energy cube names (legacy override).
   DEFAULT_SCAN_INTERVAL = 15, -- Seconds between discovery scans.
   DEFAULT_UI_REFRESH_INTERVAL = 1.0, -- Seconds between monitor UI refreshes.
@@ -25,6 +27,8 @@ return {
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
   wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
   matrix = CONFIG.DEFAULT_MATRIX,
+  matrix_names = CONFIG.DEFAULT_MATRIX_NAMES,
+  matrix_aliases = CONFIG.DEFAULT_MATRIX_ALIASES,
   cubes = CONFIG.DEFAULT_CUBES,
   scan_interval = CONFIG.DEFAULT_SCAN_INTERVAL,
   ui_refresh_interval = CONFIG.DEFAULT_UI_REFRESH_INTERVAL,
