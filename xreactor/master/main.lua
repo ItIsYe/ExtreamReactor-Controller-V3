@@ -455,7 +455,7 @@ local function draw()
     auto_profile = auto_profile
   }
   local rt_data = { rt_nodes = {}, ramp_profile = sequencer.ramp_profile, sequence_state = sequencer.state, queue = sequencer.queue, active_step = sequencer.active }
-  local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {}, trend_values = trend_cache.energy, trend_arrow = trend_cache.energy_arrow, trend_dirty = trends:is_dirty("energy") }
+  local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {}, nodes = {}, trend_values = trend_cache.energy, trend_arrow = trend_cache.energy_arrow, trend_dirty = trends:is_dirty("energy"), now_ms = os.epoch("utc") }
   local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {} }
 
   for _, node in pairs(nodes) do
@@ -468,12 +468,22 @@ local function draw()
     })
     if node.role == constants.roles.RT_NODE then
       table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status })
-    elseif node.role == constants.roles.ENERGY_NODE and node.capacity then
+    elseif node.role == constants.roles.ENERGY_NODE then
       energy_data.stored = energy_data.stored + (node.stored or 0)
       energy_data.capacity = energy_data.capacity + (node.capacity or 0)
       energy_data.input = energy_data.input + (node.input or 0)
       energy_data.output = energy_data.output + (node.output or 0)
       table.insert(energy_data.stores, { id = node.id, stored = node.stored, capacity = node.capacity, input = node.input, output = node.output })
+      table.insert(energy_data.nodes, {
+        id = node.id,
+        monitor_bound = node.monitor_bound,
+        storage_bound_count = node.storage_bound_count,
+        bound_storage_names = node.bound_storage_names,
+        degraded_reason = node.degraded_reason,
+        last_scan_ts = node.last_scan_ts,
+        last_scan_result = node.last_scan_result,
+        status = node.status
+      })
     elseif node.role == constants.roles.FUEL_NODE then
       resource_data.fuel.reserve = node.reserve or resource_data.fuel.reserve
       resource_data.fuel.minimum = node.minimum_reserve or resource_data.fuel.minimum
@@ -489,6 +499,7 @@ local function draw()
 
   table.sort(rt_data.rt_nodes, function(a, b) return (a.id or "") < (b.id or "") end)
   table.sort(energy_data.stores, function(a, b) return (a.id or "") < (b.id or "") end)
+  table.sort(energy_data.nodes, function(a, b) return (a.id or "") < (b.id or "") end)
   table.sort(resource_data.fuel.sources, function(a, b) return (a.id or "") < (b.id or "") end)
 
   local fuel_total = 0
