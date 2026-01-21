@@ -146,7 +146,8 @@ Wireless Modem (Control/Status)
 - Inhalte:
   - Induction Matrices: **pro Matrix** Stored/Capacity/% + IN/OUT (falls API verfügbar), inkl. Füllstand-Balken.
   - **GESAMT**-Block: Summe Stored/Capacity/% + optional Summe IN/OUT.
-  - Storages-Seite: Liste der erkannten Storages (optional zweite Seite).
+  - **Diagnostics**-Seite: Peripherals gefunden/gebunden, letzter Scan, letzter Fehler.
+- Storages-Seite: Liste der erkannten Storages (optional zweite Seite).
 - Paging: Touch auf `<`/`>` in der Fußzeile oder Pfeiltasten links/rechts.
 - Werte, die die API nicht liefert, werden als **`n/a`** angezeigt.
 

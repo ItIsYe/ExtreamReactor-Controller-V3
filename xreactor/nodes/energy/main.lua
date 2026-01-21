@@ -188,7 +188,10 @@ local devices = {
   bound_storage_names = {},
   degraded_reason = nil,
   last_scan_ts = nil,
-  last_scan_result = nil
+  last_scan_result = nil,
+  peripheral_count = 0,
+  last_error = nil,
+  last_error_ts = nil
 }
 local last_heartbeat = 0
 local last_scan = 0
@@ -334,8 +337,17 @@ local function log_discovery_snapshot(names, candidates, monitor_name, matrices)
   end
 end
 
+local function record_error(context, err)
+  if not err or err == "" then
+    return
+  end
+  devices.last_error = string.format("%s: %s", tostring(context), tostring(err))
+  devices.last_error_ts = os.epoch("utc")
+end
+
 local function discover()
   local names = peripheral.getNames() or {}
+  devices.peripheral_count = #names
   local include_set = config.storage_filters and config.storage_filters.include_names and to_set(config.storage_filters.include_names) or nil
   local exclude_set = to_set(config.storage_filters and config.storage_filters.exclude_names or {})
   local prefer_names = {}
@@ -351,9 +363,12 @@ local function discover()
 
   local monitor_name = pick_monitor()
   local previous_monitor = devices.monitor_name
-  local monitor = monitor_name and utils.safe_wrap(monitor_name) or nil
+  local monitor, monitor_err = monitor_name and utils.safe_wrap(monitor_name) or nil
   if monitor_name and not monitor then
     utils.log("ENERGY", "WARN: monitor wrap failed for " .. tostring(monitor_name))
+    record_error("monitor", monitor_err or "wrap failed")
+  elseif not monitor_name then
+    record_error("monitor", "not found")
   end
   if monitor and monitor.setTextScale then
     monitor.setTextScale(config.ui_scale)
@@ -407,13 +422,15 @@ local function discover()
   for _, candidate in ipairs(candidates) do
     if not seen[candidate.name] and not matrix_set[candidate.name] then
       seen[candidate.name] = true
-      local wrapped = utils.safe_wrap(candidate.name)
+      local wrapped, wrap_err = utils.safe_wrap(candidate.name)
       if wrapped then
         table.insert(storages, {
           name = candidate.name,
           profile = candidate.profile
         })
         table.insert(bound_names, candidate.name)
+      elseif wrap_err then
+        record_error(candidate.name, wrap_err)
       end
     end
   end
@@ -462,7 +479,10 @@ local function read_storage_stats()
       if not method then
         return 0
       end
-      local value = utils.safe_peripheral_call(storage.name, method)
+      local value, err = utils.safe_peripheral_call(storage.name, method)
+      if err then
+        record_error(storage.name .. "." .. tostring(method), err)
+      end
       return tonumber(value) or 0
     end
     local stored = read_metric(profile.stored)
@@ -500,6 +520,9 @@ local function read_matrix_stats()
         return nil, "missing method"
       end
       local value, err = utils.safe_peripheral_call(matrix.name, method)
+      if err then
+        record_error(matrix.name .. "." .. tostring(method), err)
+      end
       return tonumber(value), err
     end
     local stored, stored_err = read_metric(profile and profile.stored)
@@ -594,6 +617,9 @@ local function send_status()
   energy.storages_summary = summary
   energy.last_scan_ts = devices.last_scan_ts
   energy.last_scan_result = devices.last_scan_result
+  energy.last_error = devices.last_error
+  energy.last_error_ts = devices.last_error_ts
+  energy.peripheral_count = devices.peripheral_count
   network:send(constants.channels.STATUS, protocol.status(network.id, network.role, energy))
   last_heartbeat = os.epoch("utc")
 end
@@ -630,6 +656,13 @@ local function format_percent(value)
   return string.format("%.0f%%", value * 100)
 end
 
+local function format_age(ts, now)
+  if not ts then
+    return "n/a"
+  end
+  return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
+end
+
 local function build_pages(matrices, storages, height)
   local pages = {}
   local header_lines = 3
@@ -646,6 +679,7 @@ local function build_pages(matrices, storages, height)
   if #storages > 0 then
     table.insert(pages, { type = "storages" })
   end
+  table.insert(pages, { type = "diagnostics" })
   return pages
 end
 
@@ -687,6 +721,10 @@ local function render_monitor()
     degraded_reason = devices.degraded_reason,
     last_scan_ts = devices.last_scan_ts,
     scan_result = devices.last_scan_result,
+    last_error = devices.last_error,
+    last_error_ts = devices.last_error_ts,
+    peripheral_count = devices.peripheral_count,
+    monitor_bound = devices.monitor ~= nil,
     storages_count = #(devices.storages or {}),
     storages = storages,
     matrices = matrices,
@@ -756,7 +794,7 @@ local function render_monitor()
     local total_out = model.total and model.total.output or nil
     local total_flow = (total_in ~= nil or total_out ~= nil) and ("IN " .. format_energy(total_in) .. "  OUT " .. format_energy(total_out)) or "IN/OUT n/a"
     ui.text(mon, 2, line, total_flow, colors.get("text"), colors.get("background"))
-  else
+  elseif page.type == "storages" then
     ui.text(mon, 2, line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
     line = line + 1
     local rows = {}
@@ -769,6 +807,19 @@ local function render_monitor()
       table.insert(rows, { text = "none", status = "WARNING" })
     end
     ui.list(mon, 2, line, w - 2, rows, { max_rows = math.max(1, h - line - 2) })
+  else
+    local info_rows = {
+      { text = ("Peripherals found: %d"):format(model.peripheral_count or 0) },
+      { text = ("Monitor bound: %s"):format(model.monitor_bound and "yes" or "no") },
+      { text = ("Storages bound: %d"):format(model.storages_count or 0) },
+      { text = ("Matrices bound: %d"):format(#matrices) },
+      { text = ("Degraded reason: %s"):format(model.degraded_reason or "none") },
+      { text = ("Last scan: %s (%s)"):format(model.scan_result or "n/a", format_age(model.last_scan_ts, now)) },
+      { text = ("Last error: %s (%s)"):format(model.last_error or "none", format_age(model.last_error_ts, now)) }
+    }
+    ui.text(mon, 2, line, "Diagnostics", colors.get("text"), colors.get("background"))
+    line = line + 1
+    ui.list(mon, 2, line, w - 2, info_rows, { max_rows = math.max(1, h - line - 2) })
   end
 
   local footer = h

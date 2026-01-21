@@ -27,7 +27,7 @@ return {
     { path = "xreactor/nodes/fuel/config.lua", size_bytes = 1195, hash = "fe380f04" },
     { path = "xreactor/nodes/fuel/main.lua", size_bytes = 8413, hash = "e9e16bff" },
     { path = "xreactor/nodes/energy/config.lua", size_bytes = 2417, hash = "5ea2e4f5" },
-    { path = "xreactor/nodes/energy/main.lua", size_bytes = 32758, hash = "64eee847" },
+    { path = "xreactor/nodes/energy/main.lua", size_bytes = 34880, hash = "dd5321be" },
     { path = "xreactor/master/config.lua", size_bytes = 1329, hash = "3b58b0ad" },
     { path = "xreactor/master/startup_sequencer.lua", size_bytes = 3239, hash = "d9c315f6" },
     { path = "xreactor/master/profiles.lua", size_bytes = 164, hash = "9068a725" },
