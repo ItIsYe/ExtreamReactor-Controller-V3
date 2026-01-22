@@ -183,7 +183,12 @@ for _, warning in ipairs(config_warnings) do
   utils.log(CONFIG.LOG_PREFIX, warning, "WARN")
 end
 
-local registry = registry_lib.new({ node_id = node_id, log_prefix = CONFIG.LOG_PREFIX })
+local registry = registry_lib.new({
+  node_id = node_id,
+  role = "energy",
+  log_prefix = CONFIG.LOG_PREFIX,
+  aliases = config.matrix_aliases or {}
+})
 
 local network
 local devices = {
