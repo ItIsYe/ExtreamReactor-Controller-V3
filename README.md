@@ -44,6 +44,8 @@ Wireless Modem (Control/Status)
 - **Protokoll**: `proto_ver = 1.0` (bei Mismatch ignorieren Nodes/Master die Nachricht).
 - **Protokoll-Versionierung**: `proto_ver` nutzt `major.minor` (z. B. `1.0`). Gleiche Major-Versionen sind kompatibel, Minor-Abweichungen werden toleriert.
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
+- **Comms-Layer**: Commands nutzen ACK/Retry/Timeout/Dedupe; Heartbeats können ohne ACK laufen, Status/Commands sind ACK-pflichtig.
+- **2-Phase ACK**: Commands senden `delivered` ACK, optional `applied` ACK nach Ausführung.
 
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
@@ -139,8 +141,15 @@ Wireless Modem (Control/Status)
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
 - **Persistenz**:
   - `node_id`: `/xreactor/config/node_id.txt` (immer String)
-  - **Device Registry**: `/xreactor/config/registry_<node_id>.lua` (stabile IDs + Aliases für Energy-Storage/Matrix-Geräte)
+  - **Device Registry**: `/xreactor/config/registry_<role>_<node_id>.json` (stabile IDs + Aliases, Health-Status)
 - Manifest: `/xreactor/.manifest`
+
+## Services & Core-Module (Kurz)
+- **core/comms.lua**: ACK/Retry/Timeout/Dedupe, Peer-Health.
+- **core/health.lua**: Standardisiertes Health-Schema (OK/DEGRADED/DOWN + Reasons).
+- **core/registry.lua**: Persistente Device Registry (stable IDs, alias mapping, health).
+- **services/**: Lifecycle Services (comms, discovery, telemetry, ui, control).
+- **adapters/**: Einheitliche Adapter für Monitor, Energy Storage, Induction Matrix, Reactor, Turbine.
 
 ## ENERGY Node Monitor UI
 - Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
