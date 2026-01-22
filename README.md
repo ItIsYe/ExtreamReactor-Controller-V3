@@ -139,6 +139,7 @@ Wireless Modem (Control/Status)
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
 - **Persistenz**:
   - `node_id`: `/xreactor/config/node_id.txt` (immer String)
+  - **Device Registry**: `/xreactor/config/registry_<node_id>.lua` (stabile IDs + Aliases für Energy-Storage/Matrix-Geräte)
 - Manifest: `/xreactor/.manifest`
 
 ## ENERGY Node Monitor UI

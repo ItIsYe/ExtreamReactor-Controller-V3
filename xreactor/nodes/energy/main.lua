@@ -23,6 +23,10 @@ local utils = require("core.utils")
 local network_lib = require("core.network")
 local ui = require("core.ui")
 local colors = require("shared.colors")
+local registry_lib = require("core.registry")
+local storage_adapter = require("adapters.energy_storage")
+local matrix_adapter = require("adapters.induction_matrix")
+local monitor_adapter = require("adapters.monitor")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
@@ -179,6 +183,8 @@ for _, warning in ipairs(config_warnings) do
   utils.log(CONFIG.LOG_PREFIX, warning, "WARN")
 end
 
+local registry = registry_lib.new({ node_id = node_id, log_prefix = CONFIG.LOG_PREFIX })
+
 local network
 local devices = {
   storages = {},
@@ -205,60 +211,6 @@ local function to_set(list)
   return out
 end
 
-local function get_method_list(name)
-  local ok, methods = pcall(peripheral.getMethods, name)
-  if not ok or type(methods) ~= "table" then
-    return {}
-  end
-  return methods
-end
-
-local function build_method_set(method_list)
-  return to_set(method_list or {})
-end
-
-local function resolve_storage_profile(methods)
-  if methods.getEnergy and methods.getMaxEnergy then
-    return { stored = "getEnergy", capacity = "getMaxEnergy", input = "getLastInput", output = "getLastOutput" }
-  end
-  if methods.getEnergyStored and methods.getMaxEnergyStored then
-    return { stored = "getEnergyStored", capacity = "getMaxEnergyStored" }
-  end
-  if methods.getStoredPower and methods.getMaxStoredPower then
-    return { stored = "getStoredPower", capacity = "getMaxStoredPower" }
-  end
-  return nil
-end
-
-local function resolve_first_method(methods, candidates)
-  for _, name in ipairs(candidates or {}) do
-    if methods[name] then
-      return name
-    end
-  end
-  return nil
-end
-
-local function is_matrix_method_set(methods)
-  local keys = {
-    "getInstalledCells",
-    "getInstalledProviders",
-    "getInstalledPorts",
-    "getCells",
-    "getProviders",
-    "getPorts",
-    "getInductionCells",
-    "getInductionProviders",
-    "getInductionPorts"
-  }
-  for _, key in ipairs(keys) do
-    if methods[key] then
-      return true
-    end
-  end
-  return false
-end
-
 local function is_matrix_override(name)
   if config.matrix and name == config.matrix then
     return true
@@ -281,41 +233,9 @@ local function is_blocked_type(name)
 end
 
 local function pick_monitor()
-  if config.monitor and config.monitor.preferred_name then
-    local preferred = config.monitor.preferred_name
-    if peripheral.getType(preferred) == "monitor" then
-      return preferred
-    end
-  end
-  local monitors = { peripheral.find("monitor") }
-  local candidates = {}
-  for _, mon in ipairs(monitors) do
-    local ok, name = pcall(peripheral.getName, mon)
-    if ok and name then
-      table.insert(candidates, { name = name, mon = mon })
-    end
-  end
-  if #candidates == 0 then
-    return nil
-  end
-  if config.monitor and tostring(config.monitor.strategy):lower() == "first" then
-    table.sort(candidates, function(a, b) return a.name < b.name end)
-    return candidates[1].name
-  end
-  local best_name, best_area
-  for _, entry in ipairs(candidates) do
-    local w, h = entry.mon.getSize()
-    local area = w * h
-    if not best_area or area > best_area then
-      best_area = area
-      best_name = entry.name
-    end
-  end
-  if best_name then
-    return best_name
-  end
-  table.sort(candidates, function(a, b) return a.name < b.name end)
-  return candidates[1].name
+  local preferred = config.monitor and config.monitor.preferred_name or nil
+  local strategy = config.monitor and config.monitor.strategy or "largest"
+  return monitor_adapter.find(preferred, strategy, config.ui_scale, CONFIG.LOG_PREFIX)
 end
 
 local function log_discovery_snapshot(names, candidates, monitor_name, matrices)
@@ -327,13 +247,15 @@ local function log_discovery_snapshot(names, candidates, monitor_name, matrices)
     utils.log("ENERGY", ("Discovery peripheral: %s type=%s"):format(tostring(name), tostring(peripheral.getType(name))))
   end
   for _, candidate in ipairs(candidates) do
-    utils.log("ENERGY", ("Discovery candidate: %s methods=%s"):format(tostring(candidate.name), textutils.serialize(candidate.method_list)))
+    local method_list = candidate.adapter and candidate.adapter.getMethodList and candidate.adapter.getMethodList() or candidate.method_list or {}
+    utils.log("ENERGY", ("Discovery candidate: %s methods=%s"):format(tostring(candidate.name), textutils.serialize(method_list)))
   end
   if monitor_name then
     utils.log("ENERGY", ("Discovery monitor selection: %s"):format(tostring(monitor_name)))
   end
   for _, matrix in ipairs(matrices or {}) do
-    utils.log("ENERGY", ("Discovery matrix: %s methods=%s"):format(tostring(matrix.name), textutils.serialize(matrix.method_list or {})))
+    local method_list = matrix.adapter and matrix.adapter.getMethodList and matrix.adapter.getMethodList() or matrix.method_list or {}
+    utils.log("ENERGY", ("Discovery matrix: %s methods=%s"):format(tostring(matrix.name), textutils.serialize(method_list)))
   end
 end
 
@@ -361,46 +283,65 @@ local function discover()
     table.insert(prefer_names, name)
   end
 
-  local monitor_name = pick_monitor()
+  local monitor_entry = pick_monitor()
+  local monitor_name = monitor_entry and monitor_entry.name or nil
+  local monitor = monitor_entry and monitor_entry.mon or nil
   local previous_monitor = devices.monitor_name
-  local monitor, monitor_err = monitor_name and utils.safe_wrap(monitor_name) or nil
-  if monitor_name and not monitor then
-    utils.log("ENERGY", "WARN: monitor wrap failed for " .. tostring(monitor_name))
-    record_error("monitor", monitor_err or "wrap failed")
-  elseif not monitor_name then
-    record_error("monitor", "not found")
-  end
-  if monitor and monitor.setTextScale then
-    monitor.setTextScale(config.ui_scale)
-  end
   if monitor_name and monitor_name ~= previous_monitor then
     utils.log("ENERGY", "Monitor selected: " .. tostring(monitor_name))
   end
+  if not monitor_name then
+    record_error("monitor", "not found")
+  end
 
-  local storages = {}
-  local bound_names = {}
   local candidates = {}
-  local matrices = {}
+  local matrix_adapters = {}
+  local storage_adapters = {}
+  local registry_devices = {}
+  local seen = {}
 
   local function consider_name(name)
+    if seen[name] then
+      return
+    end
+    seen[name] = true
     if exclude_set[name] then
       return
     end
     if is_blocked_type(name) then
       return
     end
-    if include_set and not include_set[name] then
+    local forced_matrix = is_matrix_override(name)
+    if include_set and not include_set[name] and not forced_matrix then
       return
     end
-    local method_list = get_method_list(name)
-    local methods = build_method_set(method_list)
-    local profile = resolve_storage_profile(methods)
-    if profile then
-      local is_matrix = is_matrix_method_set(methods) or is_matrix_override(name)
-      if is_matrix then
-        table.insert(matrices, { name = name, profile = profile, method_list = method_list })
-      end
-      table.insert(candidates, { name = name, profile = profile, methods = methods, method_list = method_list })
+    local matrix = matrix_adapter.detect(name)
+    if matrix then
+      table.insert(matrix_adapters, matrix)
+      table.insert(candidates, { name = name, adapter = matrix })
+      table.insert(registry_devices, {
+        name = name,
+        type = matrix.getType(),
+        methods = matrix.getMethodList and matrix.getMethodList() or {},
+        kind = "matrix",
+        alias = config.matrix_aliases and config.matrix_aliases[name] or nil
+      })
+      return
+    end
+    if forced_matrix then
+      record_error(name, "matrix override set but methods missing")
+      return
+    end
+    local storage = storage_adapter.detect(name)
+    if storage then
+      table.insert(storage_adapters, storage)
+      table.insert(candidates, { name = name, adapter = storage })
+      table.insert(registry_devices, {
+        name = name,
+        type = storage.getType(),
+        methods = storage.getMethodList and storage.getMethodList() or {},
+        kind = "storage"
+      })
     end
   end
 
@@ -413,26 +354,72 @@ local function discover()
     end
   end
 
-  local matrix_set = {}
-  table.sort(matrices, function(a, b) return a.name < b.name end)
-  for _, matrix in ipairs(matrices) do
-    matrix_set[matrix.name] = true
+  registry:sync(registry_devices)
+  local order_index = registry:get_order_index()
+  local prefer_rank = {}
+  for idx, name in ipairs(prefer_names) do
+    prefer_rank[name] = idx
   end
-  local seen = {}
-  for _, candidate in ipairs(candidates) do
-    if not seen[candidate.name] and not matrix_set[candidate.name] then
-      seen[candidate.name] = true
-      local wrapped, wrap_err = utils.safe_wrap(candidate.name)
-      if wrapped then
-        table.insert(storages, {
-          name = candidate.name,
-          profile = candidate.profile
-        })
-        table.insert(bound_names, candidate.name)
-      elseif wrap_err then
-        record_error(candidate.name, wrap_err)
-      end
+
+  local storage_entries = {}
+  for _, adapter in ipairs(storage_adapters) do
+    local id = registry.state.name_index[adapter.name]
+    local entry = id and registry.state.devices[id]
+    if entry then
+      table.insert(storage_entries, { adapter = adapter, entry = entry })
     end
+  end
+  table.sort(storage_entries, function(a, b)
+    local rank_a = prefer_rank[a.adapter.name] or math.huge
+    local rank_b = prefer_rank[b.adapter.name] or math.huge
+    if rank_a ~= rank_b then
+      return rank_a < rank_b
+    end
+    local order_a = order_index[a.entry.id] or math.huge
+    local order_b = order_index[b.entry.id] or math.huge
+    if order_a ~= order_b then
+      return order_a < order_b
+    end
+    return tostring(a.adapter.name) < tostring(b.adapter.name)
+  end)
+
+  local matrix_entries = {}
+  for _, adapter in ipairs(matrix_adapters) do
+    local id = registry.state.name_index[adapter.name]
+    local entry = id and registry.state.devices[id]
+    if entry then
+      table.insert(matrix_entries, { adapter = adapter, entry = entry })
+    end
+  end
+  table.sort(matrix_entries, function(a, b)
+    local order_a = order_index[a.entry.id] or math.huge
+    local order_b = order_index[b.entry.id] or math.huge
+    if order_a ~= order_b then
+      return order_a < order_b
+    end
+    return tostring(a.adapter.name) < tostring(b.adapter.name)
+  end)
+
+  local storages = {}
+  local bound_names = {}
+  for _, item in ipairs(storage_entries) do
+    table.insert(storages, {
+      id = item.entry.id,
+      alias = item.entry.alias,
+      name = item.adapter.name,
+      adapter = item.adapter
+    })
+    table.insert(bound_names, item.entry.alias or item.entry.id)
+  end
+
+  local matrices = {}
+  for _, item in ipairs(matrix_entries) do
+    table.insert(matrices, {
+      id = item.entry.id,
+      alias = item.entry.alias,
+      name = item.adapter.name,
+      adapter = item.adapter
+    })
   end
 
   local degraded_reason
@@ -474,21 +461,21 @@ local function read_storage_stats()
   local total, capacity, input, output = 0, 0, 0, 0
   local stores = {}
   for _, storage in ipairs(devices.storages or {}) do
-    local profile = storage.profile or {}
-    local function read_metric(method)
-      if not method then
+    local adapter = storage.adapter
+    local function read_metric(label, fn)
+      if not fn then
         return 0
       end
-      local value, err = utils.safe_peripheral_call(storage.name, method)
+      local value, err = fn()
       if err then
-        record_error(storage.name .. "." .. tostring(method), err)
+        record_error(storage.name .. "." .. tostring(label), err)
       end
       return tonumber(value) or 0
     end
-    local stored = read_metric(profile.stored)
-    local cap = read_metric(profile.capacity)
-    local in_rate = read_metric(profile.input)
-    local out_rate = read_metric(profile.output)
+    local stored = read_metric("stored", adapter and adapter.getStored)
+    local cap = read_metric("capacity", adapter and adapter.getCapacity)
+    local in_rate = read_metric("input", adapter and adapter.getInput)
+    local out_rate = read_metric("output", adapter and adapter.getOutput)
     stored = tonumber(stored) or 0
     cap = tonumber(cap) or stored
     in_rate = tonumber(in_rate) or 0
@@ -498,7 +485,9 @@ local function read_storage_stats()
     input = input + in_rate
     output = output + out_rate
     table.insert(stores, {
-      id = storage.name,
+      id = storage.id or storage.name,
+      alias = storage.alias,
+      name = storage.name,
       stored = stored,
       capacity = cap,
       input = in_rate,
@@ -513,34 +502,31 @@ local function read_matrix_stats()
   local matrices = {}
   local total = { stored = 0, capacity = 0, input = 0, output = 0, has_flow = false }
   for idx, matrix in ipairs(devices.matrices or {}) do
-    local methods = build_method_set(matrix.method_list or {})
-    local profile = resolve_storage_profile(methods)
-    local function read_metric(method)
-      if not method then
+    local adapter = matrix.adapter
+    local function read_metric(label, fn)
+      if not fn then
         return nil, "missing method"
       end
-      local value, err = utils.safe_peripheral_call(matrix.name, method)
+      local value, err = fn()
       if err then
-        record_error(matrix.name .. "." .. tostring(method), err)
+        record_error(matrix.name .. "." .. tostring(label), err)
       end
       return tonumber(value), err
     end
-    local stored, stored_err = read_metric(profile and profile.stored)
-    local capacity, cap_err = read_metric(profile and profile.capacity)
+    local stored, stored_err = read_metric("stored", adapter and adapter.getStored)
+    local capacity, cap_err = read_metric("capacity", adapter and adapter.getCapacity)
     stored = stored or 0
     capacity = capacity or stored
-    local input = select(1, read_metric(profile and profile.input))
-    local output = select(1, read_metric(profile and profile.output))
-    local cells_method = resolve_first_method(methods, { "getInstalledCells", "getCells", "getInductionCells" })
-    local providers_method = resolve_first_method(methods, { "getInstalledProviders", "getProviders", "getInductionProviders" })
-    local ports_method = resolve_first_method(methods, { "getInstalledPorts", "getPorts", "getInductionPorts" })
-    local cells = select(1, read_metric(cells_method))
-    local providers = select(1, read_metric(providers_method))
-    local ports = select(1, read_metric(ports_method))
+    local input = select(1, read_metric("input", adapter and adapter.getInput))
+    local output = select(1, read_metric("output", adapter and adapter.getOutput))
+    local cells = select(1, read_metric("cells", adapter and adapter.getCells))
+    local providers = select(1, read_metric("providers", adapter and adapter.getProviders))
+    local ports = select(1, read_metric("ports", adapter and adapter.getPorts))
     local degraded = stored_err or cap_err
     if debug_enabled and (cells == nil or providers == nil or ports == nil) then
+      local method_list = adapter and adapter.getMethodList and adapter.getMethodList() or {}
       utils.log("ENERGY", ("Matrix component counts unavailable (%s). Methods=%s"):format(
-        matrix.name, textutils.serialize(matrix.method_list or {})
+        matrix.name, textutils.serialize(method_list)
       ))
     end
     if input ~= nil or output ~= nil then
@@ -550,9 +536,9 @@ local function read_matrix_stats()
     end
     total.stored = total.stored + stored
     total.capacity = total.capacity + capacity
-    local display = config.matrix_aliases and config.matrix_aliases[matrix.name] or matrix.name or ("Matrix " .. tostring(idx))
+    local display = matrix.alias or matrix.name or ("Matrix " .. tostring(idx))
     table.insert(matrices, {
-      id = matrix.name,
+      id = matrix.id or matrix.name,
       name = display,
       stored = stored,
       capacity = capacity,
