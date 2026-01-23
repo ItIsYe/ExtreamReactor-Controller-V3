@@ -42,7 +42,8 @@ local function render(mon, model)
       scan_age = (" scan %ds"):format(age)
     end
     local storage_names = join_names(node.bound_storage_names, w - 8)
-    table.insert(rows, { text = string.format("%s %s S:%d%s%s", node.id or "ENERGY", monitor_flag, storage_count, degraded, scan_age), status = status })
+    local bindings = node.bindings_summary and (" " .. node.bindings_summary) or ""
+    table.insert(rows, { text = string.format("%s %s S:%d%s%s%s", node.id or "ENERGY", monitor_flag, storage_count, degraded, scan_age, bindings), status = status })
     table.insert(rows, { text = "  storages: " .. storage_names, status = status })
     if node.last_scan_result then
       table.insert(rows, { text = "  last: " .. tostring(node.last_scan_result), status = status })

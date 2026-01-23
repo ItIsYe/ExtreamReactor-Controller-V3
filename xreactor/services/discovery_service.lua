@@ -73,7 +73,8 @@ function discovery:tick()
     bound = bound,
     missing = missing,
     last_scan = ts,
-    errors = {}
+    errors = {},
+    diagnostics = self.registry and self.registry.get_diagnostics and self.registry:get_diagnostics() or nil
   }
   if self.update_health then
     self.update_health(true)

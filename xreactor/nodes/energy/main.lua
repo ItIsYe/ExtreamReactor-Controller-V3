@@ -209,11 +209,20 @@ local devices = {
   peripheral_count = 0,
   last_error = nil,
   last_error_ts = nil,
-  discovery_failed = false
+  discovery_failed = false,
+  adapters = {
+    storages = {},
+    matrices = {}
+  },
+  registry_snapshot = nil,
+  registry_summary = nil,
+  registry_load_error = nil,
+  proto_mismatch = false
 }
 local last_heartbeat = 0
 local last_scan = 0
 local ui_state = { last_snapshot = nil, last_draw = 0, page = 1, pages = {} }
+local master_seen_ts = nil
 
 local function to_set(list)
   local out = {}
@@ -311,6 +320,19 @@ local function discover()
   local storage_adapters = {}
   local registry_devices = {}
   local seen = {}
+  local adapter_map = { matrices = {}, storages = {} }
+
+  for _, name in ipairs(names) do
+    if peripheral.getType(name) == "monitor" then
+      table.insert(registry_devices, {
+        name = name,
+        type = "monitor",
+        methods = peripheral.getMethods(name) or {},
+        kind = "monitor",
+        bound = monitor_name == name
+      })
+    end
+  end
 
   local function consider_name(name)
     if seen[name] then
@@ -331,12 +353,16 @@ local function discover()
     if matrix then
       table.insert(matrix_adapters, matrix)
       table.insert(candidates, { name = name, adapter = matrix })
+      adapter_map.matrices[name] = matrix
       table.insert(registry_devices, {
         name = name,
         type = matrix.getType(),
         methods = matrix.getMethodList and matrix.getMethodList() or {},
         kind = "matrix",
-        alias = config.matrix_aliases and config.matrix_aliases[name] or nil
+        alias = config.matrix_aliases and config.matrix_aliases[name] or nil,
+        bound = true,
+        features = matrix.features,
+        schema = matrix.schema
       })
       return
     end
@@ -348,11 +374,15 @@ local function discover()
     if storage then
       table.insert(storage_adapters, storage)
       table.insert(candidates, { name = name, adapter = storage })
+      adapter_map.storages[name] = storage
       table.insert(registry_devices, {
         name = name,
         type = storage.getType(),
         methods = storage.getMethodList and storage.getMethodList() or {},
-        kind = "storage"
+        kind = "storage",
+        bound = true,
+        features = storage.features,
+        schema = storage.schema
       })
     end
   end
@@ -366,6 +396,8 @@ local function discover()
     end
   end
 
+  registry:sync(registry_devices)
+
   local order_index = registry:get_order_index()
   local prefer_rank = {}
   for idx, name in ipairs(prefer_names) do
@@ -373,10 +405,9 @@ local function discover()
   end
 
   local storage_entries = {}
-  for _, adapter in ipairs(storage_adapters) do
-    local id = registry.state.name_index[adapter.name]
-    local entry = id and registry.state.devices[id]
-    if entry then
+  for _, entry in ipairs(registry:get_bound_devices("storage")) do
+    local adapter = adapter_map.storages[entry.name]
+    if adapter then
       table.insert(storage_entries, { adapter = adapter, entry = entry })
     end
   end
@@ -395,10 +426,9 @@ local function discover()
   end)
 
   local matrix_entries = {}
-  for _, adapter in ipairs(matrix_adapters) do
-    local id = registry.state.name_index[adapter.name]
-    local entry = id and registry.state.devices[id]
-    if entry then
+  for _, entry in ipairs(registry:get_bound_devices("matrix")) do
+    local adapter = adapter_map.matrices[entry.name]
+    if adapter then
       table.insert(matrix_entries, { adapter = adapter, entry = entry })
     end
   end
@@ -449,6 +479,10 @@ local function discover()
   devices.storages = storages
   devices.matrices = matrices
   devices.bound_storage_names = bound_names
+  devices.adapters = adapter_map
+  devices.registry_snapshot = registry:get_devices_by_kind()
+  devices.registry_summary = registry:get_summary()
+  devices.registry_load_error = registry.state.load_error
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
 
@@ -461,6 +495,7 @@ local function read_storage_stats()
   local stores = {}
   for _, storage in ipairs(devices.storages or {}) do
     local adapter = storage.adapter
+    local had_error = false
     local function read_metric(label, fn)
       if not fn then
         return 0
@@ -468,6 +503,7 @@ local function read_storage_stats()
       local value, err = fn()
       if err then
         record_error(storage.name .. "." .. tostring(label), err)
+        had_error = true
       end
       return tonumber(value) or 0
     end
@@ -491,7 +527,8 @@ local function read_storage_stats()
       capacity = cap,
       input = in_rate,
       output = out_rate,
-      is_matrix = storage.is_matrix or false
+      is_matrix = storage.is_matrix or false,
+      ok = not had_error
     })
   end
   return { stored = total, capacity = capacity, input = input, output = output, stores = stores }
@@ -538,7 +575,9 @@ local function read_matrix_stats()
     local display = matrix.alias or matrix.name or ("Matrix " .. tostring(idx))
     table.insert(matrices, {
       id = matrix.id or matrix.name,
-      name = display,
+      name = matrix.name,
+      alias = matrix.alias,
+      label = display,
       stored = stored,
       capacity = capacity,
       percent = capacity > 0 and (stored / capacity) or 0,
@@ -547,6 +586,7 @@ local function read_matrix_stats()
       cells = cells,
       providers = providers,
       ports = ports,
+      ok = not degraded,
       status = degraded and "DEGRADED" or "OK"
     })
   end
@@ -570,18 +610,21 @@ local function build_status_payload()
   local total_capacity = energy.capacity + (matrix.total.capacity or 0)
   local total_input = energy.input + (matrix.total.input or 0)
   local total_output = energy.output + (matrix.total.output or 0)
+  local registry_summary = devices.registry_summary or registry:get_summary()
+  local matrix_bound = registry_summary.kinds.matrix and registry_summary.kinds.matrix.bound or 0
+  local storage_bound = registry_summary.kinds.storage and registry_summary.kinds.storage.bound or 0
   energy.monitor_bound = devices.monitor ~= nil
-  energy.storage_bound_count = #(devices.storages or {})
+  energy.storage_bound_count = storage_bound
   energy.bound_storage_names = devices.bound_storage_names or {}
   energy.matrices = matrix.matrices
   energy.total = matrix.total
-  energy.matrix_present = #(matrix.matrices or {}) > 0
+  energy.matrix_present = matrix_bound > 0
   energy.matrix_energy = matrix.total.stored
   energy.matrix_capacity = matrix.total.capacity
   energy.matrix_percent = matrix.total.percent
   energy.matrix_in = matrix.total.input
   energy.matrix_out = matrix.total.output
-  energy.storages_count = energy.storage_bound_count
+  energy.storages_count = storage_bound
   energy.stored = total_stored
   energy.capacity = total_capacity
   energy.input = total_input
@@ -604,27 +647,33 @@ local function build_status_payload()
   if not energy.monitor_bound then
     reasons[health.reasons.NO_MONITOR] = true
   end
-  if energy.storage_bound_count == 0 then
+  if storage_bound == 0 then
     reasons[health.reasons.NO_STORAGE] = true
   end
-  if not energy.matrix_present then
+  if matrix_bound == 0 then
     reasons[health.reasons.NO_MATRIX] = true
   end
-  if devices.discovery_failed then
+  if devices.discovery_failed or devices.registry_load_error then
     reasons[health.reasons.DISCOVERY_FAILED] = true
+  end
+  if devices.proto_mismatch then
+    reasons[health.reasons.PROTO_MISMATCH] = true
+  end
+  if master_seen_ts and os.epoch("utc") - master_seen_ts > config.heartbeat_interval * 6000 then
+    reasons[health.reasons.COMMS_DOWN] = true
   end
   local status = (next(reasons) and health.status.DEGRADED) or health.status.OK
   energy_health.status = status
   energy_health.reasons = reasons
   energy_health.last_seen_ts = os.epoch("utc")
   energy_health.bindings = {
-    storages = energy.bound_storage_names,
-    matrices = (energy.matrices or {}),
-    monitor = energy.monitor_bound and devices.monitor_name or nil
+    storages = storage_bound,
+    matrices = matrix_bound,
+    monitor = energy.monitor_bound and 1 or 0
   }
   energy_health.capabilities = {
-    storage_count = energy.storage_bound_count,
-    matrix_count = #(energy.matrices or {}),
+    storage_count = storage_bound,
+    matrix_count = matrix_bound,
     monitor = energy.monitor_bound
   }
   energy.health = {
@@ -633,6 +682,12 @@ local function build_status_payload()
     last_seen_ts = energy_health.last_seen_ts,
     bindings = energy_health.bindings,
     capabilities = energy_health.capabilities
+  }
+  energy.bindings_summary = health.summarize_bindings(energy_health.bindings)
+  energy.registry = {
+    summary = registry_summary,
+    devices = registry:get_devices_by_kind(),
+    diagnostics = registry:get_diagnostics()
   }
   return energy
 end
@@ -729,10 +784,11 @@ local function render_monitor()
   local reasons_text = payload.health and table.concat(payload.health.reasons or {}, ",") or ""
   local matrices = payload.matrices or {}
   local storages = payload.stores or {}
-  local registry_entries = registry:list()
+  local registry_entries = payload.registry and payload.registry.devices or registry:list()
+  local registry_summary = payload.registry and payload.registry.summary or registry:get_summary()
   local registry_rows = {}
   for _, entry in ipairs(registry_entries) do
-    local state = entry.missing and "MISSING" or "BOUND"
+    local state = entry.missing and "MISSING" or (entry.bound and "BOUND" or "FOUND")
     local label = string.format("%s %s", entry.alias or entry.id, state)
     table.insert(registry_rows, { text = label, status = entry.missing and "WARNING" or "OK" })
   end
@@ -745,11 +801,12 @@ local function render_monitor()
     last_error_ts = devices.last_error_ts,
     peripheral_count = devices.peripheral_count,
     monitor_bound = devices.monitor ~= nil,
-    storages_count = #(devices.storages or {}),
+    storages_count = registry_summary.kinds.storage and registry_summary.kinds.storage.bound or 0,
     storages = storages,
     matrices = matrices,
     total = payload.total,
-    registry_rows = registry_rows
+    registry_rows = registry_rows,
+    registry_summary = registry_summary
   }
   local snapshot = textutils.serialize(model)
   if ui_state.last_snapshot == snapshot then
@@ -838,6 +895,15 @@ local function render_monitor()
       { text = ("Last scan: %s (%s)"):format(model.scan_result or "n/a", format_age(model.last_scan_ts, now)) },
       { text = ("Last error: %s (%s)"):format(model.last_error or "none", format_age(model.last_error_ts, now)) }
     }
+    if model.registry_summary then
+      table.insert(info_rows, {
+        text = ("Registry total: %d bound:%d missing:%d"):format(
+          model.registry_summary.total or 0,
+          model.registry_summary.bound or 0,
+          model.registry_summary.missing or 0
+        )
+      })
+    end
     ui.text(mon, 2, line, "Diagnostics", colors.get("text"), colors.get("background"))
     line = line + 1
     local rows = {}
@@ -891,10 +957,10 @@ end
 
 local function handle_message(message)
   if message.type == "PROTO_MISMATCH" then
-    energy_health.status = health.status.DEGRADED
-    energy_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+    devices.proto_mismatch = true
     return
   end
+  master_seen_ts = os.epoch("utc")
   if message.type == constants.message_types.COMMAND then
     comms:send_applied_ack(message, "ignored")
   end
@@ -912,7 +978,7 @@ local function init()
     registry = registry,
     discover = discover,
     interval = config.scan_interval,
-    managed_registry = true,
+    managed_registry = false,
     update_health = function(ok, reason)
       devices.discovery_failed = not ok
     end
@@ -940,8 +1006,10 @@ local function init()
   }))
   services:init()
   discover()
+  local summary = registry:get_summary()
   comms:send_hello({
-    storages = #(devices.storages or {}),
+    storages = summary.kinds.storage and summary.kinds.storage.bound or 0,
+    matrices = summary.kinds.matrix and summary.kinds.matrix.bound or 0,
     monitor = devices.monitor and 1 or 0
   })
   utils.log("ENERGY", "Node ready: " .. comms.network.id)

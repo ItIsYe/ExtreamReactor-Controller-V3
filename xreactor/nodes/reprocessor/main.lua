@@ -21,11 +21,15 @@ local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
 local health = require("core.health")
+local ui = require("core.ui")
+local colors = require("shared.colors")
 local registry_lib = require("core.registry")
+local monitor_adapter = require("adapters.monitor")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
+local ui_service = require("services.ui_service")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.REPROCESSOR_NODE, -- Node role identifier.
@@ -120,31 +124,89 @@ local services
 local registry = registry_lib.new({ node_id = node_id, role = "reprocessor", log_prefix = CONFIG.LOG_PREFIX })
 local reproc_health = health.new({})
 local buffers = {}
+local devices = {
+  monitor = nil,
+  monitor_name = nil,
+  discovery_failed = false,
+  registry_summary = nil,
+  registry_load_error = nil,
+  proto_mismatch = false,
+  last_scan_ts = nil
+}
 local last_heartbeat = 0
 local master_seen = os.epoch("utc")
 local standby = false
 
-local function cache()
-  buffers = utils.cache_peripherals(config.buffers)
+local function cache(bound_names)
+  buffers = utils.cache_peripherals(bound_names or {})
 end
 
 local function discover()
-  local devices = {}
-  for name in pairs(buffers or {}) do
-    if peripheral.isPresent(name) then
-      table.insert(devices, {
+  local names = peripheral.getNames() or {}
+  local registry_devices = {}
+  local allow_set = {}
+  for _, name in ipairs(config.buffers or {}) do
+    allow_set[name] = true
+  end
+  local allow_all = #config.buffers == 0
+  local monitor_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  local monitor_name = monitor_entry and monitor_entry.name or nil
+  devices.monitor = monitor_entry and monitor_entry.mon or nil
+  devices.monitor_name = monitor_name
+
+  for _, name in ipairs(names) do
+    if peripheral.getType(name) == "monitor" then
+      table.insert(registry_devices, {
         name = name,
-        type = peripheral.getType(name),
+        type = "monitor",
         methods = peripheral.getMethods(name) or {},
-        kind = "buffer"
+        kind = "monitor",
+        bound = monitor_name == name
       })
     end
   end
-  registry:sync(devices)
+
+  for _, name in ipairs(names) do
+    if not allow_all and not allow_set[name] then
+      goto continue
+    end
+    local ok, methods = pcall(peripheral.getMethods, name)
+    if not ok or type(methods) ~= "table" then
+      goto continue
+    end
+    local has_buffer = false
+    for _, method in ipairs(methods) do
+      if method == "getWaste" or method == "getItemCount" then
+        has_buffer = true
+        break
+      end
+    end
+    if has_buffer then
+      table.insert(registry_devices, {
+        name = name,
+        type = peripheral.getType(name),
+        methods = methods,
+        kind = "buffer",
+        bound = true
+      })
+    end
+    ::continue::
+  end
+  registry:sync(registry_devices)
+  devices.registry_summary = registry:get_summary()
+  devices.registry_load_error = registry.state.load_error
+  devices.last_scan_ts = os.epoch("utc")
+  local bound = registry:get_bound_devices("buffer")
+  local bound_names = {}
+  for _, entry in ipairs(bound) do
+    table.insert(bound_names, entry.name)
+  end
+  cache(bound_names)
 end
 
 local function hello()
-  comms:send_hello({ buffers = #config.buffers })
+  local summary = registry:get_summary()
+  comms:send_hello({ buffers = summary.kinds.buffer and summary.kinds.buffer.bound or 0 })
 end
 
 local function read_buffers()
@@ -166,10 +228,19 @@ local function build_status_payload()
   if not next(buffers) then
     reasons[health.reasons.NO_STORAGE] = true
   end
+  if devices.discovery_failed or devices.registry_load_error then
+    reasons[health.reasons.DISCOVERY_FAILED] = true
+  end
+  if devices.proto_mismatch then
+    reasons[health.reasons.PROTO_MISMATCH] = true
+  end
+  if master_seen and os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
+    reasons[health.reasons.COMMS_DOWN] = true
+  end
   reproc_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
   reproc_health.reasons = reasons
   reproc_health.last_seen_ts = os.epoch("utc")
-  reproc_health.bindings = { buffers = read_buffers() }
+  reproc_health.bindings = { buffers = #read_buffers() }
   reproc_health.capabilities = { buffers = #config.buffers }
   return {
     buffers = read_buffers(),
@@ -181,8 +252,43 @@ local function build_status_payload()
       bindings = reproc_health.bindings,
       capabilities = reproc_health.capabilities
     },
-    bindings = reproc_health.bindings
+    bindings = reproc_health.bindings,
+    bindings_summary = health.summarize_bindings(reproc_health.bindings),
+    registry = {
+      summary = devices.registry_summary or registry:get_summary(),
+      devices = registry:get_devices_by_kind(),
+      diagnostics = registry:get_diagnostics()
+    }
   }
+end
+
+local function format_age(ts, now)
+  if not ts then
+    return "n/a"
+  end
+  return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
+end
+
+local function render_monitor()
+  if not devices.monitor then
+    return
+  end
+  local mon = devices.monitor
+  local w, h = mon.getSize()
+  local payload = build_status_payload()
+  local status = payload.health and payload.health.status or "OK"
+  ui.panel(mon, 1, 1, w, h, "REPROC NODE", status)
+  ui.text(mon, 2, 2, ("ID: %s"):format(comms and comms.network and comms.network.id or config.node_id), colors.get("text"), colors.get("background"))
+  ui.badge(mon, w - 6, 2, status, status)
+  ui.text(mon, 2, 4, ("Standby: %s"):format(standby and "yes" or "no"), colors.get("text"), colors.get("background"))
+
+  local summary = payload.registry and payload.registry.summary or registry:get_summary()
+  local rows = {
+    { text = ("Discovery: %s"):format(devices.discovery_failed and "FAILED" or "OK"), status = devices.discovery_failed and "WARNING" or "OK" },
+    { text = ("Last scan: %s"):format(format_age(devices.last_scan_ts, os.epoch("utc"))) },
+    { text = ("Registry total:%d bound:%d missing:%d"):format(summary.total or 0, summary.bound or 0, summary.missing or 0) }
+  }
+  ui.list(mon, 2, 6, w - 2, rows, { max_rows = h - 7 })
 end
 
 local function process_buffers()
@@ -195,19 +301,18 @@ local function process_buffers()
 end
 
 local function init()
-  cache()
+  discover()
   services = service_manager.new({ log_prefix = "REPROC" })
   comms = comms_service.new({
     config = config,
     log_prefix = "REPROC",
     on_message = function(message)
       if message.type == "PROTO_MISMATCH" then
-        reproc_health.status = health.status.DEGRADED
-        reproc_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+        devices.proto_mismatch = true
         return
       end
+      master_seen = os.epoch("utc")
       if message.type == constants.message_types.HELLO then
-        master_seen = os.epoch("utc")
         standby = false
       elseif message.type == constants.message_types.COMMAND and protocol.is_for_node(message, comms.network.id) then
         local cmd = message.payload.command
@@ -224,7 +329,11 @@ local function init()
   services:add(discovery_service.new({
     registry = registry,
     discover = discover,
-    interval = config.heartbeat_interval
+    interval = config.heartbeat_interval,
+    managed_registry = false,
+    update_health = function(ok)
+      devices.discovery_failed = not ok
+    end
   }))
   services:add(telemetry_service.new({
     comms = comms,
@@ -232,6 +341,11 @@ local function init()
     heartbeat_interval = config.heartbeat_interval,
     build_payload = build_status_payload,
     heartbeat_state = function() return { standby = standby } end
+  }))
+  services:add(ui_service.new({
+    interval = 1,
+    render = render_monitor,
+    handle_input = function() end
   }))
   services:init()
   hello()
