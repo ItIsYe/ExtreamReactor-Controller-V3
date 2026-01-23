@@ -56,6 +56,25 @@ Wireless Modem (Control/Status)
 - **Dedupe**: Pro Sender wird ein Zeitfenster gecacht, um doppelte COMMANDS zu erkennen.
 - **COMMS_DOWN**: Ein Peer ist „down“, wenn `peer_timeout_s` überschritten wird (UI zeigt `COMMS_DOWN` + Age).
 
+## Definition of Done (Comms)
+- **Keine Mischpfade**: Business-Logic sendet/empfängt **nie** direkt (`rednet`, `modem.transmit`, `os.pullEvent("modem_message")`) außerhalb `core/comms.lua` + `services/comms_service.lua`.
+- **COMMAND Lifecycle**: Jeder COMMAND endet deterministisch mit `ACK_DELIVERED` und `ACK_APPLIED` inkl. Ergebnis `{ ok=true }` oder `{ ok=false, error, reason_code }`.
+- **Proto/Validation**: Payload-Validation + `proto_ver`-Check; bei Mismatch liefert der Node `ok=false` mit `reason_code=PROTO_MISMATCH`.
+- **Timeout/Retry**: Bei ausbleibendem `ACK_APPLIED` markiert der MASTER das Kommando als **failed** und loggt den Grund (`ACK_TIMEOUT`).
+- **COMMS_DOWN Semantik**:
+  - MASTER setzt Nodes auf `COMMS_DOWN` bei `peer_timeout_s`.
+  - Nodes markieren `COMMS_DOWN`, wenn der MASTER nicht erreichbar ist (laufen aber autonom).
+- **Diagnostics/Observability**: Master/Nodes zeigen Queue/Inflight/Retry/Dropped/Dedupe-Hits und Peer-Status.
+
+## Manual Test Checklist (Kurz)
+1. **Start**: MASTER + RT + ENERGY starten (FUEL/WATER/REPROCESSOR optional).
+2. **Comms-Down**: Einen Node stoppen → MASTER zeigt `COMMS_DOWN` + `down_since` + Age; Node läuft lokal weiter.
+3. **Comms-Recover**: Node neu starten → MASTER zeigt `OK`, `down_since` reset.
+4. **Command Applied**: MASTER sendet Setpoints/Mode → `ACK_APPLIED` sichtbar (ok/failed, reason_code).
+5. **Diagnostics**: Master-Resources-Page zeigt `Queue/Inflight/Retry/Dropped/Dedupe` + Peer-Summary.
+6. **Node Diagnostics**: Jede Node zeigt MASTER-Link (OK/DOWN + Age) + Queue/Inflight/Retry/Dropped/Dedupe.
+7. **Safe Update**: SAFE UPDATE ausführen → keine Rolle/Config-Resets, Rollback bei Fehlern.
+
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
 - **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Zusätzlich ergänzt er `package.path` um `/xreactor/?.lua` und `/xreactor/?/init.lua`, damit auch native `require`-Aufrufe immer aus dem Projekt-Root auflösen.

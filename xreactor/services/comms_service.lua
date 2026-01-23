@@ -13,6 +13,16 @@ local function status_channel(config)
   return (config.channels and config.channels.status) or constants.channels.STATUS
 end
 
+local function sanitize_channels(config)
+  config.channels = type(config.channels) == "table" and config.channels or {}
+  if type(config.channels.control) ~= "number" then
+    config.channels.control = constants.channels.CONTROL
+  end
+  if type(config.channels.status) ~= "number" then
+    config.channels.status = constants.channels.STATUS
+  end
+end
+
 function comms_service.new(opts)
   opts = opts or {}
   local self = {
@@ -33,6 +43,8 @@ function comms_service.new(opts)
 end
 
 function comms_service:init()
+  sanitize_channels(self.config)
+  self.config.comms = comms_lib.sanitize_config(self.config.comms or {})
   self.network = network_lib.init(self.config)
   local normalized_id = utils.normalize_node_id(self.network.id)
   if normalized_id ~= self.network.id then
@@ -167,6 +179,14 @@ end
 
 function comms_service:get_peers()
   return self.comms.get_peer_state()
+end
+
+function comms_service:get_diagnostics()
+  return self.comms.get_diagnostics()
+end
+
+function comms_service:consume_timeouts()
+  return self.comms.consume_timeouts()
 end
 
 function comms_service:is_master_reachable()

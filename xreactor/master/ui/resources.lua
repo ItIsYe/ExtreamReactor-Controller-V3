@@ -2,6 +2,14 @@ local ui = require("core.ui")
 local colorset = require("shared.colors")
 local cache = {}
 
+local function format_age(ts)
+  if not ts then
+    return "n/a"
+  end
+  local age = math.max(0, math.floor((os.epoch("utc") - ts) / 1000))
+  return age .. "s"
+end
+
 local function render(mon, model)
   local key = textutils.serialize(model)
   if cache[mon] == key then return end
@@ -55,6 +63,9 @@ local function render(mon, model)
     local reasons = node.reasons and #node.reasons > 0 and node.reasons or ""
     local bindings = node.bindings and #node.bindings > 0 and (" " .. node.bindings) or ""
     table.insert(diagnostics, { text = string.format("%s %s age:%s%s", node.id or "NODE", node.status or "OFFLINE", age, bindings), status = node.status })
+    if node.down_since then
+      table.insert(diagnostics, { text = "  down since: " .. format_age(node.down_since), status = node.status })
+    end
     if reasons ~= "" then
       table.insert(diagnostics, { text = "  reasons: " .. reasons, status = node.status })
     end
@@ -65,10 +76,45 @@ local function render(mon, model)
     if node.last_error then
       table.insert(diagnostics, { text = "  last error: " .. tostring(node.last_error), status = "WARNING" })
     end
+    if node.last_command_result then
+      local result = node.last_command_result
+      local cmd_status = result.ok and "OK" or "WARNING"
+      local target = result.command_target or "command"
+      local reason = result.reason_code or (result.ok and "OK" or "FAILED")
+      table.insert(diagnostics, { text = ("  last cmd: %s %s"):format(tostring(target), tostring(reason)), status = cmd_status })
+      if result.ok == false and result.error then
+        table.insert(diagnostics, { text = "    cmd error: " .. tostring(result.error), status = "WARNING" })
+      end
+    end
   end
+  local comms = model.comms or {}
+  local metrics = comms.metrics or {}
+  local peers = comms.peers or {}
+  local peer_total = 0
+  local peer_down = 0
+  for _, peer in pairs(peers) do
+    peer_total = peer_total + 1
+    if peer.down then
+      peer_down = peer_down + 1
+    end
+  end
+  local comms_rows = {
+    { text = ("Queue: %d  Inflight: %d"):format(comms.queue_depth or 0, comms.inflight_count or 0) },
+    { text = ("Retries: %d  Dropped: %d"):format(metrics.retries or 0, metrics.dropped or 0) },
+    { text = ("Dedupe hits: %d  Timeouts: %d"):format(metrics.dedupe_hits or 0, metrics.timeouts or 0) },
+    { text = ("Peers: %d  Down: %d"):format(peer_total, peer_down) }
+  }
+  local node_rows = math.min(7, #diagnostics)
+  local comms_rows_count = #comms_rows
+  local comms_title_y = h - node_rows - comms_rows_count - 3
+  if comms_title_y < 12 then
+    comms_title_y = 12
+  end
+  ui.text(mon, 2, comms_title_y, "Comms Diagnostics", colorset.get("text"), colorset.get("background"))
+  ui.list(mon, 2, comms_title_y + 1, w - 2, comms_rows, { max_rows = comms_rows_count })
   if #diagnostics > 0 then
-    ui.text(mon, 2, h - math.min(7, #diagnostics) - 1, "Node Diagnostics", colorset.get("text"), colorset.get("background"))
-    ui.list(mon, 2, h - math.min(7, #diagnostics), w - 2, diagnostics, { max_rows = math.min(7, #diagnostics) })
+    ui.text(mon, 2, h - node_rows - 1, "Node Diagnostics", colorset.get("text"), colorset.get("background"))
+    ui.list(mon, 2, h - node_rows, w - 2, diagnostics, { max_rows = node_rows })
   end
 end
 

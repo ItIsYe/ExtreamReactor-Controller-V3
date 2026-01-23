@@ -104,6 +104,17 @@ local DEFAULT_CONFIG = {
     control = constants.channels.CONTROL, -- Control channel for MASTER commands.
     status = constants.channels.STATUS -- Status channel for telemetry.
   },
+  comms = {
+    ack_timeout_s = 3.0, -- Seconds before retrying a command.
+    max_retries = 4, -- Maximum retries per message.
+    backoff_base_s = 0.6, -- Base backoff seconds.
+    backoff_cap_s = 6.0, -- Max backoff seconds.
+    dedupe_ttl_s = 30, -- Seconds to keep dedupe entries.
+    dedupe_limit = 200, -- Max dedupe entries per peer.
+    peer_timeout_s = 12.0, -- Seconds before marking peer down.
+    queue_limit = 200, -- Max queued outbound messages.
+    drop_simulation = 0 -- Drop rate (0-1) for testing comms.
+  },
   safety = {
     max_temperature = 2000, -- Maximum reactor temperature before SCRAM.
     max_rpm = 1800, -- Maximum turbine RPM.
@@ -174,6 +185,9 @@ local function validate_config(config_values, defaults)
   if type(config_values.heartbeat_interval) ~= "number" or config_values.heartbeat_interval <= 0 then
     config_values.heartbeat_interval = defaults.heartbeat_interval
     add_config_warning("heartbeat_interval missing/invalid; defaulting to " .. tostring(defaults.heartbeat_interval))
+  elseif config_values.heartbeat_interval > 60 then
+    config_values.heartbeat_interval = 60
+    add_config_warning("heartbeat_interval too high; clamping to 60s")
   end
   if type(config_values.scan_interval) ~= "number" or config_values.scan_interval <= 0 then
     config_values.scan_interval = defaults.scan_interval
@@ -266,6 +280,13 @@ local function validate_config(config_values, defaults)
   if type(config_values.status_interval) ~= "number" or config_values.status_interval <= 0 then
     config_values.status_interval = defaults.status_interval
     add_config_warning("status_interval missing/invalid; defaulting to " .. tostring(defaults.status_interval))
+  elseif config_values.status_interval > 60 then
+    config_values.status_interval = 60
+    add_config_warning("status_interval too high; clamping to 60s")
+  end
+  if type(config_values.comms) ~= "table" then
+    config_values.comms = utils.deep_copy(defaults.comms)
+    add_config_warning("comms config missing/invalid; defaulting to comms defaults")
   end
   if config_values.status_log ~= nil and type(config_values.status_log) ~= "boolean" then
     config_values.status_log = defaults.status_log
@@ -2103,6 +2124,17 @@ local function update_monitor()
   local avg_temp = snapshot and snapshot.avg_temp or 0
   local health_payload = build_health_payload()
   local summary = devices.registry_summary or registry:get_summary()
+  local comms_diag = comms and comms:get_diagnostics() or {}
+  local metrics = comms_diag.metrics or {}
+  local master_state = "UNKNOWN"
+  local master_age = "n/a"
+  for _, peer in pairs(comms_diag.peers or {}) do
+    if peer.role == constants.roles.MASTER then
+      master_state = peer.down and "DOWN" or "OK"
+      master_age = peer.age and (math.floor(peer.age) .. "s") or "n/a"
+      break
+    end
+  end
   local lines = {}
   if monitor_page == 1 then
     lines = {
@@ -2122,7 +2154,18 @@ local function update_monitor()
       "Bound: " .. tostring(summary.bound or 0),
       "Missing: " .. tostring(summary.missing or 0),
       "Reasons: " .. (reasons ~= "" and reasons or "none"),
-      "Last scan: " .. (devices.last_scan_ts and (math.floor((now - devices.last_scan_ts) / 1000) .. "s") or "n/a")
+      "Last scan: " .. (devices.last_scan_ts and (math.floor((now - devices.last_scan_ts) / 1000) .. "s") or "n/a"),
+      "Master link: " .. master_state .. " age:" .. master_age,
+      ("Comms q:%d inflight:%d retries:%d"):format(
+        comms_diag.queue_depth or 0,
+        comms_diag.inflight_count or 0,
+        metrics.retries or 0
+      ),
+      ("Comms drop:%d dedupe:%d timeouts:%d"):format(
+        metrics.dropped or 0,
+        metrics.dedupe_hits or 0,
+        metrics.timeouts or 0
+      )
     }
   end
   pcall(monitor.setBackgroundColor, colors.black)
@@ -2221,12 +2264,17 @@ local states = {
 
 local function handle_command(message)
   if not protocol.is_for_node(message, comms.network.id) then return end
-  local command = message.payload.command
-  if not command or type(command) ~= "table" then
-    return { ok = false, error = "invalid command" }
+  local ok_proto = protocol.is_proto_compatible(message.proto_ver)
+  if not ok_proto then
+    return { ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" }
+  end
+  local payload = type(message.payload) == "table" and message.payload or nil
+  local command = payload and payload.command
+  if type(command) ~= "table" then
+    return { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
   end
   if current_state == STATE.SAFE then
-    return { ok = false, error = "safe: ignoring commands" }
+    return { ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" }
   end
   note_master_seen()
   if command.target == constants.command_targets.SET_MODE then
@@ -2234,7 +2282,7 @@ local function handle_command(message)
     apply_mode(desired)
   elseif command.target == constants.command_targets.SET_SETPOINTS then
     if current_state ~= STATE.MASTER then
-      return { ok = false, error = "autonom: ignoring setpoints" }
+      return { ok = false, error = "autonom: ignoring setpoints", reason_code = "INVALID_STATE" }
     end
     local value = command.value or {}
     if type(value.target_rpm) == "number" then
@@ -2271,17 +2319,19 @@ local function handle_command(message)
   elseif command.target == constants.command_targets.STARTUP_STAGE
     or command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
     if current_state ~= STATE.MASTER then
-      return { ok = false, error = "autonom: ignoring startup" }
+      return { ok = false, error = "autonom: ignoring startup", reason_code = "INVALID_STATE" }
     end
     local value = command.value or {}
     local module, detail = start_module(value.module_id, value.module_type, value.ramp_profile)
     if not module then
       add_alarm(comms.network.id, "WARNING", "Startup rejected: " .. (detail or "unknown"))
-      return { ok = false, error = detail or "startup rejected" }
+      return { ok = false, error = detail or "startup rejected", reason_code = "STARTUP_REJECTED" }
     end
     return { ok = true, module_id = module.id, detail = detail }
   elseif command.target == constants.command_targets.SCRAM then
     apply_mode(STATE.SAFE)
+  else
+    return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
   end
   return { ok = true }
 end
