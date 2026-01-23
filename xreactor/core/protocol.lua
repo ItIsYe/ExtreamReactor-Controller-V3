@@ -59,6 +59,7 @@ local function sanitize_value(value, depth)
 end
 
 local function base_message(msg_type, sender_id, role, payload)
+  local ts = os.epoch("utc")
   return {
     type = msg_type,
     message_id = nil,
@@ -67,7 +68,8 @@ local function base_message(msg_type, sender_id, role, payload)
     dst = nil,
     node_id = utils.normalize_node_id(sender_id),
     role = role,
-    timestamp = os.epoch("utc"),
+    ts = ts,
+    timestamp = ts,
     proto_ver = normalize_proto(constants.proto_ver),
     payload = payload or {}
   }
@@ -95,11 +97,21 @@ end
 
 function protocol.command(sender_id, role, target_node, command)
   command.command_id = command.command_id or os.epoch("utc")
-  return base_message(constants.message_types.COMMAND, sender_id, role, { target = target_node, command = command })
+  local msg = base_message(constants.message_types.COMMAND, sender_id, role, { target = target_node, command = command })
+  msg.dst = target_node
+  return msg
 end
 
 function protocol.ack(sender_id, role, command_id, detail, module_id)
   return base_message(constants.message_types.ACK, sender_id, role, { command_id = command_id, detail = detail, module_id = module_id })
+end
+
+function protocol.ack_delivered(sender_id, role, command_id, detail)
+  return base_message(constants.message_types.ACK_DELIVERED, sender_id, role, { command_id = command_id, detail = detail })
+end
+
+function protocol.ack_applied(sender_id, role, command_id, result)
+  return base_message(constants.message_types.ACK_APPLIED, sender_id, role, { command_id = command_id, result = result })
 end
 
 function protocol.error(sender_id, role, message)
@@ -109,6 +121,7 @@ end
 function protocol.sanitize_message(message)
   if type(message) ~= "table" then return nil end
   local normalized_proto = normalize_proto(message.proto_ver)
+  local ts = message.ts or message.timestamp or os.epoch("utc")
   local sanitized = {
     type = message.type,
     message_id = message.message_id,
@@ -117,7 +130,8 @@ function protocol.sanitize_message(message)
     src = utils.normalize_node_id(message.src or message.sender_id),
     dst = message.dst,
     role = message.role,
-    timestamp = message.timestamp,
+    ts = ts,
+    timestamp = ts,
     proto_ver = normalized_proto,
     ack_for = message.ack_for,
     phase = message.phase,
@@ -132,10 +146,12 @@ end
 function protocol.validateMessage(message)
   if type(message) ~= "table" then return false, "message not table" end
   if type(message.type) ~= "string" then return false, "missing type" end
-  local sender_id = utils.normalize_node_id(message.sender_id)
+  local sender_id = utils.normalize_node_id(message.sender_id or message.src)
   if sender_id == "UNKNOWN" then return false, "missing sender_id" end
   if type(message.role) ~= "string" then return false, "missing role" end
-  if type(message.timestamp) ~= "number" then return false, "missing timestamp" end
+  if type(message.ts) ~= "number" and type(message.timestamp) ~= "number" then
+    return false, "missing timestamp"
+  end
   if type(message.payload) ~= "table" then return false, "missing payload" end
   local ok, err = is_proto_compatible(message.proto_ver)
   if not ok then return false, err end
@@ -147,9 +163,14 @@ function protocol.validate(message)
 end
 
 function protocol.is_for_node(message, node_id)
+  if message.dst and message.dst ~= node_id then
+    return false
+  end
   local payload = message.payload or {}
   if message.type == constants.message_types.COMMAND then
-    return payload.target == node_id
+    if payload.target and payload.target ~= node_id then
+      return false
+    end
   end
   return true
 end

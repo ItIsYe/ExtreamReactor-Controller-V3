@@ -269,7 +269,7 @@ local function sync_rt_node(node)
 end
 
 local function update_node(message)
-  if message.type == "PROTO_MISMATCH" then
+  if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
     local mismatch_id = utils.normalize_node_id(message.src)
     if mismatch_id ~= "UNKNOWN" then
       nodes[mismatch_id] = nodes[mismatch_id] or { id = mismatch_id, role = "UNKNOWN" }
@@ -279,6 +279,7 @@ local function update_node(message)
       nodes[mismatch_id].status = health.status.DEGRADED
       nodes[mismatch_id].last_seen = os.epoch("utc")
       nodes[mismatch_id].last_seen_str = textutils.formatTime(os.time(), true)
+      nodes[mismatch_id].proto_ver = message.payload.proto_ver
     end
     return
   end
@@ -346,16 +347,28 @@ local function update_node(message)
       end
     end
     sync_rt_node(nodes[id])
-  elseif message.type == constants.message_types.ACK then
-    sequencer:notify_ack(id, message.payload and message.payload.module_id)
+  elseif message.type == constants.message_types.ACK_APPLIED then
+    local result = message.payload and message.payload.result or {}
+    if result.ok == false then
+      utils.log("MASTER", ("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN")
+    end
+    sequencer:notify_ack(id, result.module_id)
   elseif message.type == constants.message_types.ALERT then
     add_alarm(id, message.payload.severity, message.payload.message)
   end
 end
 
 local function check_timeouts()
+  local peers = comms:get_peers() or {}
+  local now = os.epoch("utc")
+  local timeout_ms = (config.comms and config.comms.peer_timeout_s or config.heartbeat_interval * 4) * 1000
   for _, node in pairs(nodes) do
-    if node.last_seen and (os.epoch("utc") - node.last_seen > config.heartbeat_interval * 4000) then
+    local peer = peers[node.id]
+    local last_seen = peer and peer.last_seen or node.last_seen
+    if peer and peer.age then
+      node.last_seen_age = math.floor(peer.age)
+    end
+    if last_seen and (now - last_seen > timeout_ms) then
       if node.status ~= constants.status_levels.OFFLINE then
         utils.log("MASTER", "Node offline: " .. tostring(node.id))
       end
@@ -363,6 +376,8 @@ local function check_timeouts()
       node.health = node.health or health.new({})
       node.health.status = health.status.DOWN
       node.health.reasons = { [health.reasons.COMMS_DOWN] = true }
+    elseif node.health and node.health.reasons then
+      node.health.reasons[health.reasons.COMMS_DOWN] = nil
     end
   end
 end
@@ -490,12 +505,13 @@ local function draw()
 
   for _, node in pairs(nodes) do
     local reasons = node.health and node.health.reasons or {}
-    local reason_text = type(reasons) == "table" and table.concat(reasons, ",") or nil
+    local reason_list = type(reasons) == "table" and (#reasons > 0 and reasons or health.reasons_list({ reasons = reasons })) or {}
+    local reason_text = type(reason_list) == "table" and table.concat(reason_list, ",") or nil
     local bindings_summary = node.bindings_summary
     if not bindings_summary and node.health and type(node.health.bindings) == "table" then
       bindings_summary = health.summarize_bindings(node.health.bindings)
     end
-    local age = node.last_seen and math.max(0, math.floor((os.epoch("utc") - node.last_seen) / 1000)) or nil
+    local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((os.epoch("utc") - node.last_seen) / 1000)) or nil)
     table.insert(overview_data.nodes, {
       id = node.id,
       role = node.role,

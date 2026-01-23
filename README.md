@@ -44,8 +44,17 @@ Wireless Modem (Control/Status)
 - **Protokoll**: `proto_ver = 1.0` (bei Mismatch ignorieren Nodes/Master die Nachricht).
 - **Protokoll-Versionierung**: `proto_ver` nutzt `major.minor` (z. B. `1.0`). Gleiche Major-Versionen sind kompatibel, Minor-Abweichungen werden toleriert.
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
-- **Comms-Layer**: Commands nutzen ACK/Retry/Timeout/Dedupe; Heartbeats können ohne ACK laufen, Status/Commands sind ACK-pflichtig.
+- **Comms-Layer**: Commands nutzen ACK/Retry/Timeout/Dedupe; Heartbeats/Status sind best-effort (Master erkennt Staleness).
 - **2-Phase ACK**: Commands senden `delivered` ACK, optional `applied` ACK nach Ausführung.
+
+## Comms Reliability
+- **Envelope**: Jede Nachricht enthält `message_id`, `proto_ver`, `src`, `dst`, `type`, `payload`, `ts`.
+- **ACK-Phasen**:
+  - `ACK_DELIVERED` direkt nach Empfang eines COMMAND.
+  - `ACK_APPLIED` nach Ausführung mit Ergebnis `{ ok, error?, module_id? }`.
+- **Retry/Backoff**: COMMANDS werden mit Exponential-Backoff erneut gesendet, bis ACKs kommen oder `max_retries` erreicht sind.
+- **Dedupe**: Pro Sender wird ein Zeitfenster gecacht, um doppelte COMMANDS zu erkennen.
+- **COMMS_DOWN**: Ein Peer ist „down“, wenn `peer_timeout_s` überschritten wird (UI zeigt `COMMS_DOWN` + Age).
 
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
@@ -197,6 +206,7 @@ Wireless Modem (Control/Status)
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
 - **COMMS_DOWN**: Node ist > Timeout nicht gesehen → Master markiert DOWN.
+- **Node stale / ACK timeout**: Prüfe `comms.ack_timeout_s`, Reichweite/Interferenz und ob Nodes ACK_APPLIED senden.
 - **DISCOVERY_FAILED**: Discovery-Scan konnte nicht laufen; prüfe Peripherals + Modem.
 - **Reason-Codes**: Zentral definiert in `xreactor/shared/health_codes.lua` (Master/Nodes nutzen identische Codes).
 - **Device not bound**: Diagnostics-Page der Node prüfen (Registry zeigt Found/Bound/Missing + letzte Fehler).
@@ -238,6 +248,11 @@ Wireless Modem (Control/Status)
 1. **MASTER starten** → Overview zeigt Nodes + Health/Reasons/Bindings.
 2. **RT starten** → Turbines/Reaktoren sichtbar, Health OK/DEGRADED korrekt.
 3. **ENERGY starten** → Matrices + Total sichtbar, Diagnostics zeigt Registry.
+
+## Manual Test Checklist (Step 3 – Comms)
+1. **MASTER starten**, danach **Node starten** → Node erscheint mit `last_seen`/Age.
+2. **Node stoppen** → MASTER zeigt `DOWN/COMMS_DOWN` nach Timeout.
+3. **COMMAND senden** (z. B. RT target RPM) → `ACK_APPLIED` im Master-Log/Diagnostics sichtbar.
 4. **Diagnostics Pages** (ENERGY/RT/FUEL/WATER/REPROC) → Registry snapshot + last errors sichtbar.
 5. **Safe Update** ausführen → Rolle/Config bleiben erhalten, neue Dateien sind vorhanden.
 
