@@ -366,7 +366,6 @@ local function discover()
     end
   end
 
-  registry:sync(registry_devices)
   local order_index = registry:get_order_index()
   local prefer_rank = {}
   for idx, name in ipairs(prefer_names) do
@@ -443,6 +442,7 @@ local function discover()
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
 
   log_discovery_snapshot(names, candidates, monitor_name, matrices)
+  return registry_devices
 end
 
 local function read_storage_stats()
@@ -901,7 +901,7 @@ local function init()
     registry = registry,
     discover = discover,
     interval = config.scan_interval,
-    managed_registry = false,
+    managed_registry = true,
     update_health = function(ok, reason)
       devices.discovery_failed = not ok
     end
