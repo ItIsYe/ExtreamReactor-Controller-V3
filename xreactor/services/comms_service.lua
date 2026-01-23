@@ -1,10 +1,17 @@
 local constants = require("shared.constants")
 local comms_lib = require("core.comms")
 local network_lib = require("core.network")
-local protocol = require("core.protocol")
 local utils = require("core.utils")
 
 local comms_service = {}
+
+local function control_channel(config)
+  return (config.channels and config.channels.control) or constants.channels.CONTROL
+end
+
+local function status_channel(config)
+  return (config.channels and config.channels.status) or constants.channels.STATUS
+end
 
 function comms_service.new(opts)
   opts = opts or {}
@@ -14,6 +21,11 @@ function comms_service.new(opts)
     role = opts.role,
     node_id = opts.node_id,
     on_message = opts.on_message,
+    on_command = opts.on_command,
+    on_status = opts.on_status,
+    on_heartbeat = opts.on_heartbeat,
+    on_alert = opts.on_alert,
+    on_error = opts.on_error,
     network = nil,
     comms = nil
   }
@@ -22,84 +34,149 @@ end
 
 function comms_service:init()
   self.network = network_lib.init(self.config)
-  self.comms = comms_lib.new({
-    network = self.network,
-    node_id = self.network.id,
-    role = self.network.role,
-    log_prefix = self.log_prefix,
-    config = self.config.comms or {}
-  })
   local normalized_id = utils.normalize_node_id(self.network.id)
   if normalized_id ~= self.network.id then
     utils.log(self.log_prefix, "WARN: normalized node_id to string", "WARN")
     self.network.id = normalized_id
   end
+  self.comms = comms_lib.init({
+    network = self.network,
+    node_id = self.network.id,
+    role = self.network.role,
+    proto_ver = constants.proto_ver,
+    log_prefix = self.log_prefix,
+    config = self.config.comms or {}
+  })
+
+  self.comms.on(constants.message_types.STATUS, function(message)
+    if self.on_status then
+      self.on_status(message)
+    elseif self.on_message then
+      self.on_message(message)
+    end
+  end)
+
+  self.comms.on(constants.message_types.HEARTBEAT, function(message)
+    if self.on_heartbeat then
+      self.on_heartbeat(message)
+    elseif self.on_message then
+      self.on_message(message)
+    end
+  end)
+
+  self.comms.on(constants.message_types.COMMAND, function(message)
+    if self.on_command then
+      return self.on_command(message)
+    end
+    return { ok = false, error = "command handler missing" }
+  end)
+
+  self.comms.on(constants.message_types.ALERT, function(message)
+    if self.on_alert then
+      self.on_alert(message)
+    elseif self.on_message then
+      self.on_message(message)
+    end
+  end)
+
+  self.comms.on(constants.message_types.ERROR, function(message)
+    if self.on_error then
+      self.on_error(message)
+    elseif self.on_message then
+      self.on_message(message)
+    end
+  end)
+
+  self.comms.on(constants.message_types.ACK_DELIVERED, function(message)
+    if self.on_message then
+      self.on_message(message)
+    end
+  end)
+
+  self.comms.on(constants.message_types.ACK_APPLIED, function(message)
+    if self.on_message then
+      self.on_message(message)
+    end
+  end)
+
+  self.comms.on(constants.message_types.HELLO, function(message)
+    if self.on_message then
+      self.on_message(message)
+    end
+  end)
+
+  self.comms.on(constants.message_types.REGISTER, function(message)
+    if self.on_message then
+      self.on_message(message)
+    end
+  end)
 end
 
 function comms_service:send_command(target, command, opts)
-  local message = protocol.command(self.network.id, self.network.role, target, command)
-  message.dst = target
-  return self.comms:send(message, constants.channels.CONTROL, {
+  local payload = { target = target, command = command }
+  return self.comms.send(target, constants.message_types.COMMAND, payload, {
     priority = 1,
-    requires_ack = true,
-    requires_applied = opts and opts.requires_applied or false
+    require_ack = true,
+    require_applied = opts and opts.requires_applied or false,
+    channel = control_channel(self.config)
   })
 end
 
 function comms_service:publish_status(payload, opts)
-  local message = protocol.status(self.network.id, self.network.role, payload)
-  return self.comms:send(message, constants.channels.STATUS, {
+  return self.comms.send(nil, constants.message_types.STATUS, payload, {
     priority = 2,
-    requires_ack = opts and opts.requires_ack ~= nil and opts.requires_ack or true
+    require_ack = opts and opts.requires_ack or false,
+    channel = status_channel(self.config)
   })
 end
 
 function comms_service:send_heartbeat(state)
-  local message = protocol.heartbeat(self.network.id, self.network.role, state)
-  return self.comms:send(message, constants.channels.STATUS, { priority = 3, requires_ack = false })
+  return self.comms.send(nil, constants.message_types.HEARTBEAT, { state = state }, {
+    priority = 3,
+    require_ack = false,
+    channel = status_channel(self.config)
+  })
 end
 
 function comms_service:send_alert(severity, message)
-  local alert = protocol.alert(self.network.id, self.network.role, severity, message)
-  return self.comms:send(alert, constants.channels.STATUS, { priority = 1, requires_ack = true })
+  return self.comms.send(nil, constants.message_types.ALERT, { severity = severity, message = message }, {
+    priority = 1,
+    require_ack = false,
+    channel = status_channel(self.config)
+  })
 end
 
 function comms_service:send_hello(capabilities)
-  local hello = protocol.hello(self.network.id, self.network.role, capabilities or {})
-  return self.comms:send(hello, constants.channels.CONTROL, { priority = 2, requires_ack = false })
-end
-
-function comms_service:send_applied_ack(message, detail)
-  if not message then return end
-  self.comms:send_ack(message, "applied", detail)
-end
-
-function comms_service:send_command_ack(message, detail, module_id, phase)
-  if not message then return end
-  local ack = protocol.ack(self.network.id, self.network.role, message.payload and message.payload.command and message.payload.command.command_id, detail, module_id)
-  ack.ack_for = message.message_id
-  ack.phase = phase or "applied"
-  ack.src = self.network.id
-  ack.dst = message.src
-  self.comms:send(ack, constants.channels.CONTROL, { priority = 1, requires_ack = false })
+  return self.comms.send(nil, constants.message_types.HELLO, { capabilities = capabilities or {} }, {
+    priority = 2,
+    require_ack = false,
+    channel = control_channel(self.config)
+  })
 end
 
 function comms_service:handle_event(event)
   if event[1] == "modem_message" then
     local _, _, _, _, message = table.unpack(event)
-    local incoming = self.comms:handle_incoming(message)
-    if incoming and self.on_message then
-      self.on_message(incoming)
-    end
+    self.comms.receive(message)
   end
 end
 
-function comms_service:tick()
-  self.comms:tick()
+function comms_service:tick(now)
+  self.comms.tick(now)
 end
 
-function comms_service:get_peer_health()
-  return self.comms:get_peer_health()
+function comms_service:get_peers()
+  return self.comms.get_peer_state()
+end
+
+function comms_service:is_master_reachable()
+  local peers = self:get_peers() or {}
+  for _, data in pairs(peers) do
+    if data.role == constants.roles.MASTER then
+      return not data.down
+    end
+  end
+  return false
 end
 
 return comms_service

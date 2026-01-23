@@ -659,7 +659,8 @@ local function build_status_payload()
   if devices.proto_mismatch then
     reasons[health.reasons.PROTO_MISMATCH] = true
   end
-  if master_seen_ts and os.epoch("utc") - master_seen_ts > config.heartbeat_interval * 6000 then
+  local master_ok = is_master_connected()
+  if not master_ok then
     reasons[health.reasons.COMMS_DOWN] = true
   end
   local status = (next(reasons) and health.status.DEGRADED) or health.status.OK
@@ -955,15 +956,41 @@ local function warn_once(key, message)
   utils.log("ENERGY", message, "WARN")
 end
 
+local function master_peer_state()
+  local peers = comms and comms:get_peers() or {}
+  for _, data in pairs(peers) do
+    if data.role == constants.roles.MASTER then
+      return data
+    end
+  end
+  return nil
+end
+
+local function is_master_connected()
+  local peer = master_peer_state()
+  if peer then
+    return not peer.down, peer.age
+  end
+  if master_seen_ts then
+    local age = (os.epoch("utc") - master_seen_ts) / 1000
+    return age <= config.heartbeat_interval * 6, age
+  end
+  return false, nil
+end
+
 local function handle_message(message)
-  if message.type == "PROTO_MISMATCH" then
+  if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
     devices.proto_mismatch = true
     return
   end
-  master_seen_ts = os.epoch("utc")
-  if message.type == constants.message_types.COMMAND then
-    comms:send_applied_ack(message, "ignored")
+  if message.role == constants.roles.MASTER then
+    master_seen_ts = os.epoch("utc")
   end
+end
+
+local function handle_command(message)
+  if not protocol.is_for_node(message, comms.network.id) then return end
+  return { ok = false, error = "unsupported command" }
 end
 
 local function init()
@@ -971,7 +998,8 @@ local function init()
   comms = comms_service.new({
     config = config,
     log_prefix = "ENERGY",
-    on_message = handle_message
+    on_message = handle_message,
+    on_command = handle_command
   })
   services:add(comms)
   services:add(discovery_service.new({
@@ -985,7 +1013,7 @@ local function init()
   }))
   services:add(telemetry_service.new({
     comms = comms,
-    status_interval = config.heartbeat_interval,
+    status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
     build_payload = build_status_payload
   }))

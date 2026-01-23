@@ -137,6 +137,28 @@ local last_heartbeat = 0
 local master_seen = os.epoch("utc")
 local standby = false
 
+local function master_peer_state()
+  local peers = comms and comms:get_peers() or {}
+  for _, data in pairs(peers) do
+    if data.role == constants.roles.MASTER then
+      return data
+    end
+  end
+  return nil
+end
+
+local function is_master_connected()
+  local peer = master_peer_state()
+  if peer then
+    return not peer.down, peer.age
+  end
+  if master_seen then
+    local age = (os.epoch("utc") - master_seen) / 1000
+    return age <= config.heartbeat_interval * 6, age
+  end
+  return false, nil
+end
+
 local function cache(bound_names)
   buffers = utils.cache_peripherals(bound_names or {})
 end
@@ -234,7 +256,8 @@ local function build_status_payload()
   if devices.proto_mismatch then
     reasons[health.reasons.PROTO_MISMATCH] = true
   end
-  if master_seen and os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
+  local master_ok = is_master_connected()
+  if not master_ok then
     reasons[health.reasons.COMMS_DOWN] = true
   end
   reproc_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
@@ -306,22 +329,29 @@ local function init()
   comms = comms_service.new({
     config = config,
     log_prefix = "REPROC",
+    on_command = function(message)
+      if not protocol.is_for_node(message, comms.network.id) then return end
+      local cmd = message.payload.command
+      if not cmd then
+        return { ok = false, error = "invalid command" }
+      end
+      if cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.OFF then
+        standby = true
+      elseif cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.RUNNING then
+        standby = false
+      end
+      return { ok = true }
+    end,
     on_message = function(message)
-      if message.type == "PROTO_MISMATCH" then
+      if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
         devices.proto_mismatch = true
         return
       end
-      master_seen = os.epoch("utc")
+      if message.role == constants.roles.MASTER then
+        master_seen = os.epoch("utc")
+      end
       if message.type == constants.message_types.HELLO then
         standby = false
-      elseif message.type == constants.message_types.COMMAND and protocol.is_for_node(message, comms.network.id) then
-        local cmd = message.payload.command
-        if cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.OFF then
-          standby = true
-        elseif cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.RUNNING then
-          standby = false
-        end
-        comms:send_command_ack(message, "ack")
       end
     end
   })
@@ -337,7 +367,7 @@ local function init()
   }))
   services:add(telemetry_service.new({
     comms = comms,
-    status_interval = config.heartbeat_interval,
+    status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
     build_payload = build_status_payload,
     heartbeat_state = function() return { standby = standby } end

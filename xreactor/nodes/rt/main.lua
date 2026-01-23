@@ -1330,6 +1330,28 @@ local function ramp_duration(profile)
   return ramp_profiles[profile] or ramp_profiles.NORMAL
 end
 
+local function master_peer_state()
+  local peers = comms and comms:get_peers() or {}
+  for _, data in pairs(peers) do
+    if data.role == constants.roles.MASTER then
+      return data
+    end
+  end
+  return nil
+end
+
+local function is_master_connected()
+  local peer = master_peer_state()
+  if peer then
+    return not peer.down, peer.age
+  end
+  if master_seen then
+    local age = (os.epoch("utc") - master_seen) / 1000
+    return age <= (hb * 5), age
+  end
+  return false, nil
+end
+
 local function build_health_payload()
   local reasons = {}
   local summary = devices.registry_summary or registry:get_summary()
@@ -1347,7 +1369,8 @@ local function build_health_payload()
   if devices.proto_mismatch then
     reasons[health.reasons.PROTO_MISMATCH] = true
   end
-  if master_seen and os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
+  local connected = is_master_connected()
+  if not connected then
     reasons[health.reasons.COMMS_DOWN] = true
   end
   local status = next(reasons) and health.status.DEGRADED or health.status.OK
@@ -1911,7 +1934,8 @@ local function update_module_states()
 end
 
 local function monitor_master()
-  if os.epoch("utc") - master_seen > hb * 5000 then
+  local connected = is_master_connected()
+  if not connected then
     if setState(STATE.AUTONOM) then
       log("WARN", "Master timeout detected, switching to AUTONOM")
       node_state_machine:transition(constants.node_states.AUTONOM)
@@ -1966,7 +1990,7 @@ local function update_status_snapshot()
 
   local avg_temp = temp_count > 0 and (temp_sum / temp_count) or 0
   local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
-  local master_connected = (os.epoch("utc") - master_seen) <= hb * 5000
+  local master_ok = is_master_connected()
   local turbine_details = {}
   for _, name in ipairs(config.turbines) do
     local turbine = peripherals.turbines[name]
@@ -2035,7 +2059,7 @@ local function update_status_snapshot()
   status_snapshot = {
     node_id = comms and comms.network and comms.network.id or config.role,
     state = current_state,
-    master_connected = master_connected,
+    master_connected = master_ok,
     reactor_count = #config.reactors,
     turbine_count = #config.turbines,
     avg_temp = avg_temp,
@@ -2198,10 +2222,11 @@ local states = {
 local function handle_command(message)
   if not protocol.is_for_node(message, comms.network.id) then return end
   local command = message.payload.command
-  if not command then return end
+  if not command or type(command) ~= "table" then
+    return { ok = false, error = "invalid command" }
+  end
   if current_state == STATE.SAFE then
-    comms:send_command_ack(message, "safe: ignoring commands")
-    return
+    return { ok = false, error = "safe: ignoring commands" }
   end
   note_master_seen()
   if command.target == constants.command_targets.SET_MODE then
@@ -2209,8 +2234,7 @@ local function handle_command(message)
     apply_mode(desired)
   elseif command.target == constants.command_targets.SET_SETPOINTS then
     if current_state ~= STATE.MASTER then
-      comms:send_command_ack(message, "autonom: ignoring setpoints")
-      return
+      return { ok = false, error = "autonom: ignoring setpoints" }
     end
     local value = command.value or {}
     if type(value.target_rpm) == "number" then
@@ -2247,22 +2271,19 @@ local function handle_command(message)
   elseif command.target == constants.command_targets.STARTUP_STAGE
     or command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
     if current_state ~= STATE.MASTER then
-      comms:send_command_ack(message, "autonom: ignoring startup")
-      return
+      return { ok = false, error = "autonom: ignoring startup" }
     end
     local value = command.value or {}
     local module, detail = start_module(value.module_id, value.module_type, value.ramp_profile)
     if not module then
       add_alarm(comms.network.id, "WARNING", "Startup rejected: " .. (detail or "unknown"))
-      comms:send_command_ack(message, detail or "ack")
-      return
+      return { ok = false, error = detail or "startup rejected" }
     end
-    comms:send_command_ack(message, detail or "ack", module.id)
-    return
+    return { ok = true, module_id = module.id, detail = detail }
   elseif command.target == constants.command_targets.SCRAM then
     apply_mode(STATE.SAFE)
   end
-  comms:send_command_ack(message, "ack")
+  return { ok = true }
 end
 
 local function send_heartbeat()
@@ -2297,16 +2318,13 @@ local function init()
   comms = comms_service.new({
     config = config,
     log_prefix = "RT",
+    on_command = handle_command,
     on_message = function(message)
-      if message.type == "PROTO_MISMATCH" then
+      if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
         devices.proto_mismatch = true
         return
       end
-      note_master_seen()
-      if message.type == constants.message_types.COMMAND then
-        handle_command(message)
-      elseif message.type == constants.message_types.HELLO
-        or message.type == constants.message_types.REGISTER then
+      if message.role == constants.roles.MASTER then
         note_master_seen()
       end
     end
@@ -2324,7 +2342,7 @@ local function init()
   services:add(control_service.new({ tick = control_tick }))
   services:add(telemetry_service.new({
     comms = comms,
-    status_interval = config.heartbeat_interval,
+    status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
     heartbeat_state = function() return { state = node_state_machine.state() } end,
     build_payload = function()

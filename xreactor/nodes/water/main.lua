@@ -245,7 +245,8 @@ local function build_status_payload()
   if devices.proto_mismatch then
     reasons[health.reasons.PROTO_MISMATCH] = true
   end
-  if master_seen_ts and os.epoch("utc") - master_seen_ts > config.heartbeat_interval * 6000 then
+  local master_ok = is_master_connected()
+  if not master_ok then
     reasons[health.reasons.COMMS_DOWN] = true
   end
   water_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
@@ -303,20 +304,47 @@ local function render_monitor()
   ui.list(mon, 2, 7, w - 2, rows, { max_rows = h - 8 })
 end
 
+local function master_peer_state()
+  local peers = comms and comms:get_peers() or {}
+  for _, data in pairs(peers) do
+    if data.role == constants.roles.MASTER then
+      return data
+    end
+  end
+  return nil
+end
+
+local function is_master_connected()
+  local peer = master_peer_state()
+  if peer then
+    return not peer.down, peer.age
+  end
+  if master_seen_ts then
+    local age = (os.epoch("utc") - master_seen_ts) / 1000
+    return age <= config.heartbeat_interval * 6, age
+  end
+  return false, nil
+end
+
+local function handle_command(message)
+  if not protocol.is_for_node(message, comms.network.id) then return end
+  return { ok = true }
+end
+
 local function init()
   discover()
   services = service_manager.new({ log_prefix = "WATER" })
   comms = comms_service.new({
     config = config,
     log_prefix = "WATER",
+    on_command = handle_command,
     on_message = function(message)
-      if message.type == "PROTO_MISMATCH" then
+      if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
         devices.proto_mismatch = true
         return
       end
-      master_seen_ts = os.epoch("utc")
-      if message.type == constants.message_types.COMMAND then
-        comms:send_command_ack(message, "ack")
+      if message.role == constants.roles.MASTER then
+        master_seen_ts = os.epoch("utc")
       end
     end
   })
@@ -332,7 +360,7 @@ local function init()
   }))
   services:add(telemetry_service.new({
     comms = comms,
-    status_interval = config.heartbeat_interval,
+    status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
     build_payload = build_status_payload,
     heartbeat_state = function() return { tanks = #config.loop_tanks } end
