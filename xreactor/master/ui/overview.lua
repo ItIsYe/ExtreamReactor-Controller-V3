@@ -80,7 +80,15 @@ local function render(mon, model)
         mode = (node.mode == "MASTER" and "MANAGED") or (node.mode or "AUTONOM")
       end
       local last_seen = node.last_seen or "--:--"
-      local label = string.format("%s %s %s %s", node.id or "NODE", node.status or "OFFLINE", mode, last_seen)
+      local details = {}
+      if node.reasons and node.reasons ~= "" then
+        table.insert(details, node.reasons)
+      end
+      if node.bindings and node.bindings ~= "" then
+        table.insert(details, node.bindings)
+      end
+      local suffix = #details > 0 and (" " .. table.concat(details, " ")) or ""
+      local label = string.format("%s %s %s %s%s", node.id or "NODE", node.status or "OFFLINE", mode, last_seen, suffix)
       table.insert(rows, { text = label, status = node.status })
     end
     ui.list(mon, 2, node_y + 1, w - 3, rows, { max_rows = node_rows })

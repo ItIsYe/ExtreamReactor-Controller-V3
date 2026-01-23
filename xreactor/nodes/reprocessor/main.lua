@@ -20,7 +20,12 @@ local require = bootstrap.require
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
-local network_lib = require("core.network")
+local health = require("core.health")
+local registry_lib = require("core.registry")
+local service_manager = require("services.service_manager")
+local comms_service = require("services.comms_service")
+local telemetry_service = require("services.telemetry_service")
+local discovery_service = require("services.discovery_service")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.REPROCESSOR_NODE, -- Node role identifier.
@@ -110,7 +115,10 @@ for _, warning in ipairs(config_warnings) do
   utils.log(CONFIG.LOG_PREFIX, warning, "WARN")
 end
 
-local network
+local comms
+local services
+local registry = registry_lib.new({ node_id = node_id, role = "reprocessor", log_prefix = CONFIG.LOG_PREFIX })
+local reproc_health = health.new({})
 local buffers = {}
 local last_heartbeat = 0
 local master_seen = os.epoch("utc")
@@ -120,8 +128,23 @@ local function cache()
   buffers = utils.cache_peripherals(config.buffers)
 end
 
+local function discover()
+  local devices = {}
+  for name in pairs(buffers or {}) do
+    if peripheral.isPresent(name) then
+      table.insert(devices, {
+        name = name,
+        type = peripheral.getType(name),
+        methods = peripheral.getMethods(name) or {},
+        kind = "buffer"
+      })
+    end
+  end
+  registry:sync(devices)
+end
+
 local function hello()
-  network:broadcast(protocol.hello(network.id, network.role, { buffers = #config.buffers }))
+  comms:send_hello({ buffers = #config.buffers })
 end
 
 local function read_buffers()
@@ -138,10 +161,28 @@ local function read_buffers()
   return info
 end
 
-local function send_status()
-  local payload = { buffers = read_buffers(), standby = standby }
-  network:send(constants.channels.STATUS, protocol.status(network.id, network.role, payload))
-  last_heartbeat = os.epoch("utc")
+local function build_status_payload()
+  local reasons = {}
+  if not next(buffers) then
+    reasons[health.reasons.NO_STORAGE] = true
+  end
+  reproc_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
+  reproc_health.reasons = reasons
+  reproc_health.last_seen_ts = os.epoch("utc")
+  reproc_health.bindings = { buffers = read_buffers() }
+  reproc_health.capabilities = { buffers = #config.buffers }
+  return {
+    buffers = read_buffers(),
+    standby = standby,
+    health = {
+      status = reproc_health.status,
+      reasons = health.reasons_list(reproc_health),
+      last_seen_ts = reproc_health.last_seen_ts,
+      bindings = reproc_health.bindings,
+      capabilities = reproc_health.capabilities
+    },
+    bindings = reproc_health.bindings
+  }
 end
 
 local function process_buffers()
@@ -153,40 +194,64 @@ local function process_buffers()
   end
 end
 
-local function main_loop()
-  while true do
-    process_buffers()
-    if os.epoch("utc") - last_heartbeat > config.heartbeat_interval * 1000 then
-      send_status()
-    end
-    if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
-      standby = true
-    end
-    local msg = network:receive(CONFIG.RECEIVE_TIMEOUT)
-    if msg then
-      if msg.type == constants.message_types.HELLO then
+local function init()
+  cache()
+  services = service_manager.new({ log_prefix = "REPROC" })
+  comms = comms_service.new({
+    config = config,
+    log_prefix = "REPROC",
+    on_message = function(message)
+      if message.type == "PROTO_MISMATCH" then
+        reproc_health.status = health.status.DEGRADED
+        reproc_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+        return
+      end
+      if message.type == constants.message_types.HELLO then
         master_seen = os.epoch("utc")
         standby = false
-      elseif msg.type == constants.message_types.COMMAND and protocol.is_for_node(msg, network.id) then
-        local cmd = msg.payload.command
+      elseif message.type == constants.message_types.COMMAND and protocol.is_for_node(message, comms.network.id) then
+        local cmd = message.payload.command
         if cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.OFF then
           standby = true
         elseif cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.RUNNING then
           standby = false
         end
-        network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, cmd.command_id, "ack"))
+        comms:send_command_ack(message, "ack")
       end
     end
-  end
-end
-
-local function init()
-  cache()
-  network = network_lib.init(config)
+  })
+  services:add(comms)
+  services:add(discovery_service.new({
+    registry = registry,
+    discover = discover,
+    interval = config.heartbeat_interval
+  }))
+  services:add(telemetry_service.new({
+    comms = comms,
+    status_interval = config.heartbeat_interval,
+    heartbeat_interval = config.heartbeat_interval,
+    build_payload = build_status_payload,
+    heartbeat_state = function() return { standby = standby } end
+  }))
+  services:init()
   hello()
-  send_status()
-  utils.log("REPROC", "Node ready: " .. network.id)
+  utils.log("REPROC", "Node ready: " .. comms.network.id)
 end
 
 init()
-main_loop()
+while true do
+  local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
+  while true do
+    local event = { os.pullEvent() }
+    if event[1] == "modem_message" then
+      comms:handle_event(event)
+    elseif event[1] == "timer" and event[2] == timer then
+      break
+    end
+  end
+  process_buffers()
+  if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
+    standby = true
+  end
+  services:tick()
+end

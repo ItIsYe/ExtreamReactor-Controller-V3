@@ -25,7 +25,7 @@ local function plan_modules(node_id, modules)
   return steps
 end
 
-function sequencer.new(network, ramp_profile)
+function sequencer.new(comms, ramp_profile)
   local self = {
     queue = {},
     state = states.idle,
@@ -69,7 +69,7 @@ function sequencer.new(network, ramp_profile)
         }
       }
       local safe_node_id = utils.normalize_node_id(self.active and self.active.node_id)
-      network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, safe_node_id, payload))
+      comms:send_command(safe_node_id, payload, { requires_applied = true })
       self.state = states.waiting_ack
       utils.log("SEQ", "Request startup " .. tostring(self.active.module_id) .. " on " .. safe_node_id)
     elseif self.state == states.waiting_ack then

@@ -148,7 +148,7 @@ Wireless Modem (Control/Status)
 - **core/comms.lua**: ACK/Retry/Timeout/Dedupe, Peer-Health.
 - **core/health.lua**: Standardisiertes Health-Schema (OK/DEGRADED/DOWN + Reasons).
 - **core/registry.lua**: Persistente Device Registry (stable IDs, alias mapping, health).
-- **services/**: Lifecycle Services (comms, discovery, telemetry, ui, control).
+- **services/**: Lifecycle Services (comms, discovery, telemetry, ui, control) mit `service_manager`.
 - **adapters/**: Einheitliche Adapter für Monitor, Energy Storage, Induction Matrix, Reactor, Turbine.
 
 ## ENERGY Node Monitor UI
@@ -191,6 +191,8 @@ Wireless Modem (Control/Status)
 - **Module not found**: Prüfe, ob `/xreactor/shared/constants.lua` vorhanden ist und ob der Bootstrap vor allen `require`-Aufrufen läuft (Entry-File lädt `/xreactor/core/bootstrap.lua` zuerst). Bei aktivem `BOOTSTRAP_LOG_ENABLED` kontrolliere `/xreactor_logs/loader_<role>.log` für `package.path`, `shell.dir()` und die tatsächlich versuchten Pfade.
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
+- **COMMS_DOWN**: Node ist > Timeout nicht gesehen → Master markiert DOWN.
+- **DISCOVERY_FAILED**: Discovery-Scan konnte nicht laufen; prüfe Peripherals + Modem.
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
 - **Manifest-Download fehlgeschlagen**: Retry nutzen oder Cache verwenden (falls vorhanden).
 - **Retry-Menü**: Bei Download-Fehlern gibt es immer ein Retry/Cancel-Menü; Retry versucht den Download erneut mit kurzer Wartezeit.

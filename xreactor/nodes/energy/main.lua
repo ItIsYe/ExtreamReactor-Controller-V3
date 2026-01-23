@@ -18,15 +18,20 @@ bootstrap.setup({
 })
 local require = bootstrap.require
 local constants = require("shared.constants")
-local protocol = require("core.protocol")
 local utils = require("core.utils")
-local network_lib = require("core.network")
+local health = require("core.health")
 local ui = require("core.ui")
 local colors = require("shared.colors")
 local registry_lib = require("core.registry")
 local storage_adapter = require("adapters.energy_storage")
 local matrix_adapter = require("adapters.induction_matrix")
 local monitor_adapter = require("adapters.monitor")
+local service_manager = require("services.service_manager")
+local comms_service = require("services.comms_service")
+local discovery_service = require("services.discovery_service")
+local telemetry_service = require("services.telemetry_service")
+local ui_service = require("services.ui_service")
+local control_service = require("services.control_service")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
@@ -190,19 +195,21 @@ local registry = registry_lib.new({
   aliases = config.matrix_aliases or {}
 })
 
-local network
+local comms
+local services
+local energy_health = health.new({})
 local devices = {
   storages = {},
   matrices = {},
   monitor = nil,
   monitor_name = nil,
   bound_storage_names = {},
-  degraded_reason = nil,
   last_scan_ts = nil,
   last_scan_result = nil,
   peripheral_count = 0,
   last_error = nil,
-  last_error_ts = nil
+  last_error_ts = nil,
+  discovery_failed = false
 }
 local last_heartbeat = 0
 local last_scan = 0
@@ -427,39 +434,15 @@ local function discover()
     })
   end
 
-  local degraded_reason
-  if #names == 0 then
-    degraded_reason = "no_peripherals"
-  else
-    local reasons = {}
-    if not monitor then
-      table.insert(reasons, "no_monitor")
-    end
-    if #storages == 0 then
-      table.insert(reasons, "no_storage")
-    end
-    if #reasons > 0 then
-      degraded_reason = table.concat(reasons, ",")
-    end
-  end
-
   devices.monitor = monitor
   devices.monitor_name = monitor_name
   devices.storages = storages
   devices.matrices = matrices
   devices.bound_storage_names = bound_names
-  devices.degraded_reason = degraded_reason
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
 
   log_discovery_snapshot(names, candidates, monitor_name, matrices)
-end
-
-local function hello()
-  network:broadcast(protocol.hello(network.id, network.role, {
-    storages = #(devices.storages or {}),
-    monitor = devices.monitor and 1 or 0
-  }))
 end
 
 local function read_storage_stats()
@@ -569,7 +552,7 @@ local function read_matrix_stats()
   }
 end
 
-local function send_status()
+local function build_status_payload()
   local energy = read_storage_stats()
   local matrix = read_matrix_stats()
   local total_stored = energy.stored + (matrix.total.stored or 0)
@@ -579,12 +562,6 @@ local function send_status()
   energy.monitor_bound = devices.monitor ~= nil
   energy.storage_bound_count = #(devices.storages or {})
   energy.bound_storage_names = devices.bound_storage_names or {}
-  energy.degraded_reason = devices.degraded_reason
-  if devices.degraded_reason then
-    energy.status = constants.status_levels.WARNING
-  else
-    energy.status = constants.status_levels.OK
-  end
   energy.matrices = matrix.matrices
   energy.total = matrix.total
   energy.matrix_present = #(matrix.matrices or {}) > 0
@@ -611,8 +588,42 @@ local function send_status()
   energy.last_error = devices.last_error
   energy.last_error_ts = devices.last_error_ts
   energy.peripheral_count = devices.peripheral_count
-  network:send(constants.channels.STATUS, protocol.status(network.id, network.role, energy))
-  last_heartbeat = os.epoch("utc")
+
+  local reasons = {}
+  if not energy.monitor_bound then
+    reasons[health.reasons.NO_MONITOR] = true
+  end
+  if energy.storage_bound_count == 0 then
+    reasons[health.reasons.NO_STORAGE] = true
+  end
+  if not energy.matrix_present then
+    reasons[health.reasons.NO_MATRIX] = true
+  end
+  if devices.discovery_failed then
+    reasons[health.reasons.DISCOVERY_FAILED] = true
+  end
+  local status = (next(reasons) and health.status.DEGRADED) or health.status.OK
+  energy_health.status = status
+  energy_health.reasons = reasons
+  energy_health.last_seen_ts = os.epoch("utc")
+  energy_health.bindings = {
+    storages = energy.bound_storage_names,
+    matrices = (energy.matrices or {}),
+    monitor = energy.monitor_bound and devices.monitor_name or nil
+  }
+  energy_health.capabilities = {
+    storage_count = energy.storage_bound_count,
+    matrix_count = #(energy.matrices or {}),
+    monitor = energy.monitor_bound
+  }
+  energy.health = {
+    status = energy_health.status,
+    reasons = health.reasons_list(energy_health),
+    last_seen_ts = energy_health.last_seen_ts,
+    bindings = energy_health.bindings,
+    capabilities = energy_health.capabilities
+  }
+  return energy
 end
 
 local function format_value(value)
@@ -702,14 +713,21 @@ local function render_monitor()
   if now - ui_state.last_draw < config.ui_refresh_interval * 1000 then
     return
   end
-  local energy = read_storage_stats()
-  local matrix = read_matrix_stats()
-  local degraded = devices.degraded_reason ~= nil
-  local matrices = matrix.matrices or {}
-  local storages = energy.stores or {}
+  local payload = build_status_payload()
+  local degraded = payload.health and payload.health.status == health.status.DEGRADED
+  local reasons_text = payload.health and table.concat(payload.health.reasons or {}, ",") or ""
+  local matrices = payload.matrices or {}
+  local storages = payload.stores or {}
+  local registry_entries = registry:list()
+  local registry_rows = {}
+  for _, entry in ipairs(registry_entries) do
+    local state = entry.missing and "MISSING" or "BOUND"
+    local label = string.format("%s %s", entry.alias or entry.id, state)
+    table.insert(registry_rows, { text = label, status = entry.missing and "WARNING" or "OK" })
+  end
   local model = {
-    node_id = network and network.id or config.node_id,
-    degraded_reason = devices.degraded_reason,
+    node_id = comms and comms.network and comms.network.id or config.node_id,
+    degraded_reason = reasons_text ~= "" and reasons_text or nil,
     last_scan_ts = devices.last_scan_ts,
     scan_result = devices.last_scan_result,
     last_error = devices.last_error,
@@ -719,7 +737,8 @@ local function render_monitor()
     storages_count = #(devices.storages or {}),
     storages = storages,
     matrices = matrices,
-    total = matrix.total
+    total = payload.total,
+    registry_rows = registry_rows
   }
   local snapshot = textutils.serialize(model)
   if ui_state.last_snapshot == snapshot then
@@ -810,7 +829,17 @@ local function render_monitor()
     }
     ui.text(mon, 2, line, "Diagnostics", colors.get("text"), colors.get("background"))
     line = line + 1
-    ui.list(mon, 2, line, w - 2, info_rows, { max_rows = math.max(1, h - line - 2) })
+    local rows = {}
+    for _, row in ipairs(info_rows) do
+      table.insert(rows, row)
+    end
+    if model.registry_rows and #model.registry_rows > 0 then
+      table.insert(rows, { text = "Registry:", status = "OK" })
+      for _, row in ipairs(model.registry_rows) do
+        table.insert(rows, row)
+      end
+    end
+    ui.list(mon, 2, line, w - 2, rows, { max_rows = math.max(1, h - line - 2) })
   end
 
   local footer = h
@@ -849,31 +878,45 @@ local function warn_once(key, message)
   utils.log("ENERGY", message, "WARN")
 end
 
-local function main_loop()
-  while true do
-    if os.epoch("utc") - last_scan > config.scan_interval * 1000 then
-      discover()
-      last_scan = os.epoch("utc")
+local function handle_message(message)
+  if message.type == "PROTO_MISMATCH" then
+    energy_health.status = health.status.DEGRADED
+    energy_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+    return
+  end
+  if message.type == constants.message_types.COMMAND then
+    comms:send_applied_ack(message, "ignored")
+  end
+end
+
+local function init()
+  services = service_manager.new({ log_prefix = "ENERGY" })
+  comms = comms_service.new({
+    config = config,
+    log_prefix = "ENERGY",
+    on_message = handle_message
+  })
+  services:add(comms)
+  services:add(discovery_service.new({
+    registry = registry,
+    discover = discover,
+    interval = config.scan_interval,
+    managed_registry = false,
+    update_health = function(ok, reason)
+      devices.discovery_failed = not ok
     end
-    render_monitor()
-    if os.epoch("utc") - last_heartbeat > config.heartbeat_interval * 1000 then
-      send_status()
-    end
-    local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
-    while true do
-      local event = { os.pullEvent() }
-      if event[1] == "modem_message" then
-        local _, _, _, _, message = table.unpack(event)
-        local ok, err = protocol.validateMessage(message)
-        if ok then
-          local sanitized = protocol.sanitize_message(message)
-          if sanitized and sanitized.type == constants.message_types.HELLO then
-            -- master seen
-          end
-        else
-          warn_once("schema:" .. tostring(err), "WARN: invalid message ignored (" .. tostring(err) .. ")")
-        end
-      elseif event[1] == "monitor_touch" then
+  }))
+  services:add(telemetry_service.new({
+    comms = comms,
+    status_interval = config.heartbeat_interval,
+    heartbeat_interval = config.heartbeat_interval,
+    build_payload = build_status_payload
+  }))
+  services:add(ui_service.new({
+    interval = config.ui_refresh_interval,
+    render = render_monitor,
+    handle_input = function(event)
+      if event[1] == "monitor_touch" then
         handle_monitor_touch(event[2], event[3], event[4])
       elseif event[1] == "key" then
         if event[2] == keys.left then
@@ -881,20 +924,33 @@ local function main_loop()
         elseif event[2] == keys.right then
           update_page(1)
         end
+      end
+    end
+  }))
+  services:init()
+  discover()
+  comms:send_hello({
+    storages = #(devices.storages or {}),
+    monitor = devices.monitor and 1 or 0
+  })
+  utils.log("ENERGY", "Node ready: " .. comms.network.id)
+end
+
+local function main_loop()
+  while true do
+    local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
+    while true do
+      local event = { os.pullEvent() }
+      if event[1] == "modem_message" then
+        comms:handle_event(event)
+      elseif event[1] == "monitor_touch" or event[1] == "key" then
+        services:tick(nil, event)
       elseif event[1] == "timer" and event[2] == timer then
         break
       end
     end
+    services:tick()
   end
-end
-
-local function init()
-  discover()
-  last_scan = os.epoch("utc")
-  network = network_lib.init(config)
-  hello()
-  send_status()
-  utils.log("ENERGY", "Node ready: " .. network.id)
 end
 
 init()

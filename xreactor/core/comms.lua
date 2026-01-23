@@ -182,16 +182,24 @@ local function update_peer(self, sender_id)
   self.peers[sender_id].last_seen = now()
 end
 
-function comms:poll(timeout)
+function comms:tick()
   flush_queue(self)
   retry_inflight(self)
-  local message = self.network:receive(timeout)
-  if not message then
-    return nil
-  end
+end
+
+function comms:handle_incoming(raw_message)
+  if not raw_message then return nil end
+  local message = protocol.sanitize_message(raw_message)
   local ok, err = protocol.validate(message)
   if not ok then
     log(self, "Invalid message ignored: " .. tostring(err), "WARN")
+    if err == "proto_ver mismatch" then
+      return {
+        type = "PROTO_MISMATCH",
+        src = message.sender_id or message.src,
+        proto_ver = message.proto_ver
+      }
+    end
     return nil
   end
   update_peer(self, message.src or message.sender_id)

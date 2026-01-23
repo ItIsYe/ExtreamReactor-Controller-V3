@@ -20,7 +20,12 @@ local require = bootstrap.require
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
-local network_lib = require("core.network")
+local health = require("core.health")
+local registry_lib = require("core.registry")
+local service_manager = require("services.service_manager")
+local comms_service = require("services.comms_service")
+local telemetry_service = require("services.telemetry_service")
+local discovery_service = require("services.discovery_service")
 local safety = require("core.safety")
 
 local DEFAULT_CONFIG = {
@@ -125,7 +130,10 @@ for _, warning in ipairs(config_warnings) do
   utils.log(CONFIG.LOG_PREFIX, warning, "WARN")
 end
 
-local network
+local comms
+local services
+local registry = registry_lib.new({ node_id = node_id, role = "fuel", log_prefix = CONFIG.LOG_PREFIX })
+local fuel_health = health.new({})
 local storage
 local last_heartbeat = 0
 local reserve = config.minimum_reserve
@@ -141,8 +149,21 @@ local function cache()
   end
 end
 
+local function discover()
+  local devices = {}
+  if config.storage_bus and peripheral.isPresent(config.storage_bus) then
+    table.insert(devices, {
+      name = config.storage_bus,
+      type = peripheral.getType(config.storage_bus),
+      methods = peripheral.getMethods(config.storage_bus) or {},
+      kind = "storage"
+    })
+  end
+  registry:sync(devices)
+end
+
 local function hello()
-  network:broadcast(protocol.hello(network.id, network.role, { reserve = reserve }))
+  comms:send_hello({ reserve = reserve })
 end
 
 local function read_fuel()
@@ -160,15 +181,36 @@ local function enforce_reserve(current)
   return adjusted
 end
 
-local function send_status()
+local function build_status_payload()
   local amount = enforce_reserve(read_fuel())
-  local payload = { reserve = amount, minimum_reserve = reserve, sources = { { id = config.storage_bus or "unknown", amount = amount } } }
-  network:send(constants.channels.STATUS, protocol.status(network.id, network.role, payload))
-  last_heartbeat = os.epoch("utc")
+  local has_storage = storage ~= nil
+  local reasons = {}
+  if not has_storage then
+    reasons[health.reasons.NO_STORAGE] = true
+  end
+  fuel_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
+  fuel_health.reasons = reasons
+  fuel_health.last_seen_ts = os.epoch("utc")
+  fuel_health.bindings = { storage = has_storage and config.storage_bus or nil }
+  fuel_health.capabilities = { storage = config.storage_bus ~= nil }
+  local payload = {
+    reserve = amount,
+    minimum_reserve = reserve,
+    sources = { { id = config.storage_bus or "unknown", amount = amount } },
+    health = {
+      status = fuel_health.status,
+      reasons = health.reasons_list(fuel_health),
+      last_seen_ts = fuel_health.last_seen_ts,
+      bindings = fuel_health.bindings,
+      capabilities = fuel_health.capabilities
+    },
+    bindings = fuel_health.bindings
+  }
+  return payload
 end
 
 local function handle_command(message)
-  if not protocol.is_for_node(message, network.id) then return end
+  if not protocol.is_for_node(message, comms.network.id) then return end
   local command = message.payload.command
   if not command then return end
   if command.target == constants.command_targets.SET_RESERVE then
@@ -176,30 +218,54 @@ local function handle_command(message)
   elseif command.target == constants.command_targets.MODE and command.value == constants.node_states.MANUAL then
     -- manual mode acknowledged but not changing behavior
   end
-  network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "ack"))
-end
-
-local function main_loop()
-  while true do
-    if os.epoch("utc") - last_heartbeat > config.heartbeat_interval * 1000 then
-      send_status()
-    end
-    local message = network:receive(CONFIG.RECEIVE_TIMEOUT)
-    if message then
-      if message.type == constants.message_types.COMMAND then
-        handle_command(message)
-      end
-    end
-  end
+  comms:send_command_ack(message, "ack")
 end
 
 local function init()
   cache()
-  network = network_lib.init(config)
+  services = service_manager.new({ log_prefix = "FUEL" })
+  comms = comms_service.new({
+    config = config,
+    log_prefix = "FUEL",
+    on_message = function(message)
+      if message.type == "PROTO_MISMATCH" then
+        fuel_health.status = health.status.DEGRADED
+        fuel_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+        return
+      end
+      if message.type == constants.message_types.COMMAND then
+        handle_command(message)
+      end
+    end
+  })
+  services:add(comms)
+  services:add(discovery_service.new({
+    registry = registry,
+    discover = discover,
+    interval = config.heartbeat_interval
+  }))
+  services:add(telemetry_service.new({
+    comms = comms,
+    status_interval = config.heartbeat_interval,
+    heartbeat_interval = config.heartbeat_interval,
+    build_payload = build_status_payload,
+    heartbeat_state = function() return { reserve = reserve } end
+  }))
+  services:init()
   hello()
-  send_status()
-  utils.log("FUEL", "Node ready: " .. network.id)
+  utils.log("FUEL", "Node ready: " .. comms.network.id)
 end
 
 init()
-main_loop()
+while true do
+  local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
+  while true do
+    local event = { os.pullEvent() }
+    if event[1] == "modem_message" then
+      comms:handle_event(event)
+    elseif event[1] == "timer" and event[2] == timer then
+      break
+    end
+  end
+  services:tick()
+end
