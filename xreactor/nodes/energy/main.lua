@@ -463,6 +463,17 @@ local function discover()
     })
   end
 
+  local bound_lookup = {}
+  for _, storage in ipairs(storages) do
+    bound_lookup[storage.name] = true
+  end
+  for _, matrix in ipairs(matrices) do
+    bound_lookup[matrix.name] = true
+  end
+  for _, entry in ipairs(registry_devices) do
+    entry.bound = bound_lookup[entry.name] or false
+  end
+
   devices.monitor = monitor
   devices.monitor_name = monitor_name
   devices.storages = storages
