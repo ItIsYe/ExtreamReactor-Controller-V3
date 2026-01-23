@@ -44,6 +44,8 @@ Wireless Modem (Control/Status)
 - **Protokoll**: `proto_ver = 1.0` (bei Mismatch ignorieren Nodes/Master die Nachricht).
 - **Protokoll-Versionierung**: `proto_ver` nutzt `major.minor` (z. B. `1.0`). Gleiche Major-Versionen sind kompatibel, Minor-Abweichungen werden toleriert.
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
+- **Comms-Layer**: Commands nutzen ACK/Retry/Timeout/Dedupe; Heartbeats können ohne ACK laufen, Status/Commands sind ACK-pflichtig.
+- **2-Phase ACK**: Commands senden `delivered` ACK, optional `applied` ACK nach Ausführung.
 
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
@@ -139,8 +141,15 @@ Wireless Modem (Control/Status)
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
 - **Persistenz**:
   - `node_id`: `/xreactor/config/node_id.txt` (immer String)
-  - **Device Registry**: `/xreactor/config/registry_<node_id>.lua` (stabile IDs + Aliases für Energy-Storage/Matrix-Geräte)
+  - **Device Registry**: `/xreactor/config/registry_<role>_<node_id>.json` (stabile IDs + Aliases, Health-Status)
 - Manifest: `/xreactor/.manifest`
+
+## Services & Core-Module (Kurz)
+- **core/comms.lua**: ACK/Retry/Timeout/Dedupe, Peer-Health.
+- **core/health.lua**: Standardisiertes Health-Schema (OK/DEGRADED/DOWN + Reasons).
+- **core/registry.lua**: Persistente Device Registry (stable IDs, alias mapping, health).
+- **services/**: Lifecycle Services (comms, discovery, telemetry, ui, control) mit `service_manager`.
+- **adapters/**: Einheitliche Adapter für Monitor, Energy Storage, Induction Matrix, Reactor, Turbine.
 
 ## ENERGY Node Monitor UI
 - Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
@@ -182,6 +191,8 @@ Wireless Modem (Control/Status)
 - **Module not found**: Prüfe, ob `/xreactor/shared/constants.lua` vorhanden ist und ob der Bootstrap vor allen `require`-Aufrufen läuft (Entry-File lädt `/xreactor/core/bootstrap.lua` zuerst). Bei aktivem `BOOTSTRAP_LOG_ENABLED` kontrolliere `/xreactor_logs/loader_<role>.log` für `package.path`, `shell.dir()` und die tatsächlich versuchten Pfade.
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
+- **COMMS_DOWN**: Node ist > Timeout nicht gesehen → Master markiert DOWN.
+- **DISCOVERY_FAILED**: Discovery-Scan konnte nicht laufen; prüfe Peripherals + Modem.
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
 - **Manifest-Download fehlgeschlagen**: Retry nutzen oder Cache verwenden (falls vorhanden).
 - **Retry-Menü**: Bei Download-Fehlern gibt es immer ein Retry/Cancel-Menü; Retry versucht den Download erneut mit kurzer Wartezeit.

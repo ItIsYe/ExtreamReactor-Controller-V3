@@ -61,7 +61,10 @@ end
 local function base_message(msg_type, sender_id, role, payload)
   return {
     type = msg_type,
+    message_id = nil,
     sender_id = utils.normalize_node_id(sender_id),
+    src = utils.normalize_node_id(sender_id),
+    dst = nil,
     node_id = utils.normalize_node_id(sender_id),
     role = role,
     timestamp = os.epoch("utc"),
@@ -108,11 +111,16 @@ function protocol.sanitize_message(message)
   local normalized_proto = normalize_proto(message.proto_ver)
   local sanitized = {
     type = message.type,
+    message_id = message.message_id,
     sender_id = utils.normalize_node_id(message.sender_id),
     node_id = utils.normalize_node_id(message.node_id or message.sender_id),
+    src = utils.normalize_node_id(message.src or message.sender_id),
+    dst = message.dst,
     role = message.role,
     timestamp = message.timestamp,
     proto_ver = normalized_proto,
+    ack_for = message.ack_for,
+    phase = message.phase,
     payload = sanitize_value(message.payload or {}, 0)
   }
   if type(sanitized.payload) ~= "table" then

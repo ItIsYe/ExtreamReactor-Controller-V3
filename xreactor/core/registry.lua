@@ -49,8 +49,10 @@ end
 function registry.new(opts)
   local self = {}
   self.node_id = opts.node_id or "UNKNOWN"
-  self.path = opts.path or ("/xreactor/config/registry_" .. tostring(self.node_id) .. ".lua")
+  local role = opts.role or "node"
+  self.path = opts.path or ("/xreactor/config/registry_" .. tostring(role) .. "_" .. tostring(self.node_id) .. ".json")
   self.log_prefix = opts.log_prefix or "REGISTRY"
+  self.aliases = opts.aliases or {}
   self.state = load_registry(self.path)
   return setmetatable(self, { __index = registry })
 end
@@ -79,7 +81,9 @@ function registry:register(name, info)
       name = name,
       type = type_name,
       signature = signature,
-      first_seen = os.epoch("utc")
+      first_seen = os.epoch("utc"),
+      last_error = nil,
+      last_error_ts = nil
     }
     table.insert(self.state.order, id)
     self.state.devices[id] = entry
@@ -90,8 +94,12 @@ function registry:register(name, info)
   entry.signature = signature
   entry.last_seen = os.epoch("utc")
   entry.kind = info.kind
-  if info.alias then
-    entry.alias = info.alias
+  local alias = info.alias or self.aliases[name]
+  if alias then entry.alias = alias end
+  if info.status then entry.status = info.status end
+  if info.last_error then
+    entry.last_error = info.last_error
+    entry.last_error_ts = os.epoch("utc")
   end
   return entry
 end
@@ -108,6 +116,17 @@ function registry:sync(devices)
     else
       entry.missing = false
     end
+  end
+  self:save()
+end
+
+function registry:update_status(id, status, reason)
+  local entry = self.state.devices[id]
+  if not entry then return end
+  entry.status = status
+  if reason then
+    entry.last_error = reason
+    entry.last_error_ts = os.epoch("utc")
   end
   self:save()
 end
