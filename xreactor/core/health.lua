@@ -1,4 +1,5 @@
 local constants = require("shared.constants")
+local health_codes = require("shared.health_codes")
 
 local health = {}
 
@@ -8,23 +9,13 @@ health.status = {
   DOWN = "DOWN"
 }
 
-health.reasons = {
-  NO_MONITOR = "NO_MONITOR",
-  NO_STORAGE = "NO_STORAGE",
-  NO_MATRIX = "NO_MATRIX",
-  NO_TURBINE = "NO_TURBINE",
-  NO_REACTOR = "NO_REACTOR",
-  PROTO_MISMATCH = "PROTO_MISMATCH",
-  DISCOVERY_FAILED = "DISCOVERY_FAILED",
-  COMMS_DOWN = "COMMS_DOWN",
-  CONTROL_DEGRADED = "CONTROL_DEGRADED"
-}
+health.reasons = health_codes
 
 local function now()
   return os.epoch("utc")
 end
 
-function health.new(opts)
+function health.build_health(opts)
   opts = opts or {}
   return {
     status = opts.status or health.status.OK,
@@ -35,6 +26,10 @@ function health.new(opts)
   }
 end
 
+function health.new(opts)
+  return health.build_health(opts)
+end
+
 function health.update(entry, status, reasons)
   entry.status = status or entry.status
   entry.reasons = reasons or entry.reasons or {}
@@ -42,17 +37,21 @@ function health.update(entry, status, reasons)
   return entry
 end
 
-function health.add_reason(entry, reason)
+function health.set_reason(entry, reason, active)
   entry.reasons = entry.reasons or {}
-  if not entry.reasons[reason] then
+  if active == false then
+    entry.reasons[reason] = nil
+  else
     entry.reasons[reason] = true
   end
 end
 
+function health.add_reason(entry, reason)
+  health.set_reason(entry, reason, true)
+end
+
 function health.clear_reason(entry, reason)
-  if entry.reasons then
-    entry.reasons[reason] = nil
-  end
+  health.set_reason(entry, reason, false)
 end
 
 function health.reasons_list(entry)
@@ -62,6 +61,22 @@ function health.reasons_list(entry)
   end
   table.sort(out)
   return out
+end
+
+function health.summarize_bindings(bindings)
+  if type(bindings) ~= "table" then
+    return ""
+  end
+  local parts = {}
+  for key, value in pairs(bindings) do
+    if type(value) == "table" then
+      table.insert(parts, string.format("%s:%d", key, #value))
+    else
+      table.insert(parts, string.format("%s:%s", key, tostring(value)))
+    end
+  end
+  table.sort(parts)
+  return table.concat(parts, " ")
 end
 
 function health.is_degraded(entry)
