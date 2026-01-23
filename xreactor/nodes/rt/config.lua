@@ -18,6 +18,8 @@ local CONFIG = {
   DEFAULT_COMMS_DEDUPE_TTL = 30, -- Seconds to keep dedupe entries.
   DEFAULT_COMMS_DEDUPE_LIMIT = 200, -- Max dedupe entries per peer.
   DEFAULT_COMMS_PEER_TIMEOUT = 12.0, -- Seconds before marking peer down.
+  DEFAULT_COMMS_QUEUE_LIMIT = 200, -- Max queued outbound messages.
+  DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
   DEFAULT_DEBUG_LOGGING = false -- Enable debug logging to /xreactor/logs/rt.log.
 }
 
@@ -49,6 +51,8 @@ return {
     backoff_cap_s = CONFIG.DEFAULT_COMMS_BACKOFF_CAP,
     dedupe_ttl_s = CONFIG.DEFAULT_COMMS_DEDUPE_TTL,
     dedupe_limit = CONFIG.DEFAULT_COMMS_DEDUPE_LIMIT,
-    peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT
+    peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT,
+    queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
+    drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
   }
 }

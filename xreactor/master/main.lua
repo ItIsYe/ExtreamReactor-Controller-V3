@@ -76,7 +76,22 @@ end
 utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled })
 utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
 
-config.heartbeat_interval = config.heartbeat_interval or 5
+local function clamp_interval(value, fallback, min, max)
+  local num = tonumber(value)
+  if not num or num <= 0 then
+    num = fallback
+  end
+  if min and num < min then
+    num = min
+  end
+  if max and num > max then
+    num = max
+  end
+  return num
+end
+
+config.heartbeat_interval = clamp_interval(config.heartbeat_interval, 5, 1, 60)
+config.status_interval = clamp_interval(config.status_interval or config.heartbeat_interval, config.heartbeat_interval, 1, 60)
 config.rt_default_mode = config.rt_default_mode or "MASTER"
 config.rt_setpoints = config.rt_setpoints or {}
 config.rt_setpoints.target_rpm = config.rt_setpoints.target_rpm or 900
@@ -286,6 +301,10 @@ local function update_node(message)
   local id = utils.normalize_node_id(message.sender_id)
   local existing = nodes[id]
   nodes[id] = existing or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
+  if nodes[id].down_since then
+    nodes[id].down_since = nil
+    utils.log("MASTER", "Node comms restored: " .. tostring(id))
+  end
   if nodes[id].id ~= id then
     nodes[id].id = id
   end
@@ -349,12 +368,54 @@ local function update_node(message)
     sync_rt_node(nodes[id])
   elseif message.type == constants.message_types.ACK_APPLIED then
     local result = message.payload and message.payload.result or {}
+    nodes[id].last_command_result = {
+      ok = result.ok ~= false,
+      error = result.error,
+      reason_code = result.reason_code,
+      module_id = result.module_id,
+      ack_for = message.ack_for,
+      at = os.epoch("utc"),
+      command_target = result.command_target,
+      command_value = result.command_value
+    }
+    nodes[id].last_command_error = result.ok == false and (result.error or "unknown") or nil
     if result.ok == false then
       utils.log("MASTER", ("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN")
     end
     sequencer:notify_ack(id, result.module_id)
   elseif message.type == constants.message_types.ALERT then
     add_alarm(id, message.payload.severity, message.payload.message)
+  end
+end
+
+local function handle_command_timeouts()
+  local timeouts = comms:consume_timeouts() or {}
+  if #timeouts == 0 then
+    return
+  end
+  for _, entry in ipairs(timeouts) do
+    local msg = entry.message or {}
+    if msg.type == constants.message_types.COMMAND then
+      local node_id = utils.normalize_node_id(msg.dst or (msg.payload and msg.payload.target))
+      if node_id ~= "UNKNOWN" then
+        nodes[node_id] = nodes[node_id] or { id = node_id, role = "UNKNOWN", status = constants.status_levels.OFFLINE }
+        local command = msg.payload and msg.payload.command or {}
+        nodes[node_id].last_command_result = {
+          ok = false,
+          error = "ack timeout",
+          reason_code = "ACK_TIMEOUT",
+          ack_for = msg.message_id,
+          at = os.epoch("utc"),
+          command_target = command.target,
+          command_value = command.value
+        }
+        nodes[node_id].last_command_error = "ack timeout"
+        utils.log("MASTER", ("Command timeout for %s (%s)"):format(
+          tostring(node_id),
+          tostring(command.target or "unknown")
+        ), "WARN")
+      end
+    end
   end
 end
 
@@ -372,12 +433,16 @@ local function check_timeouts()
       if node.status ~= constants.status_levels.OFFLINE then
         utils.log("MASTER", "Node offline: " .. tostring(node.id))
       end
+      if not node.down_since then
+        node.down_since = now
+      end
       node.status = health.status.DOWN
       node.health = node.health or health.new({})
       node.health.status = health.status.DOWN
       node.health.reasons = { [health.reasons.COMMS_DOWN] = true }
     elseif node.health and node.health.reasons then
       node.health.reasons[health.reasons.COMMS_DOWN] = nil
+      node.down_since = nil
     end
   end
 end
@@ -501,7 +566,7 @@ local function draw()
   }
   local rt_data = { rt_nodes = {}, ramp_profile = sequencer.ramp_profile, sequence_state = sequencer.state, queue = sequencer.queue, active_step = sequencer.active }
   local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {}, nodes = {}, trend_values = trend_cache.energy, trend_arrow = trend_cache.energy_arrow, trend_dirty = trends:is_dirty("energy"), now_ms = os.epoch("utc") }
-  local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {}, node_details = {} }
+  local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {}, node_details = {}, comms = comms:get_diagnostics() or {} }
 
   for _, node in pairs(nodes) do
     local reasons = node.health and node.health.reasons or {}
@@ -529,9 +594,12 @@ local function draw()
       reasons = reason_text,
       bindings = bindings_summary,
       last_seen_age = age,
+      down_since = node.down_since,
       registry = node.registry,
       last_error = node.last_error,
-      last_error_ts = node.last_error_ts
+      last_error_ts = node.last_error_ts,
+      last_command_result = node.last_command_result,
+      last_command_error = node.last_command_error
     })
     if node.role == constants.roles.RT_NODE then
       table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status })
@@ -638,6 +706,7 @@ local function init()
     interval = 0.5,
     render = function()
       refresh_monitors(false)
+      handle_command_timeouts()
       sequencer:tick(nodes)
       check_timeouts()
       sample_trends()
