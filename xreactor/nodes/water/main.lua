@@ -18,9 +18,13 @@ bootstrap.setup({
 })
 local require = bootstrap.require
 local constants = require("shared.constants")
-local protocol = require("core.protocol")
 local utils = require("core.utils")
-local network_lib = require("core.network")
+local health = require("core.health")
+local registry_lib = require("core.registry")
+local service_manager = require("services.service_manager")
+local comms_service = require("services.comms_service")
+local telemetry_service = require("services.telemetry_service")
+local discovery_service = require("services.discovery_service")
 local safety = require("core.safety")
 
 local DEFAULT_CONFIG = {
@@ -116,7 +120,10 @@ for _, warning in ipairs(config_warnings) do
   utils.log(CONFIG.LOG_PREFIX, warning, "WARN")
 end
 
-local network
+local comms
+local services
+local registry = registry_lib.new({ node_id = node_id, role = "water", log_prefix = CONFIG.LOG_PREFIX })
+local water_health = health.new({})
 local tanks = {}
 local last_heartbeat = 0
 
@@ -124,8 +131,23 @@ local function cache()
   tanks = utils.cache_peripherals(config.loop_tanks)
 end
 
+local function discover()
+  local devices = {}
+  for name in pairs(tanks or {}) do
+    if peripheral.isPresent(name) then
+      table.insert(devices, {
+        name = name,
+        type = peripheral.getType(name),
+        methods = peripheral.getMethods(name) or {},
+        kind = "tank"
+      })
+    end
+  end
+  registry:sync(devices)
+end
+
 local function hello()
-  network:broadcast(protocol.hello(network.id, network.role, { tanks = #config.loop_tanks }))
+  comms:send_hello({ tanks = #config.loop_tanks })
 end
 
 local function total_water()
@@ -148,33 +170,77 @@ local function balance_loop()
   end
 end
 
-local function send_status()
+local function build_status_payload()
   local total, buffers = total_water()
-  local payload = { total_water = total, buffers = buffers }
-  network:send(constants.channels.STATUS, protocol.status(network.id, network.role, payload))
-  last_heartbeat = os.epoch("utc")
-end
-
-local function main_loop()
-  while true do
-    balance_loop()
-    if os.epoch("utc") - last_heartbeat > config.heartbeat_interval * 1000 then
-      send_status()
-    end
-    local msg = network:receive(CONFIG.RECEIVE_TIMEOUT)
-    if msg and msg.type == constants.message_types.HELLO then
-      -- acknowledgement only
-    end
+  local reasons = {}
+  if not next(tanks) then
+    reasons[health.reasons.NO_STORAGE] = true
   end
+  water_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
+  water_health.reasons = reasons
+  water_health.last_seen_ts = os.epoch("utc")
+  water_health.bindings = { tanks = buffers }
+  water_health.capabilities = { tanks = #config.loop_tanks }
+  return {
+    total_water = total,
+    buffers = buffers,
+    health = {
+      status = water_health.status,
+      reasons = health.reasons_list(water_health),
+      last_seen_ts = water_health.last_seen_ts,
+      bindings = water_health.bindings,
+      capabilities = water_health.capabilities
+    },
+    bindings = water_health.bindings
+  }
 end
 
 local function init()
   cache()
-  network = network_lib.init(config)
+  services = service_manager.new({ log_prefix = "WATER" })
+  comms = comms_service.new({
+    config = config,
+    log_prefix = "WATER",
+    on_message = function(message)
+      if message.type == "PROTO_MISMATCH" then
+        water_health.status = health.status.DEGRADED
+        water_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+        return
+      end
+      if message.type == constants.message_types.COMMAND then
+        comms:send_command_ack(message, "ack")
+      end
+    end
+  })
+  services:add(comms)
+  services:add(discovery_service.new({
+    registry = registry,
+    discover = discover,
+    interval = config.heartbeat_interval
+  }))
+  services:add(telemetry_service.new({
+    comms = comms,
+    status_interval = config.heartbeat_interval,
+    heartbeat_interval = config.heartbeat_interval,
+    build_payload = build_status_payload,
+    heartbeat_state = function() return { tanks = #config.loop_tanks } end
+  }))
+  services:init()
   hello()
-  send_status()
-  utils.log("WATER", "Node ready: " .. network.id)
+  utils.log("WATER", "Node ready: " .. comms.network.id)
 end
 
 init()
-main_loop()
+while true do
+  local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
+  while true do
+    local event = { os.pullEvent() }
+    if event[1] == "modem_message" then
+      comms:handle_event(event)
+    elseif event[1] == "timer" and event[2] == timer then
+      break
+    end
+  end
+  balance_loop()
+  services:tick()
+end

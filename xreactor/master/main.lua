@@ -50,9 +50,8 @@ end
 _G.ensure_turbine_ctrl = ensure_turbine_ctrl
 local constants = require("shared.constants")
 local colors = require("shared.colors")
-local protocol = require("core.protocol")
 local utils = require("core.utils")
-local network_lib = require("core.network")
+local health = require("core.health")
 local sequencer_lib = require("master.startup_sequencer")
 local overview_ui = require("master.ui.overview")
 local rt_ui = require("master.ui.rt_dashboard")
@@ -63,6 +62,9 @@ local profiles = require("master.profiles")
 local trends_lib = require("core.trends")
 local ui = require("core.ui")
 local config = require("master.config")
+local service_manager = require("services.service_manager")
+local comms_service = require("services.comms_service")
+local ui_service = require("services.ui_service")
 
 -- Initialize file logging early to capture startup events.
 local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
@@ -97,7 +99,8 @@ local nodes = {}
 local alarms = {}
 local power_target = 0
 local sequencer
-local network
+local comms
+local services
 local last_draw = 0
 local monitor_scan_last = 0
 local trends = trends_lib.new(600)
@@ -137,10 +140,10 @@ end
 
 local function send_rt_mode(node, mode)
   if not node or not mode then return end
-  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, utils.normalize_node_id(node.id), {
+  comms:send_command(utils.normalize_node_id(node.id), {
     target = constants.command_targets.SET_MODE or constants.command_targets.MODE,
     value = mode
-  }))
+  }, { requires_applied = true })
   node.last_mode_request = os.epoch("utc")
   node.desired_mode = mode
 end
@@ -148,10 +151,10 @@ end
 local function send_rt_setpoints(node, setpoints)
   if not node then return end
   local payload = normalize_setpoints(setpoints)
-  network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, utils.normalize_node_id(node.id), {
+  comms:send_command(utils.normalize_node_id(node.id), {
     target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET,
     value = payload
-  }))
+  }, { requires_applied = true })
   node.last_setpoints = payload
   node.last_setpoints_ts = os.epoch("utc")
 end
@@ -266,6 +269,19 @@ local function sync_rt_node(node)
 end
 
 local function update_node(message)
+  if message.type == "PROTO_MISMATCH" then
+    local mismatch_id = utils.normalize_node_id(message.src)
+    if mismatch_id ~= "UNKNOWN" then
+      nodes[mismatch_id] = nodes[mismatch_id] or { id = mismatch_id, role = "UNKNOWN" }
+      nodes[mismatch_id].health = nodes[mismatch_id].health or health.new({})
+      nodes[mismatch_id].health.status = health.status.DEGRADED
+      nodes[mismatch_id].health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+      nodes[mismatch_id].status = health.status.DEGRADED
+      nodes[mismatch_id].last_seen = os.epoch("utc")
+      nodes[mismatch_id].last_seen_str = textutils.formatTime(os.time(), true)
+    end
+    return
+  end
   local id = utils.normalize_node_id(message.sender_id)
   local existing = nodes[id]
   nodes[id] = existing or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
@@ -297,7 +313,14 @@ local function update_node(message)
   elseif message.type == constants.message_types.STATUS then
     local previous_mode = nodes[id].mode
     nodes[id] = utils.merge(nodes[id], message.payload)
-    nodes[id].status = message.payload.status or nodes[id].status
+    if message.payload.health then
+      nodes[id].health = message.payload.health
+      nodes[id].status = message.payload.health.status or nodes[id].status
+    else
+      nodes[id].status = message.payload.status or nodes[id].status
+    end
+    nodes[id].bindings = message.payload.bindings or nodes[id].bindings
+    nodes[id].capabilities = message.payload.capabilities or nodes[id].capabilities
     nodes[id].mode = message.payload.mode or nodes[id].mode
     if previous_mode and nodes[id].mode and previous_mode ~= nodes[id].mode then
       utils.log("MASTER", ("Node %s mode: %s"):format(id, tostring(nodes[id].mode)))
@@ -332,7 +355,10 @@ local function check_timeouts()
       if node.status ~= constants.status_levels.OFFLINE then
         utils.log("MASTER", "Node offline: " .. tostring(node.id))
       end
-      node.status = constants.status_levels.OFFLINE
+      node.status = health.status.DOWN
+      node.health = node.health or health.new({})
+      node.health.status = health.status.DOWN
+      node.health.reasons = { [health.reasons.COMMS_DOWN] = true }
     end
   end
 end
@@ -362,10 +388,10 @@ local function apply_profile(name)
         if node.mode == "MASTER" then
           send_rt_setpoints(node, build_rt_setpoints())
         else
-          network:send(constants.channels.CONTROL, protocol.command(network.id, network.role, node.id, {
+          comms:send_command(node.id, {
             target = constants.command_targets.POWER_TARGET,
             value = power_target
-          }))
+          }, { requires_applied = true })
         end
       end
     end
@@ -459,12 +485,29 @@ local function draw()
   local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {} }
 
   for _, node in pairs(nodes) do
+    local reasons = node.health and node.health.reasons or {}
+    local reason_text = type(reasons) == "table" and table.concat(reasons, ",") or nil
+    local bindings_summary = nil
+    if node.health and type(node.health.bindings) == "table" then
+      local parts = {}
+      for key, value in pairs(node.health.bindings) do
+        if type(value) == "table" then
+          table.insert(parts, string.format("%s:%d", key, #value))
+        else
+          table.insert(parts, string.format("%s:%s", key, tostring(value)))
+        end
+      end
+      table.sort(parts)
+      bindings_summary = table.concat(parts, " ")
+    end
     table.insert(overview_data.nodes, {
       id = node.id,
       role = node.role,
       status = node.status or constants.status_levels.OFFLINE,
       last_seen = node.last_seen_str,
-      mode = node.mode
+      mode = node.mode,
+      reasons = reason_text,
+      bindings = bindings_summary
     })
     if node.role == constants.roles.RT_NODE then
       table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status })
@@ -479,7 +522,7 @@ local function draw()
         monitor_bound = node.monitor_bound,
         storage_bound_count = node.storage_bound_count,
         bound_storage_names = node.bound_storage_names,
-        degraded_reason = node.degraded_reason,
+        degraded_reason = node.health and node.health.reasons and table.concat(node.health.reasons, ",") or node.degraded_reason,
         last_scan_ts = node.last_scan_ts,
         last_scan_result = node.last_scan_result,
         status = node.status
@@ -558,15 +601,32 @@ end
 
 local function init()
   refresh_monitors(true)
-  network = network_lib.init(config)
-  sequencer = sequencer_lib.new(network, config.startup_ramp)
-  network:broadcast(protocol.hello(network.id, network.role, { monitors = monitor_cache.list and #monitor_cache.list or 0 }))
-  local normalized_id = utils.normalize_node_id(network.id)
-  if normalized_id ~= network.id then
-    utils.log("MASTER", "WARN: normalized node_id to string")
-    network.id = normalized_id
-  end
-  utils.log("MASTER", "Initialized as " .. network.id)
+  comms = comms_service.new({
+    config = config,
+    log_prefix = "MASTER",
+    on_message = update_node
+  })
+  services = service_manager.new({ log_prefix = "MASTER" })
+  services:add(comms)
+  services:add(ui_service.new({
+    interval = 0.5,
+    render = function()
+      refresh_monitors(false)
+      sequencer:tick(nodes)
+      check_timeouts()
+      sample_trends()
+      draw()
+    end,
+    handle_input = function(event)
+      if event[1] == "monitor_touch" then
+        handle_monitor_touch(event[2], event[3], event[4])
+      end
+    end
+  }))
+  services:init()
+  sequencer = sequencer_lib.new(comms, config.startup_ramp)
+  comms:send_hello({ monitors = monitor_cache.list and #monitor_cache.list or 0 })
+  utils.log("MASTER", "Initialized as " .. comms.network.id)
 end
 
 local function handle_monitor_touch(name, x, y)
@@ -587,28 +647,18 @@ end
 
 local function main_loop()
   while true do
-    refresh_monitors(false)
-    sequencer:tick(nodes)
-    check_timeouts()
-    sample_trends()
-    draw()
     local timer = os.startTimer(0.5)
     while true do
       local event = { os.pullEvent() }
       if event[1] == "modem_message" then
-        local _, _, _, _, message = table.unpack(event)
-        local ok, err = protocol.validateMessage(message)
-        if ok then
-          update_node(protocol.sanitize_message(message))
-        else
-          warn_once("schema:" .. tostring(err), "WARN: invalid message ignored (" .. tostring(err) .. ")")
-        end
+        comms:handle_event(event)
       elseif event[1] == "monitor_touch" then
-        handle_monitor_touch(event[2], event[3], event[4])
+        services:tick(nil, event)
       elseif event[1] == "timer" and event[2] == timer then
         break
       end
     end
+    services:tick()
   end
 end
 

@@ -69,8 +69,15 @@ local colors = require("shared.colors")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
 local safety = require("core.safety")
-local network_lib = require("core.network")
+local health = require("core.health")
 local machine = require("core.state_machine")
+local registry_lib = require("core.registry")
+local reactor_adapter = require("adapters.reactor")
+local turbine_adapter = require("adapters.turbine")
+local service_manager = require("services.service_manager")
+local comms_service = require("services.comms_service")
+local telemetry_service = require("services.telemetry_service")
+local control_service = require("services.control_service")
 
 local INFO = "INFO"
 local DEBUG = "DEBUG"
@@ -321,7 +328,10 @@ config.monitor_interval = config.monitor_interval or DEFAULT_CONFIG.monitor_inte
 config.monitor_scale = config.monitor_scale or DEFAULT_CONFIG.monitor_scale
 local hb = config.heartbeat_interval
 
-local network
+local comms
+local services
+local registry = registry_lib.new({ node_id = node_id, role = "rt", log_prefix = CONFIG.LOG_PREFIX })
+local rt_health = health.new({})
 local peripherals = {}
 local targets = { power = 0, steam = 0, rpm = TARGET_RPM, enable_reactors = true, enable_turbines = true }
 local modules = {}
@@ -1154,8 +1164,71 @@ local function ramp_duration(profile)
   return ramp_profiles[profile] or ramp_profiles.NORMAL
 end
 
+local function update_registry()
+  local devices = {}
+  for _, name in ipairs(config.reactors or {}) do
+    local info = reactor_adapter.inspect(name)
+    if info then
+      table.insert(devices, {
+        name = name,
+        type = info.type,
+        methods = info.methods,
+        kind = "reactor"
+      })
+    end
+  end
+  for _, name in ipairs(config.turbines or {}) do
+    local info = turbine_adapter.inspect(name)
+    if info then
+      table.insert(devices, {
+        name = name,
+        type = info.type,
+        methods = info.methods,
+        kind = "turbine"
+      })
+    end
+  end
+  registry:sync(devices)
+end
+
+local function build_health_payload()
+  local reasons = {}
+  local bound_reactors, bound_turbines = 0, 0
+  for _, entry in ipairs(registry:list()) do
+    if not entry.missing then
+      if entry.kind == "reactor" then
+        bound_reactors = bound_reactors + 1
+      elseif entry.kind == "turbine" then
+        bound_turbines = bound_turbines + 1
+      end
+    end
+  end
+  if bound_reactors == 0 then
+    reasons[health.reasons.NO_REACTOR] = true
+  end
+  if bound_turbines == 0 then
+    reasons[health.reasons.NO_TURBINE] = true
+  end
+  local status = next(reasons) and health.status.DEGRADED or health.status.OK
+  rt_health.status = status
+  rt_health.reasons = reasons
+  rt_health.last_seen_ts = os.epoch("utc")
+  rt_health.bindings = {
+    reactors = bound_reactors,
+    turbines = bound_turbines
+  }
+  rt_health.capabilities = { reactors = #config.reactors, turbines = #config.turbines }
+  return {
+    status = rt_health.status,
+    reasons = health.reasons_list(rt_health),
+    last_seen_ts = rt_health.last_seen_ts,
+    bindings = rt_health.bindings,
+    capabilities = rt_health.capabilities
+  }
+end
+
 local function add_alarm(sender, severity, message)
-  network:send(constants.channels.CONTROL, protocol.alert(sender, config.role, severity, message))
+  comms:send_alert(severity, message)
 end
 
 local function module_payload()
@@ -1170,24 +1243,32 @@ local function module_payload()
   return snapshot
 end
 
-local function broadcast_status(status_level)
-  local payload = {
+local function build_status_payload(status_level)
+  update_registry()
+  local health_payload = build_health_payload()
+  return {
     status = status_level,
     state = node_state_machine.state(),
     mode = current_state,
     output = targets.power,
     turbine_rpm = targets.rpm,
     steam = targets.steam,
-    capabilities = { reactors = #config.reactors, turbines = #config.turbines },
+    capabilities = health_payload.capabilities,
+    bindings = health_payload.bindings,
+    health = health_payload,
     modules = module_payload(),
     snapshot = status_snapshot
   }
-  network:send(constants.channels.STATUS, protocol.status(network.id, network.role, payload))
+end
+
+local function broadcast_status(status_level)
+  local payload = build_status_payload(status_level)
+  comms:publish_status(payload, { requires_ack = true })
 end
 
 local function hello()
   local caps = { reactors = #config.reactors, turbines = #config.turbines }
-  network:broadcast(protocol.register(network.id, network.role, caps))
+  comms:send_hello(caps)
 end
 
 set_reactors_active = function(active)
@@ -1485,7 +1566,7 @@ local function process_startup()
     module.progress = 0
     module.limits = limits
     active_startup = nil
-    add_alarm(network.id, "EMERGENCY", "Startup blocked for " .. module.id)
+    add_alarm(comms.network.id, "EMERGENCY", "Startup blocked for " .. module.id)
     return
   end
   local now = os.epoch("utc")
@@ -1759,7 +1840,7 @@ local function update_status_snapshot()
   end
 
   status_snapshot = {
-    node_id = network and network.id or config.role,
+    node_id = comms and comms.network and comms.network.id or config.role,
     state = current_state,
     master_connected = master_connected,
     reactor_count = #config.reactors,
@@ -1802,7 +1883,7 @@ local function update_monitor()
   local snapshot = update_status_snapshot()
   local avg_temp = snapshot and snapshot.avg_temp or 0
   local lines = {
-    "RT Node: " .. (network and network.id or config.node_id or "RT"),
+    "RT Node: " .. (comms and comms.network and comms.network.id or config.node_id or "RT"),
     "State: " .. tostring(current_state),
     "Reactors: " .. tostring(#config.reactors),
     "Turbines: " .. tostring(#config.turbines),
@@ -1895,7 +1976,7 @@ local states = {
     on_enter = function()
       scram()
       targets.power, targets.steam, targets.rpm = 0, 0, 0
-      add_alarm(network.id, "EMERGENCY", "SCRAM triggered")
+      add_alarm(comms.network.id, "EMERGENCY", "SCRAM triggered")
     end,
     on_tick = function()
       monitor_master()
@@ -1904,11 +1985,11 @@ local states = {
 }
 
 local function handle_command(message)
-  if not protocol.is_for_node(message, network.id) then return end
+  if not protocol.is_for_node(message, comms.network.id) then return end
   local command = message.payload.command
   if not command then return end
   if current_state == STATE.SAFE then
-    network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "safe: ignoring commands"))
+    comms:send_command_ack(message, "safe: ignoring commands")
     return
   end
   note_master_seen()
@@ -1917,7 +1998,7 @@ local function handle_command(message)
     apply_mode(desired)
   elseif command.target == constants.command_targets.SET_SETPOINTS then
     if current_state ~= STATE.MASTER then
-      network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "autonom: ignoring setpoints"))
+      comms:send_command_ack(message, "autonom: ignoring setpoints")
       return
     end
     local value = command.value or {}
@@ -1955,56 +2036,42 @@ local function handle_command(message)
   elseif command.target == constants.command_targets.STARTUP_STAGE
     or command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
     if current_state ~= STATE.MASTER then
-      network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "autonom: ignoring startup"))
+      comms:send_command_ack(message, "autonom: ignoring startup")
       return
     end
     local value = command.value or {}
     local module, detail = start_module(value.module_id, value.module_type, value.ramp_profile)
     if not module then
-      add_alarm(network.id, "WARNING", "Startup rejected: " .. (detail or "unknown"))
-      network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, detail or "ack"))
+      add_alarm(comms.network.id, "WARNING", "Startup rejected: " .. (detail or "unknown"))
+      comms:send_command_ack(message, detail or "ack")
       return
     end
-    network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, detail or "ack", module.id))
+    comms:send_command_ack(message, detail or "ack", module.id)
     return
   elseif command.target == constants.command_targets.SCRAM then
     apply_mode(STATE.SAFE)
   end
-  network:send(constants.channels.CONTROL, protocol.ack(network.id, network.role, command.command_id, "ack"))
+  comms:send_command_ack(message, "ack")
 end
 
 local function send_heartbeat()
   update_status_snapshot()
-  network:send(constants.channels.STATUS, protocol.heartbeat(network.id, network.role, node_state_machine.state()))
+  comms:send_heartbeat({ state = node_state_machine.state() })
   broadcast_status(constants.status_levels.OK)
   last_heartbeat = os.epoch("utc")
 end
 
-local function mainEventLoop()
-  while true do
-    refresh_module_peripherals()
-    process_startup()
-    update_module_states()
-    updateReactorControl()
-    if current_state == STATE.SAFE and node_state_machine.state() ~= constants.node_states.EMERGENCY then
-      node_state_machine:transition(constants.node_states.EMERGENCY)
-    end
-    node_state_machine:tick()
-    local message = network:receive(CONFIG.RECEIVE_TIMEOUT)
-    if message then
-      if message.type == constants.message_types.COMMAND then
-        handle_command(message)
-      elseif message.type == constants.message_types.HELLO
-        or message.type == constants.message_types.REGISTER then
-        note_master_seen()
-      end
-    end
-    if os.epoch("utc") - last_heartbeat > hb * 1000 then
-      send_heartbeat()
-    end
-    update_monitor()
-    update_status_snapshot()
+local function control_tick()
+  refresh_module_peripherals()
+  process_startup()
+  update_module_states()
+  updateReactorControl()
+  if current_state == STATE.SAFE and node_state_machine.state() ~= constants.node_states.EMERGENCY then
+    node_state_machine:transition(constants.node_states.EMERGENCY)
   end
+  node_state_machine:tick()
+  update_monitor()
+  update_status_snapshot()
 end
 
 local function init()
@@ -2017,19 +2084,58 @@ local function init()
   set_reactors_active(true)
   set_turbines_active(true)
   apply_initial_reactor_rods()
-  network = network_lib.init(config)
-  local normalized_id = utils.normalize_node_id(network.id)
-  if normalized_id ~= network.id then
-    log("WARN", "Normalized node_id to string")
-    network.id = normalized_id
-  end
+  services = service_manager.new({ log_prefix = "RT" })
+  comms = comms_service.new({
+    config = config,
+    log_prefix = "RT",
+    on_message = function(message)
+      if message.type == "PROTO_MISMATCH" then
+        rt_health.status = health.status.DEGRADED
+        rt_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+        return
+      end
+      if message.type == constants.message_types.COMMAND then
+        handle_command(message)
+      elseif message.type == constants.message_types.HELLO
+        or message.type == constants.message_types.REGISTER then
+        note_master_seen()
+      end
+    end
+  })
+  services:add(comms)
+  services:add(control_service.new({ tick = control_tick }))
+  services:add(telemetry_service.new({
+    comms = comms,
+    status_interval = config.heartbeat_interval,
+    heartbeat_interval = config.heartbeat_interval,
+    heartbeat_state = function() return { state = node_state_machine.state() } end,
+    build_payload = function()
+      update_status_snapshot()
+      return build_status_payload(constants.status_levels.OK)
+    end
+  }))
+  services:init()
   node_state_machine = machine.new(states, constants.node_states.OFF)
   apply_mode(STATE.AUTONOM)
   init_monitor()
   hello()
   send_heartbeat()
-  log("INFO", "Node ready: " .. network.id)
+  log("INFO", "Node ready: " .. comms.network.id)
 end
 
 init()
-mainEventLoop()
+while true do
+  local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
+  while true do
+    local event = { os.pullEvent() }
+    if event[1] == "modem_message" then
+      comms:handle_event(event)
+    elseif event[1] == "timer" and event[2] == timer then
+      break
+    end
+  end
+  if os.epoch("utc") - last_heartbeat > hb * 1000 then
+    send_heartbeat()
+  end
+  services:tick()
+end
