@@ -7,6 +7,7 @@ local CONFIG = {
   DEFAULT_MODEM = "right", -- Default modem side or peripheral name.
   DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
+  DEFAULT_SCAN_INTERVAL = 10, -- Seconds between discovery scans.
   DEFAULT_CONTROL_CHANNEL = 6500, -- Control channel for MASTER commands.
   DEFAULT_STATUS_CHANNEL = 6501, -- Status channel for telemetry.
   DEFAULT_DEBUG_LOGGING = false -- Enable debug logging to /xreactor/logs/rt.log.
@@ -26,6 +27,7 @@ return {
   wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
 
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
+  scan_interval = CONFIG.DEFAULT_SCAN_INTERVAL,
 
   channels = {
     control = CONFIG.DEFAULT_CONTROL_CHANNEL,

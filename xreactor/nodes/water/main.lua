@@ -20,11 +20,15 @@ local require = bootstrap.require
 local constants = require("shared.constants")
 local utils = require("core.utils")
 local health = require("core.health")
+local ui = require("core.ui")
+local colors = require("shared.colors")
 local registry_lib = require("core.registry")
+local monitor_adapter = require("adapters.monitor")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
+local ui_service = require("services.ui_service")
 local safety = require("core.safety")
 
 local DEFAULT_CONFIG = {
@@ -125,29 +129,88 @@ local services
 local registry = registry_lib.new({ node_id = node_id, role = "water", log_prefix = CONFIG.LOG_PREFIX })
 local water_health = health.new({})
 local tanks = {}
+local devices = {
+  monitor = nil,
+  monitor_name = nil,
+  discovery_failed = false,
+  registry_summary = nil,
+  registry_load_error = nil,
+  proto_mismatch = false,
+  last_scan_ts = nil
+}
 local last_heartbeat = 0
+local master_seen_ts = nil
 
-local function cache()
-  tanks = utils.cache_peripherals(config.loop_tanks)
+local function cache(bound_names)
+  tanks = utils.cache_peripherals(bound_names or {})
 end
 
 local function discover()
-  local devices = {}
-  for name in pairs(tanks or {}) do
-    if peripheral.isPresent(name) then
-      table.insert(devices, {
+  local names = peripheral.getNames() or {}
+  local registry_devices = {}
+  local allow_set = {}
+  for _, name in ipairs(config.loop_tanks or {}) do
+    allow_set[name] = true
+  end
+  local allow_all = #config.loop_tanks == 0
+  local monitor_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  local monitor_name = monitor_entry and monitor_entry.name or nil
+  devices.monitor = monitor_entry and monitor_entry.mon or nil
+  devices.monitor_name = monitor_name
+
+  for _, name in ipairs(names) do
+    if peripheral.getType(name) == "monitor" then
+      table.insert(registry_devices, {
         name = name,
-        type = peripheral.getType(name),
+        type = "monitor",
         methods = peripheral.getMethods(name) or {},
-        kind = "tank"
+        kind = "monitor",
+        bound = monitor_name == name
       })
     end
   end
-  registry:sync(devices)
+
+  for _, name in ipairs(names) do
+    if not allow_all and not allow_set[name] then
+      goto continue
+    end
+    local ok, methods = pcall(peripheral.getMethods, name)
+    if not ok or type(methods) ~= "table" then
+      goto continue
+    end
+    local has_fluid = false
+    for _, method in ipairs(methods) do
+      if method == "getFluidAmount" then
+        has_fluid = true
+        break
+      end
+    end
+    if has_fluid then
+      table.insert(registry_devices, {
+        name = name,
+        type = peripheral.getType(name),
+        methods = methods,
+        kind = "tank",
+        bound = true
+      })
+    end
+    ::continue::
+  end
+  registry:sync(registry_devices)
+  devices.registry_summary = registry:get_summary()
+  devices.registry_load_error = registry.state.load_error
+  devices.last_scan_ts = os.epoch("utc")
+  local bound = registry:get_bound_devices("tank")
+  local bound_names = {}
+  for _, entry in ipairs(bound) do
+    table.insert(bound_names, entry.name)
+  end
+  cache(bound_names)
 end
 
 local function hello()
-  comms:send_hello({ tanks = #config.loop_tanks })
+  local summary = registry:get_summary()
+  comms:send_hello({ tanks = summary.kinds.tank and summary.kinds.tank.bound or 0 })
 end
 
 local function total_water()
@@ -176,10 +239,19 @@ local function build_status_payload()
   if not next(tanks) then
     reasons[health.reasons.NO_STORAGE] = true
   end
+  if devices.discovery_failed or devices.registry_load_error then
+    reasons[health.reasons.DISCOVERY_FAILED] = true
+  end
+  if devices.proto_mismatch then
+    reasons[health.reasons.PROTO_MISMATCH] = true
+  end
+  if master_seen_ts and os.epoch("utc") - master_seen_ts > config.heartbeat_interval * 6000 then
+    reasons[health.reasons.COMMS_DOWN] = true
+  end
   water_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
   water_health.reasons = reasons
   water_health.last_seen_ts = os.epoch("utc")
-  water_health.bindings = { tanks = buffers }
+  water_health.bindings = { tanks = #buffers }
   water_health.capabilities = { tanks = #config.loop_tanks }
   return {
     total_water = total,
@@ -191,22 +263,58 @@ local function build_status_payload()
       bindings = water_health.bindings,
       capabilities = water_health.capabilities
     },
-    bindings = water_health.bindings
+    bindings = water_health.bindings,
+    bindings_summary = health.summarize_bindings(water_health.bindings),
+    registry = {
+      summary = devices.registry_summary or registry:get_summary(),
+      devices = registry:get_devices_by_kind(),
+      diagnostics = registry:get_diagnostics()
+    }
   }
 end
 
+local function format_age(ts, now)
+  if not ts then
+    return "n/a"
+  end
+  return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
+end
+
+local function render_monitor()
+  if not devices.monitor then
+    return
+  end
+  local mon = devices.monitor
+  local w, h = mon.getSize()
+  local payload = build_status_payload()
+  local status = payload.health and payload.health.status or "OK"
+  ui.panel(mon, 1, 1, w, h, "WATER NODE", status)
+  ui.text(mon, 2, 2, ("ID: %s"):format(comms and comms.network and comms.network.id or config.node_id), colors.get("text"), colors.get("background"))
+  ui.badge(mon, w - 6, 2, status, status)
+  ui.text(mon, 2, 4, ("Total: %.0f"):format(payload.total_water or 0), colors.get("text"), colors.get("background"))
+  ui.text(mon, 2, 5, ("Target: %.0f"):format(config.target_volume or 0), colors.get("text"), colors.get("background"))
+
+  local summary = payload.registry and payload.registry.summary or registry:get_summary()
+  local rows = {
+    { text = ("Discovery: %s"):format(devices.discovery_failed and "FAILED" or "OK"), status = devices.discovery_failed and "WARNING" or "OK" },
+    { text = ("Last scan: %s"):format(format_age(devices.last_scan_ts, os.epoch("utc"))) },
+    { text = ("Registry total:%d bound:%d missing:%d"):format(summary.total or 0, summary.bound or 0, summary.missing or 0) }
+  }
+  ui.list(mon, 2, 7, w - 2, rows, { max_rows = h - 8 })
+end
+
 local function init()
-  cache()
+  discover()
   services = service_manager.new({ log_prefix = "WATER" })
   comms = comms_service.new({
     config = config,
     log_prefix = "WATER",
     on_message = function(message)
       if message.type == "PROTO_MISMATCH" then
-        water_health.status = health.status.DEGRADED
-        water_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+        devices.proto_mismatch = true
         return
       end
+      master_seen_ts = os.epoch("utc")
       if message.type == constants.message_types.COMMAND then
         comms:send_command_ack(message, "ack")
       end
@@ -216,7 +324,11 @@ local function init()
   services:add(discovery_service.new({
     registry = registry,
     discover = discover,
-    interval = config.heartbeat_interval
+    interval = config.heartbeat_interval,
+    managed_registry = false,
+    update_health = function(ok)
+      devices.discovery_failed = not ok
+    end
   }))
   services:add(telemetry_service.new({
     comms = comms,
@@ -224,6 +336,11 @@ local function init()
     heartbeat_interval = config.heartbeat_interval,
     build_payload = build_status_payload,
     heartbeat_state = function() return { tanks = #config.loop_tanks } end
+  }))
+  services:add(ui_service.new({
+    interval = 1,
+    render = render_monitor,
+    handle_input = function() end
   }))
   services:init()
   hello()

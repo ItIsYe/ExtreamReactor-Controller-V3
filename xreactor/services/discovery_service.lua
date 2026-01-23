@@ -48,16 +48,24 @@ function discovery:tick()
   local bound = {}
   if self.registry then
     for _, entry in ipairs(self.registry:list()) do
-      table.insert(found, entry)
-      if not entry.missing then
+      if entry.found ~= false then
+        table.insert(found, entry)
+      end
+      local is_bound = entry.bound
+      if is_bound == nil then
+        is_bound = not entry.missing
+      end
+      if is_bound then
         table.insert(bound, entry)
       end
     end
   end
   local missing = {}
-  for _, entry in ipairs(found) do
-    if entry.missing then
-      table.insert(missing, entry)
+  if self.registry then
+    for _, entry in ipairs(self.registry:list()) do
+      if entry.missing then
+        table.insert(missing, entry)
+      end
     end
   end
   self.snapshot = {
@@ -65,7 +73,8 @@ function discovery:tick()
     bound = bound,
     missing = missing,
     last_scan = ts,
-    errors = {}
+    errors = {},
+    diagnostics = self.registry and self.registry.get_diagnostics and self.registry:get_diagnostics() or nil
   }
   if self.update_health then
     self.update_health(true)

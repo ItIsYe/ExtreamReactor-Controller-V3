@@ -54,6 +54,7 @@ Wireless Modem (Control/Status)
 - **Projekt-Root**: Alle Module werden relativ zum festen Root `/xreactor` geladen (z. B. `/xreactor/shared/constants.lua`).
 - **Module-Struktur**:
   - `xreactor/shared/*` (z. B. `shared.constants`)
+  - `xreactor/shared/health_codes.lua` (Health-Reason-Codes für Master/Nodes)
   - `xreactor/core/*` (z. B. `core.utils`)
   - `xreactor/master/*` (z. B. `master.main`)
   - `xreactor/nodes/*` (z. B. `nodes.rt.main`)
@@ -142,6 +143,7 @@ Wireless Modem (Control/Status)
 - **Persistenz**:
   - `node_id`: `/xreactor/config/node_id.txt` (immer String)
   - **Device Registry**: `/xreactor/config/registry_<role>_<node_id>.json` (stabile IDs + Aliases, Health-Status)
+  - **Source-of-Truth**: Discovery schreibt die Registry; UI/Telemetry lesen **ausschließlich** aus der Registry.
 - Manifest: `/xreactor/.manifest`
 
 ## Services & Core-Module (Kurz)
@@ -150,6 +152,9 @@ Wireless Modem (Control/Status)
 - **core/registry.lua**: Persistente Device Registry (stable IDs, alias mapping, health).
 - **services/**: Lifecycle Services (comms, discovery, telemetry, ui, control) mit `service_manager`.
 - **adapters/**: Einheitliche Adapter für Monitor, Energy Storage, Induction Matrix, Reactor, Turbine.
+- **shared/health_codes.lua**: Einheitliche Reason-Codes für Health-Status.
+- **shared/telemetry_schema.lua**: Dokumentiertes Telemetry-Schema (Schema-Version + Rollenfelder).
+- **shared/build_info.lua**: Build-Metadaten (Commit/Version aus `installer/release.lua`).
 
 ## ENERGY Node Monitor UI
 - Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
@@ -193,6 +198,9 @@ Wireless Modem (Control/Status)
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
 - **COMMS_DOWN**: Node ist > Timeout nicht gesehen → Master markiert DOWN.
 - **DISCOVERY_FAILED**: Discovery-Scan konnte nicht laufen; prüfe Peripherals + Modem.
+- **Reason-Codes**: Zentral definiert in `xreactor/shared/health_codes.lua` (Master/Nodes nutzen identische Codes).
+- **Device not bound**: Diagnostics-Page der Node prüfen (Registry zeigt Found/Bound/Missing + letzte Fehler).
+- **Registry corrupt**: Datei `registry_<role>_<node_id>.json.broken_<timestamp>` wird erzeugt; Node läuft weiter im DEGRADED-Modus.
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
 - **Manifest-Download fehlgeschlagen**: Retry nutzen oder Cache verwenden (falls vorhanden).
 - **Retry-Menü**: Bei Download-Fehlern gibt es immer ein Retry/Cancel-Menü; Retry versucht den Download erneut mit kurzer Wartezeit.
@@ -215,6 +223,23 @@ Wireless Modem (Control/Status)
   - Die API liefert diese Werte nicht (z. B. Matrix-Komponenten-Counts).
   - Debug-Log zeigt die verfügbaren Methoden am Matrix-Peripheral.
 - **Node bleibt in SAFE**: Temperatur/Water-Limits prüfen, ggf. Ursache beseitigen und Modus wechseln.
+
+## Telemetry-Schema (Kurz)
+- Jeder STATUS-Payload enthält `meta` mit `proto_ver`, `role`, `node_id`, `build` und `schema_version`.
+- Gemeinsame Felder: `health`, `bindings`, `bindings_summary`, `registry`.
+- Rollen-Felder:
+  - **ENERGY**: `total`, `matrices[]`, `stores[]`.
+  - **RT**: `turbines[]`, `reactors[]`, `control_mode`, `ramp_state`.
+  - **FUEL**: `sources[]`, `reserve`, `minimum_reserve`.
+  - **WATER**: `total_water`, `buffers[]`.
+  - **REPROCESSOR**: `buffers[]`, `standby`.
+
+## Manual Test Checklist (Step 2)
+1. **MASTER starten** → Overview zeigt Nodes + Health/Reasons/Bindings.
+2. **RT starten** → Turbines/Reaktoren sichtbar, Health OK/DEGRADED korrekt.
+3. **ENERGY starten** → Matrices + Total sichtbar, Diagnostics zeigt Registry.
+4. **Diagnostics Pages** (ENERGY/RT/FUEL/WATER/REPROC) → Registry snapshot + last errors sichtbar.
+5. **Safe Update** ausführen → Rolle/Config bleiben erhalten, neue Dateien sind vorhanden.
 
 ## Wie teste ich das System? (6 Szenarien)
 1. **RT-Node startet ohne MASTER** → läuft stabil in **AUTONOM**.

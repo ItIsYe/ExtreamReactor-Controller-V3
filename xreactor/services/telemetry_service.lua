@@ -1,5 +1,7 @@
 local constants = require("shared.constants")
 local utils = require("core.utils")
+local build_info = require("shared.build_info")
+local telemetry_schema = require("shared.telemetry_schema")
 
 local telemetry = {}
 
@@ -37,10 +39,13 @@ function telemetry:tick()
     if self.build_payload then
       local ok, payload = pcall(self.build_payload)
       if ok and payload then
+        local build = build_info.get()
         payload.meta = payload.meta or {
           proto_ver = constants.proto_ver,
           role = self.comms.network and self.comms.network.role or nil,
-          node_id = self.comms.network and self.comms.network.id or nil
+          node_id = self.comms.network and self.comms.network.id or nil,
+          build = build,
+          schema_version = telemetry_schema.version
         }
         self.comms:publish_status(payload, { requires_ack = true })
       elseif not ok then

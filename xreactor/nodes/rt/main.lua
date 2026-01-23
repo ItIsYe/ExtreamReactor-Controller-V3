@@ -74,8 +74,10 @@ local machine = require("core.state_machine")
 local registry_lib = require("core.registry")
 local reactor_adapter = require("adapters.reactor")
 local turbine_adapter = require("adapters.turbine")
+local monitor_adapter = require("adapters.monitor")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
+local discovery_service = require("services.discovery_service")
 local telemetry_service = require("services.telemetry_service")
 local control_service = require("services.control_service")
 
@@ -97,6 +99,7 @@ local DEFAULT_CONFIG = {
   reactors = { "BigReactors-Reactor_6" }, -- Default reactor peripheral names.
   turbines = { "BigReactors-Turbine_327", "BigReactors-Turbine_426" }, -- Default turbine peripheral names.
   heartbeat_interval = 2, -- Seconds between status heartbeats.
+  scan_interval = 10, -- Seconds between peripheral discovery scans.
   channels = {
     control = constants.channels.CONTROL, -- Control channel for MASTER commands.
     status = constants.channels.STATUS -- Status channel for telemetry.
@@ -171,6 +174,10 @@ local function validate_config(config_values, defaults)
   if type(config_values.heartbeat_interval) ~= "number" or config_values.heartbeat_interval <= 0 then
     config_values.heartbeat_interval = defaults.heartbeat_interval
     add_config_warning("heartbeat_interval missing/invalid; defaulting to " .. tostring(defaults.heartbeat_interval))
+  end
+  if type(config_values.scan_interval) ~= "number" or config_values.scan_interval <= 0 then
+    config_values.scan_interval = defaults.scan_interval
+    add_config_warning("scan_interval missing/invalid; defaulting to " .. tostring(defaults.scan_interval))
   end
   if type(config_values.channels) ~= "table" then
     config_values.channels = utils.deep_copy(defaults.channels)
@@ -326,12 +333,31 @@ config.autonom.steam_reserve = config.autonom.steam_reserve or DEFAULT_CONFIG.au
 config.autonom.steam_deficit = config.autonom.steam_deficit or DEFAULT_CONFIG.autonom.steam_deficit
 config.monitor_interval = config.monitor_interval or DEFAULT_CONFIG.monitor_interval
 config.monitor_scale = config.monitor_scale or DEFAULT_CONFIG.monitor_scale
+config.scan_interval = config.scan_interval or DEFAULT_CONFIG.scan_interval
 local hb = config.heartbeat_interval
+
+local configured_reactors = utils.deep_copy(config.reactors or {})
+local configured_turbines = utils.deep_copy(config.turbines or {})
+local configured_caps = {
+  reactors = #configured_reactors,
+  turbines = #configured_turbines
+}
 
 local comms
 local services
 local registry = registry_lib.new({ node_id = node_id, role = "rt", log_prefix = CONFIG.LOG_PREFIX })
 local rt_health = health.new({})
+local devices = {
+  reactors = {},
+  turbines = {},
+  adapters = { reactors = {}, turbines = {} },
+  discovery_failed = false,
+  registry_summary = nil,
+  registry_load_error = nil,
+  proto_mismatch = false,
+  binding_signature = nil,
+  last_scan_ts = nil
+}
 local peripherals = {}
 local targets = { power = 0, steam = 0, rpm = TARGET_RPM, enable_reactors = true, enable_turbines = true }
 local modules = {}
@@ -344,7 +370,10 @@ local last_reactor_debug_log = 0
 local status_snapshot = nil
 local last_snapshot = 0
 local monitor = nil
+local monitor_name = nil
 local last_monitor_update = 0
+local last_monitor_page = 0
+local monitor_page = 1
 local last_actuator_update = 0
 local warned = {}
 local autonom_state = { reactors = {}, turbines = {} }
@@ -353,6 +382,9 @@ local capability_cache = { reactors = {}, turbines = {} }
 local turbine_ctrl = _G.turbine_ctrl or {}
 _G.turbine_ctrl = turbine_ctrl
 local reactor_ctrl = {}
+local cache
+local build_modules
+local refresh_module_peripherals
 
 local STATE = {
   INIT = "INIT",
@@ -1102,7 +1134,7 @@ local function apply_mode(mode)
   end
 end
 
-local function cache()
+cache = function()
   peripherals.reactors = utils.cache_peripherals(config.reactors)
   peripherals.turbines = utils.cache_peripherals(config.turbines)
   for _, name in ipairs(config.reactors) do
@@ -1127,28 +1159,162 @@ function dumpPeripherals()
   end
 end
 
-local function build_modules()
-  modules = {}
-  for i, name in ipairs(config.turbines) do
-    local id = "turbine:" .. i
-    modules[id] = { id = id, type = "turbine", state = "OFF", progress = 0, limits = {}, name = name, stable_since = nil }
+local function to_set(list)
+  local out = {}
+  for _, value in ipairs(list or {}) do
+    out[value] = true
   end
-  for i, name in ipairs(config.reactors) do
-    local id = "reactor:" .. i
+  return out
+end
+
+local function build_binding_signature(reactors, turbines)
+  local ids = {}
+  for _, entry in ipairs(reactors or {}) do
+    table.insert(ids, tostring(entry.id))
+  end
+  for _, entry in ipairs(turbines or {}) do
+    table.insert(ids, tostring(entry.id))
+  end
+  table.sort(ids)
+  return table.concat(ids, "|")
+end
+
+local function refresh_bindings()
+  local reactors = registry:get_bound_devices("reactor")
+  local turbines = registry:get_bound_devices("turbine")
+  local signature = build_binding_signature(reactors, turbines)
+  if devices.binding_signature == signature then
+    return
+  end
+  devices.binding_signature = signature
+  local reactor_names = {}
+  local turbine_names = {}
+  for _, entry in ipairs(reactors) do
+    table.insert(reactor_names, entry.name)
+  end
+  for _, entry in ipairs(turbines) do
+    table.insert(turbine_names, entry.name)
+  end
+  config.reactors = reactor_names
+  config.turbines = turbine_names
+  devices.reactors = reactors
+  devices.turbines = turbines
+  cache()
+  build_modules()
+  refresh_module_peripherals()
+end
+
+local function discover()
+  local names = peripheral.getNames() or {}
+  local allow_reactors = to_set(configured_reactors)
+  local allow_turbines = to_set(configured_turbines)
+  local allow_all_reactors = #configured_reactors == 0
+  local allow_all_turbines = #configured_turbines == 0
+  local adapter_map = { reactors = {}, turbines = {} }
+  local registry_devices = {}
+
+  for _, name in ipairs(names) do
+    if peripheral.getType(name) == "monitor" then
+      table.insert(registry_devices, {
+        name = name,
+        type = "monitor",
+        methods = peripheral.getMethods(name) or {},
+        kind = "monitor",
+        bound = monitor_name == name
+      })
+    end
+  end
+
+  for _, name in ipairs(names) do
+    local ok, methods = pcall(peripheral.getMethods, name)
+    if not ok or type(methods) ~= "table" then
+      goto continue
+    end
+    local method_set = {}
+    for _, method in ipairs(methods) do
+      method_set[method] = true
+    end
+    local is_reactor = method_set.getControlRodLevel or method_set.setAllControlRodLevels or method_set.getFuelAmount
+    local is_turbine = method_set.getRotorSpeed or method_set.getRotorRPM or method_set.setFluidFlowRateMax
+    if is_reactor then
+      local info = reactor_adapter.inspect(name, CONFIG.LOG_PREFIX)
+      if info then
+        local bound = allow_all_reactors or allow_reactors[name]
+        if bound then
+          adapter_map.reactors[name] = info
+        end
+        table.insert(registry_devices, {
+          name = name,
+          type = info.type,
+          methods = info.methods,
+          kind = "reactor",
+          bound = bound,
+          features = info.features,
+          schema = info.schema
+        })
+      end
+    elseif is_turbine then
+      local info = turbine_adapter.inspect(name, CONFIG.LOG_PREFIX)
+      if info then
+        local bound = allow_all_turbines or allow_turbines[name]
+        if bound then
+          adapter_map.turbines[name] = info
+        end
+        table.insert(registry_devices, {
+          name = name,
+          type = info.type,
+          methods = info.methods,
+          kind = "turbine",
+          bound = bound,
+          features = info.features,
+          schema = info.schema
+        })
+      end
+    end
+    ::continue::
+  end
+
+  registry:sync(registry_devices)
+  devices.adapters = adapter_map
+  devices.registry_summary = registry:get_summary()
+  devices.registry_load_error = registry.state.load_error
+  devices.last_scan_ts = os.epoch("utc")
+  refresh_bindings()
+  return registry_devices
+end
+
+build_modules = function()
+  modules = {}
+  for _, entry in ipairs(devices.turbines or {}) do
+    local id = entry.id or ("turbine:" .. tostring(entry.name))
+    modules[id] = {
+      id = id,
+      type = "turbine",
+      state = "OFF",
+      progress = 0,
+      limits = {},
+      name = entry.name,
+      alias = entry.alias,
+      stable_since = nil
+    }
+  end
+  for _, entry in ipairs(devices.reactors or {}) do
+    local id = entry.id or ("reactor:" .. tostring(entry.name))
     modules[id] = {
       id = id,
       type = "reactor",
       state = "OFF",
       progress = 0,
       limits = {},
-      name = name,
+      name = entry.name,
+      alias = entry.alias,
       stable_since = nil,
       autonom_control_rod = nil
     }
   end
 end
 
-local function refresh_module_peripherals()
+refresh_module_peripherals = function()
   for _, module in pairs(modules) do
     if module.type == "turbine" then
       module.peripheral = peripherals.turbines[module.name]
@@ -1164,50 +1330,25 @@ local function ramp_duration(profile)
   return ramp_profiles[profile] or ramp_profiles.NORMAL
 end
 
-local function update_registry()
-  local devices = {}
-  for _, name in ipairs(config.reactors or {}) do
-    local info = reactor_adapter.inspect(name)
-    if info then
-      table.insert(devices, {
-        name = name,
-        type = info.type,
-        methods = info.methods,
-        kind = "reactor"
-      })
-    end
-  end
-  for _, name in ipairs(config.turbines or {}) do
-    local info = turbine_adapter.inspect(name)
-    if info then
-      table.insert(devices, {
-        name = name,
-        type = info.type,
-        methods = info.methods,
-        kind = "turbine"
-      })
-    end
-  end
-  registry:sync(devices)
-end
-
 local function build_health_payload()
   local reasons = {}
-  local bound_reactors, bound_turbines = 0, 0
-  for _, entry in ipairs(registry:list()) do
-    if not entry.missing then
-      if entry.kind == "reactor" then
-        bound_reactors = bound_reactors + 1
-      elseif entry.kind == "turbine" then
-        bound_turbines = bound_turbines + 1
-      end
-    end
-  end
+  local summary = devices.registry_summary or registry:get_summary()
+  local bound_reactors = summary.kinds.reactor and summary.kinds.reactor.bound or 0
+  local bound_turbines = summary.kinds.turbine and summary.kinds.turbine.bound or 0
   if bound_reactors == 0 then
     reasons[health.reasons.NO_REACTOR] = true
   end
   if bound_turbines == 0 then
     reasons[health.reasons.NO_TURBINE] = true
+  end
+  if devices.discovery_failed or devices.registry_load_error then
+    reasons[health.reasons.DISCOVERY_FAILED] = true
+  end
+  if devices.proto_mismatch then
+    reasons[health.reasons.PROTO_MISMATCH] = true
+  end
+  if master_seen and os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
+    reasons[health.reasons.COMMS_DOWN] = true
   end
   local status = next(reasons) and health.status.DEGRADED or health.status.OK
   rt_health.status = status
@@ -1217,7 +1358,7 @@ local function build_health_payload()
     reactors = bound_reactors,
     turbines = bound_turbines
   }
-  rt_health.capabilities = { reactors = #config.reactors, turbines = #config.turbines }
+  rt_health.capabilities = { reactors = configured_caps.reactors, turbines = configured_caps.turbines }
   return {
     status = rt_health.status,
     reasons = health.reasons_list(rt_health),
@@ -1243,9 +1384,47 @@ local function module_payload()
   return snapshot
 end
 
+local function build_turbine_snapshots()
+  local list = {}
+  for _, entry in ipairs(registry:get_bound_devices("turbine")) do
+    local info = turbine_adapter.inspect(entry.name, CONFIG.LOG_PREFIX)
+    local module = modules[entry.id]
+    table.insert(list, {
+      id = entry.id,
+      name = entry.name,
+      alias = entry.alias,
+      rpm = info and info.rpm or nil,
+      flow_rate = info and info.flow or nil,
+      target_rpm = targets.rpm,
+      coil_engaged = info and info.coil_engaged or nil,
+      state = module and module.state or nil
+    })
+  end
+  return list
+end
+
+local function build_reactor_snapshots()
+  local list = {}
+  for _, entry in ipairs(registry:get_bound_devices("reactor")) do
+    local info = reactor_adapter.inspect(entry.name, CONFIG.LOG_PREFIX)
+    local module = modules[entry.id]
+    table.insert(list, {
+      id = entry.id,
+      name = entry.name,
+      alias = entry.alias,
+      rods_level = info and info.control_rod_level or nil,
+      active = info and info.active or nil,
+      steam_production = info and info.steam or nil,
+      state = module and module.state or nil
+    })
+  end
+  return list
+end
+
 local function build_status_payload(status_level)
-  update_registry()
   local health_payload = build_health_payload()
+  local turbines = build_turbine_snapshots()
+  local reactors = build_reactor_snapshots()
   return {
     status = status_level,
     state = node_state_machine.state(),
@@ -1255,9 +1434,19 @@ local function build_status_payload(status_level)
     steam = targets.steam,
     capabilities = health_payload.capabilities,
     bindings = health_payload.bindings,
+    bindings_summary = health.summarize_bindings(health_payload.bindings),
     health = health_payload,
     modules = module_payload(),
-    snapshot = status_snapshot
+    snapshot = status_snapshot,
+    turbines = turbines,
+    reactors = reactors,
+    registry = {
+      summary = devices.registry_summary or registry:get_summary(),
+      devices = registry:get_devices_by_kind(),
+      diagnostics = registry:get_diagnostics()
+    },
+    control_mode = current_state,
+    ramp_state = { active_module = active_startup, queue = startup_queue }
   }
 end
 
@@ -1267,7 +1456,11 @@ local function broadcast_status(status_level)
 end
 
 local function hello()
-  local caps = { reactors = #config.reactors, turbines = #config.turbines }
+  local summary = registry:get_summary()
+  local caps = {
+    reactors = summary.kinds.reactor and summary.kinds.reactor.bound or 0,
+    turbines = summary.kinds.turbine and summary.kinds.turbine.bound or 0
+  }
   comms:send_hello(caps)
 end
 
@@ -1861,12 +2054,10 @@ local function update_status_snapshot()
 end
 
 local function init_monitor()
-  local ok, found = pcall(peripheral.find, "monitor")
-  if ok then
-    monitor = found
-  end
+  local entry = monitor_adapter.find(nil, "first", config.monitor_scale, CONFIG.LOG_PREFIX)
+  monitor = entry and entry.mon or nil
+  monitor_name = entry and entry.name or nil
   if monitor then
-    pcall(monitor.setTextScale, config.monitor_scale)
     pcall(monitor.setBackgroundColor, colors.black)
     pcall(monitor.setTextColor, colors.white)
     pcall(monitor.clear)
@@ -1880,16 +2071,36 @@ local function update_monitor()
     return
   end
   last_monitor_update = now
+  if now - last_monitor_page > 8000 then
+    monitor_page = monitor_page == 1 and 2 or 1
+    last_monitor_page = now
+  end
   local snapshot = update_status_snapshot()
   local avg_temp = snapshot and snapshot.avg_temp or 0
-  local lines = {
-    "RT Node: " .. (comms and comms.network and comms.network.id or config.node_id or "RT"),
-    "State: " .. tostring(current_state),
-    "Reactors: " .. tostring(#config.reactors),
-    "Turbines: " .. tostring(#config.turbines),
-    string.format("Avg Temp: %.1f", avg_temp),
-    "Target RPM: " .. tostring(get_target_rpm())
-  }
+  local health_payload = build_health_payload()
+  local summary = devices.registry_summary or registry:get_summary()
+  local lines = {}
+  if monitor_page == 1 then
+    lines = {
+      "RT Node: " .. (comms and comms.network and comms.network.id or config.node_id or "RT"),
+      "State: " .. tostring(current_state),
+      "Health: " .. tostring(health_payload.status),
+      "Reactors: " .. tostring(summary.kinds.reactor and summary.kinds.reactor.bound or 0),
+      "Turbines: " .. tostring(summary.kinds.turbine and summary.kinds.turbine.bound or 0),
+      string.format("Avg Temp: %.1f", avg_temp),
+      "Target RPM: " .. tostring(get_target_rpm())
+    }
+  else
+    local reasons = table.concat(health_payload.reasons or {}, ",")
+    lines = {
+      "RT Diagnostics",
+      "Registry total: " .. tostring(summary.total or 0),
+      "Bound: " .. tostring(summary.bound or 0),
+      "Missing: " .. tostring(summary.missing or 0),
+      "Reasons: " .. (reasons ~= "" and reasons or "none"),
+      "Last scan: " .. (devices.last_scan_ts and (math.floor((now - devices.last_scan_ts) / 1000) .. "s") or "n/a")
+    }
+  end
   pcall(monitor.setBackgroundColor, colors.black)
   pcall(monitor.setTextColor, colors.white)
   pcall(monitor.clear)
@@ -1914,11 +2125,11 @@ local states = {
       targets.steam = 0
       targets.rpm = TARGET_RPM
       startup_queue = {}
-      for i = 1, #config.turbines do
-        table.insert(startup_queue, "turbine:" .. i)
+      for _, entry in ipairs(devices.turbines or {}) do
+        table.insert(startup_queue, entry.id)
       end
-      for i = 1, #config.reactors do
-        table.insert(startup_queue, "reactor:" .. i)
+      for _, entry in ipairs(devices.reactors or {}) do
+        table.insert(startup_queue, entry.id)
       end
     end,
     on_tick = function()
@@ -2076,11 +2287,9 @@ end
 
 local function init()
   dumpPeripherals()
-  cache()
+  discover()
   init_turbine_ctrl()
   init_reactor_ctrl()
-  build_modules()
-  refresh_module_peripherals()
   set_reactors_active(true)
   set_turbines_active(true)
   apply_initial_reactor_rods()
@@ -2090,10 +2299,10 @@ local function init()
     log_prefix = "RT",
     on_message = function(message)
       if message.type == "PROTO_MISMATCH" then
-        rt_health.status = health.status.DEGRADED
-        rt_health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+        devices.proto_mismatch = true
         return
       end
+      note_master_seen()
       if message.type == constants.message_types.COMMAND then
         handle_command(message)
       elseif message.type == constants.message_types.HELLO
@@ -2103,6 +2312,15 @@ local function init()
     end
   })
   services:add(comms)
+  services:add(discovery_service.new({
+    registry = registry,
+    discover = discover,
+    interval = config.scan_interval,
+    managed_registry = false,
+    update_health = function(ok)
+      devices.discovery_failed = not ok
+    end
+  }))
   services:add(control_service.new({ tick = control_tick }))
   services:add(telemetry_service.new({
     comms = comms,

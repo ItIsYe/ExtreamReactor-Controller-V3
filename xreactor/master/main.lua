@@ -320,8 +320,12 @@ local function update_node(message)
       nodes[id].status = message.payload.status or nodes[id].status
     end
     nodes[id].bindings = message.payload.bindings or nodes[id].bindings
+    nodes[id].bindings_summary = message.payload.bindings_summary or nodes[id].bindings_summary
     nodes[id].capabilities = message.payload.capabilities or nodes[id].capabilities
     nodes[id].mode = message.payload.mode or nodes[id].mode
+    nodes[id].registry = message.payload.registry or nodes[id].registry
+    nodes[id].last_error = message.payload.last_error or nodes[id].last_error
+    nodes[id].last_error_ts = message.payload.last_error_ts or nodes[id].last_error_ts
     if previous_mode and nodes[id].mode and previous_mode ~= nodes[id].mode then
       utils.log("MASTER", ("Node %s mode: %s"):format(id, tostring(nodes[id].mode)))
     end
@@ -482,32 +486,36 @@ local function draw()
   }
   local rt_data = { rt_nodes = {}, ramp_profile = sequencer.ramp_profile, sequence_state = sequencer.state, queue = sequencer.queue, active_step = sequencer.active }
   local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {}, nodes = {}, trend_values = trend_cache.energy, trend_arrow = trend_cache.energy_arrow, trend_dirty = trends:is_dirty("energy"), now_ms = os.epoch("utc") }
-  local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {} }
+  local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {}, node_details = {} }
 
   for _, node in pairs(nodes) do
     local reasons = node.health and node.health.reasons or {}
     local reason_text = type(reasons) == "table" and table.concat(reasons, ",") or nil
-    local bindings_summary = nil
-    if node.health and type(node.health.bindings) == "table" then
-      local parts = {}
-      for key, value in pairs(node.health.bindings) do
-        if type(value) == "table" then
-          table.insert(parts, string.format("%s:%d", key, #value))
-        else
-          table.insert(parts, string.format("%s:%s", key, tostring(value)))
-        end
-      end
-      table.sort(parts)
-      bindings_summary = table.concat(parts, " ")
+    local bindings_summary = node.bindings_summary
+    if not bindings_summary and node.health and type(node.health.bindings) == "table" then
+      bindings_summary = health.summarize_bindings(node.health.bindings)
     end
+    local age = node.last_seen and math.max(0, math.floor((os.epoch("utc") - node.last_seen) / 1000)) or nil
     table.insert(overview_data.nodes, {
       id = node.id,
       role = node.role,
       status = node.status or constants.status_levels.OFFLINE,
       last_seen = node.last_seen_str,
+      last_seen_age = age,
       mode = node.mode,
       reasons = reason_text,
       bindings = bindings_summary
+    })
+    table.insert(resource_data.node_details, {
+      id = node.id,
+      role = node.role,
+      status = node.status or constants.status_levels.OFFLINE,
+      reasons = reason_text,
+      bindings = bindings_summary,
+      last_seen_age = age,
+      registry = node.registry,
+      last_error = node.last_error,
+      last_error_ts = node.last_error_ts
     })
     if node.role == constants.roles.RT_NODE then
       table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status })
@@ -525,7 +533,9 @@ local function draw()
         degraded_reason = node.health and node.health.reasons and table.concat(node.health.reasons, ",") or node.degraded_reason,
         last_scan_ts = node.last_scan_ts,
         last_scan_result = node.last_scan_result,
-        status = node.status
+        status = node.status,
+        bindings_summary = node.bindings_summary,
+        registry = node.registry
       })
     elseif node.role == constants.roles.FUEL_NODE then
       resource_data.fuel.reserve = node.reserve or resource_data.fuel.reserve

@@ -80,6 +80,9 @@ local function render(mon, model)
         mode = (node.mode == "MASTER" and "MANAGED") or (node.mode or "AUTONOM")
       end
       local last_seen = node.last_seen or "--:--"
+      if node.last_seen_age then
+        last_seen = last_seen .. (" (%ds)"):format(node.last_seen_age)
+      end
       local details = {}
       if node.reasons and node.reasons ~= "" then
         table.insert(details, node.reasons)

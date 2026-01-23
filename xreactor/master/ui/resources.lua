@@ -44,7 +44,32 @@ local function render(mon, model)
     local buf = model.water.buffers[name]
     table.insert(rows, { text = string.format("%s %.0f", name, buf.level or 0), status = water_status })
   end
-  ui.list(mon, 2, 11, w - 2, rows, { max_rows = h - 12 })
+  local next_y = 11
+  ui.list(mon, 2, next_y, w - 2, rows, { max_rows = math.max(1, h - next_y - 8) })
+
+  local diagnostics = {}
+  local details = model.node_details or {}
+  table.sort(details, function(a, b) return (a.id or "") < (b.id or "") end)
+  for _, node in ipairs(details) do
+    local age = node.last_seen_age and (node.last_seen_age .. "s") or "n/a"
+    local reasons = node.reasons and #node.reasons > 0 and node.reasons or ""
+    local bindings = node.bindings and #node.bindings > 0 and (" " .. node.bindings) or ""
+    table.insert(diagnostics, { text = string.format("%s %s age:%s%s", node.id or "NODE", node.status or "OFFLINE", age, bindings), status = node.status })
+    if reasons ~= "" then
+      table.insert(diagnostics, { text = "  reasons: " .. reasons, status = node.status })
+    end
+    local registry = node.registry and node.registry.summary
+    if registry then
+      table.insert(diagnostics, { text = string.format("  devices: total:%d bound:%d missing:%d", registry.total or 0, registry.bound or 0, registry.missing or 0), status = node.status })
+    end
+    if node.last_error then
+      table.insert(diagnostics, { text = "  last error: " .. tostring(node.last_error), status = "WARNING" })
+    end
+  end
+  if #diagnostics > 0 then
+    ui.text(mon, 2, h - math.min(7, #diagnostics) - 1, "Node Diagnostics", colorset.get("text"), colorset.get("background"))
+    ui.list(mon, 2, h - math.min(7, #diagnostics), w - 2, diagnostics, { max_rows = math.min(7, #diagnostics) })
+  end
 end
 
 return { render = render }
