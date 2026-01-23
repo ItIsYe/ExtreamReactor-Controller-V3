@@ -96,6 +96,12 @@ function registry:register(name, info)
   entry.kind = info.kind
   local alias = info.alias or self.aliases[name]
   if alias then entry.alias = alias end
+  if info.found ~= nil then
+    entry.found = info.found
+  end
+  if info.bound ~= nil then
+    entry.bound = info.bound
+  end
   if info.status then entry.status = info.status end
   if info.last_error then
     entry.last_error = info.last_error
@@ -108,11 +114,16 @@ function registry:sync(devices)
   local seen = {}
   for _, device in ipairs(devices or {}) do
     local entry = self:register(device.name, device)
+    entry.found = true
+    entry.bound = device.bound == true
+    entry.missing = false
     seen[entry.id] = true
   end
   for id, entry in pairs(self.state.devices) do
     if not seen[id] then
       entry.missing = true
+      entry.found = false
+      entry.bound = false
     else
       entry.missing = false
     end

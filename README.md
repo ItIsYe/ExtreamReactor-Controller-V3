@@ -54,6 +54,7 @@ Wireless Modem (Control/Status)
 - **Projekt-Root**: Alle Module werden relativ zum festen Root `/xreactor` geladen (z. B. `/xreactor/shared/constants.lua`).
 - **Module-Struktur**:
   - `xreactor/shared/*` (z. B. `shared.constants`)
+  - `xreactor/shared/health_codes.lua` (Health-Reason-Codes für Master/Nodes)
   - `xreactor/core/*` (z. B. `core.utils`)
   - `xreactor/master/*` (z. B. `master.main`)
   - `xreactor/nodes/*` (z. B. `nodes.rt.main`)
@@ -150,6 +151,7 @@ Wireless Modem (Control/Status)
 - **core/registry.lua**: Persistente Device Registry (stable IDs, alias mapping, health).
 - **services/**: Lifecycle Services (comms, discovery, telemetry, ui, control) mit `service_manager`.
 - **adapters/**: Einheitliche Adapter für Monitor, Energy Storage, Induction Matrix, Reactor, Turbine.
+- **shared/health_codes.lua**: Einheitliche Reason-Codes für Health-Status.
 
 ## ENERGY Node Monitor UI
 - Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
@@ -193,6 +195,7 @@ Wireless Modem (Control/Status)
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
 - **COMMS_DOWN**: Node ist > Timeout nicht gesehen → Master markiert DOWN.
 - **DISCOVERY_FAILED**: Discovery-Scan konnte nicht laufen; prüfe Peripherals + Modem.
+- **Reason-Codes**: Zentral definiert in `xreactor/shared/health_codes.lua` (Master/Nodes nutzen identische Codes).
 - **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
 - **Manifest-Download fehlgeschlagen**: Retry nutzen oder Cache verwenden (falls vorhanden).
 - **Retry-Menü**: Bei Download-Fehlern gibt es immer ein Retry/Cancel-Menü; Retry versucht den Download erneut mit kurzer Wartezeit.

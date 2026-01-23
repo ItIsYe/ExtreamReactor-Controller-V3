@@ -1167,24 +1167,26 @@ end
 local function update_registry()
   local devices = {}
   for _, name in ipairs(config.reactors or {}) do
-    local info = reactor_adapter.inspect(name)
+    local info = reactor_adapter.inspect(name, CONFIG.LOG_PREFIX)
     if info then
       table.insert(devices, {
         name = name,
         type = info.type,
         methods = info.methods,
-        kind = "reactor"
+        kind = "reactor",
+        bound = true
       })
     end
   end
   for _, name in ipairs(config.turbines or {}) do
-    local info = turbine_adapter.inspect(name)
+    local info = turbine_adapter.inspect(name, CONFIG.LOG_PREFIX)
     if info then
       table.insert(devices, {
         name = name,
         type = info.type,
         methods = info.methods,
-        kind = "turbine"
+        kind = "turbine",
+        bound = true
       })
     end
   end

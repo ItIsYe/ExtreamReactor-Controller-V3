@@ -327,7 +327,7 @@ local function discover()
     if include_set and not include_set[name] and not forced_matrix then
       return
     end
-    local matrix = matrix_adapter.detect(name)
+    local matrix = matrix_adapter.detect(name, CONFIG.LOG_PREFIX)
     if matrix then
       table.insert(matrix_adapters, matrix)
       table.insert(candidates, { name = name, adapter = matrix })
@@ -344,7 +344,7 @@ local function discover()
       record_error(name, "matrix override set but methods missing")
       return
     end
-    local storage = storage_adapter.detect(name)
+    local storage = storage_adapter.detect(name, CONFIG.LOG_PREFIX)
     if storage then
       table.insert(storage_adapters, storage)
       table.insert(candidates, { name = name, adapter = storage })
@@ -431,6 +431,17 @@ local function discover()
       name = item.adapter.name,
       adapter = item.adapter
     })
+  end
+
+  local bound_lookup = {}
+  for _, storage in ipairs(storages) do
+    bound_lookup[storage.name] = true
+  end
+  for _, matrix in ipairs(matrices) do
+    bound_lookup[matrix.name] = true
+  end
+  for _, entry in ipairs(registry_devices) do
+    entry.bound = bound_lookup[entry.name] or false
   end
 
   devices.monitor = monitor
