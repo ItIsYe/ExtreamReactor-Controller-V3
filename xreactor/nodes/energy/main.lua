@@ -22,6 +22,7 @@ local protocol = require("core.protocol")
 local utils = require("core.utils")
 local health = require("core.health")
 local ui = require("core.ui")
+local ui_router = require("core.ui_router")
 local colors = require("shared.colors")
 local registry_lib = require("core.registry")
 local storage_adapter = require("adapters.energy_storage")
@@ -244,11 +245,22 @@ local devices = {
   registry_snapshot = nil,
   registry_summary = nil,
   registry_load_error = nil,
-  proto_mismatch = false
+  proto_mismatch = false,
+  last_command = nil,
+  last_command_ts = nil
 }
 local last_heartbeat = 0
 local last_scan = 0
-local ui_state = { last_snapshot = nil, last_draw = 0, page = 1, pages = {} }
+local ui_state = {
+  last_snapshot = nil,
+  last_draw = 0,
+  page = 1,
+  pages = {},
+  matrix_page = 1,
+  matrix_controls = nil,
+  router = nil,
+  model = nil
+}
 local master_seen_ts = nil
 
 local function to_set(list)
@@ -759,54 +771,35 @@ local function format_age(ts, now)
   return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
 end
 
-local function build_pages(matrices, storages, height)
-  local pages = {}
-  local header_lines = 3
-  local footer_lines = 1
-  local card_lines = 4
-  local total_lines = 4
-  local available = math.max(1, height - header_lines - footer_lines - total_lines)
-  local per_page = math.max(1, math.floor(available / card_lines))
-  local count = #matrices
-  local total_pages = math.max(1, math.ceil(count / per_page))
-  for page = 1, total_pages do
-    table.insert(pages, { type = "matrices", start_index = (page - 1) * per_page + 1, end_index = math.min(count, page * per_page) })
+local function build_matrix_signature(matrices)
+  local parts = {}
+  for _, entry in ipairs(matrices or {}) do
+    table.insert(parts, table.concat({
+      tostring(entry.name or ""),
+      tostring(entry.percent or 0),
+      tostring(entry.stored or 0),
+      tostring(entry.capacity or 0),
+      tostring(entry.input or 0),
+      tostring(entry.output or 0),
+      tostring(entry.status or "")
+    }, ":"))
   end
-  if #storages > 0 then
-    table.insert(pages, { type = "storages" })
-  end
-  table.insert(pages, { type = "diagnostics" })
-  return pages
+  return table.concat(parts, "|")
 end
 
-local function update_page(delta)
-  local total = #ui_state.pages
-  if total == 0 then
-    return
+local function build_storage_signature(storages)
+  local parts = {}
+  for _, entry in ipairs(storages or {}) do
+    table.insert(parts, table.concat({
+      tostring(entry.id or ""),
+      tostring(entry.stored or 0),
+      tostring(entry.capacity or 0)
+    }, ":"))
   end
-  local next_page = ui_state.page + delta
-  if next_page < 1 then
-    next_page = total
-  elseif next_page > total then
-    next_page = 1
-  end
-  if next_page ~= ui_state.page then
-    ui_state.page = next_page
-    ui_state.last_snapshot = nil
-    if debug_enabled then
-      utils.log("ENERGY", ("UI page -> %d/%d"):format(ui_state.page, total))
-    end
-  end
+  return table.concat(parts, "|")
 end
 
-local function render_monitor()
-  if not devices.monitor then
-    return
-  end
-  local now = os.epoch("utc")
-  if now - ui_state.last_draw < config.ui_refresh_interval * 1000 then
-    return
-  end
+local function build_ui_model()
   local payload = build_status_payload()
   local degraded = payload.health and payload.health.status == health.status.DEGRADED
   local reasons_text = payload.health and table.concat(payload.health.reasons or {}, ",") or ""
@@ -820,13 +813,22 @@ local function render_monitor()
     local label = string.format("%s %s", entry.alias or entry.id, state)
     table.insert(registry_rows, { text = label, status = entry.missing and "WARNING" or "OK" })
   end
-  local model = {
+  local comms_diag = comms and comms:get_diagnostics() or {}
+  local metrics = comms_diag.metrics or {}
+  local master_peer = master_peer_state()
+  local master_age = master_peer and master_peer.age and string.format("%ds", math.floor(master_peer.age)) or "n/a"
+  local master_state = master_peer and (master_peer.down and "DOWN" or "OK") or "UNKNOWN"
+  return {
     node_id = comms and comms.network and comms.network.id or config.node_id,
+    degraded = degraded,
+    health_status = payload.health and payload.health.status or health.status.OK,
     degraded_reason = reasons_text ~= "" and reasons_text or nil,
     last_scan_ts = devices.last_scan_ts,
     scan_result = devices.last_scan_result,
     last_error = devices.last_error,
     last_error_ts = devices.last_error_ts,
+    last_command = devices.last_command,
+    last_command_ts = devices.last_command_ts,
     peripheral_count = devices.peripheral_count,
     monitor_bound = devices.monitor ~= nil,
     storages_count = registry_summary.kinds.storage and registry_summary.kinds.storage.bound or 0,
@@ -834,161 +836,257 @@ local function render_monitor()
     matrices = matrices,
     total = payload.total,
     registry_rows = registry_rows,
-    registry_summary = registry_summary
+    registry_summary = registry_summary,
+    comms = comms_diag,
+    metrics = metrics,
+    master_state = master_state,
+    master_age = master_age
   }
-  local snapshot = textutils.serialize(model)
-  if ui_state.last_snapshot == snapshot then
+end
+
+local function build_snapshot_key(model)
+  return textutils.serialize({
+    health = model.health_status,
+    degraded = model.degraded,
+    reason = model.degraded_reason,
+    scan = model.last_scan_ts,
+    scan_result = model.scan_result,
+    err = model.last_error,
+    err_ts = model.last_error_ts,
+    cmd = model.last_command,
+    cmd_ts = model.last_command_ts,
+    matrices = build_matrix_signature(model.matrices),
+    storages = build_storage_signature(model.storages),
+    total = model.total,
+    registry = model.registry_summary,
+    comms = model.comms and model.comms.metrics,
+    master_state = model.master_state,
+    master_age = model.master_age
+  })
+end
+
+local function render_header(mon, title, status, model)
+  local w, h = mon.getSize()
+  ui.panel(mon, 1, 1, w, h, title, status)
+  ui.text(mon, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
+  local status_label = model.health_status or status
+  ui.rightText(mon, 2, 2, w - 2, status_label, colors.get(status), colors.get("background"))
+end
+
+local function render_overview(mon)
+  local model = ui_state.model
+  local status = model.degraded and "WARNING" or "OK"
+  render_header(mon, "ENERGY NODE", status, model)
+  local w = mon.getSize()
+  local line = 4
+  ui.text(mon, 2, line, ("Matrices: %d"):format(#model.matrices), colors.get("text"), colors.get("background"))
+  line = line + 1
+  ui.text(mon, 2, line, ("Storages: %d"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
+  line = line + 2
+  local total = model.total or {}
+  ui.text(mon, 2, line, "GESAMT", colors.get("text"), colors.get("background"))
+  line = line + 1
+  ui.progress(mon, 2, line, w - 4, total.percent or 0, status)
+  line = line + 1
+  ui.text(mon, 2, line, ("E: %s / %s (%s)"):format(
+    format_energy(total.stored),
+    format_energy(total.capacity),
+    format_percent(total.percent)
+  ), colors.get("text"), colors.get("background"))
+  line = line + 1
+  local total_in = total.input
+  local total_out = total.output
+  local total_flow = (total_in ~= nil or total_out ~= nil) and ("IN " .. format_energy(total_in) .. "  OUT " .. format_energy(total_out)) or "IN/OUT n/a"
+  ui.text(mon, 2, line, total_flow, colors.get("text"), colors.get("background"))
+  line = line + 2
+  local scan_age = model.last_scan_ts and format_age(model.last_scan_ts, os.epoch("utc")) or "n/a"
+  ui.text(mon, 2, line, ("Last scan: %s"):format(scan_age), colors.get("text"), colors.get("background"))
+end
+
+local function render_matrices(mon)
+  local model = ui_state.model
+  local status = model.degraded and "WARNING" or "OK"
+  render_header(mon, "ENERGY MATRICES", status, model)
+  local w, h = mon.getSize()
+  local line = 4
+  ui.text(mon, 2, line, ("Induction Matrices (%d)"):format(#model.matrices), colors.get("text"), colors.get("background"))
+  line = line + 1
+  local header_lines = 3
+  local footer_lines = 1
+  local card_lines = 4
+  local total_lines = 4
+  local available = math.max(1, h - header_lines - footer_lines - total_lines - 1)
+  local per_page = math.max(1, math.floor(available / card_lines))
+  local pagination = ui_router.paginate(model.matrices, per_page, ui_state.matrix_page)
+  ui_state.matrix_page = pagination.page
+  if #model.matrices == 0 then
+    ui.text(mon, 2, line, "No matrices detected", colors.get("WARNING"), colors.get("background"))
+    line = line + 2
+  else
+    for idx = pagination.start_index, pagination.end_index do
+      local entry = model.matrices[idx]
+      local pct = entry and entry.percent or 0
+      if entry then
+        local label = string.format("%s", entry.name or ("Matrix " .. tostring(idx)))
+        ui.text(mon, 2, line, label, colors.get("text"), colors.get("background"))
+        ui.rightText(mon, 2, line, w - 2, format_percent(pct), colors.get(entry.status == "DEGRADED" and "WARNING" or status), colors.get("background"))
+        line = line + 1
+        ui.progress(mon, 2, line, w - 4, pct or 0, entry.status == "DEGRADED" and "WARNING" or status)
+        line = line + 1
+        ui.text(mon, 2, line, ("E: %s / %s"):format(format_energy(entry.stored), format_energy(entry.capacity)), colors.get("text"), colors.get("background"))
+        line = line + 1
+        local in_text = entry.input and format_energy(entry.input) or "n/a"
+        local out_text = entry.output and format_energy(entry.output) or "n/a"
+        ui.text(mon, 2, line, ("IN %s  OUT %s"):format(in_text, out_text), colors.get("text"), colors.get("background"))
+        line = line + 1
+      end
+    end
+  end
+  ui.text(mon, 2, line, ("GESAMT (%d)"):format(#model.matrices), colors.get("text"), colors.get("background"))
+  line = line + 1
+  ui.progress(mon, 2, line, w - 4, model.total and model.total.percent or 0, status)
+  line = line + 1
+  ui.text(mon, 2, line, ("E: %s / %s (%s)"):format(
+    format_energy(model.total and model.total.stored),
+    format_energy(model.total and model.total.capacity),
+    format_percent(model.total and model.total.percent)
+  ), colors.get("text"), colors.get("background"))
+  line = line + 1
+  local total_in = model.total and model.total.input or nil
+  local total_out = model.total and model.total.output or nil
+  local total_flow = (total_in ~= nil or total_out ~= nil) and ("IN " .. format_energy(total_in) .. "  OUT " .. format_energy(total_out)) or "IN/OUT n/a"
+  ui.text(mon, 2, line, total_flow, colors.get("text"), colors.get("background"))
+  local footer = h
+  local page_text = ("< Mat %d/%d >"):format(pagination.page, pagination.total)
+  ui.text(mon, 2, footer, page_text, colors.get("text"), colors.get("background"))
+  ui_state.matrix_controls = {
+    prev = { x1 = 2, x2 = 2, y = footer },
+    next = { x1 = 2 + #page_text - 1, x2 = 2 + #page_text, y = footer }
+  }
+end
+
+local function render_storages(mon)
+  local model = ui_state.model
+  local status = model.degraded and "WARNING" or "OK"
+  render_header(mon, "ENERGY STORAGES", status, model)
+  local w, h = mon.getSize()
+  local line = 4
+  ui.text(mon, 2, line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
+  line = line + 1
+  local rows = {}
+  table.sort(model.storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
+  for _, s in ipairs(model.storages) do
+    local pct = s.capacity and s.capacity > 0 and (s.stored / s.capacity) or 0
+    table.insert(rows, { text = string.format("%s %s", s.id, format_percent(pct)), status = status })
+  end
+  if #rows == 0 then
+    table.insert(rows, { text = "none", status = "WARNING" })
+  end
+  ui.list(mon, 2, line, w - 2, rows, { max_rows = math.max(1, h - line - 2) })
+end
+
+local function render_diagnostics(mon)
+  local model = ui_state.model
+  local status = model.degraded and "WARNING" or "OK"
+  render_header(mon, "ENERGY DIAGNOSTICS", status, model)
+  local w, h = mon.getSize()
+  local now = os.epoch("utc")
+  local reasons = model.degraded_reason or "none"
+  local rows = {
+    { text = ("Health: %s"):format(model.health_status or status), status = status },
+    { text = ("Reasons: %s"):format(reasons) },
+    { text = ("Registry total:%d bound:%d missing:%d"):format(
+      model.registry_summary.total or 0,
+      model.registry_summary.bound or 0,
+      model.registry_summary.missing or 0
+    ) },
+    { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
+    { text = ("Comms q:%d inflight:%d retries:%d"):format(
+      model.comms.queue_depth or 0,
+      model.comms.inflight_count or 0,
+      model.metrics.retries or 0
+    ) },
+    { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(
+      model.metrics.dropped or 0,
+      model.metrics.dedupe_hits or 0,
+      model.metrics.timeouts or 0
+    ) },
+    { text = ("Last scan: %s (%s)"):format(model.scan_result or "n/a", format_age(model.last_scan_ts, now)) },
+    { text = ("Last error: %s (%s)"):format(model.last_error or "none", format_age(model.last_error_ts, now)) },
+    { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", format_age(model.last_command_ts, now)) }
+  }
+  if model.registry_rows and #model.registry_rows > 0 then
+    table.insert(rows, { text = "Registry:", status = "OK" })
+    for _, row in ipairs(model.registry_rows) do
+      table.insert(rows, row)
+    end
+  end
+  ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 5) })
+end
+
+local function render_monitor()
+  if not devices.monitor then
+    return
+  end
+  local now = os.epoch("utc")
+  if now - ui_state.last_draw < config.ui_refresh_interval * 1000 then
+    return
+  end
+  local model = build_ui_model()
+  local snapshot = build_snapshot_key(model)
+  if ui_state.last_snapshot == snapshot and ui_state.router and ui_state.router:current() then
     return
   end
   ui_state.last_snapshot = snapshot
   ui_state.last_draw = now
-
-  local mon = devices.monitor
-  local w, h = mon.getSize()
-  local status = degraded and "WARNING" or "OK"
-  ui_state.pages = build_pages(matrices, storages, h)
-  local pages = ui_state.pages
-  if ui_state.page > #pages then
-    ui_state.page = #pages
-  end
-  local page = pages[ui_state.page] or { type = "matrices", start_index = 1, end_index = 0 }
-  ui.panel(mon, 1, 1, w, h, "ENERGY NODE", status)
-  ui.text(mon, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
-  local status_label = degraded and "DEGRADED" or "OK"
-  ui.rightText(mon, 2, 2, w - 2, status_label, colors.get(status), colors.get("background"))
-
-  local line = 4
-  if page.type == "matrices" then
-    ui.text(mon, 2, line, ("Induction Matrices (%d)"):format(#matrices), colors.get("text"), colors.get("background"))
-    line = line + 1
-    local start_idx = page.start_index
-    local end_idx = page.end_index
-    if #matrices == 0 then
-      ui.text(mon, 2, line, "No matrices detected", colors.get("WARNING"), colors.get("background"))
-      line = line + 2
-    else
-      for idx = start_idx, end_idx do
-        local entry = matrices[idx]
-        local pct = entry and entry.percent or 0
-        if entry then
-          local label = string.format("%s", entry.name or ("Matrix " .. tostring(idx)))
-          ui.text(mon, 2, line, label, colors.get("text"), colors.get("background"))
-          ui.rightText(mon, 2, line, w - 2, format_percent(pct), colors.get(entry.status == "DEGRADED" and "WARNING" or status), colors.get("background"))
-          line = line + 1
-          ui.progress(mon, 2, line, w - 4, pct or 0, entry.status == "DEGRADED" and "WARNING" or status)
-          line = line + 1
-          ui.text(mon, 2, line, ("E: %s / %s"):format(format_energy(entry.stored), format_energy(entry.capacity)), colors.get("text"), colors.get("background"))
-          line = line + 1
-          local in_text = entry.input and format_energy(entry.input) or "n/a"
-          local out_text = entry.output and format_energy(entry.output) or "n/a"
-          ui.text(mon, 2, line, ("IN %s  OUT %s"):format(in_text, out_text), colors.get("text"), colors.get("background"))
-          line = line + 1
-        end
-      end
-    end
-    ui.text(mon, 2, line, ("GESAMT (%d)"):format(#matrices), colors.get("text"), colors.get("background"))
-    line = line + 1
-    ui.progress(mon, 2, line, w - 4, model.total and model.total.percent or 0, status)
-    line = line + 1
-    ui.text(mon, 2, line, ("E: %s / %s (%s)"):format(
-      format_energy(model.total and model.total.stored),
-      format_energy(model.total and model.total.capacity),
-      format_percent(model.total and model.total.percent)
-    ), colors.get("text"), colors.get("background"))
-    line = line + 1
-    local total_in = model.total and model.total.input or nil
-    local total_out = model.total and model.total.output or nil
-    local total_flow = (total_in ~= nil or total_out ~= nil) and ("IN " .. format_energy(total_in) .. "  OUT " .. format_energy(total_out)) or "IN/OUT n/a"
-    ui.text(mon, 2, line, total_flow, colors.get("text"), colors.get("background"))
-  elseif page.type == "storages" then
-    ui.text(mon, 2, line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
-    line = line + 1
-    local rows = {}
-    table.sort(storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
-    for _, s in ipairs(storages) do
-      local pct = s.capacity and s.capacity > 0 and (s.stored / s.capacity) or 0
-      table.insert(rows, { text = string.format("%s %s", s.id, format_percent(pct)), status = status })
-    end
-    if #rows == 0 then
-      table.insert(rows, { text = "none", status = "WARNING" })
-    end
-    ui.list(mon, 2, line, w - 2, rows, { max_rows = math.max(1, h - line - 2) })
-  else
-    local comms_diag = comms and comms:get_diagnostics() or {}
-    local metrics = comms_diag.metrics or {}
-    local master_peer = master_peer_state()
-    local master_age = master_peer and master_peer.age and string.format("%ds", math.floor(master_peer.age)) or "n/a"
-    local master_state = master_peer and (master_peer.down and "DOWN" or "OK") or "UNKNOWN"
-    local info_rows = {
-      { text = ("Peripherals found: %d"):format(model.peripheral_count or 0) },
-      { text = ("Monitor bound: %s"):format(model.monitor_bound and "yes" or "no") },
-      { text = ("Storages bound: %d"):format(model.storages_count or 0) },
-      { text = ("Matrices bound: %d"):format(#matrices) },
-      { text = ("Degraded reason: %s"):format(model.degraded_reason or "none") },
-      { text = ("Last scan: %s (%s)"):format(model.scan_result or "n/a", format_age(model.last_scan_ts, now)) },
-      { text = ("Last error: %s (%s)"):format(model.last_error or "none", format_age(model.last_error_ts, now)) },
-      { text = ("Master link: %s age:%s"):format(master_state, master_age) },
-      { text = ("Comms q:%d inflight:%d retries:%d"):format(
-        comms_diag.queue_depth or 0,
-        comms_diag.inflight_count or 0,
-        metrics.retries or 0
-      ) },
-      { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(
-        metrics.dropped or 0,
-        metrics.dedupe_hits or 0,
-        metrics.timeouts or 0
-      ) }
+  ui_state.model = model
+  local expected_pages = 3 + (#model.storages > 0 and 1 or 0)
+  if not ui_state.router or ui_state.router:count() ~= expected_pages then
+    local pages = {
+      { name = "Overview", render = function() render_overview(devices.monitor) end },
+      { name = "Matrices", render = function() render_matrices(devices.monitor) end }
     }
-    if model.registry_summary then
-      table.insert(info_rows, {
-        text = ("Registry total: %d bound:%d missing:%d"):format(
-          model.registry_summary.total or 0,
-          model.registry_summary.bound or 0,
-          model.registry_summary.missing or 0
-        )
-      })
+    if #model.storages > 0 then
+      table.insert(pages, { name = "Storages", render = function() render_storages(devices.monitor) end })
     end
-    ui.text(mon, 2, line, "Diagnostics", colors.get("text"), colors.get("background"))
-    line = line + 1
-    local rows = {}
-    for _, row in ipairs(info_rows) do
-      table.insert(rows, row)
-    end
-    if model.registry_rows and #model.registry_rows > 0 then
-      table.insert(rows, { text = "Registry:", status = "OK" })
-      for _, row in ipairs(model.registry_rows) do
-        table.insert(rows, row)
-      end
-    end
-    ui.list(mon, 2, line, w - 2, rows, { max_rows = math.max(1, h - line - 2) })
+    table.insert(pages, { name = "Diagnostics", render = function() render_diagnostics(devices.monitor) end })
+    ui_state.router = ui_router.new({
+      pages = pages,
+      key_prev = { [keys.left] = true, [keys.pageUp] = true },
+      key_next = { [keys.right] = true, [keys.pageDown] = true }
+    })
   end
-
-  local footer = h
-  local scan_age = ""
-  if model.last_scan_ts then
-    scan_age = string.format("scan %ds", math.max(0, math.floor((now - model.last_scan_ts) / 1000)))
-  end
-  local warning = degraded and ("WARN: " .. tostring(model.degraded_reason)) or ""
-  local page_text = ("< Page %d/%d >"):format(ui_state.page, math.max(1, #pages))
-  local footer_text = string.format("%s  %s  %s", textutils.formatTime(os.time(), true), scan_age, warning)
-  ui.text(mon, 2, footer, footer_text, colors.get("text"), colors.get("background"))
-  ui.rightText(mon, 2, footer, w - 2, page_text, colors.get("text"), colors.get("background"))
-  local start = 2 + math.max(0, (w - 2) - #page_text)
-  ui_state.controls = {
-    prev = { x = start, y = footer },
-    next = { x = start + #page_text - 1, y = footer }
-  }
+  ui_state.router:render(devices.monitor, { snapshot = snapshot })
 end
 
-local function handle_monitor_touch(name, x, y)
-  if not devices.monitor_name or name ~= devices.monitor_name then
+local function handle_matrix_input(event)
+  if not ui_state.router or not ui_state.router:current() then
     return
   end
-  local controls = ui_state.controls or {}
-  if controls.prev and y == controls.prev.y and x == controls.prev.x then
-    update_page(-1)
-  elseif controls.next and y == controls.next.y and x == controls.next.x then
-    update_page(1)
+  if ui_state.router:current().name ~= "Matrices" then
+    return
+  end
+  if event[1] == "key" then
+    if event[2] == keys.up then
+      ui_state.matrix_page = math.max(1, ui_state.matrix_page - 1)
+      ui_state.last_snapshot = nil
+    elseif event[2] == keys.down then
+      ui_state.matrix_page = ui_state.matrix_page + 1
+      ui_state.last_snapshot = nil
+    end
+  elseif event[1] == "monitor_touch" then
+    if not devices.monitor_name or event[2] ~= devices.monitor_name then
+      return
+    end
+    local controls = ui_state.matrix_controls or {}
+    local x, y = event[3], event[4]
+    if controls.prev and y == controls.prev.y and x >= controls.prev.x1 and x <= controls.prev.x2 then
+      ui_state.matrix_page = math.max(1, ui_state.matrix_page - 1)
+      ui_state.last_snapshot = nil
+    elseif controls.next and y == controls.next.y and x >= controls.next.x1 and x <= controls.next.x2 then
+      ui_state.matrix_page = ui_state.matrix_page + 1
+      ui_state.last_snapshot = nil
+    end
   end
 end
 
@@ -1040,9 +1138,15 @@ local function handle_command(message)
   local payload = type(message.payload) == "table" and message.payload or nil
   local command = payload and payload.command
   if type(command) ~= "table" then
-    return { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
+    local result = { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
+    devices.last_command = result.error
+    devices.last_command_ts = os.epoch("utc")
+    return result
   end
-  return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
+  local result = { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
+  devices.last_command = result.error
+  devices.last_command_ts = os.epoch("utc")
+  return result
 end
 
 local function init()
@@ -1073,15 +1177,10 @@ local function init()
     interval = config.ui_refresh_interval,
     render = render_monitor,
     handle_input = function(event)
-      if event[1] == "monitor_touch" then
-        handle_monitor_touch(event[2], event[3], event[4])
-      elseif event[1] == "key" then
-        if event[2] == keys.left then
-          update_page(-1)
-        elseif event[2] == keys.right then
-          update_page(1)
-        end
+      if ui_state.router then
+        ui_state.router:handle_input(event)
       end
+      handle_matrix_input(event)
     end
   }))
   services:init()
