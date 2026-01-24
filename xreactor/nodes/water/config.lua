@@ -5,6 +5,7 @@ local CONFIG = {
   DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
   DEFAULT_LOOP_TANKS = { "dynamicTank_0" }, -- Default tank peripheral names.
   DEFAULT_TARGET_VOLUME = 200000, -- Desired tank volume.
+  DEFAULT_BALANCE_LOG_INTERVAL = 60, -- Seconds between repeated balance logs while refilling/bleeding (0 = only on state change).
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
   DEFAULT_CONTROL_CHANNEL = 6500, -- Control channel for MASTER commands.
@@ -66,6 +67,7 @@ return {
   wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
   loop_tanks = CONFIG.DEFAULT_LOOP_TANKS,
   target_volume = CONFIG.DEFAULT_TARGET_VOLUME,
+  balance_log_interval_s = CONFIG.DEFAULT_BALANCE_LOG_INTERVAL,
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
   status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
   channels = {

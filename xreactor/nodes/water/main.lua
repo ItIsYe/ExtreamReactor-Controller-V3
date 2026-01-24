@@ -41,6 +41,7 @@ local DEFAULT_CONFIG = {
   wired_modem = nil, -- Optional wired modem side.
   loop_tanks = { "dynamicTank_0" }, -- Default tank peripheral names.
   target_volume = 200000, -- Desired tank volume.
+  balance_log_interval_s = 60, -- Seconds between repeated balance logs while refilling/bleeding (0 = only on state change).
   heartbeat_interval = 2, -- Seconds between status heartbeats.
   status_interval = 5, -- Seconds between status payloads.
   channels = {
@@ -62,6 +63,7 @@ local DEFAULT_CONFIG = {
 
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
+local balance_log_state = { last_action = "ok", last_log_ts = 0 }
 
 local function add_config_warning(message)
   table.insert(config_warnings, message)
@@ -98,6 +100,10 @@ local function validate_config(config_values, defaults)
   if type(config_values.target_volume) ~= "number" or config_values.target_volume < 0 then
     config_values.target_volume = defaults.target_volume
     add_config_warning("target_volume missing/invalid; defaulting to " .. tostring(defaults.target_volume))
+  end
+  if type(config_values.balance_log_interval_s) ~= "number" or config_values.balance_log_interval_s < 0 then
+    config_values.balance_log_interval_s = defaults.balance_log_interval_s
+    add_config_warning("balance_log_interval_s missing/invalid; defaulting to " .. tostring(defaults.balance_log_interval_s))
   end
   if type(config_values.heartbeat_interval) ~= "number" or config_values.heartbeat_interval <= 0 then
     config_values.heartbeat_interval = defaults.heartbeat_interval
@@ -256,12 +262,36 @@ local function total_water()
   return total, buffers
 end
 
+local function should_log_balance(action, now)
+  if action ~= balance_log_state.last_action then
+    balance_log_state.last_action = action
+    balance_log_state.last_log_ts = now
+    return true
+  end
+  local interval_s = math.max(0, tonumber(config.balance_log_interval_s) or 0)
+  if interval_s <= 0 then
+    return false
+  end
+  if now - balance_log_state.last_log_ts >= interval_s * 1000 then
+    balance_log_state.last_log_ts = now
+    return true
+  end
+  return false
+end
+
 local function balance_loop()
   local total, _ = total_water()
+  local now = os.epoch("utc")
   if total < config.target_volume then
-    utils.log("WATER", "Refill requested: " .. (config.target_volume - total))
+    if should_log_balance("refill", now) then
+      utils.log("WATER", "Refill requested: " .. (config.target_volume - total))
+    end
   elseif total > config.target_volume * 1.1 then
-    utils.log("WATER", "Bleed excess: " .. (total - config.target_volume))
+    if should_log_balance("bleed", now) then
+      utils.log("WATER", "Bleed excess: " .. (total - config.target_volume))
+    end
+  elseif should_log_balance("ok", now) then
+    utils.log("WATER", "Water level within target range")
   end
 end
 
