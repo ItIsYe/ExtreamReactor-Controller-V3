@@ -68,6 +68,7 @@ local config = require("master.config")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local alert_service_lib = require("services.alert_service")
+local telemetry_service = require("services.telemetry_service")
 local ui_service = require("services.ui_service")
 
 -- Initialize file logging early to capture startup events.
@@ -131,10 +132,13 @@ end
 config.alert_eval_interval = clamp_interval(config.alert_eval_interval or 1, 1, 0.5, 5)
 config.alert_history_size = math.floor(clamp_number(config.alert_history_size or 200, 200, 10, 1000))
 config.alert_info_ttl = clamp_number(config.alert_info_ttl or 20, 20, 5, 600)
-config.alert_debounce_s = clamp_number(config.alert_debounce_s or 2, 2, 0, 30)
-config.alert_clear_s = clamp_number(config.alert_clear_s or 3, 3, 0, 60)
+config.alert_raise_after_s = clamp_number(config.alert_raise_after_s or config.alert_debounce_s or 2, 2, 0, 30)
+config.alert_clear_after_s = clamp_number(config.alert_clear_after_s or config.alert_clear_s or 3, 3, 0, 60)
+config.alert_debounce_s = config.alert_raise_after_s
+config.alert_clear_s = config.alert_clear_after_s
 config.alert_cooldown_s = clamp_number(config.alert_cooldown_s or 6, 6, 0, 120)
-config.comms_down_crit_secs = clamp_number(config.comms_down_crit_secs or 12, 12, 1, 120)
+config.comms_down_warn_secs = clamp_number(config.comms_down_warn_secs or config.alert_raise_after_s or 2, 2, 1, 120)
+config.comms_down_crit_secs = clamp_number(config.comms_down_crit_secs or 12, 12, config.comms_down_warn_secs, 300)
 config.energy_warn_pct = clamp_percent(config.energy_warn_pct or 25)
 config.energy_crit_pct = clamp_percent(config.energy_crit_pct or 15)
 if config.energy_crit_pct > config.energy_warn_pct then
@@ -148,6 +152,25 @@ if config.rpm_crit_high < config.rpm_warn_low then
 end
 config.rod_stuck_secs = clamp_number(config.rod_stuck_secs or 20, 20, 1, 300)
 config.steam_deficit_pct = clamp_ratio(config.steam_deficit_pct or 0.9)
+config.alert_mute_default_minutes = math.floor(clamp_number(config.alert_mute_default_minutes or 10, 10, 1, 1440))
+config.alert_node_top_n = math.floor(clamp_number(config.alert_node_top_n or 3, 3, 1, 10))
+if type(config.alert_mute_durations) ~= "table" then
+  config.alert_mute_durations = { 5, 15, 30, 60 }
+end
+local durations = {}
+for _, entry in ipairs(config.alert_mute_durations) do
+  local value = math.floor(clamp_number(entry, entry, 1, 1440))
+  if value > 0 then
+    durations[value] = true
+  end
+end
+config.alert_mute_durations = {}
+for value in pairs(durations) do
+  table.insert(config.alert_mute_durations, value)
+end
+table.sort(config.alert_mute_durations)
+config.alert_log_muted_events = config.alert_log_muted_events == nil and true or config.alert_log_muted_events
+config.alert_state_path = type(config.alert_state_path) == "string" and config.alert_state_path or "/xreactor/config/alerts_state.lua"
 
 local monitor_cache = {}
 local monitor_mgr = nil
@@ -562,6 +585,37 @@ local function compute_system_status()
   return status
 end
 
+local function build_master_alert_payload()
+  local by_node = {}
+  local limit = config.alert_node_top_n or 3
+  local active = alert_service and alert_service:get_active() or {}
+  for _, alert in ipairs(active) do
+    local source = alert.source or {}
+    local node_id = source.node_id
+    if node_id then
+      local entry = by_node[node_id] or { critical = 0, top = {} }
+      if alert.severity == "CRITICAL" then
+        entry.critical = entry.critical + 1
+      end
+      if #entry.top < limit then
+        table.insert(entry.top, {
+          severity = alert.severity,
+          title = alert.title,
+          message = alert.message,
+          code = alert.code
+        })
+      end
+      by_node[node_id] = entry
+    end
+  end
+  return {
+    alerts = {
+      ts = os.epoch("utc"),
+      by_node = by_node
+    }
+  }
+end
+
 local function draw()
   local now = os.epoch("utc")
   if now - last_draw < 400 then return end
@@ -581,6 +635,8 @@ local function draw()
   local alert_active = alert_service and alert_service:get_active() or {}
   local alert_history = alert_service and alert_service:get_history() or {}
   local alert_top = alert_service and alert_service:get_top_critical(3) or {}
+  local alert_metrics = alert_service and alert_service:get_metrics() or {}
+  local alert_mutes = alert_service and alert_service:get_mutes() or {}
   overview_data.alert_counts = alert_counts
   overview_data.alert_summary = alert_summary
   overview_data.alert_top = alert_top
@@ -777,7 +833,14 @@ local function draw()
         counts = alert_counts,
         summary = alert_summary,
         active = alert_active,
-        history = alert_history
+        history = alert_history,
+        metrics = alert_metrics,
+        mutes = alert_mutes,
+        config = {
+          mute_default_minutes = config.alert_mute_default_minutes,
+          mute_durations = config.alert_mute_durations
+        },
+        now_ms = now
       }
     }
     rendered_views = view_manager:render(monitor_cache.list or {}, data_map) or {}
@@ -813,8 +876,20 @@ local function init()
         auto_profile = not auto_profile
       elseif action.type == "alert_ack" and alert_service then
         alert_service:ack(action.id)
+      elseif action.type == "alert_unack" and alert_service then
+        alert_service:unack(action.id)
+      elseif action.type == "alert_ack_visible" and alert_service then
+        alert_service:ack_visible(action.ids)
       elseif action.type == "alert_ack_all" and alert_service then
         alert_service:ack_all()
+      elseif action.type == "alert_mute_rule" and alert_service then
+        alert_service:mute_rule(action.code, action.minutes)
+      elseif action.type == "alert_unmute_rule" and alert_service then
+        alert_service:unmute_rule(action.code)
+      elseif action.type == "alert_mute_node" and alert_service then
+        alert_service:mute_node(action.node_id, action.minutes)
+      elseif action.type == "alert_unmute_node" and alert_service then
+        alert_service:unmute_node(action.node_id)
       end
     end
   })
@@ -845,6 +920,13 @@ local function init()
     recovery_notice = recovery_notice
   })
   services:add(alert_service)
+  services:add(telemetry_service.new({
+    comms = comms,
+    log_prefix = "MASTER",
+    status_interval = config.status_interval or config.heartbeat_interval,
+    heartbeat_interval = config.heartbeat_interval,
+    build_payload = build_master_alert_payload
+  }))
   services:add(ui_service.new({
     interval = 0.5,
     render = function()
@@ -858,6 +940,14 @@ local function init()
     handle_input = function(event)
       if event[1] == "monitor_touch" then
         handle_monitor_touch(event[2], event[3], event[4])
+      elseif event[1] == "key" then
+        if view_manager then
+          view_manager:handle_key(event[2])
+        end
+      elseif event[1] == "char" then
+        if view_manager then
+          view_manager:handle_char(event[2])
+        end
       end
     end
   }))
@@ -880,7 +970,7 @@ local function main_loop()
       local event = { os.pullEvent() }
       if event[1] == "modem_message" then
         comms:handle_event(event)
-      elseif event[1] == "monitor_touch" then
+      elseif event[1] == "monitor_touch" or event[1] == "key" or event[1] == "char" then
         services:tick(nil, event)
       elseif event[1] == "timer" and event[2] == timer then
         break

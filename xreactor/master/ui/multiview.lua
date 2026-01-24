@@ -335,4 +335,60 @@ function multiview:handle_input(monitor_name, x, y)
   return false
 end
 
+function multiview:_resolve_active_view()
+  local mon_entry = self.monitor_list and self.monitor_list[1]
+  if not mon_entry then
+    return nil
+  end
+  local id = mon_entry.id or mon_entry.name
+  local state = self.monitor_states[id]
+  if not state then
+    return nil
+  end
+  local layout = ensure_table(self.layout.monitors[id])
+  local view_key = layout.view
+  if layout.mode == "router" and state.router and state.router.current then
+    local page = state.router:current()
+    if page and page.key then
+      view_key = page.key
+    end
+  end
+  return mon_entry, state, view_key
+end
+
+function multiview:handle_key(key_code)
+  local mon_entry, state, view_key = self:_resolve_active_view()
+  if not mon_entry then
+    return false
+  end
+  if state.router and state.router:handle_input({ "key", key_code }) then
+    return true
+  end
+  local view = self.views[view_key]
+  if view and view.handle_key then
+    local action = view.handle_key(mon_entry.mon, key_code)
+    if action and self.on_action then
+      self.on_action(action)
+      return true
+    end
+  end
+  return false
+end
+
+function multiview:handle_char(ch)
+  local mon_entry, state, view_key = self:_resolve_active_view()
+  if not mon_entry then
+    return false
+  end
+  local view = self.views[view_key]
+  if view and view.handle_char then
+    local action = view.handle_char(mon_entry.mon, ch)
+    if action and self.on_action then
+      self.on_action(action)
+      return true
+    end
+  end
+  return false
+end
+
 return multiview

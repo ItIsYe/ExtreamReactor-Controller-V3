@@ -249,6 +249,7 @@ local devices = {
   last_command = nil,
   last_command_ts = nil
 }
+local master_alerts = {}
 local last_heartbeat = 0
 local last_scan = 0
 local ui_state = {
@@ -812,10 +813,14 @@ local function build_ui_model()
   local comms_diag = comms and comms:get_diagnostics() or {}
   local metrics = comms_diag.metrics or {}
   local master_peer = master_peer_state()
+  local node_id = comms and comms.network and comms.network.id or config.node_id
+  local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
+  local local_alerts = alert_payload and alert_payload.top or {}
+  local local_critical = alert_payload and alert_payload.critical or 0
   local master_age = master_peer and master_peer.age and string.format("%ds", math.floor(master_peer.age)) or "n/a"
   local master_state = master_peer and (master_peer.down and "DOWN" or "OK") or "UNKNOWN"
   return {
-    node_id = comms and comms.network and comms.network.id or config.node_id,
+    node_id = node_id,
     degraded = degraded,
     health_status = payload.health and payload.health.status or health.status.OK,
     degraded_reason = reasons_text ~= "" and reasons_text or nil,
@@ -836,7 +841,9 @@ local function build_ui_model()
     comms = comms_diag,
     metrics = metrics,
     master_state = master_state,
-    master_age = master_age
+    master_age = master_age,
+    local_alerts = local_alerts,
+    local_alerts_critical = local_critical
   }
 end
 
@@ -857,7 +864,8 @@ local function build_snapshot_key(model)
     registry = model.registry_summary,
     comms = model.comms and model.comms.metrics,
     master_state = model.master_state,
-    master_age = model.master_age
+    master_age = model.master_age,
+    local_alerts = model.local_alerts_critical
   })
 end
 
@@ -867,6 +875,10 @@ local function render_header(mon, title, status, model)
   ui.text(mon, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
   local status_label = model.health_status or status
   ui.rightText(mon, 2, 2, w - 2, status_label, colors.get(status), colors.get("background"))
+  if model.local_alerts_critical and model.local_alerts_critical > 0 then
+    local label = "CRIT " .. tostring(model.local_alerts_critical)
+    ui.badge(mon, w - (#label + 2), 1, label, "EMERGENCY")
+  end
 end
 
 local function render_overview(mon, model)
@@ -1042,6 +1054,15 @@ local function render_diagnostics(mon, model)
     { text = ("Last error: %s (%s)"):format(model.last_error or "none", format_age(model.last_error_ts, now)) },
     { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", format_age(model.last_command_ts, now)) }
   }
+  if model.local_alerts and #model.local_alerts > 0 then
+    table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
+    for _, alert in ipairs(model.local_alerts) do
+      local sev = alert.severity and alert.severity:sub(1, 1) or "?"
+      local title = alert.title or alert.message or alert.code or "alert"
+      local status = alert.severity == "CRITICAL" and "EMERGENCY" or alert.severity == "WARN" and "WARNING" or "OK"
+      table.insert(rows, { text = string.format("%s %s", sev, title), status = status })
+    end
+  end
   if model.registry_rows and #model.registry_rows > 0 then
     table.insert(rows, { text = "Registry:", status = "OK" })
     for _, row in ipairs(model.registry_rows) do
@@ -1130,6 +1151,9 @@ local function handle_message(message)
   end
   if message.role == constants.roles.MASTER then
     master_seen_ts = os.epoch("utc")
+    if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then
+      master_alerts = message.payload.alerts
+    end
   end
 end
 

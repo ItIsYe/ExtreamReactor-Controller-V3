@@ -100,17 +100,26 @@ function alerts:raise(entry)
   local severity = normalize_severity(entry.severity)
   local scope = normalize_scope(entry.scope)
   local source = type(entry.source) == "table" and entry.source or {}
+  local code = entry.code and tostring(entry.code) or nil
   local title = tostring(entry.title or "Alert")
   local message = tostring(entry.message or "")
   local details = self:_ensure_details(entry)
   local existing = self.active_by_key[key]
-  local result = { log = false, alert = nil }
+  local result = { log = false, alert = nil, event = nil, severity_changed = false }
   if existing then
-    local severity_changed = severity_rank[severity] < severity_rank[existing.severity]
+    local prior_severity = existing.severity
+    local severity_changed = prior_severity ~= severity
+    local severity_increased = severity_rank[severity] < severity_rank[prior_severity]
     existing.ts_last = ts
-    if severity_changed or existing.severity ~= severity then
+    if severity_changed then
       existing.severity = severity
+      result.severity_changed = true
       result.log = true
+      result.event = "severity"
+      if existing.acknowledged and severity_increased then
+        existing.acknowledged = nil
+        existing.ack_ts = nil
+      end
     end
     if existing.title ~= title then
       existing.title = title
@@ -118,11 +127,10 @@ function alerts:raise(entry)
     if existing.message ~= message then
       existing.message = message
     end
-    existing.details = details
-    if existing.acknowledged then
-      existing.acknowledged = nil
-      existing.ack_ts = nil
+    if code then
+      existing.code = code
     end
+    existing.details = details
     result.alert = existing
     self:_mark_dirty()
     return result
@@ -133,6 +141,7 @@ function alerts:raise(entry)
     ts_first = ts,
     ts_last = ts,
     severity = severity,
+    code = code,
     scope = scope,
     source = source,
     title = title,
@@ -145,6 +154,7 @@ function alerts:raise(entry)
   self:_mark_dirty()
   result.alert = alert
   result.log = true
+  result.event = "raise"
   return result
 end
 
@@ -159,10 +169,10 @@ function alerts:resolve(key)
   self.active_by_key[key] = nil
   self.active_by_id[alert.id] = nil
   self:_mark_dirty()
-  return true
+  return alert
 end
 
-function alerts:ack(id)
+function alerts:set_ack(id, value)
   if not id then
     return false
   end
@@ -170,33 +180,97 @@ function alerts:ack(id)
   if not alert then
     return false
   end
-  alert.acknowledged = true
-  alert.ack_ts = now_ms()
+  local next_value = value
+  if next_value == nil then
+    next_value = not alert.acknowledged
+  end
+  if not next_value then
+    next_value = nil
+  end
+  if alert.acknowledged == next_value then
+    return false
+  end
+  alert.acknowledged = next_value
+  alert.ack_ts = next_value and now_ms() or nil
   self:_mark_dirty()
-  return true
+  return true, alert
 end
 
-function alerts:ack_all()
-  for _, alert in pairs(self.active_by_key) do
-    alert.acknowledged = true
-    alert.ack_ts = now_ms()
+function alerts:ack(id)
+  return self:set_ack(id, nil)
+end
+
+function alerts:set_ack_for_ids(ids, value)
+  local changed = {}
+  for _, id in ipairs(ids or {}) do
+    local ok, alert = self:set_ack(id, value)
+    if ok and alert then
+      table.insert(changed, alert)
+    end
   end
+  return changed
+end
+
+function alerts:ack_all(value)
+  local changed = {}
+  for _, alert in pairs(self.active_by_key) do
+    local next_value = value
+    if next_value == nil then
+      next_value = true
+    end
+    if not next_value then
+      next_value = nil
+    end
+    if alert.acknowledged ~= next_value then
+      alert.acknowledged = next_value
+      alert.ack_ts = next_value and now_ms() or nil
+      table.insert(changed, alert)
+    end
+  end
+  if #changed > 0 then
+    self:_mark_dirty()
+  end
+  return changed
+end
+
+function alerts:record_muted(entry)
+  if type(entry) ~= "table" then
+    return
+  end
+  self.seq = self.seq + 1
+  local snapshot = {
+    id = string.format("MUTED-%d-%d", entry.ts or now_ms(), self.seq),
+    ts_first = entry.ts or now_ms(),
+    ts_last = entry.ts or now_ms(),
+    severity = normalize_severity(entry.severity or "INFO"),
+    code = entry.code and tostring(entry.code) or nil,
+    scope = normalize_scope(entry.scope),
+    source = type(entry.source) == "table" and entry.source or {},
+    title = tostring(entry.title or "Muted alert"),
+    message = tostring(entry.message or ""),
+    details = self:_ensure_details(entry),
+    muted = true
+  }
+  self:_push_history(snapshot)
   self:_mark_dirty()
 end
 
 function alerts:tick(ts)
   local now = ts or now_ms()
   if not self.info_ttl_s or self.info_ttl_s <= 0 then
-    return
+    return {}
   end
   local ttl_ms = self.info_ttl_s * 1000
+  local expired = {}
   for key, alert in pairs(self.active_by_key) do
     if alert.severity == "INFO" and now - (alert.ts_last or 0) >= ttl_ms then
       self.active_by_key[key] = nil
       self.active_by_id[alert.id] = nil
+      table.insert(expired, alert)
       self:_mark_dirty()
     end
   end
+  return expired
 end
 
 function alerts:get_active()

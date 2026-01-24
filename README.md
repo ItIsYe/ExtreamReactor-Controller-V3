@@ -69,16 +69,24 @@ Wireless Modem (Control/Status)
 ## Alerts (Monitoring only)
 - **Zweck**: Einheitliches Alert-System für Telemetry/Health/Registry-Daten, **ohne** Regelungs- oder Steuerungseingriff.
 - **Severity**: `INFO`, `WARN`, `CRITICAL` (Anzeige + Logging).
-- **Acknowledge**: ACK markiert Alerts nur als bestätigt (wird nicht gelöscht). „ACK ALL“ bestätigt alle aktuellen Alerts.
+- **Acknowledge**: ACK toggelt den Status (wird nicht gelöscht). „ACK ALL (VISIBLE)“ bestätigt nur gefilterte ACTIVE Alerts, „ACK ALL (ACTIVE)“ bestätigt alle ACTIVE Alerts.
+- **Mute**: Regeln oder Nodes für X Minuten muten (persistiert in `/xreactor/config/alerts_state.lua`). Gemutete Alerts erscheinen nicht in ACTIVE; optional als INFO in History.
 - **Anzeige**:
   - Master-Layout: View **Alerts** (per Layout-Menü zuweisbar).
+  - Filter: Severity/Scope/Role + ACK anzeigen/ausblenden.
+  - Sort: Severity+Recency (Default), Recency, Node/Role.
+  - Group: Flat oder „by node“ (collapsible).
+  - History: eigener Tab mit Severity-Filter (Ring-Buffer).
   - Dashboards: kleine Warn-Badges + Top-CRITICAL inline.
+  - Nodes: CRITICAL-Banner + „Local Alerts“ im Diagnostics-Tab.
 - **Konfiguration** (`xreactor/master/config.lua`):
   - `energy_warn_pct`, `energy_crit_pct`
   - `matrix_warn_full_pct`
   - `rpm_warn_low`, `rpm_crit_high`
-  - `comms_down_crit_secs`
+  - `comms_down_warn_secs`, `comms_down_crit_secs`
   - `alert_eval_interval`, `alert_history_size`, `alert_info_ttl`
+  - `alert_raise_after_s`, `alert_clear_after_s`, `alert_cooldown_s`
+  - `alert_mute_default_minutes`, `alert_mute_durations`, `alert_log_muted_events`
 
 ## Manual Test Checklist (Kurz)
 1. **Start**: MASTER + RT + ENERGY starten (FUEL/WATER/REPROCESSOR optional).
@@ -94,7 +102,9 @@ Wireless Modem (Control/Status)
 11. **Update Recovery Marker**: `/xreactor/.update_in_progress` anlegen → beim Start wird Recovery (Apply/Rollback) ausgeführt und Marker entfernt.
 12. **Alerts Node Down**: Node stoppen → `CRITICAL` Alert in Alerts-View + Badge im Dashboard.
 13. **Alerts Energy Low**: `energy_warn_pct`/`energy_crit_pct` temporär hochsetzen → WARN/CRITICAL erscheint.
-14. **Alerts Ack**: Alert auswählen → ACK/ACK ALL setzt `acknowledged`, Alert bleibt sichtbar.
+14. **Alerts Ack**: Alert auswählen → ACK/ACK ALL VISIBLE/ACTIVE setzt `acknowledged`, Alert bleibt sichtbar.
+15. **Alerts History**: Alerts-View → History-Tab, Severity-Filter prüfen.
+16. **Alerts Mute Persist**: Rule/Node muten → reboot → Mute bleibt aktiv.
 
 ## Rails/Tuning Guide (Kurz)
 - **RT Control Rails** werden zentral über `rails` in `master/config.lua` und `nodes/*/config.lua` gesteuert.
