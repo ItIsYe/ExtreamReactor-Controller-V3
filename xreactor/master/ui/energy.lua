@@ -33,11 +33,22 @@ local function render(mon, model)
   ui.text(mon, 2, line, "Flow", colorset.get("text"), colorset.get("background"))
   ui.text(mon, 8, line, string.format("In %.0f  Out %.0f  %s", model.input or 0, model.output or 0, model.trend_arrow or "→"), colorset.get("text"), colorset.get("background"))
   line = line + 1
-  if model.alerts and #model.alerts > 0 then
+  local counts = model.alert_counts or {}
+  local crit = counts.CRITICAL or 0
+  local warn = counts.WARN or 0
+  if crit > 0 or warn > 0 then
     ui.text(mon, 2, line, "Alerts", colorset.get("WARNING"), colorset.get("background"))
+    ui.badge(mon, 10, line, "CRIT " .. tostring(crit), crit > 0 and "EMERGENCY" or "OFFLINE")
+    ui.badge(mon, 20, line, "WARN " .. tostring(warn), warn > 0 and "WARNING" or "OFFLINE")
     line = line + 1
-    for i = 1, math.min(2, #model.alerts) do
-      ui.text(mon, 4, line, model.alerts[i], colorset.get("WARNING"), colorset.get("background"))
+    local top = model.alert_top or {}
+    if #top > 0 then
+      for i = 1, math.min(3, #top) do
+        ui.text(mon, 4, line, top[i].title or top[i].message or "CRITICAL", colorset.get("EMERGENCY"), colorset.get("background"))
+        line = line + 1
+      end
+    else
+      ui.text(mon, 4, line, "Warnings active", colorset.get("WARNING"), colorset.get("background"))
       line = line + 1
     end
   end

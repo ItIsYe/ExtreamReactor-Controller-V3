@@ -13,11 +13,22 @@ local function render(mon, model)
   ui.text(mon, 2, 3, "Sequence: " .. tostring(model.sequence_state or "IDLE"), colorset.get("text"), colorset.get("background"))
   ui.text(mon, 2, 4, "Control: " .. tostring(model.control_mode or "AUTO"), colorset.get("text"), colorset.get("background"))
   local row = 6
-  if model.alerts and #model.alerts > 0 then
+  local counts = model.alert_counts or {}
+  local crit = counts.CRITICAL or 0
+  local warn = counts.WARN or 0
+  if crit > 0 or warn > 0 then
     ui.text(mon, 2, row, "Alerts", colorset.get("WARNING"), colorset.get("background"))
+    ui.badge(mon, 10, row, "CRIT " .. tostring(crit), crit > 0 and "EMERGENCY" or "OFFLINE")
+    ui.badge(mon, 20, row, "WARN " .. tostring(warn), warn > 0 and "WARNING" or "OFFLINE")
     row = row + 1
-    for i = 1, math.min(2, #model.alerts) do
-      ui.text(mon, 4, row, model.alerts[i], colorset.get("WARNING"), colorset.get("background"))
+    local top = model.alert_top or {}
+    if #top > 0 then
+      for i = 1, math.min(3, #top) do
+        ui.text(mon, 4, row, top[i].title or top[i].message or "CRITICAL", colorset.get("EMERGENCY"), colorset.get("background"))
+        row = row + 1
+      end
+    else
+      ui.text(mon, 4, row, "Warnings active", colorset.get("WARNING"), colorset.get("background"))
       row = row + 1
     end
   end

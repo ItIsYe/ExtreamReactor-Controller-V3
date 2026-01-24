@@ -59,6 +59,7 @@ local rt_ui = require("master.ui.rt_dashboard")
 local energy_ui = require("master.ui.energy")
 local resources_ui = require("master.ui.resources")
 local alarms_ui = require("master.ui.alarms")
+local alerts_ui = require("master.ui.alerts")
 local multiview_ui = require("master.ui.multiview")
 local profiles = require("master.profiles")
 local trends_lib = require("core.trends")
@@ -66,6 +67,7 @@ local ui = require("core.ui")
 local config = require("master.config")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
+local alert_service_lib = require("services.alert_service")
 local ui_service = require("services.ui_service")
 
 -- Initialize file logging early to capture startup events.
@@ -77,6 +79,7 @@ if CONFIG.DEBUG_LOG_ENABLED ~= nil then
 end
 utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled })
 utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
+local recovery_status = bootstrap.get_recovery_status and bootstrap.get_recovery_status() or nil
 
 local function clamp_interval(value, fallback, min, max)
   local num = tonumber(value)
@@ -92,6 +95,28 @@ local function clamp_interval(value, fallback, min, max)
   return num
 end
 
+local function clamp_number(value, fallback, min, max)
+  local num = tonumber(value)
+  if not num then
+    num = fallback
+  end
+  if min and num < min then
+    num = min
+  end
+  if max and num > max then
+    num = max
+  end
+  return num
+end
+
+local function clamp_percent(value, fallback)
+  return clamp_number(value, fallback, 0, 100)
+end
+
+local function clamp_ratio(value, fallback)
+  return clamp_number(value, fallback, 0, 1)
+end
+
 config.heartbeat_interval = clamp_interval(config.heartbeat_interval, 5, 1, 60)
 config.status_interval = clamp_interval(config.status_interval or config.heartbeat_interval, config.heartbeat_interval, 1, 60)
 config.rt_default_mode = config.rt_default_mode or "MASTER"
@@ -103,6 +128,26 @@ end
 if config.rt_setpoints.enable_turbines == nil then
   config.rt_setpoints.enable_turbines = true
 end
+config.alert_eval_interval = clamp_interval(config.alert_eval_interval or 1, 1, 0.5, 5)
+config.alert_history_size = math.floor(clamp_number(config.alert_history_size or 200, 200, 10, 1000))
+config.alert_info_ttl = clamp_number(config.alert_info_ttl or 20, 20, 5, 600)
+config.alert_debounce_s = clamp_number(config.alert_debounce_s or 2, 2, 0, 30)
+config.alert_clear_s = clamp_number(config.alert_clear_s or 3, 3, 0, 60)
+config.alert_cooldown_s = clamp_number(config.alert_cooldown_s or 6, 6, 0, 120)
+config.comms_down_crit_secs = clamp_number(config.comms_down_crit_secs or 12, 12, 1, 120)
+config.energy_warn_pct = clamp_percent(config.energy_warn_pct or 25)
+config.energy_crit_pct = clamp_percent(config.energy_crit_pct or 15)
+if config.energy_crit_pct > config.energy_warn_pct then
+  config.energy_crit_pct = config.energy_warn_pct
+end
+config.matrix_warn_full_pct = clamp_percent(config.matrix_warn_full_pct or 90)
+config.rpm_warn_low = clamp_number(config.rpm_warn_low or 800, 800, 0, 5000)
+config.rpm_crit_high = clamp_number(config.rpm_crit_high or 1800, 1800, 0, 10000)
+if config.rpm_crit_high < config.rpm_warn_low then
+  config.rpm_crit_high = config.rpm_warn_low
+end
+config.rod_stuck_secs = clamp_number(config.rod_stuck_secs or 20, 20, 1, 300)
+config.steam_deficit_pct = clamp_ratio(config.steam_deficit_pct or 0.9)
 
 local monitor_cache = {}
 local monitor_mgr = nil
@@ -110,6 +155,7 @@ local view_manager = nil
 local layout_config_path = "/xreactor/config/master_ui_layout.json"
 local nodes = {}
 local alarms = {}
+local alert_service = nil
 local power_target = 0
 local sequencer
 local comms
@@ -489,6 +535,14 @@ end
 
 local function compute_system_status()
   local status = constants.status_levels.OK
+  if alert_service then
+    local counts = alert_service:get_counts() or {}
+    if (counts.CRITICAL or 0) > 0 then
+      return constants.status_levels.EMERGENCY
+    elseif (counts.WARN or 0) > 0 then
+      status = constants.status_levels.WARNING
+    end
+  end
   for _, node in pairs(nodes) do
     if node.status == constants.status_levels.EMERGENCY then
       return constants.status_levels.EMERGENCY
@@ -522,14 +576,23 @@ local function draw()
     active_profile = active_profile,
     auto_profile = auto_profile
   }
+  local alert_counts = alert_service and alert_service:get_counts() or { INFO = 0, WARN = 0, CRITICAL = 0 }
+  local alert_summary = alert_service and alert_service:get_summary() or ""
+  local alert_active = alert_service and alert_service:get_active() or {}
+  local alert_history = alert_service and alert_service:get_history() or {}
+  local alert_top = alert_service and alert_service:get_top_critical(3) or {}
+  overview_data.alert_counts = alert_counts
+  overview_data.alert_summary = alert_summary
+  overview_data.alert_top = alert_top
   local rt_data = {
     rt_nodes = {},
     ramp_profile = sequencer.ramp_profile,
     sequence_state = sequencer.state,
     queue = sequencer.queue,
     active_step = sequencer.active,
-    alerts = {},
-    control_mode = nil
+    control_mode = nil,
+    alert_counts = alert_counts,
+    alert_top = alert_top
   }
   local energy_data = {
     stored = 0,
@@ -540,11 +603,12 @@ local function draw()
     nodes = {},
     matrices = {},
     top_matrices = {},
-    alerts = {},
     trend_values = trend_cache.energy,
     trend_arrow = trend_cache.energy_arrow,
     trend_dirty = trends:is_dirty("energy"),
-    now_ms = os.epoch("utc")
+    now_ms = os.epoch("utc"),
+    alert_counts = alert_counts,
+    alert_top = alert_top
   }
   local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {}, node_details = {}, comms = comms:get_diagnostics() or {} }
 
@@ -583,11 +647,6 @@ local function draw()
     })
     if node.role == constants.roles.RT_NODE then
       table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status, mode = node.mode })
-      if node.status == health.status.DOWN then
-        table.insert(rt_data.alerts, ("RT %s COMMS_DOWN"):format(node.id or "NODE"))
-      elseif node.health and node.health.status == health.status.DEGRADED then
-        table.insert(rt_data.alerts, ("RT %s DEGRADED"):format(node.id or "NODE"))
-      end
     elseif node.role == constants.roles.ENERGY_NODE then
       energy_data.stored = energy_data.stored + (node.stored or 0)
       energy_data.capacity = energy_data.capacity + (node.capacity or 0)
@@ -622,11 +681,6 @@ local function draw()
           })
         end
       end
-      if node.status == health.status.DOWN then
-        table.insert(energy_data.alerts, ("ENERGY %s COMMS_DOWN"):format(node.id or "NODE"))
-      elseif node.health and node.health.status == health.status.DEGRADED then
-        table.insert(energy_data.alerts, ("ENERGY %s DEGRADED"):format(node.id or "NODE"))
-      end
     elseif node.role == constants.roles.FUEL_NODE then
       resource_data.fuel.reserve = node.reserve or resource_data.fuel.reserve
       resource_data.fuel.minimum = node.minimum_reserve or resource_data.fuel.minimum
@@ -652,12 +706,17 @@ local function draw()
   end
   resource_data.fuel.total = fuel_total
   resource_data.fuel.mix_status = (#(resource_data.fuel.sources or {}) > 1) and "MIXED" or "SINGLE"
-  energy_data.status = energy_data.capacity > 0 and (energy_data.stored / energy_data.capacity < 0.2 and "WARNING" or "OK") or "OFFLINE"
   if energy_data.capacity > 0 then
-    local pct = energy_data.stored / energy_data.capacity
-    if pct < 0.2 then
-      table.insert(energy_data.alerts, ("LOW ENERGY %.0f%%"):format(pct * 100))
+    local pct = (energy_data.stored / energy_data.capacity) * 100
+    if pct <= config.energy_crit_pct then
+      energy_data.status = "EMERGENCY"
+    elseif pct <= config.energy_warn_pct then
+      energy_data.status = "WARNING"
+    else
+      energy_data.status = "OK"
     end
+  else
+    energy_data.status = "OFFLINE"
   end
   for i = 1, math.min(3, #energy_data.matrices) do
     table.insert(energy_data.top_matrices, energy_data.matrices[i])
@@ -713,7 +772,13 @@ local function draw()
       rt = rt_data,
       energy = energy_data,
       resources = resource_data,
-      alarms = { alarms = alarms, header_blink = os.epoch("utc") < critical_blink_until and math.floor(os.epoch("utc") / 400) % 2 == 0 }
+      alarms = { alarms = alarms, header_blink = os.epoch("utc") < critical_blink_until and math.floor(os.epoch("utc") / 400) % 2 == 0 },
+      alerts = {
+        counts = alert_counts,
+        summary = alert_summary,
+        active = alert_active,
+        history = alert_history
+      }
     }
     rendered_views = view_manager:render(monitor_cache.list or {}, data_map) or {}
   end
@@ -736,15 +801,20 @@ local function init()
       energy = { label = "Energy", render = energy_ui.render, interval = 1.0 },
       rt = { label = "RT", render = rt_ui.render, interval = 1.0 },
       resources = { label = "Resources", render = resources_ui.render, interval = 2.0 },
+      alerts = { label = "Alerts", render = alerts_ui.render, hit_test = alerts_ui.hit_test, interval = 0.5 },
       alarms = { label = "Logs", render = alarms_ui.render, interval = 1.0 }
     },
-    view_order = { "overview", "energy", "rt", "resources", "alarms" },
+    view_order = { "overview", "energy", "rt", "resources", "alerts", "alarms" },
     on_action = function(action)
       if not action then return end
       if action.type == "profile" then
         apply_profile(action.name)
       elseif action.type == "auto" then
         auto_profile = not auto_profile
+      elseif action.type == "alert_ack" and alert_service then
+        alert_service:ack(action.id)
+      elseif action.type == "alert_ack_all" and alert_service then
+        alert_service:ack_all()
       end
     end
   })
@@ -756,6 +826,25 @@ local function init()
   })
   services = service_manager.new({ log_prefix = "MASTER" })
   services:add(comms)
+  local recovery_notice = nil
+  if recovery_status and recovery_status.had_marker then
+    local action = recovery_status.result or "recovery"
+    local notice_until = os.epoch("utc") + (config.alert_info_ttl or 20) * 1000
+    recovery_notice = {
+      active = true,
+      active_until = notice_until,
+      message = "Update recovery: " .. tostring(action),
+      details = recovery_status.marker or {}
+    }
+  end
+  alert_service = alert_service_lib.new({
+    config = config,
+    nodes = nodes,
+    power_target = function() return power_target end,
+    log_prefix = "ALERT",
+    recovery_notice = recovery_notice
+  })
+  services:add(alert_service)
   services:add(ui_service.new({
     interval = 0.5,
     render = function()

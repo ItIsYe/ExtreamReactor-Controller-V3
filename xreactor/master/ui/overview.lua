@@ -5,30 +5,6 @@ local constants = require("shared.constants")
 local cache = {}
 local button_cache = setmetatable({}, { __mode = "k" })
 
-local severity_rank = {
-  EMERGENCY = 1,
-  WARNING = 2,
-  LIMITED = 3,
-  OK = 4,
-  OFFLINE = 5
-}
-
-local function sort_alarms(alarms)
-  local sorted = {}
-  for _, alarm in ipairs(alarms or {}) do
-    table.insert(sorted, alarm)
-  end
-  table.sort(sorted, function(a, b)
-    local ar = severity_rank[a.severity] or 99
-    local br = severity_rank[b.severity] or 99
-    if ar == br then
-      return (a.timestamp or "") > (b.timestamp or "")
-    end
-    return ar < br
-  end)
-  return sorted
-end
-
 local function build_profile_buttons(mon, x, y, profiles, active, auto_enabled)
   local buttons = {}
   local cursor = x
@@ -56,6 +32,13 @@ local function render(mon, model)
 
   ui.text(mon, 2, 1, "SYSTEM", colorset.get("text"), colorset.get("background"))
   ui.badge(mon, 10, 1, model.system_status or "OK", model.system_status or "OK")
+  local counts = model.alert_counts or {}
+  local crit = counts.CRITICAL or 0
+  local warn = counts.WARN or 0
+  if crit > 0 or warn > 0 then
+    ui.badge(mon, 22, 1, "CRIT " .. tostring(crit), crit > 0 and "EMERGENCY" or "OFFLINE")
+    ui.badge(mon, 32, 1, "WARN " .. tostring(warn), warn > 0 and "WARNING" or "OFFLINE")
+  end
 
   local tiles = model.tiles or {}
   local tile_y = 3
@@ -103,17 +86,18 @@ local function render(mon, model)
   ui.text(mon, 2, power_y, "Power Target", colorset.get("text"), colorset.get("background"))
   ui.bigNumber(mon, 16, power_y, "", string.format("%.0f", model.power_target or 0), "RF/t", model.system_status)
 
-  local alarm_rows = {}
+  local alert_rows = {}
+  local top_alerts = model.alert_top or {}
   for i = 1, 3 do
-    local alarm = sort_alarms(model.alarms or {})[i]
-    if alarm then
-      table.insert(alarm_rows, { text = string.format("%s %s", alarm.timestamp or "--:--", alarm.message or ""), status = alarm.severity })
+    local alert = top_alerts[i]
+    if alert then
+      table.insert(alert_rows, { text = alert.title or alert.message or "--", status = alert.severity == "CRITICAL" and "EMERGENCY" or "WARNING" })
     else
-      table.insert(alarm_rows, { text = "--", status = "OFFLINE" })
+      table.insert(alert_rows, { text = "--", status = "OFFLINE" })
     end
   end
-  ui.text(mon, 2, h - 3, "Top Alarms", colorset.get("text"), colorset.get("background"))
-  ui.list(mon, 2, h - 2, w - 2, alarm_rows, { max_rows = 3 })
+  ui.text(mon, 2, h - 3, "Top Alerts", colorset.get("text"), colorset.get("background"))
+  ui.list(mon, 2, h - 2, w - 2, alert_rows, { max_rows = 3 })
 end
 
 local function hit_test(mon, x, y)

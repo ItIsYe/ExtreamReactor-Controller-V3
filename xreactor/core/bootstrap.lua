@@ -10,7 +10,8 @@ local CONFIG = {
 local state = {
   base_dir = CONFIG.BASE_DIR,
   log_path = CONFIG.LOG_PATH,
-  log_enabled_override = nil
+  log_enabled_override = nil,
+  last_recovery = nil
 }
 
 local native_require = rawget(_G, "require")
@@ -292,7 +293,14 @@ function bootstrap.setup(opts)
   end
   local ok_recovery, recovery_mod = pcall(bootstrap.require, "core.update_recovery")
   if ok_recovery and recovery_mod and recovery_mod.recover_if_needed then
+    local marker = recovery_mod.read_marker and recovery_mod.read_marker() or nil
     local ok_run, result = pcall(recovery_mod.recover_if_needed)
+    state.last_recovery = {
+      had_marker = marker ~= nil,
+      marker = marker,
+      ok = ok_run == true,
+      result = ok_run and result or nil
+    }
     if ok_run and result then
       log_line("INFO", "update recovery: " .. tostring(result))
     elseif not ok_run then
@@ -300,6 +308,10 @@ function bootstrap.setup(opts)
     end
   end
   log_environment()
+end
+
+function bootstrap.get_recovery_status()
+  return state.last_recovery
 end
 
 return bootstrap
