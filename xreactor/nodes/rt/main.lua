@@ -32,6 +32,7 @@ bootstrap.setup({
   log_path = CONFIG.BOOTSTRAP_LOG_PATH
 })
 local require = bootstrap.require
+local rails = require("core.control_rails")
 _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
 
 local function ensure_turbine_ctrl(name)
@@ -60,12 +61,20 @@ local function ensure_turbine_ctrl(name)
   if ctrl.last_update == nil then
     ctrl.last_update = os.clock()
   end
+  if type(ctrl.rails) ~= "table" then
+    ctrl.rails = {
+      flow = rails.new_state(),
+      coil = rails.new_state()
+    }
+  end
   return ctrl
 end
 
 local get_turbine_ctrl = ensure_turbine_ctrl
 local constants = require("shared.constants")
 local colors = require("shared.colors")
+local ui = require("core.ui")
+local ui_router = require("core.ui_router")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
 local safety = require("core.safety")
@@ -132,6 +141,43 @@ local DEFAULT_CONFIG = {
     reactor_adjust_interval = CONFIG.ROD_TICK, -- Reactor adjust interval.
     steam_reserve = 5000, -- Steam reserve threshold.
     steam_deficit = 5000 -- Steam deficit threshold.
+  },
+  rails = {
+    ramp_profiles = {
+      NORMAL = { up = 1.0, down = 1.0 },
+      SLOW = { up = 0.5, down = 0.5 },
+      FAST = { up = 1.5, down = 1.5 }
+    },
+    turbine_flow = {
+      deadband_up = CONFIG.RPM_TOLERANCE, -- RPM deadband before increasing flow.
+      deadband_down = CONFIG.RPM_TOLERANCE, -- RPM deadband before decreasing flow.
+      hysteresis_up = 10, -- Extra RPM hysteresis for up direction.
+      hysteresis_down = 10, -- Extra RPM hysteresis for down direction.
+      max_step_up = CONFIG.FLOW_STEP, -- Max flow increase per tick.
+      max_step_down = CONFIG.FLOW_STEP, -- Max flow decrease per tick.
+      cooldown_s = 1.0, -- Minimum seconds between flow changes.
+      min = CONFIG.MIN_FLOW, -- Flow clamp minimum.
+      max = CONFIG.MAX_FLOW, -- Flow clamp maximum.
+      ema_alpha = 0.2 -- RPM smoothing alpha.
+    },
+    reactor_rods = {
+      deadband_up = 5000, -- Steam reserve deadband before inserting rods.
+      deadband_down = 5000, -- Steam deficit deadband before withdrawing rods.
+      hysteresis_up = 500, -- Steam hysteresis for rod insert.
+      hysteresis_down = 500, -- Steam hysteresis for rod withdraw.
+      max_step_up = CONFIG.REACTOR_STEP, -- Max rod insert step.
+      max_step_down = CONFIG.REACTOR_STEP, -- Max rod withdraw step.
+      cooldown_s = CONFIG.MIN_APPLY_INTERVAL, -- Minimum seconds between rod changes.
+      min = CONFIG.ROD_MIN, -- Rod clamp minimum.
+      max = CONFIG.ROD_MAX, -- Rod clamp maximum.
+      ema_alpha = 0.25 -- Steam margin smoothing alpha.
+    },
+    coil = {
+      engage_rpm = CONFIG.COIL_ENGAGE_RPM, -- Coil engage threshold.
+      disengage_rpm = CONFIG.COIL_DISENGAGE_RPM, -- Coil disengage threshold.
+      cooldown_s = 1.0, -- Minimum seconds between coil changes.
+      ema_alpha = 0.2 -- RPM smoothing alpha.
+    }
   },
   monitor_interval = 2, -- Monitor update interval (seconds).
   monitor_scale = 0.5, -- Monitor UI scale.
@@ -334,6 +380,7 @@ local last_rod_change_ts = 0
 local last_rod_direction = nil
 local last_reactor_demand = 0
 local steam_tank_name = nil
+local reactor_rails_state = rails.new_state()
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or DEFAULT_CONFIG.safety.max_temperature
 config.safety.max_rpm = config.safety.max_rpm or DEFAULT_CONFIG.safety.max_rpm
@@ -352,6 +399,46 @@ config.autonom.max_rods = config.autonom.max_rods or ROD_MAX
 config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or ROD_TICK
 config.autonom.steam_reserve = config.autonom.steam_reserve or DEFAULT_CONFIG.autonom.steam_reserve
 config.autonom.steam_deficit = config.autonom.steam_deficit or DEFAULT_CONFIG.autonom.steam_deficit
+config.rails = config.rails or utils.deep_copy(DEFAULT_CONFIG.rails)
+config.rails.ramp_profiles = config.rails.ramp_profiles or utils.deep_copy(DEFAULT_CONFIG.rails.ramp_profiles)
+local function clamp_nonneg(value, fallback)
+  if type(value) ~= "number" or value < 0 then
+    return fallback
+  end
+  return value
+end
+local function normalize_rail(section, defaults)
+  local data = config.rails[section] or {}
+  data.deadband_up = clamp_nonneg(data.deadband_up, defaults.deadband_up)
+  data.deadband_down = clamp_nonneg(data.deadband_down, defaults.deadband_down)
+  data.hysteresis_up = clamp_nonneg(data.hysteresis_up, defaults.hysteresis_up)
+  data.hysteresis_down = clamp_nonneg(data.hysteresis_down, defaults.hysteresis_down)
+  data.max_step_up = clamp_nonneg(data.max_step_up, defaults.max_step_up)
+  data.max_step_down = clamp_nonneg(data.max_step_down, defaults.max_step_down)
+  data.cooldown_s = clamp_nonneg(data.cooldown_s, defaults.cooldown_s)
+  data.min = type(data.min) == "number" and data.min or defaults.min
+  data.max = type(data.max) == "number" and data.max or defaults.max
+  if type(data.ema_alpha) ~= "number" or data.ema_alpha <= 0 or data.ema_alpha >= 1 then
+    data.ema_alpha = defaults.ema_alpha
+  end
+  config.rails[section] = data
+end
+normalize_rail("turbine_flow", DEFAULT_CONFIG.rails.turbine_flow)
+local rod_defaults = utils.deep_copy(DEFAULT_CONFIG.rails.reactor_rods)
+rod_defaults.deadband_up = config.autonom.steam_reserve
+rod_defaults.deadband_down = config.autonom.steam_deficit
+normalize_rail("reactor_rods", rod_defaults)
+local coil = config.rails.coil or {}
+coil.engage_rpm = clamp_nonneg(coil.engage_rpm, DEFAULT_CONFIG.rails.coil.engage_rpm)
+coil.disengage_rpm = clamp_nonneg(coil.disengage_rpm, DEFAULT_CONFIG.rails.coil.disengage_rpm)
+coil.cooldown_s = clamp_nonneg(coil.cooldown_s, DEFAULT_CONFIG.rails.coil.cooldown_s)
+if type(coil.ema_alpha) ~= "number" or coil.ema_alpha <= 0 or coil.ema_alpha >= 1 then
+  coil.ema_alpha = DEFAULT_CONFIG.rails.coil.ema_alpha
+end
+if coil.disengage_rpm > coil.engage_rpm then
+  coil.disengage_rpm = coil.engage_rpm
+end
+config.rails.coil = coil
 config.monitor_interval = config.monitor_interval or DEFAULT_CONFIG.monitor_interval
 config.monitor_scale = config.monitor_scale or DEFAULT_CONFIG.monitor_scale
 config.scan_interval = config.scan_interval or DEFAULT_CONFIG.scan_interval
@@ -393,9 +480,10 @@ local last_snapshot = 0
 local monitor = nil
 local monitor_name = nil
 local last_monitor_update = 0
-local last_monitor_page = 0
-local monitor_page = 1
+local monitor_router = nil
 local last_actuator_update = 0
+local last_command = nil
+local last_command_ts = nil
 local warned = {}
 local autonom_state = { reactors = {}, turbines = {} }
 local autonom_control_logged = false
@@ -812,18 +900,16 @@ local function controlReactor()
     return
   end
 
-  local target_rods = current_rods
-  if steam_margin > config.autonom.steam_reserve then
-    target_rods = current_rods + REACTOR_STEP
-  elseif steam_margin < -config.autonom.steam_deficit then
-    target_rods = current_rods - REACTOR_STEP
-  end
-
+  local rod_cfg = config.rails and config.rails.reactor_rods or {}
+  local smoothed_margin = rails.smooth(reactor_rails_state, "steam_margin", steam_margin, rod_cfg.ema_alpha)
+  local target_rods, direction = rails.step(current_rods, smoothed_margin, reactor_rails_state, rod_cfg, os.clock())
   target_rods = safety.clamp(target_rods, ROD_MIN, ROD_MAX)
   if target_rods == current_rods then
     return
   end
-
+  if direction ~= 0 then
+    autonom_state.pending_rod_direction = direction > 0 and "UP" or "DOWN"
+  end
   local applied = applyReactorRods(target_rods, false)
   if applied then
     log("INFO", string.format("ReactorCtrl margin=%.1f rods=%d", steam_margin, target_rods))
@@ -860,41 +946,52 @@ end
 
 local function update_inductor_for_rpm(name, turbine, caps, rpm)
   local ctrl = get_turbine_ctrl(name)
+  local coil_cfg = config.rails and config.rails.coil or {}
+  local state = ctrl.rails and ctrl.rails.coil or rails.new_state()
+  if ctrl.rails then
+    ctrl.rails.coil = state
+  end
+  local smoothed_rpm = rails.smooth(state, "rpm", rpm, coil_cfg.ema_alpha)
   local engaged = ctrl.inductor_engaged or false
-  if rpm and rpm >= COIL_ENGAGE_RPM and not engaged then
+  local now = os.clock()
+  local cooldown = coil_cfg.cooldown_s or 0
+  if cooldown > 0 and now - (state.last_change_ts or 0) < cooldown then
+    return true, true
+  end
+  local engage_rpm = coil_cfg.engage_rpm or COIL_ENGAGE_RPM
+  local disengage_rpm = coil_cfg.disengage_rpm or COIL_DISENG_RPM
+  if smoothed_rpm and smoothed_rpm >= engage_rpm and not engaged then
     engaged = true
-  elseif (not rpm or rpm <= COIL_DISENG_RPM) and engaged then
+  elseif (not smoothed_rpm or smoothed_rpm <= disengage_rpm) and engaged then
     engaged = false
   end
   if engaged == ctrl.inductor_engaged then
     return true, true
   end
   ctrl.inductor_engaged = engaged
+  state.last_change_ts = now
   return pcall(setInductor, turbine, caps, engaged)
 end
 
 local function update_turbine_flow_state(rpm, target_rpm, ctrl)
-  local mode = ctrl.mode or TURBINE_MODE.RAMP
-  local ramp_step = FLOW_STEP
-  local flow_step = FLOW_STEP
-  local target = target_rpm or TARGET_RPM
-  if mode == TURBINE_MODE.RAMP then
-    if not rpm or rpm < target then
-      ctrl.flow = ctrl.flow + ramp_step
-    else
-      ctrl.mode = TURBINE_MODE.REGULATE
-      if rpm and rpm > target + RPM_TOL then
-        ctrl.flow = ctrl.flow - flow_step
-      end
-    end
-  else
-    if rpm and rpm < target - RPM_TOL then
-      ctrl.flow = ctrl.flow + flow_step
-    elseif rpm and rpm > target + RPM_TOL then
-      ctrl.flow = ctrl.flow - flow_step
-    end
+  local rail_cfg = config.rails and config.rails.turbine_flow or {}
+  local flow_state = ctrl.rails and ctrl.rails.flow or rails.new_state()
+  if ctrl.rails then
+    ctrl.rails.flow = flow_state
   end
-  ctrl.flow = clamp_turbine_flow(ctrl.flow)
+  local smoothed_rpm = rails.smooth(flow_state, "rpm", rpm, rail_cfg.ema_alpha)
+  local target = target_rpm or TARGET_RPM
+  local error = target - (smoothed_rpm or target)
+  rail_cfg.ramp_profile = ctrl.ramp_profile or rail_cfg.ramp_profile or "NORMAL"
+  local next_flow, direction = rails.step(ctrl.flow, error, flow_state, rail_cfg, os.clock())
+  ctrl.flow = clamp_turbine_flow(next_flow)
+  if direction > 0 then
+    ctrl.mode = "UP"
+  elseif direction < 0 then
+    ctrl.mode = "DOWN"
+  else
+    ctrl.mode = "HOLD"
+  end
   return ctrl.flow, ctrl.mode
 end
 
@@ -2109,6 +2206,16 @@ local function init_monitor()
   end
 end
 
+local function format_value(value)
+  if value == nil then
+    return "n/a"
+  end
+  if type(value) == "number" then
+    return string.format("%.0f", value)
+  end
+  return tostring(value)
+end
+
 local function update_monitor()
   if not monitor then return end
   local now = os.epoch("utc")
@@ -2116,12 +2223,7 @@ local function update_monitor()
     return
   end
   last_monitor_update = now
-  if now - last_monitor_page > 8000 then
-    monitor_page = monitor_page == 1 and 2 or 1
-    last_monitor_page = now
-  end
   local snapshot = update_status_snapshot()
-  local avg_temp = snapshot and snapshot.avg_temp or 0
   local health_payload = build_health_payload()
   local summary = devices.registry_summary or registry:get_summary()
   local comms_diag = comms and comms:get_diagnostics() or {}
@@ -2135,46 +2237,77 @@ local function update_monitor()
       break
     end
   end
-  local lines = {}
-  if monitor_page == 1 then
-    lines = {
-      "RT Node: " .. (comms and comms.network and comms.network.id or config.node_id or "RT"),
-      "State: " .. tostring(current_state),
-      "Health: " .. tostring(health_payload.status),
-      "Reactors: " .. tostring(summary.kinds.reactor and summary.kinds.reactor.bound or 0),
-      "Turbines: " .. tostring(summary.kinds.turbine and summary.kinds.turbine.bound or 0),
-      string.format("Avg Temp: %.1f", avg_temp),
-      "Target RPM: " .. tostring(get_target_rpm())
-    }
-  else
-    local reasons = table.concat(health_payload.reasons or {}, ",")
-    lines = {
-      "RT Diagnostics",
-      "Registry total: " .. tostring(summary.total or 0),
-      "Bound: " .. tostring(summary.bound or 0),
-      "Missing: " .. tostring(summary.missing or 0),
-      "Reasons: " .. (reasons ~= "" and reasons or "none"),
-      "Last scan: " .. (devices.last_scan_ts and (math.floor((now - devices.last_scan_ts) / 1000) .. "s") or "n/a"),
-      "Master link: " .. master_state .. " age:" .. master_age,
-      ("Comms q:%d inflight:%d retries:%d"):format(
-        comms_diag.queue_depth or 0,
-        comms_diag.inflight_count or 0,
-        metrics.retries or 0
-      ),
-      ("Comms drop:%d dedupe:%d timeouts:%d"):format(
-        metrics.dropped or 0,
-        metrics.dedupe_hits or 0,
-        metrics.timeouts or 0
-      )
-    }
+  local model = {
+    snapshot = snapshot,
+    health = health_payload,
+    summary = summary,
+    comms = comms_diag,
+    metrics = metrics,
+    master_state = master_state,
+    master_age = master_age,
+    last_scan = devices.last_scan_ts and (math.floor((now - devices.last_scan_ts) / 1000) .. "s") or "n/a",
+    last_command = last_command,
+    last_command_ts = last_command_ts and (math.floor((now - last_command_ts) / 1000) .. "s") or "n/a"
+  }
+  if not monitor_router then
+    monitor_router = ui_router.new({
+      pages = {
+        { name = "Overview", render = function(target)
+          local w, h = target.getSize()
+          ui.panel(target, 1, 1, w, h, "RT NODE", model.health.status)
+          ui.text(target, 2, 2, ("ID: %s"):format(snapshot and snapshot.node_id or config.node_id), colors.get("text"), colors.get("background"))
+          ui.badge(target, w - 6, 2, model.health.status, model.health.status)
+          ui.text(target, 2, 4, ("State: %s"):format(current_state), colors.get("text"), colors.get("background"))
+          ui.text(target, 2, 5, ("Reactors: %d"):format(model.summary.kinds.reactor and model.summary.kinds.reactor.bound or 0), colors.get("text"), colors.get("background"))
+          ui.text(target, 2, 6, ("Turbines: %d"):format(model.summary.kinds.turbine and model.summary.kinds.turbine.bound or 0), colors.get("text"), colors.get("background"))
+          ui.text(target, 2, 7, ("Avg Temp: %.1f"):format(snapshot and snapshot.avg_temp or 0), colors.get("text"), colors.get("background"))
+          ui.text(target, 2, 8, ("Target RPM: %d"):format(get_target_rpm()), colors.get("text"), colors.get("background"))
+        end },
+        { name = "Details", render = function(target)
+          local w, h = target.getSize()
+          ui.panel(target, 1, 1, w, h, "RT DETAILS", model.health.status)
+          local rows = {}
+          for name, info in pairs(snapshot and snapshot.turbines or {}) do
+            table.insert(rows, { text = ("T %s rpm:%s flow:%s"):format(name, format_value(info.rpm), format_value(info.flow)) })
+          end
+          for name, info in pairs(snapshot and snapshot.reactors or {}) do
+            table.insert(rows, { text = ("R %s rods:%s temp:%s"):format(name, format_value(info.rods), format_value(info.temp)) })
+          end
+          if #rows == 0 then
+            table.insert(rows, { text = "No modules detected", status = "WARNING" })
+          end
+          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+        end },
+        { name = "Diagnostics", render = function(target)
+          local w, h = target.getSize()
+          ui.panel(target, 1, 1, w, h, "RT DIAGNOSTICS", model.health.status)
+          local reasons = table.concat(model.health.reasons or {}, ",")
+          local rows = {
+            { text = ("Health: %s"):format(model.health.status), status = model.health.status },
+            { text = ("Reasons: %s"):format(reasons ~= "" and reasons or "none") },
+            { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
+            { text = ("Last scan: %s"):format(model.last_scan) },
+            { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
+            { text = ("Comms q:%d inflight:%d retries:%d"):format(
+              model.comms.queue_depth or 0,
+              model.comms.inflight_count or 0,
+              model.metrics.retries or 0
+            ) },
+            { text = ("Comms drop:%d dedupe:%d timeouts:%d"):format(
+              model.metrics.dropped or 0,
+              model.metrics.dedupe_hits or 0,
+              model.metrics.timeouts or 0
+            ) },
+            { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
+          }
+          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+        end }
+      },
+      key_prev = { [keys.left] = true, [keys.pageUp] = true },
+      key_next = { [keys.right] = true, [keys.pageDown] = true }
+    })
   end
-  pcall(monitor.setBackgroundColor, colors.black)
-  pcall(monitor.setTextColor, colors.white)
-  pcall(monitor.clear)
-  for i, line in ipairs(lines) do
-    pcall(monitor.setCursorPos, 1, i)
-    pcall(monitor.write, line)
-  end
+  monitor_router:render(monitor, model)
 end
 
 local states = {
@@ -2263,18 +2396,23 @@ local states = {
 }
 
 local function handle_command(message)
+  local function record(result)
+    last_command = result and (result.ok and "ok" or result.error or "error") or "error"
+    last_command_ts = os.epoch("utc")
+    return result
+  end
   if not protocol.is_for_node(message, comms.network.id) then return end
   local ok_proto = protocol.is_proto_compatible(message.proto_ver)
   if not ok_proto then
-    return { ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" }
+    return record({ ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" })
   end
   local payload = type(message.payload) == "table" and message.payload or nil
   local command = payload and payload.command
   if type(command) ~= "table" then
-    return { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
+    return record({ ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" })
   end
   if current_state == STATE.SAFE then
-    return { ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" }
+    return record({ ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" })
   end
   note_master_seen()
   if command.target == constants.command_targets.SET_MODE then
@@ -2282,7 +2420,7 @@ local function handle_command(message)
     apply_mode(desired)
   elseif command.target == constants.command_targets.SET_SETPOINTS then
     if current_state ~= STATE.MASTER then
-      return { ok = false, error = "autonom: ignoring setpoints", reason_code = "INVALID_STATE" }
+      return record({ ok = false, error = "autonom: ignoring setpoints", reason_code = "INVALID_STATE" })
     end
     local value = command.value or {}
     if type(value.target_rpm) == "number" then
@@ -2319,21 +2457,21 @@ local function handle_command(message)
   elseif command.target == constants.command_targets.STARTUP_STAGE
     or command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
     if current_state ~= STATE.MASTER then
-      return { ok = false, error = "autonom: ignoring startup", reason_code = "INVALID_STATE" }
+      return record({ ok = false, error = "autonom: ignoring startup", reason_code = "INVALID_STATE" })
     end
     local value = command.value or {}
     local module, detail = start_module(value.module_id, value.module_type, value.ramp_profile)
     if not module then
       add_alarm(comms.network.id, "WARNING", "Startup rejected: " .. (detail or "unknown"))
-      return { ok = false, error = detail or "startup rejected", reason_code = "STARTUP_REJECTED" }
+      return record({ ok = false, error = detail or "startup rejected", reason_code = "STARTUP_REJECTED" })
     end
-    return { ok = true, module_id = module.id, detail = detail }
+    return record({ ok = true, module_id = module.id, detail = detail })
   elseif command.target == constants.command_targets.SCRAM then
     apply_mode(STATE.SAFE)
   else
-    return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
+    return record({ ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" })
   end
-  return { ok = true }
+  return record({ ok = true })
 end
 
 local function send_heartbeat()
@@ -2418,6 +2556,10 @@ while true do
       comms:handle_event(event)
     elseif event[1] == "timer" and event[2] == timer then
       break
+    elseif event[1] == "monitor_touch" or event[1] == "key" then
+      if monitor_router then
+        monitor_router:handle_input(event)
+      end
     end
   end
   if os.epoch("utc") - last_heartbeat > hb * 1000 then

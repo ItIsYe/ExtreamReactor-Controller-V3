@@ -290,6 +290,15 @@ function bootstrap.setup(opts)
     table.insert(package.searchers, 1, xreactor_searcher)
     searcher_installed = true
   end
+  local ok_recovery, recovery_mod = pcall(bootstrap.require, "core.update_recovery")
+  if ok_recovery and recovery_mod and recovery_mod.recover_if_needed then
+    local ok_run, result = pcall(recovery_mod.recover_if_needed)
+    if ok_run and result then
+      log_line("INFO", "update recovery: " .. tostring(result))
+    elseif not ok_run then
+      log_line("ERROR", "update recovery failed: " .. tostring(result))
+    end
+  end
   log_environment()
 end
 
