@@ -66,6 +66,20 @@ Wireless Modem (Control/Status)
   - Nodes markieren `COMMS_DOWN`, wenn der MASTER nicht erreichbar ist (laufen aber autonom).
 - **Diagnostics/Observability**: Master/Nodes zeigen Queue/Inflight/Retry/Dropped/Dedupe-Hits und Peer-Status.
 
+## Alerts (Monitoring only)
+- **Zweck**: Einheitliches Alert-System für Telemetry/Health/Registry-Daten, **ohne** Regelungs- oder Steuerungseingriff.
+- **Severity**: `INFO`, `WARN`, `CRITICAL` (Anzeige + Logging).
+- **Acknowledge**: ACK markiert Alerts nur als bestätigt (wird nicht gelöscht). „ACK ALL“ bestätigt alle aktuellen Alerts.
+- **Anzeige**:
+  - Master-Layout: View **Alerts** (per Layout-Menü zuweisbar).
+  - Dashboards: kleine Warn-Badges + Top-CRITICAL inline.
+- **Konfiguration** (`xreactor/master/config.lua`):
+  - `energy_warn_pct`, `energy_crit_pct`
+  - `matrix_warn_full_pct`
+  - `rpm_warn_low`, `rpm_crit_high`
+  - `comms_down_crit_secs`
+  - `alert_eval_interval`, `alert_history_size`, `alert_info_ttl`
+
 ## Manual Test Checklist (Kurz)
 1. **Start**: MASTER + RT + ENERGY starten (FUEL/WATER/REPROCESSOR optional).
 2. **Comms-Down**: Einen Node stoppen → MASTER zeigt `COMMS_DOWN` + `down_since` + Age; Node läuft lokal weiter.
@@ -78,6 +92,9 @@ Wireless Modem (Control/Status)
 9. **Safe Update**: SAFE UPDATE ausführen → keine Rolle/Config-Resets, Rollback bei Fehlern.
 10. **Proto-Mismatch**: `proto_ver` Major abweichen lassen → Node antwortet mit `ok=false`, `reason_code=PROTO_MISMATCH`.
 11. **Update Recovery Marker**: `/xreactor/.update_in_progress` anlegen → beim Start wird Recovery (Apply/Rollback) ausgeführt und Marker entfernt.
+12. **Alerts Node Down**: Node stoppen → `CRITICAL` Alert in Alerts-View + Badge im Dashboard.
+13. **Alerts Energy Low**: `energy_warn_pct`/`energy_crit_pct` temporär hochsetzen → WARN/CRITICAL erscheint.
+14. **Alerts Ack**: Alert auswählen → ACK/ACK ALL setzt `acknowledged`, Alert bleibt sichtbar.
 
 ## Rails/Tuning Guide (Kurz)
 - **RT Control Rails** werden zentral über `rails` in `master/config.lua` und `nodes/*/config.lua` gesteuert.
