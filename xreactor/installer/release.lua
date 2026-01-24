@@ -2,7 +2,7 @@ return {
   commit_sha = "main",
   hash_algo = "crc32",
   manifest_path = "xreactor/installer/manifest.lua",
-  installer_core_version = "1.3",
-  installer_core_hash = "13fe4366",
-  installer_core_size_bytes = 76823
+  installer_core_version = "1.4",
+  installer_core_hash = "ba402faf",
+  installer_core_size_bytes = 79846
 }

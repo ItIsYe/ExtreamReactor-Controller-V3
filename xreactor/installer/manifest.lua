@@ -3,10 +3,10 @@ return {
   manifest_version = 2,
   source_ref = "main",
   hash_algo = "crc32",
-  installer_min_version = "1.3",
+  installer_min_version = "1.4",
   installer_path = "xreactor/installer/installer_core.lua",
-  installer_hash = "13fe4366",
-  installer_size_bytes = 76823,
+  installer_hash = "ba402faf",
+  installer_size_bytes = 79846,
   files = {
     { path = "xreactor/core/bootstrap.lua", size_bytes = 9115, hash = "d1a38895" },
     { path = "xreactor/core/alerts.lua", size_bytes = 7862, hash = "e5bea6f2" },
@@ -66,8 +66,9 @@ return {
     { path = "xreactor/shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
     { path = "xreactor/shared/build_info.lua", size_bytes = 894, hash = "bbef6624" },
     { path = "xreactor/shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
-    { path = "xreactor/installer/installer.lua", size_bytes = 11419, hash = "9d23fe3c" },
-    { path = "xreactor/installer/installer_core.lua", size_bytes = 76823, hash = "13fe4366" },
-    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "2b0ed18c" }
+    { path = "installer.lua", size_bytes = 14886, hash = "199ebcfe" },
+    { path = "xreactor/installer/installer.lua", size_bytes = 14886, hash = "199ebcfe" },
+    { path = "xreactor/installer/installer_core.lua", size_bytes = 79846, hash = "ba402faf" },
+    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "4cb6c006" }
   }
 }

@@ -105,6 +105,8 @@ Wireless Modem (Control/Status)
 14. **Alerts Ack**: Alert auswählen → ACK/ACK ALL VISIBLE/ACTIVE setzt `acknowledged`, Alert bleibt sichtbar.
 15. **Alerts History**: Alerts-View → History-Tab, Severity-Filter prüfen.
 16. **Alerts Mute Persist**: Rule/Node muten → reboot → Mute bleibt aktiv.
+17. **Installer HTML Guard**: HTML-Response simulieren → Installer bricht mit „Downloaded HTML, expected Lua“ ab, ohne Dateien zu überschreiben.
+18. **Debug Logging Toggle**: `settings set xreactor.debug_logging true` → Installer/Node erzeugen Logdateien beim Start.
 
 ## Rails/Tuning Guide (Kurz)
 - **RT Control Rails** werden zentral über `rails` in `master/config.lua` und `nodes/*/config.lua` gesteuert.
@@ -159,12 +161,28 @@ Wireless Modem (Control/Status)
 **Erstinstallation / Vollinstallation**
 1. Installer herunterladen und ausführen:
    ```
+   wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main/installer.lua
+   ```
+   Alternativ (wenn der Bootstrapper schon lokal vorhanden ist):
+   ```
    lua /installer.lua
    ```
+   **Wichtig:** Nutze immer **RAW**-Links (`raw.githubusercontent.com`). GitHub-**Blob**-Links liefern HTML und sind nicht ausführbar.
    (Beide Einstiegspunkte sind Bootstrapper: `/installer.lua` und `/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
+
+**Warum HTML passiert (Fehler `/installer: unexpected symbol near '<'`)**
+- Wird statt einer RAW-Datei eine GitHub-**HTML**-Seite geladen (z. B. Blob-URL, 404, Rate-Limit, Cloudflare), landet HTML im `installer`/`installer_core`.
+- Lua versucht das HTML zu parsen → `unexpected symbol near '<'`.
+
+**Wie der Installer das verhindert**
+- **RAW-Only**: Downloader nutzt ausschließlich `raw.githubusercontent.com` (inkl. Mirror).
+- **Response-Validation**: Statuscode, HTML-Signaturen und Content-Length werden geprüft.
+- **Atomic Writes**: Downloads gehen zuerst in `.tmp`, erst nach Validierung wird ersetzt.
+- **Retry/Backoff + Jitter**: Mehrere Versuche mit Backoff, ohne bestehende Installation zu überschreiben.
+- **Debug-Log**: Aktivierbar via `settings set xreactor.debug_logging true` (Installer + Nodes loggen Start/Downloads in eigene Logdateien).
 
 **SAFE UPDATE (inkrementell, ohne Config-Reset)**
 - Installer erneut ausführen → Menü **SAFE UPDATE** wählen.
@@ -202,7 +220,7 @@ Wireless Modem (Control/Status)
 - Bootstrap-Log: `/xreactor_logs/installer_bootstrap.log` (mit Rotation `.1`).
 - Installer-Core-Log: `/xreactor_logs/installer.log` (mit Rotation `.1`).
 - Node-Logs: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
-- Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen.
+- Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen oder global via `settings set xreactor.debug_logging true`.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
 
 ## Konfiguration & Autodetection
