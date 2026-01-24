@@ -162,6 +162,7 @@ local devices = {
   last_command = nil,
   last_command_ts = nil
 }
+local master_alerts = {}
 local last_heartbeat = 0
 local master_seen = os.epoch("utc")
 local standby = false
@@ -322,6 +323,14 @@ local function format_age(ts, now)
   return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
 end
 
+local function render_alert_banner(target, model)
+  if model.local_alerts_critical and model.local_alerts_critical > 0 then
+    local w, _ = target.getSize()
+    local label = "CRIT " .. tostring(model.local_alerts_critical)
+    ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
+  end
+end
+
 local function render_monitor()
   if not devices.monitor then
     return
@@ -342,6 +351,10 @@ local function render_monitor()
   end
   local summary = payload.registry and payload.registry.summary or registry:get_summary()
   local now = os.epoch("utc")
+  local node_id = comms and comms.network and comms.network.id or config.node_id
+  local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
+  local local_alerts = alert_payload and alert_payload.top or {}
+  local local_critical = alert_payload and alert_payload.critical or 0
   local model = {
     payload = payload,
     status = payload.health and payload.health.status or "OK",
@@ -352,7 +365,10 @@ local function render_monitor()
     master_age = master_age,
     last_scan = format_age(devices.last_scan_ts, now),
     last_command = devices.last_command,
-    last_command_ts = devices.last_command_ts and format_age(devices.last_command_ts, now) or "n/a"
+    last_command_ts = devices.last_command_ts and format_age(devices.last_command_ts, now) or "n/a",
+    local_alerts = local_alerts,
+    local_alerts_critical = local_critical,
+    node_id = node_id
   }
   if not monitor_router then
     monitor_router = ui_router.new({
@@ -360,7 +376,8 @@ local function render_monitor()
         { name = "Overview", render = function(target)
           local w, h = target.getSize()
           ui.panel(target, 1, 1, w, h, "REPROC NODE", model.status)
-          ui.text(target, 2, 2, ("ID: %s"):format(comms and comms.network and comms.network.id or config.node_id), colors.get("text"), colors.get("background"))
+          render_alert_banner(target, model)
+          ui.text(target, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
           ui.badge(target, w - 6, 2, model.status, model.status)
           ui.text(target, 2, 4, ("Standby: %s"):format(standby and "yes" or "no"), colors.get("text"), colors.get("background"))
           ui.text(target, 2, 6, ("Master link: %s age:%s"):format(model.master_state, model.master_age), colors.get("text"), colors.get("background"))
@@ -368,6 +385,7 @@ local function render_monitor()
         { name = "Details", render = function(target)
           local w, h = target.getSize()
           ui.panel(target, 1, 1, w, h, "REPROC DETAILS", model.status)
+          render_alert_banner(target, model)
           local rows = {
             { text = ("Buffers: %d"):format(#(model.payload.buffers or {})) },
             { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
@@ -378,6 +396,7 @@ local function render_monitor()
         { name = "Diagnostics", render = function(target)
           local w, h = target.getSize()
           ui.panel(target, 1, 1, w, h, "REPROC DIAGNOSTICS", model.status)
+          render_alert_banner(target, model)
           local rows = {
             { text = ("Health: %s"):format(model.status), status = model.status },
             { text = ("Discovery: %s"):format(devices.discovery_failed and "FAILED" or "OK"), status = devices.discovery_failed and "WARNING" or "OK" },
@@ -395,6 +414,15 @@ local function render_monitor()
             ) },
             { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
           }
+          if model.local_alerts and #model.local_alerts > 0 then
+            table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
+            for _, alert in ipairs(model.local_alerts) do
+              local sev = alert.severity and alert.severity:sub(1, 1) or "?"
+              local title = alert.title or alert.message or alert.code or "alert"
+              local status = alert.severity == "CRITICAL" and "EMERGENCY" or alert.severity == "WARN" and "WARNING" or "OK"
+              table.insert(rows, { text = string.format("%s %s", sev, title), status = status })
+            end
+          end
           ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
         end }
       },
@@ -456,6 +484,9 @@ local function init()
       end
       if message.role == constants.roles.MASTER then
         master_seen = os.epoch("utc")
+        if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then
+          master_alerts = message.payload.alerts
+        end
       end
       if message.type == constants.message_types.HELLO then
         standby = false

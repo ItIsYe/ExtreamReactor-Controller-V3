@@ -59,21 +59,20 @@ end
 local function rule_state(self, key)
   local state = self.state[key]
   if not state then
-    state = { active = false, since = nil, clear_since = nil, last_emit = 0 }
+    state = { active = false, since = nil, clear_since = nil, last_emit = 0, last_active = false }
     self.state[key] = state
   end
   return state
 end
 
-local function should_raise(self, key, active, now, opts)
-  local state = rule_state(self, key)
-  local debounce_ms = (opts.debounce_s or 0) * 1000
-  local clear_ms = (opts.clear_s or 0) * 1000
+local function should_raise(state, active, now, opts)
+  local raise_ms = (opts.raise_after_s or 0) * 1000
+  local clear_ms = (opts.clear_after_s or 0) * 1000
   local cooldown_ms = (opts.cooldown_s or 0) * 1000
   if active then
     if not state.active then
       state.since = state.since or now
-      if now - state.since >= debounce_ms and now - (state.last_emit or 0) >= cooldown_ms then
+      if now - state.since >= raise_ms and now - (state.last_emit or 0) >= cooldown_ms then
         state.active = true
         state.clear_since = nil
         state.last_emit = now
@@ -116,15 +115,16 @@ function rules:evaluate(context)
   local clears = {}
 
   local base_opts = {
-    debounce_s = cfg.alert_debounce_s or 1,
-    clear_s = cfg.alert_clear_s or 2,
+    raise_after_s = cfg.alert_raise_after_s or cfg.alert_debounce_s or 1,
+    clear_after_s = cfg.alert_clear_after_s or cfg.alert_clear_s or 2,
     cooldown_s = cfg.alert_cooldown_s or 5
   }
 
   local function emit(key, active, opts, builder)
-    local action = should_raise(self, key, active, now, opts or base_opts)
+    local state = rule_state(self, key)
+    local action = should_raise(state, active, now, opts or base_opts)
     if action == "raise" then
-      local entry = builder()
+      local entry = builder(state)
       if entry then
         entry.key = key
         table.insert(alerts, entry)
@@ -140,20 +140,22 @@ function rules:evaluate(context)
     comms_down = comms_down or has_reason(reasons, health.reasons.COMMS_DOWN)
     local down_key = string.format("NODE_COMMS_DOWN|%s", tostring(node.id))
     emit(down_key, comms_down, {
-      debounce_s = cfg.comms_down_crit_secs or base_opts.debounce_s,
-      clear_s = cfg.alert_clear_s or base_opts.clear_s,
+      raise_after_s = cfg.comms_down_warn_secs or base_opts.raise_after_s,
+      clear_after_s = cfg.alert_clear_after_s or cfg.alert_clear_s or base_opts.clear_after_s,
       cooldown_s = base_opts.cooldown_s
-    }, function()
-      local down_for = node.down_since and math.floor((now - node.down_since) / 1000) or nil
+    }, function(state)
+      local down_for = state.since and math.floor((now - state.since) / 1000) or (node.down_since and math.floor((now - node.down_since) / 1000)) or nil
       local detail = down_for and ("down %ds"):format(down_for) or "down"
+      local crit_after = cfg.comms_down_crit_secs or 12
+      local severity = down_for and down_for >= crit_after and "CRITICAL" or "WARN"
       return {
         code = "NODE_COMMS_DOWN",
-        severity = "CRITICAL",
+        severity = severity,
         scope = "NODE",
         source = build_source(node),
         title = "Node comms down",
         message = string.format("%s (%s)", tostring(node.id or "NODE"), detail),
-        details = { down_for_s = down_for }
+        details = { down_for_s = down_for, warn_after_s = cfg.comms_down_warn_secs or base_opts.raise_after_s, crit_after_s = crit_after }
       }
     end)
 

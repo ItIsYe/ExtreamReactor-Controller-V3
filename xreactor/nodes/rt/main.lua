@@ -466,6 +466,7 @@ local devices = {
   binding_signature = nil,
   last_scan_ts = nil
 }
+local master_alerts = {}
 local peripherals = {}
 local targets = { power = 0, steam = 0, rpm = TARGET_RPM, enable_reactors = true, enable_turbines = true }
 local modules = {}
@@ -2216,6 +2217,14 @@ local function format_value(value)
   return tostring(value)
 end
 
+local function render_alert_banner(target, model)
+  if model.local_alerts_critical and model.local_alerts_critical > 0 then
+    local w, _ = target.getSize()
+    local label = "CRIT " .. tostring(model.local_alerts_critical)
+    ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
+  end
+end
+
 local function update_monitor()
   if not monitor then return end
   local now = os.epoch("utc")
@@ -2237,8 +2246,16 @@ local function update_monitor()
       break
     end
   end
-  local model = {
+  local node_id = snapshot and snapshot.node_id or config.node_id
+  local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
+  local local_alerts = alert_payload and alert_payload.top or {}
+  local local_critical = alert_payload and alert_payload.critical or 0
+  local snapshot_key = {
     snapshot = snapshot,
+    local_alerts = local_critical
+  }
+  local model = {
+    snapshot = snapshot_key,
     health = health_payload,
     summary = summary,
     comms = comms_diag,
@@ -2247,7 +2264,10 @@ local function update_monitor()
     master_age = master_age,
     last_scan = devices.last_scan_ts and (math.floor((now - devices.last_scan_ts) / 1000) .. "s") or "n/a",
     last_command = last_command,
-    last_command_ts = last_command_ts and (math.floor((now - last_command_ts) / 1000) .. "s") or "n/a"
+    last_command_ts = last_command_ts and (math.floor((now - last_command_ts) / 1000) .. "s") or "n/a",
+    local_alerts = local_alerts,
+    local_alerts_critical = local_critical,
+    node_id = node_id
   }
   if not monitor_router then
     monitor_router = ui_router.new({
@@ -2255,7 +2275,8 @@ local function update_monitor()
         { name = "Overview", render = function(target)
           local w, h = target.getSize()
           ui.panel(target, 1, 1, w, h, "RT NODE", model.health.status)
-          ui.text(target, 2, 2, ("ID: %s"):format(snapshot and snapshot.node_id or config.node_id), colors.get("text"), colors.get("background"))
+          render_alert_banner(target, model)
+          ui.text(target, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
           ui.badge(target, w - 6, 2, model.health.status, model.health.status)
           ui.text(target, 2, 4, ("State: %s"):format(current_state), colors.get("text"), colors.get("background"))
           ui.text(target, 2, 5, ("Reactors: %d"):format(model.summary.kinds.reactor and model.summary.kinds.reactor.bound or 0), colors.get("text"), colors.get("background"))
@@ -2266,6 +2287,7 @@ local function update_monitor()
         { name = "Details", render = function(target)
           local w, h = target.getSize()
           ui.panel(target, 1, 1, w, h, "RT DETAILS", model.health.status)
+          render_alert_banner(target, model)
           local rows = {}
           for name, info in pairs(snapshot and snapshot.turbines or {}) do
             table.insert(rows, { text = ("T %s rpm:%s flow:%s"):format(name, format_value(info.rpm), format_value(info.flow)) })
@@ -2281,6 +2303,7 @@ local function update_monitor()
         { name = "Diagnostics", render = function(target)
           local w, h = target.getSize()
           ui.panel(target, 1, 1, w, h, "RT DIAGNOSTICS", model.health.status)
+          render_alert_banner(target, model)
           local reasons = table.concat(model.health.reasons or {}, ",")
           local rows = {
             { text = ("Health: %s"):format(model.health.status), status = model.health.status },
@@ -2300,6 +2323,15 @@ local function update_monitor()
             ) },
             { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
           }
+          if model.local_alerts and #model.local_alerts > 0 then
+            table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
+            for _, alert in ipairs(model.local_alerts) do
+              local sev = alert.severity and alert.severity:sub(1, 1) or "?"
+              local title = alert.title or alert.message or alert.code or "alert"
+              local status = alert.severity == "CRITICAL" and "EMERGENCY" or alert.severity == "WARN" and "WARNING" or "OK"
+              table.insert(rows, { text = string.format("%s %s", sev, title), status = status })
+            end
+          end
           ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
         end }
       },
@@ -2514,6 +2546,9 @@ local function init()
       end
       if message.role == constants.roles.MASTER then
         note_master_seen()
+        if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then
+          master_alerts = message.payload.alerts
+        end
       end
     end
   })
