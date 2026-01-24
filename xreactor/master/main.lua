@@ -52,12 +52,14 @@ local constants = require("shared.constants")
 local colors = require("shared.colors")
 local utils = require("core.utils")
 local health = require("core.health")
+local monitor_manager = require("core.monitor_manager")
 local sequencer_lib = require("master.startup_sequencer")
 local overview_ui = require("master.ui.overview")
 local rt_ui = require("master.ui.rt_dashboard")
 local energy_ui = require("master.ui.energy")
 local resources_ui = require("master.ui.resources")
 local alarms_ui = require("master.ui.alarms")
+local multiview_ui = require("master.ui.multiview")
 local profiles = require("master.profiles")
 local trends_lib = require("core.trends")
 local ui = require("core.ui")
@@ -102,14 +104,10 @@ if config.rt_setpoints.enable_turbines == nil then
   config.rt_setpoints.enable_turbines = true
 end
 
-local monitor_roles = {
-  OVERVIEW = {},
-  RT = {},
-  ENERGY = {},
-  RESOURCES = {},
-  ALARMS = {}
-}
 local monitor_cache = {}
+local monitor_mgr = nil
+local view_manager = nil
+local layout_config_path = "/xreactor/config/master_ui_layout.json"
 local nodes = {}
 local alarms = {}
 local power_target = 0
@@ -174,65 +172,25 @@ local function send_rt_setpoints(node, setpoints)
   node.last_setpoints_ts = os.epoch("utc")
 end
 
-local function discover_monitors()
-  local names = {}
-  for _, name in ipairs(peripheral.getNames()) do
-    if peripheral.getType(name) == "monitor" then
-      table.insert(names, name)
-    end
-  end
-  table.sort(names)
-  local monitors = {}
-  for _, name in ipairs(names) do
-    local mon, err = utils.safe_wrap(name)
-    if mon then
-      ui.setScale(mon, config.ui_scale_default or 0.5)
-      table.insert(monitors, { name = name, mon = mon })
-    elseif err then
-      utils.log("MASTER", "WARN: monitor wrap failed for " .. tostring(name) .. ": " .. tostring(err))
-    end
-  end
-  return monitors
-end
-
-local function assign_roles(monitors)
-  for k in pairs(monitor_roles) do monitor_roles[k] = {} end
-  if #monitors == 0 then return end
-  local map = {
-    "OVERVIEW",
-    "RT",
-    "ENERGY",
-    "RESOURCES",
-    "ALARMS"
-  }
-  for idx, entry in ipairs(monitors) do
-    local role = map[math.min(idx, #map)] or "OVERVIEW"
-    if idx > #map and #monitors >= 5 then role = "OVERVIEW" end
-    monitor_roles[role] = monitor_roles[role] or {}
-    table.insert(monitor_roles[role], entry)
-  end
-end
-
 local function refresh_monitors(force)
   local now = os.epoch("utc")
-  if not force and now - monitor_scan_last < 5000 then return end
-  monitor_scan_last = now
-  local monitors = discover_monitors()
-  if #monitors == 0 then
-    monitors = { { name = "term", mon = term } }
+  if not monitor_mgr then
+    return
   end
+  if not force and now - monitor_scan_last < 5000 then
+    return
+  end
+  monitor_scan_last = now
+  local monitors = monitor_mgr:scan()
   local signature_parts = {}
   for _, entry in ipairs(monitors) do
-    table.insert(signature_parts, entry.name)
+    table.insert(signature_parts, entry.id or entry.name)
   end
   local signature = table.concat(signature_parts, "|")
   if monitor_cache.signature ~= signature or force then
     monitor_cache = { list = monitors, signature = signature }
-    assign_roles(monitors)
-    for _, roleList in pairs(monitor_roles) do
-      for _, entry in ipairs(roleList) do
-        ui.clear(entry.mon)
-      end
+    for _, entry in ipairs(monitors) do
+      ui.clear(entry.mon)
     end
   end
 end
@@ -564,8 +522,30 @@ local function draw()
     active_profile = active_profile,
     auto_profile = auto_profile
   }
-  local rt_data = { rt_nodes = {}, ramp_profile = sequencer.ramp_profile, sequence_state = sequencer.state, queue = sequencer.queue, active_step = sequencer.active }
-  local energy_data = { stored = 0, capacity = 0, input = 0, output = 0, stores = {}, nodes = {}, trend_values = trend_cache.energy, trend_arrow = trend_cache.energy_arrow, trend_dirty = trends:is_dirty("energy"), now_ms = os.epoch("utc") }
+  local rt_data = {
+    rt_nodes = {},
+    ramp_profile = sequencer.ramp_profile,
+    sequence_state = sequencer.state,
+    queue = sequencer.queue,
+    active_step = sequencer.active,
+    alerts = {},
+    control_mode = nil
+  }
+  local energy_data = {
+    stored = 0,
+    capacity = 0,
+    input = 0,
+    output = 0,
+    stores = {},
+    nodes = {},
+    matrices = {},
+    top_matrices = {},
+    alerts = {},
+    trend_values = trend_cache.energy,
+    trend_arrow = trend_cache.energy_arrow,
+    trend_dirty = trends:is_dirty("energy"),
+    now_ms = os.epoch("utc")
+  }
   local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {}, node_details = {}, comms = comms:get_diagnostics() or {} }
 
   for _, node in pairs(nodes) do
@@ -602,7 +582,12 @@ local function draw()
       last_command_error = node.last_command_error
     })
     if node.role == constants.roles.RT_NODE then
-      table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status })
+      table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status, mode = node.mode })
+      if node.status == health.status.DOWN then
+        table.insert(rt_data.alerts, ("RT %s COMMS_DOWN"):format(node.id or "NODE"))
+      elseif node.health and node.health.status == health.status.DEGRADED then
+        table.insert(rt_data.alerts, ("RT %s DEGRADED"):format(node.id or "NODE"))
+      end
     elseif node.role == constants.roles.ENERGY_NODE then
       energy_data.stored = energy_data.stored + (node.stored or 0)
       energy_data.capacity = energy_data.capacity + (node.capacity or 0)
@@ -621,6 +606,27 @@ local function draw()
         bindings_summary = node.bindings_summary,
         registry = node.registry
       })
+      if node.matrices then
+        for _, matrix in ipairs(node.matrices) do
+          local percent = matrix.capacity and matrix.capacity > 0 and (matrix.stored or 0) / matrix.capacity or (matrix.percent or 0)
+          table.insert(energy_data.matrices, {
+            id = matrix.id or matrix.name or (node.id .. ":matrix"),
+            label = matrix.label or matrix.name or matrix.alias,
+            stored = matrix.stored,
+            capacity = matrix.capacity,
+            percent = percent,
+            input = matrix.input,
+            output = matrix.output,
+            status = matrix.status or node.status,
+            node_id = node.id
+          })
+        end
+      end
+      if node.status == health.status.DOWN then
+        table.insert(energy_data.alerts, ("ENERGY %s COMMS_DOWN"):format(node.id or "NODE"))
+      elseif node.health and node.health.status == health.status.DEGRADED then
+        table.insert(energy_data.alerts, ("ENERGY %s DEGRADED"):format(node.id or "NODE"))
+      end
     elseif node.role == constants.roles.FUEL_NODE then
       resource_data.fuel.reserve = node.reserve or resource_data.fuel.reserve
       resource_data.fuel.minimum = node.minimum_reserve or resource_data.fuel.minimum
@@ -637,6 +643,7 @@ local function draw()
   table.sort(rt_data.rt_nodes, function(a, b) return (a.id or "") < (b.id or "") end)
   table.sort(energy_data.stores, function(a, b) return (a.id or "") < (b.id or "") end)
   table.sort(energy_data.nodes, function(a, b) return (a.id or "") < (b.id or "") end)
+  table.sort(energy_data.matrices, function(a, b) return (a.percent or 0) > (b.percent or 0) end)
   table.sort(resource_data.fuel.sources, function(a, b) return (a.id or "") < (b.id or "") end)
 
   local fuel_total = 0
@@ -646,6 +653,31 @@ local function draw()
   resource_data.fuel.total = fuel_total
   resource_data.fuel.mix_status = (#(resource_data.fuel.sources or {}) > 1) and "MIXED" or "SINGLE"
   energy_data.status = energy_data.capacity > 0 and (energy_data.stored / energy_data.capacity < 0.2 and "WARNING" or "OK") or "OFFLINE"
+  if energy_data.capacity > 0 then
+    local pct = energy_data.stored / energy_data.capacity
+    if pct < 0.2 then
+      table.insert(energy_data.alerts, ("LOW ENERGY %.0f%%"):format(pct * 100))
+    end
+  end
+  for i = 1, math.min(3, #energy_data.matrices) do
+    table.insert(energy_data.top_matrices, energy_data.matrices[i])
+  end
+  local modes = {}
+  for _, rt in ipairs(rt_data.rt_nodes) do
+    if rt.mode then
+      modes[rt.mode] = true
+    end
+  end
+  local mode_list = {}
+  for mode in pairs(modes) do
+    table.insert(mode_list, mode)
+  end
+  table.sort(mode_list)
+  if #mode_list == 1 then
+    rt_data.control_mode = mode_list[1]
+  elseif #mode_list > 1 then
+    rt_data.control_mode = "MIXED"
+  end
   local tile_map = {
     { label = "RT", role = constants.roles.RT_NODE },
     { label = "ENERGY", role = constants.roles.ENERGY_NODE },
@@ -674,26 +706,48 @@ local function draw()
     table.insert(overview_data.tiles, { label = entry.label, status = tile_status, detail = entry.role })
   end
 
-  local function render(role, drawer, model)
-    local rendered = false
-    for _, entry in ipairs(monitor_roles[role] or {}) do
-      drawer.render(entry.mon, model)
-      rendered = true
-    end
-    return rendered
+  local rendered_views = {}
+  if view_manager then
+    local data_map = {
+      overview = overview_data,
+      rt = rt_data,
+      energy = energy_data,
+      resources = resource_data,
+      alarms = { alarms = alarms, header_blink = os.epoch("utc") < critical_blink_until and math.floor(os.epoch("utc") / 400) % 2 == 0 }
+    }
+    rendered_views = view_manager:render(monitor_cache.list or {}, data_map) or {}
   end
-
-  render("OVERVIEW", overview_ui, overview_data)
-  render("RT", rt_ui, rt_data)
-  local energy_rendered = render("ENERGY", energy_ui, energy_data)
-  render("RESOURCES", resources_ui, resource_data)
-  render("ALARMS", alarms_ui, { alarms = alarms, header_blink = os.epoch("utc") < critical_blink_until and math.floor(os.epoch("utc") / 400) % 2 == 0 })
-  if energy_rendered and trends:is_dirty("energy") then
+  if rendered_views.energy and trends:is_dirty("energy") then
     trends:clear_dirty("energy")
   end
 end
 
 local function init()
+  monitor_mgr = monitor_manager.new({
+    log_prefix = "MASTER",
+    node_id = node_id,
+    scale = config.ui_scale_default or 0.5,
+    path = "/xreactor/config/registry_master_monitors.json"
+  })
+  view_manager = multiview_ui.new({
+    layout_path = layout_config_path,
+    views = {
+      overview = { label = "Overview", render = overview_ui.render, hit_test = overview_ui.hit_test, interval = 0.5 },
+      energy = { label = "Energy", render = energy_ui.render, interval = 1.0 },
+      rt = { label = "RT", render = rt_ui.render, interval = 1.0 },
+      resources = { label = "Resources", render = resources_ui.render, interval = 2.0 },
+      alarms = { label = "Logs", render = alarms_ui.render, interval = 1.0 }
+    },
+    view_order = { "overview", "energy", "rt", "resources", "alarms" },
+    on_action = function(action)
+      if not action then return end
+      if action.type == "profile" then
+        apply_profile(action.name)
+      elseif action.type == "auto" then
+        auto_profile = not auto_profile
+      end
+    end
+  })
   refresh_monitors(true)
   comms = comms_service.new({
     config = config,
@@ -725,18 +779,8 @@ local function init()
 end
 
 local function handle_monitor_touch(name, x, y)
-  for _, entry in ipairs(monitor_roles.OVERVIEW or {}) do
-    if entry.name == name then
-      local hit = overview_ui.hit_test(entry.mon, x, y)
-      if hit then
-        if hit.type == "profile" then
-          apply_profile(hit.name)
-        elseif hit.type == "auto" then
-          auto_profile = not auto_profile
-        end
-      end
-      return
-    end
+  if view_manager then
+    view_manager:handle_input(name, x, y)
   end
 end
 

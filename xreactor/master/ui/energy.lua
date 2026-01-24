@@ -1,5 +1,6 @@
 local ui = require("core.ui")
 local colorset = require("shared.colors")
+local widgets = require("master.ui.widgets")
 local cache = {}
 
 local function join_names(names, max_len)
@@ -18,18 +19,40 @@ local function render(mon, model)
   if cache[mon] == key then return end
   cache[mon] = key
   local w, h = mon.getSize()
-  ui.panel(mon, 1, 1, w, h, "ENERGY", "OK")
+  widgets.card(mon, 1, 1, w, h, "ENERGY", "OK")
   local percent = model.capacity and model.capacity > 0 and (model.stored or 0) / model.capacity or 0
   ui.bigNumber(mon, 2, 2, "Stored", string.format("%.0f%%", percent * 100), "", model.status)
-  ui.progress(mon, 2, 4, w - 4, percent, model.status or "OK")
-  ui.text(mon, 2, 6, "Trend", colorset.get("text"), colorset.get("background"))
+  widgets.progress_bar(mon, 2, 4, w - 4, percent, model.status or "OK")
+  local line = 6
+  ui.text(mon, 2, line, "Trend", colorset.get("text"), colorset.get("background"))
   if model.trend_dirty then
-    local trend = ui.sparkline(model.trend_values or {}, w - 8)
+    local trend = widgets.sparkline(model.trend_values or {}, w - 8)
     ui.text(mon, 8, 6, trend, colorset.get(model.status or "OK"), colorset.get("background"))
   end
-  ui.text(mon, 2, 7, "Flow", colorset.get("text"), colorset.get("background"))
-  ui.text(mon, 8, 7, string.format("In %.0f  Out %.0f  %s", model.input or 0, model.output or 0, model.trend_arrow or "→"), colorset.get("text"), colorset.get("background"))
+  line = line + 1
+  ui.text(mon, 2, line, "Flow", colorset.get("text"), colorset.get("background"))
+  ui.text(mon, 8, line, string.format("In %.0f  Out %.0f  %s", model.input or 0, model.output or 0, model.trend_arrow or "→"), colorset.get("text"), colorset.get("background"))
+  line = line + 1
+  if model.alerts and #model.alerts > 0 then
+    ui.text(mon, 2, line, "Alerts", colorset.get("WARNING"), colorset.get("background"))
+    line = line + 1
+    for i = 1, math.min(2, #model.alerts) do
+      ui.text(mon, 4, line, model.alerts[i], colorset.get("WARNING"), colorset.get("background"))
+      line = line + 1
+    end
+  end
+  if model.top_matrices and #model.top_matrices > 0 then
+    ui.text(mon, 2, line, "Top Matrices", colorset.get("text"), colorset.get("background"))
+    line = line + 1
+    for i = 1, math.min(3, #model.top_matrices) do
+      local m = model.top_matrices[i]
+      local label = string.format("%s %.0f%%", m.label or m.id or "matrix", (m.percent or 0) * 100)
+      ui.text(mon, 4, line, label, colorset.get(m.status or "OK"), colorset.get("background"))
+      line = line + 1
+    end
+  end
   local rows = {}
+  line = math.max(line + 1, 9)
   table.insert(rows, { text = "Nodes", status = "OK" })
   for _, node in ipairs(model.nodes or {}) do
     local monitor_flag = node.monitor_bound and "M:Y" or "M:N"
@@ -53,7 +76,7 @@ local function render(mon, model)
   for _, s in ipairs(model.stores or {}) do
     table.insert(rows, { text = string.format("%s %.0f/%.0f", s.id, s.stored or 0, s.capacity or 0), status = model.status })
   end
-  ui.list(mon, 2, 9, w - 2, rows, { max_rows = h - 10 })
+  ui.list(mon, 2, line, w - 2, rows, { max_rows = h - line - 1 })
 end
 
 return { render = render }
