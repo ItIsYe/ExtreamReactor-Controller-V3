@@ -22,6 +22,7 @@ local protocol = require("core.protocol")
 local utils = require("core.utils")
 local health = require("core.health")
 local ui = require("core.ui")
+local ui_router = require("core.ui_router")
 local colors = require("shared.colors")
 local registry_lib = require("core.registry")
 local monitor_adapter = require("adapters.monitor")
@@ -173,11 +174,14 @@ local devices = {
   registry_summary = nil,
   registry_load_error = nil,
   proto_mismatch = false,
-  last_scan_ts = nil
+  last_scan_ts = nil,
+  last_command = nil,
+  last_command_ts = nil
 }
 local last_heartbeat = 0
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
+local monitor_router = nil
 
 local function cache()
   storage = nil
@@ -319,39 +323,75 @@ local function render_monitor()
     return
   end
   local mon = devices.monitor
-  local w, h = mon.getSize()
   local payload = build_status_payload()
-  local status = payload.health and payload.health.status or "OK"
-  ui.panel(mon, 1, 1, w, h, "FUEL NODE", status)
-  ui.text(mon, 2, 2, ("ID: %s"):format(comms and comms.network and comms.network.id or config.node_id), colors.get("text"), colors.get("background"))
-  ui.badge(mon, w - 6, 2, status, status)
-  ui.text(mon, 2, 4, ("Reserve: %.0f"):format(payload.reserve or 0), colors.get("text"), colors.get("background"))
-  ui.text(mon, 2, 5, ("Minimum: %.0f"):format(payload.minimum_reserve or 0), colors.get("text"), colors.get("background"))
-  ui.text(mon, 2, 6, ("Storage: %s"):format(devices.storage_name or "none"), colors.get("text"), colors.get("background"))
-
   local comms_diag = comms and comms:get_diagnostics() or {}
   local metrics = comms_diag.metrics or {}
   local peer = master_peer_state()
-  local master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN"
-  local master_age = peer and peer.age and string.format("%ds", math.floor(peer.age)) or "n/a"
   local summary = payload.registry and payload.registry.summary or registry:get_summary()
-  local rows = {
-    { text = ("Discovery: %s"):format(devices.discovery_failed and "FAILED" or "OK"), status = devices.discovery_failed and "WARNING" or "OK" },
-    { text = ("Last scan: %s"):format(format_age(devices.last_scan_ts, os.epoch("utc"))) },
-    { text = ("Registry total:%d bound:%d missing:%d"):format(summary.total or 0, summary.bound or 0, summary.missing or 0) },
-    { text = ("Master link: %s age:%s"):format(master_state, master_age) },
-    { text = ("Comms q:%d inflight:%d retries:%d"):format(
-      comms_diag.queue_depth or 0,
-      comms_diag.inflight_count or 0,
-      metrics.retries or 0
-    ) },
-    { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(
-      metrics.dropped or 0,
-      metrics.dedupe_hits or 0,
-      metrics.timeouts or 0
-    ) }
+  local now = os.epoch("utc")
+  local model = {
+    payload = payload,
+    status = payload.health and payload.health.status or "OK",
+    summary = summary,
+    comms = comms_diag,
+    metrics = metrics,
+    master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN",
+    master_age = peer and peer.age and string.format("%ds", math.floor(peer.age)) or "n/a",
+    last_scan = format_age(devices.last_scan_ts, now),
+    last_command = devices.last_command,
+    last_command_ts = devices.last_command_ts and format_age(devices.last_command_ts, now) or "n/a"
   }
-  ui.list(mon, 2, 8, w - 2, rows, { max_rows = h - 9 })
+  if not monitor_router then
+    monitor_router = ui_router.new({
+      pages = {
+        { name = "Overview", render = function(target)
+          local w, h = target.getSize()
+          ui.panel(target, 1, 1, w, h, "FUEL NODE", model.status)
+          ui.text(target, 2, 2, ("ID: %s"):format(comms and comms.network and comms.network.id or config.node_id), colors.get("text"), colors.get("background"))
+          ui.badge(target, w - 6, 2, model.status, model.status)
+          ui.text(target, 2, 4, ("Reserve: %.0f"):format(model.payload.reserve or 0), colors.get("text"), colors.get("background"))
+          ui.text(target, 2, 5, ("Minimum: %.0f"):format(model.payload.minimum_reserve or 0), colors.get("text"), colors.get("background"))
+          ui.text(target, 2, 6, ("Storage: %s"):format(devices.storage_name or "none"), colors.get("text"), colors.get("background"))
+          ui.text(target, 2, 8, ("Master link: %s age:%s"):format(model.master_state, model.master_age), colors.get("text"), colors.get("background"))
+        end },
+        { name = "Details", render = function(target)
+          local w, h = target.getSize()
+          ui.panel(target, 1, 1, w, h, "FUEL DETAILS", model.status)
+          local rows = {
+            { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
+            { text = ("Last scan: %s"):format(model.last_scan) },
+            { text = ("Storage: %s"):format(devices.storage_name or "none") }
+          }
+          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+        end },
+        { name = "Diagnostics", render = function(target)
+          local w, h = target.getSize()
+          ui.panel(target, 1, 1, w, h, "FUEL DIAGNOSTICS", model.status)
+          local rows = {
+            { text = ("Health: %s"):format(model.status), status = model.status },
+            { text = ("Discovery: %s"):format(devices.discovery_failed and "FAILED" or "OK"), status = devices.discovery_failed and "WARNING" or "OK" },
+            { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
+            { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
+            { text = ("Comms q:%d inflight:%d retries:%d"):format(
+              model.comms.queue_depth or 0,
+              model.comms.inflight_count or 0,
+              model.metrics.retries or 0
+            ) },
+            { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(
+              model.metrics.dropped or 0,
+              model.metrics.dedupe_hits or 0,
+              model.metrics.timeouts or 0
+            ) },
+            { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
+          }
+          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+        end }
+      },
+      key_prev = { [keys.left] = true, [keys.pageUp] = true },
+      key_next = { [keys.right] = true, [keys.pageDown] = true }
+    })
+  end
+  monitor_router:render(mon, model)
 end
 
 local function handle_command(message)
@@ -363,16 +403,25 @@ local function handle_command(message)
   local payload = type(message.payload) == "table" and message.payload or nil
   local command = payload and payload.command
   if type(command) ~= "table" then
-    return { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
+    local result = { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
+    devices.last_command = result.error
+    devices.last_command_ts = os.epoch("utc")
+    return result
   end
   if command.target == constants.command_targets.SET_RESERVE then
     reserve = command.value
   elseif command.target == constants.command_targets.MODE and command.value == constants.node_states.MANUAL then
     -- manual mode acknowledged but not changing behavior
   else
-    return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
+    local result = { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
+    devices.last_command = result.error
+    devices.last_command_ts = os.epoch("utc")
+    return result
   end
-  return { ok = true }
+  local result = { ok = true }
+  devices.last_command = "ok"
+  devices.last_command_ts = os.epoch("utc")
+  return result
 end
 
 local function master_peer_state()
@@ -434,7 +483,11 @@ local function init()
   services:add(ui_service.new({
     interval = 1,
     render = render_monitor,
-    handle_input = function() end
+    handle_input = function(event)
+      if monitor_router then
+        monitor_router:handle_input(event)
+      end
+    end
   }))
   services:init()
   hello()
@@ -448,8 +501,11 @@ while true do
     local event = { os.pullEvent() }
     if event[1] == "modem_message" then
       comms:handle_event(event)
+      services:tick(nil, event)
     elseif event[1] == "timer" and event[2] == timer then
       break
+    elseif event[1] == "monitor_touch" or event[1] == "key" then
+      services:tick(nil, event)
     end
   end
   services:tick()
