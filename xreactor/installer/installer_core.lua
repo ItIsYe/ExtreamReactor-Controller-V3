@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "1.3"
+local INSTALLER_CORE_VERSION = "1.4"
 
 -- CONFIG
 local CONFIG = {
@@ -14,7 +14,7 @@ local CONFIG = {
   BACKUP_BASE = "/xreactor_backup", -- Backup base directory.
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
   UPDATE_STAGING_BASE = "/xreactor_stage", -- Base staging folder for updates.
-  INSTALLER_VERSION = "1.3", -- Installer version for min-version checks.
+  INSTALLER_VERSION = "1.4", -- Installer version for min-version checks.
   INSTALLER_MIN_BYTES = 200, -- Min bytes to accept installer download.
   INSTALLER_SANITY_MARKER = "local function main", -- Installer sanity marker.
   MANIFEST_MIN_BYTES = 50, -- Min bytes to accept manifest download.
@@ -23,6 +23,7 @@ local CONFIG = {
   RELEASE_SANITY_MARKER = "commit_sha", -- Release sanity marker.
   DOWNLOAD_ATTEMPTS = 4, -- Download retry attempts (per URL).
   DOWNLOAD_BACKOFF = 1, -- Backoff base (seconds) between retries.
+  DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to download backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (used when http.request is available).
   DOWNLOAD_MIRRORS = { -- Download mirrors (raw content only).
     "https://raw.githubusercontent.com",
@@ -40,11 +41,14 @@ local CONFIG = {
   PROTOCOL_ABORT_ON_MAJOR_CHANGE = true, -- Abort SAFE UPDATE if protocol major version changes.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = false, -- Enables installer file logging to /xreactor_logs/installer.log.
-  LOG_PATH = "/xreactor_logs/installer.log", -- Installer log file path.
+  LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path.
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER", -- Installer log prefix.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- settings key for debug logs.
+  LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
+  LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
+  LOG_SAMPLE_BYTES = 96, -- Bytes to capture as response signature.
   REQUIRED_CORE_FILES = { -- Core files that must exist in the manifest.
     "xreactor/core/bootstrap.lua",
     "xreactor/core/logger.lua",
@@ -150,6 +154,8 @@ end
 -- Internal standalone logger for the installer (no project dependencies).
 local active_logger = {}
 local internal_log_enabled = false
+local log_buffer = {}
+local log_last_flush = 0
 
 local function resolve_log_enabled()
   if CONFIG.DEBUG_LOG_ENABLED ~= nil then
@@ -185,8 +191,25 @@ local function rotate_log_if_needed()
   fs.move(CONFIG.LOG_PATH, backup)
 end
 
-local function internal_log(level, message)
+local function internal_log(prefix, message, level)
   if not internal_log_enabled then
+    return
+  end
+  local resolved_prefix = CONFIG.LOG_PREFIX
+  local resolved_message = ""
+  local resolved_level = "INFO"
+  if level ~= nil then
+    resolved_prefix = prefix or CONFIG.LOG_PREFIX
+    resolved_message = message
+    resolved_level = level or "INFO"
+  else
+    resolved_message = message
+    resolved_level = prefix or "INFO"
+  end
+  local line = string.format("[%s] %s | %s | %s", log_stamp(), tostring(resolved_prefix), tostring(resolved_level), tostring(resolved_message))
+  table.insert(log_buffer, line)
+  local elapsed = os.clock() - (log_last_flush or 0)
+  if #log_buffer < CONFIG.LOG_FLUSH_LINES and elapsed < CONFIG.LOG_FLUSH_INTERVAL then
     return
   end
   local ok = pcall(function()
@@ -196,10 +219,13 @@ local function internal_log(level, message)
     if not file then
       return
     end
-    local line = string.format("[%s] %s | %s | %s", log_stamp(), CONFIG.LOG_PREFIX, tostring(level), tostring(message))
-    file.write(line .. "\n")
+    for _, entry in ipairs(log_buffer) do
+      file.write(entry .. "\n")
+    end
     file.close()
   end)
+  log_buffer = {}
+  log_last_flush = os.clock()
   if not ok then
     internal_log_enabled = false
   end
@@ -207,6 +233,7 @@ end
 
 local function init_internal_logger()
   internal_log_enabled = resolve_log_enabled()
+  log_last_flush = os.clock()
   active_logger.log = internal_log
   active_logger.set_enabled = function(enabled)
     if enabled == true then
@@ -650,13 +677,41 @@ local function merge_defaults(target, defaults)
   return changed
 end
 
+local function sanitize_signature(prefix)
+  if not prefix or prefix == "" then
+    return ""
+  end
+  local sample = prefix:gsub("[%c]", ".")
+  return sample:sub(1, CONFIG.LOG_SAMPLE_BYTES or 96)
+end
+
+local function detect_html(body_prefix)
+  if not body_prefix or body_prefix == "" then
+    return false
+  end
+  local head = body_prefix:sub(1, 512)
+  local lower = head:lower()
+  if lower:find("<!doctype", 1, true) or lower:find("<html", 1, true) then
+    return true
+  end
+  if lower:find("<body", 1, true) or lower:find("<head", 1, true) or lower:find("<title", 1, true) then
+    return true
+  end
+  if lower:find("rate limit", 1, true) or lower:find("not found", 1, true) then
+    return true
+  end
+  if lower:find("cloudflare", 1, true) then
+    return true
+  end
+  if head:match("^%s*<") then
+    return true
+  end
+  return false
+end
+
 local function is_html_payload(content)
   if not content then return false end
-  local head = content:sub(1, 200)
-  if head:match("^%s*<!DOCTYPE") then return true end
-  if head:match("^%s*<html") then return true end
-  if head:find("<body") then return true end
-  return false
+  return detect_html(content:sub(1, 200))
 end
 
 local function sanity_check(content, min_bytes, marker)
@@ -679,21 +734,7 @@ local function is_html_response(body)
   if not body or body == "" then
     return false
   end
-  local head = body:sub(1, 512)
-  local lower = head:lower()
-  if lower:find("<!doctype", 1, true) or lower:find("<html", 1, true) then
-    return true
-  end
-  if lower:find("<body", 1, true) or lower:find("<head", 1, true) or lower:find("<title", 1, true) then
-    return true
-  end
-  if lower:find("rate limit", 1, true) or lower:find("not found", 1, true) then
-    return true
-  end
-  if head:match("^%s*<") then
-    return true
-  end
-  return false
+  return detect_html(body:sub(1, 512))
 end
 
 local function is_suspect_html(body)
@@ -704,6 +745,23 @@ local function is_suspect_html(body)
     return true
   end
   return false
+end
+
+local function validate_response(status_code, headers, body_prefix, body_len)
+  if status_code and status_code ~= 200 then
+    return false, "http " .. tostring(status_code)
+  end
+  if detect_html(body_prefix) then
+    return false, "html response"
+  end
+  local content_length = headers and (headers["Content-Length"] or headers["content-length"])
+  if content_length then
+    local expected = tonumber(content_length)
+    if expected and body_len and expected ~= body_len then
+      return true, "size mismatch", true
+    end
+  end
+  return true
 end
 
 local function join_url(base, path)
@@ -754,6 +812,23 @@ local function build_mirror_urls(base_url, path)
   return urls
 end
 
+local function log_download_entry(entry, label)
+  local name = label or "download"
+  local level = entry.ok and "INFO" or "WARN"
+  local msg = string.format(
+    "%s attempt=%d url=%s ok=%s err=%s code=%s bytes=%s sig=%s",
+    name,
+    tonumber(entry.attempt) or 0,
+    tostring(entry.url or "unknown"),
+    tostring(entry.ok),
+    tostring(entry.err or ""),
+    tostring(entry.code or "n/a"),
+    tostring(entry.bytes or 0),
+    tostring(entry.signature or "")
+  )
+  log(level, msg)
+end
+
 -- Single download function used by all network requests.
 local function fetch_url(url, opts)
   if not http or not http.get then
@@ -801,29 +876,31 @@ local function fetch_url(url, opts)
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
   local body = response.readAll()
   response.close()
-  local meta = { url = url, code = code, status = code, headers = headers, bytes = body and #body or 0 }
+  local prefix = body and body:sub(1, 1024) or ""
+  local meta = {
+    url = url,
+    code = code,
+    status = code,
+    headers = headers,
+    bytes = body and #body or 0,
+    signature = sanitize_signature(prefix)
+  }
   if not body or body == "" then
     meta.reason = "empty body"
     return false, nil, "empty body", meta
   end
-  if is_html_response(body) or is_suspect_html(body) then
+  if is_suspect_html(body) then
     meta.reason = "html response"
-    return false, nil, "html response", meta
-  end
-  if code and code ~= 200 then
-    meta.reason = "http " .. tostring(code)
     return false, nil, meta.reason, meta
   end
-  local content_length
-  if headers then
-    content_length = headers["Content-Length"] or headers["content-length"]
+  local ok, reason, size_mismatch = validate_response(code, headers, prefix, body and #body or 0)
+  if not ok then
+    meta.reason = reason
+    return false, nil, reason, meta
   end
-  if content_length then
-    local expected = tonumber(content_length)
-    if expected and expected >= 0 and expected ~= #body then
-      meta.size_mismatch = true
-      meta.reason = "size mismatch"
-    end
+  if size_mismatch then
+    meta.size_mismatch = true
+    meta.reason = reason
   end
   return true, body, nil, meta
 end
@@ -858,6 +935,7 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
         headers = meta and meta.headers or nil,
         reason = meta and meta.reason or nil,
         size_mismatch = meta and meta.size_mismatch or nil,
+        signature = meta and meta.signature or nil,
         attempt = attempt
       }
       if not entry.ok then
@@ -868,11 +946,13 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
         entry.err = "size mismatch"
       end
       table.insert(tried, entry)
+      log_download_entry(entry, "fetch")
       if ok then
         return true, body, { tried = tried, last = entry }
       end
       if attempt < attempts then
-        os.sleep(backoff * attempt)
+        local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
+        os.sleep((backoff * attempt) + jitter)
       end
     end
   end
@@ -905,6 +985,7 @@ local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
         headers = meta and meta.headers or nil,
         reason = meta and meta.reason or nil,
         size_mismatch = meta and meta.size_mismatch or nil,
+        signature = meta and meta.signature or nil,
         attempt = attempt
       }
       if not entry.ok then
@@ -922,12 +1003,18 @@ local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
         end
       end
       table.insert(tried, entry)
+      log_download_entry(entry, "download")
       if entry.ok then
         return true, body, { tried = tried, last = entry }
       end
     end
     if attempt < attempts then
-      os.sleep(backoff * attempt)
+      if not fetch_url_seeded then
+        math.randomseed(os.time())
+        fetch_url_seeded = true
+      end
+      local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
+      os.sleep((backoff * attempt) + jitter)
     end
   end
   local last_entry = tried[#tried] or { url = list[1], ok = false, err = "timeout or http error", bytes = 0 }
@@ -1111,6 +1198,13 @@ local function write_manifest_cache(manifest_content, release, source, base_info
   write_atomic(MANIFEST_CACHE, serialized)
 end
 
+local function describe_download_error(err)
+  if err == "html response" then
+    return "Downloaded HTML, expected Lua"
+  end
+  return err or "timeout or http error"
+end
+
 local function format_manifest_failure(meta)
   local reason = "timeout or http error"
   local tried_list = {}
@@ -1127,6 +1221,7 @@ local function format_manifest_failure(meta)
   if meta and meta.last and meta.last.err then
     reason = meta.last.err
   end
+  reason = describe_download_error(reason)
   if #tried_list == 0 then
     tried_list = { CONFIG.MANIFEST_URL_PRIMARY }
     if CONFIG.MANIFEST_URL_FALLBACK then
@@ -1161,11 +1256,15 @@ end
 local function print_download_failure(label, info, fallback_urls)
   local urls = collect_tried_urls(info, fallback_urls)
   local last = info and info.last or {}
+  local err_msg = describe_download_error(last.err)
   print(label)
   print(("Last error: %s (url=%s)"):format(
-    tostring(last.err or "timeout or http error"),
+    tostring(err_msg),
     tostring(last.url or urls[1])
   ))
+  if last.signature and last.signature ~= "" then
+    print(("Response signature: %s"):format(tostring(last.signature)))
+  end
 end
 
 local function download_release()
@@ -1855,7 +1954,7 @@ local function update_installer_if_required(manifest, release, hash_algo)
       local last = meta and meta.last or {}
       print(("SAFE UPDATE aborted: installer download failed (url=%s reason=%s)"):format(
         tostring(last.url or installer_path),
-        tostring(last.err or "timeout or http error")
+        tostring(describe_download_error(last.err))
       ))
       return false
     end

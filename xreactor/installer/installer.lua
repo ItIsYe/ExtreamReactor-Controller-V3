@@ -11,13 +11,18 @@ local CONFIG = {
   },
   DOWNLOAD_ATTEMPTS = 4, -- Retry attempts per URL.
   DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
+  DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
   MIN_CORE_BYTES = 200, -- Minimum bytes to accept core download.
   CORE_SANITY_MARKER = "local function main", -- Core sanity marker.
-  LOG_ENABLED = true, -- Enable bootstrap logging.
-  LOG_PATH = "/xreactor_logs/installer_bootstrap.log", -- Bootstrap log file path.
+  LOG_ENABLED = nil, -- Enable bootstrap logging (nil uses settings key).
+  LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
+  LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
-  LOG_BACKUP_SUFFIX = ".1" -- Suffix for rotated log.
+  LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
+  LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
+  LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
+  LOG_SAMPLE_BYTES = 96 -- Bytes to capture as response signature.
 }
 
 local function ensure_dir(path)
@@ -28,6 +33,16 @@ end
 
 local function now_stamp()
   return textutils.formatTime(os.epoch("utc") / 1000, true)
+end
+
+local function resolve_log_enabled()
+  if CONFIG.LOG_ENABLED ~= nil then
+    return CONFIG.LOG_ENABLED == true
+  end
+  if settings and settings.get and CONFIG.LOG_SETTINGS_KEY then
+    return settings.get(CONFIG.LOG_SETTINGS_KEY) == true
+  end
+  return false
 end
 
 local function rotate_log_if_needed(path)
@@ -44,8 +59,21 @@ local function rotate_log_if_needed(path)
   fs.move(path, backup)
 end
 
-local function log_line(level, message)
-  if not CONFIG.LOG_ENABLED then
+local log_state = {
+  enabled = nil,
+  buffer = {},
+  last_flush = 0
+}
+
+local function flush_log(force)
+  if not log_state.enabled then
+    return
+  end
+  if #log_state.buffer == 0 then
+    return
+  end
+  local elapsed = os.clock() - (log_state.last_flush or 0)
+  if not force and #log_state.buffer < CONFIG.LOG_FLUSH_LINES and elapsed < CONFIG.LOG_FLUSH_INTERVAL then
     return
   end
   local ok = pcall(function()
@@ -55,12 +83,28 @@ local function log_line(level, message)
     if not file then
       return
     end
-    file.write(string.format("[%s] BOOTSTRAP | %s | %s\n", now_stamp(), tostring(level), tostring(message)))
+    for _, line in ipairs(log_state.buffer) do
+      file.write(line .. "\n")
+    end
     file.close()
   end)
+  log_state.buffer = {}
+  log_state.last_flush = os.clock()
   if not ok then
-    CONFIG.LOG_ENABLED = false
+    log_state.enabled = false
   end
+end
+
+local function log_line(level, message)
+  if log_state.enabled == nil then
+    log_state.enabled = resolve_log_enabled()
+    log_state.last_flush = os.clock()
+  end
+  if not log_state.enabled then
+    return
+  end
+  table.insert(log_state.buffer, string.format("[%s] BOOTSTRAP | %s | %s", now_stamp(), tostring(level), tostring(message)))
+  flush_log(false)
 end
 
 local function confirm(prompt_text, default)
@@ -73,25 +117,53 @@ local function confirm(prompt_text, default)
   return input == "y" or input == "yes"
 end
 
-local function is_html_response(body)
-  if not body or body == "" then
+local function sanitize_signature(prefix)
+  if not prefix or prefix == "" then
+    return ""
+  end
+  local sample = prefix:gsub("[%c]", ".")
+  return sample:sub(1, CONFIG.LOG_SAMPLE_BYTES or 96)
+end
+
+local function detect_html(body_prefix)
+  if not body_prefix or body_prefix == "" then
     return false
   end
-  local head = body:sub(1, 512)
+  local head = body_prefix:sub(1, 512)
   local lower = head:lower()
   if lower:find("<!doctype", 1, true) or lower:find("<html", 1, true) then
     return true
   end
-  if lower:find("<body", 1, true) or lower:find("<head", 1, true) then
+  if lower:find("<body", 1, true) or lower:find("<head", 1, true) or lower:find("<title", 1, true) then
     return true
   end
   if lower:find("rate limit", 1, true) or lower:find("not found", 1, true) then
+    return true
+  end
+  if lower:find("cloudflare", 1, true) then
     return true
   end
   if head:match("^%s*<") then
     return true
   end
   return false
+end
+
+local function validate_response(status_code, headers, body_prefix, body_len)
+  if status_code and status_code ~= 200 then
+    return false, "http " .. tostring(status_code)
+  end
+  if detect_html(body_prefix) then
+    return false, "html response"
+  end
+  local content_length = headers and (headers["Content-Length"] or headers["content-length"])
+  if content_length then
+    local expected = tonumber(content_length)
+    if expected and body_len and expected ~= body_len then
+      return false, "size mismatch"
+    end
+  end
+  return true
 end
 
 local function fetch_url(url)
@@ -132,15 +204,20 @@ local function fetch_url(url)
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
   local body = response.readAll()
   response.close()
-  local meta = { url = url, code = code, headers = headers, bytes = body and #body or 0 }
+  local prefix = body and body:sub(1, 1024) or ""
+  local meta = {
+    url = url,
+    code = code,
+    headers = headers,
+    bytes = body and #body or 0,
+    signature = sanitize_signature(prefix)
+  }
   if not body or body == "" then
     return false, nil, "empty body", meta
   end
-  if is_html_response(body) then
-    return false, nil, "html response", meta
-  end
-  if code and code ~= 200 then
-    return false, nil, "http " .. tostring(code), meta
+  local ok, reason = validate_response(code, headers, prefix, body and #body or 0)
+  if not ok then
+    return false, nil, reason, meta
   end
   return true, body, nil, meta
 end
@@ -167,19 +244,39 @@ local function build_raw_urls(path, commit_sha)
   return urls
 end
 
+local fetch_url_seeded = false
+
 local function fetch_with_retries(urls)
   local last_meta
+  if not fetch_url_seeded then
+    math.randomseed(os.time())
+    fetch_url_seeded = true
+  end
   for attempt = 1, CONFIG.DOWNLOAD_ATTEMPTS do
     for _, url in ipairs(urls or {}) do
       local ok, body, err, meta = fetch_url(url)
       last_meta = meta or { url = url, err = err }
       if ok then
+        log_line("INFO", string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
+          tostring(url),
+          tostring(meta and meta.code or "n/a"),
+          tostring(meta and meta.bytes or 0),
+          tostring(meta and meta.signature or ""),
+          attempt
+        ))
         return true, body, meta
       end
-      log_line("WARN", string.format("Download failed: %s (%s)", tostring(url), tostring(err)))
+      log_line("WARN", string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
+        tostring(url),
+        tostring(err),
+        tostring(meta and meta.code or "n/a"),
+        tostring(meta and meta.signature or ""),
+        attempt
+      ))
     end
     if attempt < CONFIG.DOWNLOAD_ATTEMPTS then
-      os.sleep(CONFIG.DOWNLOAD_BACKOFF * attempt)
+      local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
+      os.sleep((CONFIG.DOWNLOAD_BACKOFF * attempt) + jitter)
     end
   end
   return false, nil, last_meta
@@ -224,6 +321,22 @@ local function write_file(path, content)
   end
   file.write(content)
   file.close()
+  return true
+end
+
+local function write_atomic(path, content)
+  ensure_dir(fs.getDir(path))
+  local tmp = path .. ".tmp"
+  local file = fs.open(tmp, "w")
+  if not file then
+    return false
+  end
+  file.write(content)
+  file.close()
+  if fs.exists(path) then
+    fs.delete(path)
+  end
+  fs.move(tmp, path)
   return true
 end
 
@@ -350,7 +463,7 @@ local function download_core(release)
       return false, nil, { err = "checksum mismatch", url = meta and meta.url }
     end
   end
-  if not write_file(CONFIG.CORE_PATH, content) then
+  if not write_atomic(CONFIG.CORE_PATH, content) then
     return false, nil, { err = "write failed" }
   end
   save_core_meta({
@@ -375,8 +488,12 @@ if release and needs_core_update(release) then
   print("Checking installer core update...")
   local ok, _, meta = download_core(release)
   while not ok do
-    print("Installer core download failed.")
-    log_line("WARN", "Core download failed: " .. tostring(meta and meta.err))
+    local err_msg = meta and meta.err or "unknown"
+    if err_msg == "html response" then
+      err_msg = "Downloaded HTML, expected Lua"
+    end
+    print("Installer core download failed: " .. tostring(err_msg))
+    log_line("WARN", "Core download failed: " .. tostring(err_msg) .. " url=" .. tostring(meta and meta.url or "unknown"))
     if fs.exists(CONFIG.CORE_PATH) then
       print("Using existing installer core.")
       break

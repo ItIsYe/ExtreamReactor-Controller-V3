@@ -1,0 +1,389 @@
+-- CONFIG
+local CONFIG = {
+  TARGET_PATH = "/installer.lua", -- Target bootstrap file (Lua).
+  TEMP_PATH = "/tmp/installer.new", -- Temp download path for atomic swap.
+  REPO_OWNER = "ItIsYe", -- GitHub repository owner.
+  REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
+  BRANCH = "beta", -- Branch to fetch the bootstrap from.
+  FILE_PATH = "installer.lua", -- Remote bootstrap filename.
+  BASE_URLS = { -- RAW mirrors (no blob links).
+    "https://raw.githubusercontent.com",
+    "https://raw.github.com"
+  },
+  DOWNLOAD_ATTEMPTS = 3, -- Retry attempts per URL.
+  DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
+  DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to backoff.
+  DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
+  LOG_ENABLED = nil, -- Enable bootstrap logging (nil uses settings key).
+  LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
+  LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path.
+  LOG_MAX_BYTES = 200000, -- Max log size before rotation.
+  LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
+  LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
+  LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
+  LOG_SAMPLE_BYTES = 80 -- Bytes to capture as response signature.
+}
+
+local function ensure_dir(path)
+  if path and path ~= "" and not fs.exists(path) then
+    fs.makeDir(path)
+  end
+end
+
+local function now_stamp()
+  return textutils.formatTime(os.epoch("utc") / 1000, true)
+end
+
+local function resolve_log_enabled()
+  if CONFIG.LOG_ENABLED ~= nil then
+    return CONFIG.LOG_ENABLED == true
+  end
+  if settings and settings.get and CONFIG.LOG_SETTINGS_KEY then
+    return settings.get(CONFIG.LOG_SETTINGS_KEY) == true
+  end
+  return false
+end
+
+local function rotate_log_if_needed(path)
+  if not fs.exists(path) then
+    return
+  end
+  if fs.getSize(path) < CONFIG.LOG_MAX_BYTES then
+    return
+  end
+  local backup = path .. CONFIG.LOG_BACKUP_SUFFIX
+  if fs.exists(backup) then
+    fs.delete(backup)
+  end
+  fs.move(path, backup)
+end
+
+local log_state = {
+  enabled = nil,
+  buffer = {},
+  last_flush = 0
+}
+
+local function flush_log(force)
+  if not log_state.enabled then
+    return
+  end
+  if #log_state.buffer == 0 then
+    return
+  end
+  local elapsed = os.clock() - (log_state.last_flush or 0)
+  if not force and #log_state.buffer < CONFIG.LOG_FLUSH_LINES and elapsed < CONFIG.LOG_FLUSH_INTERVAL then
+    return
+  end
+  local ok = pcall(function()
+    ensure_dir(fs.getDir(CONFIG.LOG_PATH))
+    rotate_log_if_needed(CONFIG.LOG_PATH)
+    local file = fs.open(CONFIG.LOG_PATH, "a")
+    if not file then
+      return
+    end
+    for _, line in ipairs(log_state.buffer) do
+      file.write(line .. "\n")
+    end
+    file.close()
+  end)
+  log_state.buffer = {}
+  log_state.last_flush = os.clock()
+  if not ok then
+    log_state.enabled = false
+  end
+end
+
+local function log_line(level, message)
+  if log_state.enabled == nil then
+    log_state.enabled = resolve_log_enabled()
+    log_state.last_flush = os.clock()
+  end
+  if not log_state.enabled then
+    return
+  end
+  table.insert(log_state.buffer, string.format("[%s] BOOTSTRAP | %s | %s", now_stamp(), tostring(level), tostring(message)))
+  flush_log(false)
+end
+
+local function sanitize_signature(prefix)
+  if not prefix or prefix == "" then
+    return ""
+  end
+  local sample = prefix:gsub("[%c]", ".")
+  return sample:sub(1, CONFIG.LOG_SAMPLE_BYTES or 80)
+end
+
+local function detect_html(body_prefix)
+  if not body_prefix or body_prefix == "" then
+    return false
+  end
+  local head = body_prefix:sub(1, 512)
+  local lower = head:lower()
+  if lower:find("<!doctype", 1, true) or lower:find("<html", 1, true) then
+    return true
+  end
+  if lower:find("<body", 1, true) or lower:find("<head", 1, true) or lower:find("<title", 1, true) then
+    return true
+  end
+  if lower:find("rate limit", 1, true) or lower:find("not found", 1, true) then
+    return true
+  end
+  if lower:find("cloudflare", 1, true) then
+    return true
+  end
+  if head:match("^%s*<") then
+    return true
+  end
+  return false
+end
+
+local function detect_lua_signature(body_prefix)
+  if not body_prefix or body_prefix == "" then
+    return false
+  end
+  local trimmed = body_prefix:match("^%s*(.-)%s*$")
+  if trimmed:match("^%-%-") then
+    return true
+  end
+  if trimmed:match("^local%s") or trimmed:match("^return%s") or trimmed:match("^function%s") then
+    return true
+  end
+  return false
+end
+
+local function validate_response(status_code, headers, body_prefix, body_len)
+  if status_code and status_code ~= 200 then
+    return false, "http " .. tostring(status_code)
+  end
+  if detect_html(body_prefix) then
+    return false, "html response"
+  end
+  if not detect_lua_signature(body_prefix) then
+    return false, "missing lua signature"
+  end
+  local content_length = headers and (headers["Content-Length"] or headers["content-length"])
+  if content_length then
+    local expected = tonumber(content_length)
+    if expected and body_len and expected ~= body_len then
+      return false, "size mismatch"
+    end
+  end
+  return true
+end
+
+local function join_url(base, path)
+  local cleaned_path = path:gsub("^/", "")
+  if base:sub(-1) ~= "/" then
+    return base .. "/" .. cleaned_path
+  end
+  return base .. cleaned_path
+end
+
+local function build_raw_urls(path)
+  local urls = {}
+  local seen = {}
+  local repo_path = string.format("/%s/%s/%s/", CONFIG.REPO_OWNER, CONFIG.REPO_NAME, CONFIG.BRANCH or "main")
+  for _, host in ipairs(CONFIG.BASE_URLS) do
+    local url = join_url(host .. repo_path, path)
+    if not seen[url] then
+      table.insert(urls, url)
+      seen[url] = true
+    end
+  end
+  return urls
+end
+
+local fetch_url_seeded = false
+
+local function fetch_url(url)
+  if not http or not http.get then
+    return false, nil, "HTTP API unavailable", { url = url }
+  end
+  local response
+  local err
+  if http.request and CONFIG.DOWNLOAD_TIMEOUT then
+    local ok, req_err = pcall(http.request, url, nil, nil, false)
+    if not ok then
+      return false, nil, "http.request failed (" .. tostring(req_err) .. ")", { url = url }
+    end
+    local timer = os.startTimer(CONFIG.DOWNLOAD_TIMEOUT)
+    while true do
+      local event, p1, p2 = os.pullEvent()
+      if event == "http_success" and p1 == url then
+        response = p2
+        break
+      elseif event == "http_failure" and p1 == url then
+        return false, nil, "http failure (" .. tostring(p2) .. ")", { url = url }
+      elseif event == "timer" and p1 == timer then
+        return false, nil, "timeout", { url = url }
+      end
+    end
+  else
+    local ok, result = pcall(function() return http.get(url) end)
+    if ok then
+      response = result
+    else
+      err = result
+    end
+    if not response then
+      return false, nil, "http.get returned nil" .. (err and (" (" .. tostring(err) .. ")") or ""), { url = url }
+    end
+  end
+  local code = response.getResponseCode and response.getResponseCode() or nil
+  local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
+  local body = response.readAll()
+  response.close()
+  local prefix = body and body:sub(1, 512) or ""
+  local meta = {
+    url = url,
+    code = code,
+    headers = headers,
+    bytes = body and #body or 0,
+    signature = sanitize_signature(prefix)
+  }
+  if not body or body == "" then
+    return false, nil, "empty body", meta
+  end
+  local ok, reason = validate_response(code, headers, prefix, body and #body or 0)
+  if not ok then
+    return false, nil, reason, meta
+  end
+  return true, body, nil, meta
+end
+
+local function write_atomic(path, temp_path, content)
+  ensure_dir(fs.getDir(path))
+  ensure_dir(fs.getDir(temp_path))
+  if fs.exists(temp_path) then
+    fs.delete(temp_path)
+  end
+  local file = fs.open(temp_path, "w")
+  if not file then
+    return false, "write failed"
+  end
+  file.write(content)
+  file.close()
+  if fs.exists(path) then
+    fs.delete(path)
+  end
+  fs.move(temp_path, path)
+  return true
+end
+
+local function read_prefix(path, bytes)
+  if not fs.exists(path) then
+    return nil
+  end
+  local file = fs.open(path, "r")
+  if not file then
+    return nil
+  end
+  local content = file.read(bytes or 200)
+  file.close()
+  return content
+end
+
+local function is_valid_local(path)
+  local prefix = read_prefix(path, 512)
+  if not prefix then
+    return false
+  end
+  if detect_html(prefix) then
+    return false
+  end
+  return detect_lua_signature(prefix)
+end
+
+local function retry_menu()
+  print("1) Retry download")
+  print("2) Cancel")
+  write("Select option: ")
+  local choice = tonumber(read() or "")
+  return choice == 1
+end
+
+local function download_bootstrap()
+  local urls = build_raw_urls(CONFIG.FILE_PATH)
+  if not fetch_url_seeded then
+    math.randomseed(os.time())
+    fetch_url_seeded = true
+  end
+  for attempt = 1, CONFIG.DOWNLOAD_ATTEMPTS do
+    for _, url in ipairs(urls) do
+      local ok, body, err, meta = fetch_url(url)
+      if ok then
+        log_line("INFO", string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
+          tostring(url),
+          tostring(meta and meta.code or "n/a"),
+          tostring(meta and meta.bytes or 0),
+          tostring(meta and meta.signature or ""),
+          attempt
+        ))
+        local write_ok, write_err = write_atomic(CONFIG.TARGET_PATH, CONFIG.TEMP_PATH, body)
+        if not write_ok then
+          return false, "write failed (" .. tostring(write_err) .. ")", meta
+        end
+        log_line("INFO", "Atomic swap complete: " .. CONFIG.TARGET_PATH)
+        return true
+      end
+      log_line("WARN", string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
+        tostring(url),
+        tostring(err),
+        tostring(meta and meta.code or "n/a"),
+        tostring(meta and meta.signature or ""),
+        attempt
+      ))
+    end
+    if attempt < CONFIG.DOWNLOAD_ATTEMPTS then
+      local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
+      os.sleep((CONFIG.DOWNLOAD_BACKOFF * attempt) + jitter)
+    end
+  end
+  return false, "download failed", nil
+end
+
+if not http then
+  error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
+end
+
+local ok = false
+local err
+local meta
+
+repeat
+  ok, err, meta = download_bootstrap()
+  if ok then
+    break
+  end
+  local err_msg = err or "unknown error"
+  if err_msg == "html response" then
+    err_msg = "Downloaded HTML, expected Lua"
+  end
+  print(("Bootstrap download failed: %s"):format(err_msg))
+  if meta and meta.url then
+    print(("URL: %s"):format(tostring(meta.url)))
+  end
+  if meta and meta.signature and meta.signature ~= "" then
+    print(("Response signature: %s"):format(tostring(meta.signature)))
+  end
+until not retry_menu()
+
+if not ok then
+  if is_valid_local(CONFIG.TARGET_PATH) then
+    print("Using existing installer.lua.")
+  else
+    error("Installer bootstrap unavailable. Please re-run the RAW install command.")
+  end
+end
+
+if shell and shell.run then
+  shell.run(CONFIG.TARGET_PATH)
+else
+  local loader = loadfile(CONFIG.TARGET_PATH)
+  if loader then
+    loader()
+  else
+    error("Unable to launch installer.lua")
+  end
+end
