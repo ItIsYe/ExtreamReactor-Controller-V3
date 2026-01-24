@@ -73,7 +73,7 @@ Wireless Modem (Control/Status)
 4. **Command Applied**: MASTER sendet Setpoints/Mode → `ACK_APPLIED` sichtbar (ok/failed, reason_code).
 5. **Diagnostics**: Master-Resources-Page zeigt `Queue/Inflight/Retry/Dropped/Dedupe` + Peer-Summary.
 6. **Node Diagnostics**: Jede Node zeigt MASTER-Link (OK/DOWN + Age) + Queue/Inflight/Retry/Dropped/Dedupe.
-7. **Energy Navigation**: ENERGY UI durchblättern (Overview/Matrices/Storages/Diagnostics), Matrix-Paging prüfen.
+7. **Energy Navigation**: ENERGY UI via `ui_router` prüfen (Overview/Matrices/Storages/Diagnostics + Paging).
 8. **Safe Update**: SAFE UPDATE ausführen → keine Rolle/Config-Resets, Rollback bei Fehlern.
 9. **Proto-Mismatch**: `proto_ver` Major abweichen lassen → Node antwortet mit `ok=false`, `reason_code=PROTO_MISMATCH`.
 10. **Update Recovery Marker**: `/xreactor/.update_in_progress` anlegen → beim Start wird Recovery (Apply/Rollback) ausgeführt und Marker entfernt.
@@ -89,7 +89,7 @@ Wireless Modem (Control/Status)
 
 ## UI Navigation Guide
 - **Master**: Overview / Node Detail / Resources / Diagnostics.
-- **Nodes**: Overview / Details / Diagnostics (ENERGY nutzt `ui_router` wie die anderen Nodes).
+- **Nodes**: Overview / Details / Diagnostics (ENERGY nutzt `ui_router`, Pages: Overview/Matrices/Storages/Diagnostics).
 - Navigation:
   - Touch auf die Page-Buttons (`<`/`>`) unten.
   - **Keys**: `←`/`→` oder `PageUp`/`PageDown`.
