@@ -162,6 +162,10 @@ function protocol.validate(message)
   return protocol.validateMessage(message)
 end
 
+function protocol.is_proto_compatible(ver)
+  return is_proto_compatible(ver)
+end
+
 function protocol.is_for_node(message, node_id)
   if message.dst and message.dst ~= node_id then
     return false

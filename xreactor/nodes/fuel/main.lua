@@ -42,9 +42,21 @@ local DEFAULT_CONFIG = {
   target = 2000, -- Default fuel reserve target.
   minimum_reserve = 2000, -- Minimum reserve used for safety.
   heartbeat_interval = 2, -- Seconds between status heartbeats.
+  status_interval = 5, -- Seconds between status payloads.
   channels = {
     control = constants.channels.CONTROL, -- Control channel for MASTER commands.
     status = constants.channels.STATUS -- Status channel for telemetry.
+  },
+  comms = {
+    ack_timeout_s = 3.0, -- Seconds before retrying a command.
+    max_retries = 4, -- Maximum retries per message.
+    backoff_base_s = 0.6, -- Base backoff seconds.
+    backoff_cap_s = 6.0, -- Max backoff seconds.
+    dedupe_ttl_s = 30, -- Seconds to keep dedupe entries.
+    dedupe_limit = 200, -- Max dedupe entries per peer.
+    peer_timeout_s = 12.0, -- Seconds before marking peer down.
+    queue_limit = 200, -- Max queued outbound messages.
+    drop_simulation = 0 -- Drop rate (0-1) for testing comms.
   }
 }
 
@@ -98,6 +110,16 @@ local function validate_config(config_values, defaults)
   if type(config_values.heartbeat_interval) ~= "number" or config_values.heartbeat_interval <= 0 then
     config_values.heartbeat_interval = defaults.heartbeat_interval
     add_config_warning("heartbeat_interval missing/invalid; defaulting to " .. tostring(defaults.heartbeat_interval))
+  elseif config_values.heartbeat_interval > 60 then
+    config_values.heartbeat_interval = 60
+    add_config_warning("heartbeat_interval too high; clamping to 60s")
+  end
+  if type(config_values.status_interval) ~= "number" or config_values.status_interval <= 0 then
+    config_values.status_interval = defaults.status_interval
+    add_config_warning("status_interval missing/invalid; defaulting to " .. tostring(defaults.status_interval))
+  elseif config_values.status_interval > 60 then
+    config_values.status_interval = 60
+    add_config_warning("status_interval too high; clamping to 60s")
   end
   if type(config_values.channels) ~= "table" then
     config_values.channels = utils.deep_copy(defaults.channels)
@@ -110,6 +132,10 @@ local function validate_config(config_values, defaults)
   if type(config_values.channels.status) ~= "number" then
     config_values.channels.status = defaults.channels.status
     add_config_warning("channels.status missing/invalid; defaulting to " .. tostring(defaults.channels.status))
+  end
+  if type(config_values.comms) ~= "table" then
+    config_values.comms = utils.deep_copy(defaults.comms)
+    add_config_warning("comms config missing/invalid; defaulting to comms defaults")
   end
 end
 
@@ -303,25 +329,48 @@ local function render_monitor()
   ui.text(mon, 2, 5, ("Minimum: %.0f"):format(payload.minimum_reserve or 0), colors.get("text"), colors.get("background"))
   ui.text(mon, 2, 6, ("Storage: %s"):format(devices.storage_name or "none"), colors.get("text"), colors.get("background"))
 
+  local comms_diag = comms and comms:get_diagnostics() or {}
+  local metrics = comms_diag.metrics or {}
+  local peer = master_peer_state()
+  local master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN"
+  local master_age = peer and peer.age and string.format("%ds", math.floor(peer.age)) or "n/a"
   local summary = payload.registry and payload.registry.summary or registry:get_summary()
   local rows = {
     { text = ("Discovery: %s"):format(devices.discovery_failed and "FAILED" or "OK"), status = devices.discovery_failed and "WARNING" or "OK" },
     { text = ("Last scan: %s"):format(format_age(devices.last_scan_ts, os.epoch("utc"))) },
-    { text = ("Registry total:%d bound:%d missing:%d"):format(summary.total or 0, summary.bound or 0, summary.missing or 0) }
+    { text = ("Registry total:%d bound:%d missing:%d"):format(summary.total or 0, summary.bound or 0, summary.missing or 0) },
+    { text = ("Master link: %s age:%s"):format(master_state, master_age) },
+    { text = ("Comms q:%d inflight:%d retries:%d"):format(
+      comms_diag.queue_depth or 0,
+      comms_diag.inflight_count or 0,
+      metrics.retries or 0
+    ) },
+    { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(
+      metrics.dropped or 0,
+      metrics.dedupe_hits or 0,
+      metrics.timeouts or 0
+    ) }
   }
   ui.list(mon, 2, 8, w - 2, rows, { max_rows = h - 9 })
 end
 
 local function handle_command(message)
   if not protocol.is_for_node(message, comms.network.id) then return end
-  local command = message.payload.command
-  if not command then
-    return { ok = false, error = "invalid command" }
+  local ok_proto = protocol.is_proto_compatible(message.proto_ver)
+  if not ok_proto then
+    return { ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" }
+  end
+  local payload = type(message.payload) == "table" and message.payload or nil
+  local command = payload and payload.command
+  if type(command) ~= "table" then
+    return { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
   end
   if command.target == constants.command_targets.SET_RESERVE then
     reserve = command.value
   elseif command.target == constants.command_targets.MODE and command.value == constants.node_states.MANUAL then
     -- manual mode acknowledged but not changing behavior
+  else
+    return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
   end
   return { ok = true }
 end

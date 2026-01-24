@@ -34,7 +34,17 @@ local state = {
   inflight = {},
   dedupe = {},
   peers = {},
-  incoming = {}
+  incoming = {},
+  metrics = {
+    dropped = 0,
+    queue_dropped = 0,
+    retries = 0,
+    dedupe_hits = 0,
+    timeouts = 0,
+    last_timeout_ts = nil,
+    last_timeout_id = nil
+  },
+  timeouts = {}
 }
 
 local function now_ms()
@@ -49,6 +59,34 @@ local function merge_config(config)
   for k, v in pairs(config or {}) do
     merged[k] = v
   end
+  return merged
+end
+
+local function clamp_number(value, fallback, min, max)
+  local num = tonumber(value)
+  if not num then
+    return fallback
+  end
+  if min and num < min then
+    return min
+  end
+  if max and num > max then
+    return max
+  end
+  return num
+end
+
+local function sanitize_config(config)
+  local merged = merge_config(config)
+  merged.ack_timeout_s = clamp_number(merged.ack_timeout_s, DEFAULT_CONFIG.ack_timeout_s, 0.2, 30.0)
+  merged.max_retries = math.floor(clamp_number(merged.max_retries, DEFAULT_CONFIG.max_retries, 0, 12))
+  merged.backoff_base_s = clamp_number(merged.backoff_base_s, DEFAULT_CONFIG.backoff_base_s, 0.1, 10.0)
+  merged.backoff_cap_s = clamp_number(merged.backoff_cap_s, DEFAULT_CONFIG.backoff_cap_s, merged.backoff_base_s, 60.0)
+  merged.dedupe_ttl_s = clamp_number(merged.dedupe_ttl_s, DEFAULT_CONFIG.dedupe_ttl_s, 1.0, 300.0)
+  merged.dedupe_limit = math.floor(clamp_number(merged.dedupe_limit, DEFAULT_CONFIG.dedupe_limit, 10, 1000))
+  merged.peer_timeout_s = clamp_number(merged.peer_timeout_s, DEFAULT_CONFIG.peer_timeout_s, 2.0, 120.0)
+  merged.queue_limit = math.floor(clamp_number(merged.queue_limit, DEFAULT_CONFIG.queue_limit, 10, 1000))
+  merged.drop_simulation = clamp_number(merged.drop_simulation, DEFAULT_CONFIG.drop_simulation, 0, 0.9)
   return merged
 end
 
@@ -108,9 +146,15 @@ local function update_peer(message)
   local sender = message.src or message.sender_id
   if not sender or sender == state.node_id then return end
   state.peers[sender] = state.peers[sender] or {}
-  state.peers[sender].last_seen = now_ms()
-  state.peers[sender].role = message.role
-  state.peers[sender].proto_ver = message.proto_ver
+  local peer = state.peers[sender]
+  peer.last_seen = now_ms()
+  peer.role = message.role
+  peer.proto_ver = message.proto_ver
+  if peer.down then
+    peer.down = false
+    peer.down_since = nil
+    log("Peer up: " .. tostring(sender))
+  end
 end
 
 local function should_drop()
@@ -139,10 +183,12 @@ local function send_raw(channel, message)
   local sanitized = protocol.sanitize_message(message)
   if not sanitized then
     log("Invalid outbound message dropped", "WARN")
+    state.metrics.dropped = state.metrics.dropped + 1
     return
   end
   if should_drop() then
     log("Drop simulation: outbound message dropped", "WARN")
+    state.metrics.dropped = state.metrics.dropped + 1
     return
   end
   state.network:send(channel, sanitized)
@@ -151,6 +197,8 @@ end
 local function queue_entry(message, channel, opts)
   if #state.queue >= state.config.queue_limit then
     log("Send queue full; dropping message " .. tostring(message.type), "WARN")
+    state.metrics.dropped = state.metrics.dropped + 1
+    state.metrics.queue_dropped = state.metrics.queue_dropped + 1
     return nil, "queue_full"
   end
   opts = opts or {}
@@ -200,11 +248,31 @@ local function retry_inflight()
     entry.retries = entry.retries + 1
     if entry.retries > state.config.max_retries then
       log("Message retry exhausted " .. tostring(msg_id), "WARN")
+      state.metrics.timeouts = state.metrics.timeouts + 1
+      state.metrics.last_timeout_ts = now_ts
+      state.metrics.last_timeout_id = msg_id
+      table.insert(state.timeouts, {
+        message_id = msg_id,
+        message = entry.message,
+        require_ack = entry.require_ack,
+        require_applied = entry.require_applied,
+        retries = entry.retries,
+        last_sent = entry.sent_ts
+      })
       state.inflight[msg_id] = nil
       goto continue
     end
     entry.sent_ts = now_ts
     entry.next_retry = now_ts + (schedule_backoff(entry.retries) * 1000)
+    state.metrics.retries = state.metrics.retries + 1
+    if entry.message and entry.message.type == constants.message_types.COMMAND then
+      log(("Retry command %s -> %s (%d/%d)"):format(
+        tostring(msg_id),
+        tostring(entry.message.dst or "broadcast"),
+        entry.retries,
+        state.config.max_retries
+      ))
+    end
     send_raw(entry.channel, entry.message)
     ::continue::
   end
@@ -255,8 +323,20 @@ local function handle_ack(message)
     if not entry.require_applied then
       state.inflight[ack_for] = nil
     end
+    if entry.message and entry.message.type == constants.message_types.COMMAND then
+      log(("Command delivered ack %s from %s"):format(tostring(ack_for), tostring(message.src or message.sender_id or "unknown")))
+    end
   elseif message.type == constants.message_types.ACK_APPLIED then
     state.inflight[ack_for] = nil
+    if entry.message and entry.message.type == constants.message_types.COMMAND then
+      local result = message.payload and message.payload.result or {}
+      local status = result.ok == false and "failed" or "ok"
+      log(("Command applied ack %s from %s (%s)"):format(
+        tostring(ack_for),
+        tostring(message.src or message.sender_id or "unknown"),
+        status
+      ))
+    end
   end
 end
 
@@ -265,10 +345,14 @@ local function handle_message(message)
   if message.dst and message.dst ~= state.node_id then
     return
   end
+  if message.type == constants.message_types.COMMAND and not protocol.is_for_node(message, state.node_id) then
+    return
+  end
 
   if message.message_id then
     local dup = find_dedupe(message.src, message.message_id)
     if dup then
+      state.metrics.dedupe_hits = state.metrics.dedupe_hits + 1
       if message.type == constants.message_types.COMMAND then
         send_ack(message, constants.message_types.ACK_DELIVERED, { detail = "duplicate" })
         if dup.applied then
@@ -293,6 +377,15 @@ local function handle_message(message)
 
   if message.type == constants.message_types.COMMAND then
     local applied = result or { ok = true }
+    local cmd = message.payload and message.payload.command or nil
+    if type(applied) == "table" and type(cmd) == "table" then
+      if applied.command_target == nil then
+        applied.command_target = cmd.target
+      end
+      if applied.command_value == nil then
+        applied.command_value = cmd.value
+      end
+    end
     send_ack(message, constants.message_types.ACK_APPLIED, { result = applied })
     add_dedupe(message.src, message.message_id, applied)
   else
@@ -300,9 +393,26 @@ local function handle_message(message)
   end
 end
 
+local function update_peer_timeouts()
+  local now_ts = now_ms()
+  for id, peer in pairs(state.peers) do
+    local last = peer.last_seen or 0
+    local down = (now_ts - last) / 1000 > state.config.peer_timeout_s
+    if down and not peer.down then
+      peer.down = true
+      peer.down_since = now_ts
+      log("Peer down: " .. tostring(id), "WARN")
+    elseif not down and peer.down then
+      peer.down = false
+      peer.down_since = nil
+      log("Peer up: " .. tostring(id))
+    end
+  end
+end
+
 function comms.init(opts)
   opts = opts or {}
-  state.config = merge_config(opts.config or {})
+  state.config = sanitize_config(opts.config or {})
   state.network = opts.network or network_lib.init(opts)
   state.node_id = opts.node_id or state.network.id
   state.role = opts.role or state.network.role
@@ -345,6 +455,13 @@ function comms.send(dst, msg_type, payload, opts)
     require_ack = opts and opts.require_ack or false,
     require_applied = opts and opts.require_applied or false
   })
+  if entry and msg_type == constants.message_types.COMMAND then
+    log(("Command queued %s -> %s (applied=%s)"):format(
+      tostring(message.message_id),
+      tostring(dst or "broadcast"),
+      tostring(opts and opts.require_applied or false)
+    ))
+  end
   return entry
 end
 
@@ -358,6 +475,7 @@ function comms.tick(now)
   prune_dedupe()
   flush_queue()
   retry_inflight()
+  update_peer_timeouts()
 
   local queue = state.incoming
   state.incoming = {}
@@ -377,6 +495,14 @@ function comms.tick(now)
           proto_ver = message and message.proto_ver or constants.proto_ver
         }
         dispatch_handlers(error_msg)
+        if message and message.type == constants.message_types.COMMAND
+          and protocol.is_for_node(message, state.node_id)
+          and message.message_id then
+          local applied = { ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" }
+          send_ack(message, constants.message_types.ACK_DELIVERED, { error = "proto mismatch", reason_code = "PROTO_MISMATCH" })
+          send_ack(message, constants.message_types.ACK_APPLIED, { result = applied })
+          add_dedupe(message.src, message.message_id, applied)
+        end
       end
     else
       handle_message(message)
@@ -393,12 +519,38 @@ function comms.get_peer_state()
     out[peer] = {
       last_seen = last,
       down = delta > state.config.peer_timeout_s,
+      down_since = data.down_since,
       age = delta,
       role = data.role,
       proto_ver = data.proto_ver
     }
   end
   return out
+end
+
+function comms.get_diagnostics()
+  local inflight_count = 0
+  for _ in pairs(state.inflight) do
+    inflight_count = inflight_count + 1
+  end
+  return {
+    queue_depth = #state.queue,
+    inflight_count = inflight_count,
+    incoming = #state.incoming,
+    metrics = utils.deep_copy(state.metrics),
+    peers = comms.get_peer_state(),
+    config = utils.deep_copy(state.config)
+  }
+end
+
+function comms.consume_timeouts()
+  local list = state.timeouts
+  state.timeouts = {}
+  return list
+end
+
+function comms.sanitize_config(config)
+  return sanitize_config(config)
 end
 
 return comms
