@@ -74,6 +74,7 @@ Wireless Modem (Control/Status)
 5. **Diagnostics**: Master-Resources-Page zeigt `Queue/Inflight/Retry/Dropped/Dedupe` + Peer-Summary.
 6. **Node Diagnostics**: Jede Node zeigt MASTER-Link (OK/DOWN + Age) + Queue/Inflight/Retry/Dropped/Dedupe.
 7. **Safe Update**: SAFE UPDATE ausführen → keine Rolle/Config-Resets, Rollback bei Fehlern.
+8. **Proto-Mismatch**: `proto_ver` Major abweichen lassen → Node antwortet mit `ok=false`, `reason_code=PROTO_MISMATCH`.
 
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
