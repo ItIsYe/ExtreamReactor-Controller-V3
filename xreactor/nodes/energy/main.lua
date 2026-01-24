@@ -252,12 +252,8 @@ local devices = {
 local last_heartbeat = 0
 local last_scan = 0
 local ui_state = {
-  last_snapshot = nil,
-  last_draw = 0,
-  page = 1,
-  pages = {},
   matrix_page = 1,
-  matrix_controls = nil,
+  storage_page = 1,
   router = nil,
   model = nil
 }
@@ -873,8 +869,7 @@ local function render_header(mon, title, status, model)
   ui.rightText(mon, 2, 2, w - 2, status_label, colors.get(status), colors.get("background"))
 end
 
-local function render_overview(mon)
-  local model = ui_state.model
+local function render_overview(mon, model)
   local status = model.degraded and "WARNING" or "OK"
   render_header(mon, "ENERGY NODE", status, model)
   local w = mon.getSize()
@@ -903,31 +898,33 @@ local function render_overview(mon)
   ui.text(mon, 2, line, ("Last scan: %s"):format(scan_age), colors.get("text"), colors.get("background"))
 end
 
-local function render_matrices(mon)
-  local model = ui_state.model
+local function render_matrices(mon, model)
   local status = model.degraded and "WARNING" or "OK"
   render_header(mon, "ENERGY MATRICES", status, model)
   local w, h = mon.getSize()
-  local line = 4
-  ui.text(mon, 2, line, ("Induction Matrices (%d)"):format(#model.matrices), colors.get("text"), colors.get("background"))
-  line = line + 1
-  local header_lines = 3
-  local footer_lines = 1
-  local card_lines = 4
+  local header_line = 4
+  ui.text(mon, 2, header_line, ("Induction Matrices (%d)"):format(#model.matrices), colors.get("text"), colors.get("background"))
+  local list_start = header_line + 1
+  local footer_lines = 2
   local total_lines = 4
-  local available = math.max(1, h - header_lines - footer_lines - total_lines - 1)
+  local card_lines = 4
+  local list_end = h - footer_lines - total_lines
+  local available = math.max(0, list_end - list_start + 1)
   local per_page = math.max(1, math.floor(available / card_lines))
   local pagination = ui_router.paginate(model.matrices, per_page, ui_state.matrix_page)
   ui_state.matrix_page = pagination.page
+  local line = list_start
   if #model.matrices == 0 then
     ui.text(mon, 2, line, "No matrices detected", colors.get("WARNING"), colors.get("background"))
-    line = line + 2
   else
     for idx = pagination.start_index, pagination.end_index do
       local entry = model.matrices[idx]
       local pct = entry and entry.percent or 0
       if entry then
-        local label = string.format("%s", entry.name or ("Matrix " .. tostring(idx)))
+        local label = entry.label or entry.name or ("Matrix " .. tostring(idx))
+        if entry.alias and entry.name and entry.alias ~= entry.name then
+          label = ("%s (%s)"):format(entry.alias, entry.name)
+        end
         ui.text(mon, 2, line, label, colors.get("text"), colors.get("background"))
         ui.rightText(mon, 2, line, w - 2, format_percent(pct), colors.get(entry.status == "DEGRADED" and "WARNING" or status), colors.get("background"))
         line = line + 1
@@ -942,6 +939,8 @@ local function render_matrices(mon)
       end
     end
   end
+  local total_start = h - footer_lines - total_lines + 1
+  line = total_start
   ui.text(mon, 2, line, ("GESAMT (%d)"):format(#model.matrices), colors.get("text"), colors.get("background"))
   line = line + 1
   ui.progress(mon, 2, line, w - 4, model.total and model.total.percent or 0, status)
@@ -956,23 +955,31 @@ local function render_matrices(mon)
   local total_out = model.total and model.total.output or nil
   local total_flow = (total_in ~= nil or total_out ~= nil) and ("IN " .. format_energy(total_in) .. "  OUT " .. format_energy(total_out)) or "IN/OUT n/a"
   ui.text(mon, 2, line, total_flow, colors.get("text"), colors.get("background"))
-  local footer = h
-  local page_text = ("< Mat %d/%d >"):format(pagination.page, pagination.total)
-  ui.text(mon, 2, footer, page_text, colors.get("text"), colors.get("background"))
-  ui_state.matrix_controls = {
-    prev = { x1 = 2, x2 = 2, y = footer },
-    next = { x1 = 2 + #page_text - 1, x2 = 2 + #page_text, y = footer }
-  }
+  if ui_state.router and pagination.total > 1 then
+    ui_state.router:render_list_controls(mon, {
+      label = "Mat",
+      page = pagination.page,
+      total = pagination.total,
+      y = h - 1,
+      on_prev = function()
+        ui_state.matrix_page = math.max(1, ui_state.matrix_page - 1)
+      end,
+      on_next = function()
+        ui_state.matrix_page = ui_state.matrix_page + 1
+      end
+    })
+  end
 end
 
-local function render_storages(mon)
-  local model = ui_state.model
+local function render_storages(mon, model)
   local status = model.degraded and "WARNING" or "OK"
   render_header(mon, "ENERGY STORAGES", status, model)
   local w, h = mon.getSize()
-  local line = 4
-  ui.text(mon, 2, line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
-  line = line + 1
+  local header_line = 4
+  ui.text(mon, 2, header_line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
+  local list_start = header_line + 1
+  local footer_lines = 2
+  local list_end = h - footer_lines
   local rows = {}
   table.sort(model.storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
   for _, s in ipairs(model.storages) do
@@ -982,11 +989,31 @@ local function render_storages(mon)
   if #rows == 0 then
     table.insert(rows, { text = "none", status = "WARNING" })
   end
-  ui.list(mon, 2, line, w - 2, rows, { max_rows = math.max(1, h - line - 2) })
+  local per_page = math.max(1, list_end - list_start + 1)
+  local pagination = ui_router.paginate(rows, per_page, ui_state.storage_page)
+  ui_state.storage_page = pagination.page
+  local page_rows = {}
+  for idx = pagination.start_index, pagination.end_index do
+    table.insert(page_rows, rows[idx])
+  end
+  ui.list(mon, 2, list_start, w - 2, page_rows, { max_rows = per_page })
+  if ui_state.router and pagination.total > 1 then
+    ui_state.router:render_list_controls(mon, {
+      label = "Storage",
+      page = pagination.page,
+      total = pagination.total,
+      y = h - 1,
+      on_prev = function()
+        ui_state.storage_page = math.max(1, ui_state.storage_page - 1)
+      end,
+      on_next = function()
+        ui_state.storage_page = ui_state.storage_page + 1
+      end
+    })
+  end
 end
 
-local function render_diagnostics(mon)
-  local model = ui_state.model
+local function render_diagnostics(mon, model)
   local status = model.degraded and "WARNING" or "OK"
   render_header(mon, "ENERGY DIAGNOSTICS", status, model)
   local w, h = mon.getSize()
@@ -1028,66 +1055,43 @@ local function render_monitor()
   if not devices.monitor then
     return
   end
-  local now = os.epoch("utc")
-  if now - ui_state.last_draw < config.ui_refresh_interval * 1000 then
-    return
-  end
   local model = build_ui_model()
-  local snapshot = build_snapshot_key(model)
-  if ui_state.last_snapshot == snapshot and ui_state.router and ui_state.router:current() then
-    return
-  end
-  ui_state.last_snapshot = snapshot
-  ui_state.last_draw = now
   ui_state.model = model
   local expected_pages = 3 + (#model.storages > 0 and 1 or 0)
   if not ui_state.router or ui_state.router:count() ~= expected_pages then
     local pages = {
-      { name = "Overview", render = function() render_overview(devices.monitor) end },
-      { name = "Matrices", render = function() render_matrices(devices.monitor) end }
+      { name = "Overview", render = function(target, view)
+        render_overview(target, view.data or view)
+      end },
+      { name = "Matrices", render = function(target, view)
+        render_matrices(target, view.data or view)
+      end }
     }
     if #model.storages > 0 then
-      table.insert(pages, { name = "Storages", render = function() render_storages(devices.monitor) end })
+      table.insert(pages, { name = "Storages", render = function(target, view)
+        render_storages(target, view.data or view)
+      end })
     end
-    table.insert(pages, { name = "Diagnostics", render = function() render_diagnostics(devices.monitor) end })
-    ui_state.router = ui_router.new({
+    table.insert(pages, { name = "Diagnostics", render = function(target, view)
+      render_diagnostics(target, view.data or view)
+    end })
+    ui_state.router = ui_router.new(devices.monitor, {
+      title = "ENERGY",
       pages = pages,
+      interval = config.ui_refresh_interval,
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
       key_next = { [keys.right] = true, [keys.pageDown] = true }
     })
   end
-  ui_state.router:render(devices.monitor, { snapshot = snapshot })
-end
-
-local function handle_matrix_input(event)
-  if not ui_state.router or not ui_state.router:current() then
-    return
-  end
-  if ui_state.router:current().name ~= "Matrices" then
-    return
-  end
-  if event[1] == "key" then
-    if event[2] == keys.up then
-      ui_state.matrix_page = math.max(1, ui_state.matrix_page - 1)
-      ui_state.last_snapshot = nil
-    elseif event[2] == keys.down then
-      ui_state.matrix_page = ui_state.matrix_page + 1
-      ui_state.last_snapshot = nil
-    end
-  elseif event[1] == "monitor_touch" then
-    if not devices.monitor_name or event[2] ~= devices.monitor_name then
-      return
-    end
-    local controls = ui_state.matrix_controls or {}
-    local x, y = event[3], event[4]
-    if controls.prev and y == controls.prev.y and x >= controls.prev.x1 and x <= controls.prev.x2 then
-      ui_state.matrix_page = math.max(1, ui_state.matrix_page - 1)
-      ui_state.last_snapshot = nil
-    elseif controls.next and y == controls.next.y and x >= controls.next.x1 and x <= controls.next.x2 then
-      ui_state.matrix_page = ui_state.matrix_page + 1
-      ui_state.last_snapshot = nil
-    end
-  end
+  local snapshot = build_snapshot_key(model)
+  ui_state.router:render(devices.monitor, {
+    snapshot = {
+      data = snapshot,
+      matrix_page = ui_state.matrix_page,
+      storage_page = ui_state.storage_page
+    },
+    data = model
+  })
 end
 
 local warned = {}
@@ -1180,7 +1184,6 @@ local function init()
       if ui_state.router then
         ui_state.router:handle_input(event)
       end
-      handle_matrix_input(event)
     end
   }))
   services:init()
