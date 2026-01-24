@@ -75,6 +75,24 @@ Wireless Modem (Control/Status)
 6. **Node Diagnostics**: Jede Node zeigt MASTER-Link (OK/DOWN + Age) + Queue/Inflight/Retry/Dropped/Dedupe.
 7. **Safe Update**: SAFE UPDATE ausführen → keine Rolle/Config-Resets, Rollback bei Fehlern.
 8. **Proto-Mismatch**: `proto_ver` Major abweichen lassen → Node antwortet mit `ok=false`, `reason_code=PROTO_MISMATCH`.
+9. **Update Recovery Marker**: `/xreactor/.update_in_progress` anlegen → beim Start wird Recovery (Apply/Rollback) ausgeführt und Marker entfernt.
+
+## Rails/Tuning Guide (Kurz)
+- **RT Control Rails** werden zentral über `rails` in `master/config.lua` und `nodes/*/config.lua` gesteuert.
+- Wichtige Parameter:
+  - `deadband_up/down` + `hysteresis_up/down` → verhindert Oszillation/Flip-Flop.
+  - `max_step_up/down` + `cooldown_s` → limitiert Sprünge pro Tick.
+  - `min/max` → harte Klemmen (Rods 0–98%, Flow 0–1900).
+  - `ema_alpha` → optionales Smoothing für noisy Inputs (RPM/Steam).
+- Änderungen zuerst im RT-Node testen (beste Hardware-Nähe).
+
+## UI Navigation Guide
+- **Master**: Overview / Node Detail / Resources / Diagnostics.
+- **Nodes**: Overview / Details / Diagnostics.
+- Navigation:
+  - Touch auf die Page-Buttons (`<`/`>`) unten.
+  - **Keys**: `←`/`→` oder `PageUp`/`PageDown`.
+  - Page-Indicator zeigt `X/Y` (aktuelle Seite).
 
 ## Modul-Loading & Require-Konzept
 - **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
@@ -114,6 +132,7 @@ Wireless Modem (Control/Status)
 - SAFE UPDATE fragt **keine** Rolle neu ab und überschreibt keine Configs/Node-ID.
 - Downloads werden zuerst in ein **Staging-Verzeichnis** (`/xreactor_stage/<timestamp>`) geschrieben, per Checksum verifiziert und erst danach atomar ersetzt.
 - Bei Fehler: Rollback aus `/xreactor_backup/<timestamp>/`, keine halbfertigen Updates.
+- **Update Marker**: Während des Updates wird `/xreactor/.update_in_progress` geschrieben; beim Start wird Recovery (Apply/Rollback) erzwungen, Marker wird danach entfernt.
 - Downloader nutzt **Retries + Backoff**, prüft HTTP-Status/HTML-Fehler und nutzt RAW-Mirrors (`raw.githubusercontent.com`, `raw.github.com`).
 - **Size mismatch** gilt nur als Transport-Warnung; die Entscheidung trifft die Checksum. Bei Problemen: Retry.
 - Manifest-Cache: `/xreactor/.cache/manifest.lua`. Bei Problemen: **Cached Manifest**, **Retry** oder **Cancel**.

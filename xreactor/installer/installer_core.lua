@@ -53,7 +53,10 @@ local CONFIG = {
     "xreactor/core/safety.lua",
     "xreactor/core/state_machine.lua",
     "xreactor/core/trends.lua",
+    "xreactor/core/control_rails.lua",
     "xreactor/core/ui.lua",
+    "xreactor/core/ui_router.lua",
+    "xreactor/core/update_recovery.lua",
     "xreactor/core/utils.lua",
     "xreactor/shared/colors.lua",
     "xreactor/shared/constants.lua"
@@ -494,6 +497,84 @@ local function file_checksum(path, algo)
   local content = read_file(path)
   if not content then return nil end
   return compute_hash(content, algo)
+end
+
+local UPDATE_MARKER_PATH = "/xreactor/.update_in_progress"
+
+local function read_update_marker()
+  if not fs.exists(UPDATE_MARKER_PATH) then
+    return nil
+  end
+  local content = read_file(UPDATE_MARKER_PATH)
+  if not content then
+    return nil
+  end
+  local data = textutils.unserialize(content)
+  if type(data) ~= "table" then
+    return nil
+  end
+  return data
+end
+
+local function write_update_marker(data)
+  write_atomic(UPDATE_MARKER_PATH, textutils.serialize(data or {}))
+end
+
+local function clear_update_marker()
+  if fs.exists(UPDATE_MARKER_PATH) then
+    fs.delete(UPDATE_MARKER_PATH)
+  end
+end
+
+local function recover_update_marker()
+  local marker = read_update_marker()
+  if not marker then
+    return false, "no marker"
+  end
+  local algo = marker.hash_algo or "crc32"
+  if marker.stage_dir and fs.exists(marker.stage_dir) and type(marker.updates) == "table" then
+    local staged_map = {}
+    for _, entry in ipairs(marker.updates) do
+      staged_map[entry.path] = marker.stage_dir .. "/" .. entry.path
+      local verify = file_checksum(staged_map[entry.path], algo)
+      if verify ~= entry.hash then
+        if marker.rollback_paths and marker.backup_dir then
+          rollback_from_backup(marker.backup_dir, marker.rollback_paths, marker.created or {})
+        end
+        clear_update_marker()
+        return false, "staged verify mismatch: " .. entry.path
+      end
+    end
+    local ok, apply_err = apply_staged(marker.updates, staged_map, {})
+    if not ok then
+      if marker.rollback_paths and marker.backup_dir then
+        rollback_from_backup(marker.backup_dir, marker.rollback_paths, marker.created or {})
+      end
+      clear_update_marker()
+      return false, apply_err
+    end
+    for _, entry in ipairs(marker.updates) do
+      local target_path = "/" .. entry.path
+      local verify = file_checksum(target_path, algo)
+      if verify ~= entry.hash then
+        if marker.rollback_paths and marker.backup_dir then
+          rollback_from_backup(marker.backup_dir, marker.rollback_paths, marker.created or {})
+        end
+        clear_update_marker()
+        return false, "verify mismatch: " .. entry.path
+      end
+    end
+    if marker.stage_dir and fs.exists(marker.stage_dir) then
+      fs.delete(marker.stage_dir)
+    end
+    clear_update_marker()
+    return true, "applied"
+  end
+  if marker.rollback_paths and marker.backup_dir then
+    rollback_from_backup(marker.backup_dir, marker.rollback_paths, marker.created or {})
+  end
+  clear_update_marker()
+  return false, "rolled back"
 end
 
 local function compare_version(a, b)
@@ -1974,6 +2055,27 @@ local function safe_update()
   backup_files(backup_dir, migration_paths)
   backup_files(backup_dir, protected)
 
+  local created_before = {}
+  for _, path in ipairs(update_paths) do
+    if not fs.exists(path) then
+      table.insert(created_before, path)
+    end
+  end
+  local rollback_paths = {}
+  for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
+  for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
+  for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
+  write_update_marker({
+    ts = os.epoch("utc"),
+    version = manifest.version or release and release.commit_sha or "unknown",
+    stage_dir = stage_dir,
+    backup_dir = backup_dir,
+    updates = updates,
+    created = created_before,
+    rollback_paths = rollback_paths,
+    hash_algo = hash_algo
+  })
+
   local local_proto = load_proto_version("/xreactor/shared/constants.lua")
   local staged_proto = nil
   if staged["xreactor/shared/constants.lua"] then
@@ -1988,6 +2090,7 @@ local function safe_update()
       print(message)
       log("WARN", message)
       cleanup_staging(stage_dir)
+      clear_update_marker()
       return
     end
   end
@@ -2035,12 +2138,9 @@ local function safe_update()
   end
 
   if not ok then
-    local rollback_paths = {}
-    for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
-    for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
-    for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
     rollback_from_backup(backup_dir, rollback_paths, created)
     cleanup_staging(stage_dir)
+    clear_update_marker()
     print("SAFE UPDATE failed. Rolled back. Error: " .. tostring(err))
     print("Backup: " .. backup_dir)
     log("ERROR", "SAFE UPDATE rolled back: " .. tostring(err))
@@ -2049,15 +2149,12 @@ local function safe_update()
 
   local integrity_ok, integrity_err = verify_integrity(manifest, role, cfg_path)
   if not integrity_ok then
-    local rollback_paths = {}
-    for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
-    for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
-    for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
     rollback_from_backup(backup_dir, rollback_paths, created)
     print("Integrity check failed: " .. tostring(integrity_err))
     print("Rollback complete. Backup: " .. backup_dir)
     log("ERROR", "SAFE UPDATE integrity failure: " .. tostring(integrity_err))
     cleanup_staging(stage_dir)
+    clear_update_marker()
     return
   end
 
@@ -2069,6 +2166,7 @@ local function safe_update()
   print("Backup: " .. backup_dir)
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "SAFE UPDATE complete. Backup: " .. backup_dir)
+  clear_update_marker()
   cleanup_staging(stage_dir)
 end
 
@@ -2150,6 +2248,27 @@ local function full_reinstall()
   backup_files(backup_dir, migration_paths)
   backup_files(backup_dir, protected)
 
+  local created_before = {}
+  for _, path in ipairs(update_paths) do
+    if not fs.exists(path) then
+      table.insert(created_before, path)
+    end
+  end
+  local rollback_paths = {}
+  for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
+  for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
+  for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
+  write_update_marker({
+    ts = os.epoch("utc"),
+    version = manifest.version or release and release.commit_sha or "unknown",
+    stage_dir = stage_dir,
+    backup_dir = backup_dir,
+    updates = entries,
+    created = created_before,
+    rollback_paths = rollback_paths,
+    hash_algo = hash_algo
+  })
+
   local ok, err = apply_staged(entries, staged, created)
   if ok then
     local migrate_ok, migrate_err = apply_file_migrations()
@@ -2159,12 +2278,9 @@ local function full_reinstall()
     end
   end
   if not ok then
-    local rollback_paths = {}
-    for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
-    for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
-    for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
     rollback_from_backup(backup_dir, rollback_paths, created)
     cleanup_staging(stage_dir)
+    clear_update_marker()
     print("FULL REINSTALL failed. Rolled back. Error: " .. tostring(err))
     log("ERROR", "FULL REINSTALL apply failed: " .. tostring(err))
     return
@@ -2249,6 +2365,7 @@ local function full_reinstall()
   print("FULL REINSTALL complete.")
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "FULL REINSTALL complete")
+  clear_update_marker()
   cleanup_staging(stage_dir)
 end
 
@@ -2296,6 +2413,10 @@ local function main()
   end
   print("=== XReactor Installer ===")
   log("INFO", "Installer started")
+  local recovered, result = recover_update_marker()
+  if result and result ~= "no marker" then
+    log("INFO", "Update recovery: " .. tostring(result))
+  end
   if fs.exists(BASE_DIR) then
     print("Existing installation detected.")
     log("INFO", "Existing installation detected")

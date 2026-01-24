@@ -17,6 +17,44 @@ local CONFIG = {
   DEFAULT_COMMS_PEER_TIMEOUT = 12.0, -- Seconds before marking peer down.
   DEFAULT_COMMS_QUEUE_LIMIT = 200, -- Max queued outbound messages.
   DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
+  -- Control rails tuning (shared defaults for RT nodes).
+  DEFAULT_RAILS = {
+    ramp_profiles = {
+      NORMAL = { up = 1.0, down = 1.0 },
+      SLOW = { up = 0.5, down = 0.5 },
+      FAST = { up = 1.5, down = 1.5 }
+    },
+    turbine_flow = {
+      deadband_up = 20,
+      deadband_down = 20,
+      hysteresis_up = 10,
+      hysteresis_down = 10,
+      max_step_up = 50,
+      max_step_down = 50,
+      cooldown_s = 1.0,
+      min = 200,
+      max = 1900,
+      ema_alpha = 0.2
+    },
+    reactor_rods = {
+      deadband_up = 5000,
+      deadband_down = 5000,
+      hysteresis_up = 500,
+      hysteresis_down = 500,
+      max_step_up = 5,
+      max_step_down = 5,
+      cooldown_s = 1.5,
+      min = 0,
+      max = 98,
+      ema_alpha = 0.25
+    },
+    coil = {
+      engage_rpm = 850,
+      disengage_rpm = 750,
+      cooldown_s = 1.0,
+      ema_alpha = 0.2
+    }
+  },
   DEFAULT_DEBUG_LOGGING = false -- Enable debug logging to /xreactor/logs/reprocessor.log.
 }
 
@@ -42,5 +80,6 @@ return {
     peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT,
     queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
     drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
-  }
+  },
+  rails = CONFIG.DEFAULT_RAILS
 }
