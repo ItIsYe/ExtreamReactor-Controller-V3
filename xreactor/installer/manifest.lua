@@ -66,9 +66,10 @@ return {
     { path = "xreactor/shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
     { path = "xreactor/shared/build_info.lua", size_bytes = 894, hash = "bbef6624" },
     { path = "xreactor/shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
-    { path = "installer.lua", size_bytes = 14886, hash = "199ebcfe" },
-    { path = "xreactor/installer/installer.lua", size_bytes = 14886, hash = "199ebcfe" },
-    { path = "xreactor/installer/installer_core.lua", size_bytes = 79846, hash = "ba402faf" },
-    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "4cb6c006" }
+    { path = "installer", size_bytes = 11153, hash = "4901600f" },
+    { path = "installer.lua", size_bytes = 14882, hash = "06316729" },
+    { path = "xreactor/installer/installer.lua", size_bytes = 14882, hash = "06316729" },
+    { path = "xreactor/installer/installer_core.lua", size_bytes = 79851, hash = "fa807d05" },
+    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "6468c1f7" }
   }
 }

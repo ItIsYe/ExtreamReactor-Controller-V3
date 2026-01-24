@@ -105,8 +105,9 @@ Wireless Modem (Control/Status)
 14. **Alerts Ack**: Alert auswählen → ACK/ACK ALL VISIBLE/ACTIVE setzt `acknowledged`, Alert bleibt sichtbar.
 15. **Alerts History**: Alerts-View → History-Tab, Severity-Filter prüfen.
 16. **Alerts Mute Persist**: Rule/Node muten → reboot → Mute bleibt aktiv.
-17. **Installer HTML Guard**: HTML-Response simulieren → Installer bricht mit „Downloaded HTML, expected Lua“ ab, ohne Dateien zu überschreiben.
-18. **Debug Logging Toggle**: `settings set xreactor.debug_logging true` → Installer/Node erzeugen Logdateien beim Start.
+17. **RAW Install (beta)**: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer` → `installer` startet den Bootstrap korrekt.
+18. **Blob-Fail Scenario**: Blob-URL laden → `/installer` enthält HTML → Bootstrap verweigert Überschreiben und meldet „Downloaded HTML, expected Lua“.
+19. **Debug Logging Toggle**: `settings set xreactor.debug_logging true` → Installer/Node erzeugen Logdateien beim Start.
 
 ## Rails/Tuning Guide (Kurz)
 - **RT Control Rails** werden zentral über `rails` in `master/config.lua` und `nodes/*/config.lua` gesteuert.
@@ -161,14 +162,15 @@ Wireless Modem (Control/Status)
 **Erstinstallation / Vollinstallation**
 1. Installer herunterladen und ausführen:
    ```
-   wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main/installer.lua
+   wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
+   installer
    ```
    Alternativ (wenn der Bootstrapper schon lokal vorhanden ist):
    ```
-   lua /installer.lua
+   lua /installer
    ```
    **Wichtig:** Nutze immer **RAW**-Links (`raw.githubusercontent.com`). GitHub-**Blob**-Links liefern HTML und sind nicht ausführbar.
-   (Beide Einstiegspunkte sind Bootstrapper: `/installer.lua` und `/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
+   (Beide Einstiegspunkte sind Bootstrapper: `/installer` und `/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
@@ -176,6 +178,11 @@ Wireless Modem (Control/Status)
 **Warum HTML passiert (Fehler `/installer: unexpected symbol near '<'`)**
 - Wird statt einer RAW-Datei eine GitHub-**HTML**-Seite geladen (z. B. Blob-URL, 404, Rate-Limit, Cloudflare), landet HTML im `installer`/`installer_core`.
 - Lua versucht das HTML zu parsen → `unexpected symbol near '<'`.
+  - **Fix:** RAW-Bootstrap erneut ausführen (beta-Branch):
+    ```
+    wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
+    installer
+    ```
 
 **Wie der Installer das verhindert**
 - **RAW-Only**: Downloader nutzt ausschließlich `raw.githubusercontent.com` (inkl. Mirror).
@@ -212,13 +219,13 @@ Wireless Modem (Control/Status)
 - **GitHub Timeout**: Installer nutzt Retry; falls weiter fehlschlägt, kann ein Cached Manifest verwendet werden oder der Installer bricht sauber ohne Änderungen ab.
 
 **Installer starten (ohne Neu-Download)**
-- Root-Installer (`/installer.lua`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
+- Root-Installer (`/installer`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
 - Der Installer unter `/xreactor/installer/installer.lua` ist ebenfalls ein Bootstrap und verhält sich identisch.
 - SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
 
 **Logging & Debugging**
-- Bootstrap-Log: `/xreactor_logs/installer_bootstrap.log` (mit Rotation `.1`).
-- Installer-Core-Log: `/xreactor_logs/installer.log` (mit Rotation `.1`).
+- Bootstrap-Log: `/xreactor/logs/installer_debug.log` (mit Rotation `.1`).
+- Installer-Core-Log: `/xreactor/logs/installer_core.log` (mit Rotation `.1`).
 - Node-Logs: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
 - Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen oder global via `settings set xreactor.debug_logging true`.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
