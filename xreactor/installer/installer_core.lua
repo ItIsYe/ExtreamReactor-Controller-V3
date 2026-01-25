@@ -50,6 +50,7 @@ local CONFIG = {
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
   LOG_SAMPLE_BYTES = 96, -- Bytes to capture as response signature.
+  CHECKSUM_DIAG_SAMPLE_BYTES = 80, -- Bytes to show when checksum mismatch occurs.
   REQUIRED_CORE_FILES = { -- Core files that must exist in the manifest.
     "xreactor/core/bootstrap.lua",
     "xreactor/core/logger.lua",
@@ -93,6 +94,7 @@ local RELEASE_SANITY_MARKER = CONFIG.RELEASE_SANITY_MARKER
 local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
 local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
 local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
+local CHECKSUM_DIAG_SAMPLE_BYTES = CONFIG.CHECKSUM_DIAG_SAMPLE_BYTES
 local REQUIRED_CORE_FILES = CONFIG.REQUIRED_CORE_FILES
 local FILE_MIGRATIONS = CONFIG.FILE_MIGRATIONS
 
@@ -937,6 +939,7 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
         reason = meta and meta.reason or nil,
         size_mismatch = meta and meta.size_mismatch or nil,
         signature = meta and meta.signature or nil,
+        starts_with_lt = body and body:sub(1, 1) == "<" or false,
         attempt = attempt
       }
       if not entry.ok then
@@ -1026,6 +1029,9 @@ local function download_file_with_retry(urls, expected_hash, hash_algo, opts)
   local function validate(body, meta, entry)
     if expected_hash then
       local actual = compute_hash(body, hash_algo)
+      entry.expected_hash = expected_hash
+      entry.actual_hash = actual
+      entry.expected_size = opts and opts.expected_size or nil
       if actual ~= expected_hash then
         return false, ("checksum mismatch expected=%s actual=%s"):format(expected_hash, actual)
       end
@@ -1263,8 +1269,26 @@ local function print_download_failure(label, info, fallback_urls)
     tostring(err_msg),
     tostring(last.url or urls[1])
   ))
-  if last.signature and last.signature ~= "" then
-    print(("Response signature: %s"):format(tostring(last.signature)))
+  local signature = last.signature or ""
+  local is_checksum = last.err and tostring(last.err):find("checksum mismatch", 1, true)
+  if is_checksum then
+    local expected_size = last.expected_size or "n/a"
+    local actual_size = last.bytes or "n/a"
+    local expected_hash = last.expected_hash or "n/a"
+    local actual_hash = last.actual_hash or "n/a"
+    local headers = last.headers or {}
+    local content_length = headers["Content-Length"] or headers["content-length"] or "n/a"
+    local starts_with_lt = last.starts_with_lt and "yes" or "no"
+    print(("Expected size: %s bytes, actual size: %s bytes"):format(tostring(expected_size), tostring(actual_size)))
+    print(("Expected crc32: %s, actual crc32: %s"):format(tostring(expected_hash), tostring(actual_hash)))
+    print(("Content-Length: %s"):format(tostring(content_length)))
+    print(("Starts with '<': %s"):format(starts_with_lt))
+    if signature ~= "" then
+      local sample = signature:sub(1, CHECKSUM_DIAG_SAMPLE_BYTES or 80)
+      print(("Response signature (first %d): %s"):format(CHECKSUM_DIAG_SAMPLE_BYTES or 80, tostring(sample)))
+    end
+  elseif signature ~= "" then
+    print(("Response signature: %s"):format(tostring(signature)))
   end
 end
 
@@ -1864,7 +1888,9 @@ local function stage_updates(entries, release, hash_algo)
   for _, entry in ipairs(entries) do
     local base = current_base_url or build_main_base_url()
     local urls = build_mirror_urls(base, entry.path)
-    local ok, content, meta = download_file_with_retry(urls, entry.hash, hash_algo)
+    local ok, content, meta = download_file_with_retry(urls, entry.hash, hash_algo, {
+      expected_size = entry.size_bytes
+    })
     if not ok then
       cleanup_staging(stage_dir)
       return nil, ("Download failed for %s"):format(entry.path), meta, "download"
@@ -1950,7 +1976,9 @@ local function update_installer_if_required(manifest, release, hash_algo)
     end
     local base = current_base_url or build_main_base_url()
     local urls = build_mirror_urls(base, installer_path)
-    local ok, content, meta = download_file_with_retry(urls, expected, hash_algo)
+    local ok, content, meta = download_file_with_retry(urls, expected, hash_algo, {
+      expected_size = manifest.installer_size_bytes
+    })
     if not ok then
       local last = meta and meta.last or {}
       print(("SAFE UPDATE aborted: installer download failed (url=%s reason=%s)"):format(
@@ -1999,7 +2027,9 @@ local function migrate_config(role, cfg_path, manifest, release, hash_algo)
   end
   local base = current_base_url or build_main_base_url()
   local urls = build_mirror_urls(base, remote_path)
-  local ok, content, meta = download_file_with_retry(urls, expected_hash, hash_algo)
+  local ok, content, meta = download_file_with_retry(urls, expected_hash, hash_algo, {
+    expected_size = entry and entry.size_bytes or nil
+  })
   if not ok then
     local last = meta and meta.last or {}
     error(("Config download failed (url=%s reason=%s)"):format(

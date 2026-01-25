@@ -225,6 +225,7 @@ Wireless Modem (Control/Status)
 **Offline/Fehlerfälle**
 - **HTTP disabled**: HTTP in der CC:Tweaked-Config aktivieren, dann Installer erneut starten.
 - **GitHub Timeout**: Installer nutzt Retry; falls weiter fehlschlägt, kann ein Cached Manifest verwendet werden oder der Installer bricht sauber ohne Änderungen ab.
+- **Checksum mismatch**: Zuerst Manifest aktualisieren und sicherstellen, dass der Installer auf das **beta**-Manifest zeigt (RAW-URL via `raw.githubusercontent.com`).
 
 **Installer starten (ohne Neu-Download)**
 - Root-Installer (`/installer`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
