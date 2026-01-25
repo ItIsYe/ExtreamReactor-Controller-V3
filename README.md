@@ -2,6 +2,14 @@
 
 SCADA-ähnlicher Steuerungs-Stack für Minecraft mit **CC:Tweaked**, **Extreme Reactors** und optional **Mekanism** (Energiespeicher/Fluids). Der Stack besteht aus einem MASTER, der Telemetrie sammelt, Sequenzen orchestriert und Visualisierung liefert, sowie spezialisierten Nodes, die lokale Peripherals steuern.
 
+## Quick Install (CC:Tweaked)
+**Copy & Paste (RAW, beta):**
+```
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
+installer
+```
+**Wichtig:** Niemals GitHub **/blob/**-Links verwenden. Blob liefert HTML → Lua meldet `unexpected symbol near '<'`. Nutze immer `raw.githubusercontent.com`.
+
 ## Projektziel & Überblick
 - **MASTER** sammelt Statusdaten, koordiniert RT-Nodes (Reactor/Turbine) und verteilt Setpoints.
 - **Nodes** kapseln die lokale Peripherie-Steuerung und Sicherheitslogik.

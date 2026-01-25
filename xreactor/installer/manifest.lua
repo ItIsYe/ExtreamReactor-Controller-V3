@@ -1,12 +1,12 @@
 -- Manifest for the XReactor installer (hashes and required files).
 return {
   manifest_version = 2,
-  source_ref = "main",
+  source_ref = "beta",
   hash_algo = "crc32",
   installer_min_version = "1.4",
   installer_path = "xreactor/installer/installer_core.lua",
-  installer_hash = "ba402faf",
-  installer_size_bytes = 79846,
+  installer_hash = "6ed0386b",
+  installer_size_bytes = 80091,
   files = {
     { path = "xreactor/core/bootstrap.lua", size_bytes = 9115, hash = "d1a38895" },
     { path = "xreactor/core/alerts.lua", size_bytes = 7862, hash = "e5bea6f2" },
@@ -66,10 +66,10 @@ return {
     { path = "xreactor/shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
     { path = "xreactor/shared/build_info.lua", size_bytes = 894, hash = "bbef6624" },
     { path = "xreactor/shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
-    { path = "installer", size_bytes = 11153, hash = "4901600f" },
-    { path = "installer.lua", size_bytes = 14882, hash = "06316729" },
-    { path = "xreactor/installer/installer.lua", size_bytes = 14882, hash = "06316729" },
-    { path = "xreactor/installer/installer_core.lua", size_bytes = 79851, hash = "fa807d05" },
-    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "6468c1f7" }
+    { path = "installer", size_bytes = 12137, hash = "23e2f1ed" },
+    { path = "installer.lua", size_bytes = 15992, hash = "b67cfed9" },
+    { path = "xreactor/installer/installer.lua", size_bytes = 15992, hash = "b67cfed9" },
+    { path = "xreactor/installer/installer_core.lua", size_bytes = 80091, hash = "6ed0386b" },
+    { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "9365741e" }
   }
 }

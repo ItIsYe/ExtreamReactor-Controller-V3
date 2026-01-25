@@ -6,6 +6,8 @@ local CONFIG = {
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
   BRANCH = "beta", -- Branch to fetch the bootstrap from.
   FILE_PATH = "installer.lua", -- Remote bootstrap filename.
+  QUICK_INSTALL_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer", -- README Quick Install URL.
+  QUICK_INSTALL_TARGET = "installer", -- README Quick Install target filename.
   BASE_URLS = { -- RAW mirrors (no blob links).
     "https://raw.githubusercontent.com",
     "https://raw.github.com"
@@ -112,6 +114,27 @@ local function sanitize_signature(prefix)
   end
   local sample = prefix:gsub("[%c]", ".")
   return sample:sub(1, CONFIG.LOG_SAMPLE_BYTES or 80)
+end
+
+local function quick_install_block()
+  local url = CONFIG.QUICK_INSTALL_URL
+  local target = CONFIG.QUICK_INSTALL_TARGET
+  if not url or not target then
+    return nil
+  end
+  return ("wget %s %s\n%s"):format(url, target, target)
+end
+
+local function print_quick_install_hint()
+  local block = quick_install_block()
+  if not block then
+    return
+  end
+  print("Quick Install (RAW, beta):")
+  for line in block:gmatch("[^\n]+") do
+    print("  " .. line)
+  end
+  print("Hinweis: Niemals GitHub /blob/ Links nutzen (HTML -> Lua-Fehler).")
 end
 
 local function detect_html(body_prefix)
@@ -367,12 +390,17 @@ repeat
   if meta and meta.signature and meta.signature ~= "" then
     print(("Response signature: %s"):format(tostring(meta.signature)))
   end
+  if err_msg == "Downloaded HTML, expected Lua" then
+    print("Detected HTML instead of Lua. This usually means a GitHub /blob/ link or HTML error page.")
+    print_quick_install_hint()
+  end
 until not retry_menu()
 
 if not ok then
   if is_valid_local(CONFIG.TARGET_PATH) then
     print("Using existing installer.lua.")
   else
+    print_quick_install_hint()
     error("Installer bootstrap unavailable. Please re-run the RAW install command.")
   end
 end

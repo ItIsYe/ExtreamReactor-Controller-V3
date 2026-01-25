@@ -5,6 +5,9 @@ local CONFIG = {
   RELEASE_PATH = "xreactor/installer/release.lua", -- Release metadata path.
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
+  RELEASE_BRANCH = "beta", -- Branch to fetch release metadata from.
+  QUICK_INSTALL_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer", -- README Quick Install URL.
+  QUICK_INSTALL_TARGET = "installer", -- README Quick Install target filename.
   BASE_URLS = { -- Raw download mirrors (no blob links).
     "https://raw.githubusercontent.com",
     "https://raw.github.com"
@@ -123,6 +126,27 @@ local function sanitize_signature(prefix)
   end
   local sample = prefix:gsub("[%c]", ".")
   return sample:sub(1, CONFIG.LOG_SAMPLE_BYTES or 96)
+end
+
+local function quick_install_block()
+  local url = CONFIG.QUICK_INSTALL_URL
+  local target = CONFIG.QUICK_INSTALL_TARGET
+  if not url or not target then
+    return nil
+  end
+  return ("wget %s %s\n%s"):format(url, target, target)
+end
+
+local function print_quick_install_hint()
+  local block = quick_install_block()
+  if not block then
+    return
+  end
+  print("Quick Install (RAW, beta):")
+  for line in block:gmatch("[^\n]+") do
+    print("  " .. line)
+  end
+  print("Hinweis: Niemals GitHub /blob/ Links nutzen (HTML -> Lua-Fehler).")
 end
 
 local function detect_html(body_prefix)
@@ -354,7 +378,7 @@ local function read_file(path)
 end
 
 local function load_release()
-  local urls = build_raw_urls(CONFIG.RELEASE_PATH, "main")
+  local urls = build_raw_urls(CONFIG.RELEASE_PATH, CONFIG.RELEASE_BRANCH)
   local ok, content, meta = fetch_with_retries(urls)
   if not ok then
     return nil, meta
@@ -484,20 +508,24 @@ if not release then
   log_line("WARN", "Release metadata unavailable: " .. tostring(release_meta and release_meta.err))
 end
 
-if release and needs_core_update(release) then
-  print("Checking installer core update...")
-  local ok, _, meta = download_core(release)
-  while not ok do
-    local err_msg = meta and meta.err or "unknown"
-    if err_msg == "html response" then
-      err_msg = "Downloaded HTML, expected Lua"
-    end
-    print("Installer core download failed: " .. tostring(err_msg))
-    log_line("WARN", "Core download failed: " .. tostring(err_msg) .. " url=" .. tostring(meta and meta.url or "unknown"))
-    if fs.exists(CONFIG.CORE_PATH) then
-      print("Using existing installer core.")
-      break
-    end
+  if release and needs_core_update(release) then
+    print("Checking installer core update...")
+    local ok, _, meta = download_core(release)
+    while not ok do
+      local err_msg = meta and meta.err or "unknown"
+      if err_msg == "html response" then
+        err_msg = "Downloaded HTML, expected Lua"
+      end
+      print("Installer core download failed: " .. tostring(err_msg))
+      if err_msg == "Downloaded HTML, expected Lua" then
+        print("Detected HTML instead of Lua. This usually means a GitHub /blob/ link or HTML error page.")
+        print_quick_install_hint()
+      end
+      log_line("WARN", "Core download failed: " .. tostring(err_msg) .. " url=" .. tostring(meta and meta.url or "unknown"))
+      if fs.exists(CONFIG.CORE_PATH) then
+        print("Using existing installer core.")
+        break
+      end
     if not confirm("Retry download?", true) then
       break
     end
@@ -512,6 +540,7 @@ local loader = load_local_core()
 if not loader then
   print("Installer core missing and could not be loaded.")
   log_line("ERROR", "Installer core missing after bootstrap attempt.")
+  print_quick_install_hint()
   return
 end
 
