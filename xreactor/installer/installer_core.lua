@@ -6,6 +6,7 @@ local CONFIG = {
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
   REPO_BASE_URL = "https://raw.githubusercontent.com", -- Raw GitHub base URL.
+  DEFAULT_BRANCH = "beta", -- Default branch for base URLs when no commit SHA is pinned.
   RELEASE_REMOTE = "xreactor/installer/release.lua", -- Release metadata path.
   MANIFEST_REMOTE = "xreactor/installer/manifest.lua", -- Manifest path (fallback).
   MANIFEST_LOCAL = "/xreactor/.manifest", -- Cached manifest in install dir.
@@ -30,8 +31,8 @@ local CONFIG = {
     "https://raw.github.com"
   },
   DOWNLOAD_HTML_SUSPECT_BYTES = 256, -- Treat small HTML-like responses as errors.
-  MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/main/xreactor/installer/manifest.lua", -- Primary manifest URL.
-  MANIFEST_URL_FALLBACK = "https://cdn.jsdelivr.net/gh/ItIsYe/ExtreamReactor-Controller-V3@main/xreactor/installer/manifest.lua", -- Optional fallback manifest URL.
+  MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/manifest.lua", -- Primary manifest URL.
+  MANIFEST_URL_FALLBACK = "https://cdn.jsdelivr.net/gh/ItIsYe/ExtreamReactor-Controller-V3@beta/xreactor/installer/manifest.lua", -- Optional fallback manifest URL.
   MANIFEST_RETRY_ATTEMPTS = 3, -- Retry attempts for manifest acquisition menu.
   MANIFEST_RETRY_BACKOFF = 1, -- Backoff seconds for manifest retry menu.
   MANIFEST_MENU_RETRY_LIMIT = 5, -- Retry rounds from menu before auto-cancel.
@@ -95,9 +96,9 @@ local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
 local REQUIRED_CORE_FILES = CONFIG.REQUIRED_CORE_FILES
 local FILE_MIGRATIONS = CONFIG.FILE_MIGRATIONS
 
--- Download base tracking (main vs pinned commit).
+-- Download base tracking (default branch vs pinned commit).
 local current_base_url = nil
-local current_base_source = "main"
+local current_base_source = CONFIG.DEFAULT_BRANCH
 local current_base_sha = nil
 
 -- BOOTSTRAP HELPERS (standalone, no external dependencies).
@@ -1047,7 +1048,7 @@ local function is_valid_sha(sha)
 end
 
 local function build_main_base_url()
-  return string.format("%s/%s/%s/main/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME)
+  return string.format("%s/%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, CONFIG.DEFAULT_BRANCH or "main")
 end
 
 local function build_commit_base_url(sha)
@@ -1080,7 +1081,7 @@ end
 
 local function set_base_source(base_url, source, sha)
   current_base_url = base_url
-  current_base_source = source or "main"
+  current_base_source = source or CONFIG.DEFAULT_BRANCH
   current_base_sha = sha
   write_base_cache({
     last_good_base_url = current_base_url,
@@ -1096,10 +1097,10 @@ local function build_manifest_sources(release)
     table.insert(sources, { base_url = build_commit_base_url(sha), source = "sha", sha = sha })
   else
     if sha then
-      log("WARN", "Invalid commit SHA format; falling back to main")
+      log("WARN", "Invalid commit SHA format; falling back to default branch")
     end
   end
-  table.insert(sources, { base_url = build_main_base_url(), source = "main", sha = nil })
+  table.insert(sources, { base_url = build_main_base_url(), source = CONFIG.DEFAULT_BRANCH, sha = nil })
   return sources
 end
 
@@ -1374,7 +1375,7 @@ end
 local function download_manifest_from_source(release, base_info)
   local manifest_path = release.manifest_path or MANIFEST_REMOTE
   local urls = build_mirror_urls(base_info.base_url, manifest_path)
-  if base_info.source == "main" and CONFIG.MANIFEST_URL_FALLBACK then
+  if base_info.source == CONFIG.DEFAULT_BRANCH and CONFIG.MANIFEST_URL_FALLBACK then
     table.insert(urls, CONFIG.MANIFEST_URL_FALLBACK)
   end
   local ok, content, meta = download_with_retry(urls, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
@@ -1427,8 +1428,8 @@ local function download_manifest_with_retries(attempts, backoff)
         end
         last_meta = meta
         if base_info.source == "sha" then
-          print("Pinned commit download failed, falling back to main.")
-          log("WARN", "Pinned manifest download failed; falling back to main")
+          print(("Pinned commit download failed, falling back to %s."):format(CONFIG.DEFAULT_BRANCH))
+          log("WARN", "Pinned manifest download failed; falling back to default branch")
         end
       end
     end
