@@ -18,6 +18,9 @@ local CONFIG = {
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
   MIN_CORE_BYTES = 200, -- Minimum bytes to accept core download.
   CORE_SANITY_MARKER = "local function main", -- Core sanity marker.
+  CORE_DOWNLOAD_PATH = "/xreactor/.tmp/installer_core.lua.download", -- Temp download path for core.
+  CORE_MAX_RETRIES = 3, -- Max core download attempts before aborting.
+  CORE_RETRY_BACKOFF = 1, -- Backoff seconds between core download retries.
   LOG_ENABLED = nil, -- Enable bootstrap logging (nil uses settings key).
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
   LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path.
@@ -383,9 +386,9 @@ local function load_release()
   if not ok then
     return nil, meta
   end
-  local loader = load(content, "release", "t", {})
+  local loader, load_err = load(content, "release", "t", {})
   if not loader then
-    return nil, { err = "release load failed" }
+    return nil, { err = "release load failed", detail = load_err }
   end
   local ok_exec, data = pcall(loader)
   if not ok_exec or type(data) ~= "table" then
@@ -406,22 +409,42 @@ local function validate_core(content)
   if not content:find(CONFIG.CORE_SANITY_MARKER, 1, true) then
     return false, "core sanity marker missing"
   end
-  local loader = load(content, "installer_core", "t", {})
+  local loader, load_err = load(content, "installer_core", "t", {})
   if not loader then
-    return false, "core load failed"
+    return false, "core load failed", load_err
   end
   return true
 end
 
 local function load_local_core()
   if not fs.exists(CONFIG.CORE_PATH) then
-    return nil
+    return nil, "core missing"
   end
-  local loader = loadfile(CONFIG.CORE_PATH)
+  local loader, load_err = loadfile(CONFIG.CORE_PATH)
   if not loader then
-    return nil
+    return nil, load_err
   end
   return loader
+end
+
+local function cleanup_temp_file(path)
+  if path and fs.exists(path) then
+    fs.delete(path)
+  end
+end
+
+local function log_core_failure(reason, meta)
+  log_line("ERROR", string.format(
+    "Core download failed: reason=%s detail=%s url=%s code=%s bytes=%s sig=%s expected=%s actual=%s",
+    tostring(reason),
+    tostring(meta and meta.detail or ""),
+    tostring(meta and meta.url or ""),
+    tostring(meta and meta.code or "n/a"),
+    tostring(meta and meta.bytes or "n/a"),
+    tostring(meta and meta.signature or ""),
+    tostring(meta and meta.expected_hash or ""),
+    tostring(meta and meta.actual_hash or "")
+  ))
 end
 
 local function save_core_meta(payload)
@@ -477,18 +500,56 @@ local function download_core(release)
   if not ok then
     return false, nil, meta
   end
-  local valid, reason = validate_core(content)
+  local valid, reason, detail = validate_core(content)
   if not valid then
-    return false, nil, { err = reason, url = meta and meta.url }
+    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+    return false, nil, {
+      err = reason,
+      detail = detail,
+      url = meta and meta.url,
+      code = meta and meta.code,
+      bytes = meta and meta.bytes,
+      signature = meta and meta.signature
+    }
   end
   if release and release.installer_core_hash then
     local hash = crc32_hash(content)
     if hash ~= release.installer_core_hash then
-      return false, nil, { err = "checksum mismatch", url = meta and meta.url }
+      cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+      return false, nil, {
+        err = "checksum mismatch",
+        url = meta and meta.url,
+        code = meta and meta.code,
+        bytes = meta and meta.bytes,
+        signature = meta and meta.signature,
+        expected_hash = release.installer_core_hash,
+        actual_hash = hash
+      }
     end
   end
-  if not write_atomic(CONFIG.CORE_PATH, content) then
-    return false, nil, { err = "write failed" }
+  if not write_file(CONFIG.CORE_DOWNLOAD_PATH, content) then
+    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+    return false, nil, { err = "temp write failed", url = meta and meta.url }
+  end
+  local loader, load_err = loadfile(CONFIG.CORE_DOWNLOAD_PATH)
+  if not loader then
+    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+    return false, nil, {
+      err = "core loadfile failed",
+      detail = load_err,
+      url = meta and meta.url,
+      code = meta and meta.code,
+      bytes = meta and meta.bytes,
+      signature = meta and meta.signature
+    }
+  end
+  if fs.exists(CONFIG.CORE_PATH) then
+    fs.delete(CONFIG.CORE_PATH)
+  end
+  local moved = pcall(fs.move, CONFIG.CORE_DOWNLOAD_PATH, CONFIG.CORE_PATH)
+  if not moved or not fs.exists(CONFIG.CORE_PATH) then
+    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+    return false, nil, { err = "move failed", url = meta and meta.url }
   end
   save_core_meta({
     hash = crc32_hash(content),
@@ -508,38 +569,47 @@ if not release then
   log_line("WARN", "Release metadata unavailable: " .. tostring(release_meta and release_meta.err))
 end
 
-  if release and needs_core_update(release) then
-    print("Checking installer core update...")
-    local ok, _, meta = download_core(release)
-    while not ok do
-      local err_msg = meta and meta.err or "unknown"
-      if err_msg == "html response" then
-        err_msg = "Downloaded HTML, expected Lua"
-      end
-      print("Installer core download failed: " .. tostring(err_msg))
-      if err_msg == "Downloaded HTML, expected Lua" then
-        print("Detected HTML instead of Lua. This usually means a GitHub /blob/ link or HTML error page.")
-        print_quick_install_hint()
-      end
-      log_line("WARN", "Core download failed: " .. tostring(err_msg) .. " url=" .. tostring(meta and meta.url or "unknown"))
-      if fs.exists(CONFIG.CORE_PATH) then
-        print("Using existing installer core.")
-        break
-      end
+if release and needs_core_update(release) then
+  print("Checking installer core update...")
+  local ok = false
+  local meta
+  for attempt = 1, (CONFIG.CORE_MAX_RETRIES or 3) do
+    ok, _, meta = download_core(release)
+    if ok then
+      break
+    end
+    local err_msg = meta and meta.err or "unknown"
+    if err_msg == "html response" then
+      err_msg = "Downloaded HTML, expected Lua"
+    end
+    print("Installer core download failed: " .. tostring(err_msg))
+    print("Details logged to: " .. tostring(CONFIG.LOG_PATH))
+    if err_msg == "Downloaded HTML, expected Lua" then
+      print("Detected HTML instead of Lua. This usually means a GitHub /blob/ link or HTML error page.")
+      print_quick_install_hint()
+    end
+    log_core_failure(err_msg, meta)
+    if fs.exists(CONFIG.CORE_PATH) and confirm("Use existing installer core?", true) then
+      break
+    end
+    if attempt >= (CONFIG.CORE_MAX_RETRIES or 3) then
+      print("Max retries reached. Aborting core update.")
+      break
+    end
     if not confirm("Retry download?", true) then
       break
     end
-    ok, _, meta = download_core(release)
+    os.sleep((CONFIG.CORE_RETRY_BACKOFF or 1) * attempt)
   end
   if ok then
     print("Installer core updated.")
   end
 end
 
-local loader = load_local_core()
+local loader, load_err = load_local_core()
 if not loader then
   print("Installer core missing and could not be loaded.")
-  log_line("ERROR", "Installer core missing after bootstrap attempt.")
+  log_line("ERROR", "Installer core missing after bootstrap attempt. err=" .. tostring(load_err))
   print_quick_install_hint()
   return
 end
