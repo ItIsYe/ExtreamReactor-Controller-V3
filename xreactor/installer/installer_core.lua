@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "1.4"
+local INSTALLER_CORE_VERSION = "1.5"
 
 -- CONFIG
 local CONFIG = {
@@ -40,6 +40,12 @@ local CONFIG = {
   FILE_RETRY_BACKOFF = 1, -- Backoff seconds for file download retry rounds.
   BASE_CACHE_PATH = "/xreactor/.cache/source.lua", -- Cache for last good base URL.
   PROTOCOL_ABORT_ON_MAJOR_CHANGE = true, -- Abort SAFE UPDATE if protocol major version changes.
+  DISK_SPACE_OVERHEAD_BYTES = 2048, -- Extra bytes per file reserved for temp writes/metadata.
+  DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
+  MAX_BACKUPS = 4, -- Retention: max backup directories under /xreactor_backup.
+  MAX_LOGS_MB = 6, -- Retention: max combined log size (MB) under log dirs.
+  MAX_STAGING_DIRS = 2, -- Retention: number of staging dirs to keep in /xreactor_stage.
+  LOG_RETENTION_DIRS = { "/xreactor/logs", "/xreactor_logs" }, -- Log dirs eligible for cleanup.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = false, -- Enables installer file logging to /xreactor_logs/installer.log.
   LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path.
@@ -152,6 +158,43 @@ local function ensure_dir(path)
   if not fs.exists(path) then
     fs.makeDir(path)
   end
+end
+
+local function format_bytes(bytes)
+  local value = tonumber(bytes or 0) or 0
+  local units = { "B", "KB", "MB", "GB" }
+  local idx = 1
+  while value >= 1024 and idx < #units do
+    value = value / 1024
+    idx = idx + 1
+  end
+  if idx == 1 then
+    return tostring(math.floor(value)) .. units[idx]
+  end
+  return string.format("%.1f%s", value, units[idx])
+end
+
+local function resolve_space_path(path)
+  local probe = path
+  if not probe or probe == "" then
+    probe = "/"
+  end
+  if not fs.exists(probe) then
+    probe = fs.getDir(probe)
+    if probe == "" then
+      probe = "/"
+    end
+  end
+  return probe
+end
+
+local function get_free_space(path)
+  local probe = resolve_space_path(path)
+  local ok, free = pcall(fs.getFreeSpace, probe)
+  if not ok then
+    return nil
+  end
+  return free, probe
 end
 
 -- Internal standalone logger for the installer (no project dependencies).
@@ -326,15 +369,242 @@ local function read_file(path)
   return content
 end
 
+local function build_cleanup_suggestions()
+  local suggestions = {
+    ("delete %s/*"):format(BACKUP_BASE),
+    ("delete %s/*"):format(UPDATE_STAGING_BASE),
+    "delete /xreactor/logs/*.log",
+    "delete /xreactor_logs/*.log"
+  }
+  return table.concat(suggestions, " | ")
+end
+
+local function describe_space_issue(context, free, needed, path)
+  local target = path and (" (" .. tostring(path) .. ")") or ""
+  local suggestion = build_cleanup_suggestions()
+  return string.format(
+    "%s: not enough disk space%s. Free=%s Needed=%s. Try: %s",
+    tostring(context or "Disk space check"),
+    target,
+    format_bytes(free),
+    format_bytes(needed),
+    suggestion
+  )
+end
+
+local function calculate_required_bytes(entries)
+  local total = 0
+  local count = 0
+  for _, entry in ipairs(entries or {}) do
+    if entry then
+      count = count + 1
+      total = total + (entry.size_bytes or 0)
+    end
+  end
+  total = total + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) * count
+  total = total + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  return total
+end
+
+local function ensure_free_space(path, needed, context)
+  local free, probe = get_free_space(path)
+  if free and needed and free >= needed then
+    return true
+  end
+  local message = describe_space_issue(context, free or 0, needed or 0, probe)
+  print(message)
+  log("WARN", message)
+  return false, message
+end
+
+local function preflight_space(entries, target_dir, context)
+  local needed = calculate_required_bytes(entries)
+  return ensure_free_space(target_dir, needed, context)
+end
+
+local function collect_dir_entries(path)
+  if not fs.exists(path) then
+    return {}
+  end
+  local ok, entries = pcall(fs.list, path)
+  if not ok or type(entries) ~= "table" then
+    return {}
+  end
+  return entries
+end
+
+local function prune_backup_dirs()
+  if not CONFIG.MAX_BACKUPS or CONFIG.MAX_BACKUPS <= 0 then
+    return {}
+  end
+  local deleted = {}
+  local entries = collect_dir_entries(BACKUP_BASE)
+  local dirs = {}
+  for _, entry in ipairs(entries) do
+    local path = BACKUP_BASE .. "/" .. entry
+    if fs.isDir(path) then
+      table.insert(dirs, entry)
+    end
+  end
+  table.sort(dirs)
+  local keep = CONFIG.MAX_BACKUPS
+  if #dirs > keep then
+    for idx = 1, #dirs - keep do
+      local path = BACKUP_BASE .. "/" .. dirs[idx]
+      if fs.exists(path) then
+        fs.delete(path)
+        table.insert(deleted, path)
+      end
+    end
+  end
+  return deleted
+end
+
+local function prune_staging_dirs()
+  if not CONFIG.MAX_STAGING_DIRS or CONFIG.MAX_STAGING_DIRS < 0 then
+    return {}
+  end
+  local deleted = {}
+  local entries = collect_dir_entries(UPDATE_STAGING_BASE)
+  local dirs = {}
+  for _, entry in ipairs(entries) do
+    local path = UPDATE_STAGING_BASE .. "/" .. entry
+    if fs.isDir(path) then
+      table.insert(dirs, entry)
+    end
+  end
+  table.sort(dirs)
+  local keep = CONFIG.MAX_STAGING_DIRS
+  if #dirs > keep then
+    for idx = 1, #dirs - keep do
+      local path = UPDATE_STAGING_BASE .. "/" .. dirs[idx]
+      if fs.exists(path) then
+        fs.delete(path)
+        table.insert(deleted, path)
+      end
+    end
+  end
+  return deleted
+end
+
+local function dir_total_size(path)
+  local total = 0
+  if not fs.exists(path) then
+    return 0
+  end
+  for _, entry in ipairs(collect_dir_entries(path)) do
+    local full_path = path .. "/" .. entry
+    if not fs.isDir(full_path) then
+      total = total + (fs.getSize(full_path) or 0)
+    end
+  end
+  return total
+end
+
+local function dir_size_recursive(path)
+  if not fs.exists(path) then
+    return 0
+  end
+  if not fs.isDir(path) then
+    return fs.getSize(path) or 0
+  end
+  local total = 0
+  for _, entry in ipairs(collect_dir_entries(path)) do
+    total = total + dir_size_recursive(path .. "/" .. entry)
+  end
+  return total
+end
+
+local function collect_log_files()
+  local files = {}
+  for _, dir in ipairs(CONFIG.LOG_RETENTION_DIRS or {}) do
+    if fs.exists(dir) and fs.isDir(dir) then
+      for _, entry in ipairs(collect_dir_entries(dir)) do
+        local full_path = dir .. "/" .. entry
+        if not fs.isDir(full_path) then
+          local ok, modified = pcall(fs.getLastModified, full_path)
+          table.insert(files, {
+            path = full_path,
+            size = fs.getSize(full_path) or 0,
+            modified = ok and modified or 0
+          })
+        end
+      end
+    end
+  end
+  return files
+end
+
+local function prune_logs()
+  if not CONFIG.MAX_LOGS_MB or CONFIG.MAX_LOGS_MB <= 0 then
+    return {}
+  end
+  local max_bytes = CONFIG.MAX_LOGS_MB * 1024 * 1024
+  local files = collect_log_files()
+  local total = 0
+  for _, entry in ipairs(files) do
+    total = total + (entry.size or 0)
+  end
+  if total <= max_bytes then
+    return {}
+  end
+  table.sort(files, function(a, b)
+    return (a.modified or 0) < (b.modified or 0)
+  end)
+  local deleted = {}
+  for _, entry in ipairs(files) do
+    if total <= max_bytes then
+      break
+    end
+    if fs.exists(entry.path) then
+      fs.delete(entry.path)
+      total = total - (entry.size or 0)
+      table.insert(deleted, entry.path)
+    end
+  end
+  return deleted
+end
+
+local function cleanup_storage()
+  local deleted = {}
+  for _, path in ipairs(prune_backup_dirs()) do
+    table.insert(deleted, path)
+  end
+  for _, path in ipairs(prune_logs()) do
+    table.insert(deleted, path)
+  end
+  for _, path in ipairs(prune_staging_dirs()) do
+    table.insert(deleted, path)
+  end
+  if #deleted > 0 then
+    print("Cleanup: removed " .. tostring(#deleted) .. " old backup/log/staging items.")
+    log("INFO", "Cleanup removed: " .. table.concat(deleted, ", "))
+  else
+    log("INFO", "Cleanup: no old backup/log/staging items removed.")
+  end
+  return deleted
+end
+
 local function write_atomic(path, content)
   ensure_dir(fs.getDir(path))
+  local needed = (content and #content or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  local ok_space = ensure_free_space(path, needed, "Write " .. tostring(path))
+  if not ok_space then
+    error("Out of space while writing " .. tostring(path), 0)
+  end
   local tmp = path .. ".tmp"
   local file = fs.open(tmp, "w")
   if not file then
-    error("Unable to write file at " .. path)
+    error("Unable to write file at " .. path, 0)
   end
-  file.write(content)
+  local ok, err = pcall(file.write, content)
   file.close()
+  if not ok then
+    if fs.exists(tmp) then
+      fs.delete(tmp)
+    end
+    error("Unable to write file at " .. path .. ": " .. tostring(err), 0)
+  end
   if fs.exists(path) then
     fs.delete(path)
   end
@@ -1888,15 +2158,29 @@ local function stage_updates(entries, release, hash_algo)
   for _, entry in ipairs(entries) do
     local base = current_base_url or build_main_base_url()
     local urls = build_mirror_urls(base, entry.path)
-    local ok, content, meta = download_file_with_retry(urls, entry.hash, hash_algo, {
+    local expected_size = entry.size_bytes or 0
+    local space_ok = ensure_free_space(stage_dir, expected_size + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0), "Stage " .. entry.path)
+    if not space_ok then
+      cleanup_staging(stage_dir)
+      return nil, ("Insufficient space to stage %s"):format(entry.path), nil, "space"
+    end
+    local ok, content, meta = pcall(download_file_with_retry, urls, entry.hash, hash_algo, {
       expected_size = entry.size_bytes
     })
     if not ok then
       cleanup_staging(stage_dir)
+      return nil, ("Download failed for %s"):format(entry.path), { last = { err = content } }, "download"
+    end
+    if not content then
+      cleanup_staging(stage_dir)
       return nil, ("Download failed for %s"):format(entry.path), meta, "download"
     end
     local staging_path = build_staging_path(stage_dir, entry.path)
-    write_atomic(staging_path, content)
+    local write_ok, write_err = pcall(write_atomic, staging_path, content)
+    if not write_ok then
+      cleanup_staging(stage_dir)
+      return nil, ("Write failed for %s: %s"):format(entry.path, tostring(write_err)), nil, "write"
+    end
     local verify = file_checksum(staging_path, hash_algo)
     if verify ~= entry.hash then
       cleanup_staging(stage_dir)
@@ -1925,6 +2209,42 @@ local function apply_staged(entries, staged, created)
     local write_ok, write_err = pcall(write_atomic, target_path, content)
     if not write_ok then
       return false, write_err
+    end
+  end
+  return true
+end
+
+local function apply_direct(entries, release, hash_algo, created)
+  for _, entry in ipairs(entries) do
+    local target_path = "/" .. entry.path
+    local base = current_base_url or build_main_base_url()
+    local urls = build_mirror_urls(base, entry.path)
+    local ok, content, meta = pcall(download_file_with_retry, urls, entry.hash, hash_algo, {
+      expected_size = entry.size_bytes
+    })
+    if not ok then
+      return false, ("Download failed for %s: %s"):format(entry.path, tostring(content)), meta, "download"
+    end
+    if not content then
+      return false, ("Download failed for %s"):format(entry.path), meta, "download"
+    end
+    if not fs.exists(target_path) then
+      table.insert(created, target_path)
+    end
+    local write_ok, write_err = pcall(write_atomic, target_path, content)
+    if not write_ok then
+      return false, ("Write failed for %s: %s"):format(entry.path, tostring(write_err)), nil, "write"
+    end
+    local verify = file_checksum(target_path, hash_algo)
+    if verify ~= entry.hash then
+      if fs.exists(target_path) then
+        fs.delete(target_path)
+      end
+      return false, ("Integrity check failed for %s (expected=%s actual=%s)"):format(
+        entry.path,
+        entry.hash,
+        verify
+      ), nil, "integrity"
     end
   end
   return true
@@ -2136,6 +2456,7 @@ local function safe_update()
       tostring(hash_algo or "unknown")
     ))
     ensure_base_dirs()
+    cleanup_storage()
 
     log("INFO", "SAFE UPDATE started for role " .. tostring(role))
     local can_continue = update_installer_if_required(manifest, release, hash_algo)
@@ -2150,6 +2471,12 @@ local function safe_update()
 
     updates = update_files(manifest, hash_algo)
     log("INFO", "Files needing update: " .. tostring(#updates))
+    local preflight_ok = preflight_space(updates, UPDATE_STAGING_BASE, "SAFE UPDATE preflight")
+    if not preflight_ok then
+      print("SAFE UPDATE aborted: not enough disk space.")
+      log("WARN", "SAFE UPDATE aborted: insufficient disk space")
+      return
+    end
     local stage_err
     local stage_meta
     staged, stage_err, stage_meta, stage_dir = stage_updates(updates, release, hash_algo)
@@ -2313,6 +2640,7 @@ local function full_reinstall()
   local existing_role
   local existing_cfg_path
   local keep_config = false
+  local use_staging = true
   while true do
     manifest_content, manifest, release, manifest_meta = acquire_manifest()
     if not manifest_content then
@@ -2325,6 +2653,7 @@ local function full_reinstall()
       tostring(hash_algo or "unknown")
     ))
     ensure_base_dirs()
+    cleanup_storage()
     log("INFO", "FULL REINSTALL started")
 
     existing_role, existing_cfg_path = find_existing_role()
@@ -2338,6 +2667,21 @@ local function full_reinstall()
     end
 
     local entries = build_manifest_entries(manifest)
+    local required_total = calculate_required_bytes(entries)
+    local free_space = get_free_space(BASE_DIR)
+    local existing_size = dir_size_recursive(BASE_DIR)
+    if free_space and (free_space + existing_size) < required_total then
+      local message = describe_space_issue("FULL REINSTALL preflight", free_space + existing_size, required_total, BASE_DIR)
+      print(message)
+      log("WARN", message)
+      return
+    end
+    use_staging = preflight_space(entries, UPDATE_STAGING_BASE, "FULL REINSTALL staging")
+    if not use_staging then
+      print("Not enough space for staging. Falling back to direct install.")
+      log("WARN", "FULL REINSTALL staging disabled due to space")
+      break
+    end
     local stage_err
     local stage_meta
     staged, stage_err, stage_meta, stage_dir = stage_updates(entries, release, hash_algo)
@@ -2391,7 +2735,7 @@ local function full_reinstall()
   write_update_marker({
     ts = os.epoch("utc"),
     version = manifest.version or release and release.commit_sha or "unknown",
-    stage_dir = stage_dir,
+    stage_dir = use_staging and stage_dir or nil,
     backup_dir = backup_dir,
     updates = entries,
     created = created_before,
@@ -2399,7 +2743,12 @@ local function full_reinstall()
     hash_algo = hash_algo
   })
 
-  local ok, err = apply_staged(entries, staged, created)
+  local ok, err, apply_meta = false, nil, nil
+  if use_staging then
+    ok, err = apply_staged(entries, staged, created)
+  else
+    ok, err, apply_meta = apply_direct(entries, release, hash_algo, created)
+  end
   if ok then
     local migrate_ok, migrate_err = apply_file_migrations()
     if not migrate_ok then
