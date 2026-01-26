@@ -13,6 +13,11 @@ installer
 wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer && installer
 ```
 **Wichtig:** Niemals GitHub **/blob/**-Links verwenden. Blob liefert HTML → Lua meldet `unexpected symbol near '<'`. Nutze immer `raw.githubusercontent.com`.
+**HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
+**Alternative (direkter Bootstrap):**
+```
+wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/installer.lua
+```
 
 ## Projektziel & Überblick
 - **MASTER** sammelt Statusdaten, koordiniert RT-Nodes (Reactor/Turbine) und verteilt Setpoints.

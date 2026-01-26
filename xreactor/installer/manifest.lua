@@ -67,8 +67,8 @@ return {
     { path = "xreactor/shared/build_info.lua", size_bytes = 894, hash = "bbef6624" },
     { path = "xreactor/shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
     { path = "installer", size_bytes = 12137, hash = "23e2f1ed" },
-    { path = "installer.lua", size_bytes = 18449, hash = "294e3f5b" },
-    { path = "xreactor/installer/installer.lua", size_bytes = 18449, hash = "294e3f5b" },
+    { path = "installer.lua", size_bytes = 21436, hash = "8c94a13a" },
+    { path = "xreactor/installer/installer.lua", size_bytes = 21436, hash = "8c94a13a" },
     { path = "xreactor/installer/installer_core.lua", size_bytes = 92394, hash = "3ecb99a5" },
     { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "9df07cb8" }
   }
