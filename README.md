@@ -8,7 +8,16 @@ SCADA-ähnlicher Steuerungs-Stack für Minecraft mit **CC:Tweaked**, **Extreme R
 wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
 installer
 ```
+**Einzeiler (RAW, beta):**
+```
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer && installer
+```
 **Wichtig:** Niemals GitHub **/blob/**-Links verwenden. Blob liefert HTML → Lua meldet `unexpected symbol near '<'`. Nutze immer `raw.githubusercontent.com`.
+**HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
+**Alternative (direkter Bootstrap):**
+```
+wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/installer.lua
+```
 
 ## Projektziel & Überblick
 - **MASTER** sammelt Statusdaten, koordiniert RT-Nodes (Reactor/Turbine) und verteilt Setpoints.
@@ -182,6 +191,16 @@ Wireless Modem (Control/Status)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
+
+**Troubleshooting: "Out of space"**
+- Prüfe freien Speicher und lösche alte Backups/Logs/Staging (Config/Node-ID bleiben dabei erhalten):
+  ```
+  delete /xreactor_backup/*
+  delete /xreactor_stage/*
+  delete /xreactor/logs/*.log
+  delete /xreactor_logs/*.log
+  ```
+- Danach Installer erneut starten (`installer`).
 
 **Warum HTML passiert (Fehler `/installer: unexpected symbol near '<'`)**
 - Wird statt einer RAW-Datei eine GitHub-**HTML**-Seite geladen (z. B. Blob-URL, 404, Rate-Limit, Cloudflare), landet HTML im `installer`/`installer_core`.
