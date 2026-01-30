@@ -5,8 +5,8 @@ return {
   hash_algo = "crc32",
   installer_min_version = "1.4",
   installer_path = "xreactor/installer/installer_core.lua",
-  installer_hash = "4d91b8c1",
-  installer_size_bytes = 92591,
+  installer_hash = "af025d81",
+  installer_size_bytes = 100523,
   files = {
     { path = "xreactor/core/bootstrap.lua", size_bytes = 9115, hash = "d1a38895" },
     { path = "xreactor/core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
@@ -67,10 +67,10 @@ return {
     { path = "xreactor/shared/build_info.lua", size_bytes = 894, hash = "bbef6624" },
     { path = "xreactor/shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
     { path = "README.md", size_bytes = 28702, hash = "a5625737" },
-    { path = "installer", size_bytes = 16988, hash = "1b5c61df" },
-    { path = "installer.lua", size_bytes = 26536, hash = "919770b6" },
-    { path = "xreactor/installer/installer.lua", size_bytes = 26536, hash = "919770b6" },
-    { path = "xreactor/installer/installer_core.lua", size_bytes = 92591, hash = "4d91b8c1" },
+    { path = "installer", size_bytes = 17472, hash = "7e4af5d7" },
+    { path = "installer.lua", size_bytes = 27199, hash = "e358b615" },
+    { path = "xreactor/installer/installer.lua", size_bytes = 27199, hash = "e358b615" },
+    { path = "xreactor/installer/installer_core.lua", size_bytes = 100523, hash = "af025d81" },
     { path = "xreactor/installer/release.lua", size_bytes = 216, hash = "659dafb7" }
   }
 }
