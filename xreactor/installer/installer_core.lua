@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "1.5"
+local INSTALLER_CORE_VERSION = "1.6"
 
 -- CONFIG
 local CONFIG = {
@@ -47,11 +47,11 @@ local CONFIG = {
   MAX_STAGING_DIRS = 2, -- Retention: number of staging dirs to keep in /xreactor_stage.
   LOG_RETENTION_DIRS = { "/xreactor/logs", "/xreactor_logs" }, -- Log dirs eligible for cleanup.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
-  LOG_ENABLED = false, -- Enables installer file logging to /xreactor_logs/installer.log.
+  LOG_ENABLED = true, -- Always enable installer file logging.
   LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path.
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
-  LOG_PREFIX = "INSTALLER", -- Installer log prefix.
+  LOG_PREFIX = "INSTALLER_CORE", -- Installer log prefix.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- settings key for debug logs.
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.

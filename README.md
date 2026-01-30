@@ -187,6 +187,7 @@ Wireless Modem (Control/Status)
    lua /installer
    ```
    **Wichtig:** Nutze immer **RAW**-Links (`raw.githubusercontent.com`). GitHub-**Blob**-Links liefern HTML und sind nicht ausführbar.
+   **HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
    (Beide Einstiegspunkte sind Bootstrapper: `/installer` und `/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.

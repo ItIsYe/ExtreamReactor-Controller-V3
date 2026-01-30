@@ -22,8 +22,7 @@ local CONFIG = {
   CORE_BAD_PATH = "/xreactor/.tmp/installer_core.bad", -- Saved bad core content for debugging.
   CORE_MAX_RETRIES = 3, -- Max core download attempts before aborting.
   CORE_RETRY_BACKOFF = 1, -- Backoff seconds between core download retries.
-  LOG_ENABLED = nil, -- Enable bootstrap logging (nil uses settings key or default).
-  LOG_DEFAULT_ENABLED = true, -- Default logging when settings are unset.
+  LOG_ENABLED = true, -- Always enable bootstrap logging.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
   LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path.
   LOG_FALLBACK_PATH = "/installer_debug.log", -- Fallback log path when /xreactor is unavailable.
@@ -31,12 +30,12 @@ local CONFIG = {
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
-  LOG_SAMPLE_BYTES = 120 -- Bytes to capture as response signature.
+  LOG_SAMPLE_BYTES = 200 -- Bytes to capture as response signature.
 }
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
-    fs.makeDir(path)
+    pcall(fs.makeDir, path)
   end
 end
 
@@ -48,10 +47,7 @@ local function resolve_log_enabled()
   if CONFIG.LOG_ENABLED ~= nil then
     return CONFIG.LOG_ENABLED == true
   end
-  if settings and settings.get and CONFIG.LOG_SETTINGS_KEY then
-    return settings.get(CONFIG.LOG_SETTINGS_KEY) == true
-  end
-  return CONFIG.LOG_DEFAULT_ENABLED == true
+  return true
 end
 
 local function rotate_log_if_needed(path)
@@ -75,18 +71,13 @@ local log_state = {
   path = CONFIG.LOG_PATH,
   fallback_used = false,
   memory_fallback = {},
-  last_write_ok = false
+  last_write_ok = false,
+  last_failed_path = nil
 }
 
 local function ensure_log_dirs()
-  pcall(function()
-    if not fs.exists("/xreactor") then
-      fs.makeDir("/xreactor")
-    end
-    if not fs.exists("/xreactor/logs") then
-      fs.makeDir("/xreactor/logs")
-    end
-  end)
+  pcall(fs.makeDir, "/xreactor")
+  pcall(fs.makeDir, "/xreactor/logs")
 end
 
 local function open_log_file()
@@ -103,14 +94,18 @@ local function open_log_file()
       return file
     end
   end
+  log_state.last_failed_path = log_state.path
   return nil
 end
 
 local function get_log_path()
-  if not log_state.last_write_ok then
-    return "RAM (printed on exit)"
+  if log_state.last_write_ok and log_state.path and fs.exists(log_state.path) then
+    return log_state.path
   end
-  return log_state.path
+  if log_state.fallback_used and fs.exists(CONFIG.LOG_FALLBACK_PATH) then
+    return CONFIG.LOG_FALLBACK_PATH
+  end
+  return "RAM (printed below)"
 end
 
 local function flush_log(force)
@@ -149,7 +144,7 @@ local function flush_log(force)
   end
 end
 
-local function log_line(level, message)
+local function log_line(level, module, message)
   if log_state.enabled == nil then
     log_state.enabled = resolve_log_enabled()
     log_state.last_flush = os.clock()
@@ -157,7 +152,7 @@ local function log_line(level, message)
   if not log_state.enabled then
     return
   end
-  table.insert(log_state.buffer, string.format("[%s] BOOTSTRAP | %s | %s", now_stamp(), tostring(level), tostring(message)))
+  table.insert(log_state.buffer, string.format("[%s] %s | %s | %s", now_stamp(), tostring(level), tostring(module), tostring(message)))
   flush_log(false)
 end
 
@@ -165,11 +160,20 @@ local function flush_memory_fallback()
   if #log_state.memory_fallback == 0 then
     return
   end
-  print("Installer Debug Log (RAM fallback):")
+  print("=== INSTALLER DEBUG LOG (RAM) ===")
   for _, line in ipairs(log_state.memory_fallback) do
     print(line)
   end
   log_state.memory_fallback = {}
+end
+
+local function announce_log_location()
+  flush_log(true)
+  local location = get_log_path()
+  print("Details logged to: " .. tostring(location))
+  if location == "RAM (printed below)" then
+    flush_memory_fallback()
+  end
 end
 
 local function confirm(prompt_text, default)
@@ -254,15 +258,16 @@ end
 
 local function fetch_url(url)
   if not http or not http.get then
-    log_line("ERROR", "HTTP API unavailable")
+    log_line("ERROR", "http", "HTTP API unavailable")
     return false, nil, "HTTP API unavailable", { url = url }
   end
   local response
   local err
   if http.request and CONFIG.DOWNLOAD_TIMEOUT then
+    log_line("INFO", "http", "http.request -> " .. tostring(url))
     local ok, req_err = pcall(http.request, url, nil, nil, false)
     if not ok then
-      log_line("ERROR", "http.request failed: " .. tostring(req_err))
+      log_line("ERROR", "http", "http.request failed: " .. tostring(req_err))
       return false, nil, "http.request failed (" .. tostring(req_err) .. ")", { url = url }
     end
     local timer = os.startTimer(CONFIG.DOWNLOAD_TIMEOUT)
@@ -272,22 +277,23 @@ local function fetch_url(url)
         response = p2
         break
       elseif event == "http_failure" and p1 == url then
-        log_line("WARN", "http_failure: " .. tostring(p2))
+        log_line("WARN", "http", "http_failure: " .. tostring(p2))
         return false, nil, "http failure (" .. tostring(p2) .. ")", { url = url }
       elseif event == "timer" and p1 == timer then
-        log_line("WARN", "http timeout")
+        log_line("WARN", "http", "http timeout")
         return false, nil, "timeout", { url = url }
       end
     end
   else
     local ok, result = pcall(function() return http.get(url) end)
+    log_line("INFO", "http", string.format("http.get -> %s (ok=%s, response=%s)", tostring(url), tostring(ok), tostring(result ~= nil)))
     if ok then
       response = result
     else
       err = result
     end
     if not response then
-      log_line("WARN", "http.get returned nil: " .. tostring(err))
+      log_line("WARN", "http", "http.get returned nil: " .. tostring(err))
       return false, nil, "http.get returned nil" .. (err and (" (" .. tostring(err) .. ")") or ""), { url = url }
     end
   end
@@ -303,12 +309,15 @@ local function fetch_url(url)
     bytes = body and #body or 0,
     signature = sanitize_signature(prefix)
   }
-  log_line("INFO", string.format("HTTP response: url=%s code=%s bytes=%s sig=%s",
+  local header_dump = headers and textutils.serialize(headers) or "n/a"
+  log_line("INFO", "http", string.format("HTTP response: url=%s code=%s bytes=%s sig=%s",
     tostring(url),
     tostring(code or "n/a"),
     tostring(body and #body or 0),
     tostring(sanitize_signature(prefix))
   ))
+  log_line("INFO", "http", "HTTP headers: " .. tostring(header_dump))
+  log_line("INFO", "http", "HTTP body sample: " .. tostring(sanitize_signature(prefix)))
   if not body or body == "" then
     return false, nil, "empty body", meta
   end
@@ -343,18 +352,20 @@ end
 
 local fetch_url_seeded = false
 
-local function fetch_with_retries(urls)
+local function fetch_with_retries(urls, attempts, module_name)
   local last_meta
+  local module_tag = module_name or "installer"
   if not fetch_url_seeded then
     math.randomseed(os.time())
     fetch_url_seeded = true
   end
-  for attempt = 1, CONFIG.DOWNLOAD_ATTEMPTS do
+  local max_attempts = attempts or CONFIG.DOWNLOAD_ATTEMPTS
+  for attempt = 1, max_attempts do
     for _, url in ipairs(urls or {}) do
       local ok, body, err, meta = fetch_url(url)
       last_meta = meta or { url = url, err = err }
       if ok then
-        log_line("INFO", string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
+        log_line("INFO", module_tag, string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
           tostring(url),
           tostring(meta and meta.code or "n/a"),
           tostring(meta and meta.bytes or 0),
@@ -363,7 +374,7 @@ local function fetch_with_retries(urls)
         ))
         return true, body, meta
       end
-      log_line("WARN", string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
+      log_line("WARN", module_tag, string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
         tostring(url),
         tostring(err),
         tostring(meta and meta.code or "n/a"),
@@ -371,7 +382,7 @@ local function fetch_with_retries(urls)
         attempt
       ))
     end
-    if attempt < CONFIG.DOWNLOAD_ATTEMPTS then
+    if attempt < max_attempts then
       local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
       os.sleep((CONFIG.DOWNLOAD_BACKOFF * attempt) + jitter)
     end
@@ -437,6 +448,30 @@ local function write_atomic(path, content)
   return true
 end
 
+local function move_atomic_with_backup(temp_path, target_path)
+  local backup_path = target_path .. ".bak"
+  if fs.exists(backup_path) then
+    fs.delete(backup_path)
+  end
+  if fs.exists(target_path) then
+    local ok_backup = pcall(fs.move, target_path, backup_path)
+    if not ok_backup then
+      return false, "backup failed"
+    end
+  end
+  local ok_move = pcall(fs.move, temp_path, target_path)
+  if not ok_move or not fs.exists(target_path) then
+    if fs.exists(backup_path) then
+      pcall(fs.move, backup_path, target_path)
+    end
+    return false, "move failed"
+  end
+  if fs.exists(backup_path) then
+    fs.delete(backup_path)
+  end
+  return true
+end
+
 local function read_file(path)
   if not fs.exists(path) then
     return nil
@@ -488,10 +523,14 @@ local function validate_core(content)
   if not content or #content < CONFIG.MIN_CORE_BYTES then
     return false, "core too small"
   end
+  local prefix = content:sub(1, 512)
+  if detect_html(prefix) then
+    return false, "html response"
+  end
   if not content:find(CONFIG.CORE_SANITY_MARKER, 1, true) then
     return false, "core sanity marker missing"
   end
-  local loader, load_err = load(content, "installer_core", "t", {})
+  local loader, load_err = load(content, "@installer_core", "t")
   if not loader then
     return false, "core load failed", load_err
   end
@@ -531,7 +570,7 @@ local function save_bad_core(content)
 end
 
 local function log_core_failure(reason, meta)
-  log_line("ERROR", string.format(
+  log_line("ERROR", "installer_core", string.format(
     "Core download failed: reason=%s detail=%s url=%s code=%s bytes=%s sig=%s expected=%s actual=%s",
     tostring(reason),
     tostring(meta and meta.detail or ""),
@@ -593,9 +632,32 @@ end
 local function download_core(release)
   local commit_sha = release and release.commit_sha
   local urls = build_raw_urls("xreactor/installer/installer_core.lua", commit_sha)
-  local ok, content, meta = fetch_with_retries(urls)
+  local ok, content, meta = fetch_with_retries(urls, 1, "installer_core")
   if not ok then
     return false, nil, meta
+  end
+  if not content or #content < CONFIG.MIN_CORE_BYTES then
+    save_bad_core(content)
+    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+    return false, nil, {
+      err = "core too small",
+      url = meta and meta.url,
+      code = meta and meta.code,
+      bytes = meta and meta.bytes,
+      signature = meta and meta.signature
+    }
+  end
+  local prefix = content:sub(1, 512)
+  if detect_html(prefix) then
+    save_bad_core(content)
+    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+    return false, nil, {
+      err = "html response",
+      url = meta and meta.url,
+      code = meta and meta.code,
+      bytes = meta and meta.bytes,
+      signature = meta and meta.signature
+    }
   end
   local valid, reason, detail = validate_core(content)
   if not valid then
@@ -642,13 +704,10 @@ local function download_core(release)
       signature = meta and meta.signature
     }
   end
-  if fs.exists(CONFIG.CORE_PATH) then
-    fs.delete(CONFIG.CORE_PATH)
-  end
-  local moved = pcall(fs.move, CONFIG.CORE_DOWNLOAD_PATH, CONFIG.CORE_PATH)
-  if not moved or not fs.exists(CONFIG.CORE_PATH) then
+  local moved, move_err = move_atomic_with_backup(CONFIG.CORE_DOWNLOAD_PATH, CONFIG.CORE_PATH)
+  if not moved then
     cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
-    return false, nil, { err = "move failed", url = meta and meta.url }
+    return false, nil, { err = move_err or "move failed", url = meta and meta.url }
   end
   save_core_meta({
     hash = crc32_hash(content),
@@ -663,12 +722,12 @@ if not http then
 end
 
 ensure_package_path()
-log_line("INFO", "Bootstrap start")
+log_line("INFO", "installer", "Bootstrap start")
 
 local release, release_meta = load_release()
 if not release then
   print("Warning: unable to fetch release metadata. Using local installer core if present.")
-  log_line("WARN", "Release metadata unavailable: " .. tostring(release_meta and release_meta.err))
+  log_line("WARN", "installer", "Release metadata unavailable: " .. tostring(release_meta and release_meta.err))
 end
 
 if release and needs_core_update(release) then
@@ -676,6 +735,7 @@ if release and needs_core_update(release) then
   local ok = false
   local meta
   for attempt = 1, (CONFIG.CORE_MAX_RETRIES or 3) do
+    log_line("INFO", "installer_core", string.format("Core download attempt %d/%d", attempt, CONFIG.CORE_MAX_RETRIES or 3))
     ok, _, meta = download_core(release)
     if ok then
       break
@@ -685,9 +745,9 @@ if release and needs_core_update(release) then
       err_msg = "Downloaded HTML, expected Lua"
     end
     print("Installer core download failed: " .. tostring(err_msg))
-    log_line("WARN", "Core download failed: " .. tostring(err_msg))
+    log_line("WARN", "installer_core", "Core download failed: " .. tostring(err_msg))
     flush_log(true)
-    print("Details logged to: " .. tostring(get_log_path()))
+    announce_log_location()
     if err_msg == "Downloaded HTML, expected Lua" then
       print("Detected HTML instead of Lua. This usually means a GitHub /blob/ link or HTML error page.")
       print_quick_install_hint()
@@ -713,13 +773,11 @@ end
 local loader, load_err = load_local_core()
 if not loader then
   print("Installer core missing and could not be loaded.")
-  log_line("ERROR", "Installer core missing after bootstrap attempt. err=" .. tostring(load_err))
+  log_line("ERROR", "installer_core", "Installer core missing after bootstrap attempt. err=" .. tostring(load_err))
   print_quick_install_hint()
-  flush_log(true)
-  flush_memory_fallback()
+  announce_log_location()
   return
 end
 
 loader()
-flush_log(true)
-flush_memory_fallback()
+announce_log_location()
