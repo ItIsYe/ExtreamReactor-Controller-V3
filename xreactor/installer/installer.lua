@@ -9,8 +9,7 @@ local CONFIG = {
   QUICK_INSTALL_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer", -- README Quick Install URL.
   QUICK_INSTALL_TARGET = "installer", -- README Quick Install target filename.
   BASE_URLS = { -- Raw download mirrors (no blob links).
-    "https://raw.githubusercontent.com",
-    "https://raw.github.com"
+    "https://raw.githubusercontent.com"
   },
   DOWNLOAD_ATTEMPTS = 4, -- Retry attempts per URL.
   DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
@@ -30,13 +29,49 @@ local CONFIG = {
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
-  LOG_SAMPLE_BYTES = 200 -- Bytes to capture as response signature.
+  LOG_SAMPLE_BYTES = 200, -- Bytes to capture as response signature.
+  DISK_SPACE_OVERHEAD_BYTES = 2048, -- Reserved extra bytes for write operations.
+  DISK_SPACE_MIN_BUFFER = 4096 -- Minimum free bytes to keep after writes.
 }
+
+local log_line
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
     pcall(fs.makeDir, path)
   end
+end
+
+local function get_free_space(path)
+  local probe = path
+  if probe == "" or not probe then
+    probe = "/"
+  end
+  if not fs.exists(probe) then
+    probe = fs.getDir(probe)
+    if probe == "" then
+      probe = "/"
+    end
+  end
+  local ok, free = pcall(fs.getFreeSpace, probe)
+  if not ok then
+    return nil, probe
+  end
+  return free, probe
+end
+
+local function ensure_free_space(path, needed, context)
+  local free, probe = get_free_space(path)
+  if not free then
+    log_line("WARN", "fs", "Unable to read free space for " .. tostring(probe))
+    return true
+  end
+  if needed and free < needed then
+    local message = string.format("Out of space (%s). Need %d bytes, free %d bytes.", tostring(context or path), needed, free)
+    log_line("ERROR", "fs", message)
+    return false, message
+  end
+  return true
 end
 
 local function now_stamp()
@@ -144,7 +179,7 @@ local function flush_log(force)
   end
 end
 
-local function log_line(level, module, message)
+log_line = function(level, module, message)
   if log_state.enabled == nil then
     log_state.enabled = resolve_log_enabled()
     log_state.last_flush = os.clock()
@@ -153,7 +188,7 @@ local function log_line(level, module, message)
     return
   end
   table.insert(log_state.buffer, string.format("[%s] %s | %s | %s", now_stamp(), tostring(level), tostring(module), tostring(message)))
-  flush_log(false)
+  flush_log(true)
 end
 
 local function flush_memory_fallback()
@@ -167,6 +202,15 @@ local function flush_memory_fallback()
   log_state.memory_fallback = {}
 end
 
+local function init_log_file()
+  ensure_log_dirs()
+  local file = open_log_file()
+  if file then
+    file.close()
+    log_state.last_write_ok = true
+  end
+end
+
 local function announce_log_location()
   flush_log(true)
   local location = get_log_path()
@@ -174,6 +218,16 @@ local function announce_log_location()
   if location == "RAM (printed below)" then
     flush_memory_fallback()
   end
+end
+
+local function run_with_trace(module, label, fn)
+  local ok, err = xpcall(fn, function(message)
+    return debug.traceback(tostring(message), 2)
+  end)
+  if not ok then
+    log_line("ERROR", module, label .. " failed: " .. tostring(err))
+  end
+  return ok, err
 end
 
 local function confirm(prompt_text, default)
@@ -423,24 +477,59 @@ end
 
 local function write_file(path, content)
   ensure_dir(fs.getDir(path))
+  local needed = (content and #content or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  local ok_space, space_err = ensure_free_space(path, needed, "Write " .. tostring(path))
+  if not ok_space then
+    return false, space_err
+  end
   local file = fs.open(path, "w")
   if not file then
     return false
   end
-  file.write(content)
+  local ok, err = pcall(function()
+    local chunk = 4096
+    local length = #content
+    local index = 1
+    while index <= length do
+      file.write(content:sub(index, index + chunk - 1))
+      index = index + chunk
+    end
+  end)
   file.close()
+  if not ok then
+    return false, err
+  end
   return true
 end
 
 local function write_atomic(path, content)
   ensure_dir(fs.getDir(path))
   local tmp = path .. ".tmp"
+  local needed = (content and #content or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  local ok_space, space_err = ensure_free_space(path, needed, "Write " .. tostring(path))
+  if not ok_space then
+    return false, space_err
+  end
   local file = fs.open(tmp, "w")
   if not file then
     return false
   end
-  file.write(content)
+  local ok, err = pcall(function()
+    local chunk = 4096
+    local length = #content
+    local index = 1
+    while index <= length do
+      file.write(content:sub(index, index + chunk - 1))
+      index = index + chunk
+    end
+  end)
   file.close()
+  if not ok then
+    if fs.exists(tmp) then
+      fs.delete(tmp)
+    end
+    return false, err
+  end
   if fs.exists(path) then
     fs.delete(path)
   end
@@ -687,9 +776,10 @@ local function download_core(release)
       }
     end
   end
-  if not write_file(CONFIG.CORE_DOWNLOAD_PATH, content) then
+  local write_ok, write_err = write_file(CONFIG.CORE_DOWNLOAD_PATH, content)
+  if not write_ok then
     cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
-    return false, nil, { err = "temp write failed", url = meta and meta.url }
+    return false, nil, { err = "temp write failed", detail = write_err, url = meta and meta.url }
   end
   local loader, load_err = loadfile(CONFIG.CORE_DOWNLOAD_PATH)
   if not loader then
@@ -722,6 +812,7 @@ if not http then
 end
 
 ensure_package_path()
+init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
 
 local release, release_meta = load_release()
@@ -748,6 +839,9 @@ if release and needs_core_update(release) then
     log_line("WARN", "installer_core", "Core download failed: " .. tostring(err_msg))
     flush_log(true)
     announce_log_location()
+    if meta and meta.detail then
+      print("Detail: " .. tostring(meta.detail))
+    end
     if err_msg == "Downloaded HTML, expected Lua" then
       print("Detected HTML instead of Lua. This usually means a GitHub /blob/ link or HTML error page.")
       print_quick_install_hint()
@@ -779,5 +873,8 @@ if not loader then
   return
 end
 
-loader()
+local run_ok = run_with_trace("installer_core", "Installer core execution", loader)
 announce_log_location()
+if not run_ok then
+  print("Installer core failed to run. See log: " .. tostring(get_log_path()))
+end

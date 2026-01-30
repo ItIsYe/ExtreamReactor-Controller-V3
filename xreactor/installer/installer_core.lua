@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "1.6"
+local INSTALLER_CORE_VERSION = "1.7"
 
 -- CONFIG
 local CONFIG = {
@@ -27,12 +27,11 @@ local CONFIG = {
   DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to download backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (used when http.request is available).
   DOWNLOAD_MIRRORS = { -- Download mirrors (raw content only).
-    "https://raw.githubusercontent.com",
-    "https://raw.github.com"
+    "https://raw.githubusercontent.com"
   },
   DOWNLOAD_HTML_SUSPECT_BYTES = 256, -- Treat small HTML-like responses as errors.
   MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/manifest.lua", -- Primary manifest URL.
-  MANIFEST_URL_FALLBACK = "https://cdn.jsdelivr.net/gh/ItIsYe/ExtreamReactor-Controller-V3@beta/xreactor/installer/manifest.lua", -- Optional fallback manifest URL.
+  MANIFEST_URL_FALLBACK = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/manifest.lua", -- Optional fallback manifest URL.
   MANIFEST_RETRY_ATTEMPTS = 3, -- Retry attempts for manifest acquisition menu.
   MANIFEST_RETRY_BACKOFF = 1, -- Backoff seconds for manifest retry menu.
   MANIFEST_MENU_RETRY_LIMIT = 5, -- Retry rounds from menu before auto-cancel.
@@ -53,8 +52,8 @@ local CONFIG = {
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER_CORE", -- Installer log prefix.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- settings key for debug logs.
-  LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
-  LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
+  LOG_FLUSH_LINES = 1, -- Buffered log lines before flushing.
+  LOG_FLUSH_INTERVAL = 0, -- Seconds between log flushes.
   LOG_SAMPLE_BYTES = 96, -- Bytes to capture as response signature.
   CHECKSUM_DIAG_SAMPLE_BYTES = 80, -- Bytes to show when checksum mismatch occurs.
   REQUIRED_CORE_FILES = { -- Core files that must exist in the manifest.
@@ -597,7 +596,15 @@ local function write_atomic(path, content)
   if not file then
     error("Unable to write file at " .. path, 0)
   end
-  local ok, err = pcall(file.write, content)
+  local ok, err = pcall(function()
+    local chunk = 4096
+    local length = #content
+    local index = 1
+    while index <= length do
+      file.write(content:sub(index, index + chunk - 1))
+      index = index + chunk
+    end
+  end)
   file.close()
   if not ok then
     if fs.exists(tmp) then
@@ -2914,4 +2921,15 @@ local function main()
   end
 end
 
-main()
+local function log_fatal(trace)
+  log("ERROR", trace)
+  print("Installer failed: " .. tostring(trace))
+  print("See log: " .. tostring(CONFIG.LOG_PATH))
+end
+
+local ok, err = xpcall(main, function(message)
+  return debug.traceback(tostring(message), 2)
+end)
+if not ok then
+  log_fatal(err)
+end

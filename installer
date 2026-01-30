@@ -9,8 +9,7 @@ local CONFIG = {
   QUICK_INSTALL_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer", -- README Quick Install URL.
   QUICK_INSTALL_TARGET = "installer", -- README Quick Install target filename.
   BASE_URLS = { -- RAW mirrors (no blob links).
-    "https://raw.githubusercontent.com",
-    "https://raw.github.com"
+    "https://raw.githubusercontent.com"
   },
   DOWNLOAD_ATTEMPTS = 3, -- Retry attempts per URL.
   DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
@@ -24,13 +23,49 @@ local CONFIG = {
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
-  LOG_SAMPLE_BYTES = 200 -- Bytes to capture as response signature.
+  LOG_SAMPLE_BYTES = 200, -- Bytes to capture as response signature.
+  DISK_SPACE_OVERHEAD_BYTES = 2048, -- Reserved extra bytes for write operations.
+  DISK_SPACE_MIN_BUFFER = 4096 -- Minimum free bytes to keep after writes.
 }
+
+local log_line
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
     pcall(fs.makeDir, path)
   end
+end
+
+local function get_free_space(path)
+  local probe = path
+  if probe == "" or not probe then
+    probe = "/"
+  end
+  if not fs.exists(probe) then
+    probe = fs.getDir(probe)
+    if probe == "" then
+      probe = "/"
+    end
+  end
+  local ok, free = pcall(fs.getFreeSpace, probe)
+  if not ok then
+    return nil, probe
+  end
+  return free, probe
+end
+
+local function ensure_free_space(path, needed, context)
+  local free, probe = get_free_space(path)
+  if not free then
+    log_line("WARN", "fs", "Unable to read free space for " .. tostring(probe))
+    return true
+  end
+  if needed and free < needed then
+    local message = string.format("Out of space (%s). Need %d bytes, free %d bytes.", tostring(context or path), needed, free)
+    log_line("ERROR", "fs", message)
+    return false, message
+  end
+  return true
 end
 
 local function now_stamp()
@@ -138,7 +173,7 @@ local function flush_log(force)
   end
 end
 
-local function log_line(level, module, message)
+log_line = function(level, module, message)
   if log_state.enabled == nil then
     log_state.enabled = resolve_log_enabled()
     log_state.last_flush = os.clock()
@@ -147,7 +182,46 @@ local function log_line(level, module, message)
     return
   end
   table.insert(log_state.buffer, string.format("[%s] %s | %s | %s", now_stamp(), tostring(level), tostring(module), tostring(message)))
-  flush_log(false)
+  flush_log(true)
+end
+
+local function flush_memory_fallback()
+  if #log_state.memory_fallback == 0 then
+    return
+  end
+  print("=== INSTALLER DEBUG LOG (RAM) ===")
+  for _, line in ipairs(log_state.memory_fallback) do
+    print(line)
+  end
+  log_state.memory_fallback = {}
+end
+
+local function init_log_file()
+  ensure_log_dirs()
+  local file = open_log_file()
+  if file then
+    file.close()
+    log_state.last_write_ok = true
+  end
+end
+
+local function announce_log_location()
+  flush_log(true)
+  local location = get_log_path()
+  print("Details logged to: " .. tostring(location))
+  if location == "RAM (printed below)" then
+    flush_memory_fallback()
+  end
+end
+
+local function run_with_trace(module, label, fn)
+  local ok, err = xpcall(fn, function(message)
+    return debug.traceback(tostring(message), 2)
+  end)
+  if not ok then
+    log_line("ERROR", module, label .. " failed: " .. tostring(err))
+  end
+  return ok, err
 end
 
 local function flush_memory_fallback()
@@ -356,6 +430,11 @@ end
 local function write_atomic(path, temp_path, content)
   ensure_dir(fs.getDir(path))
   ensure_dir(fs.getDir(temp_path))
+  local needed = (content and #content or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  local ok_space, space_err = ensure_free_space(path, needed, "Write " .. tostring(path))
+  if not ok_space then
+    return false, space_err
+  end
   if fs.exists(temp_path) then
     fs.delete(temp_path)
   end
@@ -363,8 +442,22 @@ local function write_atomic(path, temp_path, content)
   if not file then
     return false, "write failed"
   end
-  file.write(content)
+  local ok, err = pcall(function()
+    local chunk = 4096
+    local length = #content
+    local index = 1
+    while index <= length do
+      file.write(content:sub(index, index + chunk - 1))
+      index = index + chunk
+    end
+  end)
   file.close()
+  if not ok then
+    if fs.exists(temp_path) then
+      fs.delete(temp_path)
+    end
+    return false, err
+  end
   if fs.exists(path) then
     fs.delete(path)
   end
@@ -448,6 +541,7 @@ if not http then
   error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
 end
 
+init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
 
 local ok = false
@@ -491,7 +585,11 @@ if shell and shell.run then
 else
   local loader = loadfile(CONFIG.TARGET_PATH)
   if loader then
-    loader()
+    local ok = run_with_trace("installer", "Bootstrap execution", loader)
+    if not ok then
+      announce_log_location()
+      error("Installer bootstrap failed. See log: " .. tostring(get_log_path()))
+    end
   else
     error("Unable to launch installer.lua")
   end
