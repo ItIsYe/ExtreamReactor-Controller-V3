@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "1.7"
+local INSTALLER_CORE_VERSION = "1.8"
 
 -- CONFIG
 local CONFIG = {
@@ -77,31 +77,8 @@ local CONFIG = {
   }
 }
 
-local BASE_DIR = CONFIG.BASE_DIR
-local REPO_OWNER = CONFIG.REPO_OWNER
-local REPO_NAME = CONFIG.REPO_NAME
-local REPO_BASE_URL_MAIN = CONFIG.REPO_BASE_URL
-local RELEASE_REMOTE = CONFIG.RELEASE_REMOTE
-local MANIFEST_REMOTE = CONFIG.MANIFEST_REMOTE
-local MANIFEST_LOCAL = CONFIG.MANIFEST_LOCAL
-local MANIFEST_CACHE = CONFIG.MANIFEST_CACHE
-local MANIFEST_CACHE_LEGACY = CONFIG.MANIFEST_CACHE_LEGACY
-local BACKUP_BASE = CONFIG.BACKUP_BASE
-local NODE_ID_PATH = CONFIG.NODE_ID_PATH
-local UPDATE_STAGING_BASE = CONFIG.UPDATE_STAGING_BASE
-local INSTALLER_VERSION = CONFIG.INSTALLER_VERSION
-local INSTALLER_MIN_BYTES = CONFIG.INSTALLER_MIN_BYTES
-local INSTALLER_SANITY_MARKER = CONFIG.INSTALLER_SANITY_MARKER
-local MANIFEST_MIN_BYTES = CONFIG.MANIFEST_MIN_BYTES
-local MANIFEST_SANITY_MARKER = CONFIG.MANIFEST_SANITY_MARKER
-local RELEASE_MIN_BYTES = CONFIG.RELEASE_MIN_BYTES
-local RELEASE_SANITY_MARKER = CONFIG.RELEASE_SANITY_MARKER
-local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
-local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
-local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
-local CHECKSUM_DIAG_SAMPLE_BYTES = CONFIG.CHECKSUM_DIAG_SAMPLE_BYTES
-local REQUIRED_CORE_FILES = CONFIG.REQUIRED_CORE_FILES
-local FILE_MIGRATIONS = CONFIG.FILE_MIGRATIONS
+local C = CONFIG
+
 
 -- Download base tracking (default branch vs pinned commit).
 local current_base_url = nil
@@ -201,6 +178,9 @@ local active_logger = {}
 local internal_log_enabled = false
 local log_buffer = {}
 local log_last_flush = 0
+local log_fallback_buffer = {}
+local log_fallback_reason = nil
+local log_fallback_active = false
 
 local function resolve_log_enabled()
   if CONFIG.DEBUG_LOG_ENABLED ~= nil then
@@ -252,28 +232,38 @@ local function internal_log(prefix, message, level)
     resolved_level = prefix or "INFO"
   end
   local line = string.format("[%s] %s | %s | %s", log_stamp(), tostring(resolved_prefix), tostring(resolved_level), tostring(resolved_message))
+  if log_fallback_active then
+    table.insert(log_fallback_buffer, line)
+    return
+  end
   table.insert(log_buffer, line)
   local elapsed = os.clock() - (log_last_flush or 0)
   if #log_buffer < CONFIG.LOG_FLUSH_LINES and elapsed < CONFIG.LOG_FLUSH_INTERVAL then
     return
   end
-  local ok = pcall(function()
+  local ok, err = pcall(function()
     ensure_dir(fs.getDir(CONFIG.LOG_PATH))
     rotate_log_if_needed()
     local file = fs.open(CONFIG.LOG_PATH, "a")
     if not file then
-      return
+      error("log open failed", 0)
     end
     for _, entry in ipairs(log_buffer) do
       file.write(entry .. "\n")
     end
     file.close()
   end)
-  log_buffer = {}
-  log_last_flush = os.clock()
-  if not ok then
-    internal_log_enabled = false
+  if ok then
+    log_buffer = {}
+    log_last_flush = os.clock()
+    return
   end
+  log_fallback_active = true
+  log_fallback_reason = log_fallback_reason or tostring(err)
+  for _, entry in ipairs(log_buffer) do
+    table.insert(log_fallback_buffer, entry)
+  end
+  log_buffer = {}
 end
 
 local function init_internal_logger()
@@ -294,6 +284,20 @@ local function init_internal_logger()
 end
 
 init_internal_logger()
+
+local function flush_log_fallback()
+  if not log_fallback_active or #log_fallback_buffer == 0 then
+    return
+  end
+  print("=== INSTALLER CORE DEBUG LOG (RAM) ===")
+  if log_fallback_reason then
+    print("Log file unavailable: " .. tostring(log_fallback_reason))
+  end
+  for _, entry in ipairs(log_fallback_buffer) do
+    print(entry)
+  end
+  log_fallback_buffer = {}
+end
 
 -- Defensive wrapper for legacy calls.
 local function prompt(label, default)
@@ -370,8 +374,8 @@ end
 
 local function build_cleanup_suggestions()
   local suggestions = {
-    ("delete %s/*"):format(BACKUP_BASE),
-    ("delete %s/*"):format(UPDATE_STAGING_BASE),
+    ("delete %s/*"):format(C.BACKUP_BASE),
+    ("delete %s/*"):format(C.UPDATE_STAGING_BASE),
     "delete /xreactor/logs/*.log",
     "delete /xreactor_logs/*.log"
   }
@@ -437,10 +441,10 @@ local function prune_backup_dirs()
     return {}
   end
   local deleted = {}
-  local entries = collect_dir_entries(BACKUP_BASE)
+  local entries = collect_dir_entries(C.BACKUP_BASE)
   local dirs = {}
   for _, entry in ipairs(entries) do
-    local path = BACKUP_BASE .. "/" .. entry
+    local path = C.BACKUP_BASE .. "/" .. entry
     if fs.isDir(path) then
       table.insert(dirs, entry)
     end
@@ -449,7 +453,7 @@ local function prune_backup_dirs()
   local keep = CONFIG.MAX_BACKUPS
   if #dirs > keep then
     for idx = 1, #dirs - keep do
-      local path = BACKUP_BASE .. "/" .. dirs[idx]
+      local path = C.BACKUP_BASE .. "/" .. dirs[idx]
       if fs.exists(path) then
         fs.delete(path)
         table.insert(deleted, path)
@@ -464,10 +468,10 @@ local function prune_staging_dirs()
     return {}
   end
   local deleted = {}
-  local entries = collect_dir_entries(UPDATE_STAGING_BASE)
+  local entries = collect_dir_entries(C.UPDATE_STAGING_BASE)
   local dirs = {}
   for _, entry in ipairs(entries) do
-    local path = UPDATE_STAGING_BASE .. "/" .. entry
+    local path = C.UPDATE_STAGING_BASE .. "/" .. entry
     if fs.isDir(path) then
       table.insert(dirs, entry)
     end
@@ -476,7 +480,7 @@ local function prune_staging_dirs()
   local keep = CONFIG.MAX_STAGING_DIRS
   if #dirs > keep then
     for idx = 1, #dirs - keep do
-      local path = UPDATE_STAGING_BASE .. "/" .. dirs[idx]
+      local path = C.UPDATE_STAGING_BASE .. "/" .. dirs[idx]
       if fs.exists(path) then
         fs.delete(path)
         table.insert(deleted, path)
@@ -1114,7 +1118,7 @@ local function fetch_url(url, opts)
   if not http or not http.get then
     return false, nil, "HTTP API unavailable (enable in CC:Tweaked config/server)", { url = url }
   end
-  local timeout = (opts and opts.timeout) or DOWNLOAD_TIMEOUT
+  local timeout = (opts and opts.timeout) or C.DOWNLOAD_TIMEOUT
   local response
   local err
   if http.request and timeout then
@@ -1187,8 +1191,8 @@ end
 
 -- Download helper with retries per URL and full tried list tracking.
 local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
-  local attempts = max_attempts or DOWNLOAD_ATTEMPTS
-  local backoff = backoff_seconds or DOWNLOAD_BACKOFF
+  local attempts = max_attempts or C.DOWNLOAD_ATTEMPTS
+  local backoff = backoff_seconds or C.DOWNLOAD_BACKOFF
   local tried = {}
   if not fetch_url_seeded then
     math.randomseed(os.time())
@@ -1205,7 +1209,7 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
   end
   for _, url in ipairs(list) do
     for attempt = 1, attempts do
-      local ok, body, err, meta = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
+      local ok, body, err, meta = fetch_url(url, { timeout = C.DOWNLOAD_TIMEOUT })
       local entry = {
         url = url,
         ok = ok,
@@ -1242,8 +1246,8 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
 end
 
 local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
-  local attempts = max_attempts or DOWNLOAD_ATTEMPTS
-  local backoff = backoff_seconds or DOWNLOAD_BACKOFF
+  local attempts = max_attempts or C.DOWNLOAD_ATTEMPTS
+  local backoff = backoff_seconds or C.DOWNLOAD_BACKOFF
   local tried = {}
   local list = {}
   for _, url in ipairs(urls or {}) do
@@ -1256,7 +1260,7 @@ local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
   end
   for attempt = 1, attempts do
     for _, url in ipairs(list) do
-      local ok, body, err, meta = fetch_url(url, { timeout = DOWNLOAD_TIMEOUT })
+      local ok, body, err, meta = fetch_url(url, { timeout = C.DOWNLOAD_TIMEOUT })
       local entry = {
         url = url,
         ok = ok,
@@ -1317,8 +1321,8 @@ local function download_file_with_retry(urls, expected_hash, hash_algo, opts)
   end
   return download_with_retry(
     urls,
-    opts and opts.attempts or DOWNLOAD_ATTEMPTS,
-    opts and opts.backoff or DOWNLOAD_BACKOFF,
+    opts and opts.attempts or C.DOWNLOAD_ATTEMPTS,
+    opts and opts.backoff or C.DOWNLOAD_BACKOFF,
     {
       allow_size_mismatch = true,
       validate = validate
@@ -1331,11 +1335,11 @@ local function is_valid_sha(sha)
 end
 
 local function build_main_base_url()
-  return string.format("%s/%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, CONFIG.DEFAULT_BRANCH or "main")
+  return string.format("%s/%s/%s/%s/", C.REPO_BASE_URL, C.REPO_OWNER, C.REPO_NAME, CONFIG.DEFAULT_BRANCH or "main")
 end
 
 local function build_commit_base_url(sha)
-  return string.format("%s/%s/%s/%s/", REPO_BASE_URL_MAIN, REPO_OWNER, REPO_NAME, sha)
+  return string.format("%s/%s/%s/%s/", C.REPO_BASE_URL, C.REPO_OWNER, C.REPO_NAME, sha)
 end
 
 local function read_base_cache()
@@ -1407,10 +1411,10 @@ local function fetch_repo_file(ref, path, opts)
 end
 
 local function validate_installer_content(content)
-  if not content or #content < INSTALLER_MIN_BYTES then
+  if not content or #content < C.INSTALLER_MIN_BYTES then
     return false, "content too short"
   end
-  if not content:find(INSTALLER_SANITY_MARKER, 1, true) then
+  if not content:find(C.INSTALLER_SANITY_MARKER, 1, true) then
     return false, "sanity check failed"
   end
   local loader, err = load(content, "installer", "t", {})
@@ -1422,10 +1426,10 @@ end
 
 local function read_manifest_cache()
   local path = nil
-  if fs.exists(MANIFEST_CACHE) then
-    path = MANIFEST_CACHE
-  elseif fs.exists(MANIFEST_CACHE_LEGACY) then
-    path = MANIFEST_CACHE_LEGACY
+  if fs.exists(C.MANIFEST_CACHE) then
+    path = C.MANIFEST_CACHE
+  elseif fs.exists(C.MANIFEST_CACHE_LEGACY) then
+    path = C.MANIFEST_CACHE_LEGACY
   end
   if not path then
     return nil
@@ -1472,14 +1476,14 @@ local function write_manifest_cache(manifest_content, release, source, base_info
       saved_at = os.time()
     })
     if fallback then
-      write_atomic(MANIFEST_CACHE, fallback)
+      write_atomic(C.MANIFEST_CACHE, fallback)
     else
       print("Warning: unable to save manifest cache.")
       log("WARN", "Unable to serialize manifest cache: " .. tostring(err))
     end
     return
   end
-  write_atomic(MANIFEST_CACHE, serialized)
+  write_atomic(C.MANIFEST_CACHE, serialized)
 end
 
 local function describe_download_error(err)
@@ -1561,8 +1565,8 @@ local function print_download_failure(label, info, fallback_urls)
     print(("Content-Length: %s"):format(tostring(content_length)))
     print(("Starts with '<': %s"):format(starts_with_lt))
     if signature ~= "" then
-      local sample = signature:sub(1, CHECKSUM_DIAG_SAMPLE_BYTES or 80)
-      print(("Response signature (first %d): %s"):format(CHECKSUM_DIAG_SAMPLE_BYTES or 80, tostring(sample)))
+      local sample = signature:sub(1, C.CHECKSUM_DIAG_SAMPLE_BYTES or 80)
+      print(("Response signature (first %d): %s"):format(C.CHECKSUM_DIAG_SAMPLE_BYTES or 80, tostring(sample)))
     end
   elseif signature ~= "" then
     print(("Response signature: %s"):format(tostring(signature)))
@@ -1570,12 +1574,12 @@ local function print_download_failure(label, info, fallback_urls)
 end
 
 local function download_release()
-  local urls = build_mirror_urls(build_main_base_url(), RELEASE_REMOTE)
-  local ok, content, meta = download_with_retry(urls, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
+  local urls = build_mirror_urls(build_main_base_url(), C.RELEASE_REMOTE)
+  local ok, content, meta = download_with_retry(urls, C.DOWNLOAD_ATTEMPTS, C.DOWNLOAD_BACKOFF)
   if not ok then
     return nil, "Release download failed", meta
   end
-  local ok_sanity, reason = sanity_check(content, RELEASE_MIN_BYTES, RELEASE_SANITY_MARKER)
+  local ok_sanity, reason = sanity_check(content, C.RELEASE_MIN_BYTES, C.RELEASE_SANITY_MARKER)
   if not ok_sanity then
     local entry = meta and meta.last or { url = url, ok = false, err = reason, bytes = content and #content or 0 }
     entry.ok = false
@@ -1597,14 +1601,14 @@ local function download_release()
   if type(data.hash_algo) ~= "string" then
     return nil, "Release missing hash_algo", meta
   end
-  data.manifest_path = data.manifest_path or MANIFEST_REMOTE
+  data.manifest_path = data.manifest_path or C.MANIFEST_REMOTE
   log("INFO", "Release fetched: " .. data.commit_sha)
   return data, meta
 end
 
 local function validate_manifest_required(manifest)
   local missing = {}
-  for _, path in ipairs(REQUIRED_CORE_FILES or {}) do
+  for _, path in ipairs(C.REQUIRED_CORE_FILES or {}) do
     if not manifest.lookup or not manifest.lookup[path] then
       table.insert(missing, path)
     end
@@ -1612,7 +1616,7 @@ local function validate_manifest_required(manifest)
   if #missing > 0 then
     return nil, "Manifest missing required files: " .. table.concat(missing, ", ")
   end
-  for _, migration in ipairs(FILE_MIGRATIONS or {}) do
+  for _, migration in ipairs(C.FILE_MIGRATIONS or {}) do
     if type(migration) == "table" then
       local to_path = migration.to
       local from_path = migration.from
@@ -1674,16 +1678,16 @@ local function parse_manifest(content)
 end
 
 local function download_manifest_from_source(release, base_info)
-  local manifest_path = release.manifest_path or MANIFEST_REMOTE
+  local manifest_path = release.manifest_path or C.MANIFEST_REMOTE
   local urls = build_mirror_urls(base_info.base_url, manifest_path)
   if base_info.source == CONFIG.DEFAULT_BRANCH and CONFIG.MANIFEST_URL_FALLBACK then
     table.insert(urls, CONFIG.MANIFEST_URL_FALLBACK)
   end
-  local ok, content, meta = download_with_retry(urls, DOWNLOAD_ATTEMPTS, DOWNLOAD_BACKOFF)
+  local ok, content, meta = download_with_retry(urls, C.DOWNLOAD_ATTEMPTS, C.DOWNLOAD_BACKOFF)
   if not ok then
     return nil, "Manifest download failed", meta
   end
-  local ok_sanity, reason = sanity_check(content, MANIFEST_MIN_BYTES, MANIFEST_SANITY_MARKER)
+  local ok_sanity, reason = sanity_check(content, C.MANIFEST_MIN_BYTES, C.MANIFEST_SANITY_MARKER)
   if not ok_sanity then
     local entry = meta and meta.last or { url = urls[1], ok = false, err = reason, bytes = content and #content or 0 }
     entry.ok = false
@@ -1799,21 +1803,21 @@ local function acquire_manifest()
 end
 
 local function ensure_base_dirs()
-  ensure_dir(BASE_DIR)
-  ensure_dir(BASE_DIR .. "/config")
-  ensure_dir(BASE_DIR .. "/core")
-  ensure_dir(BASE_DIR .. "/master")
-  ensure_dir(BASE_DIR .. "/master/ui")
-  ensure_dir(BASE_DIR .. "/nodes")
-  ensure_dir(BASE_DIR .. "/nodes/rt")
-  ensure_dir(BASE_DIR .. "/nodes/energy")
-  ensure_dir(BASE_DIR .. "/nodes/fuel")
-  ensure_dir(BASE_DIR .. "/nodes/water")
-  ensure_dir(BASE_DIR .. "/nodes/reprocessor")
-  ensure_dir(BASE_DIR .. "/shared")
-  ensure_dir(BASE_DIR .. "/installer")
-  ensure_dir(BASE_DIR .. "/.cache")
-  ensure_dir(BASE_DIR .. "/logs")
+  ensure_dir(C.BASE_DIR)
+  ensure_dir(C.BASE_DIR .. "/config")
+  ensure_dir(C.BASE_DIR .. "/core")
+  ensure_dir(C.BASE_DIR .. "/master")
+  ensure_dir(C.BASE_DIR .. "/master/ui")
+  ensure_dir(C.BASE_DIR .. "/nodes")
+  ensure_dir(C.BASE_DIR .. "/nodes/rt")
+  ensure_dir(C.BASE_DIR .. "/nodes/energy")
+  ensure_dir(C.BASE_DIR .. "/nodes/fuel")
+  ensure_dir(C.BASE_DIR .. "/nodes/water")
+  ensure_dir(C.BASE_DIR .. "/nodes/reprocessor")
+  ensure_dir(C.BASE_DIR .. "/shared")
+  ensure_dir(C.BASE_DIR .. "/installer")
+  ensure_dir(C.BASE_DIR .. "/.cache")
+  ensure_dir(C.BASE_DIR .. "/logs")
 end
 
 local function is_config_file(path)
@@ -1955,7 +1959,7 @@ local function prompt_use_detected()
 end
 
 local function write_config(role, wireless, wired, extras)
-  local cfg_path = BASE_DIR .. "/" .. role_targets[role].config
+  local cfg_path = C.BASE_DIR .. "/" .. role_targets[role].config
   local defaults = read_config(cfg_path, {})
   defaults.role = role
   defaults.wireless_modem = wireless
@@ -1990,7 +1994,7 @@ end
 
 local function find_existing_role()
   for role, target in pairs(role_targets) do
-    local cfg_path = BASE_DIR .. "/" .. target.config
+    local cfg_path = C.BASE_DIR .. "/" .. target.config
     if fs.exists(cfg_path) then
       local cfg = read_config(cfg_path, {})
       if cfg.role == role then
@@ -2003,15 +2007,15 @@ end
 
 local function collect_known_node_id_sources(role, cfg_path)
   local sources = {
-    { label = "legacy_file", path = BASE_DIR .. "/data/node_id.txt" },
-    { label = "legacy_file", path = BASE_DIR .. "/node_id.txt" },
-    { label = "legacy_file", path = BASE_DIR .. "/config/node_id.txt" }
+    { label = "legacy_file", path = C.BASE_DIR .. "/data/node_id.txt" },
+    { label = "legacy_file", path = C.BASE_DIR .. "/node_id.txt" },
+    { label = "legacy_file", path = C.BASE_DIR .. "/config/node_id.txt" }
   }
   if cfg_path then
     table.insert(sources, { label = "config", path = cfg_path })
   end
   for _, target in pairs(role_targets) do
-    local path = BASE_DIR .. "/" .. target.config
+    local path = C.BASE_DIR .. "/" .. target.config
     if path ~= cfg_path then
       table.insert(sources, { label = "config", path = path })
     end
@@ -2020,12 +2024,12 @@ local function collect_known_node_id_sources(role, cfg_path)
 end
 
 local function ensure_node_id(role, cfg_path)
-  if fs.exists(NODE_ID_PATH) then
-    local existing = trim(read_file(NODE_ID_PATH))
+  if fs.exists(C.NODE_ID_PATH) then
+    local existing = trim(read_file(C.NODE_ID_PATH))
     local normalized = normalize_node_id(existing)
     if normalized then
       if normalized ~= existing then
-        write_atomic(NODE_ID_PATH, normalized)
+        write_atomic(C.NODE_ID_PATH, normalized)
         print("normalized node_id from file")
         log("INFO", "Normalized node_id from file")
       end
@@ -2041,7 +2045,7 @@ local function ensure_node_id(role, cfg_path)
         local cfg = read_config(source.path, {})
         local normalized = normalize_node_id(cfg.node_id)
         if normalized then
-          write_atomic(NODE_ID_PATH, normalized)
+          write_atomic(C.NODE_ID_PATH, normalized)
           print("migrated node_id from config")
           log("INFO", "Migrated node_id from config")
           return true
@@ -2050,7 +2054,7 @@ local function ensure_node_id(role, cfg_path)
         local content = trim(read_file(source.path))
         local normalized = normalize_node_id(content)
         if normalized then
-          write_atomic(NODE_ID_PATH, normalized)
+          write_atomic(C.NODE_ID_PATH, normalized)
           print("migrated node_id from legacy_file")
           log("INFO", "Migrated node_id from legacy file")
           return true
@@ -2060,16 +2064,16 @@ local function ensure_node_id(role, cfg_path)
   end
 
   local generated = fallback_node_id()
-  write_atomic(NODE_ID_PATH, generated)
+  write_atomic(C.NODE_ID_PATH, generated)
   print("generated new node_id")
   log("INFO", "Generated new node_id")
   return true
 end
 
 local function create_backup_dir()
-  ensure_dir(BACKUP_BASE)
+  ensure_dir(C.BACKUP_BASE)
   local stamp = os.date("%Y%m%d_%H%M%S")
-  local path = BACKUP_BASE .. "/" .. stamp
+  local path = C.BACKUP_BASE .. "/" .. stamp
   ensure_dir(path)
   return path
 end
@@ -2138,13 +2142,13 @@ local function update_files(manifest, hash_algo)
 end
 
 local function build_staging_dir()
-  ensure_dir(UPDATE_STAGING_BASE)
+  ensure_dir(C.UPDATE_STAGING_BASE)
   if not fetch_url_seeded then
     math.randomseed(os.time())
     fetch_url_seeded = true
   end
   local stamp = os.epoch and os.epoch("utc") or os.time()
-  local dir = string.format("%s/%s-%d", UPDATE_STAGING_BASE, tostring(stamp), math.random(1000, 9999))
+  local dir = string.format("%s/%s-%d", C.UPDATE_STAGING_BASE, tostring(stamp), math.random(1000, 9999))
   ensure_dir(dir)
   return dir
 end
@@ -2259,7 +2263,7 @@ end
 
 local function build_migration_paths()
   local paths = {}
-  for _, migration in ipairs(FILE_MIGRATIONS or {}) do
+  for _, migration in ipairs(C.FILE_MIGRATIONS or {}) do
     if type(migration) == "table" and migration.from then
       table.insert(paths, "/" .. migration.from)
     end
@@ -2269,7 +2273,7 @@ end
 
 local function apply_file_migrations()
   local applied = {}
-  for _, migration in ipairs(FILE_MIGRATIONS or {}) do
+  for _, migration in ipairs(C.FILE_MIGRATIONS or {}) do
     if type(migration) == "table" and migration.from and migration.to then
       local from_path = "/" .. migration.from
       local to_path = "/" .. migration.to
@@ -2287,7 +2291,7 @@ end
 
 local function update_installer_if_required(manifest, release, hash_algo)
   local required = manifest.installer_min_version
-  if required and compare_version(INSTALLER_VERSION, required) < 0 then
+  if required and compare_version(C.INSTALLER_VERSION, required) < 0 then
     print("Installer update required.")
     log("WARN", "Installer update required (min " .. tostring(required) .. ")")
     if not confirm("Update installer now?", true) then
@@ -2407,7 +2411,7 @@ local function verify_integrity(manifest, role, cfg_path)
   if role and cfg_path and not fs.exists(cfg_path) then
     return false, "Missing config"
   end
-  if not fs.exists(NODE_ID_PATH) then
+  if not fs.exists(C.NODE_ID_PATH) then
     return false, "Missing node_id"
   end
   return true
@@ -2478,7 +2482,7 @@ local function safe_update()
 
     updates = update_files(manifest, hash_algo)
     log("INFO", "Files needing update: " .. tostring(#updates))
-    local preflight_ok = preflight_space(updates, UPDATE_STAGING_BASE, "SAFE UPDATE preflight")
+    local preflight_ok = preflight_space(updates, C.UPDATE_STAGING_BASE, "SAFE UPDATE preflight")
     if not preflight_ok then
       print("SAFE UPDATE aborted: not enough disk space.")
       log("WARN", "SAFE UPDATE aborted: insufficient disk space")
@@ -2507,7 +2511,7 @@ local function safe_update()
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
   end
   local backup_dir = create_backup_dir()
-  local protected = { cfg_path, NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
+  local protected = { cfg_path, C.NODE_ID_PATH, "/startup.lua", C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
   local update_paths = {}
   local created = {}
   local migration_paths = build_migration_paths()
@@ -2583,7 +2587,7 @@ local function safe_update()
   end
 
   if ok then
-    local success, result = pcall(write_atomic, MANIFEST_LOCAL, manifest_content)
+    local success, result = pcall(write_atomic, C.MANIFEST_LOCAL, manifest_content)
     if not success then
       ok = false
       err = result
@@ -2675,15 +2679,15 @@ local function full_reinstall()
 
     local entries = build_manifest_entries(manifest)
     local required_total = calculate_required_bytes(entries)
-    local free_space = get_free_space(BASE_DIR)
-    local existing_size = dir_size_recursive(BASE_DIR)
+    local free_space = get_free_space(C.BASE_DIR)
+    local existing_size = dir_size_recursive(C.BASE_DIR)
     if free_space and (free_space + existing_size) < required_total then
-      local message = describe_space_issue("FULL REINSTALL preflight", free_space + existing_size, required_total, BASE_DIR)
+      local message = describe_space_issue("FULL REINSTALL preflight", free_space + existing_size, required_total, C.BASE_DIR)
       print(message)
       log("WARN", message)
       return
     end
-    use_staging = preflight_space(entries, UPDATE_STAGING_BASE, "FULL REINSTALL staging")
+    use_staging = preflight_space(entries, C.UPDATE_STAGING_BASE, "FULL REINSTALL staging")
     if not use_staging then
       print("Not enough space for staging. Falling back to direct install.")
       log("WARN", "FULL REINSTALL staging disabled due to space")
@@ -2720,9 +2724,9 @@ local function full_reinstall()
   for _, entry in ipairs(entries) do
     table.insert(update_paths, "/" .. entry.path)
   end
-  local protected = { NODE_ID_PATH, "/startup.lua", MANIFEST_LOCAL, MANIFEST_CACHE }
+  local protected = { C.NODE_ID_PATH, "/startup.lua", C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
   for _, target in pairs(role_targets) do
-    table.insert(protected, BASE_DIR .. "/" .. target.config)
+    table.insert(protected, C.BASE_DIR .. "/" .. target.config)
   end
 
   backup_files(backup_dir, update_paths)
@@ -2781,7 +2785,7 @@ local function full_reinstall()
     log("INFO", "Restored existing config for role " .. tostring(role))
   else
     role = choose_role()
-    cfg_path = BASE_DIR .. "/" .. role_targets[role].config
+    cfg_path = C.BASE_DIR .. "/" .. role_targets[role].config
     local modems = detect_modems()
     local wireless = select_primary_modem(modems)
     local wired = modems.wired[1]
@@ -2841,7 +2845,7 @@ local function full_reinstall()
 
   ensure_node_id(role, cfg_path)
   write_startup(role)
-  write_atomic(MANIFEST_LOCAL, manifest_content)
+  write_atomic(C.MANIFEST_LOCAL, manifest_content)
   write_manifest_cache(manifest_content, release, current_base_source, {
     base_url = current_base_url,
     source = current_base_source,
@@ -2903,7 +2907,7 @@ local function main()
   if result and result ~= "no marker" then
     log("INFO", "Update recovery: " .. tostring(result))
   end
-  if fs.exists(BASE_DIR) then
+  if fs.exists(C.BASE_DIR) then
     print("Existing installation detected.")
     log("INFO", "Existing installation detected")
     local choice = ui_menu(nil, { "SAFE UPDATE", "FULL REINSTALL", "CANCEL" }, 1)
@@ -2925,6 +2929,7 @@ local function log_fatal(trace)
   log("ERROR", trace)
   print("Installer failed: " .. tostring(trace))
   print("See log: " .. tostring(CONFIG.LOG_PATH))
+  flush_log_fallback()
 end
 
 local ok, err = xpcall(main, function(message)
@@ -2933,3 +2938,4 @@ end)
 if not ok then
   log_fatal(err)
 end
+flush_log_fallback()
