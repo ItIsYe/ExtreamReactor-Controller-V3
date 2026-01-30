@@ -8,7 +8,7 @@ SCADA-ähnlicher Steuerungs-Stack für Minecraft mit **CC:Tweaked**, **Extreme R
 wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
 installer
 ```
-**Einzeiler (RAW, beta):**
+**Ein einzelner Copy-Paste-Befehl für CC:Tweaked-Computer (RAW, beta):**
 ```
 wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer && installer
 ```
