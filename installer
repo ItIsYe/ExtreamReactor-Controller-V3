@@ -224,6 +224,26 @@ local function run_with_trace(module, label, fn)
   return ok, err
 end
 
+local function flush_memory_fallback()
+  if #log_state.memory_fallback == 0 then
+    return
+  end
+  print("=== INSTALLER DEBUG LOG (RAM) ===")
+  for _, line in ipairs(log_state.memory_fallback) do
+    print(line)
+  end
+  log_state.memory_fallback = {}
+end
+
+local function announce_log_location()
+  flush_log(true)
+  local location = get_log_path()
+  print("Details logged to: " .. tostring(location))
+  if location == "RAM (printed below)" then
+    flush_memory_fallback()
+  end
+end
+
 local function sanitize_signature(prefix)
   if not prefix or prefix == "" then
     return ""
