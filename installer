@@ -16,19 +16,20 @@ local CONFIG = {
   DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
   DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
-  LOG_ENABLED = nil, -- Enable bootstrap logging (nil uses settings key).
+  LOG_ENABLED = true, -- Always enable bootstrap logging.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
   LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path.
+  LOG_FALLBACK_PATH = "/installer_debug.log", -- Fallback log path when /xreactor is unavailable.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
-  LOG_SAMPLE_BYTES = 80 -- Bytes to capture as response signature.
+  LOG_SAMPLE_BYTES = 200 -- Bytes to capture as response signature.
 }
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
-    fs.makeDir(path)
+    pcall(fs.makeDir, path)
   end
 end
 
@@ -40,10 +41,7 @@ local function resolve_log_enabled()
   if CONFIG.LOG_ENABLED ~= nil then
     return CONFIG.LOG_ENABLED == true
   end
-  if settings and settings.get and CONFIG.LOG_SETTINGS_KEY then
-    return settings.get(CONFIG.LOG_SETTINGS_KEY) == true
-  end
-  return false
+  return true
 end
 
 local function rotate_log_if_needed(path)
@@ -63,8 +61,46 @@ end
 local log_state = {
   enabled = nil,
   buffer = {},
-  last_flush = 0
+  last_flush = 0,
+  path = CONFIG.LOG_PATH,
+  fallback_used = false,
+  memory_fallback = {},
+  last_write_ok = false,
+  last_failed_path = nil
 }
+
+local function ensure_log_dirs()
+  pcall(fs.makeDir, "/xreactor")
+  pcall(fs.makeDir, "/xreactor/logs")
+end
+
+local function open_log_file()
+  ensure_log_dirs()
+  local file = fs.open(log_state.path, "a")
+  if file then
+    return file
+  end
+  if log_state.path ~= CONFIG.LOG_FALLBACK_PATH then
+    log_state.path = CONFIG.LOG_FALLBACK_PATH
+    log_state.fallback_used = true
+    file = fs.open(log_state.path, "a")
+    if file then
+      return file
+    end
+  end
+  log_state.last_failed_path = log_state.path
+  return nil
+end
+
+local function get_log_path()
+  if log_state.last_write_ok and log_state.path and fs.exists(log_state.path) then
+    return log_state.path
+  end
+  if log_state.fallback_used and fs.exists(CONFIG.LOG_FALLBACK_PATH) then
+    return CONFIG.LOG_FALLBACK_PATH
+  end
+  return "RAM (printed below)"
+end
 
 local function flush_log(force)
   if not log_state.enabled then
@@ -78,25 +114,31 @@ local function flush_log(force)
     return
   end
   local ok = pcall(function()
-    ensure_dir(fs.getDir(CONFIG.LOG_PATH))
-    rotate_log_if_needed(CONFIG.LOG_PATH)
-    local file = fs.open(CONFIG.LOG_PATH, "a")
+    rotate_log_if_needed(log_state.path)
+    local file = open_log_file()
     if not file then
-      return
+      return false
     end
     for _, line in ipairs(log_state.buffer) do
       file.write(line .. "\n")
     end
     file.close()
+    return true
   end)
-  log_state.buffer = {}
-  log_state.last_flush = os.clock()
-  if not ok then
-    log_state.enabled = false
+  if ok then
+    log_state.last_write_ok = true
+    log_state.buffer = {}
+    log_state.last_flush = os.clock()
+  else
+    log_state.last_write_ok = false
+    for _, line in ipairs(log_state.buffer) do
+      table.insert(log_state.memory_fallback, line)
+    end
+    log_state.buffer = {}
   end
 end
 
-local function log_line(level, message)
+local function log_line(level, module, message)
   if log_state.enabled == nil then
     log_state.enabled = resolve_log_enabled()
     log_state.last_flush = os.clock()
@@ -104,8 +146,28 @@ local function log_line(level, message)
   if not log_state.enabled then
     return
   end
-  table.insert(log_state.buffer, string.format("[%s] BOOTSTRAP | %s | %s", now_stamp(), tostring(level), tostring(message)))
+  table.insert(log_state.buffer, string.format("[%s] %s | %s | %s", now_stamp(), tostring(level), tostring(module), tostring(message)))
   flush_log(false)
+end
+
+local function flush_memory_fallback()
+  if #log_state.memory_fallback == 0 then
+    return
+  end
+  print("=== INSTALLER DEBUG LOG (RAM) ===")
+  for _, line in ipairs(log_state.memory_fallback) do
+    print(line)
+  end
+  log_state.memory_fallback = {}
+end
+
+local function announce_log_location()
+  flush_log(true)
+  local location = get_log_path()
+  print("Details logged to: " .. tostring(location))
+  if location == "RAM (printed below)" then
+    flush_memory_fallback()
+  end
 end
 
 local function sanitize_signature(prefix)
@@ -221,13 +283,16 @@ local fetch_url_seeded = false
 
 local function fetch_url(url)
   if not http or not http.get then
+    log_line("ERROR", "http", "HTTP API unavailable")
     return false, nil, "HTTP API unavailable", { url = url }
   end
   local response
   local err
   if http.request and CONFIG.DOWNLOAD_TIMEOUT then
+    log_line("INFO", "http", "http.request -> " .. tostring(url))
     local ok, req_err = pcall(http.request, url, nil, nil, false)
     if not ok then
+      log_line("ERROR", "http", "http.request failed: " .. tostring(req_err))
       return false, nil, "http.request failed (" .. tostring(req_err) .. ")", { url = url }
     end
     local timer = os.startTimer(CONFIG.DOWNLOAD_TIMEOUT)
@@ -237,19 +302,23 @@ local function fetch_url(url)
         response = p2
         break
       elseif event == "http_failure" and p1 == url then
+        log_line("WARN", "http", "http_failure: " .. tostring(p2))
         return false, nil, "http failure (" .. tostring(p2) .. ")", { url = url }
       elseif event == "timer" and p1 == timer then
+        log_line("WARN", "http", "http timeout")
         return false, nil, "timeout", { url = url }
       end
     end
   else
     local ok, result = pcall(function() return http.get(url) end)
+    log_line("INFO", "http", string.format("http.get -> %s (ok=%s, response=%s)", tostring(url), tostring(ok), tostring(result ~= nil)))
     if ok then
       response = result
     else
       err = result
     end
     if not response then
+      log_line("WARN", "http", "http.get returned nil: " .. tostring(err))
       return false, nil, "http.get returned nil" .. (err and (" (" .. tostring(err) .. ")") or ""), { url = url }
     end
   end
@@ -265,6 +334,15 @@ local function fetch_url(url)
     bytes = body and #body or 0,
     signature = sanitize_signature(prefix)
   }
+  local header_dump = headers and textutils.serialize(headers) or "n/a"
+  log_line("INFO", "http", string.format("HTTP response: url=%s code=%s bytes=%s sig=%s",
+    tostring(url),
+    tostring(code or "n/a"),
+    tostring(body and #body or 0),
+    tostring(sanitize_signature(prefix))
+  ))
+  log_line("INFO", "http", "HTTP headers: " .. tostring(header_dump))
+  log_line("INFO", "http", "HTTP body sample: " .. tostring(sanitize_signature(prefix)))
   if not body or body == "" then
     return false, nil, "empty body", meta
   end
@@ -336,7 +414,7 @@ local function download_bootstrap()
     for _, url in ipairs(urls) do
       local ok, body, err, meta = fetch_url(url)
       if ok then
-        log_line("INFO", string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
+        log_line("INFO", "installer", string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
           tostring(url),
           tostring(meta and meta.code or "n/a"),
           tostring(meta and meta.bytes or 0),
@@ -347,10 +425,10 @@ local function download_bootstrap()
         if not write_ok then
           return false, "write failed (" .. tostring(write_err) .. ")", meta
         end
-        log_line("INFO", "Atomic swap complete: " .. CONFIG.TARGET_PATH)
+        log_line("INFO", "installer", "Atomic swap complete: " .. CONFIG.TARGET_PATH)
         return true
       end
-      log_line("WARN", string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
+      log_line("WARN", "installer", string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
         tostring(url),
         tostring(err),
         tostring(meta and meta.code or "n/a"),
@@ -369,6 +447,8 @@ end
 if not http then
   error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
 end
+
+log_line("INFO", "installer", "Bootstrap start")
 
 local ok = false
 local err
@@ -401,6 +481,7 @@ if not ok then
     print("Using existing installer.lua.")
   else
     print_quick_install_hint()
+    announce_log_location()
     error("Installer bootstrap unavailable. Please re-run the RAW install command.")
   end
 end
