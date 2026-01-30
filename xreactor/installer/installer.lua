@@ -630,7 +630,15 @@ local function load_local_core()
   if not fs.exists(CONFIG.CORE_PATH) then
     return nil, "core missing"
   end
-  local loader, load_err = loadfile(CONFIG.CORE_PATH)
+  local content = read_file(CONFIG.CORE_PATH)
+  if not content then
+    return nil, "core unreadable"
+  end
+  local valid, reason, detail = validate_core(content)
+  if not valid then
+    return nil, reason or detail
+  end
+  local loader, load_err = load(content, "@installer_core", "t")
   if not loader then
     return nil, load_err
   end
@@ -724,6 +732,14 @@ local function download_core(release)
   local ok, content, meta = fetch_with_retries(urls, 1, "installer_core")
   if not ok then
     return false, nil, meta
+  end
+  local expected_size = release and release.installer_core_size_bytes or nil
+  if expected_size then
+    local space_ok, space_err = ensure_free_space(CONFIG.CORE_DOWNLOAD_PATH, expected_size + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0), "Core download")
+    if not space_ok then
+      cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+      return false, nil, { err = space_err or "out of space", url = meta and meta.url }
+    end
   end
   if not content or #content < CONFIG.MIN_CORE_BYTES then
     save_bad_core(content)

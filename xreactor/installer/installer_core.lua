@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "1.8"
+local INSTALLER_CORE_VERSION = "1.9"
 
 -- CONFIG
 local CONFIG = {
@@ -26,6 +26,7 @@ local CONFIG = {
   DOWNLOAD_BACKOFF = 1, -- Backoff base (seconds) between retries.
   DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to download backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (used when http.request is available).
+  DOWNLOAD_CHUNK_SIZE = 4096, -- Stream chunk size for downloads.
   DOWNLOAD_MIRRORS = { -- Download mirrors (raw content only).
     "https://raw.githubusercontent.com"
   },
@@ -269,6 +270,7 @@ end
 local function init_internal_logger()
   internal_log_enabled = resolve_log_enabled()
   log_last_flush = os.clock()
+  ensure_dir(fs.getDir(CONFIG.LOG_PATH))
   active_logger.log = internal_log
   active_logger.set_enabled = function(enabled)
     if enabled == true then
@@ -588,6 +590,19 @@ local function cleanup_storage()
   return deleted
 end
 
+local function ensure_space_with_cleanup(path, expected_bytes, context)
+  if not expected_bytes or expected_bytes <= 0 then
+    return true
+  end
+  local needed = expected_bytes + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  local ok = ensure_free_space(path, needed, context)
+  if ok then
+    return true
+  end
+  cleanup_storage()
+  return ensure_free_space(path, needed, context .. " (after cleanup)")
+end
+
 local function write_atomic(path, content)
   ensure_dir(fs.getDir(path))
   local needed = (content and #content or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
@@ -624,7 +639,11 @@ end
 
 local function normalize_newlines(content)
   if not content then return "" end
-  return content:gsub("\r\n", "\n")
+  local normalized = content:gsub("\r\n", "\n")
+  if normalized:sub(1, 3) == "\239\187\191" then
+    normalized = normalized:sub(4)
+  end
+  return normalized
 end
 
 local function sanitize_snapshot(value, active)
@@ -1113,6 +1132,125 @@ local function log_download_entry(entry, label)
   log(level, msg)
 end
 
+local function fetch_response(url, opts)
+  if not http or not http.get then
+    return false, nil, "HTTP API unavailable (enable in CC:Tweaked config/server)", { url = url }
+  end
+  local timeout = (opts and opts.timeout) or C.DOWNLOAD_TIMEOUT
+  local response
+  local err
+  if http.request and timeout then
+    local ok, req_err = pcall(http.request, url, nil, nil, false)
+    if not ok then
+      return false, nil, "http.request failed (" .. tostring(req_err) .. ")", { url = url }
+    end
+    local timer = os.startTimer(timeout)
+    while true do
+      local event, p1, p2 = os.pullEvent()
+      if event == "http_success" and p1 == url then
+        response = p2
+        break
+      elseif event == "http_failure" and p1 == url then
+        return false, nil, "http failure (" .. tostring(p2) .. ")", { url = url }
+      elseif event == "timer" and p1 == timer then
+        return false, nil, "timeout", { url = url }
+      end
+    end
+  else
+    local ok, result = pcall(function()
+      return http.get(url)
+    end)
+    if ok then
+      response = result
+    else
+      err = result
+      response = nil
+    end
+    if response == nil then
+      local reason = "http.get returned nil"
+      if err then
+        reason = reason .. " (" .. tostring(err) .. ")"
+      end
+      return false, nil, reason, { url = url }
+    end
+  end
+  local code = response.getResponseCode and response.getResponseCode() or nil
+  local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
+  local meta = {
+    url = url,
+    code = code,
+    status = code,
+    headers = headers
+  }
+  if code and code ~= 200 then
+    response.close()
+    return false, nil, "http " .. tostring(code), meta
+  end
+  return true, response, nil, meta
+end
+
+local function stream_response_to_file(response, target_path, opts)
+  ensure_dir(fs.getDir(target_path))
+  local tmp = target_path .. ".part"
+  local file = fs.open(tmp, "w")
+  if not file then
+    return false, "open failed"
+  end
+  local chunk_size = (opts and opts.chunk_size) or C.DOWNLOAD_CHUNK_SIZE or 4096
+  local prefix_limit = (opts and opts.prefix_bytes) or 512
+  local prefix = ""
+  local total = 0
+  local read_fn = response.read
+  local ok, err = pcall(function()
+    if read_fn then
+      while true do
+        local chunk = response.read(chunk_size)
+        if not chunk then
+          break
+        end
+        if #prefix < prefix_limit then
+          local needed = prefix_limit - #prefix
+          prefix = prefix .. chunk:sub(1, needed)
+        end
+        file.write(chunk)
+        total = total + #chunk
+      end
+    else
+      local body = response.readAll()
+      if body then
+        if #prefix < prefix_limit then
+          prefix = body:sub(1, prefix_limit)
+        end
+        local index = 1
+        while index <= #body do
+          file.write(body:sub(index, index + chunk_size - 1))
+          index = index + chunk_size
+        end
+        total = #body
+      end
+    end
+  end)
+  file.close()
+  if not ok then
+    if fs.exists(tmp) then
+      fs.delete(tmp)
+    end
+    return false, err
+  end
+  return true, {
+    bytes = total,
+    prefix = prefix,
+    temp_path = tmp
+  }
+end
+
+local function finalize_temp_file(temp_path, target_path)
+  if fs.exists(target_path) then
+    fs.delete(target_path)
+  end
+  fs.move(temp_path, target_path)
+end
+
 -- Single download function used by all network requests.
 local function fetch_url(url, opts)
   if not http or not http.get then
@@ -1328,6 +1466,100 @@ local function download_file_with_retry(urls, expected_hash, hash_algo, opts)
       validate = validate
     }
   )
+end
+
+local function download_file_to_path(urls, target_path, expected_hash, hash_algo, opts)
+  local attempts = opts and opts.attempts or C.DOWNLOAD_ATTEMPTS
+  local backoff = opts and opts.backoff or C.DOWNLOAD_BACKOFF
+  local tried = {}
+  local list = {}
+  for _, url in ipairs(urls or {}) do
+    if url and url ~= "" then
+      table.insert(list, url)
+    end
+  end
+  if #list == 0 then
+    return false, { tried = {}, last = { url = nil, ok = false, err = "no urls" } }
+  end
+  for attempt = 1, attempts do
+    for _, url in ipairs(list) do
+      local entry = { url = url, ok = false, attempt = attempt }
+      local ok, response, err, meta = fetch_response(url, { timeout = C.DOWNLOAD_TIMEOUT })
+      if not ok then
+        entry.err = err
+        entry.code = meta and meta.code or nil
+      else
+        local headers = meta and meta.headers or {}
+        local content_length = headers["Content-Length"] or headers["content-length"]
+        local expected_size = (opts and opts.expected_size) or (content_length and tonumber(content_length)) or nil
+        entry.expected_size = expected_size
+        if expected_size and not ensure_space_with_cleanup(target_path, expected_size, "Download " .. target_path) then
+          entry.err = "out of space"
+          response.close()
+        else
+          local stream_ok, stream_info = stream_response_to_file(response, target_path, {
+            chunk_size = C.DOWNLOAD_CHUNK_SIZE,
+            prefix_bytes = 512
+          })
+          response.close()
+          if not stream_ok then
+            entry.err = stream_info
+          else
+            entry.bytes = stream_info.bytes or 0
+            entry.signature = sanitize_signature(stream_info.prefix or "")
+            if detect_html(stream_info.prefix) then
+              entry.err = "html response"
+              if fs.exists(stream_info.temp_path) then
+                fs.delete(stream_info.temp_path)
+              end
+            else
+              if expected_size and entry.bytes ~= expected_size then
+                entry.err = "size mismatch"
+                if fs.exists(stream_info.temp_path) then
+                  fs.delete(stream_info.temp_path)
+                end
+              else
+                if expected_hash then
+                  local actual = file_checksum(stream_info.temp_path, hash_algo)
+                  entry.expected_hash = expected_hash
+                  entry.actual_hash = actual
+                  if actual ~= expected_hash then
+                    entry.err = ("checksum mismatch expected=%s actual=%s"):format(expected_hash, actual)
+                    if fs.exists(stream_info.temp_path) then
+                      fs.delete(stream_info.temp_path)
+                    end
+                  end
+                end
+                if not entry.err then
+                  finalize_temp_file(stream_info.temp_path, target_path)
+                  entry.ok = true
+                end
+              end
+            end
+          end
+        end
+      end
+      if entry.ok ~= true then
+        entry.ok = false
+      end
+      entry.code = entry.code or (meta and meta.code or nil)
+      table.insert(tried, entry)
+      log_download_entry(entry, "download")
+      if entry.ok then
+        return true, { tried = tried, last = entry }
+      end
+    end
+    if attempt < attempts then
+      if not fetch_url_seeded then
+        math.randomseed(os.time())
+        fetch_url_seeded = true
+      end
+      local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
+      os.sleep((backoff * attempt) + jitter)
+    end
+  end
+  local last_entry = tried[#tried] or { url = list[1], ok = false, err = "timeout or http error", bytes = 0 }
+  return false, { tried = tried, last = last_entry }
 end
 
 local function is_valid_sha(sha)
@@ -2170,36 +2402,18 @@ local function stage_updates(entries, release, hash_algo)
     local base = current_base_url or build_main_base_url()
     local urls = build_mirror_urls(base, entry.path)
     local expected_size = entry.size_bytes or 0
-    local space_ok = ensure_free_space(stage_dir, expected_size + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0), "Stage " .. entry.path)
+    local space_ok = ensure_space_with_cleanup(stage_dir, expected_size, "Stage " .. entry.path)
     if not space_ok then
       cleanup_staging(stage_dir)
       return nil, ("Insufficient space to stage %s"):format(entry.path), nil, "space"
     end
-    local ok, content, meta = pcall(download_file_with_retry, urls, entry.hash, hash_algo, {
+    local staging_path = build_staging_path(stage_dir, entry.path)
+    local ok, meta = download_file_to_path(urls, staging_path, entry.hash, hash_algo, {
       expected_size = entry.size_bytes
     })
     if not ok then
       cleanup_staging(stage_dir)
-      return nil, ("Download failed for %s"):format(entry.path), { last = { err = content } }, "download"
-    end
-    if not content then
-      cleanup_staging(stage_dir)
       return nil, ("Download failed for %s"):format(entry.path), meta, "download"
-    end
-    local staging_path = build_staging_path(stage_dir, entry.path)
-    local write_ok, write_err = pcall(write_atomic, staging_path, content)
-    if not write_ok then
-      cleanup_staging(stage_dir)
-      return nil, ("Write failed for %s: %s"):format(entry.path, tostring(write_err)), nil, "write"
-    end
-    local verify = file_checksum(staging_path, hash_algo)
-    if verify ~= entry.hash then
-      cleanup_staging(stage_dir)
-      return nil, ("Integrity check failed for %s (staged mismatch expected=%s actual=%s)"):format(
-        entry.path,
-        entry.hash,
-        verify
-      ), nil, "integrity"
     end
     staged[entry.path] = staging_path
   end
@@ -2228,34 +2442,16 @@ end
 local function apply_direct(entries, release, hash_algo, created)
   for _, entry in ipairs(entries) do
     local target_path = "/" .. entry.path
-    local base = current_base_url or build_main_base_url()
-    local urls = build_mirror_urls(base, entry.path)
-    local ok, content, meta = pcall(download_file_with_retry, urls, entry.hash, hash_algo, {
-      expected_size = entry.size_bytes
-    })
-    if not ok then
-      return false, ("Download failed for %s: %s"):format(entry.path, tostring(content)), meta, "download"
-    end
-    if not content then
-      return false, ("Download failed for %s"):format(entry.path), meta, "download"
-    end
     if not fs.exists(target_path) then
       table.insert(created, target_path)
     end
-    local write_ok, write_err = pcall(write_atomic, target_path, content)
-    if not write_ok then
-      return false, ("Write failed for %s: %s"):format(entry.path, tostring(write_err)), nil, "write"
-    end
-    local verify = file_checksum(target_path, hash_algo)
-    if verify ~= entry.hash then
-      if fs.exists(target_path) then
-        fs.delete(target_path)
-      end
-      return false, ("Integrity check failed for %s (expected=%s actual=%s)"):format(
-        entry.path,
-        entry.hash,
-        verify
-      ), nil, "integrity"
+    local base = current_base_url or build_main_base_url()
+    local urls = build_mirror_urls(base, entry.path)
+    local ok, meta = download_file_to_path(urls, target_path, entry.hash, hash_algo, {
+      expected_size = entry.size_bytes
+    })
+    if not ok then
+      return false, ("Download failed for %s"):format(entry.path), meta, "download"
     end
   end
   return true
@@ -2307,7 +2503,8 @@ local function update_installer_if_required(manifest, release, hash_algo)
     end
     local base = current_base_url or build_main_base_url()
     local urls = build_mirror_urls(base, installer_path)
-    local ok, content, meta = download_file_with_retry(urls, expected, hash_algo, {
+    local temp = "/" .. installer_path .. ".new"
+    local ok, meta = download_file_to_path(urls, temp, expected, hash_algo, {
       expected_size = manifest.installer_size_bytes
     })
     if not ok then
@@ -2318,14 +2515,16 @@ local function update_installer_if_required(manifest, release, hash_algo)
       ))
       return false
     end
+    local content = read_file(temp)
     local valid, valid_err = validate_installer_content(content)
     if not valid then
       print("SAFE UPDATE aborted: installer invalid (" .. tostring(valid_err) .. ").")
+      if fs.exists(temp) then
+        fs.delete(temp)
+      end
       return false
     end
     local target = "/" .. installer_path
-    local temp = target .. ".new"
-    write_atomic(temp, content)
     if fs.exists(target) then
       fs.delete(target)
     end
@@ -2433,34 +2632,14 @@ local function build_manifest_entries(manifest)
   return entries
 end
 
--- SAFE UPDATE keeps role/config/node_id intact and updates only changed files.
-local function safe_update()
-  local role, cfg_path = find_existing_role()
-  if not role then
-    print("No existing role config found. Use FULL REINSTALL.")
-    log("WARN", "SAFE UPDATE aborted: no existing role config")
-    return
-  end
-  local existing_cfg = read_config(cfg_path, {})
-  if existing_cfg.debug_logging == true and active_logger.set_enabled then
-    active_logger.set_enabled(true)
-  end
-
-  local manifest_content
-  local manifest
-  local release
-  local manifest_meta
-  local hash_algo
-  local updates
-  local staged
-  local stage_dir
+local function safe_update_prepare(role, cfg_path)
   local retry_rounds = 0
   while true do
-    manifest_content, manifest, release, manifest_meta = acquire_manifest()
+    local manifest_content, manifest, release = acquire_manifest()
     if not manifest_content then
-      return
+      return nil
     end
-    hash_algo = resolve_hash_algo(manifest, release)
+    local hash_algo = resolve_hash_algo(manifest, release)
     print(("Debug: manifest source=%s base=%s hash=%s"):format(
       tostring(current_base_source or "unknown"),
       tostring(current_base_url or "unknown"),
@@ -2472,44 +2651,59 @@ local function safe_update()
     log("INFO", "SAFE UPDATE started for role " .. tostring(role))
     local can_continue = update_installer_if_required(manifest, release, hash_algo)
     if not can_continue then
-      return
+      return nil
     end
-
     local node_ok = ensure_node_id(role, cfg_path)
     if not node_ok then
-      return
+      return nil
     end
 
-    updates = update_files(manifest, hash_algo)
+    local updates = update_files(manifest, hash_algo)
     log("INFO", "Files needing update: " .. tostring(#updates))
     local preflight_ok = preflight_space(updates, C.UPDATE_STAGING_BASE, "SAFE UPDATE preflight")
     if not preflight_ok then
       print("SAFE UPDATE aborted: not enough disk space.")
       log("WARN", "SAFE UPDATE aborted: insufficient disk space")
-      return
+      return nil
     end
-    local stage_err
-    local stage_meta
-    staged, stage_err, stage_meta, stage_dir = stage_updates(updates, release, hash_algo)
+    local staged, stage_err, stage_meta, stage_dir = stage_updates(updates, release, hash_algo)
     if staged then
-      break
+      return {
+        manifest_content = manifest_content,
+        manifest = manifest,
+        release = release,
+        hash_algo = hash_algo,
+        updates = updates,
+        staged = staged,
+        stage_dir = stage_dir
+      }
     end
     print_download_failure("SAFE UPDATE failed: " .. tostring(stage_err), stage_meta, nil)
     local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
     if choice ~= 1 then
       log("ERROR", "SAFE UPDATE staging failed: " .. tostring(stage_err))
       cleanup_staging(stage_dir)
-      return
+      return nil
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
       print("Retry limit reached. Installer cancelled.")
       log("WARN", "File retry limit reached; cancelling")
       cleanup_staging(stage_dir)
-      return
+      return nil
     end
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
   end
+end
+
+local function safe_update_apply(context, role, cfg_path)
+  local manifest_content = context.manifest_content
+  local manifest = context.manifest
+  local release = context.release
+  local hash_algo = context.hash_algo
+  local updates = context.updates or {}
+  local staged = context.staged or {}
+  local stage_dir = context.stage_dir
   local backup_dir = create_backup_dir()
   local protected = { cfg_path, C.NODE_ID_PATH, "/startup.lua", C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
   local update_paths = {}
@@ -2638,26 +2832,33 @@ local function safe_update()
   cleanup_staging(stage_dir)
 end
 
--- FULL REINSTALL overwrites all files and optionally restores existing config.
-local function full_reinstall()
-  local manifest_content
-  local manifest
-  local release
-  local manifest_meta
-  local hash_algo
-  local staged
-  local stage_dir
+-- SAFE UPDATE keeps role/config/node_id intact and updates only changed files.
+local function safe_update()
+  local role, cfg_path = find_existing_role()
+  if not role then
+    print("No existing role config found. Use FULL REINSTALL.")
+    log("WARN", "SAFE UPDATE aborted: no existing role config")
+    return
+  end
+  local existing_cfg = read_config(cfg_path, {})
+  if existing_cfg.debug_logging == true and active_logger.set_enabled then
+    active_logger.set_enabled(true)
+  end
+  local context = safe_update_prepare(role, cfg_path)
+  if not context then
+    return
+  end
+  safe_update_apply(context, role, cfg_path)
+end
+
+local function full_reinstall_prepare()
   local retry_rounds = 0
-  local existing_role
-  local existing_cfg_path
-  local keep_config = false
-  local use_staging = true
   while true do
-    manifest_content, manifest, release, manifest_meta = acquire_manifest()
+    local manifest_content, manifest, release, manifest_meta = acquire_manifest()
     if not manifest_content then
-      return
+      return nil
     end
-    hash_algo = resolve_hash_algo(manifest, release)
+    local hash_algo = resolve_hash_algo(manifest, release)
     print(("Debug: manifest source=%s base=%s hash=%s"):format(
       tostring(current_base_source or "unknown"),
       tostring(current_base_url or "unknown"),
@@ -2667,8 +2868,8 @@ local function full_reinstall()
     cleanup_storage()
     log("INFO", "FULL REINSTALL started")
 
-    existing_role, existing_cfg_path = find_existing_role()
-    keep_config = false
+    local existing_role, existing_cfg_path = find_existing_role()
+    local keep_config = false
     if existing_role then
       local existing_cfg = read_config(existing_cfg_path, {})
       if existing_cfg.debug_logging == true and active_logger.set_enabled then
@@ -2685,42 +2886,137 @@ local function full_reinstall()
       local message = describe_space_issue("FULL REINSTALL preflight", free_space + existing_size, required_total, C.BASE_DIR)
       print(message)
       log("WARN", message)
-      return
+      return nil
     end
-    use_staging = preflight_space(entries, C.UPDATE_STAGING_BASE, "FULL REINSTALL staging")
+    local use_staging = preflight_space(entries, C.UPDATE_STAGING_BASE, "FULL REINSTALL staging")
     if not use_staging then
       print("Not enough space for staging. Falling back to direct install.")
       log("WARN", "FULL REINSTALL staging disabled due to space")
-      break
+      return {
+        manifest_content = manifest_content,
+        manifest = manifest,
+        release = release,
+        hash_algo = hash_algo,
+        entries = entries,
+        use_staging = false,
+        keep_config = keep_config,
+        existing_role = existing_role,
+        existing_cfg_path = existing_cfg_path
+      }
     end
-    local stage_err
-    local stage_meta
-    staged, stage_err, stage_meta, stage_dir = stage_updates(entries, release, hash_algo)
+    local staged, stage_err, stage_meta, stage_dir = stage_updates(entries, release, hash_algo)
     if staged then
-      break
+      return {
+        manifest_content = manifest_content,
+        manifest = manifest,
+        release = release,
+        hash_algo = hash_algo,
+        entries = entries,
+        use_staging = true,
+        staged = staged,
+        stage_dir = stage_dir,
+        keep_config = keep_config,
+        existing_role = existing_role,
+        existing_cfg_path = existing_cfg_path
+      }
     end
     print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
     local choice = ui_menu(nil, { "Retry download", "Cancel" }, 1)
     if choice ~= 1 then
       log("ERROR", "FULL REINSTALL staging failed: " .. tostring(stage_err))
       cleanup_staging(stage_dir)
-      return
+      return nil
     end
     retry_rounds = retry_rounds + 1
     if retry_rounds > CONFIG.FILE_RETRY_ROUNDS then
       print("Retry limit reached. Installer cancelled.")
       log("WARN", "File retry limit reached; cancelling")
       cleanup_staging(stage_dir)
-      return
+      return nil
     end
     os.sleep(CONFIG.FILE_RETRY_BACKOFF * retry_rounds)
   end
+end
 
+local function setup_fresh_config(context, backup_dir, protected)
+  if context.keep_config and context.existing_role then
+    restore_from_backup(backup_dir, protected)
+    log("INFO", "Restored existing config for role " .. tostring(context.existing_role))
+    return context.existing_role, context.existing_cfg_path
+  end
+  local role = choose_role()
+  local cfg_path = C.BASE_DIR .. "/" .. role_targets[role].config
+  local modems = detect_modems()
+  local wireless = select_primary_modem(modems)
+  local wired = modems.wired[1]
+  local extras = {}
+
+  if not wireless then
+    wireless = ui_prompt("Primary modem side", nil)
+  end
+  if wireless and wired == wireless then
+    wired = nil
+  end
+
+  if role == roles.RT_NODE then
+    local label = build_rt_node_id()
+    os.setComputerLabel(label)
+  end
+
+  if role == roles.MASTER then
+    extras.ui_scale_default = tonumber(ui_prompt("UI scale (0.5/1)", "0.5")) or 0.5
+  elseif role == roles.RT_NODE then
+    local detected = scan_peripherals()
+    extras.modem = wireless
+    local use_detected = #detected.reactors > 0
+    if use_detected then
+      print_detected("Detected Reactors", detected.reactors)
+      print_detected("Detected Turbines", detected.turbines)
+      print_detected("Detected Modems", detected.modems)
+      use_detected = prompt_use_detected()
+    else
+      print("Warning: No reactors detected. Switching to manual entry.")
+    end
+
+    if use_detected then
+      extras.reactors = detected.reactors
+      extras.turbines = detected.turbines
+      if #detected.turbines == 0 then
+        print("No turbines detected. Reactor-only setup will be used.")
+      end
+    else
+      local reactors = ui_prompt("Reactor peripheral names (comma separated)", "")
+      local turbines = ui_prompt("Turbine peripheral names (comma separated)", "")
+      extras.reactors = {}
+      extras.turbines = {}
+      for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
+      for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
+    end
+    if not wireless then
+      extras.modem = ui_prompt("Modem peripheral name", nil)
+    end
+  end
+
+  if role == roles.RT_NODE then
+    extras.node_id = build_rt_node_id()
+  end
+  write_config(role, wireless, wired, extras)
+  return role, cfg_path
+end
+
+local function full_reinstall_apply(context)
+  local manifest_content = context.manifest_content
+  local manifest = context.manifest
+  local release = context.release
+  local hash_algo = context.hash_algo
+  local staged = context.staged
+  local stage_dir = context.stage_dir
+  local use_staging = context.use_staging
+  local entries = context.entries
   local backup_dir = create_backup_dir()
   local update_paths = {}
   local created = {}
   local migration_paths = build_migration_paths()
-  local entries = build_manifest_entries(manifest)
   for _, entry in ipairs(entries) do
     table.insert(update_paths, "/" .. entry.path)
   end
@@ -2754,11 +3050,11 @@ local function full_reinstall()
     hash_algo = hash_algo
   })
 
-  local ok, err, apply_meta = false, nil, nil
+  local ok, err = false, nil
   if use_staging then
     ok, err = apply_staged(entries, staged, created)
   else
-    ok, err, apply_meta = apply_direct(entries, release, hash_algo, created)
+    ok, err = apply_direct(entries, release, hash_algo, created)
   end
   if ok then
     local migrate_ok, migrate_err = apply_file_migrations()
@@ -2775,73 +3071,8 @@ local function full_reinstall()
     log("ERROR", "FULL REINSTALL apply failed: " .. tostring(err))
     return
   end
-  local role
-  local cfg_path
 
-  if keep_config and existing_role then
-    restore_from_backup(backup_dir, protected)
-    role = existing_role
-    cfg_path = existing_cfg_path
-    log("INFO", "Restored existing config for role " .. tostring(role))
-  else
-    role = choose_role()
-    cfg_path = C.BASE_DIR .. "/" .. role_targets[role].config
-    local modems = detect_modems()
-    local wireless = select_primary_modem(modems)
-    local wired = modems.wired[1]
-    local extras = {}
-
-    if not wireless then
-      wireless = ui_prompt("Primary modem side", nil)
-    end
-    if wireless and wired == wireless then
-      wired = nil
-    end
-
-    if role == roles.RT_NODE then
-      local label = build_rt_node_id()
-      os.setComputerLabel(label)
-    end
-
-    if role == roles.MASTER then
-      extras.ui_scale_default = tonumber(ui_prompt("UI scale (0.5/1)", "0.5")) or 0.5
-    elseif role == roles.RT_NODE then
-      local detected = scan_peripherals()
-      extras.modem = wireless
-      local use_detected = #detected.reactors > 0
-      if use_detected then
-        print_detected("Detected Reactors", detected.reactors)
-        print_detected("Detected Turbines", detected.turbines)
-        print_detected("Detected Modems", detected.modems)
-        use_detected = prompt_use_detected()
-      else
-        print("Warning: No reactors detected. Switching to manual entry.")
-      end
-
-      if use_detected then
-        extras.reactors = detected.reactors
-        extras.turbines = detected.turbines
-        if #detected.turbines == 0 then
-          print("No turbines detected. Reactor-only setup will be used.")
-        end
-      else
-      local reactors = ui_prompt("Reactor peripheral names (comma separated)", "")
-      local turbines = ui_prompt("Turbine peripheral names (comma separated)", "")
-        extras.reactors = {}
-        extras.turbines = {}
-        for name in string.gmatch(reactors, "[^,]+") do table.insert(extras.reactors, trim(name)) end
-        for name in string.gmatch(turbines, "[^,]+") do table.insert(extras.turbines, trim(name)) end
-      end
-      if not wireless then
-        extras.modem = ui_prompt("Modem peripheral name", nil)
-      end
-    end
-
-    if role == roles.RT_NODE then
-      extras.node_id = build_rt_node_id()
-    end
-    write_config(role, wireless, wired, extras)
-  end
+  local role, cfg_path = setup_fresh_config(context, backup_dir, protected)
 
   ensure_node_id(role, cfg_path)
   write_startup(role)
@@ -2857,6 +3088,15 @@ local function full_reinstall()
   log("INFO", "FULL REINSTALL complete")
   clear_update_marker()
   cleanup_staging(stage_dir)
+end
+
+-- FULL REINSTALL overwrites all files and optionally restores existing config.
+local function full_reinstall()
+  local context = full_reinstall_prepare()
+  if not context then
+    return
+  end
+  full_reinstall_apply(context)
 end
 
 local function bootstrap_self_check()
