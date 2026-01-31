@@ -2225,6 +2225,87 @@ local function render_alert_banner(target, model)
   end
 end
 
+local function monitor_snapshot(model)
+  return model and model.snapshot and model.snapshot.snapshot or nil
+end
+
+local function build_details_rows(snapshot)
+  local rows = {}
+  for name, info in pairs(snapshot and snapshot.turbines or {}) do
+    table.insert(rows, { text = ("T %s rpm:%s flow:%s"):format(name, format_value(info.rpm), format_value(info.flow)) })
+  end
+  for name, info in pairs(snapshot and snapshot.reactors or {}) do
+    table.insert(rows, { text = ("R %s rods:%s temp:%s"):format(name, format_value(info.rods), format_value(info.temp)) })
+  end
+  if #rows == 0 then
+    table.insert(rows, { text = "No modules detected", status = "WARNING" })
+  end
+  return rows
+end
+
+local function build_diagnostic_rows(model)
+  local reasons = table.concat(model.health.reasons or {}, ",")
+  local rows = {
+    { text = ("Health: %s"):format(model.health.status), status = model.health.status },
+    { text = ("Reasons: %s"):format(reasons ~= "" and reasons or "none") },
+    { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
+    { text = ("Last scan: %s"):format(model.last_scan) },
+    { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
+    { text = ("Comms q:%d inflight:%d retries:%d"):format(
+      model.comms.queue_depth or 0,
+      model.comms.inflight_count or 0,
+      model.metrics.retries or 0
+    ) },
+    { text = ("Comms drop:%d dedupe:%d timeouts:%d"):format(
+      model.metrics.dropped or 0,
+      model.metrics.dedupe_hits or 0,
+      model.metrics.timeouts or 0
+    ) },
+    { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
+  }
+  if model.local_alerts and #model.local_alerts > 0 then
+    table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
+    for _, alert in ipairs(model.local_alerts) do
+      local sev = alert.severity and alert.severity:sub(1, 1) or "?"
+      local title = alert.title or alert.message or alert.code or "alert"
+      local status = alert.severity == "CRITICAL" and "EMERGENCY" or alert.severity == "WARN" and "WARNING" or "OK"
+      table.insert(rows, { text = string.format("%s %s", sev, title), status = status })
+    end
+  end
+  return rows
+end
+
+local function render_overview(target, model)
+  local w, h = target.getSize()
+  local snapshot = monitor_snapshot(model)
+  ui.panel(target, 1, 1, w, h, "RT NODE", model.health.status)
+  render_alert_banner(target, model)
+  ui.text(target, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
+  ui.badge(target, w - 6, 2, model.health.status, model.health.status)
+  ui.text(target, 2, 4, ("State: %s"):format(current_state), colors.get("text"), colors.get("background"))
+  ui.text(target, 2, 5, ("Reactors: %d"):format(model.summary.kinds.reactor and model.summary.kinds.reactor.bound or 0), colors.get("text"), colors.get("background"))
+  ui.text(target, 2, 6, ("Turbines: %d"):format(model.summary.kinds.turbine and model.summary.kinds.turbine.bound or 0), colors.get("text"), colors.get("background"))
+  ui.text(target, 2, 7, ("Avg Temp: %.1f"):format(snapshot and snapshot.avg_temp or 0), colors.get("text"), colors.get("background"))
+  ui.text(target, 2, 8, ("Target RPM: %d"):format(get_target_rpm()), colors.get("text"), colors.get("background"))
+end
+
+local function render_details(target, model)
+  local w, h = target.getSize()
+  local snapshot = monitor_snapshot(model)
+  ui.panel(target, 1, 1, w, h, "RT DETAILS", model.health.status)
+  render_alert_banner(target, model)
+  local rows = build_details_rows(snapshot)
+  ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+end
+
+local function render_diagnostics(target, model)
+  local w, h = target.getSize()
+  ui.panel(target, 1, 1, w, h, "RT DIAGNOSTICS", model.health.status)
+  render_alert_banner(target, model)
+  local rows = build_diagnostic_rows(model)
+  ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+end
+
 local function update_monitor()
   if not monitor then return end
   local now = os.epoch("utc")
@@ -2272,68 +2353,9 @@ local function update_monitor()
   if not monitor_router then
     monitor_router = ui_router.new({
       pages = {
-        { name = "Overview", render = function(target)
-          local w, h = target.getSize()
-          ui.panel(target, 1, 1, w, h, "RT NODE", model.health.status)
-          render_alert_banner(target, model)
-          ui.text(target, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
-          ui.badge(target, w - 6, 2, model.health.status, model.health.status)
-          ui.text(target, 2, 4, ("State: %s"):format(current_state), colors.get("text"), colors.get("background"))
-          ui.text(target, 2, 5, ("Reactors: %d"):format(model.summary.kinds.reactor and model.summary.kinds.reactor.bound or 0), colors.get("text"), colors.get("background"))
-          ui.text(target, 2, 6, ("Turbines: %d"):format(model.summary.kinds.turbine and model.summary.kinds.turbine.bound or 0), colors.get("text"), colors.get("background"))
-          ui.text(target, 2, 7, ("Avg Temp: %.1f"):format(snapshot and snapshot.avg_temp or 0), colors.get("text"), colors.get("background"))
-          ui.text(target, 2, 8, ("Target RPM: %d"):format(get_target_rpm()), colors.get("text"), colors.get("background"))
-        end },
-        { name = "Details", render = function(target)
-          local w, h = target.getSize()
-          ui.panel(target, 1, 1, w, h, "RT DETAILS", model.health.status)
-          render_alert_banner(target, model)
-          local rows = {}
-          for name, info in pairs(snapshot and snapshot.turbines or {}) do
-            table.insert(rows, { text = ("T %s rpm:%s flow:%s"):format(name, format_value(info.rpm), format_value(info.flow)) })
-          end
-          for name, info in pairs(snapshot and snapshot.reactors or {}) do
-            table.insert(rows, { text = ("R %s rods:%s temp:%s"):format(name, format_value(info.rods), format_value(info.temp)) })
-          end
-          if #rows == 0 then
-            table.insert(rows, { text = "No modules detected", status = "WARNING" })
-          end
-          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
-        end },
-        { name = "Diagnostics", render = function(target)
-          local w, h = target.getSize()
-          ui.panel(target, 1, 1, w, h, "RT DIAGNOSTICS", model.health.status)
-          render_alert_banner(target, model)
-          local reasons = table.concat(model.health.reasons or {}, ",")
-          local rows = {
-            { text = ("Health: %s"):format(model.health.status), status = model.health.status },
-            { text = ("Reasons: %s"):format(reasons ~= "" and reasons or "none") },
-            { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
-            { text = ("Last scan: %s"):format(model.last_scan) },
-            { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
-            { text = ("Comms q:%d inflight:%d retries:%d"):format(
-              model.comms.queue_depth or 0,
-              model.comms.inflight_count or 0,
-              model.metrics.retries or 0
-            ) },
-            { text = ("Comms drop:%d dedupe:%d timeouts:%d"):format(
-              model.metrics.dropped or 0,
-              model.metrics.dedupe_hits or 0,
-              model.metrics.timeouts or 0
-            ) },
-            { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
-          }
-          if model.local_alerts and #model.local_alerts > 0 then
-            table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
-            for _, alert in ipairs(model.local_alerts) do
-              local sev = alert.severity and alert.severity:sub(1, 1) or "?"
-              local title = alert.title or alert.message or alert.code or "alert"
-              local status = alert.severity == "CRITICAL" and "EMERGENCY" or alert.severity == "WARN" and "WARNING" or "OK"
-              table.insert(rows, { text = string.format("%s %s", sev, title), status = status })
-            end
-          end
-          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
-        end }
+        { name = "Overview", render = render_overview },
+        { name = "Details", render = render_details },
+        { name = "Diagnostics", render = render_diagnostics }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
       key_next = { [keys.right] = true, [keys.pageDown] = true }

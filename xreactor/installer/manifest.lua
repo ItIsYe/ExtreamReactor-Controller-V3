@@ -33,7 +33,7 @@ return {
     { path = "xreactor/adapters/reactor.lua", size_bytes = 3894, hash = "bbc5dc89" },
     { path = "xreactor/adapters/turbine.lua", size_bytes = 3485, hash = "e2d43c15" },
     { path = "xreactor/nodes/rt/config.lua", size_bytes = 4234, hash = "e005b4cd" },
-    { path = "xreactor/nodes/rt/main.lua", size_bytes = 93803, hash = "011adfa6" },
+    { path = "xreactor/nodes/rt/main.lua", size_bytes = 93886, hash = "f3bdd905" },
     { path = "xreactor/nodes/reprocessor/config.lua", size_bytes = 3132, hash = "d98073f7" },
     { path = "xreactor/nodes/reprocessor/main.lua", size_bytes = 21263, hash = "d53a7875" },
     { path = "xreactor/nodes/water/config.lua", size_bytes = 3425, hash = "42843ec6" },
@@ -71,7 +71,7 @@ return {
     { path = "installer.lua", size_bytes = 29292, hash = "d01eb147" },
     { path = "xreactor/installer/installer.lua", size_bytes = 29292, hash = "d01eb147" },
     { path = "xreactor/installer/installer_core.lua", size_bytes = 102959, hash = "9f8951cd" },
-    { path = "xreactor/installer/manifest.lua", size_bytes = 5933, hash = "5c1db353" },
+    { path = "xreactor/installer/manifest.lua", size_bytes = 5933, hash = "0c733165" },
     { path = "xreactor/installer/release.lua", size_bytes = 217, hash = "7d5f5824" }
   }
 }
