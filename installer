@@ -17,8 +17,8 @@ local CONFIG = {
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
   LOG_ENABLED = true, -- Always enable bootstrap logging.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
-  LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path.
-  LOG_FALLBACK_PATH = "/installer_debug.log", -- Fallback log path when /xreactor is unavailable.
+  LOG_PATH = "/xreactor_logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
+  LOG_FALLBACK_PATH = "/installer_debug.log", -- Fallback log path when storage root is unavailable.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
@@ -29,6 +29,30 @@ local CONFIG = {
 }
 
 local log_line
+
+local function detect_storage_mount()
+  local candidates = { "disk", "disk2", "disk3" }
+  for _, mount in ipairs(candidates) do
+    if fs.exists(mount) then
+      return "/" .. mount
+    end
+  end
+  return nil
+end
+
+local function configure_storage_root()
+  local mount = detect_storage_mount()
+  local root = "/xreactor"
+  if mount then
+    root = mount .. "/xreactor"
+  end
+  local log_dir = root .. "_logs"
+  CONFIG.STORAGE_ROOT = root
+  CONFIG.LOG_DIR = log_dir
+  CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
+end
+
+configure_storage_root()
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
@@ -105,8 +129,8 @@ local log_state = {
 }
 
 local function ensure_log_dirs()
-  pcall(fs.makeDir, "/xreactor")
-  pcall(fs.makeDir, "/xreactor/logs")
+  pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
+  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor_logs")
 end
 
 local function open_log_file()
@@ -115,6 +139,7 @@ local function open_log_file()
   if file then
     return file
   end
+  print("Warning: unable to open log file at " .. tostring(log_state.path))
   if log_state.path ~= CONFIG.LOG_FALLBACK_PATH then
     log_state.path = CONFIG.LOG_FALLBACK_PATH
     log_state.fallback_used = true
@@ -123,6 +148,7 @@ local function open_log_file()
       return file
     end
   end
+  print("Warning: fallback log file unavailable; continuing without file logging.")
   log_state.last_failed_path = log_state.path
   return nil
 end
@@ -165,6 +191,10 @@ local function flush_log(force)
     log_state.buffer = {}
     log_state.last_flush = os.clock()
   else
+    if not log_state.fallback_used then
+      print("Warning: log write failed; continuing without file logging.")
+      log_state.fallback_used = true
+    end
     log_state.last_write_ok = false
     for _, line in ipairs(log_state.buffer) do
       table.insert(log_state.memory_fallback, line)

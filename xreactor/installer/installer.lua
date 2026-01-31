@@ -1,7 +1,7 @@
 -- CONFIG
 local CONFIG = {
-  CORE_PATH = "/xreactor/installer/installer_core.lua", -- Installed core installer path.
-  CORE_META_PATH = "/xreactor/installer/installer_core.meta", -- Stored core metadata snapshot.
+  CORE_PATH = "/xreactor/installer/installer_core.lua", -- Installed core installer path (updated at runtime).
+  CORE_META_PATH = "/xreactor/installer/installer_core.meta", -- Stored core metadata snapshot (updated at runtime).
   RELEASE_PATH = "xreactor/installer/release.lua", -- Release metadata path.
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
@@ -17,16 +17,16 @@ local CONFIG = {
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
   MIN_CORE_BYTES = 200, -- Minimum bytes to accept core download.
   CORE_SANITY_MARKER = "local function main", -- Core sanity marker.
-  CORE_DOWNLOAD_PATH = "/xreactor/.tmp/installer_core.lua.download", -- Temp download path for core.
-  CORE_BAD_PATH = "/xreactor/.tmp/installer_core.bad", -- Saved bad core content for debugging.
+  CORE_DOWNLOAD_PATH = "/xreactor/.tmp/installer_core.lua.download", -- Temp download path for core (updated at runtime).
+  CORE_BAD_PATH = "/xreactor/.tmp/installer_core.bad", -- Saved bad core content for debugging (updated at runtime).
   CORE_MAX_RETRIES = 3, -- Max core download attempts before aborting.
   CORE_RETRY_BACKOFF = 1, -- Backoff seconds between core download retries.
   LOG_ENABLED = true, -- Always enable bootstrap logging.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
-  LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path.
-  LOCAL_LOG_DIR = "/xreactor/logs", -- Local log directory.
-  LOG_FALLBACK_PATH = "/installer_debug.log", -- Fallback log path when /xreactor is unavailable.
-  DISK_LOG_DIR_NAME = "xreactor_logs", -- Disk log directory name.
+  LOG_PATH = "/xreactor_logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
+  LOG_FALLBACK_PATH = "/installer_debug.log", -- Fallback log path when storage root is unavailable.
+  DISK_LOG_DIR_NAME = "xreactor_logs", -- Legacy disk log directory name.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
@@ -37,6 +37,39 @@ local CONFIG = {
 }
 
 local log_line
+
+local function detect_storage_mount()
+  local candidates = { "disk", "disk2", "disk3" }
+  for _, mount in ipairs(candidates) do
+    if fs.exists(mount) then
+      return "/" .. mount
+    end
+  end
+  return nil
+end
+
+local function configure_storage_root()
+  local mount = detect_storage_mount()
+  local root = "/xreactor"
+  if mount then
+    root = mount .. "/xreactor"
+  end
+  local log_dir = root .. "_logs"
+  local stage_dir = root .. "_stage"
+  local backup_dir = root .. "_backup"
+  CONFIG.STORAGE_ROOT = root
+  CONFIG.LOG_DIR = log_dir
+  CONFIG.STAGE_DIR = stage_dir
+  CONFIG.BACKUP_DIR = backup_dir
+  CONFIG.CORE_PATH = root .. "/installer/installer_core.lua"
+  CONFIG.CORE_META_PATH = root .. "/installer/installer_core.meta"
+  CONFIG.CORE_DOWNLOAD_PATH = root .. "/.tmp/installer_core.lua.download"
+  CONFIG.CORE_BAD_PATH = root .. "/.tmp/installer_core.bad"
+  CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
+  CONFIG.LOCAL_LOG_DIR = log_dir
+end
+
+configure_storage_root()
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
@@ -80,6 +113,20 @@ local function now_stamp()
   return textutils.formatTime(os.epoch("utc") / 1000, true)
 end
 
+local function format_bytes(bytes)
+  local value = tonumber(bytes or 0) or 0
+  local units = { "B", "KB", "MB", "GB" }
+  local idx = 1
+  while value >= 1024 and idx < #units do
+    value = value / 1024
+    idx = idx + 1
+  end
+  if idx == 1 then
+    return tostring(math.floor(value)) .. units[idx]
+  end
+  return string.format("%.1f%s", value, units[idx])
+end
+
 local function resolve_log_enabled()
   if CONFIG.LOG_ENABLED ~= nil then
     return CONFIG.LOG_ENABLED == true
@@ -106,54 +153,18 @@ local log_state = {
   buffer = {},
   last_flush = 0,
   path = CONFIG.LOG_PATH,
-  fallback_path = CONFIG.LOCAL_LOG_DIR .. "/installer_debug.log",
+  fallback_path = CONFIG.LOG_FALLBACK_PATH,
   fallback_used = false,
   memory_fallback = {},
   last_write_ok = false,
   last_failed_path = nil
 }
 
-local function detect_disk_mount()
-  if not peripheral or not peripheral.find then
-    return nil
-  end
-  local drive = peripheral.find("drive")
-  if not drive or not drive.isDiskPresent or not drive.getMountPath then
-    return nil
-  end
-  local ok, present = pcall(drive.isDiskPresent)
-  if not ok or not present then
-    return nil
-  end
-  local mount = drive.getMountPath()
-  if not mount or mount == "" then
-    return nil
-  end
-  return mount
-end
-
-local function configure_log_paths()
-  local mount = detect_disk_mount()
-  if mount then
-    log_state.path = mount .. "/" .. CONFIG.DISK_LOG_DIR_NAME .. "/installer_debug.log"
-    log_state.fallback_path = CONFIG.LOCAL_LOG_DIR .. "/installer_debug.log"
-  else
-    log_state.path = CONFIG.LOG_PATH
-    log_state.fallback_path = CONFIG.LOG_PATH
-  end
-end
-
 local function ensure_log_dirs()
-  pcall(fs.makeDir, "/xreactor")
-  pcall(fs.makeDir, "/xreactor/logs")
-  pcall(fs.makeDir, "/xreactor_stage")
-  pcall(fs.makeDir, "/xreactor_backup")
-  local mount = detect_disk_mount()
-  if mount then
-    pcall(fs.makeDir, mount .. "/" .. CONFIG.DISK_LOG_DIR_NAME)
-    pcall(fs.makeDir, mount .. "/xreactor_stage")
-    pcall(fs.makeDir, mount .. "/xreactor_backup")
-  end
+  pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
+  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor_logs")
+  pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
+  pcall(fs.makeDir, CONFIG.BACKUP_DIR or "/xreactor_backup")
 end
 
 local function open_log_file()
@@ -162,6 +173,7 @@ local function open_log_file()
   if file then
     return file
   end
+  print("Warning: unable to open log file at " .. tostring(log_state.path))
   if log_state.fallback_path and log_state.path ~= log_state.fallback_path then
     log_state.path = log_state.fallback_path
     log_state.fallback_used = true
@@ -178,6 +190,7 @@ local function open_log_file()
       return file
     end
   end
+  print("Warning: fallback log file unavailable; continuing without file logging.")
   log_state.last_failed_path = log_state.path
   return nil
 end
@@ -220,6 +233,10 @@ local function flush_log(force)
     log_state.buffer = {}
     log_state.last_flush = os.clock()
   else
+    if not log_state.fallback_used then
+      print("Warning: log write failed; continuing without file logging.")
+      log_state.fallback_used = true
+    end
     log_state.last_write_ok = false
     for _, line in ipairs(log_state.buffer) do
       table.insert(log_state.memory_fallback, line)
@@ -251,8 +268,19 @@ local function flush_memory_fallback()
   log_state.memory_fallback = {}
 end
 
+local function print_debug_summary(context)
+  local free = get_free_space(CONFIG.STORAGE_ROOT or "/")
+  print("=== Installer Debug Summary ===")
+  if context then
+    print("Context: " .. tostring(context))
+  end
+  print("Storage root: " .. tostring(CONFIG.STORAGE_ROOT or "/xreactor"))
+  print("Free space: " .. format_bytes(free or 0))
+  print("Stage path: " .. tostring(CONFIG.STAGE_DIR or "/xreactor_stage"))
+  print("Log path: " .. tostring(get_log_path()))
+end
+
 local function init_log_file()
-  configure_log_paths()
   ensure_log_dirs()
   local file = open_log_file()
   if file then
@@ -632,9 +660,6 @@ local function move_atomic_with_backup(temp_path, target_path)
     end
     return false, "move failed"
   end
-  if fs.exists(backup_path) then
-    fs.delete(backup_path)
-  end
   return true
 end
 
@@ -655,11 +680,12 @@ local function ensure_package_path()
   if not package or not package.path then
     return
   end
-  if not package.path:find("/xreactor/?.lua", 1, true) then
-    package.path = package.path .. ";/xreactor/?.lua"
+  local root = CONFIG.STORAGE_ROOT or "/xreactor"
+  if not package.path:find(root .. "/?.lua", 1, true) then
+    package.path = package.path .. ";" .. root .. "/?.lua"
   end
-  if not package.path:find("/xreactor/?/init.lua", 1, true) then
-    package.path = package.path .. ";/xreactor/?/init.lua"
+  if not package.path:find(root .. "/?/init.lua", 1, true) then
+    package.path = package.path .. ";" .. root .. "/?/init.lua"
   end
 end
 
@@ -982,9 +1008,11 @@ if release and needs_core_update(release) then
     end
     if attempt >= (CONFIG.CORE_MAX_RETRIES or 3) then
       print("Max retries reached. Aborting core update.")
+      print_debug_summary("Installer core update failed")
       break
     end
     if not confirm("Retry download?", true) then
+      print_debug_summary("Installer core update cancelled")
       break
     end
     os.sleep((CONFIG.CORE_RETRY_BACKOFF or 1) * attempt)
@@ -994,26 +1022,53 @@ if release and needs_core_update(release) then
   end
 end
 
-local loader, load_err = load_local_core()
-if not loader then
-  print("Installer core missing and could not be loaded.")
-  log_line("ERROR", "installer_core", "Installer core missing after bootstrap attempt. err=" .. tostring(load_err))
-  local recovered, meta = attempt_core_recovery(release, load_err)
-  if recovered then
-    loader, load_err = load_local_core()
-  end
-  if not loader then
-    if meta and meta.err then
-      log_core_failure(meta.err, meta)
+local function run_core_with_retries()
+  while true do
+    local loader, load_err = load_local_core()
+    if not loader then
+      print("Installer core missing and could not be loaded.")
+      log_line("ERROR", "installer_core", "Installer core missing after bootstrap attempt. err=" .. tostring(load_err))
+      local recovered, meta = attempt_core_recovery(release, load_err)
+      if recovered then
+        loader, load_err = load_local_core()
+      end
+      if not loader then
+        if meta and meta.err then
+          log_core_failure(meta.err, meta)
+        end
+        print_quick_install_hint()
+        announce_log_location()
+        print_debug_summary("Installer core load failure")
+      end
     end
-    print_quick_install_hint()
-    announce_log_location()
-    return
+
+    if loader then
+      local run_ok = run_with_trace("installer_core", "Installer core execution", loader)
+      announce_log_location()
+      if run_ok then
+        return true
+      end
+      print("Installer core failed to run. See log: " .. tostring(get_log_path()))
+      print_debug_summary("Installer core execution failed")
+    end
+
+    if release and confirm("Retry installer core download?", true) then
+      local ok, _, meta = download_core(release, { cache_bust = true })
+      if ok then
+        print("Installer core updated.")
+      else
+        print("Installer core download failed: " .. tostring(meta and meta.err or "unknown"))
+        log_core_failure(meta and meta.err or "unknown", meta)
+      end
+    end
+
+    if confirm("Retry running installer core?", true) then
+      -- Loop again.
+    else
+      print("Installer will exit. You can re-run after addressing storage or network issues.")
+      return false
+    end
   end
 end
 
-local run_ok = run_with_trace("installer_core", "Installer core execution", loader)
-announce_log_location()
-if not run_ok then
-  print("Installer core failed to run. See log: " .. tostring(get_log_path()))
-end
+run_core_with_retries()
