@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "1.9"
+local INSTALLER_CORE_VERSION = "2.0"
 
 -- CONFIG
 local CONFIG = {
@@ -12,9 +12,12 @@ local CONFIG = {
   MANIFEST_LOCAL = "/xreactor/.manifest", -- Cached manifest in install dir.
   MANIFEST_CACHE = "/xreactor/.cache/manifest.lua", -- Serialized manifest cache.
   MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path.
-  BACKUP_BASE = "/xreactor_backup", -- Backup base directory.
+  LOCAL_BACKUP_BASE = "/xreactor_backup", -- Local backup base directory.
+  LOCAL_STAGING_BASE = "/xreactor_stage", -- Local staging base directory.
+  LOCAL_LOG_DIR = "/xreactor/logs", -- Local log directory.
+  BACKUP_BASE = "/xreactor_backup", -- Backup base directory (may be overridden).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
-  UPDATE_STAGING_BASE = "/xreactor_stage", -- Base staging folder for updates.
+  UPDATE_STAGING_BASE = "/xreactor_stage", -- Base staging folder for updates (may be overridden).
   INSTALLER_VERSION = "1.4", -- Installer version for min-version checks.
   INSTALLER_MIN_BYTES = 200, -- Min bytes to accept installer download.
   INSTALLER_SANITY_MARKER = "local function main", -- Installer sanity marker.
@@ -42,10 +45,11 @@ local CONFIG = {
   PROTOCOL_ABORT_ON_MAJOR_CHANGE = true, -- Abort SAFE UPDATE if protocol major version changes.
   DISK_SPACE_OVERHEAD_BYTES = 2048, -- Extra bytes per file reserved for temp writes/metadata.
   DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
+  CHECKSUM_RETRY_LIMIT = 3, -- Max retries for checksum mismatch per file.
   MAX_BACKUPS = 4, -- Retention: max backup directories under /xreactor_backup.
   MAX_LOGS_MB = 6, -- Retention: max combined log size (MB) under log dirs.
   MAX_STAGING_DIRS = 2, -- Retention: number of staging dirs to keep in /xreactor_stage.
-  LOG_RETENTION_DIRS = { "/xreactor/logs", "/xreactor_logs" }, -- Log dirs eligible for cleanup.
+  LOG_RETENTION_DIRS = { "/xreactor/logs", "/xreactor_logs" }, -- Log dirs eligible for cleanup (updated at runtime).
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = true, -- Always enable installer file logging.
   LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path.
@@ -179,6 +183,71 @@ function get_free_space(path)
   return free, probe
 end
 
+local storage_state = {
+  use_disk = false,
+  disk_mount = nil,
+  disk_log_dir = nil,
+  log_primary = nil,
+  log_fallback = nil,
+  local_log_dir = CONFIG.LOCAL_LOG_DIR
+}
+
+function detect_disk_drive()
+  if not peripheral or not peripheral.find then
+    return nil
+  end
+  local drive = peripheral.find("drive")
+  if not drive or not drive.isDiskPresent or not drive.getMountPath then
+    return nil
+  end
+  local ok, present = pcall(drive.isDiskPresent)
+  if not ok or not present then
+    return nil
+  end
+  local mount = drive.getMountPath()
+  if not mount or mount == "" then
+    return nil
+  end
+  return { drive = drive, mount_path = mount }
+end
+
+function build_disk_paths(mount_path)
+  local base = mount_path or ""
+  return {
+    staging = base .. "/xreactor_stage",
+    backup = base .. "/xreactor_backup",
+    logs = base .. "/xreactor_logs"
+  }
+end
+
+function configure_storage_paths()
+  storage_state.use_disk = false
+  storage_state.disk_mount = nil
+  storage_state.disk_log_dir = nil
+  local disk = detect_disk_drive()
+  if disk then
+    local paths = build_disk_paths(disk.mount_path)
+    storage_state.use_disk = true
+    storage_state.disk_mount = disk.mount_path
+    storage_state.disk_log_dir = paths.logs
+    C.UPDATE_STAGING_BASE = paths.staging
+    C.BACKUP_BASE = paths.backup
+    storage_state.log_primary = paths.logs .. "/installer_core.log"
+  else
+    C.UPDATE_STAGING_BASE = C.LOCAL_STAGING_BASE
+    C.BACKUP_BASE = C.LOCAL_BACKUP_BASE
+    storage_state.log_primary = C.LOCAL_LOG_DIR .. "/installer_core.log"
+  end
+  storage_state.log_fallback = C.LOCAL_LOG_DIR .. "/installer_core.log"
+  C.LOG_PATH = storage_state.log_primary
+  CONFIG.LOG_PATH = storage_state.log_primary
+  if storage_state.disk_log_dir then
+    CONFIG.LOG_RETENTION_DIRS = { C.LOCAL_LOG_DIR, storage_state.disk_log_dir }
+  else
+    CONFIG.LOG_RETENTION_DIRS = { C.LOCAL_LOG_DIR, "/xreactor_logs" }
+  end
+end
+
 -- Internal standalone logger for the installer (no project dependencies).
 local active_logger = {}
 local internal_log_enabled = false
@@ -187,6 +256,12 @@ local log_last_flush = 0
 local log_fallback_buffer = {}
 local log_fallback_reason = nil
 local log_fallback_active = false
+local log_state = {
+  primary = nil,
+  fallback = nil,
+  active = nil,
+  fallback_used = false
+}
 
 function resolve_log_enabled()
   if CONFIG.DEBUG_LOG_ENABLED ~= nil then
@@ -205,21 +280,60 @@ function log_stamp()
   return textutils.formatTime(os.epoch("utc") / 1000, true)
 end
 
-function rotate_log_if_needed()
+function rotate_log_if_needed(path)
   if not CONFIG.LOG_MAX_BYTES or CONFIG.LOG_MAX_BYTES <= 0 then
     return
   end
-  if not fs.exists(CONFIG.LOG_PATH) then
+  if not path or not fs.exists(path) then
     return
   end
-  if fs.getSize(CONFIG.LOG_PATH) < CONFIG.LOG_MAX_BYTES then
+  if fs.getSize(path) < CONFIG.LOG_MAX_BYTES then
     return
   end
-  local backup = CONFIG.LOG_PATH .. (CONFIG.LOG_BACKUP_SUFFIX or ".1")
+  local backup = path .. (CONFIG.LOG_BACKUP_SUFFIX or ".1")
   if fs.exists(backup) then
     fs.delete(backup)
   end
-  fs.move(CONFIG.LOG_PATH, backup)
+  fs.move(path, backup)
+end
+
+function set_log_paths(primary, fallback)
+  log_state.primary = primary
+  log_state.fallback = fallback
+  log_state.active = nil
+  log_state.fallback_used = false
+end
+
+local function open_log_file()
+  local function try_open(path)
+    if not path then
+      return nil
+    end
+    ensure_dir(fs.getDir(path))
+    rotate_log_if_needed(path)
+    local file = fs.open(path, "a")
+    if file then
+      log_state.active = path
+      return file
+    end
+    return nil
+  end
+  local file = try_open(log_state.primary)
+  if file then
+    return file
+  end
+  if log_state.fallback and log_state.fallback ~= log_state.primary then
+    file = try_open(log_state.fallback)
+    if file then
+      log_state.fallback_used = true
+      return file
+    end
+  end
+  return nil
+end
+
+function get_log_path()
+  return log_state.active or log_state.primary or log_state.fallback or "RAM (printed below)"
 end
 
 function internal_log(prefix, message, level)
@@ -248,9 +362,7 @@ function internal_log(prefix, message, level)
     return
   end
   local ok, err = pcall(function()
-    ensure_dir(fs.getDir(CONFIG.LOG_PATH))
-    rotate_log_if_needed()
-    local file = fs.open(CONFIG.LOG_PATH, "a")
+    local file = open_log_file()
     if not file then
       error("log open failed", 0)
     end
@@ -275,11 +387,10 @@ end
 function init_internal_logger()
   internal_log_enabled = resolve_log_enabled()
   log_last_flush = os.clock()
-  ensure_dir("/xreactor")
-  ensure_dir("/xreactor/logs")
-  ensure_dir(fs.getDir(CONFIG.LOG_PATH))
+  ensure_required_dirs()
+  set_log_paths(storage_state.log_primary, storage_state.log_fallback)
   pcall(function()
-    local file = fs.open(CONFIG.LOG_PATH, "a")
+    local file = open_log_file()
     if file then
       file.write("")
       file.close()
@@ -299,6 +410,7 @@ function init_internal_logger()
   end
 end
 
+configure_storage_paths()
 init_internal_logger()
 
 function flush_log_fallback()
@@ -392,9 +504,13 @@ function build_cleanup_suggestions()
   local suggestions = {
     ("delete %s/*"):format(C.BACKUP_BASE),
     ("delete %s/*"):format(C.UPDATE_STAGING_BASE),
-    "delete /xreactor/logs/*.log",
-    "delete /xreactor_logs/*.log"
+    ("delete %s/*.log"):format(C.LOCAL_LOG_DIR)
   }
+  if storage_state.disk_log_dir then
+    table.insert(suggestions, ("delete %s/*.log"):format(storage_state.disk_log_dir))
+  else
+    table.insert(suggestions, "delete /xreactor_logs/*.log")
+  end
   return table.concat(suggestions, " | ")
 end
 
@@ -438,7 +554,24 @@ end
 
 function preflight_space(entries, target_dir, context)
   local needed = calculate_required_bytes(entries)
-  return ensure_free_space(target_dir, needed, context)
+  return ensure_space_with_cleanup(target_dir, needed, context)
+end
+
+function print_space_preflight(needed, context)
+  local free_local = get_free_space(C.BASE_DIR)
+  local free_disk = nil
+  if storage_state.use_disk and storage_state.disk_mount then
+    free_disk = get_free_space(storage_state.disk_mount)
+  end
+  print(string.format("%s preflight:", tostring(context or "Disk space")))
+  print("  Free local: " .. format_bytes(free_local or 0))
+  if free_disk then
+    print("  Free disk: " .. format_bytes(free_disk))
+  else
+    print("  Free disk: n/a")
+  end
+  print("  Needed: " .. format_bytes(needed or 0))
+  print("  Using disk: " .. (storage_state.use_disk and "yes" or "no"))
 end
 
 function collect_dir_entries(path)
@@ -642,6 +775,65 @@ function clear_log_files(log_dir)
   return deleted
 end
 
+function cleanup_logs_for_space()
+  local deleted = {}
+  for _, path in ipairs(clear_log_files(C.LOCAL_LOG_DIR)) do
+    table.insert(deleted, path)
+  end
+  if storage_state.disk_log_dir and storage_state.disk_log_dir ~= C.LOCAL_LOG_DIR then
+    for _, path in ipairs(clear_log_files(storage_state.disk_log_dir)) do
+      table.insert(deleted, path)
+    end
+  end
+  return deleted
+end
+
+function cleanup_staging_for_space()
+  local deleted = {}
+  for _, path in ipairs(clear_dir_contents(C.LOCAL_STAGING_BASE)) do
+    table.insert(deleted, path)
+  end
+  if C.UPDATE_STAGING_BASE ~= C.LOCAL_STAGING_BASE then
+    for _, path in ipairs(clear_dir_contents(C.UPDATE_STAGING_BASE)) do
+      table.insert(deleted, path)
+    end
+  end
+  return deleted
+end
+
+function cleanup_backups_for_space()
+  local deleted = {}
+  for _, path in ipairs(clear_dir_contents(C.LOCAL_BACKUP_BASE)) do
+    table.insert(deleted, path)
+  end
+  if C.BACKUP_BASE ~= C.LOCAL_BACKUP_BASE then
+    for _, path in ipairs(clear_dir_contents(C.BACKUP_BASE)) do
+      table.insert(deleted, path)
+    end
+  end
+  return deleted
+end
+
+function cleanup_storage_for_space()
+  local deleted = {}
+  for _, path in ipairs(cleanup_logs_for_space()) do
+    table.insert(deleted, path)
+  end
+  for _, path in ipairs(cleanup_staging_for_space()) do
+    table.insert(deleted, path)
+  end
+  for _, path in ipairs(cleanup_backups_for_space()) do
+    table.insert(deleted, path)
+  end
+  if #deleted > 0 then
+    print("Cleanup: removed " .. tostring(#deleted) .. " log/staging/backup items.")
+    log("INFO", "Cleanup for space removed: " .. table.concat(deleted, ", "))
+  else
+    log("INFO", "Cleanup for space: nothing to remove.")
+  end
+  return deleted
+end
+
 function cleanup_full_reinstall_storage()
   local deleted = {}
   for _, path in ipairs(clear_dir_contents(C.UPDATE_STAGING_BASE)) do
@@ -671,7 +863,7 @@ function ensure_space_with_cleanup(path, expected_bytes, context)
   if ok then
     return true
   end
-  cleanup_storage()
+  cleanup_storage_for_space()
   return ensure_free_space(path, needed, context .. " (after cleanup)")
 end
 
@@ -1564,30 +1756,109 @@ function download_file_with_retry(urls, expected_hash, hash_algo, opts)
   )
 end
 
-function download_file_to_path(urls, target_path, expected_hash, hash_algo, opts)
-  local attempts = opts and opts.attempts or C.DOWNLOAD_ATTEMPTS
-  local backoff = opts and opts.backoff or C.DOWNLOAD_BACKOFF
-  local tried = {}
+function is_staging_path(path)
+  if not path then
+    return false
+  end
+  if C.UPDATE_STAGING_BASE and path:find(C.UPDATE_STAGING_BASE, 1, true) == 1 then
+    return true
+  end
+  if C.LOCAL_STAGING_BASE and path:find(C.LOCAL_STAGING_BASE, 1, true) == 1 then
+    return true
+  end
+  return false
+end
+
+function prepare_download_urls(urls)
   local list = {}
   for _, url in ipairs(urls or {}) do
     if url and url ~= "" then
       table.insert(list, url)
     end
   end
+  return list
+end
+
+function init_download_entry(url, attempt)
+  return { url = url, ok = false, attempt = attempt }
+end
+
+function resolve_expected_size(meta, opts)
+  local headers = meta and meta.headers or {}
+  local content_length = headers["Content-Length"] or headers["content-length"]
+  return (opts and opts.expected_size) or (content_length and tonumber(content_length)) or nil
+end
+
+function cleanup_download_artifacts(temp_path, target_path)
+  if temp_path and fs.exists(temp_path) then
+    fs.delete(temp_path)
+  end
+  if target_path and fs.exists(target_path) and is_staging_path(target_path) then
+    fs.delete(target_path)
+  end
+end
+
+function write_downloaded_file(temp_path, target_path)
+  finalize_temp_file(temp_path, target_path)
+end
+
+function verify_downloaded_file(entry, stream_info, target_path, expected_hash, hash_algo, expected_size)
+  entry.bytes = stream_info.bytes or 0
+  entry.signature = sanitize_signature(stream_info.prefix or "")
+  if detect_html(stream_info.prefix) then
+    entry.err = "html response"
+    cleanup_download_artifacts(stream_info.temp_path, target_path)
+    return entry
+  end
+  if expected_size and entry.bytes ~= expected_size then
+    entry.err = "size mismatch"
+    cleanup_download_artifacts(stream_info.temp_path, target_path)
+    return entry
+  end
+  if expected_hash then
+    local actual = file_checksum_for_target(stream_info.temp_path, target_path, hash_algo)
+    entry.expected_hash = expected_hash
+    entry.actual_hash = actual
+    if actual ~= expected_hash then
+      entry.err = ("checksum mismatch expected=%s actual=%s"):format(expected_hash, actual)
+      cleanup_download_artifacts(stream_info.temp_path, target_path)
+      return entry
+    end
+  end
+  write_downloaded_file(stream_info.temp_path, target_path)
+  entry.ok = true
+  return entry
+end
+
+function log_checksum_retry(entry, attempt, limit)
+  local message = ("Checksum mismatch (%d/%d) for %s"):format(attempt, limit, tostring(entry.url or "unknown"))
+  log("WARN", message)
+end
+
+function log_checksum_abort(entry)
+  local message = ("Checksum retry limit reached for %s"):format(tostring(entry.url or "unknown"))
+  log("ERROR", message)
+end
+
+function download_file_to_path(urls, target_path, expected_hash, hash_algo, opts)
+  local attempts = opts and opts.attempts or C.DOWNLOAD_ATTEMPTS
+  local backoff = opts and opts.backoff or C.DOWNLOAD_BACKOFF
+  local checksum_limit = opts and opts.checksum_attempts or C.CHECKSUM_RETRY_LIMIT
+  local checksum_failures = 0
+  local tried = {}
+  local list = prepare_download_urls(urls)
   if #list == 0 then
     return false, { tried = {}, last = { url = nil, ok = false, err = "no urls" } }
   end
   for attempt = 1, attempts do
     for _, url in ipairs(list) do
-      local entry = { url = url, ok = false, attempt = attempt }
+      local entry = init_download_entry(url, attempt)
       local ok, response, err, meta = fetch_response(url, { timeout = C.DOWNLOAD_TIMEOUT })
       if not ok then
         entry.err = err
         entry.code = meta and meta.code or nil
       else
-        local headers = meta and meta.headers or {}
-        local content_length = headers["Content-Length"] or headers["content-length"]
-        local expected_size = (opts and opts.expected_size) or (content_length and tonumber(content_length)) or nil
+        local expected_size = resolve_expected_size(meta, opts)
         entry.expected_size = expected_size
         if expected_size and not ensure_space_with_cleanup(target_path, expected_size, "Download " .. target_path) then
           entry.err = "out of space"
@@ -1601,48 +1872,23 @@ function download_file_to_path(urls, target_path, expected_hash, hash_algo, opts
           if not stream_ok then
             entry.err = stream_info
           else
-            entry.bytes = stream_info.bytes or 0
-            entry.signature = sanitize_signature(stream_info.prefix or "")
-            if detect_html(stream_info.prefix) then
-              entry.err = "html response"
-              if fs.exists(stream_info.temp_path) then
-                fs.delete(stream_info.temp_path)
-              end
-            else
-              if expected_size and entry.bytes ~= expected_size then
-                entry.err = "size mismatch"
-                if fs.exists(stream_info.temp_path) then
-                  fs.delete(stream_info.temp_path)
-                end
-              else
-                if expected_hash then
-                  local actual = file_checksum_for_target(stream_info.temp_path, target_path, hash_algo)
-                  entry.expected_hash = expected_hash
-                  entry.actual_hash = actual
-                  if actual ~= expected_hash then
-                    entry.err = ("checksum mismatch expected=%s actual=%s"):format(expected_hash, actual)
-                    if fs.exists(stream_info.temp_path) then
-                      fs.delete(stream_info.temp_path)
-                    end
-                  end
-                end
-                if not entry.err then
-                  finalize_temp_file(stream_info.temp_path, target_path)
-                  entry.ok = true
-                end
-              end
-            end
+            entry = verify_downloaded_file(entry, stream_info, target_path, expected_hash, hash_algo, expected_size)
           end
         end
-      end
-      if entry.ok ~= true then
-        entry.ok = false
       end
       entry.code = entry.code or (meta and meta.code or nil)
       table.insert(tried, entry)
       log_download_entry(entry, "download")
       if entry.ok then
         return true, { tried = tried, last = entry }
+      end
+      if entry.err and tostring(entry.err):find("checksum mismatch", 1, true) then
+        checksum_failures = checksum_failures + 1
+        log_checksum_retry(entry, checksum_failures, checksum_limit)
+        if checksum_failures >= checksum_limit then
+          log_checksum_abort(entry)
+          return false, { tried = tried, last = entry }
+        end
       end
     end
     if attempt < attempts then
@@ -2130,7 +2376,20 @@ local function acquire_manifest()
   return manifest_content, manifest, release, manifest_meta
 end
 
+function ensure_required_dirs()
+  ensure_dir(C.BASE_DIR)
+  ensure_dir(C.LOCAL_LOG_DIR)
+  ensure_dir(C.LOCAL_STAGING_BASE)
+  ensure_dir(C.LOCAL_BACKUP_BASE)
+  if storage_state.use_disk then
+    ensure_dir(storage_state.disk_log_dir)
+    ensure_dir(C.UPDATE_STAGING_BASE)
+    ensure_dir(C.BACKUP_BASE)
+  end
+end
+
 local function ensure_base_dirs()
+  ensure_required_dirs()
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.BASE_DIR .. "/config")
   ensure_dir(C.BASE_DIR .. "/core")
@@ -2756,10 +3015,13 @@ local function safe_update_prepare(role, cfg_path)
 
     local updates = update_files(manifest, hash_algo)
     log("INFO", "Files needing update: " .. tostring(#updates))
+    local needed_bytes = calculate_required_bytes(updates)
+    print_space_preflight(needed_bytes, "SAFE UPDATE")
     local preflight_ok = preflight_space(updates, C.UPDATE_STAGING_BASE, "SAFE UPDATE preflight")
     if not preflight_ok then
       print("SAFE UPDATE aborted: not enough disk space.")
       log("WARN", "SAFE UPDATE aborted: insufficient disk space")
+      cleanup_storage_for_space()
       return nil
     end
     local staged, stage_err, stage_meta, stage_dir = stage_updates(updates, release, hash_algo)
@@ -3002,12 +3264,14 @@ local function full_reinstall_prepare()
 
     local entries = build_manifest_entries(manifest)
     local required_total = calculate_required_bytes(entries)
+    print_space_preflight(required_total, "FULL REINSTALL")
     local free_space = get_free_space(C.BASE_DIR)
     local existing_size = dir_size_recursive(C.BASE_DIR)
     if free_space and (free_space + existing_size) < required_total then
       local message = describe_space_issue("FULL REINSTALL preflight", free_space + existing_size, required_total, C.BASE_DIR)
       print(message)
       log("WARN", message)
+      cleanup_storage_for_space()
       return nil
     end
     local use_staging = preflight_space(entries, C.UPDATE_STAGING_BASE, "FULL REINSTALL staging")
@@ -3279,7 +3543,7 @@ end
 local function log_fatal(trace)
   log("ERROR", trace)
   print("Installer failed: " .. tostring(trace))
-  print("See log: " .. tostring(CONFIG.LOG_PATH))
+  print("See log: " .. tostring(get_log_path()))
   flush_log_fallback()
 end
 

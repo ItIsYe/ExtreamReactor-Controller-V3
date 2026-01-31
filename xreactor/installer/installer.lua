@@ -24,7 +24,9 @@ local CONFIG = {
   LOG_ENABLED = true, -- Always enable bootstrap logging.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
   LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path.
+  LOCAL_LOG_DIR = "/xreactor/logs", -- Local log directory.
   LOG_FALLBACK_PATH = "/installer_debug.log", -- Fallback log path when /xreactor is unavailable.
+  DISK_LOG_DIR_NAME = "xreactor_logs", -- Disk log directory name.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
   LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
@@ -104,15 +106,54 @@ local log_state = {
   buffer = {},
   last_flush = 0,
   path = CONFIG.LOG_PATH,
+  fallback_path = CONFIG.LOCAL_LOG_DIR .. "/installer_debug.log",
   fallback_used = false,
   memory_fallback = {},
   last_write_ok = false,
   last_failed_path = nil
 }
 
+local function detect_disk_mount()
+  if not peripheral or not peripheral.find then
+    return nil
+  end
+  local drive = peripheral.find("drive")
+  if not drive or not drive.isDiskPresent or not drive.getMountPath then
+    return nil
+  end
+  local ok, present = pcall(drive.isDiskPresent)
+  if not ok or not present then
+    return nil
+  end
+  local mount = drive.getMountPath()
+  if not mount or mount == "" then
+    return nil
+  end
+  return mount
+end
+
+local function configure_log_paths()
+  local mount = detect_disk_mount()
+  if mount then
+    log_state.path = mount .. "/" .. CONFIG.DISK_LOG_DIR_NAME .. "/installer_debug.log"
+    log_state.fallback_path = CONFIG.LOCAL_LOG_DIR .. "/installer_debug.log"
+  else
+    log_state.path = CONFIG.LOG_PATH
+    log_state.fallback_path = CONFIG.LOG_PATH
+  end
+end
+
 local function ensure_log_dirs()
   pcall(fs.makeDir, "/xreactor")
   pcall(fs.makeDir, "/xreactor/logs")
+  pcall(fs.makeDir, "/xreactor_stage")
+  pcall(fs.makeDir, "/xreactor_backup")
+  local mount = detect_disk_mount()
+  if mount then
+    pcall(fs.makeDir, mount .. "/" .. CONFIG.DISK_LOG_DIR_NAME)
+    pcall(fs.makeDir, mount .. "/xreactor_stage")
+    pcall(fs.makeDir, mount .. "/xreactor_backup")
+  end
 end
 
 local function open_log_file()
@@ -120,6 +161,14 @@ local function open_log_file()
   local file = fs.open(log_state.path, "a")
   if file then
     return file
+  end
+  if log_state.fallback_path and log_state.path ~= log_state.fallback_path then
+    log_state.path = log_state.fallback_path
+    log_state.fallback_used = true
+    file = fs.open(log_state.path, "a")
+    if file then
+      return file
+    end
   end
   if log_state.path ~= CONFIG.LOG_FALLBACK_PATH then
     log_state.path = CONFIG.LOG_FALLBACK_PATH
@@ -203,6 +252,7 @@ local function flush_memory_fallback()
 end
 
 local function init_log_file()
+  configure_log_paths()
   ensure_log_dirs()
   local file = open_log_file()
   if file then
