@@ -200,6 +200,7 @@ local function init_log_file()
   ensure_log_dirs()
   local file = open_log_file()
   if file then
+    file.write("")
     file.close()
     log_state.last_write_ok = true
   end

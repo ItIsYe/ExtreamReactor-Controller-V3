@@ -206,6 +206,7 @@ local function init_log_file()
   ensure_log_dirs()
   local file = open_log_file()
   if file then
+    file.write("")
     file.close()
     log_state.last_write_ok = true
   end
@@ -475,6 +476,32 @@ local function crc32_hash(content)
   return string.format("%08x", bit32.bnot(crc))
 end
 
+local function normalize_newlines(content)
+  if not content then
+    return ""
+  end
+  local normalized = content:gsub("\r\n", "\n"):gsub("\r", "\n")
+  if normalized:sub(1, 3) == "\239\187\191" then
+    normalized = normalized:sub(4)
+  end
+  return normalized
+end
+
+local function hash_core_content(content)
+  return crc32_hash(normalize_newlines(content))
+end
+
+local function append_cache_bust(url, seed)
+  if not url or url == "" then
+    return url
+  end
+  local token = tostring(seed or os.epoch("utc") or os.time())
+  if url:find("?", 1, true) then
+    return url .. "&cb=" .. token
+  end
+  return url .. "?cb=" .. token
+end
+
 local function write_file(path, content)
   ensure_dir(fs.getDir(path))
   local needed = (content and #content or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
@@ -680,6 +707,27 @@ local function log_core_failure(reason, meta)
   ))
 end
 
+local function should_cache_bust(err)
+  local value = tostring(err or "")
+  return value == "checksum mismatch"
+    or value == "core loadfile failed"
+    or value == "core load failed"
+    or value == "html response"
+    or value == "core sanity marker missing"
+end
+
+local function attempt_core_recovery(release, reason)
+  if not release then
+    return false, "release metadata unavailable"
+  end
+  log_line("WARN", "installer_core", "Attempting core recovery: " .. tostring(reason or "unknown"))
+  local ok, _, meta = download_core(release, { cache_bust = true })
+  if not ok then
+    return false, meta
+  end
+  return true, meta
+end
+
 local function save_core_meta(payload)
   local ok, serialized = pcall(textutils.serialize, payload)
   if not ok then
@@ -711,7 +759,7 @@ local function needs_core_update(release)
   if not local_content then
     return true
   end
-  local local_hash = crc32_hash(local_content)
+  local local_hash = hash_core_content(local_content)
   local local_version = parse_core_version(local_content)
   local meta = read_core_meta() or {}
   if release.installer_core_hash and release.installer_core_hash ~= local_hash then
@@ -726,11 +774,22 @@ local function needs_core_update(release)
   return false
 end
 
-local function download_core(release)
+local function download_core(release, opts)
   local commit_sha = release and release.commit_sha
+  local cache_bust = opts and opts.cache_bust or false
   local urls = build_raw_urls("xreactor/installer/installer_core.lua", commit_sha)
+  if cache_bust then
+    local busted = {}
+    for _, url in ipairs(urls) do
+      table.insert(busted, append_cache_bust(url))
+    end
+    urls = busted
+  end
   local ok, content, meta = fetch_with_retries(urls, 1, "installer_core")
   if not ok then
+    if meta then
+      meta.cache_bust = cache_bust
+    end
     return false, nil, meta
   end
   local expected_size = release and release.installer_core_size_bytes or nil
@@ -778,7 +837,7 @@ local function download_core(release)
     }
   end
   if release and release.installer_core_hash then
-    local hash = crc32_hash(content)
+    local hash = hash_core_content(content)
     if hash ~= release.installer_core_hash then
       cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
       return false, nil, {
@@ -788,7 +847,8 @@ local function download_core(release)
         bytes = meta and meta.bytes,
         signature = meta and meta.signature,
         expected_hash = release.installer_core_hash,
-        actual_hash = hash
+        actual_hash = hash,
+        cache_bust = cache_bust
       }
     end
   end
@@ -816,7 +876,7 @@ local function download_core(release)
     return false, nil, { err = move_err or "move failed", url = meta and meta.url }
   end
   save_core_meta({
-    hash = crc32_hash(content),
+    hash = hash_core_content(content),
     version = parse_core_version(content) or "unknown",
     saved_at = os.time()
   })
@@ -844,6 +904,10 @@ if release and needs_core_update(release) then
   for attempt = 1, (CONFIG.CORE_MAX_RETRIES or 3) do
     log_line("INFO", "installer_core", string.format("Core download attempt %d/%d", attempt, CONFIG.CORE_MAX_RETRIES or 3))
     ok, _, meta = download_core(release)
+    if not ok and should_cache_bust(meta and meta.err) then
+      log_line("INFO", "installer_core", "Retrying core download with cache-bust parameter")
+      ok, _, meta = download_core(release, { cache_bust = true })
+    end
     if ok then
       break
     end
@@ -884,9 +948,18 @@ local loader, load_err = load_local_core()
 if not loader then
   print("Installer core missing and could not be loaded.")
   log_line("ERROR", "installer_core", "Installer core missing after bootstrap attempt. err=" .. tostring(load_err))
-  print_quick_install_hint()
-  announce_log_location()
-  return
+  local recovered, meta = attempt_core_recovery(release, load_err)
+  if recovered then
+    loader, load_err = load_local_core()
+  end
+  if not loader then
+    if meta and meta.err then
+      log_core_failure(meta.err, meta)
+    end
+    print_quick_install_hint()
+    announce_log_location()
+    return
+  end
 end
 
 local run_ok = run_with_trace("installer_core", "Installer core execution", loader)
