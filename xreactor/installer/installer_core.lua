@@ -80,6 +80,9 @@ local CONFIG = {
 
 local C = CONFIG
 
+-- NOTE: CC:Tweaked limits each chunk to ~200 local variables. To stay under the
+-- limit, many low-level helper functions are defined as globals in this file.
+
 
 -- Download base tracking (default branch vs pinned commit).
 local current_base_url = nil
@@ -88,7 +91,7 @@ local current_base_sha = nil
 
 -- BOOTSTRAP HELPERS (standalone, no external dependencies).
 -- UI helpers (centralized input).
-local function ui_prompt(label, default, min, max)
+function ui_prompt(label, default, min, max)
   local suffix = default and (" [" .. tostring(default) .. "]") or ""
   write(label .. suffix .. ": ")
   local input = read()
@@ -111,7 +114,7 @@ local function ui_prompt(label, default, min, max)
   return input
 end
 
-local function ui_menu(title, options, default)
+function ui_menu(title, options, default)
   if title and title ~= "" then
     print(title)
   end
@@ -125,19 +128,21 @@ local function ui_menu(title, options, default)
   return choice
 end
 
-local function ui_pause(msg)
+function ui_pause(msg)
   print(msg or "Press Enter to continue.")
   read()
 end
 
-local function ensure_dir(path)
-  if path == "" then return end
+function ensure_dir(path)
+  if path == "" then
+    return
+  end
   if not fs.exists(path) then
-    fs.makeDir(path)
+    pcall(fs.makeDir, path)
   end
 end
 
-local function format_bytes(bytes)
+function format_bytes(bytes)
   local value = tonumber(bytes or 0) or 0
   local units = { "B", "KB", "MB", "GB" }
   local idx = 1
@@ -151,7 +156,7 @@ local function format_bytes(bytes)
   return string.format("%.1f%s", value, units[idx])
 end
 
-local function resolve_space_path(path)
+function resolve_space_path(path)
   local probe = path
   if not probe or probe == "" then
     probe = "/"
@@ -165,7 +170,7 @@ local function resolve_space_path(path)
   return probe
 end
 
-local function get_free_space(path)
+function get_free_space(path)
   local probe = resolve_space_path(path)
   local ok, free = pcall(fs.getFreeSpace, probe)
   if not ok then
@@ -183,7 +188,7 @@ local log_fallback_buffer = {}
 local log_fallback_reason = nil
 local log_fallback_active = false
 
-local function resolve_log_enabled()
+function resolve_log_enabled()
   if CONFIG.DEBUG_LOG_ENABLED ~= nil then
     return CONFIG.DEBUG_LOG_ENABLED == true
   end
@@ -196,11 +201,11 @@ local function resolve_log_enabled()
   return false
 end
 
-local function log_stamp()
+function log_stamp()
   return textutils.formatTime(os.epoch("utc") / 1000, true)
 end
 
-local function rotate_log_if_needed()
+function rotate_log_if_needed()
   if not CONFIG.LOG_MAX_BYTES or CONFIG.LOG_MAX_BYTES <= 0 then
     return
   end
@@ -217,7 +222,7 @@ local function rotate_log_if_needed()
   fs.move(CONFIG.LOG_PATH, backup)
 end
 
-local function internal_log(prefix, message, level)
+function internal_log(prefix, message, level)
   if not internal_log_enabled then
     return
   end
@@ -267,10 +272,19 @@ local function internal_log(prefix, message, level)
   log_buffer = {}
 end
 
-local function init_internal_logger()
+function init_internal_logger()
   internal_log_enabled = resolve_log_enabled()
   log_last_flush = os.clock()
+  ensure_dir("/xreactor")
+  ensure_dir("/xreactor/logs")
   ensure_dir(fs.getDir(CONFIG.LOG_PATH))
+  pcall(function()
+    local file = fs.open(CONFIG.LOG_PATH, "a")
+    if file then
+      file.write("")
+      file.close()
+    end
+  end)
   active_logger.log = internal_log
   active_logger.set_enabled = function(enabled)
     if enabled == true then
@@ -287,7 +301,7 @@ end
 
 init_internal_logger()
 
-local function flush_log_fallback()
+function flush_log_fallback()
   if not log_fallback_active or #log_fallback_buffer == 0 then
     return
   end
@@ -302,7 +316,7 @@ local function flush_log_fallback()
 end
 
 -- Defensive wrapper for legacy calls.
-local function prompt(label, default)
+function prompt(label, default)
   return ui_prompt(label, default)
 end
 
@@ -325,18 +339,18 @@ local role_targets = {
 }
 
 -- Centralized installer logging helper.
-local function log(level, message)
+function log(level, message)
   if active_logger and active_logger.log then
     active_logger.log(CONFIG.LOG_PREFIX, message, level)
   end
 end
 
-local function trim(text)
+function trim(text)
   if not text then return "" end
   return text:match("^%s*(.-)%s*$")
 end
 
-local function normalize_node_id(value)
+function normalize_node_id(value)
   if type(value) == "string" then
     local trimmed = trim(value)
     if trimmed ~= "" then
@@ -359,13 +373,13 @@ local function normalize_node_id(value)
   return nil
 end
 
-local function fallback_node_id()
+function fallback_node_id()
   return tostring(os.getComputerLabel() or os.getComputerID())
 end
 
 local fetch_url_seeded = false
 
-local function read_file(path)
+function read_file(path)
   if not fs.exists(path) then return nil end
   local file = fs.open(path, "r")
   if not file then return nil end
@@ -374,7 +388,7 @@ local function read_file(path)
   return content
 end
 
-local function build_cleanup_suggestions()
+function build_cleanup_suggestions()
   local suggestions = {
     ("delete %s/*"):format(C.BACKUP_BASE),
     ("delete %s/*"):format(C.UPDATE_STAGING_BASE),
@@ -384,7 +398,7 @@ local function build_cleanup_suggestions()
   return table.concat(suggestions, " | ")
 end
 
-local function describe_space_issue(context, free, needed, path)
+function describe_space_issue(context, free, needed, path)
   local target = path and (" (" .. tostring(path) .. ")") or ""
   local suggestion = build_cleanup_suggestions()
   return string.format(
@@ -397,7 +411,7 @@ local function describe_space_issue(context, free, needed, path)
   )
 end
 
-local function calculate_required_bytes(entries)
+function calculate_required_bytes(entries)
   local total = 0
   local count = 0
   for _, entry in ipairs(entries or {}) do
@@ -411,7 +425,7 @@ local function calculate_required_bytes(entries)
   return total
 end
 
-local function ensure_free_space(path, needed, context)
+function ensure_free_space(path, needed, context)
   local free, probe = get_free_space(path)
   if free and needed and free >= needed then
     return true
@@ -422,12 +436,12 @@ local function ensure_free_space(path, needed, context)
   return false, message
 end
 
-local function preflight_space(entries, target_dir, context)
+function preflight_space(entries, target_dir, context)
   local needed = calculate_required_bytes(entries)
   return ensure_free_space(target_dir, needed, context)
 end
 
-local function collect_dir_entries(path)
+function collect_dir_entries(path)
   if not fs.exists(path) then
     return {}
   end
@@ -438,7 +452,7 @@ local function collect_dir_entries(path)
   return entries
 end
 
-local function prune_backup_dirs()
+function prune_backup_dirs()
   if not CONFIG.MAX_BACKUPS or CONFIG.MAX_BACKUPS <= 0 then
     return {}
   end
@@ -465,7 +479,7 @@ local function prune_backup_dirs()
   return deleted
 end
 
-local function prune_staging_dirs()
+function prune_staging_dirs()
   if not CONFIG.MAX_STAGING_DIRS or CONFIG.MAX_STAGING_DIRS < 0 then
     return {}
   end
@@ -492,7 +506,7 @@ local function prune_staging_dirs()
   return deleted
 end
 
-local function dir_total_size(path)
+function dir_total_size(path)
   local total = 0
   if not fs.exists(path) then
     return 0
@@ -506,7 +520,7 @@ local function dir_total_size(path)
   return total
 end
 
-local function dir_size_recursive(path)
+function dir_size_recursive(path)
   if not fs.exists(path) then
     return 0
   end
@@ -520,7 +534,7 @@ local function dir_size_recursive(path)
   return total
 end
 
-local function collect_log_files()
+function collect_log_files()
   local files = {}
   for _, dir in ipairs(CONFIG.LOG_RETENTION_DIRS or {}) do
     if fs.exists(dir) and fs.isDir(dir) then
@@ -540,7 +554,7 @@ local function collect_log_files()
   return files
 end
 
-local function prune_logs()
+function prune_logs()
   if not CONFIG.MAX_LOGS_MB or CONFIG.MAX_LOGS_MB <= 0 then
     return {}
   end
@@ -570,7 +584,7 @@ local function prune_logs()
   return deleted
 end
 
-local function cleanup_storage()
+function cleanup_storage()
   local deleted = {}
   for _, path in ipairs(prune_backup_dirs()) do
     table.insert(deleted, path)
@@ -590,7 +604,65 @@ local function cleanup_storage()
   return deleted
 end
 
-local function ensure_space_with_cleanup(path, expected_bytes, context)
+function clear_dir_contents(path)
+  local deleted = {}
+  if not path or path == "" then
+    return deleted
+  end
+  if not fs.exists(path) then
+    return deleted
+  end
+  for _, entry in ipairs(collect_dir_entries(path)) do
+    local full_path = path .. "/" .. entry
+    if fs.exists(full_path) then
+      fs.delete(full_path)
+      table.insert(deleted, full_path)
+    end
+  end
+  return deleted
+end
+
+function clear_log_files(log_dir)
+  local deleted = {}
+  if not log_dir or log_dir == "" then
+    return deleted
+  end
+  if not fs.exists(log_dir) or not fs.isDir(log_dir) then
+    return deleted
+  end
+  for _, entry in ipairs(collect_dir_entries(log_dir)) do
+    if entry:match("%.log$") then
+      local full_path = log_dir .. "/" .. entry
+      if fs.exists(full_path) then
+        fs.delete(full_path)
+        table.insert(deleted, full_path)
+      end
+    end
+  end
+  return deleted
+end
+
+function cleanup_full_reinstall_storage()
+  local deleted = {}
+  for _, path in ipairs(clear_dir_contents(C.UPDATE_STAGING_BASE)) do
+    table.insert(deleted, path)
+  end
+  for _, path in ipairs(clear_dir_contents(C.BACKUP_BASE)) do
+    table.insert(deleted, path)
+  end
+  for _, path in ipairs(clear_log_files(C.BASE_DIR .. "/logs")) do
+    table.insert(deleted, path)
+  end
+  if #deleted > 0 then
+    print("Cleanup: removed " .. tostring(#deleted) .. " staging/backup/log items.")
+    log("INFO", "Full reinstall cleanup removed: " .. table.concat(deleted, ", "))
+  else
+    log("INFO", "Full reinstall cleanup: nothing to remove.")
+  end
+  return deleted
+end
+
+function ensure_space_with_cleanup(path, expected_bytes, context)
   if not expected_bytes or expected_bytes <= 0 then
     return true
   end
@@ -603,7 +675,7 @@ local function ensure_space_with_cleanup(path, expected_bytes, context)
   return ensure_free_space(path, needed, context .. " (after cleanup)")
 end
 
-local function write_atomic(path, content)
+function write_atomic(path, content)
   ensure_dir(fs.getDir(path))
   local needed = (content and #content or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
   local ok_space = ensure_free_space(path, needed, "Write " .. tostring(path))
@@ -637,16 +709,18 @@ local function write_atomic(path, content)
   fs.move(tmp, path)
 end
 
-local function normalize_newlines(content)
-  if not content then return "" end
-  local normalized = content:gsub("\r\n", "\n")
+function normalize_newlines(content)
+  if not content then
+    return ""
+  end
+  local normalized = content:gsub("\r\n", "\n"):gsub("\r", "\n")
   if normalized:sub(1, 3) == "\239\187\191" then
     normalized = normalized:sub(4)
   end
   return normalized
 end
 
-local function sanitize_snapshot(value, active)
+function sanitize_snapshot(value, active)
   local value_type = type(value)
   if value_type == "string" or value_type == "number" or value_type == "boolean" or value_type == "nil" then
     return value
@@ -671,7 +745,7 @@ local function sanitize_snapshot(value, active)
   return out
 end
 
-local function safe_serialize(value)
+function safe_serialize(value)
   local sanitized = sanitize_snapshot(value)
   local ok, result = pcall(textutils.serialize, sanitized)
   if not ok then
@@ -680,14 +754,14 @@ local function safe_serialize(value)
   return result
 end
 
-local function copy_file(src, dst)
+function copy_file(src, dst)
   local content = read_file(src)
   if content == nil then return false end
   write_atomic(dst, content)
   return true
 end
 
-local function sumlen_hash(content)
+function sumlen_hash(content)
   local sum = 0
   for i = 1, #content do
     sum = (sum + string.byte(content, i)) % 1000000007
@@ -697,7 +771,7 @@ end
 
 local crc32_table
 
-local function build_crc32_table()
+function build_crc32_table()
   local table_out = {}
   for i = 0, 255 do
     local crc = i
@@ -713,7 +787,7 @@ local function build_crc32_table()
   return table_out
 end
 
-local function crc32_hash(content)
+function crc32_hash(content)
   if not crc32_table then
     crc32_table = build_crc32_table()
   end
@@ -727,7 +801,7 @@ local function crc32_hash(content)
   return string.format("%08x", crc)
 end
 
-local function sha1_hash(content)
+function sha1_hash(content)
   local function left_rotate(value, bits)
     return bit32.lrotate(value, bits)
   end
@@ -797,11 +871,11 @@ local function sha1_hash(content)
   return string.format("%08x%08x%08x%08x%08x", h0, h1, h2, h3, h4)
 end
 
-local function resolve_hash_algo(manifest, release)
+function resolve_hash_algo(manifest, release)
   return manifest.hash_algo or release.hash_algo
 end
 
-local function validate_hash_algo(manifest, release)
+function validate_hash_algo(manifest, release)
   local algo = resolve_hash_algo(manifest, release)
   local allowed = { ["sumlen-v1"] = true, ["crc32"] = true, ["sha1"] = true }
   if not allowed[algo] then
@@ -809,7 +883,7 @@ local function validate_hash_algo(manifest, release)
   end
 end
 
-local function compute_hash(content, algo)
+function compute_hash(content, algo)
   content = normalize_newlines(content)
   if algo == "sumlen-v1" then
     return sumlen_hash(content)
@@ -823,15 +897,37 @@ local function compute_hash(content, algo)
   error("Unsupported hash algo: " .. tostring(algo))
 end
 
-local function file_checksum(path, algo)
+function normalize_manifest_self_hash(content)
+  if not content or content == "" then
+    return content
+  end
+  local pattern = '(path%s*=%s*"xreactor/installer/manifest.lua"%s*,%s*size_bytes%s*=%s*%d+%s*,%s*hash%s*=%s*")%x+(")'
+  return content:gsub(pattern, "%1" .. string.rep("0", 8) .. "%2")
+end
+
+function file_checksum(path, algo)
   local content = read_file(path)
   if not content then return nil end
+  if path == "/" .. C.MANIFEST_REMOTE then
+    content = normalize_manifest_self_hash(content)
+  end
+  return compute_hash(content, algo)
+end
+
+function file_checksum_for_target(temp_path, target_path, algo)
+  local content = read_file(temp_path)
+  if not content then
+    return nil
+  end
+  if target_path == "/" .. C.MANIFEST_REMOTE then
+    content = normalize_manifest_self_hash(content)
+  end
   return compute_hash(content, algo)
 end
 
 local UPDATE_MARKER_PATH = "/xreactor/.update_in_progress"
 
-local function read_update_marker()
+function read_update_marker()
   if not fs.exists(UPDATE_MARKER_PATH) then
     return nil
   end
@@ -846,17 +942,17 @@ local function read_update_marker()
   return data
 end
 
-local function write_update_marker(data)
+function write_update_marker(data)
   write_atomic(UPDATE_MARKER_PATH, textutils.serialize(data or {}))
 end
 
-local function clear_update_marker()
+function clear_update_marker()
   if fs.exists(UPDATE_MARKER_PATH) then
     fs.delete(UPDATE_MARKER_PATH)
   end
 end
 
-local function recover_update_marker()
+function recover_update_marker()
   local marker = read_update_marker()
   if not marker then
     return false, "no marker"
@@ -907,7 +1003,7 @@ local function recover_update_marker()
   return false, "rolled back"
 end
 
-local function compare_version(a, b)
+function compare_version(a, b)
   local function parse(version)
     local major, minor = tostring(version or "0"):match("^(%d+)%.?(%d*)$")
     return tonumber(major) or 0, tonumber(minor) or 0
@@ -920,7 +1016,7 @@ local function compare_version(a, b)
   return a_minor - b_minor
 end
 
-local function read_config(path, defaults)
+function read_config(path, defaults)
   if not fs.exists(path) then
     return defaults or {}
   end
@@ -942,7 +1038,7 @@ local function read_config(path, defaults)
   return defaults or {}
 end
 
-local function read_config_from_content(content)
+function read_config_from_content(content)
   if not content then return {} end
   local loader = load(content, "config", "t", {})
   if loader then
@@ -958,7 +1054,7 @@ local function read_config_from_content(content)
   return {}
 end
 
-local function write_config_file(path, tbl)
+function write_config_file(path, tbl)
   local serialized, err = safe_serialize(tbl)
   if not serialized then
     error("Config serialize failed: " .. tostring(err))
@@ -966,7 +1062,7 @@ local function write_config_file(path, tbl)
   write_atomic(path, "return " .. serialized)
 end
 
-local function merge_defaults(target, defaults)
+function merge_defaults(target, defaults)
   local changed = false
   for key, value in pairs(defaults or {}) do
     if target[key] == nil then
@@ -980,7 +1076,7 @@ local function merge_defaults(target, defaults)
   return changed
 end
 
-local function sanitize_signature(prefix)
+function sanitize_signature(prefix)
   if not prefix or prefix == "" then
     return ""
   end
@@ -988,7 +1084,7 @@ local function sanitize_signature(prefix)
   return sample:sub(1, CONFIG.LOG_SAMPLE_BYTES or 96)
 end
 
-local function detect_html(body_prefix)
+function detect_html(body_prefix)
   if not body_prefix or body_prefix == "" then
     return false
   end
@@ -1012,12 +1108,12 @@ local function detect_html(body_prefix)
   return false
 end
 
-local function is_html_payload(content)
+function is_html_payload(content)
   if not content then return false end
   return detect_html(content:sub(1, 200))
 end
 
-local function sanity_check(content, min_bytes, marker)
+function sanity_check(content, min_bytes, marker)
   if not content or content == "" then
     return false, "empty"
   end
@@ -1033,14 +1129,14 @@ local function sanity_check(content, min_bytes, marker)
   return true
 end
 
-local function is_html_response(body)
+function is_html_response(body)
   if not body or body == "" then
     return false
   end
   return detect_html(body:sub(1, 512))
 end
 
-local function is_suspect_html(body)
+function is_suspect_html(body)
   if not body then
     return false
   end
@@ -1050,7 +1146,7 @@ local function is_suspect_html(body)
   return false
 end
 
-local function validate_response(status_code, headers, body_prefix, body_len)
+function validate_response(status_code, headers, body_prefix, body_len)
   if status_code and status_code ~= 200 then
     return false, "http " .. tostring(status_code)
   end
@@ -1067,7 +1163,7 @@ local function validate_response(status_code, headers, body_prefix, body_len)
   return true
 end
 
-local function join_url(base, path)
+function join_url(base, path)
   if not base or base == "" then
     return path
   end
@@ -1081,7 +1177,7 @@ local function join_url(base, path)
   return base .. cleaned_path
 end
 
-local function build_mirror_base_urls(base_url)
+function build_mirror_base_urls(base_url)
   local list = {}
   local seen = {}
   local function add(url)
@@ -1102,7 +1198,7 @@ local function build_mirror_base_urls(base_url)
   return list
 end
 
-local function build_mirror_urls(base_url, path)
+function build_mirror_urls(base_url, path)
   local urls = {}
   local seen = {}
   for _, base in ipairs(build_mirror_base_urls(base_url)) do
@@ -1115,7 +1211,7 @@ local function build_mirror_urls(base_url, path)
   return urls
 end
 
-local function log_download_entry(entry, label)
+function log_download_entry(entry, label)
   local name = label or "download"
   local level = entry.ok and "INFO" or "WARN"
   local msg = string.format(
@@ -1132,7 +1228,7 @@ local function log_download_entry(entry, label)
   log(level, msg)
 end
 
-local function fetch_response(url, opts)
+function fetch_response(url, opts)
   if not http or not http.get then
     return false, nil, "HTTP API unavailable (enable in CC:Tweaked config/server)", { url = url }
   end
@@ -1189,7 +1285,7 @@ local function fetch_response(url, opts)
   return true, response, nil, meta
 end
 
-local function stream_response_to_file(response, target_path, opts)
+function stream_response_to_file(response, target_path, opts)
   ensure_dir(fs.getDir(target_path))
   local tmp = target_path .. ".part"
   local file = fs.open(tmp, "w")
@@ -1244,7 +1340,7 @@ local function stream_response_to_file(response, target_path, opts)
   }
 end
 
-local function finalize_temp_file(temp_path, target_path)
+function finalize_temp_file(temp_path, target_path)
   if fs.exists(target_path) then
     fs.delete(target_path)
   end
@@ -1252,7 +1348,7 @@ local function finalize_temp_file(temp_path, target_path)
 end
 
 -- Single download function used by all network requests.
-local function fetch_url(url, opts)
+function fetch_url(url, opts)
   if not http or not http.get then
     return false, nil, "HTTP API unavailable (enable in CC:Tweaked config/server)", { url = url }
   end
@@ -1328,7 +1424,7 @@ local function fetch_url(url, opts)
 end
 
 -- Download helper with retries per URL and full tried list tracking.
-local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
+function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
   local attempts = max_attempts or C.DOWNLOAD_ATTEMPTS
   local backoff = backoff_seconds or C.DOWNLOAD_BACKOFF
   local tried = {}
@@ -1383,7 +1479,7 @@ local function fetch_with_retries(urls, max_attempts, backoff_seconds, opts)
   return false, nil, { tried = tried, last = last_entry }
 end
 
-local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
+function download_with_retry(urls, max_attempts, backoff_seconds, opts)
   local attempts = max_attempts or C.DOWNLOAD_ATTEMPTS
   local backoff = backoff_seconds or C.DOWNLOAD_BACKOFF
   local tried = {}
@@ -1444,7 +1540,7 @@ local function download_with_retry(urls, max_attempts, backoff_seconds, opts)
   return false, nil, { tried = tried, last = last_entry }
 end
 
-local function download_file_with_retry(urls, expected_hash, hash_algo, opts)
+function download_file_with_retry(urls, expected_hash, hash_algo, opts)
   local function validate(body, meta, entry)
     if expected_hash then
       local actual = compute_hash(body, hash_algo)
@@ -1468,7 +1564,7 @@ local function download_file_with_retry(urls, expected_hash, hash_algo, opts)
   )
 end
 
-local function download_file_to_path(urls, target_path, expected_hash, hash_algo, opts)
+function download_file_to_path(urls, target_path, expected_hash, hash_algo, opts)
   local attempts = opts and opts.attempts or C.DOWNLOAD_ATTEMPTS
   local backoff = opts and opts.backoff or C.DOWNLOAD_BACKOFF
   local tried = {}
@@ -1520,7 +1616,7 @@ local function download_file_to_path(urls, target_path, expected_hash, hash_algo
                 end
               else
                 if expected_hash then
-                  local actual = file_checksum(stream_info.temp_path, hash_algo)
+                  local actual = file_checksum_for_target(stream_info.temp_path, target_path, hash_algo)
                   entry.expected_hash = expected_hash
                   entry.actual_hash = actual
                   if actual ~= expected_hash then
@@ -1562,19 +1658,19 @@ local function download_file_to_path(urls, target_path, expected_hash, hash_algo
   return false, { tried = tried, last = last_entry }
 end
 
-local function is_valid_sha(sha)
+function is_valid_sha(sha)
   return type(sha) == "string" and sha:match("^[a-fA-F0-9]+$") and #sha == 40
 end
 
-local function build_main_base_url()
+function build_main_base_url()
   return string.format("%s/%s/%s/%s/", C.REPO_BASE_URL, C.REPO_OWNER, C.REPO_NAME, CONFIG.DEFAULT_BRANCH or "main")
 end
 
-local function build_commit_base_url(sha)
+function build_commit_base_url(sha)
   return string.format("%s/%s/%s/%s/", C.REPO_BASE_URL, C.REPO_OWNER, C.REPO_NAME, sha)
 end
 
-local function read_base_cache()
+function read_base_cache()
   if not fs.exists(CONFIG.BASE_CACHE_PATH) then
     return nil
   end
@@ -1589,7 +1685,7 @@ local function read_base_cache()
   return nil
 end
 
-local function write_base_cache(payload)
+function write_base_cache(payload)
   local serialized, err = safe_serialize(payload)
   if not serialized then
     log("WARN", "Unable to serialize base cache: " .. tostring(err))
@@ -1598,7 +1694,7 @@ local function write_base_cache(payload)
   write_atomic(CONFIG.BASE_CACHE_PATH, serialized)
 end
 
-local function set_base_source(base_url, source, sha)
+function set_base_source(base_url, source, sha)
   current_base_url = base_url
   current_base_source = source or CONFIG.DEFAULT_BRANCH
   current_base_sha = sha
@@ -2696,6 +2792,51 @@ local function safe_update_prepare(role, cfg_path)
   end
 end
 
+function build_update_paths(entries)
+  local update_paths = {}
+  for _, entry in ipairs(entries or {}) do
+    table.insert(update_paths, "/" .. entry.path)
+  end
+  return update_paths
+end
+
+function build_created_before(paths)
+  local created_before = {}
+  for _, path in ipairs(paths or {}) do
+    if not fs.exists(path) then
+      table.insert(created_before, path)
+    end
+  end
+  return created_before
+end
+
+function build_rollback_paths(update_paths, migration_paths, protected)
+  local rollback_paths = {}
+  for _, path in ipairs(update_paths or {}) do
+    table.insert(rollback_paths, path)
+  end
+  for _, path in ipairs(migration_paths or {}) do
+    table.insert(rollback_paths, path)
+  end
+  for _, path in ipairs(protected or {}) do
+    table.insert(rollback_paths, path)
+  end
+  return rollback_paths
+end
+
+function write_marker_payload(manifest, release, stage_dir, backup_dir, updates, created, rollback_paths, hash_algo)
+  write_update_marker({
+    ts = os.epoch("utc"),
+    version = manifest.version or release and release.commit_sha or "unknown",
+    stage_dir = stage_dir,
+    backup_dir = backup_dir,
+    updates = updates,
+    created = created,
+    rollback_paths = rollback_paths,
+    hash_algo = hash_algo
+  })
+end
+
 local function safe_update_apply(context, role, cfg_path)
   local manifest_content = context.manifest_content
   local manifest = context.manifest
@@ -2706,37 +2847,17 @@ local function safe_update_apply(context, role, cfg_path)
   local stage_dir = context.stage_dir
   local backup_dir = create_backup_dir()
   local protected = { cfg_path, C.NODE_ID_PATH, "/startup.lua", C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
-  local update_paths = {}
+  local update_paths = build_update_paths(updates)
   local created = {}
   local migration_paths = build_migration_paths()
-  for _, entry in ipairs(updates) do
-    table.insert(update_paths, "/" .. entry.path)
-  end
 
   backup_files(backup_dir, update_paths)
   backup_files(backup_dir, migration_paths)
   backup_files(backup_dir, protected)
 
-  local created_before = {}
-  for _, path in ipairs(update_paths) do
-    if not fs.exists(path) then
-      table.insert(created_before, path)
-    end
-  end
-  local rollback_paths = {}
-  for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
-  for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
-  for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
-  write_update_marker({
-    ts = os.epoch("utc"),
-    version = manifest.version or release and release.commit_sha or "unknown",
-    stage_dir = stage_dir,
-    backup_dir = backup_dir,
-    updates = updates,
-    created = created_before,
-    rollback_paths = rollback_paths,
-    hash_algo = hash_algo
-  })
+  local created_before = build_created_before(update_paths)
+  local rollback_paths = build_rollback_paths(update_paths, migration_paths, protected)
+  write_marker_payload(manifest, release, stage_dir, backup_dir, updates, created_before, rollback_paths, hash_algo)
 
   local local_proto = load_proto_version("/xreactor/shared/constants.lua")
   local staged_proto = nil
@@ -2854,6 +2975,7 @@ end
 local function full_reinstall_prepare()
   local retry_rounds = 0
   while true do
+    cleanup_full_reinstall_storage()
     local manifest_content, manifest, release, manifest_meta = acquire_manifest()
     if not manifest_content then
       return nil
@@ -3014,12 +3136,9 @@ local function full_reinstall_apply(context)
   local use_staging = context.use_staging
   local entries = context.entries
   local backup_dir = create_backup_dir()
-  local update_paths = {}
+  local update_paths = build_update_paths(entries)
   local created = {}
   local migration_paths = build_migration_paths()
-  for _, entry in ipairs(entries) do
-    table.insert(update_paths, "/" .. entry.path)
-  end
   local protected = { C.NODE_ID_PATH, "/startup.lua", C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
   for _, target in pairs(role_targets) do
     table.insert(protected, C.BASE_DIR .. "/" .. target.config)
@@ -3029,26 +3148,18 @@ local function full_reinstall_apply(context)
   backup_files(backup_dir, migration_paths)
   backup_files(backup_dir, protected)
 
-  local created_before = {}
-  for _, path in ipairs(update_paths) do
-    if not fs.exists(path) then
-      table.insert(created_before, path)
-    end
-  end
-  local rollback_paths = {}
-  for _, path in ipairs(update_paths) do table.insert(rollback_paths, path) end
-  for _, path in ipairs(migration_paths) do table.insert(rollback_paths, path) end
-  for _, path in ipairs(protected) do table.insert(rollback_paths, path) end
-  write_update_marker({
-    ts = os.epoch("utc"),
-    version = manifest.version or release and release.commit_sha or "unknown",
-    stage_dir = use_staging and stage_dir or nil,
-    backup_dir = backup_dir,
-    updates = entries,
-    created = created_before,
-    rollback_paths = rollback_paths,
-    hash_algo = hash_algo
-  })
+  local created_before = build_created_before(update_paths)
+  local rollback_paths = build_rollback_paths(update_paths, migration_paths, protected)
+  write_marker_payload(
+    manifest,
+    release,
+    use_staging and stage_dir or nil,
+    backup_dir,
+    entries,
+    created_before,
+    rollback_paths,
+    hash_algo
+  )
 
   local ok, err = false, nil
   if use_staging then
