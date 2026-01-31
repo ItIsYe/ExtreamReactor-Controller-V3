@@ -1,23 +1,23 @@
-local INSTALLER_CORE_VERSION = "2.0"
+local INSTALLER_CORE_VERSION = "2.1"
 
 -- CONFIG
 local CONFIG = {
-  BASE_DIR = "/xreactor", -- Base install directory.
+  BASE_DIR = "/xreactor", -- Base install directory (updated at runtime).
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
   REPO_BASE_URL = "https://raw.githubusercontent.com", -- Raw GitHub base URL.
   DEFAULT_BRANCH = "beta", -- Default branch for base URLs when no commit SHA is pinned.
   RELEASE_REMOTE = "xreactor/installer/release.lua", -- Release metadata path.
   MANIFEST_REMOTE = "xreactor/installer/manifest.lua", -- Manifest path (fallback).
-  MANIFEST_LOCAL = "/xreactor/.manifest", -- Cached manifest in install dir.
-  MANIFEST_CACHE = "/xreactor/.cache/manifest.lua", -- Serialized manifest cache.
-  MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path.
-  LOCAL_BACKUP_BASE = "/xreactor_backup", -- Local backup base directory.
-  LOCAL_STAGING_BASE = "/xreactor_stage", -- Local staging base directory.
-  LOCAL_LOG_DIR = "/xreactor/logs", -- Local log directory.
-  BACKUP_BASE = "/xreactor_backup", -- Backup base directory (may be overridden).
-  NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
-  UPDATE_STAGING_BASE = "/xreactor_stage", -- Base staging folder for updates (may be overridden).
+  MANIFEST_LOCAL = "/xreactor/.manifest", -- Cached manifest in install dir (updated at runtime).
+  MANIFEST_CACHE = "/xreactor/.cache/manifest.lua", -- Serialized manifest cache (updated at runtime).
+  MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path (updated at runtime).
+  LOCAL_BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
+  LOCAL_STAGING_BASE = "/xreactor_stage", -- Staging base directory (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
+  BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
+  NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path (updated at runtime).
+  UPDATE_STAGING_BASE = "/xreactor_stage", -- Base staging folder for updates (updated at runtime).
   INSTALLER_VERSION = "1.4", -- Installer version for min-version checks.
   INSTALLER_MIN_BYTES = 200, -- Min bytes to accept installer download.
   INSTALLER_SANITY_MARKER = "local function main", -- Installer sanity marker.
@@ -41,18 +41,19 @@ local CONFIG = {
   MANIFEST_MENU_RETRY_LIMIT = 5, -- Retry rounds from menu before auto-cancel.
   FILE_RETRY_ROUNDS = 3, -- Retry rounds for file download failures.
   FILE_RETRY_BACKOFF = 1, -- Backoff seconds for file download retry rounds.
-  BASE_CACHE_PATH = "/xreactor/.cache/source.lua", -- Cache for last good base URL.
+  BASE_CACHE_PATH = "/xreactor/.cache/source.lua", -- Cache for last good base URL (updated at runtime).
   PROTOCOL_ABORT_ON_MAJOR_CHANGE = true, -- Abort SAFE UPDATE if protocol major version changes.
   DISK_SPACE_OVERHEAD_BYTES = 2048, -- Extra bytes per file reserved for temp writes/metadata.
   DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
   CHECKSUM_RETRY_LIMIT = 3, -- Max retries for checksum mismatch per file.
   MAX_BACKUPS = 4, -- Retention: max backup directories under /xreactor_backup.
+  MAX_LOG_FILES = 5, -- Retention: max number of log files to keep.
   MAX_LOGS_MB = 6, -- Retention: max combined log size (MB) under log dirs.
   MAX_STAGING_DIRS = 2, -- Retention: number of staging dirs to keep in /xreactor_stage.
-  LOG_RETENTION_DIRS = { "/xreactor/logs", "/xreactor_logs" }, -- Log dirs eligible for cleanup (updated at runtime).
+  LOG_RETENTION_DIRS = { "/xreactor_logs" }, -- Log dirs eligible for cleanup (updated at runtime).
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = true, -- Always enable installer file logging.
-  LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path.
+  LOG_PATH = "/xreactor_logs/installer_core.log", -- Installer log file path (updated at runtime).
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER_CORE", -- Installer log prefix.
@@ -61,6 +62,7 @@ local CONFIG = {
   LOG_FLUSH_INTERVAL = 0, -- Seconds between log flushes.
   LOG_SAMPLE_BYTES = 96, -- Bytes to capture as response signature.
   CHECKSUM_DIAG_SAMPLE_BYTES = 80, -- Bytes to show when checksum mismatch occurs.
+  UPDATE_MARKER_PATH = "/xreactor/.update_in_progress", -- Update marker path (updated at runtime).
   REQUIRED_CORE_FILES = { -- Core files that must exist in the manifest.
     "xreactor/core/bootstrap.lua",
     "xreactor/core/logger.lua",
@@ -185,67 +187,74 @@ end
 
 local storage_state = {
   use_disk = false,
-  disk_mount = nil,
-  disk_log_dir = nil,
-  log_primary = nil,
-  log_fallback = nil,
-  local_log_dir = CONFIG.LOCAL_LOG_DIR
+  mount_path = nil,
+  storage_root = CONFIG.BASE_DIR,
+  log_dir = CONFIG.LOCAL_LOG_DIR,
+  stage_dir = CONFIG.UPDATE_STAGING_BASE,
+  backup_dir = CONFIG.BACKUP_BASE,
+  log_primary = CONFIG.LOG_PATH,
+  log_fallback = CONFIG.LOG_PATH
 }
 
-function detect_disk_drive()
-  if not peripheral or not peripheral.find then
-    return nil
+function detect_storage_mount()
+  local candidates = { "disk", "disk2", "disk3" }
+  for _, mount in ipairs(candidates) do
+    if fs.exists(mount) then
+      return "/" .. mount
+    end
   end
-  local drive = peripheral.find("drive")
-  if not drive or not drive.isDiskPresent or not drive.getMountPath then
-    return nil
-  end
-  local ok, present = pcall(drive.isDiskPresent)
-  if not ok or not present then
-    return nil
-  end
-  local mount = drive.getMountPath()
-  if not mount or mount == "" then
-    return nil
-  end
-  return { drive = drive, mount_path = mount }
+  return nil
 end
 
-function build_disk_paths(mount_path)
-  local base = mount_path or ""
+function build_storage_paths(root)
+  local base = root or "/xreactor"
   return {
-    staging = base .. "/xreactor_stage",
-    backup = base .. "/xreactor_backup",
-    logs = base .. "/xreactor_logs"
+    base_dir = base,
+    log_dir = base .. "_logs",
+    stage_dir = base .. "_stage",
+    backup_dir = base .. "_backup",
+    manifest_local = base .. "/.manifest",
+    manifest_cache = base .. "/.cache/manifest.lua",
+    manifest_cache_legacy = base .. "/.manifest_cache",
+    base_cache = base .. "/.cache/source.lua",
+    node_id = base .. "/config/node_id.txt",
+    update_marker = base .. "/.update_in_progress"
   }
 end
 
 function configure_storage_paths()
-  storage_state.use_disk = false
-  storage_state.disk_mount = nil
-  storage_state.disk_log_dir = nil
-  local disk = detect_disk_drive()
-  if disk then
-    local paths = build_disk_paths(disk.mount_path)
-    storage_state.use_disk = true
-    storage_state.disk_mount = disk.mount_path
-    storage_state.disk_log_dir = paths.logs
-    C.UPDATE_STAGING_BASE = paths.staging
-    C.BACKUP_BASE = paths.backup
-    storage_state.log_primary = paths.logs .. "/installer_core.log"
-  else
-    C.UPDATE_STAGING_BASE = C.LOCAL_STAGING_BASE
-    C.BACKUP_BASE = C.LOCAL_BACKUP_BASE
-    storage_state.log_primary = C.LOCAL_LOG_DIR .. "/installer_core.log"
+  local mount = detect_storage_mount()
+  local root = "/xreactor"
+  if mount then
+    root = mount .. "/xreactor"
   end
-  storage_state.log_fallback = C.LOCAL_LOG_DIR .. "/installer_core.log"
+  local paths = build_storage_paths(root)
+  storage_state.use_disk = mount ~= nil
+  storage_state.mount_path = mount
+  storage_state.storage_root = root
+  storage_state.log_dir = paths.log_dir
+  storage_state.stage_dir = paths.stage_dir
+  storage_state.backup_dir = paths.backup_dir
+  storage_state.log_primary = paths.log_dir .. "/installer_core.log"
+  storage_state.log_fallback = storage_state.log_primary
+
+  C.BASE_DIR = paths.base_dir
+  C.MANIFEST_LOCAL = paths.manifest_local
+  C.MANIFEST_CACHE = paths.manifest_cache
+  C.MANIFEST_CACHE_LEGACY = paths.manifest_cache_legacy
+  C.BASE_CACHE_PATH = paths.base_cache
+  C.NODE_ID_PATH = paths.node_id
+  C.UPDATE_MARKER_PATH = paths.update_marker
+
+  C.LOCAL_LOG_DIR = paths.log_dir
+  C.LOCAL_STAGING_BASE = paths.stage_dir
+  C.LOCAL_BACKUP_BASE = paths.backup_dir
+  C.UPDATE_STAGING_BASE = paths.stage_dir
+  C.BACKUP_BASE = paths.backup_dir
+
   C.LOG_PATH = storage_state.log_primary
-  CONFIG.LOG_PATH = storage_state.log_primary
-  if storage_state.disk_log_dir then
-    CONFIG.LOG_RETENTION_DIRS = { C.LOCAL_LOG_DIR, storage_state.disk_log_dir }
-  else
-    CONFIG.LOG_RETENTION_DIRS = { C.LOCAL_LOG_DIR, "/xreactor_logs" }
-  end
+  CONFIG.LOG_PATH = C.LOG_PATH
+  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir }
 end
 
 -- Internal standalone logger for the installer (no project dependencies).
@@ -304,7 +313,7 @@ function set_log_paths(primary, fallback)
   log_state.fallback_used = false
 end
 
-local function open_log_file()
+function open_log_file()
   local function try_open(path)
     if not path then
       return nil
@@ -376,6 +385,9 @@ function internal_log(prefix, message, level)
     log_last_flush = os.clock()
     return
   end
+  if not log_fallback_active then
+    print("Warning: log file unavailable; continuing without file logging.")
+  end
   log_fallback_active = true
   log_fallback_reason = log_fallback_reason or tostring(err)
   for _, entry in ipairs(log_buffer) do
@@ -412,6 +424,21 @@ end
 
 configure_storage_paths()
 init_internal_logger()
+
+function resolve_install_path(path)
+  if not path or path == "" then
+    return path
+  end
+  local normalized = path
+  if normalized:sub(1, 1) == "/" then
+    normalized = normalized:sub(2)
+  end
+  if normalized:match("^xreactor/") then
+    local suffix = normalized:sub(#"xreactor/" + 1)
+    return storage_state.storage_root .. "/" .. suffix
+  end
+  return "/" .. normalized
+end
 
 function flush_log_fallback()
   if not log_fallback_active or #log_fallback_buffer == 0 then
@@ -506,11 +533,6 @@ function build_cleanup_suggestions()
     ("delete %s/*"):format(C.UPDATE_STAGING_BASE),
     ("delete %s/*.log"):format(C.LOCAL_LOG_DIR)
   }
-  if storage_state.disk_log_dir then
-    table.insert(suggestions, ("delete %s/*.log"):format(storage_state.disk_log_dir))
-  else
-    table.insert(suggestions, "delete /xreactor_logs/*.log")
-  end
   return table.concat(suggestions, " | ")
 end
 
@@ -560,8 +582,8 @@ end
 function print_space_preflight(needed, context)
   local free_local = get_free_space(C.BASE_DIR)
   local free_disk = nil
-  if storage_state.use_disk and storage_state.disk_mount then
-    free_disk = get_free_space(storage_state.disk_mount)
+  if storage_state.use_disk and storage_state.mount_path then
+    free_disk = get_free_space(storage_state.mount_path)
   end
   print(string.format("%s preflight:", tostring(context or "Disk space")))
   print("  Free local: " .. format_bytes(free_local or 0))
@@ -572,6 +594,18 @@ function print_space_preflight(needed, context)
   end
   print("  Needed: " .. format_bytes(needed or 0))
   print("  Using disk: " .. (storage_state.use_disk and "yes" or "no"))
+end
+
+function print_debug_summary(context)
+  local free = get_free_space(storage_state.storage_root or C.BASE_DIR)
+  print("=== Installer Debug Summary ===")
+  if context then
+    print("Context: " .. tostring(context))
+  end
+  print("Storage root: " .. tostring(storage_state.storage_root or C.BASE_DIR))
+  print("Free space: " .. format_bytes(free or 0))
+  print("Stage path: " .. tostring(C.UPDATE_STAGING_BASE))
+  print("Log path: " .. tostring(get_log_path()))
 end
 
 function collect_dir_entries(path)
@@ -717,9 +751,35 @@ function prune_logs()
   return deleted
 end
 
+function prune_logs_by_count()
+  if not CONFIG.MAX_LOG_FILES or CONFIG.MAX_LOG_FILES <= 0 then
+    return {}
+  end
+  local files = collect_log_files()
+  if #files <= CONFIG.MAX_LOG_FILES then
+    return {}
+  end
+  table.sort(files, function(a, b)
+    return (a.modified or 0) < (b.modified or 0)
+  end)
+  local deleted = {}
+  local overflow = #files - CONFIG.MAX_LOG_FILES
+  for idx = 1, overflow do
+    local entry = files[idx]
+    if entry and fs.exists(entry.path) then
+      fs.delete(entry.path)
+      table.insert(deleted, entry.path)
+    end
+  end
+  return deleted
+end
+
 function cleanup_storage()
   local deleted = {}
   for _, path in ipairs(prune_backup_dirs()) do
+    table.insert(deleted, path)
+  end
+  for _, path in ipairs(prune_logs_by_count()) do
     table.insert(deleted, path)
   end
   for _, path in ipairs(prune_logs()) do
@@ -780,11 +840,6 @@ function cleanup_logs_for_space()
   for _, path in ipairs(clear_log_files(C.LOCAL_LOG_DIR)) do
     table.insert(deleted, path)
   end
-  if storage_state.disk_log_dir and storage_state.disk_log_dir ~= C.LOCAL_LOG_DIR then
-    for _, path in ipairs(clear_log_files(storage_state.disk_log_dir)) do
-      table.insert(deleted, path)
-    end
-  end
   return deleted
 end
 
@@ -842,7 +897,7 @@ function cleanup_full_reinstall_storage()
   for _, path in ipairs(clear_dir_contents(C.BACKUP_BASE)) do
     table.insert(deleted, path)
   end
-  for _, path in ipairs(clear_log_files(C.BASE_DIR .. "/logs")) do
+  for _, path in ipairs(clear_log_files(C.LOCAL_LOG_DIR)) do
     table.insert(deleted, path)
   end
   if #deleted > 0 then
@@ -1100,7 +1155,7 @@ end
 function file_checksum(path, algo)
   local content = read_file(path)
   if not content then return nil end
-  if path == "/" .. C.MANIFEST_REMOTE then
+  if path == resolve_install_path(C.MANIFEST_REMOTE) then
     content = normalize_manifest_self_hash(content)
   end
   return compute_hash(content, algo)
@@ -1111,13 +1166,13 @@ function file_checksum_for_target(temp_path, target_path, algo)
   if not content then
     return nil
   end
-  if target_path == "/" .. C.MANIFEST_REMOTE then
+  if target_path == resolve_install_path(C.MANIFEST_REMOTE) then
     content = normalize_manifest_self_hash(content)
   end
   return compute_hash(content, algo)
 end
 
-local UPDATE_MARKER_PATH = "/xreactor/.update_in_progress"
+local UPDATE_MARKER_PATH = C.UPDATE_MARKER_PATH
 
 function read_update_marker()
   if not fs.exists(UPDATE_MARKER_PATH) then
@@ -1172,7 +1227,7 @@ function recover_update_marker()
       return false, apply_err
     end
     for _, entry in ipairs(marker.updates) do
-      local target_path = "/" .. entry.path
+      local target_path = resolve_install_path(entry.path)
       local verify = file_checksum(target_path, algo)
       if verify ~= entry.hash then
         if marker.rollback_paths and marker.backup_dir then
@@ -1951,7 +2006,7 @@ function set_base_source(base_url, source, sha)
   })
 end
 
-local function build_manifest_sources(release)
+function build_manifest_sources(release)
   local sources = {}
   local sha = release and release.commit_sha
   if is_valid_sha(sha) then
@@ -1965,7 +2020,7 @@ local function build_manifest_sources(release)
   return sources
 end
 
-local function fetch_repo_file(ref, path, opts)
+function fetch_repo_file(ref, path, opts)
   local base = current_base_url or build_main_base_url()
   local urls = build_mirror_urls(base, path)
   local ok, body, info = fetch_with_retries(urls, opts and opts.attempts, opts and opts.backoff, {
@@ -1984,7 +2039,7 @@ local function fetch_repo_file(ref, path, opts)
   return true, body, info
 end
 
-local function validate_installer_content(content)
+function validate_installer_content(content)
   if not content or #content < C.INSTALLER_MIN_BYTES then
     return false, "content too short"
   end
@@ -1998,7 +2053,7 @@ local function validate_installer_content(content)
   return true
 end
 
-local function read_manifest_cache()
+function read_manifest_cache()
   local path = nil
   if fs.exists(C.MANIFEST_CACHE) then
     path = C.MANIFEST_CACHE
@@ -2028,7 +2083,7 @@ local function read_manifest_cache()
   return data
 end
 
-local function write_manifest_cache(manifest_content, release, source, base_info)
+function write_manifest_cache(manifest_content, release, source, base_info)
   local safe_release = {
     commit_sha = release and release.commit_sha,
     hash_algo = release and release.hash_algo,
@@ -2060,14 +2115,14 @@ local function write_manifest_cache(manifest_content, release, source, base_info
   write_atomic(C.MANIFEST_CACHE, serialized)
 end
 
-local function describe_download_error(err)
+function describe_download_error(err)
   if err == "html response" then
     return "Downloaded HTML, expected Lua"
   end
   return err or "timeout or http error"
 end
 
-local function format_manifest_failure(meta)
+function format_manifest_failure(meta)
   local reason = "timeout or http error"
   local tried_list = {}
   if meta and meta.tried then
@@ -2094,7 +2149,7 @@ local function format_manifest_failure(meta)
   return ("Manifest download failed (%s). Tried: %s"):format(reason, tried)
 end
 
-local function collect_tried_urls(info, fallback_urls)
+function collect_tried_urls(info, fallback_urls)
   local urls = {}
   if info and info.tried then
     for _, entry in ipairs(info.tried) do
@@ -2115,7 +2170,7 @@ local function collect_tried_urls(info, fallback_urls)
   return urls
 end
 
-local function print_download_failure(label, info, fallback_urls)
+function print_download_failure(label, info, fallback_urls)
   local urls = collect_tried_urls(info, fallback_urls)
   local last = info and info.last or {}
   local err_msg = describe_download_error(last.err)
@@ -2147,7 +2202,7 @@ local function print_download_failure(label, info, fallback_urls)
   end
 end
 
-local function download_release()
+function download_release()
   local urls = build_mirror_urls(build_main_base_url(), C.RELEASE_REMOTE)
   local ok, content, meta = download_with_retry(urls, C.DOWNLOAD_ATTEMPTS, C.DOWNLOAD_BACKOFF)
   if not ok then
@@ -2180,7 +2235,7 @@ local function download_release()
   return data, meta
 end
 
-local function validate_manifest_required(manifest)
+function validate_manifest_required(manifest)
   local missing = {}
   for _, path in ipairs(C.REQUIRED_CORE_FILES or {}) do
     if not manifest.lookup or not manifest.lookup[path] then
@@ -2202,7 +2257,7 @@ local function validate_manifest_required(manifest)
   return true
 end
 
-local function parse_manifest(content)
+function parse_manifest(content)
   local loader = load(content, "manifest", "t", {})
   if not loader then
     return nil, "Manifest load failed"
@@ -2251,7 +2306,7 @@ local function parse_manifest(content)
   return data
 end
 
-local function download_manifest_from_source(release, base_info)
+function download_manifest_from_source(release, base_info)
   local manifest_path = release.manifest_path or C.MANIFEST_REMOTE
   local urls = build_mirror_urls(base_info.base_url, manifest_path)
   if base_info.source == CONFIG.DEFAULT_BRANCH and CONFIG.MANIFEST_URL_FALLBACK then
@@ -2280,7 +2335,7 @@ local function download_manifest_from_source(release, base_info)
   return content, manifest, meta
 end
 
-local function download_manifest_with_retries(attempts, backoff)
+function download_manifest_with_retries(attempts, backoff)
   local max_attempts = attempts or CONFIG.MANIFEST_RETRY_ATTEMPTS or 1
   local delay = backoff or CONFIG.MANIFEST_RETRY_BACKOFF or 1
   local last_meta
@@ -2319,7 +2374,7 @@ local function download_manifest_with_retries(attempts, backoff)
   return nil, nil, nil, last_meta
 end
 
-local function acquire_manifest()
+function acquire_manifest()
   local manifest_content, manifest, release, manifest_meta = download_manifest_with_retries(1, 0)
   local retry_rounds = 0
   while not manifest_content do
@@ -2381,14 +2436,11 @@ function ensure_required_dirs()
   ensure_dir(C.LOCAL_LOG_DIR)
   ensure_dir(C.LOCAL_STAGING_BASE)
   ensure_dir(C.LOCAL_BACKUP_BASE)
-  if storage_state.use_disk then
-    ensure_dir(storage_state.disk_log_dir)
-    ensure_dir(C.UPDATE_STAGING_BASE)
-    ensure_dir(C.BACKUP_BASE)
-  end
+  ensure_dir(C.UPDATE_STAGING_BASE)
+  ensure_dir(C.BACKUP_BASE)
 end
 
-local function ensure_base_dirs()
+function ensure_base_dirs()
   ensure_required_dirs()
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.BASE_DIR .. "/config")
@@ -2404,10 +2456,10 @@ local function ensure_base_dirs()
   ensure_dir(C.BASE_DIR .. "/shared")
   ensure_dir(C.BASE_DIR .. "/installer")
   ensure_dir(C.BASE_DIR .. "/.cache")
-  ensure_dir(C.BASE_DIR .. "/logs")
+  ensure_dir(C.LOCAL_LOG_DIR)
 end
 
-local function is_config_file(path)
+function is_config_file(path)
   if not path then
     return false
   end
@@ -2420,7 +2472,7 @@ local function is_config_file(path)
   return false
 end
 
-local function parse_proto_version_from_content(content)
+function parse_proto_version_from_content(content)
   if not content or content == "" then
     return nil
   end
@@ -2436,7 +2488,7 @@ local function parse_proto_version_from_content(content)
   return { major = major, minor = minor }
 end
 
-local function load_proto_version(path)
+function load_proto_version(path)
   if not path or not fs.exists(path) then
     return nil
   end
@@ -2444,14 +2496,14 @@ local function load_proto_version(path)
   return parse_proto_version_from_content(content)
 end
 
-local function format_proto_version(ver)
+function format_proto_version(ver)
   if not ver then
     return "unknown"
   end
   return tostring(ver.major) .. "." .. tostring(ver.minor)
 end
 
-local function confirm(prompt_text, default)
+function confirm(prompt_text, default)
   local hint = default and "Y/n" or "y/N"
   local input = ui_prompt(prompt_text .. " (" .. hint .. ")", default and "y" or "n")
   input = input:lower()
@@ -2461,13 +2513,13 @@ end
 
 local last_detection = { reactors = {}, turbines = {}, modems = {} }
 
-local function is_wireless_modem(name)
+function is_wireless_modem(name)
   local ok, result = pcall(peripheral.call, name, "isWireless")
   if ok then return result end
   return false
 end
 
-local function scan_peripherals()
+function scan_peripherals()
   local reactors = {}
   local turbines = {}
   local modems = {}
@@ -2485,7 +2537,7 @@ local function scan_peripherals()
   return last_detection
 end
 
-local function detect_modems()
+function detect_modems()
   local wireless = {}
   local wired = {}
   for _, name in ipairs(scan_peripherals().modems) do
@@ -2498,7 +2550,7 @@ local function detect_modems()
   return { wireless = wireless, wired = wired }
 end
 
-local function select_primary_modem(modems)
+function select_primary_modem(modems)
   if #modems.wireless > 0 then
     return modems.wireless[1]
   end
@@ -2508,7 +2560,7 @@ local function select_primary_modem(modems)
   return nil
 end
 
-local function choose_role()
+function choose_role()
   local list = {
     roles.MASTER,
     roles.RT_NODE,
@@ -2521,12 +2573,13 @@ local function choose_role()
   return list[choice] or roles.MASTER
 end
 
-local function write_startup(role)
+function write_startup(role)
   local target = role_targets[role]
-  write_atomic("/startup.lua", [[shell.run("/xreactor/]] .. target.path .. [[/main.lua")]])
+  local base = storage_state.storage_root or C.BASE_DIR
+  write_atomic("/startup.lua", [[shell.run("]] .. base .. [[/]] .. target.path .. [[/main.lua")]])
 end
 
-local function print_detected(label, items)
+function print_detected(label, items)
   print(label .. ":")
   if #items == 0 then
     print(" - (none)")
@@ -2537,7 +2590,7 @@ local function print_detected(label, items)
   end
 end
 
-local function prompt_use_detected()
+function prompt_use_detected()
   scan_peripherals()
   local input = ui_prompt("Use detected peripherals? [Y/n]", "y")
   input = tostring(input or ""):lower()
@@ -2545,7 +2598,7 @@ local function prompt_use_detected()
   return input == "y" or input == "yes"
 end
 
-local function write_config(role, wireless, wired, extras)
+function write_config(role, wireless, wired, extras)
   local cfg_path = C.BASE_DIR .. "/" .. role_targets[role].config
   local defaults = read_config(cfg_path, {})
   defaults.role = role
@@ -2573,13 +2626,13 @@ local function write_config(role, wireless, wired, extras)
   write_config_file(cfg_path, defaults)
 end
 
-local function build_rt_node_id()
+function build_rt_node_id()
   local id_str = tostring(os.getComputerID())
   local suffix = id_str:sub(-4)
   return "RT-" .. suffix
 end
 
-local function find_existing_role()
+function find_existing_role()
   for role, target in pairs(role_targets) do
     local cfg_path = C.BASE_DIR .. "/" .. target.config
     if fs.exists(cfg_path) then
@@ -2592,7 +2645,7 @@ local function find_existing_role()
   return nil, nil, nil
 end
 
-local function collect_known_node_id_sources(role, cfg_path)
+function collect_known_node_id_sources(role, cfg_path)
   local sources = {
     { label = "legacy_file", path = C.BASE_DIR .. "/data/node_id.txt" },
     { label = "legacy_file", path = C.BASE_DIR .. "/node_id.txt" },
@@ -2610,7 +2663,7 @@ local function collect_known_node_id_sources(role, cfg_path)
   return sources
 end
 
-local function ensure_node_id(role, cfg_path)
+function ensure_node_id(role, cfg_path)
   if fs.exists(C.NODE_ID_PATH) then
     local existing = trim(read_file(C.NODE_ID_PATH))
     local normalized = normalize_node_id(existing)
@@ -2657,7 +2710,7 @@ local function ensure_node_id(role, cfg_path)
   return true
 end
 
-local function create_backup_dir()
+function create_backup_dir()
   ensure_dir(C.BACKUP_BASE)
   local stamp = os.date("%Y%m%d_%H%M%S")
   local path = C.BACKUP_BASE .. "/" .. stamp
@@ -2665,7 +2718,7 @@ local function create_backup_dir()
   return path
 end
 
-local function backup_files(base_dir, paths)
+function backup_files(base_dir, paths)
   for _, path in ipairs(paths) do
     if fs.exists(path) then
       local target = base_dir .. path
@@ -2675,7 +2728,7 @@ local function backup_files(base_dir, paths)
   end
 end
 
-local function rollback_from_backup(base_dir, paths, created)
+function rollback_from_backup(base_dir, paths, created)
   for _, path in ipairs(paths) do
     local backup_path = base_dir .. path
     if fs.exists(backup_path) then
@@ -2690,7 +2743,7 @@ local function rollback_from_backup(base_dir, paths, created)
   end
 end
 
-local function restore_from_backup(base_dir, paths)
+function restore_from_backup(base_dir, paths)
   for _, path in ipairs(paths) do
     local backup_path = base_dir .. path
     if fs.exists(backup_path) then
@@ -2700,12 +2753,12 @@ local function restore_from_backup(base_dir, paths)
   end
 end
 
-local function update_files(manifest, hash_algo)
+function update_files(manifest, hash_algo)
   local updates = {}
   for _, entry in ipairs(manifest.entries or {}) do
     local path = entry.path
     if not is_config_file(path) then
-      local full_path = "/" .. path
+      local full_path = resolve_install_path(path)
       local needs_update = false
       if not fs.exists(full_path) then
         needs_update = true
@@ -2728,7 +2781,7 @@ local function update_files(manifest, hash_algo)
   return updates
 end
 
-local function build_staging_dir()
+function build_staging_dir()
   ensure_dir(C.UPDATE_STAGING_BASE)
   if not fetch_url_seeded then
     math.randomseed(os.time())
@@ -2740,17 +2793,17 @@ local function build_staging_dir()
   return dir
 end
 
-local function cleanup_staging(dir)
+function cleanup_staging(dir)
   if dir and fs.exists(dir) then
     fs.delete(dir)
   end
 end
 
-local function build_staging_path(stage_dir, path)
+function build_staging_path(stage_dir, path)
   return stage_dir .. "/" .. path
 end
 
-local function stage_updates(entries, release, hash_algo)
+function stage_updates(entries, release, hash_algo)
   local stage_dir = build_staging_dir()
   local staged = {}
   for _, entry in ipairs(entries) do
@@ -2775,9 +2828,9 @@ local function stage_updates(entries, release, hash_algo)
   return staged, nil, nil, stage_dir
 end
 
-local function apply_staged(entries, staged, created)
+function apply_staged(entries, staged, created)
   for _, entry in ipairs(entries) do
-    local target_path = "/" .. entry.path
+    local target_path = resolve_install_path(entry.path)
     local staging_path = staged[entry.path]
     local content = read_file(staging_path)
     if content == nil then
@@ -2794,9 +2847,9 @@ local function apply_staged(entries, staged, created)
   return true
 end
 
-local function apply_direct(entries, release, hash_algo, created)
+function apply_direct(entries, release, hash_algo, created)
   for _, entry in ipairs(entries) do
-    local target_path = "/" .. entry.path
+    local target_path = resolve_install_path(entry.path)
     if not fs.exists(target_path) then
       table.insert(created, target_path)
     end
@@ -2812,22 +2865,22 @@ local function apply_direct(entries, release, hash_algo, created)
   return true
 end
 
-local function build_migration_paths()
+function build_migration_paths()
   local paths = {}
   for _, migration in ipairs(C.FILE_MIGRATIONS or {}) do
     if type(migration) == "table" and migration.from then
-      table.insert(paths, "/" .. migration.from)
+      table.insert(paths, resolve_install_path(migration.from))
     end
   end
   return paths
 end
 
-local function apply_file_migrations()
+function apply_file_migrations()
   local applied = {}
   for _, migration in ipairs(C.FILE_MIGRATIONS or {}) do
     if type(migration) == "table" and migration.from and migration.to then
-      local from_path = "/" .. migration.from
-      local to_path = "/" .. migration.to
+      local from_path = resolve_install_path(migration.from)
+      local to_path = resolve_install_path(migration.to)
       if fs.exists(from_path) then
         if not fs.exists(to_path) then
           return false, ("Migration target missing: %s (from %s)"):format(migration.to, migration.from)
@@ -2840,7 +2893,7 @@ local function apply_file_migrations()
   return true, applied
 end
 
-local function update_installer_if_required(manifest, release, hash_algo)
+function update_installer_if_required(manifest, release, hash_algo)
   local required = manifest.installer_min_version
   if required and compare_version(C.INSTALLER_VERSION, required) < 0 then
     print("Installer update required.")
@@ -2858,7 +2911,7 @@ local function update_installer_if_required(manifest, release, hash_algo)
     end
     local base = current_base_url or build_main_base_url()
     local urls = build_mirror_urls(base, installer_path)
-    local temp = "/" .. installer_path .. ".new"
+    local temp = resolve_install_path(installer_path) .. ".new"
     local ok, meta = download_file_to_path(urls, temp, expected, hash_algo, {
       expected_size = manifest.installer_size_bytes
     })
@@ -2879,7 +2932,7 @@ local function update_installer_if_required(manifest, release, hash_algo)
       end
       return false
     end
-    local target = "/" .. installer_path
+    local target = resolve_install_path(installer_path)
     if fs.exists(target) then
       fs.delete(target)
     end
@@ -2903,7 +2956,7 @@ local function update_installer_if_required(manifest, release, hash_algo)
   return true
 end
 
-local function migrate_config(role, cfg_path, manifest, release, hash_algo)
+function migrate_config(role, cfg_path, manifest, release, hash_algo)
   local remote_path = "xreactor/" .. role_targets[role].config
   local entry = manifest.lookup and manifest.lookup[remote_path] or nil
   local expected_hash = entry and entry.hash or nil
@@ -2942,7 +2995,7 @@ local function migrate_config(role, cfg_path, manifest, release, hash_algo)
   return false
 end
 
-local function verify_integrity(manifest, role, cfg_path)
+function verify_integrity(manifest, role, cfg_path)
   local required = {
     "xreactor/core/bootstrap.lua",
     "xreactor/core/network.lua",
@@ -2958,7 +3011,7 @@ local function verify_integrity(manifest, role, cfg_path)
     table.insert(required, "xreactor/nodes/rt/main.lua")
   end
   for _, path in ipairs(required) do
-    if not fs.exists("/" .. path) then
+    if not fs.exists(resolve_install_path(path)) then
       return false, "Missing " .. path
     end
   end
@@ -2971,7 +3024,7 @@ local function verify_integrity(manifest, role, cfg_path)
   return true
 end
 
-local function build_manifest_entries(manifest)
+function build_manifest_entries(manifest)
   local entries = {}
   for _, entry in ipairs(manifest.entries or {}) do
     table.insert(entries, { path = entry.path, hash = entry.hash, size_bytes = entry.size_bytes })
@@ -2987,7 +3040,7 @@ local function build_manifest_entries(manifest)
   return entries
 end
 
-local function safe_update_prepare(role, cfg_path)
+function safe_update_prepare(role, cfg_path)
   local retry_rounds = 0
   while true do
     local manifest_content, manifest, release = acquire_manifest()
@@ -3057,7 +3110,7 @@ end
 function build_update_paths(entries)
   local update_paths = {}
   for _, entry in ipairs(entries or {}) do
-    table.insert(update_paths, "/" .. entry.path)
+    table.insert(update_paths, resolve_install_path(entry.path))
   end
   return update_paths
 end
@@ -3099,7 +3152,7 @@ function write_marker_payload(manifest, release, stage_dir, backup_dir, updates,
   })
 end
 
-local function safe_update_apply(context, role, cfg_path)
+function safe_update_apply(context, role, cfg_path)
   local manifest_content = context.manifest_content
   local manifest = context.manifest
   local release = context.release
@@ -3121,7 +3174,7 @@ local function safe_update_apply(context, role, cfg_path)
   local rollback_paths = build_rollback_paths(update_paths, migration_paths, protected)
   write_marker_payload(manifest, release, stage_dir, backup_dir, updates, created_before, rollback_paths, hash_algo)
 
-  local local_proto = load_proto_version("/xreactor/shared/constants.lua")
+  local local_proto = load_proto_version(resolve_install_path("xreactor/shared/constants.lua"))
   local staged_proto = nil
   if staged["xreactor/shared/constants.lua"] then
     staged_proto = load_proto_version(staged["xreactor/shared/constants.lua"])
@@ -3216,7 +3269,7 @@ local function safe_update_apply(context, role, cfg_path)
 end
 
 -- SAFE UPDATE keeps role/config/node_id intact and updates only changed files.
-local function safe_update()
+function safe_update()
   local role, cfg_path = find_existing_role()
   if not role then
     print("No existing role config found. Use FULL REINSTALL.")
@@ -3234,7 +3287,7 @@ local function safe_update()
   safe_update_apply(context, role, cfg_path)
 end
 
-local function full_reinstall_prepare()
+function full_reinstall_prepare()
   local retry_rounds = 0
   while true do
     cleanup_full_reinstall_storage()
@@ -3324,7 +3377,7 @@ local function full_reinstall_prepare()
   end
 end
 
-local function setup_fresh_config(context, backup_dir, protected)
+function setup_fresh_config(context, backup_dir, protected)
   if context.keep_config and context.existing_role then
     restore_from_backup(backup_dir, protected)
     log("INFO", "Restored existing config for role " .. tostring(context.existing_role))
@@ -3390,7 +3443,7 @@ local function setup_fresh_config(context, backup_dir, protected)
   return role, cfg_path
 end
 
-local function full_reinstall_apply(context)
+function full_reinstall_apply(context)
   local manifest_content = context.manifest_content
   local manifest = context.manifest
   local release = context.release
@@ -3466,7 +3519,7 @@ local function full_reinstall_apply(context)
 end
 
 -- FULL REINSTALL overwrites all files and optionally restores existing config.
-local function full_reinstall()
+function full_reinstall()
   local context = full_reinstall_prepare()
   if not context then
     return
@@ -3474,7 +3527,7 @@ local function full_reinstall()
   full_reinstall_apply(context)
 end
 
-local function bootstrap_self_check()
+function bootstrap_self_check()
   local required = {
     { name = "ui_prompt", fn = ui_prompt },
     { name = "ui_menu", fn = ui_menu },
@@ -3512,7 +3565,7 @@ end
 
 bootstrap_self_check()
 
-local function main()
+function main()
   if not http then
     error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
   end
@@ -3540,10 +3593,11 @@ local function main()
   end
 end
 
-local function log_fatal(trace)
+function log_fatal(trace)
   log("ERROR", trace)
   print("Installer failed: " .. tostring(trace))
   print("See log: " .. tostring(get_log_path()))
+  print_debug_summary("Installer fatal error")
   flush_log_fallback()
 end
 
