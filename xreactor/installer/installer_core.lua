@@ -14,7 +14,7 @@ local CONFIG = {
   MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path (updated at runtime).
   LOCAL_BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   LOCAL_STAGING_BASE = "/xreactor_stage", -- Staging base directory (updated at runtime).
-  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor/logs", -- Log directory (updated at runtime).
   BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path (updated at runtime).
   ROLE_PATH = "/xreactor/config/role.lua", -- Role storage path (updated at runtime).
@@ -51,10 +51,10 @@ local CONFIG = {
   MAX_LOG_FILES = 5, -- Retention: max number of log files to keep.
   MAX_LOGS_MB = 6, -- Retention: max combined log size (MB) under log dirs.
   MAX_STAGING_DIRS = 2, -- Retention: number of staging dirs to keep in /xreactor_stage.
-  LOG_RETENTION_DIRS = { "/xreactor_logs" }, -- Log dirs eligible for cleanup (updated at runtime).
+  LOG_RETENTION_DIRS = { "/xreactor/logs" }, -- Log dirs eligible for cleanup (updated at runtime).
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = true, -- Always enable installer file logging.
-  LOG_PATH = "/xreactor_logs/installer_core.log", -- Installer log file path (updated at runtime).
+  LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path (updated at runtime).
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER_CORE", -- Installer log prefix.
@@ -206,7 +206,10 @@ end
 
 function build_storage_paths(root)
   local base = root or "/xreactor"
-  local log_dir = base .. "_logs"
+  local log_dir = "/xreactor/logs"
+  if base:match("^/disk/") then
+    log_dir = "/disk/xreactor_logs"
+  end
   return {
     base_dir = base,
     log_dir = log_dir,
@@ -236,7 +239,7 @@ function configure_storage_paths()
   storage_state.stage_dir = paths.stage_dir
   storage_state.backup_dir = paths.backup_dir
   storage_state.log_primary = paths.log_dir .. "/installer_core.log"
-  storage_state.log_fallback = storage_state.log_primary
+  storage_state.log_fallback = "/xreactor/logs/installer_core.log"
 
   C.BASE_DIR = paths.base_dir
   C.MANIFEST_LOCAL = paths.manifest_local
@@ -255,7 +258,7 @@ function configure_storage_paths()
 
   C.LOG_PATH = storage_state.log_primary
   CONFIG.LOG_PATH = C.LOG_PATH
-  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir, "/xreactor_logs" }
+  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir, "/xreactor/logs" }
 end
 
 -- Internal standalone logger for the installer (no project dependencies).
@@ -498,6 +501,140 @@ local role_storage_values = {
   [roles.REPROCESSOR_NODE] = "REPROCESSOR"
 }
 
+local role_filter_cache = {}
+local base_role_prefixes = {
+  "xreactor/core/",
+  "xreactor/shared/",
+  "xreactor/installer/",
+  "xreactor/config/",
+  "xreactor/ui/"
+}
+local base_role_files = {
+  "installer",
+  "installer.lua"
+}
+local service_files = {
+  service_manager = "xreactor/services/service_manager.lua",
+  comms = "xreactor/services/comms_service.lua",
+  discovery = "xreactor/services/discovery_service.lua",
+  telemetry = "xreactor/services/telemetry_service.lua",
+  ui = "xreactor/services/ui_service.lua",
+  control = "xreactor/services/control_service.lua",
+  alert = "xreactor/services/alert_service.lua"
+}
+local adapter_files = {
+  monitor = "xreactor/adapters/monitor.lua",
+  reactor = "xreactor/adapters/reactor.lua",
+  turbine = "xreactor/adapters/turbine.lua",
+  energy = "xreactor/adapters/energy_storage.lua",
+  matrix = "xreactor/adapters/induction_matrix.lua"
+}
+local role_prefixes = {
+  [roles.MASTER] = { "xreactor/master/", "xreactor/services/" },
+  [roles.RT_NODE] = { "xreactor/nodes/rt/" },
+  [roles.ENERGY_NODE] = { "xreactor/nodes/energy/" },
+  [roles.WATER_NODE] = { "xreactor/nodes/water/" },
+  [roles.FUEL_NODE] = { "xreactor/nodes/fuel/" },
+  [roles.REPROCESSOR_NODE] = { "xreactor/nodes/reprocessor/" }
+}
+local role_service_files = {
+  [roles.MASTER] = {
+    service_files.service_manager,
+    service_files.comms,
+    service_files.alert,
+    service_files.telemetry,
+    service_files.ui
+  },
+  [roles.RT_NODE] = {
+    service_files.service_manager,
+    service_files.comms,
+    service_files.discovery,
+    service_files.telemetry,
+    service_files.control
+  },
+  [roles.ENERGY_NODE] = {
+    service_files.service_manager,
+    service_files.comms,
+    service_files.discovery,
+    service_files.telemetry,
+    service_files.ui,
+    service_files.control
+  },
+  [roles.WATER_NODE] = {
+    service_files.service_manager,
+    service_files.comms,
+    service_files.discovery,
+    service_files.telemetry,
+    service_files.ui
+  },
+  [roles.FUEL_NODE] = {
+    service_files.service_manager,
+    service_files.comms,
+    service_files.discovery,
+    service_files.telemetry,
+    service_files.ui
+  },
+  [roles.REPROCESSOR_NODE] = {
+    service_files.service_manager,
+    service_files.comms,
+    service_files.discovery,
+    service_files.telemetry,
+    service_files.ui
+  }
+}
+local role_adapter_files = {
+  [roles.MASTER] = { adapter_files.monitor },
+  [roles.RT_NODE] = { adapter_files.monitor, adapter_files.reactor, adapter_files.turbine },
+  [roles.ENERGY_NODE] = { adapter_files.monitor, adapter_files.energy, adapter_files.matrix },
+  [roles.WATER_NODE] = { adapter_files.monitor },
+  [roles.FUEL_NODE] = { adapter_files.monitor },
+  [roles.REPROCESSOR_NODE] = { adapter_files.monitor }
+}
+
+local function build_role_filter(role)
+  if role_filter_cache[role] then
+    return role_filter_cache[role]
+  end
+  if not role then
+    return nil
+  end
+  local prefixes = {}
+  local exact = {}
+  local function add_prefixes(list)
+    for _, entry in ipairs(list or {}) do
+      table.insert(prefixes, entry)
+    end
+  end
+  local function add_exact(list)
+    for _, entry in ipairs(list or {}) do
+      exact[entry] = true
+    end
+  end
+  add_prefixes(base_role_prefixes)
+  add_prefixes(role_prefixes[role])
+  add_exact(base_role_files)
+  add_exact(role_service_files[role])
+  add_exact(role_adapter_files[role])
+  role_filter_cache[role] = { prefixes = prefixes, exact = exact }
+  return role_filter_cache[role]
+end
+
+local function entry_path_allowed_for_role(path, role)
+  local filter = build_role_filter(role)
+  if not filter or not path then
+    return true
+  end
+  if filter.exact[path] then
+    return true
+  end
+  for _, prefix in ipairs(filter.prefixes or {}) do
+    if path:sub(1, #prefix) == prefix then
+      return true
+    end
+  end
+  return false
+end
+
 -- Centralized installer logging helper.
 function log(level, message)
   if active_logger and active_logger.log then
@@ -619,7 +756,7 @@ function build_cleanup_suggestions()
   local suggestions = {
     ("delete %s/*"):format(C.BACKUP_BASE),
     ("delete %s/*"):format(C.UPDATE_STAGING_BASE),
-    "delete /xreactor_logs/*.log"
+    "delete /xreactor/logs/*.log"
   }
   if storage_state.mount_path then
     table.insert(suggestions, "delete " .. storage_state.mount_path .. "/xreactor_logs/*.log")
@@ -2642,9 +2779,9 @@ function acquire_manifest()
 end
 
 function ensure_required_dirs()
-  ensure_dir("/xreactor_logs")
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.LOCAL_LOG_DIR)
+  ensure_dir("/xreactor/logs")
   ensure_dir(C.LOCAL_STAGING_BASE)
   ensure_dir(C.LOCAL_BACKUP_BASE)
   ensure_dir(C.UPDATE_STAGING_BASE)
@@ -3259,14 +3396,14 @@ function getFilesForRole(role, manifest)
   local groups = manifest and manifest.role_groups or {}
   local role_token = role and role_storage_values[role] or nil
   for _, entry in ipairs(groups.shared or {}) do
-    if entry_applies_to_role(entry, role_token) then
+    if entry_applies_to_role(entry, role_token) and entry_path_allowed_for_role(entry.path, role) then
       table.insert(entries, entry)
     end
   end
   local key = role and role_keys[role] or nil
   if key and groups[key] then
     for _, entry in ipairs(groups[key]) do
-      if entry_applies_to_role(entry, role_token) then
+      if entry_applies_to_role(entry, role_token) and entry_path_allowed_for_role(entry.path, role) then
         table.insert(entries, entry)
       end
     end
@@ -3288,6 +3425,35 @@ function entry_applies_to_role(entry, role_token)
     end
   end
   return false
+end
+
+function filter_manifest_by_role(manifest, role)
+  if not manifest or not role then
+    return manifest
+  end
+  local filtered = {}
+  for key, value in pairs(manifest) do
+    if key ~= "entries" and key ~= "lookup" and key ~= "role_groups" then
+      filtered[key] = value
+    end
+  end
+  local entries = {}
+  local lookup = {}
+  for _, entry in ipairs(getFilesForRole(role, manifest)) do
+    local clone = {
+      path = entry.path,
+      hash = entry.hash,
+      size_bytes = entry.size_bytes,
+      roles = entry.roles
+    }
+    table.insert(entries, clone)
+    lookup[clone.path] = clone
+  end
+  table.sort(entries, function(a, b) return a.path < b.path end)
+  filtered.entries = entries
+  filtered.lookup = lookup
+  filtered.role_groups = { shared = entries }
+  return filtered
 end
 
 function build_manifest_entries(manifest, role)
@@ -3429,7 +3595,8 @@ function safe_update_prepare(role, cfg_path)
     end
     ensure_role_file(role)
 
-    local role_entries = getFilesForRole(role, manifest)
+    local filtered_manifest = filter_manifest_by_role(manifest, role)
+    local role_entries = getFilesForRole(role, filtered_manifest)
     local updates = update_files(role_entries, hash_algo)
     log("INFO", "Files needing update: " .. tostring(#updates))
     local needed_bytes = calculate_required_bytes(updates)
@@ -3445,7 +3612,7 @@ function safe_update_prepare(role, cfg_path)
     if staged then
       return {
         manifest_content = manifest_content,
-        manifest = manifest,
+        manifest = filtered_manifest,
         release = release,
         hash_algo = hash_algo,
         updates = updates,
@@ -3688,7 +3855,8 @@ function full_reinstall_prepare()
     end
     ROLE = selected_role
     ensure_base_dirs(selected_role)
-    local entries = build_manifest_entries(manifest, selected_role)
+    local filtered_manifest = filter_manifest_by_role(manifest, selected_role)
+    local entries = build_manifest_entries(filtered_manifest, selected_role)
     local required_total = calculate_required_bytes(entries)
     print_space_preflight(required_total, "FULL REINSTALL")
     local free_space = get_free_space(C.BASE_DIR)
@@ -3706,7 +3874,7 @@ function full_reinstall_prepare()
       log("WARN", "FULL REINSTALL staging disabled due to space")
       return {
         manifest_content = manifest_content,
-        manifest = manifest,
+        manifest = filtered_manifest,
         release = release,
         hash_algo = hash_algo,
         entries = entries,
@@ -3721,7 +3889,7 @@ function full_reinstall_prepare()
     if staged then
       return {
         manifest_content = manifest_content,
-        manifest = manifest,
+        manifest = filtered_manifest,
         release = release,
         hash_algo = hash_algo,
         entries = entries,
