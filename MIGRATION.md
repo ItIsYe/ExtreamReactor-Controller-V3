@@ -23,6 +23,6 @@ Dieser Guide beschreibt die Migration von der Beta-Branch auf die finalisierte A
 - Bestehende Registry-Dateien werden beim nächsten Discovery-Lauf neu aufgebaut.
 
 ## Nach der Migration prüfen
-- Logs: `/xreactor/logs/<role>_<node_id>.log`.
+- Logs: `/xreactor_logs/<role>_<node_id>.log`.
 - Master UI: Node-Status + Degraded-Reasons.
 - SAFE UPDATE: `/xreactor/.manifest` und `/xreactor/.cache/manifest.lua` aktualisiert.

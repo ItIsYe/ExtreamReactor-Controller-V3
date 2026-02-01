@@ -15,6 +15,7 @@ local CONFIG = {
   DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
   DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
+  DOWNLOAD_STREAM_CHUNK_SIZE = 4096, -- Stream chunk size for core downloads.
   MIN_CORE_BYTES = 200, -- Minimum bytes to accept core download.
   CORE_SANITY_MARKER = "local function main", -- Core sanity marker.
   CORE_DOWNLOAD_PATH = "/xreactor/.tmp/installer_core.lua.download", -- Temp download path for core (updated at runtime).
@@ -23,9 +24,9 @@ local CONFIG = {
   CORE_RETRY_BACKOFF = 1, -- Backoff seconds between core download retries.
   LOG_ENABLED = true, -- Always enable bootstrap logging.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
-  LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
-  LOCAL_LOG_DIR = "/xreactor/logs", -- Log directory (updated at runtime).
-  LOG_FALLBACK_PATH = "/xreactor/logs/installer_debug.log", -- Fallback log path when storage root is unavailable.
+  LOG_PATH = "/xreactor_logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
+  LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log", -- Fallback log path when storage root is unavailable.
   DISK_LOG_DIR_NAME = "xreactor_logs", -- Legacy disk log directory name.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
@@ -37,13 +38,11 @@ local CONFIG = {
 }
 
 local log_line
+local cleanup_temp_file
 
 local function detect_storage_mount()
-  local candidates = { "disk", "disk2", "disk3" }
-  for _, mount in ipairs(candidates) do
-    if fs.exists(mount) then
-      return "/" .. mount
-    end
+  if fs.exists("/disk") then
+    return "/disk"
   end
   return nil
 end
@@ -55,9 +54,6 @@ local function configure_storage_root()
     root = mount .. "/xreactor"
   end
   local log_dir = root .. "_logs"
-  if root == "/xreactor" then
-    log_dir = "/xreactor/logs"
-  end
   local stage_dir = root .. "_stage"
   local backup_dir = root .. "_backup"
   CONFIG.STORAGE_ROOT = root
@@ -112,6 +108,64 @@ local function ensure_free_space(path, needed, context)
   return true
 end
 
+local function remove_dir_contents(path)
+  if not path or path == "" or not fs.exists(path) or not fs.isDir(path) then
+    return
+  end
+  for _, entry in ipairs(fs.list(path)) do
+    pcall(fs.delete, fs.combine(path, entry))
+  end
+end
+
+local function cleanup_storage_for_space()
+  local removed = {}
+  local function delete_log_files(path)
+    if not path or path == "" or not fs.exists(path) or not fs.isDir(path) then
+      return
+    end
+    for _, entry in ipairs(fs.list(path)) do
+      if entry:match("%.log$") then
+        local target = fs.combine(path, entry)
+        if pcall(fs.delete, target) then
+          table.insert(removed, target)
+        end
+      end
+    end
+  end
+  delete_log_files(CONFIG.LOG_DIR)
+  if CONFIG.LOG_DIR ~= "/xreactor_logs" then
+    delete_log_files("/xreactor_logs")
+  end
+  remove_dir_contents(CONFIG.BACKUP_DIR)
+  remove_dir_contents(CONFIG.STAGE_DIR)
+  if CONFIG.BACKUP_DIR ~= "/xreactor_backup" then
+    remove_dir_contents("/xreactor_backup")
+  end
+  if CONFIG.STAGE_DIR ~= "/xreactor_stage" then
+    remove_dir_contents("/xreactor_stage")
+  end
+  if #removed > 0 then
+    log_line("INFO", "fs", "Cleanup removed: " .. table.concat(removed, ", "))
+  end
+end
+
+local function ensure_core_space(expected_bytes)
+  if not expected_bytes then
+    return true
+  end
+  local needed = expected_bytes + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  local ok, err = ensure_free_space(CONFIG.CORE_DOWNLOAD_PATH, needed, "Core download")
+  if ok then
+    return true
+  end
+  cleanup_storage_for_space()
+  ok, err = ensure_free_space(CONFIG.CORE_DOWNLOAD_PATH, needed, "Core download (after cleanup)")
+  if ok then
+    return true
+  end
+  return false, err
+end
+
 local function now_stamp()
   return textutils.formatTime(os.epoch("utc") / 1000, true)
 end
@@ -164,9 +218,9 @@ local log_state = {
 }
 
 local function ensure_log_dirs()
-  pcall(fs.makeDir, "/xreactor/logs")
+  pcall(fs.makeDir, "/xreactor_logs")
   pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
-  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor/logs")
+  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor_logs")
   pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
   pcall(fs.makeDir, CONFIG.BACKUP_DIR or "/xreactor_backup")
 end
@@ -465,6 +519,116 @@ local function fetch_url(url)
   return true, body, nil, meta
 end
 
+local function read_stream_chunk(handle, size)
+  if handle.read then
+    return handle.read(size)
+  end
+  if handle.readLine then
+    local line = handle.readLine()
+    if line then
+      return line .. "\n"
+    end
+  end
+  return nil
+end
+
+local function fetch_url_stream(url, target_path)
+  if not http or not http.get then
+    log_line("ERROR", "http", "HTTP API unavailable")
+    return false, "HTTP API unavailable", { url = url }
+  end
+  local response
+  local err
+  if http.request and CONFIG.DOWNLOAD_TIMEOUT then
+    log_line("INFO", "http", "http.request -> " .. tostring(url))
+    local ok, req_err = pcall(http.request, url, nil, nil, false)
+    if not ok then
+      log_line("ERROR", "http", "http.request failed: " .. tostring(req_err))
+      return false, "http.request failed (" .. tostring(req_err) .. ")", { url = url }
+    end
+    local timer = os.startTimer(CONFIG.DOWNLOAD_TIMEOUT)
+    while true do
+      local event, p1, p2 = os.pullEvent()
+      if event == "http_success" and p1 == url then
+        response = p2
+        break
+      elseif event == "http_failure" and p1 == url then
+        log_line("WARN", "http", "http_failure: " .. tostring(p2))
+        return false, "http failure (" .. tostring(p2) .. ")", { url = url }
+      elseif event == "timer" and p1 == timer then
+        log_line("WARN", "http", "http timeout")
+        return false, "timeout", { url = url }
+      end
+    end
+  else
+    local ok, result = pcall(function() return http.get(url) end)
+    log_line("INFO", "http", string.format("http.get -> %s (ok=%s, response=%s)", tostring(url), tostring(ok), tostring(result ~= nil)))
+    if ok then
+      response = result
+    else
+      err = result
+    end
+    if not response then
+      log_line("WARN", "http", "http.get returned nil: " .. tostring(err))
+      return false, "http.get returned nil" .. (err and (" (" .. tostring(err) .. ")") or ""), { url = url }
+    end
+  end
+
+  local code = response.getResponseCode and response.getResponseCode() or nil
+  local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
+  local file = fs.open(target_path, "w")
+  if not file then
+    response.close()
+    return false, "file open failed", { url = url, code = code, headers = headers }
+  end
+  local bytes = 0
+  local signature = ""
+  local chunk_size = CONFIG.DOWNLOAD_STREAM_CHUNK_SIZE or 4096
+  local ok, read_err = pcall(function()
+    while true do
+      local chunk = read_stream_chunk(response, chunk_size)
+      if not chunk then
+        break
+      end
+      bytes = bytes + #chunk
+      if #signature < (CONFIG.LOG_SAMPLE_BYTES or 0) then
+        local needed = (CONFIG.LOG_SAMPLE_BYTES or 0) - #signature
+        signature = signature .. chunk:sub(1, needed)
+      end
+      file.write(chunk)
+    end
+  end)
+  file.close()
+  response.close()
+  if not ok then
+    return false, read_err, { url = url, code = code, headers = headers, bytes = bytes }
+  end
+  local meta = {
+    url = url,
+    code = code,
+    headers = headers,
+    bytes = bytes,
+    signature = sanitize_signature(signature)
+  }
+  local header_dump = headers and textutils.serialize(headers) or "n/a"
+  log_line("INFO", "http", string.format("HTTP response: url=%s code=%s bytes=%s sig=%s",
+    tostring(url),
+    tostring(code or "n/a"),
+    tostring(bytes),
+    tostring(sanitize_signature(signature))
+  ))
+  log_line("INFO", "http", "HTTP headers: " .. tostring(header_dump))
+  log_line("INFO", "http", "HTTP body sample: " .. tostring(sanitize_signature(signature)))
+  if bytes == 0 then
+    return false, "empty body", meta
+  end
+  local ok_resp, reason = validate_response(code, headers, signature, bytes)
+  if not ok_resp then
+    return false, reason, meta
+  end
+  return true, nil, meta
+end
+
 local function join_url(base, path)
   local cleaned_path = path:gsub("^/", "")
   if base:sub(-1) ~= "/" then
@@ -527,6 +691,45 @@ local function fetch_with_retries(urls, attempts, module_name)
   return false, nil, last_meta
 end
 
+local function download_with_retries_to_path(urls, attempts, module_name, target_path)
+  local last_meta
+  local module_tag = module_name or "installer"
+  if not fetch_url_seeded then
+    math.randomseed(os.time())
+    fetch_url_seeded = true
+  end
+  local max_attempts = attempts or CONFIG.DOWNLOAD_ATTEMPTS
+  for attempt = 1, max_attempts do
+    for _, url in ipairs(urls or {}) do
+      cleanup_temp_file(target_path)
+      local ok, err, meta = fetch_url_stream(url, target_path)
+      last_meta = meta or { url = url, err = err }
+      if ok then
+        log_line("INFO", module_tag, string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
+          tostring(url),
+          tostring(meta and meta.code or "n/a"),
+          tostring(meta and meta.bytes or 0),
+          tostring(meta and meta.signature or ""),
+          attempt
+        ))
+        return true, meta
+      end
+      log_line("WARN", module_tag, string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
+        tostring(url),
+        tostring(err),
+        tostring(meta and meta.code or "n/a"),
+        tostring(meta and meta.signature or ""),
+        attempt
+      ))
+    end
+    if attempt < max_attempts then
+      local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
+      os.sleep((CONFIG.DOWNLOAD_BACKOFF * attempt) + jitter)
+    end
+  end
+  return false, last_meta
+end
+
 local function downloadFile(path, ref, opts)
   local urls = (opts and opts.urls) or build_raw_urls(path, ref)
   local attempts = opts and opts.attempts or nil
@@ -578,6 +781,66 @@ end
 
 local function hash_core_content(content)
   return crc32_hash(normalize_newlines(content))
+end
+
+local function crc32_update(crc, byte)
+  local idx = bit32.band(bit32.bxor(crc, byte), 0xFF)
+  return bit32.bxor(bit32.rshift(crc, 8), crc32_table[idx])
+end
+
+local function hash_core_file(path)
+  if not crc32_table then
+    crc32_table = build_crc32_table()
+  end
+  local file = fs.open(path, "r")
+  if not file then
+    return nil
+  end
+  local crc = 0xFFFFFFFF
+  local prev_cr = false
+  local bom_buffer = ""
+  local chunk_size = 4096
+  while true do
+    local chunk = file.read(chunk_size)
+    if not chunk then
+      break
+    end
+    if #bom_buffer < 3 then
+      local needed = 3 - #bom_buffer
+      bom_buffer = bom_buffer .. chunk:sub(1, needed)
+      chunk = chunk:sub(needed + 1)
+      if #bom_buffer == 3 and bom_buffer == "\239\187\191" then
+        bom_buffer = ""
+      end
+    end
+    if #bom_buffer > 0 then
+      chunk = bom_buffer .. chunk
+      bom_buffer = ""
+    end
+    for i = 1, #chunk do
+      local byte = string.byte(chunk, i)
+      if prev_cr then
+        if byte == 10 then
+          crc = crc32_update(crc, 10)
+          prev_cr = false
+          goto continue
+        end
+        crc = crc32_update(crc, 10)
+        prev_cr = false
+      end
+      if byte == 13 then
+        prev_cr = true
+      else
+        crc = crc32_update(crc, byte)
+      end
+      ::continue::
+    end
+  end
+  if prev_cr then
+    crc = crc32_update(crc, 10)
+  end
+  file.close()
+  return string.format("%08x", bit32.bnot(crc))
 end
 
 local function append_cache_bust(url, seed)
@@ -716,23 +979,71 @@ local function load_release()
   return data, meta
 end
 
-local function parse_core_version(content)
-  local marker = content:match("INSTALLER_CORE_VERSION%s*=%s*\"([^\"]+)\"")
-  return marker
+local function read_file_prefix(path, max_bytes)
+  if not fs.exists(path) then
+    return nil
+  end
+  local file = fs.open(path, "r")
+  if not file then
+    return nil
+  end
+  local content = file.read(max_bytes)
+  file.close()
+  return content
 end
 
-local function validate_core(content)
-  if not content or #content < CONFIG.MIN_CORE_BYTES then
+local function file_contains_marker(path, marker)
+  if not marker or marker == "" then
+    return true
+  end
+  local file = fs.open(path, "r")
+  if not file then
+    return false
+  end
+  local chunk_size = 4096
+  local buffer = ""
+  while true do
+    local chunk = file.read(chunk_size)
+    if not chunk then
+      break
+    end
+    buffer = buffer .. chunk
+    if buffer:find(marker, 1, true) then
+      file.close()
+      return true
+    end
+    if #buffer > #marker then
+      buffer = buffer:sub(-#marker)
+    end
+  end
+  file.close()
+  return false
+end
+
+local function parse_core_version_from_file(path)
+  local prefix = read_file_prefix(path, 4096)
+  if not prefix then
+    return nil
+  end
+  return prefix:match("INSTALLER_CORE_VERSION%s*=%s*\"([^\"]+)\"")
+end
+
+local function validate_core_file(path)
+  if not path or not fs.exists(path) then
+    return false, "core missing"
+  end
+  local size = fs.getSize(path)
+  if not size or size < CONFIG.MIN_CORE_BYTES then
     return false, "core too small"
   end
-  local prefix = content:sub(1, 512)
+  local prefix = read_file_prefix(path, 512) or ""
   if detect_html(prefix) then
     return false, "html response"
   end
-  if not content:find(CONFIG.CORE_SANITY_MARKER, 1, true) then
+  if not file_contains_marker(path, CONFIG.CORE_SANITY_MARKER) then
     return false, "core sanity marker missing"
   end
-  local loader, load_err = load(content, "@installer_core", "t")
+  local loader, load_err = loadfile(path)
   if not loader then
     return false, "core load failed", load_err
   end
@@ -743,39 +1054,30 @@ local function load_local_core()
   if not fs.exists(CONFIG.CORE_PATH) then
     return nil, "core missing"
   end
-  local content = read_file(CONFIG.CORE_PATH)
-  if not content then
-    return nil, "core unreadable"
-  end
-  local valid, reason, detail = validate_core(content)
+  local valid, reason, detail = validate_core_file(CONFIG.CORE_PATH)
   if not valid then
     return nil, reason or detail
   end
-  local loader, load_err = load(content, "@installer_core", "t")
+  local loader, load_err = loadfile(CONFIG.CORE_PATH)
   if not loader then
     return nil, load_err
   end
   return loader
 end
 
-local function cleanup_temp_file(path)
+cleanup_temp_file = function(path)
   if path and fs.exists(path) then
     fs.delete(path)
   end
 end
 
-local function save_bad_core(content)
-  if not content or content == "" then
+local function save_bad_core_file(path)
+  if not path or not fs.exists(path) then
     return
   end
   ensure_dir(fs.getDir(CONFIG.CORE_BAD_PATH))
   pcall(function()
-    local file = fs.open(CONFIG.CORE_BAD_PATH, "w")
-    if not file then
-      return
-    end
-    file.write(content)
-    file.close()
+    fs.copy(path, CONFIG.CORE_BAD_PATH)
   end)
 end
 
@@ -841,12 +1143,11 @@ local function needs_core_update(release)
   if not release then
     return false
   end
-  local local_content = read_file(CONFIG.CORE_PATH)
-  if not local_content then
+  local local_hash = hash_core_file(CONFIG.CORE_PATH)
+  if not local_hash then
     return true
   end
-  local local_hash = hash_core_content(local_content)
-  local local_version = parse_core_version(local_content)
+  local local_version = parse_core_version_from_file(CONFIG.CORE_PATH)
   local meta = read_core_meta() or {}
   if release.installer_core_hash and release.installer_core_hash ~= local_hash then
     return true
@@ -871,51 +1172,23 @@ local function download_core(release, opts)
     end
     urls = busted
   end
-  local ok, content, meta = downloadFile("xreactor/installer/installer_core.lua", commit_sha, {
-    urls = urls,
-    attempts = 1,
-    module_name = "installer_core"
-  })
+  local expected_size = release and release.installer_core_size_bytes or nil
+  local space_ok, space_err = ensure_core_space(expected_size)
+  if not space_ok then
+    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
+    return false, nil, { err = space_err or "out of space" }
+  end
+  local ok, meta = download_with_retries_to_path(urls, 1, "installer_core", CONFIG.CORE_DOWNLOAD_PATH)
   if not ok then
     if meta then
       meta.cache_bust = cache_bust
     end
+    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
     return false, nil, meta
   end
-  local expected_size = release and release.installer_core_size_bytes or nil
-  if expected_size then
-    local space_ok, space_err = ensure_free_space(CONFIG.CORE_DOWNLOAD_PATH, expected_size + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0), "Core download")
-    if not space_ok then
-      cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
-      return false, nil, { err = space_err or "out of space", url = meta and meta.url }
-    end
-  end
-  if not content or #content < CONFIG.MIN_CORE_BYTES then
-    save_bad_core(content)
-    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
-    return false, nil, {
-      err = "core too small",
-      url = meta and meta.url,
-      code = meta and meta.code,
-      bytes = meta and meta.bytes,
-      signature = meta and meta.signature
-    }
-  end
-  local prefix = content:sub(1, 512)
-  if detect_html(prefix) then
-    save_bad_core(content)
-    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
-    return false, nil, {
-      err = "html response",
-      url = meta and meta.url,
-      code = meta and meta.code,
-      bytes = meta and meta.bytes,
-      signature = meta and meta.signature
-    }
-  end
-  local valid, reason, detail = validate_core(content)
+  local valid, reason, detail = validate_core_file(CONFIG.CORE_DOWNLOAD_PATH)
   if not valid then
-    save_bad_core(content)
+    save_bad_core_file(CONFIG.CORE_DOWNLOAD_PATH)
     cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
     return false, nil, {
       err = reason,
@@ -927,8 +1200,8 @@ local function download_core(release, opts)
     }
   end
   if release and release.installer_core_hash then
-    local hash = hash_core_content(content)
-    if hash ~= release.installer_core_hash then
+    local hash = hash_core_file(CONFIG.CORE_DOWNLOAD_PATH)
+    if not hash or hash ~= release.installer_core_hash then
       cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
       return false, nil, {
         err = "checksum mismatch",
@@ -942,35 +1215,17 @@ local function download_core(release, opts)
       }
     end
   end
-  local write_ok, write_err = write_file(CONFIG.CORE_DOWNLOAD_PATH, content)
-  if not write_ok then
-    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
-    return false, nil, { err = "temp write failed", detail = write_err, url = meta and meta.url }
-  end
-  local loader, load_err = loadfile(CONFIG.CORE_DOWNLOAD_PATH)
-  if not loader then
-    save_bad_core(content)
-    cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
-    return false, nil, {
-      err = "core loadfile failed",
-      detail = load_err,
-      url = meta and meta.url,
-      code = meta and meta.code,
-      bytes = meta and meta.bytes,
-      signature = meta and meta.signature
-    }
-  end
   local moved, move_err = move_atomic_with_backup(CONFIG.CORE_DOWNLOAD_PATH, CONFIG.CORE_PATH)
   if not moved then
     cleanup_temp_file(CONFIG.CORE_DOWNLOAD_PATH)
     return false, nil, { err = move_err or "move failed", url = meta and meta.url }
   end
   save_core_meta({
-    hash = hash_core_content(content),
-    version = parse_core_version(content) or "unknown",
+    hash = hash_core_file(CONFIG.CORE_PATH),
+    version = parse_core_version_from_file(CONFIG.CORE_PATH) or "unknown",
     saved_at = os.time()
   })
-  return true, content, meta
+  return true, nil, meta
 end
 
 if not http then

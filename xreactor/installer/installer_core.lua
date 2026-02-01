@@ -14,7 +14,7 @@ local CONFIG = {
   MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path (updated at runtime).
   LOCAL_BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   LOCAL_STAGING_BASE = "/xreactor_stage", -- Staging base directory (updated at runtime).
-  LOCAL_LOG_DIR = "/xreactor/logs", -- Log directory (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
   BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path (updated at runtime).
   ROLE_PATH = "/xreactor/config/role.lua", -- Role storage path (updated at runtime).
@@ -51,10 +51,10 @@ local CONFIG = {
   MAX_LOG_FILES = 5, -- Retention: max number of log files to keep.
   MAX_LOGS_MB = 6, -- Retention: max combined log size (MB) under log dirs.
   MAX_STAGING_DIRS = 2, -- Retention: number of staging dirs to keep in /xreactor_stage.
-  LOG_RETENTION_DIRS = { "/xreactor/logs" }, -- Log dirs eligible for cleanup (updated at runtime).
+  LOG_RETENTION_DIRS = { "/xreactor_logs" }, -- Log dirs eligible for cleanup (updated at runtime).
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = true, -- Always enable installer file logging.
-  LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path (updated at runtime).
+  LOG_PATH = "/xreactor_logs/installer_core.log", -- Installer log file path (updated at runtime).
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER_CORE", -- Installer log prefix.
@@ -198,11 +198,8 @@ local storage_state = {
 }
 
 function detect_storage_mount()
-  local candidates = { "disk", "disk2", "disk3" }
-  for _, mount in ipairs(candidates) do
-    if fs.exists(mount) then
-      return "/" .. mount
-    end
+  if fs.exists("/disk") then
+    return "/disk"
   end
   return nil
 end
@@ -210,9 +207,6 @@ end
 function build_storage_paths(root)
   local base = root or "/xreactor"
   local log_dir = base .. "_logs"
-  if base == "/xreactor" then
-    log_dir = "/xreactor/logs"
-  end
   return {
     base_dir = base,
     log_dir = log_dir,
@@ -261,7 +255,7 @@ function configure_storage_paths()
 
   C.LOG_PATH = storage_state.log_primary
   CONFIG.LOG_PATH = C.LOG_PATH
-  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir, "/xreactor/logs" }
+  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir, "/xreactor_logs" }
 end
 
 -- Internal standalone logger for the installer (no project dependencies).
@@ -625,7 +619,7 @@ function build_cleanup_suggestions()
   local suggestions = {
     ("delete %s/*"):format(C.BACKUP_BASE),
     ("delete %s/*"):format(C.UPDATE_STAGING_BASE),
-    "delete /xreactor/logs/*.log"
+    "delete /xreactor_logs/*.log"
   }
   if storage_state.mount_path then
     table.insert(suggestions, "delete " .. storage_state.mount_path .. "/xreactor_logs/*.log")
@@ -2648,7 +2642,7 @@ function acquire_manifest()
 end
 
 function ensure_required_dirs()
-  ensure_dir("/xreactor/logs")
+  ensure_dir("/xreactor_logs")
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.LOCAL_LOG_DIR)
   ensure_dir(C.LOCAL_STAGING_BASE)
