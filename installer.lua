@@ -487,13 +487,6 @@ local function build_raw_urls(path, commit_sha)
   return urls
 end
 
-local function downloadFile(path, ref, opts)
-  local urls = (opts and opts.urls) or build_raw_urls(path, ref)
-  local attempts = opts and opts.attempts or nil
-  local module_name = opts and opts.module_name or nil
-  return fetch_with_retries(urls, attempts, module_name)
-end
-
 local fetch_url_seeded = false
 
 local function fetch_with_retries(urls, attempts, module_name)
@@ -532,6 +525,13 @@ local function fetch_with_retries(urls, attempts, module_name)
     end
   end
   return false, nil, last_meta
+end
+
+local function downloadFile(path, ref, opts)
+  local urls = (opts and opts.urls) or build_raw_urls(path, ref)
+  local attempts = opts and opts.attempts or nil
+  local module_name = opts and opts.module_name or nil
+  return fetch_with_retries(urls, attempts, module_name)
 end
 
 local function build_crc32_table()
