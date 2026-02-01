@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "2.1"
+local INSTALLER_CORE_VERSION = "2.5"
 
 -- CONFIG
 local CONFIG = {
@@ -30,7 +30,7 @@ local CONFIG = {
   DOWNLOAD_BACKOFF = 1, -- Backoff base (seconds) between retries.
   DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to download backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (used when http.request is available).
-  DOWNLOAD_CHUNK_SIZE = 4096, -- Stream chunk size for downloads.
+  DOWNLOAD_CHUNK_SIZE = 8192, -- Stream chunk size for downloads.
   DOWNLOAD_MIRRORS = { -- Download mirrors (raw content only).
     "https://raw.githubusercontent.com"
   },
@@ -64,6 +64,7 @@ local CONFIG = {
   LOG_SAMPLE_BYTES = 96, -- Bytes to capture as response signature.
   CHECKSUM_DIAG_SAMPLE_BYTES = 80, -- Bytes to show when checksum mismatch occurs.
   UPDATE_MARKER_PATH = "/xreactor/.update_in_progress", -- Update marker path (updated at runtime).
+  DISK_LABEL = "XREACTOR_DATA", -- Disk label to set when using a mounted disk.
   REQUIRED_CORE_FILES = { -- Core files that must exist in the manifest.
     "xreactor/core/bootstrap.lua",
     "xreactor/core/logger.lua",
@@ -198,17 +199,43 @@ local storage_state = {
 }
 
 function detect_storage_mount()
-  if fs.exists("/disk") then
-    return "/disk"
+  if not peripheral or not peripheral.find then
+    return nil, nil, "Peripheral API unavailable"
   end
-  return nil
+  if not disk then
+    return nil, nil, "Disk API unavailable"
+  end
+  local drive = peripheral.find("drive")
+  if not drive then
+    return nil, nil, "No drive found"
+  end
+  local drive_name = peripheral.getName and peripheral.getName(drive) or drive
+  local present = true
+  if disk.isPresent then
+    local ok, inserted = pcall(disk.isPresent, drive_name)
+    present = ok and inserted or false
+  end
+  if not present then
+    return nil, drive_name, "Disk not inserted"
+  end
+  local ok, mount_path = pcall(disk.getMountPath, drive_name)
+  if ok and mount_path and mount_path ~= "" then
+    if fs.exists("/disk") then
+      return "/disk", drive_name
+    end
+    return mount_path, drive_name
+  end
+  if fs.exists("/disk") then
+    return "/disk", drive_name
+  end
+  return nil, drive_name, "Disk mount missing"
 end
 
-function build_storage_paths(root)
+function build_storage_paths(root, mount_path)
   local base = root or "/xreactor"
   local log_dir = "/xreactor/logs"
-  if base:match("^/disk/") then
-    log_dir = "/disk/xreactor_logs"
+  if mount_path then
+    log_dir = mount_path .. "/xreactor_logs"
   end
   return {
     base_dir = base,
@@ -226,14 +253,21 @@ function build_storage_paths(root)
 end
 
 function configure_storage_paths()
-  local mount = detect_storage_mount()
+  local mount_path, drive, mount_err = detect_storage_mount()
   local root = "/xreactor"
-  if mount then
-    root = mount .. "/xreactor"
+  if mount_path then
+    root = mount_path .. "/xreactor"
+  else
+    print("WARNING: No disk mount found. Storage is limited.")
+    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
+    if mount_err then
+      print("Disk status: " .. tostring(mount_err))
+    end
   end
-  local paths = build_storage_paths(root)
-  storage_state.use_disk = mount ~= nil
-  storage_state.mount_path = mount
+  local paths = build_storage_paths(root, mount_path)
+  storage_state.use_disk = mount_path ~= nil
+  storage_state.mount_path = mount_path
+  storage_state.mount_name = drive
   storage_state.storage_root = root
   storage_state.log_dir = paths.log_dir
   storage_state.stage_dir = paths.stage_dir
@@ -429,6 +463,28 @@ end
 configure_storage_paths()
 init_internal_logger()
 
+local function try_label_disk()
+  if not storage_state.mount_path or not storage_state.mount_name then
+    return
+  end
+  if not disk or not disk.getLabel or not disk.setLabel then
+    return
+  end
+  local ok, current = pcall(disk.getLabel, storage_state.mount_name)
+  local current_label = ok and current or nil
+  if current_label and current_label ~= "" then
+    return
+  end
+  local ok_set, err = pcall(disk.setLabel, storage_state.mount_name, CONFIG.DISK_LABEL)
+  if ok_set then
+    log("INFO", "Disk label set to " .. CONFIG.DISK_LABEL)
+  else
+    log("WARN", "Failed to set disk label: " .. tostring(err))
+  end
+end
+
+try_label_disk()
+
 function resolve_install_path(path)
   if not path or path == "" then
     return path
@@ -502,6 +558,73 @@ local role_storage_values = {
 }
 
 local role_filter_cache = {}
+local role_files_cache = nil
+local role_files_default = {
+  MASTER = {
+    "xreactor/master/config.lua",
+    "xreactor/master/startup_sequencer.lua",
+    "xreactor/master/profiles.lua",
+    "xreactor/master/main.lua",
+    "xreactor/master/ui/alarms.lua",
+    "xreactor/master/ui/resources.lua",
+    "xreactor/master/ui/rt_dashboard.lua",
+    "xreactor/master/ui/overview.lua",
+    "xreactor/master/ui/alerts.lua",
+    "xreactor/master/ui/energy.lua",
+    "xreactor/master/ui/multiview.lua",
+    "xreactor/master/ui/widgets.lua"
+  },
+  RT = {
+    "xreactor/nodes/rt/config.lua",
+    "xreactor/nodes/rt/main.lua"
+  },
+  ENERGY = {
+    "xreactor/nodes/energy/config.lua",
+    "xreactor/nodes/energy/main.lua"
+  },
+  WATER = {
+    "xreactor/nodes/water/config.lua",
+    "xreactor/nodes/water/main.lua"
+  },
+  FUEL = {
+    "xreactor/nodes/fuel/config.lua",
+    "xreactor/nodes/fuel/main.lua"
+  },
+  REPROCESSOR = {
+    "xreactor/nodes/reprocessor/config.lua",
+    "xreactor/nodes/reprocessor/main.lua"
+  }
+}
+
+local function load_role_files_map()
+  if role_files_cache ~= nil then
+    return role_files_cache
+  end
+  local path = resolve_install_path("xreactor/installer/role_files.lua")
+  if not path or not fs.exists(path) then
+    role_files_cache = role_files_default
+    return role_files_cache
+  end
+  local file = fs.open(path, "r")
+  if not file then
+    role_files_cache = role_files_default
+    return role_files_cache
+  end
+  local content = file.readAll()
+  file.close()
+  local loader = load(content or "", "role_files", "t", {})
+  if not loader then
+    role_files_cache = role_files_default
+    return role_files_cache
+  end
+  local ok, data = pcall(loader)
+  if not ok or type(data) ~= "table" then
+    role_files_cache = role_files_default
+    return role_files_cache
+  end
+  role_files_cache = data
+  return role_files_cache
+end
 local base_role_prefixes = {
   "xreactor/core/",
   "xreactor/shared/",
@@ -615,6 +738,9 @@ local function build_role_filter(role)
   add_exact(base_role_files)
   add_exact(role_service_files[role])
   add_exact(role_adapter_files[role])
+  local role_map = load_role_files_map()
+  local extras = role_map and role_map[role_storage_values[role]] or nil
+  add_exact(extras)
   role_filter_cache[role] = { prefixes = prefixes, exact = exact }
   return role_filter_cache[role]
 end
@@ -1782,7 +1908,7 @@ end
 function stream_response_to_file(response, target_path, opts)
   ensure_dir(fs.getDir(target_path))
   local tmp = target_path .. ".part"
-  local file = fs.open(tmp, "w")
+  local file = fs.open(tmp, "wb")
   if not file then
     return false, "open failed"
   end
@@ -1790,34 +1916,26 @@ function stream_response_to_file(response, target_path, opts)
   local prefix_limit = (opts and opts.prefix_bytes) or 512
   local prefix = ""
   local total = 0
-  local read_fn = response.read
   local ok, err = pcall(function()
-    if read_fn then
-      while true do
-        local chunk = response.read(chunk_size)
-        if not chunk then
-          break
+    while true do
+      local chunk = nil
+      if response.read then
+        chunk = response.read(chunk_size)
+      elseif response.readLine then
+        local line = response.readLine()
+        if line then
+          chunk = line .. "\n"
         end
-        if #prefix < prefix_limit then
-          local needed = prefix_limit - #prefix
-          prefix = prefix .. chunk:sub(1, needed)
-        end
-        file.write(chunk)
-        total = total + #chunk
       end
-    else
-      local body = response.readAll()
-      if body then
-        if #prefix < prefix_limit then
-          prefix = body:sub(1, prefix_limit)
-        end
-        local index = 1
-        while index <= #body do
-          file.write(body:sub(index, index + chunk_size - 1))
-          index = index + chunk_size
-        end
-        total = #body
+      if not chunk then
+        break
       end
+      if #prefix < prefix_limit then
+        local needed = prefix_limit - #prefix
+        prefix = prefix .. chunk:sub(1, needed)
+      end
+      file.write(chunk)
+      total = total + #chunk
     end
   end)
   file.close()
@@ -1839,6 +1957,28 @@ function finalize_temp_file(temp_path, target_path)
     fs.delete(target_path)
   end
   fs.move(temp_path, target_path)
+end
+
+function read_response_body(response, chunk_size)
+  local chunks = {}
+  local total = 0
+  while true do
+    local chunk = nil
+    if response.read then
+      chunk = response.read(chunk_size)
+    elseif response.readLine then
+      local line = response.readLine()
+      if line then
+        chunk = line .. "\n"
+      end
+    end
+    if not chunk then
+      break
+    end
+    total = total + #chunk
+    table.insert(chunks, chunk)
+  end
+  return table.concat(chunks), total
 end
 
 -- Single download function used by all network requests.
@@ -1886,7 +2026,7 @@ function fetch_url(url, opts)
   end
   local code = response.getResponseCode and response.getResponseCode() or nil
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
-  local body = response.readAll()
+  local body, body_len = read_response_body(response, (opts and opts.chunk_size) or C.DOWNLOAD_CHUNK_SIZE or 8192)
   response.close()
   local prefix = body and body:sub(1, 1024) or ""
   local meta = {
@@ -1894,7 +2034,7 @@ function fetch_url(url, opts)
     code = code,
     status = code,
     headers = headers,
-    bytes = body and #body or 0,
+    bytes = body_len or 0,
     signature = sanitize_signature(prefix)
   }
   if not body or body == "" then
@@ -1905,7 +2045,7 @@ function fetch_url(url, opts)
     meta.reason = "html response"
     return false, nil, meta.reason, meta
   end
-  local ok, reason, size_mismatch = validate_response(code, headers, prefix, body and #body or 0)
+  local ok, reason, size_mismatch = validate_response(code, headers, prefix, body_len or 0)
   if not ok then
     meta.reason = reason
     return false, nil, reason, meta
@@ -2464,10 +2604,14 @@ function print_download_failure(label, info, fallback_urls)
 end
 
 function download_release()
-  local ok, content, meta = downloadFile(C.RELEASE_REMOTE, build_main_base_url())
+  local temp_path = C.BASE_DIR .. "/.tmp/release.lua.download"
+  ensure_dir(fs.getDir(temp_path))
+  local urls = build_mirror_urls(build_main_base_url(), C.RELEASE_REMOTE)
+  local ok, meta = download_file_to_path(urls, temp_path, nil, "crc32", { attempts = C.DOWNLOAD_ATTEMPTS })
   if not ok then
     return nil, "Release download failed", meta
   end
+  local content = read_file(temp_path)
   local ok_sanity, reason = sanity_check(content, C.RELEASE_MIN_BYTES, C.RELEASE_SANITY_MARKER)
   if not ok_sanity then
     local entry = meta and meta.last or { url = url, ok = false, err = reason, bytes = content and #content or 0 }
@@ -2659,10 +2803,13 @@ function download_manifest_from_source(release, base_info)
   if base_info.source == CONFIG.DEFAULT_BRANCH and CONFIG.MANIFEST_URL_FALLBACK then
     table.insert(urls, CONFIG.MANIFEST_URL_FALLBACK)
   end
-  local ok, content, meta = downloadFile(urls)
+  local temp_path = C.BASE_DIR .. "/.tmp/manifest.lua.download"
+  ensure_dir(fs.getDir(temp_path))
+  local ok, meta = download_file_to_path(urls, temp_path, nil, "crc32", { attempts = C.DOWNLOAD_ATTEMPTS })
   if not ok then
     return nil, "Manifest download failed", meta
   end
+  local content = read_file(temp_path)
   local ok_sanity, reason = sanity_check(content, C.MANIFEST_MIN_BYTES, C.MANIFEST_SANITY_MARKER)
   if not ok_sanity then
     local entry = meta and meta.last or { url = urls[1], ok = false, err = reason, bytes = content and #content or 0 }
@@ -2782,6 +2929,9 @@ function ensure_required_dirs()
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.LOCAL_LOG_DIR)
   ensure_dir("/xreactor/logs")
+  if fs.exists("/disk") then
+    ensure_dir("/disk/xreactor_logs")
+  end
   ensure_dir(C.LOCAL_STAGING_BASE)
   ensure_dir(C.LOCAL_BACKUP_BASE)
   ensure_dir(C.UPDATE_STAGING_BASE)

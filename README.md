@@ -191,14 +191,17 @@ Wireless Modem (Control/Status)
    **HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
    (Beide Einstiegspunkte sind Bootstrapper: `/installer` und `/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
-   - Wenn ein Disk-Drive vorhanden ist (`/disk`), installiert der Installer automatisch nach `/disk/xreactor` und schreibt Logs nach `/disk/xreactor_logs/`.
-   - Ohne Disk-Drive werden `/xreactor` und `/xreactor/logs/` genutzt.
+   - Wenn ein Disk-Drive gemountet ist (`/disk`), installiert der Installer **zuerst auf Disk** nach `/disk/xreactor` und schreibt Logs nach `/disk/xreactor_logs/`.
+   - **Wichtig:** Ein Disk hilft nur, wenn auf dem Computer ein lokaler Mount wie `/disk` vorhanden ist. Ohne lokalen Mount nutzt der Installer `/xreactor` und `/xreactor/logs/` und warnt über begrenzten Speicher.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
 
 ## Disk Installation Mode
-Installer automatically installs to disk drive if available.
+Installer automatically installs to a locally mounted disk (`/disk`) if available.
 Recommended for Advanced Computers with limited internal storage.
+If no disk mount is present, attach a disk drive directly to this computer and insert a disk so `/disk` appears.
+Disk labels are optional; the installer will label the disk `XREACTOR_DATA` when possible.
+Installer downloads only the files needed for the selected role (plus shared/core files).
 
 **Troubleshooting: "Out of space"**
 - Prüfe freien Speicher und lösche alte Backups/Logs/Staging (Config/Node-ID bleiben dabei erhalten):

@@ -15,7 +15,7 @@ local CONFIG = {
   DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
   DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
-  DOWNLOAD_STREAM_CHUNK_SIZE = 4096, -- Stream chunk size for core downloads.
+  DOWNLOAD_STREAM_CHUNK_SIZE = 8192, -- Stream chunk size for core downloads.
   MIN_CORE_BYTES = 200, -- Minimum bytes to accept core download.
   CORE_SANITY_MARKER = "local function main", -- Core sanity marker.
   CORE_DOWNLOAD_PATH = "/xreactor/.tmp/installer_core.lua.download", -- Temp download path for core (updated at runtime).
@@ -34,28 +34,59 @@ local CONFIG = {
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
   LOG_SAMPLE_BYTES = 200, -- Bytes to capture as response signature.
   DISK_SPACE_OVERHEAD_BYTES = 2048, -- Reserved extra bytes for write operations.
-  DISK_SPACE_MIN_BUFFER = 4096 -- Minimum free bytes to keep after writes.
+  DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
+  DISK_LABEL = "XREACTOR_DATA" -- Disk label to set when using a mounted disk.
 }
 
 local log_line
 local cleanup_temp_file
 
 local function detect_storage_mount()
-  if fs.exists("/disk") then
-    return "/disk"
+  if not peripheral or not peripheral.find then
+    return nil, nil, "Peripheral API unavailable"
   end
-  return nil
+  if not disk then
+    return nil, nil, "Disk API unavailable"
+  end
+  local drive = peripheral.find("drive")
+  if not drive then
+    return nil, nil, "No drive found"
+  end
+  local drive_name = peripheral.getName and peripheral.getName(drive) or drive
+  local present = true
+  if disk.isPresent then
+    local ok, inserted = pcall(disk.isPresent, drive_name)
+    present = ok and inserted or false
+  end
+  if not present then
+    return nil, drive_name, "Disk not inserted"
+  end
+  local ok, mount_path = pcall(disk.getMountPath, drive_name)
+  if ok and mount_path and mount_path ~= "" then
+    if fs.exists("/disk") then
+      return "/disk", drive_name
+    end
+    return mount_path, drive_name
+  end
+  if fs.exists("/disk") then
+    return "/disk", drive_name
+  end
+  return nil, drive_name, "Disk mount missing"
 end
 
 local function configure_storage_root()
-  local mount = detect_storage_mount()
+  local mount_path, drive, mount_err = detect_storage_mount()
   local root = "/xreactor"
-  if mount then
-    root = mount .. "/xreactor"
-  end
   local log_dir = "/xreactor/logs"
-  if mount then
-    log_dir = mount .. "/xreactor_logs"
+  if mount_path then
+    root = mount_path .. "/xreactor"
+    log_dir = mount_path .. "/xreactor_logs"
+  else
+    print("WARNING: No disk mount found. Storage is limited.")
+    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
+    if mount_err then
+      print("Disk status: " .. tostring(mount_err))
+    end
   end
   local stage_dir = root .. "_stage"
   local backup_dir = root .. "_backup"
@@ -70,9 +101,57 @@ local function configure_storage_root()
   CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
   CONFIG.LOCAL_LOG_DIR = log_dir
   CONFIG.LOG_FALLBACK_PATH = "/xreactor/logs/installer_debug.log"
+  CONFIG.DISK_MOUNT_PATH = mount_path
+  CONFIG.DISK_DRIVE = drive
 end
 
 configure_storage_root()
+
+local function try_label_disk()
+  if not CONFIG.DISK_MOUNT_PATH or not CONFIG.DISK_DRIVE then
+    return
+  end
+  if not disk or not disk.getLabel or not disk.setLabel then
+    return
+  end
+  local ok, current = pcall(disk.getLabel, CONFIG.DISK_DRIVE)
+  local current_label = ok and current or nil
+  if current_label and current_label ~= "" then
+    return
+  end
+  local ok_set, err = pcall(disk.setLabel, CONFIG.DISK_DRIVE, CONFIG.DISK_LABEL)
+  if ok_set then
+    log_line("INFO", "disk", "Disk label set to " .. CONFIG.DISK_LABEL)
+  else
+    log_line("WARN", "disk", "Failed to set disk label: " .. tostring(err))
+  end
+end
+
+local function relocate_bootstrap_if_needed()
+  if not CONFIG.DISK_MOUNT_PATH or not shell or not shell.getRunningProgram or not shell.run then
+    return false
+  end
+  local running = shell.getRunningProgram()
+  if not running or running == "" then
+    return false
+  end
+  local absolute = running:sub(1, 1) == "/" and running or ("/" .. running)
+  local target = CONFIG.STORAGE_ROOT .. "/installer/installer.lua"
+  if absolute == target then
+    return false
+  end
+  if absolute:sub(1, #CONFIG.DISK_MOUNT_PATH) == CONFIG.DISK_MOUNT_PATH then
+    return false
+  end
+  ensure_dir(fs.getDir(target))
+  local ok_copy = pcall(fs.copy, absolute, target)
+  if not ok_copy then
+    return false
+  end
+  print("Relocating installer to disk: " .. target)
+  shell.run(target)
+  return true
+end
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
@@ -227,6 +306,9 @@ local function ensure_log_dirs()
   pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
   pcall(fs.makeDir, CONFIG.BACKUP_DIR or "/xreactor_backup")
+  if fs.exists("/disk") then
+    pcall(fs.makeDir, "/disk/xreactor_logs")
+  end
 end
 
 local function open_log_file()
@@ -451,6 +533,28 @@ local function validate_response(status_code, headers, body_prefix, body_len)
   return true
 end
 
+local function read_response_body(response, chunk_size)
+  local chunks = {}
+  local total = 0
+  while true do
+    local chunk = nil
+    if response.read then
+      chunk = response.read(chunk_size)
+    elseif response.readLine then
+      local line = response.readLine()
+      if line then
+        chunk = line .. "\n"
+      end
+    end
+    if not chunk then
+      break
+    end
+    total = total + #chunk
+    table.insert(chunks, chunk)
+  end
+  return table.concat(chunks), total
+end
+
 local function fetch_url(url)
   if not http or not http.get then
     log_line("ERROR", "http", "HTTP API unavailable")
@@ -494,14 +598,14 @@ local function fetch_url(url)
   end
   local code = response.getResponseCode and response.getResponseCode() or nil
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
-  local body = response.readAll()
+  local body, body_len = read_response_body(response, 8192)
   response.close()
   local prefix = body and body:sub(1, 1024) or ""
   local meta = {
     url = url,
     code = code,
     headers = headers,
-    bytes = body and #body or 0,
+    bytes = body_len or 0,
     signature = sanitize_signature(prefix)
   }
   local header_dump = headers and textutils.serialize(headers) or "n/a"
@@ -516,7 +620,7 @@ local function fetch_url(url)
   if not body or body == "" then
     return false, nil, "empty body", meta
   end
-  local ok, reason = validate_response(code, headers, prefix, body and #body or 0)
+  local ok, reason = validate_response(code, headers, prefix, body_len or 0)
   if not ok then
     return false, nil, reason, meta
   end
@@ -580,7 +684,7 @@ local function fetch_url_stream(url, target_path)
 
   local code = response.getResponseCode and response.getResponseCode() or nil
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
-  local file = fs.open(target_path, "w")
+  local file = fs.open(target_path, "wb")
   if not file then
     response.close()
     return false, "file open failed", { url = url, code = code, headers = headers }
@@ -968,11 +1072,13 @@ local function ensure_package_path()
 end
 
 local function load_release()
-  local ok, content, meta = downloadFile(CONFIG.RELEASE_PATH, CONFIG.RELEASE_BRANCH, { module_name = "release" })
+  local temp_path = CONFIG.STORAGE_ROOT .. "/.tmp/release.lua.download"
+  local urls = build_raw_urls(CONFIG.RELEASE_PATH, CONFIG.RELEASE_BRANCH)
+  local ok, meta = download_with_retries_to_path(urls, 1, "release", temp_path)
   if not ok then
     return nil, meta
   end
-  local loader, load_err = load(content, "release", "t", {})
+  local loader, load_err = loadfile(temp_path)
   if not loader then
     return nil, { err = "release load failed", detail = load_err }
   end
@@ -1239,6 +1345,10 @@ end
 ensure_package_path()
 init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
+try_label_disk()
+if relocate_bootstrap_if_needed() then
+  return
+end
 
 local release, release_meta = load_release()
 if not release then
