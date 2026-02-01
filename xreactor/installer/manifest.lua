@@ -1,13 +1,13 @@
 -- Manifest for the XReactor installer (hashes and required files).
 return {
-  manifest_version = 3,
+  manifest_version = 4,
   source_ref = "beta",
   hash_algo = "crc32",
   installer_min_version = "1.4",
   installer_path = "xreactor/installer/installer_core.lua",
-  installer_hash = "d3f6c31d",
-  installer_size_bytes = 119257,
-  shared = {
+  installer_hash = "d2a57d53",
+  installer_size_bytes = 121545,
+  files = {
     { path = "xreactor/core/bootstrap.lua", size_bytes = 9115, hash = "d1a38895" },
     { path = "xreactor/core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
     { path = "xreactor/core/alert_rules.lua", size_bytes = 12921, hash = "f4c32c65" },
@@ -47,42 +47,30 @@ return {
     { path = "installer", size_bytes = 18426, hash = "af3dd63f" },
     { path = "installer.lua", size_bytes = 33183, hash = "fd1ec8f5" },
     { path = "xreactor/installer/installer.lua", size_bytes = 33183, hash = "fd1ec8f5" },
-    { path = "xreactor/installer/installer_core.lua", size_bytes = 119257, hash = "d3f6c31d" },
-    { path = "xreactor/installer/manifest.lua", size_bytes = 5967, hash = "98d05b8d" },
-    { path = "xreactor/installer/release.lua", size_bytes = 217, hash = "484ff615" }
-  },
-  master = {
-    { path = "xreactor/master/config.lua", size_bytes = 7378, hash = "0ce66350" },
-    { path = "xreactor/master/startup_sequencer.lua", size_bytes = 3200, hash = "fd879d22" },
-    { path = "xreactor/master/profiles.lua", size_bytes = 164, hash = "9068a725" },
-    { path = "xreactor/master/main.lua", size_bytes = 37011, hash = "941f1e4d" },
-    { path = "xreactor/master/ui/alarms.lua", size_bytes = 1245, hash = "ab00070b" },
-    { path = "xreactor/master/ui/resources.lua", size_bytes = 5534, hash = "0447e76b" },
-    { path = "xreactor/master/ui/rt_dashboard.lua", size_bytes = 2824, hash = "6ca4b11e" },
-    { path = "xreactor/master/ui/overview.lua", size_bytes = 4525, hash = "89e0cb55" },
-    { path = "xreactor/master/ui/alerts.lua", size_bytes = 25190, hash = "adafc8e9" },
-    { path = "xreactor/master/ui/energy.lua", size_bytes = 4345, hash = "853d19c8" },
-    { path = "xreactor/master/ui/multiview.lua", size_bytes = 11565, hash = "2bceb16e" },
-    { path = "xreactor/master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a" }
-  },
-  rt = {
-    { path = "xreactor/nodes/rt/config.lua", size_bytes = 4234, hash = "e005b4cd" },
-    { path = "xreactor/nodes/rt/main.lua", size_bytes = 93886, hash = "f3bdd905" }
-  },
-  energy = {
-    { path = "xreactor/nodes/energy/config.lua", size_bytes = 4558, hash = "5283fadd" },
-    { path = "xreactor/nodes/energy/main.lua", size_bytes = 48159, hash = "6a42720d" }
-  },
-  water = {
-    { path = "xreactor/nodes/water/config.lua", size_bytes = 3425, hash = "42843ec6" },
-    { path = "xreactor/nodes/water/main.lua", size_bytes = 22170, hash = "ff616753" }
-  },
-  fuel = {
-    { path = "xreactor/nodes/fuel/config.lua", size_bytes = 3336, hash = "f879eefe" },
-    { path = "xreactor/nodes/fuel/main.lua", size_bytes = 21957, hash = "9e388a8d" }
-  },
-  reprocessor = {
-    { path = "xreactor/nodes/reprocessor/config.lua", size_bytes = 3132, hash = "d98073f7" },
-    { path = "xreactor/nodes/reprocessor/main.lua", size_bytes = 21263, hash = "d53a7875" }
+    { path = "xreactor/installer/installer_core.lua", size_bytes = 121545, hash = "d2a57d53" },
+    { path = "xreactor/installer/manifest.lua", size_bytes = 6347, hash = "f4e5123c" },
+    { path = "xreactor/installer/release.lua", size_bytes = 217, hash = "e891f6b7" },
+    { path = "xreactor/master/config.lua", size_bytes = 7378, hash = "0ce66350", roles = { "MASTER" } },
+    { path = "xreactor/master/startup_sequencer.lua", size_bytes = 3200, hash = "fd879d22", roles = { "MASTER" } },
+    { path = "xreactor/master/profiles.lua", size_bytes = 164, hash = "9068a725", roles = { "MASTER" } },
+    { path = "xreactor/master/main.lua", size_bytes = 37011, hash = "941f1e4d", roles = { "MASTER" } },
+    { path = "xreactor/master/ui/alarms.lua", size_bytes = 1245, hash = "ab00070b", roles = { "MASTER" } },
+    { path = "xreactor/master/ui/resources.lua", size_bytes = 5534, hash = "0447e76b", roles = { "MASTER" } },
+    { path = "xreactor/master/ui/rt_dashboard.lua", size_bytes = 2824, hash = "6ca4b11e", roles = { "MASTER" } },
+    { path = "xreactor/master/ui/overview.lua", size_bytes = 4525, hash = "89e0cb55", roles = { "MASTER" } },
+    { path = "xreactor/master/ui/alerts.lua", size_bytes = 25190, hash = "adafc8e9", roles = { "MASTER" } },
+    { path = "xreactor/master/ui/energy.lua", size_bytes = 4345, hash = "853d19c8", roles = { "MASTER" } },
+    { path = "xreactor/master/ui/multiview.lua", size_bytes = 11565, hash = "2bceb16e", roles = { "MASTER" } },
+    { path = "xreactor/master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a", roles = { "MASTER" } },
+    { path = "xreactor/nodes/rt/config.lua", size_bytes = 4234, hash = "e005b4cd", roles = { "RT" } },
+    { path = "xreactor/nodes/rt/main.lua", size_bytes = 93886, hash = "f3bdd905", roles = { "RT" } },
+    { path = "xreactor/nodes/energy/config.lua", size_bytes = 4558, hash = "5283fadd", roles = { "ENERGY" } },
+    { path = "xreactor/nodes/energy/main.lua", size_bytes = 48159, hash = "6a42720d", roles = { "ENERGY" } },
+    { path = "xreactor/nodes/water/config.lua", size_bytes = 3425, hash = "42843ec6", roles = { "WATER" } },
+    { path = "xreactor/nodes/water/main.lua", size_bytes = 22170, hash = "ff616753", roles = { "WATER" } },
+    { path = "xreactor/nodes/fuel/config.lua", size_bytes = 3336, hash = "f879eefe", roles = { "FUEL" } },
+    { path = "xreactor/nodes/fuel/main.lua", size_bytes = 21957, hash = "9e388a8d", roles = { "FUEL" } },
+    { path = "xreactor/nodes/reprocessor/config.lua", size_bytes = 3132, hash = "d98073f7", roles = { "REPROCESSOR" } },
+    { path = "xreactor/nodes/reprocessor/main.lua", size_bytes = 21263, hash = "d53a7875", roles = { "REPROCESSOR" } },
   }
 }
