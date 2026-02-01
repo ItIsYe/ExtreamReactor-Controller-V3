@@ -74,7 +74,7 @@ local function select_best_mount(min_bytes)
       return entry.path, entry.free
     end
   end
-  return nil
+  return nil, drive_name, "Disk mount missing"
 end
 
 local function configure_storage_root()
@@ -330,6 +330,9 @@ local function ensure_log_dirs()
   pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
   pcall(fs.makeDir, CONFIG.BACKUP_DIR or "/xreactor_backup")
+  if fs.exists("/disk") then
+    pcall(fs.makeDir, "/disk/xreactor_logs")
+  end
 end
 
 local function open_log_file()

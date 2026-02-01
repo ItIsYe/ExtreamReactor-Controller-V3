@@ -231,7 +231,7 @@ function select_best_mount(min_bytes)
       return entry.path, entry.free
     end
   end
-  return nil
+  return nil, drive_name, "Disk mount missing"
 end
 
 function build_storage_paths(root, mount_path)
