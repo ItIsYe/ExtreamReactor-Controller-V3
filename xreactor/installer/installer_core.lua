@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "2.5"
+local INSTALLER_CORE_VERSION = "2.6"
 
 -- CONFIG
 local CONFIG = {
@@ -64,7 +64,7 @@ local CONFIG = {
   LOG_SAMPLE_BYTES = 96, -- Bytes to capture as response signature.
   CHECKSUM_DIAG_SAMPLE_BYTES = 80, -- Bytes to show when checksum mismatch occurs.
   UPDATE_MARKER_PATH = "/xreactor/.update_in_progress", -- Update marker path (updated at runtime).
-  DISK_LABEL = "XREACTOR_DATA", -- Disk label to set when using a mounted disk.
+  DISK_LABEL = "XREACTOR", -- Disk label to set when using a mounted disk.
   REQUIRED_CORE_FILES = { -- Core files that must exist in the manifest.
     "xreactor/core/bootstrap.lua",
     "xreactor/core/logger.lua",
@@ -198,35 +198,38 @@ local storage_state = {
   log_fallback = CONFIG.LOG_PATH
 }
 
-function detect_storage_mount()
-  if not peripheral or not peripheral.find then
-    return nil, nil, "Peripheral API unavailable"
-  end
-  if not disk then
-    return nil, nil, "Disk API unavailable"
-  end
-  local drive = peripheral.find("drive")
-  if not drive then
-    return nil, nil, "No drive found"
-  end
-  local drive_name = peripheral.getName and peripheral.getName(drive) or drive
-  local present = true
-  if disk.isPresent then
-    local ok, inserted = pcall(disk.isPresent, drive_name)
-    present = ok and inserted or false
-  end
-  if not present then
-    return nil, drive_name, "Disk not inserted"
-  end
-  local ok, mount_path = pcall(disk.getMountPath, drive_name)
-  if ok and mount_path and mount_path ~= "" then
-    if fs.exists("/disk") then
-      return "/disk", drive_name
+function list_disk_mounts()
+  local mounts = {}
+  local candidates = { "/disk", "/disk2", "/disk3", "/disk4", "/disk5", "/disk6", "/disk7", "/disk8", "/disk9" }
+  for _, path in ipairs(candidates) do
+    if fs.exists(path) and fs.isDir(path) then
+      local ok_free, free = pcall(fs.getFreeSpace, path)
+      if ok_free and free then
+        local test_path = path .. "/.xreactor_write_test"
+        local ok_write = pcall(function()
+          local file = fs.open(test_path, "w")
+          if not file then
+            error("open failed", 0)
+          end
+          file.write("ok")
+          file.close()
+          fs.delete(test_path)
+        end)
+        if ok_write then
+          table.insert(mounts, { path = path, free = free })
+        end
+      end
     end
-    return mount_path, drive_name
   end
-  if fs.exists("/disk") then
-    return "/disk", drive_name
+  table.sort(mounts, function(a, b) return a.free > b.free end)
+  return mounts
+end
+
+function select_best_mount(min_bytes)
+  for _, entry in ipairs(list_disk_mounts()) do
+    if not min_bytes or entry.free >= min_bytes then
+      return entry.path, entry.free
+    end
   end
   return nil, drive_name, "Disk mount missing"
 end
@@ -252,28 +255,21 @@ function build_storage_paths(root, mount_path)
   }
 end
 
-function configure_storage_paths()
-  local mount_path, drive, mount_err = detect_storage_mount()
-  local root = "/xreactor"
-  if mount_path then
-    root = mount_path .. "/xreactor"
-  else
-    print("WARNING: No disk mount found. Storage is limited.")
-    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
-    if mount_err then
-      print("Disk status: " .. tostring(mount_err))
-    end
+function apply_storage_paths(mount_path)
+  if not mount_path then
+    return false
   end
+  local root = mount_path .. "/xreactor"
   local paths = build_storage_paths(root, mount_path)
-  storage_state.use_disk = mount_path ~= nil
+  storage_state.use_disk = true
   storage_state.mount_path = mount_path
-  storage_state.mount_name = drive
+  storage_state.mount_name = nil
   storage_state.storage_root = root
   storage_state.log_dir = paths.log_dir
   storage_state.stage_dir = paths.stage_dir
   storage_state.backup_dir = paths.backup_dir
   storage_state.log_primary = paths.log_dir .. "/installer_core.log"
-  storage_state.log_fallback = "/xreactor/logs/installer_core.log"
+  storage_state.log_fallback = storage_state.log_primary
 
   C.BASE_DIR = paths.base_dir
   C.MANIFEST_LOCAL = paths.manifest_local
@@ -292,7 +288,18 @@ function configure_storage_paths()
 
   C.LOG_PATH = storage_state.log_primary
   CONFIG.LOG_PATH = C.LOG_PATH
-  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir, "/xreactor/logs" }
+  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir }
+  return true
+end
+
+function configure_storage_paths()
+  local mount_path = select_best_mount()
+  if not mount_path then
+    print("ERROR: No writable disk mount found.")
+    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
+    error("No writable disk mount available.")
+  end
+  apply_storage_paths(mount_path)
 end
 
 -- Internal standalone logger for the installer (no project dependencies).
@@ -464,22 +471,11 @@ configure_storage_paths()
 init_internal_logger()
 
 local function try_label_disk()
-  if not storage_state.mount_path or not storage_state.mount_name then
+  if not storage_state.mount_path then
     return
   end
-  if not disk or not disk.getLabel or not disk.setLabel then
-    return
-  end
-  local ok, current = pcall(disk.getLabel, storage_state.mount_name)
-  local current_label = ok and current or nil
-  if current_label and current_label ~= "" then
-    return
-  end
-  local ok_set, err = pcall(disk.setLabel, storage_state.mount_name, CONFIG.DISK_LABEL)
-  if ok_set then
-    log("INFO", "Disk label set to " .. CONFIG.DISK_LABEL)
-  else
-    log("WARN", "Failed to set disk label: " .. tostring(err))
+  if shell and shell.run then
+    pcall(shell.run, "label", "set", CONFIG.DISK_LABEL)
   end
 end
 
@@ -1262,6 +1258,18 @@ function cleanup_storage_for_space()
   return deleted
 end
 
+function switch_storage_disk(min_bytes, context)
+  local target = select_best_mount(min_bytes)
+  if not target or target == storage_state.mount_path then
+    return false
+  end
+  apply_storage_paths(target)
+  ensure_required_dirs()
+  set_log_paths(storage_state.log_primary, storage_state.log_fallback)
+  log("INFO", ("Switched disk mount to %s for %s"):format(tostring(target), tostring(context or "space")))
+  return true
+end
+
 function cleanup_full_reinstall_storage()
   local deleted = {}
   for _, path in ipairs(clear_dir_contents(C.UPDATE_STAGING_BASE)) do
@@ -1292,7 +1300,15 @@ function ensure_space_with_cleanup(path, expected_bytes, context)
     return true
   end
   cleanup_storage_for_space()
-  return ensure_free_space(path, needed, context .. " (after cleanup)")
+  ok = ensure_free_space(path, needed, context .. " (after cleanup)")
+  if ok then
+    return true
+  end
+  if switch_storage_disk(needed, context) then
+    local switched_path = storage_state.storage_root or C.BASE_DIR
+    return ensure_free_space(switched_path, needed, context .. " (after disk switch)")
+  end
+  return false
 end
 
 function write_atomic(path, content)
@@ -2928,10 +2944,6 @@ end
 function ensure_required_dirs()
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.LOCAL_LOG_DIR)
-  ensure_dir("/xreactor/logs")
-  if fs.exists("/disk") then
-    ensure_dir("/disk/xreactor_logs")
-  end
   ensure_dir(C.LOCAL_STAGING_BASE)
   ensure_dir(C.LOCAL_BACKUP_BASE)
   ensure_dir(C.UPDATE_STAGING_BASE)

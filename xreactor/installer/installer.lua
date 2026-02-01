@@ -35,59 +35,57 @@ local CONFIG = {
   LOG_SAMPLE_BYTES = 200, -- Bytes to capture as response signature.
   DISK_SPACE_OVERHEAD_BYTES = 2048, -- Reserved extra bytes for write operations.
   DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
-  DISK_LABEL = "XREACTOR_DATA" -- Disk label to set when using a mounted disk.
+  DISK_LABEL = "XREACTOR" -- Disk label to set when using a mounted disk.
 }
 
 local log_line
 local cleanup_temp_file
 
-local function detect_storage_mount()
-  if not peripheral or not peripheral.find then
-    return nil, nil, "Peripheral API unavailable"
-  end
-  if not disk then
-    return nil, nil, "Disk API unavailable"
-  end
-  local drive = peripheral.find("drive")
-  if not drive then
-    return nil, nil, "No drive found"
-  end
-  local drive_name = peripheral.getName and peripheral.getName(drive) or drive
-  local present = true
-  if disk.isPresent then
-    local ok, inserted = pcall(disk.isPresent, drive_name)
-    present = ok and inserted or false
-  end
-  if not present then
-    return nil, drive_name, "Disk not inserted"
-  end
-  local ok, mount_path = pcall(disk.getMountPath, drive_name)
-  if ok and mount_path and mount_path ~= "" then
-    if fs.exists("/disk") then
-      return "/disk", drive_name
+local function list_disk_mounts()
+  local mounts = {}
+  local candidates = { "/disk", "/disk2", "/disk3", "/disk4", "/disk5", "/disk6", "/disk7", "/disk8", "/disk9" }
+  for _, path in ipairs(candidates) do
+    if fs.exists(path) and fs.isDir(path) then
+      local ok_free, free = pcall(fs.getFreeSpace, path)
+      if ok_free and free then
+        local test_path = path .. "/.xreactor_write_test"
+        local ok_write = pcall(function()
+          local file = fs.open(test_path, "w")
+          if not file then
+            error("open failed", 0)
+          end
+          file.write("ok")
+          file.close()
+          fs.delete(test_path)
+        end)
+        if ok_write then
+          table.insert(mounts, { path = path, free = free })
+        end
+      end
     end
-    return mount_path, drive_name
   end
-  if fs.exists("/disk") then
-    return "/disk", drive_name
+  table.sort(mounts, function(a, b) return a.free > b.free end)
+  return mounts
+end
+
+local function select_best_mount(min_bytes)
+  for _, entry in ipairs(list_disk_mounts()) do
+    if not min_bytes or entry.free >= min_bytes then
+      return entry.path, entry.free
+    end
   end
   return nil, drive_name, "Disk mount missing"
 end
 
 local function configure_storage_root()
-  local mount_path, drive, mount_err = detect_storage_mount()
-  local root = "/xreactor"
-  local log_dir = "/xreactor/logs"
-  if mount_path then
-    root = mount_path .. "/xreactor"
-    log_dir = mount_path .. "/xreactor_logs"
-  else
-    print("WARNING: No disk mount found. Storage is limited.")
+  local mount_path = select_best_mount()
+  if not mount_path then
+    print("ERROR: No writable disk mount found.")
     print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
-    if mount_err then
-      print("Disk status: " .. tostring(mount_err))
-    end
+    error("No writable disk mount available.")
   end
+  local root = mount_path .. "/xreactor"
+  local log_dir = mount_path .. "/xreactor_logs"
   local stage_dir = root .. "_stage"
   local backup_dir = root .. "_backup"
   CONFIG.STORAGE_ROOT = root
@@ -100,31 +98,51 @@ local function configure_storage_root()
   CONFIG.CORE_BAD_PATH = root .. "/.tmp/installer_core.bad"
   CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
   CONFIG.LOCAL_LOG_DIR = log_dir
-  CONFIG.LOG_FALLBACK_PATH = "/xreactor/logs/installer_debug.log"
+  CONFIG.LOG_FALLBACK_PATH = log_dir .. "/installer_debug.log"
   CONFIG.DISK_MOUNT_PATH = mount_path
-  CONFIG.DISK_DRIVE = drive
 end
 
 configure_storage_root()
 
 local function try_label_disk()
-  if not CONFIG.DISK_MOUNT_PATH or not CONFIG.DISK_DRIVE then
+  if not CONFIG.DISK_MOUNT_PATH then
     return
   end
-  if not disk or not disk.getLabel or not disk.setLabel then
-    return
+  if shell and shell.run then
+    pcall(shell.run, "label", "set", CONFIG.DISK_LABEL)
   end
-  local ok, current = pcall(disk.getLabel, CONFIG.DISK_DRIVE)
-  local current_label = ok and current or nil
-  if current_label and current_label ~= "" then
-    return
+end
+
+local function apply_mount(path)
+  if not path then
+    return false
   end
-  local ok_set, err = pcall(disk.setLabel, CONFIG.DISK_DRIVE, CONFIG.DISK_LABEL)
-  if ok_set then
-    log_line("INFO", "disk", "Disk label set to " .. CONFIG.DISK_LABEL)
-  else
-    log_line("WARN", "disk", "Failed to set disk label: " .. tostring(err))
+  CONFIG.DISK_MOUNT_PATH = path
+  CONFIG.STORAGE_ROOT = path .. "/xreactor"
+  CONFIG.LOG_DIR = path .. "/xreactor_logs"
+  CONFIG.STAGE_DIR = CONFIG.STORAGE_ROOT .. "_stage"
+  CONFIG.BACKUP_DIR = CONFIG.STORAGE_ROOT .. "_backup"
+  CONFIG.CORE_PATH = CONFIG.STORAGE_ROOT .. "/installer/installer_core.lua"
+  CONFIG.CORE_META_PATH = CONFIG.STORAGE_ROOT .. "/installer/installer_core.meta"
+  CONFIG.CORE_DOWNLOAD_PATH = CONFIG.STORAGE_ROOT .. "/.tmp/installer_core.lua.download"
+  CONFIG.CORE_BAD_PATH = CONFIG.STORAGE_ROOT .. "/.tmp/installer_core.bad"
+  CONFIG.LOG_PATH = CONFIG.LOG_DIR .. "/installer_debug.log"
+  CONFIG.LOCAL_LOG_DIR = CONFIG.LOG_DIR
+  CONFIG.LOG_FALLBACK_PATH = CONFIG.LOG_PATH
+  return true
+end
+
+local function select_mount_for_bytes(needed)
+  local path = select_best_mount(needed)
+  if not path then
+    return false
   end
+  if path ~= CONFIG.DISK_MOUNT_PATH then
+    apply_mount(path)
+    ensure_log_dirs()
+    try_label_disk()
+  end
+  return true
 end
 
 local function relocate_bootstrap_if_needed()
@@ -246,6 +264,13 @@ local function ensure_core_space(expected_bytes)
   if ok then
     return true
   end
+  if select_mount_for_bytes(needed) then
+    cleanup_storage_for_space()
+    ok, err = ensure_free_space(CONFIG.CORE_DOWNLOAD_PATH, needed, "Core download (after disk switch)")
+    if ok then
+      return true
+    end
+  end
   return false, err
 end
 
@@ -301,7 +326,6 @@ local log_state = {
 }
 
 local function ensure_log_dirs()
-  pcall(fs.makeDir, "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
   pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
