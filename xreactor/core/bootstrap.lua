@@ -1,9 +1,16 @@
 -- Centralized bootstrap for module loading without package.path.
 local bootstrap = {}
 
+local function resolve_log_dir()
+  if fs and fs.exists and fs.exists("/disk") then
+    return "/disk/xreactor_logs"
+  end
+  return "/xreactor_logs"
+end
+
 local CONFIG = {
   BASE_DIR = "/xreactor",
-  LOG_PATH = "/xreactor/logs/bootstrap.log",
+  LOG_PATH = resolve_log_dir() .. "/bootstrap.log",
   LOG_SETTINGS_KEY = "xreactor.debug_logging"
 }
 
@@ -278,7 +285,7 @@ function bootstrap.setup(opts)
   if opts.log_path then
     state.log_path = opts.log_path
   elseif opts.role then
-    state.log_path = string.format("/xreactor/logs/loader_%s.log", tostring(opts.role):lower())
+    state.log_path = string.format("%s/loader_%s.log", resolve_log_dir(), tostring(opts.role):lower())
   end
   resolve_global()
   ensure_package_table()

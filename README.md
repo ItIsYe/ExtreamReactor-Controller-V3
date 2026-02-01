@@ -167,7 +167,7 @@ Wireless Modem (Control/Status)
   - `xreactor/master/*` (z. B. `master.main`)
   - `xreactor/nodes/*` (z. B. `nodes.rt.main`)
 - **Keine globalen Injects**: Alle Module nutzen lokale Requires, z. B. `local utils = require("core.utils")`.
-- **Debug-Log**: In den jeweiligen `main.lua`-Dateien kann `BOOTSTRAP_LOG_ENABLED = true` gesetzt werden (Konfig ganz oben). Dann schreibt der Bootstrap eine Datei `/xreactor/logs/loader_<role>.log` (z. B. `loader_master.log`) mit Environment-Infos, Root-Pfad, `package.path`, `shell.dir()` und jedem Modul-Ladeversuch. Optional kann `BOOTSTRAP_LOG_PATH` das Logziel überschreiben. Bei Require-Fehlern werden die tatsächlich geprüften Pfade protokolliert.
+- **Debug-Log**: In den jeweiligen `main.lua`-Dateien kann `BOOTSTRAP_LOG_ENABLED = true` gesetzt werden (Konfig ganz oben). Dann schreibt der Bootstrap eine Datei `/xreactor_logs/loader_<role>.log` (z. B. `loader_master.log`, bei Disk `/disk/xreactor_logs/loader_<role>.log`) mit Environment-Infos, Root-Pfad, `package.path`, `shell.dir()` und jedem Modul-Ladeversuch. Optional kann `BOOTSTRAP_LOG_PATH` das Logziel überschreiben. Bei Require-Fehlern werden die tatsächlich geprüften Pfade protokolliert.
 - **Warum das wichtig ist**: Ohne Bootstrap nutzt Lua die Standard-`package.path`, die relativ zum aktuellen Programmverzeichnis ist (z. B. `/xreactor/master/?.lua`). Dadurch werden Module wie `shared.constants` fälschlich unter `/xreactor/master/shared/...` gesucht. Der Bootstrap überschreibt `require`, ergänzt `package.path` und installiert einen `package.searcher`, der immer unter `/xreactor` lädt.
 - **Empfohlene Nutzung**:
   ```
@@ -191,6 +191,8 @@ Wireless Modem (Control/Status)
    **HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
    (Beide Einstiegspunkte sind Bootstrapper: `/installer` und `/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
+   - Wenn ein Disk-Drive vorhanden ist (`/disk`), installiert der Installer automatisch nach `/disk/xreactor` und schreibt Logs nach `/disk/xreactor_logs/`.
+   - Ohne Disk-Drive werden `/xreactor` und `/xreactor_logs/` genutzt.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
 
@@ -199,7 +201,7 @@ Wireless Modem (Control/Status)
   ```
   delete /xreactor_backup/*
   delete /xreactor_stage/*
-  delete /xreactor/logs/*.log
+  delete /xreactor_logs/*.log
   delete /disk/xreactor_logs/*.log
   ```
 - Danach Installer erneut starten (`installer`).
@@ -255,12 +257,12 @@ Wireless Modem (Control/Status)
 
 **Logging & Debugging**
 - Logs liegen in:
-  - `/xreactor/logs/`
+  - `/xreactor_logs/`
   - `/disk/xreactor_logs/`
 - Installer erzeugt die Log-Ordner automatisch.
-- Bootstrap-Log: `/xreactor/logs/installer_debug.log` (mit Rotation `.1`).
-- Installer-Core-Log: `/xreactor/logs/installer_core.log` (mit Rotation `.1`).
-- Node-Logs: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
+- Bootstrap-Log: `/xreactor_logs/installer_debug.log` (mit Rotation `.1`).
+- Installer-Core-Log: `/xreactor_logs/installer_core.log` (mit Rotation `.1`).
+- Node-Logs: `/xreactor_logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`, auf Disk unter `/disk/xreactor_logs/`).
 - Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen oder global via `settings set xreactor.debug_logging true`.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
 
@@ -325,9 +327,9 @@ Wireless Modem (Control/Status)
   - Settings API: `settings.set("xreactor.debug_logging", true)` + `settings.save()`.
 - **Config-Fallback-Logs**: Falls eine Config fehlt/invalid ist, schreibt der Node automatisch eine Warnung ins Log und nutzt Defaults, um Start-Crashes zu vermeiden.
 - Logfiles:
-- Bootstrap: `/xreactor/logs/installer_bootstrap.log` (Rotation `.1`)
-- Installer-Core: `/xreactor/logs/installer.log` (Rotation `.1`)
-  - Nodes: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
+- Bootstrap: `/xreactor_logs/installer_bootstrap.log` (Rotation `.1`, auf Disk unter `/disk/xreactor_logs/`)
+- Installer-Core: `/xreactor_logs/installer.log` (Rotation `.1`, auf Disk unter `/disk/xreactor_logs/`)
+  - Nodes: `/xreactor_logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, auf Disk unter `/disk/xreactor_logs/`)
 - ENERGY-Node schreibt bei aktiviertem Debug einmal pro Discovery-Scan einen **Discovery Snapshot** (Peripherie-Liste + Types + Methoden der Kandidaten).
 - Matrix-Debug: Wenn Component-Counts fehlen, loggt der ENERGY-Node die verfügbaren Matrix-Methoden (kein Terminal-Spam).
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
@@ -340,7 +342,7 @@ Wireless Modem (Control/Status)
 ## Troubleshooting
 - **Timeout/Offline**: Prüfe Heartbeat-Intervalle und Wireless-Reichweite.
 - **Falsche Modem-Seite**: `wireless_modem`/`wired_modem` in `config.lua` prüfen.
-- **Module not found**: Prüfe, ob `/xreactor/shared/constants.lua` vorhanden ist und ob der Bootstrap vor allen `require`-Aufrufen läuft (Entry-File lädt `/xreactor/core/bootstrap.lua` zuerst). Bei aktivem `BOOTSTRAP_LOG_ENABLED` kontrolliere `/xreactor/logs/loader_<role>.log` für `package.path`, `shell.dir()` und die tatsächlich versuchten Pfade.
+- **Module not found**: Prüfe, ob `/xreactor/shared/constants.lua` vorhanden ist und ob der Bootstrap vor allen `require`-Aufrufen läuft (Entry-File lädt `/xreactor/core/bootstrap.lua` zuerst). Bei aktivem `BOOTSTRAP_LOG_ENABLED` kontrolliere `/xreactor_logs/loader_<role>.log` (bzw. `/disk/xreactor_logs/loader_<role>.log`) für `package.path`, `shell.dir()` und die tatsächlich versuchten Pfade.
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
 - **COMMS_DOWN**: Node ist > Timeout nicht gesehen → Master markiert DOWN.
@@ -363,7 +365,7 @@ Wireless Modem (Control/Status)
 - **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
 - **Peripherals fehlen**: Namen in `config.lua` prüfen, Wired-Modem korrekt angeschlossen?
 - **ENERGY ok aber keine Storages/Monitor gebunden**:
-  - Discovery-Log prüfen: `/xreactor/logs/energy_<node_id>.log`
+  - Discovery-Log prüfen: `/xreactor_logs/energy_<node_id>.log` (bzw. `/disk/xreactor_logs/energy_<node_id>.log`)
   - `storage_filters.include_names`/`exclude_names` checken.
   - Wired-Modem korrekt verbunden? `peripheral.getNames()` sollte Remote-Peripherals listen.
   - Peripherals müssen Energy-Methoden anbieten (siehe Autodetection-Methoden).

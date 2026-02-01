@@ -4,7 +4,7 @@ local CONFIG = {
   LOG_PREFIX = "RT", -- Default log prefix for RT events.
   DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
   BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
-  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor/logs/loader_rt.log).
+  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor_logs/loader_rt.log).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
   CONFIG_PATH = "/xreactor/nodes/rt/config.lua", -- Config file path.
   TARGET_RPM = 900, -- Default turbine RPM target.
@@ -101,7 +101,7 @@ end
 local DEFAULT_CONFIG = {
   role = constants.roles.RT_NODE, -- Node role identifier.
   node_id = "RT-1", -- Default node_id used if none is set.
-  debug_logging = false, -- Enable debug logging to /xreactor/logs/rt.log.
+  debug_logging = false, -- Enable debug logging to /xreactor_logs/rt.log.
   wireless_modem = "right", -- Default wireless modem side.
   wired_modem = nil, -- Optional wired modem side.
   modem = "right", -- Default modem side or peripheral name.
