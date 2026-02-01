@@ -791,6 +791,21 @@ function dir_size_recursive(path)
   return total
 end
 
+function collect_files_recursive(path, files)
+  files = files or {}
+  if not fs.exists(path) then
+    return files
+  end
+  if not fs.isDir(path) then
+    table.insert(files, path)
+    return files
+  end
+  for _, entry in ipairs(collect_dir_entries(path)) do
+    collect_files_recursive(path .. "/" .. entry, files)
+  end
+  return files
+end
+
 function collect_log_files()
   local files = {}
   for _, dir in ipairs(CONFIG.LOG_RETENTION_DIRS or {}) do
@@ -2636,6 +2651,7 @@ function ensure_base_dirs()
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.BASE_DIR .. "/config")
   ensure_dir(C.BASE_DIR .. "/core")
+  ensure_dir(C.BASE_DIR .. "/logs")
   ensure_dir(C.BASE_DIR .. "/master")
   ensure_dir(C.BASE_DIR .. "/master/ui")
   ensure_dir(C.BASE_DIR .. "/nodes")
@@ -3283,6 +3299,69 @@ function build_manifest_entries(manifest, role)
   return entries
 end
 
+function build_allowed_install_paths(manifest, role)
+  local allowed = {}
+  for _, entry in ipairs(getFilesForRole(role, manifest)) do
+    allowed[resolve_install_path(entry.path)] = true
+  end
+  if manifest.installer_path and manifest.installer_hash and manifest.installer_size_bytes then
+    allowed[resolve_install_path(manifest.installer_path)] = true
+  end
+  return allowed
+end
+
+function is_cleanup_protected_path(full_path)
+  if not full_path then
+    return true
+  end
+  local root = storage_state.storage_root or C.BASE_DIR
+  local prefix = root .. "/"
+  if full_path:sub(1, #prefix) ~= prefix then
+    return true
+  end
+  local rel = full_path:sub(#prefix + 1)
+  local normalized = "xreactor/" .. rel
+  if is_config_file(normalized) then
+    return true
+  end
+  if normalized:match("^xreactor/logs/") then
+    return true
+  end
+  if normalized:match("^xreactor/%.cache/") then
+    return true
+  end
+  if normalized == "xreactor/.manifest" or normalized == "xreactor/.manifest_cache" then
+    return true
+  end
+  if normalized == "xreactor/.update_in_progress" then
+    return true
+  end
+  return false
+end
+
+function cleanup_role_files(manifest, role)
+  if not manifest then
+    return {}
+  end
+  local allowed = build_allowed_install_paths(manifest, role)
+  local root = storage_state.storage_root or C.BASE_DIR
+  local deleted = {}
+  for _, full_path in ipairs(collect_files_recursive(root)) do
+    if not allowed[full_path] and not is_cleanup_protected_path(full_path) then
+      if fs.exists(full_path) then
+        fs.delete(full_path)
+        table.insert(deleted, full_path)
+      end
+    end
+  end
+  if #deleted > 0 then
+    log("INFO", "Removed obsolete files: " .. table.concat(deleted, ", "))
+  else
+    log("INFO", "No obsolete files removed.")
+  end
+  return deleted
+end
+
 function safe_update_prepare(role, cfg_path)
   local retry_rounds = 0
   while true do
@@ -3500,6 +3579,8 @@ function safe_update_apply(context, role, cfg_path)
     clear_update_marker()
     return
   end
+
+  cleanup_role_files(manifest, role)
 
   print("SAFE UPDATE complete.")
   print("Changed files: " .. tostring(changed))
@@ -3752,6 +3833,8 @@ function full_reinstall_apply(context)
     log("ERROR", "FULL REINSTALL apply failed: " .. tostring(err))
     return
   end
+
+  cleanup_role_files(manifest, context.selected_role or context.existing_role)
 
   local role, cfg_path = setup_fresh_config(context, backup_dir, protected)
 
