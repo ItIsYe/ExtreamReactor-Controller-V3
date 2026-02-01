@@ -23,9 +23,9 @@ local CONFIG = {
   CORE_RETRY_BACKOFF = 1, -- Backoff seconds between core download retries.
   LOG_ENABLED = true, -- Always enable bootstrap logging.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
-  LOG_PATH = "/xreactor_logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
-  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
-  LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log", -- Fallback log path when storage root is unavailable.
+  LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor/logs", -- Log directory (updated at runtime).
+  LOG_FALLBACK_PATH = "/xreactor/logs/installer_debug.log", -- Fallback log path when storage root is unavailable.
   DISK_LOG_DIR_NAME = "xreactor_logs", -- Legacy disk log directory name.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
@@ -55,6 +55,9 @@ local function configure_storage_root()
     root = mount .. "/xreactor"
   end
   local log_dir = root .. "_logs"
+  if root == "/xreactor" then
+    log_dir = "/xreactor/logs"
+  end
   local stage_dir = root .. "_stage"
   local backup_dir = root .. "_backup"
   CONFIG.STORAGE_ROOT = root
@@ -161,9 +164,9 @@ local log_state = {
 }
 
 local function ensure_log_dirs()
-  pcall(fs.makeDir, "/xreactor_logs")
+  pcall(fs.makeDir, "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
-  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor_logs")
+  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
   pcall(fs.makeDir, CONFIG.BACKUP_DIR or "/xreactor_backup")
 end
