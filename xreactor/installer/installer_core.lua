@@ -468,6 +468,8 @@ local roles = {
   REPROCESSOR_NODE = "REPROCESSOR-NODE"
 }
 
+local ROLE
+
 local role_targets = {
   [roles.MASTER] = { path = "master", config = "master/config.lua" },
   [roles.RT_NODE] = { path = "nodes/rt", config = "nodes/rt/config.lua" },
@@ -1787,6 +1789,20 @@ function download_with_retry(urls, max_attempts, backoff_seconds, opts)
   return false, nil, { tried = tried, last = last_entry }
 end
 
+function downloadFile(path_or_urls, base_url, opts)
+  local urls = path_or_urls
+  if type(path_or_urls) == "string" then
+    local base = base_url or build_main_base_url()
+    urls = build_mirror_urls(base, path_or_urls)
+  end
+  return download_with_retry(
+    urls,
+    opts and opts.attempts or C.DOWNLOAD_ATTEMPTS,
+    opts and opts.backoff or C.DOWNLOAD_BACKOFF,
+    opts
+  )
+end
+
 function download_file_with_retry(urls, expected_hash, hash_algo, opts)
   local function validate(body, meta, entry)
     if expected_hash then
@@ -2203,8 +2219,7 @@ function print_download_failure(label, info, fallback_urls)
 end
 
 function download_release()
-  local urls = build_mirror_urls(build_main_base_url(), C.RELEASE_REMOTE)
-  local ok, content, meta = download_with_retry(urls, C.DOWNLOAD_ATTEMPTS, C.DOWNLOAD_BACKOFF)
+  local ok, content, meta = downloadFile(C.RELEASE_REMOTE, build_main_base_url())
   if not ok then
     return nil, "Release download failed", meta
   end
@@ -2312,7 +2327,7 @@ function download_manifest_from_source(release, base_info)
   if base_info.source == CONFIG.DEFAULT_BRANCH and CONFIG.MANIFEST_URL_FALLBACK then
     table.insert(urls, CONFIG.MANIFEST_URL_FALLBACK)
   end
-  local ok, content, meta = download_with_retry(urls, C.DOWNLOAD_ATTEMPTS, C.DOWNLOAD_BACKOFF)
+  local ok, content, meta = downloadFile(urls)
   if not ok then
     return nil, "Manifest download failed", meta
   end
@@ -2432,6 +2447,7 @@ function acquire_manifest()
 end
 
 function ensure_required_dirs()
+  ensure_dir("/xreactor_logs")
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.LOCAL_LOG_DIR)
   ensure_dir(C.LOCAL_STAGING_BASE)
@@ -2601,7 +2617,8 @@ end
 function write_config(role, wireless, wired, extras)
   local cfg_path = C.BASE_DIR .. "/" .. role_targets[role].config
   local defaults = read_config(cfg_path, {})
-  defaults.role = role
+  ROLE = role
+  defaults.role = ROLE or role
   defaults.wireless_modem = wireless
   defaults.wired_modem = wired
   if defaults.node_id == nil then
@@ -2636,9 +2653,10 @@ function find_existing_role()
   for role, target in pairs(role_targets) do
     local cfg_path = C.BASE_DIR .. "/" .. target.config
     if fs.exists(cfg_path) then
-      local cfg = read_config(cfg_path, {})
-      if cfg.role == role then
-        return role, cfg_path, cfg
+      local config = read_config(cfg_path, {})
+      ROLE = config.role
+      if ROLE == role then
+        return role, cfg_path, config
       end
     end
   end
@@ -3384,6 +3402,7 @@ function setup_fresh_config(context, backup_dir, protected)
     return context.existing_role, context.existing_cfg_path
   end
   local role = choose_role()
+  ROLE = role
   local cfg_path = C.BASE_DIR .. "/" .. role_targets[role].config
   local modems = detect_modems()
   local wireless = select_primary_modem(modems)

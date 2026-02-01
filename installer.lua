@@ -25,7 +25,7 @@ local CONFIG = {
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
   LOG_PATH = "/xreactor_logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
   LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
-  LOG_FALLBACK_PATH = "/installer_debug.log", -- Fallback log path when storage root is unavailable.
+  LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log", -- Fallback log path when storage root is unavailable.
   DISK_LOG_DIR_NAME = "xreactor_logs", -- Legacy disk log directory name.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
@@ -161,6 +161,7 @@ local log_state = {
 }
 
 local function ensure_log_dirs()
+  pcall(fs.makeDir, "/xreactor_logs")
   pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
   pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor_logs")
   pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
@@ -483,6 +484,13 @@ local function build_raw_urls(path, commit_sha)
   return urls
 end
 
+local function downloadFile(path, ref, opts)
+  local urls = (opts and opts.urls) or build_raw_urls(path, ref)
+  local attempts = opts and opts.attempts or nil
+  local module_name = opts and opts.module_name or nil
+  return fetch_with_retries(urls, attempts, module_name)
+end
+
 local fetch_url_seeded = false
 
 local function fetch_with_retries(urls, attempts, module_name)
@@ -690,8 +698,7 @@ local function ensure_package_path()
 end
 
 local function load_release()
-  local urls = build_raw_urls(CONFIG.RELEASE_PATH, CONFIG.RELEASE_BRANCH)
-  local ok, content, meta = fetch_with_retries(urls)
+  local ok, content, meta = downloadFile(CONFIG.RELEASE_PATH, CONFIG.RELEASE_BRANCH, { module_name = "release" })
   if not ok then
     return nil, meta
   end
@@ -861,7 +868,11 @@ local function download_core(release, opts)
     end
     urls = busted
   end
-  local ok, content, meta = fetch_with_retries(urls, 1, "installer_core")
+  local ok, content, meta = downloadFile("xreactor/installer/installer_core.lua", commit_sha, {
+    urls = urls,
+    attempts = 1,
+    module_name = "installer_core"
+  })
   if not ok then
     if meta then
       meta.cache_bust = cache_bust
