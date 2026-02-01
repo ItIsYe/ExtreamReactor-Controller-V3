@@ -2381,14 +2381,64 @@ function normalize_manifest_group(group, label)
     if type(entry.size_bytes) ~= "number" or entry.size_bytes < 1 then
       return nil, "Manifest entry missing size"
     end
+    local normalized_roles, roles_err = normalize_manifest_roles(entry.roles)
+    if roles_err then
+      return nil, roles_err
+    end
     table.insert(entries, {
       path = entry.path,
       hash = entry.hash,
-      size_bytes = entry.size_bytes
+      size_bytes = entry.size_bytes,
+      roles = normalized_roles
     })
   end
   table.sort(entries, function(a, b) return a.path < b.path end)
   return entries
+end
+
+function normalize_manifest_roles(roles)
+  if roles == nil then
+    return nil
+  end
+  local role_list = roles
+  if type(role_list) == "string" then
+    role_list = { role_list }
+  end
+  if type(role_list) ~= "table" then
+    return nil, "Manifest entry roles invalid"
+  end
+  local allowed = {
+    MASTER = true,
+    RT = true,
+    ENERGY = true,
+    WATER = true,
+    FUEL = true,
+    REPROCESSOR = true,
+    ALL = true
+  }
+  local seen = {}
+  local normalized = {}
+  for _, role in ipairs(role_list) do
+    if type(role) ~= "string" then
+      return nil, "Manifest entry roles invalid"
+    end
+    local key = role:upper()
+    if key == "ALL" then
+      return { "ALL" }
+    end
+    if not allowed[key] then
+      return nil, ("Manifest entry roles invalid: %s"):format(tostring(role))
+    end
+    if not seen[key] then
+      table.insert(normalized, key)
+      seen[key] = true
+    end
+  end
+  if #normalized == 0 then
+    return nil, "Manifest entry roles empty"
+  end
+  table.sort(normalized)
+  return normalized
 end
 
 function parse_manifest(content)
@@ -3184,17 +3234,37 @@ end
 function getFilesForRole(role, manifest)
   local entries = {}
   local groups = manifest and manifest.role_groups or {}
+  local role_token = role and role_storage_values[role] or nil
   for _, entry in ipairs(groups.shared or {}) do
-    table.insert(entries, entry)
+    if entry_applies_to_role(entry, role_token) then
+      table.insert(entries, entry)
+    end
   end
   local key = role and role_keys[role] or nil
   if key and groups[key] then
     for _, entry in ipairs(groups[key]) do
-      table.insert(entries, entry)
+      if entry_applies_to_role(entry, role_token) then
+        table.insert(entries, entry)
+      end
     end
   end
   table.sort(entries, function(a, b) return a.path < b.path end)
   return entries
+end
+
+function entry_applies_to_role(entry, role_token)
+  if not entry or not entry.roles then
+    return true
+  end
+  for _, allowed in ipairs(entry.roles) do
+    if allowed == "ALL" then
+      return true
+    end
+    if role_token and allowed == role_token then
+      return true
+    end
+  end
+  return false
 end
 
 function build_manifest_entries(manifest, role)
