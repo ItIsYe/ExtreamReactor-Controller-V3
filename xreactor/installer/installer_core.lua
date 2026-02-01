@@ -17,6 +17,7 @@ local CONFIG = {
   LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
   BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path (updated at runtime).
+  ROLE_PATH = "/xreactor/config/role.lua", -- Role storage path (updated at runtime).
   UPDATE_STAGING_BASE = "/xreactor_stage", -- Base staging folder for updates (updated at runtime).
   INSTALLER_VERSION = "1.4", -- Installer version for min-version checks.
   INSTALLER_MIN_BYTES = 200, -- Min bytes to accept installer download.
@@ -218,6 +219,7 @@ function build_storage_paths(root)
     manifest_cache_legacy = base .. "/.manifest_cache",
     base_cache = base .. "/.cache/source.lua",
     node_id = base .. "/config/node_id.txt",
+    role = base .. "/config/role.lua",
     update_marker = base .. "/.update_in_progress"
   }
 end
@@ -244,6 +246,7 @@ function configure_storage_paths()
   C.MANIFEST_CACHE_LEGACY = paths.manifest_cache_legacy
   C.BASE_CACHE_PATH = paths.base_cache
   C.NODE_ID_PATH = paths.node_id
+  C.ROLE_PATH = paths.role
   C.UPDATE_MARKER_PATH = paths.update_marker
 
   C.LOCAL_LOG_DIR = paths.log_dir
@@ -479,6 +482,24 @@ local role_targets = {
   [roles.REPROCESSOR_NODE] = { path = "nodes/reprocessor", config = "nodes/reprocessor/config.lua" }
 }
 
+local role_keys = {
+  [roles.MASTER] = "master",
+  [roles.RT_NODE] = "rt",
+  [roles.ENERGY_NODE] = "energy",
+  [roles.WATER_NODE] = "water",
+  [roles.FUEL_NODE] = "fuel",
+  [roles.REPROCESSOR_NODE] = "reprocessor"
+}
+
+local role_storage_values = {
+  [roles.MASTER] = "MASTER",
+  [roles.RT_NODE] = "RT",
+  [roles.ENERGY_NODE] = "ENERGY",
+  [roles.WATER_NODE] = "WATER",
+  [roles.FUEL_NODE] = "FUEL",
+  [roles.REPROCESSOR_NODE] = "REPROCESSOR"
+}
+
 -- Centralized installer logging helper.
 function log(level, message)
   if active_logger and active_logger.log then
@@ -514,6 +535,32 @@ function normalize_node_id(value)
   return nil
 end
 
+function normalize_role_value(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  local upper = value:upper()
+  if upper == "MASTER" then
+    return roles.MASTER
+  end
+  if upper == "RT" or upper == "RT-NODE" then
+    return roles.RT_NODE
+  end
+  if upper == "ENERGY" or upper == "ENERGY-NODE" then
+    return roles.ENERGY_NODE
+  end
+  if upper == "FUEL" or upper == "FUEL-NODE" then
+    return roles.FUEL_NODE
+  end
+  if upper == "WATER" or upper == "WATER-NODE" then
+    return roles.WATER_NODE
+  end
+  if upper == "REPROCESSOR" or upper == "REPROCESSOR-NODE" then
+    return roles.REPROCESSOR_NODE
+  end
+  return nil
+end
+
 function fallback_node_id()
   return tostring(os.getComputerLabel() or os.getComputerID())
 end
@@ -527,6 +574,47 @@ function read_file(path)
   local content = file.readAll()
   file.close()
   return content
+end
+
+function read_role_file()
+  if not C.ROLE_PATH or not fs.exists(C.ROLE_PATH) then
+    return nil
+  end
+  local content = read_file(C.ROLE_PATH)
+  if not content or content == "" then
+    return nil
+  end
+  local loader = load(content, "role", "t", {})
+  if loader then
+    local ok, result = pcall(loader)
+    if ok then
+      local normalized = normalize_role_value(result)
+      if normalized then
+        return normalized
+      end
+    end
+  end
+  local trimmed = trim(content)
+  return normalize_role_value(trimmed)
+end
+
+function write_role_file(role)
+  if not role or not C.ROLE_PATH then
+    return
+  end
+  local value = role_storage_values[role] or tostring(role)
+  ensure_dir(fs.getDir(C.ROLE_PATH))
+  write_atomic(C.ROLE_PATH, 'return "' .. value .. '"\n')
+end
+
+function ensure_role_file(role)
+  if not role then
+    return
+  end
+  local existing = read_role_file()
+  if existing ~= role then
+    write_role_file(role)
+  end
 end
 
 function build_cleanup_suggestions()
@@ -2272,23 +2360,15 @@ function validate_manifest_required(manifest)
   return true
 end
 
-function parse_manifest(content)
-  local loader = load(content, "manifest", "t", {})
-  if not loader then
-    return nil, "Manifest load failed"
+function normalize_manifest_group(group, label)
+  if group == nil then
+    return {}
   end
-  local ok, data = pcall(loader)
-  if not ok or type(data) ~= "table" or type(data.files) ~= "table" then
-    return nil, "Manifest parse failed"
-  end
-  if type(data.manifest_version) ~= "number" then
-    return nil, "Manifest missing manifest_version"
-  end
-  if type(data.source_ref) ~= "string" then
-    return nil, "Manifest missing source_ref"
+  if type(group) ~= "table" then
+    return nil, ("Manifest group invalid: %s"):format(tostring(label or "?"))
   end
   local entries = {}
-  for _, entry in ipairs(data.files) do
+  for _, entry in ipairs(group) do
     if type(entry) ~= "table" then
       return nil, "Manifest entry invalid"
     end
@@ -2308,12 +2388,57 @@ function parse_manifest(content)
     })
   end
   table.sort(entries, function(a, b) return a.path < b.path end)
-  local lookup = {}
-  for _, entry in ipairs(entries) do
-    lookup[entry.path] = entry
+  return entries
+end
+
+function parse_manifest(content)
+  local loader = load(content, "manifest", "t", {})
+  if not loader then
+    return nil, "Manifest load failed"
   end
+  local ok, data = pcall(loader)
+  if not ok or type(data) ~= "table" then
+    return nil, "Manifest parse failed"
+  end
+  if type(data.manifest_version) ~= "number" then
+    return nil, "Manifest missing manifest_version"
+  end
+  if type(data.source_ref) ~= "string" then
+    return nil, "Manifest missing source_ref"
+  end
+  local manifest_groups = {}
+  if type(data.files) == "table" then
+    manifest_groups.shared = data.files
+  else
+    manifest_groups.shared = data.shared
+    manifest_groups.master = data.master
+    manifest_groups.rt = data.rt
+    manifest_groups.energy = data.energy
+    manifest_groups.water = data.water
+    manifest_groups.fuel = data.fuel
+    manifest_groups.reprocessor = data.reprocessor
+  end
+  local normalized_groups = {}
+  local entries = {}
+  local lookup = {}
+  for label, group in pairs(manifest_groups) do
+    local normalized, err = normalize_manifest_group(group, label)
+    if not normalized then
+      return nil, err
+    end
+    normalized_groups[label] = normalized
+    for _, entry in ipairs(normalized) do
+      if lookup[entry.path] then
+        return nil, "Manifest duplicate path: " .. entry.path
+      end
+      lookup[entry.path] = entry
+      table.insert(entries, entry)
+    end
+  end
+  table.sort(entries, function(a, b) return a.path < b.path end)
   data.entries = entries
   data.lookup = lookup
+  data.role_groups = normalized_groups
   local ok, err = validate_manifest_required(data)
   if not ok then
     return nil, err
@@ -2641,6 +2766,7 @@ function write_config(role, wireless, wired, extras)
     end
   end
   write_config_file(cfg_path, defaults)
+  ensure_role_file(role)
 end
 
 function build_rt_node_id()
@@ -2650,11 +2776,18 @@ function build_rt_node_id()
 end
 
 function find_existing_role()
+  local stored_role = read_role_file()
+  if stored_role then
+    local target = role_targets[stored_role]
+    local cfg_path = target and (C.BASE_DIR .. "/" .. target.config) or nil
+    local config = cfg_path and fs.exists(cfg_path) and read_config(cfg_path, {}) or nil
+    return stored_role, cfg_path, config
+  end
   for role, target in pairs(role_targets) do
     local cfg_path = C.BASE_DIR .. "/" .. target.config
     if fs.exists(cfg_path) then
       local config = read_config(cfg_path, {})
-      ROLE = config.role
+      ROLE = normalize_role_value(config.role) or config.role
       if ROLE == role then
         return role, cfg_path, config
       end
@@ -2771,9 +2904,9 @@ function restore_from_backup(base_dir, paths)
   end
 end
 
-function update_files(manifest, hash_algo)
+function update_files(entries, hash_algo)
   local updates = {}
-  for _, entry in ipairs(manifest.entries or {}) do
+  for _, entry in ipairs(entries or {}) do
     local path = entry.path
     if not is_config_file(path) then
       local full_path = resolve_install_path(path)
@@ -3023,10 +3156,16 @@ function verify_integrity(manifest, role, cfg_path)
     "xreactor/shared/constants.lua",
     "xreactor/installer/installer.lua"
   }
-  if role == roles.MASTER then
-    table.insert(required, "xreactor/master/main.lua")
-  else
-    table.insert(required, "xreactor/nodes/rt/main.lua")
+  local role_required = {
+    [roles.MASTER] = "xreactor/master/main.lua",
+    [roles.RT_NODE] = "xreactor/nodes/rt/main.lua",
+    [roles.ENERGY_NODE] = "xreactor/nodes/energy/main.lua",
+    [roles.FUEL_NODE] = "xreactor/nodes/fuel/main.lua",
+    [roles.WATER_NODE] = "xreactor/nodes/water/main.lua",
+    [roles.REPROCESSOR_NODE] = "xreactor/nodes/reprocessor/main.lua"
+  }
+  if role_required[role] then
+    table.insert(required, role_required[role])
   end
   for _, path in ipairs(required) do
     if not fs.exists(resolve_install_path(path)) then
@@ -3042,9 +3181,25 @@ function verify_integrity(manifest, role, cfg_path)
   return true
 end
 
-function build_manifest_entries(manifest)
+function getFilesForRole(role, manifest)
   local entries = {}
-  for _, entry in ipairs(manifest.entries or {}) do
+  local groups = manifest and manifest.role_groups or {}
+  for _, entry in ipairs(groups.shared or {}) do
+    table.insert(entries, entry)
+  end
+  local key = role and role_keys[role] or nil
+  if key and groups[key] then
+    for _, entry in ipairs(groups[key]) do
+      table.insert(entries, entry)
+    end
+  end
+  table.sort(entries, function(a, b) return a.path < b.path end)
+  return entries
+end
+
+function build_manifest_entries(manifest, role)
+  local entries = {}
+  for _, entry in ipairs(getFilesForRole(role, manifest)) do
     table.insert(entries, { path = entry.path, hash = entry.hash, size_bytes = entry.size_bytes })
   end
   if manifest.installer_path and manifest.installer_hash and manifest.installer_size_bytes then
@@ -3083,8 +3238,10 @@ function safe_update_prepare(role, cfg_path)
     if not node_ok then
       return nil
     end
+    ensure_role_file(role)
 
-    local updates = update_files(manifest, hash_algo)
+    local role_entries = getFilesForRole(role, manifest)
+    local updates = update_files(role_entries, hash_algo)
     log("INFO", "Files needing update: " .. tostring(#updates))
     local needed_bytes = calculate_required_bytes(updates)
     print_space_preflight(needed_bytes, "SAFE UPDATE")
@@ -3333,7 +3490,12 @@ function full_reinstall_prepare()
       keep_config = confirm("Keep existing config + role?", true)
     end
 
-    local entries = build_manifest_entries(manifest)
+    local selected_role = existing_role
+    if not keep_config or not existing_role then
+      selected_role = choose_role()
+    end
+    ROLE = selected_role
+    local entries = build_manifest_entries(manifest, selected_role)
     local required_total = calculate_required_bytes(entries)
     print_space_preflight(required_total, "FULL REINSTALL")
     local free_space = get_free_space(C.BASE_DIR)
@@ -3358,7 +3520,8 @@ function full_reinstall_prepare()
         use_staging = false,
         keep_config = keep_config,
         existing_role = existing_role,
-        existing_cfg_path = existing_cfg_path
+        existing_cfg_path = existing_cfg_path,
+        selected_role = selected_role
       }
     end
     local staged, stage_err, stage_meta, stage_dir = stage_updates(entries, release, hash_algo)
@@ -3374,7 +3537,8 @@ function full_reinstall_prepare()
         stage_dir = stage_dir,
         keep_config = keep_config,
         existing_role = existing_role,
-        existing_cfg_path = existing_cfg_path
+        existing_cfg_path = existing_cfg_path,
+        selected_role = selected_role
       }
     end
     print_download_failure("FULL REINSTALL failed: " .. tostring(stage_err), stage_meta, nil)
@@ -3401,7 +3565,7 @@ function setup_fresh_config(context, backup_dir, protected)
     log("INFO", "Restored existing config for role " .. tostring(context.existing_role))
     return context.existing_role, context.existing_cfg_path
   end
-  local role = choose_role()
+  local role = context.selected_role or choose_role()
   ROLE = role
   local cfg_path = C.BASE_DIR .. "/" .. role_targets[role].config
   local modems = detect_modems()
@@ -3475,7 +3639,7 @@ function full_reinstall_apply(context)
   local update_paths = build_update_paths(entries)
   local created = {}
   local migration_paths = build_migration_paths()
-  local protected = { C.NODE_ID_PATH, "/startup.lua", C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
+  local protected = { C.NODE_ID_PATH, C.ROLE_PATH, "/startup.lua", C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
   for _, target in pairs(role_targets) do
     table.insert(protected, C.BASE_DIR .. "/" .. target.config)
   end
@@ -3522,6 +3686,7 @@ function full_reinstall_apply(context)
   local role, cfg_path = setup_fresh_config(context, backup_dir, protected)
 
   ensure_node_id(role, cfg_path)
+  ensure_role_file(role)
   write_startup(role)
   write_atomic(C.MANIFEST_LOCAL, manifest_content)
   write_manifest_cache(manifest_content, release, current_base_source, {
