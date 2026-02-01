@@ -25,35 +25,125 @@ local CONFIG = {
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
   LOG_SAMPLE_BYTES = 200, -- Bytes to capture as response signature.
   DISK_SPACE_OVERHEAD_BYTES = 2048, -- Reserved extra bytes for write operations.
-  DISK_SPACE_MIN_BUFFER = 4096 -- Minimum free bytes to keep after writes.
+  DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
+  DISK_LABEL = "XREACTOR" -- Disk label to set when using a mounted disk.
 }
 
 local log_line
 
-local function detect_storage_mount()
-  if fs.exists("/disk") then
-    return "/disk"
+local function list_disk_mounts()
+  local mounts = {}
+  local candidates = { "/disk", "/disk2", "/disk3", "/disk4", "/disk5", "/disk6", "/disk7", "/disk8", "/disk9" }
+  for _, path in ipairs(candidates) do
+    if fs.exists(path) and fs.isDir(path) then
+      local ok_free, free = pcall(fs.getFreeSpace, path)
+      if ok_free and free then
+        local test_path = path .. "/.xreactor_write_test"
+        local ok_write = pcall(function()
+          local file = fs.open(test_path, "w")
+          if not file then
+            error("open failed", 0)
+          end
+          file.write("ok")
+          file.close()
+          fs.delete(test_path)
+        end)
+        if ok_write then
+          table.insert(mounts, { path = path, free = free })
+        end
+      end
+    end
+  end
+  table.sort(mounts, function(a, b) return a.free > b.free end)
+  return mounts
+end
+
+local function select_best_mount(min_bytes)
+  for _, entry in ipairs(list_disk_mounts()) do
+    if not min_bytes or entry.free >= min_bytes then
+      return entry.path, entry.free
+    end
   end
   return nil
 end
 
 local function configure_storage_root()
-  local mount = detect_storage_mount()
-  local root = "/xreactor"
-  if mount then
-    root = mount .. "/xreactor"
+  local mount_path = select_best_mount()
+  if not mount_path then
+    print("ERROR: No writable disk mount found.")
+    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
+    error("No writable disk mount available.")
   end
-  local log_dir = "/xreactor/logs"
-  if mount then
-    log_dir = mount .. "/xreactor_logs"
-  end
+  local root = mount_path .. "/xreactor"
+  local log_dir = mount_path .. "/xreactor_logs"
   CONFIG.STORAGE_ROOT = root
   CONFIG.LOG_DIR = log_dir
   CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
-  CONFIG.LOG_FALLBACK_PATH = "/xreactor/logs/installer_debug.log"
+  CONFIG.LOG_FALLBACK_PATH = log_dir .. "/installer_debug.log"
+  CONFIG.DISK_MOUNT_PATH = mount_path
+  CONFIG.TARGET_PATH = mount_path and (mount_path .. "/xreactor/installer/installer.lua") or "/installer.lua"
+  CONFIG.TEMP_PATH = mount_path and (mount_path .. "/xreactor/.tmp/installer.new") or "/tmp/installer.new"
 end
 
 configure_storage_root()
+
+local function try_label_disk()
+  if not CONFIG.DISK_MOUNT_PATH then
+    return
+  end
+  if shell and shell.run then
+    pcall(shell.run, "label", "set", CONFIG.DISK_LABEL)
+  end
+end
+
+local function apply_mount(path)
+  if not path then
+    return false
+  end
+  CONFIG.DISK_MOUNT_PATH = path
+  CONFIG.STORAGE_ROOT = path .. "/xreactor"
+  CONFIG.LOG_DIR = path .. "/xreactor_logs"
+  CONFIG.LOG_PATH = CONFIG.LOG_DIR .. "/installer_debug.log"
+  CONFIG.LOG_FALLBACK_PATH = CONFIG.LOG_PATH
+  CONFIG.TARGET_PATH = path .. "/xreactor/installer/installer.lua"
+  CONFIG.TEMP_PATH = path .. "/xreactor/.tmp/installer.new"
+  return true
+end
+
+local function select_mount_for_bytes(needed)
+  local path = select_best_mount(needed)
+  if not path then
+    return false
+  end
+  if path ~= CONFIG.DISK_MOUNT_PATH then
+    apply_mount(path)
+    ensure_log_dirs()
+    try_label_disk()
+  end
+  return true
+end
+
+local function relocate_bootstrap_if_needed()
+  if not CONFIG.DISK_MOUNT_PATH or not shell or not shell.getRunningProgram or not shell.run then
+    return false
+  end
+  local running = shell.getRunningProgram()
+  if not running or running == "" then
+    return false
+  end
+  local absolute = running:sub(1, 1) == "/" and running or ("/" .. running)
+  if absolute:sub(1, #CONFIG.DISK_MOUNT_PATH) == CONFIG.DISK_MOUNT_PATH then
+    return false
+  end
+  local target = CONFIG.DISK_MOUNT_PATH .. "/installer"
+  local ok_copy = pcall(fs.copy, absolute, target)
+  if not ok_copy then
+    return false
+  end
+  print("Relocating installer to disk: " .. target)
+  shell.run(target)
+  return true
+end
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
@@ -131,7 +221,6 @@ local log_state = {
 
 local function ensure_log_dirs()
   pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
-  pcall(fs.makeDir, "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor/logs")
 end
 
@@ -388,7 +477,7 @@ end
 
 local fetch_url_seeded = false
 
-local function fetch_url(url)
+local function fetch_url(url, target_path)
   if not http or not http.get then
     log_line("ERROR", "http", "HTTP API unavailable")
     return false, nil, "HTTP API unavailable", { url = url }
@@ -431,14 +520,65 @@ local function fetch_url(url)
   end
   local code = response.getResponseCode and response.getResponseCode() or nil
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
-  local body = response.readAll()
+  local content_length = headers and (headers["Content-Length"] or headers["content-length"])
+  if content_length then
+    local expected = tonumber(content_length)
+    if expected then
+      local needed = expected + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+      local ok_space, space_err = ensure_free_space(target_path, needed, "Download " .. tostring(target_path))
+      if not ok_space then
+        if not select_mount_for_bytes(needed) then
+          response.close()
+          return false, nil, space_err, { url = url, code = code, headers = headers }
+        end
+        target_path = CONFIG.TEMP_PATH
+      end
+    end
+  end
+  ensure_dir(fs.getDir(target_path))
+  local file = fs.open(target_path, "wb")
+  if not file then
+    response.close()
+    return false, nil, "file open failed", { url = url, code = code, headers = headers }
+  end
+  local prefix = ""
+  local bytes = 0
+  local chunk_size = 8192
+  local ok_read, read_err = pcall(function()
+    while true do
+      local chunk = nil
+      if response.read then
+        chunk = response.read(chunk_size)
+      elseif response.readLine then
+        local line = response.readLine()
+        if line then
+          chunk = line .. "\n"
+        end
+      end
+      if not chunk then
+        break
+      end
+      bytes = bytes + #chunk
+      if #prefix < 512 then
+        local needed = 512 - #prefix
+        prefix = prefix .. chunk:sub(1, needed)
+      end
+      file.write(chunk)
+    end
+  end)
+  file.close()
   response.close()
-  local prefix = body and body:sub(1, 512) or ""
+  if not ok_read then
+    if fs.exists(target_path) then
+      fs.delete(target_path)
+    end
+    return false, nil, tostring(read_err), { url = url, code = code, headers = headers }
+  end
   local meta = {
     url = url,
     code = code,
     headers = headers,
-    bytes = body and #body or 0,
+    bytes = bytes,
     signature = sanitize_signature(prefix)
   }
   local header_dump = headers and textutils.serialize(headers) or "n/a"
@@ -450,14 +590,14 @@ local function fetch_url(url)
   ))
   log_line("INFO", "http", "HTTP headers: " .. tostring(header_dump))
   log_line("INFO", "http", "HTTP body sample: " .. tostring(sanitize_signature(prefix)))
-  if not body or body == "" then
+  if bytes == 0 then
     return false, nil, "empty body", meta
   end
-  local ok, reason = validate_response(code, headers, prefix, body and #body or 0)
+  local ok, reason = validate_response(code, headers, prefix, bytes)
   if not ok then
     return false, nil, reason, meta
   end
-  return true, body, nil, meta
+  return true, target_path, nil, meta
 end
 
 local function write_atomic(path, temp_path, content)
@@ -538,7 +678,10 @@ local function download_bootstrap()
   end
   for attempt = 1, CONFIG.DOWNLOAD_ATTEMPTS do
     for _, url in ipairs(urls) do
-      local ok, body, err, meta = fetch_url(url)
+      if fs.exists(CONFIG.TEMP_PATH) then
+        fs.delete(CONFIG.TEMP_PATH)
+      end
+      local ok, temp_path, err, meta = fetch_url(url, CONFIG.TEMP_PATH)
       if ok then
         log_line("INFO", "installer", string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
           tostring(url),
@@ -547,10 +690,11 @@ local function download_bootstrap()
           tostring(meta and meta.signature or ""),
           attempt
         ))
-        local write_ok, write_err = write_atomic(CONFIG.TARGET_PATH, CONFIG.TEMP_PATH, body)
-        if not write_ok then
-          return false, "write failed (" .. tostring(write_err) .. ")", meta
+        ensure_dir(fs.getDir(CONFIG.TARGET_PATH))
+        if fs.exists(CONFIG.TARGET_PATH) then
+          fs.delete(CONFIG.TARGET_PATH)
         end
+        fs.move(temp_path, CONFIG.TARGET_PATH)
         log_line("INFO", "installer", "Atomic swap complete: " .. CONFIG.TARGET_PATH)
         return true
       end
@@ -576,6 +720,10 @@ end
 
 init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
+try_label_disk()
+if relocate_bootstrap_if_needed() then
+  return
+end
 
 local ok = false
 local err

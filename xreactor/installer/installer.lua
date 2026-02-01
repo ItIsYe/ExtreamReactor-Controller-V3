@@ -15,7 +15,7 @@ local CONFIG = {
   DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
   DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
-  DOWNLOAD_STREAM_CHUNK_SIZE = 4096, -- Stream chunk size for core downloads.
+  DOWNLOAD_STREAM_CHUNK_SIZE = 8192, -- Stream chunk size for core downloads.
   MIN_CORE_BYTES = 200, -- Minimum bytes to accept core download.
   CORE_SANITY_MARKER = "local function main", -- Core sanity marker.
   CORE_DOWNLOAD_PATH = "/xreactor/.tmp/installer_core.lua.download", -- Temp download path for core (updated at runtime).
@@ -34,29 +34,58 @@ local CONFIG = {
   LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
   LOG_SAMPLE_BYTES = 200, -- Bytes to capture as response signature.
   DISK_SPACE_OVERHEAD_BYTES = 2048, -- Reserved extra bytes for write operations.
-  DISK_SPACE_MIN_BUFFER = 4096 -- Minimum free bytes to keep after writes.
+  DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
+  DISK_LABEL = "XREACTOR" -- Disk label to set when using a mounted disk.
 }
 
 local log_line
 local cleanup_temp_file
 
-local function detect_storage_mount()
-  if fs.exists("/disk") then
-    return "/disk"
+local function list_disk_mounts()
+  local mounts = {}
+  local candidates = { "/disk", "/disk2", "/disk3", "/disk4", "/disk5", "/disk6", "/disk7", "/disk8", "/disk9" }
+  for _, path in ipairs(candidates) do
+    if fs.exists(path) and fs.isDir(path) then
+      local ok_free, free = pcall(fs.getFreeSpace, path)
+      if ok_free and free then
+        local test_path = path .. "/.xreactor_write_test"
+        local ok_write = pcall(function()
+          local file = fs.open(test_path, "w")
+          if not file then
+            error("open failed", 0)
+          end
+          file.write("ok")
+          file.close()
+          fs.delete(test_path)
+        end)
+        if ok_write then
+          table.insert(mounts, { path = path, free = free })
+        end
+      end
+    end
+  end
+  table.sort(mounts, function(a, b) return a.free > b.free end)
+  return mounts
+end
+
+local function select_best_mount(min_bytes)
+  for _, entry in ipairs(list_disk_mounts()) do
+    if not min_bytes or entry.free >= min_bytes then
+      return entry.path, entry.free
+    end
   end
   return nil
 end
 
 local function configure_storage_root()
-  local mount = detect_storage_mount()
-  local root = "/xreactor"
-  if mount then
-    root = mount .. "/xreactor"
+  local mount_path = select_best_mount()
+  if not mount_path then
+    print("ERROR: No writable disk mount found.")
+    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
+    error("No writable disk mount available.")
   end
-  local log_dir = "/xreactor/logs"
-  if mount then
-    log_dir = mount .. "/xreactor_logs"
-  end
+  local root = mount_path .. "/xreactor"
+  local log_dir = mount_path .. "/xreactor_logs"
   local stage_dir = root .. "_stage"
   local backup_dir = root .. "_backup"
   CONFIG.STORAGE_ROOT = root
@@ -69,10 +98,78 @@ local function configure_storage_root()
   CONFIG.CORE_BAD_PATH = root .. "/.tmp/installer_core.bad"
   CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
   CONFIG.LOCAL_LOG_DIR = log_dir
-  CONFIG.LOG_FALLBACK_PATH = "/xreactor/logs/installer_debug.log"
+  CONFIG.LOG_FALLBACK_PATH = log_dir .. "/installer_debug.log"
+  CONFIG.DISK_MOUNT_PATH = mount_path
 end
 
 configure_storage_root()
+
+local function try_label_disk()
+  if not CONFIG.DISK_MOUNT_PATH then
+    return
+  end
+  if shell and shell.run then
+    pcall(shell.run, "label", "set", CONFIG.DISK_LABEL)
+  end
+end
+
+local function apply_mount(path)
+  if not path then
+    return false
+  end
+  CONFIG.DISK_MOUNT_PATH = path
+  CONFIG.STORAGE_ROOT = path .. "/xreactor"
+  CONFIG.LOG_DIR = path .. "/xreactor_logs"
+  CONFIG.STAGE_DIR = CONFIG.STORAGE_ROOT .. "_stage"
+  CONFIG.BACKUP_DIR = CONFIG.STORAGE_ROOT .. "_backup"
+  CONFIG.CORE_PATH = CONFIG.STORAGE_ROOT .. "/installer/installer_core.lua"
+  CONFIG.CORE_META_PATH = CONFIG.STORAGE_ROOT .. "/installer/installer_core.meta"
+  CONFIG.CORE_DOWNLOAD_PATH = CONFIG.STORAGE_ROOT .. "/.tmp/installer_core.lua.download"
+  CONFIG.CORE_BAD_PATH = CONFIG.STORAGE_ROOT .. "/.tmp/installer_core.bad"
+  CONFIG.LOG_PATH = CONFIG.LOG_DIR .. "/installer_debug.log"
+  CONFIG.LOCAL_LOG_DIR = CONFIG.LOG_DIR
+  CONFIG.LOG_FALLBACK_PATH = CONFIG.LOG_PATH
+  return true
+end
+
+local function select_mount_for_bytes(needed)
+  local path = select_best_mount(needed)
+  if not path then
+    return false
+  end
+  if path ~= CONFIG.DISK_MOUNT_PATH then
+    apply_mount(path)
+    ensure_log_dirs()
+    try_label_disk()
+  end
+  return true
+end
+
+local function relocate_bootstrap_if_needed()
+  if not CONFIG.DISK_MOUNT_PATH or not shell or not shell.getRunningProgram or not shell.run then
+    return false
+  end
+  local running = shell.getRunningProgram()
+  if not running or running == "" then
+    return false
+  end
+  local absolute = running:sub(1, 1) == "/" and running or ("/" .. running)
+  local target = CONFIG.STORAGE_ROOT .. "/installer/installer.lua"
+  if absolute == target then
+    return false
+  end
+  if absolute:sub(1, #CONFIG.DISK_MOUNT_PATH) == CONFIG.DISK_MOUNT_PATH then
+    return false
+  end
+  ensure_dir(fs.getDir(target))
+  local ok_copy = pcall(fs.copy, absolute, target)
+  if not ok_copy then
+    return false
+  end
+  print("Relocating installer to disk: " .. target)
+  shell.run(target)
+  return true
+end
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
@@ -167,6 +264,13 @@ local function ensure_core_space(expected_bytes)
   if ok then
     return true
   end
+  if select_mount_for_bytes(needed) then
+    cleanup_storage_for_space()
+    ok, err = ensure_free_space(CONFIG.CORE_DOWNLOAD_PATH, needed, "Core download (after disk switch)")
+    if ok then
+      return true
+    end
+  end
   return false, err
 end
 
@@ -222,7 +326,6 @@ local log_state = {
 }
 
 local function ensure_log_dirs()
-  pcall(fs.makeDir, "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
   pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor/logs")
   pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
@@ -451,6 +554,28 @@ local function validate_response(status_code, headers, body_prefix, body_len)
   return true
 end
 
+local function read_response_body(response, chunk_size)
+  local chunks = {}
+  local total = 0
+  while true do
+    local chunk = nil
+    if response.read then
+      chunk = response.read(chunk_size)
+    elseif response.readLine then
+      local line = response.readLine()
+      if line then
+        chunk = line .. "\n"
+      end
+    end
+    if not chunk then
+      break
+    end
+    total = total + #chunk
+    table.insert(chunks, chunk)
+  end
+  return table.concat(chunks), total
+end
+
 local function fetch_url(url)
   if not http or not http.get then
     log_line("ERROR", "http", "HTTP API unavailable")
@@ -494,14 +619,14 @@ local function fetch_url(url)
   end
   local code = response.getResponseCode and response.getResponseCode() or nil
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
-  local body = response.readAll()
+  local body, body_len = read_response_body(response, 8192)
   response.close()
   local prefix = body and body:sub(1, 1024) or ""
   local meta = {
     url = url,
     code = code,
     headers = headers,
-    bytes = body and #body or 0,
+    bytes = body_len or 0,
     signature = sanitize_signature(prefix)
   }
   local header_dump = headers and textutils.serialize(headers) or "n/a"
@@ -516,7 +641,7 @@ local function fetch_url(url)
   if not body or body == "" then
     return false, nil, "empty body", meta
   end
-  local ok, reason = validate_response(code, headers, prefix, body and #body or 0)
+  local ok, reason = validate_response(code, headers, prefix, body_len or 0)
   if not ok then
     return false, nil, reason, meta
   end
@@ -580,7 +705,7 @@ local function fetch_url_stream(url, target_path)
 
   local code = response.getResponseCode and response.getResponseCode() or nil
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
-  local file = fs.open(target_path, "w")
+  local file = fs.open(target_path, "wb")
   if not file then
     response.close()
     return false, "file open failed", { url = url, code = code, headers = headers }
@@ -968,11 +1093,13 @@ local function ensure_package_path()
 end
 
 local function load_release()
-  local ok, content, meta = downloadFile(CONFIG.RELEASE_PATH, CONFIG.RELEASE_BRANCH, { module_name = "release" })
+  local temp_path = CONFIG.STORAGE_ROOT .. "/.tmp/release.lua.download"
+  local urls = build_raw_urls(CONFIG.RELEASE_PATH, CONFIG.RELEASE_BRANCH)
+  local ok, meta = download_with_retries_to_path(urls, 1, "release", temp_path)
   if not ok then
     return nil, meta
   end
-  local loader, load_err = load(content, "release", "t", {})
+  local loader, load_err = loadfile(temp_path)
   if not loader then
     return nil, { err = "release load failed", detail = load_err }
   end
@@ -1239,6 +1366,10 @@ end
 ensure_package_path()
 init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
+try_label_disk()
+if relocate_bootstrap_if_needed() then
+  return
+end
 
 local release, release_meta = load_release()
 if not release then

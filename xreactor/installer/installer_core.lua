@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "2.1"
+local INSTALLER_CORE_VERSION = "2.6"
 
 -- CONFIG
 local CONFIG = {
@@ -30,7 +30,7 @@ local CONFIG = {
   DOWNLOAD_BACKOFF = 1, -- Backoff base (seconds) between retries.
   DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to download backoff.
   DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (used when http.request is available).
-  DOWNLOAD_CHUNK_SIZE = 4096, -- Stream chunk size for downloads.
+  DOWNLOAD_CHUNK_SIZE = 8192, -- Stream chunk size for downloads.
   DOWNLOAD_MIRRORS = { -- Download mirrors (raw content only).
     "https://raw.githubusercontent.com"
   },
@@ -64,6 +64,7 @@ local CONFIG = {
   LOG_SAMPLE_BYTES = 96, -- Bytes to capture as response signature.
   CHECKSUM_DIAG_SAMPLE_BYTES = 80, -- Bytes to show when checksum mismatch occurs.
   UPDATE_MARKER_PATH = "/xreactor/.update_in_progress", -- Update marker path (updated at runtime).
+  DISK_LABEL = "XREACTOR", -- Disk label to set when using a mounted disk.
   REQUIRED_CORE_FILES = { -- Core files that must exist in the manifest.
     "xreactor/core/bootstrap.lua",
     "xreactor/core/logger.lua",
@@ -197,18 +198,47 @@ local storage_state = {
   log_fallback = CONFIG.LOG_PATH
 }
 
-function detect_storage_mount()
-  if fs.exists("/disk") then
-    return "/disk"
+function list_disk_mounts()
+  local mounts = {}
+  local candidates = { "/disk", "/disk2", "/disk3", "/disk4", "/disk5", "/disk6", "/disk7", "/disk8", "/disk9" }
+  for _, path in ipairs(candidates) do
+    if fs.exists(path) and fs.isDir(path) then
+      local ok_free, free = pcall(fs.getFreeSpace, path)
+      if ok_free and free then
+        local test_path = path .. "/.xreactor_write_test"
+        local ok_write = pcall(function()
+          local file = fs.open(test_path, "w")
+          if not file then
+            error("open failed", 0)
+          end
+          file.write("ok")
+          file.close()
+          fs.delete(test_path)
+        end)
+        if ok_write then
+          table.insert(mounts, { path = path, free = free })
+        end
+      end
+    end
+  end
+  table.sort(mounts, function(a, b) return a.free > b.free end)
+  return mounts
+end
+
+function select_best_mount(min_bytes)
+  for _, entry in ipairs(list_disk_mounts()) do
+    if not min_bytes or entry.free >= min_bytes then
+      return entry.path, entry.free
+    end
   end
   return nil
 end
 
-function build_storage_paths(root)
+function build_storage_paths(root, mount_path)
   local base = root or "/xreactor"
   local log_dir = "/xreactor/logs"
-  if base:match("^/disk/") then
-    log_dir = "/disk/xreactor_logs"
+  if mount_path then
+    log_dir = mount_path .. "/xreactor_logs"
   end
   return {
     base_dir = base,
@@ -225,21 +255,21 @@ function build_storage_paths(root)
   }
 end
 
-function configure_storage_paths()
-  local mount = detect_storage_mount()
-  local root = "/xreactor"
-  if mount then
-    root = mount .. "/xreactor"
+function apply_storage_paths(mount_path)
+  if not mount_path then
+    return false
   end
-  local paths = build_storage_paths(root)
-  storage_state.use_disk = mount ~= nil
-  storage_state.mount_path = mount
+  local root = mount_path .. "/xreactor"
+  local paths = build_storage_paths(root, mount_path)
+  storage_state.use_disk = true
+  storage_state.mount_path = mount_path
+  storage_state.mount_name = nil
   storage_state.storage_root = root
   storage_state.log_dir = paths.log_dir
   storage_state.stage_dir = paths.stage_dir
   storage_state.backup_dir = paths.backup_dir
   storage_state.log_primary = paths.log_dir .. "/installer_core.log"
-  storage_state.log_fallback = "/xreactor/logs/installer_core.log"
+  storage_state.log_fallback = storage_state.log_primary
 
   C.BASE_DIR = paths.base_dir
   C.MANIFEST_LOCAL = paths.manifest_local
@@ -258,7 +288,18 @@ function configure_storage_paths()
 
   C.LOG_PATH = storage_state.log_primary
   CONFIG.LOG_PATH = C.LOG_PATH
-  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir, "/xreactor/logs" }
+  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir }
+  return true
+end
+
+function configure_storage_paths()
+  local mount_path = select_best_mount()
+  if not mount_path then
+    print("ERROR: No writable disk mount found.")
+    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
+    error("No writable disk mount available.")
+  end
+  apply_storage_paths(mount_path)
 end
 
 -- Internal standalone logger for the installer (no project dependencies).
@@ -429,6 +470,17 @@ end
 configure_storage_paths()
 init_internal_logger()
 
+local function try_label_disk()
+  if not storage_state.mount_path then
+    return
+  end
+  if shell and shell.run then
+    pcall(shell.run, "label", "set", CONFIG.DISK_LABEL)
+  end
+end
+
+try_label_disk()
+
 function resolve_install_path(path)
   if not path or path == "" then
     return path
@@ -502,6 +554,73 @@ local role_storage_values = {
 }
 
 local role_filter_cache = {}
+local role_files_cache = nil
+local role_files_default = {
+  MASTER = {
+    "xreactor/master/config.lua",
+    "xreactor/master/startup_sequencer.lua",
+    "xreactor/master/profiles.lua",
+    "xreactor/master/main.lua",
+    "xreactor/master/ui/alarms.lua",
+    "xreactor/master/ui/resources.lua",
+    "xreactor/master/ui/rt_dashboard.lua",
+    "xreactor/master/ui/overview.lua",
+    "xreactor/master/ui/alerts.lua",
+    "xreactor/master/ui/energy.lua",
+    "xreactor/master/ui/multiview.lua",
+    "xreactor/master/ui/widgets.lua"
+  },
+  RT = {
+    "xreactor/nodes/rt/config.lua",
+    "xreactor/nodes/rt/main.lua"
+  },
+  ENERGY = {
+    "xreactor/nodes/energy/config.lua",
+    "xreactor/nodes/energy/main.lua"
+  },
+  WATER = {
+    "xreactor/nodes/water/config.lua",
+    "xreactor/nodes/water/main.lua"
+  },
+  FUEL = {
+    "xreactor/nodes/fuel/config.lua",
+    "xreactor/nodes/fuel/main.lua"
+  },
+  REPROCESSOR = {
+    "xreactor/nodes/reprocessor/config.lua",
+    "xreactor/nodes/reprocessor/main.lua"
+  }
+}
+
+local function load_role_files_map()
+  if role_files_cache ~= nil then
+    return role_files_cache
+  end
+  local path = resolve_install_path("xreactor/installer/role_files.lua")
+  if not path or not fs.exists(path) then
+    role_files_cache = role_files_default
+    return role_files_cache
+  end
+  local file = fs.open(path, "r")
+  if not file then
+    role_files_cache = role_files_default
+    return role_files_cache
+  end
+  local content = file.readAll()
+  file.close()
+  local loader = load(content or "", "role_files", "t", {})
+  if not loader then
+    role_files_cache = role_files_default
+    return role_files_cache
+  end
+  local ok, data = pcall(loader)
+  if not ok or type(data) ~= "table" then
+    role_files_cache = role_files_default
+    return role_files_cache
+  end
+  role_files_cache = data
+  return role_files_cache
+end
 local base_role_prefixes = {
   "xreactor/core/",
   "xreactor/shared/",
@@ -615,6 +734,9 @@ local function build_role_filter(role)
   add_exact(base_role_files)
   add_exact(role_service_files[role])
   add_exact(role_adapter_files[role])
+  local role_map = load_role_files_map()
+  local extras = role_map and role_map[role_storage_values[role]] or nil
+  add_exact(extras)
   role_filter_cache[role] = { prefixes = prefixes, exact = exact }
   return role_filter_cache[role]
 end
@@ -1136,6 +1258,18 @@ function cleanup_storage_for_space()
   return deleted
 end
 
+function switch_storage_disk(min_bytes, context)
+  local target = select_best_mount(min_bytes)
+  if not target or target == storage_state.mount_path then
+    return false
+  end
+  apply_storage_paths(target)
+  ensure_required_dirs()
+  set_log_paths(storage_state.log_primary, storage_state.log_fallback)
+  log("INFO", ("Switched disk mount to %s for %s"):format(tostring(target), tostring(context or "space")))
+  return true
+end
+
 function cleanup_full_reinstall_storage()
   local deleted = {}
   for _, path in ipairs(clear_dir_contents(C.UPDATE_STAGING_BASE)) do
@@ -1166,7 +1300,15 @@ function ensure_space_with_cleanup(path, expected_bytes, context)
     return true
   end
   cleanup_storage_for_space()
-  return ensure_free_space(path, needed, context .. " (after cleanup)")
+  ok = ensure_free_space(path, needed, context .. " (after cleanup)")
+  if ok then
+    return true
+  end
+  if switch_storage_disk(needed, context) then
+    local switched_path = storage_state.storage_root or C.BASE_DIR
+    return ensure_free_space(switched_path, needed, context .. " (after disk switch)")
+  end
+  return false
 end
 
 function write_atomic(path, content)
@@ -1782,7 +1924,7 @@ end
 function stream_response_to_file(response, target_path, opts)
   ensure_dir(fs.getDir(target_path))
   local tmp = target_path .. ".part"
-  local file = fs.open(tmp, "w")
+  local file = fs.open(tmp, "wb")
   if not file then
     return false, "open failed"
   end
@@ -1790,34 +1932,26 @@ function stream_response_to_file(response, target_path, opts)
   local prefix_limit = (opts and opts.prefix_bytes) or 512
   local prefix = ""
   local total = 0
-  local read_fn = response.read
   local ok, err = pcall(function()
-    if read_fn then
-      while true do
-        local chunk = response.read(chunk_size)
-        if not chunk then
-          break
+    while true do
+      local chunk = nil
+      if response.read then
+        chunk = response.read(chunk_size)
+      elseif response.readLine then
+        local line = response.readLine()
+        if line then
+          chunk = line .. "\n"
         end
-        if #prefix < prefix_limit then
-          local needed = prefix_limit - #prefix
-          prefix = prefix .. chunk:sub(1, needed)
-        end
-        file.write(chunk)
-        total = total + #chunk
       end
-    else
-      local body = response.readAll()
-      if body then
-        if #prefix < prefix_limit then
-          prefix = body:sub(1, prefix_limit)
-        end
-        local index = 1
-        while index <= #body do
-          file.write(body:sub(index, index + chunk_size - 1))
-          index = index + chunk_size
-        end
-        total = #body
+      if not chunk then
+        break
       end
+      if #prefix < prefix_limit then
+        local needed = prefix_limit - #prefix
+        prefix = prefix .. chunk:sub(1, needed)
+      end
+      file.write(chunk)
+      total = total + #chunk
     end
   end)
   file.close()
@@ -1839,6 +1973,28 @@ function finalize_temp_file(temp_path, target_path)
     fs.delete(target_path)
   end
   fs.move(temp_path, target_path)
+end
+
+function read_response_body(response, chunk_size)
+  local chunks = {}
+  local total = 0
+  while true do
+    local chunk = nil
+    if response.read then
+      chunk = response.read(chunk_size)
+    elseif response.readLine then
+      local line = response.readLine()
+      if line then
+        chunk = line .. "\n"
+      end
+    end
+    if not chunk then
+      break
+    end
+    total = total + #chunk
+    table.insert(chunks, chunk)
+  end
+  return table.concat(chunks), total
 end
 
 -- Single download function used by all network requests.
@@ -1886,7 +2042,7 @@ function fetch_url(url, opts)
   end
   local code = response.getResponseCode and response.getResponseCode() or nil
   local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
-  local body = response.readAll()
+  local body, body_len = read_response_body(response, (opts and opts.chunk_size) or C.DOWNLOAD_CHUNK_SIZE or 8192)
   response.close()
   local prefix = body and body:sub(1, 1024) or ""
   local meta = {
@@ -1894,7 +2050,7 @@ function fetch_url(url, opts)
     code = code,
     status = code,
     headers = headers,
-    bytes = body and #body or 0,
+    bytes = body_len or 0,
     signature = sanitize_signature(prefix)
   }
   if not body or body == "" then
@@ -1905,7 +2061,7 @@ function fetch_url(url, opts)
     meta.reason = "html response"
     return false, nil, meta.reason, meta
   end
-  local ok, reason, size_mismatch = validate_response(code, headers, prefix, body and #body or 0)
+  local ok, reason, size_mismatch = validate_response(code, headers, prefix, body_len or 0)
   if not ok then
     meta.reason = reason
     return false, nil, reason, meta
@@ -2464,10 +2620,14 @@ function print_download_failure(label, info, fallback_urls)
 end
 
 function download_release()
-  local ok, content, meta = downloadFile(C.RELEASE_REMOTE, build_main_base_url())
+  local temp_path = C.BASE_DIR .. "/.tmp/release.lua.download"
+  ensure_dir(fs.getDir(temp_path))
+  local urls = build_mirror_urls(build_main_base_url(), C.RELEASE_REMOTE)
+  local ok, meta = download_file_to_path(urls, temp_path, nil, "crc32", { attempts = C.DOWNLOAD_ATTEMPTS })
   if not ok then
     return nil, "Release download failed", meta
   end
+  local content = read_file(temp_path)
   local ok_sanity, reason = sanity_check(content, C.RELEASE_MIN_BYTES, C.RELEASE_SANITY_MARKER)
   if not ok_sanity then
     local entry = meta and meta.last or { url = url, ok = false, err = reason, bytes = content and #content or 0 }
@@ -2659,10 +2819,13 @@ function download_manifest_from_source(release, base_info)
   if base_info.source == CONFIG.DEFAULT_BRANCH and CONFIG.MANIFEST_URL_FALLBACK then
     table.insert(urls, CONFIG.MANIFEST_URL_FALLBACK)
   end
-  local ok, content, meta = downloadFile(urls)
+  local temp_path = C.BASE_DIR .. "/.tmp/manifest.lua.download"
+  ensure_dir(fs.getDir(temp_path))
+  local ok, meta = download_file_to_path(urls, temp_path, nil, "crc32", { attempts = C.DOWNLOAD_ATTEMPTS })
   if not ok then
     return nil, "Manifest download failed", meta
   end
+  local content = read_file(temp_path)
   local ok_sanity, reason = sanity_check(content, C.MANIFEST_MIN_BYTES, C.MANIFEST_SANITY_MARKER)
   if not ok_sanity then
     local entry = meta and meta.last or { url = urls[1], ok = false, err = reason, bytes = content and #content or 0 }
@@ -2781,7 +2944,6 @@ end
 function ensure_required_dirs()
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.LOCAL_LOG_DIR)
-  ensure_dir("/xreactor/logs")
   ensure_dir(C.LOCAL_STAGING_BASE)
   ensure_dir(C.LOCAL_BACKUP_BASE)
   ensure_dir(C.UPDATE_STAGING_BASE)
