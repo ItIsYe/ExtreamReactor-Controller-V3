@@ -14,7 +14,7 @@ local CONFIG = {
   MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path (updated at runtime).
   LOCAL_BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   LOCAL_STAGING_BASE = "/xreactor_stage", -- Staging base directory (updated at runtime).
-  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor/logs", -- Log directory (updated at runtime).
   BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path (updated at runtime).
   ROLE_PATH = "/xreactor/config/role.lua", -- Role storage path (updated at runtime).
@@ -51,10 +51,10 @@ local CONFIG = {
   MAX_LOG_FILES = 5, -- Retention: max number of log files to keep.
   MAX_LOGS_MB = 6, -- Retention: max combined log size (MB) under log dirs.
   MAX_STAGING_DIRS = 2, -- Retention: number of staging dirs to keep in /xreactor_stage.
-  LOG_RETENTION_DIRS = { "/xreactor_logs" }, -- Log dirs eligible for cleanup (updated at runtime).
+  LOG_RETENTION_DIRS = { "/xreactor/logs" }, -- Log dirs eligible for cleanup (updated at runtime).
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = true, -- Always enable installer file logging.
-  LOG_PATH = "/xreactor_logs/installer_core.log", -- Installer log file path (updated at runtime).
+  LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path (updated at runtime).
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER_CORE", -- Installer log prefix.
@@ -209,9 +209,13 @@ end
 
 function build_storage_paths(root)
   local base = root or "/xreactor"
+  local log_dir = base .. "_logs"
+  if base == "/xreactor" then
+    log_dir = "/xreactor/logs"
+  end
   return {
     base_dir = base,
-    log_dir = base .. "_logs",
+    log_dir = log_dir,
     stage_dir = base .. "_stage",
     backup_dir = base .. "_backup",
     manifest_local = base .. "/.manifest",
@@ -257,7 +261,7 @@ function configure_storage_paths()
 
   C.LOG_PATH = storage_state.log_primary
   CONFIG.LOG_PATH = C.LOG_PATH
-  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir }
+  CONFIG.LOG_RETENTION_DIRS = { paths.log_dir, "/xreactor/logs" }
 end
 
 -- Internal standalone logger for the installer (no project dependencies).
@@ -621,8 +625,13 @@ function build_cleanup_suggestions()
   local suggestions = {
     ("delete %s/*"):format(C.BACKUP_BASE),
     ("delete %s/*"):format(C.UPDATE_STAGING_BASE),
-    ("delete %s/*.log"):format(C.LOCAL_LOG_DIR)
+    "delete /xreactor/logs/*.log"
   }
+  if storage_state.mount_path then
+    table.insert(suggestions, "delete " .. storage_state.mount_path .. "/xreactor_logs/*.log")
+  else
+    table.insert(suggestions, "delete /disk/xreactor_logs/*.log")
+  end
   return table.concat(suggestions, " | ")
 end
 
@@ -942,8 +951,10 @@ end
 
 function cleanup_logs_for_space()
   local deleted = {}
-  for _, path in ipairs(clear_log_files(C.LOCAL_LOG_DIR)) do
-    table.insert(deleted, path)
+  for _, dir in ipairs(CONFIG.LOG_RETENTION_DIRS or {}) do
+    for _, path in ipairs(clear_log_files(dir)) do
+      table.insert(deleted, path)
+    end
   end
   return deleted
 end
@@ -2637,7 +2648,7 @@ function acquire_manifest()
 end
 
 function ensure_required_dirs()
-  ensure_dir("/xreactor_logs")
+  ensure_dir("/xreactor/logs")
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.LOCAL_LOG_DIR)
   ensure_dir(C.LOCAL_STAGING_BASE)
@@ -2646,24 +2657,26 @@ function ensure_required_dirs()
   ensure_dir(C.BACKUP_BASE)
 end
 
-function ensure_base_dirs()
+function ensure_base_dirs(role)
   ensure_required_dirs()
   ensure_dir(C.BASE_DIR)
   ensure_dir(C.BASE_DIR .. "/config")
   ensure_dir(C.BASE_DIR .. "/core")
-  ensure_dir(C.BASE_DIR .. "/logs")
-  ensure_dir(C.BASE_DIR .. "/master")
-  ensure_dir(C.BASE_DIR .. "/master/ui")
-  ensure_dir(C.BASE_DIR .. "/nodes")
-  ensure_dir(C.BASE_DIR .. "/nodes/rt")
-  ensure_dir(C.BASE_DIR .. "/nodes/energy")
-  ensure_dir(C.BASE_DIR .. "/nodes/fuel")
-  ensure_dir(C.BASE_DIR .. "/nodes/water")
-  ensure_dir(C.BASE_DIR .. "/nodes/reprocessor")
+  ensure_dir(C.BASE_DIR .. "/services")
   ensure_dir(C.BASE_DIR .. "/shared")
+  ensure_dir(C.BASE_DIR .. "/adapters")
   ensure_dir(C.BASE_DIR .. "/installer")
+  ensure_dir(C.BASE_DIR .. "/logs")
+  ensure_dir(C.BASE_DIR .. "/state")
   ensure_dir(C.BASE_DIR .. "/.cache")
   ensure_dir(C.LOCAL_LOG_DIR)
+  if role == roles.MASTER then
+    ensure_dir(C.BASE_DIR .. "/master")
+    ensure_dir(C.BASE_DIR .. "/master/ui")
+  elseif role and role_targets[role] then
+    ensure_dir(C.BASE_DIR .. "/nodes")
+    ensure_dir(C.BASE_DIR .. "/" .. role_targets[role].path)
+  end
 end
 
 function is_config_file(path)
@@ -3362,6 +3375,39 @@ function cleanup_role_files(manifest, role)
   return deleted
 end
 
+function cleanup_role_dirs(role)
+  local root = storage_state.storage_root or C.BASE_DIR
+  local removed = {}
+  local function remove_path(path)
+    if path and fs.exists(path) then
+      fs.delete(path)
+      table.insert(removed, path)
+    end
+  end
+  if role == roles.MASTER then
+    remove_path(root .. "/nodes")
+  else
+    remove_path(root .. "/master")
+    local nodes_path = root .. "/nodes"
+    local allowed = role_targets[role] and role_targets[role].path or nil
+    local allowed_dir = allowed and allowed:match("^nodes/(.+)$") or nil
+    if fs.exists(nodes_path) and fs.isDir(nodes_path) then
+      for _, entry in ipairs(collect_dir_entries(nodes_path)) do
+        if entry ~= allowed_dir then
+          remove_path(nodes_path .. "/" .. entry)
+        end
+      end
+      if not allowed_dir or #collect_dir_entries(nodes_path) == 0 then
+        remove_path(nodes_path)
+      end
+    end
+  end
+  if #removed > 0 then
+    log("INFO", "Removed obsolete role directories: " .. table.concat(removed, ", "))
+  end
+  return removed
+end
+
 function safe_update_prepare(role, cfg_path)
   local retry_rounds = 0
   while true do
@@ -3375,7 +3421,7 @@ function safe_update_prepare(role, cfg_path)
       tostring(current_base_url or "unknown"),
       tostring(hash_algo or "unknown")
     ))
-    ensure_base_dirs()
+    ensure_base_dirs(role)
     cleanup_storage()
 
     log("INFO", "SAFE UPDATE started for role " .. tostring(role))
@@ -3581,6 +3627,7 @@ function safe_update_apply(context, role, cfg_path)
   end
 
   cleanup_role_files(manifest, role)
+  cleanup_role_dirs(role)
 
   print("SAFE UPDATE complete.")
   print("Changed files: " .. tostring(changed))
@@ -3627,7 +3674,7 @@ function full_reinstall_prepare()
       tostring(current_base_url or "unknown"),
       tostring(hash_algo or "unknown")
     ))
-    ensure_base_dirs()
+    ensure_required_dirs()
     cleanup_storage()
     log("INFO", "FULL REINSTALL started")
 
@@ -3646,6 +3693,7 @@ function full_reinstall_prepare()
       selected_role = choose_role()
     end
     ROLE = selected_role
+    ensure_base_dirs(selected_role)
     local entries = build_manifest_entries(manifest, selected_role)
     local required_total = calculate_required_bytes(entries)
     print_space_preflight(required_total, "FULL REINSTALL")
@@ -3835,6 +3883,7 @@ function full_reinstall_apply(context)
   end
 
   cleanup_role_files(manifest, context.selected_role or context.existing_role)
+  cleanup_role_dirs(context.selected_role or context.existing_role)
 
   local role, cfg_path = setup_fresh_config(context, backup_dir, protected)
 

@@ -3,7 +3,7 @@ local bootstrap = {}
 
 local CONFIG = {
   BASE_DIR = "/xreactor",
-  LOG_PATH = "/xreactor_logs/bootstrap.log",
+  LOG_PATH = "/xreactor/logs/bootstrap.log",
   LOG_SETTINGS_KEY = "xreactor.debug_logging"
 }
 
@@ -278,7 +278,7 @@ function bootstrap.setup(opts)
   if opts.log_path then
     state.log_path = opts.log_path
   elseif opts.role then
-    state.log_path = string.format("/xreactor_logs/loader_%s.log", tostring(opts.role):lower())
+    state.log_path = string.format("/xreactor/logs/loader_%s.log", tostring(opts.role):lower())
   end
   resolve_global()
   ensure_package_table()
