@@ -1,13 +1,13 @@
 -- Manifest for the XReactor installer (hashes and required files).
 return {
-  manifest_version = 2,
+  manifest_version = 3,
   source_ref = "beta",
   hash_algo = "crc32",
   installer_min_version = "1.4",
   installer_path = "xreactor/installer/installer_core.lua",
-  installer_hash = "fae170ed",
-  installer_size_bytes = 112242,
-  files = {
+  installer_hash = "decfaa4e",
+  installer_size_bytes = 117548,
+  shared = {
     { path = "xreactor/core/bootstrap.lua", size_bytes = 9115, hash = "d1a38895" },
     { path = "xreactor/core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
     { path = "xreactor/core/alert_rules.lua", size_bytes = 12921, hash = "f4c32c65" },
@@ -32,16 +32,26 @@ return {
     { path = "xreactor/adapters/monitor.lua", size_bytes = 3202, hash = "f9eaca60" },
     { path = "xreactor/adapters/reactor.lua", size_bytes = 3894, hash = "bbc5dc89" },
     { path = "xreactor/adapters/turbine.lua", size_bytes = 3485, hash = "e2d43c15" },
-    { path = "xreactor/nodes/rt/config.lua", size_bytes = 4234, hash = "e005b4cd" },
-    { path = "xreactor/nodes/rt/main.lua", size_bytes = 93886, hash = "f3bdd905" },
-    { path = "xreactor/nodes/reprocessor/config.lua", size_bytes = 3132, hash = "d98073f7" },
-    { path = "xreactor/nodes/reprocessor/main.lua", size_bytes = 21263, hash = "d53a7875" },
-    { path = "xreactor/nodes/water/config.lua", size_bytes = 3425, hash = "42843ec6" },
-    { path = "xreactor/nodes/water/main.lua", size_bytes = 22170, hash = "ff616753" },
-    { path = "xreactor/nodes/fuel/config.lua", size_bytes = 3336, hash = "f879eefe" },
-    { path = "xreactor/nodes/fuel/main.lua", size_bytes = 21957, hash = "9e388a8d" },
-    { path = "xreactor/nodes/energy/config.lua", size_bytes = 4558, hash = "5283fadd" },
-    { path = "xreactor/nodes/energy/main.lua", size_bytes = 48159, hash = "6a42720d" },
+    { path = "xreactor/services/service_manager.lua", size_bytes = 1265, hash = "d91e40ad" },
+    { path = "xreactor/services/comms_service.lua", size_bytes = 5603, hash = "4153eebb" },
+    { path = "xreactor/services/discovery_service.lua", size_bytes = 2229, hash = "a82f81ec" },
+    { path = "xreactor/services/telemetry_service.lua", size_bytes = 1773, hash = "bdbe4b9d" },
+    { path = "xreactor/services/ui_service.lua", size_bytes = 571, hash = "c0addbea" },
+    { path = "xreactor/services/control_service.lua", size_bytes = 419, hash = "01a44c98" },
+    { path = "xreactor/services/alert_service.lua", size_bytes = 10006, hash = "900e97ea" },
+    { path = "xreactor/shared/colors.lua", size_bytes = 332, hash = "445d12af" },
+    { path = "xreactor/shared/constants.lua", size_bytes = 1384, hash = "db560e96" },
+    { path = "xreactor/shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
+    { path = "xreactor/shared/build_info.lua", size_bytes = 894, hash = "bbef6624" },
+    { path = "xreactor/shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
+    { path = "installer", size_bytes = 18426, hash = "af3dd63f" },
+    { path = "installer.lua", size_bytes = 33183, hash = "fd1ec8f5" },
+    { path = "xreactor/installer/installer.lua", size_bytes = 33183, hash = "fd1ec8f5" },
+    { path = "xreactor/installer/installer_core.lua", size_bytes = 117548, hash = "decfaa4e" },
+    { path = "xreactor/installer/manifest.lua", size_bytes = 5967, hash = "7cf85f31" },
+    { path = "xreactor/installer/release.lua", size_bytes = 217, hash = "484ff615" }
+  },
+  master = {
     { path = "xreactor/master/config.lua", size_bytes = 7378, hash = "0ce66350" },
     { path = "xreactor/master/startup_sequencer.lua", size_bytes = 3200, hash = "fd879d22" },
     { path = "xreactor/master/profiles.lua", size_bytes = 164, hash = "9068a725" },
@@ -51,27 +61,28 @@ return {
     { path = "xreactor/master/ui/rt_dashboard.lua", size_bytes = 2824, hash = "6ca4b11e" },
     { path = "xreactor/master/ui/overview.lua", size_bytes = 4525, hash = "89e0cb55" },
     { path = "xreactor/master/ui/alerts.lua", size_bytes = 25190, hash = "adafc8e9" },
-    { path = "xreactor/services/service_manager.lua", size_bytes = 1265, hash = "d91e40ad" },
-    { path = "xreactor/services/comms_service.lua", size_bytes = 5603, hash = "4153eebb" },
-    { path = "xreactor/services/discovery_service.lua", size_bytes = 2229, hash = "a82f81ec" },
-    { path = "xreactor/services/telemetry_service.lua", size_bytes = 1773, hash = "bdbe4b9d" },
-    { path = "xreactor/services/ui_service.lua", size_bytes = 571, hash = "c0addbea" },
-    { path = "xreactor/services/control_service.lua", size_bytes = 419, hash = "01a44c98" },
-    { path = "xreactor/services/alert_service.lua", size_bytes = 10006, hash = "900e97ea" },
     { path = "xreactor/master/ui/energy.lua", size_bytes = 4345, hash = "853d19c8" },
     { path = "xreactor/master/ui/multiview.lua", size_bytes = 11565, hash = "2bceb16e" },
-    { path = "xreactor/master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a" },
-    { path = "xreactor/shared/colors.lua", size_bytes = 332, hash = "445d12af" },
-    { path = "xreactor/shared/constants.lua", size_bytes = 1384, hash = "db560e96" },
-    { path = "xreactor/shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
-    { path = "xreactor/shared/build_info.lua", size_bytes = 894, hash = "bbef6624" },
-    { path = "xreactor/shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
-    { path = "README.md", size_bytes = 28702, hash = "a5625737" },
-    { path = "installer", size_bytes = 18426, hash = "af3dd63f" },
-    { path = "installer.lua", size_bytes = 33183, hash = "fd1ec8f5" },
-    { path = "xreactor/installer/installer.lua", size_bytes = 33183, hash = "fd1ec8f5" },
-    { path = "xreactor/installer/installer_core.lua", size_bytes = 112242, hash = "fae170ed" },
-    { path = "xreactor/installer/manifest.lua", size_bytes = 5933, hash = "6a063ce5" },
-    { path = "xreactor/installer/release.lua", size_bytes = 217, hash = "484ff615" }
+    { path = "xreactor/master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a" }
+  },
+  rt = {
+    { path = "xreactor/nodes/rt/config.lua", size_bytes = 4234, hash = "e005b4cd" },
+    { path = "xreactor/nodes/rt/main.lua", size_bytes = 93886, hash = "f3bdd905" }
+  },
+  energy = {
+    { path = "xreactor/nodes/energy/config.lua", size_bytes = 4558, hash = "5283fadd" },
+    { path = "xreactor/nodes/energy/main.lua", size_bytes = 48159, hash = "6a42720d" }
+  },
+  water = {
+    { path = "xreactor/nodes/water/config.lua", size_bytes = 3425, hash = "42843ec6" },
+    { path = "xreactor/nodes/water/main.lua", size_bytes = 22170, hash = "ff616753" }
+  },
+  fuel = {
+    { path = "xreactor/nodes/fuel/config.lua", size_bytes = 3336, hash = "f879eefe" },
+    { path = "xreactor/nodes/fuel/main.lua", size_bytes = 21957, hash = "9e388a8d" }
+  },
+  reprocessor = {
+    { path = "xreactor/nodes/reprocessor/config.lua", size_bytes = 3132, hash = "d98073f7" },
+    { path = "xreactor/nodes/reprocessor/main.lua", size_bytes = 21263, hash = "d53a7875" }
   }
 }
