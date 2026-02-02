@@ -178,6 +178,10 @@ Wireless Modem (Control/Status)
 
 ## Installation, Safe Update & Full Reinstall
 **Erstinstallation / Vollinstallation**
+**1-Command Install (RAW, empfohlen)**
+```
+wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/installer.lua
+```
 1. Installer herunterladen und ausführen:
    ```
    wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
@@ -193,9 +197,10 @@ Wireless Modem (Control/Status)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
    - Wenn Disk-Drives gemountet sind (`/disk`, `/disk2`, ...), erstellt der Installer einen **Storage-Pool**:
      - **Core/Runtime** → größter Datenträger (`<disk>/xreactor`)
-     - **Staging** → nächstgrößerer Datenträger (`<disk>/xreactor_stage`)
+     - **Staging** → größter Datenträger (`<disk>/xreactor_stage`)
+     - **Backups** → zweitgrößter Datenträger (`<disk>/xreactor_backup`)
      - **Logs** → kleinster Datenträger (`<disk>/xreactor_logs`)
-   - Alle Disks werden automatisch vorbereitet (`xreactor`, `xreactor_stage`, `xreactor_logs`) und mit Label **XREACTOR** versehen (falls möglich).
+   - Alle Disks werden automatisch vorbereitet (`xreactor`, `xreactor_stage`, `xreactor_backup`, `xreactor_logs`) und bei Bedarf mit Label `XREACTOR_DISK_<n>` versehen (nur wenn kein User-Label existiert).
    - **Wichtig:** Ein Disk hilft nur, wenn auf dem Computer ein lokaler Mount wie `/disk` vorhanden ist. Ohne lokalen Mount bricht der Installer ab und fordert eine lokale Disk an.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
@@ -203,12 +208,13 @@ Wireless Modem (Control/Status)
 ## Disk Installation Mode
 Installer scans all locally mounted disks (`/disk`, `/disk2`, ...) and builds a storage pool:
 - Core/runtime → largest disk (`/disk*/xreactor`)
-- Staging → next disk (`/disk*/xreactor_stage`)
+- Staging → largest disk (`/disk*/xreactor_stage`)
+- Backups → second-largest disk (`/disk*/xreactor_backup`)
 - Logs → smallest disk (`/disk*/xreactor_logs`)
 The bootstrap relocates itself to `/disk*/installer` so all runtime work happens on disk.
 Recommended for Advanced Computers with limited internal storage.
 If no disk mount is present, attach a disk drive directly to this computer and insert a disk so `/disk` appears.
-Disk labels are optional; the installer will label the disk `XREACTOR` when possible.
+Disk labels are optional; the installer will label unlabeled disks as `XREACTOR_DISK_<n>` when possible.
 Installer downloads only the files needed for the selected role (plus shared/core files).
 
 **Troubleshooting: "Out of space"**
@@ -217,6 +223,7 @@ Installer downloads only the files needed for the selected role (plus shared/cor
   delete /xreactor_backup/*
   delete /xreactor_stage/*
   delete /disk*/xreactor_stage/*
+  delete /disk*/xreactor_backup/*
   delete /disk*/xreactor_logs/*.log
   ```
 - Danach Installer erneut starten (`installer`).
@@ -272,16 +279,20 @@ Installer downloads only the files needed for the selected role (plus shared/cor
 
 **Logging & Debugging**
 - Installer-Logs liegen in:
-  - `/disk*/xreactor_logs/`
+  - `/<selected_root>/xreactor_logs/` (z. B. `/disk/xreactor_logs/`)
 - Node-Logs liegen in:
   - `/xreactor_logs/`
   - `/disk*/xreactor_logs/`
 - Installer erzeugt die Log-Ordner automatisch.
-- Bootstrap-Log: `/disk*/xreactor_logs/installer_debug.log` (mit Rotation `.1`).
-- Installer-Core-Log: `/disk*/xreactor_logs/installer_core.log` (mit Rotation `.1`).
+- Bootstrap-Log: `/<selected_root>/xreactor_logs/installer_debug.log` (mit Rotation `.1`).
+- Installer-Core-Log: `/<selected_root>/xreactor_logs/installer_core.log` (mit Rotation `.1`).
 - Node-Logs: `/xreactor_logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`, auf Disk unter `/disk*/xreactor_logs/`).
 - Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen oder global via `settings set xreactor.debug_logging true`.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
+ - Falls kein Log-File verfügbar ist, gibt der Installer den Log-Buffer am Ende im Terminal aus (RAM-Fallback).
+
+**Update-Hinweis**
+- Aktualisiere auch die Update-bezogenen Dateien auf dem Computer (Installer/Installer-Core), damit Änderungen am Update-Prozess tatsächlich ausgerollt werden.
 
 ## Konfiguration & Autodetection
 - **MASTER**: `xreactor/master/config.lua`

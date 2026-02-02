@@ -24,9 +24,9 @@ local CONFIG = {
   CORE_RETRY_BACKOFF = 1, -- Backoff seconds between core download retries.
   LOG_ENABLED = true, -- Always enable bootstrap logging.
   LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
-  LOG_PATH = "/xreactor/logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
-  LOCAL_LOG_DIR = "/xreactor/logs", -- Log directory (updated at runtime).
-  LOG_FALLBACK_PATH = "/xreactor/logs/installer_debug.log", -- Fallback log path when storage root is unavailable.
+  LOG_PATH = "/xreactor_logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
+  LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log", -- Fallback log path when storage root is unavailable.
   DISK_LOG_DIR_NAME = "xreactor_logs", -- Legacy disk log directory name.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
@@ -92,12 +92,14 @@ local function build_disk_pool(required_bytes)
   if required_bytes and largest.free < required_bytes then
     return nil, "Not enough disk space for core.", mounts
   end
-  local stage = mounts[2] or largest
+  local stage = largest
+  local backup = mounts[2] or largest
   local log_mount = mounts[#mounts] or largest
   return {
     mounts = mounts,
     core_mount = largest,
     stage_mount = stage,
+    backup_mount = backup,
     log_mount = log_mount
   }, nil, mounts
 end
@@ -105,6 +107,7 @@ end
 local function apply_disk_pool(pool)
   local core_mount = pool and pool.core_mount or nil
   local stage_mount = pool and pool.stage_mount or core_mount
+  local backup_mount = pool and pool.backup_mount or core_mount
   local log_mount = pool and pool.log_mount or core_mount
   if not core_mount then
     return false
@@ -112,31 +115,45 @@ local function apply_disk_pool(pool)
   local root = core_mount.path .. "/xreactor"
   local log_dir = log_mount.path .. "/xreactor_logs"
   local stage_dir = stage_mount.path .. "/xreactor_stage"
-  local backup_dir = root .. "_backup"
+  local backup_dir = backup_mount.path .. "/xreactor_backup"
   CONFIG.STORAGE_ROOT = root
   CONFIG.LOG_DIR = log_dir
   CONFIG.STAGE_DIR = stage_dir
   CONFIG.BACKUP_DIR = backup_dir
   CONFIG.CORE_PATH = root .. "/installer/installer_core.lua"
   CONFIG.CORE_META_PATH = root .. "/installer/installer_core.meta"
-  CONFIG.CORE_DOWNLOAD_PATH = root .. "/.tmp/installer_core.lua.download"
-  CONFIG.CORE_BAD_PATH = root .. "/.tmp/installer_core.bad"
+  CONFIG.CORE_DOWNLOAD_PATH = stage_dir .. "/installer_core.lua.download"
+  CONFIG.CORE_BAD_PATH = stage_dir .. "/installer_core.bad"
   CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
   CONFIG.LOCAL_LOG_DIR = log_dir
   CONFIG.LOG_FALLBACK_PATH = log_dir .. "/installer_debug.log"
   CONFIG.DISK_MOUNT_PATH = core_mount.path
   CONFIG.CORE_MOUNT_PATH = core_mount.path
   CONFIG.STAGE_MOUNT_PATH = stage_mount.path
+  CONFIG.BACKUP_MOUNT_PATH = backup_mount.path
   CONFIG.LOG_MOUNT_PATH = log_mount.path
   return true
 end
 
 local function configure_storage_root()
-  local pool, err, mounts = build_disk_pool()
+  local pool, err = build_disk_pool()
   if not pool then
-    print("ERROR: " .. tostring(err or "No writable disk mount found."))
-    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
-    error("No writable disk mount available.")
+    print("WARN: " .. tostring(err or "No writable disk mount found."))
+    print('No disk mount detected, using local storage. Attach a disk so "/disk" appears for disk-first install.')
+    CONFIG.STORAGE_ROOT = "/xreactor"
+    CONFIG.LOG_DIR = "/xreactor_logs"
+    CONFIG.STAGE_DIR = "/xreactor_stage"
+    CONFIG.BACKUP_DIR = "/xreactor_backup"
+    CONFIG.CORE_PATH = "/xreactor/installer/installer_core.lua"
+    CONFIG.CORE_META_PATH = "/xreactor/installer/installer_core.meta"
+    CONFIG.CORE_DOWNLOAD_PATH = "/xreactor_stage/installer_core.lua.download"
+    CONFIG.CORE_BAD_PATH = "/xreactor_stage/installer_core.bad"
+    CONFIG.LOG_PATH = "/xreactor_logs/installer_debug.log"
+    CONFIG.LOCAL_LOG_DIR = "/xreactor_logs"
+    CONFIG.LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log"
+    CONFIG.DISK_MOUNT_PATH = nil
+    disk_pool = nil
+    return
   end
   disk_pool = pool
   apply_disk_pool(pool)
@@ -144,15 +161,18 @@ end
 
 configure_storage_root()
 
-local function label_disk_mount(mount_path)
-  if not mount_path or not peripheral or not disk or not disk.getMountPath then
+local function label_disk_mount(mount_path, label)
+  if not mount_path or not label or not peripheral or not disk or not disk.getMountPath then
     return
   end
   for _, name in ipairs(peripheral.getNames()) do
     if peripheral.getType(name) == "drive" then
       local ok, mount = pcall(disk.getMountPath, name)
       if ok and mount == mount_path then
-        pcall(disk.setLabel, name, CONFIG.DISK_LABEL)
+        local ok_label, existing = pcall(disk.getLabel, name)
+        if ok_label and (not existing or existing == "") then
+          pcall(disk.setLabel, name, label)
+        end
       end
     end
   end
@@ -162,8 +182,8 @@ local function try_label_disk()
   if not disk_pool or not disk_pool.mounts then
     return
   end
-  for _, entry in ipairs(disk_pool.mounts) do
-    label_disk_mount(entry.path)
+  for idx, entry in ipairs(disk_pool.mounts) do
+    label_disk_mount(entry.path, CONFIG.DISK_LABEL .. "_DISK_" .. tostring(idx))
   end
 end
 
@@ -174,12 +194,12 @@ local function apply_mount(path)
   CONFIG.DISK_MOUNT_PATH = path
   CONFIG.STORAGE_ROOT = path .. "/xreactor"
   CONFIG.LOG_DIR = path .. "/xreactor_logs"
-  CONFIG.STAGE_DIR = CONFIG.STORAGE_ROOT .. "_stage"
-  CONFIG.BACKUP_DIR = CONFIG.STORAGE_ROOT .. "_backup"
+  CONFIG.STAGE_DIR = path .. "/xreactor_stage"
+  CONFIG.BACKUP_DIR = path .. "/xreactor_backup"
   CONFIG.CORE_PATH = CONFIG.STORAGE_ROOT .. "/installer/installer_core.lua"
   CONFIG.CORE_META_PATH = CONFIG.STORAGE_ROOT .. "/installer/installer_core.meta"
-  CONFIG.CORE_DOWNLOAD_PATH = CONFIG.STORAGE_ROOT .. "/.tmp/installer_core.lua.download"
-  CONFIG.CORE_BAD_PATH = CONFIG.STORAGE_ROOT .. "/.tmp/installer_core.bad"
+  CONFIG.CORE_DOWNLOAD_PATH = CONFIG.STAGE_DIR .. "/installer_core.lua.download"
+  CONFIG.CORE_BAD_PATH = CONFIG.STAGE_DIR .. "/installer_core.bad"
   CONFIG.LOG_PATH = CONFIG.LOG_DIR .. "/installer_debug.log"
   CONFIG.LOCAL_LOG_DIR = CONFIG.LOG_DIR
   CONFIG.LOG_FALLBACK_PATH = CONFIG.LOG_PATH
@@ -287,8 +307,8 @@ local function cleanup_storage_for_space()
     end
   end
   delete_log_files(CONFIG.LOG_DIR)
-  if CONFIG.LOG_DIR ~= "/xreactor/logs" then
-    delete_log_files("/xreactor/logs")
+  if CONFIG.LOG_DIR ~= "/xreactor_logs" then
+    delete_log_files("/xreactor_logs")
   end
   remove_dir_contents(CONFIG.BACKUP_DIR)
   remove_dir_contents(CONFIG.STAGE_DIR)
@@ -391,8 +411,19 @@ local function ensure_log_dirs()
       pcall(fs.makeDir, entry.path .. "/xreactor")
       pcall(fs.makeDir, entry.path .. "/xreactor_logs")
       pcall(fs.makeDir, entry.path .. "/xreactor_stage")
+      pcall(fs.makeDir, entry.path .. "/xreactor_backup")
     end
   end
+end
+
+local function print_storage_summary()
+  local free_root = get_free_space(CONFIG.STORAGE_ROOT or "/")
+  print("=== Installer Storage Summary ===")
+  print("Storage root: " .. tostring(CONFIG.STORAGE_ROOT))
+  print("Stage root: " .. tostring(CONFIG.STAGE_DIR))
+  print("Backup root: " .. tostring(CONFIG.BACKUP_DIR))
+  print("Log root: " .. tostring(CONFIG.LOG_DIR))
+  print("Free space: " .. format_bytes(free_root or 0))
 end
 
 local function open_log_file()
@@ -1432,6 +1463,7 @@ end
 ensure_package_path()
 init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
+print_storage_summary()
 try_label_disk()
 if relocate_bootstrap_if_needed() then
   return

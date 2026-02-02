@@ -14,7 +14,7 @@ local CONFIG = {
   MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path (updated at runtime).
   LOCAL_BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   LOCAL_STAGING_BASE = "/xreactor_stage", -- Staging base directory (updated at runtime).
-  LOCAL_LOG_DIR = "/xreactor/logs", -- Log directory (updated at runtime).
+  LOCAL_LOG_DIR = "/xreactor_logs", -- Log directory (updated at runtime).
   BACKUP_BASE = "/xreactor_backup", -- Backup base directory (updated at runtime).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path (updated at runtime).
   ROLE_PATH = "/xreactor/config/role.lua", -- Role storage path (updated at runtime).
@@ -51,10 +51,10 @@ local CONFIG = {
   MAX_LOG_FILES = 5, -- Retention: max number of log files to keep.
   MAX_LOGS_MB = 6, -- Retention: max combined log size (MB) under log dirs.
   MAX_STAGING_DIRS = 2, -- Retention: number of staging dirs to keep in /xreactor_stage.
-  LOG_RETENTION_DIRS = { "/xreactor/logs" }, -- Log dirs eligible for cleanup (updated at runtime).
+  LOG_RETENTION_DIRS = { "/xreactor_logs" }, -- Log dirs eligible for cleanup (updated at runtime).
   DEBUG_LOG_ENABLED = nil, -- Override debug logging for installer (nil uses settings/config).
   LOG_ENABLED = true, -- Always enable installer file logging.
-  LOG_PATH = "/xreactor/logs/installer_core.log", -- Installer log file path (updated at runtime).
+  LOG_PATH = "/xreactor_logs/installer_core.log", -- Installer log file path (updated at runtime).
   LOG_MAX_BYTES = 200000, -- Rotate installer log after this size.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log file.
   LOG_PREFIX = "INSTALLER_CORE", -- Installer log prefix.
@@ -192,6 +192,7 @@ local storage_state = {
   mounts = {},
   core_mount = nil,
   stage_mount = nil,
+  backup_mount = nil,
   log_mount = nil,
   mount_path = nil,
   storage_root = CONFIG.BASE_DIR,
@@ -249,25 +250,28 @@ function build_disk_pool(required_bytes)
   if required_bytes and largest.free < required_bytes then
     return nil, "Not enough disk space for core.", mounts
   end
-  local stage = mounts[2] or largest
+  local stage = largest
+  local backup = mounts[2] or largest
   local log_mount = mounts[#mounts] or largest
   return {
     mounts = mounts,
     core_mount = largest,
     stage_mount = stage,
+    backup_mount = backup,
     log_mount = log_mount
   }, nil, mounts
 end
 
-function build_storage_paths(core_mount, stage_mount, log_mount)
+function build_storage_paths(core_mount, stage_mount, backup_mount, log_mount)
   local base = (core_mount or "/") .. "/xreactor"
   local log_dir = (log_mount or "/") .. "/xreactor_logs"
   local stage_dir = (stage_mount or "/") .. "/xreactor_stage"
+  local backup_dir = (backup_mount or "/") .. "/xreactor_backup"
   return {
     base_dir = base,
     log_dir = log_dir,
     stage_dir = stage_dir,
-    backup_dir = base .. "_backup",
+    backup_dir = backup_dir,
     manifest_local = base .. "/.manifest",
     manifest_cache = base .. "/.cache/manifest.lua",
     manifest_cache_legacy = base .. "/.manifest_cache",
@@ -284,12 +288,14 @@ function apply_storage_paths(pool)
   end
   local core_mount = pool.core_mount.path
   local stage_mount = (pool.stage_mount and pool.stage_mount.path) or core_mount
+  local backup_mount = (pool.backup_mount and pool.backup_mount.path) or core_mount
   local log_mount = (pool.log_mount and pool.log_mount.path) or core_mount
-  local paths = build_storage_paths(core_mount, stage_mount, log_mount)
+  local paths = build_storage_paths(core_mount, stage_mount, backup_mount, log_mount)
   storage_state.use_disk = true
   storage_state.mounts = pool.mounts or {}
   storage_state.core_mount = pool.core_mount
   storage_state.stage_mount = pool.stage_mount
+  storage_state.backup_mount = pool.backup_mount
   storage_state.log_mount = pool.log_mount
   storage_state.mount_path = core_mount
   storage_state.mount_name = nil
@@ -324,9 +330,37 @@ end
 function configure_storage_paths()
   local pool, err = build_disk_pool()
   if not pool then
-    print("ERROR: " .. tostring(err or "No writable disk mount found."))
-    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
-    error("No writable disk mount available.")
+    print("WARN: " .. tostring(err or "No writable disk mount found."))
+    print('No disk mount detected, using local storage. Attach a disk so "/disk" appears for disk-first install.')
+    storage_state.use_disk = false
+    storage_state.mounts = {}
+    storage_state.core_mount = nil
+    storage_state.stage_mount = nil
+    storage_state.backup_mount = nil
+    storage_state.log_mount = nil
+    storage_state.mount_path = nil
+    storage_state.storage_root = CONFIG.BASE_DIR
+    storage_state.log_dir = CONFIG.LOCAL_LOG_DIR
+    storage_state.stage_dir = CONFIG.UPDATE_STAGING_BASE
+    storage_state.backup_dir = CONFIG.BACKUP_BASE
+    storage_state.log_primary = CONFIG.LOG_PATH
+    storage_state.log_fallback = CONFIG.LOG_PATH
+    C.BASE_DIR = CONFIG.BASE_DIR
+    C.MANIFEST_LOCAL = CONFIG.MANIFEST_LOCAL
+    C.MANIFEST_CACHE = CONFIG.MANIFEST_CACHE
+    C.MANIFEST_CACHE_LEGACY = CONFIG.MANIFEST_CACHE_LEGACY
+    C.BASE_CACHE_PATH = CONFIG.BASE_CACHE_PATH
+    C.NODE_ID_PATH = CONFIG.NODE_ID_PATH
+    C.ROLE_PATH = CONFIG.ROLE_PATH
+    C.UPDATE_MARKER_PATH = CONFIG.UPDATE_MARKER_PATH
+    C.LOCAL_LOG_DIR = CONFIG.LOCAL_LOG_DIR
+    C.LOCAL_STAGING_BASE = CONFIG.LOCAL_STAGING_BASE
+    C.LOCAL_BACKUP_BASE = CONFIG.LOCAL_BACKUP_BASE
+    C.UPDATE_STAGING_BASE = CONFIG.UPDATE_STAGING_BASE
+    C.BACKUP_BASE = CONFIG.BACKUP_BASE
+    C.LOG_PATH = CONFIG.LOG_PATH
+    CONFIG.LOG_RETENTION_DIRS = { CONFIG.LOCAL_LOG_DIR }
+    return
   end
   apply_storage_paths(pool)
 end
@@ -506,14 +540,19 @@ local function try_label_disk()
   if not peripheral or not disk or not disk.getMountPath then
     return
   end
+  local mount_index = {}
+  for idx, entry in ipairs(storage_state.mounts) do
+    mount_index[entry.path] = idx
+  end
   for _, name in ipairs(peripheral.getNames()) do
     if peripheral.getType(name) == "drive" then
       local ok, mount = pcall(disk.getMountPath, name)
       if ok and mount then
-        for _, entry in ipairs(storage_state.mounts) do
-          if entry.path == mount then
-            pcall(disk.setLabel, name, CONFIG.DISK_LABEL)
-            break
+        local idx = mount_index[mount]
+        if idx then
+          local ok_label, existing = pcall(disk.getLabel, name)
+          if ok_label and (not existing or existing == "") then
+            pcall(disk.setLabel, name, CONFIG.DISK_LABEL .. "_DISK_" .. tostring(idx))
           end
         end
       end
@@ -920,7 +959,7 @@ function build_cleanup_suggestions()
   local suggestions = {
     ("delete %s/*"):format(C.BACKUP_BASE),
     ("delete %s/*"):format(C.UPDATE_STAGING_BASE),
-    "delete /xreactor/logs/*.log"
+    "delete /xreactor_logs/*.log"
   }
   if storage_state.log_mount and storage_state.log_mount.path then
     table.insert(suggestions, "delete " .. storage_state.log_mount.path .. "/xreactor_logs/*.log")
@@ -977,11 +1016,13 @@ function print_space_preflight(needed, context)
   local free_local = get_free_space(C.BASE_DIR)
   local free_core = storage_state.core_mount and get_free_space(storage_state.core_mount.path) or nil
   local free_stage = storage_state.stage_mount and get_free_space(storage_state.stage_mount.path) or nil
+  local free_backup = storage_state.backup_mount and get_free_space(storage_state.backup_mount.path) or nil
   local free_log = storage_state.log_mount and get_free_space(storage_state.log_mount.path) or nil
   print(string.format("%s preflight:", tostring(context or "Disk space")))
   print("  Free local: " .. format_bytes(free_local or 0))
   print("  Free disk (core): " .. format_bytes(free_core or 0))
   print("  Free disk (stage): " .. format_bytes(free_stage or 0))
+  print("  Free disk (backup): " .. format_bytes(free_backup or 0))
   print("  Free disk (logs): " .. format_bytes(free_log or 0))
   print("  Needed: " .. format_bytes(needed or 0))
   print("  Using disk: " .. (storage_state.use_disk and "yes" or "no"))
@@ -1001,11 +1042,24 @@ function print_debug_summary(context)
   if storage_state.stage_mount then
     print("Stage disk: " .. tostring(storage_state.stage_mount.path))
   end
+  if storage_state.backup_mount then
+    print("Backup disk: " .. tostring(storage_state.backup_mount.path))
+  end
   if storage_state.log_mount then
     print("Log disk: " .. tostring(storage_state.log_mount.path))
   end
   print("Stage path: " .. tostring(C.UPDATE_STAGING_BASE))
   print("Log path: " .. tostring(get_log_path()))
+end
+
+function print_storage_summary()
+  local free = get_free_space(storage_state.storage_root or C.BASE_DIR)
+  print("=== Installer Storage Summary ===")
+  print("Storage root: " .. tostring(storage_state.storage_root or C.BASE_DIR))
+  print("Stage root: " .. tostring(storage_state.stage_dir or C.UPDATE_STAGING_BASE))
+  print("Backup root: " .. tostring(storage_state.backup_dir or C.BACKUP_BASE))
+  print("Log root: " .. tostring(storage_state.log_dir or C.LOCAL_LOG_DIR))
+  print("Free space: " .. format_bytes(free or 0))
 end
 
 function collect_dir_entries(path)
@@ -1310,6 +1364,9 @@ function resolve_storage_role(path)
   if path and storage_state.stage_dir and path:sub(1, #storage_state.stage_dir) == storage_state.stage_dir then
     return "stage"
   end
+  if path and storage_state.backup_dir and path:sub(1, #storage_state.backup_dir) == storage_state.backup_dir then
+    return "backup"
+  end
   if path and storage_state.log_dir and path:sub(1, #storage_state.log_dir) == storage_state.log_dir then
     return "log"
   end
@@ -1339,6 +1396,13 @@ function pick_mount_for_role(role, min_bytes)
     local core = storage_state.core_mount or mounts[1]
     if core and (not min_bytes or core.free >= min_bytes) then
       return core, mounts
+    end
+    return nil, mounts
+  end
+  if role == "backup" then
+    local backup = mounts[2] or mounts[1]
+    if backup and (not min_bytes or backup.free >= min_bytes) then
+      return backup, mounts
     end
     return nil, mounts
   end
@@ -1386,6 +1450,18 @@ function switch_storage_mount(role, min_bytes, context)
     log("INFO", ("Switched log disk to %s for %s"):format(tostring(target.path), tostring(context or "space")))
     return true
   end
+  if role == "backup" then
+    if storage_state.backup_mount and target.path == storage_state.backup_mount.path then
+      return false
+    end
+    storage_state.backup_mount = target
+    storage_state.backup_dir = target.path .. "/xreactor_backup"
+    C.LOCAL_BACKUP_BASE = storage_state.backup_dir
+    C.BACKUP_BASE = storage_state.backup_dir
+    ensure_required_dirs()
+    log("INFO", ("Switched backup disk to %s for %s"):format(tostring(target.path), tostring(context or "space")))
+    return true
+  end
   return false
 end
 
@@ -1428,6 +1504,8 @@ function ensure_space_with_cleanup(path, expected_bytes, context)
     local switched_path = storage_state.storage_root or C.BASE_DIR
     if role == "stage" then
       switched_path = storage_state.stage_dir
+    elseif role == "backup" then
+      switched_path = storage_state.backup_dir
     elseif role == "log" then
       switched_path = storage_state.log_dir
     end
@@ -4413,6 +4491,7 @@ function main()
   end
   print("=== XReactor Installer ===")
   log("INFO", "Installer started")
+  print_storage_summary()
   local recovered, result = recover_update_marker()
   if result and result ~= "no marker" then
     log("INFO", "Update recovery: " .. tostring(result))
