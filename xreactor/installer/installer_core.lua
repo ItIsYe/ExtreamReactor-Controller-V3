@@ -209,6 +209,7 @@ function list_disk_mounts()
   for _, path in ipairs(candidates) do
     if fs.exists(path) and fs.isDir(path) then
       local ok_free, free = pcall(fs.getFreeSpace, path)
+      local ok_total, total = pcall(fs.getCapacity, path)
       if ok_free and free then
         local test_path = path .. "/.xreactor_write_test"
         local ok_write = pcall(function()
@@ -221,7 +222,8 @@ function list_disk_mounts()
           fs.delete(test_path)
         end)
         if ok_write then
-          table.insert(mounts, { path = path, free = free })
+          local used = (ok_total and total) and (total - free) or nil
+          table.insert(mounts, { path = path, free = free, total = ok_total and total or nil, used = used })
         end
       end
     end
@@ -236,9 +238,32 @@ function format_mounts(mounts)
   end
   local lines = {}
   for _, entry in ipairs(mounts) do
-    table.insert(lines, string.format("  %s: %s free", entry.path, format_bytes(entry.free)))
+    if entry.total and entry.used then
+      table.insert(lines, string.format(
+        "  %s: %s free (%s used / %s total)",
+        entry.path,
+        format_bytes(entry.free),
+        format_bytes(entry.used),
+        format_bytes(entry.total)
+      ))
+    else
+      table.insert(lines, string.format("  %s: %s free", entry.path, format_bytes(entry.free)))
+    end
   end
   return table.concat(lines, "\n")
+end
+
+function pick_smallest_mount(mounts, min_free)
+  if not mounts or #mounts == 0 then
+    return nil
+  end
+  for idx = #mounts, 1, -1 do
+    local entry = mounts[idx]
+    if not min_free or entry.free >= min_free then
+      return entry
+    end
+  end
+  return mounts[#mounts]
 end
 
 function build_disk_pool(required_bytes)
@@ -250,9 +275,9 @@ function build_disk_pool(required_bytes)
   if required_bytes and largest.free < required_bytes then
     return nil, "Not enough disk space for core.", mounts
   end
-  local stage = largest
-  local backup = mounts[2] or largest
-  local log_mount = mounts[#mounts] or largest
+  local stage = mounts[2] or largest
+  local backup = mounts[3] or stage
+  local log_mount = pick_smallest_mount(mounts, CONFIG.DISK_SPACE_MIN_BUFFER or 0) or largest
   return {
     mounts = mounts,
     core_mount = largest,

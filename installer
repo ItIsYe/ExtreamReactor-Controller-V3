@@ -42,6 +42,7 @@ local function list_disk_mounts()
   for _, path in ipairs(candidates) do
     if fs.exists(path) and fs.isDir(path) then
       local ok_free, free = pcall(fs.getFreeSpace, path)
+      local ok_total, total = pcall(fs.getCapacity, path)
       if ok_free and free then
         local test_path = path .. "/.xreactor_write_test"
         local ok_write = pcall(function()
@@ -54,7 +55,8 @@ local function list_disk_mounts()
           fs.delete(test_path)
         end)
         if ok_write then
-          table.insert(mounts, { path = path, free = free })
+          local used = (ok_total and total) and (total - free) or nil
+          table.insert(mounts, { path = path, free = free, total = ok_total and total or nil, used = used })
         end
       end
     end
@@ -69,9 +71,32 @@ local function format_mounts(mounts)
   end
   local lines = {}
   for _, entry in ipairs(mounts) do
-    table.insert(lines, string.format("  %s: %s free", entry.path, format_bytes(entry.free)))
+    if entry.total and entry.used then
+      table.insert(lines, string.format(
+        "  %s: %s free (%s used / %s total)",
+        entry.path,
+        format_bytes(entry.free),
+        format_bytes(entry.used),
+        format_bytes(entry.total)
+      ))
+    else
+      table.insert(lines, string.format("  %s: %s free", entry.path, format_bytes(entry.free)))
+    end
   end
   return table.concat(lines, "\n")
+end
+
+local function pick_smallest_mount(mounts, min_free)
+  if not mounts or #mounts == 0 then
+    return nil
+  end
+  for idx = #mounts, 1, -1 do
+    local entry = mounts[idx]
+    if not min_free or entry.free >= min_free then
+      return entry
+    end
+  end
+  return mounts[#mounts]
 end
 
 local function build_disk_pool(required_bytes)
@@ -83,9 +108,9 @@ local function build_disk_pool(required_bytes)
   if required_bytes and largest.free < required_bytes then
     return nil, "Not enough disk space for installer.", mounts
   end
-  local stage = largest
-  local backup = mounts[2] or largest
-  local log_mount = mounts[#mounts] or largest
+  local stage = mounts[2] or largest
+  local backup = mounts[3] or stage
+  local log_mount = pick_smallest_mount(mounts, CONFIG.DISK_SPACE_MIN_BUFFER or 0) or largest
   return {
     mounts = mounts,
     core_mount = largest,
@@ -196,11 +221,32 @@ local function relocate_bootstrap_if_needed()
     return false
   end
   local absolute = running:sub(1, 1) == "/" and running or ("/" .. running)
-  if absolute:sub(1, #CONFIG.DISK_MOUNT_PATH) == CONFIG.DISK_MOUNT_PATH then
-    return false
-  end
   local target = CONFIG.DISK_MOUNT_PATH .. "/installer"
   if absolute == target then
+    return false
+  end
+  local current_mount = nil
+  if disk_pool and disk_pool.mounts then
+    for _, entry in ipairs(disk_pool.mounts) do
+      if absolute:sub(1, #entry.path) == entry.path then
+        current_mount = entry.path
+        break
+      end
+    end
+  end
+  local required_free = (CONFIG.DISK_SPACE_MIN_BUFFER or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0)
+  local current_free = current_mount and get_free_space(current_mount) or nil
+  local target_free = get_free_space(CONFIG.DISK_MOUNT_PATH)
+  if current_mount == CONFIG.DISK_MOUNT_PATH then
+    return false
+  end
+  if current_free and current_free >= required_free then
+    return false
+  end
+  if not target_free or target_free < required_free then
+    return false
+  end
+  if current_free and (target_free - current_free) < required_free then
     return false
   end
   local ok_copy = pcall(fs.copy, absolute, target)
