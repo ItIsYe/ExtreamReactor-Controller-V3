@@ -40,10 +40,14 @@ local CONFIG = {
 
 local log_line
 local cleanup_temp_file
+local disk_pool
 
 local function list_disk_mounts()
   local mounts = {}
-  local candidates = { "/disk", "/disk2", "/disk3", "/disk4", "/disk5", "/disk6", "/disk7", "/disk8", "/disk9" }
+  local candidates = { "/disk" }
+  for idx = 2, 9 do
+    table.insert(candidates, "/disk" .. tostring(idx))
+  end
   for _, path in ipairs(candidates) do
     if fs.exists(path) and fs.isDir(path) then
       local ok_free, free = pcall(fs.getFreeSpace, path)
@@ -68,25 +72,46 @@ local function list_disk_mounts()
   return mounts
 end
 
-local function select_best_mount(min_bytes)
-  for _, entry in ipairs(list_disk_mounts()) do
-    if not min_bytes or entry.free >= min_bytes then
-      return entry.path, entry.free
-    end
+local function format_mounts(mounts)
+  if not mounts or #mounts == 0 then
+    return "  (no disks found)"
   end
-  return nil, drive_name, "Disk mount missing"
+  local lines = {}
+  for _, entry in ipairs(mounts) do
+    table.insert(lines, string.format("  %s: %s free", entry.path, format_bytes(entry.free)))
+  end
+  return table.concat(lines, "\n")
 end
 
-local function configure_storage_root()
-  local mount_path = select_best_mount()
-  if not mount_path then
-    print("ERROR: No writable disk mount found.")
-    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
-    error("No writable disk mount available.")
+local function build_disk_pool(required_bytes)
+  local mounts = list_disk_mounts()
+  if #mounts == 0 then
+    return nil, "No writable disk mount found.", mounts
   end
-  local root = mount_path .. "/xreactor"
-  local log_dir = mount_path .. "/xreactor_logs"
-  local stage_dir = root .. "_stage"
+  local largest = mounts[1]
+  if required_bytes and largest.free < required_bytes then
+    return nil, "Not enough disk space for core.", mounts
+  end
+  local stage = mounts[2] or largest
+  local log_mount = mounts[#mounts] or largest
+  return {
+    mounts = mounts,
+    core_mount = largest,
+    stage_mount = stage,
+    log_mount = log_mount
+  }, nil, mounts
+end
+
+local function apply_disk_pool(pool)
+  local core_mount = pool and pool.core_mount or nil
+  local stage_mount = pool and pool.stage_mount or core_mount
+  local log_mount = pool and pool.log_mount or core_mount
+  if not core_mount then
+    return false
+  end
+  local root = core_mount.path .. "/xreactor"
+  local log_dir = log_mount.path .. "/xreactor_logs"
+  local stage_dir = stage_mount.path .. "/xreactor_stage"
   local backup_dir = root .. "_backup"
   CONFIG.STORAGE_ROOT = root
   CONFIG.LOG_DIR = log_dir
@@ -99,17 +124,46 @@ local function configure_storage_root()
   CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
   CONFIG.LOCAL_LOG_DIR = log_dir
   CONFIG.LOG_FALLBACK_PATH = log_dir .. "/installer_debug.log"
-  CONFIG.DISK_MOUNT_PATH = mount_path
+  CONFIG.DISK_MOUNT_PATH = core_mount.path
+  CONFIG.CORE_MOUNT_PATH = core_mount.path
+  CONFIG.STAGE_MOUNT_PATH = stage_mount.path
+  CONFIG.LOG_MOUNT_PATH = log_mount.path
+  return true
+end
+
+local function configure_storage_root()
+  local pool, err, mounts = build_disk_pool()
+  if not pool then
+    print("ERROR: " .. tostring(err or "No writable disk mount found."))
+    print('Attach a disk drive directly to this computer and insert a disk so "/disk" appears.')
+    error("No writable disk mount available.")
+  end
+  disk_pool = pool
+  apply_disk_pool(pool)
 end
 
 configure_storage_root()
 
-local function try_label_disk()
-  if not CONFIG.DISK_MOUNT_PATH then
+local function label_disk_mount(mount_path)
+  if not mount_path or not peripheral or not disk or not disk.getMountPath then
     return
   end
-  if shell and shell.run then
-    pcall(shell.run, "label", "set", CONFIG.DISK_LABEL)
+  for _, name in ipairs(peripheral.getNames()) do
+    if peripheral.getType(name) == "drive" then
+      local ok, mount = pcall(disk.getMountPath, name)
+      if ok and mount == mount_path then
+        pcall(disk.setLabel, name, CONFIG.DISK_LABEL)
+      end
+    end
+  end
+end
+
+local function try_label_disk()
+  if not disk_pool or not disk_pool.mounts then
+    return
+  end
+  for _, entry in ipairs(disk_pool.mounts) do
+    label_disk_mount(entry.path)
   end
 end
 
@@ -133,15 +187,17 @@ local function apply_mount(path)
 end
 
 local function select_mount_for_bytes(needed)
-  local path = select_best_mount(needed)
-  if not path then
+  local pool, _, mounts = build_disk_pool(needed)
+  if not pool then
+    print("ERROR: Not enough disk space to continue.")
+    print("Detected disks:")
+    print(format_mounts(mounts))
     return false
   end
-  if path ~= CONFIG.DISK_MOUNT_PATH then
-    apply_mount(path)
-    ensure_log_dirs()
-    try_label_disk()
-  end
+  disk_pool = pool
+  apply_disk_pool(pool)
+  ensure_log_dirs()
+  try_label_disk()
   return true
 end
 
@@ -154,11 +210,8 @@ local function relocate_bootstrap_if_needed()
     return false
   end
   local absolute = running:sub(1, 1) == "/" and running or ("/" .. running)
-  local target = CONFIG.STORAGE_ROOT .. "/installer/installer.lua"
+  local target = CONFIG.DISK_MOUNT_PATH .. "/installer"
   if absolute == target then
-    return false
-  end
-  if absolute:sub(1, #CONFIG.DISK_MOUNT_PATH) == CONFIG.DISK_MOUNT_PATH then
     return false
   end
   ensure_dir(fs.getDir(target))
@@ -271,6 +324,9 @@ local function ensure_core_space(expected_bytes)
       return true
     end
   end
+  print("ERROR: Not enough disk space for installer core download.")
+  print("Detected disks:")
+  print(format_mounts(list_disk_mounts()))
   return false, err
 end
 
@@ -327,11 +383,15 @@ local log_state = {
 
 local function ensure_log_dirs()
   pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
-  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor/logs")
+  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor_logs")
   pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
   pcall(fs.makeDir, CONFIG.BACKUP_DIR or "/xreactor_backup")
-  if fs.exists("/disk") then
-    pcall(fs.makeDir, "/disk/xreactor_logs")
+  if disk_pool and disk_pool.mounts then
+    for _, entry in ipairs(disk_pool.mounts) do
+      pcall(fs.makeDir, entry.path .. "/xreactor")
+      pcall(fs.makeDir, entry.path .. "/xreactor_logs")
+      pcall(fs.makeDir, entry.path .. "/xreactor_stage")
+    end
   end
 end
 
@@ -1242,6 +1302,9 @@ local function attempt_core_recovery(release, reason)
   if not release then
     return false, "release metadata unavailable"
   end
+  if not download_core then
+    return false, { err = "download_core unavailable" }
+  end
   log_line("WARN", "installer_core", "Attempting core recovery: " .. tostring(reason or "unknown"))
   local ok, _, meta = download_core(release, { cache_bust = true })
   if not ok then
@@ -1386,6 +1449,11 @@ if release and needs_core_update(release) then
   local meta
   for attempt = 1, (CONFIG.CORE_MAX_RETRIES or 3) do
     log_line("INFO", "installer_core", string.format("Core download attempt %d/%d", attempt, CONFIG.CORE_MAX_RETRIES or 3))
+    if not download_core then
+      print("Installer core update unavailable (download_core missing).")
+      log_line("ERROR", "installer_core", "download_core unavailable during update check")
+      break
+    end
     ok, _, meta = download_core(release)
     if not ok and should_cache_bust(meta and meta.err) then
       log_line("INFO", "installer_core", "Retrying core download with cache-bust parameter")
@@ -1446,6 +1514,8 @@ local function run_core_with_retries()
         print_quick_install_hint()
         announce_log_location()
         print_debug_summary("Installer core load failure")
+        print("Installer will exit. You can re-run after addressing storage or network issues.")
+        return false
       end
     end
 
@@ -1460,12 +1530,17 @@ local function run_core_with_retries()
     end
 
     if release and confirm("Retry installer core download?", true) then
-      local ok, _, meta = download_core(release, { cache_bust = true })
-      if ok then
-        print("Installer core updated.")
+      if not download_core then
+        print("Installer core download unavailable (download_core missing).")
+        log_line("ERROR", "installer_core", "download_core unavailable during retry")
       else
-        print("Installer core download failed: " .. tostring(meta and meta.err or "unknown"))
-        log_core_failure(meta and meta.err or "unknown", meta)
+        local ok, _, meta = download_core(release, { cache_bust = true })
+        if ok then
+          print("Installer core updated.")
+        else
+          print("Installer core download failed: " .. tostring(meta and meta.err or "unknown"))
+          log_core_failure(meta and meta.err or "unknown", meta)
+        end
       end
     end
 
