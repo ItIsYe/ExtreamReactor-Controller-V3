@@ -39,6 +39,7 @@ local CONFIG = {
 }
 
 local log_line
+local format_bytes
 local cleanup_temp_file
 local disk_pool
 
@@ -354,7 +355,7 @@ local function now_stamp()
   return textutils.formatTime(os.epoch("utc") / 1000, true)
 end
 
-local function format_bytes(bytes)
+format_bytes = function(bytes)
   local value = tonumber(bytes or 0) or 0
   local units = { "B", "KB", "MB", "GB" }
   local idx = 1
