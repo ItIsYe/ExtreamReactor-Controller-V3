@@ -243,7 +243,7 @@ end
 
 function list_disk_mounts()
   local mounts = {}
-  local candidates = { "/disk", "/disk2", "/disk3", "/disk4", "/disk5", "/disk6", "/disk7", "/disk8", "/disk9" }
+  local candidates = { "/disk", "/disk2", "/disk3" }
   for _, path in ipairs(candidates) do
     if fs.exists(path) and fs.isDir(path) then
       local ok_free, free = pcall(fs.getFreeSpace, path)

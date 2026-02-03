@@ -45,10 +45,7 @@ local disk_pool
 
 local function list_disk_mounts()
   local mounts = {}
-  local candidates = { "/disk" }
-  for idx = 2, 9 do
-    table.insert(candidates, "/disk" .. tostring(idx))
-  end
+  local candidates = { "/disk", "/disk2", "/disk3" }
   for _, path in ipairs(candidates) do
     if fs.exists(path) and fs.isDir(path) then
       local ok_free, free = pcall(fs.getFreeSpace, path)
