@@ -96,6 +96,8 @@ local function format_mounts(mounts)
   return table.concat(lines, "\n")
 end
 
+local INSTALL_ARGS = { ... }
+
 local function pick_smallest_mount(mounts, min_free)
   if not mounts or #mounts == 0 then
     return nil
@@ -646,8 +648,11 @@ local function announce_log_location()
   end
 end
 
-local function run_with_trace(module, label, fn)
-  local ok, err = xpcall(fn, function(message)
+local function run_with_trace(module, label, fn, ...)
+  local args = { ... }
+  local ok, err = xpcall(function()
+    return fn(table.unpack(args))
+  end, function(message)
     return debug.traceback(tostring(message), 2)
   end)
   if not ok then
@@ -1640,7 +1645,7 @@ local function run_core_with_retries()
     end
 
     if loader then
-      local run_ok = run_with_trace("installer_core", "Installer core execution", loader)
+      local run_ok = run_with_trace("installer_core", "Installer core execution", loader, table.unpack(INSTALL_ARGS))
       announce_log_location()
       if run_ok then
         return true
