@@ -475,7 +475,6 @@ local function is_master_connected()
 end
 
 local function init()
-  discover()
   services = service_manager.new({ log_prefix = "FUEL" })
   comms = comms_service.new({
     config = config,

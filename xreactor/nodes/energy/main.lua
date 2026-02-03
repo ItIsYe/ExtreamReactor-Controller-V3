@@ -1211,7 +1211,6 @@ local function init()
     end
   }))
   services:init()
-  discover()
   local summary = registry:get_summary()
   comms:send_hello({
     storages = summary.kinds.storage and summary.kinds.storage.bound or 0,

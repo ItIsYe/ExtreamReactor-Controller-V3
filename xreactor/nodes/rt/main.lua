@@ -2550,7 +2550,6 @@ end
 
 local function init()
   dumpPeripherals()
-  discover()
   init_turbine_ctrl()
   init_reactor_ctrl()
   set_reactors_active(true)
