@@ -203,6 +203,44 @@ local storage_state = {
   log_fallback = CONFIG.LOG_PATH
 }
 
+local function normalize_root(path)
+  if not path or path == "" then
+    return nil
+  end
+  if #path > 1 and path:sub(-1) == "/" then
+    return path:sub(1, -2)
+  end
+  return path
+end
+
+local function live_root_path()
+  return normalize_root(storage_state.storage_root or C.BASE_DIR)
+end
+
+local function safe_delete(path, context)
+  if not path or path == "" then
+    return false
+  end
+  local root = live_root_path()
+  if normalize_root(path) == root then
+    local message = "Refusing to delete live root " .. tostring(path) .. " (" .. tostring(context or "delete") .. ")"
+    if type(log) == "function" then
+      log("ERROR", message)
+    end
+    print("WARN: " .. message)
+    return false
+  end
+  assert(normalize_root(path) ~= root, "Refusing to delete live root")
+  local ok, err = pcall(fs.delete, path)
+  if not ok then
+    if type(log) == "function" then
+      log("WARN", "Delete failed for " .. tostring(path) .. ": " .. tostring(err))
+    end
+    return false
+  end
+  return true
+end
+
 function list_disk_mounts()
   local mounts = {}
   local candidates = { "/disk", "/disk2", "/disk3", "/disk4", "/disk5", "/disk6", "/disk7", "/disk8", "/disk9" }
@@ -219,7 +257,7 @@ function list_disk_mounts()
           end
           file.write("ok")
           file.close()
-          fs.delete(test_path)
+          safe_delete(test_path, "disk write test")
         end)
         if ok_write then
           local used = (ok_total and total) and (total - free) or nil
@@ -434,7 +472,7 @@ function rotate_log_if_needed(path)
   end
   local backup = path .. (CONFIG.LOG_BACKUP_SUFFIX or ".1")
   if fs.exists(backup) then
-    fs.delete(backup)
+    safe_delete(backup, "rotate log backup")
   end
   fs.move(path, backup)
 end
@@ -1130,7 +1168,7 @@ function prune_backup_dirs()
     for idx = 1, #dirs - keep do
       local path = C.BACKUP_BASE .. "/" .. dirs[idx]
       if fs.exists(path) then
-        fs.delete(path)
+        safe_delete(path, "prune backup")
         table.insert(deleted, path)
       end
     end
@@ -1157,7 +1195,7 @@ function prune_staging_dirs()
     for idx = 1, #dirs - keep do
       local path = C.UPDATE_STAGING_BASE .. "/" .. dirs[idx]
       if fs.exists(path) then
-        fs.delete(path)
+        safe_delete(path, "prune staging")
         table.insert(deleted, path)
       end
     end
@@ -1250,7 +1288,7 @@ function prune_logs()
       break
     end
     if fs.exists(entry.path) then
-      fs.delete(entry.path)
+      safe_delete(entry.path, "prune logs by count")
       total = total - (entry.size or 0)
       table.insert(deleted, entry.path)
     end
@@ -1274,7 +1312,7 @@ function prune_logs_by_count()
   for idx = 1, overflow do
     local entry = files[idx]
     if entry and fs.exists(entry.path) then
-      fs.delete(entry.path)
+      safe_delete(entry.path, "prune logs by size")
       table.insert(deleted, entry.path)
     end
   end
@@ -1315,7 +1353,7 @@ function clear_dir_contents(path)
   for _, entry in ipairs(collect_dir_entries(path)) do
     local full_path = path .. "/" .. entry
     if fs.exists(full_path) then
-      fs.delete(full_path)
+      safe_delete(full_path, "clear dir contents")
       table.insert(deleted, full_path)
     end
   end
@@ -1334,7 +1372,7 @@ function clear_log_files(log_dir)
     if entry:match("%.log$") then
       local full_path = log_dir .. "/" .. entry
       if fs.exists(full_path) then
-        fs.delete(full_path)
+        safe_delete(full_path, "clear log files")
         table.insert(deleted, full_path)
       end
     end
@@ -1592,12 +1630,12 @@ function write_atomic(path, content)
   file.close()
   if not ok then
     if fs.exists(tmp) then
-      fs.delete(tmp)
+      safe_delete(tmp, "atomic write cleanup")
     end
     error("Unable to write file at " .. path .. ": " .. tostring(err), 0)
   end
   if fs.exists(path) then
-    fs.delete(path)
+    safe_delete(path, "atomic write replace")
   end
   fs.move(tmp, path)
 end
@@ -1841,7 +1879,7 @@ end
 
 function clear_update_marker()
   if fs.exists(UPDATE_MARKER_PATH) then
-    fs.delete(UPDATE_MARKER_PATH)
+    safe_delete(UPDATE_MARKER_PATH, "clear update marker")
   end
 end
 
@@ -1884,8 +1922,9 @@ function recover_update_marker()
       end
     end
     if marker.stage_dir and fs.exists(marker.stage_dir) then
-      fs.delete(marker.stage_dir)
+      safe_delete(marker.stage_dir, "recovery stage cleanup")
     end
+    cleanup_update_artifacts(nil, marker.backup_dir)
     clear_update_marker()
     return true, "applied"
   end
@@ -2214,7 +2253,7 @@ function stream_response_to_file(response, target_path, opts)
   file.close()
   if not ok then
     if fs.exists(tmp) then
-      fs.delete(tmp)
+      safe_delete(tmp, "temp file cleanup")
     end
     return false, err
   end
@@ -2227,7 +2266,7 @@ end
 
 function finalize_temp_file(temp_path, target_path)
   if fs.exists(target_path) then
-    fs.delete(target_path)
+    safe_delete(target_path, "temp file finalize")
   end
   fs.move(temp_path, target_path)
 end
@@ -2520,10 +2559,10 @@ end
 
 function cleanup_download_artifacts(temp_path, target_path)
   if temp_path and fs.exists(temp_path) then
-    fs.delete(temp_path)
+    safe_delete(temp_path, "download temp cleanup")
   end
   if target_path and fs.exists(target_path) and is_staging_path(target_path) then
-    fs.delete(target_path)
+    safe_delete(target_path, "download target cleanup")
   end
 end
 
@@ -3525,7 +3564,7 @@ function rollback_from_backup(base_dir, paths, created)
   end
   for _, path in ipairs(created) do
     if fs.exists(path) then
-      fs.delete(path)
+      safe_delete(path, "rollback cleanup")
     end
   end
 end
@@ -3582,7 +3621,28 @@ end
 
 function cleanup_staging(dir)
   if dir and fs.exists(dir) then
-    fs.delete(dir)
+    safe_delete(dir, "cleanup staging")
+  end
+end
+
+function cleanup_update_artifacts(stage_dir, backup_dir)
+  if stage_dir then
+    cleanup_staging(stage_dir)
+  end
+  if backup_dir and fs.exists(backup_dir) then
+    safe_delete(backup_dir, "cleanup backup")
+  end
+  if C.UPDATE_STAGING_BASE and fs.exists(C.UPDATE_STAGING_BASE) then
+    clear_dir_contents(C.UPDATE_STAGING_BASE)
+    if #collect_dir_entries(C.UPDATE_STAGING_BASE) == 0 then
+      safe_delete(C.UPDATE_STAGING_BASE, "cleanup staging base")
+    end
+  end
+  if C.BACKUP_BASE and fs.exists(C.BACKUP_BASE) then
+    clear_dir_contents(C.BACKUP_BASE)
+    if #collect_dir_entries(C.BACKUP_BASE) == 0 then
+      safe_delete(C.BACKUP_BASE, "cleanup backup base")
+    end
   end
 end
 
@@ -3686,7 +3746,7 @@ function apply_file_migrations()
         if not fs.exists(to_path) then
           return false, ("Migration target missing: %s (from %s)"):format(migration.to, migration.from)
         end
-        fs.delete(from_path)
+        safe_delete(from_path, "file migration cleanup")
         table.insert(applied, migration.from)
       end
     end
@@ -3729,13 +3789,13 @@ function update_installer_if_required(manifest, release, hash_algo)
     if not valid then
       print("SAFE UPDATE aborted: installer invalid (" .. tostring(valid_err) .. ").")
       if fs.exists(temp) then
-        fs.delete(temp)
+        safe_delete(temp, "installer temp cleanup")
       end
       return false
     end
     local target = resolve_install_path(installer_path)
     if fs.exists(target) then
-      fs.delete(target)
+      safe_delete(target, "installer apply cleanup")
     end
     fs.move(temp, target)
     print("Installer updated.")
@@ -3962,7 +4022,7 @@ function cleanup_role_files(manifest, role)
   for _, full_path in ipairs(collect_files_recursive(root)) do
     if not allowed[full_path] and not is_cleanup_protected_path(full_path) then
       if fs.exists(full_path) then
-        fs.delete(full_path)
+        safe_delete(full_path, "cleanup role files")
         table.insert(deleted, full_path)
       end
     end
@@ -3980,7 +4040,7 @@ function cleanup_role_dirs(role)
   local removed = {}
   local function remove_path(path)
     if path and fs.exists(path) then
-      fs.delete(path)
+      safe_delete(path, "cleanup role dirs")
       table.insert(removed, path)
     end
   end
@@ -4165,6 +4225,7 @@ function safe_update_apply(context, role, cfg_path)
     cleanup_role_dirs(role)
     print("SAFE UPDATE complete (no changes needed).")
     log("INFO", "SAFE UPDATE complete (no changes needed)")
+    cleanup_update_artifacts(nil, nil)
     return
   end
 
@@ -4288,11 +4349,10 @@ function safe_update_apply(context, role, cfg_path)
   if migrated then
     print("Config migration: updated defaults")
   end
-  print("Backup: " .. backup_dir)
   print("Next steps: reboot or run the role entrypoint.")
-  log("INFO", "SAFE UPDATE complete. Backup: " .. backup_dir)
+  log("INFO", "SAFE UPDATE complete. Cleaning staging/backup artifacts.")
   clear_update_marker()
-  cleanup_staging(stage_dir)
+  cleanup_update_artifacts(stage_dir, backup_dir)
 end
 
 -- SAFE UPDATE keeps role/config/node_id intact and updates only changed files.
@@ -4574,7 +4634,7 @@ function full_reinstall_apply(context)
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "FULL REINSTALL complete")
   clear_update_marker()
-  cleanup_staging(stage_dir)
+  cleanup_update_artifacts(stage_dir, backup_dir)
 end
 
 -- FULL REINSTALL overwrites all files and optionally restores existing config.
