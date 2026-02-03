@@ -58,7 +58,10 @@ local CONFIG = {
   DEFAULT_DEBUG_LOGGING = false -- Enable debug logging to /xreactor_logs/reprocessor.log.
 }
 
+local CURRENT_VERSION = 2
+
 return {
+  version = CURRENT_VERSION,
   role = CONFIG.DEFAULT_ROLE,
   node_id = CONFIG.DEFAULT_NODE_ID,
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
