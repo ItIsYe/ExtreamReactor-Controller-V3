@@ -3,10 +3,11 @@
 ## Install/Update
 1. **Fresh Install**: MASTER/RT/ENERGY mit `lua /installer.lua`.
 2. **SAFE UPDATE** aus bestehender Beta-Installation (ohne Config-Reset).
-3. **FULL REINSTALL** optional mit Restore von Config/Node-ID.
+3. **First-Start Setup**: Rollenwahl, Label (`XR-ROLE-ID`) + `node-<ID>` erzeugt, `/disk/xreactor/config/node.lua` geschrieben, Reboot läuft durch.
 4. **Low-Space Abort**: Fülle Disk fast voll → SAFE UPDATE starten → erwarteter sauberer Abbruch mit Disk-Übersicht, Log-Eintrag, keine Stage/Backup-Reste.
 5. **Rollen-Minimalinstall**: RT/Energy-Install → prüfen, dass keine `xreactor/master/ui/*` und keine fremden Nodes-Ordner installiert wurden.
 6. **Delta-Update**: Nur eine Datei im Repo ändern → Manifest aktualisieren → SAFE UPDATE → es wird nur diese Datei (+ Manifest) geladen/aktualisiert, Backup enthält nur ersetzte Dateien.
+7. **Config-Migration**: Alte Config ohne `version` starten → Defaults ergänzt, bestehende Werte bleiben erhalten, Config wird gespeichert.
 
 ## Kommunikation
 1. **ACK/Retry**: Simuliere Paketverlust (debug drop) und prüfe Retry + ACK (delivered/applied).
