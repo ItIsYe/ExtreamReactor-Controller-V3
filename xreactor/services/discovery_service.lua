@@ -1,15 +1,25 @@
 local utils = require("core.utils")
 
+local function now()
+  return os.epoch("utc")
+end
+
 local discovery = {}
 
 function discovery.new(opts)
   opts = opts or {}
+  local start_delay = opts.start_delay
+  if start_delay == nil then
+    start_delay = 4
+  end
   local self = {
     log_prefix = opts.log_prefix or "DISCOVERY",
     registry = opts.registry,
     discover = opts.discover,
     managed_registry = opts.managed_registry ~= false,
     interval = opts.interval or 15,
+    start_delay = start_delay,
+    start_at = now() + (start_delay * 1000),
     last_scan = 0,
     snapshot = { found = {}, bound = {}, missing = {}, last_scan = nil, errors = {} },
     update_health = opts.update_health
@@ -17,12 +27,11 @@ function discovery.new(opts)
   return setmetatable(self, { __index = discovery })
 end
 
-local function now()
-  return os.epoch("utc")
-end
-
 function discovery:tick()
   local ts = now()
+  if ts < self.start_at then
+    return
+  end
   if ts - self.last_scan < self.interval * 1000 then
     return
   end

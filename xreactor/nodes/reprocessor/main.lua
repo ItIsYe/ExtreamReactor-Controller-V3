@@ -443,7 +443,6 @@ local function process_buffers()
 end
 
 local function init()
-  discover()
   services = service_manager.new({ log_prefix = "REPROC" })
   comms = comms_service.new({
     config = config,

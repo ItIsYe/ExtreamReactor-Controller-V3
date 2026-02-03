@@ -488,7 +488,6 @@ local function handle_command(message)
 end
 
 local function init()
-  discover()
   services = service_manager.new({ log_prefix = "WATER" })
   comms = comms_service.new({
     config = config,
