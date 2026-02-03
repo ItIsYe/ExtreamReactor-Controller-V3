@@ -5,7 +5,10 @@ return {
       "xreactor/shared/",
       "xreactor/installer/"
     },
-    files = {}
+    files = {
+      "installer",
+      "installer.lua"
+    }
   },
   services = {
     service_manager = "xreactor/services/service_manager.lua",

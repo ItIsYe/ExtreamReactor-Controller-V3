@@ -62,7 +62,7 @@ local function list_disk_mounts()
           end
           file.write("ok")
           file.close()
-          fs.delete(test_path)
+          safe_delete(test_path, "disk write test")
         end)
         if ok_write then
           local used = (ok_total and total) and (total - free) or nil
@@ -300,6 +300,44 @@ local function ensure_dir(path)
   end
 end
 
+local function normalize_root(path)
+  if not path or path == "" then
+    return nil
+  end
+  if #path > 1 and path:sub(-1) == "/" then
+    return path:sub(1, -2)
+  end
+  return path
+end
+
+local function live_root_path()
+  return normalize_root(CONFIG.STORAGE_ROOT or "/xreactor")
+end
+
+local function safe_delete(path, context)
+  if not path or path == "" then
+    return false
+  end
+  local root = live_root_path()
+  if normalize_root(path) == root then
+    local message = "Refusing to delete live root " .. tostring(path) .. " (" .. tostring(context or "delete") .. ")"
+    if log_line then
+      log_line("ERROR", "fs", message)
+    end
+    print("WARN: " .. message)
+    return false
+  end
+  assert(normalize_root(path) ~= root, "Refusing to delete live root")
+  local ok, err = pcall(fs.delete, path)
+  if not ok then
+    if log_line then
+      log_line("WARN", "fs", "Delete failed for " .. tostring(path) .. ": " .. tostring(err))
+    end
+    return false
+  end
+  return true
+end
+
 local function get_free_space(path)
   local probe = path
   if probe == "" or not probe then
@@ -337,7 +375,7 @@ local function remove_dir_contents(path)
     return
   end
   for _, entry in ipairs(fs.list(path)) do
-    pcall(fs.delete, fs.combine(path, entry))
+    safe_delete(fs.combine(path, entry), "clear dir contents")
   end
 end
 
@@ -350,7 +388,7 @@ local function cleanup_storage_for_space()
     for _, entry in ipairs(fs.list(path)) do
       if entry:match("%.log$") then
         local target = fs.combine(path, entry)
-        if pcall(fs.delete, target) then
+        if safe_delete(target, "log retention") then
           table.insert(removed, target)
         end
       end
@@ -434,7 +472,7 @@ local function rotate_log_if_needed(path)
   end
   local backup = path .. CONFIG.LOG_BACKUP_SUFFIX
   if fs.exists(backup) then
-    fs.delete(backup)
+    safe_delete(backup, "rotate log backup")
   end
   fs.move(path, backup)
 end
@@ -1178,12 +1216,12 @@ local function write_atomic(path, content)
   file.close()
   if not ok then
     if fs.exists(tmp) then
-      fs.delete(tmp)
+      safe_delete(tmp, "atomic write cleanup")
     end
     return false, err
   end
   if fs.exists(path) then
-    fs.delete(path)
+    safe_delete(path, "atomic write replace")
   end
   fs.move(tmp, path)
   return true
@@ -1192,7 +1230,7 @@ end
 local function move_atomic_with_backup(temp_path, target_path)
   local backup_path = target_path .. ".bak"
   if fs.exists(backup_path) then
-    fs.delete(backup_path)
+    safe_delete(backup_path, "atomic write backup cleanup")
   end
   if fs.exists(target_path) then
     local ok_backup = pcall(fs.move, target_path, backup_path)
@@ -1342,7 +1380,7 @@ end
 
 cleanup_temp_file = function(path)
   if path and fs.exists(path) then
-    fs.delete(path)
+    safe_delete(path, "remove path")
   end
 end
 
