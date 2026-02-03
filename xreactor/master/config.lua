@@ -82,8 +82,10 @@ local CONFIG = {
 }
 
 local constants = require("shared.constants")
+local CURRENT_VERSION = 2
 
 return {
+  version = CURRENT_VERSION,
   role = constants.roles.MASTER,
   wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
   wired_modem = CONFIG.DEFAULT_WIRED_MODEM,
