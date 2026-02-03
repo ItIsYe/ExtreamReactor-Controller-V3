@@ -274,6 +274,69 @@ function bootstrap.require(module_name)
   return result
 end
 
+local FIRST_START_CONFIG = "/disk/xreactor/config/node.lua"
+
+local ROLE_OPTIONS = {
+  { label = "MASTER", role = "master" },
+  { label = "RT", role = "rt" },
+  { label = "ENERGY", role = "energy" },
+  { label = "WATER", role = "water" },
+  { label = "FUEL", role = "fuel" },
+  { label = "REPROCESSING", role = "reprocessing" }
+}
+
+local function prompt_role_selection()
+  while true do
+    print("=== XReactor First Start Setup ===")
+    print("Select node role:")
+    for index, entry in ipairs(ROLE_OPTIONS) do
+      print(string.format("%d - %s", index, entry.label))
+    end
+    local input = read()
+    local choice = tonumber(input)
+    if choice and ROLE_OPTIONS[choice] then
+      return ROLE_OPTIONS[choice]
+    end
+  end
+end
+
+local function write_first_start_config(path, role, node_id, label)
+  ensure_dir(fs.getDir(path))
+  local file = fs.open(path, "w")
+  if not file then
+    error("Unable to write config: " .. tostring(path))
+  end
+  file.write(string.format([[return {
+    role = "%s",
+    node_id = "%s",
+    label = "%s"
+}
+]], tostring(role), tostring(node_id), tostring(label)))
+  file.close()
+end
+
+local function run_first_start_setup()
+  if not (fs and fs.exists and os and os.getComputerID and type(read) == "function") then
+    return
+  end
+  if fs.exists(FIRST_START_CONFIG) then
+    return
+  end
+  local selection = prompt_role_selection()
+  local computer_id = tostring(os.getComputerID())
+  local label = string.format("XR-%s-%s", selection.label, computer_id)
+  if os.setComputerLabel then
+    os.setComputerLabel(label)
+  end
+  local node_id = "node-" .. computer_id
+  write_first_start_config(FIRST_START_CONFIG, selection.role, node_id, label)
+  print("Setup complete.")
+  print("Rebooting...")
+  if os.reboot then
+    os.reboot()
+  end
+end
+
 function bootstrap.setup(opts)
   opts = opts or {}
   if opts.base_dir then
@@ -314,6 +377,7 @@ function bootstrap.setup(opts)
       log_line("ERROR", "update recovery failed: " .. tostring(result))
     end
   end
+  run_first_start_setup()
   log_environment()
 end
 
