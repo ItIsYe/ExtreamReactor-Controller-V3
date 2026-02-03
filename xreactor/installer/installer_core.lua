@@ -669,6 +669,7 @@ local roles = {
 }
 
 local ROLE
+local INSTALL_ARGS = { ... }
 
 local role_targets = {
   [roles.MASTER] = { path = "master", config = "master/config.lua" },
@@ -688,6 +689,15 @@ local role_keys = {
   [roles.REPROCESSOR_NODE] = "reprocessor"
 }
 
+local role_file_keys = {
+  [roles.MASTER] = "master",
+  [roles.RT_NODE] = "rt",
+  [roles.ENERGY_NODE] = "energy",
+  [roles.WATER_NODE] = "water",
+  [roles.FUEL_NODE] = "fuel",
+  [roles.REPROCESSOR_NODE] = "reprocessing"
+}
+
 local role_storage_values = {
   [roles.MASTER] = "MASTER",
   [roles.RT_NODE] = "RT",
@@ -700,89 +710,32 @@ local role_storage_values = {
 local role_filter_cache = {}
 local role_files_cache = nil
 local role_files_default = {
-  shared = {
-    prefixes = {
-      "xreactor/core/",
-      "xreactor/shared/",
-      "xreactor/installer/"
-    },
-    files = {}
+  base = {
+    "xreactor/shared/",
+    "xreactor/core/",
+    "xreactor/services/"
   },
-  services = {
-    service_manager = "xreactor/services/service_manager.lua",
-    comms = "xreactor/services/comms_service.lua",
-    discovery = "xreactor/services/discovery_service.lua",
-    telemetry = "xreactor/services/telemetry_service.lua",
-    ui = "xreactor/services/ui_service.lua",
-    control = "xreactor/services/control_service.lua",
-    alert = "xreactor/services/alert_service.lua"
+  master = {
+    "xreactor/master/"
   },
-  adapters = {
-    monitor = "xreactor/adapters/monitor.lua",
-    reactor = "xreactor/adapters/reactor.lua",
-    turbine = "xreactor/adapters/turbine.lua",
-    energy = "xreactor/adapters/energy_storage.lua",
-    matrix = "xreactor/adapters/induction_matrix.lua"
+  rt = {
+    "xreactor/nodes/rt/",
+    "xreactor/adapters/reactor.lua",
+    "xreactor/adapters/turbine.lua"
   },
-  roles = {
-    MASTER = {
-      files = {
-        "xreactor/master/config.lua",
-        "xreactor/master/startup_sequencer.lua",
-        "xreactor/master/profiles.lua",
-        "xreactor/master/main.lua",
-        "xreactor/master/ui/alarms.lua",
-        "xreactor/master/ui/resources.lua",
-        "xreactor/master/ui/rt_dashboard.lua",
-        "xreactor/master/ui/overview.lua",
-        "xreactor/master/ui/alerts.lua",
-        "xreactor/master/ui/energy.lua",
-        "xreactor/master/ui/multiview.lua",
-        "xreactor/master/ui/widgets.lua"
-      },
-      services = { "service_manager", "comms", "alert", "telemetry", "ui" },
-      adapters = { "monitor" }
-    },
-    RT = {
-      files = {
-        "xreactor/nodes/rt/config.lua",
-        "xreactor/nodes/rt/main.lua"
-      },
-      services = { "service_manager", "comms", "discovery", "telemetry", "control" },
-      adapters = { "monitor", "reactor", "turbine" }
-    },
-    ENERGY = {
-      files = {
-        "xreactor/nodes/energy/config.lua",
-        "xreactor/nodes/energy/main.lua"
-      },
-      services = { "service_manager", "comms", "discovery", "telemetry", "ui", "control" },
-      adapters = { "monitor", "energy", "matrix" }
-    },
-    WATER = {
-      files = {
-        "xreactor/nodes/water/config.lua",
-        "xreactor/nodes/water/main.lua"
-      },
-      services = { "service_manager", "comms", "discovery", "telemetry", "ui" },
-      adapters = { "monitor" }
-    },
-    FUEL = {
-      files = {
-        "xreactor/nodes/fuel/config.lua",
-        "xreactor/nodes/fuel/main.lua"
-      },
-      services = { "service_manager", "comms", "discovery", "telemetry", "ui" },
-      adapters = { "monitor" }
-    },
-    REPROCESSOR = {
-      files = {
-        "xreactor/nodes/reprocessor/config.lua",
-        "xreactor/nodes/reprocessor/main.lua"
-      },
-      services = { "service_manager", "comms", "discovery", "telemetry", "ui" },
-      adapters = { "monitor" }
-    }
+  energy = {
+    "xreactor/nodes/energy/",
+    "xreactor/adapters/induction_matrix.lua",
+    "xreactor/adapters/energy_storage.lua"
+  },
+  water = {
+    "xreactor/nodes/water/"
+  },
+  fuel = {
+    "xreactor/nodes/fuel/"
+  },
+  reprocessing = {
+    "xreactor/nodes/reprocessor/"
   }
 }
 
@@ -790,21 +743,10 @@ local function normalize_role_files_map(data)
   if type(data) ~= "table" then
     return role_files_default
   end
-  if data.shared or data.roles then
+  if data.base then
     return data
   end
-  local legacy_roles = {}
-  for key, value in pairs(data) do
-    if type(value) == "table" then
-      legacy_roles[key] = { files = value }
-    end
-  end
-  return {
-    shared = role_files_default.shared,
-    services = role_files_default.services,
-    adapters = role_files_default.adapters,
-    roles = legacy_roles
-  }
+  return role_files_default
 end
 
 local function load_role_files_map()
@@ -841,45 +783,27 @@ local function build_role_filter(role)
   if role_filter_cache[role] then
     return role_filter_cache[role]
   end
-  if not role then
-    return nil
-  end
+  role = role or roles.MASTER
   local prefixes = {}
   local exact = {}
-  local function add_prefixes(list)
+  local function add_paths(list)
     for _, entry in ipairs(list or {}) do
-      table.insert(prefixes, entry)
-    end
-  end
-  local function add_exact(list)
-    for _, entry in ipairs(list or {}) do
-      exact[entry] = true
+      if entry:sub(-1) == "/" then
+        table.insert(prefixes, entry)
+      else
+        exact[entry] = true
+      end
     end
   end
   local role_map = load_role_files_map()
-  local shared = role_map and role_map.shared or {}
-  add_prefixes(shared.prefixes)
-  add_exact(shared.files)
-  local services = role_map and role_map.services or {}
-  local adapters = role_map and role_map.adapters or {}
-  local role_key = role_storage_values[role] or role
-  local role_def = role_map and role_map.roles and role_map.roles[role_key] or nil
-  if role_def and role_def.prefixes then
-    add_prefixes(role_def.prefixes)
-  end
-  add_exact(role_def and role_def.files or nil)
-  for _, name in ipairs(role_def and role_def.services or {}) do
-    local path = services[name]
-    if path then
-      exact[path] = true
-    end
-  end
-  for _, name in ipairs(role_def and role_def.adapters or {}) do
-    local path = adapters[name]
-    if path then
-      exact[path] = true
-    end
-  end
+  add_paths(role_map and role_map.base or nil)
+  add_paths({
+    "xreactor/shared/",
+    "xreactor/core/",
+    "xreactor/services/"
+  })
+  local role_key = role_file_keys[role]
+  add_paths(role_map and role_key and role_map[role_key] or nil)
   role_filter_cache[role] = { prefixes = prefixes, exact = exact }
   return role_filter_cache[role]
 end
@@ -955,8 +879,34 @@ function normalize_role_value(value)
   if upper == "WATER" or upper == "WATER-NODE" then
     return roles.WATER_NODE
   end
-  if upper == "REPROCESSOR" or upper == "REPROCESSOR-NODE" then
+  if upper == "REPROCESSOR" or upper == "REPROCESSOR-NODE" or upper == "REPROCESSING" or upper == "REPROCESSING-NODE" then
     return roles.REPROCESSOR_NODE
+  end
+  return nil
+end
+
+local function read_role_argument()
+  for idx, arg in ipairs(INSTALL_ARGS or {}) do
+    if type(arg) == "string" then
+      local value = arg:match("^role=(.+)$") or arg:match("^--role=(.+)$")
+      if value then
+        local normalized = normalize_role_value(value)
+        if normalized then
+          return normalized
+        end
+      elseif arg == "role" or arg == "--role" then
+        local next_arg = INSTALL_ARGS[idx + 1]
+        local normalized = normalize_role_value(next_arg)
+        if normalized then
+          return normalized
+        end
+      else
+        local normalized = normalize_role_value(arg)
+        if normalized then
+          return normalized
+        end
+      end
+    end
   end
   return nil
 end
@@ -3892,6 +3842,7 @@ function verify_integrity(manifest, role, cfg_path)
 end
 
 function getFilesForRole(role, manifest)
+  role = role or roles.MASTER
   local entries = {}
   local groups = manifest and manifest.role_groups or {}
   local role_token = role and role_storage_values[role] or nil
@@ -3928,9 +3879,10 @@ function entry_applies_to_role(entry, role_token)
 end
 
 function filter_manifest_by_role(manifest, role)
-  if not manifest or not role then
+  if not manifest then
     return manifest
   end
+  role = role or roles.MASTER
   local filtered = {}
   for key, value in pairs(manifest) do
     if key ~= "entries" and key ~= "lookup" and key ~= "role_groups" then
@@ -4402,9 +4354,10 @@ function full_reinstall_prepare()
       keep_config = confirm("Keep existing config + role?", true)
     end
 
+    local requested_role = read_role_argument()
     local selected_role = existing_role
     if not keep_config or not existing_role then
-      selected_role = choose_role()
+      selected_role = requested_role or choose_role()
     end
     ROLE = selected_role
     ensure_base_dirs(selected_role)
