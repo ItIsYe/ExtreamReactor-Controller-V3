@@ -1,4 +1,4 @@
-local INSTALLER_CORE_VERSION = "2.6"
+local INSTALLER_CORE_VERSION = "2.7"
 
 -- CONFIG
 local CONFIG = {
@@ -275,8 +275,8 @@ function build_disk_pool(required_bytes)
   if required_bytes and largest.free < required_bytes then
     return nil, "Not enough disk space for core.", mounts
   end
-  local stage = mounts[2] or largest
-  local backup = mounts[3] or stage
+  local stage = largest
+  local backup = mounts[2] or largest
   local log_mount = pick_smallest_mount(mounts, CONFIG.DISK_SPACE_MIN_BUFFER or 0) or largest
   return {
     mounts = mounts,
@@ -662,41 +662,112 @@ local role_storage_values = {
 local role_filter_cache = {}
 local role_files_cache = nil
 local role_files_default = {
-  MASTER = {
-    "xreactor/master/config.lua",
-    "xreactor/master/startup_sequencer.lua",
-    "xreactor/master/profiles.lua",
-    "xreactor/master/main.lua",
-    "xreactor/master/ui/alarms.lua",
-    "xreactor/master/ui/resources.lua",
-    "xreactor/master/ui/rt_dashboard.lua",
-    "xreactor/master/ui/overview.lua",
-    "xreactor/master/ui/alerts.lua",
-    "xreactor/master/ui/energy.lua",
-    "xreactor/master/ui/multiview.lua",
-    "xreactor/master/ui/widgets.lua"
+  shared = {
+    prefixes = {
+      "xreactor/core/",
+      "xreactor/shared/",
+      "xreactor/installer/"
+    },
+    files = {}
   },
-  RT = {
-    "xreactor/nodes/rt/config.lua",
-    "xreactor/nodes/rt/main.lua"
+  services = {
+    service_manager = "xreactor/services/service_manager.lua",
+    comms = "xreactor/services/comms_service.lua",
+    discovery = "xreactor/services/discovery_service.lua",
+    telemetry = "xreactor/services/telemetry_service.lua",
+    ui = "xreactor/services/ui_service.lua",
+    control = "xreactor/services/control_service.lua",
+    alert = "xreactor/services/alert_service.lua"
   },
-  ENERGY = {
-    "xreactor/nodes/energy/config.lua",
-    "xreactor/nodes/energy/main.lua"
+  adapters = {
+    monitor = "xreactor/adapters/monitor.lua",
+    reactor = "xreactor/adapters/reactor.lua",
+    turbine = "xreactor/adapters/turbine.lua",
+    energy = "xreactor/adapters/energy_storage.lua",
+    matrix = "xreactor/adapters/induction_matrix.lua"
   },
-  WATER = {
-    "xreactor/nodes/water/config.lua",
-    "xreactor/nodes/water/main.lua"
-  },
-  FUEL = {
-    "xreactor/nodes/fuel/config.lua",
-    "xreactor/nodes/fuel/main.lua"
-  },
-  REPROCESSOR = {
-    "xreactor/nodes/reprocessor/config.lua",
-    "xreactor/nodes/reprocessor/main.lua"
+  roles = {
+    MASTER = {
+      files = {
+        "xreactor/master/config.lua",
+        "xreactor/master/startup_sequencer.lua",
+        "xreactor/master/profiles.lua",
+        "xreactor/master/main.lua",
+        "xreactor/master/ui/alarms.lua",
+        "xreactor/master/ui/resources.lua",
+        "xreactor/master/ui/rt_dashboard.lua",
+        "xreactor/master/ui/overview.lua",
+        "xreactor/master/ui/alerts.lua",
+        "xreactor/master/ui/energy.lua",
+        "xreactor/master/ui/multiview.lua",
+        "xreactor/master/ui/widgets.lua"
+      },
+      services = { "service_manager", "comms", "alert", "telemetry", "ui" },
+      adapters = { "monitor" }
+    },
+    RT = {
+      files = {
+        "xreactor/nodes/rt/config.lua",
+        "xreactor/nodes/rt/main.lua"
+      },
+      services = { "service_manager", "comms", "discovery", "telemetry", "control" },
+      adapters = { "monitor", "reactor", "turbine" }
+    },
+    ENERGY = {
+      files = {
+        "xreactor/nodes/energy/config.lua",
+        "xreactor/nodes/energy/main.lua"
+      },
+      services = { "service_manager", "comms", "discovery", "telemetry", "ui", "control" },
+      adapters = { "monitor", "energy", "matrix" }
+    },
+    WATER = {
+      files = {
+        "xreactor/nodes/water/config.lua",
+        "xreactor/nodes/water/main.lua"
+      },
+      services = { "service_manager", "comms", "discovery", "telemetry", "ui" },
+      adapters = { "monitor" }
+    },
+    FUEL = {
+      files = {
+        "xreactor/nodes/fuel/config.lua",
+        "xreactor/nodes/fuel/main.lua"
+      },
+      services = { "service_manager", "comms", "discovery", "telemetry", "ui" },
+      adapters = { "monitor" }
+    },
+    REPROCESSOR = {
+      files = {
+        "xreactor/nodes/reprocessor/config.lua",
+        "xreactor/nodes/reprocessor/main.lua"
+      },
+      services = { "service_manager", "comms", "discovery", "telemetry", "ui" },
+      adapters = { "monitor" }
+    }
   }
 }
+
+local function normalize_role_files_map(data)
+  if type(data) ~= "table" then
+    return role_files_default
+  end
+  if data.shared or data.roles then
+    return data
+  end
+  local legacy_roles = {}
+  for key, value in pairs(data) do
+    if type(value) == "table" then
+      legacy_roles[key] = { files = value }
+    end
+  end
+  return {
+    shared = role_files_default.shared,
+    services = role_files_default.services,
+    adapters = role_files_default.adapters,
+    roles = legacy_roles
+  }
+end
 
 local function load_role_files_map()
   if role_files_cache ~= nil then
@@ -724,97 +795,9 @@ local function load_role_files_map()
     role_files_cache = role_files_default
     return role_files_cache
   end
-  role_files_cache = data
+  role_files_cache = normalize_role_files_map(data)
   return role_files_cache
 end
-local base_role_prefixes = {
-  "xreactor/core/",
-  "xreactor/shared/",
-  "xreactor/installer/",
-  "xreactor/config/",
-  "xreactor/ui/"
-}
-local base_role_files = {
-  "installer",
-  "installer.lua"
-}
-local service_files = {
-  service_manager = "xreactor/services/service_manager.lua",
-  comms = "xreactor/services/comms_service.lua",
-  discovery = "xreactor/services/discovery_service.lua",
-  telemetry = "xreactor/services/telemetry_service.lua",
-  ui = "xreactor/services/ui_service.lua",
-  control = "xreactor/services/control_service.lua",
-  alert = "xreactor/services/alert_service.lua"
-}
-local adapter_files = {
-  monitor = "xreactor/adapters/monitor.lua",
-  reactor = "xreactor/adapters/reactor.lua",
-  turbine = "xreactor/adapters/turbine.lua",
-  energy = "xreactor/adapters/energy_storage.lua",
-  matrix = "xreactor/adapters/induction_matrix.lua"
-}
-local role_prefixes = {
-  [roles.MASTER] = { "xreactor/master/", "xreactor/services/" },
-  [roles.RT_NODE] = { "xreactor/nodes/rt/" },
-  [roles.ENERGY_NODE] = { "xreactor/nodes/energy/" },
-  [roles.WATER_NODE] = { "xreactor/nodes/water/" },
-  [roles.FUEL_NODE] = { "xreactor/nodes/fuel/" },
-  [roles.REPROCESSOR_NODE] = { "xreactor/nodes/reprocessor/" }
-}
-local role_service_files = {
-  [roles.MASTER] = {
-    service_files.service_manager,
-    service_files.comms,
-    service_files.alert,
-    service_files.telemetry,
-    service_files.ui
-  },
-  [roles.RT_NODE] = {
-    service_files.service_manager,
-    service_files.comms,
-    service_files.discovery,
-    service_files.telemetry,
-    service_files.control
-  },
-  [roles.ENERGY_NODE] = {
-    service_files.service_manager,
-    service_files.comms,
-    service_files.discovery,
-    service_files.telemetry,
-    service_files.ui,
-    service_files.control
-  },
-  [roles.WATER_NODE] = {
-    service_files.service_manager,
-    service_files.comms,
-    service_files.discovery,
-    service_files.telemetry,
-    service_files.ui
-  },
-  [roles.FUEL_NODE] = {
-    service_files.service_manager,
-    service_files.comms,
-    service_files.discovery,
-    service_files.telemetry,
-    service_files.ui
-  },
-  [roles.REPROCESSOR_NODE] = {
-    service_files.service_manager,
-    service_files.comms,
-    service_files.discovery,
-    service_files.telemetry,
-    service_files.ui
-  }
-}
-local role_adapter_files = {
-  [roles.MASTER] = { adapter_files.monitor },
-  [roles.RT_NODE] = { adapter_files.monitor, adapter_files.reactor, adapter_files.turbine },
-  [roles.ENERGY_NODE] = { adapter_files.monitor, adapter_files.energy, adapter_files.matrix },
-  [roles.WATER_NODE] = { adapter_files.monitor },
-  [roles.FUEL_NODE] = { adapter_files.monitor },
-  [roles.REPROCESSOR_NODE] = { adapter_files.monitor }
-}
 
 local function build_role_filter(role)
   if role_filter_cache[role] then
@@ -835,14 +818,30 @@ local function build_role_filter(role)
       exact[entry] = true
     end
   end
-  add_prefixes(base_role_prefixes)
-  add_prefixes(role_prefixes[role])
-  add_exact(base_role_files)
-  add_exact(role_service_files[role])
-  add_exact(role_adapter_files[role])
   local role_map = load_role_files_map()
-  local extras = role_map and role_map[role_storage_values[role]] or nil
-  add_exact(extras)
+  local shared = role_map and role_map.shared or {}
+  add_prefixes(shared.prefixes)
+  add_exact(shared.files)
+  local services = role_map and role_map.services or {}
+  local adapters = role_map and role_map.adapters or {}
+  local role_key = role_storage_values[role] or role
+  local role_def = role_map and role_map.roles and role_map.roles[role_key] or nil
+  if role_def and role_def.prefixes then
+    add_prefixes(role_def.prefixes)
+  end
+  add_exact(role_def and role_def.files or nil)
+  for _, name in ipairs(role_def and role_def.services or {}) do
+    local path = services[name]
+    if path then
+      exact[path] = true
+    end
+  end
+  for _, name in ipairs(role_def and role_def.adapters or {}) do
+    local path = adapters[name]
+    if path then
+      exact[path] = true
+    end
+  end
   role_filter_cache[role] = { prefixes = prefixes, exact = exact }
   return role_filter_cache[role]
 end
@@ -1014,6 +1013,20 @@ function calculate_required_bytes(entries)
     if entry then
       count = count + 1
       total = total + (entry.size_bytes or 0)
+    end
+  end
+  total = total + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) * count
+  total = total + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  return total
+end
+
+function calculate_backup_bytes(paths)
+  local total = 0
+  local count = 0
+  for _, path in ipairs(paths or {}) do
+    if path and fs.exists(path) then
+      total = total + (fs.getSize(path) or 0)
+      count = count + 1
     end
   end
   total = total + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) * count
@@ -1411,16 +1424,16 @@ function pick_mount_for_role(role, min_bytes)
     return smallest, mounts
   end
   if role == "stage" then
+    local core = storage_state.core_mount or mounts[1]
+    if core and (not min_bytes or core.free >= min_bytes) then
+      return core, mounts
+    end
     for _, entry in ipairs(mounts) do
-      if storage_state.core_mount and entry.path ~= storage_state.core_mount.path then
+      if core and entry.path ~= core.path then
         if not min_bytes or entry.free >= min_bytes then
           return entry, mounts
         end
       end
-    end
-    local core = storage_state.core_mount or mounts[1]
-    if core and (not min_bytes or core.free >= min_bytes) then
-      return core, mounts
     end
     return nil, mounts
   end
@@ -1537,6 +1550,22 @@ function ensure_space_with_cleanup(path, expected_bytes, context)
     return ensure_free_space(switched_path, needed, context .. " (after disk switch)")
   end
   return false
+end
+
+function require_space(path, expected_bytes, context)
+  if not expected_bytes or expected_bytes <= 0 then
+    return true
+  end
+  local ok, err = ensure_space_with_cleanup(path, expected_bytes, context)
+  if ok then
+    return true
+  end
+  local message = err or "Not enough disk space."
+  print("ERROR: " .. tostring(message))
+  log("ERROR", "Space check failed: " .. tostring(message))
+  print("Detected disks:")
+  print(format_mounts(list_disk_mounts()))
+  return false, message
 end
 
 function write_atomic(path, content)
@@ -3562,13 +3591,20 @@ function build_staging_path(stage_dir, path)
 end
 
 function stage_updates(entries, release, hash_algo)
+  if not entries or #entries == 0 then
+    return {}, nil, nil, nil
+  end
+  local total_needed = calculate_required_bytes(entries)
+  if not require_space(C.UPDATE_STAGING_BASE, total_needed, "Stage updates") then
+    return nil, "not enough disk space", nil, "space"
+  end
   local stage_dir = build_staging_dir()
   local staged = {}
   for _, entry in ipairs(entries) do
     local base = current_base_url or build_main_base_url()
     local urls = build_mirror_urls(base, entry.path)
     local expected_size = entry.size_bytes or 0
-    local space_ok = ensure_space_with_cleanup(stage_dir, expected_size, "Stage " .. entry.path)
+    local space_ok = require_space(stage_dir, expected_size, "Stage " .. entry.path)
     if not space_ok then
       cleanup_staging(stage_dir)
       return nil, ("Insufficient space to stage %s"):format(entry.path), nil, "space"
@@ -3610,6 +3646,13 @@ function apply_direct(entries, release, hash_algo, created)
     local target_path = resolve_install_path(entry.path)
     if not fs.exists(target_path) then
       table.insert(created, target_path)
+    end
+    local expected_size = entry.size_bytes or 0
+    if expected_size > 0 then
+      local ok = require_space(target_path, expected_size, "Install " .. entry.path)
+      if not ok then
+        return false, ("Insufficient space to install %s"):format(entry.path), nil, "space"
+      end
     end
     local base = current_base_url or build_main_base_url()
     local urls = build_mirror_urls(base, entry.path)
@@ -3996,6 +4039,18 @@ function safe_update_prepare(role, cfg_path)
     local role_entries = getFilesForRole(role, filtered_manifest)
     local updates = update_files(role_entries, hash_algo)
     log("INFO", "Files needing update: " .. tostring(#updates))
+    if #updates == 0 then
+      log("INFO", "SAFE UPDATE skipped: no file changes needed")
+      return {
+        manifest_content = manifest_content,
+        manifest = filtered_manifest,
+        release = release,
+        hash_algo = hash_algo,
+        updates = {},
+        staged = {},
+        stage_dir = nil
+      }
+    end
     local needed_bytes = calculate_required_bytes(updates)
     print_space_preflight(needed_bytes, "SAFE UPDATE")
     local preflight_ok = preflight_space(updates, C.UPDATE_STAGING_BASE, "SAFE UPDATE preflight")
@@ -4088,11 +4143,52 @@ function safe_update_apply(context, role, cfg_path)
   local updates = context.updates or {}
   local staged = context.staged or {}
   local stage_dir = context.stage_dir
-  local backup_dir = create_backup_dir()
-  local protected = { cfg_path, C.NODE_ID_PATH, "/startup.lua", C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
+  if #updates == 0 then
+    log("INFO", "SAFE UPDATE: no file changes to apply")
+    local write_ok, write_err = pcall(write_atomic, C.MANIFEST_LOCAL, manifest_content)
+    if not write_ok then
+      print("SAFE UPDATE failed: unable to write manifest (" .. tostring(write_err) .. ")")
+      log("ERROR", "SAFE UPDATE manifest write failed: " .. tostring(write_err))
+      return
+    end
+    local cache_ok, cache_err = pcall(write_manifest_cache, manifest_content, release, current_base_source, {
+      base_url = current_base_url,
+      source = current_base_source,
+      sha = current_base_sha
+    })
+    if not cache_ok then
+      print("SAFE UPDATE failed: unable to write manifest cache (" .. tostring(cache_err) .. ")")
+      log("ERROR", "SAFE UPDATE manifest cache write failed: " .. tostring(cache_err))
+      return
+    end
+    cleanup_role_files(manifest, role)
+    cleanup_role_dirs(role)
+    print("SAFE UPDATE complete (no changes needed).")
+    log("INFO", "SAFE UPDATE complete (no changes needed)")
+    return
+  end
+
+  local protected = { cfg_path, C.MANIFEST_LOCAL, C.MANIFEST_CACHE }
   local update_paths = build_update_paths(updates)
   local created = {}
   local migration_paths = build_migration_paths()
+  local backup_candidates = {}
+  for _, path in ipairs(update_paths) do
+    table.insert(backup_candidates, path)
+  end
+  for _, path in ipairs(migration_paths) do
+    table.insert(backup_candidates, path)
+  end
+  for _, path in ipairs(protected) do
+    table.insert(backup_candidates, path)
+  end
+  local backup_needed = calculate_backup_bytes(backup_candidates)
+  if not require_space(C.BACKUP_BASE, backup_needed, "Backup files") then
+    print("SAFE UPDATE aborted: not enough space for backup.")
+    log("WARN", "SAFE UPDATE aborted: insufficient backup space")
+    return
+  end
+  local backup_dir = create_backup_dir()
 
   backup_files(backup_dir, update_paths)
   backup_files(backup_dir, migration_paths)
@@ -4393,7 +4489,6 @@ function full_reinstall_apply(context)
   local stage_dir = context.stage_dir
   local use_staging = context.use_staging
   local entries = context.entries
-  local backup_dir = create_backup_dir()
   local update_paths = build_update_paths(entries)
   local created = {}
   local migration_paths = build_migration_paths()
@@ -4401,6 +4496,25 @@ function full_reinstall_apply(context)
   for _, target in pairs(role_targets) do
     table.insert(protected, C.BASE_DIR .. "/" .. target.config)
   end
+  local backup_candidates = {}
+  for _, path in ipairs(update_paths) do
+    table.insert(backup_candidates, path)
+  end
+  for _, path in ipairs(migration_paths) do
+    table.insert(backup_candidates, path)
+  end
+  for _, path in ipairs(protected) do
+    table.insert(backup_candidates, path)
+  end
+  local backup_needed = calculate_backup_bytes(backup_candidates)
+  if not require_space(C.BACKUP_BASE, backup_needed, "Backup files") then
+    print("FULL REINSTALL aborted: not enough space for backup.")
+    log("WARN", "FULL REINSTALL aborted: insufficient backup space")
+    cleanup_staging(stage_dir)
+    clear_update_marker()
+    return
+  end
+  local backup_dir = create_backup_dir()
 
   backup_files(backup_dir, update_paths)
   backup_files(backup_dir, migration_paths)

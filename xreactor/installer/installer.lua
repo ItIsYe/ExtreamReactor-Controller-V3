@@ -39,6 +39,7 @@ local CONFIG = {
 }
 
 local log_line
+local format_bytes
 local cleanup_temp_file
 local disk_pool
 
@@ -117,8 +118,8 @@ local function build_disk_pool(required_bytes)
   if required_bytes and largest.free < required_bytes then
     return nil, "Not enough disk space for core.", mounts
   end
-  local stage = mounts[2] or largest
-  local backup = mounts[3] or stage
+  local stage = largest
+  local backup = mounts[2] or largest
   local log_mount = pick_smallest_mount(mounts, CONFIG.DISK_SPACE_MIN_BUFFER or 0) or largest
   return {
     mounts = mounts,
@@ -384,7 +385,7 @@ local function now_stamp()
   return textutils.formatTime(os.epoch("utc") / 1000, true)
 end
 
-local function format_bytes(bytes)
+format_bytes = function(bytes)
   local value = tonumber(bytes or 0) or 0
   local units = { "B", "KB", "MB", "GB" }
   local idx = 1

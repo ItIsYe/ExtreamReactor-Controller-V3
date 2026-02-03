@@ -108,8 +108,8 @@ local function build_disk_pool(required_bytes)
   if required_bytes and largest.free < required_bytes then
     return nil, "Not enough disk space for installer.", mounts
   end
-  local stage = mounts[2] or largest
-  local backup = mounts[3] or stage
+  local stage = largest
+  local backup = mounts[2] or largest
   local log_mount = pick_smallest_mount(mounts, CONFIG.DISK_SPACE_MIN_BUFFER or 0) or largest
   return {
     mounts = mounts,
