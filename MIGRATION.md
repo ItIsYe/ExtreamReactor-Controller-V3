@@ -8,21 +8,19 @@ Dieser Guide beschreibt die Migration von der Beta-Branch auf die finalisierte A
 2. Warten, bis Download + Verifikation abgeschlossen sind (Staging wird vollständig geprüft, bevor Live-Dateien getauscht werden).
 3. Nach Abschluss einmal neu starten (`reboot`), damit Services sauber init/stop durchlaufen.
 
-## Wann FULL REINSTALL nötig ist
-- **Protokoll-Major-Änderung** (proto_ver major).
-- Installer meldet, dass eine Migration nicht möglich ist (z. B. fehlende Migration Targets).
-- Beschädigte lokale Dateien/Config, die nicht mehr geladen werden können.
+## Full-Reinstall
+Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE, Delta-Update und Recovery halten den Stand konsistent, ohne Config-Reset.
 
 ## Was SAFE UPDATE **nicht** ändert
 - Rolle (`role`).
-- Node-ID (`/xreactor/config/node_id.txt`).
-- Lokale Configs (`xreactor/*/config.lua`).
+- Node-ID (`/disk/xreactor/config/node_id.txt`).
+- Lokale Configs (`/disk/xreactor/*/config.lua`).
 
 ## Registry-Änderung
-- Neue Registry-Datei pro Rolle: `/xreactor/config/registry_<role>_<node_id>.json`.
+- Neue Registry-Datei pro Rolle: `/disk/xreactor/config/registry_<role>_<node_id>.json`.
 - Bestehende Registry-Dateien werden beim nächsten Discovery-Lauf neu aufgebaut.
 
 ## Nach der Migration prüfen
-- Logs: `/xreactor_logs/<role>_<node_id>.log`.
+- Logs: `/disk/xreactor_logs/<role>_<node_id>.log`.
 - Master UI: Node-Status + Degraded-Reasons.
-- SAFE UPDATE: `/xreactor/.manifest` und `/xreactor/.cache/manifest.lua` aktualisiert.
+- SAFE UPDATE: `/disk/xreactor/.manifest` und `/disk/xreactor/.cache/manifest.lua` aktualisiert.
