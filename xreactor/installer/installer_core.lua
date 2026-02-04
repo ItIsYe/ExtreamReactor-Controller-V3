@@ -2,7 +2,8 @@ local INSTALLER_CORE_VERSION = "2.7"
 
 -- CONFIG
 local CONFIG = {
-  BASE_DIR = "/xreactor", -- Base install directory (updated at runtime).
+  STORAGE_ROOT = nil, -- Optional override for storage root.
+  BASE_DIR = "/xreactor", -- Base install directory.
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
   REPO_BASE_URL = "https://raw.githubusercontent.com", -- Raw GitHub base URL.
@@ -86,137 +87,8 @@ local CONFIG = {
   }
 }
 
-local function normalize_storage_base(base)
-  if type(base) ~= "string" or base == "" then
-    return "/"
-  end
-  if base ~= "/" and base:sub(-1) == "/" then
-    base = base:sub(1, -2)
-  end
-  if base == "" then
-    return "/"
-  end
-  return base
-end
-
-local function join_storage_base(base, suffix)
-  if base == "/" then
-    return "/" .. suffix
-  end
-  return base .. "/" .. suffix
-end
-
-local function derive_storage_base()
-  if type(CONFIG.BASE_DIR) ~= "string" or CONFIG.BASE_DIR == "" then
-    return "/"
-  end
-  local match = CONFIG.BASE_DIR:match("^(.*)/xreactor/?$")
-  if match and match ~= "" then
-    return match
-  end
-  return "/"
-end
-
-local function try_label_disk(storage_base)
-  pcall(function()
-    if type(storage_base) ~= "string" or storage_base == "/" then
-      return
-    end
-    if not disk or not disk.getMountPath or not disk.setLabel then
-      return
-    end
-    for _, name in ipairs(peripheral.getNames()) do
-      if peripheral.getType(name) == "drive" then
-        local mount = disk.getMountPath(name)
-        if mount and ("/" .. mount) == storage_base then
-          local label = disk.getLabel(name)
-          if not label or label == "" then
-            disk.setLabel(name, "xreactor")
-          end
-          return
-        end
-      end
-    end
-  end)
-end
-
-local STORAGE = nil
-local storage_initialized = false
-
-local function init_storage()
-  if storage_initialized and STORAGE then
-    return STORAGE
-  end
-  local base = normalize_storage_base(derive_storage_base())
-  STORAGE = {
-    base = base,
-    root = join_storage_base(base, "xreactor"),
-    stage = join_storage_base(base, "xreactor_stage"),
-    backup = join_storage_base(base, "xreactor_backup"),
-    logs = join_storage_base(base, "xreactor_logs")
-  }
-  storage_initialized = true
-  try_label_disk(STORAGE.base)
-  return STORAGE
-end
-
-local function validate_storage(storage)
-  if not storage or type(storage) ~= "table" then
-    return false, "Storage config missing"
-  end
-  local fields = { "base", "root", "stage", "backup", "logs" }
-  for _, key in ipairs(fields) do
-    local value = storage[key]
-    if type(value) ~= "string" or value == "" then
-      return false, "Storage path invalid: " .. tostring(key)
-    end
-  end
-  return true, nil
-end
-
-local function apply_storage_to_config(storage)
-  CONFIG.BASE_DIR = storage.root
-  CONFIG.BACKUP_BASE = storage.backup
-  CONFIG.UPDATE_STAGING_BASE = storage.stage
-  CONFIG.LOG_PATH = storage.logs .. "/installer.log"
-  CONFIG.MANIFEST_LOCAL = storage.root .. "/.manifest"
-  CONFIG.MANIFEST_CACHE = storage.root .. "/.cache/manifest.lua"
-  CONFIG.MANIFEST_CACHE_LEGACY = storage.root .. "/.manifest_cache"
-  CONFIG.BASE_CACHE_PATH = storage.root .. "/.cache/source.lua"
-  CONFIG.NODE_ID_PATH = storage.root .. "/config/node_id.txt"
-end
-
-local function storage_summary(storage)
-  return table.concat({
-    "Storage Summary:",
-    "Storage root: " .. storage.root,
-    "Stage root: " .. storage.stage,
-    "Backup root: " .. storage.backup,
-    "Log root: " .. storage.logs
-  }, "\n")
-end
-
-local storage_summary_printed = false
-
-local function print_storage_summary(storage)
-  if storage_summary_printed then
-    return
-  end
-  storage_summary_printed = true
-  print(storage_summary(storage))
-end
-
-local function resolve_storage()
-  local storage = init_storage()
-  local ok, err = validate_storage(storage)
-  if not ok then
-    return nil, err
-  end
-  apply_storage_to_config(storage)
-  return storage, nil
-end
-
-local STORAGE_STATE, storage_err = resolve_storage()
+local STORAGE = { root = nil, initialized = false }
+local storage_root = nil
 
 local BASE_DIR = CONFIG.BASE_DIR
 local REPO_OWNER = CONFIG.REPO_OWNER
@@ -242,6 +114,40 @@ local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
 local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
 local REQUIRED_CORE_FILES = CONFIG.REQUIRED_CORE_FILES
 local FILE_MIGRATIONS = CONFIG.FILE_MIGRATIONS
+
+local function try_label_disk(...)
+  if not disk or type(disk.setLabel) ~= "function" then
+    return false, "disk API unavailable"
+  end
+  local ok, result = pcall(disk.setLabel, ...)
+  if not ok then
+    return false, tostring(result)
+  end
+  return result ~= false
+end
+
+local function detect_storage_root()
+  if type(CONFIG.STORAGE_ROOT) == "string" and CONFIG.STORAGE_ROOT ~= "" then
+    return CONFIG.STORAGE_ROOT
+  end
+  return "/"
+end
+
+local function init_storage_root()
+  if STORAGE.initialized then
+    return STORAGE.root
+  end
+  local root = detect_storage_root()
+  if type(root) ~= "string" or root == "" then
+    root = "/"
+  end
+  STORAGE.root = root
+  STORAGE.initialized = true
+  storage_root = root
+  CONFIG.STORAGE_ROOT = root
+  return root
+end
+
 
 -- Download base tracking (main vs pinned commit).
 local current_base_url = nil
@@ -1550,54 +1456,18 @@ function resolve_storage_role(path)
   return "core"
 end
 
-function try_label_disk(storage_root)
-  pcall(function()
-    if type(storage_root) ~= "string" then
-      return
-    end
-    local disk_root = storage_root:match("^(/disk%d*)")
-    if not disk_root then
-      return
-    end
-    if not peripheral then
-      return
-    end
-    local drives = {}
-    if peripheral.find then
-      local found = { peripheral.find("drive") }
-      for _, drive in ipairs(found) do
-        if drive then
-          table.insert(drives, drive)
-        end
-      end
-    end
-    if #drives == 0 and peripheral.getNames then
-      for _, name in ipairs(peripheral.getNames()) do
-        if peripheral.getType and peripheral.getType(name) == "drive" then
-          local drive = peripheral.wrap(name)
-          if drive then
-            table.insert(drives, drive)
-          end
-        end
-      end
-    end
-    if #drives == 0 then
-      return
-    end
-    for _, drive in ipairs(drives) do
-      if drive
-        and drive.isDiskPresent
-        and drive.isDiskPresent()
-        and drive.getMountPath
-        and drive.setDiskLabel then
-        local mount = drive.getMountPath()
-        if mount == disk_root then
-          drive.setDiskLabel("XReactor")
-          return
-        end
-      end
-    end
-  end)
+local function ensure_storage_root()
+  if storage_root == nil then
+    print("Installer error: storage root is nil. Aborting.")
+    log("ERROR", "Storage root is nil; aborting installer.")
+    return false
+  end
+  return true
+end
+
+local function trim(text)
+  if not text then return "" end
+  return text:match("^%s*(.-)%s*$")
 end
 
 local function normalize_node_id(value)
@@ -4837,6 +4707,10 @@ bootstrap_self_check()
 function main()
   if not http then
     error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
+  end
+  init_storage_root()
+  if not ensure_storage_root() then
+    return
   end
   print("=== XReactor Installer ===")
   if not STORAGE_STATE then
