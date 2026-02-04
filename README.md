@@ -2,6 +2,25 @@
 
 SCADA-ähnlicher Steuerungs-Stack für Minecraft mit **CC:Tweaked**, **Extreme Reactors** und optional **Mekanism** (Energiespeicher/Fluids). Der Stack besteht aus einem MASTER, der Telemetrie sammelt, Sequenzen orchestriert und Visualisierung liefert, sowie spezialisierten Nodes, die lokale Peripherals steuern.
 
+## Installation
+### Quick Install (CC:Tweaked)
+**Copy & Paste (RAW, beta):**
+```
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
+installer
+```
+**Ein einzelner Copy-Paste-Befehl für CC:Tweaked-Computer (RAW, beta):**
+```
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer && installer
+```
+**Wichtig:** Niemals GitHub **/blob/**-Links verwenden. Blob liefert HTML → Lua meldet `unexpected symbol near '<'`. Nutze immer `raw.githubusercontent.com`.
+**HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
+**Alternative (direkter Bootstrap):**
+```
+wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/installer.lua
+```
+Der Installer arbeitet **disk-first** und installiert die Runtime immer auf `/disk/xreactor`.
+
 ## Projektziel & Überblick
 - **MASTER** sammelt Statusdaten, koordiniert RT-Nodes (Reactor/Turbine) und verteilt Setpoints.
 - **Nodes** kapseln die lokale Peripherie-Steuerung und Sicherheitslogik.
@@ -30,13 +49,18 @@ Wireless Modem (Control/Status)
         └─ REPROCESSOR-NODE (Waste/Output)
 ```
 
-## Rollen & Aufgaben
+## Node Rollen
 - **MASTER**: Aggregiert Status, startet Sequenzen, verteilt Setpoints, rendert UI.
 - **RT-NODE**: Steuert Reaktoren/Turbinen, lokalen Schutz (SCRAM/Flow-Limits), Moduswechsel (AUTONOM/MASTER/SAFE).
 - **ENERGY-NODE**: Liest Energie-Speicherstände/IO-Raten.
 - **FUEL-NODE**: Überwacht Fuel-Reserven (z. B. AE2), berichtet Engpässe.
 - **WATER-NODE**: Stabilisiert Wasser-/Dampfkreislauf.
-- **REPROCESSOR-NODE**: Überwacht Waste-Reprocessing.
+- **REPROCESSING-NODE**: Überwacht Waste-Reprocessing (intern `REPROCESSOR-NODE`).
+
+## Rollen-Minimalinstallation
+- Der Installer lädt **nur** die Dateien, die für die gewählte Rolle benötigt werden (plus shared/core).
+- **Keine Master-UI auf Nodes**, keine fremden Adapter/Services.
+- Rollenmenü bietet: **MASTER, RT, ENERGY, WATER, FUEL, REPROCESSING**.
 
 ## Netzwerk-Setup
 - **Wireless Modem**: Kommunikation MASTER ↔ Nodes (Control/Status, Kanäle 6500/6501).
@@ -44,47 +68,208 @@ Wireless Modem (Control/Status)
 - **Protokoll**: `proto_ver = 1.0` (bei Mismatch ignorieren Nodes/Master die Nachricht).
 - **Protokoll-Versionierung**: `proto_ver` nutzt `major.minor` (z. B. `1.0`). Gleiche Major-Versionen sind kompatibel, Minor-Abweichungen werden toleriert.
 - **Wichtig**: Der MASTER greift **nie** direkt auf Peripherals zu – nur die Nodes tun das.
+- **Comms-Layer**: Commands nutzen ACK/Retry/Timeout/Dedupe; Heartbeats/Status sind best-effort (Master erkennt Staleness).
+- **2-Phase ACK**: Commands senden `delivered` ACK, optional `applied` ACK nach Ausführung.
+
+## Comms Reliability
+- **Envelope**: Jede Nachricht enthält `message_id`, `proto_ver`, `src`, `dst`, `type`, `payload`, `ts`.
+- **ACK-Phasen**:
+  - `ACK_DELIVERED` direkt nach Empfang eines COMMAND.
+  - `ACK_APPLIED` nach Ausführung mit Ergebnis `{ ok, error?, module_id? }`.
+- **Retry/Backoff**: COMMANDS werden mit Exponential-Backoff erneut gesendet, bis ACKs kommen oder `max_retries` erreicht sind.
+- **Dedupe**: Pro Sender wird ein Zeitfenster gecacht, um doppelte COMMANDS zu erkennen.
+- **COMMS_DOWN**: Ein Peer ist „down“, wenn `peer_timeout_s` überschritten wird (UI zeigt `COMMS_DOWN` + Age).
+
+## Definition of Done (Comms)
+- **Keine Mischpfade**: Business-Logic sendet/empfängt **nie** direkt (`rednet`, `modem.transmit`, `os.pullEvent("modem_message")`) außerhalb `core/comms.lua` + `services/comms_service.lua`.
+- **COMMAND Lifecycle**: Jeder COMMAND endet deterministisch mit `ACK_DELIVERED` und `ACK_APPLIED` inkl. Ergebnis `{ ok=true }` oder `{ ok=false, error, reason_code }`.
+- **Proto/Validation**: Payload-Validation + `proto_ver`-Check; bei Mismatch liefert der Node `ok=false` mit `reason_code=PROTO_MISMATCH`.
+- **Timeout/Retry**: Bei ausbleibendem `ACK_APPLIED` markiert der MASTER das Kommando als **failed** und loggt den Grund (`ACK_TIMEOUT`).
+- **COMMS_DOWN Semantik**:
+  - MASTER setzt Nodes auf `COMMS_DOWN` bei `peer_timeout_s`.
+  - Nodes markieren `COMMS_DOWN`, wenn der MASTER nicht erreichbar ist (laufen aber autonom).
+- **Diagnostics/Observability**: Master/Nodes zeigen Queue/Inflight/Retry/Dropped/Dedupe-Hits und Peer-Status.
+
+## Alerts (Monitoring only)
+- **Zweck**: Einheitliches Alert-System für Telemetry/Health/Registry-Daten, **ohne** Regelungs- oder Steuerungseingriff.
+- **Severity**: `INFO`, `WARN`, `CRITICAL` (Anzeige + Logging).
+- **Acknowledge**: ACK toggelt den Status (wird nicht gelöscht). „ACK ALL (VISIBLE)“ bestätigt nur gefilterte ACTIVE Alerts, „ACK ALL (ACTIVE)“ bestätigt alle ACTIVE Alerts.
+- **Mute**: Regeln oder Nodes für X Minuten muten (persistiert in `/disk/xreactor/config/alerts_state.lua`). Gemutete Alerts erscheinen nicht in ACTIVE; optional als INFO in History.
+- **Anzeige**:
+  - Master-Layout: View **Alerts** (per Layout-Menü zuweisbar).
+  - Filter: Severity/Scope/Role + ACK anzeigen/ausblenden.
+  - Sort: Severity+Recency (Default), Recency, Node/Role.
+  - Group: Flat oder „by node“ (collapsible).
+  - History: eigener Tab mit Severity-Filter (Ring-Buffer).
+  - Dashboards: kleine Warn-Badges + Top-CRITICAL inline.
+  - Nodes: CRITICAL-Banner + „Local Alerts“ im Diagnostics-Tab.
+- **Konfiguration** (`xreactor/master/config.lua`):
+  - `energy_warn_pct`, `energy_crit_pct`
+  - `matrix_warn_full_pct`
+  - `rpm_warn_low`, `rpm_crit_high`
+  - `comms_down_warn_secs`, `comms_down_crit_secs`
+  - `alert_eval_interval`, `alert_history_size`, `alert_info_ttl`
+  - `alert_raise_after_s`, `alert_clear_after_s`, `alert_cooldown_s`
+  - `alert_mute_default_minutes`, `alert_mute_durations`, `alert_log_muted_events`
+
+## Manual Test Checklist (Kurz)
+1. **Start**: MASTER + RT + ENERGY starten (FUEL/WATER/REPROCESSOR optional).
+2. **Comms-Down**: Einen Node stoppen → MASTER zeigt `COMMS_DOWN` + `down_since` + Age; Node läuft lokal weiter.
+3. **Comms-Recover**: Node neu starten → MASTER zeigt `OK`, `down_since` reset.
+4. **Command Applied**: MASTER sendet Setpoints/Mode → `ACK_APPLIED` sichtbar (ok/failed, reason_code).
+5. **Diagnostics**: Master-Resources-Page zeigt `Queue/Inflight/Retry/Dropped/Dedupe` + Peer-Summary.
+6. **Node Diagnostics**: Jede Node zeigt MASTER-Link (OK/DOWN + Age) + Queue/Inflight/Retry/Dropped/Dedupe.
+7. **Energy Navigation**: ENERGY UI via `ui_router` prüfen (Overview/Matrices/Storages/Diagnostics + Paging).
+8. **Master Multi-Monitor**: Mit 2 Monitoren starten → Overview/Energy/RT verteilt, Layout-Taste testen, Auswahl bleibt nach Reboot.
+9. **Safe Update**: SAFE UPDATE ausführen → keine Rolle/Config-Resets, Rollback bei Fehlern.
+10. **Proto-Mismatch**: `proto_ver` Major abweichen lassen → Node antwortet mit `ok=false`, `reason_code=PROTO_MISMATCH`.
+11. **Update Recovery Marker**: `/disk/xreactor/.update_in_progress` anlegen → beim Start wird Recovery (Apply/Rollback) ausgeführt und Marker entfernt.
+12. **Alerts Node Down**: Node stoppen → `CRITICAL` Alert in Alerts-View + Badge im Dashboard.
+13. **Alerts Energy Low**: `energy_warn_pct`/`energy_crit_pct` temporär hochsetzen → WARN/CRITICAL erscheint.
+14. **Alerts Ack**: Alert auswählen → ACK/ACK ALL VISIBLE/ACTIVE setzt `acknowledged`, Alert bleibt sichtbar.
+15. **Alerts History**: Alerts-View → History-Tab, Severity-Filter prüfen.
+16. **Alerts Mute Persist**: Rule/Node muten → reboot → Mute bleibt aktiv.
+17. **RAW Install (beta)**: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer` → `installer` startet den Bootstrap korrekt.
+18. **Blob-Fail Scenario**: Blob-URL laden → `/installer` enthält HTML → Bootstrap verweigert Überschreiben und meldet „Downloaded HTML, expected Lua“.
+19. **Debug Logging Toggle**: `settings set xreactor.debug_logging true` → Installer/Node erzeugen Logdateien beim Start.
+
+## Rails/Tuning Guide (Kurz)
+- **RT Control Rails** werden zentral über `rails` in `master/config.lua` und `nodes/*/config.lua` gesteuert.
+- Wichtige Parameter:
+  - `deadband_up/down` + `hysteresis_up/down` → verhindert Oszillation/Flip-Flop.
+  - `max_step_up/down` + `cooldown_s` → limitiert Sprünge pro Tick.
+  - `min/max` → harte Klemmen (Rods 0–98%, Flow 0–1900).
+  - `ema_alpha` → optionales Smoothing für noisy Inputs (RPM/Steam).
+- Änderungen zuerst im RT-Node testen (beste Hardware-Nähe).
+
+## UI Navigation Guide
+- **Master**: Overview / Node Detail / Resources / Diagnostics.
+- **Nodes**: Overview / Details / Diagnostics (ENERGY nutzt `ui_router`, Pages: Overview/Matrices/Storages/Diagnostics).
+- Navigation:
+  - Touch auf die Page-Buttons (`<`/`>`) unten.
+  - **Keys**: `←`/`→` oder `PageUp`/`PageDown`.
+  - Page-Indicator zeigt `X/Y` (aktuelle Seite).
+
+## Master Multi-Monitor (Wired)
+- **Auto-Detection**: MASTER erkennt automatisch alle per Wired Modem angeschlossenen Monitore und sortiert stabil.
+- **Default Layout**:
+  - 1 Monitor → Router: Overview / Energy / RT / Resources / Logs.
+  - 2+ Monitore → automatische Zuordnung (Overview / Energy / RT / Resources / Logs).
+- **Layout ändern**:
+  - Auf dem jeweiligen Monitor oben rechts **LAYOUT** tippen.
+  - View auswählen oder auf **Router** zurückschalten.
+  - Optional **Lock** aktivieren, damit die Zuordnung bei weiteren Monitoren bleibt.
+- **Persistenz**: Layout-Zuordnung bleibt nach Reboot erhalten (kein Role/Node-ID Reset).
 
 ## Modul-Loading & Require-Konzept
-- **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/xreactor/core/bootstrap.lua`.
-- **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Zusätzlich ergänzt er `package.path` um `/xreactor/?.lua` und `/xreactor/?/init.lua`, damit auch native `require`-Aufrufe immer aus dem Projekt-Root auflösen.
+- **Zentrale Bootstrap-Lösung**: Jede Entry-Datei (`master/main.lua`, `nodes/*/main.lua`) lädt zuerst `/disk/xreactor/core/bootstrap.lua`.
+- **Bootstrap-Aufgabe**: Installiert einen **eigenen Loader** ohne Abhängigkeit von `package.path`. Zusätzlich ergänzt er `package.path` um `/disk/xreactor/?.lua` und `/disk/xreactor/?/init.lua`, damit auch native `require`-Aufrufe immer aus dem Projekt-Root auflösen.
 - **Package-Sicherheit**: Falls `package` nicht existiert (einige CC:Tweaked-Umgebungen), erstellt der Bootstrap ein minimales `package`-Objekt, damit `require` zuverlässig funktioniert.
-- **Projekt-Root**: Alle Module werden relativ zum festen Root `/xreactor` geladen (z. B. `/xreactor/shared/constants.lua`).
+- **Projekt-Root**: Alle Module werden relativ zum festen Root `/disk/xreactor` geladen (z. B. `/disk/xreactor/shared/constants.lua`).
 - **Module-Struktur**:
   - `xreactor/shared/*` (z. B. `shared.constants`)
+  - `xreactor/shared/health_codes.lua` (Health-Reason-Codes für Master/Nodes)
   - `xreactor/core/*` (z. B. `core.utils`)
   - `xreactor/master/*` (z. B. `master.main`)
   - `xreactor/nodes/*` (z. B. `nodes.rt.main`)
 - **Keine globalen Injects**: Alle Module nutzen lokale Requires, z. B. `local utils = require("core.utils")`.
-- **Debug-Log**: In den jeweiligen `main.lua`-Dateien kann `BOOTSTRAP_LOG_ENABLED = true` gesetzt werden (Konfig ganz oben). Dann schreibt der Bootstrap eine Datei `/xreactor_logs/loader_<role>.log` (z. B. `loader_master.log`) mit Environment-Infos, Root-Pfad, `package.path`, `shell.dir()` und jedem Modul-Ladeversuch. Optional kann `BOOTSTRAP_LOG_PATH` das Logziel überschreiben. Bei Require-Fehlern werden die tatsächlich geprüften Pfade protokolliert.
-- **Warum das wichtig ist**: Ohne Bootstrap nutzt Lua die Standard-`package.path`, die relativ zum aktuellen Programmverzeichnis ist (z. B. `/xreactor/master/?.lua`). Dadurch werden Module wie `shared.constants` fälschlich unter `/xreactor/master/shared/...` gesucht. Der Bootstrap überschreibt `require`, ergänzt `package.path` und installiert einen `package.searcher`, der immer unter `/xreactor` lädt.
+- **Debug-Log**: In den jeweiligen `main.lua`-Dateien kann `BOOTSTRAP_LOG_ENABLED = true` gesetzt werden (Konfig ganz oben). Dann schreibt der Bootstrap eine Datei `/disk/xreactor_logs/loader_<role>.log` (z. B. `loader_master.log`) mit Environment-Infos, Root-Pfad, `package.path`, `shell.dir()` und jedem Modul-Ladeversuch. Optional kann `BOOTSTRAP_LOG_PATH` das Logziel überschreiben. Bei Require-Fehlern werden die tatsächlich geprüften Pfade protokolliert.
+- **Warum das wichtig ist**: Ohne Bootstrap nutzt Lua die Standard-`package.path`, die relativ zum aktuellen Programmverzeichnis ist (z. B. `/disk/xreactor/master/?.lua`). Dadurch werden Module wie `shared.constants` fälschlich unter `/disk/xreactor/master/shared/...` gesucht. Der Bootstrap überschreibt `require`, ergänzt `package.path` und installiert einen `package.searcher`, der immer unter `/disk/xreactor` lädt.
 - **Empfohlene Nutzung**:
   ```
-  local bootstrap = dofile("/xreactor/core/bootstrap.lua")
+  local bootstrap = dofile("/disk/xreactor/core/bootstrap.lua")
   bootstrap.setup({ role = "master" })
   local utils = require("core.utils")
   ```
 
-## Installation, Safe Update & Full Reinstall
-**Erstinstallation / Vollinstallation**
+## Installation, Safe Update
+**Erstinstallation**
+**1-Command Install (RAW, empfohlen)**
+```
+wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/installer.lua
+```
 1. Installer herunterladen und ausführen:
    ```
-   lua /installer.lua
+   wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
+   installer
    ```
-   (Beide Einstiegspunkte sind Bootstrapper: `/installer.lua` und `/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
+   Alternativ (wenn der Bootstrapper schon lokal vorhanden ist):
+   ```
+   lua /installer
+   ```
+   **Wichtig:** Nutze immer **RAW**-Links (`raw.githubusercontent.com`). GitHub-**Blob**-Links liefern HTML und sind nicht ausführbar.
+   **HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
+   (Beide Einstiegspunkte sind Bootstrapper: `/installer` und `/disk/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/disk/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
+   - Wenn Disk-Drives gemountet sind (`/disk`, `/disk2`, ...), erstellt der Installer einen **Storage-Pool**:
+     - **Core/Runtime** → größter Datenträger (`<disk>/xreactor`)
+     - **Staging** → größter Datenträger (`<disk>/xreactor_stage`)
+     - **Backups** → zweitgrößter Datenträger (`<disk>/xreactor_backup`)
+     - **Logs** → kleinster Datenträger (`<disk>/xreactor_logs`)
+   - Alle Disks werden automatisch vorbereitet (`xreactor`, `xreactor_stage`, `xreactor_backup`, `xreactor_logs`) und bei Bedarf mit Label `XREACTOR_DISK_<n>` versehen (nur wenn kein User-Label existiert).
+   - **Wichtig:** Ein Disk hilft nur, wenn auf dem Computer ein lokaler Mount wie `/disk` vorhanden ist. Ohne lokalen Mount bricht der Installer ab und fordert eine lokale Disk an.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
+
+## Disk Layout (verbindlich)
+Der Installer nutzt **disk-first**. Nach der Installation gilt:
+- `/disk/xreactor` → **aktive Installation**
+- `/disk/xreactor_logs` → **Logs**
+- `/disk/xreactor_stage` → **nur während SAFE UPDATE**
+- `/disk/xreactor_backup` → **nur während SAFE UPDATE**
+
+Stage & Backup existieren **nur während Updates**. Der interne Speicher bleibt weitgehend leer.
+
+## Disk Installation Mode
+Installer scans all locally mounted disks (`/disk`, `/disk2`, ...) and builds a storage pool:
+- Core/runtime → largest disk (`/disk*/xreactor`)
+- Staging → largest disk (`/disk*/xreactor_stage`)
+- Backups → second-largest disk (`/disk*/xreactor_backup`)
+- Logs → smallest disk (`/disk*/xreactor_logs`)
+The bootstrap relocates itself to `/disk*/installer` so all runtime work happens on disk.
+Recommended for Advanced Computers with limited internal storage.
+If no disk mount is present, attach a disk drive directly to this computer and insert a disk so `/disk` appears.
+Disk labels are optional; the installer will label unlabeled disks as `XREACTOR_DISK_<n>` when possible.
+Installer downloads only the files needed for the selected role (plus shared/core files).
+
+**Troubleshooting: "Out of space"**
+- Prüfe freien Speicher und lösche alte Backups/Logs/Staging (Config/Node-ID bleiben dabei erhalten):
+  ```
+  delete /disk*/xreactor_stage/*
+  delete /disk*/xreactor_backup/*
+  delete /disk*/xreactor_logs/*.log
+  ```
+- Danach Installer erneut starten (`installer`).
+
+**Warum HTML passiert (Fehler `/installer: unexpected symbol near '<'`)**
+- Wird statt einer RAW-Datei eine GitHub-**HTML**-Seite geladen (z. B. Blob-URL, 404, Rate-Limit, Cloudflare), landet HTML im `installer`/`installer_core`.
+- Lua versucht das HTML zu parsen → `unexpected symbol near '<'`.
+  - **Fix:** RAW-Bootstrap erneut ausführen (beta-Branch):
+    ```
+    wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
+    installer
+    ```
+
+**Wie der Installer das verhindert**
+- **RAW-Only**: Downloader nutzt ausschließlich `raw.githubusercontent.com` (inkl. Mirror).
+- **Response-Validation**: Statuscode, HTML-Signaturen und Content-Length werden geprüft.
+- **Atomic Writes**: Downloads gehen zuerst in `.tmp`, erst nach Validierung wird ersetzt.
+- **Retry/Backoff + Jitter**: Mehrere Versuche mit Backoff, ohne bestehende Installation zu überschreiben.
+- **Debug-Log**: Aktivierbar via `settings set xreactor.debug_logging true` (Installer + Nodes loggen Start/Downloads in eigene Logdateien).
 
 **SAFE UPDATE (inkrementell, ohne Config-Reset)**
 - Installer erneut ausführen → Menü **SAFE UPDATE** wählen.
 - Lädt nur **geänderte/fehlende** Dateien laut Manifest (dateiweise).
+- **Delta-Update**: Backup enthält nur die **ersetzten** Dateien.
 - SAFE UPDATE fragt **keine** Rolle neu ab und überschreibt keine Configs/Node-ID.
-- Downloads werden zuerst in ein **Staging-Verzeichnis** (`/xreactor_stage/<timestamp>`) geschrieben, per Checksum verifiziert und erst danach atomar ersetzt.
-- Bei Fehler: Rollback aus `/xreactor_backup/<timestamp>/`, keine halbfertigen Updates.
+- Downloads werden zuerst in ein **Staging-Verzeichnis** (`/disk/xreactor_stage/<timestamp>`) geschrieben, per Checksum verifiziert und erst danach atomar ersetzt.
+- Bei Fehler: Rollback aus `/disk/xreactor_backup/<timestamp>/`, keine halbfertigen Updates.
+- **Update Marker**: Während des Updates wird `/disk/xreactor/.update_in_progress` geschrieben; beim Start wird Recovery (Apply/Rollback) erzwungen, Marker wird danach entfernt.
+- **Recovery nach Abbruch**: Falls der Server beim Update abstürzt, wird beim nächsten Start automatisch Apply/Rollback ausgeführt.
+- **Cleanup**: Stage/Backup werden nach Abschluss entfernt.
 - Downloader nutzt **Retries + Backoff**, prüft HTTP-Status/HTML-Fehler und nutzt RAW-Mirrors (`raw.githubusercontent.com`, `raw.github.com`).
 - **Size mismatch** gilt nur als Transport-Warnung; die Entscheidung trifft die Checksum. Bei Problemen: Retry.
-- Manifest-Cache: `/xreactor/.cache/manifest.lua`. Bei Problemen: **Cached Manifest**, **Retry** oder **Cancel**.
+- Manifest-Cache: `/disk/xreactor/.cache/manifest.lua`. Bei Problemen: **Cached Manifest**, **Retry** oder **Cancel**.
 - Updates sind source_ref-gepinnt: Manifest und Dateien kommen aus derselben Base-URL (Commit-SHA bevorzugt, `main` nur Fallback).
 - Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
 - Installer speichert nur sichere Plain-Data-Snapshots (keine shared refs); Backup/Cache-Indizes sind textbasiert.
@@ -93,35 +278,61 @@ Wireless Modem (Control/Status)
 - **Datei-Renames/Migrationen**: Wenn Dateien umbenannt/verschoben werden, müssen Migrationsregeln hinterlegt sein – andernfalls wird der Update-Lauf abgebrochen, um halbfertige Zustände zu verhindern.
 - **Loader-Garantie**: SAFE UPDATE stellt sicher, dass der Loader (`xreactor/core/bootstrap.lua`) und alle abhängigen Core-Module aus dem Manifest vorhanden sind, bevor ein Start empfohlen wird.
 
-**FULL REINSTALL (alles neu)**
-- Installer erneut ausführen → Menü **FULL REINSTALL** wählen.
-- Optional: bestehende Config/Rolle/Node-ID behalten (Restore nach Neuinstall).
-- Andernfalls: Rolle wird neu abgefragt, Config wird neu geschrieben, `startup.lua` wird gesetzt.
+Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE und Recovery halten die Installation konsistent, ohne Config-Reset.
 
 **Offline/Fehlerfälle**
 - **HTTP disabled**: HTTP in der CC:Tweaked-Config aktivieren, dann Installer erneut starten.
 - **GitHub Timeout**: Installer nutzt Retry; falls weiter fehlschlägt, kann ein Cached Manifest verwendet werden oder der Installer bricht sauber ohne Änderungen ab.
+- **Checksum mismatch**: Zuerst Manifest aktualisieren und sicherstellen, dass der Installer auf das **beta**-Manifest zeigt (RAW-URL via `raw.githubusercontent.com`).
 
 **Installer starten (ohne Neu-Download)**
-- Root-Installer (`/installer.lua`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
-- Der Installer unter `/xreactor/installer/installer.lua` ist ebenfalls ein Bootstrap und verhält sich identisch.
+- Root-Installer (`/installer`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/disk/xreactor/installer/installer_core.lua`.
+- Der Installer unter `/disk/xreactor/installer/installer.lua` ist ebenfalls ein Bootstrap und verhält sich identisch.
 - SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
 
 **Logging & Debugging**
-- Bootstrap-Log: `/xreactor_logs/installer_bootstrap.log` (mit Rotation `.1`).
-- Installer-Core-Log: `/xreactor_logs/installer.log` (mit Rotation `.1`).
-- Node-Logs: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
-- Debug-Logging aktivieren: in `xreactor/*/config.lua` `debug_logging = true` setzen.
+- Installer-Logs liegen in:
+  - `/disk/xreactor_logs/`
+- Node-Logs liegen in:
+  - `/disk/xreactor_logs/`
+- Installer erzeugt die Log-Ordner automatisch.
+- Bootstrap-Log: `/disk/xreactor_logs/installer_debug.log` (mit Rotation `.1`).
+- Installer-Core-Log: `/disk/xreactor_logs/installer_core.log` (mit Rotation `.1`).
+- Node-Logs: `/disk/xreactor_logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
+- Debug-Logging aktivieren: in `/disk/xreactor/*/config.lua` `debug_logging = true` setzen oder global via `settings set xreactor.debug_logging true`.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
+ - Falls kein Log-File verfügbar ist, gibt der Installer den Log-Buffer am Ende im Terminal aus (RAM-Fallback).
+
+**Update-Hinweis**
+- Aktualisiere auch die Update-bezogenen Dateien auf dem Computer (Installer/Installer-Core), damit Änderungen am Update-Prozess tatsächlich ausgerollt werden.
+
+## First-Start Setup (neu)
+Ablauf nach Installation:
+1. Installation → Reboot
+2. **First-Start Setup** startet automatisch.
+3. Rollenwahl (MASTER/RT/ENERGY/WATER/FUEL/REPROCESSING).
+4. Automatisches Computer-Label: `XR-ROLE-ID` (z. B. `XR-RT-12`).
+5. Node-ID-Erzeugung: `node-<ID>` (z. B. `node-12`).
+6. Config wird unter `/disk/xreactor/config/node.lua` gespeichert.
+7. Reboot → Normalstart.
+
+**node.lua Struktur:**
+```
+return {
+  role = "rt",
+  node_id = "node-12",
+  label = "XR-RT-12"
+}
+```
 
 ## Konfiguration & Autodetection
-- **MASTER**: `xreactor/master/config.lua`
+- **MASTER**: `/disk/xreactor/master/config.lua`
   - `rt_default_mode`: Standardmodus für RT-Nodes (`AUTONOM`, `MASTER`, `SAFE`).
   - `rt_setpoints`: Zielwerte (z. B. `target_rpm`, `enable_reactors`, `enable_turbines`).
-- **RT-NODE**: `xreactor/nodes/rt/config.lua`
+- **RT-NODE**: `/disk/xreactor/nodes/rt/config.lua`
   - `reactors`, `turbines`: Namen der Peripherals.
   - `wireless_modem`, `wired_modem`: Modem-Seiten.
-- **ENERGY/WATER/FUEL/REPROCESSOR**: `xreactor/nodes/<role>/config.lua`
+- **ENERGY/WATER/FUEL/REPROCESSING**: `/disk/xreactor/nodes/<role>/config.lua`
   - `heartbeat_interval`: Sekunden zwischen Status-Heartbeats (Default: **2** bei Nodes, **5** beim MASTER).
   - `wireless_modem`: Wireless-Modem-Seite (Default: `right`).
   - **ENERGY**:
@@ -138,22 +349,35 @@ Wireless Modem (Control/Status)
   - **REPROCESSOR**: `buffers` (Buffer-Peripherals).
 - Autodetection wird genutzt, wo möglich (Monitore/Tank-Namen).
 - **Persistenz**:
-  - `node_id`: `/xreactor/config/node_id.txt` (immer String)
-- Manifest: `/xreactor/.manifest`
+  - `node_id`: `/disk/xreactor/config/node_id.txt` (immer String)
+  - **Device Registry**: `/disk/xreactor/config/registry_<role>_<node_id>.json` (stabile IDs + Aliases, Health-Status)
+  - **Source-of-Truth**: Discovery schreibt die Registry; UI/Telemetry lesen **ausschließlich** aus der Registry.
+- Manifest: `/disk/xreactor/.manifest`
+
+## Services & Core-Module (Kurz)
+- **core/comms.lua**: ACK/Retry/Timeout/Dedupe, Peer-Health.
+- **core/health.lua**: Standardisiertes Health-Schema (OK/DEGRADED/DOWN + Reasons).
+- **core/registry.lua**: Persistente Device Registry (stable IDs, alias mapping, health).
+- **services/**: Lifecycle Services (comms, discovery, telemetry, ui, control) mit `service_manager`.
+- **adapters/**: Einheitliche Adapter für Monitor, Energy Storage, Induction Matrix, Reactor, Turbine.
+- **shared/health_codes.lua**: Einheitliche Reason-Codes für Health-Status.
+- **shared/telemetry_schema.lua**: Dokumentiertes Telemetry-Schema (Schema-Version + Rollenfelder).
+- **shared/build_info.lua**: Build-Metadaten (Commit/Version aus `installer/release.lua`).
 
 ## ENERGY Node Monitor UI
 - Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
 - Inhalte:
   - Induction Matrices: **pro Matrix** Stored/Capacity/% + IN/OUT (falls API verfügbar), inkl. Füllstand-Balken.
   - **GESAMT**-Block: Summe Stored/Capacity/% + optional Summe IN/OUT.
-  - Storages-Seite: Liste der erkannten Storages (optional zweite Seite).
+  - **Diagnostics**-Seite: Peripherals gefunden/gebunden, letzter Scan, letzter Fehler.
+- Storages-Seite: Liste der erkannten Storages (optional zweite Seite).
 - Paging: Touch auf `<`/`>` in der Fußzeile oder Pfeiltasten links/rechts.
 - Werte, die die API nicht liefert, werden als **`n/a`** angezeigt.
 
 ## Recovery & Rollback
-- Backups liegen unter `/xreactor_backup/<timestamp>/`.
+- Backups liegen unter `/disk/xreactor_backup/<timestamp>/`.
 - SAFE UPDATE führt bei Fehlern automatisch Rollback durch und lässt den alten Stand bestehen.
-- Manuelles Rollback: Dateien aus dem Backup-Verzeichnis zurück nach `/xreactor/` kopieren (z. B. bei Stromausfall während Updates).
+- Manuelles Rollback: Dateien aus dem Backup-Verzeichnis zurück nach `/disk/xreactor/` kopieren (z. B. bei Stromausfall während Updates).
 
 ## Debug-Logging
 - **Standardmäßig AUS**.
@@ -162,9 +386,9 @@ Wireless Modem (Control/Status)
   - Settings API: `settings.set("xreactor.debug_logging", true)` + `settings.save()`.
 - **Config-Fallback-Logs**: Falls eine Config fehlt/invalid ist, schreibt der Node automatisch eine Warnung ins Log und nutzt Defaults, um Start-Crashes zu vermeiden.
 - Logfiles:
-- Bootstrap: `/xreactor_logs/installer_bootstrap.log` (Rotation `.1`)
-- Installer-Core: `/xreactor_logs/installer.log` (Rotation `.1`)
-  - Nodes: `/xreactor/logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
+- Bootstrap: `/disk/xreactor_logs/installer_debug.log` (Rotation `.1`)
+- Installer-Core: `/disk/xreactor_logs/installer_core.log` (Rotation `.1`)
+  - Nodes: `/disk/xreactor_logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
 - ENERGY-Node schreibt bei aktiviertem Debug einmal pro Discovery-Scan einen **Discovery Snapshot** (Peripherie-Liste + Types + Methoden der Kandidaten).
 - Matrix-Debug: Wenn Component-Counts fehlen, loggt der ENERGY-Node die verfügbaren Matrix-Methoden (kein Terminal-Spam).
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
@@ -174,13 +398,42 @@ Wireless Modem (Control/Status)
 - **MASTER**: MASTER gibt Setpoints vor (z. B. Ziel-RPM); lokale Schutzlogik bleibt immer Vorrang.
 - **SAFE**: RT-Node fährt in sicheren Zustand (Rods hoch, Turbinen aus).
 
+## Config-Handling & Migration (neu)
+- Configs liegen getrennt vom Code unter `/disk/xreactor/config/`.
+- Jede Config enthält `version = <number>`.
+- Fehlt `version`, wird **Version 1** angenommen.
+- Beim Start wird automatisch migriert:
+  - Fehlende Werte werden ergänzt.
+  - Bestehende Werte bleiben unverändert.
+  - `version` wird auf die aktuelle Version gesetzt.
+- Die Migration ist **idempotent** und schreibt die Config nach erfolgreichem Update zurück.
+
+## Kaltstart-Verhalten (neu)
+- Nodes starten **autonom**, auch ohne Master.
+- Discovery startet **verzögert** und **non-blocking**.
+- Start-Jitter verhindert Netzwerkstürme.
+- RT-Node nutzt **Soft Control Start** beim Hochlaufen.
+- Turbinen starten automatisch gemäß RT-Startlogik.
+- MASTER synchronisiert Nodes beim Start; fehlende Nodes erzeugen Warnung + Alarm.
+
+## Warnungen & Alarme (MASTER)
+- Missing-Node-Erkennung erzeugt Alerts im UI.
+- Anzeige in der Alerts-View + Dashboard-Badges.
+- Automatische Auflösung, sobald der Node später startet.
+
 ## Troubleshooting
 - **Timeout/Offline**: Prüfe Heartbeat-Intervalle und Wireless-Reichweite.
 - **Falsche Modem-Seite**: `wireless_modem`/`wired_modem` in `config.lua` prüfen.
-- **Module not found**: Prüfe, ob `/xreactor/shared/constants.lua` vorhanden ist und ob der Bootstrap vor allen `require`-Aufrufen läuft (Entry-File lädt `/xreactor/core/bootstrap.lua` zuerst). Bei aktivem `BOOTSTRAP_LOG_ENABLED` kontrolliere `/xreactor_logs/loader_<role>.log` für `package.path`, `shell.dir()` und die tatsächlich versuchten Pfade.
+- **Module not found**: Prüfe, ob `/disk/xreactor/shared/constants.lua` vorhanden ist und ob der Bootstrap vor allen `require`-Aufrufen läuft (Entry-File lädt `/disk/xreactor/core/bootstrap.lua` zuerst). Bei aktivem `BOOTSTRAP_LOG_ENABLED` kontrolliere `/disk/xreactor_logs/loader_<role>.log` für `package.path`, `shell.dir()` und die tatsächlich versuchten Pfade.
 - **Proto-Mismatch**: `proto_ver` prüfen; alte Nodes ignorieren neue Nachrichten.
 - **Proto-Mismatch Verhalten**: inkompatible Nachrichten werden ignoriert (kein Crash/Flapping), Update empfohlen.
-- **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/xreactor_backup/<timestamp>/`.
+- **COMMS_DOWN**: Node ist > Timeout nicht gesehen → Master markiert DOWN.
+- **Node stale / ACK timeout**: Prüfe `comms.ack_timeout_s`, Reichweite/Interferenz und ob Nodes ACK_APPLIED senden.
+- **DISCOVERY_FAILED**: Discovery-Scan konnte nicht laufen; prüfe Peripherals + Modem.
+- **Reason-Codes**: Zentral definiert in `xreactor/shared/health_codes.lua` (Master/Nodes nutzen identische Codes).
+- **Device not bound**: Diagnostics-Page der Node prüfen (Registry zeigt Found/Bound/Missing + letzte Fehler).
+- **Registry corrupt**: Datei `registry_<role>_<node_id>.json.broken_<timestamp>` wird erzeugt; Node läuft weiter im DEGRADED-Modus.
+- **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/disk/xreactor_backup/<timestamp>/`.
 - **Manifest-Download fehlgeschlagen**: Retry nutzen oder Cache verwenden (falls vorhanden).
 - **Retry-Menü**: Bei Download-Fehlern gibt es immer ein Retry/Cancel-Menü; Retry versucht den Download erneut mit kurzer Wartezeit.
 - **Installer-Details**: Der Fehlerdialog zeigt die tatsächlich verwendeten RAW-URLs (Tried) und den letzten Fehler (z. B. Timeout, HTTP-Status, HTML-Response).
@@ -194,7 +447,7 @@ Wireless Modem (Control/Status)
 - **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
 - **Peripherals fehlen**: Namen in `config.lua` prüfen, Wired-Modem korrekt angeschlossen?
 - **ENERGY ok aber keine Storages/Monitor gebunden**:
-  - Discovery-Log prüfen: `/xreactor/logs/energy_<node_id>.log`
+  - Discovery-Log prüfen: `/disk/xreactor_logs/energy_<node_id>.log`
   - `storage_filters.include_names`/`exclude_names` checken.
   - Wired-Modem korrekt verbunden? `peripheral.getNames()` sollte Remote-Peripherals listen.
   - Peripherals müssen Energy-Methoden anbieten (siehe Autodetection-Methoden).
@@ -202,6 +455,28 @@ Wireless Modem (Control/Status)
   - Die API liefert diese Werte nicht (z. B. Matrix-Komponenten-Counts).
   - Debug-Log zeigt die verfügbaren Methoden am Matrix-Peripheral.
 - **Node bleibt in SAFE**: Temperatur/Water-Limits prüfen, ggf. Ursache beseitigen und Modus wechseln.
+
+## Telemetry-Schema (Kurz)
+- Jeder STATUS-Payload enthält `meta` mit `proto_ver`, `role`, `node_id`, `build` und `schema_version`.
+- Gemeinsame Felder: `health`, `bindings`, `bindings_summary`, `registry`.
+- Rollen-Felder:
+  - **ENERGY**: `total`, `matrices[]`, `stores[]`.
+  - **RT**: `turbines[]`, `reactors[]`, `control_mode`, `ramp_state`.
+  - **FUEL**: `sources[]`, `reserve`, `minimum_reserve`.
+  - **WATER**: `total_water`, `buffers[]`.
+  - **REPROCESSOR**: `buffers[]`, `standby`.
+
+## Manual Test Checklist (Step 2)
+1. **MASTER starten** → Overview zeigt Nodes + Health/Reasons/Bindings.
+2. **RT starten** → Turbines/Reaktoren sichtbar, Health OK/DEGRADED korrekt.
+3. **ENERGY starten** → Matrices + Total sichtbar, Diagnostics zeigt Registry.
+
+## Manual Test Checklist (Step 3 – Comms)
+1. **MASTER starten**, danach **Node starten** → Node erscheint mit `last_seen`/Age.
+2. **Node stoppen** → MASTER zeigt `DOWN/COMMS_DOWN` nach Timeout.
+3. **COMMAND senden** (z. B. RT target RPM) → `ACK_APPLIED` im Master-Log/Diagnostics sichtbar.
+4. **Diagnostics Pages** (ENERGY/RT/FUEL/WATER/REPROC) → Registry snapshot + last errors sichtbar.
+5. **Safe Update** ausführen → Rolle/Config bleiben erhalten, neue Dateien sind vorhanden.
 
 ## Wie teste ich das System? (6 Szenarien)
 1. **RT-Node startet ohne MASTER** → läuft stabil in **AUTONOM**.

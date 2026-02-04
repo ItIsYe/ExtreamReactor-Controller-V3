@@ -1,5 +1,6 @@
 local ui = require("core.ui")
 local colorset = require("shared.colors")
+local widgets = require("master.ui.widgets")
 local cache = {}
 
 local function render(mon, model)
@@ -7,10 +8,30 @@ local function render(mon, model)
   if cache[mon] == key then return end
   cache[mon] = key
   local w, h = mon.getSize()
-  ui.panel(mon, 1, 1, w, h, "RT DASHBOARD", "OK")
+  widgets.card(mon, 1, 1, w, h, "RT DASHBOARD", "OK")
   ui.text(mon, 2, 2, "Ramp: " .. tostring(model.ramp_profile or "NORMAL"), colorset.get("text"), colorset.get("background"))
   ui.text(mon, 2, 3, "Sequence: " .. tostring(model.sequence_state or "IDLE"), colorset.get("text"), colorset.get("background"))
-  local row = 5
+  ui.text(mon, 2, 4, "Control: " .. tostring(model.control_mode or "AUTO"), colorset.get("text"), colorset.get("background"))
+  local row = 6
+  local counts = model.alert_counts or {}
+  local crit = counts.CRITICAL or 0
+  local warn = counts.WARN or 0
+  if crit > 0 or warn > 0 then
+    ui.text(mon, 2, row, "Alerts", colorset.get("WARNING"), colorset.get("background"))
+    ui.badge(mon, 10, row, "CRIT " .. tostring(crit), crit > 0 and "EMERGENCY" or "OFFLINE")
+    ui.badge(mon, 20, row, "WARN " .. tostring(warn), warn > 0 and "WARNING" or "OFFLINE")
+    row = row + 1
+    local top = model.alert_top or {}
+    if #top > 0 then
+      for i = 1, math.min(3, #top) do
+        ui.text(mon, 4, row, top[i].title or top[i].message or "CRITICAL", colorset.get("EMERGENCY"), colorset.get("background"))
+        row = row + 1
+      end
+    else
+      ui.text(mon, 4, row, "Warnings active", colorset.get("WARNING"), colorset.get("background"))
+      row = row + 1
+    end
+  end
   for _, rt in ipairs(model.rt_nodes or {}) do
     if row >= h - 3 then break end
     local status = rt.status or "OFFLINE"
