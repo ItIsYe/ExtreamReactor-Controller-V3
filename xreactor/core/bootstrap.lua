@@ -1,16 +1,24 @@
 -- Centralized bootstrap for module loading without package.path.
 local bootstrap = {}
 
+local function resolve_log_dir()
+  if fs and fs.exists and fs.exists("/disk") then
+    return "/disk/xreactor_logs"
+  end
+  return "/xreactor_logs"
+end
+
 local CONFIG = {
   BASE_DIR = "/xreactor",
-  LOG_PATH = "/xreactor_logs/bootstrap.log",
+  LOG_PATH = resolve_log_dir() .. "/bootstrap.log",
   LOG_SETTINGS_KEY = "xreactor.debug_logging"
 }
 
 local state = {
   base_dir = CONFIG.BASE_DIR,
   log_path = CONFIG.LOG_PATH,
-  log_enabled_override = nil
+  log_enabled_override = nil,
+  last_recovery = nil
 }
 
 local native_require = rawget(_G, "require")
@@ -266,6 +274,69 @@ function bootstrap.require(module_name)
   return result
 end
 
+local FIRST_START_CONFIG = "/disk/xreactor/config/node.lua"
+
+local ROLE_OPTIONS = {
+  { label = "MASTER", role = "master" },
+  { label = "RT", role = "rt" },
+  { label = "ENERGY", role = "energy" },
+  { label = "WATER", role = "water" },
+  { label = "FUEL", role = "fuel" },
+  { label = "REPROCESSING", role = "reprocessing" }
+}
+
+local function prompt_role_selection()
+  while true do
+    print("=== XReactor First Start Setup ===")
+    print("Select node role:")
+    for index, entry in ipairs(ROLE_OPTIONS) do
+      print(string.format("%d - %s", index, entry.label))
+    end
+    local input = read()
+    local choice = tonumber(input)
+    if choice and ROLE_OPTIONS[choice] then
+      return ROLE_OPTIONS[choice]
+    end
+  end
+end
+
+local function write_first_start_config(path, role, node_id, label)
+  ensure_dir(fs.getDir(path))
+  local file = fs.open(path, "w")
+  if not file then
+    error("Unable to write config: " .. tostring(path))
+  end
+  file.write(string.format([[return {
+    role = "%s",
+    node_id = "%s",
+    label = "%s"
+}
+]], tostring(role), tostring(node_id), tostring(label)))
+  file.close()
+end
+
+local function run_first_start_setup()
+  if not (fs and fs.exists and os and os.getComputerID and type(read) == "function") then
+    return
+  end
+  if fs.exists(FIRST_START_CONFIG) then
+    return
+  end
+  local selection = prompt_role_selection()
+  local computer_id = tostring(os.getComputerID())
+  local label = string.format("XR-%s-%s", selection.label, computer_id)
+  if os.setComputerLabel then
+    os.setComputerLabel(label)
+  end
+  local node_id = "node-" .. computer_id
+  write_first_start_config(FIRST_START_CONFIG, selection.role, node_id, label)
+  print("Setup complete.")
+  print("Rebooting...")
+  if os.reboot then
+    os.reboot()
+  end
+end
+
 function bootstrap.setup(opts)
   opts = opts or {}
   if opts.base_dir then
@@ -277,7 +348,7 @@ function bootstrap.setup(opts)
   if opts.log_path then
     state.log_path = opts.log_path
   elseif opts.role then
-    state.log_path = string.format("/xreactor_logs/loader_%s.log", tostring(opts.role):lower())
+    state.log_path = string.format("%s/loader_%s.log", resolve_log_dir(), tostring(opts.role):lower())
   end
   resolve_global()
   ensure_package_table()
@@ -290,7 +361,28 @@ function bootstrap.setup(opts)
     table.insert(package.searchers, 1, xreactor_searcher)
     searcher_installed = true
   end
+  local ok_recovery, recovery_mod = pcall(bootstrap.require, "core.update_recovery")
+  if ok_recovery and recovery_mod and recovery_mod.recover_if_needed then
+    local marker = recovery_mod.read_marker and recovery_mod.read_marker() or nil
+    local ok_run, result = pcall(recovery_mod.recover_if_needed)
+    state.last_recovery = {
+      had_marker = marker ~= nil,
+      marker = marker,
+      ok = ok_run == true,
+      result = ok_run and result or nil
+    }
+    if ok_run and result then
+      log_line("INFO", "update recovery: " .. tostring(result))
+    elseif not ok_run then
+      log_line("ERROR", "update recovery failed: " .. tostring(result))
+    end
+  end
+  run_first_start_setup()
   log_environment()
+end
+
+function bootstrap.get_recovery_status()
+  return state.last_recovery
 end
 
 return bootstrap

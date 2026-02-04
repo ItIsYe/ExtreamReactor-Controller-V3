@@ -110,6 +110,34 @@ function utils.merge_defaults(target, defaults)
   return changed
 end
 
+local function migrate_config(path, data, defaults, meta)
+  if type(defaults) ~= "table" then
+    return data
+  end
+  local target_version = type(defaults.version) == "number" and defaults.version or nil
+  if not target_version then
+    return data
+  end
+  local original = utils.deep_copy(data)
+  local changed = utils.merge_defaults(data, defaults)
+  local loaded_version = type(data.version) == "number" and data.version or 1
+  if data.version == nil or loaded_version < target_version then
+    data.version = target_version
+    changed = true
+  end
+  if not changed then
+    return data
+  end
+  local ok, err = pcall(utils.write_config, path, data)
+  if ok then
+    meta.migrated = true
+    return data
+  end
+  meta.migration_error = err
+  utils.log("CONFIG", "Config migration failed at " .. tostring(path) .. "; using existing config.", "WARN")
+  return original
+end
+
 function utils.load_config(path, defaults)
   local meta = { path = path, source = "defaults" }
   local fallback = utils.deep_copy(defaults or {})
@@ -130,9 +158,12 @@ function utils.load_config(path, defaults)
   if loader then
     local ok, data = pcall(loader)
     if ok and type(data) == "table" then
-      utils.merge_defaults(data, defaults)
+      local migrated = migrate_config(path, data, defaults, meta)
+      if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then
+        utils.merge_defaults(data, defaults)
+      end
       meta.source = "lua"
-      return data, meta
+      return migrated, meta
     end
     if not ok then
       err = data
@@ -141,10 +172,13 @@ function utils.load_config(path, defaults)
   if textutils and textutils.unserialize then
     local ok, data = pcall(textutils.unserialize, content)
     if ok and type(data) == "table" then
-      utils.merge_defaults(data, defaults)
+      local migrated = migrate_config(path, data, defaults, meta)
+      if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then
+        utils.merge_defaults(data, defaults)
+      end
       meta.source = "serialized"
       meta.reason = "lua invalid"
-      return data, meta
+      return migrated, meta
     end
   end
   meta.reason = err or "invalid"
