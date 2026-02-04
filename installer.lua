@@ -53,6 +53,19 @@ for key, value in pairs(DEFAULT_CONFIG) do
   set_default(key, value)
 end
 
+local INS = _G.INS
+if type(INS) ~= "table" then
+  INS = {}
+end
+_G.INS = INS
+local INSTALL_ARGS = { ... }
+if #INSTALL_ARGS == 0 and #INS > 0 then
+  INSTALL_ARGS = INS
+else
+  INS = INSTALL_ARGS
+  _G.INS = INS
+end
+
 local REQUIRED_FILES = _G.REQUIRED_FILES
 if type(REQUIRED_FILES) ~= "table" then
   REQUIRED_FILES = {
