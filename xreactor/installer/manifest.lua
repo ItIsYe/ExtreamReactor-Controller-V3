@@ -1,9 +1,9 @@
 -- Manifest for the XReactor installer (hashes and required files).
 return {
-  manifest_version = 2,
-  source_ref = "main",
+  manifest_version = 4,
+  source_ref = "beta",
   hash_algo = "crc32",
-  installer_min_version = "1.3",
+  installer_min_version = "1.4",
   installer_path = "xreactor/installer/installer_core.lua",
   installer_hash = "ae69fed5",
   installer_size_bytes = 73190,
