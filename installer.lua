@@ -857,6 +857,61 @@ local function fetch_with_retries(urls, attempts, module_name)
   return false, nil, last_meta
 end
 
+local function download_with_retries_to_path(urls, attempts, module_name, target_path)
+  local last_meta
+  local module_tag = module_name or "installer"
+  if not fetch_url_seeded then
+    math.randomseed(os.time())
+    fetch_url_seeded = true
+  end
+  local max_attempts = attempts or CONFIG.DOWNLOAD_ATTEMPTS
+  local list = {}
+  for _, url in ipairs(urls or {}) do
+    if url and url ~= "" then
+      table.insert(list, url)
+    end
+  end
+  if #list == 0 then
+    return false, { url = nil, err = "no urls" }
+  end
+  for attempt = 1, max_attempts do
+    for _, url in ipairs(list) do
+      local ok, err, meta = fetch_url_stream(url, target_path)
+      last_meta = meta or { url = url, err = err }
+      if ok then
+        log_line("INFO", module_tag, string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
+          tostring(url),
+          tostring(meta and meta.code or "n/a"),
+          tostring(meta and meta.bytes or 0),
+          tostring(meta and meta.signature or ""),
+          attempt
+        ))
+        return true, meta
+      end
+      if fs.exists(target_path) then
+        safe_delete(target_path, "failed download cleanup")
+      end
+      log_line("WARN", module_tag, string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
+        tostring(url),
+        tostring(err),
+        tostring(meta and meta.code or "n/a"),
+        tostring(meta and meta.signature or ""),
+        attempt
+      ))
+    end
+    if attempt < max_attempts then
+      local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
+      os.sleep((CONFIG.DOWNLOAD_BACKOFF * attempt) + jitter)
+    end
+  end
+  if last_meta and not last_meta.err then
+    last_meta.err = "download failed"
+  end
+  return false, last_meta
+end
+
+_G.download_with_retries_to_path = download_with_retries_to_path
+
 local function ensure_installer_files(release)
   local root_prefix = get_installer_root()
   local installer_dir = root_prefix .. "/xreactor/installer"
