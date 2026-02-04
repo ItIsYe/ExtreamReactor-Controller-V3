@@ -86,68 +86,137 @@ local CONFIG = {
   }
 }
 
-local function collect_storage_candidates()
-  local candidates = { "/" }
-  for i = 1, 9 do
-    local path = (i == 1) and "/disk" or ("/disk" .. i)
-    if fs.exists(path) then
-      table.insert(candidates, path)
+local function normalize_storage_base(base)
+  if type(base) ~= "string" or base == "" then
+    return "/"
+  end
+  if base ~= "/" and base:sub(-1) == "/" then
+    base = base:sub(1, -2)
+  end
+  if base == "" then
+    return "/"
+  end
+  return base
+end
+
+local function join_storage_base(base, suffix)
+  if base == "/" then
+    return "/" .. suffix
+  end
+  return base .. "/" .. suffix
+end
+
+local function derive_storage_base()
+  if type(CONFIG.BASE_DIR) ~= "string" or CONFIG.BASE_DIR == "" then
+    return "/"
+  end
+  local match = CONFIG.BASE_DIR:match("^(.*)/xreactor/?$")
+  if match and match ~= "" then
+    return match
+  end
+  return "/"
+end
+
+local function try_label_disk(storage_base)
+  pcall(function()
+    if type(storage_base) ~= "string" or storage_base == "/" then
+      return
+    end
+    if not disk or not disk.getMountPath or not disk.setLabel then
+      return
+    end
+    for _, name in ipairs(peripheral.getNames()) do
+      if peripheral.getType(name) == "drive" then
+        local mount = disk.getMountPath(name)
+        if mount and ("/" .. mount) == storage_base then
+          local label = disk.getLabel(name)
+          if not label or label == "" then
+            disk.setLabel(name, "xreactor")
+          end
+          return
+        end
+      end
+    end
+  end)
+end
+
+local STORAGE = nil
+local storage_initialized = false
+
+local function init_storage()
+  if storage_initialized and STORAGE then
+    return STORAGE
+  end
+  local base = normalize_storage_base(derive_storage_base())
+  STORAGE = {
+    base = base,
+    root = join_storage_base(base, "xreactor"),
+    stage = join_storage_base(base, "xreactor_stage"),
+    backup = join_storage_base(base, "xreactor_backup"),
+    logs = join_storage_base(base, "xreactor_logs")
+  }
+  storage_initialized = true
+  try_label_disk(STORAGE.base)
+  return STORAGE
+end
+
+local function validate_storage(storage)
+  if not storage or type(storage) ~= "table" then
+    return false, "Storage config missing"
+  end
+  local fields = { "base", "root", "stage", "backup", "logs" }
+  for _, key in ipairs(fields) do
+    local value = storage[key]
+    if type(value) ~= "string" or value == "" then
+      return false, "Storage path invalid: " .. tostring(key)
     end
   end
-  return candidates
+  return true, nil
 end
 
-local function detect_best_storage_root()
-  local candidates = collect_storage_candidates()
-  local best_root = "/"
-  local best_free = fs.getFreeSpace(best_root) or 0
-  for _, path in ipairs(candidates) do
-    local free = fs.getFreeSpace(path) or 0
-    if free > best_free then
-      best_root = path
-      best_free = free
-    end
-  end
-  if fs.exists(best_root) then
-    return best_root
-  end
-  return nil
+local function apply_storage_to_config(storage)
+  CONFIG.BASE_DIR = storage.root
+  CONFIG.BACKUP_BASE = storage.backup
+  CONFIG.UPDATE_STAGING_BASE = storage.stage
+  CONFIG.LOG_PATH = storage.logs .. "/installer.log"
+  CONFIG.MANIFEST_LOCAL = storage.root .. "/.manifest"
+  CONFIG.MANIFEST_CACHE = storage.root .. "/.cache/manifest.lua"
+  CONFIG.MANIFEST_CACHE_LEGACY = storage.root .. "/.manifest_cache"
+  CONFIG.BASE_CACHE_PATH = storage.root .. "/.cache/source.lua"
+  CONFIG.NODE_ID_PATH = storage.root .. "/config/node_id.txt"
 end
 
-local function apply_storage_root(root)
-  if not root or not fs.exists(root) then
-    return false
-  end
-  local storage_root = root
-  local base_root = storage_root .. "/xreactor"
-  local stage_root = storage_root .. "/xreactor_stage"
-  local backup_root = storage_root .. "/xreactor_backup"
-  local log_root = storage_root .. "/xreactor_logs"
-  CONFIG.BASE_DIR = base_root
-  CONFIG.BACKUP_BASE = backup_root
-  CONFIG.UPDATE_STAGING_BASE = stage_root
-  CONFIG.LOG_PATH = log_root .. "/installer.log"
-  CONFIG.MANIFEST_LOCAL = base_root .. "/.manifest"
-  CONFIG.MANIFEST_CACHE = base_root .. "/.cache/manifest.lua"
-  CONFIG.MANIFEST_CACHE_LEGACY = base_root .. "/.manifest_cache"
-  CONFIG.BASE_CACHE_PATH = base_root .. "/.cache/source.lua"
-  CONFIG.NODE_ID_PATH = base_root .. "/config/node_id.txt"
-  return true
+local function storage_summary(storage)
+  return table.concat({
+    "Storage Summary:",
+    "Storage root: " .. storage.root,
+    "Stage root: " .. storage.stage,
+    "Backup root: " .. storage.backup,
+    "Log root: " .. storage.logs
+  }, "\n")
 end
 
-local function resolve_storage_root()
-  local selected_root = _G.__xreactor_storage_root or detect_best_storage_root()
-  if not selected_root then
-    selected_root = "/"
+local storage_summary_printed = false
+
+local function print_storage_summary(storage)
+  if storage_summary_printed then
+    return
   end
-  if not fs.exists(selected_root) then
-    error("Storage root invalid: " .. tostring(selected_root))
-  end
-  _G.__xreactor_storage_root = selected_root
-  apply_storage_root(selected_root)
+  storage_summary_printed = true
+  print(storage_summary(storage))
 end
 
-resolve_storage_root()
+local function resolve_storage()
+  local storage = init_storage()
+  local ok, err = validate_storage(storage)
+  if not ok then
+    return nil, err
+  end
+  apply_storage_to_config(storage)
+  return storage, nil
+end
+
+local STORAGE_STATE, storage_err = resolve_storage()
 
 local BASE_DIR = CONFIG.BASE_DIR
 local REPO_OWNER = CONFIG.REPO_OWNER
@@ -4770,6 +4839,13 @@ function main()
     error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
   end
   print("=== XReactor Installer ===")
+  if not STORAGE_STATE then
+    local msg = "Storage setup failed: " .. tostring(storage_err or "unknown error")
+    print(msg)
+    log("ERROR", msg)
+    return
+  end
+  print_storage_summary(STORAGE_STATE)
   log("INFO", "Installer started")
   print_storage_summary()
   local recovered, result = recover_update_marker()
