@@ -2,9 +2,6 @@ local INSTALLER_CORE_VERSION = "2.7"
 
 -- CONFIG
 local CONFIG = _G.CONFIG
-if not CONFIG then
-  error("CONFIG not initialized; run installer bootstrap first.")
-end
 
 local DEFAULT_CONFIG = {
   STORAGE_ROOT = nil, -- Optional override for storage root.
