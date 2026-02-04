@@ -1,0 +1,960 @@
+-- CONFIG
+local CONFIG = {
+  TARGET_PATH = "/installer.lua", -- Target bootstrap file (Lua).
+  TEMP_PATH = "/tmp/installer.new", -- Temp download path for atomic swap.
+  REPO_OWNER = "ItIsYe", -- GitHub repository owner.
+  REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
+  BRANCH = "beta", -- Branch to fetch the bootstrap from.
+  FILE_PATH = "installer.lua", -- Remote bootstrap filename.
+  QUICK_INSTALL_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer", -- README Quick Install URL.
+  QUICK_INSTALL_TARGET = "installer", -- README Quick Install target filename.
+  BASE_URLS = { -- RAW mirrors (no blob links).
+    "https://raw.githubusercontent.com"
+  },
+  DOWNLOAD_ATTEMPTS = 3, -- Retry attempts per URL.
+  DOWNLOAD_BACKOFF = 1, -- Backoff base seconds between retries.
+  DOWNLOAD_JITTER = 0.35, -- Max jitter seconds added to backoff.
+  DOWNLOAD_TIMEOUT = 8, -- HTTP timeout in seconds (when http.request is available).
+  LOG_ENABLED = true, -- Always enable bootstrap logging.
+  LOG_SETTINGS_KEY = "xreactor.debug_logging", -- Settings key for debug logging toggle.
+  LOG_PATH = "/xreactor_logs/installer_debug.log", -- Bootstrap log file path (updated at runtime).
+  LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log", -- Fallback log path when storage root is unavailable.
+  LOG_MAX_BYTES = 200000, -- Max log size before rotation.
+  LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
+  LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
+  LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
+  LOG_SAMPLE_BYTES = 200, -- Bytes to capture as response signature.
+  DISK_SPACE_OVERHEAD_BYTES = 2048, -- Reserved extra bytes for write operations.
+  DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
+  DISK_LABEL = "XREACTOR" -- Disk label to set when using a mounted disk.
+}
+
+local log_line
+local format_bytes
+local disk_pool
+
+local function list_disk_mounts()
+  local mounts = {}
+  local candidates = { "/disk", "/disk2", "/disk3" }
+  for _, path in ipairs(candidates) do
+    if fs.exists(path) and fs.isDir(path) then
+      local ok_free, free = pcall(fs.getFreeSpace, path)
+      local ok_total, total = pcall(fs.getCapacity, path)
+      if ok_free and free then
+        local test_path = path .. "/.xreactor_write_test"
+        local ok_write = pcall(function()
+          local file = fs.open(test_path, "w")
+          if not file then
+            error("open failed", 0)
+          end
+          file.write("ok")
+          file.close()
+          safe_delete(test_path, "disk write test")
+        end)
+        if ok_write then
+          local used = (ok_total and total) and (total - free) or nil
+          table.insert(mounts, { path = path, free = free, total = ok_total and total or nil, used = used })
+        end
+      end
+    end
+  end
+  table.sort(mounts, function(a, b) return a.free > b.free end)
+  return mounts
+end
+
+local function format_mounts(mounts)
+  if not mounts or #mounts == 0 then
+    return "  (no disks found)"
+  end
+  local lines = {}
+  for _, entry in ipairs(mounts) do
+    if entry.total and entry.used then
+      table.insert(lines, string.format(
+        "  %s: %s free (%s used / %s total)",
+        entry.path,
+        format_bytes(entry.free),
+        format_bytes(entry.used),
+        format_bytes(entry.total)
+      ))
+    else
+      table.insert(lines, string.format("  %s: %s free", entry.path, format_bytes(entry.free)))
+    end
+  end
+  return table.concat(lines, "\n")
+end
+
+local function pick_smallest_mount(mounts, min_free)
+  if not mounts or #mounts == 0 then
+    return nil
+  end
+  for idx = #mounts, 1, -1 do
+    local entry = mounts[idx]
+    if not min_free or entry.free >= min_free then
+      return entry
+    end
+  end
+  return mounts[#mounts]
+end
+
+local function build_disk_pool(required_bytes)
+  local mounts = list_disk_mounts()
+  if #mounts == 0 then
+    return nil, "No writable disk mount found.", mounts
+  end
+  local largest = mounts[1]
+  if required_bytes and largest.free < required_bytes then
+    return nil, "Not enough disk space for installer.", mounts
+  end
+  local stage = largest
+  local backup = mounts[2] or largest
+  local log_mount = pick_smallest_mount(mounts, CONFIG.DISK_SPACE_MIN_BUFFER or 0) or largest
+  return {
+    mounts = mounts,
+    core_mount = largest,
+    stage_mount = stage,
+    backup_mount = backup,
+    log_mount = log_mount
+  }, nil, mounts
+end
+
+local function apply_disk_pool(pool)
+  local core_mount = pool and pool.core_mount or nil
+  local stage_mount = pool and pool.stage_mount or core_mount
+  local backup_mount = pool and pool.backup_mount or core_mount
+  local log_mount = pool and pool.log_mount or core_mount
+  if not core_mount then
+    return false
+  end
+  local root = core_mount.path .. "/xreactor"
+  local log_dir = log_mount.path .. "/xreactor_logs"
+  local stage_dir = stage_mount.path .. "/xreactor_stage"
+  local backup_dir = backup_mount.path .. "/xreactor_backup"
+  CONFIG.STORAGE_ROOT = root
+  CONFIG.LOG_DIR = log_dir
+  CONFIG.STAGE_DIR = stage_dir
+  CONFIG.BACKUP_DIR = backup_dir
+  CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
+  CONFIG.LOG_FALLBACK_PATH = log_dir .. "/installer_debug.log"
+  CONFIG.DISK_MOUNT_PATH = core_mount.path
+  CONFIG.TARGET_PATH = core_mount.path .. "/xreactor/installer/installer.lua"
+  CONFIG.TEMP_PATH = core_mount.path .. "/xreactor/.tmp/installer.new"
+  CONFIG.CORE_MOUNT_PATH = core_mount.path
+  CONFIG.STAGE_MOUNT_PATH = stage_mount.path
+  CONFIG.BACKUP_MOUNT_PATH = backup_mount.path
+  CONFIG.LOG_MOUNT_PATH = log_mount.path
+  return true
+end
+
+local function configure_storage_root()
+  local pool, err = build_disk_pool()
+  if not pool then
+    print("WARN: " .. tostring(err or "No writable disk mount found."))
+    print('No disk mount detected, using local storage. Attach a disk so "/disk" appears for disk-first install.')
+    CONFIG.STORAGE_ROOT = "/xreactor"
+    CONFIG.LOG_DIR = "/xreactor_logs"
+    CONFIG.STAGE_DIR = "/xreactor_stage"
+    CONFIG.BACKUP_DIR = "/xreactor_backup"
+    CONFIG.LOG_PATH = "/xreactor_logs/installer_debug.log"
+    CONFIG.LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log"
+    CONFIG.DISK_MOUNT_PATH = nil
+    CONFIG.TARGET_PATH = "/xreactor/installer/installer.lua"
+    CONFIG.TEMP_PATH = "/xreactor/.tmp/installer.new"
+    disk_pool = nil
+    return
+  end
+  disk_pool = pool
+  apply_disk_pool(pool)
+end
+
+configure_storage_root()
+
+local function label_disk_mount(mount_path, label)
+  if not mount_path or not label or not peripheral or not disk or not disk.getMountPath then
+    return
+  end
+  for _, name in ipairs(peripheral.getNames()) do
+    if peripheral.getType(name) == "drive" then
+      local ok, mount = pcall(disk.getMountPath, name)
+      if ok and mount == mount_path then
+        local ok_label, existing = pcall(disk.getLabel, name)
+        if ok_label and (not existing or existing == "") then
+          pcall(disk.setLabel, name, label)
+        end
+      end
+    end
+  end
+end
+
+local function try_label_disk()
+  if not disk_pool or not disk_pool.mounts then
+    return
+  end
+  for idx, entry in ipairs(disk_pool.mounts) do
+    label_disk_mount(entry.path, CONFIG.DISK_LABEL .. "_DISK_" .. tostring(idx))
+  end
+end
+
+local function select_mount_for_bytes(needed)
+  local pool, _, mounts = build_disk_pool(needed)
+  if not pool then
+    print("ERROR: Not enough disk space to continue.")
+    print("Detected disks:")
+    print(format_mounts(mounts))
+    return false
+  end
+  disk_pool = pool
+  apply_disk_pool(pool)
+  ensure_log_dirs()
+  try_label_disk()
+  return true
+end
+
+local function relocate_bootstrap_if_needed()
+  if not CONFIG.DISK_MOUNT_PATH or not shell or not shell.getRunningProgram or not shell.run then
+    return false
+  end
+  local running = shell.getRunningProgram()
+  if not running or running == "" then
+    return false
+  end
+  local absolute = running:sub(1, 1) == "/" and running or ("/" .. running)
+  local target = CONFIG.DISK_MOUNT_PATH .. "/installer"
+  if absolute == target then
+    return false
+  end
+  local current_mount = nil
+  if disk_pool and disk_pool.mounts then
+    for _, entry in ipairs(disk_pool.mounts) do
+      if absolute:sub(1, #entry.path) == entry.path then
+        current_mount = entry.path
+        break
+      end
+    end
+  end
+  local required_free = (CONFIG.DISK_SPACE_MIN_BUFFER or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0)
+  local current_free = current_mount and get_free_space(current_mount) or nil
+  local target_free = get_free_space(CONFIG.DISK_MOUNT_PATH)
+  if current_mount == CONFIG.DISK_MOUNT_PATH then
+    return false
+  end
+  if current_free and current_free >= required_free then
+    return false
+  end
+  if not target_free or target_free < required_free then
+    return false
+  end
+  if current_free and (target_free - current_free) < required_free then
+    return false
+  end
+  local ok_copy = pcall(fs.copy, absolute, target)
+  if not ok_copy then
+    return false
+  end
+  print("Relocating installer to disk: " .. target)
+  shell.run(target)
+  return true
+end
+
+local function ensure_dir(path)
+  if path and path ~= "" and not fs.exists(path) then
+    pcall(fs.makeDir, path)
+  end
+end
+
+local function normalize_root(path)
+  if not path or path == "" then
+    return nil
+  end
+  if #path > 1 and path:sub(-1) == "/" then
+    return path:sub(1, -2)
+  end
+  return path
+end
+
+local function live_root_path()
+  return normalize_root(CONFIG.STORAGE_ROOT or "/xreactor")
+end
+
+local function safe_delete(path, context)
+  if not path or path == "" then
+    return false
+  end
+  local root = live_root_path()
+  if normalize_root(path) == root then
+    local message = "Refusing to delete live root " .. tostring(path) .. " (" .. tostring(context or "delete") .. ")"
+    if log_line then
+      log_line("ERROR", "fs", message)
+    end
+    print("WARN: " .. message)
+    return false
+  end
+  assert(normalize_root(path) ~= root, "Refusing to delete live root")
+  local ok, err = pcall(fs.delete, path)
+  if not ok then
+    if log_line then
+      log_line("WARN", "fs", "Delete failed for " .. tostring(path) .. ": " .. tostring(err))
+    end
+    return false
+  end
+  return true
+end
+
+local function get_free_space(path)
+  local probe = path
+  if probe == "" or not probe then
+    probe = "/"
+  end
+  if not fs.exists(probe) then
+    probe = fs.getDir(probe)
+    if probe == "" then
+      probe = "/"
+    end
+  end
+  local ok, free = pcall(fs.getFreeSpace, probe)
+  if not ok then
+    return nil, probe
+  end
+  return free, probe
+end
+
+local function ensure_free_space(path, needed, context)
+  local free, probe = get_free_space(path)
+  if not free then
+    log_line("WARN", "fs", "Unable to read free space for " .. tostring(probe))
+    return true
+  end
+  if needed and free < needed then
+    local message = string.format("Out of space (%s). Need %d bytes, free %d bytes.", tostring(context or path), needed, free)
+    log_line("ERROR", "fs", message)
+    return false, message
+  end
+  return true
+end
+
+local function now_stamp()
+  return textutils.formatTime(os.epoch("utc") / 1000, true)
+end
+
+format_bytes = function(bytes)
+  local value = tonumber(bytes or 0) or 0
+  local units = { "B", "KB", "MB", "GB" }
+  local idx = 1
+  while value >= 1024 and idx < #units do
+    value = value / 1024
+    idx = idx + 1
+  end
+  if idx == 1 then
+    return tostring(math.floor(value)) .. units[idx]
+  end
+  return string.format("%.1f%s", value, units[idx])
+end
+
+local function resolve_log_enabled()
+  if CONFIG.LOG_ENABLED ~= nil then
+    return CONFIG.LOG_ENABLED == true
+  end
+  return true
+end
+
+local function rotate_log_if_needed(path)
+  if not fs.exists(path) then
+    return
+  end
+  if fs.getSize(path) < CONFIG.LOG_MAX_BYTES then
+    return
+  end
+  local backup = path .. CONFIG.LOG_BACKUP_SUFFIX
+  if fs.exists(backup) then
+    safe_delete(backup, "rotate log backup")
+  end
+  fs.move(path, backup)
+end
+
+local log_state = {
+  enabled = nil,
+  buffer = {},
+  last_flush = 0,
+  path = CONFIG.LOG_PATH,
+  fallback_used = false,
+  memory_fallback = {},
+  last_write_ok = false,
+  last_failed_path = nil
+}
+
+local function ensure_log_dirs()
+  pcall(fs.makeDir, CONFIG.STORAGE_ROOT or "/xreactor")
+  pcall(fs.makeDir, CONFIG.LOG_DIR or "/xreactor_logs")
+  pcall(fs.makeDir, CONFIG.STAGE_DIR or "/xreactor_stage")
+  pcall(fs.makeDir, CONFIG.BACKUP_DIR or "/xreactor_backup")
+  if disk_pool and disk_pool.mounts then
+    for _, entry in ipairs(disk_pool.mounts) do
+      pcall(fs.makeDir, entry.path .. "/xreactor")
+      pcall(fs.makeDir, entry.path .. "/xreactor_logs")
+      pcall(fs.makeDir, entry.path .. "/xreactor_stage")
+      pcall(fs.makeDir, entry.path .. "/xreactor_backup")
+    end
+  end
+end
+
+local function print_storage_summary()
+  local free_root = get_free_space(CONFIG.STORAGE_ROOT or "/")
+  print("=== Installer Storage Summary ===")
+  print("Storage root: " .. tostring(CONFIG.STORAGE_ROOT))
+  print("Stage root: " .. tostring(CONFIG.STAGE_DIR or "n/a"))
+  print("Backup root: " .. tostring(CONFIG.BACKUP_DIR or "n/a"))
+  print("Log root: " .. tostring(CONFIG.LOG_DIR))
+  print("Free space: " .. format_bytes(free_root or 0))
+end
+
+local function open_log_file()
+  ensure_log_dirs()
+  local file = fs.open(log_state.path, "a")
+  if file then
+    return file
+  end
+  print("Warning: unable to open log file at " .. tostring(log_state.path))
+  if log_state.path ~= CONFIG.LOG_FALLBACK_PATH then
+    log_state.path = CONFIG.LOG_FALLBACK_PATH
+    log_state.fallback_used = true
+    file = fs.open(log_state.path, "a")
+    if file then
+      return file
+    end
+  end
+  print("Warning: fallback log file unavailable; continuing without file logging.")
+  log_state.last_failed_path = log_state.path
+  return nil
+end
+
+local function get_log_path()
+  if log_state.last_write_ok and log_state.path and fs.exists(log_state.path) then
+    return log_state.path
+  end
+  if log_state.fallback_used and fs.exists(CONFIG.LOG_FALLBACK_PATH) then
+    return CONFIG.LOG_FALLBACK_PATH
+  end
+  return "RAM (printed below)"
+end
+
+local function flush_log(force)
+  if not log_state.enabled then
+    return
+  end
+  if #log_state.buffer == 0 then
+    return
+  end
+  local elapsed = os.clock() - (log_state.last_flush or 0)
+  if not force and #log_state.buffer < CONFIG.LOG_FLUSH_LINES and elapsed < CONFIG.LOG_FLUSH_INTERVAL then
+    return
+  end
+  local ok = pcall(function()
+    rotate_log_if_needed(log_state.path)
+    local file = open_log_file()
+    if not file then
+      return false
+    end
+    for _, line in ipairs(log_state.buffer) do
+      file.write(line .. "\n")
+    end
+    file.close()
+    return true
+  end)
+  if ok then
+    log_state.last_write_ok = true
+    log_state.buffer = {}
+    log_state.last_flush = os.clock()
+  else
+    if not log_state.fallback_used then
+      print("Warning: log write failed; continuing without file logging.")
+      log_state.fallback_used = true
+    end
+    log_state.last_write_ok = false
+    for _, line in ipairs(log_state.buffer) do
+      table.insert(log_state.memory_fallback, line)
+    end
+    log_state.buffer = {}
+  end
+end
+
+log_line = function(level, module, message)
+  if log_state.enabled == nil then
+    log_state.enabled = resolve_log_enabled()
+    log_state.last_flush = os.clock()
+  end
+  if not log_state.enabled then
+    return
+  end
+  table.insert(log_state.buffer, string.format("[%s] %s | %s | %s", now_stamp(), tostring(level), tostring(module), tostring(message)))
+  flush_log(true)
+end
+
+local function flush_memory_fallback()
+  if #log_state.memory_fallback == 0 then
+    return
+  end
+  print("=== INSTALLER DEBUG LOG (RAM) ===")
+  for _, line in ipairs(log_state.memory_fallback) do
+    print(line)
+  end
+  log_state.memory_fallback = {}
+end
+
+local function init_log_file()
+  ensure_log_dirs()
+  local file = open_log_file()
+  if file then
+    file.write("")
+    file.close()
+    log_state.last_write_ok = true
+  end
+end
+
+local function announce_log_location()
+  flush_log(true)
+  local location = get_log_path()
+  print("Details logged to: " .. tostring(location))
+  if location == "RAM (printed below)" then
+    flush_memory_fallback()
+  end
+end
+
+local function run_with_trace(module, label, fn)
+  local ok, err = xpcall(fn, function(message)
+    return debug.traceback(tostring(message), 2)
+  end)
+  if not ok then
+    log_line("ERROR", module, label .. " failed: " .. tostring(err))
+  end
+  return ok, err
+end
+
+local function flush_memory_fallback()
+  if #log_state.memory_fallback == 0 then
+    return
+  end
+  print("=== INSTALLER DEBUG LOG (RAM) ===")
+  for _, line in ipairs(log_state.memory_fallback) do
+    print(line)
+  end
+  log_state.memory_fallback = {}
+end
+
+local function announce_log_location()
+  flush_log(true)
+  local location = get_log_path()
+  print("Details logged to: " .. tostring(location))
+  if location == "RAM (printed below)" then
+    flush_memory_fallback()
+  end
+end
+
+local function sanitize_signature(prefix)
+  if not prefix or prefix == "" then
+    return ""
+  end
+  local sample = prefix:gsub("[%c]", ".")
+  return sample:sub(1, CONFIG.LOG_SAMPLE_BYTES or 80)
+end
+
+local function quick_install_block()
+  local url = CONFIG.QUICK_INSTALL_URL
+  local target = CONFIG.QUICK_INSTALL_TARGET
+  if not url or not target then
+    return nil
+  end
+  return ("wget %s %s\n%s"):format(url, target, target)
+end
+
+local function print_quick_install_hint()
+  local block = quick_install_block()
+  if not block then
+    return
+  end
+  print("Quick Install (RAW, beta):")
+  for line in block:gmatch("[^\n]+") do
+    print("  " .. line)
+  end
+  print("Hinweis: Niemals GitHub /blob/ Links nutzen (HTML -> Lua-Fehler).")
+end
+
+local function detect_html(body_prefix)
+  if not body_prefix or body_prefix == "" then
+    return false
+  end
+  local head = body_prefix:sub(1, 512)
+  local lower = head:lower()
+  if lower:find("<!doctype", 1, true) or lower:find("<html", 1, true) then
+    return true
+  end
+  if lower:find("<body", 1, true) or lower:find("<head", 1, true) or lower:find("<title", 1, true) then
+    return true
+  end
+  if lower:find("rate limit", 1, true) or lower:find("not found", 1, true) then
+    return true
+  end
+  if lower:find("cloudflare", 1, true) then
+    return true
+  end
+  if head:match("^%s*<") then
+    return true
+  end
+  return false
+end
+
+local function detect_lua_signature(body_prefix)
+  if not body_prefix or body_prefix == "" then
+    return false
+  end
+  local trimmed = body_prefix:match("^%s*(.-)%s*$")
+  if trimmed:match("^%-%-") then
+    return true
+  end
+  if trimmed:match("^local%s") or trimmed:match("^return%s") or trimmed:match("^function%s") then
+    return true
+  end
+  return false
+end
+
+local function validate_response(status_code, headers, body_prefix, body_len)
+  if status_code and status_code ~= 200 then
+    return false, "http " .. tostring(status_code)
+  end
+  if detect_html(body_prefix) then
+    return false, "html response"
+  end
+  if not detect_lua_signature(body_prefix) then
+    return false, "missing lua signature"
+  end
+  local content_length = headers and (headers["Content-Length"] or headers["content-length"])
+  if content_length then
+    local expected = tonumber(content_length)
+    if expected and body_len and expected ~= body_len then
+      return false, "size mismatch"
+    end
+  end
+  return true
+end
+
+local function join_url(base, path)
+  local cleaned_path = path:gsub("^/", "")
+  if base:sub(-1) ~= "/" then
+    return base .. "/" .. cleaned_path
+  end
+  return base .. cleaned_path
+end
+
+local function build_raw_urls(path)
+  local urls = {}
+  local seen = {}
+  local repo_path = string.format("/%s/%s/%s/", CONFIG.REPO_OWNER, CONFIG.REPO_NAME, CONFIG.BRANCH or "main")
+  for _, host in ipairs(CONFIG.BASE_URLS) do
+    local url = join_url(host .. repo_path, path)
+    if not seen[url] then
+      table.insert(urls, url)
+      seen[url] = true
+    end
+  end
+  return urls
+end
+
+local fetch_url_seeded = false
+
+local function fetch_url(url, target_path)
+  if not http or not http.get then
+    log_line("ERROR", "http", "HTTP API unavailable")
+    return false, nil, "HTTP API unavailable", { url = url }
+  end
+  local response
+  local err
+  if http.request and CONFIG.DOWNLOAD_TIMEOUT then
+    log_line("INFO", "http", "http.request -> " .. tostring(url))
+    local ok, req_err = pcall(http.request, url, nil, nil, false)
+    if not ok then
+      log_line("ERROR", "http", "http.request failed: " .. tostring(req_err))
+      return false, nil, "http.request failed (" .. tostring(req_err) .. ")", { url = url }
+    end
+    local timer = os.startTimer(CONFIG.DOWNLOAD_TIMEOUT)
+    while true do
+      local event, p1, p2 = os.pullEvent()
+      if event == "http_success" and p1 == url then
+        response = p2
+        break
+      elseif event == "http_failure" and p1 == url then
+        log_line("WARN", "http", "http_failure: " .. tostring(p2))
+        return false, nil, "http failure (" .. tostring(p2) .. ")", { url = url }
+      elseif event == "timer" and p1 == timer then
+        log_line("WARN", "http", "http timeout")
+        return false, nil, "timeout", { url = url }
+      end
+    end
+  else
+    local ok, result = pcall(function() return http.get(url) end)
+    log_line("INFO", "http", string.format("http.get -> %s (ok=%s, response=%s)", tostring(url), tostring(ok), tostring(result ~= nil)))
+    if ok then
+      response = result
+    else
+      err = result
+    end
+    if not response then
+      log_line("WARN", "http", "http.get returned nil: " .. tostring(err))
+      return false, nil, "http.get returned nil" .. (err and (" (" .. tostring(err) .. ")") or ""), { url = url }
+    end
+  end
+  local code = response.getResponseCode and response.getResponseCode() or nil
+  local headers = response.getResponseHeaders and response.getResponseHeaders() or nil
+  local content_length = headers and (headers["Content-Length"] or headers["content-length"])
+  if content_length then
+    local expected = tonumber(content_length)
+    if expected then
+      local needed = expected + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+      local ok_space, space_err = ensure_free_space(target_path, needed, "Download " .. tostring(target_path))
+      if not ok_space then
+        if not select_mount_for_bytes(needed) then
+          response.close()
+          return false, nil, space_err, { url = url, code = code, headers = headers }
+        end
+        target_path = CONFIG.TEMP_PATH
+      end
+    end
+  end
+  ensure_dir(fs.getDir(target_path))
+  local file = fs.open(target_path, "wb")
+  if not file then
+    response.close()
+    return false, nil, "file open failed", { url = url, code = code, headers = headers }
+  end
+  local prefix = ""
+  local bytes = 0
+  local chunk_size = 8192
+  local ok_read, read_err = pcall(function()
+    while true do
+      local chunk = nil
+      if response.read then
+        chunk = response.read(chunk_size)
+      elseif response.readLine then
+        local line = response.readLine()
+        if line then
+          chunk = line .. "\n"
+        end
+      end
+      if not chunk then
+        break
+      end
+      bytes = bytes + #chunk
+      if #prefix < 512 then
+        local needed = 512 - #prefix
+        prefix = prefix .. chunk:sub(1, needed)
+      end
+      file.write(chunk)
+    end
+  end)
+  file.close()
+  response.close()
+  if not ok_read then
+    if fs.exists(target_path) then
+      safe_delete(target_path, "download read cleanup")
+    end
+    return false, nil, tostring(read_err), { url = url, code = code, headers = headers }
+  end
+  local meta = {
+    url = url,
+    code = code,
+    headers = headers,
+    bytes = bytes,
+    signature = sanitize_signature(prefix)
+  }
+  local header_dump = headers and textutils.serialize(headers) or "n/a"
+  log_line("INFO", "http", string.format("HTTP response: url=%s code=%s bytes=%s sig=%s",
+    tostring(url),
+    tostring(code or "n/a"),
+    tostring(body and #body or 0),
+    tostring(sanitize_signature(prefix))
+  ))
+  log_line("INFO", "http", "HTTP headers: " .. tostring(header_dump))
+  log_line("INFO", "http", "HTTP body sample: " .. tostring(sanitize_signature(prefix)))
+  if bytes == 0 then
+    return false, nil, "empty body", meta
+  end
+  local ok, reason = validate_response(code, headers, prefix, bytes)
+  if not ok then
+    return false, nil, reason, meta
+  end
+  return true, target_path, nil, meta
+end
+
+local function write_atomic(path, temp_path, content)
+  ensure_dir(fs.getDir(path))
+  ensure_dir(fs.getDir(temp_path))
+  local needed = (content and #content or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0) + (CONFIG.DISK_SPACE_MIN_BUFFER or 0)
+  local ok_space, space_err = ensure_free_space(path, needed, "Write " .. tostring(path))
+  if not ok_space then
+    return false, space_err
+  end
+  if fs.exists(temp_path) then
+    safe_delete(temp_path, "download temp cleanup")
+  end
+  local file = fs.open(temp_path, "w")
+  if not file then
+    return false, "write failed"
+  end
+  local ok, err = pcall(function()
+    local chunk = 4096
+    local length = #content
+    local index = 1
+    while index <= length do
+      file.write(content:sub(index, index + chunk - 1))
+      index = index + chunk
+    end
+  end)
+  file.close()
+  if not ok then
+    if fs.exists(temp_path) then
+      safe_delete(temp_path, "download verify cleanup")
+    end
+    return false, err
+  end
+  if fs.exists(path) then
+    safe_delete(path, "atomic write replace")
+  end
+  fs.move(temp_path, path)
+  return true
+end
+
+local function read_prefix(path, bytes)
+  if not fs.exists(path) then
+    return nil
+  end
+  local file = fs.open(path, "r")
+  if not file then
+    return nil
+  end
+  local content = file.read(bytes or 200)
+  file.close()
+  return content
+end
+
+local function is_valid_local(path)
+  local prefix = read_prefix(path, 512)
+  if not prefix then
+    return false
+  end
+  if detect_html(prefix) then
+    return false
+  end
+  return detect_lua_signature(prefix)
+end
+
+local function retry_menu()
+  print("1) Retry download")
+  print("2) Cancel")
+  write("Select option: ")
+  local choice = tonumber(read() or "")
+  return choice == 1
+end
+
+local function download_bootstrap()
+  local urls = build_raw_urls(CONFIG.FILE_PATH)
+  if not fetch_url_seeded then
+    math.randomseed(os.time())
+    fetch_url_seeded = true
+  end
+  for attempt = 1, CONFIG.DOWNLOAD_ATTEMPTS do
+    for _, url in ipairs(urls) do
+      if fs.exists(CONFIG.TEMP_PATH) then
+        safe_delete(CONFIG.TEMP_PATH, "cleanup temp download")
+      end
+      local ok, temp_path, err, meta = fetch_url(url, CONFIG.TEMP_PATH)
+      if ok then
+        log_line("INFO", "installer", string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
+          tostring(url),
+          tostring(meta and meta.code or "n/a"),
+          tostring(meta and meta.bytes or 0),
+          tostring(meta and meta.signature or ""),
+          attempt
+        ))
+        ensure_dir(fs.getDir(CONFIG.TARGET_PATH))
+        if fs.exists(CONFIG.TARGET_PATH) then
+          safe_delete(CONFIG.TARGET_PATH, "cleanup bootstrap")
+        end
+        fs.move(temp_path, CONFIG.TARGET_PATH)
+        log_line("INFO", "installer", "Atomic swap complete: " .. CONFIG.TARGET_PATH)
+        return true
+      end
+      log_line("WARN", "installer", string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
+        tostring(url),
+        tostring(err),
+        tostring(meta and meta.code or "n/a"),
+        tostring(meta and meta.signature or ""),
+        attempt
+      ))
+    end
+    if attempt < CONFIG.DOWNLOAD_ATTEMPTS then
+      local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
+      os.sleep((CONFIG.DOWNLOAD_BACKOFF * attempt) + jitter)
+    end
+  end
+  return false, "download failed", nil
+end
+
+if not http then
+  error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
+end
+
+init_log_file()
+log_line("INFO", "installer", "Bootstrap start")
+print_storage_summary()
+try_label_disk()
+if relocate_bootstrap_if_needed() then
+  return
+end
+
+local ok = false
+local err
+local meta
+
+repeat
+  ok, err, meta = download_bootstrap()
+  if ok then
+    break
+  end
+  local err_msg = err or "unknown error"
+  if err_msg == "html response" then
+    err_msg = "Downloaded HTML, expected Lua"
+  end
+  print(("Bootstrap download failed: %s"):format(err_msg))
+  if meta and meta.url then
+    print(("URL: %s"):format(tostring(meta.url)))
+  end
+  if meta and meta.signature and meta.signature ~= "" then
+    print(("Response signature: %s"):format(tostring(meta.signature)))
+  end
+  if err_msg == "Downloaded HTML, expected Lua" then
+    print("Detected HTML instead of Lua. This usually means a GitHub /blob/ link or HTML error page.")
+    print_quick_install_hint()
+  end
+until not retry_menu()
+
+if not ok then
+  if is_valid_local(CONFIG.TARGET_PATH) then
+    print("Using existing installer.lua.")
+  else
+    print_quick_install_hint()
+    announce_log_location()
+    error("Installer bootstrap unavailable. Please re-run the RAW install command.")
+  end
+end
+
+if shell and shell.run then
+  shell.run(CONFIG.TARGET_PATH)
+else
+  local loader = loadfile(CONFIG.TARGET_PATH)
+  if loader then
+    local ok = run_with_trace("installer", "Bootstrap execution", loader)
+    if not ok then
+      announce_log_location()
+      error("Installer bootstrap failed. See log: " .. tostring(get_log_path()))
+    end
+  else
+    error("Unable to launch installer.lua")
+  end
+end

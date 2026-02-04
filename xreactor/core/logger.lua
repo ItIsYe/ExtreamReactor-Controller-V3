@@ -1,6 +1,13 @@
+local function resolve_log_dir()
+  if fs and fs.exists and fs.exists("/disk") then
+    return "/disk/xreactor_logs"
+  end
+  return "/xreactor_logs"
+end
+
 -- CONFIG
 local CONFIG = {
-  LOG_DIR = "/xreactor/logs", -- Directory for log files.
+  LOG_DIR = resolve_log_dir(), -- Directory for log files.
   SETTINGS_KEY = "xreactor.debug_logging", -- settings API key for enabling debug logs.
   DEFAULT_ENABLED = false, -- Default debug logging state when no config/setting exists.
   FLUSH_LINES = 8, -- Buffer size before flushing to disk.
