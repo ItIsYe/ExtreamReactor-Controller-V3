@@ -38,242 +38,22 @@ local CONFIG = {
   DISK_LABEL = "XREACTOR" -- Disk label to set when using a mounted disk.
 }
 
-local log_line
-local format_bytes
-local cleanup_temp_file
-local disk_pool
-
-local function list_disk_mounts()
-  local mounts = {}
-  local candidates = { "/disk" }
-  for idx = 2, 9 do
-    table.insert(candidates, "/disk" .. tostring(idx))
+local function get_installer_root()
+  local disk_root = "/disk"
+  local disk_installer = disk_root .. "/xreactor/installer"
+  if fs.exists(disk_installer) then
+    return disk_root
   end
-  for _, path in ipairs(candidates) do
-    if fs.exists(path) and fs.isDir(path) then
-      local ok_free, free = pcall(fs.getFreeSpace, path)
-      local ok_total, total = pcall(fs.getCapacity, path)
-      if ok_free and free then
-        local test_path = path .. "/.xreactor_write_test"
-        local ok_write = pcall(function()
-          local file = fs.open(test_path, "w")
-          if not file then
-            error("open failed", 0)
-          end
-          file.write("ok")
-          file.close()
-          safe_delete(test_path, "disk write test")
-        end)
-        if ok_write then
-          local used = (ok_total and total) and (total - free) or nil
-          table.insert(mounts, { path = path, free = free, total = ok_total and total or nil, used = used })
-        end
-      end
-    end
-  end
-  table.sort(mounts, function(a, b) return a.free > b.free end)
-  return mounts
+  return ""
 end
 
-local function format_mounts(mounts)
-  if not mounts or #mounts == 0 then
-    return "  (no disks found)"
-  end
-  local lines = {}
-  for _, entry in ipairs(mounts) do
-    if entry.total and entry.used then
-      table.insert(lines, string.format(
-        "  %s: %s free (%s used / %s total)",
-        entry.path,
-        format_bytes(entry.free),
-        format_bytes(entry.used),
-        format_bytes(entry.total)
-      ))
-    else
-      table.insert(lines, string.format("  %s: %s free", entry.path, format_bytes(entry.free)))
-    end
-  end
-  return table.concat(lines, "\n")
-end
-
-local function pick_smallest_mount(mounts, min_free)
-  if not mounts or #mounts == 0 then
-    return nil
-  end
-  for idx = #mounts, 1, -1 do
-    local entry = mounts[idx]
-    if not min_free or entry.free >= min_free then
-      return entry
-    end
-  end
-  return mounts[#mounts]
-end
-
-local function build_disk_pool(required_bytes)
-  local mounts = list_disk_mounts()
-  if #mounts == 0 then
-    return nil, "No writable disk mount found.", mounts
-  end
-  local largest = mounts[1]
-  if required_bytes and largest.free < required_bytes then
-    return nil, "Not enough disk space for core.", mounts
-  end
-  local stage = largest
-  local backup = mounts[2] or largest
-  local log_mount = pick_smallest_mount(mounts, CONFIG.DISK_SPACE_MIN_BUFFER or 0) or largest
-  return {
-    mounts = mounts,
-    core_mount = largest,
-    stage_mount = stage,
-    backup_mount = backup,
-    log_mount = log_mount
-  }, nil, mounts
-end
-
-local function apply_disk_pool(pool)
-  local core_mount = pool and pool.core_mount or nil
-  local stage_mount = pool and pool.stage_mount or core_mount
-  local backup_mount = pool and pool.backup_mount or core_mount
-  local log_mount = pool and pool.log_mount or core_mount
-  if not core_mount then
-    return false
-  end
-  local root = core_mount.path .. "/xreactor"
-  local log_dir = log_mount.path .. "/xreactor_logs"
-  local stage_dir = stage_mount.path .. "/xreactor_stage"
-  local backup_dir = backup_mount.path .. "/xreactor_backup"
-  CONFIG.STORAGE_ROOT = root
-  CONFIG.LOG_DIR = log_dir
-  CONFIG.STAGE_DIR = stage_dir
-  CONFIG.BACKUP_DIR = backup_dir
-  CONFIG.CORE_PATH = root .. "/installer/installer_core.lua"
-  CONFIG.CORE_META_PATH = root .. "/installer/installer_core.meta"
-  CONFIG.CORE_DOWNLOAD_PATH = stage_dir .. "/installer_core.lua.download"
-  CONFIG.CORE_BAD_PATH = stage_dir .. "/installer_core.bad"
-  CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
-  CONFIG.LOCAL_LOG_DIR = log_dir
-  CONFIG.LOG_FALLBACK_PATH = log_dir .. "/installer_debug.log"
-  CONFIG.DISK_MOUNT_PATH = core_mount.path
-  CONFIG.CORE_MOUNT_PATH = core_mount.path
-  CONFIG.STAGE_MOUNT_PATH = stage_mount.path
-  CONFIG.BACKUP_MOUNT_PATH = backup_mount.path
-  CONFIG.LOG_MOUNT_PATH = log_mount.path
-  return true
-end
-
-local function configure_storage_root()
-  local pool, err = build_disk_pool()
-  if not pool then
-    print("WARN: " .. tostring(err or "No writable disk mount found."))
-    print('No disk mount detected, using local storage. Attach a disk so "/disk" appears for disk-first install.')
-    CONFIG.STORAGE_ROOT = "/xreactor"
-    CONFIG.LOG_DIR = "/xreactor_logs"
-    CONFIG.STAGE_DIR = "/xreactor_stage"
-    CONFIG.BACKUP_DIR = "/xreactor_backup"
-    CONFIG.CORE_PATH = "/xreactor/installer/installer_core.lua"
-    CONFIG.CORE_META_PATH = "/xreactor/installer/installer_core.meta"
-    CONFIG.CORE_DOWNLOAD_PATH = "/xreactor_stage/installer_core.lua.download"
-    CONFIG.CORE_BAD_PATH = "/xreactor_stage/installer_core.bad"
-    CONFIG.LOG_PATH = "/xreactor_logs/installer_debug.log"
-    CONFIG.LOCAL_LOG_DIR = "/xreactor_logs"
-    CONFIG.LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log"
-    CONFIG.DISK_MOUNT_PATH = nil
-    disk_pool = nil
-    return
-  end
-  disk_pool = pool
-  apply_disk_pool(pool)
-end
-
-configure_storage_root()
-
-local function label_disk_mount(mount_path, label)
-  if not mount_path or not label or not peripheral or not disk or not disk.getMountPath then
-    return
-  end
-  for _, name in ipairs(peripheral.getNames()) do
-    if peripheral.getType(name) == "drive" then
-      local ok, mount = pcall(disk.getMountPath, name)
-      if ok and mount == mount_path then
-        local ok_label, existing = pcall(disk.getLabel, name)
-        if ok_label and (not existing or existing == "") then
-          pcall(disk.setLabel, name, label)
-        end
-      end
-    end
-  end
-end
-
-local function try_label_disk()
-  if not disk_pool or not disk_pool.mounts then
-    return
-  end
-  for idx, entry in ipairs(disk_pool.mounts) do
-    label_disk_mount(entry.path, CONFIG.DISK_LABEL .. "_DISK_" .. tostring(idx))
-  end
-end
-
-local function select_mount_for_bytes(needed)
-  local pool, _, mounts = build_disk_pool(needed)
-  if not pool then
-    print("ERROR: Not enough disk space to continue.")
-    print("Detected disks:")
-    print(format_mounts(mounts))
-    return false
-  end
-  disk_pool = pool
-  apply_disk_pool(pool)
-  ensure_log_dirs()
-  try_label_disk()
-  return true
-end
-
-local function relocate_bootstrap_if_needed()
-  if not CONFIG.DISK_MOUNT_PATH or not shell or not shell.getRunningProgram or not shell.run then
-    return false
-  end
-  local running = shell.getRunningProgram()
-  if not running or running == "" then
-    return false
-  end
-  local absolute = running:sub(1, 1) == "/" and running or ("/" .. running)
-  local target = CONFIG.STORAGE_ROOT .. "/installer/installer.lua"
-  if absolute == target then
-    return false
-  end
-  local current_mount = nil
-  if disk_pool and disk_pool.mounts then
-    for _, entry in ipairs(disk_pool.mounts) do
-      if absolute:sub(1, #entry.path) == entry.path then
-        current_mount = entry.path
-        break
-      end
-    end
-  end
-  local required_free = (CONFIG.DISK_SPACE_MIN_BUFFER or 0) + (CONFIG.DISK_SPACE_OVERHEAD_BYTES or 0)
-  local current_free = current_mount and get_free_space(current_mount) or nil
-  local target_free = get_free_space(CONFIG.DISK_MOUNT_PATH)
-  if current_mount == CONFIG.DISK_MOUNT_PATH then
-    return false
-  end
-  if current_free and current_free >= required_free then
-    return false
-  end
-  if not target_free or target_free < required_free then
-    return false
-  end
-  if current_free and (target_free - current_free) < required_free then
-    return false
-  end
-  ensure_dir(fs.getDir(target))
-  local ok_copy = pcall(fs.copy, absolute, target)
-  if not ok_copy then
-    return false
-  end
-  print("Relocating installer to disk: " .. target)
-  shell.run(target)
-  return true
-end
+local REQUIRED_FILES = {
+  "installer.lua",
+  "installer_core.lua",
+  "manifest.lua",
+  "release.lua",
+  "role_files.lua"
+}
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
@@ -983,50 +763,26 @@ local function fetch_with_retries(urls, attempts, module_name)
   return false, nil, last_meta
 end
 
-local function download_with_retries_to_path(urls, attempts, module_name, target_path)
-  local last_meta
-  local module_tag = module_name or "installer"
-  if not fetch_url_seeded then
-    math.randomseed(os.time())
-    fetch_url_seeded = true
-  end
-  local max_attempts = attempts or CONFIG.DOWNLOAD_ATTEMPTS
-  for attempt = 1, max_attempts do
-    for _, url in ipairs(urls or {}) do
-      cleanup_temp_file(target_path)
-      local ok, err, meta = fetch_url_stream(url, target_path)
-      last_meta = meta or { url = url, err = err }
+local function ensure_installer_files(release)
+  local root_prefix = get_installer_root()
+  local installer_dir = root_prefix .. "/xreactor/installer"
+  for _, filename in ipairs(REQUIRED_FILES) do
+    local path = installer_dir .. "/" .. filename
+    local needs_download = (not fs.exists(path)) or fs.getSize(path) == 0
+    if needs_download then
+      local urls = build_raw_urls("xreactor/installer/" .. filename, release and release.commit_sha)
+      local ok, content, meta = fetch_with_retries(urls)
       if ok then
-        log_line("INFO", module_tag, string.format("Download ok: url=%s code=%s bytes=%s sig=%s attempt=%d",
-          tostring(url),
-          tostring(meta and meta.code or "n/a"),
-          tostring(meta and meta.bytes or 0),
-          tostring(meta and meta.signature or ""),
-          attempt
-        ))
-        return true, meta
+        if write_file(path, content) then
+          log_line("INFO", "Installer file restored: " .. tostring(path))
+        else
+          log_line("WARN", "Installer file write failed: " .. tostring(path))
+        end
+      else
+        log_line("WARN", "Installer file download failed: " .. tostring(path) .. " (" .. tostring(meta and meta.err) .. ")")
       end
-      log_line("WARN", module_tag, string.format("Download failed: url=%s err=%s code=%s sig=%s attempt=%d",
-        tostring(url),
-        tostring(err),
-        tostring(meta and meta.code or "n/a"),
-        tostring(meta and meta.signature or ""),
-        attempt
-      ))
-    end
-    if attempt < max_attempts then
-      local jitter = math.random() * (CONFIG.DOWNLOAD_JITTER or 0)
-      os.sleep((CONFIG.DOWNLOAD_BACKOFF * attempt) + jitter)
     end
   end
-  return false, last_meta
-end
-
-local function downloadFile(path, ref, opts)
-  local urls = (opts and opts.urls) or build_raw_urls(path, ref)
-  local attempts = opts and opts.attempts or nil
-  local module_name = opts and opts.module_name or nil
-  return fetch_with_retries(urls, attempts, module_name)
 end
 
 local function build_crc32_table()
@@ -1540,6 +1296,8 @@ if not release then
   print("Warning: unable to fetch release metadata. Using local installer core if present.")
   log_line("WARN", "installer", "Release metadata unavailable: " .. tostring(release_meta and release_meta.err))
 end
+
+ensure_installer_files(release)
 
 if release and needs_core_update(release) then
   print("Checking installer core update...")
