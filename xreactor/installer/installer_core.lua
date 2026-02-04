@@ -63,6 +63,69 @@ local CONFIG = {
   }
 }
 
+local function collect_storage_candidates()
+  local candidates = { "/" }
+  for i = 1, 9 do
+    local path = (i == 1) and "/disk" or ("/disk" .. i)
+    if fs.exists(path) then
+      table.insert(candidates, path)
+    end
+  end
+  return candidates
+end
+
+local function detect_best_storage_root()
+  local candidates = collect_storage_candidates()
+  local best_root = "/"
+  local best_free = fs.getFreeSpace(best_root) or 0
+  for _, path in ipairs(candidates) do
+    local free = fs.getFreeSpace(path) or 0
+    if free > best_free then
+      best_root = path
+      best_free = free
+    end
+  end
+  if fs.exists(best_root) then
+    return best_root
+  end
+  return nil
+end
+
+local function apply_storage_root(root)
+  if not root or not fs.exists(root) then
+    return false
+  end
+  local storage_root = root
+  local base_root = storage_root .. "/xreactor"
+  local stage_root = storage_root .. "/xreactor_stage"
+  local backup_root = storage_root .. "/xreactor_backup"
+  local log_root = storage_root .. "/xreactor_logs"
+  CONFIG.BASE_DIR = base_root
+  CONFIG.BACKUP_BASE = backup_root
+  CONFIG.UPDATE_STAGING_BASE = stage_root
+  CONFIG.LOG_PATH = log_root .. "/installer.log"
+  CONFIG.MANIFEST_LOCAL = base_root .. "/.manifest"
+  CONFIG.MANIFEST_CACHE = base_root .. "/.cache/manifest.lua"
+  CONFIG.MANIFEST_CACHE_LEGACY = base_root .. "/.manifest_cache"
+  CONFIG.BASE_CACHE_PATH = base_root .. "/.cache/source.lua"
+  CONFIG.NODE_ID_PATH = base_root .. "/config/node_id.txt"
+  return true
+end
+
+local function resolve_storage_root()
+  local selected_root = _G.__xreactor_storage_root or detect_best_storage_root()
+  if not selected_root then
+    selected_root = "/"
+  end
+  if not fs.exists(selected_root) then
+    error("Storage root invalid: " .. tostring(selected_root))
+  end
+  _G.__xreactor_storage_root = selected_root
+  apply_storage_root(selected_root)
+end
+
+resolve_storage_root()
+
 local BASE_DIR = CONFIG.BASE_DIR
 local REPO_OWNER = CONFIG.REPO_OWNER
 local REPO_NAME = CONFIG.REPO_NAME
