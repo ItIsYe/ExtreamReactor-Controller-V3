@@ -97,7 +97,7 @@ local function collect_storage_candidates()
   return candidates
 end
 
-local function select_best_storage_root()
+local function detect_best_storage_root()
   local candidates = collect_storage_candidates()
   local best_root = "/"
   local best_free = fs.getFreeSpace(best_root) or 0
@@ -109,31 +109,45 @@ local function select_best_storage_root()
     end
   end
   if fs.exists(best_root) then
-    return best_root, best_free
+    return best_root
   end
-  return nil, nil
+  return nil
 end
 
 local function apply_storage_root(root)
   if not root or not fs.exists(root) then
     return false
   end
-  CONFIG.BASE_DIR = root .. "/xreactor"
-  CONFIG.BACKUP_BASE = root .. "/xreactor_backup"
-  CONFIG.UPDATE_STAGING_BASE = root .. "/xreactor_stage"
-  CONFIG.LOG_PATH = root .. "/xreactor_logs/installer.log"
-  CONFIG.MANIFEST_LOCAL = CONFIG.BASE_DIR .. "/.manifest"
-  CONFIG.MANIFEST_CACHE = CONFIG.BASE_DIR .. "/.cache/manifest.lua"
-  CONFIG.MANIFEST_CACHE_LEGACY = CONFIG.BASE_DIR .. "/.manifest_cache"
-  CONFIG.BASE_CACHE_PATH = CONFIG.BASE_DIR .. "/.cache/source.lua"
-  CONFIG.NODE_ID_PATH = CONFIG.BASE_DIR .. "/config/node_id.txt"
+  local storage_root = root
+  local base_root = storage_root .. "/xreactor"
+  local stage_root = storage_root .. "/xreactor_stage"
+  local backup_root = storage_root .. "/xreactor_backup"
+  local log_root = storage_root .. "/xreactor_logs"
+  CONFIG.BASE_DIR = base_root
+  CONFIG.BACKUP_BASE = backup_root
+  CONFIG.UPDATE_STAGING_BASE = stage_root
+  CONFIG.LOG_PATH = log_root .. "/installer.log"
+  CONFIG.MANIFEST_LOCAL = base_root .. "/.manifest"
+  CONFIG.MANIFEST_CACHE = base_root .. "/.cache/manifest.lua"
+  CONFIG.MANIFEST_CACHE_LEGACY = base_root .. "/.manifest_cache"
+  CONFIG.BASE_CACHE_PATH = base_root .. "/.cache/source.lua"
+  CONFIG.NODE_ID_PATH = base_root .. "/config/node_id.txt"
   return true
 end
 
-do
-  local best_root = select_best_storage_root()
-  apply_storage_root(best_root)
+local function resolve_storage_root()
+  local selected_root = _G.__xreactor_storage_root or detect_best_storage_root()
+  if not selected_root then
+    selected_root = "/"
+  end
+  if not fs.exists(selected_root) then
+    error("Storage root invalid: " .. tostring(selected_root))
+  end
+  _G.__xreactor_storage_root = selected_root
+  apply_storage_root(selected_root)
 end
+
+resolve_storage_root()
 
 local BASE_DIR = CONFIG.BASE_DIR
 local REPO_OWNER = CONFIG.REPO_OWNER

@@ -38,23 +38,6 @@ local CONFIG = {
   DISK_LABEL = "XREACTOR" -- Disk label to set when using a mounted disk.
 }
 
-local function get_installer_root()
-  local disk_root = "/disk"
-  local disk_installer = disk_root .. "/xreactor/installer"
-  if fs.exists(disk_installer) then
-    return disk_root
-  end
-  return ""
-end
-
-local REQUIRED_FILES = {
-  "installer.lua",
-  "installer_core.lua",
-  "manifest.lua",
-  "release.lua",
-  "role_files.lua"
-}
-
 local function collect_storage_candidates()
   local candidates = { "/" }
   for i = 1, 9 do
@@ -66,7 +49,7 @@ local function collect_storage_candidates()
   return candidates
 end
 
-local function select_best_storage_root()
+local function detect_best_storage_root()
   local candidates = collect_storage_candidates()
   local best_root = "/"
   local best_free = fs.getFreeSpace(best_root) or 0
@@ -78,9 +61,9 @@ local function select_best_storage_root()
     end
   end
   if fs.exists(best_root) then
-    return best_root, best_free
+    return best_root
   end
-  return nil, nil
+  return nil
 end
 
 local function apply_storage_root(root)
@@ -93,10 +76,19 @@ local function apply_storage_root(root)
   return true
 end
 
-do
-  local best_root = select_best_storage_root()
-  apply_storage_root(best_root)
+local function resolve_storage_root()
+  local selected_root = detect_best_storage_root()
+  if not selected_root then
+    selected_root = "/"
+  end
+  if not fs.exists(selected_root) then
+    error("Storage root invalid: " .. tostring(selected_root))
+  end
+  _G.__xreactor_storage_root = selected_root
+  apply_storage_root(selected_root)
 end
+
+resolve_storage_root()
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
