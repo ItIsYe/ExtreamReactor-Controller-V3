@@ -53,6 +53,17 @@ for key, value in pairs(DEFAULT_CONFIG) do
   set_default(key, value)
 end
 
+local REQUIRED_FILES = _G.REQUIRED_FILES
+if type(REQUIRED_FILES) ~= "table" then
+  REQUIRED_FILES = {
+    "installer_core.lua",
+    "manifest.lua",
+    "release.lua",
+    "role_files.lua"
+  }
+end
+_G.REQUIRED_FILES = REQUIRED_FILES
+
 local function collect_storage_candidates()
   local candidates = { "/" }
   for i = 1, 9 do
@@ -931,6 +942,9 @@ _G.download_with_retries_to_path = download_with_retries_to_path
 local function ensure_installer_files(release)
   local root_prefix = get_installer_root()
   local installer_dir = root_prefix .. "/xreactor/installer"
+  if type(REQUIRED_FILES) ~= "table" then
+    REQUIRED_FILES = {}
+  end
   for _, filename in ipairs(REQUIRED_FILES) do
     local path = installer_dir .. "/" .. filename
     local needs_download = (not fs.exists(path)) or fs.getSize(path) == 0
