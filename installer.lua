@@ -20,6 +20,23 @@ local CONFIG = {
   LOG_BACKUP_SUFFIX = ".1" -- Suffix for rotated log.
 }
 
+local function get_installer_root()
+  local disk_root = "/disk"
+  local disk_installer = disk_root .. "/xreactor/installer"
+  if fs.exists(disk_installer) then
+    return disk_root
+  end
+  return ""
+end
+
+local REQUIRED_FILES = {
+  "installer.lua",
+  "installer_core.lua",
+  "manifest.lua",
+  "release.lua",
+  "role_files.lua"
+}
+
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
     fs.makeDir(path)
@@ -183,6 +200,28 @@ local function fetch_with_retries(urls)
     end
   end
   return false, nil, last_meta
+end
+
+local function ensure_installer_files(release)
+  local root_prefix = get_installer_root()
+  local installer_dir = root_prefix .. "/xreactor/installer"
+  for _, filename in ipairs(REQUIRED_FILES) do
+    local path = installer_dir .. "/" .. filename
+    local needs_download = (not fs.exists(path)) or fs.getSize(path) == 0
+    if needs_download then
+      local urls = build_raw_urls("xreactor/installer/" .. filename, release and release.commit_sha)
+      local ok, content, meta = fetch_with_retries(urls)
+      if ok then
+        if write_file(path, content) then
+          log_line("INFO", "Installer file restored: " .. tostring(path))
+        else
+          log_line("WARN", "Installer file write failed: " .. tostring(path))
+        end
+      else
+        log_line("WARN", "Installer file download failed: " .. tostring(path) .. " (" .. tostring(meta and meta.err) .. ")")
+      end
+    end
+  end
 end
 
 local function build_crc32_table()
@@ -370,6 +409,8 @@ if not release then
   print("Warning: unable to fetch release metadata. Using local installer core if present.")
   log_line("WARN", "Release metadata unavailable: " .. tostring(release_meta and release_meta.err))
 end
+
+ensure_installer_files(release)
 
 if release and needs_core_update(release) then
   print("Checking installer core update...")
