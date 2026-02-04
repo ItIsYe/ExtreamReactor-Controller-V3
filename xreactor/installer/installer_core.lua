@@ -115,17 +115,6 @@ local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
 local REQUIRED_CORE_FILES = CONFIG.REQUIRED_CORE_FILES
 local FILE_MIGRATIONS = CONFIG.FILE_MIGRATIONS
 
-local function try_label_disk(...)
-  if not disk or type(disk.setLabel) ~= "function" then
-    return false, "disk API unavailable"
-  end
-  local ok, result = pcall(disk.setLabel, ...)
-  if not ok then
-    return false, tostring(result)
-  end
-  return result ~= false
-end
-
 local function detect_storage_root()
   if type(CONFIG.STORAGE_ROOT) == "string" and CONFIG.STORAGE_ROOT ~= "" then
     return CONFIG.STORAGE_ROOT
@@ -1454,6 +1443,15 @@ function resolve_storage_role(path)
     return "log"
   end
   return "core"
+end
+
+local function ensure_storage_root()
+  if storage_root == nil then
+    print("Installer error: storage root is nil. Aborting.")
+    log("ERROR", "Storage root is nil; aborting installer.")
+    return false
+  end
+  return true
 end
 
 local function ensure_storage_root()
