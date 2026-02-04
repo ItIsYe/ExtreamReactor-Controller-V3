@@ -166,6 +166,22 @@ local function live_root_path()
   return normalize_root(CONFIG.STORAGE_ROOT or "/xreactor")
 end
 
+local function get_installer_root()
+  if type(_G.__xreactor_storage_root) == "string" and _G.__xreactor_storage_root ~= "" then
+    return normalize_root(_G.__xreactor_storage_root) or "/"
+  end
+  local storage_root = normalize_root(CONFIG.STORAGE_ROOT or "/xreactor") or "/"
+  local suffix = "/xreactor"
+  if storage_root:sub(-#suffix) == suffix then
+    local root = storage_root:sub(1, -#suffix - 1)
+    if root == "" then
+      root = "/"
+    end
+    return root
+  end
+  return storage_root
+end
+
 local function safe_delete(path, context)
   if not path or path == "" then
     return false
