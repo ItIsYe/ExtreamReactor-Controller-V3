@@ -1,5 +1,5 @@
 return {
-  commit_sha = "main",
+  commit_sha = "beta",
   hash_algo = "crc32",
   manifest_path = "xreactor/installer/manifest.lua",
   installer_core_version = "1.3",
