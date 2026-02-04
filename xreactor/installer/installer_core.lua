@@ -1,7 +1,12 @@
 local INSTALLER_CORE_VERSION = "2.7"
 
 -- CONFIG
-local CONFIG = {
+local CONFIG = _G.CONFIG
+if not CONFIG then
+  error("CONFIG not initialized; run installer bootstrap first.")
+end
+
+local DEFAULT_CONFIG = {
   STORAGE_ROOT = nil, -- Optional override for storage root.
   BASE_DIR = "/xreactor", -- Base install directory.
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
@@ -86,6 +91,16 @@ local CONFIG = {
     { from = "xreactor/installer/installer.lua", to = "installer.lua" }
   }
 }
+
+local function set_default(key, value)
+  if CONFIG[key] == nil then
+    CONFIG[key] = value
+  end
+end
+
+for key, value in pairs(DEFAULT_CONFIG) do
+  set_default(key, value)
+end
 
 local STORAGE = { root = nil, initialized = false }
 local storage_root = nil
