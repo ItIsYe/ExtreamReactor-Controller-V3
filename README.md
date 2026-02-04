@@ -195,11 +195,7 @@ wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/b
    ```
    Alternativ (wenn der Bootstrapper schon lokal vorhanden ist):
    ```
-   lua /installer
-   ```
-   **Wichtig:** Nutze immer **RAW**-Links (`raw.githubusercontent.com`). GitHub-**Blob**-Links liefern HTML und sind nicht ausführbar.
-   **HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
-   (Beide Einstiegspunkte sind Bootstrapper: `/installer` und `/disk/xreactor/installer/installer.lua` aktualisieren bei Bedarf `/disk/xreactor/installer/installer_core.lua` und starten anschließend den Core-Installer.)
+   (Der Root-Installer `/installer.lua` ist der einzige Einstiegspunkt. Er aktualisiert bei Bedarf `/xreactor/installer/installer_core.lua` und startet anschließend den Core-Installer.)
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
    - Wenn Disk-Drives gemountet sind (`/disk`, `/disk2`, ...), erstellt der Installer einen **Storage-Pool**:
      - **Core/Runtime** → größter Datenträger (`<disk>/xreactor`)
@@ -286,8 +282,7 @@ Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE und Recovery halten die Ins
 - **Checksum mismatch**: Zuerst Manifest aktualisieren und sicherstellen, dass der Installer auf das **beta**-Manifest zeigt (RAW-URL via `raw.githubusercontent.com`).
 
 **Installer starten (ohne Neu-Download)**
-- Root-Installer (`/installer`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/disk/xreactor/installer/installer_core.lua`.
-- Der Installer unter `/disk/xreactor/installer/installer.lua` ist ebenfalls ein Bootstrap und verhält sich identisch.
+- Root-Installer (`/installer.lua`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
 - SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
 
 **Logging & Debugging**

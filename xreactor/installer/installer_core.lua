@@ -83,7 +83,7 @@ local CONFIG = {
     "xreactor/shared/constants.lua"
   },
   FILE_MIGRATIONS = { -- Optional migrations for renamed files.
-    -- { from = "xreactor/core/old.lua", to = "xreactor/core/new.lua" }
+    { from = "xreactor/installer/installer.lua", to = "installer.lua" }
   }
 }
 
@@ -3779,7 +3779,7 @@ function update_installer_if_required(manifest, release, hash_algo)
       log("WARN", "Installer update declined by user")
       return false
     end
-    local installer_path = manifest.installer_path or "xreactor/installer/installer.lua"
+    local installer_path = manifest.installer_path or "installer.lua"
     local expected = manifest.installer_hash
     if not expected then
       print("SAFE UPDATE aborted: installer hash missing.")
@@ -3879,7 +3879,7 @@ function verify_integrity(manifest, role, cfg_path)
     "xreactor/core/utils.lua",
     "xreactor/shared/colors.lua",
     "xreactor/shared/constants.lua",
-    "xreactor/installer/installer.lua"
+    "installer.lua"
   }
   local role_required = {
     [roles.MASTER] = "xreactor/master/main.lua",
