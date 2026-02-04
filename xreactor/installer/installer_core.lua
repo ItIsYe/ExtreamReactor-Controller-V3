@@ -642,35 +642,6 @@ end
 configure_storage_paths()
 init_internal_logger()
 
-local function try_label_disk()
-  if not storage_state.mounts or #storage_state.mounts == 0 then
-    return
-  end
-  if not peripheral or not disk or not disk.getMountPath then
-    return
-  end
-  local mount_index = {}
-  for idx, entry in ipairs(storage_state.mounts) do
-    mount_index[entry.path] = idx
-  end
-  for _, name in ipairs(peripheral.getNames()) do
-    if peripheral.getType(name) == "drive" then
-      local ok, mount = pcall(disk.getMountPath, name)
-      if ok and mount then
-        local idx = mount_index[mount]
-        if idx then
-          local ok_label, existing = pcall(disk.getLabel, name)
-          if ok_label and (not existing or existing == "") then
-            pcall(disk.setLabel, name, CONFIG.DISK_LABEL .. "_DISK_" .. tostring(idx))
-          end
-        end
-      end
-    end
-  end
-end
-
-try_label_disk()
-
 function resolve_install_path(path)
   if not path or path == "" then
     return path
