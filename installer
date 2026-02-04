@@ -1,5 +1,11 @@
 -- CONFIG
-local CONFIG = {
+local CONFIG = _G.CONFIG
+if not CONFIG then
+  CONFIG = {}
+  _G.CONFIG = CONFIG
+end
+
+local DEFAULT_CONFIG = {
   TARGET_PATH = "/installer.lua", -- Target bootstrap file (Lua).
   TEMP_PATH = "/tmp/installer.new", -- Temp download path for atomic swap.
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
@@ -28,6 +34,22 @@ local CONFIG = {
   DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
   DISK_LABEL = "XREACTOR" -- Disk label to set when using a mounted disk.
 }
+
+local function set_default(key, value)
+  if CONFIG[key] == nil then
+    CONFIG[key] = value
+  end
+end
+
+local function set_if_default(key, value, default_value)
+  if CONFIG[key] == nil or CONFIG[key] == default_value then
+    CONFIG[key] = value
+  end
+end
+
+for key, value in pairs(DEFAULT_CONFIG) do
+  set_default(key, value)
+end
 
 local log_line
 local format_bytes
@@ -129,19 +151,19 @@ local function apply_disk_pool(pool)
   local log_dir = log_mount.path .. "/xreactor_logs"
   local stage_dir = stage_mount.path .. "/xreactor_stage"
   local backup_dir = backup_mount.path .. "/xreactor_backup"
-  CONFIG.STORAGE_ROOT = root
-  CONFIG.LOG_DIR = log_dir
-  CONFIG.STAGE_DIR = stage_dir
-  CONFIG.BACKUP_DIR = backup_dir
-  CONFIG.LOG_PATH = log_dir .. "/installer_debug.log"
-  CONFIG.LOG_FALLBACK_PATH = log_dir .. "/installer_debug.log"
-  CONFIG.DISK_MOUNT_PATH = core_mount.path
-  CONFIG.TARGET_PATH = core_mount.path .. "/xreactor/installer/installer.lua"
-  CONFIG.TEMP_PATH = core_mount.path .. "/xreactor/.tmp/installer.new"
-  CONFIG.CORE_MOUNT_PATH = core_mount.path
-  CONFIG.STAGE_MOUNT_PATH = stage_mount.path
-  CONFIG.BACKUP_MOUNT_PATH = backup_mount.path
-  CONFIG.LOG_MOUNT_PATH = log_mount.path
+  set_default("STORAGE_ROOT", root)
+  set_default("LOG_DIR", log_dir)
+  set_default("STAGE_DIR", stage_dir)
+  set_default("BACKUP_DIR", backup_dir)
+  set_if_default("LOG_PATH", log_dir .. "/installer_debug.log", DEFAULT_CONFIG.LOG_PATH)
+  set_if_default("LOG_FALLBACK_PATH", log_dir .. "/installer_debug.log", DEFAULT_CONFIG.LOG_FALLBACK_PATH)
+  set_default("DISK_MOUNT_PATH", core_mount.path)
+  set_if_default("TARGET_PATH", core_mount.path .. "/xreactor/installer/installer.lua", DEFAULT_CONFIG.TARGET_PATH)
+  set_if_default("TEMP_PATH", core_mount.path .. "/xreactor/.tmp/installer.new", DEFAULT_CONFIG.TEMP_PATH)
+  set_default("CORE_MOUNT_PATH", core_mount.path)
+  set_default("STAGE_MOUNT_PATH", stage_mount.path)
+  set_default("BACKUP_MOUNT_PATH", backup_mount.path)
+  set_default("LOG_MOUNT_PATH", log_mount.path)
   return true
 end
 
@@ -150,15 +172,15 @@ local function configure_storage_root()
   if not pool then
     print("WARN: " .. tostring(err or "No writable disk mount found."))
     print('No disk mount detected, using local storage. Attach a disk so "/disk" appears for disk-first install.')
-    CONFIG.STORAGE_ROOT = "/xreactor"
-    CONFIG.LOG_DIR = "/xreactor_logs"
-    CONFIG.STAGE_DIR = "/xreactor_stage"
-    CONFIG.BACKUP_DIR = "/xreactor_backup"
-    CONFIG.LOG_PATH = "/xreactor_logs/installer_debug.log"
-    CONFIG.LOG_FALLBACK_PATH = "/xreactor_logs/installer_debug.log"
-    CONFIG.DISK_MOUNT_PATH = nil
-    CONFIG.TARGET_PATH = "/xreactor/installer/installer.lua"
-    CONFIG.TEMP_PATH = "/xreactor/.tmp/installer.new"
+    set_default("STORAGE_ROOT", "/xreactor")
+    set_default("LOG_DIR", "/xreactor_logs")
+    set_default("STAGE_DIR", "/xreactor_stage")
+    set_default("BACKUP_DIR", "/xreactor_backup")
+    set_if_default("LOG_PATH", "/xreactor_logs/installer_debug.log", DEFAULT_CONFIG.LOG_PATH)
+    set_if_default("LOG_FALLBACK_PATH", "/xreactor_logs/installer_debug.log", DEFAULT_CONFIG.LOG_FALLBACK_PATH)
+    set_default("DISK_MOUNT_PATH", nil)
+    set_if_default("TARGET_PATH", "/xreactor/installer/installer.lua", DEFAULT_CONFIG.TARGET_PATH)
+    set_if_default("TEMP_PATH", "/xreactor/.tmp/installer.new", DEFAULT_CONFIG.TEMP_PATH)
     disk_pool = nil
     return
   end
@@ -167,6 +189,14 @@ local function configure_storage_root()
 end
 
 configure_storage_root()
+
+local function ensure_storage_root()
+  if type(CONFIG.STORAGE_ROOT) ~= "string" or CONFIG.STORAGE_ROOT == "" then
+    error("Storage root invalid: " .. tostring(CONFIG.STORAGE_ROOT))
+  end
+end
+
+ensure_storage_root()
 
 local function select_mount_for_bytes(needed)
   local pool, _, mounts = build_disk_pool(needed)
