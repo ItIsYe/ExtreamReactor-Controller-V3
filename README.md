@@ -186,23 +186,21 @@ Wireless Modem (Control/Status)
 **Erstinstallation**
 **1-Command Install (RAW, empfohlen)**
 ```
-wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/installer.lua
+wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer
 ```
 1. Installer herunterladen und ausführen:
    ```
    wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
    installer
    ```
-   Alternativ (wenn der Bootstrapper schon lokal vorhanden ist):
-   ```
-   (Der Root-Installer `/installer.lua` ist der einzige Einstiegspunkt. Er aktualisiert bei Bedarf `/xreactor/installer/installer_core.lua` und startet anschließend den Core-Installer.)
+   Der Root-Installer `/installer` ist der einzige Einstiegspunkt. Er aktualisiert bei Bedarf `/xreactor/installer/installer_core.lua` und startet anschließend den Core-Installer.
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
    - Wenn Disk-Drives gemountet sind (`/disk`, `/disk2`, ...), erstellt der Installer einen **Storage-Pool**:
      - **Core/Runtime** → größter Datenträger (`<disk>/xreactor`)
      - **Staging** → größter Datenträger (`<disk>/xreactor_stage`)
      - **Backups** → zweitgrößter Datenträger (`<disk>/xreactor_backup`)
      - **Logs** → kleinster Datenträger (`<disk>/xreactor_logs`)
-   - Alle Disks werden automatisch vorbereitet (`xreactor`, `xreactor_stage`, `xreactor_backup`, `xreactor_logs`) und bei Bedarf mit Label `XREACTOR_DISK_<n>` versehen (nur wenn kein User-Label existiert).
+   - Alle Disks werden automatisch vorbereitet (`xreactor`, `xreactor_stage`, `xreactor_backup`, `xreactor_logs`).
    - **Wichtig:** Ein Disk hilft nur, wenn auf dem Computer ein lokaler Mount wie `/disk` vorhanden ist. Ohne lokalen Mount bricht der Installer ab und fordert eine lokale Disk an.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
@@ -225,7 +223,6 @@ Installer scans all locally mounted disks (`/disk`, `/disk2`, ...) and builds a 
 The bootstrap relocates itself to `/disk*/installer` so all runtime work happens on disk.
 Recommended for Advanced Computers with limited internal storage.
 If no disk mount is present, attach a disk drive directly to this computer and insert a disk so `/disk` appears.
-Disk labels are optional; the installer will label unlabeled disks as `XREACTOR_DISK_<n>` when possible.
 Installer downloads only the files needed for the selected role (plus shared/core files).
 
 **Troubleshooting: "Out of space"**
@@ -282,7 +279,7 @@ Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE und Recovery halten die Ins
 - **Checksum mismatch**: Zuerst Manifest aktualisieren und sicherstellen, dass der Installer auf das **beta**-Manifest zeigt (RAW-URL via `raw.githubusercontent.com`).
 
 **Installer starten (ohne Neu-Download)**
-- Root-Installer (`/installer.lua`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
+- Root-Installer (`/installer`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
 - SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
 
 **Logging & Debugging**

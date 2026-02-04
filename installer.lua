@@ -1,5 +1,4 @@
 -- CONFIG
--- NOTE: Disk labeling (try_label_disk) removed from bootstrap installers.
 local CONFIG = {
   CORE_PATH = "/xreactor/installer/installer_core.lua", -- Installed core installer path (updated at runtime).
   CORE_META_PATH = "/xreactor/installer/installer_core.meta", -- Stored core metadata snapshot (updated at runtime).
@@ -1328,7 +1327,6 @@ ensure_package_path()
 init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
 print_storage_summary()
-try_label_disk()
 if relocate_bootstrap_if_needed() then
   return
 end

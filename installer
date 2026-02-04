@@ -168,32 +168,6 @@ end
 
 configure_storage_root()
 
-local function label_disk_mount(mount_path, label)
-  if not mount_path or not label or not peripheral or not disk or not disk.getMountPath then
-    return
-  end
-  for _, name in ipairs(peripheral.getNames()) do
-    if peripheral.getType(name) == "drive" then
-      local ok, mount = pcall(disk.getMountPath, name)
-      if ok and mount == mount_path then
-        local ok_label, existing = pcall(disk.getLabel, name)
-        if ok_label and (not existing or existing == "") then
-          pcall(disk.setLabel, name, label)
-        end
-      end
-    end
-  end
-end
-
-local function try_label_disk()
-  if not disk_pool or not disk_pool.mounts then
-    return
-  end
-  for idx, entry in ipairs(disk_pool.mounts) do
-    label_disk_mount(entry.path, CONFIG.DISK_LABEL .. "_DISK_" .. tostring(idx))
-  end
-end
-
 local function select_mount_for_bytes(needed)
   local pool, _, mounts = build_disk_pool(needed)
   if not pool then
@@ -205,7 +179,6 @@ local function select_mount_for_bytes(needed)
   disk_pool = pool
   apply_disk_pool(pool)
   ensure_log_dirs()
-  try_label_disk()
   return true
 end
 
@@ -903,7 +876,6 @@ end
 init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
 print_storage_summary()
-try_label_disk()
 if relocate_bootstrap_if_needed() then
   return
 end
