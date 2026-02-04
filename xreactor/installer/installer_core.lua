@@ -1399,15 +1399,61 @@ function resolve_storage_role(path)
   return "core"
 end
 
-function pick_mount_for_role(role, min_bytes)
-  local mounts = list_disk_mounts()
-  if #mounts == 0 then
-    return nil, mounts
-  end
-  if role == "log" then
-    local smallest = mounts[#mounts]
-    if min_bytes and smallest.free < min_bytes then
-      return nil, mounts
+function try_label_disk(storage_root)
+  pcall(function()
+    if type(storage_root) ~= "string" then
+      return
+    end
+    local disk_root = storage_root:match("^(/disk%d*)")
+    if not disk_root then
+      return
+    end
+    if not peripheral then
+      return
+    end
+    local drives = {}
+    if peripheral.find then
+      local found = { peripheral.find("drive") }
+      for _, drive in ipairs(found) do
+        if drive then
+          table.insert(drives, drive)
+        end
+      end
+    end
+    if #drives == 0 and peripheral.getNames then
+      for _, name in ipairs(peripheral.getNames()) do
+        if peripheral.getType and peripheral.getType(name) == "drive" then
+          local drive = peripheral.wrap(name)
+          if drive then
+            table.insert(drives, drive)
+          end
+        end
+      end
+    end
+    if #drives == 0 then
+      return
+    end
+    for _, drive in ipairs(drives) do
+      if drive
+        and drive.isDiskPresent
+        and drive.isDiskPresent()
+        and drive.getMountPath
+        and drive.setDiskLabel then
+        local mount = drive.getMountPath()
+        if mount == disk_root then
+          drive.setDiskLabel("XReactor")
+          return
+        end
+      end
+    end
+  end)
+end
+
+local function normalize_node_id(value)
+  if type(value) == "string" then
+    local trimmed = trim(value)
+    if trimmed ~= "" then
+      return trimmed
     end
     return smallest, mounts
   end
