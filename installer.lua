@@ -945,6 +945,7 @@ local function ensure_installer_files(release)
   if type(REQUIRED_FILES) ~= "table" then
     REQUIRED_FILES = {}
   end
+  assert(type(write_file) == "function", "write_file missing")
   for _, filename in ipairs(REQUIRED_FILES) do
     local path = installer_dir .. "/" .. filename
     local needs_download = (not fs.exists(path)) or fs.getSize(path) == 0
@@ -1176,6 +1177,17 @@ local function read_file(path)
   file.close()
   return content
 end
+
+local function expose_helper(name, fn)
+  if type(_G[name]) ~= "function" then
+    _G[name] = fn
+  end
+  assert(type(_G[name]) == "function", name .. " missing")
+end
+
+expose_helper("ensure_dir", ensure_dir)
+expose_helper("write_file", write_file)
+expose_helper("read_file", read_file)
 
 local function ensure_package_path()
   if not package or not package.path then
