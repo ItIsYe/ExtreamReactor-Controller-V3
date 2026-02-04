@@ -1,12 +1,12 @@
 -- Manifest for the XReactor installer (hashes and required files).
 return {
-  manifest_version = 2,
-  source_ref = "main",
+  manifest_version = 4,
+  source_ref = "beta",
   hash_algo = "crc32",
-  installer_min_version = "1.3",
+  installer_min_version = "1.4",
   installer_path = "xreactor/installer/installer_core.lua",
-  installer_hash = "9bbbf388",
-  installer_size_bytes = 73228,
+  installer_hash = "12e62b7b",
+  installer_size_bytes = 74165,
   files = {
     { path = "xreactor/core/bootstrap.lua", size_bytes = 8346, hash = "9a3af341" },
     { path = "xreactor/core/network.lua", size_bytes = 3241, hash = "870f6483" },
