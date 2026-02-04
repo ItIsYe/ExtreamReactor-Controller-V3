@@ -1,5 +1,6 @@
 -- CONFIG
-local CONFIG = _G.CONFIG or {
+-- NOTE: Disk labeling (try_label_disk) removed from bootstrap installers.
+local CONFIG = {
   CORE_PATH = "/xreactor/installer/installer_core.lua", -- Installed core installer path.
   CORE_META_PATH = "/xreactor/installer/installer_core.meta", -- Stored core metadata snapshot.
   RELEASE_PATH = "xreactor/installer/release.lua", -- Release metadata path.
