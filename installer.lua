@@ -55,6 +55,49 @@ local REQUIRED_FILES = {
   "role_files.lua"
 }
 
+local function collect_storage_candidates()
+  local candidates = { "/" }
+  for i = 1, 9 do
+    local path = (i == 1) and "/disk" or ("/disk" .. i)
+    if fs.exists(path) then
+      table.insert(candidates, path)
+    end
+  end
+  return candidates
+end
+
+local function select_best_storage_root()
+  local candidates = collect_storage_candidates()
+  local best_root = "/"
+  local best_free = fs.getFreeSpace(best_root) or 0
+  for _, path in ipairs(candidates) do
+    local free = fs.getFreeSpace(path) or 0
+    if free > best_free then
+      best_root = path
+      best_free = free
+    end
+  end
+  if fs.exists(best_root) then
+    return best_root, best_free
+  end
+  return nil, nil
+end
+
+local function apply_storage_root(root)
+  if not root or not fs.exists(root) then
+    return false
+  end
+  CONFIG.CORE_PATH = root .. "/xreactor/installer/installer_core.lua"
+  CONFIG.CORE_META_PATH = root .. "/xreactor/installer/installer_core.meta"
+  CONFIG.LOG_PATH = root .. "/xreactor_logs/installer_bootstrap.log"
+  return true
+end
+
+do
+  local best_root = select_best_storage_root()
+  apply_storage_root(best_root)
+end
+
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
     pcall(fs.makeDir, path)

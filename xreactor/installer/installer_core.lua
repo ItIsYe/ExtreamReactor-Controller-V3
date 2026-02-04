@@ -86,13 +86,81 @@ local CONFIG = {
   }
 }
 
-local C = CONFIG
+local function collect_storage_candidates()
+  local candidates = { "/" }
+  for i = 1, 9 do
+    local path = (i == 1) and "/disk" or ("/disk" .. i)
+    if fs.exists(path) then
+      table.insert(candidates, path)
+    end
+  end
+  return candidates
+end
 
--- NOTE: CC:Tweaked limits each chunk to ~200 local variables. To stay under the
--- limit, many low-level helper functions are defined as globals in this file.
+local function select_best_storage_root()
+  local candidates = collect_storage_candidates()
+  local best_root = "/"
+  local best_free = fs.getFreeSpace(best_root) or 0
+  for _, path in ipairs(candidates) do
+    local free = fs.getFreeSpace(path) or 0
+    if free > best_free then
+      best_root = path
+      best_free = free
+    end
+  end
+  if fs.exists(best_root) then
+    return best_root, best_free
+  end
+  return nil, nil
+end
 
+local function apply_storage_root(root)
+  if not root or not fs.exists(root) then
+    return false
+  end
+  CONFIG.BASE_DIR = root .. "/xreactor"
+  CONFIG.BACKUP_BASE = root .. "/xreactor_backup"
+  CONFIG.UPDATE_STAGING_BASE = root .. "/xreactor_stage"
+  CONFIG.LOG_PATH = root .. "/xreactor_logs/installer.log"
+  CONFIG.MANIFEST_LOCAL = CONFIG.BASE_DIR .. "/.manifest"
+  CONFIG.MANIFEST_CACHE = CONFIG.BASE_DIR .. "/.cache/manifest.lua"
+  CONFIG.MANIFEST_CACHE_LEGACY = CONFIG.BASE_DIR .. "/.manifest_cache"
+  CONFIG.BASE_CACHE_PATH = CONFIG.BASE_DIR .. "/.cache/source.lua"
+  CONFIG.NODE_ID_PATH = CONFIG.BASE_DIR .. "/config/node_id.txt"
+  return true
+end
 
--- Download base tracking (default branch vs pinned commit).
+do
+  local best_root = select_best_storage_root()
+  apply_storage_root(best_root)
+end
+
+local BASE_DIR = CONFIG.BASE_DIR
+local REPO_OWNER = CONFIG.REPO_OWNER
+local REPO_NAME = CONFIG.REPO_NAME
+local REPO_BASE_URL_MAIN = CONFIG.REPO_BASE_URL
+local RELEASE_REMOTE = CONFIG.RELEASE_REMOTE
+local MANIFEST_REMOTE = CONFIG.MANIFEST_REMOTE
+local MANIFEST_LOCAL = CONFIG.MANIFEST_LOCAL
+local MANIFEST_CACHE = CONFIG.MANIFEST_CACHE
+local MANIFEST_CACHE_LEGACY = CONFIG.MANIFEST_CACHE_LEGACY
+local BACKUP_BASE = CONFIG.BACKUP_BASE
+local NODE_ID_PATH = CONFIG.NODE_ID_PATH
+local UPDATE_STAGING_BASE = CONFIG.UPDATE_STAGING_BASE
+local INSTALLER_VERSION = CONFIG.INSTALLER_VERSION
+local INSTALLER_MIN_BYTES = CONFIG.INSTALLER_MIN_BYTES
+local INSTALLER_SANITY_MARKER = CONFIG.INSTALLER_SANITY_MARKER
+local MANIFEST_MIN_BYTES = CONFIG.MANIFEST_MIN_BYTES
+local MANIFEST_SANITY_MARKER = CONFIG.MANIFEST_SANITY_MARKER
+local RELEASE_MIN_BYTES = CONFIG.RELEASE_MIN_BYTES
+local RELEASE_SANITY_MARKER = CONFIG.RELEASE_SANITY_MARKER
+local DOWNLOAD_ATTEMPTS = CONFIG.DOWNLOAD_ATTEMPTS
+local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
+local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
+local REQUIRED_CORE_FILES = CONFIG.REQUIRED_CORE_FILES
+local FILE_MIGRATIONS = CONFIG.FILE_MIGRATIONS
+
+-- Download base tracking (main vs pinned commit).
 local current_base_url = nil
 local current_base_source = CONFIG.DEFAULT_BRANCH
 local current_base_sha = nil
