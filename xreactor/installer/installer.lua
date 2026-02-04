@@ -1,7 +1,7 @@
 -- CONFIG
-local CONFIG = {
-  CORE_PATH = "/xreactor/installer/installer_core.lua", -- Installed core installer path (updated at runtime).
-  CORE_META_PATH = "/xreactor/installer/installer_core.meta", -- Stored core metadata snapshot (updated at runtime).
+local CONFIG = _G.CONFIG or {
+  CORE_PATH = "/xreactor/installer/installer_core.lua", -- Installed core installer path.
+  CORE_META_PATH = "/xreactor/installer/installer_core.meta", -- Stored core metadata snapshot.
   RELEASE_PATH = "xreactor/installer/release.lua", -- Release metadata path.
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
@@ -30,30 +30,65 @@ local CONFIG = {
   DISK_LOG_DIR_NAME = "xreactor_logs", -- Legacy disk log directory name.
   LOG_MAX_BYTES = 200000, -- Max log size before rotation.
   LOG_BACKUP_SUFFIX = ".1", -- Suffix for rotated log.
-  LOG_FLUSH_LINES = 6, -- Buffered log lines before flushing.
-  LOG_FLUSH_INTERVAL = 1.5, -- Seconds between log flushes.
-  LOG_SAMPLE_BYTES = 200, -- Bytes to capture as response signature.
-  DISK_SPACE_OVERHEAD_BYTES = 2048, -- Reserved extra bytes for write operations.
-  DISK_SPACE_MIN_BUFFER = 4096, -- Minimum free bytes to keep after writes.
-  DISK_LABEL = "XREACTOR" -- Disk label to set when using a mounted disk.
+  STORAGE_ROOT = "/xreactor", -- Storage root path.
+  LOG_DIR = "/xreactor_logs", -- Log directory.
+  STAGE_DIR = "/xreactor_stage", -- Staging directory.
+  BACKUP_DIR = "/xreactor_backup" -- Backup directory.
 }
 
-local function get_installer_root()
-  local disk_root = "/disk"
-  local disk_installer = disk_root .. "/xreactor/installer"
-  if fs.exists(disk_installer) then
-    return disk_root
-  end
-  return ""
+_G.CONFIG = CONFIG
+
+if type(CONFIG.STORAGE_ROOT) ~= "string" or CONFIG.STORAGE_ROOT == "" then
+  CONFIG.STORAGE_ROOT = "/xreactor"
+end
+if type(CONFIG.LOG_DIR) ~= "string" or CONFIG.LOG_DIR == "" then
+  CONFIG.LOG_DIR = "/xreactor_logs"
+end
+if type(CONFIG.STAGE_DIR) ~= "string" or CONFIG.STAGE_DIR == "" then
+  CONFIG.STAGE_DIR = "/xreactor_stage"
+end
+if type(CONFIG.BACKUP_DIR) ~= "string" or CONFIG.BACKUP_DIR == "" then
+  CONFIG.BACKUP_DIR = "/xreactor_backup"
+end
+CONFIG.LOG_PATH = string.format("%s/installer_bootstrap.log", CONFIG.LOG_DIR)
+
+local function try_label_disk(storage_root)
+  pcall(function()
+    if type(storage_root) ~= "string" or storage_root == "" then
+      return
+    end
+    if not disk or not disk.getMountPath or not disk.setLabel then
+      return
+    end
+    for _, name in ipairs(peripheral.getNames()) do
+      if peripheral.getType(name) == "drive" then
+        local mount = disk.getMountPath(name)
+        if mount and ("/" .. mount) == storage_root then
+          local label = disk.getLabel(name)
+          if not label or label == "" then
+            disk.setLabel(name, "xreactor")
+          end
+          return
+        end
+      end
+    end
+  end)
 end
 
-local REQUIRED_FILES = {
-  "installer.lua",
-  "installer_core.lua",
-  "manifest.lua",
-  "release.lua",
-  "role_files.lua"
-}
+local function print_storage_summary()
+  if _G.__XR_STORAGE_SUMMARY_PRINTED then
+    return
+  end
+  _G.__XR_STORAGE_SUMMARY_PRINTED = true
+  print("Storage Summary:")
+  print("Storage root: " .. tostring(CONFIG.STORAGE_ROOT))
+  print("Stage root: " .. tostring(CONFIG.STAGE_DIR))
+  print("Backup root: " .. tostring(CONFIG.BACKUP_DIR))
+  print("Log root: " .. tostring(CONFIG.LOG_DIR))
+end
+
+try_label_disk(CONFIG.STORAGE_ROOT)
+print_storage_summary()
 
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
