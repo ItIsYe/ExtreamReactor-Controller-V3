@@ -2,6 +2,7 @@ local INSTALLER_CORE_VERSION = "1.3"
 
 -- CONFIG
 local CONFIG = {
+  STORAGE_ROOT = nil, -- Optional override for storage root.
   BASE_DIR = "/xreactor", -- Base install directory.
   REPO_OWNER = "ItIsYe", -- GitHub repository owner.
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
@@ -63,6 +64,9 @@ local CONFIG = {
   }
 }
 
+local STORAGE = { root = nil, initialized = false }
+local storage_root = nil
+
 local BASE_DIR = CONFIG.BASE_DIR
 local REPO_OWNER = CONFIG.REPO_OWNER
 local REPO_NAME = CONFIG.REPO_NAME
@@ -87,6 +91,29 @@ local DOWNLOAD_BACKOFF = CONFIG.DOWNLOAD_BACKOFF
 local DOWNLOAD_TIMEOUT = CONFIG.DOWNLOAD_TIMEOUT
 local REQUIRED_CORE_FILES = CONFIG.REQUIRED_CORE_FILES
 local FILE_MIGRATIONS = CONFIG.FILE_MIGRATIONS
+
+local function detect_storage_root()
+  if type(CONFIG.STORAGE_ROOT) == "string" and CONFIG.STORAGE_ROOT ~= "" then
+    return CONFIG.STORAGE_ROOT
+  end
+  return "/"
+end
+
+local function init_storage_root()
+  if STORAGE.initialized then
+    return STORAGE.root
+  end
+  local root = detect_storage_root()
+  if type(root) ~= "string" or root == "" then
+    root = "/"
+  end
+  STORAGE.root = root
+  STORAGE.initialized = true
+  storage_root = root
+  CONFIG.STORAGE_ROOT = root
+  return root
+end
+
 
 -- Download base tracking (main vs pinned commit).
 local current_base_url = nil
@@ -248,6 +275,15 @@ local function log(level, message)
   if active_logger and active_logger.log then
     active_logger.log(CONFIG.LOG_PREFIX, message, level)
   end
+end
+
+local function ensure_storage_root()
+  if storage_root == nil then
+    print("Installer error: storage root is nil. Aborting.")
+    log("ERROR", "Storage root is nil; aborting installer.")
+    return false
+  end
+  return true
 end
 
 local function trim(text)
@@ -2293,6 +2329,10 @@ bootstrap_self_check()
 local function main()
   if not http then
     error("HTTP API is disabled. Enable it in ComputerCraft config to run the installer.")
+  end
+  init_storage_root()
+  if not ensure_storage_root() then
+    return
   end
   print("=== XReactor Installer ===")
   log("INFO", "Installer started")
