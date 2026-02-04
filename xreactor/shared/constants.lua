@@ -19,6 +19,8 @@ constants.message_types = {
   COMMAND = "COMMAND",
   ALERT = "ALERT",
   ACK = "ACK",
+  ACK_DELIVERED = "ACK_DELIVERED",
+  ACK_APPLIED = "ACK_APPLIED",
   ERROR = "ERROR"
 }
 
