@@ -1,8 +1,8 @@
 -- CONFIG
-local CONFIG = _G.CONFIG
-if not CONFIG then
-  error("CONFIG not initialized; run installer bootstrap first.")
+if not _G.CONFIG then
+  _G.CONFIG = {}
 end
+local CONFIG = _G.CONFIG
 
 local DEFAULT_CONFIG = {
   CORE_PATH = "/xreactor/installer/installer_core.lua", -- Installed core installer path (updated at runtime).
@@ -112,11 +112,20 @@ local function resolve_storage_root()
   if not CONFIG.LOG_DIR then
     CONFIG.LOG_DIR = selected_root .. "/xreactor_logs"
   end
+  if not CONFIG.LOG_ROOT then
+    CONFIG.LOG_ROOT = CONFIG.LOG_DIR
+  end
   if not CONFIG.STAGE_DIR then
     CONFIG.STAGE_DIR = selected_root .. "/xreactor_stage"
   end
+  if not CONFIG.STAGE_ROOT then
+    CONFIG.STAGE_ROOT = CONFIG.STAGE_DIR
+  end
   if not CONFIG.BACKUP_DIR then
     CONFIG.BACKUP_DIR = selected_root .. "/xreactor_backup"
+  end
+  if not CONFIG.BACKUP_ROOT then
+    CONFIG.BACKUP_ROOT = CONFIG.BACKUP_DIR
   end
   if CONFIG.LOG_PATH == nil or CONFIG.LOG_PATH == DEFAULT_CONFIG.LOG_PATH then
     CONFIG.LOG_PATH = CONFIG.LOG_DIR .. "/installer_bootstrap.log"
