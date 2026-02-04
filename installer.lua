@@ -1327,8 +1327,10 @@ ensure_package_path()
 init_log_file()
 log_line("INFO", "installer", "Bootstrap start")
 print_storage_summary()
-if relocate_bootstrap_if_needed() then
-  return
+if type(relocate_bootstrap_if_needed) == "function" then
+  if relocate_bootstrap_if_needed() then
+    return
+  end
 end
 
 local release, release_meta = load_release()
