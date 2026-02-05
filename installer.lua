@@ -200,6 +200,20 @@ end
 
 ensure_storage_root()
 
+local function select_mount_for_bytes(bytes)
+  local needed = tonumber(bytes or 0) or 0
+  local mounts = list_disk_mounts()
+  for _, entry in ipairs(mounts) do
+    if (tonumber(entry.free) or 0) >= needed then
+      if apply_storage_root(entry.path) then
+        _G.__xreactor_storage_root = entry.path
+      end
+      return true
+    end
+  end
+  return false
+end
+
 local function ensure_dir(path)
   if path and path ~= "" and not fs.exists(path) then
     pcall(fs.makeDir, path)
