@@ -662,6 +662,15 @@ function internal_log(prefix, message, level)
   log_buffer = {}
 end
 
+local function ensure_required_dirs()
+  fs.makeDir(C.BASE_DIR)
+  fs.makeDir(C.LOCAL_LOG_DIR)
+  fs.makeDir(C.LOCAL_STAGING_BASE)
+  fs.makeDir(C.LOCAL_BACKUP_BASE)
+  fs.makeDir(C.UPDATE_STAGING_BASE)
+  fs.makeDir(C.BACKUP_BASE)
+end
+
 function init_internal_logger()
   internal_log_enabled = resolve_log_enabled()
   log_last_flush = os.clock()
