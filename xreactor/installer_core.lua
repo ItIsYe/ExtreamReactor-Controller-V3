@@ -261,6 +261,7 @@ local storage_state = {
   log_primary = CONFIG.LOG_PATH,
   log_fallback = CONFIG.LOG_PATH
 }
+local last_mount_diagnostics = {}
 
 local function normalize_root(path)
   if not path or path == "" then
@@ -302,6 +303,7 @@ end
 
 function list_disk_mounts()
   local mounts = {}
+  local diagnostics = {}
   local ok, entries = pcall(fs.list, "/")
   local candidates = {}
   if ok and type(entries) == "table" then
@@ -312,28 +314,46 @@ function list_disk_mounts()
     end
   end
   for _, path in ipairs(candidates) do
-    if fs.exists(path) and fs.isDir(path) then
+    local record = { path = path, free = "n/a", reason = "" }
+    if not fs.exists(path) or not fs.isDir(path) then
+      record.reason = "missing or not a directory"
+      table.insert(diagnostics, record)
+    else
       local ok_free, free = pcall(fs.getFreeSpace, path)
       local ok_total, total = pcall(fs.getCapacity, path)
-      if ok_free and free then
-        local test_path = path .. "/.xreactor_write_test"
-        local ok_write = pcall(function()
-          local file = fs.open(test_path, "w")
-          if not file then
-            error("open failed", 0)
+      if not ok_free or type(free) ~= "number" then
+        record.reason = "free-space query failed"
+        table.insert(diagnostics, record)
+      else
+        record.free = free
+        local target_dir = path .. "/xreactor"
+        if not pcall(fs.makeDir, target_dir) then
+          record.reason = "mkdir failed"
+          table.insert(diagnostics, record)
+        else
+          local test_path = target_dir .. "/.xreactor_write_test"
+          local ok_write = pcall(function()
+            local file = fs.open(test_path, "w")
+            if not file then
+              error("open failed", 0)
+            end
+            file.write("ok")
+            file.close()
+            safe_delete(test_path, "disk write test")
+          end)
+          if ok_write then
+            local used = (ok_total and total) and (total - free) or nil
+            table.insert(mounts, { path = path, free = free, total = ok_total and total or nil, used = used })
+          else
+            record.reason = "write-test failed"
+            table.insert(diagnostics, record)
           end
-          file.write("ok")
-          file.close()
-          safe_delete(test_path, "disk write test")
-        end)
-        if ok_write then
-          local used = (ok_total and total) and (total - free) or nil
-          table.insert(mounts, { path = path, free = free, total = ok_total and total or nil, used = used })
         end
       end
     end
   end
   table.sort(mounts, function(a, b) return a.free > b.free end)
+  last_mount_diagnostics = diagnostics
   return mounts
 end
 
@@ -461,6 +481,12 @@ function configure_storage_paths()
   local pool, err = build_disk_pool()
   if not pool then
     print("WARN: " .. tostring(err or "No writable disk mount found."))
+    if last_mount_diagnostics and #last_mount_diagnostics > 0 then
+      print("Disk mount diagnostics:")
+      for _, entry in ipairs(last_mount_diagnostics) do
+        print(string.format("- %s free=%s reason=%s", tostring(entry.path), tostring(entry.free), tostring(entry.reason)))
+      end
+    end
     print('No disk mount detected, using local storage. Attach a disk so "/disk" appears for disk-first install.')
     storage_state.use_disk = false
     storage_state.mounts = {}
