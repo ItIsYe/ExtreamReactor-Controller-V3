@@ -17,7 +17,7 @@ wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/
 **HTTP muss aktiviert sein** (`enableAPI_http=true` in der CC:Tweaked-Config).
 **Alternative (direkter Bootstrap):**
 ```
-wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/installer.lua
+wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer
 ```
 Der Installer arbeitet **disk-first** und installiert die Runtime immer auf `/disk/xreactor`.
 
@@ -193,7 +193,7 @@ wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/b
    wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
    installer
    ```
-   Der Root-Installer `/installer` ist der einzige Einstiegspunkt. Er aktualisiert bei Bedarf `/xreactor/installer/installer_core.lua` und startet anschließend den Core-Installer.
+   Der Root-Installer `/installer` ist der einzige Einstiegspunkt. Er aktualisiert bei Bedarf `/xreactor/installer_core.lua` und startet anschließend den Core-Installer.
 2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
    - Wenn Disk-Drives gemountet sind (`/disk`, `/disk2`, ...), erstellt der Installer einen **Storage-Pool**:
      - **Core/Runtime** → größter Datenträger (`<disk>/xreactor`)
@@ -279,7 +279,7 @@ Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE und Recovery halten die Ins
 - **Checksum mismatch**: Zuerst Manifest aktualisieren und sicherstellen, dass der Installer auf das **beta**-Manifest zeigt (RAW-URL via `raw.githubusercontent.com`).
 
 **Installer starten (ohne Neu-Download)**
-- Root-Installer (`/installer`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer/installer_core.lua`.
+- Root-Installer (`/installer`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer_core.lua`.
 - SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
 
 **Logging & Debugging**
@@ -354,7 +354,7 @@ return {
 - **adapters/**: Einheitliche Adapter für Monitor, Energy Storage, Induction Matrix, Reactor, Turbine.
 - **shared/health_codes.lua**: Einheitliche Reason-Codes für Health-Status.
 - **shared/telemetry_schema.lua**: Dokumentiertes Telemetry-Schema (Schema-Version + Rollenfelder).
-- **shared/build_info.lua**: Build-Metadaten (Commit/Version aus `installer/release.lua`).
+- **shared/build_info.lua**: Build-Metadaten (Commit/Version aus `xreactor/release.lua`).
 
 ## ENERGY Node Monitor UI
 - Der ENERGY-Node nutzt den **direkt angeschlossenen Monitor** für eine lokale Anzeige.
@@ -431,9 +431,9 @@ return {
 - **Installer-Details**: Der Fehlerdialog zeigt die tatsächlich verwendeten RAW-URLs (Tried) und den letzten Fehler (z. B. Timeout, HTTP-Status, HTML-Response).
 - **HTTP API**: Wenn der Installer meldet, dass HTTP nicht verfügbar ist, aktiviere es in der CC:Tweaked-Konfiguration.
 - **HTML-Response**: Weist auf falsche URL (z. B. GitHub-Blob) oder Proxy hin – der Installer erwartet RAW-Links.
-- **404 bei Dateien**: Wenn ein gepinnter Commit nicht mehr passt, fällt der Installer automatisch auf `main` zurück, statt weiter 404s zu produzieren.
+- **404 bei Dateien**: Wenn ein gepinnter Commit nicht mehr passt, fällt der Installer automatisch auf den konfigurierten Default-Branch (`beta`) zurück, statt weiter 404s zu produzieren.
 - **HTML statt Lua**: Installer bricht ab (meist falscher Link oder GitHub-Rate-Limit).
-- **Installer core download failed**: Prüfe HTTP-API/Timeouts und ob `xreactor/installer/release.lua` (Hash/Size) zum tatsächlichen `installer_core.lua` passt.
+- **Installer core download failed**: Prüfe HTTP-API/Timeouts und ob `xreactor/release.lua` (Hash/Size) zum tatsächlichen `installer_core.lua` passt.
 - **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien) und normalisiert auf String.
 - **SAFE UPDATE Abbruch**: Bei Download-Problemen kann der Nutzer abbrechen; das System bleibt unverändert.
 - **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
