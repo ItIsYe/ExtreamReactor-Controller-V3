@@ -72,6 +72,65 @@ local function apply_storage_paths(mount_path)
   CONFIG.UPDATE_MARKER_PATH = mount_path .. "/xreactor/.update_in_progress"
 end
 
+local function resolve_storage_root(mount_path)
+  if mount_path and mount_path ~= "" then
+    return mount_path .. "/xreactor"
+  end
+  return "/xreactor"
+end
+
+local function ensure_directory(path)
+  if fs.exists(path) then
+    return fs.isDir(path)
+  end
+  return pcall(fs.makeDir, path)
+end
+
+local function download_installer_core(storage_root)
+  local core_target_path = storage_root .. "/installer_core.lua"
+  if fs.exists(core_target_path) then
+    return true
+  end
+
+  if not ensure_directory(storage_root) then
+    return false, "Unable to create storage root: " .. tostring(storage_root)
+  end
+
+  if not http or type(http.get) ~= "function" then
+    return false, "HTTP API unavailable"
+  end
+
+  local core_url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer_core.lua"
+  local ok_get, response = pcall(http.get, core_url)
+  if not ok_get or not response then
+    return false, "Failed to download installer core"
+  end
+
+  local ok_read, body = pcall(response.readAll)
+  pcall(response.close)
+  if not ok_read or type(body) ~= "string" or body == "" then
+    return false, "Downloaded installer core is empty"
+  end
+
+  local ok_write, write_err = pcall(function()
+    local file = fs.open(core_target_path, "w")
+    if not file then
+      error("open failed", 0)
+    end
+    file.write(body)
+    file.close()
+  end)
+  if not ok_write then
+    return false, "Failed to write installer core: " .. tostring(write_err)
+  end
+
+  if not fs.exists(core_target_path) then
+    return false, "Installer core missing after download"
+  end
+
+  return true
+end
+
 local function load_core(mount_path)
   local core_candidates = {
     (mount_path and (mount_path .. "/xreactor/installer_core.lua") or nil),
@@ -92,6 +151,12 @@ end
 local function main()
   local mount_path = choose_mount()
   apply_storage_paths(mount_path)
+
+  local storage_root = resolve_storage_root(mount_path)
+  local ok_download, download_err = download_installer_core(storage_root)
+  if not ok_download then
+    error("Installer core download failed: " .. tostring(download_err))
+  end
 
   local loader = load_core(mount_path)
   if not loader then
