@@ -177,24 +177,24 @@ local function main()
   apply_storage_paths(mount_path)
 
   local storage_root = resolve_storage_root(mount_path)
-  local core_target_path = storage_root .. "/installer_core.lua"
-  if fs.exists(core_target_path) then
-    return shell.run(core_target_path)
+  local core_path = storage_root .. "/installer_core.lua"
+
+  if fs.exists(core_path) then
+    shell.run(core_path)
+    return
   end
 
-  if not fs.exists(core_target_path) then
-    if not ensure_directory(storage_root) then
-      error("Unable to create storage root: " .. tostring(storage_root))
-    end
-
-    local ok_download, download_err = download_installer_core(storage_root)
-    if not ok_download then
-      error("Installer core download failed: " .. tostring(download_err))
-    end
+  if not ensure_directory(storage_root) then
+    error("Unable to create storage root: " .. tostring(storage_root))
   end
 
-  if fs.exists(core_target_path) then
-    return shell.run(core_target_path)
+  local ok_download, download_err = download_installer_core(storage_root)
+  if not ok_download then
+    error("Installer core download failed: " .. tostring(download_err))
+  end
+
+  if fs.exists(core_path) then
+    return shell.run(core_path)
   end
 
   local fallback_loader = load_core(mount_path)
