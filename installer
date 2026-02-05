@@ -54,9 +54,22 @@ local log_line
 local format_bytes
 local disk_pool
 
+local function list_root_disk_candidates()
+  local candidates = {}
+  local ok, entries = pcall(fs.list, "/")
+  if ok and type(entries) == "table" then
+    for _, entry in ipairs(entries) do
+      if type(entry) == "string" and entry:match("^disk") then
+        table.insert(candidates, "/" .. entry)
+      end
+    end
+  end
+  return candidates
+end
+
 local function list_disk_mounts()
   local mounts = {}
-  local candidates = { "/disk", "/disk2", "/disk3" }
+  local candidates = list_root_disk_candidates()
   for _, path in ipairs(candidates) do
     if fs.exists(path) and fs.isDir(path) then
       local ok_free, free = pcall(fs.getFreeSpace, path)
@@ -183,9 +196,13 @@ local function configure_storage_root()
     set_default("BACKUP_ROOT", "/xreactor_backup")
     set_if_default("LOG_PATH", "/xreactor_logs/installer_debug.log", DEFAULT_CONFIG.LOG_PATH)
     set_if_default("LOG_FALLBACK_PATH", "/xreactor_logs/installer_debug.log", DEFAULT_CONFIG.LOG_FALLBACK_PATH)
-    set_default("DISK_MOUNT_PATH", nil)
+    set_default("DISK_MOUNT_PATH", "/")
     set_if_default("TARGET_PATH", "/xreactor/installer/installer.lua", DEFAULT_CONFIG.TARGET_PATH)
     set_if_default("TEMP_PATH", "/xreactor/.tmp/installer.new", DEFAULT_CONFIG.TEMP_PATH)
+    set_default("CORE_MOUNT_PATH", "/")
+    set_default("STAGE_MOUNT_PATH", "/")
+    set_default("BACKUP_MOUNT_PATH", "/")
+    set_default("LOG_MOUNT_PATH", "/")
     disk_pool = nil
     return
   end
