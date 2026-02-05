@@ -3,104 +3,25 @@ if not _G.CONFIG then
 end
 local CONFIG = _G.CONFIG
 
-local function list_root_disk_candidates()
-  local candidates = {}
-  local ok, entries = pcall(fs.list, "/")
-  if ok and type(entries) == "table" then
-    for _, entry in ipairs(entries) do
-      if type(entry) == "string" and entry:match("^disk") then
-        table.insert(candidates, "/" .. entry)
-      end
-    end
-  end
-  return candidates
-end
+local STORAGE_ROOT = "/xreactor"
 
-local function list_disk_mounts()
-  local mounts = {}
-  local diagnostics = {}
-  for _, path in ipairs(list_root_disk_candidates()) do
-    local record = { path = path, free = "n/a", reason = "" }
-    if not fs.exists(path) or not fs.isDir(path) then
-      record.reason = "missing or not a directory"
-      table.insert(diagnostics, record)
-    else
-      local ok_free, free = pcall(fs.getFreeSpace, path)
-      if not ok_free or type(free) ~= "number" then
-        record.reason = "free-space query failed"
-        table.insert(diagnostics, record)
-      else
-        record.free = free
-        local target_dir = path .. "/xreactor"
-        if not pcall(fs.makeDir, target_dir) then
-          record.reason = "mkdir failed"
-          table.insert(diagnostics, record)
-        else
-          local test_path = target_dir .. "/.xreactor_write_test"
-          local ok_write = pcall(function()
-            local file = fs.open(test_path, "w")
-            if not file then
-              error("open failed", 0)
-            end
-            file.write("ok")
-            file.close()
-            pcall(fs.delete, test_path)
-          end)
-          if ok_write then
-            table.insert(mounts, { path = path, free = free })
-          else
-            record.reason = "write-test failed"
-            table.insert(diagnostics, record)
-          end
-        end
-      end
-    end
-  end
-  table.sort(mounts, function(a, b) return a.free > b.free end)
-  return mounts, diagnostics
-end
-
-local function choose_mount()
-  local mounts, diagnostics = list_disk_mounts()
-  if mounts[1] then
-    return mounts[1].path
-  end
-  if diagnostics and #diagnostics > 0 then
-    print("No usable disk mount found; mount diagnostics:")
-    for _, entry in ipairs(diagnostics) do
-      print(string.format("- %s free=%s reason=%s", tostring(entry.path), tostring(entry.free), tostring(entry.reason)))
-    end
-  end
-  return nil
-end
-
-local function apply_storage_paths(mount_path)
-  if not mount_path or mount_path == "" then
-    return
-  end
-  CONFIG.STORAGE_ROOT = mount_path
-  CONFIG.BASE_DIR = mount_path .. "/xreactor"
-  CONFIG.BACKUP_BASE = mount_path .. "/xreactor_backup"
-  CONFIG.UPDATE_STAGING_BASE = mount_path .. "/xreactor_stage"
-  CONFIG.LOCAL_STAGING_BASE = mount_path .. "/xreactor_stage"
-  CONFIG.LOCAL_BACKUP_BASE = mount_path .. "/xreactor_backup"
-  CONFIG.LOCAL_LOG_DIR = mount_path .. "/xreactor_logs"
-  CONFIG.LOG_DIR = mount_path .. "/xreactor_logs"
-  CONFIG.LOG_ROOT = mount_path .. "/xreactor_logs"
-  CONFIG.LOG_PATH = mount_path .. "/xreactor_logs/installer_core.log"
-  CONFIG.MANIFEST_LOCAL = mount_path .. "/xreactor/.manifest"
-  CONFIG.MANIFEST_CACHE = mount_path .. "/xreactor/.cache/manifest.lua"
-  CONFIG.MANIFEST_CACHE_LEGACY = mount_path .. "/xreactor/.manifest_cache"
-  CONFIG.NODE_ID_PATH = mount_path .. "/xreactor/config/node_id.txt"
-  CONFIG.ROLE_PATH = mount_path .. "/xreactor/config/role.lua"
-  CONFIG.UPDATE_MARKER_PATH = mount_path .. "/xreactor/.update_in_progress"
-end
-
-local function resolve_storage_root(mount_path)
-  if mount_path and mount_path ~= "" then
-    return mount_path .. "/xreactor"
-  end
-  return "/xreactor"
+local function apply_storage_paths()
+  CONFIG.STORAGE_ROOT = STORAGE_ROOT
+  CONFIG.BASE_DIR = "/xreactor"
+  CONFIG.BACKUP_BASE = "/xreactor_backup"
+  CONFIG.UPDATE_STAGING_BASE = "/xreactor_stage"
+  CONFIG.LOCAL_STAGING_BASE = "/xreactor_stage"
+  CONFIG.LOCAL_BACKUP_BASE = "/xreactor_backup"
+  CONFIG.LOCAL_LOG_DIR = "/xreactor_logs"
+  CONFIG.LOG_DIR = "/xreactor_logs"
+  CONFIG.LOG_ROOT = "/xreactor_logs"
+  CONFIG.LOG_PATH = "/xreactor_logs/installer_core.log"
+  CONFIG.MANIFEST_LOCAL = "/xreactor/.manifest"
+  CONFIG.MANIFEST_CACHE = "/xreactor/.cache/manifest.lua"
+  CONFIG.MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache"
+  CONFIG.NODE_ID_PATH = "/xreactor/config/node_id.txt"
+  CONFIG.ROLE_PATH = "/xreactor/config/role.lua"
+  CONFIG.UPDATE_MARKER_PATH = "/xreactor/.update_in_progress"
 end
 
 local function ensure_directory(path)
@@ -155,40 +76,11 @@ local function download_installer_core(storage_root)
   return true
 end
 
-local function load_core(mount_path)
-  local core_candidates = {
-    (mount_path and (mount_path .. "/xreactor/installer_core.lua") or nil),
-    "/xreactor/installer_core.lua",
-    "/disk/xreactor/installer_core.lua"
-  }
-  for _, path in ipairs(core_candidates) do
-    if path and fs.exists(path) then
-      local ok, loader = pcall(loadfile, path)
-      if ok and type(loader) == "function" then
-        return loader
-      end
-    end
-  end
-  return nil
-end
-
 local function main()
-  local mount_path = choose_mount()
-  apply_storage_paths(mount_path)
+  apply_storage_paths()
 
-  local storage_root = resolve_storage_root(mount_path)
-  local core_path = storage_root .. "/installer_core.lua"
-
-  if fs.exists(core_path) then
-    shell.run(core_path)
-    return
-  end
-
-  if not ensure_directory(storage_root) then
-    error("Unable to create storage root: " .. tostring(storage_root))
-  end
-
-  local ok_download, download_err = download_installer_core(storage_root)
+  local core_path = STORAGE_ROOT .. "/installer_core.lua"
+  local ok_download, download_err = download_installer_core(STORAGE_ROOT)
   if not ok_download then
     error("Installer core download failed: " .. tostring(download_err))
   end
@@ -197,11 +89,7 @@ local function main()
     return shell.run(core_path)
   end
 
-  local fallback_loader = load_core(mount_path)
-  if not fallback_loader then
-    error("Installer core missing: /xreactor/installer_core.lua")
-  end
-  return fallback_loader()
+  error("Installer core missing: /xreactor/installer_core.lua")
 end
 
 return main()
