@@ -18,34 +18,58 @@ end
 
 local function list_disk_mounts()
   local mounts = {}
+  local diagnostics = {}
   for _, path in ipairs(list_root_disk_candidates()) do
-    if fs.exists(path) and fs.isDir(path) then
+    local record = { path = path, free = "n/a", reason = "" }
+    if not fs.exists(path) or not fs.isDir(path) then
+      record.reason = "missing or not a directory"
+      table.insert(diagnostics, record)
+    else
       local ok_free, free = pcall(fs.getFreeSpace, path)
-      if ok_free and type(free) == "number" then
-        local test_path = path .. "/.xreactor_write_test"
-        local ok_write = pcall(function()
-          local file = fs.open(test_path, "w")
-          if not file then
-            error("open failed", 0)
+      if not ok_free or type(free) ~= "number" then
+        record.reason = "free-space query failed"
+        table.insert(diagnostics, record)
+      else
+        record.free = free
+        local target_dir = path .. "/xreactor"
+        if not pcall(fs.makeDir, target_dir) then
+          record.reason = "mkdir failed"
+          table.insert(diagnostics, record)
+        else
+          local test_path = target_dir .. "/.xreactor_write_test"
+          local ok_write = pcall(function()
+            local file = fs.open(test_path, "w")
+            if not file then
+              error("open failed", 0)
+            end
+            file.write("ok")
+            file.close()
+            pcall(fs.delete, test_path)
+          end)
+          if ok_write then
+            table.insert(mounts, { path = path, free = free })
+          else
+            record.reason = "write-test failed"
+            table.insert(diagnostics, record)
           end
-          file.write("ok")
-          file.close()
-          pcall(fs.delete, test_path)
-        end)
-        if ok_write then
-          table.insert(mounts, { path = path, free = free })
         end
       end
     end
   end
   table.sort(mounts, function(a, b) return a.free > b.free end)
-  return mounts
+  return mounts, diagnostics
 end
 
 local function choose_mount()
-  local mounts = list_disk_mounts()
+  local mounts, diagnostics = list_disk_mounts()
   if mounts[1] then
     return mounts[1].path
+  end
+  if diagnostics and #diagnostics > 0 then
+    print("No usable disk mount found; mount diagnostics:")
+    for _, entry in ipairs(diagnostics) do
+      print(string.format("- %s free=%s reason=%s", tostring(entry.path), tostring(entry.free), tostring(entry.reason)))
+    end
   end
   return nil
 end
