@@ -1,5 +1,7 @@
 local INSTALLER_CORE_VERSION = "2.7"
 
+local C = C or {}
+
 -- CONFIG
 local CONFIG = _G.CONFIG
 
