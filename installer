@@ -153,6 +153,10 @@ local function main()
   apply_storage_paths(mount_path)
 
   local storage_root = resolve_storage_root(mount_path)
+  if not ensure_directory(storage_root) then
+    error("Unable to create storage root: " .. tostring(storage_root))
+  end
+
   local ok_download, download_err = download_installer_core(storage_root)
   if not ok_download then
     error("Installer core download failed: " .. tostring(download_err))
