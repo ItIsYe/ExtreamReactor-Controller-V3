@@ -106,7 +106,7 @@ local function list_disk_mounts()
           end
           file.write("ok")
           file.close()
-          safe_delete(test_path, "disk write test")
+          pcall(fs.delete, test_path)
         end)
         if ok_write then
           local used = (ok_total and total) and (total - free) or nil
@@ -152,15 +152,29 @@ local function apply_storage_root(root)
   if not root or not fs.exists(root) then
     return false
   end
-  if CONFIG.CORE_PATH == nil or CONFIG.CORE_PATH == DEFAULT_CONFIG.CORE_PATH then
-    CONFIG.CORE_PATH = root .. "/xreactor/installer/installer_core.lua"
-  end
-  if CONFIG.CORE_META_PATH == nil or CONFIG.CORE_META_PATH == DEFAULT_CONFIG.CORE_META_PATH then
-    CONFIG.CORE_META_PATH = root .. "/xreactor/installer/installer_core.meta"
-  end
-  if CONFIG.LOG_PATH == nil or CONFIG.LOG_PATH == DEFAULT_CONFIG.LOG_PATH then
-    CONFIG.LOG_PATH = root .. "/xreactor_logs/installer_bootstrap.log"
-  end
+  local base_dir = root .. "/xreactor"
+  local stage_dir = root .. "/xreactor_stage"
+  local backup_dir = root .. "/xreactor_backup"
+  local log_dir = root .. "/xreactor_logs"
+
+  CONFIG.STORAGE_ROOT = base_dir
+  CONFIG.BASE_DIR = base_dir
+  CONFIG.STAGE_DIR = stage_dir
+  CONFIG.STAGE_ROOT = stage_dir
+  CONFIG.UPDATE_STAGING_BASE = stage_dir
+  CONFIG.BACKUP_DIR = backup_dir
+  CONFIG.BACKUP_ROOT = backup_dir
+  CONFIG.BACKUP_BASE = backup_dir
+  CONFIG.LOG_DIR = log_dir
+  CONFIG.LOG_ROOT = log_dir
+  CONFIG.LOCAL_LOG_DIR = log_dir
+  CONFIG.CORE_PATH = base_dir .. "/installer/installer_core.lua"
+  CONFIG.CORE_META_PATH = base_dir .. "/installer/installer_core.meta"
+  CONFIG.CORE_DOWNLOAD_PATH = base_dir .. "/.tmp/installer_core.lua.download"
+  CONFIG.CORE_BAD_PATH = base_dir .. "/.tmp/installer_core.bad"
+  CONFIG.LOG_PATH = log_dir .. "/installer_bootstrap.log"
+  CONFIG.LOG_FALLBACK_PATH = CONFIG.LOG_PATH
+
   return true
 end
 
@@ -173,33 +187,6 @@ local function resolve_storage_root()
     error("Storage root invalid: " .. tostring(selected_root))
   end
   _G.__xreactor_storage_root = selected_root
-  if not CONFIG.STORAGE_ROOT then
-    CONFIG.STORAGE_ROOT = selected_root .. "/xreactor"
-  end
-  if not CONFIG.LOG_DIR then
-    CONFIG.LOG_DIR = selected_root .. "/xreactor_logs"
-  end
-  if not CONFIG.LOG_ROOT then
-    CONFIG.LOG_ROOT = CONFIG.LOG_DIR
-  end
-  if not CONFIG.STAGE_DIR then
-    CONFIG.STAGE_DIR = selected_root .. "/xreactor_stage"
-  end
-  if not CONFIG.STAGE_ROOT then
-    CONFIG.STAGE_ROOT = CONFIG.STAGE_DIR
-  end
-  if not CONFIG.BACKUP_DIR then
-    CONFIG.BACKUP_DIR = selected_root .. "/xreactor_backup"
-  end
-  if not CONFIG.BACKUP_ROOT then
-    CONFIG.BACKUP_ROOT = CONFIG.BACKUP_DIR
-  end
-  if CONFIG.LOG_PATH == nil or CONFIG.LOG_PATH == DEFAULT_CONFIG.LOG_PATH then
-    CONFIG.LOG_PATH = CONFIG.LOG_DIR .. "/installer_bootstrap.log"
-  end
-  if CONFIG.LOG_FALLBACK_PATH == nil or CONFIG.LOG_FALLBACK_PATH == DEFAULT_CONFIG.LOG_FALLBACK_PATH then
-    CONFIG.LOG_FALLBACK_PATH = CONFIG.LOG_PATH
-  end
   apply_storage_root(selected_root)
 end
 
