@@ -10,8 +10,8 @@ local DEFAULT_CONFIG = {
   REPO_NAME = "ExtreamReactor-Controller-V3", -- GitHub repository name.
   REPO_BASE_URL = "https://raw.githubusercontent.com", -- Raw GitHub base URL.
   DEFAULT_BRANCH = "beta", -- Default branch for base URLs when no commit SHA is pinned.
-  RELEASE_REMOTE = "xreactor/installer/release.lua", -- Release metadata path.
-  MANIFEST_REMOTE = "xreactor/installer/manifest.lua", -- Manifest path (fallback).
+  RELEASE_REMOTE = "xreactor/release.lua", -- Release metadata path.
+  MANIFEST_REMOTE = "xreactor/manifest.lua", -- Manifest path (fallback).
   MANIFEST_LOCAL = "/xreactor/.manifest", -- Cached manifest in install dir (updated at runtime).
   MANIFEST_CACHE = "/xreactor/.cache/manifest.lua", -- Serialized manifest cache (updated at runtime).
   MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache", -- Legacy cache path (updated at runtime).
@@ -38,8 +38,8 @@ local DEFAULT_CONFIG = {
     "https://raw.githubusercontent.com"
   },
   DOWNLOAD_HTML_SUSPECT_BYTES = 256, -- Treat small HTML-like responses as errors.
-  MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/manifest.lua", -- Primary manifest URL.
-  MANIFEST_URL_FALLBACK = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer/manifest.lua", -- Optional fallback manifest URL.
+  MANIFEST_URL_PRIMARY = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/manifest.lua", -- Primary manifest URL.
+  MANIFEST_URL_FALLBACK = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/manifest.lua", -- Optional fallback manifest URL.
   MANIFEST_RETRY_ATTEMPTS = 3, -- Retry attempts for manifest acquisition menu.
   MANIFEST_RETRY_BACKOFF = 1, -- Backoff seconds for manifest retry menu.
   MANIFEST_MENU_RETRY_LIMIT = 5, -- Retry rounds from menu before auto-cancel.
@@ -85,7 +85,8 @@ local DEFAULT_CONFIG = {
     "xreactor/shared/constants.lua"
   },
   FILE_MIGRATIONS = { -- Optional migrations for renamed files.
-    { from = "xreactor/installer/installer.lua", to = "installer.lua" }
+    { from = "xreactor/installer/installer.lua", to = "installer" },
+    { from = "xreactor/installer/installer_core.lua", to = "xreactor/installer_core.lua" }
   }
 }
 
@@ -790,7 +791,7 @@ local function load_role_files_map()
   if role_files_cache ~= nil then
     return role_files_cache
   end
-  local path = resolve_install_path("xreactor/installer/role_files.lua")
+  local path = nil
   if not path or not fs.exists(path) then
     role_files_cache = role_files_default
     return role_files_cache
@@ -1838,7 +1839,7 @@ function normalize_manifest_self_hash(content)
   if not content or content == "" then
     return content
   end
-  local pattern = '(path%s*=%s*"xreactor/installer/manifest.lua"%s*,%s*size_bytes%s*=%s*%d+%s*,%s*hash%s*=%s*")%x+(")'
+  local pattern = '(path%s*=%s*"xreactor/manifest.lua"%s*,%s*size_bytes%s*=%s*%d+%s*,%s*hash%s*=%s*")%x+(")'
   return content:gsub(pattern, "%1" .. string.rep("0", 8) .. "%2")
 end
 
@@ -3770,7 +3771,7 @@ function update_installer_if_required(manifest, release, hash_algo)
       log("WARN", "Installer update declined by user")
       return false
     end
-    local installer_path = manifest.installer_path or "installer.lua"
+    local installer_path = manifest.installer_path or "installer"
     local expected = manifest.installer_hash
     if not expected then
       print("SAFE UPDATE aborted: installer hash missing.")
@@ -3870,7 +3871,7 @@ function verify_integrity(manifest, role, cfg_path)
     "xreactor/core/utils.lua",
     "xreactor/shared/colors.lua",
     "xreactor/shared/constants.lua",
-    "installer.lua"
+    "installer"
   }
   local role_required = {
     [roles.MASTER] = "xreactor/master/main.lua",

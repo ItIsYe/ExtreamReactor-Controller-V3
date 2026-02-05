@@ -8,10 +8,10 @@ local function load_release()
   if not fs or not fs.exists then
     return nil
   end
-  if not fs.exists("/xreactor/installer/release.lua") then
+  if not fs.exists("/xreactor/release.lua") then
     return nil
   end
-  local ok, data = pcall(dofile, "/xreactor/installer/release.lua")
+  local ok, data = pcall(dofile, "/xreactor/release.lua")
   if not ok or type(data) ~= "table" then
     return nil
   end
