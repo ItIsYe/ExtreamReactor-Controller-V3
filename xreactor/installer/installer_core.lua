@@ -301,7 +301,15 @@ end
 
 function list_disk_mounts()
   local mounts = {}
-  local candidates = { "/disk", "/disk2", "/disk3" }
+  local ok, entries = pcall(fs.list, "/")
+  local candidates = {}
+  if ok and type(entries) == "table" then
+    for _, entry in ipairs(entries) do
+      if type(entry) == "string" and entry:match("^disk") then
+        table.insert(candidates, "/" .. entry)
+      end
+    end
+  end
   for _, path in ipairs(candidates) do
     if fs.exists(path) and fs.isDir(path) then
       local ok_free, free = pcall(fs.getFreeSpace, path)
@@ -459,7 +467,7 @@ function configure_storage_paths()
     storage_state.stage_mount = nil
     storage_state.backup_mount = nil
     storage_state.log_mount = nil
-    storage_state.mount_path = nil
+    storage_state.mount_path = "/"
     storage_state.storage_root = CONFIG.BASE_DIR
     storage_state.log_dir = CONFIG.LOCAL_LOG_DIR
     storage_state.stage_dir = CONFIG.UPDATE_STAGING_BASE

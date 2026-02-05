@@ -77,32 +77,75 @@ if type(REQUIRED_FILES) ~= "table" then
 end
 _G.REQUIRED_FILES = REQUIRED_FILES
 
-local function collect_storage_candidates()
-  local candidates = { "/" }
-  for i = 1, 9 do
-    local path = (i == 1) and "/disk" or ("/disk" .. i)
-    if fs.exists(path) then
-      table.insert(candidates, path)
+local function list_root_disk_candidates()
+  local candidates = {}
+  local ok, entries = pcall(fs.list, "/")
+  if ok and type(entries) == "table" then
+    for _, entry in ipairs(entries) do
+      if type(entry) == "string" and entry:match("^disk") then
+        table.insert(candidates, "/" .. entry)
+      end
     end
   end
   return candidates
 end
 
-local function detect_best_storage_root()
-  local candidates = collect_storage_candidates()
-  local best_root = "/"
-  local best_free = fs.getFreeSpace(best_root) or 0
+local function list_disk_mounts()
+  local mounts = {}
+  local candidates = list_root_disk_candidates()
   for _, path in ipairs(candidates) do
-    local free = fs.getFreeSpace(path) or 0
-    if free > best_free then
-      best_root = path
-      best_free = free
+    if fs.exists(path) and fs.isDir(path) then
+      local ok_free, free = pcall(fs.getFreeSpace, path)
+      local ok_total, total = pcall(fs.getCapacity, path)
+      if ok_free and free then
+        local test_path = path .. "/.xreactor_write_test"
+        local ok_write = pcall(function()
+          local file = fs.open(test_path, "w")
+          if not file then
+            error("open failed", 0)
+          end
+          file.write("ok")
+          file.close()
+          safe_delete(test_path, "disk write test")
+        end)
+        if ok_write then
+          local used = (ok_total and total) and (total - free) or nil
+          table.insert(mounts, { path = path, free = free, total = ok_total and total or nil, used = used })
+        end
+      end
     end
   end
-  if fs.exists(best_root) then
-    return best_root
+  table.sort(mounts, function(a, b) return a.free > b.free end)
+  return mounts
+end
+
+local function format_mounts(mounts)
+  if not mounts or #mounts == 0 then
+    return "  (no disks found)"
   end
-  return nil
+  local lines = {}
+  for _, entry in ipairs(mounts) do
+    if entry.total and entry.used then
+      table.insert(lines, string.format(
+        "  %s: %s free (%s used / %s total)",
+        entry.path,
+        format_bytes(entry.free),
+        format_bytes(entry.used),
+        format_bytes(entry.total)
+      ))
+    else
+      table.insert(lines, string.format("  %s: %s free", entry.path, format_bytes(entry.free)))
+    end
+  end
+  return table.concat(lines, "\n")
+end
+
+local function detect_best_storage_root()
+  local mounts = list_disk_mounts()
+  if mounts[1] and mounts[1].path then
+    return mounts[1].path
+  end
+  return "/"
 end
 
 local function apply_storage_root(root)
