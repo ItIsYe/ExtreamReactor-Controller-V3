@@ -467,7 +467,7 @@ local devices = {
   last_scan_ts = nil
 }
 local master_alerts = {}
-local peripherals = {}
+local peripherals = { reactors = {}, turbines = {} }
 local targets = { power = 0, steam = 0, rpm = TARGET_RPM, enable_reactors = true, enable_turbines = true }
 local modules = {}
 local active_startup = nil
@@ -1274,8 +1274,8 @@ local function apply_mode(mode)
 end
 
 cache = function()
-  peripherals.reactors = utils.cache_peripherals(config.reactors)
-  peripherals.turbines = utils.cache_peripherals(config.turbines)
+  peripherals.reactors = utils.cache_peripherals(config.reactors) or {}
+  peripherals.turbines = utils.cache_peripherals(config.turbines) or {}
   for _, name in ipairs(config.reactors) do
     capability_cache.reactors[name] = build_capabilities(name)
   end
@@ -1454,12 +1454,14 @@ build_modules = function()
 end
 
 refresh_module_peripherals = function()
+  local turbines = peripherals.turbines or {}
+  local reactors = peripherals.reactors or {}
   for _, module in pairs(modules) do
     if module.type == "turbine" then
-      module.peripheral = peripherals.turbines[module.name]
+      module.peripheral = turbines[module.name]
       module.caps = module.peripheral and get_device_caps("turbines", module.name) or nil
     else
-      module.peripheral = peripherals.reactors[module.name]
+      module.peripheral = reactors[module.name]
       module.caps = module.peripheral and get_device_caps("reactors", module.name) or nil
     end
   end
@@ -1643,7 +1645,11 @@ set_reactors_active = function(active)
 end
 
 set_turbines_active = function(active)
-  for name, turbine in pairs(peripherals.turbines) do
+  local turbines = peripherals and peripherals.turbines or {}
+  if not next(turbines) then
+    warn_once("turbines_missing", "No turbines detected")
+  end
+  for name, turbine in pairs(turbines) do
     local caps = get_device_caps("turbines", name)
     local ok, result = pcall(setTurbineActive, turbine, caps, active)
     if not ok then
@@ -1670,7 +1676,11 @@ apply_safe_controls = function()
   end
   applyReactorRods(100, true)
 
-  for name, turbine in pairs(peripherals.turbines) do
+  local turbines = peripherals and peripherals.turbines or {}
+  if not next(turbines) then
+    warn_once("turbines_missing", "No turbines detected")
+  end
+  for name, turbine in pairs(turbines) do
     local caps = get_device_caps("turbines", name)
     local rpm = turbine.getRotorSpeed and turbine.getRotorSpeed() or nil
     if caps.setInductorEngaged then

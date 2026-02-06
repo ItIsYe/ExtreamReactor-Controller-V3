@@ -58,7 +58,7 @@ return {
     },
     rt = {
       { path = "nodes/rt/config.lua", size_bytes = 4290, hash = "c4ac557a" },
-      { path = "nodes/rt/main.lua", size_bytes = 94787, hash = "183104d7" }
+      { path = "nodes/rt/main.lua", size_bytes = 95183, hash = "679541b8" }
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4614, hash = "7b0f8089" },
