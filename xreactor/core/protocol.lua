@@ -122,11 +122,12 @@ function protocol.sanitize_message(message)
   if type(message) ~= "table" then return nil end
   local normalized_proto = normalize_proto(message.proto_ver)
   local ts = message.ts or message.timestamp or os.epoch("utc")
+  local normalized_sender = utils.normalize_node_id(message.sender_id or message.src)
   local sanitized = {
     type = message.type,
     message_id = message.message_id,
-    sender_id = utils.normalize_node_id(message.sender_id),
-    node_id = utils.normalize_node_id(message.node_id or message.sender_id),
+    sender_id = normalized_sender,
+    node_id = utils.normalize_node_id(message.node_id or message.sender_id or message.src),
     src = utils.normalize_node_id(message.src or message.sender_id),
     dst = message.dst,
     role = message.role,
