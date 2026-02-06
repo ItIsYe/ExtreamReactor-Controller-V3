@@ -2727,15 +2727,44 @@ function download_file_to_path(urls, target_path, expected_hash, hash_algo, opts
           entry.err = "out of space"
           response.close()
         else
-          local stream_ok, stream_info = stream_response_to_file(response, target_path, {
-            chunk_size = C.DOWNLOAD_CHUNK_SIZE,
-            prefix_bytes = 512
-          })
-          response.close()
-          if not stream_ok then
-            entry.err = stream_info
+          ensure_dir(fs.getDir(target_path))
+          local temp_path = target_path .. ".part"
+          local file = fs.open(temp_path, "wb")
+          if not file then
+            entry.err = "open failed"
+            response.close()
           else
-            entry = verify_downloaded_file(entry, stream_info, target_path, expected_hash, hash_algo, expected_size)
+            local prefix_limit = 512
+            local prefix = ""
+            local total = 0
+            local stream_ok, stream_err = pcall(function()
+              while true do
+                local chunk = response.read(8192)
+                if not chunk then
+                  break
+                end
+                if #prefix < prefix_limit then
+                  local needed = prefix_limit - #prefix
+                  prefix = prefix .. chunk:sub(1, needed)
+                end
+                file.write(chunk)
+                total = total + #chunk
+              end
+            end)
+            file.close()
+            response.close()
+            if not stream_ok then
+              if fs.exists(temp_path) then
+                safe_delete(temp_path, "temp file cleanup")
+              end
+              entry.err = stream_err
+            else
+              entry = verify_downloaded_file(entry, {
+                bytes = total,
+                prefix = prefix,
+                temp_path = temp_path
+              }, target_path, expected_hash, hash_algo, expected_size)
+            end
           end
         end
       end
