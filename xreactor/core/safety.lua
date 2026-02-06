@@ -1,16 +1,22 @@
 local safety = {}
 
 function safety.clamp(value, min, max)
-  if value < min then return min end
-  if value > max then return max end
-  return value
+  local num = tonumber(value)
+  if not num then
+    return min or max or value
+  end
+  if min ~= nil and num < min then return min end
+  if max ~= nil and num > max then return max end
+  return num
 end
 
 function safety.with_reserve(amount, reserve)
-  if amount < reserve then
-    return reserve, true
+  local current = tonumber(amount) or 0
+  local min = tonumber(reserve) or 0
+  if current < min then
+    return min, true
   end
-  return amount, false
+  return current, false
 end
 
 function safety.should_scram(reactor_metrics)
@@ -25,8 +31,10 @@ function safety.should_scram(reactor_metrics)
 end
 
 function safety.safe_steam_request(request, capacity)
-  if capacity <= 0 then return 0 end
-  return safety.clamp(request, 0, capacity)
+  local cap = tonumber(capacity) or 0
+  if cap <= 0 then return 0 end
+  local req = tonumber(request) or 0
+  return safety.clamp(req, 0, cap)
 end
 
 return safety
