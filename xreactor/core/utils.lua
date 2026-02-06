@@ -213,11 +213,14 @@ function utils.safe_peripheral_call(name, method, ...)
   if not name or not peripheral.isPresent(name) then
     return nil, "peripheral missing"
   end
-  local ok, result = pcall(peripheral.call, name, method, ...)
-  if not ok then
-    return nil, result
+  local results = table.pack(pcall(peripheral.call, name, method, ...))
+  if not results[1] then
+    return nil, results[2]
   end
-  return result
+  if results.n == 1 then
+    return true
+  end
+  return table.unpack(results, 2, results.n)
 end
 
 function utils.safe_wrap(name)
