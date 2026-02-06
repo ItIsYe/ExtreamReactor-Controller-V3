@@ -188,7 +188,7 @@ function router:render_list_controls(mon, opts)
   ui.text(mon, x, y, text, colors.get("text"), colors.get("background"))
   self.list_controls = {
     prev = { x1 = x, x2 = x + 1, y = y },
-    next = { x1 = x + #text - 1, x2 = x + #text, y = y },
+    next = { x1 = x + #text - 1, x2 = x + #text - 1, y = y },
     on_prev = opts.on_prev,
     on_next = opts.on_next
   }
@@ -218,7 +218,7 @@ function router:render(mon, model)
   ui.rightText(mon, 2, h, w - 2, indicator, colors.get("text"), colors.get("background"))
   local start = 2 + math.max(0, (w - 2) - #indicator)
   self.footer.prev = { x1 = start, x2 = start + 1, y = h }
-  self.footer.next = { x1 = start + #indicator - 1, x2 = start + #indicator, y = h }
+  self.footer.next = { x1 = start + #indicator - 1, x2 = start + #indicator - 1, y = h }
   self.footer.indicator = { x1 = start, x2 = start + #indicator, y = h }
 end
 
