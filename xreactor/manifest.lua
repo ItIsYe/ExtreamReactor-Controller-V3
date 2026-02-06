@@ -34,6 +34,7 @@ return {
     { path = "services/service_manager.lua", size_bytes = 1265, hash = "d91e40ad" },
     { path = "services/telemetry_service.lua", size_bytes = 1773, hash = "bdbe4b9d" },
     { path = "services/ui_service.lua", size_bytes = 571, hash = "c0addbea" },
+    { path = "start.lua", size_bytes = 1541, hash = "f8c99b78" },
     { path = "shared/build_info.lua", size_bytes = 874, hash = "19ff720f" },
     { path = "shared/colors.lua", size_bytes = 332, hash = "445d12af" },
     { path = "shared/constants.lua", size_bytes = 1384, hash = "db560e96" },
