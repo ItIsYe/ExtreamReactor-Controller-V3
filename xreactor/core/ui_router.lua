@@ -18,10 +18,14 @@ local function clamp(value, min, max)
 end
 
 function router.paginate(list, per_page, page)
-  local total = math.max(1, math.ceil(#list / per_page))
+  local per = tonumber(per_page) or 1
+  if per < 1 then
+    per = 1
+  end
+  local total = math.max(1, math.ceil(#list / per))
   local current = clamp(page or 1, 1, total)
-  local start_idx = (current - 1) * per_page + 1
-  local end_idx = math.min(#list, current * per_page)
+  local start_idx = (current - 1) * per + 1
+  local end_idx = math.min(#list, current * per)
   return {
     page = current,
     total = total,
