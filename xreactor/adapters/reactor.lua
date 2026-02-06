@@ -51,7 +51,13 @@ function reactor.inspect(name, log_prefix)
   local waste = read_number(name, "getWasteAmount", log_prefix)
   local energy = read_number(name, has_method(method_set, "getEnergyStored") and "getEnergyStored" or "getEnergyProducedLastTick", log_prefix)
   local rods = read_number(name, "getControlRodLevel", log_prefix)
-  local steam = read_number(name, has_method(method_set, "getHotFluidAmount") and "getHotFluidAmount" or "getSteamAmount", log_prefix)
+  local steam = read_number(
+    name,
+    has_method(method_set, "getHotFluidAmount") and "getHotFluidAmount"
+      or has_method(method_set, "getSteamAmount") and "getSteamAmount"
+      or has_method(method_set, "getSteam") and "getSteam",
+    log_prefix
+  )
   return {
     name = name,
     type = type_name,
