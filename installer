@@ -1,95 +1,405 @@
-if not _G.CONFIG then
-  _G.CONFIG = {}
-end
-local CONFIG = _G.CONFIG
+local INSTALL_ROOT = "/xreactor"
+local LOG_DIR = "/xreactor_logs"
+local LOG_PATH = LOG_DIR .. "/installer.log"
+local BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
+local MANIFEST_URL = BASE_URL .. "manifest.lua"
 
-local STORAGE_ROOT = "/xreactor"
-
-local function apply_storage_paths()
-  CONFIG.STORAGE_ROOT = STORAGE_ROOT
-  CONFIG.BASE_DIR = "/xreactor"
-  CONFIG.BACKUP_BASE = "/xreactor_backup"
-  CONFIG.UPDATE_STAGING_BASE = "/xreactor_stage"
-  CONFIG.LOCAL_STAGING_BASE = "/xreactor_stage"
-  CONFIG.LOCAL_BACKUP_BASE = "/xreactor_backup"
-  CONFIG.LOCAL_LOG_DIR = "/xreactor_logs"
-  CONFIG.LOG_DIR = "/xreactor_logs"
-  CONFIG.LOG_ROOT = "/xreactor_logs"
-  CONFIG.LOG_PATH = "/xreactor_logs/installer_core.log"
-  CONFIG.MANIFEST_LOCAL = "/xreactor/.manifest"
-  CONFIG.MANIFEST_CACHE = "/xreactor/.cache/manifest.lua"
-  CONFIG.MANIFEST_CACHE_LEGACY = "/xreactor/.manifest_cache"
-  CONFIG.NODE_ID_PATH = "/xreactor/config/node_id.txt"
-  CONFIG.ROLE_PATH = "/xreactor/config/role.lua"
-  CONFIG.UPDATE_MARKER_PATH = "/xreactor/.update_in_progress"
-end
-
-local function ensure_directory(path)
+local function safe_mkdir(path)
   if fs.exists(path) then
     return fs.isDir(path)
   end
-  return pcall(fs.makeDir, path)
+  local ok = pcall(fs.makeDir, path)
+  return ok and fs.exists(path) and fs.isDir(path)
 end
 
-local function download_installer_core(storage_root)
-  local core_target_path = storage_root .. "/installer_core.lua"
-  if fs.exists(core_target_path) then
-    return true
+local function timestamp()
+  if textutils and textutils.formatTime and os and os.epoch then
+    return textutils.formatTime(os.epoch("utc") / 1000, true)
   end
-
-  if not ensure_directory(storage_root) then
-    return false, "Unable to create storage root: " .. tostring(storage_root)
+  if os and os.time then
+    return tostring(os.time())
   end
+  return "unknown-time"
+end
 
-  if not http or type(http.get) ~= "function" then
-    return false, "HTTP API unavailable"
-  end
-
-  local core_url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/installer_core.lua"
-  local ok_get, response = pcall(http.get, core_url)
-  if not ok_get or not response then
-    return false, "Failed to download installer core"
-  end
-
-  local ok_read, body = pcall(response.readAll)
-  pcall(response.close)
-  if not ok_read or type(body) ~= "string" or body == "" then
-    return false, "Downloaded installer core is empty"
-  end
-
-  local ok_write, write_err = pcall(function()
-    local file = fs.open(core_target_path, "w")
+local function log_line(message)
+  local ok = pcall(function()
+    safe_mkdir(LOG_DIR)
+    local file = fs.open(LOG_PATH, "a")
     if not file then
-      error("open failed", 0)
+      return
     end
-    file.write(body)
+    file.write(string.format("[%s] %s\n", timestamp(), tostring(message)))
     file.close()
   end)
-  if not ok_write then
-    return false, "Failed to write installer core: " .. tostring(write_err)
+  if not ok then
+    return
   end
+end
 
-  if not fs.exists(core_target_path) then
-    return false, "Installer core missing after download"
+local function info(message)
+  print(message)
+  log_line(message)
+end
+
+local function warn(message)
+  print(message)
+  log_line("WARN: " .. tostring(message))
+end
+
+local function fatal(message)
+  warn(message)
+  error(message, 0)
+end
+
+local function build_crc32_table()
+  local table_crc = {}
+  for i = 0, 255 do
+    local crc = i
+    for _ = 1, 8 do
+      if bit32.band(crc, 1) == 1 then
+        crc = bit32.bxor(bit32.rshift(crc, 1), 0xEDB88320)
+      else
+        crc = bit32.rshift(crc, 1)
+      end
+    end
+    table_crc[i] = crc
   end
+  return table_crc
+end
 
+local CRC32_TABLE = build_crc32_table()
+
+local function crc32_hash(content)
+  local crc = 0xFFFFFFFF
+  for i = 1, #content do
+    local byte = string.byte(content, i)
+    local idx = bit32.band(bit32.bxor(crc, byte), 0xFF)
+    crc = bit32.bxor(bit32.rshift(crc, 8), CRC32_TABLE[idx])
+  end
+  return string.format("%08x", bit32.bxor(crc, 0xFFFFFFFF))
+end
+
+local function read_file(path)
+  local file = fs.open(path, "r")
+  if not file then
+    return nil
+  end
+  local content = file.readAll()
+  file.close()
+  return content
+end
+
+local function write_file(path, content)
+  local dir = fs.getDir(path)
+  if dir and dir ~= "" then
+    safe_mkdir(dir)
+  end
+  local file, err = fs.open(path, "w")
+  if not file then
+    return false, err or "open failed"
+  end
+  file.write(content)
+  file.close()
   return true
 end
 
-local function main()
-  apply_storage_paths()
-
-  local core_path = STORAGE_ROOT .. "/installer_core.lua"
-  local ok_download, download_err = download_installer_core(STORAGE_ROOT)
-  if not ok_download then
-    error("Installer core download failed: " .. tostring(download_err))
+local function download_url(url)
+  if not http or type(http.get) ~= "function" then
+    return nil, "HTTP API unavailable"
   end
-
-  if fs.exists(core_path) then
-    return shell.run(core_path)
+  local ok, response = pcall(http.get, url)
+  if not ok or not response then
+    return nil, "Failed to download " .. url
   end
-
-  error("Installer core missing: /xreactor/installer_core.lua")
+  local ok_read, body = pcall(response.readAll)
+  pcall(response.close)
+  if not ok_read or type(body) ~= "string" then
+    return nil, "Failed to read response from " .. url
+  end
+  return body
 end
 
-return main()
+local function download_file(remote_path, target_path)
+  local url = BASE_URL .. remote_path
+  info("Downloading " .. remote_path)
+  local body, err = download_url(url)
+  if not body then
+    return false, err
+  end
+  local ok, write_err = write_file(target_path, body)
+  if not ok then
+    return false, write_err
+  end
+  return true
+end
+
+local function load_manifest()
+  info("Downloading manifest")
+  local body, err = download_url(MANIFEST_URL)
+  if not body then
+    return nil, err
+  end
+  local loader, load_err = load(body, "=manifest", "t", {})
+  if not loader then
+    return nil, load_err
+  end
+  local ok, manifest = pcall(loader)
+  if not ok then
+    return nil, manifest
+  end
+  if type(manifest) ~= "table" then
+    return nil, "Manifest invalid"
+  end
+  if type(manifest.base_files) ~= "table" or type(manifest.roles) ~= "table" then
+    return nil, "Manifest missing base_files or roles"
+  end
+  return manifest
+end
+
+local function ensure_install_root()
+  if not safe_mkdir(INSTALL_ROOT) then
+    fatal("Unable to create install root: " .. INSTALL_ROOT)
+  end
+end
+
+local function delete_install_root()
+  if fs.exists(INSTALL_ROOT) then
+    info("Removing existing installation")
+    fs.delete(INSTALL_ROOT)
+  end
+end
+
+local function select_role()
+  print("")
+  print("1 MASTER")
+  print("2 RT")
+  print("3 ENERGY")
+  print("4 WATER")
+  print("5 FUEL")
+  print("6 REPROCESSING")
+  write("Select role: ")
+  local choice = read()
+  local map = {
+    ["1"] = { key = "master", label = "MASTER" },
+    ["2"] = { key = "rt", label = "RT" },
+    ["3"] = { key = "energy", label = "ENERGY" },
+    ["4"] = { key = "water", label = "WATER" },
+    ["5"] = { key = "fuel", label = "FUEL" },
+    ["6"] = { key = "reprocessing", label = "REPROCESSING" }
+  }
+  return map[choice]
+end
+
+local function normalize_file_list(entries)
+  local list = {}
+  for _, entry in ipairs(entries or {}) do
+    if type(entry) == "string" then
+      table.insert(list, { path = entry })
+    elseif type(entry) == "table" and entry.path then
+      table.insert(list, entry)
+    end
+  end
+  return list
+end
+
+local function build_expected_files(base_files, role_files)
+  local expected = {}
+  for _, entry in ipairs(base_files) do
+    expected[entry.path] = entry
+  end
+  for _, entry in ipairs(role_files) do
+    expected[entry.path] = entry
+  end
+  return expected
+end
+
+local function list_files(dir, prefix, out)
+  out = out or {}
+  prefix = prefix or ""
+  for _, name in ipairs(fs.list(dir)) do
+    local path = fs.combine(dir, name)
+    local rel = prefix .. name
+    if fs.isDir(path) then
+      list_files(path, rel .. "/", out)
+    else
+      table.insert(out, rel)
+    end
+  end
+  return out
+end
+
+local function ensure_role_config(role_label)
+  local role_path = INSTALL_ROOT .. "/config/role.lua"
+  local content = string.format("return { role = %q }\n", role_label)
+  local ok, err = write_file(role_path, content)
+  if not ok then
+    warn("Failed to write role config: " .. tostring(err))
+  end
+end
+
+local function read_role_config()
+  local role_path = INSTALL_ROOT .. "/config/role.lua"
+  if not fs.exists(role_path) then
+    return nil
+  end
+  local content = read_file(role_path)
+  if not content then
+    return nil
+  end
+  local loader = load(content, "=role", "t", {})
+  if not loader then
+    return nil
+  end
+  local ok, result = pcall(loader)
+  if not ok then
+    return nil
+  end
+  if type(result) == "table" and type(result.role) == "string" then
+    return result.role
+  end
+  return nil
+end
+
+local function files_for_role(manifest, role_key)
+  local role_files = manifest.roles[role_key]
+  if type(role_files) ~= "table" then
+    return nil, "Role not found in manifest"
+  end
+  return normalize_file_list(role_files)
+end
+
+local function install_files(expected)
+  for _, entry in pairs(expected) do
+    local target_path = INSTALL_ROOT .. "/" .. entry.path
+    local ok, err = download_file(entry.path, target_path)
+    if not ok then
+      fatal("Download failed: " .. tostring(err))
+    end
+  end
+end
+
+local function hash_matches(entry, content)
+  if not entry.hash then
+    return false
+  end
+  local computed = crc32_hash(content)
+  return string.lower(computed) == string.lower(entry.hash)
+end
+
+local function update_files(expected)
+  for _, entry in pairs(expected) do
+    local target_path = INSTALL_ROOT .. "/" .. entry.path
+    local current = read_file(target_path)
+    if current and entry.hash and hash_matches(entry, current) then
+      -- up to date
+    else
+      local ok, err = download_file(entry.path, target_path)
+      if not ok then
+        fatal("Download failed: " .. tostring(err))
+      end
+    end
+  end
+end
+
+local function remove_obsolete_files(expected)
+  if not fs.exists(INSTALL_ROOT) then
+    return
+  end
+  for _, rel in ipairs(list_files(INSTALL_ROOT)) do
+    if rel:sub(1, 7) == "config/" then
+      -- preserve configuration
+    elseif not expected[rel] then
+      local full = INSTALL_ROOT .. "/" .. rel
+      info("Removing obsolete file " .. rel)
+      fs.delete(full)
+    end
+  end
+end
+
+local function run_install()
+  info("Selected action: Neuinstallation")
+  delete_install_root()
+  ensure_install_root()
+
+  local role = select_role()
+  if not role then
+    fatal("Invalid role selection")
+  end
+  info("Selected role: " .. role.label)
+
+  local manifest, err = load_manifest()
+  if not manifest then
+    fatal("Manifest error: " .. tostring(err))
+  end
+
+  local base_files = normalize_file_list(manifest.base_files)
+  local role_files, role_err = files_for_role(manifest, role.key)
+  if not role_files then
+    fatal("Role error: " .. tostring(role_err))
+  end
+
+  local expected = build_expected_files(base_files, role_files)
+  install_files(expected)
+  ensure_role_config(role.label)
+  info("Installation complete")
+end
+
+local function run_update()
+  info("Selected action: Update")
+  local manifest, err = load_manifest()
+  if not manifest then
+    fatal("Manifest error: " .. tostring(err))
+  end
+
+  local role_label = read_role_config()
+  if not role_label then
+    fatal("Role config missing; cannot update")
+  end
+
+  local role_key_map = {
+    MASTER = "master",
+    RT = "rt",
+    ENERGY = "energy",
+    WATER = "water",
+    FUEL = "fuel",
+    REPROCESSING = "reprocessing"
+  }
+  local role_key = role_key_map[role_label]
+  if not role_key then
+    fatal("Unknown role in config: " .. tostring(role_label))
+  end
+  info("Selected role: " .. role_label)
+
+  local base_files = normalize_file_list(manifest.base_files)
+  local role_files, role_err = files_for_role(manifest, role_key)
+  if not role_files then
+    fatal("Role error: " .. tostring(role_err))
+  end
+
+  local expected = build_expected_files(base_files, role_files)
+  ensure_install_root()
+  update_files(expected)
+  remove_obsolete_files(expected)
+  info("Update complete")
+end
+
+local function main()
+  log_line("installer start")
+  print("XReactor Installer")
+  print("")
+  print("1 - Neuinstallation")
+  print("2 - Update")
+  print("3 - Abbrechen")
+  write("Select option: ")
+  local choice = read()
+  if choice == "1" then
+    run_install()
+  elseif choice == "2" then
+    run_update()
+  else
+    info("Installer cancelled")
+  end
+end
+
+main()
