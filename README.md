@@ -19,7 +19,7 @@ wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/
 ```
 wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer
 ```
-Der Installer arbeitet **disk-first** und installiert die Runtime immer auf `/disk/xreactor`.
+Der Installer installiert die Runtime standardmäßig nach `/xreactor`.
 
 ## Projektziel & Überblick
 - **MASTER** sammelt Statusdaten, koordiniert RT-Nodes (Reactor/Turbine) und verteilt Setpoints.
@@ -193,49 +193,13 @@ wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/b
    wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer
    installer
    ```
-   Der Root-Installer `/installer` ist der einzige Einstiegspunkt. Er aktualisiert bei Bedarf `/xreactor/installer_core.lua` und startet anschließend den Core-Installer.
-2. Der Installer läuft standalone; Projekt-Logger wird erst nach erfolgreicher Installation/Update genutzt.
-   - Wenn Disk-Drives gemountet sind (`/disk`, `/disk2`, ...), erstellt der Installer einen **Storage-Pool**:
-     - **Core/Runtime** → größter Datenträger (`<disk>/xreactor`)
-     - **Staging** → größter Datenträger (`<disk>/xreactor_stage`)
-     - **Backups** → zweitgrößter Datenträger (`<disk>/xreactor_backup`)
-     - **Logs** → kleinster Datenträger (`<disk>/xreactor_logs`)
-   - Alle Disks werden automatisch vorbereitet (`xreactor`, `xreactor_stage`, `xreactor_backup`, `xreactor_logs`).
-   - **Wichtig:** Ein Disk hilft nur, wenn auf dem Computer ein lokaler Mount wie `/disk` vorhanden ist. Ohne lokalen Mount bricht der Installer ab und fordert eine lokale Disk an.
+   Der Root-Installer `/installer` ist der einzige Einstiegspunkt. Er lädt die Dateien für die gewählte Rolle nach `/xreactor`.
+2. Der Installer läuft standalone (kein separater Core-Installer); Logs landen in `/xreactor_logs/installer.log`.
 3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
 4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
 
-## Disk Layout (verbindlich)
-Der Installer nutzt **disk-first**. Nach der Installation gilt:
-- `/disk/xreactor` → **aktive Installation**
-- `/disk/xreactor_logs` → **Logs**
-- `/disk/xreactor_stage` → **nur während SAFE UPDATE**
-- `/disk/xreactor_backup` → **nur während SAFE UPDATE**
-
-Stage & Backup existieren **nur während Updates**. Der interne Speicher bleibt weitgehend leer.
-
-## Disk Installation Mode
-Installer scans all locally mounted disks (`/disk`, `/disk2`, ...) and builds a storage pool:
-- Core/runtime → largest disk (`/disk*/xreactor`)
-- Staging → largest disk (`/disk*/xreactor_stage`)
-- Backups → second-largest disk (`/disk*/xreactor_backup`)
-- Logs → smallest disk (`/disk*/xreactor_logs`)
-The bootstrap relocates itself to `/disk*/installer` so all runtime work happens on disk.
-Recommended for Advanced Computers with limited internal storage.
-If no disk mount is present, attach a disk drive directly to this computer and insert a disk so `/disk` appears.
-Installer downloads only the files needed for the selected role (plus shared/core files).
-
-**Troubleshooting: "Out of space"**
-- Prüfe freien Speicher und lösche alte Backups/Logs/Staging (Config/Node-ID bleiben dabei erhalten):
-  ```
-  delete /disk*/xreactor_stage/*
-  delete /disk*/xreactor_backup/*
-  delete /disk*/xreactor_logs/*.log
-  ```
-- Danach Installer erneut starten (`installer`).
-
 **Warum HTML passiert (Fehler `/installer: unexpected symbol near '<'`)**
-- Wird statt einer RAW-Datei eine GitHub-**HTML**-Seite geladen (z. B. Blob-URL, 404, Rate-Limit, Cloudflare), landet HTML im `installer`/`installer_core`.
+- Wird statt einer RAW-Datei eine GitHub-**HTML**-Seite geladen (z. B. Blob-URL, 404, Rate-Limit, Cloudflare), landet HTML im `installer`.
 - Lua versucht das HTML zu parsen → `unexpected symbol near '<'`.
   - **Fix:** RAW-Bootstrap erneut ausführen (beta-Branch):
     ```
@@ -250,28 +214,12 @@ Installer downloads only the files needed for the selected role (plus shared/cor
 - **Retry/Backoff + Jitter**: Mehrere Versuche mit Backoff, ohne bestehende Installation zu überschreiben.
 - **Debug-Log**: Aktivierbar via `settings set xreactor.debug_logging true` (Installer + Nodes loggen Start/Downloads in eigene Logdateien).
 
-**SAFE UPDATE (inkrementell, ohne Config-Reset)**
-- Installer erneut ausführen → Menü **SAFE UPDATE** wählen.
+**Update (inkrementell, ohne Config-Reset)**
+- Installer erneut ausführen → Menü **Update** wählen.
 - Lädt nur **geänderte/fehlende** Dateien laut Manifest (dateiweise).
-- **Delta-Update**: Backup enthält nur die **ersetzten** Dateien.
-- SAFE UPDATE fragt **keine** Rolle neu ab und überschreibt keine Configs/Node-ID.
-- Downloads werden zuerst in ein **Staging-Verzeichnis** (`/disk/xreactor_stage/<timestamp>`) geschrieben, per Checksum verifiziert und erst danach atomar ersetzt.
-- Bei Fehler: Rollback aus `/disk/xreactor_backup/<timestamp>/`, keine halbfertigen Updates.
-- **Update Marker**: Während des Updates wird `/disk/xreactor/.update_in_progress` geschrieben; beim Start wird Recovery (Apply/Rollback) erzwungen, Marker wird danach entfernt.
-- **Recovery nach Abbruch**: Falls der Server beim Update abstürzt, wird beim nächsten Start automatisch Apply/Rollback ausgeführt.
-- **Cleanup**: Stage/Backup werden nach Abschluss entfernt.
-- Downloader nutzt **Retries + Backoff**, prüft HTTP-Status/HTML-Fehler und nutzt RAW-Mirrors (`raw.githubusercontent.com`, `raw.github.com`).
-- **Size mismatch** gilt nur als Transport-Warnung; die Entscheidung trifft die Checksum. Bei Problemen: Retry.
-- Manifest-Cache: `/disk/xreactor/.cache/manifest.lua`. Bei Problemen: **Cached Manifest**, **Retry** oder **Cancel**.
-- Updates sind source_ref-gepinnt: Manifest und Dateien kommen aus derselben Base-URL (Commit-SHA bevorzugt, `main` nur Fallback).
-- Retry startet den gesamten Download-Teil neu (Manifest wird erneut geladen), um konsistent zu bleiben.
-- Installer speichert nur sichere Plain-Data-Snapshots (keine shared refs); Backup/Cache-Indizes sind textbasiert.
-- **Protokoll-Änderung**: Wenn das Update eine neue Major-Protokollversion enthält, bricht SAFE UPDATE ab, um inkonsistente Master/Node-Versionen zu vermeiden.
-- **Core-Dateien Pflicht**: SAFE UPDATE bricht mit klarer Meldung ab, falls das Manifest essentielle Core-/Shared-Files (z. B. `xreactor/core/utils.lua`, `xreactor/shared/constants.lua`) nicht enthält oder Pfade falsch sind.
-- **Datei-Renames/Migrationen**: Wenn Dateien umbenannt/verschoben werden, müssen Migrationsregeln hinterlegt sein – andernfalls wird der Update-Lauf abgebrochen, um halbfertige Zustände zu verhindern.
-- **Loader-Garantie**: SAFE UPDATE stellt sicher, dass der Loader (`xreactor/core/bootstrap.lua`) und alle abhängigen Core-Module aus dem Manifest vorhanden sind, bevor ein Start empfohlen wird.
-
-Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE und Recovery halten die Installation konsistent, ohne Config-Reset.
+- Update fragt **keine** Rolle neu ab und überschreibt keine Configs/Node-ID.
+- Veraltete Dateien (außerhalb von `config/`) werden entfernt, damit die Installation schlank bleibt.
+- Bei Abbruch: Installer einfach erneut starten, um fehlende Dateien nachzuladen.
 
 **Offline/Fehlerfälle**
 - **HTTP disabled**: HTTP in der CC:Tweaked-Config aktivieren, dann Installer erneut starten.
@@ -279,24 +227,17 @@ Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE und Recovery halten die Ins
 - **Checksum mismatch**: Zuerst Manifest aktualisieren und sicherstellen, dass der Installer auf das **beta**-Manifest zeigt (RAW-URL via `raw.githubusercontent.com`).
 
 **Installer starten (ohne Neu-Download)**
-- Root-Installer (`/installer`) ist ein Bootstrap. Er lädt bei Bedarf den Core-Installer nach `/xreactor/installer_core.lua`.
-- SAFE UPDATE läuft immer mit dem lokalen Core-Installer; nur bei Versionssprung wird dieser ersetzt und automatisch neu gestartet.
+- Der lokale `/installer` kann jederzeit erneut ausgeführt werden.
 
 **Logging & Debugging**
 - Installer-Logs liegen in:
-  - `/disk/xreactor_logs/`
+  - `/xreactor_logs/installer.log`
 - Node-Logs liegen in:
-  - `/disk/xreactor_logs/`
+  - `/disk/xreactor_logs/` (oder `/xreactor_logs/`, falls kein `/disk` vorhanden ist).
 - Installer erzeugt die Log-Ordner automatisch.
-- Bootstrap-Log: `/disk/xreactor_logs/installer_debug.log` (mit Rotation `.1`).
-- Installer-Core-Log: `/disk/xreactor_logs/installer_core.log` (mit Rotation `.1`).
 - Node-Logs: `/disk/xreactor_logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`, `master_MASTER-1.log`).
 - Debug-Logging aktivieren: in `/disk/xreactor/*/config.lua` `debug_logging = true` setzen oder global via `settings set xreactor.debug_logging true`.
 - Optionaler Override pro Komponente: `DEBUG_LOG_ENABLED` in den jeweiligen `main.lua`-Dateien.
- - Falls kein Log-File verfügbar ist, gibt der Installer den Log-Buffer am Ende im Terminal aus (RAM-Fallback).
-
-**Update-Hinweis**
-- Aktualisiere auch die Update-bezogenen Dateien auf dem Computer (Installer/Installer-Core), damit Änderungen am Update-Prozess tatsächlich ausgerollt werden.
 
 ## First-Start Setup (neu)
 Ablauf nach Installation:
@@ -366,10 +307,9 @@ return {
 - Paging: Touch auf `<`/`>` in der Fußzeile oder Pfeiltasten links/rechts.
 - Werte, die die API nicht liefert, werden als **`n/a`** angezeigt.
 
-## Recovery & Rollback
-- Backups liegen unter `/disk/xreactor_backup/<timestamp>/`.
-- SAFE UPDATE führt bei Fehlern automatisch Rollback durch und lässt den alten Stand bestehen.
-- Manuelles Rollback: Dateien aus dem Backup-Verzeichnis zurück nach `/disk/xreactor/` kopieren (z. B. bei Stromausfall während Updates).
+## Update Recovery
+- Der Installer nutzt keine Staging-/Backup-Verzeichnisse.
+- Falls ein Update abbricht, einfach den Installer erneut starten; fehlende Dateien werden nachgeladen.
 
 ## Debug-Logging
 - **Standardmäßig AUS**.
@@ -378,9 +318,8 @@ return {
   - Settings API: `settings.set("xreactor.debug_logging", true)` + `settings.save()`.
 - **Config-Fallback-Logs**: Falls eine Config fehlt/invalid ist, schreibt der Node automatisch eine Warnung ins Log und nutzt Defaults, um Start-Crashes zu vermeiden.
 - Logfiles:
-- Bootstrap: `/disk/xreactor_logs/installer_debug.log` (Rotation `.1`)
-- Installer-Core: `/disk/xreactor_logs/installer_core.log` (Rotation `.1`)
-  - Nodes: `/disk/xreactor_logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
+- Bootstrap/Loader: `/disk/xreactor_logs/loader_<role>.log` (z. B. `loader_master.log`)
+- Nodes: `/disk/xreactor_logs/<role>_<node_id>.log` (z. B. `rt_RT-1.log`)
 - ENERGY-Node schreibt bei aktiviertem Debug einmal pro Discovery-Scan einen **Discovery Snapshot** (Peripherie-Liste + Types + Methoden der Kandidaten).
 - Matrix-Debug: Wenn Component-Counts fehlen, loggt der ENERGY-Node die verfügbaren Matrix-Methoden (kein Terminal-Spam).
 - Format: `[Zeit] PREFIX | LEVEL | Nachricht`
@@ -425,18 +364,11 @@ return {
 - **Reason-Codes**: Zentral definiert in `xreactor/shared/health_codes.lua` (Master/Nodes nutzen identische Codes).
 - **Device not bound**: Diagnostics-Page der Node prüfen (Registry zeigt Found/Bound/Missing + letzte Fehler).
 - **Registry corrupt**: Datei `registry_<role>_<node_id>.json.broken_<timestamp>` wird erzeugt; Node läuft weiter im DEGRADED-Modus.
-- **Update fehlgeschlagen**: Rollback wird automatisch durchgeführt, Backup unter `/disk/xreactor_backup/<timestamp>/`.
-- **Manifest-Download fehlgeschlagen**: Retry nutzen oder Cache verwenden (falls vorhanden).
-- **Retry-Menü**: Bei Download-Fehlern gibt es immer ein Retry/Cancel-Menü; Retry versucht den Download erneut mit kurzer Wartezeit.
-- **Installer-Details**: Der Fehlerdialog zeigt die tatsächlich verwendeten RAW-URLs (Tried) und den letzten Fehler (z. B. Timeout, HTTP-Status, HTML-Response).
+- **Update fehlgeschlagen**: Installer erneut starten, damit fehlende Dateien erneut geladen werden.
 - **HTTP API**: Wenn der Installer meldet, dass HTTP nicht verfügbar ist, aktiviere es in der CC:Tweaked-Konfiguration.
 - **HTML-Response**: Weist auf falsche URL (z. B. GitHub-Blob) oder Proxy hin – der Installer erwartet RAW-Links.
 - **404 bei Dateien**: Wenn ein gepinnter Commit nicht mehr passt, fällt der Installer automatisch auf den konfigurierten Default-Branch (`beta`) zurück, statt weiter 404s zu produzieren.
 - **HTML statt Lua**: Installer bricht ab (meist falscher Link oder GitHub-Rate-Limit).
-- **Installer core download failed**: Prüfe HTTP-API/Timeouts und ob `xreactor/release.lua` (Hash/Size) zum tatsächlichen `installer_core.lua` passt.
-- **node_id Migration**: SAFE UPDATE versucht alte Speicherorte zu übernehmen (z. B. alte Config/Dateien) und normalisiert auf String.
-- **SAFE UPDATE Abbruch**: Bei Download-Problemen kann der Nutzer abbrechen; das System bleibt unverändert.
-- **Manueller Restore**: Inhalte aus dem Backup zurückkopieren, danach reboot.
 - **Peripherals fehlen**: Namen in `config.lua` prüfen, Wired-Modem korrekt angeschlossen?
 - **ENERGY ok aber keine Storages/Monitor gebunden**:
   - Discovery-Log prüfen: `/disk/xreactor_logs/energy_<node_id>.log`
