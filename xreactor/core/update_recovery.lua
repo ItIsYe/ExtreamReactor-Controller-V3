@@ -74,8 +74,8 @@ function recovery.read_marker()
   if not content then
     return nil
   end
-  local data = textutils.unserialize(content)
-  if type(data) ~= "table" then
+  local ok, data = pcall(textutils.unserialize, content)
+  if not ok or type(data) ~= "table" then
     return nil
   end
   return data
