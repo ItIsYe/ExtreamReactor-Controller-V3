@@ -2647,9 +2647,7 @@ function init_download_entry(url, attempt)
 end
 
 function resolve_expected_size(meta, opts)
-  local headers = meta and meta.headers or {}
-  local content_length = headers["Content-Length"] or headers["content-length"]
-  return (opts and opts.expected_size) or (content_length and tonumber(content_length)) or nil
+  return (opts and opts.expected_size) or nil
 end
 
 function cleanup_download_artifacts(temp_path, target_path)
