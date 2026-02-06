@@ -112,10 +112,21 @@ local function download_url(url)
   if not ok or not response then
     return nil, "Failed to download " .. url
   end
+  if response.getResponseCode then
+    local code = response.getResponseCode()
+    if code ~= 200 then
+      pcall(response.close)
+      return nil, "HTTP " .. tostring(code) .. " for " .. url
+    end
+  end
   local ok_read, body = pcall(response.readAll)
   pcall(response.close)
   if not ok_read or type(body) ~= "string" then
     return nil, "Failed to read response from " .. url
+  end
+  local snippet = body:sub(1, 200):lower()
+  if snippet:find("<html", 1, true) or snippet:find("<!doctype", 1, true) then
+    return nil, "Downloaded HTML, expected Lua (check RAW URL)"
   end
   return body
 end

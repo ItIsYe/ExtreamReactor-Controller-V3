@@ -121,17 +121,16 @@ Wireless Modem (Control/Status)
 6. **Node Diagnostics**: Jede Node zeigt MASTER-Link (OK/DOWN + Age) + Queue/Inflight/Retry/Dropped/Dedupe.
 7. **Energy Navigation**: ENERGY UI via `ui_router` prüfen (Overview/Matrices/Storages/Diagnostics + Paging).
 8. **Master Multi-Monitor**: Mit 2 Monitoren starten → Overview/Energy/RT verteilt, Layout-Taste testen, Auswahl bleibt nach Reboot.
-9. **Safe Update**: SAFE UPDATE ausführen → keine Rolle/Config-Resets, Rollback bei Fehlern.
+9. **Update (inkrementell)**: Update ausführen → keine Rolle/Config-Resets; nur geänderte Dateien werden aktualisiert.
 10. **Proto-Mismatch**: `proto_ver` Major abweichen lassen → Node antwortet mit `ok=false`, `reason_code=PROTO_MISMATCH`.
-11. **Update Recovery Marker**: `/xreactor/.update_in_progress` anlegen → beim Start wird Recovery (Apply/Rollback) ausgeführt und Marker entfernt.
-12. **Alerts Node Down**: Node stoppen → `CRITICAL` Alert in Alerts-View + Badge im Dashboard.
-13. **Alerts Energy Low**: `energy_warn_pct`/`energy_crit_pct` temporär hochsetzen → WARN/CRITICAL erscheint.
-14. **Alerts Ack**: Alert auswählen → ACK/ACK ALL VISIBLE/ACTIVE setzt `acknowledged`, Alert bleibt sichtbar.
-15. **Alerts History**: Alerts-View → History-Tab, Severity-Filter prüfen.
-16. **Alerts Mute Persist**: Rule/Node muten → reboot → Mute bleibt aktiv.
-17. **RAW Install (beta)**: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer` → `installer` startet den Bootstrap korrekt.
-18. **Blob-Fail Scenario**: Blob-URL laden → `/installer` enthält HTML → Bootstrap verweigert Überschreiben und meldet „Downloaded HTML, expected Lua“.
-19. **Debug Logging Toggle**: `settings set xreactor.debug_logging true` → Installer/Node erzeugen Logdateien beim Start.
+11. **Alerts Node Down**: Node stoppen → `CRITICAL` Alert in Alerts-View + Badge im Dashboard.
+12. **Alerts Energy Low**: `energy_warn_pct`/`energy_crit_pct` temporär hochsetzen → WARN/CRITICAL erscheint.
+13. **Alerts Ack**: Alert auswählen → ACK/ACK ALL VISIBLE/ACTIVE setzt `acknowledged`, Alert bleibt sichtbar.
+14. **Alerts History**: Alerts-View → History-Tab, Severity-Filter prüfen.
+15. **Alerts Mute Persist**: Rule/Node muten → reboot → Mute bleibt aktiv.
+16. **RAW Install (beta)**: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer` → `installer` startet den Bootstrap korrekt.
+17. **Blob-Fail Scenario**: Blob-URL laden → `/installer` enthält HTML → Bootstrap verweigert Überschreiben und meldet „Downloaded HTML, expected Lua“.
+18. **Debug Logging Toggle**: `settings set xreactor.debug_logging true` → Installer/Node erzeugen Logdateien beim Start.
 
 ## Rails/Tuning Guide (Kurz)
 - **RT Control Rails** werden zentral über `rails` in `master/config.lua` und `nodes/*/config.lua` gesteuert.
@@ -182,7 +181,7 @@ Wireless Modem (Control/Status)
   local utils = require("core.utils")
   ```
 
-## Installation, Safe Update
+## Installation, Update
 **Erstinstallation**
 **1-Command Install (RAW, empfohlen)**
 ```
@@ -195,8 +194,8 @@ wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/b
    ```
    Der Root-Installer `/installer` ist der einzige Einstiegspunkt. Er lädt die Dateien für die gewählte Rolle nach `/xreactor`.
 2. Der Installer läuft standalone (kein separater Core-Installer); Logs landen in `/xreactor_logs/installer.log`.
-3. Rolle wählen (MASTER/RT/etc.), Modem-Seiten und Node-ID setzen.
-4. `startup.lua` wird gesetzt; danach reboot oder manuell starten.
+3. Rolle wählen (MASTER/RT/etc.). Der Installer schreibt die Rollenwahl nach `/xreactor/config/role.lua`.
+4. Startup-Einträge/Node-ID setzt der Installer **nicht**; das kann manuell erfolgen (z. B. eigenes `startup.lua` oder Start über `shell.run`).
 
 **Warum HTML passiert (Fehler `/installer: unexpected symbol near '<'`)**
 - Wird statt einer RAW-Datei eine GitHub-**HTML**-Seite geladen (z. B. Blob-URL, 404, Rate-Limit, Cloudflare), landet HTML im `installer`.
@@ -208,10 +207,8 @@ wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/b
     ```
 
 **Wie der Installer das verhindert**
-- **RAW-Only**: Downloader nutzt ausschließlich `raw.githubusercontent.com` (inkl. Mirror).
-- **Response-Validation**: Statuscode, HTML-Signaturen und Content-Length werden geprüft.
-- **Atomic Writes**: Downloads gehen zuerst in `.tmp`, erst nach Validierung wird ersetzt.
-- **Retry/Backoff + Jitter**: Mehrere Versuche mit Backoff, ohne bestehende Installation zu überschreiben.
+- **RAW-Only**: Downloader nutzt ausschließlich `raw.githubusercontent.com`.
+- **Response-Validation**: HTTP-Statuscode und HTML-Signaturen werden geprüft.
 - **Debug-Log**: Aktivierbar via `settings set xreactor.debug_logging true` (Installer + Nodes loggen Start/Downloads in eigene Logdateien).
 
 **Update (inkrementell, ohne Config-Reset)**
@@ -223,8 +220,8 @@ wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/b
 
 **Offline/Fehlerfälle**
 - **HTTP disabled**: HTTP in der CC:Tweaked-Config aktivieren, dann Installer erneut starten.
-- **GitHub Timeout**: Installer nutzt Retry; falls weiter fehlschlägt, kann ein Cached Manifest verwendet werden oder der Installer bricht sauber ohne Änderungen ab.
-- **Checksum mismatch**: Zuerst Manifest aktualisieren und sicherstellen, dass der Installer auf das **beta**-Manifest zeigt (RAW-URL via `raw.githubusercontent.com`).
+- **GitHub Timeout**: Installer meldet den Fehler und kann anschließend erneut gestartet werden.
+- **Checksum mismatch**: Manifest aktualisieren und sicherstellen, dass der Installer auf das **beta**-Manifest zeigt (RAW-URL via `raw.githubusercontent.com`).
 
 **Installer starten (ohne Neu-Download)**
 - Der lokale `/installer` kann jederzeit erneut ausgeführt werden.
@@ -246,7 +243,7 @@ Ablauf nach Installation:
 3. Rollenwahl (MASTER/RT/ENERGY/WATER/FUEL/REPROCESSING).
 4. Automatisches Computer-Label: `XR-ROLE-ID` (z. B. `XR-RT-12`).
 5. Node-ID-Erzeugung: `node-<ID>` (z. B. `node-12`).
-6. Config wird unter `/xreactor/config/node.lua` gespeichert.
+6. Config wird unter `/disk/xreactor/config/node.lua` gespeichert.
 7. Reboot → Normalstart.
 
 **node.lua Struktur:**
@@ -307,7 +304,7 @@ return {
 - Paging: Touch auf `<`/`>` in der Fußzeile oder Pfeiltasten links/rechts.
 - Werte, die die API nicht liefert, werden als **`n/a`** angezeigt.
 
-## Update Recovery
+## Update Hinweise
 - Der Installer nutzt keine Staging-/Backup-Verzeichnisse.
 - Falls ein Update abbricht, einfach den Installer erneut starten; fehlende Dateien werden nachgeladen.
 
@@ -400,7 +397,7 @@ return {
 2. **Node stoppen** → MASTER zeigt `DOWN/COMMS_DOWN` nach Timeout.
 3. **COMMAND senden** (z. B. RT target RPM) → `ACK_APPLIED` im Master-Log/Diagnostics sichtbar.
 4. **Diagnostics Pages** (ENERGY/RT/FUEL/WATER/REPROC) → Registry snapshot + last errors sichtbar.
-5. **Safe Update** ausführen → Rolle/Config bleiben erhalten, neue Dateien sind vorhanden.
+5. **Update** ausführen → Rolle/Config bleiben erhalten, neue Dateien sind vorhanden.
 
 ## Wie teste ich das System? (6 Szenarien)
 1. **RT-Node startet ohne MASTER** → läuft stabil in **AUTONOM**.
