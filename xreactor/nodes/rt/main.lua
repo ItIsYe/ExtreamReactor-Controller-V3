@@ -1627,7 +1627,11 @@ local function hello()
 end
 
 set_reactors_active = function(active)
-  for name, reactor in pairs(peripherals.reactors) do
+  local reactors = peripherals and peripherals.reactors or {}
+  if not next(reactors) then
+    warn_once("reactors_missing", "No reactors detected")
+  end
+  for name, reactor in pairs(reactors) do
     local caps = get_device_caps("reactors", name)
     local ok, result = pcall(setReactorActive, reactor, caps, active)
     if not ok then
@@ -1651,7 +1655,11 @@ set_turbines_active = function(active)
 end
 
 apply_safe_controls = function()
-  for name, reactor in pairs(peripherals.reactors) do
+  local reactors = peripherals and peripherals.reactors or {}
+  if not next(reactors) then
+    warn_once("reactors_missing", "No reactors detected")
+  end
+  for name, reactor in pairs(reactors) do
     local caps = get_device_caps("reactors", name)
     if caps.getControlRods or caps.setAllControlRodLevels then
       local ctrl = ensure_reactor_ctrl(name)
