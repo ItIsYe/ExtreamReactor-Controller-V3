@@ -1217,6 +1217,14 @@ function collect_dir_entries(path)
   return entries
 end
 
+function installation_exists()
+  if not fs.exists(C.BASE_DIR) or not fs.isDir(C.BASE_DIR) then
+    return false
+  end
+  local entries = collect_dir_entries(C.BASE_DIR)
+  return #entries > 0
+end
+
 function prune_backup_dirs()
   if not CONFIG.MAX_BACKUPS or CONFIG.MAX_BACKUPS <= 0 then
     return {}
@@ -4534,10 +4542,19 @@ function full_reinstall_prepare()
       cleanup_storage_for_space()
       return nil
     end
-    local use_staging = preflight_space(entries, C.UPDATE_STAGING_BASE, "FULL REINSTALL staging")
+    local first_install = not installation_exists()
+    local use_staging = not first_install
+    if use_staging then
+      use_staging = preflight_space(entries, C.UPDATE_STAGING_BASE, "FULL REINSTALL staging")
+    end
     if not use_staging then
-      print("Not enough space for staging. Falling back to direct install.")
-      log("WARN", "FULL REINSTALL staging disabled due to space")
+      if first_install then
+        print("First installation detected. Installing directly without staging/backup.")
+        log("INFO", "FULL REINSTALL first install: staging/backup disabled")
+      else
+        print("Not enough space for staging. Falling back to direct install.")
+        log("WARN", "FULL REINSTALL staging disabled due to space")
+      end
       return {
         manifest_content = manifest_content,
         manifest = filtered_manifest,
@@ -4545,6 +4562,7 @@ function full_reinstall_prepare()
         hash_algo = hash_algo,
         entries = entries,
         use_staging = false,
+        first_install = first_install,
         keep_config = keep_config,
         existing_role = existing_role,
         existing_cfg_path = existing_cfg_path,
@@ -4560,6 +4578,7 @@ function full_reinstall_prepare()
         hash_algo = hash_algo,
         entries = entries,
         use_staging = true,
+        first_install = first_install,
         staged = staged,
         stage_dir = stage_dir,
         keep_config = keep_config,
@@ -4661,6 +4680,7 @@ function full_reinstall_apply(context)
   local staged = context.staged
   local stage_dir = context.stage_dir
   local use_staging = context.use_staging
+  local first_install = context.first_install == true
   local entries = context.entries
   local update_paths = build_update_paths(entries)
   local created = {}
@@ -4669,42 +4689,46 @@ function full_reinstall_apply(context)
   for _, target in pairs(role_targets) do
     table.insert(protected, C.BASE_DIR .. "/" .. target.config)
   end
-  local backup_candidates = {}
-  for _, path in ipairs(update_paths) do
-    table.insert(backup_candidates, path)
-  end
-  for _, path in ipairs(migration_paths) do
-    table.insert(backup_candidates, path)
-  end
-  for _, path in ipairs(protected) do
-    table.insert(backup_candidates, path)
-  end
-  local backup_needed = calculate_backup_bytes(backup_candidates)
-  if not require_space(C.BACKUP_BASE, backup_needed, "Backup files") then
-    print("FULL REINSTALL aborted: not enough space for backup.")
-    log("WARN", "FULL REINSTALL aborted: insufficient backup space")
-    cleanup_staging(stage_dir)
-    clear_update_marker()
-    return
-  end
-  local backup_dir = create_backup_dir()
+  local backup_dir = nil
+  local rollback_paths = nil
+  if not first_install then
+    local backup_candidates = {}
+    for _, path in ipairs(update_paths) do
+      table.insert(backup_candidates, path)
+    end
+    for _, path in ipairs(migration_paths) do
+      table.insert(backup_candidates, path)
+    end
+    for _, path in ipairs(protected) do
+      table.insert(backup_candidates, path)
+    end
+    local backup_needed = calculate_backup_bytes(backup_candidates)
+    if not require_space(C.BACKUP_BASE, backup_needed, "Backup files") then
+      print("FULL REINSTALL aborted: not enough space for backup.")
+      log("WARN", "FULL REINSTALL aborted: insufficient backup space")
+      cleanup_staging(stage_dir)
+      clear_update_marker()
+      return
+    end
+    backup_dir = create_backup_dir()
 
-  backup_files(backup_dir, update_paths)
-  backup_files(backup_dir, migration_paths)
-  backup_files(backup_dir, protected)
+    backup_files(backup_dir, update_paths)
+    backup_files(backup_dir, migration_paths)
+    backup_files(backup_dir, protected)
 
-  local created_before = build_created_before(update_paths)
-  local rollback_paths = build_rollback_paths(update_paths, migration_paths, protected)
-  write_marker_payload(
-    manifest,
-    release,
-    use_staging and stage_dir or nil,
-    backup_dir,
-    entries,
-    created_before,
-    rollback_paths,
-    hash_algo
-  )
+    local created_before = build_created_before(update_paths)
+    rollback_paths = build_rollback_paths(update_paths, migration_paths, protected)
+    write_marker_payload(
+      manifest,
+      release,
+      use_staging and stage_dir or nil,
+      backup_dir,
+      entries,
+      created_before,
+      rollback_paths,
+      hash_algo
+    )
+  end
 
   local ok, err = false, nil
   if use_staging then
@@ -4720,9 +4744,13 @@ function full_reinstall_apply(context)
     end
   end
   if not ok then
-    rollback_from_backup(backup_dir, rollback_paths, created)
+    if backup_dir and rollback_paths then
+      rollback_from_backup(backup_dir, rollback_paths, created)
+    end
     cleanup_staging(stage_dir)
-    clear_update_marker()
+    if not first_install then
+      clear_update_marker()
+    end
     print("FULL REINSTALL failed. Rolled back. Error: " .. tostring(err))
     log("ERROR", "FULL REINSTALL apply failed: " .. tostring(err))
     return
@@ -4746,7 +4774,9 @@ function full_reinstall_apply(context)
   print("FULL REINSTALL complete.")
   print("Next steps: reboot or run the role entrypoint.")
   log("INFO", "FULL REINSTALL complete")
-  clear_update_marker()
+  if not first_install then
+    clear_update_marker()
+  end
   cleanup_update_artifacts(stage_dir, backup_dir)
 end
 
@@ -4817,7 +4847,7 @@ function main()
   if result and result ~= "no marker" then
     log("INFO", "Update recovery: " .. tostring(result))
   end
-  if fs.exists(C.BASE_DIR) then
+  if installation_exists() then
     print("Existing installation detected.")
     log("INFO", "Existing installation detected")
     local choice = ui_menu(nil, { "SAFE UPDATE", "FULL REINSTALL", "CANCEL" }, 1)
