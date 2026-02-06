@@ -58,6 +58,9 @@ local function safe_serialize(value)
 end
 
 function utils.ensure_dir(path)
+  if not path or path == "" then
+    return
+  end
   if not fs.exists(path) then
     fs.makeDir(path)
   end

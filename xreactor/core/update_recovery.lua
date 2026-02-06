@@ -35,6 +35,25 @@ local function ensure_dir(path)
   end
 end
 
+local function join_path(base, path)
+  if not base or base == "" then
+    return path
+  end
+  if not path or path == "" then
+    return base
+  end
+  if base:sub(-1) == "/" then
+    if path:sub(1, 1) == "/" then
+      return base .. path:sub(2)
+    end
+    return base .. path
+  end
+  if path:sub(1, 1) == "/" then
+    return base .. path
+  end
+  return base .. "/" .. path
+end
+
 local function crc32_hash(content)
   if content == nil then
     return nil
@@ -98,7 +117,7 @@ local function rollback(marker)
   end
   local paths = marker.rollback_paths or {}
   for _, path in ipairs(paths) do
-    local backup_path = marker.backup_dir .. path
+    local backup_path = join_path(marker.backup_dir, path)
     if fs.exists(backup_path) then
       ensure_dir(fs.getDir(path))
       fs.copy(backup_path, path)
@@ -133,12 +152,14 @@ local function apply_staged(marker)
     if content == nil then
       return false, "missing staged content: " .. entry.path
     end
-    local target_path = "/" .. entry.path
+    local base_root = marker.install_root or marker.base_dir or "/"
+    local target_path = join_path(base_root, entry.path)
     ensure_dir(fs.getDir(target_path))
     write_atomic(target_path, content)
   end
   for _, entry in ipairs(marker.updates or {}) do
-    local target_path = "/" .. entry.path
+    local base_root = marker.install_root or marker.base_dir or "/"
+    local target_path = join_path(base_root, entry.path)
     local verify = file_checksum(target_path, algo)
     if verify ~= entry.hash then
       return false, "applied hash mismatch: " .. entry.path

@@ -129,7 +129,7 @@ function comms_service:send_command(target, command, opts)
   return self.comms.send(target, constants.message_types.COMMAND, payload, {
     priority = 1,
     require_ack = true,
-    require_applied = opts and opts.requires_applied or false,
+    require_applied = opts and (opts.requires_applied or opts.require_applied) or false,
     channel = control_channel(self.config)
   })
 end
