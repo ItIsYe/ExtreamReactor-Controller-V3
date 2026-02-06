@@ -2176,7 +2176,7 @@ local function update_status_snapshot()
   end
 
   status_snapshot = {
-    node_id = comms and comms.network and comms.network.id or config.role,
+    node_id = comms and comms.network and comms.network.id or config.node_id,
     state = current_state,
     master_connected = master_ok,
     reactor_count = #config.reactors,
