@@ -685,12 +685,33 @@ function internal_log(prefix, message, level)
 end
 
 local function ensure_required_dirs()
-  fs.makeDir(C.BASE_DIR)
-  fs.makeDir(C.LOCAL_LOG_DIR)
-  fs.makeDir(C.LOCAL_STAGING_BASE)
-  fs.makeDir(C.LOCAL_BACKUP_BASE)
-  fs.makeDir(C.UPDATE_STAGING_BASE)
-  fs.makeDir(C.BACKUP_BASE)
+  local required = {
+    "/xreactor",
+    "/xreactor_logs",
+    "/xreactor_stage",
+    "/xreactor_backup"
+  }
+  for _, path in ipairs(required) do
+    local ok, err = pcall(fs.makeDir, path)
+    if not ok and not fs.exists(path) then
+      print("WARN: unable to create storage dir " .. tostring(path) .. ": " .. tostring(err))
+      if type(log) == "function" then
+        log("WARN", "Unable to create storage dir " .. tostring(path) .. ": " .. tostring(err))
+      end
+    end
+  end
+
+  for _, path in ipairs({ C.BASE_DIR, C.LOCAL_LOG_DIR, C.LOCAL_STAGING_BASE, C.LOCAL_BACKUP_BASE, C.UPDATE_STAGING_BASE, C.BACKUP_BASE }) do
+    if path and path ~= "" then
+      local ok, err = pcall(fs.makeDir, path)
+      if not ok and not fs.exists(path) then
+        print("WARN: unable to prepare storage path " .. tostring(path) .. ": " .. tostring(err))
+        if type(log) == "function" then
+          log("WARN", "Unable to prepare storage path " .. tostring(path) .. ": " .. tostring(err))
+        end
+      end
+    end
+  end
 end
 
 function init_internal_logger()
@@ -3304,17 +3325,40 @@ function acquire_manifest()
 end
 
 function ensure_required_dirs()
-  ensure_dir(C.BASE_DIR)
-  ensure_dir(C.LOCAL_LOG_DIR)
-  ensure_dir(C.LOCAL_STAGING_BASE)
-  ensure_dir(C.LOCAL_BACKUP_BASE)
-  ensure_dir(C.UPDATE_STAGING_BASE)
-  ensure_dir(C.BACKUP_BASE)
+  local required = {
+    "/xreactor",
+    "/xreactor_logs",
+    "/xreactor_stage",
+    "/xreactor_backup"
+  }
+  for _, path in ipairs(required) do
+    local ok, err = pcall(fs.makeDir, path)
+    if not ok and not fs.exists(path) then
+      print("WARN: unable to create storage dir " .. tostring(path) .. ": " .. tostring(err))
+      log("WARN", "Unable to create storage dir " .. tostring(path) .. ": " .. tostring(err))
+    end
+  end
+
+  for _, path in ipairs({ C.BASE_DIR, C.LOCAL_LOG_DIR, C.LOCAL_STAGING_BASE, C.LOCAL_BACKUP_BASE, C.UPDATE_STAGING_BASE, C.BACKUP_BASE }) do
+    if path and path ~= "" then
+      local ok, err = pcall(fs.makeDir, path)
+      if not ok and not fs.exists(path) then
+        print("WARN: unable to prepare storage path " .. tostring(path) .. ": " .. tostring(err))
+        log("WARN", "Unable to prepare storage path " .. tostring(path) .. ": " .. tostring(err))
+      end
+    end
+  end
+
   if storage_state.mounts and #storage_state.mounts > 0 then
     for _, entry in ipairs(storage_state.mounts) do
-      ensure_dir(entry.path .. "/xreactor")
-      ensure_dir(entry.path .. "/xreactor_logs")
-      ensure_dir(entry.path .. "/xreactor_stage")
+      for _, suffix in ipairs({ "/xreactor", "/xreactor_logs", "/xreactor_stage", "/xreactor_backup" }) do
+        local path = entry.path .. suffix
+        local ok, err = pcall(fs.makeDir, path)
+        if not ok and not fs.exists(path) then
+          print("WARN: unable to prepare disk storage path " .. tostring(path) .. ": " .. tostring(err))
+          log("WARN", "Unable to prepare disk storage path " .. tostring(path) .. ": " .. tostring(err))
+        end
+      end
     end
   end
 end
@@ -4762,13 +4806,11 @@ function main()
     return
   end
   print("=== XReactor Installer ===")
-  if not STORAGE_STATE then
-    local msg = "Storage setup failed: " .. tostring(storage_err or "unknown error")
-    print(msg)
-    log("ERROR", msg)
-    return
+  if not storage_state or not storage_state.storage_root then
+    local msg = "Storage setup warning: storage state incomplete; continuing with defaults."
+    print("WARN: " .. msg)
+    log("WARN", msg)
   end
-  print_storage_summary(STORAGE_STATE)
   log("INFO", "Installer started")
   print_storage_summary()
   local recovered, result = recover_update_marker()
