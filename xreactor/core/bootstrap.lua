@@ -361,22 +361,7 @@ function bootstrap.setup(opts)
     table.insert(package.searchers, 1, xreactor_searcher)
     searcher_installed = true
   end
-  local ok_recovery, recovery_mod = pcall(bootstrap.require, "core.update_recovery")
-  if ok_recovery and recovery_mod and recovery_mod.recover_if_needed then
-    local marker = recovery_mod.read_marker and recovery_mod.read_marker() or nil
-    local ok_run, result = pcall(recovery_mod.recover_if_needed)
-    state.last_recovery = {
-      had_marker = marker ~= nil,
-      marker = marker,
-      ok = ok_run == true,
-      result = ok_run and result or nil
-    }
-    if ok_run and result then
-      log_line("INFO", "update recovery: " .. tostring(result))
-    elseif not ok_run then
-      log_line("ERROR", "update recovery failed: " .. tostring(result))
-    end
-  end
+  state.last_recovery = nil
   run_first_start_setup()
   log_environment()
 end

@@ -44,11 +44,11 @@ end
 
 local function open_modem(name, channels)
   if not name or not peripheral.isPresent(name) then
-    error("Modem " .. tostring(name) .. " missing")
+    return nil, "missing"
   end
   local modem, err = utils.safe_wrap(name)
   if not modem then
-    error("Modem " .. tostring(name) .. " wrap failed: " .. tostring(err))
+    return nil, "wrap failed: " .. tostring(err)
   end
   for _, channel in ipairs(channels) do
     modem.open(channel)
@@ -57,12 +57,43 @@ local function open_modem(name, channels)
 end
 
 function network.init(config)
-  local modem = open_modem(config.wireless_modem, { constants.channels.CONTROL, constants.channels.STATUS })
+  local modem, modem_err = open_modem(config.wireless_modem, { constants.channels.CONTROL, constants.channels.STATUS })
   local wired = nil
   if config.wired_modem and peripheral.isPresent(config.wired_modem) then
     wired = select(1, utils.safe_wrap(config.wired_modem))
   end
   local node_id = resolve_node_id(config)
+  if not modem then
+    warn_once("modem.missing", "WARN: wireless modem missing; comms disabled (" .. tostring(modem_err) .. ")")
+    return {
+      modem = nil,
+      wired = wired,
+      id = node_id,
+      role = config.role,
+      send = function(_, _, _)
+        return false, "wireless modem missing"
+      end,
+      receive = function(_, timeout)
+        if timeout then
+          local timer = os.startTimer(timeout)
+          while true do
+            local event = { os.pullEvent() }
+            if event[1] == "timer" and event[2] == timer then
+              return nil
+            end
+          end
+        end
+        return nil
+      end,
+      broadcast = function(_, _)
+        return false, "wireless modem missing"
+      end,
+      push_wired = function(_, side, method, ...)
+        if not wired then return nil, "wired modem missing" end
+        return utils.safe_peripheral_call(side, method, ...)
+      end
+    }
+  end
   return {
     modem = modem,
     wired = wired,

@@ -552,7 +552,7 @@ local function resolve_steam_tank_name()
   end
   for _, name in ipairs(peripheral.getNames()) do
     if string.find(string.lower(name), "steam") then
-      local tank = peripheral.wrap(name)
+      local tank = utils.safe_wrap(name)
       if tank and tank.getFluidAmount then
         steam_tank_name = name
         return steam_tank_name
@@ -567,7 +567,11 @@ local function read_steam_tank_amount()
   if not name then
     return nil
   end
-  local tank = peripheral.wrap(name)
+  local tank, err = utils.safe_wrap(name)
+  if not tank then
+    warn_once("steam_tank_wrap:" .. name, "Steam tank wrap failed for " .. name .. ": " .. tostring(err))
+    return nil
+  end
   if tank and tank.getFluidAmount then
     local ok, amount = pcall(tank.getFluidAmount)
     if ok and type(amount) == "number" then
@@ -581,7 +585,15 @@ local function read_reactor_steam_amount()
   local total = 0
   local found = false
   for _, name in ipairs(config.reactors or {}) do
-    local reactor = peripherals.reactors[name] or peripheral.wrap(name)
+    local reactor = peripherals.reactors[name]
+    if not reactor then
+      local wrapped, err = utils.safe_wrap(name)
+      if wrapped then
+        reactor = wrapped
+      else
+        warn_once("reactor_wrap:" .. name, "Reactor wrap failed for " .. name .. ": " .. tostring(err))
+      end
+    end
     if reactor then
       local amount = nil
       if reactor.getHotFluidAmount then
@@ -626,7 +638,15 @@ local function get_total_steam_demand()
     local ctrl = get_turbine_ctrl(name)
     local rpm = ctrl.rpm
     if type(rpm) ~= "number" then
-      local turbine = peripherals.turbines[name] or peripheral.wrap(name)
+      local turbine = peripherals.turbines[name]
+      if not turbine then
+        local wrapped, err = utils.safe_wrap(name)
+        if wrapped then
+          turbine = wrapped
+        else
+          warn_once("turbine_wrap:" .. name, "Turbine wrap failed for " .. name .. ": " .. tostring(err))
+        end
+      end
       if turbine and turbine.getRotorSpeed then
         local ok, value = pcall(turbine.getRotorSpeed)
         if ok and type(value) == "number" then

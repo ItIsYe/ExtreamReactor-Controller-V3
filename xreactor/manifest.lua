@@ -10,13 +10,13 @@ return {
     { path = "adapters/turbine.lua", size_bytes = 3485, hash = "e2d43c15" },
     { path = "core/alert_rules.lua", size_bytes = 12921, hash = "f4c32c65" },
     { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
-    { path = "core/bootstrap.lua", size_bytes = 11082, hash = "d3ab118c" },
+    { path = "core/bootstrap.lua", size_bytes = 10439, hash = "8ba4ba0c" },
     { path = "core/comms.lua", size_bytes = 17172, hash = "fc8f6e02" },
     { path = "core/control_rails.lua", size_bytes = 2835, hash = "927b12c0" },
     { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
     { path = "core/logger.lua", size_bytes = 4429, hash = "30895567" },
     { path = "core/monitor_manager.lua", size_bytes = 2924, hash = "b41a0f0e" },
-    { path = "core/network.lua", size_bytes = 3241, hash = "870f6483" },
+    { path = "core/network.lua", size_bytes = 4143, hash = "a13e50b1" },
     { path = "core/protocol.lua", size_bytes = 5955, hash = "fc94cb4d" },
     { path = "core/registry.lua", size_bytes = 9265, hash = "78a50cd8" },
     { path = "core/safety.lua", size_bytes = 771, hash = "73bab9de" },
@@ -25,7 +25,6 @@ return {
     { path = "core/turbine_ctrl.lua", size_bytes = 1266, hash = "a0681bf2" },
     { path = "core/ui.lua", size_bytes = 6038, hash = "1d5c8711" },
     { path = "core/ui_router.lua", size_bytes = 5885, hash = "a0991195" },
-    { path = "core/update_recovery.lua", size_bytes = 4159, hash = "e2f6977a" },
     { path = "core/utils.lua", size_bytes = 7801, hash = "a425d6c7" },
     { path = "release.lua", size_bytes = 207, hash = "8994add5" },
     { path = "services/alert_service.lua", size_bytes = 10006, hash = "900e97ea" },
@@ -58,7 +57,7 @@ return {
     },
     rt = {
       { path = "nodes/rt/config.lua", size_bytes = 4290, hash = "c4ac557a" },
-      { path = "nodes/rt/main.lua", size_bytes = 93873, hash = "e0c29eb5" }
+      { path = "nodes/rt/main.lua", size_bytes = 94501, hash = "b75f088a" }
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4614, hash = "7b0f8089" },
