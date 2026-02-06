@@ -1,6 +1,8 @@
 local INSTALL_ROOT = "/xreactor"
 local LOG_DIR = "/xreactor_logs"
 local LOG_PATH = LOG_DIR .. "/installer.log"
+local STARTUP_PATH = "/startup"
+local STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n"
 local BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
 local MANIFEST_URL = BASE_URL .. "manifest.lua"
 
@@ -88,6 +90,38 @@ local function read_file(path)
   local content = file.readAll()
   file.close()
   return content
+end
+
+local function is_xreactor_startup(content)
+  if not content then
+    return false
+  end
+  if content:find("/xreactor/start.lua", 1, true) then
+    return true
+  end
+  if content:find("XReactor", 1, true) then
+    return true
+  end
+  return false
+end
+
+local function ensure_startup_script()
+  local existing = nil
+  if fs.exists(STARTUP_PATH) then
+    existing = read_file(STARTUP_PATH)
+  end
+
+  if existing and not is_xreactor_startup(existing) then
+    warn("Startup file exists and does not belong to XReactor; leaving unchanged")
+    return
+  end
+
+  local ok, err = write_file(STARTUP_PATH, STARTUP_CONTENT)
+  if not ok then
+    warn("Failed to write startup file: " .. tostring(err))
+    return
+  end
+  info("Startup file configured")
 end
 
 local function write_file(path, content)
@@ -353,6 +387,7 @@ local function run_install()
   local expected = build_expected_files(base_files, role_files)
   install_files(expected)
   ensure_role_config(role.label)
+  ensure_startup_script()
   info("Installation complete")
 end
 
@@ -392,6 +427,7 @@ local function run_update()
   ensure_install_root()
   update_files(expected)
   remove_obsolete_files(expected)
+  ensure_startup_script()
   info("Update complete")
 end
 
