@@ -2319,7 +2319,7 @@ function stream_response_to_file(response, target_path, opts)
   if not file then
     return false, "open failed"
   end
-  local chunk_size = (opts and opts.chunk_size) or C.DOWNLOAD_CHUNK_SIZE or 4096
+  local chunk_size = (opts and opts.chunk_size) or C.DOWNLOAD_CHUNK_SIZE or 8192
   local prefix_limit = (opts and opts.prefix_bytes) or 512
   local prefix = ""
   local total = 0
