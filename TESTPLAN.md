@@ -1,7 +1,7 @@
 # Testplan (Finalisierung)
 
 ## Install/Update
-1. **Fresh Install**: MASTER/RT/ENERGY mit `lua /installer.lua`.
+1. **Fresh Install**: MASTER/RT/ENERGY mit `installer`.
 2. **SAFE UPDATE** aus bestehender Beta-Installation (ohne Config-Reset).
 3. **First-Start Setup**: Rollenwahl, Label (`XR-ROLE-ID`) + `node-<ID>` erzeugt, `/disk/xreactor/config/node.lua` geschrieben, Reboot läuft durch.
 4. **Low-Space Abort**: Fülle Disk fast voll → SAFE UPDATE starten → erwarteter sauberer Abbruch mit Disk-Übersicht, Log-Eintrag, keine Stage/Backup-Reste.

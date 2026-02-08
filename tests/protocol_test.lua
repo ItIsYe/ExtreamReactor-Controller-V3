@@ -41,6 +41,14 @@ if ok_payload or err_payload ~= "missing payload" then
   error("expected missing payload validation error")
 end
 
+local command_nil = protocol.command("MASTER-1", constants.roles.MASTER, "RT-1", nil)
+local ok_command_nil, err_command_nil = protocol.validateMessage(command_nil)
+assert_ok("command nil payload", ok_command_nil, err_command_nil)
+
+local command_string = protocol.command("MASTER-1", constants.roles.MASTER, "RT-1", "invalid")
+local ok_command_string, err_command_string = protocol.validateMessage(command_string)
+assert_ok("command string payload", ok_command_string, err_command_string)
+
 local proto_mismatch = protocol.status("MASTER-1", constants.roles.MASTER, { ok = true })
 proto_mismatch.proto_ver = { major = constants.proto_ver.major + 1, minor = 0 }
 local ok_proto, err_proto = protocol.validateMessage(proto_mismatch)

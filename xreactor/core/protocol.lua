@@ -96,6 +96,7 @@ function protocol.alert(sender_id, role, severity, message)
 end
 
 function protocol.command(sender_id, role, target_node, command)
+  command = type(command) == "table" and command or {}
   command.command_id = command.command_id or os.epoch("utc")
   local msg = base_message(constants.message_types.COMMAND, sender_id, role, { target = target_node, command = command })
   msg.dst = target_node

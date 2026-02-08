@@ -17,7 +17,7 @@ return {
     { path = "core/logger.lua", size_bytes = 4429, hash = "30895567" },
     { path = "core/monitor_manager.lua", size_bytes = 2924, hash = "b41a0f0e" },
     { path = "core/network.lua", size_bytes = 4143, hash = "a13e50b1" },
-    { path = "core/protocol.lua", size_bytes = 5955, hash = "fc94cb4d" },
+    { path = "core/protocol.lua", size_bytes = 6086, hash = "602e75c9" },
     { path = "core/registry.lua", size_bytes = 9265, hash = "78a50cd8" },
     { path = "core/safety.lua", size_bytes = 771, hash = "73bab9de" },
     { path = "core/state_machine.lua", size_bytes = 842, hash = "4ae6c19c" },
