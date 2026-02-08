@@ -360,7 +360,10 @@ end
 
 local function render_alert_banner(target, model)
   if model.local_alerts_critical and model.local_alerts_critical > 0 then
-    local w, _ = target.getSize()
+    local w = select(1, ui.getSize(target))
+    if not w then
+      return
+    end
     local label = "CRIT " .. tostring(model.local_alerts_critical)
     ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
   end
@@ -400,7 +403,10 @@ local function render_monitor()
     monitor_router = ui_router.new({
       pages = {
         { name = "Overview", render = function(target)
-          local w, h = target.getSize()
+          local w, h = ui.getSize(target)
+          if not w or not h then
+            return
+          end
           ui.panel(target, 1, 1, w, h, "WATER NODE", model.status)
           render_alert_banner(target, model)
           ui.text(target, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
@@ -410,7 +416,10 @@ local function render_monitor()
           ui.text(target, 2, 7, ("Master link: %s age:%s"):format(model.master_state, model.master_age), colors.get("text"), colors.get("background"))
         end },
         { name = "Details", render = function(target)
-          local w, h = target.getSize()
+          local w, h = ui.getSize(target)
+          if not w or not h then
+            return
+          end
           ui.panel(target, 1, 1, w, h, "WATER DETAILS", model.status)
           render_alert_banner(target, model)
           local rows = {
@@ -421,7 +430,10 @@ local function render_monitor()
           ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
         end },
         { name = "Diagnostics", render = function(target)
-          local w, h = target.getSize()
+          local w, h = ui.getSize(target)
+          if not w or not h then
+            return
+          end
           ui.panel(target, 1, 1, w, h, "WATER DIAGNOSTICS", model.status)
           render_alert_banner(target, model)
           local rows = {

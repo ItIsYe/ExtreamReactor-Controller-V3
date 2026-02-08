@@ -7,7 +7,10 @@ local function render(mon, model)
   local key = textutils.serialize(model)
   if cache[mon] == key then return end
   cache[mon] = key
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   widgets.card(mon, 1, 1, w, h, "RT DASHBOARD", "OK")
   ui.text(mon, 2, 2, "Ramp: " .. tostring(model.ramp_profile or "NORMAL"), colorset.get("text"), colorset.get("background"))
   ui.text(mon, 2, 3, "Sequence: " .. tostring(model.sequence_state or "IDLE"), colorset.get("text"), colorset.get("background"))

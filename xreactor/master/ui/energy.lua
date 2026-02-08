@@ -18,7 +18,10 @@ local function render(mon, model)
   local key = textutils.serialize(model)
   if cache[mon] == key then return end
   cache[mon] = key
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   widgets.card(mon, 1, 1, w, h, "ENERGY", "OK")
   local percent = model.capacity and model.capacity > 0 and (model.stored or 0) / model.capacity or 0
   ui.bigNumber(mon, 2, 2, "Stored", string.format("%.0f%%", percent * 100), "", model.status)

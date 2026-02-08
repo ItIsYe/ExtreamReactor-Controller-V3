@@ -21,6 +21,17 @@ local function is_dirty(mon, key, snapshot)
   return true
 end
 
+function ui.getSize(mon)
+  if not mon or type(mon.getSize) ~= "function" then
+    return nil
+  end
+  local ok, w, h = pcall(mon.getSize, mon)
+  if ok and type(w) == "number" and type(h) == "number" then
+    return w, h
+  end
+  return nil
+end
+
 function ui.setScale(mon, scale)
   if not mon then return end
   if mon.setTextScale then mon.setTextScale(scale) end

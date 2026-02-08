@@ -2233,7 +2233,10 @@ end
 
 local function render_alert_banner(target, model)
   if model.local_alerts_critical and model.local_alerts_critical > 0 then
-    local w, _ = target.getSize()
+    local w = select(1, ui.getSize(target))
+    if not w then
+      return
+    end
     local label = "CRIT " .. tostring(model.local_alerts_critical)
     ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
   end
@@ -2290,7 +2293,10 @@ local function build_diagnostic_rows(model)
 end
 
 local function render_overview(target, model)
-  local w, h = target.getSize()
+  local w, h = ui.getSize(target)
+  if not w or not h then
+    return
+  end
   local snapshot = monitor_snapshot(model)
   ui.panel(target, 1, 1, w, h, "RT NODE", model.health.status)
   render_alert_banner(target, model)
@@ -2304,7 +2310,10 @@ local function render_overview(target, model)
 end
 
 local function render_details(target, model)
-  local w, h = target.getSize()
+  local w, h = ui.getSize(target)
+  if not w or not h then
+    return
+  end
   local snapshot = monitor_snapshot(model)
   ui.panel(target, 1, 1, w, h, "RT DETAILS", model.health.status)
   render_alert_banner(target, model)
@@ -2313,7 +2322,10 @@ local function render_details(target, model)
 end
 
 local function render_diagnostics(target, model)
-  local w, h = target.getSize()
+  local w, h = ui.getSize(target)
+  if not w or not h then
+    return
+  end
   ui.panel(target, 1, 1, w, h, "RT DIAGNOSTICS", model.health.status)
   render_alert_banner(target, model)
   local rows = build_diagnostic_rows(model)

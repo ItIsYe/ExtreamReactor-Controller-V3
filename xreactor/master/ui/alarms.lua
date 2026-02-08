@@ -30,7 +30,10 @@ local function render(mon, model)
   local key = textutils.serialize(model)
   if cache[mon] == key then return end
   cache[mon] = key
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   local header_status = model.header_blink and "EMERGENCY" or "accent"
   ui.panel(mon, 1, 1, w, h, "ALARMS", header_status)
   local row = 0

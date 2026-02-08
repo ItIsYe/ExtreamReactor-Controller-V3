@@ -184,7 +184,10 @@ function multiview:ensure_router(state, mon, mode, view_key, data_map)
 end
 
 local function layout_menu_bounds(mon, view_order, has_router)
-  local w, _ = mon.getSize()
+  local w = select(1, ui.getSize(mon))
+  if not w then
+    return
+  end
   local width = math.min(24, w - 2)
   local height = #view_order + (has_router and 3 or 2)
   return {
@@ -264,10 +267,12 @@ function multiview:render(monitors, data_map)
       end
       state.last_render[current_key] = now
     end
-    local w, _ = mon_entry.mon.getSize()
-    local layout_x = math.max(2, w - 7)
-    state.layout_button = widgets.layout_button(mon_entry.mon, layout_x, 1, "LAYOUT", "accent")
-    self:render_layout_menu(mon_entry.mon, state, layout, self.view_order)
+    local w = select(1, ui.getSize(mon_entry.mon))
+    if w then
+      local layout_x = math.max(2, w - 7)
+      state.layout_button = widgets.layout_button(mon_entry.mon, layout_x, 1, "LAYOUT", "accent")
+      self:render_layout_menu(mon_entry.mon, state, layout, self.view_order)
+    end
   end
   return rendered
 end

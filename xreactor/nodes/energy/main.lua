@@ -870,7 +870,10 @@ local function build_snapshot_key(model)
 end
 
 local function render_header(mon, title, status, model)
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   ui.panel(mon, 1, 1, w, h, title, status)
   ui.text(mon, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
   local status_label = model.health_status or status
@@ -884,7 +887,10 @@ end
 local function render_overview(mon, model)
   local status = model.degraded and "WARNING" or "OK"
   render_header(mon, "ENERGY NODE", status, model)
-  local w = mon.getSize()
+  local w = select(1, ui.getSize(mon))
+  if not w then
+    return
+  end
   local line = 4
   ui.text(mon, 2, line, ("Matrices: %d"):format(#model.matrices), colors.get("text"), colors.get("background"))
   line = line + 1
@@ -913,7 +919,10 @@ end
 local function render_matrices(mon, model)
   local status = model.degraded and "WARNING" or "OK"
   render_header(mon, "ENERGY MATRICES", status, model)
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   local header_line = 4
   ui.text(mon, 2, header_line, ("Induction Matrices (%d)"):format(#model.matrices), colors.get("text"), colors.get("background"))
   local list_start = header_line + 1
@@ -986,7 +995,10 @@ end
 local function render_storages(mon, model)
   local status = model.degraded and "WARNING" or "OK"
   render_header(mon, "ENERGY STORAGES", status, model)
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   local header_line = 4
   ui.text(mon, 2, header_line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
   local list_start = header_line + 1
@@ -1028,7 +1040,10 @@ end
 local function render_diagnostics(mon, model)
   local status = model.degraded and "WARNING" or "OK"
   render_header(mon, "ENERGY DIAGNOSTICS", status, model)
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   local now = os.epoch("utc")
   local reasons = model.degraded_reason or "none"
   local rows = {

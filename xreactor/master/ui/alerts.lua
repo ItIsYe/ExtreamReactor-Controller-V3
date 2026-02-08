@@ -273,7 +273,10 @@ local function render(mon, model)
   end
   cache[mon] = snapshot
 
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   ui.panel(mon, 1, 1, w, h, "ALERTS", "OK")
 
   local counts = model.counts or {}
