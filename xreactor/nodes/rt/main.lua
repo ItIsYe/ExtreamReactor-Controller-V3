@@ -808,9 +808,11 @@ function applyReactorRods(target, allow_overmax)
     return false
   end
   for name, ctrl in pairs(reactor_ctrl) do
-    local reactor = peripheral.wrap(name)
+    local reactor, wrap_err = utils.safe_wrap(name)
     local caps = get_device_caps("reactors", name)
-    if reactor and caps.setAllControlRodLevels then
+    if not reactor then
+      warn_once("reactor_wrap:" .. name, "Reactor wrap failed for " .. name .. ": " .. tostring(wrap_err))
+    elseif caps.setAllControlRodLevels then
       local ok, result = pcall(reactor.setAllControlRodLevels, clamped)
       if ok and result ~= false then
         ctrl.last_applied = clamped
@@ -863,7 +865,7 @@ end
 
 local function read_current_rods()
   for _, name in ipairs(config.reactors or {}) do
-    local reactor = peripheral.wrap(name)
+    local reactor = utils.safe_wrap(name)
     if reactor and reactor.getControlRodLevel then
       local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
       if ok_rods and type(current_rods) == "number" then
