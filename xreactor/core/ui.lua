@@ -52,21 +52,23 @@ end
 
 function ui.text(mon, x, y, text, fg, bg)
   if not mon then return end
-  local snapshot = table.concat({ tostring(text), tostring(fg), tostring(bg) }, "|")
+  local safe_text = tostring(text or "")
+  local snapshot = table.concat({ safe_text, tostring(fg), tostring(bg) }, "|")
   local key = ("text:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
   redirect(mon, function()
     term.setCursorPos(x, y)
     if bg then term.setBackgroundColor(bg) end
     if fg then term.setTextColor(fg) end
-    term.write(text)
+    term.write(safe_text)
   end)
 end
 
 function ui.rightText(mon, x, y, w, text, fg, bg)
   if not mon then return end
-  local start = x + math.max(0, w - #text)
-  ui.text(mon, start, y, text, fg, bg)
+  local safe_text = tostring(text or "")
+  local start = x + math.max(0, w - #safe_text)
+  ui.text(mon, start, y, safe_text, fg, bg)
 end
 
 function ui.panel(mon, x, y, w, h, title, status)
@@ -137,7 +139,14 @@ function ui.list(mon, x, y, w, rows, opts)
   if not w or w <= 0 then
     return
   end
-  local snapshot = textutils.serialize({ rows = rows, opts = opts })
+  local snapshot = nil
+  if textutils and textutils.serialize then
+    local ok, result = pcall(textutils.serialize, { rows = rows, opts = opts })
+    if ok then
+      snapshot = result
+    end
+  end
+  snapshot = snapshot or tostring(rows) .. "|" .. tostring(opts)
   local key = ("list:%d:%d:%d"):format(x, y, w)
   if not is_dirty(mon, key, snapshot) then return end
   local max_rows = opts.max_rows or #rows
@@ -206,7 +215,7 @@ function ui.table(mon, x, y, w, headers, rows, opts)
     local col_w = math.floor(w / #headers)
     term.setCursorPos(x, y)
     for _, h in ipairs(headers) do
-      local txt = h
+      local txt = tostring(h or "")
       if #txt > col_w then txt = txt:sub(1, col_w) end
       term.write(txt .. string.rep(" ", col_w - #txt))
     end
@@ -214,7 +223,7 @@ function ui.table(mon, x, y, w, headers, rows, opts)
       if y + idx <= y + (opts.max_rows or #rows) then
         term.setCursorPos(x, y + idx)
         for _, cell in ipairs(row) do
-          local txt = tostring(cell)
+          local txt = tostring(cell or "")
           if #txt > col_w then txt = txt:sub(1, col_w) end
           term.write(txt .. string.rep(" ", col_w - #txt))
         end
