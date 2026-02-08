@@ -27,7 +27,10 @@ local function render(mon, model)
   local key = textutils.serialize(model)
   if cache[mon] == key then return end
   cache[mon] = key
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   ui.panel(mon, 1, 1, w, h, nil, model.system_status)
 
   ui.text(mon, 2, 1, "SYSTEM", colorset.get("text"), colorset.get("background"))

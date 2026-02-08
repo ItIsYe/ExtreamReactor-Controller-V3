@@ -14,7 +14,10 @@ local function render(mon, model)
   local key = textutils.serialize(model)
   if cache[mon] == key then return end
   cache[mon] = key
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   ui.panel(mon, 1, 1, w, h, "RESOURCES", "OK")
 
   local fuel_total = model.fuel.total or 0

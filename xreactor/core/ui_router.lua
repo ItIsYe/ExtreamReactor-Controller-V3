@@ -190,12 +190,18 @@ end
 function router:render_list_controls(mon, opts)
   if not mon then return end
   opts = opts or {}
-  local _, h = mon.getSize()
+  local _, h = ui.getSize(mon)
+  if not h then
+    return
+  end
   local page = opts.page or 1
   local total = opts.total or 1
   local label = opts.label or "List"
   local x = opts.x or 2
   local y = opts.y or (h - 1)
+  if y < 1 then
+    y = 1
+  end
   local text = ("< %s %d/%d >"):format(label, page, total)
   ui.text(mon, x, y, text, colors.get("text"), colors.get("background"))
   self.list_controls = {
@@ -224,7 +230,10 @@ function router:render(mon, model)
   if page and page.render then
     page.render(mon, model)
   end
-  local w, h = mon.getSize()
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
   local page_count = math.max(1, #self.pages)
   local indicator = ("< Page %d/%d >"):format(self.index, page_count)
   ui.rightText(mon, 2, h, w - 2, indicator, colors.get("text"), colors.get("background"))
