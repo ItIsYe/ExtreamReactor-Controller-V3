@@ -172,10 +172,19 @@ function router:handle_input(event)
 end
 
 local function build_snapshot(page_name, model)
+  local payload
   if model and model.snapshot ~= nil then
-    return textutils.serialize({ page = page_name or "", snapshot = model.snapshot })
+    payload = { page = page_name or "", snapshot = model.snapshot }
+  else
+    payload = { page = page_name or "", model = model or {} }
   end
-  return textutils.serialize({ page = page_name or "", model = model or {} })
+  if textutils and textutils.serialize then
+    local ok, result = pcall(textutils.serialize, payload)
+    if ok then
+      return result
+    end
+  end
+  return tostring(payload)
 end
 
 function router:render_list_controls(mon, opts)
