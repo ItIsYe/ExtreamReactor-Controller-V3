@@ -57,7 +57,11 @@ function manager:scan()
   end
   table.sort(names)
   if #names == 0 then
-    return { { id = "TERM", name = "term", mon = term, size_tag = "small", width = 0, height = 0, is_terminal = true } }
+    local ok, w, h = pcall(term.getSize, term)
+    local width = ok and w or 0
+    local height = ok and h or 0
+    local size_tag = classify_size(width, height, self.thresholds)
+    return { { id = "TERM", name = "term", mon = term, size_tag = size_tag, width = width, height = height, is_terminal = true } }
   end
   self.registry:sync(build_devices(names))
   local order = self.registry:get_order_index()
