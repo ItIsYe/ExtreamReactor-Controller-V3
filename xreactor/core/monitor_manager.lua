@@ -20,7 +20,7 @@ end
 local function build_devices(names)
   local devices = {}
   for _, name in ipairs(names or {}) do
-    local methods = peripheral.getMethods(name) or {}
+    local methods = utils.safe_get_methods(name) or {}
     table.insert(devices, {
       name = name,
       type = "monitor",

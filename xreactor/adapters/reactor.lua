@@ -39,7 +39,7 @@ function reactor.inspect(name, log_prefix)
     return nil, "peripheral missing"
   end
   local type_name = peripheral.getType(name) or "reactor"
-  local methods = peripheral.getMethods(name) or {}
+  local methods = utils.safe_get_methods(name) or {}
   local method_set = {}
   for _, method in ipairs(methods) do
     method_set[method] = true

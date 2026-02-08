@@ -237,6 +237,20 @@ function utils.safe_wrap(name)
   return wrapped
 end
 
+function utils.safe_get_methods(name)
+  if not name or not peripheral.isPresent(name) then
+    return nil, "peripheral missing"
+  end
+  local ok, methods = pcall(peripheral.getMethods, name)
+  if not ok then
+    return nil, methods
+  end
+  if type(methods) ~= "table" then
+    return nil, "invalid methods"
+  end
+  return methods
+end
+
 function utils.cache_peripherals(names)
   local cache = {}
   for _, name in ipairs(names or {}) do
