@@ -212,7 +212,7 @@ function ui.table(mon, x, y, w, headers, rows, opts)
   redirect(mon, function()
     term.setBackgroundColor(opts.bg or colors.background)
     term.setTextColor(opts.fg or colors.text)
-    local col_w = math.floor(w / #headers)
+    local col_w = math.max(1, math.floor(w / #headers))
     term.setCursorPos(x, y)
     for _, h in ipairs(headers) do
       local txt = tostring(h or "")

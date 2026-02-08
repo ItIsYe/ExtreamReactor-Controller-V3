@@ -50,8 +50,14 @@ local function open_modem(name, channels)
   if not modem then
     return nil, "wrap failed: " .. tostring(err)
   end
+  if type(modem.open) ~= "function" or type(modem.transmit) ~= "function" then
+    return nil, "not a modem"
+  end
   for _, channel in ipairs(channels) do
-    modem.open(channel)
+    local ok, open_err = pcall(modem.open, modem, channel)
+    if not ok then
+      return nil, "open failed: " .. tostring(open_err)
+    end
   end
   return modem
 end
