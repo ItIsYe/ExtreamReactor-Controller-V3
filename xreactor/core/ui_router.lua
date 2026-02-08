@@ -18,6 +18,9 @@ local function clamp(value, min, max)
 end
 
 function router.paginate(list, per_page, page)
+  if type(list) ~= "table" then
+    list = {}
+  end
   local per = tonumber(per_page) or 1
   if per < 1 then
     per = 1

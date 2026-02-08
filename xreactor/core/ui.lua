@@ -32,6 +32,9 @@ function ui.clear(mon)
 end
 
 function ui.clearRegion(mon, x, y, w, h)
+  if not w or not h or w <= 0 or h <= 0 then
+    return
+  end
   redirect(mon, function()
     term.setBackgroundColor(colors.background)
     for row=y,y+h-1 do
@@ -59,6 +62,9 @@ function ui.rightText(mon, x, y, w, text, fg, bg)
 end
 
 function ui.panel(mon, x, y, w, h, title, status)
+  if not w or not h or w <= 0 or h <= 0 then
+    return
+  end
   local snapshot = table.concat({ tostring(w), tostring(h), tostring(title), tostring(status) }, "|")
   local key = ("panel:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
@@ -95,6 +101,9 @@ function ui.bigNumber(mon, x, y, label, value, unit, status)
 end
 
 function ui.progress(mon, x, y, w, percent, status)
+  if not w or w <= 0 then
+    return
+  end
   local snapshot = table.concat({ tostring(w), tostring(percent), tostring(status) }, "|")
   local key = ("progress:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
@@ -111,10 +120,16 @@ end
 
 function ui.list(mon, x, y, w, rows, opts)
   opts = opts or {}
+  if not w or w <= 0 then
+    return
+  end
   local snapshot = textutils.serialize({ rows = rows, opts = opts })
   local key = ("list:%d:%d:%d"):format(x, y, w)
   if not is_dirty(mon, key, snapshot) then return end
   local max_rows = opts.max_rows or #rows
+  if max_rows <= 0 then
+    return
+  end
   for idx = 1, max_rows do
     local row = rows[idx]
     if not row then
@@ -135,6 +150,9 @@ end
 
 function ui.sparkline(values, width)
   local blocks = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
+  if not width or width <= 0 then
+    return ""
+  end
   if not values or #values == 0 then return string.rep(" ", width) end
   local min, max = values[1], values[1]
   for _, v in ipairs(values) do
