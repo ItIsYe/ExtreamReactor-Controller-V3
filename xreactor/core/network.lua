@@ -56,6 +56,26 @@ local function open_modem(name, channels)
   return modem
 end
 
+local function safe_call_remote(wired, device_name, method, ...)
+  if not wired then
+    return nil, "wired modem missing"
+  end
+  if type(wired.callRemote) ~= "function" then
+    return nil, "wired modem unsupported"
+  end
+  if type(wired.isPresentRemote) == "function" and not wired.isPresentRemote(device_name) then
+    return nil, "remote peripheral missing"
+  end
+  local results = table.pack(pcall(wired.callRemote, device_name, method, ...))
+  if not results[1] then
+    return nil, results[2]
+  end
+  if results.n == 1 then
+    return true
+  end
+  return table.unpack(results, 2, results.n)
+end
+
 function network.init(config)
   local modem, modem_err = open_modem(config.wireless_modem, { constants.channels.CONTROL, constants.channels.STATUS })
   local wired = nil
@@ -88,9 +108,8 @@ function network.init(config)
       broadcast = function(_, _)
         return false, "wireless modem missing"
       end,
-      push_wired = function(_, side, method, ...)
-        if not wired then return nil, "wired modem missing" end
-        return utils.safe_peripheral_call(side, method, ...)
+      push_wired = function(_, device_name, method, ...)
+        return safe_call_remote(wired, device_name, method, ...)
       end
     }
   end
@@ -130,9 +149,8 @@ function network.init(config)
         modem.transmit(constants.channels.CONTROL, constants.channels.CONTROL, sanitized)
       end
     end,
-    push_wired = function(_, side, method, ...)
-      if not wired then return nil, "wired modem missing" end
-      return utils.safe_peripheral_call(side, method, ...)
+    push_wired = function(_, device_name, method, ...)
+      return safe_call_remote(wired, device_name, method, ...)
     end
   }
 end

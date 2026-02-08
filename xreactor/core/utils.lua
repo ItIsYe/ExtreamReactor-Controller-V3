@@ -239,7 +239,7 @@ end
 
 function utils.cache_peripherals(names)
   local cache = {}
-  for _, name in ipairs(names) do
+  for _, name in ipairs(names or {}) do
     local wrapped = utils.safe_wrap(name)
     if wrapped then
       cache[name] = wrapped
