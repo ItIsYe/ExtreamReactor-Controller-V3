@@ -1,5 +1,6 @@
 local ui = require("core.ui")
 local colorset = require("shared.colors")
+local utils = require("core.utils")
 local cache = {}
 
 local function format_age(ts)
@@ -11,7 +12,7 @@ local function format_age(ts)
 end
 
 local function render(mon, model)
-  local key = textutils.serialize(model)
+  local key = utils.safe_serialize(model) or tostring(model)
   if cache[mon] == key then return end
   cache[mon] = key
   local w, h = ui.getSize(mon)

@@ -1,5 +1,6 @@
 local ui = require("core.ui")
 local colorset = require("shared.colors")
+local utils = require("core.utils")
 local cache = {}
 
 local severity_rank = {
@@ -27,7 +28,7 @@ local function sort_alarms(alarms)
 end
 
 local function render(mon, model)
-  local key = textutils.serialize(model)
+  local key = utils.safe_serialize(model) or tostring(model)
   if cache[mon] == key then return end
   cache[mon] = key
   local w, h = ui.getSize(mon)
