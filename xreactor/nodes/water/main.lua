@@ -178,6 +178,13 @@ local master_alerts = {}
 local last_heartbeat = 0
 local master_seen_ts = nil
 local monitor_router = nil
+local warned = {}
+
+local function warn_once(key, message)
+  if warned[key] then return end
+  warned[key] = true
+  utils.log(CONFIG.LOG_PREFIX, message, "WARN")
+end
 
 local function cache(bound_names)
   tanks = utils.cache_peripherals(bound_names or {})
@@ -255,7 +262,15 @@ local function total_water()
   local total = 0
   local buffers = {}
   for name, tank in pairs(tanks) do
-    local level = tank.getFluidAmount and tank.getFluidAmount() or 0
+    local level = 0
+    if tank.getFluidAmount then
+      local ok, value = pcall(tank.getFluidAmount)
+      if ok and type(value) == "number" then
+        level = value
+      elseif not ok then
+        warn_once("tank_read:" .. tostring(name), "Tank read failed for " .. tostring(name) .. ": " .. tostring(value))
+      end
+    end
     total = total + level
     table.insert(buffers, { id = name, level = level })
   end

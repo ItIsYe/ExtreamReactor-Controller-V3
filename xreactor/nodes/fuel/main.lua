@@ -183,6 +183,13 @@ local last_heartbeat = 0
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
 local monitor_router = nil
+local warned = {}
+
+local function warn_once(key, message)
+  if warned[key] then return end
+  warned[key] = true
+  utils.log(CONFIG.LOG_PREFIX, message, "WARN")
+end
 
 local function cache()
   storage = nil
@@ -255,7 +262,13 @@ end
 
 local function read_fuel()
   if storage and storage.getFluidAmount then
-    return storage.getFluidAmount() or 0
+    local ok, value = pcall(storage.getFluidAmount)
+    if ok and type(value) == "number" then
+      return value
+    end
+    if not ok then
+      warn_once("storage_read", "Storage read failed: " .. tostring(value))
+    end
   end
   return 0
 end

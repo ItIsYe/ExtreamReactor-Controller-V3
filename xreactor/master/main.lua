@@ -16,38 +16,6 @@ bootstrap.setup({
 })
 local require = bootstrap.require
 
-_G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
-
-local function ensure_turbine_ctrl(name)
-  _G.turbine_ctrl = type(_G.turbine_ctrl) == "table" and _G.turbine_ctrl or {}
-  _G.ensure_turbine_ctrl = ensure_turbine_ctrl
-  if not name then
-    name = "__unknown__"
-  end
-  local ctrl = _G.turbine_ctrl[name]
-  if type(ctrl) ~= "table" then
-    ctrl = {}
-    _G.turbine_ctrl[name] = ctrl
-  end
-  if ctrl.mode == nil then
-    ctrl.mode = "INIT"
-  end
-  if ctrl.flow == nil then
-    ctrl.flow = 0
-  end
-  if ctrl.target_flow == nil then
-    ctrl.target_flow = 0
-  end
-  if ctrl.last_rpm == nil then
-    ctrl.last_rpm = 0
-  end
-  if ctrl.last_update == nil then
-    ctrl.last_update = os.clock()
-  end
-  return ctrl
-end
-
-_G.ensure_turbine_ctrl = ensure_turbine_ctrl
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local utils = require("core.utils")

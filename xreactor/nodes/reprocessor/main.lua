@@ -167,6 +167,13 @@ local last_heartbeat = 0
 local master_seen = os.epoch("utc")
 local standby = false
 local monitor_router = nil
+local warned = {}
+
+local function warn_once(key, message)
+  if warned[key] then return end
+  warned[key] = true
+  utils.log(CONFIG.LOG_PREFIX, message, "WARN")
+end
 
 local function master_peer_state()
   local peers = comms and comms:get_peers() or {}
@@ -267,9 +274,19 @@ local function read_buffers()
   for name, buf in pairs(buffers) do
     local stored = 0
     if buf.getWaste then
-      stored = buf.getWaste()
+      local ok, value = pcall(buf.getWaste)
+      if ok and type(value) == "number" then
+        stored = value
+      elseif not ok then
+        warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value))
+      end
     elseif buf.getItemCount then
-      stored = buf.getItemCount()
+      local ok, value = pcall(buf.getItemCount)
+      if ok and type(value) == "number" then
+        stored = value
+      elseif not ok then
+        warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value))
+      end
     end
     table.insert(info, { id = name, stored = stored })
   end

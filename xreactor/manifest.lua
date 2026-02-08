@@ -44,7 +44,7 @@ return {
   roles = {
     master = {
       { path = "master/config.lua", size_bytes = 7433, hash = "aa261615" },
-      { path = "master/main.lua", size_bytes = 37011, hash = "941f1e4d" },
+      { path = "master/main.lua", size_bytes = 36225, hash = "8c1d0efc" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
       { path = "master/startup_sequencer.lua", size_bytes = 3200, hash = "fd879d22" },
       { path = "master/ui/alarms.lua", size_bytes = 1245, hash = "ab00070b" },
@@ -58,7 +58,7 @@ return {
     },
     rt = {
       { path = "nodes/rt/config.lua", size_bytes = 4290, hash = "c4ac557a" },
-      { path = "nodes/rt/main.lua", size_bytes = 95183, hash = "679541b8" }
+      { path = "nodes/rt/main.lua", size_bytes = 94693, hash = "6e594da5" }
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4614, hash = "7b0f8089" },
@@ -66,15 +66,15 @@ return {
     },
     water = {
       { path = "nodes/water/config.lua", size_bytes = 3481, hash = "b816f1e2" },
-      { path = "nodes/water/main.lua", size_bytes = 22157, hash = "21a2c6a1" }
+      { path = "nodes/water/main.lua", size_bytes = 22586, hash = "db848e65" }
     },
     fuel = {
       { path = "nodes/fuel/config.lua", size_bytes = 3392, hash = "5a7c94f9" },
-      { path = "nodes/fuel/main.lua", size_bytes = 21944, hash = "68e1d206" }
+      { path = "nodes/fuel/main.lua", size_bytes = 22293, hash = "ef4004b8" }
     },
     reprocessing = {
       { path = "nodes/reprocessor/config.lua", size_bytes = 3188, hash = "d5ee204d" },
-      { path = "nodes/reprocessor/main.lua", size_bytes = 21250, hash = "5500ead4" }
+      { path = "nodes/reprocessor/main.lua", size_bytes = 21897, hash = "22463c34" }
     }
   }
 }
