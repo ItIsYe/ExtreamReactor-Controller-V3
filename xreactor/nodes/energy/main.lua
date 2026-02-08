@@ -848,7 +848,7 @@ local function build_ui_model()
 end
 
 local function build_snapshot_key(model)
-  return textutils.serialize({
+  return utils.safe_serialize({
     health = model.health_status,
     degraded = model.degraded,
     reason = model.degraded_reason,
@@ -866,7 +866,7 @@ local function build_snapshot_key(model)
     master_state = model.master_state,
     master_age = model.master_age,
     local_alerts = model.local_alerts_critical
-  })
+  }) or tostring(model)
 end
 
 local function render_header(mon, title, status, model)

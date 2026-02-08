@@ -1,6 +1,7 @@
 local ui = require("core.ui")
 local colorset = require("shared.colors")
 local constants = require("shared.constants")
+local utils = require("core.utils")
 
 local cache = {}
 local state_cache = setmetatable({}, { __mode = "k" })
@@ -253,7 +254,7 @@ end
 local function render(mon, model)
   local state = ensure_state(mon)
   model = model or {}
-  local snapshot = textutils.serialize({
+  local snapshot = utils.safe_serialize({
     model = model,
     state = {
       page = state.page,
@@ -267,7 +268,7 @@ local function render(mon, model)
       collapsed = state.collapsed,
       mute_index = state.mute_index
     }
-  })
+  }) or tostring(model)
   if cache[mon] == snapshot then
     return
   end

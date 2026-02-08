@@ -49,12 +49,19 @@ local function sanitize_snapshot(value, active)
 end
 
 local function safe_serialize(value)
+  if not textutils or not textutils.serialize then
+    return nil, "serialize unavailable"
+  end
   local sanitized = sanitize_snapshot(value)
   local ok, result = pcall(textutils.serialize, sanitized)
   if not ok then
     return nil, result
   end
   return result
+end
+
+function utils.safe_serialize(value)
+  return safe_serialize(value)
 end
 
 function utils.ensure_dir(path)

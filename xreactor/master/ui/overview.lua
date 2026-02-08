@@ -1,6 +1,7 @@
 local ui = require("core.ui")
 local colorset = require("shared.colors")
 local constants = require("shared.constants")
+local utils = require("core.utils")
 
 local cache = {}
 local button_cache = setmetatable({}, { __mode = "k" })
@@ -24,7 +25,7 @@ local function build_profile_buttons(mon, x, y, profiles, active, auto_enabled)
 end
 
 local function render(mon, model)
-  local key = textutils.serialize(model)
+  local key = utils.safe_serialize(model) or tostring(model)
   if cache[mon] == key then return end
   cache[mon] = key
   local w, h = ui.getSize(mon)

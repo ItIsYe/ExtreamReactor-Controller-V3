@@ -18,7 +18,7 @@ local function ensure_table(value)
 end
 
 local function build_snapshot(data, extra)
-  return textutils.serialize({ data = data or {}, extra = extra or {} })
+  return utils.safe_serialize({ data = data or {}, extra = extra or {} }) or tostring(data)
 end
 
 local function sorted_view_keys(views)

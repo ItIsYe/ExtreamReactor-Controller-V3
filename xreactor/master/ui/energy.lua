@@ -1,6 +1,7 @@
 local ui = require("core.ui")
 local colorset = require("shared.colors")
 local widgets = require("master.ui.widgets")
+local utils = require("core.utils")
 local cache = {}
 
 local function join_names(names, max_len)
@@ -15,7 +16,7 @@ local function join_names(names, max_len)
 end
 
 local function render(mon, model)
-  local key = textutils.serialize(model)
+  local key = utils.safe_serialize(model) or tostring(model)
   if cache[mon] == key then return end
   cache[mon] = key
   local w, h = ui.getSize(mon)
