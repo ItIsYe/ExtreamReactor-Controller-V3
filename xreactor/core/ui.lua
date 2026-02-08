@@ -4,6 +4,9 @@ local ui = {}
 local dirty_cache = setmetatable({}, { __mode = "k" })
 
 local function redirect(mon, fn)
+  if not mon or not term or not term.redirect then
+    return
+  end
   local old = term.redirect(mon)
   fn()
   term.redirect(old)
@@ -19,10 +22,12 @@ local function is_dirty(mon, key, snapshot)
 end
 
 function ui.setScale(mon, scale)
+  if not mon then return end
   if mon.setTextScale then mon.setTextScale(scale) end
 end
 
 function ui.clear(mon)
+  if not mon then return end
   redirect(mon, function()
     term.setBackgroundColor(colors.background)
     term.setTextColor(colors.text)
@@ -32,6 +37,7 @@ function ui.clear(mon)
 end
 
 function ui.clearRegion(mon, x, y, w, h)
+  if not mon then return end
   if not w or not h or w <= 0 or h <= 0 then
     return
   end
@@ -45,6 +51,7 @@ function ui.clearRegion(mon, x, y, w, h)
 end
 
 function ui.text(mon, x, y, text, fg, bg)
+  if not mon then return end
   local snapshot = table.concat({ tostring(text), tostring(fg), tostring(bg) }, "|")
   local key = ("text:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
@@ -57,11 +64,13 @@ function ui.text(mon, x, y, text, fg, bg)
 end
 
 function ui.rightText(mon, x, y, w, text, fg, bg)
+  if not mon then return end
   local start = x + math.max(0, w - #text)
   ui.text(mon, start, y, text, fg, bg)
 end
 
 function ui.panel(mon, x, y, w, h, title, status)
+  if not mon then return end
   if not w or not h or w <= 0 or h <= 0 then
     return
   end
@@ -84,11 +93,13 @@ function ui.panel(mon, x, y, w, h, title, status)
 end
 
 function ui.badge(mon, x, y, text, status)
+  if not mon then return end
   local color = colors.get(status) or colors.get("OK")
   ui.text(mon, x, y, " " .. text .. " ", colors.background, color)
 end
 
 function ui.bigNumber(mon, x, y, label, value, unit, status)
+  if not mon then return end
   local value_text = tostring(value or "")
   local unit_text = unit and (" " .. unit) or ""
   local snapshot = table.concat({ tostring(label), value_text, unit_text, tostring(status) }, "|")
@@ -101,6 +112,7 @@ function ui.bigNumber(mon, x, y, label, value, unit, status)
 end
 
 function ui.progress(mon, x, y, w, percent, status)
+  if not mon then return end
   if not w or w <= 0 then
     return
   end
@@ -119,7 +131,9 @@ function ui.progress(mon, x, y, w, percent, status)
 end
 
 function ui.list(mon, x, y, w, rows, opts)
+  if not mon then return end
   opts = opts or {}
+  rows = rows or {}
   if not w or w <= 0 then
     return
   end
@@ -177,7 +191,15 @@ function ui.sparkline(values, width)
 end
 
 function ui.table(mon, x, y, w, headers, rows, opts)
+  if not mon then return end
   opts = opts or {}
+  rows = rows or {}
+  if not headers or #headers == 0 then
+    return
+  end
+  if not w or w <= 0 then
+    return
+  end
   redirect(mon, function()
     term.setBackgroundColor(opts.bg or colors.background)
     term.setTextColor(opts.fg or colors.text)
