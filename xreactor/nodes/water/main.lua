@@ -201,7 +201,7 @@ local function discover()
       table.insert(registry_devices, {
         name = name,
         type = "monitor",
-        methods = peripheral.getMethods(name) or {},
+        methods = utils.safe_get_methods(name) or {},
         kind = "monitor",
         bound = monitor_name == name
       })

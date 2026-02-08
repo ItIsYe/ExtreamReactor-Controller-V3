@@ -1291,7 +1291,7 @@ function dumpPeripherals()
     local pType = peripheral.getType(name)
     log(INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
 
-    local methods = peripheral.getMethods(name)
+    local methods = utils.safe_get_methods(name) or {}
     if methods then
       for _, m in ipairs(methods) do
         log(DEBUG, "  method: " .. m)
@@ -1359,7 +1359,7 @@ local function discover()
       table.insert(registry_devices, {
         name = name,
         type = "monitor",
-        methods = peripheral.getMethods(name) or {},
+        methods = utils.safe_get_methods(name) or {},
         kind = "monitor",
         bound = monitor_name == name
       })
