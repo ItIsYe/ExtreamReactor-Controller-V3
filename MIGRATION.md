@@ -13,7 +13,7 @@ Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE, Delta-Update und Recovery 
 
 ## Was SAFE UPDATE **nicht** ändert
 - Rolle (`role`).
-- Node-ID (`/disk/xreactor/config/node_id.txt`).
+- Node-ID (`/xreactor/config/node_id.txt`).
 - Lokale Configs (`/disk/xreactor/*/config.lua`).
 
 ## Registry-Änderung
