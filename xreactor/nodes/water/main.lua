@@ -264,7 +264,7 @@ local function total_water()
   for name, tank in pairs(tanks) do
     local level = 0
     if tank.getFluidAmount then
-      local ok, value = pcall(tank.getFluidAmount)
+      local ok, value = pcall(tank.getFluidAmount, tank)
       if ok and type(value) == "number" then
         level = value
       elseif not ok then

@@ -547,7 +547,7 @@ local function read_steam_tank_amount()
     return nil
   end
   if tank and tank.getFluidAmount then
-    local ok, amount = pcall(tank.getFluidAmount)
+    local ok, amount = pcall(tank.getFluidAmount, tank)
     if ok and type(amount) == "number" then
       return amount
     end
@@ -571,17 +571,17 @@ local function read_reactor_steam_amount()
     if reactor then
       local amount = nil
       if reactor.getHotFluidAmount then
-        local ok, value = pcall(reactor.getHotFluidAmount)
+        local ok, value = pcall(reactor.getHotFluidAmount, reactor)
         if ok and type(value) == "number" then
           amount = value
         end
       elseif reactor.getSteamAmount then
-        local ok, value = pcall(reactor.getSteamAmount)
+        local ok, value = pcall(reactor.getSteamAmount, reactor)
         if ok and type(value) == "number" then
           amount = value
         end
       elseif reactor.getSteam then
-        local ok, value = pcall(reactor.getSteam)
+        local ok, value = pcall(reactor.getSteam, reactor)
         if ok and type(value) == "number" then
           amount = value
         end
@@ -622,7 +622,7 @@ local function get_total_steam_demand()
         end
       end
       if turbine and turbine.getRotorSpeed then
-        local ok, value = pcall(turbine.getRotorSpeed)
+        local ok, value = pcall(turbine.getRotorSpeed, turbine)
         if ok and type(value) == "number" then
           rpm = value
         end
@@ -639,8 +639,8 @@ local function reactor_low_water(reactor)
   if not reactor or not reactor.getCoolantAmount or not reactor.getCoolantAmountMax then
     return false
   end
-  local ok_amount, amount = pcall(reactor.getCoolantAmount)
-  local ok_max, max = pcall(reactor.getCoolantAmountMax)
+  local ok_amount, amount = pcall(reactor.getCoolantAmount, reactor)
+  local ok_max, max = pcall(reactor.getCoolantAmountMax, reactor)
   if not ok_amount or not ok_max or type(amount) ~= "number" or type(max) ~= "number" or max <= 0 then
     return false
   end
@@ -787,18 +787,18 @@ function applyReactorRods(target, allow_overmax)
     if not reactor then
       warn_once("reactor_wrap:" .. name, "Reactor wrap failed for " .. name .. ": " .. tostring(wrap_err))
     elseif caps.setAllControlRodLevels then
-      local ok, result = pcall(reactor.setAllControlRodLevels, clamped)
+      local ok, result = pcall(reactor.setAllControlRodLevels, reactor, clamped)
       if ok and result ~= false then
         ctrl.last_applied = clamped
       else
         warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
       end
     elseif reactor and reactor.getControlRods then
-      local ok_rods, rods = pcall(reactor.getControlRods)
+      local ok_rods, rods = pcall(reactor.getControlRods, reactor)
       if ok_rods and type(rods) == "table" then
         for _, rod in pairs(rods) do
           if rod and rod.setLevel then
-            pcall(rod.setLevel, clamped)
+            pcall(rod.setLevel, rod, clamped)
           end
         end
         ctrl.last_applied = clamped
@@ -841,7 +841,7 @@ local function read_current_rods()
   for _, name in ipairs(config.reactors or {}) do
     local reactor = utils.safe_wrap(name)
     if reactor and reactor.getControlRodLevel then
-      local ok_rods, current_rods = pcall(reactor.getControlRodLevel, 0)
+      local ok_rods, current_rods = pcall(reactor.getControlRodLevel, reactor, 0)
       if ok_rods and type(current_rods) == "number" then
         return current_rods
       end
@@ -1081,7 +1081,7 @@ local function updateActuators()
       end
       local rpm = nil
       if turbine.getRotorSpeed then
-        local ok, value = pcall(turbine.getRotorSpeed)
+        local ok, value = pcall(turbine.getRotorSpeed, turbine)
         if ok and type(value) == "number" then
           rpm = value
         end
@@ -1162,7 +1162,7 @@ local function updateControl()
       end
       local rpm = nil
       if turbine.getRotorSpeed then
-        local ok, value = pcall(turbine.getRotorSpeed)
+        local ok, value = pcall(turbine.getRotorSpeed, turbine)
         if ok and type(value) == "number" then
           rpm = value
         end
@@ -2098,7 +2098,7 @@ local function update_status_snapshot()
   for _, name in ipairs(config.reactors) do
     local reactor = peripherals.reactors[name]
     if reactor and reactor.getCasingTemperature then
-      local ok, temp = pcall(reactor.getCasingTemperature)
+      local ok, temp = pcall(reactor.getCasingTemperature, reactor)
       if ok and type(temp) == "number" then
         temp_sum = temp_sum + temp
         temp_count = temp_count + 1
@@ -2113,7 +2113,7 @@ local function update_status_snapshot()
   for _, name in ipairs(config.turbines) do
     local turbine = peripherals.turbines[name]
     if turbine and turbine.getRotorSpeed then
-      local ok, rpm = pcall(turbine.getRotorSpeed)
+      local ok, rpm = pcall(turbine.getRotorSpeed, turbine)
       if ok and type(rpm) == "number" then
         rpm_sum = rpm_sum + rpm
         rpm_count = rpm_count + 1
@@ -2132,19 +2132,19 @@ local function update_status_snapshot()
     local active = nil
     local coil = ctrl.inductor_engaged
     if turbine and turbine.getRotorSpeed then
-      local ok, value = pcall(turbine.getRotorSpeed)
+      local ok, value = pcall(turbine.getRotorSpeed, turbine)
       if ok and type(value) == "number" then
         rpm = value
       end
     end
     if turbine and turbine.getActive then
-      local ok, value = pcall(turbine.getActive)
+      local ok, value = pcall(turbine.getActive, turbine)
       if ok then
         active = value
       end
     end
     if turbine and turbine.getInductorEngaged then
-      local ok, value = pcall(turbine.getInductorEngaged)
+      local ok, value = pcall(turbine.getInductorEngaged, turbine)
       if ok then
         coil = value
       end
@@ -2165,19 +2165,19 @@ local function update_status_snapshot()
     local temp = nil
     local active = nil
     if reactor and reactor.getControlRodLevel then
-      local ok, value = pcall(reactor.getControlRodLevel, 0)
+      local ok, value = pcall(reactor.getControlRodLevel, reactor, 0)
       if ok and type(value) == "number" then
         rods = value
       end
     end
     if reactor and reactor.getCasingTemperature then
-      local ok, value = pcall(reactor.getCasingTemperature)
+      local ok, value = pcall(reactor.getCasingTemperature, reactor)
       if ok and type(value) == "number" then
         temp = value
       end
     end
     if reactor and reactor.getActive then
-      local ok, value = pcall(reactor.getActive)
+      local ok, value = pcall(reactor.getActive, reactor)
       if ok then
         active = value
       end
@@ -2215,9 +2215,9 @@ local function init_monitor()
   monitor = entry and entry.mon or nil
   monitor_name = entry and entry.name or nil
   if monitor then
-    pcall(monitor.setBackgroundColor, colors.black)
-    pcall(monitor.setTextColor, colors.white)
-    pcall(monitor.clear)
+    pcall(monitor.setBackgroundColor, monitor, colors.black)
+    pcall(monitor.setTextColor, monitor, colors.white)
+    pcall(monitor.clear, monitor)
   end
 end
 

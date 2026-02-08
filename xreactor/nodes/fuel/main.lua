@@ -262,7 +262,7 @@ end
 
 local function read_fuel()
   if storage and storage.getFluidAmount then
-    local ok, value = pcall(storage.getFluidAmount)
+    local ok, value = pcall(storage.getFluidAmount, storage)
     if ok and type(value) == "number" then
       return value
     end

@@ -274,14 +274,14 @@ local function read_buffers()
   for name, buf in pairs(buffers) do
     local stored = 0
     if buf.getWaste then
-      local ok, value = pcall(buf.getWaste)
+      local ok, value = pcall(buf.getWaste, buf)
       if ok and type(value) == "number" then
         stored = value
       elseif not ok then
         warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value))
       end
     elseif buf.getItemCount then
-      local ok, value = pcall(buf.getItemCount)
+      local ok, value = pcall(buf.getItemCount, buf)
       if ok and type(value) == "number" then
         stored = value
       elseif not ok then
@@ -454,7 +454,7 @@ local function process_buffers()
   if standby then return end
   for _, buf in pairs(buffers) do
     if buf.process then
-      pcall(buf.process)
+      pcall(buf.process, buf)
     end
   end
 end
