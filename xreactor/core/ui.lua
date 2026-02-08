@@ -118,10 +118,13 @@ function ui.progress(mon, x, y, w, percent, status)
   if not w or w <= 0 then
     return
   end
-  local snapshot = table.concat({ tostring(w), tostring(percent), tostring(status) }, "|")
+  local pct = tonumber(percent) or 0
+  if pct < 0 then pct = 0 end
+  if pct > 1 then pct = 1 end
+  local snapshot = table.concat({ tostring(w), tostring(pct), tostring(status) }, "|")
   local key = ("progress:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
-  local fill = math.floor(w * math.max(0, math.min(1, percent)))
+  local fill = math.floor(w * pct)
   redirect(mon, function()
     term.setCursorPos(x, y)
     term.setBackgroundColor(colors.get("OFFLINE"))
@@ -177,8 +180,17 @@ function ui.sparkline(values, width)
     return ""
   end
   if not values or #values == 0 then return string.rep(" ", width) end
-  local min, max = values[1], values[1]
+  local numeric = {}
   for _, v in ipairs(values) do
+    if type(v) == "number" then
+      table.insert(numeric, v)
+    end
+  end
+  if #numeric == 0 then
+    return string.rep(" ", width)
+  end
+  local min, max = numeric[1], numeric[1]
+  for _, v in ipairs(numeric) do
     if v < min then min = v end
     if v > max then max = v end
   end
@@ -187,10 +199,10 @@ function ui.sparkline(values, width)
     local mid = blocks[4]
     return string.rep(mid, width)
   end
-  local step = math.max(1, math.floor(#values / width))
+  local step = math.max(1, math.floor(#numeric / width))
   local out = {}
-  for i = 1, #values, step do
-    local v = values[i]
+  for i = 1, #numeric, step do
+    local v = numeric[i]
     local idx = math.floor(((v - min) / range) * (#blocks - 1)) + 1
     table.insert(out, blocks[math.min(#blocks, math.max(1, idx))])
     if #out >= width then break end
