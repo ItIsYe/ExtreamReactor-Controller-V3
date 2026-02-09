@@ -56,4 +56,16 @@ if ok_proto or err_proto ~= "proto_ver mismatch" then
   error("expected proto_ver mismatch validation error")
 end
 
+local target_message = protocol.command("MASTER-1", constants.roles.MASTER, 101, { target = 101 })
+target_message.dst = 101
+if not protocol.is_for_node(target_message, "101") then
+  error("expected numeric dst/target to match normalized node id")
+end
+
+local other_target = protocol.command("MASTER-1", constants.roles.MASTER, "RT-2", { target = "RT-2" })
+other_target.dst = "RT-2"
+if protocol.is_for_node(other_target, "RT-1") then
+  error("expected mismatched target to be rejected")
+end
+
 print("protocol_test.lua: ok")

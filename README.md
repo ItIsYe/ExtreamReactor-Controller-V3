@@ -129,7 +129,7 @@ Wireless Modem (Control/Status)
 14. **Alerts History**: Alerts-View → History-Tab, Severity-Filter prüfen.
 15. **Alerts Mute Persist**: Rule/Node muten → reboot → Mute bleibt aktiv.
 16. **RAW Install (beta)**: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer` → `installer` startet den Bootstrap korrekt.
-17. **Blob-Fail Scenario**: Blob-URL laden → `/installer` enthält HTML → Bootstrap verweigert Überschreiben und meldet „Downloaded HTML, expected Lua“.
+17. **Blob-Fail Scenario**: Blob-URL laden → `/installer` enthält HTML → Bootstrap verweigert Überschreiben und meldet „Download validation failed: HTML content for /installer“.
 18. **Debug Logging Toggle**: `settings set xreactor.debug_logging true` → Installer/Node erzeugen Logdateien beim Start.
 
 ## Rails/Tuning Guide (Kurz)
