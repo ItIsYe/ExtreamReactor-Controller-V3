@@ -97,6 +97,7 @@ end
 if config.rt_setpoints.enable_turbines == nil then
   config.rt_setpoints.enable_turbines = true
 end
+config.startup_stage_timeout_s = clamp_number(config.startup_stage_timeout_s or 60, 60, 5, 600)
 config.alert_eval_interval = clamp_interval(config.alert_eval_interval or 1, 1, 0.5, 5)
 config.alert_history_size = math.floor(clamp_number(config.alert_history_size or 200, 200, 10, 1000))
 config.alert_info_ttl = clamp_number(config.alert_info_ttl or 20, 20, 5, 600)
@@ -920,7 +921,11 @@ local function init()
     end
   }))
   services:init()
-  sequencer = sequencer_lib.new(comms, config.startup_ramp)
+  sequencer = sequencer_lib.new(comms, config.startup_ramp, {
+    alert_service = alert_service,
+    timeout_s = config.startup_stage_timeout_s,
+    config = config
+  })
   comms:send_hello({ monitors = monitor_cache.list and #monitor_cache.list or 0 })
   utils.log("MASTER", "Initialized as " .. comms.network.id)
 end

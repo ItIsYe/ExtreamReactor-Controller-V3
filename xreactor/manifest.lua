@@ -43,10 +43,10 @@ return {
   },
   roles = {
     master = {
-      { path = "master/config.lua", size_bytes = 7433, hash = "aa261615" },
-      { path = "master/main.lua", size_bytes = 36225, hash = "8c1d0efc" },
+      { path = "master/config.lua", size_bytes = 7578, hash = "09301620" },
+      { path = "master/main.lua", size_bytes = 36431, hash = "41efe731" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
-      { path = "master/startup_sequencer.lua", size_bytes = 3200, hash = "fd879d22" },
+      { path = "master/startup_sequencer.lua", size_bytes = 8165, hash = "fbe5786a" },
       { path = "master/ui/alarms.lua", size_bytes = 1245, hash = "ab00070b" },
       { path = "master/ui/alerts.lua", size_bytes = 25190, hash = "adafc8e9" },
       { path = "master/ui/energy.lua", size_bytes = 4345, hash = "853d19c8" },
@@ -57,8 +57,8 @@ return {
       { path = "master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a" }
     },
     rt = {
-      { path = "nodes/rt/config.lua", size_bytes = 4290, hash = "c4ac557a" },
-      { path = "nodes/rt/main.lua", size_bytes = 94693, hash = "6e594da5" }
+      { path = "nodes/rt/config.lua", size_bytes = 4425, hash = "8c4b3c3f" },
+      { path = "nodes/rt/main.lua", size_bytes = 98888, hash = "68af2087" }
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4614, hash = "7b0f8089" },
