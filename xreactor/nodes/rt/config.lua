@@ -9,6 +9,7 @@ local CONFIG = {
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
   DEFAULT_SCAN_INTERVAL = 10, -- Seconds between discovery scans.
+  DEFAULT_STARTUP_WATCHDOG_S = 60, -- Seconds before STARTUP watchdog trips.
   DEFAULT_CONTROL_CHANNEL = 6500, -- Control channel for MASTER commands.
   DEFAULT_STATUS_CHANNEL = 6501, -- Status channel for telemetry.
   DEFAULT_COMMS_ACK_TIMEOUT = 3.0, -- Seconds before retrying a command.
@@ -80,6 +81,7 @@ return {
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
   status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
   scan_interval = CONFIG.DEFAULT_SCAN_INTERVAL,
+  startup_watchdog_s = CONFIG.DEFAULT_STARTUP_WATCHDOG_S,
 
   channels = {
     control = CONFIG.DEFAULT_CONTROL_CHANNEL,

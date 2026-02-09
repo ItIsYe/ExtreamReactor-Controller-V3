@@ -6,6 +6,7 @@ local CONFIG = {
   DEFAULT_HEARTBEAT_INTERVAL = 5, -- Seconds between status heartbeats.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status broadcasts.
   DEFAULT_STARTUP_RAMP = "NORMAL", -- Startup ramp profile name.
+  DEFAULT_STARTUP_STAGE_TIMEOUT = 60, -- Seconds before startup stage timeout.
   DEFAULT_RT_MODE = "MASTER", -- Default mode for RT nodes.
   DEFAULT_TARGET_RPM = 900, -- Default RT target RPM.
   -- Alerting parameters (monitoring only).
@@ -93,6 +94,7 @@ return {
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
   status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
   startup_ramp = CONFIG.DEFAULT_STARTUP_RAMP,
+  startup_stage_timeout_s = CONFIG.DEFAULT_STARTUP_STAGE_TIMEOUT,
   rt_default_mode = CONFIG.DEFAULT_RT_MODE,
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
   alert_eval_interval = CONFIG.DEFAULT_ALERT_EVAL_INTERVAL,

@@ -49,6 +49,11 @@ local function warn(message)
   log_line("WARN: " .. tostring(message))
 end
 
+local function error_msg(message)
+  print(message)
+  log_line("ERROR: " .. tostring(message))
+end
+
 local function fatal(message)
   warn(message)
   error(message, 0)
@@ -160,11 +165,54 @@ local function download_url(url)
   if not ok_read or type(body) ~= "string" then
     return nil, "Failed to read response from " .. url
   end
-  local snippet = body:sub(1, 200):lower()
-  if snippet:find("<html", 1, true) or snippet:find("<!doctype", 1, true) then
-    return nil, "Downloaded HTML, expected Lua (check RAW URL)"
-  end
   return body
+end
+
+local function is_html_content(content)
+  if type(content) ~= "string" then
+    return false
+  end
+  local snippet = content:sub(1, 200):lower()
+  return snippet:find("<html", 1, true) or snippet:find("<!doctype", 1, true)
+end
+
+local function compile_lua(path, content)
+  if type(loadfile) == "function" then
+    return loadfile(path)
+  end
+  return load(content or "", "=" .. tostring(path), "t", {})
+end
+
+local function validate_download(path)
+  if not fs.exists(path) then
+    error_msg("Download validation failed: missing file " .. tostring(path))
+    return false, "missing file"
+  end
+  if fs.getSize(path) <= 0 then
+    fs.delete(path)
+    error_msg("Download validation failed: empty file " .. tostring(path))
+    return false, "empty file"
+  end
+  local content = read_file(path)
+  if not content then
+    fs.delete(path)
+    error_msg("Download validation failed: unreadable file " .. tostring(path))
+    return false, "unreadable file"
+  end
+  if is_html_content(content) then
+    fs.delete(path)
+    error_msg("Download validation failed: HTML content for " .. tostring(path))
+    return false, "html content"
+  end
+  if path:sub(-4) == ".lua" then
+    local loader, err = compile_lua(path, content)
+    if not loader then
+      fs.delete(path)
+      error_msg("Download validation failed: Lua parse error for " .. tostring(path) .. " (" .. tostring(err) .. ")")
+      return false, "lua parse error"
+    end
+  end
+  return true
 end
 
 local function download_file(remote_path, target_path)
@@ -177,6 +225,10 @@ local function download_file(remote_path, target_path)
   local ok, write_err = write_file(target_path, body)
   if not ok then
     return false, write_err
+  end
+  local valid, valid_err = validate_download(target_path)
+  if not valid then
+    return false, valid_err
   end
   return true
 end

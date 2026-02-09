@@ -83,6 +83,7 @@ local DEFAULT_CONFIG = {
   turbines = { "BigReactors-Turbine_327", "BigReactors-Turbine_426" }, -- Default turbine peripheral names.
   heartbeat_interval = 2, -- Seconds between status heartbeats.
   scan_interval = 10, -- Seconds between peripheral discovery scans.
+  startup_watchdog_s = 60, -- Seconds before STARTUP watchdog trips.
   channels = {
     control = constants.channels.CONTROL, -- Control channel for MASTER commands.
     status = constants.channels.STATUS -- Status channel for telemetry.
@@ -212,6 +213,13 @@ local function validate_config(config_values, defaults)
   if type(config_values.scan_interval) ~= "number" or config_values.scan_interval <= 0 then
     config_values.scan_interval = defaults.scan_interval
     add_config_warning("scan_interval missing/invalid; defaulting to " .. tostring(defaults.scan_interval))
+  end
+  if type(config_values.startup_watchdog_s) ~= "number" or config_values.startup_watchdog_s <= 0 then
+    config_values.startup_watchdog_s = defaults.startup_watchdog_s
+    add_config_warning("startup_watchdog_s missing/invalid; defaulting to " .. tostring(defaults.startup_watchdog_s))
+  elseif config_values.startup_watchdog_s > 600 then
+    config_values.startup_watchdog_s = 600
+    add_config_warning("startup_watchdog_s too high; clamping to 600s")
   end
   if type(config_values.channels) ~= "table" then
     config_values.channels = utils.deep_copy(defaults.channels)
@@ -416,6 +424,7 @@ config.rails.coil = coil
 config.monitor_interval = config.monitor_interval or DEFAULT_CONFIG.monitor_interval
 config.monitor_scale = config.monitor_scale or DEFAULT_CONFIG.monitor_scale
 config.scan_interval = config.scan_interval or DEFAULT_CONFIG.scan_interval
+config.startup_watchdog_s = config.startup_watchdog_s or DEFAULT_CONFIG.startup_watchdog_s
 local hb = config.heartbeat_interval
 
 local configured_reactors = utils.deep_copy(config.reactors or {})
@@ -446,6 +455,8 @@ local targets = { power = 0, steam = 0, rpm = TARGET_RPM, enable_reactors = true
 local modules = {}
 local active_startup = nil
 local startup_queue = {}
+local startup_started_ms = nil
+local startup_watchdog_tripped = false
 local master_seen = os.epoch("utc")
 local last_heartbeat = 0
 local last_reactor_tick = 0
@@ -1486,6 +1497,9 @@ local function build_health_payload()
   if devices.proto_mismatch then
     reasons[health.reasons.PROTO_MISMATCH] = true
   end
+  if startup_watchdog_tripped then
+    reasons[health.reasons.CONTROL_DEGRADED] = true
+  end
   local connected = is_master_connected()
   if not connected then
     reasons[health.reasons.COMMS_DOWN] = true
@@ -2390,9 +2404,85 @@ local function update_monitor()
   monitor_router:render(monitor, model)
 end
 
+local function reset_startup_watchdog()
+  startup_started_ms = nil
+  startup_watchdog_tripped = false
+end
+
+local function build_peripheral_summary()
+  local summary = devices.registry_summary or registry:get_summary() or {}
+  local kinds = summary.kinds or {}
+  local reactors = kinds.reactor or {}
+  local turbines = kinds.turbine or {}
+  return string.format(
+    "registry total=%d bound=%d missing=%d reactors=%d/%d turbines=%d/%d",
+    summary.total or 0,
+    summary.bound or 0,
+    summary.missing or 0,
+    reactors.bound or 0,
+    reactors.total or 0,
+    turbines.bound or 0,
+    turbines.total or 0
+  )
+end
+
+local function should_emergency_startup(snapshot)
+  local max_temp = snapshot and snapshot.max_temp or nil
+  if safety.should_scram({ temperature = max_temp, max_temperature = config.safety.max_temperature }) then
+    return true
+  end
+  local max_rpm = config.safety.max_rpm
+  if type(max_rpm) ~= "number" then
+    return false
+  end
+  if snapshot and type(snapshot.avg_rpm) == "number" and snapshot.avg_rpm > max_rpm then
+    return true
+  end
+  for _, entry in pairs(snapshot and snapshot.turbines or {}) do
+    if type(entry.rpm) == "number" and entry.rpm > max_rpm then
+      return true
+    end
+  end
+  return false
+end
+
+local function handle_startup_timeout()
+  if startup_watchdog_tripped then
+    return
+  end
+  startup_watchdog_tripped = true
+  local now = os.epoch("utc")
+  local elapsed_s = startup_started_ms and (now - startup_started_ms) / 1000 or 0
+  local node_id = comms and comms.network and comms.network.id or config.node_id
+  local summary = build_peripheral_summary()
+  log("ERROR", ("Startup watchdog tripped role=%s node=%s elapsed=%.1fs %s"):format(
+    tostring(config.role or "RT"),
+    tostring(node_id),
+    elapsed_s,
+    summary
+  ))
+
+  local snapshot = update_status_snapshot()
+  local emergency = should_emergency_startup(snapshot)
+  local status_level = emergency and constants.status_levels.EMERGENCY or constants.status_levels.WARNING
+  broadcast_status(status_level)
+  if emergency then
+    if node_state_machine.state() ~= constants.node_states.EMERGENCY then
+      node_state_machine:transition(constants.node_states.EMERGENCY)
+    end
+  else
+    if node_state_machine.state() ~= constants.node_states.LIMITED then
+      node_state_machine:transition(constants.node_states.LIMITED)
+    end
+  end
+  active_startup = nil
+  startup_queue = {}
+end
+
 local states = {
   [constants.node_states.OFF] = {
     on_enter = function()
+      reset_startup_watchdog()
       scram()
       targets.power, targets.steam, targets.rpm = 0, 0, 0
     end,
@@ -2402,6 +2492,8 @@ local states = {
   },
   [constants.node_states.STARTUP] = {
     on_enter = function()
+      startup_started_ms = os.epoch("utc")
+      startup_watchdog_tripped = false
       targets.steam = 0
       targets.rpm = TARGET_RPM
       startup_queue = {}
@@ -2413,6 +2505,12 @@ local states = {
       end
     end,
     on_tick = function()
+      if startup_started_ms and not startup_watchdog_tripped then
+        local now = os.epoch("utc")
+        if now - startup_started_ms >= (config.startup_watchdog_s or 60) * 1000 then
+          handle_startup_timeout()
+        end
+      end
       if not active_startup and #startup_queue > 0 then
         local next_id = table.remove(startup_queue, 1)
         local module = modules[next_id]
@@ -2429,6 +2527,9 @@ local states = {
     end
   },
   [constants.node_states.RUNNING] = {
+    on_enter = function()
+      reset_startup_watchdog()
+    end,
     on_tick = function()
       adjust_turbines()
       adjust_reactors()
@@ -2436,6 +2537,9 @@ local states = {
     end
   },
   [constants.node_states.LIMITED] = {
+    on_enter = function()
+      reset_startup_watchdog()
+    end,
     on_tick = function()
       targets.power = targets.power * 0.5
       adjust_reactors()
@@ -2445,6 +2549,7 @@ local states = {
   },
   [constants.node_states.AUTONOM] = {
     on_enter = function()
+      reset_startup_watchdog()
       active_startup = nil
       startup_queue = {}
       clamp_autonom_targets()
@@ -2459,12 +2564,16 @@ local states = {
     end
   },
   [constants.node_states.MANUAL] = {
+    on_enter = function()
+      reset_startup_watchdog()
+    end,
     on_tick = function()
       monitor_master()
     end
   },
   [constants.node_states.EMERGENCY] = {
     on_enter = function()
+      reset_startup_watchdog()
       scram()
       targets.power, targets.steam, targets.rpm = 0, 0, 0
       add_alarm(comms.network.id, "EMERGENCY", "SCRAM triggered")
