@@ -130,7 +130,7 @@ function protocol.sanitize_message(message)
     sender_id = normalized_sender,
     node_id = utils.normalize_node_id(message.node_id or message.sender_id or message.src),
     src = utils.normalize_node_id(message.src or message.sender_id),
-    dst = message.dst,
+    dst = message.dst ~= nil and utils.normalize_node_id(message.dst) or nil,
     role = message.role,
     ts = ts,
     timestamp = ts,
@@ -169,12 +169,15 @@ function protocol.is_proto_compatible(ver)
 end
 
 function protocol.is_for_node(message, node_id)
-  if message.dst and message.dst ~= node_id then
+  local normalized_node = utils.normalize_node_id(node_id)
+  local normalized_dst = message.dst ~= nil and utils.normalize_node_id(message.dst) or nil
+  if normalized_dst and normalized_dst ~= normalized_node then
     return false
   end
   local payload = message.payload or {}
   if message.type == constants.message_types.COMMAND then
-    if payload.target and payload.target ~= node_id then
+    local normalized_target = payload.target ~= nil and utils.normalize_node_id(payload.target) or nil
+    if normalized_target and normalized_target ~= normalized_node then
       return false
     end
   end
