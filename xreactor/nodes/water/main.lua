@@ -43,6 +43,7 @@ local DEFAULT_CONFIG = {
   target_volume = 200000, -- Desired tank volume.
   balance_log_interval_s = 60, -- Seconds between repeated balance logs while refilling/bleeding (0 = only on state change).
   heartbeat_interval = 2, -- Seconds between status heartbeats.
+  discovery_interval = 15, -- Seconds between peripheral rescans.
   status_interval = 5, -- Seconds between status payloads.
   channels = {
     control = constants.channels.CONTROL, -- Control channel for MASTER commands.
@@ -119,6 +120,14 @@ local function validate_config(config_values, defaults)
     config_values.status_interval = 60
     add_config_warning("status_interval too high; clamping to 60s")
   end
+  if type(config_values.discovery_interval) ~= "number" or config_values.discovery_interval <= 0 then
+    config_values.discovery_interval = defaults.discovery_interval
+    add_config_warning("discovery_interval missing/invalid; defaulting to " .. tostring(defaults.discovery_interval))
+  elseif config_values.discovery_interval > 300 then
+    config_values.discovery_interval = 300
+    add_config_warning("discovery_interval too high; clamping to 300s")
+  end
+
   if type(config_values.channels) ~= "table" then
     config_values.channels = utils.deep_copy(defaults.channels)
     add_config_warning("channels missing/invalid; defaulting to control/status defaults")
@@ -223,14 +232,11 @@ local function discover()
     if not ok or type(methods) ~= "table" then
       goto continue
     end
-    local has_fluid = false
+    local method_set = {}
     for _, method in ipairs(methods) do
-      if method == "getFluidAmount" then
-        has_fluid = true
-        break
-      end
+      method_set[method] = true
     end
-    if has_fluid then
+    if method_set.tanks or method_set.getFluidAmount then
       table.insert(registry_devices, {
         name = name,
         type = peripheral.getType(name),
@@ -263,7 +269,18 @@ local function total_water()
   local buffers = {}
   for name, tank in pairs(tanks) do
     local level = 0
-    if tank.getFluidAmount then
+    if tank.tanks then
+      local ok, tank_data = pcall(tank.tanks, tank)
+      if ok and type(tank_data) == "table" then
+        for _, info in pairs(tank_data) do
+          if type(info) == "table" and type(info.amount) == "number" then
+            level = level + info.amount
+          end
+        end
+      elseif not ok then
+        warn_once("tank_read:" .. tostring(name), "Tank read failed for " .. tostring(name) .. ": " .. tostring(tank_data))
+      end
+    elseif tank.getFluidAmount then
       local ok, value = pcall(tank.getFluidAmount, tank)
       if ok and type(value) == "number" then
         level = value
@@ -537,7 +554,7 @@ local function init()
   services:add(discovery_service.new({
     registry = registry,
     discover = discover,
-    interval = config.heartbeat_interval,
+    interval = config.discovery_interval or config.heartbeat_interval,
     managed_registry = false,
     update_health = function(ok)
       devices.discovery_failed = not ok

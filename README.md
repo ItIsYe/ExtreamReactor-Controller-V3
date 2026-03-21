@@ -309,14 +309,14 @@ Current runtime comms behavior includes:
 
 - structured protocol validation,
 - heartbeat/status traffic,
-- command delivery and applied acknowledgements,
+- command-only delivery and applied acknowledgements,
 - retry/backoff handling,
 - dedupe tracking,
 - peer timeout/down detection.
 
 ### Discovery and registries
 
-Support nodes maintain a local peripheral registry and periodically rescan hardware. The registry stores bound/missing state, signatures, aliases, and scan metadata in `/xreactor/config/registry_<role>_<node_id>.json`.
+Support nodes maintain a local peripheral registry and periodically rescan hardware. Discovery runs on the node-specific `discovery_interval`, independently from heartbeat timing. The registry stores bound/missing state, signatures, aliases, and scan metadata in `/xreactor/config/registry_<role>_<node_id>.json`, and only rewrites the file when the serialized registry state actually changes.
 
 ### Monitor behavior
 

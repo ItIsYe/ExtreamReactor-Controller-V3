@@ -82,8 +82,17 @@ local function safe_call_remote(wired, device_name, method, ...)
   return table.unpack(results, 2, results.n)
 end
 
+local function resolve_channels(config)
+  local channels = type(config.channels) == "table" and config.channels or {}
+  local control = type(channels.control) == "number" and channels.control or constants.channels.CONTROL
+  local status = type(channels.status) == "number" and channels.status or constants.channels.STATUS
+  return { control = control, status = status }
+end
+
 function network.init(config)
-  local modem, modem_err = open_modem(config.wireless_modem, { constants.channels.CONTROL, constants.channels.STATUS })
+  config = config or {}
+  local channels = resolve_channels(config)
+  local modem, modem_err = open_modem(config.wireless_modem, { channels.control, channels.status })
   local wired = nil
   if config.wired_modem and peripheral.isPresent(config.wired_modem) then
     wired = select(1, utils.safe_wrap(config.wired_modem))
@@ -94,6 +103,7 @@ function network.init(config)
     return {
       modem = nil,
       wired = wired,
+      channels = channels,
       id = node_id,
       role = config.role,
       send = function(_, _, _)
@@ -122,13 +132,19 @@ function network.init(config)
   return {
     modem = modem,
     wired = wired,
+    channels = channels,
     id = node_id,
     role = config.role,
     send = function(_, channel, payload)
       local sanitized = protocol.sanitize_message(payload)
-      if sanitized then
-        modem.transmit(channel, channel, sanitized)
+      if not sanitized then
+        return false, "invalid payload"
       end
+      local ok, err = pcall(modem.transmit, modem, channel, channel, sanitized)
+      if not ok then
+        return false, tostring(err)
+      end
+      return true
     end,
     receive = function(_, timeout)
       local timer
@@ -151,9 +167,14 @@ function network.init(config)
     end,
     broadcast = function(_, payload)
       local sanitized = protocol.sanitize_message(payload)
-      if sanitized then
-        modem.transmit(constants.channels.CONTROL, constants.channels.CONTROL, sanitized)
+      if not sanitized then
+        return false, "invalid payload"
       end
+      local ok, err = pcall(modem.transmit, modem, channels.control, channels.control, sanitized)
+      if not ok then
+        return false, tostring(err)
+      end
+      return true
     end,
     push_wired = function(_, device_name, method, ...)
       return safe_call_remote(wired, device_name, method, ...)

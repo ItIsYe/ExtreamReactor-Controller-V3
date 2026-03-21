@@ -162,6 +162,7 @@ local function save_registry(path, data)
     end
   end
   utils.write_config(path, snapshot)
+  return snapshot
 end
 
 function registry.new(opts)
@@ -172,11 +173,18 @@ function registry.new(opts)
   self.log_prefix = opts.log_prefix or "REGISTRY"
   self.aliases = opts.aliases or {}
   self.state = load_registry(self.path)
+  self._last_saved = textutils.serialize(sanitize_value(self.state, 0) or {})
   return setmetatable(self, { __index = registry })
 end
 
 function registry:save()
+  local snapshot = textutils.serialize(sanitize_value(self.state, 0) or {})
+  if snapshot == self._last_saved then
+    return false
+  end
   save_registry(self.path, self.state)
+  self._last_saved = snapshot
+  return true
 end
 
 function registry:register(name, info)

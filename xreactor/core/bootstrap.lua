@@ -54,7 +54,7 @@ local function log_line(level, message)
     if not file then
       return
     end
-    local stamp = textutils.formatTime(os.epoch("utc") / 1000, true)
+    local stamp = os.date("!%H:%M:%S")
     file.write(string.format("[%s] BOOTSTRAP | %s | %s\n", stamp, tostring(level), tostring(message)))
     file.close()
   end)
@@ -274,15 +274,16 @@ function bootstrap.require(module_name)
   return result
 end
 
-local FIRST_START_CONFIG = "/disk/xreactor/config/node.lua"
+local FIRST_START_ROLE_CONFIG = "/xreactor/config/role.lua"
+local FIRST_START_NODE_ID_PATH = "/xreactor/config/node_id.txt"
 
 local ROLE_OPTIONS = {
-  { label = "MASTER", role = "master" },
-  { label = "RT", role = "rt" },
-  { label = "ENERGY", role = "energy" },
-  { label = "WATER", role = "water" },
-  { label = "FUEL", role = "fuel" },
-  { label = "REPROCESSING", role = "reprocessing" }
+  { label = "MASTER", role = "MASTER" },
+  { label = "RT", role = "RT" },
+  { label = "ENERGY", role = "ENERGY" },
+  { label = "WATER", role = "WATER" },
+  { label = "FUEL", role = "FUEL" },
+  { label = "REPROCESSING", role = "REPROCESSING" }
 }
 
 local function prompt_role_selection()
@@ -300,18 +301,26 @@ local function prompt_role_selection()
   end
 end
 
-local function write_first_start_config(path, role, node_id, label)
+local function write_first_start_role(path, role)
   ensure_dir(fs.getDir(path))
   local file = fs.open(path, "w")
   if not file then
     error("Unable to write config: " .. tostring(path))
   end
   file.write(string.format([[return {
-    role = "%s",
-    node_id = "%s",
-    label = "%s"
+  role = "%s"
 }
-]], tostring(role), tostring(node_id), tostring(label)))
+]], tostring(role)))
+  file.close()
+end
+
+local function write_first_start_node_id(path, node_id)
+  ensure_dir(fs.getDir(path))
+  local file = fs.open(path, "w")
+  if not file then
+    error("Unable to write node id: " .. tostring(path))
+  end
+  file.write(tostring(node_id))
   file.close()
 end
 
@@ -319,7 +328,7 @@ local function run_first_start_setup()
   if not (fs and fs.exists and os and os.getComputerID and type(read) == "function") then
     return
   end
-  if fs.exists(FIRST_START_CONFIG) then
+  if fs.exists(FIRST_START_ROLE_CONFIG) then
     return
   end
   local selection = prompt_role_selection()
@@ -329,7 +338,8 @@ local function run_first_start_setup()
     os.setComputerLabel(label)
   end
   local node_id = "node-" .. computer_id
-  write_first_start_config(FIRST_START_CONFIG, selection.role, node_id, label)
+  write_first_start_role(FIRST_START_ROLE_CONFIG, selection.role)
+  write_first_start_node_id(FIRST_START_NODE_ID_PATH, node_id)
   print("Setup complete.")
   print("Rebooting...")
   if os.reboot then

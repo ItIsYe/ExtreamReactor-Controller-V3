@@ -40,6 +40,7 @@ local DEFAULT_CONFIG = {
   wired_modem = nil, -- Optional wired modem side.
   buffers = { "chemical_tank_0" }, -- Default buffer peripheral names.
   heartbeat_interval = 2, -- Seconds between status heartbeats.
+  discovery_interval = 15, -- Seconds between peripheral rescans.
   status_interval = 5, -- Seconds between status payloads.
   channels = {
     control = constants.channels.CONTROL, -- Control channel for MASTER commands.
@@ -107,6 +108,14 @@ local function validate_config(config_values, defaults)
     config_values.status_interval = 60
     add_config_warning("status_interval too high; clamping to 60s")
   end
+  if type(config_values.discovery_interval) ~= "number" or config_values.discovery_interval <= 0 then
+    config_values.discovery_interval = defaults.discovery_interval
+    add_config_warning("discovery_interval missing/invalid; defaulting to " .. tostring(defaults.discovery_interval))
+  elseif config_values.discovery_interval > 300 then
+    config_values.discovery_interval = 300
+    add_config_warning("discovery_interval too high; clamping to 300s")
+  end
+
   if type(config_values.channels) ~= "table" then
     config_values.channels = utils.deep_copy(defaults.channels)
     add_config_warning("channels missing/invalid; defaulting to control/status defaults")
@@ -234,14 +243,11 @@ local function discover()
     if not ok or type(methods) ~= "table" then
       goto continue
     end
-    local has_buffer = false
+    local method_set = {}
     for _, method in ipairs(methods) do
-      if method == "getWaste" or method == "getItemCount" then
-        has_buffer = true
-        break
-      end
+      method_set[method] = true
     end
-    if has_buffer then
+    if (method_set.list and method_set.size) or method_set.getWaste or method_set.getItemCount then
       table.insert(registry_devices, {
         name = name,
         type = peripheral.getType(name),
@@ -273,7 +279,18 @@ local function read_buffers()
   local info = {}
   for name, buf in pairs(buffers) do
     local stored = 0
-    if buf.getWaste then
+    if buf.list and buf.size then
+      local ok, items = pcall(buf.list, buf)
+      if ok and type(items) == "table" then
+        for _, stack in pairs(items) do
+          if type(stack) == "table" and type(stack.count) == "number" then
+            stored = stored + stack.count
+          end
+        end
+      elseif not ok then
+        warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(items))
+      end
+    elseif buf.getWaste then
       local ok, value = pcall(buf.getWaste, buf)
       if ok and type(value) == "number" then
         stored = value
@@ -525,7 +542,7 @@ local function init()
   services:add(discovery_service.new({
     registry = registry,
     discover = discover,
-    interval = config.heartbeat_interval,
+    interval = config.discovery_interval or config.heartbeat_interval,
     managed_registry = false,
     update_health = function(ok)
       devices.discovery_failed = not ok

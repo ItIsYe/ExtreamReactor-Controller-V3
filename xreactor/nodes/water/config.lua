@@ -7,6 +7,7 @@ local CONFIG = {
   DEFAULT_TARGET_VOLUME = 200000, -- Desired tank volume.
   DEFAULT_BALANCE_LOG_INTERVAL = 60, -- Seconds between repeated balance logs while refilling/bleeding (0 = only on state change).
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
+  DEFAULT_DISCOVERY_INTERVAL = 15, -- Seconds between discovery rescans.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
   DEFAULT_CONTROL_CHANNEL = 6500, -- Control channel for MASTER commands.
   DEFAULT_STATUS_CHANNEL = 6501, -- Status channel for telemetry.
@@ -72,6 +73,7 @@ return {
   target_volume = CONFIG.DEFAULT_TARGET_VOLUME,
   balance_log_interval_s = CONFIG.DEFAULT_BALANCE_LOG_INTERVAL,
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
+  discovery_interval = CONFIG.DEFAULT_DISCOVERY_INTERVAL,
   status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
   channels = {
     control = CONFIG.DEFAULT_CONTROL_CHANNEL,
