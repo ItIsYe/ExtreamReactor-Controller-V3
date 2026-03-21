@@ -51,6 +51,37 @@ local function now_ms()
   return os.epoch("utc")
 end
 
+local function reset_runtime_state()
+  state.initialized = false
+  state.seq = 0
+  state.node_id = nil
+  state.role = nil
+  state.proto_ver = nil
+  state.config = nil
+  state.network = nil
+  state.log_prefix = "COMMS"
+  state.logger = nil
+  state.drop_simulation = 0
+  state.handlers = {}
+  state.any_handlers = {}
+  state.queue = {}
+  state.inflight = {}
+  state.dedupe = {}
+  state.peers = {}
+  state.incoming = {}
+  state.metrics = {
+    dropped = 0,
+    queue_dropped = 0,
+    retries = 0,
+    dedupe_hits = 0,
+    timeouts = 0,
+    last_timeout_ts = nil,
+    last_timeout_id = nil
+  }
+  state.timeouts = {}
+end
+
+
 local function merge_config(config)
   local merged = {}
   for k, v in pairs(DEFAULT_CONFIG) do
@@ -179,19 +210,30 @@ local function build_message(dst, msg_type, payload)
   }
 end
 
+local function resolve_channel(msg_type, explicit_channel)
+  if explicit_channel then
+    return explicit_channel
+  end
+  local channels = state.network and state.network.channels or {}
+  if msg_type == constants.message_types.STATUS or msg_type == constants.message_types.HEARTBEAT or msg_type == constants.message_types.ALERT then
+    return channels.status or constants.channels.STATUS
+  end
+  return channels.control or constants.channels.CONTROL
+end
+
 local function send_raw(channel, message)
   local sanitized = protocol.sanitize_message(message)
   if not sanitized then
     log("Invalid outbound message dropped", "WARN")
     state.metrics.dropped = state.metrics.dropped + 1
-    return
+    return false, "invalid payload"
   end
   if should_drop() then
     log("Drop simulation: outbound message dropped", "WARN")
     state.metrics.dropped = state.metrics.dropped + 1
-    return
+    return false, "simulated drop"
   end
-  state.network:send(channel, sanitized)
+  return state.network:send(channel, sanitized)
 end
 
 local function queue_entry(message, channel, opts)
@@ -224,10 +266,16 @@ local function flush_queue()
     if entry.sent_ts then
       table.insert(remaining, entry)
     else
-      entry.sent_ts = now_ms()
-      send_raw(entry.channel, entry.message)
-      if entry.require_ack or entry.require_applied then
-        state.inflight[entry.message.message_id] = entry
+      local sent_ts = now_ms()
+      local ok, err = send_raw(entry.channel, entry.message)
+      if ok then
+        entry.sent_ts = sent_ts
+        if entry.require_ack or entry.require_applied then
+          state.inflight[entry.message.message_id] = entry
+        end
+      else
+        entry.last_error = err
+        table.insert(remaining, entry)
       end
     end
   end
@@ -262,6 +310,13 @@ local function retry_inflight()
       state.inflight[msg_id] = nil
       goto continue
     end
+    local ok, err = send_raw(entry.channel, entry.message)
+    if not ok then
+      entry.retries = entry.retries - 1
+      entry.next_retry = now_ts + 1000
+      entry.last_error = err
+      goto continue
+    end
     entry.sent_ts = now_ts
     entry.next_retry = now_ts + (schedule_backoff(entry.retries) * 1000)
     state.metrics.retries = state.metrics.retries + 1
@@ -273,7 +328,6 @@ local function retry_inflight()
         state.config.max_retries
       ))
     end
-    send_raw(entry.channel, entry.message)
     ::continue::
   end
 end
@@ -285,7 +339,9 @@ local function send_ack(message, msg_type, payload)
   ack.phase = msg_type == constants.message_types.ACK_APPLIED and "applied" or "delivered"
   ack.dst = message.src
   ack.src = state.node_id
-  queue_entry(ack, constants.channels.CONTROL, { priority = 1 })
+  local channels = state.network and state.network.channels or {}
+  local control_channel = channels.control or constants.channels.CONTROL
+  queue_entry(ack, control_channel, { priority = 1 })
 end
 
 local function dispatch_handlers(message)
@@ -412,6 +468,7 @@ end
 
 function comms.init(opts)
   opts = opts or {}
+  reset_runtime_state()
   state.config = sanitize_config(opts.config or {})
   state.network = opts.network or network_lib.init(opts)
   state.node_id = opts.node_id or state.network.id
@@ -442,18 +499,13 @@ function comms.send(dst, msg_type, payload, opts)
   if opts and opts.message_id then
     message.message_id = opts.message_id
   end
-  local channel = opts and opts.channel or nil
-  if not channel then
-    if msg_type == constants.message_types.STATUS or msg_type == constants.message_types.HEARTBEAT or msg_type == constants.message_types.ALERT then
-      channel = constants.channels.STATUS
-    else
-      channel = constants.channels.CONTROL
-    end
-  end
+  local channel = resolve_channel(msg_type, opts and opts.channel or nil)
+  local require_ack = msg_type == constants.message_types.COMMAND and (opts and opts.require_ack or false)
+  local require_applied = msg_type == constants.message_types.COMMAND and (opts and opts.require_applied or false)
   local entry = queue_entry(message, channel, {
     priority = opts and opts.priority or nil,
-    require_ack = opts and opts.require_ack or false,
-    require_applied = opts and opts.require_applied or false
+    require_ack = require_ack,
+    require_applied = require_applied
   })
   if entry and msg_type == constants.message_types.COMMAND then
     log(("Command queued %s -> %s (applied=%s)"):format(

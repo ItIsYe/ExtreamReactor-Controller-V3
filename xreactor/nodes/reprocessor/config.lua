@@ -5,6 +5,7 @@ local CONFIG = {
   DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
   DEFAULT_BUFFERS = { "chemical_tank_0" }, -- Default buffer peripheral names.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
+  DEFAULT_DISCOVERY_INTERVAL = 15, -- Seconds between discovery rescans.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
   DEFAULT_CONTROL_CHANNEL = 6500, -- Control channel for MASTER commands.
   DEFAULT_STATUS_CHANNEL = 6501, -- Status channel for telemetry.
@@ -68,6 +69,7 @@ return {
   wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
   buffers = CONFIG.DEFAULT_BUFFERS,
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
+  discovery_interval = CONFIG.DEFAULT_DISCOVERY_INTERVAL,
   status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
   channels = {
     control = CONFIG.DEFAULT_CONTROL_CHANNEL,

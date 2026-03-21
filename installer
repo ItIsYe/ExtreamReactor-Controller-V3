@@ -15,8 +15,8 @@ local function safe_mkdir(path)
 end
 
 local function timestamp()
-  if textutils and textutils.formatTime and os and os.epoch then
-    return textutils.formatTime(os.epoch("utc") / 1000, true)
+  if os and os.date then
+    return os.date("!%H:%M:%S")
   end
   if os and os.time then
     return tostring(os.time())

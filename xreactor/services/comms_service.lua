@@ -137,7 +137,7 @@ end
 function comms_service:publish_status(payload, opts)
   return self.comms.send(nil, constants.message_types.STATUS, payload, {
     priority = 2,
-    require_ack = opts and opts.requires_ack or false,
+    require_ack = false,
     channel = status_channel(self.config)
   })
 end

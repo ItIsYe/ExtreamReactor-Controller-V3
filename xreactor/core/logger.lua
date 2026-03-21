@@ -28,7 +28,7 @@ local state = {
 }
 
 local function now_stamp()
-  return textutils.formatTime(os.epoch("utc") / 1000, true)
+  return os.date("!%H:%M:%S")
 end
 
 local function ensure_dir(path)

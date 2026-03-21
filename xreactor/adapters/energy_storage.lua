@@ -20,6 +20,9 @@ local function to_set(list)
 end
 
 local function resolve_profile(methods)
+  if methods.getEnergy and methods.getEnergyCapacity then
+    return { stored = "getEnergy", capacity = "getEnergyCapacity", input = "getLastInput", output = "getLastOutput" }
+  end
   if methods.getEnergy and methods.getMaxEnergy then
     return { stored = "getEnergy", capacity = "getMaxEnergy", input = "getLastInput", output = "getLastOutput" }
   end
