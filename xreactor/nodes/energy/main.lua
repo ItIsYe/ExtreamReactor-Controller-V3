@@ -1218,6 +1218,15 @@ local function init()
   }))
   services:add(ui_service.new({
     interval = config.ui_refresh_interval,
+    snapshot = function()
+      local model = build_ui_model()
+      return {
+        page = ui_state.router and ui_state.router.index or 1,
+        matrix_page = ui_state.matrix_page,
+        storage_page = ui_state.storage_page,
+        data = build_snapshot_key(model)
+      }
+    end,
     render = render_monitor,
     handle_input = function(event)
       if ui_state.router then

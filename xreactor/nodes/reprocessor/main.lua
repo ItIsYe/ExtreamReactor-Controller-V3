@@ -557,6 +557,28 @@ local function init()
   }))
   services:add(ui_service.new({
     interval = 1,
+    snapshot = function()
+      local payload = build_status_payload()
+      local peers = comms and comms:get_peers() or {}
+      local master_state = "UNKNOWN"
+      for _, peer in pairs(peers) do
+        if peer.role == constants.roles.MASTER then
+          master_state = peer.down and "DOWN" or "OK"
+          break
+        end
+      end
+      local node_id = comms and comms.network and comms.network.id or config.node_id
+      local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
+      return {
+        page = monitor_router and monitor_router.index or 1,
+        payload = payload,
+        master_state = master_state,
+        standby = standby,
+        alerts = alert_payload and alert_payload.critical or 0,
+        last_command = devices.last_command,
+        last_command_ts = devices.last_command_ts
+      }
+    end,
     render = render_monitor,
     handle_input = function(event)
       if monitor_router then

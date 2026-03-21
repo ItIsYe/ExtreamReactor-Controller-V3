@@ -186,6 +186,7 @@ function registry.new(opts)
   self.state = load_registry(self.path)
   self._last_saved = textutils.serialize(build_persisted_snapshot(self.state))
   self._dirty = false
+  self._persist_dirty = false
   return setmetatable(self, { __index = registry })
 end
 
@@ -193,14 +194,20 @@ function registry:save()
   if not self._dirty then
     return false
   end
+  if not self._persist_dirty then
+    self._dirty = false
+    return false
+  end
   local snapshot = textutils.serialize(build_persisted_snapshot(self.state))
   if snapshot == self._last_saved then
     self._dirty = false
+    self._persist_dirty = false
     return false
   end
   save_registry(self.path, self.state)
   self._last_saved = snapshot
   self._dirty = false
+  self._persist_dirty = false
   return true
 end
 
@@ -213,6 +220,7 @@ function registry:register(name, info)
   local id = self.state.name_index[name]
   local entry = id and self.state.devices[id] or nil
   local changed = false
+  local persist_changed = false
   if not entry then
     id = build_device_id(name, type_name, signature)
     local suffix = 1
@@ -233,25 +241,27 @@ function registry:register(name, info)
     self.state.devices[id] = entry
     self.state.name_index[name] = id
     changed = true
+    persist_changed = true
   end
-  if entry.name ~= name then entry.name = name changed = true end
-  if entry.type ~= type_name then entry.type = type_name changed = true end
-  if entry.signature ~= signature then entry.signature = signature changed = true end
+  if entry.name ~= name then entry.name = name changed = true persist_changed = true end
+  if entry.type ~= type_name then entry.type = type_name changed = true persist_changed = true end
+  if entry.signature ~= signature then entry.signature = signature changed = true persist_changed = true end
   entry.last_seen = now()
-  if entry.kind ~= info.kind then entry.kind = info.kind changed = true end
+  if entry.kind ~= info.kind then entry.kind = info.kind changed = true persist_changed = true end
   local alias = info.alias or self.aliases[name]
-  if alias and entry.alias ~= alias then entry.alias = alias changed = true end
+  if alias and entry.alias ~= alias then entry.alias = alias changed = true persist_changed = true end
   if info.found ~= nil then
-    if entry.found ~= info.found then entry.found = info.found changed = true end
+    if entry.found ~= info.found then entry.found = info.found changed = true persist_changed = true end
   end
   if info.bound ~= nil then
-    if entry.bound ~= info.bound then entry.bound = info.bound changed = true end
+    if entry.bound ~= info.bound then entry.bound = info.bound changed = true persist_changed = true end
   end
   if info.features then
     local features = sanitize_value(info.features, 0)
     if textutils.serialize(entry.features or {}) ~= textutils.serialize(features or {}) then
       entry.features = features
       changed = true
+      persist_changed = true
     end
   end
   if info.schema then
@@ -259,42 +269,47 @@ function registry:register(name, info)
     if textutils.serialize(entry.schema or {}) ~= textutils.serialize(schema or {}) then
       entry.schema = schema
       changed = true
+      persist_changed = true
     end
   end
-  if info.status and entry.status ~= info.status then entry.status = info.status changed = true end
+  if info.status and entry.status ~= info.status then entry.status = info.status changed = true persist_changed = true end
   if info.last_error then
     if entry.last_error ~= info.last_error then
       entry.last_error = info.last_error
       entry.last_error_ts = now()
       changed = true
+      persist_changed = true
     end
   end
   self._dirty = self._dirty or changed
+  self._persist_dirty = self._persist_dirty or persist_changed
   return entry, changed
 end
 
 function registry:sync(devices)
   local seen = {}
   local changed = false
+  local persist_changed = false
   for _, device in ipairs(devices or {}) do
     local entry, entry_changed = self:register(device.name, device)
-    if entry.found ~= true then entry.found = true changed = true end
-    if entry.bound ~= (device.bound == true) then entry.bound = device.bound == true changed = true end
-    if entry.missing ~= false then entry.missing = false changed = true end
+    if entry.found ~= true then entry.found = true changed = true persist_changed = true end
+    if entry.bound ~= (device.bound == true) then entry.bound = device.bound == true changed = true persist_changed = true end
+    if entry.missing ~= false then entry.missing = false changed = true persist_changed = true end
     seen[entry.id] = true
     changed = changed or entry_changed
   end
   for id, entry in pairs(self.state.devices) do
     if not seen[id] then
-      if entry.missing ~= true then entry.missing = true changed = true end
-      if entry.found ~= false then entry.found = false changed = true end
-      if entry.bound ~= false then entry.bound = false changed = true end
+      if entry.missing ~= true then entry.missing = true changed = true persist_changed = true end
+      if entry.found ~= false then entry.found = false changed = true persist_changed = true end
+      if entry.bound ~= false then entry.bound = false changed = true persist_changed = true end
     else
-      if entry.missing ~= false then entry.missing = false changed = true end
+      if entry.missing ~= false then entry.missing = false changed = true persist_changed = true end
     end
   end
   self.state.last_scan = now()
   self._dirty = self._dirty or changed
+  self._persist_dirty = self._persist_dirty or persist_changed
   self:save()
 end
 
@@ -302,16 +317,20 @@ function registry:update_status(id, status, reason)
   local entry = self.state.devices[id]
   if not entry then return end
   local changed = false
+  local persist_changed = false
   if entry.status ~= status then
     entry.status = status
     changed = true
+    persist_changed = true
   end
   if reason and entry.last_error ~= reason then
     entry.last_error = reason
     entry.last_error_ts = now()
     changed = true
+    persist_changed = true
   end
   self._dirty = self._dirty or changed
+  self._persist_dirty = self._persist_dirty or persist_changed
   self:save()
 end
 
@@ -368,6 +387,7 @@ function registry:set_alias(device_id, alias)
   end
   entry.alias = alias
   self._dirty = true
+  self._persist_dirty = true
   self:save()
   return entry
 end
