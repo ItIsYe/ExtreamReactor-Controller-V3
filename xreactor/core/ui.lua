@@ -2,6 +2,7 @@ local colors = require("shared.colors")
 
 local ui = {}
 local dirty_cache = setmetatable({}, { __mode = "k" })
+local monitor_state = setmetatable({}, { __mode = "k" })
 
 local function redirect(mon, fn)
   if not mon or not term or not term.redirect then
@@ -21,6 +22,15 @@ local function is_dirty(mon, key, snapshot)
   return true
 end
 
+local function state_for(mon)
+  monitor_state[mon] = monitor_state[mon] or { scale = nil, size = nil }
+  return monitor_state[mon]
+end
+
+function ui.invalidate(mon)
+  dirty_cache[mon] = nil
+end
+
 function ui.getSize(mon)
   if not mon or type(mon.getSize) ~= "function" then
     return nil
@@ -34,11 +44,18 @@ end
 
 function ui.setScale(mon, scale)
   if not mon then return end
+  local state = state_for(mon)
+  if state.scale == scale then
+    return
+  end
   if mon.setTextScale then mon.setTextScale(scale) end
+  state.scale = scale
+  ui.invalidate(mon)
 end
 
 function ui.clear(mon)
   if not mon then return end
+  ui.invalidate(mon)
   redirect(mon, function()
     term.setBackgroundColor(colors.background)
     term.setTextColor(colors.text)
@@ -64,14 +81,21 @@ end
 function ui.text(mon, x, y, text, fg, bg)
   if not mon then return end
   local safe_text = tostring(text or "")
+  local width = #safe_text
   local snapshot = table.concat({ safe_text, tostring(fg), tostring(bg) }, "|")
   local key = ("text:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
+  local state = state_for(mon)
+  local prev_width = state[key]
+  state[key] = width
   redirect(mon, function()
     term.setCursorPos(x, y)
     if bg then term.setBackgroundColor(bg) end
     if fg then term.setTextColor(fg) end
     term.write(safe_text)
+    if prev_width and prev_width > width then
+      term.write(string.rep(" ", prev_width - width))
+    end
   end)
 end
 
@@ -182,6 +206,22 @@ function ui.list(mon, x, y, w, rows, opts)
       if #text > w then text = text:sub(1, w) end
       ui.text(mon, x, y + idx - 1, text .. string.rep(" ", w - #text), colors.get(status) or (opts.fg or colors.text), opts.bg or colors.background)
     end
+  end
+end
+
+function ui.begin_frame(mon)
+  if not mon then
+    return
+  end
+  local w, h = ui.getSize(mon)
+  if not w or not h then
+    return
+  end
+  local state = state_for(mon)
+  local size_key = ("%dx%d"):format(w, h)
+  if state.size ~= size_key then
+    state.size = size_key
+    ui.invalidate(mon)
   end
 end
 

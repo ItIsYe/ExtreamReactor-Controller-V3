@@ -2,12 +2,52 @@ local utils = require("core.utils")
 
 local manager = {}
 
+local function now_ms()
+  if os and os.epoch then
+    return os.epoch("utc")
+  end
+  return math.floor((os.clock() or 0) * 1000)
+end
+
+local function backoff_delay_ms(config, retries)
+  local base = math.max(0, tonumber(config.backoff_base_s) or 0.5)
+  local cap = math.max(base, tonumber(config.backoff_cap_s) or 5)
+  local exponent = math.max(0, (retries or 1) - 1)
+  local delay = base * math.pow(2, exponent)
+  return math.floor(math.min(delay, cap) * 1000)
+end
+
+local function ensure_state(self, service)
+  local state = self.service_state[service]
+  if state then
+    return state
+  end
+  state = { retries = 0, next_retry = 0, initialized = false }
+  self.service_state[service] = state
+  return state
+end
+
+local function clear_retry(state)
+  state.retries = 0
+  state.next_retry = 0
+end
+
+local function schedule_retry(self, service, state, stage, err)
+  state.retries = (state.retries or 0) + 1
+  local delay_ms = backoff_delay_ms(self, state.retries)
+  state.next_retry = now_ms() + delay_ms
+  utils.log(self.log_prefix, string.format("Service %s failed (%s); retry in %.2fs: %s", tostring(stage), tostring(service.name or service.log_prefix or "?"), delay_ms / 1000, tostring(err)), "ERROR")
+end
+
 function manager.new(opts)
   opts = opts or {}
   local self = {
     services = {},
     log_prefix = opts.log_prefix or "SERVICES",
-    running = false
+    running = false,
+    backoff_base_s = opts.backoff_base_s or 0.5,
+    backoff_cap_s = opts.backoff_cap_s or 5,
+    service_state = {}
   }
   return setmetatable(self, { __index = manager })
 end
@@ -18,10 +58,14 @@ end
 
 function manager:init()
   for _, service in ipairs(self.services) do
-    if service.init then
+    local state = ensure_state(self, service)
+    if service.init and not state.initialized then
       local ok, err = pcall(service.init, service)
       if not ok then
-        utils.log(self.log_prefix, "Service init failed: " .. tostring(err), "ERROR")
+        schedule_retry(self, service, state, "init", err)
+      else
+        state.initialized = true
+        clear_retry(state)
       end
     end
   end
@@ -30,12 +74,28 @@ end
 
 function manager:tick(dt, event)
   for _, service in ipairs(self.services) do
+    local state = ensure_state(self, service)
+    if state.next_retry > now_ms() then
+      goto continue
+    end
+    if service.init and not state.initialized then
+      local ok, err = pcall(service.init, service)
+      if not ok then
+        schedule_retry(self, service, state, "init", err)
+        goto continue
+      end
+      state.initialized = true
+      clear_retry(state)
+    end
     if service.tick then
       local ok, err = pcall(service.tick, service, dt, event)
       if not ok then
-        utils.log(self.log_prefix, "Service tick failed: " .. tostring(err), "ERROR")
+        schedule_retry(self, service, state, "tick", err)
+      else
+        clear_retry(state)
       end
     end
+    ::continue::
   end
 end
 

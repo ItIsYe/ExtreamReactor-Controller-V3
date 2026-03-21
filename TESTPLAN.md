@@ -18,11 +18,18 @@
 1. Geräte-Registry erzeugt stabile IDs und behält Reihenfolge (kein Flackern).
 2. Missing/Found aktualisiert mit last_seen + last_error.
 3. Alias-Mapping aus Config sichtbar in UI.
+4. RT/FUEL/WATER Fluid-Lesen bevorzugt `tanks()`; Legacy-Methoden nur als Fallback testen.
 
 ## UI/Router
 1. Master: Node list/Node detail/System summary navigierbar.
 2. Nodes: Overview/Details/Diagnostics + Paging.
 3. Dirty redraw: keine Full clears pro tick (nur bei Änderungen).
+4. UI-Dirty-Redraw: verkürzte Texte überschreiben Restzeichen korrekt; Monitor-Resize invalidiert einmalig und rendert dann stabil.
+5. Monitor-Scale: `setTextScale` nur bei echter Scale-Änderung oder neuem Monitor.
+
+## Service-Stabilität
+1. Fehlernder Service wird mit Exponential-Backoff erneut versucht und nicht in jedem Tick neu gespammt.
+2. Erfolgreicher Tick/Init setzt den Backoff zurück.
 
 ## Health/Degraded
 1. Energy: fehlende Matrix/Storage führt zu DEGRADED + reason.
