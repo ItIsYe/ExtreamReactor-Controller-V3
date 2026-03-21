@@ -2,6 +2,7 @@ local utils = require("core.utils")
 
 local monitor = {}
 local warned = {}
+local scale_cache = setmetatable({}, { __mode = "k" })
 
 local function log_once(prefix, key, message)
   if warned[key] then
@@ -33,13 +34,25 @@ local function safe_call(mon, name, method, log_prefix, ...)
   return ok, err
 end
 
+local function maybe_set_scale(mon, name, scale, log_prefix)
+  if scale == nil then
+    return true
+  end
+  if scale_cache[mon] == scale then
+    return true
+  end
+  local ok, err = safe_call(mon, name, "setTextScale", log_prefix, scale)
+  if ok then
+    scale_cache[mon] = scale
+  end
+  return ok, err
+end
+
 function monitor.find(preferred_name, strategy, scale, log_prefix)
   if preferred_name and peripheral.getType(preferred_name) == "monitor" then
     local mon = wrap_monitor(preferred_name, log_prefix)
     if mon then
-      if scale then
-        safe_call(mon, preferred_name, "setTextScale", log_prefix, scale)
-      end
+      maybe_set_scale(mon, preferred_name, scale, log_prefix)
       return { name = preferred_name, mon = mon }
     end
   end
@@ -59,9 +72,7 @@ function monitor.find(preferred_name, strategy, scale, log_prefix)
   if normalized == "first" then
     table.sort(candidates, function(a, b) return a.name < b.name end)
     local selected = candidates[1]
-    if scale then
-      safe_call(selected.mon, selected.name, "setTextScale", log_prefix, scale)
-    end
+    maybe_set_scale(selected.mon, selected.name, scale, log_prefix)
     return selected
   end
   local best
@@ -75,16 +86,12 @@ function monitor.find(preferred_name, strategy, scale, log_prefix)
     end
   end
   if best then
-    if scale then
-      safe_call(best.mon, best.name, "setTextScale", log_prefix, scale)
-    end
+    maybe_set_scale(best.mon, best.name, scale, log_prefix)
     return { name = best.name, mon = best.mon }
   end
   table.sort(candidates, function(a, b) return a.name < b.name end)
   local fallback = candidates[1]
-  if scale then
-    safe_call(fallback.mon, fallback.name, "setTextScale", log_prefix, scale)
-  end
+  maybe_set_scale(fallback.mon, fallback.name, scale, log_prefix)
   return fallback
 end
 
@@ -101,7 +108,7 @@ function monitor.safe_write(mon, name, text, log_prefix)
 end
 
 function monitor.safe_set_scale(mon, name, scale, log_prefix)
-  return safe_call(mon, name, "setTextScale", log_prefix, scale)
+  return maybe_set_scale(mon, name, scale, log_prefix)
 end
 
 return monitor

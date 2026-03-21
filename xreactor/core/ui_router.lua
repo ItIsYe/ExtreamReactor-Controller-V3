@@ -215,6 +215,7 @@ end
 
 function router:render(mon, model)
   if not mon then return end
+  ui.begin_frame(mon)
   local ts = now_ms()
   if ts - self.last_draw < self.interval * 1000 then
     return

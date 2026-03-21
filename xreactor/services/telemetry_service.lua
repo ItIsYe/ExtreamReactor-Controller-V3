@@ -47,7 +47,7 @@ function telemetry:tick()
           build = build,
           schema_version = telemetry_schema.version
         }
-        self.comms:publish_status(payload, { requires_ack = true })
+        self.comms:publish_status(payload)
       elseif not ok then
         utils.log(self.log_prefix, "Status payload error: " .. tostring(payload), "WARN")
       end

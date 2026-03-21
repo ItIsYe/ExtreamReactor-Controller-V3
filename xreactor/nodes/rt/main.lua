@@ -55,6 +55,7 @@ local safety = require("core.safety")
 local health = require("core.health")
 local machine = require("core.state_machine")
 local registry_lib = require("core.registry")
+local fluid = require("core.fluid")
 local reactor_adapter = require("adapters.reactor")
 local turbine_adapter = require("adapters.turbine")
 local monitor_adapter = require("adapters.monitor")
@@ -538,7 +539,7 @@ local function resolve_steam_tank_name()
   for _, name in ipairs(peripheral.getNames()) do
     if string.find(string.lower(name), "steam") then
       local tank = utils.safe_wrap(name)
-      if tank and tank.getFluidAmount then
+      if tank and (tank.tanks or tank.getFluidAmount) then
         steam_tank_name = name
         return steam_tank_name
       end
@@ -557,12 +558,11 @@ local function read_steam_tank_amount()
     warn_once("steam_tank_wrap:" .. name, "Steam tank wrap failed for " .. name .. ": " .. tostring(err))
     return nil
   end
-  if tank and tank.getFluidAmount then
-    local ok, amount = pcall(tank.getFluidAmount, tank)
-    if ok and type(amount) == "number" then
-      return amount
-    end
+  local amount, read_err = fluid.read_amount(tank, { "getFluidAmount" })
+  if type(amount) == "number" then
+    return amount
   end
+  warn_once("steam_tank_read:" .. tostring(name), "Steam tank read failed for " .. tostring(name) .. ": " .. tostring(read_err))
   return nil
 end
 
@@ -581,22 +581,7 @@ local function read_reactor_steam_amount()
     end
     if reactor then
       local amount = nil
-      if reactor.getHotFluidAmount then
-        local ok, value = pcall(reactor.getHotFluidAmount, reactor)
-        if ok and type(value) == "number" then
-          amount = value
-        end
-      elseif reactor.getSteamAmount then
-        local ok, value = pcall(reactor.getSteamAmount, reactor)
-        if ok and type(value) == "number" then
-          amount = value
-        end
-      elseif reactor.getSteam then
-        local ok, value = pcall(reactor.getSteam, reactor)
-        if ok and type(value) == "number" then
-          amount = value
-        end
-      end
+      amount = fluid.read_amount(reactor, { "getHotFluidAmount", "getSteamAmount", "getSteam" })
       if type(amount) == "number" then
         total = total + amount
         found = true
@@ -1606,7 +1591,7 @@ end
 
 local function broadcast_status(status_level)
   local payload = build_status_payload(status_level)
-  comms:publish_status(payload, { requires_ack = true })
+  comms:publish_status(payload)
 end
 
 local function hello()
