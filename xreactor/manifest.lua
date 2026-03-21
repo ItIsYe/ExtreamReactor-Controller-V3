@@ -19,10 +19,10 @@ return {
     { path = "core/monitor_manager.lua", size_bytes = 3114, hash = "58f26df6" },
     { path = "core/network.lua", size_bytes = 5825, hash = "d6f38322" },
     { path = "core/protocol.lua", size_bytes = 6086, hash = "602e75c9" },
-    { path = "core/registry.lua", size_bytes = 11481, hash = "b8848d60" },
+    { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9" },
     { path = "core/safety.lua", size_bytes = 771, hash = "73bab9de" },
     { path = "core/state_machine.lua", size_bytes = 842, hash = "4ae6c19c" },
-    { path = "core/time.lua", size_bytes = 388, hash = "fd414236" },
+    { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
     { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
     { path = "core/turbine_ctrl.lua", size_bytes = 1266, hash = "a0681bf2" },
     { path = "core/ui.lua", size_bytes = 8614, hash = "0dbff3eb" },
@@ -64,19 +64,19 @@ return {
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4614, hash = "7b0f8089" },
-      { path = "nodes/energy/main.lua", size_bytes = 48146, hash = "2166cee0" }
+      { path = "nodes/energy/main.lua", size_bytes = 48678, hash = "e3897d76" }
     },
     water = {
       { path = "nodes/water/config.lua", size_bytes = 3612, hash = "4630013f" },
-      { path = "nodes/water/main.lua", size_bytes = 23847, hash = "4522e17c" }
+      { path = "nodes/water/main.lua", size_bytes = 24508, hash = "6aeea5c8" }
     },
     fuel = {
       { path = "nodes/fuel/config.lua", size_bytes = 3523, hash = "35c40abf" },
-      { path = "nodes/fuel/main.lua", size_bytes = 23570, hash = "eaab8848" }
+      { path = "nodes/fuel/main.lua", size_bytes = 24231, hash = "110ab895" }
     },
     reprocessing = {
       { path = "nodes/reprocessor/config.lua", size_bytes = 3319, hash = "f1fda934" },
-      { path = "nodes/reprocessor/main.lua", size_bytes = 23184, hash = "385d8932" }
+      { path = "nodes/reprocessor/main.lua", size_bytes = 24065, hash = "1d923219" }
     }
   }
 }
