@@ -89,6 +89,31 @@ local function resolve_channels(config)
   return { control = control, status = status }
 end
 
+local function legacy_receive_disabled()
+  warn_once("receive.legacy", "WARN: network.receive() is legacy/disabled; use modem_message event handling via comms_service")
+  return nil, "legacy receive disabled"
+end
+
+local function legacy_receive(timeout)
+  local timer
+  if timeout then
+    timer = os.startTimer(timeout)
+  end
+  while true do
+    local event = { os.pullEvent() }
+    if event[1] == "modem_message" then
+      local _, _, _, _, message = table.unpack(event)
+      local ok, err = protocol.validateMessage(message)
+      if ok then
+        return protocol.sanitize_message(message)
+      end
+      warn_once("schema:" .. tostring(err), "WARN: invalid message ignored (" .. tostring(err) .. ")")
+    elseif event[1] == "timer" and event[2] == timer then
+      return nil
+    end
+  end
+end
+
 function network.init(config)
   config = config or {}
   local channels = resolve_channels(config)
@@ -110,16 +135,10 @@ function network.init(config)
         return false, "wireless modem missing"
       end,
       receive = function(_, timeout)
-        if timeout then
-          local timer = os.startTimer(timeout)
-          while true do
-            local event = { os.pullEvent() }
-            if event[1] == "timer" and event[2] == timer then
-              return nil
-            end
-          end
+        if config.allow_legacy_receive == true then
+          return legacy_receive(timeout)
         end
-        return nil
+        return legacy_receive_disabled()
       end,
       broadcast = function(_, _)
         return false, "wireless modem missing"
@@ -147,23 +166,10 @@ function network.init(config)
       return true
     end,
     receive = function(_, timeout)
-      local timer
-      if timeout then
-        timer = os.startTimer(timeout)
+      if config.allow_legacy_receive == true then
+        return legacy_receive(timeout)
       end
-      while true do
-        local event = { os.pullEvent() }
-        if event[1] == "modem_message" then
-          local _, _, channel, _, message = table.unpack(event)
-          local ok, err = protocol.validateMessage(message)
-          if ok then
-            return protocol.sanitize_message(message)
-          end
-          warn_once("schema:" .. tostring(err), "WARN: invalid message ignored (" .. tostring(err) .. ")")
-        elseif event[1] == "timer" and event[2] == timer then
-          return nil
-        end
-      end
+      return legacy_receive_disabled()
     end,
     broadcast = function(_, payload)
       local sanitized = protocol.sanitize_message(payload)

@@ -31,6 +31,7 @@ The current repository ships:
 **Expected behavior:**
 - Starts from `/xreactor/master/main.lua`.
 - Uses wired monitors when present.
+- Shows UTC wall-clock time in the MASTER UI (not CC:Tweaked in-game time).
 - Does **not** directly control reactor, turbine, or storage peripherals; those stay on the role nodes.
 
 ### RT
