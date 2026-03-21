@@ -31,6 +31,7 @@ local alerts_ui = require("master.ui.alerts")
 local multiview_ui = require("master.ui.multiview")
 local profiles = require("master.profiles")
 local trends_lib = require("core.trends")
+local time = require("core.time")
 local ui = require("core.ui")
 local config = require("master.config")
 local service_manager = require("services.service_manager")
@@ -168,6 +169,19 @@ local function warn_once(key, message)
   utils.log("MASTER", message)
 end
 
+local function table_count(tbl)
+  local count = 0
+  for _ in pairs(tbl or {}) do
+    count = count + 1
+  end
+  return count
+end
+
+local function master_time_label()
+  -- MASTER intentionally shows real UTC wall-clock time, not CC's in-game clock.
+  return time.wall_clock_hms_utc()
+end
+
 local function normalize_setpoints(setpoints)
   local payload = setpoints or {}
   return {
@@ -238,7 +252,7 @@ local function add_alarm(sender, severity, message)
     sender_id = sender,
     severity = severity,
     message = message,
-    timestamp = textutils.formatTime(os.time(), true)
+    timestamp = master_time_label()
   })
   if #alarms > 50 then table.remove(alarms) end
   if severity == constants.status_levels.EMERGENCY then
@@ -289,7 +303,7 @@ local function update_node(message)
       nodes[mismatch_id].health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
       nodes[mismatch_id].status = health.status.DEGRADED
       nodes[mismatch_id].last_seen = os.epoch("utc")
-      nodes[mismatch_id].last_seen_str = textutils.formatTime(os.time(), true)
+      nodes[mismatch_id].last_seen_str = master_time_label()
       nodes[mismatch_id].proto_ver = message.payload.proto_ver
     end
     return
@@ -311,7 +325,7 @@ local function update_node(message)
     end
   end
   nodes[id].last_seen = os.epoch("utc")
-  nodes[id].last_seen_str = textutils.formatTime(os.time(), true)
+  nodes[id].last_seen_str = master_time_label()
   nodes[id].proto_ver = message.proto_ver
   if message.type == constants.message_types.HELLO or message.type == constants.message_types.REGISTER then
     if nodes[id].status == constants.status_levels.OFFLINE then
@@ -898,6 +912,18 @@ local function init()
   }))
   services:add(ui_service.new({
     interval = 0.5,
+    force_interval = 2,
+    snapshot = function(event)
+      return {
+        event = event and event[1] or "tick",
+        monitors = monitor_cache.list and #monitor_cache.list or 0,
+        active_view = view_manager and view_manager.active_key or "overview",
+        node_count = table_count(nodes),
+        queue_depth = sequencer and #sequencer.queue or 0,
+        critical_blink = critical_blink_until,
+        trends = last_trend_sample
+      }
+    end,
     render = function()
       refresh_monitors(false)
       handle_command_timeouts()

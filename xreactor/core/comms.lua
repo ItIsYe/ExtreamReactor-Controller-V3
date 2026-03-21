@@ -14,7 +14,8 @@ local DEFAULT_CONFIG = {
   dedupe_limit = 200,
   peer_timeout_s = 12.0,
   queue_limit = 200,
-  drop_simulation = 0
+  drop_simulation = 0,
+  volatile_ttl_s = 15.0
 }
 
 local state = {
@@ -118,6 +119,7 @@ local function sanitize_config(config)
   merged.peer_timeout_s = clamp_number(merged.peer_timeout_s, DEFAULT_CONFIG.peer_timeout_s, 2.0, 120.0)
   merged.queue_limit = math.floor(clamp_number(merged.queue_limit, DEFAULT_CONFIG.queue_limit, 10, 1000))
   merged.drop_simulation = clamp_number(merged.drop_simulation, DEFAULT_CONFIG.drop_simulation, 0, 0.9)
+  merged.volatile_ttl_s = clamp_number(merged.volatile_ttl_s, DEFAULT_CONFIG.volatile_ttl_s, 1.0, 300.0)
   return merged
 end
 
@@ -236,14 +238,42 @@ local function send_raw(channel, message)
   return state.network:send(channel, sanitized)
 end
 
+local function is_volatile_message(msg_type)
+  return msg_type == constants.message_types.STATUS or msg_type == constants.message_types.HEARTBEAT
+end
+
+local function build_volatile_key(message, channel)
+  if not message or not is_volatile_message(message.type) then
+    return nil
+  end
+  return table.concat({
+    tostring(channel),
+    tostring(message.dst or "*"),
+    tostring(message.type)
+  }, "|")
+end
+
 local function queue_entry(message, channel, opts)
+  opts = opts or {}
+  local volatile_key = build_volatile_key(message, channel)
+  if volatile_key then
+    for _, existing in ipairs(state.queue) do
+      if existing.volatile_key == volatile_key and not existing.sent_ts then
+        existing.message = message
+        existing.channel = channel
+        existing.priority = opts.priority or existing.priority or 2
+        existing.queued_ts = now_ms()
+        existing.last_error = nil
+        return existing
+      end
+    end
+  end
   if #state.queue >= state.config.queue_limit then
     log("Send queue full; dropping message " .. tostring(message.type), "WARN")
     state.metrics.dropped = state.metrics.dropped + 1
     state.metrics.queue_dropped = state.metrics.queue_dropped + 1
     return nil, "queue_full"
   end
-  opts = opts or {}
   local entry = {
     message = message,
     channel = channel,
@@ -251,9 +281,11 @@ local function queue_entry(message, channel, opts)
     require_ack = opts.require_ack or false,
     require_applied = opts.require_applied or false,
     sent_ts = nil,
+    queued_ts = now_ms(),
     retries = 0,
     next_retry = 0,
-    delivered = false
+    delivered = false,
+    volatile_key = volatile_key
   }
   table.insert(state.queue, entry)
   table.sort(state.queue, function(a, b) return a.priority < b.priority end)
@@ -262,11 +294,17 @@ end
 
 local function flush_queue()
   local remaining = {}
+  local now_ts = now_ms()
+  local ttl_ms = (state.config.volatile_ttl_s or DEFAULT_CONFIG.volatile_ttl_s) * 1000
   for _, entry in ipairs(state.queue) do
-    if entry.sent_ts then
+    if entry.volatile_key and entry.queued_ts and ttl_ms > 0 and (now_ts - entry.queued_ts) > ttl_ms then
+      state.metrics.dropped = state.metrics.dropped + 1
+      state.metrics.queue_dropped = state.metrics.queue_dropped + 1
+      log("Dropping stale volatile message " .. tostring(entry.message and entry.message.type), "WARN")
+    elseif entry.sent_ts then
       table.insert(remaining, entry)
     else
-      local sent_ts = now_ms()
+      local sent_ts = now_ts
       local ok, err = send_raw(entry.channel, entry.message)
       if ok then
         entry.sent_ts = sent_ts

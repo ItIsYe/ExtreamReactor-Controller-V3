@@ -13,12 +13,14 @@
 1. **ACK/Retry**: Simuliere Paketverlust (debug drop) und prüfe Retry + ACK (delivered/applied) nur für `COMMAND`, nicht für `STATUS`/`HEARTBEAT`.
 2. **Timeouts**: Prüfe, dass nach max retries klare Logmeldung erfolgt.
 3. **Proto-Mismatch**: absichtlich proto_ver ändern → Status DEGRADED + keine Command-Ausführung.
+4. **Queue-Stau**: Modem/Funk ausfallen lassen → `STATUS`/`HEARTBEAT` dürfen nicht ungebremst anwachsen; nur aktuelle volatile Zustände bleiben in der Queue, `COMMAND` bleibt retry-/ACK-fähig.
 
 ## Registry/Discovery
 1. Geräte-Registry erzeugt stabile IDs und behält Reihenfolge (kein Flackern).
 2. Missing/Found aktualisiert mit last_seen + last_error.
 3. Alias-Mapping aus Config sichtbar in UI.
 4. RT/FUEL/WATER Fluid-Lesen bevorzugt `tanks()`; Legacy-Methoden nur als Fallback testen.
+5. Wiederholte Discovery-Zyklen ohne echte Geräteänderung erzeugen keine unnötigen Registry-Schreibzugriffe.
 
 ## UI/Router
 1. Master: Node list/Node detail/System summary navigierbar.
@@ -26,6 +28,7 @@
 3. Dirty redraw: keine Full clears pro tick (nur bei Änderungen).
 4. UI-Dirty-Redraw: verkürzte Texte überschreiben Restzeichen korrekt; Monitor-Resize invalidiert einmalig und rendert dann stabil.
 5. Monitor-Scale: `setTextScale` nur bei echter Scale-Änderung oder neuem Monitor.
+6. UI-Service rendert bei unverändertem Snapshot nicht in jedem Tick; langsamer Fallback-Refresh bleibt vorhanden.
 
 ## Service-Stabilität
 1. Fehlernder Service wird mit Exponential-Backoff erneut versucht und nicht in jedem Tick neu gespammt.
