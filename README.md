@@ -39,6 +39,7 @@ The current repository ships:
 
 **Controls / responsibilities:**
 - Detects and manages Extreme Reactors reactors and turbines.
+- Fresh installs use auto-discovery by default: empty `reactors` / `turbines` config lists bind all compatible local RT devices automatically.
 - Applies local control rails for rods, turbine flow, and coil engagement.
 - Executes startup sequencing and startup watchdog logic.
 - Accepts MASTER commands for mode changes and setpoints.
@@ -48,6 +49,7 @@ The current repository ships:
 - Supports local operating states such as `AUTONOM`, `MASTER`, and `SAFE`.
 - If MASTER comms are lost, it can fall back to autonomous behavior instead of hard-stopping.
 - Can drive an attached local monitor UI.
+- If explicit device names are configured, RT binds only those names; clearing the lists switches back to auto-discovery.
 
 ### ENERGY
 **Purpose:** Power telemetry node.

@@ -2,8 +2,8 @@
 local CONFIG = {
   DEFAULT_ROLE = "RT-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "RT-1", -- Default node_id used if none is set.
-  DEFAULT_REACTORS = { "BigReactors-Reactor_6" }, -- Default reactor peripheral names.
-  DEFAULT_TURBINES = { "BigReactors-Turbine_327", "BigReactors-Turbine_426" }, -- Default turbine peripheral names.
+  DEFAULT_REACTORS = {}, -- Empty list enables auto-discovery for local reactors.
+  DEFAULT_TURBINES = {}, -- Empty list enables auto-discovery for local turbines.
   DEFAULT_MODEM = "right", -- Default modem side or peripheral name.
   DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.

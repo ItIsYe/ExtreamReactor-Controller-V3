@@ -8,6 +8,7 @@
 5. **Rollen-Minimalinstallation**: RT/Energy-Install → prüfen, dass keine `xreactor/master/ui/*` und keine fremden Nodes-Ordner installiert wurden.
 6. **Delta-Update**: Nur eine Datei im Repo ändern → Manifest aktualisieren → SAFE UPDATE → es wird nur diese Datei (+ Manifest) geladen/aktualisiert, Backup enthält nur ersetzte Dateien.
 7. **Config-Migration**: Alte Config ohne `version` starten → Defaults ergänzt, bestehende Werte bleiben erhalten, Config wird gespeichert.
+8. **RT Fresh Install Auto-Discovery**: Frische RT-Installation ohne Namensanpassung startet mit leeren `reactors`/`turbines`-Listen und bindet lokal sichtbare Reaktoren/Turbinen automatisch.
 
 ## Kommunikation
 1. **ACK/Retry**: Simuliere Paketverlust (debug drop) und prüfe Retry + ACK (delivered/applied) nur für `COMMAND`, nicht für `STATUS`/`HEARTBEAT`.
@@ -21,6 +22,7 @@
 3. Alias-Mapping aus Config sichtbar in UI.
 4. RT/FUEL/WATER Fluid-Lesen bevorzugt `tanks()`; Legacy-Methoden nur als Fallback testen.
 5. Wiederholte Discovery-Zyklen ohne echte Geräteänderung erzeugen keine unnötigen Registry-Schreibzugriffe.
+6. RT mit leeren Gerätelisten bindet kompatible lokale Reaktoren/Turbinen automatisch; RT mit festen Listen bindet weiterhin ausschließlich diese Namen.
 
 ## UI/Router
 1. Master: Node list/Node detail/System summary navigierbar.
