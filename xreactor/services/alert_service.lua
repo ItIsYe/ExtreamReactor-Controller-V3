@@ -34,7 +34,7 @@ local function is_expired(entry, now)
   if type(entry) == "number" then
     return entry <= now
   end
-  return type(entry.until) ~= "number" or entry.until <= now
+  return type(entry.until_ts or entry["until"]) ~= "number" or (entry.until_ts or entry["until"]) <= now
 end
 
 function alert_service.new(opts)
@@ -88,10 +88,10 @@ function alert_service:log_alert(alert, event)
 end
 
 function alert_service:log_mute(kind, key, until_ts)
-  local until = until_ts and os.date("!%H:%M:%S", math.floor(until_ts / 1000)) or "cleared"
+  local until_label = until_ts and os.date("!%H:%M:%S", math.floor(until_ts / 1000)) or "cleared"
   local node_id = (kind == "mute_node" or kind == "unmute_node") and tostring(key) or "SYSTEM"
   local code = (kind == "mute_rule" or kind == "unmute_rule") and tostring(key) or "NODE_MUTE"
-  local msg = string.format("%s until=%s", kind, tostring(until))
+  local msg = string.format("%s until=%s", kind, tostring(until_label))
   local message = string.format("severity=INFO code=%s node=%s msg=%s", code, node_id, msg)
   utils.log(self.log_prefix, message, "INFO")
 end
@@ -266,7 +266,7 @@ function alert_service:mute_rule(code, minutes)
   end
   local duration = math.max(1, tonumber(minutes) or (self.config.alert_mute_default_minutes or 10))
   local until_ts = now_ms() + duration * 60 * 1000
-  self.state.mutes.rules[code] = { until = until_ts, minutes = duration }
+  self.state.mutes.rules[code] = { until_ts = until_ts, minutes = duration }
   self:save_state()
   self:log_mute("mute_rule", code, until_ts)
   return true
@@ -290,7 +290,7 @@ function alert_service:mute_node(node_id, minutes)
   end
   local duration = math.max(1, tonumber(minutes) or (self.config.alert_mute_default_minutes or 10))
   local until_ts = now_ms() + duration * 60 * 1000
-  self.state.mutes.nodes[node_id] = { until = until_ts, minutes = duration }
+  self.state.mutes.nodes[node_id] = { until_ts = until_ts, minutes = duration }
   self:save_state()
   self:log_mute("mute_node", node_id, until_ts)
   return true
