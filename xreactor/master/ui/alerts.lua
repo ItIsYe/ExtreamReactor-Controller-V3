@@ -246,7 +246,7 @@ local function format_mute(entry, now)
     return entry
   end
   if type(entry) == "table" then
-    return entry.until or 0
+    return entry.until_ts or entry["until"] or 0
   end
   return 0
 end
@@ -505,9 +505,9 @@ local function render(mon, model)
     local node_until = node_muted and format_mute(node_muted, now) or nil
     local mute_text = "Muted"
     if rule_until or node_until then
-      local until = math.max(rule_until or 0, node_until or 0)
-      if until > 0 then
-        mute_text = string.format("Muted until %s", os.date("!%H:%M:%S", math.floor(until / 1000)))
+      local mute_until_ts = math.max(rule_until or 0, node_until or 0)
+      if mute_until_ts > 0 then
+        mute_text = string.format("Muted until %s", os.date("!%H:%M:%S", math.floor(mute_until_ts / 1000)))
       end
     end
     ui.rightText(mon, 2, mute_y, w - 3, mute_text, colorset.get("text"), colorset.get("background"))
