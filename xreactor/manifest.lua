@@ -59,8 +59,9 @@ return {
       { path = "master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a" }
     },
     rt = {
-      { path = "nodes/rt/config.lua", size_bytes = 4425, hash = "8c4b3c3f" },
-      { path = "nodes/rt/main.lua", size_bytes = 98530, hash = "57914dd6" }
+      { path = "nodes/rt/binding.lua", size_bytes = 2125, hash = "cde378e1" },
+      { path = "nodes/rt/config.lua", size_bytes = 4386, hash = "2f739f40" },
+      { path = "nodes/rt/main.lua", size_bytes = 99658, hash = "6bdfec2a" }
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4614, hash = "7b0f8089" },

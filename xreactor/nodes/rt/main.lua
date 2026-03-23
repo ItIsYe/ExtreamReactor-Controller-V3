@@ -32,6 +32,7 @@ bootstrap.setup({
   log_path = CONFIG.BOOTSTRAP_LOG_PATH
 })
 local require = bootstrap.require
+local binding = require("nodes.rt.binding")
 local rails = require("core.control_rails")
 local ensure_turbine_ctrl = require("core.turbine_ctrl")
 
@@ -80,8 +81,8 @@ local DEFAULT_CONFIG = {
   wireless_modem = "right", -- Default wireless modem side.
   wired_modem = nil, -- Optional wired modem side.
   modem = "right", -- Default modem side or peripheral name.
-  reactors = { "BigReactors-Reactor_6" }, -- Default reactor peripheral names.
-  turbines = { "BigReactors-Turbine_327", "BigReactors-Turbine_426" }, -- Default turbine peripheral names.
+  reactors = {}, -- Empty list enables auto-discovery for local reactors.
+  turbines = {}, -- Empty list enables auto-discovery for local turbines.
   heartbeat_interval = 2, -- Seconds between status heartbeats.
   scan_interval = 10, -- Seconds between peripheral discovery scans.
   startup_watchdog_s = 60, -- Seconds before STARTUP watchdog trips.
@@ -687,7 +688,7 @@ local function init_turbine_ctrl()
   local turbines = config.turbines or {}
   log("INFO", "Detected " .. tostring(#turbines) .. " turbines")
   if #turbines < 1 then
-    log("ERROR", "No turbines detected")
+    log("ERROR", binding.missing_devices_message("turbine", binding.build_policy(configured_reactors, configured_turbines)))
     return
   end
   for _, name in ipairs(turbines) do
@@ -1270,14 +1271,6 @@ function dumpPeripherals()
   end
 end
 
-local function to_set(list)
-  local out = {}
-  for _, value in ipairs(list or {}) do
-    out[value] = true
-  end
-  return out
-end
-
 local function build_binding_signature(reactors, turbines)
   local ids = {}
   for _, entry in ipairs(reactors or {}) do
@@ -1317,10 +1310,7 @@ end
 
 local function discover()
   local names = peripheral.getNames() or {}
-  local allow_reactors = to_set(configured_reactors)
-  local allow_turbines = to_set(configured_turbines)
-  local allow_all_reactors = #configured_reactors == 0
-  local allow_all_turbines = #configured_turbines == 0
+  local binding_policy = binding.build_policy(configured_reactors, configured_turbines)
   local adapter_map = { reactors = {}, turbines = {} }
   local registry_devices = {}
 
@@ -1350,7 +1340,7 @@ local function discover()
     if is_reactor then
       local info = reactor_adapter.inspect(name, CONFIG.LOG_PREFIX)
       if info then
-        local bound = allow_all_reactors or allow_reactors[name]
+        local bound = binding.should_bind("reactor", name, binding_policy)
         if bound then
           adapter_map.reactors[name] = info
         end
@@ -1367,7 +1357,7 @@ local function discover()
     elseif is_turbine then
       local info = turbine_adapter.inspect(name, CONFIG.LOG_PREFIX)
       if info then
-        local bound = allow_all_turbines or allow_turbines[name]
+        local bound = binding.should_bind("turbine", name, binding_policy)
         if bound then
           adapter_map.turbines[name] = info
         end
@@ -1468,13 +1458,16 @@ end
 local function build_health_payload()
   local reasons = {}
   local summary = devices.registry_summary or registry:get_summary()
+  local binding_policy = binding.build_policy(configured_reactors, configured_turbines)
   local bound_reactors = summary.kinds.reactor and summary.kinds.reactor.bound or 0
   local bound_turbines = summary.kinds.turbine and summary.kinds.turbine.bound or 0
   if bound_reactors == 0 then
     reasons[health.reasons.NO_REACTOR] = true
+    warn_once("reactors_missing_health", binding.missing_devices_message("reactor", binding_policy))
   end
   if bound_turbines == 0 then
     reasons[health.reasons.NO_TURBINE] = true
+    warn_once("turbines_missing_health", binding.missing_devices_message("turbine", binding_policy))
   end
   if devices.discovery_failed or devices.registry_load_error then
     reasons[health.reasons.DISCOVERY_FAILED] = true
@@ -1606,7 +1599,7 @@ end
 set_reactors_active = function(active)
   local reactors = peripherals and peripherals.reactors or {}
   if not next(reactors) then
-    warn_once("reactors_missing", "No reactors detected")
+    warn_once("reactors_missing", binding.missing_devices_message("reactor", binding.build_policy(configured_reactors, configured_turbines)))
   end
   for name, reactor in pairs(reactors) do
     local caps = get_device_caps("reactors", name)
@@ -1622,7 +1615,7 @@ end
 set_turbines_active = function(active)
   local turbines = peripherals and peripherals.turbines or {}
   if not next(turbines) then
-    warn_once("turbines_missing", "No turbines detected")
+    warn_once("turbines_missing", binding.missing_devices_message("turbine", binding.build_policy(configured_reactors, configured_turbines)))
   end
   for name, turbine in pairs(turbines) do
     local caps = get_device_caps("turbines", name)
@@ -1638,7 +1631,7 @@ end
 apply_safe_controls = function()
   local reactors = peripherals and peripherals.reactors or {}
   if not next(reactors) then
-    warn_once("reactors_missing", "No reactors detected")
+    warn_once("reactors_missing", binding.missing_devices_message("reactor", binding.build_policy(configured_reactors, configured_turbines)))
   end
   for name, reactor in pairs(reactors) do
     local caps = get_device_caps("reactors", name)
@@ -1653,7 +1646,7 @@ apply_safe_controls = function()
 
   local turbines = peripherals and peripherals.turbines or {}
   if not next(turbines) then
-    warn_once("turbines_missing", "No turbines detected")
+    warn_once("turbines_missing", binding.missing_devices_message("turbine", binding.build_policy(configured_reactors, configured_turbines)))
   end
   for name, turbine in pairs(turbines) do
     local caps = get_device_caps("turbines", name)
@@ -2304,8 +2297,17 @@ local function render_overview(target, model)
   ui.text(target, 2, 4, ("State: %s"):format(current_state), colors.get("text"), colors.get("background"))
   ui.text(target, 2, 5, ("Reactors: %d"):format(model.summary.kinds.reactor and model.summary.kinds.reactor.bound or 0), colors.get("text"), colors.get("background"))
   ui.text(target, 2, 6, ("Turbines: %d"):format(model.summary.kinds.turbine and model.summary.kinds.turbine.bound or 0), colors.get("text"), colors.get("background"))
-  ui.text(target, 2, 7, ("Avg Temp: %.1f"):format(snapshot and snapshot.avg_temp or 0), colors.get("text"), colors.get("background"))
-  ui.text(target, 2, 8, ("Target RPM: %d"):format(get_target_rpm()), colors.get("text"), colors.get("background"))
+  local policy = binding.build_policy(configured_reactors, configured_turbines)
+  if (model.summary.kinds.reactor and model.summary.kinds.reactor.bound or 0) == 0 then
+    ui.text(target, 2, 7, policy.allow_all_reactors and "Reactors: auto-discovery waiting" or "Reactors: explicit binding unmatched", colors.get("WARNING"), colors.get("background"))
+  else
+    ui.text(target, 2, 7, ("Avg Temp: %.1f"):format(snapshot and snapshot.avg_temp or 0), colors.get("text"), colors.get("background"))
+  end
+  if (model.summary.kinds.turbine and model.summary.kinds.turbine.bound or 0) == 0 then
+    ui.text(target, 2, 8, policy.allow_all_turbines and "Turbines: auto-discovery waiting" or "Turbines: explicit binding unmatched", colors.get("WARNING"), colors.get("background"))
+  else
+    ui.text(target, 2, 8, ("Target RPM: %d"):format(get_target_rpm()), colors.get("text"), colors.get("background"))
+  end
 end
 
 local function render_details(target, model)
