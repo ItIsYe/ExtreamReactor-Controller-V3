@@ -47,12 +47,15 @@ local debug_enabled = config.debug_logging
 if CONFIG.DEBUG_LOG_ENABLED ~= nil then
   debug_enabled = CONFIG.DEBUG_LOG_ENABLED
 end
-utils.init_logger({
+local log_status = utils.init_logger({
   log_name = log_name,
   prefix = CONFIG.LOG_PREFIX,
   enabled = debug_enabled,
   truncate = config.reset_log_on_start == true
 })
+if log_status and log_status.enabled then
+  utils.log(CONFIG.LOG_PREFIX, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)), "INFO")
+end
 utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
 local recovery_status = bootstrap.get_recovery_status and bootstrap.get_recovery_status() or nil
 

@@ -13,7 +13,8 @@ local CONFIG = {
   FLUSH_LINES = 8, -- Buffer size before flushing to disk.
   FLUSH_INTERVAL = 2, -- Seconds between flushes during active logging.
   MAX_BYTES = 200000, -- Rotate log files after this size.
-  ROTATE_SUFFIX = ".1" -- Suffix for rotated log.
+  ROTATE_SUFFIX = ".1", -- Suffix for rotated log.
+  STARTUP_MODE = "truncate" -- Startup policy: "truncate", "rotate", or "keep".
 }
 
 -- Lightweight file logger for CC:Tweaked.
@@ -22,9 +23,11 @@ local logger = {}
 local state = {
   enabled = nil,
   log_name = nil,
+  log_path = nil,
   buffer = {},
   last_flush = 0,
-  warn_once = false
+  warn_once = false,
+  startup_action = "none"
 }
 
 local function now_stamp()
@@ -145,31 +148,62 @@ local function parse_message_level(message, level)
   return "INFO", text
 end
 
-local function reset_log_file(log_name)
-  local name = resolve_log_name(log_name)
-  local path = string.format("%s/%s.log", CONFIG.LOG_DIR, name)
+local function startup_prepare(path, mode)
+  if mode == "keep" then
+    return "kept"
+  end
   local ok = pcall(function()
     ensure_dir(CONFIG.LOG_DIR)
+    if mode == "rotate" and fs.exists(path) then
+      local backup = path .. (CONFIG.ROTATE_SUFFIX or ".1")
+      if fs.exists(backup) then
+        fs.delete(backup)
+      end
+      fs.move(path, backup)
+    end
     local file = fs.open(path, "w")
     if file then
       file.close()
     end
   end)
-  if not ok and not state.warn_once then
-    state.warn_once = true
-    print("WARN: Log reset failed for " .. tostring(path))
+  if not ok then
+    if not state.warn_once then
+      state.warn_once = true
+      print("WARN: Log startup policy failed for " .. tostring(path))
+    end
+    return "startup_policy_failed"
   end
+  if mode == "rotate" then
+    return "rotated"
+  end
+  return "truncated"
 end
 
 function logger.init(opts)
   opts = opts or {}
   state.enabled = resolve_enabled(opts.enabled)
   state.log_name = resolve_log_name(opts.log_name, opts.prefix)
+  state.log_path = string.format("%s/%s.log", CONFIG.LOG_DIR, state.log_name or "xreactor")
   state.last_flush = os.clock()
   state.buffer = {}
-  if state.enabled and opts.truncate == true then
-    reset_log_file(state.log_name)
+  state.startup_action = "none"
+  if state.enabled then
+    local startup_mode = CONFIG.STARTUP_MODE
+    if opts.truncate ~= nil then
+      startup_mode = opts.truncate and "truncate" or "keep"
+    end
+    if type(opts.startup_mode) == "string" then
+      startup_mode = string.lower(opts.startup_mode)
+    end
+    state.startup_action = startup_prepare(state.log_path, startup_mode)
+    print(string.format("LOG: file=%s startup=%s", state.log_path, state.startup_action))
   end
+  return {
+    enabled = state.enabled == true,
+    log_name = state.log_name,
+    log_path = state.log_path,
+    startup_action = state.startup_action
+  }
 end
 
 function logger.set_enabled(enabled)
@@ -191,6 +225,15 @@ end
 
 function logger.flush()
   flush_if_needed(true)
+end
+
+function logger.describe()
+  return {
+    enabled = state.enabled == true,
+    log_name = state.log_name,
+    log_path = state.log_path,
+    startup_action = state.startup_action
+  }
 end
 
 return logger

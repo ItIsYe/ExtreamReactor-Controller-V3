@@ -66,7 +66,8 @@ local CONFIG = {
       ema_alpha = 0.2
     }
   },
-  DEFAULT_DEBUG_LOGGING = false -- Enable debug logging to /xreactor_logs/energy.log.
+  DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/energy.log.
+  DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
 }
 
 local CURRENT_VERSION = 2
@@ -76,6 +77,7 @@ return {
   role = CONFIG.DEFAULT_ROLE,
   node_id = CONFIG.DEFAULT_NODE_ID,
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
+  reset_log_on_start = CONFIG.DEFAULT_RESET_LOG_ON_START,
   wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
   matrix = CONFIG.DEFAULT_MATRIX,
   matrix_names = CONFIG.DEFAULT_MATRIX_NAMES,
