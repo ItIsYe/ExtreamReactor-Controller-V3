@@ -27,7 +27,7 @@ local function safe_call(mon, name, method, log_prefix, ...)
   if not mon or not mon[method] then
     return false, "missing method"
   end
-  local ok, err = pcall(mon[method], mon, ...)
+  local ok, err = pcall(mon[method], ...)
   if not ok then
     log_once(log_prefix, tostring(name) .. ":" .. tostring(method), "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(err))
   end
@@ -40,12 +40,19 @@ local function maybe_set_scale(mon, name, scale, log_prefix)
   end
   local scale_number = tonumber(scale)
   if not scale_number then
-    log_once(log_prefix, tostring(name) .. ":setTextScale:invalid", "Monitor setTextScale skipped for " .. tostring(name) .. " (non-numeric scale)")
+    log_once(
+      log_prefix,
+      tostring(name) .. ":setTextScale:invalid",
+      "Monitor setTextScale skipped for " .. tostring(name)
+        .. " (non-numeric scale type=" .. type(scale)
+        .. " value=" .. tostring(scale) .. ")"
+    )
     return false, "invalid scale"
   end
   if scale_cache[mon] == scale_number then
     return true
   end
+  utils.log(log_prefix or "MONITOR", "Applying monitor scale for " .. tostring(name) .. ": " .. tostring(scale_number))
   local ok, err = safe_call(mon, name, "setTextScale", log_prefix, scale_number)
   if ok then
     scale_cache[mon] = scale_number

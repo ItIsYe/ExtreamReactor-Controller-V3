@@ -44,6 +44,9 @@ end
 
 function ui.setScale(mon, scale)
   if not mon then return end
+  if type(scale) ~= "number" then
+    return
+  end
   local state = state_for(mon)
   if state.scale == scale then
     return

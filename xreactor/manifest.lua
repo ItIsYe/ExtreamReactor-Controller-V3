@@ -5,7 +5,7 @@ return {
   base_files = {
     { path = "adapters/energy_storage.lua", size_bytes = 3220, hash = "65c983a9" },
     { path = "adapters/induction_matrix.lua", size_bytes = 4655, hash = "95078398" },
-    { path = "adapters/monitor.lua", size_bytes = 3857, hash = "4314c55c" },
+    { path = "adapters/monitor.lua", size_bytes = 4071, hash = "6829b71f" },
     { path = "adapters/reactor.lua", size_bytes = 3894, hash = "bbc5dc89" },
     { path = "adapters/turbine.lua", size_bytes = 3485, hash = "e2d43c15" },
     { path = "core/alert_rules.lua", size_bytes = 12921, hash = "f4c32c65" },
@@ -17,7 +17,7 @@ return {
     { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
     { path = "core/logger.lua", size_bytes = 4922, hash = "55c44afd" },
     { path = "core/monitor_manager.lua", size_bytes = 3146, hash = "ebd69bb0" },
-    { path = "core/network.lua", size_bytes = 13293, hash = "197b045c" },
+    { path = "core/network.lua", size_bytes = 13591, hash = "af1702da" },
     { path = "core/protocol.lua", size_bytes = 6086, hash = "602e75c9" },
     { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9" },
     { path = "core/safety.lua", size_bytes = 771, hash = "73bab9de" },
@@ -25,7 +25,7 @@ return {
     { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
     { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
     { path = "core/turbine_ctrl.lua", size_bytes = 1266, hash = "a0681bf2" },
-    { path = "core/ui.lua", size_bytes = 8614, hash = "0dbff3eb" },
+    { path = "core/ui.lua", size_bytes = 8665, hash = "51814858" },
     { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
     { path = "core/utils.lua", size_bytes = 7801, hash = "a425d6c7" },
     { path = "release.lua", size_bytes = 207, hash = "8994add5" },
@@ -59,9 +59,9 @@ return {
       { path = "master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a" }
     },
     rt = {
-      { path = "nodes/rt/binding.lua", size_bytes = 2125, hash = "cde378e1" },
+      { path = "nodes/rt/binding.lua", size_bytes = 3437, hash = "68caef5f" },
       { path = "nodes/rt/config.lua", size_bytes = 4556, hash = "8c8fa9c7" },
-      { path = "nodes/rt/main.lua", size_bytes = 100122, hash = "eefc76af" },
+      { path = "nodes/rt/main.lua", size_bytes = 101535, hash = "a967adf2" },
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4637, hash = "6ec46511" },

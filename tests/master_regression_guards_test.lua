@@ -89,7 +89,10 @@ local function test_monitor_scale_requires_number()
   local monitor_adapter = require('adapters.monitor')
   local called_with = nil
   local mon = {
-    setTextScale = function(_, scale)
+    setTextScale = function(scale)
+      if type(scale) ~= 'number' then
+        error('scale must be numeric')
+      end
       called_with = scale
     end,
   }
@@ -111,13 +114,17 @@ local function test_network_channel_sanitization_numeric_open()
     wrap = function(name)
       if name ~= 'right' then return nil end
       return {
-        open = function(_, channel)
+        open = function(channel)
           if type(channel) ~= 'number' then
             error('non numeric channel open')
           end
           table.insert(opened, channel)
         end,
-        transmit = function() end,
+        transmit = function(channel, reply_channel, payload)
+          if type(channel) ~= 'number' or type(reply_channel) ~= 'number' or type(payload) ~= 'table' then
+            error('invalid transmit signature')
+          end
+        end,
       }
     end,
   }
@@ -141,10 +148,48 @@ local function test_network_channel_sanitization_numeric_open()
   if type(opened[1]) ~= 'number' or type(opened[2]) ~= 'number' then
     error('modem.open must only receive numeric channels')
   end
+  local ok_send, send_err = net:send(6500, { type = 'status', node_id = 'RT-1', role = 'RT_NODE' })
+  if not ok_send then
+    error('network send should use modem transmit numeric signature: ' .. tostring(send_err))
+  end
+end
+
+local function test_network_open_rejects_table_channel_runtime()
+  reset_module('core.network')
+  local opened = 0
+  _G.peripheral = {
+    isPresent = function(name) return name == 'right' end,
+    getType = function(name) return name == 'right' and 'modem' or nil end,
+    wrap = function(name)
+      if name ~= 'right' then return nil end
+      return {
+        open = function(channel)
+          if type(channel) ~= 'number' then
+            error('open called with non-number')
+          end
+          opened = opened + 1
+        end,
+        transmit = function() end,
+      }
+    end,
+  }
+  local network = require('core.network')
+  local net = network.init({
+    wireless_modem = 'right',
+    role = 'MASTER',
+    channels = { control = { bad = true }, status = { bad = true } },
+  })
+  if net.modem ~= nil then
+    error('modem should not initialize when no numeric channels are resolved')
+  end
+  if opened ~= 0 then
+    error('modem.open must not be called when channels are non-numeric')
+  end
 end
 
 test_multiview_initial_render_without_last_render()
 test_monitor_scale_requires_number()
 test_network_channel_sanitization_numeric_open()
+test_network_open_rejects_table_channel_runtime()
 
 print('master_regression_guards_test.lua: ok')

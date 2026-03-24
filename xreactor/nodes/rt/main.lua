@@ -1319,6 +1319,20 @@ local function discover()
   local binding_policy = binding.build_policy(configured_reactors, configured_turbines)
   local adapter_map = { reactors = {}, turbines = {} }
   local registry_devices = {}
+  local visible_counts = { reactor = 0, turbine = 0 }
+  local bound_counts = { reactor = 0, turbine = 0 }
+
+  local function describe_value(value)
+    if type(value) == "table" then
+      return "table"
+    end
+    return tostring(value)
+  end
+
+  local function log_binding_decision(kind, name, bound, reason)
+    local action = bound and "bound" or "rejected"
+    log(INFO, string.format("Discovery %s %s (%s): %s", kind, tostring(name), action, tostring(reason or "n/a")))
+  end
 
   for _, name in ipairs(names) do
     if peripheral.getType(name) == "monitor" then
@@ -1335,21 +1349,25 @@ local function discover()
   for _, name in ipairs(names) do
     local ok, methods = pcall(peripheral.getMethods, name)
     if not ok or type(methods) ~= "table" then
+      log(INFO, "Discovery skipped " .. tostring(name) .. ": methods unavailable")
       goto continue
     end
     local method_set = {}
     for _, method in ipairs(methods) do
       method_set[method] = true
     end
-    local is_reactor = method_set.getControlRodLevel or method_set.setAllControlRodLevels or method_set.getFuelAmount
-    local is_turbine = method_set.getRotorSpeed or method_set.getRotorRPM or method_set.setFluidFlowRateMax
-    if is_reactor then
+    local type_name = peripheral.getType(name)
+    local kind, kind_reason = binding.detect_kind(type_name, method_set)
+    if kind == "reactor" then
+      visible_counts.reactor = visible_counts.reactor + 1
       local info = reactor_adapter.inspect(name, CONFIG.LOG_PREFIX)
       if info then
-        local bound = binding.should_bind("reactor", name, binding_policy)
+        local bound, reason = binding.should_bind_with_reason("reactor", name, binding_policy)
         if bound then
           adapter_map.reactors[name] = info
+          bound_counts.reactor = bound_counts.reactor + 1
         end
+        log_binding_decision("reactor", name, bound, reason)
         table.insert(registry_devices, {
           name = name,
           type = info.type,
@@ -1359,14 +1377,19 @@ local function discover()
           features = info.features,
           schema = info.schema
         })
+      else
+        log_binding_decision("reactor", name, false, "adapter inspect failed")
       end
-    elseif is_turbine then
+    elseif kind == "turbine" then
+      visible_counts.turbine = visible_counts.turbine + 1
       local info = turbine_adapter.inspect(name, CONFIG.LOG_PREFIX)
       if info then
-        local bound = binding.should_bind("turbine", name, binding_policy)
+        local bound, reason = binding.should_bind_with_reason("turbine", name, binding_policy)
         if bound then
           adapter_map.turbines[name] = info
+          bound_counts.turbine = bound_counts.turbine + 1
         end
+        log_binding_decision("turbine", name, bound, reason)
         table.insert(registry_devices, {
           name = name,
           type = info.type,
@@ -1376,10 +1399,22 @@ local function discover()
           features = info.features,
           schema = info.schema
         })
+      else
+        log_binding_decision("turbine", name, false, "adapter inspect failed")
       end
+    else
+      log(INFO, "Discovery ignored " .. tostring(name) .. ": " .. tostring(kind_reason) .. " type=" .. describe_value(type_name))
     end
     ::continue::
   end
+
+  log(INFO, string.format(
+    "Discovery summary visible reactors=%d turbines=%d | bound reactors=%d turbines=%d",
+    visible_counts.reactor,
+    visible_counts.turbine,
+    bound_counts.reactor,
+    bound_counts.turbine
+  ))
 
   registry:sync(registry_devices)
   devices.adapters = adapter_map
