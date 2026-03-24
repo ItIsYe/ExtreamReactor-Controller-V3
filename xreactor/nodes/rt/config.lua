@@ -4,8 +4,8 @@ local CONFIG = {
   DEFAULT_NODE_ID = "RT-1", -- Default node_id used if none is set.
   DEFAULT_REACTORS = {}, -- Empty list enables auto-discovery for local reactors.
   DEFAULT_TURBINES = {}, -- Empty list enables auto-discovery for local turbines.
-  DEFAULT_MODEM = "right", -- Default modem side or peripheral name.
-  DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
+  DEFAULT_MODEM = nil, -- Legacy modem field; prefer autodetect unless explicitly configured.
+  DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
   DEFAULT_SCAN_INTERVAL = 10, -- Seconds between discovery scans.
@@ -59,7 +59,7 @@ local CONFIG = {
       ema_alpha = 0.2 -- RPM smoothing alpha.
     }
   },
-  DEFAULT_DEBUG_LOGGING = false -- Enable debug logging to /xreactor_logs/rt.log.
+  DEFAULT_DEBUG_LOGGING = true -- Keep enabled by default for RT stabilization diagnostics.
 }
 
 local CURRENT_VERSION = 2

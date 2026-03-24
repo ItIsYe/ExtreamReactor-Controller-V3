@@ -1,7 +1,7 @@
 -- CONFIG
 local CONFIG = {
-  DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
-  DEFAULT_WIRED_MODEM = "left", -- Default wired modem side for monitors.
+  DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
+  DEFAULT_WIRED_MODEM = nil, -- Autodetect wired modem/peripheral hub unless explicitly configured.
   DEFAULT_MONITORS = { "back" }, -- Default monitor list for UI.
   DEFAULT_HEARTBEAT_INTERVAL = 5, -- Seconds between status heartbeats.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status broadcasts.

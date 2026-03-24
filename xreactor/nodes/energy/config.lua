@@ -2,7 +2,7 @@
 local CONFIG = {
   DEFAULT_ROLE = "ENERGY-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "ENERGY-1", -- Default node_id used if none is set.
-  DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
+  DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
   DEFAULT_MATRIX = nil, -- Optional induction matrix peripheral name (legacy override).
   DEFAULT_MATRIX_NAMES = {}, -- Optional list of induction matrix peripheral names (legacy override).
   DEFAULT_MATRIX_ALIASES = {}, -- Optional mapping of peripheral name -> display label.

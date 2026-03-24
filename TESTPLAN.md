@@ -15,6 +15,9 @@
 2. **Timeouts**: Prüfe, dass nach max retries klare Logmeldung erfolgt.
 3. **Proto-Mismatch**: absichtlich proto_ver ändern → Status DEGRADED + keine Command-Ausführung.
 4. **Queue-Stau**: Modem/Funk ausfallen lassen → `STATUS`/`HEARTBEAT` dürfen nicht ungebremst anwachsen; nur aktuelle volatile Zustände bleiben in der Queue, `COMMAND` bleibt retry-/ACK-fähig.
+5. **Modem-Autodetect (1x wireless + 1x wired)**: Vertausche Seiten (nicht `left/right`) und prüfe, dass Node/Master korrekt starten und beide Rollen (Comms + wired peripherals) automatisch gewählt werden.
+6. **Override/Autodetect-Fallback**: Setze absichtlich ungültige `wireless_modem`/`wired_modem` Werte in Config → klare Warnungen im Log und sicherer Fallback auf autodetect.
+7. **Override-Prio**: Bei mehreren passenden Modems explizite Config setzen und prüfen, dass die explizite Auswahl Vorrang vor der deterministischen Autodetect-Reihenfolge hat.
 
 ## Registry/Discovery
 1. Geräte-Registry erzeugt stabile IDs und behält Reihenfolge (kein Flackern).

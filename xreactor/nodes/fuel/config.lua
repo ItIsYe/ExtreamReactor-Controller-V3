@@ -2,7 +2,7 @@
 local CONFIG = {
   DEFAULT_ROLE = "FUEL-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "FUEL-1", -- Default node_id used if none is set.
-  DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
+  DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
   DEFAULT_STORAGE_BUS = "meBridge_0", -- Default storage bus peripheral name.
   DEFAULT_TARGET = 2000, -- Default fuel reserve target.
   DEFAULT_MINIMUM_RESERVE = 2000, -- Minimum reserve used for safety.

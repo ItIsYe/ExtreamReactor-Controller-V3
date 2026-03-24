@@ -2,7 +2,7 @@
 local CONFIG = {
   DEFAULT_ROLE = "REPROCESSOR-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "REPROC-1", -- Default node_id used if none is set.
-  DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
+  DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
   DEFAULT_BUFFERS = { "chemical_tank_0" }, -- Default buffer peripheral names.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_DISCOVERY_INTERVAL = 15, -- Seconds between discovery rescans.
