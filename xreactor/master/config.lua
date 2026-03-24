@@ -79,7 +79,7 @@ local CONFIG = {
       ema_alpha = 0.2 -- RPM smoothing alpha.
     }
   },
-  DEFAULT_DEBUG_LOGGING = true -- Enable debug logging to /xreactor_logs/master.log.
+  DEFAULT_DEBUG_LOGGING = true -- Keep enabled by default for master diagnostics during rollout/update cycles.
 }
 
 local constants = require("shared.constants")

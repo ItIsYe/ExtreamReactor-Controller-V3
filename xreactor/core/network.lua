@@ -53,39 +53,46 @@ local function open_modem(name, channels)
   if type(modem.open) ~= "function" or type(modem.transmit) ~= "function" then
     return nil, "not a modem"
   end
-  for _, channel in ipairs(channels) do
-    local ok, open_err = pcall(modem.open, modem, channel)
-    if not ok then
-      return nil, "open failed: " .. tostring(open_err)
+  local opened = {}
+  for _, channel in ipairs(channels or {}) do
+    if type(channel) == "number" and not opened[channel] then
+      local ok, open_err = pcall(modem.open, modem, channel)
+      if not ok then
+        return nil, "open failed: " .. tostring(open_err)
+      end
+      opened[channel] = true
     end
+  end
+  if not next(opened) then
+    return nil, "open failed: no numeric channels"
   end
   return modem
 end
 
-local function safe_call_remote(wired, device_name, method, ...)
-  if not wired then
-    return nil, "wired modem missing"
+local function channel_number(value, fallback)
+  if type(value) == "number" then
+    return value
   end
-  if type(wired.callRemote) ~= "function" then
-    return nil, "wired modem unsupported"
+  if type(value) == "string" then
+    local parsed = tonumber(value)
+    if parsed then
+      return parsed
+    end
   end
-  if type(wired.isPresentRemote) == "function" and not wired.isPresentRemote(device_name) then
-    return nil, "remote peripheral missing"
+  if type(value) == "table" then
+    local candidate = value.channel or value.value or value.id or value[1]
+    local parsed = tonumber(candidate)
+    if parsed then
+      return parsed
+    end
   end
-  local results = table.pack(pcall(wired.callRemote, device_name, method, ...))
-  if not results[1] then
-    return nil, results[2]
-  end
-  if results.n == 1 then
-    return true
-  end
-  return table.unpack(results, 2, results.n)
+  return fallback
 end
 
 local function resolve_channels(config)
   local channels = type(config.channels) == "table" and config.channels or {}
-  local control = type(channels.control) == "number" and channels.control or constants.channels.CONTROL
-  local status = type(channels.status) == "number" and channels.status or constants.channels.STATUS
+  local control = channel_number(channels.control, constants.channels.CONTROL)
+  local status = channel_number(channels.status, constants.channels.STATUS)
   return { control = control, status = status }
 end
 
@@ -113,6 +120,27 @@ local function legacy_receive(timeout)
     end
   end
 end
+
+local function safe_call_remote(wired, device_name, method, ...)
+  if not wired then
+    return nil, "wired modem missing"
+  end
+  if type(wired.callRemote) ~= "function" then
+    return nil, "wired modem unsupported"
+  end
+  if type(wired.isPresentRemote) == "function" and not wired.isPresentRemote(device_name) then
+    return nil, "remote peripheral missing"
+  end
+  local results = table.pack(pcall(wired.callRemote, device_name, method, ...))
+  if not results[1] then
+    return nil, results[2]
+  end
+  if results.n == 1 then
+    return true
+  end
+  return table.unpack(results, 2, results.n)
+end
+
 
 function network.init(config)
   config = config or {}
