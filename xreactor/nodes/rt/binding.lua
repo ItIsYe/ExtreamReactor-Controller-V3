@@ -74,17 +74,17 @@ end
 function binding.detect_kind(type_name, methods)
   local method_set = methods or {}
   local normalized_type = tostring(type_name or ""):lower()
-  if normalized_type:find("reactor", 1, true) then
-    return "reactor", "type=" .. tostring(type_name)
-  end
   if normalized_type:find("turbine", 1, true) then
     return "turbine", "type=" .. tostring(type_name)
   end
-  if method_set.getControlRodLevel or method_set.setAllControlRodLevels or method_set.getFuelAmount then
-    return "reactor", "reactor method signature"
+  if normalized_type:find("reactor", 1, true) then
+    return "reactor", "type=" .. tostring(type_name)
   end
   if method_set.getRotorSpeed or method_set.getRotorRPM or method_set.setFluidFlowRateMax or method_set.setFluidFlowRate then
     return "turbine", "turbine method signature"
+  end
+  if method_set.getControlRodLevel or method_set.setAllControlRodLevels or method_set.getFuelAmount then
+    return "reactor", "reactor method signature"
   end
   return nil, "unsupported signature"
 end

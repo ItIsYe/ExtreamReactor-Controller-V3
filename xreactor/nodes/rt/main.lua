@@ -1253,6 +1253,36 @@ local function apply_mode(mode)
 end
 
 cache = function()
+  local function normalize_bound_names(kind, names)
+    local normalized = {}
+    for _, name in ipairs(names or {}) do
+      local ok, methods = pcall(peripheral.getMethods, name)
+      local type_name = peripheral.getType(name)
+      local method_set = {}
+      if ok and type(methods) == "table" then
+        for _, method in ipairs(methods) do
+          method_set[method] = true
+        end
+      end
+      local detected, reason = binding.detect_kind(type_name, method_set)
+      if detected == kind then
+        normalized[#normalized + 1] = name
+      else
+        log("WARN", string.format(
+          "Skipping configured %s %s: detected kind=%s type=%s reason=%s",
+          tostring(kind),
+          tostring(name),
+          tostring(detected or "unknown"),
+          tostring(type_name or "n/a"),
+          tostring(reason or "n/a")
+        ))
+      end
+    end
+    return normalized
+  end
+
+  config.reactors = normalize_bound_names("reactor", config.reactors or {})
+  config.turbines = normalize_bound_names("turbine", config.turbines or {})
   peripherals.reactors = utils.cache_peripherals(config.reactors) or {}
   peripherals.turbines = utils.cache_peripherals(config.turbines) or {}
   for _, name in ipairs(config.reactors) do
@@ -1329,9 +1359,16 @@ local function discover()
     return tostring(value)
   end
 
-  local function log_binding_decision(kind, name, bound, reason)
+  local function log_binding_decision(kind, name, type_name, bound, reason)
     local action = bound and "bound" or "rejected"
-    log(INFO, string.format("Discovery %s %s (%s): %s", kind, tostring(name), action, tostring(reason or "n/a")))
+    log(INFO, string.format(
+      "Discovery %s %s type=%s (%s): %s",
+      tostring(kind),
+      tostring(name),
+      tostring(type_name or "n/a"),
+      tostring(action),
+      tostring(reason or "n/a")
+    ))
   end
 
   for _, name in ipairs(names) do
@@ -1367,7 +1404,7 @@ local function discover()
           adapter_map.reactors[name] = info
           bound_counts.reactor = bound_counts.reactor + 1
         end
-        log_binding_decision("reactor", name, bound, reason)
+        log_binding_decision("reactor", name, type_name, bound, reason)
         table.insert(registry_devices, {
           name = name,
           type = info.type,
@@ -1378,7 +1415,7 @@ local function discover()
           schema = info.schema
         })
       else
-        log_binding_decision("reactor", name, false, "adapter inspect failed")
+        log_binding_decision("reactor", name, type_name, false, "adapter inspect failed")
       end
     elseif kind == "turbine" then
       visible_counts.turbine = visible_counts.turbine + 1
@@ -1389,7 +1426,7 @@ local function discover()
           adapter_map.turbines[name] = info
           bound_counts.turbine = bound_counts.turbine + 1
         end
-        log_binding_decision("turbine", name, bound, reason)
+        log_binding_decision("turbine", name, type_name, bound, reason)
         table.insert(registry_devices, {
           name = name,
           type = info.type,
@@ -1400,7 +1437,7 @@ local function discover()
           schema = info.schema
         })
       else
-        log_binding_decision("turbine", name, false, "adapter inspect failed")
+        log_binding_decision("turbine", name, type_name, false, "adapter inspect failed")
       end
     else
       log(INFO, "Discovery ignored " .. tostring(name) .. ": " .. tostring(kind_reason) .. " type=" .. describe_value(type_name))
@@ -1415,6 +1452,10 @@ local function discover()
     bound_counts.reactor,
     bound_counts.turbine
   ))
+  log(INFO, "Visible reactors count: " .. tostring(visible_counts.reactor))
+  log(INFO, "Visible turbines count: " .. tostring(visible_counts.turbine))
+  log(INFO, "Bound reactors count: " .. tostring(bound_counts.reactor))
+  log(INFO, "Bound turbines count: " .. tostring(bound_counts.turbine))
 
   registry:sync(registry_devices)
   devices.adapters = adapter_map
@@ -2713,6 +2754,7 @@ end
 
 local function init()
   dumpPeripherals()
+  discover()
   init_turbine_ctrl()
   init_reactor_ctrl()
   set_reactors_active(true)

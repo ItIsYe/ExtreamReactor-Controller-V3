@@ -56,6 +56,17 @@ local function severity_for_proto(node)
   return "WARN"
 end
 
+local function number_or(value, fallback)
+  if type(value) == "number" then
+    return value
+  end
+  local parsed = tonumber(value)
+  if parsed ~= nil then
+    return parsed
+  end
+  return fallback
+end
+
 local function rule_state(self, key)
   local state = self.state[key]
   if not state then
@@ -313,10 +324,10 @@ function rules:evaluate(context)
       end
 
       local reactors = node.reactors or {}
-      local steam_target = node.steam or 0
+      local steam_target = number_or(node.steam, 0)
       local steam_prod = 0
       for _, reactor in ipairs(reactors) do
-        steam_prod = steam_prod + (reactor.steam_production or 0)
+        steam_prod = steam_prod + number_or(reactor.steam_production, 0)
       end
       local deficit = steam_target > 0 and steam_prod < steam_target * (cfg.steam_deficit_pct or 0.9)
       for _, reactor in ipairs(reactors) do
