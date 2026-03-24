@@ -2,7 +2,7 @@
 local CONFIG = {
   DEFAULT_ROLE = "WATER-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "WATER-1", -- Default node_id used if none is set.
-  DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
+  DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
   DEFAULT_LOOP_TANKS = { "dynamicTank_0" }, -- Default tank peripheral names.
   DEFAULT_TARGET_VOLUME = 200000, -- Desired tank volume.
   DEFAULT_BALANCE_LOG_INTERVAL = 60, -- Seconds between repeated balance logs while refilling/bleeding (0 = only on state change).

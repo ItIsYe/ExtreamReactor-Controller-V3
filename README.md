@@ -317,6 +317,12 @@ Current runtime comms behavior includes:
 - dedupe tracking,
 - peer timeout/down detection.
 
+Modem selection is now centralized and robust:
+
+- `wireless_modem` / `wired_modem` config entries stay supported as explicit overrides.
+- If overrides are missing or invalid, runtime auto-detects modem roles from available peripherals (including `modem.isWireless()` when available).
+- Selection is deterministic (stable name ordering), logs the selected wireless/wired modem, and warns clearly when falling back or when no compatible modem exists.
+
 ### Discovery and registries
 
 Support nodes maintain a local peripheral registry and periodically rescan hardware. Discovery runs on the node-specific `discovery_interval`, independently from heartbeat timing. The registry stores bound/missing state, signatures, aliases, and scan metadata in `/xreactor/config/registry_<role>_<node_id>.json`, and only rewrites the file when the serialized registry state actually changes. Fluid-capable nodes prefer CC:Tweaked's generic `fluid_storage` API (`tanks()`) and keep older mod-specific methods only as compatibility fallbacks.

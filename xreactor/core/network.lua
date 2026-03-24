@@ -69,6 +69,181 @@ local function open_modem(name, channels)
   return modem
 end
 
+local function sorted_names(items)
+  local copy = {}
+  for _, value in ipairs(items or {}) do
+    copy[#copy + 1] = value
+  end
+  table.sort(copy, function(a, b)
+    return tostring(a) < tostring(b)
+  end)
+  return copy
+end
+
+local function discover_modems()
+  local discovered = {
+    all = {},
+    wireless = {},
+    wired = {},
+    modem_unknown = {},
+    modem_like = {}
+  }
+  if type(peripheral) ~= "table" or type(peripheral.getNames) ~= "function" then
+    return discovered
+  end
+  local names = peripheral.getNames() or {}
+  for _, name in ipairs(sorted_names(names)) do
+    if peripheral.isPresent(name) then
+      local type_name = peripheral.getType(name)
+      local wrapped = select(1, utils.safe_wrap(name))
+      local is_modem_like = type_name == "modem" or type_name == "peripheral_hub"
+      if is_modem_like then
+        discovered.modem_like[#discovered.modem_like + 1] = {
+          name = name,
+          type = type_name,
+          wrapped = wrapped
+        }
+      end
+      if type_name == "modem" and wrapped then
+        local wireless = nil
+        if type(wrapped.isWireless) == "function" then
+          local ok, result = pcall(wrapped.isWireless, wrapped)
+          if ok then
+            wireless = result == true
+          end
+        end
+        local entry = {
+          name = name,
+          type = type_name,
+          wireless = wireless,
+          wrapped = wrapped
+        }
+        discovered.all[#discovered.all + 1] = entry
+        if wireless == true then
+          discovered.wireless[#discovered.wireless + 1] = entry
+        elseif wireless == false then
+          discovered.wired[#discovered.wired + 1] = entry
+        else
+          discovered.modem_unknown[#discovered.modem_unknown + 1] = entry
+        end
+      elseif type_name == "peripheral_hub" and wrapped then
+        discovered.wired[#discovered.wired + 1] = {
+          name = name,
+          type = type_name,
+          wireless = false,
+          wrapped = wrapped
+        }
+      end
+    end
+  end
+  return discovered
+end
+
+local function modem_type_matches_expected(entry, expected)
+  if not entry then
+    return false, "missing"
+  end
+  if expected == "wireless" then
+    if entry.type ~= "modem" then
+      return false, "not modem"
+    end
+    if entry.wireless == false then
+      return false, "wired modem"
+    end
+    return true
+  end
+  if expected == "wired" then
+    if entry.type == "peripheral_hub" then
+      return true
+    end
+    if entry.type == "modem" then
+      if entry.wireless == true then
+        return false, "wireless modem"
+      end
+      return true
+    end
+    return false, "unsupported type"
+  end
+  return false, "unsupported expectation"
+end
+
+local function entry_by_name(discovered, name)
+  if not discovered or not name then return nil end
+  for _, entry in ipairs(discovered.modem_like or {}) do
+    if entry.name == name then
+      return entry
+    end
+  end
+  return nil
+end
+
+local function pick_first(entries, excluded_name)
+  for _, entry in ipairs(entries or {}) do
+    if not excluded_name or entry.name ~= excluded_name then
+      return entry
+    end
+  end
+  return nil
+end
+
+local function resolve_modems(config)
+  local discovered = discover_modems()
+  local selected = {
+    wireless = nil,
+    wired = nil,
+    wireless_source = "autodetect",
+    wired_source = "autodetect"
+  }
+
+  local wireless_override = type(config.wireless_modem) == "string" and config.wireless_modem or nil
+  local wired_override = type(config.wired_modem) == "string" and config.wired_modem or nil
+
+  if wireless_override then
+    local entry = entry_by_name(discovered, wireless_override)
+    local ok, reason = modem_type_matches_expected(entry, "wireless")
+    if ok then
+      selected.wireless = entry
+      selected.wireless_source = "config override"
+    else
+      warn_once("modem.override.wireless", "WARN: configured wireless_modem \"" .. tostring(wireless_override) .. "\" invalid (" .. tostring(reason) .. "); falling back to autodetect")
+    end
+  end
+
+  if wired_override then
+    local entry = entry_by_name(discovered, wired_override)
+    local ok, reason = modem_type_matches_expected(entry, "wired")
+    if ok then
+      selected.wired = entry
+      selected.wired_source = "config override"
+    else
+      warn_once("modem.override.wired", "WARN: configured wired_modem \"" .. tostring(wired_override) .. "\" invalid (" .. tostring(reason) .. "); falling back to autodetect")
+    end
+  end
+
+  if not selected.wireless then
+    selected.wireless = pick_first(discovered.wireless)
+    if not selected.wireless then
+      selected.wireless = pick_first(discovered.modem_unknown)
+      if selected.wireless then
+        warn_once("modem.autodetect.unknown", "WARN: wireless modem autodetect using modem without isWireless() signal: " .. tostring(selected.wireless.name))
+      end
+    end
+  end
+
+  if not selected.wired then
+    selected.wired = pick_first(discovered.wired, selected.wireless and selected.wireless.name or nil)
+    if not selected.wired and selected.wireless then
+      local wireless_ok_for_wired = modem_type_matches_expected(selected.wireless, "wired")
+      if wireless_ok_for_wired then
+        selected.wired = selected.wireless
+        warn_once("modem.shared", "WARN: using same modem for wireless and wired paths: " .. tostring(selected.wired.name))
+      end
+    end
+  end
+
+  return selected, discovered
+end
+
 local function channel_number(value, fallback)
   if type(value) == "number" then
     return value
@@ -145,17 +320,30 @@ end
 function network.init(config)
   config = config or {}
   local channels = resolve_channels(config)
-  local modem, modem_err = open_modem(config.wireless_modem, { channels.control, channels.status })
-  local wired = nil
-  if config.wired_modem and peripheral.isPresent(config.wired_modem) then
-    wired = select(1, utils.safe_wrap(config.wired_modem))
+  local selected_modems = resolve_modems(config)
+  local wireless_name = selected_modems.wireless and selected_modems.wireless.name or nil
+  local wired_name = selected_modems.wired and selected_modems.wired.name or nil
+
+  if wireless_name then
+    utils.log("NET", "Wireless modem selected: " .. tostring(wireless_name) .. " (" .. tostring(selected_modems.wireless_source) .. ")")
+  else
+    warn_once("modem.autodetect.none.wireless", "WARN: no wireless modem found (override/autodetect)")
   end
+  if wired_name then
+    utils.log("NET", "Wired modem selected: " .. tostring(wired_name) .. " (" .. tostring(selected_modems.wired_source) .. ")")
+  else
+    warn_once("modem.autodetect.none.wired", "WARN: no wired modem/peripheral hub found; remote peripherals disabled")
+  end
+
+  local modem, modem_err = open_modem(wireless_name, { channels.control, channels.status })
+  local wired = wired_name and select(1, utils.safe_wrap(wired_name)) or nil
   local node_id = resolve_node_id(config)
   if not modem then
     warn_once("modem.missing", "WARN: wireless modem missing; comms disabled (" .. tostring(modem_err) .. ")")
     return {
       modem = nil,
       wired = wired,
+      selected_modems = selected_modems,
       channels = channels,
       id = node_id,
       role = config.role,
@@ -179,6 +367,7 @@ function network.init(config)
   return {
     modem = modem,
     wired = wired,
+    selected_modems = selected_modems,
     channels = channels,
     id = node_id,
     role = config.role,

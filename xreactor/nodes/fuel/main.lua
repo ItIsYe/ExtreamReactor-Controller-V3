@@ -37,7 +37,7 @@ local DEFAULT_CONFIG = {
   role = constants.roles.FUEL_NODE, -- Node role identifier.
   node_id = "FUEL-1", -- Default node_id used if none is set.
   debug_logging = false, -- Enable debug logging to /xreactor_logs/fuel.log.
-  wireless_modem = "right", -- Default wireless modem side.
+  wireless_modem = nil, -- Autodetect wireless modem unless explicitly configured.
   wired_modem = nil, -- Optional wired modem side.
   storage_bus = "meBridge_0", -- Default storage bus peripheral name.
   target = 2000, -- Default fuel reserve target.
@@ -85,9 +85,9 @@ local function validate_config(config_values, defaults)
     config_values.debug_logging = defaults.debug_logging
     add_config_warning("debug_logging missing/invalid; defaulting to " .. tostring(defaults.debug_logging))
   end
-  if type(config_values.wireless_modem) ~= "string" then
+  if config_values.wireless_modem ~= nil and type(config_values.wireless_modem) ~= "string" then
     config_values.wireless_modem = defaults.wireless_modem
-    add_config_warning("wireless_modem missing/invalid; defaulting to " .. tostring(defaults.wireless_modem))
+    add_config_warning("wireless_modem invalid; defaulting to " .. tostring(defaults.wireless_modem))
   end
   if config_values.wired_modem ~= nil and type(config_values.wired_modem) ~= "string" then
     config_values.wired_modem = defaults.wired_modem
