@@ -1,13 +1,34 @@
-local function resolve_log_dir()
-  if fs and fs.exists and fs.exists("/disk") then
-    return "/disk/xreactor_logs"
+local DEFAULT_LOG_DIR = "/xreactor_logs"
+
+local function normalize_log_dir(path)
+  if type(path) ~= "string" then
+    return nil
   end
-  return "/xreactor_logs"
+  local trimmed = path:gsub("%s+$", "")
+  trimmed = trimmed:gsub("^%s+", "")
+  if trimmed == "" then
+    return nil
+  end
+  return trimmed
+end
+
+local function resolve_log_dir(opts)
+  local explicit = opts and normalize_log_dir(opts.log_dir)
+  if explicit then
+    return explicit
+  end
+  if settings and settings.get then
+    local configured = normalize_log_dir(settings.get("xreactor.log_dir"))
+    if configured then
+      return configured
+    end
+  end
+  return DEFAULT_LOG_DIR
 end
 
 -- CONFIG
 local CONFIG = {
-  LOG_DIR = resolve_log_dir(), -- Directory for log files.
+  LOG_DIR = DEFAULT_LOG_DIR, -- Directory for log files.
   SETTINGS_KEY = "xreactor.debug_logging", -- settings API key for enabling debug logs.
   DEFAULT_ENABLED = false, -- Default debug logging state when no config/setting exists.
   FLUSH_LINES = 8, -- Buffer size before flushing to disk.
@@ -22,6 +43,7 @@ local logger = {}
 
 local state = {
   enabled = nil,
+  log_dir = CONFIG.LOG_DIR,
   log_name = nil,
   log_path = nil,
   buffer = {},
@@ -90,8 +112,8 @@ local function flush_if_needed(force)
     return true
   end
   local ok, err = pcall(function()
-    ensure_dir(CONFIG.LOG_DIR)
-    local path = string.format("%s/%s.log", CONFIG.LOG_DIR, state.log_name or "xreactor")
+    ensure_dir(state.log_dir or CONFIG.LOG_DIR)
+    local path = string.format("%s/%s.log", state.log_dir or CONFIG.LOG_DIR, state.log_name or "xreactor")
     rotate_log_if_needed(path)
     local file = fs.open(path, "a")
     if not file then
@@ -148,12 +170,12 @@ local function parse_message_level(message, level)
   return "INFO", text
 end
 
-local function startup_prepare(path, mode)
+local function startup_prepare(path, mode, log_dir)
   if mode == "keep" then
     return "kept"
   end
   local ok = pcall(function()
-    ensure_dir(CONFIG.LOG_DIR)
+    ensure_dir(log_dir or CONFIG.LOG_DIR)
     if mode == "rotate" and fs.exists(path) then
       local backup = path .. (CONFIG.ROTATE_SUFFIX or ".1")
       if fs.exists(backup) then
@@ -182,8 +204,9 @@ end
 function logger.init(opts)
   opts = opts or {}
   state.enabled = resolve_enabled(opts.enabled)
+  state.log_dir = resolve_log_dir(opts)
   state.log_name = resolve_log_name(opts.log_name, opts.prefix)
-  state.log_path = string.format("%s/%s.log", CONFIG.LOG_DIR, state.log_name or "xreactor")
+  state.log_path = string.format("%s/%s.log", state.log_dir, state.log_name or "xreactor")
   state.last_flush = os.clock()
   state.buffer = {}
   state.startup_action = "none"
@@ -195,11 +218,12 @@ function logger.init(opts)
     if type(opts.startup_mode) == "string" then
       startup_mode = string.lower(opts.startup_mode)
     end
-    state.startup_action = startup_prepare(state.log_path, startup_mode)
-    print(string.format("LOG: file=%s startup=%s", state.log_path, state.startup_action))
+    state.startup_action = startup_prepare(state.log_path, startup_mode, state.log_dir)
+    print(string.format("LOG: dir=%s file=%s startup=%s", tostring(state.log_dir), state.log_path, state.startup_action))
   end
   return {
     enabled = state.enabled == true,
+    log_dir = state.log_dir,
     log_name = state.log_name,
     log_path = state.log_path,
     startup_action = state.startup_action
@@ -230,6 +254,7 @@ end
 function logger.describe()
   return {
     enabled = state.enabled == true,
+    log_dir = state.log_dir,
     log_name = state.log_name,
     log_path = state.log_path,
     startup_action = state.startup_action

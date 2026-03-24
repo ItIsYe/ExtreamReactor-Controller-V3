@@ -2,8 +2,14 @@
 local bootstrap = {}
 
 local function resolve_log_dir()
-  if fs and fs.exists and fs.exists("/disk") then
-    return "/disk/xreactor_logs"
+  if settings and settings.get then
+    local configured = settings.get("xreactor.log_dir")
+    if type(configured) == "string" then
+      local trimmed = configured:gsub("%s+$", ""):gsub("^%s+", "")
+      if trimmed ~= "" then
+        return trimmed
+      end
+    end
   end
   return "/xreactor_logs"
 end
