@@ -21,6 +21,15 @@ local function build_snapshot(data, extra)
   return utils.safe_serialize({ data = data or {}, extra = extra or {} }) or tostring(data)
 end
 
+local function ensure_monitor_state(state)
+  state = type(state) == "table" and state or {}
+  state.last_render = type(state.last_render) == "table" and state.last_render or {}
+  if state.menu_open == nil then
+    state.menu_open = false
+  end
+  return state
+end
+
 local function sorted_view_keys(views)
   local keys = {}
   for key in pairs(views or {}) do
@@ -122,8 +131,19 @@ function multiview:update_monitors(monitors)
     self.monitor_index = index
     self:apply_defaults(monitors)
     for _, mon in ipairs(monitors) do
-      local state = self.monitor_states[mon.id] or {}
+      local state = ensure_monitor_state(self.monitor_states[mon.id])
       state.clear_next = true
+      state.geometry = tostring(mon.width or 0) .. "x" .. tostring(mon.height or 0)
+      self.monitor_states[mon.id] = state
+    end
+  else
+    for _, mon in ipairs(monitors) do
+      local state = ensure_monitor_state(self.monitor_states[mon.id])
+      local geometry = tostring(mon.width or 0) .. "x" .. tostring(mon.height or 0)
+      if state.geometry ~= geometry then
+        state.geometry = geometry
+        state.clear_next = true
+      end
       self.monitor_states[mon.id] = state
     end
   end
@@ -231,7 +251,7 @@ function multiview:render(monitors, data_map)
   local rendered = {}
   for _, mon_entry in ipairs(monitors or {}) do
     local id = mon_entry.id or mon_entry.name
-    local state = self.monitor_states[id] or { last_render = {}, menu_open = false }
+    local state = ensure_monitor_state(self.monitor_states[id])
     self.monitor_states[id] = state
     local layout = ensure_table(self.layout.monitors[id])
     if not layout.view then

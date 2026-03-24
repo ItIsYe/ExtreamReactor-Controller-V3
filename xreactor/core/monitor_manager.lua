@@ -35,9 +35,10 @@ end
 
 function manager.new(opts)
   opts = opts or {}
+  local scale = tonumber(opts.scale)
   local self = {
     log_prefix = opts.log_prefix or "MONITOR",
-    scale = opts.scale,
+    scale = scale,
     thresholds = opts.thresholds or { small_area = 300, medium_area = 700 },
     registry = registry_lib.new({
       role = opts.role or "master_monitor",
