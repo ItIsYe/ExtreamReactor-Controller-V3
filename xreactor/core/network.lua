@@ -61,6 +61,7 @@ local function open_modem(name, channels)
         return nil, "open failed: " .. tostring(open_err)
       end
       opened[channel] = true
+      utils.log("NET", "Opened modem channel: " .. tostring(channel))
     end
   end
   if not next(opened) then
@@ -343,6 +344,7 @@ function network.init(config)
     warn_once("modem.autodetect.none.wired", "WARN: no wired modem/peripheral hub found; remote peripherals disabled")
   end
 
+  utils.log("NET", ("Resolved channels control=%s status=%s"):format(tostring(channels.control), tostring(channels.status)))
   local modem, modem_err = open_modem(wireless_name, { channels.control, channels.status })
   local wired = wired_name and select(1, utils.safe_wrap(wired_name)) or nil
   local node_id = resolve_node_id(config)

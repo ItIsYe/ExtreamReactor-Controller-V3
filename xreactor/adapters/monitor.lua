@@ -49,6 +49,7 @@ local function maybe_set_scale(mon, name, scale, log_prefix)
   local ok, err = safe_call(mon, name, "setTextScale", log_prefix, scale_number)
   if ok then
     scale_cache[mon] = scale_number
+    log_once(log_prefix, tostring(name) .. ":setTextScale:" .. tostring(scale_number), "Monitor setTextScale applied for " .. tostring(name) .. " -> " .. tostring(scale_number))
   end
   return ok, err
 end

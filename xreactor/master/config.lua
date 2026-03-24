@@ -79,7 +79,8 @@ local CONFIG = {
       ema_alpha = 0.2 -- RPM smoothing alpha.
     }
   },
-  DEFAULT_DEBUG_LOGGING = true -- Keep enabled by default for master diagnostics during rollout/update cycles.
+  DEFAULT_DEBUG_LOGGING = true, -- Keep enabled by default for master diagnostics during rollout/update cycles.
+  DEFAULT_RESET_LOG_ON_START = true -- Clear master runtime log at startup to avoid stale diagnostics during test cycles.
 }
 
 local constants = require("shared.constants")
@@ -97,6 +98,7 @@ return {
   startup_stage_timeout_s = CONFIG.DEFAULT_STARTUP_STAGE_TIMEOUT,
   rt_default_mode = CONFIG.DEFAULT_RT_MODE,
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
+  reset_log_on_start = CONFIG.DEFAULT_RESET_LOG_ON_START,
   alert_eval_interval = CONFIG.DEFAULT_ALERT_EVAL_INTERVAL,
   alert_history_size = CONFIG.DEFAULT_ALERT_HISTORY_SIZE,
   alert_info_ttl = CONFIG.DEFAULT_ALERT_INFO_TTL,

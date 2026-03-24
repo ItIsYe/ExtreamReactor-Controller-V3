@@ -274,6 +274,7 @@ Runtime log directory resolution:
 Typical runtime log names:
 
 - `master_<node_id>.log`
+- `loader_master.log` (optional bootstrap trace when enabled)
 - `rt_<node_id>.log`
 - `energy_<node_id>.log`
 - `water_<node_id>.log`
@@ -281,6 +282,15 @@ Typical runtime log names:
 - `reprocessor_<node_id>.log`
 
 Optional bootstrap loader logs can also be enabled in each role entry file (`BOOTSTRAP_LOG_ENABLED`).
+
+For clean regression test cycles, the Master now truncates its runtime log on startup (`reset_log_on_start = true` in `xreactor/master/config.lua`).
+You can also force a clean slate manually before an in-game test:
+
+```lua
+fs.delete("/xreactor_logs/master_<node_id>.log")
+fs.delete("/disk/xreactor_logs/master_<node_id>.log") -- when a disk is attached
+```
+
 
 ## Config and state files
 
