@@ -64,10 +64,14 @@ end
 package.loaded["core.logger"] = nil
 local logger = require("core.logger")
 
+write_file("/disk", "__dir__")
 write_file("/xreactor_logs/rt.log", "old-content")
 local status = logger.init({ log_name = "rt", enabled = true, truncate = true })
 if status.startup_action ~= "truncated" then
   error("expected startup_action truncated")
+end
+if status.log_dir ~= "/xreactor_logs" then
+  error("expected default log_dir to stay local even when /disk exists")
 end
 if files["/xreactor_logs/rt.log"] ~= "" then
   error("truncate policy should clear startup file")
@@ -85,6 +89,13 @@ if not files["/xreactor_logs/energy.log.1"] then
 end
 if #moves == 0 then
   error("expected fs.move to be called for rotation")
+end
+
+logger.init({ log_name = "override", enabled = true, truncate = true, log_dir = "/disk/manual_logs" })
+logger.log("OVERRIDE", "manual-path", "INFO")
+logger.flush()
+if not files["/disk/manual_logs/override.log"] then
+  error("expected explicit log_dir override to be honored")
 end
 
 _G.fs = original_fs
