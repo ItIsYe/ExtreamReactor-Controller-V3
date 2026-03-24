@@ -17,7 +17,7 @@ return {
     { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
     { path = "core/logger.lua", size_bytes = 4399, hash = "23101367" },
     { path = "core/monitor_manager.lua", size_bytes = 3146, hash = "ebd69bb0" },
-    { path = "core/network.lua", size_bytes = 12606, hash = "9897268f" },
+    { path = "core/network.lua", size_bytes = 13098, hash = "ac1eee26" },
     { path = "core/protocol.lua", size_bytes = 6086, hash = "602e75c9" },
     { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9" },
     { path = "core/safety.lua", size_bytes = 771, hash = "73bab9de" },
@@ -60,8 +60,8 @@ return {
     },
     rt = {
       { path = "nodes/rt/binding.lua", size_bytes = 2125, hash = "cde378e1" },
-      { path = "nodes/rt/config.lua", size_bytes = 4444, hash = "2b915e1d" },
-      { path = "nodes/rt/main.lua", size_bytes = 99748, hash = "c7d6bf2b" },
+      { path = "nodes/rt/config.lua", size_bytes = 4556, hash = "8c8fa9c7" },
+      { path = "nodes/rt/main.lua", size_bytes = 100122, hash = "eefc76af" },
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4637, hash = "6ec46511" },

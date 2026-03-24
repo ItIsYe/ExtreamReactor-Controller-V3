@@ -6,6 +6,7 @@ local CONFIG = {
   DEFAULT_TURBINES = {}, -- Empty list enables auto-discovery for local turbines.
   DEFAULT_MODEM = nil, -- Legacy modem field; prefer autodetect unless explicitly configured.
   DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
+  DEFAULT_WIRED_MODEM = nil, -- Optional wired modem side override.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
   DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
   DEFAULT_SCAN_INTERVAL = 10, -- Seconds between discovery scans.
@@ -77,6 +78,7 @@ return {
   modem = CONFIG.DEFAULT_MODEM,
 
   wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
+  wired_modem = CONFIG.DEFAULT_WIRED_MODEM,
 
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
   status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
