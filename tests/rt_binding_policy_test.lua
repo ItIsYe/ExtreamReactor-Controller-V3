@@ -12,6 +12,10 @@ end
 if not binding.should_bind("turbine", "BigReactors-Turbine_99", auto) then
   error("auto-discovery must bind discovered turbines")
 end
+local auto_bind, auto_reason = binding.should_bind_with_reason("turbine", "BigReactors-Turbine_99", auto)
+if not auto_bind or not tostring(auto_reason):find("auto%-discovery") then
+  error("auto-discovery reason should be returned for bind decision")
+end
 
 local explicit = binding.build_policy(
   { "BigReactors-Reactor_6" },
@@ -31,6 +35,25 @@ if not binding.should_bind("turbine", "BigReactors-Turbine_327", explicit) then
 end
 if binding.should_bind("turbine", "BigReactors-Turbine_999", explicit) then
   error("explicit turbine list must not bind unconfigured turbine")
+end
+local denied, deny_reason = binding.should_bind_with_reason("turbine", "BigReactors-Turbine_999", explicit)
+if denied then
+  error("explicit policy should deny unknown turbine names")
+end
+if not tostring(deny_reason):find("not listed") then
+  error("explicit policy deny reason should mention explicit list")
+end
+
+local kind_by_type = binding.detect_kind("BigReactors-Turbine", {})
+if kind_by_type ~= "turbine" then
+  error("detect_kind should classify turbines via peripheral type")
+end
+local kind_by_methods, method_reason = binding.detect_kind("unknown", { setFluidFlowRate = true })
+if kind_by_methods ~= "turbine" then
+  error("detect_kind should classify turbines via setFluidFlowRate signature")
+end
+if not tostring(method_reason):find("turbine method signature") then
+  error("detect_kind method signature reason missing")
 end
 
 local auto_msg = binding.missing_devices_message("reactor", auto)

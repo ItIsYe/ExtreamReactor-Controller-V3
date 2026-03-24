@@ -35,13 +35,30 @@ function binding.build_policy(configured_reactors, configured_turbines)
 end
 
 function binding.should_bind(kind, name, policy)
+  local allowed = binding.should_bind_with_reason(kind, name, policy)
+  return allowed
+end
+
+function binding.should_bind_with_reason(kind, name, policy)
   if kind == "reactor" then
-    return policy.allow_all_reactors or policy.reactor_set[name] or false
+    if policy.allow_all_reactors then
+      return true, "auto-discovery enabled (reactors list empty)"
+    end
+    if policy.reactor_set[name] then
+      return true, "configured reactor name match"
+    end
+    return false, "reactor not listed in explicit config"
   end
   if kind == "turbine" then
-    return policy.allow_all_turbines or policy.turbine_set[name] or false
+    if policy.allow_all_turbines then
+      return true, "auto-discovery enabled (turbines list empty)"
+    end
+    if policy.turbine_set[name] then
+      return true, "configured turbine name match"
+    end
+    return false, "turbine not listed in explicit config"
   end
-  return false
+  return false, "unsupported device kind"
 end
 
 function binding.mode_label(kind, policy)
@@ -52,6 +69,24 @@ function binding.mode_label(kind, policy)
     return policy.allow_all_turbines and "auto-discovery" or "explicit"
   end
   return "unknown"
+end
+
+function binding.detect_kind(type_name, methods)
+  local method_set = methods or {}
+  local normalized_type = tostring(type_name or ""):lower()
+  if normalized_type:find("reactor", 1, true) then
+    return "reactor", "type=" .. tostring(type_name)
+  end
+  if normalized_type:find("turbine", 1, true) then
+    return "turbine", "type=" .. tostring(type_name)
+  end
+  if method_set.getControlRodLevel or method_set.setAllControlRodLevels or method_set.getFuelAmount then
+    return "reactor", "reactor method signature"
+  end
+  if method_set.getRotorSpeed or method_set.getRotorRPM or method_set.setFluidFlowRateMax or method_set.setFluidFlowRate then
+    return "turbine", "turbine method signature"
+  end
+  return nil, "unsupported signature"
 end
 
 function binding.missing_devices_message(kind, policy)

@@ -55,10 +55,14 @@ local function open_modem(name, channels)
   end
   local opened = {}
   for _, channel in ipairs(channels or {}) do
-    if type(channel) == "number" and not opened[channel] then
-      local ok, open_err = pcall(modem.open, modem, channel)
+    local channel_type = type(channel)
+    if channel_type ~= "number" then
+      utils.log("NET", "Skipping modem channel open; expected number but got " .. tostring(channel_type) .. " value=" .. tostring(channel), "WARN")
+    elseif not opened[channel] then
+      utils.log("NET", "Opening modem channel (numeric): " .. tostring(channel))
+      local ok, open_err = pcall(modem.open, channel)
       if not ok then
-        return nil, "open failed: " .. tostring(open_err)
+        return nil, "open failed for channel " .. tostring(channel) .. ": " .. tostring(open_err)
       end
       opened[channel] = true
       utils.log("NET", "Opened modem channel: " .. tostring(channel))
@@ -386,7 +390,7 @@ function network.init(config)
       if not sanitized then
         return false, "invalid payload"
       end
-      local ok, err = pcall(modem.transmit, modem, channel, channel, sanitized)
+      local ok, err = pcall(modem.transmit, channel, channel, sanitized)
       if not ok then
         return false, tostring(err)
       end
@@ -403,7 +407,7 @@ function network.init(config)
       if not sanitized then
         return false, "invalid payload"
       end
-      local ok, err = pcall(modem.transmit, modem, channels.control, channels.control, sanitized)
+      local ok, err = pcall(modem.transmit, channels.control, channels.control, sanitized)
       if not ok then
         return false, tostring(err)
       end
