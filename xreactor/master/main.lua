@@ -47,9 +47,28 @@ local debug_enabled = config.debug_logging
 if CONFIG.DEBUG_LOG_ENABLED ~= nil then
   debug_enabled = CONFIG.DEBUG_LOG_ENABLED
 end
-utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled })
+utils.init_logger({
+  log_name = log_name,
+  prefix = CONFIG.LOG_PREFIX,
+  enabled = debug_enabled,
+  truncate = config.reset_log_on_start == true
+})
 utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
 local recovery_status = bootstrap.get_recovery_status and bootstrap.get_recovery_status() or nil
+
+local multiview_source = "unknown"
+do
+  local probe = multiview_ui and multiview_ui.render
+  if type(probe) == "function" and debug and type(debug.getinfo) == "function" then
+    local info = debug.getinfo(probe, "S")
+    multiview_source = info and info.source or multiview_source
+  end
+end
+utils.log(CONFIG.LOG_PREFIX, "Loaded multiview module source: " .. tostring(multiview_source), "INFO")
+utils.log(CONFIG.LOG_PREFIX, "Configured monitor scale: " .. tostring(config.monitor_scale), "INFO")
+if type(config.channels) == "table" then
+  utils.log(CONFIG.LOG_PREFIX, ("Configured channels control=%s status=%s"):format(tostring(config.channels.control), tostring(config.channels.status)), "INFO")
+end
 
 local function clamp_interval(value, fallback, min, max)
   local num = tonumber(value)

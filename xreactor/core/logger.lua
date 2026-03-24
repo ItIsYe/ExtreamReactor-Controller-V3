@@ -145,12 +145,31 @@ local function parse_message_level(message, level)
   return "INFO", text
 end
 
+local function reset_log_file(log_name)
+  local name = resolve_log_name(log_name)
+  local path = string.format("%s/%s.log", CONFIG.LOG_DIR, name)
+  local ok = pcall(function()
+    ensure_dir(CONFIG.LOG_DIR)
+    local file = fs.open(path, "w")
+    if file then
+      file.close()
+    end
+  end)
+  if not ok and not state.warn_once then
+    state.warn_once = true
+    print("WARN: Log reset failed for " .. tostring(path))
+  end
+end
+
 function logger.init(opts)
   opts = opts or {}
   state.enabled = resolve_enabled(opts.enabled)
   state.log_name = resolve_log_name(opts.log_name, opts.prefix)
   state.last_flush = os.clock()
   state.buffer = {}
+  if state.enabled and opts.truncate == true then
+    reset_log_file(state.log_name)
+  end
 end
 
 function logger.set_enabled(enabled)

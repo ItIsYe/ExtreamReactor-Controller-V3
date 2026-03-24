@@ -5,7 +5,7 @@ return {
   base_files = {
     { path = "adapters/energy_storage.lua", size_bytes = 3220, hash = "65c983a9" },
     { path = "adapters/induction_matrix.lua", size_bytes = 4655, hash = "95078398" },
-    { path = "adapters/monitor.lua", size_bytes = 3679, hash = "c8468934" },
+    { path = "adapters/monitor.lua", size_bytes = 3857, hash = "4314c55c" },
     { path = "adapters/reactor.lua", size_bytes = 3894, hash = "bbc5dc89" },
     { path = "adapters/turbine.lua", size_bytes = 3485, hash = "e2d43c15" },
     { path = "core/alert_rules.lua", size_bytes = 12921, hash = "f4c32c65" },
@@ -15,9 +15,9 @@ return {
     { path = "core/control_rails.lua", size_bytes = 2835, hash = "927b12c0" },
     { path = "core/fluid.lua", size_bytes = 1063, hash = "e1a5837b" },
     { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
-    { path = "core/logger.lua", size_bytes = 4399, hash = "23101367" },
+    { path = "core/logger.lua", size_bytes = 4922, hash = "55c44afd" },
     { path = "core/monitor_manager.lua", size_bytes = 3146, hash = "ebd69bb0" },
-    { path = "core/network.lua", size_bytes = 13098, hash = "ac1eee26" },
+    { path = "core/network.lua", size_bytes = 13293, hash = "197b045c" },
     { path = "core/protocol.lua", size_bytes = 6086, hash = "602e75c9" },
     { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9" },
     { path = "core/safety.lua", size_bytes = 771, hash = "73bab9de" },
@@ -45,8 +45,8 @@ return {
   },
   roles = {
     master = {
-      { path = "master/config.lua", size_bytes = 7652, hash = "79cc1be1" },
-      { path = "master/main.lua", size_bytes = 37158, hash = "769eaf60" },
+      { path = "master/config.lua", size_bytes = 7833, hash = "e47fa828" },
+      { path = "master/main.lua", size_bytes = 37915, hash = "d070c845" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
       { path = "master/startup_sequencer.lua", size_bytes = 8165, hash = "fbe5786a" },
       { path = "master/ui/alarms.lua", size_bytes = 1245, hash = "ab00070b" },
