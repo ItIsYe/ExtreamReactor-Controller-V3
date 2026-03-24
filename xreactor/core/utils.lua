@@ -211,7 +211,7 @@ end
 
 -- Initialize file logging for the current runtime.
 function utils.init_logger(opts)
-  logger.init(opts)
+  return logger.init(opts)
 end
 
 -- Log a message using the shared logger (no terminal spam).

@@ -36,6 +36,7 @@ local DEFAULT_CONFIG = {
   role = constants.roles.REPROCESSOR_NODE, -- Node role identifier.
   node_id = "REPROC-1", -- Default node_id used if none is set.
   debug_logging = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
+  reset_log_on_start = true, -- Truncate runtime log at startup to keep disk usage bounded.
   wireless_modem = nil, -- Autodetect wireless modem unless explicitly configured.
   wired_modem = nil, -- Optional wired modem side.
   buffers = { "chemical_tank_0" }, -- Default buffer peripheral names.
@@ -81,6 +82,10 @@ local function validate_config(config_values, defaults)
   if type(config_values.debug_logging) ~= "boolean" then
     config_values.debug_logging = defaults.debug_logging
     add_config_warning("debug_logging missing/invalid; defaulting to " .. tostring(defaults.debug_logging))
+  end
+  if type(config_values.reset_log_on_start) ~= "boolean" then
+    config_values.reset_log_on_start = defaults.reset_log_on_start
+    add_config_warning("reset_log_on_start missing/invalid; defaulting to " .. tostring(defaults.reset_log_on_start))
   end
   if config_values.wireless_modem ~= nil and type(config_values.wireless_modem) ~= "string" then
     config_values.wireless_modem = defaults.wireless_modem
@@ -146,7 +151,15 @@ end
 if (config_meta and config_meta.reason) or #config_warnings > 0 then
   debug_enabled = true
 end
-utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled })
+local log_status = utils.init_logger({
+  log_name = log_name,
+  prefix = CONFIG.LOG_PREFIX,
+  enabled = debug_enabled,
+  truncate = config.reset_log_on_start == true
+})
+if log_status and log_status.enabled then
+  utils.log(CONFIG.LOG_PREFIX, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)), "INFO")
+end
 utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
 if config_meta and config_meta.reason then
   utils.log(CONFIG.LOG_PREFIX, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.", "WARN")

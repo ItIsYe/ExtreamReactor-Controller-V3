@@ -5,6 +5,7 @@ local STARTUP_PATH = "/startup"
 local STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n"
 local BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
 local MANIFEST_URL = BASE_URL .. "manifest.lua"
+local INCLUDE_DEV_FILES = false
 
 local function safe_mkdir(path)
   if fs.exists(path) then
@@ -302,13 +303,18 @@ local function normalize_file_list(entries)
   return list
 end
 
-local function build_expected_files(base_files, role_files)
+local function build_expected_files(base_files, role_files, dev_files)
   local expected = {}
   for _, entry in ipairs(base_files) do
     expected[entry.path] = entry
   end
   for _, entry in ipairs(role_files) do
     expected[entry.path] = entry
+  end
+  if INCLUDE_DEV_FILES then
+    for _, entry in ipairs(dev_files or {}) do
+      expected[entry.path] = entry
+    end
   end
   return expected
 end
@@ -438,7 +444,8 @@ local function run_install()
     fatal("Role error: " .. tostring(role_err))
   end
 
-  local expected = build_expected_files(base_files, role_files)
+  local dev_files = normalize_file_list(manifest.dev_files)
+  local expected = build_expected_files(base_files, role_files, dev_files)
   install_files(expected)
   ensure_role_config(role.label)
   ensure_startup_script()
@@ -477,7 +484,8 @@ local function run_update()
     fatal("Role error: " .. tostring(role_err))
   end
 
-  local expected = build_expected_files(base_files, role_files)
+  local dev_files = normalize_file_list(manifest.dev_files)
+  local expected = build_expected_files(base_files, role_files, dev_files)
   ensure_install_root()
   update_files(expected)
   remove_obsolete_files(expected)
