@@ -325,6 +325,12 @@ local function validate_config(config_values, defaults)
 end
 
 validate_config(config, DEFAULT_CONFIG)
+if config.wireless_modem == nil and type(config.modem) == "string" then
+  config.wireless_modem = config.modem
+  add_config_warning("legacy modem field detected; mapped modem -> wireless_modem")
+elseif type(config.modem) == "string" and config.wireless_modem ~= config.modem then
+  add_config_warning("legacy modem field ignored because wireless_modem override is set")
+end
 -- Initialize file logging early to capture startup events.
 local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
 local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)

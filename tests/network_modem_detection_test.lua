@@ -122,6 +122,46 @@ local function test_override_wins_over_autodetect()
   end
 end
 
+local function test_legacy_modem_alias_maps_to_wireless_override()
+  install_peripheral({
+    names = { 'a', 'z' },
+    entries = {
+      a = { type = 'modem', wrap = build_modem({ isWireless = true }) },
+      z = { type = 'modem', wrap = build_modem({ isWireless = true }) },
+    },
+  })
+  local network = reset_network()
+  local net = network.init({
+    role = 'MASTER',
+    modem = 'z',
+  })
+  if net.selected_modems.wireless.name ~= 'z' then
+    error('legacy modem field should alias to wireless override')
+  end
+  if net.selected_modems.wireless_source ~= 'config override' then
+    error('legacy modem alias should report config override source')
+  end
+end
+
+local function test_wireless_override_wins_over_legacy_modem_alias()
+  install_peripheral({
+    names = { 'a', 'z' },
+    entries = {
+      a = { type = 'modem', wrap = build_modem({ isWireless = true }) },
+      z = { type = 'modem', wrap = build_modem({ isWireless = true }) },
+    },
+  })
+  local network = reset_network()
+  local net = network.init({
+    role = 'MASTER',
+    modem = 'a',
+    wireless_modem = 'z',
+  })
+  if net.selected_modems.wireless.name ~= 'z' then
+    error('wireless_modem must take precedence over legacy modem field')
+  end
+end
+
 local function test_no_hard_left_right_required()
   install_peripheral({
     names = { 'bottom', 'top' },
@@ -146,6 +186,8 @@ end
 test_autodetect_wireless_and_wired()
 test_invalid_override_falls_back()
 test_override_wins_over_autodetect()
+test_legacy_modem_alias_maps_to_wireless_override()
+test_wireless_override_wins_over_legacy_modem_alias()
 test_no_hard_left_right_required()
 
 print('network_modem_detection_test.lua: ok')

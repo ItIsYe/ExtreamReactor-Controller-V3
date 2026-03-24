@@ -197,6 +197,14 @@ local function resolve_modems(config)
 
   local wireless_override = type(config.wireless_modem) == "string" and config.wireless_modem or nil
   local wired_override = type(config.wired_modem) == "string" and config.wired_modem or nil
+  local legacy_modem = type(config.modem) == "string" and config.modem or nil
+
+  if not wireless_override and legacy_modem then
+    wireless_override = legacy_modem
+    warn_once("modem.legacy.alias", "WARN: legacy config field \"modem\" detected; treating as wireless_modem override")
+  elseif wireless_override and legacy_modem and wireless_override ~= legacy_modem then
+    warn_once("modem.legacy.ignored", "WARN: legacy modem field ignored because wireless_modem override is set")
+  end
 
   if wireless_override then
     local entry = entry_by_name(discovered, wireless_override)
