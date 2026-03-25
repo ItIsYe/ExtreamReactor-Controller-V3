@@ -429,6 +429,13 @@ local function preflight_storage(storage_plan, allow_cleanup)
 
   local required_bytes = storage_plan.required_bytes
   local free_bytes = fs.getFreeSpace("/")
+  info(string.format("Storage preflight free bytes: %d", free_bytes))
+  info(string.format("Storage preflight payload estimate: %d", storage_plan.payload_bytes))
+  info(string.format(
+    "Storage preflight safety buffer: %d fixed + %d dynamic",
+    storage_plan.fixed_buffer_bytes,
+    storage_plan.percent_buffer_bytes
+  ))
   if free_bytes >= required_bytes then
     info(string.format(
       "Storage preflight OK (free=%d payload=%d buffer=%d+%d required=%d)",
@@ -438,6 +445,7 @@ local function preflight_storage(storage_plan, allow_cleanup)
       storage_plan.percent_buffer_bytes,
       required_bytes
     ))
+    info("Storage preflight result: ok")
     return true
   end
 
@@ -449,6 +457,7 @@ local function preflight_storage(storage_plan, allow_cleanup)
     storage_plan.percent_buffer_bytes,
     required_bytes
   ))
+  warn("Storage preflight result: not ok")
   if allow_cleanup then
     cleanup_stage_and_logs(true)
     free_bytes = fs.getFreeSpace("/")
@@ -461,8 +470,10 @@ local function preflight_storage(storage_plan, allow_cleanup)
         storage_plan.percent_buffer_bytes,
         required_bytes
       ))
+      info("Storage preflight result after cleanup: ok")
       return true
     end
+    warn("Storage preflight result after cleanup: not ok")
   end
 
   return false, string.format(
@@ -524,11 +535,13 @@ end
 
 local function stage_expected_files(expected)
   if fs.exists(STAGE_ROOT) then
+    info("Removing stale stage root")
     fs.delete(STAGE_ROOT)
   end
   if not safe_mkdir(STAGE_ROOT) then
     fatal("Unable to create stage root: " .. STAGE_ROOT)
   end
+  info("Installing files into stage root: " .. STAGE_ROOT)
   for _, entry in pairs(expected) do
     local target_path = STAGE_ROOT .. "/" .. entry.path
     local ok, err = download_file(entry.path, target_path, entry)
@@ -571,14 +584,17 @@ local function verify_stage(expected)
 end
 
 local function activate_stage()
+  info("Committing staged install")
   if fs.exists(BACKUP_ROOT) then
     fs.delete(BACKUP_ROOT)
   end
 
   if fs.exists(INSTALL_ROOT) then
+    info("Moving active install to backup")
     fs.move(INSTALL_ROOT, BACKUP_ROOT)
   end
 
+  info("Activating stage as live install")
   local moved = pcall(fs.move, STAGE_ROOT, INSTALL_ROOT)
   if not moved then
     warn("Stage activation failed; attempting rollback")
@@ -595,7 +611,11 @@ local function activate_stage()
   end
 
   if fs.exists(BACKUP_ROOT) then
+    info("Removing backup after successful commit")
     fs.delete(BACKUP_ROOT)
+  end
+  if fs.exists(STAGE_ROOT) then
+    fs.delete(STAGE_ROOT)
   end
 end
 
