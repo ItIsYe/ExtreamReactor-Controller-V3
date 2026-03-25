@@ -66,6 +66,7 @@ local comms_service = require("services.comms_service")
 local discovery_service = require("services.discovery_service")
 local telemetry_service = require("services.telemetry_service")
 local control_service = require("services.control_service")
+local turbine_regulator = require("core.turbine_regulator")
 
 local INFO = "INFO"
 local DEBUG = "DEBUG"
@@ -533,10 +534,7 @@ local function get_target_rpm()
 end
 
 local function clamp_turbine_flow(rate)
-  if type(rate) ~= "number" then
-    rate = config.autonom.min_flow
-  end
-  return safety.clamp(rate, MIN_FLOW, MAX_FLOW)
+  return turbine_regulator.clamp_flow(rate, MIN_FLOW, MAX_FLOW)
 end
 
 local function clamp_rods(level, allow_overmax)
@@ -695,10 +693,52 @@ local function build_capabilities(name)
     setActive = has_method(methods, "setActive"),
     setFluidFlowRate = has_method(methods, "setFluidFlowRate"),
     setFluidFlowRateMax = has_method(methods, "setFluidFlowRateMax"),
+    getFluidFlowRate = has_method(methods, "getFluidFlowRate"),
+    getFluidFlowRateMax = has_method(methods, "getFluidFlowRateMax"),
+    getRotorSpeed = has_method(methods, "getRotorSpeed"),
+    getRotorRPM = has_method(methods, "getRotorRPM"),
     getControlRods = has_method(methods, "getControlRods"),
     setInductorEngaged = has_method(methods, "setInductorEngaged"),
     setAllControlRodLevels = has_method(methods, "setAllControlRodLevels")
   }
+end
+
+local function read_turbine_rpm(turbine, caps)
+  if not turbine then
+    return nil, "NO_TURBINE"
+  end
+  if caps and caps.getRotorSpeed and turbine.getRotorSpeed then
+    local ok, value = pcall(turbine.getRotorSpeed, turbine)
+    if ok and type(value) == "number" then
+      return value, "getRotorSpeed"
+    end
+  end
+  if caps and caps.getRotorRPM and turbine.getRotorRPM then
+    local ok, value = pcall(turbine.getRotorRPM, turbine)
+    if ok and type(value) == "number" then
+      return value, "getRotorRPM"
+    end
+  end
+  return nil, "RPM_UNAVAILABLE"
+end
+
+local function read_turbine_flow(turbine, caps)
+  if not turbine then
+    return nil, "NO_TURBINE"
+  end
+  if caps and caps.getFluidFlowRate and turbine.getFluidFlowRate then
+    local ok, value = pcall(turbine.getFluidFlowRate, turbine)
+    if ok and type(value) == "number" then
+      return value, "getFluidFlowRate"
+    end
+  end
+  if caps and caps.getFluidFlowRateMax and turbine.getFluidFlowRateMax then
+    local ok, value = pcall(turbine.getFluidFlowRateMax, turbine)
+    if ok and type(value) == "number" then
+      return value, "getFluidFlowRateMax"
+    end
+  end
+  return nil, "FLOW_UNAVAILABLE"
 end
 
 local function init_turbine_ctrl()
@@ -741,12 +781,12 @@ local function setTurbineFlow(turbine, caps, rate)
   local clamped = clamp_turbine_flow(rate)
   if caps.setFluidFlowRate then
     turbine.setFluidFlowRate(clamped)
-    return true
+    return true, "setFluidFlowRate"
   elseif caps.setFluidFlowRateMax then
     turbine.setFluidFlowRateMax(clamped)
-    return true
+    return true, "setFluidFlowRateMax"
   end
-  return false
+  return false, "NO_FLOW_API"
 end
 
 local function setInductor(turbine, caps, engaged)
@@ -1004,14 +1044,28 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   if type(rpm) == "number" then
     ctrl.rpm = rpm
   end
+  local old_flow = ctrl.flow
   local flow, mode = update_turbine_flow_state(rpm, target_rpm, ctrl)
-  local ok, result = pcall(setTurbineFlow, turbine, caps, flow)
-  log("DEBUG", "Turbine " .. name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " mode=" .. tostring(mode) .. " coil=" .. tostring(ctrl.inductor_engaged))
+  local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, flow)
+  local observed_flow, flow_reader = read_turbine_flow(turbine, caps)
+  local direction = mode
+  log("DEBUG", "TurbineCtrl name=" .. name
+      .. " rpm=" .. tostring(rpm)
+      .. " target_rpm=" .. tostring(target_rpm)
+      .. " old_flow=" .. tostring(old_flow)
+      .. " new_flow=" .. tostring(flow)
+      .. " direction=" .. tostring(direction)
+      .. " set_api=" .. tostring(setter)
+      .. " set_called=" .. tostring(ok and applied)
+      .. " flow_read=" .. tostring(observed_flow)
+      .. " flow_api=" .. tostring(flow_reader)
+      .. " mode=" .. tostring(mode)
+      .. " coil=" .. tostring(ctrl.inductor_engaged))
   if not ctrl.logged then
     log("INFO", "Turbine " .. name .. " active, initial flow " .. tostring(ctrl.flow))
     ctrl.logged = true
   end
-  return ok, result
+  return ok, applied, setter
 end
 
 local set_reactors_active
@@ -1086,13 +1140,7 @@ local function updateActuators()
         warn_unsupported(name)
         goto continue_turbine
       end
-      local rpm = nil
-      if turbine.getRotorSpeed then
-        local ok, value = pcall(turbine.getRotorSpeed, turbine)
-        if ok and type(value) == "number" then
-          rpm = value
-        end
-      end
+      local rpm = select(1, read_turbine_rpm(turbine, caps))
       local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
       if not ok_inductor then
         warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
@@ -1102,13 +1150,14 @@ local function updateActuators()
         warn_unsupported(name)
         goto continue_turbine
       end
-      local ok, result = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
+      local ok, result, setter = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       if not ok then
         warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
         goto continue_turbine
       end
       if not result then
         warn_unsupported(name)
+        log("DEBUG", "TurbineCtrl skip name=" .. name .. " reason=FLOW_SET_UNSUPPORTED state=AUTONOM api=" .. tostring(setter))
       end
       ::continue_turbine::
     end
@@ -1884,6 +1933,7 @@ local function adjust_turbines()
   local target_rpm = get_target_rpm()
   for _, module in pairs(modules) do
     if module.type == "turbine" and module.peripheral then
+      local can_regulate, reject_reason = turbine_regulator.should_regulate_module_state(module.state)
       if module.state == "OFF" or module.state == "ERROR" then
         local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or nil
         if module.caps and module.caps.setInductorEngaged then
@@ -1907,9 +1957,17 @@ local function adjust_turbines()
         end
         local ctrl = get_turbine_ctrl(module.name)
         ctrl.mode = TURBINE_MODE.RAMP
+        if config.debug_logging then
+          log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=" .. tostring(reject_reason) .. " state=" .. tostring(module.state))
+        end
       elseif module.state == "STARTING" then
+        log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=STATE_STARTING")
         goto continue_adjust_turbine
       else
+        if not can_regulate then
+          log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=" .. tostring(reject_reason) .. " state=" .. tostring(module.state))
+          goto continue_adjust_turbine
+        end
         if not module.caps or not module.caps.setInductorEngaged then
           warn_unsupported(module.name)
           goto continue_adjust_turbine
@@ -1924,7 +1982,7 @@ local function adjust_turbines()
             warn_unsupported(module.name)
           end
         end
-        local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or nil
+        local rpm, rpm_reader = read_turbine_rpm(module.peripheral, module.caps)
         local ok_inductor, inductor_result = update_inductor_for_rpm(module.name, module.peripheral, module.caps, rpm)
         if not ok_inductor then
           warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
@@ -1941,6 +1999,7 @@ local function adjust_turbines()
         end
         if not flow_result then
           warn_unsupported(module.name)
+          log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=FLOW_SET_UNSUPPORTED state=" .. tostring(module.state) .. " rpm_api=" .. tostring(rpm_reader))
           goto continue_adjust_turbine
         end
       end
@@ -2099,7 +2158,7 @@ local function process_startup()
     else
       module.progress = 0
     end
-    if rpm >= target_rpm and target_rpm > 0 then
+    if turbine_regulator.startup_reached_target(rpm, target_rpm, RPM_TOL) then
       mark_stable(module, now)
       active_startup = nil
     end
