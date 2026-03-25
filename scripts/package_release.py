@@ -60,6 +60,16 @@ def run_manifest_sync(write: bool):
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
 
+def run_cc_parse_guard():
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "cc_parse_guard.py"),
+        "--file",
+        "xreactor/nodes/rt/main.lua",
+    ]
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+
+
 def build_zip(output_zip: pathlib.Path):
     output_zip.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -75,6 +85,7 @@ def main():
     parser.add_argument("--sync", action="store_true", help="sync manifest/release metadata before packaging")
     args = parser.parse_args()
 
+    run_cc_parse_guard()
     run_manifest_sync(write=args.sync)
 
     if not sync_release_metadata(write=args.sync):

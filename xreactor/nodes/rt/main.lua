@@ -67,6 +67,8 @@ local discovery_service = require("services.discovery_service")
 local telemetry_service = require("services.telemetry_service")
 local control_service = require("services.control_service")
 local turbine_regulator = require("core.turbine_regulator")
+local monitor_ui = require("nodes.rt.monitor_ui")
+local state_handlers = require("nodes.rt.state_handlers")
 
 local INFO = "INFO"
 local DEBUG = "DEBUG"
@@ -489,8 +491,6 @@ local status_snapshot = nil
 local last_snapshot = 0
 local monitor = nil
 local monitor_name = nil
-local last_monitor_update = 0
-local monitor_router = nil
 local last_actuator_update = 0
 local last_command = nil
 local last_command_ts = nil
@@ -2247,335 +2247,47 @@ local function note_master_seen()
   master_seen = os.epoch("utc")
 end
 
-local function collect_reactor_temp_stats()
-  local sum, count, max_temp = 0, 0, 0
-  for _, name in ipairs(config.reactors) do
-    local reactor = peripherals.reactors[name]
-    if reactor and reactor.getCasingTemperature then
-      local ok, temp = pcall(reactor.getCasingTemperature, reactor)
-      if ok and type(temp) == "number" then
-        sum = sum + temp
-        count = count + 1
-        if temp > max_temp then
-          max_temp = temp
-        end
-      end
-    end
-  end
-  return sum, count, max_temp
-end
-
-local function collect_turbine_rpm_stats()
-  local sum, count = 0, 0
-  for _, name in ipairs(config.turbines) do
-    local turbine = peripherals.turbines[name]
-    if turbine and turbine.getRotorSpeed then
-      local ok, rpm = pcall(turbine.getRotorSpeed, turbine)
-      if ok and type(rpm) == "number" then
-        sum = sum + rpm
-        count = count + 1
-      end
-    end
-  end
-  return sum, count
-end
-
-local function build_turbine_status_details()
-  local details = {}
-  for _, name in ipairs(config.turbines) do
-    local turbine = peripherals.turbines[name]
-    local ctrl = get_turbine_ctrl(name)
-    local rpm = nil
-    local active = nil
-    local coil = ctrl.inductor_engaged
-    if turbine and turbine.getRotorSpeed then
-      local ok, value = pcall(turbine.getRotorSpeed, turbine)
-      if ok and type(value) == "number" then
-        rpm = value
-      end
-    end
-    if turbine and turbine.getActive then
-      local ok, value = pcall(turbine.getActive, turbine)
-      if ok then
-        active = value
-      end
-    end
-    if turbine and turbine.getInductorEngaged then
-      local ok, value = pcall(turbine.getInductorEngaged, turbine)
-      if ok then
-        coil = value
-      end
-    end
-    details[name] = {
-      rpm = rpm,
-      flow = ctrl.flow,
-      coil = coil,
-      mode = ctrl.mode,
-      active = active
-    }
-  end
-  return details
-end
-
-local function build_reactor_status_details()
-  local details = {}
-  for _, name in ipairs(config.reactors) do
-    local reactor = peripherals.reactors[name]
-    local rods = nil
-    local temp = nil
-    local active = nil
-    if reactor and reactor.getControlRodLevel then
-      local ok, value = pcall(reactor.getControlRodLevel, reactor, 0)
-      if ok and type(value) == "number" then
-        rods = value
-      end
-    end
-    if reactor and reactor.getCasingTemperature then
-      local ok, value = pcall(reactor.getCasingTemperature, reactor)
-      if ok and type(value) == "number" then
-        temp = value
-      end
-    end
-    if reactor and reactor.getActive then
-      local ok, value = pcall(reactor.getActive, reactor)
-      if ok then
-        active = value
-      end
-    end
-    details[name] = {
-      rods = rods,
-      temp = temp,
-      active = active
-    }
-  end
-  return details
-end
-
 local function update_status_snapshot()
-  local now = os.epoch("utc")
-  local interval = (config.status_interval or 5) * 1000
-  if now - last_snapshot < interval then
-    return status_snapshot
-  end
-  last_snapshot = now
-
-  local temp_sum, temp_count, temp_max = collect_reactor_temp_stats()
-  local rpm_sum, rpm_count = collect_turbine_rpm_stats()
-
-  local avg_temp = temp_count > 0 and (temp_sum / temp_count) or 0
-  local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
-  local master_ok = is_master_connected()
-  local turbine_details = build_turbine_status_details()
-  local reactor_details = build_reactor_status_details()
-
-  status_snapshot = {
-    node_id = comms and comms.network and comms.network.id or config.node_id,
-    state = current_state,
-    master_connected = master_ok,
-    reactor_count = #config.reactors,
-    turbine_count = #config.turbines,
-    avg_temp = avg_temp,
-    max_temp = temp_max,
-    avg_rpm = avg_rpm,
-    turbines = turbine_details,
-    reactors = reactor_details,
-    timestamp = now
-  }
-
-  if config.status_log then
-    log("INFO", "Status snapshot updated")
-  end
-
-  return status_snapshot
+  last_status_snapshot = monitor_ui.update_status_snapshot({
+    devices = devices,
+    registry = registry,
+    comms = comms,
+    config = config,
+    read_turbine_rpm = read_turbine_rpm,
+    read_turbine_flow = read_turbine_flow,
+    get_device_caps = get_device_caps,
+    get_available_steam = get_available_steam,
+    last_status_snapshot = last_status_snapshot
+  })
+  return last_status_snapshot
 end
 
 local function init_monitor()
-  local entry = monitor_adapter.find(nil, "first", config.monitor_scale, CONFIG.LOG_PREFIX)
-  monitor = entry and entry.mon or nil
-  monitor_name = entry and entry.name or nil
-  if monitor then
-    pcall(monitor.setBackgroundColor, monitor, colors.black)
-    pcall(monitor.setTextColor, monitor, colors.white)
-    pcall(monitor.clear, monitor)
-  end
-end
-
-local function format_value(value)
-  if value == nil then
-    return "n/a"
-  end
-  if type(value) == "number" then
-    return string.format("%.0f", value)
-  end
-  return tostring(value)
-end
-
-local function render_alert_banner(target, model)
-  if model.local_alerts_critical and model.local_alerts_critical > 0 then
-    local w = select(1, ui.getSize(target))
-    if not w then
-      return
-    end
-    local label = "CRIT " .. tostring(model.local_alerts_critical)
-    ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
-  end
-end
-
-local function monitor_snapshot(model)
-  return model and model.snapshot and model.snapshot.snapshot or nil
-end
-
-local function build_details_rows(snapshot)
-  local rows = {}
-  for name, info in pairs(snapshot and snapshot.turbines or {}) do
-    table.insert(rows, { text = ("T %s rpm:%s flow:%s"):format(name, format_value(info.rpm), format_value(info.flow)) })
-  end
-  for name, info in pairs(snapshot and snapshot.reactors or {}) do
-    table.insert(rows, { text = ("R %s rods:%s temp:%s"):format(name, format_value(info.rods), format_value(info.temp)) })
-  end
-  if #rows == 0 then
-    table.insert(rows, { text = "No modules detected", status = "WARNING" })
-  end
-  return rows
-end
-
-local function build_diagnostic_rows(model)
-  local reasons = table.concat(model.health.reasons or {}, ",")
-  local rows = {
-    { text = ("Health: %s"):format(model.health.status), status = model.health.status },
-    { text = ("Reasons: %s"):format(reasons ~= "" and reasons or "none") },
-    { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
-    { text = ("Last scan: %s"):format(model.last_scan) },
-    { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
-    { text = ("Comms q:%d inflight:%d retries:%d"):format(
-      model.comms.queue_depth or 0,
-      model.comms.inflight_count or 0,
-      model.metrics.retries or 0
-    ) },
-    { text = ("Comms drop:%d dedupe:%d timeouts:%d"):format(
-      model.metrics.dropped or 0,
-      model.metrics.dedupe_hits or 0,
-      model.metrics.timeouts or 0
-    ) },
-    { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
-  }
-  if model.local_alerts and #model.local_alerts > 0 then
-    table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
-    for _, alert in ipairs(model.local_alerts) do
-      local sev = alert.severity and alert.severity:sub(1, 1) or "?"
-      local title = alert.title or alert.message or alert.code or "alert"
-      local status = alert.severity == "CRITICAL" and "EMERGENCY" or alert.severity == "WARN" and "WARNING" or "OK"
-      table.insert(rows, { text = string.format("%s %s", sev, title), status = status })
-    end
-  end
-  return rows
-end
-
-local function render_overview(target, model)
-  local w, h = ui.getSize(target)
-  if not w or not h then
-    return
-  end
-  local snapshot = monitor_snapshot(model)
-  ui.panel(target, 1, 1, w, h, "RT NODE", model.health.status)
-  render_alert_banner(target, model)
-  ui.text(target, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
-  ui.badge(target, w - 6, 2, model.health.status, model.health.status)
-  ui.text(target, 2, 4, ("State: %s"):format(current_state), colors.get("text"), colors.get("background"))
-  ui.text(target, 2, 5, ("Reactors: %d"):format(model.summary.kinds.reactor and model.summary.kinds.reactor.bound or 0), colors.get("text"), colors.get("background"))
-  ui.text(target, 2, 6, ("Turbines: %d"):format(model.summary.kinds.turbine and model.summary.kinds.turbine.bound or 0), colors.get("text"), colors.get("background"))
-  local policy = binding.build_policy(configured_reactors, configured_turbines)
-  if (model.summary.kinds.reactor and model.summary.kinds.reactor.bound or 0) == 0 then
-    ui.text(target, 2, 7, policy.allow_all_reactors and "Reactors: auto-discovery waiting" or "Reactors: explicit binding unmatched", colors.get("WARNING"), colors.get("background"))
-  else
-    ui.text(target, 2, 7, ("Avg Temp: %.1f"):format(snapshot and snapshot.avg_temp or 0), colors.get("text"), colors.get("background"))
-  end
-  if (model.summary.kinds.turbine and model.summary.kinds.turbine.bound or 0) == 0 then
-    ui.text(target, 2, 8, policy.allow_all_turbines and "Turbines: auto-discovery waiting" or "Turbines: explicit binding unmatched", colors.get("WARNING"), colors.get("background"))
-  else
-    ui.text(target, 2, 8, ("Target RPM: %d"):format(get_target_rpm()), colors.get("text"), colors.get("background"))
-  end
-end
-
-local function render_details(target, model)
-  local w, h = ui.getSize(target)
-  if not w or not h then
-    return
-  end
-  local snapshot = monitor_snapshot(model)
-  ui.panel(target, 1, 1, w, h, "RT DETAILS", model.health.status)
-  render_alert_banner(target, model)
-  local rows = build_details_rows(snapshot)
-  ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
-end
-
-local function render_diagnostics(target, model)
-  local w, h = ui.getSize(target)
-  if not w or not h then
-    return
-  end
-  ui.panel(target, 1, 1, w, h, "RT DIAGNOSTICS", model.health.status)
-  render_alert_banner(target, model)
-  local rows = build_diagnostic_rows(model)
-  ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+  monitor = monitor_ui.init(monitor_adapter, config.monitor, config.monitor_scale)
 end
 
 local function update_monitor()
-  if not monitor then return end
-  local now = os.epoch("utc")
-  if now - last_monitor_update < (config.monitor_interval * 1000) then
-    return
-  end
-  last_monitor_update = now
-  local snapshot = update_status_snapshot()
-  local health_payload = build_health_payload()
-  local summary = devices.registry_summary or registry:get_summary()
-  local comms_diag = comms and comms:get_diagnostics() or {}
-  local metrics = comms_diag.metrics or {}
-  local master_state = "UNKNOWN"
-  local master_age = "n/a"
-  for _, peer in pairs(comms_diag.peers or {}) do
-    if peer.role == constants.roles.MASTER then
-      master_state = peer.down and "DOWN" or "OK"
-      master_age = peer.age and (math.floor(peer.age) .. "s") or "n/a"
-      break
-    end
-  end
-  local node_id = snapshot and snapshot.node_id or config.node_id
-  local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
-  local local_alerts = alert_payload and alert_payload.top or {}
-  local local_critical = alert_payload and alert_payload.critical or 0
-  local snapshot_key = {
-    snapshot = snapshot,
-    local_alerts = local_critical
-  }
-  local model = {
-    snapshot = snapshot_key,
-    health = health_payload,
-    summary = summary,
-    comms = comms_diag,
-    metrics = metrics,
-    master_state = master_state,
-    master_age = master_age,
-    last_scan = devices.last_scan_ts and (math.floor((now - devices.last_scan_ts) / 1000) .. "s") or "n/a",
+  last_status_snapshot = monitor_ui.update(monitor, {
+    config = config,
+    devices = devices,
+    registry = registry,
+    comms = comms,
+    constants = constants,
+    master_alerts = master_alerts,
     last_command = last_command,
-    last_command_ts = last_command_ts and (math.floor((now - last_command_ts) / 1000) .. "s") or "n/a",
-    local_alerts = local_alerts,
-    local_alerts_critical = local_critical,
-    node_id = node_id
-  }
-  if not monitor_router then
-    monitor_router = ui_router.new({
-      pages = {
-        { name = "Overview", render = render_overview },
-        { name = "Details", render = render_details },
-        { name = "Diagnostics", render = render_diagnostics }
-      },
-      key_prev = { [keys.left] = true, [keys.pageUp] = true },
-      key_next = { [keys.right] = true, [keys.pageDown] = true }
-    })
-  end
-  monitor_router:render(monitor, model)
+    last_command_ts = last_command_ts,
+    current_state = current_state,
+    configured_reactors = configured_reactors,
+    configured_turbines = configured_turbines,
+    get_target_rpm = get_target_rpm,
+    binding = binding,
+    build_health_payload = build_health_payload,
+    read_turbine_rpm = read_turbine_rpm,
+    read_turbine_flow = read_turbine_flow,
+    get_device_caps = get_device_caps,
+    get_available_steam = get_available_steam,
+    last_status_snapshot = last_status_snapshot
+  })
 end
 
 local function reset_startup_watchdog()
@@ -2653,110 +2365,39 @@ local function handle_startup_timeout()
   startup_queue = {}
 end
 
-local states = {
-  [constants.node_states.OFF] = {
-    on_enter = function()
-      reset_startup_watchdog()
-      scram()
-      targets.power, targets.steam, targets.rpm = 0, 0, 0
-    end,
-    on_tick = function()
-      monitor_master()
-    end
-  },
-  [constants.node_states.STARTUP] = {
-    on_enter = function()
-      startup_started_ms = os.epoch("utc")
-      startup_watchdog_tripped = false
-      targets.steam = 0
-      targets.rpm = TARGET_RPM
-      startup_queue = {}
-      for _, entry in ipairs(devices.turbines or {}) do
-        table.insert(startup_queue, entry.id)
-      end
-      for _, entry in ipairs(devices.reactors or {}) do
-        table.insert(startup_queue, entry.id)
-      end
-    end,
-    on_tick = function()
-      if startup_started_ms and not startup_watchdog_tripped then
-        local now = os.epoch("utc")
-        if now - startup_started_ms >= (config.startup_watchdog_s or 60) * 1000 then
-          handle_startup_timeout()
-        end
-      end
-      if not active_startup and #startup_queue > 0 then
-        local next_id = table.remove(startup_queue, 1)
-        local module = modules[next_id]
-        if module then
-          start_module(module.id, module.type, "NORMAL")
-        end
-      end
-      adjust_turbines()
-      adjust_reactors()
-      monitor_master()
-      if not active_startup and #startup_queue == 0 then
-        node_state_machine:transition(constants.node_states.RUNNING)
-      end
-    end
-  },
-  [constants.node_states.RUNNING] = {
-    on_enter = function()
-      reset_startup_watchdog()
-    end,
-    on_tick = function()
-      adjust_turbines()
-      adjust_reactors()
-      monitor_master()
-    end
-  },
-  [constants.node_states.LIMITED] = {
-    on_enter = function()
-      reset_startup_watchdog()
-    end,
-    on_tick = function()
-      targets.power = targets.power * 0.5
-      adjust_reactors()
-      adjust_turbines()
-      monitor_master()
-    end
-  },
-  [constants.node_states.AUTONOM] = {
-    on_enter = function()
-      reset_startup_watchdog()
-      active_startup = nil
-      startup_queue = {}
-      clamp_autonom_targets()
-    end,
-    on_tick = function()
-      clamp_autonom_targets()
-      adjust_reactors()
-      adjust_turbines()
-      if current_state == STATE.MASTER then
-        node_state_machine:transition(constants.node_states.RUNNING)
-      end
-    end
-  },
-  [constants.node_states.MANUAL] = {
-    on_enter = function()
-      reset_startup_watchdog()
-    end,
-    on_tick = function()
-      monitor_master()
-    end
-  },
-  [constants.node_states.EMERGENCY] = {
-    on_enter = function()
-      reset_startup_watchdog()
-      scram()
-      targets.power, targets.steam, targets.rpm = 0, 0, 0
-      add_alarm(comms.network.id, "EMERGENCY", "SCRAM triggered")
-    end,
-    on_tick = function()
-      monitor_master()
-    end
+local states
+
+local function build_state_context()
+  return {
+    constants = constants,
+    STATE = STATE,
+    config = config,
+    devices = devices,
+    modules = modules,
+    comms = comms,
+    targets = targets,
+    reset_startup_watchdog = reset_startup_watchdog,
+    scram = scram,
+    monitor_master = monitor_master,
+    get_target_rpm = get_target_rpm,
+    start_module = start_module,
+    adjust_turbines = adjust_turbines,
+    adjust_reactors = adjust_reactors,
+    clamp_autonom_targets = clamp_autonom_targets,
+    add_alarm = add_alarm,
+    handle_startup_timeout = handle_startup_timeout,
+    get_startup_started_ms = function() return startup_started_ms end,
+    set_startup_started_ms = function(value) startup_started_ms = value end,
+    get_startup_watchdog_tripped = function() return startup_watchdog_tripped end,
+    set_startup_watchdog_tripped = function(value) startup_watchdog_tripped = value end,
+    get_startup_queue = function() return startup_queue end,
+    set_startup_queue = function(value) startup_queue = value end,
+    get_active_startup = function() return active_startup end,
+    set_active_startup = function(value) active_startup = value end,
+    get_current_state = function() return current_state end,
+    get_node_state_machine = function() return node_state_machine end
   }
-}
+end
 
 local function handle_command(message)
   local function record(result)
@@ -2905,6 +2546,7 @@ local function init()
     end
   }))
   services:init()
+  states = state_handlers.build(build_state_context())
   node_state_machine = machine.new(states, constants.node_states.OFF)
   apply_mode(STATE.AUTONOM)
   init_monitor()
@@ -2923,9 +2565,7 @@ while true do
     elseif event[1] == "timer" and event[2] == timer then
       break
     elseif event[1] == "monitor_touch" or event[1] == "key" then
-      if monitor_router then
-        monitor_router:handle_input(event)
-      end
+      monitor_ui.handle_input(event)
     end
   end
   if os.epoch("utc") - last_heartbeat > hb * 1000 then
