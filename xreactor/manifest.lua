@@ -66,7 +66,7 @@ return {
       { path = "nodes/rt/binding.lua", size_bytes = 3437, hash = "672c87ad" },
       { path = "nodes/rt/config.lua", size_bytes = 4717, hash = "af4475f1" },
       { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62" },
-      { path = "nodes/rt/main.lua", size_bytes = 106821, hash = "6f640959", required_for = { "RT" } },
+      { path = "nodes/rt/main.lua", size_bytes = 107257, hash = "fe93b566", required_for = { "RT" } },
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4795, hash = "56a3dea5" },

@@ -2247,45 +2247,41 @@ local function note_master_seen()
   master_seen = os.epoch("utc")
 end
 
-local function update_status_snapshot()
-  local now = os.epoch("utc")
-  local interval = (config.status_interval or 5) * 1000
-  if now - last_snapshot < interval then
-    return status_snapshot
-  end
-  last_snapshot = now
-
-  local temp_sum, temp_count, temp_max = 0, 0, 0
+local function collect_reactor_temp_stats()
+  local sum, count, max_temp = 0, 0, 0
   for _, name in ipairs(config.reactors) do
     local reactor = peripherals.reactors[name]
     if reactor and reactor.getCasingTemperature then
       local ok, temp = pcall(reactor.getCasingTemperature, reactor)
       if ok and type(temp) == "number" then
-        temp_sum = temp_sum + temp
-        temp_count = temp_count + 1
-        if temp > temp_max then
-          temp_max = temp
+        sum = sum + temp
+        count = count + 1
+        if temp > max_temp then
+          max_temp = temp
         end
       end
     end
   end
+  return sum, count, max_temp
+end
 
-  local rpm_sum, rpm_count = 0, 0
+local function collect_turbine_rpm_stats()
+  local sum, count = 0, 0
   for _, name in ipairs(config.turbines) do
     local turbine = peripherals.turbines[name]
     if turbine and turbine.getRotorSpeed then
       local ok, rpm = pcall(turbine.getRotorSpeed, turbine)
       if ok and type(rpm) == "number" then
-        rpm_sum = rpm_sum + rpm
-        rpm_count = rpm_count + 1
+        sum = sum + rpm
+        count = count + 1
       end
     end
   end
+  return sum, count
+end
 
-  local avg_temp = temp_count > 0 and (temp_sum / temp_count) or 0
-  local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
-  local master_ok = is_master_connected()
-  local turbine_details = {}
+local function build_turbine_status_details()
+  local details = {}
   for _, name in ipairs(config.turbines) do
     local turbine = peripherals.turbines[name]
     local ctrl = get_turbine_ctrl(name)
@@ -2310,7 +2306,7 @@ local function update_status_snapshot()
         coil = value
       end
     end
-    turbine_details[name] = {
+    details[name] = {
       rpm = rpm,
       flow = ctrl.flow,
       coil = coil,
@@ -2318,8 +2314,11 @@ local function update_status_snapshot()
       active = active
     }
   end
+  return details
+end
 
-  local reactor_details = {}
+local function build_reactor_status_details()
+  local details = {}
   for _, name in ipairs(config.reactors) do
     local reactor = peripherals.reactors[name]
     local rods = nil
@@ -2343,12 +2342,31 @@ local function update_status_snapshot()
         active = value
       end
     end
-    reactor_details[name] = {
+    details[name] = {
       rods = rods,
       temp = temp,
       active = active
     }
   end
+  return details
+end
+
+local function update_status_snapshot()
+  local now = os.epoch("utc")
+  local interval = (config.status_interval or 5) * 1000
+  if now - last_snapshot < interval then
+    return status_snapshot
+  end
+  last_snapshot = now
+
+  local temp_sum, temp_count, temp_max = collect_reactor_temp_stats()
+  local rpm_sum, rpm_count = collect_turbine_rpm_stats()
+
+  local avg_temp = temp_count > 0 and (temp_sum / temp_count) or 0
+  local avg_rpm = rpm_count > 0 and (rpm_sum / rpm_count) or 0
+  local master_ok = is_master_connected()
+  local turbine_details = build_turbine_status_details()
+  local reactor_details = build_reactor_status_details()
 
   status_snapshot = {
     node_id = comms and comms.network and comms.network.id or config.node_id,
