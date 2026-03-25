@@ -12,10 +12,14 @@ local installer = read("installer")
 
 local required_snippets = {
   "local STAGE_ROOT = \"/xreactor_stage\"",
-  "local function preflight_storage(required_bytes, allow_cleanup)",
+  "local function preflight_storage(storage_plan, allow_cleanup)",
+  "Storage preflight OK (free=%d payload=%d buffer=%d+%d required=%d)",
+  "Not enough free space (free=%d payload=%d buffer=%d+%d required=%d)",
   "if entry.always == true or role_matches(entry.required_for, role_label) then",
   "local function activate_stage()",
-  "Stage activation failed; attempting rollback"
+  "Stage activation failed; attempting rollback",
+  "if fs.exists(STAGE_ROOT) then\n      fs.delete(STAGE_ROOT)\n    end\n    return false, \"Download failed: \" .. tostring(err)",
+  "if entry.path and (INCLUDE_DEV_FILES or not should_exclude_prod_path(entry.path)) then"
 }
 
 for _, snippet in ipairs(required_snippets) do
