@@ -29,7 +29,7 @@ return {
     { path = "core/ui.lua", size_bytes = 8665, hash = "51814858" },
     { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
     { path = "core/utils.lua", size_bytes = 8466, hash = "a0e346aa" },
-    { path = "release.lua", size_bytes = 290, hash = "8a71abd9", always = true },
+    { path = "release.lua", size_bytes = 302, hash = "7f1da6c9", always = true },
     { path = "services/alert_service.lua", size_bytes = 10068, hash = "f5ad1d30" },
     { path = "services/comms_service.lua", size_bytes = 5599, hash = "1c80d077" },
     { path = "services/control_service.lua", size_bytes = 419, hash = "01a44c98" },

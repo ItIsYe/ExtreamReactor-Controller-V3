@@ -9,6 +9,7 @@ local BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Contro
 local MANIFEST_URL = BASE_URL .. "manifest.lua"
 local INCLUDE_DEV_FILES = false
 local STORAGE_BUFFER_BYTES = 65536
+local STORAGE_PERCENT_BUFFER = 0.15
 
 local function safe_mkdir(path)
   if fs.exists(path) then
@@ -311,9 +312,25 @@ local function normalize_file_list(entries)
   return list
 end
 
+local function should_exclude_prod_path(path)
+  if type(path) ~= "string" then
+    return true
+  end
+  if path:match("^tests/") then
+    return true
+  end
+  if path:match("^docs/") then
+    return true
+  end
+  if path == "README.md" or path == "MIGRATION.md" then
+    return true
+  end
+  return false
+end
+
 local function merge_unique(entries, source)
   for _, entry in ipairs(source or {}) do
-    if entry.path then
+    if entry.path and (INCLUDE_DEV_FILES or not should_exclude_prod_path(entry.path)) then
       entries[entry.path] = entry
     end
   end
@@ -374,19 +391,29 @@ local function select_expected_files(manifest, role_label)
   return expected
 end
 
-local function estimate_required_bytes(expected)
+local function estimate_required_storage(expected)
   local total = 0
   for _, entry in pairs(expected) do
     total = total + math.max(0, tonumber(entry.size_bytes) or 0)
   end
-  local with_buffer = total + STORAGE_BUFFER_BYTES + math.floor(total * 0.15)
-  return with_buffer
+  local percent_buffer = math.floor(total * STORAGE_PERCENT_BUFFER)
+  local required = total + STORAGE_BUFFER_BYTES + percent_buffer
+  return {
+    payload_bytes = total,
+    fixed_buffer_bytes = STORAGE_BUFFER_BYTES,
+    percent_buffer_bytes = percent_buffer,
+    required_bytes = required
+  }
 end
 
-local function cleanup_stage_and_logs()
+local function cleanup_stage_and_logs(cleanup_logs)
   if fs.exists(STAGE_ROOT) then
     info("Cleaning stale stage directory")
     fs.delete(STAGE_ROOT)
+  end
+  if cleanup_logs and fs.exists(LOG_DIR) then
+    info("Cleaning log directory to recover storage")
+    fs.delete(LOG_DIR)
   end
   local rotated = LOG_DIR .. "/installer.log.1"
   if fs.exists(rotated) then
@@ -394,29 +421,58 @@ local function cleanup_stage_and_logs()
   end
 end
 
-local function preflight_storage(required_bytes, allow_cleanup)
+local function preflight_storage(storage_plan, allow_cleanup)
   if not fs.getFreeSpace then
     warn("Free space check unavailable; continuing without preflight")
     return true
   end
 
+  local required_bytes = storage_plan.required_bytes
   local free_bytes = fs.getFreeSpace("/")
   if free_bytes >= required_bytes then
-    info(string.format("Storage preflight OK (required=%d free=%d)", required_bytes, free_bytes))
+    info(string.format(
+      "Storage preflight OK (free=%d payload=%d buffer=%d+%d required=%d)",
+      free_bytes,
+      storage_plan.payload_bytes,
+      storage_plan.fixed_buffer_bytes,
+      storage_plan.percent_buffer_bytes,
+      required_bytes
+    ))
     return true
   end
 
-  warn(string.format("Storage low before install/update (required=%d free=%d)", required_bytes, free_bytes))
+  warn(string.format(
+    "Storage low before install/update (free=%d payload=%d buffer=%d+%d required=%d)",
+    free_bytes,
+    storage_plan.payload_bytes,
+    storage_plan.fixed_buffer_bytes,
+    storage_plan.percent_buffer_bytes,
+    required_bytes
+  ))
   if allow_cleanup then
-    cleanup_stage_and_logs()
+    cleanup_stage_and_logs(true)
     free_bytes = fs.getFreeSpace("/")
     if free_bytes >= required_bytes then
-      info(string.format("Storage preflight OK after cleanup (required=%d free=%d)", required_bytes, free_bytes))
+      info(string.format(
+        "Storage preflight OK after cleanup (free=%d payload=%d buffer=%d+%d required=%d)",
+        free_bytes,
+        storage_plan.payload_bytes,
+        storage_plan.fixed_buffer_bytes,
+        storage_plan.percent_buffer_bytes,
+        required_bytes
+      ))
       return true
     end
   end
 
-  return false, string.format("Not enough free space (required=%d free=%d)", required_bytes, free_bytes)
+  return false, string.format(
+    "Not enough free space (free=%d payload=%d buffer=%d+%d required=%d)",
+    free_bytes,
+    storage_plan.payload_bytes,
+    storage_plan.fixed_buffer_bytes,
+    storage_plan.percent_buffer_bytes,
+    required_bytes
+  )
 end
 
 local function list_files(dir, prefix, out)
@@ -477,9 +533,13 @@ local function stage_expected_files(expected)
     local target_path = STAGE_ROOT .. "/" .. entry.path
     local ok, err = download_file(entry.path, target_path, entry)
     if not ok then
-      fatal("Download failed: " .. tostring(err))
+      if fs.exists(STAGE_ROOT) then
+        fs.delete(STAGE_ROOT)
+      end
+      return false, "Download failed: " .. tostring(err)
     end
   end
+  return true
 end
 
 local function copy_config_to_stage()
@@ -527,6 +587,9 @@ local function activate_stage()
     end
     if fs.exists(BACKUP_ROOT) then
       fs.move(BACKUP_ROOT, INSTALL_ROOT)
+    end
+    if fs.exists(STAGE_ROOT) then
+      fs.delete(STAGE_ROOT)
     end
     fatal("Failed to activate staged install")
   end
@@ -577,13 +640,16 @@ local function run_install()
   end
 
   local expected = select_expected_files(manifest, role.label)
-  local required_bytes = estimate_required_bytes(expected)
-  local preflight_ok, preflight_err = preflight_storage(required_bytes, true)
+  local storage_plan = estimate_required_storage(expected)
+  local preflight_ok, preflight_err = preflight_storage(storage_plan, true)
   if not preflight_ok then
     fatal("Storage preflight failed: " .. tostring(preflight_err))
   end
 
-  stage_expected_files(expected)
+  local stage_files_ok, stage_files_err = stage_expected_files(expected)
+  if not stage_files_ok then
+    fatal(tostring(stage_files_err))
+  end
   ensure_role_config(STAGE_ROOT, role.label)
   local stage_ok, stage_err = verify_stage(expected)
   if not stage_ok then
@@ -623,13 +689,16 @@ local function run_update()
   info("Selected role: " .. role_label)
 
   local expected = select_expected_files(manifest, role_label)
-  local required_bytes = estimate_required_bytes(expected)
-  local preflight_ok, preflight_err = preflight_storage(required_bytes, false)
+  local storage_plan = estimate_required_storage(expected)
+  local preflight_ok, preflight_err = preflight_storage(storage_plan, false)
   if not preflight_ok then
     fatal("Storage preflight failed: " .. tostring(preflight_err))
   end
 
-  stage_expected_files(expected)
+  local stage_files_ok, stage_files_err = stage_expected_files(expected)
+  if not stage_files_ok then
+    fatal(tostring(stage_files_err))
+  end
   copy_config_to_stage()
   local stage_ok, stage_err = verify_stage(expected)
   if not stage_ok then
