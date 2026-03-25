@@ -130,7 +130,7 @@ function sequencer.new(comms, ramp_profile, opts)
           table.insert(expanded, step)
         end
       else
-        table.insert(expanded, { node_id = entry.node_id, module_id = "all", module_type = "reactor" })
+        table.insert(expanded, { node_id = entry.node_id })
       end
     end
     self.queue = expanded
@@ -140,9 +140,15 @@ function sequencer.new(comms, ramp_profile, opts)
     if self.state == states.idle and #self.queue > 0 then
       if not self.queue[1].module_id then
         self.build_steps(nodes)
-        if #self.queue == 0 then return end
+        if #self.queue == 0 or not self.queue[1].module_id then return end
       end
       self.active = table.remove(self.queue, 1)
+      local node = nodes and nodes[self.active.node_id]
+      if not node or node.mode ~= "MASTER" then
+        table.insert(self.queue, 1, self.active)
+        self.active = nil
+        return
+      end
       local payload = {
         target = constants.command_targets.STARTUP_STAGE or constants.command_targets.REQUEST_STARTUP_MODULE,
         value = {

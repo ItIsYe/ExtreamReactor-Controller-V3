@@ -1294,7 +1294,7 @@ local function apply_mode(mode)
     if setState(STATE.MASTER) then
       local current = node_state_machine.state()
       if current == constants.node_states.OFF or current == constants.node_states.AUTONOM then
-        node_state_machine:transition(constants.node_states.RUNNING)
+        node_state_machine:transition(constants.node_states.STARTUP)
       end
     end
   elseif mode == STATE.SAFE then
@@ -1303,6 +1303,40 @@ local function apply_mode(mode)
       node_state_machine:transition(constants.node_states.EMERGENCY)
     end
   end
+end
+
+local function has_off_modules(kind)
+  for _, module in pairs(modules) do
+    if module.type == kind and module.state == "OFF" then
+      return true
+    end
+  end
+  return false
+end
+
+local function request_startup_if_needed(reason)
+  if current_state ~= STATE.MASTER then
+    return false
+  end
+  local machine_state = node_state_machine and node_state_machine.state and node_state_machine.state() or nil
+  if machine_state ~= constants.node_states.RUNNING and machine_state ~= constants.node_states.OFF then
+    return false
+  end
+  local needs_turbine = targets.enable_turbines ~= false and has_off_modules("turbine")
+  local needs_reactor = targets.enable_reactors ~= false and has_off_modules("reactor")
+  if not needs_turbine and not needs_reactor then
+    return false
+  end
+  if active_startup then
+    return false
+  end
+  log("INFO", ("Startup requested reason=%s turbines_off=%s reactors_off=%s"):format(
+    tostring(reason or "unknown"),
+    tostring(needs_turbine),
+    tostring(needs_reactor)
+  ))
+  node_state_machine:transition(constants.node_states.STARTUP)
+  return true
 end
 
 cache = function()
@@ -1958,7 +1992,20 @@ local function adjust_turbines()
         local ctrl = get_turbine_ctrl(module.name)
         ctrl.mode = TURBINE_MODE.RAMP
         if config.debug_logging then
-          log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=" .. tostring(reject_reason) .. " state=" .. tostring(module.state))
+          local startup_hint = "UNKNOWN"
+          if current_state ~= STATE.MASTER then
+            startup_hint = "MODE_" .. tostring(current_state)
+          elseif targets.enable_turbines == false then
+            startup_hint = "TURBINES_DISABLED"
+          elseif node_state_machine.state() == constants.node_states.STARTUP then
+            startup_hint = "STARTUP_PENDING"
+          else
+            startup_hint = "NO_START_REQUEST"
+          end
+          log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name)
+            .. " reason=" .. tostring(reject_reason)
+            .. " state=" .. tostring(module.state)
+            .. " startup_hint=" .. tostring(startup_hint))
         end
       elseif module.state == "STARTING" then
         log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=STATE_STARTING")
@@ -2030,9 +2077,13 @@ local function check_interlocks(module)
 end
 
 local function mark_stable(module, now)
+  local previous = module.state
   module.state = "STABLE"
   module.progress = 1
   module.stable_since = now
+  if previous ~= module.state then
+    log("INFO", ("Module state %s %s -> %s reason=STARTUP_STABLE"):format(tostring(module.id), tostring(previous), tostring(module.state)))
+  end
 end
 
 local function start_module(module_id, module_type, ramp_profile)
@@ -2049,6 +2100,7 @@ local function start_module(module_id, module_type, ramp_profile)
   if module.state == "STABLE" or module.state == "RUNNING" then
     return module, "Already running"
   end
+  local previous = module.state
   module.state = "STARTING"
   module.progress = 0
   module.limits = {}
@@ -2056,6 +2108,12 @@ local function start_module(module_id, module_type, ramp_profile)
   module.ramp_profile = ramp_profile or "NORMAL"
   module.stable_since = nil
   active_startup = module_id
+  log("INFO", ("Module state %s %s -> %s reason=START_REQUEST profile=%s"):format(
+    tostring(module.id),
+    tostring(previous),
+    tostring(module.state),
+    tostring(module.ramp_profile)
+  ))
   if module.type == "turbine" then
     local ctrl = get_turbine_ctrl(module.name)
     ctrl.mode = TURBINE_MODE.RAMP
@@ -2194,6 +2252,7 @@ end
 local function update_module_states()
   local now = os.epoch("utc")
   for _, module in pairs(modules) do
+    local previous = module.state
     local limits = update_module_limits(module)
     if module.type == "reactor" and module.state ~= "OFF" then
       for _, limit in ipairs(limits) do
@@ -2223,6 +2282,25 @@ local function update_module_states()
       module.state = "LIMITED"
     elseif module.state == "LIMITED" and #module.limits == 0 then
       module.state = "RUNNING"
+    end
+    if previous ~= module.state then
+      local reason = "STATE_UPDATE"
+      if module.state == "RUNNING" and previous == "STABLE" then
+        reason = "STABLE_WINDOW_ELAPSED"
+      elseif module.state == "LIMITED" then
+        reason = "LIMIT_ACTIVE"
+      elseif previous == "LIMITED" and module.state == "RUNNING" then
+        reason = "LIMIT_CLEARED"
+      elseif module.state == "ERROR" then
+        reason = "SAFETY_LIMIT"
+      end
+      log("INFO", ("Module state %s %s -> %s reason=%s limits=%s"):format(
+        tostring(module.id),
+        tostring(previous),
+        tostring(module.state),
+        tostring(reason),
+        table.concat(module.limits or {}, ",")
+      ))
     end
   end
 end
@@ -2448,6 +2526,7 @@ local function handle_command(message)
     if value.enable_turbines ~= nil then
       targets.enable_turbines = value.enable_turbines and true or false
     end
+    request_startup_if_needed("SET_SETPOINTS")
   elseif command.target == constants.command_targets.POWER_TARGET then
     if current_state == STATE.MASTER then
       targets.power = command.value
@@ -2496,6 +2575,7 @@ local function control_tick()
   process_startup()
   update_module_states()
   updateReactorControl()
+  request_startup_if_needed("CONTROL_TICK")
   if current_state == STATE.SAFE and node_state_machine.state() ~= constants.node_states.EMERGENCY then
     node_state_machine:transition(constants.node_states.EMERGENCY)
   end
