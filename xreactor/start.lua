@@ -35,6 +35,17 @@ local function read_role_config()
   return nil, "Role config invalid"
 end
 
+local function read_release_info()
+  if not fs.exists("/xreactor/release.lua") then
+    return nil
+  end
+  local ok, result = pcall(dofile, "/xreactor/release.lua")
+  if ok and type(result) == "table" then
+    return result
+  end
+  return nil
+end
+
 local role, err = read_role_config()
 if not role then
   logger.log("STARTUP", "ERROR: " .. tostring(err))
@@ -47,7 +58,16 @@ if not entry then
   error("Unknown role: " .. tostring(role), 0)
 end
 
-logger.log("STARTUP", "Starting XReactor role: " .. tostring(role))
+local release = read_release_info() or {}
+logger.log(
+  "STARTUP",
+  string.format(
+    "Starting XReactor role=%s release=%s manifest=%s",
+    tostring(role),
+    tostring(release.release_id or release.commit_sha or "unknown"),
+    tostring(release.manifest_id or release.manifest_version or "unknown")
+  )
+)
 
 local ok = shell.run(entry)
 if not ok then
