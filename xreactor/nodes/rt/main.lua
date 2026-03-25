@@ -2263,7 +2263,13 @@ local function update_status_snapshot()
 end
 
 local function init_monitor()
-  monitor = monitor_ui.init(monitor_adapter, config.monitor, config.monitor_scale)
+  local monitor_name_or_err
+  monitor, monitor_name_or_err = monitor_ui.init(monitor_adapter, config.monitor, config.monitor_scale)
+  if not monitor then
+    log(WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no monitor available"))
+  elseif monitor_name_or_err then
+    log(INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
+  end
 end
 
 local function update_monitor()
