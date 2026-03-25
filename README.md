@@ -190,6 +190,21 @@ The installer validates downloaded files before keeping them:
 
 That means blob/HTML downloads are explicitly treated as installation failures.
 
+### Build/Release consistency (manifest + package)
+
+To avoid stale ZIP artifacts and manifest drift, build release artifacts only via the repo scripts:
+
+```bash
+python scripts/manifest_sync.py --write
+python scripts/package_release.py --sync --output dist/xreactor-release.zip
+```
+
+The packaging command validates and/or synchronizes:
+
+- all manifest file hashes/sizes,
+- installer hash/size in `xreactor/release.lua`,
+- ZIP content directly from the current repository working tree (`installer` + `xreactor/**`).
+
 ### Current storage paths used by the installer
 
 - Install root: `/xreactor`
