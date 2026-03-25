@@ -7,6 +7,64 @@ local M = {
   last_monitor_update = 0
 }
 
+local function warn(message)
+  print("[RT][MONITOR_UI][WARN] " .. tostring(message))
+end
+
+local function try_set_scale(monitor, scale, monitor_name)
+  if not monitor or type(scale) ~= "number" or not monitor.setTextScale then
+    return
+  end
+  local ok, err = pcall(monitor.setTextScale, monitor, scale)
+  if not ok then
+    warn(("setTextScale failed for %s: %s"):format(tostring(monitor_name), tostring(err)))
+  end
+end
+
+local function normalize_monitor_result(result)
+  if type(result) == "table" then
+    if result.mon then
+      return result.mon, result.name
+    end
+    if result.monitor then
+      return result.monitor, result.name
+    end
+  end
+  return result
+end
+
+local function resolve_monitor(monitor_adapter, preferred_name, monitor_scale)
+  if type(monitor_adapter) ~= "table" then
+    return nil, "monitor adapter missing"
+  end
+
+  if type(monitor_adapter.find) == "function" then
+    local found = monitor_adapter.find(preferred_name, "first", monitor_scale, "RT")
+    local monitor, monitor_name = normalize_monitor_result(found)
+    if monitor then
+      return monitor, monitor_name
+    end
+  end
+
+  if type(monitor_adapter.wrap) == "function" and preferred_name then
+    local monitor = monitor_adapter.wrap(preferred_name)
+    if monitor then
+      try_set_scale(monitor, monitor_scale, preferred_name)
+      return monitor, preferred_name
+    end
+  end
+
+  if preferred_name and peripheral and type(peripheral.wrap) == "function" then
+    local monitor = peripheral.wrap(preferred_name)
+    if monitor then
+      try_set_scale(monitor, monitor_scale, preferred_name)
+      return monitor, preferred_name
+    end
+  end
+
+  return nil, preferred_name and ("monitor unavailable: " .. tostring(preferred_name)) or "no monitor found"
+end
+
 local function format_value(value)
   if type(value) ~= "number" then
     return "n/a"
@@ -199,18 +257,13 @@ function M.update_status_snapshot(ctx)
 end
 
 function M.init(monitor_adapter, configured_monitor, monitor_scale)
-  if configured_monitor then
-    M.monitor_router = nil
-    M.last_monitor_update = 0
-    return monitor_adapter.wrap(configured_monitor)
-  end
-  local monitor_name = monitor_adapter.find()
-  if not monitor_name then return nil end
-  local monitor = monitor_adapter.wrap(monitor_name)
-  if monitor and monitor.setTextScale then monitor.setTextScale(monitor_scale) end
   M.monitor_router = nil
   M.last_monitor_update = 0
-  return monitor
+  local monitor, monitor_name_or_err = resolve_monitor(monitor_adapter, configured_monitor, monitor_scale)
+  if not monitor then
+    return nil, monitor_name_or_err
+  end
+  return monitor, monitor_name_or_err
 end
 
 function M.update(monitor, ctx)
