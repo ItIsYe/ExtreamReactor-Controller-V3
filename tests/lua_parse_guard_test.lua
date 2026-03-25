@@ -1,6 +1,13 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
 local files = {
+  'xreactor/start.lua',
+  'xreactor/core/turbine_regulator.lua',
+  'xreactor/nodes/energy/main.lua',
+  'xreactor/nodes/fuel/main.lua',
+  'xreactor/nodes/reprocessor/main.lua',
+  'xreactor/nodes/rt/main.lua',
+  'xreactor/nodes/water/main.lua',
   'xreactor/services/alert_service.lua',
   'xreactor/master/ui/alerts.lua'
 }
