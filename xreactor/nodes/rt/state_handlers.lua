@@ -21,10 +21,16 @@ function M.build(ctx)
     ctx.targets.rpm = ctx.get_target_rpm()
     local queue = {}
     for _, entry in ipairs(ctx.devices.turbines or {}) do
-      table.insert(queue, entry.id)
+      local module = ctx.modules[entry.id]
+      if module and module.state == "OFF" and ctx.targets.enable_turbines ~= false then
+        table.insert(queue, entry.id)
+      end
     end
     for _, entry in ipairs(ctx.devices.reactors or {}) do
-      table.insert(queue, entry.id)
+      local module = ctx.modules[entry.id]
+      if module and module.state == "OFF" and ctx.targets.enable_reactors ~= false then
+        table.insert(queue, entry.id)
+      end
     end
     ctx.set_startup_queue(queue)
   end
