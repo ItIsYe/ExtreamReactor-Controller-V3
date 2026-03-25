@@ -20,9 +20,23 @@ local function assert_no_tests(entries, scope)
   end
 end
 
+local function assert_no_docs(entries, scope)
+  for _, entry in ipairs(entries or {}) do
+    local path = type(entry.path) == "string" and entry.path or ""
+    if path:match("^docs/") or path:match("^README%.md$") or path:match("^MIGRATION%.md$") then
+      error(scope .. " should not deploy docs file: " .. path)
+    end
+  end
+end
+
 assert_no_tests(manifest.base_files, "base_files")
 for role, entries in pairs(manifest.roles or {}) do
   assert_no_tests(entries, "roles." .. tostring(role))
+end
+
+assert_no_docs(manifest.base_files, "base_files")
+for role, entries in pairs(manifest.roles or {}) do
+  assert_no_docs(entries, "roles." .. tostring(role))
 end
 
 if type(manifest.dev_files) ~= "table" then
