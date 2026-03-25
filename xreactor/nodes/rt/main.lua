@@ -33,6 +33,7 @@ bootstrap.setup({
 })
 local require = bootstrap.require
 local binding = require("nodes.rt.binding")
+local discovery_log = require("nodes.rt.discovery_log")
 local rails = require("core.control_rails")
 local ensure_turbine_ctrl = require("core.turbine_ctrl")
 
@@ -468,7 +469,8 @@ local devices = {
   registry_load_error = nil,
   proto_mismatch = false,
   binding_signature = nil,
-  last_scan_ts = nil
+  last_scan_ts = nil,
+  discovery_log_signature = nil
 }
 local master_alerts = {}
 local peripherals = { reactors = {}, turbines = {} }
@@ -797,33 +799,19 @@ function applyReactorRods(target, allow_overmax)
     autonom_state.pending_rod_direction = nil
     return false
   end
+  local applied = false
   for name, ctrl in pairs(reactor_ctrl) do
-    local reactor, wrap_err = utils.safe_wrap(name)
-    local caps = get_device_caps("reactors", name)
-    if not reactor then
-      warn_once("reactor_wrap:" .. name, "Reactor wrap failed for " .. name .. ": " .. tostring(wrap_err))
-    elseif caps.setAllControlRodLevels then
-      local ok, result = pcall(reactor.setAllControlRodLevels, reactor, clamped)
-      if ok and result ~= false then
-        ctrl.last_applied = clamped
-      else
-        warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. name)
-      end
-    elseif reactor and reactor.getControlRods then
-      local ok_rods, rods = pcall(reactor.getControlRods, reactor)
-      if ok_rods and type(rods) == "table" then
-        for _, rod in pairs(rods) do
-          if rod and rod.setLevel then
-            pcall(rod.setLevel, rod, clamped)
-          end
-        end
-        ctrl.last_applied = clamped
-      else
-        warn_once("reactor_rods:" .. name, "Reactor control rod read failed for " .. name)
-      end
+    local ok_apply, err_apply = reactor_adapter.apply_rod_level(name, clamped, CONFIG.LOG_PREFIX)
+    if ok_apply then
+      ctrl.last_applied = clamped
+      ctrl.last_known_rods = clamped
+      applied = true
     else
-      warn_once("reactor_rods:" .. name, "Reactor control rods unsupported for " .. name)
+      warn_once("reactor_rods:" .. name, "Reactor control rod write failed for " .. tostring(name) .. ": " .. tostring(err_apply))
     end
+  end
+  if not applied then
+    return false
   end
   local previous_applied = last_applied_rods
   last_applied_rods = clamped
@@ -855,12 +843,15 @@ end
 
 local function read_current_rods()
   for _, name in ipairs(config.reactors or {}) do
-    local reactor = utils.safe_wrap(name)
-    if reactor and reactor.getControlRodLevel then
-      local ok_rods, current_rods = pcall(reactor.getControlRodLevel, reactor, 0)
-      if ok_rods and type(current_rods) == "number" then
-        return current_rods
-      end
+    local current_rods = reactor_adapter.read_control_rods(name, CONFIG.LOG_PREFIX)
+    if type(current_rods) == "number" then
+      local ctrl = ensure_reactor_ctrl(name)
+      ctrl.last_known_rods = current_rods
+      return current_rods
+    end
+    local ctrl = reactor_ctrl[name]
+    if ctrl and type(ctrl.last_known_rods) == "number" then
+      return ctrl.last_known_rods
     end
   end
   return nil
@@ -872,7 +863,7 @@ local function log_reactor_control_state()
     return
   end
   last_reactor_debug_log = now
-  local sample_rods = read_current_rods() or ROD_MAX
+  local sample_rods = read_current_rods() or last_applied_rods or "n/a"
   local tick_age = now - last_reactor_tick
   log("DEBUG", "ReactorCtrl state=" .. tostring(current_state) .. " rods=" .. tostring(sample_rods) .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
 end
@@ -1359,29 +1350,27 @@ end
 
 local function discover()
   local names = peripheral.getNames() or {}
+  table.sort(names)
   local binding_policy = binding.build_policy(configured_reactors, configured_turbines)
   local adapter_map = { reactors = {}, turbines = {} }
   local registry_devices = {}
   local visible_counts = { reactor = 0, turbine = 0 }
   local bound_counts = { reactor = 0, turbine = 0 }
+  local binding_decisions = {}
+  local discovery_had_errors = false
 
-  local function describe_value(value)
-    if type(value) == "table" then
-      return "table"
+  local function add_binding_decision(kind, name, type_name, bound, reason, is_error)
+    table.insert(binding_decisions, {
+      kind = kind,
+      name = name,
+      type_name = type_name,
+      bound = bound and true or false,
+      reason = reason,
+      error = is_error and true or false
+    })
+    if is_error then
+      discovery_had_errors = true
     end
-    return tostring(value)
-  end
-
-  local function log_binding_decision(kind, name, type_name, bound, reason)
-    local action = bound and "bound" or "rejected"
-    log(INFO, string.format(
-      "Discovery %s %s type=%s (%s): %s",
-      tostring(kind),
-      tostring(name),
-      tostring(type_name or "n/a"),
-      tostring(action),
-      tostring(reason or "n/a")
-    ))
   end
 
   for _, name in ipairs(names) do
@@ -1399,7 +1388,7 @@ local function discover()
   for _, name in ipairs(names) do
     local ok, methods = pcall(peripheral.getMethods, name)
     if not ok or type(methods) ~= "table" then
-      log(INFO, "Discovery skipped " .. tostring(name) .. ": methods unavailable")
+      add_binding_decision("unknown", name, peripheral.getType(name), false, "methods unavailable", true)
       goto continue
     end
     local method_set = {}
@@ -1417,7 +1406,7 @@ local function discover()
           adapter_map.reactors[name] = info
           bound_counts.reactor = bound_counts.reactor + 1
         end
-        log_binding_decision("reactor", name, type_name, bound, reason)
+        add_binding_decision("reactor", name, type_name, bound, reason)
         table.insert(registry_devices, {
           name = name,
           type = info.type,
@@ -1428,7 +1417,7 @@ local function discover()
           schema = info.schema
         })
       else
-        log_binding_decision("reactor", name, type_name, false, "adapter inspect failed")
+        add_binding_decision("reactor", name, type_name, false, "adapter inspect failed", true)
       end
     elseif kind == "turbine" then
       visible_counts.turbine = visible_counts.turbine + 1
@@ -1439,7 +1428,7 @@ local function discover()
           adapter_map.turbines[name] = info
           bound_counts.turbine = bound_counts.turbine + 1
         end
-        log_binding_decision("turbine", name, type_name, bound, reason)
+        add_binding_decision("turbine", name, type_name, bound, reason)
         table.insert(registry_devices, {
           name = name,
           type = info.type,
@@ -1450,25 +1439,51 @@ local function discover()
           schema = info.schema
         })
       else
-        log_binding_decision("turbine", name, type_name, false, "adapter inspect failed")
+        add_binding_decision("turbine", name, type_name, false, "adapter inspect failed", true)
       end
     else
-      log(INFO, "Discovery ignored " .. tostring(name) .. ": " .. tostring(kind_reason) .. " type=" .. describe_value(type_name))
+      add_binding_decision("unknown", name, type_name, false, tostring(kind_reason), false)
     end
     ::continue::
   end
 
-  log(INFO, string.format(
-    "Discovery summary visible reactors=%d turbines=%d | bound reactors=%d turbines=%d",
-    visible_counts.reactor,
-    visible_counts.turbine,
-    bound_counts.reactor,
-    bound_counts.turbine
-  ))
-  log(INFO, "Visible reactors count: " .. tostring(visible_counts.reactor))
-  log(INFO, "Visible turbines count: " .. tostring(visible_counts.turbine))
-  log(INFO, "Bound reactors count: " .. tostring(bound_counts.reactor))
-  log(INFO, "Bound turbines count: " .. tostring(bound_counts.turbine))
+  local summary = {
+    visible_reactors = visible_counts.reactor,
+    visible_turbines = visible_counts.turbine,
+    bound_reactors = bound_counts.reactor,
+    bound_turbines = bound_counts.turbine
+  }
+  local discovery_signature = discovery_log.build_signature(summary, binding_decisions)
+  local log_details = discovery_log.should_log_details(devices.discovery_log_signature, discovery_signature, discovery_had_errors)
+  devices.discovery_log_signature = discovery_signature
+  if log_details then
+    for _, decision in ipairs(binding_decisions) do
+      local action = decision.bound and "bound" or "rejected"
+      log(INFO, string.format(
+        "Discovery %s %s type=%s (%s): %s",
+        tostring(decision.kind),
+        tostring(decision.name),
+        tostring(decision.type_name or "n/a"),
+        tostring(action),
+        tostring(decision.reason or "n/a")
+      ))
+    end
+    log(INFO, string.format(
+      "Discovery summary visible reactors=%d turbines=%d | bound reactors=%d turbines=%d",
+      visible_counts.reactor,
+      visible_counts.turbine,
+      bound_counts.reactor,
+      bound_counts.turbine
+    ))
+  else
+    log(DEBUG, string.format(
+      "Discovery unchanged visible reactors=%d turbines=%d | bound reactors=%d turbines=%d",
+      visible_counts.reactor,
+      visible_counts.turbine,
+      bound_counts.reactor,
+      bound_counts.turbine
+    ))
+  end
 
   registry:sync(registry_devices)
   devices.adapters = adapter_map
