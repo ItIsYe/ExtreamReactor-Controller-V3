@@ -7,7 +7,7 @@ return {
       { path = "adapters/energy_storage.lua", size_bytes = 3220, hash = "65c983a9" },
       { path = "adapters/induction_matrix.lua", size_bytes = 4655, hash = "95078398" },
       { path = "adapters/monitor.lua", size_bytes = 4071, hash = "6829b71f" },
-      { path = "adapters/reactor.lua", size_bytes = 4021, hash = "9c8b57d1" },
+      { path = "adapters/reactor.lua", size_bytes = 8753, hash = "455ef7a1" },
       { path = "adapters/turbine.lua", size_bytes = 3486, hash = "d06dd6fb" },
       { path = "core/alert_rules.lua", size_bytes = 13140, hash = "dd28ae5e" },
       { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
@@ -29,7 +29,7 @@ return {
       { path = "core/ui.lua", size_bytes = 8665, hash = "51814858" },
       { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
       { path = "core/utils.lua", size_bytes = 8466, hash = "a0e346aa" },
-      { path = "release.lua", size_bytes = 330, hash = "77e4cd0a", always = true },
+      { path = "release.lua", size_bytes = 330, hash = "6264fbf3", always = true },
       { path = "services/alert_service.lua", size_bytes = 10068, hash = "f5ad1d30" },
       { path = "services/comms_service.lua", size_bytes = 5599, hash = "1c80d077" },
       { path = "services/control_service.lua", size_bytes = 419, hash = "01a44c98" },
@@ -64,7 +64,8 @@ return {
     rt = {
       { path = "nodes/rt/binding.lua", size_bytes = 3437, hash = "672c87ad" },
       { path = "nodes/rt/config.lua", size_bytes = 4717, hash = "af4475f1" },
-      { path = "nodes/rt/main.lua", size_bytes = 103641, hash = "c62edddb", required_for = { "RT" } },
+      { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62" },
+      { path = "nodes/rt/main.lua", size_bytes = 104006, hash = "902254ec", required_for = { "RT" } },
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4795, hash = "56a3dea5" },
