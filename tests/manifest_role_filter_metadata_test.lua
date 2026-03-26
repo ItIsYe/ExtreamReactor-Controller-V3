@@ -55,4 +55,35 @@ for role_key, role_label in pairs(required) do
   end
 end
 
+
+local function contains_path(entries, wanted)
+  for _, entry in ipairs(entries or {}) do
+    if entry.path == wanted then
+      return true
+    end
+  end
+  return false
+end
+
+local base_paths = manifest.base_files or {}
+if contains_path(base_paths, "core/alert_rules.lua") then
+  error("core/alert_rules.lua should not be in base_files")
+end
+if contains_path(base_paths, "adapters/reactor.lua") then
+  error("adapters/reactor.lua should not be in base_files")
+end
+if contains_path(base_paths, "adapters/energy_storage.lua") then
+  error("adapters/energy_storage.lua should not be in base_files")
+end
+
+if not contains_path((manifest.roles or {}).master, "core/alert_rules.lua") then
+  error("expected master role to include core/alert_rules.lua")
+end
+if not contains_path((manifest.roles or {}).rt, "adapters/reactor.lua") then
+  error("expected rt role to include adapters/reactor.lua")
+end
+if not contains_path((manifest.roles or {}).energy, "adapters/energy_storage.lua") then
+  error("expected energy role to include adapters/energy_storage.lua")
+end
+
 print("manifest_role_filter_metadata_test.lua: ok")

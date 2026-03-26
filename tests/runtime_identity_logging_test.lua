@@ -9,7 +9,7 @@ local function read(path)
 end
 
 local start_lua = read("xreactor/start.lua")
-if not start_lua:find("Starting XReactor role=%%s release=%%s manifest=%%s", 1, true) then
+if not start_lua:find("Starting XReactor role=%%s release=%%s manifest=%%s files=%%s", 1, true) then
   error("startup identity log format missing")
 end
 

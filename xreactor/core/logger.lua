@@ -1,4 +1,5 @@
 local DEFAULT_LOG_DIR = "/xreactor_logs"
+local DISK_LOG_DIR = "/disk/xreactor_logs"
 
 local function normalize_log_dir(path)
   if type(path) ~= "string" then
@@ -12,33 +13,21 @@ local function normalize_log_dir(path)
   return trimmed
 end
 
-local function resolve_log_dir(opts)
-  local explicit = opts and normalize_log_dir(opts.log_dir)
-  if explicit then
-    return explicit
-  end
-  if settings and settings.get then
-    local configured = normalize_log_dir(settings.get("xreactor.log_dir"))
-    if configured then
-      return configured
-    end
-  end
-  return DEFAULT_LOG_DIR
-end
-
--- CONFIG
 local CONFIG = {
-  LOG_DIR = DEFAULT_LOG_DIR, -- Directory for log files.
-  SETTINGS_KEY = "xreactor.debug_logging", -- settings API key for enabling debug logs.
-  DEFAULT_ENABLED = false, -- Default debug logging state when no config/setting exists.
-  FLUSH_LINES = 8, -- Buffer size before flushing to disk.
-  FLUSH_INTERVAL = 2, -- Seconds between flushes during active logging.
-  MAX_BYTES = 200000, -- Rotate log files after this size.
-  ROTATE_SUFFIX = ".1", -- Suffix for rotated log.
-  STARTUP_MODE = "truncate" -- Startup policy: "truncate", "rotate", or "keep".
+  LOG_DIR = DEFAULT_LOG_DIR,
+  DISK_LOG_DIR = DISK_LOG_DIR,
+  DISK_ROOT = "/disk",
+  DISK_MIN_FREE_BYTES = 32768,
+  SETTINGS_KEY = "xreactor.debug_logging",
+  DEFAULT_ENABLED = false,
+  FLUSH_LINES = 8,
+  FLUSH_INTERVAL = 2,
+  MAX_BYTES = 200000,
+  DISK_MAX_BYTES = 300000,
+  ROTATE_SUFFIX = ".1",
+  STARTUP_MODE = "truncate"
 }
 
--- Lightweight file logger for CC:Tweaked.
 local logger = {}
 
 local state = {
@@ -46,6 +35,7 @@ local state = {
   log_dir = CONFIG.LOG_DIR,
   log_name = nil,
   log_path = nil,
+  log_source = "default",
   buffer = {},
   last_flush = 0,
   warn_once = false,
@@ -62,14 +52,107 @@ local function ensure_dir(path)
   end
 end
 
+local function summarize_error(err)
+  if type(err) == "string" then
+    return err
+  end
+  return tostring(err)
+end
+
+local function disk_free_ok()
+  if not fs or type(fs.getFreeSpace) ~= "function" then
+    return true
+  end
+  local ok, free = pcall(fs.getFreeSpace, CONFIG.DISK_ROOT)
+  if not ok then
+    return false, "free-space-check-failed"
+  end
+  if type(free) == "string" then
+    local lowered = string.lower(free)
+    if lowered == "unlimited" or lowered == "inf" then
+      return true
+    end
+    local parsed = tonumber(free)
+    if parsed then
+      free = parsed
+    else
+      return false, "invalid-free-space-type:string"
+    end
+  end
+  if type(free) ~= "number" then
+    return false, "invalid-free-space-type:" .. type(free)
+  end
+  if free < (CONFIG.DISK_MIN_FREE_BYTES or 0) then
+    return false, "insufficient-free-space:" .. tostring(free)
+  end
+  return true
+end
+
+local function disk_write_test(path)
+  local probe = path .. "/.xreactor_log_probe"
+  local ok, err = pcall(function()
+    ensure_dir(path)
+    local file = fs.open(probe, "w")
+    if not file then
+      error("probe-open-failed")
+    end
+    file.write("probe")
+    file.close()
+    if fs.exists(probe) then
+      fs.delete(probe)
+    end
+  end)
+  if not ok then
+    return false, summarize_error(err)
+  end
+  return true
+end
+
+local function resolve_log_dir(opts)
+  local explicit = opts and normalize_log_dir(opts.log_dir)
+  if explicit then
+    return explicit, "explicit"
+  end
+  if settings and settings.get then
+    local configured = normalize_log_dir(settings.get("xreactor.log_dir"))
+    if configured then
+      return configured, "settings"
+    end
+  end
+
+  local disk_exists = fs and fs.exists and fs.exists(CONFIG.DISK_ROOT)
+  local disk_is_dir = fs and fs.isDir and fs.isDir(CONFIG.DISK_ROOT)
+  if disk_exists and disk_is_dir then
+    local free_ok, free_reason = disk_free_ok()
+    if free_ok then
+      local writable, write_reason = disk_write_test(CONFIG.DISK_LOG_DIR)
+      if writable then
+        return CONFIG.DISK_LOG_DIR, "auto-disk"
+      end
+      return DEFAULT_LOG_DIR, "fallback-local(write-test:" .. tostring(write_reason) .. ")"
+    end
+    return DEFAULT_LOG_DIR, "fallback-local(space:" .. tostring(free_reason) .. ")"
+  end
+
+  return DEFAULT_LOG_DIR, "default-local"
+end
+
+local function current_max_bytes()
+  if state.log_source == "auto-disk" then
+    return CONFIG.DISK_MAX_BYTES or CONFIG.MAX_BYTES
+  end
+  return CONFIG.MAX_BYTES
+end
+
 local function rotate_log_if_needed(path)
-  if not CONFIG.MAX_BYTES or CONFIG.MAX_BYTES <= 0 then
+  local max_bytes = current_max_bytes()
+  if not max_bytes or max_bytes <= 0 then
     return
   end
   if not fs.exists(path) then
     return
   end
-  if fs.getSize(path) < CONFIG.MAX_BYTES then
+  if fs.getSize(path) < max_bytes then
     return
   end
   local backup = path .. (CONFIG.ROTATE_SUFFIX or ".1")
@@ -100,6 +183,22 @@ local function resolve_log_name(current, fallback)
   return tostring(name):lower()
 end
 
+local function flush_buffer_to_dir(target_dir)
+  ensure_dir(target_dir)
+  local path = string.format("%s/%s.log", target_dir, state.log_name or "xreactor")
+  rotate_log_if_needed(path)
+  local file = fs.open(path, "a")
+  if not file then
+    error("Unable to open log file: " .. path)
+  end
+  for _, line in ipairs(state.buffer) do
+    file.write(line .. "\n")
+  end
+  file.close()
+  state.log_dir = target_dir
+  state.log_path = path
+end
+
 local function flush_if_needed(force)
   if not state.enabled then
     return true
@@ -111,19 +210,22 @@ local function flush_if_needed(force)
   if not force and #state.buffer < CONFIG.FLUSH_LINES and elapsed < CONFIG.FLUSH_INTERVAL then
     return true
   end
-  local ok, err = pcall(function()
-    ensure_dir(state.log_dir or CONFIG.LOG_DIR)
-    local path = string.format("%s/%s.log", state.log_dir or CONFIG.LOG_DIR, state.log_name or "xreactor")
-    rotate_log_if_needed(path)
-    local file = fs.open(path, "a")
-    if not file then
-      error("Unable to open log file: " .. path)
+
+  local ok, err = pcall(flush_buffer_to_dir, state.log_dir or CONFIG.LOG_DIR)
+  if not ok and (state.log_dir ~= DEFAULT_LOG_DIR) then
+    local fallback_ok, fallback_err = pcall(flush_buffer_to_dir, DEFAULT_LOG_DIR)
+    if fallback_ok then
+      if not state.warn_once then
+        state.warn_once = true
+        print("WARN: Log dir fallback to local (reason=" .. tostring(err) .. ")")
+      end
+      state.log_source = "runtime-fallback-local"
+      ok = true
+    else
+      err = tostring(err) .. " | fallback=" .. tostring(fallback_err)
     end
-    for _, line in ipairs(state.buffer) do
-      file.write(line .. "\n")
-    end
-    file.close()
-  end)
+  end
+
   state.buffer = {}
   state.last_flush = os.clock()
   if not ok and not state.warn_once then
@@ -204,7 +306,9 @@ end
 function logger.init(opts)
   opts = opts or {}
   state.enabled = resolve_enabled(opts.enabled)
-  state.log_dir = resolve_log_dir(opts)
+  local log_dir, source = resolve_log_dir(opts)
+  state.log_dir = log_dir
+  state.log_source = source
   state.log_name = resolve_log_name(opts.log_name, opts.prefix)
   state.log_path = string.format("%s/%s.log", state.log_dir, state.log_name or "xreactor")
   state.last_flush = os.clock()
@@ -219,13 +323,14 @@ function logger.init(opts)
       startup_mode = string.lower(opts.startup_mode)
     end
     state.startup_action = startup_prepare(state.log_path, startup_mode, state.log_dir)
-    print(string.format("LOG: dir=%s file=%s startup=%s", tostring(state.log_dir), state.log_path, state.startup_action))
+    print(string.format("LOG: dir=%s file=%s startup=%s source=%s", tostring(state.log_dir), state.log_path, state.startup_action, tostring(state.log_source)))
   end
   return {
     enabled = state.enabled == true,
     log_dir = state.log_dir,
     log_name = state.log_name,
     log_path = state.log_path,
+    log_source = state.log_source,
     startup_action = state.startup_action
   }
 end
@@ -257,6 +362,7 @@ function logger.describe()
     log_dir = state.log_dir,
     log_name = state.log_name,
     log_path = state.log_path,
+    log_source = state.log_source,
     startup_action = state.startup_action
   }
 end

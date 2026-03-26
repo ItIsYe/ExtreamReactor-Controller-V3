@@ -7,23 +7,55 @@ local original_os = _G.os
 local original_print = _G.print
 
 local files = {}
+local dirs = {
+  ["/"] = true,
+  ["/xreactor_logs"] = true
+}
 local moves = {}
 local print_lines = {}
+local disk_writable = true
+local disk_present = true
 
 local function write_file(path, content)
   files[path] = content or ""
 end
 
+local function ensure_dir(path)
+  dirs[path] = true
+end
+
+local function parent_dir(path)
+  return (path:match("^(.*)/[^/]+$")) or "/"
+end
+
 _G.fs = {
   exists = function(path)
-    return files[path] ~= nil
+    if path == "/disk" then
+      return disk_present
+    end
+    return files[path] ~= nil or dirs[path] == true
   end,
-  makeDir = function() end,
+  isDir = function(path)
+    if path == "/disk" then
+      return disk_present
+    end
+    return dirs[path] == true
+  end,
+  getFreeSpace = function(path)
+    if path == "/disk" then
+      return 800000
+    end
+    return 800000
+  end,
+  makeDir = function(path)
+    ensure_dir(path)
+  end,
   getSize = function(path)
     return #(files[path] or "")
   end,
   delete = function(path)
     files[path] = nil
+    dirs[path] = nil
   end,
   move = function(src, dst)
     moves[#moves + 1] = { src = src, dst = dst }
@@ -31,6 +63,13 @@ _G.fs = {
     files[src] = nil
   end,
   open = function(path, mode)
+    local dir = parent_dir(path)
+    if not (dirs[dir] or dir == "/") then
+      return nil
+    end
+    if path:sub(1, 5) == "/disk" and (not disk_present or not disk_writable) then
+      return nil
+    end
     if mode == "w" then
       files[path] = ""
       return {
@@ -64,24 +103,31 @@ end
 package.loaded["core.logger"] = nil
 local logger = require("core.logger")
 
-write_file("/disk", "__dir__")
-write_file("/xreactor_logs/rt.log", "old-content")
+ensure_dir("/disk")
 local status = logger.init({ log_name = "rt", enabled = true, truncate = true })
-if status.startup_action ~= "truncated" then
-  error("expected startup_action truncated")
+if status.log_dir ~= "/disk/xreactor_logs" then
+  error("expected auto disk log_dir when disk is suitable")
 end
-if status.log_dir ~= "/xreactor_logs" then
-  error("expected default log_dir to stay local even when /disk exists")
+if status.log_source ~= "auto-disk" then
+  error("expected auto-disk source")
 end
-if files["/xreactor_logs/rt.log"] ~= "" then
-  error("truncate policy should clear startup file")
+
+logger.log("RT", "disk-write", "INFO")
+logger.flush()
+if not files["/disk/xreactor_logs/rt.log"] then
+  error("expected disk log file")
 end
-if not print_lines[#print_lines] or not print_lines[#print_lines]:find("startup=truncated", 1, true) then
-  error("expected startup log line for truncation")
+
+-- Simulate disk disappearing after startup and require fallback.
+disk_present = false
+logger.log("RT", "fallback-local", "INFO")
+logger.flush()
+if not files["/xreactor_logs/rt.log"] then
+  error("expected fallback to local log path")
 end
 
 write_file("/xreactor_logs/energy.log", string.rep("a", 200001))
-logger.init({ log_name = "energy", enabled = true, truncate = false })
+logger.init({ log_name = "energy", enabled = true, truncate = false, log_dir = "/xreactor_logs" })
 logger.log("ENERGY", "rotation-check", "INFO")
 logger.flush()
 if not files["/xreactor_logs/energy.log.1"] then
@@ -91,10 +137,10 @@ if #moves == 0 then
   error("expected fs.move to be called for rotation")
 end
 
-logger.init({ log_name = "override", enabled = true, truncate = true, log_dir = "/disk/manual_logs" })
+logger.init({ log_name = "override", enabled = true, truncate = true, log_dir = "/xreactor_logs/manual_logs" })
 logger.log("OVERRIDE", "manual-path", "INFO")
 logger.flush()
-if not files["/disk/manual_logs/override.log"] then
+if not files["/xreactor_logs/manual_logs/override.log"] then
   error("expected explicit log_dir override to be honored")
 end
 

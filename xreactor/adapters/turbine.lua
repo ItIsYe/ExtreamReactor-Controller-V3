@@ -27,6 +27,15 @@ local function read_number(name, method, log_prefix)
   if type(value) == "number" then
     return value
   end
+  if type(value) == "string" then
+    local parsed = tonumber(value)
+    if parsed then
+      return parsed
+    end
+  end
+  if value ~= nil then
+    log_once(log_prefix, tostring(name) .. ":" .. tostring(method) .. ":type", "Turbine metric type mismatch peripheral=" .. tostring(name) .. " method=" .. tostring(method) .. " type=" .. type(value) .. " value=" .. tostring(value))
+  end
   return "n/a"
 end
 
