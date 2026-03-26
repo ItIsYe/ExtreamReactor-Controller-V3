@@ -69,6 +69,9 @@ local control_service = require("services.control_service")
 local turbine_regulator = require("core.turbine_regulator")
 local monitor_ui = require("nodes.rt.monitor_ui")
 local state_handlers = require("nodes.rt.state_handlers")
+local status_snapshot_lib = require("nodes.rt.status_snapshot")
+local startup_diagnostics = require("nodes.rt.startup_diagnostics")
+local module_lifecycle = require("nodes.rt.module_lifecycle")
 
 local INFO = "INFO"
 local DEBUG = "DEBUG"
@@ -1697,82 +1700,23 @@ local function add_alarm(sender, severity, message)
   comms:send_alert(severity, message)
 end
 
-local function module_payload()
-  local snapshot = {}
-  for id, module in pairs(modules) do
-    snapshot[id] = {
-      state = module.state,
-      progress = module.progress,
-      limits = module.limits
-    }
-  end
-  return snapshot
-end
-
-local function build_turbine_snapshots()
-  local list = {}
-  for _, entry in ipairs(registry:get_bound_devices("turbine")) do
-    local info = turbine_adapter.inspect(entry.name, CONFIG.LOG_PREFIX)
-    local module = modules[entry.id]
-    table.insert(list, {
-      id = entry.id,
-      name = entry.name,
-      alias = entry.alias,
-      rpm = info and info.rpm or nil,
-      flow_rate = info and info.flow or nil,
-      target_rpm = targets.rpm,
-      coil_engaged = info and info.coil_engaged or nil,
-      state = module and module.state or nil
-    })
-  end
-  return list
-end
-
-local function build_reactor_snapshots()
-  local list = {}
-  for _, entry in ipairs(registry:get_bound_devices("reactor")) do
-    local info = reactor_adapter.inspect(entry.name, CONFIG.LOG_PREFIX)
-    local module = modules[entry.id]
-    table.insert(list, {
-      id = entry.id,
-      name = entry.name,
-      alias = entry.alias,
-      rods_level = info and info.control_rod_level or nil,
-      active = info and info.active or nil,
-      steam_production = info and info.steam or nil,
-      state = module and module.state or nil
-    })
-  end
-  return list
-end
-
 local function build_status_payload(status_level)
-  local health_payload = build_health_payload()
-  local turbines = build_turbine_snapshots()
-  local reactors = build_reactor_snapshots()
-  return {
-    status = status_level,
-    state = node_state_machine.state(),
-    mode = current_state,
-    output = targets.power,
-    turbine_rpm = targets.rpm,
-    steam = targets.steam,
-    capabilities = health_payload.capabilities,
-    bindings = health_payload.bindings,
-    bindings_summary = health.summarize_bindings(health_payload.bindings),
-    health = health_payload,
-    modules = module_payload(),
-    snapshot = status_snapshot,
-    turbines = turbines,
-    reactors = reactors,
-    registry = {
-      summary = devices.registry_summary or registry:get_summary(),
-      devices = registry:get_devices_by_kind(),
-      diagnostics = registry:get_diagnostics()
-    },
-    control_mode = current_state,
-    ramp_state = { active_module = active_startup, queue = startup_queue }
-  }
+  return status_snapshot_lib.build_status_payload({
+    status_level = status_level,
+    node_state_machine = node_state_machine,
+    current_state = current_state,
+    targets = targets,
+    build_health_payload = build_health_payload,
+    status_snapshot = status_snapshot,
+    devices = devices,
+    registry = registry,
+    modules = modules,
+    active_startup = active_startup,
+    startup_queue = startup_queue,
+    turbine_adapter = turbine_adapter,
+    reactor_adapter = reactor_adapter,
+    log_prefix = CONFIG.LOG_PREFIX
+  })
 end
 
 local function broadcast_status(status_level)
@@ -1876,433 +1820,52 @@ local function scram()
   end
 end
 
+local function build_module_lifecycle_context()
+  return {
+    constants = constants,
+    STATE = STATE,
+    config = config,
+    modules = modules,
+    comms = comms,
+    RPM_TOL = RPM_TOL,
+    TURBINE_MODE = TURBINE_MODE,
+    log = log,
+    warn_once = warn_once,
+    warn_unsupported = warn_unsupported,
+    get_target_rpm = get_target_rpm,
+    get_turbine_ctrl = get_turbine_ctrl,
+    ensure_reactor_ctrl = ensure_reactor_ctrl,
+    setTurbineActive = setTurbineActive,
+    setReactorActive = setReactorActive,
+    setTurbineFlow = setTurbineFlow,
+    update_inductor_for_rpm = update_inductor_for_rpm,
+    update_turbine_flow_state = update_turbine_flow_state,
+    applyReactorRods = applyReactorRods,
+    add_alarm = add_alarm,
+    ramp_duration = ramp_duration,
+    reactor_low_water = reactor_low_water,
+    get_active_startup = function() return active_startup end,
+    set_active_startup = function(value) active_startup = value end,
+    current_state = function() return current_state end,
+    setState = setState,
+    node_state_machine = node_state_machine
+  }
+end
+
 local function update_module_limits(module)
-  local limits = {}
-  if module.type == "turbine" then
-    local rpm = module.peripheral and module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
-    local target_rpm = get_target_rpm()
-    if target_rpm > 0 and rpm > 0 and rpm < target_rpm * 0.7 then
-      table.insert(limits, "RPM")
-    end
-  elseif module.type == "reactor" then
-    local temp = module.peripheral and module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
-    if temp > config.safety.max_temperature then
-      table.insert(limits, "TEMP")
-    end
-    if reactor_low_water(module.peripheral) then
-      table.insert(limits, "WATER")
-    end
-  end
-  module.limits = limits
-  return limits
-end
-
-local function adjust_reactors()
-  if current_state == STATE.MASTER and targets.enable_reactors == false then
-    applyReactorRods(100, true)
-    set_reactors_active(false)
-    return
-  end
-  local active = 0
-  for _, module in pairs(modules) do
-    if module.type == "reactor" and module.peripheral and module.state ~= "OFF" and module.state ~= "ERROR" then
-      active = active + 1
-    end
-  end
-  for _, module in pairs(modules) do
-    if module.type == "reactor" and module.peripheral then
-      if module.state == "OFF" or module.state == "ERROR" then
-        ensure_reactor_ctrl(module.name)
-      else
-        if (current_state == STATE.AUTONOM or current_state == STATE.MASTER) and module.caps then
-          local ok_active, active_result = pcall(setReactorActive, module.peripheral, module.caps, true)
-          if ok_active and not active_result then
-            warn_unsupported(module.name)
-          end
-        end
-        local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
-        if temp > config.safety.max_temperature then
-          module.state = "ERROR"
-          module.progress = 0
-          module.limits = { "TEMP" }
-          if current_state ~= STATE.SAFE then
-            log("ERROR", "Safety trigger: reactor temperature limit exceeded")
-            setState(STATE.SAFE)
-          end
-          if node_state_machine.state() ~= constants.node_states.EMERGENCY then
-            node_state_machine:transition(constants.node_states.EMERGENCY)
-          end
-          return
-        end
-        if reactor_low_water(module.peripheral) then
-          module.state = "ERROR"
-          module.progress = 0
-          module.limits = { "WATER" }
-          if current_state ~= STATE.SAFE then
-            log("ERROR", "Safety trigger: reactor coolant level too low")
-            setState(STATE.SAFE)
-          end
-          if node_state_machine.state() ~= constants.node_states.EMERGENCY then
-            node_state_machine:transition(constants.node_states.EMERGENCY)
-          end
-          return
-        end
-        if not module.caps or not (module.caps.getControlRods or module.caps.setAllControlRodLevels) then
-          warn_unsupported(module.name)
-          goto continue_adjust_reactor
-        elseif module.caps and (module.caps.getControlRods or module.caps.setAllControlRodLevels) then
-          ensure_reactor_ctrl(module.name)
-        end
-      end
-    end
-    ::continue_adjust_reactor::
-  end
-end
-
-local function adjust_turbines()
-  if current_state == STATE.MASTER and targets.enable_turbines == false then
-    set_turbines_active(false)
-    return
-  end
-  local target_rpm = get_target_rpm()
-  for _, module in pairs(modules) do
-    if module.type == "turbine" and module.peripheral then
-      local can_regulate, reject_reason = turbine_regulator.should_regulate_module_state(module.state)
-      if module.state == "OFF" or module.state == "ERROR" then
-        local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or nil
-        if module.caps and module.caps.setInductorEngaged then
-          local ok_inductor, inductor_result = update_inductor_for_rpm(module.name, module.peripheral, module.caps, rpm)
-          if not ok_inductor then
-            warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
-          elseif not inductor_result then
-            warn_unsupported(module.name)
-          end
-        end
-        if module.caps and (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
-          local ctrl = get_turbine_ctrl(module.name)
-          ctrl.mode = TURBINE_MODE.RAMP
-          ctrl.flow = clamp_turbine_flow(ctrl.flow)
-          local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, ctrl.flow)
-          if not ok_flow then
-            warn_once("turbine_flow:" .. module.name, "Turbine flow update failed for " .. module.name .. ": " .. tostring(flow_result))
-          elseif not flow_result then
-            warn_unsupported(module.name)
-          end
-        end
-        local ctrl = get_turbine_ctrl(module.name)
-        ctrl.mode = TURBINE_MODE.RAMP
-        if config.debug_logging then
-          local startup_hint = "UNKNOWN"
-          if current_state ~= STATE.MASTER then
-            startup_hint = "MODE_" .. tostring(current_state)
-          elseif targets.enable_turbines == false then
-            startup_hint = "TURBINES_DISABLED"
-          elseif node_state_machine.state() == constants.node_states.STARTUP then
-            startup_hint = "STARTUP_PENDING"
-          else
-            startup_hint = "NO_START_REQUEST"
-          end
-          log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name)
-            .. " reason=" .. tostring(reject_reason)
-            .. " state=" .. tostring(module.state)
-            .. " startup_hint=" .. tostring(startup_hint))
-        end
-      elseif module.state == "STARTING" then
-        log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=STATE_STARTING")
-        goto continue_adjust_turbine
-      else
-        if not can_regulate then
-          log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=" .. tostring(reject_reason) .. " state=" .. tostring(module.state))
-          goto continue_adjust_turbine
-        end
-        if not module.caps or not module.caps.setInductorEngaged then
-          warn_unsupported(module.name)
-          goto continue_adjust_turbine
-        end
-        if not module.caps or not (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
-          warn_unsupported(module.name)
-          goto continue_adjust_turbine
-        end
-        if (current_state == STATE.AUTONOM or current_state == STATE.MASTER) and module.caps then
-          local ok_active, active_result = pcall(setTurbineActive, module.peripheral, module.caps, true)
-          if ok_active and not active_result then
-            warn_unsupported(module.name)
-          end
-        end
-        local rpm, rpm_reader = read_turbine_rpm(module.peripheral, module.caps)
-        local ok_inductor, inductor_result = update_inductor_for_rpm(module.name, module.peripheral, module.caps, rpm)
-        if not ok_inductor then
-          warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
-          goto continue_adjust_turbine
-        end
-        if not inductor_result then
-          warn_unsupported(module.name)
-          goto continue_adjust_turbine
-        end
-        local ok_flow, flow_result = apply_turbine_flow(module.name, module.peripheral, module.caps, rpm, target_rpm)
-        if not ok_flow then
-          warn_once("turbine_flow:" .. module.name, "Turbine flow update failed for " .. module.name .. ": " .. tostring(flow_result))
-          goto continue_adjust_turbine
-        end
-        if not flow_result then
-          warn_unsupported(module.name)
-          log("DEBUG", "TurbineCtrl skip name=" .. tostring(module.name) .. " reason=FLOW_SET_UNSUPPORTED state=" .. tostring(module.state) .. " rpm_api=" .. tostring(rpm_reader))
-          goto continue_adjust_turbine
-        end
-      end
-    end
-    ::continue_adjust_turbine::
-  end
-end
-
-local function check_interlocks(module)
-  local limits = update_module_limits(module)
-  if module.type == "turbine" then
-    for _, limit in ipairs(limits) do
-      if limit == "WATER" then
-        return false, limits
-      end
-    end
-  elseif module.type == "reactor" then
-    for _, limit in ipairs(limits) do
-      if limit == "TEMP" or limit == "WATER" then
-        return false, limits
-      end
-    end
-  end
-  if not module.peripheral then
-    return false, limits
-  end
-  return true, limits
-end
-
-local function mark_stable(module, now)
-  local previous = module.state
-  module.state = "STABLE"
-  module.progress = 1
-  module.stable_since = now
-  if previous ~= module.state then
-    log("INFO", ("Module state %s %s -> %s reason=STARTUP_STABLE"):format(tostring(module.id), tostring(previous), tostring(module.state)))
-  end
+  return module_lifecycle.update_module_limits(build_module_lifecycle_context(), module)
 end
 
 local function start_module(module_id, module_type, ramp_profile)
-  local module = modules[module_id]
-  if not module or module.type ~= module_type then
-    return nil, "Unknown module"
-  end
-  if active_startup and active_startup ~= module_id then
-    return nil, "Startup busy"
-  end
-  if module.state == "STARTING" then
-    return module, "Starting"
-  end
-  if module.state == "STABLE" or module.state == "RUNNING" then
-    return module, "Already running"
-  end
-  local previous = module.state
-  module.state = "STARTING"
-  module.progress = 0
-  module.limits = {}
-  module.start_time = os.epoch("utc")
-  module.ramp_profile = ramp_profile or "NORMAL"
-  module.stable_since = nil
-  active_startup = module_id
-  log("INFO", ("Module state %s %s -> %s reason=START_REQUEST profile=%s"):format(
-    tostring(module.id),
-    tostring(previous),
-    tostring(module.state),
-    tostring(module.ramp_profile)
-  ))
-  if module.type == "turbine" then
-    local ctrl = get_turbine_ctrl(module.name)
-    ctrl.mode = TURBINE_MODE.RAMP
-  end
-  return module, "Starting"
+  return module_lifecycle.start_module(build_module_lifecycle_context(), module_id, module_type, ramp_profile)
 end
 
 local function process_startup()
-  if not active_startup then return end
-  local module = modules[active_startup]
-  if not module then
-    active_startup = nil
-    return
-  end
-  local ok, limits = check_interlocks(module)
-  if not ok then
-    module.state = "ERROR"
-    module.progress = 0
-    module.limits = limits
-    active_startup = nil
-    add_alarm(comms.network.id, "EMERGENCY", "Startup blocked for " .. module.id)
-    return
-  end
-  local now = os.epoch("utc")
-  local duration = ramp_duration(module.ramp_profile)
-  local progress = safety.clamp((now - module.start_time) / duration, 0, 1)
-  module.progress = progress
-  if module.type == "turbine" then
-    if module.caps then
-      local ok_active, active_result = pcall(setTurbineActive, module.peripheral, module.caps, true)
-      if ok_active and not active_result then
-        warn_unsupported(module.name)
-      end
-    end
-    if not module.caps or not module.caps.setInductorEngaged then
-      warn_unsupported(module.name)
-      module.state = "ERROR"
-      module.progress = 0
-      module.limits = { "CONTROL" }
-      active_startup = nil
-      return
-    end
-    if not module.caps or not (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
-      warn_unsupported(module.name)
-      module.state = "ERROR"
-      module.progress = 0
-      module.limits = { "CONTROL" }
-      active_startup = nil
-      return
-    end
-    local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or nil
-    local ok_inductor, inductor_result = update_inductor_for_rpm(module.name, module.peripheral, module.caps, rpm)
-    if not ok_inductor then
-      warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
-      module.state = "ERROR"
-      module.progress = 0
-      module.limits = { "CONTROL" }
-      active_startup = nil
-      return
-    end
-    if not inductor_result then
-      warn_unsupported(module.name)
-      module.state = "ERROR"
-      module.progress = 0
-      module.limits = { "CONTROL" }
-      active_startup = nil
-      return
-    end
-    if module.caps and (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
-      local target_rpm = get_target_rpm()
-      local ctrl = get_turbine_ctrl(module.name)
-      local flow, mode = update_turbine_flow_state(rpm, target_rpm, ctrl)
-      local ok_flow, flow_result = pcall(setTurbineFlow, module.peripheral, module.caps, ctrl.flow)
-      if not ok_flow then
-        warn_once("turbine_flow:" .. module.name, "Turbine flow update failed for " .. module.name .. ": " .. tostring(flow_result))
-        module.state = "ERROR"
-        module.progress = 0
-        module.limits = { "CONTROL" }
-        active_startup = nil
-        return
-      end
-      if not flow_result then
-        warn_unsupported(module.name)
-        module.state = "ERROR"
-        module.progress = 0
-        module.limits = { "CONTROL" }
-        active_startup = nil
-        return
-      end
-      if not ctrl.logged then
-        log("INFO", "Turbine " .. module.name .. " active, initial flow " .. tostring(ctrl.flow))
-        ctrl.logged = true
-      end
-      log("DEBUG", "Turbine " .. module.name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " mode=" .. tostring(mode))
-    end
-    local target_rpm = get_target_rpm()
-    rpm = rpm or 0
-    if target_rpm > 0 then
-      module.progress = safety.clamp(rpm / target_rpm, 0, 1)
-    else
-      module.progress = 0
-    end
-    if turbine_regulator.startup_reached_target(rpm, target_rpm, RPM_TOL) then
-      mark_stable(module, now)
-      active_startup = nil
-    end
-  elseif module.type == "reactor" then
-    if module.caps then
-      local ok_active, active_result = pcall(setReactorActive, module.peripheral, module.caps, true)
-      if ok_active and not active_result then
-        warn_unsupported(module.name)
-      end
-    end
-    if not module.caps or not (module.caps.getControlRods or module.caps.setAllControlRodLevels) then
-      warn_unsupported(module.name)
-      module.state = "ERROR"
-      module.progress = 0
-      module.limits = { "CONTROL" }
-      active_startup = nil
-      return
-    end
-    if module.caps and (module.caps.getControlRods or module.caps.setAllControlRodLevels) then
-      local level = 100 - math.floor(progress * 100)
-      local ctrl = ensure_reactor_ctrl(module.name)
-      ctrl.last_applied = nil
-      applyReactorRods(level, false)
-    end
-    local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
-    if progress >= 1 and temp > 0 and temp < config.safety.max_temperature then
-      mark_stable(module, now)
-      active_startup = nil
-    end
-  end
+  module_lifecycle.process_startup(build_module_lifecycle_context())
 end
 
 local function update_module_states()
-  local now = os.epoch("utc")
-  for _, module in pairs(modules) do
-    local previous = module.state
-    local limits = update_module_limits(module)
-    if module.type == "reactor" and module.state ~= "OFF" then
-      for _, limit in ipairs(limits) do
-        if limit == "TEMP" or limit == "WATER" then
-          module.state = "ERROR"
-          module.progress = 0
-          if current_state ~= STATE.SAFE then
-            if limit == "WATER" then
-              log("ERROR", "Safety trigger: reactor coolant level too low")
-            else
-              log("ERROR", "Safety trigger: reactor temperature limit exceeded")
-            end
-            setState(STATE.SAFE)
-          end
-          if node_state_machine.state() ~= constants.node_states.EMERGENCY then
-            node_state_machine:transition(constants.node_states.EMERGENCY)
-          end
-        end
-      end
-    end
-    if module.state == "STABLE" and module.stable_since and (now - module.stable_since > 3000) then
-      if node_state_machine.state() == constants.node_states.RUNNING then
-        module.state = "RUNNING"
-      end
-    end
-    if module.state == "RUNNING" and #module.limits > 0 then
-      module.state = "LIMITED"
-    elseif module.state == "LIMITED" and #module.limits == 0 then
-      module.state = "RUNNING"
-    end
-    if previous ~= module.state then
-      local reason = "STATE_UPDATE"
-      if module.state == "RUNNING" and previous == "STABLE" then
-        reason = "STABLE_WINDOW_ELAPSED"
-      elseif module.state == "LIMITED" then
-        reason = "LIMIT_ACTIVE"
-      elseif previous == "LIMITED" and module.state == "RUNNING" then
-        reason = "LIMIT_CLEARED"
-      elseif module.state == "ERROR" then
-        reason = "SAFETY_LIMIT"
-      end
-      log("INFO", ("Module state %s %s -> %s reason=%s limits=%s"):format(
-        tostring(module.id),
-        tostring(previous),
-        tostring(module.state),
-        tostring(reason),
-        table.concat(module.limits or {}, ",")
-      ))
-    end
-  end
+  module_lifecycle.update_module_states(build_module_lifecycle_context())
 end
 
 local function monitor_master()
@@ -2326,7 +1889,8 @@ local function note_master_seen()
 end
 
 local function update_status_snapshot()
-  last_status_snapshot = monitor_ui.update_status_snapshot({
+  last_status_snapshot = status_snapshot_lib.update_status_snapshot({
+    monitor_ui = monitor_ui,
     devices = devices,
     registry = registry,
     comms = comms,
@@ -2381,39 +1945,11 @@ end
 
 local function build_peripheral_summary()
   local summary = devices.registry_summary or registry:get_summary() or {}
-  local kinds = summary.kinds or {}
-  local reactors = kinds.reactor or {}
-  local turbines = kinds.turbine or {}
-  return string.format(
-    "registry total=%d bound=%d missing=%d reactors=%d/%d turbines=%d/%d",
-    summary.total or 0,
-    summary.bound or 0,
-    summary.missing or 0,
-    reactors.bound or 0,
-    reactors.total or 0,
-    turbines.bound or 0,
-    turbines.total or 0
-  )
+  return startup_diagnostics.build_peripheral_summary(summary)
 end
 
 local function should_emergency_startup(snapshot)
-  local max_temp = snapshot and snapshot.max_temp or nil
-  if safety.should_scram({ temperature = max_temp, max_temperature = config.safety.max_temperature }) then
-    return true
-  end
-  local max_rpm = config.safety.max_rpm
-  if type(max_rpm) ~= "number" then
-    return false
-  end
-  if snapshot and type(snapshot.avg_rpm) == "number" and snapshot.avg_rpm > max_rpm then
-    return true
-  end
-  for _, entry in pairs(snapshot and snapshot.turbines or {}) do
-    if type(entry.rpm) == "number" and entry.rpm > max_rpm then
-      return true
-    end
-  end
-  return false
+  return startup_diagnostics.should_emergency_startup(snapshot, config.safety.max_temperature, config.safety.max_rpm)
 end
 
 local function handle_startup_timeout()
