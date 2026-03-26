@@ -62,10 +62,11 @@ local release = read_release_info() or {}
 logger.log(
   "STARTUP",
   string.format(
-    "Starting XReactor role=%s release=%s manifest=%s",
+    "Starting XReactor role=%s release=%s manifest=%s files=%s",
     tostring(role),
     tostring(release.release_id or release.commit_sha or "unknown"),
-    tostring(release.manifest_id or release.manifest_version or "unknown")
+    tostring(release.manifest_id or release.manifest_version or "unknown"),
+    tostring(release.manifest_file_count or "unknown")
   )
 )
 

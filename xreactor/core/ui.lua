@@ -1,16 +1,59 @@
 local colors = require("shared.colors")
+local logger = require("core.logger")
 
 local ui = {}
 local dirty_cache = setmetatable({}, { __mode = "k" })
 local monitor_state = setmetatable({}, { __mode = "k" })
 
-local function redirect(mon, fn)
-  if not mon or not term or not term.redirect then
+local function report_redirect_error(context, err)
+  local message = "UI redirect failure"
+  if context then
+    message = message .. " context=" .. tostring(context)
+  end
+  message = message .. " err=" .. tostring(err)
+  if logger and logger.log then
+    logger.log("UI", "ERROR: " .. message, "ERROR")
+  else
+    print("WARN: " .. message)
+  end
+end
+
+local function redirect(mon, fn, context)
+  if not mon or not term or not term.redirect or type(fn) ~= "function" then
     return
   end
-  local old = term.redirect(mon)
-  fn()
-  term.redirect(old)
+
+  local old = nil
+  if term.current then
+    local ok_current, current = pcall(term.current)
+    if ok_current then
+      old = current
+    end
+  end
+
+  local ok_redirect, previous_or_err = pcall(term.redirect, mon)
+  if not ok_redirect then
+    report_redirect_error(context or "redirect", previous_or_err)
+    return
+  end
+  if previous_or_err ~= nil then
+    old = previous_or_err
+  end
+
+  local ok_exec, exec_err = xpcall(fn, function(err)
+    if debug and debug.traceback then
+      return debug.traceback(err, 2)
+    end
+    return tostring(err)
+  end)
+
+  local ok_restore, restore_err = pcall(term.redirect, old)
+  if not ok_restore then
+    report_redirect_error(context or "restore", restore_err)
+  end
+  if not ok_exec then
+    report_redirect_error(context or "render", exec_err)
+  end
 end
 
 local function is_dirty(mon, key, snapshot)
@@ -64,7 +107,7 @@ function ui.clear(mon)
     term.setTextColor(colors.text)
     term.clear()
     term.setCursorPos(1,1)
-  end)
+  end, "ui.clear")
 end
 
 function ui.clearRegion(mon, x, y, w, h)
@@ -78,7 +121,7 @@ function ui.clearRegion(mon, x, y, w, h)
       term.setCursorPos(x, row)
       term.write(string.rep(" ", w))
     end
-  end)
+  end, "ui.clearRegion")
 end
 
 function ui.text(mon, x, y, text, fg, bg)
@@ -99,7 +142,7 @@ function ui.text(mon, x, y, text, fg, bg)
     if prev_width and prev_width > width then
       term.write(string.rep(" ", prev_width - width))
     end
-  end)
+  end, "ui.text")
 end
 
 function ui.rightText(mon, x, y, w, text, fg, bg)
@@ -129,7 +172,7 @@ function ui.panel(mon, x, y, w, h, title, status)
       term.setTextColor(colors.get(status) or colors.get("accent"))
       term.write(title)
     end
-  end)
+  end, "ui.panel")
 end
 
 function ui.badge(mon, x, y, text, status)
@@ -170,7 +213,7 @@ function ui.progress(mon, x, y, w, percent, status)
     term.setCursorPos(x, y)
     term.setBackgroundColor(colors.get(status) or colors.get("OK"))
     term.write(string.rep(" ", fill))
-  end)
+  end, "ui.progress")
 end
 
 function ui.list(mon, x, y, w, rows, opts)
@@ -295,7 +338,7 @@ function ui.table(mon, x, y, w, headers, rows, opts)
         end
       end
     end
-  end)
+  end, "ui.table")
 end
 
 return ui
