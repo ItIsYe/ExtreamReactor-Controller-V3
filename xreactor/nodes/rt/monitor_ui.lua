@@ -7,18 +7,11 @@ local M = {
   last_monitor_update = 0
 }
 
-local function warn(message)
-  print("[RT][MONITOR_UI][WARN] " .. tostring(message))
-end
-
-local function try_set_scale(monitor, scale, monitor_name)
-  if not monitor or type(scale) ~= "number" or not monitor.setTextScale then
+local function try_set_scale(monitor, scale)
+  if not monitor or type(scale) ~= "number" then
     return
   end
-  local ok, err = pcall(monitor.setTextScale, monitor, scale)
-  if not ok then
-    warn(("setTextScale failed for %s: %s"):format(tostring(monitor_name), tostring(err)))
-  end
+  ui.setScale(monitor, scale)
 end
 
 local function normalize_monitor_result(result)
@@ -49,7 +42,7 @@ local function resolve_monitor(monitor_adapter, preferred_name, monitor_scale)
   if type(monitor_adapter.wrap) == "function" and preferred_name then
     local monitor = monitor_adapter.wrap(preferred_name)
     if monitor then
-      try_set_scale(monitor, monitor_scale, preferred_name)
+      try_set_scale(monitor, monitor_scale)
       return monitor, preferred_name
     end
   end
@@ -57,7 +50,7 @@ local function resolve_monitor(monitor_adapter, preferred_name, monitor_scale)
   if preferred_name and peripheral and type(peripheral.wrap) == "function" then
     local monitor = peripheral.wrap(preferred_name)
     if monitor then
-      try_set_scale(monitor, monitor_scale, preferred_name)
+      try_set_scale(monitor, monitor_scale)
       return monitor, preferred_name
     end
   end
@@ -193,9 +186,6 @@ function M.collect_reactor_temp_stats(devices, reactor_adapter, log_prefix)
   for _, entry in ipairs(devices.reactors or {}) do
     local info = read_reactor_info(entry, reactor_adapter, log_prefix)
     local temp = info and info.temperature
-    if temp == nil then
-      temp = entry.peripheral and entry.peripheral.getTemperature and entry.peripheral.getTemperature()
-    end
     if type(temp) == "number" then
       count = count + 1
       sum_temp = sum_temp + temp
@@ -232,14 +222,8 @@ function M.build_turbine_status_details(devices, turbine_adapter, read_turbine_r
     local info = read_turbine_info(entry, turbine_adapter, log_prefix)
     local rpm = info and info.rpm or read_turbine_rpm(turbine, caps)
     local flow = info and info.flow or read_turbine_flow(turbine, caps)
-    local active = info and info.active
-    if active == nil then
-      active = turbine and turbine.getActive and turbine.getActive() or nil
-    end
-    local inductor = info and info.coil_engaged
-    if inductor == nil then
-      inductor = turbine and turbine.getInductorEngaged and turbine.getInductorEngaged() or nil
-    end
+    local active = info and info.active or nil
+    local inductor = info and info.coil_engaged or nil
     list[#list + 1] = {
       id = entry.id,
       bound = entry.bound ~= false,
@@ -255,17 +239,20 @@ end
 function M.build_reactor_status_details(devices, reactor_adapter, log_prefix)
   local list = {}
   for _, entry in ipairs(devices.reactors or {}) do
-    local reactor = entry.peripheral
     local info = read_reactor_info(entry, reactor_adapter, log_prefix)
+    local rods = info and info.control_rod_level or nil
+    if rods == nil and reactor_adapter and type(reactor_adapter.read_control_rods) == "function" and entry and entry.name then
+      rods = reactor_adapter.read_control_rods(entry.name, log_prefix)
+    end
     list[#list + 1] = {
       id = entry.id,
       bound = entry.bound ~= false,
-      temperature = info and info.temperature or (reactor and reactor.getTemperature and reactor.getTemperature() or nil),
-      fuel = info and info.fuel or (reactor and reactor.getFuelAmount and reactor.getFuelAmount() or nil),
+      temperature = info and info.temperature or nil,
+      fuel = info and info.fuel or nil,
       energy = info and info.energy or nil,
       waste = info and info.waste or nil,
-      active = info and info.active or (reactor and reactor.getActive and reactor.getActive() or nil),
-      rods = info and info.control_rod_level or (reactor and reactor.getControlRodLevel and reactor.getControlRodLevel(0) or nil)
+      active = info and info.active or nil,
+      rods = rods
     }
   end
   return list

@@ -102,7 +102,37 @@ local function test_apply_control_rods_uses_setControlRodLevel_fallback_and_clam
   end
 end
 
+local function test_apply_control_rods_prefers_setControlRodLevel_over_getControlRods()
+  reset_modules()
+  local indexed_calls = 0
+  local rod_set_calls = 0
+  local rods = {
+    { setLevel = function() rod_set_calls = rod_set_calls + 1 end },
+    { setLevel = function() rod_set_calls = rod_set_calls + 1 end },
+  }
+  make_peripheral_stub({
+    methods = { "setControlRodLevel", "getControlRodLevels", "getControlRods" },
+    calls = {
+      getControlRodLevels = function() return { 5, 15 } end,
+      getControlRods = function() return rods end,
+      setControlRodLevel = function() indexed_calls = indexed_calls + 1; return true end,
+    },
+  })
+  local reactor = require("adapters.reactor")
+  local ok, err = reactor.apply_rod_level("reactor_0", 50, "TEST")
+  if not ok or err ~= nil then
+    error("expected setControlRodLevel path to succeed, got " .. tostring(err))
+  end
+  if indexed_calls ~= 2 then
+    error("expected indexed fallback path to update every rod")
+  end
+  if rod_set_calls ~= 0 then
+    error("expected getControlRods fallback to be skipped when setControlRodLevel exists")
+  end
+end
+
 test_read_control_rods_uses_getControlRods_fallback()
 test_apply_control_rods_uses_getControlRods_setLevel_fallback()
 test_apply_control_rods_uses_setControlRodLevel_fallback_and_clamps()
+test_apply_control_rods_prefers_setControlRodLevel_over_getControlRods()
 print("reactor_control_rods_regression_test.lua: ok")

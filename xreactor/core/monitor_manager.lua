@@ -4,6 +4,15 @@ local monitor_adapter = require("adapters.monitor")
 
 local manager = {}
 
+local function safe_wrapped_call(obj, method, ...)
+  if not obj or type(obj[method]) ~= "function" then
+    return false, "missing method"
+  end
+  return pcall(function(...)
+    return obj[method](obj, ...)
+  end, ...)
+end
+
 local function classify_size(w, h, thresholds)
   local area = (w or 0) * (h or 0)
   local small = thresholds and thresholds.small_area or 300
@@ -87,7 +96,7 @@ function manager:scan()
       if self.scale then
         monitor_adapter.safe_set_scale(mon, entry.name, self.scale, self.log_prefix)
       end
-      local ok, w, h = pcall(mon.getSize, mon)
+      local ok, w, h = safe_wrapped_call(mon, "getSize")
       local width = ok and w or 0
       local height = ok and h or 0
       local size_tag = classify_size(width, height, self.thresholds)

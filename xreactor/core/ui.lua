@@ -70,6 +70,15 @@ local function state_for(mon)
   return monitor_state[mon]
 end
 
+local function safe_monitor_call(mon, method, ...)
+  if not mon or type(mon[method]) ~= "function" then
+    return false, "missing method"
+  end
+  return pcall(function(...)
+    return mon[method](mon, ...)
+  end, ...)
+end
+
 function ui.invalidate(mon)
   dirty_cache[mon] = nil
 end
@@ -78,7 +87,7 @@ function ui.getSize(mon)
   if not mon or type(mon.getSize) ~= "function" then
     return nil
   end
-  local ok, w, h = pcall(mon.getSize, mon)
+  local ok, w, h = safe_monitor_call(mon, "getSize")
   if ok and type(w) == "number" and type(h) == "number" then
     return w, h
   end
@@ -102,7 +111,7 @@ function ui.setScale(mon, scale)
     return
   end
   if mon.setTextScale then
-    local ok, err = pcall(mon.setTextScale, mon, normalized)
+    local ok, err = safe_monitor_call(mon, "setTextScale", normalized)
     if not ok and logger and logger.log then
       logger.log("UI", "WARN: setTextScale failed: " .. tostring(err), "WARN")
       return
