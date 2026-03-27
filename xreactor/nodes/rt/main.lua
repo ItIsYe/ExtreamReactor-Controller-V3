@@ -617,6 +617,8 @@ local function read_reactor_steam_amount()
   return nil
 end
 
+local safe_wrapped_call
+
 local function get_available_steam()
   local tank_amount = read_steam_tank_amount()
   if type(tank_amount) == "number" then
@@ -641,7 +643,7 @@ local function get_total_steam_demand()
         end
       end
       if turbine and turbine.getRotorSpeed then
-        local ok, value = pcall(turbine.getRotorSpeed, turbine)
+        local ok, value = safe_wrapped_call(turbine, "getRotorSpeed")
         if ok and type(value) == "number" then
           rpm = value
         end
@@ -658,8 +660,8 @@ local function reactor_low_water(reactor)
   if not reactor or not reactor.getCoolantAmount or not reactor.getCoolantAmountMax then
     return false
   end
-  local ok_amount, amount = pcall(reactor.getCoolantAmount, reactor)
-  local ok_max, max = pcall(reactor.getCoolantAmountMax, reactor)
+  local ok_amount, amount = safe_wrapped_call(reactor, "getCoolantAmount")
+  local ok_max, max = safe_wrapped_call(reactor, "getCoolantAmountMax")
   if not ok_amount or not ok_max or type(amount) ~= "number" or type(max) ~= "number" or max <= 0 then
     return false
   end
@@ -687,6 +689,19 @@ local function has_method(methods, method)
   return false
 end
 
+safe_wrapped_call = function(obj, method, ...)
+  if not obj or type(obj[method]) ~= "function" then
+    return false, "missing method"
+  end
+  return pcall(function(...)
+    return obj[method](obj, ...)
+  end, ...)
+end
+
+local function has_reactor_rod_write_path(caps)
+  return caps and (caps.setAllControlRodLevels or caps.setControlRodLevel or caps.getControlRods)
+end
+
 local function build_capabilities(name)
   local ok, methods = pcall(peripheral.getMethods, name)
   if not ok or type(methods) ~= "table" then
@@ -701,8 +716,11 @@ local function build_capabilities(name)
     getRotorSpeed = has_method(methods, "getRotorSpeed"),
     getRotorRPM = has_method(methods, "getRotorRPM"),
     getControlRods = has_method(methods, "getControlRods"),
+    getControlRodLevel = has_method(methods, "getControlRodLevel"),
+    getControlRodLevels = has_method(methods, "getControlRodLevels"),
     setInductorEngaged = has_method(methods, "setInductorEngaged"),
-    setAllControlRodLevels = has_method(methods, "setAllControlRodLevels")
+    setAllControlRodLevels = has_method(methods, "setAllControlRodLevels"),
+    setControlRodLevel = has_method(methods, "setControlRodLevel")
   }
 end
 
@@ -711,13 +729,13 @@ local function read_turbine_rpm(turbine, caps)
     return nil, "NO_TURBINE"
   end
   if caps and caps.getRotorSpeed and turbine.getRotorSpeed then
-    local ok, value = pcall(turbine.getRotorSpeed, turbine)
+    local ok, value = safe_wrapped_call(turbine, "getRotorSpeed")
     if ok and type(value) == "number" then
       return value, "getRotorSpeed"
     end
   end
   if caps and caps.getRotorRPM and turbine.getRotorRPM then
-    local ok, value = pcall(turbine.getRotorRPM, turbine)
+    local ok, value = safe_wrapped_call(turbine, "getRotorRPM")
     if ok and type(value) == "number" then
       return value, "getRotorRPM"
     end
@@ -730,13 +748,13 @@ local function read_turbine_flow(turbine, caps)
     return nil, "NO_TURBINE"
   end
   if caps and caps.getFluidFlowRate and turbine.getFluidFlowRate then
-    local ok, value = pcall(turbine.getFluidFlowRate, turbine)
+    local ok, value = safe_wrapped_call(turbine, "getFluidFlowRate")
     if ok and type(value) == "number" then
       return value, "getFluidFlowRate"
     end
   end
   if caps and caps.getFluidFlowRateMax and turbine.getFluidFlowRateMax then
-    local ok, value = pcall(turbine.getFluidFlowRateMax, turbine)
+    local ok, value = safe_wrapped_call(turbine, "getFluidFlowRateMax")
     if ok and type(value) == "number" then
       return value, "getFluidFlowRateMax"
     end
@@ -1093,7 +1111,7 @@ local function updateActuators()
     end
     if reactor then
       local caps = get_device_caps("reactors", name)
-      if not (caps.getControlRods or caps.setAllControlRodLevels) then
+      if not has_reactor_rod_write_path(caps) then
         warn_unsupported(name)
         goto continue_reactor
       end
@@ -1175,7 +1193,7 @@ local function updateControl()
     local ok, reactor = pcall(peripheral.wrap, name)
     if ok and reactor then
       local caps = get_device_caps("reactors", name)
-      if not (caps.getControlRods or caps.setAllControlRodLevels) then
+      if not has_reactor_rod_write_path(caps) then
         warn_unsupported(name)
         goto continue_control_reactor
       end
@@ -1221,7 +1239,7 @@ local function updateControl()
       end
       local rpm = nil
       if turbine.getRotorSpeed then
-        local ok, value = pcall(turbine.getRotorSpeed, turbine)
+        local ok, value = safe_wrapped_call(turbine, "getRotorSpeed")
         if ok and type(value) == "number" then
           rpm = value
         end
@@ -1772,7 +1790,7 @@ apply_safe_controls = function()
   end
   for name, reactor in pairs(reactors) do
     local caps = get_device_caps("reactors", name)
-    if caps.getControlRods or caps.setAllControlRodLevels then
+    if has_reactor_rod_write_path(caps) then
       local ctrl = ensure_reactor_ctrl(name)
       ctrl.last_applied = nil
     else
@@ -1787,7 +1805,8 @@ apply_safe_controls = function()
   end
   for name, turbine in pairs(turbines) do
     local caps = get_device_caps("turbines", name)
-    local rpm = turbine.getRotorSpeed and turbine.getRotorSpeed() or nil
+    local _, rpm_value = safe_wrapped_call(turbine, "getRotorSpeed")
+    local rpm = type(rpm_value) == "number" and rpm_value or nil
     if caps.setInductorEngaged then
       local ok, result = update_inductor_for_rpm(name, turbine, caps, rpm)
       if not ok then

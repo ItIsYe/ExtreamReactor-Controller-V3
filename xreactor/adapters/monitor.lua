@@ -27,11 +27,13 @@ local function safe_call(mon, name, method, log_prefix, ...)
   if not mon or not mon[method] then
     return false, "missing method"
   end
-  local ok, err = pcall(mon[method], mon, ...)
-  if not ok then
-    log_once(log_prefix, tostring(name) .. ":" .. tostring(method), "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(err))
+  local results = table.pack(pcall(function(...)
+    return mon[method](mon, ...)
+  end, ...))
+  if not results[1] then
+    log_once(log_prefix, tostring(name) .. ":" .. tostring(method), "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(results[2]))
   end
-  return ok, err
+  return table.unpack(results, 1, results.n)
 end
 
 local function maybe_set_scale(mon, name, scale, log_prefix)
@@ -96,7 +98,7 @@ function monitor.find(preferred_name, strategy, scale, log_prefix)
   end
   local best
   for _, entry in ipairs(candidates) do
-    local ok, w, h = pcall(entry.mon.getSize, entry.mon)
+    local ok, w, h = safe_call(entry.mon, entry.name, "getSize", log_prefix)
     if ok then
       local area = w * h
       if not best or area > best.area then

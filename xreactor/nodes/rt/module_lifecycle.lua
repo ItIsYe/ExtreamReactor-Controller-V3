@@ -3,16 +3,31 @@ local turbine_regulator = require("core.turbine_regulator")
 
 local M = {}
 
+local function safe_wrapped_call(obj, method, ...)
+  if not obj or type(obj[method]) ~= "function" then
+    return false, "missing method"
+  end
+  return pcall(function(...)
+    return obj[method](obj, ...)
+  end, ...)
+end
+
+local function has_reactor_rod_write_path(caps)
+  return caps and (caps.setAllControlRodLevels or caps.setControlRodLevel or caps.getControlRods)
+end
+
 function M.update_module_limits(ctx, module)
   local limits = {}
   if module.type == "turbine" then
-    local rpm = module.peripheral and module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or 0
+    local _, rpm_value = safe_wrapped_call(module.peripheral, "getRotorSpeed")
+    local rpm = type(rpm_value) == "number" and rpm_value or 0
     local target_rpm = ctx.get_target_rpm()
     if target_rpm > 0 and rpm > 0 and rpm < target_rpm * 0.7 then
       table.insert(limits, "RPM")
     end
   elseif module.type == "reactor" then
-    local temp = module.peripheral and module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
+    local _, temp_value = safe_wrapped_call(module.peripheral, "getCasingTemperature")
+    local temp = type(temp_value) == "number" and temp_value or 0
     if temp > ctx.config.safety.max_temperature then
       table.insert(limits, "TEMP")
     end
@@ -135,7 +150,8 @@ function M.process_startup(ctx)
       ctx.set_active_startup(nil)
       return
     end
-    local rpm = module.peripheral.getRotorSpeed and module.peripheral.getRotorSpeed() or nil
+    local _, rpm_value = safe_wrapped_call(module.peripheral, "getRotorSpeed")
+    local rpm = type(rpm_value) == "number" and rpm_value or nil
     local ok_inductor, inductor_result = ctx.update_inductor_for_rpm(module.name, module.peripheral, module.caps, rpm)
     if not ok_inductor then
       ctx.warn_once("turbine_inductor:" .. module.name, "Turbine inductor update failed for " .. module.name .. ": " .. tostring(inductor_result))
@@ -198,7 +214,7 @@ function M.process_startup(ctx)
         ctx.warn_unsupported(module.name)
       end
     end
-    if not module.caps or not (module.caps.getControlRods or module.caps.setAllControlRodLevels) then
+    if not has_reactor_rod_write_path(module.caps) then
       ctx.warn_unsupported(module.name)
       module.state = "ERROR"
       module.progress = 0
@@ -206,13 +222,14 @@ function M.process_startup(ctx)
       ctx.set_active_startup(nil)
       return
     end
-    if module.caps and (module.caps.getControlRods or module.caps.setAllControlRodLevels) then
+    if has_reactor_rod_write_path(module.caps) then
       local level = 100 - math.floor(progress * 100)
       local ctrl = ctx.ensure_reactor_ctrl(module.name)
       ctrl.last_applied = nil
       ctx.applyReactorRods(level, false)
     end
-    local temp = module.peripheral.getCasingTemperature and module.peripheral.getCasingTemperature() or 0
+    local _, temp_value = safe_wrapped_call(module.peripheral, "getCasingTemperature")
+    local temp = type(temp_value) == "number" and temp_value or 0
     if progress >= 1 and temp > 0 and temp < ctx.config.safety.max_temperature then
       M.mark_stable(ctx, module, now)
       ctx.set_active_startup(nil)

@@ -43,6 +43,15 @@ local function has_method(set, key)
   return set and set[key] == true
 end
 
+local function safe_wrapped_call(obj, method, ...)
+  if not obj or type(obj[method]) ~= "function" then
+    return false, "missing method"
+  end
+  return pcall(function(...)
+    return obj[method](obj, ...)
+  end, ...)
+end
+
 local function build_method_set(name)
   local methods = utils.safe_get_methods(name) or {}
   local set = {}
@@ -251,33 +260,6 @@ function reactor.apply_rod_level(name, level, log_prefix)
     return true
   end
 
-  if has_method(method_set, "getControlRods") then
-    local rods, rods_err = utils.safe_peripheral_call(name, "getControlRods")
-    if type(rods) ~= "table" then
-      local detail = rods_err or ("unexpected value " .. summarize_value(rods))
-      log_rod_error(log_prefix, name, "getControlRods", detail)
-      return nil, detail
-    end
-    local changed = 0
-    for _, rod in pairs(rods) do
-      if rod and rod.setLevel then
-        local ok_set, set_err = pcall(rod.setLevel, rod, normalized_level)
-        if ok_set then
-          changed = changed + 1
-        else
-          log_rod_error(log_prefix, name, "rod.setLevel", set_err)
-        end
-      end
-    end
-    if changed > 0 then
-      log_rod_path(log_prefix, name, "getControlRods.setLevel", "changed=" .. tostring(changed) .. " level=" .. tostring(normalized_level))
-      return true
-    end
-    local detail = "no writable rods via getControlRods"
-    log_rod_error(log_prefix, name, "getControlRods", detail)
-    return nil, detail
-  end
-
   if has_method(method_set, "setControlRodLevel") then
     local rod_count = count_rods(name, method_set) or 1
     local changed = 0
@@ -307,6 +289,33 @@ function reactor.apply_rod_level(name, level, log_prefix)
     end
     local detail = last_err or "no rod updated"
     log_rod_error(log_prefix, name, "setControlRodLevel", detail)
+    return nil, detail
+  end
+
+  if has_method(method_set, "getControlRods") then
+    local rods, rods_err = utils.safe_peripheral_call(name, "getControlRods")
+    if type(rods) ~= "table" then
+      local detail = rods_err or ("unexpected value " .. summarize_value(rods))
+      log_rod_error(log_prefix, name, "getControlRods", detail)
+      return nil, detail
+    end
+    local changed = 0
+    for _, rod in pairs(rods) do
+      if rod and rod.setLevel then
+        local ok_set, set_err = safe_wrapped_call(rod, "setLevel", normalized_level)
+        if ok_set then
+          changed = changed + 1
+        else
+          log_rod_error(log_prefix, name, "rod.setLevel", set_err)
+        end
+      end
+    end
+    if changed > 0 then
+      log_rod_path(log_prefix, name, "getControlRods.setLevel", "changed=" .. tostring(changed) .. " level=" .. tostring(normalized_level))
+      return true
+    end
+    local detail = "no writable rods via getControlRods"
+    log_rod_error(log_prefix, name, "getControlRods", detail)
     return nil, detail
   end
 
@@ -353,7 +362,7 @@ function reactor.read_control_rods(name, log_prefix)
       for _, rod in pairs(rods) do
         local level = normalize_rod_level(rod)
         if level == nil and rod and rod.getLevel then
-          local ok_level, value = pcall(rod.getLevel, rod)
+          local ok_level, value = safe_wrapped_call(rod, "getLevel")
           if ok_level then
             level = normalize_rod_level(value) or (type(value) == "number" and value or nil)
           end
