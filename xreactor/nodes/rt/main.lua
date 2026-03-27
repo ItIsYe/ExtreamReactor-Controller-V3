@@ -1897,6 +1897,9 @@ local function update_status_snapshot()
     config = config,
     read_turbine_rpm = read_turbine_rpm,
     read_turbine_flow = read_turbine_flow,
+    reactor_adapter = reactor_adapter,
+    turbine_adapter = turbine_adapter,
+    log_prefix = "RT",
     get_device_caps = get_device_caps,
     get_available_steam = get_available_steam,
     last_status_snapshot = last_status_snapshot
@@ -1932,6 +1935,9 @@ local function update_monitor()
     build_health_payload = build_health_payload,
     read_turbine_rpm = read_turbine_rpm,
     read_turbine_flow = read_turbine_flow,
+    reactor_adapter = reactor_adapter,
+    turbine_adapter = turbine_adapter,
+    log_prefix = "RT",
     get_device_caps = get_device_caps,
     get_available_steam = get_available_steam,
     last_status_snapshot = last_status_snapshot

@@ -87,15 +87,28 @@ end
 
 function ui.setScale(mon, scale)
   if not mon then return end
-  if type(scale) ~= "number" then
+  local numeric_scale = tonumber(scale)
+  if type(numeric_scale) ~= "number" then
+    if logger and logger.log then
+      logger.log("UI", "WARN: Ignoring invalid monitor scale value=" .. tostring(scale), "WARN")
+    end
     return
   end
+  local normalized = math.floor((numeric_scale * 2) + 0.5) / 2
+  if normalized < 0.5 then normalized = 0.5 end
+  if normalized > 5 then normalized = 5 end
   local state = state_for(mon)
-  if state.scale == scale then
+  if state.scale == normalized then
     return
   end
-  if mon.setTextScale then mon.setTextScale(scale) end
-  state.scale = scale
+  if mon.setTextScale then
+    local ok, err = pcall(mon.setTextScale, mon, normalized)
+    if not ok and logger and logger.log then
+      logger.log("UI", "WARN: setTextScale failed: " .. tostring(err), "WARN")
+      return
+    end
+  end
+  state.scale = normalized
   ui.invalidate(mon)
 end
 

@@ -88,6 +88,9 @@ function M.update_status_snapshot(ctx)
     config = ctx.config,
     read_turbine_rpm = ctx.read_turbine_rpm,
     read_turbine_flow = ctx.read_turbine_flow,
+    reactor_adapter = ctx.reactor_adapter,
+    turbine_adapter = ctx.turbine_adapter,
+    log_prefix = ctx.log_prefix,
     get_device_caps = ctx.get_device_caps,
     get_available_steam = ctx.get_available_steam,
     last_status_snapshot = ctx.last_status_snapshot

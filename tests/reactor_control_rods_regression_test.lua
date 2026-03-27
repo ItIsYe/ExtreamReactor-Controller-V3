@@ -71,6 +71,38 @@ local function test_apply_control_rods_uses_getControlRods_setLevel_fallback()
   end
 end
 
+local function test_apply_control_rods_uses_setControlRodLevel_fallback_and_clamps()
+  reset_modules()
+  local calls = {}
+  make_peripheral_stub({
+    methods = { "setControlRodLevel", "getControlRodLevels" },
+    calls = {
+      getControlRodLevels = function() return { 10, 20, 30 } end,
+      setControlRodLevel = function(index, value)
+        table.insert(calls, { index = index, value = value })
+        return true
+      end,
+    },
+  })
+  local reactor = require("adapters.reactor")
+  local ok, err = reactor.apply_rod_level("reactor_0", 175, "TEST")
+  if not ok or err ~= nil then
+    error("expected indexed fallback write to succeed, got " .. tostring(err))
+  end
+  if #calls ~= 3 then
+    error("expected setControlRodLevel to be called for each rod, got " .. tostring(#calls))
+  end
+  for idx, call in ipairs(calls) do
+    if call.index ~= (idx - 1) then
+      error("unexpected rod index: " .. tostring(call.index))
+    end
+    if call.value ~= 100 then
+      error("expected clamped rod value 100, got " .. tostring(call.value))
+    end
+  end
+end
+
 test_read_control_rods_uses_getControlRods_fallback()
 test_apply_control_rods_uses_getControlRods_setLevel_fallback()
+test_apply_control_rods_uses_setControlRodLevel_fallback_and_clamps()
 print("reactor_control_rods_regression_test.lua: ok")

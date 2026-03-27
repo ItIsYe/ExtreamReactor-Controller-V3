@@ -71,6 +71,19 @@ local function normalize_rod_level(value)
   return nil
 end
 
+local function normalize_write_level(level)
+  local numeric = tonumber(level)
+  if not numeric then
+    return nil
+  end
+  if numeric < 0 then
+    numeric = 0
+  elseif numeric > 100 then
+    numeric = 100
+  end
+  return math.floor(numeric + 0.5)
+end
+
 local function summarize_value(value)
   local value_type = type(value)
   if value_type == "number" or value_type == "string" or value_type == "boolean" or value_type == "nil" then
@@ -95,18 +108,84 @@ local function log_rod_error(log_prefix, name, method, detail)
   )
 end
 
+local function log_rod_path(log_prefix, name, method, detail)
+  utils.log(
+    log_prefix or "REACTOR",
+    "Reactor rod write path peripheral=" .. tostring(name) .. " method=" .. tostring(method) .. " detail=" .. tostring(detail),
+    "INFO"
+  )
+end
+
+local function read_first_number(name, method_set, methods, log_prefix)
+  for _, method in ipairs(methods or {}) do
+    if has_method(method_set, method) then
+      local value = read_number(name, method, log_prefix)
+      if type(value) == "number" then
+        return value
+      end
+    end
+  end
+  return "n/a"
+end
+
+local function read_active(name, method_set, log_prefix)
+  if has_method(method_set, "getActive") then
+    local active = safe_call(name, "getActive", log_prefix)
+    if type(active) == "boolean" then
+      return active
+    end
+  end
+  if has_method(method_set, "getStatus") then
+    local status = safe_call(name, "getStatus", log_prefix)
+    if type(status) == "boolean" then
+      return status
+    end
+    if type(status) == "string" then
+      local normalized = status:lower()
+      if normalized == "online" or normalized == "active" or normalized == "running" then
+        return true
+      end
+      if normalized == "offline" or normalized == "inactive" or normalized == "stopped" then
+        return false
+      end
+    end
+  end
+  return false
+end
+
+local function count_rods(name, method_set)
+  if has_method(method_set, "getControlRodLevels") then
+    local levels = utils.safe_peripheral_call(name, "getControlRodLevels")
+    if type(levels) == "table" and #levels > 0 then
+      return #levels
+    end
+  end
+  if has_method(method_set, "getControlRods") then
+    local rods = utils.safe_peripheral_call(name, "getControlRods")
+    if type(rods) == "table" then
+      local count = 0
+      for _ in pairs(rods) do
+        count = count + 1
+      end
+      if count > 0 then
+        return count
+      end
+    end
+  end
+  return nil
+end
+
 function reactor.inspect(name, log_prefix)
   if not name or not peripheral.isPresent(name) then
     return nil, "peripheral missing"
   end
   local type_name = peripheral.getType(name) or "reactor"
   local methods, method_set = build_method_set(name)
-  local status = safe_call(name, "getStatus", log_prefix) or safe_call(name, "getActive", log_prefix)
-  local active = (status == true or status == "online") and true or false
-  local temp = read_number(name, has_method(method_set, "getFuelTemperature") and "getFuelTemperature" or "getTemperature", log_prefix)
+  local active = read_active(name, method_set, log_prefix)
+  local temp = read_first_number(name, method_set, { "getFuelTemperature", "getTemperature", "getCasingTemperature" }, log_prefix)
   local fuel = read_number(name, "getFuelAmount", log_prefix)
   local waste = read_number(name, "getWasteAmount", log_prefix)
-  local energy = read_number(name, has_method(method_set, "getEnergyStored") and "getEnergyStored" or "getEnergyProducedLastTick", log_prefix)
+  local energy = read_first_number(name, method_set, { "getEnergyStored", "getEnergyProducedLastTick" }, log_prefix)
   local rods = reactor.read_control_rods(name, log_prefix)
   local steam = read_number(
     name,
@@ -150,10 +229,16 @@ end
 
 function reactor.apply_rod_level(name, level, log_prefix)
   if not name or level == nil then return nil, "missing data" end
+  local normalized_level = normalize_write_level(level)
+  if normalized_level == nil then
+    local detail = "invalid level " .. tostring(level)
+    log_rod_error(log_prefix, name, "setControlRodLevel", detail)
+    return nil, detail
+  end
   local methods, method_set = build_method_set(name)
 
   if has_method(method_set, "setAllControlRodLevels") then
-    local ok, err = utils.safe_peripheral_call(name, "setAllControlRodLevels", level)
+    local ok, err = utils.safe_peripheral_call(name, "setAllControlRodLevels", normalized_level)
     if err then
       log_rod_error(log_prefix, name, "setAllControlRodLevels", err)
       return nil, err
@@ -162,6 +247,7 @@ function reactor.apply_rod_level(name, level, log_prefix)
       log_rod_error(log_prefix, name, "setAllControlRodLevels", "returned false")
       return nil, "returned false"
     end
+    log_rod_path(log_prefix, name, "setAllControlRodLevels", "level=" .. tostring(normalized_level))
     return true
   end
 
@@ -175,7 +261,7 @@ function reactor.apply_rod_level(name, level, log_prefix)
     local changed = 0
     for _, rod in pairs(rods) do
       if rod and rod.setLevel then
-        local ok_set, set_err = pcall(rod.setLevel, rod, level)
+        local ok_set, set_err = pcall(rod.setLevel, rod, normalized_level)
         if ok_set then
           changed = changed + 1
         else
@@ -184,6 +270,7 @@ function reactor.apply_rod_level(name, level, log_prefix)
       end
     end
     if changed > 0 then
+      log_rod_path(log_prefix, name, "getControlRods.setLevel", "changed=" .. tostring(changed) .. " level=" .. tostring(normalized_level))
       return true
     end
     local detail = "no writable rods via getControlRods"
@@ -191,8 +278,40 @@ function reactor.apply_rod_level(name, level, log_prefix)
     return nil, detail
   end
 
+  if has_method(method_set, "setControlRodLevel") then
+    local rod_count = count_rods(name, method_set) or 1
+    local changed = 0
+    local last_err = nil
+    for index = 0, rod_count - 1 do
+      local ok, err = utils.safe_peripheral_call(name, "setControlRodLevel", index, normalized_level)
+      if err then
+        if index == 0 and rod_count == 1 then
+          local ok_one, err_one = utils.safe_peripheral_call(name, "setControlRodLevel", 1, normalized_level)
+          if not err_one and ok_one ~= false then
+            changed = changed + 1
+          else
+            last_err = err_one or "returned false"
+          end
+        else
+          last_err = err
+        end
+      elseif ok ~= false then
+        changed = changed + 1
+      else
+        last_err = "returned false"
+      end
+    end
+    if changed > 0 then
+      log_rod_path(log_prefix, name, "setControlRodLevel", "count=" .. tostring(changed) .. " level=" .. tostring(normalized_level))
+      return true
+    end
+    local detail = last_err or "no rod updated"
+    log_rod_error(log_prefix, name, "setControlRodLevel", detail)
+    return nil, detail
+  end
+
   local detail = "unsupported methods"
-  log_rod_error(log_prefix, name, "setAllControlRodLevels|getControlRods", detail .. " available=" .. tostring(#methods))
+  log_rod_error(log_prefix, name, "setAllControlRodLevels|getControlRods|setControlRodLevel", detail .. " available=" .. tostring(#methods))
   return nil, detail
 end
 
