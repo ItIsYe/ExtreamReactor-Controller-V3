@@ -89,7 +89,7 @@ local function test_monitor_scale_requires_number()
   local monitor_adapter = require('adapters.monitor')
   local called_with = nil
   local mon = {
-    setTextScale = function(scale)
+    setTextScale = function(_, scale)
       if type(scale) ~= 'number' then
         error('scale must be numeric')
       end
@@ -102,6 +102,24 @@ local function test_monitor_scale_requires_number()
   end
   if called_with ~= nil then
     error('setTextScale should not be called with invalid scale')
+  end
+end
+
+local function test_monitor_scale_clamps_and_rounds()
+  reset_module('adapters.monitor')
+  local monitor_adapter = require('adapters.monitor')
+  local called_with = nil
+  local mon = {
+    setTextScale = function(_, scale)
+      called_with = scale
+    end,
+  }
+  local ok, err = monitor_adapter.safe_set_scale(mon, 'monitor_31', 4.74, 'TEST')
+  if not ok or err ~= nil then
+    error('expected safe_set_scale to accept numeric value')
+  end
+  if called_with ~= 4.5 then
+    error('expected safe_set_scale to round to 0.5 steps, got ' .. tostring(called_with))
   end
 end
 
@@ -189,6 +207,7 @@ end
 
 test_multiview_initial_render_without_last_render()
 test_monitor_scale_requires_number()
+test_monitor_scale_clamps_and_rounds()
 test_network_channel_sanitization_numeric_open()
 test_network_open_rejects_table_channel_runtime()
 

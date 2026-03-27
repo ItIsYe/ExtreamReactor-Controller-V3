@@ -27,7 +27,7 @@ local function safe_call(mon, name, method, log_prefix, ...)
   if not mon or not mon[method] then
     return false, "missing method"
   end
-  local ok, err = pcall(mon[method], ...)
+  local ok, err = pcall(mon[method], mon, ...)
   if not ok then
     log_once(log_prefix, tostring(name) .. ":" .. tostring(method), "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(err))
   end
@@ -49,14 +49,20 @@ local function maybe_set_scale(mon, name, scale, log_prefix)
     )
     return false, "invalid scale"
   end
-  if scale_cache[mon] == scale_number then
+  local normalized = math.floor((scale_number * 2) + 0.5) / 2
+  if normalized < 0.5 then
+    normalized = 0.5
+  elseif normalized > 5 then
+    normalized = 5
+  end
+  if scale_cache[mon] == normalized then
     return true
   end
-  utils.log(log_prefix or "MONITOR", "Applying monitor scale for " .. tostring(name) .. ": " .. tostring(scale_number))
-  local ok, err = safe_call(mon, name, "setTextScale", log_prefix, scale_number)
+  utils.log(log_prefix or "MONITOR", "Applying monitor scale for " .. tostring(name) .. ": " .. tostring(normalized))
+  local ok, err = safe_call(mon, name, "setTextScale", log_prefix, normalized)
   if ok then
-    scale_cache[mon] = scale_number
-    log_once(log_prefix, tostring(name) .. ":setTextScale:" .. tostring(scale_number), "Monitor setTextScale applied for " .. tostring(name) .. " -> " .. tostring(scale_number))
+    scale_cache[mon] = normalized
+    log_once(log_prefix, tostring(name) .. ":setTextScale:" .. tostring(normalized), "Monitor setTextScale applied for " .. tostring(name) .. " -> " .. tostring(normalized))
   end
   return ok, err
 end

@@ -72,6 +72,26 @@ local function format_value(value)
   return string.format("%.1f", value)
 end
 
+local function read_reactor_info(entry, adapter, log_prefix)
+  if adapter and type(adapter.inspect) == "function" and entry and entry.name then
+    local info = adapter.inspect(entry.name, log_prefix)
+    if type(info) == "table" then
+      return info
+    end
+  end
+  return nil
+end
+
+local function read_turbine_info(entry, adapter, log_prefix)
+  if adapter and type(adapter.inspect) == "function" and entry and entry.name then
+    local info = adapter.inspect(entry.name, log_prefix)
+    if type(info) == "table" then
+      return info
+    end
+  end
+  return nil
+end
+
 local function render_alert_banner(target, model)
   local critical = model.local_alerts_critical or 0
   if critical <= 0 then
@@ -165,13 +185,17 @@ local function render_diagnostics(target, model)
   ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
 end
 
-function M.collect_reactor_temp_stats(devices)
+function M.collect_reactor_temp_stats(devices, reactor_adapter, log_prefix)
   local min_temp = nil
   local max_temp = nil
   local sum_temp = 0
   local count = 0
   for _, entry in ipairs(devices.reactors or {}) do
-    local temp = entry.peripheral and entry.peripheral.getTemperature and entry.peripheral.getTemperature()
+    local info = read_reactor_info(entry, reactor_adapter, log_prefix)
+    local temp = info and info.temperature
+    if temp == nil then
+      temp = entry.peripheral and entry.peripheral.getTemperature and entry.peripheral.getTemperature()
+    end
     if type(temp) == "number" then
       count = count + 1
       sum_temp = sum_temp + temp
@@ -200,36 +224,48 @@ function M.collect_turbine_rpm_stats(devices, read_turbine_rpm, get_device_caps)
   return min_rpm, max_rpm, count > 0 and (sum_rpm / count) or nil
 end
 
-function M.build_turbine_status_details(devices, read_turbine_rpm, read_turbine_flow, get_device_caps)
+function M.build_turbine_status_details(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix)
   local list = {}
   for _, entry in ipairs(devices.turbines or {}) do
     local turbine = entry.peripheral
     local caps = get_device_caps("turbine", entry.id)
-    local rpm = read_turbine_rpm(turbine, caps)
-    local flow = read_turbine_flow(turbine, caps)
+    local info = read_turbine_info(entry, turbine_adapter, log_prefix)
+    local rpm = info and info.rpm or read_turbine_rpm(turbine, caps)
+    local flow = info and info.flow or read_turbine_flow(turbine, caps)
+    local active = info and info.active
+    if active == nil then
+      active = turbine and turbine.getActive and turbine.getActive() or nil
+    end
+    local inductor = info and info.coil_engaged
+    if inductor == nil then
+      inductor = turbine and turbine.getInductorEngaged and turbine.getInductorEngaged() or nil
+    end
     list[#list + 1] = {
       id = entry.id,
       bound = entry.bound ~= false,
       rpm = rpm,
       flow = flow,
-      active = turbine and turbine.getActive and turbine.getActive() or nil,
-      inductor = turbine and turbine.getInductorEngaged and turbine.getInductorEngaged() or nil
+      active = active,
+      inductor = inductor
     }
   end
   return list
 end
 
-function M.build_reactor_status_details(devices)
+function M.build_reactor_status_details(devices, reactor_adapter, log_prefix)
   local list = {}
   for _, entry in ipairs(devices.reactors or {}) do
     local reactor = entry.peripheral
+    local info = read_reactor_info(entry, reactor_adapter, log_prefix)
     list[#list + 1] = {
       id = entry.id,
       bound = entry.bound ~= false,
-      temperature = reactor and reactor.getTemperature and reactor.getTemperature() or nil,
-      fuel = reactor and reactor.getFuelAmount and reactor.getFuelAmount() or nil,
-      active = reactor and reactor.getActive and reactor.getActive() or nil,
-      rods = reactor and reactor.getControlRodLevel and reactor.getControlRodLevel(0) or nil
+      temperature = info and info.temperature or (reactor and reactor.getTemperature and reactor.getTemperature() or nil),
+      fuel = info and info.fuel or (reactor and reactor.getFuelAmount and reactor.getFuelAmount() or nil),
+      energy = info and info.energy or nil,
+      waste = info and info.waste or nil,
+      active = info and info.active or (reactor and reactor.getActive and reactor.getActive() or nil),
+      rods = info and info.control_rod_level or (reactor and reactor.getControlRodLevel and reactor.getControlRodLevel(0) or nil)
     }
   end
   return list
@@ -237,7 +273,7 @@ end
 
 function M.update_status_snapshot(ctx)
   local summary = ctx.devices.registry_summary or ctx.registry:get_summary() or {}
-  local min_temp, max_temp, avg_temp = M.collect_reactor_temp_stats(ctx.devices)
+  local min_temp, max_temp, avg_temp = M.collect_reactor_temp_stats(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
   local min_rpm, max_rpm, avg_rpm = M.collect_turbine_rpm_stats(ctx.devices, ctx.read_turbine_rpm, ctx.get_device_caps)
   ctx.last_status_snapshot = {
     ts = os.epoch("utc"),
@@ -250,8 +286,8 @@ function M.update_status_snapshot(ctx)
     max_rpm = max_rpm,
     avg_rpm = avg_rpm,
     steam_amount = ctx.get_available_steam(),
-    reactors = M.build_reactor_status_details(ctx.devices),
-    turbines = M.build_turbine_status_details(ctx.devices, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps)
+    reactors = M.build_reactor_status_details(ctx.devices, ctx.reactor_adapter, ctx.log_prefix),
+    turbines = M.build_turbine_status_details(ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
   }
   return ctx.last_status_snapshot
 end
