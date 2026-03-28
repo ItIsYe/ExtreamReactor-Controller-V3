@@ -9,6 +9,16 @@ local monitor_adapter = require('adapters.monitor')
 local ui = require('core.ui')
 local monitor_manager = require('core.monitor_manager')
 
+local function read_file(path)
+  local handle, err = io.open(path, 'r')
+  if not handle then
+    error('failed to read file ' .. tostring(path) .. ': ' .. tostring(err))
+  end
+  local content = handle:read('*a')
+  handle:close()
+  return content
+end
+
 local function test_monitor_adapter_find_calls_wrapped_getSize_safely()
   local calls = 0
   _G.peripheral = {
@@ -99,7 +109,26 @@ local function test_monitor_manager_term_getSize_without_self_forwarding()
   _G.peripheral = original_peripheral
 end
 
+local function test_runtime_wrapped_call_paths_no_implicit_self_forwarding()
+  local rt_main = read_file('xreactor/nodes/rt/main.lua')
+  if rt_main:find('obj%[method%]%s*%(%s*obj%s*,', 1) then
+    error('rt safe_wrapped_call must not pass obj as implicit self argument')
+  end
+
+  local network = read_file('xreactor/core/network.lua')
+  if network:find('pcall%(wrapped%.isWireless', 1, true) then
+    error('network wrapped isWireless call must use shared wrapped-call helper')
+  end
+  if network:find('pcall%(modem%.open', 1, true) then
+    error('network wrapped modem open must use shared wrapped-call helper')
+  end
+  if network:find('pcall%(modem%.transmit', 1, true) then
+    error('network wrapped modem transmit must use shared wrapped-call helper')
+  end
+end
+
 test_monitor_adapter_find_calls_wrapped_getSize_safely()
 test_ui_setScale_normalizes_and_avoids_duplicate_calls()
 test_monitor_manager_term_getSize_without_self_forwarding()
+test_runtime_wrapped_call_paths_no_implicit_self_forwarding()
 print('wrapped_peripheral_guard_test.lua: ok')

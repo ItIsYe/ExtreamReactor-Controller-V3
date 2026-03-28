@@ -693,9 +693,7 @@ safe_wrapped_call = function(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then
     return false, "missing method"
   end
-  return pcall(function(...)
-    return obj[method](obj, ...)
-  end, ...)
+  return pcall(obj[method], ...)
 end
 
 local function has_reactor_rod_write_path(caps)
