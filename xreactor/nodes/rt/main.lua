@@ -1184,7 +1184,7 @@ local function updateActuators()
 end
 
 local function updateControl()
-  if current_state ~= STATE.AUTONOM then
+  if current_state ~= STATE.AUTONOM and current_state ~= STATE.MASTER then
     return
   end
   for _, name in ipairs(config.reactors or {}) do
@@ -1267,6 +1267,14 @@ local function updateControl()
       ::continue_control_turbine::
     end
   end
+end
+
+local function adjust_turbines()
+  updateControl()
+end
+
+local function adjust_reactors()
+  updateReactorControl()
 end
 
 local allowed_transitions = {

@@ -1,6 +1,15 @@
 local M = {}
 
 function M.build(ctx)
+  local function assert_fn(name)
+    if type(ctx[name]) ~= "function" then
+      error("state handler context missing function: " .. tostring(name), 2)
+    end
+  end
+
+  assert_fn("adjust_reactors")
+  assert_fn("adjust_turbines")
+
   local constants = ctx.constants
   local STATE = ctx.STATE
 
