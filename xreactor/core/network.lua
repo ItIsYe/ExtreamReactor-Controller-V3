@@ -11,6 +11,13 @@ local function warn_once(key, message)
   utils.log("NET", message)
 end
 
+local function safe_wrapped_call(obj, method, ...)
+  if not obj or type(obj[method]) ~= "function" then
+    return false, "missing method"
+  end
+  return pcall(obj[method], ...)
+end
+
 local function resolve_node_id(config)
   if config.node_id then
     local normalized = utils.normalize_node_id(config.node_id)
@@ -60,7 +67,7 @@ local function open_modem(name, channels)
       utils.log("NET", "Skipping modem channel open; expected number but got " .. tostring(channel_type) .. " value=" .. tostring(channel), "WARN")
     elseif not opened[channel] then
       utils.log("NET", "Opening modem channel (numeric): " .. tostring(channel))
-      local ok, open_err = pcall(modem.open, channel)
+      local ok, open_err = safe_wrapped_call(modem, "open", channel)
       if not ok then
         return nil, "open failed for channel " .. tostring(channel) .. ": " .. tostring(open_err)
       end
@@ -112,7 +119,7 @@ local function discover_modems()
       if type_name == "modem" and wrapped then
         local wireless = nil
         if type(wrapped.isWireless) == "function" then
-          local ok, result = pcall(wrapped.isWireless)
+          local ok, result = safe_wrapped_call(wrapped, "isWireless")
           if ok then
             wireless = result == true
           end
@@ -316,10 +323,16 @@ local function safe_call_remote(wired, device_name, method, ...)
   if type(wired.callRemote) ~= "function" then
     return nil, "wired modem unsupported"
   end
-  if type(wired.isPresentRemote) == "function" and not wired.isPresentRemote(device_name) then
-    return nil, "remote peripheral missing"
+  if type(wired.isPresentRemote) == "function" then
+    local ok_present, present_or_err = safe_wrapped_call(wired, "isPresentRemote", device_name)
+    if not ok_present then
+      return nil, present_or_err
+    end
+    if not present_or_err then
+      return nil, "remote peripheral missing"
+    end
   end
-  local results = table.pack(pcall(wired.callRemote, device_name, method, ...))
+  local results = table.pack(safe_wrapped_call(wired, "callRemote", device_name, method, ...))
   if not results[1] then
     return nil, results[2]
   end
@@ -390,7 +403,7 @@ function network.init(config)
       if not sanitized then
         return false, "invalid payload"
       end
-      local ok, err = pcall(modem.transmit, channel, channel, sanitized)
+      local ok, err = safe_wrapped_call(modem, "transmit", channel, channel, sanitized)
       if not ok then
         return false, tostring(err)
       end
@@ -407,7 +420,7 @@ function network.init(config)
       if not sanitized then
         return false, "invalid payload"
       end
-      local ok, err = pcall(modem.transmit, channels.control, channels.control, sanitized)
+      local ok, err = safe_wrapped_call(modem, "transmit", channels.control, channels.control, sanitized)
       if not ok then
         return false, tostring(err)
       end

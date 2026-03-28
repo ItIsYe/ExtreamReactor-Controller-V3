@@ -74,9 +74,8 @@ local function safe_monitor_call(mon, method, ...)
   if not mon or type(mon[method]) ~= "function" then
     return false, "missing method"
   end
-  return pcall(function(...)
-    return mon[method](...)
-  end, ...)
+  local fn = mon[method]
+  return pcall(fn, ...)
 end
 
 function ui.invalidate(mon)

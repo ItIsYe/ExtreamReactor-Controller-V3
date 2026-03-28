@@ -208,6 +208,13 @@ local function warn_once(key, message)
   utils.log(CONFIG.LOG_PREFIX, message, "WARN")
 end
 
+local function safe_wrapped_call(obj, method, ...)
+  if not obj or type(obj[method]) ~= "function" then
+    return false, "missing method"
+  end
+  return pcall(obj[method], ...)
+end
+
 local function cache(bound_names)
   tanks = utils.cache_peripherals(bound_names or {})
 end
@@ -283,7 +290,7 @@ local function total_water()
   for name, tank in pairs(tanks) do
     local level = 0
     if tank.tanks then
-      local ok, tank_data = pcall(tank.tanks)
+      local ok, tank_data = safe_wrapped_call(tank, "tanks")
       if ok and type(tank_data) == "table" then
         for _, info in pairs(tank_data) do
           if type(info) == "table" and type(info.amount) == "number" then
@@ -294,7 +301,7 @@ local function total_water()
         warn_once("tank_read:" .. tostring(name), "Tank read failed for " .. tostring(name) .. ": " .. tostring(tank_data))
       end
     elseif tank.getFluidAmount then
-      local ok, value = pcall(tank.getFluidAmount)
+      local ok, value = safe_wrapped_call(tank, "getFluidAmount")
       if ok and type(value) == "number" then
         level = value
       elseif not ok then
