@@ -9,7 +9,7 @@ local function safe_wrapped_call(obj, method, ...)
     return false, "missing method"
   end
   return pcall(function(...)
-    return obj[method](obj, ...)
+    return obj[method](...)
   end, ...)
 end
 
@@ -67,7 +67,7 @@ function manager:scan()
   end
   table.sort(names)
   if #names == 0 then
-    local ok, w, h = pcall(term.getSize, term)
+    local ok, w, h = pcall(term.getSize)
     local width = ok and w or 0
     local height = ok and h or 0
     local size_tag = classify_size(width, height, self.thresholds)

@@ -48,7 +48,7 @@ local function safe_wrapped_call(obj, method, ...)
     return false, "missing method"
   end
   return pcall(function(...)
-    return obj[method](obj, ...)
+    return obj[method](...)
   end, ...)
 end
 
