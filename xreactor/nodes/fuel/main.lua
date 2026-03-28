@@ -281,7 +281,7 @@ end
 
 local function read_fuel()
   if storage and storage.tanks then
-    local ok, tank_data = pcall(storage.tanks, storage)
+    local ok, tank_data = pcall(storage.tanks)
     if ok and type(tank_data) == "table" then
       local total = 0
       for _, tank in pairs(tank_data) do
@@ -295,7 +295,7 @@ local function read_fuel()
     end
   end
   if storage and storage.getFluidAmount then
-    local ok, value = pcall(storage.getFluidAmount, storage)
+    local ok, value = pcall(storage.getFluidAmount)
     if ok and type(value) == "number" then
       return value
     end

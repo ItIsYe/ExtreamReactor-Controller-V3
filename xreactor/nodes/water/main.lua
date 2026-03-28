@@ -283,7 +283,7 @@ local function total_water()
   for name, tank in pairs(tanks) do
     local level = 0
     if tank.tanks then
-      local ok, tank_data = pcall(tank.tanks, tank)
+      local ok, tank_data = pcall(tank.tanks)
       if ok and type(tank_data) == "table" then
         for _, info in pairs(tank_data) do
           if type(info) == "table" and type(info.amount) == "number" then
@@ -294,7 +294,7 @@ local function total_water()
         warn_once("tank_read:" .. tostring(name), "Tank read failed for " .. tostring(name) .. ": " .. tostring(tank_data))
       end
     elseif tank.getFluidAmount then
-      local ok, value = pcall(tank.getFluidAmount, tank)
+      local ok, value = pcall(tank.getFluidAmount)
       if ok and type(value) == "number" then
         level = value
       elseif not ok then

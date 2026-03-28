@@ -45,13 +45,38 @@ local function build_modem(opts)
   opts = opts or {}
   local opened = opts.opened
   return {
-    open = function(_, channel)
+    open = function(channel, extra)
+      if extra ~= nil then
+        error('wrapped modem open must not receive implicit self argument')
+      end
       if opened then table.insert(opened, channel) end
     end,
-    transmit = function() end,
-    isWireless = opts.isWireless and function() return opts.isWireless end or nil,
-    callRemote = opts.callRemote and function() return true end or nil,
-    isPresentRemote = opts.callRemote and function() return true end or nil,
+    transmit = function(channel, reply_channel, payload, extra)
+      if extra ~= nil then
+        error('wrapped modem transmit must not receive implicit self argument')
+      end
+      if channel == nil or reply_channel == nil or payload == nil then
+        error('wrapped modem transmit missing arguments')
+      end
+    end,
+    isWireless = opts.isWireless and function(extra)
+      if extra ~= nil then
+        error('wrapped modem isWireless must not receive implicit self argument')
+      end
+      return opts.isWireless
+    end or nil,
+    callRemote = opts.callRemote and function(device_name, method_name, ...)
+      if device_name == nil or method_name == nil then
+        error('wrapped modem callRemote missing target args')
+      end
+      return true
+    end or nil,
+    isPresentRemote = opts.callRemote and function(device_name, extra)
+      if extra ~= nil then
+        error('wrapped modem isPresentRemote must not receive implicit self argument')
+      end
+      return device_name ~= nil
+    end or nil,
   }
 end
 

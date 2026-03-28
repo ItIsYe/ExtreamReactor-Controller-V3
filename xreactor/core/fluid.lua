@@ -4,7 +4,7 @@ local function safe_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then
     return false, "missing method"
   end
-  return pcall(obj[method], obj, ...)
+  return pcall(obj[method], ...)
 end
 
 function fluid.sum_tanks(obj)
