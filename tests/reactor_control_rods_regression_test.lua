@@ -52,8 +52,22 @@ local function test_apply_control_rods_uses_getControlRods_setLevel_fallback()
   reset_modules()
   local applied = {}
   local rods = {
-    { setLevel = function(_, value) applied[1] = value end },
-    { setLevel = function(_, value) applied[2] = value end },
+    {
+      setLevel = function(value, extra)
+        if extra ~= nil then
+          error("wrapped rod setLevel must not receive implicit self argument")
+        end
+        applied[1] = value
+      end
+    },
+    {
+      setLevel = function(value, extra)
+        if extra ~= nil then
+          error("wrapped rod setLevel must not receive implicit self argument")
+        end
+        applied[2] = value
+      end
+    },
   }
   make_peripheral_stub({
     methods = { "getControlRods" },

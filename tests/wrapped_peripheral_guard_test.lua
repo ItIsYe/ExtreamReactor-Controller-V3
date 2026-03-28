@@ -3,9 +3,11 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 package.loaded['core.utils'] = nil
 package.loaded['adapters.monitor'] = nil
 package.loaded['core.ui'] = nil
+package.loaded['core.monitor_manager'] = nil
 
 local monitor_adapter = require('adapters.monitor')
 local ui = require('core.ui')
+local monitor_manager = require('core.monitor_manager')
 
 local function test_monitor_adapter_find_calls_wrapped_getSize_safely()
   local calls = 0
@@ -66,6 +68,38 @@ local function test_ui_setScale_normalizes_and_avoids_duplicate_calls()
   end
 end
 
+local function test_monitor_manager_term_getSize_without_self_forwarding()
+  local original_term = _G.term
+  local original_peripheral = _G.peripheral
+  local called = 0
+  _G.term = {
+    getSize = function(arg1)
+      if arg1 ~= nil then
+        error('term.getSize must not receive implicit self argument')
+      end
+      called = called + 1
+      return 51, 19
+    end
+  }
+  _G.peripheral = {
+    getNames = function() return {} end,
+    getType = function() return nil end,
+  }
+
+  local manager = monitor_manager.new({ node_id = 'TEST' })
+  local result = manager:scan()
+  if type(result) ~= 'table' or #result ~= 1 or not result[1].is_terminal then
+    error('expected terminal fallback monitor entry when no physical monitors exist')
+  end
+  if called ~= 1 then
+    error('expected term.getSize fallback to be called exactly once')
+  end
+
+  _G.term = original_term
+  _G.peripheral = original_peripheral
+end
+
 test_monitor_adapter_find_calls_wrapped_getSize_safely()
 test_ui_setScale_normalizes_and_avoids_duplicate_calls()
+test_monitor_manager_term_getSize_without_self_forwarding()
 print('wrapped_peripheral_guard_test.lua: ok')
