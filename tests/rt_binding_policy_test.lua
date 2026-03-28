@@ -56,6 +56,11 @@ if not tostring(method_reason):find("turbine method signature") then
   error("detect_kind method signature reason missing")
 end
 
+local kind_by_rod_write = binding.detect_kind("unknown", { setControlRodLevel = true })
+if kind_by_rod_write ~= "reactor" then
+  error("detect_kind should classify reactors via setControlRodLevel signature")
+end
+
 local auto_msg = binding.missing_devices_message("reactor", auto)
 if not auto_msg:find("auto%-discovery") then
   error("auto-discovery missing-device message should explain the default behavior")

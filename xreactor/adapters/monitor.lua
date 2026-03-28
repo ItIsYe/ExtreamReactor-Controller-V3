@@ -28,7 +28,7 @@ local function safe_call(mon, name, method, log_prefix, ...)
     return false, "missing method"
   end
   local results = table.pack(pcall(function(...)
-    return mon[method](mon, ...)
+    return mon[method](...)
   end, ...))
   if not results[1] then
     log_once(log_prefix, tostring(name) .. ":" .. tostring(method), "Monitor call failed for " .. tostring(name) .. "." .. tostring(method) .. ": " .. tostring(results[2]))

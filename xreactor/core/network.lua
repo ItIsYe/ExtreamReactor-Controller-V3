@@ -112,7 +112,7 @@ local function discover_modems()
       if type_name == "modem" and wrapped then
         local wireless = nil
         if type(wrapped.isWireless) == "function" then
-          local ok, result = pcall(wrapped.isWireless, wrapped)
+          local ok, result = pcall(wrapped.isWireless)
           if ok then
             wireless = result == true
           end

@@ -75,7 +75,7 @@ local function safe_monitor_call(mon, method, ...)
     return false, "missing method"
   end
   return pcall(function(...)
-    return mon[method](mon, ...)
+    return mon[method](...)
   end, ...)
 end
 

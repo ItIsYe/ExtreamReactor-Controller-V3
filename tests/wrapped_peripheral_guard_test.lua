@@ -16,14 +16,21 @@ local function test_monitor_adapter_find_calls_wrapped_getSize_safely()
     wrap = function(name)
       if name ~= 'monitor_1' then return nil end
       return {
-        getSize = function(self)
-          if self == nil then
-            error('self should be forwarded for wrapped monitor calls')
+        getSize = function(arg1)
+          if arg1 ~= nil then
+            error('wrapped monitor getSize must not receive implicit self argument')
           end
           calls = calls + 1
           return 10, 5
         end,
-        setTextScale = function() end,
+        setTextScale = function(value, extra)
+          if extra ~= nil then
+            error('wrapped monitor setTextScale must not receive an extra self argument')
+          end
+          if value ~= 0.5 then
+            error('expected monitor scale value 0.5 during discovery')
+          end
+        end,
       }
     end,
   }
@@ -40,8 +47,11 @@ end
 local function test_ui_setScale_normalizes_and_avoids_duplicate_calls()
   local set_calls = 0
   local mon = {
-    setTextScale = function(_, value)
+    setTextScale = function(value, extra)
       set_calls = set_calls + 1
+      if extra ~= nil then
+        error('ui.setScale must not pass implicit self for wrapped monitor call')
+      end
       if value ~= 1.5 then
         error('expected scale rounding to nearest 0.5 value')
       end

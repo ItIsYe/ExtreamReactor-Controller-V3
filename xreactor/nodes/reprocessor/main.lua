@@ -293,7 +293,7 @@ local function read_buffers()
   for name, buf in pairs(buffers) do
     local stored = 0
     if buf.list and buf.size then
-      local ok, items = pcall(buf.list, buf)
+      local ok, items = pcall(buf.list)
       if ok and type(items) == "table" then
         for _, stack in pairs(items) do
           if type(stack) == "table" and type(stack.count) == "number" then
@@ -304,14 +304,14 @@ local function read_buffers()
         warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(items))
       end
     elseif buf.getWaste then
-      local ok, value = pcall(buf.getWaste, buf)
+      local ok, value = pcall(buf.getWaste)
       if ok and type(value) == "number" then
         stored = value
       elseif not ok then
         warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value))
       end
     elseif buf.getItemCount then
-      local ok, value = pcall(buf.getItemCount, buf)
+      local ok, value = pcall(buf.getItemCount)
       if ok and type(value) == "number" then
         stored = value
       elseif not ok then
@@ -496,7 +496,7 @@ local function process_buffers()
   if standby then return end
   for _, buf in pairs(buffers) do
     if buf.process then
-      pcall(buf.process, buf)
+      pcall(buf.process)
     end
   end
 end

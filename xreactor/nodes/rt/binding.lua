@@ -83,7 +83,7 @@ function binding.detect_kind(type_name, methods)
   if method_set.getRotorSpeed or method_set.getRotorRPM or method_set.setFluidFlowRateMax or method_set.setFluidFlowRate then
     return "turbine", "turbine method signature"
   end
-  if method_set.getControlRodLevel or method_set.setAllControlRodLevels or method_set.getFuelAmount then
+  if method_set.getControlRodLevel or method_set.setAllControlRodLevels or method_set.setControlRodLevel or method_set.getFuelAmount then
     return "reactor", "reactor method signature"
   end
   return nil, "unsupported signature"

@@ -3,7 +3,10 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 local fluid = require("core.fluid")
 
 local modern = {
-  tanks = function()
+  tanks = function(extra)
+    if extra ~= nil then
+      error("wrapped tanks() call must not receive implicit self argument")
+    end
     return {
       [1] = { name = "steam", amount = 1250 },
       [3] = { name = "steam", amount = 750 },
@@ -12,7 +15,12 @@ local modern = {
 }
 
 local legacy = {
-  getFluidAmount = function() return 900 end
+  getFluidAmount = function(extra)
+    if extra ~= nil then
+      error("wrapped getFluidAmount() call must not receive implicit self argument")
+    end
+    return 900
+  end
 }
 
 local broken = {
