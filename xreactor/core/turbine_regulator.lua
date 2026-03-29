@@ -97,4 +97,15 @@ function regulator.update_effective_min(state, requested_flow, confirmed_flow, r
   return state.effective_min_flow, false
 end
 
+function regulator.resolve_min_flow(base_min, effective_min_flow)
+  local min_flow = sanitize_number(base_min, 0)
+  if min_flow < 0 then
+    min_flow = 0
+  end
+  if type(effective_min_flow) == "number" and effective_min_flow > min_flow then
+    return effective_min_flow, true
+  end
+  return min_flow, false
+end
+
 return regulator

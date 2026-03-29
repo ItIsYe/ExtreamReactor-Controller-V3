@@ -195,6 +195,12 @@ end
 if not tostring(status.startup_action):find("rt.log.preboot", 1, true) then
   error("expected startup action to include removed filenames for diagnostics")
 end
+if not tostring(status.startup_action):find("startup_min_required=", 1, true) then
+  error("expected startup diagnostics to include startup minimum threshold")
+end
+if not tostring(status.startup_action):find("target_budget=", 1, true) then
+  error("expected startup diagnostics to include target budget threshold")
+end
 
 logger.log("RT", "disk-write", "INFO")
 logger.flush()
@@ -220,6 +226,16 @@ if tostring(network_status.startup_action):find("non%-disk", 1, false) then
 end
 if not tostring(network_status.startup_action):find("disk=true", 1, true) then
   error("expected startup action diagnostics to expose disk classification for /disk2")
+end
+
+-- Disk startup should remain on disk when there is enough room to start but less than target budget.
+free_space_by_path["/disk2/xreactor_logs"] = 1724
+local startup_tight_ok = logger.init({ log_name = "startup_tight_ok", enabled = true, truncate = true, log_dir = "/disk2/xreactor_logs" })
+if startup_tight_ok.log_dir ~= "/disk2/xreactor_logs" then
+  error("expected disk startup to stay on disk when startup minimum is satisfied")
+end
+if tostring(startup_tight_ok.startup_action):find("startup_space_reject", 1, true) then
+  error("startup should not reject disk when startup minimum is satisfied")
 end
 
 -- Disk target must allow bigger budget than local.
@@ -263,8 +279,14 @@ local explicit_fallback = logger.init({ log_name = "tight", enabled = true, trun
 if explicit_fallback.log_dir ~= "/xreactor_logs" then
   error("expected explicit disk path fallback to local when space is insufficient")
 end
-if not tostring(explicit_fallback.log_source):find("fallback%-local%(explicit%-disk:space:", 1, false) then
+if not tostring(explicit_fallback.log_source):find("fallback%-local%(explicit%-disk:space%-startup:", 1, false) then
   error("expected explicit disk fallback reason to include space diagnostics")
+end
+
+free_space_by_path["/disk/tiny_logs"] = 12
+local startup_space_reject = logger.init({ log_name = "tiny", enabled = true, truncate = true, log_dir = "/disk/tiny_logs" })
+if startup_space_reject.log_dir ~= "/xreactor_logs" then
+  error("expected explicit tiny disk path to fallback to local")
 end
 
 -- Peripheral network drive mount path should also be considered.

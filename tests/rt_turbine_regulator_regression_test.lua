@@ -162,4 +162,14 @@ if m5 ~= nil or not changed5 then
   error('effective minimum should clear when requested flow leaves zero')
 end
 
+local resolved_min_a, used_effective_a = regulator.resolve_min_flow(0, 200)
+if resolved_min_a ~= 200 or not used_effective_a then
+  error('effective minimum should raise clamp minimum per turbine')
+end
+
+local resolved_min_b, used_effective_b = regulator.resolve_min_flow(200, 1)
+if resolved_min_b ~= 200 or used_effective_b then
+  error('base minimum should win when effective minimum is lower')
+end
+
 print('rt_turbine_regulator_regression_test.lua: ok')
