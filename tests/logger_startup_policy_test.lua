@@ -58,7 +58,30 @@ _G.fs = {
       end
       return out
     end
-    return {}
+    local out = {}
+    local seen = {}
+    local prefix = path == "/" and "/" or (path .. "/")
+    for file_path in pairs(files) do
+      if file_path:sub(1, #prefix) == prefix then
+        local rest = file_path:sub(#prefix + 1)
+        local first = rest:match("^([^/]+)")
+        if first and not seen[first] then
+          seen[first] = true
+          out[#out + 1] = first
+        end
+      end
+    end
+    for dir_path in pairs(dirs) do
+      if dir_path:sub(1, #prefix) == prefix then
+        local rest = dir_path:sub(#prefix + 1)
+        local first = rest:match("^([^/]+)")
+        if first and not seen[first] then
+          seen[first] = true
+          out[#out + 1] = first
+        end
+      end
+    end
+    return out
   end,
   getFreeSpace = function(path)
     if free_space_by_path[path] ~= nil then
@@ -140,12 +163,20 @@ package.loaded["core.logger"] = nil
 local logger = require("core.logger")
 
 ensure_dir("/disk")
+write_file("/disk/xreactor_logs/rt.log.1", "old-1")
+write_file("/disk/xreactor_logs/rt.log.2", "old-2")
 local status = logger.init({ log_name = "rt", enabled = true, truncate = true })
 if status.log_dir ~= "/disk/xreactor_logs" then
   error("expected auto disk log_dir when disk is suitable")
 end
 if not tostring(status.log_source):find("auto%-disk:/disk", 1, false) then
   error("expected auto-disk source with disk root")
+end
+if files["/disk/xreactor_logs/rt.log.1"] or files["/disk/xreactor_logs/rt.log.2"] then
+  error("expected startup cleanup to delete stale disk log rotations")
+end
+if not tostring(status.startup_action):find("cleanup:removed=2", 1, true) then
+  error("expected startup action to expose disk cleanup result")
 end
 
 logger.log("RT", "disk-write", "INFO")

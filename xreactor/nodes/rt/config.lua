@@ -37,8 +37,8 @@ local CONFIG = {
       max_step_up = 50, -- Max flow increase per tick.
       max_step_down = 50, -- Max flow decrease per tick.
       cooldown_s = 1.0, -- Minimum seconds between flow changes.
-      min = 200, -- Flow clamp minimum.
-      max = 1900, -- Flow clamp maximum.
+      min = 0, -- Flow clamp minimum.
+      max = 2000, -- Flow clamp maximum.
       ema_alpha = 0.2 -- RPM smoothing alpha.
     },
     reactor_rods = {

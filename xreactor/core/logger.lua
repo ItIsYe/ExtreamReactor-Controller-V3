@@ -376,8 +376,38 @@ local function parse_message_level(message, level)
 end
 
 local function startup_prepare(path, mode, log_dir)
+  local cleanup_summary = "none"
+  local cleanup_path = log_dir or CONFIG.LOG_DIR
+  local function cleanup_rotated_logs()
+    if not is_disk_path(cleanup_path) then
+      return "skipped-non-disk"
+    end
+    if not (fs and type(fs.list) == "function" and fs.exists and fs.exists(cleanup_path)) then
+      return "skipped-unavailable"
+    end
+    local ok, entries = pcall(fs.list, cleanup_path)
+    if not ok or type(entries) ~= "table" then
+      return "list-failed"
+    end
+    local removed = 0
+    local failures = 0
+    for _, entry in ipairs(entries) do
+      if type(entry) == "string" and entry:match("%.log%.[0-9]+$") then
+        local stale_path = cleanup_path .. "/" .. entry
+        local deleted = pcall(fs.delete, stale_path)
+        if deleted then
+          removed = removed + 1
+        else
+          failures = failures + 1
+        end
+      end
+    end
+    return "removed=" .. tostring(removed) .. ",failed=" .. tostring(failures)
+  end
+
+  cleanup_summary = cleanup_rotated_logs()
   if mode == "keep" then
-    return "kept"
+    return "kept(cleanup:" .. tostring(cleanup_summary) .. ")"
   end
   local ok = pcall(function()
     ensure_dir(log_dir or CONFIG.LOG_DIR)
@@ -398,12 +428,12 @@ local function startup_prepare(path, mode, log_dir)
       state.warn_once = true
       print("WARN: Log startup policy failed for " .. tostring(path))
     end
-    return "startup_policy_failed"
+    return "startup_policy_failed(cleanup:" .. tostring(cleanup_summary) .. ")"
   end
   if mode == "rotate" then
-    return "rotated"
+    return "rotated(cleanup:" .. tostring(cleanup_summary) .. ")"
   end
-  return "truncated"
+  return "truncated(cleanup:" .. tostring(cleanup_summary) .. ")"
 end
 
 function logger.init(opts)

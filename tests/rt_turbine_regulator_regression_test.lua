@@ -40,8 +40,8 @@ local flow_cfg = {
   max_step_up = 50,
   max_step_down = 50,
   cooldown_s = 0,
-  min = 200,
-  max = 1900,
+  min = 0,
+  max = 2000,
   ema_alpha = 1.0,
 }
 
@@ -62,6 +62,22 @@ if not (flow_b < 500 and dir_b < 0) then
 end
 if flow_a == flow_b then
   error('different RPMs must produce different flow targets')
+end
+
+local low_flow, low_dir = next_flow(1980, 400, 900)
+if not (low_flow == 2000 and low_dir > 0) then
+  error('low RPM should clamp up to max flow 2000')
+end
+
+local high_flow, high_dir = next_flow(40, 1300, 900)
+if not (high_flow == 0 and high_dir < 0) then
+  error('high RPM should clamp down to min flow 0')
+end
+
+local t1_flow = next_flow(700, 850, 900)
+local t2_flow = next_flow(700, 1100, 900)
+if t1_flow == t2_flow then
+  error('per-turbine RPM inputs must yield individual flow results')
 end
 
 print('rt_turbine_regulator_regression_test.lua: ok')
