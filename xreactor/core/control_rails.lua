@@ -60,13 +60,51 @@ local function resolve_ramp(config, direction)
   return 1
 end
 
+local function resolve_step(cfg, direction, error, ramp_multiplier)
+  local max_key = direction > 0 and "max_step_up" or "max_step_down"
+  local min_key = direction > 0 and "min_step_up" or "min_step_down"
+  local gain_key = direction > 0 and "step_per_rpm_up" or "step_per_rpm_down"
+
+  local max_step = math.max(0, tonumber(cfg[max_key]) or 0) * ramp_multiplier
+  if max_step == 0 then
+    return 0
+  end
+
+  local min_step = tonumber(cfg[min_key])
+  if type(min_step) ~= "number" then
+    min_step = max_step
+  else
+    min_step = math.max(0, min_step * ramp_multiplier)
+  end
+  if min_step > max_step then
+    min_step = max_step
+  end
+
+  if cfg.adaptive_step ~= true then
+    return max_step
+  end
+
+  local step_per_rpm = tonumber(cfg[gain_key])
+  if type(step_per_rpm) ~= "number" or step_per_rpm <= 0 then
+    return max_step
+  end
+
+  local err_mag = math.abs(tonumber(error) or 0)
+  local dynamic_step = err_mag * step_per_rpm * ramp_multiplier
+  return clamp(dynamic_step, min_step, max_step)
+end
+
 function rails.step(current, error, state, config, now)
   state = ensure_state(state)
   local cfg = config or {}
   local time_now = now or os.clock()
   local cooldown = math.max(0, tonumber(cfg.cooldown_s) or 0)
   if cooldown > 0 and time_now - state.last_change_ts < cooldown then
-    return current, 0
+    return current, 0, {
+      reason = "COOLDOWN",
+      cooldown_s = cooldown,
+      since_change_s = time_now - state.last_change_ts
+    }
   end
 
   local deadband_up = math.max(0, tonumber(cfg.deadband_up) or 0)
@@ -84,26 +122,41 @@ function rails.step(current, error, state, config, now)
   end
 
   if direction == 0 then
-    return current, 0
+    return current, 0, {
+      reason = "DEADBAND",
+      error = error,
+      deadband_up = deadband_up,
+      deadband_down = deadband_down,
+      hysteresis_up = hysteresis_up,
+      hysteresis_down = hysteresis_down
+    }
   end
 
   local ramp_multiplier = resolve_ramp(cfg, direction)
-  local step_up = math.max(0, tonumber(cfg.max_step_up) or 0) * ramp_multiplier
-  local step_down = math.max(0, tonumber(cfg.max_step_down) or 0) * ramp_multiplier
-  local step = direction > 0 and step_up or step_down
+  local step = resolve_step(cfg, direction, error, ramp_multiplier)
   if step == 0 then
-    return current, 0
+    return current, 0, {
+      reason = "STEP_ZERO",
+      ramp_multiplier = ramp_multiplier
+    }
   end
 
   local next_value = current + direction * step
   next_value = clamp(next_value, cfg.min, cfg.max)
+  local reason = next_value == current and "CLAMP_NOOP" or "STEP"
 
   if next_value ~= current then
     state.last_change_ts = time_now
     state.last_direction = direction
   end
 
-  return next_value, direction
+  return next_value, direction, {
+    reason = reason,
+    step = step,
+    ramp_multiplier = ramp_multiplier,
+    min = cfg.min,
+    max = cfg.max
+  }
 end
 
 return rails

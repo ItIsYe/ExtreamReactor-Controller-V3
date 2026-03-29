@@ -37,8 +37,13 @@ local flow_cfg = {
   deadband_down = 20,
   hysteresis_up = 0,
   hysteresis_down = 0,
-  max_step_up = 50,
-  max_step_down = 50,
+  max_step_up = 250,
+  max_step_down = 250,
+  min_step_up = 50,
+  min_step_down = 50,
+  step_per_rpm_up = 0.5,
+  step_per_rpm_down = 0.5,
+  adaptive_step = true,
   cooldown_s = 0,
   min = 0,
   max = 2000,
@@ -48,8 +53,8 @@ local flow_cfg = {
 local function next_flow(current, rpm, target)
   local state = rails.new_state()
   local error = target - rpm
-  local flow, direction = rails.step(current, error, state, flow_cfg, os.clock())
-  return flow, direction
+  local flow, direction, decision = rails.step(current, error, state, flow_cfg, os.clock())
+  return flow, direction, decision
 end
 
 local flow_a, dir_a = next_flow(500, 820, 900)
@@ -78,6 +83,32 @@ local t1_flow = next_flow(700, 850, 900)
 local t2_flow = next_flow(700, 1100, 900)
 if t1_flow == t2_flow then
   error('per-turbine RPM inputs must yield individual flow results')
+end
+
+local small_error_flow = next_flow(1000, 890, 900)
+if small_error_flow ~= 1000 then
+  error('RPM within deadband should hold flow')
+end
+
+local medium_step_flow, _, medium_decision = next_flow(500, 760, 900) -- +140 rpm error
+if medium_step_flow ~= 570 then
+  error('adaptive step should use proportional delta for medium RPM error')
+end
+if not (medium_decision and medium_decision.step == 70) then
+  error('decision metadata must expose applied adaptive step')
+end
+
+local huge_step_flow, _, huge_decision = next_flow(500, 0, 900)
+if huge_step_flow ~= 750 then
+  error('adaptive step should be capped at max_step_up')
+end
+if not (huge_decision and huge_decision.step == 250) then
+  error('decision metadata should show capped step')
+end
+
+local start_flow = regulator.clamp_flow(nil, 0, 2000)
+if start_flow ~= 0 then
+  error('startup fallback flow must clamp to lower bound 0')
 end
 
 print('rt_turbine_regulator_regression_test.lua: ok')
