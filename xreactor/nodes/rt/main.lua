@@ -138,9 +138,14 @@ local DEFAULT_CONFIG = {
       deadband_down = CONFIG.RPM_TOLERANCE, -- RPM deadband before decreasing flow.
       hysteresis_up = 10, -- Extra RPM hysteresis for up direction.
       hysteresis_down = 10, -- Extra RPM hysteresis for down direction.
-      max_step_up = CONFIG.FLOW_STEP, -- Max flow increase per tick.
-      max_step_down = CONFIG.FLOW_STEP, -- Max flow decrease per tick.
-      cooldown_s = 1.0, -- Minimum seconds between flow changes.
+      max_step_up = 250, -- Max flow increase per tick.
+      max_step_down = 250, -- Max flow decrease per tick.
+      min_step_up = 50, -- Min flow increase when adaptive stepping is active.
+      min_step_down = 50, -- Min flow decrease when adaptive stepping is active.
+      step_per_rpm_up = 0.5, -- Flow step gain per RPM error (up direction).
+      step_per_rpm_down = 0.5, -- Flow step gain per RPM error (down direction).
+      adaptive_step = true, -- Enable adaptive step sizing based on RPM error.
+      cooldown_s = 0.2, -- Minimum seconds between flow changes.
       min = CONFIG.MIN_FLOW, -- Flow clamp minimum.
       max = CONFIG.MAX_FLOW, -- Flow clamp maximum.
       ema_alpha = 0.2 -- RPM smoothing alpha.
@@ -428,6 +433,20 @@ local function normalize_rail(section, defaults)
   data.cooldown_s = clamp_nonneg(data.cooldown_s, defaults.cooldown_s)
   data.min = type(data.min) == "number" and data.min or defaults.min
   data.max = type(data.max) == "number" and data.max or defaults.max
+  if section == "turbine_flow" then
+    data.min = safety.clamp(data.min, MIN_FLOW, MAX_FLOW)
+    data.max = safety.clamp(data.max, MIN_FLOW, MAX_FLOW)
+    if data.min > data.max then
+      data.min, data.max = MIN_FLOW, MAX_FLOW
+    end
+    data.max_step_up = math.max(data.max_step_up, defaults.max_step_up)
+    data.max_step_down = math.max(data.max_step_down, defaults.max_step_down)
+    data.min_step_up = clamp_nonneg(data.min_step_up, defaults.min_step_up)
+    data.min_step_down = clamp_nonneg(data.min_step_down, defaults.min_step_down)
+    data.step_per_rpm_up = clamp_nonneg(data.step_per_rpm_up, defaults.step_per_rpm_up)
+    data.step_per_rpm_down = clamp_nonneg(data.step_per_rpm_down, defaults.step_per_rpm_down)
+    data.adaptive_step = data.adaptive_step ~= false
+  end
   if type(data.ema_alpha) ~= "number" or data.ema_alpha <= 0 or data.ema_alpha >= 1 then
     data.ema_alpha = defaults.ema_alpha
   end
@@ -1046,7 +1065,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   local target = target_rpm or TARGET_RPM
   local error = target - (smoothed_rpm or target)
   rail_cfg.ramp_profile = ctrl.ramp_profile or rail_cfg.ramp_profile or "NORMAL"
-  local next_flow, direction = rails.step(ctrl.flow, error, flow_state, rail_cfg, os.clock())
+  local next_flow, direction, decision = rails.step(ctrl.flow, error, flow_state, rail_cfg, os.clock())
   ctrl.flow = clamp_turbine_flow(next_flow)
   if direction > 0 then
     ctrl.mode = "UP"
@@ -1055,7 +1074,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   else
     ctrl.mode = "HOLD"
   end
-  return ctrl.flow, ctrl.mode
+  return ctrl.flow, ctrl.mode, decision, smoothed_rpm
 end
 
 local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
@@ -1064,16 +1083,26 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     ctrl.rpm = rpm
   end
   local old_flow = ctrl.flow
-  local flow, mode = update_turbine_flow_state(rpm, target_rpm, ctrl)
+  local flow, mode, decision, smoothed_rpm = update_turbine_flow_state(rpm, target_rpm, ctrl)
   local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, flow)
   local observed_flow, flow_reader = read_turbine_flow(turbine, caps)
   local direction = mode
+  local rail_cfg = config.rails and config.rails.turbine_flow or {}
+  local reason = decision and decision.reason or "NONE"
+  local step = decision and decision.step or "nil"
+  local applied_min = decision and decision.min or rail_cfg.min
+  local applied_max = decision and decision.max or rail_cfg.max
   log("DEBUG", "TurbineCtrl name=" .. name
       .. " rpm=" .. tostring(rpm)
+      .. " rpm_smooth=" .. tostring(smoothed_rpm)
       .. " target_rpm=" .. tostring(target_rpm)
       .. " old_flow=" .. tostring(old_flow)
       .. " new_flow=" .. tostring(flow)
       .. " direction=" .. tostring(direction)
+      .. " reason=" .. tostring(reason)
+      .. " step=" .. tostring(step)
+      .. " clamp_min=" .. tostring(applied_min)
+      .. " clamp_max=" .. tostring(applied_max)
       .. " set_api=" .. tostring(setter)
       .. " set_called=" .. tostring(ok and applied)
       .. " flow_read=" .. tostring(observed_flow)
