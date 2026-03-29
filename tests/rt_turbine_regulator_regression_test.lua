@@ -111,4 +111,26 @@ if start_flow ~= 0 then
   error('startup fallback flow must clamp to lower bound 0')
 end
 
+if regulator.flows_match(0, 200, 1) then
+  error('requested and confirmed flow must not match when delta exceeds tolerance')
+end
+if not regulator.flows_match(200, 201, 1) then
+  error('flow match should allow tolerance window')
+end
+
+local defer_a, reason_a = regulator.should_defer_cooldown(0, 200, 10.0, 10.2, 0.8, 1)
+if not defer_a or reason_a ~= 'WAITING_CONFIRM' then
+  error('cooldown should defer while flow change is pending confirmation')
+end
+
+local defer_b, reason_b = regulator.should_defer_cooldown(0, 200, 10.0, 11.1, 0.8, 1)
+if defer_b or reason_b ~= 'SETTLE_TIMEOUT' then
+  error('cooldown defer should end after settle timeout')
+end
+
+local defer_c, reason_c = regulator.should_defer_cooldown(500, 500, 10.0, 10.1, 0.8, 1)
+if defer_c or reason_c ~= 'SETTLED' then
+  error('cooldown must not defer for settled flow values')
+end
+
 print('rt_turbine_regulator_regression_test.lua: ok')

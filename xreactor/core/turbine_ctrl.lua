@@ -37,8 +37,26 @@ local function ensure_turbine_ctrl(name)
   if ctrl.flow == nil then
     ctrl.flow = 0
   end
+  if ctrl.requested_flow == nil then
+    ctrl.requested_flow = ctrl.flow
+  end
+  if ctrl.confirmed_flow == nil then
+    ctrl.confirmed_flow = ctrl.flow
+  end
   if ctrl.target_flow == nil then
     ctrl.target_flow = 0
+  end
+  if ctrl.pending_flow_since == nil then
+    ctrl.pending_flow_since = 0
+  end
+  if ctrl.pending_retries == nil then
+    ctrl.pending_retries = 0
+  end
+  if ctrl.effective_min_flow == nil then
+    ctrl.effective_min_flow = nil
+  end
+  if ctrl.effective_min_hits == nil then
+    ctrl.effective_min_hits = 0
   end
   if ctrl.last_rpm == nil then
     ctrl.last_rpm = 0

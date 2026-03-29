@@ -59,6 +59,8 @@ local function summarize_error(err)
   return tostring(err)
 end
 
+local list_disk_roots
+
 local function disk_free_ok(root)
   if not fs or type(fs.getFreeSpace) ~= "function" then
     return true
@@ -92,10 +94,20 @@ local function is_disk_path(path)
   if type(path) ~= "string" then
     return false
   end
-  return path:match("^/disk%d*($|/)")
+  if path:match("^/disk%d*($|/)") then
+    return true
+  end
+  for _, root in ipairs(list_disk_roots()) do
+    if type(root) == "string" and root ~= "" then
+      if path == root or path:sub(1, #root + 1) == (root .. "/") then
+        return true
+      end
+    end
+  end
+  return false
 end
 
-local function list_disk_roots()
+function list_disk_roots()
   local roots = {}
   local seen = {}
   local function add(path)
@@ -377,17 +389,18 @@ end
 
 local function startup_prepare(path, mode, log_dir)
   local cleanup_summary = "none"
-  local cleanup_path = log_dir or CONFIG.LOG_DIR
+  local cleanup_path = log_dir or (type(path) == "string" and path:match("^(.*)/[^/]+$")) or CONFIG.LOG_DIR
+  local cleanup_is_disk = is_disk_path(cleanup_path)
   local function cleanup_rotated_logs()
-    if not is_disk_path(cleanup_path) then
-      return "skipped-non-disk"
+    if not cleanup_is_disk then
+      return "executed=false,reason=non-disk,path=" .. tostring(cleanup_path)
     end
     if not (fs and type(fs.list) == "function" and fs.exists and fs.exists(cleanup_path)) then
-      return "skipped-unavailable"
+      return "executed=false,reason=unavailable,path=" .. tostring(cleanup_path)
     end
     local ok, entries = pcall(fs.list, cleanup_path)
     if not ok or type(entries) ~= "table" then
-      return "list-failed"
+      return "executed=false,reason=list-failed,path=" .. tostring(cleanup_path)
     end
     local removed = 0
     local failures = 0
@@ -398,8 +411,9 @@ local function startup_prepare(path, mode, log_dir)
       if type(entry) == "string" then
         local is_rotated_log = entry:match("%.log%..+$") ~= nil
         local is_cleanup_probe = entry == ".xreactor_log_probe"
+        local is_temp = entry:match("%.tmp$") ~= nil or entry:match("%.temp$") ~= nil or entry:match("%.old$") ~= nil or entry:match("%.bak$") ~= nil
         local is_active = active_name ~= nil and entry == active_name
-        if (is_rotated_log or is_cleanup_probe) and not is_active then
+        if (is_rotated_log or is_cleanup_probe or is_temp) and not is_active then
           local stale_path = cleanup_path .. "/" .. entry
           local deleted = pcall(fs.delete, stale_path)
           if deleted then
@@ -416,12 +430,13 @@ local function startup_prepare(path, mode, log_dir)
     table.sort(failure_names)
     local removed_detail = #removed_names > 0 and table.concat(removed_names, "|") or "none"
     local failed_detail = #failure_names > 0 and table.concat(failure_names, "|") or "none"
-    return "removed=" .. tostring(removed) .. "[" .. removed_detail .. "],failed=" .. tostring(failures) .. "[" .. failed_detail .. "]"
+    return "executed=true,path=" .. tostring(cleanup_path) .. ",removed=" .. tostring(removed) .. "[" .. removed_detail .. "],failed=" .. tostring(failures) .. "[" .. failed_detail .. "]"
   end
 
   cleanup_summary = cleanup_rotated_logs()
+  local cleanup_prefix = "path=" .. tostring(cleanup_path) .. ",disk=" .. tostring(cleanup_is_disk) .. ",cleanup={" .. tostring(cleanup_summary) .. "}"
   if mode == "keep" then
-    return "kept(cleanup:" .. tostring(cleanup_summary) .. ")"
+    return "kept(" .. cleanup_prefix .. ")"
   end
   local ok = pcall(function()
     ensure_dir(log_dir or CONFIG.LOG_DIR)
@@ -442,12 +457,12 @@ local function startup_prepare(path, mode, log_dir)
       state.warn_once = true
       print("WARN: Log startup policy failed for " .. tostring(path))
     end
-    return "startup_policy_failed(cleanup:" .. tostring(cleanup_summary) .. ")"
+    return "startup_policy_failed(" .. cleanup_prefix .. ")"
   end
   if mode == "rotate" then
-    return "rotated(cleanup:" .. tostring(cleanup_summary) .. ")"
+    return "rotated(" .. cleanup_prefix .. ")"
   end
-  return "truncated(cleanup:" .. tostring(cleanup_summary) .. ")"
+  return "truncated(" .. cleanup_prefix .. ")"
 end
 
 function logger.init(opts)
