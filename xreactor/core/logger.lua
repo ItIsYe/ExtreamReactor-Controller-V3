@@ -18,6 +18,7 @@ local CONFIG = {
   DISK_LOG_DIR = DISK_LOG_DIR,
   DISK_ROOT = "/disk",
   DISK_MIN_FREE_BYTES = 4096,
+  DISK_STARTUP_MIN_FREE_BYTES = 128,
   SETTINGS_KEY = "xreactor.debug_logging",
   DEFAULT_ENABLED = false,
   FLUSH_LINES = 8,
@@ -61,9 +62,9 @@ end
 
 local list_disk_roots
 
-local function disk_free_ok(root)
+local function get_free_space(root)
   if not fs or type(fs.getFreeSpace) ~= "function" then
-    return true
+    return true, nil
   end
   local ok, free = pcall(fs.getFreeSpace, root or CONFIG.DISK_ROOT)
   if not ok then
@@ -72,7 +73,7 @@ local function disk_free_ok(root)
   if type(free) == "string" then
     local lowered = string.lower(free)
     if lowered == "unlimited" or lowered == "inf" then
-      return true
+      return true, math.huge
     end
     local parsed = tonumber(free)
     if parsed then
@@ -84,10 +85,22 @@ local function disk_free_ok(root)
   if type(free) ~= "number" then
     return false, "invalid-free-space-type:" .. type(free)
   end
-  if free < (CONFIG.DISK_MIN_FREE_BYTES or 0) then
-    return false, "insufficient-free-space:" .. tostring(free)
+  return true, free
+end
+
+local function disk_free_ok(root, required_bytes)
+  local ok, free_or_reason = get_free_space(root)
+  if not ok then
+    return false, free_or_reason
   end
-  return true
+  local required = tonumber(required_bytes) or 0
+  if required < 0 then
+    required = 0
+  end
+  if type(free_or_reason) == "number" and free_or_reason < required then
+    return false, "insufficient-free-space:" .. tostring(free_or_reason)
+  end
+  return true, free_or_reason
 end
 
 local function is_disk_path(path)
@@ -174,9 +187,9 @@ local function disk_write_test(path)
 end
 
 local function validate_log_target(path)
-  local free_ok, free_reason = disk_free_ok(path)
+  local free_ok, free_reason = disk_free_ok(path, CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
   if not free_ok then
-    return false, "space:" .. tostring(free_reason)
+    return false, "space-startup:" .. tostring(free_reason)
   end
   local writable, write_reason = disk_write_test(path)
   if not writable then
@@ -393,6 +406,11 @@ local function startup_prepare(path, mode, log_dir)
   local final_dir = log_dir or (final_path ~= "" and final_path:match("^(.*)/[^/]+$")) or CONFIG.LOG_DIR
   local cleanup_path = final_dir
   local cleanup_is_disk = is_disk_path(final_dir)
+  local free_before = "n/a"
+  if cleanup_is_disk then
+    local _, before_value = disk_free_ok(final_dir, 0)
+    free_before = tostring(before_value)
+  end
   local function cleanup_rotated_logs()
     if not cleanup_is_disk then
       return "executed=false,reason=non-disk,path=" .. tostring(cleanup_path)
@@ -413,7 +431,12 @@ local function startup_prepare(path, mode, log_dir)
       if type(entry) == "string" then
         local is_rotated_log = entry:match("%.log%..+$") ~= nil
         local is_cleanup_probe = entry == ".xreactor_log_probe"
-        local is_temp = entry:match("%.tmp$") ~= nil or entry:match("%.temp$") ~= nil or entry:match("%.old$") ~= nil or entry:match("%.bak$") ~= nil
+        local is_temp = entry:match("%.tmp$") ~= nil
+          or entry:match("%.temp$") ~= nil
+          or entry:match("%.old$") ~= nil
+          or entry:match("%.bak$") ~= nil
+          or entry:match("%.preboot$") ~= nil
+          or entry:match("^%.xreactor_.*%.tmp$") ~= nil
         local is_active = active_name ~= nil and entry == active_name
         if (is_rotated_log or is_cleanup_probe or is_temp) and not is_active then
           local stale_path = cleanup_path .. "/" .. entry
@@ -436,10 +459,31 @@ local function startup_prepare(path, mode, log_dir)
   end
 
   cleanup_summary = cleanup_rotated_logs()
+  local free_after_cleanup = "n/a"
+  local startup_min = "n/a"
+  local target_budget = "n/a"
+  local startup_space_ok = true
+  local startup_space_reason = "n/a"
+  if cleanup_is_disk then
+    local _, after_value = disk_free_ok(final_dir, 0)
+    free_after_cleanup = tostring(after_value)
+    startup_min = tostring(CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
+    target_budget = tostring(CONFIG.DISK_MIN_FREE_BYTES or 0)
+    startup_space_ok, startup_space_reason = disk_free_ok(final_dir, CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
+  end
   local cleanup_prefix = "final_path=" .. tostring(final_path)
     .. ",final_dir=" .. tostring(final_dir)
     .. ",disk=" .. tostring(cleanup_is_disk)
+    .. ",free_before=" .. tostring(free_before)
+    .. ",free_after_cleanup=" .. tostring(free_after_cleanup)
+    .. ",startup_min_required=" .. tostring(startup_min)
+    .. ",target_budget=" .. tostring(target_budget)
+    .. ",startup_space_ok=" .. tostring(startup_space_ok)
+    .. ",startup_space_reason=" .. tostring(startup_space_reason)
     .. ",cleanup={" .. tostring(cleanup_summary) .. "}"
+  if cleanup_is_disk and not startup_space_ok then
+    return "startup_space_reject(" .. cleanup_prefix .. ")"
+  end
   if mode == "keep" then
     return "kept(" .. cleanup_prefix .. ")"
   end

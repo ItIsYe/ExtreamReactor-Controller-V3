@@ -61,6 +61,9 @@ local function ensure_turbine_ctrl(name)
   if ctrl.effective_min_hits == nil then
     ctrl.effective_min_hits = 0
   end
+  if ctrl.startup_synced == nil then
+    ctrl.startup_synced = false
+  end
   if ctrl.last_rpm == nil then
     ctrl.last_rpm = 0
   end
