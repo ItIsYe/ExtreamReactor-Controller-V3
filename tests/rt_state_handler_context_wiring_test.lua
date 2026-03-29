@@ -53,6 +53,8 @@ end
 do
   local ctx, calls = make_ctx()
   local handlers = state_handlers.build(ctx)
+  ctx.adjust_turbines = nil
+  ctx.adjust_reactors = nil
   handlers[constants.node_states.RUNNING].on_tick()
   assert_true(calls.turbines == 1, 'adjust_turbines should be called on RUNNING tick')
   assert_true(calls.reactors == 1, 'adjust_reactors should be called on RUNNING tick')

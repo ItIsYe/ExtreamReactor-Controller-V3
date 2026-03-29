@@ -5,10 +5,11 @@ function M.build(ctx)
     if type(ctx[name]) ~= "function" then
       error("state handler context missing function: " .. tostring(name), 2)
     end
+    return ctx[name]
   end
 
-  assert_fn("adjust_reactors")
-  assert_fn("adjust_turbines")
+  local adjust_reactors = assert_fn("adjust_reactors")
+  local adjust_turbines = assert_fn("adjust_turbines")
 
   local constants = ctx.constants
   local STATE = ctx.STATE
@@ -59,8 +60,8 @@ function M.build(ctx)
         ctx.start_module(module.id, module.type, "NORMAL")
       end
     end
-    ctx.adjust_turbines()
-    ctx.adjust_reactors()
+    adjust_turbines()
+    adjust_reactors()
     ctx.monitor_master()
     if not ctx.get_active_startup() and #ctx.get_startup_queue() == 0 then
       ctx.get_node_state_machine():transition(constants.node_states.RUNNING)
@@ -72,8 +73,8 @@ function M.build(ctx)
   end
 
   local function running_on_tick()
-    ctx.adjust_turbines()
-    ctx.adjust_reactors()
+    adjust_turbines()
+    adjust_reactors()
     ctx.monitor_master()
   end
 
@@ -83,8 +84,8 @@ function M.build(ctx)
 
   local function limited_on_tick()
     ctx.targets.power = ctx.targets.power * 0.5
-    ctx.adjust_reactors()
-    ctx.adjust_turbines()
+    adjust_reactors()
+    adjust_turbines()
     ctx.monitor_master()
   end
 
@@ -97,8 +98,8 @@ function M.build(ctx)
 
   local function autonom_on_tick()
     ctx.clamp_autonom_targets()
-    ctx.adjust_reactors()
-    ctx.adjust_turbines()
+    adjust_reactors()
+    adjust_turbines()
     if ctx.get_current_state() == STATE.MASTER then
       ctx.get_node_state_machine():transition(constants.node_states.RUNNING)
     end

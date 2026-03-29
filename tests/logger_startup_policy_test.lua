@@ -15,6 +15,12 @@ local moves = {}
 local print_lines = {}
 local disk_writable = true
 local disk_present = true
+local disk_roots = {
+  disk = true
+}
+local free_space_by_path = {
+  ["/disk"] = 800000
+}
 
 local function write_file(path, content)
   files[path] = content or ""
@@ -30,20 +36,30 @@ end
 
 _G.fs = {
   exists = function(path)
-    if path == "/disk" then
-      return disk_present
+    if path:match("^/disk%d*$") then
+      return disk_present and disk_roots[path:sub(2)] == true
     end
     return files[path] ~= nil or dirs[path] == true
   end,
   isDir = function(path)
-    if path == "/disk" then
-      return disk_present
+    if path:match("^/disk%d*$") then
+      return disk_present and disk_roots[path:sub(2)] == true
     end
     return dirs[path] == true
   end,
+  list = function(path)
+    if path == "/" then
+      local out = {}
+      for name in pairs(disk_roots) do
+        out[#out + 1] = name
+      end
+      return out
+    end
+    return {}
+  end,
   getFreeSpace = function(path)
-    if path == "/disk" then
-      return 800000
+    if free_space_by_path[path] ~= nil then
+      return free_space_by_path[path]
     end
     return 800000
   end,
@@ -108,14 +124,36 @@ local status = logger.init({ log_name = "rt", enabled = true, truncate = true })
 if status.log_dir ~= "/disk/xreactor_logs" then
   error("expected auto disk log_dir when disk is suitable")
 end
-if status.log_source ~= "auto-disk" then
-  error("expected auto-disk source")
+if not tostring(status.log_source):find("auto%-disk:/disk", 1, false) then
+  error("expected auto-disk source with disk root")
 end
 
 logger.log("RT", "disk-write", "INFO")
 logger.flush()
 if not files["/disk/xreactor_logs/rt.log"] then
   error("expected disk log file")
+end
+
+-- Simulate mounted network disk with real free space while /disk is nearly full.
+disk_roots.disk = true
+disk_roots.disk2 = true
+ensure_dir("/disk2")
+free_space_by_path["/disk"] = 13
+free_space_by_path["/disk2"] = 120000
+local network_status = logger.init({ log_name = "net", enabled = true, truncate = true })
+if network_status.log_dir ~= "/disk2/xreactor_logs" then
+  error("expected network disk mount to be selected when /disk is full")
+end
+if not tostring(network_status.log_source):find("auto%-disk:/disk2", 1, false) then
+  error("expected auto-disk source for /disk2")
+end
+
+-- Disk target must allow bigger budget than local.
+write_file("/disk2/xreactor_logs/net.log", string.rep("d", 250000))
+logger.log("RT", "disk-rotation-threshold-check", "INFO")
+logger.flush()
+if files["/disk2/xreactor_logs/net.log.1"] then
+  error("disk logs should not rotate at local budget limit")
 end
 
 -- Simulate disk disappearing after startup and require fallback.

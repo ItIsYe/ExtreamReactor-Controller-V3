@@ -17,7 +17,7 @@ local CONFIG = {
   LOG_DIR = DEFAULT_LOG_DIR,
   DISK_LOG_DIR = DISK_LOG_DIR,
   DISK_ROOT = "/disk",
-  DISK_MIN_FREE_BYTES = 32768,
+  DISK_MIN_FREE_BYTES = 4096,
   SETTINGS_KEY = "xreactor.debug_logging",
   DEFAULT_ENABLED = false,
   FLUSH_LINES = 8,
@@ -59,11 +59,11 @@ local function summarize_error(err)
   return tostring(err)
 end
 
-local function disk_free_ok()
+local function disk_free_ok(root)
   if not fs or type(fs.getFreeSpace) ~= "function" then
     return true
   end
-  local ok, free = pcall(fs.getFreeSpace, CONFIG.DISK_ROOT)
+  local ok, free = pcall(fs.getFreeSpace, root or CONFIG.DISK_ROOT)
   if not ok then
     return false, "free-space-check-failed"
   end
@@ -86,6 +86,31 @@ local function disk_free_ok()
     return false, "insufficient-free-space:" .. tostring(free)
   end
   return true
+end
+
+local function list_disk_roots()
+  local roots = {}
+  local seen = {}
+  local function add(path)
+    if type(path) ~= "string" or path == "" or seen[path] then
+      return
+    end
+    seen[path] = true
+    roots[#roots + 1] = path
+  end
+
+  add(CONFIG.DISK_ROOT)
+  if fs and type(fs.list) == "function" then
+    local ok, entries = pcall(fs.list, "/")
+    if ok and type(entries) == "table" then
+      for _, entry in ipairs(entries) do
+        if type(entry) == "string" and entry:match("^disk%d*$") then
+          add("/" .. entry)
+        end
+      end
+    end
+  end
+  return roots
 end
 
 local function disk_write_test(path)
@@ -120,25 +145,31 @@ local function resolve_log_dir(opts)
     end
   end
 
-  local disk_exists = fs and fs.exists and fs.exists(CONFIG.DISK_ROOT)
-  local disk_is_dir = fs and fs.isDir and fs.isDir(CONFIG.DISK_ROOT)
-  if disk_exists and disk_is_dir then
-    local free_ok, free_reason = disk_free_ok()
-    if free_ok then
-      local writable, write_reason = disk_write_test(CONFIG.DISK_LOG_DIR)
-      if writable then
-        return CONFIG.DISK_LOG_DIR, "auto-disk"
+  local disk_failures = {}
+  for _, disk_root in ipairs(list_disk_roots()) do
+    if fs and fs.exists and fs.exists(disk_root) and fs.isDir and fs.isDir(disk_root) then
+      local free_ok, free_reason = disk_free_ok(disk_root)
+      local disk_log_dir = disk_root .. "/xreactor_logs"
+      if free_ok then
+        local writable, write_reason = disk_write_test(disk_log_dir)
+        if writable then
+          return disk_log_dir, "auto-disk:" .. disk_root
+        end
+        disk_failures[#disk_failures + 1] = "write-test:" .. tostring(disk_root) .. ":" .. tostring(write_reason)
+      else
+        disk_failures[#disk_failures + 1] = "space:" .. tostring(disk_root) .. ":" .. tostring(free_reason)
       end
-      return DEFAULT_LOG_DIR, "fallback-local(write-test:" .. tostring(write_reason) .. ")"
     end
-    return DEFAULT_LOG_DIR, "fallback-local(space:" .. tostring(free_reason) .. ")"
+  end
+  if #disk_failures > 0 then
+    return DEFAULT_LOG_DIR, "fallback-local(" .. table.concat(disk_failures, "|") .. ")"
   end
 
   return DEFAULT_LOG_DIR, "default-local"
 end
 
 local function current_max_bytes()
-  if state.log_source == "auto-disk" then
+  if type(state.log_source) == "string" and state.log_source:sub(1, 9) == "auto-disk" then
     return CONFIG.DISK_MAX_BYTES or CONFIG.MAX_BYTES
   end
   return CONFIG.MAX_BYTES
