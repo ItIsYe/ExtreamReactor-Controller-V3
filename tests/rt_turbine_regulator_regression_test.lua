@@ -133,4 +133,33 @@ if defer_c or reason_c ~= 'SETTLED' then
   error('cooldown must not defer for settled flow values')
 end
 
+local defer_d, reason_d = regulator.should_defer_cooldown(0, 200, nil, 5.0, 0.8, 1)
+if not defer_d or reason_d ~= 'WAITING_CONFIRM' then
+  error('cooldown defer must handle missing pending timestamp during readback lag')
+end
+
+local tracker = { effective_min_hits = 0, effective_min_flow = nil }
+local m1, changed1 = regulator.update_effective_min(tracker, 0, 200, 3)
+local m2, changed2 = regulator.update_effective_min(tracker, 0, 200, 3)
+local m3, changed3 = regulator.update_effective_min(tracker, 0, 200, 3)
+if m1 ~= nil or changed1 then
+  error('effective minimum must not be confirmed after one sample')
+end
+if m2 ~= nil or changed2 then
+  error('effective minimum must not be confirmed before required samples')
+end
+if m3 ~= 200 or not changed3 then
+  error('effective minimum must be confirmed after required repeated samples')
+end
+
+local m4, changed4 = regulator.update_effective_min(tracker, 0, 200, 3)
+if m4 ~= 200 or changed4 then
+  error('effective minimum should stay stable without re-triggering change signal')
+end
+
+local m5, changed5 = regulator.update_effective_min(tracker, 300, 300, 3)
+if m5 ~= nil or not changed5 then
+  error('effective minimum should clear when requested flow leaves zero')
+end
+
 print('rt_turbine_regulator_regression_test.lua: ok')

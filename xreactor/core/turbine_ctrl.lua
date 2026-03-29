@@ -49,6 +49,9 @@ local function ensure_turbine_ctrl(name)
   if ctrl.pending_flow_since == nil then
     ctrl.pending_flow_since = 0
   end
+  if ctrl.pending_expected_flow == nil then
+    ctrl.pending_expected_flow = ctrl.requested_flow
+  end
   if ctrl.pending_retries == nil then
     ctrl.pending_retries = 0
   end

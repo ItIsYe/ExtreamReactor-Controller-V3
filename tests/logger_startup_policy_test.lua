@@ -215,6 +215,12 @@ end
 if not tostring(network_status.log_source):find("auto%-disk:/disk2", 1, false) then
   error("expected auto-disk source for /disk2")
 end
+if tostring(network_status.startup_action):find("non%-disk", 1, false) then
+  error("disk2 log target must not be classified as non-disk during cleanup")
+end
+if not tostring(network_status.startup_action):find("disk=true", 1, true) then
+  error("expected startup action diagnostics to expose disk classification for /disk2")
+end
 
 -- Disk target must allow bigger budget than local.
 write_file("/disk2/xreactor_logs/net.log", string.rep("d", 250000))
