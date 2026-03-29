@@ -389,8 +389,10 @@ end
 
 local function startup_prepare(path, mode, log_dir)
   local cleanup_summary = "none"
-  local cleanup_path = log_dir or (type(path) == "string" and path:match("^(.*)/[^/]+$")) or CONFIG.LOG_DIR
-  local cleanup_is_disk = is_disk_path(cleanup_path)
+  local final_path = type(path) == "string" and path or ""
+  local final_dir = log_dir or (final_path ~= "" and final_path:match("^(.*)/[^/]+$")) or CONFIG.LOG_DIR
+  local cleanup_path = final_dir
+  local cleanup_is_disk = is_disk_path(final_dir)
   local function cleanup_rotated_logs()
     if not cleanup_is_disk then
       return "executed=false,reason=non-disk,path=" .. tostring(cleanup_path)
@@ -434,7 +436,10 @@ local function startup_prepare(path, mode, log_dir)
   end
 
   cleanup_summary = cleanup_rotated_logs()
-  local cleanup_prefix = "path=" .. tostring(cleanup_path) .. ",disk=" .. tostring(cleanup_is_disk) .. ",cleanup={" .. tostring(cleanup_summary) .. "}"
+  local cleanup_prefix = "final_path=" .. tostring(final_path)
+    .. ",final_dir=" .. tostring(final_dir)
+    .. ",disk=" .. tostring(cleanup_is_disk)
+    .. ",cleanup={" .. tostring(cleanup_summary) .. "}"
   if mode == "keep" then
     return "kept(" .. cleanup_prefix .. ")"
   end

@@ -802,6 +802,7 @@ local function init_turbine_ctrl()
     ctrl.requested_flow = ctrl.flow
     ctrl.confirmed_flow = ctrl.flow
     ctrl.pending_flow_since = 0
+    ctrl.pending_expected_flow = ctrl.flow
     ctrl.pending_retries = 0
     ctrl.effective_min_hits = 0
     ctrl.effective_min_flow = nil
@@ -1080,8 +1081,12 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   rail_cfg.ramp_profile = ctrl.ramp_profile or rail_cfg.ramp_profile or "NORMAL"
   local base_flow = ctrl.requested_flow or ctrl.flow or 0
   local flow_cfg = rail_cfg
+  local pending_requested_flow = ctrl.pending_expected_flow
+  if type(pending_requested_flow) ~= "number" then
+    pending_requested_flow = ctrl.requested_flow
+  end
   local defer_cooldown, defer_reason = turbine_regulator.should_defer_cooldown(
-    ctrl.requested_flow,
+    pending_requested_flow,
     ctrl.confirmed_flow,
     ctrl.pending_flow_since,
     now_ts,
@@ -1116,7 +1121,11 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   end
   local old_flow = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow
   local requested_flow, mode, decision, smoothed_rpm = update_turbine_flow_state(rpm, target_rpm, ctrl)
-  local previous_requested = ctrl.last_requested_flow
+  local now_ts = os.clock()
+  local previous_requested = ctrl.pending_expected_flow
+  if type(previous_requested) ~= "number" then
+    previous_requested = ctrl.last_requested_flow
+  end
   local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, requested_flow)
   local observed_flow, flow_reader = read_turbine_flow(turbine, caps)
   if type(observed_flow) == "number" then
@@ -1125,38 +1134,22 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local confirmed_flow = ctrl.confirmed_flow
   local flow_tolerance = (config.rails and config.rails.turbine_flow and config.rails.turbine_flow.confirm_tolerance) or 1
   local flow_settled = turbine_regulator.flows_match(requested_flow, confirmed_flow, flow_tolerance)
+  local pending_settled = turbine_regulator.flows_match(ctrl.pending_expected_flow, confirmed_flow, flow_tolerance)
   if previous_requested ~= requested_flow then
-    ctrl.pending_flow_since = os.clock()
+    ctrl.pending_flow_since = now_ts
+    ctrl.pending_expected_flow = requested_flow
     ctrl.pending_retries = 0
-  elseif not flow_settled then
+  elseif not pending_settled then
     ctrl.pending_retries = (ctrl.pending_retries or 0) + 1
   else
     ctrl.pending_retries = 0
     ctrl.pending_flow_since = 0
+    ctrl.pending_expected_flow = requested_flow
   end
 
   local rail_cfg = config.rails and config.rails.turbine_flow or {}
   local effective_min_samples = rail_cfg.effective_min_samples or 3
-  local effective_min_flow = ctrl.effective_min_flow
-  if requested_flow == 0 and type(confirmed_flow) == "number" and confirmed_flow > 0 then
-    if (ctrl.effective_min_candidate or -1) == confirmed_flow then
-      ctrl.effective_min_hits = (ctrl.effective_min_hits or 0) + 1
-    else
-      ctrl.effective_min_candidate = confirmed_flow
-      ctrl.effective_min_hits = 1
-    end
-    if ctrl.effective_min_hits >= effective_min_samples then
-      ctrl.effective_min_flow = confirmed_flow
-      effective_min_flow = confirmed_flow
-    end
-  else
-    ctrl.effective_min_candidate = nil
-    ctrl.effective_min_hits = 0
-    if requested_flow ~= 0 then
-      ctrl.effective_min_flow = nil
-      effective_min_flow = nil
-    end
-  end
+  local effective_min_flow, effective_min_changed = turbine_regulator.update_effective_min(ctrl, requested_flow, confirmed_flow, effective_min_samples)
 
   ctrl.last_requested_flow = requested_flow
   local direction = mode
@@ -1183,8 +1176,10 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " flow_read=" .. tostring(observed_flow)
       .. " flow_api=" .. tostring(flow_reader)
       .. " flow_settled=" .. tostring(flow_settled)
+      .. " pending_settled=" .. tostring(pending_settled)
       .. " pending_retries=" .. tostring(ctrl.pending_retries)
       .. " pending_since=" .. tostring(ctrl.pending_flow_since)
+      .. " pending_expected_flow=" .. tostring(ctrl.pending_expected_flow)
       .. " cooldown_deferred=" .. tostring(decision and decision.defer_cooldown or false)
       .. " cooldown_defer_reason=" .. tostring(decision and decision.defer_reason or "n/a")
       .. " effective_min_flow=" .. tostring(effective_min_flow)
@@ -1194,7 +1189,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     log("INFO", "Turbine " .. name .. " active, initial flow " .. tostring(ctrl.requested_flow))
     ctrl.logged = true
   end
-  if requested_flow == 0 and type(effective_min_flow) == "number" then
+  if requested_flow == 0 and type(effective_min_flow) == "number" and effective_min_changed then
     log("INFO", "Turbine " .. name .. " effective minimum flow detected at " .. tostring(effective_min_flow))
   end
   return ok, applied, setter
@@ -1939,6 +1934,9 @@ apply_safe_controls = function()
       ctrl.mode = TURBINE_MODE.RAMP
       ctrl.requested_flow = clamp_turbine_flow(ctrl.requested_flow or ctrl.flow or START_FLOW)
       ctrl.flow = ctrl.requested_flow
+      ctrl.pending_expected_flow = ctrl.requested_flow
+      ctrl.pending_flow_since = 0
+      ctrl.pending_retries = 0
       local ok, result = pcall(setTurbineFlow, turbine, caps, ctrl.requested_flow)
       if not ok then
         warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))

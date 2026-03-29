@@ -67,4 +67,34 @@ function regulator.should_defer_cooldown(requested_flow, confirmed_flow, pending
   return false, "SETTLE_TIMEOUT"
 end
 
+function regulator.update_effective_min(state, requested_flow, confirmed_flow, required_samples)
+  if type(state) ~= "table" then
+    return nil, false
+  end
+  local samples = math.max(1, math.floor(tonumber(required_samples) or 3))
+  if requested_flow == 0 and type(confirmed_flow) == "number" and confirmed_flow > 0 then
+    if state.effective_min_candidate == confirmed_flow then
+      state.effective_min_hits = (tonumber(state.effective_min_hits) or 0) + 1
+    else
+      state.effective_min_candidate = confirmed_flow
+      state.effective_min_hits = 1
+    end
+    if state.effective_min_hits >= samples then
+      local changed = state.effective_min_flow ~= confirmed_flow
+      state.effective_min_flow = confirmed_flow
+      return state.effective_min_flow, changed
+    end
+    return state.effective_min_flow, false
+  end
+
+  state.effective_min_candidate = nil
+  state.effective_min_hits = 0
+  if requested_flow ~= 0 then
+    local changed = state.effective_min_flow ~= nil
+    state.effective_min_flow = nil
+    return nil, changed
+  end
+  return state.effective_min_flow, false
+end
+
 return regulator
