@@ -15,6 +15,12 @@ assert_true(content:find('data%.min = safety%.clamp%(data%.min, MIN_FLOW, MAX_FL
   'turbine rail min must be clamped to runtime MIN_FLOW/MAX_FLOW')
 assert_true(content:find('data%.max = safety%.clamp%(data%.max, MIN_FLOW, MAX_FLOW%)') ~= nil,
   'turbine rail max must be clamped to runtime MIN_FLOW/MAX_FLOW')
+assert_true(content:find('MIN_FLOW = 0', 1, true) ~= nil,
+  'runtime minimum turbine flow must stay at 0')
+assert_true(content:find('MAX_FLOW = 2000', 1, true) ~= nil,
+  'runtime maximum turbine flow must stay at 2000')
+assert_true(content:find('START_FLOW = 0', 1, true) ~= nil,
+  'startup turbine flow must allow direct ramp from 0')
 assert_true(content:find('data%.adaptive_step = data%.adaptive_step ~= false') ~= nil,
   'turbine rail adaptive_step default must stay enabled')
 assert_true(content:find('reason=', 1, true) ~= nil,

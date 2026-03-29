@@ -165,6 +165,8 @@ local logger = require("core.logger")
 ensure_dir("/disk")
 write_file("/disk/xreactor_logs/rt.log.1", "old-1")
 write_file("/disk/xreactor_logs/rt.log.2", "old-2")
+write_file("/disk/xreactor_logs/rt.log.preboot", "old-preboot")
+write_file("/disk/xreactor_logs/.xreactor_log_probe", "stale-probe")
 local status = logger.init({ log_name = "rt", enabled = true, truncate = true })
 if status.log_dir ~= "/disk/xreactor_logs" then
   error("expected auto disk log_dir when disk is suitable")
@@ -172,11 +174,17 @@ end
 if not tostring(status.log_source):find("auto%-disk:/disk", 1, false) then
   error("expected auto-disk source with disk root")
 end
-if files["/disk/xreactor_logs/rt.log.1"] or files["/disk/xreactor_logs/rt.log.2"] then
+if files["/disk/xreactor_logs/rt.log.1"] or files["/disk/xreactor_logs/rt.log.2"] or files["/disk/xreactor_logs/rt.log.preboot"] then
   error("expected startup cleanup to delete stale disk log rotations")
 end
-if not tostring(status.startup_action):find("cleanup:removed=2", 1, true) then
+if files["/disk/xreactor_logs/.xreactor_log_probe"] then
+  error("expected startup cleanup to remove stale probe file")
+end
+if not tostring(status.startup_action):find("cleanup:removed=4", 1, true) then
   error("expected startup action to expose disk cleanup result")
+end
+if not tostring(status.startup_action):find("rt.log.preboot", 1, true) then
+  error("expected startup action to include removed filenames for diagnostics")
 end
 
 logger.log("RT", "disk-write", "INFO")

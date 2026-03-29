@@ -391,18 +391,32 @@ local function startup_prepare(path, mode, log_dir)
     end
     local removed = 0
     local failures = 0
+    local removed_names = {}
+    local failure_names = {}
+    local active_name = path and path:match("([^/]+)$") or nil
     for _, entry in ipairs(entries) do
-      if type(entry) == "string" and entry:match("%.log%.[0-9]+$") then
-        local stale_path = cleanup_path .. "/" .. entry
-        local deleted = pcall(fs.delete, stale_path)
-        if deleted then
-          removed = removed + 1
-        else
-          failures = failures + 1
+      if type(entry) == "string" then
+        local is_rotated_log = entry:match("%.log%..+$") ~= nil
+        local is_cleanup_probe = entry == ".xreactor_log_probe"
+        local is_active = active_name ~= nil and entry == active_name
+        if (is_rotated_log or is_cleanup_probe) and not is_active then
+          local stale_path = cleanup_path .. "/" .. entry
+          local deleted = pcall(fs.delete, stale_path)
+          if deleted then
+            removed = removed + 1
+            removed_names[#removed_names + 1] = entry
+          else
+            failures = failures + 1
+            failure_names[#failure_names + 1] = entry
+          end
         end
       end
     end
-    return "removed=" .. tostring(removed) .. ",failed=" .. tostring(failures)
+    table.sort(removed_names)
+    table.sort(failure_names)
+    local removed_detail = #removed_names > 0 and table.concat(removed_names, "|") or "none"
+    local failed_detail = #failure_names > 0 and table.concat(failure_names, "|") or "none"
+    return "removed=" .. tostring(removed) .. "[" .. removed_detail .. "],failed=" .. tostring(failures) .. "[" .. failed_detail .. "]"
   end
 
   cleanup_summary = cleanup_rotated_logs()
