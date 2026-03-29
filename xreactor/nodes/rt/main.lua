@@ -146,6 +146,9 @@ local DEFAULT_CONFIG = {
       step_per_rpm_down = 0.5, -- Flow step gain per RPM error (down direction).
       adaptive_step = true, -- Enable adaptive step sizing based on RPM error.
       cooldown_s = 0.2, -- Minimum seconds between flow changes.
+      settle_timeout_s = 0.8, -- Maximum wait for requested flow to appear in readback before normal cooldown resumes.
+      confirm_tolerance = 1, -- Allowed delta between requested and confirmed flow.
+      effective_min_samples = 3, -- Readback samples needed before persisting effective min flow.
       min = CONFIG.MIN_FLOW, -- Flow clamp minimum.
       max = CONFIG.MAX_FLOW, -- Flow clamp maximum.
       ema_alpha = 0.2 -- RPM smoothing alpha.
@@ -446,6 +449,9 @@ local function normalize_rail(section, defaults)
     data.step_per_rpm_up = clamp_nonneg(data.step_per_rpm_up, defaults.step_per_rpm_up)
     data.step_per_rpm_down = clamp_nonneg(data.step_per_rpm_down, defaults.step_per_rpm_down)
     data.adaptive_step = data.adaptive_step ~= false
+    data.settle_timeout_s = clamp_nonneg(data.settle_timeout_s, defaults.settle_timeout_s)
+    data.confirm_tolerance = clamp_nonneg(data.confirm_tolerance, defaults.confirm_tolerance)
+    data.effective_min_samples = math.max(1, math.floor(tonumber(data.effective_min_samples) or defaults.effective_min_samples))
   end
   if type(data.ema_alpha) ~= "number" or data.ema_alpha <= 0 or data.ema_alpha >= 1 then
     data.ema_alpha = defaults.ema_alpha
@@ -669,7 +675,7 @@ local function get_total_steam_demand()
       end
     end
     if type(rpm) == "number" and rpm > MIN_ACTIVE_RPM then
-      total = total + (ctrl.flow or 0)
+      total = total + (ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow or 0)
     end
   end
   return total
@@ -793,6 +799,12 @@ local function init_turbine_ctrl()
   for _, name in ipairs(turbines) do
     local ctrl = get_turbine_ctrl(name)
     ctrl.flow = clamp_turbine_flow(START_FLOW)
+    ctrl.requested_flow = ctrl.flow
+    ctrl.confirmed_flow = ctrl.flow
+    ctrl.pending_flow_since = 0
+    ctrl.pending_retries = 0
+    ctrl.effective_min_hits = 0
+    ctrl.effective_min_flow = nil
     ctrl.mode = TURBINE_MODE.RAMP
     ctrl.logged = false
     log("INFO", "Controlling turbine: " .. name)
@@ -1061,12 +1073,32 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   if ctrl.rails then
     ctrl.rails.flow = flow_state
   end
+  local now_ts = os.clock()
   local smoothed_rpm = rails.smooth(flow_state, "rpm", rpm, rail_cfg.ema_alpha)
   local target = target_rpm or TARGET_RPM
   local error = target - (smoothed_rpm or target)
   rail_cfg.ramp_profile = ctrl.ramp_profile or rail_cfg.ramp_profile or "NORMAL"
-  local next_flow, direction, decision = rails.step(ctrl.flow, error, flow_state, rail_cfg, os.clock())
-  ctrl.flow = clamp_turbine_flow(next_flow)
+  local base_flow = ctrl.requested_flow or ctrl.flow or 0
+  local flow_cfg = rail_cfg
+  local defer_cooldown, defer_reason = turbine_regulator.should_defer_cooldown(
+    ctrl.requested_flow,
+    ctrl.confirmed_flow,
+    ctrl.pending_flow_since,
+    now_ts,
+    rail_cfg.settle_timeout_s,
+    rail_cfg.confirm_tolerance
+  )
+  if defer_cooldown then
+    flow_cfg = utils.deep_copy(rail_cfg)
+    flow_cfg.cooldown_s = 0
+  end
+  local next_flow, direction, decision = rails.step(base_flow, error, flow_state, flow_cfg, now_ts)
+  ctrl.requested_flow = clamp_turbine_flow(next_flow)
+  ctrl.flow = ctrl.requested_flow
+  if defer_cooldown and decision then
+    decision.defer_cooldown = true
+    decision.defer_reason = defer_reason
+  end
   if direction > 0 then
     ctrl.mode = "UP"
   elseif direction < 0 then
@@ -1074,7 +1106,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   else
     ctrl.mode = "HOLD"
   end
-  return ctrl.flow, ctrl.mode, decision, smoothed_rpm
+  return ctrl.requested_flow, ctrl.mode, decision, smoothed_rpm
 end
 
 local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
@@ -1082,12 +1114,52 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   if type(rpm) == "number" then
     ctrl.rpm = rpm
   end
-  local old_flow = ctrl.flow
-  local flow, mode, decision, smoothed_rpm = update_turbine_flow_state(rpm, target_rpm, ctrl)
-  local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, flow)
+  local old_flow = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow
+  local requested_flow, mode, decision, smoothed_rpm = update_turbine_flow_state(rpm, target_rpm, ctrl)
+  local previous_requested = ctrl.last_requested_flow
+  local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, requested_flow)
   local observed_flow, flow_reader = read_turbine_flow(turbine, caps)
-  local direction = mode
+  if type(observed_flow) == "number" then
+    ctrl.confirmed_flow = clamp_turbine_flow(observed_flow)
+  end
+  local confirmed_flow = ctrl.confirmed_flow
+  local flow_tolerance = (config.rails and config.rails.turbine_flow and config.rails.turbine_flow.confirm_tolerance) or 1
+  local flow_settled = turbine_regulator.flows_match(requested_flow, confirmed_flow, flow_tolerance)
+  if previous_requested ~= requested_flow then
+    ctrl.pending_flow_since = os.clock()
+    ctrl.pending_retries = 0
+  elseif not flow_settled then
+    ctrl.pending_retries = (ctrl.pending_retries or 0) + 1
+  else
+    ctrl.pending_retries = 0
+    ctrl.pending_flow_since = 0
+  end
+
   local rail_cfg = config.rails and config.rails.turbine_flow or {}
+  local effective_min_samples = rail_cfg.effective_min_samples or 3
+  local effective_min_flow = ctrl.effective_min_flow
+  if requested_flow == 0 and type(confirmed_flow) == "number" and confirmed_flow > 0 then
+    if (ctrl.effective_min_candidate or -1) == confirmed_flow then
+      ctrl.effective_min_hits = (ctrl.effective_min_hits or 0) + 1
+    else
+      ctrl.effective_min_candidate = confirmed_flow
+      ctrl.effective_min_hits = 1
+    end
+    if ctrl.effective_min_hits >= effective_min_samples then
+      ctrl.effective_min_flow = confirmed_flow
+      effective_min_flow = confirmed_flow
+    end
+  else
+    ctrl.effective_min_candidate = nil
+    ctrl.effective_min_hits = 0
+    if requested_flow ~= 0 then
+      ctrl.effective_min_flow = nil
+      effective_min_flow = nil
+    end
+  end
+
+  ctrl.last_requested_flow = requested_flow
+  local direction = mode
   local reason = decision and decision.reason or "NONE"
   local step = decision and decision.step or "nil"
   local applied_min = decision and decision.min or rail_cfg.min
@@ -1097,7 +1169,9 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " rpm_smooth=" .. tostring(smoothed_rpm)
       .. " target_rpm=" .. tostring(target_rpm)
       .. " old_flow=" .. tostring(old_flow)
-      .. " new_flow=" .. tostring(flow)
+      .. " requested_flow=" .. tostring(requested_flow)
+      .. " confirmed_flow=" .. tostring(confirmed_flow)
+      .. " new_flow=" .. tostring(requested_flow)
       .. " direction=" .. tostring(direction)
       .. " reason=" .. tostring(reason)
       .. " step=" .. tostring(step)
@@ -1105,13 +1179,23 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " clamp_max=" .. tostring(applied_max)
       .. " set_api=" .. tostring(setter)
       .. " set_called=" .. tostring(ok and applied)
+      .. " set_ok=" .. tostring(ok)
       .. " flow_read=" .. tostring(observed_flow)
       .. " flow_api=" .. tostring(flow_reader)
+      .. " flow_settled=" .. tostring(flow_settled)
+      .. " pending_retries=" .. tostring(ctrl.pending_retries)
+      .. " pending_since=" .. tostring(ctrl.pending_flow_since)
+      .. " cooldown_deferred=" .. tostring(decision and decision.defer_cooldown or false)
+      .. " cooldown_defer_reason=" .. tostring(decision and decision.defer_reason or "n/a")
+      .. " effective_min_flow=" .. tostring(effective_min_flow)
       .. " mode=" .. tostring(mode)
       .. " coil=" .. tostring(ctrl.inductor_engaged))
   if not ctrl.logged then
-    log("INFO", "Turbine " .. name .. " active, initial flow " .. tostring(ctrl.flow))
+    log("INFO", "Turbine " .. name .. " active, initial flow " .. tostring(ctrl.requested_flow))
     ctrl.logged = true
+  end
+  if requested_flow == 0 and type(effective_min_flow) == "number" then
+    log("INFO", "Turbine " .. name .. " effective minimum flow detected at " .. tostring(effective_min_flow))
   end
   return ok, applied, setter
 end
@@ -1853,8 +1937,9 @@ apply_safe_controls = function()
     if caps.setFluidFlowRate or caps.setFluidFlowRateMax then
       local ctrl = get_turbine_ctrl(name)
       ctrl.mode = TURBINE_MODE.RAMP
-      ctrl.flow = clamp_turbine_flow(ctrl.flow)
-      local ok, result = pcall(setTurbineFlow, turbine, caps, ctrl.flow)
+      ctrl.requested_flow = clamp_turbine_flow(ctrl.requested_flow or ctrl.flow or START_FLOW)
+      ctrl.flow = ctrl.requested_flow
+      local ok, result = pcall(setTurbineFlow, turbine, caps, ctrl.requested_flow)
       if not ok then
         warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
       elseif not result then

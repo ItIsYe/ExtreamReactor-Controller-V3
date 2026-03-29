@@ -180,7 +180,16 @@ end
 if files["/disk/xreactor_logs/.xreactor_log_probe"] then
   error("expected startup cleanup to remove stale probe file")
 end
-if not tostring(status.startup_action):find("cleanup:removed=4", 1, true) then
+if tostring(status.startup_action):find("non%-disk", 1, false) then
+  error("disk log target must not be classified as non-disk during cleanup")
+end
+if not tostring(status.startup_action):find("disk=true", 1, true) then
+  error("expected startup action diagnostics to expose disk classification")
+end
+if not tostring(status.startup_action):find("executed=true", 1, true) then
+  error("expected startup action diagnostics to expose cleanup execution")
+end
+if not tostring(status.startup_action):find("removed=4", 1, true) then
   error("expected startup action to expose disk cleanup result")
 end
 if not tostring(status.startup_action):find("rt.log.preboot", 1, true) then
