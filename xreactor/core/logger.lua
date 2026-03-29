@@ -88,6 +88,13 @@ local function disk_free_ok(root)
   return true
 end
 
+local function is_disk_path(path)
+  if type(path) ~= "string" then
+    return false
+  end
+  return path:match("^/disk%d*($|/)")
+end
+
 local function list_disk_roots()
   local roots = {}
   local seen = {}
@@ -100,6 +107,27 @@ local function list_disk_roots()
   end
 
   add(CONFIG.DISK_ROOT)
+  if peripheral and type(peripheral.getNames) == "function" and disk and type(disk.getMountPath) == "function" then
+    local ok, names = pcall(peripheral.getNames)
+    if ok and type(names) == "table" then
+      for _, name in ipairs(names) do
+        local is_drive = false
+        if peripheral.hasType and type(peripheral.hasType) == "function" then
+          local type_ok, type_result = pcall(peripheral.hasType, name, "drive")
+          is_drive = type_ok and type_result == true
+        else
+          local type_ok, p_type = pcall(peripheral.getType, name)
+          is_drive = type_ok and p_type == "drive"
+        end
+        if is_drive then
+          local path_ok, mount_path = pcall(disk.getMountPath, name)
+          if path_ok and type(mount_path) == "string" and mount_path ~= "" then
+            add(mount_path)
+          end
+        end
+      end
+    end
+  end
   if fs and type(fs.list) == "function" then
     local ok, entries = pcall(fs.list, "/")
     if ok and type(entries) == "table" then
@@ -133,14 +161,38 @@ local function disk_write_test(path)
   return true
 end
 
+local function validate_log_target(path)
+  local free_ok, free_reason = disk_free_ok(path)
+  if not free_ok then
+    return false, "space:" .. tostring(free_reason)
+  end
+  local writable, write_reason = disk_write_test(path)
+  if not writable then
+    return false, "write-test:" .. tostring(write_reason)
+  end
+  return true
+end
+
 local function resolve_log_dir(opts)
   local explicit = opts and normalize_log_dir(opts.log_dir)
   if explicit then
+    if is_disk_path(explicit) then
+      local explicit_ok, explicit_reason = validate_log_target(explicit)
+      if not explicit_ok then
+        return DEFAULT_LOG_DIR, "fallback-local(explicit-disk:" .. tostring(explicit_reason) .. ")"
+      end
+    end
     return explicit, "explicit"
   end
   if settings and settings.get then
     local configured = normalize_log_dir(settings.get("xreactor.log_dir"))
     if configured then
+      if is_disk_path(configured) then
+        local configured_ok, configured_reason = validate_log_target(configured)
+        if not configured_ok then
+          return DEFAULT_LOG_DIR, "fallback-local(settings-disk:" .. tostring(configured_reason) .. ")"
+        end
+      end
       return configured, "settings"
     end
   end
@@ -148,17 +200,12 @@ local function resolve_log_dir(opts)
   local disk_failures = {}
   for _, disk_root in ipairs(list_disk_roots()) do
     if fs and fs.exists and fs.exists(disk_root) and fs.isDir and fs.isDir(disk_root) then
-      local free_ok, free_reason = disk_free_ok(disk_root)
       local disk_log_dir = disk_root .. "/xreactor_logs"
-      if free_ok then
-        local writable, write_reason = disk_write_test(disk_log_dir)
-        if writable then
-          return disk_log_dir, "auto-disk:" .. disk_root
-        end
-        disk_failures[#disk_failures + 1] = "write-test:" .. tostring(disk_root) .. ":" .. tostring(write_reason)
-      else
-        disk_failures[#disk_failures + 1] = "space:" .. tostring(disk_root) .. ":" .. tostring(free_reason)
+      local target_ok, target_reason = validate_log_target(disk_log_dir)
+      if target_ok then
+        return disk_log_dir, "auto-disk:" .. disk_root
       end
+      disk_failures[#disk_failures + 1] = tostring(disk_root) .. ":" .. tostring(target_reason)
     end
   end
   if #disk_failures > 0 then
@@ -169,7 +216,7 @@ local function resolve_log_dir(opts)
 end
 
 local function current_max_bytes()
-  if type(state.log_source) == "string" and state.log_source:sub(1, 9) == "auto-disk" then
+  if is_disk_path(state.log_dir) then
     return CONFIG.DISK_MAX_BYTES or CONFIG.MAX_BYTES
   end
   return CONFIG.MAX_BYTES
@@ -240,6 +287,31 @@ local function flush_if_needed(force)
   local elapsed = os.clock() - (state.last_flush or 0)
   if not force and #state.buffer < CONFIG.FLUSH_LINES and elapsed < CONFIG.FLUSH_INTERVAL then
     return true
+  end
+
+  if is_disk_path(state.log_dir) then
+    local target_ok, target_reason = validate_log_target(state.log_dir)
+    if not target_ok then
+      local fallback_ok, fallback_err = pcall(flush_buffer_to_dir, DEFAULT_LOG_DIR)
+      if fallback_ok then
+        if not state.warn_once then
+          state.warn_once = true
+          print("WARN: Log dir fallback to local (reason=" .. tostring(target_reason) .. ")")
+        end
+        state.log_source = "runtime-fallback-local"
+        state.buffer = {}
+        state.last_flush = os.clock()
+        return true
+      end
+      if not state.warn_once then
+        state.warn_once = true
+        print("WARN: Logging disabled (" .. tostring(target_reason) .. " | fallback=" .. tostring(fallback_err) .. ")")
+      end
+      state.enabled = false
+      state.buffer = {}
+      state.last_flush = os.clock()
+      return false
+    end
   end
 
   local ok, err = pcall(flush_buffer_to_dir, state.log_dir or CONFIG.LOG_DIR)

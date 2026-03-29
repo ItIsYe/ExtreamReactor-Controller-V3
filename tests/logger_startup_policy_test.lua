@@ -5,6 +5,8 @@ local original_fs = _G.fs
 local original_settings = _G.settings
 local original_os = _G.os
 local original_print = _G.print
+local original_peripheral = _G.peripheral
+local original_disk = _G.disk
 
 local files = {}
 local dirs = {
@@ -18,6 +20,7 @@ local disk_present = true
 local disk_roots = {
   disk = true
 }
+local peripheral_drives = {}
 local free_space_by_path = {
   ["/disk"] = 800000
 }
@@ -115,6 +118,23 @@ end
 _G.print = function(message)
   print_lines[#print_lines + 1] = tostring(message)
 end
+_G.peripheral = {
+  getNames = function()
+    local out = {}
+    for name in pairs(peripheral_drives) do
+      out[#out + 1] = name
+    end
+    return out
+  end,
+  hasType = function(name, wanted)
+    return wanted == "drive" and peripheral_drives[name] ~= nil
+  end
+}
+_G.disk = {
+  getMountPath = function(name)
+    return peripheral_drives[name]
+  end
+}
 
 package.loaded["core.logger"] = nil
 local logger = require("core.logger")
@@ -182,10 +202,37 @@ if not files["/xreactor_logs/manual_logs/override.log"] then
   error("expected explicit log_dir override to be honored")
 end
 
+-- Explicit disk targets with insufficient space should fallback to local.
+disk_present = true
+free_space_by_path["/disk/tight_logs"] = 10
+local explicit_fallback = logger.init({ log_name = "tight", enabled = true, truncate = true, log_dir = "/disk/tight_logs" })
+if explicit_fallback.log_dir ~= "/xreactor_logs" then
+  error("expected explicit disk path fallback to local when space is insufficient")
+end
+if not tostring(explicit_fallback.log_source):find("fallback%-local%(explicit%-disk:space:", 1, false) then
+  error("expected explicit disk fallback reason to include space diagnostics")
+end
+
+-- Peripheral network drive mount path should also be considered.
+disk_roots.disk2 = nil
+free_space_by_path["/disk2"] = nil
+peripheral_drives["drive_remote_0"] = "/disk_remote"
+ensure_dir("/disk_remote")
+free_space_by_path["/disk_remote/xreactor_logs"] = 128000
+local remote_status = logger.init({ log_name = "remote", enabled = true, truncate = true })
+if remote_status.log_dir ~= "/disk_remote/xreactor_logs" then
+  error("expected peripheral drive mount path to be selected")
+end
+if not tostring(remote_status.log_source):find("auto%-disk:/disk_remote", 1, false) then
+  error("expected auto-disk source for remote mount")
+end
+
 _G.fs = original_fs
 _G.settings = original_settings
 _G.os = original_os
 _G.print = original_print
+_G.peripheral = original_peripheral
+_G.disk = original_disk
 package.path = package_path
 
 print("logger_startup_policy_test.lua: ok")
