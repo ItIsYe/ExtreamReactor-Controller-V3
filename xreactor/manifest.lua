@@ -8,7 +8,7 @@ return {
       { path = "core/bootstrap.lua", size_bytes = 10874, hash = "4a180335" },
       { path = "core/comms.lua", size_bytes = 20223, hash = "903b39da" },
       { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
-      { path = "core/logger.lua", size_bytes = 10428, hash = "903c5584" },
+      { path = "core/logger.lua", size_bytes = 12912, hash = "77ce6727" },
       { path = "core/network.lua", size_bytes = 14002, hash = "2fba2f3c" },
       { path = "core/protocol.lua", size_bytes = 6423, hash = "6c324af5" },
       { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9" },
