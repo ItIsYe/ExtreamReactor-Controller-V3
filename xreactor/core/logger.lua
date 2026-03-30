@@ -69,6 +69,8 @@ local function summarize_error(err)
 end
 
 local list_disk_roots
+local preflight_write
+local rotate_log_if_needed
 
 local function get_free_space(root)
   if not fs or type(fs.getFreeSpace) ~= "function" then
@@ -272,10 +274,13 @@ end
 
 local function compute_write_requirements(pending_bytes)
   local pending = math.max(0, tonumber(pending_bytes) or 0)
-  local overhead = math.max(8, math.min(48, math.floor(pending * 0.15) + 8))
+  local overhead = math.max(2, math.min(32, math.floor(pending * 0.08) + 2))
+  if pending <= 8 then
+    overhead = 1
+  end
   return {
     immediate_bytes = math.max(1, pending + overhead),
-    target_budget_bytes = math.max(CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0, math.floor(pending * 0.25))
+    target_budget_bytes = math.max(1, math.floor(pending * 0.15))
   }
 end
 
@@ -293,31 +298,33 @@ end
 
 local function runtime_recover_space(target_dir, path, pending_bytes)
   local active_name = path and path:match("([^/]+)$") or nil
+  local free_before_ok, free_before = get_free_space(target_dir)
   local cleanup = cleanup_log_workspace(target_dir, active_name, true)
   local preflight_ok, preflight_reason = preflight_write(target_dir, path, pending_bytes)
   if preflight_ok then
-    return true, "recovered-after-cleanup(" .. build_space_diag(target_dir, path, pending_bytes, cleanup, preflight_reason) .. ")"
+    return true, "recovered-after-cleanup(free_before=" .. tostring(free_before_ok and free_before or ("err:" .. tostring(free_before)))
+      .. "," .. build_space_diag(target_dir, path, pending_bytes, cleanup, preflight_reason) .. ")"
   end
 
   local rotate_ok, rotate_reason = rotate_log_if_needed(path, target_dir)
   if rotate_ok then
     local retry_ok, retry_reason = preflight_write(target_dir, path, pending_bytes)
     if retry_ok then
-      return true, "recovered-after-rotate(" .. build_space_diag(target_dir, path, pending_bytes, cleanup, rotate_reason) .. ")"
+      return true, "recovered-after-rotate(free_before=" .. tostring(free_before_ok and free_before or ("err:" .. tostring(free_before)))
+        .. "," .. build_space_diag(target_dir, path, pending_bytes, cleanup, rotate_reason) .. ")"
     end
-    return false, "recover-preflight-failed(" .. build_space_diag(target_dir, path, pending_bytes, cleanup, retry_reason) .. ")"
+    return false, "recover-preflight-failed(free_before=" .. tostring(free_before_ok and free_before or ("err:" .. tostring(free_before)))
+      .. "," .. build_space_diag(target_dir, path, pending_bytes, cleanup, retry_reason) .. ")"
   end
-  return false, "recover-rotate-failed(" .. build_space_diag(target_dir, path, pending_bytes, cleanup, rotate_reason) .. ")"
+  return false, "recover-rotate-failed(free_before=" .. tostring(free_before_ok and free_before or ("err:" .. tostring(free_before)))
+    .. "," .. build_space_diag(target_dir, path, pending_bytes, cleanup, rotate_reason) .. ")"
 end
 
-local function preflight_write(target_dir, path, pending_bytes)
+preflight_write = function(target_dir, path, pending_bytes)
   if not is_disk_path(target_dir) then
     return true, "local-target", nil
   end
-  local active_name = path and path:match("([^/]+)$") or nil
   local free_before_ok, free_before = get_free_space(target_dir)
-  local cleanup = cleanup_log_workspace(target_dir, active_name, true)
-  local free_after_cleanup_ok, free_after_cleanup = get_free_space(target_dir)
   local requirements = compute_write_requirements(pending_bytes)
   local required_now = requirements.immediate_bytes
   local target_budget = requirements.target_budget_bytes
@@ -330,8 +337,7 @@ local function preflight_write(target_dir, path, pending_bytes)
     .. ",target_budget_reason=" .. tostring(budget_reason)
     .. ",pending=" .. tostring(pending_bytes)
     .. ",free_before=" .. tostring(free_before_ok and free_before or ("err:" .. tostring(free_before)))
-    .. ",free_after_cleanup=" .. tostring(free_after_cleanup_ok and free_after_cleanup or ("err:" .. tostring(free_after_cleanup)))
-    .. ",cleanup={" .. summarize_cleanup(cleanup, target_dir) .. "}"
+    .. ",cleanup={executed=false,path=" .. tostring(target_dir) .. ",removed=0[none],failed=0[none],reason=preflight-check-only}"
   if not space_ok then
     return false, "preflight-space-failed(" .. tostring(space_reason) .. ";" .. diag .. ")", diag
   end
@@ -387,7 +393,7 @@ local function current_max_bytes()
   return CONFIG.MAX_BYTES
 end
 
-local function rotate_log_if_needed(path, target_dir)
+rotate_log_if_needed = function(path, target_dir)
   local max_bytes = current_max_bytes()
   if not max_bytes or max_bytes <= 0 then
     return true, "rotate-skip:max-disabled"

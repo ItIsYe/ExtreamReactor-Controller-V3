@@ -96,6 +96,11 @@ _G.fs = {
     return #(files[path] or "")
   end,
   delete = function(path)
+    local dir = parent_dir(path)
+    local reclaimed = #(files[path] or "")
+    if reclaimed > 0 and free_space_by_path[dir] ~= nil then
+      free_space_by_path[dir] = free_space_by_path[dir] + reclaimed
+    end
     files[path] = nil
     dirs[path] = nil
   end,
@@ -281,6 +286,19 @@ for _, line in ipairs(print_lines) do
 end
 if not saw_preflight_reason then
   error("expected runtime fallback warning to include preflight-space-failed diagnostics")
+end
+
+-- Runtime cleanup should recover space and avoid fallback when stale files can be removed.
+free_space_by_path["/disk2/xreactor_logs"] = 8
+write_file("/disk2/xreactor_logs/runtime_recover.log.1", string.rep("x", 256))
+logger.init({ log_name = "runtime_recover", enabled = true, truncate = true, log_dir = "/disk2/xreactor_logs" })
+logger.log("RT", "recoverable", "INFO")
+logger.flush()
+if not files["/disk2/xreactor_logs/runtime_recover.log"] then
+  error("expected runtime cleanup recovery to keep log on disk")
+end
+if files["/xreactor_logs/runtime_recover.log"] then
+  error("runtime cleanup recovery should not fallback to local")
 end
 
 -- Simulate disk disappearing after startup and require fallback.

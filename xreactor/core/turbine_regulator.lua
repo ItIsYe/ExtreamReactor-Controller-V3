@@ -131,6 +131,7 @@ function regulator.classify_bottleneck(input)
   local inductor_engaged = type(input) == "table" and input.inductor_engaged or nil
   local steam_input = sanitize_number(type(input) == "table" and input.steam_input or nil, -1)
   local min_flow = sanitize_number(type(input) == "table" and input.min_flow or nil, 0)
+  local abs_error = target - rotor
   if rotor < 0 then
     return "RPM_UNAVAILABLE", "RPM_READ_FAILED"
   end
@@ -145,9 +146,12 @@ function regulator.classify_bottleneck(input)
   end
   if requested <= (min_flow + 1) and rotor > (target + 50) then
     if inductor_engaged == true then
-      return "MIN_LIMIT_OVERSPEED", "MIN_FLOW_WITH_COIL_ENGAGED"
+      return "MIN_LIMIT_OVERSPEED", "MIN_FLOW_WITH_COIL_ENGAGED_NO_FURTHER_DOWN"
     end
-    return "MIN_LIMIT_OVERSPEED", "MIN_FLOW_LIMIT_REACHED"
+    return "MIN_LIMIT_OVERSPEED", "MIN_FLOW_LIMIT_REACHED_NO_FURTHER_DOWN"
+  end
+  if requested >= (max - 1) and abs_error > 0 then
+    return "MAX_LIMIT_UNDERSPEED", "MAX_FLOW_LIMIT_REACHED_NO_FURTHER_UP"
   end
   if math.abs(requested - confirmed) > 5 then
     return "FLOW_READBACK_LAG", "API_READBACK_LAG"
@@ -165,6 +169,7 @@ function regulator.target_band_state(input)
   local trim_trigger = math.max(0, sanitize_number(type(input) == "table" and input.trim_trigger_rpm or nil, 5))
   local trim_up = math.max(1, sanitize_number(type(input) == "table" and input.trim_up_step or nil, 25))
   local trim_down = math.max(1, sanitize_number(type(input) == "table" and input.trim_down_step or nil, 25))
+  local coil_engaged = type(input) == "table" and input.coil_engaged == true
 
   local error = target - rpm
   local abs_error = math.abs(error)
@@ -184,7 +189,19 @@ function regulator.target_band_state(input)
     return { in_band = true, mode = reason, flow = next_flow, direction = next_flow < requested and -1 or 0, reason = reason, error = error }
   end
 
-  return { in_band = true, mode = "HOLDING_TARGET", flow = requested, direction = 0, reason = "TARGET_BAND_DEADBAND", error = error }
+  if requested >= (max_flow - 1) and error <= 0 then
+    local next_flow = regulator.clamp_flow(requested - trim_down, min_flow, max_flow)
+    local reason = next_flow == requested and "MIN_LIMIT_OVERSPEED" or "TARGET_TRIM_DOWN"
+    return { in_band = true, mode = reason, flow = next_flow, direction = next_flow < requested and -1 or 0, reason = reason, error = error }
+  end
+  if requested <= (min_flow + 1) and error >= 0 then
+    local next_flow = regulator.clamp_flow(requested + trim_up, min_flow, max_flow)
+    local reason = next_flow == requested and "MAX_LIMIT_UNDERSPEED" or "TARGET_TRIM_UP"
+    return { in_band = true, mode = reason, flow = next_flow, direction = next_flow > requested and 1 or 0, reason = reason, error = error }
+  end
+
+  local deadband_reason = coil_engaged and "TARGET_BAND_ACTIVE_WITH_COIL" or "TARGET_BAND_ACTIVE"
+  return { in_band = true, mode = "HOLDING_TARGET_ACTIVE", flow = requested, direction = 0, reason = deadband_reason, error = error }
 end
 
 return regulator
