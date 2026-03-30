@@ -187,9 +187,9 @@ local function disk_write_test(path)
 end
 
 local function validate_log_target(path)
-  local free_ok, free_reason = disk_free_ok(path, CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
+  local free_ok, free_reason = disk_free_ok(path, 1)
   if not free_ok then
-    return false, "space-startup:" .. tostring(free_reason)
+    return false, "space:" .. tostring(free_reason)
   end
   local writable, write_reason = disk_write_test(path)
   if not writable then
@@ -460,34 +460,22 @@ local function startup_prepare(path, mode, log_dir)
 
   cleanup_summary = cleanup_rotated_logs()
   local free_after_cleanup = "n/a"
+  local free_after_prepare = "n/a"
   local startup_min = "n/a"
+  local startup_required = "n/a"
   local target_budget = "n/a"
   local startup_space_ok = true
   local startup_space_reason = "n/a"
+  local startup_budget_ok = true
+  local startup_budget_reason = "n/a"
   if cleanup_is_disk then
     local _, after_value = disk_free_ok(final_dir, 0)
     free_after_cleanup = tostring(after_value)
     startup_min = tostring(CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
+    startup_required = "1"
     target_budget = tostring(CONFIG.DISK_MIN_FREE_BYTES or 0)
-    startup_space_ok, startup_space_reason = disk_free_ok(final_dir, CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
   end
-  local cleanup_prefix = "final_path=" .. tostring(final_path)
-    .. ",final_dir=" .. tostring(final_dir)
-    .. ",disk=" .. tostring(cleanup_is_disk)
-    .. ",free_before=" .. tostring(free_before)
-    .. ",free_after_cleanup=" .. tostring(free_after_cleanup)
-    .. ",startup_min_required=" .. tostring(startup_min)
-    .. ",target_budget=" .. tostring(target_budget)
-    .. ",startup_space_ok=" .. tostring(startup_space_ok)
-    .. ",startup_space_reason=" .. tostring(startup_space_reason)
-    .. ",cleanup={" .. tostring(cleanup_summary) .. "}"
-  if cleanup_is_disk and not startup_space_ok then
-    return "startup_space_reject(" .. cleanup_prefix .. ")"
-  end
-  if mode == "keep" then
-    return "kept(" .. cleanup_prefix .. ")"
-  end
-  local ok = pcall(function()
+  local prepare_ok = pcall(function()
     ensure_dir(log_dir or CONFIG.LOG_DIR)
     if mode == "rotate" and fs.exists(path) then
       local backup = path .. (CONFIG.ROTATE_SUFFIX or ".1")
@@ -496,17 +484,45 @@ local function startup_prepare(path, mode, log_dir)
       end
       fs.move(path, backup)
     end
-    local file = fs.open(path, "w")
-    if file then
-      file.close()
+    if mode ~= "keep" then
+      local file = fs.open(path, "w")
+      if file then
+        file.close()
+      end
     end
   end)
-  if not ok then
+  if cleanup_is_disk then
+    local _, after_prepare = disk_free_ok(final_dir, 0)
+    free_after_prepare = tostring(after_prepare)
+    startup_space_ok, startup_space_reason = disk_free_ok(final_dir, 1)
+    startup_budget_ok, startup_budget_reason = disk_free_ok(final_dir, CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
+  end
+  local cleanup_prefix = "final_path=" .. tostring(final_path)
+    .. ",final_dir=" .. tostring(final_dir)
+    .. ",disk=" .. tostring(cleanup_is_disk)
+    .. ",free_before=" .. tostring(free_before)
+    .. ",free_after_cleanup=" .. tostring(free_after_cleanup)
+    .. ",free_after_prepare=" .. tostring(free_after_prepare)
+    .. ",startup_required_now=" .. tostring(startup_required)
+    .. ",startup_min_required=" .. tostring(startup_min)
+    .. ",target_budget=" .. tostring(target_budget)
+    .. ",startup_space_ok=" .. tostring(startup_space_ok)
+    .. ",startup_space_reason=" .. tostring(startup_space_reason)
+    .. ",startup_budget_ok=" .. tostring(startup_budget_ok)
+    .. ",startup_budget_reason=" .. tostring(startup_budget_reason)
+    .. ",cleanup={" .. tostring(cleanup_summary) .. "}"
+  if cleanup_is_disk and not startup_space_ok then
+    return "startup_space_reject(" .. cleanup_prefix .. ")"
+  end
+  if not prepare_ok then
     if not state.warn_once then
       state.warn_once = true
       print("WARN: Log startup policy failed for " .. tostring(path))
     end
     return "startup_policy_failed(" .. cleanup_prefix .. ")"
+  end
+  if mode == "keep" then
+    return "kept(" .. cleanup_prefix .. ")"
   end
   if mode == "rotate" then
     return "rotated(" .. cleanup_prefix .. ")"

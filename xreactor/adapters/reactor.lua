@@ -163,6 +163,18 @@ local function read_active(name, method_set, log_prefix)
 end
 
 local function count_rods(name, method_set)
+  if has_method(method_set, "getControlRodsLevels") then
+    local levels = utils.safe_peripheral_call(name, "getControlRodsLevels")
+    if type(levels) == "table" then
+      local count = 0
+      for _ in pairs(levels) do
+        count = count + 1
+      end
+      if count > 0 then
+        return count
+      end
+    end
+  end
   if has_method(method_set, "getControlRodLevels") then
     local levels = utils.safe_peripheral_call(name, "getControlRodLevels")
     if type(levels) == "table" and #levels > 0 then
@@ -213,7 +225,10 @@ function reactor.inspect(name, log_prefix)
       fuel = has_method(method_set, "getFuelAmount"),
       waste = has_method(method_set, "getWasteAmount"),
       energy = has_method(method_set, "getEnergyStored") or has_method(method_set, "getEnergyProducedLastTick"),
-      rods = has_method(method_set, "getControlRodLevel") or has_method(method_set, "getControlRodLevels") or has_method(method_set, "getControlRods"),
+      rods = has_method(method_set, "getControlRodLevel")
+        or has_method(method_set, "getControlRodLevels")
+        or has_method(method_set, "getControlRodsLevels")
+        or has_method(method_set, "getControlRods"),
       steam = has_method(method_set, "getHotFluidAmount") or has_method(method_set, "getSteamAmount") or has_method(method_set, "getSteam")
     },
     schema = {
@@ -245,6 +260,29 @@ function reactor.apply_rod_level(name, level, log_prefix)
     return nil, detail
   end
   local methods, method_set = build_method_set(name)
+
+  if has_method(method_set, "setControlRodsLevels") then
+    local rod_count = count_rods(name, method_set)
+    if not rod_count or rod_count < 1 then
+      log_rod_error(log_prefix, name, "setControlRodsLevels", "unable to resolve rod count")
+      return nil, "unable to resolve rod count"
+    end
+    local levels = {}
+    for index = 0, rod_count - 1 do
+      levels[index] = normalized_level
+    end
+    local ok, err = utils.safe_peripheral_call(name, "setControlRodsLevels", levels)
+    if err then
+      log_rod_error(log_prefix, name, "setControlRodsLevels", err)
+      return nil, err
+    end
+    if ok == false then
+      log_rod_error(log_prefix, name, "setControlRodsLevels", "returned false")
+      return nil, "returned false"
+    end
+    log_rod_path(log_prefix, name, "setControlRodsLevels", "count=" .. tostring(rod_count) .. " level=" .. tostring(normalized_level))
+    return true
+  end
 
   if has_method(method_set, "setAllControlRodLevels") then
     local ok, err = utils.safe_peripheral_call(name, "setAllControlRodLevels", normalized_level)
@@ -320,7 +358,7 @@ function reactor.apply_rod_level(name, level, log_prefix)
   end
 
   local detail = "unsupported methods"
-  log_rod_error(log_prefix, name, "setAllControlRodLevels|getControlRods|setControlRodLevel", detail .. " available=" .. tostring(#methods))
+  log_rod_error(log_prefix, name, "setControlRodsLevels|setAllControlRodLevels|getControlRods|setControlRodLevel", detail .. " available=" .. tostring(#methods))
   return nil, detail
 end
 
@@ -329,6 +367,23 @@ function reactor.read_control_rods(name, log_prefix)
     return nil, "missing peripheral"
   end
   local _, method_set = build_method_set(name)
+
+  if has_method(method_set, "getControlRodsLevels") then
+    local levels, err = utils.safe_peripheral_call(name, "getControlRodsLevels")
+    if type(levels) == "table" then
+      local sum, count = 0, 0
+      for _, value in pairs(levels) do
+        if type(value) == "number" then
+          sum = sum + value
+          count = count + 1
+        end
+      end
+      if count > 0 then
+        return sum / count
+      end
+    end
+    log_rod_error(log_prefix, name, "getControlRodsLevels", err or ("unexpected value " .. summarize_value(levels)))
+  end
 
   if has_method(method_set, "getControlRodLevel") then
     local level, err = utils.safe_peripheral_call(name, "getControlRodLevel", 0)

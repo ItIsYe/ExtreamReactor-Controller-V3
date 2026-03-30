@@ -198,8 +198,14 @@ end
 if not tostring(status.startup_action):find("startup_min_required=", 1, true) then
   error("expected startup diagnostics to include startup minimum threshold")
 end
+if not tostring(status.startup_action):find("startup_required_now=1", 1, true) then
+  error("expected startup diagnostics to include immediate startup space requirement")
+end
 if not tostring(status.startup_action):find("target_budget=", 1, true) then
   error("expected startup diagnostics to include target budget threshold")
+end
+if not tostring(status.startup_action):find("startup_budget_ok=", 1, true) then
+  error("expected startup diagnostics to include startup budget decision")
 end
 
 logger.log("RT", "disk-write", "INFO")
@@ -279,7 +285,7 @@ local explicit_fallback = logger.init({ log_name = "tight", enabled = true, trun
 if explicit_fallback.log_dir ~= "/xreactor_logs" then
   error("expected explicit disk path fallback to local when space is insufficient")
 end
-if not tostring(explicit_fallback.log_source):find("fallback%-local%(explicit%-disk:space%-startup:", 1, false) then
+if not tostring(explicit_fallback.log_source):find("fallback%-local%(explicit%-disk:space:", 1, false) then
   error("expected explicit disk fallback reason to include space diagnostics")
 end
 

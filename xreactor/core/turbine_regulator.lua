@@ -90,11 +90,24 @@ function regulator.update_effective_min(state, requested_flow, confirmed_flow, r
   state.effective_min_candidate = nil
   state.effective_min_hits = 0
   if requested_flow ~= 0 then
-    local changed = state.effective_min_flow ~= nil
-    state.effective_min_flow = nil
-    return nil, changed
+    return state.effective_min_flow, false
   end
   return state.effective_min_flow, false
+end
+
+function regulator.sync_startup_state(state, confirmed_flow)
+  if type(state) ~= "table" or type(confirmed_flow) ~= "number" then
+    return false
+  end
+  state.confirmed_flow = confirmed_flow
+  state.requested_flow = confirmed_flow
+  state.flow = confirmed_flow
+  state.pending_expected_flow = confirmed_flow
+  state.pending_flow_since = 0
+  state.pending_retries = 0
+  state.last_requested_flow = confirmed_flow
+  state.startup_synced = true
+  return true
 end
 
 function regulator.resolve_min_flow(base_min, effective_min_flow)
