@@ -832,10 +832,16 @@ end
 
 local function setTurbineFlow(turbine, caps, rate)
   local clamped = clamp_turbine_flow(rate)
-  if caps.setFluidFlowRate then
+  if caps.setFluidFlowRate or type(turbine.setFluidFlowRate) == "function" then
+    if caps then
+      caps.setFluidFlowRate = true
+    end
     turbine.setFluidFlowRate(clamped)
     return true, "setFluidFlowRate"
-  elseif caps.setFluidFlowRateMax then
+  elseif caps.setFluidFlowRateMax or type(turbine.setFluidFlowRateMax) == "function" then
+    if caps then
+      caps.setFluidFlowRateMax = true
+    end
     turbine.setFluidFlowRateMax(clamped)
     return true, "setFluidFlowRateMax"
   end
@@ -1042,6 +1048,25 @@ local function warn_unsupported(name, reason)
   warn_once("device_unsupported:" .. name .. ":" .. tostring(reason or "generic"), "Device unsupported by API: " .. name .. suffix)
 end
 
+local function turbine_has_flow_setter(turbine, caps)
+  if caps and (caps.setFluidFlowRate or caps.setFluidFlowRateMax) then
+    return true, "capability-cache"
+  end
+  if turbine and type(turbine.setFluidFlowRate) == "function" then
+    if caps then
+      caps.setFluidFlowRate = true
+    end
+    return true, "runtime-probe:setFluidFlowRate"
+  end
+  if turbine and type(turbine.setFluidFlowRateMax) == "function" then
+    if caps then
+      caps.setFluidFlowRateMax = true
+    end
+    return true, "runtime-probe:setFluidFlowRateMax"
+  end
+  return false, "missing-flow-setter"
+end
+
 local function read_turbine_inductor_state(turbine, caps)
   if turbine and caps and caps.getInductorEngaged and turbine.getInductorEngaged then
     local ok, value = safe_wrapped_call(turbine, "getInductorEngaged")
@@ -1173,7 +1198,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
           .. " synced_flow=" .. tostring(synced)
           .. " flow_api=" .. tostring(startup_reader)
           .. " effective_min_flow=" .. tostring(ctrl.effective_min_flow))
-      return true, false, "startup-sync-hold"
+      return true, false, "startup-sync-hold", "STARTUP_SYNC"
     end
   end
   local old_flow = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow
@@ -1225,7 +1250,15 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   ctrl.last_requested_flow = requested_flow
   local direction = mode
   local reason = decision and decision.reason or "NONE"
-  local bottleneck = turbine_regulator.classify_bottleneck(requested_flow, confirmed_flow, rpm, target_rpm, ctrl.effective_max_flow or MAX_FLOW, ctrl.inductor_engaged)
+  local bottleneck, bottleneck_detail = turbine_regulator.classify_bottleneck({
+    requested_flow = requested_flow,
+    confirmed_flow = confirmed_flow,
+    rpm = rpm,
+    target_rpm = target_rpm,
+    max_flow = ctrl.effective_max_flow or MAX_FLOW,
+    inductor_engaged = ctrl.inductor_engaged,
+    steam_input = steam_input
+  })
   local step = decision and decision.step or "nil"
   local applied_min = decision and decision.min or rail_cfg.min
   local applied_max = decision and decision.max or rail_cfg.max
@@ -1263,7 +1296,8 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " active=" .. tostring(active_state)
       .. " max_flow_limit=" .. tostring(ctrl.effective_max_flow or MAX_FLOW)
       .. " at_max_flow=" .. tostring(requested_flow == (ctrl.effective_max_flow or MAX_FLOW))
-      .. " bottleneck=" .. tostring(bottleneck))
+      .. " bottleneck=" .. tostring(bottleneck)
+      .. " bottleneck_detail=" .. tostring(bottleneck_detail))
   if not ctrl.logged then
     log("INFO", "Turbine " .. name .. " active, initial flow " .. tostring(ctrl.requested_flow))
     ctrl.logged = true
@@ -1271,7 +1305,13 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   if requested_flow == 0 and type(effective_min_flow) == "number" and effective_min_changed then
     log("INFO", "Turbine " .. name .. " effective minimum flow detected at " .. tostring(effective_min_flow))
   end
-  return ok, applied, setter
+  if not ok then
+    return false, applied, setter, "FLOW_SET_CALL_FAILED"
+  end
+  if not applied then
+    return true, false, setter, "FLOW_SET_SKIPPED"
+  end
+  return true, true, setter, "FLOW_SET_OK"
 end
 
 local set_reactors_active
@@ -1329,10 +1369,17 @@ local function updateActuators()
     end
     if turbine then
       local caps = get_device_caps("turbines", name)
-      if not (caps.setFluidFlowRate or caps.setFluidFlowRateMax) then
-        warn_unsupported(name, "missing-flow-setter")
+      local has_flow_api, flow_api_reason = turbine_has_flow_setter(turbine, caps)
+      if not has_flow_api then
+        ctrl.flow_api_missing_ticks = (ctrl.flow_api_missing_ticks or 0) + 1
+        if ctrl.flow_api_missing_ticks >= 5 then
+          warn_unsupported(name, flow_api_reason)
+        else
+          log("DEBUG", "TurbineCtrl startup-wait name=" .. tostring(name) .. " reason=" .. tostring(flow_api_reason) .. " missing_ticks=" .. tostring(ctrl.flow_api_missing_ticks))
+        end
         goto continue_turbine
       end
+      ctrl.flow_api_missing_ticks = 0
       local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
       if not ok_active then
         warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(active_result))
@@ -1347,14 +1394,13 @@ local function updateActuators()
         warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
         goto continue_turbine
       end
-      local ok, result, setter = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
+      local ok, result, setter, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       if not ok then
-        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
+        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
         goto continue_turbine
       end
       if not result then
-        warn_unsupported(name, "flow-setter-call-failed")
-        log("DEBUG", "TurbineCtrl skip name=" .. name .. " reason=FLOW_SET_UNSUPPORTED state=AUTONOM api=" .. tostring(setter))
+        log("DEBUG", "TurbineCtrl skip name=" .. name .. " reason=" .. tostring(apply_reason) .. " state=AUTONOM api=" .. tostring(setter))
       end
       ::continue_turbine::
     end
@@ -1396,10 +1442,17 @@ local function updateControl()
     local ok, turbine = pcall(peripheral.wrap, name)
     if ok and turbine then
       local caps = get_device_caps("turbines", name)
-      if not (caps.setFluidFlowRate or caps.setFluidFlowRateMax) then
-        warn_unsupported(name, "missing-flow-setter")
+      local has_flow_api, flow_api_reason = turbine_has_flow_setter(turbine, caps)
+      if not has_flow_api then
+        ctrl.flow_api_missing_ticks = (ctrl.flow_api_missing_ticks or 0) + 1
+        if ctrl.flow_api_missing_ticks >= 5 then
+          warn_unsupported(name, flow_api_reason)
+        else
+          log("DEBUG", "TurbineCtrl startup-wait name=" .. tostring(name) .. " reason=" .. tostring(flow_api_reason) .. " missing_ticks=" .. tostring(ctrl.flow_api_missing_ticks))
+        end
         goto continue_control_turbine
       end
+      ctrl.flow_api_missing_ticks = 0
       local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
       if not ok_active then
         warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(active_result))
@@ -1420,13 +1473,13 @@ local function updateControl()
         warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
         goto continue_control_turbine
       end
-      local set_ok, result = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
+      local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       if not set_ok then
-        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
+        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
         goto continue_control_turbine
       end
       if not result then
-        warn_unsupported(name, "flow-setter-call-failed")
+        log("DEBUG", "TurbineCtrl skip name=" .. name .. " reason=" .. tostring(apply_reason) .. " state=" .. tostring(current_state))
         goto continue_control_turbine
       end
       if not autonom_control_logged then

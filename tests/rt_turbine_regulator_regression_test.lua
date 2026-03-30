@@ -198,19 +198,50 @@ end
 
 
 
-local bottleneck_a = regulator.classify_bottleneck(2000, 2000, 500, 900, 2000, false)
+local bottleneck_a, detail_a = regulator.classify_bottleneck({
+  requested_flow = 2000,
+  confirmed_flow = 2000,
+  rpm = 500,
+  target_rpm = 900,
+  max_flow = 2000,
+  inductor_engaged = false,
+  steam_input = 1800,
+})
 if bottleneck_a ~= 'MAX_FLOW_LOW_RPM_STEAM_LIMIT' then
   error('max flow with low rpm and coil disabled should classify steam limit')
 end
+if detail_a ~= 'STEAM_INPUT_BELOW_FLOW' then
+  error('steam-limited bottleneck should include explicit detail')
+end
 
-local bottleneck_b = regulator.classify_bottleneck(2000, 2000, 500, 900, 2000, true)
+local bottleneck_b, detail_b = regulator.classify_bottleneck({
+  requested_flow = 2000,
+  confirmed_flow = 2000,
+  rpm = 500,
+  target_rpm = 900,
+  max_flow = 2000,
+  inductor_engaged = true,
+})
 if bottleneck_b ~= 'MAX_FLOW_LOW_RPM_WITH_COIL' then
   error('max flow with low rpm and coil enabled should classify coil load')
 end
+if detail_b ~= 'PLANT_OR_COIL_LIMIT' then
+  error('coil bottleneck should include plant/coil detail')
+end
 
-local bottleneck_c = regulator.classify_bottleneck(1000, 900, 900, 900, 2000, true)
+local bottleneck_c, detail_c = regulator.classify_bottleneck({
+  requested_flow = 1000,
+  confirmed_flow = 900,
+  rpm = 900,
+  target_rpm = 900,
+  max_flow = 2000,
+  inductor_engaged = true,
+})
 if bottleneck_c ~= 'FLOW_READBACK_LAG' then
   error('flow mismatch should classify readback lag')
+end
+if detail_c ~= 'API_READBACK_LAG' then
+  error('readback lag should include API detail')
 end
 
 print('rt_turbine_regulator_regression_test.lua: ok')

@@ -122,28 +122,33 @@ function regulator.resolve_min_flow(base_min, effective_min_flow)
 end
 
 
-function regulator.classify_bottleneck(requested_flow, confirmed_flow, rpm, target_rpm, max_flow, inductor_engaged)
-  local requested = sanitize_number(requested_flow, 0)
-  local confirmed = sanitize_number(confirmed_flow, requested)
-  local rotor = sanitize_number(rpm, -1)
-  local target = sanitize_number(target_rpm, 0)
-  local max = sanitize_number(max_flow, 0)
+function regulator.classify_bottleneck(input)
+  local requested = sanitize_number(type(input) == "table" and input.requested_flow or nil, 0)
+  local confirmed = sanitize_number(type(input) == "table" and input.confirmed_flow or nil, requested)
+  local rotor = sanitize_number(type(input) == "table" and input.rpm or nil, -1)
+  local target = sanitize_number(type(input) == "table" and input.target_rpm or nil, 0)
+  local max = sanitize_number(type(input) == "table" and input.max_flow or nil, 0)
+  local inductor_engaged = type(input) == "table" and input.inductor_engaged or nil
+  local steam_input = sanitize_number(type(input) == "table" and input.steam_input or nil, -1)
   if rotor < 0 then
-    return "RPM_UNAVAILABLE"
+    return "RPM_UNAVAILABLE", "RPM_READ_FAILED"
   end
   if requested >= max and rotor < (target - 50) then
     if inductor_engaged == true then
-      return "MAX_FLOW_LOW_RPM_WITH_COIL"
+      return "MAX_FLOW_LOW_RPM_WITH_COIL", "PLANT_OR_COIL_LIMIT"
     end
-    return "MAX_FLOW_LOW_RPM_STEAM_LIMIT"
+    if steam_input >= 0 and steam_input < math.max(0, confirmed - 25) then
+      return "MAX_FLOW_LOW_RPM_STEAM_LIMIT", "STEAM_INPUT_BELOW_FLOW"
+    end
+    return "MAX_FLOW_LOW_RPM_STEAM_LIMIT", "PLANT_LIMIT_AT_MAX_FLOW"
   end
   if requested <= 0 and rotor > (target + 50) then
-    return "MIN_FLOW_HIGH_RPM"
+    return "MIN_FLOW_HIGH_RPM", "CONTROLLER_MIN_FLOW"
   end
   if math.abs(requested - confirmed) > 5 then
-    return "FLOW_READBACK_LAG"
+    return "FLOW_READBACK_LAG", "API_READBACK_LAG"
   end
-  return "NONE"
+  return "NONE", "NO_LIMITER_DETECTED"
 end
 
 return regulator

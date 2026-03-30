@@ -273,7 +273,7 @@ end
 local function compute_write_requirements(pending_bytes)
   local pending = math.max(0, tonumber(pending_bytes) or 0)
   return {
-    immediate_bytes = 1,
+    immediate_bytes = math.max(1, pending + 64),
     target_budget_bytes = math.max(CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0, math.floor(pending * 0.25))
   }
 end
@@ -417,19 +417,46 @@ local function flush_buffer_to_dir(target_dir)
   if not rotate_ok then
     error("log-op=rotate path=" .. tostring(path) .. " reason=" .. tostring(rotate_reason))
   end
-  local file = fs.open(path, "a")
+  local file
+  local open_ok, open_result = pcall(fs.open, path, "a")
+  if open_ok then
+    file = open_result
+  end
   if not file then
     local cleanup = cleanup_log_workspace(target_dir, state.log_name and (state.log_name .. ".log") or nil, true)
-    file = fs.open(path, "a")
+    local retry_ok, retry_result = pcall(fs.open, path, "a")
+    if retry_ok then
+      file = retry_result
+    end
     if not file then
       local _, free_now = get_free_space(target_dir)
-      error("log-op=open path=" .. tostring(path) .. " reason=open-failed free_now=" .. tostring(free_now) .. " pending=" .. tostring(pending_bytes) .. " cleanup={" .. summarize_cleanup(cleanup, target_dir) .. "}")
+      local failure = open_ok and "open-returned-nil" or ("open-error:" .. summarize_error(open_result))
+      if retry_ok == false then
+        failure = failure .. "|retry-error:" .. summarize_error(retry_result)
+      elseif not retry_result then
+        failure = failure .. "|retry-returned-nil"
+      end
+      error("log-op=open path=" .. tostring(path) .. " reason=" .. failure .. " free_now=" .. tostring(free_now) .. " pending=" .. tostring(pending_bytes) .. " cleanup={" .. summarize_cleanup(cleanup, target_dir) .. "}")
     end
   end
-  for _, line in ipairs(state.buffer) do
-    file.write(line .. "\n")
+  for index, line in ipairs(state.buffer) do
+    local write_ok, write_err = pcall(file.write, line .. "\n")
+    if not write_ok then
+      local _, free_now = get_free_space(target_dir)
+      local close_ok, close_err = pcall(file.close)
+      error("log-op=write path=" .. tostring(path)
+        .. " line_index=" .. tostring(index)
+        .. " reason=" .. summarize_error(write_err)
+        .. " free_now=" .. tostring(free_now)
+        .. " close_ok=" .. tostring(close_ok)
+        .. " close_err=" .. tostring(close_err))
+    end
   end
-  file.close()
+  local close_ok, close_err = pcall(file.close)
+  if not close_ok then
+    local _, free_now = get_free_space(target_dir)
+    error("log-op=close path=" .. tostring(path) .. " reason=" .. summarize_error(close_err) .. " free_now=" .. tostring(free_now))
+  end
   state.log_dir = target_dir
   state.log_path = path
 end
