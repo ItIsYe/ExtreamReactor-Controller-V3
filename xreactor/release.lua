@@ -3,7 +3,7 @@ return {
   commit_sha = "beta",
   manifest_id = "manifest-v6",
   manifest_version = 6,
-  manifest_file_count = 69,
+  manifest_file_count = 70,
   hash_algo = "crc32",
   manifest_path = "xreactor/manifest.lua",
   installer_core_version = "1.6",

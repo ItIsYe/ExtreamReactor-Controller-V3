@@ -2,12 +2,15 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 local startup_diagnostics = require('nodes.rt.startup_diagnostics')
 local status_snapshot = require('nodes.rt.status_snapshot')
+local command_handler = require('nodes.rt.command_handler')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
     error((message or 'assert_eq failed') .. ': expected=' .. tostring(expected) .. ' actual=' .. tostring(actual))
   end
 end
+
+assert_eq(type(command_handler.new), 'function', 'command_handler.new missing')
 
 local summary = startup_diagnostics.build_peripheral_summary({
   total = 4,
