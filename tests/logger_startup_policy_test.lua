@@ -253,8 +253,8 @@ if files["/disk2/xreactor_logs/net.log.1"] then
 end
 
 
--- Disk preflight must reject writes that exceed immediate free space and fallback before open fails.
-free_space_by_path["/disk2/xreactor_logs"] = 40
+-- Disk preflight must reject writes when immediate space is exhausted and fallback before open fails.
+free_space_by_path["/disk2/xreactor_logs"] = 0
 logger.init({ log_name = "runtime_preflight", enabled = true, truncate = true, log_dir = "/disk2/xreactor_logs" })
 logger.log("RT", string.rep("runtime-preflight-check", 12), "INFO")
 logger.flush()

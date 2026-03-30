@@ -270,6 +270,14 @@ local function estimate_buffer_bytes()
   return total
 end
 
+local function compute_write_requirements(pending_bytes)
+  local pending = math.max(0, tonumber(pending_bytes) or 0)
+  return {
+    immediate_bytes = 1,
+    target_budget_bytes = math.max(CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0, math.floor(pending * 0.25))
+  }
+end
+
 local function preflight_write(target_dir, path, pending_bytes)
   if not is_disk_path(target_dir) then
     return true, "local-target", nil
@@ -278,10 +286,16 @@ local function preflight_write(target_dir, path, pending_bytes)
   local free_before_ok, free_before = get_free_space(target_dir)
   local cleanup = cleanup_log_workspace(target_dir, active_name, true)
   local free_after_cleanup_ok, free_after_cleanup = get_free_space(target_dir)
-  local required = math.max(1, tonumber(pending_bytes) or 0) + 64
-  local space_ok, space_reason = disk_free_ok(target_dir, required)
+  local requirements = compute_write_requirements(pending_bytes)
+  local required_now = requirements.immediate_bytes
+  local target_budget = requirements.target_budget_bytes
+  local space_ok, space_reason = disk_free_ok(target_dir, required_now)
+  local budget_ok, budget_reason = disk_free_ok(target_dir, target_budget)
   local diag = "path=" .. tostring(path)
-    .. ",required=" .. tostring(required)
+    .. ",required_now=" .. tostring(required_now)
+    .. ",target_budget=" .. tostring(target_budget)
+    .. ",target_budget_ok=" .. tostring(budget_ok)
+    .. ",target_budget_reason=" .. tostring(budget_reason)
     .. ",pending=" .. tostring(pending_bytes)
     .. ",free_before=" .. tostring(free_before_ok and free_before or ("err:" .. tostring(free_before)))
     .. ",free_after_cleanup=" .. tostring(free_after_cleanup_ok and free_after_cleanup or ("err:" .. tostring(free_after_cleanup)))
@@ -341,22 +355,30 @@ local function current_max_bytes()
   return CONFIG.MAX_BYTES
 end
 
-local function rotate_log_if_needed(path)
+local function rotate_log_if_needed(path, target_dir)
   local max_bytes = current_max_bytes()
   if not max_bytes or max_bytes <= 0 then
-    return
+    return true, "rotate-skip:max-disabled"
   end
   if not fs.exists(path) then
-    return
+    return true, "rotate-skip:missing-log"
   end
   if fs.getSize(path) < max_bytes then
-    return
+    return true, "rotate-skip:below-threshold"
   end
   local backup = path .. (CONFIG.ROTATE_SUFFIX or ".1")
   if fs.exists(backup) then
-    fs.delete(backup)
+    local delete_ok, delete_err = pcall(fs.delete, backup)
+    if not delete_ok then
+      return false, "rotate-delete-failed path=" .. tostring(backup) .. " err=" .. summarize_error(delete_err)
+    end
   end
-  fs.move(path, backup)
+  local move_ok, move_err = pcall(fs.move, path, backup)
+  if not move_ok then
+    local _, free_now = get_free_space(target_dir)
+    return false, "rotate-move-failed src=" .. tostring(path) .. " dst=" .. tostring(backup) .. " err=" .. summarize_error(move_err) .. " free_now=" .. tostring(free_now)
+  end
+  return true, "rotated:" .. tostring(backup)
 end
 
 local function resolve_enabled(current)
@@ -391,14 +413,18 @@ local function flush_buffer_to_dir(target_dir)
   if not preflight_ok then
     error("log-op=preflight path=" .. tostring(path) .. " reason=" .. tostring(preflight_reason))
   end
-  local rotate_ok, rotate_err = pcall(rotate_log_if_needed, path)
+  local rotate_ok, rotate_reason = rotate_log_if_needed(path, target_dir)
   if not rotate_ok then
-    error("log-op=rotate path=" .. tostring(path) .. " reason=" .. summarize_error(rotate_err))
+    error("log-op=rotate path=" .. tostring(path) .. " reason=" .. tostring(rotate_reason))
   end
   local file = fs.open(path, "a")
   if not file then
-    local _, free_now = get_free_space(target_dir)
-    error("log-op=open path=" .. tostring(path) .. " reason=open-failed free_now=" .. tostring(free_now) .. " pending=" .. tostring(pending_bytes))
+    local cleanup = cleanup_log_workspace(target_dir, state.log_name and (state.log_name .. ".log") or nil, true)
+    file = fs.open(path, "a")
+    if not file then
+      local _, free_now = get_free_space(target_dir)
+      error("log-op=open path=" .. tostring(path) .. " reason=open-failed free_now=" .. tostring(free_now) .. " pending=" .. tostring(pending_bytes) .. " cleanup={" .. summarize_cleanup(cleanup, target_dir) .. "}")
+    end
   end
   for _, line in ipairs(state.buffer) do
     file.write(line .. "\n")
@@ -541,9 +567,10 @@ local function startup_prepare(path, mode, log_dir)
   if cleanup_is_disk then
     local _, after_value = disk_free_ok(final_dir, 0)
     free_after_cleanup = tostring(after_value)
+    local requirements = compute_write_requirements(estimate_buffer_bytes())
     startup_min = tostring(CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
-    startup_required = "1"
-    target_budget = tostring(CONFIG.DISK_MIN_FREE_BYTES or 0)
+    startup_required = tostring(requirements.immediate_bytes)
+    target_budget = tostring(requirements.target_budget_bytes)
   end
   local prepare_ok = pcall(function()
     ensure_dir(log_dir or CONFIG.LOG_DIR)
@@ -564,8 +591,9 @@ local function startup_prepare(path, mode, log_dir)
   if cleanup_is_disk then
     local _, after_prepare = disk_free_ok(final_dir, 0)
     free_after_prepare = tostring(after_prepare)
-    startup_space_ok, startup_space_reason = disk_free_ok(final_dir, 1)
-    startup_budget_ok, startup_budget_reason = disk_free_ok(final_dir, CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0)
+    local requirements = compute_write_requirements(estimate_buffer_bytes())
+    startup_space_ok, startup_space_reason = disk_free_ok(final_dir, requirements.immediate_bytes)
+    startup_budget_ok, startup_budget_reason = disk_free_ok(final_dir, requirements.target_budget_bytes)
   end
   local cleanup_prefix = "final_path=" .. tostring(final_path)
     .. ",final_dir=" .. tostring(final_dir)

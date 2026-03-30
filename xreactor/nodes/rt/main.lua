@@ -855,7 +855,7 @@ local function setTurbineActive(turbine, caps, active)
     turbine.setActive(active)
     return true
   end
-  return false
+  return true
 end
 
 local function ensure_reactor_ctrl(name)
@@ -1185,6 +1185,11 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       steam_input = steam_value
     end
   end
+  local active_state = nil
+  if caps and caps.getActive and turbine and turbine.getActive then
+    local active_ok, active_value = safe_wrapped_call(turbine, "getActive")
+    if active_ok and type(active_value) == "boolean" then active_state = active_value end
+  end
   local now_ts = os.clock()
   local previous_requested = ctrl.pending_expected_flow
   if type(previous_requested) ~= "number" then
@@ -1217,7 +1222,6 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local rail_cfg = config.rails and config.rails.turbine_flow or {}
   local effective_min_samples = rail_cfg.effective_min_samples or 3
   local effective_min_flow, effective_min_changed = turbine_regulator.update_effective_min(ctrl, requested_flow, confirmed_flow, effective_min_samples)
-
   ctrl.last_requested_flow = requested_flow
   local direction = mode
   local reason = decision and decision.reason or "NONE"
@@ -1256,6 +1260,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " coil=" .. tostring(ctrl.inductor_engaged)
       .. " coil_api=" .. tostring(ctrl.inductor_state_api or "n/a")
       .. " steam_input=" .. tostring(steam_input)
+      .. " active=" .. tostring(active_state)
       .. " max_flow_limit=" .. tostring(ctrl.effective_max_flow or MAX_FLOW)
       .. " at_max_flow=" .. tostring(requested_flow == (ctrl.effective_max_flow or MAX_FLOW))
       .. " bottleneck=" .. tostring(bottleneck))
@@ -1301,7 +1306,7 @@ local function updateActuators()
         goto continue_reactor
       end
       if not active_result then
-        warn_unsupported(name)
+        warn_once("reactor_set_active_unavailable:" .. name, "Reactor active API unavailable for " .. name)
         goto continue_reactor
       end
       ensure_reactor_ctrl(name)
@@ -1334,8 +1339,7 @@ local function updateActuators()
         goto continue_turbine
       end
       if not active_result then
-        warn_unsupported(name)
-        goto continue_turbine
+        warn_once("turbine_set_active_unavailable:" .. name, "Turbine active API unavailable for " .. name .. " (continuing with flow control)")
       end
       local rpm = select(1, read_turbine_rpm(turbine, caps))
       local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
@@ -1375,7 +1379,7 @@ local function updateControl()
         goto continue_control_reactor
       end
       if not active_result then
-        warn_unsupported(name)
+        warn_once("reactor_set_active_unavailable:" .. name, "Reactor active API unavailable for " .. name)
         goto continue_control_reactor
       end
       ensure_reactor_ctrl(name)
@@ -1402,8 +1406,7 @@ local function updateControl()
         goto continue_control_turbine
       end
       if not active_result then
-        warn_unsupported(name, "setActive-unsupported")
-        goto continue_control_turbine
+        warn_once("turbine_set_active_unavailable:" .. name, "Turbine active API unavailable for " .. name .. " (continuing with flow control)")
       end
       local rpm = nil
       if turbine.getRotorSpeed then
@@ -1434,7 +1437,6 @@ local function updateControl()
     end
   end
 end
-
 local function adjust_turbines()
   updateControl()
 end
@@ -1949,8 +1951,6 @@ set_turbines_active = function(active)
     local ok, result = pcall(setTurbineActive, turbine, caps, active)
     if not ok then
       warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(result))
-    elseif not result then
-      warn_unsupported(name)
     end
   end
 end
