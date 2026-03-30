@@ -70,6 +70,7 @@ local state_handlers = require("nodes.rt.state_handlers")
 local status_snapshot_lib = require("nodes.rt.status_snapshot")
 local startup_diagnostics = require("nodes.rt.startup_diagnostics")
 local module_lifecycle = require("nodes.rt.module_lifecycle")
+local command_handler = require("nodes.rt.command_handler")
 local INFO = "INFO"
 local DEBUG = "DEBUG"
 local WARN = "WARN"
@@ -2269,90 +2270,34 @@ local function build_state_context()
     set_startup_queue = function(value) startup_queue = value end,
     get_active_startup = function() return active_startup end,
     set_active_startup = function(value) active_startup = value end,
+    get_network_id = function() return (comms and comms.network and comms.network.id) or config.node_id end,
     get_current_state = function() return current_state end,
     get_node_state_machine = function() return node_state_machine end
   }
 end
 
-local function handle_command(message)
-  local function record(result)
-    last_command = result and (result.ok and "ok" or result.error or "error") or "error"
-    last_command_ts = os.epoch("utc")
-    return result
-  end
-  if not protocol.is_for_node(message, comms.network.id) then return end
-  local ok_proto = protocol.is_proto_compatible(message.proto_ver)
-  if not ok_proto then
-    return record({ ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" })
-  end
-  local payload = type(message.payload) == "table" and message.payload or nil
-  local command = payload and payload.command
-  if type(command) ~= "table" then
-    return record({ ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" })
-  end
-  if current_state == STATE.SAFE then
-    return record({ ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" })
-  end
-  note_master_seen()
-  if command.target == constants.command_targets.SET_MODE then
-    local desired = command.value
-    apply_mode(desired)
-  elseif command.target == constants.command_targets.SET_SETPOINTS then
-    if current_state ~= STATE.MASTER then
-      return record({ ok = false, error = "autonom: ignoring setpoints", reason_code = "INVALID_STATE" })
-    end
-    local value = command.value or {}
-    if type(value.target_rpm) == "number" then
-      targets.rpm = value.target_rpm
-    end
-    if type(value.power_target) == "number" then
-      targets.power = value.power_target
-    end
-    if type(value.steam_target) == "number" then
-      targets.steam = value.steam_target
-    end
-    if value.enable_reactors ~= nil then
-      targets.enable_reactors = value.enable_reactors and true or false
-    end
-    if value.enable_turbines ~= nil then
-      targets.enable_turbines = value.enable_turbines and true or false
-    end
-    request_startup_if_needed("SET_SETPOINTS")
-  elseif command.target == constants.command_targets.POWER_TARGET then
-    if current_state == STATE.MASTER then
-      targets.power = command.value
-    end
-  elseif command.target == constants.command_targets.STEAM_TARGET then
-    if current_state == STATE.MASTER then
-      targets.steam = command.value
-    end
-  elseif command.target == constants.command_targets.TURBINE_RPM then
-    if current_state == STATE.MASTER then
-      targets.rpm = command.value or TARGET_RPM
-    end
-  elseif command.target == constants.command_targets.MODE then
-    if current_state == STATE.MASTER and states[command.value] then
-      node_state_machine:transition(command.value)
-    end
-  elseif command.target == constants.command_targets.STARTUP_STAGE
-    or command.target == constants.command_targets.REQUEST_STARTUP_MODULE then
-    if current_state ~= STATE.MASTER then
-      return record({ ok = false, error = "autonom: ignoring startup", reason_code = "INVALID_STATE" })
-    end
-    local value = command.value or {}
-    local module, detail = start_module(value.module_id, value.module_type, value.ramp_profile)
-    if not module then
-      add_alarm(comms.network.id, "WARNING", "Startup rejected: " .. (detail or "unknown"))
-      return record({ ok = false, error = detail or "startup rejected", reason_code = "STARTUP_REJECTED" })
-    end
-    return record({ ok = true, module_id = module.id, detail = detail })
-  elseif command.target == constants.command_targets.SCRAM then
-    apply_mode(STATE.SAFE)
-  else
-    return record({ ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" })
-  end
-  return record({ ok = true })
+local function build_command_context()
+  return {
+    protocol = protocol,
+    constants = constants,
+    STATE = STATE,
+    TARGET_RPM = TARGET_RPM,
+    targets = targets,
+    node_state_machine = node_state_machine,
+    apply_mode = apply_mode,
+    request_startup_if_needed = request_startup_if_needed,
+    start_module = start_module,
+    add_alarm = add_alarm,
+    note_master_seen = note_master_seen,
+    get_network_id = function() return (comms and comms.network and comms.network.id) or config.node_id end,
+    get_current_state = function() return current_state end,
+    get_states = function() return states or {} end,
+    set_last_command = function(value) last_command = value end,
+    set_last_command_ts = function(value) last_command_ts = value end
+  }
 end
+
+local handle_command
 
 local function send_heartbeat()
   update_status_snapshot()
@@ -2384,6 +2329,7 @@ local function init()
   set_turbines_active(true)
   apply_initial_reactor_rods()
   services = service_manager.new({ log_prefix = "RT" })
+  handle_command = command_handler.new(build_command_context())
   comms = comms_service.new({
     config = config,
     log_prefix = "RT",
