@@ -1172,6 +1172,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     requested_flow = base_flow,
     min_flow = min_flow,
     max_flow = max_flow,
+    coil_engaged = ctrl.inductor_engaged,
     band_rpm = rail_cfg.target_hold_band_rpm or rail_cfg.deadband_up or RPM_TOLERANCE,
     trim_trigger_rpm = rail_cfg.target_trim_trigger_rpm or 6,
     trim_up_step = rail_cfg.target_trim_step_up or 25,
@@ -1296,6 +1297,17 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     inductor_engaged = ctrl.inductor_engaged,
     steam_input = steam_input
   })
+  local target_zone_state = ctrl.target_holding_active and "IN_TARGET_BAND" or "OUTSIDE_TARGET_BAND"
+  local target_action = "TARGET_HOLD_STABLE"
+  if tostring(reason) == "TARGET_TRIM_UP" then
+    target_action = "TARGET_TRIM_UP"
+  elseif tostring(reason) == "TARGET_TRIM_DOWN" then
+    target_action = "TARGET_TRIM_DOWN"
+  elseif tostring(reason):find("MIN_LIMIT_OVERSPEED", 1, true) then
+    target_action = "MIN_LIMIT_OVERSPEED"
+  elseif tostring(reason):find("MAX_LIMIT_UNDERSPEED", 1, true) then
+    target_action = "MAX_LIMIT_UNDERSPEED"
+  end
   log("DEBUG", "TurbineCtrl name=" .. name
       .. " rpm=" .. tostring(rpm)
       .. " rpm_smooth=" .. tostring(smoothed_rpm)
@@ -1324,6 +1336,8 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " effective_min_flow=" .. tostring(effective_min_flow)
       .. " effective_min_applied=" .. tostring(type(effective_min_flow) == "number" and requested_flow == effective_min_flow and requested_flow > 0)
       .. " mode=" .. tostring(mode)
+      .. " regulator_state=" .. tostring(target_action)
+      .. " target_zone_state=" .. tostring(target_zone_state)
       .. " target_band_active=" .. tostring(ctrl.target_holding_active)
       .. " target_band_status=" .. tostring(ctrl.target_band_status)
       .. " target_band_reason=" .. tostring(decision and decision.target_band_mode or "n/a")

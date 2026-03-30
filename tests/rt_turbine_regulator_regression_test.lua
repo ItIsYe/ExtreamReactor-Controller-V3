@@ -256,7 +256,7 @@ local bottleneck_d, detail_d = regulator.classify_bottleneck({
 if bottleneck_d ~= 'MIN_LIMIT_OVERSPEED' then
   error('effective minimum overspeed should classify minimum-limit bottleneck')
 end
-if detail_d ~= 'MIN_FLOW_WITH_COIL_ENGAGED' then
+if detail_d ~= 'MIN_FLOW_WITH_COIL_ENGAGED_NO_FURTHER_DOWN' then
   error('minimum-limit bottleneck should expose coil contribution detail')
 end
 
@@ -271,8 +271,27 @@ local hold_state = regulator.target_band_state({
   trim_up_step = 25,
   trim_down_step = 50
 })
-if not hold_state.in_band or hold_state.mode ~= 'HOLDING_TARGET' or hold_state.flow ~= 1200 then
+if not hold_state.in_band or hold_state.mode ~= 'HOLDING_TARGET_ACTIVE' or hold_state.flow ~= 1200 then
   error('target-band hold should keep flow steady when within trim deadzone')
+end
+if hold_state.reason ~= 'TARGET_BAND_ACTIVE' then
+  error('target-band hold should expose active hold reason')
+end
+
+local hold_state_with_coil = regulator.target_band_state({
+  rpm = 901,
+  target_rpm = 900,
+  requested_flow = 1200,
+  min_flow = 200,
+  max_flow = 2000,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50,
+  coil_engaged = true
+})
+if hold_state_with_coil.reason ~= 'TARGET_BAND_ACTIVE_WITH_COIL' then
+  error('target-band hold should expose coil-aware active hold reason')
 end
 
 local trim_down_state = regulator.target_band_state({
