@@ -1168,6 +1168,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   local next_flow, direction, decision = rails.step(base_flow, error, flow_state, flow_cfg, now_ts)
   local target_band = turbine_regulator.target_band_state({
     rpm = smoothed_rpm or rpm or target,
+    live_rpm = rpm,
     target_rpm = target,
     requested_flow = base_flow,
     min_flow = min_flow,
@@ -1188,7 +1189,11 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
       max = max_flow,
       target_band = true,
       target_band_mode = target_band.mode,
-      target_band_error = target_band.error
+      target_band_error = target_band.error,
+      target_band_live_error = target_band.live_error,
+      target_band_smoothed_error = target_band.smoothed_error,
+      target_band_at_min_limit = target_band.at_min_limit == true,
+      target_band_at_max_limit = target_band.at_max_limit == true
     }
   end
   ctrl.requested_flow = clamp_turbine_flow(next_flow)
@@ -1206,7 +1211,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   elseif direction < 0 then
     ctrl.mode = "DOWN"
   else
-    ctrl.mode = "HOLD"
+    ctrl.mode = "TRACKING_STABLE"
   end
   return ctrl.requested_flow, ctrl.mode, decision, smoothed_rpm
 end
@@ -1308,6 +1313,20 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   elseif tostring(reason):find("MAX_LIMIT_UNDERSPEED", 1, true) then
     target_action = "MAX_LIMIT_UNDERSPEED"
   end
+  local at_max_limit = requested_flow == (ctrl.effective_max_flow or MAX_FLOW)
+  local at_min_limit = type(applied_min) == "number" and requested_flow <= applied_min
+  local active_trim = target_action == "TARGET_TRIM_UP" or target_action == "TARGET_TRIM_DOWN"
+  local hold_active = target_action == "TARGET_HOLD_STABLE"
+  local down_limited = tostring(reason):find("MIN_LIMIT_OVERSPEED", 1, true) ~= nil
+  local up_limited = tostring(reason):find("MAX_LIMIT_UNDERSPEED", 1, true) ~= nil
+  ctrl.target_trim_state = active_trim and target_action or "NONE"
+  if down_limited or (decision and decision.target_band_at_min_limit) then
+    ctrl.flow_limit_state = "MIN_LIMIT"
+  elseif up_limited or (decision and decision.target_band_at_max_limit) then
+    ctrl.flow_limit_state = "MAX_LIMIT"
+  else
+    ctrl.flow_limit_state = "NONE"
+  end
   log("DEBUG", "TurbineCtrl name=" .. name
       .. " rpm=" .. tostring(rpm)
       .. " rpm_smooth=" .. tostring(smoothed_rpm)
@@ -1342,13 +1361,21 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " target_band_status=" .. tostring(ctrl.target_band_status)
       .. " target_band_reason=" .. tostring(decision and decision.target_band_mode or "n/a")
       .. " target_band_error=" .. tostring(decision and decision.target_band_error or "n/a")
+      .. " target_band_live_error=" .. tostring(decision and decision.target_band_live_error or "n/a")
+      .. " target_band_smoothed_error=" .. tostring(decision and decision.target_band_smoothed_error or "n/a")
+      .. " target_holding_active=" .. tostring(hold_active)
+      .. " target_trim_active=" .. tostring(active_trim)
+      .. " flow_trim_direction=" .. tostring(active_trim and (target_action == "TARGET_TRIM_UP" and "UP" or "DOWN") or "NONE")
       .. " coil=" .. tostring(ctrl.inductor_engaged)
       .. " coil_api=" .. tostring(ctrl.inductor_state_api or "n/a")
       .. " steam_input=" .. tostring(steam_input)
       .. " active=" .. tostring(active_state)
       .. " max_flow_limit=" .. tostring(ctrl.effective_max_flow or MAX_FLOW)
-      .. " at_max_flow=" .. tostring(requested_flow == (ctrl.effective_max_flow or MAX_FLOW))
-      .. " at_min_flow=" .. tostring(type(applied_min) == "number" and requested_flow <= applied_min)
+      .. " at_max_flow=" .. tostring(at_max_limit)
+      .. " at_min_flow=" .. tostring(at_min_limit)
+      .. " down_regulation_limited=" .. tostring(down_limited or (decision and decision.target_band_at_min_limit) or false)
+      .. " up_regulation_limited=" .. tostring(up_limited or (decision and decision.target_band_at_max_limit) or false)
+      .. " flow_limit_state=" .. tostring(ctrl.flow_limit_state)
       .. " bottleneck=" .. tostring(bottleneck)
       .. " bottleneck_detail=" .. tostring(bottleneck_detail))
   if not ctrl.logged then

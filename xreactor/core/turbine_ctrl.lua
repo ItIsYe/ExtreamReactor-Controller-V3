@@ -79,6 +79,12 @@ local function ensure_turbine_ctrl(name)
   if ctrl.target_band_status == nil then
     ctrl.target_band_status = "TRACKING"
   end
+  if ctrl.target_trim_state == nil then
+    ctrl.target_trim_state = "NONE"
+  end
+  if ctrl.flow_limit_state == nil then
+    ctrl.flow_limit_state = "NONE"
+  end
   return ctrl
 end
 

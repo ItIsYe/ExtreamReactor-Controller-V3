@@ -274,13 +274,17 @@ end
 
 local function compute_write_requirements(pending_bytes)
   local pending = math.max(0, tonumber(pending_bytes) or 0)
-  local overhead = math.max(2, math.min(32, math.floor(pending * 0.08) + 2))
-  if pending <= 8 then
-    overhead = 1
+  local overhead = 1
+  if pending > 128 then
+    overhead = math.min(16, math.floor(pending * 0.03))
+  elseif pending > 32 then
+    overhead = 2
   end
+  local immediate = math.max(1, pending + overhead)
   return {
-    immediate_bytes = math.max(1, pending + overhead),
-    target_budget_bytes = math.max(1, math.floor(pending * 0.15))
+    immediate_bytes = immediate,
+    target_budget_bytes = math.max(1, math.min(4096, math.max(64, math.floor(immediate * 0.5)))),
+    overhead_bytes = overhead
   }
 end
 
@@ -290,6 +294,7 @@ local function build_space_diag(target_dir, path, pending_bytes, cleanup, extra_
   return "path=" .. tostring(path)
     .. ",free_now=" .. tostring(free_ok and free_now or ("err:" .. tostring(free_now)))
     .. ",required_now=" .. tostring(requirements.immediate_bytes)
+    .. ",required_overhead=" .. tostring(requirements.overhead_bytes)
     .. ",target_budget=" .. tostring(requirements.target_budget_bytes)
     .. ",pending=" .. tostring(pending_bytes)
     .. ",cleanup={" .. summarize_cleanup(cleanup or { executed = false, removed = 0, failed = 0, removed_names = {}, failed_names = {}, reason = "n/a" }, target_dir) .. "}"
@@ -332,6 +337,7 @@ preflight_write = function(target_dir, path, pending_bytes)
   local budget_ok, budget_reason = disk_free_ok(target_dir, target_budget)
   local diag = "path=" .. tostring(path)
     .. ",required_now=" .. tostring(required_now)
+    .. ",required_overhead=" .. tostring(requirements.overhead_bytes)
     .. ",target_budget=" .. tostring(target_budget)
     .. ",target_budget_ok=" .. tostring(budget_ok)
     .. ",target_budget_reason=" .. tostring(budget_reason)

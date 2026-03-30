@@ -294,6 +294,22 @@ if hold_state_with_coil.reason ~= 'TARGET_BAND_ACTIVE_WITH_COIL' then
   error('target-band hold should expose coil-aware active hold reason')
 end
 
+local hold_state_live_override = regulator.target_band_state({
+  rpm = 860,
+  live_rpm = 902,
+  target_rpm = 900,
+  requested_flow = 1200,
+  min_flow = 200,
+  max_flow = 2000,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50
+})
+if not hold_state_live_override.in_band or hold_state_live_override.mode ~= 'HOLDING_TARGET_ACTIVE' then
+  error('live RPM inside target band should keep active holding even when smoothed rpm lags')
+end
+
 local trim_down_state = regulator.target_band_state({
   rpm = 915,
   target_rpm = 900,
@@ -307,6 +323,9 @@ local trim_down_state = regulator.target_band_state({
 })
 if trim_down_state.mode ~= 'TARGET_TRIM_DOWN' or trim_down_state.flow ~= 1950 then
   error('target-band overspeed at max flow should trim down instead of passive hold')
+end
+if trim_down_state.at_min_limit then
+  error('target trim down from high flow should not report min-limit clamp')
 end
 
 local trim_up_state = regulator.target_band_state({
@@ -322,6 +341,9 @@ local trim_up_state = regulator.target_band_state({
 })
 if trim_up_state.mode ~= 'TARGET_TRIM_UP' or trim_up_state.flow ~= 925 then
   error('target-band underspeed should trim flow up')
+end
+if trim_up_state.at_max_limit then
+  error('target trim up at mid-flow should not report max-limit clamp')
 end
 
 print('rt_turbine_regulator_regression_test.lua: ok')
