@@ -7,6 +7,6 @@ return {
   hash_algo = "crc32",
   manifest_path = "xreactor/manifest.lua",
   installer_core_version = "1.6",
-  installer_core_hash = "a96793f0",
-  installer_core_size_bytes = 23088
+  installer_core_hash = "5d81af81",
+  installer_core_size_bytes = 23787
 }

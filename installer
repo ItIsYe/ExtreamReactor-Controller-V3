@@ -11,6 +11,7 @@ local INCLUDE_DEV_FILES = false
 local STORAGE_BUFFER_BYTES = 32768
 local STORAGE_PERCENT_BUFFER = 0.05
 local STORAGE_UPDATE_BUFFER_BYTES = 16384
+local STORAGE_MIN_REQUIRED_BYTES = 4096
 
 local function safe_mkdir(path)
   if fs.exists(path) then
@@ -425,14 +426,18 @@ local function estimate_required_storage(expected, mode)
     end
   end
   local buffer_base = mode == "update" and STORAGE_UPDATE_BUFFER_BYTES or STORAGE_BUFFER_BYTES
-  local percent_buffer = math.floor(total * STORAGE_PERCENT_BUFFER)
+  local estimate_base = mode == "update" and growth_bytes or total
+  local percent_buffer = math.floor(estimate_base * STORAGE_PERCENT_BUFFER)
   local churn_buffer = math.floor(growth_bytes * 0.1)
-  local required = total + buffer_base + percent_buffer + churn_buffer
+  local stage_peak_bytes = mode == "update" and growth_bytes or total
+  local required = math.max(STORAGE_MIN_REQUIRED_BYTES, stage_peak_bytes + buffer_base + percent_buffer + churn_buffer)
   return {
     mode = mode or "install",
     payload_bytes = total,
     growth_bytes = growth_bytes,
     existing_bytes = existing_bytes,
+    stage_peak_bytes = stage_peak_bytes,
+    estimate_base_bytes = estimate_base,
     fixed_buffer_bytes = buffer_base,
     percent_buffer_bytes = percent_buffer,
     churn_buffer_bytes = churn_buffer,
@@ -480,6 +485,7 @@ local function preflight_storage(storage_plan, opts)
   info(string.format("Storage preflight free bytes: %d", free_bytes))
   info(string.format("Storage preflight payload estimate: %d", storage_plan.payload_bytes))
   info(string.format("Storage preflight growth estimate: %d (existing=%d)", storage_plan.growth_bytes or 0, storage_plan.existing_bytes or 0))
+  info(string.format("Storage preflight stage peak estimate: %d (estimate_base=%d)", storage_plan.stage_peak_bytes or 0, storage_plan.estimate_base_bytes or 0))
   info(string.format(
     "Storage preflight safety buffer: %d fixed + %d dynamic + %d churn",
     storage_plan.fixed_buffer_bytes,
@@ -488,11 +494,12 @@ local function preflight_storage(storage_plan, opts)
   ))
   if free_bytes >= required_bytes then
     info(string.format(
-      "Storage preflight OK (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+      "Storage preflight OK (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
       tostring(storage_plan.mode or "install"),
       free_bytes,
       storage_plan.payload_bytes,
       storage_plan.growth_bytes or 0,
+      storage_plan.stage_peak_bytes or 0,
       storage_plan.fixed_buffer_bytes,
       storage_plan.percent_buffer_bytes,
       storage_plan.churn_buffer_bytes or 0,
@@ -503,11 +510,12 @@ local function preflight_storage(storage_plan, opts)
   end
 
   warn(string.format(
-    "Storage low before install/update (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+    "Storage low before install/update (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
     tostring(storage_plan.mode or "install"),
     free_bytes,
     storage_plan.payload_bytes,
     storage_plan.growth_bytes or 0,
+    storage_plan.stage_peak_bytes or 0,
     storage_plan.fixed_buffer_bytes,
     storage_plan.percent_buffer_bytes,
     storage_plan.churn_buffer_bytes or 0,
@@ -520,11 +528,12 @@ local function preflight_storage(storage_plan, opts)
     info(string.format("Storage cleanup reclaimed bytes: stage=%d backup=%d logs=%d rotated=%d", reclaimed.stage or 0, reclaimed.backup or 0, reclaimed.logs or 0, reclaimed.rotated or 0))
     if free_bytes >= required_bytes then
       info(string.format(
-        "Storage preflight OK after cleanup (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+        "Storage preflight OK after cleanup (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
         tostring(storage_plan.mode or "install"),
         free_bytes,
         storage_plan.payload_bytes,
         storage_plan.growth_bytes or 0,
+        storage_plan.stage_peak_bytes or 0,
         storage_plan.fixed_buffer_bytes,
         storage_plan.percent_buffer_bytes,
         storage_plan.churn_buffer_bytes or 0,
@@ -537,11 +546,12 @@ local function preflight_storage(storage_plan, opts)
   end
 
   return false, string.format(
-    "Not enough free space (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+    "Not enough free space (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
     tostring(storage_plan.mode or "install"),
     free_bytes,
     storage_plan.payload_bytes,
     storage_plan.growth_bytes or 0,
+    storage_plan.stage_peak_bytes or 0,
     storage_plan.fixed_buffer_bytes,
     storage_plan.percent_buffer_bytes,
     storage_plan.churn_buffer_bytes or 0,
