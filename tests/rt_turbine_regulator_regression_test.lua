@@ -244,4 +244,65 @@ if detail_c ~= 'API_READBACK_LAG' then
   error('readback lag should include API detail')
 end
 
+local bottleneck_d, detail_d = regulator.classify_bottleneck({
+  requested_flow = 250,
+  confirmed_flow = 250,
+  rpm = 980,
+  target_rpm = 900,
+  min_flow = 250,
+  max_flow = 2000,
+  inductor_engaged = true,
+})
+if bottleneck_d ~= 'MIN_LIMIT_OVERSPEED' then
+  error('effective minimum overspeed should classify minimum-limit bottleneck')
+end
+if detail_d ~= 'MIN_FLOW_WITH_COIL_ENGAGED' then
+  error('minimum-limit bottleneck should expose coil contribution detail')
+end
+
+local hold_state = regulator.target_band_state({
+  rpm = 901,
+  target_rpm = 900,
+  requested_flow = 1200,
+  min_flow = 200,
+  max_flow = 2000,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50
+})
+if not hold_state.in_band or hold_state.mode ~= 'HOLDING_TARGET' or hold_state.flow ~= 1200 then
+  error('target-band hold should keep flow steady when within trim deadzone')
+end
+
+local trim_down_state = regulator.target_band_state({
+  rpm = 915,
+  target_rpm = 900,
+  requested_flow = 2000,
+  min_flow = 200,
+  max_flow = 2000,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50
+})
+if trim_down_state.mode ~= 'TARGET_TRIM_DOWN' or trim_down_state.flow ~= 1950 then
+  error('target-band overspeed at max flow should trim down instead of passive hold')
+end
+
+local trim_up_state = regulator.target_band_state({
+  rpm = 892,
+  target_rpm = 900,
+  requested_flow = 900,
+  min_flow = 200,
+  max_flow = 2000,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50
+})
+if trim_up_state.mode ~= 'TARGET_TRIM_UP' or trim_up_state.flow ~= 925 then
+  error('target-band underspeed should trim flow up')
+end
+
 print('rt_turbine_regulator_regression_test.lua: ok')

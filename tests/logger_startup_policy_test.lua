@@ -254,6 +254,17 @@ end
 
 
 -- Disk preflight must reject writes when immediate space is exhausted and fallback before open fails.
+free_space_by_path["/disk2/xreactor_logs"] = 80
+logger.init({ log_name = "runtime_small_flush", enabled = true, truncate = true, log_dir = "/disk2/xreactor_logs" })
+logger.log("RT", "tiny", "INFO")
+logger.flush()
+if not files["/disk2/xreactor_logs/runtime_small_flush.log"] then
+  error("expected runtime small flush to stay on disk with realistic preflight requirement")
+end
+if files["/xreactor_logs/runtime_small_flush.log"] then
+  error("small runtime flush must not fallback to local when disk has enough bytes for the pending write")
+end
+
 free_space_by_path["/disk2/xreactor_logs"] = 0
 logger.init({ log_name = "runtime_preflight", enabled = true, truncate = true, log_dir = "/disk2/xreactor_logs" })
 logger.log("RT", string.rep("runtime-preflight-check", 12), "INFO")

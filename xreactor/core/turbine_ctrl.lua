@@ -73,6 +73,12 @@ local function ensure_turbine_ctrl(name)
   if ctrl.last_update == nil then
     ctrl.last_update = os.clock()
   end
+  if ctrl.target_holding_active == nil then
+    ctrl.target_holding_active = false
+  end
+  if ctrl.target_band_status == nil then
+    ctrl.target_band_status = "TRACKING"
+  end
   return ctrl
 end
 
