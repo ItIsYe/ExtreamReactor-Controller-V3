@@ -272,10 +272,42 @@ end
 
 local function compute_write_requirements(pending_bytes)
   local pending = math.max(0, tonumber(pending_bytes) or 0)
+  local overhead = math.max(8, math.min(48, math.floor(pending * 0.15) + 8))
   return {
-    immediate_bytes = math.max(1, pending + 64),
+    immediate_bytes = math.max(1, pending + overhead),
     target_budget_bytes = math.max(CONFIG.DISK_STARTUP_MIN_FREE_BYTES or 0, math.floor(pending * 0.25))
   }
+end
+
+local function build_space_diag(target_dir, path, pending_bytes, cleanup, extra_reason)
+  local requirements = compute_write_requirements(pending_bytes)
+  local free_ok, free_now = get_free_space(target_dir)
+  return "path=" .. tostring(path)
+    .. ",free_now=" .. tostring(free_ok and free_now or ("err:" .. tostring(free_now)))
+    .. ",required_now=" .. tostring(requirements.immediate_bytes)
+    .. ",target_budget=" .. tostring(requirements.target_budget_bytes)
+    .. ",pending=" .. tostring(pending_bytes)
+    .. ",cleanup={" .. summarize_cleanup(cleanup or { executed = false, removed = 0, failed = 0, removed_names = {}, failed_names = {}, reason = "n/a" }, target_dir) .. "}"
+    .. ",extra=" .. tostring(extra_reason or "n/a")
+end
+
+local function runtime_recover_space(target_dir, path, pending_bytes)
+  local active_name = path and path:match("([^/]+)$") or nil
+  local cleanup = cleanup_log_workspace(target_dir, active_name, true)
+  local preflight_ok, preflight_reason = preflight_write(target_dir, path, pending_bytes)
+  if preflight_ok then
+    return true, "recovered-after-cleanup(" .. build_space_diag(target_dir, path, pending_bytes, cleanup, preflight_reason) .. ")"
+  end
+
+  local rotate_ok, rotate_reason = rotate_log_if_needed(path, target_dir)
+  if rotate_ok then
+    local retry_ok, retry_reason = preflight_write(target_dir, path, pending_bytes)
+    if retry_ok then
+      return true, "recovered-after-rotate(" .. build_space_diag(target_dir, path, pending_bytes, cleanup, rotate_reason) .. ")"
+    end
+    return false, "recover-preflight-failed(" .. build_space_diag(target_dir, path, pending_bytes, cleanup, retry_reason) .. ")"
+  end
+  return false, "recover-rotate-failed(" .. build_space_diag(target_dir, path, pending_bytes, cleanup, rotate_reason) .. ")"
 end
 
 local function preflight_write(target_dir, path, pending_bytes)
@@ -478,25 +510,28 @@ local function flush_if_needed(force)
     local pending = estimate_buffer_bytes()
     local target_ok, target_reason = preflight_write(state.log_dir, path, pending)
     if not target_ok then
-      local fallback_ok, fallback_err = pcall(flush_buffer_to_dir, DEFAULT_LOG_DIR)
-      if fallback_ok then
+      local recovered_ok, recovered_reason = runtime_recover_space(state.log_dir, path, pending)
+      if not recovered_ok then
+        local fallback_ok, fallback_err = pcall(flush_buffer_to_dir, DEFAULT_LOG_DIR)
+        if fallback_ok then
+          if not state.warn_once then
+            state.warn_once = true
+            print("WARN: Log dir fallback to local (reason=" .. tostring(target_reason) .. " recover=" .. tostring(recovered_reason) .. ")")
+          end
+          state.log_source = "runtime-fallback-local"
+          state.buffer = {}
+          state.last_flush = os.clock()
+          return true
+        end
         if not state.warn_once then
           state.warn_once = true
-          print("WARN: Log dir fallback to local (reason=" .. tostring(target_reason) .. ")")
+          print("WARN: Logging disabled (" .. tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err) .. ")")
         end
-        state.log_source = "runtime-fallback-local"
+        state.enabled = false
         state.buffer = {}
         state.last_flush = os.clock()
-        return true
+        return false
       end
-      if not state.warn_once then
-        state.warn_once = true
-        print("WARN: Logging disabled (" .. tostring(target_reason) .. " | fallback=" .. tostring(fallback_err) .. ")")
-      end
-      state.enabled = false
-      state.buffer = {}
-      state.last_flush = os.clock()
-      return false
     end
   end
 

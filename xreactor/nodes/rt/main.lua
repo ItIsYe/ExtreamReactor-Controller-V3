@@ -145,6 +145,10 @@ local DEFAULT_CONFIG = {
       settle_timeout_s = 0.8, -- Maximum wait for requested flow to appear in readback before normal cooldown resumes.
       confirm_tolerance = 1, -- Allowed delta between requested and confirmed flow.
       effective_min_samples = 3, -- Readback samples needed before persisting effective min flow.
+      target_hold_band_rpm = 30, -- Active holding band around target RPM.
+      target_trim_trigger_rpm = 6, -- RPM error threshold for target-band trim corrections.
+      target_trim_step_up = 25, -- Fine up-trim step while holding target RPM.
+      target_trim_step_down = 50, -- Fine down-trim step while holding target RPM.
       min = CONFIG.MIN_FLOW, -- Flow clamp minimum.
       max = CONFIG.MAX_FLOW, -- Flow clamp maximum.
       ema_alpha = 0.2 -- RPM smoothing alpha.
@@ -1162,13 +1166,41 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     flow_cfg.cooldown_s = 0
   end
   local next_flow, direction, decision = rails.step(base_flow, error, flow_state, flow_cfg, now_ts)
+  local target_band = turbine_regulator.target_band_state({
+    rpm = smoothed_rpm or rpm or target,
+    target_rpm = target,
+    requested_flow = base_flow,
+    min_flow = min_flow,
+    max_flow = max_flow,
+    band_rpm = rail_cfg.target_hold_band_rpm or rail_cfg.deadband_up or RPM_TOLERANCE,
+    trim_trigger_rpm = rail_cfg.target_trim_trigger_rpm or 6,
+    trim_up_step = rail_cfg.target_trim_step_up or 25,
+    trim_down_step = rail_cfg.target_trim_step_down or 50
+  })
+  if target_band and target_band.in_band then
+    next_flow = target_band.flow
+    direction = target_band.direction or 0
+    decision = {
+      reason = target_band.reason,
+      step = math.abs((target_band.flow or base_flow) - base_flow),
+      min = min_flow,
+      max = max_flow,
+      target_band = true,
+      target_band_mode = target_band.mode,
+      target_band_error = target_band.error
+    }
+  end
   ctrl.requested_flow = clamp_turbine_flow(next_flow)
   ctrl.flow = ctrl.requested_flow
   if defer_cooldown and decision then
     decision.defer_cooldown = true
     decision.defer_reason = defer_reason
   end
-  if direction > 0 then
+  ctrl.target_holding_active = target_band and target_band.in_band or false
+  ctrl.target_band_status = target_band and target_band.mode or "TRACKING"
+  if ctrl.target_holding_active and type(ctrl.target_band_status) == "string" then
+    ctrl.mode = ctrl.target_band_status
+  elseif direction > 0 then
     ctrl.mode = "UP"
   elseif direction < 0 then
     ctrl.mode = "DOWN"
@@ -1251,18 +1283,19 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   ctrl.last_requested_flow = requested_flow
   local direction = mode
   local reason = decision and decision.reason or "NONE"
+  local step = decision and decision.step or "nil"
+  local applied_min = decision and decision.min or rail_cfg.min
+  local applied_max = decision and decision.max or rail_cfg.max
   local bottleneck, bottleneck_detail = turbine_regulator.classify_bottleneck({
     requested_flow = requested_flow,
     confirmed_flow = confirmed_flow,
     rpm = rpm,
     target_rpm = target_rpm,
+    min_flow = applied_min,
     max_flow = ctrl.effective_max_flow or MAX_FLOW,
     inductor_engaged = ctrl.inductor_engaged,
     steam_input = steam_input
   })
-  local step = decision and decision.step or "nil"
-  local applied_min = decision and decision.min or rail_cfg.min
-  local applied_max = decision and decision.max or rail_cfg.max
   log("DEBUG", "TurbineCtrl name=" .. name
       .. " rpm=" .. tostring(rpm)
       .. " rpm_smooth=" .. tostring(smoothed_rpm)
@@ -1291,12 +1324,17 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " effective_min_flow=" .. tostring(effective_min_flow)
       .. " effective_min_applied=" .. tostring(type(effective_min_flow) == "number" and requested_flow == effective_min_flow and requested_flow > 0)
       .. " mode=" .. tostring(mode)
+      .. " target_band_active=" .. tostring(ctrl.target_holding_active)
+      .. " target_band_status=" .. tostring(ctrl.target_band_status)
+      .. " target_band_reason=" .. tostring(decision and decision.target_band_mode or "n/a")
+      .. " target_band_error=" .. tostring(decision and decision.target_band_error or "n/a")
       .. " coil=" .. tostring(ctrl.inductor_engaged)
       .. " coil_api=" .. tostring(ctrl.inductor_state_api or "n/a")
       .. " steam_input=" .. tostring(steam_input)
       .. " active=" .. tostring(active_state)
       .. " max_flow_limit=" .. tostring(ctrl.effective_max_flow or MAX_FLOW)
       .. " at_max_flow=" .. tostring(requested_flow == (ctrl.effective_max_flow or MAX_FLOW))
+      .. " at_min_flow=" .. tostring(type(applied_min) == "number" and requested_flow <= applied_min)
       .. " bottleneck=" .. tostring(bottleneck)
       .. " bottleneck_detail=" .. tostring(bottleneck_detail))
   if not ctrl.logged then
