@@ -24,7 +24,6 @@ local CONFIG = {
   MIN_ACTIVE_RPM = 100, -- Minimum RPM to consider turbine active.
   RECEIVE_TIMEOUT = 0.2 -- Network receive timeout (seconds).
 }
-
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
 bootstrap.setup({
   role = "rt",
@@ -36,7 +35,6 @@ local binding = require("nodes.rt.binding")
 local discovery_log = require("nodes.rt.discovery_log")
 local rails = require("core.control_rails")
 local ensure_turbine_ctrl = require("core.turbine_ctrl")
-
 local function get_turbine_ctrl(name)
   local ctrl = ensure_turbine_ctrl(name)
   if type(ctrl.rails) ~= "table" then
@@ -72,15 +70,12 @@ local state_handlers = require("nodes.rt.state_handlers")
 local status_snapshot_lib = require("nodes.rt.status_snapshot")
 local startup_diagnostics = require("nodes.rt.startup_diagnostics")
 local module_lifecycle = require("nodes.rt.module_lifecycle")
-
 local INFO = "INFO"
 local DEBUG = "DEBUG"
 local WARN = "WARN"
-
 local function log(level, message)
   utils.log(CONFIG.LOG_PREFIX, message, level)
 end
-
 local DEFAULT_CONFIG = {
   role = constants.roles.RT_NODE, -- Node role identifier.
   node_id = "RT-1", -- Default node_id used if none is set.
@@ -1042,12 +1037,28 @@ function warn_once(key, message)
   log("WARN", message)
 end
 
-local function warn_unsupported(name)
-  warn_once("device_unsupported:" .. name, "Device unsupported by API: " .. name)
+local function warn_unsupported(name, reason)
+  local suffix = reason and (" (" .. tostring(reason) .. ")") or ""
+  warn_once("device_unsupported:" .. name .. ":" .. tostring(reason or "generic"), "Device unsupported by API: " .. name .. suffix)
+end
+
+local function read_turbine_inductor_state(turbine, caps)
+  if turbine and caps and caps.getInductorEngaged and turbine.getInductorEngaged then
+    local ok, value = safe_wrapped_call(turbine, "getInductorEngaged")
+    if ok and type(value) == "boolean" then return value, "getInductorEngaged" end
+  end
+  return nil, "INDUCTOR_UNAVAILABLE"
 end
 
 local function update_inductor_for_rpm(name, turbine, caps, rpm)
   local ctrl = get_turbine_ctrl(name)
+  local measured_inductor, measured_api = read_turbine_inductor_state(turbine, caps)
+  if type(measured_inductor) == "boolean" then
+    ctrl.inductor_engaged = measured_inductor
+    ctrl.inductor_state_api = measured_api
+  elseif ctrl.inductor_engaged == nil then
+    ctrl.inductor_engaged = false
+  end
   local coil_cfg = config.rails and config.rails.coil or {}
   local state = ctrl.rails and ctrl.rails.coil or rails.new_state()
   if ctrl.rails then
@@ -1068,11 +1079,16 @@ local function update_inductor_for_rpm(name, turbine, caps, rpm)
     engaged = false
   end
   if engaged == ctrl.inductor_engaged then
-    return true, true
+    return true, true, measured_api
+  end
+  if not caps.setInductorEngaged then
+    ctrl.inductor_engaged = engaged
+    return true, true, "inductor-write-unavailable"
   end
   ctrl.inductor_engaged = engaged
   state.last_change_ts = now
-  return pcall(setInductor, turbine, caps, engaged)
+  local ok, applied = pcall(setInductor, turbine, caps, engaged)
+  return ok, applied, measured_api
 end
 
 local function update_turbine_flow_state(rpm, target_rpm, ctrl)
@@ -1162,6 +1178,13 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   end
   local old_flow = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow
   local requested_flow, mode, decision, smoothed_rpm = update_turbine_flow_state(rpm, target_rpm, ctrl)
+  local steam_input = nil
+  if turbine and turbine.getLastInputFluidRate then
+    local steam_ok, steam_value = safe_wrapped_call(turbine, "getLastInputFluidRate")
+    if steam_ok and type(steam_value) == "number" then
+      steam_input = steam_value
+    end
+  end
   local now_ts = os.clock()
   local previous_requested = ctrl.pending_expected_flow
   if type(previous_requested) ~= "number" then
@@ -1198,6 +1221,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   ctrl.last_requested_flow = requested_flow
   local direction = mode
   local reason = decision and decision.reason or "NONE"
+  local bottleneck = turbine_regulator.classify_bottleneck(requested_flow, confirmed_flow, rpm, target_rpm, ctrl.effective_max_flow or MAX_FLOW, ctrl.inductor_engaged)
   local step = decision and decision.step or "nil"
   local applied_min = decision and decision.min or rail_cfg.min
   local applied_max = decision and decision.max or rail_cfg.max
@@ -1229,7 +1253,12 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " effective_min_flow=" .. tostring(effective_min_flow)
       .. " effective_min_applied=" .. tostring(type(effective_min_flow) == "number" and requested_flow == effective_min_flow and requested_flow > 0)
       .. " mode=" .. tostring(mode)
-      .. " coil=" .. tostring(ctrl.inductor_engaged))
+      .. " coil=" .. tostring(ctrl.inductor_engaged)
+      .. " coil_api=" .. tostring(ctrl.inductor_state_api or "n/a")
+      .. " steam_input=" .. tostring(steam_input)
+      .. " max_flow_limit=" .. tostring(ctrl.effective_max_flow or MAX_FLOW)
+      .. " at_max_flow=" .. tostring(requested_flow == (ctrl.effective_max_flow or MAX_FLOW))
+      .. " bottleneck=" .. tostring(bottleneck))
   if not ctrl.logged then
     log("INFO", "Turbine " .. name .. " active, initial flow " .. tostring(ctrl.requested_flow))
     ctrl.logged = true
@@ -1295,12 +1324,8 @@ local function updateActuators()
     end
     if turbine then
       local caps = get_device_caps("turbines", name)
-      if not caps.setInductorEngaged then
-        warn_unsupported(name)
-        goto continue_turbine
-      end
       if not (caps.setFluidFlowRate or caps.setFluidFlowRateMax) then
-        warn_unsupported(name)
+        warn_unsupported(name, "missing-flow-setter")
         goto continue_turbine
       end
       local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
@@ -1318,17 +1343,13 @@ local function updateActuators()
         warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
         goto continue_turbine
       end
-      if not inductor_result then
-        warn_unsupported(name)
-        goto continue_turbine
-      end
       local ok, result, setter = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       if not ok then
         warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
         goto continue_turbine
       end
       if not result then
-        warn_unsupported(name)
+        warn_unsupported(name, "flow-setter-call-failed")
         log("DEBUG", "TurbineCtrl skip name=" .. name .. " reason=FLOW_SET_UNSUPPORTED state=AUTONOM api=" .. tostring(setter))
       end
       ::continue_turbine::
@@ -1371,12 +1392,8 @@ local function updateControl()
     local ok, turbine = pcall(peripheral.wrap, name)
     if ok and turbine then
       local caps = get_device_caps("turbines", name)
-      if not caps.setInductorEngaged then
-        warn_unsupported(name)
-        goto continue_control_turbine
-      end
       if not (caps.setFluidFlowRate or caps.setFluidFlowRateMax) then
-        warn_unsupported(name)
+        warn_unsupported(name, "missing-flow-setter")
         goto continue_control_turbine
       end
       local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
@@ -1385,7 +1402,7 @@ local function updateControl()
         goto continue_control_turbine
       end
       if not active_result then
-        warn_unsupported(name)
+        warn_unsupported(name, "setActive-unsupported")
         goto continue_control_turbine
       end
       local rpm = nil
@@ -1400,17 +1417,13 @@ local function updateControl()
         warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
         goto continue_control_turbine
       end
-      if not inductor_result then
-        warn_unsupported(name)
-        goto continue_control_turbine
-      end
       local set_ok, result = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       if not set_ok then
         warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
         goto continue_control_turbine
       end
       if not result then
-        warn_unsupported(name)
+        warn_unsupported(name, "flow-setter-call-failed")
         goto continue_control_turbine
       end
       if not autonom_control_logged then

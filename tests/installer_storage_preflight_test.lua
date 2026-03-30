@@ -11,12 +11,13 @@ end
 local installer = read("installer")
 
 local required = {
-  "local function estimate_required_storage(expected)",
+  "local function estimate_required_storage(expected, mode)",
   "payload_bytes = total",
-  "fixed_buffer_bytes = STORAGE_BUFFER_BYTES",
+  "fixed_buffer_bytes = buffer_base",
   "percent_buffer_bytes = percent_buffer",
-  "Storage low before install/update (free=%d payload=%d buffer=%d+%d required=%d)",
-  "cleanup_stage_and_logs(true)"
+  "churn_buffer_bytes = churn_buffer",
+  "Storage low before install/update (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+  "cleanup_stage_and_logs(cleanup_logs, cleanup_backup)"
 }
 
 for _, snippet in ipairs(required) do

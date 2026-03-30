@@ -121,4 +121,29 @@ function regulator.resolve_min_flow(base_min, effective_min_flow)
   return min_flow, false
 end
 
+
+function regulator.classify_bottleneck(requested_flow, confirmed_flow, rpm, target_rpm, max_flow, inductor_engaged)
+  local requested = sanitize_number(requested_flow, 0)
+  local confirmed = sanitize_number(confirmed_flow, requested)
+  local rotor = sanitize_number(rpm, -1)
+  local target = sanitize_number(target_rpm, 0)
+  local max = sanitize_number(max_flow, 0)
+  if rotor < 0 then
+    return "RPM_UNAVAILABLE"
+  end
+  if requested >= max and rotor < (target - 50) then
+    if inductor_engaged == true then
+      return "MAX_FLOW_LOW_RPM_WITH_COIL"
+    end
+    return "MAX_FLOW_LOW_RPM_STEAM_LIMIT"
+  end
+  if requested <= 0 and rotor > (target + 50) then
+    return "MIN_FLOW_HIGH_RPM"
+  end
+  if math.abs(requested - confirmed) > 5 then
+    return "FLOW_READBACK_LAG"
+  end
+  return "NONE"
+end
+
 return regulator

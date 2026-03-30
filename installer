@@ -8,8 +8,9 @@ local STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")
 local BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
 local MANIFEST_URL = BASE_URL .. "manifest.lua"
 local INCLUDE_DEV_FILES = false
-local STORAGE_BUFFER_BYTES = 65536
-local STORAGE_PERCENT_BUFFER = 0.15
+local STORAGE_BUFFER_BYTES = 32768
+local STORAGE_PERCENT_BUFFER = 0.05
+local STORAGE_UPDATE_BUFFER_BYTES = 16384
 
 local function safe_mkdir(path)
   if fs.exists(path) then
@@ -391,37 +392,84 @@ local function select_expected_files(manifest, role_label)
   return expected
 end
 
-local function estimate_required_storage(expected)
-  local total = 0
-  for _, entry in pairs(expected) do
-    total = total + math.max(0, tonumber(entry.size_bytes) or 0)
+local function measure_tree_size(path)
+  if not fs.exists(path) then
+    return 0
   end
+  if not fs.isDir(path) then
+    return math.max(0, tonumber(fs.getSize(path)) or 0)
+  end
+  local total = 0
+  for _, name in ipairs(fs.list(path)) do
+    total = total + measure_tree_size(fs.combine(path, name))
+  end
+  return total
+end
+
+local function estimate_required_storage(expected, mode)
+  local total = 0
+  local growth_bytes = 0
+  local existing_bytes = 0
+  for rel, entry in pairs(expected) do
+    local expected_size = math.max(0, tonumber(entry.size_bytes) or 0)
+    total = total + expected_size
+    local live_path = fs.combine(INSTALL_ROOT, rel)
+    if fs.exists(live_path) and not fs.isDir(live_path) then
+      local current_size = math.max(0, tonumber(fs.getSize(live_path)) or 0)
+      existing_bytes = existing_bytes + current_size
+      if expected_size > current_size then
+        growth_bytes = growth_bytes + (expected_size - current_size)
+      end
+    else
+      growth_bytes = growth_bytes + expected_size
+    end
+  end
+  local buffer_base = mode == "update" and STORAGE_UPDATE_BUFFER_BYTES or STORAGE_BUFFER_BYTES
   local percent_buffer = math.floor(total * STORAGE_PERCENT_BUFFER)
-  local required = total + STORAGE_BUFFER_BYTES + percent_buffer
+  local churn_buffer = math.floor(growth_bytes * 0.1)
+  local required = total + buffer_base + percent_buffer + churn_buffer
   return {
+    mode = mode or "install",
     payload_bytes = total,
-    fixed_buffer_bytes = STORAGE_BUFFER_BYTES,
+    growth_bytes = growth_bytes,
+    existing_bytes = existing_bytes,
+    fixed_buffer_bytes = buffer_base,
     percent_buffer_bytes = percent_buffer,
+    churn_buffer_bytes = churn_buffer,
     required_bytes = required
   }
 end
 
-local function cleanup_stage_and_logs(cleanup_logs)
+local function cleanup_stage_and_logs(cleanup_logs, cleanup_backup)
+  local reclaimed = { stage = 0, backup = 0, logs = 0, rotated = 0 }
   if fs.exists(STAGE_ROOT) then
+    reclaimed.stage = measure_tree_size(STAGE_ROOT)
     info("Cleaning stale stage directory")
     fs.delete(STAGE_ROOT)
   end
+  if cleanup_backup and fs.exists(BACKUP_ROOT) then
+    reclaimed.backup = measure_tree_size(BACKUP_ROOT)
+    info("Cleaning stale backup directory")
+    fs.delete(BACKUP_ROOT)
+  end
   if cleanup_logs and fs.exists(LOG_DIR) then
+    reclaimed.logs = measure_tree_size(LOG_DIR)
     info("Cleaning log directory to recover storage")
     fs.delete(LOG_DIR)
   end
   local rotated = LOG_DIR .. "/installer.log.1"
   if fs.exists(rotated) then
+    reclaimed.rotated = math.max(0, tonumber(fs.getSize(rotated)) or 0)
     fs.delete(rotated)
   end
+  return reclaimed
 end
 
-local function preflight_storage(storage_plan, allow_cleanup)
+local function preflight_storage(storage_plan, opts)
+  opts = opts or {}
+  local allow_cleanup = opts.allow_cleanup == true
+  local cleanup_logs = opts.cleanup_logs == true
+  local cleanup_backup = opts.cleanup_backup == true
   if not fs.getFreeSpace then
     warn("Free space check unavailable; continuing without preflight")
     return true
@@ -431,18 +479,23 @@ local function preflight_storage(storage_plan, allow_cleanup)
   local free_bytes = fs.getFreeSpace("/")
   info(string.format("Storage preflight free bytes: %d", free_bytes))
   info(string.format("Storage preflight payload estimate: %d", storage_plan.payload_bytes))
+  info(string.format("Storage preflight growth estimate: %d (existing=%d)", storage_plan.growth_bytes or 0, storage_plan.existing_bytes or 0))
   info(string.format(
-    "Storage preflight safety buffer: %d fixed + %d dynamic",
+    "Storage preflight safety buffer: %d fixed + %d dynamic + %d churn",
     storage_plan.fixed_buffer_bytes,
-    storage_plan.percent_buffer_bytes
+    storage_plan.percent_buffer_bytes,
+    storage_plan.churn_buffer_bytes or 0
   ))
   if free_bytes >= required_bytes then
     info(string.format(
-      "Storage preflight OK (free=%d payload=%d buffer=%d+%d required=%d)",
+      "Storage preflight OK (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+      tostring(storage_plan.mode or "install"),
       free_bytes,
       storage_plan.payload_bytes,
+      storage_plan.growth_bytes or 0,
       storage_plan.fixed_buffer_bytes,
       storage_plan.percent_buffer_bytes,
+      storage_plan.churn_buffer_bytes or 0,
       required_bytes
     ))
     info("Storage preflight result: ok")
@@ -450,24 +503,31 @@ local function preflight_storage(storage_plan, allow_cleanup)
   end
 
   warn(string.format(
-    "Storage low before install/update (free=%d payload=%d buffer=%d+%d required=%d)",
+    "Storage low before install/update (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+    tostring(storage_plan.mode or "install"),
     free_bytes,
     storage_plan.payload_bytes,
+    storage_plan.growth_bytes or 0,
     storage_plan.fixed_buffer_bytes,
     storage_plan.percent_buffer_bytes,
+    storage_plan.churn_buffer_bytes or 0,
     required_bytes
   ))
   warn("Storage preflight result: not ok")
   if allow_cleanup then
-    cleanup_stage_and_logs(true)
+    local reclaimed = cleanup_stage_and_logs(cleanup_logs, cleanup_backup)
     free_bytes = fs.getFreeSpace("/")
+    info(string.format("Storage cleanup reclaimed bytes: stage=%d backup=%d logs=%d rotated=%d", reclaimed.stage or 0, reclaimed.backup or 0, reclaimed.logs or 0, reclaimed.rotated or 0))
     if free_bytes >= required_bytes then
       info(string.format(
-        "Storage preflight OK after cleanup (free=%d payload=%d buffer=%d+%d required=%d)",
+        "Storage preflight OK after cleanup (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+        tostring(storage_plan.mode or "install"),
         free_bytes,
         storage_plan.payload_bytes,
+        storage_plan.growth_bytes or 0,
         storage_plan.fixed_buffer_bytes,
         storage_plan.percent_buffer_bytes,
+        storage_plan.churn_buffer_bytes or 0,
         required_bytes
       ))
       info("Storage preflight result after cleanup: ok")
@@ -477,11 +537,14 @@ local function preflight_storage(storage_plan, allow_cleanup)
   end
 
   return false, string.format(
-    "Not enough free space (free=%d payload=%d buffer=%d+%d required=%d)",
+    "Not enough free space (mode=%s free=%d payload=%d growth=%d buffer=%d+%d+%d required=%d)",
+    tostring(storage_plan.mode or "install"),
     free_bytes,
     storage_plan.payload_bytes,
+    storage_plan.growth_bytes or 0,
     storage_plan.fixed_buffer_bytes,
     storage_plan.percent_buffer_bytes,
+    storage_plan.churn_buffer_bytes or 0,
     required_bytes
   )
 end
@@ -660,8 +723,8 @@ local function run_install()
   end
 
   local expected = select_expected_files(manifest, role.label)
-  local storage_plan = estimate_required_storage(expected)
-  local preflight_ok, preflight_err = preflight_storage(storage_plan, true)
+  local storage_plan = estimate_required_storage(expected, "install")
+  local preflight_ok, preflight_err = preflight_storage(storage_plan, { allow_cleanup = true, cleanup_logs = true, cleanup_backup = true })
   if not preflight_ok then
     fatal("Storage preflight failed: " .. tostring(preflight_err))
   end
@@ -709,8 +772,8 @@ local function run_update()
   info("Selected role: " .. role_label)
 
   local expected = select_expected_files(manifest, role_label)
-  local storage_plan = estimate_required_storage(expected)
-  local preflight_ok, preflight_err = preflight_storage(storage_plan, false)
+  local storage_plan = estimate_required_storage(expected, "update")
+  local preflight_ok, preflight_err = preflight_storage(storage_plan, { allow_cleanup = true, cleanup_logs = false, cleanup_backup = true })
   if not preflight_ok then
     fatal("Storage preflight failed: " .. tostring(preflight_err))
   end

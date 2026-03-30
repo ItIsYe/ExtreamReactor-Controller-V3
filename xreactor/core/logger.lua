@@ -48,9 +48,17 @@ local function now_stamp()
 end
 
 local function ensure_dir(path)
-  if not fs.exists(path) then
-    fs.makeDir(path)
+  if fs.exists(path) then
+    return true
   end
+  local ok, err = pcall(fs.makeDir, path)
+  if not ok then
+    return false, "makeDir-failed:" .. tostring(err)
+  end
+  if not fs.exists(path) then
+    return false, "makeDir-missing-after-create"
+  end
+  return true
 end
 
 local function summarize_error(err)
@@ -169,7 +177,10 @@ end
 local function disk_write_test(path)
   local probe = path .. "/.xreactor_log_probe"
   local ok, err = pcall(function()
-    ensure_dir(path)
+    local dir_ok, dir_reason = ensure_dir(path)
+    if not dir_ok then
+      error("probe-dir-failed:" .. tostring(dir_reason))
+    end
     local file = fs.open(probe, "w")
     if not file then
       error("probe-open-failed")
@@ -196,6 +207,89 @@ local function validate_log_target(path)
     return false, "write-test:" .. tostring(write_reason)
   end
   return true
+end
+
+
+local function cleanup_log_workspace(dir_path, active_name, include_rotated)
+  if not (fs and type(fs.list) == "function" and fs.exists and fs.exists(dir_path)) then
+    return { executed = false, removed = 0, failed = 0, removed_names = {}, failed_names = {}, reason = "unavailable" }
+  end
+  local ok, entries = pcall(fs.list, dir_path)
+  if not ok or type(entries) ~= "table" then
+    return { executed = false, removed = 0, failed = 0, removed_names = {}, failed_names = {}, reason = "list-failed" }
+  end
+  local removed_names, failed_names = {}, {}
+  for _, entry in ipairs(entries) do
+    if type(entry) == "string" then
+      local is_active = active_name ~= nil and entry == active_name
+      local is_rotated_log = include_rotated and entry:match("%.log%..+$") ~= nil
+      local is_cleanup_probe = entry == ".xreactor_log_probe"
+      local is_temp = entry:match("%.tmp$") ~= nil
+        or entry:match("%.temp$") ~= nil
+        or entry:match("%.old$") ~= nil
+        or entry:match("%.bak$") ~= nil
+        or entry:match("%.preboot$") ~= nil
+        or entry:match("^%.xreactor_.*%.tmp$") ~= nil
+      if (is_rotated_log or is_cleanup_probe or is_temp) and not is_active then
+        local stale_path = dir_path .. "/" .. entry
+        local deleted, delete_err = pcall(fs.delete, stale_path)
+        if deleted then
+          removed_names[#removed_names + 1] = entry
+        else
+          failed_names[#failed_names + 1] = entry .. ":" .. summarize_error(delete_err)
+        end
+      end
+    end
+  end
+  table.sort(removed_names)
+  table.sort(failed_names)
+  return {
+    executed = true,
+    removed = #removed_names,
+    failed = #failed_names,
+    removed_names = removed_names,
+    failed_names = failed_names
+  }
+end
+
+local function summarize_cleanup(cleanup, path)
+  local removed_detail = (#cleanup.removed_names > 0) and table.concat(cleanup.removed_names, "|") or "none"
+  local failed_detail = (#cleanup.failed_names > 0) and table.concat(cleanup.failed_names, "|") or "none"
+  return "executed=" .. tostring(cleanup.executed)
+    .. ",path=" .. tostring(path)
+    .. ",removed=" .. tostring(cleanup.removed) .. "[" .. removed_detail .. "]"
+    .. ",failed=" .. tostring(cleanup.failed) .. "[" .. failed_detail .. "]"
+    .. ",reason=" .. tostring(cleanup.reason or "n/a")
+end
+
+local function estimate_buffer_bytes()
+  local total = 0
+  for _, line in ipairs(state.buffer or {}) do
+    total = total + #tostring(line) + 1
+  end
+  return total
+end
+
+local function preflight_write(target_dir, path, pending_bytes)
+  if not is_disk_path(target_dir) then
+    return true, "local-target", nil
+  end
+  local active_name = path and path:match("([^/]+)$") or nil
+  local free_before_ok, free_before = get_free_space(target_dir)
+  local cleanup = cleanup_log_workspace(target_dir, active_name, true)
+  local free_after_cleanup_ok, free_after_cleanup = get_free_space(target_dir)
+  local required = math.max(1, tonumber(pending_bytes) or 0) + 64
+  local space_ok, space_reason = disk_free_ok(target_dir, required)
+  local diag = "path=" .. tostring(path)
+    .. ",required=" .. tostring(required)
+    .. ",pending=" .. tostring(pending_bytes)
+    .. ",free_before=" .. tostring(free_before_ok and free_before or ("err:" .. tostring(free_before)))
+    .. ",free_after_cleanup=" .. tostring(free_after_cleanup_ok and free_after_cleanup or ("err:" .. tostring(free_after_cleanup)))
+    .. ",cleanup={" .. summarize_cleanup(cleanup, target_dir) .. "}"
+  if not space_ok then
+    return false, "preflight-space-failed(" .. tostring(space_reason) .. ";" .. diag .. ")", diag
+  end
+  return true, "preflight-ok(" .. diag .. ")", diag
 end
 
 local function resolve_log_dir(opts)
@@ -287,12 +381,24 @@ local function resolve_log_name(current, fallback)
 end
 
 local function flush_buffer_to_dir(target_dir)
-  ensure_dir(target_dir)
   local path = string.format("%s/%s.log", target_dir, state.log_name or "xreactor")
-  rotate_log_if_needed(path)
+  local dir_ok, dir_reason = ensure_dir(target_dir)
+  if not dir_ok then
+    error("log-op=ensure_dir path=" .. tostring(target_dir) .. " reason=" .. tostring(dir_reason))
+  end
+  local pending_bytes = estimate_buffer_bytes()
+  local preflight_ok, preflight_reason = preflight_write(target_dir, path, pending_bytes)
+  if not preflight_ok then
+    error("log-op=preflight path=" .. tostring(path) .. " reason=" .. tostring(preflight_reason))
+  end
+  local rotate_ok, rotate_err = pcall(rotate_log_if_needed, path)
+  if not rotate_ok then
+    error("log-op=rotate path=" .. tostring(path) .. " reason=" .. summarize_error(rotate_err))
+  end
   local file = fs.open(path, "a")
   if not file then
-    error("Unable to open log file: " .. path)
+    local _, free_now = get_free_space(target_dir)
+    error("log-op=open path=" .. tostring(path) .. " reason=open-failed free_now=" .. tostring(free_now) .. " pending=" .. tostring(pending_bytes))
   end
   for _, line in ipairs(state.buffer) do
     file.write(line .. "\n")
@@ -315,7 +421,9 @@ local function flush_if_needed(force)
   end
 
   if is_disk_path(state.log_dir) then
-    local target_ok, target_reason = validate_log_target(state.log_dir)
+    local path = string.format("%s/%s.log", state.log_dir, state.log_name or "xreactor")
+    local pending = estimate_buffer_bytes()
+    local target_ok, target_reason = preflight_write(state.log_dir, path, pending)
     if not target_ok then
       local fallback_ok, fallback_err = pcall(flush_buffer_to_dir, DEFAULT_LOG_DIR)
       if fallback_ok then
@@ -415,47 +523,9 @@ local function startup_prepare(path, mode, log_dir)
     if not cleanup_is_disk then
       return "executed=false,reason=non-disk,path=" .. tostring(cleanup_path)
     end
-    if not (fs and type(fs.list) == "function" and fs.exists and fs.exists(cleanup_path)) then
-      return "executed=false,reason=unavailable,path=" .. tostring(cleanup_path)
-    end
-    local ok, entries = pcall(fs.list, cleanup_path)
-    if not ok or type(entries) ~= "table" then
-      return "executed=false,reason=list-failed,path=" .. tostring(cleanup_path)
-    end
-    local removed = 0
-    local failures = 0
-    local removed_names = {}
-    local failure_names = {}
     local active_name = path and path:match("([^/]+)$") or nil
-    for _, entry in ipairs(entries) do
-      if type(entry) == "string" then
-        local is_rotated_log = entry:match("%.log%..+$") ~= nil
-        local is_cleanup_probe = entry == ".xreactor_log_probe"
-        local is_temp = entry:match("%.tmp$") ~= nil
-          or entry:match("%.temp$") ~= nil
-          or entry:match("%.old$") ~= nil
-          or entry:match("%.bak$") ~= nil
-          or entry:match("%.preboot$") ~= nil
-          or entry:match("^%.xreactor_.*%.tmp$") ~= nil
-        local is_active = active_name ~= nil and entry == active_name
-        if (is_rotated_log or is_cleanup_probe or is_temp) and not is_active then
-          local stale_path = cleanup_path .. "/" .. entry
-          local deleted = pcall(fs.delete, stale_path)
-          if deleted then
-            removed = removed + 1
-            removed_names[#removed_names + 1] = entry
-          else
-            failures = failures + 1
-            failure_names[#failure_names + 1] = entry
-          end
-        end
-      end
-    end
-    table.sort(removed_names)
-    table.sort(failure_names)
-    local removed_detail = #removed_names > 0 and table.concat(removed_names, "|") or "none"
-    local failed_detail = #failure_names > 0 and table.concat(failure_names, "|") or "none"
-    return "executed=true,path=" .. tostring(cleanup_path) .. ",removed=" .. tostring(removed) .. "[" .. removed_detail .. "],failed=" .. tostring(failures) .. "[" .. failed_detail .. "]"
+    local cleanup = cleanup_log_workspace(cleanup_path, active_name, true)
+    return summarize_cleanup(cleanup, cleanup_path)
   end
 
   cleanup_summary = cleanup_rotated_logs()
