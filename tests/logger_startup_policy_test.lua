@@ -252,6 +252,26 @@ if files["/disk2/xreactor_logs/net.log.1"] then
   error("disk logs should not rotate at local budget limit")
 end
 
+
+-- Disk preflight must reject writes that exceed immediate free space and fallback before open fails.
+free_space_by_path["/disk2/xreactor_logs"] = 40
+logger.init({ log_name = "runtime_preflight", enabled = true, truncate = true, log_dir = "/disk2/xreactor_logs" })
+logger.log("RT", string.rep("runtime-preflight-check", 12), "INFO")
+logger.flush()
+if not files["/xreactor_logs/runtime_preflight.log"] then
+  error("expected runtime preflight fallback to local for low disk space")
+end
+local saw_preflight_reason = false
+for _, line in ipairs(print_lines) do
+  if line:find("preflight%-space%-failed", 1, false) then
+    saw_preflight_reason = true
+    break
+  end
+end
+if not saw_preflight_reason then
+  error("expected runtime fallback warning to include preflight-space-failed diagnostics")
+end
+
 -- Simulate disk disappearing after startup and require fallback.
 disk_present = false
 logger.log("RT", "fallback-local", "INFO")

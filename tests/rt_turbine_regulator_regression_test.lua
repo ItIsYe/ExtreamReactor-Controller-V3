@@ -196,4 +196,21 @@ if startup_state.confirmed_flow ~= 2000
   error('startup state sync must align internal flow fields with confirmed flow')
 end
 
+
+
+local bottleneck_a = regulator.classify_bottleneck(2000, 2000, 500, 900, 2000, false)
+if bottleneck_a ~= 'MAX_FLOW_LOW_RPM_STEAM_LIMIT' then
+  error('max flow with low rpm and coil disabled should classify steam limit')
+end
+
+local bottleneck_b = regulator.classify_bottleneck(2000, 2000, 500, 900, 2000, true)
+if bottleneck_b ~= 'MAX_FLOW_LOW_RPM_WITH_COIL' then
+  error('max flow with low rpm and coil enabled should classify coil load')
+end
+
+local bottleneck_c = regulator.classify_bottleneck(1000, 900, 900, 900, 2000, true)
+if bottleneck_c ~= 'FLOW_READBACK_LAG' then
+  error('flow mismatch should classify readback lag')
+end
+
 print('rt_turbine_regulator_regression_test.lua: ok')
