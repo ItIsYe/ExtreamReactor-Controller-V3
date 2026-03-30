@@ -722,7 +722,7 @@ safe_wrapped_call = function(obj, method, ...)
 end
 
 local function has_reactor_rod_write_path(caps)
-  return caps and (caps.setAllControlRodLevels or caps.setControlRodLevel or caps.getControlRods)
+  return caps and (caps.setControlRodsLevels or caps.setAllControlRodLevels or caps.setControlRodLevel or caps.getControlRods)
 end
 
 local function build_capabilities(name)
@@ -731,18 +731,23 @@ local function build_capabilities(name)
     methods = {}
   end
   return {
+    getActive = has_method(methods, "getActive"),
     setActive = has_method(methods, "setActive"),
     setFluidFlowRate = has_method(methods, "setFluidFlowRate"),
     setFluidFlowRateMax = has_method(methods, "setFluidFlowRateMax"),
     getFluidFlowRate = has_method(methods, "getFluidFlowRate"),
     getFluidFlowRateMax = has_method(methods, "getFluidFlowRateMax"),
+    getFluidFlowRateMaxMax = has_method(methods, "getFluidFlowRateMaxMax"),
     getRotorSpeed = has_method(methods, "getRotorSpeed"),
     getRotorRPM = has_method(methods, "getRotorRPM"),
     getControlRods = has_method(methods, "getControlRods"),
     getControlRodLevel = has_method(methods, "getControlRodLevel"),
     getControlRodLevels = has_method(methods, "getControlRodLevels"),
+    getControlRodsLevels = has_method(methods, "getControlRodsLevels"),
+    getInductorEngaged = has_method(methods, "getInductorEngaged"),
     setInductorEngaged = has_method(methods, "setInductorEngaged"),
     setAllControlRodLevels = has_method(methods, "setAllControlRodLevels"),
+    setControlRodsLevels = has_method(methods, "setControlRodsLevels"),
     setControlRodLevel = has_method(methods, "setControlRodLevel")
   }
 end
@@ -806,6 +811,7 @@ local function init_turbine_ctrl()
     ctrl.pending_retries = 0
     ctrl.effective_min_hits = 0
     ctrl.effective_min_flow = nil
+    ctrl.effective_max_flow = nil
     ctrl.startup_synced = false
     ctrl.mode = TURBINE_MODE.RAMP
     ctrl.logged = false
@@ -1083,9 +1089,19 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   local base_flow = ctrl.requested_flow or ctrl.flow or 0
   local flow_cfg = rail_cfg
   local min_flow, min_from_effective = turbine_regulator.resolve_min_flow(rail_cfg.min or MIN_FLOW, ctrl.effective_min_flow)
+  local max_flow = rail_cfg.max or MAX_FLOW
+  if type(ctrl.effective_max_flow) == "number" then
+    max_flow = math.min(max_flow, ctrl.effective_max_flow)
+  end
   if min_from_effective then
     flow_cfg = utils.deep_copy(flow_cfg)
     flow_cfg.min = min_flow
+  end
+  if max_flow ~= (rail_cfg.max or MAX_FLOW) then
+    if flow_cfg == rail_cfg then
+      flow_cfg = utils.deep_copy(flow_cfg)
+    end
+    flow_cfg.max = max_flow
   end
   local pending_requested_flow = ctrl.pending_expected_flow
   if type(pending_requested_flow) ~= "number" then
@@ -1125,24 +1141,23 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   if type(rpm) == "number" then
     ctrl.rpm = rpm
   end
-  local startup_observed_flow = nil
-  local startup_reader = "FLOW_UNAVAILABLE"
-  if not ctrl.startup_synced then
-    startup_observed_flow, startup_reader = read_turbine_flow(turbine, caps)
-    if type(startup_observed_flow) == "number" then
-      local synced = clamp_turbine_flow(startup_observed_flow)
-      ctrl.confirmed_flow = synced
-      ctrl.requested_flow = synced
-      ctrl.flow = synced
-      ctrl.pending_expected_flow = synced
-      ctrl.pending_flow_since = 0
-      ctrl.pending_retries = 0
-      ctrl.last_requested_flow = synced
-      ctrl.startup_synced = true
+  if type(ctrl.effective_max_flow) ~= "number" and caps and caps.getFluidFlowRateMaxMax and turbine.getFluidFlowRateMaxMax then
+    local max_ok, max_value = safe_wrapped_call(turbine, "getFluidFlowRateMaxMax")
+    if max_ok and type(max_value) == "number" and max_value > 0 then
+      ctrl.effective_max_flow = math.min(MAX_FLOW, math.max(MIN_FLOW, math.floor(max_value + 0.5)))
+    end
+  end
+  local startup_observed_flow, startup_reader = read_turbine_flow(turbine, caps)
+  if type(startup_observed_flow) == "number" then
+    local synced = clamp_turbine_flow(startup_observed_flow)
+    ctrl.confirmed_flow = synced
+    if not ctrl.startup_synced and turbine_regulator.sync_startup_state(ctrl, synced) then
       log("DEBUG", "TurbineSync name=" .. name
           .. " source=confirmed_flow"
           .. " synced_flow=" .. tostring(synced)
-          .. " flow_api=" .. tostring(startup_reader))
+          .. " flow_api=" .. tostring(startup_reader)
+          .. " effective_min_flow=" .. tostring(ctrl.effective_min_flow))
+      return true, false, "startup-sync-hold"
     end
   end
   local old_flow = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow

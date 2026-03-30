@@ -61,6 +61,9 @@ local function ensure_turbine_ctrl(name)
   if ctrl.effective_min_hits == nil then
     ctrl.effective_min_hits = 0
   end
+  if ctrl.effective_max_flow == nil then
+    ctrl.effective_max_flow = nil
+  end
   if ctrl.startup_synced == nil then
     ctrl.startup_synced = false
   end

@@ -158,8 +158,8 @@ if m4 ~= 200 or changed4 then
 end
 
 local m5, changed5 = regulator.update_effective_min(tracker, 300, 300, 3)
-if m5 ~= nil or not changed5 then
-  error('effective minimum should clear when requested flow leaves zero')
+if m5 ~= 200 or changed5 then
+  error('effective minimum should persist per turbine after non-zero requests')
 end
 
 local resolved_min_a, used_effective_a = regulator.resolve_min_flow(0, 200)
@@ -170,6 +170,30 @@ end
 local resolved_min_b, used_effective_b = regulator.resolve_min_flow(200, 1)
 if resolved_min_b ~= 200 or used_effective_b then
   error('base minimum should win when effective minimum is lower')
+end
+
+local startup_state = {
+  startup_synced = false,
+  requested_flow = 0,
+  confirmed_flow = 0,
+  flow = 0,
+  pending_expected_flow = 0,
+  pending_flow_since = 5,
+  pending_retries = 3,
+}
+local synced = regulator.sync_startup_state(startup_state, 2000)
+if not synced then
+  error('startup state sync should succeed with numeric confirmed flow')
+end
+if startup_state.confirmed_flow ~= 2000
+    or startup_state.requested_flow ~= 2000
+    or startup_state.flow ~= 2000
+    or startup_state.pending_expected_flow ~= 2000
+    or startup_state.pending_flow_since ~= 0
+    or startup_state.pending_retries ~= 0
+    or startup_state.last_requested_flow ~= 2000
+    or startup_state.startup_synced ~= true then
+  error('startup state sync must align internal flow fields with confirmed flow')
 end
 
 print('rt_turbine_regulator_regression_test.lua: ok')

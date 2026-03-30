@@ -145,8 +145,51 @@ local function test_apply_control_rods_prefers_setControlRodLevel_over_getContro
   end
 end
 
+local function test_read_control_rods_supports_getControlRodsLevels_map()
+  reset_modules()
+  make_peripheral_stub({
+    methods = { "getControlRodsLevels" },
+    calls = {
+      getControlRodsLevels = function() return { [0] = 10, [1] = 20, [2] = 30 } end,
+    },
+  })
+  local reactor = require("adapters.reactor")
+  local level, err = reactor.read_control_rods("reactor_0", "TEST")
+  if err ~= nil then
+    error("expected getControlRodsLevels read to succeed, got " .. tostring(err))
+  end
+  if math.abs(level - 20) > 0.001 then
+    error("expected average rod level 20 from getControlRodsLevels, got " .. tostring(level))
+  end
+end
+
+local function test_apply_control_rods_supports_setControlRodsLevels_map()
+  reset_modules()
+  local captured
+  make_peripheral_stub({
+    methods = { "setControlRodsLevels", "getControlRodsLevels" },
+    calls = {
+      getControlRodsLevels = function() return { [0] = 12, [1] = 22 } end,
+      setControlRodsLevels = function(levels)
+        captured = levels
+        return true
+      end,
+    },
+  })
+  local reactor = require("adapters.reactor")
+  local ok, err = reactor.apply_rod_level("reactor_0", 55, "TEST")
+  if not ok or err ~= nil then
+    error("expected setControlRodsLevels write to succeed, got " .. tostring(err))
+  end
+  if type(captured) ~= "table" or captured[0] ~= 55 or captured[1] ~= 55 then
+    error("expected setControlRodsLevels map payload with per-index entries")
+  end
+end
+
 test_read_control_rods_uses_getControlRods_fallback()
 test_apply_control_rods_uses_getControlRods_setLevel_fallback()
 test_apply_control_rods_uses_setControlRodLevel_fallback_and_clamps()
 test_apply_control_rods_prefers_setControlRodLevel_over_getControlRods()
+test_read_control_rods_supports_getControlRodsLevels_map()
+test_apply_control_rods_supports_setControlRodsLevels_map()
 print("reactor_control_rods_regression_test.lua: ok")
