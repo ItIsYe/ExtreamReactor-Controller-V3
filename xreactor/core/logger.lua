@@ -43,7 +43,8 @@ local state = {
   startup_action = "none",
   degraded_mode = "DISK_OK",
   degraded_reason = nil,
-  emergency_drop = false
+  emergency_drop = false,
+  emergency_buffer_limit = 32
 }
 
 local function safe_print(message)
@@ -550,11 +551,12 @@ local function flush_if_needed(force)
           state.warn_once = true
           safe_print("WARN: Logging disabled (" .. tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err) .. ")")
         end
-        state.degraded_mode = "EMERGENCY_LOGGING_ONLY"
+        state.degraded_mode = "EMERGENCY_BUFFER_ONLY"
         state.degraded_reason = tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err)
         safe_print("WARN: logger degraded; disk unavailable; local fallback failed; emergency logging only")
-        state.emergency_drop = true
-        state.buffer = {}
+        while #state.buffer > (state.emergency_buffer_limit or 32) do
+          table.remove(state.buffer, 1)
+        end
         state.last_flush = os.clock()
         return true
       end
@@ -801,6 +803,18 @@ function logger.log(prefix, message, level)
     local resolved_level, resolved_message = parse_message_level(message, level)
     local line = string.format("[%s] %s | %s | %s", now_stamp(), tostring(prefix or "LOG"), resolved_level, resolved_message)
     table.insert(state.buffer, line)
+    if state.degraded_mode == "EMERGENCY_BUFFER_ONLY" then
+      while #state.buffer > (state.emergency_buffer_limit or 32) do
+        table.remove(state.buffer, 1)
+      end
+      local elapsed = os.clock() - (state.last_flush or 0)
+      if elapsed >= (CONFIG.FLUSH_INTERVAL * 2) then
+        flush_if_needed(true)
+      else
+        state.last_flush = os.clock()
+      end
+      return
+    end
     flush_if_needed(false)
   end)
   if not ok then
