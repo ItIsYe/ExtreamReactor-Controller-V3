@@ -29,5 +29,7 @@ assert_true(content:find('clamp_min=', 1, true) ~= nil,
   'turbine debug log must include effective clamp min')
 assert_true(content:find('clamp_max=', 1, true) ~= nil,
   'turbine debug log must include effective clamp max')
+assert_true(content:find('decision and decision.reason == "DEADBAND" and base_flow >= %(max_flow %- 1%)') ~= nil,
+  'rt control loop must actively trim down at max flow instead of HOLD/DEADBAND')
 
 print('rt_turbine_flow_range_config_regression_test.lua: ok')

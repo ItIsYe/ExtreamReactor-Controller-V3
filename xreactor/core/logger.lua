@@ -41,7 +41,7 @@ local state = {
   last_flush = 0,
   warn_once = false,
   startup_action = "none",
-  degraded_mode = "NONE",
+  degraded_mode = "DISK_OK",
   degraded_reason = nil
 }
 
@@ -276,10 +276,10 @@ end
 
 local function compute_write_requirements(pending_bytes)
   local pending = math.max(0, tonumber(pending_bytes) or 0)
-  local overhead = 1
-  if pending > 128 then
+  local overhead = 0
+  if pending > 256 then
     overhead = math.min(16, math.floor(pending * 0.03))
-  elseif pending > 32 then
+  elseif pending > 96 then
     overhead = 2
   end
   local immediate = math.max(1, pending + overhead)
@@ -535,7 +535,7 @@ local function flush_if_needed(force)
           state.log_source = "runtime-fallback-local"
           state.buffer = {}
           state.last_flush = os.clock()
-          state.degraded_mode = "RUNTIME_FALLBACK_LOCAL"
+          state.degraded_mode = "LOCAL_FALLBACK"
           state.degraded_reason = tostring(target_reason) .. " | " .. tostring(recovered_reason)
           return true
         end
@@ -543,8 +543,9 @@ local function flush_if_needed(force)
           state.warn_once = true
           print("WARN: Logging disabled (" .. tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err) .. ")")
         end
-        state.degraded_mode = "EMERGENCY_DROP_BUFFER"
+        state.degraded_mode = "EMERGENCY_LOGGING_ONLY"
         state.degraded_reason = tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err)
+        print("WARN: logger degraded; disk unavailable; local fallback failed; emergency logging only")
         state.buffer = {}
         state.last_flush = os.clock()
         return true
@@ -561,6 +562,8 @@ local function flush_if_needed(force)
         print("WARN: Log dir fallback to local (reason=" .. tostring(err) .. ")")
       end
       state.log_source = "runtime-fallback-local"
+      state.degraded_mode = "LOCAL_FALLBACK"
+      state.degraded_reason = tostring(err)
       ok = true
     else
       err = tostring(err) .. " | fallback=" .. tostring(fallback_err)
@@ -574,12 +577,13 @@ local function flush_if_needed(force)
     print("WARN: Logging disabled (" .. tostring(err) .. ")")
   end
   if not ok then
-    state.degraded_mode = "EMERGENCY_DROP_BUFFER"
+    state.degraded_mode = "LOGGING_DISABLED_NONFATAL"
     state.degraded_reason = tostring(err)
+    print("WARN: logger degraded; emergency logging only")
     return true
   end
-  if state.degraded_mode ~= "NONE" then
-    state.degraded_mode = "NONE"
+  if state.degraded_mode ~= "DISK_OK" then
+    state.degraded_mode = "DISK_OK"
     state.degraded_reason = nil
   end
   return true
@@ -713,34 +717,47 @@ local function startup_prepare(path, mode, log_dir)
 end
 
 function logger.init(opts)
-  opts = opts or {}
-  state.enabled = resolve_enabled(opts.enabled)
-  local log_dir, source = resolve_log_dir(opts)
-  state.log_dir = log_dir
-  state.log_source = source
-  state.log_name = resolve_log_name(opts.log_name, opts.prefix)
-  state.log_path = string.format("%s/%s.log", state.log_dir, state.log_name or "xreactor")
-  state.last_flush = os.clock()
-  state.buffer = {}
-  state.startup_action = "none"
-  if state.enabled then
-    local startup_mode = CONFIG.STARTUP_MODE
-    if opts.truncate ~= nil then
-      startup_mode = opts.truncate and "truncate" or "keep"
+  local ok, err = pcall(function()
+    opts = opts or {}
+    state.enabled = resolve_enabled(opts.enabled)
+    local log_dir, source = resolve_log_dir(opts)
+    state.log_dir = log_dir
+    state.log_source = source
+    state.log_name = resolve_log_name(opts.log_name, opts.prefix)
+    state.log_path = string.format("%s/%s.log", state.log_dir, state.log_name or "xreactor")
+    state.last_flush = os.clock()
+    state.buffer = {}
+    state.startup_action = "none"
+    if state.enabled then
+      local startup_mode = CONFIG.STARTUP_MODE
+      if opts.truncate ~= nil then
+        startup_mode = opts.truncate and "truncate" or "keep"
+      end
+      if type(opts.startup_mode) == "string" then
+        startup_mode = string.lower(opts.startup_mode)
+      end
+      local startup_ok, startup_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
+      state.startup_action = startup_ok and startup_result or ("startup_nonfatal_error(" .. tostring(startup_result) .. ")")
+      if type(state.startup_action) == "string" and state.startup_action:find("startup_space_reject", 1, true) then
+        state.log_dir = DEFAULT_LOG_DIR
+        state.log_source = "startup-fallback-local"
+        state.log_path = string.format("%s/%s.log", state.log_dir, state.log_name or "xreactor")
+        local fallback_ok, fallback_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
+        state.startup_action = "startup_disk_reject_nonfatal(original=" .. tostring(startup_result) .. ",fallback=" .. tostring(fallback_ok and fallback_result or fallback_result) .. ")"
+      end
+      print(string.format("LOG: dir=%s file=%s startup=%s source=%s", tostring(state.log_dir), state.log_path, state.startup_action, tostring(state.log_source)))
     end
-    if type(opts.startup_mode) == "string" then
-      startup_mode = string.lower(opts.startup_mode)
-    end
-    local startup_ok, startup_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
-    state.startup_action = startup_ok and startup_result or ("startup_nonfatal_error(" .. tostring(startup_result) .. ")")
-    if type(state.startup_action) == "string" and state.startup_action:find("startup_space_reject", 1, true) then
-      state.log_dir = DEFAULT_LOG_DIR
-      state.log_source = "startup-fallback-local"
-      state.log_path = string.format("%s/%s.log", state.log_dir, state.log_name or "xreactor")
-      local fallback_ok, fallback_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
-      state.startup_action = "startup_disk_reject_nonfatal(original=" .. tostring(startup_result) .. ",fallback=" .. tostring(fallback_ok and fallback_result or fallback_result) .. ")"
-    end
-    print(string.format("LOG: dir=%s file=%s startup=%s source=%s", tostring(state.log_dir), state.log_path, state.startup_action, tostring(state.log_source)))
+  end)
+  if not ok then
+    state.enabled = true
+    state.log_dir = DEFAULT_LOG_DIR
+    state.log_source = "init-nonfatal-fallback"
+    state.log_name = state.log_name or "xreactor"
+    state.log_path = string.format("%s/%s.log", state.log_dir, state.log_name)
+    state.startup_action = "init_nonfatal_error(" .. tostring(err) .. ")"
+    state.degraded_mode = "LOGGING_DISABLED_NONFATAL"
+    state.degraded_reason = tostring(err)
+    print("WARN: logger degraded; local fallback failed; emergency logging only")
   end
   return {
     enabled = state.enabled == true,
@@ -759,20 +776,32 @@ function logger.set_enabled(enabled)
 end
 
 function logger.log(prefix, message, level)
-  if state.enabled == nil then
-    logger.init({ prefix = prefix })
+  local ok = pcall(function()
+    if state.enabled == nil then
+      logger.init({ prefix = prefix })
+    end
+    if not state.enabled then
+      return
+    end
+    local resolved_level, resolved_message = parse_message_level(message, level)
+    local line = string.format("[%s] %s | %s | %s", now_stamp(), tostring(prefix or "LOG"), resolved_level, resolved_message)
+    table.insert(state.buffer, line)
+    flush_if_needed(false)
+  end)
+  if not ok then
+    state.degraded_mode = "LOGGING_DISABLED_NONFATAL"
+    state.degraded_reason = "log-call-failed"
   end
-  if not state.enabled then
-    return
-  end
-  local resolved_level, resolved_message = parse_message_level(message, level)
-  local line = string.format("[%s] %s | %s | %s", now_stamp(), tostring(prefix or "LOG"), resolved_level, resolved_message)
-  table.insert(state.buffer, line)
-  flush_if_needed(false)
 end
 
 function logger.flush()
-  flush_if_needed(true)
+  local ok, err = pcall(flush_if_needed, true)
+  if not ok then
+    state.degraded_mode = "LOGGING_DISABLED_NONFATAL"
+    state.degraded_reason = tostring(err)
+    return true
+  end
+  return true
 end
 
 function logger.describe()

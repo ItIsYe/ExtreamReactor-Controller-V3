@@ -1175,6 +1175,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     live_rpm = rpm,
     target_rpm = target,
     requested_flow = base_flow,
+    confirmed_flow = ctrl.confirmed_flow,
     min_flow = min_flow,
     max_flow = max_flow,
     coil_engaged = ctrl.inductor_engaged,
@@ -1198,6 +1199,23 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
       target_band_smoothed_error = target_band.smoothed_error,
       target_band_at_min_limit = target_band.at_min_limit == true,
       target_band_at_max_limit = target_band.at_max_limit == true
+    }
+  elseif decision and decision.reason == "DEADBAND" and base_flow >= (max_flow - 1) then
+    local emergency_trim = math.max(1, rail_cfg.target_trim_step_down or 50)
+    next_flow = turbine_regulator.clamp_flow(base_flow - emergency_trim, min_flow, max_flow)
+    direction = next_flow < base_flow and -1 or 0
+    decision = {
+      reason = next_flow < base_flow and "TARGET_TRIM_DOWN" or "MIN_LIMIT_OVERSPEED",
+      step = math.abs(next_flow - base_flow),
+      min = min_flow,
+      max = max_flow,
+      target_band = true,
+      target_band_mode = "TARGET_TRIM_DOWN",
+      target_band_error = target - (rpm or target),
+      target_band_live_error = target - (rpm or target),
+      target_band_smoothed_error = target - (smoothed_rpm or target),
+      target_band_at_min_limit = next_flow <= min_flow,
+      target_band_at_max_limit = next_flow >= max_flow
     }
   end
   ctrl.requested_flow = clamp_turbine_flow(next_flow)

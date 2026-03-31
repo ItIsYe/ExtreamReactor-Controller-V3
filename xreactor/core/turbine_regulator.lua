@@ -164,6 +164,7 @@ function regulator.target_band_state(input)
   local live_rpm = sanitize_number(type(input) == "table" and input.live_rpm or nil, rpm)
   local target = sanitize_number(type(input) == "table" and input.target_rpm or nil, 0)
   local requested = sanitize_number(type(input) == "table" and input.requested_flow or nil, 0)
+  local confirmed = sanitize_number(type(input) == "table" and input.confirmed_flow or nil, requested)
   local min_flow = sanitize_number(type(input) == "table" and input.min_flow or nil, 0)
   local max_flow = sanitize_number(type(input) == "table" and input.max_flow or nil, 2000)
   local band = math.max(0, sanitize_number(type(input) == "table" and input.band_rpm or nil, 20))
@@ -180,7 +181,9 @@ function regulator.target_band_state(input)
     return { in_band = false, mode = "TRACKING", flow = requested, direction = 0, reason = "OUTSIDE_TARGET_BAND", error = error, live_error = error_live, smoothed_error = error_smooth }
   end
 
-  if requested >= (max_flow - 1) and error < trim_trigger then
+  local effective_flow = math.max(requested, confirmed)
+
+  if effective_flow >= (max_flow - 1) and abs_error <= trim_trigger then
     local next_flow = regulator.clamp_flow(requested - trim_down, min_flow, max_flow)
     local reason = next_flow == requested and "MIN_LIMIT_OVERSPEED" or "TARGET_TRIM_DOWN"
     return {
@@ -228,7 +231,7 @@ function regulator.target_band_state(input)
     }
   end
 
-  if requested >= (max_flow - 1) and error <= 0 then
+  if effective_flow >= (max_flow - 1) and error <= 0 then
     local next_flow = regulator.clamp_flow(requested - trim_down, min_flow, max_flow)
     local reason = next_flow == requested and "MIN_LIMIT_OVERSPEED" or "TARGET_TRIM_DOWN"
     return {

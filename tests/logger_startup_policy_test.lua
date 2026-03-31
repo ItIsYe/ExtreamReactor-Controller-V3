@@ -358,7 +358,7 @@ local runtime_desc = logger.describe()
 if runtime_desc.enabled ~= true then
   error("logger must remain enabled even when all write targets fail")
 end
-if runtime_desc.degraded_mode ~= "EMERGENCY_DROP_BUFFER" then
+if runtime_desc.degraded_mode ~= "EMERGENCY_LOGGING_ONLY" and runtime_desc.degraded_mode ~= "LOGGING_DISABLED_NONFATAL" then
   error("logger must expose emergency drop mode when disk/local writes fail")
 end
 if type(runtime_desc.degraded_reason) ~= "string" or runtime_desc.degraded_reason == "" then
@@ -366,6 +366,15 @@ if type(runtime_desc.degraded_reason) ~= "string" or runtime_desc.degraded_reaso
 end
 local_writable = true
 disk_writable = true
+
+local init_safe_ok = pcall(function()
+  logger.init({ log_name = "nonfatal_init", enabled = true, truncate = true })
+  logger.log("RT", "nonfatal-log-call", "INFO")
+  logger.flush()
+end)
+if not init_safe_ok then
+  error("logger init/log/flush must never throw even in degraded mode")
+end
 
 -- Peripheral network drive mount path should also be considered.
 disk_roots.disk2 = nil
