@@ -162,6 +162,18 @@ if m5 ~= 200 or changed5 then
   error('effective minimum should persist per turbine after non-zero requests')
 end
 
+local tracker_a = { effective_min_hits = 0, effective_min_flow = nil }
+local tracker_b = { effective_min_hits = 0, effective_min_flow = nil }
+local tracker_c = { effective_min_hits = 0, effective_min_flow = nil }
+for _ = 1, 3 do
+  regulator.update_effective_min(tracker_a, 0, 200, 3)
+  regulator.update_effective_min(tracker_b, 0, 250, 3)
+  regulator.update_effective_min(tracker_c, 0, 313, 3)
+end
+if tracker_a.effective_min_flow ~= 200 or tracker_b.effective_min_flow ~= 250 or tracker_c.effective_min_flow ~= 313 then
+  error('per-turbine effective minimums must remain independent (200/250/313)')
+end
+
 local resolved_min_a, used_effective_a = regulator.resolve_min_flow(0, 200)
 if resolved_min_a ~= 200 or not used_effective_a then
   error('effective minimum should raise clamp minimum per turbine')
@@ -344,6 +356,21 @@ if trim_up_state.mode ~= 'TARGET_TRIM_UP' or trim_up_state.flow ~= 925 then
 end
 if trim_up_state.at_max_limit then
   error('target trim up at mid-flow should not report max-limit clamp')
+end
+
+local max_escape_state = regulator.target_band_state({
+  rpm = 898,
+  target_rpm = 900,
+  requested_flow = 2000,
+  min_flow = 200,
+  max_flow = 2000,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50
+})
+if max_escape_state.mode ~= 'TARGET_TRIM_DOWN' or max_escape_state.flow ~= 1950 then
+  error('target-band near-target at max flow should trim down to avoid passive hold at 2000')
 end
 
 print('rt_turbine_regulator_regression_test.lua: ok')

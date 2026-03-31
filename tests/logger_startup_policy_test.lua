@@ -16,6 +16,7 @@ local dirs = {
 local moves = {}
 local print_lines = {}
 local disk_writable = true
+local local_writable = true
 local disk_present = true
 local disk_roots = {
   disk = true
@@ -115,6 +116,9 @@ _G.fs = {
       return nil
     end
     if path:sub(1, 5) == "/disk" and (not disk_present or not disk_writable) then
+      return nil
+    end
+    if path:sub(1, 14) == "/xreactor_logs" and not local_writable then
       return nil
     end
     if mode == "w" then
@@ -343,6 +347,25 @@ local startup_space_reject = logger.init({ log_name = "tiny", enabled = true, tr
 if startup_space_reject.log_dir ~= "/xreactor_logs" then
   error("expected explicit tiny disk path to fallback to local")
 end
+
+-- Runtime failures on both disk and local path must remain non-fatal and degrade to emergency drop mode.
+local_writable = false
+disk_writable = false
+logger.init({ log_name = "runtime_nonfatal", enabled = true, truncate = true, log_dir = "/disk/xreactor_logs" })
+logger.log("RT", "degrade-without-abort", "INFO")
+logger.flush()
+local runtime_desc = logger.describe()
+if runtime_desc.enabled ~= true then
+  error("logger must remain enabled even when all write targets fail")
+end
+if runtime_desc.degraded_mode ~= "EMERGENCY_DROP_BUFFER" then
+  error("logger must expose emergency drop mode when disk/local writes fail")
+end
+if type(runtime_desc.degraded_reason) ~= "string" or runtime_desc.degraded_reason == "" then
+  error("logger must provide degradation reason diagnostics")
+end
+local_writable = true
+disk_writable = true
 
 -- Peripheral network drive mount path should also be considered.
 disk_roots.disk2 = nil

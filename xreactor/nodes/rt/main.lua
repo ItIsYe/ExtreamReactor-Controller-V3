@@ -361,12 +361,16 @@ end
 if (config_meta and config_meta.reason) or #config_warnings > 0 then
   debug_enabled = true
 end
-local log_status = utils.init_logger({
+local logger_init_ok, log_status = pcall(utils.init_logger, {
   log_name = log_name,
   prefix = CONFIG.LOG_PREFIX,
   enabled = debug_enabled,
   truncate = config.reset_log_on_start == true
 })
+if not logger_init_ok then
+  print("WARN: RT logger init non-fatal failure: " .. tostring(log_status))
+  log_status = { enabled = false, startup_action = "init_nonfatal_failure" }
+end
 if log_status and log_status.enabled then
   log(INFO, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)))
 end
@@ -1210,6 +1214,8 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     ctrl.mode = "UP"
   elseif direction < 0 then
     ctrl.mode = "DOWN"
+  elseif decision and decision.reason == "DEADBAND" then
+    ctrl.mode = "TRACKING_DEADBAND"
   else
     ctrl.mode = "TRACKING_STABLE"
   end
