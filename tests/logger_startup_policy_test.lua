@@ -360,7 +360,9 @@ local runtime_desc = logger.describe()
 if runtime_desc.enabled ~= true then
   error("logger must remain enabled even when all write targets fail")
 end
-if runtime_desc.degraded_mode ~= "EMERGENCY_LOGGING_ONLY" and runtime_desc.degraded_mode ~= "LOGGING_DISABLED_NONFATAL" then
+if runtime_desc.degraded_mode ~= "EMERGENCY_BUFFER_ONLY"
+    and runtime_desc.degraded_mode ~= "EMERGENCY_LOGGING_ONLY"
+    and runtime_desc.degraded_mode ~= "LOGGING_DISABLED_NONFATAL" then
   error("logger must expose emergency drop mode when disk/local writes fail")
 end
 if type(runtime_desc.degraded_reason) ~= "string" or runtime_desc.degraded_reason == "" then

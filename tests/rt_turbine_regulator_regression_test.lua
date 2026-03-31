@@ -184,6 +184,30 @@ if resolved_min_b ~= 200 or used_effective_b then
   error('base minimum should win when effective minimum is lower')
 end
 
+local target_trim_down = regulator.target_band_state({
+  rpm = 900,
+  live_rpm = 904,
+  target_rpm = 900,
+  requested_flow = 2000,
+  confirmed_flow = 2000,
+  min_flow = 200,
+  max_flow = 2000,
+  coil_engaged = true,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50
+})
+if not target_trim_down.in_band then
+  error('target band should be active near 900 RPM')
+end
+if target_trim_down.reason ~= 'TARGET_TRIM_DOWN' or target_trim_down.direction ~= -1 then
+  error('in-target max-flow state must actively trim down instead of hold/deadband')
+end
+if target_trim_down.flow >= 2000 then
+  error('target trim down must reduce flow below hard max 2000')
+end
+
 local startup_state = {
   startup_synced = false,
   requested_flow = 0,
