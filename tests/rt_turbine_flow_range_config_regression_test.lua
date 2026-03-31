@@ -31,5 +31,9 @@ assert_true(content:find('clamp_max=', 1, true) ~= nil,
   'turbine debug log must include effective clamp max')
 assert_true(content:find('decision and decision.reason == "DEADBAND" and base_flow >= %(max_flow %- 1%)') ~= nil,
   'rt control loop must actively trim down at max flow instead of HOLD/DEADBAND')
+assert_true(content:find('confirmed_at_max', 1, true) ~= nil,
+  'rt control loop must track confirmed max-flow readback for target-band trim decisions')
+assert_true(content:find('decision.reason = "TARGET_TRIM_DOWN"', 1, true) ~= nil,
+  'rt control loop must force target-band trim down instead of passive hold at max flow')
 
 print('rt_turbine_flow_range_config_regression_test.lua: ok')

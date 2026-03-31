@@ -9,7 +9,34 @@ local ROLE_PATHS = {
   REPROCESSING = "/xreactor/nodes/reprocessor/main.lua"
 }
 
-local logger = dofile("/xreactor/core/logger.lua")
+local function load_logger()
+  local ok, loaded = pcall(dofile, "/xreactor/core/logger.lua")
+  if ok and type(loaded) == "table" and type(loaded.log) == "function" then
+    return loaded
+  end
+  return {
+    log = function(_, message)
+      local text = tostring(message or "")
+      local safe = pcall(print, "WARN: startup logger unavailable: " .. text)
+      if not safe then
+        -- logging must never block runtime startup
+      end
+    end
+  }
+end
+
+local logger = load_logger()
+
+local function safe_log(prefix, message)
+  local ok = pcall(function()
+    if type(logger) == "table" and type(logger.log) == "function" then
+      logger.log(prefix, message)
+    end
+  end)
+  if not ok then
+    pcall(print, "WARN: startup log dropped for prefix=" .. tostring(prefix))
+  end
+end
 
 local function read_role_config()
   if not fs.exists(ROLE_CONFIG_PATH) then
@@ -48,18 +75,18 @@ end
 
 local role, err = read_role_config()
 if not role then
-  logger.log("STARTUP", "ERROR: " .. tostring(err))
+  safe_log("STARTUP", "ERROR: " .. tostring(err))
   error(err, 0)
 end
 
 local entry = ROLE_PATHS[role]
 if not entry then
-  logger.log("STARTUP", "ERROR: Unknown role: " .. tostring(role))
+  safe_log("STARTUP", "ERROR: Unknown role: " .. tostring(role))
   error("Unknown role: " .. tostring(role), 0)
 end
 
 local release = read_release_info() or {}
-logger.log(
+safe_log(
   "STARTUP",
   string.format(
     "Starting XReactor role=%s release=%s manifest=%s files=%s",
@@ -72,6 +99,6 @@ logger.log(
 
 local ok = shell.run(entry)
 if not ok then
-  logger.log("STARTUP", "ERROR: Failed to start role: " .. tostring(role))
+  safe_log("STARTUP", "ERROR: Failed to start role: " .. tostring(role))
   error("Failed to start role: " .. tostring(role), 0)
 end
