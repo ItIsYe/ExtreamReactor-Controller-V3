@@ -40,7 +40,9 @@ local state = {
   buffer = {},
   last_flush = 0,
   warn_once = false,
-  startup_action = "none"
+  startup_action = "none",
+  degraded_mode = "NONE",
+  degraded_reason = nil
 }
 
 local function now_stamp()
@@ -533,16 +535,19 @@ local function flush_if_needed(force)
           state.log_source = "runtime-fallback-local"
           state.buffer = {}
           state.last_flush = os.clock()
+          state.degraded_mode = "RUNTIME_FALLBACK_LOCAL"
+          state.degraded_reason = tostring(target_reason) .. " | " .. tostring(recovered_reason)
           return true
         end
         if not state.warn_once then
           state.warn_once = true
           print("WARN: Logging disabled (" .. tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err) .. ")")
         end
-        state.enabled = false
+        state.degraded_mode = "EMERGENCY_DROP_BUFFER"
+        state.degraded_reason = tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err)
         state.buffer = {}
         state.last_flush = os.clock()
-        return false
+        return true
       end
     end
   end
@@ -569,8 +574,13 @@ local function flush_if_needed(force)
     print("WARN: Logging disabled (" .. tostring(err) .. ")")
   end
   if not ok then
-    state.enabled = false
-    return false
+    state.degraded_mode = "EMERGENCY_DROP_BUFFER"
+    state.degraded_reason = tostring(err)
+    return true
+  end
+  if state.degraded_mode ~= "NONE" then
+    state.degraded_mode = "NONE"
+    state.degraded_reason = nil
   end
   return true
 end
@@ -721,7 +731,15 @@ function logger.init(opts)
     if type(opts.startup_mode) == "string" then
       startup_mode = string.lower(opts.startup_mode)
     end
-    state.startup_action = startup_prepare(state.log_path, startup_mode, state.log_dir)
+    local startup_ok, startup_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
+    state.startup_action = startup_ok and startup_result or ("startup_nonfatal_error(" .. tostring(startup_result) .. ")")
+    if type(state.startup_action) == "string" and state.startup_action:find("startup_space_reject", 1, true) then
+      state.log_dir = DEFAULT_LOG_DIR
+      state.log_source = "startup-fallback-local"
+      state.log_path = string.format("%s/%s.log", state.log_dir, state.log_name or "xreactor")
+      local fallback_ok, fallback_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
+      state.startup_action = "startup_disk_reject_nonfatal(original=" .. tostring(startup_result) .. ",fallback=" .. tostring(fallback_ok and fallback_result or fallback_result) .. ")"
+    end
     print(string.format("LOG: dir=%s file=%s startup=%s source=%s", tostring(state.log_dir), state.log_path, state.startup_action, tostring(state.log_source)))
   end
   return {
@@ -730,7 +748,9 @@ function logger.init(opts)
     log_name = state.log_name,
     log_path = state.log_path,
     log_source = state.log_source,
-    startup_action = state.startup_action
+    startup_action = state.startup_action,
+    degraded_mode = state.degraded_mode,
+    degraded_reason = state.degraded_reason
   }
 end
 
@@ -762,7 +782,9 @@ function logger.describe()
     log_name = state.log_name,
     log_path = state.log_path,
     log_source = state.log_source,
-    startup_action = state.startup_action
+    startup_action = state.startup_action,
+    degraded_mode = state.degraded_mode,
+    degraded_reason = state.degraded_reason
   }
 end
 
