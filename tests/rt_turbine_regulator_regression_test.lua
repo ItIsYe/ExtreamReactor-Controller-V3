@@ -373,4 +373,20 @@ if max_escape_state.mode ~= 'TARGET_TRIM_DOWN' or max_escape_state.flow ~= 1950 
   error('target-band near-target at max flow should trim down to avoid passive hold at 2000')
 end
 
+local confirmed_max_trim_state = regulator.target_band_state({
+  rpm = 900,
+  target_rpm = 900,
+  requested_flow = 1950,
+  confirmed_flow = 2000,
+  min_flow = 200,
+  max_flow = 2000,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50
+})
+if confirmed_max_trim_state.mode ~= 'TARGET_TRIM_DOWN' or confirmed_max_trim_state.flow ~= 1900 then
+  error('target-band should trim down when confirmed flow is still at max to avoid HOLD+2000')
+end
+
 print('rt_turbine_regulator_regression_test.lua: ok')
