@@ -1200,6 +1200,24 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
       target_band_at_min_limit = target_band.at_min_limit == true,
       target_band_at_max_limit = target_band.at_max_limit == true
     }
+    local confirmed_at_max = type(ctrl.confirmed_flow) == "number" and ctrl.confirmed_flow >= (max_flow - 1)
+    local requested_at_max = type(base_flow) == "number" and base_flow >= (max_flow - 1)
+    local trimmed_flow = turbine_regulator.clamp_flow(base_flow - math.max(1, rail_cfg.target_trim_step_down or 50), min_flow, max_flow)
+    local trim_trigger = math.max(0, rail_cfg.target_trim_trigger_rpm or 6)
+    local can_force_trim = (requested_at_max or confirmed_at_max)
+      and direction == 0
+      and trim_trigger >= 0
+      and (target_band.error or 0) <= trim_trigger
+      and trimmed_flow < base_flow
+    if can_force_trim then
+      next_flow = trimmed_flow
+      direction = -1
+      decision.reason = "TARGET_TRIM_DOWN"
+      decision.step = math.abs(next_flow - base_flow)
+      decision.target_band_mode = "TARGET_TRIM_DOWN"
+      decision.target_band_at_min_limit = next_flow <= min_flow
+      decision.target_band_at_max_limit = next_flow >= max_flow
+    end
   elseif decision and decision.reason == "DEADBAND" and base_flow >= (max_flow - 1) then
     local emergency_trim = math.max(1, rail_cfg.target_trim_step_down or 50)
     next_flow = turbine_regulator.clamp_flow(base_flow - emergency_trim, min_flow, max_flow)

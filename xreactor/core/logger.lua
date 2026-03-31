@@ -42,8 +42,15 @@ local state = {
   warn_once = false,
   startup_action = "none",
   degraded_mode = "DISK_OK",
-  degraded_reason = nil
+  degraded_reason = nil,
+  emergency_drop = false
 }
+
+local function safe_print(message)
+  if type(print) == "function" then
+    pcall(print, tostring(message))
+  end
+end
 
 local function now_stamp()
   return os.date("!%H:%M:%S")
@@ -530,7 +537,7 @@ local function flush_if_needed(force)
         if fallback_ok then
           if not state.warn_once then
             state.warn_once = true
-            print("WARN: Log dir fallback to local (reason=" .. tostring(target_reason) .. " recover=" .. tostring(recovered_reason) .. ")")
+            safe_print("WARN: Log dir fallback to local (reason=" .. tostring(target_reason) .. " recover=" .. tostring(recovered_reason) .. ")")
           end
           state.log_source = "runtime-fallback-local"
           state.buffer = {}
@@ -541,11 +548,12 @@ local function flush_if_needed(force)
         end
         if not state.warn_once then
           state.warn_once = true
-          print("WARN: Logging disabled (" .. tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err) .. ")")
+          safe_print("WARN: Logging disabled (" .. tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err) .. ")")
         end
         state.degraded_mode = "EMERGENCY_LOGGING_ONLY"
         state.degraded_reason = tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err)
-        print("WARN: logger degraded; disk unavailable; local fallback failed; emergency logging only")
+        safe_print("WARN: logger degraded; disk unavailable; local fallback failed; emergency logging only")
+        state.emergency_drop = true
         state.buffer = {}
         state.last_flush = os.clock()
         return true
@@ -559,7 +567,7 @@ local function flush_if_needed(force)
     if fallback_ok then
       if not state.warn_once then
         state.warn_once = true
-        print("WARN: Log dir fallback to local (reason=" .. tostring(err) .. ")")
+        safe_print("WARN: Log dir fallback to local (reason=" .. tostring(err) .. ")")
       end
       state.log_source = "runtime-fallback-local"
       state.degraded_mode = "LOCAL_FALLBACK"
@@ -574,18 +582,20 @@ local function flush_if_needed(force)
   state.last_flush = os.clock()
   if not ok and not state.warn_once then
     state.warn_once = true
-    print("WARN: Logging disabled (" .. tostring(err) .. ")")
+    safe_print("WARN: Logging disabled (" .. tostring(err) .. ")")
   end
   if not ok then
     state.degraded_mode = "LOGGING_DISABLED_NONFATAL"
     state.degraded_reason = tostring(err)
-    print("WARN: logger degraded; emergency logging only")
+    state.emergency_drop = true
+    safe_print("WARN: logger degraded; emergency logging only")
     return true
   end
   if state.degraded_mode ~= "DISK_OK" then
     state.degraded_mode = "DISK_OK"
     state.degraded_reason = nil
   end
+  state.emergency_drop = false
   return true
 end
 
@@ -728,6 +738,7 @@ function logger.init(opts)
     state.last_flush = os.clock()
     state.buffer = {}
     state.startup_action = "none"
+    state.emergency_drop = false
     if state.enabled then
       local startup_mode = CONFIG.STARTUP_MODE
       if opts.truncate ~= nil then
@@ -745,7 +756,7 @@ function logger.init(opts)
         local fallback_ok, fallback_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
         state.startup_action = "startup_disk_reject_nonfatal(original=" .. tostring(startup_result) .. ",fallback=" .. tostring(fallback_ok and fallback_result or fallback_result) .. ")"
       end
-      print(string.format("LOG: dir=%s file=%s startup=%s source=%s", tostring(state.log_dir), state.log_path, state.startup_action, tostring(state.log_source)))
+      safe_print(string.format("LOG: dir=%s file=%s startup=%s source=%s", tostring(state.log_dir), state.log_path, state.startup_action, tostring(state.log_source)))
     end
   end)
   if not ok then
@@ -757,7 +768,8 @@ function logger.init(opts)
     state.startup_action = "init_nonfatal_error(" .. tostring(err) .. ")"
     state.degraded_mode = "LOGGING_DISABLED_NONFATAL"
     state.degraded_reason = tostring(err)
-    print("WARN: logger degraded; local fallback failed; emergency logging only")
+    state.emergency_drop = true
+    safe_print("WARN: logger degraded; local fallback failed; emergency logging only")
   end
   return {
     enabled = state.enabled == true,
@@ -783,6 +795,9 @@ function logger.log(prefix, message, level)
     if not state.enabled then
       return
     end
+    if state.emergency_drop then
+      return
+    end
     local resolved_level, resolved_message = parse_message_level(message, level)
     local line = string.format("[%s] %s | %s | %s", now_stamp(), tostring(prefix or "LOG"), resolved_level, resolved_message)
     table.insert(state.buffer, line)
@@ -795,6 +810,9 @@ function logger.log(prefix, message, level)
 end
 
 function logger.flush()
+  if state.emergency_drop then
+    return true
+  end
   local ok, err = pcall(flush_if_needed, true)
   if not ok then
     state.degraded_mode = "LOGGING_DISABLED_NONFATAL"

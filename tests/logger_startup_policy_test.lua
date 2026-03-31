@@ -354,6 +354,8 @@ disk_writable = false
 logger.init({ log_name = "runtime_nonfatal", enabled = true, truncate = true, log_dir = "/disk/xreactor_logs" })
 logger.log("RT", "degrade-without-abort", "INFO")
 logger.flush()
+logger.log("RT", "degrade-second-call", "INFO")
+logger.flush()
 local runtime_desc = logger.describe()
 if runtime_desc.enabled ~= true then
   error("logger must remain enabled even when all write targets fail")
