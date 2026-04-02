@@ -960,6 +960,29 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   local next_flow, direction, decision = rails.step(base_flow, error, flow_state, flow_cfg, now_ts)
   local hold_band = rail_cfg.target_hold_band_rpm or rail_cfg.deadband_up or RPM_TOLERANCE
   local trim_trigger = math.max(0, rail_cfg.target_trim_trigger_rpm or 6)
+  local overspeed_state = turbine_regulator.overspeed_brake_state({
+    rpm = smoothed_rpm or rpm or target,
+    live_rpm = rpm,
+    target_rpm = target,
+    requested_flow = base_flow,
+    max_flow = max_flow,
+    band_rpm = hold_band
+  })
+  if overspeed_state.active then
+    next_flow = 0
+    direction = -1
+    decision = {
+      reason = "OVERSPEED_BRAKE_FLOW_ZERO",
+      step = math.abs(base_flow),
+      min = 0,
+      max = max_flow,
+      overspeed_brake = true,
+      overspeed_rpm = overspeed_state.overspeed_rpm,
+      overspeed_threshold_rpm = overspeed_state.threshold_rpm,
+      target_band = false,
+      target_band_mode = "OVERSPEED_BRAKE"
+    }
+  end
   local target_band = turbine_regulator.target_band_state({
     rpm = smoothed_rpm or rpm or target,
     live_rpm = rpm,
@@ -974,7 +997,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     trim_up_step = rail_cfg.target_trim_step_up or 25,
     trim_down_step = rail_cfg.target_trim_step_down or 50
   })
-  if target_band and target_band.in_band then
+  if (not overspeed_state.active) and target_band and target_band.in_band then
     next_flow = target_band.flow
     direction = target_band.direction or 0
     decision = {
@@ -1006,7 +1029,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
       decision.target_band_at_min_limit = next_flow <= min_flow
       decision.target_band_at_max_limit = next_flow >= max_flow
     end
-  elseif decision and decision.reason == "DEADBAND" and base_flow >= (max_flow - 1) then
+  elseif (not overspeed_state.active) and decision and decision.reason == "DEADBAND" and base_flow >= (max_flow - 1) then
     local emergency_trim = math.max(1, rail_cfg.target_trim_step_down or 50)
     local live_error = target - (rpm or target)
     local can_trim = math.abs(live_error) <= hold_band
@@ -1033,10 +1056,12 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     decision.defer_cooldown = true
     decision.defer_reason = defer_reason
   end
-  ctrl.target_holding_active = target_band and target_band.in_band or false
-  ctrl.target_band_status = target_band and target_band.mode or "TRACKING"
+  ctrl.target_holding_active = (not overspeed_state.active) and target_band and target_band.in_band or false
+  ctrl.target_band_status = overspeed_state.active and "OVERSPEED_BRAKE" or (target_band and target_band.mode or "TRACKING")
   if ctrl.target_holding_active and type(ctrl.target_band_status) == "string" then
     ctrl.mode = ctrl.target_band_status
+  elseif overspeed_state.active then
+    ctrl.mode = "OVERSPEED_BRAKE"
   elseif direction > 0 then
     ctrl.mode = "UP"
   elseif direction < 0 then
@@ -1047,6 +1072,25 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     ctrl.mode = "TRACKING_STABLE"
   end
   return ctrl.requested_flow, ctrl.mode, decision, smoothed_rpm
+end
+
+local function enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
+  if type(decision) ~= "table" or decision.overspeed_brake ~= true then
+    return true, "not-required"
+  end
+  if ctrl.inductor_engaged == true then
+    return true, "already-engaged"
+  end
+  if not (caps and caps.setInductorEngaged) then
+    ctrl.inductor_engaged = true
+    return false, "inductor-write-unavailable"
+  end
+  local ok, applied = pcall(setInductor, turbine, caps, true)
+  if ok and applied then
+    ctrl.inductor_engaged = true
+    return true, "overspeed-coil-engaged"
+  end
+  return false, "overspeed-coil-set-failed:" .. tostring(applied)
 end
 
 local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
@@ -1093,6 +1137,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     previous_requested = ctrl.last_requested_flow
   end
   local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, requested_flow)
+  local overspeed_coil_ok, overspeed_coil_reason = enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
   local observed_flow, flow_reader = read_turbine_flow(turbine, caps)
   if type(observed_flow) == "number" then
     ctrl.confirmed_flow = clamp_turbine_flow(observed_flow)
@@ -1136,8 +1181,10 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     steam_input = steam_input
   })
   local target_zone_state = ctrl.target_holding_active and "IN_TARGET_BAND" or "OUTSIDE_TARGET_BAND"
-  local target_action = "TARGET_HOLD_STABLE"
-  if tostring(reason) == "TARGET_TRIM_UP" then
+  local target_action = ctrl.target_holding_active and "TARGET_HOLD_STABLE" or "TRACKING_ACTIVE"
+  if decision and decision.overspeed_brake then
+    target_action = "OVERSPEED_BRAKE"
+  elseif tostring(reason) == "TARGET_TRIM_UP" then
     target_action = "TARGET_TRIM_UP"
   elseif tostring(reason) == "TARGET_TRIM_DOWN" then
     target_action = "TARGET_TRIM_DOWN"
@@ -1149,7 +1196,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local at_max_limit = requested_flow == (ctrl.effective_max_flow or MAX_FLOW)
   local at_min_limit = type(applied_min) == "number" and requested_flow <= applied_min
   local active_trim = target_action == "TARGET_TRIM_UP" or target_action == "TARGET_TRIM_DOWN"
-  local hold_active = target_action == "TARGET_HOLD_STABLE"
+  local hold_active = ctrl.target_holding_active and target_action == "TARGET_HOLD_STABLE"
   local down_limited = tostring(reason):find("MIN_LIMIT_OVERSPEED", 1, true) ~= nil
   local up_limited = tostring(reason):find("MAX_LIMIT_UNDERSPEED", 1, true) ~= nil
   ctrl.target_trim_state = active_trim and target_action or "NONE"
@@ -1201,6 +1248,11 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " flow_trim_direction=" .. tostring(active_trim and (target_action == "TARGET_TRIM_UP" and "UP" or "DOWN") or "NONE")
       .. " coil=" .. tostring(ctrl.inductor_engaged)
       .. " coil_api=" .. tostring(ctrl.inductor_state_api or "n/a")
+      .. " overspeed_brake=" .. tostring(decision and decision.overspeed_brake or false)
+      .. " overspeed_rpm=" .. tostring(decision and decision.overspeed_rpm or "n/a")
+      .. " overspeed_threshold_rpm=" .. tostring(decision and decision.overspeed_threshold_rpm or "n/a")
+      .. " overspeed_coil_ok=" .. tostring(overspeed_coil_ok)
+      .. " overspeed_coil_reason=" .. tostring(overspeed_coil_reason)
       .. " steam_input=" .. tostring(steam_input)
       .. " active=" .. tostring(active_state)
       .. " max_flow_limit=" .. tostring(ctrl.effective_max_flow or MAX_FLOW)
@@ -1351,57 +1403,80 @@ local function updateControl()
   end
 
   local target_rpm = get_target_rpm()
-  for name, ctrl in pairs(turbine_ctrl) do
-    local ok, turbine = pcall(peripheral.wrap, name)
-    if ok and turbine then
-      local caps = get_device_caps("turbines", name)
-      local has_flow_api, flow_api_reason = turbine_has_flow_setter(turbine, caps)
-      if not has_flow_api then
-        ctrl.flow_api_missing_ticks = (ctrl.flow_api_missing_ticks or 0) + 1
-        if ctrl.flow_api_missing_ticks >= 5 then
-          warn_unsupported(name, flow_api_reason)
-        else
-          log("DEBUG", "TurbineCtrl startup-wait name=" .. tostring(name) .. " reason=" .. tostring(flow_api_reason) .. " missing_ticks=" .. tostring(ctrl.flow_api_missing_ticks))
-        end
-        goto continue_control_turbine
-      end
-      ctrl.flow_api_missing_ticks = 0
-      local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
-      if not ok_active then
-        warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(active_result))
-        goto continue_control_turbine
-      end
-      if not active_result then
-        warn_once("turbine_set_active_unavailable:" .. name, "Turbine active API unavailable for " .. name .. " (continuing with flow control)")
-      end
-      local rpm = nil
-      if turbine.getRotorSpeed then
-        local ok, value = safe_wrapped_call(turbine, "getRotorSpeed")
-        if ok and type(value) == "number" then
-          rpm = value
-        end
-      end
-      local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
-      if not ok_inductor then
-        warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
-        goto continue_control_turbine
-      end
-      local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
-      if not set_ok then
-        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
-        goto continue_control_turbine
-      end
-      if not result then
-        log("DEBUG", "TurbineCtrl skip name=" .. name .. " reason=" .. tostring(apply_reason) .. " state=" .. tostring(current_state))
-        goto continue_control_turbine
-      end
-      if not autonom_control_logged then
-        autonom_control_logged = true
-        log("INFO", "AUTONOM actuator control active")
-      end
-      ::continue_control_turbine::
-    end
+  local eval_total, eval_decision, eval_skipped = 0, 0, 0
+  local skip_reasons = {}
+  local function track_skip(reason)
+    local key = tostring(reason or "UNKNOWN")
+    skip_reasons[key] = (skip_reasons[key] or 0) + 1
+    eval_skipped = eval_skipped + 1
   end
+  for name, ctrl in pairs(turbine_ctrl) do
+    eval_total = eval_total + 1
+    local ok, turbine = pcall(peripheral.wrap, name)
+    if not ok or not turbine then
+      track_skip("WRAP_FAILED")
+      warn_once("turbine_wrap:" .. name, "Turbine wrap failed for " .. name .. ": " .. tostring(turbine))
+      goto continue_control_turbine
+    end
+    local caps = get_device_caps("turbines", name)
+    local has_flow_api, flow_api_reason = turbine_has_flow_setter(turbine, caps)
+    if not has_flow_api then
+      ctrl.flow_api_missing_ticks = (ctrl.flow_api_missing_ticks or 0) + 1
+      track_skip(flow_api_reason)
+      if ctrl.flow_api_missing_ticks >= 5 then
+        warn_unsupported(name, flow_api_reason)
+      else
+        log("DEBUG", "TurbineCtrl startup-wait name=" .. tostring(name) .. " reason=" .. tostring(flow_api_reason) .. " missing_ticks=" .. tostring(ctrl.flow_api_missing_ticks))
+      end
+      goto continue_control_turbine
+    end
+    ctrl.flow_api_missing_ticks = 0
+    local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
+    if not ok_active then
+      warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(active_result))
+      track_skip("SET_ACTIVE_FAILED_NONFATAL")
+    elseif not active_result then
+      warn_once("turbine_set_active_unavailable:" .. name, "Turbine active API unavailable for " .. name .. " (continuing with flow control)")
+    end
+    local rpm = nil
+    if turbine.getRotorSpeed then
+      local rpm_ok, value = safe_wrapped_call(turbine, "getRotorSpeed")
+      if rpm_ok and type(value) == "number" then
+        rpm = value
+      end
+    end
+    local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
+    if not ok_inductor then
+      warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
+      track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
+    end
+    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
+    if not set_ok then
+      warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
+      track_skip(apply_reason or "FLOW_SET_CALL_FAILED")
+      goto continue_control_turbine
+    end
+    if not result then
+      track_skip(apply_reason or "FLOW_SET_SKIPPED")
+      log("DEBUG", "TurbineCtrl skip name=" .. name .. " reason=" .. tostring(apply_reason) .. " state=" .. tostring(current_state))
+      goto continue_control_turbine
+    end
+    eval_decision = eval_decision + 1
+    if not autonom_control_logged then
+      autonom_control_logged = true
+      log("INFO", "AUTONOM actuator control active")
+    end
+    ::continue_control_turbine::
+  end
+  local reason_parts = {}
+  for reason, count in pairs(skip_reasons) do
+    reason_parts[#reason_parts + 1] = tostring(reason) .. "=" .. tostring(count)
+  end
+  table.sort(reason_parts)
+  log("DEBUG", "TurbineTick evaluated=" .. tostring(eval_total)
+    .. " decisions=" .. tostring(eval_decision)
+    .. " skipped=" .. tostring(eval_skipped)
+    .. " skip_reasons=" .. (#reason_parts > 0 and table.concat(reason_parts, ",") or "none"))
 end
 local function adjust_turbines()
   updateControl()

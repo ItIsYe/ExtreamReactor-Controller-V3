@@ -216,7 +216,10 @@ end
 
 -- Log a message using the shared logger (no terminal spam).
 function utils.log(prefix, message, level)
-  logger.log(prefix or CONFIG.LOGGER_DEFAULT_PREFIX, message, level)
+  local ok = pcall(logger.log, prefix or CONFIG.LOGGER_DEFAULT_PREFIX, message, level)
+  if not ok then
+    pcall(print, "WARN: logging suppressed due to non-fatal logger failure")
+  end
 end
 
 function utils.safe_peripheral_call(name, method, ...)

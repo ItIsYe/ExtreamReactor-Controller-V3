@@ -448,4 +448,34 @@ if underspeed_max_trim_state.mode ~= 'TARGET_TRIM_DOWN' or underspeed_max_trim_s
   error('in-band underspeed at max flow must still trim down to escape HOLD+2000 live lock')
 end
 
+local overspeed_brake = regulator.overspeed_brake_state({
+  rpm = 945,
+  live_rpm = 948,
+  target_rpm = 900,
+  requested_flow = 1200,
+  max_flow = 2000,
+  band_rpm = 20
+})
+if not overspeed_brake.active then
+  error('overspeed above target band must activate brake mode')
+end
+if overspeed_brake.flow ~= 0 then
+  error('overspeed brake mode must force requested flow to 0')
+end
+if not overspeed_brake.engage_coil then
+  error('overspeed brake mode must request coil engagement for active braking')
+end
+
+local no_overspeed_brake = regulator.overspeed_brake_state({
+  rpm = 905,
+  live_rpm = 906,
+  target_rpm = 900,
+  requested_flow = 1200,
+  max_flow = 2000,
+  band_rpm = 20
+})
+if no_overspeed_brake.active then
+  error('rpm inside target band must not trigger overspeed brake mode')
+end
+
 print('rt_turbine_regulator_regression_test.lua: ok')

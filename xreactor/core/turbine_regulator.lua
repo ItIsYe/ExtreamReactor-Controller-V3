@@ -294,4 +294,29 @@ function regulator.target_band_state(input)
   }
 end
 
+function regulator.overspeed_brake_state(input)
+  local rpm = sanitize_number(type(input) == "table" and input.rpm or nil, -1)
+  local live_rpm = sanitize_number(type(input) == "table" and input.live_rpm or nil, rpm)
+  local target = sanitize_number(type(input) == "table" and input.target_rpm or nil, 0)
+  local band = math.max(0, sanitize_number(type(input) == "table" and input.band_rpm or nil, 20))
+  local max_flow = sanitize_number(type(input) == "table" and input.max_flow or nil, 2000)
+  local requested = sanitize_number(type(input) == "table" and input.requested_flow or nil, 0)
+  local overspeed_rpm = math.max(rpm, live_rpm)
+  if overspeed_rpm < 0 then
+    return { active = false, reason = "RPM_UNAVAILABLE", flow = requested, engage_coil = false }
+  end
+  if overspeed_rpm <= (target + band) then
+    return { active = false, reason = "NOT_OVERSPEED", flow = requested, engage_coil = false }
+  end
+  return {
+    active = true,
+    reason = "OVERSPEED_BRAKE",
+    flow = 0,
+    engage_coil = true,
+    overspeed_rpm = overspeed_rpm,
+    threshold_rpm = target + band,
+    requested_was_max = requested >= (max_flow - 1)
+  }
+end
+
 return regulator
