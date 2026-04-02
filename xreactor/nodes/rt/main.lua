@@ -145,11 +145,14 @@ local DEFAULT_CONFIG = {
       cooldown_s = 0.2, -- Minimum seconds between flow changes.
       settle_timeout_s = 0.8, -- Maximum wait for requested flow to appear in readback before normal cooldown resumes.
       confirm_tolerance = 1, -- Allowed delta between requested and confirmed flow.
+      readback_retry_cap = 3, -- Retry cap before cooldown defer is stopped to keep control responsive.
+      readback_fast_rereads = 2, -- Immediate re-read attempts after a write to reduce stale readback impact.
       effective_min_samples = 3, -- Readback samples needed before persisting effective min flow.
       target_hold_band_rpm = 30, -- Active holding band around target RPM.
       target_trim_trigger_rpm = 6, -- RPM error threshold for target-band trim corrections.
-      target_trim_step_up = 25, -- Fine up-trim step while holding target RPM.
-      target_trim_step_down = 50, -- Fine down-trim step while holding target RPM.
+      target_trim_hold_samples = 2, -- Require repeated in-band confirmations before entering HOLDING_TARGET_ACTIVE.
+      target_trim_step_up = 50, -- Fine up-trim step while holding target RPM.
+      target_trim_step_down = 75, -- Fine down-trim step while holding target RPM.
       min = CONFIG.MIN_FLOW, -- Flow clamp minimum.
       max = CONFIG.MAX_FLOW, -- Flow clamp maximum.
       ema_alpha = 0.2 -- RPM smoothing alpha.
@@ -178,14 +181,11 @@ local DEFAULT_CONFIG = {
   status_interval = 5, -- Status log interval (seconds).
   status_log = false -- Enable periodic status log output.
 }
-
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
-
 local function add_config_warning(message)
   table.insert(config_warnings, message)
 end
-
 config_normalizer.validate_config(config, DEFAULT_CONFIG, add_config_warning, utils)
 if config.wireless_modem == nil and type(config.modem) == "string" then
   config.wireless_modem = config.modem
@@ -271,14 +271,12 @@ config.monitor_scale = config.monitor_scale or DEFAULT_CONFIG.monitor_scale
 config.scan_interval = config.scan_interval or DEFAULT_CONFIG.scan_interval
 config.startup_watchdog_s = config.startup_watchdog_s or DEFAULT_CONFIG.startup_watchdog_s
 local hb = config.heartbeat_interval
-
 local configured_reactors = utils.deep_copy(config.reactors or {})
 local configured_turbines = utils.deep_copy(config.turbines or {})
 local configured_caps = {
   reactors = #configured_reactors,
   turbines = #configured_turbines
 }
-
 local comms
 local services
 local registry = registry_lib.new({ node_id = node_id, role = "rt", log_prefix = CONFIG.LOG_PREFIX })
@@ -324,39 +322,32 @@ local reactor_ctrl = {}
 local cache
 local build_modules
 local refresh_module_peripherals
-
 local STATE = {
   INIT = "INIT",
   AUTONOM = "AUTONOM",
   MASTER = "MASTER",
   SAFE = "SAFE"
 }
-
 local current_state = STATE.INIT
 local node_state_machine
-
 local ramp_profiles = {
   FAST = 4000,
   NORMAL = 8000,
   SLOW = 12000
 }
-
 local TURBINE_MODE = {
   RAMP = "RAMP",
   REGULATE = "REGULATE"
 }
-
 local function get_target_rpm()
   if current_state == STATE.MASTER and type(targets.rpm) == "number" and targets.rpm > 0 then
     return targets.rpm
   end
   return TARGET_RPM
 end
-
 local function clamp_turbine_flow(rate)
   return turbine_regulator.clamp_flow(rate, MIN_FLOW, MAX_FLOW)
 end
-
 local function clamp_rods(level, allow_overmax)
   if type(level) ~= "number" then
     level = ROD_MAX
@@ -364,7 +355,6 @@ local function clamp_rods(level, allow_overmax)
   local max_limit = allow_overmax and 100 or ROD_MAX
   return safety.clamp(level, ROD_MIN, max_limit)
 end
-
 local function resolve_steam_tank_name()
   if steam_tank_name and peripheral.isPresent(steam_tank_name) then
     return steam_tank_name
@@ -387,7 +377,6 @@ local function resolve_steam_tank_name()
   end
   return nil
 end
-
 local function read_steam_tank_amount()
   local name = resolve_steam_tank_name()
   if not name then
@@ -405,7 +394,6 @@ local function read_steam_tank_amount()
   warn_once("steam_tank_read:" .. tostring(name), "Steam tank read failed for " .. tostring(name) .. ": " .. tostring(read_err))
   return nil
 end
-
 local function read_reactor_steam_amount()
   local total = 0
   local found = false
@@ -433,9 +421,7 @@ local function read_reactor_steam_amount()
   end
   return nil
 end
-
 local safe_wrapped_call
-
 local function get_available_steam()
   local tank_amount = read_steam_tank_amount()
   if type(tank_amount) == "number" then
@@ -443,7 +429,6 @@ local function get_available_steam()
   end
   return read_reactor_steam_amount()
 end
-
 local function get_total_steam_demand()
   local total = 0
   for _, name in ipairs(config.turbines or {}) do
@@ -472,7 +457,6 @@ local function get_total_steam_demand()
   end
   return total
 end
-
 local function reactor_low_water(reactor)
   if not reactor or not reactor.getCoolantAmount or not reactor.getCoolantAmountMax then
     return false
@@ -484,7 +468,6 @@ local function reactor_low_water(reactor)
   end
   return (amount / max) <= config.safety.min_water
 end
-
 local function ramp_towards(current, target, step)
   if current == nil then return target end
   local delta = target - current
@@ -496,7 +479,6 @@ local function ramp_towards(current, target, step)
   end
   return current - step
 end
-
 local function has_method(methods, method)
   for _, name in ipairs(methods or {}) do
     if name == method then
@@ -505,18 +487,15 @@ local function has_method(methods, method)
   end
   return false
 end
-
 safe_wrapped_call = function(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then
     return false, "missing method"
   end
   return pcall(obj[method], ...)
 end
-
 local function has_reactor_rod_write_path(caps)
   return caps and (caps.setControlRodsLevels or caps.setAllControlRodLevels or caps.setControlRodLevel or caps.getControlRods)
 end
-
 local function build_capabilities(name)
   local ok, methods = pcall(peripheral.getMethods, name)
   if not ok or type(methods) ~= "table" then
@@ -543,7 +522,6 @@ local function build_capabilities(name)
     setControlRodLevel = has_method(methods, "setControlRodLevel")
   }
 end
-
 local function read_turbine_rpm(turbine, caps)
   if not turbine then
     return nil, "NO_TURBINE"
@@ -562,7 +540,6 @@ local function read_turbine_rpm(turbine, caps)
   end
   return nil, "RPM_UNAVAILABLE"
 end
-
 local function read_turbine_flow(turbine, caps)
   if not turbine then
     return nil, "NO_TURBINE"
@@ -581,7 +558,6 @@ local function read_turbine_flow(turbine, caps)
   end
   return nil, "FLOW_UNAVAILABLE"
 end
-
 local function init_turbine_ctrl()
   for key in pairs(turbine_ctrl) do
     turbine_ctrl[key] = nil
@@ -610,7 +586,6 @@ local function init_turbine_ctrl()
     log("INFO", "Controlling turbine: " .. name)
   end
 end
-
 local function get_device_caps(kind, name)
   capability_cache[kind] = capability_cache[kind] or {}
   if not capability_cache[kind][name] or peripheral.isPresent(name) then
@@ -618,7 +593,6 @@ local function get_device_caps(kind, name)
   end
   return capability_cache[kind][name]
 end
-
 local function setReactorActive(reactor, caps, active)
   if caps.setActive then
     reactor.setActive(active)
@@ -626,7 +600,6 @@ local function setReactorActive(reactor, caps, active)
   end
   return false
 end
-
 local function setTurbineFlow(turbine, caps, rate)
   local clamped = clamp_turbine_flow(rate)
   if caps.setFluidFlowRate or type(turbine.setFluidFlowRate) == "function" then
@@ -644,7 +617,6 @@ local function setTurbineFlow(turbine, caps, rate)
   end
   return false, "NO_FLOW_API"
 end
-
 local function setInductor(turbine, caps, engaged)
   if caps.setInductorEngaged then
     turbine.setInductorEngaged(engaged)
@@ -652,7 +624,6 @@ local function setInductor(turbine, caps, engaged)
   end
   return false
 end
-
 local function setTurbineActive(turbine, caps, active)
   if caps.setActive then
     turbine.setActive(active)
@@ -660,7 +631,6 @@ local function setTurbineActive(turbine, caps, active)
   end
   return true
 end
-
 local function ensure_reactor_ctrl(name)
   local ctrl = reactor_ctrl[name]
   if not ctrl then
@@ -669,7 +639,6 @@ local function ensure_reactor_ctrl(name)
   end
   return ctrl
 end
-
 local function init_reactor_ctrl()
   reactor_ctrl = {}
   for _, name in ipairs(config.reactors or {}) do
@@ -681,7 +650,6 @@ local function init_reactor_ctrl()
     }
   end
 end
-
 function applyReactorRods(target, allow_overmax)
   local now = os.clock()
   if now - last_rod_apply_ts < MIN_APPLY_INTERVAL then
@@ -728,7 +696,6 @@ function applyReactorRods(target, allow_overmax)
   log("INFO", "Applied rods " .. tostring(clamped) .. "%")
   return true
 end
-
 local function apply_initial_reactor_rods()
   for name, ctrl in pairs(reactor_ctrl) do
     ctrl.last_applied = nil
@@ -736,7 +703,6 @@ local function apply_initial_reactor_rods()
   end
   applyReactorRods(INITIAL_ROD_LEVEL, false)
 end
-
 local function read_current_rods()
   for _, name in ipairs(config.reactors or {}) do
     local current_rods = reactor_adapter.read_control_rods(name, CONFIG.LOG_PREFIX)
@@ -752,7 +718,6 @@ local function read_current_rods()
   end
   return nil
 end
-
 local function log_reactor_control_state()
   local now = os.clock()
   if now - last_reactor_debug_log < 5 then
@@ -763,7 +728,6 @@ local function log_reactor_control_state()
   local tick_age = now - last_reactor_tick
   log("DEBUG", "ReactorCtrl state=" .. tostring(current_state) .. " rods=" .. tostring(sample_rods) .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
 end
-
 local function log_reactor_control_tick()
   local sample_demand = last_reactor_demand
   local age = os.clock() - last_rod_change_ts
@@ -778,28 +742,23 @@ local function log_reactor_control_tick()
   )
   log("INFO", "ReactorCtrl demand=" .. tostring(sample_demand))
 end
-
 local function controlReactor()
   local turbine_count = #config.turbines
   if turbine_count == 0 then
     return
   end
-
   local total_steam_demand = get_total_steam_demand()
   local available_steam = get_available_steam()
   if type(available_steam) ~= "number" then
     return
   end
-
   local steam_margin = available_steam - total_steam_demand
   last_reactor_demand = steam_margin
-
   local current_rods = read_current_rods()
   if type(current_rods) ~= "number" then
     log("ERROR", "Reactor control rods unreadable")
     return
   end
-
   local rod_cfg = config.rails and config.rails.reactor_rods or {}
   local smoothed_margin = rails.smooth(reactor_rails_state, "steam_margin", steam_margin, rod_cfg.ema_alpha)
   local target_rods, direction = rails.step(current_rods, smoothed_margin, reactor_rails_state, rod_cfg, os.clock())
@@ -815,7 +774,6 @@ local function controlReactor()
     log("INFO", string.format("ReactorCtrl margin=%.1f rods=%d", steam_margin, target_rods))
   end
 end
-
 local function updateReactorControl()
   local now = os.clock()
   log("DEBUG", "Reactor control tick")
@@ -831,7 +789,6 @@ local function updateReactorControl()
   controlReactor()
   log_reactor_control_tick()
 end
-
 function warn_once(key, message)
   if warned[key] then
     return
@@ -839,12 +796,10 @@ function warn_once(key, message)
   warned[key] = true
   log("WARN", message)
 end
-
 local function warn_unsupported(name, reason)
   local suffix = reason and (" (" .. tostring(reason) .. ")") or ""
   warn_once("device_unsupported:" .. name .. ":" .. tostring(reason or "generic"), "Device unsupported by API: " .. name .. suffix)
 end
-
 local function turbine_has_flow_setter(turbine, caps)
   if caps and (caps.setFluidFlowRate or caps.setFluidFlowRateMax) then
     return true, "capability-cache"
@@ -863,7 +818,6 @@ local function turbine_has_flow_setter(turbine, caps)
   end
   return false, "missing-flow-setter"
 end
-
 local function read_turbine_inductor_state(turbine, caps)
   if turbine and caps and caps.getInductorEngaged and turbine.getInductorEngaged then
     local ok, value = safe_wrapped_call(turbine, "getInductorEngaged")
@@ -871,7 +825,6 @@ local function read_turbine_inductor_state(turbine, caps)
   end
   return nil, "INDUCTOR_UNAVAILABLE"
 end
-
 local function update_inductor_for_rpm(name, turbine, caps, rpm)
   local ctrl = get_turbine_ctrl(name)
   local measured_inductor, measured_api = read_turbine_inductor_state(turbine, caps)
@@ -910,9 +863,21 @@ local function update_inductor_for_rpm(name, turbine, caps, rpm)
   ctrl.inductor_engaged = engaged
   state.last_change_ts = now
   local ok, applied = pcall(setInductor, turbine, caps, engaged)
+  if ok and applied then
+    local reason = "TARGET_TRACKING"
+    if ctrl.mode == "OVERSPEED_BRAKE" then
+      reason = "OVERSPEED_BRAKE"
+    end
+    ctrl.last_coil_reason = reason
+    log("INFO", ("Turbine coil name=%s engaged=%s reason=%s rpm=%s"):format(
+      tostring(name),
+      tostring(engaged),
+      tostring(reason),
+      tostring(rpm)
+    ))
+  end
   return ok, applied, measured_api
 end
-
 local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   local rail_cfg = config.rails and config.rails.turbine_flow or {}
   local flow_state = ctrl.rails and ctrl.rails.flow or rails.new_state()
@@ -951,7 +916,9 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     ctrl.pending_flow_since,
     now_ts,
     rail_cfg.settle_timeout_s,
-    rail_cfg.confirm_tolerance
+    rail_cfg.confirm_tolerance,
+    ctrl.pending_retries,
+    rail_cfg.readback_retry_cap
   )
   if defer_cooldown then
     flow_cfg = utils.deep_copy(rail_cfg)
@@ -994,8 +961,8 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     coil_engaged = ctrl.inductor_engaged,
     band_rpm = hold_band,
     trim_trigger_rpm = trim_trigger,
-    trim_up_step = rail_cfg.target_trim_step_up or 25,
-    trim_down_step = rail_cfg.target_trim_step_down or 50
+    trim_up_step = rail_cfg.target_trim_step_up or 50,
+    trim_down_step = rail_cfg.target_trim_step_down or 75
   })
   if (not overspeed_state.active) and target_band and target_band.in_band then
     next_flow = target_band.flow
@@ -1056,7 +1023,17 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     decision.defer_cooldown = true
     decision.defer_reason = defer_reason
   end
-  ctrl.target_holding_active = (not overspeed_state.active) and target_band and target_band.in_band or false
+  local hold_sample_target = math.max(1, rail_cfg.target_trim_hold_samples or 2)
+  if (not overspeed_state.active) and target_band and target_band.in_band and target_band.mode == "HOLDING_TARGET_ACTIVE" then
+    ctrl.target_hold_hits = (ctrl.target_hold_hits or 0) + 1
+  else
+    ctrl.target_hold_hits = 0
+  end
+  ctrl.target_holding_active = (not overspeed_state.active)
+    and target_band
+    and target_band.in_band
+    and (target_band.mode ~= "HOLDING_TARGET_ACTIVE" or ctrl.target_hold_hits >= hold_sample_target)
+    or false
   ctrl.target_band_status = overspeed_state.active and "OVERSPEED_BRAKE" or (target_band and target_band.mode or "TRACKING")
   if ctrl.target_holding_active and type(ctrl.target_band_status) == "string" then
     ctrl.mode = ctrl.target_band_status
@@ -1073,7 +1050,6 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   end
   return ctrl.requested_flow, ctrl.mode, decision, smoothed_rpm
 end
-
 local function enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
   if type(decision) ~= "table" or decision.overspeed_brake ~= true then
     return true, "not-required"
@@ -1092,7 +1068,6 @@ local function enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
   end
   return false, "overspeed-coil-set-failed:" .. tostring(applied)
 end
-
 local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local ctrl = get_turbine_ctrl(name)
   if type(rpm) == "number" then
@@ -1139,6 +1114,20 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, requested_flow)
   local overspeed_coil_ok, overspeed_coil_reason = enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
   local observed_flow, flow_reader = read_turbine_flow(turbine, caps)
+  local rail_cfg = config.rails and config.rails.turbine_flow or {}
+  local fast_rereads = math.max(0, rail_cfg.readback_fast_rereads or 2)
+  local flow_tolerance = rail_cfg.confirm_tolerance or 1
+  local attempt = 0
+  while type(observed_flow) == "number"
+      and math.abs(requested_flow - observed_flow) > flow_tolerance
+      and attempt < fast_rereads do
+    local retry_flow, retry_reader = read_turbine_flow(turbine, caps)
+    if type(retry_flow) == "number" then
+      observed_flow = retry_flow
+      flow_reader = retry_reader
+    end
+    attempt = attempt + 1
+  end
   if type(observed_flow) == "number" then
     ctrl.confirmed_flow = clamp_turbine_flow(observed_flow)
     if not ctrl.startup_synced then
@@ -1146,7 +1135,6 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     end
   end
   local confirmed_flow = ctrl.confirmed_flow
-  local flow_tolerance = (config.rails and config.rails.turbine_flow and config.rails.turbine_flow.confirm_tolerance) or 1
   local flow_settled = turbine_regulator.flows_match(requested_flow, confirmed_flow, flow_tolerance)
   local pending_settled = turbine_regulator.flows_match(ctrl.pending_expected_flow, confirmed_flow, flow_tolerance)
   if previous_requested ~= requested_flow then
@@ -1160,10 +1148,24 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     ctrl.pending_flow_since = 0
     ctrl.pending_expected_flow = requested_flow
   end
-
-  local rail_cfg = config.rails and config.rails.turbine_flow or {}
   local effective_min_samples = rail_cfg.effective_min_samples or 3
   local effective_min_flow, effective_min_changed = turbine_regulator.update_effective_min(ctrl, requested_flow, confirmed_flow, effective_min_samples)
+  if decision and decision.overspeed_brake and requested_flow == 0 and type(confirmed_flow) == "number" and confirmed_flow > flow_tolerance then
+    ctrl.overspeed_floor_hits = (ctrl.overspeed_floor_hits or 0) + 1
+  else
+    ctrl.overspeed_floor_hits = 0
+  end
+  local readback_state, readback_detail = turbine_regulator.classify_confirmation({
+    requested_flow = requested_flow,
+    confirmed_flow = confirmed_flow,
+    pending_expected_flow = ctrl.pending_expected_flow,
+    tolerance = flow_tolerance,
+    pending_retries = ctrl.pending_retries,
+    settle_timeout_s = rail_cfg.settle_timeout_s or 0,
+    pending_since = ctrl.pending_flow_since,
+    now_ts = now_ts,
+    floor_hint = (ctrl.overspeed_floor_hits or 0) >= effective_min_samples
+  })
   ctrl.last_requested_flow = requested_flow
   local direction = mode
   local reason = decision and decision.reason or "NONE"
@@ -1225,6 +1227,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " set_ok=" .. tostring(ok)
       .. " flow_read=" .. tostring(observed_flow)
       .. " flow_api=" .. tostring(flow_reader)
+      .. " flow_read_attempts=" .. tostring(1 + attempt)
       .. " flow_settled=" .. tostring(flow_settled)
       .. " pending_settled=" .. tostring(pending_settled)
       .. " pending_retries=" .. tostring(ctrl.pending_retries)
@@ -1253,6 +1256,9 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
       .. " overspeed_threshold_rpm=" .. tostring(decision and decision.overspeed_threshold_rpm or "n/a")
       .. " overspeed_coil_ok=" .. tostring(overspeed_coil_ok)
       .. " overspeed_coil_reason=" .. tostring(overspeed_coil_reason)
+      .. " overspeed_floor_hits=" .. tostring(ctrl.overspeed_floor_hits or 0)
+      .. " readback_state=" .. tostring(readback_state)
+      .. " readback_detail=" .. tostring(readback_detail)
       .. " steam_input=" .. tostring(steam_input)
       .. " active=" .. tostring(active_state)
       .. " max_flow_limit=" .. tostring(ctrl.effective_max_flow or MAX_FLOW)
@@ -1270,6 +1276,15 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   if requested_flow == 0 and type(effective_min_flow) == "number" and effective_min_changed then
     log("INFO", "Turbine " .. name .. " effective minimum flow detected at " .. tostring(effective_min_flow))
   end
+  if decision and decision.overspeed_brake and requested_flow == 0 and type(confirmed_flow) == "number" and confirmed_flow > flow_tolerance then
+    log("WARN", ("Overspeed brake pending name=%s requested_flow=0 confirmed_flow=%s readback_state=%s detail=%s retries=%s"):format(
+      tostring(name),
+      tostring(confirmed_flow),
+      tostring(readback_state),
+      tostring(readback_detail),
+      tostring(ctrl.pending_retries)
+    ))
+  end
   if not ok then
     return false, applied, setter, "FLOW_SET_CALL_FAILED"
   end
@@ -1278,11 +1293,9 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   end
   return true, true, setter, "FLOW_SET_OK"
 end
-
 local set_reactors_active
 local set_turbines_active
 local apply_safe_controls
-
 local function updateActuators()
   if current_state ~= STATE.AUTONOM then
     return
@@ -1318,7 +1331,6 @@ local function updateActuators()
       ::continue_reactor::
     end
   end
-
   local target_rpm = get_target_rpm()
   for name, ctrl in pairs(turbine_ctrl) do
     local turbine
@@ -1371,7 +1383,6 @@ local function updateActuators()
     end
   end
 end
-
 local function updateControl()
   if current_state ~= STATE.AUTONOM and current_state ~= STATE.MASTER then
     return
@@ -1401,7 +1412,6 @@ local function updateControl()
       ::continue_control_reactor::
     end
   end
-
   local target_rpm = get_target_rpm()
   local eval_total, eval_decision, eval_skipped = 0, 0, 0
   local skip_reasons = {}
@@ -1481,19 +1491,16 @@ end
 local function adjust_turbines()
   updateControl()
 end
-
 local function adjust_reactors()
   updateReactorControl()
 end
-
 local allowed_transitions = {
   [STATE.INIT] = { [STATE.AUTONOM] = true, [STATE.MASTER] = true, [STATE.SAFE] = true },
   [STATE.MASTER] = { [STATE.AUTONOM] = true, [STATE.SAFE] = true },
   [STATE.AUTONOM] = { [STATE.MASTER] = true, [STATE.SAFE] = true },
   [STATE.SAFE] = {}
 }
-
-local function setState(new_state)
+local function setState(new_state, transition_reason)
   if current_state == new_state then
     return false
   end
@@ -1503,44 +1510,42 @@ local function setState(new_state)
   local previous_state = current_state
   current_state = new_state
   if new_state == STATE.AUTONOM then
-    log("INFO", "Entering AUTONOM mode")
+    log("INFO", "Entering AUTONOM mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
   elseif new_state == STATE.MASTER then
     if previous_state == STATE.AUTONOM then
-      log("INFO", "Master reconnected")
+      log("INFO", "Master reconnected reason=" .. tostring(transition_reason or "STATE_REQUEST"))
     else
-      log("INFO", "Entering MASTER mode")
+      log("INFO", "Entering MASTER mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
     end
   elseif new_state == STATE.SAFE then
-    log("INFO", "Entering SAFE mode")
+    log("INFO", "Entering SAFE mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
     apply_safe_controls()
-    set_reactors_active(false)
-    set_turbines_active(false)
+    set_reactors_active(false, "SAFE_MODE")
+    set_turbines_active(false, "SAFE_MODE")
   else
-    log("INFO", "Entering INIT mode")
+    log("INFO", "Entering INIT mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
   end
   return true
 end
-
 local function apply_mode(mode)
   if mode == STATE.AUTONOM then
-    if setState(STATE.AUTONOM) then
+    if setState(STATE.AUTONOM, "MODE_APPLY") then
       node_state_machine:transition(constants.node_states.AUTONOM)
     end
   elseif mode == STATE.MASTER then
-    if setState(STATE.MASTER) then
+    if setState(STATE.MASTER, "MODE_APPLY") then
       local current = node_state_machine.state()
       if current == constants.node_states.OFF or current == constants.node_states.AUTONOM then
         node_state_machine:transition(constants.node_states.STARTUP)
       end
     end
   elseif mode == STATE.SAFE then
-    setState(STATE.SAFE)
+    setState(STATE.SAFE, "MODE_APPLY")
     if node_state_machine.state() ~= constants.node_states.EMERGENCY then
       node_state_machine:transition(constants.node_states.EMERGENCY)
     end
   end
 end
-
 local function has_off_modules(kind)
   for _, module in pairs(modules) do
     if module.type == kind and module.state == "OFF" then
@@ -1549,7 +1554,6 @@ local function has_off_modules(kind)
   end
   return false
 end
-
 local function request_startup_if_needed(reason)
   if current_state ~= STATE.MASTER then
     return false
@@ -1574,7 +1578,6 @@ local function request_startup_if_needed(reason)
   node_state_machine:transition(constants.node_states.STARTUP)
   return true
 end
-
 cache = function()
   local function normalize_bound_names(kind, names)
     local normalized = {}
@@ -1629,7 +1632,6 @@ function dumpPeripherals()
     end
   end
 end
-
 local function build_binding_signature(reactors, turbines)
   local ids = {}
   for _, entry in ipairs(reactors or {}) do
@@ -1641,7 +1643,6 @@ local function build_binding_signature(reactors, turbines)
   table.sort(ids)
   return table.concat(ids, "|")
 end
-
 local function refresh_bindings()
   local reactors = registry:get_bound_devices("reactor")
   local turbines = registry:get_bound_devices("turbine")
@@ -1666,7 +1667,6 @@ local function refresh_bindings()
   build_modules()
   refresh_module_peripherals()
 end
-
 local function discover()
   local names = peripheral.getNames() or {}
   table.sort(names)
@@ -1966,7 +1966,7 @@ function hello()
   comms:send_hello(caps)
 end
 
-set_reactors_active = function(active)
+set_reactors_active = function(active, reason)
   local reactors = peripherals and peripherals.reactors or {}
   if not next(reactors) then
     warn_once("reactors_missing", binding.missing_devices_message("reactor", binding.build_policy(configured_reactors, configured_turbines)))
@@ -1978,11 +1978,13 @@ set_reactors_active = function(active)
       warn_once("reactor_active:" .. name, "Reactor activate failed for " .. name .. ": " .. tostring(result))
     elseif not result then
       warn_unsupported(name)
+    else
+      log("INFO", ("Reactor active name=%s active=%s reason=%s"):format(tostring(name), tostring(active), tostring(reason or "UNSPECIFIED")))
     end
   end
 end
 
-set_turbines_active = function(active)
+set_turbines_active = function(active, reason)
   local turbines = peripherals and peripherals.turbines or {}
   if not next(turbines) then
     warn_once("turbines_missing", binding.missing_devices_message("turbine", binding.build_policy(configured_reactors, configured_turbines)))
@@ -1992,6 +1994,17 @@ set_turbines_active = function(active)
     local ok, result = pcall(setTurbineActive, turbine, caps, active)
     if not ok then
       warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(result))
+    else
+      local ctrl = get_turbine_ctrl(name)
+      if ctrl.last_active_command ~= active or ctrl.last_active_command_reason ~= reason then
+        ctrl.last_active_command = active
+        ctrl.last_active_command_reason = reason
+        log("INFO", ("Turbine active name=%s active=%s reason=%s"):format(
+          tostring(name),
+          tostring(active),
+          tostring(reason or "UNSPECIFIED")
+        ))
+      end
     end
   end
 end
@@ -2052,8 +2065,8 @@ end
 function scram()
   apply_safe_controls()
   if current_state == STATE.SAFE then
-    set_reactors_active(false)
-    set_turbines_active(false)
+    set_reactors_active(false, "SCRAM_SAFE_STATE")
+    set_turbines_active(false, "SCRAM_SAFE_STATE")
   end
 end
 
@@ -2108,7 +2121,7 @@ end
 function monitor_master()
   local connected = is_master_connected()
   if not connected then
-    if setState(STATE.AUTONOM) then
+    if setState(STATE.AUTONOM, "MASTER_TIMEOUT_AUTONOM_FALLBACK") then
       log("WARN", "Master timeout detected, switching to AUTONOM")
       node_state_machine:transition(constants.node_states.AUTONOM)
     end
@@ -2227,7 +2240,6 @@ function handle_startup_timeout()
   active_startup = nil
   startup_queue = {}
 end
-
 local states
 
 function build_state_context()
@@ -2283,7 +2295,6 @@ function build_command_context()
     set_last_command_ts = function(value) last_command_ts = value end
   }
 end
-
 local handle_command
 
 function send_heartbeat()
@@ -2306,14 +2317,13 @@ function control_tick()
   update_monitor()
   update_status_snapshot()
 end
-
 local function init()
   dumpPeripherals()
   discover()
   init_turbine_ctrl()
   init_reactor_ctrl()
-  set_reactors_active(true)
-  set_turbines_active(true)
+  set_reactors_active(true, "RT_STARTUP")
+  set_turbines_active(true, "RT_STARTUP")
   apply_initial_reactor_rods()
   services = service_manager.new({ log_prefix = "RT" })
   handle_command = command_handler.new(build_command_context())
