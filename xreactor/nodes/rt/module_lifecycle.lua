@@ -250,10 +250,13 @@ function M.update_module_states(ctx)
           if ctx.current_state() ~= ctx.STATE.SAFE then
             if limit == "WATER" then
               ctx.log("ERROR", "Safety trigger: reactor coolant level too low")
+              ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE")
+              ctx.setState(ctx.STATE.SAFE, "SAFETY_COOLANT_LOW")
             else
               ctx.log("ERROR", "Safety trigger: reactor temperature limit exceeded")
+              ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_TEMP action=ENTER_SAFE")
+              ctx.setState(ctx.STATE.SAFE, "SAFETY_TEMPERATURE_HIGH")
             end
-            ctx.setState(ctx.STATE.SAFE)
           end
           if ctx.node_state_machine:state() ~= ctx.constants.node_states.EMERGENCY then
             ctx.node_state_machine:transition(ctx.constants.node_states.EMERGENCY)

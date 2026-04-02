@@ -118,24 +118,58 @@ if not regulator.flows_match(200, 201, 1) then
   error('flow match should allow tolerance window')
 end
 
-local defer_a, reason_a = regulator.should_defer_cooldown(0, 200, 10.0, 10.2, 0.8, 1)
+local defer_a, reason_a = regulator.should_defer_cooldown(0, 200, 10.0, 10.2, 0.8, 1, 0, 3)
 if not defer_a or reason_a ~= 'WAITING_CONFIRM' then
   error('cooldown should defer while flow change is pending confirmation')
 end
 
-local defer_b, reason_b = regulator.should_defer_cooldown(0, 200, 10.0, 11.1, 0.8, 1)
+local defer_b, reason_b = regulator.should_defer_cooldown(0, 200, 10.0, 11.1, 0.8, 1, 0, 3)
 if defer_b or reason_b ~= 'SETTLE_TIMEOUT' then
   error('cooldown defer should end after settle timeout')
 end
 
-local defer_c, reason_c = regulator.should_defer_cooldown(500, 500, 10.0, 10.1, 0.8, 1)
+local defer_c, reason_c = regulator.should_defer_cooldown(500, 500, 10.0, 10.1, 0.8, 1, 0, 3)
 if defer_c or reason_c ~= 'SETTLED' then
   error('cooldown must not defer for settled flow values')
 end
 
-local defer_d, reason_d = regulator.should_defer_cooldown(0, 200, nil, 5.0, 0.8, 1)
+local defer_d, reason_d = regulator.should_defer_cooldown(0, 200, nil, 5.0, 0.8, 1, 0, 3)
 if not defer_d or reason_d ~= 'WAITING_CONFIRM' then
   error('cooldown defer must handle missing pending timestamp during readback lag')
+end
+
+local defer_e, reason_e = regulator.should_defer_cooldown(0, 200, 10.0, 10.1, 0.8, 1, 3, 3)
+if defer_e or reason_e ~= 'RETRY_CAP_REACHED' then
+  error('cooldown defer must stop after retry cap to avoid control lock-up')
+end
+
+local confirm_a, detail_confirm_a = regulator.classify_confirmation({
+  requested_flow = 0,
+  confirmed_flow = 200,
+  pending_expected_flow = 0,
+  tolerance = 1,
+  pending_retries = 4,
+  settle_timeout_s = 0.8,
+  pending_since = 10.0,
+  now_ts = 11.0,
+  floor_hint = true
+})
+if confirm_a ~= 'READBACK_FLOOR' or detail_confirm_a ~= 'API_OR_MOD_FLOOR_HINT' then
+  error('overspeed zero request with repeated non-zero readback must classify as floor hint')
+end
+
+local confirm_b, detail_confirm_b = regulator.classify_confirmation({
+  requested_flow = 0,
+  confirmed_flow = 250,
+  pending_expected_flow = 0,
+  tolerance = 1,
+  pending_retries = 0,
+  settle_timeout_s = 1.0,
+  pending_since = 10.0,
+  now_ts = 10.2
+})
+if confirm_b ~= 'READBACK_STALE' or detail_confirm_b ~= 'READBACK_LAG' then
+  error('fresh mismatch before timeout should classify as stale readback lag')
 end
 
 local tracker = { effective_min_hits = 0, effective_min_flow = nil }

@@ -85,6 +85,21 @@ local function ensure_turbine_ctrl(name)
   if ctrl.flow_limit_state == nil then
     ctrl.flow_limit_state = "NONE"
   end
+  if ctrl.target_hold_hits == nil then
+    ctrl.target_hold_hits = 0
+  end
+  if ctrl.last_active_command == nil then
+    ctrl.last_active_command = nil
+  end
+  if ctrl.last_active_command_reason == nil then
+    ctrl.last_active_command_reason = nil
+  end
+  if ctrl.last_coil_reason == nil then
+    ctrl.last_coil_reason = nil
+  end
+  if ctrl.overspeed_floor_hits == nil then
+    ctrl.overspeed_floor_hits = 0
+  end
   return ctrl
 end
 

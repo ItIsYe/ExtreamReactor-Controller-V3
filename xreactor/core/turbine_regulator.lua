@@ -50,9 +50,14 @@ function regulator.flows_match(requested_flow, confirmed_flow, tolerance)
   return math.abs(requested_flow - confirmed_flow) <= tol
 end
 
-function regulator.should_defer_cooldown(requested_flow, confirmed_flow, pending_since, now_ts, settle_timeout_s, tolerance)
+function regulator.should_defer_cooldown(requested_flow, confirmed_flow, pending_since, now_ts, settle_timeout_s, tolerance, pending_retries, max_retry_defer)
   if regulator.flows_match(requested_flow, confirmed_flow, tolerance) then
     return false, "SETTLED"
+  end
+  local retries = math.max(0, math.floor(tonumber(pending_retries) or 0))
+  local retry_cap = math.max(0, math.floor(tonumber(max_retry_defer) or 0))
+  if retry_cap > 0 and retries >= retry_cap then
+    return false, "RETRY_CAP_REACHED"
   end
   local now = tonumber(now_ts) or 0
   local since = tonumber(pending_since) or now
@@ -159,6 +164,36 @@ function regulator.classify_bottleneck(input)
   return "NONE", "NO_LIMITER_DETECTED"
 end
 
+function regulator.classify_confirmation(input)
+  local requested = sanitize_number(type(input) == "table" and input.requested_flow or nil, 0)
+  local confirmed = sanitize_number(type(input) == "table" and input.confirmed_flow or nil, requested)
+  local pending_expected = sanitize_number(type(input) == "table" and input.pending_expected_flow or nil, requested)
+  local tolerance = math.max(0, sanitize_number(type(input) == "table" and input.tolerance or nil, 1))
+  local pending_retries = math.max(0, math.floor(sanitize_number(type(input) == "table" and input.pending_retries or nil, 0)))
+  local settle_timeout_s = math.max(0, sanitize_number(type(input) == "table" and input.settle_timeout_s or nil, 0))
+  local pending_since = sanitize_number(type(input) == "table" and input.pending_since or nil, 0)
+  local now_ts = sanitize_number(type(input) == "table" and input.now_ts or nil, pending_since)
+  local floor_hint = type(input) == "table" and input.floor_hint or false
+
+  if math.abs(requested - confirmed) <= tolerance then
+    return "CONFIRMED_MATCH", "API_CONFIRMED_WRITE"
+  end
+  if math.abs(pending_expected - confirmed) <= tolerance then
+    return "PENDING_CONFIRM", "PENDING_EXPECTED_MATCH"
+  end
+  local age = math.max(0, now_ts - pending_since)
+  if settle_timeout_s > 0 and age < settle_timeout_s and pending_retries <= 1 then
+    return "READBACK_STALE", "READBACK_LAG"
+  end
+  if floor_hint and requested == 0 and confirmed > 0 then
+    return "READBACK_FLOOR", "API_OR_MOD_FLOOR_HINT"
+  end
+  if requested == 0 and confirmed > 0 then
+    return "CONFIRMED_MISMATCH", "ZERO_REQUEST_NOT_CONFIRMED"
+  end
+  return "CONFIRMED_MISMATCH", "WRITE_ACCEPTED_READBACK_MISMATCH"
+end
+
 function regulator.target_band_state(input)
   local rpm = sanitize_number(type(input) == "table" and input.rpm or nil, 0)
   local live_rpm = sanitize_number(type(input) == "table" and input.live_rpm or nil, rpm)
@@ -169,8 +204,8 @@ function regulator.target_band_state(input)
   local max_flow = sanitize_number(type(input) == "table" and input.max_flow or nil, 2000)
   local band = math.max(0, sanitize_number(type(input) == "table" and input.band_rpm or nil, 20))
   local trim_trigger = math.max(0, sanitize_number(type(input) == "table" and input.trim_trigger_rpm or nil, 5))
-  local trim_up = math.max(1, sanitize_number(type(input) == "table" and input.trim_up_step or nil, 25))
-  local trim_down = math.max(1, sanitize_number(type(input) == "table" and input.trim_down_step or nil, 25))
+  local trim_up = math.max(1, sanitize_number(type(input) == "table" and input.trim_up_step or nil, 50))
+  local trim_down = math.max(1, sanitize_number(type(input) == "table" and input.trim_down_step or nil, 75))
   local coil_engaged = type(input) == "table" and input.coil_engaged == true
 
   local error_smooth = target - rpm
