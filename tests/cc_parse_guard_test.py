@@ -9,5 +9,9 @@ subprocess.run([
     str(repo / 'scripts' / 'cc_parse_guard.py'),
     '--file',
     'xreactor/nodes/rt/main.lua',
+    '--chunk-limit',
+    '160',
+    '--function-limit',
+    '120',
 ], cwd=repo, check=True)
 print('cc_parse_guard_test.py: ok')

@@ -58,7 +58,8 @@ def count_local_names(toks, i):
 
 
 def analyze(path: Path):
-    toks=tokens(path.read_text(encoding='utf-8'))
+    source = path.read_text(encoding='utf-8')
+    toks=tokens(source)
     block_stack=[]
     fn_stack=[]  # dict(line, locals)
     chunk_locals=0
