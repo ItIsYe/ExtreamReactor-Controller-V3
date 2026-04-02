@@ -8,7 +8,7 @@ return {
       { path = "core/bootstrap.lua", size_bytes = 10874, hash = "4a180335" },
       { path = "core/comms.lua", size_bytes = 20223, hash = "903b39da" },
       { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
-      { path = "core/logger.lua", size_bytes = 30463, hash = "041ae093" },
+      { path = "core/logger.lua", size_bytes = 30592, hash = "1688d3c8" },
       { path = "core/network.lua", size_bytes = 14002, hash = "2fba2f3c" },
       { path = "core/protocol.lua", size_bytes = 6423, hash = "6c324af5" },
       { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9" },
@@ -70,7 +70,7 @@ return {
       { path = "core/control_rails.lua", size_bytes = 4278, hash = "149674ad" },
       { path = "core/fluid.lua", size_bytes = 1058, hash = "b77c46ca" },
       { path = "core/turbine_ctrl.lua", size_bytes = 2334, hash = "c16939bd" },
-      { path = "core/turbine_regulator.lua", size_bytes = 10730, hash = "9219f1b3" },
+      { path = "core/turbine_regulator.lua", size_bytes = 10700, hash = "52825d10" },
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 4795, hash = "56a3dea5" },
