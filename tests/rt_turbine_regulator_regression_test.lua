@@ -430,4 +430,22 @@ if coil_max_trim_state.mode ~= 'TARGET_TRIM_DOWN' or coil_max_trim_state.flow ~=
   error('coil-engaged target-band must still trim down at max flow to avoid HOLD+2000')
 end
 
+local underspeed_max_trim_state = regulator.target_band_state({
+  rpm = 885,
+  live_rpm = 885,
+  target_rpm = 900,
+  requested_flow = 2000,
+  confirmed_flow = 2000,
+  min_flow = 250,
+  max_flow = 2000,
+  band_rpm = 30,
+  trim_trigger_rpm = 6,
+  trim_up_step = 25,
+  trim_down_step = 50,
+  coil_engaged = true
+})
+if underspeed_max_trim_state.mode ~= 'TARGET_TRIM_DOWN' or underspeed_max_trim_state.flow ~= 1950 then
+  error('in-band underspeed at max flow must still trim down to escape HOLD+2000 live lock')
+end
+
 print('rt_turbine_regulator_regression_test.lua: ok')
