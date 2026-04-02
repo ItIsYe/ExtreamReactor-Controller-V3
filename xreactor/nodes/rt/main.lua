@@ -72,6 +72,7 @@ local startup_diagnostics = require("nodes.rt.startup_diagnostics")
 local module_lifecycle = require("nodes.rt.module_lifecycle")
 local command_handler = require("nodes.rt.command_handler")
 local config_normalizer = require("nodes.rt.config_normalizer")
+local flow_apply_helpers = require("nodes.rt.flow_apply_helpers")
 local INFO = "INFO"
 local DEBUG = "DEBUG"
 local WARN = "WARN"
@@ -1068,6 +1069,7 @@ local function enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
   end
   return false, "overspeed-coil-set-failed:" .. tostring(applied)
 end
+
 local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local ctrl = get_turbine_ctrl(name)
   if type(rpm) == "number" then
@@ -1094,78 +1096,17 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   end
   local old_flow = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow
   local requested_flow, mode, decision, smoothed_rpm = update_turbine_flow_state(rpm, target_rpm, ctrl)
-  local steam_input = nil
-  if turbine and turbine.getLastInputFluidRate then
-    local steam_ok, steam_value = safe_wrapped_call(turbine, "getLastInputFluidRate")
-    if steam_ok and type(steam_value) == "number" then
-      steam_input = steam_value
-    end
-  end
-  local active_state = nil
-  if caps and caps.getActive and turbine and turbine.getActive then
-    local active_ok, active_value = safe_wrapped_call(turbine, "getActive")
-    if active_ok and type(active_value) == "boolean" then active_state = active_value end
-  end
+  local steam_input, active_state = flow_apply_helpers.sample_turbine_runtime_metrics(turbine, caps, safe_wrapped_call)
   local now_ts = os.clock()
-  local previous_requested = ctrl.pending_expected_flow
-  if type(previous_requested) ~= "number" then
-    previous_requested = ctrl.last_requested_flow
-  end
   local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, requested_flow)
   local overspeed_coil_ok, overspeed_coil_reason = enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
-  local observed_flow, flow_reader = read_turbine_flow(turbine, caps)
   local rail_cfg = config.rails and config.rails.turbine_flow or {}
-  local fast_rereads = math.max(0, rail_cfg.readback_fast_rereads or 2)
-  local flow_tolerance = rail_cfg.confirm_tolerance or 1
-  local attempt = 0
-  while type(observed_flow) == "number"
-      and math.abs(requested_flow - observed_flow) > flow_tolerance
-      and attempt < fast_rereads do
-    local retry_flow, retry_reader = read_turbine_flow(turbine, caps)
-    if type(retry_flow) == "number" then
-      observed_flow = retry_flow
-      flow_reader = retry_reader
-    end
-    attempt = attempt + 1
-  end
-  if type(observed_flow) == "number" then
-    ctrl.confirmed_flow = clamp_turbine_flow(observed_flow)
-    if not ctrl.startup_synced then
-      ctrl.startup_synced = true
-    end
-  end
+  local observed_flow, flow_reader, attempt, flow_tolerance =
+    flow_apply_helpers.capture_turbine_flow_readback(turbine, caps, ctrl, requested_flow, rail_cfg, read_turbine_flow, clamp_turbine_flow)
   local confirmed_flow = ctrl.confirmed_flow
   local flow_settled = turbine_regulator.flows_match(requested_flow, confirmed_flow, flow_tolerance)
-  local pending_settled = turbine_regulator.flows_match(ctrl.pending_expected_flow, confirmed_flow, flow_tolerance)
-  if previous_requested ~= requested_flow then
-    ctrl.pending_flow_since = now_ts
-    ctrl.pending_expected_flow = requested_flow
-    ctrl.pending_retries = 0
-  elseif not pending_settled then
-    ctrl.pending_retries = (ctrl.pending_retries or 0) + 1
-  else
-    ctrl.pending_retries = 0
-    ctrl.pending_flow_since = 0
-    ctrl.pending_expected_flow = requested_flow
-  end
-  local effective_min_samples = rail_cfg.effective_min_samples or 3
-  local effective_min_flow, effective_min_changed = turbine_regulator.update_effective_min(ctrl, requested_flow, confirmed_flow, effective_min_samples)
-  if decision and decision.overspeed_brake and requested_flow == 0 and type(confirmed_flow) == "number" and confirmed_flow > flow_tolerance then
-    ctrl.overspeed_floor_hits = (ctrl.overspeed_floor_hits or 0) + 1
-  else
-    ctrl.overspeed_floor_hits = 0
-  end
-  local readback_state, readback_detail = turbine_regulator.classify_confirmation({
-    requested_flow = requested_flow,
-    confirmed_flow = confirmed_flow,
-    pending_expected_flow = ctrl.pending_expected_flow,
-    tolerance = flow_tolerance,
-    pending_retries = ctrl.pending_retries,
-    settle_timeout_s = rail_cfg.settle_timeout_s or 0,
-    pending_since = ctrl.pending_flow_since,
-    now_ts = now_ts,
-    floor_hint = (ctrl.overspeed_floor_hits or 0) >= effective_min_samples
-  })
+  local pending_settled, effective_min_flow, effective_min_changed, readback_state, readback_detail =
+    flow_apply_helpers.update_turbine_flow_tracking(ctrl, requested_flow, confirmed_flow, flow_tolerance, rail_cfg, now_ts, decision, turbine_regulator)
   ctrl.last_requested_flow = requested_flow
   local direction = mode
   local reason = decision and decision.reason or "NONE"
@@ -1183,18 +1124,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     steam_input = steam_input
   })
   local target_zone_state = ctrl.target_holding_active and "IN_TARGET_BAND" or "OUTSIDE_TARGET_BAND"
-  local target_action = ctrl.target_holding_active and "TARGET_HOLD_STABLE" or "TRACKING_ACTIVE"
-  if decision and decision.overspeed_brake then
-    target_action = "OVERSPEED_BRAKE"
-  elseif tostring(reason) == "TARGET_TRIM_UP" then
-    target_action = "TARGET_TRIM_UP"
-  elseif tostring(reason) == "TARGET_TRIM_DOWN" then
-    target_action = "TARGET_TRIM_DOWN"
-  elseif tostring(reason):find("MIN_LIMIT_OVERSPEED", 1, true) then
-    target_action = "MIN_LIMIT_OVERSPEED"
-  elseif tostring(reason):find("MAX_LIMIT_UNDERSPEED", 1, true) then
-    target_action = "MAX_LIMIT_UNDERSPEED"
-  end
+  local target_action = ctrl.target_holding_active and "TARGET_HOLD_STABLE" or flow_apply_helpers.resolve_target_action(reason, decision)
   local at_max_limit = requested_flow == (ctrl.effective_max_flow or MAX_FLOW)
   local at_min_limit = type(applied_min) == "number" and requested_flow <= applied_min
   local active_trim = target_action == "TARGET_TRIM_UP" or target_action == "TARGET_TRIM_DOWN"
@@ -1209,66 +1139,67 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   else
     ctrl.flow_limit_state = "NONE"
   end
-  log("DEBUG", "TurbineCtrl name=" .. name
-      .. " rpm=" .. tostring(rpm)
-      .. " rpm_smooth=" .. tostring(smoothed_rpm)
-      .. " target_rpm=" .. tostring(target_rpm)
-      .. " old_flow=" .. tostring(old_flow)
-      .. " requested_flow=" .. tostring(requested_flow)
-      .. " confirmed_flow=" .. tostring(confirmed_flow)
-      .. " new_flow=" .. tostring(requested_flow)
-      .. " direction=" .. tostring(direction)
-      .. " reason=" .. tostring(reason)
-      .. " step=" .. tostring(step)
-      .. " clamp_min=" .. tostring(applied_min)
-      .. " clamp_max=" .. tostring(applied_max)
-      .. " set_api=" .. tostring(setter)
-      .. " set_called=" .. tostring(ok and applied)
-      .. " set_ok=" .. tostring(ok)
-      .. " flow_read=" .. tostring(observed_flow)
-      .. " flow_api=" .. tostring(flow_reader)
-      .. " flow_read_attempts=" .. tostring(1 + attempt)
-      .. " flow_settled=" .. tostring(flow_settled)
-      .. " pending_settled=" .. tostring(pending_settled)
-      .. " pending_retries=" .. tostring(ctrl.pending_retries)
-      .. " pending_since=" .. tostring(ctrl.pending_flow_since)
-      .. " pending_expected_flow=" .. tostring(ctrl.pending_expected_flow)
-      .. " cooldown_deferred=" .. tostring(decision and decision.defer_cooldown or false)
-      .. " cooldown_defer_reason=" .. tostring(decision and decision.defer_reason or "n/a")
-      .. " effective_min_flow=" .. tostring(effective_min_flow)
-      .. " effective_min_applied=" .. tostring(type(effective_min_flow) == "number" and requested_flow == effective_min_flow and requested_flow > 0)
-      .. " mode=" .. tostring(mode)
-      .. " regulator_state=" .. tostring(target_action)
-      .. " target_zone_state=" .. tostring(target_zone_state)
-      .. " target_band_active=" .. tostring(ctrl.target_holding_active)
-      .. " target_band_status=" .. tostring(ctrl.target_band_status)
-      .. " target_band_reason=" .. tostring(decision and decision.target_band_mode or "n/a")
-      .. " target_band_error=" .. tostring(decision and decision.target_band_error or "n/a")
-      .. " target_band_live_error=" .. tostring(decision and decision.target_band_live_error or "n/a")
-      .. " target_band_smoothed_error=" .. tostring(decision and decision.target_band_smoothed_error or "n/a")
-      .. " target_holding_active=" .. tostring(hold_active)
-      .. " target_trim_active=" .. tostring(active_trim)
-      .. " flow_trim_direction=" .. tostring(active_trim and (target_action == "TARGET_TRIM_UP" and "UP" or "DOWN") or "NONE")
-      .. " coil=" .. tostring(ctrl.inductor_engaged)
-      .. " coil_api=" .. tostring(ctrl.inductor_state_api or "n/a")
-      .. " overspeed_brake=" .. tostring(decision and decision.overspeed_brake or false)
-      .. " overspeed_rpm=" .. tostring(decision and decision.overspeed_rpm or "n/a")
-      .. " overspeed_threshold_rpm=" .. tostring(decision and decision.overspeed_threshold_rpm or "n/a")
-      .. " overspeed_coil_ok=" .. tostring(overspeed_coil_ok)
-      .. " overspeed_coil_reason=" .. tostring(overspeed_coil_reason)
-      .. " overspeed_floor_hits=" .. tostring(ctrl.overspeed_floor_hits or 0)
-      .. " readback_state=" .. tostring(readback_state)
-      .. " readback_detail=" .. tostring(readback_detail)
-      .. " steam_input=" .. tostring(steam_input)
-      .. " active=" .. tostring(active_state)
-      .. " max_flow_limit=" .. tostring(ctrl.effective_max_flow or MAX_FLOW)
-      .. " at_max_flow=" .. tostring(at_max_limit)
-      .. " at_min_flow=" .. tostring(at_min_limit)
-      .. " down_regulation_limited=" .. tostring(down_limited or (decision and decision.target_band_at_min_limit) or false)
-      .. " up_regulation_limited=" .. tostring(up_limited or (decision and decision.target_band_at_max_limit) or false)
-      .. " flow_limit_state=" .. tostring(ctrl.flow_limit_state)
-      .. " bottleneck=" .. tostring(bottleneck)
-      .. " bottleneck_detail=" .. tostring(bottleneck_detail))
+  flow_apply_helpers.log_turbine_control_metrics({
+    name = name,
+    rpm = rpm,
+    smoothed_rpm = smoothed_rpm,
+    target_rpm = target_rpm,
+    old_flow = old_flow,
+    requested_flow = requested_flow,
+    confirmed_flow = confirmed_flow,
+    direction = direction,
+    reason = reason,
+    step = step,
+    applied_min = applied_min,
+    applied_max = applied_max,
+    setter = setter,
+    set_called = ok and applied,
+    set_ok = ok,
+    observed_flow = observed_flow,
+    flow_reader = flow_reader,
+    attempt = attempt,
+    flow_settled = flow_settled,
+    pending_settled = pending_settled,
+    pending_retries = ctrl.pending_retries,
+    pending_flow_since = ctrl.pending_flow_since,
+    pending_expected_flow = ctrl.pending_expected_flow,
+    cooldown_deferred = decision and decision.defer_cooldown or false,
+    cooldown_defer_reason = decision and decision.defer_reason or "n/a",
+    effective_min_flow = effective_min_flow,
+    effective_min_applied = type(effective_min_flow) == "number" and requested_flow == effective_min_flow and requested_flow > 0,
+    mode = mode,
+    target_action = target_action,
+    target_zone_state = target_zone_state,
+    target_holding_active = ctrl.target_holding_active,
+    target_band_status = ctrl.target_band_status,
+    target_band_reason = decision and decision.target_band_mode or "n/a",
+    target_band_error = decision and decision.target_band_error or "n/a",
+    target_band_live_error = decision and decision.target_band_live_error or "n/a",
+    target_band_smoothed_error = decision and decision.target_band_smoothed_error or "n/a",
+    hold_active = hold_active,
+    active_trim = active_trim,
+    flow_trim_direction = active_trim and (target_action == "TARGET_TRIM_UP" and "UP" or "DOWN") or "NONE",
+    inductor_engaged = ctrl.inductor_engaged,
+    inductor_state_api = ctrl.inductor_state_api or "n/a",
+    overspeed_brake = decision and decision.overspeed_brake or false,
+    overspeed_rpm = decision and decision.overspeed_rpm or "n/a",
+    overspeed_threshold_rpm = decision and decision.overspeed_threshold_rpm or "n/a",
+    overspeed_coil_ok = overspeed_coil_ok,
+    overspeed_coil_reason = overspeed_coil_reason,
+    overspeed_floor_hits = ctrl.overspeed_floor_hits or 0,
+    readback_state = readback_state,
+    readback_detail = readback_detail,
+    steam_input = steam_input,
+    active_state = active_state,
+    max_flow_limit = ctrl.effective_max_flow or MAX_FLOW,
+    at_max_limit = at_max_limit,
+    at_min_limit = at_min_limit,
+    down_regulation_limited = down_limited or (decision and decision.target_band_at_min_limit) or false,
+    up_regulation_limited = up_limited or (decision and decision.target_band_at_max_limit) or false,
+    flow_limit_state = ctrl.flow_limit_state,
+    bottleneck = bottleneck,
+    bottleneck_detail = bottleneck_detail
+  }, log)
   if not ctrl.logged then
     log("INFO", "Turbine " .. name .. " active, initial flow " .. tostring(ctrl.requested_flow))
     ctrl.logged = true
