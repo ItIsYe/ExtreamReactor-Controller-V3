@@ -26,4 +26,35 @@ for idx in range(len(fn_starts) - 1):
 if max_fn_lines > 250:
     raise SystemExit(f'rt main has oversized function scope: {max_fn_lines} lines > 250')
 
+lines = text.splitlines()
+apply_start = None
+for i, line in enumerate(lines, start=1):
+    if line.startswith('local function apply_turbine_flow('):
+        apply_start = i
+        break
+
+if apply_start is None:
+    raise SystemExit('apply_turbine_flow not found in rt main')
+
+next_function_start = line_count + 1
+for i, line in enumerate(lines[apply_start:], start=apply_start + 1):
+    if line.startswith('local function ') or line.startswith('function '):
+        next_function_start = i
+        break
+
+apply_span = next_function_start - apply_start
+if apply_span > 180:
+    raise SystemExit(f'apply_turbine_flow too large: {apply_span} lines > 180')
+
+apply_block = '\n'.join(lines[apply_start - 1:next_function_start - 1])
+required_delegations = [
+    'sample_turbine_runtime_metrics(',
+    'capture_turbine_flow_readback(',
+    'update_turbine_flow_tracking(',
+    'log_turbine_control_metrics('
+]
+for marker in required_delegations:
+    if marker not in apply_block:
+        raise SystemExit(f'apply_turbine_flow missing structural delegation: {marker}')
+
 print('rt_main_structure_guard_test.py: ok')
