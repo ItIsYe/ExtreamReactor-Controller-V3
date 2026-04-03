@@ -60,20 +60,27 @@ function M.update_module_limits(ctx, module)
     local coolant_eval = ctx.evaluate_reactor_coolant(module.peripheral, module.coolant_safety_state)
     module.coolant_safety_diag = coolant_eval
     if coolant_eval and module.last_coolant_condition ~= coolant_eval.condition then
-      ctx.log("DEBUG", ("Coolant safety diag module=%s condition=%s amount=%s max=%s ratio=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s"):format(
+      ctx.log("DEBUG", ("Coolant safety diag module=%s condition=%s amount=%s max=%s ratio=%s ratio_raw=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s source_method=%s measurement_state=%s measurement_valid=%s stale_fallback=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s zero_glitch_pending=%s zero_glitch_ticks=%s"):format(
         tostring(module.id),
         tostring(coolant_eval.condition),
         tostring(coolant_eval.coolant_amount),
         tostring(coolant_eval.coolant_amount_max),
         tostring(coolant_eval.coolant_ratio),
+        tostring(coolant_eval.coolant_ratio_raw),
         tostring(coolant_eval.min_water),
         tostring(coolant_eval.recover_threshold),
         tostring(coolant_eval.hysteresis),
         tostring(coolant_eval.source),
+        tostring(coolant_eval.source_method),
+        tostring(coolant_eval.measurement_state),
+        tostring(coolant_eval.measurement_valid),
+        tostring(coolant_eval.stale_fallback_used),
         tostring(coolant_eval.low_ticks),
         tostring(coolant_eval.trip_samples),
         tostring(coolant_eval.invalid_ticks),
-        tostring(coolant_eval.invalid_grace_samples)
+        tostring(coolant_eval.invalid_grace_samples),
+        tostring(coolant_eval.zero_glitch_pending),
+        tostring(coolant_eval.zero_glitch_ticks)
       ))
       module.last_coolant_condition = coolant_eval.condition
     end
@@ -297,19 +304,24 @@ function M.update_module_states(ctx)
             if limit == "WATER" then
               local coolant_diag = module.coolant_safety_diag or {}
               local temp_diag = module.temperature_safety_diag or {}
-              local coupled = temp_diag.over_limit and "TEMP_COUPLED" or "COOLANT_PRIMARY"
-              ctx.log("ERROR", ("Safety trigger: reactor coolant level too low amount=%s max=%s ratio=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s condition=%s causality=%s temp_value=%s temp_limit=%s temp_condition=%s"):format(
+              local coupled = temp_diag.over_limit and "TEMP_COUPLED" or tostring(coolant_diag.causality or "COOLANT_PRIMARY")
+              ctx.log("ERROR", ("Safety trigger: reactor coolant level too low amount=%s max=%s ratio=%s ratio_raw=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s source_method=%s measurement_state=%s stale_fallback=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s zero_glitch_pending=%s condition=%s causality=%s temp_value=%s temp_limit=%s temp_condition=%s"):format(
                 tostring(coolant_diag.coolant_amount),
                 tostring(coolant_diag.coolant_amount_max),
                 tostring(coolant_diag.coolant_ratio),
+                tostring(coolant_diag.coolant_ratio_raw),
                 tostring(coolant_diag.min_water),
                 tostring(coolant_diag.recover_threshold),
                 tostring(coolant_diag.hysteresis),
                 tostring(coolant_diag.source),
+                tostring(coolant_diag.source_method),
+                tostring(coolant_diag.measurement_state),
+                tostring(coolant_diag.stale_fallback_used),
                 tostring(coolant_diag.low_ticks),
                 tostring(coolant_diag.trip_samples),
                 tostring(coolant_diag.invalid_ticks),
                 tostring(coolant_diag.invalid_grace_samples),
+                tostring(coolant_diag.zero_glitch_pending),
                 tostring(coolant_diag.condition),
                 tostring(coupled),
                 tostring(temp_diag.temperature),

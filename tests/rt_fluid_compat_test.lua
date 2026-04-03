@@ -58,4 +58,19 @@ if ratio_amount ~= 0.42 or source_amount ~= "getCoolantAmount/getCoolantAmountMa
   error("expected amount/max fallback for coolant ratio")
 end
 
+local coolant_sample = fluid.read_coolant_sample({
+  getCoolantAmount = function() return 420 end,
+  getCoolantAmountMax = function() return 1000 end,
+  getCoolantFilledPercentage = function() return 42 end
+})
+if coolant_sample.coolant_ratio ~= 0.42 then
+  error("coolant sample helper must normalize ratio")
+end
+if coolant_sample.measurement_state ~= "FRESH" then
+  error("coolant sample helper must classify valid measurements as fresh")
+end
+if coolant_sample.source_method ~= "getCoolantFilledPercentage" then
+  error("coolant sample helper must report selected API method")
+end
+
 print("rt_fluid_compat_test.lua: ok")
