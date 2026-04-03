@@ -78,6 +78,7 @@ function M.update_turbine_flow_tracking(ctrl, requested_flow, confirmed_flow, fl
     pending_expected_flow = ctrl.pending_expected_flow,
     tolerance = flow_tolerance,
     pending_retries = ctrl.pending_retries,
+    readback_retry_cap = rail_cfg.readback_retry_cap or 0,
     settle_timeout_s = rail_cfg.settle_timeout_s or 0,
     pending_since = ctrl.pending_flow_since,
     now_ts = now_ts,

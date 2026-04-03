@@ -171,6 +171,7 @@ function regulator.classify_confirmation(input)
   local tolerance = math.max(0, sanitize_number(type(input) == "table" and input.tolerance or nil, 1))
   local pending_retries = math.max(0, math.floor(sanitize_number(type(input) == "table" and input.pending_retries or nil, 0)))
   local settle_timeout_s = math.max(0, sanitize_number(type(input) == "table" and input.settle_timeout_s or nil, 0))
+  local retry_cap = math.max(0, math.floor(sanitize_number(type(input) == "table" and input.readback_retry_cap or nil, 0)))
   local pending_since = sanitize_number(type(input) == "table" and input.pending_since or nil, 0)
   local now_ts = sanitize_number(type(input) == "table" and input.now_ts or nil, pending_since)
   local floor_hint = type(input) == "table" and input.floor_hint or false
@@ -179,19 +180,22 @@ function regulator.classify_confirmation(input)
     return "CONFIRMED_MATCH", "API_CONFIRMED_WRITE"
   end
   if math.abs(pending_expected - confirmed) <= tolerance then
-    return "PENDING_CONFIRM", "PENDING_EXPECTED_MATCH"
+    return "PENDING_MISMATCH", "PENDING_EXPECTED_MATCH"
   end
   local age = math.max(0, now_ts - pending_since)
   if settle_timeout_s > 0 and age < settle_timeout_s and pending_retries <= 1 then
-    return "READBACK_STALE", "READBACK_LAG"
+    return "READBACK_LAG", "READBACK_LAG"
   end
   if floor_hint and requested == 0 and confirmed > 0 then
     return "READBACK_FLOOR", "API_OR_MOD_FLOOR_HINT"
   end
-  if requested == 0 and confirmed > 0 then
-    return "CONFIRMED_MISMATCH", "ZERO_REQUEST_NOT_CONFIRMED"
+  if retry_cap > 0 and pending_retries >= retry_cap and requested == 0 and confirmed > 0 then
+    return "READBACK_FLOOR", "API_OR_MOD_FLOOR_SUSPECTED"
   end
-  return "CONFIRMED_MISMATCH", "WRITE_ACCEPTED_READBACK_MISMATCH"
+  if requested == 0 and confirmed > 0 then
+    return "PENDING_MISMATCH", "ZERO_REQUEST_NOT_CONFIRMED"
+  end
+  return "PENDING_MISMATCH", "WRITE_ACCEPTED_READBACK_MISMATCH"
 end
 
 function regulator.target_band_state(input)

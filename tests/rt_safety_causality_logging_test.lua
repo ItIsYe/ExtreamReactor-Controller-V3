@@ -25,6 +25,7 @@ assert_contains(main_src, "Overspeed brake pending name=", "overspeed mismatch p
 
 assert_contains(lifecycle_src, "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE", "coolant safety path must log ownership separation")
 assert_contains(lifecycle_src, "Safety ownership=SAFETY subsystem=REACTOR_TEMP action=ENTER_SAFE", "temperature safety path must log ownership separation")
+assert_contains(lifecycle_src, "source=%s fuel_temp=%s casing_temp=%s hysteresis=%s over_limit_ticks=%s trip_samples=%s condition=%s", "temperature safety log must include source/value/hysteresis diagnostics")
 assert_contains(lifecycle_src, "ctx.setState(ctx.STATE.SAFE, \"SAFETY_COOLANT_LOW\")", "coolant safety must set SAFE with explicit reason")
 assert_contains(lifecycle_src, "ctx.setState(ctx.STATE.SAFE, \"SAFETY_TEMPERATURE_HIGH\")", "temperature safety must set SAFE with explicit reason")
 

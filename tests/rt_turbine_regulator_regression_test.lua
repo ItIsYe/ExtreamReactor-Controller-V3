@@ -168,8 +168,22 @@ local confirm_b, detail_confirm_b = regulator.classify_confirmation({
   pending_since = 10.0,
   now_ts = 10.2
 })
-if confirm_b ~= 'READBACK_STALE' or detail_confirm_b ~= 'READBACK_LAG' then
-  error('fresh mismatch before timeout should classify as stale readback lag')
+if confirm_b ~= 'READBACK_LAG' or detail_confirm_b ~= 'READBACK_LAG' then
+  error('fresh mismatch before timeout should classify as readback lag')
+end
+local confirm_c, detail_confirm_c = regulator.classify_confirmation({
+  requested_flow = 0,
+  confirmed_flow = 250,
+  pending_expected_flow = 0,
+  tolerance = 1,
+  pending_retries = 5,
+  readback_retry_cap = 3,
+  settle_timeout_s = 1.0,
+  pending_since = 10.0,
+  now_ts = 12.0
+})
+if confirm_c ~= 'READBACK_FLOOR' or detail_confirm_c ~= 'API_OR_MOD_FLOOR_SUSPECTED' then
+  error('retry cap should escalate unresolved zero-flow mismatch to floor suspicion')
 end
 
 local tracker = { effective_min_hits = 0, effective_min_flow = nil }

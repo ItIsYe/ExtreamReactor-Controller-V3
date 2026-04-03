@@ -109,6 +109,8 @@ local DEFAULT_CONFIG = {
   },
   safety = {
     max_temperature = 2000, -- Maximum reactor temperature before SCRAM.
+    temperature_hysteresis = 50, -- Temperature margin required before a pending over-limit condition is cleared.
+    temperature_trip_samples = 2, -- Consecutive over-limit samples required before SAFE is entered.
     max_rpm = 1800, -- Maximum turbine RPM.
     min_water = 0.2 -- Minimum water ratio before SCRAM.
   },
@@ -248,6 +250,8 @@ local steam_tank_name = nil
 local reactor_rails_state = rails.new_state()
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or DEFAULT_CONFIG.safety.max_temperature
+config.safety.temperature_hysteresis = config.safety.temperature_hysteresis or DEFAULT_CONFIG.safety.temperature_hysteresis
+config.safety.temperature_trip_samples = config.safety.temperature_trip_samples or DEFAULT_CONFIG.safety.temperature_trip_samples
 config.safety.max_rpm = config.safety.max_rpm or DEFAULT_CONFIG.safety.max_rpm
 config.safety.min_water = config.safety.min_water or DEFAULT_CONFIG.safety.min_water
 config.heartbeat_interval = config.heartbeat_interval or DEFAULT_CONFIG.heartbeat_interval
@@ -545,16 +549,16 @@ local function read_turbine_flow(turbine, caps)
   if not turbine then
     return nil, "NO_TURBINE"
   end
-  if caps and caps.getFluidFlowRate and turbine.getFluidFlowRate then
-    local ok, value = safe_wrapped_call(turbine, "getFluidFlowRate")
-    if ok and type(value) == "number" then
-      return value, "getFluidFlowRate"
-    end
-  end
   if caps and caps.getFluidFlowRateMax and turbine.getFluidFlowRateMax then
     local ok, value = safe_wrapped_call(turbine, "getFluidFlowRateMax")
     if ok and type(value) == "number" then
       return value, "getFluidFlowRateMax"
+    end
+  end
+  if caps and caps.getFluidFlowRate and turbine.getFluidFlowRate then
+    local ok, value = safe_wrapped_call(turbine, "getFluidFlowRate")
+    if ok and type(value) == "number" then
+      return value, "getFluidFlowRate"
     end
   end
   return nil, "FLOW_UNAVAILABLE"
@@ -1994,6 +1998,7 @@ apply_safe_controls = function()
 end
 
 function scram()
+  log("ERROR", "SCRAM ownership=STATE_MACHINE action=SCRAM_APPLY current_state=" .. tostring(current_state))
   apply_safe_controls()
   if current_state == STATE.SAFE then
     set_reactors_active(false, "SCRAM_SAFE_STATE")
