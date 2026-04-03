@@ -1,26 +1,37 @@
-# Migration Guide (Beta → Final)
+# Migration Guide (aktueller Stand)
 
 ## Ziel
-Dieser Guide beschreibt die Migration von der Beta-Branch auf die finalisierte Architektur mit Comms/Services/Registry/Health sowie dem Safe-Update-Staging.
+Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand mit dem lokalen Installer-Flow.
 
-## Empfohlener Pfad
-1. **SAFE UPDATE** mit dem Installer starten (`lua /installer.lua` → SAFE UPDATE).
-2. Warten, bis Download + Verifikation abgeschlossen sind (Staging wird vollständig geprüft, bevor Live-Dateien getauscht werden).
-3. Nach Abschluss einmal neu starten (`reboot`), damit Services sauber init/stop durchlaufen.
+## Empfohlener Ablauf
+1. Installer lokal starten: `installer`.
+2. Im Menü `Update` wählen.
+3. Der Installer lädt das Manifest, ermittelt die installierte Rolle aus `/xreactor/config/role.lua` und berechnet den Storage-Preflight.
+4. Dateien werden nach `/xreactor_stage` geladen und verifiziert.
+5. Bestehende Config aus `/xreactor/config` wird ins Stage übernommen.
+6. Aktivierung/Commit:
+   - aktives `/xreactor` -> `/xreactor_backup_prev`
+   - `/xreactor_stage` -> `/xreactor`
+   - Backup wird nach erfolgreichem Commit gelöscht.
+7. Optional `reboot`, damit alle Dienste sauber neu starten.
 
-## Full-Reinstall
-Ein Full-Reinstall ist **nicht nötig**; SAFE UPDATE, Delta-Update und Recovery halten den Stand konsistent, ohne Config-Reset.
+## Was beim Update erhalten bleibt
+- Rolle (`/xreactor/config/role.lua`, wird nach Update erneut sichergestellt).
+- Bestehende Runtime-Config in `/xreactor/config/*` (wird vor Aktivierung ins Stage kopiert).
+- `/startup`, sofern ein nicht-XReactor-Startup absichtlich geschützt ist (wird dann nicht überschrieben).
 
-## Was SAFE UPDATE **nicht** ändert
-- Rolle (`role`).
-- Node-ID (`/xreactor/config/node_id.txt`).
-- Lokale Configs (`/disk/xreactor/*/config.lua`).
+## Pfade (Update vs. Runtime)
 
-## Registry-Änderung
-- Neue Registry-Datei pro Rolle: `/disk/xreactor/config/registry_<role>_<node_id>.json`.
-- Bestehende Registry-Dateien werden beim nächsten Discovery-Lauf neu aufgebaut.
+### Update-relevant (Installer)
+- Install root: `/xreactor`
+- Stage root: `/xreactor_stage`
+- Backup root: `/xreactor_backup_prev`
+- Installer-Log: `/xreactor_logs/installer.log`
 
-## Nach der Migration prüfen
-- Logs: `/disk/xreactor_logs/<role>_<node_id>.log`.
-- Master UI: Node-Status + Degraded-Reasons.
-- SAFE UPDATE: `/disk/xreactor/.manifest` und `/disk/xreactor/.cache/manifest.lua` aktualisiert.
+### Runtime-/Logging-Pfade
+- Runtime-Logs liegen unter `/xreactor_logs` (bei vorhandener Disk können Runtime-Logs auf Disk-basierte Pfade umgeleitet sein; der Update-Flow selbst bleibt lokal).
+- Rollen-/Knoten-bezogene Runtime-Dateien bleiben unter `/xreactor/config/*`.
+
+## Safety-/RT-Migrationshinweis
+- `SAFETY_COOLANT_LOW` wird nicht mehr sofort ausgelöst: zuerst Pending (`COOLANT_LOW_PENDING`), Bestätigung erst nach ~4s persistenter Unterschreitung; Recovery im Pending-Fenster bricht den Pending-Fall ab.
+- RT-Regelung nutzt aktive Target-Trim- und Readback-Diagnosezustände (u. a. `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`) plus Overspeed-Bremse mit Flow `0`.
