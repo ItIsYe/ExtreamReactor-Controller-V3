@@ -43,4 +43,33 @@ function fluid.read_amount(obj, legacy_methods)
   return nil, err
 end
 
+function fluid.normalize_fraction(value)
+  local numeric = tonumber(value)
+  if type(numeric) ~= "number" then
+    return nil
+  end
+  if numeric >= 0 and numeric <= 1 then
+    return numeric, "fraction"
+  end
+  if numeric >= 0 and numeric <= 100 then
+    return numeric / 100, "percent"
+  end
+  return nil
+end
+
+function fluid.resolve_ratio(amount, amount_max, filled_percentage)
+  local ratio, ratio_source = fluid.normalize_fraction(filled_percentage)
+  if type(ratio) == "number" then
+    return ratio, "getCoolantFilledPercentage(" .. tostring(ratio_source) .. ")"
+  end
+
+  local current = tonumber(amount)
+  local maximum = tonumber(amount_max)
+  if type(current) == "number" and type(maximum) == "number" and maximum > 0 then
+    return current / maximum, "getCoolantAmount/getCoolantAmountMax"
+  end
+
+  return nil, "UNAVAILABLE"
+end
+
 return fluid

@@ -104,6 +104,66 @@ function safety.evaluate_temperature_limit(input)
   }
 end
 
+function safety.evaluate_coolant_limit(input)
+  local data = type(input) == "table" and input or {}
+  local amount = tonumber(data.coolant_amount)
+  local amount_max = tonumber(data.coolant_amount_max)
+  local ratio = tonumber(data.coolant_ratio)
+  local source = data.source or "UNAVAILABLE"
+  local low_threshold = safety.clamp(data.min_water, 0, 1)
+  local hysteresis = math.max(0, tonumber(data.hysteresis) or 0)
+  local required_samples = math.max(1, math.floor(tonumber(data.trip_samples) or 1))
+  local invalid_grace_samples = math.max(0, math.floor(tonumber(data.invalid_grace_samples) or 0))
+  local state = type(data.state) == "table" and data.state or {}
+
+  local recover_threshold = safety.clamp((tonumber(low_threshold) or 0) + hysteresis, 0, 1)
+  local ratio_valid = type(ratio) == "number" and ratio >= 0 and ratio <= 1
+
+  if ratio_valid then
+    state.invalid_ticks = 0
+    if ratio <= low_threshold then
+      state.low_ticks = (tonumber(state.low_ticks) or 0) + 1
+    elseif ratio >= recover_threshold then
+      state.low_ticks = 0
+    end
+  else
+    state.invalid_ticks = (tonumber(state.invalid_ticks) or 0) + 1
+    if state.invalid_ticks > invalid_grace_samples then
+      state.low_ticks = 0
+    end
+  end
+
+  local low_ticks = tonumber(state.low_ticks) or 0
+  local invalid_ticks = tonumber(state.invalid_ticks) or 0
+  local low_detected = ratio_valid and ratio <= low_threshold
+  local triggered = low_detected and low_ticks >= required_samples
+  local condition = "COOLANT_OK"
+  if not ratio_valid then
+    condition = invalid_ticks > invalid_grace_samples and "COOLANT_UNAVAILABLE" or "COOLANT_UNAVAILABLE_GRACE"
+  elseif triggered then
+    condition = "COOLANT_LOW_PERSISTENT"
+  elseif low_detected then
+    condition = "COOLANT_LOW_PENDING"
+  end
+
+  return {
+    triggered = triggered,
+    low_detected = low_detected,
+    condition = condition,
+    source = source,
+    coolant_amount = amount,
+    coolant_amount_max = amount_max,
+    coolant_ratio = ratio,
+    min_water = low_threshold,
+    hysteresis = hysteresis,
+    recover_threshold = recover_threshold,
+    trip_samples = required_samples,
+    invalid_grace_samples = invalid_grace_samples,
+    low_ticks = low_ticks,
+    invalid_ticks = invalid_ticks
+  }
+end
+
 function safety.safe_steam_request(request, capacity)
   local cap = tonumber(capacity) or 0
   if cap <= 0 then return 0 end

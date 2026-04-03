@@ -252,7 +252,10 @@ function M.build_reactor_status_details(devices, reactor_adapter, log_prefix)
       energy = info and info.energy or nil,
       waste = info and info.waste or nil,
       active = info and info.active or nil,
-      rods = rods
+      rods = rods,
+      coolant_amount = info and info.coolant_amount or nil,
+      coolant_amount_max = info and info.coolant_amount_max or nil,
+      coolant_filled_percentage = info and info.coolant_filled_percentage or nil
     }
   end
   return list

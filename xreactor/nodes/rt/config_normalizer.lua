@@ -94,6 +94,18 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     config_values.safety.min_water = defaults.safety.min_water
     add_warning("safety.min_water missing/invalid; defaulting to " .. tostring(defaults.safety.min_water))
   end
+  if type(config_values.safety.coolant_hysteresis) ~= "number" then
+    config_values.safety.coolant_hysteresis = defaults.safety.coolant_hysteresis
+    add_warning("safety.coolant_hysteresis missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_hysteresis))
+  end
+  if type(config_values.safety.coolant_trip_samples) ~= "number" then
+    config_values.safety.coolant_trip_samples = defaults.safety.coolant_trip_samples
+    add_warning("safety.coolant_trip_samples missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_trip_samples))
+  end
+  if type(config_values.safety.coolant_invalid_grace_samples) ~= "number" then
+    config_values.safety.coolant_invalid_grace_samples = defaults.safety.coolant_invalid_grace_samples
+    add_warning("safety.coolant_invalid_grace_samples missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_invalid_grace_samples))
+  end
   if type(config_values.autonom) ~= "table" then
     config_values.autonom = utils.deep_copy(defaults.autonom)
     add_warning("autonom missing/invalid; defaulting to autonom defaults")
