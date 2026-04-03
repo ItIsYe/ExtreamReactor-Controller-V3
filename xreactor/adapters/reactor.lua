@@ -215,6 +215,9 @@ function reactor.inspect(name, log_prefix)
       or has_method(method_set, "getSteam") and "getSteam",
     log_prefix
   )
+  local coolant_amount = read_number(name, has_method(method_set, "getCoolantAmount") and "getCoolantAmount" or nil, log_prefix)
+  local coolant_amount_max = read_number(name, has_method(method_set, "getCoolantAmountMax") and "getCoolantAmountMax" or nil, log_prefix)
+  local coolant_filled_percentage = read_number(name, has_method(method_set, "getCoolantFilledPercentage") and "getCoolantFilledPercentage" or nil, log_prefix)
   return {
     name = name,
     type = type_name,
@@ -229,7 +232,10 @@ function reactor.inspect(name, log_prefix)
         or has_method(method_set, "getControlRodLevels")
         or has_method(method_set, "getControlRodsLevels")
         or has_method(method_set, "getControlRods"),
-      steam = has_method(method_set, "getHotFluidAmount") or has_method(method_set, "getSteamAmount") or has_method(method_set, "getSteam")
+      steam = has_method(method_set, "getHotFluidAmount") or has_method(method_set, "getSteamAmount") or has_method(method_set, "getSteam"),
+      coolant = has_method(method_set, "getCoolantAmount")
+        or has_method(method_set, "getCoolantAmountMax")
+        or has_method(method_set, "getCoolantFilledPercentage")
     },
     schema = {
       active = "boolean",
@@ -238,7 +244,10 @@ function reactor.inspect(name, log_prefix)
       waste = "number",
       energy = "number",
       control_rod_level = "number",
-      steam = "number"
+      steam = "number",
+      coolant_amount = "number",
+      coolant_amount_max = "number",
+      coolant_filled_percentage = "number"
     },
     active = active,
     temperature = temp,
@@ -247,6 +256,9 @@ function reactor.inspect(name, log_prefix)
     energy = energy,
     control_rod_level = rods,
     steam = steam,
+    coolant_amount = coolant_amount,
+    coolant_amount_max = coolant_amount_max,
+    coolant_filled_percentage = coolant_filled_percentage,
     methods = methods
   }
 end

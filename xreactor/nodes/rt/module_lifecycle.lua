@@ -38,10 +38,46 @@ function M.update_module_limits(ctx, module)
       state = module.safety_temp_state
     })
     module.temperature_safety_diag = temp_eval
+    if module.last_temperature_condition ~= temp_eval.condition then
+      ctx.log("DEBUG", ("Temperature safety diag module=%s condition=%s value=%s limit=%s source=%s fuel_temp=%s casing_temp=%s hysteresis=%s over_limit_ticks=%s trip_samples=%s"):format(
+        tostring(module.id),
+        tostring(temp_eval.condition),
+        tostring(temp_eval.temperature),
+        tostring(temp_eval.max_temperature),
+        tostring(temp_eval.source),
+        tostring(temp_eval.fuel_temperature),
+        tostring(temp_eval.casing_temperature),
+        tostring(temp_eval.hysteresis),
+        tostring(temp_eval.over_limit_ticks),
+        tostring(temp_eval.trip_samples)
+      ))
+      module.last_temperature_condition = temp_eval.condition
+    end
     if temp_eval.triggered then
       table.insert(limits, "TEMP")
     end
-    if ctx.reactor_low_water(module.peripheral) then
+    module.coolant_safety_state = module.coolant_safety_state or {}
+    local coolant_eval = ctx.evaluate_reactor_coolant(module.peripheral, module.coolant_safety_state)
+    module.coolant_safety_diag = coolant_eval
+    if coolant_eval and module.last_coolant_condition ~= coolant_eval.condition then
+      ctx.log("DEBUG", ("Coolant safety diag module=%s condition=%s amount=%s max=%s ratio=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s"):format(
+        tostring(module.id),
+        tostring(coolant_eval.condition),
+        tostring(coolant_eval.coolant_amount),
+        tostring(coolant_eval.coolant_amount_max),
+        tostring(coolant_eval.coolant_ratio),
+        tostring(coolant_eval.min_water),
+        tostring(coolant_eval.recover_threshold),
+        tostring(coolant_eval.hysteresis),
+        tostring(coolant_eval.source),
+        tostring(coolant_eval.low_ticks),
+        tostring(coolant_eval.trip_samples),
+        tostring(coolant_eval.invalid_ticks),
+        tostring(coolant_eval.invalid_grace_samples)
+      ))
+      module.last_coolant_condition = coolant_eval.condition
+    end
+    if coolant_eval and coolant_eval.triggered then
       table.insert(limits, "WATER")
     end
   end
@@ -259,11 +295,33 @@ function M.update_module_states(ctx)
           module.progress = 0
           if ctx.current_state() ~= ctx.STATE.SAFE then
             if limit == "WATER" then
-              ctx.log("ERROR", "Safety trigger: reactor coolant level too low")
+              local coolant_diag = module.coolant_safety_diag or {}
+              local temp_diag = module.temperature_safety_diag or {}
+              local coupled = temp_diag.over_limit and "TEMP_COUPLED" or "COOLANT_PRIMARY"
+              ctx.log("ERROR", ("Safety trigger: reactor coolant level too low amount=%s max=%s ratio=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s condition=%s causality=%s temp_value=%s temp_limit=%s temp_condition=%s"):format(
+                tostring(coolant_diag.coolant_amount),
+                tostring(coolant_diag.coolant_amount_max),
+                tostring(coolant_diag.coolant_ratio),
+                tostring(coolant_diag.min_water),
+                tostring(coolant_diag.recover_threshold),
+                tostring(coolant_diag.hysteresis),
+                tostring(coolant_diag.source),
+                tostring(coolant_diag.low_ticks),
+                tostring(coolant_diag.trip_samples),
+                tostring(coolant_diag.invalid_ticks),
+                tostring(coolant_diag.invalid_grace_samples),
+                tostring(coolant_diag.condition),
+                tostring(coupled),
+                tostring(temp_diag.temperature),
+                tostring(temp_diag.max_temperature),
+                tostring(temp_diag.condition)
+              ))
               ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE")
               ctx.setState(ctx.STATE.SAFE, "SAFETY_COOLANT_LOW")
             else
               local temp_diag = module.temperature_safety_diag or {}
+              local coolant_diag = module.coolant_safety_diag or {}
+              local coupled = coolant_diag.low_detected and "COOLANT_COUPLED" or "TEMP_PRIMARY"
               ctx.log("ERROR", ("Safety trigger: reactor temperature limit exceeded value=%s limit=%s source=%s fuel_temp=%s casing_temp=%s hysteresis=%s over_limit_ticks=%s trip_samples=%s condition=%s"):format(
                 tostring(temp_diag.temperature),
                 tostring(temp_diag.max_temperature),
@@ -274,6 +332,14 @@ function M.update_module_states(ctx)
                 tostring(temp_diag.over_limit_ticks),
                 tostring(temp_diag.trip_samples),
                 tostring(temp_diag.condition)
+              ))
+              ctx.log("ERROR", ("Safety trigger correlation: temp_causality=%s coolant_ratio=%s coolant_threshold=%s coolant_condition=%s coolant_source=%s coolant_low_ticks=%s"):format(
+                tostring(coupled),
+                tostring(coolant_diag.coolant_ratio),
+                tostring(coolant_diag.min_water),
+                tostring(coolant_diag.condition),
+                tostring(coolant_diag.source),
+                tostring(coolant_diag.low_ticks)
               ))
               ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_TEMP action=ENTER_SAFE")
               ctx.setState(ctx.STATE.SAFE, "SAFETY_TEMPERATURE_HIGH")

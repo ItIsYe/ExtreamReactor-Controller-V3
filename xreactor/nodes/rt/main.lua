@@ -112,7 +112,10 @@ local DEFAULT_CONFIG = {
     temperature_hysteresis = 50, -- Temperature margin required before a pending over-limit condition is cleared.
     temperature_trip_samples = 2, -- Consecutive over-limit samples required before SAFE is entered.
     max_rpm = 1800, -- Maximum turbine RPM.
-    min_water = 0.2 -- Minimum water ratio before SCRAM.
+    min_water = 0.2, -- Minimum coolant ratio before SCRAM.
+    coolant_hysteresis = 0.05, -- Coolant margin required before a pending low-coolant condition is cleared.
+    coolant_trip_samples = 3, -- Consecutive low-coolant samples required before SAFE is entered.
+    coolant_invalid_grace_samples = 3 -- Ignore short coolant read glitches before diagnostics mark the sample stream unavailable.
   },
   autonom = {
     control_rod_level = 70, -- Default rod level in autonom mode.
@@ -254,6 +257,9 @@ config.safety.temperature_hysteresis = config.safety.temperature_hysteresis or D
 config.safety.temperature_trip_samples = config.safety.temperature_trip_samples or DEFAULT_CONFIG.safety.temperature_trip_samples
 config.safety.max_rpm = config.safety.max_rpm or DEFAULT_CONFIG.safety.max_rpm
 config.safety.min_water = config.safety.min_water or DEFAULT_CONFIG.safety.min_water
+config.safety.coolant_hysteresis = config.safety.coolant_hysteresis or DEFAULT_CONFIG.safety.coolant_hysteresis
+config.safety.coolant_trip_samples = config.safety.coolant_trip_samples or DEFAULT_CONFIG.safety.coolant_trip_samples
+config.safety.coolant_invalid_grace_samples = config.safety.coolant_invalid_grace_samples or DEFAULT_CONFIG.safety.coolant_invalid_grace_samples
 config.heartbeat_interval = config.heartbeat_interval or DEFAULT_CONFIG.heartbeat_interval
 config.autonom = config.autonom or {}
 config.autonom.control_rod_level = config.autonom.control_rod_level or DEFAULT_CONFIG.autonom.control_rod_level
@@ -462,16 +468,36 @@ local function get_total_steam_demand()
   end
   return total
 end
-local function reactor_low_water(reactor)
-  if not reactor or not reactor.getCoolantAmount or not reactor.getCoolantAmountMax then
-    return false
+local function evaluate_reactor_coolant(reactor, state)
+  local amount = nil
+  local amount_max = nil
+  local filled_percentage = nil
+  if reactor then
+    local ok_amount, amount_value = safe_wrapped_call(reactor, "getCoolantAmount")
+    if ok_amount and type(amount_value) == "number" then
+      amount = amount_value
+    end
+    local ok_max, max_value = safe_wrapped_call(reactor, "getCoolantAmountMax")
+    if ok_max and type(max_value) == "number" then
+      amount_max = max_value
+    end
+    local ok_percent, percent_value = safe_wrapped_call(reactor, "getCoolantFilledPercentage")
+    if ok_percent and type(percent_value) == "number" then
+      filled_percentage = percent_value
+    end
   end
-  local ok_amount, amount = safe_wrapped_call(reactor, "getCoolantAmount")
-  local ok_max, max = safe_wrapped_call(reactor, "getCoolantAmountMax")
-  if not ok_amount or not ok_max or type(amount) ~= "number" or type(max) ~= "number" or max <= 0 then
-    return false
-  end
-  return (amount / max) <= config.safety.min_water
+  local ratio, ratio_source = fluid.resolve_ratio(amount, amount_max, filled_percentage)
+  return safety.evaluate_coolant_limit({
+    coolant_amount = amount,
+    coolant_amount_max = amount_max,
+    coolant_ratio = ratio,
+    source = ratio_source,
+    min_water = config.safety.min_water,
+    hysteresis = config.safety.coolant_hysteresis,
+    trip_samples = config.safety.coolant_trip_samples,
+    invalid_grace_samples = config.safety.coolant_invalid_grace_samples,
+    state = state
+  })
 end
 local function ramp_towards(current, target, step)
   if current == nil then return target end
@@ -2029,7 +2055,7 @@ function build_module_lifecycle_context()
     applyReactorRods = applyReactorRods,
     add_alarm = add_alarm,
     ramp_duration = ramp_duration,
-    reactor_low_water = reactor_low_water,
+    evaluate_reactor_coolant = evaluate_reactor_coolant,
     get_active_startup = function() return active_startup end,
     set_active_startup = function(value) active_startup = value end,
     current_state = function() return current_state end,
