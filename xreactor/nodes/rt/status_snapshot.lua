@@ -48,6 +48,8 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
       coolant_amount = info and info.coolant_amount or nil,
       coolant_amount_max = info and info.coolant_amount_max or nil,
       coolant_filled_percentage = info and info.coolant_filled_percentage or nil,
+      coolant_ratio = info and info.coolant_ratio or nil,
+      coolant_ratio_source = info and info.coolant_ratio_source or nil,
       state = module and module.state or nil
     })
   end

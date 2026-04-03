@@ -469,33 +469,19 @@ local function get_total_steam_demand()
   return total
 end
 local function evaluate_reactor_coolant(reactor, state)
-  local amount = nil
-  local amount_max = nil
-  local filled_percentage = nil
-  if reactor then
-    local ok_amount, amount_value = safe_wrapped_call(reactor, "getCoolantAmount")
-    if ok_amount and type(amount_value) == "number" then
-      amount = amount_value
-    end
-    local ok_max, max_value = safe_wrapped_call(reactor, "getCoolantAmountMax")
-    if ok_max and type(max_value) == "number" then
-      amount_max = max_value
-    end
-    local ok_percent, percent_value = safe_wrapped_call(reactor, "getCoolantFilledPercentage")
-    if ok_percent and type(percent_value) == "number" then
-      filled_percentage = percent_value
-    end
-  end
-  local ratio, ratio_source = fluid.resolve_ratio(amount, amount_max, filled_percentage)
+  local sample = fluid.read_coolant_sample(reactor, safe_wrapped_call)
   return safety.evaluate_coolant_limit({
-    coolant_amount = amount,
-    coolant_amount_max = amount_max,
-    coolant_ratio = ratio,
-    source = ratio_source,
+    coolant_amount = sample.coolant_amount,
+    coolant_amount_max = sample.coolant_amount_max,
+    coolant_ratio = sample.coolant_ratio,
+    source = sample.source,
+    source_method = sample.source_method,
+    measurement_state = sample.measurement_state,
     min_water = config.safety.min_water,
     hysteresis = config.safety.coolant_hysteresis,
     trip_samples = config.safety.coolant_trip_samples,
     invalid_grace_samples = config.safety.coolant_invalid_grace_samples,
+    zero_glitch_grace_samples = config.safety.coolant_zero_glitch_grace_samples,
     state = state
   })
 end
@@ -1063,8 +1049,15 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   ctrl.target_holding_active = (not overspeed_state.active)
     and target_band
     and target_band.in_band
-    and (target_band.mode ~= "HOLDING_TARGET_ACTIVE" or ctrl.target_hold_hits >= hold_sample_target)
+    and target_band.mode == "HOLDING_TARGET_ACTIVE"
+    and ctrl.target_hold_hits >= hold_sample_target
     or false
+  ctrl.target_trim_active = (not overspeed_state.active)
+    and target_band
+    and target_band.in_band
+    and (target_band.mode == "TARGET_TRIM_UP" or target_band.mode == "TARGET_TRIM_DOWN")
+    or false
+  ctrl.in_target_band = (not overspeed_state.active) and target_band and target_band.in_band or false
   ctrl.target_band_status = overspeed_state.active and "OVERSPEED_BRAKE" or (target_band and target_band.mode or "TRACKING")
   if ctrl.target_holding_active and type(ctrl.target_band_status) == "string" then
     ctrl.mode = ctrl.target_band_status
@@ -1153,15 +1146,27 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     inductor_engaged = ctrl.inductor_engaged,
     steam_input = steam_input
   })
-  local target_zone_state = ctrl.target_holding_active and "IN_TARGET_BAND" or "OUTSIDE_TARGET_BAND"
-  local target_action = ctrl.target_holding_active and "TARGET_HOLD_STABLE" or flow_apply_helpers.resolve_target_action(reason, decision)
+  local target_zone_state = ctrl.in_target_band and "IN_TARGET_BAND" or "OUTSIDE_TARGET_BAND"
+  local target_action = flow_apply_helpers.resolve_target_action(reason, decision)
+  if ctrl.target_holding_active then
+    target_action = "TARGET_HOLD_STABLE"
+  elseif ctrl.target_trim_active then
+    target_action = decision and decision.target_band_mode or target_action
+  end
   local at_max_limit = requested_flow == (ctrl.effective_max_flow or MAX_FLOW)
   local at_min_limit = type(applied_min) == "number" and requested_flow <= applied_min
-  local active_trim = target_action == "TARGET_TRIM_UP" or target_action == "TARGET_TRIM_DOWN"
+  local active_trim = ctrl.target_trim_active or target_action == "TARGET_TRIM_UP" or target_action == "TARGET_TRIM_DOWN"
   local hold_active = ctrl.target_holding_active and target_action == "TARGET_HOLD_STABLE"
+  if active_trim and readback_state == "READBACK_LAG" then
+    target_action = "ACTIVE_TRIM_WITH_READBACK_LAG"
+  elseif active_trim and readback_state == "PENDING_MISMATCH" then
+    target_action = "TRIM_PENDING_CONFIRMATION"
+  elseif hold_active and readback_state == "CONFIRMED_MATCH" then
+    target_action = "HOLD_CONFIRMED"
+  end
   local down_limited = tostring(reason):find("MIN_LIMIT_OVERSPEED", 1, true) ~= nil
   local up_limited = tostring(reason):find("MAX_LIMIT_UNDERSPEED", 1, true) ~= nil
-  ctrl.target_trim_state = active_trim and target_action or "NONE"
+  ctrl.target_trim_state = active_trim and (decision and decision.target_band_mode or "ACTIVE_TRIM") or "NONE"
   if down_limited or (decision and decision.target_band_at_min_limit) then
     ctrl.flow_limit_state = "MIN_LIMIT"
   elseif up_limited or (decision and decision.target_band_at_max_limit) then

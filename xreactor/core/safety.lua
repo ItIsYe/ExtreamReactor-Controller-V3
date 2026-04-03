@@ -114,32 +114,67 @@ function safety.evaluate_coolant_limit(input)
   local hysteresis = math.max(0, tonumber(data.hysteresis) or 0)
   local required_samples = math.max(1, math.floor(tonumber(data.trip_samples) or 1))
   local invalid_grace_samples = math.max(0, math.floor(tonumber(data.invalid_grace_samples) or 0))
+  local zero_glitch_grace_samples = math.max(0, math.floor(tonumber(data.zero_glitch_grace_samples) or 1))
+  local measurement_state = tostring(data.measurement_state or "UNSPECIFIED")
+  local measurement_source_method = tostring(data.source_method or "UNAVAILABLE")
   local state = type(data.state) == "table" and data.state or {}
 
   local recover_threshold = safety.clamp((tonumber(low_threshold) or 0) + hysteresis, 0, 1)
   local ratio_valid = type(ratio) == "number" and ratio >= 0 and ratio <= 1
+  local measurement_valid = ratio_valid and measurement_state ~= "INVALID"
+  local last_valid_ratio = tonumber(state.last_valid_ratio)
+  local stale_fallback_used = false
+  local zero_glitch_candidate = measurement_valid
+    and ratio == 0
+    and tonumber(amount) == 0
+    and type(amount_max) == "number"
+    and amount_max > 0
+    and type(last_valid_ratio) == "number"
+    and last_valid_ratio > low_threshold
+  local zero_glitch_pending = false
 
-  if ratio_valid then
+  if measurement_valid and not zero_glitch_candidate then
+    state.zero_glitch_ticks = 0
     state.invalid_ticks = 0
+    state.last_valid_ratio = ratio
+    state.last_valid_amount = amount
+    state.last_valid_amount_max = amount_max
     if ratio <= low_threshold then
       state.low_ticks = (tonumber(state.low_ticks) or 0) + 1
     elseif ratio >= recover_threshold then
       state.low_ticks = 0
     end
   else
+    if zero_glitch_candidate then
+      state.zero_glitch_ticks = (tonumber(state.zero_glitch_ticks) or 0) + 1
+      zero_glitch_pending = state.zero_glitch_ticks <= zero_glitch_grace_samples
+    else
+      state.zero_glitch_ticks = 0
+    end
     state.invalid_ticks = (tonumber(state.invalid_ticks) or 0) + 1
-    if state.invalid_ticks > invalid_grace_samples then
+    if type(last_valid_ratio) == "number" and state.invalid_ticks <= invalid_grace_samples then
+      ratio = last_valid_ratio
+      stale_fallback_used = true
+    elseif state.invalid_ticks > invalid_grace_samples then
       state.low_ticks = 0
     end
   end
 
   local low_ticks = tonumber(state.low_ticks) or 0
   local invalid_ticks = tonumber(state.invalid_ticks) or 0
-  local low_detected = ratio_valid and ratio <= low_threshold
+  local low_detected = type(ratio) == "number" and ratio <= low_threshold and not stale_fallback_used and not zero_glitch_pending
   local triggered = low_detected and low_ticks >= required_samples
   local condition = "COOLANT_OK"
-  if not ratio_valid then
+  local causality = "COOLANT_PRIMARY"
+  if zero_glitch_pending then
+    condition = "INVALID_MEASUREMENT_GLITCH_GRACE"
+    causality = "INVALID_MEASUREMENT"
+  elseif stale_fallback_used then
+    condition = "STALE_MEASUREMENT_GRACE"
+    causality = "STALE_MEASUREMENT"
+  elseif not measurement_valid then
     condition = invalid_ticks > invalid_grace_samples and "COOLANT_UNAVAILABLE" or "COOLANT_UNAVAILABLE_GRACE"
+    causality = "INVALID_MEASUREMENT"
   elseif triggered then
     condition = "COOLANT_LOW_PERSISTENT"
   elseif low_detected then
@@ -151,16 +186,25 @@ function safety.evaluate_coolant_limit(input)
     low_detected = low_detected,
     condition = condition,
     source = source,
+    source_method = measurement_source_method,
     coolant_amount = amount,
     coolant_amount_max = amount_max,
     coolant_ratio = ratio,
+    coolant_ratio_raw = tonumber(data.coolant_ratio),
     min_water = low_threshold,
     hysteresis = hysteresis,
     recover_threshold = recover_threshold,
     trip_samples = required_samples,
     invalid_grace_samples = invalid_grace_samples,
+    zero_glitch_grace_samples = zero_glitch_grace_samples,
     low_ticks = low_ticks,
-    invalid_ticks = invalid_ticks
+    invalid_ticks = invalid_ticks,
+    stale_fallback_used = stale_fallback_used,
+    measurement_state = measurement_state,
+    measurement_valid = measurement_valid,
+    causality = causality,
+    zero_glitch_pending = zero_glitch_pending,
+    zero_glitch_ticks = tonumber(state.zero_glitch_ticks) or 0
   }
 end
 

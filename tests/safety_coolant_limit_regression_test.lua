@@ -96,4 +96,40 @@ if recovered.low_ticks ~= 0 or recovered.condition ~= "COOLANT_OK" then
   error("coolant state must recover once ratio clears hysteresis threshold")
 end
 
+local zero_glitch = safety.evaluate_coolant_limit({
+  coolant_amount = 0,
+  coolant_amount_max = 1000,
+  coolant_ratio = 0,
+  source = "getCoolantAmount/getCoolantAmountMax",
+  source_method = "getCoolantAmount+getCoolantAmountMax",
+  measurement_state = "FRESH",
+  min_water = 0.2,
+  hysteresis = 0.05,
+  trip_samples = 3,
+  invalid_grace_samples = 2,
+  zero_glitch_grace_samples = 1,
+  state = state
+})
+if zero_glitch.triggered or zero_glitch.condition ~= "INVALID_MEASUREMENT_GLITCH_GRACE" then
+  error("single zero-glitch sample after valid coolant must stay in grace state")
+end
+
+local stale = safety.evaluate_coolant_limit({
+  coolant_amount = nil,
+  coolant_amount_max = nil,
+  coolant_ratio = nil,
+  source = "UNAVAILABLE",
+  source_method = "UNAVAILABLE",
+  measurement_state = "INVALID",
+  min_water = 0.2,
+  hysteresis = 0.05,
+  trip_samples = 3,
+  invalid_grace_samples = 2,
+  zero_glitch_grace_samples = 1,
+  state = state
+})
+if stale.triggered or stale.condition ~= "STALE_MEASUREMENT_GRACE" or stale.stale_fallback_used ~= true then
+  error("invalid coolant readback should reuse last valid ratio within invalid grace window")
+end
+
 print("safety_coolant_limit_regression_test.lua: ok")

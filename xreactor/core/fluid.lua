@@ -72,4 +72,67 @@ function fluid.resolve_ratio(amount, amount_max, filled_percentage)
   return nil, "UNAVAILABLE"
 end
 
+local function parse_numeric(value)
+  if type(value) == "number" then
+    return value
+  end
+  if type(value) == "string" then
+    return tonumber(value)
+  end
+  return nil
+end
+
+function fluid.read_coolant_sample(reactor, safe_call)
+  local reader = safe_call
+  if type(reader) ~= "function" then
+    reader = function(obj, method)
+      if not obj or type(obj[method]) ~= "function" then
+        return false, "missing method"
+      end
+      return pcall(obj[method])
+    end
+  end
+
+  local function call_metric(method)
+    if not reactor or type(reactor[method]) ~= "function" then
+      return nil, "METHOD_UNAVAILABLE", method
+    end
+    local ok, value = reader(reactor, method)
+    local parsed = ok and parse_numeric(value) or nil
+    if parsed == nil then
+      return nil, ok and "INVALID_VALUE" or "CALL_FAILED", method
+    end
+    return parsed, "OK", method
+  end
+
+  local amount, amount_state, amount_method = call_metric("getCoolantAmount")
+  local amount_max, max_state, max_method = call_metric("getCoolantAmountMax")
+  local filled_percentage, percent_state, percent_method = call_metric("getCoolantFilledPercentage")
+  local ratio, ratio_source = fluid.resolve_ratio(amount, amount_max, filled_percentage)
+  local measurement_state = "FRESH"
+  if type(ratio) ~= "number" then
+    measurement_state = "INVALID"
+  end
+
+  local source_method = "UNAVAILABLE"
+  if ratio_source:find("getCoolantFilledPercentage", 1, true) then
+    source_method = percent_method
+  elseif ratio_source:find("getCoolantAmount/getCoolantAmountMax", 1, true) then
+    source_method = (amount_method or "getCoolantAmount") .. "+" .. (max_method or "getCoolantAmountMax")
+  end
+
+  return {
+    coolant_amount = amount,
+    coolant_amount_max = amount_max,
+    coolant_filled_percentage = filled_percentage,
+    coolant_ratio = ratio,
+    source = ratio_source,
+    source_method = source_method,
+    measurement_state = measurement_state,
+    amount_state = amount_state,
+    amount_max_state = max_state,
+    filled_percentage_state = percent_state
+  }
+end
+
 return fluid

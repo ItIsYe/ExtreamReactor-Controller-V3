@@ -1,4 +1,5 @@
 local utils = require("core.utils")
+local fluid = require("core.fluid")
 
 local reactor = {}
 local warned = {}
@@ -218,6 +219,7 @@ function reactor.inspect(name, log_prefix)
   local coolant_amount = read_number(name, has_method(method_set, "getCoolantAmount") and "getCoolantAmount" or nil, log_prefix)
   local coolant_amount_max = read_number(name, has_method(method_set, "getCoolantAmountMax") and "getCoolantAmountMax" or nil, log_prefix)
   local coolant_filled_percentage = read_number(name, has_method(method_set, "getCoolantFilledPercentage") and "getCoolantFilledPercentage" or nil, log_prefix)
+  local coolant_ratio, coolant_ratio_source = fluid.resolve_ratio(coolant_amount, coolant_amount_max, coolant_filled_percentage)
   return {
     name = name,
     type = type_name,
@@ -247,7 +249,8 @@ function reactor.inspect(name, log_prefix)
       steam = "number",
       coolant_amount = "number",
       coolant_amount_max = "number",
-      coolant_filled_percentage = "number"
+      coolant_filled_percentage = "number",
+      coolant_ratio = "number"
     },
     active = active,
     temperature = temp,
@@ -259,6 +262,8 @@ function reactor.inspect(name, log_prefix)
     coolant_amount = coolant_amount,
     coolant_amount_max = coolant_amount_max,
     coolant_filled_percentage = coolant_filled_percentage,
+    coolant_ratio = coolant_ratio,
+    coolant_ratio_source = coolant_ratio_source,
     methods = methods
   }
 end
