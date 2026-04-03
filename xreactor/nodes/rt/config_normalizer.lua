@@ -78,6 +78,14 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     config_values.safety.max_temperature = defaults.safety.max_temperature
     add_warning("safety.max_temperature missing/invalid; defaulting to " .. tostring(defaults.safety.max_temperature))
   end
+  if type(config_values.safety.temperature_hysteresis) ~= "number" then
+    config_values.safety.temperature_hysteresis = defaults.safety.temperature_hysteresis
+    add_warning("safety.temperature_hysteresis missing/invalid; defaulting to " .. tostring(defaults.safety.temperature_hysteresis))
+  end
+  if type(config_values.safety.temperature_trip_samples) ~= "number" then
+    config_values.safety.temperature_trip_samples = defaults.safety.temperature_trip_samples
+    add_warning("safety.temperature_trip_samples missing/invalid; defaulting to " .. tostring(defaults.safety.temperature_trip_samples))
+  end
   if type(config_values.safety.max_rpm) ~= "number" then
     config_values.safety.max_rpm = defaults.safety.max_rpm
     add_warning("safety.max_rpm missing/invalid; defaulting to " .. tostring(defaults.safety.max_rpm))

@@ -26,9 +26,19 @@ function M.update_module_limits(ctx, module)
       table.insert(limits, "RPM")
     end
   elseif module.type == "reactor" then
+    module.safety_temp_state = module.safety_temp_state or {}
+    local _, fuel_temp_value = safe_wrapped_call(module.peripheral, "getFuelTemperature")
     local _, temp_value = safe_wrapped_call(module.peripheral, "getCasingTemperature")
-    local temp = type(temp_value) == "number" and temp_value or 0
-    if temp > ctx.config.safety.max_temperature then
+    local temp_eval = safety.evaluate_temperature_limit({
+      fuel_temperature = fuel_temp_value,
+      casing_temperature = temp_value,
+      max_temperature = ctx.config.safety.max_temperature,
+      hysteresis = ctx.config.safety.temperature_hysteresis,
+      trip_samples = ctx.config.safety.temperature_trip_samples,
+      state = module.safety_temp_state
+    })
+    module.temperature_safety_diag = temp_eval
+    if temp_eval.triggered then
       table.insert(limits, "TEMP")
     end
     if ctx.reactor_low_water(module.peripheral) then
@@ -253,7 +263,18 @@ function M.update_module_states(ctx)
               ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE")
               ctx.setState(ctx.STATE.SAFE, "SAFETY_COOLANT_LOW")
             else
-              ctx.log("ERROR", "Safety trigger: reactor temperature limit exceeded")
+              local temp_diag = module.temperature_safety_diag or {}
+              ctx.log("ERROR", ("Safety trigger: reactor temperature limit exceeded value=%s limit=%s source=%s fuel_temp=%s casing_temp=%s hysteresis=%s over_limit_ticks=%s trip_samples=%s condition=%s"):format(
+                tostring(temp_diag.temperature),
+                tostring(temp_diag.max_temperature),
+                tostring(temp_diag.source),
+                tostring(temp_diag.fuel_temperature),
+                tostring(temp_diag.casing_temperature),
+                tostring(temp_diag.hysteresis),
+                tostring(temp_diag.over_limit_ticks),
+                tostring(temp_diag.trip_samples),
+                tostring(temp_diag.condition)
+              ))
               ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_TEMP action=ENTER_SAFE")
               ctx.setState(ctx.STATE.SAFE, "SAFETY_TEMPERATURE_HIGH")
             end
