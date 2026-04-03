@@ -155,19 +155,14 @@ On launch it shows a simple menu:
 
 `Neuinstallation` currently does the following:
 
-1. Deletes the existing `/xreactor` install root if it exists.
-2. Prompts for one role:
-   - `MASTER`
-   - `RT`
-   - `ENERGY`
-   - `WATER`
-   - `FUEL`
-   - `REPROCESSING`
-3. Downloads `xreactor/manifest.lua` from the `beta` branch raw GitHub URL.
-4. Downloads the shared base files plus only the selected role files into `/xreactor`.
-5. Writes `/xreactor/config/role.lua` with the selected role.
-6. Writes `/startup` with `shell.run("/xreactor/start.lua")`, unless an existing `/startup` looks unrelated to XReactor.
-7. Logs progress to `/xreactor_logs/installer.log`.
+1. Prompts for one role (`MASTER`, `RT`, `ENERGY`, `WATER`, `FUEL`, `REPROCESSING`).
+2. Downloads `xreactor/manifest.lua` from the `beta` branch raw GitHub URL.
+3. Runs storage preflight checks (including stage/peak + buffer estimation and optional cleanup of stale stage/backup artifacts).
+4. Downloads the expected base + selected role files into `/xreactor_stage` and validates staged files/hashes.
+5. Writes the selected role config into the staged tree.
+6. Commits stage activation by moving current `/xreactor` to `/xreactor_backup_prev`, moving stage to `/xreactor`, and removing backup after successful commit.
+7. Writes `/startup` with `shell.run("/xreactor/start.lua")`, unless an existing `/startup` looks unrelated to XReactor.
+8. Logs progress to `/xreactor_logs/installer.log`.
 
 ### Update flow
 
@@ -175,10 +170,12 @@ On launch it shows a simple menu:
 
 1. Downloads the current manifest.
 2. Reads the installed role from `/xreactor/config/role.lua`.
-3. Updates only missing or changed files for that role based on manifest CRC32 hashes.
-4. Removes obsolete files under `/xreactor`, except anything under `/xreactor/config/`.
-5. Rewrites/ensures the XReactor startup file at `/startup` if the existing startup belongs to XReactor.
-6. Logs progress to `/xreactor_logs/installer.log`.
+3. Runs storage preflight checks for update mode.
+4. Downloads the expected base + installed role files into `/xreactor_stage`.
+5. Copies existing `/xreactor/config` into stage and validates staged files/hashes.
+6. Commits stage activation by moving active `/xreactor` to `/xreactor_backup_prev`, activating `/xreactor_stage` as `/xreactor`, and deleting backup after successful commit.
+7. Rewrites/ensures the XReactor startup file at `/startup` if the existing startup belongs to XReactor.
+8. Logs progress to `/xreactor_logs/installer.log`.
 
 ### Download validation
 
@@ -208,6 +205,8 @@ The packaging command validates and/or synchronizes:
 ### Current storage paths used by the installer
 
 - Install root: `/xreactor`
+- Stage root (temporary): `/xreactor_stage`
+- Backup root during activation (temporary): `/xreactor_backup_prev`
 - Installer log: `/xreactor_logs/installer.log`
 - Role selection file: `/xreactor/config/role.lua`
 - Startup file: `/startup`
@@ -358,6 +357,12 @@ Support nodes maintain a local peripheral registry and periodically rescan hardw
 - ENERGY, WATER, FUEL, RT, and REPROCESSING can render local monitor pages when a monitor is available.
 - ENERGY can choose monitors using a preferred name or selection strategy.
 
+## RT safety and turbine control notes (current behavior)
+
+- Low coolant is handled with a confirmation window, not as immediate kill: runtime emits `COOLANT_LOW_PENDING`, waits ~4 seconds, then either enters SAFE with `SAFETY_COOLANT_LOW` or aborts the pending condition on recovery.
+- Turbine control includes explicit target-band trim and readback diagnostics states such as `TARGET_TRIM_UP`, `TARGET_TRIM_DOWN`, `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`, and `HOLD_CONFIRMED`.
+- Overspeed handling uses explicit brake mode (`OVERSPEED_BRAKE`) and forces requested turbine flow to `0` while enforcing coil engagement for active braking.
+
 ## Update instructions
 
 To update an installed node/computer:
@@ -391,8 +396,8 @@ Work from the current implementation, not older installer docs:
 These are the constraints that are visible in the current codebase:
 
 - **HTTP is required for installation and update.** The installer cannot work without the CC:Tweaked HTTP API.
-- **The installer only supports two active operations:** fresh install and update. There is no active stage/backup/rollback flow in the current installer.
-- **Fresh install is destructive for `/xreactor`.** `Neuinstallation` deletes the existing install root before downloading the selected role runtime.
+- **The installer uses an active staged commit flow** for both install and update (`/xreactor_stage` + `/xreactor_backup_prev` + activation/rollback attempt on stage move failure).
+- **Fresh install replaces the active install tree.** `Neuinstallation` stages a full install and then swaps it into `/xreactor` (existing runtime is moved to backup during activation and removed after successful commit).
 - **Autostart only works automatically if `/startup` is writable and not protected by an unrelated script.**
 - **Role changes are install-time decisions.** The updater does not re-prompt for a different role; it uses the installed role from `role.lua`.
 - **Hardware availability is role-dependent.** Missing modems, monitors, tanks, matrices, storages, reactors, or turbines lead to degraded behavior, warnings, or disabled subsystems rather than magically emulated hardware.

@@ -1,49 +1,38 @@
-# Testplan (Finalisierung)
+# Testplan (aktueller Stand)
 
 ## Install/Update
-1. **Fresh Install**: MASTER/RT/ENERGY mit `installer`.
-2. **SAFE UPDATE** aus bestehender Beta-Installation (ohne Config-Reset).
-3. **First-Start Setup**: Rollenwahl, Label (`XR-ROLE-ID`) + `node-<ID>` erzeugt, `/xreactor/config/role.lua` plus `/xreactor/config/node_id.txt` geschrieben, Reboot läuft durch.
-4. **Low-Space Abort**: Fülle Disk fast voll → SAFE UPDATE starten → erwarteter sauberer Abbruch mit Disk-Übersicht, Log-Eintrag, keine Stage/Backup-Reste.
-5. **Rollen-Minimalinstallation**: RT/Energy-Install → prüfen, dass keine `xreactor/master/ui/*` und keine fremden Nodes-Ordner installiert wurden.
-6. **Delta-Update**: Nur eine Datei im Repo ändern → Manifest aktualisieren → SAFE UPDATE → es wird nur diese Datei (+ Manifest) geladen/aktualisiert, Backup enthält nur ersetzte Dateien.
-7. **Config-Migration**: Alte Config ohne `version` starten → Defaults ergänzt, bestehende Werte bleiben erhalten, Config wird gespeichert.
-8. **RT Fresh Install Auto-Discovery**: Frische RT-Installation ohne Namensanpassung startet mit leeren `reactors`/`turbines`-Listen und bindet lokal sichtbare Reaktoren/Turbinen automatisch.
+1. **Fresh Install (lokal)**: `installer` starten, Rolle wählen, Abschluss prüfen (`Installation complete` im Installer-Log).
+2. **Update (lokal)**: `installer` -> `Update`; Rolle wird aus `/xreactor/config/role.lua` übernommen.
+3. **Storage-Preflight**: im Installer-Log müssen Free/Payload/Growth/Stage-Peak/Buffer-Werte protokolliert werden; bei Low-Space sauberer Abbruch mit konkreter Meldung.
+4. **Stage/Backup/Activation/Commit**:
+   - Stage-Aufbau in `/xreactor_stage`
+   - Aktivbestand nach `/xreactor_backup_prev`
+   - Stage-Aktivierung auf `/xreactor`
+   - Backup-Entfernung nach erfolgreichem Commit.
+5. **Startup-Verhalten**: `/startup` wird nur überschrieben, wenn es als XReactor-Startup erkannt wird; fremde Startups bleiben erhalten.
+6. **Config-Erhalt beim Update**: bestehende `/xreactor/config/*` bleibt wirksam (durch Copy nach Stage).
 
-## Kommunikation
-1. **ACK/Retry**: Simuliere Paketverlust (debug drop) und prüfe Retry + ACK (delivered/applied) nur für `COMMAND`, nicht für `STATUS`/`HEARTBEAT`.
-2. **Timeouts**: Prüfe, dass nach max retries klare Logmeldung erfolgt.
-3. **Proto-Mismatch**: absichtlich proto_ver ändern → Status DEGRADED + keine Command-Ausführung.
-4. **Queue-Stau**: Modem/Funk ausfallen lassen → `STATUS`/`HEARTBEAT` dürfen nicht ungebremst anwachsen; nur aktuelle volatile Zustände bleiben in der Queue, `COMMAND` bleibt retry-/ACK-fähig.
-5. **Modem-Autodetect (1x wireless + 1x wired)**: Vertausche Seiten (nicht `left/right`) und prüfe, dass Node/Master korrekt starten und beide Rollen (Comms + wired peripherals) automatisch gewählt werden.
-6. **Override/Autodetect-Fallback**: Setze absichtlich ungültige `wireless_modem`/`wired_modem` Werte in Config → klare Warnungen im Log und sicherer Fallback auf autodetect.
-7. **Override-Prio**: Bei mehreren passenden Modems explizite Config setzen und prüfen, dass die explizite Auswahl Vorrang vor der deterministischen Autodetect-Reihenfolge hat.
+## Safety (RT)
+1. **Coolant Pending statt sofort SAFE**: Low-Coolant auslösen -> Log enthält `COOLANT_LOW_PENDING`, aber noch kein sofortiger SAFE/SCRAM.
+2. **Bestätigter Coolant-Low-Fall**: Coolant-Low > ~4s halten -> SAFE mit Grund `SAFETY_COOLANT_LOW` und zugehöriger Safety-Ownership-Log.
+3. **Pending-Recovery-Abbruch**: während Pending erholt sich Coolant wieder -> Pending wird abgebrochen, kein SAFE-Übergang.
+4. **Temperatur-Safety getrennt prüfen**: Übertemperatur triggert SAFE mit `SAFETY_TEMPERATURE_HIGH` und eigener Ownership-Kausalkette.
+5. **SAFE-/SCRAM-Ursachen klar lesbar**: Übergangslogs enthalten explizite Gründe (`Entering SAFE mode reason=...`, SCRAM-Ownership-Logs).
 
-## Registry/Discovery
-1. Geräte-Registry erzeugt stabile IDs und behält Reihenfolge (kein Flackern).
-2. Missing/Found aktualisiert mit last_seen + last_error.
-3. Alias-Mapping aus Config sichtbar in UI.
-4. RT/FUEL/WATER Fluid-Lesen bevorzugt `tanks()`; Legacy-Methoden nur als Fallback testen.
-5. Wiederholte Discovery-Zyklen ohne echte Geräteänderung erzeugen keine unnötigen Registry-Schreibzugriffe.
-6. RT mit leeren Gerätelisten bindet kompatible lokale Reaktoren/Turbinen automatisch; RT mit festen Listen bindet weiterhin ausschließlich diese Namen.
+## RT-/Turbinenregelung
+1. **Alle gebundenen Turbinen werden pro Zyklus bewertet**: bei Multi-Turbinen-Setup (inkl. großem Satz, z. B. 25 im Discovery-/Snapshot-Test) pro Turbine Regelungs-/Diagnoselog prüfen.
+2. **Overspeed-Bremse**: bei Overspeed muss `OVERSPEED_BRAKE` aktiv werden, Soll-Flow auf `0` gesetzt werden und Coil-Bremsung erzwungen werden.
+3. **Target-Band mit aktiver Trim-Logik**: in-band Zustände prüfen (`TARGET_TRIM_UP`, `TARGET_TRIM_DOWN`, `HOLDING_TARGET_ACTIVE`).
+4. **Readback-Lag-Diagnose**: bei Soll/Ist-Mismatch müssen `READBACK_LAG`/Pending-Klassifikationen und kombinierte Zustände wie `ACTIVE_TRIM_WITH_READBACK_LAG` erscheinen.
+5. **Flow-0-Pending bei Overspeed**: wenn Overspeed aktiv und Readback nicht sofort folgt, muss der Pending-Pfad mit klarer Diagnose (inkl. retries/detail) sichtbar sein.
 
-## UI/Router
-1. Master: Node list/Node detail/System summary navigierbar.
-2. Nodes: Overview/Details/Diagnostics + Paging.
-3. Dirty redraw: keine Full clears pro tick (nur bei Änderungen).
-4. UI-Dirty-Redraw: verkürzte Texte überschreiben Restzeichen korrekt; Monitor-Resize invalidiert einmalig und rendert dann stabil.
-5. Monitor-Scale: `setTextScale` nur bei echter Scale-Änderung oder neuem Monitor.
-6. UI-Service rendert bei unverändertem Snapshot nicht in jedem Tick; langsamer Fallback-Refresh bleibt vorhanden.
+## Kommunikation / Discovery / Betrieb
+1. **ACK/Retry**: Retry + ACK für `COMMAND` prüfen; `STATUS`/`HEARTBEAT` bleiben ohne Applied-ACK-Logik.
+2. **Modem-Auswahl**: Override + Autodetect-Fallback testen (inkl. klarer Warnungen bei ungültigem Override).
+3. **Registry-Stabilität**: unveränderte Discovery-Zyklen erzeugen keine unnötigen Registry-Rewrites.
+4. **Health/Degraded**: fehlende Kernperipherie führt zu DEGRADED mit nachvollziehbaren Reasons.
 
-## Service-Stabilität
-1. Fehlernder Service wird mit Exponential-Backoff erneut versucht und nicht in jedem Tick neu gespammt.
-2. Erfolgreicher Tick/Init setzt den Backoff zurück.
-
-## Health/Degraded
-1. Energy: fehlende Matrix/Storage führt zu DEGRADED + reason.
-2. RT: fehlende Reactor/Turbine führt zu DEGRADED + reason.
-3. Master: Node Overview zeigt Status + reasons + last_seen.
-
-## Offline Verhalten
-1. Master offline → Nodes gehen DEGRADED/AUTONOM.
-2. Master wieder online → Status normalisiert.
+## First start / bootstrap / role setup
+1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.
+2. **Rollenwechsel**: erfolgt nicht im Update-Dialog; Rollenwechsel nur über Neuinstallation oder manuelle, bewusste Re-Konfiguration.
+3. **Bootstrap-Basics**: Node kommt ohne historische Setup-Reste hoch; Logs dokumentieren erkannten Role-/Runtime-Startpfad.
