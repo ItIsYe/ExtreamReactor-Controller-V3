@@ -16,6 +16,17 @@ local function has_reactor_rod_write_path(caps)
   return caps and (caps.setAllControlRodLevels or caps.setControlRodLevel or caps.getControlRods)
 end
 
+local COOLANT_CONFIRM_DELAY_MS = 4000
+
+local function has_limit(limits, expected)
+  for _, limit in ipairs(limits or {}) do
+    if limit == expected then
+      return true
+    end
+  end
+  return false
+end
+
 function M.update_module_limits(ctx, module)
   local limits = {}
   if module.type == "turbine" then
@@ -296,66 +307,138 @@ function M.update_module_states(ctx)
     local previous = module.state
     local limits = M.update_module_limits(ctx, module)
     if module.type == "reactor" and module.state ~= "OFF" then
-      for _, limit in ipairs(limits) do
-        if limit == "TEMP" or limit == "WATER" then
+      local has_temp_limit = has_limit(limits, "TEMP")
+      local has_coolant_limit = has_limit(limits, "WATER")
+      local coolant_diag = module.coolant_safety_diag or {}
+      local temp_diag = module.temperature_safety_diag or {}
+
+      if not has_coolant_limit and module.coolant_low_pending_trip then
+        local pending = module.coolant_low_pending_trip
+        local elapsed_ms = math.max(0, now - (tonumber(pending.started_at_ms) or now))
+        ctx.log("INFO", ("COOLANT_LOW_ABORTED_RECOVERED module=%s elapsed_ms=%s amount=%s max=%s ratio=%s threshold=%s recover_threshold=%s measurement_state=%s measurement_valid=%s stale_fallback=%s source=%s source_method=%s condition=%s"):format(
+          tostring(module.id),
+          tostring(elapsed_ms),
+          tostring(coolant_diag.coolant_amount),
+          tostring(coolant_diag.coolant_amount_max),
+          tostring(coolant_diag.coolant_ratio),
+          tostring(coolant_diag.min_water),
+          tostring(coolant_diag.recover_threshold),
+          tostring(coolant_diag.measurement_state),
+          tostring(coolant_diag.measurement_valid),
+          tostring(coolant_diag.stale_fallback_used),
+          tostring(coolant_diag.source),
+          tostring(coolant_diag.source_method),
+          tostring(coolant_diag.condition)
+        ))
+        module.coolant_low_pending_trip = nil
+      end
+
+      if has_temp_limit then
+        module.state = "ERROR"
+        module.progress = 0
+        module.coolant_low_pending_trip = nil
+        if ctx.current_state() ~= ctx.STATE.SAFE then
+          local coupled = coolant_diag.low_detected and "COOLANT_COUPLED" or "TEMP_PRIMARY"
+          ctx.log("ERROR", ("Safety trigger: reactor temperature limit exceeded value=%s limit=%s source=%s fuel_temp=%s casing_temp=%s hysteresis=%s over_limit_ticks=%s trip_samples=%s condition=%s"):format(
+            tostring(temp_diag.temperature),
+            tostring(temp_diag.max_temperature),
+            tostring(temp_diag.source),
+            tostring(temp_diag.fuel_temperature),
+            tostring(temp_diag.casing_temperature),
+            tostring(temp_diag.hysteresis),
+            tostring(temp_diag.over_limit_ticks),
+            tostring(temp_diag.trip_samples),
+            tostring(temp_diag.condition)
+          ))
+          ctx.log("ERROR", ("Safety trigger correlation: temp_causality=%s coolant_ratio=%s coolant_threshold=%s coolant_condition=%s coolant_source=%s coolant_low_ticks=%s"):format(
+            tostring(coupled),
+            tostring(coolant_diag.coolant_ratio),
+            tostring(coolant_diag.min_water),
+            tostring(coolant_diag.condition),
+            tostring(coolant_diag.source),
+            tostring(coolant_diag.low_ticks)
+          ))
+          ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_TEMP action=ENTER_SAFE")
+          ctx.setState(ctx.STATE.SAFE, "SAFETY_TEMPERATURE_HIGH")
+        end
+        if ctx.node_state_machine:state() ~= ctx.constants.node_states.EMERGENCY then
+          ctx.node_state_machine:transition(ctx.constants.node_states.EMERGENCY)
+        end
+      elseif has_coolant_limit then
+        local pending = module.coolant_low_pending_trip
+        if not pending then
+          pending = { started_at_ms = now }
+          module.coolant_low_pending_trip = pending
+        end
+        local elapsed_ms = math.max(0, now - (tonumber(pending.started_at_ms) or now))
+        local remaining_ms = math.max(0, COOLANT_CONFIRM_DELAY_MS - elapsed_ms)
+        local coupled = temp_diag.over_limit and "TEMP_COUPLED" or tostring(coolant_diag.causality or "COOLANT_PRIMARY")
+        if remaining_ms > 0 then
+          ctx.log("WARN", ("COOLANT_LOW_PENDING module=%s started_at_ms=%s elapsed_ms=%s remaining_ms=%s amount=%s max=%s ratio=%s threshold=%s recover_threshold=%s measurement_state=%s measurement_valid=%s stale_fallback=%s source=%s source_method=%s condition=%s causality=%s"):format(
+            tostring(module.id),
+            tostring(pending.started_at_ms),
+            tostring(elapsed_ms),
+            tostring(remaining_ms),
+            tostring(coolant_diag.coolant_amount),
+            tostring(coolant_diag.coolant_amount_max),
+            tostring(coolant_diag.coolant_ratio),
+            tostring(coolant_diag.min_water),
+            tostring(coolant_diag.recover_threshold),
+            tostring(coolant_diag.measurement_state),
+            tostring(coolant_diag.measurement_valid),
+            tostring(coolant_diag.stale_fallback_used),
+            tostring(coolant_diag.source),
+            tostring(coolant_diag.source_method),
+            tostring(coolant_diag.condition),
+            tostring(coupled)
+          ))
+        else
           module.state = "ERROR"
           module.progress = 0
+          module.coolant_low_pending_trip = nil
           if ctx.current_state() ~= ctx.STATE.SAFE then
-            if limit == "WATER" then
-              local coolant_diag = module.coolant_safety_diag or {}
-              local temp_diag = module.temperature_safety_diag or {}
-              local coupled = temp_diag.over_limit and "TEMP_COUPLED" or tostring(coolant_diag.causality or "COOLANT_PRIMARY")
-              ctx.log("ERROR", ("Safety trigger: reactor coolant level too low amount=%s max=%s ratio=%s ratio_raw=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s source_method=%s measurement_state=%s stale_fallback=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s zero_glitch_pending=%s condition=%s causality=%s temp_value=%s temp_limit=%s temp_condition=%s"):format(
-                tostring(coolant_diag.coolant_amount),
-                tostring(coolant_diag.coolant_amount_max),
-                tostring(coolant_diag.coolant_ratio),
-                tostring(coolant_diag.coolant_ratio_raw),
-                tostring(coolant_diag.min_water),
-                tostring(coolant_diag.recover_threshold),
-                tostring(coolant_diag.hysteresis),
-                tostring(coolant_diag.source),
-                tostring(coolant_diag.source_method),
-                tostring(coolant_diag.measurement_state),
-                tostring(coolant_diag.stale_fallback_used),
-                tostring(coolant_diag.low_ticks),
-                tostring(coolant_diag.trip_samples),
-                tostring(coolant_diag.invalid_ticks),
-                tostring(coolant_diag.invalid_grace_samples),
-                tostring(coolant_diag.zero_glitch_pending),
-                tostring(coolant_diag.condition),
-                tostring(coupled),
-                tostring(temp_diag.temperature),
-                tostring(temp_diag.max_temperature),
-                tostring(temp_diag.condition)
-              ))
-              ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE")
-              ctx.setState(ctx.STATE.SAFE, "SAFETY_COOLANT_LOW")
-            else
-              local temp_diag = module.temperature_safety_diag or {}
-              local coolant_diag = module.coolant_safety_diag or {}
-              local coupled = coolant_diag.low_detected and "COOLANT_COUPLED" or "TEMP_PRIMARY"
-              ctx.log("ERROR", ("Safety trigger: reactor temperature limit exceeded value=%s limit=%s source=%s fuel_temp=%s casing_temp=%s hysteresis=%s over_limit_ticks=%s trip_samples=%s condition=%s"):format(
-                tostring(temp_diag.temperature),
-                tostring(temp_diag.max_temperature),
-                tostring(temp_diag.source),
-                tostring(temp_diag.fuel_temperature),
-                tostring(temp_diag.casing_temperature),
-                tostring(temp_diag.hysteresis),
-                tostring(temp_diag.over_limit_ticks),
-                tostring(temp_diag.trip_samples),
-                tostring(temp_diag.condition)
-              ))
-              ctx.log("ERROR", ("Safety trigger correlation: temp_causality=%s coolant_ratio=%s coolant_threshold=%s coolant_condition=%s coolant_source=%s coolant_low_ticks=%s"):format(
-                tostring(coupled),
-                tostring(coolant_diag.coolant_ratio),
-                tostring(coolant_diag.min_water),
-                tostring(coolant_diag.condition),
-                tostring(coolant_diag.source),
-                tostring(coolant_diag.low_ticks)
-              ))
-              ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_TEMP action=ENTER_SAFE")
-              ctx.setState(ctx.STATE.SAFE, "SAFETY_TEMPERATURE_HIGH")
-            end
+            ctx.log("ERROR", ("COOLANT_LOW_CONFIRMED module=%s started_at_ms=%s elapsed_ms=%s amount=%s max=%s ratio=%s threshold=%s recover_threshold=%s measurement_state=%s measurement_valid=%s stale_fallback=%s source=%s source_method=%s condition=%s causality=%s"):format(
+              tostring(module.id),
+              tostring(pending.started_at_ms),
+              tostring(elapsed_ms),
+              tostring(coolant_diag.coolant_amount),
+              tostring(coolant_diag.coolant_amount_max),
+              tostring(coolant_diag.coolant_ratio),
+              tostring(coolant_diag.min_water),
+              tostring(coolant_diag.recover_threshold),
+              tostring(coolant_diag.measurement_state),
+              tostring(coolant_diag.measurement_valid),
+              tostring(coolant_diag.stale_fallback_used),
+              tostring(coolant_diag.source),
+              tostring(coolant_diag.source_method),
+              tostring(coolant_diag.condition),
+              tostring(coupled)
+            ))
+            ctx.log("ERROR", ("Safety trigger: reactor coolant level too low amount=%s max=%s ratio=%s ratio_raw=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s source_method=%s measurement_state=%s stale_fallback=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s zero_glitch_pending=%s condition=%s causality=%s temp_value=%s temp_limit=%s temp_condition=%s"):format(
+              tostring(coolant_diag.coolant_amount),
+              tostring(coolant_diag.coolant_amount_max),
+              tostring(coolant_diag.coolant_ratio),
+              tostring(coolant_diag.coolant_ratio_raw),
+              tostring(coolant_diag.min_water),
+              tostring(coolant_diag.recover_threshold),
+              tostring(coolant_diag.hysteresis),
+              tostring(coolant_diag.source),
+              tostring(coolant_diag.source_method),
+              tostring(coolant_diag.measurement_state),
+              tostring(coolant_diag.stale_fallback_used),
+              tostring(coolant_diag.low_ticks),
+              tostring(coolant_diag.trip_samples),
+              tostring(coolant_diag.invalid_ticks),
+              tostring(coolant_diag.invalid_grace_samples),
+              tostring(coolant_diag.zero_glitch_pending),
+              tostring(coolant_diag.condition),
+              tostring(coupled),
+              tostring(temp_diag.temperature),
+              tostring(temp_diag.max_temperature),
+              tostring(temp_diag.condition)
+            ))
+            ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE")
+            ctx.setState(ctx.STATE.SAFE, "SAFETY_COOLANT_LOW")
           end
           if ctx.node_state_machine:state() ~= ctx.constants.node_states.EMERGENCY then
             ctx.node_state_machine:transition(ctx.constants.node_states.EMERGENCY)

@@ -61,7 +61,7 @@ return {
       { path = "nodes/rt/command_handler.lua", size_bytes = 4313, hash = "595cf28b" },
       { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62" },
       { path = "nodes/rt/monitor_ui.lua", size_bytes = 13882, hash = "7cedf18b" },
-      { path = "nodes/rt/module_lifecycle.lua", size_bytes = 16669, hash = "831e60aa" },
+      { path = "nodes/rt/module_lifecycle.lua", size_bytes = 20592, hash = "2be03ab3" },
       { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 7997, hash = "fa20e3a7" },
       { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 1123, hash = "712f74f4" },
       { path = "nodes/rt/status_snapshot.lua", size_bytes = 3637, hash = "51bda9ce" },
