@@ -10,6 +10,16 @@ local function clamp(value, min, max)
   return value
 end
 
+function rails.clamp_with_reason(value, min, max)
+  if min ~= nil and value < min then
+    return min, "MIN"
+  end
+  if max ~= nil and value > max then
+    return max, "MAX"
+  end
+  return value, nil
+end
+
 local function ensure_state(state)
   if type(state) ~= "table" then
     state = {}

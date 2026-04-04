@@ -1,5 +1,9 @@
 local M = {}
 
+local function clamp_range(value, min_value, max_value)
+  return math.max(min_value, math.min(max_value, value))
+end
+
 function M.validate_config(config_values, defaults, add_warning, utils)
   local normalized = utils.normalize_node_id(config_values.node_id)
   if normalized == "UNKNOWN" then
@@ -153,6 +157,39 @@ function M.validate_config(config_values, defaults, add_warning, utils)
   if type(config_values.autonom.steam_deficit) ~= "number" then
     config_values.autonom.steam_deficit = defaults.autonom.steam_deficit
     add_warning("autonom.steam_deficit missing/invalid; defaulting to " .. tostring(defaults.autonom.steam_deficit))
+  end
+  local autonom = config_values.autonom
+  if type(autonom.regulator_min_rods) ~= "number" then
+    if type(autonom.min_rods) == "number" then
+      autonom.regulator_min_rods = autonom.min_rods
+      add_warning("autonom.regulator_min_rods missing; using legacy autonom.min_rods")
+    else
+      autonom.regulator_min_rods = defaults.autonom.regulator_min_rods
+      add_warning("autonom.regulator_min_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.regulator_min_rods))
+    end
+  end
+  if type(autonom.regulator_max_rods) ~= "number" then
+    if type(autonom.max_rods) == "number" then
+      autonom.regulator_max_rods = autonom.max_rods
+      add_warning("autonom.regulator_max_rods missing; using legacy autonom.max_rods")
+    else
+      autonom.regulator_max_rods = defaults.autonom.regulator_max_rods
+      add_warning("autonom.regulator_max_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.regulator_max_rods))
+    end
+  end
+  local min_before = autonom.regulator_min_rods
+  local max_before = autonom.regulator_max_rods
+  autonom.regulator_min_rods = clamp_range(autonom.regulator_min_rods, 0, 100)
+  autonom.regulator_max_rods = clamp_range(autonom.regulator_max_rods, 0, 100)
+  if autonom.regulator_min_rods ~= min_before then
+    add_warning("autonom.regulator_min_rods out of range; clamping to " .. tostring(autonom.regulator_min_rods))
+  end
+  if autonom.regulator_max_rods ~= max_before then
+    add_warning("autonom.regulator_max_rods out of range; clamping to " .. tostring(autonom.regulator_max_rods))
+  end
+  if autonom.regulator_min_rods > autonom.regulator_max_rods then
+    autonom.regulator_min_rods, autonom.regulator_max_rods = autonom.regulator_max_rods, autonom.regulator_min_rods
+    add_warning("autonom.regulator_min_rods > autonom.regulator_max_rods; swapping values")
   end
   if type(config_values.monitor_interval) ~= "number" or config_values.monitor_interval <= 0 then
     config_values.monitor_interval = defaults.monitor_interval

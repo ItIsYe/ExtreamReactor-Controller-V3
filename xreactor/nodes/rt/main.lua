@@ -126,6 +126,8 @@ local DEFAULT_CONFIG = {
     ramp_step = CONFIG.FLOW_STEP, -- Ramp step in autonom mode.
     min_rods = CONFIG.ROD_MIN, -- Minimum rod insertion.
     max_rods = CONFIG.ROD_MAX, -- Maximum rod insertion.
+    regulator_min_rods = CONFIG.ROD_MIN, -- Lower clamp for automatic rod target.
+    regulator_max_rods = CONFIG.ROD_MAX, -- Upper clamp for automatic rod target.
     reactor_adjust_interval = CONFIG.ROD_TICK, -- Reactor adjust interval.
     steam_reserve = 5000, -- Steam reserve threshold.
     steam_deficit = 5000 -- Steam deficit threshold.
@@ -278,6 +280,8 @@ config.autonom.flow_step = config.autonom.flow_step or FLOW_STEP
 config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
 config.autonom.min_rods = config.autonom.min_rods or ROD_MIN
 config.autonom.max_rods = config.autonom.max_rods or ROD_MAX
+config.autonom.regulator_min_rods = config.autonom.regulator_min_rods or config.autonom.min_rods or DEFAULT_CONFIG.autonom.regulator_min_rods
+config.autonom.regulator_max_rods = config.autonom.regulator_max_rods or config.autonom.max_rods or DEFAULT_CONFIG.autonom.regulator_max_rods
 config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or ROD_TICK
 config.autonom.steam_reserve = config.autonom.steam_reserve or DEFAULT_CONFIG.autonom.steam_reserve
 config.autonom.steam_deficit = config.autonom.steam_deficit or DEFAULT_CONFIG.autonom.steam_deficit
@@ -787,6 +791,17 @@ local function controlReactor()
   local smoothed_margin = rails.smooth(reactor_rails_state, "steam_margin", steam_margin, rod_cfg.ema_alpha)
   local target_rods, direction = rails.step(current_rods, smoothed_margin, reactor_rails_state, rod_cfg, os.clock())
   target_rods = safety.clamp(target_rods, ROD_MIN, ROD_MAX)
+  do
+    local cfg_min = config.autonom and config.autonom.regulator_min_rods or ROD_MIN
+    local cfg_max = config.autonom and config.autonom.regulator_max_rods or ROD_MAX
+    local clamped_target, clamp_reason = rails.clamp_with_reason(target_rods, cfg_min, cfg_max)
+    if clamp_reason == "MIN" then
+      log("DEBUG", "ROD_TARGET_CLAMPED_BY_CONFIG_MIN current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods) .. " clamped=" .. tostring(clamped_target) .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max))
+    elseif clamp_reason == "MAX" then
+      log("DEBUG", "ROD_TARGET_CLAMPED_BY_CONFIG_MAX current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods) .. " clamped=" .. tostring(clamped_target) .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max))
+    end
+    target_rods = clamped_target
+  end
   local min_coolant_ratio
   for _, name in ipairs(config.reactors or {}) do
     local reactor, sample = peripherals.reactors[name], nil
@@ -800,7 +815,6 @@ local function controlReactor()
     if ramp_diag and ramp_diag.reason == "RAMP_APPLIED" then log("DEBUG", "ROD_RAMP_APPLIED requested_delta=" .. tostring(ramp_diag.requested_delta) .. " applied_delta=" .. tostring(ramp_diag.applied_delta) .. " current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods)) end
     return
   end
-
   if direction ~= 0 then
     autonom_state.pending_rod_direction = direction > 0 and "UP" or "DOWN"
   end
