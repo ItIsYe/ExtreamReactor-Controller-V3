@@ -70,6 +70,16 @@ def run_cc_parse_guard():
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
 
+def verify_remote_consistency(base_url: str):
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "verify_remote_manifest.py"),
+        "--base-url",
+        base_url,
+    ]
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+
+
 def build_zip(output_zip: pathlib.Path):
     output_zip.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -83,6 +93,7 @@ def main():
     parser = argparse.ArgumentParser(description="Create consistent release package from repo state")
     parser.add_argument("--output", default="dist/xreactor-release.zip", help="zip output path")
     parser.add_argument("--sync", action="store_true", help="sync manifest/release metadata before packaging")
+    parser.add_argument("--verify-url", help="verify published files against published manifest URL after packaging")
     args = parser.parse_args()
 
     run_cc_parse_guard()
@@ -94,6 +105,10 @@ def main():
 
     output_zip = REPO_ROOT / args.output
     build_zip(output_zip)
+
+    if args.verify_url:
+        verify_remote_consistency(args.verify_url)
+
     print(f"Package: {output_zip}")
     return 0
 

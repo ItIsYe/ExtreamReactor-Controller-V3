@@ -202,6 +202,20 @@ The packaging command validates and/or synchronizes:
 - installer hash/size in `xreactor/release.lua`,
 - ZIP content directly from the current repository working tree (`installer` + `xreactor/**`).
 
+For publish/deploy sanity checks, verify the *published* files against the *published* manifest and fail release if any mismatch exists:
+
+```bash
+python scripts/verify_remote_manifest.py --base-url https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor --check-local
+```
+
+You can also wire this into packaging via:
+
+```bash
+python scripts/package_release.py --sync --verify-url https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor
+```
+
+Deploy order must remain consistent: publish files first, then `manifest.lua` (or atomically), so installers never read a new manifest with old files.
+
 ### Current storage paths used by the installer
 
 - Install root: `/xreactor`

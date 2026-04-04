@@ -57,7 +57,7 @@ return {
     rt = {
       { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48" },
       { path = "nodes/rt/config_normalizer.lua", size_bytes = 15996, hash = "92f3d7f0" },
-      { path = "nodes/rt/config.lua", size_bytes = 6453, hash = "5d55bdb1" },
+      { path = "nodes/rt/config.lua", size_bytes = 6455, hash = "cfe3b9de" },
       { path = "nodes/rt/command_handler.lua", size_bytes = 4313, hash = "595cf28b" },
       { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62" },
       { path = "nodes/rt/monitor_ui.lua", size_bytes = 13882, hash = "7cedf18b" },
