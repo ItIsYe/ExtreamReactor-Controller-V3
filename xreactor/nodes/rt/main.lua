@@ -120,7 +120,7 @@ local DEFAULT_CONFIG = {
   autonom = {
     control_rod_level = 70, max_rpm = CONFIG.TARGET_RPM, min_flow = CONFIG.MIN_FLOW, max_flow = CONFIG.MAX_FLOW,
     flow_step = CONFIG.FLOW_STEP, ramp_step = CONFIG.FLOW_STEP,
-    regulator_min_rods = 30, regulator_max_rods = CONFIG.ROD_MAX, reactor_adjust_interval = CONFIG.ROD_TICK,
+    regulator_min_rods = 20, regulator_max_rods = CONFIG.ROD_MAX, reactor_adjust_interval = CONFIG.ROD_TICK,
     steam_reserve = 5000,
     steam_deficit = 5000
   },
@@ -167,7 +167,7 @@ local DEFAULT_CONFIG = {
       coolant_ramp_hard_limit_ratio = 0.22, -- Hard coolant margin where power-up rod withdraw is blocked.
       max_step_down_when_coolant_soft = 2, -- Max withdraw step when coolant enters soft-limit zone.
       max_step_down_when_coolant_hard = 0, -- Max withdraw step when coolant enters hard-limit zone.
-      min = 30, -- Rod clamp minimum for automatic regulator path defaults (70% max automatic power).
+      min = 20, -- Rod clamp minimum for automatic regulator path defaults (80% max automatic power).
       max = CONFIG.ROD_MAX, -- Rod clamp maximum.
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
     },
@@ -1070,6 +1070,30 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
       target_band_at_max_limit = next_flow >= max_flow
     }
   end
+  local hold_for_readback_lag, hold_reason = turbine_regulator.should_hold_readback_settle({
+    pending_expected_flow = pending_requested_flow,
+    confirmed_flow = ctrl.confirmed_flow,
+    current_flow = base_flow,
+    candidate_flow = next_flow,
+    tolerance = rail_cfg.confirm_tolerance,
+    pending_since = ctrl.pending_flow_since,
+    now_ts = now_ts,
+    settle_timeout_s = rail_cfg.settle_timeout_s,
+    pending_retries = ctrl.pending_retries,
+    readback_retry_cap = rail_cfg.readback_retry_cap
+  })
+  if (not overspeed_state.active) and hold_for_readback_lag then
+    next_flow = base_flow
+    direction = 0
+    decision = {
+      reason = "READBACK_SETTLING_HOLD",
+      step = 0,
+      min = min_flow,
+      max = max_flow,
+      target_band = target_band and target_band.in_band or false,
+      target_band_mode = hold_reason
+    }
+  end
   ctrl.requested_flow = clamp_turbine_flow(next_flow)
   ctrl.flow = ctrl.requested_flow
   if defer_cooldown and decision then
@@ -1091,6 +1115,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   ctrl.target_trim_active = (not overspeed_state.active)
     and target_band
     and target_band.in_band
+    and not (decision and decision.reason == "READBACK_SETTLING_HOLD")
     and (target_band.mode == "TARGET_TRIM_UP" or target_band.mode == "TARGET_TRIM_DOWN")
     or false
   ctrl.in_target_band = (not overspeed_state.active) and target_band and target_band.in_band or false
@@ -1158,6 +1183,17 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local steam_input, active_state = flow_apply_helpers.sample_turbine_runtime_metrics(turbine, caps, safe_wrapped_call)
   local now_ts = os.clock()
   local ok, applied, setter = pcall(setTurbineFlow, turbine, caps, requested_flow)
+  local write_state = "WRITE_FAILED"
+  local write_detail = tostring(setter)
+  if ok and applied then
+    write_state = "WRITE_ACCEPTED"
+    write_detail = tostring(setter)
+  elseif ok then
+    write_state = "WRITE_REJECTED"
+    write_detail = tostring(setter)
+  elseif not ok then
+    write_detail = tostring(applied)
+  end
   local overspeed_coil_ok, overspeed_coil_reason = enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
   local rail_cfg = config.rails and config.rails.turbine_flow or {}
   local observed_flow, flow_reader, attempt, flow_tolerance =
@@ -1180,7 +1216,9 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     min_flow = applied_min,
     max_flow = ctrl.effective_max_flow or MAX_FLOW,
     inductor_engaged = ctrl.inductor_engaged,
-    steam_input = steam_input
+    steam_input = steam_input,
+    readback_state = readback_state,
+    write_state = write_state
   })
   local target_zone_state = ctrl.in_target_band and "IN_TARGET_BAND" or "OUTSIDE_TARGET_BAND"
   local target_action = flow_apply_helpers.resolve_target_action(reason, decision)
@@ -1226,6 +1264,8 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     setter = setter,
     set_called = ok and applied,
     set_ok = ok,
+    write_state = write_state,
+    write_detail = write_detail,
     observed_flow = observed_flow,
     flow_reader = flow_reader,
     attempt = attempt,

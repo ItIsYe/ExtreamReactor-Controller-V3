@@ -126,6 +126,41 @@ function regulator.resolve_min_flow(base_min, effective_min_flow)
   return min_flow, false
 end
 
+function regulator.should_hold_readback_settle(input)
+  local pending_expected = sanitize_number(type(input) == "table" and input.pending_expected_flow or nil, nil)
+  local confirmed = sanitize_number(type(input) == "table" and input.confirmed_flow or nil, nil)
+  local current_flow = sanitize_number(type(input) == "table" and input.current_flow or nil, pending_expected)
+  local candidate_flow = sanitize_number(type(input) == "table" and input.candidate_flow or nil, current_flow)
+  local tolerance = math.max(0, sanitize_number(type(input) == "table" and input.tolerance or nil, 1))
+  local pending_since = sanitize_number(type(input) == "table" and input.pending_since or nil, 0)
+  local now_ts = sanitize_number(type(input) == "table" and input.now_ts or nil, pending_since)
+  local settle_timeout_s = math.max(0, sanitize_number(type(input) == "table" and input.settle_timeout_s or nil, 0))
+  local pending_retries = math.max(0, math.floor(sanitize_number(type(input) == "table" and input.pending_retries or nil, 0)))
+  local retry_cap = math.max(0, math.floor(sanitize_number(type(input) == "table" and input.readback_retry_cap or nil, 0)))
+
+  if type(pending_expected) ~= "number" or type(confirmed) ~= "number" then
+    return false, "INSUFFICIENT_DATA"
+  end
+  if math.abs(pending_expected - confirmed) <= tolerance then
+    return false, "SETTLED"
+  end
+  if retry_cap > 0 and pending_retries >= retry_cap then
+    return false, "RETRY_CAP_REACHED"
+  end
+  if settle_timeout_s > 0 and (now_ts - pending_since) >= settle_timeout_s then
+    return false, "SETTLE_TIMEOUT"
+  end
+  local pending_delta = pending_expected - confirmed
+  local candidate_delta = candidate_flow - current_flow
+  if pending_delta > tolerance and candidate_delta > tolerance then
+    return true, "UP_PENDING_READBACK"
+  end
+  if pending_delta < -tolerance and candidate_delta < -tolerance then
+    return true, "DOWN_PENDING_READBACK"
+  end
+  return false, "DIRECTION_CHANGE_ALLOWED"
+end
+
 
 function regulator.classify_bottleneck(input)
   local requested = sanitize_number(type(input) == "table" and input.requested_flow or nil, 0)
@@ -136,6 +171,8 @@ function regulator.classify_bottleneck(input)
   local inductor_engaged = type(input) == "table" and input.inductor_engaged or nil
   local steam_input = sanitize_number(type(input) == "table" and input.steam_input or nil, -1)
   local min_flow = sanitize_number(type(input) == "table" and input.min_flow or nil, 0)
+  local readback_state = type(input) == "table" and input.readback_state or nil
+  local write_state = type(input) == "table" and input.write_state or nil
   local abs_error = target - rotor
   if rotor < 0 then
     return "RPM_UNAVAILABLE", "RPM_READ_FAILED"
@@ -159,6 +196,9 @@ function regulator.classify_bottleneck(input)
     return "MAX_LIMIT_UNDERSPEED", "MAX_FLOW_LIMIT_REACHED_NO_FURTHER_UP"
   end
   if math.abs(requested - confirmed) > 5 then
+    if readback_state == "READBACK_LAG" and write_state == "WRITE_ACCEPTED" then
+      return "FLOW_READBACK_LAG", "WRITE_ACCEPTED_READBACK_PENDING"
+    end
     return "FLOW_READBACK_LAG", "API_READBACK_LAG"
   end
   return "NONE", "NO_LIMITER_DETECTED"
