@@ -7,7 +7,7 @@
 4. **Stage/Backup/Activation/Commit**:
    - Stage-Aufbau in `/xreactor_stage`
    - Aktivbestand nach `/xreactor_backup_prev`
-   - Stage-Aktivierung auf `/xreactor`
+   - Activate: Stage-Aktivierung auf `/xreactor`
    - Backup-Entfernung nach erfolgreichem Commit.
 5. **Startup-Verhalten**: `/startup` wird nur überschrieben, wenn es als XReactor-Startup erkannt wird; fremde Startups bleiben erhalten.
 6. **Config-Erhalt beim Update**: bestehende `/xreactor/config/*` bleibt wirksam (durch Copy nach Stage).
@@ -15,7 +15,7 @@
 ## Safety (RT)
 1. **Coolant Pending statt sofort SAFE**: Low-Coolant auslösen -> Log enthält `COOLANT_LOW_PENDING`, aber noch kein sofortiger SAFE/SCRAM.
 2. **Bestätigter Coolant-Low-Fall**: Coolant-Low > ~4s halten -> SAFE mit Grund `SAFETY_COOLANT_LOW` und zugehöriger Safety-Ownership-Log.
-3. **Pending-Recovery-Abbruch**: während Pending erholt sich Coolant wieder -> Pending wird abgebrochen, kein SAFE-Übergang.
+3. **Pending-Recovery-Abbruch**: während Pending erholt sich Coolant wieder -> Pending wird als Recovery-Fall abgebrochen, kein SAFE-Übergang.
 4. **Temperatur-Safety getrennt prüfen**: Übertemperatur triggert SAFE mit `SAFETY_TEMPERATURE_HIGH` und eigener Ownership-Kausalkette.
 5. **SAFE-/SCRAM-Ursachen klar lesbar**: Übergangslogs enthalten explizite Gründe (`Entering SAFE mode reason=...`, SCRAM-Ownership-Logs).
 

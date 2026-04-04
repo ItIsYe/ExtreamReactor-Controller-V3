@@ -15,6 +15,8 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
    - Backup wird nach erfolgreichem Commit gelöscht.
 7. Optional `reboot`, damit alle Dienste sauber neu starten.
 
+> Hinweis: Der Update-Flow ist lokal-only (lokale Stage/Backup/Activate-Pfade). Optionale Disk-Pfade betreffen Runtime-Logging, nicht den Installer-Commit.
+
 ## Was beim Update erhalten bleibt
 - Rolle (`/xreactor/config/role.lua`, wird nach Update erneut sichergestellt).
 - Bestehende Runtime-Config in `/xreactor/config/*` (wird vor Aktivierung ins Stage kopiert).
@@ -34,4 +36,4 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 
 ## Safety-/RT-Migrationshinweis
 - `SAFETY_COOLANT_LOW` wird nicht mehr sofort ausgelöst: zuerst Pending (`COOLANT_LOW_PENDING`), Bestätigung erst nach ~4s persistenter Unterschreitung; Recovery im Pending-Fenster bricht den Pending-Fall ab.
-- RT-Regelung nutzt aktive Target-Trim- und Readback-Diagnosezustände (u. a. `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`) plus Overspeed-Bremse mit Flow `0`.
+- RT-Regelung nutzt aktive Target-Trim- und Readback-Diagnosezustände (u. a. `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`) sowie Overspeed-Bremszustände (`OVERSPEED_BRAKE`, inkl. Flow `0`).
