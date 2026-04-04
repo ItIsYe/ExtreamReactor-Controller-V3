@@ -278,12 +278,13 @@ The installer always appends to:
 
 ### Runtime logging
 
-Runtime logs are written through the shared logger. If `/disk` exists, the runtime log directory moves there automatically; otherwise it stays under the root filesystem.
+Runtime logs are written through the shared logger. The runtime can use disk-backed log paths when a usable disk mount exists, but this is separate from installer/update behavior (which stays local under `/xreactor*` paths).
 
 Runtime log directory resolution:
 
-- `/disk/xreactor_logs` if `/disk` exists
-- otherwise `/xreactor_logs`
+- explicit runtime override (e.g. `xreactor.log_dir` setting or role-level `log_dir`) when valid,
+- otherwise first usable disk mount like `/disk`, `/disk2`, ... as `/<disk>/xreactor_logs`,
+- otherwise local fallback `/xreactor_logs`.
 
 Typical runtime log names:
 
@@ -370,8 +371,9 @@ To update an installed node/computer:
 1. Run the local installer again, or download the latest `installer` from the repo.
 2. Choose `Update`.
 3. The installer reads the already-installed role from `/xreactor/config/role.lua`.
-4. It refreshes only files for that role and the shared base runtime.
-5. Config files under `/xreactor/config/` are left in place.
+4. It performs storage preflight, stages expected files into `/xreactor_stage`, copies existing `/xreactor/config` into stage, validates hashes, then commits by backup+activate.
+5. Commit sequence is: active `/xreactor` -> `/xreactor_backup_prev`, stage `/xreactor_stage` -> live `/xreactor`, then backup removal after successful activation.
+6. Config files under `/xreactor/config/` are preserved via stage copy.
 
 Practical update command:
 
@@ -398,6 +400,7 @@ These are the constraints that are visible in the current codebase:
 - **HTTP is required for installation and update.** The installer cannot work without the CC:Tweaked HTTP API.
 - **The installer uses an active staged commit flow** for both install and update (`/xreactor_stage` + `/xreactor_backup_prev` + activation/rollback attempt on stage move failure).
 - **Fresh install replaces the active install tree.** `Neuinstallation` stages a full install and then swaps it into `/xreactor` (existing runtime is moved to backup during activation and removed after successful commit).
+- **Update is local-only.** The installer always stages/activates local filesystem paths; optional disk usage applies to runtime logging only.
 - **Autostart only works automatically if `/startup` is writable and not protected by an unrelated script.**
 - **Role changes are install-time decisions.** The updater does not re-prompt for a different role; it uses the installed role from `role.lua`.
 - **Hardware availability is role-dependent.** Missing modems, monitors, tanks, matrices, storages, reactors, or turbines lead to degraded behavior, warnings, or disabled subsystems rather than magically emulated hardware.
