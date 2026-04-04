@@ -200,7 +200,11 @@ The packaging command validates and/or synchronizes:
 
 - all manifest file hashes/sizes,
 - installer hash/size in `xreactor/release.lua`,
+- release manifest metadata in `xreactor/release.lua` (`manifest_id`, `manifest_version`, `manifest_file_count`, `hash_algo`, `manifest_path`),
 - ZIP content directly from the current repository working tree (`installer` + `xreactor/**`).
+
+`scripts/package_release.py` now performs a final strict manifest validation pass before writing the ZIP.
+If manifest/release metadata is stale and `--sync` is not used, packaging fails instead of producing a broken artifact.
 
 For publish/deploy sanity checks, verify the *published* files against the *published* manifest and fail release if any mismatch exists:
 
