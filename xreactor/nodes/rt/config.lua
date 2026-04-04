@@ -64,8 +64,8 @@ local CONFIG = {
       max_step_up = 5, -- Max rod insert step.
       max_step_down = 5, -- Max rod withdraw step.
       cooldown_s = 1.5, -- Minimum seconds between rod changes.
-      min = 0, -- Rod clamp minimum.
-      max = 98, -- Rod clamp maximum.
+      min = 50, -- Rod clamp minimum.
+      max = 100, -- Rod clamp maximum.
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
     },
     coil = {
