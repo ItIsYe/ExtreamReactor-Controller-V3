@@ -33,6 +33,7 @@ assert_contains(lifecycle_src, "ctx.setState(ctx.STATE.SAFE, \"SAFETY_COOLANT_LO
 assert_contains(lifecycle_src, "ctx.setState(ctx.STATE.SAFE, \"SAFETY_TEMPERATURE_HIGH\")", "temperature safety must set SAFE with explicit reason")
 assert_contains(main_src, "ACTIVE_TRIM_WITH_READBACK_LAG", "target trim and readback lag must be represented as separate combined state")
 assert_contains(main_src, "TRIM_PENDING_CONFIRMATION", "trim state should remain trim while confirmation is pending")
+assert_contains(main_src, "READBACK_SETTLING_HOLD", "readback lag path should expose explicit settle-hold reason to avoid repeated trim")
 assert_contains(main_src, "HOLD_CONFIRMED", "hold status should only be confirmed on readback confirmation")
 assert_contains(main_src, "and target_band.mode == \"HOLDING_TARGET_ACTIVE\"", "target hold flag must require explicit hold mode")
 assert_contains(main_src, "ctrl.target_trim_active = (not overspeed_state.active)", "target trim flag must be tracked explicitly")

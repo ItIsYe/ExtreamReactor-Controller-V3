@@ -64,7 +64,7 @@ local CONFIG = {
       max_step_up = 5, -- Max rod insert step.
       max_step_down = 5, -- Max rod withdraw step.
       cooldown_s = 1.5, -- Minimum seconds between rod changes.
-      min = 30, -- Rod clamp minimum (70% max automatic power => minimum 30% rods).
+      min = 20, -- Rod clamp minimum (80% max automatic power => minimum 20% rods).
       max = 98, -- Rod clamp maximum for automatic regulator path (SAFE/SCRAM may still force 100%).
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
     },

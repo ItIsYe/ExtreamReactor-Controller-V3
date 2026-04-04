@@ -379,10 +379,10 @@ Support nodes maintain a local peripheral registry and periodically rescan hardw
 ## RT safety and turbine control notes (current behavior)
 
 - Low coolant is handled with a confirmation window, not as immediate kill: runtime emits `COOLANT_LOW_PENDING`, waits ~4 seconds, then either enters SAFE with `SAFETY_COOLANT_LOW` or aborts the pending condition on recovery.
-- Turbine control includes explicit target-band trim and readback diagnostics states such as `TARGET_TRIM_UP`, `TARGET_TRIM_DOWN`, `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`, and `HOLD_CONFIRMED`.
+- Turbine control includes explicit target-band trim and readback diagnostics states such as `TARGET_TRIM_UP`, `TARGET_TRIM_DOWN`, `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`, `READBACK_SETTLING_HOLD`, and `HOLD_CONFIRMED`.
 - Overspeed handling uses explicit brake mode (`OVERSPEED_BRAKE`) and forces requested turbine flow to `0` while enforcing coil engagement for active braking.
 - The automatic reactor rod regulator now supports explicit config clamps:
-  - `autonom.regulator_min_rods` (default `30`; this equals the default `rails.reactor_rods.min` and enforces max 70% automatic power)
+  - `autonom.regulator_min_rods` (default `20`; this equals the default `rails.reactor_rods.min` and enforces max 80% automatic power)
   - `autonom.regulator_max_rods` (default `98`; this equals the default `rails.reactor_rods.max`)
   - valid range is `0..100`; invalid values are normalized, and if min > max the values are swapped during normalization.
   - legacy aliases `autonom.min_rods` / `autonom.max_rods` are only migration fallbacks when regulator fields are missing; if both are present, regulator fields are authoritative and legacy values are ignored with warnings.

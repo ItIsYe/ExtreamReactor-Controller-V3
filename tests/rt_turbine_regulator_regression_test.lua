@@ -143,6 +143,38 @@ if defer_e or reason_e ~= 'RETRY_CAP_REACHED' then
   error('cooldown defer must stop after retry cap to avoid control lock-up')
 end
 
+local hold_a, hold_reason_a = regulator.should_hold_readback_settle({
+  pending_expected_flow = 1200,
+  confirmed_flow = 1300,
+  current_flow = 1200,
+  candidate_flow = 1150,
+  tolerance = 1,
+  pending_since = 10.0,
+  now_ts = 10.1,
+  settle_timeout_s = 0.8,
+  pending_retries = 0,
+  readback_retry_cap = 3
+})
+if not hold_a or hold_reason_a ~= 'DOWN_PENDING_READBACK' then
+  error('readback settle hold must suppress repeated trim-down while prior down-write is pending')
+end
+
+local hold_b, hold_reason_b = regulator.should_hold_readback_settle({
+  pending_expected_flow = 1200,
+  confirmed_flow = 1300,
+  current_flow = 1200,
+  candidate_flow = 1250,
+  tolerance = 1,
+  pending_since = 10.0,
+  now_ts = 10.1,
+  settle_timeout_s = 0.8,
+  pending_retries = 0,
+  readback_retry_cap = 3
+})
+if hold_b or hold_reason_b ~= 'DIRECTION_CHANGE_ALLOWED' then
+  error('readback settle hold must allow direction changes to avoid control deadlock')
+end
+
 local confirm_a, detail_confirm_a = regulator.classify_confirmation({
   requested_flow = 0,
   confirmed_flow = 200,
@@ -326,6 +358,23 @@ if bottleneck_c ~= 'FLOW_READBACK_LAG' then
 end
 if detail_c ~= 'API_READBACK_LAG' then
   error('readback lag should include API detail')
+end
+
+local bottleneck_c2, detail_c2 = regulator.classify_bottleneck({
+  requested_flow = 1000,
+  confirmed_flow = 900,
+  rpm = 900,
+  target_rpm = 900,
+  max_flow = 2000,
+  inductor_engaged = true,
+  readback_state = 'READBACK_LAG',
+  write_state = 'WRITE_ACCEPTED',
+})
+if bottleneck_c2 ~= 'FLOW_READBACK_LAG' then
+  error('accepted write with stale readback must still classify readback lag')
+end
+if detail_c2 ~= 'WRITE_ACCEPTED_READBACK_PENDING' then
+  error('accepted write with stale readback must emit explicit pending detail')
 end
 
 local bottleneck_d, detail_d = regulator.classify_bottleneck({
