@@ -79,7 +79,7 @@ local CONFIG = {
   DEFAULT_RESET_LOG_ON_START = true -- Truncate RT runtime log at startup to keep disk usage bounded.
 }
 
-local CURRENT_VERSION = 2
+local CURRENT_VERSION = 3
 
 return {
   version = CURRENT_VERSION,
@@ -116,6 +116,12 @@ return {
     peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT,
     queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
     drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
+  },
+  autonom = {
+    regulator_min_rods = 0, -- Lower clamp for automatic rod regulator target (%).
+    regulator_max_rods = CONFIG.DEFAULT_RAILS.reactor_rods.max, -- Upper clamp for automatic rod regulator target (%).
+    min_rods = CONFIG.DEFAULT_RAILS.reactor_rods.min, -- Legacy alias; prefer regulator_min_rods.
+    max_rods = CONFIG.DEFAULT_RAILS.reactor_rods.max -- Legacy alias; prefer regulator_max_rods.
   },
   rails = CONFIG.DEFAULT_RAILS
 }

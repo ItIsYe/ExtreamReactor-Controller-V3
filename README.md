@@ -363,6 +363,11 @@ Support nodes maintain a local peripheral registry and periodically rescan hardw
 - Low coolant is handled with a confirmation window, not as immediate kill: runtime emits `COOLANT_LOW_PENDING`, waits ~4 seconds, then either enters SAFE with `SAFETY_COOLANT_LOW` or aborts the pending condition on recovery.
 - Turbine control includes explicit target-band trim and readback diagnostics states such as `TARGET_TRIM_UP`, `TARGET_TRIM_DOWN`, `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`, and `HOLD_CONFIRMED`.
 - Overspeed handling uses explicit brake mode (`OVERSPEED_BRAKE`) and forces requested turbine flow to `0` while enforcing coil engagement for active braking.
+- The automatic reactor rod regulator now supports explicit config clamps:
+  - `autonom.regulator_min_rods` (default `0`)
+  - `autonom.regulator_max_rods` (default `98`)
+  - valid range is `0..100`; invalid values are normalized, and if min > max the values are swapped during normalization.
+  - clamps apply to the automatic regulator target path (with diagnostics `ROD_TARGET_CLAMPED_BY_CONFIG_MIN/MAX`), while SAFE/SCRAM still keeps authority to force rods to `100%`.
 
 ## Update instructions
 

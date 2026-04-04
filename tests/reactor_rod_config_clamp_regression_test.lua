@@ -1,0 +1,52 @@
+package.path = package.path .. ";/workspace/ExtreamReactor-Controller-V3/?.lua"
+
+local rails = dofile("/workspace/ExtreamReactor-Controller-V3/xreactor/core/control_rails.lua")
+
+local function assert_eq(actual, expected, message)
+  if actual ~= expected then
+    error((message or "assert_eq failed") .. " expected=" .. tostring(expected) .. " actual=" .. tostring(actual))
+  end
+end
+
+local function assert_true(value, message)
+  if not value then
+    error(message or "assert_true failed")
+  end
+end
+
+local function test_clamp_with_reason()
+  local value, reason = rails.clamp_with_reason(15, 40, 85)
+  assert_eq(value, 40, "value below config minimum must clamp to minimum")
+  assert_eq(reason, "MIN", "below-range clamp reason must be MIN")
+
+  value, reason = rails.clamp_with_reason(92, 40, 85)
+  assert_eq(value, 85, "value above config maximum must clamp to maximum")
+  assert_eq(reason, "MAX", "above-range clamp reason must be MAX")
+
+  value, reason = rails.clamp_with_reason(66, 40, 85)
+  assert_eq(value, 66, "value inside range must stay unchanged")
+  assert_eq(reason, nil, "in-range value must not report a clamp reason")
+end
+
+local function test_rt_main_has_config_clamp_logging_and_safe_override()
+  local file = io.open('xreactor/nodes/rt/main.lua', 'r')
+  if not file then
+    error('failed to open RT main source')
+  end
+  local content = file:read('*a')
+  file:close()
+
+  assert_true(content:find('ROD_TARGET_CLAMPED_BY_CONFIG_MIN', 1, true) ~= nil,
+    'automatic rod controller must log min clamp diagnostics')
+  assert_true(content:find('ROD_TARGET_CLAMPED_BY_CONFIG_MAX', 1, true) ~= nil,
+    'automatic rod controller must log max clamp diagnostics')
+  assert_true(content:find('rails%.clamp_with_reason%(target_rods, cfg_min, cfg_max%)') ~= nil,
+    'automatic rod controller must clamp target via config min/max before write path')
+  assert_true(content:find('applyReactorRods%(ROD_MAX, true%)') ~= nil,
+    'SAFE/SCRAM path must still force 100% rod insertion via allow_overmax')
+end
+
+test_clamp_with_reason()
+test_rt_main_has_config_clamp_logging_and_safe_override()
+
+print('reactor_rod_config_clamp_regression_test.lua: ok')
