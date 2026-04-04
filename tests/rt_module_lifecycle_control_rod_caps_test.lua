@@ -5,6 +5,7 @@ local lifecycle = require('nodes.rt.module_lifecycle')
 local function make_ctx(module)
   local active = module.id
   local apply_calls = 0
+  local last_apply_source = nil
   local state = nil
   local transitions = 0
   return {
@@ -24,7 +25,10 @@ local function make_ctx(module)
     get_target_rpm = function() return 900 end,
     get_turbine_ctrl = function() return { flow = 200, rails = {} } end,
     ensure_reactor_ctrl = function() return { last_applied = nil } end,
-    applyReactorRods = function() apply_calls = apply_calls + 1 end,
+    applyReactorRods = function(_, _, source)
+      apply_calls = apply_calls + 1
+      last_apply_source = source
+    end,
     reactor_low_water = function() return false end,
     add_alarm = function() end,
     log = function() end,
@@ -47,6 +51,9 @@ local function make_ctx(module)
       end
       if apply_calls < 1 then
         error('expected reactor rod application during startup for setControlRodLevel-only reactor')
+      end
+      if last_apply_source ~= 'STARTUP_RAMP' then
+        error('expected startup reactor writes to carry STARTUP_RAMP source tag')
       end
     end,
   }

@@ -54,7 +54,15 @@ local function test_rt_main_has_config_clamp_logging_and_safe_override()
     'automatic rod controller must log max clamp diagnostics')
   assert_true(content:find('rails%.clamp_with_reason%(target_rods, cfg_min, cfg_max%)') ~= nil,
     'automatic rod controller must clamp target via config min/max before write path')
-  assert_true(content:find('applyReactorRods%(ROD_MAX, true%)') ~= nil,
+  assert_true(content:find('ROD_APPLY_CLAMPED_BY_CONFIG_MIN', 1, true) ~= nil,
+    'rod write path must log min cap clamp diagnostics')
+  assert_true(content:find('ROD_APPLY_CLAMPED_BY_CONFIG_MAX', 1, true) ~= nil,
+    'rod write path must log max cap clamp diagnostics')
+  assert_true(content:find('ROD_APPLY_SAFE_OVERRIDE', 1, true) ~= nil,
+    'SAFE/SCRAM override path must be explicitly logged')
+  assert_true(content:find('Rod cap config loaded', 1, true) ~= nil,
+    'startup log must report effective rod cap config source values')
+  assert_true(content:find('applyReactorRods%(ROD_MAX, true, "SAFE_TICK"%)') ~= nil,
     'SAFE/SCRAM path must still force 100% rod insertion via allow_overmax')
 end
 
