@@ -170,7 +170,14 @@ local DEFAULT_CONFIG = {
       hysteresis_down = 500, -- Steam hysteresis for rod withdraw.
       max_step_up = CONFIG.REACTOR_STEP, -- Max rod insert step.
       max_step_down = CONFIG.REACTOR_STEP, -- Max rod withdraw step.
+      max_apply_step_up = CONFIG.REACTOR_STEP, -- Hard max rod insert delta per control cycle.
+      max_apply_step_down = CONFIG.REACTOR_STEP, -- Hard max rod withdraw delta per control cycle.
       cooldown_s = CONFIG.MIN_APPLY_INTERVAL, -- Minimum seconds between rod changes.
+      apply_cooldown_s = CONFIG.MIN_APPLY_INTERVAL, -- Minimum seconds between applied rod changes.
+      coolant_ramp_soft_limit_ratio = 0.28, -- Soft coolant margin where power-up rod withdraw is damped.
+      coolant_ramp_hard_limit_ratio = 0.22, -- Hard coolant margin where power-up rod withdraw is blocked.
+      max_step_down_when_coolant_soft = 2, -- Max withdraw step when coolant enters soft-limit zone.
+      max_step_down_when_coolant_hard = 0, -- Max withdraw step when coolant enters hard-limit zone.
       min = CONFIG.ROD_MIN, -- Rod clamp minimum.
       max = CONFIG.ROD_MAX, -- Rod clamp maximum.
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
@@ -780,15 +787,31 @@ local function controlReactor()
   local smoothed_margin = rails.smooth(reactor_rails_state, "steam_margin", steam_margin, rod_cfg.ema_alpha)
   local target_rods, direction = rails.step(current_rods, smoothed_margin, reactor_rails_state, rod_cfg, os.clock())
   target_rods = safety.clamp(target_rods, ROD_MIN, ROD_MAX)
-  if target_rods == current_rods then
+  local min_coolant_ratio
+  for _, name in ipairs(config.reactors or {}) do
+    local reactor, sample = peripherals.reactors[name], nil
+    if reactor then sample = fluid.read_coolant_sample(reactor, safe_wrapped_call) end
+    local ratio = sample and sample.coolant_ratio or nil
+    if type(ratio) == "number" and (min_coolant_ratio == nil or ratio < min_coolant_ratio) then min_coolant_ratio = ratio end
+  end
+  local applied_rods, ramp_diag = rails.ramp_target(current_rods, target_rods, rod_cfg, { state = reactor_rails_state, now = os.clock(), coolant_ratio = min_coolant_ratio, safety_min_water = config.safety and config.safety.min_water })
+  applied_rods = safety.clamp(applied_rods, ROD_MIN, ROD_MAX)
+  if applied_rods == current_rods then
+    if ramp_diag and ramp_diag.reason == "RAMP_APPLIED" then log("DEBUG", "ROD_RAMP_APPLIED requested_delta=" .. tostring(ramp_diag.requested_delta) .. " applied_delta=" .. tostring(ramp_diag.applied_delta) .. " current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods)) end
     return
   end
+
   if direction ~= 0 then
     autonom_state.pending_rod_direction = direction > 0 and "UP" or "DOWN"
   end
-  local applied = applyReactorRods(target_rods, false)
+  local applied = applyReactorRods(applied_rods, false)
   if applied then
-    log("INFO", string.format("ReactorCtrl margin=%.1f rods=%d", steam_margin, target_rods))
+    local limited = ramp_diag and math.abs(tonumber(ramp_diag.applied_delta) or 0) < math.abs(tonumber(ramp_diag.requested_delta) or 0)
+    log("INFO", string.format("ReactorCtrl margin=%.1f rods_current=%.1f rods_target=%.1f requested_delta=%.1f applied_delta=%.1f ramp_reason=%s rate_limited=%s coolant_ratio=%s coolant_limited=%s", steam_margin, current_rods, target_rods, (ramp_diag and ramp_diag.requested_delta) or 0, (ramp_diag and ramp_diag.applied_delta) or (applied_rods - current_rods), tostring(ramp_diag and ramp_diag.reason or "n/a"), tostring(limited), tostring(min_coolant_ratio), tostring(ramp_diag and ramp_diag.coolant_limited == true)))
+    if limited then log("DEBUG", "ROD_TARGET_CLAMPED_BY_RATE_LIMIT current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods) .. " requested_delta=" .. tostring(ramp_diag.requested_delta) .. " applied_delta=" .. tostring(ramp_diag.applied_delta) .. " max_step=" .. tostring(ramp_diag.max_step)) end
+    if ramp_diag and ramp_diag.coolant_limited then
+      log("DEBUG", "ROD_CHANGE_LIMITED_BY_COOLANT_MARGIN ratio=" .. tostring(min_coolant_ratio) .. " mode=" .. tostring(ramp_diag.coolant_reason) .. " requested_delta=" .. tostring(ramp_diag.requested_delta) .. " applied_delta=" .. tostring(ramp_diag.applied_delta))
+    end
   end
 end
 local function updateReactorControl()

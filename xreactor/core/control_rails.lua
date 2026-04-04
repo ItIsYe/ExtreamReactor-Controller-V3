@@ -159,4 +159,113 @@ function rails.step(current, error, state, config, now)
   }
 end
 
+function rails.ramp_target(current, target, config, opts)
+  local cfg = config or {}
+  opts = opts or {}
+  local state = ensure_state(opts.state)
+  local now_ts = tonumber(opts.now) or os.clock()
+
+  if type(current) ~= "number" or type(target) ~= "number" then
+    return current, {
+      reason = "INVALID_INPUT",
+      current = current,
+      target = target
+    }
+  end
+
+  local requested_delta = target - current
+  if requested_delta == 0 then
+    return current, {
+      reason = "AT_TARGET",
+      current = current,
+      target = target,
+      requested_delta = 0,
+      applied_delta = 0
+    }
+  end
+
+  local direction = requested_delta > 0 and 1 or -1
+  local max_apply_key = direction > 0 and "max_apply_step_up" or "max_apply_step_down"
+  local fallback_key = direction > 0 and "max_step_up" or "max_step_down"
+  local max_step = math.max(0, tonumber(cfg[max_apply_key]) or tonumber(cfg[fallback_key]) or 0)
+  if max_step == 0 then
+    return current, {
+      reason = "RAMP_DISABLED",
+      current = current,
+      target = target,
+      requested_delta = requested_delta,
+      applied_delta = 0,
+      direction = direction
+    }
+  end
+
+  local cooldown = math.max(0, tonumber(cfg.apply_cooldown_s) or tonumber(cfg.cooldown_s) or 0)
+  local since_apply = now_ts - (tonumber(state.last_apply_ts) or 0)
+  if cooldown > 0 and since_apply < cooldown then
+    return current, {
+      reason = "RAMP_COOLDOWN",
+      current = current,
+      target = target,
+      requested_delta = requested_delta,
+      applied_delta = 0,
+      direction = direction,
+      cooldown_s = cooldown,
+      since_apply_s = since_apply
+    }
+  end
+
+  local coolant_limited = false
+  local coolant_reason = nil
+  if direction < 0 then
+    local coolant_ratio = tonumber(opts.coolant_ratio)
+    if type(coolant_ratio) == "number" then
+      local hard_limit = tonumber(cfg.coolant_ramp_hard_limit_ratio)
+      if type(hard_limit) ~= "number" then
+        hard_limit = tonumber(opts.safety_min_water) or 0.2
+      end
+      local soft_limit = tonumber(cfg.coolant_ramp_soft_limit_ratio) or (hard_limit + 0.08)
+      local withdraw_soft = math.max(0, tonumber(cfg.max_step_down_when_coolant_soft) or 1)
+      local withdraw_hard = math.max(0, tonumber(cfg.max_step_down_when_coolant_hard) or 0)
+      if coolant_ratio <= hard_limit then
+        max_step = math.min(max_step, withdraw_hard)
+        coolant_limited = true
+        coolant_reason = "HARD"
+      elseif coolant_ratio <= soft_limit then
+        max_step = math.min(max_step, withdraw_soft)
+        coolant_limited = true
+        coolant_reason = "SOFT"
+      end
+    end
+  end
+
+  if max_step == 0 then
+    return current, {
+      reason = "COOLANT_HOLD",
+      current = current,
+      target = target,
+      requested_delta = requested_delta,
+      applied_delta = 0,
+      direction = direction,
+      coolant_limited = coolant_limited,
+      coolant_reason = coolant_reason
+    }
+  end
+
+  local applied_mag = math.min(math.abs(requested_delta), max_step)
+  local applied_delta = direction * applied_mag
+  local next_value = clamp(current + applied_delta, cfg.min, cfg.max)
+  state.last_apply_ts = now_ts
+  return next_value, {
+    reason = applied_mag < math.abs(requested_delta) and "RAMP_APPLIED" or "TARGET_REACHED",
+    current = current,
+    target = target,
+    requested_delta = requested_delta,
+    applied_delta = next_value - current,
+    direction = direction,
+    max_step = max_step,
+    coolant_limited = coolant_limited,
+    coolant_reason = coolant_reason
+  }
+end
+
 return rails
