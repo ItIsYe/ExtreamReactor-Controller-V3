@@ -118,17 +118,11 @@ local DEFAULT_CONFIG = {
     coolant_invalid_grace_samples = 3 -- Ignore short coolant read glitches before diagnostics mark the sample stream unavailable.
   },
   autonom = {
-    control_rod_level = 70, -- Default rod level in autonom mode.
-    max_rpm = CONFIG.TARGET_RPM, -- Max RPM in autonom mode.
-    min_flow = CONFIG.MIN_FLOW, -- Min flow in autonom mode.
-    max_flow = CONFIG.MAX_FLOW, -- Max flow in autonom mode.
-    flow_step = CONFIG.FLOW_STEP, -- Flow step in autonom mode.
-    ramp_step = CONFIG.FLOW_STEP, -- Ramp step in autonom mode.
-    regulator_min_rods = 50, -- Lower clamp for automatic rod target (% rods, i.e. 50% power cap by default).
-    regulator_max_rods = CONFIG.ROD_MAX, -- Upper clamp for automatic rod target.
-    reactor_adjust_interval = CONFIG.ROD_TICK, -- Reactor adjust interval.
-    steam_reserve = 5000, -- Steam reserve threshold.
-    steam_deficit = 5000 -- Steam deficit threshold.
+    control_rod_level = 70, max_rpm = CONFIG.TARGET_RPM, min_flow = CONFIG.MIN_FLOW, max_flow = CONFIG.MAX_FLOW,
+    flow_step = CONFIG.FLOW_STEP, ramp_step = CONFIG.FLOW_STEP,
+    regulator_min_rods = 50, regulator_max_rods = CONFIG.ROD_MAX, reactor_adjust_interval = CONFIG.ROD_TICK,
+    steam_reserve = 5000,
+    steam_deficit = 5000
   },
   rails = {
     ramp_profiles = {
@@ -164,14 +158,9 @@ local DEFAULT_CONFIG = {
       ema_alpha = 0.2 -- RPM smoothing alpha.
     },
     reactor_rods = {
-      deadband_up = 5000, -- Steam reserve deadband before inserting rods.
-      deadband_down = 5000, -- Steam deficit deadband before withdrawing rods.
-      hysteresis_up = 500, -- Steam hysteresis for rod insert.
-      hysteresis_down = 500, -- Steam hysteresis for rod withdraw.
-      max_step_up = CONFIG.REACTOR_STEP, -- Max rod insert step.
-      max_step_down = CONFIG.REACTOR_STEP, -- Max rod withdraw step.
-      max_apply_step_up = CONFIG.REACTOR_STEP, -- Hard max rod insert delta per control cycle.
-      max_apply_step_down = CONFIG.REACTOR_STEP, -- Hard max rod withdraw delta per control cycle.
+      deadband_up = 5000, deadband_down = 5000, hysteresis_up = 500, hysteresis_down = 500,
+      max_step_up = CONFIG.REACTOR_STEP, max_step_down = CONFIG.REACTOR_STEP,
+      max_apply_step_up = CONFIG.REACTOR_STEP, max_apply_step_down = CONFIG.REACTOR_STEP,
       cooldown_s = CONFIG.MIN_APPLY_INTERVAL, -- Minimum seconds between rod changes.
       apply_cooldown_s = CONFIG.MIN_APPLY_INTERVAL, -- Minimum seconds between applied rod changes.
       coolant_ramp_soft_limit_ratio = 0.28, -- Soft coolant margin where power-up rod withdraw is damped.
@@ -363,16 +352,21 @@ local function get_target_rpm()
   end
   return TARGET_RPM
 end
-local function clamp_turbine_flow(rate)
-  return turbine_regulator.clamp_flow(rate, MIN_FLOW, MAX_FLOW)
-end
+local function clamp_turbine_flow(rate) return turbine_regulator.clamp_flow(rate, MIN_FLOW, MAX_FLOW) end
 local function clamp_rods(level, allow_overmax)
-  if type(level) ~= "number" then
-    level = ROD_MAX
-  end
+  if type(level) ~= "number" then level = ROD_MAX end
   local max_limit = allow_overmax and 100 or ROD_MAX
   return safety.clamp(level, ROD_MIN, max_limit)
 end
+local function get_effective_regulator_rod_caps()
+  local autonom = config and config.autonom or {}
+  local cfg_min = type(autonom.regulator_min_rods) == "number" and autonom.regulator_min_rods or ROD_MIN
+  local cfg_max = type(autonom.regulator_max_rods) == "number" and autonom.regulator_max_rods or ROD_MAX
+  cfg_min = safety.clamp(cfg_min, ROD_MIN, ROD_MAX); cfg_max = safety.clamp(cfg_max, ROD_MIN, ROD_MAX)
+  if cfg_min > cfg_max then cfg_min, cfg_max = cfg_max, cfg_min end
+  return cfg_min, cfg_max
+end
+do local cfg_min, cfg_max = get_effective_regulator_rod_caps(); log("INFO", "Rod cap config loaded cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max) .. " autonom_min=" .. tostring(config.autonom and config.autonom.regulator_min_rods) .. " autonom_max=" .. tostring(config.autonom and config.autonom.regulator_max_rods) .. " rails_min=" .. tostring(config.rails and config.rails.reactor_rods and config.rails.reactor_rods.min) .. " rails_max=" .. tostring(config.rails and config.rails.reactor_rods and config.rails.reactor_rods.max)) end
 local function resolve_steam_tank_name()
   if steam_tank_name and peripheral.isPresent(steam_tank_name) then
     return steam_tank_name
@@ -674,7 +668,7 @@ local function init_reactor_ctrl()
     }
   end
 end
-function applyReactorRods(target, allow_overmax)
+function applyReactorRods(target, allow_overmax, source)
   local now = os.clock()
   if now - last_rod_apply_ts < MIN_APPLY_INTERVAL then
     return false
@@ -682,7 +676,16 @@ function applyReactorRods(target, allow_overmax)
   if type(target) ~= "number" then
     return false
   end
+  source = source or "UNSPECIFIED"
   local clamped = clamp_rods(target, allow_overmax)
+  if not allow_overmax and current_state ~= STATE.SAFE then
+    local cfg_min, cfg_max = get_effective_regulator_rod_caps()
+    local cap_clamped, cap_reason = rails.clamp_with_reason(clamped, cfg_min, cfg_max)
+    if cap_reason == "MIN" then log("DEBUG", "ROD_APPLY_CLAMPED_BY_CONFIG_MIN source=" .. tostring(source) .. " requested=" .. tostring(clamped) .. " clamped=" .. tostring(cap_clamped) .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max))
+    elseif cap_reason == "MAX" then log("DEBUG", "ROD_APPLY_CLAMPED_BY_CONFIG_MAX source=" .. tostring(source) .. " requested=" .. tostring(clamped) .. " clamped=" .. tostring(cap_clamped) .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max)) end
+    clamped = cap_clamped
+  elseif allow_overmax then log("DEBUG", "ROD_APPLY_SAFE_OVERRIDE source=" .. tostring(source) .. " requested=" .. tostring(target) .. " clamped=" .. tostring(clamped))
+  end
   if last_applied_rods == clamped then
     autonom_state.pending_rod_direction = nil
     return false
@@ -717,7 +720,7 @@ function applyReactorRods(target, allow_overmax)
     last_rod_direction = applied_direction
   end
   autonom_state.pending_rod_direction = nil
-  log("INFO", "Applied rods " .. tostring(clamped) .. "%")
+  log("INFO", "Applied rods " .. tostring(clamped) .. "% source=" .. tostring(source))
   return true
 end
 local function apply_initial_reactor_rods()
@@ -725,7 +728,7 @@ local function apply_initial_reactor_rods()
     ctrl.last_applied = nil
     log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(INITIAL_ROD_LEVEL) .. "%")
   end
-  applyReactorRods(INITIAL_ROD_LEVEL, false)
+  applyReactorRods(INITIAL_ROD_LEVEL, false, "STARTUP_INIT")
 end
 local function read_current_rods()
   for _, name in ipairs(config.reactors or {}) do
@@ -814,7 +817,7 @@ local function controlReactor()
   if direction ~= 0 then
     autonom_state.pending_rod_direction = direction > 0 and "UP" or "DOWN"
   end
-  local applied = applyReactorRods(applied_rods, false)
+  local applied = applyReactorRods(applied_rods, false, "AUTO_REGULATOR")
   if applied then
     local limited = ramp_diag and math.abs(tonumber(ramp_diag.applied_delta) or 0) < math.abs(tonumber(ramp_diag.requested_delta) or 0)
     log("INFO", string.format("ReactorCtrl margin=%.1f rods_current=%.1f rods_target=%.1f requested_delta=%.1f applied_delta=%.1f ramp_reason=%s rate_limited=%s coolant_ratio=%s coolant_limited=%s", steam_margin, current_rods, target_rods, (ramp_diag and ramp_diag.requested_delta) or 0, (ramp_diag and ramp_diag.applied_delta) or (applied_rods - current_rods), tostring(ramp_diag and ramp_diag.reason or "n/a"), tostring(limited), tostring(min_coolant_ratio), tostring(ramp_diag and ramp_diag.coolant_limited == true)))
@@ -828,7 +831,7 @@ local function updateReactorControl()
   local now = os.clock()
   log("DEBUG", "Reactor control tick")
   if current_state == STATE.SAFE then
-    applyReactorRods(ROD_MAX, true)
+    applyReactorRods(ROD_MAX, true, "SAFE_TICK")
     return
   end
   if now - last_reactor_tick < config.autonom.reactor_adjust_interval then
@@ -2022,7 +2025,7 @@ apply_safe_controls = function()
       warn_unsupported(name)
     end
   end
-  applyReactorRods(100, true)
+  applyReactorRods(100, true, "SAFE_SCRAM")
 
   local turbines = peripherals and peripherals.turbines or {}
   if not next(turbines) then

@@ -290,7 +290,7 @@ function M.process_startup(ctx)
       local level = 100 - math.floor(progress * 100)
       local ctrl = ctx.ensure_reactor_ctrl(module.name)
       ctrl.last_applied = nil
-      ctx.applyReactorRods(level, false)
+      ctx.applyReactorRods(level, false, "STARTUP_RAMP")
     end
     local _, temp_value = safe_wrapped_call(module.peripheral, "getCasingTemperature")
     local temp = type(temp_value) == "number" and temp_value or 0
