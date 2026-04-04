@@ -10,6 +10,7 @@ import zlib
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 RELEASE_PATH = REPO_ROOT / "xreactor" / "release.lua"
 INSTALLER_PATH = REPO_ROOT / "installer"
+MANIFEST_PATH = REPO_ROOT / "xreactor" / "manifest.lua"
 
 
 def crc32_hex(content: bytes) -> str:
@@ -25,29 +26,70 @@ def parse_release(path: pathlib.Path):
     return data
 
 
+def parse_manifest_metadata(path: pathlib.Path):
+    data = {}
+    file_count = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        entry_match = re.search(r'\bpath\s*=\s*"([^"]+)"', line)
+        if entry_match:
+            file_count += 1
+        kv = re.match(r"\s*(manifest_id|manifest_version|hash_algo)\s*=\s*(.+?),\s*$", line)
+        if kv:
+            data[kv.group(1)] = kv.group(2)
+    data["manifest_file_count"] = str(file_count)
+    data["manifest_path"] = '"xreactor/manifest.lua"'
+    return data
+
+
 def sync_release_metadata(write: bool):
     release = parse_release(RELEASE_PATH)
+    manifest = parse_manifest_metadata(MANIFEST_PATH)
     installer = INSTALLER_PATH.read_bytes()
     expected_hash = crc32_hex(installer)
     expected_size = len(installer)
 
-    hash_ok = release.get("installer_core_hash", '""').strip('"') == expected_hash
-    size_ok = int(release.get("installer_core_size_bytes", "0")) == expected_size
+    expected = {
+        "installer_core_hash": f'"{expected_hash}"',
+        "installer_core_size_bytes": str(expected_size),
+        "manifest_id": manifest.get("manifest_id", '"manifest-v6"'),
+        "manifest_version": manifest.get("manifest_version", "6"),
+        "manifest_file_count": manifest.get("manifest_file_count", "0"),
+        "hash_algo": manifest.get("hash_algo", '"crc32"'),
+        "manifest_path": manifest.get("manifest_path", '"xreactor/manifest.lua"'),
+    }
 
-    if hash_ok and size_ok:
+    mismatches = {}
+    for key, expected_value in expected.items():
+        actual_value = release.get(key)
+        if actual_value is None:
+            mismatches[key] = {"actual": "<missing>", "expected": expected_value}
+            continue
+        if key in ("installer_core_size_bytes", "manifest_version", "manifest_file_count"):
+            if str(actual_value).strip() != str(expected_value).strip():
+                mismatches[key] = {"actual": str(actual_value).strip(), "expected": str(expected_value).strip()}
+        else:
+            if str(actual_value).strip('"') != str(expected_value).strip('"'):
+                mismatches[key] = {"actual": str(actual_value).strip('"'), "expected": str(expected_value).strip('"')}
+
+    if not mismatches:
         return True
 
     if not write:
+        print("release.lua metadata mismatch:")
+        for key, values in mismatches.items():
+            print(f" - {key}: release={values['actual']} expected={values['expected']}")
         return False
 
     lines = RELEASE_PATH.read_text(encoding="utf-8").splitlines()
     out = []
     for line in lines:
-        if re.match(r"\s*installer_core_hash\s*=", line):
-            out.append(f'  installer_core_hash = "{expected_hash}",')
-        elif re.match(r"\s*installer_core_size_bytes\s*=", line):
-            out.append(f"  installer_core_size_bytes = {expected_size}")
-        else:
+        replaced = False
+        for key, value in expected.items():
+            if re.match(rf"\s*{re.escape(key)}\s*=", line):
+                out.append(f"  {key} = {value},")
+                replaced = True
+                break
+        if not replaced:
             out.append(line)
     RELEASE_PATH.write_text("\n".join(out) + "\n", encoding="utf-8")
     return True
@@ -97,11 +139,21 @@ def main():
     args = parser.parse_args()
 
     run_cc_parse_guard()
-    run_manifest_sync(write=args.sync)
+    if args.sync:
+        run_manifest_sync(write=True)
+        if not sync_release_metadata(write=True):
+            print("release.lua metadata mismatch (use --sync)")
+            return 1
+        # release.lua is part of the manifest; re-sync after metadata updates.
+        run_manifest_sync(write=True)
+    else:
+        run_manifest_sync(write=False)
+        if not sync_release_metadata(write=False):
+            print("release.lua metadata mismatch (use --sync)")
+            return 1
 
-    if not sync_release_metadata(write=args.sync):
-        print("release.lua installer metadata mismatch (use --sync)")
-        return 1
+    # Final strict validation pass (must succeed before packaging).
+    run_manifest_sync(write=False)
 
     output_zip = REPO_ROOT / args.output
     build_zip(output_zip)

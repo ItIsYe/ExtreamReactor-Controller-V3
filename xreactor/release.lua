@@ -8,5 +8,5 @@ return {
   manifest_path = "xreactor/manifest.lua",
   installer_core_version = "1.6",
   installer_core_hash = "c03511f0",
-  installer_core_size_bytes = 24171
+  installer_core_size_bytes = 24171,
 }
