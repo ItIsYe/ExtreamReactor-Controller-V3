@@ -47,7 +47,7 @@ local function mk_defaults()
       max_flow = 2000,
       flow_step = 50,
       ramp_step = 50,
-      regulator_min_rods = 50,
+      regulator_min_rods = 30,
       regulator_max_rods = 98,
       reactor_adjust_interval = 5,
       steam_reserve = 5000,

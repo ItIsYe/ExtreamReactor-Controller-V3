@@ -38,6 +38,10 @@ local function test_rt_config_uses_single_authoritative_regulator_fields()
     'default regulator_min_rods must align with rails.reactor_rods.min for unambiguous default cap')
   assert_eq(cfg.autonom.regulator_max_rods, cfg.rails.reactor_rods.max,
     'default regulator_max_rods must align with rails.reactor_rods.max for unambiguous default cap')
+  assert_eq(cfg.autonom.regulator_min_rods, 30,
+    'default regulator min rods must enforce 70% automatic power cap (100-rods semantics)')
+  assert_eq(100 - cfg.autonom.regulator_min_rods, 70,
+    'power semantics regression: min rods of 30 must equal max 70% automatic power')
 end
 
 local function test_rt_main_has_config_clamp_logging_and_safe_override()

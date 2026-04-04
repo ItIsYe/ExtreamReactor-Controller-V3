@@ -26,6 +26,7 @@ assert_contains(main_src, "Overspeed brake pending name=", "overspeed mismatch p
 assert_contains(lifecycle_src, "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE", "coolant safety path must log ownership separation")
 assert_contains(lifecycle_src, "Safety ownership=SAFETY subsystem=REACTOR_TEMP action=ENTER_SAFE", "temperature safety path must log ownership separation")
 assert_contains(lifecycle_src, "source=%s fuel_temp=%s casing_temp=%s hysteresis=%s over_limit_ticks=%s trip_samples=%s condition=%s", "temperature safety log must include source/value/hysteresis diagnostics")
+assert_contains(lifecycle_src, "Safety temperature context: rods_current=%s regulator_min_rods=%s regulator_max_rods=%s auto_power_cap_pct=%s", "temperature safety log must include rod cap context diagnostics")
 assert_contains(lifecycle_src, "amount=%s max=%s ratio=%s ratio_raw=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s source_method=%s measurement_state=%s stale_fallback=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s zero_glitch_pending=%s condition=%s causality=%s", "coolant safety log must include source/value/hysteresis diagnostics")
 assert_contains(lifecycle_src, "Safety trigger correlation: temp_causality=%s coolant_ratio=%s coolant_threshold=%s coolant_condition=%s coolant_source=%s coolant_low_ticks=%s", "temperature/coolant causality correlation log must be explicit")
 assert_contains(lifecycle_src, "ctx.setState(ctx.STATE.SAFE, \"SAFETY_COOLANT_LOW\")", "coolant safety must set SAFE with explicit reason")
@@ -35,5 +36,7 @@ assert_contains(main_src, "TRIM_PENDING_CONFIRMATION", "trim state should remain
 assert_contains(main_src, "HOLD_CONFIRMED", "hold status should only be confirmed on readback confirmation")
 assert_contains(main_src, "and target_band.mode == \"HOLDING_TARGET_ACTIVE\"", "target hold flag must require explicit hold mode")
 assert_contains(main_src, "ctrl.target_trim_active = (not overspeed_state.active)", "target trim flag must be tracked explicitly")
+assert_contains(main_src, "get_effective_regulator_rod_caps = get_effective_regulator_rod_caps", "module lifecycle context must expose effective regulator rod caps")
+assert_contains(main_src, "read_current_rods = read_current_rods", "module lifecycle context must expose current rod readback helper")
 
 print("rt_safety_causality_logging_test.lua: ok")
