@@ -339,6 +339,14 @@ function M.update_module_states(ctx)
         module.coolant_low_pending_trip = nil
         if ctx.current_state() ~= ctx.STATE.SAFE then
           local coupled = coolant_diag.low_detected and "COOLANT_COUPLED" or "TEMP_PRIMARY"
+          local rod_caps_min, rod_caps_max = nil, nil
+          if type(ctx.get_effective_regulator_rod_caps) == "function" then
+            rod_caps_min, rod_caps_max = ctx.get_effective_regulator_rod_caps()
+          end
+          local current_rods = nil
+          if type(ctx.read_current_rods) == "function" then
+            current_rods = ctx.read_current_rods()
+          end
           ctx.log("ERROR", ("Safety trigger: reactor temperature limit exceeded value=%s limit=%s source=%s fuel_temp=%s casing_temp=%s hysteresis=%s over_limit_ticks=%s trip_samples=%s condition=%s"):format(
             tostring(temp_diag.temperature),
             tostring(temp_diag.max_temperature),
@@ -349,6 +357,12 @@ function M.update_module_states(ctx)
             tostring(temp_diag.over_limit_ticks),
             tostring(temp_diag.trip_samples),
             tostring(temp_diag.condition)
+          ))
+          ctx.log("ERROR", ("Safety temperature context: rods_current=%s regulator_min_rods=%s regulator_max_rods=%s auto_power_cap_pct=%s"):format(
+            tostring(current_rods),
+            tostring(rod_caps_min),
+            tostring(rod_caps_max),
+            tostring(type(rod_caps_min) == "number" and (100 - rod_caps_min) or nil)
           ))
           ctx.log("ERROR", ("Safety trigger correlation: temp_causality=%s coolant_ratio=%s coolant_threshold=%s coolant_condition=%s coolant_source=%s coolant_low_ticks=%s"):format(
             tostring(coupled),

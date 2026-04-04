@@ -120,7 +120,7 @@ local DEFAULT_CONFIG = {
   autonom = {
     control_rod_level = 70, max_rpm = CONFIG.TARGET_RPM, min_flow = CONFIG.MIN_FLOW, max_flow = CONFIG.MAX_FLOW,
     flow_step = CONFIG.FLOW_STEP, ramp_step = CONFIG.FLOW_STEP,
-    regulator_min_rods = 50, regulator_max_rods = CONFIG.ROD_MAX, reactor_adjust_interval = CONFIG.ROD_TICK,
+    regulator_min_rods = 30, regulator_max_rods = CONFIG.ROD_MAX, reactor_adjust_interval = CONFIG.ROD_TICK,
     steam_reserve = 5000,
     steam_deficit = 5000
   },
@@ -167,7 +167,7 @@ local DEFAULT_CONFIG = {
       coolant_ramp_hard_limit_ratio = 0.22, -- Hard coolant margin where power-up rod withdraw is blocked.
       max_step_down_when_coolant_soft = 2, -- Max withdraw step when coolant enters soft-limit zone.
       max_step_down_when_coolant_hard = 0, -- Max withdraw step when coolant enters hard-limit zone.
-      min = 50, -- Rod clamp minimum for automatic regulator path defaults.
+      min = 30, -- Rod clamp minimum for automatic regulator path defaults (70% max automatic power).
       max = CONFIG.ROD_MAX, -- Rod clamp maximum.
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
     },
@@ -2097,6 +2097,8 @@ function build_module_lifecycle_context()
     add_alarm = add_alarm,
     ramp_duration = ramp_duration,
     evaluate_reactor_coolant = evaluate_reactor_coolant,
+    get_effective_regulator_rod_caps = get_effective_regulator_rod_caps,
+    read_current_rods = read_current_rods,
     get_active_startup = function() return active_startup end,
     set_active_startup = function(value) active_startup = value end,
     current_state = function() return current_state end,
@@ -2108,7 +2110,6 @@ end
 function update_module_limits(module)
   return module_lifecycle.update_module_limits(build_module_lifecycle_context(), module)
 end
-
 function start_module(module_id, module_type, ramp_profile)
   return module_lifecycle.start_module(build_module_lifecycle_context(), module_id, module_type, ramp_profile)
 end

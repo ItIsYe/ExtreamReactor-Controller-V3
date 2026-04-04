@@ -38,7 +38,7 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 - `SAFETY_COOLANT_LOW` wird nicht mehr sofort ausgelöst: zuerst Pending (`COOLANT_LOW_PENDING`), Bestätigung erst nach ~4s persistenter Unterschreitung; Recovery im Pending-Fenster bricht den Pending-Fall ab.
 - RT-Regelung nutzt aktive Target-Trim- und Readback-Diagnosezustände (u. a. `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`) sowie Overspeed-Bremszustände (`OVERSPEED_BRAKE`, inkl. Flow `0`).
 - Neuer offizieller RT-Konfig-Pfad für den automatischen Rod-Regler:
-  - `autonom.regulator_min_rods` (Default `0`)
+  - `autonom.regulator_min_rods` (Default `30`, entspricht max. 70% automatischer Reaktorleistung; 100% rods = 0% Leistung, 0% rods = 100% Leistung)
   - `autonom.regulator_max_rods` (Default `98`)
   - Bereich `0..100`, bei `min > max` werden die Werte deterministisch getauscht.
   - Legacy-Felder `autonom.min_rods` / `autonom.max_rods` werden bei fehlenden neuen Feldern weiterhin als Fallback gelesen.
