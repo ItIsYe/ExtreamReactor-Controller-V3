@@ -138,14 +138,6 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     config_values.autonom.ramp_step = defaults.autonom.ramp_step
     add_warning("autonom.ramp_step missing/invalid; defaulting to " .. tostring(defaults.autonom.ramp_step))
   end
-  if type(config_values.autonom.min_rods) ~= "number" then
-    config_values.autonom.min_rods = defaults.autonom.min_rods
-    add_warning("autonom.min_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.min_rods))
-  end
-  if type(config_values.autonom.max_rods) ~= "number" then
-    config_values.autonom.max_rods = defaults.autonom.max_rods
-    add_warning("autonom.max_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.max_rods))
-  end
   if type(config_values.autonom.reactor_adjust_interval) ~= "number" then
     config_values.autonom.reactor_adjust_interval = defaults.autonom.reactor_adjust_interval
     add_warning("autonom.reactor_adjust_interval missing/invalid; defaulting to " .. tostring(defaults.autonom.reactor_adjust_interval))
@@ -162,7 +154,7 @@ function M.validate_config(config_values, defaults, add_warning, utils)
   if type(autonom.regulator_min_rods) ~= "number" then
     if type(autonom.min_rods) == "number" then
       autonom.regulator_min_rods = autonom.min_rods
-      add_warning("autonom.regulator_min_rods missing; using legacy autonom.min_rods")
+      add_warning("autonom.min_rods is deprecated; mapped to autonom.regulator_min_rods")
     else
       autonom.regulator_min_rods = defaults.autonom.regulator_min_rods
       add_warning("autonom.regulator_min_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.regulator_min_rods))
@@ -171,11 +163,17 @@ function M.validate_config(config_values, defaults, add_warning, utils)
   if type(autonom.regulator_max_rods) ~= "number" then
     if type(autonom.max_rods) == "number" then
       autonom.regulator_max_rods = autonom.max_rods
-      add_warning("autonom.regulator_max_rods missing; using legacy autonom.max_rods")
+      add_warning("autonom.max_rods is deprecated; mapped to autonom.regulator_max_rods")
     else
       autonom.regulator_max_rods = defaults.autonom.regulator_max_rods
       add_warning("autonom.regulator_max_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.regulator_max_rods))
     end
+  end
+  if type(autonom.regulator_min_rods) == "number" and type(autonom.min_rods) == "number" and autonom.regulator_min_rods ~= autonom.min_rods then
+    add_warning("autonom.min_rods deprecated and ignored because autonom.regulator_min_rods is set")
+  end
+  if type(autonom.regulator_max_rods) == "number" and type(autonom.max_rods) == "number" and autonom.regulator_max_rods ~= autonom.max_rods then
+    add_warning("autonom.max_rods deprecated and ignored because autonom.regulator_max_rods is set")
   end
   local min_before = autonom.regulator_min_rods
   local max_before = autonom.regulator_max_rods
