@@ -47,9 +47,7 @@ local function mk_defaults()
       max_flow = 2000,
       flow_step = 50,
       ramp_step = 50,
-      min_rods = 0,
-      max_rods = 98,
-      regulator_min_rods = 0,
+      regulator_min_rods = 50,
       regulator_max_rods = 98,
       reactor_adjust_interval = 5,
       steam_reserve = 5000,
@@ -115,13 +113,34 @@ local function test_legacy_alias_fallback()
   cfg.autonom.min_rods = 40
   cfg.autonom.max_rods = 85
 
-  run(cfg)
+  local warnings = run(cfg)
 
   assert_eq(cfg.autonom.regulator_min_rods, 40, "legacy min_rods must map to regulator_min_rods")
   assert_eq(cfg.autonom.regulator_max_rods, 85, "legacy max_rods must map to regulator_max_rods")
+  assert_true(table.concat(warnings, "\n"):find("deprecated", 1, true) ~= nil,
+    "legacy fallback should emit deprecation warning")
+end
+
+local function test_regulator_fields_override_legacy_aliases()
+  local cfg = mk_defaults()
+  cfg.autonom.regulator_min_rods = 60
+  cfg.autonom.regulator_max_rods = 80
+  cfg.autonom.min_rods = 40
+  cfg.autonom.max_rods = 90
+
+  local warnings = run(cfg)
+
+  assert_eq(cfg.autonom.regulator_min_rods, 60, "explicit regulator_min_rods must stay authoritative")
+  assert_eq(cfg.autonom.regulator_max_rods, 80, "explicit regulator_max_rods must stay authoritative")
+  local warning_blob = table.concat(warnings, "\n")
+  assert_true(warning_blob:find("autonom.min_rods deprecated and ignored", 1, true) ~= nil,
+    "conflicting legacy min should log ignored warning")
+  assert_true(warning_blob:find("autonom.max_rods deprecated and ignored", 1, true) ~= nil,
+    "conflicting legacy max should log ignored warning")
 end
 
 test_range_clamp_and_swap()
 test_legacy_alias_fallback()
+test_regulator_fields_override_legacy_aliases()
 
 print("rt_config_normalizer_rod_limits_test.lua: ok")

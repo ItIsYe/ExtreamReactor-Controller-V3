@@ -118,10 +118,8 @@ return {
     drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
   },
   autonom = {
-    regulator_min_rods = 0, -- Lower clamp for automatic rod regulator target (%).
-    regulator_max_rods = CONFIG.DEFAULT_RAILS.reactor_rods.max, -- Upper clamp for automatic rod regulator target (%).
-    min_rods = CONFIG.DEFAULT_RAILS.reactor_rods.min, -- Legacy alias; prefer regulator_min_rods.
-    max_rods = CONFIG.DEFAULT_RAILS.reactor_rods.max -- Legacy alias; prefer regulator_max_rods.
+    regulator_min_rods = CONFIG.DEFAULT_RAILS.reactor_rods.min, -- Lower clamp for automatic rod regulator target (%).
+    regulator_max_rods = CONFIG.DEFAULT_RAILS.reactor_rods.max -- Upper clamp for automatic rod regulator target (%).
   },
   rails = CONFIG.DEFAULT_RAILS
 }

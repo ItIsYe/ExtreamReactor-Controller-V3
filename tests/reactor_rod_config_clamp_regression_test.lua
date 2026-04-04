@@ -28,6 +28,18 @@ local function test_clamp_with_reason()
   assert_eq(reason, nil, "in-range value must not report a clamp reason")
 end
 
+
+local function test_rt_config_uses_single_authoritative_regulator_fields()
+  local cfg = dofile('/workspace/ExtreamReactor-Controller-V3/xreactor/nodes/rt/config.lua')
+  assert_true(type(cfg.autonom) == 'table', 'rt config must define autonom section')
+  assert_true(cfg.autonom.min_rods == nil and cfg.autonom.max_rods == nil,
+    'legacy autonom.min_rods/max_rods must be removed from defaults to avoid ambiguous caps')
+  assert_eq(cfg.autonom.regulator_min_rods, cfg.rails.reactor_rods.min,
+    'default regulator_min_rods must align with rails.reactor_rods.min for unambiguous default cap')
+  assert_eq(cfg.autonom.regulator_max_rods, cfg.rails.reactor_rods.max,
+    'default regulator_max_rods must align with rails.reactor_rods.max for unambiguous default cap')
+end
+
 local function test_rt_main_has_config_clamp_logging_and_safe_override()
   local file = io.open('xreactor/nodes/rt/main.lua', 'r')
   if not file then
@@ -47,6 +59,7 @@ local function test_rt_main_has_config_clamp_logging_and_safe_override()
 end
 
 test_clamp_with_reason()
+test_rt_config_uses_single_authoritative_regulator_fields()
 test_rt_main_has_config_clamp_logging_and_safe_override()
 
 print('reactor_rod_config_clamp_regression_test.lua: ok')
