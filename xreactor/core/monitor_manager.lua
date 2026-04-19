@@ -66,6 +66,7 @@ function manager:scan()
     end
   end
   table.sort(names)
+  monitor_adapter.sync_names(names)
   if #names == 0 then
     local ok, w, h = pcall(term.getSize)
     local width = ok and w or 0

@@ -35,6 +35,8 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 - Rollen-/Knoten-bezogene Runtime-Dateien bleiben unter `/xreactor/config/*`.
 
 ## Safety-/RT-Migrationshinweis
+- MASTER-Monitor-Scale wird jetzt pro Monitor-Name zwischengespeichert (statt pro temporärem Wrap-Objekt), damit periodische Monitor-Scans keine identischen `setTextScale`-Wiederholungen und keinen Log-Spam mehr auslösen.
+- Wenn ein Monitor wirklich verschwindet und später neu erkannt/rebound wird, wird der Cache für diesen Namen invalidiert und die Scale beim Rebind wieder korrekt gesetzt.
 - `SAFETY_COOLANT_LOW` wird nicht mehr sofort ausgelöst: zuerst Pending (`COOLANT_LOW_PENDING`), Bestätigung erst nach ~4s persistenter Unterschreitung; Recovery im Pending-Fenster bricht den Pending-Fall ab.
 - RT-Regelung nutzt aktive Target-Trim- und Readback-Diagnosezustände (u. a. `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`, `READBACK_SETTLING_HOLD`) sowie Overspeed-Bremszustände (`OVERSPEED_BRAKE`, inkl. Flow `0`).
 - Neuer offizieller RT-Konfig-Pfad für den automatischen Rod-Regler:

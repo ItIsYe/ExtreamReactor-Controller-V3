@@ -56,6 +56,50 @@ local function test_monitor_adapter_find_calls_wrapped_getSize_safely()
   end
 end
 
+local function test_monitor_adapter_avoids_duplicate_scale_for_rewrapped_monitor()
+  package.loaded['adapters.monitor'] = nil
+  local adapter = require('adapters.monitor')
+  local set_calls = 0
+  local mon_a = {
+    setTextScale = function(value)
+      set_calls = set_calls + 1
+      if value ~= 0.5 then
+        error('expected normalized scale 0.5 for initial monitor set')
+      end
+    end,
+  }
+  local mon_b = {
+    setTextScale = function()
+      set_calls = set_calls + 1
+    end,
+  }
+
+  adapter.safe_set_scale(mon_a, 'monitor_30', 0.5, 'TEST')
+  adapter.safe_set_scale(mon_b, 'monitor_30', 0.5, 'TEST')
+
+  if set_calls ~= 1 then
+    error('expected duplicate scale write for same monitor name to be skipped across wraps')
+  end
+end
+
+local function test_monitor_adapter_reapplies_scale_after_monitor_disappears()
+  package.loaded['adapters.monitor'] = nil
+  local adapter = require('adapters.monitor')
+  local set_calls = 0
+  local mon_a = { setTextScale = function() set_calls = set_calls + 1 end }
+  local mon_b = { setTextScale = function() set_calls = set_calls + 1 end }
+
+  adapter.sync_names({ 'monitor_30' })
+  adapter.safe_set_scale(mon_a, 'monitor_30', 0.5, 'TEST')
+  adapter.sync_names({})
+  adapter.sync_names({ 'monitor_30' })
+  adapter.safe_set_scale(mon_b, 'monitor_30', 0.5, 'TEST')
+
+  if set_calls ~= 2 then
+    error('expected scale write to re-apply after monitor disappears and is rediscovered')
+  end
+end
+
 local function test_ui_setScale_normalizes_and_avoids_duplicate_calls()
   local set_calls = 0
   local mon = {
@@ -128,6 +172,8 @@ local function test_runtime_wrapped_call_paths_no_implicit_self_forwarding()
 end
 
 test_monitor_adapter_find_calls_wrapped_getSize_safely()
+test_monitor_adapter_avoids_duplicate_scale_for_rewrapped_monitor()
+test_monitor_adapter_reapplies_scale_after_monitor_disappears()
 test_ui_setScale_normalizes_and_avoids_duplicate_calls()
 test_monitor_manager_term_getSize_without_self_forwarding()
 test_runtime_wrapped_call_paths_no_implicit_self_forwarding()
