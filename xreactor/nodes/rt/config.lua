@@ -70,6 +70,17 @@ local CONFIG = {
       max = 98, -- Rod clamp maximum for automatic regulator path (SAFE/SCRAM may still force 100%).
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
     },
+    reactor_steam_guard = {
+      -- Internal reactor steam/hot-fluid is a secondary guard signal, not the primary regulator target.
+      -- It blocks extra rod withdraw at high fill and can force a small close step at critical fill.
+      enabled = true,
+      high_ratio = 0.82,
+      high_release_ratio = 0.74,
+      critical_ratio = 0.92,
+      critical_release_ratio = 0.86,
+      force_close_step = 2,
+      ema_alpha = 0.20
+    },
     coil = {
       engage_rpm = 850, -- Coil engage threshold.
       disengage_rpm = 750, -- Coil disengage threshold.

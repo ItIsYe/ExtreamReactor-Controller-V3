@@ -8,8 +8,8 @@ local modern = {
       error("wrapped tanks() call must not receive implicit self argument")
     end
     return {
-      [1] = { name = "steam", amount = 1250 },
-      [3] = { name = "steam", amount = 750 },
+      [1] = { name = "steam", amount = 1250, capacity = 2000 },
+      [3] = { name = "steam", amount = 750, capacity = 2000 },
     }
   end
 }
@@ -31,6 +31,11 @@ local broken = {
 local modern_value, modern_err = fluid.read_amount(modern, { "getFluidAmount" })
 if modern_value ~= 2000 or modern_err ~= nil then
   error("expected modern tanks API to be preferred")
+end
+
+local modern_capacity = fluid.read_capacity(modern, { "getFluidAmountMax" })
+if modern_capacity ~= 4000 then
+  error("expected modern tanks capacity read to be preferred")
 end
 
 local legacy_value = fluid.read_amount(legacy, { "getFluidAmount" })
