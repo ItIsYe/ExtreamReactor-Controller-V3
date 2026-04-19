@@ -1201,7 +1201,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local confirmed_flow = ctrl.confirmed_flow
   local flow_settled = turbine_regulator.flows_match(requested_flow, confirmed_flow, flow_tolerance)
   local pending_settled, effective_min_flow, effective_min_changed, readback_state, readback_detail =
-    flow_apply_helpers.update_turbine_flow_tracking(ctrl, requested_flow, confirmed_flow, flow_tolerance, rail_cfg, now_ts, decision, turbine_regulator)
+    flow_apply_helpers.update_turbine_flow_tracking(ctrl, requested_flow, confirmed_flow, flow_tolerance, rail_cfg, now_ts, decision, write_state, turbine_regulator)
   ctrl.last_requested_flow = requested_flow
   local direction = mode
   local reason = decision and decision.reason or "NONE"
@@ -1229,6 +1229,10 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   end
   local at_max_limit = requested_flow == (ctrl.effective_max_flow or MAX_FLOW)
   local at_min_limit = type(applied_min) == "number" and requested_flow <= applied_min
+  local pending_age_s = 0
+  if type(ctrl.pending_flow_since) == "number" and ctrl.pending_flow_since > 0 then
+    pending_age_s = math.max(0, now_ts - ctrl.pending_flow_since)
+  end
   local active_trim = ctrl.target_trim_active or target_action == "TARGET_TRIM_UP" or target_action == "TARGET_TRIM_DOWN"
   local hold_active = ctrl.target_holding_active and target_action == "TARGET_HOLD_STABLE"
   if active_trim and readback_state == "READBACK_LAG" then
@@ -1272,6 +1276,9 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     flow_settled = flow_settled,
     pending_settled = pending_settled,
     pending_retries = ctrl.pending_retries,
+    pending_retry_stage = ctrl.pending_retry_stage,
+    pending_age_s = pending_age_s,
+    settle_timeout_s = rail_cfg.settle_timeout_s or 0,
     pending_flow_since = ctrl.pending_flow_since,
     pending_expected_flow = ctrl.pending_expected_flow,
     cooldown_deferred = decision and decision.defer_cooldown or false,

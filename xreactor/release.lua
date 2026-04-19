@@ -1,5 +1,5 @@
 return {
-  release_id = "beta-2026-04-02-livefix-rt-turbine",
+  release_id = "beta-2026-04-19-rt-readback-lag",
   commit_sha = "beta",
   manifest_id = "manifest-v6",
   manifest_version = 6,
