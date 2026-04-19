@@ -198,10 +198,25 @@ local confirm_b, detail_confirm_b = regulator.classify_confirmation({
   pending_retries = 0,
   settle_timeout_s = 1.0,
   pending_since = 10.0,
+  now_ts = 10.2,
+  write_state = "WRITE_ACCEPTED"
+})
+if confirm_b ~= 'READBACK_LAG' or detail_confirm_b ~= 'WRITE_ACCEPTED_READBACK_PENDING' then
+  error('fresh mismatch before timeout after accepted write should classify as pending readback lag')
+end
+
+local confirm_b2, detail_confirm_b2 = regulator.classify_confirmation({
+  requested_flow = 0,
+  confirmed_flow = 250,
+  pending_expected_flow = 0,
+  tolerance = 1,
+  pending_retries = 0,
+  settle_timeout_s = 1.0,
+  pending_since = 10.0,
   now_ts = 10.2
 })
-if confirm_b ~= 'READBACK_LAG' or detail_confirm_b ~= 'READBACK_LAG' then
-  error('fresh mismatch before timeout should classify as readback lag')
+if confirm_b2 ~= 'READBACK_LAG' or detail_confirm_b2 ~= 'READBACK_LAG' then
+  error('fresh mismatch before timeout without accepted write hint should keep generic readback lag detail')
 end
 local confirm_c, detail_confirm_c = regulator.classify_confirmation({
   requested_flow = 0,

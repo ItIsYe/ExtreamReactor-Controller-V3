@@ -42,20 +42,33 @@ function M.capture_turbine_flow_readback(turbine, caps, ctrl, requested_flow, ra
   return observed_flow, flow_reader, attempt, flow_tolerance
 end
 
-function M.update_turbine_flow_tracking(ctrl, requested_flow, confirmed_flow, flow_tolerance, rail_cfg, now_ts, decision, turbine_regulator)
+function M.update_turbine_flow_tracking(ctrl, requested_flow, confirmed_flow, flow_tolerance, rail_cfg, now_ts, decision, write_state, turbine_regulator)
   local previous_requested = ctrl.pending_expected_flow
   if type(previous_requested) ~= "number" then
     previous_requested = ctrl.last_requested_flow
   end
   local pending_settled = turbine_regulator.flows_match(ctrl.pending_expected_flow, confirmed_flow, flow_tolerance)
-  if previous_requested ~= requested_flow then
+  local write_accepted = write_state == "WRITE_ACCEPTED"
+  if write_accepted and previous_requested ~= requested_flow then
     ctrl.pending_flow_since = now_ts
     ctrl.pending_expected_flow = requested_flow
     ctrl.pending_retries = 0
+    ctrl.pending_retry_stage = 0
   elseif not pending_settled then
-    ctrl.pending_retries = (ctrl.pending_retries or 0) + 1
+    local settle_timeout_s = tonumber(rail_cfg and rail_cfg.settle_timeout_s) or 0
+    local pending_since = tonumber(ctrl.pending_flow_since) or now_ts
+    local pending_age = math.max(0, now_ts - pending_since)
+    if settle_timeout_s > 0 then
+      local retry_stage = math.floor(pending_age / settle_timeout_s)
+      ctrl.pending_retry_stage = retry_stage
+      ctrl.pending_retries = retry_stage
+    elseif write_accepted then
+      ctrl.pending_retries = (ctrl.pending_retries or 0) + 1
+      ctrl.pending_retry_stage = ctrl.pending_retries
+    end
   else
     ctrl.pending_retries = 0
+    ctrl.pending_retry_stage = 0
     ctrl.pending_flow_since = 0
     ctrl.pending_expected_flow = requested_flow
   end
@@ -82,7 +95,8 @@ function M.update_turbine_flow_tracking(ctrl, requested_flow, confirmed_flow, fl
     settle_timeout_s = rail_cfg.settle_timeout_s or 0,
     pending_since = ctrl.pending_flow_since,
     now_ts = now_ts,
-    floor_hint = (ctrl.overspeed_floor_hits or 0) >= effective_min_samples
+    floor_hint = (ctrl.overspeed_floor_hits or 0) >= effective_min_samples,
+    write_state = write_state
   })
   return pending_settled, effective_min_flow, effective_min_changed, readback_state, readback_detail
 end
@@ -132,6 +146,9 @@ function M.log_turbine_control_metrics(fields, log)
       .. " flow_settled=" .. tostring(fields.flow_settled)
       .. " pending_settled=" .. tostring(fields.pending_settled)
       .. " pending_retries=" .. tostring(fields.pending_retries)
+      .. " pending_retry_stage=" .. tostring(fields.pending_retry_stage)
+      .. " pending_age_s=" .. tostring(fields.pending_age_s)
+      .. " settle_timeout_s=" .. tostring(fields.settle_timeout_s)
       .. " pending_since=" .. tostring(fields.pending_flow_since)
       .. " pending_expected_flow=" .. tostring(fields.pending_expected_flow)
       .. " cooldown_deferred=" .. tostring(fields.cooldown_deferred)

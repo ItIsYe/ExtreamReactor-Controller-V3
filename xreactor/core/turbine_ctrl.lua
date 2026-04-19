@@ -55,6 +55,9 @@ local function ensure_turbine_ctrl(name)
   if ctrl.pending_retries == nil then
     ctrl.pending_retries = 0
   end
+  if ctrl.pending_retry_stage == nil then
+    ctrl.pending_retry_stage = 0
+  end
   if ctrl.effective_min_flow == nil then
     ctrl.effective_min_flow = nil
   end

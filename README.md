@@ -380,6 +380,7 @@ Support nodes maintain a local peripheral registry and periodically rescan hardw
 
 - Low coolant is handled with a confirmation window, not as immediate kill: runtime emits `COOLANT_LOW_PENDING`, waits ~4 seconds, then either enters SAFE with `SAFETY_COOLANT_LOW` or aborts the pending condition on recovery.
 - Turbine control includes explicit target-band trim and readback diagnostics states such as `TARGET_TRIM_UP`, `TARGET_TRIM_DOWN`, `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`, `READBACK_SETTLING_HOLD`, and `HOLD_CONFIRMED`.
+- `FLOW_READBACK_LAG` diagnostics now separate accepted-write/readback-pending (`WRITE_ACCEPTED_READBACK_PENDING`) from generic mismatch states, and pending retry escalation advances per `settle_timeout_s` window instead of every fast control tick to avoid premature retry-cap trips during delayed API readback.
 - Overspeed handling uses explicit brake mode (`OVERSPEED_BRAKE`) and forces requested turbine flow to `0` while enforcing coil engagement for active braking.
 - The automatic reactor rod regulator now supports explicit config clamps:
   - `autonom.regulator_min_rods` (default `20`; this equals the default `rails.reactor_rods.min` and enforces max 80% automatic power)

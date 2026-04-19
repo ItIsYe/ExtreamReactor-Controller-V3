@@ -110,6 +110,7 @@ function regulator.sync_startup_state(state, confirmed_flow)
   state.pending_expected_flow = confirmed_flow
   state.pending_flow_since = 0
   state.pending_retries = 0
+  state.pending_retry_stage = 0
   state.last_requested_flow = confirmed_flow
   state.startup_synced = true
   return true
@@ -215,6 +216,7 @@ function regulator.classify_confirmation(input)
   local pending_since = sanitize_number(type(input) == "table" and input.pending_since or nil, 0)
   local now_ts = sanitize_number(type(input) == "table" and input.now_ts or nil, pending_since)
   local floor_hint = type(input) == "table" and input.floor_hint or false
+  local write_state = type(input) == "table" and input.write_state or nil
 
   if math.abs(requested - confirmed) <= tolerance then
     return "CONFIRMED_MATCH", "API_CONFIRMED_WRITE"
@@ -224,6 +226,9 @@ function regulator.classify_confirmation(input)
   end
   local age = math.max(0, now_ts - pending_since)
   if settle_timeout_s > 0 and age < settle_timeout_s and pending_retries <= 1 then
+    if write_state == "WRITE_ACCEPTED" then
+      return "READBACK_LAG", "WRITE_ACCEPTED_READBACK_PENDING"
+    end
     return "READBACK_LAG", "READBACK_LAG"
   end
   if floor_hint and requested == 0 and confirmed > 0 then
