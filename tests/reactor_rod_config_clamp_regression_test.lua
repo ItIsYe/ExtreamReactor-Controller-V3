@@ -38,10 +38,10 @@ local function test_rt_config_uses_single_authoritative_regulator_fields()
     'default regulator_min_rods must align with rails.reactor_rods.min for unambiguous default cap')
   assert_eq(cfg.autonom.regulator_max_rods, cfg.rails.reactor_rods.max,
     'default regulator_max_rods must align with rails.reactor_rods.max for unambiguous default cap')
-  assert_eq(cfg.autonom.regulator_min_rods, 20,
-    'default regulator min rods must enforce 80% automatic power cap (100-rods semantics)')
-  assert_eq(100 - cfg.autonom.regulator_min_rods, 80,
-    'power semantics regression: min rods of 20 must equal max 80% automatic power')
+  assert_eq(cfg.autonom.regulator_min_rods, 80,
+    'default regulator min rods must enforce 20% automatic power cap (100-rods semantics)')
+  assert_eq(100 - cfg.autonom.regulator_min_rods, 20,
+    'power semantics regression: min rods of 80 must equal max 20% automatic power')
 end
 
 local function test_rt_main_has_config_clamp_logging_and_safe_override()
@@ -66,6 +66,10 @@ local function test_rt_main_has_config_clamp_logging_and_safe_override()
     'SAFE/SCRAM override path must be explicitly logged')
   assert_true(content:find('Rod cap config loaded', 1, true) ~= nil,
     'startup log must report effective rod cap config source values')
+  assert_true(content:find('ROD_CAP_CONFIG_MIN_MISMATCH', 1, true) ~= nil,
+    'startup diagnostics must report min-cap mismatches between autonom and rails config paths')
+  assert_true(content:find('math%.max%(autonom_min, rails_min%)') ~= nil,
+    'effective rod cap resolver must use stricter min cap when autonom and rails both exist')
   assert_true(content:find('applyReactorRods%(ROD_MAX, true, "SAFE_TICK"%)') ~= nil,
     'SAFE/SCRAM path must still force 100% rod insertion via allow_overmax')
 end
