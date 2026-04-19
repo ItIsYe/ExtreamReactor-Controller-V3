@@ -25,10 +25,11 @@
 3. **Target-Band mit aktiver Trim-Logik**: in-band Zustände prüfen (`TARGET_TRIM_UP`, `TARGET_TRIM_DOWN`, `HOLDING_TARGET_ACTIVE`).
 4. **Readback-Lag-Diagnose**: bei Soll/Ist-Mismatch müssen `READBACK_LAG`/Pending-Klassifikationen und kombinierte Zustände wie `ACTIVE_TRIM_WITH_READBACK_LAG` erscheinen.
 5. **Flow-0-Pending bei Overspeed**: wenn Overspeed aktiv und Readback nicht sofort folgt, muss der Pending-Pfad mit klarer Diagnose (inkl. retries/detail) sichtbar sein.
-6. **Rod-Regler Min-Clamp / 80%-Power-Cap**: Default prüfen (`autonom.regulator_min_rods = 20`); Automatik darf nie unter `20` rods gehen (`100% rods = 0% Leistung`, `0% rods = 100% Leistung`), Log muss `ROD_TARGET_CLAMPED_BY_CONFIG_MIN` zeigen.
-7. **Rod-Regler Max-Clamp**: `autonom.regulator_max_rods` < aktuellem Ziel setzen; Automatik darf Ziel nicht darüber schreiben, Log muss `ROD_TARGET_CLAMPED_BY_CONFIG_MAX` zeigen.
-8. **Rod-Regler Min/Max-Kombination**: gültigen Bereich setzen (z. B. 40..85) und verifizieren, dass Automatik innerhalb des Bereichs bleibt; bei invertierter Eingabe (`min > max`) nach Normalisierung konsistenten Bereich prüfen.
-9. **Safety übersteuert Rod-Config**: SAFE/SCRAM auslösen und verifizieren, dass Rods weiterhin auf `100%` gefahren werden können (Config-Clamps dürfen Safety nicht blockieren).
+6. **Lua-Parse-Guard (RT Main)**: `tests/rt_main_parse_guard_test.py` muss grün sein, damit lokale Variablen-/Register-Limits in `nodes/rt/main.lua` frühzeitig auffallen.
+7. **Rod-Regler Min-Clamp / 80%-Power-Cap**: Default prüfen (`autonom.regulator_min_rods = 20`); Automatik darf nie unter `20` rods gehen (`100% rods = 0% Leistung`, `0% rods = 100% Leistung`), Log muss `ROD_TARGET_CLAMPED_BY_CONFIG_MIN` zeigen.
+8. **Rod-Regler Max-Clamp**: `autonom.regulator_max_rods` < aktuellem Ziel setzen; Automatik darf Ziel nicht darüber schreiben, Log muss `ROD_TARGET_CLAMPED_BY_CONFIG_MAX` zeigen.
+9. **Rod-Regler Min/Max-Kombination**: gültigen Bereich setzen (z. B. 40..85) und verifizieren, dass Automatik innerhalb des Bereichs bleibt; bei invertierter Eingabe (`min > max`) nach Normalisierung konsistenten Bereich prüfen.
+10. **Safety übersteuert Rod-Config**: SAFE/SCRAM auslösen und verifizieren, dass Rods weiterhin auf `100%` gefahren werden können (Config-Clamps dürfen Safety nicht blockieren).
 
 ## Kommunikation / Discovery / Betrieb
 1. **ACK/Retry**: Retry + ACK für `COMMAND` prüfen; `STATUS`/`HEARTBEAT` bleiben ohne Applied-ACK-Logik.
