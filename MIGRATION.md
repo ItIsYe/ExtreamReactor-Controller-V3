@@ -42,3 +42,7 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
   - `autonom.regulator_max_rods` (Default `98`)
   - Bereich `0..100`, bei `min > max` werden die Werte deterministisch getauscht.
   - Legacy-Felder `autonom.min_rods` / `autonom.max_rods` werden bei fehlenden neuen Feldern weiterhin als Fallback gelesen.
+- Zusätzliches RT-Sekundärsignal für aktive Kühlung:
+  - `rails.reactor_steam_guard` nutzt internen Reaktor-Steam/Hot-Fluid-Füllstand als Guard (nicht als Primär-Führungsgröße).
+  - Hoher Füllstand blockiert weiteres Öffnen; kritischer Füllstand kann kontrolliertes Schließen erzwingen.
+  - Guard arbeitet geglättet (`ema_alpha`) und mit Hysterese (`high*`/`critical*` + `*_release`), um Oszillation zu vermeiden.

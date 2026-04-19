@@ -268,6 +268,40 @@ function M.normalize_rails(config, defaults, utils, safety, min_flow, max_flow)
   rod_defaults.deadband_up = config.autonom.steam_reserve
   rod_defaults.deadband_down = config.autonom.steam_deficit
   normalize_rail("reactor_rods", rod_defaults)
+  local steam_guard = config.rails.reactor_steam_guard or {}
+  local steam_guard_defaults = defaults.rails.reactor_steam_guard or {}
+  local default_high_ratio = tonumber(steam_guard_defaults.high_ratio) or 0.82
+  local default_high_release_ratio = tonumber(steam_guard_defaults.high_release_ratio) or 0.74
+  local default_critical_ratio = tonumber(steam_guard_defaults.critical_ratio) or 0.92
+  local default_critical_release_ratio = tonumber(steam_guard_defaults.critical_release_ratio) or 0.86
+  local default_force_close_step = tonumber(steam_guard_defaults.force_close_step) or 2
+  local default_ema_alpha = tonumber(steam_guard_defaults.ema_alpha) or 0.2
+  steam_guard.enabled = steam_guard.enabled ~= false
+  steam_guard.high_ratio = type(steam_guard.high_ratio) == "number" and steam_guard.high_ratio or default_high_ratio
+  steam_guard.high_release_ratio = type(steam_guard.high_release_ratio) == "number" and steam_guard.high_release_ratio or default_high_release_ratio
+  steam_guard.critical_ratio = type(steam_guard.critical_ratio) == "number" and steam_guard.critical_ratio or default_critical_ratio
+  steam_guard.critical_release_ratio = type(steam_guard.critical_release_ratio) == "number" and steam_guard.critical_release_ratio or default_critical_release_ratio
+  steam_guard.force_close_step = clamp_nonneg(steam_guard.force_close_step, default_force_close_step)
+  if type(steam_guard.ema_alpha) ~= "number" or steam_guard.ema_alpha <= 0 or steam_guard.ema_alpha >= 1 then
+    steam_guard.ema_alpha = default_ema_alpha
+  end
+  steam_guard.high_ratio = clamp_range(steam_guard.high_ratio, 0, 1)
+  steam_guard.high_release_ratio = clamp_range(steam_guard.high_release_ratio, 0, 1)
+  steam_guard.critical_ratio = clamp_range(steam_guard.critical_ratio, 0, 1)
+  steam_guard.critical_release_ratio = clamp_range(steam_guard.critical_release_ratio, 0, 1)
+  if steam_guard.high_release_ratio > steam_guard.high_ratio then
+    steam_guard.high_release_ratio = steam_guard.high_ratio
+  end
+  if steam_guard.critical_release_ratio > steam_guard.critical_ratio then
+    steam_guard.critical_release_ratio = steam_guard.critical_ratio
+  end
+  if steam_guard.high_ratio > steam_guard.critical_ratio then
+    steam_guard.high_ratio = steam_guard.critical_ratio
+    if steam_guard.high_release_ratio > steam_guard.high_ratio then
+      steam_guard.high_release_ratio = steam_guard.high_ratio
+    end
+  end
+  config.rails.reactor_steam_guard = steam_guard
 
   local coil = config.rails.coil or {}
   coil.engage_rpm = clamp_nonneg(coil.engage_rpm, defaults.rails.coil.engage_rpm)

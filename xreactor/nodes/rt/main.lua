@@ -73,6 +73,7 @@ local module_lifecycle = require("nodes.rt.module_lifecycle")
 local command_handler = require("nodes.rt.command_handler")
 local config_normalizer = require("nodes.rt.config_normalizer")
 local flow_apply_helpers = require("nodes.rt.flow_apply_helpers")
+local reactor_steam_guard = require("nodes.rt.reactor_steam_guard")
 local INFO = "INFO"
 local DEBUG = "DEBUG"
 local WARN = "WARN"
@@ -173,6 +174,17 @@ local DEFAULT_CONFIG = {
       max = CONFIG.ROD_MAX, -- Rod clamp maximum.
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
     },
+    reactor_steam_guard = {
+      -- Internal reactor steam/hot-fluid is a secondary guard signal, not the primary regulator target.
+      -- Existing turbine-demand/steam-margin logic remains the lead control path.
+      enabled = true,
+      high_ratio = 0.82,
+      high_release_ratio = 0.74,
+      critical_ratio = 0.92,
+      critical_release_ratio = 0.86,
+      force_close_step = 2,
+      ema_alpha = 0.20
+    },
     coil = {
       engage_rpm = CONFIG.COIL_ENGAGE_RPM, -- Coil engage threshold.
       disengage_rpm = CONFIG.COIL_DISENGAGE_RPM, -- Coil disengage threshold.
@@ -249,6 +261,7 @@ local last_rod_direction = nil
 local last_reactor_demand = 0
 local steam_tank_name = nil
 local reactor_rails_state = rails.new_state()
+local reactor_steam_guard_state = {}
 config.safety = config.safety or {}
 config.safety.max_temperature = config.safety.max_temperature or DEFAULT_CONFIG.safety.max_temperature
 config.safety.temperature_hysteresis = config.safety.temperature_hysteresis or DEFAULT_CONFIG.safety.temperature_hysteresis
@@ -459,6 +472,35 @@ local function read_reactor_steam_amount()
     return total
   end
   return nil
+end
+local function read_reactor_internal_steam_fill_ratio()
+  local total_amount = 0
+  local total_capacity = 0
+  local found = false
+  for _, name in ipairs(config.reactors or {}) do
+    local reactor = peripherals.reactors[name]
+    if not reactor then
+      local wrapped = utils.safe_wrap(name)
+      if wrapped then
+        reactor = wrapped
+      end
+    end
+    if reactor then
+      local amount = fluid.read_amount(reactor, { "getHotFluidAmount", "getSteamAmount", "getSteam" })
+      if type(amount) == "number" then
+        local capacity = fluid.read_capacity(reactor, { "getHotFluidAmountMax", "getSteamAmountMax", "getHotFluidCapacity", "getSteamCapacity" })
+        if type(capacity) == "number" and capacity > 0 then
+          total_amount = total_amount + amount
+          total_capacity = total_capacity + capacity
+          found = true
+        end
+      end
+    end
+  end
+  if found and total_capacity > 0 then
+    return safety.clamp(total_amount / total_capacity, 0, 1), total_amount, total_capacity
+  end
+  return nil, nil, nil
 end
 local safe_wrapped_call
 local function get_available_steam()
@@ -686,6 +728,7 @@ local function ensure_reactor_ctrl(name)
 end
 local function init_reactor_ctrl()
   reactor_ctrl = {}
+  reactor_steam_guard_state = {}
   for _, name in ipairs(config.reactors or {}) do
     reactor_ctrl[name] = {
       last_steam_pct = nil,
@@ -827,6 +870,29 @@ local function controlReactor()
     end
     target_rods = clamped_target
   end
+  local steam_guard_cfg = config.rails and config.rails.reactor_steam_guard or {}
+  local pre_guard_target_rods = target_rods
+  local internal_fill_ratio, internal_amount, internal_capacity = read_reactor_internal_steam_fill_ratio()
+  local guard_target = target_rods
+  local guard_diag = {
+    unavailable = true,
+    high_active = false,
+    critical_active = false,
+    blocked_opening = false,
+    forced_closing = false
+  }
+  if steam_guard_cfg.enabled ~= false then
+    guard_target, guard_diag = reactor_steam_guard.apply(
+      current_rods,
+      target_rods,
+      internal_fill_ratio,
+      steam_guard_cfg,
+      reactor_steam_guard_state
+    )
+    if type(guard_target) == "number" then
+      target_rods = guard_target
+    end
+  end
   local min_coolant_ratio
   for _, name in ipairs(config.reactors or {}) do
     local reactor, sample = peripherals.reactors[name], nil
@@ -846,10 +912,16 @@ local function controlReactor()
   local applied = applyReactorRods(applied_rods, false, "AUTO_REGULATOR")
   if applied then
     local limited = ramp_diag and math.abs(tonumber(ramp_diag.applied_delta) or 0) < math.abs(tonumber(ramp_diag.requested_delta) or 0)
-    log("INFO", string.format("ReactorCtrl margin=%.1f rods_current=%.1f rods_target=%.1f requested_delta=%.1f applied_delta=%.1f ramp_reason=%s rate_limited=%s coolant_ratio=%s coolant_limited=%s", steam_margin, current_rods, target_rods, (ramp_diag and ramp_diag.requested_delta) or 0, (ramp_diag and ramp_diag.applied_delta) or (applied_rods - current_rods), tostring(ramp_diag and ramp_diag.reason or "n/a"), tostring(limited), tostring(min_coolant_ratio), tostring(ramp_diag and ramp_diag.coolant_limited == true)))
+    log("INFO", string.format("ReactorCtrl margin=%.1f rods_current=%.1f rods_target=%.1f requested_delta=%.1f applied_delta=%.1f ramp_reason=%s rate_limited=%s coolant_ratio=%s coolant_limited=%s internal_steam_ratio=%s internal_steam_ratio_ema=%s internal_steam_amount=%s internal_steam_capacity=%s steam_guard_high=%s steam_guard_critical=%s steam_guard_block_open=%s steam_guard_force_close=%s steam_guard_unavailable=%s", steam_margin, current_rods, target_rods, (ramp_diag and ramp_diag.requested_delta) or 0, (ramp_diag and ramp_diag.applied_delta) or (applied_rods - current_rods), tostring(ramp_diag and ramp_diag.reason or "n/a"), tostring(limited), tostring(min_coolant_ratio), tostring(ramp_diag and ramp_diag.coolant_limited == true), tostring(guard_diag and guard_diag.raw_ratio), tostring(guard_diag and guard_diag.ema_ratio), tostring(internal_amount), tostring(internal_capacity), tostring(guard_diag and guard_diag.high_active == true), tostring(guard_diag and guard_diag.critical_active == true), tostring(guard_diag and guard_diag.blocked_opening == true), tostring(guard_diag and guard_diag.forced_closing == true), tostring(guard_diag and guard_diag.unavailable == true)))
     if limited then log("DEBUG", "ROD_TARGET_CLAMPED_BY_RATE_LIMIT current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods) .. " requested_delta=" .. tostring(ramp_diag.requested_delta) .. " applied_delta=" .. tostring(ramp_diag.applied_delta) .. " max_step=" .. tostring(ramp_diag.max_step)) end
     if ramp_diag and ramp_diag.coolant_limited then
       log("DEBUG", "ROD_CHANGE_LIMITED_BY_COOLANT_MARGIN ratio=" .. tostring(min_coolant_ratio) .. " mode=" .. tostring(ramp_diag.coolant_reason) .. " requested_delta=" .. tostring(ramp_diag.requested_delta) .. " applied_delta=" .. tostring(ramp_diag.applied_delta))
+    end
+    if guard_diag and guard_diag.blocked_opening then
+      log("DEBUG", "ROD_OPEN_BLOCKED_BY_INTERNAL_STEAM_GUARD ratio_ema=" .. tostring(guard_diag.ema_ratio) .. " current=" .. tostring(current_rods) .. " requested_target=" .. tostring(pre_guard_target_rods) .. " adjusted_target=" .. tostring(target_rods))
+    end
+    if guard_diag and guard_diag.forced_closing then
+      log("DEBUG", "ROD_CLOSE_FORCED_BY_INTERNAL_STEAM_GUARD ratio_ema=" .. tostring(guard_diag.ema_ratio) .. " current=" .. tostring(current_rods) .. " adjusted_target=" .. tostring(target_rods))
     end
   end
 end

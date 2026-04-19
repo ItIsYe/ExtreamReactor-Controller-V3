@@ -216,6 +216,18 @@ function reactor.inspect(name, log_prefix)
       or has_method(method_set, "getSteam") and "getSteam",
     log_prefix
   )
+  local steam_max = read_number(
+    name,
+    has_method(method_set, "getHotFluidAmountMax") and "getHotFluidAmountMax"
+      or has_method(method_set, "getSteamAmountMax") and "getSteamAmountMax"
+      or has_method(method_set, "getHotFluidCapacity") and "getHotFluidCapacity"
+      or has_method(method_set, "getSteamCapacity") and "getSteamCapacity",
+    log_prefix
+  )
+  local steam_fill_ratio = nil
+  if type(steam) == "number" and type(steam_max) == "number" and steam_max > 0 then
+    steam_fill_ratio = steam / steam_max
+  end
   local coolant_amount = read_number(name, has_method(method_set, "getCoolantAmount") and "getCoolantAmount" or nil, log_prefix)
   local coolant_amount_max = read_number(name, has_method(method_set, "getCoolantAmountMax") and "getCoolantAmountMax" or nil, log_prefix)
   local coolant_filled_percentage = read_number(name, has_method(method_set, "getCoolantFilledPercentage") and "getCoolantFilledPercentage" or nil, log_prefix)
@@ -235,6 +247,10 @@ function reactor.inspect(name, log_prefix)
         or has_method(method_set, "getControlRodsLevels")
         or has_method(method_set, "getControlRods"),
       steam = has_method(method_set, "getHotFluidAmount") or has_method(method_set, "getSteamAmount") or has_method(method_set, "getSteam"),
+      steam_capacity = has_method(method_set, "getHotFluidAmountMax")
+        or has_method(method_set, "getSteamAmountMax")
+        or has_method(method_set, "getHotFluidCapacity")
+        or has_method(method_set, "getSteamCapacity"),
       coolant = has_method(method_set, "getCoolantAmount")
         or has_method(method_set, "getCoolantAmountMax")
         or has_method(method_set, "getCoolantFilledPercentage")
@@ -247,6 +263,8 @@ function reactor.inspect(name, log_prefix)
       energy = "number",
       control_rod_level = "number",
       steam = "number",
+      steam_amount_max = "number",
+      steam_fill_ratio = "number",
       coolant_amount = "number",
       coolant_amount_max = "number",
       coolant_filled_percentage = "number",
@@ -259,6 +277,8 @@ function reactor.inspect(name, log_prefix)
     energy = energy,
     control_rod_level = rods,
     steam = steam,
+    steam_amount_max = steam_max,
+    steam_fill_ratio = steam_fill_ratio,
     coolant_amount = coolant_amount,
     coolant_amount_max = coolant_amount_max,
     coolant_filled_percentage = coolant_filled_percentage,

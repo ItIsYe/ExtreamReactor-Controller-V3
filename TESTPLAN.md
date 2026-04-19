@@ -30,6 +30,8 @@
 8. **Rod-Regler Max-Clamp**: `autonom.regulator_max_rods` < aktuellem Ziel setzen; Automatik darf Ziel nicht darüber schreiben, Log muss `ROD_TARGET_CLAMPED_BY_CONFIG_MAX` zeigen.
 9. **Rod-Regler Min/Max-Kombination**: gültigen Bereich setzen (z. B. 40..85) und verifizieren, dass Automatik innerhalb des Bereichs bleibt; bei invertierter Eingabe (`min > max`) nach Normalisierung konsistenten Bereich prüfen.
 10. **Safety übersteuert Rod-Config**: SAFE/SCRAM auslösen und verifizieren, dass Rods weiterhin auf `100%` gefahren werden können (Config-Clamps dürfen Safety nicht blockieren).
+11. **Interner Steam-Guard (Sekundärsignal)**: Primärregelung via Turbinenbedarf aktiv lassen; bei hohem internem Reaktor-Steam muss weiteres Öffnen blockiert werden (`steam_guard_block_open=true`), bei kritischem Füllstand zusätzlich kontrolliertes Schließen (`steam_guard_force_close=true`).
+12. **Steam-Guard-Hysterese/Stabilität**: Schwellenbereich durchfahren und prüfen, dass Guard erst an `high_ratio`/`critical_ratio` aktiviert, erst an `high_release_ratio`/`critical_release_ratio` wieder freigibt (kein unnötiges Hin-und-her-Regeln).
 
 ## Kommunikation / Discovery / Betrieb
 1. **ACK/Retry**: Retry + ACK für `COMMAND` prüfen; `STATUS`/`HEARTBEAT` bleiben ohne Applied-ACK-Logik.

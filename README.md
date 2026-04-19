@@ -388,6 +388,12 @@ Support nodes maintain a local peripheral registry and periodically rescan hardw
   - valid range is `0..100`; invalid values are normalized, and if min > max the values are swapped during normalization.
   - legacy aliases `autonom.min_rods` / `autonom.max_rods` are only migration fallbacks when regulator fields are missing; if both are present, regulator fields are authoritative and legacy values are ignored with warnings.
   - clamps apply to the automatic regulator target path (with diagnostics `ROD_TARGET_CLAMPED_BY_CONFIG_MIN/MAX`), while SAFE/SCRAM still keeps authority to force rods to `100%`.
+- RT now includes an internal reactor steam/hot-fluid **secondary guard** (`rails.reactor_steam_guard`), which keeps turbine-demand regulation as primary and only adds stabilizing corrections:
+  - uses internal reactor steam fill ratio when available (`getHotFluidAmount*`, `getSteamAmount*`, `get*Capacity`, or `tanks()` fallback data),
+  - smooths with EMA (`ema_alpha`) and applies hysteresis (`high_ratio`/`high_release_ratio`, `critical_ratio`/`critical_release_ratio`),
+  - high zone: blocks further rod withdraw (`steam_guard_block_open=true`),
+  - critical zone: additionally forces a small controlled close step (`force_close_step`),
+  - designed to avoid oscillation by latching until release thresholds are crossed.
 - Temperatur-Safety-Logs enthalten zusätzlich Regler-Kontext (`Safety temperature context: rods_current=... regulator_min_rods=... regulator_max_rods=... auto_power_cap_pct=...`), damit Übertemperatur-Fälle mit aktiven Rod-Caps im Feld klar korreliert werden können.
 
 ## Update instructions
