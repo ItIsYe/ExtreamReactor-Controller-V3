@@ -47,11 +47,17 @@ local function mk_defaults()
       max_flow = 2000,
       flow_step = 50,
       ramp_step = 50,
-      regulator_min_rods = 20,
+      regulator_min_rods = 80,
       regulator_max_rods = 98,
       reactor_adjust_interval = 5,
       steam_reserve = 5000,
       steam_deficit = 5000
+    },
+    rails = {
+      reactor_rods = {
+        min = 80,
+        max = 98
+      }
     },
     monitor_interval = 2,
     monitor_scale = 0.5,
@@ -139,8 +145,27 @@ local function test_regulator_fields_override_legacy_aliases()
     "conflicting legacy max should log ignored warning")
 end
 
+local function test_rails_caps_backfill_missing_regulator_caps()
+  local cfg = mk_defaults()
+  cfg.autonom.regulator_min_rods = nil
+  cfg.autonom.regulator_max_rods = nil
+  cfg.rails.reactor_rods.min = 83
+  cfg.rails.reactor_rods.max = 96
+
+  local warnings = run(cfg)
+
+  assert_eq(cfg.autonom.regulator_min_rods, 83, "missing regulator_min_rods must be backfilled from rails.reactor_rods.min")
+  assert_eq(cfg.autonom.regulator_max_rods, 96, "missing regulator_max_rods must be backfilled from rails.reactor_rods.max")
+  local warning_blob = table.concat(warnings, "\n")
+  assert_true(warning_blob:find("mapped from rails.reactor_rods.min", 1, true) ~= nil,
+    "rails->autonom min mapping should emit explicit warning")
+  assert_true(warning_blob:find("mapped from rails.reactor_rods.max", 1, true) ~= nil,
+    "rails->autonom max mapping should emit explicit warning")
+end
+
 test_range_clamp_and_swap()
 test_legacy_alias_fallback()
 test_regulator_fields_override_legacy_aliases()
+test_rails_caps_backfill_missing_regulator_caps()
 
 print("rt_config_normalizer_rod_limits_test.lua: ok")

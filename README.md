@@ -383,7 +383,7 @@ Support nodes maintain a local peripheral registry and periodically rescan hardw
 - `FLOW_READBACK_LAG` diagnostics now separate accepted-write/readback-pending (`WRITE_ACCEPTED_READBACK_PENDING`) from generic mismatch states, and pending retry escalation advances per `settle_timeout_s` window instead of every fast control tick to avoid premature retry-cap trips during delayed API readback.
 - Overspeed handling uses explicit brake mode (`OVERSPEED_BRAKE`) and forces requested turbine flow to `0` while enforcing coil engagement for active braking.
 - The automatic reactor rod regulator now supports explicit config clamps:
-  - `autonom.regulator_min_rods` (default `20`; this equals the default `rails.reactor_rods.min` and enforces max 80% automatic power)
+  - `autonom.regulator_min_rods` (default `80`; this equals the default `rails.reactor_rods.min` and enforces max 20% automatic power with inverted rod semantics: `100% rods = 0% power`, `0% rods = 100% power`)
   - `autonom.regulator_max_rods` (default `98`; this equals the default `rails.reactor_rods.max`)
   - valid range is `0..100`; invalid values are normalized, and if min > max the values are swapped during normalization.
   - legacy aliases `autonom.min_rods` / `autonom.max_rods` are only migration fallbacks when regulator fields are missing; if both are present, regulator fields are authoritative and legacy values are ignored with warnings.

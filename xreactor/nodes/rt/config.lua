@@ -64,7 +64,9 @@ local CONFIG = {
       max_step_up = 5, -- Max rod insert step.
       max_step_down = 5, -- Max rod withdraw step.
       cooldown_s = 1.5, -- Minimum seconds between rod changes.
-      min = 20, -- Rod clamp minimum (80% max automatic power => minimum 20% rods).
+      -- Inverted rod semantics (Mekanism): 100% rods = 0% reactor power, 0% rods = 100% reactor power.
+      -- Test cap requirement: max 20% automatic reactor power => minimum 80% rods.
+      min = 80, -- Rod clamp minimum for automatic regulator path.
       max = 98, -- Rod clamp maximum for automatic regulator path (SAFE/SCRAM may still force 100%).
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
     },
@@ -118,7 +120,7 @@ return {
     drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
   },
   autonom = {
-    regulator_min_rods = CONFIG.DEFAULT_RAILS.reactor_rods.min, -- Lower clamp for automatic rod regulator target (%).
+    regulator_min_rods = CONFIG.DEFAULT_RAILS.reactor_rods.min, -- Lower clamp for automatic rod regulator target (%) with inverted rod semantics.
     regulator_max_rods = CONFIG.DEFAULT_RAILS.reactor_rods.max -- Upper clamp for automatic rod regulator target (%).
   },
   rails = CONFIG.DEFAULT_RAILS

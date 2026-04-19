@@ -120,7 +120,7 @@ local DEFAULT_CONFIG = {
   autonom = {
     control_rod_level = 70, max_rpm = CONFIG.TARGET_RPM, min_flow = CONFIG.MIN_FLOW, max_flow = CONFIG.MAX_FLOW,
     flow_step = CONFIG.FLOW_STEP, ramp_step = CONFIG.FLOW_STEP,
-    regulator_min_rods = 20, regulator_max_rods = CONFIG.ROD_MAX, reactor_adjust_interval = CONFIG.ROD_TICK,
+    regulator_min_rods = 80, regulator_max_rods = CONFIG.ROD_MAX, reactor_adjust_interval = CONFIG.ROD_TICK,
     steam_reserve = 5000,
     steam_deficit = 5000
   },
@@ -167,7 +167,9 @@ local DEFAULT_CONFIG = {
       coolant_ramp_hard_limit_ratio = 0.22, -- Hard coolant margin where power-up rod withdraw is blocked.
       max_step_down_when_coolant_soft = 2, -- Max withdraw step when coolant enters soft-limit zone.
       max_step_down_when_coolant_hard = 0, -- Max withdraw step when coolant enters hard-limit zone.
-      min = 20, -- Rod clamp minimum for automatic regulator path defaults (80% max automatic power).
+      -- Inverted rod semantics (Mekanism): 100% rods = 0% reactor power, 0% rods = 100% reactor power.
+      -- Test cap requirement: max 20% automatic reactor power => minimum 80% rods.
+      min = 80, -- Rod clamp minimum for automatic regulator path defaults.
       max = CONFIG.ROD_MAX, -- Rod clamp maximum.
       ema_alpha = 0.25 -- Steam margin smoothing alpha.
     },
@@ -360,13 +362,38 @@ local function clamp_rods(level, allow_overmax)
 end
 local function get_effective_regulator_rod_caps()
   local autonom = config and config.autonom or {}
-  local cfg_min = type(autonom.regulator_min_rods) == "number" and autonom.regulator_min_rods or ROD_MIN
-  local cfg_max = type(autonom.regulator_max_rods) == "number" and autonom.regulator_max_rods or ROD_MAX
+  local rod_rails = config and config.rails and config.rails.reactor_rods or {}
+  local autonom_min = type(autonom.regulator_min_rods) == "number" and autonom.regulator_min_rods or nil
+  local autonom_max = type(autonom.regulator_max_rods) == "number" and autonom.regulator_max_rods or nil
+  local rails_min = type(rod_rails.min) == "number" and rod_rails.min or nil
+  local rails_max = type(rod_rails.max) == "number" and rod_rails.max or nil
+  local cfg_min = autonom_min or rails_min or ROD_MIN
+  local cfg_max = autonom_max or rails_max or ROD_MAX
+  if type(autonom_min) == "number" and type(rails_min) == "number" then
+    -- Use the stricter minimum (more inserted rods => less power) when both config paths are present.
+    cfg_min = math.max(autonom_min, rails_min)
+  end
+  if type(autonom_max) == "number" and type(rails_max) == "number" then
+    cfg_max = math.min(autonom_max, rails_max)
+  end
   cfg_min = safety.clamp(cfg_min, ROD_MIN, ROD_MAX); cfg_max = safety.clamp(cfg_max, ROD_MIN, ROD_MAX)
   if cfg_min > cfg_max then cfg_min, cfg_max = cfg_max, cfg_min end
   return cfg_min, cfg_max
 end
-do local cfg_min, cfg_max = get_effective_regulator_rod_caps(); log("INFO", "Rod cap config loaded cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max) .. " autonom_min=" .. tostring(config.autonom and config.autonom.regulator_min_rods) .. " autonom_max=" .. tostring(config.autonom and config.autonom.regulator_max_rods) .. " rails_min=" .. tostring(config.rails and config.rails.reactor_rods and config.rails.reactor_rods.min) .. " rails_max=" .. tostring(config.rails and config.rails.reactor_rods and config.rails.reactor_rods.max)) end
+do
+  local cfg_min, cfg_max = get_effective_regulator_rod_caps()
+  local autonom_min = config.autonom and config.autonom.regulator_min_rods
+  local autonom_max = config.autonom and config.autonom.regulator_max_rods
+  local rails_min = config.rails and config.rails.reactor_rods and config.rails.reactor_rods.min
+  local rails_max = config.rails and config.rails.reactor_rods and config.rails.reactor_rods.max
+  log("INFO", "Rod cap config loaded cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max) .. " autonom_min=" .. tostring(autonom_min) .. " autonom_max=" .. tostring(autonom_max) .. " rails_min=" .. tostring(rails_min) .. " rails_max=" .. tostring(rails_max))
+  if type(autonom_min) == "number" and type(rails_min) == "number" and autonom_min ~= rails_min then
+    log("WARN", "ROD_CAP_CONFIG_MIN_MISMATCH autonom_min=" .. tostring(autonom_min) .. " rails_min=" .. tostring(rails_min) .. " effective_min=" .. tostring(cfg_min))
+  end
+  if type(autonom_max) == "number" and type(rails_max) == "number" and autonom_max ~= rails_max then
+    log("WARN", "ROD_CAP_CONFIG_MAX_MISMATCH autonom_max=" .. tostring(autonom_max) .. " rails_max=" .. tostring(rails_max) .. " effective_max=" .. tostring(cfg_max))
+  end
+end
 local function resolve_steam_tank_name()
   if steam_tank_name and peripheral.isPresent(steam_tank_name) then
     return steam_tank_name
@@ -791,8 +818,7 @@ local function controlReactor()
   local target_rods, direction = rails.step(current_rods, smoothed_margin, reactor_rails_state, rod_cfg, os.clock())
   target_rods = safety.clamp(target_rods, ROD_MIN, ROD_MAX)
   do
-    local cfg_min = config.autonom and config.autonom.regulator_min_rods or ROD_MIN
-    local cfg_max = config.autonom and config.autonom.regulator_max_rods or ROD_MAX
+    local cfg_min, cfg_max = get_effective_regulator_rod_caps()
     local clamped_target, clamp_reason = rails.clamp_with_reason(target_rods, cfg_min, cfg_max)
     if clamp_reason == "MIN" then
       log("DEBUG", "ROD_TARGET_CLAMPED_BY_CONFIG_MIN current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods) .. " clamped=" .. tostring(clamped_target) .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max))

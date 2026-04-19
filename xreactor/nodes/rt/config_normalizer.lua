@@ -151,10 +151,14 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     add_warning("autonom.steam_deficit missing/invalid; defaulting to " .. tostring(defaults.autonom.steam_deficit))
   end
   local autonom = config_values.autonom
+  local rail_rods = type(config_values.rails) == "table" and type(config_values.rails.reactor_rods) == "table" and config_values.rails.reactor_rods or {}
   if type(autonom.regulator_min_rods) ~= "number" then
     if type(autonom.min_rods) == "number" then
       autonom.regulator_min_rods = autonom.min_rods
       add_warning("autonom.min_rods is deprecated; mapped to autonom.regulator_min_rods")
+    elseif type(rail_rods.min) == "number" then
+      autonom.regulator_min_rods = rail_rods.min
+      add_warning("autonom.regulator_min_rods missing/invalid; mapped from rails.reactor_rods.min")
     else
       autonom.regulator_min_rods = defaults.autonom.regulator_min_rods
       add_warning("autonom.regulator_min_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.regulator_min_rods))
@@ -164,6 +168,9 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     if type(autonom.max_rods) == "number" then
       autonom.regulator_max_rods = autonom.max_rods
       add_warning("autonom.max_rods is deprecated; mapped to autonom.regulator_max_rods")
+    elseif type(rail_rods.max) == "number" then
+      autonom.regulator_max_rods = rail_rods.max
+      add_warning("autonom.regulator_max_rods missing/invalid; mapped from rails.reactor_rods.max")
     else
       autonom.regulator_max_rods = defaults.autonom.regulator_max_rods
       add_warning("autonom.regulator_max_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.regulator_max_rods))
