@@ -4,7 +4,7 @@ return {
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
-      { path = "adapters/monitor.lua", size_bytes = 4314, hash = "63239bbf" },
+      { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460" },
       { path = "core/bootstrap.lua", size_bytes = 10874, hash = "4a180335" },
       { path = "core/comms.lua", size_bytes = 20223, hash = "903b39da" },
       { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
@@ -51,7 +51,7 @@ return {
       { path = "master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a" },
       { path = "core/alert_rules.lua", size_bytes = 13140, hash = "dd28ae5e" },
       { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
-      { path = "core/monitor_manager.lua", size_bytes = 3369, hash = "d719028a" },
+      { path = "core/monitor_manager.lua", size_bytes = 3405, hash = "10a89762" },
       { path = "services/alert_service.lua", size_bytes = 10068, hash = "f5ad1d30" },
     },
     rt = {

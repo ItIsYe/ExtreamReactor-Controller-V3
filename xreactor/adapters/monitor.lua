@@ -3,6 +3,8 @@ local utils = require("core.utils")
 local monitor = {}
 local warned = {}
 local scale_cache = setmetatable({}, { __mode = "k" })
+local scale_cache_by_name = {}
+local known_monitor_names = {}
 
 local function log_once(prefix, key, message)
   if warned[key] then
@@ -56,16 +58,34 @@ local function maybe_set_scale(mon, name, scale, log_prefix)
   elseif normalized > 5 then
     normalized = 5
   end
+  local cache_name = tostring(name or "")
   if scale_cache[mon] == normalized then
+    return true
+  end
+  if cache_name ~= "" and scale_cache_by_name[cache_name] == normalized then
+    scale_cache[mon] = normalized
     return true
   end
   utils.log(log_prefix or "MONITOR", "Applying monitor scale for " .. tostring(name) .. ": " .. tostring(normalized))
   local ok, err = safe_call(mon, name, "setTextScale", log_prefix, normalized)
   if ok then
     scale_cache[mon] = normalized
+    if cache_name ~= "" then
+      scale_cache_by_name[cache_name] = normalized
+      known_monitor_names[cache_name] = true
+    end
     log_once(log_prefix, tostring(name) .. ":setTextScale:" .. tostring(normalized), "Monitor setTextScale applied for " .. tostring(name) .. " -> " .. tostring(normalized))
   end
   return ok, err
+end
+
+local function clear_name_cache(name)
+  local cache_name = tostring(name or "")
+  if cache_name == "" then
+    return
+  end
+  scale_cache_by_name[cache_name] = nil
+  known_monitor_names[cache_name] = nil
 end
 
 function monitor.find(preferred_name, strategy, scale, log_prefix)
@@ -129,6 +149,26 @@ end
 
 function monitor.safe_set_scale(mon, name, scale, log_prefix)
   return maybe_set_scale(mon, name, scale, log_prefix)
+end
+
+function monitor.sync_names(names)
+  local present = {}
+  for _, name in ipairs(names or {}) do
+    if name ~= nil then
+      local key = tostring(name)
+      present[key] = true
+      known_monitor_names[key] = true
+    end
+  end
+  for key in pairs(known_monitor_names) do
+    if not present[key] then
+      clear_name_cache(key)
+    end
+  end
+end
+
+function monitor.invalidate_name(name)
+  clear_name_cache(name)
 end
 
 return monitor
