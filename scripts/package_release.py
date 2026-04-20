@@ -118,6 +118,8 @@ def verify_remote_consistency(base_url: str):
         str(REPO_ROOT / "scripts" / "verify_remote_manifest.py"),
         "--base-url",
         base_url,
+        "--require-path",
+        "shared/build_info.lua",
     ]
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 

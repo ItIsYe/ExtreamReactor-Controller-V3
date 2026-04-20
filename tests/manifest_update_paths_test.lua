@@ -19,6 +19,7 @@ local manifest = load_table("xreactor/manifest.lua")
 local required_base = {
   ["adapters/monitor.lua"] = false,
   ["core/network.lua"] = false,
+  ["shared/build_info.lua"] = false,
 }
 for _, entry in ipairs(manifest.base_files or {}) do
   if required_base[entry.path] ~= nil then
