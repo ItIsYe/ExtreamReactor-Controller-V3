@@ -9,6 +9,7 @@ local CONFIG = {
   DEFAULT_CUBES = {}, -- Optional list of energy cube names (legacy override).
   DEFAULT_SCAN_INTERVAL = 15, -- Seconds between discovery scans.
   DEFAULT_MATRIX_METRIC_POLL_INTERVAL = 2.0, -- Seconds between expensive matrix energy metric reads.
+  DEFAULT_MATRIX_METRIC_CALL_BUDGET = 4, -- Max expensive matrix metric calls per status build tick.
   DEFAULT_MATRIX_COMPONENT_POLL_INTERVAL = 30, -- Seconds between matrix component count reads.
   DEFAULT_UI_REFRESH_INTERVAL = 1.0, -- Seconds between monitor UI refreshes.
   DEFAULT_UI_SCALE = 0.5, -- Monitor text scale for ENERGY node UI.
@@ -91,6 +92,7 @@ return {
   cubes = CONFIG.DEFAULT_CUBES,
   scan_interval = CONFIG.DEFAULT_SCAN_INTERVAL,
   matrix_metric_poll_interval = CONFIG.DEFAULT_MATRIX_METRIC_POLL_INTERVAL,
+  matrix_metric_call_budget = CONFIG.DEFAULT_MATRIX_METRIC_CALL_BUDGET,
   matrix_component_poll_interval = CONFIG.DEFAULT_MATRIX_COMPONENT_POLL_INTERVAL,
   ui_refresh_interval = CONFIG.DEFAULT_UI_REFRESH_INTERVAL,
   ui_scale = CONFIG.DEFAULT_UI_SCALE,

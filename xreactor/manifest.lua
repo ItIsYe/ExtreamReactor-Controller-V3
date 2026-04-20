@@ -76,9 +76,9 @@ return {
       { path = "core/turbine_regulator.lua", size_bytes = 16601, hash = "7e2685eb" },
     },
     energy = {
-      { path = "nodes/energy/config.lua", size_bytes = 5888, hash = "8f936b15" },
+      { path = "nodes/energy/config.lua", size_bytes = 6061, hash = "33e8793c" },
       { path = "nodes/energy/discovery_log.lua", size_bytes = 2009, hash = "7a6883dc" },
-      { path = "nodes/energy/main.lua", size_bytes = 61476, hash = "d4153d51", required_for = { "ENERGY" } },
+      { path = "nodes/energy/main.lua", size_bytes = 64030, hash = "7b171766", required_for = { "ENERGY" } },
       { path = "adapters/energy_storage.lua", size_bytes = 3220, hash = "65c983a9" },
       { path = "adapters/induction_matrix.lua", size_bytes = 8282, hash = "ff99ac2d" },
     },

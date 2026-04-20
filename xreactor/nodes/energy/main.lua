@@ -49,6 +49,7 @@ local DEFAULT_CONFIG = {
   cubes = {}, -- Optional list of energy cube names (legacy override).
   scan_interval = 15, -- Seconds between peripheral discovery scans.
   matrix_metric_poll_interval = 2.0, -- Seconds between expensive matrix energy metric reads (stored/capacity/input/output).
+  matrix_metric_call_budget = 4, -- Max expensive matrix metric peripheral calls per payload build to avoid long blocking ticks.
   matrix_component_poll_interval = 30, -- Seconds between matrix component count reads (cells/providers/ports).
   ui_refresh_interval = 1.0, -- Seconds between monitor UI refreshes.
   ui_scale = 0.5, -- Monitor text scale for the ENERGY node UI.
@@ -145,6 +146,13 @@ local function validate_config(config_values, defaults)
   elseif config_values.matrix_metric_poll_interval > 30 then
     config_values.matrix_metric_poll_interval = 30
     add_config_warning("matrix_metric_poll_interval too high; clamping to 30s")
+  end
+  if type(config_values.matrix_metric_call_budget) ~= "number" or config_values.matrix_metric_call_budget <= 0 then
+    config_values.matrix_metric_call_budget = defaults.matrix_metric_call_budget
+    add_config_warning("matrix_metric_call_budget missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_call_budget))
+  elseif config_values.matrix_metric_call_budget > 64 then
+    config_values.matrix_metric_call_budget = 64
+    add_config_warning("matrix_metric_call_budget too high; clamping to 64")
   end
   if type(config_values.matrix_component_poll_interval) ~= "number" or config_values.matrix_component_poll_interval <= 0 then
     config_values.matrix_component_poll_interval = defaults.matrix_component_poll_interval
@@ -274,6 +282,7 @@ local devices = {
   matrix_component_diag = {},
   matrix_component_cache = {},
   matrix_metric_cache = {},
+  matrix_metric_cursor = 1,
   discovery_failed = false,
   adapters = {
     storages = {},
@@ -568,6 +577,9 @@ local function discover()
   devices.registry_load_error = registry.state.load_error
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
+  devices.matrix_component_cache = {}
+  devices.matrix_metric_cache = {}
+  devices.matrix_metric_cursor = 1
   status_payload_cache.ts = 0
   status_payload_cache.payload = nil
   ui_model_cache.ts = 0
@@ -654,6 +666,7 @@ end
 
 local function read_matrix_stats()
   local metric_poll_interval_ms = math.max(1, tonumber(config.matrix_metric_poll_interval) or 2.0) * 1000
+  local metric_call_budget = math.max(1, math.floor(tonumber(config.matrix_metric_call_budget) or 4))
   local component_poll_interval_ms = math.max(1, tonumber(config.matrix_component_poll_interval) or 30) * 1000
   local now_ts = os.epoch("utc")
   local matrices = {}
@@ -674,18 +687,85 @@ local function read_matrix_stats()
     local metric_key = tostring(metric)
     diag.metric_totals[metric_key] = (diag.metric_totals[metric_key] or 0) + duration_ms
   end
+  local function read_matrix_metric(matrix, label, fn)
+    if not fn then
+      return nil, "missing method"
+    end
+    local value, err = fn()
+    if err then
+      record_error(matrix.name .. "." .. tostring(label), err)
+    end
+    return tonumber(value), err
+  end
+  local metric_jobs = {}
+  local metric_order = { "stored", "capacity", "input", "output" }
+  for _, matrix in ipairs(devices.matrices or {}) do
+    local adapter = matrix.adapter
+    local cache_key = tostring(matrix.name)
+    local metric_cache = devices.matrix_metric_cache[cache_key]
+    if type(metric_cache) ~= "table" then
+      metric_cache = {}
+      devices.matrix_metric_cache[cache_key] = metric_cache
+    end
+    for _, metric in ipairs(metric_order) do
+      local getter = metric == "stored" and (adapter and adapter.getStored)
+        or metric == "capacity" and (adapter and adapter.getCapacity)
+        or metric == "input" and (adapter and adapter.getInput)
+        or metric == "output" and (adapter and adapter.getOutput)
+        or nil
+      if getter then
+        local last_ts = tonumber(metric_cache[metric .. "_ts"]) or 0
+        local due = last_ts <= 0 or (now_ts - last_ts) >= metric_poll_interval_ms
+        metric_jobs[#metric_jobs + 1] = {
+          matrix = matrix,
+          adapter = adapter,
+          metric = metric,
+          fn = getter,
+          cache = metric_cache,
+          due = due
+        }
+      end
+    end
+  end
+  if #metric_jobs > 0 then
+    local due_jobs = {}
+    for _, job in ipairs(metric_jobs) do
+      if job.due then
+        due_jobs[#due_jobs + 1] = job
+      end
+    end
+    local to_poll = math.min(metric_call_budget, #due_jobs)
+    local start_index = devices.matrix_metric_cursor or 1
+    if start_index < 1 or start_index > #due_jobs then
+      start_index = 1
+    end
+    for polled = 0, to_poll - 1 do
+      local idx = ((start_index + polled - 1) % #due_jobs) + 1
+      local job = due_jobs[idx]
+      local call_started_at = now_ms()
+      local value, err = read_matrix_metric(job.matrix, job.metric, job.fn)
+      local call_duration = now_ms() - call_started_at
+      append_metric_call(job.matrix.name, job.metric, call_duration)
+      job.cache[job.metric] = value
+      job.cache[job.metric .. "_err"] = err
+      job.cache[job.metric .. "_ts"] = now_ts
+    end
+    if #due_jobs > 0 then
+      devices.matrix_metric_cursor = ((start_index + to_poll - 1) % #due_jobs) + 1
+      if #due_jobs > to_poll and debug_enabled then
+        utils.log(
+          "ENERGY",
+          ("Matrix metric polling throttled: due=%d budget=%d deferred=%d"):format(
+            #due_jobs,
+            to_poll,
+            #due_jobs - to_poll
+          )
+        )
+      end
+    end
+  end
   for idx, matrix in ipairs(devices.matrices or {}) do
     local adapter = matrix.adapter
-    local function read_metric(label, fn)
-      if not fn then
-        return nil, "missing method"
-      end
-      local value, err = fn()
-      if err then
-        record_error(matrix.name .. "." .. tostring(label), err)
-      end
-      return tonumber(value), err
-    end
     local function normalize_reason(reason)
       if reason == nil then
         return nil
@@ -741,29 +821,13 @@ local function read_matrix_stats()
     end
     local cache_key = tostring(matrix.name)
     local metric_cache = devices.matrix_metric_cache[cache_key]
-    if type(metric_cache) ~= "table" then
-      metric_cache = {}
-      devices.matrix_metric_cache[cache_key] = metric_cache
-    end
-    local should_poll_metrics = (metric_cache.ts or 0) <= 0 or (now_ts - metric_cache.ts) >= metric_poll_interval_ms
-    local function read_cached_metric(metric, fn)
-      if should_poll_metrics then
-        local call_started_at = now_ms()
-        local value, err = read_metric(metric, fn)
-        local call_duration = now_ms() - call_started_at
-        append_metric_call(matrix.name, metric, call_duration)
-        metric_cache[metric] = value
-        metric_cache[metric .. "_err"] = err
-      end
+    local function read_cached_metric(metric)
       return metric_cache[metric], metric_cache[metric .. "_err"]
     end
-    local stored, stored_err = read_cached_metric("stored", adapter and adapter.getStored)
-    local capacity, cap_err = read_cached_metric("capacity", adapter and adapter.getCapacity)
-    local input = select(1, read_cached_metric("input", adapter and adapter.getInput))
-    local output = select(1, read_cached_metric("output", adapter and adapter.getOutput))
-    if should_poll_metrics then
-      metric_cache.ts = now_ts
-    end
+    local stored, stored_err = read_cached_metric("stored")
+    local capacity, cap_err = read_cached_metric("capacity")
+    local input = select(1, read_cached_metric("input"))
+    local output = select(1, read_cached_metric("output"))
     stored = stored or 0
     capacity = capacity or stored
     local component_cache = devices.matrix_component_cache[cache_key]
@@ -779,7 +843,7 @@ local function read_matrix_stats()
         return nil, nil
       end
       if should_poll_components then
-        local value, err = read_metric(metric, fn)
+        local value, err = read_matrix_metric(matrix, metric, fn)
         component_cache[metric] = value
         component_cache[metric .. "_err"] = err
       end
