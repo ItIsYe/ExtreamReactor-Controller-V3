@@ -31,6 +31,19 @@ local methods_by_name = {
     getEnergy = true,
     getMaxEnergy = true,
   },
+  inductionPort_4 = {
+    getInstalledCells = function() end,
+    getInstalledProviders = "callable",
+    getInstalledPorts = {},
+    getEnergy = true,
+    getMaxEnergy = true,
+  },
+  inductionPort_5 = {
+    'getInstalledCells',
+    'getInstalledProviders',
+    'getEnergy',
+    'getMaxEnergy',
+  },
 }
 
 _G.peripheral = {
@@ -82,6 +95,21 @@ _G.peripheral = {
     end
     if name == 'inductionPort_3' and method == 'getInstalledPorts' then
       return true, { installed = { 'p1', 'p2', 'p3', 'p4' } }
+    end
+    if name == 'inductionPort_4' and method == 'getInstalledCells' then
+      return nil, 'warming up', { 'cell_1', 'cell_2' }
+    end
+    if name == 'inductionPort_4' and method == 'getInstalledProviders' then
+      return nil, 'warming up', { count = 9 }
+    end
+    if name == 'inductionPort_4' and method == 'getInstalledPorts' then
+      return nil, 'warming up', { 'p1', 'p2' }
+    end
+    if name == 'inductionPort_5' and method == 'getInstalledCells' then
+      return true
+    end
+    if name == 'inductionPort_5' and method == 'getInstalledProviders' then
+      return false, 'matrix not assembled'
     end
     error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
   end
@@ -154,6 +182,36 @@ end
 local ports3, ports3_err = matrix3.getPorts()
 if ports3 ~= 4 or ports3_err ~= nil then
   error('expected nested installed list for ports to normalize to count=4')
+end
+
+local matrix4 = adapter.detect('inductionPort_4', 'TEST')
+if not matrix4 then
+  error('expected inductionPort_4 matrix adapter')
+end
+local cells4, cells4_err = matrix4.getCells()
+if cells4 ~= 2 or cells4_err ~= nil then
+  error('expected trailing payload list to normalize to count=2')
+end
+local providers4, providers4_err = matrix4.getProviders()
+if providers4 ~= 9 or providers4_err ~= nil then
+  error('expected trailing payload count table to normalize to count=9')
+end
+local ports4, ports4_err = matrix4.getPorts()
+if ports4 ~= 2 or ports4_err ~= nil then
+  error('expected trailing payload list for ports to normalize to count=2')
+end
+
+local matrix5 = adapter.detect('inductionPort_5', 'TEST')
+if not matrix5 then
+  error('expected inductionPort_5 matrix adapter')
+end
+local cells5, cells5_err = matrix5.getCells()
+if cells5 ~= nil or tostring(cells5_err) ~= 'nil_value:empty_payload' then
+  error('expected bare success flag to report empty payload nil_value')
+end
+local providers5, providers5_err = matrix5.getProviders()
+if providers5 ~= nil or tostring(providers5_err) ~= 'call_failed:matrix not assembled' then
+  error('expected false+error tuple to map to call_failed with detail')
 end
 
 print('induction_matrix_component_counts_test.lua: ok')
