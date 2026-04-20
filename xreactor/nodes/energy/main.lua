@@ -48,6 +48,7 @@ local DEFAULT_CONFIG = {
   matrix_aliases = {}, -- Optional mapping of matrix peripheral name -> display label.
   cubes = {}, -- Optional list of energy cube names (legacy override).
   scan_interval = 15, -- Seconds between peripheral discovery scans.
+  matrix_metric_poll_interval = 2.0, -- Seconds between expensive matrix energy metric reads (stored/capacity/input/output).
   matrix_component_poll_interval = 30, -- Seconds between matrix component count reads (cells/providers/ports).
   ui_refresh_interval = 1.0, -- Seconds between monitor UI refreshes.
   ui_scale = 0.5, -- Monitor text scale for the ENERGY node UI.
@@ -137,6 +138,13 @@ local function validate_config(config_values, defaults)
   if type(config_values.scan_interval) ~= "number" or config_values.scan_interval <= 0 then
     config_values.scan_interval = defaults.scan_interval
     add_config_warning("scan_interval missing/invalid; defaulting to " .. tostring(defaults.scan_interval))
+  end
+  if type(config_values.matrix_metric_poll_interval) ~= "number" or config_values.matrix_metric_poll_interval <= 0 then
+    config_values.matrix_metric_poll_interval = defaults.matrix_metric_poll_interval
+    add_config_warning("matrix_metric_poll_interval missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_poll_interval))
+  elseif config_values.matrix_metric_poll_interval > 30 then
+    config_values.matrix_metric_poll_interval = 30
+    add_config_warning("matrix_metric_poll_interval too high; clamping to 30s")
   end
   if type(config_values.matrix_component_poll_interval) ~= "number" or config_values.matrix_component_poll_interval <= 0 then
     config_values.matrix_component_poll_interval = defaults.matrix_component_poll_interval
@@ -265,6 +273,7 @@ local devices = {
   last_error_ts = nil,
   matrix_component_diag = {},
   matrix_component_cache = {},
+  matrix_metric_cache = {},
   discovery_failed = false,
   adapters = {
     storages = {},
@@ -644,10 +653,27 @@ local function read_storage_stats()
 end
 
 local function read_matrix_stats()
+  local metric_poll_interval_ms = math.max(1, tonumber(config.matrix_metric_poll_interval) or 2.0) * 1000
   local component_poll_interval_ms = math.max(1, tonumber(config.matrix_component_poll_interval) or 30) * 1000
   local now_ts = os.epoch("utc")
   local matrices = {}
   local total = { stored = 0, capacity = 0, input = 0, output = 0, has_flow = false }
+  local diag = {
+    metric_calls = {},
+    metric_totals = {}
+  }
+  local function append_metric_call(name, metric, duration_ms)
+    if duration_ms < 80 then
+      return
+    end
+    diag.metric_calls[#diag.metric_calls + 1] = {
+      matrix = tostring(name),
+      metric = tostring(metric),
+      ms = duration_ms
+    }
+    local metric_key = tostring(metric)
+    diag.metric_totals[metric_key] = (diag.metric_totals[metric_key] or 0) + duration_ms
+  end
   for idx, matrix in ipairs(devices.matrices or {}) do
     local adapter = matrix.adapter
     local function read_metric(label, fn)
@@ -713,13 +739,33 @@ local function read_matrix_stats()
         tostring(method_name or "n/a")
       ), "WARN")
     end
-    local stored, stored_err = read_metric("stored", adapter and adapter.getStored)
-    local capacity, cap_err = read_metric("capacity", adapter and adapter.getCapacity)
+    local cache_key = tostring(matrix.name)
+    local metric_cache = devices.matrix_metric_cache[cache_key]
+    if type(metric_cache) ~= "table" then
+      metric_cache = {}
+      devices.matrix_metric_cache[cache_key] = metric_cache
+    end
+    local should_poll_metrics = (metric_cache.ts or 0) <= 0 or (now_ts - metric_cache.ts) >= metric_poll_interval_ms
+    local function read_cached_metric(metric, fn)
+      if should_poll_metrics then
+        local call_started_at = now_ms()
+        local value, err = read_metric(metric, fn)
+        local call_duration = now_ms() - call_started_at
+        append_metric_call(matrix.name, metric, call_duration)
+        metric_cache[metric] = value
+        metric_cache[metric .. "_err"] = err
+      end
+      return metric_cache[metric], metric_cache[metric .. "_err"]
+    end
+    local stored, stored_err = read_cached_metric("stored", adapter and adapter.getStored)
+    local capacity, cap_err = read_cached_metric("capacity", adapter and adapter.getCapacity)
+    local input = select(1, read_cached_metric("input", adapter and adapter.getInput))
+    local output = select(1, read_cached_metric("output", adapter and adapter.getOutput))
+    if should_poll_metrics then
+      metric_cache.ts = now_ts
+    end
     stored = stored or 0
     capacity = capacity or stored
-    local input = select(1, read_metric("input", adapter and adapter.getInput))
-    local output = select(1, read_metric("output", adapter and adapter.getOutput))
-    local cache_key = tostring(matrix.name)
     local component_cache = devices.matrix_component_cache[cache_key]
     if type(component_cache) ~= "table" then
       component_cache = {}
@@ -790,7 +836,8 @@ local function read_matrix_stats()
       percent = percent,
       input = total.has_flow and total.input or nil,
       output = total.has_flow and total.output or nil
-    }
+    },
+    diag = diag
   }
 end
 
@@ -888,6 +935,16 @@ local function build_status_payload_uncached()
   }
   local total_duration = now_ms() - started_at
   if total_duration > 1200 then
+    local matrix_call_text = nil
+    if matrix.diag and matrix.diag.metric_calls and #matrix.diag.metric_calls > 0 then
+      table.sort(matrix.diag.metric_calls, function(a, b) return (a.ms or 0) > (b.ms or 0) end)
+      local top = {}
+      for i = 1, math.min(6, #matrix.diag.metric_calls) do
+        local call = matrix.diag.metric_calls[i]
+        top[#top + 1] = ("%s.%s=%dms"):format(tostring(call.matrix), tostring(call.metric), tonumber(call.ms) or 0)
+      end
+      matrix_call_text = table.concat(top, ", ")
+    end
     utils.log(
       "ENERGY",
       ("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d"):format(
@@ -899,6 +956,9 @@ local function build_status_payload_uncached()
       ),
       "WARN"
     )
+    if matrix_call_text then
+      utils.log("ENERGY", "Status payload slow matrix calls: " .. matrix_call_text, "WARN")
+    end
   end
   return energy
 end

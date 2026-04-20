@@ -42,6 +42,9 @@
 6. **ENERGY Induction-Komponentenpfad**:
    - `tests/induction_matrix_component_counts_test.lua` prüft die Normalisierung von Matrix-Komponentenzahlen über API-Varianten (`table`/`string`/`number`), Multi-Return-Payloads, Nil-Readiness-Signale und den Ports-Fallback.
    - `tests/energy_matrix_component_logging_regression_test.lua` schützt vor Ports-bedingter Fehlklassifikation, stellt die Reason-Klassifikation (`api_variant`/`temporary_not_ready`) sicher und verhindert wiederholten identischen Log-Spam.
+7. **ENERGY Matrix-Metrik-Cache/Slowdown-Diagnose**:
+   - `tests/energy_matrix_metric_poll_interval_config_test.lua` stellt sicher, dass `matrix_metric_poll_interval` in der ENERGY-Config vorhanden und gültig ist.
+   - `tests/energy_matrix_payload_cache_regression_test.lua` schützt Matrix-Metrik-Cache und Slowdown-Diagnoselog (`Status payload slow matrix calls: ...`) gegen Regressionen.
 
 ## First start / bootstrap / role setup
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.
