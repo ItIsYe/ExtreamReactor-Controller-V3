@@ -1,0 +1,93 @@
+package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
+
+package.loaded['adapters.induction_matrix'] = nil
+package.loaded['adapters.energy_storage'] = nil
+
+local methods_by_name = {
+  inductionPort_0 = {
+    'getInstalledCells',
+    'getInstalledProviders',
+    'getEnergy',
+    'getMaxEnergy',
+  },
+  inductionPort_1 = {
+    'getInstalledCells',
+    'getInstalledProviders',
+    'getInstalledPorts',
+    'getEnergy',
+    'getMaxEnergy',
+  },
+}
+
+_G.peripheral = {
+  isPresent = function(name)
+    return methods_by_name[name] ~= nil
+  end,
+  getMethods = function(name)
+    return methods_by_name[name]
+  end,
+  getType = function()
+    return 'inductionPort'
+  end,
+  call = function(name, method)
+    if method == 'getEnergy' then
+      return 1200
+    end
+    if method == 'getMaxEnergy' then
+      return 5000
+    end
+    if name == 'inductionPort_0' and method == 'getInstalledCells' then
+      return { 'cell_a', 'cell_b' }
+    end
+    if name == 'inductionPort_0' and method == 'getInstalledProviders' then
+      return { provider_a = true, provider_b = true, provider_c = true }
+    end
+    if name == 'inductionPort_1' and method == 'getInstalledCells' then
+      return '4'
+    end
+    if name == 'inductionPort_1' and method == 'getInstalledProviders' then
+      return 6
+    end
+    if name == 'inductionPort_1' and method == 'getInstalledPorts' then
+      return { 'p1', 'p2', 'p3' }
+    end
+    error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
+  end
+}
+
+local adapter = require('adapters.induction_matrix')
+
+local matrix0 = adapter.detect('inductionPort_0', 'TEST')
+if not matrix0 then
+  error('expected inductionPort_0 matrix adapter')
+end
+
+local cells0, cells0_err = matrix0.getCells()
+if cells0 ~= 2 or cells0_err ~= nil then
+  error('expected table cell list to be normalized to count=2')
+end
+local providers0, providers0_err = matrix0.getProviders()
+if providers0 ~= 3 or providers0_err ~= nil then
+  error('expected keyed provider table to be normalized to count=3')
+end
+local ports0, ports0_err = matrix0.getPorts()
+if ports0 ~= nil or tostring(ports0_err) ~= 'missing_method' then
+  error('expected missing installed ports method to surface as missing_method')
+end
+local snap0 = matrix0.getSnapshot()
+if snap0.cells ~= 2 or snap0.providers ~= 3 or snap0.ports ~= 'n/a' then
+  error('snapshot should expose normalized counts and n/a for unavailable ports')
+end
+
+local matrix1 = adapter.detect('inductionPort_1', 'TEST')
+if not matrix1 then
+  error('expected inductionPort_1 matrix adapter')
+end
+local cells1 = matrix1.getCells()
+local providers1 = matrix1.getProviders()
+local ports1 = matrix1.getPorts()
+if cells1 ~= 4 or providers1 ~= 6 or ports1 ~= 3 then
+  error('expected numeric/string/table component values to normalize to counts')
+end
+
+print('induction_matrix_component_counts_test.lua: ok')

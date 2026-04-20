@@ -250,6 +250,7 @@ local devices = {
   peripheral_count = 0,
   last_error = nil,
   last_error_ts = nil,
+  matrix_component_diag = {},
   discovery_failed = false,
   adapters = {
     storages = {},
@@ -600,21 +601,78 @@ local function read_matrix_stats()
       end
       return tonumber(value), err
     end
+    local function normalize_reason(reason)
+      if reason == nil then
+        return nil
+      end
+      local text = tostring(reason)
+      if text == "missing_method" or text == "missing method" then
+        return "api_variant"
+      end
+      if text:find("^call_failed:", 1) then
+        return "temporary_read_error"
+      end
+      if text:find("^unsupported_value:", 1) then
+        return "unsupported_value"
+      end
+      return "temporary_read_error"
+    end
+    local function component_diag_key(metric)
+      return tostring(matrix.name) .. ":" .. tostring(metric)
+    end
+    local function update_component_diag(metric, reason, detail)
+      local key = component_diag_key(metric)
+      local bucket = devices.matrix_component_diag
+      local previous = bucket[key]
+      if reason == nil then
+        if previous then
+          bucket[key] = nil
+          if debug_enabled then
+            utils.log("ENERGY", ("Matrix component %s recovered (%s)"):format(tostring(metric), tostring(matrix.name)), "INFO")
+          end
+        end
+        return
+      end
+      local stamp = reason .. ":" .. tostring(detail)
+      if previous == stamp then
+        return
+      end
+      bucket[key] = stamp
+      if not debug_enabled then
+        return
+      end
+      local method_map = adapter and adapter.getComponentMethods and adapter.getComponentMethods() or {}
+      local method_name = method_map and method_map[metric]
+      utils.log("ENERGY", ("Matrix component %s unavailable (%s): reason=%s detail=%s method=%s"):format(
+        tostring(metric),
+        tostring(matrix.name),
+        tostring(reason),
+        tostring(detail),
+        tostring(method_name or "n/a")
+      ), "WARN")
+    end
     local stored, stored_err = read_metric("stored", adapter and adapter.getStored)
     local capacity, cap_err = read_metric("capacity", adapter and adapter.getCapacity)
     stored = stored or 0
     capacity = capacity or stored
     local input = select(1, read_metric("input", adapter and adapter.getInput))
     local output = select(1, read_metric("output", adapter and adapter.getOutput))
-    local cells = select(1, read_metric("cells", adapter and adapter.getCells))
-    local providers = select(1, read_metric("providers", adapter and adapter.getProviders))
-    local ports = select(1, read_metric("ports", adapter and adapter.getPorts))
+    local cells_fn = adapter and adapter.features and adapter.features.cells and adapter.getCells or nil
+    local providers_fn = adapter and adapter.features and adapter.features.providers and adapter.getProviders or nil
+    local ports_fn = adapter and adapter.features and adapter.features.ports and adapter.getPorts or nil
+    local cells, cells_err = read_metric("cells", cells_fn)
+    local providers, providers_err = read_metric("providers", providers_fn)
+    local ports, ports_err = read_metric("ports", ports_fn)
     local degraded = stored_err or cap_err
-    if debug_enabled and (cells == nil or providers == nil or ports == nil) then
-      local method_list = adapter and adapter.getMethodList and adapter.getMethodList() or {}
-      utils.log("ENERGY", ("Matrix component counts unavailable (%s). Methods=%s"):format(
-        matrix.name, textutils.serialize(method_list)
-      ))
+    local cells_reason = normalize_reason(cells_err)
+    local providers_reason = normalize_reason(providers_err)
+    local ports_reason = normalize_reason(ports_err)
+    update_component_diag("cells", cells_reason, cells_err)
+    update_component_diag("providers", providers_reason, providers_err)
+    if adapter and adapter.features and adapter.features.ports then
+      update_component_diag("ports", ports_reason, ports_err)
+    else
+      update_component_diag("ports", nil, nil)
     end
     if input ~= nil or output ~= nil then
       total.has_flow = true

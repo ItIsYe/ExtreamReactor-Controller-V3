@@ -29,6 +29,36 @@ local function resolve_component_method(methods, candidates)
   return nil
 end
 
+local function table_count(tbl)
+  local dense = #tbl
+  local keyed = 0
+  for _ in pairs(tbl) do
+    keyed = keyed + 1
+  end
+  if keyed > dense then
+    return keyed
+  end
+  return dense
+end
+
+local function normalize_component_count(value)
+  local value_type = type(value)
+  if value_type == "number" then
+    return math.floor(value)
+  end
+  if value_type == "string" then
+    local parsed = tonumber(value)
+    if parsed ~= nil then
+      return math.floor(parsed)
+    end
+    return nil
+  end
+  if value_type == "table" then
+    return table_count(value)
+  end
+  return nil
+end
+
 local function is_matrix_method_set(methods)
   local keys = {
     "getInstalledCells",
@@ -82,11 +112,22 @@ function matrix.detect(name, log_prefix)
     "getInductionPorts"
   })
 
-  local function safe_call(method)
+  local function safe_component_call(method)
     if not method then
-      return nil
+      return nil, "missing_method"
     end
-    return utils.safe_peripheral_call(name, method)
+    local value, err = utils.safe_peripheral_call(name, method)
+    if err then
+      return nil, "call_failed:" .. tostring(err)
+    end
+    local count = normalize_component_count(value)
+    if count == nil then
+      return nil, "unsupported_value:" .. type(value)
+    end
+    if count < 0 then
+      return 0
+    end
+    return count
   end
 
   local features = {
@@ -117,22 +158,22 @@ function matrix.detect(name, log_prefix)
     getInput = storage_adapter and storage_adapter.getInput or function() return nil end,
     getOutput = storage_adapter and storage_adapter.getOutput or function() return nil end,
     getCells = function()
-      return safe_call(get_cells)
+      return safe_component_call(get_cells)
     end,
     getProviders = function()
-      return safe_call(get_providers)
+      return safe_component_call(get_providers)
     end,
     getPorts = function()
-      return safe_call(get_ports)
+      return safe_component_call(get_ports)
     end,
     getSnapshot = function()
       local stored = storage_adapter and storage_adapter.getStored and storage_adapter.getStored()
       local capacity = storage_adapter and storage_adapter.getCapacity and storage_adapter.getCapacity()
       local input = storage_adapter and storage_adapter.getInput and storage_adapter.getInput()
       local output = storage_adapter and storage_adapter.getOutput and storage_adapter.getOutput()
-      local cells = safe_call(get_cells)
-      local providers = safe_call(get_providers)
-      local ports = safe_call(get_ports)
+      local cells = safe_component_call(get_cells)
+      local providers = safe_component_call(get_providers)
+      local ports = safe_component_call(get_ports)
       return {
         stored = stored ~= nil and stored or "n/a",
         capacity = capacity ~= nil and capacity or "n/a",
@@ -154,6 +195,13 @@ function matrix.detect(name, log_prefix)
     end,
     getMethodList = function()
       return methods
+    end,
+    getComponentMethods = function()
+      return {
+        cells = get_cells,
+        providers = get_providers,
+        ports = get_ports
+      }
     end
   }
 end
