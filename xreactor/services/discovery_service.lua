@@ -4,6 +4,11 @@ local function now()
   return os.epoch("utc")
 end
 
+local function is_terminate_error(err)
+  local message = tostring(err or ""):lower()
+  return message:find("terminate", 1, true) ~= nil
+end
+
 local discovery = {}
 
 function discovery.new(opts)
@@ -39,6 +44,9 @@ function discovery:tick()
   if not self.discover then return end
   local ok, devices, err = pcall(self.discover)
   if not ok then
+    if is_terminate_error(devices) then
+      error(devices, 0)
+    end
     utils.log(self.log_prefix, "Discovery failed: " .. tostring(devices), "WARN")
     self.snapshot.errors = { tostring(devices) }
     if self.update_health then
