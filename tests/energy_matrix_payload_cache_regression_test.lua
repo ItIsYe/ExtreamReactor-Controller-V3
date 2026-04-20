@@ -13,11 +13,26 @@ end
 if not source:find('matrix_metric_call_budget', 1, true) then
   error('energy main config must include matrix_metric_call_budget')
 end
+if not source:find('matrix_metric_slow_call_ms', 1, true) then
+  error('energy main config must include matrix_metric_slow_call_ms')
+end
+if not source:find('matrix_metric_slow_poll_multiplier', 1, true) then
+  error('energy main config must include matrix_metric_slow_poll_multiplier')
+end
+if not source:find('matrix_metric_per_matrix_budget', 1, true) then
+  error('energy main config must include matrix_metric_per_matrix_budget')
+end
 if not source:find('matrix_metric_cache', 1, true) then
   error('expected matrix metric cache to avoid duplicate matrix reads per tick')
 end
 if not source:find('Matrix metric polling throttled:', 1, true) then
   error('expected matrix metric throttling diagnostics for expensive matrix calls')
+end
+if not source:find('per_matrix_budget=', 1, true) then
+  error('expected matrix metric throttling diagnostics to include per-matrix budget visibility')
+end
+if not source:find('job.cache[job.metric .. "_last_ms"]', 1, true) then
+  error('expected matrix metric cache to track per-port/per-metric call duration for adaptive cadence')
 end
 if not source:find('Status payload slow matrix calls:', 1, true) then
   error('expected slow payload diagnostics to include concrete matrix metric calls')
