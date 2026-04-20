@@ -50,6 +50,9 @@ local DEFAULT_CONFIG = {
   scan_interval = 15, -- Seconds between peripheral discovery scans.
   matrix_metric_poll_interval = 2.0, -- Seconds between expensive matrix energy metric reads (stored/capacity/input/output).
   matrix_metric_call_budget = 4, -- Max expensive matrix metric peripheral calls per payload build to avoid long blocking ticks.
+  matrix_metric_slow_call_ms = 150, -- Calls above this duration are treated as expensive outliers and polled less frequently.
+  matrix_metric_slow_poll_multiplier = 4.0, -- Extra cadence multiplier for expensive outlier matrix metric calls.
+  matrix_metric_per_matrix_budget = 1, -- Max expensive matrix metric calls per matrix/per payload build so one port cannot dominate a tick.
   matrix_component_poll_interval = 30, -- Seconds between matrix component count reads (cells/providers/ports).
   ui_refresh_interval = 1.0, -- Seconds between monitor UI refreshes.
   ui_scale = 0.5, -- Monitor text scale for the ENERGY node UI.
@@ -153,6 +156,27 @@ local function validate_config(config_values, defaults)
   elseif config_values.matrix_metric_call_budget > 64 then
     config_values.matrix_metric_call_budget = 64
     add_config_warning("matrix_metric_call_budget too high; clamping to 64")
+  end
+  if type(config_values.matrix_metric_slow_call_ms) ~= "number" or config_values.matrix_metric_slow_call_ms < 50 then
+    config_values.matrix_metric_slow_call_ms = defaults.matrix_metric_slow_call_ms
+    add_config_warning("matrix_metric_slow_call_ms missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_slow_call_ms))
+  elseif config_values.matrix_metric_slow_call_ms > 5000 then
+    config_values.matrix_metric_slow_call_ms = 5000
+    add_config_warning("matrix_metric_slow_call_ms too high; clamping to 5000ms")
+  end
+  if type(config_values.matrix_metric_slow_poll_multiplier) ~= "number" or config_values.matrix_metric_slow_poll_multiplier < 1 then
+    config_values.matrix_metric_slow_poll_multiplier = defaults.matrix_metric_slow_poll_multiplier
+    add_config_warning("matrix_metric_slow_poll_multiplier missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_slow_poll_multiplier))
+  elseif config_values.matrix_metric_slow_poll_multiplier > 30 then
+    config_values.matrix_metric_slow_poll_multiplier = 30
+    add_config_warning("matrix_metric_slow_poll_multiplier too high; clamping to 30x")
+  end
+  if type(config_values.matrix_metric_per_matrix_budget) ~= "number" or config_values.matrix_metric_per_matrix_budget <= 0 then
+    config_values.matrix_metric_per_matrix_budget = defaults.matrix_metric_per_matrix_budget
+    add_config_warning("matrix_metric_per_matrix_budget missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_per_matrix_budget))
+  elseif config_values.matrix_metric_per_matrix_budget > 4 then
+    config_values.matrix_metric_per_matrix_budget = 4
+    add_config_warning("matrix_metric_per_matrix_budget too high; clamping to 4")
   end
   if type(config_values.matrix_component_poll_interval) ~= "number" or config_values.matrix_component_poll_interval <= 0 then
     config_values.matrix_component_poll_interval = defaults.matrix_component_poll_interval
@@ -282,7 +306,6 @@ local devices = {
   matrix_component_diag = {},
   matrix_component_cache = {},
   matrix_metric_cache = {},
-  matrix_metric_cursor = 1,
   discovery_failed = false,
   adapters = {
     storages = {},
@@ -579,7 +602,6 @@ local function discover()
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
   devices.matrix_component_cache = {}
   devices.matrix_metric_cache = {}
-  devices.matrix_metric_cursor = 1
   status_payload_cache.ts = 0
   status_payload_cache.payload = nil
   ui_model_cache.ts = 0
@@ -667,6 +689,9 @@ end
 local function read_matrix_stats()
   local metric_poll_interval_ms = math.max(1, tonumber(config.matrix_metric_poll_interval) or 2.0) * 1000
   local metric_call_budget = math.max(1, math.floor(tonumber(config.matrix_metric_call_budget) or 4))
+  local slow_call_ms = math.max(50, tonumber(config.matrix_metric_slow_call_ms) or 150)
+  local slow_poll_multiplier = math.max(1, tonumber(config.matrix_metric_slow_poll_multiplier) or 4.0)
+  local per_matrix_budget = math.max(1, math.floor(tonumber(config.matrix_metric_per_matrix_budget) or 1))
   local component_poll_interval_ms = math.max(1, tonumber(config.matrix_component_poll_interval) or 30) * 1000
   local now_ts = os.epoch("utc")
   local matrices = {}
@@ -715,14 +740,19 @@ local function read_matrix_stats()
         or nil
       if getter then
         local last_ts = tonumber(metric_cache[metric .. "_ts"]) or 0
-        local due = last_ts <= 0 or (now_ts - last_ts) >= metric_poll_interval_ms
+        local last_duration = tonumber(metric_cache[metric .. "_last_ms"]) or 0
+        local cadence_multiplier = last_duration >= slow_call_ms and slow_poll_multiplier or 1
+        local effective_interval_ms = math.floor(metric_poll_interval_ms * cadence_multiplier)
+        local due = last_ts <= 0 or (now_ts - last_ts) >= effective_interval_ms
         metric_jobs[#metric_jobs + 1] = {
           matrix = matrix,
           adapter = adapter,
           metric = metric,
           fn = getter,
           cache = metric_cache,
-          due = due
+          due = due,
+          last_ms = last_duration,
+          effective_interval_ms = effective_interval_ms
         }
       end
     end
@@ -734,31 +764,43 @@ local function read_matrix_stats()
         due_jobs[#due_jobs + 1] = job
       end
     end
+    table.sort(due_jobs, function(a, b)
+      if (a.last_ms or 0) ~= (b.last_ms or 0) then
+        return (a.last_ms or 0) < (b.last_ms or 0)
+      end
+      return tostring(a.matrix.name) < tostring(b.matrix.name)
+    end)
     local to_poll = math.min(metric_call_budget, #due_jobs)
-    local start_index = devices.matrix_metric_cursor or 1
-    if start_index < 1 or start_index > #due_jobs then
-      start_index = 1
-    end
-    for polled = 0, to_poll - 1 do
-      local idx = ((start_index + polled - 1) % #due_jobs) + 1
-      local job = due_jobs[idx]
-      local call_started_at = now_ms()
-      local value, err = read_matrix_metric(job.matrix, job.metric, job.fn)
-      local call_duration = now_ms() - call_started_at
-      append_metric_call(job.matrix.name, job.metric, call_duration)
-      job.cache[job.metric] = value
-      job.cache[job.metric .. "_err"] = err
-      job.cache[job.metric .. "_ts"] = now_ts
+    local polled = 0
+    local polled_per_matrix = {}
+    for _, job in ipairs(due_jobs) do
+      if polled >= to_poll then
+        break
+      end
+      local matrix_name = tostring(job.matrix.name)
+      local used_budget = polled_per_matrix[matrix_name] or 0
+      if used_budget < per_matrix_budget then
+        polled_per_matrix[matrix_name] = used_budget + 1
+        polled = polled + 1
+        local call_started_at = now_ms()
+        local value, err = read_matrix_metric(job.matrix, job.metric, job.fn)
+        local call_duration = now_ms() - call_started_at
+        append_metric_call(job.matrix.name, job.metric, call_duration)
+        job.cache[job.metric] = value
+        job.cache[job.metric .. "_err"] = err
+        job.cache[job.metric .. "_ts"] = now_ts
+        job.cache[job.metric .. "_last_ms"] = call_duration
+      end
     end
     if #due_jobs > 0 then
-      devices.matrix_metric_cursor = ((start_index + to_poll - 1) % #due_jobs) + 1
-      if #due_jobs > to_poll and debug_enabled then
+      if #due_jobs > polled and debug_enabled then
         utils.log(
           "ENERGY",
-          ("Matrix metric polling throttled: due=%d budget=%d deferred=%d"):format(
+          ("Matrix metric polling throttled: due=%d budget=%d deferred=%d per_matrix_budget=%d"):format(
             #due_jobs,
-            to_poll,
-            #due_jobs - to_poll
+            polled,
+            #due_jobs - polled,
+            per_matrix_budget
           )
         )
       end
@@ -1110,7 +1152,8 @@ end
 
 local function build_ui_model(opts)
   opts = opts or {}
-  local max_age_ms = tonumber(opts.max_age_ms) or 750
+  local default_ui_payload_max_age_ms = math.max(1000, math.floor((tonumber(config.status_interval) or 5) * 1000))
+  local max_age_ms = tonumber(opts.max_age_ms) or default_ui_payload_max_age_ms
   local ts = now_ms()
   local cache_age = ts - (ui_model_cache.ts or 0)
   if ui_model_cache.model and cache_age >= 0 and cache_age <= max_age_ms then

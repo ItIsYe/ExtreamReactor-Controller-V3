@@ -79,6 +79,16 @@ function telemetry:tick()
         utils.log(self.log_prefix, "Status payload error: " .. tostring(payload), "WARN")
       end
     end
+    local after_status_ts = now()
+    local heartbeat_after_status = after_status_ts - self.last_heartbeat
+    if heartbeat_interval_ms > 0 and heartbeat_after_status >= heartbeat_interval_ms then
+      self.last_heartbeat = after_status_ts
+      if self.heartbeat_state then
+        self.comms:send_heartbeat(self.heartbeat_state())
+      else
+        self.comms:send_heartbeat({})
+      end
+    end
   end
 end
 

@@ -376,6 +376,8 @@ Modem selection is now centralized and robust:
 
 Support nodes maintain a local peripheral registry and periodically rescan hardware. Discovery runs on the node-specific `discovery_interval`, independently from heartbeat timing. The registry stores bound/missing state, signatures, aliases, and scan metadata in `/xreactor/config/registry_<role>_<node_id>.json`, and only rewrites the file when the serialized registry state actually changes. Fluid-capable nodes prefer CC:Tweaked's generic `fluid_storage` API (`tanks()`) and keep older mod-specific methods only as compatibility fallbacks.
 ENERGY discovery diagnostics now emit full peripheral/method dumps on startup and on real discovery signature changes, while suppressing unchanged repeated snapshots in steady state.
+ENERGY matrix polling keeps per-port/per-metric timing history and applies adaptive cadence/backoff for outlier calls, while also enforcing a per-matrix poll budget so one slow port cannot consume the entire matrix poll budget in a single payload tick.
+ENERGY UI now consumes status payload cache on a status-cadence-sized max-age window to avoid forcing extra synchronous matrix rebuilds that can delay telemetry/heartbeat service ticks.
 
 ### Monitor behavior
 
