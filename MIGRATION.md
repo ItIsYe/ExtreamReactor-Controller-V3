@@ -46,6 +46,10 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
   - Für Ursachenanalyse loggt der Service-Manager jetzt langsame Service-Ticks (`Service tick slow`) und langsame Gesamt-Ticks (`Service manager tick slow`).
   - Service-Namen im Slow-Tick-Log sind jetzt immer eindeutig (`COMMS`, `DISCOVERY`, `TELEMETRY`, `UI` bzw. `service#N` als Fallback); der anonyme `?`-Eintrag entfällt.
   - ENERGY cached den Statusaufbau kurzzeitig (`~1s`) zwischen TELEMETRY und UI, inklusive Slow-Stage-Logs (`Status payload slow: storage=... matrix=...`), damit doppelte teure Peripheral-Reads im selben Tick ausbleiben.
+  - Heartbeat/Presence ist jetzt hart vom schweren Servicepfad getrennt:
+    - minimale Presence-Payload (`ts`, `node_id`, `role`) ohne Matrix/UI-Daten,
+    - eigener Heartbeat-Pump (`run_heartbeat_pump`) auf Timerpfad und zusätzlich vor/nach jedem Service im Service-Manager,
+    - unmittelbares Ausleiten über `comms:tick(ts)` direkt nach `comms:send_heartbeat(...)`, damit Heartbeats nicht auf den nächsten schweren Gesamttick warten.
 - MASTER-Monitor-Scale wird jetzt pro Monitor-Name zwischengespeichert (statt pro temporärem Wrap-Objekt), damit periodische Monitor-Scans keine identischen `setTextScale`-Wiederholungen und keinen Log-Spam mehr auslösen.
 - Wenn ein Monitor wirklich verschwindet und später neu erkannt/rebound wird, wird der Cache für diesen Namen invalidiert und die Scale beim Rebind wieder korrekt gesetzt.
 - `SAFETY_COOLANT_LOW` wird nicht mehr sofort ausgelöst: zuerst Pending (`COOLANT_LOW_PENDING`), Bestätigung erst nach ~4s persistenter Unterschreitung; Recovery im Pending-Fenster bricht den Pending-Fall ab.
