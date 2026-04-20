@@ -15,6 +15,7 @@ local DEFAULT_CONFIG = {
   peer_timeout_s = 12.0,
   peer_down_grace_s = 2.0,
   peer_up_debounce_s = 1.5,
+  peer_up_min_observations = 2,
   queue_limit = 200,
   drop_simulation = 0,
   volatile_ttl_s = 15.0
@@ -121,6 +122,12 @@ local function sanitize_config(config)
   merged.peer_timeout_s = clamp_number(merged.peer_timeout_s, DEFAULT_CONFIG.peer_timeout_s, 2.0, 120.0)
   merged.peer_down_grace_s = clamp_number(merged.peer_down_grace_s, DEFAULT_CONFIG.peer_down_grace_s, 0.0, 60.0)
   merged.peer_up_debounce_s = clamp_number(merged.peer_up_debounce_s, DEFAULT_CONFIG.peer_up_debounce_s, 0.0, 30.0)
+  merged.peer_up_min_observations = math.floor(clamp_number(
+    merged.peer_up_min_observations,
+    DEFAULT_CONFIG.peer_up_min_observations,
+    1,
+    10
+  ))
   merged.queue_limit = math.floor(clamp_number(merged.queue_limit, DEFAULT_CONFIG.queue_limit, 10, 1000))
   merged.drop_simulation = clamp_number(merged.drop_simulation, DEFAULT_CONFIG.drop_simulation, 0, 0.9)
   merged.volatile_ttl_s = clamp_number(merged.volatile_ttl_s, DEFAULT_CONFIG.volatile_ttl_s, 1.0, 300.0)
@@ -188,8 +195,15 @@ local function update_peer(message)
   peer.role = message.role
   peer.proto_ver = message.proto_ver
   peer.stale_since = nil
-  if peer.down and not peer.recovering_since then
-    peer.recovering_since = peer.last_seen
+  if peer.down then
+    if not peer.recovering_since then
+      peer.recovering_since = peer.last_seen
+      peer.recovering_observations = 1
+    else
+      peer.recovering_observations = (peer.recovering_observations or 0) + 1
+    end
+  else
+    peer.recovering_observations = 0
   end
 end
 
@@ -498,6 +512,7 @@ local function update_peer_timeouts()
     local stale = age_s > state.config.peer_timeout_s
     if stale then
       peer.recovering_since = nil
+      peer.recovering_observations = 0
       if not peer.stale_since then
         peer.stale_since = now_ts
       end
@@ -512,16 +527,22 @@ local function update_peer_timeouts()
       if not peer.recovering_since then
         peer.recovering_since = now_ts
       end
+      local recovery_observations = peer.recovering_observations or 0
       local recovering_for_s = (now_ts - (peer.recovering_since or now_ts)) / 1000
-      if recovering_for_s >= (state.config.peer_up_debounce_s or 0) then
+      -- Require both time-based debounce and multiple fresh sightings so one lucky
+      -- heartbeat does not immediately flip a peer from DOWN back to UP.
+      if recovering_for_s >= (state.config.peer_up_debounce_s or 0)
+        and recovery_observations >= (state.config.peer_up_min_observations or 1) then
         peer.down = false
         peer.down_since = nil
         peer.recovering_since = nil
+        peer.recovering_observations = 0
         log("Peer up: " .. tostring(id))
       end
     else
       peer.stale_since = nil
       peer.recovering_since = nil
+      peer.recovering_observations = 0
     end
   end
 end

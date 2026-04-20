@@ -56,7 +56,8 @@ local comms = comms_lib.init({
   config = {
     peer_timeout_s = 10,
     peer_down_grace_s = 3,
-    peer_up_debounce_s = 2
+    peer_up_debounce_s = 2,
+    peer_up_min_observations = 2
   }
 })
 
@@ -107,8 +108,19 @@ end
 advance(2000)
 comms.tick()
 peers = comms.get_peer_state()
+if not peers["MASTER-37"].down then
+  error("peer should remain down until minimum recovery observations are met")
+end
+
+advance(1000)
+heartbeat.message_id = "hb-3"
+heartbeat.ts = 18000
+heartbeat.timestamp = 18000
+comms.receive(heartbeat)
+comms.tick()
+peers = comms.get_peer_state()
 if peers["MASTER-37"].down then
-  error("peer should recover to up after stable debounce period")
+  error("peer should recover to up after debounce and repeated recovery observations")
 end
 
 print("comms_peer_state_hysteresis_test.lua: ok")
