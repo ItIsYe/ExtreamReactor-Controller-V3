@@ -48,6 +48,7 @@ local DEFAULT_CONFIG = {
   matrix_aliases = {}, -- Optional mapping of matrix peripheral name -> display label.
   cubes = {}, -- Optional list of energy cube names (legacy override).
   scan_interval = 15, -- Seconds between peripheral discovery scans.
+  matrix_component_poll_interval = 30, -- Seconds between matrix component count reads (cells/providers/ports).
   ui_refresh_interval = 1.0, -- Seconds between monitor UI refreshes.
   ui_scale = 0.5, -- Monitor text scale for the ENERGY node UI.
   monitor = {
@@ -136,6 +137,13 @@ local function validate_config(config_values, defaults)
   if type(config_values.scan_interval) ~= "number" or config_values.scan_interval <= 0 then
     config_values.scan_interval = defaults.scan_interval
     add_config_warning("scan_interval missing/invalid; defaulting to " .. tostring(defaults.scan_interval))
+  end
+  if type(config_values.matrix_component_poll_interval) ~= "number" or config_values.matrix_component_poll_interval <= 0 then
+    config_values.matrix_component_poll_interval = defaults.matrix_component_poll_interval
+    add_config_warning("matrix_component_poll_interval missing/invalid; defaulting to " .. tostring(defaults.matrix_component_poll_interval))
+  elseif config_values.matrix_component_poll_interval > 300 then
+    config_values.matrix_component_poll_interval = 300
+    add_config_warning("matrix_component_poll_interval too high; clamping to 300s")
   end
   if type(config_values.ui_refresh_interval) ~= "number" or config_values.ui_refresh_interval <= 0 then
     config_values.ui_refresh_interval = defaults.ui_refresh_interval
@@ -256,6 +264,7 @@ local devices = {
   last_error = nil,
   last_error_ts = nil,
   matrix_component_diag = {},
+  matrix_component_cache = {},
   discovery_failed = false,
   adapters = {
     storages = {},
@@ -624,6 +633,8 @@ local function read_storage_stats()
 end
 
 local function read_matrix_stats()
+  local component_poll_interval_ms = math.max(1, tonumber(config.matrix_component_poll_interval) or 30) * 1000
+  local now_ts = os.epoch("utc")
   local matrices = {}
   local total = { stored = 0, capacity = 0, input = 0, output = 0, has_flow = false }
   for idx, matrix in ipairs(devices.matrices or {}) do
@@ -697,12 +708,32 @@ local function read_matrix_stats()
     capacity = capacity or stored
     local input = select(1, read_metric("input", adapter and adapter.getInput))
     local output = select(1, read_metric("output", adapter and adapter.getOutput))
-    local cells_fn = adapter and adapter.features and adapter.features.cells and adapter.getCells or nil
-    local providers_fn = adapter and adapter.features and adapter.features.providers and adapter.getProviders or nil
-    local ports_fn = adapter and adapter.features and adapter.features.ports and adapter.getPorts or nil
-    local cells, cells_err = read_metric("cells", cells_fn)
-    local providers, providers_err = read_metric("providers", providers_fn)
-    local ports, ports_err = read_metric("ports", ports_fn)
+    local cache_key = tostring(matrix.name)
+    local component_cache = devices.matrix_component_cache[cache_key]
+    if type(component_cache) ~= "table" then
+      component_cache = {}
+      devices.matrix_component_cache[cache_key] = component_cache
+    end
+    local should_poll_components = (component_cache.ts or 0) <= 0 or (now_ts - component_cache.ts) >= component_poll_interval_ms
+    local function read_component(metric, enabled, fn)
+      if not enabled then
+        component_cache[metric] = nil
+        component_cache[metric .. "_err"] = nil
+        return nil, nil
+      end
+      if should_poll_components then
+        local value, err = read_metric(metric, fn)
+        component_cache[metric] = value
+        component_cache[metric .. "_err"] = err
+      end
+      return component_cache[metric], component_cache[metric .. "_err"]
+    end
+    local cells, cells_err = read_component("cells", adapter and adapter.features and adapter.features.cells, adapter and adapter.getCells or nil)
+    local providers, providers_err = read_component("providers", adapter and adapter.features and adapter.features.providers, adapter and adapter.getProviders or nil)
+    local ports, ports_err = read_component("ports", adapter and adapter.features and adapter.features.ports, adapter and adapter.getPorts or nil)
+    if should_poll_components then
+      component_cache.ts = now_ts
+    end
     local degraded = stored_err or cap_err
     local cells_reason = normalize_reason(cells_err)
     local providers_reason = normalize_reason(providers_err)

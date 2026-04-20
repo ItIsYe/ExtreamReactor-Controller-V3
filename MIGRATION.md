@@ -35,6 +35,10 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 - Rollen-/Knoten-bezogene Runtime-Dateien bleiben unter `/xreactor/config/*`.
 
 ## Safety-/RT-Migrationshinweis
+- ENERGY sendet Heartbeats jetzt robuster bei hoher Last:
+  - Matrix-Komponenten-Zählwerte (`cells/providers/ports`) werden standardmäßig nur noch alle `30s` gepollt (`matrix_component_poll_interval`), statt bei jedem Statusaufbau.
+  - Dadurch werden lange blockierende Matrix-Komponenten-Calls deutlich reduziert und der 2s-Heartbeat-Rhythmus stabilisiert.
+  - Für Ursachenanalyse loggt der Service-Manager jetzt langsame Service-Ticks (`Service tick slow`) und langsame Gesamt-Ticks (`Service manager tick slow`).
 - MASTER-Monitor-Scale wird jetzt pro Monitor-Name zwischengespeichert (statt pro temporärem Wrap-Objekt), damit periodische Monitor-Scans keine identischen `setTextScale`-Wiederholungen und keinen Log-Spam mehr auslösen.
 - Wenn ein Monitor wirklich verschwindet und später neu erkannt/rebound wird, wird der Cache für diesen Namen invalidiert und die Scale beim Rebind wieder korrekt gesetzt.
 - `SAFETY_COOLANT_LOW` wird nicht mehr sofort ausgelöst: zuerst Pending (`COOLANT_LOW_PENDING`), Bestätigung erst nach ~4s persistenter Unterschreitung; Recovery im Pending-Fenster bricht den Pending-Fall ab.

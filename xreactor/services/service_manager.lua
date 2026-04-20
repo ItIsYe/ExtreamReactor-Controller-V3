@@ -58,7 +58,9 @@ function manager.new(opts)
     running = false,
     backoff_base_s = opts.backoff_base_s or 0.5,
     backoff_cap_s = opts.backoff_cap_s or 5,
-    service_state = {}
+    service_state = {},
+    service_tick_warn_ms = opts.service_tick_warn_ms or 1200,
+    manager_tick_warn_ms = opts.manager_tick_warn_ms or 1800
   }
   return setmetatable(self, { __index = manager })
 end
@@ -85,6 +87,7 @@ function manager:init()
 end
 
 function manager:tick(dt, event)
+  local tick_started = now_ms()
   for _, service in ipairs(self.services) do
     local state = ensure_state(self, service)
     if state.next_retry > now_ms() then
@@ -101,7 +104,21 @@ function manager:tick(dt, event)
       clear_retry(state)
     end
     if service.tick then
+      local service_tick_started = now_ms()
       local ok, err = pcall(service.tick, service, dt, event)
+      local service_tick_duration = now_ms() - service_tick_started
+      if service_tick_duration > self.service_tick_warn_ms then
+        utils.log(
+          self.log_prefix,
+          string.format(
+            "Service tick slow: %s took %dms (threshold=%dms)",
+            tostring(service.name or service.log_prefix or "?"),
+            service_tick_duration,
+            self.service_tick_warn_ms
+          ),
+          "WARN"
+        )
+      end
       if not ok then
         rethrow_terminate(err)
         schedule_retry(self, service, state, "tick", err)
@@ -110,6 +127,14 @@ function manager:tick(dt, event)
       end
     end
     ::continue::
+  end
+  local tick_duration = now_ms() - tick_started
+  if tick_duration > self.manager_tick_warn_ms then
+    utils.log(
+      self.log_prefix,
+      string.format("Service manager tick slow: %dms (threshold=%dms)", tick_duration, self.manager_tick_warn_ms),
+      "WARN"
+    )
   end
 end
 
