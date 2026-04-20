@@ -21,7 +21,7 @@ local function to_set(list)
     out[value] = true
   end
   for key, value in pairs(list) do
-    if type(key) == "string" and value == true then
+    if type(key) == "string" and value ~= nil and value ~= false then
       out[key] = true
     end
   end
@@ -85,6 +85,29 @@ local function normalize_component_count(value)
     return table_count(value)
   end
   return nil
+end
+
+local function describe_value(value)
+  local value_type = type(value)
+  if value_type == "string" then
+    return value
+  end
+  if value_type == "number" or value_type == "boolean" then
+    return tostring(value)
+  end
+  if value_type == "nil" then
+    return "nil"
+  end
+  if value_type == "table" then
+    local ok, serialized = pcall(textutils.serialize, value)
+    if ok and type(serialized) == "string" then
+      if #serialized > 120 then
+        return serialized:sub(1, 117) .. "..."
+      end
+      return serialized
+    end
+  end
+  return "<" .. value_type .. ">"
 end
 
 local function is_matrix_method_set(methods)
@@ -151,36 +174,43 @@ function matrix.detect(name, log_prefix)
     if not packed[1] then
       return nil, "call_failed:" .. tostring(packed[2])
     end
-    local value = packed[2]
-    local secondary = packed[3]
-    if type(value) == "boolean" and secondary ~= nil then
-      if value then
-        value = secondary
-        secondary = packed[4]
-      else
-        return nil, "call_failed:" .. tostring(secondary)
-      end
+    local results = {}
+    for i = 2, packed.n do
+      results[#results + 1] = packed[i]
     end
-    if value == nil then
-      if secondary ~= nil then
-        return nil, "nil_value:" .. tostring(secondary)
-      end
-      return nil, "nil_value"
+    if #results == 0 then
+      return nil, "nil_value:no_return"
     end
-    local count = normalize_component_count(value)
-    if count == nil and secondary ~= nil then
-      count = normalize_component_count(secondary)
+    if type(results[1]) == "boolean" then
+      local success = results[1]
+      if success == false then
+        return nil, "call_failed:" .. tostring(results[2])
+      end
+      table.remove(results, 1)
+    end
+    if #results == 0 then
+      return nil, "nil_value:empty_payload"
+    end
+    for _, candidate in ipairs(results) do
+      local count = normalize_component_count(candidate)
       if count ~= nil then
+        if count < 0 then
+          return 0
+        end
         return count
       end
     end
-    if count == nil then
-      return nil, "unsupported_value:" .. type(value)
+    if results[1] == nil then
+      if results[2] ~= nil then
+        return nil, "nil_value:" .. describe_value(results[2])
+      end
+      return nil, "nil_value"
     end
-    if count < 0 then
-      return 0
+    local type_summary = {}
+    for i, candidate in ipairs(results) do
+      type_summary[#type_summary + 1] = tostring(i) .. "=" .. type(candidate)
     end
-    return count
+    return nil, "unsupported_value:" .. table.concat(type_summary, ",") .. ":" .. describe_value(results[1])
   end
 
   local features = {
