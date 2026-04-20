@@ -2,6 +2,17 @@ local utils = require("core.utils")
 
 local manager = {}
 
+local function is_terminate_error(err)
+  local message = tostring(err or ""):lower()
+  return message:find("terminate", 1, true) ~= nil
+end
+
+local function rethrow_terminate(err)
+  if is_terminate_error(err) then
+    error(err, 0)
+  end
+end
+
 local function now_ms()
   if os and os.epoch then
     return os.epoch("utc")
@@ -62,6 +73,7 @@ function manager:init()
     if service.init and not state.initialized then
       local ok, err = pcall(service.init, service)
       if not ok then
+        rethrow_terminate(err)
         schedule_retry(self, service, state, "init", err)
       else
         state.initialized = true
@@ -81,6 +93,7 @@ function manager:tick(dt, event)
     if service.init and not state.initialized then
       local ok, err = pcall(service.init, service)
       if not ok then
+        rethrow_terminate(err)
         schedule_retry(self, service, state, "init", err)
         goto continue
       end
@@ -90,6 +103,7 @@ function manager:tick(dt, event)
     if service.tick then
       local ok, err = pcall(service.tick, service, dt, event)
       if not ok then
+        rethrow_terminate(err)
         schedule_retry(self, service, state, "tick", err)
       else
         clear_retry(state)
@@ -104,6 +118,7 @@ function manager:stop()
     if service.stop then
       local ok, err = pcall(service.stop, service)
       if not ok then
+        rethrow_terminate(err)
         utils.log(self.log_prefix, "Service stop failed: " .. tostring(err), "ERROR")
       end
     end

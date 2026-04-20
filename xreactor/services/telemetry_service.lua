@@ -24,6 +24,11 @@ local function now()
   return os.epoch("utc")
 end
 
+local function is_terminate_error(err)
+  local message = tostring(err or ""):lower()
+  return message:find("terminate", 1, true) ~= nil
+end
+
 function telemetry:tick()
   local ts = now()
   if ts - self.last_heartbeat >= self.heartbeat_interval * 1000 then
@@ -49,6 +54,9 @@ function telemetry:tick()
         }
         self.comms:publish_status(payload)
       elseif not ok then
+        if is_terminate_error(payload) then
+          error(payload, 0)
+        end
         utils.log(self.log_prefix, "Status payload error: " .. tostring(payload), "WARN")
       end
     end

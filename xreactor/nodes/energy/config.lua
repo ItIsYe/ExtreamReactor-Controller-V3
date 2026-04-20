@@ -66,7 +66,7 @@ local CONFIG = {
       ema_alpha = 0.2
     }
   },
-  DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/energy.log.
+  DEFAULT_DEBUG_LOGGING = true, -- Enabled by default so ENERGY startup/discovery/comms/ui/shutdown diagnostics are always available.
   DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
 }
 

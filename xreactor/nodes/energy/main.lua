@@ -38,7 +38,7 @@ local control_service = require("services.control_service")
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
   node_id = "ENERGY-1", -- Default node_id used if none is set.
-  debug_logging = false, -- Enable debug logging to /xreactor_logs/energy.log.
+  debug_logging = true, -- Keep ENERGY logging enabled by default for field diagnostics and terminate/shutdown traces.
   reset_log_on_start = true, -- Truncate runtime log at startup to keep disk usage bounded.
   wireless_modem = nil, -- Autodetect wireless modem unless explicitly configured.
   wired_modem = nil, -- Optional wired modem side.
@@ -1206,6 +1206,7 @@ local function handle_command(message)
 end
 
 local function init()
+  utils.log("ENERGY", "Initializing services (comms, discovery, telemetry, ui)", "INFO")
   services = service_manager.new({ log_prefix = "ENERGY" })
   comms = comms_service.new({
     config = config,
@@ -1257,11 +1258,39 @@ local function init()
   utils.log("ENERGY", "Node ready: " .. comms.network.id)
 end
 
+local function is_terminate_error(err)
+  local message = tostring(err or ""):lower()
+  return message:find("terminate", 1, true) ~= nil
+end
+
+local function shutdown(reason)
+  local shutdown_reason = tostring(reason or "requested")
+  if shutdown_reason:lower():find("terminate", 1, true) then
+    utils.log("ENERGY", "terminate received", "WARN")
+  else
+    utils.log("ENERGY", "shutdown requested: " .. shutdown_reason, "WARN")
+  end
+  utils.log("ENERGY", "shutting down services", "INFO")
+  if services then
+    local ok, err = pcall(function()
+      services:stop()
+    end)
+    if not ok and not is_terminate_error(err) then
+      utils.log("ENERGY", "service shutdown error: " .. tostring(err), "ERROR")
+    end
+  end
+  utils.log("ENERGY", "shutdown complete", "INFO")
+end
+
 local function main_loop()
+  utils.log("ENERGY", "Entering event loop", "INFO")
   while true do
     local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
     while true do
-      local event = { os.pullEvent() }
+      local event = { os.pullEventRaw() }
+      if event[1] == "terminate" then
+        return "terminate received"
+      end
       if event[1] == "modem_message" then
         comms:handle_event(event)
       elseif event[1] == "monitor_touch" or event[1] == "key" then
@@ -1274,5 +1303,20 @@ local function main_loop()
   end
 end
 
-init()
-main_loop()
+local ok, result_or_err = xpcall(function()
+  init()
+  return main_loop()
+end, function(err)
+  return err
+end)
+
+if ok then
+  shutdown(result_or_err)
+else
+  if is_terminate_error(result_or_err) then
+    shutdown("terminate received")
+  else
+    shutdown("runtime error: " .. tostring(result_or_err))
+    error(result_or_err, 0)
+  end
+end
