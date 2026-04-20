@@ -34,6 +34,7 @@ local discovery_service = require("services.discovery_service")
 local telemetry_service = require("services.telemetry_service")
 local ui_service = require("services.ui_service")
 local control_service = require("services.control_service")
+local discovery_log = require("nodes.energy.discovery_log")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
@@ -72,6 +73,8 @@ local DEFAULT_CONFIG = {
     dedupe_ttl_s = 30, -- Seconds to keep dedupe entries.
     dedupe_limit = 200, -- Max dedupe entries per peer.
     peer_timeout_s = 12.0, -- Seconds before marking peer down.
+    peer_down_grace_s = 2.0, -- Extra stale window before logging peer down.
+    peer_up_debounce_s = 1.5, -- Stable visibility window before logging peer up after down.
     queue_limit = 200, -- Max queued outbound messages.
     drop_simulation = 0 -- Drop rate (0-1) for testing comms.
   }
@@ -259,6 +262,7 @@ local devices = {
   registry_snapshot = nil,
   registry_summary = nil,
   registry_load_error = nil,
+  discovery_signature = nil,
   proto_mismatch = false,
   last_command = nil,
   last_command_ts = nil
@@ -321,7 +325,8 @@ local function log_discovery_snapshot(names, candidates, monitor_name, matrices)
   end
   for _, candidate in ipairs(candidates) do
     local method_list = candidate.adapter and candidate.adapter.getMethodList and candidate.adapter.getMethodList() or candidate.method_list or {}
-    utils.log("ENERGY", ("Discovery candidate: %s methods=%s"):format(tostring(candidate.name), textutils.serialize(method_list)))
+    local kind = candidate.kind or "unknown"
+    utils.log("ENERGY", ("Discovery candidate: %s kind=%s methods=%s"):format(tostring(candidate.name), tostring(kind), textutils.serialize(method_list)))
   end
   if monitor_name then
     utils.log("ENERGY", ("Discovery monitor selection: %s"):format(tostring(monitor_name)))
@@ -404,7 +409,7 @@ local function discover()
     local matrix = matrix_adapter.detect(name, CONFIG.LOG_PREFIX)
     if matrix then
       table.insert(matrix_adapters, matrix)
-      table.insert(candidates, { name = name, adapter = matrix })
+      table.insert(candidates, { name = name, adapter = matrix, kind = "matrix" })
       adapter_map.matrices[name] = matrix
       table.insert(registry_devices, {
         name = name,
@@ -425,7 +430,7 @@ local function discover()
     local storage = storage_adapter.detect(name, CONFIG.LOG_PREFIX)
     if storage then
       table.insert(storage_adapters, storage)
-      table.insert(candidates, { name = name, adapter = storage })
+      table.insert(candidates, { name = name, adapter = storage, kind = "storage" })
       adapter_map.storages[name] = storage
       table.insert(registry_devices, {
         name = name,
@@ -538,7 +543,37 @@ local function discover()
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
 
-  log_discovery_snapshot(names, candidates, monitor_name, matrices)
+  local peripheral_types = {}
+  for _, name in ipairs(names) do
+    peripheral_types[name] = peripheral.getType(name)
+  end
+  local candidate_snapshot = {}
+  for _, candidate in ipairs(candidates) do
+    candidate_snapshot[#candidate_snapshot + 1] = {
+      name = candidate.name,
+      kind = candidate.kind,
+      methods = candidate.adapter and candidate.adapter.getMethodList and candidate.adapter.getMethodList() or candidate.method_list or {}
+    }
+  end
+  local matrix_snapshot = {}
+  for _, matrix in ipairs(matrices or {}) do
+    matrix_snapshot[#matrix_snapshot + 1] = {
+      name = matrix.name,
+      methods = matrix.adapter and matrix.adapter.getMethodList and matrix.adapter.getMethodList() or matrix.method_list or {}
+    }
+  end
+  local signature = discovery_log.build_signature({
+    names = names,
+    peripheral_types = peripheral_types,
+    candidates = candidate_snapshot,
+    monitor_name = monitor_name,
+    matrices = matrix_snapshot,
+    registry_summary = devices.registry_summary
+  })
+  if discovery_log.should_log_details(devices.discovery_signature, signature, devices.discovery_failed) then
+    log_discovery_snapshot(names, candidates, monitor_name, matrices)
+  end
+  devices.discovery_signature = signature
   return registry_devices
 end
 

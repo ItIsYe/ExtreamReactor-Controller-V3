@@ -362,7 +362,7 @@ Current runtime comms behavior includes:
 - command-only delivery and applied acknowledgements,
 - retry/backoff handling,
 - dedupe tracking,
-- peer timeout/down detection.
+- peer timeout/down detection with jitter tolerance (`peer_down_grace_s`) and up-recovery debounce (`peer_up_debounce_s`) to avoid short flap spam.
 
 Modem selection is now centralized and robust:
 
@@ -373,6 +373,7 @@ Modem selection is now centralized and robust:
 ### Discovery and registries
 
 Support nodes maintain a local peripheral registry and periodically rescan hardware. Discovery runs on the node-specific `discovery_interval`, independently from heartbeat timing. The registry stores bound/missing state, signatures, aliases, and scan metadata in `/xreactor/config/registry_<role>_<node_id>.json`, and only rewrites the file when the serialized registry state actually changes. Fluid-capable nodes prefer CC:Tweaked's generic `fluid_storage` API (`tanks()`) and keep older mod-specific methods only as compatibility fallbacks.
+ENERGY discovery diagnostics now emit full peripheral/method dumps on startup and on real discovery signature changes, while suppressing unchanged repeated snapshots in steady state.
 
 ### Monitor behavior
 
