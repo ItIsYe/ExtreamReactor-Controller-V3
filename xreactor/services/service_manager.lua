@@ -89,9 +89,21 @@ function manager.new(opts)
     backoff_cap_s = opts.backoff_cap_s or 5,
     service_state = {},
     service_tick_warn_ms = opts.service_tick_warn_ms or 1200,
-    manager_tick_warn_ms = opts.manager_tick_warn_ms or 1800
+    manager_tick_warn_ms = opts.manager_tick_warn_ms or 1800,
+    inter_service_hook = opts.inter_service_hook
   }
   return setmetatable(self, { __index = manager })
+end
+
+local function run_inter_service_hook(self, dt, event, phase, service, index)
+  if type(self.inter_service_hook) ~= "function" then
+    return
+  end
+  local ok, err = pcall(self.inter_service_hook, dt, event, phase, service, index)
+  if not ok then
+    rethrow_terminate(err)
+    utils.log(self.log_prefix, "Inter-service hook failed: " .. tostring(err), "WARN")
+  end
 end
 
 function manager:add(service)
@@ -120,9 +132,12 @@ end
 
 function manager:tick(dt, event)
   local tick_started = now_ms()
+  run_inter_service_hook(self, dt, event, "tick_start")
   for index, service in ipairs(self.services) do
+    run_inter_service_hook(self, dt, event, "before_service", service, index)
     local state = ensure_state(self, service)
     if state.next_retry > now_ms() then
+      run_inter_service_hook(self, dt, event, "after_service", service, index)
       goto continue
     end
     if service.init and not state.initialized then
@@ -130,6 +145,7 @@ function manager:tick(dt, event)
       if not ok then
         rethrow_terminate(err)
         schedule_retry(self, service, index, state, "init", err)
+        run_inter_service_hook(self, dt, event, "after_service", service, index)
         goto continue
       end
       state.initialized = true
@@ -158,8 +174,10 @@ function manager:tick(dt, event)
         clear_retry(state)
       end
     end
+    run_inter_service_hook(self, dt, event, "after_service", service, index)
     ::continue::
   end
+  run_inter_service_hook(self, dt, event, "tick_end")
   local tick_duration = now_ms() - tick_started
   if tick_duration > self.manager_tick_warn_ms then
     utils.log(

@@ -378,7 +378,7 @@ Support nodes maintain a local peripheral registry and periodically rescan hardw
 ENERGY discovery diagnostics now emit full peripheral/method dumps on startup and on real discovery signature changes, while suppressing unchanged repeated snapshots in steady state.
 ENERGY matrix polling keeps per-port/per-metric timing history and applies adaptive cadence/backoff for outlier calls, while also enforcing a per-matrix poll budget so one slow port cannot consume the entire matrix poll budget in a single payload tick.
 ENERGY UI now consumes status payload cache on a status-cadence-sized max-age window to avoid forcing extra synchronous matrix rebuilds that can delay telemetry/heartbeat service ticks.
-ENERGY heartbeats/presence are emitted on a dedicated event-loop timer path (`comms:send_heartbeat({})`) and no longer piggyback on the telemetry status payload service tick path.
+ENERGY heartbeats/presence run on a hard-separated lightweight path (timer + inter-service heartbeat pump + immediate comms flush via `comms:send_heartbeat(minimal_presence_state)` and `comms:tick(ts)`), so slow UI/matrix/status ticks no longer defer heartbeat publication across multi-second manager cycles.
 
 ### Monitor behavior
 

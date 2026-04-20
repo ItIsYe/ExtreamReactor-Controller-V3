@@ -343,6 +343,14 @@ local function heartbeat_interval_ms()
   return math.max(1, tonumber(config.heartbeat_interval) or 2) * 1000
 end
 
+local function minimal_presence_state(ts_ms)
+  return {
+    ts = ts_ms,
+    node_id = comms and comms.network and comms.network.id or config.node_id,
+    role = config.role
+  }
+end
+
 local function send_presence_heartbeat(ts_ms)
   ts_ms = ts_ms or now_ms()
   local interval_ms = heartbeat_interval_ms()
@@ -358,8 +366,18 @@ local function send_presence_heartbeat(ts_ms)
       last_heartbeat_warn = ts_ms
     end
   end
-  comms:send_heartbeat({})
+  comms:send_heartbeat(minimal_presence_state(ts_ms))
+  -- Flush heartbeat immediately on its own lightweight path so liveness does
+  -- not wait for a heavy status/UI service manager tick.
+  comms:tick(ts_ms)
   last_heartbeat = ts_ms
+end
+
+local function run_heartbeat_pump(ts_ms)
+  ts_ms = ts_ms or now_ms()
+  if ts_ms - last_heartbeat >= heartbeat_interval_ms() then
+    send_presence_heartbeat(ts_ms)
+  end
 end
 
 local function to_set(list)
@@ -1593,13 +1611,20 @@ end
 
 local function init()
   utils.log("ENERGY", "Initializing services (comms, discovery, telemetry, ui)", "INFO")
-  services = service_manager.new({ log_prefix = "ENERGY" })
   comms = comms_service.new({
     name = "COMMS",
     config = config,
     log_prefix = "ENERGY",
     on_message = handle_message,
     on_command = handle_command
+  })
+  services = service_manager.new({
+    log_prefix = "ENERGY",
+    inter_service_hook = function(_, _, phase)
+      if phase == "before_service" or phase == "after_service" then
+        run_heartbeat_pump(now_ms())
+      end
+    end
   })
   services:add(comms)
   services:add(discovery_service.new({
@@ -1693,20 +1718,23 @@ local function main_loop()
       end
       if event[1] == "modem_message" then
         comms:handle_event(event)
+        run_heartbeat_pump(now_ms())
       elseif event[1] == "monitor_touch" or event[1] == "key" then
         services:tick(nil, event)
       elseif event[1] == "timer" and event[2] == heartbeat_timer then
-        send_presence_heartbeat(now_ms())
+        run_heartbeat_pump(now_ms())
         rearm_heartbeat_timer()
       elseif event[1] == "timer" and event[2] == timer then
         break
       end
     end
     if now_ms() - last_heartbeat >= hb_interval_ms then
-      send_presence_heartbeat(now_ms())
+      run_heartbeat_pump(now_ms())
       rearm_heartbeat_timer()
     end
+    run_heartbeat_pump(now_ms())
     services:tick()
+    run_heartbeat_pump(now_ms())
   end
 end
 

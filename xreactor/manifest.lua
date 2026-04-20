@@ -23,7 +23,7 @@ return {
       { path = "services/comms_service.lua", size_bytes = 5632, hash = "c255cd12" },
       { path = "services/control_service.lua", size_bytes = 454, hash = "82b782f1" },
       { path = "services/discovery_service.lua", size_bytes = 2695, hash = "ded28ffe" },
-      { path = "services/service_manager.lua", size_bytes = 5094, hash = "df91ca78" },
+      { path = "services/service_manager.lua", size_bytes = 5943, hash = "ac30751e" },
       { path = "services/telemetry_service.lua", size_bytes = 3261, hash = "800d6b3f" },
       { path = "services/ui_service.lua", size_bytes = 1542, hash = "19251c8d" },
       { path = "start.lua", size_bytes = 2821, hash = "c49ef8ae", always = true },
@@ -78,7 +78,7 @@ return {
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 6652, hash = "d2ee389f" },
       { path = "nodes/energy/discovery_log.lua", size_bytes = 2009, hash = "7a6883dc" },
-      { path = "nodes/energy/main.lua", size_bytes = 68632, hash = "5c17cb29", required_for = { "ENERGY" } },
+      { path = "nodes/energy/main.lua", size_bytes = 69442, hash = "72f6858a", required_for = { "ENERGY" } },
       { path = "adapters/energy_storage.lua", size_bytes = 3220, hash = "65c983a9" },
       { path = "adapters/induction_matrix.lua", size_bytes = 8282, hash = "ff99ac2d" },
     },
