@@ -75,6 +75,7 @@ local DEFAULT_CONFIG = {
     peer_timeout_s = 12.0, -- Seconds before marking peer down.
     peer_down_grace_s = 2.0, -- Extra stale window before logging peer down.
     peer_up_debounce_s = 1.5, -- Stable visibility window before logging peer up after down.
+    peer_up_min_observations = 2, -- Fresh peer messages required before logging peer up after down.
     queue_limit = 200, -- Max queued outbound messages.
     drop_simulation = 0 -- Drop rate (0-1) for testing comms.
   }

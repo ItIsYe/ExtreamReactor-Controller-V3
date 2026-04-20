@@ -362,7 +362,7 @@ Current runtime comms behavior includes:
 - command-only delivery and applied acknowledgements,
 - retry/backoff handling,
 - dedupe tracking,
-- peer timeout/down detection with jitter tolerance (`peer_down_grace_s`) and up-recovery debounce (`peer_up_debounce_s`) to avoid short flap spam.
+- peer timeout/down detection with jitter tolerance (`peer_down_grace_s`) and up-recovery debounce (`peer_up_debounce_s`), plus minimum recovery sightings (`peer_up_min_observations`) so a single lucky heartbeat does not flap a peer immediately back to up.
 
 Modem selection is now centralized and robust:
 
