@@ -26,4 +26,8 @@ if not source:find('reason=api_variant', 1, true) and not source:find('"api_vari
   error('expected explicit api_variant reason classification')
 end
 
+if not source:find('"temporary_not_ready"', 1, true) then
+  error('expected explicit temporary_not_ready classification for nil component payloads')
+end
+
 print('energy_matrix_component_logging_regression_test.lua: ok')

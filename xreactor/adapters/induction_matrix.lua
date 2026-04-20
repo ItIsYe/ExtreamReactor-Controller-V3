@@ -54,6 +54,16 @@ local function normalize_component_count(value)
     return nil
   end
   if value_type == "table" then
+    local preferred_keys = { "count", "size", "length", "total", "installed" }
+    for _, key in ipairs(preferred_keys) do
+      local raw = value[key]
+      if raw ~= nil then
+        local parsed = normalize_component_count(raw)
+        if parsed ~= nil then
+          return parsed
+        end
+      end
+    end
     return table_count(value)
   end
   return nil
@@ -116,9 +126,20 @@ function matrix.detect(name, log_prefix)
     if not method then
       return nil, "missing_method"
     end
-    local value, err = utils.safe_peripheral_call(name, method)
-    if err then
-      return nil, "call_failed:" .. tostring(err)
+    if not peripheral.isPresent(name) then
+      return nil, "call_failed:peripheral missing"
+    end
+    local packed = table.pack(pcall(peripheral.call, name, method))
+    if not packed[1] then
+      return nil, "call_failed:" .. tostring(packed[2])
+    end
+    local value = packed[2]
+    local secondary = packed[3]
+    if value == nil then
+      if secondary ~= nil then
+        return nil, "nil_value:" .. tostring(secondary)
+      end
+      return nil, "nil_value"
     end
     local count = normalize_component_count(value)
     if count == nil then

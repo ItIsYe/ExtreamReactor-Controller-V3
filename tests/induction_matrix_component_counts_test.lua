@@ -17,6 +17,13 @@ local methods_by_name = {
     'getEnergy',
     'getMaxEnergy',
   },
+  inductionPort_2 = {
+    'getInstalledCells',
+    'getInstalledProviders',
+    'getInstalledPorts',
+    'getEnergy',
+    'getMaxEnergy',
+  },
 }
 
 _G.peripheral = {
@@ -50,6 +57,15 @@ _G.peripheral = {
     end
     if name == 'inductionPort_1' and method == 'getInstalledPorts' then
       return { 'p1', 'p2', 'p3' }
+    end
+    if name == 'inductionPort_2' and method == 'getInstalledCells' then
+      return { 'cell_x', 'cell_y' }, 'ok'
+    end
+    if name == 'inductionPort_2' and method == 'getInstalledProviders' then
+      return { count = '7' }, 'ok'
+    end
+    if name == 'inductionPort_2' and method == 'getInstalledPorts' then
+      return nil, 'matrix warming up'
     end
     error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
   end
@@ -88,6 +104,23 @@ local providers1 = matrix1.getProviders()
 local ports1 = matrix1.getPorts()
 if cells1 ~= 4 or providers1 ~= 6 or ports1 ~= 3 then
   error('expected numeric/string/table component values to normalize to counts')
+end
+
+local matrix2 = adapter.detect('inductionPort_2', 'TEST')
+if not matrix2 then
+  error('expected inductionPort_2 matrix adapter')
+end
+local cells2, cells2_err = matrix2.getCells()
+if cells2 ~= 2 or cells2_err ~= nil then
+  error('expected multi-return success payload to normalize using first return value')
+end
+local providers2, providers2_err = matrix2.getProviders()
+if providers2 ~= 7 or providers2_err ~= nil then
+  error('expected table count field to normalize to numeric provider count')
+end
+local ports2, ports2_err = matrix2.getPorts()
+if ports2 ~= nil or tostring(ports2_err) ~= 'nil_value:matrix warming up' then
+  error('expected nil payload with detail to be treated as temporary nil_value')
 end
 
 print('induction_matrix_component_counts_test.lua: ok')
