@@ -321,6 +321,7 @@ local devices = {
 }
 local master_alerts = {}
 local last_heartbeat = 0
+local last_heartbeat_warn = 0
 local last_scan = 0
 local master_peer_state
 local is_master_connected
@@ -336,6 +337,29 @@ local ui_model_cache = { ts = 0, model = nil, key = nil }
 
 local function now_ms()
   return os.epoch("utc")
+end
+
+local function heartbeat_interval_ms()
+  return math.max(1, tonumber(config.heartbeat_interval) or 2) * 1000
+end
+
+local function send_presence_heartbeat(ts_ms)
+  ts_ms = ts_ms or now_ms()
+  local interval_ms = heartbeat_interval_ms()
+  if last_heartbeat > 0 then
+    local delayed_by = ts_ms - last_heartbeat
+    local warn_threshold = interval_ms * 2
+    if delayed_by > warn_threshold and (ts_ms - last_heartbeat_warn) >= warn_threshold then
+      utils.log(
+        "ENERGY",
+        ("Heartbeat tick delayed by %dms (interval=%dms)"):format(delayed_by, interval_ms),
+        "WARN"
+      )
+      last_heartbeat_warn = ts_ms
+    end
+  end
+  comms:send_heartbeat({})
+  last_heartbeat = ts_ms
 end
 
 local function to_set(list)
@@ -1595,6 +1619,7 @@ local function init()
     comms = comms,
     status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
+    enable_heartbeat = false,
     status_max_age_ms = 1000,
     build_payload = build_status_payload
   }))
@@ -1606,7 +1631,9 @@ local function init()
         page = ui_state.router and ui_state.router.index or 1,
         matrix_page = ui_state.matrix_page,
         storage_page = ui_state.storage_page,
-        data = get_ui_snapshot_key({ max_age_ms = 600 })
+        data = get_ui_snapshot_key({
+          max_age_ms = math.max(1000, math.floor((tonumber(config.status_interval) or 5) * 1000))
+        })
       }
     end,
     render = render_monitor,
@@ -1652,6 +1679,11 @@ end
 
 local function main_loop()
   utils.log("ENERGY", "Entering event loop", "INFO")
+  local hb_interval_ms = heartbeat_interval_ms()
+  local heartbeat_timer = os.startTimer(hb_interval_ms / 1000)
+  local function rearm_heartbeat_timer()
+    heartbeat_timer = os.startTimer(hb_interval_ms / 1000)
+  end
   while true do
     local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
     while true do
@@ -1663,9 +1695,16 @@ local function main_loop()
         comms:handle_event(event)
       elseif event[1] == "monitor_touch" or event[1] == "key" then
         services:tick(nil, event)
+      elseif event[1] == "timer" and event[2] == heartbeat_timer then
+        send_presence_heartbeat(now_ms())
+        rearm_heartbeat_timer()
       elseif event[1] == "timer" and event[2] == timer then
         break
       end
+    end
+    if now_ms() - last_heartbeat >= hb_interval_ms then
+      send_presence_heartbeat(now_ms())
+      rearm_heartbeat_timer()
     end
     services:tick()
   end
@@ -1673,6 +1712,7 @@ end
 
 local ok, result_or_err = xpcall(function()
   init()
+  send_presence_heartbeat(now_ms())
   return main_loop()
 end, function(err)
   return err
