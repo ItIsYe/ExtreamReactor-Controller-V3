@@ -26,6 +26,7 @@ end
 function comms_service.new(opts)
   opts = opts or {}
   local self = {
+    name = opts.name or "COMMS",
     config = opts.config or {},
     log_prefix = opts.log_prefix or "COMMS",
     role = opts.role,

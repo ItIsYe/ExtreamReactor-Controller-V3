@@ -290,6 +290,12 @@ local ui_state = {
   model = nil
 }
 local master_seen_ts = nil
+local status_payload_cache = { ts = 0, payload = nil }
+local ui_model_cache = { ts = 0, model = nil, key = nil }
+
+local function now_ms()
+  return os.epoch("utc")
+end
 
 local function to_set(list)
   local out = {}
@@ -553,6 +559,11 @@ local function discover()
   devices.registry_load_error = registry.state.load_error
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
+  status_payload_cache.ts = 0
+  status_payload_cache.payload = nil
+  ui_model_cache.ts = 0
+  ui_model_cache.model = nil
+  ui_model_cache.key = nil
 
   local peripheral_types = {}
   for _, name in ipairs(names) do
@@ -783,9 +794,14 @@ local function read_matrix_stats()
   }
 end
 
-local function build_status_payload()
+local function build_status_payload_uncached()
+  local started_at = now_ms()
+  local energy_started_at = started_at
   local energy = read_storage_stats()
+  local energy_duration = now_ms() - energy_started_at
+  local matrix_started_at = now_ms()
   local matrix = read_matrix_stats()
+  local matrix_duration = now_ms() - matrix_started_at
   local total_stored = energy.stored + (matrix.total.stored or 0)
   local total_capacity = energy.capacity + (matrix.total.capacity or 0)
   local total_input = energy.input + (matrix.total.input or 0)
@@ -870,7 +886,35 @@ local function build_status_payload()
     devices = registry:get_devices_by_kind(),
     diagnostics = registry:get_diagnostics()
   }
+  local total_duration = now_ms() - started_at
+  if total_duration > 1200 then
+    utils.log(
+      "ENERGY",
+      ("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d"):format(
+        total_duration,
+        energy_duration,
+        matrix_duration,
+        #(devices.storages or {}),
+        #(devices.matrices or {})
+      ),
+      "WARN"
+    )
+  end
   return energy
+end
+
+local function build_status_payload(opts)
+  opts = opts or {}
+  local max_age_ms = tonumber(opts.max_age_ms) or 0
+  local ts = now_ms()
+  local cache_age = ts - (status_payload_cache.ts or 0)
+  if status_payload_cache.payload and cache_age >= 0 and cache_age <= max_age_ms then
+    return status_payload_cache.payload
+  end
+  local payload = build_status_payload_uncached()
+  status_payload_cache.ts = now_ms()
+  status_payload_cache.payload = payload
+  return payload
 end
 
 local function format_value(value)
@@ -940,12 +984,22 @@ local function build_storage_signature(storages)
   return table.concat(parts, "|")
 end
 
-local function build_ui_model()
-  local payload = build_status_payload()
+local function build_ui_model(opts)
+  opts = opts or {}
+  local max_age_ms = tonumber(opts.max_age_ms) or 750
+  local ts = now_ms()
+  local cache_age = ts - (ui_model_cache.ts or 0)
+  if ui_model_cache.model and cache_age >= 0 and cache_age <= max_age_ms then
+    return ui_model_cache.model
+  end
+  local payload = build_status_payload({
+    reason = "ui_model",
+    max_age_ms = max_age_ms
+  })
   local degraded = payload.health and payload.health.status == health.status.DEGRADED
   local reasons_text = payload.health and table.concat(payload.health.reasons or {}, ",") or ""
-  local matrices = payload.matrices or {}
-  local storages = payload.stores or {}
+  local matrices = utils.deep_copy(payload.matrices or {})
+  local storages = utils.deep_copy(payload.stores or {})
   local registry_entries = payload.registry and payload.registry.devices or registry:list()
   local registry_summary = payload.registry and payload.registry.summary or registry:get_summary()
   local registry_rows = {}
@@ -963,7 +1017,7 @@ local function build_ui_model()
   local local_critical = alert_payload and alert_payload.critical or 0
   local master_age = master_peer and master_peer.age and string.format("%ds", math.floor(master_peer.age)) or "n/a"
   local master_state = master_peer and (master_peer.down and "DOWN" or "OK") or "UNKNOWN"
-  return {
+  local model = {
     node_id = node_id,
     degraded = degraded,
     health_status = payload.health and payload.health.status or health.status.OK,
@@ -989,6 +1043,9 @@ local function build_ui_model()
     local_alerts = local_alerts,
     local_alerts_critical = local_critical
   }
+  ui_model_cache.ts = ts
+  ui_model_cache.model = model
+  return model
 end
 
 local function build_snapshot_key(model)
@@ -1011,6 +1068,13 @@ local function build_snapshot_key(model)
     master_age = model.master_age,
     local_alerts = model.local_alerts_critical
   }) or tostring(model)
+end
+
+local function get_ui_snapshot_key(opts)
+  local model = build_ui_model(opts)
+  local key = build_snapshot_key(model)
+  ui_model_cache.key = key
+  return key
 end
 
 local function render_header(mon, title, status, model)
@@ -1235,7 +1299,7 @@ local function render_monitor()
   if not devices.monitor then
     return
   end
-  local model = build_ui_model()
+  local model = build_ui_model({ max_age_ms = 600 })
   ui_state.model = model
   local expected_pages = 3 + (#model.storages > 0 and 1 or 0)
   if not ui_state.router or ui_state.router:count() ~= expected_pages then
@@ -1263,7 +1327,7 @@ local function render_monitor()
       key_next = { [keys.right] = true, [keys.pageDown] = true }
     })
   end
-  local snapshot = build_snapshot_key(model)
+  local snapshot = ui_model_cache.key or build_snapshot_key(model)
   ui_state.router:render(devices.monitor, {
     snapshot = {
       data = snapshot,
@@ -1340,6 +1404,7 @@ local function init()
   utils.log("ENERGY", "Initializing services (comms, discovery, telemetry, ui)", "INFO")
   services = service_manager.new({ log_prefix = "ENERGY" })
   comms = comms_service.new({
+    name = "COMMS",
     config = config,
     log_prefix = "ENERGY",
     on_message = handle_message,
@@ -1347,6 +1412,8 @@ local function init()
   })
   services:add(comms)
   services:add(discovery_service.new({
+    name = "DISCOVERY",
+    log_prefix = "DISCOVERY",
     registry = registry,
     discover = discover,
     interval = config.scan_interval,
@@ -1356,20 +1423,23 @@ local function init()
     end
   }))
   services:add(telemetry_service.new({
+    name = "TELEMETRY",
+    log_prefix = "TELEMETRY",
     comms = comms,
     status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
+    status_max_age_ms = 1000,
     build_payload = build_status_payload
   }))
   services:add(ui_service.new({
+    name = "UI",
     interval = config.ui_refresh_interval,
     snapshot = function()
-      local model = build_ui_model()
       return {
         page = ui_state.router and ui_state.router.index or 1,
         matrix_page = ui_state.matrix_page,
         storage_page = ui_state.storage_page,
-        data = build_snapshot_key(model)
+        data = get_ui_snapshot_key({ max_age_ms = 600 })
       }
     end,
     render = render_monitor,

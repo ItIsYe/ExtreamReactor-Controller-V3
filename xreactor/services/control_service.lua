@@ -3,6 +3,7 @@ local control = {}
 function control.new(opts)
   opts = opts or {}
   local self = {
+    name = opts.name or "CONTROL",
     tick_fn = opts.tick,
     handle_command = opts.handle_command
   }

@@ -13,6 +13,7 @@ end
 function ui.new(opts)
   opts = opts or {}
   local self = {
+    name = opts.name or "UI",
     render = opts.render,
     handle_input = opts.handle_input,
     interval = opts.interval or 0.5,
