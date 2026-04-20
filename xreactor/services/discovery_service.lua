@@ -18,6 +18,7 @@ function discovery.new(opts)
     start_delay = 4
   end
   local self = {
+    name = opts.name or "DISCOVERY",
     log_prefix = opts.log_prefix or "DISCOVERY",
     registry = opts.registry,
     discover = opts.discover,

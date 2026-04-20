@@ -8,12 +8,14 @@ local telemetry = {}
 function telemetry.new(opts)
   opts = opts or {}
   local self = {
+    name = opts.name or "TELEMETRY",
     log_prefix = opts.log_prefix or "TELEMETRY",
     comms = opts.comms,
     build_payload = opts.build_payload,
     heartbeat_state = opts.heartbeat_state,
     status_interval = opts.status_interval or 5,
     heartbeat_interval = opts.heartbeat_interval or 2,
+    status_max_age_ms = opts.status_max_age_ms or 1000,
     last_status = 0,
     last_heartbeat = 0,
     last_heartbeat_warn = 0
@@ -56,7 +58,10 @@ function telemetry:tick()
   if ts - self.last_status >= self.status_interval * 1000 then
     self.last_status = ts
     if self.build_payload then
-      local ok, payload = pcall(self.build_payload)
+      local ok, payload = pcall(self.build_payload, {
+        reason = "telemetry_status",
+        max_age_ms = self.status_max_age_ms
+      })
       if ok and payload then
         local build = build_info.get()
         payload.meta = payload.meta or {

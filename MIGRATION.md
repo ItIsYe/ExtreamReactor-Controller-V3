@@ -39,6 +39,8 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
   - Matrix-Komponenten-Zählwerte (`cells/providers/ports`) werden standardmäßig nur noch alle `30s` gepollt (`matrix_component_poll_interval`), statt bei jedem Statusaufbau.
   - Dadurch werden lange blockierende Matrix-Komponenten-Calls deutlich reduziert und der 2s-Heartbeat-Rhythmus stabilisiert.
   - Für Ursachenanalyse loggt der Service-Manager jetzt langsame Service-Ticks (`Service tick slow`) und langsame Gesamt-Ticks (`Service manager tick slow`).
+  - Service-Namen im Slow-Tick-Log sind jetzt immer eindeutig (`COMMS`, `DISCOVERY`, `TELEMETRY`, `UI` bzw. `service#N` als Fallback); der anonyme `?`-Eintrag entfällt.
+  - ENERGY cached den Statusaufbau kurzzeitig (`~1s`) zwischen TELEMETRY und UI, inklusive Slow-Stage-Logs (`Status payload slow: storage=... matrix=...`), damit doppelte teure Peripheral-Reads im selben Tick ausbleiben.
 - MASTER-Monitor-Scale wird jetzt pro Monitor-Name zwischengespeichert (statt pro temporärem Wrap-Objekt), damit periodische Monitor-Scans keine identischen `setTextScale`-Wiederholungen und keinen Log-Spam mehr auslösen.
 - Wenn ein Monitor wirklich verschwindet und später neu erkannt/rebound wird, wird der Cache für diesen Namen invalidiert und die Scale beim Rebind wieder korrekt gesetzt.
 - `SAFETY_COOLANT_LOW` wird nicht mehr sofort ausgelöst: zuerst Pending (`COOLANT_LOW_PENDING`), Bestätigung erst nach ~4s persistenter Unterschreitung; Recovery im Pending-Fenster bricht den Pending-Fall ab.

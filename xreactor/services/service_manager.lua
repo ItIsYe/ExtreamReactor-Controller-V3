@@ -20,6 +20,25 @@ local function now_ms()
   return math.floor((os.clock() or 0) * 1000)
 end
 
+local function service_name(service, index)
+  if type(service) ~= "table" then
+    return string.format("service#%d", tonumber(index) or -1)
+  end
+  local candidates = {
+    service.name,
+    service.service_name,
+    service.log_prefix,
+    service.id,
+    service.kind
+  }
+  for _, candidate in ipairs(candidates) do
+    if type(candidate) == "string" and candidate ~= "" then
+      return candidate
+    end
+  end
+  return string.format("service#%d", tonumber(index) or -1)
+end
+
 local function backoff_delay_ms(config, retries)
   local base = math.max(0, tonumber(config.backoff_base_s) or 0.5)
   local cap = math.max(base, tonumber(config.backoff_cap_s) or 5)
@@ -43,11 +62,21 @@ local function clear_retry(state)
   state.next_retry = 0
 end
 
-local function schedule_retry(self, service, state, stage, err)
+local function schedule_retry(self, service, index, state, stage, err)
   state.retries = (state.retries or 0) + 1
   local delay_ms = backoff_delay_ms(self, state.retries)
   state.next_retry = now_ms() + delay_ms
-  utils.log(self.log_prefix, string.format("Service %s failed (%s); retry in %.2fs: %s", tostring(stage), tostring(service.name or service.log_prefix or "?"), delay_ms / 1000, tostring(err)), "ERROR")
+  utils.log(
+    self.log_prefix,
+    string.format(
+      "Service %s failed (%s); retry in %.2fs: %s",
+      tostring(stage),
+      service_name(service, index),
+      delay_ms / 1000,
+      tostring(err)
+    ),
+    "ERROR"
+  )
 end
 
 function manager.new(opts)
@@ -66,17 +95,20 @@ function manager.new(opts)
 end
 
 function manager:add(service)
+  if type(service) == "table" and (service.name == nil or service.name == "") then
+    service.name = service_name(service, #self.services + 1)
+  end
   table.insert(self.services, service)
 end
 
 function manager:init()
-  for _, service in ipairs(self.services) do
+  for index, service in ipairs(self.services) do
     local state = ensure_state(self, service)
     if service.init and not state.initialized then
       local ok, err = pcall(service.init, service)
       if not ok then
         rethrow_terminate(err)
-        schedule_retry(self, service, state, "init", err)
+        schedule_retry(self, service, index, state, "init", err)
       else
         state.initialized = true
         clear_retry(state)
@@ -88,7 +120,7 @@ end
 
 function manager:tick(dt, event)
   local tick_started = now_ms()
-  for _, service in ipairs(self.services) do
+  for index, service in ipairs(self.services) do
     local state = ensure_state(self, service)
     if state.next_retry > now_ms() then
       goto continue
@@ -97,7 +129,7 @@ function manager:tick(dt, event)
       local ok, err = pcall(service.init, service)
       if not ok then
         rethrow_terminate(err)
-        schedule_retry(self, service, state, "init", err)
+        schedule_retry(self, service, index, state, "init", err)
         goto continue
       end
       state.initialized = true
@@ -112,7 +144,7 @@ function manager:tick(dt, event)
           self.log_prefix,
           string.format(
             "Service tick slow: %s took %dms (threshold=%dms)",
-            tostring(service.name or service.log_prefix or "?"),
+            service_name(service, index),
             service_tick_duration,
             self.service_tick_warn_ms
           ),
@@ -121,7 +153,7 @@ function manager:tick(dt, event)
       end
       if not ok then
         rethrow_terminate(err)
-        schedule_retry(self, service, state, "tick", err)
+        schedule_retry(self, service, index, state, "tick", err)
       else
         clear_retry(state)
       end
