@@ -74,6 +74,7 @@ local DEFAULT_CONFIG = {
     dedupe_limit = 200, -- Max dedupe entries per peer.
     peer_timeout_s = 12.0, -- Seconds before marking peer down.
     peer_down_grace_s = 2.0, -- Extra stale window before logging peer down.
+    peer_down_min_observations = 2, -- Consecutive stale checks required before logging peer down.
     peer_up_debounce_s = 1.5, -- Stable visibility window before logging peer up after down.
     peer_up_min_observations = 2, -- Fresh peer messages required before logging peer up after down.
     queue_limit = 200, -- Max queued outbound messages.
