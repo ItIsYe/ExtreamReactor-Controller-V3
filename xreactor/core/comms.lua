@@ -637,7 +637,6 @@ function comms.tick(now)
   prune_dedupe()
   flush_queue()
   retry_inflight()
-  update_peer_timeouts()
 
   local queue = state.incoming
   state.incoming = {}
@@ -670,6 +669,10 @@ function comms.tick(now)
       handle_message(message)
     end
   end
+
+  -- Evaluate peer timeout transitions after ingesting fresh messages queued
+  -- during this loop iteration so jitter does not cause transient DOWN/UP flaps.
+  update_peer_timeouts()
 end
 
 function comms.get_peer_state()
@@ -687,13 +690,19 @@ function comms.get_peer_state()
       down = down,
       down_since = data.down_since,
       age = delta,
+      stale = delta > state.config.peer_timeout_s,
       role = data.role,
       proto_ver = data.proto_ver,
       stale_since = data.stale_since,
       stale_observations = data.stale_observations or 0,
       recovering_since = data.recovering_since,
       recovering_observations = data.recovering_observations or 0,
-      last_message_type = data.last_message_type
+      last_message_type = data.last_message_type,
+      timeout_s = state.config.peer_timeout_s,
+      down_grace_s = state.config.peer_down_grace_s,
+      down_min_observations = state.config.peer_down_min_observations,
+      up_debounce_s = state.config.peer_up_debounce_s,
+      up_min_observations = state.config.peer_up_min_observations
     }
   end
   return out

@@ -363,6 +363,8 @@ Current runtime comms behavior includes:
 - retry/backoff handling,
 - dedupe tracking,
 - peer timeout/down detection with jitter tolerance (`peer_down_grace_s`) plus a minimum stale-observation gate (`peer_down_min_observations`), and up-recovery debounce (`peer_up_debounce_s`) with minimum recovery sightings (`peer_up_min_observations`) so one delayed/missed heartbeat does not instantly flap a peer down/up.
+- peer timeout evaluation after ingesting newly received frames in the same tick, preventing transient DOWN→UP flaps when a heartbeat arrives near the timeout edge.
+- telemetry heartbeat delay warnings when service ticks are late (helps diagnose event-loop blocking/jitter on nodes in field logs).
 
 Modem selection is now centralized and robust:
 
