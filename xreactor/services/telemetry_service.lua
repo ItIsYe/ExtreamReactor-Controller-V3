@@ -15,7 +15,8 @@ function telemetry.new(opts)
     status_interval = opts.status_interval or 5,
     heartbeat_interval = opts.heartbeat_interval or 2,
     last_status = 0,
-    last_heartbeat = 0
+    last_heartbeat = 0,
+    last_heartbeat_warn = 0
   }
   return setmetatable(self, { __index = telemetry })
 end
@@ -31,7 +32,20 @@ end
 
 function telemetry:tick()
   local ts = now()
-  if ts - self.last_heartbeat >= self.heartbeat_interval * 1000 then
+  local heartbeat_elapsed = ts - self.last_heartbeat
+  local heartbeat_interval_ms = self.heartbeat_interval * 1000
+  if self.last_heartbeat > 0 and heartbeat_interval_ms > 0 then
+    local warn_threshold = heartbeat_interval_ms * 2
+    if heartbeat_elapsed > warn_threshold and ts - self.last_heartbeat_warn >= warn_threshold then
+      utils.log(
+        self.log_prefix,
+        ("Heartbeat tick delayed by %dms (interval=%dms)"):format(heartbeat_elapsed, heartbeat_interval_ms),
+        "WARN"
+      )
+      self.last_heartbeat_warn = ts
+    end
+  end
+  if heartbeat_elapsed >= heartbeat_interval_ms then
     self.last_heartbeat = ts
     if self.heartbeat_state then
       self.comms:send_heartbeat(self.heartbeat_state())

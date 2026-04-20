@@ -6,7 +6,7 @@ return {
   base_files = {
       { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460" },
       { path = "core/bootstrap.lua", size_bytes = 10874, hash = "4a180335" },
-      { path = "core/comms.lua", size_bytes = 23447, hash = "35c708dd" },
+      { path = "core/comms.lua", size_bytes = 23951, hash = "00536995" },
       { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
       { path = "core/logger.lua", size_bytes = 30592, hash = "1688d3c8" },
       { path = "core/network.lua", size_bytes = 14002, hash = "2fba2f3c" },
@@ -24,7 +24,7 @@ return {
       { path = "services/control_service.lua", size_bytes = 419, hash = "01a44c98" },
       { path = "services/discovery_service.lua", size_bytes = 2658, hash = "83294726" },
       { path = "services/service_manager.lua", size_bytes = 3488, hash = "8ac8f4b3" },
-      { path = "services/telemetry_service.lua", size_bytes = 1973, hash = "a72538d1" },
+      { path = "services/telemetry_service.lua", size_bytes = 2542, hash = "35712132" },
       { path = "services/ui_service.lua", size_bytes = 1512, hash = "bb5eed3f" },
       { path = "start.lua", size_bytes = 2821, hash = "c49ef8ae", always = true },
       { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
