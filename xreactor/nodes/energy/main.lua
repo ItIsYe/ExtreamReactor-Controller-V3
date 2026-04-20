@@ -609,6 +609,9 @@ local function read_matrix_stats()
       if text == "missing_method" or text == "missing method" then
         return "api_variant"
       end
+      if text:find("^nil_value", 1) then
+        return "temporary_not_ready"
+      end
       if text:find("^call_failed:", 1) then
         return "temporary_read_error"
       end

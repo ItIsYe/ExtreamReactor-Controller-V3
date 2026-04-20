@@ -64,7 +64,7 @@ The current repository ships:
 - Mainly monitors and reports energy infrastructure.
 - Uses peripheral discovery and filters from its role config.
 - Normalizes induction component APIs (`getInstalledCells` / `getInstalledProviders` variants that return lists, maps, strings, or numbers) into stable numeric counts.
-- Distinguishes matrix component issues between API-variant mismatches and temporary read errors, with deduplicated diagnostics to avoid repeated identical warning spam.
+- Distinguishes matrix component issues between API-variant mismatches, temporary "not ready" nil payloads, unexpected value formats, and transient read/call errors, with deduplicated diagnostics to avoid repeated identical warning spam.
 - Does not perform reactor/turbine control.
 
 ### WATER

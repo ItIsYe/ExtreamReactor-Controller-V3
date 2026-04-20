@@ -40,8 +40,8 @@
 4. **Health/Degraded**: fehlende Kernperipherie führt zu DEGRADED mit nachvollziehbaren Reasons.
 5. **ENERGY Scope-Guard (`is_master_connected` / `master_peer_state`)**: `tests/energy_scope_regression_test.py` (und optional `tests/energy_master_connection_scope_regression_test.lua`) muss grün sein, damit `build_status_payload`/UI keinen Nil-Call durch lokale Funktionsreihenfolge erzeugen.
 6. **ENERGY Induction-Komponentenpfad**:
-   - `tests/induction_matrix_component_counts_test.lua` prüft die Normalisierung von Matrix-Komponentenzahlen über API-Varianten (`table`/`string`/`number`) und den Ports-Fallback.
-   - `tests/energy_matrix_component_logging_regression_test.lua` schützt vor Ports-bedingter Fehlklassifikation sowie vor wiederholtem identischem Log-Spam.
+   - `tests/induction_matrix_component_counts_test.lua` prüft die Normalisierung von Matrix-Komponentenzahlen über API-Varianten (`table`/`string`/`number`), Multi-Return-Payloads, Nil-Readiness-Signale und den Ports-Fallback.
+   - `tests/energy_matrix_component_logging_regression_test.lua` schützt vor Ports-bedingter Fehlklassifikation, stellt die Reason-Klassifikation (`api_variant`/`temporary_not_ready`) sicher und verhindert wiederholten identischen Log-Spam.
 
 ## First start / bootstrap / role setup
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.
