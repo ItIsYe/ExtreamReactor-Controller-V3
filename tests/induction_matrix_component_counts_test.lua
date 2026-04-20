@@ -24,6 +24,13 @@ local methods_by_name = {
     'getEnergy',
     'getMaxEnergy',
   },
+  inductionPort_3 = {
+    getInstalledCells = true,
+    getInstalledProviders = true,
+    getInstalledPorts = true,
+    getEnergy = true,
+    getMaxEnergy = true,
+  },
 }
 
 _G.peripheral = {
@@ -66,6 +73,15 @@ _G.peripheral = {
     end
     if name == 'inductionPort_2' and method == 'getInstalledPorts' then
       return nil, 'matrix warming up'
+    end
+    if name == 'inductionPort_3' and method == 'getInstalledCells' then
+      return true, { items = { 'cell_alpha', 'cell_beta', 'cell_gamma' } }
+    end
+    if name == 'inductionPort_3' and method == 'getInstalledProviders' then
+      return true, { result = { count = '8' } }
+    end
+    if name == 'inductionPort_3' and method == 'getInstalledPorts' then
+      return true, { installed = { 'p1', 'p2', 'p3', 'p4' } }
     end
     error('unexpected peripheral.call: ' .. tostring(name) .. '.' .. tostring(method))
   end
@@ -121,6 +137,23 @@ end
 local ports2, ports2_err = matrix2.getPorts()
 if ports2 ~= nil or tostring(ports2_err) ~= 'nil_value:matrix warming up' then
   error('expected nil payload with detail to be treated as temporary nil_value')
+end
+
+local matrix3 = adapter.detect('inductionPort_3', 'TEST')
+if not matrix3 then
+  error('expected inductionPort_3 matrix adapter')
+end
+local cells3, cells3_err = matrix3.getCells()
+if cells3 ~= 3 or cells3_err ~= nil then
+  error('expected success+table payload for cells to normalize to count=3')
+end
+local providers3, providers3_err = matrix3.getProviders()
+if providers3 ~= 8 or providers3_err ~= nil then
+  error('expected nested count payload for providers to normalize to count=8')
+end
+local ports3, ports3_err = matrix3.getPorts()
+if ports3 ~= 4 or ports3_err ~= nil then
+  error('expected nested installed list for ports to normalize to count=4')
 end
 
 print('induction_matrix_component_counts_test.lua: ok')

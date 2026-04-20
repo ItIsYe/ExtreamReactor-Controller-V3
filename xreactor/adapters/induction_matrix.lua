@@ -14,8 +14,16 @@ end
 
 local function to_set(list)
   local out = {}
-  for _, value in ipairs(list or {}) do
+  if type(list) ~= "table" then
+    return out
+  end
+  for _, value in ipairs(list) do
     out[value] = true
+  end
+  for key, value in pairs(list) do
+    if type(key) == "string" and value == true then
+      out[key] = true
+    end
   end
   return out
 end
@@ -54,6 +62,16 @@ local function normalize_component_count(value)
     return nil
   end
   if value_type == "table" then
+    local nested_keys = { "value", "values", "result", "results", "data", "items", "entries", "components", "installed" }
+    for _, key in ipairs(nested_keys) do
+      local nested = value[key]
+      if nested ~= nil then
+        local parsed_nested = normalize_component_count(nested)
+        if parsed_nested ~= nil then
+          return parsed_nested
+        end
+      end
+    end
     local preferred_keys = { "count", "size", "length", "total", "installed" }
     for _, key in ipairs(preferred_keys) do
       local raw = value[key]
@@ -135,6 +153,14 @@ function matrix.detect(name, log_prefix)
     end
     local value = packed[2]
     local secondary = packed[3]
+    if type(value) == "boolean" and secondary ~= nil then
+      if value then
+        value = secondary
+        secondary = packed[4]
+      else
+        return nil, "call_failed:" .. tostring(secondary)
+      end
+    end
     if value == nil then
       if secondary ~= nil then
         return nil, "nil_value:" .. tostring(secondary)
@@ -142,6 +168,12 @@ function matrix.detect(name, log_prefix)
       return nil, "nil_value"
     end
     local count = normalize_component_count(value)
+    if count == nil and secondary ~= nil then
+      count = normalize_component_count(secondary)
+      if count ~= nil then
+        return count
+      end
+    end
     if count == nil then
       return nil, "unsupported_value:" .. type(value)
     end
