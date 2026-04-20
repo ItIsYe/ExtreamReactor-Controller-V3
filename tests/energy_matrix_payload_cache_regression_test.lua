@@ -10,8 +10,14 @@ local source = read('xreactor/nodes/energy/main.lua')
 if not source:find('matrix_metric_poll_interval', 1, true) then
   error('energy main config must include matrix_metric_poll_interval')
 end
+if not source:find('matrix_metric_call_budget', 1, true) then
+  error('energy main config must include matrix_metric_call_budget')
+end
 if not source:find('matrix_metric_cache', 1, true) then
   error('expected matrix metric cache to avoid duplicate matrix reads per tick')
+end
+if not source:find('Matrix metric polling throttled:', 1, true) then
+  error('expected matrix metric throttling diagnostics for expensive matrix calls')
 end
 if not source:find('Status payload slow matrix calls:', 1, true) then
   error('expected slow payload diagnostics to include concrete matrix metric calls')

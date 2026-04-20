@@ -37,7 +37,9 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 ## Safety-/RT-Migrationshinweis
 - ENERGY sendet Heartbeats jetzt robuster bei hoher Last:
   - Matrix-Energiemetriken (`stored/capacity/input/output`) werden standardmäßig nur noch alle `2.0s` gepollt (`matrix_metric_poll_interval`), statt bei jedem UI-/Telemetry-Statusaufbau.
+  - Neue Schutzschranke `matrix_metric_call_budget` (Default `4`) begrenzt teure Matrix-Einzelabfragen pro Payload-Build; fällige Reads werden fair über mehrere Ticks verteilt statt in einem Block ausgeführt.
   - UI und TELEMETRY teilen dadurch denselben Matrix-Metrik-Cache pro Matrix; doppelte teure Reads im Sekundentakt werden vermieden.
+  - Bei aktivem Budget-Limit bleibt Diagnose sichtbar (`Matrix metric polling throttled: due=... budget=... deferred=...`) und die bisherigen Slow-Call-Details (`Status payload slow matrix calls: ...`) bleiben erhalten.
   - Bei langsamen Statuspayloads werden die konkret langsamsten Matrix-Calls mitgeloggt (`Status payload slow matrix calls: <matrix>.<metric>=...ms`) für schnellere Engpass-Lokalisierung.
   - Matrix-Komponenten-Zählwerte (`cells/providers/ports`) werden standardmäßig nur noch alle `30s` gepollt (`matrix_component_poll_interval`), statt bei jedem Statusaufbau.
   - Dadurch werden lange blockierende Matrix-Komponenten-Calls deutlich reduziert und der 2s-Heartbeat-Rhythmus stabilisiert.
