@@ -7,6 +7,8 @@ local STARTUP_PATH = "/startup"
 local STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n"
 local BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
 local MANIFEST_URL = BASE_URL .. "manifest.lua"
+local DOWNLOAD_RETRIES = 3
+local DOWNLOAD_RETRY_DELAY_SECONDS = 0.5
 local INCLUDE_DEV_FILES = false
 local STORAGE_BUFFER_BYTES = 24576
 local STORAGE_PERCENT_BUFFER = 0.03
@@ -156,23 +158,42 @@ local function download_url(url)
   if not http or type(http.get) ~= "function" then
     return nil, "HTTP API unavailable"
   end
-  local ok, response = pcall(http.get, url)
-  if not ok or not response then
-    return nil, "Failed to download " .. url
-  end
-  if response.getResponseCode then
-    local code = response.getResponseCode()
-    if code ~= 200 then
-      pcall(response.close)
-      return nil, "HTTP " .. tostring(code) .. " for " .. url
+  local last_error = nil
+  for attempt = 1, DOWNLOAD_RETRIES do
+    local ok, response = pcall(http.get, url)
+    if ok and response then
+      if response.getResponseCode then
+        local code = response.getResponseCode()
+        if code ~= 200 then
+          pcall(response.close)
+          last_error = "HTTP " .. tostring(code) .. " for " .. url
+        else
+          local ok_read, body = pcall(response.readAll)
+          pcall(response.close)
+          if ok_read and type(body) == "string" then
+            return body
+          end
+          last_error = "Failed to read response from " .. url
+        end
+      else
+        local ok_read, body = pcall(response.readAll)
+        pcall(response.close)
+        if ok_read and type(body) == "string" then
+          return body
+        end
+        last_error = "Failed to read response from " .. url
+      end
+    else
+      last_error = "Failed to download " .. url
+    end
+    if attempt < DOWNLOAD_RETRIES then
+      warn(string.format("Download attempt %d/%d failed for %s (%s)", attempt, DOWNLOAD_RETRIES, tostring(url), tostring(last_error)))
+      if os and type(os.sleep) == "function" then
+        os.sleep(DOWNLOAD_RETRY_DELAY_SECONDS)
+      end
     end
   end
-  local ok_read, body = pcall(response.readAll)
-  pcall(response.close)
-  if not ok_read or type(body) ~= "string" then
-    return nil, "Failed to read response from " .. url
-  end
-  return body
+  return nil, tostring(last_error or ("Failed to download " .. url))
 end
 
 local function is_html_content(content)

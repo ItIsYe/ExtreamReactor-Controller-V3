@@ -40,7 +40,7 @@ def fetch(url: str) -> bytes:
         return response.read()
 
 
-def verify_remote(base_url: str):
+def verify_remote(base_url: str, required_paths):
     root = base_url.rstrip("/") + "/"
     manifest_url = root + "manifest.lua"
     manifest_body = fetch(manifest_url)
@@ -48,6 +48,10 @@ def verify_remote(base_url: str):
     entries = parse_manifest(manifest_text)
 
     errors = []
+    available_paths = {entry["path"] for entry in entries}
+    for path in required_paths:
+        if path not in available_paths:
+            errors.append(f"required path missing from manifest: {path}")
     checked = 0
     for entry in entries:
         file_url = root + entry["path"]
@@ -102,6 +106,12 @@ def main():
         action="store_true",
         help="Also verify local repo xreactor files against local manifest before remote verification",
     )
+    parser.add_argument(
+        "--require-path",
+        action="append",
+        default=[],
+        help="Require that this relative path exists in the published manifest (repeatable)",
+    )
     args = parser.parse_args()
 
     if args.check_local:
@@ -114,7 +124,7 @@ def main():
         print("Local manifest consistency: OK")
 
     try:
-        checked, errors = verify_remote(args.base_url)
+        checked, errors = verify_remote(args.base_url, args.require_path)
     except Exception as exc:
         print(f"Remote verification failed: {exc}")
         return 1
