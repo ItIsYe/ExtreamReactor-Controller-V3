@@ -265,6 +265,8 @@ local devices = {
 local master_alerts = {}
 local last_heartbeat = 0
 local last_scan = 0
+local master_peer_state
+local is_master_connected
 local ui_state = {
   matrix_page = 1,
   storage_page = 1,
@@ -1150,7 +1152,7 @@ local function warn_once(key, message)
   utils.log("ENERGY", message, "WARN")
 end
 
-local function master_peer_state()
+master_peer_state = function()
   local peers = comms and comms:get_peers() or {}
   for _, data in pairs(peers) do
     if data.role == constants.roles.MASTER then
@@ -1160,7 +1162,7 @@ local function master_peer_state()
   return nil
 end
 
-local function is_master_connected()
+is_master_connected = function()
   local peer = master_peer_state()
   if peer then
     return not peer.down, peer.age

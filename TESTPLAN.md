@@ -38,6 +38,7 @@
 2. **Modem-Auswahl**: Override + Autodetect-Fallback testen (inkl. klarer Warnungen bei ungültigem Override).
 3. **Registry-Stabilität**: unveränderte Discovery-Zyklen erzeugen keine unnötigen Registry-Rewrites.
 4. **Health/Degraded**: fehlende Kernperipherie führt zu DEGRADED mit nachvollziehbaren Reasons.
+5. **ENERGY Scope-Guard (`is_master_connected` / `master_peer_state`)**: `tests/energy_scope_regression_test.py` (und optional `tests/energy_master_connection_scope_regression_test.lua`) muss grün sein, damit `build_status_payload`/UI keinen Nil-Call durch lokale Funktionsreihenfolge erzeugen.
 
 ## First start / bootstrap / role setup
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.
