@@ -39,6 +39,7 @@ local CONFIG = {
   DEFAULT_COMMS_DEDUPE_TTL = 30, -- Seconds to keep dedupe entries.
   DEFAULT_COMMS_DEDUPE_LIMIT = 200, -- Max dedupe entries per peer.
   DEFAULT_COMMS_PEER_TIMEOUT = 12.0, -- Seconds before marking peer down.
+  DEFAULT_COMMS_PEER_DOWN_MIN_OBSERVATIONS = 2, -- Consecutive stale checks required before peer-down transition.
   DEFAULT_COMMS_QUEUE_LIMIT = 200, -- Max queued outbound messages.
   DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
   -- Control rails tuning (shared defaults for RT nodes).
@@ -133,6 +134,7 @@ return {
     dedupe_ttl_s = CONFIG.DEFAULT_COMMS_DEDUPE_TTL,
     dedupe_limit = CONFIG.DEFAULT_COMMS_DEDUPE_LIMIT,
     peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT,
+    peer_down_min_observations = CONFIG.DEFAULT_COMMS_PEER_DOWN_MIN_OBSERVATIONS,
     queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
     drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
   },

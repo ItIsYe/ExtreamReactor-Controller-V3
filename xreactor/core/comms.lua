@@ -14,6 +14,7 @@ local DEFAULT_CONFIG = {
   dedupe_limit = 200,
   peer_timeout_s = 12.0,
   peer_down_grace_s = 2.0,
+  peer_down_min_observations = 2,
   peer_up_debounce_s = 1.5,
   peer_up_min_observations = 2,
   queue_limit = 200,
@@ -121,6 +122,12 @@ local function sanitize_config(config)
   merged.dedupe_limit = math.floor(clamp_number(merged.dedupe_limit, DEFAULT_CONFIG.dedupe_limit, 10, 1000))
   merged.peer_timeout_s = clamp_number(merged.peer_timeout_s, DEFAULT_CONFIG.peer_timeout_s, 2.0, 120.0)
   merged.peer_down_grace_s = clamp_number(merged.peer_down_grace_s, DEFAULT_CONFIG.peer_down_grace_s, 0.0, 60.0)
+  merged.peer_down_min_observations = math.floor(clamp_number(
+    merged.peer_down_min_observations,
+    DEFAULT_CONFIG.peer_down_min_observations,
+    1,
+    10
+  ))
   merged.peer_up_debounce_s = clamp_number(merged.peer_up_debounce_s, DEFAULT_CONFIG.peer_up_debounce_s, 0.0, 30.0)
   merged.peer_up_min_observations = math.floor(clamp_number(
     merged.peer_up_min_observations,
@@ -192,9 +199,11 @@ local function update_peer(message)
   state.peers[sender] = state.peers[sender] or {}
   local peer = state.peers[sender]
   peer.last_seen = now_ms()
+  peer.last_message_type = message.type
   peer.role = message.role
   peer.proto_ver = message.proto_ver
   peer.stale_since = nil
+  peer.stale_observations = 0
   if peer.down then
     if not peer.recovering_since then
       peer.recovering_since = peer.last_seen
@@ -515,15 +524,27 @@ local function update_peer_timeouts()
       peer.recovering_observations = 0
       if not peer.stale_since then
         peer.stale_since = now_ts
+        peer.stale_observations = 0
       end
+      peer.stale_observations = (peer.stale_observations or 0) + 1
       local stale_for_s = (now_ts - (peer.stale_since or now_ts)) / 1000
-      if not peer.down and stale_for_s >= (state.config.peer_down_grace_s or 0) then
+      if not peer.down
+        and stale_for_s >= (state.config.peer_down_grace_s or 0)
+        and (peer.stale_observations or 0) >= (state.config.peer_down_min_observations or 1) then
         peer.down = true
         peer.down_since = now_ts
-        log("Peer down: " .. tostring(id), "WARN")
+        log(("Peer down: %s (age=%.1fs timeout=%.1fs grace=%.1fs stale_obs=%d/%d)"):format(
+          tostring(id),
+          age_s,
+          state.config.peer_timeout_s or 0,
+          state.config.peer_down_grace_s or 0,
+          peer.stale_observations or 0,
+          state.config.peer_down_min_observations or 1
+        ), "WARN")
       end
     elseif peer.down then
       peer.stale_since = nil
+      peer.stale_observations = 0
       if not peer.recovering_since then
         peer.recovering_since = now_ts
       end
@@ -537,10 +558,18 @@ local function update_peer_timeouts()
         peer.down_since = nil
         peer.recovering_since = nil
         peer.recovering_observations = 0
-        log("Peer up: " .. tostring(id))
+        log(("Peer up: %s (age=%.1fs recover_for=%.1fs observations=%d/%d debounce=%.1fs)"):format(
+          tostring(id),
+          age_s,
+          recovering_for_s,
+          recovery_observations,
+          state.config.peer_up_min_observations or 1,
+          state.config.peer_up_debounce_s or 0
+        ))
       end
     else
       peer.stale_since = nil
+      peer.stale_observations = 0
       peer.recovering_since = nil
       peer.recovering_observations = 0
     end
@@ -659,7 +688,12 @@ function comms.get_peer_state()
       down_since = data.down_since,
       age = delta,
       role = data.role,
-      proto_ver = data.proto_ver
+      proto_ver = data.proto_ver,
+      stale_since = data.stale_since,
+      stale_observations = data.stale_observations or 0,
+      recovering_since = data.recovering_since,
+      recovering_observations = data.recovering_observations or 0,
+      last_message_type = data.last_message_type
     }
   end
   return out

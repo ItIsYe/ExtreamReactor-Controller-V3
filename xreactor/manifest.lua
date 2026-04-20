@@ -6,7 +6,7 @@ return {
   base_files = {
       { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460" },
       { path = "core/bootstrap.lua", size_bytes = 10874, hash = "4a180335" },
-      { path = "core/comms.lua", size_bytes = 22083, hash = "4435c8dc" },
+      { path = "core/comms.lua", size_bytes = 23447, hash = "35c708dd" },
       { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
       { path = "core/logger.lua", size_bytes = 30592, hash = "1688d3c8" },
       { path = "core/network.lua", size_bytes = 14002, hash = "2fba2f3c" },
@@ -37,8 +37,8 @@ return {
   },
   roles = {
     master = {
-      { path = "master/config.lua", size_bytes = 7833, hash = "e47fa828" },
-      { path = "master/main.lua", size_bytes = 38129, hash = "f852219d", required_for = { "MASTER" } },
+      { path = "master/config.lua", size_bytes = 8029, hash = "b69c35a7" },
+      { path = "master/main.lua", size_bytes = 38476, hash = "61206f5c", required_for = { "MASTER" } },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
       { path = "master/startup_sequencer.lua", size_bytes = 8356, hash = "45f27ed8" },
       { path = "master/ui/alarms.lua", size_bytes = 1345, hash = "0a381649" },
@@ -76,9 +76,9 @@ return {
       { path = "core/turbine_regulator.lua", size_bytes = 16601, hash = "7e2685eb" },
     },
     energy = {
-      { path = "nodes/energy/config.lua", size_bytes = 5336, hash = "0a71ae66" },
+      { path = "nodes/energy/config.lua", size_bytes = 5532, hash = "064596e3" },
       { path = "nodes/energy/discovery_log.lua", size_bytes = 2009, hash = "7a6883dc" },
-      { path = "nodes/energy/main.lua", size_bytes = 54650, hash = "74b2222c", required_for = { "ENERGY" } },
+      { path = "nodes/energy/main.lua", size_bytes = 54749, hash = "0abad146", required_for = { "ENERGY" } },
       { path = "adapters/energy_storage.lua", size_bytes = 3220, hash = "65c983a9" },
       { path = "adapters/induction_matrix.lua", size_bytes = 8282, hash = "ff99ac2d" },
     },

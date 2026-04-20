@@ -334,8 +334,12 @@ local function update_node(message)
   local existing = nodes[id]
   nodes[id] = existing or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
   if nodes[id].down_since then
-    nodes[id].down_since = nil
-    utils.log("MASTER", "Node comms restored: " .. tostring(id))
+    local peers = comms and comms:get_peers() or {}
+    local peer = peers and peers[id] or nil
+    if not (peer and peer.down) then
+      nodes[id].down_since = nil
+      utils.log("MASTER", "Node comms restored: " .. tostring(id))
+    end
   end
   if nodes[id].id ~= id then
     nodes[id].id = id
@@ -458,10 +462,17 @@ local function check_timeouts()
   for _, node in pairs(nodes) do
     local peer = peers[node.id]
     local last_seen = peer and peer.last_seen or node.last_seen
+    local peer_down = peer and peer.down
     if peer and peer.age then
       node.last_seen_age = math.floor(peer.age)
     end
-    if last_seen and (now - last_seen > timeout_ms) then
+    local should_mark_down = false
+    if peer ~= nil then
+      should_mark_down = peer_down == true
+    else
+      should_mark_down = last_seen and (now - last_seen > timeout_ms)
+    end
+    if should_mark_down then
       if node.status ~= constants.status_levels.OFFLINE then
         utils.log("MASTER", "Node offline: " .. tostring(node.id))
       end
