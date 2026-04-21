@@ -1,5 +1,5 @@
 return {
-  release_id = "beta-2026-04-19-rt-readback-lag",
+  release_id = "beta-2026-04-21-energy-matrix-grouping-fix",
   commit_sha = "beta",
   manifest_id = "manifest-v6",
   manifest_version = 6,

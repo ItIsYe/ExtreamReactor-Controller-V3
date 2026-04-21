@@ -181,8 +181,36 @@ local function infer_name_group_key(name)
   return "name_exact:" .. string_name
 end
 
+local function normalize_position(value)
+  if type(value) ~= "table" then
+    return nil
+  end
+  local x = tonumber(value.x or value[1])
+  local y = tonumber(value.y or value[2])
+  local z = tonumber(value.z or value[3])
+  if x == nil or y == nil or z == nil then
+    return nil
+  end
+  return ("%d,%d,%d"):format(math.floor(x), math.floor(y), math.floor(z))
+end
+
+local function normalize_bounds(value)
+  if type(value) ~= "table" then
+    return nil
+  end
+  local min = value.min or value.minimum or value.from or value.low
+  local max = value.max or value.maximum or value.to or value.high
+  local min_norm = normalize_position(min)
+  local max_norm = normalize_position(max)
+  if min_norm and max_norm then
+    return "min=" .. min_norm .. "|max=" .. max_norm
+  end
+  return nil
+end
+
 function matrix.build_group_key(name, methods, call_fn)
   local method_set = to_set(methods)
+  local string_name = tostring(name or "")
   local id_methods = {
     "getMatrixId",
     "getMultiblockId",
@@ -204,7 +232,45 @@ function matrix.build_group_key(name, methods, call_fn)
       end
     end
   end
-  return infer_name_group_key(name), "name_heuristic"
+
+  local bounds_pairs = {
+    { min = "getMinPos", max = "getMaxPos" },
+    { min = "getMinimumPos", max = "getMaximumPos" }
+  }
+  for _, pair in ipairs(bounds_pairs) do
+    if method_set[pair.min] and method_set[pair.max] and type(call_fn) == "function" then
+      local min_ok, min_value = pcall(call_fn, pair.min)
+      local max_ok, max_value = pcall(call_fn, pair.max)
+      if min_ok and max_ok then
+        local min_norm = normalize_position(min_value)
+        local max_norm = normalize_position(max_value)
+        if min_norm ~= nil and max_norm ~= nil then
+          return "matrix_bounds:min=" .. min_norm .. "|max=" .. max_norm, "api:" .. pair.min .. "+" .. pair.max
+        end
+      end
+    end
+  end
+
+  local bounds_methods = { "getBounds", "getBoundaries" }
+  for _, method in ipairs(bounds_methods) do
+    if method_set[method] and type(call_fn) == "function" then
+      local ok, value = pcall(call_fn, method)
+      if ok then
+        local normalized = normalize_bounds(value)
+        if normalized ~= nil then
+          return "matrix_bounds:" .. normalized, "api:" .. method
+        end
+      end
+    end
+  end
+
+  -- IMPORTANT:
+  -- A name prefix heuristic (for example inductionPort_*) is not a reliable
+  -- topology signal. Multiple physically separate matrices frequently share
+  -- the same peripheral prefix and would then be collapsed into one logical
+  -- matrix, which corrupts telemetry aggregation. If no stable matrix identity
+  -- API signal is available, keep ports separated per peripheral name.
+  return "peripheral_name:" .. string_name, "peripheral_name_fallback"
 end
 
 function matrix.group_ports(entries)

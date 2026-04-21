@@ -45,7 +45,7 @@
 7. **ENERGY Matrix-Metrik-Cache/Slowdown-Diagnose**:
    - `tests/energy_matrix_metric_poll_interval_config_test.lua` stellt sicher, dass `matrix_metric_poll_interval` in der ENERGY-Config vorhanden und gültig ist.
    - `tests/energy_matrix_payload_cache_regression_test.lua` schützt Matrix-Metrik-Cache und Slowdown-Diagnoselog (`Status payload slow matrix calls: ...`) gegen Regressionen.
-   - `tests/induction_matrix_grouping_test.lua` schützt die matrix-zentrierte Gruppierung von mehreren `inductionPort_*` auf ein logisches Matrix-Objekt mit stabilem repräsentativem Reader-Port.
+   - `tests/induction_matrix_grouping_test.lua` schützt die Matrix-Gruppierung gegen falsches Prefix-Collapsing: ohne stabile API-Identität bleibt jeder Port eine eigene Matrix; mit stabiler Matrix-ID werden Ports korrekt zusammengeführt.
 
 ## First start / bootstrap / role setup
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.

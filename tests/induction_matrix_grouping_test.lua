@@ -8,45 +8,51 @@ local groups = matrix.group_ports({
   {
     id = 'matrix-a-port-0',
     alias = 'A0',
-    adapter = { name = 'inductionPort_0', group_key = 'name_prefix:inductionPort' }
-  },
-  {
-    id = 'matrix-a-port-1',
-    alias = 'A1',
-    adapter = { name = 'inductionPort_1', group_key = 'name_prefix:inductionPort' }
+    adapter = { name = 'inductionPort_0', group_key = 'peripheral_name:inductionPort_0', group_key_source = 'peripheral_name_fallback' }
   },
   {
     id = 'matrix-b-port-0',
     alias = 'B0',
-    adapter = { name = 'otherPort_0', group_key = 'name_prefix:otherPort' }
+    adapter = { name = 'inductionPort_1', group_key = 'peripheral_name:inductionPort_1', group_key_source = 'peripheral_name_fallback' }
+  },
+  {
+    id = 'matrix-c-port-0',
+    alias = 'C0',
+    adapter = { name = 'inductionPort_2', group_key = 'matrix_id:shared-a', group_key_source = 'api:getMatrixId' }
+  },
+  {
+    id = 'matrix-c-port-1',
+    alias = 'C1',
+    adapter = { name = 'inductionPort_3', group_key = 'matrix_id:shared-a', group_key_source = 'api:getMatrixId' }
   }
 })
 
-if #groups ~= 2 then
-  error('expected two logical matrix groups, got ' .. tostring(#groups))
+if #groups ~= 3 then
+  error('expected three logical matrix groups, got ' .. tostring(#groups))
 end
 
 local first = groups[1]
 local second = groups[2]
-if first.key ~= 'name_prefix:inductionPort' then
-  error('expected induction group key ordering to be stable')
+local third = groups[3]
+if first.key ~= 'matrix_id:shared-a' then
+  error('expected matrix-id grouped entry to sort first')
 end
-if first.representative.name ~= 'inductionPort_0' then
-  error('expected lexicographically-first representative port for induction group')
+if first.representative.name ~= 'inductionPort_2' then
+  error('expected lexicographically-first representative port for shared matrix-id group')
 end
 if #first.ports ~= 2 then
-  error('expected both induction ports to collapse into one logical matrix')
+  error('expected two ports to collapse into one logical matrix for shared matrix-id')
 end
-if second.key ~= 'name_prefix:otherPort' then
-  error('expected second group key for other matrix ports')
+if second.key ~= 'peripheral_name:inductionPort_0' or #second.ports ~= 1 then
+  error('expected per-port fallback grouping for inductionPort_0')
 end
-if #second.ports ~= 1 then
-  error('expected only one port in secondary group')
+if third.key ~= 'peripheral_name:inductionPort_1' or #third.ports ~= 1 then
+  error('expected per-port fallback grouping for inductionPort_1')
 end
 
 local key, source = matrix.build_group_key('inductionPort_7', {}, nil)
-if key ~= 'name_prefix:inductionPort' or source ~= 'name_heuristic' then
-  error('expected fallback name-based grouping heuristic for inductionPort_* naming')
+if key ~= 'peripheral_name:inductionPort_7' or source ~= 'peripheral_name_fallback' then
+  error('expected per-port fallback grouping when no identity/topology API is available')
 end
 
 print('induction_matrix_grouping_test.lua: ok')

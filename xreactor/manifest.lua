@@ -19,7 +19,7 @@ return {
       { path = "core/ui.lua", size_bytes = 10664, hash = "59c49010" },
       { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
       { path = "core/utils.lua", size_bytes = 8584, hash = "f86e8b2d" },
-      { path = "release.lua", size_bytes = 340, hash = "aaf8a60c", always = true },
+      { path = "release.lua", size_bytes = 351, hash = "14bf42dc", always = true },
       { path = "services/comms_service.lua", size_bytes = 5632, hash = "c255cd12" },
       { path = "services/control_service.lua", size_bytes = 454, hash = "82b782f1" },
       { path = "services/discovery_service.lua", size_bytes = 2695, hash = "ded28ffe" },
@@ -78,9 +78,9 @@ return {
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 6652, hash = "d2ee389f" },
       { path = "nodes/energy/discovery_log.lua", size_bytes = 2433, hash = "4f723e27" },
-      { path = "nodes/energy/main.lua", size_bytes = 71322, hash = "d02c1f30", required_for = { "ENERGY" } },
+      { path = "nodes/energy/main.lua", size_bytes = 71589, hash = "52543d23", required_for = { "ENERGY" } },
       { path = "adapters/energy_storage.lua", size_bytes = 3220, hash = "65c983a9" },
-      { path = "adapters/induction_matrix.lua", size_bytes = 11932, hash = "955a614d" },
+      { path = "adapters/induction_matrix.lua", size_bytes = 14313, hash = "dcc53ab0" },
     },
     water = {
       { path = "nodes/water/config.lua", size_bytes = 3793, hash = "3b282920" },
