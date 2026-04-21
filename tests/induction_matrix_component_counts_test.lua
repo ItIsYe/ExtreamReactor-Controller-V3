@@ -14,6 +14,7 @@ local methods_by_name = {
     'getInstalledCells',
     'getInstalledProviders',
     'getInstalledPorts',
+    'getMatrixId',
     'getEnergy',
     'getMaxEnergy',
   },
@@ -77,6 +78,9 @@ _G.peripheral = {
     end
     if name == 'inductionPort_1' and method == 'getInstalledPorts' then
       return { 'p1', 'p2', 'p3' }
+    end
+    if name == 'inductionPort_1' and method == 'getMatrixId' then
+      return 'matrix-alpha'
     end
     if name == 'inductionPort_2' and method == 'getInstalledCells' then
       return { 'cell_x', 'cell_y' }, 'ok'
@@ -143,6 +147,9 @@ local matrix1 = adapter.detect('inductionPort_1', 'TEST')
 if not matrix1 then
   error('expected inductionPort_1 matrix adapter')
 end
+if matrix1.group_key ~= 'matrix_id:matrix-alpha' or matrix1.group_key_source ~= 'api:getMatrixId' then
+  error('expected matrix id API to drive logical grouping key for inductionPort_1')
+end
 local cells1 = matrix1.getCells()
 local providers1 = matrix1.getProviders()
 local ports1 = matrix1.getPorts()
@@ -204,6 +211,9 @@ end
 local matrix5 = adapter.detect('inductionPort_5', 'TEST')
 if not matrix5 then
   error('expected inductionPort_5 matrix adapter')
+end
+if matrix5.group_key ~= 'peripheral_name:inductionPort_5' or matrix5.group_key_source ~= 'peripheral_name_fallback' then
+  error('expected no-id fallback grouping per peripheral name')
 end
 local cells5, cells5_err = matrix5.getCells()
 if cells5 ~= nil or tostring(cells5_err) ~= 'nil_value:empty_payload' then

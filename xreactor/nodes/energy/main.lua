@@ -702,8 +702,9 @@ local function discover()
       for _, port in ipairs(group.ports or {}) do
         port_names[#port_names + 1] = tostring(port.name)
       end
-      utils.log("ENERGY", ("Matrix group %s via %s ports=%s"):format(
+      utils.log("ENERGY", ("Matrix group %s source=%s via %s ports=%s"):format(
         tostring(group.key),
+        tostring(group.key_source or "n/a"),
         tostring(group.representative and group.representative.name or "n/a"),
         table.concat(port_names, ",")
       ))
@@ -780,8 +781,11 @@ local function read_matrix_stats()
   end
 
   -- Matrix data is modeled matrix-zentriert (not port-zentriert):
-  -- multiple inductionPort_* belonging to the same logical matrix share one
-  -- representative reader and one cache key to avoid redundant matrix-wide reads.
+  -- ports are grouped only when we have a stable topology/identity key
+  -- (for example matrix id or bounds). A plain name prefix (inductionPort_*)
+  -- is intentionally not sufficient because separate physical matrices can
+  -- share the same prefix and would otherwise be merged incorrectly.
+  -- Each resulting group uses one representative reader and one cache key.
   local function append_metric_call(group, metric, duration_ms)
     if duration_ms < 80 then
       return
