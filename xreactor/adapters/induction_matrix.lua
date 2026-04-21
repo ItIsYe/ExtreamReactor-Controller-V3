@@ -322,11 +322,16 @@ function matrix.group_ports(entries)
   return out
 end
 
-function matrix.detect(name, log_prefix)
+function matrix.detect(name, log_prefix, opts)
+  opts = opts or {}
   if not name or not peripheral.isPresent(name) then
     return nil
   end
-  local ok, methods = pcall(peripheral.getMethods, name)
+  local methods = opts.methods
+  local ok = true
+  if type(methods) ~= "table" then
+    ok, methods = pcall(peripheral.getMethods, name)
+  end
   if not ok or type(methods) ~= "table" then
     if not ok then
       log_once(log_prefix, "methods:" .. tostring(name), "Matrix methods failed for " .. tostring(name) .. ": " .. tostring(methods))
@@ -354,12 +359,20 @@ function matrix.detect(name, log_prefix)
     "getPorts",
     "getInductionPorts"
   })
-  local group_key, group_key_source = matrix.build_group_key(name, methods, function(method)
-    if not peripheral.isPresent(name) then
-      return nil
-    end
-    return peripheral.call(name, method)
-  end)
+  -- Group identity is intentionally persistent: once a physical matrix has been
+  -- identified using stable topology/API cues (bounds/controller id), we reuse
+  -- that key until topology really changes. This keeps 4 physically separate
+  -- matrices separated even when a later discovery tick is slow.
+  local group_key = opts.group_key
+  local group_key_source = opts.group_key_source
+  if type(group_key) ~= "string" or group_key == "" then
+    group_key, group_key_source = matrix.build_group_key(name, methods, function(method)
+      if not peripheral.isPresent(name) then
+        return nil
+      end
+      return peripheral.call(name, method)
+    end)
+  end
 
   local function safe_component_call(method)
     if not method then

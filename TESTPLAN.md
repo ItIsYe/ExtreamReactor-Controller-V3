@@ -47,6 +47,10 @@
    - `tests/energy_matrix_payload_cache_regression_test.lua` schützt Matrix-Metrik-Cache und Slowdown-Diagnoselog (`Status payload slow matrix calls: ...`) gegen Regressionen.
    - `tests/energy_matrix_polling_pacing_regression_test.lua` schützt das kombinierte Call-/Zeitbudget sowie Heartbeat-Pump im Matrix-Poll-Loop gegen Regressionen.
    - `tests/induction_matrix_grouping_test.lua` schützt die Matrix-Gruppierung gegen falsches Prefix-Collapsing: ohne stabile API-Identität bleibt jeder Port eine eigene Matrix; mit stabiler Matrix-ID werden Ports korrekt zusammengeführt.
+8. **ENERGY Architektur-Stabilität (4-Matrix-Last)**:
+   - `tests/energy_architecture_stability_regression_test.lua` schützt die dauerhafte Trennung der Schichten: persistente Matrix-Identität, Topology-gated Cache-Invalidierung, dedizierter Storage-Sampling-Service und last-good Snapshot-Weitergabe.
+   - Unter Last prüfen, dass `DISCOVERY` keine zyklischen Voll-Invalidierungen auslöst, `MATRIX_SAMPLE` Komponentencalls budgetiert bleiben und Heartbeats weiterhin in konstantem Intervall gehen.
+   - HEALTH/Reasons dürfen bei verzögertem Sampling nicht sofort auf `NO_MATRIX`/`NO_STORAGE` kippen, solange last-good Snapshot + bekannte Bindings vorliegen.
 
 ## First start / bootstrap / role setup
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.

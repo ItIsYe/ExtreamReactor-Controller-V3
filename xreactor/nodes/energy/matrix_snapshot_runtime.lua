@@ -20,6 +20,7 @@ function runtime.new(opts)
     dynamic_cache = {},
     static_cache = {},
     component_diag = {},
+    component_cursor = 1,
     last_snapshot = {
       ts = 0,
       matrices = {},
@@ -231,7 +232,12 @@ function runtime:poll_due_metrics(now_ts, groups)
       local duration = now_ms() - started_at
       poll_spent_ms = poll_spent_ms + duration
       append_metric_call(job.group, job.metric, duration)
-      job.cache[job.metric] = value
+      if value ~= nil then
+        job.cache[job.metric] = value
+        job.cache["last_good_" .. job.metric] = value
+      elseif job.cache["last_good_" .. job.metric] ~= nil then
+        job.cache[job.metric] = job.cache["last_good_" .. job.metric]
+      end
       job.cache[job.metric .. "_err"] = err
       job.cache[job.metric .. "_ts"] = now_ts
       job.cache[job.metric .. "_last_ms"] = duration
@@ -270,7 +276,21 @@ end
 
 function runtime:poll_static_components(now_ts, groups)
   local component_poll_interval_ms = math.max(1, tonumber(self.config.matrix_component_poll_interval) or 30) * 1000
-  for _, group in ipairs(groups or {}) do
+  local component_call_budget = math.max(1, math.floor(tonumber(self.config.matrix_component_call_budget) or 2))
+  local component_time_budget_ms = math.max(50, math.floor(tonumber(self.config.matrix_component_time_budget_ms) or 400))
+  local ordered = groups or {}
+  if #ordered == 0 then
+    return
+  end
+  local calls = 0
+  local spent_ms = 0
+  local start_index = math.max(1, math.min(self.component_cursor or 1, #ordered))
+  local inspected = 0
+  local idx = start_index
+  while inspected < #ordered do
+    local group = ordered[idx]
+    inspected = inspected + 1
+    idx = (idx % #ordered) + 1
     local reader = group.representative
     local adapter = reader and reader.adapter
     local key = tostring(group.key)
@@ -280,7 +300,11 @@ function runtime:poll_static_components(now_ts, groups)
       self.static_cache[key] = cache
     end
     local should_poll = (cache.ts or 0) <= 0 or (now_ts - cache.ts) >= component_poll_interval_ms
-    if should_poll then
+    if should_poll and calls < component_call_budget and spent_ms < component_time_budget_ms then
+      if type(self.heartbeat_pump) == "function" then
+        self.heartbeat_pump(now_ms())
+      end
+      local started_at = now_ms()
       local cells, cells_err = read_metric(group, "cells", adapter and adapter.features and adapter.features.cells and adapter.getCells or nil, self.record_error)
       local providers, providers_err = read_metric(group, "providers", adapter and adapter.features and adapter.features.providers and adapter.getProviders or nil, self.record_error)
       local ports, ports_err = read_metric(group, "ports", adapter and adapter.features and adapter.features.ports and adapter.getPorts or nil, self.record_error)
@@ -295,8 +319,14 @@ function runtime:poll_static_components(now_ts, groups)
       else
         self:update_component_diag(group, adapter, "ports", nil, nil)
       end
+      calls = calls + 1
+      spent_ms = spent_ms + (now_ms() - started_at)
+      if type(self.heartbeat_pump) == "function" then
+        self.heartbeat_pump(now_ms())
+      end
     end
   end
+  self.component_cursor = idx
 end
 
 function runtime:rebuild_snapshot(now_ts, groups, diag)
@@ -307,8 +337,8 @@ function runtime:rebuild_snapshot(now_ts, groups, diag)
     local reader = group.representative
     local dynamic = self.dynamic_cache[tostring(group.key)] or {}
     local static = self.static_cache[tostring(group.key)] or {}
-    local stored = tonumber(dynamic.stored) or 0
-    local capacity = tonumber(dynamic.capacity) or stored
+    local stored = tonumber(dynamic.stored or dynamic.last_good_stored) or 0
+    local capacity = tonumber(dynamic.capacity or dynamic.last_good_capacity) or stored
     local input = dynamic.input
     local output = dynamic.output
     local port_names = {}
@@ -342,7 +372,7 @@ function runtime:rebuild_snapshot(now_ts, groups, diag)
       cells = tonumber(static.cells),
       providers = tonumber(static.providers),
       total_ports = tonumber(static.ports),
-      valid = dynamic.stored ~= nil and dynamic.capacity ~= nil,
+      valid = (dynamic.last_good_stored ~= nil or dynamic.stored ~= nil) and (dynamic.last_good_capacity ~= nil or dynamic.capacity ~= nil),
       freshness_ms = now_ts - math.min(tonumber(dynamic.stored_ts) or now_ts, tonumber(dynamic.capacity_ts) or now_ts),
       status = (dynamic.stored_err or dynamic.capacity_err) and "DEGRADED" or "OK"
     }
