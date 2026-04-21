@@ -6,6 +6,7 @@ local function read(path)
 end
 
 local source = read('xreactor/nodes/energy/main.lua')
+local runtime_source = read('xreactor/nodes/energy/matrix_snapshot_runtime.lua')
 
 if not source:find('matrix_metric_poll_interval', 1, true) then
   error('energy main config must include matrix_metric_poll_interval')
@@ -25,16 +26,16 @@ end
 if not source:find('matrix_metric_per_matrix_budget', 1, true) then
   error('energy main config must include matrix_metric_per_matrix_budget')
 end
-if not source:find('matrix_dynamic_snapshot_cache', 1, true) then
-  error('expected matrix dynamic snapshot cache to avoid duplicate matrix reads per tick')
+if not runtime_source:find('dynamic_cache', 1, true) then
+  error('expected matrix runtime dynamic cache to avoid duplicate matrix reads per tick')
 end
-if not source:find('matrix_static_snapshot_cache', 1, true) then
-  error('expected matrix static snapshot cache for low-cadence component reads')
+if not runtime_source:find('static_cache', 1, true) then
+  error('expected matrix runtime static cache for low-cadence component reads')
 end
 if not source:find('matrix_adapter.group_ports', 1, true) then
   error('expected logical matrix grouping so multiple ports do not duplicate matrix-wide reads')
 end
-if not source:find('Matrix metric polling throttled:', 1, true) then
+if not runtime_source:find('Matrix metric polling throttled:', 1, true) then
   error('expected matrix metric throttling diagnostics for expensive matrix calls')
 end
 if not source:find('per_matrix_budget=', 1, true) then
@@ -43,7 +44,7 @@ end
 if not source:find('time_budget_ms=', 1, true) then
   error('expected matrix metric throttling diagnostics to include time budget visibility')
 end
-if not source:find('job.cache[job.metric .. "_last_ms"]', 1, true) then
+if not runtime_source:find('job.cache[job.metric .. "_last_ms"]', 1, true) then
   error('expected matrix metric cache to track per-matrix/per-metric call duration for adaptive cadence')
 end
 if not source:find('Status payload slow matrix calls:', 1, true) then
