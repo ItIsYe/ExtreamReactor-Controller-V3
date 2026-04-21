@@ -54,6 +54,20 @@ function discovery_log.build_signature(snapshot)
     push("matrix:" .. row)
   end
 
+  local matrix_groups = snapshot.matrix_groups or {}
+  local group_rows = {}
+  for _, group in ipairs(matrix_groups) do
+    group_rows[#group_rows + 1] = table.concat({
+      tostring(group.key or "unknown"),
+      tostring(group.reader or "none"),
+      table.concat(sort_copy(group.ports or {}), ",")
+    }, ":")
+  end
+  table.sort(group_rows)
+  for _, row in ipairs(group_rows) do
+    push("matrix_group:" .. row)
+  end
+
   local registry = snapshot.registry_summary or {}
   push(("registry:%s/%s/%s"):format(
     tostring(registry.total or 0),
