@@ -3,6 +3,8 @@ from pathlib import Path
 source = Path("xreactor/nodes/energy/main.lua").read_text(encoding="utf-8")
 
 required_snippets = [
+    "local matrix_sampling_service = require(\"services.matrix_sampling_service\")",
+    "local matrix_snapshot_runtime = require(\"nodes.energy.matrix_snapshot_runtime\")",
     "local function send_presence_heartbeat",
     "local function minimal_presence_state",
     "comms:send_heartbeat(minimal_presence_state(ts_ms))",

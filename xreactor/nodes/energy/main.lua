@@ -34,7 +34,9 @@ local discovery_service = require("services.discovery_service")
 local telemetry_service = require("services.telemetry_service")
 local ui_service = require("services.ui_service")
 local control_service = require("services.control_service")
+local matrix_sampling_service = require("services.matrix_sampling_service")
 local discovery_log = require("nodes.energy.discovery_log")
+local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
@@ -299,6 +301,7 @@ local registry = registry_lib.new({
 
 local comms
 local services
+local matrix_runtime
 local energy_health = health.new({})
 local devices = {
   storages = {},
@@ -312,12 +315,6 @@ local devices = {
   peripheral_count = 0,
   last_error = nil,
   last_error_ts = nil,
-  matrix_component_diag = {},
-  -- Matrix snapshots are matrix-zentriert keyed by logical matrix key.
-  -- dynamic: frequently changing values (stored/capacity/input/output)
-  -- static: rarely changing values (cells/providers/ports)
-  matrix_static_snapshot_cache = {},
-  matrix_dynamic_snapshot_cache = {},
   discovery_failed = false,
   adapters = {
     storages = {},
@@ -644,6 +641,12 @@ local function discover()
     entry.bound = bound_lookup[entry.name] or false
   end
 
+  -- Keep the existing wrapped monitor object when the selected monitor name did
+  -- not change. Re-wrapping every discovery cycle invalidates UI dirty caches
+  -- and causes visible full redraw flicker on otherwise unchanged frames.
+  if monitor_name and monitor_name == devices.monitor_name and devices.monitor then
+    monitor = devices.monitor
+  end
   devices.monitor = monitor
   devices.monitor_name = monitor_name
   devices.storages = storages
@@ -656,8 +659,9 @@ local function discover()
   devices.registry_load_error = registry.state.load_error
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
-  devices.matrix_static_snapshot_cache = {}
-  devices.matrix_dynamic_snapshot_cache = {}
+  if matrix_runtime then
+    matrix_runtime:invalidate()
+  end
   status_payload_cache.ts = 0
   status_payload_cache.payload = nil
   ui_model_cache.ts = 0
@@ -771,312 +775,22 @@ end
 
 local function read_matrix_stats(opts)
   opts = opts or {}
-  local metric_poll_interval_ms = math.max(1, tonumber(config.matrix_metric_poll_interval) or 2.0) * 1000
-  local metric_call_budget = math.max(1, math.floor(tonumber(config.matrix_metric_call_budget) or 4))
-  local metric_time_budget_ms = math.max(100, math.floor(tonumber(config.matrix_metric_time_budget_ms) or 800))
-  local slow_call_ms = math.max(50, tonumber(config.matrix_metric_slow_call_ms) or 150)
-  local slow_poll_multiplier = math.max(1, tonumber(config.matrix_metric_slow_poll_multiplier) or 4.0)
-  local per_matrix_budget = math.max(1, math.floor(tonumber(config.matrix_metric_per_matrix_budget) or 1))
-  local component_poll_interval_ms = math.max(1, tonumber(config.matrix_component_poll_interval) or 30) * 1000
-  local now_ts = os.epoch("utc")
-  local matrices = {}
-  local total = { stored = 0, capacity = 0, input = 0, output = 0, has_flow = false }
-  local diag = {
-    metric_calls = {},
-    metric_totals = {},
-    throttled = nil
-  }
-  local matrix_groups = devices.matrix_groups or {}
-  if #matrix_groups == 0 then
-    matrix_groups = matrix_adapter.group_ports(devices.matrices or {})
-  end
-
-  -- Matrix data is modeled matrix-zentriert (not port-zentriert):
-  -- ports are grouped only when we have a stable topology/identity key
-  -- (for example matrix id or bounds). A plain name prefix (inductionPort_*)
-  -- is intentionally not sufficient because separate physical matrices can
-  -- share the same prefix and would otherwise be merged incorrectly.
-  -- Each resulting group uses one representative reader and one cache key.
-  local function append_metric_call(group, metric, duration_ms)
-    if duration_ms < 80 then
-      return
-    end
-    diag.metric_calls[#diag.metric_calls + 1] = {
-      matrix = tostring(group.key),
-      reader = tostring(group.reader and group.reader.name or "n/a"),
-      metric = tostring(metric),
-      ms = duration_ms
-    }
-    local metric_key = tostring(metric)
-    diag.metric_totals[metric_key] = (diag.metric_totals[metric_key] or 0) + duration_ms
-  end
-
-  local function read_matrix_metric(group, label, fn)
-    if not fn then
-      return nil, "missing method"
-    end
-    local value, err = fn()
-    if err then
-      local reader_name = group.reader and group.reader.name or group.key
-      record_error(tostring(reader_name) .. "." .. tostring(label), err)
-    end
-    return tonumber(value), err
-  end
-
-  local metric_jobs = {}
-  local metric_order = { "stored", "capacity", "input", "output" }
-  for _, group in ipairs(matrix_groups or {}) do
-    local reader = group.representative
-    local adapter = reader and reader.adapter
-    local cache_key = tostring(group.key)
-    local metric_cache = devices.matrix_dynamic_snapshot_cache[cache_key]
-    if type(metric_cache) ~= "table" then
-      metric_cache = {}
-      devices.matrix_dynamic_snapshot_cache[cache_key] = metric_cache
-    end
-    group.reader = reader
-    for _, metric in ipairs(metric_order) do
-      local getter = metric == "stored" and (adapter and adapter.getStored)
-        or metric == "capacity" and (adapter and adapter.getCapacity)
-        or metric == "input" and (adapter and adapter.getInput)
-        or metric == "output" and (adapter and adapter.getOutput)
-        or nil
-      if getter then
-        local last_ts = tonumber(metric_cache[metric .. "_ts"]) or 0
-        local last_duration = tonumber(metric_cache[metric .. "_last_ms"]) or 0
-        local cadence_multiplier = last_duration >= slow_call_ms and slow_poll_multiplier or 1
-        local effective_interval_ms = math.floor(metric_poll_interval_ms * cadence_multiplier)
-        local due = last_ts <= 0 or (now_ts - last_ts) >= effective_interval_ms
-        metric_jobs[#metric_jobs + 1] = {
-          group = group,
-          metric = metric,
-          fn = getter,
-          cache = metric_cache,
-          due = due,
-          last_ms = last_duration
-        }
-      end
-    end
-  end
-
-  if #metric_jobs > 0 then
-    local due_jobs = {}
-    for _, job in ipairs(metric_jobs) do
-      if job.due then
-        due_jobs[#due_jobs + 1] = job
-      end
-    end
-    table.sort(due_jobs, function(a, b)
-      if (a.last_ms or 0) ~= (b.last_ms or 0) then
-        return (a.last_ms or 0) < (b.last_ms or 0)
-      end
-      return tostring(a.group.key) < tostring(b.group.key)
-    end)
-    local to_poll = math.min(metric_call_budget, #due_jobs)
-    local polled = 0
-    local poll_spent_ms = 0
-    local polled_per_matrix = {}
-    for _, job in ipairs(due_jobs) do
-      if polled >= to_poll then
-        break
-      end
-      if poll_spent_ms >= metric_time_budget_ms then
-        break
-      end
-      local matrix_key = tostring(job.group.key)
-      local used_budget = polled_per_matrix[matrix_key] or 0
-      if used_budget < per_matrix_budget then
-        run_heartbeat_pump(now_ms())
-        polled_per_matrix[matrix_key] = used_budget + 1
-        polled = polled + 1
-        local call_started_at = now_ms()
-        local value, err = read_matrix_metric(job.group, job.metric, job.fn)
-        local call_duration = now_ms() - call_started_at
-        poll_spent_ms = poll_spent_ms + call_duration
-        append_metric_call(job.group, job.metric, call_duration)
-        job.cache[job.metric] = value
-        job.cache[job.metric .. "_err"] = err
-        job.cache[job.metric .. "_ts"] = now_ts
-        job.cache[job.metric .. "_last_ms"] = call_duration
-        run_heartbeat_pump(now_ms())
-      end
-    end
-    if #due_jobs > polled and debug_enabled then
-      diag.throttled = {
-        due = #due_jobs,
-        polled = polled,
-        deferred = #due_jobs - polled,
-        per_matrix_budget = per_matrix_budget,
-        time_budget_ms = metric_time_budget_ms,
-        spent_ms = poll_spent_ms
-      }
-      utils.log(
-        "ENERGY",
-        ("Matrix metric polling throttled: due=%d budget=%d deferred=%d per_matrix_budget=%d time_budget_ms=%d spent_ms=%d"):format(
-          #due_jobs,
-          polled,
-          #due_jobs - polled,
-          per_matrix_budget,
-          metric_time_budget_ms,
-          poll_spent_ms
-        )
-      )
-    end
-  end
-
-  local function normalize_reason(reason)
-    if reason == nil then
-      return nil
-    end
-    local text = tostring(reason)
-    if text == "missing_method" or text == "missing method" then
-      return "api_variant"
-    end
-    if text:find("^nil_value", 1) then
-      return "temporary_not_ready"
-    end
-    if text:find("^call_failed:", 1) then
-      return "temporary_read_error"
-    end
-    if text:find("^unsupported_value:", 1) then
-      return "unsupported_value"
-    end
-    return "temporary_read_error"
-  end
-
-  local function update_component_diag(group, adapter, metric, reason, detail)
-    local key = tostring(group.key) .. ":" .. tostring(metric)
-    local bucket = devices.matrix_component_diag
-    local previous = bucket[key]
-    if reason == nil then
-      if previous then
-        bucket[key] = nil
-        if debug_enabled then
-          utils.log("ENERGY", ("Matrix component %s recovered (%s)"):format(tostring(metric), tostring(group.key)), "INFO")
-        end
-      end
-      return
-    end
-    local stamp = reason .. ":" .. tostring(detail)
-    if previous == stamp then
-      return
-    end
-    bucket[key] = stamp
-    if not debug_enabled then
-      return
-    end
-    local method_map = adapter and adapter.getComponentMethods and adapter.getComponentMethods() or {}
-    local method_name = method_map and method_map[metric]
-    utils.log("ENERGY", ("Matrix component %s unavailable (%s reader=%s): reason=%s detail=%s method=%s"):format(
-      tostring(metric),
-      tostring(group.key),
-      tostring(group.reader and group.reader.name or "n/a"),
-      tostring(reason),
-      tostring(detail),
-      tostring(method_name or "n/a")
-    ), "WARN")
-  end
-
-  for _, group in ipairs(matrix_groups or {}) do
-    local reader = group.representative
-    local adapter = reader and reader.adapter
-    local cache_key = tostring(group.key)
-    local metric_cache = devices.matrix_dynamic_snapshot_cache[cache_key] or {}
-
-    local function read_cached_metric(metric)
-      return metric_cache[metric], metric_cache[metric .. "_err"]
-    end
-
-    local stored, stored_err = read_cached_metric("stored")
-    local capacity, cap_err = read_cached_metric("capacity")
-    local input = select(1, read_cached_metric("input"))
-    local output = select(1, read_cached_metric("output"))
-    stored = stored or 0
-    capacity = capacity or stored
-
-    local static_cache = devices.matrix_static_snapshot_cache[cache_key]
-    if type(static_cache) ~= "table" then
-      static_cache = {}
-      devices.matrix_static_snapshot_cache[cache_key] = static_cache
-    end
-    local should_poll_static = (static_cache.ts or 0) <= 0 or (now_ts - static_cache.ts) >= component_poll_interval_ms
-
-    local function read_component(metric, enabled, fn)
-      if not enabled then
-        static_cache[metric] = nil
-        static_cache[metric .. "_err"] = nil
-        return nil, nil
-      end
-      if should_poll_static then
-        local value, err = read_matrix_metric(group, metric, fn)
-        static_cache[metric] = value
-        static_cache[metric .. "_err"] = err
-      end
-      return static_cache[metric], static_cache[metric .. "_err"]
-    end
-
-    local cells, cells_err = read_component("cells", adapter and adapter.features and adapter.features.cells, adapter and adapter.getCells or nil)
-    local providers, providers_err = read_component("providers", adapter and adapter.features and adapter.features.providers, adapter and adapter.getProviders or nil)
-    local ports, ports_err = read_component("ports", adapter and adapter.features and adapter.features.ports, adapter and adapter.getPorts or nil)
-    if should_poll_static then
-      static_cache.ts = now_ts
-    end
-
-    update_component_diag(group, adapter, "cells", normalize_reason(cells_err), cells_err)
-    update_component_diag(group, adapter, "providers", normalize_reason(providers_err), providers_err)
-    if adapter and adapter.features and adapter.features.ports then
-      update_component_diag(group, adapter, "ports", normalize_reason(ports_err), ports_err)
-    else
-      update_component_diag(group, adapter, "ports", nil, nil)
-    end
-
-    if input ~= nil or output ~= nil then
-      total.has_flow = true
-      total.input = total.input + (input or 0)
-      total.output = total.output + (output or 0)
-    end
-    total.stored = total.stored + stored
-    total.capacity = total.capacity + capacity
-
-    local label = reader and (reader.alias or reader.name) or tostring(group.key)
-    local port_names = {}
-    for _, port in ipairs(group.ports or {}) do
-      port_names[#port_names + 1] = port.name
-    end
-
-    matrices[#matrices + 1] = {
-      id = group.key,
-      key = group.key,
-      name = reader and reader.name or group.key,
-      alias = label,
-      label = label,
-      reader = reader and reader.name or nil,
-      ports = port_names,
-      port_count = #port_names,
-      stored = stored,
-      capacity = capacity,
-      percent = capacity > 0 and (stored / capacity) or 0,
-      input = input,
-      output = output,
-      cells = cells,
-      providers = providers,
-      total_ports = ports,
-      ok = not (stored_err or cap_err),
-      status = (stored_err or cap_err) and "DEGRADED" or "OK"
+  local snapshot_max_age_ms = tonumber(opts.max_age_ms) or math.max(3000, math.floor((tonumber(config.status_interval) or 5) * 1000))
+  if not matrix_runtime then
+    return {
+      matrices = {},
+      total = { stored = 0, capacity = 0, percent = 0, input = nil, output = nil },
+      diag = { metric_calls = {}, metric_totals = {}, throttled = nil },
+      stale = true
     }
   end
-
-  local percent = total.capacity > 0 and (total.stored / total.capacity) or 0
+  local snapshot = matrix_runtime:get_snapshot(snapshot_max_age_ms)
   return {
-    matrices = matrices,
-    total = {
-      stored = total.stored,
-      capacity = total.capacity,
-      percent = percent,
-      input = total.has_flow and total.input or nil,
-      output = total.has_flow and total.output or nil
-    },
-    diag = diag
+    matrices = snapshot.matrices or {},
+    total = snapshot.total or { stored = 0, capacity = 0, percent = 0, input = nil, output = nil },
+    diag = snapshot.diag or { metric_calls = {}, metric_totals = {}, throttled = nil },
+    stale = snapshot.stale,
+    freshness_ms = snapshot.freshness_ms
   }
 end
 
@@ -1101,6 +815,8 @@ local function build_status_payload_uncached(opts)
   energy.bound_storage_names = devices.bound_storage_names or {}
   energy.matrices = matrix.matrices
   energy.total = matrix.total
+  energy.matrix_snapshot_freshness_ms = matrix.freshness_ms
+  energy.matrix_snapshot_stale = matrix.stale == true
   energy.matrix_present = matrix_bound > 0
   energy.matrix_energy = matrix.total.stored
   energy.matrix_capacity = matrix.total.capacity
@@ -1723,6 +1439,16 @@ local function init()
       end
     end
   })
+  matrix_runtime = matrix_snapshot_runtime.new({
+    log_prefix = "ENERGY",
+    config = config,
+    debug_enabled = debug_enabled,
+    get_groups = function()
+      return devices.matrix_groups or {}
+    end,
+    heartbeat_pump = run_heartbeat_pump,
+    record_error = record_error
+  })
   services:add(comms)
   services:add(discovery_service.new({
     name = "DISCOVERY",
@@ -1734,6 +1460,11 @@ local function init()
     update_health = function(ok, reason)
       devices.discovery_failed = not ok
     end
+  }))
+  services:add(matrix_sampling_service.new({
+    name = "MATRIX_SAMPLE",
+    interval = 0.25,
+    runtime = matrix_runtime
   }))
   services:add(telemetry_service.new({
     name = "TELEMETRY",
