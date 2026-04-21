@@ -37,6 +37,7 @@ local control_service = require("services.control_service")
 local matrix_sampling_service = require("services.matrix_sampling_service")
 local discovery_log = require("nodes.energy.discovery_log")
 local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
+local matrix_topology_cache = require("nodes.energy.matrix_topology_cache")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
@@ -49,7 +50,8 @@ local DEFAULT_CONFIG = {
   matrix_names = {}, -- Optional list of matrix peripheral names (legacy override).
   matrix_aliases = {}, -- Optional mapping of matrix peripheral name -> display label.
   cubes = {}, -- Optional list of energy cube names (legacy override).
-  scan_interval = 15, -- Seconds between peripheral discovery scans.
+  scan_interval = 2, -- Seconds between lightweight discovery checks (heavy discovery runs only on topology change/forced interval).
+  discovery_force_rescan_interval = 300, -- Defensive full discovery interval (seconds) even without observed topology changes.
   matrix_metric_poll_interval = 2.0, -- Seconds between expensive matrix energy metric reads (stored/capacity/input/output).
   matrix_metric_call_budget = 4, -- Max expensive matrix metric peripheral calls per payload build to avoid long blocking ticks.
   matrix_metric_time_budget_ms = 800, -- Max cumulative time spent on expensive matrix metric calls per payload build.
@@ -147,6 +149,16 @@ local function validate_config(config_values, defaults)
   if type(config_values.scan_interval) ~= "number" or config_values.scan_interval <= 0 then
     config_values.scan_interval = defaults.scan_interval
     add_config_warning("scan_interval missing/invalid; defaulting to " .. tostring(defaults.scan_interval))
+  elseif config_values.scan_interval > 60 then
+    config_values.scan_interval = 60
+    add_config_warning("scan_interval too high; clamping to 60s")
+  end
+  if type(config_values.discovery_force_rescan_interval) ~= "number" or config_values.discovery_force_rescan_interval <= 0 then
+    config_values.discovery_force_rescan_interval = defaults.discovery_force_rescan_interval
+    add_config_warning("discovery_force_rescan_interval missing/invalid; defaulting to " .. tostring(defaults.discovery_force_rescan_interval))
+  elseif config_values.discovery_force_rescan_interval > 3600 then
+    config_values.discovery_force_rescan_interval = 3600
+    add_config_warning("discovery_force_rescan_interval too high; clamping to 3600s")
   end
   if type(config_values.matrix_metric_poll_interval) ~= "number" or config_values.matrix_metric_poll_interval <= 0 then
     config_values.matrix_metric_poll_interval = defaults.matrix_metric_poll_interval
@@ -318,6 +330,7 @@ local registry = registry_lib.new({
 local comms
 local services
 local matrix_runtime
+local topology_cache
 local energy_health = health.new({})
 local devices = {
   storages = {},
@@ -494,6 +507,44 @@ local function matrix_group_signature(groups)
   end
   table.sort(rows)
   return table.concat(rows, ";")
+end
+
+local function reconcile_matrix_groups(previous_groups, next_groups)
+  local previous_by_key = {}
+  for _, group in ipairs(previous_groups or {}) do
+    previous_by_key[tostring(group.key)] = group
+  end
+  local stable = {}
+  for _, next_group in ipairs(next_groups or {}) do
+    local key = tostring(next_group.key)
+    local existing = previous_by_key[key]
+    if existing then
+      existing.key_source = next_group.key_source
+      local ports_by_name = {}
+      for _, port in ipairs(existing.ports or {}) do
+        ports_by_name[tostring(port.name)] = port
+      end
+      local rebuilt_ports = {}
+      local representative
+      for _, next_port in ipairs(next_group.ports or {}) do
+        local port = ports_by_name[tostring(next_port.name)] or {}
+        port.id = next_port.id
+        port.alias = next_port.alias
+        port.name = next_port.name
+        port.adapter = next_port.adapter
+        rebuilt_ports[#rebuilt_ports + 1] = port
+        if next_group.representative and next_group.representative.name == port.name then
+          representative = port
+        end
+      end
+      existing.ports = rebuilt_ports
+      existing.representative = representative or rebuilt_ports[1] or nil
+      stable[#stable + 1] = existing
+    else
+      stable[#stable + 1] = next_group
+    end
+  end
+  return stable
 end
 
 local function discover()
@@ -686,6 +737,14 @@ local function discover()
     })
   end
   local matrix_groups = matrix_adapter.group_ports(matrices)
+  local next_topology_signature = matrix_group_signature(matrix_groups)
+  local topology_changed = next_topology_signature ~= (devices.topology_signature or "")
+  if not topology_changed then
+    -- Keep the existing logical matrix objects stable when topology did not
+    -- change. This avoids rebuilding matrix groups in the hot path and keeps
+    -- snapshot/UI identity stable even while adapters are refreshed.
+    matrix_groups = reconcile_matrix_groups(devices.matrix_groups or {}, matrix_groups)
+  end
 
   local bound_lookup = {}
   for _, storage in ipairs(storages) do
@@ -717,20 +776,23 @@ local function discover()
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
   devices.matrix_identity_cache = next_matrix_identity_cache
-  local next_topology_signature = matrix_group_signature(matrix_groups)
-  local topology_changed = next_topology_signature ~= (devices.topology_signature or "")
   devices.topology_signature = next_topology_signature
+  if topology_cache then
+    topology_cache:record_discovery(devices.last_scan_ts, next_topology_signature)
+  end
   if matrix_runtime and topology_changed then
     -- Invalidate matrix sampling cache only when matrix topology/grouping really
     -- changed. Invalidating on every discovery tick caused false "missing" data
     -- windows and visible UI/master flapping under load.
     matrix_runtime:invalidate()
   end
-  status_payload_cache.ts = 0
-  status_payload_cache.payload = nil
-  ui_model_cache.ts = 0
-  ui_model_cache.model = nil
-  ui_model_cache.key = nil
+  if topology_changed then
+    status_payload_cache.ts = 0
+    status_payload_cache.payload = nil
+    ui_model_cache.ts = 0
+    ui_model_cache.model = nil
+    ui_model_cache.key = nil
+  end
 
   local peripheral_types = {}
   for _, name in ipairs(names) do
@@ -772,7 +834,7 @@ local function discover()
     matrix_groups = matrix_group_snapshot,
     registry_summary = devices.registry_summary
   })
-  if debug_enabled and #matrix_groups > 0 then
+  if debug_enabled and topology_changed and #matrix_groups > 0 then
     for _, group in ipairs(matrix_groups) do
       local port_names = {}
       for _, port in ipairs(group.ports or {}) do
@@ -1544,6 +1606,10 @@ local function init()
     heartbeat_pump = run_heartbeat_pump,
     record_error = record_error
   })
+  topology_cache = matrix_topology_cache.new({
+    log_prefix = "ENERGY",
+    forced_rescan_interval_s = config.discovery_force_rescan_interval
+  })
   services:add(comms)
   services:add(discovery_service.new({
     name = "DISCOVERY",
@@ -1551,6 +1617,15 @@ local function init()
     registry = registry,
     discover = discover,
     interval = config.scan_interval,
+    -- Discovery must stay out of the hot path: we only execute full discovery
+    -- when topology changed (peripheral attach/detach/signature drift) or when
+    -- a defensive forced-rescan interval elapsed.
+    should_discover = function(_, ts, event, due)
+      if not topology_cache then
+        return due
+      end
+      return topology_cache:should_discover(ts, event, due)
+    end,
     managed_registry = false,
     update_health = function(ok, reason)
       devices.discovery_failed = not ok

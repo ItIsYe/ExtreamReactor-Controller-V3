@@ -235,6 +235,7 @@ function runtime:poll_due_metrics(now_ts, groups)
       if value ~= nil then
         job.cache[job.metric] = value
         job.cache["last_good_" .. job.metric] = value
+        job.cache.last_good_ts = now_ts
       elseif job.cache["last_good_" .. job.metric] ~= nil then
         job.cache[job.metric] = job.cache["last_good_" .. job.metric]
       end
@@ -332,6 +333,7 @@ end
 function runtime:rebuild_snapshot(now_ts, groups, diag)
   local matrices = {}
   local total = { stored = 0, capacity = 0, input = 0, output = 0, has_flow = false }
+  local stale_after_ms = math.max(1000, math.floor((tonumber(self.config.matrix_metric_poll_interval) or 2.0) * 4000))
 
   for _, group in ipairs(groups or {}) do
     local reader = group.representative
@@ -341,6 +343,14 @@ function runtime:rebuild_snapshot(now_ts, groups, diag)
     local capacity = tonumber(dynamic.capacity or dynamic.last_good_capacity) or stored
     local input = dynamic.input
     local output = dynamic.output
+    local stored_ts = tonumber(dynamic.stored_ts) or 0
+    local capacity_ts = tonumber(dynamic.capacity_ts) or 0
+    local metric_ts = math.min(stored_ts > 0 and stored_ts or now_ts, capacity_ts > 0 and capacity_ts or now_ts)
+    local has_live_sample = stored_ts > 0 or capacity_ts > 0
+    local has_last_good = (dynamic.last_good_stored ~= nil) and (dynamic.last_good_capacity ~= nil)
+    local freshness_ms = has_live_sample and math.max(0, now_ts - metric_ts) or nil
+    local missing = not has_live_sample and not has_last_good
+    local stale = has_live_sample and freshness_ms ~= nil and freshness_ms > stale_after_ms
     local port_names = {}
     for _, port in ipairs(group.ports or {}) do
       port_names[#port_names + 1] = port.name
@@ -372,9 +382,22 @@ function runtime:rebuild_snapshot(now_ts, groups, diag)
       cells = tonumber(static.cells),
       providers = tonumber(static.providers),
       total_ports = tonumber(static.ports),
-      valid = (dynamic.last_good_stored ~= nil or dynamic.stored ~= nil) and (dynamic.last_good_capacity ~= nil or dynamic.capacity ~= nil),
-      freshness_ms = now_ts - math.min(tonumber(dynamic.stored_ts) or now_ts, tonumber(dynamic.capacity_ts) or now_ts),
-      status = (dynamic.stored_err or dynamic.capacity_err) and "DEGRADED" or "OK"
+      -- Snapshot contract for telemetry/UI:
+      -- missing => no successful sample yet, stale => last sample too old,
+      -- valid => safe last-good state exists for stable rendering/reporting.
+      valid = has_last_good or (dynamic.stored ~= nil and dynamic.capacity ~= nil),
+      last_good_state = has_last_good and {
+        stored = tonumber(dynamic.last_good_stored) or 0,
+        capacity = tonumber(dynamic.last_good_capacity) or 0,
+        input = tonumber(dynamic.last_good_input),
+        output = tonumber(dynamic.last_good_output),
+        ts = tonumber(dynamic.last_good_ts)
+      } or nil,
+      sample_ts = has_live_sample and metric_ts or nil,
+      freshness_ms = freshness_ms,
+      missing = missing,
+      stale = stale,
+      status = missing and "MISSING" or (stale and "STALE" or ((dynamic.stored_err or dynamic.capacity_err) and "DEGRADED" or "OK"))
     }
   end
 
