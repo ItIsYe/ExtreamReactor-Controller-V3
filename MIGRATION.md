@@ -38,6 +38,7 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 - ENERGY sendet Heartbeats jetzt robuster bei hoher Last:
   - Matrix-Energiemetriken (`stored/capacity/input/output`) werden standardmäßig nur noch alle `2.0s` gepollt (`matrix_metric_poll_interval`), statt bei jedem UI-/Telemetry-Statusaufbau.
   - Neue Schutzschranke `matrix_metric_call_budget` (Default `4`) begrenzt teure Matrix-Einzelabfragen pro Payload-Build; fällige Reads werden fair über mehrere Ticks verteilt statt in einem Block ausgeführt.
+  - Ergänzend begrenzt `matrix_metric_time_budget_ms` (Default `800`) die gesamte Blockierzeit pro Payload-Build; sobald das Zeitbudget erreicht ist, werden weitere fällige Matrix-Reads sauber auf spätere Ticks verschoben.
   - UI und TELEMETRY teilen dadurch denselben Matrix-Metrik-Cache pro Matrix; doppelte teure Reads im Sekundentakt werden vermieden.
   - Bei aktivem Budget-Limit bleibt Diagnose sichtbar (`Matrix metric polling throttled: due=... budget=... deferred=...`) und die bisherigen Slow-Call-Details (`Status payload slow matrix calls: ...`) bleiben erhalten.
   - Bei langsamen Statuspayloads werden die konkret langsamsten Matrix-Calls mitgeloggt (`Status payload slow matrix calls: <matrix>.<metric>=...ms`) für schnellere Engpass-Lokalisierung.
@@ -52,6 +53,7 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
   - Heartbeat/Presence ist jetzt hart vom schweren Servicepfad getrennt:
     - minimale Presence-Payload (`ts`, `node_id`, `role`) ohne Matrix/UI-Daten,
     - eigener Heartbeat-Pump (`run_heartbeat_pump`) auf Timerpfad und zusätzlich vor/nach jedem Service im Service-Manager,
+    - zusätzlicher Heartbeat-Pump direkt innerhalb teurer Matrix-Poll-Loops, damit lange Peripheral-Calls Heartbeats nicht mehr um mehrere Sekunden verzögern,
     - unmittelbares Ausleiten über `comms:tick(ts)` direkt nach `comms:send_heartbeat(...)`, damit Heartbeats nicht auf den nächsten schweren Gesamttick warten.
 - MASTER-Monitor-Scale wird jetzt pro Monitor-Name zwischengespeichert (statt pro temporärem Wrap-Objekt), damit periodische Monitor-Scans keine identischen `setTextScale`-Wiederholungen und keinen Log-Spam mehr auslösen.
 - Wenn ein Monitor wirklich verschwindet und später neu erkannt/rebound wird, wird der Cache für diesen Namen invalidiert und die Scale beim Rebind wieder korrekt gesetzt.

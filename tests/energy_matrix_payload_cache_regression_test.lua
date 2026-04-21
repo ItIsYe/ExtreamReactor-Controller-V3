@@ -13,6 +13,9 @@ end
 if not source:find('matrix_metric_call_budget', 1, true) then
   error('energy main config must include matrix_metric_call_budget')
 end
+if not source:find('matrix_metric_time_budget_ms', 1, true) then
+  error('energy main config must include matrix_metric_time_budget_ms')
+end
 if not source:find('matrix_metric_slow_call_ms', 1, true) then
   error('energy main config must include matrix_metric_slow_call_ms')
 end
@@ -36,6 +39,9 @@ if not source:find('Matrix metric polling throttled:', 1, true) then
 end
 if not source:find('per_matrix_budget=', 1, true) then
   error('expected matrix metric throttling diagnostics to include per-matrix budget visibility')
+end
+if not source:find('time_budget_ms=', 1, true) then
+  error('expected matrix metric throttling diagnostics to include time budget visibility')
 end
 if not source:find('job.cache[job.metric .. "_last_ms"]', 1, true) then
   error('expected matrix metric cache to track per-matrix/per-metric call duration for adaptive cadence')

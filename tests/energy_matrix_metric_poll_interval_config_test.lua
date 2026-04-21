@@ -12,6 +12,12 @@ end
 if config.matrix_metric_call_budget <= 0 then
   error('matrix_metric_call_budget must be > 0')
 end
+if type(config.matrix_metric_time_budget_ms) ~= 'number' then
+  error('energy config must expose matrix_metric_time_budget_ms')
+end
+if config.matrix_metric_time_budget_ms < 100 then
+  error('matrix_metric_time_budget_ms must be >= 100')
+end
 if type(config.matrix_metric_slow_call_ms) ~= 'number' then
   error('energy config must expose matrix_metric_slow_call_ms')
 end

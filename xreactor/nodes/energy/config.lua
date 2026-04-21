@@ -10,6 +10,7 @@ local CONFIG = {
   DEFAULT_SCAN_INTERVAL = 15, -- Seconds between discovery scans.
   DEFAULT_MATRIX_METRIC_POLL_INTERVAL = 2.0, -- Seconds between expensive matrix energy metric reads.
   DEFAULT_MATRIX_METRIC_CALL_BUDGET = 4, -- Max expensive matrix metric calls per status build tick.
+  DEFAULT_MATRIX_METRIC_TIME_BUDGET_MS = 800, -- Max cumulative time spent on expensive matrix metric reads per status build.
   DEFAULT_MATRIX_METRIC_SLOW_CALL_MS = 150, -- Calls slower than this are considered outliers and get a slower cadence.
   DEFAULT_MATRIX_METRIC_SLOW_POLL_MULTIPLIER = 4.0, -- Extra poll cadence multiplier for outlier matrix metric calls.
   DEFAULT_MATRIX_METRIC_PER_MATRIX_BUDGET = 1, -- Max expensive matrix metric calls per matrix per tick.
@@ -96,6 +97,7 @@ return {
   scan_interval = CONFIG.DEFAULT_SCAN_INTERVAL,
   matrix_metric_poll_interval = CONFIG.DEFAULT_MATRIX_METRIC_POLL_INTERVAL,
   matrix_metric_call_budget = CONFIG.DEFAULT_MATRIX_METRIC_CALL_BUDGET,
+  matrix_metric_time_budget_ms = CONFIG.DEFAULT_MATRIX_METRIC_TIME_BUDGET_MS,
   matrix_metric_slow_call_ms = CONFIG.DEFAULT_MATRIX_METRIC_SLOW_CALL_MS,
   matrix_metric_slow_poll_multiplier = CONFIG.DEFAULT_MATRIX_METRIC_SLOW_POLL_MULTIPLIER,
   matrix_metric_per_matrix_budget = CONFIG.DEFAULT_MATRIX_METRIC_PER_MATRIX_BUDGET,
