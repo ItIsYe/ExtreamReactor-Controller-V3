@@ -15,6 +15,8 @@ local CONFIG = {
   DEFAULT_MATRIX_METRIC_SLOW_POLL_MULTIPLIER = 4.0, -- Extra poll cadence multiplier for outlier matrix metric calls.
   DEFAULT_MATRIX_METRIC_PER_MATRIX_BUDGET = 1, -- Max expensive matrix metric calls per matrix per tick.
   DEFAULT_MATRIX_COMPONENT_POLL_INTERVAL = 30, -- Seconds between matrix component count reads.
+  DEFAULT_MATRIX_COMPONENT_CALL_BUDGET = 2, -- Max matrix component calls per sampling tick.
+  DEFAULT_MATRIX_COMPONENT_TIME_BUDGET_MS = 400, -- Max time spent on matrix component calls per tick.
   DEFAULT_UI_REFRESH_INTERVAL = 1.0, -- Seconds between monitor UI refreshes.
   DEFAULT_UI_SCALE = 0.5, -- Monitor text scale for ENERGY node UI.
   DEFAULT_MONITOR_PREFERRED = nil, -- Optional monitor name to pin.
@@ -102,6 +104,8 @@ return {
   matrix_metric_slow_poll_multiplier = CONFIG.DEFAULT_MATRIX_METRIC_SLOW_POLL_MULTIPLIER,
   matrix_metric_per_matrix_budget = CONFIG.DEFAULT_MATRIX_METRIC_PER_MATRIX_BUDGET,
   matrix_component_poll_interval = CONFIG.DEFAULT_MATRIX_COMPONENT_POLL_INTERVAL,
+  matrix_component_call_budget = CONFIG.DEFAULT_MATRIX_COMPONENT_CALL_BUDGET,
+  matrix_component_time_budget_ms = CONFIG.DEFAULT_MATRIX_COMPONENT_TIME_BUDGET_MS,
   ui_refresh_interval = CONFIG.DEFAULT_UI_REFRESH_INTERVAL,
   ui_scale = CONFIG.DEFAULT_UI_SCALE,
   monitor = {

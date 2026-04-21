@@ -57,6 +57,8 @@ local DEFAULT_CONFIG = {
   matrix_metric_slow_poll_multiplier = 4.0, -- Extra cadence multiplier for expensive outlier matrix metric calls.
   matrix_metric_per_matrix_budget = 1, -- Max expensive matrix metric calls per matrix/per payload build so one port cannot dominate a tick.
   matrix_component_poll_interval = 30, -- Seconds between matrix component count reads (cells/providers/ports).
+  matrix_component_call_budget = 2, -- Max matrix component count calls per sampling tick to avoid periodic spikes.
+  matrix_component_time_budget_ms = 400, -- Max time budget for matrix component calls per sampling tick.
   ui_refresh_interval = 1.0, -- Seconds between monitor UI refreshes.
   ui_scale = 0.5, -- Monitor text scale for the ENERGY node UI.
   monitor = {
@@ -195,6 +197,20 @@ local function validate_config(config_values, defaults)
     config_values.matrix_component_poll_interval = 300
     add_config_warning("matrix_component_poll_interval too high; clamping to 300s")
   end
+  if type(config_values.matrix_component_call_budget) ~= "number" or config_values.matrix_component_call_budget <= 0 then
+    config_values.matrix_component_call_budget = defaults.matrix_component_call_budget
+    add_config_warning("matrix_component_call_budget missing/invalid; defaulting to " .. tostring(defaults.matrix_component_call_budget))
+  elseif config_values.matrix_component_call_budget > 12 then
+    config_values.matrix_component_call_budget = 12
+    add_config_warning("matrix_component_call_budget too high; clamping to 12")
+  end
+  if type(config_values.matrix_component_time_budget_ms) ~= "number" or config_values.matrix_component_time_budget_ms < 50 then
+    config_values.matrix_component_time_budget_ms = defaults.matrix_component_time_budget_ms
+    add_config_warning("matrix_component_time_budget_ms missing/invalid; defaulting to " .. tostring(defaults.matrix_component_time_budget_ms))
+  elseif config_values.matrix_component_time_budget_ms > 5000 then
+    config_values.matrix_component_time_budget_ms = 5000
+    add_config_warning("matrix_component_time_budget_ms too high; clamping to 5000ms")
+  end
   if type(config_values.ui_refresh_interval) ~= "number" or config_values.ui_refresh_interval <= 0 then
     config_values.ui_refresh_interval = defaults.ui_refresh_interval
     add_config_warning("ui_refresh_interval missing/invalid; defaulting to " .. tostring(defaults.ui_refresh_interval))
@@ -326,7 +342,9 @@ local devices = {
   discovery_signature = nil,
   proto_mismatch = false,
   last_command = nil,
-  last_command_ts = nil
+  last_command_ts = nil,
+  matrix_identity_cache = {},
+  topology_signature = nil
 }
 local master_alerts = {}
 local last_heartbeat = 0
@@ -343,6 +361,12 @@ local ui_state = {
 local master_seen_ts = nil
 local status_payload_cache = { ts = 0, payload = nil }
 local ui_model_cache = { ts = 0, model = nil, key = nil }
+local storage_snapshot = {
+  ts = 0,
+  stale = true,
+  stores = {},
+  total = { stored = 0, capacity = 0, input = 0, output = 0 }
+}
 
 local function now_ms()
   return os.epoch("utc")
@@ -454,6 +478,24 @@ local function record_error(context, err)
   devices.last_error_ts = os.epoch("utc")
 end
 
+local function matrix_group_signature(groups)
+  local rows = {}
+  for _, group in ipairs(groups or {}) do
+    local ports = {}
+    for _, port in ipairs(group.ports or {}) do
+      ports[#ports + 1] = tostring(port.name)
+    end
+    table.sort(ports)
+    rows[#rows + 1] = table.concat({
+      tostring(group.key),
+      tostring(group.representative and group.representative.name or "n/a"),
+      table.concat(ports, ",")
+    }, "|")
+  end
+  table.sort(rows)
+  return table.concat(rows, ";")
+end
+
 local function discover()
   local names = peripheral.getNames() or {}
   devices.peripheral_count = #names
@@ -482,11 +524,11 @@ local function discover()
   end
 
   local candidates = {}
-  local matrix_adapters = {}
-  local storage_adapters = {}
   local registry_devices = {}
   local seen = {}
   local adapter_map = { matrices = {}, storages = {} }
+  local previous_adapters = devices.adapters or { matrices = {}, storages = {} }
+  local next_matrix_identity_cache = {}
 
   for _, name in ipairs(names) do
     if peripheral.getType(name) == "monitor" then
@@ -515,11 +557,24 @@ local function discover()
     if include_set and not include_set[name] and not forced_matrix then
       return
     end
-    local matrix = matrix_adapter.detect(name, CONFIG.LOG_PREFIX)
+    local existing_matrix = previous_adapters.matrices and previous_adapters.matrices[name] or nil
+    local matrix
+    if existing_matrix and existing_matrix.isValid and existing_matrix.isValid() then
+      matrix = existing_matrix
+    else
+      local cached_identity = devices.matrix_identity_cache and devices.matrix_identity_cache[name] or nil
+      matrix = matrix_adapter.detect(name, CONFIG.LOG_PREFIX, {
+        group_key = cached_identity and cached_identity.group_key or nil,
+        group_key_source = cached_identity and cached_identity.group_key_source or nil
+      })
+    end
     if matrix then
-      table.insert(matrix_adapters, matrix)
       table.insert(candidates, { name = name, adapter = matrix, kind = "matrix" })
       adapter_map.matrices[name] = matrix
+      next_matrix_identity_cache[name] = {
+        group_key = matrix.group_key,
+        group_key_source = matrix.group_key_source
+      }
       table.insert(registry_devices, {
         name = name,
         type = matrix.getType(),
@@ -536,9 +591,11 @@ local function discover()
       record_error(name, "matrix override set but methods missing")
       return
     end
-    local storage = storage_adapter.detect(name, CONFIG.LOG_PREFIX)
+    local storage = previous_adapters.storages and previous_adapters.storages[name] or nil
+    if not (storage and storage.isValid and storage.isValid()) then
+      storage = storage_adapter.detect(name, CONFIG.LOG_PREFIX)
+    end
     if storage then
-      table.insert(storage_adapters, storage)
       table.insert(candidates, { name = name, adapter = storage, kind = "storage" })
       adapter_map.storages[name] = storage
       table.insert(registry_devices, {
@@ -659,7 +716,14 @@ local function discover()
   devices.registry_load_error = registry.state.load_error
   devices.last_scan_ts = os.epoch("utc")
   devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
-  if matrix_runtime then
+  devices.matrix_identity_cache = next_matrix_identity_cache
+  local next_topology_signature = matrix_group_signature(matrix_groups)
+  local topology_changed = next_topology_signature ~= (devices.topology_signature or "")
+  devices.topology_signature = next_topology_signature
+  if matrix_runtime and topology_changed then
+    -- Invalidate matrix sampling cache only when matrix topology/grouping really
+    -- changed. Invalidating on every discovery tick caused false "missing" data
+    -- windows and visible UI/master flapping under load.
     matrix_runtime:invalidate()
   end
   status_payload_cache.ts = 0
@@ -729,7 +793,9 @@ local function discover()
   return registry_devices
 end
 
-local function read_storage_stats()
+-- Storage sampling is kept off the telemetry/UI path: both layers consume this
+-- cached snapshot only, so heavy peripheral reads cannot block rendering/comms.
+local function sample_storage_stats(ts)
   local total, capacity, input, output = 0, 0, 0, 0
   local stores = {}
   for _, storage in ipairs(devices.storages or {}) do
@@ -770,7 +836,32 @@ local function read_storage_stats()
       ok = not had_error
     })
   end
-  return { stored = total, capacity = capacity, input = input, output = output, stores = stores }
+  storage_snapshot = {
+    ts = ts or now_ms(),
+    stale = false,
+    stores = stores,
+    total = { stored = total, capacity = capacity, input = input, output = output }
+  }
+end
+
+local function read_storage_stats(opts)
+  opts = opts or {}
+  local max_age_ms = tonumber(opts.max_age_ms) or math.max(3000, math.floor((tonumber(config.status_interval) or 5) * 1000))
+  local now = now_ms()
+  local age = now - (storage_snapshot.ts or 0)
+  if max_age_ms > 0 and age > max_age_ms and #storage_snapshot.stores == 0 then
+    sample_storage_stats(now)
+    age = now - (storage_snapshot.ts or 0)
+  end
+  return {
+    stored = tonumber(storage_snapshot.total and storage_snapshot.total.stored) or 0,
+    capacity = tonumber(storage_snapshot.total and storage_snapshot.total.capacity) or 0,
+    input = tonumber(storage_snapshot.total and storage_snapshot.total.input) or 0,
+    output = tonumber(storage_snapshot.total and storage_snapshot.total.output) or 0,
+    stores = utils.deep_copy(storage_snapshot.stores or {}),
+    freshness_ms = age,
+    stale = (storage_snapshot.ts or 0) <= 0 or (max_age_ms > 0 and age > max_age_ms)
+  }
 end
 
 local function read_matrix_stats(opts)
@@ -798,7 +889,7 @@ local function build_status_payload_uncached(opts)
   opts = opts or {}
   local started_at = now_ms()
   local energy_started_at = started_at
-  local energy = read_storage_stats()
+  local energy = read_storage_stats(opts)
   local energy_duration = now_ms() - energy_started_at
   local matrix_started_at = now_ms()
   local matrix = read_matrix_stats(opts)
@@ -810,20 +901,24 @@ local function build_status_payload_uncached(opts)
   local registry_summary = devices.registry_summary or registry:get_summary()
   local matrix_bound = registry_summary.kinds.matrix and registry_summary.kinds.matrix.bound or 0
   local storage_bound = registry_summary.kinds.storage and registry_summary.kinds.storage.bound or 0
+  local effective_matrix_count = math.max(matrix_bound, #(devices.matrix_groups or {}), #(matrix.matrices or {}))
+  local effective_storage_count = math.max(storage_bound, #(devices.storages or {}), #(energy.stores or {}))
   energy.monitor_bound = devices.monitor ~= nil
-  energy.storage_bound_count = storage_bound
+  energy.storage_bound_count = effective_storage_count
   energy.bound_storage_names = devices.bound_storage_names or {}
   energy.matrices = matrix.matrices
   energy.total = matrix.total
   energy.matrix_snapshot_freshness_ms = matrix.freshness_ms
   energy.matrix_snapshot_stale = matrix.stale == true
-  energy.matrix_present = matrix_bound > 0
+  energy.matrix_present = effective_matrix_count > 0
   energy.matrix_energy = matrix.total.stored
   energy.matrix_capacity = matrix.total.capacity
   energy.matrix_percent = matrix.total.percent
   energy.matrix_in = matrix.total.input
   energy.matrix_out = matrix.total.output
-  energy.storages_count = storage_bound
+  energy.storages_count = effective_storage_count
+  energy.storage_snapshot_freshness_ms = energy.freshness_ms
+  energy.storage_snapshot_stale = energy.stale == true
   energy.stored = total_stored
   energy.capacity = total_capacity
   energy.input = total_input
@@ -846,10 +941,10 @@ local function build_status_payload_uncached(opts)
   if not energy.monitor_bound then
     reasons[health.reasons.NO_MONITOR] = true
   end
-  if storage_bound == 0 then
+  if effective_storage_count == 0 then
     reasons[health.reasons.NO_STORAGE] = true
   end
-  if matrix_bound == 0 then
+  if effective_matrix_count == 0 then
     reasons[health.reasons.NO_MATRIX] = true
   end
   if devices.discovery_failed or devices.registry_load_error then
@@ -867,13 +962,13 @@ local function build_status_payload_uncached(opts)
   energy_health.reasons = reasons
   energy_health.last_seen_ts = os.epoch("utc")
   energy_health.bindings = {
-    storages = storage_bound,
-    matrices = matrix_bound,
+    storages = effective_storage_count,
+    matrices = effective_matrix_count,
     monitor = energy.monitor_bound and 1 or 0
   }
   energy_health.capabilities = {
-    storage_count = storage_bound,
-    matrix_count = matrix_bound,
+    storage_count = effective_storage_count,
+    matrix_count = effective_matrix_count,
     monitor = energy.monitor_bound
   }
   energy.health = {
@@ -1462,6 +1557,15 @@ local function init()
     end
   }))
   services:add(matrix_sampling_service.new({
+    name = "STORAGE_SAMPLE",
+    interval = 0.5,
+    runtime = {
+      tick = function(_, ts)
+        sample_storage_stats(ts or now_ms())
+      end
+    }
+  }))
+  services:add(matrix_sampling_service.new({
     name = "MATRIX_SAMPLE",
     interval = 0.25,
     runtime = matrix_runtime
@@ -1497,6 +1601,7 @@ local function init()
     end
   }))
   services:init()
+  sample_storage_stats(now_ms())
   local summary = registry:get_summary()
   comms:send_hello({
     storages = summary.kinds.storage and summary.kinds.storage.bound or 0,
