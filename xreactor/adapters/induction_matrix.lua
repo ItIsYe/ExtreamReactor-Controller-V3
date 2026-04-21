@@ -130,6 +130,132 @@ local function is_matrix_method_set(methods)
   return false
 end
 
+local function normalize_matrix_group_hint(value)
+  if value == nil then
+    return nil
+  end
+  if type(value) == "number" then
+    return tostring(math.floor(value))
+  end
+  if type(value) == "string" then
+    local trimmed = value:match("^%s*(.-)%s*$")
+    if trimmed and trimmed ~= "" then
+      return trimmed
+    end
+    return nil
+  end
+  if type(value) == "table" then
+    local preferred = {
+      "id",
+      "uuid",
+      "matrixId",
+      "multiblockId",
+      "controller",
+      "controllerPos",
+      "controllerPosition",
+      "position",
+      "x",
+      "y",
+      "z"
+    }
+    for _, key in ipairs(preferred) do
+      local parsed = normalize_matrix_group_hint(value[key])
+      if parsed ~= nil then
+        return parsed
+      end
+    end
+    local ok, serialized = pcall(textutils.serialize, value)
+    if ok and type(serialized) == "string" and serialized ~= "" then
+      return serialized
+    end
+  end
+  return nil
+end
+
+local function infer_name_group_key(name)
+  local string_name = tostring(name or "")
+  local prefix = string_name:match("^(.+)_%d+$")
+  if prefix and prefix ~= "" then
+    return "name_prefix:" .. prefix
+  end
+  return "name_exact:" .. string_name
+end
+
+function matrix.build_group_key(name, methods, call_fn)
+  local method_set = to_set(methods)
+  local id_methods = {
+    "getMatrixId",
+    "getMultiblockId",
+    "getMultiblockID",
+    "getMatrixUUID",
+    "getMatrixUuid",
+    "getControllerPos",
+    "getControllerPosition",
+    "getController"
+  }
+  for _, method in ipairs(id_methods) do
+    if method_set[method] and type(call_fn) == "function" then
+      local ok, value = pcall(call_fn, method)
+      if ok then
+        local normalized = normalize_matrix_group_hint(value)
+        if normalized ~= nil then
+          return "matrix_id:" .. normalized, "api:" .. method
+        end
+      end
+    end
+  end
+  return infer_name_group_key(name), "name_heuristic"
+end
+
+function matrix.group_ports(entries)
+  local groups = {}
+  local order = {}
+  for _, entry in ipairs(entries or {}) do
+    local adapter = entry and entry.adapter or entry
+    if adapter and adapter.name then
+      local group_key = adapter.group_key or infer_name_group_key(adapter.name)
+      local group = groups[group_key]
+      if not group then
+        group = {
+          key = group_key,
+          key_source = adapter.group_key_source,
+          ports = {},
+          representative = nil
+        }
+        groups[group_key] = group
+        order[#order + 1] = group_key
+      end
+      group.ports[#group.ports + 1] = {
+        id = entry and entry.id or adapter.name,
+        alias = entry and entry.alias or nil,
+        name = adapter.name,
+        adapter = adapter
+      }
+      local current = group.representative
+      if current == nil or tostring(adapter.name) < tostring(current.name) then
+        group.representative = {
+          id = entry and entry.id or adapter.name,
+          alias = entry and entry.alias or nil,
+          name = adapter.name,
+          adapter = adapter
+        }
+      end
+    end
+  end
+  local out = {}
+  for _, key in ipairs(order) do
+    local group = groups[key]
+    table.sort(group.ports, function(a, b)
+      return tostring(a.name) < tostring(b.name)
+    end)
+    out[#out + 1] = group
+  end
+  table.sort(out, function(a, b)
+    return tostring(a.key) < tostring(b.key)
+  end)
+  return out
+end
+
 function matrix.detect(name, log_prefix)
   if not name or not peripheral.isPresent(name) then
     return nil
@@ -162,6 +288,12 @@ function matrix.detect(name, log_prefix)
     "getPorts",
     "getInductionPorts"
   })
+  local group_key, group_key_source = matrix.build_group_key(name, methods, function(method)
+    if not peripheral.isPresent(name) then
+      return nil
+    end
+    return peripheral.call(name, method)
+  end)
 
   local function safe_component_call(method)
     if not method then
@@ -270,6 +402,8 @@ function matrix.detect(name, log_prefix)
     getName = function()
       return name
     end,
+    group_key = group_key,
+    group_key_source = group_key_source,
     getType = function()
       return type_name
     end,

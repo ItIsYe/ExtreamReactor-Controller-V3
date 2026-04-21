@@ -46,6 +46,9 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
   - Für Ursachenanalyse loggt der Service-Manager jetzt langsame Service-Ticks (`Service tick slow`) und langsame Gesamt-Ticks (`Service manager tick slow`).
   - Service-Namen im Slow-Tick-Log sind jetzt immer eindeutig (`COMMS`, `DISCOVERY`, `TELEMETRY`, `UI` bzw. `service#N` als Fallback); der anonyme `?`-Eintrag entfällt.
   - ENERGY cached den Statusaufbau kurzzeitig (`~1s`) zwischen TELEMETRY und UI, inklusive Slow-Stage-Logs (`Status payload slow: storage=... matrix=...`), damit doppelte teure Peripheral-Reads im selben Tick ausbleiben.
+  - Matrix-Abfragen sind jetzt logisch matrix-zentriert statt primär port-zentriert: mehrere `inductionPort_*` derselben Matrix werden zu einem logischen Matrix-Objekt gruppiert und über einen repräsentativen Reader-Port gelesen.
+  - Matrix-Snapshots sind intern getrennt in `dynamic` (`stored/capacity/input/output`) und `static` (`cells/providers/ports`) Caches mit eigener Kadenz; dadurch blockieren seltene Strukturwerte keine schnelle Energiesicht.
+  - Slow-Call-Diagnose zeigt weiter konkrete Zuordnung (`matrix key`, `reader port`, `metric`), damit teure Ports/Metriken weiterhin gezielt identifizierbar bleiben.
   - Heartbeat/Presence ist jetzt hart vom schweren Servicepfad getrennt:
     - minimale Presence-Payload (`ts`, `node_id`, `role`) ohne Matrix/UI-Daten,
     - eigener Heartbeat-Pump (`run_heartbeat_pump`) auf Timerpfad und zusätzlich vor/nach jedem Service im Service-Manager,

@@ -77,10 +77,10 @@ return {
     },
     energy = {
       { path = "nodes/energy/config.lua", size_bytes = 6652, hash = "d2ee389f" },
-      { path = "nodes/energy/discovery_log.lua", size_bytes = 2009, hash = "7a6883dc" },
-      { path = "nodes/energy/main.lua", size_bytes = 69442, hash = "72f6858a", required_for = { "ENERGY" } },
+      { path = "nodes/energy/discovery_log.lua", size_bytes = 2433, hash = "4f723e27" },
+      { path = "nodes/energy/main.lua", size_bytes = 71322, hash = "d02c1f30", required_for = { "ENERGY" } },
       { path = "adapters/energy_storage.lua", size_bytes = 3220, hash = "65c983a9" },
-      { path = "adapters/induction_matrix.lua", size_bytes = 8282, hash = "ff99ac2d" },
+      { path = "adapters/induction_matrix.lua", size_bytes = 11932, hash = "955a614d" },
     },
     water = {
       { path = "nodes/water/config.lua", size_bytes = 3793, hash = "3b282920" },
