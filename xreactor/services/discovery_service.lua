@@ -24,6 +24,7 @@ function discovery.new(opts)
     discover = opts.discover,
     managed_registry = opts.managed_registry ~= false,
     interval = opts.interval or 15,
+    should_discover = opts.should_discover,
     start_delay = start_delay,
     start_at = now() + (start_delay * 1000),
     last_scan = 0,
@@ -33,12 +34,23 @@ function discovery.new(opts)
   return setmetatable(self, { __index = discovery })
 end
 
-function discovery:tick()
+function discovery:tick(_, event)
   local ts = now()
   if ts < self.start_at then
     return
   end
-  if ts - self.last_scan < self.interval * 1000 then
+  local due = ts - self.last_scan >= self.interval * 1000
+  local should_scan = due
+  if type(self.should_discover) == "function" then
+    local ok, decision = pcall(self.should_discover, self, ts, event, due)
+    if ok and decision ~= nil then
+      should_scan = decision == true
+    elseif not ok then
+      utils.log(self.log_prefix, "Discovery precheck failed: " .. tostring(decision), "WARN")
+      should_scan = due
+    end
+  end
+  if not should_scan then
     return
   end
   self.last_scan = ts
