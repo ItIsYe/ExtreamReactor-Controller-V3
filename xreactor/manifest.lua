@@ -1,6 +1,6 @@
 return {
-  manifest_version = 6,
-  manifest_id = "manifest-v6",
+  manifest_version = 7,
+  manifest_id = "manifest-v7",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -10,6 +10,8 @@ return {
       { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
       { path = "core/logger.lua", size_bytes = 30592, hash = "1688d3c8" },
       { path = "core/network.lua", size_bytes = 14002, hash = "2fba2f3c" },
+      { path = "core/non_rt_config.lua", size_bytes = 4183, hash = "6f5bf45f" },
+      { path = "core/non_rt_payload.lua", size_bytes = 558, hash = "b9c0175d" },
       { path = "core/protocol.lua", size_bytes = 6423, hash = "6c324af5" },
       { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9" },
       { path = "core/safety.lua", size_bytes = 7761, hash = "760fcddb" },
@@ -33,6 +35,10 @@ return {
       { path = "shared/constants.lua", size_bytes = 1384, hash = "db560e96" },
       { path = "shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
       { path = "shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
+      { path = "nodes/support/command_handler.lua", size_bytes = 658, hash = "40dc12d4" },
+      { path = "nodes/support/discovery.lua", size_bytes = 474, hash = "a276d35c" },
+      { path = "nodes/support/runtime.lua", size_bytes = 323, hash = "24e7ba8a" },
+      { path = "nodes/support/ui_pages.lua", size_bytes = 463, hash = "5319d305" },
   },
   dev_files = {
   },
@@ -87,15 +93,15 @@ return {
     },
     water = {
       { path = "nodes/water/config.lua", size_bytes = 3793, hash = "3b282920" },
-      { path = "nodes/water/main.lua", size_bytes = 25377, hash = "276d3d39", required_for = { "WATER" } },
+      { path = "nodes/water/main.lua", size_bytes = 21612, hash = "e9a05c00", required_for = { "WATER" } },
     },
     fuel = {
       { path = "nodes/fuel/config.lua", size_bytes = 3704, hash = "ae225506" },
-      { path = "nodes/fuel/main.lua", size_bytes = 25094, hash = "6e2fee4f", required_for = { "FUEL" } },
+      { path = "nodes/fuel/main.lua", size_bytes = 21998, hash = "79197ab8", required_for = { "FUEL" } },
     },
     reprocessing = {
       { path = "nodes/reprocessor/config.lua", size_bytes = 3500, hash = "1ace0654" },
-      { path = "nodes/reprocessor/main.lua", size_bytes = 24941, hash = "3210d3e0", required_for = { "REPROCESSING" } },
+      { path = "nodes/reprocessor/main.lua", size_bytes = 21866, hash = "c808e012", required_for = { "REPROCESSING" } },
     },
   }
 }

@@ -32,6 +32,8 @@ local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
 local ui_service = require("services.ui_service")
 local safety = require("core.safety")
+local non_rt_config = require("core.non_rt_config")
+local support_discovery = require("nodes.support.discovery")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.WATER_NODE, -- Node role identifier.
@@ -72,33 +74,7 @@ local function add_config_warning(message)
 end
 
 local function validate_config(config_values, defaults)
-  local normalized = utils.normalize_node_id(config_values.node_id)
-  if normalized == "UNKNOWN" then
-    config_values.node_id = defaults.node_id
-    add_config_warning("node_id missing/invalid; defaulting to " .. tostring(defaults.node_id))
-  else
-    config_values.node_id = normalized
-  end
-  if type(config_values.role) ~= "string" then
-    config_values.role = defaults.role
-    add_config_warning("role missing/invalid; defaulting to " .. tostring(defaults.role))
-  end
-  if type(config_values.debug_logging) ~= "boolean" then
-    config_values.debug_logging = defaults.debug_logging
-    add_config_warning("debug_logging missing/invalid; defaulting to " .. tostring(defaults.debug_logging))
-  end
-  if type(config_values.reset_log_on_start) ~= "boolean" then
-    config_values.reset_log_on_start = defaults.reset_log_on_start
-    add_config_warning("reset_log_on_start missing/invalid; defaulting to " .. tostring(defaults.reset_log_on_start))
-  end
-  if config_values.wireless_modem ~= nil and type(config_values.wireless_modem) ~= "string" then
-    config_values.wireless_modem = defaults.wireless_modem
-    add_config_warning("wireless_modem invalid; defaulting to " .. tostring(defaults.wireless_modem))
-  end
-  if config_values.wired_modem ~= nil and type(config_values.wired_modem) ~= "string" then
-    config_values.wired_modem = defaults.wired_modem
-    add_config_warning("wired_modem invalid; defaulting to " .. tostring(defaults.wired_modem))
-  end
+  non_rt_config.apply_common(config_values, defaults, add_config_warning, utils)
   if type(config_values.loop_tanks) ~= "table" then
     config_values.loop_tanks = utils.deep_copy(defaults.loop_tanks)
     add_config_warning("loop_tanks missing/invalid; defaulting to configured list")
@@ -110,44 +86,6 @@ local function validate_config(config_values, defaults)
   if type(config_values.balance_log_interval_s) ~= "number" or config_values.balance_log_interval_s < 0 then
     config_values.balance_log_interval_s = defaults.balance_log_interval_s
     add_config_warning("balance_log_interval_s missing/invalid; defaulting to " .. tostring(defaults.balance_log_interval_s))
-  end
-  if type(config_values.heartbeat_interval) ~= "number" or config_values.heartbeat_interval <= 0 then
-    config_values.heartbeat_interval = defaults.heartbeat_interval
-    add_config_warning("heartbeat_interval missing/invalid; defaulting to " .. tostring(defaults.heartbeat_interval))
-  elseif config_values.heartbeat_interval > 60 then
-    config_values.heartbeat_interval = 60
-    add_config_warning("heartbeat_interval too high; clamping to 60s")
-  end
-  if type(config_values.status_interval) ~= "number" or config_values.status_interval <= 0 then
-    config_values.status_interval = defaults.status_interval
-    add_config_warning("status_interval missing/invalid; defaulting to " .. tostring(defaults.status_interval))
-  elseif config_values.status_interval > 60 then
-    config_values.status_interval = 60
-    add_config_warning("status_interval too high; clamping to 60s")
-  end
-  if type(config_values.discovery_interval) ~= "number" or config_values.discovery_interval <= 0 then
-    config_values.discovery_interval = defaults.discovery_interval
-    add_config_warning("discovery_interval missing/invalid; defaulting to " .. tostring(defaults.discovery_interval))
-  elseif config_values.discovery_interval > 300 then
-    config_values.discovery_interval = 300
-    add_config_warning("discovery_interval too high; clamping to 300s")
-  end
-
-  if type(config_values.channels) ~= "table" then
-    config_values.channels = utils.deep_copy(defaults.channels)
-    add_config_warning("channels missing/invalid; defaulting to control/status defaults")
-  end
-  if type(config_values.channels.control) ~= "number" then
-    config_values.channels.control = defaults.channels.control
-    add_config_warning("channels.control missing/invalid; defaulting to " .. tostring(defaults.channels.control))
-  end
-  if type(config_values.channels.status) ~= "number" then
-    config_values.channels.status = defaults.channels.status
-    add_config_warning("channels.status missing/invalid; defaulting to " .. tostring(defaults.channels.status))
-  end
-  if type(config_values.comms) ~= "table" then
-    config_values.comms = utils.deep_copy(defaults.comms)
-    add_config_warning("comms config missing/invalid; defaulting to comms defaults")
   end
 end
 
@@ -220,8 +158,8 @@ local function cache(bound_names)
 end
 
 local function discover()
-  local names = peripheral.getNames() or {}
-  local registry_devices = {}
+  local names
+  local registry_devices
   local allow_set = {}
   for _, name in ipairs(config.loop_tanks or {}) do
     allow_set[name] = true
@@ -232,17 +170,7 @@ local function discover()
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
 
-  for _, name in ipairs(names) do
-    if peripheral.getType(name) == "monitor" then
-      table.insert(registry_devices, {
-        name = name,
-        type = "monitor",
-        methods = utils.safe_get_methods(name) or {},
-        kind = "monitor",
-        bound = monitor_name == name
-      })
-    end
-  end
+  registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
 
   for _, name in ipairs(names) do
     if not allow_all and not allow_set[name] then
