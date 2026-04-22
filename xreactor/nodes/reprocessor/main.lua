@@ -34,6 +34,7 @@ local ui_service = require("services.ui_service")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
 local support_runtime = require("nodes.support.runtime")
+local role_logic = require("nodes.support.role_logic")
 local role_descriptor = require("nodes.reprocessor.role_descriptor")
 local config_normalizer = require("nodes.reprocessor.config_normalizer")
 
@@ -121,25 +122,16 @@ local function safe_wrapped_call(obj, method, ...)
 end
 
 local function master_peer_state()
-  local peers = comms and comms:get_peers() or {}
-  for _, data in pairs(peers) do
-    if data.role == constants.roles.MASTER then
-      return data
-    end
-  end
-  return nil
+  return role_logic.master_peer_state(comms, constants.roles.MASTER)
 end
 
 local function is_master_connected()
-  local peer = master_peer_state()
-  if peer then
-    return not peer.down, peer.age
-  end
-  if master_seen then
-    local age = (os.epoch("utc") - master_seen) / 1000
-    return age <= config.heartbeat_interval * 6, age
-  end
-  return false, nil
+  return role_logic.is_master_connected({
+    comms = comms,
+    master_role = constants.roles.MASTER,
+    last_seen_ts = master_seen,
+    heartbeat_interval = config.heartbeat_interval
+  })
 end
 
 local function cache(bound_names)
