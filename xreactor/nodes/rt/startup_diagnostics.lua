@@ -38,4 +38,38 @@ function M.should_emergency_startup(snapshot, max_temperature, max_rpm)
   return false
 end
 
+function M.handle_startup_timeout(ctx)
+  if ctx.startup_watchdog_tripped then
+    return true
+  end
+  ctx.startup_watchdog_tripped = true
+  local now = os.epoch("utc")
+  local elapsed_s = ctx.startup_started_ms and (now - ctx.startup_started_ms) / 1000 or 0
+  local node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id
+  local summary = M.build_peripheral_summary(ctx.devices.registry_summary or ctx.registry:get_summary() or {})
+  ctx.log("ERROR", ("Startup watchdog tripped role=%s node=%s elapsed=%.1fs %s"):format(
+    tostring(ctx.config.role or "RT"),
+    tostring(node_id),
+    elapsed_s,
+    summary
+  ))
+
+  local snapshot = ctx.update_status_snapshot()
+  local emergency = M.should_emergency_startup(snapshot, ctx.config.safety.max_temperature, ctx.config.safety.max_rpm)
+  local status_level = emergency and ctx.constants.status_levels.EMERGENCY or ctx.constants.status_levels.WARNING
+  ctx.broadcast_status(status_level)
+  if emergency then
+    if ctx.node_state_machine.state() ~= ctx.constants.node_states.EMERGENCY then
+      ctx.node_state_machine:transition(ctx.constants.node_states.EMERGENCY)
+    end
+  else
+    if ctx.node_state_machine.state() ~= ctx.constants.node_states.LIMITED then
+      ctx.node_state_machine:transition(ctx.constants.node_states.LIMITED)
+    end
+  end
+  ctx.active_startup = nil
+  ctx.startup_queue = {}
+  return true
+end
+
 return M

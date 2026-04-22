@@ -1746,108 +1746,19 @@ local function hello()
 end
 
 set_reactors_active = function(active, reason)
-  local reactors = peripherals and peripherals.reactors or {}
-  if not next(reactors) then
-    warn_once("reactors_missing", binding.missing_devices_message("reactor", binding.build_policy(configured_reactors, configured_turbines)))
-  end
-  for name, reactor in pairs(reactors) do
-    local caps = get_device_caps("reactors", name)
-    local ok, result = pcall(setReactorActive, reactor, caps, active)
-    if not ok then
-      warn_once("reactor_active:" .. name, "Reactor activate failed for " .. name .. ": " .. tostring(result))
-    elseif not result then
-      warn_unsupported(name)
-    else
-      log("INFO", ("Reactor active name=%s active=%s reason=%s"):format(tostring(name), tostring(active), tostring(reason or "UNSPECIFIED")))
-    end
-  end
+  return module_lifecycle.set_reactors_active(build_module_lifecycle_context(), active, reason)
 end
 
 set_turbines_active = function(active, reason)
-  local turbines = peripherals and peripherals.turbines or {}
-  if not next(turbines) then
-    warn_once("turbines_missing", binding.missing_devices_message("turbine", binding.build_policy(configured_reactors, configured_turbines)))
-  end
-  for name, turbine in pairs(turbines) do
-    local caps = get_device_caps("turbines", name)
-    local ok, result = pcall(setTurbineActive, turbine, caps, active)
-    if not ok then
-      warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(result))
-    else
-      local ctrl = get_turbine_ctrl(name)
-      if ctrl.last_active_command ~= active or ctrl.last_active_command_reason ~= reason then
-        ctrl.last_active_command = active
-        ctrl.last_active_command_reason = reason
-        log("INFO", ("Turbine active name=%s active=%s reason=%s"):format(
-          tostring(name),
-          tostring(active),
-          tostring(reason or "UNSPECIFIED")
-        ))
-      end
-    end
-  end
+  return module_lifecycle.set_turbines_active(build_module_lifecycle_context(), active, reason)
 end
 
 apply_safe_controls = function()
-  local reactors = peripherals and peripherals.reactors or {}
-  if not next(reactors) then
-    warn_once("reactors_missing", binding.missing_devices_message("reactor", binding.build_policy(configured_reactors, configured_turbines)))
-  end
-  for name, reactor in pairs(reactors) do
-    local caps = get_device_caps("reactors", name)
-    if has_reactor_rod_write_path(caps) then
-      local ctrl = ensure_reactor_ctrl(name)
-      ctrl.last_applied = nil
-    else
-      warn_unsupported(name)
-    end
-  end
-  applyReactorRods(100, true, "SAFE_SCRAM")
-
-  local turbines = peripherals and peripherals.turbines or {}
-  if not next(turbines) then
-    warn_once("turbines_missing", binding.missing_devices_message("turbine", binding.build_policy(configured_reactors, configured_turbines)))
-  end
-  for name, turbine in pairs(turbines) do
-    local caps = get_device_caps("turbines", name)
-    local _, rpm_value = safe_wrapped_call(turbine, "getRotorSpeed")
-    local rpm = type(rpm_value) == "number" and rpm_value or nil
-    if caps.setInductorEngaged then
-      local ok, result = update_inductor_for_rpm(name, turbine, caps, rpm)
-      if not ok then
-        warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(result))
-      elseif not result then
-        warn_unsupported(name)
-      end
-    end
-    if caps.setFluidFlowRate or caps.setFluidFlowRateMax then
-      local ctrl = get_turbine_ctrl(name)
-      ctrl.mode = TURBINE_MODE.RAMP
-      ctrl.requested_flow = clamp_turbine_flow(ctrl.requested_flow or ctrl.flow or START_FLOW)
-      ctrl.flow = ctrl.requested_flow
-      ctrl.pending_expected_flow = ctrl.requested_flow
-      ctrl.pending_flow_since = 0
-      ctrl.pending_retries = 0
-      ctrl.startup_synced = false
-      local ok, result = pcall(setTurbineFlow, turbine, caps, ctrl.requested_flow)
-      if not ok then
-        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
-      elseif not result then
-        warn_unsupported(name)
-      end
-    else
-      warn_unsupported(name)
-    end
-  end
+  return module_lifecycle.apply_safe_controls(build_module_lifecycle_context())
 end
 
 local function scram()
-  log("ERROR", "SCRAM ownership=STATE_MACHINE action=SCRAM_APPLY current_state=" .. tostring(current_state))
-  apply_safe_controls()
-  if current_state == STATE.SAFE then
-    set_reactors_active(false, "SCRAM_SAFE_STATE")
-    set_turbines_active(false, "SCRAM_SAFE_STATE")
-  end
+  return module_lifecycle.scram(build_module_lifecycle_context())
 end
 
 local function build_module_lifecycle_context()
@@ -1855,19 +1766,26 @@ local function build_module_lifecycle_context()
     constants = constants,
     STATE = STATE,
     config = config,
+    peripherals = peripherals,
+    binding = binding,
+    configured_reactors = configured_reactors,
+    configured_turbines = configured_turbines,
     modules = modules,
     comms = comms,
     RPM_TOL = RPM_TOL,
     TURBINE_MODE = TURBINE_MODE,
+    START_FLOW = START_FLOW,
     log = log,
     warn_once = warn_once,
     warn_unsupported = warn_unsupported,
     get_target_rpm = get_target_rpm,
     get_turbine_ctrl = get_turbine_ctrl,
+    get_device_caps = get_device_caps,
     ensure_reactor_ctrl = ensure_reactor_ctrl,
     setTurbineActive = setTurbineActive,
     setReactorActive = setReactorActive,
     setTurbineFlow = setTurbineFlow,
+    clamp_turbine_flow = clamp_turbine_flow,
     update_inductor_for_rpm = update_inductor_for_rpm,
     update_turbine_flow_state = update_turbine_flow_state,
     applyReactorRods = applyReactorRods,
@@ -1878,6 +1796,7 @@ local function build_module_lifecycle_context()
     read_current_rods = read_current_rods,
     get_active_startup = function() return active_startup end,
     set_active_startup = function(value) active_startup = value end,
+    get_current_state = function() return current_state end,
     current_state = function() return current_state end,
     setState = setState,
     node_state_machine = node_state_machine
@@ -1980,44 +1899,23 @@ local function reset_startup_watchdog()
   startup_watchdog_tripped = false
 end
 
-local function build_peripheral_summary()
-  local summary = devices.registry_summary or registry:get_summary() or {}
-  return startup_diagnostics.build_peripheral_summary(summary)
-end
-
-local function should_emergency_startup(snapshot)
-  return startup_diagnostics.should_emergency_startup(snapshot, config.safety.max_temperature, config.safety.max_rpm)
-end
-
 local function handle_startup_timeout()
-  if startup_watchdog_tripped then
-    return
-  end
+  startup_diagnostics.handle_startup_timeout({
+    startup_watchdog_tripped = startup_watchdog_tripped,
+    startup_started_ms = startup_started_ms,
+    comms = comms,
+    config = config,
+    devices = devices,
+    registry = registry,
+    constants = constants,
+    node_state_machine = node_state_machine,
+    log = log,
+    update_status_snapshot = update_status_snapshot,
+    broadcast_status = broadcast_status,
+    active_startup = active_startup,
+    startup_queue = startup_queue
+  })
   startup_watchdog_tripped = true
-  local now = os.epoch("utc")
-  local elapsed_s = startup_started_ms and (now - startup_started_ms) / 1000 or 0
-  local node_id = comms and comms.network and comms.network.id or config.node_id
-  local summary = build_peripheral_summary()
-  log("ERROR", ("Startup watchdog tripped role=%s node=%s elapsed=%.1fs %s"):format(
-    tostring(config.role or "RT"),
-    tostring(node_id),
-    elapsed_s,
-    summary
-  ))
-
-  local snapshot = update_status_snapshot()
-  local emergency = should_emergency_startup(snapshot)
-  local status_level = emergency and constants.status_levels.EMERGENCY or constants.status_levels.WARNING
-  broadcast_status(status_level)
-  if emergency then
-    if node_state_machine.state() ~= constants.node_states.EMERGENCY then
-      node_state_machine:transition(constants.node_states.EMERGENCY)
-    end
-  else
-    if node_state_machine.state() ~= constants.node_states.LIMITED then
-      node_state_machine:transition(constants.node_states.LIMITED)
-    end
-  end
   active_startup = nil
   startup_queue = {}
 end
