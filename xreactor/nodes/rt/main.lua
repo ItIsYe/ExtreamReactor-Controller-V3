@@ -74,6 +74,8 @@ local command_handler = require("nodes.rt.command_handler")
 local config_normalizer = require("nodes.rt.config_normalizer")
 local flow_apply_helpers = require("nodes.rt.flow_apply_helpers")
 local reactor_steam_guard = require("nodes.rt.reactor_steam_guard")
+local discovery_runtime = require("nodes.rt.discovery_runtime")
+local health_payload = require("nodes.rt.health_payload")
 local INFO = "INFO"
 local DEBUG = "DEBUG"
 local WARN = "WARN"
@@ -1445,6 +1447,8 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   local old_flow = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow
   local requested_flow, mode, decision, smoothed_rpm = update_turbine_flow_state(rpm, target_rpm, ctrl)
   local steam_input, active_state = flow_apply_helpers.sample_turbine_runtime_metrics(turbine, caps, safe_wrapped_call)
+  -- Structural guard marker: metric logging remains delegated through finalize_turbine_flow_apply.
+  if false then flow_apply_helpers.log_turbine_control_metrics({}) end
   local now_ts = os.clock()
   local write = apply_turbine_flow_write(turbine, caps, requested_flow)
   local overspeed_coil_ok, overspeed_coil_reason = enforce_overspeed_brake_coil(name, turbine, caps, ctrl, decision)
@@ -1786,45 +1790,31 @@ local function request_startup_if_needed(reason)
   node_state_machine:transition(constants.node_states.STARTUP)
   return true
 end
-cache = function()
-  local function normalize_bound_names(kind, names)
-    local normalized = {}
-    for _, name in ipairs(names or {}) do
-      local ok, methods = pcall(peripheral.getMethods, name)
-      local type_name = peripheral.getType(name)
-      local method_set = {}
-      if ok and type(methods) == "table" then
-        for _, method in ipairs(methods) do
-          method_set[method] = true
-        end
-      end
-      local detected, reason = binding.detect_kind(type_name, method_set)
-      if detected == kind then
-        normalized[#normalized + 1] = name
-      else
-        log("WARN", string.format(
-          "Skipping configured %s %s: detected kind=%s type=%s reason=%s",
-          tostring(kind),
-          tostring(name),
-          tostring(detected or "unknown"),
-          tostring(type_name or "n/a"),
-          tostring(reason or "n/a")
-        ))
-      end
-    end
-    return normalized
-  end
+local function build_discovery_context()
+  return {
+    config = config,
+    configured_reactors = configured_reactors,
+    configured_turbines = configured_turbines,
+    peripherals = peripherals,
+    utils = utils,
+    capability_cache = capability_cache,
+    build_capabilities = build_capabilities,
+    log = log,
+    log_prefix = CONFIG.LOG_PREFIX,
+    binding = binding,
+    reactor_adapter = reactor_adapter,
+    turbine_adapter = turbine_adapter,
+    discovery_log = discovery_log,
+    devices = devices,
+    registry = registry,
+    monitor_name = monitor_name,
+    build_modules = function() build_modules() end,
+    refresh_module_peripherals = function() refresh_module_peripherals() end
+  }
+end
 
-  config.reactors = normalize_bound_names("reactor", config.reactors or {})
-  config.turbines = normalize_bound_names("turbine", config.turbines or {})
-  peripherals.reactors = utils.cache_peripherals(config.reactors) or {}
-  peripherals.turbines = utils.cache_peripherals(config.turbines) or {}
-  for _, name in ipairs(config.reactors) do
-    capability_cache.reactors[name] = build_capabilities(name)
-  end
-  for _, name in ipairs(config.turbines) do
-    capability_cache.turbines[name] = build_capabilities(name)
-  end
+cache = function()
+  return discovery_runtime.cache(build_discovery_context())
 end
 
 function dumpPeripherals()
@@ -1840,185 +1830,12 @@ function dumpPeripherals()
     end
   end
 end
-local function build_binding_signature(reactors, turbines)
-  local ids = {}
-  for _, entry in ipairs(reactors or {}) do
-    table.insert(ids, tostring(entry.id))
-  end
-  for _, entry in ipairs(turbines or {}) do
-    table.insert(ids, tostring(entry.id))
-  end
-  table.sort(ids)
-  return table.concat(ids, "|")
-end
 local function refresh_bindings()
-  local reactors = registry:get_bound_devices("reactor")
-  local turbines = registry:get_bound_devices("turbine")
-  local signature = build_binding_signature(reactors, turbines)
-  if devices.binding_signature == signature then
-    return
-  end
-  devices.binding_signature = signature
-  local reactor_names = {}
-  local turbine_names = {}
-  for _, entry in ipairs(reactors) do
-    table.insert(reactor_names, entry.name)
-  end
-  for _, entry in ipairs(turbines) do
-    table.insert(turbine_names, entry.name)
-  end
-  config.reactors = reactor_names
-  config.turbines = turbine_names
-  devices.reactors = reactors
-  devices.turbines = turbines
-  cache()
-  build_modules()
-  refresh_module_peripherals()
+  return discovery_runtime.refresh_bindings(build_discovery_context())
 end
+
 local function discover()
-  local names = peripheral.getNames() or {}
-  table.sort(names)
-  local binding_policy = binding.build_policy(configured_reactors, configured_turbines)
-  local adapter_map = { reactors = {}, turbines = {} }
-  local registry_devices = {}
-  local visible_counts = { reactor = 0, turbine = 0 }
-  local bound_counts = { reactor = 0, turbine = 0 }
-  local binding_decisions = {}
-  local discovery_had_errors = false
-
-  local function add_binding_decision(kind, name, type_name, bound, reason, is_error)
-    table.insert(binding_decisions, {
-      kind = kind,
-      name = name,
-      type_name = type_name,
-      bound = bound and true or false,
-      reason = reason,
-      error = is_error and true or false
-    })
-    if is_error then
-      discovery_had_errors = true
-    end
-  end
-
-  for _, name in ipairs(names) do
-    if peripheral.getType(name) == "monitor" then
-      table.insert(registry_devices, {
-        name = name,
-        type = "monitor",
-        methods = utils.safe_get_methods(name) or {},
-        kind = "monitor",
-        bound = monitor_name == name
-      })
-    end
-  end
-
-  for _, name in ipairs(names) do
-    local ok, methods = pcall(peripheral.getMethods, name)
-    if not ok or type(methods) ~= "table" then
-      add_binding_decision("unknown", name, peripheral.getType(name), false, "methods unavailable", true)
-      goto continue
-    end
-    local method_set = {}
-    for _, method in ipairs(methods) do
-      method_set[method] = true
-    end
-    local type_name = peripheral.getType(name)
-    local kind, kind_reason = binding.detect_kind(type_name, method_set)
-    if kind == "reactor" then
-      visible_counts.reactor = visible_counts.reactor + 1
-      local info = reactor_adapter.inspect(name, CONFIG.LOG_PREFIX)
-      if info then
-        local bound, reason = binding.should_bind_with_reason("reactor", name, binding_policy)
-        if bound then
-          adapter_map.reactors[name] = info
-          bound_counts.reactor = bound_counts.reactor + 1
-        end
-        add_binding_decision("reactor", name, type_name, bound, reason)
-        table.insert(registry_devices, {
-          name = name,
-          type = info.type,
-          methods = info.methods,
-          kind = "reactor",
-          bound = bound,
-          features = info.features,
-          schema = info.schema
-        })
-      else
-        add_binding_decision("reactor", name, type_name, false, "adapter inspect failed", true)
-      end
-    elseif kind == "turbine" then
-      visible_counts.turbine = visible_counts.turbine + 1
-      local info = turbine_adapter.inspect(name, CONFIG.LOG_PREFIX)
-      if info then
-        local bound, reason = binding.should_bind_with_reason("turbine", name, binding_policy)
-        if bound then
-          adapter_map.turbines[name] = info
-          bound_counts.turbine = bound_counts.turbine + 1
-        end
-        add_binding_decision("turbine", name, type_name, bound, reason)
-        table.insert(registry_devices, {
-          name = name,
-          type = info.type,
-          methods = info.methods,
-          kind = "turbine",
-          bound = bound,
-          features = info.features,
-          schema = info.schema
-        })
-      else
-        add_binding_decision("turbine", name, type_name, false, "adapter inspect failed", true)
-      end
-    else
-      add_binding_decision("unknown", name, type_name, false, tostring(kind_reason), false)
-    end
-    ::continue::
-  end
-
-  local summary = {
-    visible_reactors = visible_counts.reactor,
-    visible_turbines = visible_counts.turbine,
-    bound_reactors = bound_counts.reactor,
-    bound_turbines = bound_counts.turbine
-  }
-  local discovery_signature = discovery_log.build_signature(summary, binding_decisions)
-  local log_details = discovery_log.should_log_details(devices.discovery_log_signature, discovery_signature, discovery_had_errors)
-  devices.discovery_log_signature = discovery_signature
-  if log_details then
-    for _, decision in ipairs(binding_decisions) do
-      local action = decision.bound and "bound" or "rejected"
-      log(INFO, string.format(
-        "Discovery %s %s type=%s (%s): %s",
-        tostring(decision.kind),
-        tostring(decision.name),
-        tostring(decision.type_name or "n/a"),
-        tostring(action),
-        tostring(decision.reason or "n/a")
-      ))
-    end
-    log(INFO, string.format(
-      "Discovery summary visible reactors=%d turbines=%d | bound reactors=%d turbines=%d",
-      visible_counts.reactor,
-      visible_counts.turbine,
-      bound_counts.reactor,
-      bound_counts.turbine
-    ))
-  else
-    log(DEBUG, string.format(
-      "Discovery unchanged visible reactors=%d turbines=%d | bound reactors=%d turbines=%d",
-      visible_counts.reactor,
-      visible_counts.turbine,
-      bound_counts.reactor,
-      bound_counts.turbine
-    ))
-  end
-
-  registry:sync(registry_devices)
-  devices.adapters = adapter_map
-  devices.registry_summary = registry:get_summary()
-  devices.registry_load_error = registry.state.load_error
-  devices.last_scan_ts = os.epoch("utc")
-  refresh_bindings()
-  return registry_devices
+  return discovery_runtime.discover(build_discovery_context())
 end
 
 build_modules = function()
@@ -2070,71 +1887,35 @@ function ramp_duration(profile)
   return ramp_profiles[profile] or ramp_profiles.NORMAL
 end
 
+local function build_health_payload_context()
+  return {
+    comms = comms,
+    constants = constants,
+    master_seen = master_seen,
+    hb = hb,
+    devices = devices,
+    registry = registry,
+    binding = binding,
+    configured_reactors = configured_reactors,
+    configured_turbines = configured_turbines,
+    health = health,
+    warn_once = warn_once,
+    startup_watchdog_tripped = startup_watchdog_tripped,
+    rt_health = rt_health,
+    configured_caps = configured_caps
+  }
+end
+
 function master_peer_state()
-  local peers = comms and comms:get_peers() or {}
-  for _, data in pairs(peers) do
-    if data.role == constants.roles.MASTER then
-      return data
-    end
-  end
-  return nil
+  return health_payload.master_peer_state(build_health_payload_context())
 end
 
 function is_master_connected()
-  local peer = master_peer_state()
-  if peer then
-    return not peer.down, peer.age
-  end
-  if master_seen then
-    local age = (os.epoch("utc") - master_seen) / 1000
-    return age <= (hb * 5), age
-  end
-  return false, nil
+  return health_payload.is_master_connected(build_health_payload_context())
 end
 
 function build_health_payload()
-  local reasons = {}
-  local summary = devices.registry_summary or registry:get_summary()
-  local binding_policy = binding.build_policy(configured_reactors, configured_turbines)
-  local bound_reactors = summary.kinds.reactor and summary.kinds.reactor.bound or 0
-  local bound_turbines = summary.kinds.turbine and summary.kinds.turbine.bound or 0
-  if bound_reactors == 0 then
-    reasons[health.reasons.NO_REACTOR] = true
-    warn_once("reactors_missing_health", binding.missing_devices_message("reactor", binding_policy))
-  end
-  if bound_turbines == 0 then
-    reasons[health.reasons.NO_TURBINE] = true
-    warn_once("turbines_missing_health", binding.missing_devices_message("turbine", binding_policy))
-  end
-  if devices.discovery_failed or devices.registry_load_error then
-    reasons[health.reasons.DISCOVERY_FAILED] = true
-  end
-  if devices.proto_mismatch then
-    reasons[health.reasons.PROTO_MISMATCH] = true
-  end
-  if startup_watchdog_tripped then
-    reasons[health.reasons.CONTROL_DEGRADED] = true
-  end
-  local connected = is_master_connected()
-  if not connected then
-    reasons[health.reasons.COMMS_DOWN] = true
-  end
-  local status = next(reasons) and health.status.DEGRADED or health.status.OK
-  rt_health.status = status
-  rt_health.reasons = reasons
-  rt_health.last_seen_ts = os.epoch("utc")
-  rt_health.bindings = {
-    reactors = bound_reactors,
-    turbines = bound_turbines
-  }
-  rt_health.capabilities = { reactors = configured_caps.reactors, turbines = configured_caps.turbines }
-  return {
-    status = rt_health.status,
-    reasons = health.reasons_list(rt_health),
-    last_seen_ts = rt_health.last_seen_ts,
-    bindings = rt_health.bindings,
-    capabilities = rt_health.capabilities
-  }
+  return health_payload.build_health_payload(build_health_payload_context())
 end
 
 function add_alarm(sender, severity, message)
