@@ -38,6 +38,8 @@ local matrix_sampling_service = require("services.matrix_sampling_service")
 local discovery_log = require("nodes.energy.discovery_log")
 local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
 local matrix_topology_cache = require("nodes.energy.matrix_topology_cache")
+local config_normalizer = require("nodes.energy.config_normalizer")
+local command_handler = require("nodes.energy.command_handler")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
@@ -103,192 +105,7 @@ local function add_config_warning(message)
 end
 
 local function validate_config(config_values, defaults)
-  local normalized = utils.normalize_node_id(config_values.node_id)
-  if normalized == "UNKNOWN" then
-    config_values.node_id = defaults.node_id
-    add_config_warning("node_id missing/invalid; defaulting to " .. tostring(defaults.node_id))
-  else
-    config_values.node_id = normalized
-  end
-  if type(config_values.role) ~= "string" then
-    config_values.role = defaults.role
-    add_config_warning("role missing/invalid; defaulting to " .. tostring(defaults.role))
-  end
-  if type(config_values.debug_logging) ~= "boolean" then
-    config_values.debug_logging = defaults.debug_logging
-    add_config_warning("debug_logging missing/invalid; defaulting to " .. tostring(defaults.debug_logging))
-  end
-  if type(config_values.reset_log_on_start) ~= "boolean" then
-    config_values.reset_log_on_start = defaults.reset_log_on_start
-    add_config_warning("reset_log_on_start missing/invalid; defaulting to " .. tostring(defaults.reset_log_on_start))
-  end
-  if config_values.wireless_modem ~= nil and type(config_values.wireless_modem) ~= "string" then
-    config_values.wireless_modem = defaults.wireless_modem
-    add_config_warning("wireless_modem invalid; defaulting to " .. tostring(defaults.wireless_modem))
-  end
-  if config_values.wired_modem ~= nil and type(config_values.wired_modem) ~= "string" then
-    config_values.wired_modem = defaults.wired_modem
-    add_config_warning("wired_modem invalid; defaulting to " .. tostring(defaults.wired_modem))
-  end
-  if config_values.matrix ~= nil and type(config_values.matrix) ~= "string" then
-    config_values.matrix = defaults.matrix
-    add_config_warning("matrix invalid; defaulting to " .. tostring(defaults.matrix))
-  end
-  if type(config_values.matrix_names) ~= "table" then
-    config_values.matrix_names = utils.deep_copy(defaults.matrix_names)
-    add_config_warning("matrix_names missing/invalid; defaulting to configured list")
-  end
-  if type(config_values.matrix_aliases) ~= "table" then
-    config_values.matrix_aliases = utils.deep_copy(defaults.matrix_aliases)
-    add_config_warning("matrix_aliases missing/invalid; defaulting to configured mapping")
-  end
-  if type(config_values.cubes) ~= "table" then
-    config_values.cubes = utils.deep_copy(defaults.cubes)
-    add_config_warning("cubes missing/invalid; defaulting to configured list")
-  end
-  if type(config_values.scan_interval) ~= "number" or config_values.scan_interval <= 0 then
-    config_values.scan_interval = defaults.scan_interval
-    add_config_warning("scan_interval missing/invalid; defaulting to " .. tostring(defaults.scan_interval))
-  elseif config_values.scan_interval > 60 then
-    config_values.scan_interval = 60
-    add_config_warning("scan_interval too high; clamping to 60s")
-  end
-  if type(config_values.discovery_force_rescan_interval) ~= "number" or config_values.discovery_force_rescan_interval <= 0 then
-    config_values.discovery_force_rescan_interval = defaults.discovery_force_rescan_interval
-    add_config_warning("discovery_force_rescan_interval missing/invalid; defaulting to " .. tostring(defaults.discovery_force_rescan_interval))
-  elseif config_values.discovery_force_rescan_interval > 3600 then
-    config_values.discovery_force_rescan_interval = 3600
-    add_config_warning("discovery_force_rescan_interval too high; clamping to 3600s")
-  end
-  if type(config_values.matrix_metric_poll_interval) ~= "number" or config_values.matrix_metric_poll_interval <= 0 then
-    config_values.matrix_metric_poll_interval = defaults.matrix_metric_poll_interval
-    add_config_warning("matrix_metric_poll_interval missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_poll_interval))
-  elseif config_values.matrix_metric_poll_interval > 30 then
-    config_values.matrix_metric_poll_interval = 30
-    add_config_warning("matrix_metric_poll_interval too high; clamping to 30s")
-  end
-  if type(config_values.matrix_metric_call_budget) ~= "number" or config_values.matrix_metric_call_budget <= 0 then
-    config_values.matrix_metric_call_budget = defaults.matrix_metric_call_budget
-    add_config_warning("matrix_metric_call_budget missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_call_budget))
-  elseif config_values.matrix_metric_call_budget > 64 then
-    config_values.matrix_metric_call_budget = 64
-    add_config_warning("matrix_metric_call_budget too high; clamping to 64")
-  end
-  if type(config_values.matrix_metric_time_budget_ms) ~= "number" or config_values.matrix_metric_time_budget_ms < 100 then
-    config_values.matrix_metric_time_budget_ms = defaults.matrix_metric_time_budget_ms
-    add_config_warning("matrix_metric_time_budget_ms missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_time_budget_ms))
-  elseif config_values.matrix_metric_time_budget_ms > 10000 then
-    config_values.matrix_metric_time_budget_ms = 10000
-    add_config_warning("matrix_metric_time_budget_ms too high; clamping to 10000ms")
-  end
-  if type(config_values.matrix_metric_slow_call_ms) ~= "number" or config_values.matrix_metric_slow_call_ms < 50 then
-    config_values.matrix_metric_slow_call_ms = defaults.matrix_metric_slow_call_ms
-    add_config_warning("matrix_metric_slow_call_ms missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_slow_call_ms))
-  elseif config_values.matrix_metric_slow_call_ms > 5000 then
-    config_values.matrix_metric_slow_call_ms = 5000
-    add_config_warning("matrix_metric_slow_call_ms too high; clamping to 5000ms")
-  end
-  if type(config_values.matrix_metric_slow_poll_multiplier) ~= "number" or config_values.matrix_metric_slow_poll_multiplier < 1 then
-    config_values.matrix_metric_slow_poll_multiplier = defaults.matrix_metric_slow_poll_multiplier
-    add_config_warning("matrix_metric_slow_poll_multiplier missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_slow_poll_multiplier))
-  elseif config_values.matrix_metric_slow_poll_multiplier > 30 then
-    config_values.matrix_metric_slow_poll_multiplier = 30
-    add_config_warning("matrix_metric_slow_poll_multiplier too high; clamping to 30x")
-  end
-  if type(config_values.matrix_metric_per_matrix_budget) ~= "number" or config_values.matrix_metric_per_matrix_budget <= 0 then
-    config_values.matrix_metric_per_matrix_budget = defaults.matrix_metric_per_matrix_budget
-    add_config_warning("matrix_metric_per_matrix_budget missing/invalid; defaulting to " .. tostring(defaults.matrix_metric_per_matrix_budget))
-  elseif config_values.matrix_metric_per_matrix_budget > 4 then
-    config_values.matrix_metric_per_matrix_budget = 4
-    add_config_warning("matrix_metric_per_matrix_budget too high; clamping to 4")
-  end
-  if type(config_values.matrix_component_poll_interval) ~= "number" or config_values.matrix_component_poll_interval <= 0 then
-    config_values.matrix_component_poll_interval = defaults.matrix_component_poll_interval
-    add_config_warning("matrix_component_poll_interval missing/invalid; defaulting to " .. tostring(defaults.matrix_component_poll_interval))
-  elseif config_values.matrix_component_poll_interval > 300 then
-    config_values.matrix_component_poll_interval = 300
-    add_config_warning("matrix_component_poll_interval too high; clamping to 300s")
-  end
-  if type(config_values.matrix_component_call_budget) ~= "number" or config_values.matrix_component_call_budget <= 0 then
-    config_values.matrix_component_call_budget = defaults.matrix_component_call_budget
-    add_config_warning("matrix_component_call_budget missing/invalid; defaulting to " .. tostring(defaults.matrix_component_call_budget))
-  elseif config_values.matrix_component_call_budget > 12 then
-    config_values.matrix_component_call_budget = 12
-    add_config_warning("matrix_component_call_budget too high; clamping to 12")
-  end
-  if type(config_values.matrix_component_time_budget_ms) ~= "number" or config_values.matrix_component_time_budget_ms < 50 then
-    config_values.matrix_component_time_budget_ms = defaults.matrix_component_time_budget_ms
-    add_config_warning("matrix_component_time_budget_ms missing/invalid; defaulting to " .. tostring(defaults.matrix_component_time_budget_ms))
-  elseif config_values.matrix_component_time_budget_ms > 5000 then
-    config_values.matrix_component_time_budget_ms = 5000
-    add_config_warning("matrix_component_time_budget_ms too high; clamping to 5000ms")
-  end
-  if type(config_values.ui_refresh_interval) ~= "number" or config_values.ui_refresh_interval <= 0 then
-    config_values.ui_refresh_interval = defaults.ui_refresh_interval
-    add_config_warning("ui_refresh_interval missing/invalid; defaulting to " .. tostring(defaults.ui_refresh_interval))
-  end
-  if type(config_values.ui_scale) ~= "number" or config_values.ui_scale <= 0 then
-    config_values.ui_scale = defaults.ui_scale
-    add_config_warning("ui_scale missing/invalid; defaulting to " .. tostring(defaults.ui_scale))
-  end
-  if type(config_values.monitor) ~= "table" then
-    config_values.monitor = utils.deep_copy(defaults.monitor)
-    add_config_warning("monitor config missing/invalid; defaulting to configured monitor options")
-  end
-  if config_values.monitor.preferred_name ~= nil and type(config_values.monitor.preferred_name) ~= "string" then
-    config_values.monitor.preferred_name = defaults.monitor.preferred_name
-    add_config_warning("monitor.preferred_name invalid; defaulting to configured value")
-  end
-  if type(config_values.monitor.strategy) ~= "string" then
-    config_values.monitor.strategy = defaults.monitor.strategy
-    add_config_warning("monitor.strategy invalid; defaulting to " .. tostring(defaults.monitor.strategy))
-  end
-  if type(config_values.storage_filters) ~= "table" then
-    config_values.storage_filters = utils.deep_copy(defaults.storage_filters)
-    add_config_warning("storage_filters missing/invalid; defaulting to configured filters")
-  end
-  if config_values.storage_filters.include_names ~= nil and type(config_values.storage_filters.include_names) ~= "table" then
-    config_values.storage_filters.include_names = defaults.storage_filters.include_names
-    add_config_warning("storage_filters.include_names invalid; defaulting to configured value")
-  end
-  if type(config_values.storage_filters.exclude_names) ~= "table" then
-    config_values.storage_filters.exclude_names = utils.deep_copy(defaults.storage_filters.exclude_names)
-    add_config_warning("storage_filters.exclude_names missing/invalid; defaulting to configured list")
-  end
-  if type(config_values.storage_filters.prefer_names) ~= "table" then
-    config_values.storage_filters.prefer_names = utils.deep_copy(defaults.storage_filters.prefer_names)
-    add_config_warning("storage_filters.prefer_names missing/invalid; defaulting to configured list")
-  end
-  if type(config_values.heartbeat_interval) ~= "number" or config_values.heartbeat_interval <= 0 then
-    config_values.heartbeat_interval = defaults.heartbeat_interval
-    add_config_warning("heartbeat_interval missing/invalid; defaulting to " .. tostring(defaults.heartbeat_interval))
-  elseif config_values.heartbeat_interval > 60 then
-    config_values.heartbeat_interval = 60
-    add_config_warning("heartbeat_interval too high; clamping to 60s")
-  end
-  if type(config_values.status_interval) ~= "number" or config_values.status_interval <= 0 then
-    config_values.status_interval = defaults.status_interval
-    add_config_warning("status_interval missing/invalid; defaulting to " .. tostring(defaults.status_interval))
-  elseif config_values.status_interval > 60 then
-    config_values.status_interval = 60
-    add_config_warning("status_interval too high; clamping to 60s")
-  end
-  if type(config_values.channels) ~= "table" then
-    config_values.channels = utils.deep_copy(defaults.channels)
-    add_config_warning("channels missing/invalid; defaulting to control/status defaults")
-  end
-  if type(config_values.channels.control) ~= "number" then
-    config_values.channels.control = defaults.channels.control
-    add_config_warning("channels.control missing/invalid; defaulting to " .. tostring(defaults.channels.control))
-  end
-  if type(config_values.channels.status) ~= "number" then
-    config_values.channels.status = defaults.channels.status
-    add_config_warning("channels.status missing/invalid; defaulting to " .. tostring(defaults.channels.status))
-  end
-  if type(config_values.comms) ~= "table" then
-    config_values.comms = utils.deep_copy(defaults.comms)
-    add_config_warning("comms config missing/invalid; defaulting to comms defaults")
-  end
+  return config_normalizer.normalize(config_values, defaults, utils, add_config_warning)
 end
 
 validate_config(config, DEFAULT_CONFIG)
@@ -1546,41 +1363,30 @@ is_master_connected = function()
   return false, nil
 end
 
+local message_handler = nil
+
 local function handle_message(message)
-  if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
-    devices.proto_mismatch = true
-    return
-  end
-  if message.role == constants.roles.MASTER then
-    master_seen_ts = os.epoch("utc")
-    if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then
-      master_alerts = message.payload.alerts
-    end
-  end
+  return message_handler and message_handler.handle_message(message)
 end
 
 local function handle_command(message)
-  if not protocol.is_for_node(message, comms.network.id) then return end
-  local ok_proto = protocol.is_proto_compatible(message.proto_ver)
-  if not ok_proto then
-    return { ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" }
-  end
-  local payload = type(message.payload) == "table" and message.payload or nil
-  local command = payload and payload.command
-  if type(command) ~= "table" then
-    local result = { ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" }
-    devices.last_command = result.error
-    devices.last_command_ts = os.epoch("utc")
-    return result
-  end
-  local result = { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
-  devices.last_command = result.error
-  devices.last_command_ts = os.epoch("utc")
-  return result
+  return message_handler and message_handler.handle_command(message)
 end
 
 local function init()
   utils.log("ENERGY", "Initializing services (comms, discovery, telemetry, ui)", "INFO")
+  message_handler = command_handler.new({
+    protocol = protocol,
+    constants = constants,
+    get_comms_id = function() return comms and comms.network and comms.network.id or config.node_id end,
+    set_last_command = function(command_error)
+      devices.last_command = command_error
+      devices.last_command_ts = os.epoch("utc")
+    end,
+    mark_master_seen = function() master_seen_ts = os.epoch("utc") end,
+    on_master_alerts = function(alerts) master_alerts = alerts end,
+    on_proto_mismatch = function() devices.proto_mismatch = true end
+  })
   comms = comms_service.new({
     name = "COMMS",
     config = config,
