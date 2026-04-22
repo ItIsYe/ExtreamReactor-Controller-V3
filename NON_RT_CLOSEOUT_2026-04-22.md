@@ -41,9 +41,21 @@
 - `python3 tests/cc_parse_guard_test.py` ✅
 - `python3 tests/rt_main_parse_guard_test.py` ✅
 
-### Broad suite probes (executed for transparency)
-- `pytest -q tests/*.py` intentionally includes `tests/rt_main_structure_guard_test.py` and fails by design on RT size policy in this repo state.
-- `lua tests/*.lua` broad probe is environment-sensitive (plain Lua runtime, no CC:Tweaked globals) and includes many RT-track checks; results are therefore not used as non-RT closeout gate.
+### Additional formal signoff checks (executed)
+- Full Python guard sweep (excluding RT-size-track guard):
+  - `python3 tests/cc_parse_guard_test.py` ✅
+  - `python3 tests/energy_heartbeat_decoupling_regression_test.py` ✅
+  - `python3 tests/energy_persistent_topology_regression_test.py` ✅
+  - `python3 tests/energy_scope_regression_test.py` ✅
+  - `python3 tests/rt_main_parse_guard_test.py` ✅
+  - `python3 tests/support_nodes_shared_runtime_regression_test.py` ✅
+  - `tests/rt_main_structure_guard_test.py` intentionally skipped (separate RT-audit track).
+- `pytest -q tests/*.py` executed for transparency and aborts during collection because `tests/rt_main_structure_guard_test.py` raises `SystemExit` by design on RT-size policy.
+- Lua runtime availability check executed; no `lua`/`luajit` binary in this environment, so `.lua` suites could not be executed in this signoff run.
+
+### Architecture consistency spot checks (executed)
+- Non-RT `main.lua` footprint check executed (`xreactor/master/main.lua`, `xreactor/nodes/energy/main.lua`, `xreactor/nodes/water/main.lua`, `xreactor/nodes/fuel/main.lua`, `xreactor/nodes/reprocessor/main.lua`) to ensure there is no forced/artificial split wave.
+- Support-layer usage check re-verified in `water`/`fuel`/`reprocessor` (`nodes/support/runtime.lua`, `nodes/support/discovery.lua`, `collect_devices_by_methods` path present in all three role mains).
 
 ## Excluded from this closeout (intentional)
 - RT refactor, RT state-machine behavior changes, RT safety behavior changes, or any file changes under `xreactor/nodes/rt/**`.
