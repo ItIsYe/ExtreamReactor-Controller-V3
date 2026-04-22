@@ -114,13 +114,6 @@ local function warn_once(key, message)
   end, key, message)
 end
 
-local function safe_wrapped_call(obj, method, ...)
-  if not obj or type(obj[method]) ~= "function" then
-    return false, "missing method"
-  end
-  return pcall(obj[method], ...)
-end
-
 local function master_peer_state()
   return role_logic.master_peer_state(comms, constants.roles.MASTER)
 end
@@ -187,7 +180,7 @@ local function read_buffers()
   for name, buf in pairs(buffers) do
     local stored = 0
     if buf.list and buf.size then
-      local ok, items = safe_wrapped_call(buf, "list")
+      local ok, items = support_runtime.safe_wrapped_call(buf, "list")
       if ok and type(items) == "table" then
         for _, stack in pairs(items) do
           if type(stack) == "table" and type(stack.count) == "number" then
@@ -198,14 +191,14 @@ local function read_buffers()
         warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(items))
       end
     elseif buf.getWaste then
-      local ok, value = safe_wrapped_call(buf, "getWaste")
+      local ok, value = support_runtime.safe_wrapped_call(buf, "getWaste")
       if ok and type(value) == "number" then
         stored = value
       elseif not ok then
         warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value))
       end
     elseif buf.getItemCount then
-      local ok, value = safe_wrapped_call(buf, "getItemCount")
+      local ok, value = support_runtime.safe_wrapped_call(buf, "getItemCount")
       if ok and type(value) == "number" then
         stored = value
       elseif not ok then

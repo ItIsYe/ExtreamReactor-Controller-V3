@@ -59,3 +59,16 @@
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.
 2. **Rollenwechsel**: erfolgt nicht im Update-Dialog; Rollenwechsel nur über Neuinstallation oder manuelle, bewusste Re-Konfiguration.
 3. **Bootstrap-Basics**: Node kommt ohne historische Setup-Reste hoch; Logs dokumentieren erkannten Role-/Runtime-Startpfad.
+
+## Finaler Akzeptanzlauf (Non-RT Abschluss)
+1. **Architektur-Guard (Support-Nodes)**: `python3 tests/support_nodes_shared_runtime_regression_test.py`.
+2. **ENERGY Scope-/Heartbeat-/Topologie-Regressionslauf**:
+   - `python3 tests/energy_scope_regression_test.py`
+   - `python3 tests/energy_heartbeat_decoupling_regression_test.py`
+   - `python3 tests/energy_persistent_topology_regression_test.py`
+3. **Parse-/Syntax-Guards**:
+   - `python3 tests/cc_parse_guard_test.py`
+   - `python3 tests/rt_main_parse_guard_test.py`
+4. **Optional lokal mit Lua-Interpreter**: ausgewählte `.lua`-Regressionen für Installer/MASTER/ENERGY/Support ergänzend ausführen.
+5. **Wichtig**: `tests/rt_main_structure_guard_test.py` ist ein RT-Größen-Guard und gehört in einen separaten RT-Audit-Track (kein Non-RT-Abschlusskriterium).
+

@@ -118,13 +118,6 @@ local function warn_once(key, message)
   end, key, message)
 end
 
-local function safe_wrapped_call(obj, method, ...)
-  if not obj or type(obj[method]) ~= "function" then
-    return false, "missing method"
-  end
-  return pcall(obj[method], ...)
-end
-
 local function cache()
   storage = nil
   if devices.storage_name and peripheral.isPresent(devices.storage_name) then
@@ -172,7 +165,7 @@ end
 
 local function read_fuel()
   if storage and storage.tanks then
-    local ok, tank_data = safe_wrapped_call(storage, "tanks")
+    local ok, tank_data = support_runtime.safe_wrapped_call(storage, "tanks")
     if ok and type(tank_data) == "table" then
       local total = 0
       for _, tank in pairs(tank_data) do
@@ -186,7 +179,7 @@ local function read_fuel()
     end
   end
   if storage and storage.getFluidAmount then
-    local ok, value = safe_wrapped_call(storage, "getFluidAmount")
+    local ok, value = support_runtime.safe_wrapped_call(storage, "getFluidAmount")
     if ok and type(value) == "number" then
       return value
     end

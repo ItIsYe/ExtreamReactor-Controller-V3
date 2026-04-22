@@ -13,5 +13,6 @@ for node in ('fuel', 'water', 'reprocessor'):
 
 assert 'function M.init_logging' in support_runtime, 'expected shared support init_logging helper'
 assert 'function M.run_event_loop' in support_runtime, 'expected shared support event loop helper'
+assert 'function M.safe_wrapped_call' in support_runtime, 'expected shared safe wrapped call helper'
 assert 'function M.collect_devices_by_methods' in support_discovery, 'expected shared discovery classification helper'
 print('support_nodes_shared_runtime_regression_test.py: ok')

@@ -60,6 +60,14 @@ function M.warn_once(state, log_fn, key, message)
   log_fn(message, "WARN")
 end
 
+
+function M.safe_wrapped_call(obj, method, ...)
+  if not obj or type(obj[method]) ~= "function" then
+    return false, "missing method"
+  end
+  return pcall(obj[method], ...)
+end
+
 function M.run_event_loop(receive_timeout, services, comms, after_cycle)
   while true do
     local timer = os.startTimer(receive_timeout)
