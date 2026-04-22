@@ -6,6 +6,8 @@ for node in ('fuel', 'water', 'reprocessor'):
     assert 'config_normalizer' in source, f'{node}: expected dedicated config_normalizer wiring'
     assert 'role_descriptor' in source, f'{node}: expected role_descriptor wiring'
     assert 'support_runtime.run_event_loop' in source, f'{node}: expected shared support runtime event loop usage'
+    assert 'support_ui_pages' in source, f'{node}: expected shared support ui_pages usage'
+    assert 'support_command_handler' in source, f'{node}: expected shared support command handler usage'
 
 assert 'function M.init_logging' in support_runtime, 'expected shared support init_logging helper'
 assert 'function M.run_event_loop' in support_runtime, 'expected shared support event loop helper'
