@@ -120,6 +120,16 @@ At runtime, the project is split into a small set of active areas:
 - `xreactor/start.lua` - startup router that reads the installed role and launches the correct entrypoint.
 - `installer` - single-file installer/update entrypoint for deployment.
 
+
+### Roadmap-Status (Non-RT)
+
+Der große Nicht-RT-Umbau ist auf dem aktuellen Stand im Wesentlichen abgeschlossen:
+- gemeinsame Nicht-RT-Bausteine sind aktiv,
+- ENERGY/MASTER/Installer laufen modular,
+- WATER/FUEL/REPROCESSOR nutzen die gemeinsame Support-Schicht.
+
+RT bleibt bewusst getrennt und unverändert; RT-Audits/Refactors laufen separat.
+
 Support-node architecture note:
 - `water`, `fuel`, and `reprocessor` keep role-specific control logic local, but share common discovery classification/runtime wiring via `nodes/support/*`.
 - RT (`xreactor/nodes/rt/*`) is intentionally separate and not part of these shared non-RT support abstractions.

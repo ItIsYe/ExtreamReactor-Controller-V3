@@ -75,3 +75,15 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 - Discovery-Klassifikation in kleinen Nodes ist auf gemeinsame Methoden-basierte Hilfslogik konsolidiert; Rollenspezifik bleibt über `kind`/Filter/Matcher pro Node erhalten.
 - Renderpfade bleiben über Payload -> UI-Modell -> Rendering geführt; direkte Discovery-/Registry-Scans finden weiterhin außerhalb des Renderpfads statt.
 - RT bleibt bewusst unverändert; offene RT-Themen sind ausschließlich Audit-/Backlog-Punkte für einen separaten RT-Track.
+
+## Finaler Abnahmestand (Non-RT, 2026-04-22)
+
+- Der Non-RT-Roadmap-Umbau gilt auf diesem Stand als **im Wesentlichen abgeschlossen**:
+  - ENERGY läuft modular über dedizierte Runtime-/Payload-/UI-Bausteine.
+  - MASTER läuft modular über `runtime_context`, `startup_sequencer`, `message_handlers`, `ui_controller` und UI-Teilmodule.
+  - Installer-Entry (`installer` + `xreactor/installer_main.lua`) bleibt extern kompatibel und nutzt die modulare Installer-Schicht.
+  - WATER/FUEL/REPROCESSOR nutzen die gemeinsame Support-Schicht (`nodes/support/*`) für Discovery, Event-Loop, Command-Handling, UI-Bausteine und Rollen-Connectivity.
+- Bewusst **nicht** Bestandteil dieses Abschlusses:
+  - RT-Refactor, RT-State-Machine-Änderungen, RT-Sicherheitsverhalten (SAFE/LIMITED/STARTUP), direkte Änderungen unter `xreactor/nodes/rt/*`.
+- Offener Backlog wird als separater **RT-Audit-Track** geführt.
+
