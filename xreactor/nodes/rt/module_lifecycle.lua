@@ -492,4 +492,109 @@ function M.update_module_states(ctx)
   end
 end
 
+function M.set_reactors_active(ctx, active, reason)
+  local reactors = ctx.peripherals and ctx.peripherals.reactors or {}
+  if not next(reactors) then
+    ctx.warn_once("reactors_missing", ctx.binding.missing_devices_message("reactor", ctx.binding.build_policy(ctx.configured_reactors, ctx.configured_turbines)))
+  end
+  for name, reactor in pairs(reactors) do
+    local caps = ctx.get_device_caps("reactors", name)
+    local ok, result = pcall(ctx.setReactorActive, reactor, caps, active)
+    if not ok then
+      ctx.warn_once("reactor_active:" .. name, "Reactor activate failed for " .. name .. ": " .. tostring(result))
+    elseif not result then
+      ctx.warn_unsupported(name)
+    else
+      ctx.log("INFO", ("Reactor active name=%s active=%s reason=%s"):format(tostring(name), tostring(active), tostring(reason or "UNSPECIFIED")))
+    end
+  end
+end
+
+function M.set_turbines_active(ctx, active, reason)
+  local turbines = ctx.peripherals and ctx.peripherals.turbines or {}
+  if not next(turbines) then
+    ctx.warn_once("turbines_missing", ctx.binding.missing_devices_message("turbine", ctx.binding.build_policy(ctx.configured_reactors, ctx.configured_turbines)))
+  end
+  for name, turbine in pairs(turbines) do
+    local caps = ctx.get_device_caps("turbines", name)
+    local ok, result = pcall(ctx.setTurbineActive, turbine, caps, active)
+    if not ok then
+      ctx.warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(result))
+    else
+      local ctrl = ctx.get_turbine_ctrl(name)
+      if ctrl.last_active_command ~= active or ctrl.last_active_command_reason ~= reason then
+        ctrl.last_active_command = active
+        ctrl.last_active_command_reason = reason
+        ctx.log("INFO", ("Turbine active name=%s active=%s reason=%s"):format(
+          tostring(name),
+          tostring(active),
+          tostring(reason or "UNSPECIFIED")
+        ))
+      end
+    end
+  end
+end
+
+function M.apply_safe_controls(ctx)
+  local reactors = ctx.peripherals and ctx.peripherals.reactors or {}
+  if not next(reactors) then
+    ctx.warn_once("reactors_missing", ctx.binding.missing_devices_message("reactor", ctx.binding.build_policy(ctx.configured_reactors, ctx.configured_turbines)))
+  end
+  for name, _ in pairs(reactors) do
+    local caps = ctx.get_device_caps("reactors", name)
+    if has_reactor_rod_write_path(caps) then
+      local ctrl = ctx.ensure_reactor_ctrl(name)
+      ctrl.last_applied = nil
+    else
+      ctx.warn_unsupported(name)
+    end
+  end
+  ctx.applyReactorRods(100, true, "SAFE_SCRAM")
+
+  local turbines = ctx.peripherals and ctx.peripherals.turbines or {}
+  if not next(turbines) then
+    ctx.warn_once("turbines_missing", ctx.binding.missing_devices_message("turbine", ctx.binding.build_policy(ctx.configured_reactors, ctx.configured_turbines)))
+  end
+  for name, turbine in pairs(turbines) do
+    local caps = ctx.get_device_caps("turbines", name)
+    local _, rpm_value = safe_wrapped_call(turbine, "getRotorSpeed")
+    local rpm = type(rpm_value) == "number" and rpm_value or nil
+    if caps.setInductorEngaged then
+      local ok, result = ctx.update_inductor_for_rpm(name, turbine, caps, rpm)
+      if not ok then
+        ctx.warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(result))
+      elseif not result then
+        ctx.warn_unsupported(name)
+      end
+    end
+    if caps.setFluidFlowRate or caps.setFluidFlowRateMax then
+      local ctrl = ctx.get_turbine_ctrl(name)
+      ctrl.mode = ctx.TURBINE_MODE.RAMP
+      ctrl.requested_flow = ctx.clamp_turbine_flow(ctrl.requested_flow or ctrl.flow or ctx.START_FLOW)
+      ctrl.flow = ctrl.requested_flow
+      ctrl.pending_expected_flow = ctrl.requested_flow
+      ctrl.pending_flow_since = 0
+      ctrl.pending_retries = 0
+      ctrl.startup_synced = false
+      local ok, result = pcall(ctx.setTurbineFlow, turbine, caps, ctrl.requested_flow)
+      if not ok then
+        ctx.warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result))
+      elseif not result then
+        ctx.warn_unsupported(name)
+      end
+    else
+      ctx.warn_unsupported(name)
+    end
+  end
+end
+
+function M.scram(ctx)
+  ctx.log("ERROR", "SCRAM ownership=STATE_MACHINE action=SCRAM_APPLY current_state=" .. tostring(ctx.get_current_state()))
+  M.apply_safe_controls(ctx)
+  if ctx.get_current_state() == ctx.STATE.SAFE then
+    M.set_reactors_active(ctx, false, "SCRAM_SAFE_STATE")
+    M.set_turbines_active(ctx, false, "SCRAM_SAFE_STATE")
+  end
+end
+
 return M
