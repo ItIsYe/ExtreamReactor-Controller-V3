@@ -46,6 +46,7 @@ local energy_ui_pages = require("nodes.energy.ui_pages")
 local runtime_context = require("nodes.energy.runtime_context")
 local discovery_runtime = require("nodes.energy.discovery_runtime")
 local storage_snapshot_runtime = require("nodes.energy.storage_snapshot_runtime")
+local role_logic = require("nodes.support.role_logic")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
@@ -167,15 +168,11 @@ local discover
 local now_ms = runtime.now_ms
 
 local function heartbeat_interval_ms()
-  return math.max(1, tonumber(config.heartbeat_interval) or 2) * 1000
+  return runtime_context.heartbeat_interval_ms(config)
 end
 
 local function minimal_presence_state(ts_ms)
-  return {
-    ts = ts_ms,
-    node_id = comms and comms.network and comms.network.id or config.node_id,
-    role = config.role
-  }
+  return runtime_context.make_presence(config, comms, ts_ms)
 end
 
 local function send_presence_heartbeat(ts_ms)
@@ -322,33 +319,23 @@ local function render_monitor()
   })
 end
 
-local warned = {}
 local function warn_once(key, message)
-  if warned[key] then return end
-  warned[key] = true
-  utils.log("ENERGY", message, "WARN")
+  runtime_context.warn_once(runtime, function(msg, level)
+    utils.log("ENERGY", msg, level)
+  end, key, message)
 end
 
 master_peer_state = function()
-  local peers = comms and comms:get_peers() or {}
-  for _, data in pairs(peers) do
-    if data.role == constants.roles.MASTER then
-      return data
-    end
-  end
-  return nil
+  return role_logic.master_peer_state(comms, constants.roles.MASTER)
 end
 
 is_master_connected = function()
-  local peer = master_peer_state()
-  if peer then
-    return not peer.down, peer.age
-  end
-  if runtime.master_seen_ts then
-    local age = (os.epoch("utc") - runtime.master_seen_ts) / 1000
-    return age <= config.heartbeat_interval * 6, age
-  end
-  return false, nil
+  return role_logic.is_master_connected({
+    comms = comms,
+    master_role = constants.roles.MASTER,
+    last_seen_ts = runtime.master_seen_ts,
+    heartbeat_interval = config.heartbeat_interval
+  })
 end
 
 local message_handler = nil

@@ -80,45 +80,36 @@ end
 
 runtime_context.normalize_config(config)
 
-local monitor_cache = {}
+local state = runtime_context.new_state()
+local monitor_cache = state.monitor_cache
 local monitor_mgr = nil
 local view_manager = nil
 local layout_config_path = "/xreactor/config/master_ui_layout.json"
-local nodes = {}
-local alarms = {}
+local nodes = state.nodes
+local alarms = state.alarms
 local alert_service = nil
-local power_target = 0
+local power_target = state.power_target
 local sequencer
 local comms
 local services
-local last_draw = 0
-local monitor_scan_last = 0
+local last_draw = state.last_draw
+local monitor_scan_last = state.monitor_scan_last
 local trends = trends_lib.new(600)
-local last_trend_sample = 0
-local active_profile = "BASELOAD"
-local auto_profile = profiles.AUTO_ENABLED or false
-local critical_blink_until = 0
-local trend_cache = { energy = {}, energy_arrow = "→" }
-local warned = {}
+local last_trend_sample = state.last_trend_sample
+local active_profile = state.active_profile
+local auto_profile = profiles.AUTO_ENABLED or state.auto_profile
+local critical_blink_until = state.critical_blink_until
+local trend_cache = state.trend_cache
 local ui_controller
 
 local function warn_once(key, message)
-  if warned[key] then return end
-  warned[key] = true
-  utils.log("MASTER", message)
-end
-
-local function table_count(tbl)
-  local count = 0
-  for _ in pairs(tbl or {}) do
-    count = count + 1
-  end
-  return count
+  runtime_context.warn_once(state, function(msg)
+    utils.log("MASTER", msg)
+  end, key, message)
 end
 
 local function master_time_label()
-  -- MASTER intentionally shows real UTC wall-clock time, not CC's in-game clock.
-  return time.wall_clock_hms_utc()
+  return runtime_context.master_time_label(time)
 end
 
 local function normalize_setpoints(setpoints)
@@ -413,7 +404,7 @@ local function init()
         event = event and event[1] or "tick",
         monitors = monitor_cache.list and #monitor_cache.list or 0,
         active_view = view_manager and view_manager.active_key or "overview",
-        node_count = table_count(nodes),
+        node_count = runtime_context.table_count(nodes),
         queue_depth = sequencer and #sequencer.queue or 0,
         critical_blink = critical_blink_until,
         trends = last_trend_sample
