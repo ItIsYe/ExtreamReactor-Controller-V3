@@ -108,7 +108,6 @@ local devices = {
   last_command_ts = nil
 }
 local master_alerts = {}
-local last_heartbeat = 0
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
 local monitor_router = nil
@@ -146,28 +145,17 @@ local function discover()
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
-  for _, name in ipairs(names) do
-    if config.storage_bus and name ~= config.storage_bus then
-      goto continue
+  local storage_devices = support_discovery.collect_devices_by_methods(names, {
+    kind = "storage",
+    allow_name = function(name)
+      return not config.storage_bus or name == config.storage_bus
+    end,
+    match = function(method_set)
+      return method_set.tanks or method_set.getFluidAmount
     end
-    local ok, methods = pcall(peripheral.getMethods, name)
-    if not ok or type(methods) ~= "table" then
-      goto continue
-    end
-    local method_set = {}
-    for _, method in ipairs(methods) do
-      method_set[method] = true
-    end
-    if method_set.tanks or method_set.getFluidAmount then
-      table.insert(registry_devices, {
-        name = name,
-        type = peripheral.getType(name),
-        methods = methods,
-        kind = "storage",
-        bound = true
-      })
-    end
-    ::continue::
+  })
+  for _, entry in ipairs(storage_devices) do
+    table.insert(registry_devices, entry)
   end
   registry:sync(registry_devices)
   devices.registry_summary = registry:get_summary()

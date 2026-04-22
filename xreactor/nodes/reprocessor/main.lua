@@ -104,7 +104,6 @@ local devices = {
   last_command_ts = nil
 }
 local master_alerts = {}
-local last_heartbeat = 0
 local master_seen = os.epoch("utc")
 local standby = false
 local monitor_router = nil
@@ -154,28 +153,17 @@ local function discover()
 
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
 
-  for _, name in ipairs(names) do
-    if not allow_all and not allow_set[name] then
-      goto continue
+  local buffer_devices = support_discovery.collect_devices_by_methods(names, {
+    kind = "buffer",
+    allow_name = function(name)
+      return allow_all or allow_set[name]
+    end,
+    match = function(method_set)
+      return (method_set.list and method_set.size) or method_set.getWaste or method_set.getItemCount
     end
-    local ok, methods = pcall(peripheral.getMethods, name)
-    if not ok or type(methods) ~= "table" then
-      goto continue
-    end
-    local method_set = {}
-    for _, method in ipairs(methods) do
-      method_set[method] = true
-    end
-    if (method_set.list and method_set.size) or method_set.getWaste or method_set.getItemCount then
-      table.insert(registry_devices, {
-        name = name,
-        type = peripheral.getType(name),
-        methods = methods,
-        kind = "buffer",
-        bound = true
-      })
-    end
-    ::continue::
+  })
+  for _, entry in ipairs(buffer_devices) do
+    table.insert(registry_devices, entry)
   end
   registry:sync(registry_devices)
   devices.registry_summary = registry:get_summary()
@@ -431,20 +419,13 @@ local function init()
     interval = 1,
     snapshot = function()
       local payload = build_status_payload()
-      local peers = comms and comms:get_peers() or {}
-      local master_state = "UNKNOWN"
-      for _, peer in pairs(peers) do
-        if peer.role == constants.roles.MASTER then
-          master_state = peer.down and "DOWN" or "OK"
-          break
-        end
-      end
+      local peer = master_peer_state()
       local node_id = comms and comms.network and comms.network.id or config.node_id
       local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
       return {
         page = monitor_router and monitor_router.index or 1,
         payload = payload,
-        master_state = master_state,
+        master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN",
         standby = standby,
         alerts = alert_payload and alert_payload.critical or 0,
         last_command = devices.last_command,
