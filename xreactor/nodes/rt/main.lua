@@ -82,123 +82,9 @@ local WARN = "WARN"
 local function log(level, message)
   utils.log(CONFIG.LOG_PREFIX, message, level)
 end
-local DEFAULT_CONFIG = {
-  role = constants.roles.RT_NODE, -- Node role identifier.
-  node_id = "RT-1", -- Default node_id used if none is set.
-  debug_logging = true, -- Keep enabled by default for RT stabilization diagnostics.
-  reset_log_on_start = true, -- Truncate runtime log at startup to keep disk usage bounded.
-  wireless_modem = nil, -- Autodetect wireless modem unless explicitly configured.
-  wired_modem = nil, -- Optional wired modem side.
-  modem = nil, -- Legacy modem field; prefer autodetect unless explicitly configured.
-  reactors = {}, -- Empty list enables auto-discovery for local reactors.
-  turbines = {}, -- Empty list enables auto-discovery for local turbines.
-  heartbeat_interval = 2, -- Seconds between status heartbeats.
-  scan_interval = 10, -- Seconds between peripheral discovery scans.
-  startup_watchdog_s = 60, -- Seconds before STARTUP watchdog trips.
-  channels = {
-    control = constants.channels.CONTROL, -- Control channel for MASTER commands.
-    status = constants.channels.STATUS -- Status channel for telemetry.
-  },
-  comms = {
-    ack_timeout_s = 3.0, -- Seconds before retrying a command.
-    max_retries = 4, -- Maximum retries per message.
-    backoff_base_s = 0.6, -- Base backoff seconds.
-    backoff_cap_s = 6.0, -- Max backoff seconds.
-    dedupe_ttl_s = 30, -- Seconds to keep dedupe entries.
-    dedupe_limit = 200, -- Max dedupe entries per peer.
-    peer_timeout_s = 12.0, -- Seconds before marking peer down.
-    queue_limit = 200, -- Max queued outbound messages.
-    drop_simulation = 0 -- Drop rate (0-1) for testing comms.
-  },
-  safety = {
-    max_temperature = 2000, -- Maximum reactor temperature before SCRAM.
-    temperature_hysteresis = 50, -- Temperature margin required before a pending over-limit condition is cleared.
-    temperature_trip_samples = 2, -- Consecutive over-limit samples required before SAFE is entered.
-    max_rpm = 1800, -- Maximum turbine RPM.
-    min_water = 0.2, -- Minimum coolant ratio before SCRAM.
-    coolant_hysteresis = 0.05, -- Coolant margin required before a pending low-coolant condition is cleared.
-    coolant_trip_samples = 3, -- Consecutive low-coolant samples required before SAFE is entered.
-    coolant_invalid_grace_samples = 3 -- Ignore short coolant read glitches before diagnostics mark the sample stream unavailable.
-  },
-  autonom = {
-    control_rod_level = 70, max_rpm = CONFIG.TARGET_RPM, min_flow = CONFIG.MIN_FLOW, max_flow = CONFIG.MAX_FLOW,
-    flow_step = CONFIG.FLOW_STEP, ramp_step = CONFIG.FLOW_STEP,
-    regulator_min_rods = 80, regulator_max_rods = CONFIG.ROD_MAX, reactor_adjust_interval = CONFIG.ROD_TICK,
-    steam_reserve = 5000,
-    steam_deficit = 5000
-  },
-  rails = {
-    ramp_profiles = {
-      NORMAL = { up = 1.0, down = 1.0 },
-      SLOW = { up = 0.5, down = 0.5 },
-      FAST = { up = 1.5, down = 1.5 }
-    },
-    turbine_flow = {
-      deadband_up = CONFIG.RPM_TOLERANCE, -- RPM deadband before increasing flow.
-      deadband_down = CONFIG.RPM_TOLERANCE, -- RPM deadband before decreasing flow.
-      hysteresis_up = 10, -- Extra RPM hysteresis for up direction.
-      hysteresis_down = 10, -- Extra RPM hysteresis for down direction.
-      max_step_up = 250, -- Max flow increase per tick.
-      max_step_down = 250, -- Max flow decrease per tick.
-      min_step_up = 50, -- Min flow increase when adaptive stepping is active.
-      min_step_down = 50, -- Min flow decrease when adaptive stepping is active.
-      step_per_rpm_up = 0.5, -- Flow step gain per RPM error (up direction).
-      step_per_rpm_down = 0.5, -- Flow step gain per RPM error (down direction).
-      adaptive_step = true, -- Enable adaptive step sizing based on RPM error.
-      cooldown_s = 0.2, -- Minimum seconds between flow changes.
-      settle_timeout_s = 0.8, -- Maximum wait for requested flow to appear in readback before normal cooldown resumes.
-      confirm_tolerance = 1, -- Allowed delta between requested and confirmed flow.
-      readback_retry_cap = 3, -- Retry cap before cooldown defer is stopped to keep control responsive.
-      readback_fast_rereads = 2, -- Immediate re-read attempts after a write to reduce stale readback impact.
-      effective_min_samples = 3, -- Readback samples needed before persisting effective min flow.
-      target_hold_band_rpm = 30, -- Active holding band around target RPM.
-      target_trim_trigger_rpm = 6, -- RPM error threshold for target-band trim corrections.
-      target_trim_hold_samples = 2, -- Require repeated in-band confirmations before entering HOLDING_TARGET_ACTIVE.
-      target_trim_step_up = 50, -- Fine up-trim step while holding target RPM.
-      target_trim_step_down = 75, -- Fine down-trim step while holding target RPM.
-      min = CONFIG.MIN_FLOW, -- Flow clamp minimum.
-      max = CONFIG.MAX_FLOW, -- Flow clamp maximum.
-      ema_alpha = 0.2 -- RPM smoothing alpha.
-    },
-    reactor_rods = {
-      deadband_up = 5000, deadband_down = 5000, hysteresis_up = 500, hysteresis_down = 500,
-      max_step_up = CONFIG.REACTOR_STEP, max_step_down = CONFIG.REACTOR_STEP,
-      max_apply_step_up = CONFIG.REACTOR_STEP, max_apply_step_down = CONFIG.REACTOR_STEP,
-      cooldown_s = CONFIG.MIN_APPLY_INTERVAL, -- Minimum seconds between rod changes.
-      apply_cooldown_s = CONFIG.MIN_APPLY_INTERVAL, -- Minimum seconds between applied rod changes.
-      coolant_ramp_soft_limit_ratio = 0.28, -- Soft coolant margin where power-up rod withdraw is damped.
-      coolant_ramp_hard_limit_ratio = 0.22, -- Hard coolant margin where power-up rod withdraw is blocked.
-      max_step_down_when_coolant_soft = 2, -- Max withdraw step when coolant enters soft-limit zone.
-      max_step_down_when_coolant_hard = 0, -- Max withdraw step when coolant enters hard-limit zone.
-      -- Inverted rod semantics (Mekanism): 100% rods = 0% reactor power, 0% rods = 100% reactor power.
-      -- Test cap requirement: max 20% automatic reactor power => minimum 80% rods.
-      min = 80, -- Rod clamp minimum for automatic regulator path defaults.
-      max = CONFIG.ROD_MAX, -- Rod clamp maximum.
-      ema_alpha = 0.25 -- Steam margin smoothing alpha.
-    },
-    reactor_steam_guard = {
-      -- Internal reactor steam/hot-fluid is a secondary guard signal, not the primary regulator target.
-      -- Existing turbine-demand/steam-margin logic remains the lead control path.
-      enabled = true,
-      high_ratio = 0.82,
-      high_release_ratio = 0.74,
-      critical_ratio = 0.92,
-      critical_release_ratio = 0.86,
-      force_close_step = 2,
-      ema_alpha = 0.20
-    },
-    coil = {
-      engage_rpm = CONFIG.COIL_ENGAGE_RPM, -- Coil engage threshold.
-      disengage_rpm = CONFIG.COIL_DISENGAGE_RPM, -- Coil disengage threshold.
-      cooldown_s = 1.0, -- Minimum seconds between coil changes.
-      ema_alpha = 0.2 -- RPM smoothing alpha.
-    }
-  },
-  monitor_interval = 2, -- Monitor update interval (seconds).
-  monitor_scale = 0.5, -- Monitor UI scale.
-  status_interval = 5, -- Status log interval (seconds).
-  status_log = false -- Enable periodic status log output.
-}
+local rt_default_config = require("nodes.rt.config")
+local DEFAULT_CONFIG = utils.deep_copy(rt_default_config)
+
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message)
@@ -740,7 +626,7 @@ local function init_reactor_ctrl()
     }
   end
 end
-function applyReactorRods(target, allow_overmax, source)
+local function applyReactorRods(target, allow_overmax, source)
   local now = os.clock()
   if now - last_rod_apply_ts < MIN_APPLY_INTERVAL then
     return false
@@ -942,7 +828,7 @@ local function updateReactorControl()
   controlReactor()
   log_reactor_control_tick()
 end
-function warn_once(key, message)
+local function warn_once(key, message)
   if warned[key] then
     return
   end
@@ -1817,7 +1703,7 @@ cache = function()
   return discovery_runtime.cache(build_discovery_context())
 end
 
-function dumpPeripherals()
+local function dumpPeripherals()
   for _, name in ipairs(peripheral.getNames()) do
     local pType = peripheral.getType(name)
     log(INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
@@ -1883,7 +1769,7 @@ refresh_module_peripherals = function()
   end
 end
 
-function ramp_duration(profile)
+local function ramp_duration(profile)
   return ramp_profiles[profile] or ramp_profiles.NORMAL
 end
 
@@ -1906,23 +1792,23 @@ local function build_health_payload_context()
   }
 end
 
-function master_peer_state()
+local function master_peer_state()
   return health_payload.master_peer_state(build_health_payload_context())
 end
 
-function is_master_connected()
+local function is_master_connected()
   return health_payload.is_master_connected(build_health_payload_context())
 end
 
-function build_health_payload()
+local function build_health_payload()
   return health_payload.build_health_payload(build_health_payload_context())
 end
 
-function add_alarm(sender, severity, message)
+local function add_alarm(sender, severity, message)
   comms:send_alert(severity, message)
 end
 
-function build_status_payload(status_level)
+local function build_status_payload(status_level)
   return status_snapshot_lib.build_status_payload({
     status_level = status_level,
     node_state_machine = node_state_machine,
@@ -1941,12 +1827,12 @@ function build_status_payload(status_level)
   })
 end
 
-function broadcast_status(status_level)
+local function broadcast_status(status_level)
   local payload = build_status_payload(status_level)
   comms:publish_status(payload)
 end
 
-function hello()
+local function hello()
   local summary = registry:get_summary()
   local caps = {
     reactors = summary.kinds.reactor and summary.kinds.reactor.bound or 0,
@@ -2051,7 +1937,7 @@ apply_safe_controls = function()
   end
 end
 
-function scram()
+local function scram()
   log("ERROR", "SCRAM ownership=STATE_MACHINE action=SCRAM_APPLY current_state=" .. tostring(current_state))
   apply_safe_controls()
   if current_state == STATE.SAFE then
@@ -2060,7 +1946,7 @@ function scram()
   end
 end
 
-function build_module_lifecycle_context()
+local function build_module_lifecycle_context()
   return {
     constants = constants,
     STATE = STATE,
@@ -2094,22 +1980,22 @@ function build_module_lifecycle_context()
   }
 end
 
-function update_module_limits(module)
+local function update_module_limits(module)
   return module_lifecycle.update_module_limits(build_module_lifecycle_context(), module)
 end
-function start_module(module_id, module_type, ramp_profile)
+local function start_module(module_id, module_type, ramp_profile)
   return module_lifecycle.start_module(build_module_lifecycle_context(), module_id, module_type, ramp_profile)
 end
 
-function process_startup()
+local function process_startup()
   module_lifecycle.process_startup(build_module_lifecycle_context())
 end
 
-function update_module_states()
+local function update_module_states()
   module_lifecycle.update_module_states(build_module_lifecycle_context())
 end
 
-function monitor_master()
+local function monitor_master()
   local connected = is_master_connected()
   if not connected then
     if setState(STATE.AUTONOM, "MASTER_TIMEOUT_AUTONOM_FALLBACK") then
@@ -2119,17 +2005,17 @@ function monitor_master()
   end
 end
 
-function clamp_autonom_targets()
+local function clamp_autonom_targets()
   targets.power = 0
   targets.rpm = ramp_towards(targets.rpm, TARGET_RPM, config.autonom.flow_step)
   targets.steam = 0
 end
 
-function note_master_seen()
+local function note_master_seen()
   master_seen = os.epoch("utc")
 end
 
-function update_status_snapshot()
+local function update_status_snapshot()
   last_status_snapshot = status_snapshot_lib.update_status_snapshot({
     monitor_ui = monitor_ui,
     devices = devices,
@@ -2148,7 +2034,7 @@ function update_status_snapshot()
   return last_status_snapshot
 end
 
-function init_monitor()
+local function init_monitor()
   local monitor_name_or_err
   monitor, monitor_name_or_err = monitor_ui.init(monitor_adapter, config.monitor, config.monitor_scale)
   if not monitor then
@@ -2158,7 +2044,7 @@ function init_monitor()
   end
 end
 
-function update_monitor()
+local function update_monitor()
   last_status_snapshot = monitor_ui.update(monitor, {
     config = config,
     devices = devices,
@@ -2185,21 +2071,21 @@ function update_monitor()
   })
 end
 
-function reset_startup_watchdog()
+local function reset_startup_watchdog()
   startup_started_ms = nil
   startup_watchdog_tripped = false
 end
 
-function build_peripheral_summary()
+local function build_peripheral_summary()
   local summary = devices.registry_summary or registry:get_summary() or {}
   return startup_diagnostics.build_peripheral_summary(summary)
 end
 
-function should_emergency_startup(snapshot)
+local function should_emergency_startup(snapshot)
   return startup_diagnostics.should_emergency_startup(snapshot, config.safety.max_temperature, config.safety.max_rpm)
 end
 
-function handle_startup_timeout()
+local function handle_startup_timeout()
   if startup_watchdog_tripped then
     return
   end
@@ -2233,7 +2119,7 @@ function handle_startup_timeout()
 end
 local states
 
-function build_state_context()
+local function build_state_context()
   return {
     constants = constants,
     STATE = STATE,
@@ -2266,7 +2152,7 @@ function build_state_context()
   }
 end
 
-function build_command_context()
+local function build_command_context()
   return {
     protocol = protocol,
     constants = constants,
@@ -2288,14 +2174,14 @@ function build_command_context()
 end
 local handle_command
 
-function send_heartbeat()
+local function send_heartbeat()
   update_status_snapshot()
   comms:send_heartbeat({ state = node_state_machine.state() })
   broadcast_status(constants.status_levels.OK)
   last_heartbeat = os.epoch("utc")
 end
 
-function control_tick()
+local function control_tick()
   refresh_module_peripherals()
   process_startup()
   update_module_states()
