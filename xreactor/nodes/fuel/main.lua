@@ -35,6 +35,7 @@ local safety = require("core.safety")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
 local support_runtime = require("nodes.support.runtime")
+local role_logic = require("nodes.support.role_logic")
 local role_descriptor = require("nodes.fuel.role_descriptor")
 local config_normalizer = require("nodes.fuel.config_normalizer")
 
@@ -424,25 +425,16 @@ local function handle_command(message)
 end
 
 local function master_peer_state()
-  local peers = comms and comms:get_peers() or {}
-  for _, data in pairs(peers) do
-    if data.role == constants.roles.MASTER then
-      return data
-    end
-  end
-  return nil
+  return role_logic.master_peer_state(comms, constants.roles.MASTER)
 end
 
 local function is_master_connected()
-  local peer = master_peer_state()
-  if peer then
-    return not peer.down, peer.age
-  end
-  if master_seen_ts then
-    local age = (os.epoch("utc") - master_seen_ts) / 1000
-    return age <= config.heartbeat_interval * 6, age
-  end
-  return false, nil
+  return role_logic.is_master_connected({
+    comms = comms,
+    master_role = constants.roles.MASTER,
+    last_seen_ts = master_seen_ts,
+    heartbeat_interval = config.heartbeat_interval
+  })
 end
 
 local function init()

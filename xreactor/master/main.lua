@@ -38,6 +38,7 @@ local runtime_context = require("master.runtime_context")
 local rt_sync = require("master.rt_sync")
 local message_handlers = require("master.message_handlers")
 local housekeeping = require("master.housekeeping")
+local ui_controller_lib = require("master.ui_controller")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local alert_service_lib = require("services.alert_service")
@@ -99,6 +100,7 @@ local auto_profile = profiles.AUTO_ENABLED or false
 local critical_blink_until = 0
 local trend_cache = { energy = {}, energy_arrow = "→" }
 local warned = {}
+local ui_controller
 
 local function warn_once(key, message)
   if warned[key] then return end
@@ -327,271 +329,8 @@ local function sample_trends()
   end
 end
 
-local function compute_system_status()
-  local status = constants.status_levels.OK
-  if alert_service then
-    local counts = alert_service:get_counts() or {}
-    if (counts.CRITICAL or 0) > 0 then
-      return constants.status_levels.EMERGENCY
-    elseif (counts.WARN or 0) > 0 then
-      status = constants.status_levels.WARNING
-    end
-  end
-  for _, node in pairs(nodes) do
-    if node.status == constants.status_levels.EMERGENCY then
-      return constants.status_levels.EMERGENCY
-    elseif node.status == constants.status_levels.LIMITED then
-      status = constants.status_levels.LIMITED
-    elseif node.status == constants.status_levels.WARNING then
-      status = constants.status_levels.WARNING
-    end
-  end
-  for _, alarm in ipairs(alarms) do
-    if alarm.severity == constants.status_levels.EMERGENCY then
-      return constants.status_levels.EMERGENCY
-    elseif alarm.severity == constants.status_levels.WARNING then
-      status = constants.status_levels.WARNING
-    end
-  end
-  return status
-end
-
 local function build_master_alert_payload()
   return housekeeping.build_master_alert_payload(alert_service, config)
-end
-
-local function draw()
-  local now = os.epoch("utc")
-  if now - last_draw < 400 then return end
-  last_draw = now
-  local overview_data = {
-    nodes = {},
-    power_target = power_target,
-    alarms = alarms,
-    tiles = {},
-    system_status = compute_system_status(),
-    profile_list = { "BASELOAD", "PEAK", "IDLE" },
-    active_profile = active_profile,
-    auto_profile = auto_profile
-  }
-  local alert_counts = alert_service and alert_service:get_counts() or { INFO = 0, WARN = 0, CRITICAL = 0 }
-  local alert_summary = alert_service and alert_service:get_summary() or ""
-  local alert_active = alert_service and alert_service:get_active() or {}
-  local alert_history = alert_service and alert_service:get_history() or {}
-  local alert_top = alert_service and alert_service:get_top_critical(3) or {}
-  local alert_metrics = alert_service and alert_service:get_metrics() or {}
-  local alert_mutes = alert_service and alert_service:get_mutes() or {}
-  overview_data.alert_counts = alert_counts
-  overview_data.alert_summary = alert_summary
-  overview_data.alert_top = alert_top
-  local rt_data = {
-    rt_nodes = {},
-    ramp_profile = sequencer.ramp_profile,
-    sequence_state = sequencer.state,
-    queue = sequencer.queue,
-    active_step = sequencer.active,
-    control_mode = nil,
-    alert_counts = alert_counts,
-    alert_top = alert_top
-  }
-  local energy_data = {
-    stored = 0,
-    capacity = 0,
-    input = 0,
-    output = 0,
-    stores = {},
-    nodes = {},
-    matrices = {},
-    top_matrices = {},
-    trend_values = trend_cache.energy,
-    trend_arrow = trend_cache.energy_arrow,
-    trend_dirty = trends:is_dirty("energy"),
-    now_ms = os.epoch("utc"),
-    alert_counts = alert_counts,
-    alert_top = alert_top
-  }
-  local resource_data = { fuel = { reserve = 0, minimum = 0, sources = {}, total = 0 }, water = { total = 0, buffers = {}, target = nil }, reprocessor = {}, node_details = {}, comms = comms:get_diagnostics() or {} }
-
-  for _, node in pairs(nodes) do
-    local reasons = node.health and node.health.reasons or {}
-    local reason_list = type(reasons) == "table" and (#reasons > 0 and reasons or health.reasons_list({ reasons = reasons })) or {}
-    local reason_text = type(reason_list) == "table" and table.concat(reason_list, ",") or nil
-    local bindings_summary = node.bindings_summary
-    if not bindings_summary and node.health and type(node.health.bindings) == "table" then
-      bindings_summary = health.summarize_bindings(node.health.bindings)
-    end
-    local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((os.epoch("utc") - node.last_seen) / 1000)) or nil)
-    table.insert(overview_data.nodes, {
-      id = node.id,
-      role = node.role,
-      status = node.status or constants.status_levels.OFFLINE,
-      last_seen = node.last_seen_str,
-      last_seen_age = age,
-      mode = node.mode,
-      reasons = reason_text,
-      bindings = bindings_summary
-    })
-    table.insert(resource_data.node_details, {
-      id = node.id,
-      role = node.role,
-      status = node.status or constants.status_levels.OFFLINE,
-      reasons = reason_text,
-      bindings = bindings_summary,
-      last_seen_age = age,
-      down_since = node.down_since,
-      registry = node.registry,
-      last_error = node.last_error,
-      last_error_ts = node.last_error_ts,
-      last_command_result = node.last_command_result,
-      last_command_error = node.last_command_error
-    })
-    if node.role == constants.roles.RT_NODE then
-      table.insert(rt_data.rt_nodes, { id = node.id, state = node.state or constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status, mode = node.mode })
-    elseif node.role == constants.roles.ENERGY_NODE then
-      energy_data.stored = energy_data.stored + (node.stored or 0)
-      energy_data.capacity = energy_data.capacity + (node.capacity or 0)
-      energy_data.input = energy_data.input + (node.input or 0)
-      energy_data.output = energy_data.output + (node.output or 0)
-      table.insert(energy_data.stores, { id = node.id, stored = node.stored, capacity = node.capacity, input = node.input, output = node.output })
-      table.insert(energy_data.nodes, {
-        id = node.id,
-        monitor_bound = node.monitor_bound,
-        storage_bound_count = node.storage_bound_count,
-        bound_storage_names = node.bound_storage_names,
-        degraded_reason = node.health and node.health.reasons and table.concat(node.health.reasons, ",") or node.degraded_reason,
-        last_scan_ts = node.last_scan_ts,
-        last_scan_result = node.last_scan_result,
-        status = node.status,
-        bindings_summary = node.bindings_summary,
-        registry = node.registry
-      })
-      if node.matrices then
-        for _, matrix in ipairs(node.matrices) do
-          local percent = matrix.capacity and matrix.capacity > 0 and (matrix.stored or 0) / matrix.capacity or (matrix.percent or 0)
-          table.insert(energy_data.matrices, {
-            id = matrix.id or matrix.name or (node.id .. ":matrix"),
-            label = matrix.label or matrix.name or matrix.alias,
-            stored = matrix.stored,
-            capacity = matrix.capacity,
-            percent = percent,
-            input = matrix.input,
-            output = matrix.output,
-            status = matrix.status or node.status,
-            node_id = node.id
-          })
-        end
-      end
-    elseif node.role == constants.roles.FUEL_NODE then
-      resource_data.fuel.reserve = node.reserve or resource_data.fuel.reserve
-      resource_data.fuel.minimum = node.minimum_reserve or resource_data.fuel.minimum
-      resource_data.fuel.sources = node.sources or resource_data.fuel.sources
-    elseif node.role == constants.roles.WATER_NODE then
-      resource_data.water.total = node.total_water or resource_data.water.total
-      resource_data.water.buffers = node.buffers or resource_data.water.buffers
-      resource_data.water.state = node.state
-    elseif node.role == constants.roles.REPROCESSOR_NODE then
-      resource_data.reprocessor = node.reprocessor or {}
-    end
-  end
-
-  table.sort(rt_data.rt_nodes, function(a, b) return (a.id or "") < (b.id or "") end)
-  table.sort(energy_data.stores, function(a, b) return (a.id or "") < (b.id or "") end)
-  table.sort(energy_data.nodes, function(a, b) return (a.id or "") < (b.id or "") end)
-  table.sort(energy_data.matrices, function(a, b) return (a.percent or 0) > (b.percent or 0) end)
-  table.sort(resource_data.fuel.sources, function(a, b) return (a.id or "") < (b.id or "") end)
-
-  local fuel_total = 0
-  for _, src in ipairs(resource_data.fuel.sources or {}) do
-    fuel_total = fuel_total + (src.amount or 0)
-  end
-  resource_data.fuel.total = fuel_total
-  resource_data.fuel.mix_status = (#(resource_data.fuel.sources or {}) > 1) and "MIXED" or "SINGLE"
-  if energy_data.capacity > 0 then
-    local pct = (energy_data.stored / energy_data.capacity) * 100
-    if pct <= config.energy_crit_pct then
-      energy_data.status = "EMERGENCY"
-    elseif pct <= config.energy_warn_pct then
-      energy_data.status = "WARNING"
-    else
-      energy_data.status = "OK"
-    end
-  else
-    energy_data.status = "OFFLINE"
-  end
-  for i = 1, math.min(3, #energy_data.matrices) do
-    table.insert(energy_data.top_matrices, energy_data.matrices[i])
-  end
-  local modes = {}
-  for _, rt in ipairs(rt_data.rt_nodes) do
-    if rt.mode then
-      modes[rt.mode] = true
-    end
-  end
-  local mode_list = {}
-  for mode in pairs(modes) do
-    table.insert(mode_list, mode)
-  end
-  table.sort(mode_list)
-  if #mode_list == 1 then
-    rt_data.control_mode = mode_list[1]
-  elseif #mode_list > 1 then
-    rt_data.control_mode = "MIXED"
-  end
-  local tile_map = {
-    { label = "RT", role = constants.roles.RT_NODE },
-    { label = "ENERGY", role = constants.roles.ENERGY_NODE },
-    { label = "FUEL", role = constants.roles.FUEL_NODE },
-    { label = "WATER", role = constants.roles.WATER_NODE },
-    { label = "REPROCESSOR", role = constants.roles.REPROCESSOR_NODE }
-  }
-  local status_rank = {
-    [constants.status_levels.EMERGENCY] = 1,
-    [constants.status_levels.WARNING] = 2,
-    [constants.status_levels.LIMITED] = 3,
-    [constants.status_levels.OK] = 4,
-    [constants.status_levels.OFFLINE] = 5,
-    [constants.status_levels.MANUAL] = 6
-  }
-  for _, entry in ipairs(tile_map) do
-    local tile_status = constants.status_levels.OFFLINE
-    for _, node in pairs(nodes) do
-      if node.role == entry.role then
-        local node_status = node.status or constants.status_levels.OFFLINE
-        if (status_rank[node_status] or 99) < (status_rank[tile_status] or 99) then
-          tile_status = node_status
-        end
-      end
-    end
-    table.insert(overview_data.tiles, { label = entry.label, status = tile_status, detail = entry.role })
-  end
-
-  local rendered_views = {}
-  if view_manager then
-    local data_map = {
-      overview = overview_data,
-      rt = rt_data,
-      energy = energy_data,
-      resources = resource_data,
-      alarms = { alarms = alarms, header_blink = os.epoch("utc") < critical_blink_until and math.floor(os.epoch("utc") / 400) % 2 == 0 },
-      alerts = {
-        counts = alert_counts,
-        summary = alert_summary,
-        active = alert_active,
-        history = alert_history,
-        metrics = alert_metrics,
-        mutes = alert_mutes,
-        config = {
-          mute_default_minutes = config.alert_mute_default_minutes,
-          mute_durations = config.alert_mute_durations
-        },
-        now_ms = now
-      }
-    }
-    rendered_views = view_manager:render(monitor_cache.list or {}, data_map) or {}
-  end
-  if rendered_views.energy and trends:is_dirty("energy") then
-    trends:clear_dirty("energy")
-  end
 end
 
 local function init()
@@ -613,27 +352,8 @@ local function init()
     },
     view_order = { "overview", "energy", "rt", "resources", "alerts", "alarms" },
     on_action = function(action)
-      if not action then return end
-      if action.type == "profile" then
-        apply_profile(action.name)
-      elseif action.type == "auto" then
-        auto_profile = not auto_profile
-      elseif action.type == "alert_ack" and alert_service then
-        alert_service:ack(action.id)
-      elseif action.type == "alert_unack" and alert_service then
-        alert_service:unack(action.id)
-      elseif action.type == "alert_ack_visible" and alert_service then
-        alert_service:ack_visible(action.ids)
-      elseif action.type == "alert_ack_all" and alert_service then
-        alert_service:ack_all()
-      elseif action.type == "alert_mute_rule" and alert_service then
-        alert_service:mute_rule(action.code, action.minutes)
-      elseif action.type == "alert_unmute_rule" and alert_service then
-        alert_service:unmute_rule(action.code)
-      elseif action.type == "alert_mute_node" and alert_service then
-        alert_service:mute_node(action.node_id, action.minutes)
-      elseif action.type == "alert_unmute_node" and alert_service then
-        alert_service:unmute_node(action.node_id)
+      if ui_controller then
+        ui_controller.handle_action(action)
       end
     end
   })
@@ -671,6 +391,20 @@ local function init()
     heartbeat_interval = config.heartbeat_interval,
     build_payload = build_master_alert_payload
   }))
+  services:add(control_service.new({
+    name = "HOUSEKEEPING",
+    interval = 0.5,
+    runtime = {
+      tick = function()
+        handle_command_timeouts()
+        if sequencer then
+          sequencer:tick(nodes)
+        end
+        check_timeouts()
+        sample_trends()
+      end
+    }
+  }))
   services:add(ui_service.new({
     interval = 0.5,
     force_interval = 2,
@@ -687,23 +421,13 @@ local function init()
     end,
     render = function()
       refresh_monitors(false)
-      handle_command_timeouts()
-      sequencer:tick(nodes)
-      check_timeouts()
-      sample_trends()
-      draw()
+      if ui_controller then
+        ui_controller.draw()
+      end
     end,
     handle_input = function(event)
-      if event[1] == "monitor_touch" then
-        handle_monitor_touch(event[2], event[3], event[4])
-      elseif event[1] == "key" then
-        if view_manager then
-          view_manager:handle_key(event[2])
-        end
-      elseif event[1] == "char" then
-        if view_manager then
-          view_manager:handle_char(event[2])
-        end
+      if ui_controller then
+        ui_controller.handle_input(event)
       end
     end
   }))
@@ -725,14 +449,39 @@ local function init()
     master_time_label = master_time_label,
     log = function(message, level) utils.log("MASTER", message, level or "INFO") end
   })
+  ui_controller = ui_controller_lib.new({
+    constants = constants,
+    health = health,
+    config = config,
+    nodes = nodes,
+    alarms = alarms,
+    comms = comms,
+    sequencer = sequencer,
+    alert_service = alert_service,
+    view_manager = view_manager,
+    trends = trends,
+    trend_cache = trend_cache,
+    state = {
+      monitor_cache = monitor_cache,
+      last_draw = last_draw,
+      critical_blink_until = critical_blink_until,
+      power_target = power_target,
+      active_profile = active_profile,
+      auto_profile = auto_profile
+    },
+    calc = {
+      apply_profile = function(name)
+        apply_profile(name)
+      end,
+      set_auto_profile = function(value) auto_profile = value end,
+      get_auto_profile = function() return auto_profile end,
+      get_active_profile = function() return active_profile end,
+      get_power_target = function() return power_target end,
+      get_critical_blink_until = function() return critical_blink_until end
+    }
+  })
   comms:send_hello({ monitors = monitor_cache.list and #monitor_cache.list or 0 })
   utils.log("MASTER", "Initialized as " .. comms.network.id)
-end
-
-local function handle_monitor_touch(name, x, y)
-  if view_manager then
-    view_manager:handle_input(name, x, y)
-  end
 end
 
 local function main_loop()
