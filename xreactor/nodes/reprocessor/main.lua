@@ -31,6 +31,9 @@ local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
 local ui_service = require("services.ui_service")
+local non_rt_config = require("core.non_rt_config")
+local non_rt_payload = require("core.non_rt_payload")
+local support_discovery = require("nodes.support.discovery")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.REPROCESSOR_NODE, -- Node role identifier.
@@ -68,74 +71,10 @@ local function add_config_warning(message)
 end
 
 local function validate_config(config_values, defaults)
-  local normalized = utils.normalize_node_id(config_values.node_id)
-  if normalized == "UNKNOWN" then
-    config_values.node_id = defaults.node_id
-    add_config_warning("node_id missing/invalid; defaulting to " .. tostring(defaults.node_id))
-  else
-    config_values.node_id = normalized
-  end
-  if type(config_values.role) ~= "string" then
-    config_values.role = defaults.role
-    add_config_warning("role missing/invalid; defaulting to " .. tostring(defaults.role))
-  end
-  if type(config_values.debug_logging) ~= "boolean" then
-    config_values.debug_logging = defaults.debug_logging
-    add_config_warning("debug_logging missing/invalid; defaulting to " .. tostring(defaults.debug_logging))
-  end
-  if type(config_values.reset_log_on_start) ~= "boolean" then
-    config_values.reset_log_on_start = defaults.reset_log_on_start
-    add_config_warning("reset_log_on_start missing/invalid; defaulting to " .. tostring(defaults.reset_log_on_start))
-  end
-  if config_values.wireless_modem ~= nil and type(config_values.wireless_modem) ~= "string" then
-    config_values.wireless_modem = defaults.wireless_modem
-    add_config_warning("wireless_modem invalid; defaulting to " .. tostring(defaults.wireless_modem))
-  end
-  if config_values.wired_modem ~= nil and type(config_values.wired_modem) ~= "string" then
-    config_values.wired_modem = defaults.wired_modem
-    add_config_warning("wired_modem invalid; defaulting to " .. tostring(defaults.wired_modem))
-  end
+  non_rt_config.apply_common(config_values, defaults, add_config_warning, utils)
   if type(config_values.buffers) ~= "table" then
     config_values.buffers = utils.deep_copy(defaults.buffers)
     add_config_warning("buffers missing/invalid; defaulting to configured list")
-  end
-  if type(config_values.heartbeat_interval) ~= "number" or config_values.heartbeat_interval <= 0 then
-    config_values.heartbeat_interval = defaults.heartbeat_interval
-    add_config_warning("heartbeat_interval missing/invalid; defaulting to " .. tostring(defaults.heartbeat_interval))
-  elseif config_values.heartbeat_interval > 60 then
-    config_values.heartbeat_interval = 60
-    add_config_warning("heartbeat_interval too high; clamping to 60s")
-  end
-  if type(config_values.status_interval) ~= "number" or config_values.status_interval <= 0 then
-    config_values.status_interval = defaults.status_interval
-    add_config_warning("status_interval missing/invalid; defaulting to " .. tostring(defaults.status_interval))
-  elseif config_values.status_interval > 60 then
-    config_values.status_interval = 60
-    add_config_warning("status_interval too high; clamping to 60s")
-  end
-  if type(config_values.discovery_interval) ~= "number" or config_values.discovery_interval <= 0 then
-    config_values.discovery_interval = defaults.discovery_interval
-    add_config_warning("discovery_interval missing/invalid; defaulting to " .. tostring(defaults.discovery_interval))
-  elseif config_values.discovery_interval > 300 then
-    config_values.discovery_interval = 300
-    add_config_warning("discovery_interval too high; clamping to 300s")
-  end
-
-  if type(config_values.channels) ~= "table" then
-    config_values.channels = utils.deep_copy(defaults.channels)
-    add_config_warning("channels missing/invalid; defaulting to control/status defaults")
-  end
-  if type(config_values.channels.control) ~= "number" then
-    config_values.channels.control = defaults.channels.control
-    add_config_warning("channels.control missing/invalid; defaulting to " .. tostring(defaults.channels.control))
-  end
-  if type(config_values.channels.status) ~= "number" then
-    config_values.channels.status = defaults.channels.status
-    add_config_warning("channels.status missing/invalid; defaulting to " .. tostring(defaults.channels.status))
-  end
-  if type(config_values.comms) ~= "table" then
-    config_values.comms = utils.deep_copy(defaults.comms)
-    add_config_warning("comms config missing/invalid; defaulting to comms defaults")
   end
 end
 
@@ -231,8 +170,8 @@ local function cache(bound_names)
 end
 
 local function discover()
-  local names = peripheral.getNames() or {}
-  local registry_devices = {}
+  local names
+  local registry_devices
   local allow_set = {}
   for _, name in ipairs(config.buffers or {}) do
     allow_set[name] = true
@@ -243,17 +182,7 @@ local function discover()
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
 
-  for _, name in ipairs(names) do
-    if peripheral.getType(name) == "monitor" then
-      table.insert(registry_devices, {
-        name = name,
-        type = "monitor",
-        methods = utils.safe_get_methods(name) or {},
-        kind = "monitor",
-        bound = monitor_name == name
-      })
-    end
-  end
+  registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
 
   for _, name in ipairs(names) do
     if not allow_all and not allow_set[name] then
@@ -350,9 +279,10 @@ local function build_status_payload()
   reproc_health.last_seen_ts = os.epoch("utc")
   reproc_health.bindings = { buffers = #read_buffers() }
   reproc_health.capabilities = { buffers = #config.buffers }
-  return {
-    buffers = read_buffers(),
-    standby = standby,
+  local payload = non_rt_payload.build_base({
+    ts = os.epoch("utc"),
+    role = config.role,
+    node_id = config.node_id,
     health = {
       status = reproc_health.status,
       reasons = health.reasons_list(reproc_health),
@@ -360,14 +290,26 @@ local function build_status_payload()
       bindings = reproc_health.bindings,
       capabilities = reproc_health.capabilities
     },
-    bindings = reproc_health.bindings,
-    bindings_summary = health.summarize_bindings(reproc_health.bindings),
+    discovery_failed = devices.discovery_failed,
+    master_connected = master_ok,
+    master_seen_s = master_seen_ts and math.max(0, math.floor((os.epoch("utc") - master_seen_ts) / 1000)) or nil,
+    queue = comms and comms:queue_depth() or 0,
+    peers = comms and comms.peer_state and comms.peer_state.peers or nil,
+    alerts = master_alerts,
+    protocol_mismatch = devices.proto_mismatch,
+    last_command = devices.last_command,
+    last_command_ts = devices.last_command_ts,
     registry = {
       summary = devices.registry_summary or registry:get_summary(),
       devices = registry:get_devices_by_kind(),
       diagnostics = registry:get_diagnostics()
     }
-  }
+  })
+  payload.buffers = read_buffers()
+  payload.standby = standby
+  payload.bindings = reproc_health.bindings
+  payload.bindings_summary = health.summarize_bindings(reproc_health.bindings)
+  return payload
 end
 
 local function format_age(ts, now)
