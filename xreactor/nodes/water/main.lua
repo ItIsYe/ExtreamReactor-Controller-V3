@@ -111,12 +111,11 @@ local master_alerts = {}
 local last_heartbeat = 0
 local master_seen_ts = nil
 local monitor_router = nil
-local warned = {}
 
 local function warn_once(key, message)
-  if warned[key] then return end
-  warned[key] = true
-  utils.log(CONFIG.LOG_PREFIX, message, "WARN")
+  support_runtime.warn_once(devices, function(msg, level)
+    utils.log(CONFIG.LOG_PREFIX, msg, level)
+  end, key, message)
 end
 
 local function safe_wrapped_call(obj, method, ...)

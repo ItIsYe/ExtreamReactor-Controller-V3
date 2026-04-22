@@ -274,10 +274,6 @@ local function select_role()
 end
 
 local function stage_and_verify(ctx, expected)
-  local stage_files_ok, stage_files_err = stage_lib.stage_expected_files(ctx, expected)
-  if not stage_files_ok then
-    ctx.fatal(tostring(stage_files_err))
-  end
   local stage_ok, stage_err = stage_lib.verify_stage(ctx, expected)
   if not stage_ok then
     ctx.fs.delete(ctx.constants.STAGE_ROOT)

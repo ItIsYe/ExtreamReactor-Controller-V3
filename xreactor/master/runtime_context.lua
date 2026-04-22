@@ -70,4 +70,40 @@ function M.normalize_config(config)
   return config
 end
 
+function M.new_state()
+  return {
+    monitor_cache = {},
+    nodes = {},
+    alarms = {},
+    warned = {},
+    power_target = 0,
+    active_profile = "BASELOAD",
+    auto_profile = false,
+    critical_blink_until = 0,
+    last_draw = 0,
+    monitor_scan_last = 0,
+    last_trend_sample = 0,
+    trend_cache = { energy = {}, energy_arrow = "→" }
+  }
+end
+
+function M.warn_once(state, log_fn, key, message)
+  state.warned = state.warned or {}
+  if state.warned[key] then return end
+  state.warned[key] = true
+  log_fn(message)
+end
+
+function M.table_count(tbl)
+  local count = 0
+  for _ in pairs(tbl or {}) do
+    count = count + 1
+  end
+  return count
+end
+
+function M.master_time_label(time)
+  return time.wall_clock_hms_utc()
+end
+
 return M

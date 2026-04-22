@@ -50,6 +50,16 @@ function M.init_logging(args)
   return node_id, log_status
 end
 
+function M.warn_once(state, log_fn, key, message)
+  state = state or {}
+  state.warned = state.warned or {}
+  if state.warned[key] then
+    return
+  end
+  state.warned[key] = true
+  log_fn(message, "WARN")
+end
+
 function M.run_event_loop(receive_timeout, services, comms, after_cycle)
   while true do
     local timer = os.startTimer(receive_timeout)
