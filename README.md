@@ -123,7 +123,7 @@ At runtime, the project is split into a small set of active areas:
 
 ### Roadmap-Status (Non-RT)
 
-Der große Nicht-RT-Umbau ist auf dem aktuellen Stand im Wesentlichen abgeschlossen:
+Der große Nicht-RT-Umbau ist auf dem aktuellen Stand abgeschlossen (Final-Audit 2026-04-22, siehe `NON_RT_CLOSEOUT_2026-04-22.md`):
 - gemeinsame Nicht-RT-Bausteine sind aktiv,
 - ENERGY/MASTER/Installer laufen modular,
 - WATER/FUEL/REPROCESSOR nutzen die gemeinsame Support-Schicht.
