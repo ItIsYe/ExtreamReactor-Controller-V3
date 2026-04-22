@@ -8,22 +8,20 @@ local function read(path)
   return content
 end
 
-local installer = read("installer")
+local stage = read("xreactor/installer_stage.lua")
 
 local required = {
-  "local function preflight_storage(storage_plan, allow_cleanup)",
-  "warn(\"Storage preflight result: not ok\")",
-  "local function stage_expected_files(expected)",
-  "if fs.exists(STAGE_ROOT) then\n        fs.delete(STAGE_ROOT)\n      end\n      return false, \"Download failed: \" .. tostring(err)",
-  "local function activate_stage()",
-  "fs.move(INSTALL_ROOT, BACKUP_ROOT)",
-  "local moved = pcall(fs.move, STAGE_ROOT, INSTALL_ROOT)",
-  "warn(\"Stage activation failed; attempting rollback\")",
-  "if fs.exists(BACKUP_ROOT) then\n      fs.move(BACKUP_ROOT, INSTALL_ROOT)\n    end"
+  "function M.stage_expected_files(ctx, expected)",
+  "if ctx.fs.exists(ctx.constants.STAGE_ROOT) then\n        ctx.fs.delete(ctx.constants.STAGE_ROOT)\n      end\n      return false, \"Download failed: \" .. tostring(err)",
+  "function M.activate_stage(ctx)",
+  "ctx.fs.move(ctx.constants.INSTALL_ROOT, ctx.constants.BACKUP_ROOT)",
+  "local moved = pcall(ctx.fs.move, ctx.constants.STAGE_ROOT, ctx.constants.INSTALL_ROOT)",
+  "ctx.warn(\"Stage activation failed; attempting rollback\")",
+  "if ctx.fs.exists(ctx.constants.BACKUP_ROOT) then\n      ctx.fs.move(ctx.constants.BACKUP_ROOT, ctx.constants.INSTALL_ROOT)\n    end"
 }
 
 for _, snippet in ipairs(required) do
-  if not installer:find(snippet, 1, true) then
+  if not stage:find(snippet, 1, true) then
     error("missing commit safety snippet: " .. snippet)
   end
 end

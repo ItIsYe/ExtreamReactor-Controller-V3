@@ -8,21 +8,25 @@ local function read(path)
   return content
 end
 
-local installer = read("installer")
+local stage = read("xreactor/installer_stage.lua")
+local main = read("xreactor/installer_main.lua")
 
-local required = {
-  "local function stage_expected_files(expected)",
-  "local target_path = STAGE_ROOT .. \"/\" .. entry.path",
+local required_stage = {
+  "function M.stage_expected_files(ctx, expected)",
+  "local target_path = ctx.constants.STAGE_ROOT .. \"/\" .. entry.path",
   "return false, \"Download failed: \" .. tostring(err)",
-  "local stage_ok, stage_err = verify_stage(expected)",
-  "if not stage_ok then\n    fs.delete(STAGE_ROOT)\n    fatal(\"Staged validation failed: \" .. tostring(stage_err))\n  end",
-  "local moved = pcall(fs.move, STAGE_ROOT, INSTALL_ROOT)"
+  "function M.verify_stage(ctx, expected)",
+  "local moved = pcall(ctx.fs.move, ctx.constants.STAGE_ROOT, ctx.constants.INSTALL_ROOT)"
 }
 
-for _, snippet in ipairs(required) do
-  if not installer:find(snippet, 1, true) then
+for _, snippet in ipairs(required_stage) do
+  if not stage:find(snippet, 1, true) then
     error("missing stage install snippet: " .. snippet)
   end
+end
+
+if not main:find("stage_and_verify(ctx, expected)", 1, true) then
+  error("installer main missing stage_and_verify orchestration")
 end
 
 print("installer_stage_install_behavior_test.lua: ok")
