@@ -316,4 +316,59 @@ function M.normalize_rails(config, defaults, utils, safety, min_flow, max_flow)
   config.rails.coil = coil
 end
 
+function M.apply_runtime_defaults(config, defaults, runtime)
+  runtime = runtime or {}
+  local deep_copy = runtime.deep_copy
+  if type(deep_copy) ~= "function" then
+    deep_copy = function(value)
+      return value
+    end
+  end
+  config.safety = config.safety or {}
+  config.safety.max_temperature = config.safety.max_temperature or defaults.safety.max_temperature
+  config.safety.temperature_hysteresis = config.safety.temperature_hysteresis or defaults.safety.temperature_hysteresis
+  config.safety.temperature_trip_samples = config.safety.temperature_trip_samples or defaults.safety.temperature_trip_samples
+  config.safety.max_rpm = config.safety.max_rpm or defaults.safety.max_rpm
+  config.safety.min_water = config.safety.min_water or defaults.safety.min_water
+  config.safety.coolant_hysteresis = config.safety.coolant_hysteresis or defaults.safety.coolant_hysteresis
+  config.safety.coolant_trip_samples = config.safety.coolant_trip_samples or defaults.safety.coolant_trip_samples
+  config.safety.coolant_invalid_grace_samples = config.safety.coolant_invalid_grace_samples or defaults.safety.coolant_invalid_grace_samples
+  config.heartbeat_interval = config.heartbeat_interval or defaults.heartbeat_interval
+  config.autonom = config.autonom or {}
+
+  local target_rpm = runtime.target_rpm or defaults.autonom.max_rpm
+  local min_flow = runtime.min_flow
+  if type(min_flow) ~= "number" then
+    min_flow = defaults.autonom.min_flow
+  end
+  local max_flow = runtime.max_flow
+  if type(max_flow) ~= "number" then
+    max_flow = defaults.autonom.max_flow
+  end
+  local flow_step = runtime.flow_step or defaults.autonom.flow_step
+  local rod_tick = runtime.rod_tick or defaults.autonom.reactor_adjust_interval
+
+  config.autonom.control_rod_level = config.autonom.control_rod_level or defaults.autonom.control_rod_level
+  config.autonom.target_rpm = target_rpm
+  config.autonom.max_rpm = math.max(config.autonom.max_rpm or target_rpm, target_rpm)
+  config.autonom.min_flow = math.max(config.autonom.min_flow or min_flow, min_flow)
+  config.autonom.max_flow = math.min(config.autonom.max_flow or max_flow, max_flow)
+  config.autonom.flow_step = config.autonom.flow_step or flow_step
+  config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
+  config.autonom.regulator_min_rods = config.autonom.regulator_min_rods or defaults.autonom.regulator_min_rods
+  config.autonom.regulator_max_rods = config.autonom.regulator_max_rods or defaults.autonom.regulator_max_rods
+  config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or rod_tick
+  config.autonom.steam_reserve = config.autonom.steam_reserve or defaults.autonom.steam_reserve
+  config.autonom.steam_deficit = config.autonom.steam_deficit or defaults.autonom.steam_deficit
+  config.rails = config.rails or deep_copy(defaults.rails)
+  config.rails.ramp_profiles = config.rails.ramp_profiles or deep_copy(defaults.rails.ramp_profiles)
+  if type(runtime.normalize_rails) == "function" then
+    runtime.normalize_rails(config, defaults)
+  end
+  config.monitor_interval = config.monitor_interval or defaults.monitor_interval
+  config.monitor_scale = config.monitor_scale or defaults.monitor_scale
+  config.scan_interval = config.scan_interval or defaults.scan_interval
+  config.startup_watchdog_s = config.startup_watchdog_s or defaults.startup_watchdog_s
+end
+
 return M
