@@ -14,6 +14,7 @@ local STORAGE_BUFFER_BYTES = 24576
 local STORAGE_PERCENT_BUFFER = 0.03
 local STORAGE_UPDATE_BUFFER_BYTES = 8192
 local STORAGE_MIN_REQUIRED_BYTES = 4096
+local installer_http = dofile("/xreactor/installer_http.lua")
 
 local function safe_mkdir(path)
   if fs.exists(path) then
@@ -155,53 +156,11 @@ local function ensure_startup_script()
 end
 
 local function download_url(url)
-  if not http or type(http.get) ~= "function" then
-    return nil, "HTTP API unavailable"
-  end
-  local last_error = nil
-  for attempt = 1, DOWNLOAD_RETRIES do
-    local ok, response = pcall(http.get, url)
-    if ok and response then
-      if response.getResponseCode then
-        local code = response.getResponseCode()
-        if code ~= 200 then
-          pcall(response.close)
-          last_error = "HTTP " .. tostring(code) .. " for " .. url
-        else
-          local ok_read, body = pcall(response.readAll)
-          pcall(response.close)
-          if ok_read and type(body) == "string" then
-            return body
-          end
-          last_error = "Failed to read response from " .. url
-        end
-      else
-        local ok_read, body = pcall(response.readAll)
-        pcall(response.close)
-        if ok_read and type(body) == "string" then
-          return body
-        end
-        last_error = "Failed to read response from " .. url
-      end
-    else
-      last_error = "Failed to download " .. url
-    end
-    if attempt < DOWNLOAD_RETRIES then
-      warn(string.format("Download attempt %d/%d failed for %s (%s)", attempt, DOWNLOAD_RETRIES, tostring(url), tostring(last_error)))
-      if os and type(os.sleep) == "function" then
-        os.sleep(DOWNLOAD_RETRY_DELAY_SECONDS)
-      end
-    end
-  end
-  return nil, tostring(last_error or ("Failed to download " .. url))
+  return installer_http.download_url(http, url, DOWNLOAD_RETRIES, DOWNLOAD_RETRY_DELAY_SECONDS, warn)
 end
 
 local function is_html_content(content)
-  if type(content) ~= "string" then
-    return false
-  end
-  local snippet = content:sub(1, 200):lower()
-  return snippet:find("<html", 1, true) or snippet:find("<!doctype", 1, true)
+  return installer_http.is_html_content(content)
 end
 
 local function compile_lua(path, content)
