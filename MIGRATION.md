@@ -68,3 +68,10 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
   - `rails.reactor_steam_guard` nutzt internen Reaktor-Steam/Hot-Fluid-Füllstand als Guard (nicht als Primär-Führungsgröße).
   - Hoher Füllstand blockiert weiteres Öffnen; kritischer Füllstand kann kontrolliertes Schließen erzwingen.
   - Guard arbeitet geglättet (`ema_alpha`) und mit Hysterese (`high*`/`critical*` + `*_release`), um Oszillation zu vermeiden.
+
+## Abschlussstand Non-RT-Architektur (dieser Repo-Stand)
+
+- Die Support-Nodes `water`/`fuel`/`reprocessor` nutzen gemeinsame Infrastruktur unter `xreactor/nodes/support/` für Runtime-Loop, Command-Parsing, Rollen-Connectivity, UI-Bausteine und Discovery-Helfer.
+- Discovery-Klassifikation in kleinen Nodes ist auf gemeinsame Methoden-basierte Hilfslogik konsolidiert; Rollenspezifik bleibt über `kind`/Filter/Matcher pro Node erhalten.
+- Renderpfade bleiben über Payload -> UI-Modell -> Rendering geführt; direkte Discovery-/Registry-Scans finden weiterhin außerhalb des Renderpfads statt.
+- RT bleibt bewusst unverändert; offene RT-Themen sind ausschließlich Audit-/Backlog-Punkte für einen separaten RT-Track.

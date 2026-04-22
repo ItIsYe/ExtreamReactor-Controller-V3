@@ -113,11 +113,16 @@ At runtime, the project is split into a small set of active areas:
 - `xreactor/services/` - reusable services for comms, discovery, telemetry, alerts, UI ticks, and service lifecycle management.
 - `xreactor/master/` - MASTER-specific config, sequencer, and UI views.
 - `xreactor/nodes/` - role-specific node implementations for `rt`, `energy`, `water`, `fuel`, and `reprocessor`.
+- `xreactor/nodes/support/` - shared non-RT support-node runtime/discovery/ui/command helpers used by `water`, `fuel`, and `reprocessor`.
 - `xreactor/adapters/` - peripheral adapters for reactors, turbines, monitors, energy storage, and induction matrices.
 - `xreactor/shared/` - shared constants, colors, telemetry schema, build info, and health codes.
 - `xreactor/manifest.lua` - installer manifest listing the files for the base runtime and each role.
 - `xreactor/start.lua` - startup router that reads the installed role and launches the correct entrypoint.
 - `installer` - single-file installer/update entrypoint for deployment.
+
+Support-node architecture note:
+- `water`, `fuel`, and `reprocessor` keep role-specific control logic local, but share common discovery classification/runtime wiring via `nodes/support/*`.
+- RT (`xreactor/nodes/rt/*`) is intentionally separate and not part of these shared non-RT support abstractions.
 
 ## Repository structure
 
