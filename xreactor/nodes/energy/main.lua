@@ -40,6 +40,9 @@ local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
 local matrix_topology_cache = require("nodes.energy.matrix_topology_cache")
 local config_normalizer = require("nodes.energy.config_normalizer")
 local command_handler = require("nodes.energy.command_handler")
+local status_payload_runtime = require("nodes.energy.status_payload")
+local ui_model_runtime = require("nodes.energy.ui_model")
+local energy_ui_pages = require("nodes.energy.ui_pages")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.ENERGY_NODE, -- Node role identifier.
@@ -764,526 +767,44 @@ local function read_matrix_stats(opts)
   }
 end
 
-local function build_status_payload_uncached(opts)
-  opts = opts or {}
-  local started_at = now_ms()
-  local energy_started_at = started_at
-  local energy = read_storage_stats(opts)
-  local energy_duration = now_ms() - energy_started_at
-  local matrix_started_at = now_ms()
-  local matrix = read_matrix_stats(opts)
-  local matrix_duration = now_ms() - matrix_started_at
-  local total_stored = energy.stored + (matrix.total.stored or 0)
-  local total_capacity = energy.capacity + (matrix.total.capacity or 0)
-  local total_input = energy.input + (matrix.total.input or 0)
-  local total_output = energy.output + (matrix.total.output or 0)
-  local registry_summary = devices.registry_summary or registry:get_summary()
-  local matrix_bound = registry_summary.kinds.matrix and registry_summary.kinds.matrix.bound or 0
-  local storage_bound = registry_summary.kinds.storage and registry_summary.kinds.storage.bound or 0
-  local effective_matrix_count = math.max(matrix_bound, #(devices.matrix_groups or {}), #(matrix.matrices or {}))
-  local effective_storage_count = math.max(storage_bound, #(devices.storages or {}), #(energy.stores or {}))
-  energy.monitor_bound = devices.monitor ~= nil
-  energy.storage_bound_count = effective_storage_count
-  energy.bound_storage_names = devices.bound_storage_names or {}
-  energy.matrices = matrix.matrices
-  energy.total = matrix.total
-  energy.matrix_snapshot_freshness_ms = matrix.freshness_ms
-  energy.matrix_snapshot_stale = matrix.stale == true
-  energy.matrix_present = effective_matrix_count > 0
-  energy.matrix_energy = matrix.total.stored
-  energy.matrix_capacity = matrix.total.capacity
-  energy.matrix_percent = matrix.total.percent
-  energy.matrix_in = matrix.total.input
-  energy.matrix_out = matrix.total.output
-  energy.storages_count = effective_storage_count
-  energy.storage_snapshot_freshness_ms = energy.freshness_ms
-  energy.storage_snapshot_stale = energy.stale == true
-  energy.stored = total_stored
-  energy.capacity = total_capacity
-  energy.input = total_input
-  energy.output = total_output
-  local summary = {}
-  table.sort(energy.stores, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
-  for i = 1, math.min(3, #energy.stores) do
-    local s = energy.stores[i]
-    local pct = s.capacity and s.capacity > 0 and (s.stored / s.capacity) or 0
-    table.insert(summary, { name = s.id, percent = pct })
-  end
-  energy.storages_summary = summary
-  energy.last_scan_ts = devices.last_scan_ts
-  energy.last_scan_result = devices.last_scan_result
-  energy.last_error = devices.last_error
-  energy.last_error_ts = devices.last_error_ts
-  energy.peripheral_count = devices.peripheral_count
+local status_payload_builder
+local ui_model_builder
+local ui_pages
 
-  local reasons = {}
-  if not energy.monitor_bound then
-    reasons[health.reasons.NO_MONITOR] = true
-  end
-  if effective_storage_count == 0 then
-    reasons[health.reasons.NO_STORAGE] = true
-  end
-  if effective_matrix_count == 0 then
-    reasons[health.reasons.NO_MATRIX] = true
-  end
-  if devices.discovery_failed or devices.registry_load_error then
-    reasons[health.reasons.DISCOVERY_FAILED] = true
-  end
-  if devices.proto_mismatch then
-    reasons[health.reasons.PROTO_MISMATCH] = true
-  end
-  local master_ok = is_master_connected()
-  if not master_ok then
-    reasons[health.reasons.COMMS_DOWN] = true
-  end
-  local status = (next(reasons) and health.status.DEGRADED) or health.status.OK
-  energy_health.status = status
-  energy_health.reasons = reasons
-  energy_health.last_seen_ts = os.epoch("utc")
-  energy_health.bindings = {
-    storages = effective_storage_count,
-    matrices = effective_matrix_count,
-    monitor = energy.monitor_bound and 1 or 0
-  }
-  energy_health.capabilities = {
-    storage_count = effective_storage_count,
-    matrix_count = effective_matrix_count,
-    monitor = energy.monitor_bound
-  }
-  energy.health = {
-    status = energy_health.status,
-    reasons = health.reasons_list(energy_health),
-    last_seen_ts = energy_health.last_seen_ts,
-    bindings = energy_health.bindings,
-    capabilities = energy_health.capabilities
-  }
-  energy.bindings_summary = health.summarize_bindings(energy_health.bindings)
-  energy.registry = {
-    summary = registry_summary,
-    devices = registry:get_devices_by_kind(),
-    diagnostics = registry:get_diagnostics()
-  }
-  local total_duration = now_ms() - started_at
-  if total_duration > 1200 then
-    local matrix_call_text = nil
-    if matrix.diag and matrix.diag.metric_calls and #matrix.diag.metric_calls > 0 then
-      table.sort(matrix.diag.metric_calls, function(a, b) return (a.ms or 0) > (b.ms or 0) end)
-      local top = {}
-      for i = 1, math.min(6, #matrix.diag.metric_calls) do
-        local call = matrix.diag.metric_calls[i]
-        top[#top + 1] = ("%s.%s=%dms"):format(tostring(call.matrix), tostring(call.metric), tonumber(call.ms) or 0)
-      end
-      matrix_call_text = table.concat(top, ", ")
-    end
-    utils.log(
-      "ENERGY",
-      ("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d"):format(
-        total_duration,
-        energy_duration,
-        matrix_duration,
-        #(devices.storages or {}),
-        #(devices.matrices or {})
-      ),
-      "WARN"
-    )
-    if matrix_call_text then
-      utils.log("ENERGY", "Status payload slow matrix calls: " .. matrix_call_text, "WARN")
-    end
-  end
-  return energy
+local function build_status_payload_uncached(opts)
+  return status_payload_builder.build_status_payload_uncached(opts)
 end
 
 local function build_status_payload(opts)
-  opts = opts or {}
-  local max_age_ms = tonumber(opts.max_age_ms) or 0
-  local ts = now_ms()
-  local cache_age = ts - (status_payload_cache.ts or 0)
-  if status_payload_cache.payload and cache_age >= 0 and cache_age <= max_age_ms then
-    return status_payload_cache.payload
-  end
-  local payload = build_status_payload_uncached(opts)
-  status_payload_cache.ts = now_ms()
-  status_payload_cache.payload = payload
-  return payload
-end
-
-local function format_value(value)
-  if value == nil then
-    return "n/a"
-  end
-  return string.format("%.0f", value)
-end
-
-local function format_energy(value)
-  if value == nil then
-    return "n/a"
-  end
-  local suffixes = { "", "k", "M", "G", "T", "P", "E" }
-  local v = math.abs(value)
-  local idx = 1
-  while v >= 1000 and idx < #suffixes do
-    v = v / 1000
-    idx = idx + 1
-  end
-  local formatted = v >= 100 and string.format("%.0f", v) or string.format("%.1f", v)
-  if value < 0 then
-    formatted = "-" .. formatted
-  end
-  return formatted .. suffixes[idx]
-end
-
-local function format_percent(value)
-  if value == nil then
-    return "n/a"
-  end
-  return string.format("%.0f%%", value * 100)
-end
-
-local function format_age(ts, now)
-  if not ts then
-    return "n/a"
-  end
-  return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
-end
-
-local function build_matrix_signature(matrices)
-  local parts = {}
-  for _, entry in ipairs(matrices or {}) do
-    table.insert(parts, table.concat({
-      tostring(entry.name or ""),
-      tostring(entry.percent or 0),
-      tostring(entry.stored or 0),
-      tostring(entry.capacity or 0),
-      tostring(entry.input or 0),
-      tostring(entry.output or 0),
-      tostring(entry.status or "")
-    }, ":"))
-  end
-  return table.concat(parts, "|")
-end
-
-local function build_storage_signature(storages)
-  local parts = {}
-  for _, entry in ipairs(storages or {}) do
-    table.insert(parts, table.concat({
-      tostring(entry.id or ""),
-      tostring(entry.stored or 0),
-      tostring(entry.capacity or 0)
-    }, ":"))
-  end
-  return table.concat(parts, "|")
+  return status_payload_builder.build_status_payload(opts)
 end
 
 local function build_ui_model(opts)
-  opts = opts or {}
-  local default_ui_payload_max_age_ms = math.max(1000, math.floor((tonumber(config.status_interval) or 5) * 1000))
-  local max_age_ms = tonumber(opts.max_age_ms) or default_ui_payload_max_age_ms
-  local ts = now_ms()
-  local cache_age = ts - (ui_model_cache.ts or 0)
-  if ui_model_cache.model and cache_age >= 0 and cache_age <= max_age_ms then
-    return ui_model_cache.model
-  end
-  local payload = build_status_payload({
-    reason = "ui_model",
-    max_age_ms = max_age_ms
-  })
-  local degraded = payload.health and payload.health.status == health.status.DEGRADED
-  local reasons_text = payload.health and table.concat(payload.health.reasons or {}, ",") or ""
-  local matrices = utils.deep_copy(payload.matrices or {})
-  local storages = utils.deep_copy(payload.stores or {})
-  local registry_entries = payload.registry and payload.registry.devices or registry:list()
-  local registry_summary = payload.registry and payload.registry.summary or registry:get_summary()
-  local registry_rows = {}
-  for _, entry in ipairs(registry_entries) do
-    local state = entry.missing and "MISSING" or (entry.bound and "BOUND" or "FOUND")
-    local label = string.format("%s %s", entry.alias or entry.id, state)
-    table.insert(registry_rows, { text = label, status = entry.missing and "WARNING" or "OK" })
-  end
-  local comms_diag = comms and comms:get_diagnostics() or {}
-  local metrics = comms_diag.metrics or {}
-  local master_peer = master_peer_state()
-  local node_id = comms and comms.network and comms.network.id or config.node_id
-  local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
-  local local_alerts = alert_payload and alert_payload.top or {}
-  local local_critical = alert_payload and alert_payload.critical or 0
-  local master_age = master_peer and master_peer.age and string.format("%ds", math.floor(master_peer.age)) or "n/a"
-  local master_state = master_peer and (master_peer.down and "DOWN" or "OK") or "UNKNOWN"
-  local model = {
-    node_id = node_id,
-    degraded = degraded,
-    health_status = payload.health and payload.health.status or health.status.OK,
-    degraded_reason = reasons_text ~= "" and reasons_text or nil,
-    last_scan_ts = devices.last_scan_ts,
-    scan_result = devices.last_scan_result,
-    last_error = devices.last_error,
-    last_error_ts = devices.last_error_ts,
-    last_command = devices.last_command,
-    last_command_ts = devices.last_command_ts,
-    peripheral_count = devices.peripheral_count,
-    monitor_bound = devices.monitor ~= nil,
-    storages_count = registry_summary.kinds.storage and registry_summary.kinds.storage.bound or 0,
-    storages = storages,
-    matrices = matrices,
-    total = payload.total,
-    registry_rows = registry_rows,
-    registry_summary = registry_summary,
-    comms = comms_diag,
-    metrics = metrics,
-    master_state = master_state,
-    master_age = master_age,
-    local_alerts = local_alerts,
-    local_alerts_critical = local_critical
-  }
-  ui_model_cache.ts = ts
-  ui_model_cache.model = model
-  return model
+  return ui_model_builder.build_ui_model(opts)
 end
 
 local function build_snapshot_key(model)
-  return utils.safe_serialize({
-    health = model.health_status,
-    degraded = model.degraded,
-    reason = model.degraded_reason,
-    scan = model.last_scan_ts,
-    scan_result = model.scan_result,
-    err = model.last_error,
-    err_ts = model.last_error_ts,
-    cmd = model.last_command,
-    cmd_ts = model.last_command_ts,
-    matrices = build_matrix_signature(model.matrices),
-    storages = build_storage_signature(model.storages),
-    total = model.total,
-    registry = model.registry_summary,
-    comms = model.comms and model.comms.metrics,
-    master_state = model.master_state,
-    master_age = model.master_age,
-    local_alerts = model.local_alerts_critical
-  }) or tostring(model)
+  return ui_model_builder.build_snapshot_key(model)
 end
 
 local function get_ui_snapshot_key(opts)
-  local model = build_ui_model(opts)
-  local key = build_snapshot_key(model)
-  ui_model_cache.key = key
-  return key
-end
-
-local function render_header(mon, title, status, model)
-  local w, h = ui.getSize(mon)
-  if not w or not h then
-    return
-  end
-  ui.panel(mon, 1, 1, w, h, title, status)
-  ui.text(mon, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
-  local status_label = model.health_status or status
-  ui.rightText(mon, 2, 2, w - 2, status_label, colors.get(status), colors.get("background"))
-  if model.local_alerts_critical and model.local_alerts_critical > 0 then
-    local label = "CRIT " .. tostring(model.local_alerts_critical)
-    ui.badge(mon, w - (#label + 2), 1, label, "EMERGENCY")
-  end
+  return ui_model_builder.get_ui_snapshot_key(opts)
 end
 
 local function render_overview(mon, model)
-  local status = model.degraded and "WARNING" or "OK"
-  render_header(mon, "ENERGY NODE", status, model)
-  local w = select(1, ui.getSize(mon))
-  if not w then
-    return
-  end
-  local line = 4
-  ui.text(mon, 2, line, ("Matrices: %d"):format(#model.matrices), colors.get("text"), colors.get("background"))
-  line = line + 1
-  ui.text(mon, 2, line, ("Storages: %d"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
-  line = line + 2
-  local total = model.total or {}
-  ui.text(mon, 2, line, "GESAMT", colors.get("text"), colors.get("background"))
-  line = line + 1
-  ui.progress(mon, 2, line, w - 4, total.percent or 0, status)
-  line = line + 1
-  ui.text(mon, 2, line, ("E: %s / %s (%s)"):format(
-    format_energy(total.stored),
-    format_energy(total.capacity),
-    format_percent(total.percent)
-  ), colors.get("text"), colors.get("background"))
-  line = line + 1
-  local total_in = total.input
-  local total_out = total.output
-  local total_flow = (total_in ~= nil or total_out ~= nil) and ("IN " .. format_energy(total_in) .. "  OUT " .. format_energy(total_out)) or "IN/OUT n/a"
-  ui.text(mon, 2, line, total_flow, colors.get("text"), colors.get("background"))
-  line = line + 2
-  local scan_age = model.last_scan_ts and format_age(model.last_scan_ts, os.epoch("utc")) or "n/a"
-  ui.text(mon, 2, line, ("Last scan: %s"):format(scan_age), colors.get("text"), colors.get("background"))
+  return ui_pages.render_overview(mon, model)
 end
 
 local function render_matrices(mon, model)
-  local status = model.degraded and "WARNING" or "OK"
-  render_header(mon, "ENERGY MATRICES", status, model)
-  local w, h = ui.getSize(mon)
-  if not w or not h then
-    return
-  end
-  local header_line = 4
-  ui.text(mon, 2, header_line, ("Induction Matrices (%d)"):format(#model.matrices), colors.get("text"), colors.get("background"))
-  local list_start = header_line + 1
-  local footer_lines = 2
-  local total_lines = 4
-  local card_lines = 4
-  local list_end = h - footer_lines - total_lines
-  local available = math.max(0, list_end - list_start + 1)
-  local per_page = math.max(1, math.floor(available / card_lines))
-  local pagination = ui_router.paginate(model.matrices, per_page, ui_state.matrix_page)
-  ui_state.matrix_page = pagination.page
-  local line = list_start
-  if #model.matrices == 0 then
-    ui.text(mon, 2, line, "No matrices detected", colors.get("WARNING"), colors.get("background"))
-  else
-    for idx = pagination.start_index, pagination.end_index do
-      local entry = model.matrices[idx]
-      local pct = entry and entry.percent or 0
-      if entry then
-        local label = entry.label or entry.name or ("Matrix " .. tostring(idx))
-        if entry.alias and entry.name and entry.alias ~= entry.name then
-          label = ("%s (%s)"):format(entry.alias, entry.name)
-        end
-        ui.text(mon, 2, line, label, colors.get("text"), colors.get("background"))
-        ui.rightText(mon, 2, line, w - 2, format_percent(pct), colors.get(entry.status == "DEGRADED" and "WARNING" or status), colors.get("background"))
-        line = line + 1
-        ui.progress(mon, 2, line, w - 4, pct or 0, entry.status == "DEGRADED" and "WARNING" or status)
-        line = line + 1
-        ui.text(mon, 2, line, ("E: %s / %s"):format(format_energy(entry.stored), format_energy(entry.capacity)), colors.get("text"), colors.get("background"))
-        line = line + 1
-        local in_text = entry.input and format_energy(entry.input) or "n/a"
-        local out_text = entry.output and format_energy(entry.output) or "n/a"
-        ui.text(mon, 2, line, ("IN %s  OUT %s"):format(in_text, out_text), colors.get("text"), colors.get("background"))
-        line = line + 1
-      end
-    end
-  end
-  local total_start = h - footer_lines - total_lines + 1
-  line = total_start
-  ui.text(mon, 2, line, ("GESAMT (%d)"):format(#model.matrices), colors.get("text"), colors.get("background"))
-  line = line + 1
-  ui.progress(mon, 2, line, w - 4, model.total and model.total.percent or 0, status)
-  line = line + 1
-  ui.text(mon, 2, line, ("E: %s / %s (%s)"):format(
-    format_energy(model.total and model.total.stored),
-    format_energy(model.total and model.total.capacity),
-    format_percent(model.total and model.total.percent)
-  ), colors.get("text"), colors.get("background"))
-  line = line + 1
-  local total_in = model.total and model.total.input or nil
-  local total_out = model.total and model.total.output or nil
-  local total_flow = (total_in ~= nil or total_out ~= nil) and ("IN " .. format_energy(total_in) .. "  OUT " .. format_energy(total_out)) or "IN/OUT n/a"
-  ui.text(mon, 2, line, total_flow, colors.get("text"), colors.get("background"))
-  if ui_state.router and pagination.total > 1 then
-    ui_state.router:render_list_controls(mon, {
-      label = "Mat",
-      page = pagination.page,
-      total = pagination.total,
-      y = h - 1,
-      on_prev = function()
-        ui_state.matrix_page = math.max(1, ui_state.matrix_page - 1)
-      end,
-      on_next = function()
-        ui_state.matrix_page = ui_state.matrix_page + 1
-      end
-    })
-  end
+  return ui_pages.render_matrices(mon, model)
 end
 
 local function render_storages(mon, model)
-  local status = model.degraded and "WARNING" or "OK"
-  render_header(mon, "ENERGY STORAGES", status, model)
-  local w, h = ui.getSize(mon)
-  if not w or not h then
-    return
-  end
-  local header_line = 4
-  ui.text(mon, 2, header_line, ("Storages (%d)"):format(model.storages_count or 0), colors.get("text"), colors.get("background"))
-  local list_start = header_line + 1
-  local footer_lines = 2
-  local list_end = h - footer_lines
-  local rows = {}
-  table.sort(model.storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
-  for _, s in ipairs(model.storages) do
-    local pct = s.capacity and s.capacity > 0 and (s.stored / s.capacity) or 0
-    table.insert(rows, { text = string.format("%s %s", s.id, format_percent(pct)), status = status })
-  end
-  if #rows == 0 then
-    table.insert(rows, { text = "none", status = "WARNING" })
-  end
-  local per_page = math.max(1, list_end - list_start + 1)
-  local pagination = ui_router.paginate(rows, per_page, ui_state.storage_page)
-  ui_state.storage_page = pagination.page
-  local page_rows = {}
-  for idx = pagination.start_index, pagination.end_index do
-    table.insert(page_rows, rows[idx])
-  end
-  ui.list(mon, 2, list_start, w - 2, page_rows, { max_rows = per_page })
-  if ui_state.router and pagination.total > 1 then
-    ui_state.router:render_list_controls(mon, {
-      label = "Storage",
-      page = pagination.page,
-      total = pagination.total,
-      y = h - 1,
-      on_prev = function()
-        ui_state.storage_page = math.max(1, ui_state.storage_page - 1)
-      end,
-      on_next = function()
-        ui_state.storage_page = ui_state.storage_page + 1
-      end
-    })
-  end
+  return ui_pages.render_storages(mon, model)
 end
 
 local function render_diagnostics(mon, model)
-  local status = model.degraded and "WARNING" or "OK"
-  render_header(mon, "ENERGY DIAGNOSTICS", status, model)
-  local w, h = ui.getSize(mon)
-  if not w or not h then
-    return
-  end
-  local now = os.epoch("utc")
-  local reasons = model.degraded_reason or "none"
-  local rows = {
-    { text = ("Health: %s"):format(model.health_status or status), status = status },
-    { text = ("Reasons: %s"):format(reasons) },
-    { text = ("Registry total:%d bound:%d missing:%d"):format(
-      model.registry_summary.total or 0,
-      model.registry_summary.bound or 0,
-      model.registry_summary.missing or 0
-    ) },
-    { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
-    { text = ("Comms q:%d inflight:%d retries:%d"):format(
-      model.comms.queue_depth or 0,
-      model.comms.inflight_count or 0,
-      model.metrics.retries or 0
-    ) },
-    { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(
-      model.metrics.dropped or 0,
-      model.metrics.dedupe_hits or 0,
-      model.metrics.timeouts or 0
-    ) },
-    { text = ("Last scan: %s (%s)"):format(model.scan_result or "n/a", format_age(model.last_scan_ts, now)) },
-    { text = ("Last error: %s (%s)"):format(model.last_error or "none", format_age(model.last_error_ts, now)) },
-    { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", format_age(model.last_command_ts, now)) }
-  }
-  if model.local_alerts and #model.local_alerts > 0 then
-    table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
-    for _, alert in ipairs(model.local_alerts) do
-      local sev = alert.severity and alert.severity:sub(1, 1) or "?"
-      local title = alert.title or alert.message or alert.code or "alert"
-      local status = alert.severity == "CRITICAL" and "EMERGENCY" or alert.severity == "WARN" and "WARNING" or "OK"
-      table.insert(rows, { text = string.format("%s %s", sev, title), status = status })
-    end
-  end
-  if model.registry_rows and #model.registry_rows > 0 then
-    table.insert(rows, { text = "Registry:", status = "OK" })
-    for _, row in ipairs(model.registry_rows) do
-      table.insert(rows, row)
-    end
-  end
-  ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 5) })
+  return ui_pages.render_diagnostics(mon, model)
 end
 
 local function render_monitor()
@@ -1415,6 +936,39 @@ local function init()
   topology_cache = matrix_topology_cache.new({
     log_prefix = "ENERGY",
     forced_rescan_interval_s = config.discovery_force_rescan_interval
+  })
+  status_payload_builder = status_payload_runtime.new({
+    now_ms = now_ms,
+    config = config,
+    utils = utils,
+    health = health,
+    registry = registry,
+    devices = devices,
+    energy_health = energy_health,
+    read_storage_stats = read_storage_stats,
+    read_matrix_stats = read_matrix_stats,
+    is_master_connected = function() return is_master_connected() end,
+    status_payload_cache = status_payload_cache,
+    log = function(message, level) utils.log("ENERGY", message, level or "INFO") end
+  })
+  ui_pages = energy_ui_pages.new({
+    ui = ui,
+    colors = colors,
+    ui_router = ui_router,
+    ui_state = ui_state
+  })
+  ui_model_builder = ui_model_runtime.new({
+    now_ms = now_ms,
+    config = config,
+    utils = utils,
+    health = health,
+    registry = registry,
+    comms = comms,
+    devices = devices,
+    master_peer_state = function() return master_peer_state() end,
+    master_alerts = function() return master_alerts end,
+    build_status_payload = function(args) return build_status_payload(args) end,
+    ui_model_cache = ui_model_cache
   })
   services:add(comms)
   services:add(discovery_service.new({
