@@ -8,10 +8,10 @@ local function read(path)
   return content
 end
 
-local installer = read("installer")
+local storage = read("xreactor/installer_storage.lua")
 
 local required = {
-  "local function estimate_required_storage(expected, mode)",
+  "function M.estimate_required_storage(fs_api, install_root, expected, mode, constants)",
   "payload_bytes = total",
   "stage_peak_bytes = stage_peak_bytes",
   "estimate_base_bytes = estimate_base",
@@ -19,12 +19,12 @@ local required = {
   "percent_buffer_bytes = percent_buffer",
   "growth_buffer_bytes = update_growth_buffer",
   "Storage low before install/update (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
-  "cleanup_stage_and_logs(cleanup_logs, cleanup_backup)",
+  "M.cleanup_stage_and_logs(ctx, opts)",
   "Storage cleanup reclaimed bytes: stage=%d backup=%d logs=%d rotated=%d temp=%d"
 }
 
 for _, snippet in ipairs(required) do
-  if not installer:find(snippet, 1, true) then
+  if not storage:find(snippet, 1, true) then
     error("missing storage preflight snippet: " .. snippet)
   end
 end
