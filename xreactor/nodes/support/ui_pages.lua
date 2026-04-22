@@ -14,4 +14,79 @@ function M.draw_status_page(target, ui, colors, title, lines)
   end
 end
 
+function M.format_age(ts, now)
+  if not ts then
+    return "n/a"
+  end
+  return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
+end
+
+function M.render_alert_banner(target, ui, model)
+  if model.local_alerts_critical and model.local_alerts_critical > 0 then
+    local w = select(1, ui.getSize(target))
+    if not w then
+      return
+    end
+    local label = "CRIT " .. tostring(model.local_alerts_critical)
+    ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
+  end
+end
+
+function M.append_local_alert_rows(rows, alerts)
+  if type(alerts) ~= "table" or #alerts == 0 then
+    return rows
+  end
+  table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
+  for _, alert in ipairs(alerts) do
+    local sev = alert.severity and alert.severity:sub(1, 1) or "?"
+    local title = alert.title or alert.message or alert.code or "alert"
+    local status = alert.severity == "CRITICAL" and "EMERGENCY" or alert.severity == "WARN" and "WARNING" or "OK"
+    table.insert(rows, { text = string.format("%s %s", sev, title), status = status })
+  end
+  return rows
+end
+
+function M.build_common_model(args)
+  local payload = args.payload
+  local peer = args.master_peer
+  local now = args.now
+  local comms_diag = args.comms_diag or {}
+  local metrics = comms_diag.metrics or {}
+  return {
+    payload = payload,
+    status = payload.health and payload.health.status or "OK",
+    summary = args.summary,
+    comms = comms_diag,
+    metrics = metrics,
+    master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN",
+    master_age = peer and peer.age and string.format("%ds", math.floor(peer.age)) or "n/a",
+    last_scan = M.format_age(args.last_scan_ts, now),
+    last_command = args.last_command,
+    last_command_ts = args.last_command_ts and M.format_age(args.last_command_ts, now) or "n/a",
+    local_alerts = args.local_alerts or {},
+    local_alerts_critical = args.local_alerts_critical or 0,
+    node_id = args.node_id
+  }
+end
+
+function M.common_diagnostic_rows(model, discovery_failed)
+  return {
+    { text = ("Health: %s"):format(model.status), status = model.status },
+    { text = ("Discovery: %s"):format(discovery_failed and "FAILED" or "OK"), status = discovery_failed and "WARNING" or "OK" },
+    { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
+    { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
+    { text = ("Comms q:%d inflight:%d retries:%d"):format(
+      model.comms.queue_depth or 0,
+      model.comms.inflight_count or 0,
+      model.metrics.retries or 0
+    ) },
+    { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(
+      model.metrics.dropped or 0,
+      model.metrics.dedupe_hits or 0,
+      model.metrics.timeouts or 0
+    ) },
+    { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
+  }
+end
+
 return M
