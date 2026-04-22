@@ -6,7 +6,7 @@ local CONFIG = {
   BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
   BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor_logs/loader_water.log).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
-  CONFIG_PATH = "/xreactor/nodes/water/config.lua", -- Config file path.
+  CONFIG_PATH = nil, -- Config file path (provided by role descriptor).
   RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
 }
 
@@ -32,8 +32,11 @@ local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
 local ui_service = require("services.ui_service")
 local safety = require("core.safety")
-local non_rt_config = require("core.non_rt_config")
+local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
+local support_runtime = require("nodes.support.runtime")
+local role_descriptor = require("nodes.water.role_descriptor")
+local config_normalizer = require("nodes.water.config_normalizer")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.WATER_NODE, -- Node role identifier.
@@ -65,6 +68,7 @@ local DEFAULT_CONFIG = {
   }
 }
 
+CONFIG.CONFIG_PATH = role_descriptor.config_path
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local balance_log_state = { last_action = "ok", last_log_ts = 0 }
@@ -73,54 +77,20 @@ local function add_config_warning(message)
   table.insert(config_warnings, message)
 end
 
-local function validate_config(config_values, defaults)
-  non_rt_config.apply_common(config_values, defaults, add_config_warning, utils)
-  if type(config_values.loop_tanks) ~= "table" then
-    config_values.loop_tanks = utils.deep_copy(defaults.loop_tanks)
-    add_config_warning("loop_tanks missing/invalid; defaulting to configured list")
-  end
-  if type(config_values.target_volume) ~= "number" or config_values.target_volume < 0 then
-    config_values.target_volume = defaults.target_volume
-    add_config_warning("target_volume missing/invalid; defaulting to " .. tostring(defaults.target_volume))
-  end
-  if type(config_values.balance_log_interval_s) ~= "number" or config_values.balance_log_interval_s < 0 then
-    config_values.balance_log_interval_s = defaults.balance_log_interval_s
-    add_config_warning("balance_log_interval_s missing/invalid; defaulting to " .. tostring(defaults.balance_log_interval_s))
-  end
-end
-
-validate_config(config, DEFAULT_CONFIG)
+config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
 -- Initialize file logging early to capture startup events.
-local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
-local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
-local debug_enabled = config.debug_logging
-if CONFIG.DEBUG_LOG_ENABLED ~= nil then
-  debug_enabled = CONFIG.DEBUG_LOG_ENABLED
-end
-if (config_meta and config_meta.reason) or #config_warnings > 0 then
-  debug_enabled = true
-end
-local log_status = utils.init_logger({
-  log_name = log_name,
-  prefix = CONFIG.LOG_PREFIX,
-  enabled = debug_enabled,
-  truncate = config.reset_log_on_start == true
+local node_id = support_runtime.init_logging({
+  utils = utils,
+  config = config,
+  runtime_config = CONFIG,
+  config_meta = config_meta,
+  config_warnings = config_warnings
 })
-if log_status and log_status.enabled then
-  utils.log(CONFIG.LOG_PREFIX, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)), "INFO")
-end
-utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
-if config_meta and config_meta.reason then
-  utils.log(CONFIG.LOG_PREFIX, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.", "WARN")
-end
-for _, warning in ipairs(config_warnings) do
-  utils.log(CONFIG.LOG_PREFIX, warning, "WARN")
-end
 
 local comms
 local services
-local registry = registry_lib.new({ node_id = node_id, role = "water", log_prefix = CONFIG.LOG_PREFIX })
+local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local water_health = health.new({})
 local tanks = {}
 local devices = {
@@ -296,9 +266,10 @@ local function build_status_payload()
   water_health.last_seen_ts = os.epoch("utc")
   water_health.bindings = { tanks = #buffers }
   water_health.capabilities = { tanks = #config.loop_tanks }
-  return {
-    total_water = total,
-    buffers = buffers,
+  local payload = non_rt_payload.build_base({
+    ts = os.epoch("utc"),
+    role = config.role,
+    node_id = config.node_id,
     health = {
       status = water_health.status,
       reasons = health.reasons_list(water_health),
@@ -306,14 +277,26 @@ local function build_status_payload()
       bindings = water_health.bindings,
       capabilities = water_health.capabilities
     },
-    bindings = water_health.bindings,
-    bindings_summary = health.summarize_bindings(water_health.bindings),
+    discovery_failed = devices.discovery_failed,
+    master_connected = master_ok,
+    master_seen_s = master_seen_ts and math.max(0, math.floor((os.epoch("utc") - master_seen_ts) / 1000)) or nil,
+    queue = comms and comms:queue_depth() or 0,
+    peers = comms and comms.peer_state and comms.peer_state.peers or nil,
+    alerts = master_alerts,
+    protocol_mismatch = devices.proto_mismatch,
+    last_command = devices.last_command,
+    last_command_ts = devices.last_command_ts,
     registry = {
       summary = devices.registry_summary or registry:get_summary(),
       devices = registry:get_devices_by_kind(),
       diagnostics = registry:get_diagnostics()
     }
-  }
+  })
+  payload.total_water = total
+  payload.buffers = buffers
+  payload.bindings = water_health.bindings
+  payload.bindings_summary = health.summarize_bindings(water_health.bindings)
+  return payload
 end
 
 local function format_age(ts, now)
@@ -544,19 +527,4 @@ local function init()
 end
 
 init()
-while true do
-  local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
-  while true do
-    local event = { os.pullEvent() }
-    if event[1] == "modem_message" then
-      comms:handle_event(event)
-      services:tick(nil, event)
-    elseif event[1] == "timer" and event[2] == timer then
-      break
-    elseif event[1] == "monitor_touch" or event[1] == "key" then
-      services:tick(nil, event)
-    end
-  end
-  balance_loop()
-  services:tick()
-end
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, balance_loop)

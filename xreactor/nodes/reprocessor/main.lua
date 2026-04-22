@@ -6,7 +6,7 @@ local CONFIG = {
   BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
   BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor_logs/loader_reprocessor.log).
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
-  CONFIG_PATH = "/xreactor/nodes/reprocessor/config.lua", -- Config file path.
+  CONFIG_PATH = nil, -- Config file path (provided by role descriptor).
   RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
 }
 
@@ -31,9 +31,11 @@ local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
 local ui_service = require("services.ui_service")
-local non_rt_config = require("core.non_rt_config")
 local non_rt_payload = require("core.non_rt_payload")
 local support_discovery = require("nodes.support.discovery")
+local support_runtime = require("nodes.support.runtime")
+local role_descriptor = require("nodes.reprocessor.role_descriptor")
+local config_normalizer = require("nodes.reprocessor.config_normalizer")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.REPROCESSOR_NODE, -- Node role identifier.
@@ -63,6 +65,7 @@ local DEFAULT_CONFIG = {
   }
 }
 
+CONFIG.CONFIG_PATH = role_descriptor.config_path
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 
@@ -70,46 +73,20 @@ local function add_config_warning(message)
   table.insert(config_warnings, message)
 end
 
-local function validate_config(config_values, defaults)
-  non_rt_config.apply_common(config_values, defaults, add_config_warning, utils)
-  if type(config_values.buffers) ~= "table" then
-    config_values.buffers = utils.deep_copy(defaults.buffers)
-    add_config_warning("buffers missing/invalid; defaulting to configured list")
-  end
-end
-
-validate_config(config, DEFAULT_CONFIG)
+config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
 -- Initialize file logging early to capture startup events.
-local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
-local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
-local debug_enabled = config.debug_logging
-if CONFIG.DEBUG_LOG_ENABLED ~= nil then
-  debug_enabled = CONFIG.DEBUG_LOG_ENABLED
-end
-if (config_meta and config_meta.reason) or #config_warnings > 0 then
-  debug_enabled = true
-end
-local log_status = utils.init_logger({
-  log_name = log_name,
-  prefix = CONFIG.LOG_PREFIX,
-  enabled = debug_enabled,
-  truncate = config.reset_log_on_start == true
+local node_id = support_runtime.init_logging({
+  utils = utils,
+  config = config,
+  runtime_config = CONFIG,
+  config_meta = config_meta,
+  config_warnings = config_warnings
 })
-if log_status and log_status.enabled then
-  utils.log(CONFIG.LOG_PREFIX, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)), "INFO")
-end
-utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
-if config_meta and config_meta.reason then
-  utils.log(CONFIG.LOG_PREFIX, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.", "WARN")
-end
-for _, warning in ipairs(config_warnings) do
-  utils.log(CONFIG.LOG_PREFIX, warning, "WARN")
-end
 
 local comms
 local services
-local registry = registry_lib.new({ node_id = node_id, role = "reprocessor", log_prefix = CONFIG.LOG_PREFIX })
+local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local reproc_health = health.new({})
 local buffers = {}
 local devices = {
@@ -554,22 +531,9 @@ local function init()
 end
 
 init()
-while true do
-  local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
-  while true do
-    local event = { os.pullEvent() }
-    if event[1] == "modem_message" then
-      comms:handle_event(event)
-      services:tick(nil, event)
-    elseif event[1] == "timer" and event[2] == timer then
-      break
-    elseif event[1] == "monitor_touch" or event[1] == "key" then
-      services:tick(nil, event)
-    end
-  end
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   process_buffers()
   if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
     standby = true
   end
-  services:tick()
-end
+end)
