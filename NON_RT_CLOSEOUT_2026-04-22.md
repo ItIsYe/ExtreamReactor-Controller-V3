@@ -50,8 +50,41 @@
   - `python3 tests/rt_main_parse_guard_test.py` ✅
   - `python3 tests/support_nodes_shared_runtime_regression_test.py` ✅
   - `tests/rt_main_structure_guard_test.py` intentionally skipped (separate RT-audit track).
-- `pytest -q tests/*.py` executed for transparency and aborts during collection because `tests/rt_main_structure_guard_test.py` raises `SystemExit` by design on RT-size policy.
-- Lua runtime availability check executed; no `lua`/`luajit` binary in this environment, so `.lua` suites could not be executed in this signoff run.
+- `python3 -m pytest -q tests/*.py` was executed for transparency and aborts during collection because `tests/rt_main_structure_guard_test.py` raises `SystemExit` by design on RT-size policy.
+- Lua runtime was installed (`lua5.4`) to run the repository `.lua` suites in this signoff pass.
+- Non-selective Lua regression sweep (`for t in tests/*.lua; do lua "$t"; done` equivalent):
+  - **54 passed**
+  - **25 failed**
+  - Failures include non-RT and RT tracks, therefore full closeout gates are not currently green in this environment/repo state.
+
+#### Failing test list captured in signoff
+- Non-RT / shared stack candidates:
+  - `tests/alert_rules_numeric_normalization_test.lua`
+  - `tests/comms_peer_down_observation_debounce_test.lua`
+  - `tests/comms_peer_state_hysteresis_test.lua`
+  - `tests/energy_architecture_stability_regression_test.lua`
+  - `tests/energy_discovery_hot_path_gating_test.lua`
+  - `tests/energy_matrix_component_logging_regression_test.lua`
+  - `tests/energy_matrix_payload_cache_regression_test.lua`
+  - `tests/induction_matrix_component_counts_test.lua`
+  - `tests/logger_startup_policy_test.lua`
+  - `tests/manifest_integrity_consistency_test.lua`
+  - `tests/manifest_role_filter_metadata_test.lua`
+  - `tests/master_regression_guards_test.lua`
+  - `tests/network_modem_detection_test.lua`
+  - `tests/release_metadata_consistency_test.lua`
+  - `tests/runtime_identity_logging_test.lua`
+  - `tests/ui_redirect_guard_test.lua`
+  - `tests/wrapped_peripheral_guard_test.lua`
+- RT-track failures (explicitly outside this non-RT completion scope, but observed in full sweep):
+  - `tests/rt_config_normalizer_steam_guard_test.lua`
+  - `tests/rt_flow_apply_helpers_readback_lag_regression_test.lua`
+  - `tests/rt_master_startup_off_state_regression_test.lua`
+  - `tests/rt_module_lifecycle_control_rod_caps_test.lua`
+  - `tests/rt_monitor_ui_adapter_snapshot_test.lua`
+  - `tests/rt_safety_causality_logging_test.lua`
+  - `tests/rt_turbine_api_warning_regression_test.lua`
+  - `tests/rt_turbine_flow_range_config_regression_test.lua`
 
 ### Architecture consistency spot checks (executed)
 - Non-RT `main.lua` footprint check executed (`xreactor/master/main.lua`, `xreactor/nodes/energy/main.lua`, `xreactor/nodes/water/main.lua`, `xreactor/nodes/fuel/main.lua`, `xreactor/nodes/reprocessor/main.lua`) to ensure there is no forced/artificial split wave.
@@ -63,6 +96,6 @@
 
 ## Final decision
 
-**Non-RT roadmap status: JA (abgeschlossen).**
+**Non-RT roadmap status: NEIN (noch nicht abgeschlossen).**
 
-The non-RT architecture goals are met on this repo state, with acceptance gates passing for support-runtime, ENERGY decoupling/heartbeat/topology stability, and parse/load guards. Remaining work is optional polish or RT-track backlog, not a non-RT completion blocker.
+Architecture shape checks are broadly consistent with the intended non-RT target (layering/modular ownership/support runtime usage). However, the formal signoff criterion requires a full relevant regression/integration run, and that run is currently not fully green (multiple non-RT/shared-stack failures still present in the executed Lua sweep). Until those blockers are resolved or explicitly reclassified with objective evidence, non-RT closeout cannot be signed off as complete.
