@@ -45,6 +45,16 @@ local function get_turbine_ctrl(name)
   end
   return ctrl
 end
+local function turbine_ctrl_store()
+  local global = _G
+  if type(global) ~= "table" then
+    global = _ENV
+  end
+  if type(global) ~= "table" then
+    return {}
+  end
+  return global.turbine_ctrl or {}
+end
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local ui = require("core.ui")
@@ -150,36 +160,17 @@ local last_reactor_demand = 0
 local steam_tank_name = nil
 local reactor_rails_state = rails.new_state()
 local reactor_steam_guard_state = {}
-config.safety = config.safety or {}
-config.safety.max_temperature = config.safety.max_temperature or DEFAULT_CONFIG.safety.max_temperature
-config.safety.temperature_hysteresis = config.safety.temperature_hysteresis or DEFAULT_CONFIG.safety.temperature_hysteresis
-config.safety.temperature_trip_samples = config.safety.temperature_trip_samples or DEFAULT_CONFIG.safety.temperature_trip_samples
-config.safety.max_rpm = config.safety.max_rpm or DEFAULT_CONFIG.safety.max_rpm
-config.safety.min_water = config.safety.min_water or DEFAULT_CONFIG.safety.min_water
-config.safety.coolant_hysteresis = config.safety.coolant_hysteresis or DEFAULT_CONFIG.safety.coolant_hysteresis
-config.safety.coolant_trip_samples = config.safety.coolant_trip_samples or DEFAULT_CONFIG.safety.coolant_trip_samples
-config.safety.coolant_invalid_grace_samples = config.safety.coolant_invalid_grace_samples or DEFAULT_CONFIG.safety.coolant_invalid_grace_samples
-config.heartbeat_interval = config.heartbeat_interval or DEFAULT_CONFIG.heartbeat_interval
-config.autonom = config.autonom or {}
-config.autonom.control_rod_level = config.autonom.control_rod_level or DEFAULT_CONFIG.autonom.control_rod_level
-config.autonom.target_rpm = TARGET_RPM
-config.autonom.max_rpm = math.max(config.autonom.max_rpm or TARGET_RPM, TARGET_RPM)
-config.autonom.min_flow = math.max(config.autonom.min_flow or MIN_FLOW, MIN_FLOW)
-config.autonom.max_flow = math.min(config.autonom.max_flow or MAX_FLOW, MAX_FLOW)
-config.autonom.flow_step = config.autonom.flow_step or FLOW_STEP
-config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
-config.autonom.regulator_min_rods = config.autonom.regulator_min_rods or DEFAULT_CONFIG.autonom.regulator_min_rods
-config.autonom.regulator_max_rods = config.autonom.regulator_max_rods or DEFAULT_CONFIG.autonom.regulator_max_rods
-config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or ROD_TICK
-config.autonom.steam_reserve = config.autonom.steam_reserve or DEFAULT_CONFIG.autonom.steam_reserve
-config.autonom.steam_deficit = config.autonom.steam_deficit or DEFAULT_CONFIG.autonom.steam_deficit
-config.rails = config.rails or utils.deep_copy(DEFAULT_CONFIG.rails)
-config.rails.ramp_profiles = config.rails.ramp_profiles or utils.deep_copy(DEFAULT_CONFIG.rails.ramp_profiles)
-config_normalizer.normalize_rails(config, DEFAULT_CONFIG, utils, safety, MIN_FLOW, MAX_FLOW)
-config.monitor_interval = config.monitor_interval or DEFAULT_CONFIG.monitor_interval
-config.monitor_scale = config.monitor_scale or DEFAULT_CONFIG.monitor_scale
-config.scan_interval = config.scan_interval or DEFAULT_CONFIG.scan_interval
-config.startup_watchdog_s = config.startup_watchdog_s or DEFAULT_CONFIG.startup_watchdog_s
+config_normalizer.apply_runtime_defaults(config, DEFAULT_CONFIG, {
+  target_rpm = TARGET_RPM,
+  min_flow = MIN_FLOW,
+  max_flow = MAX_FLOW,
+  flow_step = FLOW_STEP,
+  rod_tick = ROD_TICK,
+  deep_copy = utils.deep_copy,
+  normalize_rails = function(values, defaults)
+    return config_normalizer.normalize_rails(values, defaults, utils, safety, MIN_FLOW, MAX_FLOW)
+  end
+})
 local hb = config.heartbeat_interval
 local configured_reactors = utils.deep_copy(config.reactors or {})
 local configured_turbines = utils.deep_copy(config.turbines or {})
@@ -226,8 +217,6 @@ local warned = {}
 local autonom_state = { reactors = {}, turbines = {} }
 local autonom_control_logged = false
 local capability_cache = { reactors = {}, turbines = {} }
-local turbine_ctrl = _G.turbine_ctrl or {}
-_G.turbine_ctrl = turbine_ctrl
 local reactor_ctrl = {}
 local cache
 local build_modules
@@ -534,6 +523,7 @@ local function read_turbine_flow(turbine, caps)
   return nil, "FLOW_UNAVAILABLE"
 end
 local function init_turbine_ctrl()
+  local turbine_ctrl = turbine_ctrl_store()
   for key in pairs(turbine_ctrl) do
     turbine_ctrl[key] = nil
   end
@@ -1394,93 +1384,6 @@ end
 local set_reactors_active
 local set_turbines_active
 local apply_safe_controls
-local function updateActuators()
-  if current_state ~= STATE.AUTONOM then
-    return
-  end
-  for _, name in ipairs(config.reactors) do
-    local reactor
-    if peripheral.isPresent(name) then
-      local wrapped, err = utils.safe_wrap(name)
-      if wrapped then
-        reactor = wrapped
-      else
-        warn_once("reactor_wrap:" .. name, "Reactor wrap failed for " .. name .. ": " .. tostring(err))
-      end
-    else
-      warn_once("reactor_missing:" .. name, "Reactor missing: " .. name)
-    end
-    if reactor then
-      local caps = get_device_caps("reactors", name)
-      if not has_reactor_rod_write_path(caps) then
-        warn_unsupported(name)
-        goto continue_reactor
-      end
-      local ok_active, active_result = pcall(setReactorActive, reactor, caps, true)
-      if not ok_active then
-        warn_once("reactor_active:" .. name, "Reactor activate failed for " .. name .. ": " .. tostring(active_result))
-        goto continue_reactor
-      end
-      if not active_result then
-        warn_once("reactor_set_active_unavailable:" .. name, "Reactor active API unavailable for " .. name)
-        goto continue_reactor
-      end
-      ensure_reactor_ctrl(name)
-      ::continue_reactor::
-    end
-  end
-  local target_rpm = get_target_rpm()
-  for name, ctrl in pairs(turbine_ctrl) do
-    local turbine
-    if peripheral.isPresent(name) then
-      local wrapped, err = utils.safe_wrap(name)
-      if wrapped then
-        turbine = wrapped
-      else
-        warn_once("turbine_wrap:" .. name, "Turbine wrap failed for " .. name .. ": " .. tostring(err))
-      end
-    else
-      warn_once("turbine_missing:" .. name, "Turbine missing: " .. name)
-    end
-    if turbine then
-      local caps = get_device_caps("turbines", name)
-      local has_flow_api, flow_api_reason = turbine_has_flow_setter(turbine, caps)
-      if not has_flow_api then
-        ctrl.flow_api_missing_ticks = (ctrl.flow_api_missing_ticks or 0) + 1
-        if ctrl.flow_api_missing_ticks >= 5 then
-          warn_unsupported(name, flow_api_reason)
-        else
-          log("DEBUG", "TurbineCtrl startup-wait name=" .. tostring(name) .. " reason=" .. tostring(flow_api_reason) .. " missing_ticks=" .. tostring(ctrl.flow_api_missing_ticks))
-        end
-        goto continue_turbine
-      end
-      ctrl.flow_api_missing_ticks = 0
-      local ok_active, active_result = pcall(setTurbineActive, turbine, caps, true)
-      if not ok_active then
-        warn_once("turbine_active:" .. name, "Turbine activate failed for " .. name .. ": " .. tostring(active_result))
-        goto continue_turbine
-      end
-      if not active_result then
-        warn_once("turbine_set_active_unavailable:" .. name, "Turbine active API unavailable for " .. name .. " (continuing with flow control)")
-      end
-      local rpm = select(1, read_turbine_rpm(turbine, caps))
-      local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
-      if not ok_inductor then
-        warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
-        goto continue_turbine
-      end
-      local ok, result, setter, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
-      if not ok then
-        warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
-        goto continue_turbine
-      end
-      if not result then
-        log("DEBUG", "TurbineCtrl skip name=" .. name .. " reason=" .. tostring(apply_reason) .. " state=AUTONOM api=" .. tostring(setter))
-      end
-      ::continue_turbine::
-    end
-  end
-end
 local function updateControl()
   if current_state ~= STATE.AUTONOM and current_state ~= STATE.MASTER then
     return
@@ -1518,7 +1421,8 @@ local function updateControl()
     skip_reasons[key] = (skip_reasons[key] or 0) + 1
     eval_skipped = eval_skipped + 1
   end
-  for name, ctrl in pairs(turbine_ctrl) do
+  for _, name in ipairs(config.turbines or {}) do
+    local ctrl = get_turbine_ctrl(name)
     eval_total = eval_total + 1
     local ok, turbine = pcall(peripheral.wrap, name)
     if not ok or not turbine then
