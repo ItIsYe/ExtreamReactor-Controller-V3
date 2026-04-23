@@ -5,6 +5,7 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 
 ## Empfohlener Ablauf
 1. Installer lokal starten: `installer`.
+   - Fresh-Install-Standalone: Falls `/xreactor/installer_*.lua` noch nicht vorhanden ist, bootstrappt der Root-Installer diese Module zuerst selbst per HTTP-Download.
 2. Im Menü `Update` wählen.
 3. Der Installer lädt das Manifest, ermittelt die installierte Rolle aus `/xreactor/config/role.lua` und berechnet den Storage-Preflight.
 4. Dateien werden nach `/xreactor_stage` geladen und verifiziert.
@@ -21,6 +22,19 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 - Rolle (`/xreactor/config/role.lua`, wird nach Update erneut sichergestellt).
 - Bestehende Runtime-Config in `/xreactor/config/*` (wird vor Aktivierung ins Stage kopiert).
 - `/startup`, sofern ein nicht-XReactor-Startup absichtlich geschützt ist (wird dann nicht überschrieben).
+- Persistierte Node-ID (`/xreactor/config/node_id.txt`) bleibt führend und wird nicht mehr durch Rollen-Defaults wie `ENERGY-1`/`RT-1` verdrängt.
+
+## Verhaltensänderungen (gezielt, funktional)
+
+1. **Node-ID-Kollisionsschutz**
+   - Geändert: Netzwerk-Initialisierung priorisiert persistierte Node-ID und ignoriert kollisionsanfällige Rollen-Default-IDs als effektive Runtime-ID.
+   - Warum: Mehrere reale Nodes derselben Rolle liefen sonst mit identischer ID.
+   - Reduziertes Risiko: Comms-/State-Kollisionen zwischen Nodes.
+
+2. **ENERGY Single-Device-Modell pro Node**
+   - Geändert: ENERGY bindet pro Node max. 1 Matrix und max. 1 Storage.
+   - Warum: Zielarchitektur vereinfacht Node-Laufzeit; Aggregation gehört in MASTER.
+   - Reduziertes Risiko: Mehrfach-Topologie-/Gruppierungsfehler pro Node und schwer nachvollziehbare Doppelzählung.
 
 ## Pfade (Update vs. Runtime)
 
@@ -86,4 +100,3 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 - Bewusst **nicht** Bestandteil dieses Abschlusses:
   - RT-Refactor, RT-State-Machine-Änderungen, RT-Sicherheitsverhalten (SAFE/LIMITED/STARTUP), direkte Änderungen unter `xreactor/nodes/rt/*`.
 - Offener Backlog wird als separater **RT-Audit-Track** geführt.
-

@@ -271,13 +271,32 @@ function M.new(opts)
     table.sort(matrix_entries, sort_by_order)
 
     local storages, bound_names = {}, {}
-    for _, item in ipairs(storage_entries) do
-      storages[#storages + 1] = { id = item.entry.id, alias = item.entry.alias, name = item.adapter.name, adapter = item.adapter }
-      bound_names[#bound_names + 1] = item.entry.alias or item.entry.id
+    local selected_storage = storage_entries[1]
+    if selected_storage then
+      storages[1] = {
+        id = selected_storage.entry.id,
+        alias = selected_storage.entry.alias,
+        name = selected_storage.adapter.name,
+        adapter = selected_storage.adapter
+      }
+      bound_names[1] = selected_storage.entry.alias or selected_storage.entry.id
+      if #storage_entries > 1 then
+        runtime.log(("Storage discovery: %d candidates found, using %s only (single-storage model)"):format(#storage_entries, tostring(selected_storage.adapter.name)))
+      end
     end
+
     local matrices = {}
-    for _, item in ipairs(matrix_entries) do
-      matrices[#matrices + 1] = { id = item.entry.id, alias = item.entry.alias, name = item.adapter.name, adapter = item.adapter }
+    local selected_matrix = matrix_entries[1]
+    if selected_matrix then
+      matrices[1] = {
+        id = selected_matrix.entry.id,
+        alias = selected_matrix.entry.alias,
+        name = selected_matrix.adapter.name,
+        adapter = selected_matrix.adapter
+      }
+      if #matrix_entries > 1 then
+        runtime.log(("Matrix discovery: %d candidates found, using %s only (single-matrix model)"):format(#matrix_entries, tostring(selected_matrix.adapter.name)))
+      end
     end
 
     local matrix_groups = runtime.matrix_adapter.group_ports(matrices)
@@ -307,7 +326,7 @@ function M.new(opts)
     runtime.devices.registry_summary = runtime.registry:get_summary()
     runtime.devices.registry_load_error = runtime.registry.state.load_error
     runtime.devices.last_scan_ts = os.epoch("utc")
-    runtime.devices.last_scan_result = ("monitor=%s storages=%d"):format(monitor_name or "none", #storages)
+    runtime.devices.last_scan_result = ("monitor=%s storages=%d matrices=%d"):format(monitor_name or "none", #storages, #matrices)
     runtime.devices.matrix_identity_cache = next_matrix_identity_cache
     runtime.devices.topology_signature = next_topology_signature
 

@@ -2,6 +2,7 @@
 
 ## Install/Update
 1. **Fresh Install (lokal)**: `installer` starten, Rolle wählen, Abschluss prüfen (`Installation complete` im Installer-Log).
+   - Standalone-Fall prüfen: nur Root-`installer` vorhanden, `/xreactor/installer_*.lua` fehlt initial, Installer bootstrappt Module selbst und läuft anschließend durch.
 2. **Update (lokal)**: `installer` -> `Update`; Rolle wird aus `/xreactor/config/role.lua` übernommen.
 3. **Storage-Preflight**: im Installer-Log müssen Free/Payload/Growth/Stage-Peak/Buffer-Werte protokolliert werden; bei Low-Space sauberer Abbruch mit konkreter Meldung.
 4. **Stage/Backup/Activation/Commit**:
@@ -11,6 +12,16 @@
    - Backup-Entfernung nach erfolgreichem Commit.
 5. **Startup-Verhalten**: `/startup` wird nur überschrieben, wenn es als XReactor-Startup erkannt wird; fremde Startups bleiben erhalten.
 6. **Config-Erhalt beim Update**: bestehende `/xreactor/config/*` bleibt wirksam (durch Copy nach Stage).
+7. **`fs.getFreeSpace()` Sonderfall**: Preflight akzeptiert `number` sowie `"unlimited"` robust (kein Typfehler/Abbruch durch Stringwert).
+
+## Node-ID / Identity
+1. Persistierte `/xreactor/config/node_id.txt` muss immer Vorrang gegenüber Rollen-Defaults in Config haben.
+2. Rollen-Default-ID (`RT-1`, `ENERGY-1`, etc.) darf bei Erststart keine effektive Runtime-ID-Kollision erzwingen.
+3. Ohne persistierte ID muss deterministisch eine lokale Maschinen-ID erzeugt und gespeichert werden.
+
+## ENERGY Single-Device-Modell + MASTER Aggregation
+1. ENERGY bindet pro Node max. eine Matrix + max. einen Storage, auch wenn mehrere Kandidaten verfügbar sind.
+2. MASTER aggregiert Energie-Gesamtsummen aus mehreren ENERGY-Nodes (stored/capacity/input/output).
 
 ## Safety (RT)
 1. **Coolant Pending statt sofort SAFE**: Low-Coolant auslösen -> Log enthält `COOLANT_LOW_PENDING`, aber noch kein sofortiger SAFE/SCRAM.
@@ -71,4 +82,3 @@
    - `python3 tests/rt_main_parse_guard_test.py`
 4. **Optional lokal mit Lua-Interpreter**: ausgewählte `.lua`-Regressionen für Installer/MASTER/ENERGY/Support ergänzend ausführen.
 5. **Wichtig**: `tests/rt_main_structure_guard_test.py` ist ein RT-Größen-Guard und gehört in einen separaten RT-Audit-Track (kein Non-RT-Abschlusskriterium).
-
