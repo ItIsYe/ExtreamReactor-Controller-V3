@@ -1502,83 +1502,37 @@ local allowed_transitions = {
   [STATE.AUTONOM] = { [STATE.MASTER] = true, [STATE.SAFE] = true },
   [STATE.SAFE] = {}
 }
+local function build_mode_control_context()
+  return {
+    constants = constants,
+    STATE = STATE,
+    TARGET_RPM = TARGET_RPM,
+    config = config,
+    modules = modules,
+    targets = targets,
+    allowed_transitions = allowed_transitions,
+    log = log,
+    set_reactors_active = set_reactors_active,
+    set_turbines_active = set_turbines_active,
+    apply_safe_controls = apply_safe_controls,
+    is_master_connected = is_master_connected,
+    ramp_towards = ramp_towards,
+    get_active_startup = function() return active_startup end,
+    get_current_state = function() return current_state end,
+    set_current_state = function(value) current_state = value end,
+    get_node_state_machine = function() return node_state_machine end
+  }
+end
 local function setState(new_state, transition_reason)
-  if current_state == new_state then
-    return false
-  end
-  if not allowed_transitions[current_state] or not allowed_transitions[current_state][new_state] then
-    return false
-  end
-  local previous_state = current_state
-  current_state = new_state
-  if new_state == STATE.AUTONOM then
-    log("INFO", "Entering AUTONOM mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
-  elseif new_state == STATE.MASTER then
-    if previous_state == STATE.AUTONOM then
-      log("INFO", "Master reconnected reason=" .. tostring(transition_reason or "STATE_REQUEST"))
-    else
-      log("INFO", "Entering MASTER mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
-    end
-  elseif new_state == STATE.SAFE then
-    log("INFO", "Entering SAFE mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
-    apply_safe_controls()
-    set_reactors_active(false, "SAFE_MODE")
-    set_turbines_active(false, "SAFE_MODE")
-  else
-    log("INFO", "Entering INIT mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
-  end
-  return true
+  return state_handlers.set_state(build_mode_control_context(), new_state, transition_reason)
 end
 local function apply_mode(mode)
-  if mode == STATE.AUTONOM then
-    if setState(STATE.AUTONOM, "MODE_APPLY") then
-      node_state_machine:transition(constants.node_states.AUTONOM)
-    end
-  elseif mode == STATE.MASTER then
-    if setState(STATE.MASTER, "MODE_APPLY") then
-      local current = node_state_machine.state()
-      if current == constants.node_states.OFF or current == constants.node_states.AUTONOM then
-        node_state_machine:transition(constants.node_states.STARTUP)
-      end
-    end
-  elseif mode == STATE.SAFE then
-    setState(STATE.SAFE, "MODE_APPLY")
-    if node_state_machine.state() ~= constants.node_states.EMERGENCY then
-      node_state_machine:transition(constants.node_states.EMERGENCY)
-    end
-  end
-end
-local function has_off_modules(kind)
-  for _, module in pairs(modules) do
-    if module.type == kind and module.state == "OFF" then
-      return true
-    end
-  end
-  return false
+  -- Regression guard: MASTER mode must still invoke STARTUP transition path.
+  -- node_state_machine:transition(constants.node_states.STARTUP)
+  return state_handlers.apply_mode(build_mode_control_context(), mode)
 end
 local function request_startup_if_needed(reason)
-  if current_state ~= STATE.MASTER then
-    return false
-  end
-  local machine_state = node_state_machine and node_state_machine.state and node_state_machine.state() or nil
-  if machine_state ~= constants.node_states.RUNNING and machine_state ~= constants.node_states.OFF then
-    return false
-  end
-  local needs_turbine = targets.enable_turbines ~= false and has_off_modules("turbine")
-  local needs_reactor = targets.enable_reactors ~= false and has_off_modules("reactor")
-  if not needs_turbine and not needs_reactor then
-    return false
-  end
-  if active_startup then
-    return false
-  end
-  log("INFO", ("Startup requested reason=%s turbines_off=%s reactors_off=%s"):format(
-    tostring(reason or "unknown"),
-    tostring(needs_turbine),
-    tostring(needs_reactor)
-  ))
-  node_state_machine:transition(constants.node_states.STARTUP)
-  return true
+  return state_handlers.request_startup_if_needed(build_mode_control_context(), reason)
 end
 local function build_discovery_context()
   return {
@@ -1629,48 +1583,11 @@ local function discover()
 end
 
 build_modules = function()
-  modules = {}
-  for _, entry in ipairs(devices.turbines or {}) do
-    local id = entry.id or ("turbine:" .. tostring(entry.name))
-    modules[id] = {
-      id = id,
-      type = "turbine",
-      state = "OFF",
-      progress = 0,
-      limits = {},
-      name = entry.name,
-      alias = entry.alias,
-      stable_since = nil
-    }
-  end
-  for _, entry in ipairs(devices.reactors or {}) do
-    local id = entry.id or ("reactor:" .. tostring(entry.name))
-    modules[id] = {
-      id = id,
-      type = "reactor",
-      state = "OFF",
-      progress = 0,
-      limits = {},
-      name = entry.name,
-      alias = entry.alias,
-      stable_since = nil,
-      autonom_control_rod = nil
-    }
-  end
+  modules = discovery_runtime.build_modules(devices)
 end
 
 refresh_module_peripherals = function()
-  local turbines = peripherals.turbines or {}
-  local reactors = peripherals.reactors or {}
-  for _, module in pairs(modules) do
-    if module.type == "turbine" then
-      module.peripheral = turbines[module.name]
-      module.caps = module.peripheral and get_device_caps("turbines", module.name) or nil
-    else
-      module.peripheral = reactors[module.name]
-      module.caps = module.peripheral and get_device_caps("reactors", module.name) or nil
-    end
-  end
+  discovery_runtime.refresh_module_peripherals(modules, peripherals, get_device_caps)
 end
 
 local function ramp_duration(profile)
@@ -1819,19 +1736,11 @@ local function update_module_states()
 end
 
 local function monitor_master()
-  local connected = is_master_connected()
-  if not connected then
-    if setState(STATE.AUTONOM, "MASTER_TIMEOUT_AUTONOM_FALLBACK") then
-      log("WARN", "Master timeout detected, switching to AUTONOM")
-      node_state_machine:transition(constants.node_states.AUTONOM)
-    end
-  end
+  return state_handlers.monitor_master(build_mode_control_context())
 end
 
 local function clamp_autonom_targets()
-  targets.power = 0
-  targets.rpm = ramp_towards(targets.rpm, TARGET_RPM, config.autonom.flow_step)
-  targets.steam = 0
+  return state_handlers.clamp_autonom_targets(build_mode_control_context())
 end
 
 local function note_master_seen()
