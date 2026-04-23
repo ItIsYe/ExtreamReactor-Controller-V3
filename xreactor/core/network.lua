@@ -19,15 +19,6 @@ local function safe_wrapped_call(obj, method, ...)
 end
 
 local function resolve_node_id(config)
-  if config.node_id then
-    local normalized = utils.normalize_node_id(config.node_id)
-    if normalized ~= "UNKNOWN" then
-      if type(config.node_id) ~= "string" then
-        warn_once("node_id.normalize", "WARN: normalized node_id to string")
-      end
-      return normalized
-    end
-  end
   local path = "/xreactor/config/node_id.txt"
   if fs.exists(path) then
     local file = fs.open(path, "r")
@@ -39,7 +30,44 @@ local function resolve_node_id(config)
       end
     end
   end
-  local generated = os.getComputerLabel() or (config.role .. "-" .. os.getComputerID())
+
+  local role_label = tostring(config.role or "NODE"):upper()
+  local function is_role_default_id(value)
+    if type(value) ~= "string" then
+      return false
+    end
+    local normalized = value:upper()
+    if normalized == (role_label .. "-1") then
+      return true
+    end
+    return normalized:match("^[A-Z_]+%-1$") ~= nil
+  end
+
+  if config.node_id then
+    local normalized = utils.normalize_node_id(config.node_id)
+    if normalized ~= "UNKNOWN" then
+      if is_role_default_id(normalized) then
+        warn_once("node_id.default_ignored", "WARN: ignoring role default node_id " .. tostring(normalized) .. " to avoid collisions; generating machine-local id")
+      else
+        if type(config.node_id) ~= "string" then
+          warn_once("node_id.normalize", "WARN: normalized node_id to string")
+        end
+        utils.ensure_dir(fs.getDir(path))
+        local file = fs.open(path, "w")
+        if file then
+          file.write(normalized)
+          file.close()
+        end
+        return normalized
+      end
+    end
+  end
+
+  local generated = ("node-%s"):format(tostring(os.getComputerID and os.getComputerID() or "unknown"))
+  local label = os.getComputerLabel and os.getComputerLabel() or nil
+  if type(label) == "string" and label ~= "" and not is_role_default_id(label) then
+    generated = label
+  end
   utils.ensure_dir(fs.getDir(path))
   local file = fs.open(path, "w")
   if file then

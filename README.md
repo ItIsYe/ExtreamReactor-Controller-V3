@@ -181,6 +181,17 @@ On launch it shows a simple menu:
 7. Writes `/startup` with `shell.run("/xreactor/start.lua")`, unless an existing `/startup` looks unrelated to XReactor.
 8. Logs progress to `/xreactor_logs/installer.log`.
 
+### Standalone bootstrap guarantee
+
+The root `installer` is now a real standalone entrypoint for fresh systems:
+
+- if `/xreactor/installer_main.lua` and the modular installer runtime files are missing, the root installer downloads
+  `installer_main.lua`, `installer_http.lua`, `installer_manifest.lua`, `installer_stage.lua`, `installer_startup.lua`, and `installer_storage.lua` first,
+- downloaded bootstrap files are validated (reject HTML, parse Lua before writing),
+- then normal install/update flow continues.
+
+This means a fresh machine only needs the single root `installer` file to begin installation.
+
 ### Update flow
 
 `Update` currently does the following:
@@ -201,6 +212,22 @@ The installer validates downloaded files before keeping them:
 - rejects missing or empty files,
 - rejects HTML content,
 - parses `.lua` files before accepting them.
+
+Storage preflight also handles CC:Tweaked `fs.getFreeSpace()` special values: `number`, negative-as-unbounded, and `"unlimited"`.
+
+## Node ID behavior
+
+- Effective runtime ID is loaded from persisted `/xreactor/config/node_id.txt` first.
+- If no persisted ID exists, configured `node_id` is used only when it is not a role-default collision pattern (for example `RT-1`, `ENERGY-1`).
+- If configured ID is missing/unsafe, a machine-local fallback ID (`node-<computerID>`, optionally label-based) is generated and persisted.
+
+This avoids accidental collisions when multiple nodes run the same role defaults.
+
+## Energy node model (current)
+
+- Each ENERGY node binds at most **one** matrix and at most **one** storage device.
+- If multiple candidates are discoverable, the deterministic first-ranked entry is selected and logged as a single-node model decision.
+- MASTER is responsible for aggregating totals across multiple ENERGY nodes.
 
 That means blob/HTML downloads are explicitly treated as installation failures.
 

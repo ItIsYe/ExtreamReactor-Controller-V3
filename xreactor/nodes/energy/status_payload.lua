@@ -31,10 +31,8 @@ function M.new(opts)
     local total_input = energy.input + (matrix.total.input or 0)
     local total_output = energy.output + (matrix.total.output or 0)
     local registry_summary = runtime.devices.registry_summary or runtime.registry:get_summary()
-    local matrix_bound = registry_summary.kinds.matrix and registry_summary.kinds.matrix.bound or 0
-    local storage_bound = registry_summary.kinds.storage and registry_summary.kinds.storage.bound or 0
-    local effective_matrix_count = math.max(matrix_bound, #(runtime.devices.matrix_groups or {}), #(matrix.matrices or {}))
-    local effective_storage_count = math.max(storage_bound, #(runtime.devices.storages or {}), #(energy.stores or {}))
+    local effective_matrix_count = #(runtime.devices.matrix_groups or {})
+    local effective_storage_count = #(runtime.devices.storages or {})
     energy.monitor_bound = runtime.devices.monitor ~= nil
     energy.storage_bound_count = effective_storage_count
     energy.bound_storage_names = runtime.devices.bound_storage_names or {}

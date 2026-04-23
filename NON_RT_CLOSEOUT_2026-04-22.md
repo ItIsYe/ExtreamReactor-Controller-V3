@@ -92,3 +92,14 @@
 **NICHT-RT-ROADMAP ABGESCHLOSSEN: NEIN**
 
 Reason: formal signoff requires a fully green relevant test/integration state. This run still shows multiple non-RT/shared-stack failing regressions, therefore a hard closeout signoff cannot be issued yet.
+
+---
+
+## Addendum 2026-04-23 (stabilization run)
+
+- Root-`installer` wurde auf echten Standalone-Bootstrap ergänzt (lädt fehlende `installer_*.lua` Module selbst nach).
+- Installer-Storage-Preflight behandelt jetzt `fs.getFreeSpace()` robust inkl. `"unlimited"`.
+- Node-ID-Auflösung priorisiert persistierte `/xreactor/config/node_id.txt` und entschärft Rollen-Default-Kollisionen.
+- ENERGY läuft pro Node im Single-Matrix/Single-Storage-Bindungsmodell; MASTER aggregiert weiterhin node-übergreifend.
+
+Diese Ergänzung ist eine Funktionsstabilisierung; sie ersetzt nicht den vollständigen separaten RT-Audit-Track.

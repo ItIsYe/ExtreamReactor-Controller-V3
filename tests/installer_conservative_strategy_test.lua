@@ -16,12 +16,14 @@ local storage = read("xreactor/installer_storage.lua")
 local required_snippets = {
   installer = {
     "STAGE_ROOT = \"/xreactor_stage\"",
-    "local installer_main = dofile(\"/xreactor/installer_main.lua\")"
+    "local installer_main = dofile(\"/xreactor/installer_main.lua\")",
+    "ensure_installer_runtime"
   },
   storage = {
     "function M.preflight_storage(ctx, storage_plan, opts)",
-    "Storage preflight OK (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
-    "Not enough free space (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)"
+    "Storage preflight OK (mode=%s free=%s payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
+    "Not enough free space (mode=%s free=%s payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
+    "trimmed == \"unlimited\""
   },
   manifest = {
     "if entry.always == true or M.role_matches(entry.required_for, role_label) then",

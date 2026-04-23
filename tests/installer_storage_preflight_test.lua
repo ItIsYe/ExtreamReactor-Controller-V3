@@ -18,7 +18,8 @@ local required = {
   "fixed_buffer_bytes = buffer_base",
   "percent_buffer_bytes = percent_buffer",
   "growth_buffer_bytes = update_growth_buffer",
-  "Storage low before install/update (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
+  "Storage low before install/update (mode=%s free=%s payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
+  "trimmed == \"unlimited\"",
   "M.cleanup_stage_and_logs(ctx, opts)",
   "Storage cleanup reclaimed bytes: stage=%d backup=%d logs=%d rotated=%d temp=%d"
 }

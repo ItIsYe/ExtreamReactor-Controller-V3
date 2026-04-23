@@ -1,5 +1,28 @@
 local M = {}
 
+local function normalize_free_space(value)
+  if type(value) == "number" then
+    if value < 0 then
+      return math.huge
+    end
+    return value
+  end
+  if type(value) == "string" then
+    local trimmed = tostring(value):match("^%s*(.-)%s*$")
+    if trimmed == "unlimited" then
+      return math.huge
+    end
+    local parsed = tonumber(trimmed)
+    if parsed then
+      if parsed < 0 then
+        return math.huge
+      end
+      return parsed
+    end
+  end
+  return nil
+end
+
 function M.measure_tree_size(fs_api, path)
   if not fs_api.exists(path) then
     return 0
@@ -99,8 +122,13 @@ function M.preflight_storage(ctx, storage_plan, opts)
   end
 
   local required_bytes = storage_plan.required_bytes
-  local free_bytes = ctx.fs.getFreeSpace("/")
-  ctx.info(string.format("Storage preflight free bytes: %d", free_bytes))
+  local free_raw = ctx.fs.getFreeSpace("/")
+  local free_bytes = normalize_free_space(free_raw)
+  if free_bytes == nil then
+    ctx.warn("Storage preflight: fs.getFreeSpace returned unsupported value; skipping strict check (" .. tostring(free_raw) .. ")")
+    return true
+  end
+  ctx.info(string.format("Storage preflight free bytes: %s", tostring(free_bytes)))
   ctx.info(string.format("Storage preflight payload estimate: %d", storage_plan.payload_bytes))
   ctx.info(string.format("Storage preflight growth estimate: %d (existing=%d)", storage_plan.growth_bytes or 0, storage_plan.existing_bytes or 0))
   ctx.info(string.format("Storage preflight stage peak estimate: %d (estimate_base=%d)", storage_plan.stage_peak_bytes or 0, storage_plan.estimate_base_bytes or 0))
@@ -113,9 +141,9 @@ function M.preflight_storage(ctx, storage_plan, opts)
 
   if free_bytes >= required_bytes then
     ctx.info(string.format(
-      "Storage preflight OK (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
+      "Storage preflight OK (mode=%s free=%s payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
       tostring(storage_plan.mode or "install"),
-      free_bytes,
+      tostring(free_bytes),
       storage_plan.payload_bytes,
       storage_plan.growth_bytes or 0,
       storage_plan.stage_peak_bytes or 0,
@@ -129,9 +157,9 @@ function M.preflight_storage(ctx, storage_plan, opts)
   end
 
   ctx.warn(string.format(
-    "Storage low before install/update (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
+    "Storage low before install/update (mode=%s free=%s payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
     tostring(storage_plan.mode or "install"),
-    free_bytes,
+    tostring(free_bytes),
     storage_plan.payload_bytes,
     storage_plan.growth_bytes or 0,
     storage_plan.stage_peak_bytes or 0,
@@ -144,13 +172,18 @@ function M.preflight_storage(ctx, storage_plan, opts)
 
   if opts.allow_cleanup then
     local reclaimed = M.cleanup_stage_and_logs(ctx, opts)
-    free_bytes = ctx.fs.getFreeSpace("/")
+    free_raw = ctx.fs.getFreeSpace("/")
+    free_bytes = normalize_free_space(free_raw)
+    if free_bytes == nil then
+      ctx.warn("Storage preflight: fs.getFreeSpace returned unsupported value after cleanup; skipping strict check (" .. tostring(free_raw) .. ")")
+      return true
+    end
     ctx.info(string.format("Storage cleanup reclaimed bytes: stage=%d backup=%d logs=%d rotated=%d temp=%d", reclaimed.stage or 0, reclaimed.backup or 0, reclaimed.logs or 0, reclaimed.rotated or 0, reclaimed.temp or 0))
     if free_bytes >= required_bytes then
       ctx.info(string.format(
-        "Storage preflight OK after cleanup (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
+        "Storage preflight OK after cleanup (mode=%s free=%s payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
         tostring(storage_plan.mode or "install"),
-        free_bytes,
+        tostring(free_bytes),
         storage_plan.payload_bytes,
         storage_plan.growth_bytes or 0,
         storage_plan.stage_peak_bytes or 0,
@@ -166,9 +199,9 @@ function M.preflight_storage(ctx, storage_plan, opts)
   end
 
   return false, string.format(
-    "Not enough free space (mode=%s free=%d payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
+    "Not enough free space (mode=%s free=%s payload=%d growth=%d stage_peak=%d buffer=%d+%d+%d required=%d)",
     tostring(storage_plan.mode or "install"),
-    free_bytes,
+    tostring(free_bytes),
     storage_plan.payload_bytes,
     storage_plan.growth_bytes or 0,
     storage_plan.stage_peak_bytes or 0,

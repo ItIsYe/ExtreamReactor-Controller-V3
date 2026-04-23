@@ -17,5 +17,106 @@ local constants = {
   STORAGE_MIN_REQUIRED_BYTES = 4096
 }
 
+local function is_html_content(content)
+  if type(content) ~= "string" then
+    return false
+  end
+  local snippet = content:sub(1, 200):lower()
+  return snippet:find("<html", 1, true) or snippet:find("<!doctype", 1, true)
+end
+
+local function read_file(path)
+  if not fs.exists(path) then
+    return nil
+  end
+  local handle = fs.open(path, "r")
+  if not handle then
+    return nil
+  end
+  local content = handle.readAll()
+  handle.close()
+  return content
+end
+
+local function write_file(path, content)
+  local dir = fs.getDir(path)
+  if dir and dir ~= "" and not fs.exists(dir) then
+    fs.makeDir(dir)
+  end
+  local handle = fs.open(path, "w")
+  if not handle then
+    return false
+  end
+  handle.write(content)
+  handle.close()
+  return true
+end
+
+local function download_url(url)
+  if not http or type(http.get) ~= "function" then
+    return nil, "HTTP API unavailable"
+  end
+  local ok, response = pcall(http.get, url)
+  if not ok or not response then
+    return nil, "download failed"
+  end
+  local ok_read, body = pcall(response.readAll)
+  pcall(response.close)
+  if not ok_read or type(body) ~= "string" then
+    return nil, "read failed"
+  end
+  return body
+end
+
+local function ensure_installer_runtime()
+  local required = {
+    "installer_main.lua",
+    "installer_http.lua",
+    "installer_manifest.lua",
+    "installer_stage.lua",
+    "installer_startup.lua",
+    "installer_storage.lua"
+  }
+  local missing = false
+  for _, rel in ipairs(required) do
+    local path = constants.INSTALL_ROOT .. "/" .. rel
+    if not fs.exists(path) then
+      missing = true
+      break
+    end
+  end
+  if not missing then
+    return true
+  end
+
+  print("Installer runtime fehlt lokal; lade Standalone-Module...")
+  for _, rel in ipairs(required) do
+    local path = constants.INSTALL_ROOT .. "/" .. rel
+    local url = constants.BASE_URL .. rel
+    local body, err = download_url(url)
+    if not body then
+      return false, "download failed for " .. rel .. " (" .. tostring(err) .. ")"
+    end
+    if is_html_content(body) then
+      return false, "unexpected HTML for " .. rel
+    end
+    if rel:sub(-4) == ".lua" then
+      local loader, parse_err = load(body, "=" .. rel, "t", {})
+      if not loader then
+        return false, "lua parse error for " .. rel .. " (" .. tostring(parse_err) .. ")"
+      end
+    end
+    if not write_file(path, body) then
+      return false, "write failed for " .. rel
+    end
+  end
+  return true
+end
+
+local ok, err = ensure_installer_runtime()
+if not ok then
+  error("Installer bootstrap fehlgeschlagen: " .. tostring(err), 0)
+end
+
 local installer_main = dofile("/xreactor/installer_main.lua")
 installer_main.run(constants)
