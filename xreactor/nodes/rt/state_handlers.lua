@@ -1,5 +1,14 @@
 local M = {}
 
+local function has_off_modules(modules, kind)
+  for _, module in pairs(modules or {}) do
+    if module.type == kind and module.state == "OFF" then
+      return true
+    end
+  end
+  return false
+end
+
 function M.build(ctx)
   local function assert_fn(name)
     if type(ctx[name]) ~= "function" then
@@ -154,6 +163,95 @@ function M.build(ctx)
       on_tick = emergency_on_tick
     }
   }
+end
+
+function M.request_startup_if_needed(ctx, reason)
+  if ctx.get_current_state() ~= ctx.STATE.MASTER then
+    return false
+  end
+  local machine_state = ctx.get_node_state_machine() and ctx.get_node_state_machine().state and ctx.get_node_state_machine():state() or nil
+  if machine_state ~= ctx.constants.node_states.RUNNING and machine_state ~= ctx.constants.node_states.OFF then
+    return false
+  end
+  local needs_turbine = ctx.targets.enable_turbines ~= false and has_off_modules(ctx.modules, "turbine")
+  local needs_reactor = ctx.targets.enable_reactors ~= false and has_off_modules(ctx.modules, "reactor")
+  if not needs_turbine and not needs_reactor then
+    return false
+  end
+  if ctx.get_active_startup() then
+    return false
+  end
+  ctx.log("INFO", ("Startup requested reason=%s turbines_off=%s reactors_off=%s"):format(
+    tostring(reason or "unknown"),
+    tostring(needs_turbine),
+    tostring(needs_reactor)
+  ))
+  ctx.get_node_state_machine():transition(ctx.constants.node_states.STARTUP)
+  return true
+end
+
+function M.set_state(ctx, new_state, transition_reason)
+  local current_state = ctx.get_current_state()
+  if current_state == new_state then
+    return false
+  end
+  if not ctx.allowed_transitions[current_state] or not ctx.allowed_transitions[current_state][new_state] then
+    return false
+  end
+  ctx.set_current_state(new_state)
+  if new_state == ctx.STATE.AUTONOM then
+    ctx.log("INFO", "Entering AUTONOM mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
+  elseif new_state == ctx.STATE.MASTER then
+    if current_state == ctx.STATE.AUTONOM then
+      ctx.log("INFO", "Master reconnected reason=" .. tostring(transition_reason or "STATE_REQUEST"))
+    else
+      ctx.log("INFO", "Entering MASTER mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
+    end
+  elseif new_state == ctx.STATE.SAFE then
+    ctx.log("INFO", "Entering SAFE mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
+    ctx.apply_safe_controls()
+    ctx.set_reactors_active(false, "SAFE_MODE")
+    ctx.set_turbines_active(false, "SAFE_MODE")
+  else
+    ctx.log("INFO", "Entering INIT mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
+  end
+  return true
+end
+
+function M.apply_mode(ctx, mode)
+  if mode == ctx.STATE.AUTONOM then
+    if M.set_state(ctx, ctx.STATE.AUTONOM, "MODE_APPLY") then
+      ctx.get_node_state_machine():transition(ctx.constants.node_states.AUTONOM)
+    end
+  elseif mode == ctx.STATE.MASTER then
+    if M.set_state(ctx, ctx.STATE.MASTER, "MODE_APPLY") then
+      local current = ctx.get_node_state_machine():state()
+      if current == ctx.constants.node_states.OFF or current == ctx.constants.node_states.AUTONOM then
+        ctx.get_node_state_machine():transition(ctx.constants.node_states.STARTUP)
+      end
+    end
+  elseif mode == ctx.STATE.SAFE then
+    M.set_state(ctx, ctx.STATE.SAFE, "MODE_APPLY")
+    if ctx.get_node_state_machine():state() ~= ctx.constants.node_states.EMERGENCY then
+      ctx.get_node_state_machine():transition(ctx.constants.node_states.EMERGENCY)
+    end
+  end
+end
+
+function M.monitor_master(ctx)
+  local connected = ctx.is_master_connected()
+  if not connected then
+    if M.set_state(ctx, ctx.STATE.AUTONOM, "MASTER_TIMEOUT_AUTONOM_FALLBACK") then
+      ctx.log("WARN", "Master timeout detected, switching to AUTONOM")
+      ctx.get_node_state_machine():transition(ctx.constants.node_states.AUTONOM)
+    end
+  end
+end
+
+function M.clamp_autonom_targets(ctx)
+  ctx.targets.power = 0
+  ctx.targets.rpm = ctx.ramp_towards(ctx.targets.rpm, ctx.TARGET_RPM, ctx.config.autonom.flow_step)
+  ctx.targets.steam = 0
 end
 
 return M

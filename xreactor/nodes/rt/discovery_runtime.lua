@@ -224,4 +224,50 @@ function M.discover(ctx)
   return registry_devices
 end
 
+function M.build_modules(devices)
+  local modules = {}
+  for _, entry in ipairs(devices.turbines or {}) do
+    local id = entry.id or ("turbine:" .. tostring(entry.name))
+    modules[id] = {
+      id = id,
+      type = "turbine",
+      state = "OFF",
+      progress = 0,
+      limits = {},
+      name = entry.name,
+      alias = entry.alias,
+      stable_since = nil
+    }
+  end
+  for _, entry in ipairs(devices.reactors or {}) do
+    local id = entry.id or ("reactor:" .. tostring(entry.name))
+    modules[id] = {
+      id = id,
+      type = "reactor",
+      state = "OFF",
+      progress = 0,
+      limits = {},
+      name = entry.name,
+      alias = entry.alias,
+      stable_since = nil,
+      autonom_control_rod = nil
+    }
+  end
+  return modules
+end
+
+function M.refresh_module_peripherals(modules, peripherals, get_device_caps)
+  local turbines = peripherals.turbines or {}
+  local reactors = peripherals.reactors or {}
+  for _, module in pairs(modules or {}) do
+    if module.type == "turbine" then
+      module.peripheral = turbines[module.name]
+      module.caps = module.peripheral and get_device_caps("turbines", module.name) or nil
+    else
+      module.peripheral = reactors[module.name]
+      module.caps = module.peripheral and get_device_caps("reactors", module.name) or nil
+    end
+  end
+end
+
 return M
