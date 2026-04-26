@@ -253,7 +253,7 @@ If manifest/release metadata is stale and `--sync` is not used, packaging fails 
 For publish/deploy sanity checks, verify the *published* files against the *published* manifest and fail release if any mismatch exists:
 
 ```bash
-python scripts/verify_remote_manifest.py --base-url https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor --check-local --require-path shared/build_info.lua
+python scripts/verify_remote_manifest.py --base-url https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor --check-local --expected-manifest xreactor/manifest.lua --require-path shared/build_info.lua
 ```
 
 You can also wire this into packaging via:
@@ -262,7 +262,8 @@ You can also wire this into packaging via:
 python scripts/package_release.py --sync --verify-url https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor
 ```
 
-`package_release.py --verify-url` now enforces that `shared/build_info.lua` is present in the published manifest path in addition to full hash/size verification.
+`verify_remote_manifest.py --expected-manifest` enforces that the published manifest itself matches the local release-candidate manifest entries (path/hash/size), so a stale or partial publish is detected before rollout.
+`package_release.py --verify-url` includes `--check-local`, `--expected-manifest xreactor/manifest.lua`, and `--require-path shared/build_info.lua` automatically.
 
 Deploy order must remain consistent: publish files first, then `manifest.lua` (or atomically), so installers never read a new manifest with old files.
 

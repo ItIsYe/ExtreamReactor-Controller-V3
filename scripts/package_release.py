@@ -118,6 +118,9 @@ def verify_remote_consistency(base_url: str):
         str(REPO_ROOT / "scripts" / "verify_remote_manifest.py"),
         "--base-url",
         base_url,
+        "--check-local",
+        "--expected-manifest",
+        "xreactor/manifest.lua",
         "--require-path",
         "shared/build_info.lua",
     ]
