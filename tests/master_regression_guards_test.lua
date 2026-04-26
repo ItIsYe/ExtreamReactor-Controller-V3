@@ -84,6 +84,64 @@ local function test_multiview_initial_render_without_last_render()
   end
 end
 
+local function test_multiview_render_degrades_on_single_monitor_failure()
+  reset_module('master.ui.multiview')
+  package.loaded['core.ui'] = {
+    clear = function() end,
+    getSize = function() return 20, 8 end,
+    text = function() end,
+  }
+  package.loaded['core.ui_router'] = {
+    new = function(mon, opts)
+      return {
+        interval = opts.interval,
+        current = function()
+          return opts.pages[1]
+        end,
+        render = function(_, target, model)
+          if target and target.fail_render then
+            error('simulated monitor render failure')
+          end
+          opts.pages[1].render(target, model)
+        end,
+        handle_input = function() return false end,
+      }
+    end,
+  }
+  package.loaded['master.ui.widgets'] = {
+    layout_button = function() return nil end,
+    card = function() end,
+  }
+
+  local multiview = require('master.ui.multiview')
+  local calls = 0
+  local manager = multiview.new({
+    views = {
+      overview = {
+        label = 'Overview',
+        interval = 0,
+        render = function() calls = calls + 1 end,
+      },
+    },
+    view_order = { 'overview' },
+  })
+
+  local ok, err = pcall(function()
+    manager:render({
+      { id = 'M1', name = 'monitor_30', mon = { getSize = function() return 20, 8 end, fail_render = true }, width = 20, height = 8 },
+      { id = 'M2', name = 'monitor_31', mon = { getSize = function() return 20, 8 end }, width = 20, height = 8 },
+    }, {
+      overview = { ok = true }
+    })
+  end)
+  if not ok then
+    error('multiview should continue rendering when one monitor fails: ' .. tostring(err))
+  end
+  if calls ~= 1 then
+    error('expected exactly one successful monitor render, got ' .. tostring(calls))
+  end
+end
+
 local function test_monitor_scale_requires_number()
   reset_module('adapters.monitor')
   local monitor_adapter = require('adapters.monitor')
@@ -205,10 +263,59 @@ local function test_network_open_rejects_table_channel_runtime()
   end
 end
 
+local function test_monitor_scan_skips_scale_failure()
+  reset_module('core.monitor_manager')
+  package.loaded['core.registry'] = {
+    new = function()
+      return {
+        sync = function() end,
+        get_order_index = function() return {} end,
+        list = function()
+          return {
+            { id = 'M1', name = 'monitor_30' },
+            { id = 'M2', name = 'monitor_31' },
+          }
+        end
+      }
+    end
+  }
+  package.loaded['adapters.monitor'] = {
+    sync_names = function() end,
+    safe_set_scale = function(_, name)
+      if name == 'monitor_31' then
+        return false, 'scale write failed'
+      end
+      return true
+    end
+  }
+  _G.peripheral = {
+    getNames = function() return { 'monitor_30', 'monitor_31' } end,
+    getType = function() return 'monitor' end,
+    isPresent = function() return true end,
+    wrap = function(name)
+      return {
+        getSize = function() return 20, 8 end
+      }
+    end,
+    getMethods = function() return {} end
+  }
+  local monitor_manager = require('core.monitor_manager')
+  local manager = monitor_manager.new({ scale = 0.5, log_prefix = 'TEST' })
+  local monitors = manager:scan()
+  if #monitors ~= 1 then
+    error('expected one monitor after scale failure degradation, got ' .. tostring(#monitors))
+  end
+  if monitors[1].name ~= 'monitor_30' then
+    error('expected monitor_30 to remain active')
+  end
+end
+
 test_multiview_initial_render_without_last_render()
+test_multiview_render_degrades_on_single_monitor_failure()
 test_monitor_scale_requires_number()
 test_monitor_scale_clamps_and_rounds()
 test_network_channel_sanitization_numeric_open()
 test_network_open_rejects_table_channel_runtime()
+test_monitor_scan_skips_scale_failure()
 
 print('master_regression_guards_test.lua: ok')

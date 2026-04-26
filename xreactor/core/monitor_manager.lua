@@ -53,7 +53,8 @@ function manager.new(opts)
       role = opts.role or "master_monitor",
       node_id = opts.node_id or "MASTER",
       path = opts.path
-    })
+    }),
+    disabled = {}
   }
   return setmetatable(self, { __index = manager })
 end
@@ -95,12 +96,26 @@ function manager:scan()
     local mon = utils.safe_wrap(entry.name)
     if mon then
       if self.scale then
-        monitor_adapter.safe_set_scale(mon, entry.name, self.scale, self.log_prefix)
+        local scale_ok, scale_err = monitor_adapter.safe_set_scale(mon, entry.name, self.scale, self.log_prefix)
+        if not scale_ok then
+          self.disabled[entry.name] = "setTextScale failed: " .. tostring(scale_err)
+          utils.log(self.log_prefix, "Disabling monitor " .. tostring(entry.name) .. " during scan (setTextScale failed: " .. tostring(scale_err) .. ")", "WARN")
+          goto continue
+        end
       end
       local ok, w, h = safe_wrapped_call(mon, "getSize")
+      if not ok then
+        self.disabled[entry.name] = "getSize failed: " .. tostring(w)
+        utils.log(self.log_prefix, "Disabling monitor " .. tostring(entry.name) .. " during scan (getSize failed: " .. tostring(w) .. ")", "WARN")
+        goto continue
+      end
       local width = ok and w or 0
       local height = ok and h or 0
       local size_tag = classify_size(width, height, self.thresholds)
+      if self.disabled[entry.name] then
+        self.disabled[entry.name] = nil
+        utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " recovered and re-enabled", "INFO")
+      end
       table.insert(monitors, {
         id = entry.id or entry.name,
         name = entry.name,
@@ -111,7 +126,9 @@ function manager:scan()
       })
     else
       utils.log(self.log_prefix, "Monitor wrap failed for " .. tostring(entry.name), "WARN")
+      self.disabled[entry.name] = "wrap failed"
     end
+    ::continue::
   end
   return monitors
 end

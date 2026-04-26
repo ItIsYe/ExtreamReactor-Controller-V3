@@ -144,9 +144,22 @@ local function refresh_monitors(force)
   end
   local signature = table.concat(signature_parts, "|")
   if monitor_cache.signature ~= signature or force then
-    monitor_cache = { list = monitors, signature = signature }
+    local healthy = {}
     for _, entry in ipairs(monitors) do
-      ui.clear(entry.mon)
+      local ok, err = pcall(ui.clear, entry.mon)
+      if ok then
+        table.insert(healthy, entry)
+      else
+        utils.log("MASTER", "Disabling monitor " .. tostring(entry.name or entry.id) .. " during initial clear: " .. tostring(err), "WARN")
+      end
+    end
+    local healthy_signature_parts = {}
+    for _, entry in ipairs(healthy) do
+      table.insert(healthy_signature_parts, entry.id or entry.name)
+    end
+    monitor_cache = { list = healthy, signature = table.concat(healthy_signature_parts, "|") }
+    if #healthy < #monitors then
+      utils.log("MASTER", ("UI degraded: %d/%d monitors available after clear guard"):format(#healthy, #monitors), "WARN")
     end
   end
 end
@@ -325,10 +338,19 @@ local function build_master_alert_payload()
 end
 
 local function init()
+  local configured_scale = config.monitor_scale
+  if configured_scale == nil then
+    configured_scale = config.ui_scale_default
+  end
+  local resolved_scale = tonumber(configured_scale)
+  if configured_scale ~= nil and not resolved_scale then
+    utils.log("MASTER", "Ignoring non-numeric monitor scale config value: " .. tostring(configured_scale), "WARN")
+  end
+  utils.log("MASTER", "Resolved monitor scale for scan: " .. tostring(resolved_scale), "INFO")
   monitor_mgr = monitor_manager.new({
     log_prefix = "MASTER",
     node_id = node_id,
-    scale = config.ui_scale_default or 0.5,
+    scale = resolved_scale,
     path = "/xreactor/config/registry_master_monitors.json"
   })
   view_manager = multiview_ui.new({

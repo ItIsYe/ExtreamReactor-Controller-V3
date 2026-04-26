@@ -270,28 +270,39 @@ function multiview:render(monitors, data_map)
     local should_render = state.menu_open or state.clear_next or (now - last_render >= interval * 1000)
     local view_model = data_map[current_key] or {}
     if should_render and mon_entry.mon then
-      if state.clear_next then
-        ui.clear(mon_entry.mon)
-        state.clear_next = false
+      local ok, err = pcall(function()
+        if state.clear_next then
+          ui.clear(mon_entry.mon)
+          state.clear_next = false
+        end
+        if router then
+          router.interval = interval
+          local snapshot = build_snapshot(view_model, {
+            mode = layout.mode,
+            view = layout.view,
+            page = current_key,
+            menu = state.menu_open
+          })
+          router:render(mon_entry.mon, { snapshot = snapshot, data = view_model })
+          rendered[current_key] = true
+        end
+        state.last_render[current_key] = now
+      end)
+      if not ok then
+        state.clear_next = true
+        utils.log("MULTIVIEW", "Monitor render failed for " .. tostring(mon_entry.name or id) .. ": " .. tostring(err), "WARN")
       end
-      if router then
-        router.interval = interval
-        local snapshot = build_snapshot(view_model, {
-          mode = layout.mode,
-          view = layout.view,
-          page = current_key,
-          menu = state.menu_open
-        })
-        router:render(mon_entry.mon, { snapshot = snapshot, data = view_model })
-        rendered[current_key] = true
-      end
-      state.last_render[current_key] = now
     end
     local w = select(1, ui.getSize(mon_entry.mon))
     if w then
       local layout_x = math.max(2, w - 7)
-      state.layout_button = widgets.layout_button(mon_entry.mon, layout_x, 1, "LAYOUT", "accent")
-      self:render_layout_menu(mon_entry.mon, state, layout, self.view_order)
+      local ok, err = pcall(function()
+        state.layout_button = widgets.layout_button(mon_entry.mon, layout_x, 1, "LAYOUT", "accent")
+        self:render_layout_menu(mon_entry.mon, state, layout, self.view_order)
+      end)
+      if not ok then
+        utils.log("MULTIVIEW", "Layout controls failed for " .. tostring(mon_entry.name or id) .. ": " .. tostring(err), "WARN")
+      end
     end
   end
   return rendered
