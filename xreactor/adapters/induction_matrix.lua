@@ -385,24 +385,25 @@ function matrix.detect(name, log_prefix, opts)
     if not packed[1] then
       return nil, "call_failed:" .. tostring(packed[2])
     end
-    local results = {}
-    for i = 2, packed.n do
-      results[#results + 1] = packed[i]
-    end
-    if #results == 0 then
+    local result_count = packed.n - 1
+    if result_count <= 0 then
       return nil, "nil_value:no_return"
     end
-    if type(results[1]) == "boolean" then
-      local success = results[1]
+    local result_offset = 1
+    local first_result = packed[result_offset + 1]
+    if type(first_result) == "boolean" then
+      local success = first_result
       if success == false then
-        return nil, "call_failed:" .. tostring(results[2])
+        return nil, "call_failed:" .. tostring(packed[result_offset + 2])
       end
-      table.remove(results, 1)
+      result_offset = result_offset + 1
+      result_count = result_count - 1
     end
-    if #results == 0 then
+    if result_count <= 0 then
       return nil, "nil_value:empty_payload"
     end
-    for _, candidate in ipairs(results) do
+    for i = 1, result_count do
+      local candidate = packed[result_offset + i]
       local count = normalize_component_count(candidate)
       if count ~= nil then
         if count < 0 then
@@ -411,17 +412,19 @@ function matrix.detect(name, log_prefix, opts)
         return count
       end
     end
-    if results[1] == nil then
-      if results[2] ~= nil then
-        return nil, "nil_value:" .. describe_value(results[2])
+    local first_payload = packed[result_offset + 1]
+    if first_payload == nil then
+      if result_count > 1 then
+        return nil, "nil_value:" .. describe_value(packed[result_offset + 2])
       end
       return nil, "nil_value"
     end
     local type_summary = {}
-    for i, candidate in ipairs(results) do
+    for i = 1, result_count do
+      local candidate = packed[result_offset + i]
       type_summary[#type_summary + 1] = tostring(i) .. "=" .. type(candidate)
     end
-    return nil, "unsupported_value:" .. table.concat(type_summary, ",") .. ":" .. describe_value(results[1])
+    return nil, "unsupported_value:" .. table.concat(type_summary, ",") .. ":" .. describe_value(first_payload)
   end
 
   local features = {
