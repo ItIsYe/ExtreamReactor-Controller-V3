@@ -181,11 +181,19 @@ local function build_context(constants)
   end
 
   function ctx.hash_matches(entry, content)
-    if not entry.hash then
-      return true
-    end
     local computed = crc32_hash(content)
-    return string.lower(computed) == string.lower(entry.hash)
+    if not entry.hash then
+      return true, computed
+    end
+    return string.lower(computed) == string.lower(entry.hash), computed
+  end
+
+  function ctx.size_matches(entry, content)
+    if not entry.size_bytes then
+      return true, #content
+    end
+    local actual_size = #content
+    return tonumber(entry.size_bytes) == actual_size, actual_size
   end
 
   function ctx.download_file(remote_path, target_path, entry)
@@ -195,8 +203,26 @@ local function build_context(constants)
     if not body then
       return false, err
     end
-    if not ctx.hash_matches(entry or {}, body) then
-      return false, "hash mismatch for " .. tostring(remote_path)
+    local resolved_entry = entry or {}
+    local size_ok, actual_size = ctx.size_matches(resolved_entry, body)
+    if not size_ok then
+      return false, string.format(
+        "size mismatch for %s (url=%s expected=%s actual=%s)",
+        tostring(remote_path),
+        tostring(url),
+        tostring(resolved_entry.size_bytes),
+        tostring(actual_size)
+      )
+    end
+    local hash_ok, actual_hash = ctx.hash_matches(resolved_entry, body)
+    if not hash_ok then
+      return false, string.format(
+        "hash mismatch for %s (url=%s expected=%s actual=%s)",
+        tostring(remote_path),
+        tostring(url),
+        tostring(resolved_entry.hash),
+        tostring(actual_hash)
+      )
     end
     local ok, write_err = ctx.write_file(target_path, body)
     if not ok then

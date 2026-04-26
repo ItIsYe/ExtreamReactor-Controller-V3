@@ -76,8 +76,25 @@ function M.verify_stage(ctx, expected)
     if not content then
       return false, "staged file unreadable: " .. rel
     end
-    if entry.hash and not ctx.hash_matches(entry, content) then
-      return false, "staged hash mismatch: " .. rel
+    local size_ok, actual_size = ctx.size_matches(entry, content)
+    if not size_ok then
+      return false, string.format(
+        "staged size mismatch: %s (expected=%s actual=%s)",
+        tostring(rel),
+        tostring(entry.size_bytes),
+        tostring(actual_size)
+      )
+    end
+    if entry.hash then
+      local hash_ok, actual_hash = ctx.hash_matches(entry, content)
+      if not hash_ok then
+        return false, string.format(
+          "staged hash mismatch: %s (expected=%s actual=%s)",
+          tostring(rel),
+          tostring(entry.hash),
+          tostring(actual_hash)
+        )
+      end
     end
   end
   return true

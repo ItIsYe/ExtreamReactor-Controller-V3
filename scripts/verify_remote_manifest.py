@@ -34,6 +34,13 @@ def parse_manifest(text: str):
     return entries
 
 
+def index_entries(entries):
+    indexed = {}
+    for entry in entries:
+        indexed[entry["path"]] = entry
+    return indexed
+
+
 def fetch(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=30) as response:
@@ -73,7 +80,7 @@ def verify_remote(base_url: str, required_paths):
             )
         checked += 1
 
-    return checked, errors
+    return entries, checked, errors
 
 
 def verify_local_manifest(expected_manifest: pathlib.Path):
@@ -95,6 +102,33 @@ def verify_local_manifest(expected_manifest: pathlib.Path):
             errors.append(
                 f"local hash mismatch for {entry['path']}: manifest={entry['hash']} local={local_hash}"
             )
+    return entries, errors
+
+
+def verify_remote_manifest_matches_expected(remote_entries, expected_manifest: pathlib.Path):
+    expected_entries = parse_manifest(expected_manifest.read_text(encoding="utf-8"))
+    remote_index = index_entries(remote_entries)
+    expected_index = index_entries(expected_entries)
+
+    errors = []
+    for rel, expected in expected_index.items():
+        remote = remote_index.get(rel)
+        if not remote:
+            errors.append(f"remote manifest missing expected path: {rel}")
+            continue
+        if remote["size_bytes"] != expected["size_bytes"]:
+            errors.append(
+                f"remote manifest size mismatch for {rel}: expected-manifest={expected['size_bytes']} remote-manifest={remote['size_bytes']}"
+            )
+        if remote["hash"] != expected["hash"]:
+            errors.append(
+                f"remote manifest hash mismatch for {rel}: expected-manifest={expected['hash']} remote-manifest={remote['hash']}"
+            )
+
+    for rel in remote_index:
+        if rel not in expected_index:
+            errors.append(f"remote manifest has unexpected path not in expected manifest: {rel}")
+
     return errors
 
 
@@ -112,10 +146,14 @@ def main():
         default=[],
         help="Require that this relative path exists in the published manifest (repeatable)",
     )
+    parser.add_argument(
+        "--expected-manifest",
+        help="Compare published manifest entries against this expected manifest file path",
+    )
     args = parser.parse_args()
 
     if args.check_local:
-        local_errors = verify_local_manifest(LOCAL_MANIFEST)
+        _, local_errors = verify_local_manifest(LOCAL_MANIFEST)
         if local_errors:
             print("Local manifest consistency: FAIL")
             for error in local_errors:
@@ -124,10 +162,25 @@ def main():
         print("Local manifest consistency: OK")
 
     try:
-        checked, errors = verify_remote(args.base_url, args.require_path)
+        remote_entries, checked, errors = verify_remote(args.base_url, args.require_path)
     except Exception as exc:
         print(f"Remote verification failed: {exc}")
         return 1
+
+    if args.expected_manifest:
+        expected_manifest = pathlib.Path(args.expected_manifest)
+        if not expected_manifest.is_absolute():
+            expected_manifest = REPO_ROOT / expected_manifest
+        if not expected_manifest.exists():
+            print(f"Expected manifest file not found: {expected_manifest}")
+            return 1
+        expected_errors = verify_remote_manifest_matches_expected(remote_entries, expected_manifest)
+        if expected_errors:
+            print("Remote vs expected manifest consistency: FAIL")
+            for error in expected_errors:
+                print(f" - {error}")
+            return 1
+        print("Remote vs expected manifest consistency: OK")
 
     print(f"Remote files checked: {checked}")
     if errors:

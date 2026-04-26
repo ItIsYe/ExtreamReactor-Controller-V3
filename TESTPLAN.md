@@ -13,6 +13,10 @@
 5. **Startup-Verhalten**: `/startup` wird nur überschrieben, wenn es als XReactor-Startup erkannt wird; fremde Startups bleiben erhalten.
 6. **Config-Erhalt beim Update**: bestehende `/xreactor/config/*` bleibt wirksam (durch Copy nach Stage).
 7. **`fs.getFreeSpace()` Sonderfall**: Preflight akzeptiert `number` sowie `"unlimited"` robust (kein Typfehler/Abbruch durch Stringwert).
+8. **Manifest/Remote-Konsistenz vor Rollout**:
+   - `python3 scripts/manifest_sync.py` muss `Consistency: OK` liefern.
+   - Nach Publish muss `python3 scripts/verify_remote_manifest.py --base-url <published-xreactor-url> --check-local --expected-manifest xreactor/manifest.lua --require-path shared/build_info.lua` grün sein.
+   - Damit werden sowohl Dateiinhalte (hash/size) als auch der veröffentlichte Manifest-Stand gegen den lokalen Release-Kandidaten geprüft.
 
 ## Node-ID / Identity
 1. Persistierte `/xreactor/config/node_id.txt` muss immer Vorrang gegenüber Rollen-Defaults in Config haben.
