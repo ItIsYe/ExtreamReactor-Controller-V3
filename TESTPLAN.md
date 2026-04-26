@@ -65,6 +65,9 @@
 9. **Support-Node Shared Discovery-Pfad**:
    - `tests/support_nodes_shared_runtime_regression_test.py` muss grün sein und die Nutzung von `collect_devices_by_methods` in `fuel`/`water`/`reprocessor` absichern.
    - Dadurch bleibt die Discovery-Klassifikation außerhalb von RT zentral konsistent, ohne rollenspezifische Fachlogik zu verlieren.
+10. **Manifest-Entrypoint-Coverage (Installer-Schutz gegen fehlende Module)**:
+   - `python3 tests/manifest_entrypoint_require_coverage_test.py` muss grün sein.
+   - Der Guard prüft für `MASTER`/`ENERGY`/`WATER`/`FUEL`/`REPROCESSING`, dass direkte `require(...)`-Module aus den Rollen-Entrypoints im installierten Expected-Set aus `manifest.lua` enthalten sind.
 
 ## First start / bootstrap / role setup
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.
