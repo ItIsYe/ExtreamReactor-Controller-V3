@@ -211,7 +211,9 @@ function rules:evaluate(context)
       for _, matrix in ipairs(node.matrices or {}) do
         table.insert(matrices, { matrix = matrix, node = node })
       end
-      local matrix_missing = has_reason(node.health and node.health.reasons, health.reasons.NO_MATRIX)
+      local node_reasons = node.health and node.health.reasons
+      local comms_down = has_reason(node_reasons, health.reasons.COMMS_DOWN) or node.status == health.status.DOWN or node.offline == true
+      local matrix_missing = (not comms_down) and has_reason(node_reasons, health.reasons.NO_MATRIX)
       local matrix_key = string.format("MATRIX_MISSING|%s", tostring(node.id))
       emit(matrix_key, matrix_missing, base_opts, function()
         local matrix_count = node.matrix_count or node.matrix_bound or 0

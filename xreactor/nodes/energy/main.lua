@@ -492,7 +492,7 @@ local function init()
   }))
   services:add(matrix_sampling_service.new({
     name = "MATRIX_SAMPLE",
-    interval = 0.25,
+    interval = 0.5,
     start_delay = 0.20,
     runtime = matrix_runtime
   }))
