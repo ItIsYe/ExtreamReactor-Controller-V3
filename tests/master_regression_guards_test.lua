@@ -310,6 +310,39 @@ local function test_monitor_scan_skips_scale_failure()
   end
 end
 
+local function test_master_main_service_requires_cover_service_new_calls()
+  local handle, err = io.open('xreactor/master/main.lua', 'r')
+  if not handle then
+    error('failed to open xreactor/master/main.lua: ' .. tostring(err))
+  end
+  local content = handle:read('*a')
+  handle:close()
+
+  local required_services = {}
+  for local_name, module_name in content:gmatch('local%s+([%w_]+)%s*=%s*require%(%s*["\']([^"\']+)["\']%s*%)') do
+    if module_name:match('^services%.') then
+      required_services[local_name] = true
+    end
+  end
+
+  local missing = {}
+  for local_name in content:gmatch('([%w_]+)%.new%s*%(') do
+    if local_name:match('_service$') and not required_services[local_name] then
+      missing[local_name] = true
+    end
+  end
+
+  local missing_list = {}
+  for local_name in pairs(missing) do
+    table.insert(missing_list, local_name)
+  end
+  table.sort(missing_list)
+
+  if #missing_list > 0 then
+    error('master/main.lua service used without require: ' .. table.concat(missing_list, ', '))
+  end
+end
+
 test_multiview_initial_render_without_last_render()
 test_multiview_render_degrades_on_single_monitor_failure()
 test_monitor_scale_requires_number()
@@ -317,5 +350,6 @@ test_monitor_scale_clamps_and_rounds()
 test_network_channel_sanitization_numeric_open()
 test_network_open_rejects_table_channel_runtime()
 test_monitor_scan_skips_scale_failure()
+test_master_main_service_requires_cover_service_new_calls()
 
 print('master_regression_guards_test.lua: ok')

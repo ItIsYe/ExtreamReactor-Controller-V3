@@ -43,6 +43,7 @@ local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local alert_service_lib = require("services.alert_service")
 local telemetry_service = require("services.telemetry_service")
+local control_service = require("services.control_service")
 local ui_service = require("services.ui_service")
 
 -- Initialize file logging early to capture startup events.
