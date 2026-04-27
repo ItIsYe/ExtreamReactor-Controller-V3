@@ -102,14 +102,9 @@ local function build_context(constants)
     end
   end
 
-  function ctx.set_log_target(role_label, node_label)
+  function ctx.set_log_target(role_label)
     local role_segment = sanitize_log_segment(role_label)
-    local node_segment = sanitize_log_segment(node_label)
-    if node_segment ~= "unknown" then
-      constants.LOG_PATH = string.format("%s/installer_%s_%s.log", constants.LOG_DIR, role_segment, node_segment)
-    else
-      constants.LOG_PATH = string.format("%s/installer_%s.log", constants.LOG_DIR, role_segment)
-    end
+    constants.LOG_PATH = string.format("%s/installer_%s.log", constants.LOG_DIR, role_segment)
     ctx.safe_mkdir(constants.LOG_DIR)
   end
 
@@ -400,11 +395,7 @@ local function run_install(ctx)
   end
   ctx.install_mode = "install"
   ctx.target_role = role.label
-  local node_id = nil
-  if fs.exists("/xreactor/config/node_id.txt") then
-    node_id = ctx.read_file("/xreactor/config/node_id.txt")
-  end
-  ctx.set_log_target(role.label, node_id)
+  ctx.set_log_target(role.label)
   ctx.info("Installer log target: " .. tostring(ctx.constants.LOG_PATH))
   ctx.info("Selected role: " .. role.label)
 
@@ -456,11 +447,7 @@ local function run_update(ctx)
   end
   ctx.install_mode = "update"
   ctx.target_role = role_label
-  local node_id = nil
-  if fs.exists("/xreactor/config/node_id.txt") then
-    node_id = ctx.read_file("/xreactor/config/node_id.txt")
-  end
-  ctx.set_log_target(role_label, node_id)
+  ctx.set_log_target(role_label)
   ctx.info("Installer log target: " .. tostring(ctx.constants.LOG_PATH))
   local source_ok, source_err = ctx.resolve_release_source()
   if not source_ok then

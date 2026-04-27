@@ -137,21 +137,6 @@ end
 for _, warning in ipairs(config_warnings) do
   log(WARN, warning)
 end
-local TARGET_RPM = CONFIG.TARGET_RPM
-local RPM_TOL = CONFIG.RPM_TOLERANCE
-local MIN_FLOW = CONFIG.MIN_FLOW
-local MAX_FLOW = CONFIG.MAX_FLOW
-local FLOW_STEP = CONFIG.FLOW_STEP
-local COIL_ENGAGE_RPM = CONFIG.COIL_ENGAGE_RPM
-local COIL_DISENG_RPM = CONFIG.COIL_DISENGAGE_RPM
-local START_FLOW = CONFIG.START_FLOW
-local ROD_TICK = CONFIG.ROD_TICK
-local ROD_MIN = CONFIG.ROD_MIN
-local ROD_MAX = CONFIG.ROD_MAX
-local INITIAL_ROD_LEVEL = CONFIG.INITIAL_ROD_LEVEL
-local MIN_APPLY_INTERVAL = CONFIG.MIN_APPLY_INTERVAL
-local REACTOR_STEP = CONFIG.REACTOR_STEP
-local MIN_ACTIVE_RPM = CONFIG.MIN_ACTIVE_RPM
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
 local last_rod_change_ts = 0
@@ -161,14 +146,14 @@ local steam_tank_name = nil
 local reactor_rails_state = rails.new_state()
 local reactor_steam_guard_state = {}
 config_normalizer.apply_runtime_defaults(config, DEFAULT_CONFIG, {
-  target_rpm = TARGET_RPM,
-  min_flow = MIN_FLOW,
-  max_flow = MAX_FLOW,
-  flow_step = FLOW_STEP,
-  rod_tick = ROD_TICK,
+  target_rpm = CONFIG.TARGET_RPM,
+  min_flow = CONFIG.MIN_FLOW,
+  max_flow = CONFIG.MAX_FLOW,
+  flow_step = CONFIG.FLOW_STEP,
+  rod_tick = CONFIG.ROD_TICK,
   deep_copy = utils.deep_copy,
   normalize_rails = function(values, defaults)
-    return config_normalizer.normalize_rails(values, defaults, utils, safety, MIN_FLOW, MAX_FLOW)
+    return config_normalizer.normalize_rails(values, defaults, utils, safety, CONFIG.MIN_FLOW, CONFIG.MAX_FLOW)
   end
 })
 local hb = config.heartbeat_interval
@@ -196,7 +181,7 @@ local devices = {
 }
 local master_alerts = {}
 local peripherals = { reactors = {}, turbines = {} }
-local targets = { power = 0, steam = 0, rpm = TARGET_RPM, enable_reactors = true, enable_turbines = true }
+local targets = { power = 0, steam = 0, rpm = CONFIG.TARGET_RPM, enable_reactors = true, enable_turbines = true }
 local modules = {}
 local active_startup = nil
 local startup_queue = {}
@@ -242,13 +227,13 @@ local function get_target_rpm()
   if current_state == STATE.MASTER and type(targets.rpm) == "number" and targets.rpm > 0 then
     return targets.rpm
   end
-  return TARGET_RPM
+  return CONFIG.TARGET_RPM
 end
-local function clamp_turbine_flow(rate) return turbine_regulator.clamp_flow(rate, MIN_FLOW, MAX_FLOW) end
+local function clamp_turbine_flow(rate) return turbine_regulator.clamp_flow(rate, CONFIG.MIN_FLOW, CONFIG.MAX_FLOW) end
 local function clamp_rods(level, allow_overmax)
-  if type(level) ~= "number" then level = ROD_MAX end
-  local max_limit = allow_overmax and 100 or ROD_MAX
-  return safety.clamp(level, ROD_MIN, max_limit)
+  if type(level) ~= "number" then level = CONFIG.ROD_MAX end
+  local max_limit = allow_overmax and 100 or CONFIG.ROD_MAX
+  return safety.clamp(level, CONFIG.ROD_MIN, max_limit)
 end
 local function get_effective_regulator_rod_caps()
   local autonom = config and config.autonom or {}
@@ -257,8 +242,8 @@ local function get_effective_regulator_rod_caps()
   local autonom_max = type(autonom.regulator_max_rods) == "number" and autonom.regulator_max_rods or nil
   local rails_min = type(rod_rails.min) == "number" and rod_rails.min or nil
   local rails_max = type(rod_rails.max) == "number" and rod_rails.max or nil
-  local cfg_min = autonom_min or rails_min or ROD_MIN
-  local cfg_max = autonom_max or rails_max or ROD_MAX
+  local cfg_min = autonom_min or rails_min or CONFIG.ROD_MIN
+  local cfg_max = autonom_max or rails_max or CONFIG.ROD_MAX
   if type(autonom_min) == "number" and type(rails_min) == "number" then
     -- Use the stricter minimum (more inserted rods => less power) when both config paths are present.
     cfg_min = math.max(autonom_min, rails_min)
@@ -266,7 +251,7 @@ local function get_effective_regulator_rod_caps()
   if type(autonom_max) == "number" and type(rails_max) == "number" then
     cfg_max = math.min(autonom_max, rails_max)
   end
-  cfg_min = safety.clamp(cfg_min, ROD_MIN, ROD_MAX); cfg_max = safety.clamp(cfg_max, ROD_MIN, ROD_MAX)
+  cfg_min = safety.clamp(cfg_min, CONFIG.ROD_MIN, CONFIG.ROD_MAX); cfg_max = safety.clamp(cfg_max, CONFIG.ROD_MIN, CONFIG.ROD_MAX)
   if cfg_min > cfg_max then cfg_min, cfg_max = cfg_max, cfg_min end
   return cfg_min, cfg_max
 end
@@ -409,7 +394,7 @@ local function get_total_steam_demand()
         end
       end
     end
-    if type(rpm) == "number" and rpm > MIN_ACTIVE_RPM then
+    if type(rpm) == "number" and rpm > CONFIG.MIN_ACTIVE_RPM then
       total = total + (ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow or 0)
     end
   end
@@ -536,7 +521,7 @@ local function init_turbine_ctrl()
   end
   for _, name in ipairs(turbines) do
     local ctrl = get_turbine_ctrl(name)
-    ctrl.flow = clamp_turbine_flow(START_FLOW)
+    ctrl.flow = clamp_turbine_flow(CONFIG.START_FLOW)
     ctrl.requested_flow = ctrl.flow
     ctrl.confirmed_flow = ctrl.flow
     ctrl.pending_flow_since = 0
@@ -618,7 +603,7 @@ local function init_reactor_ctrl()
 end
 local function applyReactorRods(target, allow_overmax, source)
   local now = os.clock()
-  if now - last_rod_apply_ts < MIN_APPLY_INTERVAL then
+  if now - last_rod_apply_ts < CONFIG.MIN_APPLY_INTERVAL then
     return false
   end
   if type(target) ~= "number" then
@@ -674,9 +659,9 @@ end
 local function apply_initial_reactor_rods()
   for name, ctrl in pairs(reactor_ctrl) do
     ctrl.last_applied = nil
-    log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(INITIAL_ROD_LEVEL) .. "%")
+    log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(CONFIG.INITIAL_ROD_LEVEL) .. "%")
   end
-  applyReactorRods(INITIAL_ROD_LEVEL, false, "STARTUP_INIT")
+  applyReactorRods(CONFIG.INITIAL_ROD_LEVEL, false, "STARTUP_INIT")
 end
 local function read_current_rods()
   for _, name in ipairs(config.reactors or {}) do
@@ -737,7 +722,7 @@ local function controlReactor()
   local rod_cfg = config.rails and config.rails.reactor_rods or {}
   local smoothed_margin = rails.smooth(reactor_rails_state, "steam_margin", steam_margin, rod_cfg.ema_alpha)
   local target_rods, direction = rails.step(current_rods, smoothed_margin, reactor_rails_state, rod_cfg, os.clock())
-  target_rods = safety.clamp(target_rods, ROD_MIN, ROD_MAX)
+  target_rods = safety.clamp(target_rods, CONFIG.ROD_MIN, CONFIG.ROD_MAX)
   do
     local cfg_min, cfg_max = get_effective_regulator_rod_caps()
     local clamped_target, clamp_reason = rails.clamp_with_reason(target_rods, cfg_min, cfg_max)
@@ -779,7 +764,7 @@ local function controlReactor()
     if type(ratio) == "number" and (min_coolant_ratio == nil or ratio < min_coolant_ratio) then min_coolant_ratio = ratio end
   end
   local applied_rods, ramp_diag = rails.ramp_target(current_rods, target_rods, rod_cfg, { state = reactor_rails_state, now = os.clock(), coolant_ratio = min_coolant_ratio, safety_min_water = config.safety and config.safety.min_water })
-  applied_rods = safety.clamp(applied_rods, ROD_MIN, ROD_MAX)
+  applied_rods = safety.clamp(applied_rods, CONFIG.ROD_MIN, CONFIG.ROD_MAX)
   if applied_rods == current_rods then
     if ramp_diag and ramp_diag.reason == "RAMP_APPLIED" then log("DEBUG", "ROD_RAMP_APPLIED requested_delta=" .. tostring(ramp_diag.requested_delta) .. " applied_delta=" .. tostring(ramp_diag.applied_delta) .. " current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods)) end
     return
@@ -807,7 +792,7 @@ local function updateReactorControl()
   local now = os.clock()
   log("DEBUG", "Reactor control tick")
   if current_state == STATE.SAFE then
-    applyReactorRods(ROD_MAX, true, "SAFE_TICK")
+    applyReactorRods(CONFIG.ROD_MAX, true, "SAFE_TICK")
     return
   end
   if now - last_reactor_tick < config.autonom.reactor_adjust_interval then
@@ -875,8 +860,8 @@ local function update_inductor_for_rpm(name, turbine, caps, rpm)
   if cooldown > 0 and now - (state.last_change_ts or 0) < cooldown then
     return true, true
   end
-  local engage_rpm = coil_cfg.engage_rpm or COIL_ENGAGE_RPM
-  local disengage_rpm = coil_cfg.disengage_rpm or COIL_DISENG_RPM
+  local engage_rpm = coil_cfg.engage_rpm or CONFIG.COIL_ENGAGE_RPM
+  local disengage_rpm = coil_cfg.disengage_rpm or CONFIG.COIL_DISENGAGE_RPM
   if smoothed_rpm and smoothed_rpm >= engage_rpm and not engaged then
     engaged = true
   elseif (not smoothed_rpm or smoothed_rpm <= disengage_rpm) and engaged then
@@ -915,13 +900,13 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
   end
   local now_ts = os.clock()
   local smoothed_rpm = rails.smooth(flow_state, "rpm", rpm, rail_cfg.ema_alpha)
-  local target = target_rpm or TARGET_RPM
+  local target = target_rpm or CONFIG.TARGET_RPM
   local error = target - (smoothed_rpm or target)
   rail_cfg.ramp_profile = ctrl.ramp_profile or rail_cfg.ramp_profile or "NORMAL"
   local base_flow = ctrl.requested_flow or ctrl.flow or 0
   local flow_cfg = rail_cfg
-  local min_flow, min_from_effective = turbine_regulator.resolve_min_flow(rail_cfg.min or MIN_FLOW, ctrl.effective_min_flow)
-  local max_flow = rail_cfg.max or MAX_FLOW
+  local min_flow, min_from_effective = turbine_regulator.resolve_min_flow(rail_cfg.min or CONFIG.MIN_FLOW, ctrl.effective_min_flow)
+  local max_flow = rail_cfg.max or CONFIG.MAX_FLOW
   if type(ctrl.effective_max_flow) == "number" then
     max_flow = math.min(max_flow, ctrl.effective_max_flow)
   end
@@ -929,7 +914,7 @@ local function update_turbine_flow_state(rpm, target_rpm, ctrl)
     flow_cfg = utils.deep_copy(flow_cfg)
     flow_cfg.min = min_flow
   end
-  if max_flow ~= (rail_cfg.max or MAX_FLOW) then
+  if max_flow ~= (rail_cfg.max or CONFIG.MAX_FLOW) then
     if flow_cfg == rail_cfg then
       flow_cfg = utils.deep_copy(flow_cfg)
     end
@@ -1195,7 +1180,7 @@ local function finalize_turbine_flow_apply(name, ctrl, ctx)
     pending_age_s = math.max(0, ctx.now_ts - ctrl.pending_flow_since)
   end
   local target_zone_state = ctrl.in_target_band and "IN_TARGET_BAND" or "OUTSIDE_TARGET_BAND"
-  local at_max_limit = ctx.requested_flow == (ctrl.effective_max_flow or MAX_FLOW)
+  local at_max_limit = ctx.requested_flow == (ctrl.effective_max_flow or CONFIG.MAX_FLOW)
   local at_min_limit = type(ctx.applied_min) == "number" and ctx.requested_flow <= ctx.applied_min
   local target_state = resolve_turbine_target_state(ctrl, ctx.decision, ctx.reason, ctx.readback_state)
   local bottleneck, bottleneck_detail = turbine_regulator.classify_bottleneck({
@@ -1204,7 +1189,7 @@ local function finalize_turbine_flow_apply(name, ctrl, ctx)
     rpm = ctx.rpm,
     target_rpm = ctx.target_rpm,
     min_flow = ctx.applied_min,
-    max_flow = ctrl.effective_max_flow or MAX_FLOW,
+    max_flow = ctrl.effective_max_flow or CONFIG.MAX_FLOW,
     inductor_engaged = ctrl.inductor_engaged,
     steam_input = ctx.steam_input,
     readback_state = ctx.readback_state,
@@ -1268,7 +1253,7 @@ local function finalize_turbine_flow_apply(name, ctrl, ctx)
     readback_detail = ctx.readback_detail,
     steam_input = ctx.steam_input,
     active_state = ctx.active_state,
-    max_flow_limit = ctrl.effective_max_flow or MAX_FLOW,
+    max_flow_limit = ctrl.effective_max_flow or CONFIG.MAX_FLOW,
     at_max_limit = at_max_limit,
     at_min_limit = at_min_limit,
     down_regulation_limited = target_state.down_limited or (ctx.decision and ctx.decision.target_band_at_min_limit) or false,
@@ -1304,7 +1289,7 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   if type(ctrl.effective_max_flow) ~= "number" and caps and caps.getFluidFlowRateMaxMax and turbine.getFluidFlowRateMaxMax then
     local max_ok, max_value = safe_wrapped_call(turbine, "getFluidFlowRateMaxMax")
     if max_ok and type(max_value) == "number" and max_value > 0 then
-      ctrl.effective_max_flow = math.min(MAX_FLOW, math.max(MIN_FLOW, math.floor(max_value + 0.5)))
+      ctrl.effective_max_flow = math.min(CONFIG.MAX_FLOW, math.max(CONFIG.MIN_FLOW, math.floor(max_value + 0.5)))
     end
   end
   local startup_observed_flow, startup_reader = read_turbine_flow(turbine, caps)
@@ -1506,7 +1491,7 @@ local function build_mode_control_context()
   return {
     constants = constants,
     STATE = STATE,
-    TARGET_RPM = TARGET_RPM,
+    TARGET_RPM = CONFIG.TARGET_RPM,
     config = config,
     modules = modules,
     targets = targets,
@@ -1689,9 +1674,9 @@ local function build_module_lifecycle_context()
     configured_turbines = configured_turbines,
     modules = modules,
     comms = comms,
-    RPM_TOL = RPM_TOL,
+    RPM_TOL = CONFIG.RPM_TOLERANCE,
     TURBINE_MODE = TURBINE_MODE,
-    START_FLOW = START_FLOW,
+    START_FLOW = CONFIG.START_FLOW,
     log = log,
     warn_once = warn_once,
     warn_unsupported = warn_unsupported,
@@ -1868,7 +1853,7 @@ local function build_command_context()
     protocol = protocol,
     constants = constants,
     STATE = STATE,
-    TARGET_RPM = TARGET_RPM,
+    TARGET_RPM = CONFIG.TARGET_RPM,
     targets = targets,
     node_state_machine = node_state_machine,
     apply_mode = apply_mode,
