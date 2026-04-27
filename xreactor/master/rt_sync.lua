@@ -15,12 +15,14 @@ function M.normalize_setpoints(setpoints)
 end
 
 function M.build_rt_setpoints(config, power_target)
+  local hold = config and config.rt_global_off == true
+  local target = hold and 0 or power_target
   return M.normalize_setpoints({
     target_rpm = config.rt_setpoints.target_rpm,
-    power_target = power_target,
+    power_target = target,
     steam_target = config.rt_setpoints.steam_target,
-    enable_reactors = config.rt_setpoints.enable_reactors,
-    enable_turbines = config.rt_setpoints.enable_turbines
+    enable_reactors = hold and false or config.rt_setpoints.enable_reactors,
+    enable_turbines = hold and false or config.rt_setpoints.enable_turbines
   })
 end
 
@@ -59,7 +61,10 @@ end
 function M.sync_rt_node(ctx, node)
   if node.role ~= constants.roles.RT_NODE then return end
   if not node.mode then M.set_default_mode(ctx, node) end
-  local desired = M.build_rt_setpoints(ctx.config, ctx.power_target)
+  local desired = M.build_rt_setpoints({
+    rt_setpoints = ctx.config.rt_setpoints or {},
+    rt_global_off = ctx.rt_global_off == true
+  }, ctx.power_target)
   if not M.same_setpoints(node.last_setpoints, desired) then
     M.send_rt_setpoints(ctx.comms, node, desired)
   end

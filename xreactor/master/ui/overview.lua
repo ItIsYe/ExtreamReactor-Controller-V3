@@ -6,7 +6,7 @@ local utils = require("core.utils")
 local cache = {}
 local button_cache = setmetatable({}, { __mode = "k" })
 
-local function build_profile_buttons(mon, x, y, profiles, active, auto_enabled)
+local function build_profile_buttons(mon, x, y, profiles, active, auto_enabled, rt_hold_active)
   local buttons = {}
   local cursor = x
   ui.text(mon, cursor, y, "PROFILE:", colorset.get("text"), colorset.get("background"))
@@ -21,6 +21,11 @@ local function build_profile_buttons(mon, x, y, profiles, active, auto_enabled)
   local auto_status = auto_enabled and "LIMITED" or "OFFLINE"
   ui.badge(mon, cursor, y, "AUTO", auto_status)
   table.insert(buttons, { type = "auto", name = "AUTO", x1 = cursor, x2 = cursor + 5, y = y })
+  cursor = cursor + 7
+  local rt_status = rt_hold_active and "WARNING" or "OFFLINE"
+  local rt_label = rt_hold_active and "RT-OFF ON" or "RT-OFF"
+  ui.badge(mon, cursor, y, rt_label, rt_status)
+  table.insert(buttons, { type = "rt_hold", name = "RT_OFF", x1 = cursor, x2 = cursor + #rt_label + 1, y = y })
   return buttons
 end
 
@@ -78,13 +83,16 @@ local function render(mon, model)
         table.insert(details, node.bindings)
       end
       local suffix = #details > 0 and (" " .. table.concat(details, " ")) or ""
-      local label = string.format("%s %s %s %s%s", node.id or "NODE", node.status or "OFFLINE", mode, last_seen, suffix)
+      local managed = node.managed == false and "UNMANAGED" or "MANAGED"
+      local stale = node.stale and " STALE" or ""
+      local role_map = node.node_role_map or string.format("%s = %s", node.id or "NODE", node.role or "UNKNOWN")
+      local label = string.format("%s %s %s %s %s%s%s", role_map, node.status or "OFFLINE", mode, managed, last_seen, stale, suffix)
       table.insert(rows, { text = label, status = node.status })
     end
     ui.list(mon, 2, node_y + 1, w - 3, rows, { max_rows = node_rows })
   end
 
-  button_cache[mon] = build_profile_buttons(mon, 2, profile_y, model.profile_list or {}, model.active_profile, model.auto_profile)
+  button_cache[mon] = build_profile_buttons(mon, 2, profile_y, model.profile_list or {}, model.active_profile, model.auto_profile, model.rt_global_off_hold)
 
   local power_y = profile_y + 1
   ui.text(mon, 2, power_y, "Power Target", colorset.get("text"), colorset.get("background"))

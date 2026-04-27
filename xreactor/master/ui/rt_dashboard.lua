@@ -16,6 +16,7 @@ local function render(mon, model)
   ui.text(mon, 2, 2, "Ramp: " .. tostring(model.ramp_profile or "NORMAL"), colorset.get("text"), colorset.get("background"))
   ui.text(mon, 2, 3, "Sequence: " .. tostring(model.sequence_state or "IDLE"), colorset.get("text"), colorset.get("background"))
   ui.text(mon, 2, 4, "Control: " .. tostring(model.control_mode or "AUTO"), colorset.get("text"), colorset.get("background"))
+  ui.badge(mon, 24, 4, (model.rt_global_off_hold and "RT-OFF ON" or "RT-OFF OFF"), model.rt_global_off_hold and "WARNING" or "OFFLINE")
   local row = 6
   local counts = model.alert_counts or {}
   local crit = counts.CRITICAL or 0

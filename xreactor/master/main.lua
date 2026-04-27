@@ -102,6 +102,8 @@ local auto_profile = profiles.AUTO_ENABLED or state.auto_profile
 local critical_blink_until = state.critical_blink_until
 local trend_cache = state.trend_cache
 local ui_controller
+local rt_global_off_hold = state.rt_global_off_hold == true
+local node_offline_purge_after_ms = 120000
 
 local function warn_once(key, message)
   runtime_context.warn_once(state, function(msg)
@@ -118,7 +120,7 @@ local function normalize_setpoints(setpoints)
 end
 
 local function build_rt_setpoints()
-  return rt_sync.build_rt_setpoints(config, power_target)
+  return rt_sync.build_rt_setpoints(config, rt_global_off_hold and 0 or power_target)
 end
 
 local function send_rt_mode(node, mode)
@@ -197,7 +199,12 @@ local function sync_rt_node(node)
     return
   end
   if node.mode == "MASTER" then
-    rt_sync.sync_rt_node({ config = config, comms = comms, power_target = power_target }, node)
+    rt_sync.sync_rt_node({
+      config = config,
+      comms = comms,
+      power_target = power_target,
+      rt_global_off = rt_global_off_hold
+    }, node)
   end
 end
 
@@ -221,6 +228,7 @@ local function check_timeouts()
   local peers = comms:get_peers() or {}
   local now = os.epoch("utc")
   local timeout_ms = (config.comms and config.comms.peer_timeout_s or config.heartbeat_interval * 4) * 1000
+  local stale_nodes = {}
   for _, node in pairs(nodes) do
     local peer = peers[node.id]
     local last_seen = peer and peer.last_seen or node.last_seen
@@ -242,12 +250,29 @@ local function check_timeouts()
         node.down_since = now
       end
       node.status = health.status.DOWN
+      node.offline = true
+      node.stale = true
+      node.managed = false
       node.health = node.health or health.new({})
       node.health.status = health.status.DOWN
       node.health.reasons = { [health.reasons.COMMS_DOWN] = true }
+      if last_seen and (now - last_seen) >= node_offline_purge_after_ms then
+        stale_nodes[#stale_nodes + 1] = node.id
+      end
     elseif node.health and node.health.reasons then
       node.health.reasons[health.reasons.COMMS_DOWN] = nil
       node.down_since = nil
+      node.offline = false
+      node.stale = false
+      node.managed = true
+    end
+  end
+  for _, node_id in ipairs(stale_nodes) do
+    local node = nodes[node_id]
+    if node and node.status == health.status.DOWN then
+      utils.log("MASTER", ("Node stale purged from managed set: %s"):format(tostring(node_id)), "INFO")
+      node.managed = false
+      node.active = false
     end
   end
 end
@@ -265,6 +290,10 @@ local function estimate_base_power()
 end
 
 local function apply_profile(name)
+  if rt_global_off_hold then
+    utils.log("MASTER", "Ignoring profile change while RT-OFF hold is active", "WARN")
+    return
+  end
   local profile = profiles[name]
   if not profile then return end
   active_profile = name
@@ -283,6 +312,20 @@ local function apply_profile(name)
           }, { requires_applied = true })
         end
       end
+    end
+  end
+end
+
+local function set_rt_global_hold(enabled)
+  local next_value = enabled == true
+  if rt_global_off_hold == next_value then
+    return
+  end
+  rt_global_off_hold = next_value
+  utils.log("MASTER", "RT global hold " .. (rt_global_off_hold and "ENABLED (0%)" or "DISABLED (normal control)"), "WARN")
+  for _, node in pairs(nodes) do
+    if node.role == constants.roles.RT_NODE then
+      sync_rt_node(node)
     end
   end
 end
@@ -481,7 +524,8 @@ local function init()
       critical_blink_until = critical_blink_until,
       power_target = power_target,
       active_profile = active_profile,
-      auto_profile = auto_profile
+      auto_profile = auto_profile,
+      rt_global_off_hold = rt_global_off_hold
     },
     calc = {
       apply_profile = function(name)
@@ -491,7 +535,9 @@ local function init()
       get_auto_profile = function() return auto_profile end,
       get_active_profile = function() return active_profile end,
       get_power_target = function() return power_target end,
-      get_critical_blink_until = function() return critical_blink_until end
+      get_critical_blink_until = function() return critical_blink_until end,
+      get_rt_global_off_hold = function() return rt_global_off_hold end,
+      set_rt_global_off_hold = function(value) set_rt_global_hold(value) end
     }
   })
   comms:send_hello({ monitors = monitor_cache.list and #monitor_cache.list or 0 })

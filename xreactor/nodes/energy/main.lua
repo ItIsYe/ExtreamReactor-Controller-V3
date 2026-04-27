@@ -483,6 +483,7 @@ local function init()
   services:add(matrix_sampling_service.new({
     name = "STORAGE_SAMPLE",
     interval = 0.5,
+    start_delay = 0.10,
     runtime = {
       tick = function(_, ts)
         sample_storage_stats(ts or now_ms())
@@ -492,6 +493,7 @@ local function init()
   services:add(matrix_sampling_service.new({
     name = "MATRIX_SAMPLE",
     interval = 0.25,
+    start_delay = 0.20,
     runtime = matrix_runtime
   }))
   services:add(telemetry_service.new({

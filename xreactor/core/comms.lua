@@ -19,7 +19,8 @@ local DEFAULT_CONFIG = {
   peer_up_min_observations = 2,
   queue_limit = 200,
   drop_simulation = 0,
-  volatile_ttl_s = 15.0
+  volatile_ttl_s = 15.0,
+  peer_retention_s = 180.0
 }
 
 local state = {
@@ -138,6 +139,7 @@ local function sanitize_config(config)
   merged.queue_limit = math.floor(clamp_number(merged.queue_limit, DEFAULT_CONFIG.queue_limit, 10, 1000))
   merged.drop_simulation = clamp_number(merged.drop_simulation, DEFAULT_CONFIG.drop_simulation, 0, 0.9)
   merged.volatile_ttl_s = clamp_number(merged.volatile_ttl_s, DEFAULT_CONFIG.volatile_ttl_s, 1.0, 300.0)
+  merged.peer_retention_s = clamp_number(merged.peer_retention_s, DEFAULT_CONFIG.peer_retention_s, 10.0, 3600.0)
   return merged
 end
 
@@ -515,6 +517,8 @@ end
 
 local function update_peer_timeouts()
   local now_ts = now_ms()
+  local retention_ms = math.max(10000, (state.config.peer_retention_s or DEFAULT_CONFIG.peer_retention_s) * 1000)
+  local stale_peers = {}
   for id, peer in pairs(state.peers) do
     local last = peer.last_seen or 0
     local age_s = (now_ts - last) / 1000
@@ -573,6 +577,13 @@ local function update_peer_timeouts()
       peer.recovering_since = nil
       peer.recovering_observations = 0
     end
+    if peer.down and age_s * 1000 >= retention_ms then
+      stale_peers[#stale_peers + 1] = id
+    end
+  end
+  for _, peer_id in ipairs(stale_peers) do
+    state.peers[peer_id] = nil
+    log(("Peer expired: %s (retention=%.1fs)"):format(tostring(peer_id), retention_ms / 1000), "INFO")
   end
 end
 

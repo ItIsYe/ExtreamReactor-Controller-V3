@@ -79,6 +79,7 @@ function M.new_state()
     power_target = 0,
     active_profile = "BASELOAD",
     auto_profile = false,
+    rt_global_off_hold = false,
     critical_blink_until = 0,
     last_draw = 0,
     monitor_scan_last = 0,
