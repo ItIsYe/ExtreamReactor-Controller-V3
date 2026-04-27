@@ -8,6 +8,7 @@ local constants = {
   STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n",
   BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/",
   MANIFEST_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/manifest.lua",
+  RELEASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/release.lua",
   DOWNLOAD_RETRIES = 3,
   DOWNLOAD_RETRY_DELAY_SECONDS = 0.5,
   INCLUDE_DEV_FILES = false,
@@ -69,6 +70,29 @@ local function download_url(url)
 end
 
 local function ensure_installer_runtime()
+  local install_ref = nil
+  local release_body, release_err = download_url(constants.RELEASE_URL)
+  if release_body and not is_html_content(release_body) then
+    local loader = load(release_body, "=release", "t", {})
+    if loader then
+      local ok_release, release_data = pcall(loader)
+      if ok_release and type(release_data) == "table" and type(release_data.commit_sha) == "string" and release_data.commit_sha ~= "" then
+        install_ref = release_data.commit_sha
+      end
+    end
+  else
+    print("WARN: release metadata unavailable, fallback to beta (" .. tostring(release_err) .. ")")
+  end
+
+  if install_ref and install_ref ~= "beta" then
+    constants.BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. install_ref .. "/xreactor/"
+    constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
+    constants.RELEASE_URL = constants.BASE_URL .. "release.lua"
+    print("Installer source pinned to commit: " .. install_ref)
+  else
+    print("WARN: release commit_sha missing/branch-based; installer uses beta (mutable)")
+  end
+
   local required = {
     "installer_main.lua",
     "installer_http.lua",

@@ -10,6 +10,7 @@ import zlib
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 LOCAL_MANIFEST = REPO_ROOT / "xreactor" / "manifest.lua"
 ENTRY_RE = re.compile(r'\{\s*path\s*=\s*"(?P<path>[^"]+)",\s*size_bytes\s*=\s*(?P<size>\d+),\s*hash\s*=\s*"(?P<hash>[0-9a-f]+)"')
+META_RE = re.compile(r'^\s*(manifest_id|manifest_version|hash_algo|source_ref)\s*=\s*(.+?),\s*$')
 
 
 def crc32_hex(content: bytes) -> str:
@@ -18,7 +19,11 @@ def crc32_hex(content: bytes) -> str:
 
 def parse_manifest(text: str):
     entries = []
+    metadata = {}
     for line in text.splitlines():
+        meta_match = META_RE.match(line)
+        if meta_match:
+            metadata[meta_match.group(1)] = meta_match.group(2).strip().strip('"')
         m = ENTRY_RE.search(line)
         if not m:
             continue
@@ -31,7 +36,7 @@ def parse_manifest(text: str):
         )
     if not entries:
         raise RuntimeError("manifest contains no file entries")
-    return entries
+    return entries, metadata
 
 
 def index_entries(entries):
@@ -52,7 +57,7 @@ def verify_remote(base_url: str, required_paths):
     manifest_url = root + "manifest.lua"
     manifest_body = fetch(manifest_url)
     manifest_text = manifest_body.decode("utf-8")
-    entries = parse_manifest(manifest_text)
+    entries, metadata = parse_manifest(manifest_text)
 
     errors = []
     available_paths = {entry["path"] for entry in entries}
@@ -65,27 +70,27 @@ def verify_remote(base_url: str, required_paths):
         try:
             content = fetch(file_url)
         except urllib.error.URLError as exc:
-            errors.append(f"download failed for {entry['path']}: {exc}")
+            errors.append(f"download failed for {entry['path']} (url={file_url}): {exc}")
             continue
 
         actual_size = len(content)
         actual_hash = crc32_hex(content)
         if actual_size != entry["size_bytes"]:
             errors.append(
-                f"size mismatch for {entry['path']}: manifest={entry['size_bytes']} remote={actual_size}"
+                f"size mismatch for {entry['path']} (url={file_url}): manifest={entry['size_bytes']} remote={actual_size}"
             )
         if actual_hash != entry["hash"]:
             errors.append(
-                f"hash mismatch for {entry['path']}: manifest={entry['hash']} remote={actual_hash}"
+                f"hash mismatch for {entry['path']} (url={file_url}): manifest={entry['hash']} remote={actual_hash}"
             )
         checked += 1
 
-    return entries, checked, errors
+    return entries, metadata, checked, errors
 
 
 def verify_local_manifest(expected_manifest: pathlib.Path):
     text = expected_manifest.read_text(encoding="utf-8")
-    entries = parse_manifest(text)
+    entries, _ = parse_manifest(text)
     errors = []
     for entry in entries:
         path = REPO_ROOT / "xreactor" / entry["path"]
@@ -105,8 +110,9 @@ def verify_local_manifest(expected_manifest: pathlib.Path):
     return entries, errors
 
 
-def verify_remote_manifest_matches_expected(remote_entries, expected_manifest: pathlib.Path):
+def verify_remote_manifest_matches_expected(remote_entries, remote_metadata, expected_manifest: pathlib.Path):
     expected_entries = parse_manifest(expected_manifest.read_text(encoding="utf-8"))
+    expected_entries, expected_meta = expected_entries
     remote_index = index_entries(remote_entries)
     expected_index = index_entries(expected_entries)
 
@@ -128,6 +134,14 @@ def verify_remote_manifest_matches_expected(remote_entries, expected_manifest: p
     for rel in remote_index:
         if rel not in expected_index:
             errors.append(f"remote manifest has unexpected path not in expected manifest: {rel}")
+
+    for key in ("manifest_id", "manifest_version", "hash_algo", "source_ref"):
+        remote_value = str(remote_metadata.get(key, ""))
+        expected_value = str(expected_meta.get(key, ""))
+        if remote_value != expected_value:
+            errors.append(
+                f"remote manifest metadata mismatch for {key}: expected-manifest={expected_value} remote-manifest={remote_value}"
+            )
 
     return errors
 
@@ -162,7 +176,7 @@ def main():
         print("Local manifest consistency: OK")
 
     try:
-        remote_entries, checked, errors = verify_remote(args.base_url, args.require_path)
+        remote_entries, remote_metadata, checked, errors = verify_remote(args.base_url, args.require_path)
     except Exception as exc:
         print(f"Remote verification failed: {exc}")
         return 1
@@ -174,7 +188,7 @@ def main():
         if not expected_manifest.exists():
             print(f"Expected manifest file not found: {expected_manifest}")
             return 1
-        expected_errors = verify_remote_manifest_matches_expected(remote_entries, expected_manifest)
+        expected_errors = verify_remote_manifest_matches_expected(remote_entries, remote_metadata, expected_manifest)
         if expected_errors:
             print("Remote vs expected manifest consistency: FAIL")
             for error in expected_errors:

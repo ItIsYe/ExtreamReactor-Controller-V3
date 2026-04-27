@@ -230,6 +230,9 @@ This avoids accidental collisions when multiple nodes run the same role defaults
 - MASTER is responsible for aggregating totals across multiple ENERGY nodes.
 
 That means blob/HTML downloads are explicitly treated as installation failures.
+Additionally, installer installs/updates now resolve `xreactor/release.lua` first and pin all subsequent
+manifest/file downloads to `release.commit_sha` when present. This removes branch-race windows where
+`manifest.lua` and downloaded files could come from different moving `beta` states.
 
 ### Build/Release consistency (manifest + package)
 
@@ -263,9 +266,11 @@ python scripts/package_release.py --sync --verify-url https://raw.githubusercont
 ```
 
 `verify_remote_manifest.py --expected-manifest` enforces that the published manifest itself matches the local release-candidate manifest entries (path/hash/size), so a stale or partial publish is detected before rollout.
+The remote verifier now also compares manifest metadata (`manifest_id`, `manifest_version`, `hash_algo`, `source_ref`) and includes failing file URLs in mismatch diagnostics.
 `package_release.py --verify-url` includes `--check-local`, `--expected-manifest xreactor/manifest.lua`, and `--require-path shared/build_info.lua` automatically.
 
 Deploy order must remain consistent: publish files first, then `manifest.lua` (or atomically), so installers never read a new manifest with old files.
+`xreactor/release.lua` must carry an immutable git SHA in `commit_sha` (not `beta`) so installer pinning is effective.
 
 ### Current storage paths used by the installer
 
@@ -477,6 +482,7 @@ If `installer` is missing locally, re-download it first.
 Work from the current implementation, not older installer docs:
 
 1. Open `/xreactor_logs/installer.log` and read the last error.
+   - Hash mismatch logs now include: affected file, expected hash, actual hash, source URL, manifest id, release id, and resolved source ref.
 2. Make sure HTTP access is enabled in CC:Tweaked, because the installer uses `http.get`.
 3. Make sure you used the **raw** GitHub URL, not a blob page.
 4. Re-run the installer after fixing the issue.
