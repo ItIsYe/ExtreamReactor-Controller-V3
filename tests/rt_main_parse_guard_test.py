@@ -34,7 +34,7 @@ guard = subprocess.run(
         "--file",
         str(RT_MAIN),
         "--chunk-limit",
-        "170",
+        "165",
         "--function-limit",
         "170",
     ],
