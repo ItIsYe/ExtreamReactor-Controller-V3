@@ -9,11 +9,10 @@ local main = read("xreactor/installer_main.lua")
 local storage = read("xreactor/installer_storage.lua")
 
 local main_checks = {
-  "function ctx.set_log_target(role_label, node_label)",
-  "installer_%s_%s.log",
+  "function ctx.set_log_target(role_label)",
   "installer_%s.log",
-  "ctx.set_log_target(role.label, node_id)",
-  "ctx.set_log_target(role_label, node_id)"
+  "ctx.set_log_target(role.label)",
+  "ctx.set_log_target(role_label)"
 }
 
 for _, snippet in ipairs(main_checks) do
