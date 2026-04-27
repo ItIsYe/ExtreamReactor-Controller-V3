@@ -93,10 +93,16 @@ function M.cleanup_stage_and_logs(ctx, opts)
     ctx.info("Cleaning log directory to recover storage")
     ctx.fs.delete(ctx.constants.LOG_DIR)
   end
-  local rotated = ctx.constants.LOG_DIR .. "/installer.log.1"
-  if ctx.fs.exists(rotated) then
-    reclaimed.rotated = math.max(0, tonumber(ctx.fs.getSize(rotated)) or 0)
-    ctx.fs.delete(rotated)
+  if ctx.fs.exists(ctx.constants.LOG_DIR) and ctx.fs.isDir(ctx.constants.LOG_DIR) then
+    for _, name in ipairs(ctx.fs.list(ctx.constants.LOG_DIR)) do
+      if name == "installer.log.1" or name:match("^installer_.+%.log%.1$") then
+        local rotated = ctx.fs.combine(ctx.constants.LOG_DIR, name)
+        if ctx.fs.exists(rotated) then
+          reclaimed.rotated = reclaimed.rotated + math.max(0, tonumber(ctx.fs.getSize(rotated)) or 0)
+          ctx.fs.delete(rotated)
+        end
+      end
+    end
   end
   local temp_paths = {
     "/xreactor_stage.tmp",

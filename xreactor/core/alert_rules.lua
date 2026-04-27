@@ -171,6 +171,7 @@ function rules:evaluate(context)
     end)
 
     local degraded = node.health and node.health.status == health.status.DEGRADED
+    degraded = degraded and not comms_down and node.offline ~= true and node.stale ~= true and node.recovering ~= true
     local degraded_key = string.format("NODE_DEGRADED|%s", tostring(node.id))
     emit(degraded_key, degraded, base_opts, function()
       local reason_text = build_reason_text(reasons) or "unknown"
@@ -213,7 +214,12 @@ function rules:evaluate(context)
       end
       local node_reasons = node.health and node.health.reasons
       local comms_down = has_reason(node_reasons, health.reasons.COMMS_DOWN) or node.status == health.status.DOWN or node.offline == true
-      local matrix_missing = (not comms_down) and has_reason(node_reasons, health.reasons.NO_MATRIX)
+      local matrix_missing = (not comms_down)
+        and node.offline ~= true
+        and node.stale ~= true
+        and node.recovering ~= true
+        and node.managed ~= false
+        and has_reason(node_reasons, health.reasons.NO_MATRIX)
       local matrix_key = string.format("MATRIX_MISSING|%s", tostring(node.id))
       emit(matrix_key, matrix_missing, base_opts, function()
         local matrix_count = node.matrix_count or node.matrix_bound or 0

@@ -57,6 +57,9 @@ local function download_url(url)
   if not http or type(http.get) ~= "function" then
     return nil, "HTTP API unavailable"
   end
+  if type(url) ~= "string" or url == "" then
+    return nil, "invalid url"
+  end
   local ok, response = pcall(http.get, url)
   if not ok or not response then
     return nil, "download failed"

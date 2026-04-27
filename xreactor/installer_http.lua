@@ -4,6 +4,9 @@ function M.download_url(http_api, url, retries, retry_delay_seconds, warn)
   if not http_api or type(http_api.get) ~= "function" then
     return nil, "HTTP API unavailable"
   end
+  if type(url) ~= "string" or url == "" then
+    return nil, "invalid url"
+  end
   local last_error = nil
   for attempt = 1, retries do
     local ok, response = pcall(http_api.get, url)
