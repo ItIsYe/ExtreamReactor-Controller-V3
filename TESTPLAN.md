@@ -76,6 +76,13 @@
 10. **Manifest-Entrypoint-Coverage (Installer-Schutz gegen fehlende Module)**:
    - `python3 tests/manifest_entrypoint_require_coverage_test.py` muss grün sein.
    - Der Guard prüft für `MASTER`/`ENERGY`/`WATER`/`FUEL`/`REPROCESSING`, dass direkte `require(...)`-Module aus den Rollen-Entrypoints im installierten Expected-Set aus `manifest.lua` enthalten sind.
+11. **MASTER Presence-/Identity-/RT-Hold Guards**:
+   - `tests/master_message_handler_node_id_canonicalization_test.lua` stellt sicher, dass STATUS mit kanonischer `node_id` alte Sender-IDs (z. B. `ENERGY-1`) in den MASTER-Nodes sauber ersetzt.
+   - `tests/comms_peer_retention_cleanup_test.lua` stellt sicher, dass langzeitig down/stale Peers aus dem Peer-State auslaufen (kein permanenter Altzustand).
+   - `tests/master_ui_controller_rt_hold_toggle_test.lua` stellt sicher, dass die zentrale RT-OFF-Hold-Aktion im MASTER umschaltbar ist.
+   - `tests/rt_sync_global_off_hold_test.lua` stellt sicher, dass RT-OFF-Hold Setpoints auf `0` erzwingt.
+12. **ENERGY Sampling-Last Guard (Single-Matrix)**:
+   - `tests/energy_matrix_single_group_budget_regression_test.lua` schützt, dass im Single-Matrix-Modell kein künstliches per-matrix Backlog/Throttle durch zu enges Budget entsteht.
 
 ## First start / bootstrap / role setup
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.

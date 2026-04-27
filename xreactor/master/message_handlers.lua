@@ -28,7 +28,15 @@ function M.new(opts)
       return
     end
 
-    local id = utils.normalize_node_id(message.sender_id)
+    local sender_id = utils.normalize_node_id(message.sender_id)
+    local reported_id = message.node_id and utils.normalize_node_id(message.node_id) or "UNKNOWN"
+    local id = (reported_id ~= "UNKNOWN") and reported_id or sender_id
+    if sender_id ~= "UNKNOWN" and sender_id ~= id and nodes[sender_id] then
+      local legacy = nodes[sender_id]
+      nodes[sender_id] = nil
+      nodes[id] = nodes[id] or legacy
+      log(("Node identity remapped: %s -> %s"):format(tostring(sender_id), tostring(id)))
+    end
     nodes[id] = nodes[id] or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
     if nodes[id].down_since then
       local peers = comms() and comms():get_peers() or {}
@@ -40,13 +48,14 @@ function M.new(opts)
     end
 
     nodes[id].id = id
-    if message.node_id then
-      local normalized = utils.normalize_node_id(message.node_id)
-      if normalized ~= "UNKNOWN" then nodes[id].node_id = normalized end
-    end
+    if reported_id ~= "UNKNOWN" then nodes[id].node_id = reported_id end
+    nodes[id].sender_id = sender_id ~= "UNKNOWN" and sender_id or nodes[id].sender_id
     nodes[id].last_seen = os.epoch("utc")
     nodes[id].last_seen_str = master_time_label()
     nodes[id].proto_ver = message.proto_ver
+    nodes[id].managed = true
+    nodes[id].stale = false
+    nodes[id].offline = false
 
     if message.type == constants.message_types.HELLO or message.type == constants.message_types.REGISTER then
       if nodes[id].status == constants.status_levels.OFFLINE then log("Node online: " .. tostring(id)) end

@@ -154,6 +154,11 @@ function runtime:poll_due_metrics(now_ts, groups)
   local slow_call_ms = math.max(50, tonumber(self.config.matrix_metric_slow_call_ms) or 150)
   local slow_poll_multiplier = math.max(1, tonumber(self.config.matrix_metric_slow_poll_multiplier) or 4.0)
   local per_matrix_budget = math.max(1, math.floor(tonumber(self.config.matrix_metric_per_matrix_budget) or 1))
+  if #(groups or {}) <= 1 then
+    -- In the single-matrix model we avoid artificial backlog by allowing one
+    -- full metric sweep per poll window.
+    per_matrix_budget = math.max(per_matrix_budget, #METRIC_ORDER)
+  end
 
   local jobs = {}
   for _, group in ipairs(groups or {}) do

@@ -27,6 +27,13 @@ function M.new(opts)
         controller.calc.set_auto_profile(next_value)
       end
       controller.state.auto_profile = next_value
+    elseif action.type == "rt_hold" then
+      local current = (controller.calc.get_rt_global_off_hold and controller.calc.get_rt_global_off_hold()) or controller.state.rt_global_off_hold
+      local next_value = not current
+      if controller.calc.set_rt_global_off_hold then
+        controller.calc.set_rt_global_off_hold(next_value)
+      end
+      controller.state.rt_global_off_hold = next_value
     elseif controller.alert_service then
       if action.type == "alert_ack" then controller.alert_service:ack(action.id)
       elseif action.type == "alert_unack" then controller.alert_service:unack(action.id)
@@ -87,12 +94,14 @@ function M.new(opts)
       system_status = compute_system_status(), profile_list = { "BASELOAD", "PEAK", "IDLE" },
       active_profile = (controller.calc.get_active_profile and controller.calc.get_active_profile()) or controller.state.active_profile,
       auto_profile = (controller.calc.get_auto_profile and controller.calc.get_auto_profile()) or controller.state.auto_profile,
+      rt_global_off_hold = (controller.calc.get_rt_global_off_hold and controller.calc.get_rt_global_off_hold()) or controller.state.rt_global_off_hold,
       alert_counts = alert_counts, alert_summary = alert_summary, alert_top = alert_top
     }
     local rt_data = {
       rt_nodes = {}, ramp_profile = controller.sequencer.ramp_profile, sequence_state = controller.sequencer.state,
       queue = controller.sequencer.queue, active_step = controller.sequencer.active, control_mode = nil,
-      alert_counts = alert_counts, alert_top = alert_top
+      alert_counts = alert_counts, alert_top = alert_top,
+      rt_global_off_hold = overview_data.rt_global_off_hold
     }
     local energy_data = {
       stored = 0, capacity = 0, input = 0, output = 0, stores = {}, nodes = {}, matrices = {}, top_matrices = {},
@@ -116,7 +125,9 @@ function M.new(opts)
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or nil)
       overview_data.nodes[#overview_data.nodes + 1] = {
         id = node.id, role = node.role, status = node.status or controller.constants.status_levels.OFFLINE,
-        last_seen = node.last_seen_str, last_seen_age = age, mode = node.mode, reasons = reason_text, bindings = bindings_summary
+        node_role_map = ("%s = %s"):format(tostring(node.id or "UNKNOWN"), tostring(node.role or "UNKNOWN")),
+        last_seen = node.last_seen_str, last_seen_age = age, mode = node.mode, reasons = reason_text, bindings = bindings_summary,
+        managed = node.managed ~= false, stale = node.stale == true
       }
       resource_data.node_details[#resource_data.node_details + 1] = {
         id = node.id, role = node.role, status = node.status or controller.constants.status_levels.OFFLINE,
@@ -125,7 +136,16 @@ function M.new(opts)
         last_command_result = node.last_command_result, last_command_error = node.last_command_error
       }
       if node.role == controller.constants.roles.RT_NODE then
-        rt_data.rt_nodes[#rt_data.rt_nodes + 1] = { id = node.id, state = node.state or controller.constants.node_states.OFF, output = node.output, modules = node.modules or {}, limits = node.limits, status = node.status, mode = node.mode }
+        rt_data.rt_nodes[#rt_data.rt_nodes + 1] = {
+          id = node.id,
+          state = node.state or controller.constants.node_states.OFF,
+          output = node.output,
+          modules = node.modules or {},
+          limits = node.limits,
+          status = node.status,
+          mode = node.mode,
+          hold = overview_data.rt_global_off_hold == true
+        }
       elseif node.role == controller.constants.roles.ENERGY_NODE then
         energy_data.stored = energy_data.stored + (node.stored or 0)
         energy_data.capacity = energy_data.capacity + (node.capacity or 0)
