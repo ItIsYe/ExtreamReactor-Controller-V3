@@ -233,6 +233,7 @@ local function check_timeouts()
     local peer = peers[node.id]
     local last_seen = peer and peer.last_seen or node.last_seen
     local peer_down = peer and peer.down
+    node.recovering = peer and peer.down == true and peer.recovering_since ~= nil or false
     if peer and peer.age then
       node.last_seen_age = math.floor(peer.age)
     end
@@ -252,6 +253,7 @@ local function check_timeouts()
       node.status = health.status.DOWN
       node.offline = true
       node.stale = true
+      node.recovering = false
       node.managed = false
       node.health = node.health or health.new({})
       node.health.status = health.status.DOWN
@@ -264,6 +266,7 @@ local function check_timeouts()
       node.down_since = nil
       node.offline = false
       node.stale = false
+      node.recovering = false
       node.managed = true
     end
   end

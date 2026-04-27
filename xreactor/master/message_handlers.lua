@@ -56,6 +56,7 @@ function M.new(opts)
     nodes[id].managed = true
     nodes[id].stale = false
     nodes[id].offline = false
+    nodes[id].recovering = false
 
     if message.type == constants.message_types.HELLO or message.type == constants.message_types.REGISTER then
       if nodes[id].status == constants.status_levels.OFFLINE then log("Node online: " .. tostring(id)) end
@@ -72,6 +73,7 @@ function M.new(opts)
       nodes[id].offline = false
       nodes[id].stale = false
       nodes[id].managed = true
+      nodes[id].recovering = false
       if nodes[id].health and nodes[id].health.reasons then
         nodes[id].health.reasons[health.reasons.COMMS_DOWN] = nil
       end

@@ -24,6 +24,17 @@ local ROLE_KEY_MAP = {
   REPROCESSING = "reprocessing"
 }
 
+local function sanitize_log_segment(value)
+  local raw = tostring(value or "unknown")
+  local lowered = string.lower(raw)
+  local sanitized = lowered:gsub("[^a-z0-9_%-]+", "_")
+  sanitized = sanitized:gsub("^_+", ""):gsub("_+$", "")
+  if sanitized == "" then
+    return "unknown"
+  end
+  return sanitized
+end
+
 local function build_crc32_table()
   local table_crc = {}
   for i = 0, 255 do
@@ -91,6 +102,17 @@ local function build_context(constants)
     end
   end
 
+  function ctx.set_log_target(role_label, node_label)
+    local role_segment = sanitize_log_segment(role_label)
+    local node_segment = sanitize_log_segment(node_label)
+    if node_segment ~= "unknown" then
+      constants.LOG_PATH = string.format("%s/installer_%s_%s.log", constants.LOG_DIR, role_segment, node_segment)
+    else
+      constants.LOG_PATH = string.format("%s/installer_%s.log", constants.LOG_DIR, role_segment)
+    end
+    ctx.safe_mkdir(constants.LOG_DIR)
+  end
+
   function ctx.info(message)
     print(message)
     ctx.log_line(message)
@@ -138,6 +160,9 @@ local function build_context(constants)
   end
 
   function ctx.download_url(url)
+    if type(url) ~= "string" or url == "" then
+      return nil, "invalid url"
+    end
     return installer_http.download_url(http, url, constants.DOWNLOAD_RETRIES, constants.DOWNLOAD_RETRY_DELAY_SECONDS, ctx.warn)
   end
 
@@ -239,6 +264,9 @@ local function build_context(constants)
   end
 
   function ctx.load_manifest()
+    if type(constants.MANIFEST_URL) ~= "string" or constants.MANIFEST_URL == "" then
+      return nil, "manifest url missing"
+    end
     ctx.info("Downloading manifest from " .. tostring(constants.MANIFEST_URL))
     local body, err = ctx.download_url(constants.MANIFEST_URL)
     if not body then
@@ -263,6 +291,9 @@ local function build_context(constants)
   end
 
   function ctx.resolve_release_source()
+    if type(constants.RELEASE_URL) ~= "string" or constants.RELEASE_URL == "" then
+      return false, "release metadata url missing"
+    end
     ctx.info("Downloading release metadata from " .. tostring(constants.RELEASE_URL))
     local body, err = ctx.download_url(constants.RELEASE_URL)
     if not body then
@@ -351,6 +382,12 @@ local function run_install(ctx)
   if not role then
     ctx.fatal("Invalid role selection")
   end
+  local node_id = nil
+  if fs.exists("/xreactor/config/node_id.txt") then
+    node_id = ctx.read_file("/xreactor/config/node_id.txt")
+  end
+  ctx.set_log_target(role.label, node_id)
+  ctx.info("Installer log target: " .. tostring(ctx.constants.LOG_PATH))
   ctx.info("Selected role: " .. role.label)
 
   local source_ok, source_err = ctx.resolve_release_source()
@@ -392,6 +429,19 @@ end
 
 local function run_update(ctx)
   ctx.info("Selected action: Update")
+  local role_label = stage_lib.read_role_config(ctx)
+  if not role_label then
+    ctx.fatal("Role config missing; cannot update")
+  end
+  if not ROLE_KEY_MAP[role_label] then
+    ctx.fatal("Unknown role in config: " .. tostring(role_label))
+  end
+  local node_id = nil
+  if fs.exists("/xreactor/config/node_id.txt") then
+    node_id = ctx.read_file("/xreactor/config/node_id.txt")
+  end
+  ctx.set_log_target(role_label, node_id)
+  ctx.info("Installer log target: " .. tostring(ctx.constants.LOG_PATH))
   local source_ok, source_err = ctx.resolve_release_source()
   if not source_ok then
     ctx.fatal("Release metadata error: " .. tostring(source_err))
@@ -409,13 +459,6 @@ local function run_update(ctx)
     ))
   end
 
-  local role_label = stage_lib.read_role_config(ctx)
-  if not role_label then
-    ctx.fatal("Role config missing; cannot update")
-  end
-  if not ROLE_KEY_MAP[role_label] then
-    ctx.fatal("Unknown role in config: " .. tostring(role_label))
-  end
   ctx.info("Selected role: " .. role_label)
 
   local expected = manifest_lib.select_expected_files(manifest, role_label, ctx.constants.INCLUDE_DEV_FILES)
@@ -441,6 +484,7 @@ end
 
 function M.run(constants)
   local ctx = build_context(constants)
+  ctx.set_log_target("bootstrap")
   ctx.log_line("installer start")
   print("XReactor Installer")
   print("")
