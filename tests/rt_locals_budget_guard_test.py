@@ -19,7 +19,7 @@ proc = subprocess.run(
         "--file",
         str(RT_MAIN),
         "--chunk-limit",
-        "145",
+        "140",
         "--function-limit",
         "170",
     ],

@@ -388,7 +388,6 @@ local function stage_and_verify(ctx, expected)
 end
 
 local function run_install(ctx)
-  ctx.info("Selected action: Neuinstallation")
   local role = select_role()
   if not role then
     ctx.fatal("Invalid role selection")
@@ -397,6 +396,7 @@ local function run_install(ctx)
   ctx.target_role = role.label
   ctx.set_log_target(role.label)
   ctx.info("Installer log target: " .. tostring(ctx.constants.LOG_PATH))
+  ctx.info("Selected action: Neuinstallation")
   ctx.info("Selected role: " .. role.label)
 
   local source_ok, source_err = ctx.resolve_release_source()
@@ -437,7 +437,6 @@ local function run_install(ctx)
 end
 
 local function run_update(ctx)
-  ctx.info("Selected action: Update")
   local role_label = stage_lib.read_role_config(ctx)
   if not role_label then
     ctx.fatal("Role config missing; cannot update")
@@ -449,6 +448,7 @@ local function run_update(ctx)
   ctx.target_role = role_label
   ctx.set_log_target(role_label)
   ctx.info("Installer log target: " .. tostring(ctx.constants.LOG_PATH))
+  ctx.info("Selected action: Update")
   local source_ok, source_err = ctx.resolve_release_source()
   if not source_ok then
     ctx.fatal("Release metadata error: " .. tostring(source_err))

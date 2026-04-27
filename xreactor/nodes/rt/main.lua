@@ -86,9 +86,11 @@ local flow_apply_helpers = require("nodes.rt.flow_apply_helpers")
 local reactor_steam_guard = require("nodes.rt.reactor_steam_guard")
 local discovery_runtime = require("nodes.rt.discovery_runtime")
 local health_payload = require("nodes.rt.health_payload")
-local INFO = "INFO"
-local DEBUG = "DEBUG"
-local WARN = "WARN"
+local LOG_LEVEL = {
+  INFO = "INFO",
+  DEBUG = "DEBUG",
+  WARN = "WARN"
+}
 local function log(level, message)
   utils.log(CONFIG.LOG_PREFIX, message, level)
 end
@@ -128,14 +130,14 @@ if not logger_init_ok then
   log_status = { enabled = false, startup_action = "init_nonfatal_failure" }
 end
 if log_status and log_status.enabled then
-  log(INFO, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)))
+  log(LOG_LEVEL.INFO, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)))
 end
-log(INFO, "Startup")
+log(LOG_LEVEL.INFO, "Startup")
 if config_meta and config_meta.reason then
-  log(WARN, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.")
+  log(LOG_LEVEL.WARN, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.")
 end
 for _, warning in ipairs(config_warnings) do
-  log(WARN, warning)
+  log(LOG_LEVEL.WARN, warning)
 end
 local last_applied_rods = nil
 local last_rod_apply_ts = 0
@@ -214,14 +216,18 @@ local STATE = {
 }
 local current_state = STATE.INIT
 local node_state_machine
-local ramp_profiles = {
-  FAST = 4000,
-  NORMAL = 8000,
-  SLOW = 12000
-}
-local TURBINE_MODE = {
-  RAMP = "RAMP",
-  REGULATE = "REGULATE"
+-- Keep runtime tuning/mode symbols bundled to lower top-level local pressure
+-- (Lua parser hard-limit for locals in a chunk/function is 200).
+local TURBINE_CONTROL = {
+  ramp_profiles = {
+    FAST = 4000,
+    NORMAL = 8000,
+    SLOW = 12000
+  },
+  mode = {
+    RAMP = "RAMP",
+    REGULATE = "REGULATE"
+  }
 }
 local function get_target_rpm()
   if current_state == STATE.MASTER and type(targets.rpm) == "number" and targets.rpm > 0 then
@@ -531,7 +537,7 @@ local function init_turbine_ctrl()
     ctrl.effective_min_flow = nil
     ctrl.effective_max_flow = nil
     ctrl.startup_synced = false
-    ctrl.mode = TURBINE_MODE.RAMP
+    ctrl.mode = TURBINE_CONTROL.mode.RAMP
     ctrl.logged = false
     log("INFO", "Controlling turbine: " .. name)
   end
@@ -1549,12 +1555,12 @@ end
 local function dumpPeripherals()
   for _, name in ipairs(peripheral.getNames()) do
     local pType = peripheral.getType(name)
-    log(INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
+    log(LOG_LEVEL.INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
 
     local methods = utils.safe_get_methods(name) or {}
     if methods then
       for _, m in ipairs(methods) do
-        log(DEBUG, "  method: " .. m)
+        log(LOG_LEVEL.DEBUG, "  method: " .. m)
       end
     end
   end
@@ -1576,7 +1582,7 @@ refresh_module_peripherals = function()
 end
 
 local function ramp_duration(profile)
-  return ramp_profiles[profile] or ramp_profiles.NORMAL
+  return TURBINE_CONTROL.ramp_profiles[profile] or TURBINE_CONTROL.ramp_profiles.NORMAL
 end
 
 local function build_health_payload_context()
@@ -1675,7 +1681,7 @@ local function build_module_lifecycle_context()
     modules = modules,
     comms = comms,
     RPM_TOL = CONFIG.RPM_TOLERANCE,
-    TURBINE_MODE = TURBINE_MODE,
+    TURBINE_MODE = TURBINE_CONTROL.mode,
     START_FLOW = CONFIG.START_FLOW,
     log = log,
     warn_once = warn_once,
@@ -1755,9 +1761,9 @@ local function init_monitor()
   local monitor_name_or_err
   monitor, monitor_name_or_err = monitor_ui.init(monitor_adapter, config.monitor, config.monitor_scale)
   if not monitor then
-    log(WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no monitor available"))
+    log(LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no monitor available"))
   elseif monitor_name_or_err then
-    log(INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
+    log(LOG_LEVEL.INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
   end
 end
 
