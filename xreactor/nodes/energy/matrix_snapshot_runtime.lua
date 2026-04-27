@@ -21,6 +21,7 @@ function runtime.new(opts)
     static_cache = {},
     component_diag = {},
     component_cursor = 1,
+    last_throttle_log_ts = 0,
     last_snapshot = {
       ts = 0,
       matrices = {},
@@ -46,6 +47,7 @@ function runtime:invalidate()
     stale = true,
     diag = { metric_calls = {}, metric_totals = {}, throttled = nil }
   }
+  self.last_throttle_log_ts = 0
 end
 
 local function normalize_reason(reason)
@@ -154,6 +156,7 @@ function runtime:poll_due_metrics(now_ts, groups)
   local slow_call_ms = math.max(50, tonumber(self.config.matrix_metric_slow_call_ms) or 150)
   local slow_poll_multiplier = math.max(1, tonumber(self.config.matrix_metric_slow_poll_multiplier) or 4.0)
   local per_matrix_budget = math.max(1, math.floor(tonumber(self.config.matrix_metric_per_matrix_budget) or 1))
+  local throttle_log_interval_ms = math.max(1000, math.floor(tonumber(self.config.matrix_metric_throttle_log_interval_ms) or 5000))
   if #(groups or {}) <= 1 then
     -- In the single-matrix model we avoid artificial backlog by allowing one
     -- full metric sweep per poll window.
@@ -262,7 +265,7 @@ function runtime:poll_due_metrics(now_ts, groups)
       time_budget_ms = metric_time_budget_ms,
       spent_ms = poll_spent_ms
     }
-    if self.debug_enabled then
+    if self.debug_enabled and (now_ts - (self.last_throttle_log_ts or 0) >= throttle_log_interval_ms) then
       utils.log(
         self.log_prefix,
         ("Matrix metric polling throttled: due=%d budget=%d deferred=%d per_matrix_budget=%d time_budget_ms=%d spent_ms=%d"):format(
@@ -274,6 +277,7 @@ function runtime:poll_due_metrics(now_ts, groups)
           poll_spent_ms
         )
       )
+      self.last_throttle_log_ts = now_ts
     end
   end
 

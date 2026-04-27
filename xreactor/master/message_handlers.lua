@@ -65,6 +65,16 @@ function M.new(opts)
       sync_rt_node(nodes[id])
     elseif message.type == constants.message_types.HEARTBEAT then
       nodes[id].state = message.payload.state
+      if nodes[id].status == constants.status_levels.OFFLINE or nodes[id].status == health.status.DOWN then
+        nodes[id].status = constants.status_levels.OK
+      end
+      nodes[id].down_since = nil
+      nodes[id].offline = false
+      nodes[id].stale = false
+      nodes[id].managed = true
+      if nodes[id].health and nodes[id].health.reasons then
+        nodes[id].health.reasons[health.reasons.COMMS_DOWN] = nil
+      end
       sync_rt_node(nodes[id])
     elseif message.type == constants.message_types.STATUS then
       local previous_mode = nodes[id].mode

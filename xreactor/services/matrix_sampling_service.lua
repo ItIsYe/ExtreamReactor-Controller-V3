@@ -17,8 +17,7 @@ function sampler.new(opts)
     runtime = opts.runtime,
     start_delay = start_delay,
     started_at = now,
-    next_due_at = now + math.floor(start_delay * 1000),
-    last_tick = 0
+    next_due_at = now + math.floor(start_delay * 1000)
   }
   return setmetatable(self, { __index = sampler })
 end
@@ -28,10 +27,8 @@ function sampler:tick()
   if ts < (self.next_due_at or 0) then
     return
   end
-  if ts - self.last_tick < self.interval * 1000 then
-    return
-  end
-  self.last_tick = ts
+  local interval_ms = math.max(1, math.floor((self.interval or 0.25) * 1000))
+  self.next_due_at = ts + interval_ms
   if self.runtime and self.runtime.tick then
     self.runtime:tick(ts)
   end
