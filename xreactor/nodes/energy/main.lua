@@ -67,6 +67,7 @@ local DEFAULT_CONFIG = {
   matrix_metric_slow_call_ms = 150, -- Calls above this duration are treated as expensive outliers and polled less frequently.
   matrix_metric_slow_poll_multiplier = 4.0, -- Extra cadence multiplier for expensive outlier matrix metric calls.
   matrix_metric_per_matrix_budget = 1, -- Max expensive matrix metric calls per matrix/per payload build so one port cannot dominate a tick.
+  matrix_sample_min_tick_spacing_ms = 400, -- Lower bound between matrix sampling ticks to reduce bursty load under heavy service loops.
   matrix_component_poll_interval = 30, -- Seconds between matrix component count reads (cells/providers/ports).
   matrix_component_call_budget = 2, -- Max matrix component count calls per sampling tick to avoid periodic spikes.
   matrix_component_time_budget_ms = 400, -- Max time budget for matrix component calls per sampling tick.
@@ -492,7 +493,7 @@ local function init()
   }))
   services:add(matrix_sampling_service.new({
     name = "MATRIX_SAMPLE",
-    interval = 0.5,
+    interval = 0.75,
     start_delay = 0.20,
     runtime = matrix_runtime
   }))
