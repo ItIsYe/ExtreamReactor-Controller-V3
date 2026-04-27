@@ -291,11 +291,27 @@ local function build_context(constants)
   end
 
   function ctx.resolve_release_source()
-    if type(constants.RELEASE_URL) ~= "string" or constants.RELEASE_URL == "" then
-      return false, "release metadata url missing"
+    local release_url = constants.RELEASE_URL
+    if type(release_url) ~= "string" or release_url == "" then
+      if type(constants.BASE_URL) == "string" and constants.BASE_URL ~= "" then
+        release_url = constants.BASE_URL .. "release.lua"
+        constants.RELEASE_URL = release_url
+        ctx.warn("Release metadata URL missing; derived from BASE_URL: " .. tostring(release_url))
+      else
+        return false, string.format(
+          "release metadata url missing (mode=%s role=%s)",
+          tostring(ctx.install_mode or "unknown"),
+          tostring(ctx.target_role or "unknown")
+        )
+      end
     end
-    ctx.info("Downloading release metadata from " .. tostring(constants.RELEASE_URL))
-    local body, err = ctx.download_url(constants.RELEASE_URL)
+    ctx.info(string.format(
+      "Downloading release metadata from %s (mode=%s role=%s)",
+      tostring(release_url),
+      tostring(ctx.install_mode or "unknown"),
+      tostring(ctx.target_role or "unknown")
+    ))
+    local body, err = ctx.download_url(release_url)
     if not body then
       return false, err
     end
@@ -382,6 +398,8 @@ local function run_install(ctx)
   if not role then
     ctx.fatal("Invalid role selection")
   end
+  ctx.install_mode = "install"
+  ctx.target_role = role.label
   local node_id = nil
   if fs.exists("/xreactor/config/node_id.txt") then
     node_id = ctx.read_file("/xreactor/config/node_id.txt")
@@ -436,6 +454,8 @@ local function run_update(ctx)
   if not ROLE_KEY_MAP[role_label] then
     ctx.fatal("Unknown role in config: " .. tostring(role_label))
   end
+  ctx.install_mode = "update"
+  ctx.target_role = role_label
   local node_id = nil
   if fs.exists("/xreactor/config/node_id.txt") then
     node_id = ctx.read_file("/xreactor/config/node_id.txt")

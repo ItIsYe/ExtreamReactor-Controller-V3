@@ -431,6 +431,10 @@ end
 -- Telemetry/UI consume this snapshot only; they never read matrix peripherals.
 function runtime:tick(ts)
   local now_ts = ts or now_ms()
+  local min_tick_spacing_ms = math.max(100, math.floor(tonumber(self.config.matrix_sample_min_tick_spacing_ms) or 400))
+  if self.last_snapshot and (self.last_snapshot.ts or 0) > 0 and (now_ts - (self.last_poll_ts or 0)) < min_tick_spacing_ms then
+    return
+  end
   local groups = type(self.get_groups) == "function" and (self.get_groups() or {}) or {}
   self:sync_group_caches(groups)
   local diag = self:poll_due_metrics(now_ts, groups)

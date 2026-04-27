@@ -73,6 +73,16 @@ local function download_url(url)
 end
 
 local function ensure_installer_runtime()
+  if (type(constants.RELEASE_URL) ~= "string" or constants.RELEASE_URL == "")
+    and type(constants.BASE_URL) == "string" and constants.BASE_URL ~= "" then
+    constants.RELEASE_URL = constants.BASE_URL .. "release.lua"
+    print("WARN: RELEASE_URL missing, derived fallback " .. tostring(constants.RELEASE_URL))
+  end
+  if (type(constants.MANIFEST_URL) ~= "string" or constants.MANIFEST_URL == "")
+    and type(constants.BASE_URL) == "string" and constants.BASE_URL ~= "" then
+    constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
+    print("WARN: MANIFEST_URL missing, derived fallback " .. tostring(constants.MANIFEST_URL))
+  end
   local install_ref = nil
   local release_body, release_err = download_url(constants.RELEASE_URL)
   if release_body and not is_html_content(release_body) then

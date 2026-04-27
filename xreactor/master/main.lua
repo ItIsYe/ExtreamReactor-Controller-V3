@@ -228,12 +228,13 @@ local function check_timeouts()
   local peers = comms:get_peers() or {}
   local now = os.epoch("utc")
   local timeout_ms = (config.comms and config.comms.peer_timeout_s or config.heartbeat_interval * 4) * 1000
+  local down_grace_ms = (config.comms and config.comms.peer_down_grace_s or 0) * 1000
   local stale_nodes = {}
   for _, node in pairs(nodes) do
     local peer = peers[node.id]
     local last_seen = peer and peer.last_seen or node.last_seen
     local peer_down = peer and peer.down
-    node.recovering = peer and peer.down == true and peer.recovering_since ~= nil or false
+    node.recovering = peer and peer.recovering_since ~= nil or false
     if peer and peer.age then
       node.last_seen_age = math.floor(peer.age)
     end
@@ -241,7 +242,7 @@ local function check_timeouts()
     if peer ~= nil then
       should_mark_down = peer_down == true
     else
-      should_mark_down = last_seen and (now - last_seen > timeout_ms)
+      should_mark_down = last_seen and (now - last_seen > (timeout_ms + down_grace_ms))
     end
     if should_mark_down then
       if node.status ~= constants.status_levels.OFFLINE then
@@ -257,7 +258,8 @@ local function check_timeouts()
       node.managed = false
       node.health = node.health or health.new({})
       node.health.status = health.status.DOWN
-      node.health.reasons = { [health.reasons.COMMS_DOWN] = true }
+      node.health.reasons = node.health.reasons or {}
+      node.health.reasons[health.reasons.COMMS_DOWN] = true
       if last_seen and (now - last_seen) >= node_offline_purge_after_ms then
         stale_nodes[#stale_nodes + 1] = node.id
       end
