@@ -17,6 +17,10 @@
    - `python3 scripts/manifest_sync.py` muss `Consistency: OK` liefern.
    - Nach Publish muss `python3 scripts/verify_remote_manifest.py --base-url <published-xreactor-url> --check-local --expected-manifest xreactor/manifest.lua --require-path shared/build_info.lua` grün sein.
    - Damit werden sowohl Dateiinhalte (hash/size) als auch der veröffentlichte Manifest-Stand gegen den lokalen Release-Kandidaten geprüft.
+9. **Immutable Release-Quelle für Installer**:
+   - `xreactor/release.lua` muss ein unveränderliches `commit_sha` (Git-SHA, nicht `beta`) enthalten.
+   - Install/Update-Log muss zeigen, dass der Download-Stand auf dieses Commit gepinnt wurde (`Pinned installer source to immutable commit ...`).
+   - Dadurch dürfen während eines Install-Laufs Manifest und Dateien nicht mehr aus unterschiedlichen Branch-Zeitpunkten stammen.
 
 ## Node-ID / Identity
 1. Persistierte `/xreactor/config/node_id.txt` muss immer Vorrang gegenüber Rollen-Defaults in Config haben.

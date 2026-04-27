@@ -217,11 +217,14 @@ local function build_context(constants)
     local hash_ok, actual_hash = ctx.hash_matches(resolved_entry, body)
     if not hash_ok then
       return false, string.format(
-        "hash mismatch for %s (url=%s expected=%s actual=%s)",
+        "hash mismatch for %s (url=%s expected=%s actual=%s manifest=%s release=%s source_ref=%s)",
         tostring(remote_path),
         tostring(url),
         tostring(resolved_entry.hash),
-        tostring(actual_hash)
+        tostring(actual_hash),
+        tostring(ctx.manifest_id or "unknown"),
+        tostring(ctx.release_id or "unknown"),
+        tostring(ctx.source_ref or "unknown")
       )
     end
     local ok, write_err = ctx.write_file(target_path, body)
@@ -236,7 +239,7 @@ local function build_context(constants)
   end
 
   function ctx.load_manifest()
-    ctx.info("Downloading manifest")
+    ctx.info("Downloading manifest from " .. tostring(constants.MANIFEST_URL))
     local body, err = ctx.download_url(constants.MANIFEST_URL)
     if not body then
       return nil, err
@@ -255,7 +258,42 @@ local function build_context(constants)
     if type(manifest.base_files) ~= "table" or type(manifest.roles) ~= "table" then
       return nil, "Manifest missing base_files or roles"
     end
+    ctx.manifest_id = manifest.manifest_id or manifest.manifest_version or "unknown"
     return manifest
+  end
+
+  function ctx.resolve_release_source()
+    ctx.info("Downloading release metadata from " .. tostring(constants.RELEASE_URL))
+    local body, err = ctx.download_url(constants.RELEASE_URL)
+    if not body then
+      return false, err
+    end
+    local loader, load_err = load(body, "=release", "t", {})
+    if not loader then
+      return false, load_err
+    end
+    local ok, release = pcall(loader)
+    if not ok then
+      return false, release
+    end
+    if type(release) ~= "table" then
+      return false, "release metadata invalid"
+    end
+
+    ctx.release_id = tostring(release.release_id or "unknown")
+    local commit_sha = tostring(release.commit_sha or "")
+    if commit_sha ~= "" and commit_sha ~= "beta" then
+      constants.BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. commit_sha .. "/xreactor/"
+      constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
+      constants.RELEASE_URL = constants.BASE_URL .. "release.lua"
+      ctx.source_ref = commit_sha
+      ctx.info("Pinned installer source to immutable commit " .. commit_sha)
+      return true
+    end
+
+    ctx.source_ref = "beta"
+    ctx.warn("Release commit_sha missing or mutable branch reference; installer keeps beta source")
+    return true
   end
 
   function ctx.log_install_identity(manifest, role_label, mode, expected)
@@ -278,8 +316,8 @@ local function build_context(constants)
       "Identity: mode=%s role=%s release=%s manifest=%s files=%d",
       tostring(mode),
       tostring(role_label),
-      tostring(release_id),
-      tostring(manifest.manifest_id or manifest.manifest_version or "unknown"),
+      tostring(ctx.release_id or release_id),
+      tostring(ctx.manifest_id or manifest.manifest_id or manifest.manifest_version or "unknown"),
       file_count
     ))
   end
@@ -315,9 +353,21 @@ local function run_install(ctx)
   end
   ctx.info("Selected role: " .. role.label)
 
+  local source_ok, source_err = ctx.resolve_release_source()
+  if not source_ok then
+    ctx.fatal("Release metadata error: " .. tostring(source_err))
+  end
+
   local manifest, err = ctx.load_manifest()
   if not manifest then
     ctx.fatal("Manifest error: " .. tostring(err))
+  end
+  if manifest.source_ref and tostring(manifest.source_ref) ~= "beta" and tostring(manifest.source_ref) ~= tostring(ctx.source_ref) then
+    ctx.warn(string.format(
+      "Manifest source_ref mismatch (release source=%s manifest source_ref=%s)",
+      tostring(ctx.source_ref),
+      tostring(manifest.source_ref)
+    ))
   end
 
   local expected = manifest_lib.select_expected_files(manifest, role.label, ctx.constants.INCLUDE_DEV_FILES)
@@ -342,9 +392,21 @@ end
 
 local function run_update(ctx)
   ctx.info("Selected action: Update")
+  local source_ok, source_err = ctx.resolve_release_source()
+  if not source_ok then
+    ctx.fatal("Release metadata error: " .. tostring(source_err))
+  end
+
   local manifest, err = ctx.load_manifest()
   if not manifest then
     ctx.fatal("Manifest error: " .. tostring(err))
+  end
+  if manifest.source_ref and tostring(manifest.source_ref) ~= "beta" and tostring(manifest.source_ref) ~= tostring(ctx.source_ref) then
+    ctx.warn(string.format(
+      "Manifest source_ref mismatch (release source=%s manifest source_ref=%s)",
+      tostring(ctx.source_ref),
+      tostring(manifest.source_ref)
+    ))
   end
 
   local role_label = stage_lib.read_role_config(ctx)

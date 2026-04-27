@@ -82,6 +82,12 @@ end
 if tostring(release.manifest_path) ~= "xreactor/manifest.lua" then
   error("release manifest_path mismatch")
 end
+if type(release.commit_sha) ~= "string" or not string.match(release.commit_sha, "^[0-9a-f]+$") then
+  error("release commit_sha must be an immutable git sha")
+end
+if #release.commit_sha < 12 then
+  error("release commit_sha too short")
+end
 
 local installer_hash = crc32_hash(installer_content)
 if tostring(release.installer_core_hash) ~= installer_hash then
