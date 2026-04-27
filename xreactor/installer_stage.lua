@@ -96,6 +96,16 @@ function M.verify_stage(ctx, expected)
         )
       end
     end
+    if rel:sub(-4) == ".lua" then
+      local loader, parse_err = ctx.compile_lua(path, content)
+      if not loader then
+        return false, string.format(
+          "staged lua parse error: %s (%s)",
+          tostring(rel),
+          tostring(parse_err)
+        )
+      end
+    end
   end
   return true
 end

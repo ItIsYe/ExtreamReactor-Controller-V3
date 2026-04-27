@@ -16,6 +16,8 @@ local required_stage = {
   "local target_path = ctx.constants.STAGE_ROOT .. \"/\" .. entry.path",
   "return false, \"Download failed: \" .. tostring(err)",
   "function M.verify_stage(ctx, expected)",
+  "local loader, parse_err = ctx.compile_lua(path, content)",
+  "staged lua parse error: %s (%s)",
   "local moved = pcall(ctx.fs.move, ctx.constants.STAGE_ROOT, ctx.constants.INSTALL_ROOT)"
 }
 
