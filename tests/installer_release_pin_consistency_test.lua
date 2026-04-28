@@ -10,7 +10,9 @@ local main = read("xreactor/installer_main.lua")
 
 local bootstrap_checks = {
   "local function resolve_release_ref()",
+  "local bundled_release_path = fs.combine(program_dir, \"xreactor/release.lua\")",
   "local local_release_path = constants.INSTALL_ROOT .. \"/release.lua\"",
+  "release_source = \"bundle\"",
   "Installer source pinned to commit: ",
   "(release=",
 }
