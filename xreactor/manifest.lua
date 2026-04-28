@@ -1,7 +1,7 @@
 return {
   manifest_version = 8,
   manifest_id = "manifest-v8",
-  source_ref = "beta",
+  source_ref = "545cdeb3f59c70031d801a57235a2fb145cc7e20",
   hash_algo = "crc32",
   base_files = {
       { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460" },
@@ -85,7 +85,7 @@ return {
       { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2525, hash = "3e823eea" },
       { path = "nodes/rt/status_snapshot.lua", size_bytes = 3637, hash = "51bda9ce" },
       { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c" },
-      { path = "nodes/rt/main.lua", size_bytes = 80571, hash = "28c37d8d", required_for = { "RT" } },
+      { path = "nodes/rt/main.lua", size_bytes = 80712, hash = "0d041f9e", required_for = { "RT" } },
       { path = "nodes/rt/state_handlers.lua", size_bytes = 8151, hash = "294bcd76" },
       { path = "adapters/reactor.lua", size_bytes = 17010, hash = "2e3b8447" },
       { path = "adapters/turbine.lua", size_bytes = 3871, hash = "a9e924f3" },

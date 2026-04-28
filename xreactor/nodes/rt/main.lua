@@ -22,7 +22,13 @@ local CONFIG = {
   MIN_APPLY_INTERVAL = 1.5, -- Minimum interval between rod applications.
   REACTOR_STEP = 5, -- Reactor rod step adjustment.
   MIN_ACTIVE_RPM = 100, -- Minimum RPM to consider turbine active.
-  RECEIVE_TIMEOUT = 0.2 -- Network receive timeout (seconds).
+  RECEIVE_TIMEOUT = 0.2, -- Network receive timeout (seconds).
+  -- Keep levels under CONFIG to reduce top-level local pressure in this chunk.
+  LOG_LEVEL = {
+    INFO = "INFO",
+    DEBUG = "DEBUG",
+    WARN = "WARN"
+  }
 }
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
 bootstrap.setup({
@@ -86,11 +92,6 @@ local flow_apply_helpers = require("nodes.rt.flow_apply_helpers")
 local reactor_steam_guard = require("nodes.rt.reactor_steam_guard")
 local discovery_runtime = require("nodes.rt.discovery_runtime")
 local health_payload = require("nodes.rt.health_payload")
-local LOG_LEVEL = {
-  INFO = "INFO",
-  DEBUG = "DEBUG",
-  WARN = "WARN"
-}
 local function log(level, message)
   utils.log(CONFIG.LOG_PREFIX, message, level)
 end
@@ -130,14 +131,14 @@ if not logger_init_ok then
   log_status = { enabled = false, startup_action = "init_nonfatal_failure" }
 end
 if log_status and log_status.enabled then
-  log(LOG_LEVEL.INFO, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)))
+  log(CONFIG.LOG_LEVEL.INFO, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)))
 end
-log(LOG_LEVEL.INFO, "Startup")
+log(CONFIG.LOG_LEVEL.INFO, "Startup")
 if config_meta and config_meta.reason then
-  log(LOG_LEVEL.WARN, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.")
+  log(CONFIG.LOG_LEVEL.WARN, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.")
 end
 for _, warning in ipairs(config_warnings) do
-  log(LOG_LEVEL.WARN, warning)
+  log(CONFIG.LOG_LEVEL.WARN, warning)
 end
 local runtime_state = {
   last_applied_rods = nil,
@@ -1559,12 +1560,12 @@ end
 local function dumpPeripherals()
   for _, name in ipairs(peripheral.getNames()) do
     local pType = peripheral.getType(name)
-    log(LOG_LEVEL.INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
+    log(CONFIG.LOG_LEVEL.INFO, "Peripheral: " .. name .. " type=" .. tostring(pType))
 
     local methods = utils.safe_get_methods(name) or {}
     if methods then
       for _, m in ipairs(methods) do
-        log(LOG_LEVEL.DEBUG, "  method: " .. m)
+        log(CONFIG.LOG_LEVEL.DEBUG, "  method: " .. m)
       end
     end
   end
@@ -1765,9 +1766,9 @@ local function init_monitor()
   local monitor_name_or_err
   runtime_ctx.monitor, monitor_name_or_err = monitor_ui.init(monitor_adapter, config.runtime_ctx.monitor, config.monitor_scale)
   if not runtime_ctx.monitor then
-    log(LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no runtime_ctx.monitor available"))
+    log(CONFIG.LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no runtime_ctx.monitor available"))
   elseif monitor_name_or_err then
-    log(LOG_LEVEL.INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
+    log(CONFIG.LOG_LEVEL.INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
   end
 end
 
