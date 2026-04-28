@@ -100,3 +100,19 @@
    - `python3 tests/rt_main_parse_guard_test.py`
 4. **Optional lokal mit Lua-Interpreter**: ausgewählte `.lua`-Regressionen für Installer/MASTER/ENERGY/Support ergänzend ausführen.
 5. **Wichtig**: `tests/rt_main_structure_guard_test.py` ist ein RT-Größen-Guard und gehört in einen separaten RT-Audit-Track (kein Non-RT-Abschlusskriterium).
+
+## Audit-Protokoll (2026-04-27)
+
+Durchgeführter Code-/Funktionsaudit mit Fokus auf Fehlererkennung bei unverändertem Laufzeitverhalten:
+
+1. Erfolgreich ausgeführt:
+   - `python3 tests/cc_parse_guard_test.py`
+   - `python3 tests/rt_main_parse_guard_test.py`
+   - `python3 tests/energy_scope_regression_test.py`
+   - `python3 tests/energy_persistent_topology_regression_test.py`
+   - `python3 tests/manifest_entrypoint_require_coverage_test.py`
+2. Ergebnis:
+   - Alle oben genannten Guards liefen erfolgreich durch.
+   - Keine regressionsrelevanten Codefehler im geprüften Scope festgestellt.
+3. Bekannte Umgebungsgrenze im Audit-Container:
+   - Lua-Interpreter (`lua`) ist nicht installiert; direkte `.lua`-Regressionstests konnten hier nicht ausgeführt werden und müssen in einer CC-/Lua-fähigen Umgebung nachgezogen werden.
