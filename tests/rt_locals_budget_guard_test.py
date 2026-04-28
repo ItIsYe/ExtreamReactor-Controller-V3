@@ -22,6 +22,7 @@ proc = subprocess.run(
         "140",
         "--function-limit",
         "170",
+        "--require-real-parse",
     ],
     capture_output=True,
     text=True,

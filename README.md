@@ -179,7 +179,7 @@ On launch it shows a simple menu:
 5. Writes the selected role config into the staged tree.
 6. Commits stage activation by moving current `/xreactor` to `/xreactor_backup_prev`, moving stage to `/xreactor`, and removing backup after successful commit.
 7. Writes `/startup` with `shell.run("/xreactor/start.lua")`, unless an existing `/startup` looks unrelated to XReactor.
-8. Logs progress to `/xreactor_logs/installer.log`.
+8. Logs progress to `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`.
 
 ### Standalone bootstrap guarantee
 
@@ -203,7 +203,7 @@ This means a fresh machine only needs the single root `installer` file to begin 
 5. Copies existing `/xreactor/config` into stage and validates staged files/hashes.
 6. Commits stage activation by moving active `/xreactor` to `/xreactor_backup_prev`, activating `/xreactor_stage` as `/xreactor`, and deleting backup after successful commit.
 7. Rewrites/ensures the XReactor startup file at `/startup` if the existing startup belongs to XReactor.
-8. Logs progress to `/xreactor_logs/installer.log`.
+8. Logs progress to `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`.
 
 ### Download validation
 
@@ -277,7 +277,7 @@ Deploy order must remain consistent: publish files first, then `manifest.lua` (o
 - Install root: `/xreactor`
 - Stage root (temporary): `/xreactor_stage`
 - Backup root during activation (temporary): `/xreactor_backup_prev`
-- Installer log: `/xreactor_logs/installer.log`
+- Installer log: `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`
 - Role selection file: `/xreactor/config/role.lua`
 - Startup file: `/startup`
 
@@ -344,7 +344,7 @@ Important current behavior:
 
 The installer always appends to:
 
-- `/xreactor_logs/installer.log`
+- `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`
 
 ### Runtime logging
 
@@ -481,7 +481,7 @@ If `installer` is missing locally, re-download it first.
 
 Work from the current implementation, not older installer docs:
 
-1. Open `/xreactor_logs/installer.log` and read the last error.
+1. Open `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)` and read the last error.
    - Hash mismatch logs now include: affected file, expected hash, actual hash, source URL, manifest id, release id, and resolved source ref.
 2. Make sure HTTP access is enabled in CC:Tweaked, because the installer uses `http.get`.
 3. Make sure you used the **raw** GitHub URL, not a blob page.

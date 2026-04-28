@@ -22,7 +22,7 @@ for _, snippet in ipairs(main_checks) do
   end
 end
 
-if not storage:find("name:match(\"^installer(?:_[a-z0-9_%%-]+)?%%.log%%.%d+$\")", 1, true) then
+if not storage:find("name:match(\"^installer(?:_[a-z0-9_%-]+)?%.log%.%d+$\")", 1, true) then
   error("installer storage rotation guard missing installer role log pattern")
 end
 

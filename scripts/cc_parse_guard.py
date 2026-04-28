@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 TOKEN_RE = re.compile(r"\.{3}|==|~=|<=|>=|[A-Za-z_][A-Za-z0-9_]*|\n|.")
@@ -115,12 +117,31 @@ def analyze(path: Path):
     return chunk_locals, fn_reports
 
 
+def real_parse(path: Path):
+    luac = shutil.which("luac") or shutil.which("luac5.1") or shutil.which("luac5.2") or shutil.which("luac5.3") or shutil.which("luac5.4")
+    if luac:
+        proc = subprocess.run([luac, "-p", str(path)], capture_output=True, text=True)
+        if proc.returncode == 0:
+            return True, f"luac:{luac}", ""
+        return False, f"luac:{luac}", (proc.stderr or proc.stdout or "").strip()
+
+    luajit = shutil.which("luajit")
+    if luajit:
+        proc = subprocess.run([luajit, "-b", str(path), "/dev/null"], capture_output=True, text=True)
+        if proc.returncode == 0:
+            return True, f"luajit:{luajit}", ""
+        return False, f"luajit:{luajit}", (proc.stderr or proc.stdout or "").strip()
+
+    return None, "none", "no luac/luajit parser available"
+
+
 def main():
     ap=argparse.ArgumentParser(description='Conservative CC parser guard for local-variable pressure')
     ap.add_argument('--file', action='append', dest='files', default=[])
     ap.add_argument('--chunk-limit', type=int, default=190)
     ap.add_argument('--function-limit', type=int, default=170)
     ap.add_argument('--max-bytes', type=int, default=120000)
+    ap.add_argument('--require-real-parse', action='store_true', help='Require actual Lua parser success (luac or lupa.load)')
     args=ap.parse_args()
 
     files=args.files or ['xreactor/nodes/rt/main.lua']
@@ -138,6 +159,14 @@ def main():
         for fn in funcs:
             if fn['locals'] > args.function_limit:
                 failures.append(f"{p}: function at line {fn['line']} locals {fn['locals']} > {args.function_limit}")
+        if args.require_real_parse:
+            ok, parser_used, err = real_parse(p)
+            if ok is None:
+                failures.append(f"{p}: real parse unavailable ({err})")
+            elif not ok:
+                failures.append(f"{p}: real parse failed via {parser_used}: {err}")
+            else:
+                print(f"{p}: real_parse=ok parser={parser_used}")
 
     if failures:
         print('CC parse guard failed:')
