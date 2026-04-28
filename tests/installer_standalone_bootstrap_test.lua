@@ -9,6 +9,8 @@ local source = read("installer")
 
 local required = {
   "ensure_installer_runtime",
+  "resolve_release_ref",
+  "local_release_path = constants.INSTALL_ROOT .. \"/release.lua\"",
   "installer_main.lua",
   "installer_http.lua",
   "installer_manifest.lua",
