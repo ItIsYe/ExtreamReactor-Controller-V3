@@ -95,7 +95,7 @@ function M.cleanup_stage_and_logs(ctx, opts)
   end
   if ctx.fs.exists(ctx.constants.LOG_DIR) and ctx.fs.isDir(ctx.constants.LOG_DIR) then
     for _, name in ipairs(ctx.fs.list(ctx.constants.LOG_DIR)) do
-      if name:match("^installer(?:_[a-z0-9_%-]+)?%.log%.%d+$") then
+      if name:match("^installer_[a-z0-9_%-]+%.log%.%d+$") then
         local rotated = ctx.fs.combine(ctx.constants.LOG_DIR, name)
         if ctx.fs.exists(rotated) then
           reclaimed.rotated = reclaimed.rotated + math.max(0, tonumber(ctx.fs.getSize(rotated)) or 0)
