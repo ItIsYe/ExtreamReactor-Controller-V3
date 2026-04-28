@@ -68,7 +68,7 @@ local registry_lib = require("core.registry")
 local fluid = require("core.fluid")
 local reactor_adapter = require("adapters.reactor")
 local turbine_adapter = require("adapters.turbine")
-local monitor_adapter = require("adapters.monitor")
+local monitor_adapter = require("adapters.runtime_ctx.monitor")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local discovery_service = require("services.discovery_service")
@@ -77,7 +77,7 @@ local control_service = require("services.control_service")
 local turbine_regulator = require("core.turbine_regulator")
 local monitor_ui = require("nodes.rt.monitor_ui")
 local state_handlers = require("nodes.rt.state_handlers")
-local status_snapshot_lib = require("nodes.rt.status_snapshot")
+local status_snapshot_lib = require("nodes.rt.runtime_ctx.status_snapshot")
 local startup_diagnostics = require("nodes.rt.startup_diagnostics")
 local module_lifecycle = require("nodes.rt.module_lifecycle")
 local command_handler = require("nodes.rt.command_handler")
@@ -139,14 +139,16 @@ end
 for _, warning in ipairs(config_warnings) do
   log(LOG_LEVEL.WARN, warning)
 end
-local last_applied_rods = nil
-local last_rod_apply_ts = 0
-local last_rod_change_ts = 0
-local last_rod_direction = nil
-local last_reactor_demand = 0
-local steam_tank_name = nil
-local reactor_rails_state = rails.new_state()
-local reactor_steam_guard_state = {}
+local runtime_state = {
+  last_applied_rods = nil,
+  last_rod_apply_ts = 0,
+  last_rod_change_ts = 0,
+  last_rod_direction = nil,
+  last_reactor_demand = 0,
+  steam_tank_name = nil,
+  reactor_rails_state = rails.new_state(),
+  reactor_steam_guard_state = {}
+}
 config_normalizer.apply_runtime_defaults(config, DEFAULT_CONFIG, {
   target_rpm = CONFIG.TARGET_RPM,
   min_flow = CONFIG.MIN_FLOW,
@@ -181,30 +183,32 @@ local devices = {
   last_scan_ts = nil,
   discovery_log_signature = nil
 }
-local master_alerts = {}
-local peripherals = { reactors = {}, turbines = {} }
-local targets = { power = 0, steam = 0, rpm = CONFIG.TARGET_RPM, enable_reactors = true, enable_turbines = true }
-local modules = {}
-local active_startup = nil
-local startup_queue = {}
-local startup_started_ms = nil
-local startup_watchdog_tripped = false
-local master_seen = os.epoch("utc")
-local last_heartbeat = 0
-local last_reactor_tick = 0
-local last_reactor_debug_log = 0
-local status_snapshot = nil
-local last_snapshot = 0
-local monitor = nil
-local monitor_name = nil
-local last_actuator_update = 0
-local last_command = nil
-local last_command_ts = nil
-local warned = {}
-local autonom_state = { reactors = {}, turbines = {} }
-local autonom_control_logged = false
-local capability_cache = { reactors = {}, turbines = {} }
-local reactor_ctrl = {}
+local runtime_ctx = {
+  master_alerts = {},
+  peripherals = { reactors = {}, turbines = {} },
+  targets = { power = 0, steam = 0, rpm = CONFIG.TARGET_RPM, enable_reactors = true, enable_turbines = true },
+  modules = {},
+  active_startup = nil,
+  startup_queue = {},
+  startup_started_ms = nil,
+  startup_watchdog_tripped = false,
+  master_seen = os.epoch("utc"),
+  last_heartbeat = 0,
+  last_reactor_tick = 0,
+  last_reactor_debug_log = 0,
+  status_snapshot = nil,
+  last_snapshot = 0,
+  monitor = nil,
+  monitor_name = nil,
+  last_actuator_update = 0,
+  last_command = nil,
+  last_command_ts = nil,
+  warned = {},
+  autonom_state = { reactors = {}, turbines = {} },
+  autonom_control_logged = false,
+  capability_cache = { reactors = {}, turbines = {} },
+  reactor_ctrl = {}
+}
 local cache
 local build_modules
 local refresh_module_peripherals
@@ -230,8 +234,8 @@ local TURBINE_CONTROL = {
   }
 }
 local function get_target_rpm()
-  if current_state == STATE.MASTER and type(targets.rpm) == "number" and targets.rpm > 0 then
-    return targets.rpm
+  if current_state == STATE.MASTER and type(runtime_ctx.targets.rpm) == "number" and runtime_ctx.targets.rpm > 0 then
+    return runtime_ctx.targets.rpm
   end
   return CONFIG.TARGET_RPM
 end
@@ -276,22 +280,22 @@ do
   end
 end
 local function resolve_steam_tank_name()
-  if steam_tank_name and peripheral.isPresent(steam_tank_name) then
-    return steam_tank_name
+  if runtime_state.steam_tank_name and peripheral.isPresent(runtime_state.steam_tank_name) then
+    return runtime_state.steam_tank_name
   end
   for _, name in ipairs(peripheral.getNames()) do
     local ptype = peripheral.getType(name)
     if ptype and string.find(ptype, "ultimate_fluid_tank") then
-      steam_tank_name = name
-      return steam_tank_name
+      runtime_state.steam_tank_name = name
+      return runtime_state.steam_tank_name
     end
   end
   for _, name in ipairs(peripheral.getNames()) do
     if string.find(string.lower(name), "steam") then
       local tank = utils.safe_wrap(name)
       if tank and (tank.tanks or tank.getFluidAmount) then
-        steam_tank_name = name
-        return steam_tank_name
+        runtime_state.steam_tank_name = name
+        return runtime_state.steam_tank_name
       end
     end
   end
@@ -318,7 +322,7 @@ local function read_reactor_steam_amount()
   local total = 0
   local found = false
   for _, name in ipairs(config.reactors or {}) do
-    local reactor = peripherals.reactors[name]
+    local reactor = runtime_ctx.peripherals.reactors[name]
     if not reactor then
       local wrapped, err = utils.safe_wrap(name)
       if wrapped then
@@ -346,7 +350,7 @@ local function read_reactor_internal_steam_fill_ratio()
   local total_capacity = 0
   local found = false
   for _, name in ipairs(config.reactors or {}) do
-    local reactor = peripherals.reactors[name]
+    local reactor = runtime_ctx.peripherals.reactors[name]
     if not reactor then
       local wrapped = utils.safe_wrap(name)
       if wrapped then
@@ -384,7 +388,7 @@ local function get_total_steam_demand()
     local ctrl = get_turbine_ctrl(name)
     local rpm = ctrl.rpm
     if type(rpm) ~= "number" then
-      local turbine = peripherals.turbines[name]
+      local turbine = runtime_ctx.peripherals.turbines[name]
       if not turbine then
         local wrapped, err = utils.safe_wrap(name)
         if wrapped then
@@ -518,7 +522,7 @@ local function init_turbine_ctrl()
   for key in pairs(turbine_ctrl) do
     turbine_ctrl[key] = nil
   end
-  autonom_state.turbines = turbine_ctrl
+  runtime_ctx.autonom_state.turbines = turbine_ctrl
   local turbines = config.turbines or {}
   log("INFO", "Detected " .. tostring(#turbines) .. " turbines")
   if #turbines < 1 then
@@ -543,11 +547,11 @@ local function init_turbine_ctrl()
   end
 end
 local function get_device_caps(kind, name)
-  capability_cache[kind] = capability_cache[kind] or {}
-  if not capability_cache[kind][name] or peripheral.isPresent(name) then
-    capability_cache[kind][name] = build_capabilities(name)
+  runtime_ctx.capability_cache[kind] = runtime_ctx.capability_cache[kind] or {}
+  if not runtime_ctx.capability_cache[kind][name] or peripheral.isPresent(name) then
+    runtime_ctx.capability_cache[kind][name] = build_capabilities(name)
   end
-  return capability_cache[kind][name]
+  return runtime_ctx.capability_cache[kind][name]
 end
 local function setReactorActive(reactor, caps, active)
   if caps.setActive then
@@ -588,18 +592,18 @@ local function setTurbineActive(turbine, caps, active)
   return true
 end
 local function ensure_reactor_ctrl(name)
-  local ctrl = reactor_ctrl[name]
+  local ctrl = runtime_ctx.reactor_ctrl[name]
   if not ctrl then
     ctrl = { last_steam_pct = nil, last_applied = nil, last_adjust = 0, initialized = false }
-    reactor_ctrl[name] = ctrl
+    runtime_ctx.reactor_ctrl[name] = ctrl
   end
   return ctrl
 end
 local function init_reactor_ctrl()
-  reactor_ctrl = {}
-  reactor_steam_guard_state = {}
+  runtime_ctx.reactor_ctrl = {}
+  runtime_state.reactor_steam_guard_state = {}
   for _, name in ipairs(config.reactors or {}) do
-    reactor_ctrl[name] = {
+    runtime_ctx.reactor_ctrl[name] = {
       last_steam_pct = nil,
       last_applied = nil,
       last_adjust = 0,
@@ -609,7 +613,7 @@ local function init_reactor_ctrl()
 end
 local function applyReactorRods(target, allow_overmax, source)
   local now = os.clock()
-  if now - last_rod_apply_ts < CONFIG.MIN_APPLY_INTERVAL then
+  if now - runtime_state.last_rod_apply_ts < CONFIG.MIN_APPLY_INTERVAL then
     return false
   end
   if type(target) ~= "number" then
@@ -625,12 +629,12 @@ local function applyReactorRods(target, allow_overmax, source)
     clamped = cap_clamped
   elseif allow_overmax then log("DEBUG", "ROD_APPLY_SAFE_OVERRIDE source=" .. tostring(source) .. " requested=" .. tostring(target) .. " clamped=" .. tostring(clamped))
   end
-  if last_applied_rods == clamped then
-    autonom_state.pending_rod_direction = nil
+  if runtime_state.last_applied_rods == clamped then
+    runtime_ctx.autonom_state.pending_rod_direction = nil
     return false
   end
   local applied = false
-  for name, ctrl in pairs(reactor_ctrl) do
+  for name, ctrl in pairs(runtime_ctx.reactor_ctrl) do
     local ok_apply, err_apply = reactor_adapter.apply_rod_level(name, clamped, CONFIG.LOG_PREFIX)
     if ok_apply then
       ctrl.last_applied = clamped
@@ -643,10 +647,10 @@ local function applyReactorRods(target, allow_overmax, source)
   if not applied then
     return false
   end
-  local previous_applied = last_applied_rods
-  last_applied_rods = clamped
-  last_rod_apply_ts = now
-  local applied_direction = autonom_state.pending_rod_direction
+  local previous_applied = runtime_state.last_applied_rods
+  runtime_state.last_applied_rods = clamped
+  runtime_state.last_rod_apply_ts = now
+  local applied_direction = runtime_ctx.autonom_state.pending_rod_direction
   if applied_direction == nil and type(previous_applied) == "number" then
     if clamped < previous_applied then
       applied_direction = "DOWN"
@@ -655,15 +659,15 @@ local function applyReactorRods(target, allow_overmax, source)
     end
   end
   if applied_direction ~= nil then
-    last_rod_change_ts = now
-    last_rod_direction = applied_direction
+    runtime_state.last_rod_change_ts = now
+    runtime_state.last_rod_direction = applied_direction
   end
-  autonom_state.pending_rod_direction = nil
+  runtime_ctx.autonom_state.pending_rod_direction = nil
   log("INFO", "Applied rods " .. tostring(clamped) .. "% source=" .. tostring(source))
   return true
 end
 local function apply_initial_reactor_rods()
-  for name, ctrl in pairs(reactor_ctrl) do
+  for name, ctrl in pairs(runtime_ctx.reactor_ctrl) do
     ctrl.last_applied = nil
     log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(CONFIG.INITIAL_ROD_LEVEL) .. "%")
   end
@@ -677,7 +681,7 @@ local function read_current_rods()
       ctrl.last_known_rods = current_rods
       return current_rods
     end
-    local ctrl = reactor_ctrl[name]
+    local ctrl = runtime_ctx.reactor_ctrl[name]
     if ctrl and type(ctrl.last_known_rods) == "number" then
       return ctrl.last_known_rods
     end
@@ -686,23 +690,23 @@ local function read_current_rods()
 end
 local function log_reactor_control_state()
   local now = os.clock()
-  if now - last_reactor_debug_log < 5 then
+  if now - runtime_ctx.last_reactor_debug_log < 5 then
     return
   end
-  last_reactor_debug_log = now
-  local sample_rods = read_current_rods() or last_applied_rods or "n/a"
-  local tick_age = now - last_reactor_tick
+  runtime_ctx.last_reactor_debug_log = now
+  local sample_rods = read_current_rods() or runtime_state.last_applied_rods or "n/a"
+  local tick_age = now - runtime_ctx.last_reactor_tick
   log("DEBUG", "ReactorCtrl state=" .. tostring(current_state) .. " rods=" .. tostring(sample_rods) .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
 end
 local function log_reactor_control_tick()
-  local sample_demand = last_reactor_demand
-  local age = os.clock() - last_rod_change_ts
+  local sample_demand = runtime_state.last_reactor_demand
+  local age = os.clock() - runtime_state.last_rod_change_ts
   log(
     "DEBUG",
     "ReactorCtrl demand="
       .. tostring(sample_demand)
       .. " dir="
-      .. tostring(last_rod_direction)
+      .. tostring(runtime_state.last_rod_direction)
       .. " age="
       .. string.format("%.1f", age)
   )
@@ -719,15 +723,15 @@ local function controlReactor()
     return
   end
   local steam_margin = available_steam - total_steam_demand
-  last_reactor_demand = steam_margin
+  runtime_state.last_reactor_demand = steam_margin
   local current_rods = read_current_rods()
   if type(current_rods) ~= "number" then
     log("ERROR", "Reactor control rods unreadable")
     return
   end
   local rod_cfg = config.rails and config.rails.reactor_rods or {}
-  local smoothed_margin = rails.smooth(reactor_rails_state, "steam_margin", steam_margin, rod_cfg.ema_alpha)
-  local target_rods, direction = rails.step(current_rods, smoothed_margin, reactor_rails_state, rod_cfg, os.clock())
+  local smoothed_margin = rails.smooth(runtime_state.reactor_rails_state, "steam_margin", steam_margin, rod_cfg.ema_alpha)
+  local target_rods, direction = rails.step(current_rods, smoothed_margin, runtime_state.reactor_rails_state, rod_cfg, os.clock())
   target_rods = safety.clamp(target_rods, CONFIG.ROD_MIN, CONFIG.ROD_MAX)
   do
     local cfg_min, cfg_max = get_effective_regulator_rod_caps()
@@ -756,7 +760,7 @@ local function controlReactor()
       target_rods,
       internal_fill_ratio,
       steam_guard_cfg,
-      reactor_steam_guard_state
+      runtime_state.reactor_steam_guard_state
     )
     if type(guard_target) == "number" then
       target_rods = guard_target
@@ -764,19 +768,19 @@ local function controlReactor()
   end
   local min_coolant_ratio
   for _, name in ipairs(config.reactors or {}) do
-    local reactor, sample = peripherals.reactors[name], nil
+    local reactor, sample = runtime_ctx.peripherals.reactors[name], nil
     if reactor then sample = fluid.read_coolant_sample(reactor, safe_wrapped_call) end
     local ratio = sample and sample.coolant_ratio or nil
     if type(ratio) == "number" and (min_coolant_ratio == nil or ratio < min_coolant_ratio) then min_coolant_ratio = ratio end
   end
-  local applied_rods, ramp_diag = rails.ramp_target(current_rods, target_rods, rod_cfg, { state = reactor_rails_state, now = os.clock(), coolant_ratio = min_coolant_ratio, safety_min_water = config.safety and config.safety.min_water })
+  local applied_rods, ramp_diag = rails.ramp_target(current_rods, target_rods, rod_cfg, { state = runtime_state.reactor_rails_state, now = os.clock(), coolant_ratio = min_coolant_ratio, safety_min_water = config.safety and config.safety.min_water })
   applied_rods = safety.clamp(applied_rods, CONFIG.ROD_MIN, CONFIG.ROD_MAX)
   if applied_rods == current_rods then
     if ramp_diag and ramp_diag.reason == "RAMP_APPLIED" then log("DEBUG", "ROD_RAMP_APPLIED requested_delta=" .. tostring(ramp_diag.requested_delta) .. " applied_delta=" .. tostring(ramp_diag.applied_delta) .. " current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods)) end
     return
   end
   if direction ~= 0 then
-    autonom_state.pending_rod_direction = direction > 0 and "UP" or "DOWN"
+    runtime_ctx.autonom_state.pending_rod_direction = direction > 0 and "UP" or "DOWN"
   end
   local applied = applyReactorRods(applied_rods, false, "AUTO_REGULATOR")
   if applied then
@@ -801,19 +805,19 @@ local function updateReactorControl()
     applyReactorRods(CONFIG.ROD_MAX, true, "SAFE_TICK")
     return
   end
-  if now - last_reactor_tick < config.autonom.reactor_adjust_interval then
+  if now - runtime_ctx.last_reactor_tick < config.autonom.reactor_adjust_interval then
     return
   end
-  last_reactor_tick = now
+  runtime_ctx.last_reactor_tick = now
   log_reactor_control_state()
   controlReactor()
   log_reactor_control_tick()
 end
 local function warn_once(key, message)
-  if warned[key] then
+  if runtime_ctx.warned[key] then
     return
   end
-  warned[key] = true
+  runtime_ctx.warned[key] = true
   log("WARN", message)
 end
 local function warn_unsupported(name, reason)
@@ -1397,8 +1401,8 @@ local function updateControl()
         goto continue_control_reactor
       end
       ensure_reactor_ctrl(name)
-      if not autonom_control_logged then
-        autonom_control_logged = true
+      if not runtime_ctx.autonom_control_logged then
+        runtime_ctx.autonom_control_logged = true
         log("INFO", "AUTONOM actuator control active")
       end
       ::continue_control_reactor::
@@ -1465,8 +1469,8 @@ local function updateControl()
       goto continue_control_turbine
     end
     eval_decision = eval_decision + 1
-    if not autonom_control_logged then
-      autonom_control_logged = true
+    if not runtime_ctx.autonom_control_logged then
+      runtime_ctx.autonom_control_logged = true
       log("INFO", "AUTONOM actuator control active")
     end
     ::continue_control_turbine::
@@ -1499,8 +1503,8 @@ local function build_mode_control_context()
     STATE = STATE,
     TARGET_RPM = CONFIG.TARGET_RPM,
     config = config,
-    modules = modules,
-    targets = targets,
+    modules = runtime_ctx.modules,
+    targets = runtime_ctx.targets,
     allowed_transitions = allowed_transitions,
     log = log,
     set_reactors_active = set_reactors_active,
@@ -1508,7 +1512,7 @@ local function build_mode_control_context()
     apply_safe_controls = apply_safe_controls,
     is_master_connected = is_master_connected,
     ramp_towards = ramp_towards,
-    get_active_startup = function() return active_startup end,
+    get_active_startup = function() return runtime_ctx.active_startup end,
     get_current_state = function() return current_state end,
     set_current_state = function(value) current_state = value end,
     get_node_state_machine = function() return node_state_machine end
@@ -1530,9 +1534,9 @@ local function build_discovery_context()
     config = config,
     configured_reactors = configured_reactors,
     configured_turbines = configured_turbines,
-    peripherals = peripherals,
+    peripherals = runtime_ctx.peripherals,
     utils = utils,
-    capability_cache = capability_cache,
+    capability_cache = runtime_ctx.capability_cache,
     build_capabilities = build_capabilities,
     log = log,
     log_prefix = CONFIG.LOG_PREFIX,
@@ -1542,7 +1546,7 @@ local function build_discovery_context()
     discovery_log = discovery_log,
     devices = devices,
     registry = registry,
-    monitor_name = monitor_name,
+    monitor_name = runtime_ctx.monitor_name,
     build_modules = function() build_modules() end,
     refresh_module_peripherals = function() refresh_module_peripherals() end
   }
@@ -1574,11 +1578,11 @@ local function discover()
 end
 
 build_modules = function()
-  modules = discovery_runtime.build_modules(devices)
+  runtime_ctx.modules = discovery_runtime.build_modules(devices)
 end
 
 refresh_module_peripherals = function()
-  discovery_runtime.refresh_module_peripherals(modules, peripherals, get_device_caps)
+  discovery_runtime.refresh_module_peripherals(runtime_ctx.modules, runtime_ctx.peripherals, get_device_caps)
 end
 
 local function ramp_duration(profile)
@@ -1589,7 +1593,7 @@ local function build_health_payload_context()
   return {
     comms = comms,
     constants = constants,
-    master_seen = master_seen,
+    master_seen = runtime_ctx.master_seen,
     hb = hb,
     devices = devices,
     registry = registry,
@@ -1598,7 +1602,7 @@ local function build_health_payload_context()
     configured_turbines = configured_turbines,
     health = health,
     warn_once = warn_once,
-    startup_watchdog_tripped = startup_watchdog_tripped,
+    startup_watchdog_tripped = runtime_ctx.startup_watchdog_tripped,
     rt_health = rt_health,
     configured_caps = configured_caps
   }
@@ -1625,14 +1629,14 @@ local function build_status_payload(status_level)
     status_level = status_level,
     node_state_machine = node_state_machine,
     current_state = current_state,
-    targets = targets,
+    targets = runtime_ctx.targets,
     build_health_payload = build_health_payload,
-    status_snapshot = status_snapshot,
+    status_snapshot = runtime_ctx.status_snapshot,
     devices = devices,
     registry = registry,
-    modules = modules,
-    active_startup = active_startup,
-    startup_queue = startup_queue,
+    modules = runtime_ctx.modules,
+    active_startup = runtime_ctx.active_startup,
+    startup_queue = runtime_ctx.startup_queue,
     turbine_adapter = turbine_adapter,
     reactor_adapter = reactor_adapter,
     log_prefix = CONFIG.LOG_PREFIX
@@ -1674,11 +1678,11 @@ local function build_module_lifecycle_context()
     constants = constants,
     STATE = STATE,
     config = config,
-    peripherals = peripherals,
+    peripherals = runtime_ctx.peripherals,
     binding = binding,
     configured_reactors = configured_reactors,
     configured_turbines = configured_turbines,
-    modules = modules,
+    modules = runtime_ctx.modules,
     comms = comms,
     RPM_TOL = CONFIG.RPM_TOLERANCE,
     TURBINE_MODE = TURBINE_CONTROL.mode,
@@ -1702,8 +1706,8 @@ local function build_module_lifecycle_context()
     evaluate_reactor_coolant = evaluate_reactor_coolant,
     get_effective_regulator_rod_caps = get_effective_regulator_rod_caps,
     read_current_rods = read_current_rods,
-    get_active_startup = function() return active_startup end,
-    set_active_startup = function(value) active_startup = value end,
+    get_active_startup = function() return runtime_ctx.active_startup end,
+    set_active_startup = function(value) runtime_ctx.active_startup = value end,
     get_current_state = function() return current_state end,
     current_state = function() return current_state end,
     setState = setState,
@@ -1735,7 +1739,7 @@ local function clamp_autonom_targets()
 end
 
 local function note_master_seen()
-  master_seen = os.epoch("utc")
+  runtime_ctx.master_seen = os.epoch("utc")
 end
 
 local function update_status_snapshot()
@@ -1759,24 +1763,24 @@ end
 
 local function init_monitor()
   local monitor_name_or_err
-  monitor, monitor_name_or_err = monitor_ui.init(monitor_adapter, config.monitor, config.monitor_scale)
-  if not monitor then
-    log(LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no monitor available"))
+  runtime_ctx.monitor, monitor_name_or_err = monitor_ui.init(monitor_adapter, config.runtime_ctx.monitor, config.monitor_scale)
+  if not runtime_ctx.monitor then
+    log(LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no runtime_ctx.monitor available"))
   elseif monitor_name_or_err then
     log(LOG_LEVEL.INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
   end
 end
 
 local function update_monitor()
-  last_status_snapshot = monitor_ui.update(monitor, {
+  last_status_snapshot = monitor_ui.update(runtime_ctx.monitor, {
     config = config,
     devices = devices,
     registry = registry,
     comms = comms,
     constants = constants,
-    master_alerts = master_alerts,
-    last_command = last_command,
-    last_command_ts = last_command_ts,
+    master_alerts = runtime_ctx.master_alerts,
+    last_command = runtime_ctx.last_command,
+    last_command_ts = runtime_ctx.last_command_ts,
     current_state = current_state,
     configured_reactors = configured_reactors,
     configured_turbines = configured_turbines,
@@ -1795,14 +1799,14 @@ local function update_monitor()
 end
 
 local function reset_startup_watchdog()
-  startup_started_ms = nil
-  startup_watchdog_tripped = false
+  runtime_ctx.startup_started_ms = nil
+  runtime_ctx.startup_watchdog_tripped = false
 end
 
 local function handle_startup_timeout()
   startup_diagnostics.handle_startup_timeout({
-    startup_watchdog_tripped = startup_watchdog_tripped,
-    startup_started_ms = startup_started_ms,
+    startup_watchdog_tripped = runtime_ctx.startup_watchdog_tripped,
+    startup_started_ms = runtime_ctx.startup_started_ms,
     comms = comms,
     config = config,
     devices = devices,
@@ -1812,12 +1816,12 @@ local function handle_startup_timeout()
     log = log,
     update_status_snapshot = update_status_snapshot,
     broadcast_status = broadcast_status,
-    active_startup = active_startup,
-    startup_queue = startup_queue
+    active_startup = runtime_ctx.active_startup,
+    startup_queue = runtime_ctx.startup_queue
   })
-  startup_watchdog_tripped = true
-  active_startup = nil
-  startup_queue = {}
+  runtime_ctx.startup_watchdog_tripped = true
+  runtime_ctx.active_startup = nil
+  runtime_ctx.startup_queue = {}
 end
 local states
 
@@ -1827,9 +1831,9 @@ local function build_state_context()
     STATE = STATE,
     config = config,
     devices = devices,
-    modules = modules,
+    modules = runtime_ctx.modules,
     comms = comms,
-    targets = targets,
+    targets = runtime_ctx.targets,
     reset_startup_watchdog = reset_startup_watchdog,
     scram = scram,
     monitor_master = monitor_master,
@@ -1840,14 +1844,14 @@ local function build_state_context()
     clamp_autonom_targets = clamp_autonom_targets,
     add_alarm = add_alarm,
     handle_startup_timeout = handle_startup_timeout,
-    get_startup_started_ms = function() return startup_started_ms end,
-    set_startup_started_ms = function(value) startup_started_ms = value end,
-    get_startup_watchdog_tripped = function() return startup_watchdog_tripped end,
-    set_startup_watchdog_tripped = function(value) startup_watchdog_tripped = value end,
-    get_startup_queue = function() return startup_queue end,
-    set_startup_queue = function(value) startup_queue = value end,
-    get_active_startup = function() return active_startup end,
-    set_active_startup = function(value) active_startup = value end,
+    get_startup_started_ms = function() return runtime_ctx.startup_started_ms end,
+    set_startup_started_ms = function(value) runtime_ctx.startup_started_ms = value end,
+    get_startup_watchdog_tripped = function() return runtime_ctx.startup_watchdog_tripped end,
+    set_startup_watchdog_tripped = function(value) runtime_ctx.startup_watchdog_tripped = value end,
+    get_startup_queue = function() return runtime_ctx.startup_queue end,
+    set_startup_queue = function(value) runtime_ctx.startup_queue = value end,
+    get_active_startup = function() return runtime_ctx.active_startup end,
+    set_active_startup = function(value) runtime_ctx.active_startup = value end,
     get_network_id = function() return (comms and comms.network and comms.network.id) or config.node_id end,
     get_current_state = function() return current_state end,
     get_node_state_machine = function() return node_state_machine end
@@ -1860,7 +1864,7 @@ local function build_command_context()
     constants = constants,
     STATE = STATE,
     TARGET_RPM = CONFIG.TARGET_RPM,
-    targets = targets,
+    targets = runtime_ctx.targets,
     node_state_machine = node_state_machine,
     apply_mode = apply_mode,
     request_startup_if_needed = request_startup_if_needed,
@@ -1870,8 +1874,8 @@ local function build_command_context()
     get_network_id = function() return (comms and comms.network and comms.network.id) or config.node_id end,
     get_current_state = function() return current_state end,
     get_states = function() return states or {} end,
-    set_last_command = function(value) last_command = value end,
-    set_last_command_ts = function(value) last_command_ts = value end
+    set_last_command = function(value) runtime_ctx.last_command = value end,
+    set_last_command_ts = function(value) runtime_ctx.last_command_ts = value end
   }
 end
 local handle_command
@@ -1880,7 +1884,7 @@ local function send_heartbeat()
   update_status_snapshot()
   comms:send_heartbeat({ state = node_state_machine.state() })
   broadcast_status(constants.status_levels.OK)
-  last_heartbeat = os.epoch("utc")
+  runtime_ctx.last_heartbeat = os.epoch("utc")
 end
 
 local function control_tick()
@@ -1918,7 +1922,7 @@ local function init()
       if message.role == constants.roles.MASTER then
         note_master_seen()
         if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then
-          master_alerts = message.payload.alerts
+          runtime_ctx.master_alerts = message.payload.alerts
         end
       end
     end
@@ -1967,7 +1971,7 @@ while true do
       monitor_ui.handle_input(event)
     end
   end
-  if os.epoch("utc") - last_heartbeat > hb * 1000 then
+  if os.epoch("utc") - runtime_ctx.last_heartbeat > hb * 1000 then
     send_heartbeat()
   end
   services:tick()
