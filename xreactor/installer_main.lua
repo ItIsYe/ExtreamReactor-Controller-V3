@@ -387,6 +387,21 @@ local function stage_and_verify(ctx, expected)
   end
 end
 
+local function enforce_source_consistency(ctx, manifest)
+  local release_source = tostring(ctx.source_ref or "")
+  local manifest_source = tostring(manifest.source_ref or "")
+  if manifest_source ~= "" and manifest_source ~= "beta" and release_source ~= "" and release_source ~= "beta" and manifest_source ~= release_source then
+    ctx.fatal(string.format(
+      "Manifest source_ref mismatch (release source=%s manifest source_ref=%s)",
+      tostring(release_source),
+      tostring(manifest_source)
+    ))
+  end
+  if release_source ~= "" and release_source ~= "beta" and manifest_source == "beta" then
+    ctx.fatal(string.format("Manifest source_ref is mutable branch 'beta' while release pins %s", tostring(release_source)))
+  end
+end
+
 local function run_install(ctx)
   local role = select_role()
   if not role then
@@ -408,16 +423,7 @@ local function run_install(ctx)
   if not manifest then
     ctx.fatal("Manifest error: " .. tostring(err))
   end
-  if manifest.source_ref and tostring(manifest.source_ref) ~= "beta" and tostring(manifest.source_ref) ~= tostring(ctx.source_ref) then
-    ctx.warn(string.format(
-      "Manifest source_ref mismatch (release source=%s manifest source_ref=%s)",
-      tostring(ctx.source_ref),
-      tostring(manifest.source_ref)
-    ))
-  end
-  if tostring(ctx.source_ref or "") ~= "" and tostring(ctx.source_ref) ~= "beta" and tostring(manifest.source_ref or "") == "beta" then
-    ctx.warn(string.format("Manifest source_ref is mutable branch 'beta' while release pins %s", tostring(ctx.source_ref)))
-  end
+  enforce_source_consistency(ctx, manifest)
 
   local expected = manifest_lib.select_expected_files(manifest, role.label, ctx.constants.INCLUDE_DEV_FILES)
   local storage_plan = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, expected, "install", ctx.constants)
@@ -461,16 +467,7 @@ local function run_update(ctx)
   if not manifest then
     ctx.fatal("Manifest error: " .. tostring(err))
   end
-  if manifest.source_ref and tostring(manifest.source_ref) ~= "beta" and tostring(manifest.source_ref) ~= tostring(ctx.source_ref) then
-    ctx.warn(string.format(
-      "Manifest source_ref mismatch (release source=%s manifest source_ref=%s)",
-      tostring(ctx.source_ref),
-      tostring(manifest.source_ref)
-    ))
-  end
-  if tostring(ctx.source_ref or "") ~= "" and tostring(ctx.source_ref) ~= "beta" and tostring(manifest.source_ref or "") == "beta" then
-    ctx.warn(string.format("Manifest source_ref is mutable branch 'beta' while release pins %s", tostring(ctx.source_ref)))
-  end
+  enforce_source_consistency(ctx, manifest)
 
   ctx.info("Selected role: " .. role_label)
 

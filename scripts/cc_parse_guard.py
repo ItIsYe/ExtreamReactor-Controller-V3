@@ -130,6 +130,13 @@ def real_parse(path: Path, parser_mode: str):
             return True, f"luajit:{luajit}", ""
         return False, f"luajit:{luajit}", (proc.stderr or proc.stdout or "").strip()
 
+    lua = shutil.which("lua") or shutil.which("lua5.1") or shutil.which("lua5.2") or shutil.which("lua5.3") or shutil.which("lua5.4")
+    if lua and parser_mode in ("any", "lua"):
+        proc = subprocess.run([lua, "-e", "assert(loadfile(arg[1]))", str(path)], capture_output=True, text=True)
+        if proc.returncode == 0:
+            return True, f"lua:{lua}", ""
+        return False, f"lua:{lua}", (proc.stderr or proc.stdout or "").strip()
+
     luac = shutil.which("luac") or shutil.which("luac5.1") or shutil.which("luac5.2") or shutil.which("luac5.3") or shutil.which("luac5.4")
     if luac and parser_mode in ("any", "luac"):
         proc = subprocess.run([luac, "-p", str(path)], capture_output=True, text=True)
@@ -151,9 +158,11 @@ def real_parse(path: Path, parser_mode: str):
 
     if parser_mode == "luajit":
         return None, "none", "luajit parser unavailable"
+    if parser_mode == "lua":
+        return None, "none", "lua parser unavailable"
     if parser_mode == "luac":
         return None, "none", "luac parser unavailable"
-    return None, "none", "no luajit/luac/lupa parser available"
+    return None, "none", "no luajit/lua/luac/lupa parser available"
 
 
 def main():
@@ -163,7 +172,7 @@ def main():
     ap.add_argument('--function-limit', type=int, default=170)
     ap.add_argument('--max-bytes', type=int, default=120000)
     ap.add_argument('--require-real-parse', action='store_true', help='Require actual Lua parser success (luac or lupa.load)')
-    ap.add_argument('--parser-mode', choices=['any', 'luajit', 'luac'], default='any', help='Choose parser requirement for real parse checks')
+    ap.add_argument('--parser-mode', choices=['any', 'luajit', 'lua', 'luac'], default='any', help='Choose parser requirement for real parse checks')
     args=ap.parse_args()
 
     files=args.files or ['xreactor/nodes/rt/main.lua']

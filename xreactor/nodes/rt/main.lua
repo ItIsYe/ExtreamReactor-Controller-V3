@@ -72,14 +72,18 @@ local health = require("core.health")
 local machine = require("core.state_machine")
 local registry_lib = require("core.registry")
 local fluid = require("core.fluid")
-local reactor_adapter = require("adapters.reactor")
-local turbine_adapter = require("adapters.turbine")
-local monitor_adapter = require("adapters.runtime_ctx.monitor")
-local service_manager = require("services.service_manager")
-local comms_service = require("services.comms_service")
-local discovery_service = require("services.discovery_service")
-local telemetry_service = require("services.telemetry_service")
-local control_service = require("services.control_service")
+local adapters = {
+  reactor = require("adapters.reactor"),
+  turbine = require("adapters.turbine"),
+  monitor = require("adapters.runtime_ctx.monitor")
+}
+local services_lib = {
+  manager = require("services.service_manager"),
+  comms = require("services.comms_service"),
+  discovery = require("services.discovery_service"),
+  telemetry = require("services.telemetry_service"),
+  control = require("services.control_service")
+}
 local turbine_regulator = require("core.turbine_regulator")
 local monitor_ui = require("nodes.rt.monitor_ui")
 local state_handlers = require("nodes.rt.state_handlers")
@@ -638,7 +642,7 @@ local function applyReactorRods(target, allow_overmax, source)
   end
   local applied = false
   for name, ctrl in pairs(runtime_ctx.reactor_ctrl) do
-    local ok_apply, err_apply = reactor_adapter.apply_rod_level(name, clamped, CONFIG.LOG_PREFIX)
+    local ok_apply, err_apply = adapters.reactor.apply_rod_level(name, clamped, CONFIG.LOG_PREFIX)
     if ok_apply then
       ctrl.last_applied = clamped
       ctrl.last_known_rods = clamped
@@ -678,7 +682,7 @@ local function apply_initial_reactor_rods()
 end
 local function read_current_rods()
   for _, name in ipairs(config.reactors or {}) do
-    local current_rods = reactor_adapter.read_control_rods(name, CONFIG.LOG_PREFIX)
+    local current_rods = adapters.reactor.read_control_rods(name, CONFIG.LOG_PREFIX)
     if type(current_rods) == "number" then
       local ctrl = ensure_reactor_ctrl(name)
       ctrl.last_known_rods = current_rods
@@ -1544,8 +1548,8 @@ local function build_discovery_context()
     log = log,
     log_prefix = CONFIG.LOG_PREFIX,
     binding = binding,
-    reactor_adapter = reactor_adapter,
-    turbine_adapter = turbine_adapter,
+    reactor_adapter = adapters.reactor,
+    turbine_adapter = adapters.turbine,
     discovery_log = discovery_log,
     devices = devices,
     registry = registry,
@@ -1640,8 +1644,8 @@ local function build_status_payload(status_level)
     modules = runtime_ctx.modules,
     active_startup = runtime_ctx.active_startup,
     startup_queue = runtime_ctx.startup_queue,
-    turbine_adapter = turbine_adapter,
-    reactor_adapter = reactor_adapter,
+    turbine_adapter = adapters.turbine,
+    reactor_adapter = adapters.reactor,
     log_prefix = CONFIG.LOG_PREFIX
   })
 end
@@ -1754,8 +1758,8 @@ local function update_status_snapshot()
     config = config,
     read_turbine_rpm = read_turbine_rpm,
     read_turbine_flow = read_turbine_flow,
-    reactor_adapter = reactor_adapter,
-    turbine_adapter = turbine_adapter,
+    reactor_adapter = adapters.reactor,
+    turbine_adapter = adapters.turbine,
     log_prefix = "RT",
     get_device_caps = get_device_caps,
     get_available_steam = get_available_steam,
@@ -1766,7 +1770,7 @@ end
 
 local function init_monitor()
   local monitor_name_or_err
-  runtime_ctx.monitor, monitor_name_or_err = monitor_ui.init(monitor_adapter, config.runtime_ctx.monitor, config.monitor_scale)
+  runtime_ctx.monitor, monitor_name_or_err = monitor_ui.init(adapters.monitor, config.runtime_ctx.monitor, config.monitor_scale)
   if not runtime_ctx.monitor then
     log(CONFIG.LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no runtime_ctx.monitor available"))
   elseif monitor_name_or_err then
@@ -1792,8 +1796,8 @@ local function update_monitor()
     build_health_payload = build_health_payload,
     read_turbine_rpm = read_turbine_rpm,
     read_turbine_flow = read_turbine_flow,
-    reactor_adapter = reactor_adapter,
-    turbine_adapter = turbine_adapter,
+    reactor_adapter = adapters.reactor,
+    turbine_adapter = adapters.turbine,
     log_prefix = "RT",
     get_device_caps = get_device_caps,
     get_available_steam = get_available_steam,
@@ -1911,9 +1915,9 @@ local function init()
   set_reactors_active(true, "RT_STARTUP")
   set_turbines_active(true, "RT_STARTUP")
   apply_initial_reactor_rods()
-  services = service_manager.new({ log_prefix = "RT" })
+  services = services_lib.manager.new({ log_prefix = "RT" })
   handle_command = command_handler.new(build_command_context())
-  comms = comms_service.new({
+  comms = services_lib.comms.new({
     config = config,
     log_prefix = "RT",
     on_command = handle_command,
@@ -1931,7 +1935,7 @@ local function init()
     end
   })
   services:add(comms)
-  services:add(discovery_service.new({
+  services:add(services_lib.discovery.new({
     registry = registry,
     discover = discover,
     interval = config.scan_interval,
@@ -1940,8 +1944,8 @@ local function init()
       devices.discovery_failed = not ok
     end
   }))
-  services:add(control_service.new({ tick = control_tick }))
-  services:add(telemetry_service.new({
+  services:add(services_lib.control.new({ tick = control_tick }))
+  services:add(services_lib.telemetry.new({
     comms = comms,
     status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
