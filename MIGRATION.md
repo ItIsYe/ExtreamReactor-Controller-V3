@@ -42,7 +42,7 @@ Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand
 - Install root: `/xreactor`
 - Stage root: `/xreactor_stage`
 - Backup root: `/xreactor_backup_prev`
-- Installer-Log: `/xreactor_logs/installer.log`
+- Installer-Log: `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`
 
 ### Runtime-/Logging-Pfade
 - Runtime-Logs liegen unter `/xreactor_logs` (bei vorhandener Disk können Runtime-Logs auf Disk-basierte Pfade umgeleitet sein; der Update-Flow selbst bleibt lokal).
