@@ -415,6 +415,9 @@ local function run_install(ctx)
       tostring(manifest.source_ref)
     ))
   end
+  if tostring(ctx.source_ref or "") ~= "" and tostring(ctx.source_ref) ~= "beta" and tostring(manifest.source_ref or "") == "beta" then
+    ctx.warn(string.format("Manifest source_ref is mutable branch 'beta' while release pins %s", tostring(ctx.source_ref)))
+  end
 
   local expected = manifest_lib.select_expected_files(manifest, role.label, ctx.constants.INCLUDE_DEV_FILES)
   local storage_plan = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, expected, "install", ctx.constants)
@@ -464,6 +467,9 @@ local function run_update(ctx)
       tostring(ctx.source_ref),
       tostring(manifest.source_ref)
     ))
+  end
+  if tostring(ctx.source_ref or "") ~= "" and tostring(ctx.source_ref) ~= "beta" and tostring(manifest.source_ref or "") == "beta" then
+    ctx.warn(string.format("Manifest source_ref is mutable branch 'beta' while release pins %s", tostring(ctx.source_ref)))
   end
 
   ctx.info("Selected role: " .. role_label)

@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 import argparse
+import importlib.util
 import re
 import shutil
 import subprocess
 from pathlib import Path
+
+LuaRuntime = None
+if importlib.util.find_spec("lupa") is not None:
+    from lupa import LuaRuntime
 
 TOKEN_RE = re.compile(r"\.{3}|==|~=|<=|>=|[A-Za-z_][A-Za-z0-9_]*|\n|.")
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -132,7 +137,15 @@ def real_parse(path: Path):
             return True, f"luajit:{luajit}", ""
         return False, f"luajit:{luajit}", (proc.stderr or proc.stdout or "").strip()
 
-    return None, "none", "no luac/luajit parser available"
+    if LuaRuntime is not None:
+        try:
+            lua = LuaRuntime(unpack_returned_tuples=True)
+            lua.execute(f"assert(loadfile({path.as_posix()!r}))")
+            return True, "lupa:loadfile", ""
+        except Exception as exc:
+            return False, "lupa:loadfile", str(exc)
+
+    return None, "none", "no luac/luajit/lupa parser available"
 
 
 def main():

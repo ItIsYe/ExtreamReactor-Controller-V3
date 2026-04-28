@@ -72,6 +72,39 @@ local function download_url(url)
   return body
 end
 
+local function resolve_release_ref()
+  local local_release_path = constants.INSTALL_ROOT .. "/release.lua"
+  local release_body = read_file(local_release_path)
+  local release_source = "local"
+  if not release_body then
+    local body, err = download_url(constants.RELEASE_URL)
+    release_body = body
+    release_source = "remote"
+    if not release_body then
+      return nil, "release metadata unavailable (" .. tostring(err) .. ")"
+    end
+  end
+
+  if is_html_content(release_body) then
+    return nil, "release metadata contains HTML"
+  end
+
+  local loader = load(release_body, "=release", "t", {})
+  if not loader then
+    return nil, "release metadata parse error"
+  end
+  local ok_release, release_data = pcall(loader)
+  if not ok_release or type(release_data) ~= "table" then
+    return nil, "release metadata invalid"
+  end
+
+  local install_ref = type(release_data.commit_sha) == "string" and release_data.commit_sha or nil
+  if install_ref and install_ref ~= "" then
+    return install_ref, release_source
+  end
+  return nil, "release commit_sha missing"
+end
+
 local function ensure_installer_runtime()
   if (type(constants.RELEASE_URL) ~= "string" or constants.RELEASE_URL == "")
     and type(constants.BASE_URL) == "string" and constants.BASE_URL ~= "" then
@@ -83,27 +116,15 @@ local function ensure_installer_runtime()
     constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
     print("WARN: MANIFEST_URL missing, derived fallback " .. tostring(constants.MANIFEST_URL))
   end
-  local install_ref = nil
-  local release_body, release_err = download_url(constants.RELEASE_URL)
-  if release_body and not is_html_content(release_body) then
-    local loader = load(release_body, "=release", "t", {})
-    if loader then
-      local ok_release, release_data = pcall(loader)
-      if ok_release and type(release_data) == "table" and type(release_data.commit_sha) == "string" and release_data.commit_sha ~= "" then
-        install_ref = release_data.commit_sha
-      end
-    end
-  else
-    print("WARN: release metadata unavailable, fallback to beta (" .. tostring(release_err) .. ")")
-  end
 
+  local install_ref, ref_source = resolve_release_ref()
   if install_ref and install_ref ~= "beta" then
     constants.BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. install_ref .. "/xreactor/"
     constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
     constants.RELEASE_URL = constants.BASE_URL .. "release.lua"
-    print("Installer source pinned to commit: " .. install_ref)
+    print("Installer source pinned to commit: " .. install_ref .. " (release=" .. tostring(ref_source) .. ")")
   else
-    print("WARN: release commit_sha missing/branch-based; installer uses beta (mutable)")
+    print("WARN: " .. tostring(ref_source) .. "; installer uses beta (mutable)")
   end
 
   local required = {
