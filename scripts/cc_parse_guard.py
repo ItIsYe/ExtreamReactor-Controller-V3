@@ -122,22 +122,26 @@ def analyze(path: Path):
     return chunk_locals, fn_reports
 
 
-def real_parse(path: Path):
-    luac = shutil.which("luac") or shutil.which("luac5.1") or shutil.which("luac5.2") or shutil.which("luac5.3") or shutil.which("luac5.4")
-    if luac:
-        proc = subprocess.run([luac, "-p", str(path)], capture_output=True, text=True)
-        if proc.returncode == 0:
-            return True, f"luac:{luac}", ""
-        return False, f"luac:{luac}", (proc.stderr or proc.stdout or "").strip()
-
+def real_parse(path: Path, parser_mode: str):
     luajit = shutil.which("luajit")
-    if luajit:
+    if luajit and parser_mode in ("any", "luajit"):
         proc = subprocess.run([luajit, "-b", str(path), "/dev/null"], capture_output=True, text=True)
         if proc.returncode == 0:
             return True, f"luajit:{luajit}", ""
         return False, f"luajit:{luajit}", (proc.stderr or proc.stdout or "").strip()
 
+    luac = shutil.which("luac") or shutil.which("luac5.1") or shutil.which("luac5.2") or shutil.which("luac5.3") or shutil.which("luac5.4")
+    if luac and parser_mode in ("any", "luac"):
+        proc = subprocess.run([luac, "-p", str(path)], capture_output=True, text=True)
+        if proc.returncode == 0:
+            return True, f"luac:{luac}", ""
+        return False, f"luac:{luac}", (proc.stderr or proc.stdout or "").strip()
+
     if LuaRuntime is not None:
+        if parser_mode == "luajit":
+            return None, "none", "luajit parser requested but unavailable"
+        if parser_mode == "luac":
+            return None, "none", "luac parser requested but unavailable"
         try:
             lua = LuaRuntime(unpack_returned_tuples=True)
             lua.execute(f"assert(loadfile({path.as_posix()!r}))")
@@ -145,7 +149,11 @@ def real_parse(path: Path):
         except Exception as exc:
             return False, "lupa:loadfile", str(exc)
 
-    return None, "none", "no luac/luajit/lupa parser available"
+    if parser_mode == "luajit":
+        return None, "none", "luajit parser unavailable"
+    if parser_mode == "luac":
+        return None, "none", "luac parser unavailable"
+    return None, "none", "no luajit/luac/lupa parser available"
 
 
 def main():
@@ -155,6 +163,7 @@ def main():
     ap.add_argument('--function-limit', type=int, default=170)
     ap.add_argument('--max-bytes', type=int, default=120000)
     ap.add_argument('--require-real-parse', action='store_true', help='Require actual Lua parser success (luac or lupa.load)')
+    ap.add_argument('--parser-mode', choices=['any', 'luajit', 'luac'], default='any', help='Choose parser requirement for real parse checks')
     args=ap.parse_args()
 
     files=args.files or ['xreactor/nodes/rt/main.lua']
@@ -173,7 +182,7 @@ def main():
             if fn['locals'] > args.function_limit:
                 failures.append(f"{p}: function at line {fn['line']} locals {fn['locals']} > {args.function_limit}")
         if args.require_real_parse:
-            ok, parser_used, err = real_parse(p)
+            ok, parser_used, err = real_parse(p, args.parser_mode)
             if ok is None:
                 failures.append(f"{p}: real parse unavailable ({err})")
             elif not ok:

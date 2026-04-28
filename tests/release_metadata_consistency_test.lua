@@ -88,6 +88,9 @@ end
 if #release.commit_sha < 12 then
   error("release commit_sha too short")
 end
+if tostring(manifest.source_ref or "") ~= tostring(release.commit_sha) then
+  error("manifest source_ref must match release commit_sha")
+end
 
 local installer_hash = crc32_hash(installer_content)
 if tostring(release.installer_core_hash) ~= installer_hash then

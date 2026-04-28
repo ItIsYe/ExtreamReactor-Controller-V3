@@ -22,6 +22,8 @@ proc = subprocess.run(
         "140",
         "--function-limit",
         "170",
+        "--parser-mode",
+        "luajit",
         "--require-real-parse",
     ],
     capture_output=True,
