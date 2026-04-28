@@ -161,12 +161,14 @@ config_normalizer.apply_runtime_defaults(config, DEFAULT_CONFIG, {
     return config_normalizer.normalize_rails(values, defaults, utils, safety, CONFIG.MIN_FLOW, CONFIG.MAX_FLOW)
   end
 })
-local hb = config.heartbeat_interval
-local configured_reactors = utils.deep_copy(config.reactors or {})
-local configured_turbines = utils.deep_copy(config.turbines or {})
-local configured_caps = {
-  reactors = #configured_reactors,
-  turbines = #configured_turbines
+local runtime_config = {
+  hb = config.heartbeat_interval,
+  configured_reactors = utils.deep_copy(config.reactors or {}),
+  configured_turbines = utils.deep_copy(config.turbines or {})
+}
+runtime_config.configured_caps = {
+  reactors = #runtime_config.configured_reactors,
+  turbines = #runtime_config.configured_turbines
 }
 local comms
 local services
@@ -527,7 +529,7 @@ local function init_turbine_ctrl()
   local turbines = config.turbines or {}
   log("INFO", "Detected " .. tostring(#turbines) .. " turbines")
   if #turbines < 1 then
-    log("ERROR", binding.missing_devices_message("turbine", binding.build_policy(configured_reactors, configured_turbines)))
+    log("ERROR", binding.missing_devices_message("turbine", binding.build_policy(runtime_config.configured_reactors, runtime_config.configured_turbines)))
     return
   end
   for _, name in ipairs(turbines) do
@@ -1533,8 +1535,8 @@ end
 local function build_discovery_context()
   return {
     config = config,
-    configured_reactors = configured_reactors,
-    configured_turbines = configured_turbines,
+    configured_reactors = runtime_config.configured_reactors,
+    configured_turbines = runtime_config.configured_turbines,
     peripherals = runtime_ctx.peripherals,
     utils = utils,
     capability_cache = runtime_ctx.capability_cache,
@@ -1595,17 +1597,17 @@ local function build_health_payload_context()
     comms = comms,
     constants = constants,
     master_seen = runtime_ctx.master_seen,
-    hb = hb,
+    hb = runtime_config.hb,
     devices = devices,
     registry = registry,
     binding = binding,
-    configured_reactors = configured_reactors,
-    configured_turbines = configured_turbines,
+    configured_reactors = runtime_config.configured_reactors,
+    configured_turbines = runtime_config.configured_turbines,
     health = health,
     warn_once = warn_once,
     startup_watchdog_tripped = runtime_ctx.startup_watchdog_tripped,
     rt_health = rt_health,
-    configured_caps = configured_caps
+    configured_caps = runtime_config.configured_caps
   }
 end
 
@@ -1681,8 +1683,8 @@ local function build_module_lifecycle_context()
     config = config,
     peripherals = runtime_ctx.peripherals,
     binding = binding,
-    configured_reactors = configured_reactors,
-    configured_turbines = configured_turbines,
+    configured_reactors = runtime_config.configured_reactors,
+    configured_turbines = runtime_config.configured_turbines,
     modules = runtime_ctx.modules,
     comms = comms,
     RPM_TOL = CONFIG.RPM_TOLERANCE,
@@ -1783,8 +1785,8 @@ local function update_monitor()
     last_command = runtime_ctx.last_command,
     last_command_ts = runtime_ctx.last_command_ts,
     current_state = current_state,
-    configured_reactors = configured_reactors,
-    configured_turbines = configured_turbines,
+    configured_reactors = runtime_config.configured_reactors,
+    configured_turbines = runtime_config.configured_turbines,
     get_target_rpm = get_target_rpm,
     binding = binding,
     build_health_payload = build_health_payload,
@@ -1972,7 +1974,7 @@ while true do
       monitor_ui.handle_input(event)
     end
   end
-  if os.epoch("utc") - runtime_ctx.last_heartbeat > hb * 1000 then
+  if os.epoch("utc") - runtime_ctx.last_heartbeat > runtime_config.hb * 1000 then
     send_heartbeat()
   end
   services:tick()

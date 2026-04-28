@@ -73,9 +73,21 @@ local function download_url(url)
 end
 
 local function resolve_release_ref()
+  local program_path = (shell and shell.getRunningProgram and shell.getRunningProgram()) or "installer"
+  local program_dir = fs.getDir(program_path)
+  local bundled_release_path = fs.combine(program_dir, "xreactor/release.lua")
   local local_release_path = constants.INSTALL_ROOT .. "/release.lua"
-  local release_body = read_file(local_release_path)
-  local release_source = "local"
+  local release_body
+  local release_source
+
+  if fs.exists(bundled_release_path) then
+    release_body = read_file(bundled_release_path)
+    release_source = "bundle"
+  end
+  if not release_body then
+    release_body = read_file(local_release_path)
+    release_source = "local"
+  end
   if not release_body then
     local body, err = download_url(constants.RELEASE_URL)
     release_body = body
