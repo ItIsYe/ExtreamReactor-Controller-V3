@@ -1,7 +1,7 @@
 return {
   manifest_version = 8,
   manifest_id = "manifest-v8",
-  source_ref = "090db3cec4478b4f6fdc312eb14c0825c7619da3",
+  source_ref = "36f89c73074cdda4e370b551edf958b4732d8b6b",
   hash_algo = "crc32",
   base_files = {
       { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460" },
@@ -27,7 +27,7 @@ return {
       { path = "installer_stage.lua", size_bytes = 4500, hash = "52420284", always = true },
       { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always = true },
       { path = "installer_storage.lua", size_bytes = 8405, hash = "2a56f864", always = true },
-      { path = "release.lua", size_bytes = 383, hash = "e5eb5d70", always = true },
+      { path = "release.lua", size_bytes = 383, hash = "e3b674af", always = true },
       { path = "services/comms_service.lua", size_bytes = 5632, hash = "c255cd12" },
       { path = "services/control_service.lua", size_bytes = 454, hash = "82b782f1" },
       { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },
