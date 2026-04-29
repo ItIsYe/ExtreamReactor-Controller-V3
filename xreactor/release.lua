@@ -1,6 +1,6 @@
 return {
-  release_id = "beta-2026-04-28-rt-installer-blocker-fix",
-  commit_sha = "ebb4caaadffe33d0860ad8c0bc8f149e8c4101b6",
+  release_id = "beta-2026-04-29-rt-module-coverage-fix",
+  commit_sha = "090db3cec4478b4f6fdc312eb14c0825c7619da3",
   manifest_id = "manifest-v8",
   manifest_version = 8,
   manifest_file_count = 109,
