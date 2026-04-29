@@ -79,11 +79,18 @@ def module_to_path(module_name: str):
     return module_name.replace('.', '/') + ".lua"
 
 
+ALIASES = {
+    "adapters.runtime_ctx.monitor": ["adapters/monitor.lua"],
+    "nodes.rt.runtime_ctx.status_snapshot": ["nodes/rt/status_snapshot.lua"],
+}
+
+
 def main():
     base_files, roles = parse_manifest(MANIFEST_PATH)
 
     role_specs = [
         ("MASTER", XREACTOR_ROOT / "master" / "main.lua"),
+        ("RT", XREACTOR_ROOT / "nodes" / "rt" / "main.lua"),
         ("ENERGY", XREACTOR_ROOT / "nodes" / "energy" / "main.lua"),
         ("WATER", XREACTOR_ROOT / "nodes" / "water" / "main.lua"),
         ("FUEL", XREACTOR_ROOT / "nodes" / "fuel" / "main.lua"),
@@ -94,10 +101,10 @@ def main():
     for role_label, entrypoint in role_specs:
         expected = expected_files_for_role(base_files, roles, role_label)
         for module_name in sorted(collect_requires(entrypoint)):
-            rel_path = module_to_path(module_name)
-            if rel_path not in expected:
+            candidates = [module_to_path(module_name)] + ALIASES.get(module_name, [])
+            if not any(path in expected for path in candidates):
                 errors.append(
-                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module={module_name} path={rel_path}"
+                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module={module_name} paths={candidates}"
                 )
 
     if errors:
