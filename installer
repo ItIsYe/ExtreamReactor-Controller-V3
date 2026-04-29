@@ -80,18 +80,19 @@ local function resolve_release_ref()
   local release_body
   local release_source
 
-  if fs.exists(bundled_release_path) then
-    release_body = read_file(bundled_release_path)
-    release_source = "bundle"
-  end
+  local body, err = download_url(constants.RELEASE_URL)
+  release_body = body
+  release_source = "remote"
+
   if not release_body then
-    release_body = read_file(local_release_path)
-    release_source = "local"
-  end
-  if not release_body then
-    local body, err = download_url(constants.RELEASE_URL)
-    release_body = body
-    release_source = "remote"
+    if fs.exists(bundled_release_path) then
+      release_body = read_file(bundled_release_path)
+      release_source = "bundle"
+    end
+    if not release_body then
+      release_body = read_file(local_release_path)
+      release_source = "local"
+    end
     if not release_body then
       return nil, "release metadata unavailable (" .. tostring(err) .. ")"
     end
