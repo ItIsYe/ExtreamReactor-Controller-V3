@@ -79,6 +79,8 @@ return {
       { path = "nodes/rt/config.lua", size_bytes = 3031, hash = "430d45e2" },
       { path = "nodes/rt/command_handler.lua", size_bytes = 4313, hash = "595cf28b" },
       { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62" },
+      { path = "nodes/rt/discovery_runtime.lua", size_bytes = 9137, hash = "31ad3d94" },
+      { path = "nodes/rt/health_payload.lua", size_bytes = 2438, hash = "00cb920a" },
       { path = "nodes/rt/monitor_ui.lua", size_bytes = 13882, hash = "7cedf18b" },
       { path = "nodes/rt/module_lifecycle.lua", size_bytes = 25907, hash = "eb62cb1c" },
       { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 8996, hash = "db4b458d" },
