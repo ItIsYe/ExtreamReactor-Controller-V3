@@ -1,6 +1,6 @@
 return {
   release_id = "beta-2026-04-29-rt-module-coverage-fix",
-  commit_sha = "090db3cec4478b4f6fdc312eb14c0825c7619da3",
+  commit_sha = "36f89c73074cdda4e370b551edf958b4732d8b6b",
   manifest_id = "manifest-v8",
   manifest_version = 8,
   manifest_file_count = 109,
