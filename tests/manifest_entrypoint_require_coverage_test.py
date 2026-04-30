@@ -67,9 +67,9 @@ def expected_files_for_role(base_files, roles, role_label: str):
     return expected
 
 
-def collect_requires(entrypoint: pathlib.Path):
+def collect_requires(lua_file: pathlib.Path):
     required = set()
-    content = entrypoint.read_text(encoding="utf-8")
+    content = lua_file.read_text(encoding="utf-8")
     for match in REQUIRE_RE.finditer(content):
         required.add(match.group(1))
     return required
@@ -78,11 +78,6 @@ def collect_requires(entrypoint: pathlib.Path):
 def module_to_path(module_name: str):
     return module_name.replace('.', '/') + ".lua"
 
-
-ALIASES = {
-    "adapters.runtime_ctx.monitor": ["adapters/monitor.lua"],
-    "nodes.rt.runtime_ctx.status_snapshot": ["nodes/rt/status_snapshot.lua"],
-}
 
 
 def main():
@@ -101,10 +96,20 @@ def main():
     for role_label, entrypoint in role_specs:
         expected = expected_files_for_role(base_files, roles, role_label)
         for module_name in sorted(collect_requires(entrypoint)):
-            candidates = [module_to_path(module_name)] + ALIASES.get(module_name, [])
-            if not any(path in expected for path in candidates):
+            module_path = module_to_path(module_name)
+            if module_path not in expected:
                 errors.append(
-                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module={module_name} paths={candidates}"
+                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module={module_name} path={module_path}"
+                )
+
+    rt_root = XREACTOR_ROOT / "nodes" / "rt"
+    for lua_file in sorted(rt_root.glob("*.lua")):
+        for module_name in sorted(collect_requires(lua_file)):
+            module_rel = module_to_path(module_name)
+            module_abs = XREACTOR_ROOT / module_rel
+            if not module_abs.exists():
+                errors.append(
+                    f"rt-file={lua_file.relative_to(REPO_ROOT)} requires missing module={module_name} path={module_rel}"
                 )
 
     if errors:

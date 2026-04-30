@@ -87,7 +87,7 @@ return {
       { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2525, hash = "3e823eea" },
       { path = "nodes/rt/status_snapshot.lua", size_bytes = 3637, hash = "51bda9ce" },
       { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c" },
-      { path = "nodes/rt/main.lua", size_bytes = 80955, hash = "74c07a47", required_for = { "RT" } },
+      { path = "nodes/rt/main.lua", size_bytes = 80931, hash = "33383227", required_for = { "RT" } },
       { path = "nodes/rt/state_handlers.lua", size_bytes = 8151, hash = "294bcd76" },
       { path = "adapters/reactor.lua", size_bytes = 17010, hash = "2e3b8447" },
       { path = "adapters/turbine.lua", size_bytes = 3871, hash = "a9e924f3" },
