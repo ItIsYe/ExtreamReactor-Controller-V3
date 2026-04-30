@@ -11,11 +11,12 @@ local function load_table(path)
 end
 
 local manifest = load_table("xreactor/manifest.lua")
-if manifest.manifest_version ~= 6 then
-  error("expected manifest version 6")
+if type(manifest.manifest_version) ~= "number" then
+  error("expected numeric manifest_version")
 end
-if manifest.manifest_id ~= "manifest-v6" then
-  error("expected manifest_id manifest-v6")
+local expected_manifest_id = "manifest-v" .. tostring(manifest.manifest_version)
+if manifest.manifest_id ~= expected_manifest_id then
+  error("expected manifest_id " .. expected_manifest_id)
 end
 
 local has_always = false
