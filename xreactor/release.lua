@@ -1,6 +1,6 @@
 return {
   release_id = "beta-branch-installer-strategy",
-  commit_sha = "ea52d0039fa3e75a2ca9ccafbcb66a1ce6c66759",
+  commit_sha = "beta",
   source_ref = "beta",
   manifest_id = "manifest-v8",
   manifest_version = 8,
