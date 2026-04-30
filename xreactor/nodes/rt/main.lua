@@ -75,7 +75,7 @@ local fluid = require("core.fluid")
 local adapters = {
   reactor = require("adapters.reactor"),
   turbine = require("adapters.turbine"),
-  monitor = require("adapters.runtime_ctx.monitor")
+  monitor = require("adapters.monitor")
 }
 local services_lib = {
   manager = require("services.service_manager"),
@@ -87,7 +87,7 @@ local services_lib = {
 local turbine_regulator = require("core.turbine_regulator")
 local monitor_ui = require("nodes.rt.monitor_ui")
 local state_handlers = require("nodes.rt.state_handlers")
-local status_snapshot_lib = require("nodes.rt.runtime_ctx.status_snapshot")
+local status_snapshot_lib = require("nodes.rt.status_snapshot")
 local startup_diagnostics = require("nodes.rt.startup_diagnostics")
 local module_lifecycle = require("nodes.rt.module_lifecycle")
 local command_handler = require("nodes.rt.command_handler")
