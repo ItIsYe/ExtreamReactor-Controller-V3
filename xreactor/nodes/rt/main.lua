@@ -114,6 +114,12 @@ if config.wireless_modem == nil and type(config.modem) == "string" then
 elseif type(config.modem) == "string" and config.wireless_modem ~= config.modem then
   add_config_warning("legacy modem field ignored because wireless_modem override is set")
 end
+if config.monitor == nil and type(config.runtime_ctx) == "table" and type(config.runtime_ctx.monitor) == "string" then
+  config.monitor = config.runtime_ctx.monitor
+  add_config_warning("legacy runtime_ctx.monitor detected; mapped runtime_ctx.monitor -> monitor")
+elseif type(config.runtime_ctx) == "table" and type(config.runtime_ctx.monitor) == "string" and config.monitor ~= config.runtime_ctx.monitor then
+  add_config_warning("legacy runtime_ctx.monitor ignored because monitor override is set")
+end
 -- Initialize file logging early to capture startup events.
 local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
 local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
@@ -1822,9 +1828,9 @@ end
 
 local function init_monitor()
   local monitor_name_or_err
-  runtime_ctx.monitor, monitor_name_or_err = monitor_ui.init(adapters.monitor, config.runtime_ctx.monitor, config.monitor_scale)
+  runtime_ctx.monitor, monitor_name_or_err = monitor_ui.init(adapters.monitor, config.monitor, config.monitor_scale)
   if not runtime_ctx.monitor then
-    log(CONFIG.LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no runtime_ctx.monitor available"))
+    log(CONFIG.LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no configured monitor available"))
   elseif monitor_name_or_err then
     log(CONFIG.LOG_LEVEL.INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
   end
