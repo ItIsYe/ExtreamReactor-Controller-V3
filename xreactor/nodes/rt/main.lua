@@ -108,6 +108,7 @@ local function add_config_warning(message)
   table.insert(config_warnings, message)
 end
 config_normalizer.migrate_legacy_paths(config, add_config_warning)
+log(CONFIG.LOG_LEVEL.INFO, "Config migration pass completed")
 config_normalizer.validate_config(config, DEFAULT_CONFIG, add_config_warning, utils)
 if config.wireless_modem == nil and type(config.modem) == "string" then
   config.wireless_modem = config.modem
@@ -1962,8 +1963,10 @@ local function control_tick()
   update_status_snapshot()
 end
 local function init()
+  log("INFO", "Initializing runtime bootstrap (discover/build/bind/services)")
   dumpPeripherals()
   discover()
+  log("INFO", ("Discovery finished: reactors=%d turbines=%d failed=%s"):format(#devices.reactors, #devices.turbines, tostring(devices.discovery_failed)))
   init_turbine_ctrl()
   init_reactor_ctrl()
   set_reactors_active(true, "RT_STARTUP")
@@ -2010,20 +2013,49 @@ local function init()
     end
   }))
   services:init()
+  log("INFO", "Service manager initialized")
   states = state_handlers.build(build_state_context())
   node_state_machine = machine.new(states, constants.node_states.OFF)
+  log("INFO", "State machine initialized state=" .. tostring(node_state_machine.state()))
   apply_mode(STATE.AUTONOM)
+  log("INFO", "Applied initial mode AUTONOM")
   init_monitor()
   hello()
   send_heartbeat()
   log("INFO", "Node ready: " .. comms.network.id)
 end
 
-init()
-while true do
+local function is_terminate_error(err)
+  local message = tostring(err or ""):lower()
+  return message:find("terminate", 1, true) ~= nil
+end
+
+local function shutdown(reason)
+  local shutdown_reason = tostring(reason or "requested")
+  if shutdown_reason:lower():find("terminate", 1, true) then
+    log("WARN", "terminate received")
+  else
+    log("WARN", "shutdown requested: " .. shutdown_reason)
+  end
+  log("INFO", "shutting down services")
+  if services then
+    local ok, err = pcall(function() services:stop() end)
+    if not ok and not is_terminate_error(err) then
+      log("ERROR", "service shutdown error: " .. tostring(err))
+    end
+  end
+  log("INFO", "shutdown complete")
+end
+
+local function main_loop()
+  log("INFO", "Entering event loop")
+  while true do
   local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
   while true do
-    local event = { os.pullEvent() }
+    local event = { os.pullEventRaw() }
+    if event[1] == "terminate" then
+      return "terminate received"
+    end
     if event[1] == "modem_message" then
       comms:handle_event(event)
     elseif event[1] == "timer" and event[2] == timer then
@@ -2036,4 +2068,23 @@ while true do
     send_heartbeat()
   end
   services:tick()
+end
+end
+
+local ok, result_or_err = xpcall(function()
+  init()
+  return main_loop()
+end, function(err)
+  return err
+end)
+
+if ok then
+  shutdown(result_or_err)
+else
+  if is_terminate_error(result_or_err) then
+    shutdown("terminate received")
+  else
+    shutdown("runtime error: " .. tostring(result_or_err))
+    error(result_or_err, 0)
+  end
 end
