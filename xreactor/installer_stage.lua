@@ -44,7 +44,46 @@ function M.stage_expected_files(ctx, expected)
 
   for _, entry in pairs(expected) do
     local target_path = ctx.constants.STAGE_ROOT .. "/" .. entry.path
-    local ok, err = ctx.download_file(entry.path, target_path, entry)
+    local ok, err
+    if entry.path == "release.lua" and ctx.source_ref == "beta" then
+      ctx.info("Reusing cached release metadata for release.lua in beta install strategy")
+      if type(ctx.release_metadata_body) ~= "string" or ctx.release_metadata_body == "" then
+        if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
+          ctx.fs.delete(ctx.constants.STAGE_ROOT)
+        end
+        return false, "Beta release metadata cache missing for release.lua"
+      end
+      local size_ok, actual_size = ctx.size_matches(entry, ctx.release_metadata_body)
+      if not size_ok then
+        if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
+          ctx.fs.delete(ctx.constants.STAGE_ROOT)
+        end
+        return false, string.format(
+          "cached release metadata size mismatch for %s (expected=%s actual=%s)",
+          tostring(entry.path),
+          tostring(entry.size_bytes),
+          tostring(actual_size)
+        )
+      end
+      local hash_ok, actual_hash = ctx.hash_matches(entry, ctx.release_metadata_body)
+      if not hash_ok then
+        if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
+          ctx.fs.delete(ctx.constants.STAGE_ROOT)
+        end
+        return false, string.format(
+          "cached release metadata hash mismatch for %s (expected=%s actual=%s)",
+          tostring(entry.path),
+          tostring(entry.hash),
+          tostring(actual_hash)
+        )
+      end
+      ok, err = ctx.write_file(target_path, ctx.release_metadata_body)
+      if ok then
+        ok, err = ctx.validate_download(target_path)
+      end
+    else
+      ok, err = ctx.download_file(entry.path, target_path, entry)
+    end
     if not ok then
       if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
         ctx.fs.delete(ctx.constants.STAGE_ROOT)
