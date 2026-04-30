@@ -322,6 +322,8 @@ local function build_context(constants)
       return false, "release metadata invalid"
     end
 
+    ctx.release_metadata_body = body
+
     ctx.release_id = tostring(release.release_id or "unknown")
     local commit_sha = tostring(release.commit_sha or "")
     if commit_sha ~= "" and commit_sha ~= "beta" then
@@ -400,6 +402,16 @@ local function enforce_source_consistency(ctx, manifest)
   end
 end
 
+local function enforce_release_metadata_strategy(ctx, expected)
+  local release_entry = expected["release.lua"]
+  if not release_entry then
+    ctx.fatal("Manifest expected files missing release.lua in beta install strategy")
+  end
+  if type(ctx.release_metadata_body) ~= "string" or ctx.release_metadata_body == "" then
+    ctx.fatal("Release metadata body missing before stage download in beta install strategy")
+  end
+end
+
 local function run_install(ctx)
   local role = select_role()
   if not role then
@@ -424,6 +436,7 @@ local function run_install(ctx)
   enforce_source_consistency(ctx, manifest)
 
   local expected = manifest_lib.select_expected_files(manifest, role.label, ctx.constants.INCLUDE_DEV_FILES)
+  enforce_release_metadata_strategy(ctx, expected)
   local storage_plan = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, expected, "install", ctx.constants)
   local preflight_ok, preflight_err = storage_lib.preflight_storage(ctx, storage_plan, { allow_cleanup = true, cleanup_logs = true, cleanup_backup = true })
   if not preflight_ok then
@@ -470,6 +483,7 @@ local function run_update(ctx)
   ctx.info("Selected role: " .. role_label)
 
   local expected = manifest_lib.select_expected_files(manifest, role_label, ctx.constants.INCLUDE_DEV_FILES)
+  enforce_release_metadata_strategy(ctx, expected)
   local storage_plan = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, expected, "update", ctx.constants)
   local preflight_ok, preflight_err = storage_lib.preflight_storage(ctx, storage_plan, { allow_cleanup = true, cleanup_logs = false, cleanup_backup = true })
   if not preflight_ok then
