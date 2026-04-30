@@ -9,12 +9,8 @@ local bootstrap = read("installer")
 local main = read("xreactor/installer_main.lua")
 
 local bootstrap_checks = {
-  "local function resolve_release_ref()",
-  "local bundled_release_path = fs.combine(program_dir, \"xreactor/release.lua\")",
-  "local local_release_path = constants.INSTALL_ROOT .. \"/release.lua\"",
-  "release_source = \"bundle\"",
-  "Installer source pinned to commit: ",
-  "(release=",
+  "BASE_URL = \"https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/\"",
+  "Installer source fixed to beta branch",
 }
 
 for _, snippet in ipairs(bootstrap_checks) do
@@ -24,8 +20,10 @@ for _, snippet in ipairs(bootstrap_checks) do
 end
 
 local main_checks = {
-  "Manifest source_ref mismatch (release source=%s manifest source_ref=%s)",
-  "Manifest source_ref is mutable branch 'beta' while release pins %s",
+  "release metadata commit pin is not allowed in beta install strategy",
+  "release metadata source_ref is not allowed in beta install strategy",
+  "Installer source fixed to beta branch",
+  "Manifest source_ref must be beta during normal install/update",
 }
 
 for _, snippet in ipairs(main_checks) do

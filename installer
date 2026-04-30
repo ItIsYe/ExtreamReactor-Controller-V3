@@ -72,52 +72,6 @@ local function download_url(url)
   return body
 end
 
-local function resolve_release_ref()
-  local program_path = (shell and shell.getRunningProgram and shell.getRunningProgram()) or "installer"
-  local program_dir = fs.getDir(program_path)
-  local bundled_release_path = fs.combine(program_dir, "xreactor/release.lua")
-  local local_release_path = constants.INSTALL_ROOT .. "/release.lua"
-  local release_body
-  local release_source
-
-  local body, err = download_url(constants.RELEASE_URL)
-  release_body = body
-  release_source = "remote"
-
-  if not release_body then
-    if fs.exists(bundled_release_path) then
-      release_body = read_file(bundled_release_path)
-      release_source = "bundle"
-    end
-    if not release_body then
-      release_body = read_file(local_release_path)
-      release_source = "local"
-    end
-    if not release_body then
-      return nil, "release metadata unavailable (" .. tostring(err) .. ")"
-    end
-  end
-
-  if is_html_content(release_body) then
-    return nil, "release metadata contains HTML"
-  end
-
-  local loader = load(release_body, "=release", "t", {})
-  if not loader then
-    return nil, "release metadata parse error"
-  end
-  local ok_release, release_data = pcall(loader)
-  if not ok_release or type(release_data) ~= "table" then
-    return nil, "release metadata invalid"
-  end
-
-  local install_ref = type(release_data.commit_sha) == "string" and release_data.commit_sha or nil
-  if install_ref and install_ref ~= "" then
-    return install_ref, release_source
-  end
-  return nil, "release commit_sha missing"
-end
-
 local function ensure_installer_runtime()
   if (type(constants.RELEASE_URL) ~= "string" or constants.RELEASE_URL == "")
     and type(constants.BASE_URL) == "string" and constants.BASE_URL ~= "" then
@@ -130,15 +84,7 @@ local function ensure_installer_runtime()
     print("WARN: MANIFEST_URL missing, derived fallback " .. tostring(constants.MANIFEST_URL))
   end
 
-  local install_ref, ref_source = resolve_release_ref()
-  if install_ref and install_ref ~= "beta" then
-    constants.BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. install_ref .. "/xreactor/"
-    constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
-    constants.RELEASE_URL = constants.BASE_URL .. "release.lua"
-    print("Installer source pinned to commit: " .. install_ref .. " (release=" .. tostring(ref_source) .. ")")
-  else
-    print("WARN: " .. tostring(ref_source) .. "; installer uses beta (mutable)")
-  end
+  print("Installer source fixed to beta branch")
 
   local required = {
     "installer_main.lua",
