@@ -107,18 +107,13 @@ local config_warnings = {}
 local function add_config_warning(message)
   table.insert(config_warnings, message)
 end
+config_normalizer.migrate_legacy_paths(config, add_config_warning)
 config_normalizer.validate_config(config, DEFAULT_CONFIG, add_config_warning, utils)
 if config.wireless_modem == nil and type(config.modem) == "string" then
   config.wireless_modem = config.modem
   add_config_warning("legacy modem field detected; mapped modem -> wireless_modem")
 elseif type(config.modem) == "string" and config.wireless_modem ~= config.modem then
   add_config_warning("legacy modem field ignored because wireless_modem override is set")
-end
-if config.monitor == nil and type(config.runtime_ctx) == "table" and type(config.runtime_ctx.monitor) == "string" then
-  config.monitor = config.runtime_ctx.monitor
-  add_config_warning("legacy runtime_ctx.monitor detected; mapped runtime_ctx.monitor -> monitor")
-elseif type(config.runtime_ctx) == "table" and type(config.runtime_ctx.monitor) == "string" and config.monitor ~= config.runtime_ctx.monitor then
-  add_config_warning("legacy runtime_ctx.monitor ignored because monitor override is set")
 end
 -- Initialize file logging early to capture startup events.
 local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
@@ -1829,6 +1824,7 @@ end
 local function init_monitor()
   local monitor_name_or_err
   runtime_ctx.monitor, monitor_name_or_err = monitor_ui.init(adapters.monitor, config.monitor, config.monitor_scale)
+  runtime_ctx.monitor_name = runtime_ctx.monitor and monitor_name_or_err or nil
   if not runtime_ctx.monitor then
     log(CONFIG.LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no configured monitor available"))
   elseif monitor_name_or_err then

@@ -4,6 +4,29 @@ local function clamp_range(value, min_value, max_value)
   return math.max(min_value, math.min(max_value, value))
 end
 
+function M.migrate_legacy_paths(config_values, add_warning)
+  if type(config_values) ~= "table" then
+    return
+  end
+  local runtime_ctx = type(config_values.runtime_ctx) == "table" and config_values.runtime_ctx or nil
+  if runtime_ctx and config_values.monitor == nil then
+    if type(runtime_ctx.monitor) == "string" then
+      config_values.monitor = runtime_ctx.monitor
+      add_warning("legacy runtime_ctx.monitor detected; mapped runtime_ctx.monitor -> monitor")
+    elseif type(runtime_ctx.mon) == "string" then
+      config_values.monitor = runtime_ctx.mon
+      add_warning("legacy runtime_ctx.mon detected; mapped runtime_ctx.mon -> monitor")
+    end
+  elseif runtime_ctx then
+    if type(runtime_ctx.monitor) == "string" and config_values.monitor ~= runtime_ctx.monitor then
+      add_warning("legacy runtime_ctx.monitor ignored because monitor override is set")
+    end
+    if type(runtime_ctx.mon) == "string" and config_values.monitor ~= runtime_ctx.mon then
+      add_warning("legacy runtime_ctx.mon ignored because monitor override is set")
+    end
+  end
+end
+
 function M.validate_config(config_values, defaults, add_warning, utils)
   local normalized = utils.normalize_node_id(config_values.node_id)
   if normalized == "UNKNOWN" then
