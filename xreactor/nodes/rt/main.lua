@@ -219,6 +219,8 @@ local runtime_ctx = {
 local cache
 local build_modules
 local refresh_module_peripherals
+local build_module_lifecycle_context
+local require_module_lifecycle_context
 local STATE = {
   INIT = "INIT",
   AUTONOM = "AUTONOM",
@@ -1665,22 +1667,68 @@ local function hello()
 end
 
 set_reactors_active = function(active, reason)
-  return module_lifecycle.set_reactors_active(build_module_lifecycle_context(), active, reason)
+  return module_lifecycle.set_reactors_active(require_module_lifecycle_context(), active, reason)
 end
 
 set_turbines_active = function(active, reason)
-  return module_lifecycle.set_turbines_active(build_module_lifecycle_context(), active, reason)
+  return module_lifecycle.set_turbines_active(require_module_lifecycle_context(), active, reason)
 end
 
 apply_safe_controls = function()
-  return module_lifecycle.apply_safe_controls(build_module_lifecycle_context())
+  return module_lifecycle.apply_safe_controls(require_module_lifecycle_context())
 end
 
 local function scram()
-  return module_lifecycle.scram(build_module_lifecycle_context())
+  return module_lifecycle.scram(require_module_lifecycle_context())
 end
 
-local function build_module_lifecycle_context()
+local REQUIRED_LIFECYCLE_CTX_FUNCTIONS = {
+  "get_target_rpm",
+  "get_active_startup",
+  "set_active_startup",
+  "get_turbine_ctrl",
+  "setReactorActive",
+  "setTurbineActive",
+  "setTurbineFlow",
+  "applyReactorRods",
+  "ensure_reactor_ctrl",
+  "update_turbine_flow_state",
+  "update_inductor_for_rpm",
+  "setState",
+  "warn_once",
+  "warn_unsupported",
+  "log",
+  "add_alarm"
+}
+
+local function validate_module_lifecycle_context(ctx)
+  for _, key in ipairs(REQUIRED_LIFECYCLE_CTX_FUNCTIONS) do
+    if type(ctx[key]) ~= "function" then
+      error("module lifecycle context missing function: " .. tostring(key), 2)
+    end
+  end
+  if type(ctx.constants) ~= "table" then
+    error("module lifecycle context missing table: constants", 2)
+  end
+  if type(ctx.STATE) ~= "table" then
+    error("module lifecycle context missing table: STATE", 2)
+  end
+  if type(ctx.config) ~= "table" then
+    error("module lifecycle context missing table: config", 2)
+  end
+  if type(ctx.modules) ~= "table" then
+    error("module lifecycle context missing table: modules", 2)
+  end
+  if type(ctx.peripherals) ~= "table" then
+    error("module lifecycle context missing table: peripherals", 2)
+  end
+  if type(ctx.binding) ~= "table" then
+    error("module lifecycle context missing table: binding", 2)
+  end
+  return ctx
+end
+
+build_module_lifecycle_context = function()
   return {
     constants = constants,
     STATE = STATE,
@@ -1722,19 +1770,23 @@ local function build_module_lifecycle_context()
   }
 end
 
+require_module_lifecycle_context = function()
+  return validate_module_lifecycle_context(build_module_lifecycle_context())
+end
+
 local function update_module_limits(module)
-  return module_lifecycle.update_module_limits(build_module_lifecycle_context(), module)
+  return module_lifecycle.update_module_limits(require_module_lifecycle_context(), module)
 end
 local function start_module(module_id, module_type, ramp_profile)
-  return module_lifecycle.start_module(build_module_lifecycle_context(), module_id, module_type, ramp_profile)
+  return module_lifecycle.start_module(require_module_lifecycle_context(), module_id, module_type, ramp_profile)
 end
 
 local function process_startup()
-  module_lifecycle.process_startup(build_module_lifecycle_context())
+  module_lifecycle.process_startup(require_module_lifecycle_context())
 end
 
 local function update_module_states()
-  module_lifecycle.update_module_states(build_module_lifecycle_context())
+  module_lifecycle.update_module_states(require_module_lifecycle_context())
 end
 
 local function monitor_master()
