@@ -1,7 +1,7 @@
 return {
   manifest_version = 8,
   manifest_id = "manifest-v8",
-  source_ref = "36f89c73074cdda4e370b551edf958b4732d8b6b",
+  source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
       { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460" },
@@ -22,12 +22,12 @@ return {
       { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
       { path = "core/utils.lua", size_bytes = 8584, hash = "f86e8b2d" },
       { path = "installer_http.lua", size_bytes = 1774, hash = "2d627c52", always = true },
-      { path = "installer_main.lua", size_bytes = 16190, hash = "f31ffa14", always = true },
+      { path = "installer_main.lua", size_bytes = 16267, hash = "346ce294", always = true },
       { path = "installer_manifest.lua", size_bytes = 2595, hash = "4b3f2844", always = true },
       { path = "installer_stage.lua", size_bytes = 4500, hash = "52420284", always = true },
       { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always = true },
       { path = "installer_storage.lua", size_bytes = 8405, hash = "2a56f864", always = true },
-      { path = "release.lua", size_bytes = 383, hash = "e3b674af", always = true },
+      { path = "release.lua", size_bytes = 362, hash = "6407fe7c", always = true },
       { path = "services/comms_service.lua", size_bytes = 5632, hash = "c255cd12" },
       { path = "services/control_service.lua", size_bytes = 454, hash = "82b782f1" },
       { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },

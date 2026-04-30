@@ -325,16 +325,18 @@ local function build_context(constants)
     ctx.release_id = tostring(release.release_id or "unknown")
     local commit_sha = tostring(release.commit_sha or "")
     if commit_sha ~= "" and commit_sha ~= "beta" then
-      constants.BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. commit_sha .. "/xreactor/"
-      constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
-      constants.RELEASE_URL = constants.BASE_URL .. "release.lua"
-      ctx.source_ref = commit_sha
-      ctx.info("Pinned installer source to immutable commit " .. commit_sha)
-      return true
+      return false, string.format("release metadata commit pin is not allowed in beta install strategy (commit_sha=%s)", tostring(commit_sha))
+    end
+    local release_source_ref = tostring(release.source_ref or "beta")
+    if release_source_ref ~= "" and release_source_ref ~= "beta" then
+      return false, string.format("release metadata source_ref is not allowed in beta install strategy (source_ref=%s)", tostring(release_source_ref))
     end
 
+    constants.BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
+    constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
+    constants.RELEASE_URL = constants.BASE_URL .. "release.lua"
     ctx.source_ref = "beta"
-    ctx.warn("Release commit_sha missing or mutable branch reference; installer keeps beta source")
+    ctx.info("Installer source fixed to beta branch")
     return true
   end
 
@@ -390,15 +392,11 @@ end
 local function enforce_source_consistency(ctx, manifest)
   local release_source = tostring(ctx.source_ref or "")
   local manifest_source = tostring(manifest.source_ref or "")
-  if manifest_source ~= "" and manifest_source ~= "beta" and release_source ~= "" and release_source ~= "beta" and manifest_source ~= release_source then
-    ctx.fatal(string.format(
-      "Manifest source_ref mismatch (release source=%s manifest source_ref=%s)",
-      tostring(release_source),
-      tostring(manifest_source)
-    ))
+  if release_source ~= "" and release_source ~= "beta" then
+    ctx.fatal(string.format("Installer source_ref must be beta during normal install/update (got %s)", tostring(release_source)))
   end
-  if release_source ~= "" and release_source ~= "beta" and manifest_source == "beta" then
-    ctx.fatal(string.format("Manifest source_ref is mutable branch 'beta' while release pins %s", tostring(release_source)))
+  if manifest_source ~= "" and manifest_source ~= "beta" then
+    ctx.fatal(string.format("Manifest source_ref must be beta during normal install/update (got %s)", tostring(manifest_source)))
   end
 end
 
