@@ -303,21 +303,30 @@ local function apply_profile(name)
   if not profile then return end
   active_profile = name
   sequencer.ramp_profile = profile.ramp or sequencer.ramp_profile
+  utils.log("MASTER", ("Profile applied: %s (target_factor=%s, ramp=%s)"):format(tostring(name), tostring(profile.target), tostring(sequencer.ramp_profile)), "INFO")
   local base = estimate_base_power()
   if base > 0 then
     power_target = base * profile.target
+    utils.log("MASTER", ("Power target recalculated from profile %s: base=%.2f -> target=%.2f"):format(tostring(name), base, power_target), "INFO")
     for _, node in pairs(nodes) do
       if node.role == constants.roles.RT_NODE then
+        local setpoints = build_rt_setpoints()
         if node.mode == "MASTER" then
-          send_rt_setpoints(node, build_rt_setpoints())
+          send_rt_setpoints(node, setpoints)
+          utils.log("MASTER", ("RT setpoints synced node=%s mode=MASTER power_target=%.2f steam=%.2f rpm=%.2f hold=%s"):format(
+            tostring(node.id), tonumber(setpoints.power_target) or 0, tonumber(setpoints.steam_target) or 0, tonumber(setpoints.rpm_target) or 0, tostring(rt_global_off_hold)
+          ), "INFO")
         else
           comms:send_command(node.id, {
             target = constants.command_targets.POWER_TARGET,
             value = power_target
           }, { requires_applied = true })
+          utils.log("MASTER", ("Queued power-target command node=%s mode=%s target=%.2f"):format(tostring(node.id), tostring(node.mode), power_target), "INFO")
         end
       end
     end
+  else
+    utils.log("MASTER", ("Profile %s applied but base power is unavailable; target unchanged"):format(tostring(name)), "WARN")
   end
 end
 
@@ -331,6 +340,10 @@ local function set_rt_global_hold(enabled)
   for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE then
       sync_rt_node(node)
+      local setpoints = build_rt_setpoints()
+      utils.log("MASTER", ("RT hold sync node=%s mode=%s power_target=%.2f steam=%.2f rpm=%.2f hold=%s"):format(
+        tostring(node.id), tostring(node.mode), tonumber(setpoints.power_target) or 0, tonumber(setpoints.steam_target) or 0, tonumber(setpoints.rpm_target) or 0, tostring(rt_global_off_hold)
+      ), "INFO")
     end
   end
 end
@@ -550,6 +563,7 @@ local function init()
 end
 
 local function main_loop()
+  utils.log("MASTER", "Entering event loop", "INFO")
   while true do
     local timer = os.startTimer(0.5)
     while true do
@@ -566,5 +580,42 @@ local function main_loop()
   end
 end
 
-init()
-main_loop()
+local function is_terminate_error(err)
+  local message = tostring(err or ""):lower()
+  return message:find("terminate", 1, true) ~= nil
+end
+
+local function shutdown(reason)
+  local shutdown_reason = tostring(reason or "requested")
+  if shutdown_reason:lower():find("terminate", 1, true) then
+    utils.log("MASTER", "terminate received", "WARN")
+  else
+    utils.log("MASTER", "shutdown requested: " .. shutdown_reason, "WARN")
+  end
+  utils.log("MASTER", "shutting down services", "INFO")
+  if services then
+    local ok, err = pcall(function() services:stop() end)
+    if not ok and not is_terminate_error(err) then
+      utils.log("MASTER", "service shutdown error: " .. tostring(err), "ERROR")
+    end
+  end
+  utils.log("MASTER", "shutdown complete", "INFO")
+end
+
+local ok, result_or_err = xpcall(function()
+  init()
+  return main_loop()
+end, function(err)
+  return err
+end)
+
+if ok then
+  shutdown(result_or_err)
+else
+  if is_terminate_error(result_or_err) then
+    shutdown("terminate received")
+  else
+    shutdown("runtime error: " .. tostring(result_or_err))
+    error(result_or_err, 0)
+  end
+end
