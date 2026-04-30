@@ -1,102 +1,206 @@
-# Migration Guide (aktueller Stand)
+# Migration Guide (aktueller Repo-Stand)
 
 ## Ziel
-Diese Migration beschreibt den **aktuellen** Wechsel auf den neuesten Repo-Stand mit dem lokalen Installer-Flow.
+Diese Migration beschreibt den **aktuellen Installer- und Repo-Stand** für ExtreamReactor-Controller-V3 auf dem `beta`-Branch.
 
-## Empfohlener Ablauf
-1. Installer lokal starten: `installer`.
-   - Fresh-Install-Standalone: Falls `/xreactor/installer_*.lua` noch nicht vorhanden ist, bootstrappt der Root-Installer diese Module zuerst selbst per HTTP-Download.
-2. Im Menü `Update` wählen.
-3. Der Installer lädt das Manifest, ermittelt die installierte Rolle aus `/xreactor/config/role.lua` und berechnet den Storage-Preflight.
-4. Dateien werden nach `/xreactor_stage` geladen und verifiziert.
-5. Bestehende Config aus `/xreactor/config` wird ins Stage übernommen.
+Wichtig:
+- Der normale Installer-Lauf ist **beta-only**.
+- Der Installer arbeitet mit **remote geladenen Metadaten** (`release.lua`, `manifest.lua`) vom `beta`-Branch und mit **lokaler Stage/Activate-Logik** auf dem Zielsystem.
+- Commit-Pinning ist im normalen `beta`-Installerpfad **nicht erlaubt**.
+
+---
+
+## Aktueller Install-/Update-Flow
+
+### Neuinstallation
+1. Root-Installer `installer` lokal starten.
+2. Rolle wählen.
+3. Der Installer lädt:
+   - `release.lua` vom `beta`-Branch
+   - danach `manifest.lua` vom `beta`-Branch
+4. Danach werden die erwarteten Dateien nach `/xreactor_stage` geladen.
+5. Die Stage wird validiert.
 6. Aktivierung/Commit:
    - aktives `/xreactor` -> `/xreactor_backup_prev`
    - `/xreactor_stage` -> `/xreactor`
-   - Backup wird nach erfolgreichem Commit gelöscht.
+   - Backup wird nach erfolgreichem Commit gelöscht
 7. Optional `reboot`, damit alle Dienste sauber neu starten.
 
-> Hinweis: Der Update-Flow ist lokal-only (lokale Stage/Backup/Activate-Pfade). Optionale Disk-Pfade betreffen Runtime-Logging, nicht den Installer-Commit.
+### Update
+1. Root-Installer `installer` lokal starten.
+2. `Update` wählen.
+3. Rolle wird aus bestehender Konfiguration gelesen.
+4. Der Installer lädt:
+   - `release.lua` vom `beta`-Branch
+   - `manifest.lua` vom `beta`-Branch
+5. Dateien werden nach `/xreactor_stage` geladen und validiert.
+6. Bestehende Config aus `/xreactor/config` wird ins Stage übernommen.
+7. Aktivierung/Commit wie oben.
+8. Optional `reboot`.
+
+---
+
+## Wichtige Strategie-Regeln
+
+### 1. Beta-only bedeutet: kein Commit-Pin
+Im normalen Installerlauf gilt:
+
+- `release.lua.commit_sha` darf **kein echter Commit-SHA** sein
+- `release.lua.source_ref` muss zu `beta` passen
+- `manifest.lua.source_ref` muss zu `beta` passen
+
+Wenn `release.lua` einen echten Commit-Pin enthält, ist das ein Fehler im Repo-Stand und der Installer **soll hart abbrechen**.
+
+### 2. Remote-Metadaten, lokaler Commit
+Der Installer ist **nicht lokal-only** im Sinne der Quelle:
+- Metadaten und Dateien werden vom `beta`-Branch geladen
+- Stage/Backup/Activate passieren lokal auf dem Zielsystem
+
+Die lokale Aktivierung bleibt absichtlich getrennt von der Remote-Beschaffung.
+
+### 3. Manifest ist verbindlich
+Alle shipped Dateien im Installerpfad werden gegen `manifest.lua` validiert:
+- `size_bytes`
+- `hash`
+
+Wenn eine Datei im Repo geändert wird, **muss** der passende Manifesteintrag nachgezogen werden.
+
+---
 
 ## Was beim Update erhalten bleibt
-- Rolle (`/xreactor/config/role.lua`, wird nach Update erneut sichergestellt).
-- Bestehende Runtime-Config in `/xreactor/config/*` (wird vor Aktivierung ins Stage kopiert).
-- `/startup`, sofern ein nicht-XReactor-Startup absichtlich geschützt ist (wird dann nicht überschrieben).
-- Persistierte Node-ID (`/xreactor/config/node_id.txt`) bleibt führend und wird nicht mehr durch Rollen-Defaults wie `ENERGY-1`/`RT-1` verdrängt.
+- Rolle (`/xreactor/config/role.lua`)
+- bestehende Runtime-Config in `/xreactor/config/*`
+- persistierte Node-ID (`/xreactor/config/node_id.txt`)
+- `/startup`, sofern ein nicht-XReactor-Startup absichtlich geschützt ist
 
-## Verhaltensänderungen (gezielt, funktional)
+---
 
-1. **Node-ID-Kollisionsschutz**
-   - Geändert: Netzwerk-Initialisierung priorisiert persistierte Node-ID und ignoriert kollisionsanfällige Rollen-Default-IDs als effektive Runtime-ID.
-   - Warum: Mehrere reale Nodes derselben Rolle liefen sonst mit identischer ID.
-   - Reduziertes Risiko: Comms-/State-Kollisionen zwischen Nodes.
+## Aktueller RT-Hinweis
+RT ist **nicht** mehr als „unverändert/frozen“ zu betrachten.
 
-2. **ENERGY Single-Device-Modell pro Node**
-   - Geändert: ENERGY bindet pro Node max. 1 Matrix und max. 1 Storage.
-   - Warum: Zielarchitektur vereinfacht Node-Laufzeit; Aggregation gehört in MASTER.
-   - Reduziertes Risiko: Mehrfach-Topologie-/Gruppierungsfehler pro Node und schwer nachvollziehbare Doppelzählung.
+Der aktuelle Repo-Stand enthält bereits RT-Kompatibilitäts- und Migrationslogik, z. B. für Legacy-Konfigpfade:
+- `runtime_ctx.monitor`
+- `runtime_ctx.mon`
+- Migration auf `monitor`
 
-## Pfade (Update vs. Runtime)
+Das bedeutet:
+- RT ist ein aktiver Stabilisierungsbereich
+- RT-bezogene Änderungen müssen immer gegen aktuellen Bootpfad, Config-Schema und `ctx`-Contracts geprüft werden
+- Änderungen an `xreactor/nodes/rt/*` brauchen besondere Vorsicht, weil Folgeblocker oft erst zur Laufzeit sichtbar werden
 
-### Update-relevant (Installer)
+---
+
+## Aktuelle Config-/Schema-Regeln (RT)
+Für RT gilt aktuell:
+
+- Monitor-Konfiguration soll über den **aktuellen gültigen Config-Pfad** laufen
+- alte verschachtelte Legacy-Pfade dürfen nur noch als Kompatibilitätsmigration behandelt werden
+- `config_normalizer.lua` ist der zentrale Ort für Legacy-Mapping und Default-/Clamp-Logik
+- `main.lua` darf sich nicht auf alte Felder verlassen, die weder in `config.lua` noch im Normalizer garantiert werden
+
+---
+
+## Manifest-/Release-Disziplin
+Ab diesem Stand gilt verbindlich:
+
+1. Datei geändert -> Manifest prüfen
+2. Dateiinhalt geändert -> `size_bytes` und `hash` nachziehen
+3. `release.lua`, `manifest.lua` und `installer_main.lua` dürfen sich strategisch nicht widersprechen
+4. Beta-only-Policy darf nicht durch Release-Metadaten ausgehebelt werden
+5. Ein grüner Text-/Snippet-Test reicht nicht; semantische Guards sind Pflicht
+
+---
+
+## Codex-Arbeitsregeln für dieses Repo
+Hinweis:
+Dieser Abschnitt ist als **Repo-Arbeitsregel zur Fehlervermeidung** formuliert. Er ist **kein wörtliches Zitat offizieller OpenAI-Dokumentation**.
+
+Bei Codex-/Agentenläufen in diesem Repo gilt:
+
+1. **Immer aktuellen Stand lesen, bevor geändert wird**
+   - betroffene Dateien zuerst vollständig lesen
+   - bei Installer-/Manifest-Themen immer zusammen prüfen:
+     - `installer`
+     - `xreactor/installer_main.lua`
+     - `xreactor/release.lua`
+     - `xreactor/manifest.lua`
+
+2. **Kleine, gezielte Änderungen statt breiter Refactors**
+   - nur den konkreten Blocker und direkt angrenzende Schutzmechanismen anfassen
+   - keine unnötigen Umbenennungen
+   - keine Architekturänderungen auf Verdacht
+
+3. **Nach jeder shipped Datei Manifest-Konsistenz prüfen**
+   - wenn eine manifestierte Datei geändert wurde:
+     - Größe neu prüfen
+     - Hash neu prüfen
+     - Manifest aktualisieren
+
+4. **Semantische Tests vor Text-/Snippet-Tests**
+   - nicht nur prüfen, ob eine Fehlermeldung als String existiert
+   - echte Inhalte prüfen:
+     - lädt `release.lua` als Tabelle?
+     - passt `manifest.lua` zu echten Dateien?
+     - existieren benötigte Modulpfade wirklich?
+     - sind erwartete `ctx`-Felder/Funktionen wirklich vorhanden?
+
+5. **Legacy-Migrationen zentral halten**
+   - Altpfade nicht an vielen Stellen flicken
+   - zentrale Migration im Normalizer/kompatiblen Adapter
+   - Aufrufer danach auf das aktuelle Schema umstellen
+
+6. **Bootpfad komplett denken**
+   - nicht nur den ersten sichtbaren Crash reparieren
+   - immer den direkt nächsten offensichtlichen Folgeblocker mitprüfen:
+     - Require-Pfade
+     - Config-Schema
+     - `ctx`-Contract
+     - Manifest-Coverage
+     - Release-/Installer-Policy
+
+7. **Beta-only wirklich durchhalten**
+   - keine verdeckten Commit-Pins
+   - keine Mischstrategie aus Branch und festen Commits im normalen Installerlauf
+
+---
+
+## Pfade
+
+### Installer-relevant
 - Install root: `/xreactor`
 - Stage root: `/xreactor_stage`
 - Backup root: `/xreactor_backup_prev`
-- Installer-Log: `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`
+- Installer-Logs:
+  - `/xreactor_logs/installer_bootstrap.log`
+  - `/xreactor_logs/installer_<role>.log`
 
 ### Runtime-/Logging-Pfade
-- Runtime-Logs liegen unter `/xreactor_logs` (bei vorhandener Disk können Runtime-Logs auf Disk-basierte Pfade umgeleitet sein; der Update-Flow selbst bleibt lokal).
-- Rollen-/Knoten-bezogene Runtime-Dateien bleiben unter `/xreactor/config/*`.
+- Runtime-Logs unter `/xreactor_logs`
+- Rollen-/Knoten-bezogene Runtime-Dateien unter `/xreactor/config/*`
 
-## Safety-/RT-Migrationshinweis
-- ENERGY sendet Heartbeats jetzt robuster bei hoher Last:
-  - Matrix-Energiemetriken (`stored/capacity/input/output`) werden standardmäßig nur noch alle `2.0s` gepollt (`matrix_metric_poll_interval`), statt bei jedem UI-/Telemetry-Statusaufbau.
-  - Neue Schutzschranke `matrix_metric_call_budget` (Default `4`) begrenzt teure Matrix-Einzelabfragen pro Payload-Build; fällige Reads werden fair über mehrere Ticks verteilt statt in einem Block ausgeführt.
-  - Ergänzend begrenzt `matrix_metric_time_budget_ms` (Default `800`) die gesamte Blockierzeit pro Payload-Build; sobald das Zeitbudget erreicht ist, werden weitere fällige Matrix-Reads sauber auf spätere Ticks verschoben.
-  - UI und TELEMETRY teilen dadurch denselben Matrix-Metrik-Cache pro Matrix; doppelte teure Reads im Sekundentakt werden vermieden.
-  - Bei aktivem Budget-Limit bleibt Diagnose sichtbar (`Matrix metric polling throttled: due=... budget=... deferred=...`) und die bisherigen Slow-Call-Details (`Status payload slow matrix calls: ...`) bleiben erhalten.
-  - Bei langsamen Statuspayloads werden die konkret langsamsten Matrix-Calls mitgeloggt (`Status payload slow matrix calls: <matrix>.<metric>=...ms`) für schnellere Engpass-Lokalisierung.
-  - Matrix-Komponenten-Zählwerte (`cells/providers/ports`) werden standardmäßig nur noch alle `30s` gepollt (`matrix_component_poll_interval`), statt bei jedem Statusaufbau.
-  - Dadurch werden lange blockierende Matrix-Komponenten-Calls deutlich reduziert und der 2s-Heartbeat-Rhythmus stabilisiert.
-  - Für Ursachenanalyse loggt der Service-Manager jetzt langsame Service-Ticks (`Service tick slow`) und langsame Gesamt-Ticks (`Service manager tick slow`).
-  - Service-Namen im Slow-Tick-Log sind jetzt immer eindeutig (`COMMS`, `DISCOVERY`, `TELEMETRY`, `UI` bzw. `service#N` als Fallback); der anonyme `?`-Eintrag entfällt.
-  - ENERGY cached den Statusaufbau kurzzeitig (`~1s`) zwischen TELEMETRY und UI, inklusive Slow-Stage-Logs (`Status payload slow: storage=... matrix=...`), damit doppelte teure Peripheral-Reads im selben Tick ausbleiben.
-  - Matrix-Abfragen sind jetzt logisch matrix-zentriert statt primär port-zentriert: mehrere `inductionPort_*` werden nur bei stabiler API-Identität/Topologie (z. B. Matrix-ID/Bounds) gruppiert. Reines Namenspräfix ist kein Gruppierungskriterium mehr, damit getrennte physische Matrizen nicht zusammenfallen.
-  - Matrix-Snapshots sind intern getrennt in `dynamic` (`stored/capacity/input/output`) und `static` (`cells/providers/ports`) Caches mit eigener Kadenz; dadurch blockieren seltene Strukturwerte keine schnelle Energiesicht.
-  - Slow-Call-Diagnose zeigt weiter konkrete Zuordnung (`matrix key`, `reader port`, `metric`), damit teure Ports/Metriken weiterhin gezielt identifizierbar bleiben.
-  - Heartbeat/Presence ist jetzt hart vom schweren Servicepfad getrennt:
-    - minimale Presence-Payload (`ts`, `node_id`, `role`) ohne Matrix/UI-Daten,
-    - eigener Heartbeat-Pump (`run_heartbeat_pump`) auf Timerpfad und zusätzlich vor/nach jedem Service im Service-Manager,
-    - zusätzlicher Heartbeat-Pump direkt innerhalb teurer Matrix-Poll-Loops, damit lange Peripheral-Calls Heartbeats nicht mehr um mehrere Sekunden verzögern,
-    - unmittelbares Ausleiten über `comms:tick(ts)` direkt nach `comms:send_heartbeat(...)`, damit Heartbeats nicht auf den nächsten schweren Gesamttick warten.
-- MASTER-Monitor-Scale wird jetzt pro Monitor-Name zwischengespeichert (statt pro temporärem Wrap-Objekt), damit periodische Monitor-Scans keine identischen `setTextScale`-Wiederholungen und keinen Log-Spam mehr auslösen.
-- Wenn ein Monitor wirklich verschwindet und später neu erkannt/rebound wird, wird der Cache für diesen Namen invalidiert und die Scale beim Rebind wieder korrekt gesetzt.
-- `SAFETY_COOLANT_LOW` wird nicht mehr sofort ausgelöst: zuerst Pending (`COOLANT_LOW_PENDING`), Bestätigung erst nach ~4s persistenter Unterschreitung; Recovery im Pending-Fenster bricht den Pending-Fall ab.
-- RT-Regelung nutzt aktive Target-Trim- und Readback-Diagnosezustände (u. a. `ACTIVE_TRIM_WITH_READBACK_LAG`, `TRIM_PENDING_CONFIRMATION`, `READBACK_SETTLING_HOLD`) sowie Overspeed-Bremszustände (`OVERSPEED_BRAKE`, inkl. Flow `0`).
-- Neuer offizieller RT-Konfig-Pfad für den automatischen Rod-Regler:
-  - `autonom.regulator_min_rods` (Default `80`, entspricht max. 20% automatischer Reaktorleistung; 100% rods = 0% Leistung, 0% rods = 100% Leistung)
-  - `autonom.regulator_max_rods` (Default `98`)
-  - Bereich `0..100`, bei `min > max` werden die Werte deterministisch getauscht.
-  - Legacy-Felder `autonom.min_rods` / `autonom.max_rods` werden bei fehlenden neuen Feldern weiterhin als Fallback gelesen.
-- Zusätzliches RT-Sekundärsignal für aktive Kühlung:
-  - `rails.reactor_steam_guard` nutzt internen Reaktor-Steam/Hot-Fluid-Füllstand als Guard (nicht als Primär-Führungsgröße).
-  - Hoher Füllstand blockiert weiteres Öffnen; kritischer Füllstand kann kontrolliertes Schließen erzwingen.
-  - Guard arbeitet geglättet (`ema_alpha`) und mit Hysterese (`high*`/`critical*` + `*_release`), um Oszillation zu vermeiden.
+---
 
-## Abschlussstand Non-RT-Architektur (dieser Repo-Stand)
+## Verbindliche Prüfliste vor Freigabe
+Vor jedem als „fertig“ betrachteten Repo-Stand:
 
-- Die Support-Nodes `water`/`fuel`/`reprocessor` nutzen gemeinsame Infrastruktur unter `xreactor/nodes/support/` für Runtime-Loop, Command-Parsing, Rollen-Connectivity, UI-Bausteine und Discovery-Helfer.
-- Discovery-Klassifikation in kleinen Nodes ist auf gemeinsame Methoden-basierte Hilfslogik konsolidiert; Rollenspezifik bleibt über `kind`/Filter/Matcher pro Node erhalten.
-- Renderpfade bleiben über Payload -> UI-Modell -> Rendering geführt; direkte Discovery-/Registry-Scans finden weiterhin außerhalb des Renderpfads statt.
-- RT bleibt bewusst unverändert; offene RT-Themen sind ausschließlich Audit-/Backlog-Punkte für einen separaten RT-Track.
+1. `release.lua` passt zur beta-only-Strategie
+2. `manifest.lua.source_ref` passt zu `beta`
+3. Installer-Policy, Release-Metadaten und Manifest widersprechen sich nicht
+4. alle geänderten manifestierten Dateien haben korrekte `size_bytes` und `hash`
+5. RT-Bootpfad wurde auf offensichtliche Folgeblocker mitgeprüft
+6. vorhandene Guards/Tests sind semantisch ausreichend
+7. Installer-Logs bleiben klar nach Rolle benannt
 
-## Finaler Abnahmestand (Non-RT, 2026-04-22)
+---
 
-- Der Non-RT-Roadmap-Umbau gilt auf diesem Stand als **im Wesentlichen abgeschlossen**:
-  - ENERGY läuft modular über dedizierte Runtime-/Payload-/UI-Bausteine.
-  - MASTER läuft modular über `runtime_context`, `startup_sequencer`, `message_handlers`, `ui_controller` und UI-Teilmodule.
-  - Installer-Entry (`installer` + `xreactor/installer_main.lua`) bleibt extern kompatibel und nutzt die modulare Installer-Schicht.
-  - WATER/FUEL/REPROCESSOR nutzen die gemeinsame Support-Schicht (`nodes/support/*`) für Discovery, Event-Loop, Command-Handling, UI-Bausteine und Rollen-Connectivity.
-- Bewusst **nicht** Bestandteil dieses Abschlusses:
-  - RT-Refactor, RT-State-Machine-Änderungen, RT-Sicherheitsverhalten (SAFE/LIMITED/STARTUP), direkte Änderungen unter `xreactor/nodes/rt/*`.
-- Offener Backlog wird als separater **RT-Audit-Track** geführt.
+## Abschlussbewertung dieses Dokuments
+Dieses Dokument beschreibt:
+- den aktuellen beta-only-Installeransatz
+- die lokale Stage/Activate-Logik
+- die aktuelle Manifest-/Release-Disziplin
+- die aktuellen Repo-Arbeitsregeln zur Fehlervermeidung
+
+Es ersetzt ältere Annahmen wie:
+- „lokal-only“ als Beschaffungsmodell
+- „RT bleibt unverändert“
+- rein textbasierte Schutztests als ausreichende Absicherung
