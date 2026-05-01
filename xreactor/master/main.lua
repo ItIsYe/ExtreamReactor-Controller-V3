@@ -119,9 +119,6 @@ local function normalize_setpoints(setpoints)
   return rt_sync.normalize_setpoints(setpoints)
 end
 
-local function build_rt_setpoints()
-  return rt_sync.build_rt_setpoints(config, rt_global_off_hold and 0 or power_target)
-end
 
 local function send_rt_mode(node, mode)
   rt_sync.send_rt_mode(comms, node, mode)
@@ -198,14 +195,21 @@ local function sync_rt_node(node)
     end
     return
   end
-  if node.mode == "MASTER" then
-    rt_sync.sync_rt_node({
-      config = config,
-      comms = comms,
-      power_target = power_target,
-      rt_global_off = rt_global_off_hold
-    }, node)
-  end
+  local plan = rt_sync.build_node_setpoint_plan({
+    config = config,
+    nodes = nodes,
+    power_target = power_target,
+    rt_global_off = rt_global_off_hold
+  })
+  rt_sync.sync_rt_node({
+    config = config,
+    comms = comms,
+    nodes = nodes,
+    plan = plan,
+    power_target = power_target,
+    rt_global_off = rt_global_off_hold,
+    log = function(message, level) utils.log("MASTER", message, level or "INFO") end
+  }, node)
 end
 
 local node_message_handler
@@ -310,19 +314,7 @@ local function apply_profile(name)
     utils.log("MASTER", ("Power target recalculated from profile %s: base=%.2f -> target=%.2f"):format(tostring(name), base, power_target), "INFO")
     for _, node in pairs(nodes) do
       if node.role == constants.roles.RT_NODE then
-        local setpoints = build_rt_setpoints()
-        if node.mode == "MASTER" then
-          send_rt_setpoints(node, setpoints)
-          utils.log("MASTER", ("RT setpoints synced node=%s mode=MASTER power_target=%.2f steam=%.2f rpm=%.2f hold=%s"):format(
-            tostring(node.id), tonumber(setpoints.power_target) or 0, tonumber(setpoints.steam_target) or 0, tonumber(setpoints.rpm_target) or 0, tostring(rt_global_off_hold)
-          ), "INFO")
-        else
-          comms:send_command(node.id, {
-            target = constants.command_targets.POWER_TARGET,
-            value = power_target
-          }, { requires_applied = true })
-          utils.log("MASTER", ("Queued power-target command node=%s mode=%s target=%.2f"):format(tostring(node.id), tostring(node.mode), power_target), "INFO")
-        end
+        sync_rt_node(node)
       end
     end
   else
@@ -340,10 +332,6 @@ local function set_rt_global_hold(enabled)
   for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE then
       sync_rt_node(node)
-      local setpoints = build_rt_setpoints()
-      utils.log("MASTER", ("RT hold sync node=%s mode=%s power_target=%.2f steam=%.2f rpm=%.2f hold=%s"):format(
-        tostring(node.id), tostring(node.mode), tonumber(setpoints.power_target) or 0, tonumber(setpoints.steam_target) or 0, tonumber(setpoints.rpm_target) or 0, tostring(rt_global_off_hold)
-      ), "INFO")
     end
   end
 end

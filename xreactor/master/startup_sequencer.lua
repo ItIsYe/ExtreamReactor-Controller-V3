@@ -30,6 +30,14 @@ local function now_ms()
   return os.epoch("utc")
 end
 
+local function is_startable(node)
+  if not node then return false, "NODE_MISSING" end
+  if node.mode ~= "MASTER" then return false, "MODE_" .. tostring(node.mode) end
+  if node.status == constants.status_levels.OFFLINE then return false, "OFFLINE" end
+  if node.state == constants.node_states.SAFE or node.state == constants.node_states.EMERGENCY then return false, "SAFE_OR_EMERGENCY" end
+  return true, "OK"
+end
+
 local function average(list, field)
   local sum, count = 0, 0
   for _, entry in ipairs(list or {}) do
@@ -116,9 +124,14 @@ function sequencer.new(comms, ramp_profile, opts)
     stage_started_ms = nil
   }
 
-  function self.enqueue(node_id)
+  function self.enqueue(node_id, reason)
     local normalized = utils.normalize_node_id(node_id)
-    table.insert(self.queue, { node_id = normalized })
+    for _, entry in ipairs(self.queue) do
+      if entry.node_id == normalized and not entry.module_id then
+        return
+      end
+    end
+    table.insert(self.queue, { node_id = normalized, reason = reason or "DISCOVERY" })
   end
 
   function self.build_steps(nodes)
@@ -144,7 +157,9 @@ function sequencer.new(comms, ramp_profile, opts)
       end
       self.active = table.remove(self.queue, 1)
       local node = nodes and nodes[self.active.node_id]
-      if not node or node.mode ~= "MASTER" then
+      local ok, reason = is_startable(node)
+      if not ok then
+        utils.log("SEQ", ("Skip startup node=%s reason=%s"):format(tostring(self.active.node_id), tostring(reason)), "WARN")
         table.insert(self.queue, 1, self.active)
         self.active = nil
         return
@@ -161,7 +176,7 @@ function sequencer.new(comms, ramp_profile, opts)
       comms:send_command(safe_node_id, payload, { requires_applied = true })
       self.state = states.waiting_ack
       self.stage_started_ms = now_ms()
-      utils.log("SEQ", "Request startup " .. tostring(self.active.module_id) .. " on " .. safe_node_id)
+      utils.log("SEQ", ("Request startup %s on %s reason=%s queue=%d"):format(tostring(self.active.module_id), safe_node_id, tostring(self.active.reason or "unknown"), #self.queue))
     elseif self.state == states.waiting_ack then
       if not self.stage_started_ms then
         self.stage_started_ms = now_ms()
