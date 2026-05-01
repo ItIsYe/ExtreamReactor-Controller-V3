@@ -144,7 +144,12 @@ function M.new(opts)
           limits = node.limits,
           status = node.status,
           mode = node.mode,
-          hold = overview_data.rt_global_off_hold == true
+          hold = overview_data.rt_global_off_hold == true,
+          target = node.last_setpoints and node.last_setpoints.power_target or nil,
+          target_rpm = node.last_setpoints and node.last_setpoints.target_rpm or nil,
+          steam_target = node.last_setpoints and node.last_setpoints.steam_target or nil,
+          assignment_reason = node.last_setpoints and node.last_setpoints.assignment_reason or nil,
+          startup_active = controller.sequencer.active and controller.sequencer.active.node_id == node.id or false
         }
       elseif node.role == controller.constants.roles.ENERGY_NODE then
         energy_data.stored = energy_data.stored + (node.aggregate_stored or node.stored or 0)
