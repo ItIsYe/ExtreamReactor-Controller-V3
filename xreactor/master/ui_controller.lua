@@ -147,11 +147,11 @@ function M.new(opts)
           hold = overview_data.rt_global_off_hold == true
         }
       elseif node.role == controller.constants.roles.ENERGY_NODE then
-        energy_data.stored = energy_data.stored + (node.stored or 0)
-        energy_data.capacity = energy_data.capacity + (node.capacity or 0)
-        energy_data.input = energy_data.input + (node.input or 0)
-        energy_data.output = energy_data.output + (node.output or 0)
-        energy_data.stores[#energy_data.stores + 1] = { id = node.id, stored = node.stored, capacity = node.capacity, input = node.input, output = node.output }
+        energy_data.stored = energy_data.stored + (node.aggregate_stored or node.stored or 0)
+        energy_data.capacity = energy_data.capacity + (node.aggregate_capacity or node.capacity or 0)
+        energy_data.input = energy_data.input + (node.aggregate_input or node.input or 0)
+        energy_data.output = energy_data.output + (node.aggregate_output or node.output or 0)
+        energy_data.stores[#energy_data.stores + 1] = { id = node.id, stored = node.aggregate_stored or node.stored, capacity = node.aggregate_capacity or node.capacity, input = node.aggregate_input or node.input, output = node.aggregate_output or node.output }
         energy_data.nodes[#energy_data.nodes + 1] = {
           id = node.id, monitor_bound = node.monitor_bound, storage_bound_count = node.storage_bound_count,
           bound_storage_names = node.bound_storage_names,

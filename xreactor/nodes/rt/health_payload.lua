@@ -24,6 +24,7 @@ end
 
 function M.build_health_payload(ctx)
   local reasons = {}
+  local degrade_reasons = {}
   local summary = ctx.devices.registry_summary or ctx.registry:get_summary()
   local binding_policy = ctx.binding.build_policy(ctx.configured_reactors, ctx.configured_turbines)
   local bound_reactors = summary.kinds.reactor and summary.kinds.reactor.bound or 0
@@ -38,18 +39,22 @@ function M.build_health_payload(ctx)
   end
   if ctx.devices.discovery_failed or ctx.devices.registry_load_error then
     reasons[ctx.health.reasons.DISCOVERY_FAILED] = true
+    degrade_reasons[ctx.health.reasons.DISCOVERY_FAILED] = true
   end
   if ctx.devices.proto_mismatch then
     reasons[ctx.health.reasons.PROTO_MISMATCH] = true
+    degrade_reasons[ctx.health.reasons.PROTO_MISMATCH] = true
   end
   if ctx.startup_watchdog_tripped then
     reasons[ctx.health.reasons.CONTROL_DEGRADED] = true
+    degrade_reasons[ctx.health.reasons.CONTROL_DEGRADED] = true
   end
   local connected = M.is_master_connected(ctx)
   if not connected then
     reasons[ctx.health.reasons.COMMS_DOWN] = true
+    degrade_reasons[ctx.health.reasons.COMMS_DOWN] = true
   end
-  local status = next(reasons) and ctx.health.status.DEGRADED or ctx.health.status.OK
+  local status = next(degrade_reasons) and ctx.health.status.DEGRADED or ctx.health.status.OK
   ctx.rt_health.status = status
   ctx.rt_health.reasons = reasons
   ctx.rt_health.last_seen_ts = os.epoch("utc")
