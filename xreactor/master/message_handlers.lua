@@ -12,6 +12,30 @@ function M.new(opts)
   local master_time_label = assert(opts.master_time_label, "master_time_label required")
   local log = assert(opts.log, "log required")
 
+
+  local function format_reasons(reason_set)
+    if type(reason_set) ~= "table" then return "none" end
+    local out = {}
+    for reason, enabled in pairs(reason_set) do
+      if enabled then out[#out + 1] = tostring(reason) end
+    end
+    table.sort(out)
+    return #out > 0 and table.concat(out, ",") or "none"
+  end
+
+  local function assign_node_status_from_health(node, origin)
+    local previous_status = node.status
+    local health_payload = node.health
+    local computed = previous_status
+    if health_payload and health_payload.status then
+      computed = health_payload.status
+    end
+    node.status = computed or constants.status_levels.OK
+    if previous_status ~= node.status then
+      log(("Node %s status %s -> %s (%s)"):format(tostring(node.id), tostring(previous_status or "UNKNOWN"), tostring(node.status), tostring(origin or "unknown")))
+    end
+  end
+
   local function update_node(message)
     if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
       local mismatch_id = utils.normalize_node_id(message.src)
@@ -60,30 +84,39 @@ function M.new(opts)
 
     if message.type == constants.message_types.HELLO or message.type == constants.message_types.REGISTER then
       if nodes[id].status == constants.status_levels.OFFLINE then log("Node online: " .. tostring(id)) end
-      nodes[id].status = constants.status_levels.OK
+      assign_node_status_from_health(nodes[id], "hello")
       nodes[id].state = constants.node_states.OFF
       if message.role == constants.roles.RT_NODE then sequencer:enqueue(id) end
       sync_rt_node(nodes[id])
     elseif message.type == constants.message_types.HEARTBEAT then
       nodes[id].state = message.payload.state
-      if nodes[id].status == constants.status_levels.OFFLINE or nodes[id].status == health.status.DOWN then
-        nodes[id].status = constants.status_levels.OK
-      end
       nodes[id].down_since = nil
       nodes[id].offline = false
       nodes[id].stale = false
       nodes[id].managed = true
       nodes[id].recovering = false
-      if nodes[id].health and nodes[id].health.reasons then
+      if nodes[id].health and nodes[id].health.reasons and nodes[id].health.reasons[health.reasons.COMMS_DOWN] then
         nodes[id].health.reasons[health.reasons.COMMS_DOWN] = nil
+        log(("Node %s reason removed: %s (heartbeat)"):format(id, health.reasons.COMMS_DOWN))
       end
+      assign_node_status_from_health(nodes[id], "heartbeat")
       sync_rt_node(nodes[id])
     elseif message.type == constants.message_types.STATUS then
       local previous_mode = nodes[id].mode
       nodes[id] = utils.merge(nodes[id], message.payload)
+      local previous_health_status = nodes[id].health and nodes[id].health.status or nil
+      local previous_reasons = nodes[id].health and nodes[id].health.reasons or nil
       if message.payload.health then
         nodes[id].health = message.payload.health
-        nodes[id].status = message.payload.health.status or nodes[id].status
+        if previous_health_status ~= message.payload.health.status then
+          log(("Node %s health %s -> %s (status payload)"):format(id, tostring(previous_health_status or "UNKNOWN"), tostring(message.payload.health.status or "UNKNOWN")))
+        end
+        local old_reasons = format_reasons(previous_reasons)
+        local new_reasons = format_reasons(message.payload.health.reasons)
+        if old_reasons ~= new_reasons then
+          log(("Node %s reasons %s -> %s"):format(id, old_reasons, new_reasons))
+        end
+        assign_node_status_from_health(nodes[id], "status")
       else
         nodes[id].status = message.payload.status or nodes[id].status
       end

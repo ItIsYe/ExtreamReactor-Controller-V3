@@ -49,6 +49,15 @@ function M.new(opts)
     energy.storages_count = effective_storage_count
     energy.storage_snapshot_freshness_ms = energy.freshness_ms
     energy.storage_snapshot_stale = energy.stale == true
+    energy.aggregate_stored = total_stored
+    energy.aggregate_capacity = total_capacity
+    energy.aggregate_input = total_input
+    energy.aggregate_output = total_output
+    energy.storage_stored = energy.stored
+    energy.storage_capacity = energy.capacity
+    energy.storage_input = energy.input
+    energy.storage_output = energy.output
+    -- Backward compatibility: stored/capacity/input/output remain aggregate totals.
     energy.stored = total_stored
     energy.capacity = total_capacity
     energy.input = total_input
@@ -68,14 +77,27 @@ function M.new(opts)
     energy.peripheral_count = runtime.devices.peripheral_count
 
     local reasons = {}
+    local degrade_reasons = {}
     if not energy.monitor_bound then reasons[runtime.health.reasons.NO_MONITOR] = true end
     if effective_storage_count == 0 then reasons[runtime.health.reasons.NO_STORAGE] = true end
-    if effective_matrix_count == 0 then reasons[runtime.health.reasons.NO_MATRIX] = true end
-    if runtime.devices.discovery_failed or runtime.devices.registry_load_error then reasons[runtime.health.reasons.DISCOVERY_FAILED] = true end
-    if runtime.devices.proto_mismatch then reasons[runtime.health.reasons.PROTO_MISMATCH] = true end
-    if not runtime.is_master_connected() then reasons[runtime.health.reasons.COMMS_DOWN] = true end
+    if effective_matrix_count == 0 then
+      reasons[runtime.health.reasons.NO_MATRIX] = true
+      degrade_reasons[runtime.health.reasons.NO_MATRIX] = true
+    end
+    if runtime.devices.discovery_failed or runtime.devices.registry_load_error then
+      reasons[runtime.health.reasons.DISCOVERY_FAILED] = true
+      degrade_reasons[runtime.health.reasons.DISCOVERY_FAILED] = true
+    end
+    if runtime.devices.proto_mismatch then
+      reasons[runtime.health.reasons.PROTO_MISMATCH] = true
+      degrade_reasons[runtime.health.reasons.PROTO_MISMATCH] = true
+    end
+    if not runtime.is_master_connected() then
+      reasons[runtime.health.reasons.COMMS_DOWN] = true
+      degrade_reasons[runtime.health.reasons.COMMS_DOWN] = true
+    end
 
-    runtime.energy_health.status = (next(reasons) and runtime.health.status.DEGRADED) or runtime.health.status.OK
+    runtime.energy_health.status = (next(degrade_reasons) and runtime.health.status.DEGRADED) or runtime.health.status.OK
     runtime.energy_health.reasons = reasons
     runtime.energy_health.last_seen_ts = os.epoch("utc")
     runtime.energy_health.bindings = {
@@ -103,6 +125,12 @@ function M.new(opts)
     }
 
     local total_duration = runtime.now_ms() - started_at
+    local matrix_mode = (effective_matrix_count > 0 and effective_storage_count > 0 and "mixed") or (effective_matrix_count > 0 and "matrix_only") or (effective_storage_count > 0 and "storage_only") or "empty"
+    if runtime.last_matrix_mode ~= matrix_mode then
+      runtime.log(("Energy payload mode %s -> %s (matrix=%d storage=%d aggregate=%.0f/%.0f)"):format(tostring(runtime.last_matrix_mode or "unknown"), matrix_mode, effective_matrix_count, effective_storage_count, total_stored, total_capacity))
+      runtime.last_matrix_mode = matrix_mode
+    end
+
     if total_duration > 1200 then
       runtime.log(("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d"):format(
         total_duration,
