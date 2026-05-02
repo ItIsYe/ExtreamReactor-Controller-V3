@@ -32,7 +32,9 @@ function M.normalize_setpoints(setpoints)
     assignment_source = payload.assignment_source,
     assignment_rank = payload.assignment_rank,
     assignment_state = payload.assignment_state,
-    controllable = payload.controllable
+    controllable = payload.controllable,
+    shutdown_stage = payload.shutdown_stage,
+    desired_node_state = payload.desired_node_state
   }
 end
 
@@ -101,6 +103,7 @@ function M.build_node_setpoint_plan(ctx)
   local base = config.rt_setpoints or {}
   local global_target = math.max(0, number_or(ctx.power_target, 0))
   local hold = ctx.rt_global_off == true
+  local now = os.epoch("utc")
   local plan = {}
   local active, pending_startup = {}, {}
   local max_node_power = math.max(1, number_or(base.power_per_node_capacity, 3000))
@@ -109,6 +112,7 @@ function M.build_node_setpoint_plan(ctx)
   for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE then
       local eval = M.evaluate_rt_node(node, { rt_global_off = hold })
+      local shutdown = node and node.shutdown_workflow or {}
       local entry = {
         node = node,
         eval = eval,
@@ -121,7 +125,10 @@ function M.build_node_setpoint_plan(ctx)
         assignment_state = "unavailable",
         controllable = eval.controllable == true,
         startup_eligible = eval.reason == "STARTUP_PENDING",
-        priority = math.max(0, number_or(eval.output, 0))
+        priority = math.max(0, number_or(eval.output, 0)),
+        shutdown_requested_at = shutdown.requested_at,
+        shutdown_stage = shutdown.stage,
+        shutdown_ready_at = shutdown.ready_at
       }
       table.insert(plan, entry)
       if entry.controllable then table.insert(active, entry) end
@@ -152,8 +159,20 @@ function M.build_node_setpoint_plan(ctx)
     else
       entry.assigned_power = 0
       entry.assignment_rank = idx
-      entry.assignment_state = idx == keep_count + 1 and "shed" or "standby"
-      entry.assignment_reason = idx == keep_count + 1 and "SHED_EXCESS_CAPACITY" or "STANDBY"
+      if idx == keep_count + 1 then
+        local ready_at = entry.shutdown_ready_at or 0
+        local requested_at = entry.shutdown_requested_at or now
+        local ramp_ms = math.max(1000, number_or(base.shutdown_ramp_ms, 6000))
+        if ready_at <= 0 then
+          ready_at = requested_at + ramp_ms
+        end
+        local shutdown_ready = now >= ready_at
+        entry.assignment_state = shutdown_ready and "shutdown" or "shed"
+        entry.assignment_reason = shutdown_ready and "SHUTDOWN_READY" or "SHED_EXCESS_CAPACITY"
+      else
+        entry.assignment_state = "standby"
+        entry.assignment_reason = "STANDBY"
+      end
     end
   end
 
@@ -184,6 +203,12 @@ function M.build_node_setpoint_plan(ctx)
 
   for _, entry in ipairs(plan) do
     local enabled = entry.controllable and not hold and entry.assignment_state == "active"
+    local desired_node_state = nil
+    if entry.assignment_state == "shutdown" then
+      desired_node_state = constants.node_states.OFF
+    elseif entry.assignment_state == "standby" or entry.assignment_state == "shed" then
+      desired_node_state = constants.node_states.LIMITED
+    end
     entry.setpoints = M.normalize_setpoints({
       target_rpm = base.target_rpm,
       steam_target = enabled and base.steam_target or 0,
@@ -194,7 +219,9 @@ function M.build_node_setpoint_plan(ctx)
       assignment_source = "master.rt_sync.plan",
       assignment_state = entry.assignment_state,
       assignment_rank = entry.assignment_rank,
-      controllable = entry.controllable
+      controllable = entry.controllable,
+      shutdown_stage = entry.assignment_state == "shutdown" and "REQUEST_OFF" or (entry.assignment_state == "shed" and "RAMPDOWN" or nil),
+      desired_node_state = desired_node_state
     })
   end
 

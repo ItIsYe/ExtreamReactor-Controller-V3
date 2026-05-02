@@ -20,6 +20,21 @@ local function set_setpoints(command, ctx, record)
   if value.enable_turbines ~= nil then
     targets.enable_turbines = value.enable_turbines and true or false
   end
+  local desired_state = value.desired_node_state
+  local machine = ctx.node_state_machine
+  if desired_state and machine and ctx.get_states()[desired_state] then
+    local current = machine:state()
+    if current ~= desired_state then
+      machine:transition(desired_state)
+      return record({
+        ok = true,
+        transition = "REQUESTED",
+        current_state = current,
+        desired_node_state = desired_state,
+        shutdown_stage = value.shutdown_stage
+      })
+    end
+  end
   ctx.request_startup_if_needed("SET_SETPOINTS")
   return nil
 end

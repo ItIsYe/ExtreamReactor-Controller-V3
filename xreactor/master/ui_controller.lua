@@ -152,7 +152,9 @@ function M.new(opts)
           assignment_rank = node.last_setpoints and node.last_setpoints.assignment_rank or nil,
           controllable = node.last_setpoints and node.last_setpoints.controllable or false,
           startup_active = controller.sequencer.active and controller.sequencer.active.node_id == node.id or false,
-          assignment_state = node.last_setpoints and node.last_setpoints.assignment_state or nil
+          assignment_state = node.last_setpoints and node.last_setpoints.assignment_state or nil,
+          shutdown_stage = node.last_setpoints and node.last_setpoints.shutdown_stage or nil,
+          desired_node_state = node.last_setpoints and node.last_setpoints.desired_node_state or nil
         }
       elseif node.role == controller.constants.roles.ENERGY_NODE then
         energy_data.stored = energy_data.stored + (node.aggregate_stored or node.stored or 0)
