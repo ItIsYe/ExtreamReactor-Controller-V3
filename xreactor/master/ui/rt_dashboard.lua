@@ -46,7 +46,10 @@ local function render(mon, model)
     local dispatch = rt.assignment_state or ((rt.target or 0) > 0 and "active" or (rt.startup_active and "startup" or "standby"))
     ui.text(mon, 4, row + 2, "Mode:" .. tostring(rt.mode or "?") .. " State:" .. tostring(dispatch) .. " Reason:" .. tostring(rt.assignment_reason or "n/a"), colorset.get("text"), colorset.get("background"))
     if rt.shutdown_stage or rt.desired_node_state or rt.shutdown_workflow_stage then
-      local extra = rt.shutdown_workflow_error and (" err=" .. tostring(rt.shutdown_workflow_error)) or ""
+      local extra = rt.shutdown_workflow_reason and (" reason=" .. tostring(rt.shutdown_workflow_reason)) or ""
+      if rt.shutdown_workflow_error then
+        extra = extra .. " err=" .. tostring(rt.shutdown_workflow_error)
+      end
       ui.text(mon, 4, row + 3, "Shutdown:" .. tostring(rt.shutdown_stage or "-") .. " -> " .. tostring(rt.desired_node_state or "-")
         .. " wf=" .. tostring(rt.shutdown_workflow_stage or "-") .. extra, colorset.get("LIMITED"), colorset.get("background"))
     end
