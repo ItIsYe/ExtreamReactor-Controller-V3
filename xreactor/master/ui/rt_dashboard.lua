@@ -70,8 +70,11 @@ local function render(mon, model)
       if rt.shutdown_workflow_error then
         extra = extra .. " err=" .. tostring(rt.shutdown_workflow_error)
       end
-      if rt.shutdown_requested_at or rt.shutdown_accepted_at or rt.shutdown_completed_at then
-        extra = extra .. " t_req=" .. tostring(rt.shutdown_requested_at or "-") .. " t_ack=" .. tostring(rt.shutdown_accepted_at or "-") .. " t_done=" .. tostring(rt.shutdown_completed_at or "-")
+      if rt.shutdown_workflow_outcome then
+        extra = extra .. " outcome=" .. tostring(rt.shutdown_workflow_outcome)
+      end
+      if rt.shutdown_requested_at or rt.shutdown_accepted_at or rt.shutdown_state_reached_at or rt.shutdown_completed_at then
+        extra = extra .. " t_req=" .. tostring(rt.shutdown_requested_at or "-") .. " t_ack=" .. tostring(rt.shutdown_accepted_at or "-") .. " t_state=" .. tostring(rt.shutdown_state_reached_at or "-") .. " t_done=" .. tostring(rt.shutdown_completed_at or "-")
       end
       ui.text(mon, 4, row + 3, "Shutdown:" .. tostring(rt.shutdown_stage or "-") .. " -> " .. tostring(rt.desired_node_state or "-")
         .. " wf=" .. stage .. extra, colorset.get("LIMITED"), colorset.get("background"))

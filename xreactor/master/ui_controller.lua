@@ -158,8 +158,10 @@ function M.new(opts)
           shutdown_workflow_stage = node.shutdown_workflow and node.shutdown_workflow.stage or nil,
           shutdown_workflow_error = node.shutdown_workflow and node.shutdown_workflow.error or nil,
           shutdown_workflow_reason = node.shutdown_workflow and node.shutdown_workflow.final_reason or nil,
+          shutdown_workflow_outcome = node.shutdown_workflow and node.shutdown_workflow.outcome or nil,
           shutdown_requested_at = node.shutdown_workflow and node.shutdown_workflow.request_command_at or nil,
           shutdown_accepted_at = node.shutdown_workflow and node.shutdown_workflow.request_ack_at or nil,
+          shutdown_state_reached_at = node.shutdown_workflow and node.shutdown_workflow.state_reached_at or nil,
           shutdown_completed_at = node.shutdown_workflow and node.shutdown_workflow.completed_at or nil
         }
       elseif node.role == controller.constants.roles.ENERGY_NODE then

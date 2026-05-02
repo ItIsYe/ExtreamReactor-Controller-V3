@@ -210,6 +210,7 @@ local function sync_rt_node(node)
     workflow.completed_at = now
     workflow.final_reason = reason
     workflow.error = err_msg
+    workflow.outcome = "FAILED"
     utils.log("MASTER", ("RT shutdown workflow failed node=%s reason=%s error=%s state=%s request_at=%s ack_at=%s"):format(
       tostring(node.id), tostring(reason), tostring(err_msg), tostring(node.state), tostring(workflow.request_command_at), tostring(workflow.request_ack_at)
     ), level or "WARN")
@@ -260,6 +261,7 @@ local function sync_rt_node(node)
       workflow.state_reached_at = now
       workflow.final_reason = "SUCCESS_COMPLETED"
       workflow.error = nil
+      workflow.outcome = "SUCCESS"
       utils.log("MASTER", ("RT shutdown workflow state reached node=%s state=%s"):format(
         tostring(node.id), tostring(node.state)
       ), "INFO")
@@ -295,10 +297,15 @@ local function sync_rt_node(node)
         workflow.command_ack_at = now
         workflow.request_ack_at = now
         workflow.request_accept_at = now
-        workflow.stage = "WAITING_STATE"
-        utils.log("MASTER", ("RT shutdown workflow request accepted node=%s requested_state=%s transition=%s accepted_at=%s"):format(
-          tostring(node.id), tostring(workflow.target_state or target_shutdown_state), tostring(cmd_result.transition or "REQUESTED"), tostring(workflow.request_accept_at)
-        ), "INFO")
+        local transition = tostring(cmd_result.transition or "UNKNOWN")
+        if transition == "REQUESTED" or transition == "ALREADY_IN_STATE" then
+          workflow.stage = "WAITING_STATE"
+          utils.log("MASTER", ("RT shutdown workflow request accepted node=%s requested_state=%s transition=%s accepted_at=%s"):format(
+            tostring(node.id), tostring(workflow.target_state or target_shutdown_state), transition, tostring(workflow.request_accept_at)
+          ), "INFO")
+        else
+          workflow_fail("FAILED_REJECTED", "UNEXPECTED_ACK_TRANSITION=" .. transition)
+        end
       end
     end
     if not workflow.request_ack_at and workflow.request_command_at and now - workflow.request_command_at > 15000 then
@@ -325,9 +332,9 @@ local function sync_rt_node(node)
         workflow.final_reason = "CANCELLED_DEMAND_RECOVERED"
       elseif workflow.stage == "FAILED" and (workflow.final_reason == nil or tostring(workflow.final_reason):sub(1, 7) ~= "FAILED_") then
         utils.log("MASTER", ("RT shutdown workflow cleanup guard node=%s corrected_final_reason=%s previous=%s"):format(
-          tostring(node.id), "FAILED_INVALID_STATE", tostring(workflow.final_reason)
+          tostring(node.id), "FAILED_UNKNOWN", tostring(workflow.final_reason)
         ), "WARN")
-        workflow.final_reason = "FAILED_INVALID_STATE"
+        workflow.final_reason = "FAILED_UNKNOWN"
       end
       utils.log("MASTER", ("RT shutdown workflow cleanup node=%s final_reason=%s stage=%s"):format(
         tostring(node.id), tostring(workflow.final_reason or "UNKNOWN"), tostring(workflow.stage or "UNKNOWN")
