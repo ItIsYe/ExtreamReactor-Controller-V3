@@ -63,8 +63,18 @@ function M.same_setpoints(a, b)
   if not a or not b then return false end
   return a.target_rpm == b.target_rpm and a.power_target == b.power_target and a.steam_target == b.steam_target and
       a.enable_reactors == b.enable_reactors and a.enable_turbines == b.enable_turbines and
-      a.assignment_reason == b.assignment_reason and a.assignment_rank == b.assignment_rank and
-      a.assignment_state == b.assignment_state and a.controllable == b.controllable
+      a.assignment_reason == b.assignment_reason and a.assignment_source == b.assignment_source and a.assignment_rank == b.assignment_rank and
+      a.assignment_state == b.assignment_state and a.controllable == b.controllable and
+      a.shutdown_stage == b.shutdown_stage and a.desired_node_state == b.desired_node_state
+end
+
+local function should_debounce_resend(node, desired, now)
+  local min_gap_ms = 1000
+  local last_ts = tonumber(node.last_setpoints_ts) or 0
+  if last_ts <= 0 then return false end
+  if not M.same_setpoints(node.last_setpoints, desired) then return false end
+  if (now - last_ts) > min_gap_ms then return false end
+  return true
 end
 
 function M.set_default_mode(ctx, node)
@@ -253,6 +263,29 @@ function M.sync_rt_node(ctx, node)
       tostring(assigned.mode), tostring(assigned.status)
     ), assigned.controllable and "INFO" or "WARN")
   end
+  local now = os.epoch("utc")
+  if should_debounce_resend(node, desired, now) then
+    if ctx.log then
+      ctx.log(("RT setpoints deduped node=%s state=%s reason=%s age_ms=%d"):format(
+        tostring(node_id), tostring(desired.assignment_state), tostring(desired.assignment_reason), now - (node.last_setpoints_ts or now)
+      ))
+    end
+    return
+  end
+
+  local ack = node.last_command_result
+  local shutdown_target = desired.desired_node_state == constants.node_states.OFF and desired.assignment_state == "shutdown"
+  if shutdown_target and ack and ack.ok ~= false and ack.command_target == (constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET) then
+    local ack_state = ack.desired_node_state or (ack.command_value and ack.command_value.desired_node_state)
+    local ack_transition = ack.transition or (ack.command_value and ack.command_value.transition)
+    if ack_state == constants.node_states.OFF and (ack_transition == "REQUESTED" or ack_transition == "ALREADY_IN_STATE") then
+      if ctx.log then
+        ctx.log(("RT shutdown resend skipped node=%s ack_transition=%s"):format(tostring(node_id), tostring(ack_transition)))
+      end
+      return
+    end
+  end
+
   if not M.same_setpoints(node.last_setpoints, desired) then
     M.send_rt_setpoints(ctx.comms, node, desired)
   end

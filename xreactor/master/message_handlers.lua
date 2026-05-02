@@ -23,12 +23,37 @@ function M.new(opts)
     return #out > 0 and table.concat(out, ",") or "none"
   end
 
+  local function reasons_to_set(reasons)
+    if type(reasons) ~= "table" then return {} end
+    local out = {}
+    local is_array = (#reasons > 0)
+    if is_array then
+      for _, reason in ipairs(reasons) do out[tostring(reason)] = true end
+      return out
+    end
+    for reason, enabled in pairs(reasons) do
+      if enabled then out[tostring(reason)] = true end
+    end
+    return out
+  end
+
   local function assign_node_status_from_health(node, origin)
     local previous_status = node.status
     local health_payload = node.health
     local computed = previous_status
     if health_payload and health_payload.status then
       computed = health_payload.status
+    end
+    local reasons = reasons_to_set(health_payload and health_payload.reasons)
+    local shutdown_state = node.last_setpoints and node.last_setpoints.assignment_state
+    local controlled_shutdown = shutdown_state == "shutdown" or shutdown_state == "shed" or shutdown_state == "standby"
+    if controlled_shutdown and computed == health.status.DEGRADED and node.state and (node.state == constants.node_states.OFF or node.state == constants.node_states.LIMITED) then
+      if reasons[health.reasons.COMMS_DOWN] ~= true and reasons[health.reasons.PROTO_MISMATCH] ~= true and reasons[health.reasons.DISCOVERY_FAILED] ~= true then
+        computed = constants.status_levels.OK
+        log(("Node %s suppresses degraded during controlled shutdown: state=%s assign=%s reasons=%s"):format(
+          tostring(node.id), tostring(node.state), tostring(shutdown_state), format_reasons(reasons)
+        ))
+      end
     end
     node.status = computed or constants.status_levels.OK
     if previous_status ~= node.status then
@@ -157,7 +182,10 @@ function M.new(opts)
         ack_for = message.ack_for,
         at = os.epoch("utc"),
         command_target = result.command_target,
-        command_value = result.command_value
+        command_value = result.command_value,
+        transition = result.transition,
+        desired_node_state = result.desired_node_state,
+        shutdown_stage = result.shutdown_stage
       }
       nodes[id].last_command_error = result.ok == false and (result.error or "unknown") or nil
       if result.ok == false then log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN") end

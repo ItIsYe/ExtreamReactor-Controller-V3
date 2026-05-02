@@ -126,10 +126,12 @@ function M.new(opts)
 
     local total_duration = runtime.now_ms() - started_at
     local matrix_mode = (effective_matrix_count > 0 and effective_storage_count > 0 and "mixed") or (effective_matrix_count > 0 and "matrix_only") or (effective_storage_count > 0 and "storage_only") or "empty"
-    if runtime.last_matrix_mode ~= matrix_mode then
+    local startup_grace_ms = math.max(0, math.floor(tonumber(runtime.config.energy_mode_log_startup_grace_ms) or 3000))
+    if runtime.last_matrix_mode ~= matrix_mode and (runtime.first_status_payload_ts == nil or (runtime.now_ms() - runtime.first_status_payload_ts) >= startup_grace_ms) then
       runtime.log(("Energy payload mode %s -> %s (matrix=%d storage=%d aggregate=%.0f/%.0f)"):format(tostring(runtime.last_matrix_mode or "unknown"), matrix_mode, effective_matrix_count, effective_storage_count, total_stored, total_capacity))
       runtime.last_matrix_mode = matrix_mode
     end
+    runtime.first_status_payload_ts = runtime.first_status_payload_ts or started_at
 
     if total_duration > 1200 then
       runtime.log(("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d"):format(
