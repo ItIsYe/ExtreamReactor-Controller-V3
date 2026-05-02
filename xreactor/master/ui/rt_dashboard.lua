@@ -43,8 +43,8 @@ local function render(mon, model)
     ui.panel(mon, 2, row, w - 3, 5, rt.id .. " (" .. tostring(rt.state or "OFF") .. ")", status)
     ui.bigNumber(mon, 4, row + 1, "Target", string.format("%.0f", rt.target or 0), "RF/t", status)
     ui.bigNumber(mon, 22, row + 1, "Actual", string.format("%.0f", rt.actual_output or rt.output or 0), "RF/t", status)
-    local dispatch = (rt.target or 0) > 0 and "LOAD" or (rt.startup_active and "STARTUP" or "STANDBY")
-    ui.text(mon, 4, row + 2, "Mode:" .. tostring(rt.mode or "?") .. " Role:" .. dispatch .. " Reason:" .. tostring(rt.assignment_reason or "n/a"), colorset.get("text"), colorset.get("background"))
+    local dispatch = rt.assignment_state or ((rt.target or 0) > 0 and "active" or (rt.startup_active and "startup" or "standby"))
+    ui.text(mon, 4, row + 2, "Mode:" .. tostring(rt.mode or "?") .. " State:" .. tostring(dispatch) .. " Reason:" .. tostring(rt.assignment_reason or "n/a"), colorset.get("text"), colorset.get("background"))
     local modules = rt.modules or {}
     local module_names = {}
     for name in pairs(modules) do
