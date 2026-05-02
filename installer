@@ -53,6 +53,25 @@ local function write_file(path, content)
   return true
 end
 
+local function reset_log_directory()
+  local log_dir = constants.LOG_DIR
+  if type(log_dir) ~= "string" or log_dir == "" then
+    return true
+  end
+  if fs.exists(log_dir) then
+    print("Installer bereinigt Log-Verzeichnis: " .. tostring(log_dir))
+    local ok_delete, delete_err = pcall(fs.delete, log_dir)
+    if not ok_delete then
+      return false, "log cleanup failed (" .. tostring(delete_err) .. ")"
+    end
+  end
+  local ok_make, make_err = pcall(fs.makeDir, log_dir)
+  if not ok_make then
+    return false, "log dir recreate failed (" .. tostring(make_err) .. ")"
+  end
+  return true
+end
+
 local function download_url(url)
   if not http or type(http.get) ~= "function" then
     return nil, "HTTP API unavailable"
@@ -133,6 +152,11 @@ end
 local ok, err = ensure_installer_runtime()
 if not ok then
   error("Installer bootstrap fehlgeschlagen: " .. tostring(err), 0)
+end
+
+local logs_ok, logs_err = reset_log_directory()
+if not logs_ok then
+  error("Installer log cleanup fehlgeschlagen: " .. tostring(logs_err), 0)
 end
 
 local installer_main = dofile("/xreactor/installer_main.lua")
