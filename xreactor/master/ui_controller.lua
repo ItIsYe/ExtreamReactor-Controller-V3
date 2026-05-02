@@ -149,6 +149,8 @@ function M.new(opts)
           target_rpm = node.last_setpoints and node.last_setpoints.target_rpm or nil,
           steam_target = node.last_setpoints and node.last_setpoints.steam_target or nil,
           assignment_reason = node.last_setpoints and node.last_setpoints.assignment_reason or nil,
+          assignment_rank = node.last_setpoints and node.last_setpoints.assignment_rank or nil,
+          controllable = node.last_setpoints and node.last_setpoints.controllable or false,
           startup_active = controller.sequencer.active and controller.sequencer.active.node_id == node.id or false
         }
       elseif node.role == controller.constants.roles.ENERGY_NODE then
