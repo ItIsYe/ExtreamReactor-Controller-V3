@@ -211,9 +211,13 @@ local function sync_rt_node(node)
     workflow.final_reason = reason
     workflow.error = err_msg
     workflow.outcome = "FAILED"
+    workflow.state_reached_at = nil
     utils.log("MASTER", ("RT shutdown workflow failed node=%s reason=%s error=%s state=%s request_at=%s ack_at=%s"):format(
       tostring(node.id), tostring(reason), tostring(err_msg), tostring(node.state), tostring(workflow.request_command_at), tostring(workflow.request_ack_at)
     ), level or "WARN")
+    utils.log("MASTER", ("RT shutdown workflow outcome set node=%s outcome=%s final_reason=%s completed_at=%s"):format(
+      tostring(node.id), tostring(workflow.outcome), tostring(workflow.final_reason), tostring(workflow.completed_at)
+    ), "INFO")
   end
   if plan.shutdown_candidate_id == node.id then
     if not workflow.requested_at then
@@ -221,16 +225,27 @@ local function sync_rt_node(node)
       workflow.stage = "RAMPDOWN"
       workflow.final_reason = nil
       workflow.error = nil
+      workflow.outcome = nil
       workflow.target_state = target_shutdown_state
       workflow.ready_at = now + ((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000)
+      workflow.request_command_at = nil
+      workflow.request_ack_at = nil
+      workflow.command_ack_at = nil
+      workflow.completed_at = nil
+      workflow.state_reached_at = nil
       utils.log("MASTER", ("RT shutdown workflow start node=%s reason=SHED_EXCESS_CAPACITY ready_in_ms=%d"):format(tostring(node.id), tonumber(((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000))), "INFO")
     end
   elseif workflow.requested_at and workflow.stage ~= "COMPLETED" and workflow.stage ~= "FAILED" and workflow.stage ~= "CANCELLED_DEMAND_RECOVERED" then
     workflow.stage = "CANCELLED_DEMAND_RECOVERED"
     workflow.final_reason = "CANCELLED_DEMAND_RECOVERED"
     workflow.error = nil
+    workflow.outcome = "CANCELLED"
+    workflow.state_reached_at = nil
     workflow.completed_at = now
     utils.log("MASTER", ("RT shutdown workflow cancelled node=%s reason=%s"):format(tostring(node.id), tostring(workflow.final_reason)), "INFO")
+    utils.log("MASTER", ("RT shutdown workflow outcome set node=%s outcome=%s final_reason=%s completed_at=%s"):format(
+      tostring(node.id), tostring(workflow.outcome), tostring(workflow.final_reason), tostring(workflow.completed_at)
+    ), "INFO")
   end
   if sequencer and plan.startup_candidate_id and node.id == plan.startup_candidate_id then
     sequencer:enqueue(node.id, "DEMAND_STARTUP")
@@ -265,8 +280,14 @@ local function sync_rt_node(node)
       utils.log("MASTER", ("RT shutdown workflow state reached node=%s state=%s"):format(
         tostring(node.id), tostring(node.state)
       ), "INFO")
+      utils.log("MASTER", ("RT shutdown workflow state_reached_at set node=%s state_reached_at=%s"):format(
+        tostring(node.id), tostring(workflow.state_reached_at)
+      ), "INFO")
       utils.log("MASTER", ("RT shutdown workflow finalised node=%s final_reason=%s requested_at=%s accepted_at=%s completed_at=%s"):format(
         tostring(node.id), tostring(workflow.final_reason), tostring(workflow.request_command_at), tostring(workflow.request_ack_at), tostring(workflow.completed_at)
+      ), "INFO")
+      utils.log("MASTER", ("RT shutdown workflow outcome set node=%s outcome=%s final_reason=%s completed_at=%s"):format(
+        tostring(node.id), tostring(workflow.outcome), tostring(workflow.final_reason), tostring(workflow.completed_at)
       ), "INFO")
     elseif workflow.target_state and node.state == constants.node_states.EMERGENCY then
       workflow_fail("FAILED_INVALID_STATE", "NODE_IN_EMERGENCY")
@@ -319,6 +340,11 @@ local function sync_rt_node(node)
     end
   end
   if workflow.stage == "COMPLETED" or workflow.stage == "FAILED" or workflow.stage == "CANCELLED_DEMAND_RECOVERED" then
+    if not workflow.outcome or not workflow.final_reason or not workflow.completed_at then
+      utils.log("MASTER", ("RT shutdown workflow terminal field gap node=%s stage=%s outcome=%s final_reason=%s completed_at=%s"):format(
+        tostring(node.id), tostring(workflow.stage), tostring(workflow.outcome), tostring(workflow.final_reason), tostring(workflow.completed_at)
+      ), "WARN")
+    end
     if workflow.completed_at and (now - workflow.completed_at) > 20000 then
       if workflow.stage == "COMPLETED" and workflow.final_reason ~= "SUCCESS_COMPLETED" then
         utils.log("MASTER", ("RT shutdown workflow cleanup guard node=%s corrected_final_reason=%s previous=%s"):format(
