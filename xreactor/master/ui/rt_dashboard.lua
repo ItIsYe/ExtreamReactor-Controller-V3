@@ -47,7 +47,22 @@ local function render(mon, model)
     ui.text(mon, 4, row + 2, "Mode:" .. tostring(rt.mode or "?") .. " State:" .. tostring(dispatch) .. " Reason:" .. tostring(rt.assignment_reason or "n/a"), colorset.get("text"), colorset.get("background"))
     if rt.shutdown_stage or rt.desired_node_state or rt.shutdown_workflow_stage then
       local stage = tostring(rt.shutdown_workflow_stage or "-")
-      local verdict = (stage == "COMPLETED" and "SUCCESS") or (stage == "CANCELLED_DEMAND_RECOVERED" and "CANCELLED") or (stage == "FAILED" and "FAILED") or ((stage == "REQUESTED" or stage == "WAITING_STATE" or stage == "REQUEST_STATE" or stage == "RAMPDOWN") and "IN_PROGRESS") or "IDLE"
+      local verdict = "IDLE"
+      if stage == "COMPLETED" then
+        verdict = "COMPLETED"
+      elseif stage == "CANCELLED_DEMAND_RECOVERED" then
+        verdict = "CANCELLED"
+      elseif stage == "FAILED" then
+        verdict = "FAILED"
+      elseif stage == "REQUESTED" then
+        verdict = "REQUESTED"
+      elseif stage == "WAITING_STATE" then
+        verdict = "WAITING_STATE"
+      elseif stage == "REQUEST_STATE" then
+        verdict = "REQUEST_STATE"
+      elseif stage == "RAMPDOWN" then
+        verdict = "RAMPDOWN"
+      end
       local extra = " verdict=" .. verdict
       if rt.shutdown_workflow_reason then
         extra = extra .. " reason=" .. tostring(rt.shutdown_workflow_reason)
