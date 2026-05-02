@@ -45,3 +45,42 @@ if not result or result.ok ~= true or result.transition ~= 'REQUESTED' then
 end
 
 print('rt_command_shutdown_transition_test.lua: ok')
+
+local blocked_handler = handler.new({
+  protocol = {
+    is_for_node = function() return true end,
+    is_proto_compatible = function() return true end
+  },
+  STATE = { MASTER = 'MASTER', SAFE = 'SAFE' },
+  targets = {},
+  get_current_state = function() return 'AUTONOM' end,
+  get_states = function() return constants.node_states end,
+  node_state_machine = {
+    state = function() return constants.node_states.RUNNING end,
+    transition = function() error('must not transition while not in MASTER') end
+  },
+  request_startup_if_needed = function() end,
+  apply_mode = function() end,
+  start_module = function() return nil end,
+  add_alarm = function() end,
+  get_network_id = function() return 'RT-1' end,
+  note_master_seen = function() end,
+  set_last_command = function() end,
+  set_last_command_ts = function() end
+})
+
+local denied = blocked_handler({
+  proto_ver = constants.proto_ver,
+  payload = {
+    command = {
+      target = constants.command_targets.SET_SETPOINTS,
+      value = { desired_node_state = constants.node_states.OFF, shutdown_stage = 'REQUEST_OFF' }
+    }
+  }
+})
+
+if not denied or denied.ok ~= false or denied.reason_code ~= 'INVALID_STATE' then
+  error('expected explicit INVALID_STATE rejection for shutdown transition outside MASTER mode')
+end
+
+print('rt_command_shutdown_transition_test.lua: invalid-state reject path ok')
