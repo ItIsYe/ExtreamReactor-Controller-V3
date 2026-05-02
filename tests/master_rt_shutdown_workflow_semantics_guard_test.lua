@@ -60,3 +60,20 @@ end
 if not content:find('workflow_fail("FAILED_ACK_MISSING", "ACK_MISSING")', 1, true) then
   error('missing explicit FAILED_ACK_MISSING contract')
 end
+
+
+if not content:find('if node.state == %(workflow.target_state or target_shutdown_state%) then', 1, false) then
+  error('completion must remain bound to actual node.state reaching target')
+end
+if not content:find('RT shutdown workflow request sent node=%s', 1, true) then
+  error('missing request-sent diagnostic log contract')
+end
+if not content:find('RT shutdown workflow request accepted node=%s', 1, true) then
+  error('missing request-accepted diagnostic log contract')
+end
+if not content:find('RT shutdown workflow finalised node=%s final_reason=%s', 1, true) then
+  error('missing finalised success log contract')
+end
+if not content:find('cleanup guard node=%s corrected_final_reason=%s', 1, true) then
+  error('missing cleanup final-reason guard contract')
+end
