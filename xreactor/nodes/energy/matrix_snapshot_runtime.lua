@@ -151,8 +151,8 @@ end
 
 function runtime:poll_due_metrics(now_ts, groups)
   local metric_poll_interval_ms = math.max(1, tonumber(self.config.matrix_metric_poll_interval) or 2.0) * 1000
-  local metric_call_budget = math.max(1, math.floor(tonumber(self.config.matrix_metric_call_budget) or 4))
-  local metric_time_budget_ms = math.max(100, math.floor(tonumber(self.config.matrix_metric_time_budget_ms) or 800))
+  local metric_call_budget = math.max(1, math.floor(tonumber(self.config.matrix_metric_call_budget) or 3))
+  local metric_time_budget_ms = math.max(100, math.floor(tonumber(self.config.matrix_metric_time_budget_ms) or 600))
   local slow_call_ms = math.max(50, tonumber(self.config.matrix_metric_slow_call_ms) or 150)
   local slow_poll_multiplier = math.max(1, tonumber(self.config.matrix_metric_slow_poll_multiplier) or 4.0)
   local per_matrix_budget = math.max(1, math.floor(tonumber(self.config.matrix_metric_per_matrix_budget) or 1))
@@ -279,6 +279,14 @@ function runtime:poll_due_metrics(now_ts, groups)
       )
       self.last_throttle_log_ts = now_ts
     end
+  elseif self.debug_enabled and poll_spent_ms >= math.floor(metric_time_budget_ms * 0.85) and (now_ts - (self.last_throttle_log_ts or 0) >= throttle_log_interval_ms) then
+    utils.log(self.log_prefix, ("Matrix metric polling near budget limit: due=%d polled=%d time_budget_ms=%d spent_ms=%d"):format(
+      #jobs,
+      polled,
+      metric_time_budget_ms,
+      poll_spent_ms
+    ), "WARN")
+    self.last_throttle_log_ts = now_ts
   end
 
   return diag
