@@ -223,6 +223,7 @@ local build_modules
 local refresh_module_peripherals
 local build_module_lifecycle_context
 local require_module_lifecycle_context
+local is_master_connected
 local STATE = {
   INIT = "INIT",
   AUTONOM = "AUTONOM",
@@ -1528,6 +1529,15 @@ local function build_mode_control_context()
     set_current_state = function(value) current_state = value end,
     get_node_state_machine = function() return node_state_machine end
   }
+  ctx.is_master_connected = is_master_connected
+  if type(ctx.is_master_connected) ~= "function" then
+    error("rt state context missing required function: is_master_connected", 2)
+  end
+  if not runtime_ctx.warned.rt_state_context_built then
+    runtime_ctx.warned.rt_state_context_built = true
+    log("INFO", "State context ready (is_master_connected=true)")
+  end
+  return ctx
 end
 local function setState(new_state, transition_reason)
   return state_handlers.set_state(build_mode_control_context(), new_state, transition_reason)
@@ -1623,7 +1633,7 @@ local function master_peer_state()
   return health_payload.master_peer_state(build_health_payload_context())
 end
 
-local function is_master_connected()
+is_master_connected = function()
   return health_payload.is_master_connected(build_health_payload_context())
 end
 
@@ -1888,7 +1898,7 @@ end
 local states
 
 local function build_state_context()
-  return {
+  local ctx = {
     constants = constants,
     STATE = STATE,
     config = config,
@@ -1918,6 +1928,15 @@ local function build_state_context()
     get_current_state = function() return current_state end,
     get_node_state_machine = function() return node_state_machine end
   }
+  ctx.is_master_connected = is_master_connected
+  if type(ctx.is_master_connected) ~= "function" then
+    error("rt state context missing required function: is_master_connected", 2)
+  end
+  if not runtime_ctx.warned.rt_state_context_built then
+    runtime_ctx.warned.rt_state_context_built = true
+    log("INFO", "State context ready (is_master_connected=true)")
+  end
+  return ctx
 end
 
 local function build_command_context()

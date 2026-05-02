@@ -204,6 +204,7 @@ local function sync_rt_node(node)
   node.shutdown_workflow = node.shutdown_workflow or {}
   local workflow = node.shutdown_workflow
   local target_shutdown_state = constants.node_states.OFF
+  local restart_cooldown_ms = ((config.rt_setpoints and config.rt_setpoints.shutdown_restart_cooldown_ms) or 15000)
   local function workflow_fail(reason, err_msg, level)
     workflow.stage = "FAILED"
     workflow.failed_at = now
@@ -220,7 +221,9 @@ local function sync_rt_node(node)
     ), "INFO")
   end
   if plan.shutdown_candidate_id == node.id then
-    if not workflow.requested_at then
+    if workflow.cancelled_at and (now - workflow.cancelled_at) < restart_cooldown_ms then
+      utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANCEL_RECOVERY_COOLDOWN"):format(tostring(node.id), math.max(0, restart_cooldown_ms - (now - workflow.cancelled_at))), "INFO")
+    elseif not workflow.requested_at then
       workflow.requested_at = now
       workflow.stage = "RAMPDOWN"
       workflow.final_reason = nil
@@ -242,6 +245,8 @@ local function sync_rt_node(node)
     workflow.outcome = "CANCELLED"
     workflow.state_reached_at = nil
     workflow.completed_at = now
+    workflow.cancelled_at = now
+    workflow.requested_at = nil
     utils.log("MASTER", ("RT shutdown workflow cancelled node=%s reason=%s"):format(tostring(node.id), tostring(workflow.final_reason)), "INFO")
     utils.log("MASTER", ("RT shutdown workflow outcome set node=%s outcome=%s final_reason=%s completed_at=%s"):format(
       tostring(node.id), tostring(workflow.outcome), tostring(workflow.final_reason), tostring(workflow.completed_at)

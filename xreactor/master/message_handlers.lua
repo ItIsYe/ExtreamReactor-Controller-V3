@@ -50,8 +50,8 @@ function M.new(opts)
     if controlled_shutdown and computed == health.status.DEGRADED and node.state and (node.state == constants.node_states.OFF or node.state == constants.node_states.LIMITED) then
       if reasons[health.reasons.COMMS_DOWN] ~= true and reasons[health.reasons.PROTO_MISMATCH] ~= true and reasons[health.reasons.DISCOVERY_FAILED] ~= true then
         computed = constants.status_levels.OK
-        log(("Node %s suppresses degraded during controlled shutdown: state=%s assign=%s reasons=%s"):format(
-          tostring(node.id), tostring(node.state), tostring(shutdown_state), format_reasons(reasons)
+        log(("Node %s suppresses degraded during controlled shutdown: state=%s assign=%s reasons=%s source=%s"):format(
+          tostring(node.id), tostring(node.state), tostring(shutdown_state), format_reasons(reasons), tostring(origin or "unknown")
         ))
       end
     end
