@@ -201,6 +201,13 @@ local function sync_rt_node(node)
     power_target = power_target,
     rt_global_off = rt_global_off_hold
   })
+  if sequencer and plan.startup_candidate_id and node.id == plan.startup_candidate_id then
+    sequencer:enqueue(node.id, "DEMAND_STARTUP")
+    utils.log("MASTER", ("RT startup candidate node=%s target=%.2f required_nodes=%d"):format(tostring(node.id), tonumber(power_target) or 0, tonumber(plan.required_nodes) or 0), "INFO")
+  end
+  if plan.shutdown_candidate_id and node.id == plan.shutdown_candidate_id then
+    utils.log("MASTER", ("RT shutdown candidate node=%s target=%.2f"):format(tostring(node.id), tonumber(power_target) or 0), "INFO")
+  end
   rt_sync.sync_rt_node({
     config = config,
     comms = comms,

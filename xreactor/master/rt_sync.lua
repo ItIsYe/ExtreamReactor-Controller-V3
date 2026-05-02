@@ -122,10 +122,11 @@ function M.build_node_setpoint_plan(ctx)
         assigned_power = 0,
         assignment_rank = nil,
         assignment_reason = eval.reason,
-        controllable = eval.controllable == true
+        controllable = eval.controllable == true,
+        startup_eligible = eval.reason == "STARTUP_PENDING"
       }
       table.insert(plan, entry)
-      if entry.controllable then
+      if entry.controllable or entry.startup_eligible then
         table.insert(eligible, entry)
       end
     end
@@ -134,11 +135,65 @@ function M.build_node_setpoint_plan(ctx)
   table.sort(plan, function(a, b) return (a.id or "") < (b.id or "") end)
   table.sort(eligible, function(a, b) return (a.id or "") < (b.id or "") end)
 
-  local share = (#eligible > 0 and global_target > 0) and (global_target / #eligible) or 0
-  for idx, entry in ipairs(eligible) do
-    entry.assigned_power = share
-    entry.assignment_rank = idx
-    entry.assignment_reason = "LOAD_SHARE"
+  local startup_pending = {}
+  local active = {}
+  for _, entry in ipairs(eligible) do
+    if entry.eval.state == constants.node_states.OFF or entry.startup_eligible then
+      table.insert(startup_pending, entry)
+    else
+      table.insert(active, entry)
+    end
+  end
+
+  local active_capacity = math.max(1, #active) * math.max(1, number_or(base.power_per_node_capacity, 3000))
+  local required_nodes = 0
+  if global_target > 0 then
+    required_nodes = math.max(1, math.ceil(global_target / math.max(1, number_or(base.power_per_node_capacity, 3000))))
+  end
+  if required_nodes > #eligible then required_nodes = #eligible end
+
+  local startup_candidate = nil
+  if global_target > active_capacity and #startup_pending > 0 and #active < required_nodes then
+    startup_candidate = startup_pending[1]
+    startup_candidate.assignment_reason = "STARTUP_NEEDED"
+  end
+
+  local active_for_load = {}
+  for _, entry in ipairs(active) do table.insert(active_for_load, entry) end
+  table.sort(active_for_load, function(a,b)
+    if (a.output or 0) == (b.output or 0) then return (a.id or '') < (b.id or '') end
+    return (a.output or 0) > (b.output or 0)
+  end)
+
+  local keep_count = math.min(#active_for_load, required_nodes)
+  local active_sum = 0
+  for i=1, keep_count do active_sum = active_sum + math.max(0, number_or(active_for_load[i].output, 0)) end
+  local shutdown_candidate = nil
+
+  for idx, entry in ipairs(active_for_load) do
+    if idx <= keep_count then
+      local weight = math.max(1, number_or(entry.output, 0))
+      local assigned = global_target > 0 and (global_target * (weight / math.max(1, active_sum))) or 0
+      entry.assigned_power = assigned
+      entry.assignment_rank = idx
+      entry.assignment_reason = keep_count > 1 and "LOAD_WEIGHTED" or "PRIMARY_ACTIVE"
+    elseif not shutdown_candidate then
+      shutdown_candidate = entry
+      entry.assigned_power = 0
+      entry.assignment_reason = "SHED_EXCESS_CAPACITY"
+      entry.assignment_rank = idx
+    else
+      entry.assigned_power = 0
+      entry.assignment_reason = "STANDBY"
+      entry.assignment_rank = idx
+    end
+  end
+
+  for _, entry in ipairs(startup_pending) do
+    if entry ~= startup_candidate then
+      entry.assignment_reason = "STARTUP_WAIT"
+      entry.assigned_power = 0
+    end
   end
 
   for _, entry in ipairs(plan) do
@@ -151,6 +206,7 @@ function M.build_node_setpoint_plan(ctx)
       enable_turbines = enabled and (base.enable_turbines == true) or false,
       assignment_reason = entry.assignment_reason,
       assignment_source = "master.rt_sync.plan",
+      active = entry.assigned_power > 0,
       assignment_rank = entry.assignment_rank,
       controllable = entry.controllable
     })
@@ -160,7 +216,10 @@ function M.build_node_setpoint_plan(ctx)
     nodes = plan,
     global_target = global_target,
     hold = hold,
-    controllable_count = #eligible
+    controllable_count = #eligible,
+    required_nodes = required_nodes,
+    startup_candidate_id = startup_candidate and startup_candidate.id or nil,
+    shutdown_candidate_id = shutdown_candidate and shutdown_candidate.id or nil
   }
 end
 

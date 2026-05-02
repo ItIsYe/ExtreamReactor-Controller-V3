@@ -24,8 +24,8 @@ end
 if not assigned['RT-1'] or not assigned['RT-2'] or not assigned['RT-3'] then
   error('expected plan entries for all RT nodes')
 end
-if assigned['RT-1'].power_target ~= 3000 or assigned['RT-2'].power_target ~= 3000 then
-  error('expected equal per-node power distribution for controllable nodes')
+if assigned['RT-1'].power_target <= assigned['RT-2'].power_target then
+  error('expected weighted per-node distribution to prioritize higher-output active node')
 end
 if assigned['RT-3'].power_target ~= 0 or assigned['RT-3'].enable_reactors ~= false then
   error('safe-mode node must not receive active setpoints')
