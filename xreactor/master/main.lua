@@ -214,8 +214,8 @@ local function sync_rt_node(node)
       workflow.ready_at = now + ((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000)
       utils.log("MASTER", ("RT shutdown workflow start node=%s reason=SHED_EXCESS_CAPACITY ready_in_ms=%d"):format(tostring(node.id), tonumber(((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000))), "INFO")
     end
-  elseif workflow.requested_at and workflow.stage ~= "COMPLETED" and workflow.stage ~= "FAILED" and workflow.stage ~= "CANCELLED_RECOVERY" then
-    workflow.stage = "CANCELLED_RECOVERY"
+  elseif workflow.requested_at and workflow.stage ~= "COMPLETED" and workflow.stage ~= "FAILED" and workflow.stage ~= "CANCELLED_DEMAND_RECOVERED" then
+    workflow.stage = "CANCELLED_DEMAND_RECOVERED"
     workflow.final_reason = "CANCELLED_DEMAND_RECOVERED"
     workflow.completed_at = now
     utils.log("MASTER", ("RT shutdown workflow cancelled node=%s reason=%s"):format(tostring(node.id), tostring(workflow.final_reason)), "INFO")
@@ -230,7 +230,7 @@ local function sync_rt_node(node)
       tostring(node.id), tonumber(power_target) or 0, tostring(workflow.stage or "RAMPDOWN"), tonumber(remaining_ms) or 0), "INFO")
   end
   if workflow.requested_at and workflow.stage == "RAMPDOWN" and workflow.ready_at and now >= workflow.ready_at then
-    workflow.stage = "REQUEST_OFF"
+    workflow.stage = "REQUEST_STATE"
     workflow.request_command_at = nil
     workflow.command_ack_at = nil
     workflow.request_ack_at = nil
@@ -241,13 +241,14 @@ local function sync_rt_node(node)
   end
 
   local cmd_result = node.last_command_result
-  if workflow.stage == "REQUEST_OFF" or workflow.stage == "WAITING_APPLY" then
+  if workflow.stage == "REQUEST_STATE" or workflow.stage == "REQUESTED" then
     if not workflow.request_command_at or now - workflow.request_command_at > 5000 then
       local setpoints = normalize_setpoints(node.last_setpoints or {})
       setpoints.shutdown_stage = "REQUEST_OFF"
       setpoints.desired_node_state = workflow.target_state or target_shutdown_state
       send_rt_setpoints(node, setpoints)
       workflow.request_command_at = now
+      workflow.stage = "REQUESTED"
       utils.log("MASTER", ("RT shutdown workflow command sent node=%s stage=%s target_state=%s"):format(
         tostring(node.id), tostring(setpoints.shutdown_stage), tostring(setpoints.desired_node_state)
       ), "INFO")
@@ -300,7 +301,7 @@ local function sync_rt_node(node)
       ), "WARN")
     end
   end
-  if workflow.stage == "COMPLETED" or workflow.stage == "FAILED" or workflow.stage == "CANCELLED_RECOVERY" then
+  if workflow.stage == "COMPLETED" or workflow.stage == "FAILED" or workflow.stage == "CANCELLED_DEMAND_RECOVERED" then
     if workflow.completed_at and (now - workflow.completed_at) > 20000 then
       node.shutdown_workflow = {}
       workflow = node.shutdown_workflow

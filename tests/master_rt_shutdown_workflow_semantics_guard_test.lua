@@ -7,10 +7,11 @@ handle:close()
 
 local required_stages = {
   'RAMPDOWN',
-  'REQUEST_OFF',
+  'REQUEST_STATE',
+  'REQUESTED',
   'WAITING_STATE',
   'COMPLETED',
-  'CANCELLED_RECOVERY',
+  'CANCELLED_DEMAND_RECOVERED',
   'FAILED'
 }
 
