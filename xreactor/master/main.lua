@@ -201,12 +201,28 @@ local function sync_rt_node(node)
     power_target = power_target,
     rt_global_off = rt_global_off_hold
   })
+  node.shutdown_workflow = node.shutdown_workflow or {}
+  local workflow = node.shutdown_workflow
+  if plan.shutdown_candidate_id == node.id then
+    if not workflow.requested_at then
+      workflow.requested_at = now
+      workflow.stage = "RAMPDOWN"
+      workflow.ready_at = now + ((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000)
+      utils.log("MASTER", ("RT shutdown workflow start node=%s reason=SHED_EXCESS_CAPACITY ready_in_ms=%d"):format(tostring(node.id), tonumber(((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000))), "INFO")
+    end
+  elseif workflow.requested_at then
+    utils.log("MASTER", ("RT shutdown workflow cleared node=%s reason=DEMAND_RECOVERED"):format(tostring(node.id)), "INFO")
+    node.shutdown_workflow = {}
+    workflow = node.shutdown_workflow
+  end
   if sequencer and plan.startup_candidate_id and node.id == plan.startup_candidate_id then
     sequencer:enqueue(node.id, "DEMAND_STARTUP")
     utils.log("MASTER", ("RT startup candidate node=%s target=%.2f required_nodes=%d"):format(tostring(node.id), tonumber(power_target) or 0, tonumber(plan.required_nodes) or 0), "INFO")
   end
   if plan.shutdown_candidate_id and node.id == plan.shutdown_candidate_id then
-    utils.log("MASTER", ("RT shutdown candidate node=%s target=%.2f"):format(tostring(node.id), tonumber(power_target) or 0), "INFO")
+    local remaining_ms = workflow.ready_at and math.max(0, workflow.ready_at - now) or 0
+    utils.log("MASTER", ("RT shutdown candidate node=%s target=%.2f stage=%s remaining_ms=%d"):format(
+      tostring(node.id), tonumber(power_target) or 0, tostring(workflow.stage or "RAMPDOWN"), tonumber(remaining_ms) or 0), "INFO")
   end
   rt_sync.sync_rt_node({
     config = config,
