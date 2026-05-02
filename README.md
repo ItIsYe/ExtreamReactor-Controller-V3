@@ -128,7 +128,7 @@ Der große Nicht-RT-Umbau ist auf dem aktuellen Stand abgeschlossen (Final-Audit
 - ENERGY/MASTER/Installer laufen modular,
 - WATER/FUEL/REPROCESSOR nutzen die gemeinsame Support-Schicht.
 
-RT bleibt bewusst getrennt und unverändert; RT-Audits/Refactors laufen separat.
+RT bleibt bewusst als separater Stabilisierungsbereich behandelt; Shutdown-/Standby-/Mehrknotenlogik wird dort weiterhin aktiv weiterentwickelt und separat auditiert.
 
 Support-node architecture note:
 - `water`, `fuel`, and `reprocessor` keep role-specific control logic local, but share common discovery classification/runtime wiring via `nodes/support/*`.

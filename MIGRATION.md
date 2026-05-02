@@ -90,6 +90,30 @@ Das bedeutet:
 
 ---
 
+
+## Shutdown-Workflow (MASTER <-> RT) – aktueller Ist-Stand
+Der aktuelle Repo-Stand enthält einen deutlich weiter ausgebauten Shutdown-Workflow als in älteren Doku-Ständen:
+
+- MASTER führt pro RT-Knoten einen `shutdown_workflow` mit Stufen wie `RAMPDOWN`, `REQUEST_STATE`, `WAITING_STATE`, `COMPLETED`, `FAILED`, `CANCELLED_DEMAND_RECOVERED`.
+- Der Soll-Zustand wird als `desired_node_state` in den RT-Setpoints übertragen.
+- RT verarbeitet `desired_node_state` im Command-Handler und führt bei gültigem Zustand die Zustandsmaschine entsprechend in Richtung Zielzustand.
+- MASTER pflegt dazu Workflow-Metadaten inkl. `outcome`, `final_reason`, `completed_at`, `state_reached_at` sowie Request-/Ack-Zeitstempeln.
+
+Wichtig zur Einordnung:
+- Die vorhandenen Guards sind nützlich, aber der Shutdown-Guard-Block ist derzeit gemischt:
+  - **Primär:** erste verhaltensnahe Semantikprüfungen (z. B. REQUESTED vs. ALREADY_IN_STATE, INVALID_STATE, SAFE_MODE).
+  - **Sekundär:** weiterhin text-/tokenbasierte Präsenzchecks auf Stages/Felder/Reason-Tokens.
+- Das ist **kein** Endzustand „vollständig semantisch abgesichert“. Dieser Ausbaupunkt bleibt offen.
+
+## UI-/Workflow-Diagnose (MASTER)
+Die MASTER-UI kann Shutdown-Workflow-Diagnose je RT-Knoten bereits sichtbar machen, u. a.:
+
+- Shutdown-Stage und Workflow-Reason
+- Workflow-Outcome und Workflow-Error
+- Request-/Accept-/State-Reached-/Completed-Zeitstempel
+
+Zweck ist operative Diagnose im Live-Betrieb; die Anzeige ersetzt keine verhaltensbasierte End-to-End-Validierung.
+
 ## Aktuelle Config-/Schema-Regeln (RT)
 Für RT gilt aktuell:
 
@@ -107,7 +131,7 @@ Ab diesem Stand gilt verbindlich:
 2. Dateiinhalt geändert -> `size_bytes` und `hash` nachziehen
 3. `release.lua`, `manifest.lua` und `installer_main.lua` dürfen sich strategisch nicht widersprechen
 4. Beta-only-Policy darf nicht durch Release-Metadaten ausgehebelt werden
-5. Ein grüner Text-/Snippet-Test reicht nicht; semantische Guards sind Pflicht
+5. Ein grüner Text-/Snippet-Test reicht nicht; verhaltensbasierte semantische Guards bleiben das Zielbild und sind im Shutdown-Bereich noch nicht vollständig ausgebaut
 
 ---
 
@@ -117,7 +141,7 @@ Dieser Abschnitt ist als **Repo-Arbeitsregel zur Fehlervermeidung** formuliert. 
 
 Bei Codex-/Agentenläufen in diesem Repo gilt:
 
-1. **Immer aktuellen Stand lesen, bevor geändert wird**
+1. **Dokumentation immer gegen echten Code-/Teststand abgleichen (nicht gegen alte Annahmen)**
    - betroffene Dateien zuerst vollständig lesen
    - bei Installer-/Manifest-Themen immer zusammen prüfen:
      - `installer`
@@ -136,7 +160,10 @@ Bei Codex-/Agentenläufen in diesem Repo gilt:
      - Hash neu prüfen
      - Manifest aktualisieren
 
-4. **Semantische Tests vor Text-/Snippet-Tests**
+4. **Text-/Token-Guards nie als Endzustand verkaufen**
+   - textbasierte Checks sind Sekundärschutz
+   - bei Shutdown-/Workflow-Themen verhaltensbasierte Semantikprüfungen bevorzugen
+   - keine Aussage „voll semantisch abgesichert“, solange nur Token-Guards große Teile abdecken
    - nicht nur prüfen, ob eine Fehlermeldung als String existiert
    - echte Inhalte prüfen:
      - lädt `release.lua` als Tabelle?
@@ -188,7 +215,7 @@ Vor jedem als „fertig“ betrachteten Repo-Stand:
 3. Installer-Policy, Release-Metadaten und Manifest widersprechen sich nicht
 4. alle geänderten manifestierten Dateien haben korrekte `size_bytes` und `hash`
 5. RT-Bootpfad wurde auf offensichtliche Folgeblocker mitgeprüft
-6. vorhandene Guards/Tests sind semantisch ausreichend
+6. vorhandene Guards/Tests decken den Stand ab, enthalten aber im Shutdown-Bereich weiterhin einen relevanten Anteil text-/tokenbasierter Sekundärguards
 7. Installer-Logs bleiben klar nach Rolle benannt
 
 ---
@@ -203,4 +230,4 @@ Dieses Dokument beschreibt:
 Es ersetzt ältere Annahmen wie:
 - „lokal-only“ als Beschaffungsmodell
 - „RT bleibt unverändert“
-- rein textbasierte Schutztests als ausreichende Absicherung
+- rein textbasierte Schutztests als alleinige Absicherung
