@@ -273,6 +273,14 @@ function M.sync_rt_node(ctx, node)
     return
   end
 
+  local workflow = node.shutdown_workflow or {}
+  if workflow.stage == "REQUESTED" or workflow.stage == "WAITING_STATE" then
+    if ctx.log then
+      ctx.log(("RT setpoints deduped node=%s reason=SHUTDOWN_WORKFLOW_%s"):format(tostring(node_id), tostring(workflow.stage)))
+    end
+    return
+  end
+
   local ack = node.last_command_result
   local shutdown_target = desired.desired_node_state == constants.node_states.OFF and desired.assignment_state == "shutdown"
   if shutdown_target and ack and ack.ok ~= false and ack.command_target == (constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET) then
