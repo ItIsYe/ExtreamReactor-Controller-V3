@@ -43,10 +43,20 @@ end
 print('master_rt_shutdown_workflow_semantics_guard_test.lua: ok')
 
 
-if not content:find('RT shutdown workflow cleanup node=%s final_reason=%s', 1, true) then
+if not content:find('RT shutdown workflow cleanup node=%s final_reason=%s stage=%s', 1, true) then
   error('missing explicit cleanup log with preserved final_reason')
 end
 
 if not content:find('workflow.stage = "REQUESTED"', 1, true) or not content:find('workflow.stage = "COMPLETED"', 1, true) then
   error('REQUESTED and COMPLETED stages must stay explicitly distinct')
+end
+
+if not content:find('workflow.stage == "REQUEST_STATE" or workflow.stage == "REQUESTED"', 1, true) then
+  error('request phase contract missing; REQUESTED must stay non-final')
+end
+if not content:find('workflow.stage == "WAITING_STATE"', 1, true) then
+  error('waiting phase contract missing; completion must wait for real node state')
+end
+if not content:find('workflow_fail("FAILED_ACK_MISSING", "ACK_MISSING")', 1, true) then
+  error('missing explicit FAILED_ACK_MISSING contract')
 end

@@ -53,7 +53,7 @@ return {
     master = {
       { path = "master/config.lua", size_bytes = 8523, hash = "2e77a2a6" },
       { path = "master/housekeeping.lua", size_bytes = 1952, hash = "d4ae44ae" },
-      { path = "master/main.lua", size_bytes = 27434, hash = "750dda7f", required_for = { "MASTER" } },
+      { path = "master/main.lua", size_bytes = 27374, hash = "e41c1e42", required_for = { "MASTER" } },
       { path = "master/message_handlers.lua", size_bytes = 8447, hash = "a29920d6" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
       { path = "master/rt_sync.lua", size_bytes = 10560, hash = "346b1b26" },
@@ -66,7 +66,7 @@ return {
       { path = "master/ui/multiview.lua", size_bytes = 12861, hash = "7c7f5c34" },
       { path = "master/ui/overview.lua", size_bytes = 5221, hash = "ff8dc6b8" },
       { path = "master/ui/resources.lua", size_bytes = 5634, hash = "3c3f86d2" },
-      { path = "master/ui/rt_dashboard.lua", size_bytes = 4350, hash = "0bad89be" },
+      { path = "master/ui/rt_dashboard.lua", size_bytes = 4604, hash = "7d2bd6d3" },
       { path = "master/ui/widgets.lua", size_bytes = 775, hash = "aafe7d4a" },
       { path = "core/alert_rules.lua", size_bytes = 13600, hash = "3ef37a5e" },
       { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },

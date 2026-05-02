@@ -204,6 +204,16 @@ local function sync_rt_node(node)
   node.shutdown_workflow = node.shutdown_workflow or {}
   local workflow = node.shutdown_workflow
   local target_shutdown_state = constants.node_states.OFF
+  local function workflow_fail(reason, err_msg, level)
+    workflow.stage = "FAILED"
+    workflow.failed_at = now
+    workflow.completed_at = now
+    workflow.final_reason = reason
+    workflow.error = err_msg
+    utils.log("MASTER", ("RT shutdown workflow failed node=%s reason=%s error=%s"):format(
+      tostring(node.id), tostring(reason), tostring(err_msg)
+    ), level or "WARN")
+  end
   if plan.shutdown_candidate_id == node.id then
     if not workflow.requested_at then
       workflow.requested_at = now
@@ -242,6 +252,21 @@ local function sync_rt_node(node)
   end
 
   local cmd_result = node.last_command_result
+
+  if workflow.requested_at and workflow.stage ~= "COMPLETED" and workflow.stage ~= "FAILED" and workflow.stage ~= "CANCELLED_DEMAND_RECOVERED" then
+    if node.state == (workflow.target_state or target_shutdown_state) then
+      workflow.stage = "COMPLETED"
+      workflow.completed_at = now
+      workflow.final_reason = "SUCCESS_COMPLETED"
+      workflow.error = nil
+      utils.log("MASTER", ("RT shutdown workflow completed node=%s final_state=%s"):format(
+        tostring(node.id), tostring(node.state)
+      ), "INFO")
+    elseif workflow.target_state and node.state == constants.node_states.EMERGENCY then
+      workflow_fail("FAILED_INVALID_STATE", "NODE_IN_EMERGENCY")
+    end
+  end
+
   if workflow.stage == "REQUEST_STATE" or workflow.stage == "REQUESTED" then
     if not workflow.request_command_at or now - workflow.request_command_at > 5000 then
       local setpoints = normalize_setpoints(node.last_setpoints or {})
@@ -260,14 +285,8 @@ local function sync_rt_node(node)
           cmd_value.shutdown_stage == "REQUEST_OFF" and
           cmd_value.desired_node_state == (workflow.target_state or target_shutdown_state)
       if is_shutdown_ack and cmd_result.ok == false then
-        workflow.stage = "FAILED"
-        workflow.failed_at = now
-        workflow.completed_at = now
-        workflow.final_reason = (cmd_result.reason_code == "INVALID_STATE") and "FAILED_INVALID_STATE" or "FAILED_REJECTED"
-        workflow.error = cmd_result.error or cmd_result.reason_code or "unknown"
-        utils.log("MASTER", ("RT shutdown workflow failed node=%s error=%s reason=%s"):format(
-          tostring(node.id), tostring(workflow.error), tostring(cmd_result.reason_code)
-        ), "WARN")
+        local failure_reason = (cmd_result.reason_code == "INVALID_STATE") and "FAILED_INVALID_STATE" or "FAILED_REJECTED"
+        workflow_fail(failure_reason, cmd_result.error or cmd_result.reason_code or "unknown")
       elseif is_shutdown_ack and cmd_result.ok ~= false then
         workflow.command_ack_at = now
         workflow.request_ack_at = now
@@ -278,39 +297,19 @@ local function sync_rt_node(node)
       end
     end
     if not workflow.request_ack_at and workflow.request_command_at and now - workflow.request_command_at > 15000 then
-      workflow.stage = "FAILED"
-      workflow.failed_at = now
-      workflow.completed_at = now
-      workflow.final_reason = "FAILED_ACK_MISSING"
-      workflow.error = "ACK_MISSING"
-      utils.log("MASTER", ("RT shutdown workflow failed node=%s reason=%s"):format(
-        tostring(node.id), tostring(workflow.final_reason)
-      ), "WARN")
+      workflow_fail("FAILED_ACK_MISSING", "ACK_MISSING")
     end
   elseif workflow.stage == "WAITING_STATE" then
-    if node.state == (workflow.target_state or target_shutdown_state) then
-      workflow.stage = "COMPLETED"
-      workflow.completed_at = now
-      workflow.final_reason = "SUCCESS_COMPLETED"
-      workflow.error = nil
-      utils.log("MASTER", ("RT shutdown workflow completed node=%s final_state=%s"):format(
-        tostring(node.id), tostring(node.state)
-      ), "INFO")
-    elseif workflow.command_ack_at and now - workflow.command_ack_at > 15000 then
-      workflow.stage = "FAILED"
-      workflow.failed_at = now
-      workflow.completed_at = now
-      workflow.final_reason = "FAILED_TIMEOUT"
-      workflow.error = "STATE_TRANSITION_TIMEOUT"
-      utils.log("MASTER", ("RT shutdown workflow timeout node=%s target_state=%s current_state=%s"):format(
-        tostring(node.id), tostring(workflow.target_state or target_shutdown_state), tostring(node.state)
-      ), "WARN")
+    if workflow.command_ack_at and now - workflow.command_ack_at > 15000 then
+      workflow_fail("FAILED_TIMEOUT", ("STATE_TRANSITION_TIMEOUT current=%s target=%s"):format(
+        tostring(node.state), tostring(workflow.target_state or target_shutdown_state)
+      ))
     end
   end
   if workflow.stage == "COMPLETED" or workflow.stage == "FAILED" or workflow.stage == "CANCELLED_DEMAND_RECOVERED" then
     if workflow.completed_at and (now - workflow.completed_at) > 20000 then
-      utils.log("MASTER", ("RT shutdown workflow cleanup node=%s final_reason=%s"):format(
-        tostring(node.id), tostring(workflow.final_reason or "UNKNOWN")
+      utils.log("MASTER", ("RT shutdown workflow cleanup node=%s final_reason=%s stage=%s"):format(
+        tostring(node.id), tostring(workflow.final_reason or "UNKNOWN"), tostring(workflow.stage or "UNKNOWN")
       ), "INFO")
       node.shutdown_workflow = {}
       workflow = node.shutdown_workflow
