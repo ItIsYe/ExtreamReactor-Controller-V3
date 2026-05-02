@@ -30,9 +30,21 @@ local required_reasons = {
   'FAILED_ACK_MISSING'
 }
 
+local required_outcomes = {
+  'workflow.outcome = "SUCCESS"',
+  'workflow.outcome = "CANCELLED"',
+  'workflow.outcome = "FAILED"'
+}
+
 for _, reason in ipairs(required_reasons) do
   if not content:find(reason, 1, true) then
     error('missing required shutdown workflow final reason in master/main.lua: ' .. tostring(reason))
+  end
+end
+
+for _, outcome_token in ipairs(required_outcomes) do
+  if not content:find(outcome_token, 1, true) then
+    error('missing required shutdown workflow outcome contract in master/main.lua: ' .. tostring(outcome_token))
   end
 end
 
@@ -73,6 +85,12 @@ if not content:find('RT shutdown workflow request accepted node=%s', 1, true) th
 end
 if not content:find('RT shutdown workflow finalised node=%s final_reason=%s', 1, true) then
   error('missing finalised success log contract')
+end
+if not content:find('RT shutdown workflow state_reached_at set node=%s state_reached_at=%s', 1, true) then
+  error('missing explicit state_reached_at diagnostic log contract')
+end
+if not content:find('RT shutdown workflow terminal field gap node=%s stage=%s outcome=%s final_reason=%s completed_at=%s', 1, true) then
+  error('missing terminal UI-field consistency warning guard log contract')
 end
 if not content:find('cleanup guard node=%s corrected_final_reason=%s', 1, true) then
   error('missing cleanup final-reason guard contract')
