@@ -203,10 +203,12 @@ local function sync_rt_node(node)
   })
   node.shutdown_workflow = node.shutdown_workflow or {}
   local workflow = node.shutdown_workflow
+  local target_shutdown_state = constants.node_states.OFF
   if plan.shutdown_candidate_id == node.id then
     if not workflow.requested_at then
       workflow.requested_at = now
       workflow.stage = "RAMPDOWN"
+      workflow.target_state = target_shutdown_state
       workflow.ready_at = now + ((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000)
       utils.log("MASTER", ("RT shutdown workflow start node=%s reason=SHED_EXCESS_CAPACITY ready_in_ms=%d"):format(tostring(node.id), tonumber(((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000))), "INFO")
     end
@@ -223,6 +225,63 @@ local function sync_rt_node(node)
     local remaining_ms = workflow.ready_at and math.max(0, workflow.ready_at - now) or 0
     utils.log("MASTER", ("RT shutdown candidate node=%s target=%.2f stage=%s remaining_ms=%d"):format(
       tostring(node.id), tonumber(power_target) or 0, tostring(workflow.stage or "RAMPDOWN"), tonumber(remaining_ms) or 0), "INFO")
+  end
+  if workflow.requested_at and workflow.stage == "RAMPDOWN" and workflow.ready_at and now >= workflow.ready_at then
+    workflow.stage = "REQUEST_OFF"
+    workflow.request_command_at = nil
+    workflow.command_ack_at = nil
+    workflow.failed_at = nil
+    utils.log("MASTER", ("RT shutdown workflow rampdown complete node=%s action=REQUEST_STATE target_state=%s"):format(
+      tostring(node.id), tostring(workflow.target_state or target_shutdown_state)
+    ), "INFO")
+  end
+
+  local cmd_result = node.last_command_result
+  if workflow.stage == "REQUEST_OFF" then
+    if not workflow.request_command_at or now - workflow.request_command_at > 5000 then
+      local setpoints = normalize_setpoints(node.last_setpoints or {})
+      setpoints.shutdown_stage = "REQUEST_OFF"
+      setpoints.desired_node_state = workflow.target_state or target_shutdown_state
+      send_rt_setpoints(node, setpoints)
+      workflow.request_command_at = now
+      utils.log("MASTER", ("RT shutdown workflow command sent node=%s stage=%s target_state=%s"):format(
+        tostring(node.id), tostring(setpoints.shutdown_stage), tostring(setpoints.desired_node_state)
+      ), "INFO")
+    end
+    if cmd_result and cmd_result.at and cmd_result.at >= (workflow.request_command_at or 0) then
+      local cmd_value = cmd_result.command_value or {}
+      local is_shutdown_ack = cmd_result.command_target == (constants.command_targets.SET_SETPOINTS or "SET_SETPOINTS") and
+          cmd_value.shutdown_stage == "REQUEST_OFF"
+      if is_shutdown_ack and cmd_result.ok == false then
+        workflow.stage = "FAILED"
+        workflow.failed_at = now
+        workflow.error = cmd_result.error or cmd_result.reason_code or "unknown"
+        utils.log("MASTER", ("RT shutdown workflow failed node=%s error=%s reason=%s"):format(
+          tostring(node.id), tostring(workflow.error), tostring(cmd_result.reason_code)
+        ), "WARN")
+      elseif is_shutdown_ack and cmd_result.ok ~= false then
+        workflow.command_ack_at = now
+        workflow.stage = "AWAIT_STATE"
+        utils.log("MASTER", ("RT shutdown workflow ack node=%s requested_state=%s"):format(
+          tostring(node.id), tostring(workflow.target_state or target_shutdown_state)
+        ), "INFO")
+      end
+    end
+  elseif workflow.stage == "AWAIT_STATE" then
+    if node.state == (workflow.target_state or target_shutdown_state) then
+      workflow.stage = "DONE"
+      workflow.completed_at = now
+      utils.log("MASTER", ("RT shutdown workflow completed node=%s final_state=%s"):format(
+        tostring(node.id), tostring(node.state)
+      ), "INFO")
+    elseif workflow.command_ack_at and now - workflow.command_ack_at > 15000 then
+      workflow.stage = "FAILED"
+      workflow.failed_at = now
+      workflow.error = "STATE_TRANSITION_TIMEOUT"
+      utils.log("MASTER", ("RT shutdown workflow timeout node=%s target_state=%s current_state=%s"):format(
+        tostring(node.id), tostring(workflow.target_state or target_shutdown_state), tostring(node.state)
+      ), "WARN")
+    end
   end
   rt_sync.sync_rt_node({
     config = config,

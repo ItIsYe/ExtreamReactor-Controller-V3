@@ -154,7 +154,9 @@ function M.new(opts)
           startup_active = controller.sequencer.active and controller.sequencer.active.node_id == node.id or false,
           assignment_state = node.last_setpoints and node.last_setpoints.assignment_state or nil,
           shutdown_stage = node.last_setpoints and node.last_setpoints.shutdown_stage or nil,
-          desired_node_state = node.last_setpoints and node.last_setpoints.desired_node_state or nil
+          desired_node_state = node.last_setpoints and node.last_setpoints.desired_node_state or nil,
+          shutdown_workflow_stage = node.shutdown_workflow and node.shutdown_workflow.stage or nil,
+          shutdown_workflow_error = node.shutdown_workflow and node.shutdown_workflow.error or nil
         }
       elseif node.role == controller.constants.roles.ENERGY_NODE then
         energy_data.stored = energy_data.stored + (node.aggregate_stored or node.stored or 0)

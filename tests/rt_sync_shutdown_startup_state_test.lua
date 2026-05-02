@@ -23,3 +23,25 @@ if by_id['RT-2'].power_target ~= 0 then error('shed node must receive zero power
 if by_id['RT-3'].assignment_state ~= 'standby' then error('startup pending node should wait in standby when demand covered') end
 
 print('rt_sync_shutdown_startup_state_test.lua: ok')
+
+local now = os.epoch("utc")
+local shutdown_plan = rt_sync.build_node_setpoint_plan({
+  config = { rt_setpoints = { target_rpm = 900, steam_target = 4000, enable_reactors = true, enable_turbines = true, power_per_node_capacity = 3000, shutdown_ramp_ms = 1000 } },
+  nodes = {
+    ['RT-1'] = { id = 'RT-1', role = constants.roles.RT_NODE, mode = 'MASTER', status = constants.status_levels.OK, state = constants.node_states.RUNNING, output = 3500 },
+    ['RT-2'] = {
+      id = 'RT-2', role = constants.roles.RT_NODE, mode = 'MASTER', status = constants.status_levels.OK, state = constants.node_states.RUNNING, output = 500,
+      shutdown_workflow = { requested_at = now - 3000, stage = 'RAMPDOWN', ready_at = now - 100 }
+    },
+  },
+  power_target = 1000,
+  rt_global_off = false
+})
+
+local shutdown_by_id = {}
+for _, entry in ipairs(shutdown_plan.nodes) do shutdown_by_id[entry.id] = entry.setpoints end
+if shutdown_by_id['RT-2'].assignment_state ~= 'shutdown' then error('RT-2 must become shutdown after rampdown ready_at elapsed') end
+if shutdown_by_id['RT-2'].shutdown_stage ~= 'REQUEST_OFF' then error('shutdown node must request REQUEST_OFF stage') end
+if shutdown_by_id['RT-2'].desired_node_state ~= constants.node_states.OFF then error('shutdown node must target OFF state') end
+
+print('rt_sync_shutdown_startup_state_test.lua: shutdown-ready path ok')
