@@ -22,7 +22,11 @@ local function set_setpoints(command, ctx, record)
   end
   local desired_state = value.desired_node_state
   local machine = ctx.node_state_machine
-  if desired_state and machine and ctx.get_states()[desired_state] then
+  local states = ctx.get_states()
+  if desired_state and not states[desired_state] then
+    return record({ ok = false, error = "invalid desired_node_state", reason_code = "INVALID_STATE", desired_node_state = desired_state })
+  end
+  if desired_state and machine and states[desired_state] then
     local current = machine:state()
     if current ~= desired_state then
       machine:transition(desired_state)
@@ -34,6 +38,13 @@ local function set_setpoints(command, ctx, record)
         shutdown_stage = value.shutdown_stage
       })
     end
+    return record({
+      ok = true,
+      transition = "ALREADY_IN_STATE",
+      current_state = current,
+      desired_node_state = desired_state,
+      shutdown_stage = value.shutdown_stage
+    })
   end
   ctx.request_startup_if_needed("SET_SETPOINTS")
   return nil
