@@ -22,4 +22,12 @@ h.update_node({ type = constants.message_types.STATUS, sender_id='RT-1', node_id
   health = { status = health.status.DEGRADED, reasons = { health.reasons.CONTROL_DEGRADED } }
 }})
 if nodes['RT-1'].status ~= health.status.OK then error('controlled shutdown must suppress non-hard degraded status') end
+
+nodes['RT-1'].last_setpoints = nil
+nodes['RT-1'].shutdown_workflow = { stage = 'WAITING_STATE' }
+nodes['RT-1'].state = constants.node_states.RUNNING
+h.update_node({ type = constants.message_types.HEARTBEAT, sender_id='RT-1', node_id='RT-1', role=constants.roles.RT_NODE, proto_ver=constants.proto_ver, payload={
+  state = constants.node_states.RUNNING
+}})
+if nodes['RT-1'].status ~= health.status.OK then error('shutdown workflow WAITING_STATE must keep degraded suppressed during heartbeat even before OFF state') end
 print('master_shutdown_degraded_semantics_test.lua: ok')

@@ -71,10 +71,33 @@ handlers.monitor_master(ctx)
 assert_eq(current_state, ctx.STATE.AUTONOM, 'master timeout should switch to AUTONOM')
 assert_eq(transitions[#transitions], constants.node_states.AUTONOM, 'monitor must transition node state machine to AUTONOM')
 
+local fallback_ctx = {
+  STATE = ctx.STATE,
+  constants = constants,
+  log = function() end,
+  get_current_state = function() return ctx.STATE.MASTER end,
+  set_current_state = function() end,
+  allowed_transitions = { MASTER = { AUTONOM = true } },
+  get_node_state_machine = function()
+    return { transition = function() end }
+  end
+}
+local ok = pcall(function() handlers.monitor_master(fallback_ctx) end)
+assert_true(ok, 'monitor_master must never crash if is_master_connected is missing')
+
 targets.power, targets.steam, targets.rpm = 100, 200, 400
 handlers.clamp_autonom_targets(ctx)
 assert_eq(targets.power, 0, 'autonom clamp should zero power target')
 assert_eq(targets.steam, 0, 'autonom clamp should zero steam target')
 assert_eq(targets.rpm, 900, 'autonom clamp should ramp rpm toward default target')
+
+local build_ok, build_err = pcall(function()
+  handlers.build({
+    adjust_reactors = function() end,
+    adjust_turbines = function() end
+  })
+end)
+assert_true(not build_ok and tostring(build_err):find('state handler context missing function: is_master_connected', 1, true) ~= nil,
+  'state handler build must reject contexts without is_master_connected')
 
 print('rt_state_mode_helpers_test.lua: ok')

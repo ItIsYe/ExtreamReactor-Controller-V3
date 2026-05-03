@@ -313,9 +313,11 @@ local function sync_rt_node(node)
     end
     if cmd_result and cmd_result.at and cmd_result.at >= (workflow.request_command_at or 0) then
       local cmd_value = cmd_result.command_value or {}
+      local ack_shutdown_stage = cmd_result.shutdown_stage or cmd_value.shutdown_stage
+      local ack_desired_node_state = cmd_result.desired_node_state or cmd_value.desired_node_state
       local is_shutdown_ack = cmd_result.command_target == (constants.command_targets.SET_SETPOINTS or "SET_SETPOINTS") and
-          cmd_value.shutdown_stage == "REQUEST_OFF" and
-          cmd_value.desired_node_state == (workflow.target_state or target_shutdown_state)
+          ack_shutdown_stage == "REQUEST_OFF" and
+          ack_desired_node_state == (workflow.target_state or target_shutdown_state)
       if is_shutdown_ack and cmd_result.ok == false then
         local failure_reason = (cmd_result.reason_code == "INVALID_STATE") and "FAILED_INVALID_STATE" or "FAILED_REJECTED"
         workflow_fail(failure_reason, cmd_result.error or cmd_result.reason_code or "unknown")
