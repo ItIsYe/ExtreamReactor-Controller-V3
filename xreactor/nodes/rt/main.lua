@@ -1510,7 +1510,7 @@ local allowed_transitions = {
   [STATE.SAFE] = {}
 }
 local function build_mode_control_context()
-  return {
+  local ctx = {
     constants = constants,
     STATE = STATE,
     TARGET_RPM = CONFIG.TARGET_RPM,
