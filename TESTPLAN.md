@@ -84,6 +84,10 @@
 12. **ENERGY Sampling-Last Guard (Single-Matrix)**:
    - `tests/energy_matrix_single_group_budget_regression_test.lua` schützt, dass im Single-Matrix-Modell kein künstliches per-matrix Backlog/Throttle durch zu enges Budget entsteht.
 
+13. **Manifest-Drift Repo-Guard (geänderte manifestierte Dateien)**:
+   - `python3 tests/manifest_changed_files_guard_test.py` muss grün sein.
+   - Wenn manifestierte Dateien (z. B. `xreactor/master/main.lua`) geändert wurden, muss `xreactor/manifest.lua` im selben Change mitgeführt werden, sonst harter Fail.
+
 ## First start / bootstrap / role setup
 1. **Erststart nach Install**: `/xreactor/start.lua` liest Rolle aus `/xreactor/config/role.lua` und startet genau die passende Runtime.
 2. **Rollenwechsel**: erfolgt nicht im Update-Dialog; Rollenwechsel nur über Neuinstallation oder manuelle, bewusste Re-Konfiguration.
