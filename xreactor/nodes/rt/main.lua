@@ -1908,7 +1908,6 @@ local function build_state_context()
     targets = runtime_ctx.targets,
     reset_startup_watchdog = reset_startup_watchdog,
     scram = scram,
-    monitor_master = monitor_master,
     get_target_rpm = get_target_rpm,
     start_module = start_module,
     adjust_turbines = adjust_turbines,
@@ -1929,6 +1928,9 @@ local function build_state_context()
     get_node_state_machine = function() return node_state_machine end
   }
   ctx.is_master_connected = is_master_connected
+  ctx.monitor_master = function()
+    return state_handlers.monitor_master(ctx)
+  end
   if type(ctx.is_master_connected) ~= "function" then
     error("rt state context missing required function: is_master_connected", 2)
   end

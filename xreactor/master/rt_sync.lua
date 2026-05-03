@@ -68,6 +68,21 @@ function M.same_setpoints(a, b)
       a.shutdown_stage == b.shutdown_stage and a.desired_node_state == b.desired_node_state
 end
 
+local function same_shutdown_intent(a, b)
+  if not a or not b then return false end
+  local state_a = a.assignment_state
+  local state_b = b.assignment_state
+  local shutdown_like_a = state_a == "shutdown" or state_a == "shed"
+  local shutdown_like_b = state_b == "shutdown" or state_b == "shed"
+  if not shutdown_like_a or not shutdown_like_b then return false end
+  return a.desired_node_state == b.desired_node_state and
+      a.shutdown_stage == b.shutdown_stage and
+      (tonumber(a.power_target) or 0) == (tonumber(b.power_target) or 0) and
+      (tonumber(a.steam_target) or 0) == (tonumber(b.steam_target) or 0) and
+      a.enable_reactors == b.enable_reactors and
+      a.enable_turbines == b.enable_turbines
+end
+
 local function should_debounce_resend(node, desired, now)
   local min_gap_ms = 1000
   local last_ts = tonumber(node.last_setpoints_ts) or 0
@@ -294,6 +309,14 @@ function M.sync_rt_node(ctx, node)
     end
   end
 
+  if same_shutdown_intent(node.last_setpoints, desired) then
+    if ctx.log then
+      ctx.log(("RT shutdown setpoints deduped node=%s stage=%s target=%s"):format(
+        tostring(node_id), tostring(desired.shutdown_stage), tostring(desired.desired_node_state)
+      ))
+    end
+    return
+  end
   if not M.same_setpoints(node.last_setpoints, desired) then
     M.send_rt_setpoints(ctx.comms, node, desired)
   end

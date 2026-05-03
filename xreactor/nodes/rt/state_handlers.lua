@@ -19,6 +19,7 @@ function M.build(ctx)
 
   local adjust_reactors = assert_fn("adjust_reactors")
   local adjust_turbines = assert_fn("adjust_turbines")
+  assert_fn("is_master_connected")
 
   local constants = ctx.constants
   local STATE = ctx.STATE
@@ -239,7 +240,14 @@ function M.apply_mode(ctx, mode)
 end
 
 function M.monitor_master(ctx)
-  local connected = ctx.is_master_connected()
+  local checker = ctx and ctx.is_master_connected
+  if type(checker) ~= "function" then
+    if type(ctx) == "table" and type(ctx.log) == "function" then
+      ctx.log("WARN", "State handler fallback: missing is_master_connected, forcing AUTONOM safety path")
+    end
+    checker = function() return false end
+  end
+  local connected = checker()
   if not connected then
     if M.set_state(ctx, ctx.STATE.AUTONOM, "MASTER_TIMEOUT_AUTONOM_FALLBACK") then
       ctx.log("WARN", "Master timeout detected, switching to AUTONOM")
