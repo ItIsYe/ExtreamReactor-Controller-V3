@@ -53,10 +53,10 @@ return {
     master = {
       { path = "master/config.lua", size_bytes = 8523, hash = "2e77a2a6" },
       { path = "master/housekeeping.lua", size_bytes = 1952, hash = "d4ae44ae" },
-      { path = "master/main.lua", size_bytes = 31846, hash = "d0de0e7e", required_for = { "MASTER" } },
-      { path = "master/message_handlers.lua", size_bytes = 10071, hash = "54130897" },
+      { path = "master/main.lua", size_bytes = 33911, hash = "d4eaf9bd", required_for = { "MASTER" } },
+      { path = "master/message_handlers.lua", size_bytes = 10264, hash = "aab41465" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
-      { path = "master/rt_sync.lua", size_bytes = 13563, hash = "db3b4e46" },
+      { path = "master/rt_sync.lua", size_bytes = 13949, hash = "d3d935a2" },
       { path = "master/runtime_context.lua", size_bytes = 4808, hash = "91a77a32" },
       { path = "master/startup_sequencer.lua", size_bytes = 9172, hash = "01535e76" },
       { path = "master/ui_controller.lua", size_bytes = 17577, hash = "d5fbf429" },

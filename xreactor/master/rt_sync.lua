@@ -272,17 +272,18 @@ function M.sync_rt_node(ctx, node)
   end
   if not assigned then return end
   local desired = assigned.setpoints
+  local trigger = tostring(ctx.trigger or "unknown")
   if ctx.log then
-    ctx.log(("RT plan node=%s state=%s controllable=%s reason=%s assigned=%.2f mode=%s status=%s"):format(
-      tostring(node_id), tostring(desired.assignment_state), tostring(assigned.controllable), tostring(assigned.assignment_reason), tonumber(desired.power_target) or 0,
+    ctx.log(("RT plan node=%s trigger=%s state=%s controllable=%s reason=%s assigned=%.2f mode=%s status=%s"):format(
+      tostring(node_id), trigger, tostring(desired.assignment_state), tostring(assigned.controllable), tostring(assigned.assignment_reason), tonumber(desired.power_target) or 0,
       tostring(assigned.mode), tostring(assigned.status)
     ), assigned.controllable and "INFO" or "WARN")
   end
   local now = os.epoch("utc")
   if should_debounce_resend(node, desired, now) then
     if ctx.log then
-      ctx.log(("RT setpoints deduped node=%s state=%s reason=%s age_ms=%d"):format(
-        tostring(node_id), tostring(desired.assignment_state), tostring(desired.assignment_reason), now - (node.last_setpoints_ts or now)
+      ctx.log(("RT setpoints deduped node=%s trigger=%s state=%s reason=%s age_ms=%d"):format(
+        tostring(node_id), trigger, tostring(desired.assignment_state), tostring(desired.assignment_reason), now - (node.last_setpoints_ts or now)
       ))
     end
     return
@@ -291,7 +292,7 @@ function M.sync_rt_node(ctx, node)
   local workflow = node.shutdown_workflow or {}
   if workflow.stage == "REQUESTED" or workflow.stage == "WAITING_STATE" then
     if ctx.log then
-      ctx.log(("RT setpoints deduped node=%s reason=SHUTDOWN_WORKFLOW_%s"):format(tostring(node_id), tostring(workflow.stage)))
+      ctx.log(("RT setpoints deduped node=%s trigger=%s reason=SHUTDOWN_WORKFLOW_%s"):format(tostring(node_id), trigger, tostring(workflow.stage)))
     end
     return
   end
@@ -303,7 +304,7 @@ function M.sync_rt_node(ctx, node)
     local ack_transition = ack.transition or (ack.command_value and ack.command_value.transition)
     if ack_state == constants.node_states.OFF and (ack_transition == "REQUESTED" or ack_transition == "ALREADY_IN_STATE") then
       if ctx.log then
-        ctx.log(("RT shutdown resend skipped node=%s ack_transition=%s"):format(tostring(node_id), tostring(ack_transition)))
+        ctx.log(("RT shutdown resend skipped node=%s trigger=%s ack_transition=%s"):format(tostring(node_id), trigger, tostring(ack_transition)))
       end
       return
     end
@@ -311,13 +312,18 @@ function M.sync_rt_node(ctx, node)
 
   if same_shutdown_intent(node.last_setpoints, desired) then
     if ctx.log then
-      ctx.log(("RT shutdown setpoints deduped node=%s stage=%s target=%s"):format(
-        tostring(node_id), tostring(desired.shutdown_stage), tostring(desired.desired_node_state)
+      ctx.log(("RT shutdown setpoints deduped node=%s trigger=%s stage=%s target=%s"):format(
+        tostring(node_id), trigger, tostring(desired.shutdown_stage), tostring(desired.desired_node_state)
       ))
     end
     return
   end
   if not M.same_setpoints(node.last_setpoints, desired) then
+    if ctx.log then
+      ctx.log(("RT command send node=%s trigger=%s state=%s reason=%s"):format(
+        tostring(node_id), trigger, tostring(desired.assignment_state), tostring(desired.assignment_reason)
+      ), "INFO")
+    end
     M.send_rt_setpoints(ctx.comms, node, desired)
   end
 end
