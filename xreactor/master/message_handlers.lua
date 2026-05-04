@@ -1,4 +1,5 @@
 local M = {}
+local rt_sync = require("master.rt_sync")
 
 function M.new(opts)
   local constants = assert(opts.constants, "constants required")
@@ -61,6 +62,17 @@ function M.new(opts)
     if previous_status ~= node.status then
       log(("Node %s status %s -> %s (%s)"):format(tostring(node.id), tostring(previous_status or "UNKNOWN"), tostring(node.status), tostring(origin or "unknown")))
     end
+  end
+
+  local function ack_matches_last_setpoints(node, result)
+    if type(result) ~= "table" or result.ok == false then return false end
+    local target = result.command_target
+    local expected_target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET
+    if target ~= expected_target then return false end
+    local value = result.command_value
+    local last = node and node.last_setpoints
+    if type(value) ~= "table" or type(last) ~= "table" then return false end
+    return rt_sync.same_setpoints(rt_sync.normalize_setpoints(value), rt_sync.normalize_setpoints(last))
   end
 
   local function update_node(message)
@@ -176,6 +188,7 @@ function M.new(opts)
       mark_rt_sync_dirty(nodes[id], "status")
     elseif message.type == constants.message_types.ACK_APPLIED then
       local result = message.payload and message.payload.result or {}
+      local redundant_setpoint_ack = ack_matches_last_setpoints(nodes[id], result)
       nodes[id].last_command_result = {
         ok = result.ok ~= false,
         error = result.error,
@@ -192,7 +205,13 @@ function M.new(opts)
       nodes[id].last_command_error = result.ok == false and (result.error or "unknown") or nil
       if result.ok == false then log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN") end
       sequencer:notify_ack(id, result.module_id)
-      mark_rt_sync_dirty(nodes[id], "ack_applied")
+      local workflow_stage = nodes[id].shutdown_workflow and nodes[id].shutdown_workflow.stage or nil
+      local workflow_waiting = workflow_stage == "REQUEST_STATE" or workflow_stage == "REQUESTED" or workflow_stage == "WAITING_STATE"
+      if not redundant_setpoint_ack or workflow_waiting then
+        mark_rt_sync_dirty(nodes[id], "ack_applied")
+      else
+        log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
+      end
     elseif message.type == constants.message_types.ALERT then
       add_alarm(id, message.payload.severity, message.payload.message)
     end

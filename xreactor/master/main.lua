@@ -224,6 +224,15 @@ local function sync_rt_node(node, reason)
     ), "INFO")
   end
   if plan.shutdown_candidate_id == node.id then
+    if workflow.stage == "CANCELLED_DEMAND_RECOVERED" and workflow.cancelled_at and (now - workflow.cancelled_at) >= restart_cooldown_ms and not workflow.requested_at then
+      workflow.shutdown_candidate_since = now
+      workflow.stage = nil
+      workflow.final_reason = nil
+      workflow.outcome = nil
+      workflow.completed_at = nil
+      workflow.error = nil
+      utils.log("MASTER", ("RT shutdown workflow candidate reset node=%s reason=POST_CANCEL_COOLDOWN_REEVALUATE"):format(tostring(node.id)), "INFO")
+    end
     workflow.shutdown_candidate_since = workflow.shutdown_candidate_since or now
     local candidate_age_ms = now - workflow.shutdown_candidate_since
     if workflow.cancelled_at and (now - workflow.cancelled_at) < restart_cooldown_ms then
