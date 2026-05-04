@@ -107,6 +107,7 @@ local rt_global_off_hold = state.rt_global_off_hold == true
 local node_offline_purge_after_ms = 120000
 local rt_sync_batch_window_ms = 250
 local rt_shutdown_candidate_stability_ms = 1500
+local rt_sync_pending = 0
 
 local function warn_once(key, message)
   runtime_context.warn_once(state, function(msg)
@@ -402,7 +403,7 @@ local function sync_rt_node(node, reason)
     plan = plan,
     power_target = power_target,
     rt_global_off = rt_global_off_hold,
-    trigger = tostring(reason or "direct"),
+    trigger = tostring(reason or "coalesced:unspecified"),
     log = function(message, level) utils.log("MASTER", message, level or "INFO") end
   }, node)
 end
@@ -410,11 +411,15 @@ end
 local rt_sync_coalescer
 
 local function mark_rt_sync_dirty(node, reason)
-  return rt_sync_coalescer.mark_dirty(node, reason)
+  if not rt_sync_coalescer then return end
+  rt_sync_coalescer.mark_dirty(node, reason)
+  rt_sync_pending = rt_sync_coalescer.size()
 end
 
 local function flush_rt_sync_queue(opts)
-  return rt_sync_coalescer.flush(opts)
+  if not rt_sync_coalescer then return end
+  rt_sync_coalescer.flush(opts)
+  rt_sync_pending = rt_sync_coalescer.size()
 end
 
 local node_message_handler
@@ -693,6 +698,7 @@ local function init()
         active_view = view_manager and view_manager.active_key or "overview",
         node_count = runtime_context.table_count(nodes),
         queue_depth = sequencer and #sequencer.queue or 0,
+        rt_sync_pending = rt_sync_pending,
         critical_blink = critical_blink_until,
         trends = last_trend_sample
       }

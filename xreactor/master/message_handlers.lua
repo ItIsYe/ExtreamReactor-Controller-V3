@@ -207,7 +207,11 @@ function M.new(opts)
       sequencer:notify_ack(id, result.module_id)
       local workflow_stage = nodes[id].shutdown_workflow and nodes[id].shutdown_workflow.stage or nil
       local workflow_waiting = workflow_stage == "REQUEST_STATE" or workflow_stage == "REQUESTED" or workflow_stage == "WAITING_STATE"
-      if not redundant_setpoint_ack or workflow_waiting then
+      local ack_transition = tostring(result.transition or "")
+      local needs_workflow_followup = workflow_waiting and (
+        result.ok == false or ack_transition == "REQUESTED" or ack_transition == "ALREADY_IN_STATE" or ack_transition == "APPLIED"
+      )
+      if not redundant_setpoint_ack or needs_workflow_followup then
         mark_rt_sync_dirty(nodes[id], "ack_applied")
       else
         log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))

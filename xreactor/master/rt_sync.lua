@@ -88,6 +88,10 @@ local function should_debounce_resend(node, desired, now)
   local last_ts = tonumber(node.last_setpoints_ts) or 0
   if last_ts <= 0 then return false end
   if not M.same_setpoints(node.last_setpoints, desired) then return false end
+  local last_result = node.last_command_result
+  if type(last_result) == "table" and last_result.ok == false then
+    return false
+  end
   if (now - last_ts) > min_gap_ms then return false end
   return true
 end
@@ -337,7 +341,9 @@ function M.sync_rt_node(ctx, node)
     end
   end
 
-  if same_shutdown_intent(node.last_setpoints, desired) then
+  local last_result = node.last_command_result
+  local last_failed = type(last_result) == "table" and last_result.ok == false
+  if not last_failed and same_shutdown_intent(node.last_setpoints, desired) then
     if ctx.log then
       ctx.log(("RT shutdown setpoints deduped node=%s trigger=%s stage=%s target=%s"):format(
         tostring(node_id), trigger, tostring(desired.shutdown_stage), tostring(desired.desired_node_state)

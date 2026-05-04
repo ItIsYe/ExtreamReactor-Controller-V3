@@ -49,4 +49,14 @@ if tick(wf, 3050, true) ~= 'cooldown' then error('cancelled workflow must be blo
 if tick(wf, 19000, true) ~= 'stability' then error('after cooldown and long gap, stability gate must re-arm before restart') end
 if tick(wf, 20600, true) ~= 'start' then error('candidate restarts only after cooldown + fresh stability') end
 
+
+if tick(wf, 20601, true) ~= 'running' then error('immediate next tick after restart must not restart again') end
+if wf.stage ~= 'RAMPDOWN' then error('workflow stage must stay rampdown after restart') end
+
+wf.requested_at = nil
+wf.stage = 'CANCELLED_DEMAND_RECOVERED'
+wf.cancelled_at = 30000
+if tick(wf, 45000, true) ~= 'stability' then error('cooldown boundary at exactly restart window must still pass through stability first') end
+if tick(wf, 46600, true) ~= 'start' then error('restart after boundary still requires fresh stability age') end
+
 print('master_rt_shutdown_candidate_stability_semantic_test.lua: ok')
