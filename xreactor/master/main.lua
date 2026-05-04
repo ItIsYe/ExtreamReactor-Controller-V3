@@ -37,6 +37,7 @@ local config = require("master.config")
 local runtime_context = require("master.runtime_context")
 local rt_sync = require("master.rt_sync")
 local message_handlers = require("master.message_handlers")
+local rt_sync_coalescer_lib = require("master.rt_sync_coalescer")
 local housekeeping = require("master.housekeeping")
 local ui_controller_lib = require("master.ui_controller")
 local service_manager = require("services.service_manager")
@@ -104,7 +105,6 @@ local trend_cache = state.trend_cache
 local ui_controller
 local rt_global_off_hold = state.rt_global_off_hold == true
 local node_offline_purge_after_ms = 120000
-local rt_sync_pending = {}
 local rt_sync_batch_window_ms = 250
 local rt_shutdown_candidate_stability_ms = 1500
 
@@ -227,6 +227,7 @@ local function sync_rt_node(node, reason)
     workflow.shutdown_candidate_since = workflow.shutdown_candidate_since or now
     local candidate_age_ms = now - workflow.shutdown_candidate_since
     if workflow.cancelled_at and (now - workflow.cancelled_at) < restart_cooldown_ms then
+      workflow.shutdown_candidate_since = now
       utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANCEL_RECOVERY_COOLDOWN"):format(tostring(node.id), math.max(0, restart_cooldown_ms - (now - workflow.cancelled_at))), "INFO")
     elseif candidate_age_ms < rt_shutdown_candidate_stability_ms then
       utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANDIDATE_STABILITY"):format(tostring(node.id), math.max(0, rt_shutdown_candidate_stability_ms - candidate_age_ms)), "INFO")
@@ -397,40 +398,14 @@ local function sync_rt_node(node, reason)
   }, node)
 end
 
+local rt_sync_coalescer
+
 local function mark_rt_sync_dirty(node, reason)
-  if not node or node.role ~= constants.roles.RT_NODE then return end
-  local node_id = utils.normalize_node_id(node.id)
-  local now = os.epoch("utc")
-  local pending = rt_sync_pending[node_id]
-  if not pending then
-    rt_sync_pending[node_id] = {
-      node = node,
-      first_at = now,
-      last_at = now,
-      reasons = { tostring(reason or "unknown") }
-    }
-    return
-  end
-  pending.node = node
-  pending.last_at = now
-  pending.reasons[#pending.reasons + 1] = tostring(reason or "unknown")
+  return rt_sync_coalescer.mark_dirty(node, reason)
 end
 
 local function flush_rt_sync_queue(opts)
-  opts = opts or {}
-  local force = opts.force == true
-  local now = os.epoch("utc")
-  for node_id, pending in pairs(rt_sync_pending) do
-    local age_ms = now - (pending.first_at or now)
-    if force or age_ms >= rt_sync_batch_window_ms then
-      local reasons = table.concat(pending.reasons or {}, ",")
-      utils.log("MASTER", ("RT sync flush node=%s reasons=%s age_ms=%d force=%s"):format(
-        tostring(node_id), tostring(reasons), tonumber(age_ms) or 0, tostring(force)
-      ), "INFO")
-      sync_rt_node(pending.node, "coalesced:" .. reasons)
-      rt_sync_pending[node_id] = nil
-    end
-  end
+  return rt_sync_coalescer.flush(opts)
 end
 
 local node_message_handler
@@ -650,6 +625,13 @@ local function init()
     on_message = update_node
   })
   services = service_manager.new({ log_prefix = "MASTER" })
+  rt_sync_coalescer = rt_sync_coalescer_lib.new({
+    constants = constants,
+    utils = utils,
+    batch_window_ms = rt_sync_batch_window_ms,
+    sync_rt_node = sync_rt_node,
+    log = function(message, level) utils.log("MASTER", message, level or "INFO") end
+  })
   services:add(comms)
   local recovery_notice = nil
   if recovery_status and recovery_status.had_marker then
@@ -731,7 +713,6 @@ local function init()
     nodes = nodes,
     comms = function() return comms end,
     sequencer = sequencer,
-    sync_rt_node = sync_rt_node,
     mark_rt_sync_dirty = mark_rt_sync_dirty,
     add_alarm = add_alarm,
     master_time_label = master_time_label,
