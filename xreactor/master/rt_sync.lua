@@ -92,6 +92,24 @@ local function should_debounce_resend(node, desired, now)
   return true
 end
 
+local function ack_matches_setpoints(node, ack, desired)
+  if type(ack) ~= "table" then return false end
+  if ack.ok == false then return false end
+  if ack.command_target ~= (constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET) then
+    return false
+  end
+  local ack_value = ack.command_value
+  if type(ack_value) ~= "table" then return false end
+  local ack_matches_desired = M.same_setpoints(M.normalize_setpoints(ack_value), desired)
+  if not ack_matches_desired then return false end
+  local ack_at = tonumber(ack.at) or 0
+  local last_setpoints_ts = tonumber(node and node.last_setpoints_ts) or 0
+  if last_setpoints_ts > 0 and ack_at > 0 and ack_at < last_setpoints_ts then
+    return false
+  end
+  return true
+end
+
 function M.set_default_mode(ctx, node)
   local mode = node.desired_mode or ctx.config.rt_default_mode or "MASTER"
   M.send_rt_mode(ctx.comms, node, mode)
@@ -298,6 +316,13 @@ function M.sync_rt_node(ctx, node)
   end
 
   local ack = node.last_command_result
+  if ack_matches_setpoints(node, ack, desired) then
+    if ctx.log then
+      ctx.log(("RT setpoints deduped node=%s trigger=%s reason=ACK_MATCH"):format(tostring(node_id), trigger))
+    end
+    return
+  end
+
   local shutdown_target = desired.desired_node_state == constants.node_states.OFF and desired.assignment_state == "shutdown"
   if shutdown_target and ack and ack.ok ~= false and ack.command_target == (constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET) then
     local ack_state = ack.desired_node_state or (ack.command_value and ack.command_value.desired_node_state)
