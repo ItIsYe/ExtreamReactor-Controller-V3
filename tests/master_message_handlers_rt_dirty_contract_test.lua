@@ -3,13 +3,16 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 local constants = require('shared.constants')
 local handlers = require('master.message_handlers')
 local health = require('core.health')
+local rt_sync = require('master.rt_sync')
 
-local nodes = { ['RT-1'] = { id = 'RT-1', role = constants.roles.RT_NODE, last_setpoints = { power_target = 100 } } }
+local utils = require('core.utils')
+local node_id = utils.normalize_node_id('rt-1')
+local nodes = { [node_id] = { id = node_id, role = constants.roles.RT_NODE, last_setpoints = rt_sync.normalize_setpoints({ power_target = 100 }) } }
 local dirty = {}
 local calls = 0
 local h = handlers.new({
   constants = constants,
-  utils = require('core.utils'),
+  utils = utils,
   health = health,
   nodes = nodes,
   comms = function() return { get_peers = function() return {} end } end,
@@ -23,16 +26,23 @@ local h = handlers.new({
 h.update_node({ type = constants.message_types.HELLO, sender_id = 'rt-1', node_id = 'rt-1', role = constants.roles.RT_NODE, payload = {} })
 h.update_node({ type = constants.message_types.HEARTBEAT, sender_id = 'rt-1', node_id = 'rt-1', role = constants.roles.RT_NODE, payload = { state = constants.node_states.RUNNING } })
 h.update_node({ type = constants.message_types.STATUS, sender_id = 'rt-1', node_id = 'rt-1', role = constants.roles.RT_NODE, payload = { status = constants.status_levels.OK, mode = 'MASTER', health = { status = constants.status_levels.OK, reasons = {} } } })
-h.update_node({ type = constants.message_types.ACK_APPLIED, sender_id = 'rt-1', node_id = 'rt-1', role = constants.roles.RT_NODE, ack_for = 'SET_SETPOINTS', payload = { result = { ok = true, command_target = constants.command_targets.SET_SETPOINTS, command_value = { power_target = 100 } } } })
+h.update_node({ type = constants.message_types.ACK_APPLIED, sender_id = 'rt-1', node_id = 'rt-1', role = constants.roles.RT_NODE, ack_for = 'SET_SETPOINTS', payload = { result = { ok = true, command_target = constants.command_targets.SET_SETPOINTS, command_value = rt_sync.normalize_setpoints({ power_target = 100 }) } } })
 
 if dirty.hello ~= 1 or dirty.heartbeat ~= 1 or dirty.status ~= 1 then
   error('hello/heartbeat/status must each dirty mark exactly once')
 end
 if dirty.ack_applied then
-  error('redundant ack_applied should not dirty mark')
+  error('redundant ack_applied should not dirty mark outside workflow follow-up')
 end
-if calls ~= 3 then
-  error('expected exactly 3 dirty marks, got ' .. tostring(calls))
+
+nodes[node_id].shutdown_workflow = { stage = 'WAITING_STATE' }
+h.update_node({ type = constants.message_types.ACK_APPLIED, sender_id = 'rt-1', node_id = 'rt-1', role = constants.roles.RT_NODE, ack_for = 'SET_SETPOINTS', payload = { result = { ok = true, transition = 'REQUESTED', command_target = constants.command_targets.SET_SETPOINTS, command_value = rt_sync.normalize_setpoints({ power_target = 100 }) } } })
+
+if dirty.ack_applied ~= 1 then
+  error('workflow REQUESTED ack must dirty mark once for shutdown follow-up')
+end
+if calls ~= 4 then
+  error('expected exactly 4 dirty marks including workflow follow-up, got ' .. tostring(calls))
 end
 
 print('master_message_handlers_rt_dirty_contract_test.lua: ok')

@@ -54,4 +54,13 @@ if coalescer.size() ~= 0 then error('queue must be empty after flush') end
 coalescer.flush({ force = true })
 if sends ~= 1 then error('second flush without new dirty must not add commands') end
 
+
+handler.update_node({ type = constants.message_types.HEARTBEAT, sender_id = 'rt-1', node_id = 'rt-1', role = constants.roles.RT_NODE, payload = { state = constants.node_states.RUNNING } })
+coalescer.flush()
+if sends ~= 1 then error('flush without force inside batch window must not send immediately') end
+if coalescer.size() ~= 1 then error('pending queue must retain node until batch window or force flush') end
+coalescer.flush({ force = true })
+if sends ~= 2 then error('forced flush must send exactly one command for pending node') end
+if coalescer.size() ~= 0 then error('queue must be empty after forced flush of pending node') end
+
 print('master_rt_sync_coalescing_semantic_test.lua: ok')
