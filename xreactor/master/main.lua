@@ -104,6 +104,9 @@ local trend_cache = state.trend_cache
 local ui_controller
 local rt_global_off_hold = state.rt_global_off_hold == true
 local node_offline_purge_after_ms = 120000
+local rt_sync_pending = {}
+local rt_sync_batch_window_ms = 250
+local rt_shutdown_candidate_stability_ms = 1500
 
 local function warn_once(key, message)
   runtime_context.warn_once(state, function(msg)
@@ -185,7 +188,7 @@ local function same_setpoints(a, b)
   return rt_sync.same_setpoints(a, b)
 end
 
-local function sync_rt_node(node)
+local function sync_rt_node(node, reason)
   if not node or node.role ~= constants.roles.RT_NODE then return end
   set_default_mode(node)
   local now = os.epoch("utc")
@@ -221,8 +224,12 @@ local function sync_rt_node(node)
     ), "INFO")
   end
   if plan.shutdown_candidate_id == node.id then
+    workflow.shutdown_candidate_since = workflow.shutdown_candidate_since or now
+    local candidate_age_ms = now - workflow.shutdown_candidate_since
     if workflow.cancelled_at and (now - workflow.cancelled_at) < restart_cooldown_ms then
       utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANCEL_RECOVERY_COOLDOWN"):format(tostring(node.id), math.max(0, restart_cooldown_ms - (now - workflow.cancelled_at))), "INFO")
+    elseif candidate_age_ms < rt_shutdown_candidate_stability_ms then
+      utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANDIDATE_STABILITY"):format(tostring(node.id), math.max(0, rt_shutdown_candidate_stability_ms - candidate_age_ms)), "INFO")
     elseif not workflow.requested_at then
       workflow.requested_at = now
       workflow.stage = "RAMPDOWN"
@@ -251,6 +258,8 @@ local function sync_rt_node(node)
     utils.log("MASTER", ("RT shutdown workflow outcome set node=%s outcome=%s final_reason=%s completed_at=%s"):format(
       tostring(node.id), tostring(workflow.outcome), tostring(workflow.final_reason), tostring(workflow.completed_at)
     ), "INFO")
+  else
+    workflow.shutdown_candidate_since = nil
   end
   if sequencer and plan.startup_candidate_id and node.id == plan.startup_candidate_id then
     sequencer:enqueue(node.id, "DEMAND_STARTUP")
@@ -383,8 +392,45 @@ local function sync_rt_node(node)
     plan = plan,
     power_target = power_target,
     rt_global_off = rt_global_off_hold,
+    trigger = tostring(reason or "direct"),
     log = function(message, level) utils.log("MASTER", message, level or "INFO") end
   }, node)
+end
+
+local function mark_rt_sync_dirty(node, reason)
+  if not node or node.role ~= constants.roles.RT_NODE then return end
+  local node_id = utils.normalize_node_id(node.id)
+  local now = os.epoch("utc")
+  local pending = rt_sync_pending[node_id]
+  if not pending then
+    rt_sync_pending[node_id] = {
+      node = node,
+      first_at = now,
+      last_at = now,
+      reasons = { tostring(reason or "unknown") }
+    }
+    return
+  end
+  pending.node = node
+  pending.last_at = now
+  pending.reasons[#pending.reasons + 1] = tostring(reason or "unknown")
+end
+
+local function flush_rt_sync_queue(opts)
+  opts = opts or {}
+  local force = opts.force == true
+  local now = os.epoch("utc")
+  for node_id, pending in pairs(rt_sync_pending) do
+    local age_ms = now - (pending.first_at or now)
+    if force or age_ms >= rt_sync_batch_window_ms then
+      local reasons = table.concat(pending.reasons or {}, ",")
+      utils.log("MASTER", ("RT sync flush node=%s reasons=%s age_ms=%d force=%s"):format(
+        tostring(node_id), tostring(reasons), tonumber(age_ms) or 0, tostring(force)
+      ), "INFO")
+      sync_rt_node(pending.node, "coalesced:" .. reasons)
+      rt_sync_pending[node_id] = nil
+    end
+  end
 end
 
 local node_message_handler
@@ -489,9 +535,10 @@ local function apply_profile(name)
     utils.log("MASTER", ("Power target recalculated from profile %s: base=%.2f -> target=%.2f"):format(tostring(name), base, power_target), "INFO")
     for _, node in pairs(nodes) do
       if node.role == constants.roles.RT_NODE then
-        sync_rt_node(node)
+        mark_rt_sync_dirty(node, "profile_change")
       end
     end
+    flush_rt_sync_queue({ force = true })
   else
     utils.log("MASTER", ("Profile %s applied but base power is unavailable; target unchanged"):format(tostring(name)), "WARN")
   end
@@ -506,9 +553,10 @@ local function set_rt_global_hold(enabled)
   utils.log("MASTER", "RT global hold " .. (rt_global_off_hold and "ENABLED (0%)" or "DISABLED (normal control)"), "WARN")
   for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE then
-      sync_rt_node(node)
+      mark_rt_sync_dirty(node, "global_hold_toggle")
     end
   end
+  flush_rt_sync_queue({ force = true })
 end
 
 local function sample_trends()
@@ -638,6 +686,7 @@ local function init()
         if sequencer then
           sequencer:tick(nodes)
         end
+        flush_rt_sync_queue()
         check_timeouts()
         sample_trends()
       end
@@ -683,6 +732,7 @@ local function init()
     comms = function() return comms end,
     sequencer = sequencer,
     sync_rt_node = sync_rt_node,
+    mark_rt_sync_dirty = mark_rt_sync_dirty,
     add_alarm = add_alarm,
     master_time_label = master_time_label,
     log = function(message, level) utils.log("MASTER", message, level or "INFO") end

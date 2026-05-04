@@ -8,6 +8,7 @@ function M.new(opts)
   local comms = assert(opts.comms, "comms getter required")
   local sequencer = assert(opts.sequencer, "sequencer required")
   local sync_rt_node = assert(opts.sync_rt_node, "sync_rt_node required")
+  local mark_rt_sync_dirty = assert(opts.mark_rt_sync_dirty, "mark_rt_sync_dirty required")
   local add_alarm = assert(opts.add_alarm, "add_alarm required")
   local master_time_label = assert(opts.master_time_label, "master_time_label required")
   local log = assert(opts.log, "log required")
@@ -114,7 +115,7 @@ function M.new(opts)
       assign_node_status_from_health(nodes[id], "hello")
       nodes[id].state = constants.node_states.OFF
       if message.role == constants.roles.RT_NODE then sequencer:enqueue(id) end
-      sync_rt_node(nodes[id])
+      mark_rt_sync_dirty(nodes[id], "hello")
     elseif message.type == constants.message_types.HEARTBEAT then
       nodes[id].state = message.payload.state
       nodes[id].down_since = nil
@@ -127,7 +128,7 @@ function M.new(opts)
         log(("Node %s reason removed: %s (heartbeat)"):format(id, health.reasons.COMMS_DOWN))
       end
       assign_node_status_from_health(nodes[id], "heartbeat")
-      sync_rt_node(nodes[id])
+      mark_rt_sync_dirty(nodes[id], "heartbeat")
     elseif message.type == constants.message_types.STATUS then
       local previous_mode = nodes[id].mode
       nodes[id] = utils.merge(nodes[id], message.payload)
@@ -173,7 +174,7 @@ function M.new(opts)
           sequencer:notify_stable(id, sequencer.active.module_id, nodes[id].state)
         end
       end
-      sync_rt_node(nodes[id])
+      mark_rt_sync_dirty(nodes[id], "status")
     elseif message.type == constants.message_types.ACK_APPLIED then
       local result = message.payload and message.payload.result or {}
       nodes[id].last_command_result = {
@@ -192,6 +193,7 @@ function M.new(opts)
       nodes[id].last_command_error = result.ok == false and (result.error or "unknown") or nil
       if result.ok == false then log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN") end
       sequencer:notify_ack(id, result.module_id)
+      mark_rt_sync_dirty(nodes[id], "ack_applied")
     elseif message.type == constants.message_types.ALERT then
       add_alarm(id, message.payload.severity, message.payload.message)
     end
