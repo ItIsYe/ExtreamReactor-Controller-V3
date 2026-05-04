@@ -72,8 +72,8 @@ local function same_shutdown_intent(a, b)
   if not a or not b then return false end
   local state_a = a.assignment_state
   local state_b = b.assignment_state
-  local shutdown_like_a = state_a == "shutdown" or state_a == "shed"
-  local shutdown_like_b = state_b == "shutdown" or state_b == "shed"
+  local shutdown_like_a = state_a == "shutdown" or state_a == "shed" or state_a == "standby"
+  local shutdown_like_b = state_b == "shutdown" or state_b == "shed" or state_b == "standby"
   if not shutdown_like_a or not shutdown_like_b then return false end
   return a.desired_node_state == b.desired_node_state and
       a.shutdown_stage == b.shutdown_stage and
@@ -95,7 +95,9 @@ end
 local function ack_matches_setpoints(node, ack, desired)
   if type(ack) ~= "table" then return false end
   if ack.ok == false then return false end
-  if ack.command_target ~= (constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET) then
+  local setpoints_target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET
+  local legacy_target = constants.command_targets.POWER_TARGET
+  if ack.command_target ~= setpoints_target and ack.command_target ~= legacy_target then
     return false
   end
   local ack_value = ack.command_value
