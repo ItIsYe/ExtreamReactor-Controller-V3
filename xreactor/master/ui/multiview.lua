@@ -1,221 +1,94 @@
-diff --git a/xreactor/master/ui/multiview.lua b/xreactor/master/ui/multiview.lua
-index a339af2baeab4924dc55e25174c37679c0ce7655..14d5dc422edca7c4a7bf419979f1e857a9b676d7 100644
---- a/xreactor/master/ui/multiview.lua
-+++ b/xreactor/master/ui/multiview.lua
-@@ -47,90 +47,79 @@ function multiview.new(opts)
-   if layout_path then
-     layout = utils.load_config(layout_path, layout_defaults)
-   end
-   local self = {
-     layout_path = layout_path,
-     layout = layout,
-     views = opts.views or {},
-     view_order = opts.view_order or sorted_view_keys(opts.views),
-     monitor_states = {},
-     monitor_index = {},
-     on_action = opts.on_action
-   }
-   return setmetatable(self, { __index = multiview })
- end
- 
- function multiview:save_layout()
-   if not self.layout_path then
-     return
-   end
-   utils.write_config(self.layout_path, self.layout)
- end
- 
- local function default_view_for_index(index, view_order)
-   local map = {
-     "overview",
--    "energy",
-     "rt",
--    "resources",
--    "alarms"
-+    "energy"
-   }
-   local key = map[index]
-   if key then
-     return key
-   end
-   if view_order and view_order[index] then
-     return view_order[index]
-   end
-   return (view_order and view_order[1]) or "overview"
- end
- 
- function multiview:apply_defaults(monitors)
-   local list = monitors or {}
-   local count = #list
--  local order_lookup = {}
--  for idx, key in ipairs(self.view_order) do
--    order_lookup[key] = idx
--  end
-   for idx, mon in ipairs(list) do
-     local id = mon.id or mon.name or tostring(idx)
-     local entry = self.layout.monitors[id] or {}
--    if not entry.locked then
--      if count <= 1 then
--        entry.mode = "router"
--        entry.view = self.view_order[1] or "overview"
--      else
--        entry.mode = "fixed"
--        local default_key = default_view_for_index(idx, self.view_order)
--        if order_lookup[default_key] then
--          entry.view = default_key
--        else
--          entry.view = self.view_order[1] or "overview"
--        end
--      end
--      self.layout.monitors[id] = entry
-+    local default_key = default_view_for_index(idx, self.view_order)
-+    if count >= 3 and idx <= 3 then
-+      entry.mode = "fixed"
-+      entry.view = default_key
-+      entry.locked = true
-+    elseif not entry.locked then
-+      entry.mode = "fixed"
-+      entry.view = default_key
-     end
-+    self.layout.monitors[id] = entry
-   end
- end
- 
- function multiview:update_monitors(monitors)
-   monitors = monitors or {}
-   local index = {}
-   for _, mon in ipairs(monitors) do
-     if mon.name then
-       index[mon.name] = mon
-     end
-   end
-   local signature = {}
-   for _, mon in ipairs(monitors) do
-     table.insert(signature, mon.id or mon.name)
-   end
-   local signature_key = table.concat(signature, "|")
-   if signature_key ~= self.monitor_signature then
-     self.monitor_signature = signature_key
-     self.monitor_list = monitors
-     self.monitor_index = index
-     self:apply_defaults(monitors)
-     for _, mon in ipairs(monitors) do
-       local state = ensure_monitor_state(self.monitor_states[mon.id])
-       state.clear_next = true
-       state.geometry = tostring(mon.width or 0) .. "x" .. tostring(mon.height or 0)
-@@ -196,52 +185,52 @@ function multiview:ensure_router(state, mon, mode, view_key, data_map)
-       interval = 0.1,
-       key_prev = { [keys.left] = true, [keys.pageUp] = true },
-       key_next = { [keys.right] = true, [keys.pageDown] = true }
-     })
-     state.mode = mode
-     state.view_key = view_key
-     state.clear_next = true
-   end
- end
- 
- local function layout_menu_bounds(mon, view_order, has_router)
-   local w = select(1, ui.getSize(mon))
-   if not w then
-     return
-   end
-   local width = math.min(24, w - 2)
-   local height = #view_order + (has_router and 3 or 2)
-   return {
-     x = 2,
-     y = 3,
-     w = width,
-     h = height
-   }
- end
- 
--function multiview:render_layout_menu(mon, state, layout, view_order)
--  if not state.menu_open then
-+function multiview:render_layout_menu(mon, state, layout, view_order, monitor_role)
-+  if not state.menu_open or monitor_role then
-     state.menu_items = nil
-     return
-   end
-   local bounds = layout_menu_bounds(mon, view_order, true)
-   widgets.card(mon, bounds.x, bounds.y, bounds.w, bounds.h, "Layout", "OK")
-   local row = bounds.y + 1
-   local items = {}
-   for _, key in ipairs(view_order) do
-     local view = self.views[key]
-     local label = view and view.label or key
-     local active = layout.view == key and layout.mode == "fixed"
-     local status = active and "OK" or "OFFLINE"
-     ui.text(mon, bounds.x + 1, row, label, colors.get(status), colors.get("background"))
-     table.insert(items, { type = "view", key = key, x1 = bounds.x, x2 = bounds.x + bounds.w - 1, y = row })
-     row = row + 1
-   end
-   ui.text(mon, bounds.x + 1, row, "Router", colors.get(layout.mode == "router" and "OK" or "OFFLINE"), colors.get("background"))
-   table.insert(items, { type = "mode", mode = "router", x1 = bounds.x, x2 = bounds.x + bounds.w - 1, y = row })
-   row = row + 1
-   local lock_label = layout.locked and "Lock: ON" or "Lock: OFF"
-   ui.text(mon, bounds.x + 1, row, lock_label, colors.get(layout.locked and "WARNING" or "OK"), colors.get("background"))
-   table.insert(items, { type = "lock", x1 = bounds.x, x2 = bounds.x + bounds.w - 1, y = row })
-   state.menu_items = items
- end
- 
-@@ -275,52 +264,58 @@ function multiview:render(monitors, data_map)
-           ui.clear(mon_entry.mon)
-           state.clear_next = false
-         end
-         if router then
-           router.interval = interval
-           local snapshot = build_snapshot(view_model, {
-             mode = layout.mode,
-             view = layout.view,
-             page = current_key,
-             menu = state.menu_open
-           })
-           router:render(mon_entry.mon, { snapshot = snapshot, data = view_model })
-           rendered[current_key] = true
-         end
-         state.last_render[current_key] = now
-       end)
-       if not ok then
-         state.clear_next = true
-         utils.log("MULTIVIEW", "Monitor render failed for " .. tostring(mon_entry.name or id) .. ": " .. tostring(err), "WARN")
-       end
-     end
-     local w = select(1, ui.getSize(mon_entry.mon))
-     if w then
-       local layout_x = math.max(2, w - 7)
-       local ok, err = pcall(function()
--        state.layout_button = widgets.layout_button(mon_entry.mon, layout_x, 1, "LAYOUT", "accent")
--        self:render_layout_menu(mon_entry.mon, state, layout, self.view_order)
-+        local role = (self.monitor_list and #self.monitor_list >= 3 and _ <= 3) and default_view_for_index(_, self.view_order) or nil
-+        if role then
-+          state.layout_button = nil
-+          ui.badge(mon_entry.mon, math.max(2, layout_x - 10), 1, role:upper(), "LIMITED")
-+        else
-+          state.layout_button = widgets.layout_button(mon_entry.mon, layout_x, 1, "LAYOUT", "accent")
-+        end
-+        self:render_layout_menu(mon_entry.mon, state, layout, self.view_order, role)
-       end)
-       if not ok then
-         utils.log("MULTIVIEW", "Layout controls failed for " .. tostring(mon_entry.name or id) .. ": " .. tostring(err), "WARN")
-       end
-     end
-   end
-   return rendered
- end
- 
- local function hit(bounds, x, y)
-   return bounds and y == bounds.y and x >= bounds.x1 and x <= bounds.x2
- end
- 
- function multiview:handle_input(monitor_name, x, y)
-   local mon_entry = self.monitor_index and self.monitor_index[monitor_name] or nil
-   if not mon_entry then
-     return
-   end
-   local id = mon_entry.id or mon_entry.name
-   local state = self.monitor_states[id]
-   if not state then
-     return
-   end
-   local layout = ensure_table(self.layout.monitors[id])
-   if state.layout_button and hit(state.layout_button, x, y) then
+local ui = require("core.ui")
+local widgets = require("master.ui.widgets")
+
+local M = {}
+
+local ROLE_MAP = { "overview", "rt", "energy" }
+local ROLE_LABELS = {
+  overview = "MON1 OVERVIEW",
+  rt = "MON2 RT",
+  energy = "MON3 ENERGY"
+}
+
+local function default_view(index, view_order)
+  local role = ROLE_MAP[index]
+  if role then return role end
+  return (view_order and view_order[1]) or "overview"
+end
+
+function M.new(opts)
+  local self = {
+    views = opts.views or {},
+    view_order = opts.view_order or { "overview", "rt", "energy" },
+    layout = { monitors = {} },
+    monitor_index = {},
+    monitor_list = {}
+  }
+  return setmetatable(self, { __index = M })
+end
+
+function M:update_monitors(monitors)
+  self.monitor_list = monitors or {}
+  self.monitor_index = {}
+  for idx, mon in ipairs(self.monitor_list) do
+    self.monitor_index[mon.name] = mon
+    local id = mon.id or mon.name
+    local prior = self.layout.monitors[id] or {}
+    local role_view = default_view(idx, self.view_order)
+    if idx <= 3 then
+      prior.mode = "fixed"
+      prior.view = role_view
+      prior.locked = true
+      prior.role = role_view
+    else
+      prior.mode = prior.mode or "fixed"
+      prior.view = prior.view or role_view
+      prior.locked = false
+      prior.role = "aux"
+    end
+    self.layout.monitors[id] = prior
+  end
+end
+
+function M:render(monitors, data_map)
+  self:update_monitors(monitors)
+  local rendered = {}
+  for idx, mon_entry in ipairs(self.monitor_list) do
+    local id = mon_entry.id or mon_entry.name
+    local layout = self.layout.monitors[id] or { view = default_view(idx, self.view_order) }
+    local view_key = layout.view or default_view(idx, self.view_order)
+    local view = self.views[view_key]
+    if view and view.render then
+      ui.clear(mon_entry.mon)
+      view.render(mon_entry.mon, data_map[view_key] or {})
+      rendered[view_key] = true
+    end
+    local w = select(1, ui.getSize(mon_entry.mon))
+    if w then
+      if idx <= 3 then
+        ui.badge(mon_entry.mon, math.max(2, w - 18), 1, ROLE_LABELS[view_key] or "LOCKED", "LIMITED")
+      else
+        ui.badge(mon_entry.mon, math.max(2, w - 16), 1, "AUX VIEW", "OK")
+        widgets.layout_button(mon_entry.mon, math.max(2, w - 7), 1, "LAYOUT", "accent")
+      end
+    end
+  end
+  return rendered
+end
+
+function M:handle_input(monitor_name, x, y)
+  local mon = self.monitor_index[monitor_name]
+  if not mon then return end
+  local state = self.layout.monitors[mon.id or mon.name]
+  if not state or state.locked then return end
+  local w = select(1, ui.getSize(mon.mon))
+  if w and y == 1 and x >= math.max(2, w - 7) then
+    local current = 1
+    for i, key in ipairs(self.view_order) do
+      if key == state.view then current = i break end
+    end
+    state.view = self.view_order[(current % #self.view_order) + 1]
+  end
+end
+
+return M
