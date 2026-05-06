@@ -9,6 +9,9 @@ MANIFEST_PATH = XREACTOR_ROOT / "manifest.lua"
 
 ENTRY_RE = re.compile(r'\{\s*path\s*=\s*"(?P<path>[^"]+)"(?P<tail>.*)\}\s*,?\s*$')
 REQUIRE_RE = re.compile(r'require\s*\(\s*["\']([\w\._]+)["\']\s*\)')
+MANDATORY_ROLE_REQUIRES = {
+    "MASTER": {"master.rt_sync_coalescer"},
+}
 
 
 def parse_required_for(tail: str):
@@ -95,11 +98,23 @@ def main():
     errors = []
     for role_label, entrypoint in role_specs:
         expected = expected_files_for_role(base_files, roles, role_label)
-        for module_name in sorted(collect_requires(entrypoint)):
+        entrypoint_requires = collect_requires(entrypoint)
+        for module_name in sorted(entrypoint_requires):
             module_path = module_to_path(module_name)
+            module_abs = XREACTOR_ROOT / module_path
+            if not module_abs.exists():
+                errors.append(
+                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} requires missing repo module={module_name} path={module_path}"
+                )
             if module_path not in expected:
                 errors.append(
                     f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module={module_name} path={module_path}"
+                )
+        for mandatory_module in sorted(MANDATORY_ROLE_REQUIRES.get(role_label, set())):
+            mandatory_path = module_to_path(mandatory_module)
+            if mandatory_module in entrypoint_requires and mandatory_path not in expected:
+                errors.append(
+                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} mandatory runtime module missing from manifest={mandatory_module} path={mandatory_path}"
                 )
 
     rt_root = XREACTOR_ROOT / "nodes" / "rt"
