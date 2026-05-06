@@ -106,7 +106,7 @@ local ui_controller
 local rt_global_off_hold = state.rt_global_off_hold == true
 local node_offline_purge_after_ms = 120000
 local rt_sync_batch_window_ms = 250
-local rt_shutdown_candidate_stability_ms = 1500
+local rt_shutdown_candidate_stability_ms = rt_sync_coalescer_lib.DEFAULT_SHUTDOWN_CANDIDATE_STABILITY_MS or 1500
 local rt_sync_pending = 0
 
 local function warn_once(key, message)
@@ -208,7 +208,7 @@ local function sync_rt_node(node, reason)
   node.shutdown_workflow = node.shutdown_workflow or {}
   local workflow = node.shutdown_workflow
   local target_shutdown_state = constants.node_states.OFF
-  local restart_cooldown_ms = ((config.rt_setpoints and config.rt_setpoints.shutdown_restart_cooldown_ms) or 15000)
+  local restart_cooldown_ms = ((config.rt_setpoints and config.rt_setpoints.shutdown_restart_cooldown_ms) or rt_sync_coalescer_lib.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS or 15000)
   local function workflow_fail(reason, err_msg, level)
     workflow.stage = "FAILED"
     workflow.failed_at = now
@@ -224,53 +224,38 @@ local function sync_rt_node(node, reason)
       tostring(node.id), tostring(workflow.outcome), tostring(workflow.final_reason), tostring(workflow.completed_at)
     ), "INFO")
   end
-  if plan.shutdown_candidate_id == node.id then
-    if workflow.stage == "CANCELLED_DEMAND_RECOVERED" and workflow.cancelled_at and (now - workflow.cancelled_at) >= restart_cooldown_ms and not workflow.requested_at then
-      workflow.shutdown_candidate_since = now
-      workflow.stage = nil
-      workflow.final_reason = nil
-      workflow.outcome = nil
-      workflow.completed_at = nil
-      workflow.error = nil
-      utils.log("MASTER", ("RT shutdown workflow candidate reset node=%s reason=POST_CANCEL_COOLDOWN_REEVALUATE"):format(tostring(node.id)), "INFO")
-    end
-    workflow.shutdown_candidate_since = workflow.shutdown_candidate_since or now
-    local candidate_age_ms = now - workflow.shutdown_candidate_since
-    if workflow.cancelled_at and (now - workflow.cancelled_at) < restart_cooldown_ms then
-      workflow.shutdown_candidate_since = now
-      utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANCEL_RECOVERY_COOLDOWN"):format(tostring(node.id), math.max(0, restart_cooldown_ms - (now - workflow.cancelled_at))), "INFO")
-    elseif candidate_age_ms < rt_shutdown_candidate_stability_ms then
-      utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANDIDATE_STABILITY"):format(tostring(node.id), math.max(0, rt_shutdown_candidate_stability_ms - candidate_age_ms)), "INFO")
-    elseif not workflow.requested_at then
-      workflow.requested_at = now
-      workflow.stage = "RAMPDOWN"
-      workflow.final_reason = nil
-      workflow.error = nil
-      workflow.outcome = nil
-      workflow.target_state = target_shutdown_state
-      workflow.ready_at = now + ((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000)
-      workflow.request_command_at = nil
-      workflow.request_ack_at = nil
-      workflow.command_ack_at = nil
-      workflow.completed_at = nil
-      workflow.state_reached_at = nil
-      utils.log("MASTER", ("RT shutdown workflow start node=%s reason=SHED_EXCESS_CAPACITY ready_in_ms=%d"):format(tostring(node.id), tonumber(((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000))), "INFO")
-    end
-  elseif workflow.requested_at and workflow.stage ~= "COMPLETED" and workflow.stage ~= "FAILED" and workflow.stage ~= "CANCELLED_DEMAND_RECOVERED" then
-    workflow.stage = "CANCELLED_DEMAND_RECOVERED"
-    workflow.final_reason = "CANCELLED_DEMAND_RECOVERED"
+  local candidate_step = rt_sync_coalescer_lib.advance_shutdown_candidate({
+    workflow = workflow,
+    now = now,
+    is_candidate = plan.shutdown_candidate_id == node.id,
+    restart_cooldown_ms = restart_cooldown_ms,
+    stability_ms = rt_shutdown_candidate_stability_ms
+  })
+  if candidate_step.action == "candidate_reset" then
+    utils.log("MASTER", ("RT shutdown workflow candidate reset node=%s reason=POST_CANCEL_COOLDOWN_REEVALUATE"):format(tostring(node.id)), "INFO")
+  elseif candidate_step.action == "debounce_cooldown" then
+    utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANCEL_RECOVERY_COOLDOWN"):format(tostring(node.id), tonumber(candidate_step.remaining_ms) or 0), "INFO")
+  elseif candidate_step.action == "debounce_stability" then
+    utils.log("MASTER", ("RT shutdown workflow debounce node=%s remaining_ms=%d reason=CANDIDATE_STABILITY"):format(tostring(node.id), tonumber(candidate_step.remaining_ms) or 0), "INFO")
+  elseif candidate_step.action == "start_requested" then
+    workflow.requested_at = now
+    workflow.stage = "RAMPDOWN"
+    workflow.final_reason = nil
     workflow.error = nil
-    workflow.outcome = "CANCELLED"
+    workflow.outcome = nil
+    workflow.target_state = target_shutdown_state
+    workflow.ready_at = now + ((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000)
+    workflow.request_command_at = nil
+    workflow.request_ack_at = nil
+    workflow.command_ack_at = nil
+    workflow.completed_at = nil
     workflow.state_reached_at = nil
-    workflow.completed_at = now
-    workflow.cancelled_at = now
-    workflow.requested_at = nil
+    utils.log("MASTER", ("RT shutdown workflow start node=%s reason=SHED_EXCESS_CAPACITY ready_in_ms=%d"):format(tostring(node.id), tonumber(((config.rt_setpoints and config.rt_setpoints.shutdown_ramp_ms) or 6000))), "INFO")
+  elseif candidate_step.action == "cancelled" then
     utils.log("MASTER", ("RT shutdown workflow cancelled node=%s reason=%s"):format(tostring(node.id), tostring(workflow.final_reason)), "INFO")
     utils.log("MASTER", ("RT shutdown workflow outcome set node=%s outcome=%s final_reason=%s completed_at=%s"):format(
       tostring(node.id), tostring(workflow.outcome), tostring(workflow.final_reason), tostring(workflow.completed_at)
     ), "INFO")
-  else
-    workflow.shutdown_candidate_since = nil
   end
   if sequencer and plan.startup_candidate_id and node.id == plan.startup_candidate_id then
     sequencer:enqueue(node.id, "DEMAND_STARTUP")

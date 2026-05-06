@@ -1,5 +1,8 @@
 local M = {}
 
+M.DEFAULT_SHUTDOWN_CANDIDATE_STABILITY_MS = 1500
+M.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS = 15000
+
 function M.new(opts)
   local constants = assert(opts.constants, 'constants required')
   local utils = assert(opts.utils, 'utils required')
@@ -64,6 +67,55 @@ function M.new(opts)
     flush = flush,
     size = size
   }
+end
+
+
+function M.advance_shutdown_candidate(opts)
+  local workflow = assert(opts.workflow, 'workflow required')
+  local now = assert(tonumber(opts.now), 'now required')
+  local is_candidate = opts.is_candidate == true
+  local restart_cooldown_ms = tonumber(opts.restart_cooldown_ms) or M.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS
+  local stability_ms = tonumber(opts.stability_ms) or M.DEFAULT_SHUTDOWN_CANDIDATE_STABILITY_MS
+
+  if is_candidate then
+    if workflow.stage == "CANCELLED_DEMAND_RECOVERED" and workflow.cancelled_at and (now - workflow.cancelled_at) >= restart_cooldown_ms and not workflow.requested_at then
+      workflow.shutdown_candidate_since = now
+      workflow.stage = nil
+      workflow.final_reason = nil
+      workflow.outcome = nil
+      workflow.completed_at = nil
+      workflow.error = nil
+      return { action = 'candidate_reset' }
+    end
+    workflow.shutdown_candidate_since = workflow.shutdown_candidate_since or now
+    local candidate_age_ms = now - workflow.shutdown_candidate_since
+    if workflow.cancelled_at and (now - workflow.cancelled_at) < restart_cooldown_ms then
+      workflow.shutdown_candidate_since = now
+      return { action = 'debounce_cooldown', remaining_ms = math.max(0, restart_cooldown_ms - (now - workflow.cancelled_at)) }
+    end
+    if candidate_age_ms < stability_ms then
+      return { action = 'debounce_stability', remaining_ms = math.max(0, stability_ms - candidate_age_ms) }
+    end
+    if not workflow.requested_at then
+      return { action = 'start_requested' }
+    end
+    return { action = 'candidate_active' }
+  end
+
+  if workflow.requested_at and workflow.stage ~= "COMPLETED" and workflow.stage ~= "FAILED" and workflow.stage ~= "CANCELLED_DEMAND_RECOVERED" then
+    workflow.stage = "CANCELLED_DEMAND_RECOVERED"
+    workflow.final_reason = "CANCELLED_DEMAND_RECOVERED"
+    workflow.error = nil
+    workflow.outcome = "CANCELLED"
+    workflow.state_reached_at = nil
+    workflow.completed_at = now
+    workflow.cancelled_at = now
+    workflow.requested_at = nil
+    return { action = 'cancelled' }
+  end
+
+  workflow.shutdown_candidate_since = nil
+  return { action = 'idle' }
 end
 
 return M
