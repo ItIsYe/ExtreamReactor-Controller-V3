@@ -1,124 +1,42 @@
-diff --git a/xreactor/master/ui/energy.lua b/xreactor/master/ui/energy.lua
-index 0110d07797cf2a8525c37f293a3a5f4922bb68bd..6d2cbc4100fdfcbc9a4a06ece34532dc5b3fbfdf 100644
---- a/xreactor/master/ui/energy.lua
-+++ b/xreactor/master/ui/energy.lua
-@@ -1,97 +1,39 @@
- local ui = require("core.ui")
- local colorset = require("shared.colors")
- local widgets = require("master.ui.widgets")
- local utils = require("core.utils")
- local cache = {}
- 
--local function join_names(names, max_len)
--  if type(names) ~= "table" or #names == 0 then
--    return "none"
--  end
--  local text = table.concat(names, ",")
--  if max_len and #text > max_len then
--    return text:sub(1, math.max(1, max_len - 1)) .. "…"
--  end
--  return text
--end
--
- local function render(mon, model)
-   local key = utils.safe_serialize(model) or tostring(model)
-   if cache[mon] == key then return end
-   cache[mon] = key
-   local w, h = ui.getSize(mon)
--  if not w or not h then
--    return
--  end
--  widgets.card(mon, 1, 1, w, h, "ENERGY", "OK")
--  local percent = model.capacity and model.capacity > 0 and (model.stored or 0) / model.capacity or 0
--  ui.bigNumber(mon, 2, 2, "Stored", string.format("%.0f%%", percent * 100), "", model.status)
--  widgets.progress_bar(mon, 2, 4, w - 4, percent, model.status or "OK")
--  local line = 6
--  ui.text(mon, 2, line, "Trend", colorset.get("text"), colorset.get("background"))
--  if model.trend_dirty then
--    local trend = widgets.sparkline(model.trend_values or {}, w - 8)
--    ui.text(mon, 8, 6, trend, colorset.get(model.status or "OK"), colorset.get("background"))
--  end
--  line = line + 1
--  ui.text(mon, 2, line, "Flow", colorset.get("text"), colorset.get("background"))
--  ui.text(mon, 8, line, string.format("In %.0f  Out %.0f  %s", model.input or 0, model.output or 0, model.trend_arrow or "→"), colorset.get("text"), colorset.get("background"))
--  line = line + 1
--  local counts = model.alert_counts or {}
--  local crit = counts.CRITICAL or 0
--  local warn = counts.WARN or 0
--  if crit > 0 or warn > 0 then
--    ui.text(mon, 2, line, "Alerts", colorset.get("WARNING"), colorset.get("background"))
--    ui.badge(mon, 10, line, "CRIT " .. tostring(crit), crit > 0 and "EMERGENCY" or "OFFLINE")
--    ui.badge(mon, 20, line, "WARN " .. tostring(warn), warn > 0 and "WARNING" or "OFFLINE")
--    line = line + 1
--    local top = model.alert_top or {}
--    if #top > 0 then
--      for i = 1, math.min(3, #top) do
--        ui.text(mon, 4, line, top[i].title or top[i].message or "CRITICAL", colorset.get("EMERGENCY"), colorset.get("background"))
--        line = line + 1
--      end
--    else
--      ui.text(mon, 4, line, "Warnings active", colorset.get("WARNING"), colorset.get("background"))
--      line = line + 1
--    end
--  end
--  if model.top_matrices and #model.top_matrices > 0 then
--    ui.text(mon, 2, line, "Top Matrices", colorset.get("text"), colorset.get("background"))
--    line = line + 1
--    for i = 1, math.min(3, #model.top_matrices) do
--      local m = model.top_matrices[i]
--      local label = string.format("%s %.0f%%", m.label or m.id or "matrix", (m.percent or 0) * 100)
--      ui.text(mon, 4, line, label, colorset.get(m.status or "OK"), colorset.get("background"))
--      line = line + 1
--    end
-+  widgets.card(mon, 1, 1, w, h, "MONITOR 3 - ENERGY & RESSOURCEN", model.status or "OK")
-+
-+  local pct = model.capacity and model.capacity > 0 and ((model.stored or 0) / model.capacity) or 0
-+  ui.panel(mon, 2, 2, w - 2, 4, "Energy", model.status or "OK")
-+  ui.bigNumber(mon, 4, 3, "Gesamtspeicher", string.format("%.1f%%", pct * 100), "", model.status)
-+  ui.text(mon, 26, 3, string.format("Input %.1f  Output %.1f", model.input or 0, model.output or 0), colorset.get("text"), colorset.get("background"))
-+
-+  ui.panel(mon, 2, 7, w - 2, 7, "Matrix- und Storage-Details", "OK")
-+  local matrix_rows = {}
-+  for i, m in ipairs(model.matrices or {}) do
-+    if i > 5 then break end
-+    matrix_rows[#matrix_rows + 1] = { text = string.format("%s fill:%d%% in:%.1f out:%.1f %s", tostring(m.label or m.id), math.floor((m.percent or 0) * 100), m.input or 0, m.output or 0, tostring(m.status or "OK")), status = m.status or "OK" }
-   end
-+  ui.list(mon, 3, 8, w - 4, matrix_rows, { max_rows = 5 })
-+
-+  ui.panel(mon, 2, 15, w - 2, 5, "Ressourcen", "LIMITED")
-+  local r = model.resources or {}
-+  ui.text(mon, 4, 16, string.format("Fuel %.0f | Water %.0f | Reproc %s", r.fuel_total or 0, r.water_total or 0, tostring(r.reprocessing_state or "-")), colorset.get("text"), colorset.get("background"))
-+
-+  ui.panel(mon, 2, 21, w - 2, h - 21, "Verbundene Support-Nodes", "OK")
-   local rows = {}
--  line = math.max(line + 1, 9)
--  table.insert(rows, { text = "Nodes", status = "OK" })
--  for _, node in ipairs(model.nodes or {}) do
--    local monitor_flag = node.monitor_bound and "M:Y" or "M:N"
--    local storage_count = node.storage_bound_count or 0
--    local degraded = node.degraded_reason and (" " .. node.degraded_reason) or ""
--    local status = node.degraded_reason and "WARNING" or (node.status or model.status)
--    local scan_age = ""
--    if node.last_scan_ts and model.now_ms then
--      local age = math.max(0, math.floor((model.now_ms - node.last_scan_ts) / 1000))
--      scan_age = (" scan %ds"):format(age)
--    end
--    local storage_names = join_names(node.bound_storage_names, w - 8)
--    local bindings = node.bindings_summary and (" " .. node.bindings_summary) or ""
--    table.insert(rows, { text = string.format("%s %s S:%d%s%s%s", node.id or "ENERGY", monitor_flag, storage_count, degraded, scan_age, bindings), status = status })
--    table.insert(rows, { text = "  storages: " .. storage_names, status = status })
--    if node.last_scan_result then
--      table.insert(rows, { text = "  last: " .. tostring(node.last_scan_result), status = status })
--    end
--  end
--  table.insert(rows, { text = "Storages", status = "OK" })
--  for _, s in ipairs(model.stores or {}) do
--    table.insert(rows, { text = string.format("%s %.0f/%.0f", s.id, s.stored or 0, s.capacity or 0), status = model.status })
-+  for _, n in ipairs(model.support_nodes or {}) do
-+    rows[#rows + 1] = { text = string.format("%s %-12s %-8s seen:%ss %s", tostring(n.id), tostring(n.role), tostring(n.status), tostring(n.last_seen_age or -1), tostring(n.note or "")), status = n.status }
-   end
--  ui.list(mon, 2, line, w - 2, rows, { max_rows = h - line - 1 })
-+  ui.list(mon, 3, 22, w - 4, rows, { max_rows = h - 24 })
- end
- 
- return { render = render }
+local ui = require("core.ui")
+local colors = require("shared.colors")
+local widgets = require("master.ui.widgets")
+
+local function render(mon, model)
+  local w, h = ui.getSize(mon)
+  widgets.card(mon, 1, 1, w, h, "MONITOR 3 - ENERGY & RESSOURCEN", model.status or "OK")
+
+  local pct = model.capacity and model.capacity > 0 and ((model.stored or 0) / model.capacity) * 100 or 0
+  ui.panel(mon, 2, 2, w - 2, 4, "Energy", model.status or "OK")
+  ui.bigNumber(mon, 4, 3, "Gesamtspeicher", string.format("%.1f", pct), "%", model.status or "OK")
+  ui.text(mon, 30, 3, string.format("Input %.1f | Output %.1f", model.input or 0, model.output or 0), colors.get("text"), colors.get("background"))
+
+  ui.panel(mon, 2, 7, w - 2, 7, "Matrix-/Storage-Details", "OK")
+  local matrix_rows = {}
+  for i, m in ipairs(model.matrices or {}) do
+    if i > 5 then break end
+    matrix_rows[#matrix_rows + 1] = {
+      text = string.format("%s fill:%d%% in:%.1f out:%.1f", tostring(m.id or m.label), math.floor((m.percent or 0) * 100), m.input or 0, m.output or 0),
+      status = m.status or "OK"
+    }
+  end
+  ui.list(mon, 3, 8, w - 4, matrix_rows, { max_rows = 5 })
+
+  local r = model.resources or {}
+  ui.panel(mon, 2, 15, w - 2, 5, "Ressourcen", "LIMITED")
+  ui.text(mon, 4, 16, string.format("Fuel %.0f", r.fuel_total or 0), colors.get("text"), colors.get("background"))
+  ui.text(mon, 20, 16, string.format("Water %.0f", r.water_total or 0), colors.get("text"), colors.get("background"))
+  ui.text(mon, 37, 16, "Reproc " .. tostring(r.reprocessing_state or "-"), colors.get("text"), colors.get("background"))
+
+  ui.panel(mon, 2, 21, w - 2, h - 21, "Verbundene Support-Nodes", "OK")
+  local support_rows = {}
+  for _, n in ipairs(model.support_nodes or {}) do
+    support_rows[#support_rows + 1] = {
+      text = string.format("%s %-10s %-8s seen:%ss %s", tostring(n.id), tostring(n.role), tostring(n.status), tostring(n.last_seen_age or -1), tostring(n.note or "")),
+      status = n.status or "OFFLINE"
+    }
+  end
+  ui.list(mon, 3, 22, w - 4, support_rows, { max_rows = h - 23 })
+end
+
+return { render = render }
