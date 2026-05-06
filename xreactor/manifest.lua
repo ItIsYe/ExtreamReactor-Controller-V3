@@ -57,6 +57,7 @@ return {
       { path = "master/message_handlers.lua", size_bytes = 11627, hash = "8f908b56" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
       { path = "master/rt_sync.lua", size_bytes = 15388, hash = "2a88d3ff" },
+      { path = "master/rt_sync_coalescer.lua", size_bytes = 4428, hash = "e55c02a3" },
       { path = "master/runtime_context.lua", size_bytes = 4808, hash = "91a77a32" },
       { path = "master/startup_sequencer.lua", size_bytes = 9172, hash = "01535e76" },
       { path = "master/ui_controller.lua", size_bytes = 17577, hash = "d5fbf429" },

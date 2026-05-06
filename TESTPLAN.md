@@ -76,6 +76,7 @@
 10. **Manifest-Entrypoint-Coverage (Installer-Schutz gegen fehlende Module)**:
    - `python3 tests/manifest_entrypoint_require_coverage_test.py` muss grün sein.
    - Der Guard prüft für `MASTER`/`ENERGY`/`WATER`/`FUEL`/`REPROCESSING`, dass direkte `require(...)`-Module aus den Rollen-Entrypoints im installierten Expected-Set aus `manifest.lua` enthalten sind.
+   - Für MASTER ist `master.rt_sync_coalescer` explizit als Pflichtfall abgesichert: wenn das Modul im Entrypoint genutzt wird, aber nicht im MASTER-Manifest enthalten ist, muss der Guard hart fehlschlagen.
 11. **MASTER Presence-/Identity-/RT-Hold Guards**:
    - `tests/master_message_handler_node_id_canonicalization_test.lua` stellt sicher, dass STATUS mit kanonischer `node_id` alte Sender-IDs (z. B. `ENERGY-1`) in den MASTER-Nodes sauber ersetzt.
    - `tests/comms_peer_retention_cleanup_test.lua` stellt sicher, dass langzeitig down/stale Peers aus dem Peer-State auslaufen (kein permanenter Altzustand).
