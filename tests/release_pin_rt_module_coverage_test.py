@@ -10,16 +10,19 @@ RT_MAIN_PATH = REPO_ROOT / "xreactor" / "nodes" / "rt" / "main.lua"
 REQUIRE_RE = re.compile(r'require\s*\(\s*["\']([\w\._]+)["\']\s*\)')
 
 
-def read_release_sha() -> str:
+def read_release_ref() -> tuple[str, str]:
     text = RELEASE_PATH.read_text(encoding="utf-8")
-    match = re.search(r'commit_sha\s*=\s*"([0-9a-f]+)"', text)
-    if not match:
+    commit_match = re.search(r'commit_sha\s*=\s*"([^"]+)"', text)
+    source_match = re.search(r'source_ref\s*=\s*"([^"]+)"', text)
+    if not commit_match:
         raise RuntimeError("release.lua commit_sha missing")
-    return match.group(1)
+    if not source_match:
+        raise RuntimeError("release.lua source_ref missing")
+    return commit_match.group(1), source_match.group(1)
 
 
-def git_show(sha: str, rel_path: str) -> str:
-    return subprocess.check_output(["git", "show", f"{sha}:{rel_path}"], cwd=REPO_ROOT, text=True)
+def git_show(ref: str, rel_path: str) -> str:
+    return subprocess.check_output(["git", "show", f"{ref}:{rel_path}"], cwd=REPO_ROOT, text=True)
 
 
 def parse_manifest_paths(manifest_text: str) -> set[str]:
@@ -36,8 +39,13 @@ def collect_rt_requires() -> set[str]:
 
 
 def main() -> int:
-    release_sha = read_release_sha()
-    manifest_text = git_show(release_sha, "xreactor/manifest.lua")
+    release_commit, source_ref = read_release_ref()
+    if release_commit == "beta":
+        manifest_text = (REPO_ROOT / "xreactor" / "manifest.lua").read_text(encoding="utf-8")
+        release_ref_for_log = source_ref
+    else:
+        manifest_text = git_show(release_commit, "xreactor/manifest.lua")
+        release_ref_for_log = release_commit
     manifest_paths = parse_manifest_paths(manifest_text)
 
     missing = []
@@ -48,7 +56,7 @@ def main() -> int:
 
     if missing:
         print("release_pin_rt_module_coverage_test.py: FAIL")
-        print(f" - release commit_sha={release_sha}")
+        print(f" - release_ref={release_ref_for_log}")
         for mod, module_path in missing:
             print(f" - missing module={mod} manifest_path={module_path}")
         return 1
