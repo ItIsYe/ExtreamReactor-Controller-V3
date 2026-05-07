@@ -14,12 +14,12 @@ function M.new(opts)
       auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile,
       rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold,
       power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target,
-      nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE' }, rt_online = 0
+      nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = ''
     }
     if (counts.CRITICAL or 0) > 0 then overview.system_status = 'EMERGENCY' elseif (counts.WARN or 0) > 0 then overview.system_status = 'WARNING' end
-    for i, a in ipairs(top) do if i > 3 then break end overview.alert_rows[#overview.alert_rows+1] = { text = tostring(a.message or a.title or 'Alert'), status = tostring(a.severity or 'WARNING') } end
+    for i, a in ipairs(top) do if i > 4 then break end overview.alert_rows[#overview.alert_rows+1] = { text = tostring(a.title or a.message or 'Alert') .. ': ' .. tostring(a.message or a.title or ''), status = tostring(a.severity or 'WARNING') } end
 
-    local rt = { rt_nodes = {}, queue = c.sequencer.queue or {}, ramp_profile = c.sequencer.ramp_profile, sequence_state = c.sequencer.state, rt_global_off_hold = overview.rt_global_off_hold }
+    local rt = { rt_nodes = {}, queue = c.sequencer.queue or {}, ramp_profile = c.sequencer.ramp_profile, sequence_state = c.sequencer.state, rt_global_off_hold = overview.rt_global_off_hold, rt_active = 0, rt_startup = 0, rt_shutdown = 0 }
     local energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = 'OFFLINE' }
 
     for _, node in pairs(c.nodes or {}) do
@@ -27,7 +27,11 @@ function M.new(opts)
       overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role, status = node.status or 'OFFLINE', last_seen_age = age, mode = node.mode }
       if node.role == c.constants.roles.RT_NODE then
         overview.rt_online = overview.rt_online + 1
-        rt.rt_nodes[#rt.rt_nodes+1] = node.rt or { id = node.id, status = node.status, mode = node.mode }
+        local rt_node = node.rt or { id = node.id, status = node.status, mode = node.mode }
+        rt.rt_nodes[#rt.rt_nodes+1] = rt_node
+        overview.power_actual = overview.power_actual + (rt_node.actual_output or rt_node.output or 0)
+        local state = tostring(rt_node.state or '')
+        if state == 'RUNNING' then rt.rt_active = rt.rt_active + 1 elseif state == 'STARTUP' then rt.rt_startup = rt.rt_startup + 1 elseif state == 'SHUTDOWN' then rt.rt_shutdown = rt.rt_shutdown + 1 end
       elseif node.role == c.constants.roles.ENERGY_NODE then
         local e = node.energy or {}
         energy.stored = energy.stored + (e.stored or 0); energy.capacity = energy.capacity + (e.capacity or 0); energy.input = energy.input + (e.input or 0); energy.output = energy.output + (e.output or 0)
@@ -35,7 +39,7 @@ function M.new(opts)
       else
         energy.support_nodes[#energy.support_nodes+1] = { id = node.id, role = node.role, status = node.status or 'OFFLINE', last_seen_age = age, note = node.bindings_summary or '' }
       end
-      if node.role == c.constants.roles.FUEL_NODE then energy.resources.fuel_total = (energy.resources.fuel_total or 0) + ((node.fuel and node.fuel.amount) or 0) end
+      if node.role == c.constants.roles.FUEL_NODE then energy.resources.fuel_total = (energy.resources.fuel_total or 0) + ((node.fuel and node.fuel.amount) or 0); energy.resources.fuel_sources = (energy.resources.fuel_sources or 0) + 1 end
       if node.role == c.constants.roles.WATER_NODE then energy.resources.water_total = (energy.resources.water_total or 0) + ((node.water and node.water.total) or 0) end
       if node.role == c.constants.roles.REPROCESSOR_NODE then energy.resources.reprocessing_state = (node.reprocessor and (node.reprocessor.state or node.reprocessor.mode)) or '-' end
     end
@@ -43,7 +47,9 @@ function M.new(opts)
     table.sort(rt.rt_nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
     local pct = energy.capacity > 0 and (energy.stored / energy.capacity) * 100 or 0
     energy.status = pct < 15 and 'EMERGENCY' or (pct < 30 and 'WARNING' or 'OK')
-    overview.energy_overview = { percent = pct, status = energy.status }
+    overview.energy_overview = { percent = pct, status = energy.status, trend = (pct > 70 and 'Trend stabil') or (pct > 35 and 'Trend sinkt') or 'Trend kritisch' }
+    overview.clock_label = os.date('!%H:%M UTC')
+    rt.rt_global_off_hold = overview.rt_global_off_hold
     return { overview = overview, rt = rt, energy = energy, resources = {} }
   end
 

@@ -36,4 +36,24 @@ function widgets.layout_button(mon, x, y, label, status)
   return { x1 = x, x2 = x + #text - 1, y = y }
 end
 
+function widgets.stat_card(mon, x, y, w, title, value, meta, status, progress)
+  ui.panel(mon, x, y, w, 4, title, status or "OK")
+  ui.text(mon, x + 1, y + 1, tostring(value or "-"), colors.get(status or "text"), colors.get("background"))
+  if meta then
+    ui.text(mon, x + 1, y + 2, tostring(meta), colors.get("muted"), colors.get("background"))
+  end
+  if progress ~= nil then
+    ui.progress(mon, x + 1, y + 3, math.max(6, w - 2), progress, status or "OK")
+  end
+end
+
+function widgets.compact_row(mon, x, y, values, statuses)
+  local col = x
+  for idx, value in ipairs(values or {}) do
+    local status = statuses and statuses[idx] or "text"
+    ui.text(mon, col, y, tostring(value or "-"), colors.get(status), colors.get("background"))
+    col = col + #tostring(value or "-") + 2
+  end
+end
+
 return widgets

@@ -1,22 +1,24 @@
-local text = assert(io.open('xreactor/master/ui/overview.lua', 'r')):read('*a')
+package.path = 'xreactor/?.lua;xreactor/?/init.lua;' .. package.path
 
-local sections = {
-  'Systemstatus',
-  'Globale Steuerung',
-  'Aktive Meldungen',
-  'KPI',
-  'Node-Status'
+local calls = { panels = {} }
+package.loaded['core.ui'] = {
+  panel = function(_, _, _, _, _, title) calls.panels[#calls.panels + 1] = title end,
+  badge = function() end,
+  text = function() end,
+  list = function() end,
+  progress = function() end,
+  getSize = function() return 80, 32 end,
 }
-local last = 0
-for _, section in ipairs(sections) do
-  local pos = text:find(section, 1, true)
-  if not pos then error('missing section: ' .. section) end
-  if pos < last then error('section order invalid around: ' .. section) end
-  last = pos
-end
+package.loaded['shared.colors'] = { get = function() return 1 end }
+package.loaded['core.utils'] = { safe_serialize = function() return tostring(math.random()) end }
 
-if not text:find('render_status_line', 1, true) or not text:find('render_controls', 1, true) then
-  error('overview helper structure missing')
-end
+local overview = require('master.ui.overview')
+overview.render({}, { profile_list={'BASELOAD'}, nodes={}, alert_rows={}, energy_overview={percent=50,status='OK'} })
 
+local required = { 'Systemstatus', 'Globale Steuerung', 'Aktive Meldungen', 'KPI', 'Node-Status' }
+for _, section in ipairs(required) do
+  local seen = false
+  for _, title in ipairs(calls.panels) do if title == section then seen = true break end end
+  if not seen then error('missing overview section panel: ' .. section) end
+end
 print('master_overview_ui_contract_test.lua: ok')
