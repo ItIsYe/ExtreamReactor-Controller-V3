@@ -6,7 +6,6 @@ from pathlib import Path
 repo = Path(__file__).resolve().parents[1]
 
 PARSE_FILES = [
-    'xreactor/nodes/rt/main.lua',
     'xreactor/master/ui/multiview.lua',
     'xreactor/master/ui/overview.lua',
     'xreactor/master/ui/rt_dashboard.lua',
@@ -14,6 +13,7 @@ PARSE_FILES = [
     'xreactor/master/ui_controller.lua',
     'xreactor/master/main.lua',
     'xreactor/master/message_handlers.lua',
+    'xreactor/installer_manifest.lua',
 ]
 
 cmd = [
@@ -29,4 +29,19 @@ for file_path in PARSE_FILES:
     cmd.extend(['--file', file_path])
 subprocess.run(cmd, cwd=repo, check=True)
 
-print('cc_parse_guard_test.py: ok')
+artifact_patterns = [
+    'diff --git',
+    '@@',
+    '--- a/',
+    '+++ b/',
+    '*** Begin Patch',
+    '*** End Patch',
+]
+for lua_file in sorted((repo / 'xreactor').rglob('*.lua')):
+    content = lua_file.read_text(encoding='utf-8', errors='ignore')
+    for marker in artifact_patterns:
+        if marker in content:
+            rel = lua_file.relative_to(repo)
+            raise AssertionError(f"Patch marker '{marker}' found in shipped Lua file: {rel}")
+
+print('master_shipped_lua_parse_guard_test.py: ok')
