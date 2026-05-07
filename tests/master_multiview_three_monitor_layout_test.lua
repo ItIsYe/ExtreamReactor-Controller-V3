@@ -1,22 +1,36 @@
-local text = assert(io.open('xreactor/master/ui/multiview.lua', 'r')):read('*a')
+package.path = 'xreactor/?.lua;xreactor/?/init.lua;' .. package.path
 
-local required = {
-  'ROLE_MAP = { "overview", "rt", "energy" }',
-  'if idx <= 3 then',
-  'prior.locked = true',
-  'ROLE_LABELS',
-  'if not state or state.locked then return end'
+package.loaded['core.ui'] = {
+  clear = function() end,
+  badge = function() end,
+  text = function() end,
+  getSize = function() return 80, 24 end,
 }
-for _, token in ipairs(required) do
-  if not text:find(token, 1, true) then
-    error('missing expected token: ' .. token)
-  end
-end
+package.loaded['master.ui.widgets'] = { layout_button = function() end }
 
-local role_pos = assert(text:find('ROLE_MAP', 1, true))
-local update_pos = assert(text:find('function M:update_monitors', 1, true))
-if role_pos > update_pos then
-  error('ROLE_MAP must be declared before update_monitors')
-end
+local multiview = require('master.ui.multiview')
+local calls = {}
+local m = multiview.new({
+  views = {
+    overview = { render = function() calls[#calls+1] = 'overview' end },
+    rt = { render = function() calls[#calls+1] = 'rt' end },
+    energy = { render = function() calls[#calls+1] = 'energy' end },
+  },
+  view_order = { 'overview', 'rt', 'energy' }
+})
+
+local monitors = {
+  { id='M1', name='monitor_1', mon={} },
+  { id='M2', name='monitor_2', mon={} },
+  { id='M3', name='monitor_3', mon={} },
+  { id='M4', name='monitor_4', mon={} },
+}
+
+m:render(monitors, { overview={}, rt={}, energy={} })
+
+if m.layout.monitors.M1.view ~= 'overview' or not m.layout.monitors.M1.locked then error('M1 must be locked overview') end
+if m.layout.monitors.M2.view ~= 'rt' or not m.layout.monitors.M2.locked then error('M2 must be locked rt') end
+if m.layout.monitors.M3.view ~= 'energy' or not m.layout.monitors.M3.locked then error('M3 must be locked energy') end
+if m.layout.monitors.M4.locked then error('M4 must stay operator-cyclable') end
 
 print('master_multiview_three_monitor_layout_test.lua: ok')
