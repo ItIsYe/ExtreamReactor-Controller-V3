@@ -14,6 +14,7 @@ PARSE_FILES = [
     'xreactor/master/ui_controller.lua',
     'xreactor/master/main.lua',
     'xreactor/master/message_handlers.lua',
+    'xreactor/nodes/energy/main.lua',
 ]
 
 cmd = [
