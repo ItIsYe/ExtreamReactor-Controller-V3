@@ -12,14 +12,20 @@ REQUIRE_RE = re.compile(r'require\s*\(\s*["\']([\w\._]+)["\']\s*\)')
 MANDATORY_ROLE_REQUIRES = {
     "MASTER": {"master.rt_sync_coalescer"},
 }
-
+ROLE_SCOPED_CANDIDATES = {
+    "services/matrix_sampling_service.lua": {"ENERGY"},
+    "nodes/support/discovery.lua": {"WATER", "FUEL", "REPROCESSING"},
+    "nodes/support/runtime.lua": {"WATER", "FUEL", "REPROCESSING"},
+    "nodes/support/ui_pages.lua": {"WATER", "FUEL", "REPROCESSING"},
+    "nodes/support/command_handler.lua": {"WATER", "FUEL", "REPROCESSING"},
+    "nodes/support/role_logic.lua": {"ENERGY", "WATER", "FUEL", "REPROCESSING"},
+}
 
 def parse_required_for(tail: str):
     match = re.search(r'required_for\s*=\s*\{([^}]*)\}', tail)
     if not match:
         return None
     return {value.strip().strip('"') for value in match.group(1).split(',') if value.strip()}
-
 
 def parse_manifest(path: pathlib.Path):
     base_files = []
@@ -60,7 +66,6 @@ def parse_manifest(path: pathlib.Path):
 
     return base_files, roles
 
-
 def expected_files_for_role(base_files, roles, role_label: str):
     expected = set(base_files)
     for _, entries in roles.items():
@@ -69,18 +74,21 @@ def expected_files_for_role(base_files, roles, role_label: str):
                 expected.add(path)
     return expected
 
-
 def collect_requires(lua_file: pathlib.Path):
-    required = set()
-    content = lua_file.read_text(encoding="utf-8")
-    for match in REQUIRE_RE.finditer(content):
-        required.add(match.group(1))
-    return required
-
+    return {match.group(1) for match in REQUIRE_RE.finditer(lua_file.read_text(encoding="utf-8"))}
 
 def module_to_path(module_name: str):
     return module_name.replace('.', '/') + ".lua"
 
+
+def collect_role_usage_from_entrypoints(role_specs):
+    usage = {path: set() for path in ROLE_SCOPED_CANDIDATES}
+    for role_label, entrypoint in role_specs:
+        for module_name in collect_requires(entrypoint):
+            module_path = module_to_path(module_name)
+            if module_path in usage:
+                usage[module_path].add(role_label)
+    return usage
 
 
 def main():
@@ -103,29 +111,30 @@ def main():
             module_path = module_to_path(module_name)
             module_abs = XREACTOR_ROOT / module_path
             if not module_abs.exists():
-                errors.append(
-                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} requires missing repo module={module_name} path={module_path}"
-                )
+                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} requires missing repo module={module_name} path={module_path}")
             if module_path not in expected:
-                errors.append(
-                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module={module_name} path={module_path}"
-                )
+                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module={module_name} path={module_path}")
         for mandatory_module in sorted(MANDATORY_ROLE_REQUIRES.get(role_label, set())):
             mandatory_path = module_to_path(mandatory_module)
             if mandatory_module in entrypoint_requires and mandatory_path not in expected:
-                errors.append(
-                    f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} mandatory runtime module missing from manifest={mandatory_module} path={mandatory_path}"
-                )
+                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} mandatory runtime module missing from manifest={mandatory_module} path={mandatory_path}")
+
+    observed_usage = collect_role_usage_from_entrypoints(role_specs)
+    for path, configured_roles in sorted(ROLE_SCOPED_CANDIDATES.items()):
+        if path in base_files:
+            errors.append(f"minimality violation: role-scoped candidate is still global base_files path={path} configured_roles={sorted(configured_roles)}")
+        expected_roles = observed_usage.get(path, set())
+        if configured_roles != expected_roles:
+            errors.append(
+                f"role-scope drift: candidate={path} expected_from_entrypoints={sorted(expected_roles)} configured={sorted(configured_roles)}"
+            )
 
     rt_root = XREACTOR_ROOT / "nodes" / "rt"
     for lua_file in sorted(rt_root.glob("*.lua")):
         for module_name in sorted(collect_requires(lua_file)):
             module_rel = module_to_path(module_name)
-            module_abs = XREACTOR_ROOT / module_rel
-            if not module_abs.exists():
-                errors.append(
-                    f"rt-file={lua_file.relative_to(REPO_ROOT)} requires missing module={module_name} path={module_rel}"
-                )
+            if not (XREACTOR_ROOT / module_rel).exists():
+                errors.append(f"rt-file={lua_file.relative_to(REPO_ROOT)} requires missing module={module_name} path={module_rel}")
 
     if errors:
         print("manifest_entrypoint_require_coverage_test.py: FAIL")
@@ -135,7 +144,6 @@ def main():
 
     print("manifest_entrypoint_require_coverage_test.py: ok")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
