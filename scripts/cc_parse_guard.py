@@ -171,7 +171,7 @@ def main():
     ap.add_argument('--chunk-limit', type=int, default=190)
     ap.add_argument('--function-limit', type=int, default=170)
     ap.add_argument('--max-bytes', type=int, default=120000)
-    ap.add_argument('--require-real-parse', action='store_true', help='Require actual Lua parser success (luac or lupa.load)')
+    ap.add_argument('--require-real-parse', action='store_true', help='Require actual Lua parser success (luajit/lua/luac or lupa.loadfile)')
     ap.add_argument('--parser-mode', choices=['any', 'luajit', 'lua', 'luac'], default='any', help='Choose parser requirement for real parse checks')
     args=ap.parse_args()
 
@@ -193,7 +193,7 @@ def main():
         if args.require_real_parse:
             ok, parser_used, err = real_parse(p, args.parser_mode)
             if ok is None:
-                failures.append(f"{p}: real parse unavailable ({err})")
+                failures.append(f"{p}: real parse unavailable ({err}); install lua/luajit/luac or python package 'lupa'")
             elif not ok:
                 failures.append(f"{p}: real parse failed via {parser_used}: {err}")
             else:
