@@ -58,7 +58,7 @@ return {
       { path = "master/ui/alarms.lua", size_bytes = 1345, hash = "0a381649" },
       { path = "master/ui/alerts.lua", size_bytes = 25335, hash = "746207f8" },
       { path = "master/ui/energy.lua", size_bytes = 2769, hash = "9ea81634" },
-      { path = "master/ui/multiview.lua", size_bytes = 3145, hash = "1f76638b" },
+      { path = "master/ui/multiview.lua", size_bytes = 3152, hash = "a78f311c" },
       { path = "master/ui/overview.lua", size_bytes = 4977, hash = "89d56e74" },
       { path = "master/ui/resources.lua", size_bytes = 5634, hash = "3c3f86d2" },
       { path = "master/ui/rt_dashboard.lua", size_bytes = 2894, hash = "bc7f43e2" },

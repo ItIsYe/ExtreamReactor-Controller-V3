@@ -5,9 +5,9 @@ local M = {}
 
 local PRIMARY_ROLE_MAP = { "overview", "rt", "energy" }
 local ROLE_LABELS = {
-  overview = "MONITOR 1 UEBERSICHT",
-  rt = "MONITOR 2 RT-FLOTTE",
-  energy = "MONITOR 3 ENERGY & RESSOURCEN"
+  overview = "MON1 UEBERSICHT",
+  rt = "MON2 RT-FLOTTE",
+  energy = "MON3 ENERGY/RES"
 }
 
 local function primary_view(index, view_order)
@@ -74,9 +74,10 @@ function M:render(monitors, data_map)
     local w = select(1, ui.getSize(mon_entry.mon))
     if w then
       if idx <= 3 then
-        local role_label = widgets.fit(ROLE_LABELS[view_key] or "PRIMARY", math.max(10, w - 17))
+        local fix_x = math.max(2, w - 8)
+        local role_label = widgets.fit(ROLE_LABELS[view_key] or "PRIMARY", math.max(10, fix_x - 4))
         ui.badge(mon_entry.mon, 2, 1, role_label, "LIMITED")
-        ui.badge(mon_entry.mon, math.max(2, w - 8), 1, "FIX", "LIMITED")
+        ui.badge(mon_entry.mon, fix_x, 1, "FIX", "LIMITED")
       else
         ui.badge(mon_entry.mon, math.max(2, w - 18), 1, "AUX VIEW", "OK")
         widgets.layout_button(mon_entry.mon, math.max(2, w - 11), 1, "LAYOUT", "LIMITED")
