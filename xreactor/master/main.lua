@@ -40,6 +40,7 @@ local message_handlers = require("master.message_handlers")
 local rt_sync_coalescer_lib = require("master.rt_sync_coalescer")
 local housekeeping = require("master.housekeeping")
 local ui_controller_lib = require("master.ui_controller")
+local init_runtime = require("master.init_runtime")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local alert_service_lib = require("services.alert_service")
@@ -585,98 +586,52 @@ local function build_master_alert_payload()
 end
 
 local function init()
-  local configured_scale = config.monitor_scale
-  if configured_scale == nil then
-    configured_scale = config.ui_scale_default
-  end
-  local resolved_scale = tonumber(configured_scale)
-  if configured_scale ~= nil and not resolved_scale then
-    utils.log("MASTER", "Ignoring non-numeric monitor scale config value: " .. tostring(configured_scale), "WARN")
-  end
-  utils.log("MASTER", "Resolved monitor scale for scan: " .. tostring(resolved_scale), "INFO")
-  monitor_mgr = monitor_manager.new({
-    log_prefix = "MASTER",
-    node_id = node_id,
-    scale = resolved_scale,
-    path = "/xreactor/config/registry_master_monitors.json"
-  })
-  view_manager = multiview_ui.new({
-    layout_path = layout_config_path,
-    views = {
-      overview = { label = "Overview", render = overview_ui.render, hit_test = overview_ui.hit_test, interval = 0.5 },
-      energy = { label = "Energy", render = energy_ui.render, interval = 1.0 },
-      rt = { label = "RT", render = rt_ui.render, interval = 1.0 },
-      resources = { label = "Resources", render = resources_ui.render, interval = 2.0 },
-      alerts = { label = "Alerts", render = alerts_ui.render, hit_test = alerts_ui.hit_test, interval = 0.5 },
-      alarms = { label = "Logs", render = alarms_ui.render, interval = 1.0 }
-    },
-    view_order = { "overview", "energy", "rt", "resources", "alerts", "alarms" },
-    on_action = function(action)
-      if ui_controller then
-        ui_controller.handle_action(action)
-      end
-    end
-  })
-  refresh_monitors(true)
-  comms = comms_service.new({
+  local refs = {}
+  init_runtime.run({
     config = config,
-    log_prefix = "MASTER",
-    on_message = update_node
-  })
-  services = service_manager.new({ log_prefix = "MASTER" })
-  rt_sync_coalescer = rt_sync_coalescer_lib.new({
-    constants = constants,
     utils = utils,
-    batch_window_ms = rt_sync_batch_window_ms,
-    sync_rt_node = sync_rt_node,
-    log = function(message, level) utils.log("MASTER", message, level or "INFO") end
-  })
-  services:add(comms)
-  local recovery_notice = nil
-  if recovery_status and recovery_status.had_marker then
-    local action = recovery_status.result or "recovery"
-    local notice_until = os.epoch("utc") + (config.alert_info_ttl or 20) * 1000
-    recovery_notice = {
-      active = true,
-      active_until = notice_until,
-      message = "Update recovery: " .. tostring(action),
-      details = recovery_status.marker or {}
-    }
-  end
-  alert_service = alert_service_lib.new({
-    config = config,
+    constants = constants,
+    health = health,
+    node_id = node_id,
+    layout_config_path = layout_config_path,
+    monitor_manager = monitor_manager,
+    multiview_ui = multiview_ui,
+    overview_ui = overview_ui,
+    energy_ui = energy_ui,
+    rt_ui = rt_ui,
+    resources_ui = resources_ui,
+    alerts_ui = alerts_ui,
+    alarms_ui = alarms_ui,
+    comms_service = comms_service,
+    service_manager = service_manager,
+    rt_sync_coalescer_lib = rt_sync_coalescer_lib,
+    alert_service_lib = alert_service_lib,
+    telemetry_service = telemetry_service,
+    control_service = control_service,
+    ui_service = ui_service,
+    sequencer_lib = sequencer_lib,
+    message_handlers = message_handlers,
+    ui_controller_lib = ui_controller_lib,
+    runtime_context = runtime_context,
+    recovery_status = recovery_status,
     nodes = nodes,
-    power_target = function() return power_target end,
-    log_prefix = "ALERT",
-    recovery_notice = recovery_notice
-  })
-  services:add(alert_service)
-  services:add(telemetry_service.new({
-    comms = comms,
-    log_prefix = "MASTER",
-    status_interval = config.status_interval or config.heartbeat_interval,
-    heartbeat_interval = config.heartbeat_interval,
-    build_payload = build_master_alert_payload
-  }))
-  services:add(control_service.new({
-    name = "HOUSEKEEPING",
-    interval = 0.5,
-    runtime = {
-      tick = function()
-        handle_command_timeouts()
-        if sequencer then
-          sequencer:tick(nodes)
-        end
-        flush_rt_sync_queue()
-        check_timeouts()
-        sample_trends()
-      end
-    }
-  }))
-  services:add(ui_service.new({
-    interval = 0.5,
-    force_interval = 2,
-    snapshot = function(event)
+    alarms = alarms,
+    trends = trends,
+    trend_cache = trend_cache,
+    monitor_cache = monitor_cache,
+    rt_sync_batch_window_ms = rt_sync_batch_window_ms,
+    refresh_monitors = refresh_monitors,
+    update_node = update_node,
+    sync_rt_node = sync_rt_node,
+    build_master_alert_payload = build_master_alert_payload,
+    housekeeping_tick = function()
+      handle_command_timeouts()
+      if sequencer then sequencer:tick(nodes) end
+      flush_rt_sync_queue()
+      check_timeouts()
+      sample_trends()
+    end,
+    ui_snapshot = function(event)
       return {
         event = event and event[1] or "tick",
         monitors = monitor_cache.list and #monitor_cache.list or 0,
@@ -688,73 +643,38 @@ local function init()
         trends = last_trend_sample
       }
     end,
-    render = function()
+    ui_render = function()
       refresh_monitors(false)
-      if ui_controller then
-        ui_controller.draw()
-      end
+      if ui_controller then ui_controller.draw() end
     end,
-    handle_input = function(event)
-      if ui_controller then
-        ui_controller.handle_input(event)
-      end
-    end
-  }))
-  services:init()
-  sequencer = sequencer_lib.new(comms, config.startup_ramp, {
-    alert_service = alert_service,
-    timeout_s = config.startup_stage_timeout_s,
-    config = config
-  })
-  node_message_handler = message_handlers.new({
-    constants = constants,
-    utils = utils,
-    health = health,
-    nodes = nodes,
-    comms = function() return comms end,
-    sequencer = sequencer,
+    ui_handle_input = function(event)
+      if ui_controller then ui_controller.handle_input(event) end
+    end,
     mark_rt_sync_dirty = mark_rt_sync_dirty,
     add_alarm = add_alarm,
     master_time_label = master_time_label,
-    log = function(message, level) utils.log("MASTER", message, level or "INFO") end
+    apply_profile = function(name) apply_profile(name) end,
+    set_auto_profile = function(value) auto_profile = value end,
+    get_auto_profile = function() return auto_profile end,
+    get_active_profile = function() return active_profile end,
+    get_power_target = function() return power_target end,
+    get_critical_blink_until = function() return critical_blink_until end,
+    get_rt_global_off_hold = function() return rt_global_off_hold end,
+    set_rt_global_off_hold = function(value) set_rt_global_hold(value) end,
+    last_draw = last_draw,
+    refs = refs
   })
-  ui_controller = ui_controller_lib.new({
-    constants = constants,
-    health = health,
-    config = config,
-    nodes = nodes,
-    alarms = alarms,
-    comms = comms,
-    sequencer = sequencer,
-    alert_service = alert_service,
-    view_manager = view_manager,
-    trends = trends,
-    trend_cache = trend_cache,
-    state = {
-      monitor_cache = monitor_cache,
-      last_draw = last_draw,
-      critical_blink_until = critical_blink_until,
-      power_target = power_target,
-      active_profile = active_profile,
-      auto_profile = auto_profile,
-      rt_global_off_hold = rt_global_off_hold
-    },
-    calc = {
-      apply_profile = function(name)
-        apply_profile(name)
-      end,
-      set_auto_profile = function(value) auto_profile = value end,
-      get_auto_profile = function() return auto_profile end,
-      get_active_profile = function() return active_profile end,
-      get_power_target = function() return power_target end,
-      get_critical_blink_until = function() return critical_blink_until end,
-      get_rt_global_off_hold = function() return rt_global_off_hold end,
-      set_rt_global_off_hold = function(value) set_rt_global_hold(value) end
-    }
-  })
-  comms:send_hello({ monitors = monitor_cache.list and #monitor_cache.list or 0 })
-  utils.log("MASTER", "Initialized as " .. comms.network.id)
+  monitor_mgr = refs.monitor_mgr
+  view_manager = refs.view_manager
+  comms = refs.comms
+  services = refs.services
+  rt_sync_coalescer = refs.rt_sync_coalescer
+  alert_service = refs.alert_service
+  sequencer = refs.sequencer
+  node_message_handler = refs.node_message_handler
+  ui_controller = refs.ui_controller
 end
+
 
 local function main_loop()
   utils.log("MASTER", "Entering event loop", "INFO")
