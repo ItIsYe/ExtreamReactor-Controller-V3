@@ -15,6 +15,9 @@ PARSE_FILES = [
     'xreactor/master/main.lua',
     'xreactor/master/init_runtime.lua',
     'xreactor/master/runtime_loop.lua',
+    'xreactor/master/runtime_ops_monitor.lua',
+    'xreactor/master/runtime_ops_profile.lua',
+    'xreactor/master/runtime_ops_rt.lua',
     'xreactor/master/message_handlers.lua',
     'xreactor/nodes/energy/main.lua',
 ]
