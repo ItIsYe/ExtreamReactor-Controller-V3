@@ -117,7 +117,7 @@ def main():
         for mandatory_module in sorted(MANDATORY_ROLE_REQUIRES.get(role_label, set())):
             mandatory_path = module_to_path(mandatory_module)
             if mandatory_module in entrypoint_requires and mandatory_path not in expected:
-                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} mandatory runtime module missing from manifest={mandatory_module} path={mandatory_path}")
+                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} mandatory missing module={mandatory_module} path={mandatory_path}")
 
     observed_usage = collect_role_usage_from_entrypoints(role_specs)
     for path, configured_roles in sorted(ROLE_SCOPED_CANDIDATES.items()):
