@@ -4,11 +4,12 @@ local widgets = require("master.ui.widgets")
 
 local function render_rt_card(mon, x, y, w, rt)
   widgets.card(mon, x, y, w, 8, "RT-" .. tostring(rt.id or "?"), rt.status or "OFFLINE")
-  ui.badge(mon, x + w - 12, y + 1, tostring(rt.state or "OFF"), rt.status or "OFFLINE")
+  widgets.status_badge(mon, x + w - 13, y + 1, tostring(rt.state or "OFF"), rt.status or "OFFLINE")
   ui.text(mon, x + 1, y + 2, string.format("Soll %.1f%%", rt.target or 0), colors.get("muted"), colors.get("background"))
   ui.text(mon, x + 1, y + 3, string.format("Ist %.1f%%", rt.actual_output or rt.output or 0), colors.get("text"), colors.get("background"))
-  ui.text(mon, x + 1, y + 4, "Modus " .. tostring(rt.mode or "-"), colors.get("muted"), colors.get("background"))
-  ui.text(mon, x + 1, y + 5, "Workflow " .. tostring(rt.assignment_reason or rt.assignment_state or "-"), colors.get("muted"), colors.get("background"))
+  ui.text(mon, x + 1, y + 4, widgets.pad("Modus", 9) .. widgets.fit(tostring(rt.mode or "-"), w - 11), colors.get("muted"), colors.get("background"))
+  ui.text(mon, x + 1, y + 5, widgets.pad("Betrieb", 9) .. widgets.fit(tostring(rt.assignment_state or "MASTER"), w - 11), colors.get("text"), colors.get("background"))
+  ui.text(mon, x + 1, y + 6, widgets.fit("Workflow " .. tostring(rt.assignment_reason or rt.assignment_state or "-"), w - 2), colors.get("muted"), colors.get("background"))
   ui.progress(mon, x + 1, y + 7, w - 2, math.max(0, math.min(100, rt.actual_output or rt.output or 0)), rt.status or "OFFLINE")
 end
 
@@ -17,10 +18,10 @@ local function render(mon, model)
   widgets.card(mon, 1, 1, w, h, "MONITOR 2 - RT-FLOTTE", "OK")
 
   ui.panel(mon, 2, 2, w - 2, 4, "RT-Uebersicht", "OK")
-  ui.badge(mon, 4, 3, tostring(model.rt_active or 0) .. " AKTIV", "OK")
-  ui.badge(mon, 16, 3, tostring(model.rt_startup or 0) .. " STARTUP", "LIMITED")
-  ui.badge(mon, 31, 3, tostring(model.rt_shutdown or 0) .. " SHUTDOWN", "OFFLINE")
-  ui.badge(mon, 47, 3, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING")
+  widgets.status_badge(mon, 4, 3, tostring(model.rt_active or 0) .. " AKTIV", "OK")
+  widgets.status_badge(mon, 16, 3, tostring(model.rt_startup or 0) .. " STARTUP", "LIMITED")
+  widgets.status_badge(mon, 31, 3, tostring(model.rt_shutdown or 0) .. " SHUTDOWN", "OFFLINE")
+  widgets.status_badge(mon, 47, 3, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING")
   ui.text(mon, 3, 5, "Einzelne RT-Nodes mit Sollwert, Zustand, Modus und Workflow", colors.get("muted"), colors.get("background"))
 
   local card_w, y = math.floor((w - 5) / 2), 6
@@ -36,7 +37,7 @@ local function render(mon, model)
   local rows = {}
   for i, q in ipairs(model.queue or {}) do
     if i > 3 then break end
-    rows[#rows + 1] = { text = string.format("%d. RT-%s -> %s", i, tostring(q.node_id or "?"), tostring(q.module_id or q.action or "step")), status = "LIMITED" }
+    rows[#rows + 1] = { text = widgets.fit(string.format("%d. RT-%s -> %s", i, tostring(q.node_id or "?"), tostring(q.module_id or q.action or "step")), w - 7), status = "LIMITED" }
   end
   if #rows == 0 then rows[1] = { text = "Queue leer", status = "OFFLINE" } end
   ui.list(mon, 3, h - 5, w - 4, rows, { max_rows = 3 })
