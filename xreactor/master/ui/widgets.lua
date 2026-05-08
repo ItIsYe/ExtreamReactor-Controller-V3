@@ -39,20 +39,23 @@ end
 function widgets.stat_card(mon, x, y, w, title, value, meta, status, progress)
   ui.panel(mon, x, y, w, 4, title, status or "OK")
   ui.text(mon, x + 1, y + 1, tostring(value or "-"), colors.get(status or "text"), colors.get("background"))
-  if meta then
-    ui.text(mon, x + 1, y + 2, tostring(meta), colors.get("muted"), colors.get("background"))
-  end
-  if progress ~= nil then
-    ui.progress(mon, x + 1, y + 3, math.max(6, w - 2), progress, status or "OK")
+  if meta then ui.text(mon, x + 1, y + 2, tostring(meta), colors.get("muted"), colors.get("background")) end
+  if progress ~= nil then ui.progress(mon, x + 1, y + 3, math.max(6, w - 2), progress, status or "OK") end
+end
+
+function widgets.compact_header(mon, x, y, labels, widths)
+  local col = x
+  for i, label in ipairs(labels or {}) do
+    ui.text(mon, col, y, tostring(label), colors.get("muted"), colors.get("background"))
+    col = col + (widths and widths[i] or (#tostring(label) + 2))
   end
 end
 
-function widgets.compact_row(mon, x, y, values, statuses)
+function widgets.compact_status_row(mon, x, y, values, widths, status)
   local col = x
-  for idx, value in ipairs(values or {}) do
-    local status = statuses and statuses[idx] or "text"
-    ui.text(mon, col, y, tostring(value or "-"), colors.get(status), colors.get("background"))
-    col = col + #tostring(value or "-") + 2
+  for i, value in ipairs(values or {}) do
+    ui.text(mon, col, y, tostring(value or "-"), colors.get(i == 3 and (status or "text") or "text"), colors.get("background"))
+    col = col + (widths and widths[i] or (#tostring(value or "-") + 2))
   end
 end
 

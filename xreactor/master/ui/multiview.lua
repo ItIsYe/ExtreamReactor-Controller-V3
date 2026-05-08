@@ -6,7 +6,7 @@ local M = {}
 local PRIMARY_ROLE_MAP = { "overview", "rt", "energy" }
 local ROLE_LABELS = {
   overview = "MON1 UEBERSICHT",
-  rt = "MON2 RT",
+  rt = "MON2 RT-FLOTTE",
   energy = "MON3 ENERGY"
 }
 
@@ -44,11 +44,11 @@ function M:update_monitors(monitors)
       prior.role = role_view
       prior.reason = "primary-monitor-role"
     else
-      prior.mode = prior.mode or "aux_cycle"
-      prior.view = prior.view or role_view
+      prior.mode = "aux_cycle"
+      if not prior.view or prior.view == prior.role then prior.view = role_view end
       prior.locked = false
       prior.role = "aux"
-      prior.reason = prior.reason or "operator-cycle"
+      prior.reason = "operator-cycle"
     end
 
     self.layout.monitors[id] = prior
@@ -74,8 +74,8 @@ function M:render(monitors, data_map)
     local w = select(1, ui.getSize(mon_entry.mon))
     if w then
       if idx <= 3 then
-        ui.badge(mon_entry.mon, math.max(2, w - 22), 1, ROLE_LABELS[view_key] or "PRIMARY", "LIMITED")
-        ui.badge(mon_entry.mon, math.max(2, w - 12), 2, "FIX", "OFFLINE")
+        ui.badge(mon_entry.mon, math.max(2, w - 23), 1, ROLE_LABELS[view_key] or "PRIMARY", "LIMITED")
+        ui.badge(mon_entry.mon, math.max(2, w - 12), 2, "FIX", "LIMITED")
       else
         ui.badge(mon_entry.mon, math.max(2, w - 18), 1, "AUX VIEW", "OK")
         widgets.layout_button(mon_entry.mon, math.max(2, w - 7), 1, "LAYOUT", "accent")
@@ -96,10 +96,7 @@ function M:handle_input(monitor_name, x, y)
   if w and y == 1 and x >= math.max(2, w - 7) then
     local current = 1
     for i, key in ipairs(self.view_order) do
-      if key == state.view then
-        current = i
-        break
-      end
+      if key == state.view then current = i break end
     end
     state.view = self.view_order[(current % #self.view_order) + 1]
   end
