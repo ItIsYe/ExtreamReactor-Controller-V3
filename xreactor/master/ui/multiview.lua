@@ -5,9 +5,9 @@ local M = {}
 
 local PRIMARY_ROLE_MAP = { "overview", "rt", "energy" }
 local ROLE_LABELS = {
-  overview = "MON1 UEBERSICHT",
-  rt = "MON2 RT-FLOTTE",
-  energy = "MON3 ENERGY"
+  overview = "MONITOR 1 UEBERSICHT",
+  rt = "MONITOR 2 RT-FLOTTE",
+  energy = "MONITOR 3 ENERGY & R"
 }
 
 local function primary_view(index, view_order)
@@ -78,7 +78,7 @@ function M:render(monitors, data_map)
         ui.badge(mon_entry.mon, math.max(2, w - 12), 2, "FIX", "LIMITED")
       else
         ui.badge(mon_entry.mon, math.max(2, w - 18), 1, "AUX VIEW", "OK")
-        widgets.layout_button(mon_entry.mon, math.max(2, w - 7), 1, "LAYOUT", "accent")
+        widgets.layout_button(mon_entry.mon, math.max(2, w - 11), 1, "LAYOUT", "LIMITED")
       end
     end
   end
@@ -93,7 +93,7 @@ function M:handle_input(monitor_name, x, y)
   if not state or state.locked then return end
 
   local w = select(1, ui.getSize(mon.mon))
-  if w and y == 1 and x >= math.max(2, w - 7) then
+  if w and y == 1 and x >= math.max(2, w - 11) then
     local current = 1
     for i, key in ipairs(self.view_order) do
       if key == state.view then current = i break end
