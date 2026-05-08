@@ -13,6 +13,8 @@ PARSE_FILES = [
     'xreactor/master/ui/energy.lua',
     'xreactor/master/ui_controller.lua',
     'xreactor/master/main.lua',
+    'xreactor/master/init_runtime.lua',
+    'xreactor/master/runtime_loop.lua',
     'xreactor/master/message_handlers.lua',
     'xreactor/nodes/energy/main.lua',
 ]
