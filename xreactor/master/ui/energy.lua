@@ -15,12 +15,16 @@ local function render(mon, model)
   local matrix_widths = { 8, 12, 9, 9, 9 }
   widgets.compact_header(mon, 3, 9, { "ID", "Fuellstand", "Input", "Output", "Status" }, matrix_widths)
   local y = 10
-  for i, m in ipairs(model.matrices or {}) do
+  local matrices = model.matrices or {}
+  for i, m in ipairs(matrices) do
     if i > 5 then break end
     widgets.compact_status_row(mon, 3, y, {
       tostring(m.id or m.label or "M"), string.format("%d%%", math.floor((m.percent or 0) * 100)), string.format("%.1f", m.input or 0), string.format("%.1f", m.output or 0), tostring(m.status or "OK")
     }, matrix_widths, m.status or "OK", 5)
     y = y + 1
+  end
+  if #matrices == 0 then
+    ui.text(mon, 3, 11, widgets.fit("Keine Matrixdaten", w - 6), colors.get("OFFLINE"), colors.get("background"))
   end
 
   ui.panel(mon, 2, 17, w - 2, 4, "Ressourcen", "OK")
@@ -33,10 +37,14 @@ local function render(mon, model)
   local support_widths = { 7, 10, 8, 7, 21 }
   widgets.compact_header(mon, 3, 23, { "Node", "Rolle", "Status", "Seen", "Hinweis" }, support_widths)
   local sy = 24
-  for _, n in ipairs(model.support_nodes or {}) do
+  local support_nodes = model.support_nodes or {}
+  for _, n in ipairs(support_nodes) do
     if sy > h - 1 then break end
     widgets.compact_status_row(mon, 3, sy, { tostring(n.id), tostring(n.role), tostring(n.status), tostring(n.last_seen_age or -1) .. "s", tostring(n.note or "-") }, support_widths, n.status or "OFFLINE", 3)
     sy = sy + 1
+  end
+  if #support_nodes == 0 then
+    ui.text(mon, 3, 24, widgets.fit("Keine Support-Nodes", w - 6), colors.get("OFFLINE"), colors.get("background"))
   end
 end
 

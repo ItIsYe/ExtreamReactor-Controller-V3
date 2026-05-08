@@ -4,12 +4,12 @@ local widgets = require("master.ui.widgets")
 
 local function render_rt_card(mon, x, y, w, rt)
   widgets.card(mon, x, y, w, 8, "RT-" .. tostring(rt.id or "?"), rt.status or "OFFLINE")
-  widgets.status_badge(mon, x + w - 13, y + 1, tostring(rt.state or "OFF"), rt.status or "OFFLINE")
+  widgets.status_badge(mon, x + w - 12, y + 1, tostring(rt.state or "OFF"), rt.status or "OFFLINE", 10)
   ui.text(mon, x + 1, y + 2, string.format("Soll %.1f%%", rt.target or 0), colors.get("muted"), colors.get("background"))
   ui.text(mon, x + 1, y + 3, string.format("Ist %.1f%%", rt.actual_output or rt.output or 0), colors.get("text"), colors.get("background"))
-  ui.text(mon, x + 1, y + 4, widgets.pad("Modus", 9) .. widgets.fit(tostring(rt.mode or "-"), w - 11), colors.get("muted"), colors.get("background"))
-  ui.text(mon, x + 1, y + 5, widgets.pad("Betrieb", 9) .. widgets.fit(tostring(rt.assignment_state or "MASTER"), w - 11), colors.get("text"), colors.get("background"))
-  ui.text(mon, x + 1, y + 6, widgets.fit("Workflow " .. tostring(rt.assignment_reason or rt.assignment_state or "-"), w - 2), colors.get("muted"), colors.get("background"))
+  ui.text(mon, x + 1, y + 4, widgets.pad("Modus", 8) .. widgets.fit(tostring(rt.mode or "-"), w - 10), colors.get("muted"), colors.get("background"))
+  ui.text(mon, x + 1, y + 5, widgets.pad("Betrieb", 8) .. widgets.fit(tostring(rt.assignment_state or "MASTER"), w - 10), colors.get("text"), colors.get("background"))
+  ui.text(mon, x + 1, y + 6, widgets.fit("Workflow: " .. tostring(rt.assignment_reason or rt.assignment_state or "-"), w - 2), colors.get("muted"), colors.get("background"))
   ui.progress(mon, x + 1, y + 7, w - 2, math.max(0, math.min(100, rt.actual_output or rt.output or 0)), rt.status or "OFFLINE")
 end
 
@@ -33,13 +33,13 @@ local function render(mon, model)
   end
 
   ui.panel(mon, 2, h - 7, w - 2, 7, "Sequencer / Queue", "LIMITED")
-  ui.text(mon, 3, h - 6, "Naechste Aktionen", colors.get("muted"), colors.get("background"))
+  ui.text(mon, 3, h - 6, "Naechste Aktionen / Sequenzen", colors.get("muted"), colors.get("background"))
   local rows = {}
   for i, q in ipairs(model.queue or {}) do
     if i > 3 then break end
     rows[#rows + 1] = { text = widgets.fit(string.format("%d. RT-%s -> %s", i, tostring(q.node_id or "?"), tostring(q.module_id or q.action or "step")), w - 7), status = "LIMITED" }
   end
-  if #rows == 0 then rows[1] = { text = "Queue leer", status = "OFFLINE" } end
+  if #rows == 0 then rows[1] = { text = "Queue leer - keine aktiven Sequenzen", status = "OFFLINE" } end
   ui.list(mon, 3, h - 5, w - 4, rows, { max_rows = 3 })
 end
 
