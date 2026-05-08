@@ -33,6 +33,7 @@ function M.run(ctx)
       end
     end
   })
+  ctx.utils.log("MASTER", "View manager initialized for primary roles: monitor1=overview monitor2=rt monitor3=energy", "INFO")
   ctx.refresh_monitors(true)
   ctx.refs.comms = ctx.comms_service.new({
     config = ctx.config,
@@ -136,6 +137,11 @@ function M.run(ctx)
       set_rt_global_off_hold = ctx.set_rt_global_off_hold
     }
   })
+  ctx.utils.log("MASTER", ("UI wiring ready: monitors=%d view_manager=%s ui_controller=%s"):format(
+    ctx.monitor_cache.list and #ctx.monitor_cache.list or 0,
+    tostring(ctx.refs.view_manager ~= nil),
+    tostring(ctx.refs.ui_controller ~= nil)
+  ), "INFO")
   ctx.refs.comms:send_hello({ monitors = ctx.monitor_cache.list and #ctx.monitor_cache.list or 0 })
   ctx.utils.log("MASTER", "Initialized as " .. ctx.refs.comms.network.id)
 end

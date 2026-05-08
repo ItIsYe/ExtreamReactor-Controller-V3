@@ -30,7 +30,9 @@ function M.refresh_monitors(runtime, force)
     for _, entry in ipairs(healthy) do
       table.insert(healthy_signature_parts, entry.id or entry.name)
     end
-    runtime.state.monitor_cache = { list = healthy, signature = table.concat(healthy_signature_parts, "|") }
+    monitor_cache.list = healthy
+    monitor_cache.signature = table.concat(healthy_signature_parts, "|")
+    runtime.log(("Monitor refresh: scanned=%d healthy=%d force=%s"):format(#monitors, #healthy, tostring(force == true)), "INFO")
     if #healthy < #monitors then
       runtime.log(("UI degraded: %d/%d monitors available after clear guard"):format(#healthy, #monitors), "WARN")
     end

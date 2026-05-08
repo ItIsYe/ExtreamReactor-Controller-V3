@@ -53,7 +53,18 @@ local function run_master()
     build_master_alert_payload = function() return housekeeping.build_master_alert_payload(runtime.refs.alert_service, config) end,
     housekeeping_tick = function() housekeeping.handle_command_timeouts({ constants = constants, utils = utils, comms = runtime.refs.comms, nodes = runtime.state.nodes, log = runtime.log }); if runtime.refs.sequencer then runtime.refs.sequencer:tick(runtime.state.nodes) end; flush_rt_sync_queue(); rt_ops.check_timeouts(runtime); profile_ops.sample_trends(runtime) end,
     ui_snapshot = function(event) return { event = event and event[1] or "tick", monitors = runtime.state.monitor_cache.list and #runtime.state.monitor_cache.list or 0, active_view = runtime.refs.view_manager and runtime.refs.view_manager.active_key or "overview", node_count = runtime_context.table_count(runtime.state.nodes), queue_depth = runtime.refs.sequencer and #runtime.refs.sequencer.queue or 0, rt_sync_pending = runtime.refs.rt_sync_coalescer and runtime.refs.rt_sync_coalescer.size() or 0, critical_blink = runtime.state.critical_blink_until, trends = runtime.state.last_trend_sample } end,
-    ui_render = function() monitor_ops.refresh_monitors(runtime, false); if runtime.refs.ui_controller then runtime.refs.ui_controller.draw() end end,
+    ui_render = function()
+      monitor_ops.refresh_monitors(runtime, false)
+      if runtime.refs.ui_controller then
+        runtime_context.warn_once(runtime.state, runtime.log, "ui_draw_started", "UI draw path active (ui_controller.draw)")
+        local ok, draw_err = pcall(runtime.refs.ui_controller.draw)
+        if not ok then
+          runtime.log("UI draw failed: " .. tostring(draw_err), "ERROR")
+        end
+      else
+        runtime_context.warn_once(runtime.state, runtime.log, "ui_draw_missing_controller", "UI draw skipped: ui_controller missing")
+      end
+    end,
     ui_handle_input = function(event) if runtime.refs.ui_controller then runtime.refs.ui_controller.handle_input(event) end end,
     mark_rt_sync_dirty = mark_rt_sync_dirty,
     add_alarm = function(sender, severity, message) table.insert(runtime.state.alarms, 1, { sender_id = sender, severity = severity, message = message, timestamp = runtime_context.master_time_label(time) }); if #runtime.state.alarms > 50 then table.remove(runtime.state.alarms) end end,
@@ -68,6 +79,19 @@ local function run_master()
     set_rt_global_off_hold = function(value) profile_ops.set_rt_global_hold(runtime, value) end,
     last_draw = runtime.state.last_draw, refs = runtime.refs
   })
+  runtime.log(("Runtime refs ready: view_manager=%s ui_controller=%s services=%s"):format(
+    tostring(runtime.refs.view_manager ~= nil),
+    tostring(runtime.refs.ui_controller ~= nil),
+    tostring(runtime.refs.services ~= nil)
+  ), "INFO")
+  monitor_ops.refresh_monitors(runtime, true)
+  if runtime.refs.ui_controller then
+    runtime.log("Initial UI draw trigger after init", "INFO")
+    local ok, draw_err = pcall(runtime.refs.ui_controller.draw)
+    if not ok then
+      runtime.log("Initial UI draw failed: " .. tostring(draw_err), "ERROR")
+    end
+  end
 
   while true do
     local timer = os.startTimer(0.5)
