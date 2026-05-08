@@ -25,6 +25,8 @@ cmd = [
     '--function-limit',
     '120',
     '--require-real-parse',
+    '--upvalue-estimate-limit',
+    '80',
 ]
 for file_path in PARSE_FILES:
     cmd.extend(['--file', file_path])

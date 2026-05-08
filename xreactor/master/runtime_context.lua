@@ -88,6 +88,31 @@ function M.new_state()
   }
 end
 
+
+function M.new_runtime(opts)
+  local state = (opts and opts.state) or M.new_state()
+  return {
+    state = state,
+    refs = {
+      monitor_mgr = nil,
+      view_manager = nil,
+      alert_service = nil,
+      sequencer = nil,
+      comms = nil,
+      services = nil,
+      ui_controller = nil,
+      rt_sync_coalescer = nil,
+      node_message_handler = nil,
+      trends = (opts and opts.trends) or nil,
+    },
+    tuning = {
+      layout_config_path = (opts and opts.layout_config_path) or "/xreactor/config/master_ui_layout.json",
+      node_offline_purge_after_ms = (opts and opts.node_offline_purge_after_ms) or 120000,
+      rt_sync_batch_window_ms = (opts and opts.rt_sync_batch_window_ms) or 250,
+      rt_shutdown_candidate_stability_ms = (opts and opts.rt_shutdown_candidate_stability_ms) or 1500,
+    }
+  }
+end
 function M.warn_once(state, log_fn, key, message)
   state.warned = state.warned or {}
   if state.warned[key] then return end
