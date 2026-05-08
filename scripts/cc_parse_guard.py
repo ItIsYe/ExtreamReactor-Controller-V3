@@ -71,6 +71,7 @@ def analyze(path: Path):
     fn_stack=[]  # dict(line, locals)
     chunk_locals=0
     fn_reports=[]
+    chunk_local_names = set()
 
     i=0
     while i < len(toks):
@@ -79,6 +80,19 @@ def analyze(path: Path):
         if tok=='local':
             nxt=toks[i+1][0] if i+1<len(toks) else ''
             add = 1 if nxt=='function' else count_local_names(toks, i+1)
+            if not in_fn and nxt != 'function':
+                j = i + 1
+                while j < len(toks):
+                    t = toks[j][0]
+                    if t in ('=', ';'): break
+                    if t == ',':
+                        j += 1
+                        continue
+                    if IDENT_RE.match(t) and t not in KEYWORDS:
+                        chunk_local_names.add(t)
+                        j += 1
+                        continue
+                    break
             if in_fn:
                 fn_stack[-1]['locals'] += add
             else:
@@ -98,7 +112,7 @@ def analyze(path: Path):
                 t=toks[j][0]
                 if (IDENT_RE.match(t) and t not in KEYWORDS) or t=='...': params += 1
                 j += 1
-            fn_stack.append({'line': line, 'locals': params})
+            fn_stack.append({'line': line, 'locals': params, 'idents': set(), 'upvalue_estimate': 0})
             block_stack.append('function')
         elif tok in ('then','do'):
             block_stack.append('block')
@@ -113,11 +127,18 @@ def analyze(path: Path):
             if block_stack:
                 b=block_stack.pop()
                 if b=='function' and fn_stack:
-                    fn_reports.append(fn_stack.pop())
+                    frame = fn_stack.pop()
+                    frame['upvalue_estimate'] = len(frame['idents'] & chunk_local_names)
+                    frame.pop('idents', None)
+                    fn_reports.append(frame)
+        if in_fn and IDENT_RE.match(tok) and tok not in KEYWORDS:
+            fn_stack[-1]['idents'].add(tok)
         i += 1
 
     # Any unclosed functions are considered too risky.
     for frame in fn_stack:
+        frame['upvalue_estimate'] = len(frame.get('idents', set()) & chunk_local_names)
+        frame.pop('idents', None)
         fn_reports.append(frame)
     return chunk_locals, fn_reports
 
@@ -173,6 +194,7 @@ def main():
     ap.add_argument('--max-bytes', type=int, default=120000)
     ap.add_argument('--require-real-parse', action='store_true', help='Require actual Lua parser success (luajit/lua/luac or lupa.loadfile)')
     ap.add_argument('--parser-mode', choices=['any', 'luajit', 'lua', 'luac'], default='any', help='Choose parser requirement for real parse checks')
+    ap.add_argument('--upvalue-estimate-limit', type=int, default=None, help='Conservative limit for chunk-local identifiers referenced from one function')
     args=ap.parse_args()
 
     files=args.files or ['xreactor/nodes/rt/main.lua']
@@ -182,7 +204,8 @@ def main():
         size=p.stat().st_size
         chunk_locals, funcs=analyze(p)
         max_fn=max((x['locals'] for x in funcs), default=0)
-        print(f"{p}: bytes={size} chunk_locals={chunk_locals} max_function_locals={max_fn}")
+        max_up = max((x.get('upvalue_estimate', 0) for x in funcs), default=0)
+        print(f"{p}: bytes={size} chunk_locals={chunk_locals} max_function_locals={max_fn} max_upvalue_estimate={max_up}")
         if size > args.max_bytes:
             failures.append(f"{p}: file size {size} > {args.max_bytes}")
         if chunk_locals > args.chunk_limit:
@@ -190,6 +213,10 @@ def main():
         for fn in funcs:
             if fn['locals'] > args.function_limit:
                 failures.append(f"{p}: function at line {fn['line']} locals {fn['locals']} > {args.function_limit}")
+            if args.upvalue_estimate_limit is not None and fn.get('upvalue_estimate', 0) > args.upvalue_estimate_limit:
+                failures.append(
+                    f"{p}: function at line {fn['line']} upvalue estimate {fn.get('upvalue_estimate', 0)} > {args.upvalue_estimate_limit}"
+                )
         if args.require_real_parse:
             ok, parser_used, err = real_parse(p, args.parser_mode)
             if ok is None:

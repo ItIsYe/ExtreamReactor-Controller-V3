@@ -47,7 +47,8 @@ return {
     master = {
       { path = "master/config.lua", size_bytes = 8523, hash = "2e77a2a6" },
       { path = "master/housekeeping.lua", size_bytes = 1952, hash = "d4ae44ae" },
-      { path = "master/main.lua", size_bytes = 33284, hash = "3be23372", required_for = { "MASTER" } },
+      { path = "master/main.lua", size_bytes = 30545, hash = "9c17ca86", required_for = { "MASTER" } },
+      { path = "master/init_runtime.lua", size_bytes = 5647, hash = "3c380132" },
       { path = "master/message_handlers.lua", size_bytes = 11627, hash = "8f908b56" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
       { path = "master/rt_sync.lua", size_bytes = 15388, hash = "2a88d3ff" },
