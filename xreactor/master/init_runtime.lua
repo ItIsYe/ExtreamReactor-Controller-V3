@@ -126,6 +126,7 @@ function M.run(ctx)
       auto_profile = ctx.get_auto_profile(),
       rt_global_off_hold = ctx.get_rt_global_off_hold()
     },
+    log = function(message, level) ctx.utils.log("MASTER", message, level or "INFO") end,
     calc = {
       apply_profile = ctx.apply_profile,
       set_auto_profile = ctx.set_auto_profile,

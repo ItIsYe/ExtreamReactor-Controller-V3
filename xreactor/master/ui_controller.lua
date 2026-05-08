@@ -24,10 +24,11 @@ function M.new(opts)
 
     for _, node in pairs(c.nodes or {}) do
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or -1)
-      overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role, status = node.status or 'OFFLINE', last_seen_age = age, mode = node.mode, note = node.bindings_summary or node.note or '' }
+      local stale = age >= 0 and age > 15
+      overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or (node.status or 'OFFLINE'), last_seen_age = age, mode = node.mode or (node.rt and node.rt.mode) or '-', note = node.bindings_summary or node.note or (node.rt and node.rt.assignment_reason) or '' }
       if node.role == c.constants.roles.RT_NODE then
         overview.rt_online = overview.rt_online + 1
-        local rt_node = node.rt or { id = node.id, status = node.status, mode = node.mode }
+        local rt_node = node.rt or { id = node.id, status = node.status, mode = node.mode, assignment_state = node.assignment_state }
         rt.rt_nodes[#rt.rt_nodes+1] = rt_node
         overview.power_actual = overview.power_actual + (rt_node.actual_output or rt_node.output or 0)
         local state = tostring(rt_node.state or '')
@@ -37,7 +38,7 @@ function M.new(opts)
         energy.stored = energy.stored + (e.stored or 0); energy.capacity = energy.capacity + (e.capacity or 0); energy.input = energy.input + (e.input or 0); energy.output = energy.output + (e.output or 0)
         for _, m in ipairs(e.matrices or {}) do energy.matrices[#energy.matrices+1] = m end
       else
-        energy.support_nodes[#energy.support_nodes+1] = { id = node.id, role = node.role, status = node.status or 'OFFLINE', last_seen_age = age, note = node.bindings_summary or '' }
+        energy.support_nodes[#energy.support_nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or (node.status or 'OFFLINE'), last_seen_age = age, note = node.bindings_summary or node.note or '' }
       end
       if node.role == c.constants.roles.FUEL_NODE then energy.resources.fuel_total = (energy.resources.fuel_total or 0) + ((node.fuel and node.fuel.amount) or 0); energy.resources.fuel_sources = (energy.resources.fuel_sources or 0) + 1 end
       if node.role == c.constants.roles.WATER_NODE then energy.resources.water_total = (energy.resources.water_total or 0) + ((node.water and node.water.total) or 0) end
@@ -57,7 +58,14 @@ function M.new(opts)
     draw = function()
       local models = build_models()
       local monitors = c.state.monitor_cache.list or {}
-      c.view_manager:render(monitors, models)
+      local rendered = c.view_manager:render(monitors, models) or {}
+      for _, r in ipairs(rendered) do
+        if not r.ok and c.log then
+          c.log(("UI render failed view=%s monitor=%s role=%s error=%s"):format(
+            tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)
+          ), "ERROR")
+        end
+      end
     end,
     handle_input = function(event)
       if event[1] == 'monitor_touch' then c.view_manager:handle_input(event[2], event[3], event[4]) end

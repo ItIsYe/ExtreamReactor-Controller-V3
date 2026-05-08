@@ -66,9 +66,39 @@ function M:render(monitors, data_map)
     local view = self.views[view_key]
 
     if view and view.render then
+      local ok, err = pcall(function()
+        ui.clear(mon_entry.mon)
+        view.render(mon_entry.mon, data_map[view_key] or {})
+      end)
+      rendered[#rendered + 1] = {
+        ok = ok,
+        view = view_key,
+        monitor = mon_entry.name,
+        role = layout.role,
+        id = id,
+        error = ok and nil or tostring(err)
+      }
+      if not ok then
+        ui.clear(mon_entry.mon)
+        ui.panel(mon_entry.mon, 1, 1, select(1, ui.getSize(mon_entry.mon)), select(2, ui.getSize(mon_entry.mon)), "RENDER ERROR", "EMERGENCY")
+        ui.text(mon_entry.mon, 2, 3, widgets.fit(tostring(err), math.max(10, select(1, ui.getSize(mon_entry.mon)) - 3)), 0xFFFFFF, 0x000000)
+        mon_entry.last_render_error = tostring(err)
+      else
+        mon_entry.last_render_error = nil
+      end
+    end
+    else
+      rendered[#rendered + 1] = {
+        ok = false,
+        view = view_key,
+        monitor = mon_entry.name,
+        role = layout.role,
+        id = id,
+        error = "view-missing-or-no-render"
+      }
       ui.clear(mon_entry.mon)
-      view.render(mon_entry.mon, data_map[view_key] or {})
-      rendered[view_key] = true
+      ui.panel(mon_entry.mon, 1, 1, select(1, ui.getSize(mon_entry.mon)), select(2, ui.getSize(mon_entry.mon)), "VIEW ERROR", "EMERGENCY")
+      ui.text(mon_entry.mon, 2, 3, widgets.fit("Missing view: " .. tostring(view_key), math.max(10, select(1, ui.getSize(mon_entry.mon)) - 3)), 0xFFFFFF, 0x000000)
     end
 
     local w = select(1, ui.getSize(mon_entry.mon))
@@ -84,7 +114,7 @@ function M:render(monitors, data_map)
       end
     end
   end
-
+  self.last_render_results = rendered
   return rendered
 end
 
