@@ -49,10 +49,11 @@ function widgets.stat_card(mon, x, y, w, title, value, meta, status, progress)
   if progress ~= nil then ui.progress(mon, x + 1, y + 3, math.max(6, width - 2), math.max(0, math.min(100, progress)), status or "OK") end
 end
 
-function widgets.alert_row(mon, x, y, width, alert)
+function widgets.alert_row(mon, x, y, width, alert, opts)
+  opts = opts or {}
   local row_w = math.max(24, width or 24)
   local status = tostring((alert and alert.status) or "INFO")
-  local title_w = math.max(10, math.min(16, math.floor(row_w * 0.25)))
+  local title_w = math.max(10, math.min(opts.compact and 14 or 18, math.floor(row_w * (opts.compact and 0.24 or 0.28))))
   local text_w = math.max(8, row_w - (8 + title_w + 2))
   local title = widgets.fit((alert and alert.title) or "Alert", title_w)
   local text = widgets.fit((alert and alert.text) or "", text_w)

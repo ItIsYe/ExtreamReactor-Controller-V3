@@ -10,12 +10,12 @@ local function render_status_line(mon, w, model)
   ui.panel(mon, 2, 2, w - 2, 4, "Systemstatus", model.system_status or "OK")
   local counts = model.alert_counts or {}
   local x = 3
-  x = x + widgets.status_badge(mon, x, 3, "SYSTEM " .. tostring(model.system_status or "OK"), model.system_status or "OK", 16) + 1
-  x = x + widgets.status_badge(mon, x, 3, model.auto_profile and "AUTO AKTIV" or "AUTO AUS", model.auto_profile and "LIMITED" or "OFFLINE", 12) + 1
-  widgets.status_badge(mon, x, 3, tostring(model.rt_online or 0) .. " RT ONLINE", (model.rt_online or 0) > 0 and "OK" or "OFFLINE", 12)
-  widgets.status_badge(mon, 3, 4, tostring(counts.CRITICAL or 0) .. " KRITISCH", (counts.CRITICAL or 0) > 0 and "EMERGENCY" or "OFFLINE", 12)
-  widgets.status_badge(mon, 17, 4, tostring(counts.WARN or 0) .. " WARNUNG", (counts.WARN or 0) > 0 and "WARNING" or "OFFLINE", 11)
-  ui.text(mon, math.max(2, w - 12), 4, widgets.fit(tostring(model.clock_label or ""), 11), colors.get("muted"), colors.get("background"))
+  x = x + widgets.status_badge(mon, x, 3, "SYSTEM " .. tostring(model.system_status or "OK"), model.system_status or "OK", 15) + 1
+  x = x + widgets.status_badge(mon, x, 3, model.auto_profile and "AUTO AKTIV" or "AUTO AUS", model.auto_profile and "LIMITED" or "OFFLINE", 11) + 1
+  x = x + widgets.status_badge(mon, x, 3, tostring(model.rt_online or 0) .. " RT ONLINE", (model.rt_online or 0) > 0 and "OK" or "OFFLINE", 11) + 1
+  widgets.status_badge(mon, x, 3, tostring(counts.CRITICAL or 0) .. " KRIT", (counts.CRITICAL or 0) > 0 and "EMERGENCY" or "OFFLINE", 8)
+  widgets.status_badge(mon, 3, 4, tostring(counts.WARN or 0) .. " WARNUNG", (counts.WARN or 0) > 0 and "WARNING" or "OFFLINE", 11)
+  ui.text(mon, math.max(2, w - 12), 4, widgets.fit(tostring(model.clock_label or ""), 10), colors.get("muted"), colors.get("background"))
 end
 
 local function render_controls(mon, w, model)
@@ -43,7 +43,7 @@ local function render_alerts(mon, w, model)
   local status = (counts.CRITICAL or 0) > 0 and "EMERGENCY" or ((counts.WARN or 0) > 0 and "WARNING" or "OK")
   ui.panel(mon, 2, 12, w - 2, 6, "Aktive Meldungen", status)
   if #alerts == 0 then alerts = { { title = "System", text = model.alert_summary or "Keine Meldungen", status = "OK" } } end
-  for i = 1, math.min(#alerts, 3) do widgets.alert_row(mon, 3, 12 + i, w - 6, alerts[i]) end
+  for i = 1, math.min(#alerts, 3) do widgets.alert_row(mon, 3, 12 + i, w - 6, alerts[i], { compact = false }) end
 end
 
 local function render_kpi(mon, w, model)
@@ -56,7 +56,8 @@ end
 
 local function render_nodes(mon, w, h, model)
   ui.panel(mon, 2, 25, w - 2, h - 25, "Node-Status", "OK")
-  local widths = { 6, 8, 8, 8, 8, 20 }
+  local note_w = math.max(16, w - 42)
+  local widths = { 6, 8, 8, 8, 8, note_w }
   widgets.compact_header(mon, 3, 26, { "Node", "Rolle", "Status", "Mode", "Zuletzt", "Hinweis" }, widths)
   local y = 27
   for _, n in ipairs(model.nodes or {}) do
