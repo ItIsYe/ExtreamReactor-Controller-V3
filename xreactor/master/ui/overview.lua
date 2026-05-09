@@ -11,6 +11,14 @@ local function safe(fn)
   return ok, err
 end
 
+local function safe_section(mon, x, y, label, fn)
+  local ok, err = safe(fn)
+  if not ok then
+    ui.text(mon, x, y, widgets.fit(label .. " Fehler: " .. tostring(err), 48), colors.get("WARNING"), colors.get("background"))
+  end
+  return ok
+end
+
 local function render_status_line(mon, w, model)
   ui.panel(mon, 2, 2, w - 2, 4, "Systemstatus", model.system_status or "OK")
   local counts = model.alert_counts or {}
@@ -35,8 +43,9 @@ local function render(mon, model)
   if not ok then ui.text(mon, 3, 3, "Statusbereich Fehler: " .. tostring(err), colors.get("WARNING"), colors.get("background")) end
 
   local top_y = 7
-  local left_w = math.max(26, math.floor((w - 5) * 0.56))
-  local right_w = math.max(20, w - left_w - 4)
+  local usable_w = math.max(30, w - 2)
+  local left_w = math.max(28, math.floor((usable_w - 3) * 0.58))
+  local right_w = math.max(24, usable_w - left_w - 1)
 
   local control_hits = {}
   ok = safe(function()
@@ -57,7 +66,7 @@ local function render(mon, model)
   end)
   if not ok then ui.text(mon, 3, top_y + 1, "Steuerung Fehler", colors.get("WARNING"), colors.get("background")) end
 
-  safe(function()
+  safe_section(mon, 4 + left_w, top_y + 1, "Alerts", function()
     local counts = model.alert_counts or {}
     local alerts = model.alert_rows or {}
     local status = (counts.CRITICAL or 0) > 0 and "EMERGENCY" or ((counts.WARN or 0) > 0 and "WARNING" or "OK")
@@ -66,18 +75,18 @@ local function render(mon, model)
     for i = 1, math.min(#alerts, 4) do widgets.alert_row(mon, 4 + left_w, top_y + i, right_w - 3, alerts[i], { compact = true }) end
   end)
 
-  local kpi_y = top_y + 6
-  safe(function()
+  local kpi_y = top_y + 9
+  safe_section(mon, 3, kpi_y + 1, "KPI", function()
     local energy = model.energy_overview or {}
-    ui.panel(mon, 2, kpi_y, w - 2, 5, "KPI", "OK")
+    ui.panel(mon, 2, kpi_y, w - 2, 6, "KPI", "OK")
     local half = math.floor((w - 6) / 2)
     widgets.stat_card(mon, 3, kpi_y + 1, half - 1, "Leistung", string.format("Soll %.1f MRF/t", model.power_target or 0), string.format("Ist %.1f MRF/t", model.power_actual or 0), "LIMITED", model.power_target and model.power_target > 0 and math.min(100, ((model.power_actual or 0) / model.power_target) * 100) or 0)
     widgets.stat_card(mon, 3 + half, kpi_y + 1, half - 1, "Energie", string.format("Fuellstand %.1f %%", energy.percent or 0), tostring(energy.trend or "Trend stabil"), energy.status or "OFFLINE", energy.percent or 0)
   end)
 
-  safe(function()
-    local node_y = kpi_y + 6
-    ui.panel(mon, 2, node_y, w - 2, h - node_y, "Node-Status", "OK")
+  safe_section(mon, 3, kpi_y + 8, "Nodes", function()
+    local node_y = kpi_y + 7
+    ui.panel(mon, 2, node_y, w - 2, math.max(4, h - node_y), "Node-Status", "OK")
     local note_w = math.max(10, w - 48)
     local widths = { 6, 10, 10, 10, 8, note_w }
     widgets.compact_header(mon, 3, node_y + 1, { "Node", "Rolle", "Status", "Mode", "Seen", "Hinweis" }, widths)
