@@ -61,11 +61,14 @@ local function run_master()
         if not ok then
           runtime.log("UI draw failed: " .. tostring(draw_err), "ERROR")
         elseif runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
+          local failures = 0
           for _, r in ipairs(runtime.refs.view_manager.last_render_results) do
             if not r.ok then
+              failures = failures + 1
               runtime.log(("UI draw failure detail: view=%s monitor=%s role=%s error=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)), "ERROR")
             end
           end
+          if failures == 0 then runtime.log("UI draw result: all views rendered successfully", "DEBUG") end
         end
       else
         runtime_context.warn_once(runtime.state, runtime.log, "ui_draw_missing_controller", "UI draw skipped: ui_controller missing")
@@ -97,11 +100,14 @@ local function run_master()
     if not ok then
       runtime.log("Initial UI draw failed: " .. tostring(draw_err), "ERROR")
     elseif runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
+      local failures = 0
       for _, r in ipairs(runtime.refs.view_manager.last_render_results) do
         if not r.ok then
+          failures = failures + 1
           runtime.log(("Initial draw failure detail: view=%s monitor=%s role=%s error=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)), "ERROR")
         end
       end
+      if failures == 0 then runtime.log("Initial draw result: all views rendered successfully", "DEBUG") end
     end
   end
 

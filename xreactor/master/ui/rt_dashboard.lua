@@ -17,15 +17,16 @@ local function render(mon, model)
   local w, h = ui.getSize(mon)
   widgets.card(mon, 1, 1, w, h, "MONITOR 2 - RT-FLOTTE", "OK")
   ui.panel(mon, 2, 2, w - 2, 4, "RT-Uebersicht", "OK")
-  widgets.status_badge(mon, 3, 3, tostring(model.rt_active or 0) .. " AKTIV", "OK", math.floor(w*0.14))
-  widgets.status_badge(mon, math.floor(w*0.22), 3, tostring(model.rt_startup or 0) .. " STARTUP", "LIMITED", math.floor(w*0.16))
-  widgets.status_badge(mon, math.floor(w*0.43), 3, tostring(model.rt_shutdown or 0) .. " SHUTDOWN", "OFFLINE", math.floor(w*0.16))
-  widgets.status_badge(mon, math.floor(w*0.66), 3, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", math.floor(w*0.3))
+  widgets.status_badge(mon, 3, 3, tostring(model.rt_active or 0) .. " AKTIV", "OK", math.floor(w * 0.14))
+  widgets.status_badge(mon, math.floor(w * 0.22), 3, tostring(model.rt_startup or 0) .. " STARTUP", "LIMITED", math.floor(w * 0.16))
+  widgets.status_badge(mon, math.floor(w * 0.43), 3, tostring(model.rt_shutdown or 0) .. " SHUTDOWN", "OFFLINE", math.floor(w * 0.16))
+  widgets.status_badge(mon, math.floor(w * 0.66), 3, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", math.floor(w * 0.3))
 
-  local cards_top = 6
-  local cards_bottom = math.max(cards_top + 8, h - 8)
+  local queue_h = 7
+  local cards_top = 7
+  local cards_bottom = math.max(cards_top + 8, h - queue_h - 1)
   local rows = math.max(1, math.floor((cards_bottom - cards_top + 1) / 9))
-  local cols = (w >= 80) and 3 or 2
+  local cols = (w >= 130 and 4) or (w >= 95 and 3) or 2
   local gap = 1
   local card_w = math.max(20, math.floor((w - 3 - (cols - 1) * gap) / cols))
   for i, rt in ipairs(model.rt_nodes or {}) do
@@ -38,14 +39,14 @@ local function render(mon, model)
     render_rt_card(mon, x, y, card_w, rt)
   end
 
-  ui.panel(mon, 2, h - 6, w - 2, 6, "Sequencer / Queue", "LIMITED")
+  ui.panel(mon, 2, h - queue_h, w - 2, queue_h, "Sequencer / Queue", "LIMITED")
   local rows_data = {}
   for i, q in ipairs(model.queue or {}) do
-    if i > 3 then break end
+    if i > (queue_h - 3) then break end
     rows_data[#rows_data + 1] = { text = widgets.fit(string.format("%d. RT-%s -> %s", i, tostring(q.node_id or "?"), tostring(q.module_id or q.action or "step")), w - 7), status = "LIMITED" }
   end
   if #rows_data == 0 then rows_data[1] = { text = "Queue leer - keine aktiven Sequenzen", status = "OFFLINE" } end
-  ui.list(mon, 3, h - 5, w - 4, rows_data, { max_rows = 3 })
+  ui.list(mon, 3, h - queue_h + 1, w - 4, rows_data, { max_rows = queue_h - 2 })
 end
 
 return { render = render }

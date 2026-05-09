@@ -1,5 +1,13 @@
 local M = {}
 
+local function normalize_status(raw)
+  local s = tostring(raw or "OFFLINE"):upper()
+  if s == "CRITICAL" then return "EMERGENCY" end
+  if s == "WARN" then return "WARNING" end
+  if s == "INFO" then return "LIMITED" end
+  return s
+end
+
 function M.new(opts)
   local c = opts
   local function build_models()
@@ -17,7 +25,7 @@ function M.new(opts)
       nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = ''
     }
     if (counts.CRITICAL or 0) > 0 then overview.system_status = 'EMERGENCY' elseif (counts.WARN or 0) > 0 then overview.system_status = 'WARNING' end
-    for i, a in ipairs(top) do if i > 4 then break end overview.alert_rows[#overview.alert_rows+1] = { title = tostring(a.title or a.code or 'Alert'), text = tostring(a.message or a.detail or 'Keine Details'), status = tostring(a.severity or 'WARNING') } end
+    for i, a in ipairs(top) do if i > 4 then break end overview.alert_rows[#overview.alert_rows+1] = { title = tostring(a.title or a.code or 'Alert'), text = tostring(a.message or a.detail or 'Keine Details'), status = normalize_status(a.severity or 'WARNING') } end
 
     local rt = { rt_nodes = {}, queue = c.sequencer.queue or {}, ramp_profile = c.sequencer.ramp_profile, sequence_state = c.sequencer.state, rt_global_off_hold = overview.rt_global_off_hold, rt_active = 0, rt_startup = 0, rt_shutdown = 0 }
     local energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = 'OFFLINE' }
@@ -25,10 +33,11 @@ function M.new(opts)
     for _, node in pairs(c.nodes or {}) do
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or -1)
       local stale = age >= 0 and age > 15
-      overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or (node.status or 'OFFLINE'), last_seen_age = age, mode = node.mode or (node.rt and node.rt.mode) or '-', note = node.bindings_summary or node.note or (node.rt and node.rt.assignment_reason) or '' }
+      overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OFFLINE'), last_seen_age = age, mode = node.mode or (node.rt and node.rt.mode) or '-', note = node.bindings_summary or node.note or (node.rt and node.rt.assignment_reason) or '' }
       if node.role == c.constants.roles.RT_NODE then
-        overview.rt_online = overview.rt_online + 1
-        local rt_node = node.rt or { id = node.id, status = node.status, mode = node.mode, assignment_state = node.assignment_state }
+        if not stale then overview.rt_online = overview.rt_online + 1 end
+        local rt_node = node.rt or { id = node.id, status = normalize_status(node.status), mode = node.mode, assignment_state = node.assignment_state }
+        rt_node.status = stale and 'OFFLINE' or normalize_status(rt_node.status)
         rt.rt_nodes[#rt.rt_nodes+1] = rt_node
         overview.power_actual = overview.power_actual + (rt_node.actual_output or rt_node.output or 0)
         local state = tostring(rt_node.state or '')
@@ -38,7 +47,7 @@ function M.new(opts)
         energy.stored = energy.stored + (e.stored or 0); energy.capacity = energy.capacity + (e.capacity or 0); energy.input = energy.input + (e.input or 0); energy.output = energy.output + (e.output or 0)
         for _, m in ipairs(e.matrices or {}) do energy.matrices[#energy.matrices+1] = m end
       else
-        energy.support_nodes[#energy.support_nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or (node.status or 'OFFLINE'), last_seen_age = age, note = node.bindings_summary or node.note or '' }
+        energy.support_nodes[#energy.support_nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OFFLINE'), last_seen_age = age, note = node.bindings_summary or node.note or '' }
       end
       if node.role == c.constants.roles.FUEL_NODE then energy.resources.fuel_total = (energy.resources.fuel_total or 0) + ((node.fuel and node.fuel.amount) or 0); energy.resources.fuel_sources = (energy.resources.fuel_sources or 0) + 1 end
       if node.role == c.constants.roles.WATER_NODE then energy.resources.water_total = (energy.resources.water_total or 0) + ((node.water and node.water.total) or 0) end
@@ -46,6 +55,7 @@ function M.new(opts)
     end
     table.sort(overview.nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
     table.sort(rt.rt_nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
+    table.sort(energy.support_nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
     local pct = energy.capacity > 0 and (energy.stored / energy.capacity) * 100 or 0
     energy.status = pct < 15 and 'EMERGENCY' or (pct < 30 and 'WARNING' or 'OK')
     overview.energy_overview = { percent = pct, status = energy.status, trend = (pct > 70 and 'Trend stabil') or (pct > 35 and 'Trend sinkt') or 'Trend kritisch' }

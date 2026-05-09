@@ -28,8 +28,7 @@ function widgets.pad(text, width)
   local w = clamp_int(width, 1, 512, 1)
   local clipped = widgets.fit(text, w)
   local missing = w - #clipped
-  if missing <= 0 then return clipped end
-  return clipped .. string.rep(" ", missing)
+  return (missing > 0) and (clipped .. string.rep(" ", missing)) or clipped
 end
 
 function widgets.status_badge(mon, x, y, text, status, max_width)
@@ -48,6 +47,13 @@ function widgets.card(mon, x, y, w, h, title, status)
   ui.panel(mon, x, y, width, height, widgets.fit(title or "", math.max(4, width - 4)), status or "OK")
 end
 
+function widgets.panel_box(mon, x, y, w, h, title, status)
+  local width = clamp_int(w, 8, 512, 8)
+  local height = clamp_int(h, 3, 512, 3)
+  widgets.card(mon, x, y, width, height, title, status)
+  return { x = x + 1, y = y + 1, w = math.max(1, width - 2), h = math.max(1, height - 2) }
+end
+
 function widgets.layout_button(mon, x, y, label, status)
   local text = widgets.fit((label or "LAYOUT"):upper(), 10)
   local badge = "<" .. text .. ">"
@@ -55,14 +61,9 @@ function widgets.layout_button(mon, x, y, label, status)
   return { x1 = x, x2 = x + #badge + 1, y = y }
 end
 
-function widgets.panel_box(mon, x, y, w, h, title, status)
-  widgets.card(mon, x, y, w, h, title, status)
-  return { x = x + 1, y = y + 1, w = math.max(1, w - 2), h = math.max(1, h - 2) }
-end
-
 function widgets.stat_card(mon, x, y, w, title, value, meta, status, progress)
   local width = clamp_int(w, 12, 512, 12)
-  ui.panel(mon, x, y, width, 4, widgets.fit(title or "", width - 3), status or "OK")
+  ui.panel(mon, x, y, width, 5, widgets.fit(title or "", width - 3), status or "OK")
   ui.text(mon, x + 1, y + 1, widgets.fit(tostring(value or "-"), width - 2), colors.get(status or "text"), colors.get("background"))
   if meta then ui.text(mon, x + 1, y + 2, widgets.fit(tostring(meta), width - 2), colors.get("muted"), colors.get("background")) end
   if progress ~= nil then ui.progress(mon, x + 1, y + 3, math.max(6, width - 2), math.max(0, math.min(100, progress)), status or "OK") end
@@ -73,7 +74,7 @@ function widgets.alert_row(mon, x, y, width, alert, opts)
   local row_w = clamp_int(width, 20, 512, 24)
   local status = tostring((alert and alert.status) or "INFO")
   local title_w = clamp_int(math.floor(row_w * (opts.compact and 0.24 or 0.28)), 8, 24, 12)
-  local text_w = math.max(8, row_w - (10 + title_w))
+  local text_w = math.max(8, row_w - (11 + title_w))
   ui.badge(mon, x, y, widgets.fit(status, 7), status)
   ui.text(mon, x + 9, y, widgets.pad((alert and alert.title) or "Alert", title_w), colors.get("text"), colors.get("background"))
   ui.text(mon, x + 10 + title_w, y, widgets.fit((alert and alert.text) or "", text_w), colors.get("muted"), colors.get("background"))
