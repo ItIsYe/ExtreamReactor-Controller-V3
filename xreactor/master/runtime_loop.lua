@@ -66,6 +66,8 @@ local function run_master()
             if not r.ok then
               failures = failures + 1
               runtime.log(("UI draw failure detail: view=%s monitor=%s role=%s error=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)), "ERROR")
+            else
+              runtime.log(("UI draw success detail: view=%s monitor=%s role=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role)), "DEBUG")
             end
           end
           if failures == 0 then runtime.log("UI draw result: all views rendered successfully", "DEBUG") end
@@ -105,6 +107,8 @@ local function run_master()
         if not r.ok then
           failures = failures + 1
           runtime.log(("Initial draw failure detail: view=%s monitor=%s role=%s error=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)), "ERROR")
+        else
+          runtime.log(("Initial draw success detail: view=%s monitor=%s role=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role)), "DEBUG")
         end
       end
       if failures == 0 then runtime.log("Initial draw result: all views rendered successfully", "DEBUG") end

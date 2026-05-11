@@ -13,7 +13,12 @@ local function clamp_int(value, min_v, max_v, fallback)
 end
 
 local function sanitize_text(text)
-  return tostring(text or ""):gsub("\n", " ")
+  return tostring(text or ""):gsub("\n", " "):gsub("\r", " ")
+end
+
+local function safe_space(count)
+  local n = clamp_int(count, 0, 512, 0)
+  return n > 0 and string.rep(" ", n) or ""
 end
 
 function widgets.fit(text, width)
@@ -27,12 +32,13 @@ end
 function widgets.pad(text, width)
   local w = clamp_int(width, 1, 512, 1)
   local clipped = widgets.fit(text, w)
-  local missing = w - #clipped
-  return (missing > 0) and (clipped .. string.rep(" ", missing)) or clipped
+  local missing = math.max(0, w - #clipped)
+  return clipped .. safe_space(missing)
 end
 
 function widgets.status_badge(mon, x, y, text, status, max_width)
-  local label = widgets.fit(text or "", clamp_int(max_width, 4, 80, 24))
+  local max_w = clamp_int(max_width, 4, 96, 24)
+  local label = widgets.fit(text or "", max_w)
   ui.badge(mon, x, y, label, status or "OK")
   return #label + 2
 end
@@ -81,6 +87,7 @@ function widgets.alert_row(mon, x, y, width, alert, opts)
 end
 
 function widgets.compact_header(mon, x, y, labels, widths)
+  labels = labels or {}
   local col = x
   for i, label in ipairs(labels or {}) do
     local cw = clamp_int((widths and widths[i]) or (#tostring(label) + 2), 3, 120, 8)
@@ -90,6 +97,7 @@ function widgets.compact_header(mon, x, y, labels, widths)
 end
 
 function widgets.compact_status_row(mon, x, y, values, widths, status, status_col)
+  values = values or {}
   local col = x
   local highlight_col = status_col or 3
   for i, value in ipairs(values or {}) do

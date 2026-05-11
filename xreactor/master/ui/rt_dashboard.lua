@@ -3,50 +3,48 @@ local colors = require("shared.colors")
 local widgets = require("master.ui.widgets")
 
 local function render_rt_card(mon, x, y, w, rt)
-  widgets.card(mon, x, y, w, 8, "RT-" .. tostring(rt.id or "?"), rt.status or "OFFLINE")
-  widgets.status_badge(mon, x + math.max(2, w - 12), y + 1, tostring(rt.state or "OFF"), rt.status or "OFFLINE", 10)
-  ui.text(mon, x + 1, y + 2, widgets.fit(string.format("Soll %.1f%%", rt.target or 0), w - 2), colors.get("muted"), colors.get("background"))
-  ui.text(mon, x + 1, y + 3, widgets.fit(string.format("Ist %.1f%%", rt.actual_output or rt.output or 0), w - 2), colors.get("text"), colors.get("background"))
-  ui.text(mon, x + 1, y + 4, widgets.pad("Modus", 8) .. widgets.fit(tostring(rt.mode or "-"), w - 10), colors.get("muted"), colors.get("background"))
-  ui.text(mon, x + 1, y + 5, widgets.pad("Betrieb", 8) .. widgets.fit(tostring(rt.assignment_state or "MASTER"), w - 10), colors.get("text"), colors.get("background"))
-  ui.text(mon, x + 1, y + 6, widgets.fit("Workflow: " .. tostring(rt.assignment_reason or rt.assignment_state or "-"), w - 2), colors.get("muted"), colors.get("background"))
-  ui.progress(mon, x + 1, y + 7, w - 2, math.max(0, math.min(100, rt.actual_output or rt.output or 0)), rt.status or "OFFLINE")
+  local box = widgets.panel_box(mon, x, y, w, 9, "RT-" .. tostring(rt.id or "?"), rt.status or "OFFLINE")
+  widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt.state or "OFF"), rt.status or "OFFLINE", 9)
+  ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %.1f%%", rt.target or 0), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 2, widgets.fit(string.format("Ist %.1f%%", rt.actual_output or rt.output or 0), box.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 3, widgets.pad("Modus", 8) .. widgets.fit(tostring(rt.mode or "-"), box.w - 8), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 4, widgets.pad("Betrieb", 8) .. widgets.fit(tostring(rt.assignment_state or "MASTER"), box.w - 8), colors.get("text"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 5, widgets.fit("Workflow: " .. tostring(rt.assignment_reason or rt.assignment_state or "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.progress(mon, box.x, box.y + 6, math.max(8, box.w), math.max(0, math.min(100, rt.actual_output or rt.output or 0)), rt.status or "OFFLINE")
 end
 
 local function render(mon, model)
   local w, h = ui.getSize(mon)
-  widgets.card(mon, 1, 1, w, h, "MONITOR 2 - RT-FLOTTE", "OK")
-  ui.panel(mon, 2, 2, w - 2, 4, "RT-Uebersicht", "OK")
-  widgets.status_badge(mon, 3, 3, tostring(model.rt_active or 0) .. " AKTIV", "OK", math.floor(w * 0.14))
-  widgets.status_badge(mon, math.floor(w * 0.22), 3, tostring(model.rt_startup or 0) .. " STARTUP", "LIMITED", math.floor(w * 0.16))
-  widgets.status_badge(mon, math.floor(w * 0.43), 3, tostring(model.rt_shutdown or 0) .. " SHUTDOWN", "OFFLINE", math.floor(w * 0.16))
-  widgets.status_badge(mon, math.floor(w * 0.66), 3, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", math.floor(w * 0.3))
+  ui.panel(mon, 1, 1, w, h, "MONITOR 2 - RT-FLOTTE", "OK")
+  local summary = widgets.panel_box(mon, 2, 2, w - 2, 5, "RT-Uebersicht", "OK")
+  widgets.status_badge(mon, summary.x, summary.y, tostring(model.rt_active or 0) .. " AKTIV", "OK", math.floor(summary.w * 0.20))
+  widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.23), summary.y, tostring(model.rt_startup or 0) .. " STARTUP", "LIMITED", math.floor(summary.w * 0.24))
+  widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.50), summary.y, tostring(model.rt_shutdown or 0) .. " SHUTDOWN", "OFFLINE", math.floor(summary.w * 0.24))
+  widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.76), summary.y, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", math.floor(summary.w * 0.22))
 
-  local queue_h = 7
-  local cards_top = 7
-  local cards_bottom = math.max(cards_top + 8, h - queue_h - 1)
-  local rows = math.max(1, math.floor((cards_bottom - cards_top + 1) / 9))
-  local cols = (w >= 130 and 4) or (w >= 95 and 3) or 2
+  local queue_h = math.max(6, math.floor(h * 0.25))
+  local cards_top = 8
+  local cards_h = math.max(9, h - queue_h - cards_top - 1)
+  local cols = (w >= 150 and 4) or (w >= 110 and 3) or 2
   local gap = 1
-  local card_w = math.max(20, math.floor((w - 3 - (cols - 1) * gap) / cols))
+  local card_w = math.max(22, math.floor((w - 3 - ((cols - 1) * gap)) / cols))
+  local rows = math.max(1, math.floor(cards_h / 10))
   for i, rt in ipairs(model.rt_nodes or {}) do
     local idx = i - 1
     local r = math.floor(idx / cols)
     if r >= rows then break end
     local c = idx % cols
-    local x = 2 + c * (card_w + gap)
-    local y = cards_top + r * 9
-    render_rt_card(mon, x, y, card_w, rt)
+    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 10, card_w, rt)
   end
 
-  ui.panel(mon, 2, h - queue_h, w - 2, queue_h, "Sequencer / Queue", "LIMITED")
+  local queue = widgets.panel_box(mon, 2, h - queue_h, w - 2, queue_h, "Sequencer / Queue", "LIMITED")
   local rows_data = {}
   for i, q in ipairs(model.queue or {}) do
-    if i > (queue_h - 3) then break end
-    rows_data[#rows_data + 1] = { text = widgets.fit(string.format("%d. RT-%s -> %s", i, tostring(q.node_id or "?"), tostring(q.module_id or q.action or "step")), w - 7), status = "LIMITED" }
+    if i > (queue.h) then break end
+    rows_data[#rows_data + 1] = { text = widgets.fit(string.format("%d. RT-%s -> %s", i, tostring(q.node_id or "?"), tostring(q.module_id or q.action or "step")), queue.w), status = "LIMITED" }
   end
   if #rows_data == 0 then rows_data[1] = { text = "Queue leer - keine aktiven Sequenzen", status = "OFFLINE" } end
-  ui.list(mon, 3, h - queue_h + 1, w - 4, rows_data, { max_rows = queue_h - 2 })
+  ui.list(mon, queue.x, queue.y, queue.w, rows_data, { max_rows = queue.h })
 end
 
 return { render = render }
