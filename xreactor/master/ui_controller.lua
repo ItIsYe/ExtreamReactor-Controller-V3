@@ -33,7 +33,8 @@ function M.new(opts)
     for _, node in pairs(c.nodes or {}) do
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or -1)
       local stale = age >= 0 and age > 15
-      overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OFFLINE'), last_seen_age = age, mode = node.mode or (node.rt and node.rt.mode) or '-', note = node.bindings_summary or node.note or (node.rt and node.rt.assignment_reason) or '' }
+      local freshness_note = stale and "stale" or "live"
+      overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OFFLINE'), last_seen_age = age, mode = node.mode or (node.rt and node.rt.mode) or '-', note = node.bindings_summary or node.note or (node.rt and node.rt.assignment_reason) or freshness_note }
       if node.role == c.constants.roles.RT_NODE then
         if not stale then overview.rt_online = overview.rt_online + 1 end
         local rt_node = node.rt or { id = node.id, status = normalize_status(node.status), mode = node.mode, assignment_state = node.assignment_state }
@@ -69,11 +70,20 @@ function M.new(opts)
       local models = build_models()
       local monitors = c.state.monitor_cache.list or {}
       local rendered = c.view_manager:render(monitors, models) or {}
+      if models.overview and models.overview.ui_errors and c.log then
+        for _, msg in ipairs(models.overview.ui_errors) do
+          c.log("Overview section fallback triggered: " .. tostring(msg), "ERROR")
+        end
+      end
       for _, r in ipairs(rendered) do
-        if not r.ok and c.log then
-          c.log(("UI render failed view=%s monitor=%s role=%s error=%s"):format(
-            tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)
-          ), "ERROR")
+        if c.log then
+          if r.ok then
+            c.log(("UI render ok view=%s monitor=%s role=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role)), "DEBUG")
+          else
+            c.log(("UI render failed view=%s monitor=%s role=%s error=%s"):format(
+              tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)
+            ), "ERROR")
+          end
         end
       end
     end,
