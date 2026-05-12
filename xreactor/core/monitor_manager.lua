@@ -15,8 +15,8 @@ end
 
 local function classify_size(w, h, thresholds)
   local area = (w or 0) * (h or 0)
-  local small = thresholds and thresholds.small_area or 300
-  local medium = thresholds and thresholds.medium_area or 700
+  local small = thresholds and thresholds.small_area or 600
+  local medium = thresholds and thresholds.medium_area or 1100
   if area <= small then
     return "small"
   end
@@ -24,6 +24,17 @@ local function classify_size(w, h, thresholds)
     return "medium"
   end
   return "large"
+end
+
+local function classify_layout(width, height, size_tag)
+  local area = (width or 0) * (height or 0)
+  if size_tag == "large" or (area >= 900 and (width or 0) >= 48 and (height or 0) >= 18) then
+    return "master_large"
+  end
+  if size_tag == "medium" then
+    return "master_medium"
+  end
+  return "compact"
 end
 
 local function build_devices(names)
@@ -48,7 +59,7 @@ function manager.new(opts)
   local self = {
     log_prefix = opts.log_prefix or "MONITOR",
     scale = scale,
-    thresholds = opts.thresholds or { small_area = 300, medium_area = 700 },
+    thresholds = opts.thresholds or { small_area = 600, medium_area = 1100 },
     registry = registry_lib.new({
       role = opts.role or "master_monitor",
       node_id = opts.node_id or "MASTER",
@@ -103,6 +114,11 @@ function manager:scan()
           goto continue
         end
       end
+      local effective_scale = self.scale
+      local scale_read_ok, scale_read = safe_wrapped_call(mon, "getTextScale")
+      if scale_read_ok then
+        effective_scale = tonumber(scale_read) or effective_scale
+      end
       local ok, w, h = safe_wrapped_call(mon, "getSize")
       if not ok then
         self.disabled[entry.name] = "getSize failed: " .. tostring(w)
@@ -122,7 +138,9 @@ function manager:scan()
         mon = mon,
         width = width,
         height = height,
-        size_tag = size_tag
+        size_tag = size_tag,
+        text_scale = effective_scale,
+        layout_class = classify_layout(width, height, size_tag)
       })
     else
       utils.log(self.log_prefix, "Monitor wrap failed for " .. tostring(entry.name), "WARN")

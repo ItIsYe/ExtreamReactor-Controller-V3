@@ -4,22 +4,24 @@ local widgets = require("master.ui.widgets")
 
 local function render(mon, model)
   local w, h = ui.getSize(mon)
+  local is_large = (w * h) >= 900 and w >= 48 and h >= 18
   ui.panel(mon, 1, 1, w, h, "MONITOR 3 - ENERGY & RESSOURCEN", model.status or "OK")
 
   local pct = model.capacity and model.capacity > 0 and ((model.stored or 0) / model.capacity) * 100 or 0
-  local summary = widgets.panel_box(mon, 2, 2, w - 2, 9, "Energy Summary", model.status or "OK")
+  local summary_h = is_large and 11 or 9
+  local summary = widgets.panel_box(mon, 2, 2, w - 2, summary_h, "Energy Summary", model.status or "OK")
   ui.bigNumber(mon, summary.x + 1, summary.y, "Gesamtspeicher", string.format("%.1f", pct), "%", model.status or "OK")
   ui.text(mon, summary.x + 1, summary.y + 2, widgets.fit(string.format("Stored %.1f / %.1f", model.stored or 0, model.capacity or 0), summary.w - 2), colors.get("text"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 3, widgets.fit(string.format("Input %.1f MRF/t  |  Output %.1f MRF/t", model.input or 0, model.output or 0), summary.w - 2), colors.get("text"), colors.get("background"))
 
-  local content_y = 12
-  local content_h = math.max(10, h - content_y - 1)
-  local cols = widgets.split_columns(w - 2, { 3, 2 }, 1)
+  local content_y = 2 + summary_h + 1
+  local content_h = math.max(is_large and 14 or 10, h - content_y - 1)
+  local cols = widgets.split_columns(w - 2, is_large and { 2, 1 } or { 3, 2 }, 1)
   local left_w = cols[1]
   local right_w = cols[2]
 
   local matrix = widgets.panel_box(mon, 2, content_y, left_w, content_h, "Matrix-/Storage-Details", (model.matrix_count or 0) > 0 and "OK" or "OFFLINE")
-  local matrix_widths = widgets.table_widths(matrix.w, { 8, 10, 10, 10, 9, 8 })
+  local matrix_widths = widgets.table_widths(matrix.w, is_large and { 10, 12, 11, 11, 10, 10 } or { 8, 10, 10, 10, 9, 8 })
   widgets.compact_header(mon, matrix.x, matrix.y, { "ID", "Fuellst", "Input", "Output", "Seen", "Status" }, matrix_widths)
   local y = matrix.y + 1
   for _, m in ipairs(model.matrices or {}) do
@@ -37,7 +39,7 @@ local function render(mon, model)
   if y == matrix.y + 1 then ui.text(mon, matrix.x, y, "Keine Matrixdaten", colors.get("OFFLINE"), colors.get("background")) end
 
   local right_x = 2 + left_w + 1
-  local resources_h = math.max(11, math.floor(content_h * 0.52))
+  local resources_h = is_large and math.max(15, math.floor(content_h * 0.60)) or math.max(11, math.floor(content_h * 0.52))
   local resources = widgets.panel_box(mon, right_x, content_y, right_w, resources_h, "Ressourcen", "OK")
   local r = model.resources or {}
   widgets.stat_card(mon, resources.x, resources.y, resources.w, "Fuel", string.format("Reserve %.1f", r.fuel_total or 0), string.format("Quellen %d", r.fuel_sources or 0), "LIMITED")

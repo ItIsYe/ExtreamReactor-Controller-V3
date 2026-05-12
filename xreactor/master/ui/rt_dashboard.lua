@@ -3,7 +3,7 @@ local colors = require("shared.colors")
 local widgets = require("master.ui.widgets")
 
 local function render_rt_card(mon, x, y, w, rt)
-  local box = widgets.panel_box(mon, x, y, w, 11, "RT-" .. tostring(rt.id or "?"), rt.status or "OFFLINE")
+  local box = widgets.panel_box(mon, x, y, w, 12, "RT-" .. tostring(rt.id or "?"), rt.status or "OFFLINE")
   widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt.state or "OFF"), rt.status or "OFFLINE", 9)
   ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %.1f%%", rt.target or 0), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 2, widgets.fit(string.format("Ist %.1f%%", rt.actual_output or rt.output or 0), box.w), colors.get("text"), colors.get("background"))
@@ -13,10 +13,12 @@ local function render_rt_card(mon, x, y, w, rt)
   ui.progress(mon, box.x, box.y + 6, math.max(8, box.w), math.max(0, math.min(100, rt.actual_output or rt.output or 0)), rt.status or "OFFLINE")
   ui.text(mon, box.x, box.y + 7, widgets.fit("Sync: " .. tostring(rt.last_seen_age or "-") .. "s | " .. tostring(rt.freshness or "-"), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 8, widgets.fit("Node: " .. tostring(rt.node_status or rt.status or "-") .. " | Mode: " .. tostring(rt.node_mode or rt.mode or "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 9, widgets.fit("Queue: " .. tostring(rt.queue_state or "idle") .. " | Step: " .. tostring(rt.queue_step or "-"), box.w), colors.get("muted"), colors.get("background"))
 end
 
 local function render(mon, model)
   local w, h = ui.getSize(mon)
+  local is_large = (w * h) >= 900 and w >= 48 and h >= 18
   ui.panel(mon, 1, 1, w, h, "MONITOR 2 - RT-FLOTTE", "OK")
   local summary = widgets.panel_box(mon, 2, 2, w - 2, 6, "RT-Uebersicht", "OK")
   widgets.status_badge(mon, summary.x, summary.y, tostring(model.rt_active or 0) .. " AKTIV", "OK", math.floor(summary.w * 0.18))
@@ -25,19 +27,19 @@ local function render(mon, model)
   widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.66), summary.y, tostring(model.rt_stale or 0) .. " STALE", (model.rt_stale or 0) > 0 and "WARNING" or "OK", math.floor(summary.w * 0.15))
   widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.83), summary.y, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", math.floor(summary.w * 0.17))
 
-  local queue_h = math.max(10, math.floor(h * 0.28))
+  local queue_h = is_large and math.max(16, math.floor(h * 0.42)) or math.max(10, math.floor(h * 0.28))
   local cards_top = 9
   local cards_h = math.max(12, h - queue_h - cards_top)
-  local cols = (w >= 180 and 4) or (w >= 136 and 3) or 2
+  local cols = is_large and ((w >= 150 and 4) or 3) or ((w >= 180 and 4) or (w >= 136 and 3) or 2)
   local gap = 1
   local card_w = math.max(30, math.floor((w - 3 - ((cols - 1) * gap)) / cols))
-  local rows = math.max(1, math.floor(cards_h / 12))
+  local rows = math.max(1, math.floor(cards_h / 13))
   for i, rt in ipairs(model.rt_nodes or {}) do
     local idx = i - 1
     local r = math.floor(idx / cols)
     if r >= rows then break end
     local c = idx % cols
-    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 12, card_w, rt)
+    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 13, card_w, rt)
   end
 
   local queue = widgets.panel_box(mon, 2, h - queue_h + 1, w - 2, queue_h, "Sequencer / Queue", "LIMITED")
