@@ -71,6 +71,22 @@ local function run_master()
             end
           end
         end
+        local total_nodes = runtime_context.table_count(runtime.state.nodes)
+        local rt_nodes, support_nodes = 0, 0
+        for _, node in pairs(runtime.state.nodes or {}) do
+          if node.role == constants.roles.RT_NODE then rt_nodes = rt_nodes + 1 else support_nodes = support_nodes + 1 end
+        end
+        local ms = runtime.state.last_ui_model_stats or {}
+        runtime.log(("UI model density: nodes=%d rt=%d support=%d queue=%d ov=%d rt_vm=%d support_vm=%d matrices=%d"):format(
+          total_nodes,
+          rt_nodes,
+          support_nodes,
+          runtime.refs.sequencer and #runtime.refs.sequencer.queue or 0,
+          ms.overview_nodes or 0,
+          ms.rt_nodes or 0,
+          ms.support_nodes or 0,
+          ms.matrices or 0
+        ), "DEBUG")
         if runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
           local failures = 0
           for _, r in ipairs(runtime.refs.view_manager.last_render_results) do
