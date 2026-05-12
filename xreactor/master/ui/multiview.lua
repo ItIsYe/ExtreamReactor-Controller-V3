@@ -86,7 +86,6 @@ function M:render(monitors, data_map)
       else
         mon_entry.last_render_error = nil
       end
-    end
     else
       rendered[#rendered + 1] = {
         ok = false,
