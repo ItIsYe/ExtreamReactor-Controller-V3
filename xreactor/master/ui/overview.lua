@@ -19,7 +19,7 @@ end
 local function render(mon, model)
   local section_errors = {}
   local key = utils.safe_serialize(model) or tostring(model)
-  if cache[mon] == key then return end
+  local unchanged = (cache[mon] == key)
   cache[mon] = key
 
   local w, h = ui.getSize(mon)
@@ -93,6 +93,7 @@ local function render(mon, model)
   end
 
   hit_cache[mon] = hits
+  model._overview_render_meta = { cache_unchanged = unchanged, rendered = true }
 end
 
 local function hit_test(mon, x, y)
