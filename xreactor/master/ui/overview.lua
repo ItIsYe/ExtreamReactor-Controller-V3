@@ -23,6 +23,7 @@ local function render(mon, model)
   cache[mon] = key
 
   local w, h = ui.getSize(mon)
+  local is_large = (w * h) >= 900 and w >= 48 and h >= 18
   ui.panel(mon, 1, 1, w, h, "MONITOR 1 - UEBERSICHT & STEUERUNG", model.system_status or "OK")
 
   local header_h = 6
@@ -38,8 +39,8 @@ local function render(mon, model)
   ui.text(mon, header.x, header.y + 2, widgets.fit(tostring(model.peer_summary or "Peer-Lage unbekannt"), header.w), colors.get("text"), colors.get("background"))
 
   local row2_y = 2 + header_h
-  local row2_h = math.max(9, math.floor(h * 0.24))
-  local cols = widgets.split_columns(w - 2, { 3, 2 }, 1)
+  local row2_h = is_large and math.max(12, math.floor(h * 0.34)) or math.max(9, math.floor(h * 0.24))
+  local cols = widgets.split_columns(w - 2, is_large and { 2, 1 } or { 3, 2 }, 1)
   local left_w = cols[1]
   local right_w = cols[2]
 
@@ -72,9 +73,10 @@ local function render(mon, model)
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   local kpi_y = row2_y + row2_h
+  local kpi_h = is_large and 11 or 8
   safe_section(mon, 2, kpi_y, "KPI", function()
-    local box = widgets.panel_box(mon, 2, kpi_y, w - 2, 8, "KPI / Betriebslage", "OK")
-    local cws = widgets.columns_from_width(box.w)
+    local box = widgets.panel_box(mon, 2, kpi_y, w - 2, kpi_h, "KPI / Betriebslage", "OK")
+    local cws = is_large and widgets.split_columns(box.w, { 2, 2, 1 }, 1) or widgets.columns_from_width(box.w)
     widgets.stat_card(mon, box.x, box.y, cws[1], "Leistung", string.format("Soll %.1f MRF/t", model.power_target or 0), string.format("Ist %.1f MRF/t", model.power_actual or 0), "LIMITED", (model.power_target or 0) > 0 and math.min(100, ((model.power_actual or 0) / model.power_target) * 100) or 0)
     if cws[2] then
       local energy = model.energy_overview or {}
@@ -85,10 +87,10 @@ local function render(mon, model)
     end
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
-  safe_section(mon, 2, kpi_y + 8, "Nodes", function()
-    local panel_h = math.max(8, h - (kpi_y + 8) + 1)
-    local box = widgets.panel_box(mon, 2, kpi_y + 8, w - 2, panel_h, "Node-Status", model.nodes_stale and model.nodes_stale > 0 and "WARNING" or "OK")
-    local widths = widgets.table_widths(box.w, { 7, 10, 10, 10, 8, 8, 12 })
+  safe_section(mon, 2, kpi_y + kpi_h, "Nodes", function()
+    local panel_h = math.max(is_large and 14 or 8, h - (kpi_y + kpi_h) + 1)
+    local box = widgets.panel_box(mon, 2, kpi_y + kpi_h, w - 2, panel_h, "Node-Status", model.nodes_stale and model.nodes_stale > 0 and "WARNING" or "OK")
+    local widths = widgets.table_widths(box.w, is_large and { 8, 12, 12, 12, 9, 9, 16 } or { 7, 10, 10, 10, 8, 8, 12 })
     widgets.compact_header(mon, box.x, box.y, { "Node", "Rolle", "Status", "Mode", "Seen", "Fresh", "Hinweis" }, widths)
     local y = box.y + 1
     for _, n in ipairs(model.nodes or {}) do
