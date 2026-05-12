@@ -60,7 +60,18 @@ local function run_master()
         local ok, draw_err = pcall(runtime.refs.ui_controller.draw)
         if not ok then
           runtime.log("UI draw failed: " .. tostring(draw_err), "ERROR")
-        elseif runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
+        else
+          local ov_meta = runtime.state.last_overview_render_meta
+          if ov_meta and runtime.state._last_overview_cache_unchanged ~= ov_meta.cache_unchanged then
+            runtime.state._last_overview_cache_unchanged = ov_meta.cache_unchanged
+            if ov_meta.cache_unchanged then
+              runtime.log("Overview draw executed on unchanged model (cache skip disabled)", "DEBUG")
+            else
+              runtime.log("Overview draw executed on changed model", "DEBUG")
+            end
+          end
+        end
+        if runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
           local failures = 0
           for _, r in ipairs(runtime.refs.view_manager.last_render_results) do
             if not r.ok then

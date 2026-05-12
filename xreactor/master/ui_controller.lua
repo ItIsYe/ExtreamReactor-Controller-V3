@@ -75,6 +75,16 @@ function M.new(opts)
           c.log("Overview section fallback triggered: " .. tostring(msg), "ERROR")
         end
       end
+      local ov_meta = models.overview and models.overview._overview_render_meta
+      c.state.last_overview_render_meta = ov_meta
+      if ov_meta and c.log then
+        if ov_meta.cache_unchanged then
+          c.log("Overview render executed with unchanged model (cache bypass blackscreen guard active)", "DEBUG")
+        else
+          c.log("Overview render executed with updated model", "DEBUG")
+        end
+      end
+
       for _, r in ipairs(rendered) do
         if c.log then
           if r.ok then

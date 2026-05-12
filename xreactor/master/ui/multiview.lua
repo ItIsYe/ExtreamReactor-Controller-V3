@@ -67,7 +67,6 @@ function M:render(monitors, data_map)
 
     if view and view.render then
       local ok, err = pcall(function()
-        ui.clear(mon_entry.mon)
         view.render(mon_entry.mon, data_map[view_key] or {})
       end)
       rendered[#rendered + 1] = {
