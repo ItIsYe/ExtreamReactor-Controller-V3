@@ -53,11 +53,61 @@ function widgets.card(mon, x, y, w, h, title, status)
   ui.panel(mon, x, y, width, height, widgets.fit(title or "", math.max(4, width - 4)), status or "OK")
 end
 
-function widgets.panel_box(mon, x, y, w, h, title, status)
+function widgets.panel_box(mon, x, y, w, h, title, status, opts)
+  opts = opts or {}
   local width = clamp_int(w, 8, 512, 8)
   local height = clamp_int(h, 3, 512, 3)
   widgets.card(mon, x, y, width, height, title, status)
-  return { x = x + 1, y = y + 1, w = math.max(1, width - 2), h = math.max(1, height - 2) }
+  local pad_x = clamp_int(opts.pad_x, 0, 4, 1)
+  local pad_y = clamp_int(opts.pad_y, 0, 3, 1)
+  return {
+    x = x + pad_x,
+    y = y + pad_y,
+    w = math.max(1, width - (pad_x * 2)),
+    h = math.max(1, height - (pad_y * 2)),
+    right = x + width - 1,
+    bottom = y + height - 1
+  }
+end
+
+function widgets.split_columns(total_w, ratios, gap)
+  local width = clamp_int(total_w, 1, 512, 1)
+  local g = clamp_int(gap, 0, 8, 1)
+  local cols = {}
+  local ratio_sum = 0
+  for _, r in ipairs(ratios or {}) do ratio_sum = ratio_sum + math.max(1, tonumber(r) or 1) end
+  if ratio_sum <= 0 or #ratios == 0 then return { width } end
+  local available = width - ((#ratios - 1) * g)
+  local used = 0
+  for i, r in ipairs(ratios) do
+    local cw = (i == #ratios) and (available - used) or math.floor((available * math.max(1, tonumber(r) or 1)) / ratio_sum)
+    cw = math.max(1, cw)
+    cols[#cols + 1] = cw
+    used = used + cw
+  end
+  return cols
+end
+
+function widgets.columns_from_width(total_w)
+  if total_w >= 168 then return widgets.split_columns(total_w, { 1, 1, 1 }, 1) end
+  if total_w >= 120 then return widgets.split_columns(total_w, { 1, 1 }, 1) end
+  return { total_w }
+end
+
+
+function widgets.table_widths(total_w, min_widths)
+  local width = clamp_int(total_w, 1, 512, 1)
+  local out = {}
+  local used = 0
+  for i, mw in ipairs(min_widths or {}) do
+    local v = clamp_int(mw, 2, 120, 4)
+    out[i] = v
+    used = used + v
+  end
+  local extra = math.max(0, width - used)
+  local idx = #out
+  if idx > 0 then out[idx] = out[idx] + extra end
+  return out
 end
 
 function widgets.layout_button(mon, x, y, label, status)

@@ -33,12 +33,21 @@ function M.new(opts)
     for _, node in pairs(c.nodes or {}) do
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or -1)
       local stale = age >= 0 and age > 15
-      local freshness_note = stale and "stale" or "live"
-      overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OFFLINE'), last_seen_age = age, mode = node.mode or (node.rt and node.rt.mode) or '-', note = node.bindings_summary or node.note or (node.rt and node.rt.assignment_reason) or freshness_note }
+      local freshness_note = stale and 'stale' or 'live'
+      local node_status = stale and 'OFFLINE' or normalize_status(node.status or 'OFFLINE')
+      local node_mode = node.mode or (node.rt and node.rt.mode) or '-'
+      overview.nodes[#overview.nodes+1] = { id = node.id, role = node.role or '-', status = node_status, last_seen_age = age, mode = node_mode, note = node.bindings_summary or node.note or (node.rt and node.rt.assignment_reason) or freshness_note, freshness = freshness_note }
+      overview.nodes_total = (overview.nodes_total or 0) + 1
+      if stale then overview.nodes_stale = (overview.nodes_stale or 0) + 1 else overview.nodes_live = (overview.nodes_live or 0) + 1 end
       if node.role == c.constants.roles.RT_NODE then
         if not stale then overview.rt_online = overview.rt_online + 1 end
         local rt_node = node.rt or { id = node.id, status = normalize_status(node.status), mode = node.mode, assignment_state = node.assignment_state }
         rt_node.status = stale and 'OFFLINE' or normalize_status(rt_node.status)
+        rt_node.last_seen_age = age
+        rt_node.freshness = freshness_note
+        rt_node.node_status = node_status
+        rt_node.node_mode = node_mode
+        if stale then rt.rt_stale = (rt.rt_stale or 0) + 1 end
         rt.rt_nodes[#rt.rt_nodes+1] = rt_node
         overview.power_actual = overview.power_actual + (rt_node.actual_output or rt_node.output or 0)
         local state = tostring(rt_node.state or '')
@@ -46,9 +55,16 @@ function M.new(opts)
       elseif node.role == c.constants.roles.ENERGY_NODE then
         local e = node.energy or {}
         energy.stored = energy.stored + (e.stored or 0); energy.capacity = energy.capacity + (e.capacity or 0); energy.input = energy.input + (e.input or 0); energy.output = energy.output + (e.output or 0)
-        for _, m in ipairs(e.matrices or {}) do energy.matrices[#energy.matrices+1] = m end
+        for _, m in ipairs(e.matrices or {}) do
+          local copy = {}
+          for k,v in pairs(m) do copy[k]=v end
+          copy.last_seen_age = age
+          copy.status = stale and 'OFFLINE' or normalize_status(copy.status or node.status or 'OK')
+          energy.matrices[#energy.matrices+1] = copy
+        end
       else
-        energy.support_nodes[#energy.support_nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OFFLINE'), last_seen_age = age, note = node.bindings_summary or node.note or '' }
+        energy.support_nodes[#energy.support_nodes+1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OFFLINE'), last_seen_age = age, note = node.bindings_summary or node.note or '', freshness = freshness_note }
+        if stale then energy.support_stale = (energy.support_stale or 0) + 1 else energy.support_online = (energy.support_online or 0) + 1 end
       end
       if node.role == c.constants.roles.FUEL_NODE then energy.resources.fuel_total = (energy.resources.fuel_total or 0) + ((node.fuel and node.fuel.amount) or 0); energy.resources.fuel_sources = (energy.resources.fuel_sources or 0) + 1 end
       if node.role == c.constants.roles.WATER_NODE then energy.resources.water_total = (energy.resources.water_total or 0) + ((node.water and node.water.total) or 0) end
@@ -60,6 +76,11 @@ function M.new(opts)
     local pct = energy.capacity > 0 and (energy.stored / energy.capacity) * 100 or 0
     energy.status = pct < 15 and 'EMERGENCY' or (pct < 30 and 'WARNING' or 'OK')
     overview.energy_overview = { percent = pct, status = energy.status, trend = (pct > 70 and 'Trend stabil') or (pct > 35 and 'Trend sinkt') or 'Trend kritisch' }
+    overview.nodes_total = overview.nodes_total or 0
+    overview.nodes_live = overview.nodes_live or 0
+    overview.nodes_stale = overview.nodes_stale or 0
+    overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0)
+    energy.matrix_count = #energy.matrices
     overview.clock_label = os.date('!%H:%M UTC')
     rt.rt_global_off_hold = overview.rt_global_off_hold
     return { overview = overview, rt = rt, energy = energy, resources = {} }
@@ -70,6 +91,12 @@ function M.new(opts)
       local models = build_models()
       local monitors = c.state.monitor_cache.list or {}
       local rendered = c.view_manager:render(monitors, models) or {}
+      c.state.last_ui_model_stats = {
+        overview_nodes = #(models.overview and models.overview.nodes or {}),
+        rt_nodes = #(models.rt and models.rt.rt_nodes or {}),
+        support_nodes = #(models.energy and models.energy.support_nodes or {}),
+        matrices = #(models.energy and models.energy.matrices or {})
+      }
       if models.overview and models.overview.ui_errors and c.log then
         for _, msg in ipairs(models.overview.ui_errors) do
           c.log("Overview section fallback triggered: " .. tostring(msg), "ERROR")
