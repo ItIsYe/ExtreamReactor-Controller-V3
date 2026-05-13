@@ -13,6 +13,9 @@ local function render(mon, model)
   ui.bigNumber(mon, summary.x + 1, summary.y, "Gesamtspeicher", string.format("%.1f", pct), "%", model.status or "OK")
   ui.text(mon, summary.x + 1, summary.y + 2, widgets.fit(string.format("Stored %.1f / %.1f", model.stored or 0, model.capacity or 0), summary.w - 2), colors.get("text"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 3, widgets.fit(string.format("Input %.1f MRF/t  |  Output %.1f MRF/t", model.input or 0, model.output or 0), summary.w - 2), colors.get("text"), colors.get("background"))
+  if (model.capacity or 0) <= 0 and ((model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0) then
+    ui.text(mon, summary.x + 1, summary.y + 4, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
+  end
 
   local content_y = 2 + summary_h + 1
   local content_h = math.max(is_large and 14 or 10, h - content_y - 1)
@@ -28,7 +31,7 @@ local function render(mon, model)
     if y > (matrix.y + matrix.h - 1) then break end
     widgets.compact_status_row(mon, matrix.x, y, {
       tostring(m.id or m.label or "M"),
-      string.format("%d%%", math.floor((m.percent or 0) * 100)),
+      string.format("%d%%", math.floor(((m.percent or 0) > 1 and (m.percent or 0) or ((m.percent or 0) * 100)))),
       string.format("%.1f", m.input or 0),
       string.format("%.1f", m.output or 0),
       tostring(m.last_seen_age or "-") .. "s",
@@ -36,7 +39,7 @@ local function render(mon, model)
     }, matrix_widths, m.status or "OK", 6)
     y = y + 1
   end
-  if y == matrix.y + 1 then ui.text(mon, matrix.x, y, "Keine Matrixdaten", colors.get("OFFLINE"), colors.get("background")) end
+  if y == matrix.y + 1 then ui.text(mon, matrix.x, y, "Keine Matrixdaten vom Energy-Node", colors.get("OFFLINE"), colors.get("background")) end
 
   local right_x = 2 + left_w + 1
   local resources_h = is_large and math.max(15, math.floor(content_h * 0.60)) or math.max(11, math.floor(content_h * 0.52))
@@ -57,7 +60,7 @@ local function render(mon, model)
     widgets.compact_status_row(mon, support.x, sy, { tostring(n.id), tostring(n.role), tostring(n.status), tostring(n.last_seen_age or -1) .. "s", tostring(n.note or "-") }, support_widths, n.status or "OFFLINE", 3)
     sy = sy + 1
   end
-  if sy == support.y + 1 then ui.text(mon, support.x, sy, "Keine Support-Nodes", colors.get("OFFLINE"), colors.get("background")) end
+  if sy == support.y + 1 then ui.text(mon, support.x, sy, "Keine Support-/Energy-Nodes sichtbar", colors.get("OFFLINE"), colors.get("background")) end
 end
 
 return { render = render }
