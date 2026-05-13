@@ -143,6 +143,18 @@ function M.new(opts)
     elseif message.type == constants.message_types.STATUS then
       local previous_mode = nodes[id].mode
       nodes[id] = utils.merge(nodes[id], message.payload)
+      nodes[id].payload = message.payload
+      if nodes[id].role == constants.roles.ENERGY_NODE then
+        nodes[id].energy = message.payload.energy or message.payload
+      elseif nodes[id].role == constants.roles.RT_NODE then
+        nodes[id].rt = message.payload.rt or nodes[id].rt or {}
+        if type(nodes[id].rt) == "table" then
+          nodes[id].rt.mode = nodes[id].rt.mode or message.payload.mode
+          nodes[id].rt.assignment_state = nodes[id].rt.assignment_state or message.payload.assignment_state
+          nodes[id].rt.assignment_reason = nodes[id].rt.assignment_reason or message.payload.assignment_reason or message.payload.bindings_summary
+          nodes[id].rt.control_source = nodes[id].rt.control_source or message.payload.control_source
+        end
+      end
       local previous_health_status = nodes[id].health and nodes[id].health.status or nil
       local previous_reasons = nodes[id].health and nodes[id].health.reasons or nil
       if message.payload.health then

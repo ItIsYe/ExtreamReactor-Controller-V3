@@ -10,10 +10,23 @@ end
 
 function M.new(opts)
   local c = opts
+  local function to_number(value)
+    if type(value) == "number" then return value end
+    if type(value) == "string" then
+      local n = tonumber(value)
+      if n then return n end
+      local left, right = value:match("^%s*([%+%-]?[%d%.]+)%s*/%s*([%+%-]?[%d%.]+)%s*$")
+      if left and right then
+        local a, b = tonumber(left), tonumber(right)
+        if a and b then return a, b end
+      end
+    end
+  end
   local function pick_number(...)
     for i = 1, select('#', ...) do
       local v = select(i, ...)
-      if type(v) == "number" then return v end
+      local n = to_number(v)
+      if n ~= nil then return n end
     end
     return 0
   end
@@ -23,47 +36,78 @@ function M.new(opts)
       if v ~= nil and tostring(v) ~= "" and tostring(v) ~= "-" then return v end
     end
   end
+  local function normalize_assignment(state)
+    local map = {
+      active = "ASSIGNED", startup = "ASSIGNED", standby = "ASSIGNED",
+      shutdown = "ASSIGNED", shed = "ASSIGNED", unavailable = "UNAVAILABLE",
+      master = "ASSIGNED", assigned = "ASSIGNED", unassigned = "UNASSIGNED"
+    }
+    local raw = tostring(state or "UNASSIGNED")
+    local key = raw:lower()
+    return map[key] or raw:upper()
+  end
+  local function normalize_control_source(raw, assignment)
+    local v = tostring(raw or ""):upper()
+    if v == "MASTER" or v == "LOCAL" then return v end
+    if assignment == "ASSIGNED" then return "MASTER" end
+    return "LOCAL"
+  end
   local function normalize_rt_display(rt_node)
-    local assign = tostring(rt_node.assignment_state or "UNASSIGNED"):upper()
+    local assign = normalize_assignment(rt_node.assignment_state)
     local reason = tostring(rt_node.assignment_reason or "-")
-    local control = tostring(rt_node.control_source or ""):upper()
-    if assign == "ASSIGNED" or assign == "MASTER" then
-      control = "MASTER"
-      rt_node.display_mode = "Master-gefuehrt"
-    elseif assign == "UNASSIGNED" then
-      control = (control == "MASTER") and "MASTER" or "LOCAL"
+    local control = normalize_control_source(rt_node.control_source, assign)
+    if assign == "ASSIGNED" then
+      rt_node.display_mode = (control == "MASTER") and "Master-gefuehrt" or "Lokal aktiv (Master-Zuordnung fehlt)"
+    elseif assign == "UNAVAILABLE" then
+      rt_node.display_mode = "Master nicht verfuegbar"
+      control = "LOCAL"
+    else
       rt_node.display_mode = (control == "MASTER") and "Master-Zuordnung unklar" or "Lokal/Fallback (nicht zugeordnet)"
       if reason == "-" and tostring(rt_node.node_mode or rt_node.mode or "-"):upper() == "AUTONOM" then
         reason = "Node ohne Master-Zuordnung"
       end
-    else
-      control = (control == "MASTER") and "MASTER" or "LOCAL"
-      rt_node.display_mode = (control == "MASTER") and "Master-gefuehrt" or "Lokal/Fallback"
     end
     rt_node.assignment_state = assign
     rt_node.assignment_reason = reason
     rt_node.control_source = control
     return rt_node
   end
+
+  local function matrix_rows_from_payload(e)
+    local out = {}
+    local function collect(src)
+      if type(src) ~= "table" then return end
+      if #src > 0 then
+        for _, row in ipairs(src) do out[#out + 1] = row end
+        return
+      end
+      for key, row in pairs(src) do
+        if type(row) == "table" then
+          local copy = {}
+          for k, v in pairs(row) do copy[k] = v end
+          copy.id = first_nonempty(copy.id, copy.label, copy.name, key)
+          out[#out + 1] = copy
+        end
+      end
+    end
+    collect(e.matrices)
+    collect(e.matrix_rows)
+    collect(e.matrix_data)
+    return out
+  end
+
   local function build_models()
     local now = os.epoch('utc')
     local counts = c.alert_service and c.alert_service:get_counts() or { INFO = 0, WARN = 0, CRITICAL = 0 }
     local top = c.alert_service and c.alert_service:get_top_critical(3) or {}
     local summary = c.alert_service and c.alert_service:get_summary() or 'Keine aktiven Meldungen'
 
-    local overview = {
-      system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' },
-      active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile,
-      auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile,
-      rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold,
-      power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target,
-      nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = ''
-    }
+    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '' }
     if (counts.CRITICAL or 0) > 0 then overview.system_status = 'EMERGENCY' elseif (counts.WARN or 0) > 0 then overview.system_status = 'WARNING' end
     for i, a in ipairs(top) do if i > 4 then break end overview.alert_rows[#overview.alert_rows+1] = { title = tostring(a.title or a.code or 'Alert'), text = tostring(a.message or a.detail or 'Keine Details'), status = normalize_status(a.severity or 'WARNING') } end
 
     local rt = { rt_nodes = {}, queue = c.sequencer.queue or {}, ramp_profile = c.sequencer.ramp_profile, sequence_state = c.sequencer.state, rt_global_off_hold = overview.rt_global_off_hold, rt_active = 0, rt_startup = 0, rt_shutdown = 0 }
-    local energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = 'OFFLINE' }
+    local energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = 'OFFLINE', aggregate_percent = 0, mode = '-' }
 
     for _, node in pairs(c.nodes or {}) do
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or -1)
@@ -82,9 +126,9 @@ function M.new(opts)
         rt_node.freshness = freshness_note
         rt_node.node_status = node_status
         rt_node.node_mode = node_mode
-        rt_node.assignment_state = rt_node.assignment_state or node.assignment_state or node.bindings_state or "UNASSIGNED"
-        rt_node.assignment_reason = rt_node.assignment_reason or node.assignment_reason or node.bindings_summary or "-"
-        rt_node.control_source = rt_node.control_source or node.control_source or ((rt_node.assignment_state == "ASSIGNED" or rt_node.assignment_state == "MASTER") and "MASTER" or "LOCAL")
+        rt_node.assignment_state = rt_node.assignment_state or node.assignment_state or node.bindings_state or (node.last_setpoints and node.last_setpoints.assignment_state) or "UNASSIGNED"
+        rt_node.assignment_reason = rt_node.assignment_reason or node.assignment_reason or (node.last_setpoints and node.last_setpoints.assignment_reason) or node.bindings_summary or "-"
+        rt_node.control_source = rt_node.control_source or node.control_source or (node.last_setpoints and node.last_setpoints.control_source)
         rt_node = normalize_rt_display(rt_node)
         if stale then rt.rt_stale = (rt.rt_stale or 0) + 1 end
         rt.rt_nodes[#rt.rt_nodes+1] = rt_node
@@ -92,14 +136,16 @@ function M.new(opts)
         local state = tostring(rt_node.state or '')
         if state == 'RUNNING' then rt.rt_active = rt.rt_active + 1 elseif state == 'STARTUP' then rt.rt_startup = rt.rt_startup + 1 elseif state == 'SHUTDOWN' then rt.rt_shutdown = rt.rt_shutdown + 1 end
       elseif node.role == c.constants.roles.ENERGY_NODE then
-        local e = node.energy or node or {}
-        energy.stored = energy.stored + pick_number(e.aggregate_stored, e.stored, e.matrix_energy, e.total and e.total.stored, 0)
-        energy.capacity = energy.capacity + pick_number(e.aggregate_capacity, e.capacity, e.matrix_capacity, e.total and e.total.capacity, 0)
-        energy.input = energy.input + pick_number(e.aggregate_input, e.input, e.matrix_in, e.total and e.total.input, 0)
-        energy.output = energy.output + pick_number(e.aggregate_output, e.output, e.matrix_out, e.total and e.total.output, 0)
-        energy.support_nodes[#energy.support_nodes + 1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OK'), last_seen_age = age, note = e.note or node.bindings_summary or "Energy-Node", freshness = freshness_note }
+        local e = (type(node.energy) == "table" and node.energy) or (type(node.payload) == "table" and node.payload.energy) or node.payload or node
+        local total = (type(e.total) == "table" and e.total) or {}
+        energy.stored = energy.stored + pick_number(e.aggregate_stored, e.stored, e.matrix_energy, total.stored)
+        energy.capacity = energy.capacity + pick_number(e.aggregate_capacity, e.capacity, e.matrix_capacity, total.capacity)
+        energy.input = energy.input + pick_number(e.aggregate_input, e.input, e.matrix_in, total.input)
+        energy.output = energy.output + pick_number(e.aggregate_output, e.output, e.matrix_out, total.output)
+        energy.mode = first_nonempty(e.mode, energy.mode, "-")
+        energy.support_nodes[#energy.support_nodes + 1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OK'), last_seen_age = age, note = e.mode or e.note or node.bindings_summary or "Energy-Node", freshness = freshness_note }
         if stale then energy.support_stale = (energy.support_stale or 0) + 1 else energy.support_online = (energy.support_online or 0) + 1 end
-        local matrices = e.matrices or (e.total and e.total.matrices) or {}
+        local matrices = matrix_rows_from_payload(e)
         for _, m in ipairs(matrices) do
           local copy = {}
           for k,v in pairs(m) do copy[k]=v end
@@ -123,6 +169,7 @@ function M.new(opts)
     table.sort(rt.rt_nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
     table.sort(energy.support_nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
     local pct = energy.capacity > 0 and (energy.stored / energy.capacity) * 100 or 0
+    energy.aggregate_percent = pct
     energy.status = pct < 15 and 'EMERGENCY' or (pct < 30 and 'WARNING' or 'OK')
     overview.energy_overview = { percent = pct, status = energy.status, trend = (pct > 70 and 'Trend stabil') or (pct > 35 and 'Trend sinkt') or 'Trend kritisch' }
     overview.nodes_total = overview.nodes_total or 0

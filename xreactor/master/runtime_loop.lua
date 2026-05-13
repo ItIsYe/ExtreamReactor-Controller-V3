@@ -106,7 +106,8 @@ local function run_master()
           for _, node in pairs(runtime.state.nodes or {}) do
             if node.role == constants.roles.ENERGY_NODE then energy_node_count = energy_node_count + 1 end
           end
-          runtime.log(("UI energy model: matrices=%d stored=%.1f capacity=%.1f input=%.1f output=%.1f empty=%s"):format(
+          runtime.log(("UI energy model: mode=%s matrices=%d stored=%.1f capacity=%.1f input=%.1f output=%.1f empty=%s"):format(
+            tostring(energy_model.mode or "-"),
             #(energy_model.matrices or {}),
             tonumber(energy_model.stored or 0) or 0,
             tonumber(energy_model.capacity or 0) or 0,
