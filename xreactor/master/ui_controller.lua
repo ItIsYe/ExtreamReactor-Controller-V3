@@ -10,6 +10,41 @@ end
 
 function M.new(opts)
   local c = opts
+  local function pick_number(...)
+    for i = 1, select('#', ...) do
+      local v = select(i, ...)
+      if type(v) == "number" then return v end
+    end
+    return 0
+  end
+  local function first_nonempty(...)
+    for i = 1, select('#', ...) do
+      local v = select(i, ...)
+      if v ~= nil and tostring(v) ~= "" and tostring(v) ~= "-" then return v end
+    end
+  end
+  local function normalize_rt_display(rt_node)
+    local assign = tostring(rt_node.assignment_state or "UNASSIGNED"):upper()
+    local reason = tostring(rt_node.assignment_reason or "-")
+    local control = tostring(rt_node.control_source or ""):upper()
+    if assign == "ASSIGNED" or assign == "MASTER" then
+      control = "MASTER"
+      rt_node.display_mode = "Master-gefuehrt"
+    elseif assign == "UNASSIGNED" then
+      control = (control == "MASTER") and "MASTER" or "LOCAL"
+      rt_node.display_mode = (control == "MASTER") and "Master-Zuordnung unklar" or "Lokal/Fallback (nicht zugeordnet)"
+      if reason == "-" and tostring(rt_node.node_mode or rt_node.mode or "-"):upper() == "AUTONOM" then
+        reason = "Node ohne Master-Zuordnung"
+      end
+    else
+      control = (control == "MASTER") and "MASTER" or "LOCAL"
+      rt_node.display_mode = (control == "MASTER") and "Master-gefuehrt" or "Lokal/Fallback"
+    end
+    rt_node.assignment_state = assign
+    rt_node.assignment_reason = reason
+    rt_node.control_source = control
+    return rt_node
+  end
   local function build_models()
     local now = os.epoch('utc')
     local counts = c.alert_service and c.alert_service:get_counts() or { INFO = 0, WARN = 0, CRITICAL = 0 }
@@ -50,22 +85,30 @@ function M.new(opts)
         rt_node.assignment_state = rt_node.assignment_state or node.assignment_state or node.bindings_state or "UNASSIGNED"
         rt_node.assignment_reason = rt_node.assignment_reason or node.assignment_reason or node.bindings_summary or "-"
         rt_node.control_source = rt_node.control_source or node.control_source or ((rt_node.assignment_state == "ASSIGNED" or rt_node.assignment_state == "MASTER") and "MASTER" or "LOCAL")
-        rt_node.display_mode = (rt_node.control_source == "MASTER") and "MASTER-geführt" or tostring(rt_node.mode or "-")
+        rt_node = normalize_rt_display(rt_node)
         if stale then rt.rt_stale = (rt.rt_stale or 0) + 1 end
         rt.rt_nodes[#rt.rt_nodes+1] = rt_node
         overview.power_actual = overview.power_actual + (rt_node.actual_output or rt_node.output or 0)
         local state = tostring(rt_node.state or '')
         if state == 'RUNNING' then rt.rt_active = rt.rt_active + 1 elseif state == 'STARTUP' then rt.rt_startup = rt.rt_startup + 1 elseif state == 'SHUTDOWN' then rt.rt_shutdown = rt.rt_shutdown + 1 end
       elseif node.role == c.constants.roles.ENERGY_NODE then
-        local e = node.energy or {}
-        energy.stored = energy.stored + (e.stored or 0); energy.capacity = energy.capacity + (e.capacity or 0); energy.input = energy.input + (e.input or 0); energy.output = energy.output + (e.output or 0)
+        local e = node.energy or node or {}
+        energy.stored = energy.stored + pick_number(e.aggregate_stored, e.stored, e.matrix_energy, e.total and e.total.stored, 0)
+        energy.capacity = energy.capacity + pick_number(e.aggregate_capacity, e.capacity, e.matrix_capacity, e.total and e.total.capacity, 0)
+        energy.input = energy.input + pick_number(e.aggregate_input, e.input, e.matrix_in, e.total and e.total.input, 0)
+        energy.output = energy.output + pick_number(e.aggregate_output, e.output, e.matrix_out, e.total and e.total.output, 0)
         energy.support_nodes[#energy.support_nodes + 1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OK'), last_seen_age = age, note = e.note or node.bindings_summary or "Energy-Node", freshness = freshness_note }
         if stale then energy.support_stale = (energy.support_stale or 0) + 1 else energy.support_online = (energy.support_online or 0) + 1 end
-        for _, m in ipairs(e.matrices or {}) do
+        local matrices = e.matrices or (e.total and e.total.matrices) or {}
+        for _, m in ipairs(matrices) do
           local copy = {}
           for k,v in pairs(m) do copy[k]=v end
           copy.last_seen_age = age
           copy.status = stale and 'OFFLINE' or normalize_status(copy.status or node.status or 'OK')
+          copy.percent = pick_number(copy.percent, copy.fill, copy.level, 0)
+          copy.input = pick_number(copy.input, copy.inflow, copy.rate_in, 0)
+          copy.output = pick_number(copy.output, copy.outflow, copy.rate_out, 0)
+          copy.id = first_nonempty(copy.id, copy.label, copy.name, node.id .. "-matrix")
           energy.matrices[#energy.matrices+1] = copy
         end
       else
