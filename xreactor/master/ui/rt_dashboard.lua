@@ -20,15 +20,21 @@ local function render(mon, model)
   local w, h = ui.getSize(mon)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
   ui.panel(mon, 1, 1, w, h, "MONITOR 2 - RT-FLOTTE", "OK")
-  local summary = widgets.panel_box(mon, 2, 2, w - 2, 6, "RT-Uebersicht", "OK")
-  widgets.status_badge(mon, summary.x, summary.y, tostring(model.rt_active or 0) .. " AKTIV", "OK", math.floor(summary.w * 0.18))
-  widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.20), summary.y, tostring(model.rt_startup or 0) .. " STARTUP", "LIMITED", math.floor(summary.w * 0.20))
-  widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.42), summary.y, tostring(model.rt_shutdown or 0) .. " SHUTDOWN", "OFFLINE", math.floor(summary.w * 0.22))
-  widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.66), summary.y, tostring(model.rt_stale or 0) .. " STALE", (model.rt_stale or 0) > 0 and "WARNING" or "OK", math.floor(summary.w * 0.15))
-  widgets.status_badge(mon, summary.x + math.floor(summary.w * 0.83), summary.y, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", math.floor(summary.w * 0.17))
+  local summary = widgets.panel_box(mon, 2, 2, w - 2, is_large and 7 or 6, "RT-Uebersicht", "OK")
+  local badge_cols = widgets.split_columns(summary.w, is_large and { 2, 2, 2, 2, 3 } or { 2, 2, 2, 2, 2 }, 1)
+  local sx = summary.x
+  widgets.status_badge(mon, sx, summary.y, tostring(model.rt_active or 0) .. " AKTIV", "OK", badge_cols[1])
+  sx = sx + badge_cols[1] + 1
+  widgets.status_badge(mon, sx, summary.y, tostring(model.rt_startup or 0) .. " STARTUP", "LIMITED", badge_cols[2])
+  sx = sx + badge_cols[2] + 1
+  widgets.status_badge(mon, sx, summary.y, tostring(model.rt_shutdown or 0) .. " SHUTDOWN", "OFFLINE", badge_cols[3])
+  sx = sx + badge_cols[3] + 1
+  widgets.status_badge(mon, sx, summary.y, tostring(model.rt_stale or 0) .. " STALE", (model.rt_stale or 0) > 0 and "WARNING" or "OK", badge_cols[4])
+  sx = sx + badge_cols[4] + 1
+  widgets.status_badge(mon, sx, summary.y, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", badge_cols[5])
 
-  local queue_h = is_large and math.max(16, math.floor(h * 0.42)) or math.max(10, math.floor(h * 0.28))
-  local cards_top = 9
+  local queue_h = is_large and math.max(15, math.floor(h * 0.38)) or math.max(10, math.floor(h * 0.28))
+  local cards_top = is_large and 10 or 9
   local cards_h = math.max(12, h - queue_h - cards_top)
   local cols = is_large and ((w >= 150 and 4) or 3) or ((w >= 180 and 4) or (w >= 136 and 3) or 2)
   local gap = 1
