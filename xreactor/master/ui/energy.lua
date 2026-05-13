@@ -13,8 +13,9 @@ local function render(mon, model)
   ui.bigNumber(mon, summary.x + 1, summary.y, "Gesamtspeicher", string.format("%.1f", pct), "%", model.status or "OK")
   ui.text(mon, summary.x + 1, summary.y + 2, widgets.fit(string.format("Stored %.1f / %.1f", model.stored or 0, model.capacity or 0), summary.w - 2), colors.get("text"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 3, widgets.fit(string.format("Input %.1f MRF/t  |  Output %.1f MRF/t", model.input or 0, model.output or 0), summary.w - 2), colors.get("text"), colors.get("background"))
+  ui.text(mon, summary.x + 1, summary.y + 4, widgets.fit("Mode " .. tostring(model.mode or "-") .. " | Matrices " .. tostring(model.matrix_count or 0), summary.w - 2), colors.get("muted"), colors.get("background"))
   if (model.capacity or 0) <= 0 and ((model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0) then
-    ui.text(mon, summary.x + 1, summary.y + 4, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
+    ui.text(mon, summary.x + 1, summary.y + 5, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
   end
 
   local content_y = 2 + summary_h + 1
