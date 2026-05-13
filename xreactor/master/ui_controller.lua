@@ -47,6 +47,10 @@ function M.new(opts)
         rt_node.freshness = freshness_note
         rt_node.node_status = node_status
         rt_node.node_mode = node_mode
+        rt_node.assignment_state = rt_node.assignment_state or node.assignment_state or node.bindings_state or "UNASSIGNED"
+        rt_node.assignment_reason = rt_node.assignment_reason or node.assignment_reason or node.bindings_summary or "-"
+        rt_node.control_source = rt_node.control_source or node.control_source or ((rt_node.assignment_state == "ASSIGNED" or rt_node.assignment_state == "MASTER") and "MASTER" or "LOCAL")
+        rt_node.display_mode = (rt_node.control_source == "MASTER") and "MASTER-geführt" or tostring(rt_node.mode or "-")
         if stale then rt.rt_stale = (rt.rt_stale or 0) + 1 end
         rt.rt_nodes[#rt.rt_nodes+1] = rt_node
         overview.power_actual = overview.power_actual + (rt_node.actual_output or rt_node.output or 0)
@@ -55,6 +59,8 @@ function M.new(opts)
       elseif node.role == c.constants.roles.ENERGY_NODE then
         local e = node.energy or {}
         energy.stored = energy.stored + (e.stored or 0); energy.capacity = energy.capacity + (e.capacity or 0); energy.input = energy.input + (e.input or 0); energy.output = energy.output + (e.output or 0)
+        energy.support_nodes[#energy.support_nodes + 1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OK'), last_seen_age = age, note = e.note or node.bindings_summary or "Energy-Node", freshness = freshness_note }
+        if stale then energy.support_stale = (energy.support_stale or 0) + 1 else energy.support_online = (energy.support_online or 0) + 1 end
         for _, m in ipairs(e.matrices or {}) do
           local copy = {}
           for k,v in pairs(m) do copy[k]=v end
@@ -86,9 +92,10 @@ function M.new(opts)
     return { overview = overview, rt = rt, energy = energy, resources = {} }
   end
 
-  return {
-    draw = function()
+  local controller = {}
+  controller.draw = function()
       local models = build_models()
+      controller._last_models = models
       local monitors = c.state.monitor_cache.list or {}
       local rendered = c.view_manager:render(monitors, models) or {}
       c.state.last_ui_model_stats = {
@@ -123,16 +130,16 @@ function M.new(opts)
           end
         end
       end
-    end,
-    handle_input = function(event)
+    end
+  controller.handle_input = function(event)
       if event[1] == 'monitor_touch' then c.view_manager:handle_input(event[2], event[3], event[4]) end
-    end,
-    handle_action = function(action)
+    end
+  controller.handle_action = function(action)
       if action.type == 'profile' then c.calc.apply_profile(action.name)
       elseif action.type == 'auto' then c.calc.set_auto_profile(not (c.calc.get_auto_profile and c.calc.get_auto_profile()))
       elseif action.type == 'rt_hold' then c.calc.set_rt_global_off_hold(not (c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold())) end
     end
-  }
+  return controller
 end
 
 return M

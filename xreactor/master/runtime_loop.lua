@@ -77,6 +77,10 @@ local function run_master()
           if node.role == constants.roles.RT_NODE then rt_nodes = rt_nodes + 1 else support_nodes = support_nodes + 1 end
         end
         local ms = runtime.state.last_ui_model_stats or {}
+        local ui_models = runtime.refs.ui_controller and runtime.refs.ui_controller._last_models
+        local rt_model = ui_models and ui_models.rt or nil
+        local energy_model = ui_models and ui_models.energy or nil
+        local sample_rt = rt_model and rt_model.rt_nodes and rt_model.rt_nodes[1] or nil
         runtime.log(("UI model density: nodes=%d rt=%d support=%d queue=%d ov=%d rt_vm=%d support_vm=%d matrices=%d"):format(
           total_nodes,
           rt_nodes,
@@ -87,6 +91,23 @@ local function run_master()
           ms.support_nodes or 0,
           ms.matrices or 0
         ), "DEBUG")
+        if sample_rt then
+          runtime.log(("UI RT semantic sample: id=%s mode=%s assignment=%s control=%s freshness=%s"):format(
+            tostring(sample_rt.id or "?"),
+            tostring(sample_rt.mode or "-"),
+            tostring(sample_rt.assignment_state or "-"),
+            tostring(sample_rt.control_source or "-"),
+            tostring(sample_rt.freshness or "-")
+          ), "DEBUG")
+        end
+        if energy_model then
+          runtime.log(("UI energy model: matrices=%d stored=%.1f capacity=%.1f empty=%s"):format(
+            #(energy_model.matrices or {}),
+            tonumber(energy_model.stored or 0) or 0,
+            tonumber(energy_model.capacity or 0) or 0,
+            tostring((#(energy_model.matrices or {}) == 0) and ((energy_model.stored or 0) == 0) and ((energy_model.input or 0) == 0))
+          ), "DEBUG")
+        end
         if runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
           local failures = 0
           for _, r in ipairs(runtime.refs.view_manager.last_render_results) do

@@ -64,9 +64,16 @@ function M:render(monitors, data_map)
     local layout = self.layout.monitors[id] or { view = primary_view(idx, self.view_order) }
     local view_key = layout.view or primary_view(idx, self.view_order)
     local view = self.views[view_key]
+    local w, h = ui.getSize(mon_entry.mon)
+    local size_key = (w and h) and (("%dx%d"):format(w, h)) or "unknown"
+    local requires_full_clear = mon_entry._last_frame_size ~= size_key
 
     if view and view.render then
       local ok, err = pcall(function()
+        ui.begin_frame(mon_entry.mon)
+        if requires_full_clear then
+          ui.clear(mon_entry.mon)
+        end
         view.render(mon_entry.mon, data_map[view_key] or {})
       end)
       rendered[#rendered + 1] = {
@@ -79,11 +86,12 @@ function M:render(monitors, data_map)
       }
       if not ok then
         ui.clear(mon_entry.mon)
-        ui.panel(mon_entry.mon, 1, 1, select(1, ui.getSize(mon_entry.mon)), select(2, ui.getSize(mon_entry.mon)), "RENDER ERROR", "EMERGENCY")
-        ui.text(mon_entry.mon, 2, 3, widgets.fit(tostring(err), math.max(10, select(1, ui.getSize(mon_entry.mon)) - 3)), 0xFFFFFF, 0x000000)
+        ui.panel(mon_entry.mon, 1, 1, w or select(1, ui.getSize(mon_entry.mon)), h or select(2, ui.getSize(mon_entry.mon)), "RENDER ERROR", "EMERGENCY")
+        ui.text(mon_entry.mon, 2, 3, widgets.fit(tostring(err), math.max(10, (w or select(1, ui.getSize(mon_entry.mon)) or 20) - 3)), 0xFFFFFF, 0x000000)
         mon_entry.last_render_error = tostring(err)
       else
         mon_entry.last_render_error = nil
+        mon_entry._last_frame_size = size_key
       end
     else
       rendered[#rendered + 1] = {
@@ -95,11 +103,10 @@ function M:render(monitors, data_map)
         error = "view-missing-or-no-render"
       }
       ui.clear(mon_entry.mon)
-      ui.panel(mon_entry.mon, 1, 1, select(1, ui.getSize(mon_entry.mon)), select(2, ui.getSize(mon_entry.mon)), "VIEW ERROR", "EMERGENCY")
-      ui.text(mon_entry.mon, 2, 3, widgets.fit("Missing view: " .. tostring(view_key), math.max(10, select(1, ui.getSize(mon_entry.mon)) - 3)), 0xFFFFFF, 0x000000)
+      ui.panel(mon_entry.mon, 1, 1, w or select(1, ui.getSize(mon_entry.mon)), h or select(2, ui.getSize(mon_entry.mon)), "VIEW ERROR", "EMERGENCY")
+      ui.text(mon_entry.mon, 2, 3, widgets.fit("Missing view: " .. tostring(view_key), math.max(10, (w or select(1, ui.getSize(mon_entry.mon)) or 20) - 3)), 0xFFFFFF, 0x000000)
     end
 
-    local w = select(1, ui.getSize(mon_entry.mon))
     if w then
       if idx <= 3 then
         local fix_x = math.max(2, w - 8)
