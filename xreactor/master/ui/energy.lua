@@ -39,7 +39,10 @@ local function render(mon, model)
     }, matrix_widths, m.status or "OK", 6)
     y = y + 1
   end
-  if y == matrix.y + 1 then ui.text(mon, matrix.x, y, "Keine Matrixdaten vom Energy-Node", colors.get("OFFLINE"), colors.get("background")) end
+  if y == matrix.y + 1 then
+    local has_flow = (model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0
+    ui.text(mon, matrix.x, y, has_flow and "Keine Matrixzeilen, aber Energiefluss vorhanden" or "Keine Matrixdaten vom Energy-Node", colors.get(has_flow and "WARNING" or "OFFLINE"), colors.get("background"))
+  end
 
   local right_x = 2 + left_w + 1
   local resources_h = is_large and math.max(15, math.floor(content_h * 0.60)) or math.max(11, math.floor(content_h * 0.52))
