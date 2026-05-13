@@ -72,19 +72,58 @@ end
 
 function widgets.split_columns(total_w, ratios, gap)
   local width = clamp_int(total_w, 1, 512, 1)
-  local g = clamp_int(gap, 0, 8, 1)
-  local cols = {}
-  local ratio_sum = 0
-  for _, r in ipairs(ratios or {}) do ratio_sum = ratio_sum + math.max(1, tonumber(r) or 1) end
-  if ratio_sum <= 0 or #ratios == 0 then return { width } end
-  local available = width - ((#ratios - 1) * g)
-  local used = 0
-  for i, r in ipairs(ratios) do
-    local cw = (i == #ratios) and (available - used) or math.floor((available * math.max(1, tonumber(r) or 1)) / ratio_sum)
-    cw = math.max(1, cw)
-    cols[#cols + 1] = cw
-    used = used + cw
+  local ratio_list = ratios or {}
+  if #ratio_list == 0 then return { width } end
+
+  local g = clamp_int(gap, 0, 16, 1)
+  local max_gaps = math.max(0, #ratio_list - 1)
+  local total_gap = math.min(width - #ratio_list, g * max_gaps)
+  if total_gap < 0 then total_gap = 0 end
+
+  local available = width - total_gap
+  if available < #ratio_list then
+    available = #ratio_list
+    total_gap = width - available
+    g = max_gaps > 0 and math.floor(total_gap / max_gaps) or 0
   end
+
+  local normalized = {}
+  local weight_sum = 0
+  for i, r in ipairs(ratio_list) do
+    local n = tonumber(r) or 1
+    if n <= 0 then n = 1 end
+    normalized[i] = n
+    weight_sum = weight_sum + n
+  end
+
+  local cols = {}
+  local used = 0
+  for i, weight in ipairs(normalized) do
+    local remaining_cols = #normalized - i
+    local remaining_space = available - used
+    local cw
+    if i == #normalized then
+      cw = remaining_space
+    else
+      cw = math.floor((available * weight) / weight_sum)
+      local max_here = remaining_space - remaining_cols
+      if cw > max_here then cw = max_here end
+    end
+    cw = math.max(1, cw)
+    cols[i] = cw
+    used = used + cw
+    weight_sum = weight_sum - weight
+  end
+
+  local remainder = available - used
+  local idx = 1
+  while remainder > 0 and #cols > 0 do
+    cols[idx] = cols[idx] + 1
+    remainder = remainder - 1
+    idx = idx + 1
+    if idx > #cols then idx = 1 end
+  end
+
   return cols
 end
 
@@ -95,19 +134,52 @@ function widgets.columns_from_width(total_w)
 end
 
 
-function widgets.table_widths(total_w, min_widths)
+function widgets.table_widths(total_w, weights_or_widths)
   local width = clamp_int(total_w, 1, 512, 1)
-  local out = {}
+  local spec = weights_or_widths or {}
+  if #spec == 0 then return { width } end
+
+  local cols = {}
+  local flexible = {}
   local used = 0
-  for i, mw in ipairs(min_widths or {}) do
-    local v = clamp_int(mw, 2, 120, 4)
-    out[i] = v
+
+  for i, raw in ipairs(spec) do
+    local n = tonumber(raw) or 1
+    local v = clamp_int(n, 1, 120, 1)
+    cols[i] = v
     used = used + v
+    flexible[i] = true
   end
-  local extra = math.max(0, width - used)
-  local idx = #out
-  if idx > 0 then out[idx] = out[idx] + extra end
-  return out
+
+  local diff = width - used
+  if diff > 0 then
+    local idx = 1
+    while diff > 0 do
+      cols[idx] = cols[idx] + 1
+      diff = diff - 1
+      idx = idx + 1
+      if idx > #cols then idx = 1 end
+    end
+  elseif diff < 0 then
+    local need = -diff
+    local idx = #cols
+    while need > 0 and idx >= 1 do
+      if flexible[idx] and cols[idx] > 1 then
+        cols[idx] = cols[idx] - 1
+        need = need - 1
+      else
+        idx = idx - 1
+      end
+      if idx < 1 and need > 0 then idx = #cols end
+      local all_min = true
+      for j = 1, #cols do
+        if cols[j] > 1 then all_min = false break end
+      end
+      if all_min then break end
+    end
+  end
+
+  return cols
 end
 
 function widgets.layout_button(mon, x, y, label, status)

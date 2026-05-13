@@ -8,7 +8,7 @@ local function render(mon, model)
   ui.panel(mon, 1, 1, w, h, "MONITOR 3 - ENERGY & RESSOURCEN", model.status or "OK")
 
   local pct = model.capacity and model.capacity > 0 and ((model.stored or 0) / model.capacity) * 100 or 0
-  local summary_h = is_large and 11 or 9
+  local summary_h = is_large and 12 or 9
   local summary = widgets.panel_box(mon, 2, 2, w - 2, summary_h, "Energy Summary", model.status or "OK")
   ui.bigNumber(mon, summary.x + 1, summary.y, "Gesamtspeicher", string.format("%.1f", pct), "%", model.status or "OK")
   ui.text(mon, summary.x + 1, summary.y + 2, widgets.fit(string.format("Stored %.1f / %.1f", model.stored or 0, model.capacity or 0), summary.w - 2), colors.get("text"), colors.get("background"))
@@ -47,7 +47,8 @@ local function render(mon, model)
   ui.text(mon, resources.x, resources.y + 10, widgets.fit("Support online: " .. tostring(model.support_online or 0) .. " / " .. tostring(#(model.support_nodes or {})), resources.w), colors.get("muted"), colors.get("background"))
 
   local support_y = content_y + resources_h + 1
-  local support = widgets.panel_box(mon, right_x, support_y, right_w, math.max(7, (content_y + content_h) - support_y), "Support-Nodes", (model.support_stale or 0) > 0 and "WARNING" or "OK")
+  local support_h = math.max(7, (content_y + content_h) - support_y + 1)
+  local support = widgets.panel_box(mon, right_x, support_y, right_w, support_h, "Support-Nodes", (model.support_stale or 0) > 0 and "WARNING" or "OK")
   local support_widths = widgets.table_widths(support.w, { 7, 11, 9, 8, 8 })
   widgets.compact_header(mon, support.x, support.y, { "Node", "Rolle", "Status", "Seen", "Hinweis" }, support_widths)
   local sy = support.y + 1
