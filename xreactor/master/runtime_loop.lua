@@ -153,17 +153,19 @@ local function run_master()
         runtime.refs.ui_controller.handle_input(event)
         if event and event[1] == "monitor_touch" and runtime.refs.view_manager and runtime.refs.view_manager.last_input then
           local li = runtime.refs.view_manager.last_input
-          runtime.log(("UI touch: monitor=%s pos=%s,%s view=%s hit=%s action=%s dispatched=%s handled=%s err=%s"):format(
-            tostring(li.monitor or event[2] or "-"),
-            tostring(li.x or event[3] or "-"),
-            tostring(li.y or event[4] or "-"),
-            tostring(li.view or "-"),
-            tostring(li.hit and li.hit.type or "none"),
-            tostring(li.action or "none"),
-            tostring(li.dispatched),
-            tostring(li.handled),
-            tostring(li.dispatch_error or "-")
-          ), "DEBUG")
+          if li.hit or li.dispatch_error then
+            runtime.log(("UI touch: monitor=%s pos=%s,%s view=%s hit=%s action=%s dispatched=%s handled=%s err=%s"):format(
+              tostring(li.monitor or event[2] or "-"),
+              tostring(li.x or event[3] or "-"),
+              tostring(li.y or event[4] or "-"),
+              tostring(li.view or "-"),
+              tostring(li.hit and li.hit.type or "none"),
+              tostring(li.action or "none"),
+              tostring(li.dispatched),
+              tostring(li.handled),
+              tostring(li.dispatch_error or "-")
+            ), "DEBUG")
+          end
         end
       end
     end,

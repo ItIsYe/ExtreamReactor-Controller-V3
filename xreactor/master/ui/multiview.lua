@@ -34,6 +34,8 @@ function M:update_monitors(monitors)
 
   for idx, mon in ipairs(self.monitor_list) do
     self.monitor_index[mon.name] = mon
+    self.monitor_index[mon.id or mon.name] = mon
+    self.monitor_index[tostring(mon.mon)] = mon
     local id = mon.id or mon.name
     local prior = self.layout.monitors[id] or {}
     local role_view = primary_view(idx, self.view_order)
@@ -125,7 +127,7 @@ function M:render(monitors, data_map)
 end
 
 function M:handle_input(monitor_name, x, y)
-  local mon = self.monitor_index[monitor_name]
+  local mon = self.monitor_index[monitor_name] or self.monitor_index[tostring(monitor_name)]
   if not mon then return end
   local state = self.layout.monitors[mon.id or mon.name]
   if not state then return end

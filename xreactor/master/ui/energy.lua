@@ -8,22 +8,24 @@ local function render(mon, model)
   ui.panel(mon, 1, 1, w, h, "MONITOR 3 - ENERGY & RESSOURCEN", model.status or "OK")
 
   local pct = model.capacity and model.capacity > 0 and ((model.stored or 0) / model.capacity) * 100 or 0
-  local summary_h = is_large and 13 or 10
+  local summary_h = is_large and 14 or 11
   local summary = widgets.panel_box(mon, 2, 2, w - 2, summary_h, "Energy Summary", model.status or "OK")
-  ui.bigNumber(mon, summary.x + 1, summary.y, "Gesamtspeicher", string.format("%.1f", pct), "%", model.status or "OK")
+  ui.bigNumber(mon, summary.x + 1, summary.y, "Gesamtspeicher", string.format("%.1f", model.aggregate_percent or pct), "%", model.status or "OK")
   ui.text(mon, summary.x + 1, summary.y + 2, widgets.fit(string.format("Stored %.1f / %.1f", model.stored or 0, model.capacity or 0), summary.w - 2), colors.get("text"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 3, widgets.fit(string.format("Input %.1f MRF/t  |  Output %.1f MRF/t", model.input or 0, model.output or 0), summary.w - 2), colors.get("text"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 4, widgets.fit("Mode " .. tostring(model.mode or "-") .. " | Matrices " .. tostring(model.matrix_count or 0) .. ((model.matrix_only and " | Matrix-Only") or " | Hybrid"), summary.w - 2), colors.get("muted"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 5, widgets.fit(string.format("Nettofluss %.1f MRF/t | Aggregate %.1f%%", (model.input or 0) - (model.output or 0), model.aggregate_percent or 0), summary.w - 2), colors.get("text"), colors.get("background"))
+  ui.progress(mon, summary.x + 1, summary.y + 1, math.max(10, summary.w - 2), math.max(0, math.min(100, model.aggregate_percent or pct)) / 100, model.status or "OK")
 
   ui.text(mon, summary.x + 1, summary.y + 6, widgets.fit(tostring(model.resource_summary or ""), summary.w - 2), colors.get("muted"), colors.get("background"))
+  ui.text(mon, summary.x + 1, summary.y + 7, widgets.fit("Betrieb: " .. (model.matrix_only and "Matrix-Only" or "Hybrid/Storage") .. " | Support " .. tostring(model.support_online or 0) .. "/" .. tostring(#(model.support_nodes or {})), summary.w - 2), colors.get("text"), colors.get("background"))
 
   if (model.matrix_count or 0) == 1 and model.matrices and model.matrices[1] then
     local m = model.matrices[1]
-    ui.text(mon, summary.x + 1, summary.y + 7, widgets.fit(string.format("Single-Matrix %s: %.1f%% | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent or 0, m.input or 0, m.output or 0), summary.w - 2), colors.get("LIMITED"), colors.get("background"))
+    ui.text(mon, summary.x + 1, summary.y + 8, widgets.fit(string.format("Single-Matrix %s: %.1f%% | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent or 0, m.input or 0, m.output or 0), summary.w - 2), colors.get("LIMITED"), colors.get("background"))
   end
   if (model.capacity or 0) <= 0 and ((model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0) then
-    ui.text(mon, summary.x + 1, summary.y + 8, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
+    ui.text(mon, summary.x + 1, summary.y + 9, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
   end
 
   local content_y = 2 + summary_h + 1
