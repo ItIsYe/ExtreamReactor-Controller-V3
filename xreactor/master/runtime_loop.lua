@@ -7,6 +7,7 @@ local function run_master()
   bootstrap.setup({ role = "master", log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED, log_path = CONFIG.BOOTSTRAP_LOG_PATH })
   local require = bootstrap.require
   local constants, utils, health, monitor_manager = require("shared.constants"), require("core.utils"), require("core.health"), require("core.monitor_manager")
+  local build_info = require("shared.build_info")
   local sequencer_lib, overview_ui, rt_ui, energy_ui = require("master.startup_sequencer"), require("master.ui.overview"), require("master.ui.rt_dashboard"), require("master.ui.energy")
   local resources_ui, alarms_ui, alerts_ui, multiview_ui = require("master.ui.resources"), require("master.ui.alarms"), require("master.ui.alerts"), require("master.ui.multiview")
   local profiles, trends_lib, time, ui, config = require("master.profiles"), require("core.trends"), require("core.time"), require("core.ui"), require("master.config")
@@ -21,11 +22,18 @@ local function run_master()
   local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
   local debug_enabled = CONFIG.DEBUG_LOG_ENABLED ~= nil and CONFIG.DEBUG_LOG_ENABLED or config.debug_logging
   utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled, truncate = config.reset_log_on_start == true })
+  local runtime_log = function(message, level) utils.log("MASTER", message, level or "INFO") end
   runtime_context.normalize_config(config)
+  local release = build_info.get()
+  runtime_log(("Master runtime fingerprint: build=%s manifest=%s/%s snapshot_ui_shape=local ui_shape_logs=enabled touch_dispatch_diag=enabled"):format(
+    tostring(release.commit or release.version or "unknown"),
+    tostring(release.manifest_id or "unknown"),
+    tostring(release.manifest_version or "unknown")
+  ), "INFO")
 
   local runtime = runtime_context.new_runtime({ trends = trends_lib.new(600) })
   runtime.config = config
-  runtime.log = function(message, level) utils.log("MASTER", message, level or "INFO") end
+  runtime.log = runtime_log
   runtime.libs = { constants = constants, utils = utils, health = health, ui = ui, profiles = profiles, rt_sync = rt_sync, rt_sync_coalescer = rt_sync_coalescer_lib }
   local recovery_status = bootstrap.get_recovery_status and bootstrap.get_recovery_status() or nil
 
