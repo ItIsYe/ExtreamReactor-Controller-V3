@@ -35,14 +35,15 @@ function M.refresh_monitors(runtime, force)
     runtime.log(("Monitor refresh: scanned=%d healthy=%d force=%s"):format(#monitors, #healthy, tostring(force == true)), "INFO")
     for _, entry in ipairs(healthy) do
       runtime.log(
-        ("Primary monitor ready: id=%s name=%s width=%s height=%s size_tag=%s layout_class=%s text_scale=%s"):format(
+        ("Primary monitor ready: id=%s name=%s width=%s height=%s size_tag=%s layout_class=%s text_scale=%s configured_scale=%s"):format(
           tostring(entry.id or "?"),
           tostring(entry.name or "?"),
           tostring(entry.width or "?"),
           tostring(entry.height or "?"),
           tostring(entry.size_tag or "?"),
           tostring(entry.layout_class or "?"),
-          tostring(entry.text_scale or "?")
+          tostring(entry.text_scale or "?"),
+          tostring(runtime.refs.monitor_mgr and runtime.refs.monitor_mgr.scale or "?")
         ),
         "INFO"
       )

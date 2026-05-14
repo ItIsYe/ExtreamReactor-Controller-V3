@@ -81,13 +81,14 @@ local function render(mon, model)
 
     local ctrl_y = math.min(box.y + box.h - 6, box.y + row + 1)
     ui.text(mon, box.x, ctrl_y - 1, widgets.fit("Direktsteuerung", box.w), colors.get("text"), colors.get("background"))
-    local aw = widgets.status_badge(mon, box.x, ctrl_y, "AUTO", model.auto_profile and "LIMITED" or "OFFLINE", math.max(8, math.floor(box.w * 0.18)))
+    local aw = widgets.status_badge(mon, box.x, ctrl_y, "AUTO", model.auto_profile and "LIMITED" or "OFFLINE", math.max(10, math.floor(box.w * 0.24)))
     hits[#hits + 1] = { type = "auto", x1 = box.x, x2 = box.x + math.max(0, aw - 1), y1 = ctrl_y, y2 = ctrl_y + 1 }
-    local hw = widgets.status_badge(mon, box.x + aw + 2, ctrl_y, model.rt_global_off_hold and "RT-HOLD" or "RT-OFF", model.rt_global_off_hold and "WARNING" or "OFFLINE", math.max(10, math.floor(box.w * 0.26)))
+    local hw = widgets.status_badge(mon, box.x + aw + 2, ctrl_y, model.rt_global_off_hold and "RT-HOLD" or "RT-OFF", model.rt_global_off_hold and "WARNING" or "OFFLINE", math.max(12, math.floor(box.w * 0.34)))
     hits[#hits + 1] = { type = "rt_hold", x1 = box.x + aw + 2, x2 = box.x + aw + 2 + math.max(0, hw - 1), y1 = ctrl_y, y2 = ctrl_y + 1 }
     ui.text(mon, box.x, ctrl_y + 1, widgets.fit("Soll " .. string.format("%.1f MRF/t", model.power_target or 0) .. " | Ist " .. string.format("%.1f MRF/t", model.power_actual or 0), box.w), colors.get("muted"), colors.get("background"))
     ui.text(mon, box.x, ctrl_y + 2, widgets.fit("Trefferzonen aktiv: Profile/AUTO/RT-HOLD direkt antippbar | " .. tostring(model.controls_summary or ""), box.w), colors.get("LIMITED"), colors.get("background"))
-    ui.text(mon, box.x, ctrl_y + 3, widgets.fit("RT-Lage: " .. tostring(model.rt_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
+    ui.text(mon, box.x, ctrl_y + 3, widgets.fit("Node-Lage: total=" .. tostring(model.nodes_total or 0) .. " live=" .. tostring(model.nodes_live or 0) .. " stale=" .. tostring(model.nodes_stale or 0), box.w), colors.get("text"), colors.get("background"))
+    ui.text(mon, box.x, ctrl_y + 4, widgets.fit("RT-Lage: " .. tostring(model.rt_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + control_w + 1, content_top, "Meldungen", function()

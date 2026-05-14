@@ -145,7 +145,10 @@ function M:handle_input(monitor_name, x, y)
 
   local view_key = state.view or self.view_order[1] or "overview"
   local view = self.views[view_key]
-  if not (view and view.hit_test and self.on_action) then return end
+  if not (view and view.hit_test and self.on_action) then
+    self.last_input = { monitor = mon.name, x = x, y = y, view = view_key, hit = nil, hit_error = "no-hit-test-or-action-handler", dispatched = false, handled = false }
+    return
+  end
 
   local ok, hit = pcall(view.hit_test, mon.mon, x, y)
   self.last_input = { monitor = mon.name, x = x, y = y, view = view_key, hit = ok and hit or nil, hit_error = ok and nil or tostring(hit) }

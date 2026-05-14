@@ -9,7 +9,7 @@ function M.run(ctx)
   if configured_scale ~= nil and not resolved_scale then
     ctx.utils.log("MASTER", "Ignoring non-numeric monitor scale config value: " .. tostring(configured_scale), "WARN")
   end
-  ctx.utils.log("MASTER", "Resolved monitor scale for scan: " .. tostring(resolved_scale), "INFO")
+  ctx.utils.log("MASTER", "Configured monitor scale for master scan: raw=" .. tostring(configured_scale) .. " resolved=" .. tostring(resolved_scale), "INFO")
   ctx.refs.monitor_mgr = ctx.monitor_manager.new({
     log_prefix = "MASTER",
     node_id = ctx.node_id,

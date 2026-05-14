@@ -218,7 +218,13 @@ function M.new(opts)
     end
     table.sort(overview.nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
     table.sort(rt.rt_nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
+    if #rt.rt_nodes == 0 then
+      rt.rt_nodes[1] = { id = "NO-RT", status = "OFFLINE", state = "IDLE", node_mode = "-", assignment_state = "UNASSIGNED", assignment_reason = "Keine RT-Node-Daten im Tick", control_source = "LOCAL", display_mode = "RT-Hauptansicht aktiv", queue_state = "idle", queue_step = "-", freshness = "n/a", node_status = "OFFLINE" }
+    end
     table.sort(energy.support_nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
+    if #energy.support_nodes == 0 then
+      energy.support_nodes[1] = { id = "NO-SUPPORT", role = "-", status = "OFFLINE", last_seen_age = -1, note = "Keine Support-Nodes sichtbar", freshness = "n/a" }
+    end
     local pct = energy.capacity > 0 and (energy.stored / energy.capacity) * 100 or 0
     energy.aggregate_percent = pct
     energy.status = pct < 15 and 'EMERGENCY' or (pct < 30 and 'WARNING' or 'OK')
