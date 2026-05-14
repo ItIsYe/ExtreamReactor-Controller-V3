@@ -57,12 +57,12 @@ function M.new(opts)
     local reason = tostring(rt_node.assignment_reason or "-")
     local control = normalize_control_source(rt_node.control_source, assign)
     if assign == "ASSIGNED" then
-      rt_node.display_mode = (control == "MASTER") and "Master-gefuehrt" or "Lokal aktiv (Master-Zuordnung fehlt)"
+      rt_node.display_mode = (control == "MASTER") and "Master-gefuehrt" or "Lokale Steuerung trotz Master-Zuordnung"
     elseif assign == "UNAVAILABLE" then
       rt_node.display_mode = "Master nicht verfuegbar"
       control = "LOCAL"
     else
-      rt_node.display_mode = (control == "MASTER") and "Master-Zuordnung unklar" or "Lokal/Fallback (nicht zugeordnet)"
+      rt_node.display_mode = (control == "MASTER") and "Master-Steuerung ohne klare Zuordnung" or "Lokal/Fallback (nicht zugeordnet)"
       if reason == "-" and tostring(rt_node.node_mode or rt_node.mode or "-"):upper() == "AUTONOM" then
         reason = "Node ohne Master-Zuordnung"
       end
@@ -71,6 +71,18 @@ function M.new(opts)
     rt_node.assignment_reason = reason
     rt_node.control_source = control
     return rt_node
+  end
+
+
+  local function normalize_assignment_reason(reason, assignment, node_mode, stale)
+    local text = tostring(reason or "-")
+    if text ~= "" and text ~= "-" then return text end
+    if stale then return "Keine frischen Node-Daten" end
+    local mode = tostring(node_mode or "-"):upper()
+    if assignment == "ASSIGNED" then return "Master-Zuordnung aktiv" end
+    if assignment == "UNAVAILABLE" then return "Master fuer Zuordnung nicht verfuegbar" end
+    if mode == "AUTONOM" then return "Autonom ohne Master-Zuordnung" end
+    return "Master-Zuordnung offen"
   end
 
   local function matrix_rows_from_payload(e)
@@ -102,7 +114,7 @@ function M.new(opts)
     local top = c.alert_service and c.alert_service:get_top_critical(3) or {}
     local summary = c.alert_service and c.alert_service:get_summary() or 'Keine aktiven Meldungen'
 
-    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '' }
+    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '', ops_hints = {} }
     if (counts.CRITICAL or 0) > 0 then overview.system_status = 'EMERGENCY' elseif (counts.WARN or 0) > 0 then overview.system_status = 'WARNING' end
     for i, a in ipairs(top) do if i > 4 then break end overview.alert_rows[#overview.alert_rows+1] = { title = tostring(a.title or a.code or 'Alert'), text = tostring(a.message or a.detail or 'Keine Details'), status = normalize_status(a.severity or 'WARNING') } end
 
@@ -120,15 +132,24 @@ function M.new(opts)
       if stale then overview.nodes_stale = (overview.nodes_stale or 0) + 1 else overview.nodes_live = (overview.nodes_live or 0) + 1 end
       if node.role == c.constants.roles.RT_NODE then
         if not stale then overview.rt_online = overview.rt_online + 1 end
-        local rt_node = node.rt or { id = node.id, status = normalize_status(node.status), mode = node.mode, assignment_state = node.assignment_state }
-        rt_node.status = stale and 'OFFLINE' or normalize_status(rt_node.status)
+        local rt_node = node.rt or { status = normalize_status(node.status), mode = node.mode, assignment_state = node.assignment_state }
+        rt_node.id = first_nonempty(rt_node.id, node.id, node.node_id, node.sender_id, "UNKNOWN")
+        rt_node.status = stale and 'OFFLINE' or normalize_status(rt_node.status or node.status)
         rt_node.last_seen_age = age
         rt_node.freshness = freshness_note
         rt_node.node_status = node_status
-        rt_node.node_mode = node_mode
+        rt_node.node_mode = first_nonempty(rt_node.node_mode, rt_node.mode, node_mode, "-")
+        rt_node.mode = rt_node.node_mode
         rt_node.assignment_state = rt_node.assignment_state or node.assignment_state or node.bindings_state or (node.last_setpoints and node.last_setpoints.assignment_state) or "UNASSIGNED"
-        rt_node.assignment_reason = rt_node.assignment_reason or node.assignment_reason or (node.last_setpoints and node.last_setpoints.assignment_reason) or node.bindings_summary or "-"
         rt_node.control_source = rt_node.control_source or node.control_source or (node.last_setpoints and node.last_setpoints.control_source)
+        rt_node.assignment_reason = normalize_assignment_reason(
+          rt_node.assignment_reason or node.assignment_reason or (node.last_setpoints and node.last_setpoints.assignment_reason) or node.bindings_summary,
+          rt_node.assignment_state,
+          rt_node.node_mode,
+          stale
+        )
+        rt_node.queue_state = rt_node.queue_state or node.queue_state or node.state or "idle"
+        rt_node.queue_step = rt_node.queue_step or node.queue_step or (node.last_command_result and node.last_command_result.transition) or "-"
         rt_node = normalize_rt_display(rt_node)
         if stale then rt.rt_stale = (rt.rt_stale or 0) + 1 end
         rt.rt_nodes[#rt.rt_nodes+1] = rt_node
@@ -142,16 +163,20 @@ function M.new(opts)
         energy.capacity = energy.capacity + pick_number(e.aggregate_capacity, e.capacity, e.matrix_capacity, total.capacity)
         energy.input = energy.input + pick_number(e.aggregate_input, e.input, e.matrix_in, total.input)
         energy.output = energy.output + pick_number(e.aggregate_output, e.output, e.matrix_out, total.output)
-        energy.mode = first_nonempty(e.mode, energy.mode, "-")
+        energy.mode = first_nonempty(e.mode, e.operating_mode, energy.mode, "-")
         energy.support_nodes[#energy.support_nodes + 1] = { id = node.id, role = node.role or '-', status = stale and 'OFFLINE' or normalize_status(node.status or 'OK'), last_seen_age = age, note = e.mode or e.note or node.bindings_summary or "Energy-Node", freshness = freshness_note }
         if stale then energy.support_stale = (energy.support_stale or 0) + 1 else energy.support_online = (energy.support_online or 0) + 1 end
+        local matrix_only = (e.matrix_only == true) or (e.kind == "matrix_only") or (e.payload_kind == "matrix_only")
+        energy.matrix_only = energy.matrix_only or matrix_only
         local matrices = matrix_rows_from_payload(e)
+        energy.matrix_sources = (energy.matrix_sources or 0) + (#matrices > 0 and 1 or 0)
         for _, m in ipairs(matrices) do
           local copy = {}
           for k,v in pairs(m) do copy[k]=v end
           copy.last_seen_age = age
           copy.status = stale and 'OFFLINE' or normalize_status(copy.status or node.status or 'OK')
-          copy.percent = pick_number(copy.percent, copy.fill, copy.level, 0)
+          copy.percent = pick_number(copy.percent, copy.fill, copy.level, copy.aggregate_percent, 0)
+          if copy.percent > 0 and copy.percent <= 1 then copy.percent = copy.percent * 100 end
           copy.input = pick_number(copy.input, copy.inflow, copy.rate_in, 0)
           copy.output = pick_number(copy.output, copy.outflow, copy.rate_out, 0)
           copy.id = first_nonempty(copy.id, copy.label, copy.name, node.id .. "-matrix")
@@ -175,8 +200,15 @@ function M.new(opts)
     overview.nodes_total = overview.nodes_total or 0
     overview.nodes_live = overview.nodes_live or 0
     overview.nodes_stale = overview.nodes_stale or 0
-    overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0)
     energy.matrix_count = #energy.matrices
+    overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d energy=%d src=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0, energy.matrix_count or 0, energy.matrix_sources or 0)
+    overview.rt_summary = string.format("RT active=%d startup=%d shutdown=%d stale=%d", rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0)
+    overview.energy_hint = string.format("Energy %.1f%% | Mode %s | Matrices %d", energy.aggregate_percent or 0, tostring(energy.mode or "-"), energy.matrix_count or 0)
+    overview.ops_hints[#overview.ops_hints + 1] = (overview.nodes_stale or 0) > 0 and "Stale Nodes erkannt: Kommunikationslage pruefen" or "Alle Nodes liefern frische Daten"
+    overview.ops_hints[#overview.ops_hints + 1] = (energy.matrix_count or 0) > 0 and "Matrixdaten live im Master-Modell" or "Keine Matrixzeilen gemeldet"
+    overview.ops_hints[#overview.ops_hints + 1] = (energy.matrix_only and "Energy meldet Matrix-Only Betrieb") or "Energy meldet kombinierte Storage/Matrix-Daten"
+    overview.ops_hints[#overview.ops_hints + 1] = (rt.rt_stale or 0) > 0 and "RT stale: Zuordnung/Netz pruefen" or "RT-Sync ueberwiegend stabil"
+    energy.resource_summary = string.format("Fuel %.1f | Water %.1f", energy.resources.fuel_total or 0, energy.resources.water_total or 0)
     overview.clock_label = os.date('!%H:%M UTC')
     rt.rt_global_off_hold = overview.rt_global_off_hold
     return { overview = overview, rt = rt, energy = energy, resources = {} }

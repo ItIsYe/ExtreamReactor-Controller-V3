@@ -7,10 +7,16 @@ local function render_rt_card(mon, x, y, w, rt)
   widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt.state or "OFF"), rt.status or "OFFLINE", 9)
   ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %.1f%%", rt.target or 0), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 2, widgets.fit(string.format("Ist %.1f%%", rt.actual_output or rt.output or 0), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 3, widgets.pad("Node", 9) .. widgets.fit(tostring(rt.node_mode or rt.mode or "-"), box.w - 9), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 3, widgets.pad("Node", 9) .. widgets.fit(tostring(rt.node_mode or rt.mode or "-") .. " | ID " .. tostring(rt.id or "?"), box.w - 9), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 4, widgets.pad("Master", 9) .. widgets.fit(tostring(rt.display_mode or "-"), box.w - 9), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 5, widgets.fit("Zuordnung: " .. tostring(rt.assignment_state or "-") .. " | " .. tostring(rt.assignment_reason or "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 6, widgets.fit("Steuerquelle: " .. tostring(rt.control_source or "-"), box.w), colors.get("muted"), colors.get("background"))
+  local assign = tostring(rt.assignment_state or "-")
+  local control = tostring(rt.control_source or "-")
+  local sem = (assign == "UNASSIGNED" and control == "LOCAL") and "(autonom/fallback ohne Master-Zuordnung)" or ""
+  ui.text(mon, box.x, box.y + 5, widgets.fit("Zuordnung: " .. assign .. " | " .. tostring(rt.assignment_reason or "-") .. " " .. sem, box.w), colors.get("muted"), colors.get("background"))
+  local sem_note = ""
+  if assign == "ASSIGNED" and control == "LOCAL" then sem_note = " (Abweichung: assigned aber lokal)" end
+  if assign == "UNASSIGNED" and control == "MASTER" then sem_note = " (Abweichung: unassigned aber master)" end
+  ui.text(mon, box.x, box.y + 6, widgets.fit("Steuerquelle: " .. tostring(rt.control_source or "-") .. sem_note, box.w), colors.get("muted"), colors.get("background"))
   ui.progress(mon, box.x, box.y + 7, math.max(8, box.w), math.max(0, math.min(100, rt.actual_output or rt.output or 0)) / 100, rt.status or "OFFLINE")
   ui.text(mon, box.x, box.y + 8, widgets.fit("Sync: " .. tostring(rt.last_seen_age or "-") .. "s | " .. tostring(rt.freshness or "-"), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 9, widgets.fit("Node: " .. tostring(rt.node_status or rt.status or "-") .. " | Mode: " .. tostring(rt.node_mode or rt.mode or "-"), box.w), colors.get("muted"), colors.get("background"))

@@ -80,7 +80,16 @@ local function run_master()
         local ui_models = runtime.refs.ui_controller and runtime.refs.ui_controller._last_models
         local rt_model = ui_models and ui_models.rt or nil
         local energy_model = ui_models and ui_models.energy or nil
-        local sample_rt = rt_model and rt_model.rt_nodes and rt_model.rt_nodes[1] or nil
+        local sample_rt = nil
+        if rt_model and rt_model.rt_nodes then
+          for _, candidate in ipairs(rt_model.rt_nodes) do
+            if tostring(candidate.id or "") ~= "" and tostring(candidate.id or "UNKNOWN") ~= "UNKNOWN" then
+              sample_rt = candidate
+              break
+            end
+          end
+          sample_rt = sample_rt or rt_model.rt_nodes[1]
+        end
         runtime.log(("UI model density: nodes=%d rt=%d support=%d queue=%d ov=%d rt_vm=%d support_vm=%d matrices=%d"):format(
           total_nodes,
           rt_nodes,
@@ -89,15 +98,18 @@ local function run_master()
           ms.overview_nodes or 0,
           ms.rt_nodes or 0,
           ms.support_nodes or 0,
-          ms.matrices or 0
+          (energy_model and (energy_model.matrix_count or #(energy_model.matrices or {}))) or (ms.matrices or 0)
         ), "DEBUG")
         if sample_rt then
-          runtime.log(("UI RT semantic sample: id=%s node_mode=%s display=%s assignment=%s control=%s freshness=%s"):format(
+          runtime.log(("UI RT semantic sample: id=%s node_mode=%s display=%s assignment=%s reason=%s control=%s queue=%s/%s freshness=%s"):format(
             tostring(sample_rt.id or "?"),
             tostring(sample_rt.node_mode or sample_rt.mode or "-"),
             tostring(sample_rt.display_mode or "-"),
             tostring(sample_rt.assignment_state or "-"),
+            tostring(sample_rt.assignment_reason or "-"),
             tostring(sample_rt.control_source or "-"),
+            tostring(sample_rt.queue_state or "-"),
+            tostring(sample_rt.queue_step or "-"),
             tostring(sample_rt.freshness or "-")
           ), "DEBUG")
         end
@@ -106,9 +118,10 @@ local function run_master()
           for _, node in pairs(runtime.state.nodes or {}) do
             if node.role == constants.roles.ENERGY_NODE then energy_node_count = energy_node_count + 1 end
           end
-          runtime.log(("UI energy model: mode=%s matrices=%d stored=%.1f capacity=%.1f input=%.1f output=%.1f empty=%s"):format(
+          runtime.log(("UI energy model: mode=%s matrices=%d matrix_count=%d stored=%.1f capacity=%.1f input=%.1f output=%.1f empty=%s"):format(
             tostring(energy_model.mode or "-"),
             #(energy_model.matrices or {}),
+            tonumber(energy_model.matrix_count or #(energy_model.matrices or {})) or 0,
             tonumber(energy_model.stored or 0) or 0,
             tonumber(energy_model.capacity or 0) or 0,
             tonumber(energy_model.input or 0) or 0,

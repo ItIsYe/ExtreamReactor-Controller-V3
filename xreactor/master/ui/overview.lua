@@ -26,7 +26,7 @@ local function render(mon, model)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
   ui.panel(mon, 1, 1, w, h, "MONITOR 1 - UEBERSICHT & STEUERUNG", model.system_status or "OK")
 
-  local header_h = is_large and 7 or 6
+  local header_h = is_large and 8 or 7
   local header = widgets.panel_box(mon, 2, 2, w - 2, header_h, "Systemstatus", model.system_status or "OK")
   local top_badges = widgets.split_columns(header.w, is_large and { 2, 2, 2, 2, 2 } or { 3, 3, 2, 2 }, 1)
   local bx = header.x
@@ -46,9 +46,10 @@ local function render(mon, model)
   ui.text(mon, header.x, header.y + 1, widgets.fit((counts.CRITICAL or 0) .. " KRIT | " .. (counts.WARN or 0) .. " WARN | " .. (counts.INFO or 0) .. " INFO", header.w - 14), colors.get("muted"), colors.get("background"))
   ui.text(mon, header.x + math.max(0, header.w - 12), header.y + 1, widgets.fit(tostring(model.clock_label or ""), 12), colors.get("muted"), colors.get("background"))
   ui.text(mon, header.x, header.y + 2, widgets.fit(tostring(model.peer_summary or "Peer-Lage unbekannt"), header.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, header.x, header.y + 3, widgets.fit(tostring(model.energy_hint or "Energy-Lage unbekannt"), header.w), colors.get("muted"), colors.get("background"))
 
   local content_top = 2 + header_h
-  local bottom_h = is_large and math.max(12, math.floor(h * 0.34)) or math.max(8, math.floor(h * 0.24))
+  local bottom_h = is_large and math.max(14, math.floor(h * 0.42)) or math.max(10, math.floor(h * 0.30))
   local top_h = math.max(10, h - content_top - bottom_h)
 
   local top_cols = widgets.split_columns(w - 2, is_large and { 3, 2 } or { 3, 2 }, 1)
@@ -113,6 +114,8 @@ local function render(mon, model)
     end
     local stale_status = model.nodes_stale and model.nodes_stale > 0 and "WARNING" or "OK"
     widgets.stat_card(mon, box.x, box.y + 5, box.w, "Node Freshness", tostring(model.nodes_live or 0) .. " live", tostring(model.nodes_stale or 0) .. " stale", stale_status)
+    ui.text(mon, box.x, box.y + 10, widgets.fit(tostring(model.rt_summary or "RT-Lage unbekannt"), box.w), colors.get("muted"), colors.get("background"))
+    ui.text(mon, box.x, box.y + 11, widgets.fit(tostring(model.peer_summary or "Peer-Lage unbekannt"), box.w), colors.get("muted"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + kpi_w + 1, bottom_y, "Nodes", function()
@@ -127,6 +130,13 @@ local function render(mon, model)
     end
     if y == box.y + 1 then ui.text(mon, box.x, y, "Keine Nodes verbunden", colors.get("OFFLINE"), colors.get("background")) end
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
+
+  safe_section(mon, 2, bottom_y + bottom_h - 2, "Leitstand-Hinweise", function()
+    local hints = model.ops_hints or {}
+    if #hints > 0 then
+      ui.text(mon, 2, bottom_y + bottom_h - 2, widgets.fit("Hinweise: " .. table.concat(hints, " | "), w - 4), colors.get("muted"), colors.get("background"))
+    end
+  end)
 
   if #section_errors > 0 then model.ui_errors = section_errors end
   hit_cache[mon] = hits
