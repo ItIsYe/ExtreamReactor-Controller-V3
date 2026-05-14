@@ -26,7 +26,7 @@ local function render(mon, model)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
   ui.panel(mon, 1, 1, w, h, "MONITOR 1 - UEBERSICHT & STEUERUNG", model.system_status or "OK")
 
-  local header_h = is_large and 8 or 7
+  local header_h = is_large and 9 or 8
   local header = widgets.panel_box(mon, 2, 2, w - 2, header_h, "Systemstatus", model.system_status or "OK")
   local top_badges = widgets.split_columns(header.w, is_large and { 2, 2, 2, 2, 2 } or { 3, 3, 2, 2 }, 1)
   local bx = header.x
@@ -49,7 +49,7 @@ local function render(mon, model)
   ui.text(mon, header.x, header.y + 3, widgets.fit(tostring(model.energy_hint or "Energy-Lage unbekannt"), header.w), colors.get("muted"), colors.get("background"))
 
   local content_top = 2 + header_h
-  local bottom_h = is_large and math.max(14, math.floor(h * 0.42)) or math.max(10, math.floor(h * 0.30))
+  local bottom_h = is_large and math.max(13, math.floor(h * 0.40)) or math.max(9, math.floor(h * 0.30))
   local top_h = math.max(10, h - content_top - bottom_h)
 
   local top_cols = widgets.split_columns(w - 2, is_large and { 3, 2 } or { 3, 2 }, 1)
@@ -58,7 +58,7 @@ local function render(mon, model)
 
   local hits = {}
   safe_section(mon, 2, content_top, "Steuerung", function()
-    local box = widgets.panel_box(mon, 2, content_top, control_w, top_h, "Globale Steuerung", "OK")
+    local box = widgets.panel_box(mon, 2, content_top, control_w, top_h, "Globale Steuerung / Aktionen", "OK")
     local controls_cols = widgets.split_columns(box.w, is_large and { 1, 1, 1 } or { 1, 1 }, 1)
     local profiles = model.profile_list or {}
     local row = 0
@@ -79,12 +79,15 @@ local function render(mon, model)
       if box.y + row >= box.y + box.h - 5 then break end
     end
 
-    local ctrl_y = math.min(box.y + box.h - 4, box.y + row + 1)
+    local ctrl_y = math.min(box.y + box.h - 6, box.y + row + 1)
+    ui.text(mon, box.x, ctrl_y - 1, widgets.fit("Direktsteuerung", box.w), colors.get("text"), colors.get("background"))
     local aw = widgets.status_badge(mon, box.x, ctrl_y, "AUTO", model.auto_profile and "LIMITED" or "OFFLINE", math.max(8, math.floor(box.w * 0.18)))
     hits[#hits + 1] = { type = "auto", x1 = box.x, x2 = box.x + math.max(0, aw - 1), y = ctrl_y }
     local hw = widgets.status_badge(mon, box.x + aw + 2, ctrl_y, model.rt_global_off_hold and "RT-HOLD" or "RT-OFF", model.rt_global_off_hold and "WARNING" or "OFFLINE", math.max(10, math.floor(box.w * 0.26)))
     hits[#hits + 1] = { type = "rt_hold", x1 = box.x + aw + 2, x2 = box.x + aw + 2 + math.max(0, hw - 1), y = ctrl_y }
     ui.text(mon, box.x, ctrl_y + 1, widgets.fit("Soll " .. string.format("%.1f MRF/t", model.power_target or 0) .. " | Ist " .. string.format("%.1f MRF/t", model.power_actual or 0), box.w), colors.get("muted"), colors.get("background"))
+    ui.text(mon, box.x, ctrl_y + 2, widgets.fit("Trefferzonen aktiv: Profile/AUTO/RT-HOLD direkt antippbar", box.w), colors.get("LIMITED"), colors.get("background"))
+    ui.text(mon, box.x, ctrl_y + 3, widgets.fit("RT-Lage: " .. tostring(model.rt_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + control_w + 1, content_top, "Meldungen", function()

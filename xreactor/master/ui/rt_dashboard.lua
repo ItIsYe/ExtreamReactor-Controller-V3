@@ -3,24 +3,25 @@ local colors = require("shared.colors")
 local widgets = require("master.ui.widgets")
 
 local function render_rt_card(mon, x, y, w, rt)
-  local box = widgets.panel_box(mon, x, y, w, 12, "RT-" .. tostring(rt.id or "?"), rt.status or "OFFLINE")
+  local box = widgets.panel_box(mon, x, y, w, 13, "RT-" .. tostring(rt.id or "UNKNOWN"), rt.status or "OFFLINE")
   widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt.state or "OFF"), rt.status or "OFFLINE", 9)
   ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %.1f%%", rt.target or 0), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 2, widgets.fit(string.format("Ist %.1f%%", rt.actual_output or rt.output or 0), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 3, widgets.pad("Node", 9) .. widgets.fit(tostring(rt.node_mode or rt.mode or "-") .. " | ID " .. tostring(rt.id or "?"), box.w - 9), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 3, widgets.pad("Node", 9) .. widgets.fit(tostring(rt.node_mode or rt.mode or "-") .. " | ID " .. tostring(rt.id or "UNKNOWN"), box.w - 9), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 4, widgets.pad("Master", 9) .. widgets.fit(tostring(rt.display_mode or "-") .. " | Quelle " .. tostring(rt.control_source or "-"), box.w - 9), colors.get("text"), colors.get("background"))
   local assign = tostring(rt.assignment_state or "-")
   local control = tostring(rt.control_source or "-")
   local sem = (assign == "UNASSIGNED" and control == "LOCAL") and "(autonom/fallback ohne Master-Zuordnung)" or ""
-  ui.text(mon, box.x, box.y + 5, widgets.fit("Zuordnung: " .. assign .. " | " .. tostring(rt.assignment_reason or "-") .. " " .. sem, box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 5, widgets.fit("Zuordnung: " .. assign .. " | " .. tostring(rt.assignment_reason or "-"), box.w), colors.get("muted"), colors.get("background"))
   local sem_note = ""
   if assign == "ASSIGNED" and control == "LOCAL" then sem_note = " (Abweichung: assigned aber lokal)" end
   if assign == "UNASSIGNED" and control == "MASTER" then sem_note = " (Abweichung: unassigned aber master)" end
-  ui.text(mon, box.x, box.y + 6, widgets.fit("Steuerquelle: " .. tostring(rt.control_source or "-") .. sem_note, box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 6, widgets.fit("Steuerquelle: " .. tostring(rt.control_source or "-") .. sem_note .. " " .. sem, box.w), colors.get("muted"), colors.get("background"))
   ui.progress(mon, box.x, box.y + 7, math.max(8, box.w), math.max(0, math.min(100, rt.actual_output or rt.output or 0)) / 100, rt.status or "OFFLINE")
   ui.text(mon, box.x, box.y + 8, widgets.fit("Sync: " .. tostring(rt.last_seen_age or "-") .. "s | " .. tostring(rt.freshness or "-"), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 9, widgets.fit("Node: " .. tostring(rt.node_status or rt.status or "-") .. " | Mode: " .. tostring(rt.node_mode or rt.mode or "-"), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 10, widgets.fit("Queue: " .. tostring(rt.queue_state or "idle") .. " | Step: " .. tostring(rt.queue_step or "-") .. " | Fresh " .. tostring(rt.freshness or "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 11, widgets.fit("Master-Lage: Assignment=" .. tostring(rt.assignment_state or "-") .. " / Control=" .. tostring(rt.control_source or "-") .. " / Display=" .. tostring(rt.display_mode or "-"), box.w), colors.get("muted"), colors.get("background"))
 end
 
 local function render(mon, model)
@@ -40,6 +41,7 @@ local function render(mon, model)
   sx = sx + badge_cols[4] + 1
   widgets.status_badge(mon, sx, summary.y, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", badge_cols[5])
   ui.text(mon, summary.x, summary.y + 1, widgets.fit("Klarlage: Node-Modus vs Zuordnung vs Steuerquelle getrennt dargestellt", summary.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, summary.x, summary.y + 2, widgets.fit("Assigned " .. tostring(model.assigned or 0) .. " | Unassigned " .. tostring(model.unassigned or 0) .. " | Master " .. tostring(model.master_control or 0) .. " | Local " .. tostring(model.local_control or 0), summary.w), colors.get("text"), colors.get("background"))
 
   local queue_h = is_large and math.max(15, math.floor(h * 0.38)) or math.max(10, math.floor(h * 0.28))
   local cards_top = is_large and 10 or 9
@@ -47,13 +49,13 @@ local function render(mon, model)
   local cols = is_large and ((w >= 150 and 4) or 3) or ((w >= 180 and 4) or (w >= 136 and 3) or 2)
   local gap = 1
   local card_w = math.max(30, math.floor((w - 3 - ((cols - 1) * gap)) / cols))
-  local rows = math.max(1, math.floor(cards_h / 13))
+  local rows = math.max(1, math.floor(cards_h / 14))
   for i, rt in ipairs(model.rt_nodes or {}) do
     local idx = i - 1
     local r = math.floor(idx / cols)
     if r >= rows then break end
     local c = idx % cols
-    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 13, card_w, rt)
+    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 14, card_w, rt)
   end
 
   local queue = widgets.panel_box(mon, 2, h - queue_h + 1, w - 2, queue_h, "Sequencer / Queue", "LIMITED")
