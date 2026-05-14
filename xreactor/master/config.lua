@@ -101,6 +101,8 @@ return {
   startup_ramp = CONFIG.DEFAULT_STARTUP_RAMP,
   startup_stage_timeout_s = CONFIG.DEFAULT_STARTUP_STAGE_TIMEOUT,
   rt_default_mode = CONFIG.DEFAULT_RT_MODE,
+  monitor_scale = 1.0,
+  ui_scale_default = 1.0,
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
   reset_log_on_start = CONFIG.DEFAULT_RESET_LOG_ON_START,
   alert_eval_interval = CONFIG.DEFAULT_ALERT_EVAL_INTERVAL,

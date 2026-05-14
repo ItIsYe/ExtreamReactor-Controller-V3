@@ -20,6 +20,9 @@ local function render(mon, model)
   ui.text(mon, summary.x + 1, summary.y + 6, widgets.fit(tostring(model.resource_summary or ""), summary.w - 2), colors.get("muted"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 7, widgets.fit("Betrieb: " .. (model.matrix_only and "Matrix-Only" or "Hybrid/Storage") .. " | Support " .. tostring(model.support_online or 0) .. "/" .. tostring(#(model.support_nodes or {})), summary.w - 2), colors.get("text"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 8, widgets.fit("Summary: " .. tostring(model.energy_summary or "-") , summary.w - 2), colors.get("muted"), colors.get("background"))
+  if model.matrix_only then
+    widgets.status_badge(mon, summary.x + 1, summary.y + 9, "MATRIX-ONLY BETRIEB", "LIMITED", math.max(20, math.floor((summary.w - 2) * 0.55)))
+  end
 
   if (model.matrix_count or 0) == 1 and model.matrices and model.matrices[1] then
     local m = model.matrices[1]

@@ -113,6 +113,7 @@ function manager:scan()
           utils.log(self.log_prefix, "Disabling monitor " .. tostring(entry.name) .. " during scan (setTextScale failed: " .. tostring(scale_err) .. ")", "WARN")
           goto continue
         end
+        utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " text scale set to " .. tostring(self.scale), "DEBUG")
       end
       local effective_scale = self.scale
       local scale_read_ok, scale_read = safe_wrapped_call(mon, "getTextScale")
