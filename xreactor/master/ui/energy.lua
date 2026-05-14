@@ -8,31 +8,38 @@ local function render(mon, model)
   ui.panel(mon, 1, 1, w, h, "MONITOR 3 - ENERGY & RESSOURCEN", model.status or "OK")
 
   local pct = model.capacity and model.capacity > 0 and ((model.stored or 0) / model.capacity) * 100 or 0
-  local summary_h = is_large and 12 or 9
+  local summary_h = is_large and 13 or 10
   local summary = widgets.panel_box(mon, 2, 2, w - 2, summary_h, "Energy Summary", model.status or "OK")
   ui.bigNumber(mon, summary.x + 1, summary.y, "Gesamtspeicher", string.format("%.1f", pct), "%", model.status or "OK")
   ui.text(mon, summary.x + 1, summary.y + 2, widgets.fit(string.format("Stored %.1f / %.1f", model.stored or 0, model.capacity or 0), summary.w - 2), colors.get("text"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 3, widgets.fit(string.format("Input %.1f MRF/t  |  Output %.1f MRF/t", model.input or 0, model.output or 0), summary.w - 2), colors.get("text"), colors.get("background"))
-  ui.text(mon, summary.x + 1, summary.y + 4, widgets.fit("Mode " .. tostring(model.mode or "-") .. " | Matrices " .. tostring(model.matrix_count or 0), summary.w - 2), colors.get("muted"), colors.get("background"))
+  ui.text(mon, summary.x + 1, summary.y + 4, widgets.fit("Mode " .. tostring(model.mode or "-") .. " | Matrices " .. tostring(model.matrix_count or 0) .. ((model.matrix_only and " | Matrix-Only") or ""), summary.w - 2), colors.get("muted"), colors.get("background"))
+  ui.text(mon, summary.x + 1, summary.y + 5, widgets.fit(string.format("Nettofluss %.1f MRF/t | Aggregate %.1f%%", (model.input or 0) - (model.output or 0), model.aggregate_percent or 0), summary.w - 2), colors.get("text"), colors.get("background"))
+
+  if (model.matrix_count or 0) == 1 and model.matrices and model.matrices[1] then
+    local m = model.matrices[1]
+    ui.text(mon, summary.x + 1, summary.y + 6, widgets.fit(string.format("Matrix %s: %.1f%% | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent or 0, m.input or 0, m.output or 0), summary.w - 2), colors.get("LIMITED"), colors.get("background"))
+  end
   if (model.capacity or 0) <= 0 and ((model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0) then
-    ui.text(mon, summary.x + 1, summary.y + 5, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
+    ui.text(mon, summary.x + 1, summary.y + 7, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
   end
 
   local content_y = 2 + summary_h + 1
-  local content_h = math.max(is_large and 14 or 10, h - content_y - 1)
-  local cols = widgets.split_columns(w - 2, is_large and { 2, 1 } or { 3, 2 }, 1)
+  local content_h = math.max(is_large and 15 or 11, h - content_y - 1)
+  local cols = widgets.split_columns(w - 2, is_large and { 3, 2 } or { 3, 2 }, 1)
   local left_w = cols[1]
   local right_w = cols[2]
 
-  local matrix = widgets.panel_box(mon, 2, content_y, left_w, content_h, "Matrix-/Storage-Details", (model.matrix_count or 0) > 0 and "OK" or "OFFLINE")
-  local matrix_widths = widgets.table_widths(matrix.w, is_large and { 10, 12, 11, 11, 10, 10 } or { 8, 10, 10, 10, 9, 8 })
+  local matrix_title = ((model.matrix_count or 0) == 1) and "Matrix-Detail (Single Matrix)" or "Matrix-/Storage-Details"
+  local matrix = widgets.panel_box(mon, 2, content_y, left_w, content_h, matrix_title, (model.matrix_count or 0) > 0 and "OK" or "OFFLINE")
+  local matrix_widths = widgets.table_widths(matrix.w, is_large and { 12, 10, 10, 10, 10, 10 } or { 9, 9, 9, 9, 8, 8 })
   widgets.compact_header(mon, matrix.x, matrix.y, { "ID", "Fuellst", "Input", "Output", "Seen", "Status" }, matrix_widths)
   local y = matrix.y + 1
   for _, m in ipairs(model.matrices or {}) do
     if y > (matrix.y + matrix.h - 1) then break end
     widgets.compact_status_row(mon, matrix.x, y, {
       tostring(m.id or m.label or "M"),
-      string.format("%d%%", math.floor(((m.percent or 0) > 1 and (m.percent or 0) or ((m.percent or 0) * 100)))),
+      string.format("%.1f%%", m.percent or 0),
       string.format("%.1f", m.input or 0),
       string.format("%.1f", m.output or 0),
       tostring(m.last_seen_age or "-") .. "s",
@@ -42,16 +49,21 @@ local function render(mon, model)
   end
   if y == matrix.y + 1 then
     local has_flow = (model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0
-    ui.text(mon, matrix.x, y, has_flow and "Keine Matrixzeilen, aber Energiefluss vorhanden" or "Keine Matrixdaten vom Energy-Node", colors.get(has_flow and "WARNING" or "OFFLINE"), colors.get("background"))
+    local msg = has_flow and "Keine Matrixzeilen, aber Energiefluss vorhanden" or "Keine Matrixdaten vom Energy-Node"
+    if model.matrix_only then msg = msg .. " (Matrix-Only Payload)" end
+    ui.text(mon, matrix.x, y, msg, colors.get(has_flow and "WARNING" or "OFFLINE"), colors.get("background"))
   end
 
   local right_x = 2 + left_w + 1
-  local resources_h = is_large and math.max(15, math.floor(content_h * 0.60)) or math.max(11, math.floor(content_h * 0.52))
+  local resources_h = is_large and math.max(13, math.floor(content_h * 0.50)) or math.max(9, math.floor(content_h * 0.48))
   local resources = widgets.panel_box(mon, right_x, content_y, right_w, resources_h, "Ressourcen", "OK")
   local r = model.resources or {}
   widgets.stat_card(mon, resources.x, resources.y, resources.w, "Fuel", string.format("Reserve %.1f", r.fuel_total or 0), string.format("Quellen %d", r.fuel_sources or 0), "LIMITED")
   widgets.stat_card(mon, resources.x, resources.y + 5, resources.w, "Water / Reprocessing", string.format("Wasser %.1f", r.water_total or 0), "Reproc " .. tostring(r.reprocessing_state or "-"), "OK")
   ui.text(mon, resources.x, resources.y + 10, widgets.fit("Support online: " .. tostring(model.support_online or 0) .. " / " .. tostring(#(model.support_nodes or {})), resources.w), colors.get("muted"), colors.get("background"))
+  if model.matrix_only then
+    ui.text(mon, resources.x, resources.y + 11, widgets.fit("Betrieb: Matrix-Only Payload aktiv", resources.w), colors.get("LIMITED"), colors.get("background"))
+  end
 
   local support_y = content_y + resources_h + 1
   local support_h = math.max(7, (content_y + content_h) - support_y + 1)
