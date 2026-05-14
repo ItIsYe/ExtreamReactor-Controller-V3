@@ -132,12 +132,12 @@ function M.new(opts)
     local top = c.alert_service and c.alert_service:get_top_critical(3) or {}
     local summary = c.alert_service and c.alert_service:get_summary() or 'Keine aktiven Meldungen'
 
-    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '', ops_hints = {} }
+    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '', ops_hints = {}, peer_summary = 'Peers live=0 stale=0 rt=0 energy-matrix=0 src=0', rt_summary = 'RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0', controls_summary = 'Profile=- | AUTO=AUS | RT-HOLD=AUS', nodes_total = 0, nodes_live = 0, nodes_stale = 0 }
     if (counts.CRITICAL or 0) > 0 then overview.system_status = 'EMERGENCY' elseif (counts.WARN or 0) > 0 then overview.system_status = 'WARNING' end
     for i, a in ipairs(top) do if i > 4 then break end overview.alert_rows[#overview.alert_rows+1] = { title = tostring(a.title or a.code or 'Alert'), text = tostring(a.message or a.detail or 'Keine Details'), status = normalize_status(a.severity or 'WARNING') } end
 
-    local rt = { rt_nodes = {}, queue = c.sequencer.queue or {}, ramp_profile = c.sequencer.ramp_profile, sequence_state = c.sequencer.state, rt_global_off_hold = overview.rt_global_off_hold, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, local_control = 0, master_control = 0 }
-    local energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = 'OFFLINE', aggregate_percent = 0, mode = '-' }
+    local rt = { rt_nodes = {}, queue = c.sequencer.queue or {}, ramp_profile = c.sequencer.ramp_profile, sequence_state = c.sequencer.state, rt_global_off_hold = overview.rt_global_off_hold, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, unavailable = 0, local_control = 0, master_control = 0, assignment_state = 'UNASSIGNED', assignment_reason = '-', control_source = 'LOCAL', display_mode = 'RT-Fleet aktiv', fleet_summary = '-', queue_summary = '-' }
+    local energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = 'OFFLINE', aggregate_percent = 0, mode = '-', energy_summary = 'Energy 0.0% | Stored 0.0/0.0 | In 0.0 Out 0.0 | Mode - | Matrices 0', matrix_count = 0, matrix_sources = 0, support_online = 0, support_stale = 0, matrix_only = false }
 
     for _, node in pairs(c.nodes or {}) do
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or -1)
@@ -230,11 +230,24 @@ function M.new(opts)
     overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d energy-matrix=%d src=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0, energy.matrix_count or 0, energy.matrix_sources or 0)
     overview.rt_summary = string.format("RT active=%d startup=%d shutdown=%d stale=%d assigned=%d unassigned=%d unavailable=%d master=%d local=%d", rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0, rt.assigned or 0, rt.unassigned or 0, rt.unavailable or 0, rt.master_control or 0, rt.local_control or 0)
     overview.energy_hint = string.format("Energy %.1f%% | Stored %.1f/%.1f | In %.1f Out %.1f | Mode %s | Matrices %d", energy.aggregate_percent or 0, energy.stored or 0, energy.capacity or 0, energy.input or 0, energy.output or 0, tostring(energy.mode or "-"), energy.matrix_count or 0)
+    energy.energy_summary = overview.energy_hint
     overview.ops_hints[#overview.ops_hints + 1] = (overview.nodes_stale or 0) > 0 and "Stale Nodes erkannt: Kommunikationslage pruefen" or "Alle Nodes liefern frische Daten"
     overview.ops_hints[#overview.ops_hints + 1] = (energy.matrix_count or 0) > 0 and "Matrixdaten live im Master-Modell" or "Keine Matrixzeilen gemeldet"
     overview.ops_hints[#overview.ops_hints + 1] = (energy.matrix_only and "Energy meldet Matrix-Only Betrieb") or "Energy meldet kombinierte Storage/Matrix-Daten"
     overview.ops_hints[#overview.ops_hints + 1] = (rt.rt_stale or 0) > 0 and "RT stale: Zuordnung/Netz pruefen" or "RT-Sync ueberwiegend stabil"
     overview.ops_hints[#overview.ops_hints + 1] = ((rt.unassigned or 0) > 0) and "RT hat unzugeordnete Nodes: Assignment/Control pruefen" or "RT-Zuordnung vollständig"
+    overview.controls_summary = string.format("Profile=%s | AUTO=%s | RT-HOLD=%s", tostring(overview.active_profile or '-'), tostring(overview.auto_profile and 'AN' or 'AUS'), tostring(overview.rt_global_off_hold and 'AN' or 'AUS'))
+    rt.assignment_state = ((rt.unassigned or 0) == 0 and (rt.assigned or 0) > 0) and 'ASSIGNED' or (((rt.unavailable or 0) > 0 and (rt.assigned or 0) == 0) and 'UNAVAILABLE' or 'MIXED')
+    if #(rt.rt_nodes or {}) == 0 then
+      rt.assignment_state = 'UNASSIGNED'
+      rt.assignment_reason = 'Keine RT-Node-Daten im Tick'
+    else
+      rt.assignment_reason = ((rt.unassigned or 0) > 0) and 'Teilweise unzugeordnet' or (((rt.unavailable or 0) > 0) and 'Master teilweise nicht verfuegbar' or 'Master-Zuordnung stabil')
+    end
+    rt.control_source = ((rt.master_control or 0) >= (rt.local_control or 0)) and 'MASTER' or 'LOCAL'
+    rt.display_mode = 'Node/Assignment/Control getrennt'
+    rt.fleet_summary = string.format("RT nodes=%d active=%d startup=%d shutdown=%d stale=%d", #(rt.rt_nodes or {}), rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0)
+    rt.queue_summary = string.format("Queue=%d ramp=%s seq=%s", #(rt.queue or {}), tostring(rt.ramp_profile or '-'), tostring(rt.sequence_state or '-'))
     energy.resource_summary = string.format("Fuel %.1f | Water %.1f | Reproc %s", energy.resources.fuel_total or 0, energy.resources.water_total or 0, tostring(energy.resources.reprocessing_state or "-"))
     overview.clock_label = os.date('!%H:%M UTC')
     rt.rt_global_off_hold = overview.rt_global_off_hold

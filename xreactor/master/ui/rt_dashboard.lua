@@ -42,6 +42,8 @@ local function render(mon, model)
   widgets.status_badge(mon, sx, summary.y, model.rt_global_off_hold and "GLOBAL HOLD AUS" or "GLOBAL HOLD", model.rt_global_off_hold and "OK" or "WARNING", badge_cols[5])
   ui.text(mon, summary.x, summary.y + 1, widgets.fit("Klarlage: Node-Modus vs Zuordnung vs Steuerquelle getrennt dargestellt", summary.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, summary.x, summary.y + 2, widgets.fit("Assigned " .. tostring(model.assigned or 0) .. " | Unassigned " .. tostring(model.unassigned or 0) .. " | Master " .. tostring(model.master_control or 0) .. " | Local " .. tostring(model.local_control or 0), summary.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, summary.x, summary.y + 3, widgets.fit("Fleet: " .. tostring(model.fleet_summary or "-") .. " | Queue: " .. tostring(model.queue_summary or "-"), summary.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, summary.x, summary.y + 4, widgets.fit("Assignment " .. tostring(model.assignment_state or "-") .. " | Grund " .. tostring(model.assignment_reason or "-") .. " | Quelle " .. tostring(model.control_source or "-"), summary.w), colors.get("muted"), colors.get("background"))
 
   local queue_h = is_large and math.max(15, math.floor(h * 0.38)) or math.max(10, math.floor(h * 0.28))
   local cards_top = is_large and 10 or 9
@@ -50,12 +52,18 @@ local function render(mon, model)
   local gap = 1
   local card_w = math.max(30, math.floor((w - 3 - ((cols - 1) * gap)) / cols))
   local rows = math.max(1, math.floor(cards_h / 14))
+  local drawn = 0
   for i, rt in ipairs(model.rt_nodes or {}) do
     local idx = i - 1
     local r = math.floor(idx / cols)
     if r >= rows then break end
     local c = idx % cols
     render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 14, card_w, rt)
+    drawn = drawn + 1
+  end
+
+  if drawn == 0 then
+    render_rt_card(mon, 2, cards_top, math.max(30, card_w), { id = "NO-RT", status = "OFFLINE", state = "IDLE", assignment_state = tostring(model.assignment_state or "UNASSIGNED"), assignment_reason = tostring(model.assignment_reason or "Keine RT-Nodes sichtbar"), control_source = tostring(model.control_source or "LOCAL"), display_mode = tostring(model.display_mode or "RT-Hauptansicht aktiv"), queue_state = "idle", queue_step = "-", freshness = "n/a", node_mode = "-", node_status = "OFFLINE" })
   end
 
   local queue = widgets.panel_box(mon, 2, h - queue_h + 1, w - 2, queue_h, "Sequencer / Queue", "LIMITED")

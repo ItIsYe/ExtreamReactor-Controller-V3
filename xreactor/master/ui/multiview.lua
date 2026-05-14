@@ -46,6 +46,7 @@ function M:update_monitors(monitors)
       prior.locked = true
       prior.role = role_view
       prior.reason = "primary-monitor-role"
+      prior.last_frame_size = prior.last_frame_size or nil
     else
       prior.mode = "aux_cycle"
       if not prior.view or prior.view == prior.role then prior.view = role_view end
@@ -69,7 +70,7 @@ function M:render(monitors, data_map)
     local view = self.views[view_key]
     local w, h = ui.getSize(mon_entry.mon)
     local size_key = (w and h) and (("%dx%d"):format(w, h)) or "unknown"
-    local requires_full_clear = mon_entry._last_frame_size ~= size_key
+    local requires_full_clear = layout.last_frame_size ~= size_key
 
     if view and view.render then
       local ok, err = pcall(function()
@@ -94,7 +95,7 @@ function M:render(monitors, data_map)
         mon_entry.last_render_error = tostring(err)
       else
         mon_entry.last_render_error = nil
-        mon_entry._last_frame_size = size_key
+        layout.last_frame_size = size_key
       end
     else
       rendered[#rendered + 1] = {

@@ -19,13 +19,14 @@ local function render(mon, model)
 
   ui.text(mon, summary.x + 1, summary.y + 6, widgets.fit(tostring(model.resource_summary or ""), summary.w - 2), colors.get("muted"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 7, widgets.fit("Betrieb: " .. (model.matrix_only and "Matrix-Only" or "Hybrid/Storage") .. " | Support " .. tostring(model.support_online or 0) .. "/" .. tostring(#(model.support_nodes or {})), summary.w - 2), colors.get("text"), colors.get("background"))
+  ui.text(mon, summary.x + 1, summary.y + 8, widgets.fit("Summary: " .. tostring(model.energy_summary or "-") , summary.w - 2), colors.get("muted"), colors.get("background"))
 
   if (model.matrix_count or 0) == 1 and model.matrices and model.matrices[1] then
     local m = model.matrices[1]
-    ui.text(mon, summary.x + 1, summary.y + 8, widgets.fit(string.format("Single-Matrix %s: %.1f%% | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent or 0, m.input or 0, m.output or 0), summary.w - 2), colors.get("LIMITED"), colors.get("background"))
+    ui.text(mon, summary.x + 1, summary.y + 9, widgets.fit(string.format("Single-Matrix %s: %.1f%% | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent or 0, m.input or 0, m.output or 0), summary.w - 2), colors.get("LIMITED"), colors.get("background"))
   end
   if (model.capacity or 0) <= 0 and ((model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0) then
-    ui.text(mon, summary.x + 1, summary.y + 9, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
+    ui.text(mon, summary.x + 1, summary.y + 10, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
   end
 
   local content_y = 2 + summary_h + 1
