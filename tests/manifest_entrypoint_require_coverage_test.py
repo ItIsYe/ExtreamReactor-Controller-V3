@@ -2,6 +2,7 @@
 import pathlib
 import re
 import sys
+import zlib
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 XREACTOR_ROOT = REPO_ROOT / "xreactor"
@@ -20,6 +21,22 @@ ROLE_SCOPED_CANDIDATES = {
     "nodes/support/command_handler.lua": {"WATER", "FUEL", "REPROCESSING"},
     "nodes/support/role_logic.lua": {"ENERGY", "WATER", "FUEL", "REPROCESSING"},
 }
+CRITICAL_SHIPMENT_PATHS = {
+    "master/runtime_loop.lua",
+    "master/ui_controller.lua",
+    "master/ui/multiview.lua",
+    "master/ui/overview.lua",
+    "master/ui/rt_dashboard.lua",
+    "master/ui/energy.lua",
+    "master/message_handlers.lua",
+    "master/init_runtime.lua",
+    "core/monitor_manager.lua",
+}
+MASTER_RUNTIME_FINGERPRINT_MARKERS = (
+    "Master runtime fingerprint:",
+    "snapshot_ui_shape=local",
+    "touch_dispatch_diag=enabled",
+)
 
 def parse_required_for(tail: str):
     match = re.search(r'required_for\s*=\s*\{([^}]*)\}', tail)
@@ -29,6 +46,7 @@ def parse_required_for(tail: str):
 
 def parse_manifest(path: pathlib.Path):
     base_files = []
+    metadata = {}
     roles = {}
     section = None
     current_role = None
@@ -55,7 +73,15 @@ def parse_manifest(path: pathlib.Path):
             continue
 
         rel_path = entry_match.group("path")
+        tail = entry_match.group("tail") or ""
         required_for = parse_required_for(entry_match.group("tail") or "")
+        size_match = re.search(r"size_bytes\s*=\s*(\d+)", tail)
+        hash_match = re.search(r'hash\s*=\s*"([0-9a-fA-F]+)"', tail)
+        if size_match and hash_match:
+            metadata[rel_path] = {
+                "size_bytes": int(size_match.group(1)),
+                "hash": hash_match.group(1).lower(),
+            }
 
         if section == "base":
             base_files.append(rel_path)
@@ -64,7 +90,7 @@ def parse_manifest(path: pathlib.Path):
                 required_for = {current_role.upper()}
             roles[current_role].append((rel_path, required_for))
 
-    return base_files, roles
+    return base_files, roles, metadata
 
 def expected_files_for_role(base_files, roles, role_label: str):
     expected = set(base_files)
@@ -92,7 +118,7 @@ def collect_role_usage_from_entrypoints(role_specs):
 
 
 def main():
-    base_files, roles = parse_manifest(MANIFEST_PATH)
+    base_files, roles, metadata = parse_manifest(MANIFEST_PATH)
 
     role_specs = [
         ("MASTER", XREACTOR_ROOT / "master" / "main.lua"),
@@ -128,6 +154,34 @@ def main():
             errors.append(
                 f"role-scope drift: candidate={path} expected_from_entrypoints={sorted(expected_roles)} configured={sorted(configured_roles)}"
             )
+
+    for rel_path in sorted(CRITICAL_SHIPMENT_PATHS):
+        entry_meta = metadata.get(rel_path)
+        if not entry_meta:
+            errors.append(f"manifest metadata missing for critical shipment path={rel_path}")
+            continue
+        file_path = XREACTOR_ROOT / rel_path
+        if not file_path.exists():
+            errors.append(f"critical shipment path missing in repo path={rel_path}")
+            continue
+        file_bytes = file_path.read_bytes()
+        actual_size = len(file_bytes)
+        actual_hash = f"{zlib.crc32(file_bytes) & 0xFFFFFFFF:08x}"
+        if entry_meta["size_bytes"] != actual_size:
+            errors.append(
+                f"manifest stale size for critical path={rel_path} expected={actual_size} configured={entry_meta['size_bytes']}"
+            )
+        if entry_meta["hash"] != actual_hash:
+            errors.append(
+                f"manifest stale hash for critical path={rel_path} expected={actual_hash} configured={entry_meta['hash']}"
+            )
+
+    runtime_loop = (XREACTOR_ROOT / "master" / "runtime_loop.lua").read_text(encoding="utf-8")
+    for marker in MASTER_RUNTIME_FINGERPRINT_MARKERS:
+        if marker not in runtime_loop:
+            errors.append(f"master runtime fingerprint marker missing in runtime_loop.lua marker={marker}")
+    if "local function snapshot_ui_shape(" not in runtime_loop:
+        errors.append("master runtime snapshot guard missing: local function snapshot_ui_shape(...) not found")
 
     rt_root = XREACTOR_ROOT / "nodes" / "rt"
     for lua_file in sorted(rt_root.glob("*.lua")):
