@@ -148,7 +148,25 @@ local function run_master()
         runtime_context.warn_once(runtime.state, runtime.log, "ui_draw_missing_controller", "UI draw skipped: ui_controller missing")
       end
     end,
-    ui_handle_input = function(event) if runtime.refs.ui_controller then runtime.refs.ui_controller.handle_input(event) end end,
+    ui_handle_input = function(event)
+      if runtime.refs.ui_controller then
+        runtime.refs.ui_controller.handle_input(event)
+        if event and event[1] == "monitor_touch" and runtime.refs.view_manager and runtime.refs.view_manager.last_input then
+          local li = runtime.refs.view_manager.last_input
+          runtime.log(("UI touch: monitor=%s pos=%s,%s view=%s hit=%s action=%s dispatched=%s handled=%s err=%s"):format(
+            tostring(li.monitor or event[2] or "-"),
+            tostring(li.x or event[3] or "-"),
+            tostring(li.y or event[4] or "-"),
+            tostring(li.view or "-"),
+            tostring(li.hit and li.hit.type or "none"),
+            tostring(li.action or "none"),
+            tostring(li.dispatched),
+            tostring(li.handled),
+            tostring(li.dispatch_error or "-")
+          ), "DEBUG")
+        end
+      end
+    end,
     mark_rt_sync_dirty = mark_rt_sync_dirty,
     add_alarm = function(sender, severity, message) table.insert(runtime.state.alarms, 1, { sender_id = sender, severity = severity, message = message, timestamp = runtime_context.master_time_label(time) }); if #runtime.state.alarms > 50 then table.remove(runtime.state.alarms) end end,
     master_time_label = function() return runtime_context.master_time_label(time) end,

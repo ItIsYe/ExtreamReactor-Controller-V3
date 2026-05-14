@@ -22,7 +22,8 @@ function M.new(opts)
     view_order = opts.view_order or { "overview", "rt", "energy" },
     layout = { monitors = {} },
     monitor_index = {},
-    monitor_list = {}
+    monitor_list = {},
+    on_action = opts.on_action
   }
   return setmetatable(self, { __index = M })
 end
@@ -127,15 +128,37 @@ function M:handle_input(monitor_name, x, y)
   local mon = self.monitor_index[monitor_name]
   if not mon then return end
   local state = self.layout.monitors[mon.id or mon.name]
-  if not state or state.locked then return end
+  if not state then return end
 
   local w = select(1, ui.getSize(mon.mon))
-  if w and y == 1 and x >= math.max(2, w - 11) then
+  if (not state.locked) and w and y == 1 and x >= math.max(2, w - 11) then
     local current = 1
     for i, key in ipairs(self.view_order) do
       if key == state.view then current = i break end
     end
     state.view = self.view_order[(current % #self.view_order) + 1]
+    return
+  end
+
+  local view_key = state.view or self.view_order[1] or "overview"
+  local view = self.views[view_key]
+  if not (view and view.hit_test and self.on_action) then return end
+
+  local ok, hit = pcall(view.hit_test, mon.mon, x, y)
+  self.last_input = { monitor = mon.name, x = x, y = y, view = view_key, hit = ok and hit or nil, hit_error = ok and nil or tostring(hit) }
+  if not ok or type(hit) ~= "table" then return end
+
+  if hit.type then
+    local action = {}
+    for k, v in pairs(hit) do action[k] = v end
+    action.monitor = mon.name
+    action.view = view_key
+    local dispatched, handled_or_err = pcall(self.on_action, action)
+    self.last_input.action = action.type
+    self.last_input.dispatched = dispatched
+    self.last_input.handled = dispatched and (handled_or_err ~= false) or false
+    self.last_input.dispatch_error = dispatched and nil or tostring(handled_or_err)
+    if not dispatched and mon then mon.last_input_error = tostring(handled_or_err) end
   end
 end
 
