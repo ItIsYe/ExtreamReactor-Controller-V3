@@ -1,5 +1,6 @@
 local M = {}
 
+
 local function run_master()
   local CONFIG = { LOG_NAME = "master", LOG_PREFIX = "MASTER", DEBUG_LOG_ENABLED = nil, BOOTSTRAP_LOG_ENABLED = false, BOOTSTRAP_LOG_PATH = nil, NODE_ID_PATH = "/xreactor/config/node_id.txt" }
   local bootstrap = dofile("/xreactor/core/bootstrap.lua")
@@ -37,6 +38,24 @@ local function run_master()
   end
   runtime.mark_rt_sync_dirty = mark_rt_sync_dirty
   runtime.flush_rt_sync_queue = flush_rt_sync_queue
+
+
+  local function snapshot_ui_shape(models)
+    local ov = (models and models.overview) or {}
+    local rtm = (models and models.rt) or {}
+    local en = (models and models.energy) or {}
+    return {
+      ov_nodes = #(ov.nodes or {}),
+      ov_hints = #(ov.ops_hints or {}),
+      ov_peer = tostring(ov.peer_summary or '-'),
+      rt_nodes = #(rtm.rt_nodes or {}),
+      rt_assign = tostring(rtm.assignment_state or '-'),
+      rt_queue = #(rtm.queue or {}),
+      en_matrices = #(en.matrices or {}),
+      en_support = #(en.support_nodes or {}),
+      en_summary = tostring(en.energy_summary or '-')
+    }
+  end
 
   init_runtime.run({
     config = config, utils = utils, constants = constants, health = health, node_id = node_id, layout_config_path = runtime.tuning.layout_config_path,
@@ -209,23 +228,6 @@ local function run_master()
     tostring(runtime.refs.ui_controller ~= nil),
     tostring(runtime.refs.services ~= nil)
   ), "INFO")
-
-  local function snapshot_ui_shape(models)
-    local ov = (models and models.overview) or {}
-    local rtm = (models and models.rt) or {}
-    local en = (models and models.energy) or {}
-    return {
-      ov_nodes = #(ov.nodes or {}),
-      ov_hints = #(ov.ops_hints or {}),
-      ov_peer = tostring(ov.peer_summary or '-'),
-      rt_nodes = #(rtm.rt_nodes or {}),
-      rt_assign = tostring(rtm.assignment_state or '-'),
-      rt_queue = #(rtm.queue or {}),
-      en_matrices = #(en.matrices or {}),
-      en_support = #(en.support_nodes or {}),
-      en_summary = tostring(en.energy_summary or '-')
-    }
-  end
 
   monitor_ops.refresh_monitors(runtime, true)
   if runtime.refs.ui_controller then
