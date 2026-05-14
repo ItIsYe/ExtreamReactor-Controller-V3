@@ -80,6 +80,20 @@ local function run_master()
         local ui_models = runtime.refs.ui_controller and runtime.refs.ui_controller._last_models
         local rt_model = ui_models and ui_models.rt or nil
         local energy_model = ui_models and ui_models.energy or nil
+        if ui_models and not runtime.state._steady_ui_shape_logged then
+          local steady = snapshot_ui_shape(ui_models)
+          runtime.state._steady_ui_shape_logged = true
+          runtime.log(("Steady UI shape (first regular tick): ov_nodes=%d ov_hints=%d rt_nodes=%d rt_assign=%s en_matrices=%d en_support=%d"):format(
+            steady.ov_nodes, steady.ov_hints, steady.rt_nodes, steady.rt_assign, steady.en_matrices, steady.en_support
+          ), "INFO")
+          local initial = runtime.state._initial_ui_shape
+          if initial then
+            local changed = (initial.ov_nodes ~= steady.ov_nodes) or (initial.rt_nodes ~= steady.rt_nodes) or (initial.en_matrices ~= steady.en_matrices) or (initial.en_support ~= steady.en_support)
+            runtime.log(("UI shape consistency initial->steady: changed=%s | ov %d->%d | rt %d->%d | matrices %d->%d | support %d->%d"):format(
+              tostring(changed), initial.ov_nodes, steady.ov_nodes, initial.rt_nodes, steady.rt_nodes, initial.en_matrices, steady.en_matrices, initial.en_support, steady.en_support
+            ), changed and "WARN" or "INFO")
+          end
+        end
         local sample_rt = nil
         if rt_model and rt_model.rt_nodes then
           for _, candidate in ipairs(rt_model.rt_nodes) do
@@ -138,11 +152,12 @@ local function run_master()
             if not r.ok then
               failures = failures + 1
               runtime.log(("UI draw failure detail: view=%s monitor=%s role=%s error=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)), "ERROR")
-            else
-              runtime.log(("UI draw success detail: view=%s monitor=%s role=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role)), "DEBUG")
             end
           end
-          if failures == 0 then runtime.log("UI draw result: all views rendered successfully", "DEBUG") end
+          if failures == 0 and not runtime.state._ui_success_logged_once then
+            runtime.state._ui_success_logged_once = true
+            runtime.log("UI draw result: all views rendered successfully", "DEBUG")
+          end
         end
       else
         runtime_context.warn_once(runtime.state, runtime.log, "ui_draw_missing_controller", "UI draw skipped: ui_controller missing")
@@ -187,13 +202,37 @@ local function run_master()
     tostring(runtime.refs.ui_controller ~= nil),
     tostring(runtime.refs.services ~= nil)
   ), "INFO")
+
+  local function snapshot_ui_shape(models)
+    local ov = (models and models.overview) or {}
+    local rtm = (models and models.rt) or {}
+    local en = (models and models.energy) or {}
+    return {
+      ov_nodes = #(ov.nodes or {}),
+      ov_hints = #(ov.ops_hints or {}),
+      ov_peer = tostring(ov.peer_summary or '-'),
+      rt_nodes = #(rtm.rt_nodes or {}),
+      rt_assign = tostring(rtm.assignment_state or '-'),
+      rt_queue = #(rtm.queue or {}),
+      en_matrices = #(en.matrices or {}),
+      en_support = #(en.support_nodes or {}),
+      en_summary = tostring(en.energy_summary or '-')
+    }
+  end
+
   monitor_ops.refresh_monitors(runtime, true)
   if runtime.refs.ui_controller then
     runtime.log("Initial UI draw trigger after init", "INFO")
     local ok, draw_err = pcall(runtime.refs.ui_controller.draw)
     if not ok then
       runtime.log("Initial UI draw failed: " .. tostring(draw_err), "ERROR")
-    elseif runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
+    else
+      runtime.state._initial_ui_shape = snapshot_ui_shape(runtime.refs.ui_controller and runtime.refs.ui_controller._last_models)
+      runtime.log(("Initial UI shape: ov_nodes=%d ov_hints=%d rt_nodes=%d rt_assign=%s en_matrices=%d en_support=%d"):format(
+        runtime.state._initial_ui_shape.ov_nodes, runtime.state._initial_ui_shape.ov_hints, runtime.state._initial_ui_shape.rt_nodes, runtime.state._initial_ui_shape.rt_assign, runtime.state._initial_ui_shape.en_matrices, runtime.state._initial_ui_shape.en_support
+      ), "INFO")
+    end
+    if runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
       local failures = 0
       for _, r in ipairs(runtime.refs.view_manager.last_render_results) do
         if not r.ok then
