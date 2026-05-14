@@ -29,8 +29,9 @@ function M.run(ctx)
     view_order = { "overview", "energy", "rt", "resources", "alerts", "alarms" },
     on_action = function(action)
       if ctx.refs.ui_controller then
-        ctx.refs.ui_controller.handle_action(action)
+        return ctx.refs.ui_controller.handle_action(action)
       end
+      return false, "ui-controller-missing"
     end
   })
   ctx.utils.log("MASTER", "View manager initialized for primary roles: monitor1=overview monitor2=rt monitor3=energy", "INFO")

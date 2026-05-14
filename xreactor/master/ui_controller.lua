@@ -201,14 +201,14 @@ function M.new(opts)
     overview.nodes_live = overview.nodes_live or 0
     overview.nodes_stale = overview.nodes_stale or 0
     energy.matrix_count = #energy.matrices
-    overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d energy=%d src=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0, energy.matrix_count or 0, energy.matrix_sources or 0)
+    overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d energy-matrix=%d src=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0, energy.matrix_count or 0, energy.matrix_sources or 0)
     overview.rt_summary = string.format("RT active=%d startup=%d shutdown=%d stale=%d", rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0)
-    overview.energy_hint = string.format("Energy %.1f%% | Mode %s | Matrices %d", energy.aggregate_percent or 0, tostring(energy.mode or "-"), energy.matrix_count or 0)
+    overview.energy_hint = string.format("Energy %.1f%% | Stored %.1f/%.1f | In %.1f Out %.1f | Mode %s | Matrices %d", energy.aggregate_percent or 0, energy.stored or 0, energy.capacity or 0, energy.input or 0, energy.output or 0, tostring(energy.mode or "-"), energy.matrix_count or 0)
     overview.ops_hints[#overview.ops_hints + 1] = (overview.nodes_stale or 0) > 0 and "Stale Nodes erkannt: Kommunikationslage pruefen" or "Alle Nodes liefern frische Daten"
     overview.ops_hints[#overview.ops_hints + 1] = (energy.matrix_count or 0) > 0 and "Matrixdaten live im Master-Modell" or "Keine Matrixzeilen gemeldet"
     overview.ops_hints[#overview.ops_hints + 1] = (energy.matrix_only and "Energy meldet Matrix-Only Betrieb") or "Energy meldet kombinierte Storage/Matrix-Daten"
     overview.ops_hints[#overview.ops_hints + 1] = (rt.rt_stale or 0) > 0 and "RT stale: Zuordnung/Netz pruefen" or "RT-Sync ueberwiegend stabil"
-    energy.resource_summary = string.format("Fuel %.1f | Water %.1f", energy.resources.fuel_total or 0, energy.resources.water_total or 0)
+    energy.resource_summary = string.format("Fuel %.1f | Water %.1f | Reproc %s", energy.resources.fuel_total or 0, energy.resources.water_total or 0, tostring(energy.resources.reprocessing_state or "-"))
     overview.clock_label = os.date('!%H:%M UTC')
     rt.rt_global_off_hold = overview.rt_global_off_hold
     return { overview = overview, rt = rt, energy = energy, resources = {} }
@@ -257,9 +257,24 @@ function M.new(opts)
       if event[1] == 'monitor_touch' then c.view_manager:handle_input(event[2], event[3], event[4]) end
     end
   controller.handle_action = function(action)
-      if action.type == 'profile' then c.calc.apply_profile(action.name)
-      elseif action.type == 'auto' then c.calc.set_auto_profile(not (c.calc.get_auto_profile and c.calc.get_auto_profile()))
-      elseif action.type == 'rt_hold' then c.calc.set_rt_global_off_hold(not (c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold())) end
+      if type(action) ~= "table" or not action.type then return false, "invalid-action" end
+      local handled = false
+      if action.type == 'profile' and action.name then
+        c.calc.apply_profile(action.name)
+        handled = true
+      elseif action.type == 'auto' then
+        c.calc.set_auto_profile(not (c.calc.get_auto_profile and c.calc.get_auto_profile()))
+        handled = true
+      elseif action.type == 'rt_hold' then
+        c.calc.set_rt_global_off_hold(not (c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold()))
+        handled = true
+      end
+      if c.log then
+        c.log(("UI action dispatch: type=%s view=%s monitor=%s handled=%s"):format(
+          tostring(action.type), tostring(action.view or "-"), tostring(action.monitor or "-"), tostring(handled)
+        ), handled and "DEBUG" or "WARN")
+      end
+      return handled
     end
   return controller
 end

@@ -70,7 +70,7 @@ local function render(mon, model)
       local py = box.y + row
       local col_width = controls_cols[col + 1] or controls_cols[#controls_cols] or box.w
       local bw = widgets.status_badge(mon, px, py, profile, active and "OK" or "OFFLINE", col_width)
-      hits[#hits + 1] = { type = "profile", name = profile, x1 = px, x2 = px + bw, y = py }
+      hits[#hits + 1] = { type = "profile", name = profile, x1 = px, x2 = px + math.max(0, bw - 1), y = py }
       col = col + 1
       if col >= (is_large and 3 or 2) then
         col = 0
@@ -81,9 +81,9 @@ local function render(mon, model)
 
     local ctrl_y = math.min(box.y + box.h - 4, box.y + row + 1)
     local aw = widgets.status_badge(mon, box.x, ctrl_y, "AUTO", model.auto_profile and "LIMITED" or "OFFLINE", math.max(8, math.floor(box.w * 0.18)))
-    hits[#hits + 1] = { type = "auto", x1 = box.x, x2 = box.x + aw, y = ctrl_y }
+    hits[#hits + 1] = { type = "auto", x1 = box.x, x2 = box.x + math.max(0, aw - 1), y = ctrl_y }
     local hw = widgets.status_badge(mon, box.x + aw + 2, ctrl_y, model.rt_global_off_hold and "RT-HOLD" or "RT-OFF", model.rt_global_off_hold and "WARNING" or "OFFLINE", math.max(10, math.floor(box.w * 0.26)))
-    hits[#hits + 1] = { type = "rt_hold", x1 = box.x + aw + 2, x2 = box.x + aw + 2 + hw, y = ctrl_y }
+    hits[#hits + 1] = { type = "rt_hold", x1 = box.x + aw + 2, x2 = box.x + aw + 2 + math.max(0, hw - 1), y = ctrl_y }
     ui.text(mon, box.x, ctrl_y + 1, widgets.fit("Soll " .. string.format("%.1f MRF/t", model.power_target or 0) .. " | Ist " .. string.format("%.1f MRF/t", model.power_actual or 0), box.w), colors.get("muted"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
@@ -116,6 +116,7 @@ local function render(mon, model)
     widgets.stat_card(mon, box.x, box.y + 5, box.w, "Node Freshness", tostring(model.nodes_live or 0) .. " live", tostring(model.nodes_stale or 0) .. " stale", stale_status)
     ui.text(mon, box.x, box.y + 10, widgets.fit(tostring(model.rt_summary or "RT-Lage unbekannt"), box.w), colors.get("muted"), colors.get("background"))
     ui.text(mon, box.x, box.y + 11, widgets.fit(tostring(model.peer_summary or "Peer-Lage unbekannt"), box.w), colors.get("muted"), colors.get("background"))
+    ui.text(mon, box.x, box.y + 12, widgets.fit("Energy: " .. tostring(model.energy_hint or "-") .. " | RT: " .. tostring(model.rt_summary or "-"), box.w), colors.get("text"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + kpi_w + 1, bottom_y, "Nodes", function()
