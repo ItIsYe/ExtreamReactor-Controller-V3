@@ -65,7 +65,8 @@ function manager.new(opts)
       node_id = opts.node_id or "MASTER",
       path = opts.path
     }),
-    disabled = {}
+    disabled = {},
+    scale_cache = {}
   }
   return setmetatable(self, { __index = manager })
 end
@@ -107,13 +108,20 @@ function manager:scan()
     local mon = utils.safe_wrap(entry.name)
     if mon then
       if self.scale then
-        local scale_ok, scale_err = monitor_adapter.safe_set_scale(mon, entry.name, self.scale, self.log_prefix)
-        if not scale_ok then
-          self.disabled[entry.name] = "setTextScale failed: " .. tostring(scale_err)
-          utils.log(self.log_prefix, "Disabling monitor " .. tostring(entry.name) .. " during scan (setTextScale failed: " .. tostring(scale_err) .. ")", "WARN")
-          goto continue
+        local cached_scale = self.scale_cache[entry.name]
+        local should_apply_scale = cached_scale == nil or tonumber(cached_scale) ~= tonumber(self.scale)
+        if should_apply_scale then
+          local scale_ok, scale_err = monitor_adapter.safe_set_scale(mon, entry.name, self.scale, self.log_prefix)
+          if not scale_ok then
+            self.disabled[entry.name] = "setTextScale failed: " .. tostring(scale_err)
+            utils.log(self.log_prefix, "Disabling monitor " .. tostring(entry.name) .. " during scan (setTextScale failed: " .. tostring(scale_err) .. ")", "WARN")
+            goto continue
+          end
+          self.scale_cache[entry.name] = self.scale
+          utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " text scale applied=" .. tostring(self.scale), "DEBUG")
+        else
+          utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " text scale unchanged=" .. tostring(self.scale), "DEBUG")
         end
-        utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " text scale set to " .. tostring(self.scale), "DEBUG")
       end
       local effective_scale = self.scale
       local scale_read_ok, scale_read = safe_wrapped_call(mon, "getTextScale")
@@ -141,7 +149,8 @@ function manager:scan()
         height = height,
         size_tag = size_tag,
         text_scale = effective_scale,
-        layout_class = classify_layout(width, height, size_tag)
+        layout_class = classify_layout(width, height, size_tag),
+        last_applied_scale = self.scale_cache[entry.name]
       })
     else
       utils.log(self.log_prefix, "Monitor wrap failed for " .. tostring(entry.name), "WARN")

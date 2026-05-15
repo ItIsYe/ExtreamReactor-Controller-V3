@@ -180,6 +180,23 @@ local function run_master()
             runtime.log(("UI energy model empty despite %d ENERGY node(s) - check payload mapping node.energy vs payload root"):format(energy_node_count), "WARN")
           end
         end
+        if runtime.refs.view_manager and runtime.refs.view_manager.sessions then
+          local primary = runtime.refs.view_manager.sessions:get_primary_sessions() or {}
+          for idx, session in ipairs(primary) do
+            runtime.log(("UI session binding: idx=%d id=%s name=%s role=%s view=%s dirty=%s first_draw_done=%s size=%s layout=%s scale=%s"):format(
+              idx,
+              tostring(session.id or "?"),
+              tostring(session.name or "?"),
+              tostring(session.role or "?"),
+              tostring(session.view_key or "?"),
+              tostring(session.dirty),
+              tostring(session.first_draw_done),
+              tostring(session.last_size_key or session.size_key or "?"),
+              tostring(session.last_layout_key or session.layout_key or "?"),
+              tostring(session.text_scale or "?")
+            ), "DEBUG")
+          end
+        end
         if runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
           local failures = 0
           for _, r in ipairs(runtime.refs.view_manager.last_render_results) do
