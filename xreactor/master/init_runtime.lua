@@ -26,7 +26,7 @@ function M.run(ctx)
       alerts = { label = "Alerts", render = ctx.alerts_ui.render, hit_test = ctx.alerts_ui.hit_test, interval = 0.5 },
       alarms = { label = "Logs", render = ctx.alarms_ui.render, interval = 1.0 }
     },
-    view_order = { "overview", "energy", "rt", "resources", "alerts", "alarms" },
+    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms" },
     on_action = function(action)
       if ctx.refs.ui_controller then
         return ctx.refs.ui_controller.handle_action(action)
