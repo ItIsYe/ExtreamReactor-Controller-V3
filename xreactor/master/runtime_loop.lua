@@ -13,7 +13,7 @@ local function run_master()
   local profiles, trends_lib, time, ui, config = require("master.profiles"), require("core.trends"), require("core.time"), require("core.ui"), require("master.config")
   local runtime_context, rt_sync, message_handlers = require("master.runtime_context"), require("master.rt_sync"), require("master.message_handlers")
   local rt_sync_coalescer_lib, housekeeping, ui_controller_lib = require("master.rt_sync_coalescer"), require("master.housekeeping"), require("master.ui_controller")
-  local init_runtime = require("master.init_runtime")
+  local init_runtime, ui_diagnostics = require("master.init_runtime"), require("master.ui_diagnostics")
   local service_manager, comms_service, alert_service_lib = require("services.service_manager"), require("services.comms_service"), require("services.alert_service")
   local telemetry_service, control_service, ui_service = require("services.telemetry_service"), require("services.control_service"), require("services.ui_service")
   local monitor_ops, profile_ops, rt_ops = require("master.runtime_ops_monitor"), require("master.runtime_ops_profile"), require("master.runtime_ops_rt")
@@ -25,7 +25,7 @@ local function run_master()
   local runtime_log = function(message, level) utils.log("MASTER", message, level or "INFO") end
   runtime_context.normalize_config(config)
   local release = build_info.get()
-  runtime_log(("Master runtime fingerprint: build=%s manifest=%s/%s snapshot_ui_shape=local ui_shape_logs=enabled touch_dispatch_diag=enabled"):format(
+  runtime_log(("Master runtime fingerprint: build=%s manifest=%s/%s snapshot_ui_shape=module ui_shape_logs=enabled touch_dispatch_diag=enabled"):format(
     tostring(release.commit or release.version or "unknown"),
     tostring(release.manifest_id or "unknown"),
     tostring(release.manifest_version or "unknown")
@@ -48,22 +48,6 @@ local function run_master()
   runtime.flush_rt_sync_queue = flush_rt_sync_queue
 
 
-  local function snapshot_ui_shape(models)
-    local ov = (models and models.overview) or {}
-    local rtm = (models and models.rt) or {}
-    local en = (models and models.energy) or {}
-    return {
-      ov_nodes = #(ov.nodes or {}),
-      ov_hints = #(ov.ops_hints or {}),
-      ov_peer = tostring(ov.peer_summary or '-'),
-      rt_nodes = #(rtm.rt_nodes or {}),
-      rt_assign = tostring(rtm.assignment_state or '-'),
-      rt_queue = #(rtm.queue or {}),
-      en_matrices = #(en.matrices or {}),
-      en_support = #(en.support_nodes or {}),
-      en_summary = tostring(en.energy_summary or '-')
-    }
-  end
 
   init_runtime.run({
     config = config, utils = utils, constants = constants, health = health, node_id = node_id, layout_config_path = runtime.tuning.layout_config_path,
@@ -91,7 +75,7 @@ local function run_master()
 
         local ui_models = runtime.refs.ui_controller and runtime.refs.ui_controller._last_models
         if ui_models and not runtime.state._steady_ui_shape_logged then
-          local steady = snapshot_ui_shape(ui_models)
+          local steady = ui_diagnostics.snapshot_shape(ui_models)
           runtime.state._steady_ui_shape_logged = true
           runtime.log(("Steady UI shape (first regular tick): ov_nodes=%d ov_hints=%d rt_nodes=%d rt_assign=%s en_matrices=%d en_support=%d"):format(
             steady.ov_nodes, steady.ov_hints, steady.rt_nodes, steady.rt_assign, steady.en_matrices, steady.en_support
@@ -163,7 +147,7 @@ local function run_master()
     if not ok then
       runtime.log("Initial UI draw failed: " .. tostring(draw_err), "ERROR")
     else
-      runtime.state._initial_ui_shape = snapshot_ui_shape(runtime.refs.ui_controller and runtime.refs.ui_controller._last_models)
+      runtime.state._initial_ui_shape = ui_diagnostics.snapshot_shape(runtime.refs.ui_controller and runtime.refs.ui_controller._last_models)
       runtime.log(("Initial UI shape: ov_nodes=%d ov_hints=%d rt_nodes=%d rt_assign=%s en_matrices=%d en_support=%d"):format(
         runtime.state._initial_ui_shape.ov_nodes, runtime.state._initial_ui_shape.ov_hints, runtime.state._initial_ui_shape.rt_nodes, runtime.state._initial_ui_shape.rt_assign, runtime.state._initial_ui_shape.en_matrices, runtime.state._initial_ui_shape.en_support
       ), "INFO")
