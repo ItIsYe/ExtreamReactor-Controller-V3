@@ -4,12 +4,6 @@ local sessions_lib = require("master.monitor_sessions")
 
 local M = {}
 
-local PRIMARY_VIEWS = { "overview", "rt", "energy" }
-
-local function resolve_aux_view(session, view_order)
-  if session.view_key and session.view_key ~= "aux" then return session.view_key end
-  return (view_order and view_order[1]) or "overview"
-end
 
 local function render_error(mon, w, h, title, message)
   ui.clear(mon)
@@ -31,10 +25,7 @@ function M:render(monitors, data_map)
   self.sessions:bind_or_update(monitors or {}, nil, self.view_order)
   local rendered = {}
 
-  for idx, session in ipairs(self.sessions:get_sessions()) do
-    session.view_key = (idx <= 3) and PRIMARY_VIEWS[idx] or resolve_aux_view(session, self.view_order)
-    session.locked = idx <= 3
-
+  for _, session in ipairs(self.sessions:get_sessions()) do
     local view_key = session.view_key or "overview"
     local view = self.views[view_key]
     local w, h = ui.getSize(session.mon)
@@ -48,8 +39,7 @@ function M:render(monitors, data_map)
       end)
 
       if ok then
-        local render_hash = table.concat({ view_key, tostring(session.size_key), tostring(session.layout_key) }, "|")
-        self.sessions:note_render_success(session, render_hash)
+        self.sessions:note_render_success(session)
       else
         self.sessions:note_render_failure(session, err)
         render_error(session.mon, w, h, "RENDER ERROR", err)
