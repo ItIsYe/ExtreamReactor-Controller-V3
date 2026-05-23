@@ -26,7 +26,7 @@ function M:render(monitors, data_map)
   local rendered = {}
 
   for _, session in ipairs(self.sessions:get_sessions()) do
-    local view_key = session.view_key or "overview"
+    local view_key = self.sessions:resolve_view_key(session)
     local view = self.views[view_key]
     local w, h = ui.getSize(session.mon)
     local requires_full_clear = self.sessions:needs_full_clear(session)
@@ -60,10 +60,11 @@ function M:render(monitors, data_map)
       rendered[#rendered + 1] = { ok = false, view = view_key, monitor = session.name, role = session.role, id = session.id, error = err }
     end
 
-    if session.locked then
-      ui.badge(session.mon, 2, 1, widgets.fit((session.view_key or "PRIMARY"):upper(), 20), "LIMITED")
+    local badge_view = self.sessions:resolve_view_key(session)
+    if self.sessions:is_primary(session) then
+      ui.badge(session.mon, 2, 1, widgets.fit((badge_view or "PRIMARY"):upper(), 20), "LIMITED")
     else
-      ui.badge(session.mon, 2, 1, widgets.fit(("AUX " .. tostring(session.view_key or "overview")):upper(), 20), "OK")
+      ui.badge(session.mon, 2, 1, widgets.fit(("AUX " .. tostring(badge_view or "overview")):upper(), 20), "OK")
     end
   end
 
@@ -75,7 +76,7 @@ function M:handle_input(monitor_name, x, y)
   local session = self.sessions:get_session_by_name(monitor_name)
   if not session then return end
 
-  local view_key = session.view_key or self.view_order[1] or "overview"
+  local view_key = self.sessions:resolve_view_key(session)
   local view = self.views[view_key]
   if not (view and view.hit_test and self.on_action) then
     local payload = { monitor = session.name, x = x, y = y, view = view_key, hit = nil, dispatched = false, handled = false }
