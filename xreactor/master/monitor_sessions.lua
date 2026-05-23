@@ -15,6 +15,14 @@ local function copy_hit(hit)
   return out
 end
 
+local function normalize_payload(payload)
+  if type(payload) ~= "table" then return nil end
+  local out = {}
+  for k, v in pairs(payload) do out[k] = v end
+  if payload.hit then out.hit = copy_hit(payload.hit) end
+  return out
+end
+
 function M.new(opts)
   opts = opts or {}
   return setmetatable({
@@ -50,7 +58,6 @@ function M:bind_or_update(monitors, desired_scale, view_order)
       last_applied_scale = mon.last_applied_scale or prior.last_applied_scale,
       last_size_key = size_key,
       last_layout_key = layout_key,
-      last_render_hash = prior.last_render_hash,
       dirty = prior.dirty == nil and true or prior.dirty,
       dirty_reason = prior.dirty_reason,
       first_draw_done = prior.first_draw_done == true,
@@ -62,19 +69,19 @@ function M:bind_or_update(monitors, desired_scale, view_order)
       size_tag = mon.size_tag,
       layout_class = mon.layout_class,
       size_key = size_key,
-      layout_key = layout_key
+      layout_key = layout_key,
+      rebind_pending = rebound
     }
 
     if rebound then
       session.dirty = true
       session.first_draw_done = false
-      session.last_render_hash = nil
       session.dirty_reason = "rebind"
       session.last_error = "monitor-rebound"
+      session.hitboxes = {}
     elseif size_changed or layout_changed then
       session.dirty = true
       session.dirty_reason = size_changed and "size-changed" or "layout-changed"
-      session.last_render_hash = nil
     end
 
     next_sessions[id] = session
@@ -116,13 +123,13 @@ function M:needs_full_clear(session)
   return (not session.first_draw_done) or session.dirty
 end
 
-function M:note_render_success(session, render_hash)
+function M:note_render_success(session)
   if not session then return end
   session.first_draw_done = true
   session.dirty = false
   session.dirty_reason = nil
   session.last_error = nil
-  if render_hash ~= nil then session.last_render_hash = tostring(render_hash) end
+  session.rebind_pending = false
 end
 
 function M:note_render_failure(session, err)
@@ -134,7 +141,7 @@ end
 
 function M:note_input(session, payload)
   if not session then return end
-  session.last_input = payload
+  session.last_input = normalize_payload(payload)
   local hit = payload and payload.hit
   if hit then
     session.hitboxes = { copy_hit(hit) }

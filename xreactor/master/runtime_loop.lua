@@ -82,13 +82,6 @@ local function run_master()
     ui_snapshot = function(event) return { event = event and event[1] or "tick", monitors = runtime.state.monitor_cache.list and #runtime.state.monitor_cache.list or 0, active_view = runtime.refs.view_manager and runtime.refs.view_manager.active_key or "overview", node_count = runtime_context.table_count(runtime.state.nodes), queue_depth = runtime.refs.sequencer and #runtime.refs.sequencer.queue or 0, rt_sync_pending = runtime.refs.rt_sync_coalescer and runtime.refs.rt_sync_coalescer.size() or 0, critical_blink = runtime.state.critical_blink_until, trends = runtime.state.last_trend_sample } end,
     ui_render = function()
       monitor_ops.refresh_monitors(runtime, false)
-      if not runtime.state._monitor_scale_logged_once and runtime.state.monitor_cache and runtime.state.monitor_cache.list then
-        runtime.state._monitor_scale_logged_once = true
-        for i, mon in ipairs(runtime.state.monitor_cache.list) do
-          if i > 3 then break end
-          runtime.log(("Primary monitor scale snapshot: idx=%d id=%s name=%s text_scale=%s layout=%s size=%sx%s"):format(i, tostring(mon.id or "?"), tostring(mon.name or "?"), tostring(mon.text_scale or "?"), tostring(mon.layout_class or "?"), tostring(mon.width or "?"), tostring(mon.height or "?")), "INFO")
-        end
-      end
       if runtime.refs.ui_controller then
         runtime_context.warn_once(runtime.state, runtime.log, "ui_draw_started", "UI draw path active (ui_controller.draw)")
         local ok, draw_err = pcall(runtime.refs.ui_controller.draw)
@@ -181,8 +174,6 @@ local function run_master()
         if not r.ok then
           failures = failures + 1
           runtime.log(("Initial draw failure detail: view=%s monitor=%s role=%s error=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)), "ERROR")
-        else
-          runtime.log(("Initial draw success detail: view=%s monitor=%s role=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role)), "DEBUG")
         end
       end
       if failures == 0 then runtime.log("Initial draw result: all views rendered successfully", "DEBUG") end
