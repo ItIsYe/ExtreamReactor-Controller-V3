@@ -49,7 +49,7 @@ return {
       { path = "master/housekeeping.lua", size_bytes = 1952, hash = "d4ae44ae" },
       { path = "master/main.lua", size_bytes = 244, hash = "5f009046", required_for = { "MASTER" } },
       { path = "master/runtime_loop.lua", size_bytes = 12913, hash = "a1824f4a" },
-      { path = "master/runtime_ops_monitor.lua", size_bytes = 2138, hash = "5c5509b6", required_for = { "MASTER" } },
+      { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for = { "MASTER" } },
       { path = "master/runtime_ops_profile.lua", size_bytes = 3860, hash = "b7d1a718", required_for = { "MASTER" } },
       { path = "master/runtime_ops_rt.lua", size_bytes = 14458, hash = "96cb30b6", required_for = { "MASTER" } },
       { path = "master/init_runtime.lua", size_bytes = 6236, hash = "d84168ef", required_for = { "MASTER" } },
@@ -72,7 +72,7 @@ return {
       { path = "master/ui/widgets.lua", size_bytes = 7457, hash = "09d947c3" },
       { path = "core/alert_rules.lua", size_bytes = 13600, hash = "3ef37a5e" },
       { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
-      { path = "core/monitor_manager.lua", size_bytes = 5071, hash = "a3f12603" },
+      { path = "core/monitor_manager.lua", size_bytes = 5576, hash = "bf24212a" },
       { path = "services/alert_service.lua", size_bytes = 10068, hash = "f5ad1d30" },
     },
     rt = {
