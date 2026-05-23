@@ -9,8 +9,8 @@ local hit_cache = setmetatable({}, { __mode = "k" })
 local function safe_section(mon, x, y, title, fn, on_error)
   local ok, err = pcall(fn)
   if not ok then
-    ui.panel(mon, x, y, 30, 3, widgets.fit(title .. " Fehler", 24), "WARNING")
-    ui.text(mon, x + 1, y + 1, widgets.fit(tostring(err), 28), colors.get("WARNING"), colors.get("background"))
+    ui.panel(mon, x, y, 30, 4, widgets.fit(title .. " Fehler", 24), "WARNING")
+    ui.text(mon, x + 2, y + 1, widgets.fit(tostring(err), 26), colors.get("WARNING"), colors.get("background"))
     if on_error then on_error(title, err) end
   end
   return ok
@@ -24,125 +24,122 @@ local function render(mon, model)
 
   local w, h = ui.getSize(mon)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
-  ui.panel(mon, 1, 1, w, h, "MONITOR 1 - UEBERSICHT & STEUERUNG", model.system_status or "OK")
+  ui.panel(mon, 1, 1, w, h, "MONITOR 1 - OVERVIEW", model.system_status or "OK")
 
-  local header_h = is_large and 10 or 9
-  local header = widgets.panel_box(mon, 2, 2, w - 2, header_h, "Systemstatus", model.system_status or "OK")
-  local top_badges = widgets.split_columns(header.w, is_large and { 2, 2, 2, 2, 2 } or { 3, 3, 2, 2 }, 1)
+  local header_h = is_large and 7 or 6
+  local header = widgets.panel_box(mon, 2, 2, w - 2, header_h, "Systemlage", model.system_status or "OK")
+  local badge_cols = widgets.split_columns(header.w, is_large and { 2, 2, 2, 2, 2 } or { 2, 2, 2, 2 }, 1)
   local bx = header.x
-  widgets.status_badge(mon, bx, header.y, "SYSTEM " .. tostring(model.system_status or "OK"), model.system_status or "OK", top_badges[1])
-  bx = bx + top_badges[1] + 1
-  widgets.status_badge(mon, bx, header.y, model.auto_profile and "AUTO AKTIV" or "AUTO AUS", model.auto_profile and "LIMITED" or "OFFLINE", top_badges[2])
-  bx = bx + top_badges[2] + 1
-  widgets.status_badge(mon, bx, header.y, tostring(model.rt_online or 0) .. " RT ONLINE", (model.rt_online or 0) > 0 and "OK" or "OFFLINE", top_badges[3])
-  bx = bx + top_badges[3] + 1
-  widgets.status_badge(mon, bx, header.y, tostring(model.nodes_total or 0) .. " NODES", (model.nodes_total or 0) > 0 and "LIMITED" or "OFFLINE", top_badges[4])
-  if top_badges[5] then
-    bx = bx + top_badges[4] + 1
-    widgets.status_badge(mon, bx, header.y, model.rt_global_off_hold and "RT-HOLD" or "RT FREI", model.rt_global_off_hold and "WARNING" or "OK", top_badges[5])
+  widgets.status_badge(mon, bx, header.y, "SYSTEM " .. tostring(model.system_status or "OK"), model.system_status or "OK", badge_cols[1])
+  bx = bx + badge_cols[1] + 1
+  widgets.status_badge(mon, bx, header.y, model.auto_profile and "AUTO AN" or "AUTO AUS", model.auto_profile and "LIMITED" or "OFFLINE", badge_cols[2])
+  bx = bx + badge_cols[2] + 1
+  widgets.status_badge(mon, bx, header.y, tostring(model.rt_online or 0) .. " RT", (model.rt_online or 0) > 0 and "OK" or "OFFLINE", badge_cols[3])
+  bx = bx + badge_cols[3] + 1
+  widgets.status_badge(mon, bx, header.y, tostring(model.nodes_live or 0) .. "/" .. tostring(model.nodes_total or 0) .. " LIVE", (model.nodes_stale or 0) > 0 and "WARNING" or "OK", badge_cols[4])
+  if badge_cols[5] then
+    bx = bx + badge_cols[4] + 1
+    widgets.status_badge(mon, bx, header.y, model.rt_global_off_hold and "RT HOLD" or "RT FREI", model.rt_global_off_hold and "WARNING" or "OK", badge_cols[5])
   end
+  ui.text(mon, header.x, header.y + 1, widgets.fit(tostring(model.system_status_line or "Statuslage unbekannt"), header.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, header.x, header.y + 2, widgets.fit(tostring(model.peer_summary or "Peers unbekannt"), header.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, header.x, header.y + 3, widgets.fit("Energie: " .. tostring(model.energy_hint or "-"), header.w), colors.get("muted"), colors.get("background"))
+  ui.rightText(mon, header.x, header.y + 4, header.w, widgets.fit(tostring(model.clock_label or ""), 14), colors.get("muted"), colors.get("background"))
 
-  local counts = model.alert_counts or {}
-  ui.text(mon, header.x, header.y + 1, widgets.fit((counts.CRITICAL or 0) .. " KRIT | " .. (counts.WARN or 0) .. " WARN | " .. (counts.INFO or 0) .. " INFO", header.w - 14), colors.get("muted"), colors.get("background"))
-  ui.text(mon, header.x + math.max(0, header.w - 12), header.y + 1, widgets.fit(tostring(model.clock_label or ""), 12), colors.get("muted"), colors.get("background"))
-  ui.text(mon, header.x, header.y + 2, widgets.fit(tostring(model.peer_summary or "Peer-Lage unbekannt"), header.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, header.x, header.y + 3, widgets.fit(tostring(model.energy_hint or "Energy-Lage unbekannt"), header.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, header.x, header.y + 4, widgets.fit(tostring(model.system_status_line or "-"), header.w), colors.get("text"), colors.get("background"))
-
-  local content_top = 2 + header_h
-  local bottom_h = is_large and math.max(14, math.floor(h * 0.42)) or math.max(10, math.floor(h * 0.32))
-  local top_h = math.max(10, h - content_top - bottom_h)
-
-  local top_cols = widgets.split_columns(w - 2, is_large and { 3, 2 } or { 3, 2 }, 1)
-  local control_w = top_cols[1]
-  local alert_w = top_cols[2]
+  local content_top = 2 + header_h + 1
+  local top_h = is_large and 10 or 9
+  local bottom_y = content_top + top_h + 1
+  local bottom_h = math.max(8, h - bottom_y - 1)
+  local cols = widgets.split_columns(w - 2, { 3, 2 }, 1)
+  local left_w, right_w = cols[1], cols[2]
 
   local hits = {}
+
   safe_section(mon, 2, content_top, "Steuerung", function()
-    local box = widgets.panel_box(mon, 2, content_top, control_w, top_h, "Globale Steuerung / Aktionen", "OK")
-    local controls_cols = widgets.split_columns(box.w, is_large and { 1, 1, 1 } or { 1, 1 }, 1)
+    local box = widgets.panel_box(mon, 2, content_top, left_w, top_h, "Steuerung", "OK")
+    local profile_cols = widgets.split_columns(box.w, is_large and { 1, 1, 1 } or { 1, 1 }, 1)
     local profiles = model.profile_list or {}
-    local row = 0
-    local col = 0
+    local row, col = 0, 0
     for _, profile in ipairs(profiles) do
-      local active = model.active_profile == profile
       local px = box.x
-      for k = 1, col do px = px + controls_cols[k] + 1 end
+      for i = 1, col do
+        px = px + profile_cols[i] + 1
+      end
       local py = box.y + row
-      local col_width = controls_cols[col + 1] or controls_cols[#controls_cols] or box.w
-      local bw = widgets.status_badge(mon, px, py, profile, active and "OK" or "OFFLINE", col_width)
+      local active = model.active_profile == profile
+      local bw = widgets.status_badge(mon, px, py, profile, active and "OK" or "OFFLINE", profile_cols[col + 1] or profile_cols[#profile_cols] or box.w)
       hits[#hits + 1] = { type = "profile", name = profile, x1 = px, x2 = px + math.max(0, bw - 1), y1 = py, y2 = py }
       col = col + 1
-      if col >= (is_large and 3 or 2) then
+      if col >= #profile_cols then
         col = 0
         row = row + 1
       end
-      if box.y + row >= box.y + box.h - 5 then break end
+      if row >= 2 then break end
     end
 
-    local ctrl_y = math.min(box.y + box.h - 7, box.y + row + 1)
-    ui.text(mon, box.x, ctrl_y - 1, widgets.fit("Direktsteuerung", box.w), colors.get("text"), colors.get("background"))
-    local aw = widgets.status_badge(mon, box.x, ctrl_y, "AUTO", model.auto_profile and "LIMITED" or "OFFLINE", math.max(10, math.floor(box.w * 0.24)))
-    hits[#hits + 1] = { type = "auto", x1 = box.x, x2 = box.x + math.max(0, aw - 1), y1 = ctrl_y, y2 = ctrl_y + 1 }
-    local hw = widgets.status_badge(mon, box.x + aw + 2, ctrl_y, model.rt_global_off_hold and "RT-HOLD" or "RT-OFF", model.rt_global_off_hold and "WARNING" or "OFFLINE", math.max(12, math.floor(box.w * 0.34)))
-    hits[#hits + 1] = { type = "rt_hold", x1 = box.x + aw + 2, x2 = box.x + aw + 2 + math.max(0, hw - 1), y1 = ctrl_y, y2 = ctrl_y + 1 }
-    ui.text(mon, box.x, ctrl_y + 1, widgets.fit("Soll " .. string.format("%.1f MRF/t", model.power_target or 0) .. " | Ist " .. string.format("%.1f MRF/t", model.power_actual or 0), box.w), colors.get("muted"), colors.get("background"))
-    ui.text(mon, box.x, ctrl_y + 2, widgets.fit("Trefferzonen aktiv: Profile/AUTO/RT-HOLD direkt antippbar | " .. tostring(model.controls_summary or ""), box.w), colors.get("LIMITED"), colors.get("background"))
-    ui.text(mon, box.x, ctrl_y + 3, widgets.fit("Node-Lage: total=" .. tostring(model.nodes_total or 0) .. " live=" .. tostring(model.nodes_live or 0) .. " stale=" .. tostring(model.nodes_stale or 0), box.w), colors.get("text"), colors.get("background"))
-    ui.text(mon, box.x, ctrl_y + 4, widgets.fit("RT-Lage: " .. tostring(model.rt_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
-    ui.text(mon, box.x, ctrl_y + 5, widgets.fit("Control: " .. tostring(model.control_status_line or "-"), box.w), colors.get("text"), colors.get("background"))
+    local action_y = box.y + 3
+    local auto_w = math.max(10, math.floor(box.w * 0.28))
+    local hold_w = math.max(12, math.floor(box.w * 0.34))
+    local aw = widgets.status_badge(mon, box.x, action_y, "AUTO", model.auto_profile and "LIMITED" or "OFFLINE", auto_w)
+    hits[#hits + 1] = { type = "auto", x1 = box.x, x2 = box.x + math.max(0, aw - 1), y1 = action_y, y2 = action_y }
+    local hx = box.x + auto_w + 2
+    local hw = widgets.status_badge(mon, hx, action_y, model.rt_global_off_hold and "RT-HOLD" or "RT-OFF", model.rt_global_off_hold and "WARNING" or "OFFLINE", hold_w)
+    hits[#hits + 1] = { type = "rt_hold", x1 = hx, x2 = hx + math.max(0, hw - 1), y1 = action_y, y2 = action_y }
+
+    ui.text(mon, box.x, box.y + 5, widgets.fit("Profil " .. tostring(model.active_profile or "-") .. " | " .. tostring(model.controls_summary or "-"), box.w), colors.get("text"), colors.get("background"))
+    ui.text(mon, box.x, box.y + 6, widgets.fit(string.format("Soll %.1f | Ist %.1f MRF/t", model.power_target or 0, model.power_actual or 0), box.w), colors.get("muted"), colors.get("background"))
+    ui.text(mon, box.x, box.y + 7, widgets.fit(string.format("Nodes %d live / %d stale | RT %d online", model.nodes_live or 0, model.nodes_stale or 0, model.rt_online or 0), box.w), colors.get("text"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
-  safe_section(mon, 2 + control_w + 1, content_top, "Meldungen", function()
-    local status = (counts.CRITICAL or 0) > 0 and "EMERGENCY" or ((counts.WARN or 0) > 0 and "WARNING" or "OK")
-    local box = widgets.panel_box(mon, 2 + control_w + 1, content_top, alert_w, top_h, "Aktive Meldungen", status)
+  safe_section(mon, 2 + left_w + 1, content_top, "Meldungen", function()
+    local counts = model.alert_counts or {}
+    local severity = (counts.CRITICAL or 0) > 0 and "EMERGENCY" or (((counts.WARN or 0) > 0) and "WARNING" or "OK")
+    local box = widgets.panel_box(mon, 2 + left_w + 1, content_top, right_w, top_h, "Meldungen", severity)
+    ui.text(mon, box.x, box.y, widgets.fit(string.format("C:%d  W:%d  I:%d", counts.CRITICAL or 0, counts.WARN or 0, counts.INFO or 0), box.w), colors.get("text"), colors.get("background"))
     local alerts = model.alert_rows or {}
-    if #alerts == 0 then alerts = { { title = "System", text = model.alert_summary or "Keine Meldungen", status = "OK" } } end
-    local max_rows = math.max(1, box.h - 2)
-    for i = 1, math.min(#alerts, max_rows) do widgets.alert_row(mon, box.x, box.y + i - 1, box.w, alerts[i], { compact = false }) end
-    ui.text(mon, box.x, box.y + box.h - 1, widgets.fit("Alert-Summary: " .. tostring(model.alert_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
-  end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
-
-  local bottom_y = content_top + top_h
-  local bottom_cols = widgets.split_columns(w - 2, is_large and { 2, 3 } or { 2, 3 }, 1)
-  local kpi_w = bottom_cols[1]
-  local nodes_w = bottom_cols[2]
-
-  safe_section(mon, 2, bottom_y, "KPI", function()
-    local box = widgets.panel_box(mon, 2, bottom_y, kpi_w, bottom_h, "KPI / Betriebslage", "OK")
-    local cws = widgets.split_columns(box.w, is_large and { 1, 1 } or { 1 }, 1)
-    widgets.stat_card(mon, box.x, box.y, cws[1], "Leistung", string.format("Soll %.1f MRF/t", model.power_target or 0), string.format("Ist %.1f MRF/t", model.power_actual or 0), "LIMITED", (model.power_target or 0) > 0 and math.min(100, ((model.power_actual or 0) / model.power_target) * 100) or 0)
-    if cws[2] then
-      local energy = model.energy_overview or {}
-      widgets.stat_card(mon, box.x + cws[1] + 1, box.y, cws[2], "Energie", string.format("Fuellstand %.1f %%", energy.percent or 0), tostring(energy.trend or "Trend stabil"), energy.status or "OFFLINE", energy.percent or 0)
+    if #alerts == 0 then
+      alerts = { { title = "System", text = model.alert_summary or "Keine aktiven Meldungen", status = "OK" } }
     end
-    local stale_status = model.nodes_stale and model.nodes_stale > 0 and "WARNING" or "OK"
-    widgets.stat_card(mon, box.x, box.y + 5, box.w, "Node Freshness", tostring(model.nodes_live or 0) .. " live", tostring(model.nodes_stale or 0) .. " stale", stale_status)
-    ui.text(mon, box.x, box.y + 10, widgets.fit(tostring(model.rt_summary or "RT-Lage unbekannt"), box.w), colors.get("muted"), colors.get("background"))
-    ui.text(mon, box.x, box.y + 11, widgets.fit(tostring(model.peer_summary or "Peer-Lage unbekannt"), box.w), colors.get("muted"), colors.get("background"))
-    ui.text(mon, box.x, box.y + 12, widgets.fit("Energy: " .. tostring(model.energy_hint or "-"), box.w), colors.get("text"), colors.get("background"))
-    ui.text(mon, box.x, box.y + 13, widgets.fit("Control: " .. tostring(model.controls_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
+    local max_rows = math.max(1, box.h - 3)
+    for i = 1, math.min(#alerts, max_rows) do
+      widgets.alert_row(mon, box.x, box.y + i, box.w, alerts[i], { compact = true })
+    end
+    ui.text(mon, box.x, box.y + box.h - 1, widgets.fit("Summary: " .. tostring(model.alert_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
-  safe_section(mon, 2 + kpi_w + 1, bottom_y, "Nodes", function()
-    local box = widgets.panel_box(mon, 2 + kpi_w + 1, bottom_y, nodes_w, bottom_h, "Node-Status", model.nodes_stale and model.nodes_stale > 0 and "WARNING" or "OK")
-    local widths = widgets.table_widths(box.w, is_large and { 7, 10, 10, 10, 8, 8, 14 } or { 6, 9, 9, 9, 7, 7, 11 })
-    widgets.compact_header(mon, box.x, box.y, { "Node", "Rolle", "Status", "Mode", "Seen", "Fresh", "Hinweis" }, widths)
+  safe_section(mon, 2, bottom_y, "Kennzahlen", function()
+    local box = widgets.panel_box(mon, 2, bottom_y, left_w, bottom_h, "Kennzahlen", "OK")
+    widgets.stat_card(mon, box.x, box.y, box.w, "Leistung", string.format("Soll %.1f", model.power_target or 0), string.format("Ist %.1f MRF/t", model.power_actual or 0), "LIMITED", (model.power_target or 0) > 0 and math.min(100, ((model.power_actual or 0) / model.power_target) * 100) or 0)
+    local energy = model.energy_overview or {}
+    widgets.stat_card(mon, box.x, box.y + 6, box.w, "Energie", string.format("%.1f %%", energy.percent or 0), tostring(energy.trend or "Trend stabil"), energy.status or "OFFLINE", energy.percent or 0)
+    local fresh_status = (model.nodes_stale or 0) > 0 and "WARNING" or "OK"
+    widgets.stat_card(mon, box.x, box.y + 12, box.w, "Node Freshness", tostring(model.nodes_live or 0) .. " live", tostring(model.nodes_stale or 0) .. " stale", fresh_status)
+    local hints = model.ops_hints or {}
+    if hints[1] then
+      ui.text(mon, box.x, box.y + math.max(0, box.h - 2), widgets.fit("Hinweis: " .. tostring(hints[1]), box.w), colors.get("muted"), colors.get("background"))
+    end
+  end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
+
+  safe_section(mon, 2 + left_w + 1, bottom_y, "Nodes", function()
+    local box = widgets.panel_box(mon, 2 + left_w + 1, bottom_y, right_w, bottom_h, "Nodes", (model.nodes_stale or 0) > 0 and "WARNING" or "OK")
+    local widths = widgets.table_widths(box.w, is_large and { 8, 9, 9, 7, 10 } or { 7, 8, 8, 6, 9 })
+    widgets.compact_header(mon, box.x, box.y, { "Node", "Rolle", "Status", "Seen", "Hinweis" }, widths)
     local y = box.y + 1
     for _, n in ipairs(model.nodes or {}) do
       if y > (box.y + box.h - 1) then break end
-      widgets.compact_status_row(mon, box.x, y, { tostring(n.id or "-"), tostring(n.role or "-"), tostring(n.status or "OFFLINE"), tostring(n.mode or "-"), tostring(n.last_seen_age or -1) .. "s", tostring(n.freshness or "-"), tostring(n.note or "-") }, widths, n.status or "OFFLINE", 3)
+      widgets.compact_status_row(mon, box.x, y, {
+        tostring(n.id or "-"),
+        tostring(n.role or "-"),
+        tostring(n.status or "OFFLINE"),
+        tostring(n.last_seen_age or -1) .. "s",
+        tostring(n.note or "-")
+      }, widths, n.status or "OFFLINE", 3)
       y = y + 1
     end
-    if y == box.y + 1 then ui.text(mon, box.x, y, "Keine Nodes verbunden", colors.get("OFFLINE"), colors.get("background")) end
-  end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
-
-  safe_section(mon, 2, bottom_y + bottom_h - 2, "Leitstand-Hinweise", function()
-    local hints = model.ops_hints or {}
-    if #hints > 0 then
-      ui.text(mon, 2, bottom_y + bottom_h - 2, widgets.fit("Hinweise: " .. table.concat(hints, " | "), w - 4), colors.get("muted"), colors.get("background"))
+    if y == box.y + 1 then
+      ui.text(mon, box.x, y, "Keine Nodes sichtbar", colors.get("OFFLINE"), colors.get("background"))
     end
-  end)
+  end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   if #section_errors > 0 then model.ui_errors = section_errors end
   hit_cache[mon] = hits
@@ -153,7 +150,9 @@ local function hit_test(mon, x, y)
   for _, hit in ipairs(hit_cache[mon] or {}) do
     local y1 = hit.y1 or hit.y
     local y2 = hit.y2 or hit.y
-    if y >= y1 and y <= y2 and x >= hit.x1 and x <= hit.x2 then return hit end
+    if y >= y1 and y <= y2 and x >= hit.x1 and x <= hit.x2 then
+      return hit
+    end
   end
 end
 
