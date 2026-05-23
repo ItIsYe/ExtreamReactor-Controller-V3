@@ -8,6 +8,13 @@ local function default_view(index, view_order)
   return (view_order and view_order[1]) or "overview"
 end
 
+local function copy_hit(hit)
+  if type(hit) ~= "table" then return nil end
+  local out = {}
+  for k, v in pairs(hit) do out[k] = v end
+  return out
+end
+
 function M.new(opts)
   opts = opts or {}
   return setmetatable({
@@ -28,6 +35,10 @@ function M:bind_or_update(monitors, desired_scale, view_order)
     local view_key = locked and role or (prior.view_key or default_view(i, self.view_order))
     local size_key = tostring(mon.width or 0) .. "x" .. tostring(mon.height or 0)
     local layout_key = tostring(mon.layout_class or "compact")
+    local rebound = prior.mon ~= nil and prior.mon ~= mon.mon
+    local size_changed = prior.last_size_key ~= nil and prior.last_size_key ~= size_key
+    local layout_changed = prior.last_layout_key ~= nil and prior.last_layout_key ~= layout_key
+
     local session = {
       id = id,
       name = mon.name,
@@ -37,10 +48,11 @@ function M:bind_or_update(monitors, desired_scale, view_order)
       locked = locked,
       text_scale = mon.text_scale or desired_scale,
       last_applied_scale = mon.last_applied_scale or prior.last_applied_scale,
-      last_size_key = prior.last_size_key or size_key,
-      last_layout_key = prior.last_layout_key or layout_key,
+      last_size_key = size_key,
+      last_layout_key = layout_key,
       last_render_hash = prior.last_render_hash,
       dirty = prior.dirty == nil and true or prior.dirty,
+      dirty_reason = prior.dirty_reason,
       first_draw_done = prior.first_draw_done == true,
       hitboxes = prior.hitboxes or {},
       last_input = prior.last_input,
@@ -52,16 +64,19 @@ function M:bind_or_update(monitors, desired_scale, view_order)
       size_key = size_key,
       layout_key = layout_key
     }
-    if prior.mon ~= nil and prior.mon ~= session.mon then
+
+    if rebound then
       session.dirty = true
       session.first_draw_done = false
+      session.last_render_hash = nil
+      session.dirty_reason = "rebind"
       session.last_error = "monitor-rebound"
-    end
-    if session.last_size_key ~= size_key or session.last_layout_key ~= layout_key then
+    elseif size_changed or layout_changed then
       session.dirty = true
-      session.last_size_key = size_key
-      session.last_layout_key = layout_key
+      session.dirty_reason = size_changed and "size-changed" or "layout-changed"
+      session.last_render_hash = nil
     end
+
     next_sessions[id] = session
     next_order[#next_order + 1] = id
   end
@@ -69,12 +84,9 @@ function M:bind_or_update(monitors, desired_scale, view_order)
   return self:get_primary_sessions()
 end
 
-
 function M:get_sessions()
   local out = {}
-  for _, id in ipairs(self.order) do
-    out[#out + 1] = self.sessions[id]
-  end
+  for _, id in ipairs(self.order) do out[#out + 1] = self.sessions[id] end
   return out
 end
 
@@ -96,12 +108,39 @@ end
 function M:mark_dirty(session, reason)
   if not session then return end
   session.dirty = true
-  if reason then session.last_error = tostring(reason) end
+  session.dirty_reason = reason and tostring(reason) or session.dirty_reason
 end
 
 function M:needs_full_clear(session)
   if not session then return true end
   return (not session.first_draw_done) or session.dirty
+end
+
+function M:note_render_success(session, render_hash)
+  if not session then return end
+  session.first_draw_done = true
+  session.dirty = false
+  session.dirty_reason = nil
+  session.last_error = nil
+  if render_hash ~= nil then session.last_render_hash = tostring(render_hash) end
+end
+
+function M:note_render_failure(session, err)
+  if not session then return end
+  session.last_error = tostring(err)
+  session.dirty = true
+  session.dirty_reason = "render-failed"
+end
+
+function M:note_input(session, payload)
+  if not session then return end
+  session.last_input = payload
+  local hit = payload and payload.hit
+  if hit then
+    session.hitboxes = { copy_hit(hit) }
+  elseif payload and payload.clears_hitboxes then
+    session.hitboxes = {}
+  end
 end
 
 return M

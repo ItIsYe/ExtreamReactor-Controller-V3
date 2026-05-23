@@ -94,26 +94,9 @@ local function run_master()
         local ok, draw_err = pcall(runtime.refs.ui_controller.draw)
         if not ok then
           runtime.log("UI draw failed: " .. tostring(draw_err), "ERROR")
-        else
-          local ov_meta = runtime.state.last_overview_render_meta
-          if ov_meta and runtime.state._last_overview_cache_unchanged ~= ov_meta.cache_unchanged then
-            runtime.state._last_overview_cache_unchanged = ov_meta.cache_unchanged
-            if ov_meta.cache_unchanged then
-              runtime.log("Overview draw executed on unchanged model (cache skip disabled)", "DEBUG")
-            else
-              runtime.log("Overview draw executed on changed model", "DEBUG")
-            end
-          end
         end
-        local total_nodes = runtime_context.table_count(runtime.state.nodes)
-        local rt_nodes, support_nodes = 0, 0
-        for _, node in pairs(runtime.state.nodes or {}) do
-          if node.role == constants.roles.RT_NODE then rt_nodes = rt_nodes + 1 else support_nodes = support_nodes + 1 end
-        end
-        local ms = runtime.state.last_ui_model_stats or {}
+
         local ui_models = runtime.refs.ui_controller and runtime.refs.ui_controller._last_models
-        local rt_model = ui_models and ui_models.rt or nil
-        local energy_model = ui_models and ui_models.energy or nil
         if ui_models and not runtime.state._steady_ui_shape_logged then
           local steady = snapshot_ui_shape(ui_models)
           runtime.state._steady_ui_shape_logged = true
@@ -128,86 +111,12 @@ local function run_master()
             ), changed and "WARN" or "INFO")
           end
         end
-        local sample_rt = nil
-        if rt_model and rt_model.rt_nodes then
-          for _, candidate in ipairs(rt_model.rt_nodes) do
-            if tostring(candidate.id or "") ~= "" and tostring(candidate.id or "UNKNOWN") ~= "UNKNOWN" then
-              sample_rt = candidate
-              break
-            end
-          end
-          sample_rt = sample_rt or rt_model.rt_nodes[1]
-        end
-        runtime.log(("UI model density: nodes=%d rt=%d support=%d queue=%d ov=%d rt_vm=%d support_vm=%d matrices=%d"):format(
-          total_nodes,
-          rt_nodes,
-          support_nodes,
-          runtime.refs.sequencer and #runtime.refs.sequencer.queue or 0,
-          ms.overview_nodes or 0,
-          ms.rt_nodes or 0,
-          ms.support_nodes or 0,
-          (energy_model and (energy_model.matrix_count or #(energy_model.matrices or {}))) or (ms.matrices or 0)
-        ), "DEBUG")
-        if sample_rt then
-          runtime.log(("UI RT semantic sample: id=%s node_mode=%s display=%s assignment=%s reason=%s control=%s queue=%s/%s freshness=%s"):format(
-            tostring(sample_rt.id or "?"),
-            tostring(sample_rt.node_mode or sample_rt.mode or "-"),
-            tostring(sample_rt.display_mode or "-"),
-            tostring(sample_rt.assignment_state or "-"),
-            tostring(sample_rt.assignment_reason or "-"),
-            tostring(sample_rt.control_source or "-"),
-            tostring(sample_rt.queue_state or "-"),
-            tostring(sample_rt.queue_step or "-"),
-            tostring(sample_rt.freshness or "-")
-          ), "DEBUG")
-        end
-        if energy_model then
-          local energy_node_count = 0
-          for _, node in pairs(runtime.state.nodes or {}) do
-            if node.role == constants.roles.ENERGY_NODE then energy_node_count = energy_node_count + 1 end
-          end
-          runtime.log(("UI energy model: mode=%s matrices=%d matrix_count=%d stored=%.1f capacity=%.1f input=%.1f output=%.1f empty=%s"):format(
-            tostring(energy_model.mode or "-"),
-            #(energy_model.matrices or {}),
-            tonumber(energy_model.matrix_count or #(energy_model.matrices or {})) or 0,
-            tonumber(energy_model.stored or 0) or 0,
-            tonumber(energy_model.capacity or 0) or 0,
-            tonumber(energy_model.input or 0) or 0,
-            tonumber(energy_model.output or 0) or 0,
-            tostring((#(energy_model.matrices or {}) == 0) and ((energy_model.stored or 0) == 0) and ((energy_model.input or 0) == 0))
-          ), "DEBUG")
-          if energy_node_count > 0 and #(energy_model.matrices or {}) == 0 and (energy_model.stored or 0) == 0 and (energy_model.input or 0) == 0 then
-            runtime.log(("UI energy model empty despite %d ENERGY node(s) - check payload mapping node.energy vs payload root"):format(energy_node_count), "WARN")
-          end
-        end
-        if runtime.refs.view_manager and runtime.refs.view_manager.sessions then
-          local primary = runtime.refs.view_manager.sessions:get_primary_sessions() or {}
-          for idx, session in ipairs(primary) do
-            runtime.log(("UI session binding: idx=%d id=%s name=%s role=%s view=%s dirty=%s first_draw_done=%s size=%s layout=%s scale=%s"):format(
-              idx,
-              tostring(session.id or "?"),
-              tostring(session.name or "?"),
-              tostring(session.role or "?"),
-              tostring(session.view_key or "?"),
-              tostring(session.dirty),
-              tostring(session.first_draw_done),
-              tostring(session.last_size_key or session.size_key or "?"),
-              tostring(session.last_layout_key or session.layout_key or "?"),
-              tostring(session.text_scale or "?")
-            ), "DEBUG")
-          end
-        end
+
         if runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
-          local failures = 0
           for _, r in ipairs(runtime.refs.view_manager.last_render_results) do
             if not r.ok then
-              failures = failures + 1
               runtime.log(("UI draw failure detail: view=%s monitor=%s role=%s error=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)), "ERROR")
             end
-          end
-          if failures == 0 and not runtime.state._ui_success_logged_once then
-            runtime.state._ui_success_logged_once = true
-            runtime.log("UI draw result: all views rendered successfully", "DEBUG")
           end
         end
       else
