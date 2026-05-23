@@ -26,7 +26,7 @@ local function render(mon, model)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
   ui.panel(mon, 1, 1, w, h, "MONITOR 1 - UEBERSICHT & STEUERUNG", model.system_status or "OK")
 
-  local header_h = is_large and 9 or 8
+  local header_h = is_large and 10 or 9
   local header = widgets.panel_box(mon, 2, 2, w - 2, header_h, "Systemstatus", model.system_status or "OK")
   local top_badges = widgets.split_columns(header.w, is_large and { 2, 2, 2, 2, 2 } or { 3, 3, 2, 2 }, 1)
   local bx = header.x
@@ -47,9 +47,10 @@ local function render(mon, model)
   ui.text(mon, header.x + math.max(0, header.w - 12), header.y + 1, widgets.fit(tostring(model.clock_label or ""), 12), colors.get("muted"), colors.get("background"))
   ui.text(mon, header.x, header.y + 2, widgets.fit(tostring(model.peer_summary or "Peer-Lage unbekannt"), header.w), colors.get("text"), colors.get("background"))
   ui.text(mon, header.x, header.y + 3, widgets.fit(tostring(model.energy_hint or "Energy-Lage unbekannt"), header.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, header.x, header.y + 4, widgets.fit(tostring(model.system_status_line or "-"), header.w), colors.get("text"), colors.get("background"))
 
   local content_top = 2 + header_h
-  local bottom_h = is_large and math.max(13, math.floor(h * 0.40)) or math.max(9, math.floor(h * 0.30))
+  local bottom_h = is_large and math.max(14, math.floor(h * 0.42)) or math.max(10, math.floor(h * 0.32))
   local top_h = math.max(10, h - content_top - bottom_h)
 
   local top_cols = widgets.split_columns(w - 2, is_large and { 3, 2 } or { 3, 2 }, 1)
@@ -79,7 +80,7 @@ local function render(mon, model)
       if box.y + row >= box.y + box.h - 5 then break end
     end
 
-    local ctrl_y = math.min(box.y + box.h - 6, box.y + row + 1)
+    local ctrl_y = math.min(box.y + box.h - 7, box.y + row + 1)
     ui.text(mon, box.x, ctrl_y - 1, widgets.fit("Direktsteuerung", box.w), colors.get("text"), colors.get("background"))
     local aw = widgets.status_badge(mon, box.x, ctrl_y, "AUTO", model.auto_profile and "LIMITED" or "OFFLINE", math.max(10, math.floor(box.w * 0.24)))
     hits[#hits + 1] = { type = "auto", x1 = box.x, x2 = box.x + math.max(0, aw - 1), y1 = ctrl_y, y2 = ctrl_y + 1 }
@@ -89,6 +90,7 @@ local function render(mon, model)
     ui.text(mon, box.x, ctrl_y + 2, widgets.fit("Trefferzonen aktiv: Profile/AUTO/RT-HOLD direkt antippbar | " .. tostring(model.controls_summary or ""), box.w), colors.get("LIMITED"), colors.get("background"))
     ui.text(mon, box.x, ctrl_y + 3, widgets.fit("Node-Lage: total=" .. tostring(model.nodes_total or 0) .. " live=" .. tostring(model.nodes_live or 0) .. " stale=" .. tostring(model.nodes_stale or 0), box.w), colors.get("text"), colors.get("background"))
     ui.text(mon, box.x, ctrl_y + 4, widgets.fit("RT-Lage: " .. tostring(model.rt_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
+    ui.text(mon, box.x, ctrl_y + 5, widgets.fit("Control: " .. tostring(model.control_status_line or "-"), box.w), colors.get("text"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + control_w + 1, content_top, "Meldungen", function()
@@ -96,11 +98,9 @@ local function render(mon, model)
     local box = widgets.panel_box(mon, 2 + control_w + 1, content_top, alert_w, top_h, "Aktive Meldungen", status)
     local alerts = model.alert_rows or {}
     if #alerts == 0 then alerts = { { title = "System", text = model.alert_summary or "Keine Meldungen", status = "OK" } } end
-    local max_rows = math.max(1, box.h - 1)
+    local max_rows = math.max(1, box.h - 2)
     for i = 1, math.min(#alerts, max_rows) do widgets.alert_row(mon, box.x, box.y + i - 1, box.w, alerts[i], { compact = false }) end
-    if #alerts < max_rows then
-      ui.text(mon, box.x, box.y + box.h - 1, widgets.fit("Hinweis: keine weiteren Alerts aktiv", box.w), colors.get("muted"), colors.get("background"))
-    end
+    ui.text(mon, box.x, box.y + box.h - 1, widgets.fit("Alert-Summary: " .. tostring(model.alert_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   local bottom_y = content_top + top_h
@@ -120,7 +120,8 @@ local function render(mon, model)
     widgets.stat_card(mon, box.x, box.y + 5, box.w, "Node Freshness", tostring(model.nodes_live or 0) .. " live", tostring(model.nodes_stale or 0) .. " stale", stale_status)
     ui.text(mon, box.x, box.y + 10, widgets.fit(tostring(model.rt_summary or "RT-Lage unbekannt"), box.w), colors.get("muted"), colors.get("background"))
     ui.text(mon, box.x, box.y + 11, widgets.fit(tostring(model.peer_summary or "Peer-Lage unbekannt"), box.w), colors.get("muted"), colors.get("background"))
-    ui.text(mon, box.x, box.y + 12, widgets.fit("Energy: " .. tostring(model.energy_hint or "-") .. " | RT: " .. tostring(model.rt_summary or "-"), box.w), colors.get("text"), colors.get("background"))
+    ui.text(mon, box.x, box.y + 12, widgets.fit("Energy: " .. tostring(model.energy_hint or "-"), box.w), colors.get("text"), colors.get("background"))
+    ui.text(mon, box.x, box.y + 13, widgets.fit("Control: " .. tostring(model.controls_summary or "-"), box.w), colors.get("muted"), colors.get("background"))
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + kpi_w + 1, bottom_y, "Nodes", function()

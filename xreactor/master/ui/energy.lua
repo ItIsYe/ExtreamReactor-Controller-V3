@@ -8,7 +8,7 @@ local function render(mon, model)
   ui.panel(mon, 1, 1, w, h, "MONITOR 3 - ENERGY & RESSOURCEN", model.status or "OK")
 
   local pct = model.capacity and model.capacity > 0 and ((model.stored or 0) / model.capacity) * 100 or 0
-  local summary_h = is_large and 14 or 11
+  local summary_h = is_large and 15 or 12
   local summary = widgets.panel_box(mon, 2, 2, w - 2, summary_h, "Energy Summary", model.status or "OK")
   ui.bigNumber(mon, summary.x + 1, summary.y, "Gesamtspeicher", string.format("%.1f", model.aggregate_percent or pct), "%", model.status or "OK")
   ui.text(mon, summary.x + 1, summary.y + 2, widgets.fit(string.format("Stored %.1f / %.1f", model.stored or 0, model.capacity or 0), summary.w - 2), colors.get("text"), colors.get("background"))
@@ -20,16 +20,17 @@ local function render(mon, model)
   ui.text(mon, summary.x + 1, summary.y + 6, widgets.fit(tostring(model.resource_summary or ""), summary.w - 2), colors.get("muted"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 7, widgets.fit("Betrieb: " .. (model.matrix_only and "Matrix-Only" or "Hybrid/Storage") .. " | Support " .. tostring(model.support_online or 0) .. "/" .. tostring(#(model.support_nodes or {})), summary.w - 2), colors.get("text"), colors.get("background"))
   ui.text(mon, summary.x + 1, summary.y + 8, widgets.fit("Summary: " .. tostring(model.energy_summary or "-") , summary.w - 2), colors.get("muted"), colors.get("background"))
+  ui.text(mon, summary.x + 1, summary.y + 9, widgets.fit("Matrix-Quellen " .. tostring(model.matrix_sources or 0) .. " | Support stale " .. tostring(model.support_stale or 0), summary.w - 2), colors.get("text"), colors.get("background"))
   if model.matrix_only then
-    widgets.status_badge(mon, summary.x + 1, summary.y + 9, "MATRIX-ONLY BETRIEB", "LIMITED", math.max(20, math.floor((summary.w - 2) * 0.55)))
+    widgets.status_badge(mon, summary.x + 1, summary.y + 10, "MATRIX-ONLY BETRIEB", "LIMITED", math.max(20, math.floor((summary.w - 2) * 0.55)))
   end
 
   if (model.matrix_count or 0) == 1 and model.matrices and model.matrices[1] then
     local m = model.matrices[1]
-    ui.text(mon, summary.x + 1, summary.y + 9, widgets.fit(string.format("Single-Matrix %s: %.1f%% | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent or 0, m.input or 0, m.output or 0), summary.w - 2), colors.get("LIMITED"), colors.get("background"))
+    ui.text(mon, summary.x + 1, summary.y + 11, widgets.fit(string.format("Single-Matrix %s: %.1f%% | In %.1f | Out %.1f", tostring(m.id or "M1"), m.percent or 0, m.input or 0, m.output or 0), summary.w - 2), colors.get("LIMITED"), colors.get("background"))
   end
   if (model.capacity or 0) <= 0 and ((model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0) then
-    ui.text(mon, summary.x + 1, summary.y + 10, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
+    ui.text(mon, summary.x + 1, summary.y + 12, widgets.fit("Hinweis: Kapazitaet fehlt im Payload, Flussdaten sind vorhanden.", summary.w - 2), colors.get("WARNING"), colors.get("background"))
   end
 
   local content_y = 2 + summary_h + 1
@@ -63,7 +64,7 @@ local function render(mon, model)
   end
 
   local right_x = 2 + left_w + 1
-  local resources_h = is_large and math.max(13, math.floor(content_h * 0.50)) or math.max(9, math.floor(content_h * 0.48))
+  local resources_h = is_large and math.max(12, math.floor(content_h * 0.45)) or math.max(9, math.floor(content_h * 0.44))
   local resources = widgets.panel_box(mon, right_x, content_y, right_w, resources_h, "Ressourcen", "OK")
   local r = model.resources or {}
   widgets.stat_card(mon, resources.x, resources.y, resources.w, "Fuel", string.format("Reserve %.1f", r.fuel_total or 0), string.format("Quellen %d", r.fuel_sources or 0), "LIMITED")
