@@ -4,11 +4,17 @@ local sessions_lib = require("master.monitor_sessions")
 
 local M = {}
 
-
 local function render_error(mon, w, h, title, message)
   ui.clear(mon)
   ui.panel(mon, 1, 1, w, h, title, "EMERGENCY")
   ui.text(mon, 2, 3, widgets.fit(tostring(message), math.max(10, w - 3)), 0xFFFFFF, 0x000000)
+end
+
+local function should_hard_clear(session)
+  if not session then
+    return false
+  end
+  return session.rebind_pending == true or session.dirty_reason == "rebind"
 end
 
 function M.new(opts)
@@ -29,12 +35,13 @@ function M:render(monitors, data_map)
     local view_key = self.sessions:resolve_view_key(session)
     local view = self.views[view_key]
     local w, h = ui.getSize(session.mon)
-    local requires_full_clear = self.sessions:needs_full_clear(session)
 
     if view and view.render then
       local ok, err = pcall(function()
         ui.begin_frame(session.mon)
-        if requires_full_clear then ui.clear(session.mon) end
+        if should_hard_clear(session) then
+          ui.clear(session.mon)
+        end
         view.render(session.mon, data_map[view_key] or {})
       end)
 
