@@ -2,6 +2,65 @@ local ui = require("core.ui")
 local colors = require("shared.colors")
 local widgets = require("master.ui.widgets")
 
+local function status_weight(status)
+  local s = tostring(status or "OFFLINE"):upper()
+  if s == "EMERGENCY" or s == "OFFLINE" then return 6 end
+  if s == "WARNING" then return 5 end
+  if s == "LIMITED" then return 4 end
+  if s == "OK" then return 2 end
+  return 3
+end
+
+local function rt_score(rt)
+  local score = status_weight(rt and rt.status) * 1000
+  local assignment = tostring(rt and rt.assignment_state or ""):upper()
+  if assignment == "UNASSIGNED" then
+    score = score + 700
+  elseif assignment == "UNAVAILABLE" then
+    score = score + 600
+  elseif assignment ~= "ASSIGNED" then
+    score = score + 450
+  end
+  if tostring(rt and rt.control_source or ""):upper() == "LOCAL" then
+    score = score + 300
+  end
+  local age = tonumber(rt and rt.last_seen_age) or -1
+  if age > 0 then
+    score = score + math.min(age, 300)
+  end
+  local target = tonumber(rt and rt.target) or 0
+  local actual = tonumber((rt and rt.actual_output) or (rt and rt.output)) or 0
+  score = score + math.min(200, math.abs(target - actual) * 5)
+  return score
+end
+
+local function prioritized_rt_nodes(nodes)
+  local list = {}
+  for _, node in ipairs(nodes or {}) do
+    list[#list + 1] = node
+  end
+  table.sort(list, function(a, b)
+    local sa = rt_score(a)
+    local sb = rt_score(b)
+    if sa ~= sb then
+      return sa > sb
+    end
+    return tostring(a and a.id or "") < tostring(b and b.id or "")
+  end)
+  return list
+end
+
+local function hidden_rt_summary(nodes)
+  local stale, local_ctrl, unassigned = 0, 0, 0
+  for _, rt in ipairs(nodes or {}) do
+    if (tonumber(rt.last_seen_age) or -1) > 15 then stale = stale + 1 end
+    if tostring(rt.control_source or ""):upper() == "LOCAL" then local_ctrl = local_ctrl + 1 end
+    local assignment = tostring(rt.assignment_state or ""):upper()
+    if assignment == "UNASSIGNED" or assignment == "UNAVAILABLE" then unassigned = unassigned + 1 end
+  end
+  return stale, local_ctrl, unassigned
+end
+
 local function render_rt_card(mon, x, y, w, rt)
   local node_id = tostring(rt.id or rt.node_id or "UNKNOWN")
   local box = widgets.panel_box(mon, x, y, w, 10, "RT-" .. node_id, rt.status or "OFFLINE")
@@ -16,10 +75,25 @@ local function render_rt_card(mon, x, y, w, rt)
   ui.progress(mon, box.x, box.y + 8, math.max(8, box.w), math.max(0, math.min(100, rt.actual_output or rt.output or 0)) / 100, rt.status or "OFFLINE")
 end
 
+local function render_overflow_card(mon, x, y, w, hidden_nodes)
+  local box = widgets.panel_box(mon, x, y, w, 10, "Weitere RT", (#hidden_nodes > 0) and "LIMITED" or "OK")
+  local hidden = #hidden_nodes
+  local stale, local_ctrl, unassigned = hidden_rt_summary(hidden_nodes)
+  ui.text(mon, box.x, box.y, widgets.fit("+" .. tostring(hidden) .. " weitere RT-Nodes", box.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 1, widgets.fit("Anzeige priorisiert Problemknoten", box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 3, widgets.fit("Stale: " .. tostring(stale), box.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 4, widgets.fit("Local Ctrl: " .. tostring(local_ctrl), box.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 5, widgets.fit("Offen/Unavailable: " .. tostring(unassigned), box.w), colors.get("text"), colors.get("background"))
+  if hidden_nodes[1] then
+    ui.text(mon, box.x, box.y + 7, widgets.fit("Top hidden: RT-" .. tostring(hidden_nodes[1].id or "?"), box.w), colors.get("muted"), colors.get("background"))
+    ui.text(mon, box.x, box.y + 8, widgets.fit(tostring(hidden_nodes[1].assignment_reason or "-"), box.w), colors.get("muted"), colors.get("background"))
+  end
+end
+
 local function render(mon, model)
   local w, h = ui.getSize(mon)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
-  ui.panel(mon, 1, 1, w, h, "MONITOR 2 - RT", "OK")
+  ui.panel(mon, 1, 1, w, h, "RT", "OK")
 
   local summary_h = is_large and 8 or 7
   local summary = widgets.panel_box(mon, 2, 2, w - 2, summary_h, "RT-Flotte", "OK")
@@ -44,17 +118,22 @@ local function render(mon, model)
   local gap = 1
   local card_w = math.max(24, math.floor((w - 3 - ((cols - 1) * gap)) / cols))
   local rows = math.max(1, math.floor(cards_h / 11))
+  local capacity = math.max(1, cols * rows)
+
+  local ordered = prioritized_rt_nodes(model.rt_nodes or {})
+  local overflow = #ordered > capacity
+  local visible_count = overflow and math.max(1, capacity - 1) or math.min(#ordered, capacity)
+
   local drawn = 0
-  for i, rt in ipairs(model.rt_nodes or {}) do
+  for i = 1, visible_count do
     local idx = i - 1
     local r = math.floor(idx / cols)
-    if r >= rows then break end
     local c = idx % cols
-    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 11, card_w, rt)
+    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 11, card_w, ordered[i])
     drawn = drawn + 1
   end
 
-  if drawn == 0 then
+  if #ordered == 0 then
     render_rt_card(mon, 2, cards_top, math.max(24, card_w), {
       id = "NO-RT",
       status = "OFFLINE",
@@ -69,6 +148,15 @@ local function render(mon, model)
       last_seen_age = "-",
       output = 0
     })
+  elseif overflow then
+    local hidden_nodes = {}
+    for i = visible_count + 1, #ordered do
+      hidden_nodes[#hidden_nodes + 1] = ordered[i]
+    end
+    local idx = drawn
+    local r = math.floor(idx / cols)
+    local c = idx % cols
+    render_overflow_card(mon, 2 + c * (card_w + gap), cards_top + r * 11, card_w, hidden_nodes)
   end
 
   local queue = widgets.panel_box(mon, 2, h - queue_h, w - 2, queue_h, "Sequencer / Queue", "LIMITED")
