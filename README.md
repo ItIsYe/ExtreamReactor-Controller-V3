@@ -33,6 +33,16 @@ The current repository ships:
 - Uses wired monitors when present.
 - Shows UTC wall-clock time in the MASTER UI (not CC:Tweaked in-game time).
 - Does **not** directly control reactor, turbine, or storage peripherals; those stay on the role nodes.
+- Uses a fixed 3-primary-monitor mapping when at least three MASTER monitors are bound:
+  - monitor 1 -> `overview`
+  - monitor 2 -> `rt`
+  - monitor 3 -> `energy`
+- Keeps MASTER monitor text scale explicitly fixed at `1.0` (`monitor_scale` and `ui_scale_default` in `xreactor/master/config.lua`).
+- Uses a session-based monitor UI pipeline built from:
+  - `xreactor/master/monitor_sessions.lua` for monitor/session state and binding,
+  - `xreactor/master/ui/multiview.lua` for per-session render/input orchestration,
+  - `xreactor/master/ui_diagnostics.lua` for compact UI shape diagnostics.
+- Keeps touch controls on the Overview view only; Overview is the place for primary operator actions such as profile selection, AUTO toggle, and RT hold toggle.
 
 ### RT
 **Purpose:** Reactor/turbine control node.
@@ -111,7 +121,7 @@ At runtime, the project is split into a small set of active areas:
 
 - `xreactor/core/` - shared runtime internals such as bootstrap loading, network/comms, logging, registry handling, UI helpers, control rails, and safety helpers.
 - `xreactor/services/` - reusable services for comms, discovery, telemetry, alerts, UI ticks, and service lifecycle management.
-- `xreactor/master/` - MASTER-specific config, sequencer, and UI views.
+- `xreactor/master/` - MASTER-specific config, sequencer, UI views, monitor sessions, and UI diagnostics.
 - `xreactor/nodes/` - role-specific node implementations for `rt`, `energy`, `water`, `fuel`, and `reprocessor`.
 - `xreactor/nodes/support/` - shared non-RT support-node runtime/discovery/ui/command helpers used by `water`, `fuel`, and `reprocessor`.
 - `xreactor/adapters/` - peripheral adapters for reactors, turbines, monitors, energy storage, and induction matrices.
@@ -119,6 +129,39 @@ At runtime, the project is split into a small set of active areas:
 - `xreactor/manifest.lua` - installer manifest listing the files for the base runtime and each role.
 - `xreactor/start.lua` - startup router that reads the installed role and launches the correct entrypoint.
 - `installer` - single-file installer/update entrypoint for deployment.
+
+### MASTER monitor UI architecture (current)
+
+The current MASTER monitor UI is organized in four layers:
+
+1. `xreactor/core/monitor_manager.lua`
+   - discovers and wraps bound MASTER monitors,
+   - applies monitor text scale only when needed,
+   - persists and restores the MASTER monitor registry.
+
+2. `xreactor/master/monitor_sessions.lua`
+   - keeps stable session state per physical monitor,
+   - owns primary/aux binding decisions,
+   - tracks render/input lifecycle state such as dirty/full-clear/rebind/input metadata.
+
+3. `xreactor/master/ui/multiview.lua`
+   - acts as the render/input orchestrator,
+   - asks the session layer which view a monitor should render,
+   - dispatches touches into the active view hit-test/action path.
+
+4. `xreactor/master/ui_controller.lua` plus the view files in `xreactor/master/ui/`
+   - builds per-view UI models,
+   - renders the `overview`, `rt`, and `energy` primary dashboard views.
+
+Current MASTER monitor policy:
+- exactly one active primary view per primary monitor,
+- no standby/fallback secondary UI mode,
+- no full clear on every frame,
+- no repeated `setTextScale(...)` on every monitor refresh,
+- current primary dashboard finish work is focused on the three view files:
+  - `xreactor/master/ui/overview.lua`
+  - `xreactor/master/ui/rt_dashboard.lua`
+  - `xreactor/master/ui/energy.lua`
 
 
 ### Roadmap-Status (Non-RT)
@@ -201,7 +244,7 @@ This means a fresh machine only needs the single root `installer` file to begin 
 3. Runs storage preflight checks for update mode.
 4. Downloads the expected base + installed role files into `/xreactor_stage`.
 5. Copies existing `/xreactor/config` into stage and validates staged files/hashes.
-6. Commits stage activation by moving active `/xreactor` to `/xreactor_backup_prev`, activating `/xreactor_stage` as `/xreactor`, and deleting backup after successful commit.
+6. Commits stage activation by moving active `/xreactor` to `/xreactor_backup_prev`, activating `/xreactor_stage` as `/xreactor`, and deleting backup after successful activation.
 7. Rewrites/ensures the XReactor startup file at `/startup` if the existing startup belongs to XReactor.
 8. Logs progress to `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`.
 
@@ -435,6 +478,14 @@ ENERGY heartbeats/presence run on a hard-separated lightweight path (timer + int
 ### Monitor behavior
 
 - MASTER supports wired monitor management and persistent layout assignment.
+- MASTER currently uses a fixed primary-view policy for the first three bound monitors:
+  - monitor 1 -> `overview`
+  - monitor 2 -> `rt`
+  - monitor 3 -> `energy`
+- MASTER currently uses a session-based monitor runtime (`monitor_sessions.lua`) instead of directly rendering from transient scan output.
+- MASTER monitor UI rendering currently routes through `ui/multiview.lua` and compact shape diagnostics through `ui_diagnostics.lua`.
+- MASTER currently keeps monitor scale fixed at `1.0` and avoids repeated `setTextScale(...)` on unchanged refresh cycles.
+- MASTER touch actions are currently expected on the Overview monitor only.
 - ENERGY, WATER, FUEL, RT, and REPROCESSING can render local monitor pages when a monitor is available.
 - ENERGY can choose monitors using a preferred name or selection strategy.
 
@@ -466,7 +517,7 @@ To update an installed node/computer:
 2. Choose `Update`.
 3. The installer reads the already-installed role from `/xreactor/config/role.lua`.
 4. It performs storage preflight, stages expected files into `/xreactor_stage`, copies existing `/xreactor/config` into stage, validates hashes, then commits by backup+activate.
-5. Commit sequence is: active `/xreactor` -> `/xreactor_backup_prev`, stage `/xreactor_stage` -> live `/xreactor`, then backup removal after successful activation.
+5. Commit sequence is: active `/xreactor` -> `/xreactor_backup_prev`, stage `/xreactor_stage` -> live `/xreactor`, then backup removal after successful commit.
 6. Config files under `/xreactor/config/` are preserved via stage copy.
 
 Practical update command:
