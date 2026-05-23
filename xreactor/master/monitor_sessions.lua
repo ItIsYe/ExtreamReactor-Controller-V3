@@ -2,9 +2,12 @@ local M = {}
 
 local PRIMARY_ROLE_MAP = { "overview", "rt", "energy" }
 
+local function is_primary_index(index)
+  return type(index) == "number" and index >= 1 and index <= #PRIMARY_ROLE_MAP
+end
+
 local function default_view(index, view_order)
-  local role = PRIMARY_ROLE_MAP[index]
-  if role then return role end
+  if is_primary_index(index) then return PRIMARY_ROLE_MAP[index] end
   return (view_order and view_order[1]) or "overview"
 end
 
@@ -32,15 +35,36 @@ function M.new(opts)
   }, { __index = M })
 end
 
+function M:is_primary(session)
+  return session and session.role and session.role ~= "aux" and session.locked == true or false
+end
+
+function M:bind_primary_role(session, index)
+  if not session then return end
+  local role = PRIMARY_ROLE_MAP[index]
+  if not role then
+    session.role = "aux"
+    session.locked = false
+    return
+  end
+
+  session.role = role
+  session.locked = true
+  session.view_key = role
+end
+
+function M:resolve_view_key(session, index)
+  if not session then return default_view(index, self.view_order) end
+  if self:is_primary(session) then return session.role or default_view(index, self.view_order) end
+  return session.view_key or default_view(index, self.view_order)
+end
+
 function M:bind_or_update(monitors, desired_scale, view_order)
   self.view_order = view_order or self.view_order
   local next_sessions, next_order = {}, {}
   for i, mon in ipairs(monitors or {}) do
     local id = mon.id or mon.name
     local prior = self.sessions[id] or {}
-    local role = (i <= 3) and PRIMARY_ROLE_MAP[i] or "aux"
-    local locked = i <= 3
-    local view_key = locked and role or (prior.view_key or default_view(i, self.view_order))
     local size_key = tostring(mon.width or 0) .. "x" .. tostring(mon.height or 0)
     local layout_key = tostring(mon.layout_class or "compact")
     local rebound = prior.mon ~= nil and prior.mon ~= mon.mon
@@ -51,9 +75,9 @@ function M:bind_or_update(monitors, desired_scale, view_order)
       id = id,
       name = mon.name,
       mon = mon.mon,
-      role = role,
-      view_key = view_key,
-      locked = locked,
+      role = prior.role,
+      view_key = prior.view_key,
+      locked = prior.locked == true,
       text_scale = mon.text_scale or desired_scale,
       last_applied_scale = mon.last_applied_scale or prior.last_applied_scale,
       last_size_key = size_key,
@@ -72,6 +96,9 @@ function M:bind_or_update(monitors, desired_scale, view_order)
       layout_key = layout_key,
       rebind_pending = rebound
     }
+
+    self:bind_primary_role(session, i)
+    session.view_key = self:resolve_view_key(session, i)
 
     if rebound then
       session.dirty = true
