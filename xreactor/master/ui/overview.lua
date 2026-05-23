@@ -16,6 +16,44 @@ local function safe_section(mon, x, y, title, fn, on_error)
   return ok
 end
 
+local function status_weight(status)
+  local s = tostring(status or "OFFLINE"):upper()
+  if s == "EMERGENCY" or s == "OFFLINE" then return 5 end
+  if s == "WARNING" then return 4 end
+  if s == "LIMITED" then return 3 end
+  if s == "OK" then return 1 end
+  return 2
+end
+
+local function node_score(node)
+  local score = status_weight(node and node.status) * 1000
+  local freshness = tostring(node and node.freshness or ""):lower()
+  if freshness == "stale" then
+    score = score + 500
+  end
+  local age = tonumber(node and node.last_seen_age) or -1
+  if age > 0 then
+    score = score + math.min(age, 300)
+  end
+  return score
+end
+
+local function prioritized_nodes(nodes)
+  local list = {}
+  for _, node in ipairs(nodes or {}) do
+    list[#list + 1] = node
+  end
+  table.sort(list, function(a, b)
+    local sa = node_score(a)
+    local sb = node_score(b)
+    if sa ~= sb then
+      return sa > sb
+    end
+    return tostring(a and a.id or "") < tostring(b and b.id or "")
+  end)
+  return list
+end
+
 local function render(mon, model)
   local section_errors = {}
   local key = utils.safe_serialize(model) or tostring(model)
@@ -24,7 +62,7 @@ local function render(mon, model)
 
   local w, h = ui.getSize(mon)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
-  ui.panel(mon, 1, 1, w, h, "MONITOR 1 - OVERVIEW", model.system_status or "OK")
+  ui.panel(mon, 1, 1, w, h, "OVERVIEW", model.system_status or "OK")
 
   local header_h = is_large and 7 or 6
   local header = widgets.panel_box(mon, 2, 2, w - 2, header_h, "Systemlage", model.system_status or "OK")
@@ -121,12 +159,16 @@ local function render(mon, model)
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + left_w + 1, bottom_y, "Nodes", function()
-    local box = widgets.panel_box(mon, 2 + left_w + 1, bottom_y, right_w, bottom_h, "Nodes", (model.nodes_stale or 0) > 0 and "WARNING" or "OK")
+    local box = widgets.panel_box(mon, 2 + left_w + 1, bottom_y, right_w, bottom_h, "Top-Nodes", (model.nodes_stale or 0) > 0 and "WARNING" or "OK")
     local widths = widgets.table_widths(box.w, is_large and { 8, 9, 9, 7, 10 } or { 7, 8, 8, 6, 9 })
     widgets.compact_header(mon, box.x, box.y, { "Node", "Rolle", "Status", "Seen", "Hinweis" }, widths)
+    local ordered = prioritized_nodes(model.nodes or {})
+    local row_slots = math.max(1, box.h - 1)
+    local overflow = #ordered > row_slots
+    local show_count = overflow and math.max(1, row_slots - 1) or row_slots
     local y = box.y + 1
-    for _, n in ipairs(model.nodes or {}) do
-      if y > (box.y + box.h - 1) then break end
+    for i = 1, math.min(#ordered, show_count) do
+      local n = ordered[i]
       widgets.compact_status_row(mon, box.x, y, {
         tostring(n.id or "-"),
         tostring(n.role or "-"),
@@ -136,8 +178,11 @@ local function render(mon, model)
       }, widths, n.status or "OFFLINE", 3)
       y = y + 1
     end
-    if y == box.y + 1 then
+    if #ordered == 0 then
       ui.text(mon, box.x, y, "Keine Nodes sichtbar", colors.get("OFFLINE"), colors.get("background"))
+    elseif overflow then
+      local hidden = #ordered - show_count
+      ui.text(mon, box.x, y, widgets.fit("+" .. tostring(hidden) .. " weitere Nodes - nur kritischste angezeigt", box.w), colors.get("muted"), colors.get("background"))
     end
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
