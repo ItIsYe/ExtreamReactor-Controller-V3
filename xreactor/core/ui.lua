@@ -138,7 +138,7 @@ function ui.clearRegion(mon, x, y, w, h)
   end
   redirect(mon, function()
     term.setBackgroundColor(colors.background)
-    for row=y,y+h-1 do
+    for row = y, y + h - 1 do
       term.setCursorPos(x, row)
       term.write(string.rep(" ", w))
     end
@@ -182,16 +182,41 @@ function ui.panel(mon, x, y, w, h, title, status)
   local key = ("panel:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
   redirect(mon, function()
+    local border_color = colors.get(status) or colors.get("accent") or colors.text
     term.setBackgroundColor(colors.background)
     term.setTextColor(colors.text)
-    for row=y,y+h-1 do
+    for row = y, y + h - 1 do
       term.setCursorPos(x, row)
       term.write(string.rep(" ", w))
     end
-    if title then
-      term.setCursorPos(x+1, y)
-      term.setTextColor(colors.get(status) or colors.get("accent"))
-      term.write(title)
+
+    if w == 1 or h == 1 then
+      if title then
+        term.setCursorPos(x, y)
+        term.setTextColor(border_color)
+        term.write(tostring(title):sub(1, w))
+      end
+      return
+    end
+
+    local top = "+" .. string.rep("-", math.max(0, w - 2)) .. "+"
+    local mid = "|" .. string.rep(" ", math.max(0, w - 2)) .. "|"
+    term.setTextColor(border_color)
+    term.setCursorPos(x, y)
+    term.write(top)
+    for row = y + 1, y + h - 2 do
+      term.setCursorPos(x, row)
+      term.write(mid)
+    end
+    term.setCursorPos(x, y + h - 1)
+    term.write(top)
+
+    if title and w > 4 then
+      local clipped = tostring(title):gsub("\n", " "):gsub("\r", " ")
+      clipped = clipped:sub(1, w - 4)
+      term.setCursorPos(x + 2, y)
+      term.setTextColor(border_color)
+      term.write(clipped)
     end
   end, "ui.panel")
 end
