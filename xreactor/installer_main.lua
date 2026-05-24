@@ -35,6 +35,11 @@ local function sanitize_log_segment(value)
   return sanitized
 end
 
+local function append_query_param(url, key, value)
+  local sep = tostring(url or ""):find("?", 1, true) and "&" or "?"
+  return tostring(url or "") .. sep .. tostring(key or "q") .. "=" .. tostring(value or "")
+end
+
 local function build_crc32_table()
   local table_crc = {}
   for i = 0, 255 do
@@ -85,6 +90,32 @@ local function build_context(constants)
       return tostring(os.time())
     end
     return "unknown-time"
+  end
+
+  function ctx.cache_bust_token(kind, remote_path, attempt)
+    local release = sanitize_log_segment(ctx.release_id or "unknown")
+    local manifest = sanitize_log_segment(ctx.manifest_id or "unknown")
+    local path_segment = sanitize_log_segment(remote_path or kind or "root")
+    local time_token = "0"
+    if os and type(os.epoch) == "function" then
+      local ok, value = pcall(os.epoch, "utc")
+      if ok and value then time_token = tostring(value) end
+    elseif os and type(os.time) == "function" then
+      local ok, value = pcall(os.time)
+      if ok and value then time_token = tostring(value) end
+    end
+    return table.concat({
+      sanitize_log_segment(kind or "download"),
+      release,
+      manifest,
+      path_segment,
+      tostring(attempt or 1),
+      time_token
+    }, "-")
+  end
+
+  function ctx.cache_busted_url(url, kind, remote_path, attempt)
+    return append_query_param(url, "xr_cb", ctx.cache_bust_token(kind, remote_path, attempt))
   end
 
   function ctx.log_line(message)
@@ -161,6 +192,28 @@ local function build_context(constants)
     return installer_http.download_url(http, url, constants.DOWNLOAD_RETRIES, constants.DOWNLOAD_RETRY_DELAY_SECONDS, ctx.warn)
   end
 
+  function ctx.download_versioned_url(url, kind, remote_path)
+    if type(url) ~= "string" or url == "" then
+      return nil, "invalid url"
+    end
+    local retries = tonumber(constants.DOWNLOAD_RETRIES) or 1
+    local delay = tonumber(constants.DOWNLOAD_RETRY_DELAY_SECONDS) or 0
+    local last_error = nil
+    for attempt = 1, retries do
+      local attempt_url = ctx.cache_busted_url(url, kind, remote_path, attempt)
+      local body, err = installer_http.download_url(http, attempt_url, 1, delay, nil)
+      if body then
+        return body, attempt_url
+      end
+      last_error = tostring(err or ("Failed to download " .. tostring(attempt_url)))
+      if attempt < retries then
+        ctx.warn(string.format("Download attempt %d/%d failed for %s (%s)", attempt, retries, tostring(remote_path or url), tostring(last_error)))
+        if os and type(os.sleep) == "function" and delay > 0 then os.sleep(delay) end
+      end
+    end
+    return nil, tostring(last_error or ("Failed to download " .. tostring(url)))
+  end
+
   function ctx.compile_lua(path, content)
     if type(loadfile) == "function" then
       return loadfile(path)
@@ -219,17 +272,18 @@ local function build_context(constants)
   function ctx.download_file(remote_path, target_path, entry)
     local url = constants.BASE_URL .. remote_path
     ctx.info("Downloading " .. remote_path)
-    local body, err = ctx.download_url(url)
+    local body, resolved_url_or_err = ctx.download_versioned_url(url, "file", remote_path)
     if not body then
-      return false, err
+      return false, resolved_url_or_err
     end
+    local resolved_url = resolved_url_or_err
     local resolved_entry = entry or {}
     local size_ok, actual_size = ctx.size_matches(resolved_entry, body)
     if not size_ok then
       return false, string.format(
         "size mismatch for %s (url=%s expected=%s actual=%s)",
         tostring(remote_path),
-        tostring(url),
+        tostring(resolved_url),
         tostring(resolved_entry.size_bytes),
         tostring(actual_size)
       )
@@ -239,7 +293,7 @@ local function build_context(constants)
       return false, string.format(
         "hash mismatch for %s (url=%s expected=%s actual=%s manifest=%s release=%s source_ref=%s)",
         tostring(remote_path),
-        tostring(url),
+        tostring(resolved_url),
         tostring(resolved_entry.hash),
         tostring(actual_hash),
         tostring(ctx.manifest_id or "unknown"),
@@ -263,7 +317,7 @@ local function build_context(constants)
       return nil, "manifest url missing"
     end
     ctx.info("Downloading manifest from " .. tostring(constants.MANIFEST_URL))
-    local body, err = ctx.download_url(constants.MANIFEST_URL)
+    local body, err = ctx.download_versioned_url(constants.MANIFEST_URL, "manifest", "manifest.lua")
     if not body then
       return nil, err
     end
@@ -306,7 +360,7 @@ local function build_context(constants)
       tostring(ctx.install_mode or "unknown"),
       tostring(ctx.target_role or "unknown")
     ))
-    local body, err = ctx.download_url(release_url)
+    local body, err = ctx.download_versioned_url(release_url, "release", "release.lua")
     if not body then
       return false, err
     end
@@ -520,7 +574,7 @@ function M.run(constants)
   elseif choice == "2" then
     run_update(ctx)
   else
-    ctx.info("Installer cancelled")
+    print("Aborted")
   end
 end
 
