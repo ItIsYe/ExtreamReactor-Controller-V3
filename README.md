@@ -258,4 +258,6 @@ The installer validates downloaded files before keeping them:
 - rejects HTML content,
 - parses `.lua` files before accepting them.
 
+To reduce GitHub raw cache races between a fresh `manifest.lua` and staged file downloads, the installer appends a cache-busting `xr_cb=...` query token to manifest, release, and staged file download URLs while still staying on the `beta` branch strategy.
+
 Storage preflight also handles CC:Tweaked `fs.getFreeSpace()` special values: `number`, negative-as-unbounded, and `"unlimited"`.
