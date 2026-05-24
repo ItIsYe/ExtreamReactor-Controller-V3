@@ -2,10 +2,102 @@ local ui = require("core.ui")
 local colors = require("shared.colors")
 local widgets = require("master.ui.widgets")
 
+local function status_weight(status)
+  local s = tostring(status or "OFFLINE"):upper()
+  if s == "EMERGENCY" or s == "OFFLINE" then return 6 end
+  if s == "WARNING" then return 5 end
+  if s == "LIMITED" then return 4 end
+  if s == "OK" then return 2 end
+  return 3
+end
+
+local function matrix_score(matrix)
+  local score = status_weight(matrix and matrix.status) * 1000
+  local age = tonumber(matrix and matrix.last_seen_age) or -1
+  if age > 0 then
+    score = score + math.min(age, 300)
+  end
+  local percent = tonumber(matrix and matrix.percent) or 0
+  if percent < 15 then
+    score = score + 500
+  elseif percent < 30 then
+    score = score + 250
+  end
+  local input = tonumber(matrix and matrix.input) or 0
+  local output = tonumber(matrix and matrix.output) or 0
+  score = score + math.min(200, math.abs(input - output))
+  return score
+end
+
+local function support_score(node)
+  local score = status_weight(node and node.status) * 1000
+  local age = tonumber(node and node.last_seen_age) or -1
+  if age > 0 then
+    score = score + math.min(age, 300)
+  end
+  return score
+end
+
+local function prioritized_list(items, score_fn)
+  local list = {}
+  for _, item in ipairs(items or {}) do
+    list[#list + 1] = item
+  end
+  table.sort(list, function(a, b)
+    local sa = score_fn(a)
+    local sb = score_fn(b)
+    if sa ~= sb then
+      return sa > sb
+    end
+    local aid = tostring((a and (a.id or a.label or a.name)) or "")
+    local bid = tostring((b and (b.id or b.label or b.name)) or "")
+    return aid < bid
+  end)
+  return list
+end
+
+local function render_matrix_overflow(mon, x, y, width, hidden)
+  if #hidden <= 0 then
+    return
+  end
+  local critical = 0
+  for _, matrix in ipairs(hidden) do
+    if status_weight(matrix.status) >= 5 then
+      critical = critical + 1
+    end
+  end
+  local lead = hidden[1]
+  local text = "+" .. tostring(#hidden) .. " weitere Matrizen"
+  if critical > 0 then
+    text = text .. " | kritisch=" .. tostring(critical)
+  end
+  ui.text(mon, x, y, widgets.fit(text, width), colors.get("muted"), colors.get("background"))
+  if lead then
+    ui.text(mon, x, y + 1, widgets.fit("Top hidden: " .. tostring(lead.id or lead.label or "M"), width), colors.get("muted"), colors.get("background"))
+  end
+end
+
+local function render_support_overflow(mon, x, y, width, hidden)
+  if #hidden <= 0 then
+    return
+  end
+  local stale = 0
+  for _, node in ipairs(hidden) do
+    if (tonumber(node.last_seen_age) or -1) > 15 then
+      stale = stale + 1
+    end
+  end
+  local text = "+" .. tostring(#hidden) .. " weitere Support-Nodes"
+  if stale > 0 then
+    text = text .. " | stale=" .. tostring(stale)
+  end
+  ui.text(mon, x, y, widgets.fit(text, width), colors.get("muted"), colors.get("background"))
+end
+
 local function render(mon, model)
   local w, h = ui.getSize(mon)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
-  ui.panel(mon, 1, 1, w, h, "MONITOR 3 - ENERGY", model.status or "OK")
+  ui.panel(mon, 1, 1, w, h, "ENERGY", model.status or "OK")
 
   local pct = model.capacity and model.capacity > 0 and ((model.stored or 0) / model.capacity) * 100 or 0
   local summary_h = is_large and 11 or 10
@@ -30,9 +122,13 @@ local function render(mon, model)
   local matrix = widgets.panel_box(mon, 2, content_y, left_w, content_h, ((model.matrix_count or 0) == 1) and "Matrix-Detail" or "Matrix / Storage", (model.matrix_count or 0) > 0 and "OK" or "OFFLINE")
   local matrix_widths = widgets.table_widths(matrix.w, is_large and { 12, 9, 9, 9, 8 } or { 10, 8, 8, 8, 7 })
   widgets.compact_header(mon, matrix.x, matrix.y, { "ID", "%", "In", "Out", "Status" }, matrix_widths)
+  local ordered_matrices = prioritized_list(model.matrices or {}, matrix_score)
+  local matrix_rows = math.max(1, matrix.h - 1)
+  local matrix_overflow = #ordered_matrices > matrix_rows
+  local matrix_show = matrix_overflow and math.max(1, matrix_rows - 2) or matrix_rows
   local my = matrix.y + 1
-  for _, m in ipairs(model.matrices or {}) do
-    if my > (matrix.y + matrix.h - 1) then break end
+  for i = 1, math.min(#ordered_matrices, matrix_show) do
+    local m = ordered_matrices[i]
     widgets.compact_status_row(mon, matrix.x, my, {
       tostring(m.id or m.label or "M"),
       string.format("%.1f", m.percent or 0),
@@ -42,10 +138,16 @@ local function render(mon, model)
     }, matrix_widths, m.status or "OK", 5)
     my = my + 1
   end
-  if my == matrix.y + 1 then
+  if #ordered_matrices == 0 then
     local has_flow = (model.stored or 0) > 0 or (model.input or 0) > 0 or (model.output or 0) > 0
     local msg = has_flow and "Keine Matrixzeilen, aber Energiefluss vorhanden" or "Keine Matrixdaten sichtbar"
     ui.text(mon, matrix.x, my, widgets.fit(msg, matrix.w), colors.get(has_flow and "WARNING" or "OFFLINE"), colors.get("background"))
+  elseif matrix_overflow then
+    local hidden = {}
+    for i = matrix_show + 1, #ordered_matrices do
+      hidden[#hidden + 1] = ordered_matrices[i]
+    end
+    render_matrix_overflow(mon, matrix.x, my, matrix.w, hidden)
   end
 
   local right_x = 2 + left_w + 1
@@ -63,9 +165,13 @@ local function render(mon, model)
   local support = widgets.panel_box(mon, right_x, support_y, right_w, support_h, "Support-Nodes", (model.support_stale or 0) > 0 and "WARNING" or "OK")
   local support_widths = widgets.table_widths(support.w, { 8, 8, 7, 10 })
   widgets.compact_header(mon, support.x, support.y, { "Node", "Rolle", "Seen", "Hinweis" }, support_widths)
+  local ordered_support = prioritized_list(model.support_nodes or {}, support_score)
+  local support_rows = math.max(1, support.h - 1)
+  local support_overflow = #ordered_support > support_rows
+  local support_show = support_overflow and math.max(1, support_rows - 1) or support_rows
   local sy = support.y + 1
-  for _, n in ipairs(model.support_nodes or {}) do
-    if sy > (support.y + support.h - 1) then break end
+  for i = 1, math.min(#ordered_support, support_show) do
+    local n = ordered_support[i]
     widgets.compact_status_row(mon, support.x, sy, {
       tostring(n.id or "-"),
       tostring(n.role or "-"),
@@ -74,8 +180,14 @@ local function render(mon, model)
     }, support_widths, n.status or "OFFLINE", 2)
     sy = sy + 1
   end
-  if sy == support.y + 1 then
+  if #ordered_support == 0 then
     ui.text(mon, support.x, sy, "Keine Support-Nodes sichtbar", colors.get("OFFLINE"), colors.get("background"))
+  elseif support_overflow then
+    local hidden = {}
+    for i = support_show + 1, #ordered_support do
+      hidden[#hidden + 1] = ordered_support[i]
+    end
+    render_support_overflow(mon, support.x, sy, support.w, hidden)
   end
 end
 
