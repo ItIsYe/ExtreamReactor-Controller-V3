@@ -141,26 +141,14 @@ local function run_master()
   ), "INFO")
 
   monitor_ops.refresh_monitors(runtime, true)
-  if runtime.refs.ui_controller then
-    runtime.log("Initial UI draw trigger after init", "INFO")
-    local ok, draw_err = pcall(runtime.refs.ui_controller.draw)
-    if not ok then
-      runtime.log("Initial UI draw failed: " .. tostring(draw_err), "ERROR")
-    else
-      runtime.state._initial_ui_shape = ui_diagnostics.snapshot_shape(runtime.refs.ui_controller and runtime.refs.ui_controller._last_models)
-      runtime.log(("Initial UI shape: ov_nodes=%d ov_hints=%d rt_nodes=%d rt_assign=%s en_matrices=%d en_support=%d"):format(
+  if runtime.refs.services then
+    runtime.log("Bootstrap UI/service tick trigger after init", "INFO")
+    runtime.refs.services:tick()
+    if runtime.refs.ui_controller and runtime.refs.ui_controller._last_models then
+      runtime.state._initial_ui_shape = ui_diagnostics.snapshot_shape(runtime.refs.ui_controller._last_models)
+      runtime.log(("Bootstrap UI shape: ov_nodes=%d ov_hints=%d rt_nodes=%d rt_assign=%s en_matrices=%d en_support=%d"):format(
         runtime.state._initial_ui_shape.ov_nodes, runtime.state._initial_ui_shape.ov_hints, runtime.state._initial_ui_shape.rt_nodes, runtime.state._initial_ui_shape.rt_assign, runtime.state._initial_ui_shape.en_matrices, runtime.state._initial_ui_shape.en_support
       ), "INFO")
-    end
-    if runtime.refs.view_manager and runtime.refs.view_manager.last_render_results then
-      local failures = 0
-      for _, r in ipairs(runtime.refs.view_manager.last_render_results) do
-        if not r.ok then
-          failures = failures + 1
-          runtime.log(("Initial draw failure detail: view=%s monitor=%s role=%s error=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)), "ERROR")
-        end
-      end
-      if failures == 0 then runtime.log("Initial draw result: all views rendered successfully", "DEBUG") end
     end
   end
 
