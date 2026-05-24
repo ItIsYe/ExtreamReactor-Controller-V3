@@ -53,6 +53,32 @@ local function build_devices(names)
   return devices
 end
 
+local function prune_wrap_cache(self, present_names)
+  for name, _ in pairs(self.wrap_cache or {}) do
+    if not present_names[name] then
+      self.wrap_cache[name] = nil
+    end
+  end
+end
+
+function manager:new_wrapped_monitor(name)
+  local mon = utils.safe_wrap(name)
+  if mon then
+    self.wrap_cache[name] = mon
+  else
+    self.wrap_cache[name] = nil
+  end
+  return mon
+end
+
+function manager:get_wrapped_monitor(name)
+  local mon = self.wrap_cache[name]
+  if mon and type(mon.getSize) == "function" then
+    return mon
+  end
+  return self:new_wrapped_monitor(name)
+end
+
 function manager.new(opts)
   opts = opts or {}
   local scale = tonumber(opts.scale)
@@ -66,19 +92,23 @@ function manager.new(opts)
       path = opts.path
     }),
     disabled = {},
-    scale_cache = {}
+    scale_cache = {},
+    wrap_cache = {}
   }
   return setmetatable(self, { __index = manager })
 end
 
 function manager:scan()
   local names = {}
+  local present_names = {}
   for _, name in ipairs(peripheral.getNames() or {}) do
     if peripheral.getType(name) == "monitor" then
       table.insert(names, name)
+      present_names[name] = true
     end
   end
   table.sort(names)
+  prune_wrap_cache(self, present_names)
   monitor_adapter.sync_names(names)
   if #names == 0 then
     local ok, w, h = pcall(term.getSize)
@@ -105,7 +135,7 @@ function manager:scan()
   end)
   local monitors = {}
   for _, entry in ipairs(entries) do
-    local mon = utils.safe_wrap(entry.name)
+    local mon = self:get_wrapped_monitor(entry.name)
     if mon then
       if self.scale then
         local cached_scale = self.scale_cache[entry.name]
@@ -115,6 +145,7 @@ function manager:scan()
           if not scale_ok then
             self.disabled[entry.name] = "setTextScale failed: " .. tostring(scale_err)
             utils.log(self.log_prefix, "Disabling monitor " .. tostring(entry.name) .. " during scan (setTextScale failed: " .. tostring(scale_err) .. ")", "WARN")
+            self.wrap_cache[entry.name] = nil
             goto continue
           end
           self.scale_cache[entry.name] = self.scale
@@ -129,6 +160,11 @@ function manager:scan()
         effective_scale = tonumber(scale_read) or effective_scale
       end
       local ok, w, h = safe_wrapped_call(mon, "getSize")
+      if not ok then
+        self.wrap_cache[entry.name] = nil
+        mon = self:new_wrapped_monitor(entry.name)
+        ok, w, h = safe_wrapped_call(mon, "getSize")
+      end
       if not ok then
         self.disabled[entry.name] = "getSize failed: " .. tostring(w)
         utils.log(self.log_prefix, "Disabling monitor " .. tostring(entry.name) .. " during scan (getSize failed: " .. tostring(w) .. ")", "WARN")
@@ -155,6 +191,7 @@ function manager:scan()
     else
       utils.log(self.log_prefix, "Monitor wrap failed for " .. tostring(entry.name), "WARN")
       self.disabled[entry.name] = "wrap failed"
+      self.wrap_cache[entry.name] = nil
     end
     ::continue::
   end
