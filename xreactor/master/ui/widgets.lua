@@ -194,7 +194,13 @@ function widgets.stat_card(mon, x, y, w, title, value, meta, status, progress)
   ui.panel(mon, x, y, width, 5, widgets.fit(title or "", width - 3), status or "OK")
   ui.text(mon, x + 1, y + 1, widgets.fit(tostring(value or "-"), width - 2), colors.get(status or "text"), colors.get("background"))
   if meta then ui.text(mon, x + 1, y + 2, widgets.fit(tostring(meta), width - 2), colors.get("muted"), colors.get("background")) end
-  if progress ~= nil then ui.progress(mon, x + 1, y + 3, math.max(6, width - 2), math.max(0, math.min(100, progress)), status or "OK") end
+  if progress ~= nil then
+    local pct = tonumber(progress) or 0
+    if pct > 1 then pct = pct / 100 end
+    if pct < 0 then pct = 0 end
+    if pct > 1 then pct = 1 end
+    ui.progress(mon, x + 1, y + 3, math.max(6, width - 2), pct, status or "OK")
+  end
 end
 
 function widgets.alert_row(mon, x, y, width, alert, opts)
