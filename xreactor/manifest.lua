@@ -61,7 +61,7 @@ return {
       { path = "master/startup_sequencer.lua", size_bytes = 9172, hash = "01535e76" },
       { path = "master/ui_controller.lua", size_bytes = 22469, hash = "4bcdc3df" },
       { path = "master/monitor_sessions.lua", size_bytes = 5830, hash = "0db7c0da" },
-      { path = "master/ui_diagnostics.lua", size_bytes = 598, hash = "a1544513" },
+      { path = "master/ui_diagnostics.lua" },
       { path = "master/ui/alarms.lua", size_bytes = 1345, hash = "0a381649" },
       { path = "master/ui/alerts.lua", size_bytes = 25335, hash = "746207f8" },
       { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f" },
@@ -130,7 +130,7 @@ return {
     shared = {
       { path = "services/matrix_sampling_service.lua", size_bytes = 867, hash = "fff32232", required_for = { "ENERGY" } },
       { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for = { "WATER", "FUEL", "REPROCESSING" } },
-      { path = "nodes/support/runtime.lua", size_bytes = 2656, hash = "0f4d68a2", required_for = { "WATER", "FUEL", "REPROCESSING" } },
+      { path = "nodes/support/runtime.lua", size_bytes = 2656, hash = "72cd674e", required_for = { "WATER", "FUEL", "REPROCESSING" } },
       { path = "nodes/support/ui_pages.lua", size_bytes = 3388, hash = "71cd674e", required_for = { "WATER", "FUEL", "REPROCESSING" } },
       { path = "nodes/support/command_handler.lua", size_bytes = 2224, hash = "75202127", required_for = { "WATER", "FUEL", "REPROCESSING" } },
       { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for = { "ENERGY", "WATER", "FUEL", "REPROCESSING" } },
