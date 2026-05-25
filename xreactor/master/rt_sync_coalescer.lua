@@ -12,6 +12,10 @@ local function payload_looks_rt(payload)
   return false
 end
 
+local function bool_flag(value)
+  return value and 'yes' or 'no'
+end
+
 function M.new(opts)
   local constants = assert(opts.constants, 'constants required')
   local utils = assert(opts.utils, 'utils required')
@@ -20,6 +24,7 @@ function M.new(opts)
   local log = assert(opts.log, 'log required')
 
   local pending = {}
+  local skipped = {}
 
   local function node_looks_rt(node)
     if type(node) ~= 'table' then return false end
@@ -31,10 +36,34 @@ function M.new(opts)
     return false
   end
 
+  local function log_skip_once(node, reason)
+    local node_id = tostring(node and (node.id or node.node_id or node.sender_id) or '?')
+    local key = node_id .. '|' .. tostring(reason or 'unknown')
+    if skipped[key] then return end
+    skipped[key] = true
+    local payload = type(node) == 'table' and node.payload or nil
+    log(("RT sync skip node=%s role=%s reason=%s has_rt=%s payload_rt=%s payload_mode=%s payload_output=%s payload_turbines=%s payload_reactors=%s payload_modules=%s payload_keys=%s"):format(
+      node_id,
+      tostring(node and node.role or 'nil'),
+      tostring(reason or 'unknown'),
+      bool_flag(type(node) == 'table' and type(node.rt) == 'table'),
+      bool_flag(type(payload) == 'table' and type(payload.rt) == 'table'),
+      bool_flag(type(payload) == 'table' and payload.mode ~= nil),
+      bool_flag(type(payload) == 'table' and payload.output ~= nil),
+      bool_flag(type(payload) == 'table' and type(payload.turbines) == 'table'),
+      bool_flag(type(payload) == 'table' and type(payload.reactors) == 'table'),
+      bool_flag(type(payload) == 'table' and type(payload.modules) == 'table'),
+      type(payload) == 'table' and tostring(#payload) or 'not-table'
+    ), 'WARN')
+  end
+
   local function mark_dirty(node, reason)
     if not node then return end
     if node.role ~= constants.roles.RT_NODE then
-      if not node_looks_rt(node) then return end
+      if not node_looks_rt(node) then
+        log_skip_once(node, reason)
+        return
+      end
       local previous = node.role
       node.role = constants.roles.RT_NODE
       log(("RT sync role inferred node=%s previous=%s reason=%s"):format(
@@ -78,6 +107,8 @@ function M.new(opts)
         if slot.node and node_looks_rt(slot.node) then
           slot.node.role = constants.roles.RT_NODE
           sync_rt_node(slot.node, 'coalesced:' .. reasons)
+        else
+          log_skip_once(slot.node, 'flush')
         end
         pending[node_id] = nil
       end
