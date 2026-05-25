@@ -5,16 +5,26 @@ local sessions_lib = require("master.monitor_sessions")
 local M = {}
 
 local function render_error(mon, w, h, title, message)
+  if not mon or type(w) ~= "number" or type(h) ~= "number" or w <= 0 or h <= 0 then
+    return false, "invalid-monitor-size"
+  end
   ui.clear(mon)
   ui.panel(mon, 1, 1, w, h, title, "EMERGENCY")
   ui.text(mon, 2, 3, widgets.fit(tostring(message), math.max(10, w - 3)), 0xFFFFFF, 0x000000)
+  return true
 end
 
 local function should_hard_clear(session)
-  if not session then
-    return false
-  end
+  if not session then return false end
   return session.rebind_pending == true or session.dirty_reason == "rebind"
+end
+
+local function safe_size(mon)
+  local w, h = ui.getSize(mon)
+  if type(w) ~= "number" or type(h) ~= "number" or w <= 0 or h <= 0 then
+    return nil, nil, "invalid-monitor-size"
+  end
+  return w, h
 end
 
 function M.new(opts)
@@ -28,20 +38,25 @@ function M.new(opts)
 end
 
 function M:render(monitors, data_map)
+  data_map = data_map or {}
   self.sessions:bind_or_update(monitors or {}, nil, self.view_order)
   local rendered = {}
 
   for _, session in ipairs(self.sessions:get_sessions()) do
     local view_key = self.sessions:resolve_view_key(session)
     local view = self.views[view_key]
-    local w, h = ui.getSize(session.mon)
+    local w, h, size_err = safe_size(session.mon)
+
+    if size_err then
+      self.sessions:note_render_failure(session, size_err)
+      rendered[#rendered + 1] = { ok = false, view = view_key, monitor = session.name, role = session.role, id = session.id, error = size_err }
+      goto continue
+    end
 
     if view and view.render then
       local ok, err = pcall(function()
         ui.begin_frame(session.mon)
-        if should_hard_clear(session) then
-          ui.clear(session.mon)
-        end
+        if should_hard_clear(session) then ui.clear(session.mon) end
         view.render(session.mon, data_map[view_key] or {})
       end)
 
@@ -52,14 +67,7 @@ function M:render(monitors, data_map)
         render_error(session.mon, w, h, "RENDER ERROR", err)
       end
 
-      rendered[#rendered + 1] = {
-        ok = ok,
-        view = view_key,
-        monitor = session.name,
-        role = session.role,
-        id = session.id,
-        error = ok and nil or tostring(err)
-      }
+      rendered[#rendered + 1] = { ok = ok, view = view_key, monitor = session.name, role = session.role, id = session.id, error = ok and nil or tostring(err) }
     else
       local err = "view-missing-or-no-render"
       self.sessions:note_render_failure(session, err)
@@ -73,6 +81,7 @@ function M:render(monitors, data_map)
     else
       ui.badge(session.mon, 2, 1, widgets.fit(("AUX " .. tostring(badge_view or "overview")):upper(), 20), "OK")
     end
+    ::continue::
   end
 
   self.last_render_results = rendered
