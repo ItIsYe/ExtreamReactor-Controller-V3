@@ -9,11 +9,16 @@ function M.run(ctx)
   if configured_scale ~= nil and not resolved_scale then
     ctx.utils.log("MASTER", "Ignoring non-numeric monitor scale config value: " .. tostring(configured_scale), "WARN")
   end
+  local min_monitor_width = tonumber(ctx.config.master_min_monitor_width) or 48
+  local min_monitor_height = tonumber(ctx.config.master_min_monitor_height) or 27
   ctx.utils.log("MASTER", "Configured monitor scale for master scan: raw=" .. tostring(configured_scale) .. " resolved=" .. tostring(resolved_scale), "INFO")
+  ctx.utils.log("MASTER", "Configured MASTER minimum monitor size: " .. tostring(min_monitor_width) .. "x" .. tostring(min_monitor_height), "INFO")
   ctx.refs.monitor_mgr = ctx.monitor_manager.new({
     log_prefix = "MASTER",
     node_id = ctx.node_id,
     scale = resolved_scale,
+    min_width = min_monitor_width,
+    min_height = min_monitor_height,
     path = "/xreactor/config/registry_master_monitors.json"
   })
   ctx.refs.view_manager = ctx.multiview_ui.new({
@@ -36,11 +41,7 @@ function M.run(ctx)
   })
   ctx.utils.log("MASTER", "View manager initialized for primary roles: monitor1=overview monitor2=rt monitor3=energy", "INFO")
   ctx.refresh_monitors(true)
-  ctx.refs.comms = ctx.comms_service.new({
-    config = ctx.config,
-    log_prefix = "MASTER",
-    on_message = ctx.update_node
-  })
+  ctx.refs.comms = ctx.comms_service.new({ config = ctx.config, log_prefix = "MASTER", on_message = ctx.update_node })
   ctx.refs.services = ctx.service_manager.new({ log_prefix = "MASTER" })
   ctx.refs.rt_sync_coalescer = ctx.rt_sync_coalescer_lib.new({
     constants = ctx.constants,
@@ -54,12 +55,7 @@ function M.run(ctx)
   if ctx.recovery_status and ctx.recovery_status.had_marker then
     local action = ctx.recovery_status.result or "recovery"
     local notice_until = os.epoch("utc") + (ctx.config.alert_info_ttl or 20) * 1000
-    recovery_notice = {
-      active = true,
-      active_until = notice_until,
-      message = "Update recovery: " .. tostring(action),
-      details = ctx.recovery_status.marker or {}
-    }
+    recovery_notice = { active = true, active_until = notice_until, message = "Update recovery: " .. tostring(action), details = ctx.recovery_status.marker or {} }
   end
   ctx.refs.alert_service = ctx.alert_service_lib.new({
     config = ctx.config,
@@ -76,18 +72,8 @@ function M.run(ctx)
     heartbeat_interval = ctx.config.heartbeat_interval,
     build_payload = ctx.build_master_alert_payload
   }))
-  ctx.refs.services:add(ctx.control_service.new({
-    name = "HOUSEKEEPING",
-    interval = 0.5,
-    runtime = { tick = ctx.housekeeping_tick }
-  }))
-  ctx.refs.services:add(ctx.ui_service.new({
-    interval = 0.5,
-    force_interval = 2,
-    snapshot = ctx.ui_snapshot,
-    render = ctx.ui_render,
-    handle_input = ctx.ui_handle_input
-  }))
+  ctx.refs.services:add(ctx.control_service.new({ name = "HOUSEKEEPING", interval = 0.5, runtime = { tick = ctx.housekeeping_tick } }))
+  ctx.refs.services:add(ctx.ui_service.new({ interval = 0.5, force_interval = 2, snapshot = ctx.ui_snapshot, render = ctx.ui_render, handle_input = ctx.ui_handle_input }))
   ctx.refs.services:init()
   ctx.refs.sequencer = ctx.sequencer_lib.new(ctx.refs.comms, ctx.config.startup_ramp, {
     alert_service = ctx.refs.alert_service,
