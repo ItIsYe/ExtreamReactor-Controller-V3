@@ -75,6 +75,57 @@ function M.new(opts)
     return rt_sync.same_setpoints(rt_sync.normalize_setpoints(value), rt_sync.normalize_setpoints(last))
   end
 
+  local function populate_rt_status(node, payload)
+    if type(node) ~= "table" or type(payload) ~= "table" then return end
+    node.rt = payload.rt or node.rt or {}
+    if type(node.rt) ~= "table" then node.rt = {} end
+    local rt = node.rt
+    rt.id = rt.id or node.id or payload.id or payload.node_id
+    rt.status = payload.status or rt.status or node.status
+    rt.state = payload.state or rt.state or node.state
+    rt.node_state = payload.state or rt.node_state
+    rt.mode = payload.mode or rt.mode or node.mode
+    rt.local_mode = payload.mode or rt.local_mode or rt.mode
+    rt.control_mode = payload.control_mode or rt.control_mode or payload.mode
+    rt.node_mode = payload.state or rt.node_mode or payload.node_state or payload.mode
+    rt.output = payload.output or rt.output
+    rt.actual_output = payload.output or rt.actual_output or rt.output
+    rt.power_actual = payload.output or rt.power_actual
+    rt.turbine_rpm = payload.turbine_rpm or rt.turbine_rpm
+    rt.rpm = payload.turbine_rpm or rt.rpm
+    rt.steam = payload.steam or rt.steam
+    rt.capabilities = payload.capabilities or rt.capabilities
+    rt.bindings = payload.bindings or rt.bindings
+    rt.bindings_summary = payload.bindings_summary or rt.bindings_summary
+    rt.modules = payload.modules or rt.modules
+    rt.turbines = payload.turbines or rt.turbines
+    rt.reactors = payload.reactors or rt.reactors
+    rt.registry = payload.registry or rt.registry
+    rt.snapshot = payload.snapshot or rt.snapshot
+    rt.ramp_state = payload.ramp_state or rt.ramp_state
+    rt.assignment_state = rt.assignment_state or payload.assignment_state
+    rt.assignment_reason = rt.assignment_reason or payload.assignment_reason or payload.bindings_summary
+    rt.control_source = rt.control_source or payload.control_source
+    if type(payload.turbines) == "table" then rt.turbine_count = #payload.turbines end
+    if type(payload.reactors) == "table" then rt.reactor_count = #payload.reactors end
+    if type(payload.modules) == "table" then
+      local total, running, stable, limited, error_count = 0, 0, 0, 0, 0
+      for _, module in pairs(payload.modules) do
+        total = total + 1
+        local state = tostring(type(module) == "table" and module.state or ""):upper()
+        if state == "RUNNING" then running = running + 1 end
+        if state == "STABLE" then stable = stable + 1 end
+        if state == "LIMITED" then limited = limited + 1 end
+        if state == "ERROR" or state == "FAILED" then error_count = error_count + 1 end
+      end
+      rt.module_count = total
+      rt.modules_running = running
+      rt.modules_stable = stable
+      rt.modules_limited = limited
+      rt.modules_error = error_count
+    end
+  end
+
   local function update_node(message)
     if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
       local mismatch_id = utils.normalize_node_id(message.src)
@@ -147,13 +198,7 @@ function M.new(opts)
       if nodes[id].role == constants.roles.ENERGY_NODE then
         nodes[id].energy = message.payload.energy or message.payload
       elseif nodes[id].role == constants.roles.RT_NODE then
-        nodes[id].rt = message.payload.rt or nodes[id].rt or {}
-        if type(nodes[id].rt) == "table" then
-          nodes[id].rt.mode = nodes[id].rt.mode or message.payload.mode
-          nodes[id].rt.assignment_state = nodes[id].rt.assignment_state or message.payload.assignment_state
-          nodes[id].rt.assignment_reason = nodes[id].rt.assignment_reason or message.payload.assignment_reason or message.payload.bindings_summary
-          nodes[id].rt.control_source = nodes[id].rt.control_source or message.payload.control_source
-        end
+        populate_rt_status(nodes[id], message.payload)
       end
       local previous_health_status = nodes[id].health and nodes[id].health.status or nil
       local previous_reasons = nodes[id].health and nodes[id].health.reasons or nil
@@ -178,6 +223,9 @@ function M.new(opts)
       nodes[id].registry = message.payload.registry or nodes[id].registry
       nodes[id].last_error = message.payload.last_error or nodes[id].last_error
       nodes[id].last_error_ts = message.payload.last_error_ts or nodes[id].last_error_ts
+      if nodes[id].role == constants.roles.RT_NODE then
+        populate_rt_status(nodes[id], message.payload)
+      end
       if previous_mode and nodes[id].mode and previous_mode ~= nodes[id].mode then
         log(("Node %s mode: %s"):format(id, tostring(nodes[id].mode)))
       end
