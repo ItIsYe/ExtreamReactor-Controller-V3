@@ -17,12 +17,8 @@ local function classify_size(w, h, thresholds)
   local area = (w or 0) * (h or 0)
   local small = thresholds and thresholds.small_area or 600
   local medium = thresholds and thresholds.medium_area or 1100
-  if area <= small then
-    return "small"
-  end
-  if area <= medium then
-    return "medium"
-  end
+  if area <= small then return "small" end
+  if area <= medium then return "medium" end
   return "large"
 end
 
@@ -31,9 +27,7 @@ local function classify_layout(width, height, size_tag)
   if size_tag == "large" or (area >= 900 and (width or 0) >= 48 and (height or 0) >= 18) then
     return "master_large"
   end
-  if size_tag == "medium" then
-    return "master_medium"
-  end
+  if size_tag == "medium" then return "master_medium" end
   return "compact"
 end
 
@@ -41,41 +35,40 @@ local function build_devices(names)
   local devices = {}
   for _, name in ipairs(names or {}) do
     local methods = utils.safe_get_methods(name) or {}
-    table.insert(devices, {
-      name = name,
-      type = "monitor",
-      kind = "monitor",
-      methods = methods,
-      bound = true,
-      found = true
-    })
+    table.insert(devices, { name = name, type = "monitor", kind = "monitor", methods = methods, bound = true, found = true })
   end
   return devices
 end
 
 local function prune_wrap_cache(self, present_names)
   for name, _ in pairs(self.wrap_cache or {}) do
-    if not present_names[name] then
-      self.wrap_cache[name] = nil
-    end
+    if not present_names[name] then self.wrap_cache[name] = nil end
   end
+end
+
+local function below_min_size(self, width, height)
+  local min_w = tonumber(self.min_width) or 0
+  local min_h = tonumber(self.min_height) or 0
+  if min_w > 0 and (tonumber(width) or 0) < min_w then return true end
+  if min_h > 0 and (tonumber(height) or 0) < min_h then return true end
+  return false
+end
+
+local function min_size_message(self, name, width, height)
+  return ("monitor %s too small: %sx%s, required >= %sx%s"):format(
+    tostring(name), tostring(width or "?"), tostring(height or "?"), tostring(self.min_width or 0), tostring(self.min_height or 0)
+  )
 end
 
 function manager:new_wrapped_monitor(name)
   local mon = utils.safe_wrap(name)
-  if mon then
-    self.wrap_cache[name] = mon
-  else
-    self.wrap_cache[name] = nil
-  end
+  if mon then self.wrap_cache[name] = mon else self.wrap_cache[name] = nil end
   return mon
 end
 
 function manager:get_wrapped_monitor(name)
   local mon = self.wrap_cache[name]
-  if mon and type(mon.getSize) == "function" then
-    return mon
-  end
+  if mon and type(mon.getSize) == "function" then return mon end
   return self:new_wrapped_monitor(name)
 end
 
@@ -86,11 +79,9 @@ function manager.new(opts)
     log_prefix = opts.log_prefix or "MONITOR",
     scale = scale,
     thresholds = opts.thresholds or { small_area = 600, medium_area = 1100 },
-    registry = registry_lib.new({
-      role = opts.role or "master_monitor",
-      node_id = opts.node_id or "MASTER",
-      path = opts.path
-    }),
+    min_width = tonumber(opts.min_width) or 0,
+    min_height = tonumber(opts.min_height) or 0,
+    registry = registry_lib.new({ role = opts.role or "master_monitor", node_id = opts.node_id or "MASTER", path = opts.path }),
     disabled = {},
     scale_cache = {},
     wrap_cache = {}
@@ -114,6 +105,11 @@ function manager:scan()
     local ok, w, h = pcall(term.getSize)
     local width = ok and w or 0
     local height = ok and h or 0
+    if below_min_size(self, width, height) then
+      self.disabled.TERM = min_size_message(self, "term", width, height)
+      utils.log(self.log_prefix, "Disabling terminal UI fallback: " .. self.disabled.TERM, "ERROR")
+      return {}
+    end
     local size_tag = classify_size(width, height, self.thresholds)
     return { { id = "TERM", name = "term", mon = term, size_tag = size_tag, width = width, height = height, is_terminal = true } }
   end
@@ -121,16 +117,12 @@ function manager:scan()
   local order = self.registry:get_order_index()
   local entries = {}
   for _, entry in ipairs(self.registry:list("monitor")) do
-    if entry and entry.name and peripheral.isPresent(entry.name) then
-      table.insert(entries, entry)
-    end
+    if entry and entry.name and peripheral.isPresent(entry.name) then table.insert(entries, entry) end
   end
   table.sort(entries, function(a, b)
     local rank_a = order[a.id] or math.huge
     local rank_b = order[b.id] or math.huge
-    if rank_a ~= rank_b then
-      return rank_a < rank_b
-    end
+    if rank_a ~= rank_b then return rank_a < rank_b end
     return tostring(a.name) < tostring(b.name)
   end)
   local monitors = {}
@@ -156,9 +148,7 @@ function manager:scan()
       end
       local effective_scale = self.scale
       local scale_read_ok, scale_read = safe_wrapped_call(mon, "getTextScale")
-      if scale_read_ok then
-        effective_scale = tonumber(scale_read) or effective_scale
-      end
+      if scale_read_ok then effective_scale = tonumber(scale_read) or effective_scale end
       local ok, w, h = safe_wrapped_call(mon, "getSize")
       if not ok then
         self.wrap_cache[entry.name] = nil
@@ -172,6 +162,11 @@ function manager:scan()
       end
       local width = ok and w or 0
       local height = ok and h or 0
+      if below_min_size(self, width, height) then
+        self.disabled[entry.name] = min_size_message(self, entry.name, width, height)
+        utils.log(self.log_prefix, "Disabling monitor during scan: " .. self.disabled[entry.name], "ERROR")
+        goto continue
+      end
       local size_tag = classify_size(width, height, self.thresholds)
       if self.disabled[entry.name] then
         self.disabled[entry.name] = nil
