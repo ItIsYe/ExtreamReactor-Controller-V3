@@ -28,6 +28,14 @@ local function first_text(...)
   return "-"
 end
 
+local function count_table(value)
+  if type(value) ~= "table" then return 0 end
+  if #value > 0 then return #value end
+  local n = 0
+  for _, _ in pairs(value) do n = n + 1 end
+  return n
+end
+
 local function rt_setpoints(rt)
   return (rt and (rt.last_setpoints or rt.setpoints or rt.targets)) or {}
 end
@@ -43,6 +51,25 @@ end
 
 local function rt_state(rt)
   return first_text(rt and rt.state, rt and rt.node_state, rt and rt.status_state, "OFF")
+end
+
+local function rt_local_mode(rt)
+  return first_text(rt and rt.local_mode, rt and rt.mode, rt and rt.control_mode, "-")
+end
+
+local function rt_hardware_summary(rt)
+  local reactors = first_number(rt and rt.reactor_count, count_table(rt and rt.reactors), 0)
+  local turbines = first_number(rt and rt.turbine_count, count_table(rt and rt.turbines), 0)
+  local modules = first_number(rt and rt.module_count, count_table(rt and rt.modules), 0)
+  local stable = first_number(rt and rt.modules_stable, 0)
+  local limited = first_number(rt and rt.modules_limited, 0)
+  return string.format("HW R:%d T:%d M:%d S:%d L:%d", reactors, turbines, modules, stable, limited)
+end
+
+local function rt_runtime_summary(rt)
+  local rpm = first_number(rt and rt.turbine_rpm, rt and rt.rpm, 0)
+  local steam = first_number(rt and rt.steam, 0)
+  return string.format("RPM %.0f | Steam %.0f", rpm, steam)
 end
 
 local function rt_score(rt)
@@ -102,12 +129,12 @@ local function render_rt_card(mon, x, y, w, rt)
   local actual = rt_actual(rt)
   widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt_state(rt)), rt.status or "OFFLINE", 9)
   ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %.1f%% | Ist %.1f%%", target, actual), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 2, widgets.fit("Node: " .. tostring(rt.node_mode or rt.mode or "-") .. " | Seen " .. tostring(rt.last_seen_age or "-") .. "s", box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 3, widgets.fit("Assign: " .. tostring(rt.assignment_state or "-"), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 4, widgets.fit("Source: " .. tostring(rt.control_source or "-"), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 5, widgets.fit("Master: " .. tostring(rt.display_mode or "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 6, widgets.fit("Queue: " .. tostring(rt.queue_state or "idle") .. " | " .. tostring(rt.queue_step or "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 7, widgets.fit("Grund: " .. tostring(rt.assignment_reason or "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 2, widgets.fit("State: " .. tostring(rt_state(rt)) .. " | Mode: " .. tostring(rt_local_mode(rt)), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 3, widgets.fit(rt_hardware_summary(rt), box.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 4, widgets.fit(rt_runtime_summary(rt), box.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 5, widgets.fit("Seen " .. tostring(rt.last_seen_age or "-") .. "s | " .. tostring(rt.assignment_state or "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 6, widgets.fit("Source: " .. tostring(rt.control_source or "-") .. " | " .. tostring(rt.display_mode or "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 7, widgets.fit("Queue: " .. tostring(rt.queue_state or "idle") .. " | " .. tostring(rt.queue_step or "-"), box.w), colors.get("muted"), colors.get("background"))
   ui.progress(mon, box.x, box.y + 8, math.max(8, box.w), math.max(0, math.min(100, actual)) / 100, rt.status or "OFFLINE")
 end
 
