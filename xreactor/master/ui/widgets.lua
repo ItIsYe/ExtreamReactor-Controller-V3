@@ -192,6 +192,7 @@ end
 function widgets.stat_card(mon, x, y, w, title, value, meta, status, progress)
   local width = clamp_int(w, 12, 512, 12)
   ui.panel(mon, x, y, width, 5, widgets.fit(title or "", width - 3), status or "OK")
+  ui.clearRegion(mon, x + 1, y + 1, math.max(1, width - 2), 3)
   ui.text(mon, x + 1, y + 1, widgets.fit(tostring(value or "-"), width - 2), colors.get(status or "text"), colors.get("background"))
   if meta then ui.text(mon, x + 1, y + 2, widgets.fit(tostring(meta), width - 2), colors.get("muted"), colors.get("background")) end
   if progress ~= nil then
