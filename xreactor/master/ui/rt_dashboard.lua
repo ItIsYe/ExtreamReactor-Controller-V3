@@ -11,6 +11,40 @@ local function status_weight(status)
   return 3
 end
 
+local function first_number(...)
+  for i = 1, select('#', ...) do
+    local v = select(i, ...)
+    local n = tonumber(v)
+    if n ~= nil then return n end
+  end
+  return 0
+end
+
+local function first_text(...)
+  for i = 1, select('#', ...) do
+    local v = select(i, ...)
+    if v ~= nil and tostring(v) ~= "" and tostring(v) ~= "-" then return v end
+  end
+  return "-"
+end
+
+local function rt_setpoints(rt)
+  return (rt and (rt.last_setpoints or rt.setpoints or rt.targets)) or {}
+end
+
+local function rt_target(rt)
+  local sp = rt_setpoints(rt)
+  return first_number(rt and rt.target, rt and rt.power_target, sp.power_target, sp.target, sp.output_target, 0)
+end
+
+local function rt_actual(rt)
+  return first_number(rt and rt.actual_output, rt and rt.output, rt and rt.power_actual, rt and rt.energy_output, 0)
+end
+
+local function rt_state(rt)
+  return first_text(rt and rt.state, rt and rt.node_state, rt and rt.status_state, "OFF")
+end
+
 local function rt_score(rt)
   local score = status_weight(rt and rt.status) * 1000
   local assignment = tostring(rt and rt.assignment_state or ""):upper()
@@ -28,8 +62,8 @@ local function rt_score(rt)
   if age > 0 then
     score = score + math.min(age, 300)
   end
-  local target = tonumber(rt and rt.target) or 0
-  local actual = tonumber((rt and rt.actual_output) or (rt and rt.output)) or 0
+  local target = rt_target(rt)
+  local actual = rt_actual(rt)
   score = score + math.min(200, math.abs(target - actual) * 5)
   return score
 end
@@ -64,15 +98,17 @@ end
 local function render_rt_card(mon, x, y, w, rt)
   local node_id = tostring(rt.id or rt.node_id or "UNKNOWN")
   local box = widgets.panel_box(mon, x, y, w, 10, "RT-" .. node_id, rt.status or "OFFLINE")
-  widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt.state or "OFF"), rt.status or "OFFLINE", 9)
-  ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %.1f%% | Ist %.1f%%", rt.target or 0, rt.actual_output or rt.output or 0), box.w), colors.get("text"), colors.get("background"))
+  local target = rt_target(rt)
+  local actual = rt_actual(rt)
+  widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt_state(rt)), rt.status or "OFFLINE", 9)
+  ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %.1f%% | Ist %.1f%%", target, actual), box.w), colors.get("text"), colors.get("background"))
   ui.text(mon, box.x, box.y + 2, widgets.fit("Node: " .. tostring(rt.node_mode or rt.mode or "-") .. " | Seen " .. tostring(rt.last_seen_age or "-") .. "s", box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 3, widgets.fit("Assign: " .. tostring(rt.assignment_state or "-"), box.w), colors.get("text"), colors.get("background"))
   ui.text(mon, box.x, box.y + 4, widgets.fit("Source: " .. tostring(rt.control_source or "-"), box.w), colors.get("text"), colors.get("background"))
   ui.text(mon, box.x, box.y + 5, widgets.fit("Master: " .. tostring(rt.display_mode or "-"), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 6, widgets.fit("Queue: " .. tostring(rt.queue_state or "idle") .. " | " .. tostring(rt.queue_step or "-"), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 7, widgets.fit("Grund: " .. tostring(rt.assignment_reason or "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.progress(mon, box.x, box.y + 8, math.max(8, box.w), math.max(0, math.min(100, rt.actual_output or rt.output or 0)) / 100, rt.status or "OFFLINE")
+  ui.progress(mon, box.x, box.y + 8, math.max(8, box.w), math.max(0, math.min(100, actual)) / 100, rt.status or "OFFLINE")
 end
 
 local function render_overflow_card(mon, x, y, w, hidden_nodes)
