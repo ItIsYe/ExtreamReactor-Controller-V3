@@ -3,6 +3,15 @@ local M = {}
 M.DEFAULT_SHUTDOWN_CANDIDATE_STABILITY_MS = 1500
 M.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS = 15000
 
+local function payload_looks_rt(payload)
+  if type(payload) ~= 'table' then return false end
+  if type(payload.rt) == 'table' then return true end
+  if type(payload.turbines) == 'table' or type(payload.reactors) == 'table' or type(payload.modules) == 'table' then return true end
+  if payload.turbine_rpm ~= nil or payload.steam ~= nil or payload.ramp_state ~= nil then return true end
+  if payload.mode ~= nil and (payload.output ~= nil or payload.state ~= nil) then return true end
+  return false
+end
+
 function M.new(opts)
   local constants = assert(opts.constants, 'constants required')
   local utils = assert(opts.utils, 'utils required')
@@ -12,8 +21,26 @@ function M.new(opts)
 
   local pending = {}
 
+  local function node_looks_rt(node)
+    if type(node) ~= 'table' then return false end
+    if node.role == constants.roles.RT_NODE then return true end
+    if type(node.rt) == 'table' then return true end
+    if payload_looks_rt(node.payload) then return true end
+    if type(node.turbines) == 'table' or type(node.reactors) == 'table' or type(node.modules) == 'table' then return true end
+    if node.turbine_rpm ~= nil or node.steam ~= nil or node.ramp_state ~= nil then return true end
+    return false
+  end
+
   local function mark_dirty(node, reason)
-    if not node or node.role ~= constants.roles.RT_NODE then return end
+    if not node then return end
+    if node.role ~= constants.roles.RT_NODE then
+      if not node_looks_rt(node) then return end
+      local previous = node.role
+      node.role = constants.roles.RT_NODE
+      log(("RT sync role inferred node=%s previous=%s reason=%s"):format(
+        tostring(node.id or node.node_id or '?'), tostring(previous or 'UNKNOWN'), tostring(reason or 'unknown')
+      ), 'INFO')
+    end
     local node_id = utils.normalize_node_id(node.id)
     local now = os.epoch('utc')
     local slot = pending[node_id]
@@ -48,7 +75,8 @@ function M.new(opts)
         log(("RT sync flush node=%s reasons=%s age_ms=%d idle_ms=%d force=%s"):format(
           tostring(node_id), tostring(reasons), tonumber(age_ms) or 0, tonumber(idle_ms) or 0, tostring(force)
         ), 'INFO')
-        if slot.node and slot.node.role == constants.roles.RT_NODE then
+        if slot.node and node_looks_rt(slot.node) then
+          slot.node.role = constants.roles.RT_NODE
           sync_rt_node(slot.node, 'coalesced:' .. reasons)
         end
         pending[node_id] = nil
