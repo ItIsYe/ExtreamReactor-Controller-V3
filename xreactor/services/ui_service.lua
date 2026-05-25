@@ -37,11 +37,11 @@ function ui:tick(_, event)
   local ts = now()
   local due = ts - self.last_draw >= self.interval * 1000
   local force_due = ts - self.last_force_draw >= self.force_interval * 1000
+  local current_snapshot = nil
   local snapshot_changed = false
   if self.snapshot then
-    local current = snapshot_value(self.snapshot(event))
-    snapshot_changed = current ~= self.last_snapshot
-    self.last_snapshot = current
+    current_snapshot = snapshot_value(self.snapshot(event))
+    snapshot_changed = current_snapshot ~= self.last_snapshot
   end
   local interactive = event and (event[1] == "monitor_touch" or event[1] == "key" or event[1] == "char")
   if not due or (not interactive and not snapshot_changed and not force_due) then
@@ -53,6 +53,9 @@ function ui:tick(_, event)
   end
   if self.render then
     self.render()
+  end
+  if self.snapshot then
+    self.last_snapshot = current_snapshot
   end
 end
 
