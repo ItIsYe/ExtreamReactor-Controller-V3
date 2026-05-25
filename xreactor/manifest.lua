@@ -55,7 +55,7 @@ return {
       { path = "master/init_runtime.lua", required_for = { "MASTER" } },
       { path = "master/message_handlers.lua" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
-      { path = "master/rt_sync.lua", size_bytes = 15388, hash = "2a88d3ff" },
+      { path = "master/rt_sync.lua" },
       { path = "master/rt_sync_coalescer.lua", size_bytes = 4428, hash = "e55c02a3" },
       { path = "master/runtime_context.lua", size_bytes = 5633, hash = "5740fe39" },
       { path = "master/startup_sequencer.lua", size_bytes = 9172, hash = "01535e76" },
