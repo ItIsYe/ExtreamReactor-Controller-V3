@@ -50,6 +50,7 @@ function M.run(ctx)
     sync_rt_node = ctx.sync_rt_node,
     log = function(message, level) ctx.utils.log("MASTER", message, level or "INFO") end
   })
+  ctx.utils.log("MASTER", "RT sync coalescer ready: role_inference=enabled skip_diagnostics=enabled", "INFO")
   ctx.refs.services:add(ctx.refs.comms)
   local recovery_notice = nil
   if ctx.recovery_status and ctx.recovery_status.had_marker then
