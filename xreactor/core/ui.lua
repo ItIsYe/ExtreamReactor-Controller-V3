@@ -7,60 +7,34 @@ local monitor_state = setmetatable({}, { __mode = "k" })
 
 local function report_redirect_error(context, err)
   local message = "UI redirect failure"
-  if context then
-    message = message .. " context=" .. tostring(context)
-  end
+  if context then message = message .. " context=" .. tostring(context) end
   message = message .. " err=" .. tostring(err)
-  if logger and logger.log then
-    logger.log("UI", "ERROR: " .. message, "ERROR")
-  else
-    print("WARN: " .. message)
-  end
+  if logger and logger.log then logger.log("UI", "ERROR: " .. message, "ERROR") else print("WARN: " .. message) end
 end
 
 local function redirect(mon, fn, context)
-  if not mon or not term or not term.redirect or type(fn) ~= "function" then
-    return
-  end
-
+  if not mon or not term or not term.redirect or type(fn) ~= "function" then return false, "redirect unavailable" end
   local old = nil
   if term.current then
     local ok_current, current = pcall(term.current)
-    if ok_current then
-      old = current
-    end
+    if ok_current then old = current end
   end
-
   local ok_redirect, previous_or_err = pcall(term.redirect, mon)
-  if not ok_redirect then
-    report_redirect_error(context or "redirect", previous_or_err)
-    return
-  end
-  if previous_or_err ~= nil then
-    old = previous_or_err
-  end
-
+  if not ok_redirect then report_redirect_error(context or "redirect", previous_or_err); return false, previous_or_err end
+  if previous_or_err ~= nil then old = previous_or_err end
   local ok_exec, exec_err = xpcall(fn, function(err)
-    if debug and debug.traceback then
-      return debug.traceback(err, 2)
-    end
+    if debug and debug.traceback then return debug.traceback(err, 2) end
     return tostring(err)
   end)
-
   local ok_restore, restore_err = pcall(term.redirect, old)
-  if not ok_restore then
-    report_redirect_error(context or "restore", restore_err)
-  end
-  if not ok_exec then
-    report_redirect_error(context or "render", exec_err)
-  end
+  if not ok_restore then report_redirect_error(context or "restore", restore_err) end
+  if not ok_exec then report_redirect_error(context or "render", exec_err); return false, exec_err end
+  return true
 end
 
 local function is_dirty(mon, key, snapshot)
   dirty_cache[mon] = dirty_cache[mon] or {}
-  if dirty_cache[mon][key] == snapshot then
-    return false
-  end
+  if dirty_cache[mon][key] == snapshot then return false end
   dirty_cache[mon][key] = snapshot
   return true
 end
@@ -71,9 +45,7 @@ local function state_for(mon)
 end
 
 local function safe_monitor_call(mon, method, ...)
-  if not mon or type(mon[method]) ~= "function" then
-    return false, "missing method"
-  end
+  if not mon or type(mon[method]) ~= "function" then return false, "missing method" end
   local fn = mon[method]
   return pcall(fn, ...)
 end
@@ -83,13 +55,9 @@ function ui.invalidate(mon)
 end
 
 function ui.getSize(mon)
-  if not mon or type(mon.getSize) ~= "function" then
-    return nil
-  end
+  if not mon or type(mon.getSize) ~= "function" then return nil end
   local ok, w, h = safe_monitor_call(mon, "getSize")
-  if ok and type(w) == "number" and type(h) == "number" then
-    return w, h
-  end
+  if ok and type(w) == "number" and type(h) == "number" then return w, h end
   return nil
 end
 
@@ -97,24 +65,17 @@ function ui.setScale(mon, scale)
   if not mon then return end
   local numeric_scale = tonumber(scale)
   if type(numeric_scale) ~= "number" then
-    if logger and logger.log then
-      logger.log("UI", "WARN: Ignoring invalid monitor scale value=" .. tostring(scale), "WARN")
-    end
+    if logger and logger.log then logger.log("UI", "WARN: Ignoring invalid monitor scale value=" .. tostring(scale), "WARN") end
     return
   end
   local normalized = math.floor((numeric_scale * 2) + 0.5) / 2
   if normalized < 0.5 then normalized = 0.5 end
   if normalized > 5 then normalized = 5 end
   local state = state_for(mon)
-  if state.scale == normalized then
-    return
-  end
+  if state.scale == normalized then return end
   if mon.setTextScale then
     local ok, err = safe_monitor_call(mon, "setTextScale", normalized)
-    if not ok and logger and logger.log then
-      logger.log("UI", "WARN: setTextScale failed: " .. tostring(err), "WARN")
-      return
-    end
+    if not ok and logger and logger.log then logger.log("UI", "WARN: setTextScale failed: " .. tostring(err), "WARN"); return end
   end
   state.scale = normalized
   ui.invalidate(mon)
@@ -133,9 +94,8 @@ end
 
 function ui.clearRegion(mon, x, y, w, h)
   if not mon then return end
-  if not w or not h or w <= 0 or h <= 0 then
-    return
-  end
+  if not w or not h or w <= 0 or h <= 0 then return end
+  ui.invalidate(mon)
   redirect(mon, function()
     term.setBackgroundColor(colors.background)
     for row = y, y + h - 1 do
@@ -160,9 +120,7 @@ function ui.text(mon, x, y, text, fg, bg)
     if bg then term.setBackgroundColor(bg) end
     if fg then term.setTextColor(fg) end
     term.write(safe_text)
-    if prev_width and prev_width > width then
-      term.write(string.rep(" ", prev_width - width))
-    end
+    if prev_width and prev_width > width then term.write(string.rep(" ", prev_width - width)) end
   end, "ui.text")
 end
 
@@ -175,9 +133,7 @@ end
 
 function ui.panel(mon, x, y, w, h, title, status)
   if not mon then return end
-  if not w or not h or w <= 0 or h <= 0 then
-    return
-  end
+  if not w or not h or w <= 0 or h <= 0 then return end
   local snapshot = table.concat({ tostring(w), tostring(h), tostring(title), tostring(status) }, "|")
   local key = ("panel:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
@@ -189,7 +145,6 @@ function ui.panel(mon, x, y, w, h, title, status)
       term.setCursorPos(x, row)
       term.write(string.rep(" ", w))
     end
-
     if w == 1 or h == 1 then
       if title then
         term.setCursorPos(x, y)
@@ -198,7 +153,6 @@ function ui.panel(mon, x, y, w, h, title, status)
       end
       return
     end
-
     local top = "+" .. string.rep("-", math.max(0, w - 2)) .. "+"
     local mid = "|" .. string.rep(" ", math.max(0, w - 2)) .. "|"
     term.setTextColor(border_color)
@@ -210,7 +164,6 @@ function ui.panel(mon, x, y, w, h, title, status)
     end
     term.setCursorPos(x, y + h - 1)
     term.write(top)
-
     if title and w > 4 then
       local clipped = tostring(title):gsub("\n", " "):gsub("\r", " ")
       clipped = clipped:sub(1, w - 4)
@@ -242,9 +195,7 @@ end
 
 function ui.progress(mon, x, y, w, percent, status)
   if not mon then return end
-  if not w or w <= 0 then
-    return
-  end
+  if not w or w <= 0 then return end
   local pct = tonumber(percent) or 0
   if pct < 0 then pct = 0 end
   if pct > 1 then pct = 1 end
@@ -266,23 +217,17 @@ function ui.list(mon, x, y, w, rows, opts)
   if not mon then return end
   opts = opts or {}
   rows = rows or {}
-  if not w or w <= 0 then
-    return
-  end
+  if not w or w <= 0 then return end
   local snapshot = nil
   if textutils and textutils.serialize then
     local ok, result = pcall(textutils.serialize, { rows = rows, opts = opts })
-    if ok then
-      snapshot = result
-    end
+    if ok then snapshot = result end
   end
   snapshot = snapshot or tostring(rows) .. "|" .. tostring(opts)
   local key = ("list:%d:%d:%d"):format(x, y, w)
   if not is_dirty(mon, key, snapshot) then return end
   local max_rows = opts.max_rows or #rows
-  if max_rows <= 0 then
-    return
-  end
+  if max_rows <= 0 then return end
   for idx = 1, max_rows do
     local row = rows[idx]
     if not row then
@@ -290,10 +235,7 @@ function ui.list(mon, x, y, w, rows, opts)
     else
       local text = row
       local status = nil
-      if type(row) == "table" then
-        text = row.text or ""
-        status = row.status
-      end
+      if type(row) == "table" then text = row.text or ""; status = row.status end
       text = tostring(text)
       if #text > w then text = text:sub(1, w) end
       ui.text(mon, x, y + idx - 1, text .. string.rep(" ", w - #text), colors.get(status) or (opts.fg or colors.text), opts.bg or colors.background)
@@ -302,13 +244,9 @@ function ui.list(mon, x, y, w, rows, opts)
 end
 
 function ui.begin_frame(mon)
-  if not mon then
-    return
-  end
+  if not mon then return end
   local w, h = ui.getSize(mon)
-  if not w or not h then
-    return
-  end
+  if not w or not h then return end
   local state = state_for(mon)
   local size_key = ("%dx%d"):format(w, h)
   if state.size ~= size_key then
@@ -319,29 +257,15 @@ end
 
 function ui.sparkline(values, width)
   local blocks = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
-  if not width or width <= 0 then
-    return ""
-  end
+  if not width or width <= 0 then return "" end
   if not values or #values == 0 then return string.rep(" ", width) end
   local numeric = {}
-  for _, v in ipairs(values) do
-    if type(v) == "number" then
-      table.insert(numeric, v)
-    end
-  end
-  if #numeric == 0 then
-    return string.rep(" ", width)
-  end
+  for _, v in ipairs(values) do if type(v) == "number" then table.insert(numeric, v) end end
+  if #numeric == 0 then return string.rep(" ", width) end
   local min, max = numeric[1], numeric[1]
-  for _, v in ipairs(numeric) do
-    if v < min then min = v end
-    if v > max then max = v end
-  end
+  for _, v in ipairs(numeric) do if v < min then min = v end; if v > max then max = v end end
   local range = max - min
-  if range == 0 then
-    local mid = blocks[4]
-    return string.rep(mid, width)
-  end
+  if range == 0 then return string.rep(blocks[4], width) end
   local step = math.max(1, math.floor(#numeric / width))
   local out = {}
   for i = 1, #numeric, step do
@@ -358,12 +282,8 @@ function ui.table(mon, x, y, w, headers, rows, opts)
   if not mon then return end
   opts = opts or {}
   rows = rows or {}
-  if not headers or #headers == 0 then
-    return
-  end
-  if not w or w <= 0 then
-    return
-  end
+  if not headers or #headers == 0 then return end
+  if not w or w <= 0 then return end
   redirect(mon, function()
     term.setBackgroundColor(opts.bg or colors.background)
     term.setTextColor(opts.fg or colors.text)
