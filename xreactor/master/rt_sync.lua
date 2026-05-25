@@ -13,6 +13,11 @@ local function normalize_node_mode(mode)
   return tostring(mode)
 end
 
+local function normalize_mode_key(mode)
+  if mode == nil then return "UNKNOWN" end
+  return tostring(mode):upper()
+end
+
 local function sort_by_priority_then_id(a, b)
   if (a.priority or 0) == (b.priority or 0) then
     return (a.id or "") < (b.id or "")
@@ -45,6 +50,7 @@ function M.send_rt_mode(comms, node, mode)
     value = mode
   }, { requires_applied = true })
   node.last_mode_request = os.epoch("utc")
+  node.last_mode_request_mode = mode
   node.desired_mode = mode
 end
 
@@ -119,6 +125,30 @@ end
 function M.set_default_mode(ctx, node)
   local mode = node.desired_mode or ctx.config.rt_default_mode or "MASTER"
   M.send_rt_mode(ctx.comms, node, mode)
+end
+
+local function mode_sync_action(ctx, node, now)
+  local desired = node and (node.desired_mode or (ctx.config and ctx.config.rt_default_mode) or "MASTER") or "MASTER"
+  if desired == nil or tostring(desired) == "" then return nil, nil, "NO_DESIRED_MODE" end
+
+  local current_key = normalize_mode_key(node and node.mode)
+  local desired_key = normalize_mode_key(desired)
+  if current_key == desired_key then return nil, desired, "MODE_OK" end
+
+  local status = node and node.status or constants.status_levels.OFFLINE
+  local state = node and node.state or constants.node_states.OFF
+  if status == constants.status_levels.OFFLINE then return "blocked", desired, "OFFLINE" end
+  if status == constants.status_levels.EMERGENCY or state == constants.node_states.EMERGENCY or state == constants.node_states.SAFE then
+    return "blocked", desired, "SAFE_OR_EMERGENCY"
+  end
+
+  local last_mode_ts = tonumber(node and node.last_mode_request) or 0
+  local last_mode = normalize_mode_key(node and node.last_mode_request_mode)
+  local retry_gap_ms = 3000
+  if last_mode == desired_key and last_mode_ts > 0 and (now - last_mode_ts) < retry_gap_ms then
+    return "wait", desired, "MODE_REQUEST_PENDING"
+  end
+  return "send", desired, "MODE_MISMATCH_" .. current_key
 end
 
 function M.evaluate_rt_node(node, opts)
@@ -287,9 +317,33 @@ end
 
 function M.sync_rt_node(ctx, node)
   if node.role ~= constants.roles.RT_NODE then return end
-  if not node.mode then M.set_default_mode(ctx, node) end
-  local plan = ctx.plan or M.build_node_setpoint_plan(ctx)
+  local now = os.epoch("utc")
   local node_id = utils.normalize_node_id(node.id)
+  local mode_action, desired_mode, mode_reason = mode_sync_action(ctx, node, now)
+  if mode_action == "send" then
+    if ctx.log then
+      ctx.log(("RT mode request node=%s current=%s desired=%s reason=%s"):format(
+        tostring(node_id), tostring(node.mode or "UNKNOWN"), tostring(desired_mode), tostring(mode_reason)
+      ), "INFO")
+    end
+    M.send_rt_mode(ctx.comms, node, desired_mode)
+    return
+  elseif mode_action == "wait" then
+    if ctx.log then
+      ctx.log(("RT setpoint sync deferred node=%s current=%s desired=%s reason=%s"):format(
+        tostring(node_id), tostring(node.mode or "UNKNOWN"), tostring(desired_mode), tostring(mode_reason)
+      ), "DEBUG")
+    end
+    return
+  elseif mode_action == "blocked" then
+    if ctx.log then
+      ctx.log(("RT mode request blocked node=%s current=%s desired=%s reason=%s"):format(
+        tostring(node_id), tostring(node.mode or "UNKNOWN"), tostring(desired_mode), tostring(mode_reason)
+      ), "WARN")
+    end
+  end
+
+  local plan = ctx.plan or M.build_node_setpoint_plan(ctx)
   local assigned = nil
   for _, entry in ipairs(plan.nodes or {}) do
     if entry.id == node_id then assigned = entry break end
@@ -303,7 +357,6 @@ function M.sync_rt_node(ctx, node)
       tostring(assigned.mode), tostring(assigned.status)
     ), assigned.controllable and "INFO" or "WARN")
   end
-  local now = os.epoch("utc")
   if should_debounce_resend(node, desired, now) then
     if ctx.log then
       ctx.log(("RT setpoints deduped node=%s trigger=%s state=%s reason=%s age_ms=%d"):format(
