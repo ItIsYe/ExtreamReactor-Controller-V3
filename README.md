@@ -9,12 +9,27 @@ The current repository ships:
 - a startup entrypoint that launches the selected role automatically,
 - per-role configs, local registries, telemetry, alerts, and monitor UIs.
 
+## Schnellinstallation
+
+Auf einem neuen CC:Tweaked-Computer mit aktivierter HTTP-API kann der Installer dauerhaft als `/installer` abgelegt und danach gestartet werden:
+
+```sh
+delete /installer
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer
+/installer
+```
+
+Damit bleibt der Installer fest auf dem Computer gespeichert. Nach dem Start zeigt er das Installationsmenü für `Neuinstallation`, `Update` und `Abbrechen`. Die Installation selbst legt die Runtime unter `/xreactor` ab und schreibt den XReactor-Startup-Eintrag nach `/startup`.
+
+Wichtig: `wget run ...` lädt den Installer nur temporär und speichert ihn nicht dauerhaft. Für normale Installationen deshalb den obigen Befehl mit Zielpfad `/installer` verwenden.
+
 ## System goals
 
 - Keep hardware control **local to the node** that owns the peripherals.
 - Let the **MASTER** aggregate telemetry, alerts, node health, and UI views.
 - Allow the **RT** node to continue operating when the MASTER is unavailable.
 - Keep installation/update simple with one installer and one runtime root.
+- Keep MASTER decisions and RT actuator writes separated: MASTER sends intent/setpoints, RT performs real peripheral control and safety enforcement locally.
 
 ## Roles
 
@@ -25,6 +40,7 @@ The current repository ships:
 - Receives node status, heartbeat, and alert traffic over wireless modem channels.
 - Sends commands and setpoints to nodes using the command/ack protocol.
 - Runs the startup sequencer for RT nodes.
+- Computes RT assignment, startup, shed, standby, and shutdown plans from the current `power_target`, RT node health, node mode, and global RT hold state.
 - Renders the main UI, including overview, RT, energy, resources, alarms, alerts, and multi-monitor views.
 - Tracks peer state, retries, queue metrics, and comms timeouts.
 
@@ -33,6 +49,7 @@ The current repository ships:
 - Uses wired monitors when present.
 - Shows UTC wall-clock time in the MASTER UI (not CC:Tweaked in-game time).
 - Does **not** directly control reactor, turbine, or storage peripherals; those stay on the role nodes.
+- Sends RT control intent through command payloads such as `SET_MODE`, `SET_SETPOINTS`, and `STARTUP_STAGE`.
 - Uses a fixed 3-primary-monitor mapping when at least three MASTER monitors are bound:
   - monitor 1 -> `overview`
   - monitor 2 -> `rt`
@@ -52,8 +69,10 @@ The current repository ships:
 - Fresh installs use auto-discovery by default: empty `reactors` / `turbines` config lists bind all compatible local RT devices automatically.
 - Applies local control rails for rods, turbine flow, and coil engagement.
 - Executes startup sequencing and startup watchdog logic.
-- Accepts MASTER commands for mode changes and setpoints.
+- Accepts MASTER commands for mode changes and setpoints when the RT node is in local `MASTER` mode.
+- Rejects or ignores remote setpoints in local `AUTONOM` or `SAFE` mode, so local safety and fallback behavior always win.
 - Enforces local safety rules such as temperature/coolant-related limits.
+- Performs the actual actuator writes to local peripherals: reactor activation, rod levels, turbine activation, turbine flow, and turbine inductor/coil state.
 
 **Expected behavior:**
 - Supports local operating states such as `AUTONOM`, `MASTER`, and `SAFE`.
@@ -119,16 +138,114 @@ The current repository ships:
 
 At runtime, the project is split into a small set of active areas:
 
-- `xreactor/core/` - shared runtime internals such as bootstrap loading, network/comms, logging, registry handling, UI helpers, control rails, and safety helpers.
+- `xreactor/core/` - shared runtime internals such as bootstrap loading, network/comms, logging, registry handling, UI helpers, control rails, turbine regulation, and safety helpers.
 - `xreactor/services/` - reusable services for comms, discovery, telemetry, alerts, UI ticks, and service lifecycle management.
-- `xreactor/master/` - MASTER-specific config, sequencer, UI views, monitor sessions, and UI diagnostics.
+- `xreactor/master/` - MASTER-specific config, profile handling, RT sync planning, startup sequencing, UI views, monitor sessions, and UI diagnostics.
 - `xreactor/nodes/` - role-specific node implementations for `rt`, `energy`, `water`, `fuel`, and `reprocessor`.
 - `xreactor/nodes/support/` - shared non-RT support-node runtime/discovery/ui/command helpers used by `water`, `fuel`, and `reprocessor`.
 - `xreactor/adapters/` - peripheral adapters for reactors, turbines, monitors, energy storage, and induction matrices.
 - `xreactor/shared/` - shared constants, colors, telemetry schema, build info, and health codes.
-- `xreactor/manifest.lua` - installer manifest listing the files for the base runtime and each role.
+- `xreactor/manifest.lua` - installer manifest listing the files for the base runtime and each role, including `size_bytes` and CRC32 hashes.
 - `xreactor/start.lua` - startup router that reads the installed role and launches the correct entrypoint.
 - `installer` - single-file installer/update entrypoint for deployment.
+
+### Control architecture
+
+The control path is intentionally layered:
+
+```text
+Operator touch / AUTO / profile / RT-HOLD
+        │
+        ▼
+MASTER ui_controller.lua
+        │
+        ▼
+runtime_ops_profile.lua / runtime_ops_rt.lua
+        │
+        ▼
+master.rt_sync.build_node_setpoint_plan()
+        │
+        ├─ SET_MODE
+        ├─ SET_SETPOINTS
+        └─ STARTUP_STAGE via startup_sequencer.lua
+        │
+        ▼
+services.comms_service.lua -> core.comms.lua
+        │
+        ▼
+RT nodes/rt/command_handler.lua
+        │
+        ├─ SET_MODE      -> state_handlers.apply_mode()
+        ├─ SET_SETPOINTS -> local targets + optional desired node state
+        ├─ STARTUP_STAGE -> module_lifecycle.start_module()
+        └─ SCRAM         -> SAFE
+        │
+        ▼
+RT node state-machine tick
+        │
+        ├─ Turbines: update_inductor_for_rpm(), update_turbine_flow_state(), setTurbineFlow()
+        ├─ Reactors: controlReactor(), control_rails, reactor_steam_guard, applyReactorRods()
+        └─ Safety: module_lifecycle.update_module_states() -> SAFE/EMERGENCY/SCRAM
+```
+
+The MASTER calculates desired intent and sends commands. The RT node owns all real hardware writes and safety-critical decisions. This means a MASTER UI/profile change never touches a reactor or turbine directly; it produces a command that the target node may accept, reject, acknowledge, or ignore depending on its local state.
+
+### MASTER to RT sync
+
+`xreactor/master/rt_sync.lua` evaluates every known RT node and builds a setpoint plan from:
+
+- global `power_target`,
+- `rt_global_off_hold`,
+- RT node mode and node state,
+- node health/offline/emergency state,
+- configured per-node capacity and startup/shutdown margins.
+
+The plan assigns nodes into states such as `active`, `startup`, `shed`, `standby`, `shutdown`, or `unavailable`. From that it produces RT setpoints containing `target_rpm`, `power_target`, `steam_target`, `enable_reactors`, `enable_turbines`, assignment metadata, and optional shutdown intent.
+
+`xreactor/master/runtime_ops_rt.lua` wraps this in a controlled shutdown workflow. Shutdown is not a single blind command; it moves through rampdown, request, ack wait, state wait, completion, or failure states.
+
+`xreactor/master/startup_sequencer.lua` handles staged startup and orders turbine modules before reactor modules. It waits for applied ACKs and stable module status before advancing to the next startup step.
+
+### RT command and actuator layer
+
+`xreactor/nodes/rt/command_handler.lua` is the remote command gate. It accepts setpoints only while the RT node is in local `MASTER` mode. It rejects unsafe or invalid requests and records command results for ACK_APPLIED responses.
+
+`xreactor/nodes/rt/state_handlers.lua` owns the RT operating transitions and the node state-machine behavior. It is responsible for `AUTONOM`, `MASTER`, and `SAFE` behavior, startup transitions, fallback to autonomous mode on MASTER timeout, and emergency transitions.
+
+`xreactor/nodes/rt/module_lifecycle.lua` owns module startup, stable/running/limited/error state transitions, safety limit checks, and SCRAM behavior.
+
+The actual RT actuator writes are performed through:
+
+- `setReactorActive(...)` -> reactor `setActive`, when available,
+- `applyReactorRods(...)` -> reactor adapter rod write path,
+- `setTurbineActive(...)` -> turbine `setActive`, when available,
+- `setTurbineFlow(...)` -> `setFluidFlowRate` or `setFluidFlowRateMax`,
+- `setInductor(...)` / `update_inductor_for_rpm(...)` -> turbine inductor/coil control.
+
+### RT regulation and safety
+
+`xreactor/core/control_rails.lua` provides the generic regulator mechanics used by RT control:
+
+- clamp with reason,
+- EMA smoothing,
+- deadband and hysteresis,
+- cooldown,
+- adaptive step sizing,
+- ramp profiles,
+- rod ramp limiting,
+- coolant-sensitive limits when opening rods / increasing output.
+
+`xreactor/core/turbine_regulator.lua` adds turbine-specific behavior:
+
+- startup target detection,
+- requested-vs-confirmed flow matching,
+- readback-lag handling,
+- learned effective minimum flow,
+- target-band hold/trim behavior,
+- overspeed brake behavior that can request zero flow and coil engagement,
+- bottleneck classification for diagnostics.
+
+`xreactor/core/safety.lua` and `xreactor/nodes/rt/module_lifecycle.lua` enforce safety locally. Temperature and coolant limits can transition the RT node into `SAFE`/`EMERGENCY` and trigger SCRAM behavior. `xreactor/nodes/rt/reactor_steam_guard.lua` prevents unsafe rod opening when reactor internal steam fill is high and can force extra rod insertion at critical fill levels.
 
 ### MASTER monitor UI architecture (current)
 
@@ -165,7 +282,6 @@ Current MASTER monitor policy:
   - `xreactor/master/ui/rt_dashboard.lua`
   - `xreactor/master/ui/energy.lua`
 
-
 ### Roadmap-Status (Non-RT)
 
 Der große Nicht-RT-Umbau ist auf dem aktuellen Stand abgeschlossen (Final-Audit 2026-04-22, siehe `NON_RT_CLOSEOUT_2026-04-22.md`):
@@ -199,11 +315,25 @@ xreactor/
     reprocessor/           Reprocessing telemetry node
 tests/
   protocol_test.lua        Protocol validation test
+  manifest_entrypoint_require_coverage_test.py
+                            Manifest/entrypoint coverage and critical shipment metadata test
 ```
 
 ## Installer behavior
 
 The current installer is the root-level file `installer`. It is the only installer entrypoint in this repository.
+
+### Persistent installer command
+
+Use this command on the target CC:Tweaked computer to install the installer itself permanently at `/installer`:
+
+```sh
+delete /installer
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer
+/installer
+```
+
+The installer source is fixed to the repository `beta` branch during normal install/update. The root installer bootstraps the modular installer runtime into `/xreactor` before the normal installation flow continues.
 
 ### What the installer does
 
@@ -224,11 +354,11 @@ On launch it shows a simple menu:
 5. Writes the selected role config into the staged tree.
 6. Commits stage activation by moving current `/xreactor` to `/xreactor_backup_prev`, moving stage to `/xreactor`, and removing backup after successful commit.
 7. Writes `/startup` with `shell.run("/xreactor/start.lua")`, unless an existing `/startup` looks unrelated to XReactor.
-8. Logs progress to `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`.
+8. Logs progress to `/xreactor_logs/installer_<role>.log` (bootstrap: `/xreactor_logs/installer_bootstrap.log`).
 
 ### Standalone bootstrap guarantee
 
-The root `installer` is now a real standalone entrypoint for fresh systems:
+The root `installer` is a real standalone entrypoint for fresh systems:
 
 - if `/xreactor/installer_main.lua` and the modular installer runtime files are missing, the root installer downloads
   `installer_main.lua`, `installer_http.lua`, `installer_manifest.lua`, `installer_stage.lua`, `installer_startup.lua`, and `installer_storage.lua` first,
@@ -248,7 +378,7 @@ This means a fresh machine only needs the single root `installer` file to begin 
 5. Copies existing `/xreactor/config` into stage and validates staged files/hashes.
 6. Commits stage activation by moving active `/xreactor` to `/xreactor_backup_prev`, activating `/xreactor_stage` as `/xreactor`, and deleting backup after successful activation.
 7. Rewrites/ensures the XReactor startup file at `/startup` if the existing startup belongs to XReactor.
-8. Logs progress to `/xreactor_logs/installer_<role>.log (bootstrap: /xreactor_logs/installer_bootstrap.log)`.
+8. Logs progress to `/xreactor_logs/installer_<role>.log` (bootstrap: `/xreactor_logs/installer_bootstrap.log`).
 
 ### Download validation
 
@@ -256,7 +386,8 @@ The installer validates downloaded files before keeping them:
 
 - rejects missing or empty files,
 - rejects HTML content,
-- parses `.lua` files before accepting them.
+- parses `.lua` files before accepting them,
+- checks `size_bytes` and CRC32 `hash` from `xreactor/manifest.lua` for staged runtime files.
 
 To reduce GitHub raw cache races between a fresh `manifest.lua` and staged file downloads, the installer appends a cache-busting `xr_cb=...` query token to manifest, release, and staged file download URLs while still staying on the `beta` branch strategy.
 
