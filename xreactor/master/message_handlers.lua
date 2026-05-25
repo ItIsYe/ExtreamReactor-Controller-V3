@@ -38,6 +38,48 @@ function M.new(opts)
     return out
   end
 
+  local function normalize_role(raw)
+    if raw == nil then return nil end
+    local value = tostring(raw):upper():gsub("_", "-")
+    if value == "RT" or value == "RTNODE" or value == "RT-NODE" or value == "REACTOR-TURBINE" then return constants.roles.RT_NODE end
+    if value == "MASTER" then return constants.roles.MASTER end
+    if value == "ENERGY" or value == "ENERGY-NODE" or value == "ENERGYNODE" then return constants.roles.ENERGY_NODE end
+    if value == "FUEL" or value == "FUEL-NODE" or value == "FUELNODE" then return constants.roles.FUEL_NODE end
+    if value == "WATER" or value == "WATER-NODE" or value == "WATERNODE" then return constants.roles.WATER_NODE end
+    if value == "REPROCESSING" or value == "REPROCESSOR" or value == "REPROCESSOR-NODE" or value == "REPROCESSING-NODE" then return constants.roles.REPROCESSOR_NODE end
+    return raw
+  end
+
+  local function payload_looks_rt(payload)
+    if type(payload) ~= "table" then return false end
+    if type(payload.rt) == "table" then return true end
+    if type(payload.turbines) == "table" or type(payload.reactors) == "table" or type(payload.modules) == "table" then return true end
+    if payload.turbine_rpm ~= nil or payload.steam ~= nil or payload.ramp_state ~= nil then return true end
+    if payload.mode ~= nil and (payload.output ~= nil or payload.state ~= nil) and (payload.capabilities ~= nil or payload.bindings ~= nil) then return true end
+    return false
+  end
+
+  local function infer_message_role(message)
+    local payload = message and message.payload or nil
+    local role = normalize_role(message and message.role)
+    if role ~= nil then return role end
+    role = normalize_role(type(payload) == "table" and payload.role or nil)
+    if role ~= nil then return role end
+    if payload_looks_rt(payload) then return constants.roles.RT_NODE end
+    return nil
+  end
+
+  local function apply_role_hint(node, role_hint, origin)
+    if type(node) ~= "table" or role_hint == nil then return end
+    local normalized = normalize_role(role_hint)
+    if normalized == nil then return end
+    local previous = node.role
+    if previous ~= normalized then
+      node.role = normalized
+      log(("Node %s role %s -> %s (%s)"):format(tostring(node.id or "?"), tostring(previous or "UNKNOWN"), tostring(normalized), tostring(origin or "role_hint")), "INFO")
+    end
+  end
+
   local function assign_node_status_from_health(node, origin)
     local previous_status = node.status
     local health_payload = node.health
@@ -145,13 +187,15 @@ function M.new(opts)
     local sender_id = utils.normalize_node_id(message.sender_id)
     local reported_id = message.node_id and utils.normalize_node_id(message.node_id) or "UNKNOWN"
     local id = (reported_id ~= "UNKNOWN") and reported_id or sender_id
+    local role_hint = infer_message_role(message)
     if sender_id ~= "UNKNOWN" and sender_id ~= id and nodes[sender_id] then
       local legacy = nodes[sender_id]
       nodes[sender_id] = nil
       nodes[id] = nodes[id] or legacy
       log(("Node identity remapped: %s -> %s"):format(tostring(sender_id), tostring(id)))
     end
-    nodes[id] = nodes[id] or { id = id, role = message.role, status = constants.status_levels.OFFLINE }
+    nodes[id] = nodes[id] or { id = id, role = role_hint or normalize_role(message.role), status = constants.status_levels.OFFLINE }
+    apply_role_hint(nodes[id], role_hint, "message")
     if nodes[id].down_since then
       local peers = comms() and comms():get_peers() or {}
       local peer = peers and peers[id] or nil
@@ -176,7 +220,7 @@ function M.new(opts)
       if nodes[id].status == constants.status_levels.OFFLINE then log("Node online: " .. tostring(id)) end
       assign_node_status_from_health(nodes[id], "hello")
       nodes[id].state = constants.node_states.OFF
-      if message.role == constants.roles.RT_NODE then sequencer:enqueue(id) end
+      if nodes[id].role == constants.roles.RT_NODE then sequencer:enqueue(id) end
       mark_rt_sync_dirty(nodes[id], "hello")
     elseif message.type == constants.message_types.HEARTBEAT then
       nodes[id].state = message.payload.state
@@ -194,6 +238,7 @@ function M.new(opts)
     elseif message.type == constants.message_types.STATUS then
       local previous_mode = nodes[id].mode
       nodes[id] = utils.merge(nodes[id], message.payload)
+      apply_role_hint(nodes[id], role_hint or (payload_looks_rt(message.payload) and constants.roles.RT_NODE or nil), "status")
       nodes[id].payload = message.payload
       if nodes[id].role == constants.roles.ENERGY_NODE then
         nodes[id].energy = message.payload.energy or message.payload
