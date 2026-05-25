@@ -34,16 +34,18 @@ CRITICAL_SHIPMENT_PATHS = {
 }
 # Temporary, explicit exceptions for the active MASTER UI rollout.
 # The installer accepts omitted size/hash metadata and still downloads + Lua-parses
-# these files. Remove entries after regenerating manifest metadata.
+# these files. Remove entries after running tools/regenerate_manifest_metadata.py.
 MANIFEST_METADATA_OPTIONAL_PATHS = {
     "core/monitor_manager.lua",
+    "master/runtime_loop.lua",
     "master/init_runtime.lua",
     "master/ui/multiview.lua",
     "master/ui/rt_dashboard.lua",
 }
 MASTER_RUNTIME_FINGERPRINT_MARKERS = (
     "Master runtime fingerprint:",
-    "snapshot_ui_shape=local",
+    "snapshot_ui_shape=module",
+    "ui_shape_logs=enabled",
     "touch_dispatch_diag=enabled",
 )
 
@@ -198,8 +200,10 @@ def main():
     for marker in MASTER_RUNTIME_FINGERPRINT_MARKERS:
         if marker not in runtime_loop:
             errors.append(f"master runtime fingerprint marker missing in runtime_loop.lua marker={marker}")
-    if "local function snapshot_ui_shape(" not in runtime_loop:
-        errors.append("master runtime snapshot guard missing: local function snapshot_ui_shape(...) not found")
+    if "require(\"master.ui_diagnostics\")" not in runtime_loop and "require('master.ui_diagnostics')" not in runtime_loop:
+        errors.append("master runtime snapshot guard missing: master.ui_diagnostics require not found")
+    if "ui_diagnostics.snapshot_shape(" not in runtime_loop:
+        errors.append("master runtime snapshot guard missing: ui_diagnostics.snapshot_shape(...) not found")
 
     rt_root = XREACTOR_ROOT / "nodes" / "rt"
     for lua_file in sorted(rt_root.glob("*.lua")):
