@@ -139,7 +139,7 @@ return {
       { path = "nodes/reprocessor/config.lua", size_bytes = 3500, hash = "1ace0654" },
       { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 413, hash = "a4cee204" },
       { path = "nodes/reprocessor/main.lua", size_bytes = 16921, hash = "1058e357", required_for = { "REPROCESSING" } },
-      { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "1b38a051" },
+      { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9" },
     },
   }
 }
