@@ -1,7 +1,11 @@
+local utils = require("core.utils")
+
 local function log_command(ctx, level, message)
   if type(ctx.log) == "function" then
-    pcall(ctx.log, level or "INFO", message)
+    local ok = pcall(ctx.log, level or "INFO", message)
+    if ok then return end
   end
+  utils.log("RT", message, level or "INFO")
 end
 
 local function value_summary(value)
