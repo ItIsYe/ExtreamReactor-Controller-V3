@@ -1,3 +1,25 @@
+local function log_command(ctx, level, message)
+  if type(ctx.log) == "function" then
+    pcall(ctx.log, level or "INFO", message)
+  end
+end
+
+local function value_summary(value)
+  if type(value) == "table" then
+    local parts = {}
+    if value.target_rpm ~= nil then parts[#parts + 1] = "target_rpm=" .. tostring(value.target_rpm) end
+    if value.power_target ~= nil then parts[#parts + 1] = "power_target=" .. tostring(value.power_target) end
+    if value.steam_target ~= nil then parts[#parts + 1] = "steam_target=" .. tostring(value.steam_target) end
+    if value.enable_reactors ~= nil then parts[#parts + 1] = "enable_reactors=" .. tostring(value.enable_reactors) end
+    if value.enable_turbines ~= nil then parts[#parts + 1] = "enable_turbines=" .. tostring(value.enable_turbines) end
+    if value.assignment_state ~= nil then parts[#parts + 1] = "assignment_state=" .. tostring(value.assignment_state) end
+    if value.desired_node_state ~= nil then parts[#parts + 1] = "desired_node_state=" .. tostring(value.desired_node_state) end
+    if #parts > 0 then return table.concat(parts, ",") end
+    return "table"
+  end
+  return tostring(value)
+end
+
 local function set_setpoints(command, ctx, record)
   if ctx.get_current_state() ~= ctx.STATE.MASTER then
     return record({ ok = false, error = "autonom: ignoring setpoints", reason_code = "INVALID_STATE" })
@@ -128,36 +150,63 @@ local function new(ctx)
     return result
   end
 
+  local function log_result(target_name, result)
+    if not result then return end
+    local level = result.ok == false and "WARN" or "INFO"
+    if result.ok == false then
+      log_command(ctx, level, ("Command rejected target=%s reason=%s error=%s current_mode=%s"):format(
+        tostring(target_name), tostring(result.reason_code or "UNKNOWN"), tostring(result.error or "unknown"), tostring(ctx.get_current_state())
+      ))
+    else
+      log_command(ctx, level, ("Command applied target=%s transition=%s desired_node_state=%s current_mode=%s"):format(
+        tostring(target_name), tostring(result.transition or "APPLIED"), tostring(result.desired_node_state or "-"), tostring(ctx.get_current_state())
+      ))
+    end
+  end
+
   return function(message)
     if not protocol.is_for_node(message, ctx.get_network_id()) then
       return
     end
     if not protocol.is_proto_compatible(message.proto_ver) then
-      return record({ ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" })
+      local result = record({ ok = false, error = "proto mismatch", reason_code = "PROTO_MISMATCH" })
+      log_result("UNKNOWN", result)
+      return result
     end
 
     local payload = type(message.payload) == "table" and message.payload or nil
     local command = payload and payload.command
     if type(command) ~= "table" then
-      return record({ ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" })
+      local result = record({ ok = false, error = "invalid command", reason_code = "INVALID_COMMAND" })
+      log_result("UNKNOWN", result)
+      return result
     end
     if ctx.get_current_state() == ctx.STATE.SAFE then
-      return record({ ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" })
+      local result = record({ ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" })
+      log_result(command.target or "UNKNOWN", result)
+      return result
     end
 
     ctx.note_master_seen()
 
     local target_name = command.target
+    log_command(ctx, "INFO", ("Command received target=%s value=%s from=%s current_mode=%s node=%s"):format(
+      tostring(target_name), value_summary(command.value), tostring(message.sender_id or message.src or "?"), tostring(ctx.get_current_state()), tostring(ctx.get_network_id())
+    ))
+
     local handler = target_name and dispatch_by_target[target_name]
     if not handler then
-      return record({ ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" })
+      local result = record({ ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" })
+      log_result(target_name or "UNKNOWN", result)
+      return result
     end
 
     local result = handler(command, ctx, record)
-    if result ~= nil then
-      return result
+    if result == nil then
+      result = record({ ok = true })
     end
-    return record({ ok = true })
+    log_result(target_name, result)
+    return result
   end
 end
 
