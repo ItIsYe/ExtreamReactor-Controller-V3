@@ -79,7 +79,7 @@ return {
       { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48" },
       { path = "nodes/rt/config_normalizer.lua", size_bytes = 23479, hash = "e924f652" },
       { path = "nodes/rt/config.lua", size_bytes = 3031, hash = "430d45e2" },
-      { path = "nodes/rt/command_handler.lua", size_bytes = 5232, hash = "ccc0395b" },
+      { path = "nodes/rt/command_handler.lua" },
       { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62" },
       { path = "nodes/rt/discovery_runtime.lua", size_bytes = 9137, hash = "31ad3d94" },
       { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2" },
@@ -139,7 +139,7 @@ return {
       { path = "nodes/reprocessor/config.lua", size_bytes = 3500, hash = "1ace0654" },
       { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 413, hash = "a4cee204" },
       { path = "nodes/reprocessor/main.lua", size_bytes = 16921, hash = "1058e357", required_for = { "REPROCESSING" } },
-      { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9" },
+      { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "1b38a051" },
     },
   }
 }
