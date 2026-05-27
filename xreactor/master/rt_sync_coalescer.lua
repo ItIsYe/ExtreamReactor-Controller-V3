@@ -25,6 +25,7 @@ function M.new(opts)
 
   local pending = {}
   local skipped = {}
+  local dirty_logged = {}
 
   local function node_looks_rt(node)
     if type(node) ~= 'table' then return false end
@@ -80,6 +81,12 @@ function M.new(opts)
         last_at = now,
         reasons = { [tostring(reason or 'unknown')] = true }
       }
+      if not dirty_logged[node_id] then
+        dirty_logged[node_id] = true
+        log(("RT sync dirty queued node=%s reason=%s role=%s"):format(
+          tostring(node_id), tostring(reason or 'unknown'), tostring(node.role or 'nil')
+        ), 'INFO')
+      end
       return
     end
     slot.node = node
@@ -94,15 +101,16 @@ function M.new(opts)
     for node_id, slot in pairs(pending) do
       local age_ms = now - (slot.first_at or now)
       local idle_ms = now - (slot.last_at or slot.first_at or now)
-      if force or idle_ms >= batch_window_ms then
+      if force or age_ms >= batch_window_ms or idle_ms >= batch_window_ms then
         local reason_parts = {}
         for reason_name, enabled in pairs(slot.reasons or {}) do
           if enabled then reason_parts[#reason_parts + 1] = tostring(reason_name) end
         end
         table.sort(reason_parts)
         local reasons = table.concat(reason_parts, ',')
-        log(("RT sync flush node=%s reasons=%s age_ms=%d idle_ms=%d force=%s"):format(
-          tostring(node_id), tostring(reasons), tonumber(age_ms) or 0, tonumber(idle_ms) or 0, tostring(force)
+        log(("RT sync flush node=%s reasons=%s age_ms=%d idle_ms=%d force=%s trigger=%s"):format(
+          tostring(node_id), tostring(reasons), tonumber(age_ms) or 0, tonumber(idle_ms) or 0, tostring(force),
+          force and 'force' or ((age_ms >= batch_window_ms) and 'age' or 'idle')
         ), 'INFO')
         if slot.node and node_looks_rt(slot.node) then
           slot.node.role = constants.roles.RT_NODE
@@ -111,6 +119,7 @@ function M.new(opts)
           log_skip_once(slot.node, 'flush')
         end
         pending[node_id] = nil
+        dirty_logged[node_id] = nil
       end
     end
   end
