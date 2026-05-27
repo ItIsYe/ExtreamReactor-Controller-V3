@@ -1,5 +1,6 @@
 local M = {}
 local rt_sync = require("master.rt_sync")
+local support_status = require("master.support_status")
 
 function M.new(opts)
   local constants = assert(opts.constants, "constants required")
@@ -64,6 +65,8 @@ function M.new(opts)
     local role = normalize_role(message and message.role)
     if role ~= nil then return role end
     role = normalize_role(type(payload) == "table" and payload.role or nil)
+    if role ~= nil then return role end
+    role = normalize_role(type(payload) == "table" and type(payload.meta) == "table" and payload.meta.role or nil)
     if role ~= nil then return role end
     if payload_looks_rt(payload) then return constants.roles.RT_NODE end
     return nil
@@ -244,6 +247,8 @@ function M.new(opts)
         nodes[id].energy = message.payload.energy or message.payload
       elseif nodes[id].role == constants.roles.RT_NODE then
         populate_rt_status(nodes[id], message.payload)
+      else
+        support_status.apply(nodes[id], message.payload, constants)
       end
       local previous_health_status = nodes[id].health and nodes[id].health.status or nil
       local previous_reasons = nodes[id].health and nodes[id].health.reasons or nil
@@ -270,6 +275,8 @@ function M.new(opts)
       nodes[id].last_error_ts = message.payload.last_error_ts or nodes[id].last_error_ts
       if nodes[id].role == constants.roles.RT_NODE then
         populate_rt_status(nodes[id], message.payload)
+      else
+        support_status.apply(nodes[id], message.payload, constants)
       end
       if previous_mode and nodes[id].mode and previous_mode ~= nodes[id].mode then
         log(("Node %s mode: %s"):format(id, tostring(nodes[id].mode)))
