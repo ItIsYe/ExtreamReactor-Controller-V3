@@ -23,6 +23,31 @@ local function sanitize_channels(config)
   end
 end
 
+local function normalize_role(role)
+  if role == nil then return nil end
+  return tostring(role):upper():gsub("_", "-")
+end
+
+local function payload_looks_rt(payload)
+  if type(payload) ~= "table" then return false end
+  if type(payload.rt) == "table" then return true end
+  if type(payload.turbines) == "table" or type(payload.reactors) == "table" or type(payload.modules) == "table" then return true end
+  if payload.turbine_rpm ~= nil or payload.steam ~= nil or payload.ramp_state ~= nil then return true end
+  if payload.mode ~= nil and (payload.output ~= nil or payload.state ~= nil) then return true end
+  return false
+end
+
+local function count_keys(value)
+  if type(value) ~= "table" then return 0 end
+  local n = 0
+  for _, _ in pairs(value) do n = n + 1 end
+  return n
+end
+
+local function yesno(value)
+  return value and "yes" or "no"
+end
+
 function comms_service.new(opts)
   opts = opts or {}
   local self = {
@@ -38,9 +63,39 @@ function comms_service.new(opts)
     on_alert = opts.on_alert,
     on_error = opts.on_error,
     network = nil,
-    comms = nil
+    comms = nil,
+    rx_diag_seen = {}
   }
   return setmetatable(self, { __index = comms_service })
+end
+
+function comms_service:trace_master_rx(message)
+  if self.log_prefix ~= "MASTER" or type(message) ~= "table" then return end
+  local payload = type(message.payload) == "table" and message.payload or {}
+  local role = normalize_role(message.role)
+  local payload_role = normalize_role(payload.role)
+  local meta_role = normalize_role(type(payload.meta) == "table" and payload.meta.role or nil)
+  local interesting = payload_looks_rt(payload) or role == "RT-NODE" or payload_role == "RT-NODE" or meta_role == "RT-NODE"
+  if not interesting and role == "ENERGY-NODE" then return end
+  local node_id = utils.normalize_node_id(message.node_id or message.sender_id or message.src)
+  local key = tostring(node_id) .. ":" .. tostring(message.type) .. ":" .. tostring(message.role or "-") .. ":" .. tostring(payload.role or "-") .. ":" .. tostring(meta_role or "-")
+  if self.rx_diag_seen[key] then return end
+  self.rx_diag_seen[key] = true
+  utils.log(self.log_prefix, ("RX diag node=%s type=%s sender=%s role=%s payload_role=%s meta_role=%s keys=%d mode=%s state=%s output=%s turbines=%s reactors=%s modules=%s"):format(
+    tostring(node_id),
+    tostring(message.type or "?"),
+    tostring(message.sender_id or message.src or "?"),
+    tostring(message.role or "-"),
+    tostring(payload.role or "-"),
+    tostring(meta_role or "-"),
+    count_keys(payload),
+    yesno(payload.mode ~= nil),
+    yesno(payload.state ~= nil),
+    yesno(payload.output ~= nil),
+    yesno(type(payload.turbines) == "table"),
+    yesno(type(payload.reactors) == "table"),
+    yesno(type(payload.modules) == "table")
+  ), "INFO")
 end
 
 function comms_service:init()
@@ -62,6 +117,7 @@ function comms_service:init()
   })
 
   self.comms.on(constants.message_types.STATUS, function(message)
+    self:trace_master_rx(message)
     if self.on_status then
       self.on_status(message)
     elseif self.on_message then
@@ -70,6 +126,7 @@ function comms_service:init()
   end)
 
   self.comms.on(constants.message_types.HEARTBEAT, function(message)
+    self:trace_master_rx(message)
     if self.on_heartbeat then
       self.on_heartbeat(message)
     elseif self.on_message then
@@ -85,6 +142,7 @@ function comms_service:init()
   end)
 
   self.comms.on(constants.message_types.ALERT, function(message)
+    self:trace_master_rx(message)
     if self.on_alert then
       self.on_alert(message)
     elseif self.on_message then
@@ -93,6 +151,7 @@ function comms_service:init()
   end)
 
   self.comms.on(constants.message_types.ERROR, function(message)
+    self:trace_master_rx(message)
     if self.on_error then
       self.on_error(message)
     elseif self.on_message then
@@ -101,24 +160,28 @@ function comms_service:init()
   end)
 
   self.comms.on(constants.message_types.ACK_DELIVERED, function(message)
+    self:trace_master_rx(message)
     if self.on_message then
       self.on_message(message)
     end
   end)
 
   self.comms.on(constants.message_types.ACK_APPLIED, function(message)
+    self:trace_master_rx(message)
     if self.on_message then
       self.on_message(message)
     end
   end)
 
   self.comms.on(constants.message_types.HELLO, function(message)
+    self:trace_master_rx(message)
     if self.on_message then
       self.on_message(message)
     end
   end)
 
   self.comms.on(constants.message_types.REGISTER, function(message)
+    self:trace_master_rx(message)
     if self.on_message then
       self.on_message(message)
     end
