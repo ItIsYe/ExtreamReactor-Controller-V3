@@ -57,6 +57,7 @@ return {
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
       { path = "master/rt_sync.lua" },
       { path = "master/rt_sync_coalescer.lua" },
+      { path = "master/support_status.lua" },
       { path = "master/runtime_context.lua", size_bytes = 5633, hash = "5740fe39" },
       { path = "master/startup_sequencer.lua", size_bytes = 9172, hash = "01535e76" },
       { path = "master/ui_controller.lua", size_bytes = 22469, hash = "4bcdc3df" },
@@ -132,7 +133,7 @@ return {
       { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for = { "WATER", "FUEL", "REPROCESSING" } },
       { path = "nodes/support/runtime.lua", size_bytes = 2656, hash = "72cd674e", required_for = { "WATER", "FUEL", "REPROCESSING" } },
       { path = "nodes/support/ui_pages.lua", size_bytes = 3388, hash = "71cd674e", required_for = { "WATER", "FUEL", "REPROCESSING" } },
-      { path = "nodes/support/command_handler.lua", size_bytes = 2224, hash = "75202127", required_for = { "WATER", "FUEL", "REPROCESSING" } },
+      { path = "nodes/support/command_handler.lua", required_for = { "WATER", "FUEL", "REPROCESSING" } },
       { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for = { "ENERGY", "WATER", "FUEL", "REPROCESSING" } },
     },
     reprocessing = {
