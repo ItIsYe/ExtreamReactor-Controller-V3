@@ -28,7 +28,7 @@ return {
       { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always = true },
       { path = "installer_storage.lua", size_bytes = 8405, hash = "2a56f864", always = true },
       { path = "release.lua", size_bytes = 362, hash = "a908c553", always = true },
-      { path = "services/comms_service.lua", size_bytes = 5632, hash = "c255cd12" },
+      { path = "services/comms_service.lua" },
       { path = "services/control_service.lua", size_bytes = 454, hash = "82b782f1" },
       { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },
       { path = "services/service_manager.lua", size_bytes = 5943, hash = "ac30751e" },
