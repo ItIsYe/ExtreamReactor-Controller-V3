@@ -1,4 +1,5 @@
 local M = {}
+local utils = require("core.utils")
 
 local function stamp_result(devices, label)
   if type(devices) ~= "table" then
@@ -21,11 +22,12 @@ local function value_label(command)
 end
 
 local function log_with_devices(devices, level, message)
-  if type(devices) ~= "table" then return end
-  local logger = devices.command_logger
+  local logger = type(devices) == "table" and devices.command_logger or nil
   if type(logger) == "function" then
-    pcall(logger, level or "INFO", message)
+    local ok = pcall(logger, level or "INFO", message)
+    if ok then return end
   end
+  utils.log("SUPPORT", message, level or "INFO")
 end
 
 function M.handle_common(ctx, msg)
@@ -70,12 +72,14 @@ function M.parse_node_command(message, opts)
 
   local function log_parse(level, text)
     if type(logger) == "function" then
-      pcall(logger, level or "INFO", text)
-      return
+      local ok = pcall(logger, level or "INFO", text)
+      if ok then return end
     end
     if opts and opts.utils and type(opts.utils.log) == "function" then
       opts.utils.log(log_prefix, text, level or "INFO")
+      return
     end
+    utils.log(log_prefix, text, level or "INFO")
   end
 
   if protocol and node_id and not protocol.is_for_node(message, node_id) then
