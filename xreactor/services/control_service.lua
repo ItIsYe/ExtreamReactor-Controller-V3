@@ -2,10 +2,11 @@ local control = {}
 
 function control.new(opts)
   opts = opts or {}
+  local runtime = type(opts.runtime) == "table" and opts.runtime or nil
   local self = {
     name = opts.name or "CONTROL",
-    tick_fn = opts.tick,
-    handle_command = opts.handle_command
+    tick_fn = opts.tick or (runtime and runtime.tick) or nil,
+    handle_command = opts.handle_command or (runtime and runtime.handle_command) or nil
   }
   return setmetatable(self, { __index = control })
 end
