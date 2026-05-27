@@ -1,6 +1,6 @@
 return {
-  manifest_version = 8,
-  manifest_id = "manifest-v8",
+  manifest_version = 9,
+  manifest_id = "manifest-v9",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -51,7 +51,7 @@ return {
       { path = "master/runtime_loop.lua", size_bytes = 12266, required_for = { "MASTER" } },
       { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for = { "MASTER" } },
       { path = "master/runtime_ops_profile.lua", size_bytes = 3860, hash = "b7d1a718", required_for = { "MASTER" } },
-      { path = "master/runtime_ops_rt.lua", size_bytes = 14458, hash = "96cb30b6", required_for = { "MASTER" } },
+      { path = "master/runtime_ops_rt.lua", size_bytes = 14772, hash = "3deed5fd", required_for = { "MASTER" } },
       { path = "master/init_runtime.lua", required_for = { "MASTER" } },
       { path = "master/message_handlers.lua" },
       { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725" },
