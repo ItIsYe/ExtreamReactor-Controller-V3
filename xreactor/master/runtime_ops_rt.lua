@@ -6,7 +6,7 @@ function M.sync_rt_node(runtime, node, reason)
   local constants = runtime.libs.constants
   local now = os.epoch("utc")
 
-  rt_sync.set_default_mode({ config = runtime.config, comms = runtime.refs.comms }, node)
+  node.desired_mode = node.desired_mode or runtime.config.rt_default_mode or "MASTER"
   if node.desired_mode and node.mode ~= node.desired_mode then
     if not node.last_mode_request or now - node.last_mode_request > 5000 then
       rt_sync.send_rt_mode(runtime.refs.comms, node, node.desired_mode)
@@ -201,7 +201,17 @@ function M.check_timeouts(runtime)
     node.recovering = peer and peer.recovering_since ~= nil or false
     if peer and peer.age then node.last_seen_age = math.floor(peer.age) end
     local should_mark_down = false
-    if peer ~= nil then should_mark_down = peer_down == true else should_mark_down = last_seen and (now - last_seen > (timeout_ms + down_grace_ms)) end
+    if peer ~= nil then
+      if peer_down == true then
+        if not node.down_pending_since then node.down_pending_since = now end
+        should_mark_down = now - node.down_pending_since > down_grace_ms
+      else
+        node.down_pending_since = nil
+      end
+    else
+      should_mark_down = last_seen and (now - last_seen > (timeout_ms + down_grace_ms))
+      if not should_mark_down then node.down_pending_since = nil end
+    end
     if should_mark_down then
       if node.status ~= runtime.libs.constants.status_levels.OFFLINE then runtime.log("Node offline: " .. tostring(node.id)) end
       if not node.down_since then node.down_since = now end
@@ -214,7 +224,7 @@ function M.check_timeouts(runtime)
       if last_seen and (now - last_seen) >= runtime.tuning.node_offline_purge_after_ms then stale_nodes[#stale_nodes + 1] = node.id end
     elseif node.health and node.health.reasons then
       node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN] = nil
-      node.down_since = nil; node.offline = false; node.stale = false; node.recovering = false; node.managed = true
+      node.down_since = nil; node.down_pending_since = nil; node.offline = false; node.stale = false; node.recovering = false; node.managed = true
     end
   end
   for _, node_id in ipairs(stale_nodes) do
