@@ -21,7 +21,7 @@ local function run_master()
   local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
   local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
   local debug_enabled = CONFIG.DEBUG_LOG_ENABLED ~= nil and CONFIG.DEBUG_LOG_ENABLED or config.debug_logging
-  utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled, truncate = config.reset_log_on_start == true })
+  utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX, enabled = debug_enabled, truncate = config.reset_log_on_start == true, log_dir = config.log_dir })
   local runtime_log = function(message, level) utils.log("MASTER", message, level or "INFO") end
   runtime_context.normalize_config(config)
   local release = build_info.get()
