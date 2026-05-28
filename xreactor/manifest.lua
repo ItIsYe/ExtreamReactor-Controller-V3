@@ -74,7 +74,7 @@ return {
       { path = "core/alert_rules.lua", size_bytes = 13600, hash = "3ef37a5e" },
       { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
       { path = "core/monitor_manager.lua" },
-      { path = "services/alert_service.lua", size_bytes = 10068, hash = "f5ad1d30" },
+      { path = "services/alert_service.lua" },
     },
     rt = {
       { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48" },
