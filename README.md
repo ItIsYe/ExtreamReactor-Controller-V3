@@ -282,6 +282,12 @@ Current MASTER monitor policy:
   - `xreactor/master/ui/rt_dashboard.lua`
   - `xreactor/master/ui/energy.lua`
 
+### UI inspiration and attribution
+
+The monitor UI in this repository is a custom CC:Tweaked terminal/monitor UI layer. It renders directly through the ComputerCraft terminal and monitor APIs (`term.redirect`, `term.write`, colors, monitor scale, and `monitor_touch` events) and does not embed or require an external UI library at runtime.
+
+The design is conceptually inspired by general ComputerCraft UI frameworks and monitor-dashboard patterns, especially Basalt/Basalt2-style page/widget/event organization and older ComputerCraft GUI approaches such as Bedrock. These projects are noted as design inspiration only; the current runtime uses XReactor's own UI helpers, routing, models, and view files.
+
 ### Roadmap-Status (Non-RT)
 
 Der große Nicht-RT-Umbau ist auf dem aktuellen Stand abgeschlossen (Final-Audit 2026-04-22, siehe `NON_RT_CLOSEOUT_2026-04-22.md`):
