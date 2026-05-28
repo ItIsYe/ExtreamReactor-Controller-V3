@@ -45,6 +45,7 @@ local CONFIG = {
   DEFAULT_COMMS_PEER_UP_MIN_OBSERVATIONS = 3,
   DEFAULT_COMMS_QUEUE_LIMIT = 200,
   DEFAULT_COMMS_DROP_SIMULATION = 0,
+  DEFAULT_LOG_DIR = "/disk/xreactor_logs",
   DEFAULT_RAILS = {
     ramp_profiles = {
       NORMAL = { up = 1.0, down = 1.0 },
@@ -87,7 +88,7 @@ local CONFIG = {
 }
 
 local constants = require("shared.constants")
-local CURRENT_VERSION = 2
+local CURRENT_VERSION = 3
 
 return {
   version = CURRENT_VERSION,
@@ -106,6 +107,7 @@ return {
   master_min_monitor_height = CONFIG.DEFAULT_MASTER_MIN_MONITOR_HEIGHT,
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
   reset_log_on_start = CONFIG.DEFAULT_RESET_LOG_ON_START,
+  log_dir = CONFIG.DEFAULT_LOG_DIR,
   alert_eval_interval = CONFIG.DEFAULT_ALERT_EVAL_INTERVAL,
   alert_history_size = CONFIG.DEFAULT_ALERT_HISTORY_SIZE,
   alert_info_ttl = CONFIG.DEFAULT_ALERT_INFO_TTL,
