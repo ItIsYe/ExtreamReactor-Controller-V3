@@ -3,7 +3,7 @@ local CONFIG = {
   LOGGER_DEFAULT_PREFIX = "LOG", -- Fallback prefix when none is provided.
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Default node_id storage path.
   LOG_NAME_SEPARATOR = "_", -- Separator for log file names.
-  DEFAULT_LOG_DIR = "/disk/xreactor_logs" -- Preferred runtime log directory; logger falls back locally if unavailable.
+  DEFAULT_LOG_DIR = "/disk/xreactor_logs" -- Preferred config value; init_logger treats it as auto-disk selection.
 }
 
 -- Utility helpers shared across nodes.
@@ -210,16 +210,23 @@ function utils.write_config(path, tbl)
   file.close()
 end
 
+local function normalize_logger_opts(opts)
+  opts = opts or {}
+  if opts.log_dir ~= CONFIG.DEFAULT_LOG_DIR and opts.log_dir ~= "auto" then
+    return opts
+  end
+  local normalized = {}
+  for k, v in pairs(opts) do
+    if k ~= "log_dir" then
+      normalized[k] = v
+    end
+  end
+  return normalized
+end
+
 -- Initialize file logging for the current runtime.
 function utils.init_logger(opts)
-  opts = opts or {}
-  if opts.log_dir == nil then
-    local with_default = {}
-    for k, v in pairs(opts) do with_default[k] = v end
-    with_default.log_dir = CONFIG.DEFAULT_LOG_DIR
-    opts = with_default
-  end
-  return logger.init(opts)
+  return logger.init(normalize_logger_opts(opts))
 end
 
 -- Log a message using the shared logger (no terminal spam).
