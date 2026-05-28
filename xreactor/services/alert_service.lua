@@ -37,6 +37,25 @@ local function is_expired(entry, now)
   return type(entry.until_ts or entry["until"]) ~= "number" or (entry.until_ts or entry["until"]) <= now
 end
 
+local function build_source_key(source)
+  if type(source) ~= "table" then
+    return "unknown"
+  end
+  local parts = {
+    tostring(source.node_id or "unknown"),
+    tostring(source.role or "unknown"),
+    tostring(source.device_id or "")
+  }
+  return table.concat(parts, "|")
+end
+
+local function build_alert_key(entry)
+  if type(entry) ~= "table" then return nil end
+  if entry.key then return entry.key end
+  local code = tostring(entry.code or "ALERT")
+  return build_source_key(entry.source) .. "|" .. code
+end
+
 function alert_service.new(opts)
   opts = opts or {}
   local config = opts.config or {}
@@ -69,6 +88,7 @@ function alert_service.new(opts)
     recovery_notice = opts.recovery_notice,
     state_path = state_path,
     state = state,
+    clear_pending = {},
     last_eval_duration_ms = 0,
     last_eval_ts = 0,
     muted_last = 0
@@ -126,6 +146,31 @@ function alert_service:_is_muted(entry, now)
   return nil
 end
 
+function alert_service:_clear_alert(key, now)
+  if not key then return end
+  local active = self.alerts.active_by_key and self.alerts.active_by_key[key] or nil
+  if not active then
+    self.clear_pending[key] = nil
+    return
+  end
+  local grace_ms = math.max(0, tonumber(self.config.alert_clear_grace_s or self.config.alert_clear_debounce_s or 3) or 0) * 1000
+  if grace_ms > 0 and active.severity ~= "INFO" then
+    local first_seen = self.clear_pending[key]
+    if not first_seen then
+      self.clear_pending[key] = now
+      return
+    end
+    if now - first_seen < grace_ms then
+      return
+    end
+  end
+  self.clear_pending[key] = nil
+  local cleared = self.alerts:resolve(key)
+  if cleared then
+    self:log_alert(cleared, "clear")
+  end
+end
+
 function alert_service:tick()
   local now = now_ms()
   local interval = (self.config.alert_eval_interval or 1) * 1000
@@ -161,11 +206,12 @@ function alert_service:tick()
     now = now
   })
   local muted_count = 0
+  for _, entry in ipairs(alerts or {}) do
+    local key = build_alert_key(entry)
+    if key then self.clear_pending[key] = nil end
+  end
   for _, key in ipairs(clears or {}) do
-    local cleared = self.alerts:resolve(key)
-    if cleared then
-      self:log_alert(cleared, "clear")
-    end
+    self:_clear_alert(key, now)
   end
   for _, entry in ipairs(alerts or {}) do
     local muted_kind = self:_is_muted(entry, now)
