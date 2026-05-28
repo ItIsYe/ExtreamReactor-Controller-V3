@@ -1,4 +1,4 @@
-local CURRENT_VERSION = 3
+local CURRENT_VERSION = 4
 
 return {
   version = CURRENT_VERSION,
@@ -6,6 +6,7 @@ return {
   node_id = "RT-1",
   debug_logging = true,
   reset_log_on_start = true,
+  log_dir = "/disk/xreactor_logs",
 
   wireless_modem = nil,
   wired_modem = nil,
