@@ -1,6 +1,6 @@
 return {
-  manifest_version = 9,
-  manifest_id = "manifest-v9",
+  manifest_version = 10,
+  manifest_id = "manifest-v10",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -20,7 +20,7 @@ return {
       { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
       { path = "core/ui.lua" },
       { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
-      { path = "core/utils.lua", size_bytes = 8584, hash = "f86e8b2d" },
+      { path = "core/utils.lua" },
       { path = "installer_http.lua", size_bytes = 1774, hash = "2d627c52", always = true },
       { path = "installer_main.lua", size_bytes = 19236, hash = "00977466", always = true },
       { path = "installer_manifest.lua", size_bytes = 2595, hash = "4b3f2844", always = true },
@@ -79,7 +79,7 @@ return {
     rt = {
       { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48" },
       { path = "nodes/rt/config_normalizer.lua", size_bytes = 23479, hash = "e924f652" },
-      { path = "nodes/rt/config.lua", size_bytes = 3031, hash = "430d45e2" },
+      { path = "nodes/rt/config.lua" },
       { path = "nodes/rt/command_handler.lua" },
       { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62" },
       { path = "nodes/rt/discovery_runtime.lua", size_bytes = 9137, hash = "31ad3d94" },
