@@ -2,7 +2,8 @@
 local CONFIG = {
   LOGGER_DEFAULT_PREFIX = "LOG", -- Fallback prefix when none is provided.
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Default node_id storage path.
-  LOG_NAME_SEPARATOR = "_" -- Separator for log file names.
+  LOG_NAME_SEPARATOR = "_", -- Separator for log file names.
+  DEFAULT_LOG_DIR = "/disk/xreactor_logs" -- Preferred runtime log directory; logger falls back locally if unavailable.
 }
 
 -- Utility helpers shared across nodes.
@@ -211,6 +212,13 @@ end
 
 -- Initialize file logging for the current runtime.
 function utils.init_logger(opts)
+  opts = opts or {}
+  if opts.log_dir == nil then
+    local with_default = {}
+    for k, v in pairs(opts) do with_default[k] = v end
+    with_default.log_dir = CONFIG.DEFAULT_LOG_DIR
+    opts = with_default
+  end
   return logger.init(opts)
 end
 
