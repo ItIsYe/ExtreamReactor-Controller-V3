@@ -37,6 +37,10 @@ function M.stage_expected_files(ctx, expected)
     ctx.info("Removing stale stage root")
     ctx.fs.delete(ctx.constants.STAGE_ROOT)
   end
+  if ctx.fs.exists(ctx.constants.BACKUP_ROOT) then
+    ctx.info("Removing stale backup root before staging")
+    ctx.fs.delete(ctx.constants.BACKUP_ROOT)
+  end
   if not ctx.safe_mkdir(ctx.constants.STAGE_ROOT) then
     ctx.fatal("Unable to create stage root: " .. ctx.constants.STAGE_ROOT)
   end
