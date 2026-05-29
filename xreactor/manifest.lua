@@ -22,7 +22,7 @@ return {
       { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
       { path = "core/utils.lua" },
       { path = "installer_http.lua", size_bytes = 1774, hash = "2d627c52", always = true },
-      { path = "installer_main.lua", size_bytes = 19236, hash = "00977466", always = true },
+      { path = "installer_main.lua", always = true },
       { path = "installer_manifest.lua", size_bytes = 2595, hash = "4b3f2844", always = true },
       { path = "installer_stage.lua", always = true },
       { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always = true },
