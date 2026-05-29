@@ -1,9 +1,9 @@
 return {
-  release_id = "beta-branch-installer-strategy",
+  release_id = "beta-v11",
   commit_sha = "beta",
   source_ref = "beta",
-  manifest_id = "manifest-v10",
-  manifest_version = 10,
+  manifest_id = "manifest-v11",
+  manifest_version = 11,
   manifest_file_count = 111,
   hash_algo = "crc32",
   manifest_path = "xreactor/manifest.lua",
