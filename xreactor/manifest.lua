@@ -24,7 +24,7 @@ return {
       { path = "installer_http.lua", size_bytes = 1774, hash = "2d627c52", always = true },
       { path = "installer_main.lua", size_bytes = 19236, hash = "00977466", always = true },
       { path = "installer_manifest.lua", size_bytes = 2595, hash = "4b3f2844", always = true },
-      { path = "installer_stage.lua", size_bytes = 6075, hash = "7058b5c6", always = true },
+      { path = "installer_stage.lua", always = true },
       { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always = true },
       { path = "installer_storage.lua", size_bytes = 8405, hash = "2a56f864", always = true },
       { path = "release.lua", always = true },
