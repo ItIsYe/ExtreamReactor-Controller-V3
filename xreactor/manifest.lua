@@ -48,7 +48,7 @@ return {
       { path = "master/config.lua" },
       { path = "master/housekeeping.lua", size_bytes = 1952, hash = "d4ae44ae" },
       { path = "master/main.lua", size_bytes = 244, hash = "5f009046", required_for = { "MASTER" } },
-      { path = "master/runtime_loop.lua", size_bytes = 12266, required_for = { "MASTER" } },
+      { path = "master/runtime_loop.lua", required_for = { "MASTER" } },
       { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for = { "MASTER" } },
       { path = "master/runtime_ops_profile.lua", size_bytes = 3860, hash = "b7d1a718", required_for = { "MASTER" } },
       { path = "master/runtime_ops_rt.lua", size_bytes = 14772, hash = "3deed5fd", required_for = { "MASTER" } },
