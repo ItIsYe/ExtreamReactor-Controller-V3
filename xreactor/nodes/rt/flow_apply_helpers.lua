@@ -1,5 +1,43 @@
 local M = {}
 
+local TURBINE_LOG_STATE = {}
+
+local function turbine_log_interval(fields)
+  local bottleneck = tostring(fields and fields.bottleneck or "NONE")
+  if bottleneck == "FLOW_READBACK_LAG" then
+    return 20
+  end
+  if bottleneck ~= "NONE" then
+    return 10
+  end
+  return 30
+end
+
+local function should_log_turbine_control(fields)
+  local name = tostring(fields and fields.name or "unknown")
+  local fingerprint = table.concat({
+    tostring(fields and fields.bottleneck or ""),
+    tostring(fields and fields.readback_state or ""),
+    tostring(fields and fields.write_state or ""),
+    tostring(fields and fields.reason or ""),
+    tostring(fields and fields.requested_flow or ""),
+    tostring(fields and fields.confirmed_flow or ""),
+    tostring(fields and fields.target_action or ""),
+    tostring(fields and fields.at_max_limit or ""),
+    tostring(fields and fields.at_min_limit or "")
+  }, "|")
+
+  local rec = TURBINE_LOG_STATE[name]
+  if not rec or rec.fingerprint ~= fingerprint then
+    TURBINE_LOG_STATE[name] = { fingerprint = fingerprint, count = 1 }
+    return true, 1
+  end
+
+  rec.count = (tonumber(rec.count) or 0) + 1
+  local interval = turbine_log_interval(fields)
+  return (rec.count % interval) == 0, rec.count
+end
+
 function M.sample_turbine_runtime_metrics(turbine, caps, safe_wrapped_call)
   local steam_input = nil
   if turbine and turbine.getLastInputFluidRate then
@@ -122,7 +160,12 @@ function M.resolve_target_action(reason, decision)
 end
 
 function M.log_turbine_control_metrics(fields, log)
+  local should_log, repeat_count = should_log_turbine_control(fields or {})
+  if not should_log then
+    return
+  end
   log("DEBUG", "TurbineCtrl name=" .. tostring(fields.name)
+      .. " repeat_count=" .. tostring(repeat_count)
       .. " rpm=" .. tostring(fields.rpm)
       .. " rpm_smooth=" .. tostring(fields.smoothed_rpm)
       .. " target_rpm=" .. tostring(fields.target_rpm)
