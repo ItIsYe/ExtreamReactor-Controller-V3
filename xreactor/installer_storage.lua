@@ -204,7 +204,7 @@ function M.preflight_storage(ctx, storage_plan, opts)
     ctx.warn("Storage preflight result after cleanup: not ok")
   end
 
-  if storage_plan.mode == "update" and opts.allow_low_space_update_attempt then
+  if storage_plan.mode == "update" then
     ctx.warn(string.format(
       "Storage preflight continuing in low-space update mode (free=%s required=%d payload=%d); staging will fail safely if space is still insufficient",
       tostring(free_bytes),
