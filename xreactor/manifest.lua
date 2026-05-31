@@ -1,6 +1,6 @@
 return {
-  manifest_version = 12,
-  manifest_id = "manifest-v12",
+  manifest_version = 13,
+  manifest_id = "manifest-v13",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -60,7 +60,7 @@ return {
       { path = "master/support_status.lua" },
       { path = "master/runtime_context.lua", size_bytes = 5633, hash = "5740fe39" },
       { path = "master/startup_sequencer.lua", size_bytes = 9172, hash = "01535e76" },
-      { path = "master/ui_controller.lua", size_bytes = 22469, hash = "4bcdc3df" },
+      { path = "master/ui_controller.lua" },
       { path = "master/monitor_sessions.lua", size_bytes = 5830, hash = "0db7c0da" },
       { path = "master/ui_diagnostics.lua" },
       { path = "master/ui/alarms.lua", size_bytes = 1345, hash = "0a381649" },
