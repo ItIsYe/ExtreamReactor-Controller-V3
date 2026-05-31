@@ -1,6 +1,6 @@
 return {
-  manifest_version = 14,
-  manifest_id = "manifest-v14",
+  manifest_version = 15,
+  manifest_id = "manifest-v15",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -88,7 +88,7 @@ return {
       { path = "nodes/rt/module_lifecycle.lua", size_bytes = 25907, hash = "eb62cb1c" },
       { path = "nodes/rt/flow_apply_helpers.lua" },
       { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2525, hash = "3e823eea" },
-      { path = "nodes/rt/status_snapshot.lua", size_bytes = 3637, hash = "51bda9ce" },
+      { path = "nodes/rt/status_snapshot.lua" },
       { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c" },
       { path = "nodes/rt/main.lua", size_bytes = 85079, hash = "a275560c", required_for = { "RT" } },
       { path = "nodes/rt/state_handlers.lua", size_bytes = 8485, hash = "6c8b12e2" },
