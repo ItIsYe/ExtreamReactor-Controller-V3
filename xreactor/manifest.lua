@@ -1,6 +1,6 @@
 return {
-  manifest_version = 16,
-  manifest_id = "manifest-v16",
+  manifest_version = 17,
+  manifest_id = "manifest-v17",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -84,7 +84,7 @@ return {
       { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62" },
       { path = "nodes/rt/discovery_runtime.lua", size_bytes = 9137, hash = "31ad3d94" },
       { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2" },
-      { path = "nodes/rt/monitor_ui.lua", size_bytes = 13882, hash = "7cedf18b" },
+      { path = "nodes/rt/monitor_ui.lua" },
       { path = "nodes/rt/module_lifecycle.lua", size_bytes = 25907, hash = "eb62cb1c" },
       { path = "nodes/rt/flow_apply_helpers.lua" },
       { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2525, hash = "3e823eea" },
