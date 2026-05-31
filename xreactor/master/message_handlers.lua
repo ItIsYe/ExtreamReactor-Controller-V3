@@ -39,6 +39,32 @@ function M.new(opts)
     return out
   end
 
+  local function number_or_nil(value)
+    if type(value) == "number" then return value end
+    if type(value) == "string" then
+      local n = tonumber(value)
+      if n then return n end
+    end
+    return nil
+  end
+
+  local function sum_turbine_output(turbines)
+    if type(turbines) ~= "table" then return nil end
+    local total = 0
+    local count = 0
+    for _, turbine in pairs(turbines) do
+      if type(turbine) == "table" then
+        local value = number_or_nil(turbine.energy or turbine.output or turbine.power_actual or turbine.actual_output)
+        if value then
+          total = total + value
+          count = count + 1
+        end
+      end
+    end
+    if count > 0 then return total end
+    return nil
+  end
+
   local function normalize_role(raw)
     if raw == nil then return nil end
     local value = tostring(raw):upper():gsub("_", "-")
@@ -125,6 +151,10 @@ function M.new(opts)
     node.rt = payload.rt or node.rt or {}
     if type(node.rt) ~= "table" then node.rt = {} end
     local rt = node.rt
+    local actual_output = number_or_nil(payload.actual_output or payload.power_actual)
+      or sum_turbine_output(payload.turbines)
+      or number_or_nil(rt.actual_output or rt.power_actual)
+    local target_output = number_or_nil(payload.power_target or payload.target_output or payload.output)
     rt.id = rt.id or node.id or payload.id or payload.node_id
     rt.status = payload.status or rt.status or node.status
     rt.state = payload.state or rt.state or node.state
@@ -133,9 +163,16 @@ function M.new(opts)
     rt.local_mode = payload.mode or rt.local_mode or rt.mode
     rt.control_mode = payload.control_mode or rt.control_mode or payload.mode
     rt.node_mode = payload.state or rt.node_mode or payload.node_state or payload.mode
-    rt.output = payload.output or rt.output
-    rt.actual_output = payload.output or rt.actual_output or rt.output
-    rt.power_actual = payload.output or rt.power_actual
+    rt.output = target_output or rt.output
+    rt.target_output = target_output or rt.target_output
+    rt.power_target = target_output or rt.power_target
+    rt.actual_output = actual_output or rt.actual_output or 0
+    rt.power_actual = actual_output or rt.power_actual or rt.actual_output or 0
+    node.output = actual_output or node.output or 0
+    node.actual_output = actual_output or node.actual_output or node.output or 0
+    node.power_actual = actual_output or node.power_actual or node.actual_output or 0
+    node.target_output = target_output or node.target_output
+    node.power_target = target_output or node.power_target
     rt.turbine_rpm = payload.turbine_rpm or rt.turbine_rpm
     rt.rpm = payload.turbine_rpm or rt.rpm
     rt.steam = payload.steam or rt.steam
@@ -328,8 +365,10 @@ function M.new(opts)
       else
         log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
       end
-    elseif message.type == constants.message_types.ALERT then
-      add_alarm(id, message.payload.severity, message.payload.message)
+    elseif message.type == constants.message_types.ALERT_SUMMARY then
+      -- Alert summary payload can be routed to the alert service in later iterations.
+    else
+      add_alarm(id, "WARN", "Unknown message type " .. tostring(message.type))
     end
   end
 
