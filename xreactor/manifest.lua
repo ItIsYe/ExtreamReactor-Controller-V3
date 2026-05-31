@@ -1,6 +1,6 @@
 return {
-  manifest_version = 15,
-  manifest_id = "manifest-v15",
+  manifest_version = 16,
+  manifest_id = "manifest-v16",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -50,7 +50,7 @@ return {
       { path = "master/main.lua", size_bytes = 244, hash = "5f009046", required_for = { "MASTER" } },
       { path = "master/runtime_loop.lua", required_for = { "MASTER" } },
       { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for = { "MASTER" } },
-      { path = "master/runtime_ops_profile.lua", size_bytes = 3860, hash = "b7d1a718", required_for = { "MASTER" } },
+      { path = "master/runtime_ops_profile.lua" },
       { path = "master/runtime_ops_rt.lua", size_bytes = 14772, hash = "3deed5fd", required_for = { "MASTER" } },
       { path = "master/init_runtime.lua", required_for = { "MASTER" } },
       { path = "master/message_handlers.lua" },
