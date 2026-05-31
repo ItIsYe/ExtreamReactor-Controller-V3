@@ -2,6 +2,15 @@ local health = require("core.health")
 
 local M = {}
 
+local function numeric_value(value)
+  if type(value) == "number" then return value end
+  if type(value) == "string" then
+    local n = tonumber(value)
+    if n then return n end
+  end
+  return nil
+end
+
 function M.build_module_payload(modules)
   local snapshot = {}
   for id, module in pairs(modules or {}) do
@@ -16,21 +25,26 @@ end
 
 function M.build_turbine_snapshots(registry, turbine_adapter, modules, log_prefix, targets)
   local list = {}
+  local total_output = 0
   for _, entry in ipairs(registry:get_bound_devices("turbine")) do
     local info = turbine_adapter.inspect(entry.name, log_prefix)
     local module = modules[entry.id]
+    local energy = info and numeric_value(info.energy) or nil
+    if energy then total_output = total_output + energy end
     table.insert(list, {
       id = entry.id,
       name = entry.name,
       alias = entry.alias,
       rpm = info and info.rpm or nil,
       flow_rate = info and info.flow or nil,
+      energy = energy,
+      output = energy,
       target_rpm = targets.rpm,
       coil_engaged = info and info.coil_engaged or nil,
       state = module and module.state or nil
     })
   end
-  return list
+  return list, total_output
 end
 
 function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefix)
@@ -58,13 +72,17 @@ end
 
 function M.build_status_payload(ctx)
   local health_payload = ctx.build_health_payload()
-  local turbines = M.build_turbine_snapshots(ctx.registry, ctx.turbine_adapter, ctx.modules, ctx.log_prefix, ctx.targets)
+  local turbines, actual_output = M.build_turbine_snapshots(ctx.registry, ctx.turbine_adapter, ctx.modules, ctx.log_prefix, ctx.targets)
   local reactors = M.build_reactor_snapshots(ctx.registry, ctx.reactor_adapter, ctx.modules, ctx.log_prefix)
   return {
     status = ctx.status_level,
     state = ctx.node_state_machine:state(),
     mode = ctx.current_state,
     output = ctx.targets.power,
+    target_output = ctx.targets.power,
+    power_target = ctx.targets.power,
+    actual_output = actual_output,
+    power_actual = actual_output,
     turbine_rpm = ctx.targets.rpm,
     steam = ctx.targets.steam,
     capabilities = health_payload.capabilities,
