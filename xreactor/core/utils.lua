@@ -2,7 +2,8 @@
 local CONFIG = {
   LOGGER_DEFAULT_PREFIX = "LOG", -- Fallback prefix when none is provided.
   NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Default node_id storage path.
-  LOG_NAME_SEPARATOR = "_" -- Separator for log file names.
+  LOG_NAME_SEPARATOR = "_", -- Separator for log file names.
+  DEFAULT_LOG_DIR = "/disk/xreactor_logs" -- Preferred config value; init_logger treats it as auto-disk selection.
 }
 
 -- Utility helpers shared across nodes.
@@ -49,6 +50,9 @@ local function sanitize_snapshot(value, active)
 end
 
 local function safe_serialize(value)
+  if not textutils or not textutils.serialize then
+    return nil, "serialize unavailable"
+  end
   local sanitized = sanitize_snapshot(value)
   local ok, result = pcall(textutils.serialize, sanitized)
   if not ok then
@@ -57,7 +61,14 @@ local function safe_serialize(value)
   return result
 end
 
+function utils.safe_serialize(value)
+  return safe_serialize(value)
+end
+
 function utils.ensure_dir(path)
+  if not path or path == "" then
+    return
+  end
   if not fs.exists(path) then
     fs.makeDir(path)
   end
@@ -110,6 +121,34 @@ function utils.merge_defaults(target, defaults)
   return changed
 end
 
+local function migrate_config(path, data, defaults, meta)
+  if type(defaults) ~= "table" then
+    return data
+  end
+  local target_version = type(defaults.version) == "number" and defaults.version or nil
+  if not target_version then
+    return data
+  end
+  local original = utils.deep_copy(data)
+  local changed = utils.merge_defaults(data, defaults)
+  local loaded_version = type(data.version) == "number" and data.version or 1
+  if data.version == nil or loaded_version < target_version then
+    data.version = target_version
+    changed = true
+  end
+  if not changed then
+    return data
+  end
+  local ok, err = pcall(utils.write_config, path, data)
+  if ok then
+    meta.migrated = true
+    return data
+  end
+  meta.migration_error = err
+  utils.log("CONFIG", "Config migration failed at " .. tostring(path) .. "; using existing config.", "WARN")
+  return original
+end
+
 function utils.load_config(path, defaults)
   local meta = { path = path, source = "defaults" }
   local fallback = utils.deep_copy(defaults or {})
@@ -130,9 +169,12 @@ function utils.load_config(path, defaults)
   if loader then
     local ok, data = pcall(loader)
     if ok and type(data) == "table" then
-      utils.merge_defaults(data, defaults)
+      local migrated = migrate_config(path, data, defaults, meta)
+      if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then
+        utils.merge_defaults(data, defaults)
+      end
       meta.source = "lua"
-      return data, meta
+      return migrated, meta
     end
     if not ok then
       err = data
@@ -141,10 +183,13 @@ function utils.load_config(path, defaults)
   if textutils and textutils.unserialize then
     local ok, data = pcall(textutils.unserialize, content)
     if ok and type(data) == "table" then
-      utils.merge_defaults(data, defaults)
+      local migrated = migrate_config(path, data, defaults, meta)
+      if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then
+        utils.merge_defaults(data, defaults)
+      end
       meta.source = "serialized"
       meta.reason = "lua invalid"
-      return data, meta
+      return migrated, meta
     end
   end
   meta.reason = err or "invalid"
@@ -165,25 +210,45 @@ function utils.write_config(path, tbl)
   file.close()
 end
 
+local function normalize_logger_opts(opts)
+  opts = opts or {}
+  if opts.log_dir ~= CONFIG.DEFAULT_LOG_DIR and opts.log_dir ~= "auto" then
+    return opts
+  end
+  local normalized = {}
+  for k, v in pairs(opts) do
+    if k ~= "log_dir" then
+      normalized[k] = v
+    end
+  end
+  return normalized
+end
+
 -- Initialize file logging for the current runtime.
 function utils.init_logger(opts)
-  logger.init(opts)
+  return logger.init(normalize_logger_opts(opts))
 end
 
 -- Log a message using the shared logger (no terminal spam).
 function utils.log(prefix, message, level)
-  logger.log(prefix or CONFIG.LOGGER_DEFAULT_PREFIX, message, level)
+  local ok = pcall(logger.log, prefix or CONFIG.LOGGER_DEFAULT_PREFIX, message, level)
+  if not ok then
+    pcall(print, "WARN: logging suppressed due to non-fatal logger failure")
+  end
 end
 
 function utils.safe_peripheral_call(name, method, ...)
   if not name or not peripheral.isPresent(name) then
     return nil, "peripheral missing"
   end
-  local ok, result = pcall(peripheral.call, name, method, ...)
-  if not ok then
-    return nil, result
+  local results = table.pack(pcall(peripheral.call, name, method, ...))
+  if not results[1] then
+    return nil, results[2]
   end
-  return result
+  if results.n == 1 then
+    return true
+  end
+  return table.unpack(results, 2, results.n)
 end
 
 function utils.safe_wrap(name)
@@ -197,9 +262,23 @@ function utils.safe_wrap(name)
   return wrapped
 end
 
+function utils.safe_get_methods(name)
+  if not name or not peripheral.isPresent(name) then
+    return nil, "peripheral missing"
+  end
+  local ok, methods = pcall(peripheral.getMethods, name)
+  if not ok then
+    return nil, methods
+  end
+  if type(methods) ~= "table" then
+    return nil, "invalid methods"
+  end
+  return methods
+end
+
 function utils.cache_peripherals(names)
   local cache = {}
-  for _, name in ipairs(names) do
+  for _, name in ipairs(names or {}) do
     local wrapped = utils.safe_wrap(name)
     if wrapped then
       cache[name] = wrapped

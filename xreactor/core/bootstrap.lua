@@ -1,16 +1,30 @@
 -- Centralized bootstrap for module loading without package.path.
 local bootstrap = {}
 
+local function resolve_log_dir()
+  if settings and settings.get then
+    local configured = settings.get("xreactor.log_dir")
+    if type(configured) == "string" then
+      local trimmed = configured:gsub("%s+$", ""):gsub("^%s+", "")
+      if trimmed ~= "" then
+        return trimmed
+      end
+    end
+  end
+  return "/xreactor_logs"
+end
+
 local CONFIG = {
   BASE_DIR = "/xreactor",
-  LOG_PATH = "/xreactor_logs/bootstrap.log",
+  LOG_PATH = resolve_log_dir() .. "/bootstrap.log",
   LOG_SETTINGS_KEY = "xreactor.debug_logging"
 }
 
 local state = {
   base_dir = CONFIG.BASE_DIR,
   log_path = CONFIG.LOG_PATH,
-  log_enabled_override = nil
+  log_enabled_override = nil,
+  last_recovery = nil
 }
 
 local native_require = rawget(_G, "require")
@@ -46,7 +60,7 @@ local function log_line(level, message)
     if not file then
       return
     end
-    local stamp = textutils.formatTime(os.epoch("utc") / 1000, true)
+    local stamp = os.date("!%H:%M:%S")
     file.write(string.format("[%s] BOOTSTRAP | %s | %s\n", stamp, tostring(level), tostring(message)))
     file.close()
   end)
@@ -266,6 +280,79 @@ function bootstrap.require(module_name)
   return result
 end
 
+local FIRST_START_ROLE_CONFIG = "/xreactor/config/role.lua"
+local FIRST_START_NODE_ID_PATH = "/xreactor/config/node_id.txt"
+
+local ROLE_OPTIONS = {
+  { label = "MASTER", role = "MASTER" },
+  { label = "RT", role = "RT" },
+  { label = "ENERGY", role = "ENERGY" },
+  { label = "WATER", role = "WATER" },
+  { label = "FUEL", role = "FUEL" },
+  { label = "REPROCESSING", role = "REPROCESSING" }
+}
+
+local function prompt_role_selection()
+  while true do
+    print("=== XReactor First Start Setup ===")
+    print("Select node role:")
+    for index, entry in ipairs(ROLE_OPTIONS) do
+      print(string.format("%d - %s", index, entry.label))
+    end
+    local input = read()
+    local choice = tonumber(input)
+    if choice and ROLE_OPTIONS[choice] then
+      return ROLE_OPTIONS[choice]
+    end
+  end
+end
+
+local function write_first_start_role(path, role)
+  ensure_dir(fs.getDir(path))
+  local file = fs.open(path, "w")
+  if not file then
+    error("Unable to write config: " .. tostring(path))
+  end
+  file.write(string.format([[return {
+  role = "%s"
+}
+]], tostring(role)))
+  file.close()
+end
+
+local function write_first_start_node_id(path, node_id)
+  ensure_dir(fs.getDir(path))
+  local file = fs.open(path, "w")
+  if not file then
+    error("Unable to write node id: " .. tostring(path))
+  end
+  file.write(tostring(node_id))
+  file.close()
+end
+
+local function run_first_start_setup()
+  if not (fs and fs.exists and os and os.getComputerID and type(read) == "function") then
+    return
+  end
+  if fs.exists(FIRST_START_ROLE_CONFIG) then
+    return
+  end
+  local selection = prompt_role_selection()
+  local computer_id = tostring(os.getComputerID())
+  local label = string.format("XR-%s-%s", selection.label, computer_id)
+  if os.setComputerLabel then
+    os.setComputerLabel(label)
+  end
+  local node_id = "node-" .. computer_id
+  write_first_start_role(FIRST_START_ROLE_CONFIG, selection.role)
+  write_first_start_node_id(FIRST_START_NODE_ID_PATH, node_id)
+  print("Setup complete.")
+  print("Rebooting...")
+  if os.reboot then
+    os.reboot()
+  end
+end
+
 function bootstrap.setup(opts)
   opts = opts or {}
   if opts.base_dir then
@@ -277,7 +364,7 @@ function bootstrap.setup(opts)
   if opts.log_path then
     state.log_path = opts.log_path
   elseif opts.role then
-    state.log_path = string.format("/xreactor_logs/loader_%s.log", tostring(opts.role):lower())
+    state.log_path = string.format("%s/loader_%s.log", resolve_log_dir(), tostring(opts.role):lower())
   end
   resolve_global()
   ensure_package_table()
@@ -290,7 +377,13 @@ function bootstrap.setup(opts)
     table.insert(package.searchers, 1, xreactor_searcher)
     searcher_installed = true
   end
+  state.last_recovery = nil
+  run_first_start_setup()
   log_environment()
+end
+
+function bootstrap.get_recovery_status()
+  return state.last_recovery
 end
 
 return bootstrap

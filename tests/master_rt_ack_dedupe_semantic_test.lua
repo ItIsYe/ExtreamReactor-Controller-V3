@@ -1,0 +1,122 @@
+package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
+if not os.epoch then
+  local fake_now = 200000
+  os.epoch = function() return fake_now end
+end
+
+local constants = require('shared.constants')
+local rt_sync = require('master.rt_sync')
+local utils = require('core.utils')
+
+local sends = 0
+local comms = { send_command = function() sends = sends + 1 end }
+
+local desired = rt_sync.normalize_setpoints({
+  target_rpm = 900,
+  power_target = 800,
+  steam_target = 4000,
+  enable_reactors = true,
+  enable_turbines = true,
+  assignment_reason = 'PRIMARY_ACTIVE',
+  assignment_source = 'master.rt_sync.plan',
+  assignment_rank = 1,
+  assignment_state = 'active',
+  controllable = true
+})
+
+local node = {
+  id = utils.normalize_node_id('rt-9'), role = constants.roles.RT_NODE, mode = 'MASTER',
+  status = constants.status_levels.OK, state = constants.node_states.RUNNING, output = 600,
+  last_setpoints = desired, last_setpoints_ts = os.epoch('utc') - 5000,
+  last_command_result = {
+    ok = true, at = os.epoch('utc'), command_target = constants.command_targets.SET_SETPOINTS,
+    command_value = desired, transition = 'APPLIED'
+  }
+}
+
+local ctx = {
+  comms = comms,
+  config = { rt_setpoints = { target_rpm = 900, steam_target = 4000, enable_reactors = true, enable_turbines = true, power_per_node_capacity = 3000 } },
+  nodes = { [node.id] = node },
+  power_target = 800,
+  rt_global_off = false,
+  trigger = 'coalesced:ack_applied,status',
+  log = function() end
+}
+
+rt_sync.sync_rt_node(ctx, node)
+if sends ~= 0 then error('matching successful ACK must dedupe resend') end
+
+-- Repeat the same coalesced trigger burst: still no resend for unchanged intent.
+ctx.trigger = 'coalesced:ack_applied,heartbeat,status'
+rt_sync.sync_rt_node(ctx, node)
+if sends ~= 0 then error('repeated unchanged ack/status bursts must stay deduped without resend flood') end
+
+node.last_setpoints = rt_sync.normalize_setpoints({
+  target_rpm = 900,
+  power_target = 0,
+  steam_target = 0,
+  enable_reactors = false,
+  enable_turbines = false,
+  assignment_reason = 'STANDBY',
+  assignment_source = 'master.rt_sync.plan',
+  assignment_rank = 2,
+  assignment_state = 'standby',
+  controllable = true
+})
+node.last_setpoints_ts = os.epoch('utc') - 6000
+node.last_command_result = {
+  ok = true, at = os.epoch('utc') - 6000, command_target = constants.command_targets.SET_SETPOINTS,
+  command_value = rt_sync.normalize_setpoints({ power_target = 0 }), transition = 'APPLIED'
+}
+rt_sync.sync_rt_node(ctx, node)
+if sends ~= 1 then error('stale/non-matching ACK must not block needed resend when desired setpoints differ') end
+
+-- After a resend, if ACK reflects the new desired command value, further syncs must dedupe again.
+node.last_setpoints = rt_sync.normalize_setpoints({
+  target_rpm = 900,
+  power_target = 800,
+  steam_target = 4000,
+  enable_reactors = true,
+  enable_turbines = true,
+  assignment_reason = 'PRIMARY_ACTIVE',
+  assignment_source = 'master.rt_sync.plan',
+  assignment_rank = 1,
+  assignment_state = 'active',
+  controllable = true
+})
+node.last_setpoints_ts = os.epoch('utc') - 5000
+node.last_command_result = {
+  ok = true, at = os.epoch('utc'), command_target = constants.command_targets.SET_SETPOINTS,
+  command_value = node.last_setpoints, transition = 'APPLIED'
+}
+rt_sync.sync_rt_node(ctx, node)
+if sends ~= 1 then error('fresh matching ACK after resend must close resend loop again') end
+
+node.last_setpoints = rt_sync.normalize_setpoints({
+  target_rpm = 900, power_target = 0, steam_target = 0, enable_reactors = false, enable_turbines = false,
+  assignment_reason = 'STANDBY', assignment_source = 'master.rt_sync.plan', assignment_rank = 2, assignment_state = 'standby',
+  controllable = true, desired_node_state = constants.node_states.LIMITED
+})
+node.last_setpoints_ts = os.epoch('utc') - 5000
+node.last_command_result = {
+  ok = true, at = os.epoch('utc'), command_target = constants.command_targets.POWER_TARGET,
+  command_value = node.last_setpoints, transition = 'APPLIED'
+}
+ctx.power_target = 0
+local before_legacy = sends
+rt_sync.sync_rt_node(ctx, node)
+if sends > (before_legacy + 1) then error('legacy-target standby ack must not trigger resend flood') end
+
+
+node.last_setpoints = desired
+node.last_setpoints_ts = os.epoch('utc')
+node.last_command_result = {
+  ok = false, at = os.epoch('utc'), command_target = constants.command_targets.SET_SETPOINTS,
+  command_value = desired, error = 'transient'
+}
+local before_failed_ack = sends
+rt_sync.sync_rt_node(ctx, node)
+if sends < (before_failed_ack + 1) then error('failed ACK must bypass short debounce and allow immediate retry') end
+
+print('master_rt_ack_dedupe_semantic_test.lua: ok')

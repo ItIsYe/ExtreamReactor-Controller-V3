@@ -2,12 +2,21 @@
 local CONFIG = {
   DEFAULT_ROLE = "ENERGY-NODE", -- Node role identifier.
   DEFAULT_NODE_ID = "ENERGY-1", -- Default node_id used if none is set.
-  DEFAULT_WIRELESS_MODEM = "right", -- Default wireless modem side.
+  DEFAULT_WIRELESS_MODEM = nil, -- Autodetect wireless modem unless explicitly configured.
   DEFAULT_MATRIX = nil, -- Optional induction matrix peripheral name (legacy override).
   DEFAULT_MATRIX_NAMES = {}, -- Optional list of induction matrix peripheral names (legacy override).
   DEFAULT_MATRIX_ALIASES = {}, -- Optional mapping of peripheral name -> display label.
   DEFAULT_CUBES = {}, -- Optional list of energy cube names (legacy override).
   DEFAULT_SCAN_INTERVAL = 15, -- Seconds between discovery scans.
+  DEFAULT_MATRIX_METRIC_POLL_INTERVAL = 3.0, -- Seconds between expensive matrix energy metric reads.
+  DEFAULT_MATRIX_METRIC_CALL_BUDGET = 4, -- Max expensive matrix metric calls per status build tick.
+  DEFAULT_MATRIX_METRIC_TIME_BUDGET_MS = 800, -- Max cumulative time spent on expensive matrix metric reads per status build.
+  DEFAULT_MATRIX_METRIC_SLOW_CALL_MS = 150, -- Calls slower than this are considered outliers and get a slower cadence.
+  DEFAULT_MATRIX_METRIC_SLOW_POLL_MULTIPLIER = 4.0, -- Extra poll cadence multiplier for outlier matrix metric calls.
+  DEFAULT_MATRIX_METRIC_PER_MATRIX_BUDGET = 1, -- Max expensive matrix metric calls per matrix per tick.
+  DEFAULT_MATRIX_COMPONENT_POLL_INTERVAL = 30, -- Seconds between matrix component count reads.
+  DEFAULT_MATRIX_COMPONENT_CALL_BUDGET = 2, -- Max matrix component calls per sampling tick.
+  DEFAULT_MATRIX_COMPONENT_TIME_BUDGET_MS = 400, -- Max time spent on matrix component calls per tick.
   DEFAULT_UI_REFRESH_INTERVAL = 1.0, -- Seconds between monitor UI refreshes.
   DEFAULT_UI_SCALE = 0.5, -- Monitor text scale for ENERGY node UI.
   DEFAULT_MONITOR_PREFERRED = nil, -- Optional monitor name to pin.
@@ -16,21 +25,87 @@ local CONFIG = {
   DEFAULT_STORAGE_EXCLUDE = {}, -- Optional deny-list of storage peripheral names.
   DEFAULT_STORAGE_PREFER = {}, -- Optional list of names to prioritize.
   DEFAULT_HEARTBEAT_INTERVAL = 2, -- Seconds between status heartbeats.
+  DEFAULT_STATUS_INTERVAL = 5, -- Seconds between status payloads.
   DEFAULT_CONTROL_CHANNEL = 6500, -- Control channel for MASTER commands.
   DEFAULT_STATUS_CHANNEL = 6501, -- Status channel for telemetry.
-  DEFAULT_DEBUG_LOGGING = false -- Enable debug logging to /xreactor/logs/energy.log.
+  DEFAULT_COMMS_ACK_TIMEOUT = 3.0, -- Seconds before retrying a command.
+  DEFAULT_COMMS_MAX_RETRIES = 4, -- Maximum retries per message.
+  DEFAULT_COMMS_BACKOFF_BASE = 0.6, -- Base backoff seconds.
+  DEFAULT_COMMS_BACKOFF_CAP = 6.0, -- Max backoff seconds.
+  DEFAULT_COMMS_DEDUPE_TTL = 30, -- Seconds to keep dedupe entries.
+  DEFAULT_COMMS_DEDUPE_LIMIT = 200, -- Max dedupe entries per peer.
+  DEFAULT_COMMS_PEER_TIMEOUT = 12.0, -- Seconds before marking peer down.
+  DEFAULT_COMMS_PEER_DOWN_GRACE = 3.0, -- Extra stale time before peer-down transition.
+  DEFAULT_COMMS_PEER_DOWN_MIN_OBSERVATIONS = 2, -- Consecutive stale checks required before peer-down transition.
+  DEFAULT_COMMS_PEER_UP_DEBOUNCE = 2.5, -- Stable visibility required before peer-up transition.
+  DEFAULT_COMMS_PEER_UP_MIN_OBSERVATIONS = 3, -- Fresh peer messages required before peer-up transition.
+  DEFAULT_COMMS_QUEUE_LIMIT = 200, -- Max queued outbound messages.
+  DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
+  -- Control rails tuning (shared defaults for RT nodes).
+  DEFAULT_RAILS = {
+    ramp_profiles = {
+      NORMAL = { up = 1.0, down = 1.0 },
+      SLOW = { up = 0.5, down = 0.5 },
+      FAST = { up = 1.5, down = 1.5 }
+    },
+    turbine_flow = {
+      deadband_up = 20,
+      deadband_down = 20,
+      hysteresis_up = 10,
+      hysteresis_down = 10,
+      max_step_up = 50,
+      max_step_down = 50,
+      cooldown_s = 1.0,
+      min = 200,
+      max = 1900,
+      ema_alpha = 0.2
+    },
+    reactor_rods = {
+      deadband_up = 5000,
+      deadband_down = 5000,
+      hysteresis_up = 500,
+      hysteresis_down = 500,
+      max_step_up = 5,
+      max_step_down = 5,
+      cooldown_s = 1.5,
+      min = 0,
+      max = 98,
+      ema_alpha = 0.25
+    },
+    coil = {
+      engage_rpm = 850,
+      disengage_rpm = 750,
+      cooldown_s = 1.0,
+      ema_alpha = 0.2
+    }
+  },
+  DEFAULT_DEBUG_LOGGING = true, -- Enabled by default so ENERGY startup/discovery/comms/ui/shutdown diagnostics are always available.
+  DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
 }
 
+local CURRENT_VERSION = 2
+
 return {
+  version = CURRENT_VERSION,
   role = CONFIG.DEFAULT_ROLE,
   node_id = CONFIG.DEFAULT_NODE_ID,
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
+  reset_log_on_start = CONFIG.DEFAULT_RESET_LOG_ON_START,
   wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
   matrix = CONFIG.DEFAULT_MATRIX,
   matrix_names = CONFIG.DEFAULT_MATRIX_NAMES,
   matrix_aliases = CONFIG.DEFAULT_MATRIX_ALIASES,
   cubes = CONFIG.DEFAULT_CUBES,
   scan_interval = CONFIG.DEFAULT_SCAN_INTERVAL,
+  matrix_metric_poll_interval = CONFIG.DEFAULT_MATRIX_METRIC_POLL_INTERVAL,
+  matrix_metric_call_budget = CONFIG.DEFAULT_MATRIX_METRIC_CALL_BUDGET,
+  matrix_metric_time_budget_ms = CONFIG.DEFAULT_MATRIX_METRIC_TIME_BUDGET_MS,
+  matrix_metric_slow_call_ms = CONFIG.DEFAULT_MATRIX_METRIC_SLOW_CALL_MS,
+  matrix_metric_slow_poll_multiplier = CONFIG.DEFAULT_MATRIX_METRIC_SLOW_POLL_MULTIPLIER,
+  matrix_metric_per_matrix_budget = CONFIG.DEFAULT_MATRIX_METRIC_PER_MATRIX_BUDGET,
+  matrix_component_poll_interval = CONFIG.DEFAULT_MATRIX_COMPONENT_POLL_INTERVAL,
+  matrix_component_call_budget = CONFIG.DEFAULT_MATRIX_COMPONENT_CALL_BUDGET,
+  matrix_component_time_budget_ms = CONFIG.DEFAULT_MATRIX_COMPONENT_TIME_BUDGET_MS,
   ui_refresh_interval = CONFIG.DEFAULT_UI_REFRESH_INTERVAL,
   ui_scale = CONFIG.DEFAULT_UI_SCALE,
   monitor = {
@@ -43,8 +118,25 @@ return {
     prefer_names = CONFIG.DEFAULT_STORAGE_PREFER
   },
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
+  status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
   channels = {
     control = CONFIG.DEFAULT_CONTROL_CHANNEL,
     status = CONFIG.DEFAULT_STATUS_CHANNEL
-  }
+  },
+  comms = {
+    ack_timeout_s = CONFIG.DEFAULT_COMMS_ACK_TIMEOUT,
+    max_retries = CONFIG.DEFAULT_COMMS_MAX_RETRIES,
+    backoff_base_s = CONFIG.DEFAULT_COMMS_BACKOFF_BASE,
+    backoff_cap_s = CONFIG.DEFAULT_COMMS_BACKOFF_CAP,
+    dedupe_ttl_s = CONFIG.DEFAULT_COMMS_DEDUPE_TTL,
+    dedupe_limit = CONFIG.DEFAULT_COMMS_DEDUPE_LIMIT,
+    peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT,
+    peer_down_grace_s = CONFIG.DEFAULT_COMMS_PEER_DOWN_GRACE,
+    peer_down_min_observations = CONFIG.DEFAULT_COMMS_PEER_DOWN_MIN_OBSERVATIONS,
+    peer_up_debounce_s = CONFIG.DEFAULT_COMMS_PEER_UP_DEBOUNCE,
+    peer_up_min_observations = CONFIG.DEFAULT_COMMS_PEER_UP_MIN_OBSERVATIONS,
+    queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
+    drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
+  },
+  rails = CONFIG.DEFAULT_RAILS
 }

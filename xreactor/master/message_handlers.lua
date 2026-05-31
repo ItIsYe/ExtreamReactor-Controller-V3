@@ -1,0 +1,339 @@
+local M = {}
+local rt_sync = require("master.rt_sync")
+local support_status = require("master.support_status")
+
+function M.new(opts)
+  local constants = assert(opts.constants, "constants required")
+  local utils = assert(opts.utils, "utils required")
+  local health = assert(opts.health, "health required")
+  local nodes = assert(opts.nodes, "nodes required")
+  local comms = assert(opts.comms, "comms getter required")
+  local sequencer = assert(opts.sequencer, "sequencer required")
+  local mark_rt_sync_dirty = assert(opts.mark_rt_sync_dirty, "mark_rt_sync_dirty required")
+  local add_alarm = assert(opts.add_alarm, "add_alarm required")
+  local master_time_label = assert(opts.master_time_label, "master_time_label required")
+  local log = assert(opts.log, "log required")
+
+
+  local function format_reasons(reason_set)
+    if type(reason_set) ~= "table" then return "none" end
+    local out = {}
+    for reason, enabled in pairs(reason_set) do
+      if enabled then out[#out + 1] = tostring(reason) end
+    end
+    table.sort(out)
+    return #out > 0 and table.concat(out, ",") or "none"
+  end
+
+  local function reasons_to_set(reasons)
+    if type(reasons) ~= "table" then return {} end
+    local out = {}
+    local is_array = (#reasons > 0)
+    if is_array then
+      for _, reason in ipairs(reasons) do out[tostring(reason)] = true end
+      return out
+    end
+    for reason, enabled in pairs(reasons) do
+      if enabled then out[tostring(reason)] = true end
+    end
+    return out
+  end
+
+  local function normalize_role(raw)
+    if raw == nil then return nil end
+    local value = tostring(raw):upper():gsub("_", "-")
+    if value == "RT" or value == "RTNODE" or value == "RT-NODE" or value == "REACTOR-TURBINE" then return constants.roles.RT_NODE end
+    if value == "MASTER" then return constants.roles.MASTER end
+    if value == "ENERGY" or value == "ENERGY-NODE" or value == "ENERGYNODE" then return constants.roles.ENERGY_NODE end
+    if value == "FUEL" or value == "FUEL-NODE" or value == "FUELNODE" then return constants.roles.FUEL_NODE end
+    if value == "WATER" or value == "WATER-NODE" or value == "WATERNODE" then return constants.roles.WATER_NODE end
+    if value == "REPROCESSING" or value == "REPROCESSOR" or value == "REPROCESSOR-NODE" or value == "REPROCESSING-NODE" then return constants.roles.REPROCESSOR_NODE end
+    return raw
+  end
+
+  local function payload_looks_rt(payload)
+    if type(payload) ~= "table" then return false end
+    if type(payload.rt) == "table" then return true end
+    if type(payload.turbines) == "table" or type(payload.reactors) == "table" or type(payload.modules) == "table" then return true end
+    if payload.turbine_rpm ~= nil or payload.steam ~= nil or payload.ramp_state ~= nil then return true end
+    if payload.mode ~= nil and (payload.output ~= nil or payload.state ~= nil) and (payload.capabilities ~= nil or payload.bindings ~= nil) then return true end
+    return false
+  end
+
+  local function infer_message_role(message)
+    local payload = message and message.payload or nil
+    local role = normalize_role(message and message.role)
+    if role ~= nil then return role end
+    role = normalize_role(type(payload) == "table" and payload.role or nil)
+    if role ~= nil then return role end
+    role = normalize_role(type(payload) == "table" and type(payload.meta) == "table" and payload.meta.role or nil)
+    if role ~= nil then return role end
+    if payload_looks_rt(payload) then return constants.roles.RT_NODE end
+    return nil
+  end
+
+  local function apply_role_hint(node, role_hint, origin)
+    if type(node) ~= "table" or role_hint == nil then return end
+    local normalized = normalize_role(role_hint)
+    if normalized == nil then return end
+    local previous = node.role
+    if previous ~= normalized then
+      node.role = normalized
+      log(("Node %s role %s -> %s (%s)"):format(tostring(node.id or "?"), tostring(previous or "UNKNOWN"), tostring(normalized), tostring(origin or "role_hint")), "INFO")
+    end
+  end
+
+  local function assign_node_status_from_health(node, origin)
+    local previous_status = node.status
+    local health_payload = node.health
+    local computed = previous_status
+    if health_payload and health_payload.status then
+      computed = health_payload.status
+    end
+    local reasons = reasons_to_set(health_payload and health_payload.reasons)
+    local shutdown_state = node.last_setpoints and node.last_setpoints.assignment_state
+    local workflow_stage = node.shutdown_workflow and node.shutdown_workflow.stage or nil
+    local controlled_shutdown = shutdown_state == "shutdown" or shutdown_state == "shed" or shutdown_state == "standby" or
+        workflow_stage == "RAMPDOWN" or workflow_stage == "REQUEST_STATE" or workflow_stage == "REQUESTED" or workflow_stage == "WAITING_STATE"
+    if controlled_shutdown and computed == health.status.DEGRADED then
+      if reasons[health.reasons.COMMS_DOWN] ~= true and reasons[health.reasons.PROTO_MISMATCH] ~= true and reasons[health.reasons.DISCOVERY_FAILED] ~= true then
+        computed = constants.status_levels.OK
+        log(("Node %s suppresses degraded during controlled shutdown: state=%s assign=%s reasons=%s source=%s"):format(
+          tostring(node.id), tostring(node.state), tostring(shutdown_state), format_reasons(reasons), tostring(origin or "unknown")
+        ))
+      end
+    end
+    node.status = computed or constants.status_levels.OK
+    if previous_status ~= node.status then
+      log(("Node %s status %s -> %s (%s)"):format(tostring(node.id), tostring(previous_status or "UNKNOWN"), tostring(node.status), tostring(origin or "unknown")))
+    end
+  end
+
+  local function ack_matches_last_setpoints(node, result)
+    if type(result) ~= "table" or result.ok == false then return false end
+    local target = result.command_target
+    local expected_target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET
+    if target ~= expected_target then return false end
+    local value = result.command_value
+    local last = node and node.last_setpoints
+    if type(value) ~= "table" or type(last) ~= "table" then return false end
+    return rt_sync.same_setpoints(rt_sync.normalize_setpoints(value), rt_sync.normalize_setpoints(last))
+  end
+
+  local function populate_rt_status(node, payload)
+    if type(node) ~= "table" or type(payload) ~= "table" then return end
+    node.rt = payload.rt or node.rt or {}
+    if type(node.rt) ~= "table" then node.rt = {} end
+    local rt = node.rt
+    rt.id = rt.id or node.id or payload.id or payload.node_id
+    rt.status = payload.status or rt.status or node.status
+    rt.state = payload.state or rt.state or node.state
+    rt.node_state = payload.state or rt.node_state
+    rt.mode = payload.mode or rt.mode or node.mode
+    rt.local_mode = payload.mode or rt.local_mode or rt.mode
+    rt.control_mode = payload.control_mode or rt.control_mode or payload.mode
+    rt.node_mode = payload.state or rt.node_mode or payload.node_state or payload.mode
+    rt.output = payload.output or rt.output
+    rt.actual_output = payload.output or rt.actual_output or rt.output
+    rt.power_actual = payload.output or rt.power_actual
+    rt.turbine_rpm = payload.turbine_rpm or rt.turbine_rpm
+    rt.rpm = payload.turbine_rpm or rt.rpm
+    rt.steam = payload.steam or rt.steam
+    rt.capabilities = payload.capabilities or rt.capabilities
+    rt.bindings = payload.bindings or rt.bindings
+    rt.bindings_summary = payload.bindings_summary or rt.bindings_summary
+    rt.modules = payload.modules or rt.modules
+    rt.turbines = payload.turbines or rt.turbines
+    rt.reactors = payload.reactors or rt.reactors
+    rt.registry = payload.registry or rt.registry
+    rt.snapshot = payload.snapshot or rt.snapshot
+    rt.ramp_state = payload.ramp_state or rt.ramp_state
+    rt.assignment_state = rt.assignment_state or payload.assignment_state
+    rt.assignment_reason = rt.assignment_reason or payload.assignment_reason or payload.bindings_summary
+    rt.control_source = rt.control_source or payload.control_source
+    if type(payload.turbines) == "table" then rt.turbine_count = #payload.turbines end
+    if type(payload.reactors) == "table" then rt.reactor_count = #payload.reactors end
+    if type(payload.modules) == "table" then
+      local total, running, stable, limited, error_count = 0, 0, 0, 0, 0
+      for _, module in pairs(payload.modules) do
+        total = total + 1
+        local state = tostring(type(module) == "table" and module.state or ""):upper()
+        if state == "RUNNING" then running = running + 1 end
+        if state == "STABLE" then stable = stable + 1 end
+        if state == "LIMITED" then limited = limited + 1 end
+        if state == "ERROR" or state == "FAILED" then error_count = error_count + 1 end
+      end
+      rt.module_count = total
+      rt.modules_running = running
+      rt.modules_stable = stable
+      rt.modules_limited = limited
+      rt.modules_error = error_count
+    end
+  end
+
+  local function update_node(message)
+    if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
+      local mismatch_id = utils.normalize_node_id(message.src)
+      if mismatch_id ~= "UNKNOWN" then
+        nodes[mismatch_id] = nodes[mismatch_id] or { id = mismatch_id, role = "UNKNOWN" }
+        nodes[mismatch_id].health = nodes[mismatch_id].health or health.new({})
+        nodes[mismatch_id].health.status = health.status.DEGRADED
+        nodes[mismatch_id].health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
+        nodes[mismatch_id].status = health.status.DEGRADED
+        nodes[mismatch_id].last_seen = os.epoch("utc")
+        nodes[mismatch_id].last_seen_str = master_time_label()
+        nodes[mismatch_id].proto_ver = message.payload.proto_ver
+      end
+      return
+    end
+
+    local sender_id = utils.normalize_node_id(message.sender_id)
+    local reported_id = message.node_id and utils.normalize_node_id(message.node_id) or "UNKNOWN"
+    local id = (reported_id ~= "UNKNOWN") and reported_id or sender_id
+    local role_hint = infer_message_role(message)
+    if sender_id ~= "UNKNOWN" and sender_id ~= id and nodes[sender_id] then
+      local legacy = nodes[sender_id]
+      nodes[sender_id] = nil
+      nodes[id] = nodes[id] or legacy
+      log(("Node identity remapped: %s -> %s"):format(tostring(sender_id), tostring(id)))
+    end
+    nodes[id] = nodes[id] or { id = id, role = role_hint or normalize_role(message.role), status = constants.status_levels.OFFLINE }
+    apply_role_hint(nodes[id], role_hint, "message")
+    if nodes[id].down_since then
+      local peers = comms() and comms():get_peers() or {}
+      local peer = peers and peers[id] or nil
+      if not (peer and peer.down) then
+        nodes[id].down_since = nil
+        log("Node comms restored: " .. tostring(id))
+      end
+    end
+
+    nodes[id].id = id
+    if reported_id ~= "UNKNOWN" then nodes[id].node_id = reported_id end
+    nodes[id].sender_id = sender_id ~= "UNKNOWN" and sender_id or nodes[id].sender_id
+    nodes[id].last_seen = os.epoch("utc")
+    nodes[id].last_seen_str = master_time_label()
+    nodes[id].proto_ver = message.proto_ver
+    nodes[id].managed = true
+    nodes[id].stale = false
+    nodes[id].offline = false
+    nodes[id].recovering = false
+
+    if message.type == constants.message_types.HELLO or message.type == constants.message_types.REGISTER then
+      if nodes[id].status == constants.status_levels.OFFLINE then log("Node online: " .. tostring(id)) end
+      assign_node_status_from_health(nodes[id], "hello")
+      nodes[id].state = constants.node_states.OFF
+      if nodes[id].role == constants.roles.RT_NODE then sequencer:enqueue(id) end
+      mark_rt_sync_dirty(nodes[id], "hello")
+    elseif message.type == constants.message_types.HEARTBEAT then
+      nodes[id].state = message.payload.state
+      nodes[id].down_since = nil
+      nodes[id].offline = false
+      nodes[id].stale = false
+      nodes[id].managed = true
+      nodes[id].recovering = false
+      if nodes[id].health and nodes[id].health.reasons and nodes[id].health.reasons[health.reasons.COMMS_DOWN] then
+        nodes[id].health.reasons[health.reasons.COMMS_DOWN] = nil
+        log(("Node %s reason removed: %s (heartbeat)"):format(id, health.reasons.COMMS_DOWN))
+      end
+      assign_node_status_from_health(nodes[id], "heartbeat")
+      mark_rt_sync_dirty(nodes[id], "heartbeat")
+    elseif message.type == constants.message_types.STATUS then
+      local previous_mode = nodes[id].mode
+      nodes[id] = utils.merge(nodes[id], message.payload)
+      apply_role_hint(nodes[id], role_hint or (payload_looks_rt(message.payload) and constants.roles.RT_NODE or nil), "status")
+      nodes[id].payload = message.payload
+      if nodes[id].role == constants.roles.ENERGY_NODE then
+        nodes[id].energy = message.payload.energy or message.payload
+      elseif nodes[id].role == constants.roles.RT_NODE then
+        populate_rt_status(nodes[id], message.payload)
+      else
+        support_status.apply(nodes[id], message.payload, constants)
+      end
+      local previous_health_status = nodes[id].health and nodes[id].health.status or nil
+      local previous_reasons = nodes[id].health and nodes[id].health.reasons or nil
+      if message.payload.health then
+        nodes[id].health = message.payload.health
+        if previous_health_status ~= message.payload.health.status then
+          log(("Node %s health %s -> %s (status payload)"):format(id, tostring(previous_health_status or "UNKNOWN"), tostring(message.payload.health.status or "UNKNOWN")))
+        end
+        local old_reasons = format_reasons(previous_reasons)
+        local new_reasons = format_reasons(message.payload.health.reasons)
+        if old_reasons ~= new_reasons then
+          log(("Node %s reasons %s -> %s"):format(id, old_reasons, new_reasons))
+        end
+        assign_node_status_from_health(nodes[id], "status")
+      else
+        nodes[id].status = message.payload.status or nodes[id].status
+      end
+      nodes[id].bindings = message.payload.bindings or nodes[id].bindings
+      nodes[id].bindings_summary = message.payload.bindings_summary or nodes[id].bindings_summary
+      nodes[id].capabilities = message.payload.capabilities or nodes[id].capabilities
+      nodes[id].mode = message.payload.mode or nodes[id].mode
+      nodes[id].registry = message.payload.registry or nodes[id].registry
+      nodes[id].last_error = message.payload.last_error or nodes[id].last_error
+      nodes[id].last_error_ts = message.payload.last_error_ts or nodes[id].last_error_ts
+      if nodes[id].role == constants.roles.RT_NODE then
+        populate_rt_status(nodes[id], message.payload)
+      else
+        support_status.apply(nodes[id], message.payload, constants)
+      end
+      if previous_mode and nodes[id].mode and previous_mode ~= nodes[id].mode then
+        log(("Node %s mode: %s"):format(id, tostring(nodes[id].mode)))
+      end
+      if sequencer.active and sequencer.active.node_id == id then
+        if message.payload.modules then
+          local module = message.payload.modules[sequencer.active.module_id]
+          if not module then
+            utils.log("SEQ", ("WARN: module %s missing from status, waiting"):format(sequencer.active.module_id))
+            return
+          end
+          if module.state == "STABLE" then
+            sequencer:notify_stable(id, sequencer.active.module_id, module.state)
+          else
+            utils.log("SEQ", ("Waiting for module %s, state=%s"):format(sequencer.active.module_id, module.state or "UNKNOWN"))
+          end
+        elseif nodes[id].state == constants.node_states.RUNNING then
+          sequencer:notify_stable(id, sequencer.active.module_id, nodes[id].state)
+        end
+      end
+      mark_rt_sync_dirty(nodes[id], "status")
+    elseif message.type == constants.message_types.ACK_APPLIED then
+      local result = message.payload and message.payload.result or {}
+      local redundant_setpoint_ack = ack_matches_last_setpoints(nodes[id], result)
+      nodes[id].last_command_result = {
+        ok = result.ok ~= false,
+        error = result.error,
+        reason_code = result.reason_code,
+        module_id = result.module_id,
+        ack_for = message.ack_for,
+        at = os.epoch("utc"),
+        command_target = result.command_target,
+        command_value = result.command_value,
+        transition = result.transition,
+        desired_node_state = result.desired_node_state,
+        shutdown_stage = result.shutdown_stage
+      }
+      nodes[id].last_command_error = result.ok == false and (result.error or "unknown") or nil
+      if result.ok == false then log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN") end
+      sequencer:notify_ack(id, result.module_id)
+      local workflow_stage = nodes[id].shutdown_workflow and nodes[id].shutdown_workflow.stage or nil
+      local workflow_waiting = workflow_stage == "REQUEST_STATE" or workflow_stage == "REQUESTED" or workflow_stage == "WAITING_STATE"
+      local ack_transition = tostring(result.transition or "")
+      local needs_workflow_followup = workflow_waiting and (
+        result.ok == false or ack_transition == "REQUESTED" or ack_transition == "ALREADY_IN_STATE" or ack_transition == "APPLIED"
+      )
+      if not redundant_setpoint_ack or needs_workflow_followup then
+        mark_rt_sync_dirty(nodes[id], "ack_applied")
+      else
+        log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
+      end
+    elseif message.type == constants.message_types.ALERT then
+      add_alarm(id, message.payload.severity, message.payload.message)
+    end
+  end
+
+  return { update_node = update_node }
+end
+
+return M

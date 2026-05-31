@@ -1,16 +1,22 @@
 local safety = {}
 
 function safety.clamp(value, min, max)
-  if value < min then return min end
-  if value > max then return max end
-  return value
+  local num = tonumber(value)
+  if not num then
+    return min or max or value
+  end
+  if min ~= nil and num < min then return min end
+  if max ~= nil and num > max then return max end
+  return num
 end
 
 function safety.with_reserve(amount, reserve)
-  if amount < reserve then
-    return reserve, true
+  local current = tonumber(amount) or 0
+  local min = tonumber(reserve) or 0
+  if current < min then
+    return min, true
   end
-  return amount, false
+  return current, false
 end
 
 function safety.should_scram(reactor_metrics)
@@ -24,9 +30,190 @@ function safety.should_scram(reactor_metrics)
   return false
 end
 
+local function normalize_temperature(value)
+  if type(value) == "number" then
+    return value
+  end
+  if type(value) == "string" then
+    local parsed = tonumber(value)
+    if parsed then
+      return parsed
+    end
+  end
+  return nil
+end
+
+function safety.evaluate_temperature_limit(input)
+  local data = type(input) == "table" and input or {}
+  local fuel_temp = normalize_temperature(data.fuel_temperature)
+  local casing_temp = normalize_temperature(data.casing_temperature)
+  local limit = tonumber(data.max_temperature) or 950
+  local hysteresis = math.max(0, tonumber(data.hysteresis) or 0)
+  local required_samples = math.max(1, math.floor(tonumber(data.trip_samples) or 1))
+  local state = type(data.state) == "table" and data.state or {}
+
+  local selected_temp = nil
+  local source = "UNAVAILABLE"
+  if type(fuel_temp) == "number" and type(casing_temp) == "number" then
+    if fuel_temp >= casing_temp then
+      selected_temp = fuel_temp
+      source = "getFuelTemperature"
+    else
+      selected_temp = casing_temp
+      source = "getCasingTemperature"
+    end
+  elseif type(fuel_temp) == "number" then
+    selected_temp = fuel_temp
+    source = "getFuelTemperature"
+  elseif type(casing_temp) == "number" then
+    selected_temp = casing_temp
+    source = "getCasingTemperature"
+  end
+
+  local over_limit = type(selected_temp) == "number" and selected_temp > limit
+  if over_limit then
+    state.over_limit_ticks = (tonumber(state.over_limit_ticks) or 0) + 1
+    state.last_over_limit_temp = selected_temp
+  elseif type(selected_temp) == "number" and selected_temp <= (limit - hysteresis) then
+    state.over_limit_ticks = 0
+  end
+
+  local over_limit_ticks = tonumber(state.over_limit_ticks) or 0
+  local triggered = over_limit and over_limit_ticks >= required_samples
+  local condition = "TEMP_OK"
+  if selected_temp == nil then
+    condition = "TEMP_UNAVAILABLE"
+  elseif triggered then
+    condition = "TEMP_LIMIT_PERSISTENT"
+  elseif over_limit then
+    condition = "TEMP_LIMIT_PENDING"
+  end
+
+  return {
+    triggered = triggered,
+    over_limit = over_limit,
+    condition = condition,
+    source = source,
+    temperature = selected_temp,
+    fuel_temperature = fuel_temp,
+    casing_temperature = casing_temp,
+    max_temperature = limit,
+    hysteresis = hysteresis,
+    trip_samples = required_samples,
+    over_limit_ticks = over_limit_ticks
+  }
+end
+
+function safety.evaluate_coolant_limit(input)
+  local data = type(input) == "table" and input or {}
+  local amount = tonumber(data.coolant_amount)
+  local amount_max = tonumber(data.coolant_amount_max)
+  local ratio = tonumber(data.coolant_ratio)
+  local source = data.source or "UNAVAILABLE"
+  local low_threshold = safety.clamp(data.min_water, 0, 1)
+  local hysteresis = math.max(0, tonumber(data.hysteresis) or 0)
+  local required_samples = math.max(1, math.floor(tonumber(data.trip_samples) or 1))
+  local invalid_grace_samples = math.max(0, math.floor(tonumber(data.invalid_grace_samples) or 0))
+  local default_zero_glitch_grace = math.max(3, required_samples)
+  local zero_glitch_grace_samples = math.max(0, math.floor(tonumber(data.zero_glitch_grace_samples) or default_zero_glitch_grace))
+  local measurement_state = tostring(data.measurement_state or "UNSPECIFIED")
+  local measurement_source_method = tostring(data.source_method or "UNAVAILABLE")
+  local state = type(data.state) == "table" and data.state or {}
+
+  local recover_threshold = safety.clamp((tonumber(low_threshold) or 0) + hysteresis, 0, 1)
+  local ratio_valid = type(ratio) == "number" and ratio >= 0 and ratio <= 1
+  local measurement_valid = ratio_valid and measurement_state ~= "INVALID"
+  local last_valid_ratio = tonumber(state.last_valid_ratio)
+  local stale_fallback_used = false
+  local zero_glitch_candidate = measurement_valid
+    and ratio == 0
+    and tonumber(amount) == 0
+    and type(amount_max) == "number"
+    and amount_max > 0
+    and type(last_valid_ratio) == "number"
+    and last_valid_ratio > low_threshold
+  local zero_glitch_pending = false
+
+  if measurement_valid and not zero_glitch_candidate then
+    state.zero_glitch_ticks = 0
+    state.invalid_ticks = 0
+    state.last_valid_ratio = ratio
+    state.last_valid_amount = amount
+    state.last_valid_amount_max = amount_max
+    if ratio <= low_threshold then
+      state.low_ticks = (tonumber(state.low_ticks) or 0) + 1
+    elseif ratio >= recover_threshold then
+      state.low_ticks = 0
+    end
+  else
+    if zero_glitch_candidate then
+      state.zero_glitch_ticks = (tonumber(state.zero_glitch_ticks) or 0) + 1
+      zero_glitch_pending = state.zero_glitch_ticks <= zero_glitch_grace_samples
+    else
+      state.zero_glitch_ticks = 0
+    end
+    state.invalid_ticks = (tonumber(state.invalid_ticks) or 0) + 1
+    if type(last_valid_ratio) == "number" and state.invalid_ticks <= invalid_grace_samples then
+      ratio = last_valid_ratio
+      stale_fallback_used = true
+    elseif state.invalid_ticks > invalid_grace_samples then
+      state.low_ticks = 0
+    end
+  end
+
+  local low_ticks = tonumber(state.low_ticks) or 0
+  local invalid_ticks = tonumber(state.invalid_ticks) or 0
+  local low_detected = type(ratio) == "number" and ratio <= low_threshold and not stale_fallback_used and not zero_glitch_pending
+  local triggered = low_detected and low_ticks >= required_samples
+  local condition = "COOLANT_OK"
+  local causality = "COOLANT_PRIMARY"
+  if zero_glitch_pending then
+    condition = "INVALID_MEASUREMENT_GLITCH_GRACE"
+    causality = "INVALID_MEASUREMENT"
+  elseif stale_fallback_used then
+    condition = "STALE_MEASUREMENT_GRACE"
+    causality = "STALE_MEASUREMENT"
+  elseif not measurement_valid then
+    condition = invalid_ticks > invalid_grace_samples and "COOLANT_UNAVAILABLE" or "COOLANT_UNAVAILABLE_GRACE"
+    causality = "INVALID_MEASUREMENT"
+  elseif triggered then
+    condition = "COOLANT_LOW_PERSISTENT"
+  elseif low_detected then
+    condition = "COOLANT_LOW_PENDING"
+  end
+
+  return {
+    triggered = triggered,
+    low_detected = low_detected,
+    condition = condition,
+    source = source,
+    source_method = measurement_source_method,
+    coolant_amount = amount,
+    coolant_amount_max = amount_max,
+    coolant_ratio = ratio,
+    coolant_ratio_raw = tonumber(data.coolant_ratio),
+    min_water = low_threshold,
+    hysteresis = hysteresis,
+    recover_threshold = recover_threshold,
+    trip_samples = required_samples,
+    invalid_grace_samples = invalid_grace_samples,
+    zero_glitch_grace_samples = zero_glitch_grace_samples,
+    low_ticks = low_ticks,
+    invalid_ticks = invalid_ticks,
+    stale_fallback_used = stale_fallback_used,
+    measurement_state = measurement_state,
+    measurement_valid = measurement_valid,
+    causality = causality,
+    zero_glitch_pending = zero_glitch_pending,
+    zero_glitch_ticks = tonumber(state.zero_glitch_ticks) or 0
+  }
+end
+
 function safety.safe_steam_request(request, capacity)
-  if capacity <= 0 then return 0 end
-  return safety.clamp(request, 0, capacity)
+  local cap = tonumber(capacity) or 0
+  if cap <= 0 then return 0 end
+  local req = tonumber(request) or 0
+  return safety.clamp(req, 0, cap)
 end
 
 return safety
