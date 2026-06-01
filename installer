@@ -124,6 +124,76 @@ local function download_url(url, rel)
   return nil, tostring(last_error or "download failed")
 end
 
+local function load_lua_body(body, chunk_name)
+  if type(body) ~= "string" or body == "" then
+    return nil, "empty body"
+  end
+  if is_html_content(body) then
+    return nil, "unexpected HTML"
+  end
+  local loader, load_err = load(body, "=" .. tostring(chunk_name or "download"), "t", {})
+  if not loader then
+    return nil, tostring(load_err)
+  end
+  local ok, result = pcall(loader)
+  if not ok then
+    return nil, tostring(result)
+  end
+  if type(result) ~= "table" then
+    return nil, "download did not return a table"
+  end
+  return result
+end
+
+local function verify_release_manifest_pair()
+  print("Installer bootstrap prueft Release/Manifest...")
+  local release_body, release_url_or_err = download_url(constants.RELEASE_URL, "release.lua")
+  if not release_body then
+    return false, "release download failed (" .. tostring(release_url_or_err) .. ")"
+  end
+  local release, release_err = load_lua_body(release_body, "release.lua")
+  if not release then
+    return false, "release invalid (" .. tostring(release_err) .. ")"
+  end
+
+  local manifest_body, manifest_url_or_err = download_url(constants.MANIFEST_URL, "manifest.lua")
+  if not manifest_body then
+    return false, "manifest download failed (" .. tostring(manifest_url_or_err) .. ")"
+  end
+  local manifest, manifest_err = load_lua_body(manifest_body, "manifest.lua")
+  if not manifest then
+    return false, "manifest invalid (" .. tostring(manifest_err) .. ")"
+  end
+
+  local release_id = tostring(release.release_id or "unknown")
+  local release_manifest_id = tostring(release.manifest_id or "unknown")
+  local release_manifest_version = tonumber(release.manifest_version)
+  local manifest_id = tostring(manifest.manifest_id or "unknown")
+  local manifest_version = tonumber(manifest.manifest_version)
+  print(string.format(
+    "Installer bootstrap source=beta release=%s release_manifest=%s/%s manifest=%s/%s",
+    release_id,
+    release_manifest_id,
+    tostring(release_manifest_version or "?"),
+    manifest_id,
+    tostring(manifest_version or "?")
+  ))
+
+  if tostring(release.source_ref or "beta") ~= "beta" or tostring(manifest.source_ref or "beta") ~= "beta" then
+    return false, "source_ref mismatch release=" .. tostring(release.source_ref) .. " manifest=" .. tostring(manifest.source_ref)
+  end
+  if release_manifest_id ~= manifest_id then
+    return false, "release/manifest id mismatch release=" .. release_manifest_id .. " manifest=" .. manifest_id
+  end
+  if release_manifest_version and manifest_version and release_manifest_version ~= manifest_version then
+    return false, "release/manifest version mismatch release=" .. tostring(release_manifest_version) .. " manifest=" .. tostring(manifest_version)
+  end
+  constants.__BOOTSTRAP_RELEASE_ID = release_id
+  constants.__BOOTSTRAP_MANIFEST_ID = manifest_id
+  constants.__BOOTSTRAP_MANIFEST_VERSION = manifest_version
+  return true
+end
+
 local function ensure_installer_runtime()
   if (type(constants.RELEASE_URL) ~= "string" or constants.RELEASE_URL == "")
     and type(constants.BASE_URL) == "string" and constants.BASE_URL ~= "" then
@@ -137,6 +207,11 @@ local function ensure_installer_runtime()
   end
 
   print("Installer source fixed to beta branch")
+
+  local preflight_ok, preflight_err = verify_release_manifest_pair()
+  if not preflight_ok then
+    return false, "release/manifest verification failed: " .. tostring(preflight_err)
+  end
 
   local required = {
     "installer_main.lua",
