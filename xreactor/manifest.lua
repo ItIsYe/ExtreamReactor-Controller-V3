@@ -1,6 +1,6 @@
 return {
-  manifest_version = 17,
-  manifest_id = "manifest-v17",
+  manifest_version = 18,
+  manifest_id = "manifest-v18",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -34,7 +34,7 @@ return {
       { path = "services/service_manager.lua", size_bytes = 5943, hash = "ac30751e" },
       { path = "services/telemetry_service.lua" },
       { path = "services/ui_service.lua" },
-      { path = "start.lua", size_bytes = 2821, hash = "c49ef8ae", always = true },
+      { path = "start.lua", always = true },
       { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
       { path = "shared/colors.lua", size_bytes = 332, hash = "445d12af" },
       { path = "shared/constants.lua", size_bytes = 1384, hash = "db560e96" },
