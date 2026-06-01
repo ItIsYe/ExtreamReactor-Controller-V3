@@ -8,10 +8,32 @@ local function log_command(ctx, level, message)
   utils.log("RT", message, level or "INFO")
 end
 
+local function number_or_nil(value)
+  if type(value) == "number" then return value end
+  if type(value) == "string" then
+    local parsed = tonumber(value)
+    if parsed then return parsed end
+  end
+  return nil
+end
+
+local function current_capacity(ctx)
+  local learning = ctx.capacity_learning
+  if type(learning) == "table" and learning.locked == true then
+    local max_output = number_or_nil(learning.max_output)
+    if max_output and max_output > 0 then return max_output, "learned" end
+  end
+  local targets = ctx.targets or {}
+  local previous = number_or_nil(targets.capacity_max)
+  if previous and previous > 0 then return previous, "target-cache" end
+  return nil, "unavailable"
+end
+
 local function value_summary(value)
   if type(value) == "table" then
     local parts = {}
     if value.target_rpm ~= nil then parts[#parts + 1] = "target_rpm=" .. tostring(value.target_rpm) end
+    if value.power_target_percent ~= nil then parts[#parts + 1] = "power_target_percent=" .. tostring(value.power_target_percent) end
     if value.power_target ~= nil then parts[#parts + 1] = "power_target=" .. tostring(value.power_target) end
     if value.steam_target ~= nil then parts[#parts + 1] = "steam_target=" .. tostring(value.steam_target) end
     if value.enable_reactors ~= nil then parts[#parts + 1] = "enable_reactors=" .. tostring(value.enable_reactors) end
@@ -34,8 +56,29 @@ local function set_setpoints(command, ctx, record)
   if type(value.target_rpm) == "number" then
     targets.rpm = value.target_rpm
   end
-  if type(value.power_target) == "number" then
+  local pct = number_or_nil(value.power_target_percent)
+  if pct then
+    pct = math.max(0, math.min(100, pct))
+    targets.power_percent = pct
+    local capacity, source = current_capacity(ctx)
+    if capacity and capacity > 0 then
+      targets.power = capacity * (pct / 100)
+      targets.capacity_max = capacity
+      targets.capacity_source = source
+      log_command(ctx, "INFO", ("Percent setpoint applied percent=%.1f capacity=%.2f source=%s local_power=%.2f"):format(pct, capacity, tostring(source), targets.power))
+    elseif type(value.power_target) == "number" then
+      targets.power = value.power_target
+      targets.capacity_source = "fallback-absolute"
+      log_command(ctx, "WARN", ("Percent setpoint capacity unavailable; using absolute fallback power=%.2f percent=%.1f"):format(targets.power, pct))
+    else
+      targets.power = 0
+      targets.capacity_source = "unavailable"
+      log_command(ctx, "WARN", ("Percent setpoint capacity unavailable; target forced to 0 percent=%.1f"):format(pct))
+    end
+  elseif type(value.power_target) == "number" then
     targets.power = value.power_target
+    targets.power_percent = nil
+    targets.capacity_source = "absolute"
   end
   if type(value.steam_target) == "number" then
     targets.steam = value.steam_target
@@ -61,7 +104,8 @@ local function set_setpoints(command, ctx, record)
         transition = "REQUESTED",
         current_state = current,
         desired_node_state = desired_state,
-        shutdown_stage = value.shutdown_stage
+        shutdown_stage = value.shutdown_stage,
+        command_value = value
       })
     end
     return record({
@@ -69,7 +113,8 @@ local function set_setpoints(command, ctx, record)
       transition = "ALREADY_IN_STATE",
       current_state = current,
       desired_node_state = desired_state,
-      shutdown_stage = value.shutdown_stage
+      shutdown_stage = value.shutdown_stage,
+      command_value = value
     })
   end
   ctx.request_startup_if_needed("SET_SETPOINTS")
