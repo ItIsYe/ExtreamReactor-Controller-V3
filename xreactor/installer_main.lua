@@ -40,9 +40,7 @@ local function sanitize_log_segment(value)
   local lowered = string.lower(raw)
   local sanitized = lowered:gsub("[^a-z0-9_%-]+", "_")
   sanitized = sanitized:gsub("^_+", ""):gsub("_+$", "")
-  if sanitized == "" then
-    return "unknown"
-  end
+  if sanitized == "" then return "unknown" end
   return sanitized
 end
 
@@ -51,16 +49,29 @@ local function append_query_param(url, key, value)
   return tostring(url or "") .. sep .. tostring(key or "q") .. "=" .. tostring(value or "")
 end
 
+local function normalize_free_space(value)
+  if type(value) == "number" then
+    if value < 0 then return math.huge end
+    return value
+  end
+  if type(value) == "string" then
+    local trimmed = tostring(value):match("^%s*(.-)%s*$")
+    if trimmed == "unlimited" then return math.huge end
+    local parsed = tonumber(trimmed)
+    if parsed then
+      if parsed < 0 then return math.huge end
+      return parsed
+    end
+  end
+  return nil
+end
+
 local function build_crc32_table()
   local table_crc = {}
   for i = 0, 255 do
     local crc = i
     for _ = 1, 8 do
-      if bit32.band(crc, 1) == 1 then
-        crc = bit32.bxor(bit32.rshift(crc, 1), 0xEDB88320)
-      else
-        crc = bit32.rshift(crc, 1)
-      end
+      if bit32.band(crc, 1) == 1 then crc = bit32.bxor(bit32.rshift(crc, 1), 0xEDB88320) else crc = bit32.rshift(crc, 1) end
     end
     table_crc[i] = crc
   end
@@ -87,9 +98,7 @@ local function build_context(constants)
   local ctx = { constants = constants, fs = fs, source_ref = "beta" }
 
   function ctx.safe_mkdir(path)
-    if fs.exists(path) then
-      return fs.isDir(path)
-    end
+    if fs.exists(path) then return fs.isDir(path) end
     local ok = pcall(fs.makeDir, path)
     return ok and fs.exists(path) and fs.isDir(path)
   end
@@ -135,25 +144,10 @@ local function build_context(constants)
     ctx.safe_mkdir(constants.LOG_DIR)
   end
 
-  function ctx.info(message)
-    print(message)
-    ctx.log_line(message)
-  end
-
-  function ctx.warn(message)
-    print(message)
-    ctx.log_line("WARN: " .. tostring(message))
-  end
-
-  function ctx.error_msg(message)
-    print(message)
-    ctx.log_line("ERROR: " .. tostring(message))
-  end
-
-  function ctx.fatal(message)
-    ctx.warn(message)
-    error(message, 0)
-  end
+  function ctx.info(message) print(message); ctx.log_line(message) end
+  function ctx.warn(message) print(message); ctx.log_line("WARN: " .. tostring(message)) end
+  function ctx.error_msg(message) print(message); ctx.log_line("ERROR: " .. tostring(message)) end
+  function ctx.fatal(message) ctx.warn(message); error(message, 0) end
 
   function ctx.read_file(path)
     local file = fs.open(path, "r")
@@ -171,6 +165,11 @@ local function build_context(constants)
     h.write(data)
     h.close()
     return true
+  end
+
+  function ctx.free_space()
+    if not fs.getFreeSpace then return nil end
+    return normalize_free_space(fs.getFreeSpace("/"))
   end
 
   function ctx.download_versioned_url(url, kind, remote_path)
@@ -197,33 +196,14 @@ local function build_context(constants)
   end
 
   function ctx.validate_download(path)
-    if not fs.exists(path) then
-      ctx.error_msg("Download validation failed: missing file " .. tostring(path))
-      return false, "missing file"
-    end
-    if fs.getSize(path) <= 0 then
-      fs.delete(path)
-      ctx.error_msg("Download validation failed: empty file " .. tostring(path))
-      return false, "empty file"
-    end
+    if not fs.exists(path) then ctx.error_msg("Download validation failed: missing file " .. tostring(path)); return false, "missing file" end
+    if fs.getSize(path) <= 0 then fs.delete(path); ctx.error_msg("Download validation failed: empty file " .. tostring(path)); return false, "empty file" end
     local content = ctx.read_file(path)
-    if not content then
-      fs.delete(path)
-      ctx.error_msg("Download validation failed: unreadable file " .. tostring(path))
-      return false, "unreadable file"
-    end
-    if installer_http.is_html_content(content) then
-      fs.delete(path)
-      ctx.error_msg("Download validation failed: HTML content for " .. tostring(path))
-      return false, "html content"
-    end
+    if not content then fs.delete(path); ctx.error_msg("Download validation failed: unreadable file " .. tostring(path)); return false, "unreadable file" end
+    if installer_http.is_html_content(content) then fs.delete(path); ctx.error_msg("Download validation failed: HTML content for " .. tostring(path)); return false, "html content" end
     if path:sub(-4) == ".lua" then
       local loader, err = ctx.compile_lua(path, content)
-      if not loader then
-        fs.delete(path)
-        ctx.error_msg("Download validation failed: Lua parse error for " .. tostring(path) .. " (" .. tostring(err) .. ")")
-        return false, "lua parse error"
-      end
+      if not loader then fs.delete(path); ctx.error_msg("Download validation failed: Lua parse error for " .. tostring(path) .. " (" .. tostring(err) .. ")"); return false, "lua parse error" end
     end
     return true
   end
@@ -247,13 +227,9 @@ local function build_context(constants)
     if not body then return false, resolved_url_or_err end
     local resolved_entry = entry or {}
     local size_ok, actual_size = ctx.size_matches(resolved_entry, body)
-    if not size_ok then
-      return false, string.format("size mismatch for %s (url=%s expected=%s actual=%s)", tostring(remote_path), tostring(resolved_url_or_err), tostring(resolved_entry.size_bytes), tostring(actual_size))
-    end
+    if not size_ok then return false, string.format("size mismatch for %s (url=%s expected=%s actual=%s)", tostring(remote_path), tostring(resolved_url_or_err), tostring(resolved_entry.size_bytes), tostring(actual_size)) end
     local hash_ok, actual_hash = ctx.hash_matches(resolved_entry, body)
-    if not hash_ok then
-      return false, string.format("hash mismatch for %s (url=%s expected=%s actual=%s manifest=%s release=%s source_ref=%s)", tostring(remote_path), tostring(resolved_url_or_err), tostring(resolved_entry.hash), tostring(actual_hash), tostring(ctx.manifest_id or "unknown"), tostring(ctx.release_id or "unknown"), tostring(ctx.source_ref or "unknown"))
-    end
+    if not hash_ok then return false, string.format("hash mismatch for %s (url=%s expected=%s actual=%s manifest=%s release=%s source_ref=%s)", tostring(remote_path), tostring(resolved_url_or_err), tostring(resolved_entry.hash), tostring(actual_hash), tostring(ctx.manifest_id or "unknown"), tostring(ctx.release_id or "unknown"), tostring(ctx.source_ref or "unknown")) end
     local ok, write_err = ctx.write_file(target_path, body)
     if not ok then return false, write_err end
     local valid, valid_err = ctx.validate_download(target_path)
@@ -265,6 +241,7 @@ local function build_context(constants)
     ctx.info("Downloading manifest from " .. tostring(constants.MANIFEST_URL))
     local body, err = ctx.download_versioned_url(constants.MANIFEST_URL, "manifest", "manifest.lua")
     if not body then return nil, err end
+    ctx.manifest_metadata_body = body
     local loader, load_err = load(body, "=manifest", "t", {})
     if not loader then return nil, load_err end
     local ok, manifest = pcall(loader)
@@ -301,7 +278,7 @@ local function build_context(constants)
   function ctx.log_install_identity(manifest, role_label, mode, expected)
     local file_count = 0
     for _ in pairs(expected or {}) do file_count = file_count + 1 end
-    ctx.info(string.format("Identity: mode=%s role=%s release=%s manifest=%s files=%d", tostring(mode), tostring(role_label), tostring(ctx.release_id or "unknown"), tostring(ctx.manifest_id or manifest.manifest_id or manifest.manifest_version or "unknown"), file_count))
+    ctx.info(string.format("Identity: mode=%s role=%s release=%s manifest=%s files=%d low_space_replace=%s", tostring(mode), tostring(role_label), tostring(ctx.release_id or "unknown"), tostring(ctx.manifest_id or manifest.manifest_id or manifest.manifest_version or "unknown"), file_count, tostring(ctx.low_space_replace == true)))
   end
 
   return ctx
@@ -378,6 +355,39 @@ local function refresh_installer_runtime(ctx)
   return false
 end
 
+local function prepare_low_space_replace(ctx, storage_plan, role_label, reason)
+  local free = ctx.free_space and ctx.free_space() or nil
+  if free == nil or free == math.huge then return false end
+  local required = tonumber(storage_plan.required_bytes) or 0
+  if free >= required then return false end
+
+  ctx.warn(string.format("Low-space replace mode enabled role=%s free=%s required=%s reason=%s", tostring(role_label), tostring(free), tostring(required), tostring(reason or "low-space")))
+  storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = true })
+  if ctx.fs.exists(ctx.constants.INSTALL_ROOT) then
+    local old_size = storage_lib.measure_tree_size(ctx.fs, ctx.constants.INSTALL_ROOT)
+    ctx.warn(string.format("Deleting existing install root before staging to free space: %s bytes=%d", tostring(ctx.constants.INSTALL_ROOT), old_size))
+    ctx.fs.delete(ctx.constants.INSTALL_ROOT)
+  end
+  ctx.low_space_replace = true
+  return true
+end
+
+local function preflight_or_replace(ctx, storage_plan, role_label, mode)
+  local cleanup_logs = mode == "install"
+  local preflight_ok, preflight_err = storage_lib.preflight_storage(ctx, storage_plan, { allow_cleanup = true, cleanup_logs = cleanup_logs, cleanup_backup = true })
+  if preflight_ok then
+    prepare_low_space_replace(ctx, storage_plan, role_label, "preflight-low-but-continuing")
+    return true
+  end
+  if prepare_low_space_replace(ctx, storage_plan, role_label, preflight_err) then
+    local refreshed = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, storage_plan.expected or {}, mode, ctx.constants)
+    local ok_after, err_after = storage_lib.preflight_storage(ctx, refreshed, { allow_cleanup = true, cleanup_logs = false, cleanup_backup = true })
+    if ok_after then return true end
+    ctx.fatal("Storage preflight failed even after low-space replace: " .. tostring(err_after))
+  end
+  ctx.fatal("Storage preflight failed: " .. tostring(preflight_err))
+end
+
 local function run_install(ctx)
   local role = select_role()
   if not role then ctx.fatal("Invalid role selection") end
@@ -396,8 +406,8 @@ local function run_install(ctx)
   local expected = manifest_lib.select_expected_files(manifest, role.label, ctx.constants.INCLUDE_DEV_FILES)
   enforce_release_metadata_strategy(ctx, expected)
   local storage_plan = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, expected, "install", ctx.constants)
-  local preflight_ok, preflight_err = storage_lib.preflight_storage(ctx, storage_plan, { allow_cleanup = true, cleanup_logs = true, cleanup_backup = true })
-  if not preflight_ok then ctx.fatal("Storage preflight failed: " .. tostring(preflight_err)) end
+  storage_plan.expected = expected
+  preflight_or_replace(ctx, storage_plan, role.label, "install")
   local stage_ok, stage_err = stage_lib.stage_expected_files(ctx, expected)
   if not stage_ok then ctx.fatal(tostring(stage_err)) end
   stage_lib.ensure_role_config(ctx, ctx.constants.STAGE_ROOT, role.label)
@@ -428,11 +438,12 @@ local function run_update(ctx)
   local expected = manifest_lib.select_expected_files(manifest, role_label, ctx.constants.INCLUDE_DEV_FILES)
   enforce_release_metadata_strategy(ctx, expected)
   local storage_plan = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, expected, "update", ctx.constants)
-  local preflight_ok, preflight_err = storage_lib.preflight_storage(ctx, storage_plan, { allow_cleanup = true, cleanup_logs = false, cleanup_backup = true })
-  if not preflight_ok then ctx.fatal("Storage preflight failed: " .. tostring(preflight_err)) end
+  storage_plan.expected = expected
+  preflight_or_replace(ctx, storage_plan, role_label, "update")
   local stage_ok, stage_err = stage_lib.stage_expected_files(ctx, expected)
   if not stage_ok then ctx.fatal(tostring(stage_err)) end
-  stage_lib.copy_config_to_stage(ctx)
+  if not ctx.low_space_replace then stage_lib.copy_config_to_stage(ctx) end
+  stage_lib.ensure_role_config(ctx, ctx.constants.STAGE_ROOT, role_label)
   stage_and_verify(ctx, expected)
   stage_lib.activate_stage(ctx)
   stage_lib.ensure_role_config(ctx, ctx.constants.INSTALL_ROOT, role_label)
