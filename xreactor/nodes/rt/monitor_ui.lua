@@ -47,12 +47,6 @@ local function num(value, fallback)
   return fallback
 end
 
-local function fmt(value, digits, suffix)
-  local n = num(value, nil)
-  if not n then return "n/a" end
-  return string.format("%." .. tostring(digits or 1) .. "f%s", n, suffix or "")
-end
-
 local function fit(text, width)
   local raw = tostring(text or ""):gsub("\n", " "):gsub("\r", " ")
   local w = math.max(1, tonumber(width) or #raw)
@@ -67,92 +61,10 @@ local function pad(text, width)
   return clipped .. string.rep(" ", math.max(0, w - #clipped))
 end
 
-local function panel_box(mon, x, y, w, h, title, status)
-  local width = math.max(8, math.floor(num(w, 8)))
-  local height = math.max(3, math.floor(num(h, 3)))
-  ui.panel(mon, x, y, width, height, fit(title or "", math.max(4, width - 4)), status or "OK")
-  return { x = x + 1, y = y + 1, w = math.max(1, width - 2), h = math.max(1, height - 2), right = x + width - 1, bottom = y + height - 1 }
-end
-
-local function split_columns(total_w, ratios, gap)
-  local width = math.max(1, math.floor(num(total_w, 1)))
-  local specs = ratios or { 1 }
-  local g = math.max(0, math.floor(num(gap, 1)))
-  local total_gap = math.max(0, (#specs - 1) * g)
-  local avail = math.max(#specs, width - total_gap)
-  local sum = 0
-  for _, r in ipairs(specs) do sum = sum + math.max(1, num(r, 1)) end
-  local out, used = {}, 0
-  for i, r in ipairs(specs) do
-    if i == #specs then
-      out[i] = math.max(1, avail - used)
-    else
-      out[i] = math.max(1, math.floor((avail * math.max(1, num(r, 1))) / sum))
-      used = used + out[i]
-    end
-  end
-  return out
-end
-
-local function status_badge(mon, x, y, text, status, max_width)
-  local label = fit(text or "", math.max(4, num(max_width, 18)))
-  ui.badge(mon, x, y, label, status or "OK")
-  return #label + 2
-end
-
-local function stat_card(mon, x, y, w, title, value, meta, status, progress)
-  local width = math.max(12, math.floor(num(w, 12)))
-  ui.panel(mon, x, y, width, 5, fit(title or "", width - 3), status or "OK")
-  ui.text(mon, x + 1, y + 1, fit(value or "-", width - 2), colors.get(status or "text"), colors.get("background"))
-  ui.text(mon, x + 1, y + 2, fit(meta or "", width - 2), colors.get("muted"), colors.get("background"))
-  if progress ~= nil and width >= 10 then
-    local pct = num(progress, 0)
-    if pct > 1 then pct = pct / 100 end
-    pct = math.max(0, math.min(1, pct))
-    ui.progress(mon, x + 1, y + 3, math.max(6, width - 2), pct, status or "OK")
-  end
-end
-
-local function table_widths(total_w, widths)
-  local width = math.max(1, math.floor(num(total_w, 1)))
-  local spec = widths or { width }
-  local out, used = {}, 0
-  for i, raw in ipairs(spec) do
-    out[i] = math.max(3, math.floor(num(raw, 6)))
-    used = used + out[i]
-  end
-  local diff = width - used
-  local i = #out
-  while diff < 0 and i >= 1 do
-    if out[i] > 3 then out[i] = out[i] - 1; diff = diff + 1 else i = i - 1 end
-  end
-  i = 1
-  while diff > 0 and #out > 0 do
-    out[i] = out[i] + 1
-    diff = diff - 1
-    i = i + 1
-    if i > #out then i = 1 end
-  end
-  return out
-end
-
-local function compact_header(mon, x, y, labels, widths)
-  local col = x
-  for i, label in ipairs(labels or {}) do
-    local cw = widths[i] or 8
-    ui.text(mon, col, y, pad(label, cw - 1), colors.get("muted"), colors.get("background"))
-    col = col + cw
-  end
-end
-
-local function compact_row(mon, x, y, values, widths, status, status_col)
-  local col = x
-  for i, value in ipairs(values or {}) do
-    local cw = widths[i] or 8
-    local key = (i == (status_col or 2)) and (status or "text") or (i == #values and "muted" or "text")
-    ui.text(mon, col, y, pad(value or "-", cw - 1), colors.get(key), colors.get("background"))
-    col = col + cw
-  end
+local function fmt(value, digits, suffix)
+  local n = num(value, nil)
+  if not n then return "n/a" end
+  return string.format("%." .. tostring(digits or 1) .. "f%s", n, suffix or "")
 end
 
 local function count_bound(summary, kind)
@@ -177,6 +89,10 @@ local function read_turbine_info(entry, adapter, log_prefix)
   end
 end
 
+local function status_color(status)
+  return colors.get(status or "text")
+end
+
 local function power_state(actual, target)
   local a = num(actual, 0)
   local t = num(target, 0)
@@ -198,29 +114,67 @@ local function capacity_status(model)
   return "WARNING"
 end
 
-local function render_header(mon, model, title)
-  local w = ({ ui.getSize(mon) })[1] or 40
+local function write_line(mon, y, text, status)
+  local w = ({ ui.getSize(mon) })[1] or 20
+  if y < 1 then return end
+  ui.text(mon, 2, y, fit(text, math.max(1, w - 3)), status_color(status), colors.get("background"))
+end
+
+local function badge_line(mon, y, badges)
+  local w = ({ ui.getSize(mon) })[1] or 20
+  local x = 2
+  for _, badge in ipairs(badges or {}) do
+    if x >= w then break end
+    local label = fit(badge[1], math.max(4, math.min(12, w - x)))
+    ui.badge(mon, x, y, label, badge[2] or "OK")
+    x = x + #label + 3
+  end
+end
+
+local function simple_table_header(mon, y, labels, widths)
+  local x = 2
+  for i, label in ipairs(labels or {}) do
+    local cw = widths[i] or 8
+    ui.text(mon, x, y, pad(label, cw - 1), colors.get("muted"), colors.get("background"))
+    x = x + cw
+  end
+end
+
+local function simple_table_row(mon, y, values, widths, status, status_col)
+  local x = 2
+  for i, value in ipairs(values or {}) do
+    local cw = widths[i] or 8
+    local key = (i == (status_col or 1)) and (status or "text") or (i == #values and "muted" or "text")
+    ui.text(mon, x, y, pad(value or "-", cw - 1), colors.get(key), colors.get("background"))
+    x = x + cw
+  end
+end
+
+local function clear_and_title(mon, title, status)
+  local w, h = ui.getSize(mon)
+  ui.panel(mon, 1, 1, w, h, title, status or "OK")
+  return w, h
+end
+
+local function render_compact_header(mon, model, title)
   local health_status = model.health and model.health.status or "OFFLINE"
-  local header = panel_box(mon, 2, 2, w - 2, 6, title, health_status)
-  local cols = split_columns(header.w, { 2, 2, 2, 2 }, 1)
-  local x = header.x
-  status_badge(mon, x, header.y, "RT " .. tostring(health_status), health_status, cols[1]); x = x + cols[1] + 1
-  status_badge(mon, x, header.y, "MASTER " .. tostring(model.master_state or "?"), master_status(model), cols[2]); x = x + cols[2] + 1
-  status_badge(mon, x, header.y, "MODE " .. tostring(model.current_state or "-"), tostring(model.current_state) == "MASTER" and "OK" or "LIMITED", cols[3]); x = x + cols[3] + 1
-  status_badge(mon, x, header.y, model.capacity_ready and "CAP OK" or "CAP LEARN", capacity_status(model), cols[4])
-  ui.text(mon, header.x, header.y + 2, fit("Node " .. tostring(model.node_id or "UNKNOWN") .. " | State " .. tostring(model.node_state or "-") .. " | Master age " .. tostring(model.master_age or "n/a"), header.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, header.x, header.y + 3, fit("Cmd " .. tostring(model.last_command or "none") .. " | Scan " .. tostring(model.last_scan or "n/a") .. " | Build " .. tostring(model.build_label or "n/a"), header.w), colors.get("muted"), colors.get("background"))
-  return 9
+  badge_line(mon, 2, {
+    { "RT " .. tostring(health_status), health_status },
+    { "M " .. tostring(model.master_state or "?"), master_status(model) },
+    { tostring(model.current_state or "-"), tostring(model.current_state) == "MASTER" and "OK" or "LIMITED" },
+    { model.capacity_ready and "CAP" or "LEARN", capacity_status(model) }
+  })
+  write_line(mon, 3, fit(title .. " | " .. tostring(model.node_id or "UNKNOWN") .. " | " .. tostring(model.node_state or "-"), 120), "text")
+  return 4
 end
 
 local function render_overview(mon, model)
-  local w, h = ui.getSize(mon)
-  if not w or not h then return end
   local snapshot = monitor_snapshot(model) or {}
   local summary = model.summary or {}
   local health_status = model.health and model.health.status or "OFFLINE"
-  ui.panel(mon, 1, 1, w, h, "RT OVERVIEW", health_status)
-  local top = render_header(mon, model, "Lage")
+  local w, h = clear_and_title(mon, "RT OVERVIEW", health_status)
+  local y = render_compact_header(mon, model, "Overview")
+
   local actual = num(snapshot.actual_output, 0)
   local target_power = num(model.target_power, num(snapshot.target_power, 0))
   local p_status, p_pct = power_state(actual, target_power)
@@ -229,136 +183,86 @@ local function render_overview(mon, model)
   local reactors = count_bound(summary, "reactor")
   local turbines = count_bound(summary, "turbine")
 
-  local content_h = math.max(8, h - top - 1)
-  local cols = split_columns(w - 2, w >= 58 and { 3, 2 } or { 1 }, 1)
-  local left_w = cols[1]
-  local right_w = cols[2]
+  write_line(mon, y, string.format("Power %s%%  Soll %s  Ist %s", fmt(p_pct, 1), fmt(target_power, 1), fmt(actual, 1)), p_status); y = y + 1
+  if w >= 20 then ui.progress(mon, 2, y, math.max(8, w - 3), math.min(100, p_pct), p_status) end; y = y + 1
+  write_line(mon, y, string.format("Master %s -> %s RF/t", fmt(model.target_percent, 1, "%"), fmt(target_power, 1)), "text"); y = y + 1
+  write_line(mon, y, string.format("Cap %s %s  Ist %.1f%%", fmt(capacity, 1), model.capacity_ready and "locked" or "learning", capacity_pct), capacity_status(model)); y = y + 1
+  write_line(mon, y, string.format("RPM %s/%s  Steam %s", fmt(snapshot.avg_rpm, 0), fmt(model.target_rpm, 0), fmt(snapshot.steam_amount, 1)), "muted"); y = y + 1
+  write_line(mon, y, string.format("R:%d T:%d  Cmd:%s  M-age:%s", reactors, turbines, tostring(model.last_command or "-"), tostring(model.master_age or "n/a")), "text"); y = y + 1
 
-  local metrics_h = math.min(17, content_h)
-  local box = panel_box(mon, 2, top, left_w, metrics_h, "Kennzahlen", p_status)
-  local card_cols = split_columns(box.w, box.w >= 42 and { 1, 1 } or { 1 }, 1)
-  stat_card(mon, box.x, box.y, card_cols[1], "Leistung", string.format("Soll %s", fmt(target_power, 1)), string.format("Ist %s RF/t | %.1f%%", fmt(actual, 1), p_pct), p_status, p_pct)
-  if card_cols[2] then
-    stat_card(mon, box.x + card_cols[1] + 1, box.y, card_cols[2], "Kapazitaet", string.format("Max %s", fmt(capacity, 1)), string.format("Ist %.1f%% | %s", capacity_pct, tostring(model.capacity_source or "-")), capacity_status(model), capacity_pct)
-  else
-    stat_card(mon, box.x, box.y + 6, box.w, "Kapazitaet", string.format("Max %s", fmt(capacity, 1)), string.format("Ist %.1f%% | %s", capacity_pct, tostring(model.capacity_source or "-")), capacity_status(model), capacity_pct)
-  end
-  local second_y = box.y + (card_cols[2] and 6 or 12)
-  if second_y + 4 <= box.y + box.h then
-    local rpm_pct = num(model.target_rpm, 0) > 0 and ((num(snapshot.avg_rpm, 0) / num(model.target_rpm, 1)) * 100) or 0
-    stat_card(mon, box.x, second_y, card_cols[1], "Turbinen", tostring(turbines) .. " online", string.format("RPM %s/%s", fmt(snapshot.avg_rpm, 0), fmt(model.target_rpm, 0)), turbines > 0 and "OK" or "WARNING", rpm_pct)
-    if card_cols[2] then
-      stat_card(mon, box.x + card_cols[1] + 1, second_y, card_cols[2], "Reaktoren", tostring(reactors) .. " online", string.format("Temp %s C | Steam %s", fmt(snapshot.avg_temp, 1), fmt(snapshot.steam_amount, 1)), reactors > 0 and "OK" or "WARNING")
-    end
-  end
-
-  if right_w then
-    local rbox = panel_box(mon, 2 + left_w + 1, top, right_w, metrics_h, "Kurzliste", health_status)
-    local y = rbox.y
-    ui.text(mon, rbox.x, y, fit("Master Vorgabe: " .. fmt(model.target_percent, 1, "%") .. " -> " .. fmt(target_power, 1) .. " RF/t", rbox.w), colors.get("text"), colors.get("background")); y = y + 1
-    ui.text(mon, rbox.x, y, fit("Capacity: " .. tostring(model.capacity_ready and "locked" or "learning") .. " samples=" .. tostring(model.capacity_stable_samples or 0), rbox.w), colors.get("muted"), colors.get("background")); y = y + 2
-    local tw = table_widths(rbox.w, { 9, 8, 8, 8 })
-    compact_header(mon, rbox.x, y, { "Turb", "RPM", "RF/t", "Coil" }, tw); y = y + 1
-    local turbines_list = snapshot.turbines or {}
-    for i = 1, math.min(#turbines_list, math.max(0, rbox.bottom - y)) do
-      local t = turbines_list[i]
-      compact_row(mon, rbox.x, y, { tostring(t.id or i), fmt(t.rpm, 0), fmt(t.energy, 1), t.inductor and "ON" or "OFF" }, tw, (t.bound == false) and "WARNING" or "OK", 4)
+  local list = snapshot.turbines or {}
+  if y <= h - 1 and #list > 0 then
+    simple_table_header(mon, y, { "T", "RPM", "RF/t", "C" }, { 7, 7, 9, 4 }); y = y + 1
+    for i = 1, math.min(#list, math.max(0, h - y)) do
+      local t = list[i]
+      simple_table_row(mon, y, { tostring(t.id or i), fmt(t.rpm, 0), fmt(t.energy, 1), t.inductor and "ON" or "OFF" }, { 7, 7, 9, 4 }, (t.bound == false) and "WARNING" or "OK", 4)
       y = y + 1
     end
-    if #turbines_list == 0 then ui.text(mon, rbox.x, y, "Keine Turbinen sichtbar", colors.get("WARNING"), colors.get("background")) end
   end
 end
 
 local function render_turbines(mon, model)
-  local w, h = ui.getSize(mon)
-  if not w or not h then return end
   local snapshot = monitor_snapshot(model) or {}
   local health_status = model.health and model.health.status or "OFFLINE"
-  ui.panel(mon, 1, 1, w, h, "RT TURBINES", health_status)
-  local top = render_header(mon, model, "Turbinen")
+  local w, h = clear_and_title(mon, "RT TURBINES", health_status)
+  local y = render_compact_header(mon, model, "Turbines")
   local turbines = snapshot.turbines or {}
-  local box = panel_box(mon, 2, top, w - 2, h - top, "Turbinen-Status", #turbines > 0 and "OK" or "WARNING")
-  ui.text(mon, box.x, box.y, fit(string.format("Total %d | Output %s RF/t | Avg RPM %s | Target %s", #turbines, fmt(snapshot.actual_output, 1), fmt(snapshot.avg_rpm, 0), fmt(model.target_rpm, 0)), box.w), colors.get("text"), colors.get("background"))
-  local widths = table_widths(box.w, { 10, 8, 8, 9, 8, 8, 12 })
-  local y = box.y + 2
-  compact_header(mon, box.x, y, { "ID", "RPM", "Flow", "RF/t", "Coil", "Act", "Note" }, widths); y = y + 1
-  for i = 1, math.min(#turbines, math.max(0, box.bottom - y)) do
+  write_line(mon, y, string.format("Total %d  Out %s  AvgRPM %s", #turbines, fmt(snapshot.actual_output, 1), fmt(snapshot.avg_rpm, 0)), "text"); y = y + 1
+  simple_table_header(mon, y, { "ID", "RPM", "Flow", "RF/t", "C" }, { 8, 7, 7, 8, 4 }); y = y + 1
+  for i = 1, math.min(#turbines, math.max(0, h - y)) do
     local t = turbines[i]
     local status = (t.bound == false) and "WARNING" or "OK"
-    local note = "stable"
-    if not t.rpm then note = "no rpm" elseif num(model.target_rpm, 0) > 0 and math.abs(num(t.rpm, 0) - num(model.target_rpm, 0)) > 40 then status = "WARNING"; note = "rpm drift" end
-    compact_row(mon, box.x, y, { tostring(t.id or i), fmt(t.rpm, 0), fmt(t.flow, 0), fmt(t.energy, 1), t.inductor and "ON" or "OFF", t.active and "ON" or "OFF", note }, widths, status, 7)
+    if t.rpm and num(model.target_rpm, 0) > 0 and math.abs(num(t.rpm, 0) - num(model.target_rpm, 0)) > 40 then status = "WARNING" end
+    simple_table_row(mon, y, { tostring(t.id or i), fmt(t.rpm, 0), fmt(t.flow, 0), fmt(t.energy, 1), t.inductor and "ON" or "OFF" }, { 8, 7, 7, 8, 4 }, status, 5)
     y = y + 1
   end
-  if #turbines == 0 then ui.text(mon, box.x, y, "Keine Turbinen sichtbar", colors.get("WARNING"), colors.get("background")) end
+  if #turbines == 0 then write_line(mon, y, "Keine Turbinen sichtbar", "WARNING") end
 end
 
 local function render_reactors(mon, model)
-  local w, h = ui.getSize(mon)
-  if not w or not h then return end
   local snapshot = monitor_snapshot(model) or {}
   local health_status = model.health and model.health.status or "OFFLINE"
-  ui.panel(mon, 1, 1, w, h, "RT REACTORS", health_status)
-  local top = render_header(mon, model, "Reaktoren")
+  local w, h = clear_and_title(mon, "RT REACTORS", health_status)
+  local y = render_compact_header(mon, model, "Reactors")
   local reactors = snapshot.reactors or {}
-  local box = panel_box(mon, 2, top, w - 2, h - top, "Reaktor-Status", #reactors > 0 and "OK" or "WARNING")
-  ui.text(mon, box.x, box.y, fit(string.format("Total %d | Avg Temp %s C | Max Temp %s C | Steam %s", #reactors, fmt(snapshot.avg_temp, 1), fmt(snapshot.max_temp, 1), fmt(snapshot.steam_amount, 1)), box.w), colors.get("text"), colors.get("background"))
-  local widths = table_widths(box.w, { 10, 9, 8, 8, 10, 10, 12 })
-  local y = box.y + 2
-  compact_header(mon, box.x, y, { "ID", "Temp", "Rods", "Act", "Steam", "Coolant", "Note" }, widths); y = y + 1
-  for i = 1, math.min(#reactors, math.max(0, box.bottom - y)) do
+  write_line(mon, y, string.format("Total %d  AvgT %sC  Steam %s", #reactors, fmt(snapshot.avg_temp, 1), fmt(snapshot.steam_amount, 1)), "text"); y = y + 1
+  simple_table_header(mon, y, { "ID", "Temp", "Rods", "Act", "Steam" }, { 8, 8, 7, 5, 8 }); y = y + 1
+  for i = 1, math.min(#reactors, math.max(0, h - y)) do
     local r = reactors[i]
-    local status = (r.bound == false) and "WARNING" or "OK"
-    local note = "stable"
-    if r.active == false then status = "LIMITED"; note = "inactive" end
-    compact_row(mon, box.x, y, { tostring(r.id or i), fmt(r.temperature, 1), fmt(r.rods, 0), r.active and "ON" or "OFF", fmt(r.steam_production, 1), fmt(r.coolant_filled_percentage, 1, "%"), note }, widths, status, 7)
+    local status = (r.bound == false) and "WARNING" or (r.active == false and "LIMITED" or "OK")
+    simple_table_row(mon, y, { tostring(r.id or i), fmt(r.temperature, 1), fmt(r.rods, 0), r.active and "ON" or "OFF", fmt(r.steam_production, 1) }, { 8, 8, 7, 5, 8 }, status, 4)
     y = y + 1
   end
-  if #reactors == 0 then ui.text(mon, box.x, y, "Keine Reaktoren sichtbar", colors.get("WARNING"), colors.get("background")) end
+  if #reactors == 0 then write_line(mon, y, "Keine Reaktoren sichtbar", "WARNING") end
 end
 
 local function render_diagnostics(mon, model)
-  local w, h = ui.getSize(mon)
-  if not w or not h then return end
   local health_status = model.health and model.health.status or "OFFLINE"
-  ui.panel(mon, 1, 1, w, h, "RT DIAGNOSTICS", health_status)
-  local top = render_header(mon, model, "Diagnose")
-  local cols = split_columns(w - 2, w >= 64 and { 1, 1 } or { 1 }, 1)
-  local left_w = cols[1]
-  local right_w = cols[2]
-  local box = panel_box(mon, 2, top, left_w, h - top, "Runtime", master_status(model))
+  local w, h = clear_and_title(mon, "RT DIAG", health_status)
+  local y = render_compact_header(mon, model, "Diag")
   local rows = {
     { "Master", tostring(model.master_state or "UNKNOWN") .. " age " .. tostring(model.master_age or "n/a"), master_status(model) },
     { "Comms", string.format("tx/rx %d/%d", model.metrics.sent or 0, model.metrics.received or 0), "OK" },
-    { "Retry", string.format("retries %d drops %d", model.metrics.retries or 0, model.metrics.dropped or 0), ((model.metrics.dropped or 0) > 0) and "WARNING" or "OK" },
-    { "Setpoint", string.format("power %s / %s", fmt(model.target_power, 1), fmt(model.target_percent, 1, "%")), "LIMITED" },
-    { "RPM/Steam", string.format("rpm %s steam %s", fmt(model.target_rpm, 0), fmt(model.target_steam, 1)), "LIMITED" },
-    { "Capacity", string.format("max %s ready=%s src=%s", fmt(model.capacity_max, 1), tostring(model.capacity_ready), tostring(model.capacity_source or "-")), capacity_status(model) },
-    { "Last cmd", tostring(model.last_command or "none") .. " " .. tostring(model.last_command_ts or "n/a"), "OK" },
-    { "Last scan", tostring(model.last_scan or "n/a"), "OK" }
+    { "Retry", string.format("r%d d%d", model.metrics.retries or 0, model.metrics.dropped or 0), ((model.metrics.dropped or 0) > 0) and "WARNING" or "OK" },
+    { "Set", string.format("%s / %s", fmt(model.target_power, 1), fmt(model.target_percent, 1, "%")), "LIMITED" },
+    { "RPM", fmt(model.target_rpm, 0) .. " steam " .. fmt(model.target_steam, 1), "LIMITED" },
+    { "Cap", fmt(model.capacity_max, 1) .. " " .. tostring(model.capacity_source or "-"), capacity_status(model) },
+    { "Cmd", tostring(model.last_command or "none") .. " " .. tostring(model.last_command_ts or "n/a"), "OK" },
+    { "Scan", tostring(model.last_scan or "n/a"), "OK" }
   }
-  local widths = table_widths(box.w, { 12, box.w - 12 })
-  local y = box.y
   for _, r in ipairs(rows) do
-    if y > box.bottom then break end
-    compact_row(mon, box.x, y, { r[1], r[2] }, widths, r[3], 1)
+    if y > h then break end
+    ui.text(mon, 2, y, pad(r[1], 8), colors.get(r[3]), colors.get("background"))
+    ui.text(mon, 10, y, fit(r[2], math.max(1, w - 11)), colors.get("text"), colors.get("background"))
     y = y + 1
   end
-
-  if right_w then
-    local abox = panel_box(mon, 2 + left_w + 1, top, right_w, h - top, "Alerts", (model.local_alerts_critical or 0) > 0 and "EMERGENCY" or "OK")
-    local alerts = model.local_alerts or {}
-    if #alerts == 0 then
-      ui.text(mon, abox.x, abox.y, "Keine lokalen Alerts", colors.get("OK"), colors.get("background"))
-    else
-      local y2 = abox.y
-      for i = 1, math.min(#alerts, abox.h) do
-        local a = alerts[i]
-        local sev = tostring(a.severity or "INFO")
-        ui.badge(mon, abox.x, y2, fit(sev, 7), sev == "CRITICAL" and "EMERGENCY" or (sev == "WARN" and "WARNING" or "OK"))
-        ui.text(mon, abox.x + 9, y2, fit(tostring(a.title or a.message or a.code or "alert"), math.max(4, abox.w - 10)), colors.get("text"), colors.get("background"))
-        y2 = y2 + 1
-      end
+  local alerts = model.local_alerts or {}
+  if y <= h and #alerts > 0 then
+    write_line(mon, y, "Alerts:", "WARNING"); y = y + 1
+    for i = 1, math.min(#alerts, math.max(0, h - y + 1)) do
+      local a = alerts[i]
+      write_line(mon, y, tostring(a.severity or "INFO") .. " " .. tostring(a.title or a.message or a.code or "alert"), a.severity == "CRITICAL" and "EMERGENCY" or "WARNING")
+      y = y + 1
     end
   end
 end
@@ -500,11 +404,9 @@ function M.update(monitor, ctx)
 
   local node_id = snapshot and snapshot.node_id or ctx.config.node_id
   local alert_payload = ctx.master_alerts and ctx.master_alerts.by_node and ctx.master_alerts.by_node[node_id] or nil
-  local local_alerts = alert_payload and alert_payload.top or {}
-  local local_critical = alert_payload and alert_payload.critical or 0
   local targets = ctx.targets or {}
   local model = {
-    snapshot = { snapshot = snapshot, local_alerts = local_critical },
+    snapshot = { snapshot = snapshot, local_alerts = alert_payload and alert_payload.critical or 0 },
     health = health_payload,
     summary = summary,
     comms = comms_diag,
@@ -514,8 +416,8 @@ function M.update(monitor, ctx)
     last_scan = ctx.devices.last_scan_ts and (math.floor((now - ctx.devices.last_scan_ts) / 1000) .. "s") or "n/a",
     last_command = ctx.last_command,
     last_command_ts = ctx.last_command_ts and (math.floor((now - ctx.last_command_ts) / 1000) .. "s") or "n/a",
-    local_alerts = local_alerts,
-    local_alerts_critical = local_critical,
+    local_alerts = alert_payload and alert_payload.top or {},
+    local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = node_id,
     current_state = ctx.current_state,
     node_state = ctx.node_state_machine and ctx.node_state_machine:state() or ctx.current_state,
