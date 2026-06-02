@@ -32,6 +32,67 @@ local stats = {
   modem = nil
 }
 
+local function c(name)
+  if not colors then return nil end
+  return colors[name] or colors.white
+end
+
+local function set_fg(color)
+  if term.setTextColor and color then term.setTextColor(color) end
+end
+
+local function set_bg(color)
+  if term.setBackgroundColor and color then term.setBackgroundColor(color) end
+end
+
+local function fit(text, width)
+  local raw = tostring(text or ""):gsub("\n", " "):gsub("\r", " ")
+  local w = math.max(1, tonumber(width) or #raw)
+  if #raw <= w then return raw end
+  if w <= 2 then return raw:sub(1, w) end
+  return raw:sub(1, w - 1) .. "~"
+end
+
+local function pad(text, width)
+  local s = fit(text, width)
+  return s .. string.rep(" ", math.max(0, width - #s))
+end
+
+local function line(x, y, text, fg, bg)
+  local w = ({ term.getSize() })[1] or 40
+  term.setCursorPos(x, y)
+  set_fg(fg or c("white"))
+  set_bg(bg or c("black"))
+  term.write(fit(text, math.max(1, w - x + 1)))
+end
+
+local function badge(x, y, text, status)
+  local fg = c("black")
+  local bg = c("gray")
+  if status == "OK" then bg = c("lime") elseif status == "WARN" then bg = c("yellow") elseif status == "ERR" then bg = c("red") elseif status == "INFO" then bg = c("cyan") end
+  term.setCursorPos(x, y)
+  set_fg(fg); set_bg(bg)
+  local label = " " .. fit(text, 10) .. " "
+  term.write(label)
+  set_fg(c("white")); set_bg(c("black"))
+  return #label
+end
+
+local function progress(x, y, width, pct, status)
+  local p = tonumber(pct) or 0
+  p = math.max(0, math.min(1, p))
+  local fill = math.floor(width * p)
+  local bg = c("gray")
+  local fg = c("lime")
+  if status == "WARN" then fg = c("yellow") elseif status == "ERR" then fg = c("red") end
+  term.setCursorPos(x, y)
+  for i = 1, width do
+    set_bg(i <= fill and fg or bg)
+    term.write(" ")
+  end
+  set_bg(c("black")); set_fg(c("white"))
+end
+
 local function ensure_dir(path)
   if fs.exists(path) then return fs.isDir(path) end
   local ok = pcall(fs.makeDir, path)
@@ -219,11 +280,11 @@ local function try_write_to_disk(disk_entry, payload, allow_aggressive_prune)
   if free_space(root) < MIN_FREE_BYTES then prune_any_logs(root, false) end
   if free_space(root) < 256 and allow_aggressive_prune then prune_any_logs(root, true) end
   if free_space(root) < 256 then return false, "disk full" end
-  local line = format_line(payload) .. "\n"
+  local line_text = format_line(payload) .. "\n"
   local ok, err = pcall(function()
     local h = fs.open(path, "a")
     if not h then error("open failed") end
-    h.write(line)
+    h.write(line_text)
     h.close()
   end)
   if not ok and allow_aggressive_prune then
@@ -231,7 +292,7 @@ local function try_write_to_disk(disk_entry, payload, allow_aggressive_prune)
     ok, err = pcall(function()
       local h = fs.open(path, "a")
       if not h then error("open failed") end
-      h.write(line)
+      h.write(line_text)
       h.close()
     end)
   end
@@ -243,7 +304,7 @@ local function write_log(payload)
   refresh_disks_if_needed(false)
   local count = math.max(1, #stats.disks)
   local last_err = nil
-  for attempt = 1, count do
+  for _ = 1, count do
     local disk_entry = current_disk()
     local ok, err = try_write_to_disk(disk_entry, payload, false)
     if ok then return true end
@@ -277,25 +338,55 @@ local function find_modem()
   return fallback_name, fallback_modem
 end
 
+local function draw_disk_bar(y)
+  local w = ({ term.getSize() })[1] or 40
+  local disks = math.max(1, #stats.disks)
+  local x = 2
+  local max_width = math.max(8, w - 3)
+  local per = math.max(3, math.floor(max_width / disks))
+  for i = 1, disks do
+    local d = stats.disks[i]
+    local free = free_space(d and d.root or "/")
+    local status = (i == stats.disk_index) and "INFO" or (free < MIN_FREE_BYTES and "WARN" or "OK")
+    local label = tostring(i)
+    if disks <= 8 then label = tostring(i) .. ":" .. tostring(d and d.mount or "?"):gsub("/disk", "d") end
+    x = x + badge(x, y, fit(label, per - 2), status)
+    if x > max_width then break end
+  end
+end
+
 local function draw()
   refresh_disks_if_needed(false)
   local disk_entry = current_disk() or {}
+  local w, h = term.getSize()
   term.clear()
-  term.setCursorPos(1, 1)
-  print("XReactor LOG COLLECTOR")
-  print("Channel: " .. tostring(CHANNEL))
-  print("Modem:   " .. tostring(stats.modem or "none"))
-  print("Disk:    " .. tostring(stats.disk_index) .. "/" .. tostring(#stats.disks) .. " " .. tostring(disk_entry.mount or "n/a"))
-  print("Root:    " .. tostring(stats.log_root or "n/a"))
-  print("Free:    " .. tostring(free_space(stats.log_root or "/")))
-  print("Recv:    " .. tostring(stats.received))
-  print("Written: " .. tostring(stats.written))
-  print("Dropped: " .. tostring(stats.dropped))
-  print("Switch:  " .. tostring(stats.disk_switches))
-  print("Rotated: " .. tostring(stats.rotated))
-  print("Pruned:  " .. tostring(stats.pruned))
-  print("Last:    " .. tostring(stats.last_node) .. " " .. tostring(stats.last_level))
-  if stats.last_error then print("Error:   " .. tostring(stats.last_error)) end
+  set_bg(c("black")); set_fg(c("white"))
+  line(1, 1, string.rep(" ", w), c("black"), c("gray"))
+  line(2, 1, " XReactor LOG ", c("black"), c("gray"))
+  local status = stats.last_error and "WARN" or "OK"
+  local x = 2
+  x = x + badge(x, 2, stats.last_error and "WARN" or "OK", status) + 1
+  x = x + badge(x, 2, "CH " .. tostring(CHANNEL), "INFO") + 1
+  x = x + badge(x, 2, tostring(stats.modem or "NO-MODEM"), stats.modem and "OK" or "ERR")
+  line(2, 4, "Disk Ring", c("cyan"))
+  draw_disk_bar(5)
+  line(2, 6, string.format("Active %s/%s  %s", tostring(stats.disk_index), tostring(#stats.disks), tostring(disk_entry.mount or "n/a")), c("white"))
+  line(2, 7, fit("Root " .. tostring(stats.log_root or "n/a"), w - 2), c("lightGray"))
+  local free = free_space(stats.log_root or "/")
+  line(2, 8, "Free " .. tostring(free) .. " bytes", free < MIN_FREE_BYTES and c("yellow") or c("lime"))
+  progress(2, 9, math.max(8, w - 3), free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free < MIN_FREE_BYTES and "WARN" or "OK")
+  line(2, 11, "Traffic", c("cyan"))
+  line(2, 12, string.format("Recv %-7s Written %-7s Drop %-5s", tostring(stats.received), tostring(stats.written), tostring(stats.dropped)), c("white"))
+  line(2, 13, string.format("Switch %-5s Rotate %-5s Prune %-5s", tostring(stats.disk_switches), tostring(stats.rotated), tostring(stats.pruned)), c("lightGray"))
+  line(2, 15, "Last", c("cyan"))
+  line(2, 16, fit(tostring(stats.last_node) .. "  " .. tostring(stats.last_level), w - 3), c("white"))
+  if stats.last_error then
+    line(2, 18, "Error", c("red"))
+    line(2, 19, fit(tostring(stats.last_error), w - 3), c("red"))
+  elseif h >= 18 then
+    line(2, 18, "Status stable", c("lime"))
+  end
+  set_fg(c("white")); set_bg(c("black"))
 end
 
 local function run()
