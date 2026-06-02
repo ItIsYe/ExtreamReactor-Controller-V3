@@ -10,6 +10,8 @@ local CONFIG = {
 local utils = {}
 
 local logger = require("core.logger")
+local remote_log_ok, remote_log = pcall(require, "core.remote_log")
+if not remote_log_ok then remote_log = nil end
 
 local function read_file(path)
   if not path or not fs.exists(path) then
@@ -174,7 +176,7 @@ function utils.load_config(path, defaults)
         utils.merge_defaults(data, defaults)
       end
       meta.source = "lua"
-      return migrated, meta
+      return migrated
     end
     if not ok then
       err = data
@@ -226,12 +228,20 @@ end
 
 -- Initialize file logging for the current runtime.
 function utils.init_logger(opts)
-  return logger.init(normalize_logger_opts(opts))
+  local result = logger.init(normalize_logger_opts(opts))
+  if remote_log and type(remote_log.init) == "function" then
+    pcall(remote_log.init, opts or {})
+  end
+  return result
 end
 
 -- Log a message using the shared logger (no terminal spam).
 function utils.log(prefix, message, level)
-  local ok = pcall(logger.log, prefix or CONFIG.LOGGER_DEFAULT_PREFIX, message, level)
+  local resolved_prefix = prefix or CONFIG.LOGGER_DEFAULT_PREFIX
+  if remote_log and type(remote_log.send) == "function" then
+    pcall(remote_log.send, resolved_prefix, level or "INFO", message)
+  end
+  local ok = pcall(logger.log, resolved_prefix, message, level)
   if not ok then
     pcall(print, "WARN: logging suppressed due to non-fatal logger failure")
   end
@@ -318,31 +328,19 @@ function utils.read_node_id(path)
 end
 
 function utils.build_log_name(base, node_id)
-  local name = tostring(base or "xreactor")
-  if node_id and node_id ~= "" then
-    return name .. CONFIG.LOG_NAME_SEPARATOR .. tostring(node_id)
+  local prefix = tostring(base or CONFIG.LOGGER_DEFAULT_PREFIX):lower()
+  if not node_id or node_id == "" then
+    return prefix
   end
-  return name
+  local sanitized = tostring(node_id):lower():gsub("[^%w%-_]+", CONFIG.LOG_NAME_SEPARATOR)
+  return prefix .. CONFIG.LOG_NAME_SEPARATOR .. sanitized
 end
 
-function utils.normalize_node_id(value)
-  local value_type = type(value)
-  if value_type == "string" then
-    return value
-  end
-  if value_type == "number" then
-    return tostring(value)
-  end
-  if value_type == "table" then
-    local candidates = { "node_id", "id", "name", "uuid", "uid" }
-    for _, key in ipairs(candidates) do
-      local candidate = value[key]
-      if type(candidate) == "string" or type(candidate) == "number" then
-        return tostring(candidate)
-      end
-    end
-  end
-  return "UNKNOWN"
+function utils.init_role_logger(role, node_id, opts)
+  opts = opts or {}
+  opts.prefix = role or opts.prefix
+  opts.log_name = opts.log_name or utils.build_log_name(role, node_id)
+  return utils.init_logger(opts)
 end
 
 return utils
