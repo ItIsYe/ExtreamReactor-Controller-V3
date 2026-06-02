@@ -1,4 +1,14 @@
-local constants = require("shared.constants")
+if type(package) == "table" and type(package.path) == "string" then
+  local extra = ";/xreactor/?.lua;/xreactor/?/init.lua;/xreactor/?/main.lua"
+  if not package.path:find("/xreactor/%?%.lua", 1, false) then
+    package.path = package.path .. extra
+  end
+end
+
+local ok_constants, constants = pcall(require, "shared.constants")
+if not ok_constants or type(constants) ~= "table" then
+  constants = { channels = { LOG = 6502 } }
+end
 
 local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local DEFAULT_ROOTS = { "/disk", "/disk1", "/disk2", "/xreactor_collected_logs" }
@@ -175,7 +185,7 @@ local function run()
   modem.open(CHANNEL)
   draw()
   while true do
-    local event, side, channel, reply_channel, message = os.pullEvent("modem_message")
+    local _, _, channel, _, message = os.pullEvent("modem_message")
     if channel == CHANNEL and type(message) == "table" and message.type == "LOG_EVENT" then
       stats.received = stats.received + 1
       stats.last_node = message.node_id or "?"
