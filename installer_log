@@ -1,0 +1,51 @@
+local BASE = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
+local ROOT = "/xreactor"
+
+local files = {
+  "start.lua",
+  "shared/constants.lua",
+  "core/logger.lua",
+  "core/remote_log.lua",
+  "nodes/log_collector/main.lua"
+}
+
+local function ensure_dir(path)
+  if path and path ~= "" and not fs.exists(path) then fs.makeDir(path) end
+end
+
+local function write_file(path, body)
+  ensure_dir(fs.getDir(path))
+  local h = fs.open(path, "w")
+  if not h then error("open failed: " .. tostring(path), 0) end
+  h.write(body)
+  h.close()
+end
+
+local function download(rel)
+  local url = BASE .. rel .. "?xr_cb=log-collector-" .. tostring(os.epoch and os.epoch("utc") or os.time())
+  print("Downloading " .. rel)
+  local r = http.get(url)
+  if not r then error("download failed: " .. rel, 0) end
+  local body = r.readAll()
+  r.close()
+  if type(body) ~= "string" or body == "" then error("empty download: " .. rel, 0) end
+  if body:sub(1, 20):lower():find("<html", 1, true) then error("html download: " .. rel, 0) end
+  if rel:sub(-4) == ".lua" then
+    local ok, err = load(body, "=" .. rel, "t", {})
+    if not ok then error("lua parse failed: " .. rel .. " " .. tostring(err), 0) end
+  end
+  write_file(ROOT .. "/" .. rel, body)
+end
+
+print("XReactor LOG Collector standalone installer")
+if fs.exists(ROOT) then
+  print("Cleaning old minimal log install")
+  if fs.exists(ROOT .. "/nodes/log_collector") then fs.delete(ROOT .. "/nodes/log_collector") end
+end
+
+for _, rel in ipairs(files) do download(rel) end
+write_file(ROOT .. "/config/role.lua", "return { role = \"LOG\" }\n")
+write_file("/startup", "-- XReactor LOG startup\nshell.run(\"/xreactor/start.lua\")\n")
+print("LOG collector installed. Rebooting in 3 seconds...")
+os.sleep(3)
+os.reboot()
