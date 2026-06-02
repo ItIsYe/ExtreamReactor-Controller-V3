@@ -32,6 +32,45 @@ function M.read_role_config(ctx)
   return nil
 end
 
+local function metadata_body_for(ctx, rel_path)
+  if rel_path == "release.lua" then
+    return ctx.remote_release_body or ctx.release_metadata_body
+  end
+  if rel_path == "manifest.lua" then
+    return ctx.remote_manifest_body or ctx.manifest_metadata_body
+  end
+  return nil
+end
+
+local function write_cached_metadata(ctx, entry, target_path, body)
+  if type(body) ~= "string" or body == "" then
+    return false, "remote metadata cache missing for " .. tostring(entry.path)
+  end
+  local size_ok, actual_size = ctx.size_matches(entry, body)
+  if not size_ok then
+    return false, string.format(
+      "remote metadata size mismatch for %s (expected=%s actual=%s)",
+      tostring(entry.path),
+      tostring(entry.size_bytes),
+      tostring(actual_size)
+    )
+  end
+  local hash_ok, actual_hash = ctx.hash_matches(entry, body)
+  if not hash_ok then
+    return false, string.format(
+      "remote metadata hash mismatch for %s (expected=%s actual=%s)",
+      tostring(entry.path),
+      tostring(entry.hash),
+      tostring(actual_hash)
+    )
+  end
+  local ok, err = ctx.write_file(target_path, body)
+  if ok then
+    ok, err = ctx.validate_download(target_path)
+  end
+  return ok, err
+end
+
 function M.stage_expected_files(ctx, expected)
   if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
     ctx.info("Removing stale stage root")
@@ -49,42 +88,10 @@ function M.stage_expected_files(ctx, expected)
   for _, entry in pairs(expected) do
     local target_path = ctx.constants.STAGE_ROOT .. "/" .. entry.path
     local ok, err
-    if entry.path == "release.lua" and ctx.source_ref == "beta" then
-      ctx.info("Reusing cached release metadata for release.lua in beta install strategy")
-      if type(ctx.release_metadata_body) ~= "string" or ctx.release_metadata_body == "" then
-        if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
-          ctx.fs.delete(ctx.constants.STAGE_ROOT)
-        end
-        return false, "Beta release metadata cache missing for release.lua"
-      end
-      local size_ok, actual_size = ctx.size_matches(entry, ctx.release_metadata_body)
-      if not size_ok then
-        if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
-          ctx.fs.delete(ctx.constants.STAGE_ROOT)
-        end
-        return false, string.format(
-          "cached release metadata size mismatch for %s (expected=%s actual=%s)",
-          tostring(entry.path),
-          tostring(entry.size_bytes),
-          tostring(actual_size)
-        )
-      end
-      local hash_ok, actual_hash = ctx.hash_matches(entry, ctx.release_metadata_body)
-      if not hash_ok then
-        if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
-          ctx.fs.delete(ctx.constants.STAGE_ROOT)
-        end
-        return false, string.format(
-          "cached release metadata hash mismatch for %s (expected=%s actual=%s)",
-          tostring(entry.path),
-          tostring(entry.hash),
-          tostring(actual_hash)
-        )
-      end
-      ok, err = ctx.write_file(target_path, ctx.release_metadata_body)
-      if ok then
-        ok, err = ctx.validate_download(target_path)
-      end
+    local metadata_body = metadata_body_for(ctx, entry.path)
+    if metadata_body then
+      ctx.info("Writing verified remote metadata body for " .. tostring(entry.path))
+      ok, err = write_cached_metadata(ctx, entry, target_path, metadata_body)
     else
       ok, err = ctx.download_file(entry.path, target_path, entry)
     end
