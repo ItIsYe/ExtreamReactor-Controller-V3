@@ -1,17 +1,27 @@
 -- CONFIG
 local CONFIG = {
-  LOGGER_DEFAULT_PREFIX = "LOG", -- Fallback prefix when none is provided.
-  NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Default node_id storage path.
-  LOG_NAME_SEPARATOR = "_", -- Separator for log file names.
-  DEFAULT_LOG_DIR = "/disk/xreactor_logs" -- Preferred config value; init_logger treats it as auto-disk selection.
+  LOGGER_DEFAULT_PREFIX = "LOG",
+  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  ROLE_CONFIG_PATH = "/xreactor/config/role.lua",
+  LOG_NAME_SEPARATOR = "_",
+  DEFAULT_LOG_DIR = "/disk/xreactor_logs",
+  REMOTE_LOG_CHANNEL = 6502
 }
 
--- Utility helpers shared across nodes.
 local utils = {}
 
 local logger = require("core.logger")
-local remote_log_ok, remote_log = pcall(require, "core.remote_log")
-if not remote_log_ok then remote_log = nil end
+
+local remote_log_state = {
+  initialized = false,
+  enabled = true,
+  modem = nil,
+  modem_name = nil,
+  node_id = nil,
+  role = nil,
+  sent = 0,
+  dropped = 0
+}
 
 local function read_file(path)
   if not path or not fs.exists(path) then
@@ -24,6 +34,98 @@ local function read_file(path)
   local content = file.readAll()
   file.close()
   return content
+end
+
+local function trim_text(text)
+  return tostring(text or ""):match("^%s*(.-)%s*$") or ""
+end
+
+local function read_role_config_value()
+  local content = read_file(CONFIG.ROLE_CONFIG_PATH)
+  if not content then return "UNKNOWN" end
+  local loader = load(content, "=role", "t", {})
+  if not loader then return "UNKNOWN" end
+  local ok, result = pcall(loader)
+  if ok and type(result) == "table" and type(result.role) == "string" then
+    return result.role
+  end
+  return "UNKNOWN"
+end
+
+local function resolve_node_id()
+  local value = trim_text(read_file(CONFIG.NODE_ID_PATH) or "")
+  if value ~= "" then return value end
+  if os and type(os.getComputerID) == "function" then
+    return "pc-" .. tostring(os.getComputerID())
+  end
+  return "unknown-node"
+end
+
+local function find_wireless_modem()
+  if not peripheral or type(peripheral.getNames) ~= "function" then return nil, nil end
+  local ok, names = pcall(peripheral.getNames)
+  if not ok or type(names) ~= "table" then return nil, nil end
+  local fallback_name, fallback_modem = nil, nil
+  for _, name in ipairs(names) do
+    local type_ok, ptype = pcall(peripheral.getType, name)
+    if type_ok and ptype == "modem" then
+      local wrap_ok, modem = pcall(peripheral.wrap, name)
+      if wrap_ok and modem then
+        local wireless = false
+        if type(modem.isWireless) == "function" then
+          local wireless_ok, result = pcall(modem.isWireless)
+          wireless = wireless_ok and result == true
+        end
+        if wireless then return name, modem end
+        fallback_name = fallback_name or name
+        fallback_modem = fallback_modem or modem
+      end
+    end
+  end
+  return fallback_name, fallback_modem
+end
+
+local function settings_bool(key, fallback)
+  if settings and type(settings.get) == "function" then
+    local value = settings.get(key)
+    if type(value) == "boolean" then return value end
+  end
+  return fallback
+end
+
+local function init_remote_log(opts)
+  opts = opts or {}
+  if remote_log_state.initialized then return end
+  remote_log_state.enabled = opts.remote_logging
+  if remote_log_state.enabled == nil then
+    remote_log_state.enabled = settings_bool("xreactor.remote_logging", true)
+  end
+  remote_log_state.node_id = opts.node_id or resolve_node_id()
+  remote_log_state.role = opts.prefix or read_role_config_value()
+  remote_log_state.modem_name, remote_log_state.modem = find_wireless_modem()
+  remote_log_state.initialized = true
+end
+
+local function send_remote_log(prefix, level, message)
+  local ok = pcall(function()
+    if not remote_log_state.initialized then init_remote_log({ prefix = prefix }) end
+    if not remote_log_state.enabled or not remote_log_state.modem then
+      remote_log_state.dropped = remote_log_state.dropped + 1
+      return
+    end
+    remote_log_state.modem.transmit(CONFIG.REMOTE_LOG_CHANNEL, CONFIG.REMOTE_LOG_CHANNEL, {
+      type = "LOG_EVENT",
+      proto = "xreactor-log-v1",
+      node_id = remote_log_state.node_id or resolve_node_id(),
+      role = remote_log_state.role or read_role_config_value(),
+      prefix = tostring(prefix or "LOG"),
+      level = tostring(level or "INFO"),
+      message = tostring(message or ""),
+      ts = os and os.epoch and os.epoch("utc") or nil
+    })
+    remote_log_state.sent = remote_log_state.sent + 1
+  end)
+  if not ok then remote_log_state.dropped = remote_log_state.dropped + 1 end
 end
 
 local function sanitize_snapshot(value, active)
@@ -68,39 +170,25 @@ function utils.safe_serialize(value)
 end
 
 function utils.ensure_dir(path)
-  if not path or path == "" then
-    return
-  end
-  if not fs.exists(path) then
-    fs.makeDir(path)
-  end
+  if not path or path == "" then return end
+  if not fs.exists(path) then fs.makeDir(path) end
 end
 
 function utils.read_config(path, defaults)
-  if not fs.exists(path) then
-    return defaults or {}
-  end
+  if not fs.exists(path) then return defaults or {} end
   local file = fs.open(path, "r")
-  if not file then
-    return defaults or {}
-  end
+  if not file then return defaults or {} end
   local content = file.readAll()
   file.close()
   local ok, data = pcall(textutils.unserialize, content)
-  if ok and type(data) == "table" then
-    return data
-  end
+  if ok and type(data) == "table" then return data end
   return defaults or {}
 end
 
 function utils.deep_copy(value, seen)
-  if type(value) ~= "table" then
-    return value
-  end
+  if type(value) ~= "table" then return value end
   seen = seen or {}
-  if seen[value] then
-    return seen[value]
-  end
+  if seen[value] then return seen[value] end
   local copy = {}
   seen[value] = copy
   for key, item in pairs(value) do
@@ -124,13 +212,9 @@ function utils.merge_defaults(target, defaults)
 end
 
 local function migrate_config(path, data, defaults, meta)
-  if type(defaults) ~= "table" then
-    return data
-  end
+  if type(defaults) ~= "table" then return data end
   local target_version = type(defaults.version) == "number" and defaults.version or nil
-  if not target_version then
-    return data
-  end
+  if not target_version then return data end
   local original = utils.deep_copy(data)
   local changed = utils.merge_defaults(data, defaults)
   local loaded_version = type(data.version) == "number" and data.version or 1
@@ -138,9 +222,7 @@ local function migrate_config(path, data, defaults, meta)
     data.version = target_version
     changed = true
   end
-  if not changed then
-    return data
-  end
+  if not changed then return data end
   local ok, err = pcall(utils.write_config, path, data)
   if ok then
     meta.migrated = true
@@ -154,19 +236,10 @@ end
 function utils.load_config(path, defaults)
   local meta = { path = path, source = "defaults" }
   local fallback = utils.deep_copy(defaults or {})
-  if not path then
-    meta.reason = "missing path"
-    return fallback, meta
-  end
-  if not fs.exists(path) then
-    meta.reason = "missing"
-    return fallback, meta
-  end
+  if not path then meta.reason = "missing path"; return fallback, meta end
+  if not fs.exists(path) then meta.reason = "missing"; return fallback, meta end
   local content = read_file(path)
-  if not content then
-    meta.reason = "unreadable"
-    return fallback, meta
-  end
+  if not content then meta.reason = "unreadable"; return fallback, meta end
   local loader, err = load(content, "config", "t", {})
   if loader then
     local ok, data = pcall(loader)
@@ -178,9 +251,7 @@ function utils.load_config(path, defaults)
       meta.source = "lua"
       return migrated
     end
-    if not ok then
-      err = data
-    end
+    if not ok then err = data end
   end
   if textutils and textutils.unserialize then
     local ok, data = pcall(textutils.unserialize, content)
@@ -201,46 +272,30 @@ end
 function utils.write_config(path, tbl)
   utils.ensure_dir(fs.getDir(path))
   local file = fs.open(path, "w")
-  if not file then
-    error("Unable to write config at " .. path)
-  end
+  if not file then error("Unable to write config at " .. path) end
   local serialized, err = safe_serialize(tbl)
-  if not serialized then
-    error("Config serialize failed: " .. tostring(err))
-  end
+  if not serialized then error("Config serialize failed: " .. tostring(err)) end
   file.write(serialized)
   file.close()
 end
 
 local function normalize_logger_opts(opts)
   opts = opts or {}
-  if opts.log_dir ~= CONFIG.DEFAULT_LOG_DIR and opts.log_dir ~= "auto" then
-    return opts
-  end
+  if opts.log_dir ~= CONFIG.DEFAULT_LOG_DIR and opts.log_dir ~= "auto" then return opts end
   local normalized = {}
-  for k, v in pairs(opts) do
-    if k ~= "log_dir" then
-      normalized[k] = v
-    end
-  end
+  for k, v in pairs(opts) do if k ~= "log_dir" then normalized[k] = v end end
   return normalized
 end
 
--- Initialize file logging for the current runtime.
 function utils.init_logger(opts)
   local result = logger.init(normalize_logger_opts(opts))
-  if remote_log and type(remote_log.init) == "function" then
-    pcall(remote_log.init, opts or {})
-  end
+  init_remote_log(opts or {})
   return result
 end
 
--- Log a message using the shared logger (no terminal spam).
 function utils.log(prefix, message, level)
   local resolved_prefix = prefix or CONFIG.LOGGER_DEFAULT_PREFIX
-  if remote_log and type(remote_log.send) == "function" then
-    pcall(remote_log.send, resolved_prefix, level or "INFO", message)
-  end
+  send_remote_log(resolved_prefix, level or "INFO", message)
   local ok = pcall(logger.log, resolved_prefix, message, level)
   if not ok then
     pcall(print, "WARN: logging suppressed due to non-fatal logger failure")
@@ -248,41 +303,25 @@ function utils.log(prefix, message, level)
 end
 
 function utils.safe_peripheral_call(name, method, ...)
-  if not name or not peripheral.isPresent(name) then
-    return nil, "peripheral missing"
-  end
+  if not name or not peripheral.isPresent(name) then return nil, "peripheral missing" end
   local results = table.pack(pcall(peripheral.call, name, method, ...))
-  if not results[1] then
-    return nil, results[2]
-  end
-  if results.n == 1 then
-    return true
-  end
+  if not results[1] then return nil, results[2] end
+  if results.n == 1 then return true end
   return table.unpack(results, 2, results.n)
 end
 
 function utils.safe_wrap(name)
-  if not name or not peripheral.isPresent(name) then
-    return nil, "peripheral missing"
-  end
+  if not name or not peripheral.isPresent(name) then return nil, "peripheral missing" end
   local ok, wrapped = pcall(peripheral.wrap, name)
-  if not ok then
-    return nil, wrapped
-  end
+  if not ok then return nil, wrapped end
   return wrapped
 end
 
 function utils.safe_get_methods(name)
-  if not name or not peripheral.isPresent(name) then
-    return nil, "peripheral missing"
-  end
+  if not name or not peripheral.isPresent(name) then return nil, "peripheral missing" end
   local ok, methods = pcall(peripheral.getMethods, name)
-  if not ok then
-    return nil, methods
-  end
-  if type(methods) ~= "table" then
-    return nil, "invalid methods"
-  end
+  if not ok then return nil, methods end
+  if type(methods) ~= "table" then return nil, "invalid methods" end
   return methods
 end
 
@@ -290,9 +329,7 @@ function utils.cache_peripherals(names)
   local cache = {}
   for _, name in ipairs(names or {}) do
     local wrapped = utils.safe_wrap(name)
-    if wrapped then
-      cache[name] = wrapped
-    end
+    if wrapped then cache[name] = wrapped end
   end
   return cache
 end
@@ -305,33 +342,24 @@ function utils.merge(a, b)
 end
 
 function utils.trim(text)
-  if not text then return "" end
-  return text:match("^%s*(.-)%s*$")
+  return trim_text(text)
 end
 
 function utils.read_node_id(path)
   local target = path or CONFIG.NODE_ID_PATH
-  if not target or not fs.exists(target) then
-    return nil
-  end
+  if not target or not fs.exists(target) then return nil end
   local file = fs.open(target, "r")
-  if not file then
-    return nil
-  end
+  if not file then return nil end
   local content = file.readAll()
   file.close()
   local trimmed = utils.trim(content)
-  if trimmed == "" then
-    return nil
-  end
+  if trimmed == "" then return nil end
   return trimmed
 end
 
 function utils.build_log_name(base, node_id)
   local prefix = tostring(base or CONFIG.LOGGER_DEFAULT_PREFIX):lower()
-  if not node_id or node_id == "" then
-    return prefix
-  end
+  if not node_id or node_id == "" then return prefix end
   local sanitized = tostring(node_id):lower():gsub("[^%w%-_]+", CONFIG.LOG_NAME_SEPARATOR)
   return prefix .. CONFIG.LOG_NAME_SEPARATOR .. sanitized
 end
@@ -339,8 +367,20 @@ end
 function utils.init_role_logger(role, node_id, opts)
   opts = opts or {}
   opts.prefix = role or opts.prefix
+  opts.node_id = node_id or opts.node_id
   opts.log_name = opts.log_name or utils.build_log_name(role, node_id)
   return utils.init_logger(opts)
+end
+
+function utils.remote_log_status()
+  return {
+    enabled = remote_log_state.enabled == true,
+    modem = remote_log_state.modem_name,
+    node_id = remote_log_state.node_id,
+    role = remote_log_state.role,
+    sent = remote_log_state.sent,
+    dropped = remote_log_state.dropped
+  }
 end
 
 return utils
