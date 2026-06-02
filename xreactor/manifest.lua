@@ -1,6 +1,6 @@
 return {
-  manifest_version = 20,
-  manifest_id = "manifest-v20",
+  manifest_version = 21,
+  manifest_id = "manifest-v21",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
