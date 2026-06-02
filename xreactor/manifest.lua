@@ -1,6 +1,6 @@
 return {
-  manifest_version = 23,
-  manifest_id = "manifest-v23",
+  manifest_version = 24,
+  manifest_id = "manifest-v24",
   source_ref = "beta",
   hash_algo = "crc32",
   base_files = {
@@ -141,6 +141,9 @@ return {
       { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 413, hash = "a4cee204" },
       { path = "nodes/reprocessor/main.lua", size_bytes = 16921, hash = "1058e357", required_for = { "REPROCESSING" } },
       { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9" },
+    },
+    log = {
+      { path = "nodes/log_collector/main.lua", required_for = { "LOG", "LOG_COLLECTOR" } },
     },
   }
 }
