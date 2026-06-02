@@ -6,7 +6,9 @@ local ROLE_PATHS = {
   ENERGY = "/xreactor/nodes/energy/main.lua",
   WATER = "/xreactor/nodes/water/main.lua",
   FUEL = "/xreactor/nodes/fuel/main.lua",
-  REPROCESSING = "/xreactor/nodes/reprocessor/main.lua"
+  REPROCESSING = "/xreactor/nodes/reprocessor/main.lua",
+  LOG = "/xreactor/nodes/log_collector/main.lua",
+  LOG_COLLECTOR = "/xreactor/nodes/log_collector/main.lua"
 }
 
 local STARTUP_MIN_FREE_BYTES = 4096
