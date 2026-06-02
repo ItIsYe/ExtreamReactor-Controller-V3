@@ -12,21 +12,22 @@ end
 
 local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local DEFAULT_ROOTS = { "/disk", "/disk1", "/disk2", "/xreactor_collected_logs" }
+local MAX_LOG_BYTES = 8192
+local ROTATE_KEEP = 3
+local MIN_FREE_BYTES = 1024
 
 local stats = {
   received = 0,
   written = 0,
   dropped = 0,
+  rotated = 0,
+  pruned = 0,
   last_node = "-",
   last_level = "-",
   last_error = nil,
   log_root = nil,
   modem = nil
 }
-
-local function safe_print(text)
-  pcall(print, tostring(text))
-end
 
 local function ensure_dir(path)
   if fs.exists(path) then return fs.isDir(path) end
@@ -126,6 +127,52 @@ local function format_line(payload)
   return string.format("[%s] %s | %s | %s | %s", tostring(ts), tostring(payload.role or "?"), tostring(payload.prefix or "LOG"), tostring(payload.level or "INFO"), tostring(payload.message or payload.line or ""))
 end
 
+local function safe_delete(path)
+  if fs.exists(path) then pcall(fs.delete, path) end
+end
+
+local function safe_move(from_path, to_path)
+  if not fs.exists(from_path) then return false end
+  safe_delete(to_path)
+  local ok = pcall(fs.move, from_path, to_path)
+  return ok
+end
+
+local function rotate_file(path)
+  if not fs.exists(path) then return false end
+  local size = fs.getSize(path)
+  if size < MAX_LOG_BYTES then return false end
+  safe_delete(path .. "." .. tostring(ROTATE_KEEP))
+  for i = ROTATE_KEEP - 1, 1, -1 do
+    safe_move(path .. "." .. tostring(i), path .. "." .. tostring(i + 1))
+  end
+  safe_move(path, path .. ".1")
+  stats.rotated = stats.rotated + 1
+  return true
+end
+
+local function prune_rotations(root)
+  local removed = 0
+  local function scan(dir)
+    if not fs.exists(dir) or not fs.isDir(dir) then return end
+    local ok, entries = pcall(fs.list, dir)
+    if not ok or type(entries) ~= "table" then return end
+    for _, name in ipairs(entries) do
+      local path = fs.combine(dir, name)
+      if fs.isDir(path) then
+        scan(path)
+      elseif name:match("%.log%.%d+$") or name:match("%.old$") or name:match("%.bak$") then
+        safe_delete(path)
+        removed = removed + 1
+        if free_space(root) >= MIN_FREE_BYTES then return end
+      end
+    end
+  end
+  scan(root)
+  stats.pruned = stats.pruned + removed
+  return removed
+end
+
 local function write_log(payload)
   local root = stats.log_root or choose_log_root()
   stats.log_root = root
@@ -134,11 +181,28 @@ local function write_log(payload)
   local dir = root .. "/" .. role
   if not ensure_dir(dir) then return false, "mkdir failed" end
   local path = dir .. "/" .. node_id .. ".log"
+  rotate_file(path)
+  if free_space(root) < MIN_FREE_BYTES then
+    prune_rotations(root)
+  end
   if free_space(root) < 256 then return false, "disk full" end
-  local h = fs.open(path, "a")
-  if not h then return false, "open failed" end
-  h.write(format_line(payload) .. "\n")
-  h.close()
+  local line = format_line(payload) .. "\n"
+  local ok, err = pcall(function()
+    local h = fs.open(path, "a")
+    if not h then error("open failed") end
+    h.write(line)
+    h.close()
+  end)
+  if not ok then
+    prune_rotations(root)
+    ok, err = pcall(function()
+      local h = fs.open(path, "a")
+      if not h then error("open failed") end
+      h.write(line)
+      h.close()
+    end)
+  end
+  if not ok then return false, tostring(err or "write failed") end
   return true
 end
 
@@ -170,9 +234,12 @@ local function draw()
   print("Channel: " .. tostring(CHANNEL))
   print("Modem:   " .. tostring(stats.modem or "none"))
   print("Root:    " .. tostring(stats.log_root or "n/a"))
+  print("Free:    " .. tostring(free_space(stats.log_root or "/")))
   print("Recv:    " .. tostring(stats.received))
   print("Written: " .. tostring(stats.written))
   print("Dropped: " .. tostring(stats.dropped))
+  print("Rotated: " .. tostring(stats.rotated))
+  print("Pruned:  " .. tostring(stats.pruned))
   print("Last:    " .. tostring(stats.last_node) .. " " .. tostring(stats.last_level))
   if stats.last_error then print("Error:   " .. tostring(stats.last_error)) end
 end
