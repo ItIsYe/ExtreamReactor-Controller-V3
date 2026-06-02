@@ -130,23 +130,15 @@ end
 
 local function sanitize_snapshot(value, active)
   local value_type = type(value)
-  if value_type == "string" or value_type == "number" or value_type == "boolean" or value_type == "nil" then
-    return value
-  end
-  if value_type ~= "table" then
-    return tostring(value)
-  end
+  if value_type == "string" or value_type == "number" or value_type == "boolean" or value_type == "nil" then return value end
+  if value_type ~= "table" then return tostring(value) end
   active = active or {}
-  if active[value] then
-    return "<cycle>"
-  end
+  if active[value] then return "<cycle>" end
   active[value] = true
   local out = {}
   for key, val in next, value do
     local key_type = type(key)
-    if key_type ~= "string" and key_type ~= "number" and key_type ~= "boolean" then
-      key = tostring(key)
-    end
+    if key_type ~= "string" and key_type ~= "number" and key_type ~= "boolean" then key = tostring(key) end
     out[key] = sanitize_snapshot(val, active)
   end
   active[value] = nil
@@ -154,32 +146,21 @@ local function sanitize_snapshot(value, active)
 end
 
 local function safe_serialize(value)
-  if not textutils or not textutils.serialize then
-    return nil, "serialize unavailable"
-  end
+  if not textutils or not textutils.serialize then return nil, "serialize unavailable" end
   local sanitized = sanitize_snapshot(value)
   local ok, result = pcall(textutils.serialize, sanitized)
-  if not ok then
-    return nil, result
-  end
+  if not ok then return nil, result end
   return result
 end
 
-function utils.safe_serialize(value)
-  return safe_serialize(value)
-end
-
-function utils.ensure_dir(path)
-  if not path or path == "" then return end
-  if not fs.exists(path) then fs.makeDir(path) end
-end
+function utils.safe_serialize(value) return safe_serialize(value) end
+function utils.ensure_dir(path) if not path or path == "" then return end if not fs.exists(path) then fs.makeDir(path) end end
 
 function utils.read_config(path, defaults)
   if not fs.exists(path) then return defaults or {} end
   local file = fs.open(path, "r")
   if not file then return defaults or {} end
-  local content = file.readAll()
-  file.close()
+  local content = file.readAll(); file.close()
   local ok, data = pcall(textutils.unserialize, content)
   if ok and type(data) == "table" then return data end
   return defaults or {}
@@ -189,24 +170,16 @@ function utils.deep_copy(value, seen)
   if type(value) ~= "table" then return value end
   seen = seen or {}
   if seen[value] then return seen[value] end
-  local copy = {}
-  seen[value] = copy
-  for key, item in pairs(value) do
-    copy[utils.deep_copy(key, seen)] = utils.deep_copy(item, seen)
-  end
+  local copy = {}; seen[value] = copy
+  for key, item in pairs(value) do copy[utils.deep_copy(key, seen)] = utils.deep_copy(item, seen) end
   return copy
 end
 
 function utils.merge_defaults(target, defaults)
   local changed = false
   for key, value in pairs(defaults or {}) do
-    if target[key] == nil then
-      target[key] = value
-      changed = true
-    elseif type(target[key]) == "table" and type(value) == "table" then
-      local inner_changed = utils.merge_defaults(target[key], value)
-      changed = changed or inner_changed
-    end
+    if target[key] == nil then target[key] = value; changed = true
+    elseif type(target[key]) == "table" and type(value) == "table" then changed = utils.merge_defaults(target[key], value) or changed end
   end
   return changed
 end
@@ -218,16 +191,10 @@ local function migrate_config(path, data, defaults, meta)
   local original = utils.deep_copy(data)
   local changed = utils.merge_defaults(data, defaults)
   local loaded_version = type(data.version) == "number" and data.version or 1
-  if data.version == nil or loaded_version < target_version then
-    data.version = target_version
-    changed = true
-  end
+  if data.version == nil or loaded_version < target_version then data.version = target_version; changed = true end
   if not changed then return data end
   local ok, err = pcall(utils.write_config, path, data)
-  if ok then
-    meta.migrated = true
-    return data
-  end
+  if ok then meta.migrated = true; return data end
   meta.migration_error = err
   utils.log("CONFIG", "Config migration failed at " .. tostring(path) .. "; using existing config.", "WARN")
   return original
@@ -245,9 +212,7 @@ function utils.load_config(path, defaults)
     local ok, data = pcall(loader)
     if ok and type(data) == "table" then
       local migrated = migrate_config(path, data, defaults, meta)
-      if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then
-        utils.merge_defaults(data, defaults)
-      end
+      if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then utils.merge_defaults(data, defaults) end
       meta.source = "lua"
       return migrated
     end
@@ -257,11 +222,8 @@ function utils.load_config(path, defaults)
     local ok, data = pcall(textutils.unserialize, content)
     if ok and type(data) == "table" then
       local migrated = migrate_config(path, data, defaults, meta)
-      if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then
-        utils.merge_defaults(data, defaults)
-      end
-      meta.source = "serialized"
-      meta.reason = "lua invalid"
+      if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then utils.merge_defaults(data, defaults) end
+      meta.source = "serialized"; meta.reason = "lua invalid"
       return migrated, meta
     end
   end
@@ -275,8 +237,7 @@ function utils.write_config(path, tbl)
   if not file then error("Unable to write config at " .. path) end
   local serialized, err = safe_serialize(tbl)
   if not serialized then error("Config serialize failed: " .. tostring(err)) end
-  file.write(serialized)
-  file.close()
+  file.write(serialized); file.close()
 end
 
 local function normalize_logger_opts(opts)
@@ -297,9 +258,7 @@ function utils.log(prefix, message, level)
   local resolved_prefix = prefix or CONFIG.LOGGER_DEFAULT_PREFIX
   send_remote_log(resolved_prefix, level or "INFO", message)
   local ok = pcall(logger.log, resolved_prefix, message, level)
-  if not ok then
-    pcall(print, "WARN: logging suppressed due to non-fatal logger failure")
-  end
+  if not ok then pcall(print, "WARN: logging suppressed due to non-fatal logger failure") end
 end
 
 function utils.safe_peripheral_call(name, method, ...)
@@ -327,10 +286,7 @@ end
 
 function utils.cache_peripherals(names)
   local cache = {}
-  for _, name in ipairs(names or {}) do
-    local wrapped = utils.safe_wrap(name)
-    if wrapped then cache[name] = wrapped end
-  end
+  for _, name in ipairs(names or {}) do local wrapped = utils.safe_wrap(name); if wrapped then cache[name] = wrapped end end
   return cache
 end
 
@@ -341,8 +297,18 @@ function utils.merge(a, b)
   return merged
 end
 
-function utils.trim(text)
-  return trim_text(text)
+function utils.trim(text) return trim_text(text) end
+
+function utils.normalize_node_id(value)
+  local raw = trim_text(value or "")
+  if raw == "" then
+    if os and type(os.getComputerID) == "function" then raw = tostring(os.getComputerID()) else raw = "unknown" end
+  end
+  raw = raw:gsub("%s+", "_")
+  raw = raw:gsub("[^%w%-%_%.:]+", "_")
+  raw = raw:gsub("^_+", ""):gsub("_+$", "")
+  if raw == "" then raw = "unknown" end
+  return raw
 end
 
 function utils.read_node_id(path)
@@ -350,8 +316,7 @@ function utils.read_node_id(path)
   if not target or not fs.exists(target) then return nil end
   local file = fs.open(target, "r")
   if not file then return nil end
-  local content = file.readAll()
-  file.close()
+  local content = file.readAll(); file.close()
   local trimmed = utils.trim(content)
   if trimmed == "" then return nil end
   return trimmed
@@ -373,14 +338,7 @@ function utils.init_role_logger(role, node_id, opts)
 end
 
 function utils.remote_log_status()
-  return {
-    enabled = remote_log_state.enabled == true,
-    modem = remote_log_state.modem_name,
-    node_id = remote_log_state.node_id,
-    role = remote_log_state.role,
-    sent = remote_log_state.sent,
-    dropped = remote_log_state.dropped
-  }
+  return { enabled = remote_log_state.enabled == true, modem = remote_log_state.modem_name, node_id = remote_log_state.node_id, role = remote_log_state.role, sent = remote_log_state.sent, dropped = remote_log_state.dropped }
 end
 
 return utils
