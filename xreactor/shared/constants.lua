@@ -6,7 +6,9 @@ constants.roles = {
   ENERGY_NODE = "ENERGY-NODE",
   FUEL_NODE = "FUEL-NODE",
   WATER_NODE = "WATER-NODE",
-  REPROCESSOR_NODE = "REPROCESSOR-NODE"
+  REPROCESSOR_NODE = "REPROCESSOR-NODE",
+  LOG = "LOG",
+  LOG_COLLECTOR = "LOG_COLLECTOR"
 }
 
 constants.proto_ver = { major = 1, minor = 0 }
