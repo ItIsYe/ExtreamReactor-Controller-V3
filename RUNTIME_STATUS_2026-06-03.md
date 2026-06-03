@@ -20,15 +20,15 @@ Boundaries:
 - Updated `xreactor/manifest.lua` metadata for `core/bootstrap.lua`.
 - Added `ALERT_SUMMARY` to `xreactor/shared/constants.lua` to match the existing MASTER message-handler branch.
 - Added `tests/message_type_reference_guard_test.py` to guard `constants.message_types.*` references.
+- Added LOG/LOG_COLLECTOR role constants and LOG channel constant to `xreactor/shared/constants.lua`.
 - Updated `xreactor/manifest.lua` metadata for `shared/constants.lua`.
 
 ## Connector/write limits observed
 
-The available GitHub write endpoint replaces complete files; there is no line-based patch endpoint in the currently available connector tool set. Some small intended runtime edits therefore still require sending the full target file, and a few full-file writes were blocked by the connector safety layer. When this happens, keep the manual follow-up listed here and apply it from a normal local checkout.
+The available GitHub write endpoint replaces complete files; there is no line-based patch endpoint in the currently available connector tool set. Some small intended runtime edits therefore still require sending the full target file, and a few full-file writes were blocked by the connector safety layer. Splitting changes into smaller semantic commits worked for the constants/bootstrap cleanup.
 
 Known blocked or deferred write attempts:
 
-- `xreactor/shared/constants.lua` full LOG/LOG_COLLECTOR role/channel additions.
 - README update after manual full installer URL insertion.
 - Separate ENERGY config ownership doc file.
 - GitHub issue creation for follow-up tracking.
@@ -51,13 +51,9 @@ Completed:
 
 - LOG/LOG_COLLECTOR exists in the manifest role list.
 - LOG/LOG_COLLECTOR exists in `telemetry_schema.lua`.
-- LOG is now available in bootstrap first-start role selection.
-
-Still open:
-
-- Add LOG/LOG_COLLECTOR constants to `xreactor/shared/constants.lua`.
-- Add LOG channel constant to `xreactor/shared/constants.lua` if the channel table should expose log channel `6502` directly.
-- Re-run manifest metadata generation after the constants change.
+- LOG/LOG_COLLECTOR exists in `shared.constants.lua`.
+- LOG channel `6502` exists in `shared.constants.lua`.
+- LOG is available in bootstrap first-start role selection.
 
 ## Manifest metadata status
 
@@ -100,7 +96,6 @@ Recommended future cleanup:
 
 ## Recommended next order
 
-1. Finish `shared.constants.lua` LOG constants/channel update from a local checkout or via a connector-safe method.
-2. Run full manifest metadata regeneration locally.
-3. Remove manifest-metadata exceptions from the guard test.
-4. Later: refactor ENERGY defaults into one shared module with tests.
+1. Run full manifest metadata regeneration locally.
+2. Remove manifest-metadata exceptions from the guard test.
+3. Later: refactor ENERGY defaults into one shared module with tests.
