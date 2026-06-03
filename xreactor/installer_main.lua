@@ -107,10 +107,11 @@ local function build_context(constants)
     local need = math.max(0, tonumber(bytes_needed) or 0) + WRITE_BUFFER_BYTES
     if free == nil or free == math.huge or free >= need then return true end
     ctx.warn(string.format("Low-space write cleanup target=%s free=%s need=%d reason=%s", tostring(target_path), tostring(free), need, tostring(reason or "write")))
-    storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = true })
+    local keep_stage = starts_with(target_path, ctx.constants.STAGE_ROOT .. "/")
+    storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = true, keep_stage = keep_stage })
     free = ctx.free_space()
     if free ~= nil and free ~= math.huge and free >= need then return true end
-    if starts_with(target_path, ctx.constants.STAGE_ROOT .. "/") and ctx.fs.exists(ctx.constants.INSTALL_ROOT) then
+    if keep_stage and ctx.fs.exists(ctx.constants.INSTALL_ROOT) then
       ctx.warn("Deleting existing install root during staging to complete low-space write")
       ctx.fs.delete(ctx.constants.INSTALL_ROOT)
       ctx.low_space_replace = true
