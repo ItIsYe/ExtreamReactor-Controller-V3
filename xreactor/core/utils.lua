@@ -15,8 +15,8 @@ local logger = require("core.logger")
 local remote_log_state = {
   initialized = false,
   enabled = true,
-  modem = nil,
-  modem_name = nil,
+  modems = {},
+  modem_names = {},
   node_id = nil,
   role = nil,
   sent = 0,
@@ -61,28 +61,32 @@ local function resolve_node_id()
   return "unknown-node"
 end
 
-local function find_wireless_modem()
-  if not peripheral or type(peripheral.getNames) ~= "function" then return nil, nil end
+local function discover_log_modems()
+  local list = {}
+  if not peripheral or type(peripheral.getNames) ~= "function" then return list end
   local ok, names = pcall(peripheral.getNames)
-  if not ok or type(names) ~= "table" then return nil, nil end
-  local fallback_name, fallback_modem = nil, nil
+  if not ok or type(names) ~= "table" then return list end
+  table.sort(names)
+  local wired = {}
+  local wireless = {}
   for _, name in ipairs(names) do
     local type_ok, ptype = pcall(peripheral.getType, name)
     if type_ok and ptype == "modem" then
       local wrap_ok, modem = pcall(peripheral.wrap, name)
-      if wrap_ok and modem then
-        local wireless = false
+      if wrap_ok and modem and type(modem.transmit) == "function" then
+        local is_wireless = false
         if type(modem.isWireless) == "function" then
           local wireless_ok, result = pcall(modem.isWireless)
-          wireless = wireless_ok and result == true
+          is_wireless = wireless_ok and result == true
         end
-        if wireless then return name, modem end
-        fallback_name = fallback_name or name
-        fallback_modem = fallback_modem or modem
+        local entry = { name = name, modem = modem, wireless = is_wireless }
+        if is_wireless then wireless[#wireless + 1] = entry else wired[#wired + 1] = entry end
       end
     end
   end
-  return fallback_name, fallback_modem
+  for _, entry in ipairs(wireless) do list[#list + 1] = entry end
+  for _, entry in ipairs(wired) do list[#list + 1] = entry end
+  return list
 end
 
 local function settings_bool(key, fallback)
@@ -102,18 +106,22 @@ local function init_remote_log(opts)
   end
   remote_log_state.node_id = opts.node_id or resolve_node_id()
   remote_log_state.role = opts.prefix or read_role_config_value()
-  remote_log_state.modem_name, remote_log_state.modem = find_wireless_modem()
+  remote_log_state.modems = discover_log_modems()
+  remote_log_state.modem_names = {}
+  for _, entry in ipairs(remote_log_state.modems) do
+    remote_log_state.modem_names[#remote_log_state.modem_names + 1] = entry.name
+  end
   remote_log_state.initialized = true
 end
 
 local function send_remote_log(prefix, level, message)
   local ok = pcall(function()
     if not remote_log_state.initialized then init_remote_log({ prefix = prefix }) end
-    if not remote_log_state.enabled or not remote_log_state.modem then
+    if not remote_log_state.enabled or #remote_log_state.modems == 0 then
       remote_log_state.dropped = remote_log_state.dropped + 1
       return
     end
-    remote_log_state.modem.transmit(CONFIG.REMOTE_LOG_CHANNEL, CONFIG.REMOTE_LOG_CHANNEL, {
+    local payload = {
       type = "LOG_EVENT",
       proto = "xreactor-log-v1",
       node_id = remote_log_state.node_id or resolve_node_id(),
@@ -122,8 +130,15 @@ local function send_remote_log(prefix, level, message)
       level = tostring(level or "INFO"),
       message = tostring(message or ""),
       ts = os and os.epoch and os.epoch("utc") or nil
-    })
-    remote_log_state.sent = remote_log_state.sent + 1
+    }
+    local delivered = 0
+    for _, entry in ipairs(remote_log_state.modems) do
+      local sent_ok = pcall(function()
+        entry.modem.transmit(CONFIG.REMOTE_LOG_CHANNEL, CONFIG.REMOTE_LOG_CHANNEL, payload)
+      end)
+      if sent_ok then delivered = delivered + 1 end
+    end
+    if delivered > 0 then remote_log_state.sent = remote_log_state.sent + 1 else remote_log_state.dropped = remote_log_state.dropped + 1 end
   end)
   if not ok then remote_log_state.dropped = remote_log_state.dropped + 1 end
 end
@@ -338,7 +353,15 @@ function utils.init_role_logger(role, node_id, opts)
 end
 
 function utils.remote_log_status()
-  return { enabled = remote_log_state.enabled == true, modem = remote_log_state.modem_name, node_id = remote_log_state.node_id, role = remote_log_state.role, sent = remote_log_state.sent, dropped = remote_log_state.dropped }
+  return {
+    enabled = remote_log_state.enabled == true,
+    modem = table.concat(remote_log_state.modem_names or {}, ","),
+    modems = remote_log_state.modem_names,
+    node_id = remote_log_state.node_id,
+    role = remote_log_state.role,
+    sent = remote_log_state.sent,
+    dropped = remote_log_state.dropped
+  }
 end
 
 return utils
