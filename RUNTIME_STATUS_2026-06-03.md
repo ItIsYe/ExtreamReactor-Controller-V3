@@ -6,7 +6,6 @@ This document tracks the current code-reading and cleanup status of the `beta` b
 
 Boundaries:
 
-- No in-game test was performed.
 - No full regression run is claimed here.
 - This file must stay current with every cleanup change.
 
@@ -22,6 +21,17 @@ Boundaries:
 - Added `tests/message_type_reference_guard_test.py` to guard `constants.message_types.*` references.
 - Added LOG/LOG_COLLECTOR role constants and LOG channel constant to `xreactor/shared/constants.lua`.
 - Updated `xreactor/manifest.lua` metadata for `shared/constants.lua`.
+- Fixed installer low-space cleanup so active `/xreactor_stage` is not deleted while writing staged files.
+
+## Ingame test finding
+
+During an ingame installer attempt, low-space write cleanup removed the active stage directory while files were still being downloaded. This caused staged validation to fail with missing earlier-stage files such as `core/bootstrap.lua`.
+
+Fix status:
+
+- `xreactor/installer_storage.lua` now supports `keep_stage = true` and preserves the active stage during cleanup.
+- `xreactor/installer_main.lua` now passes `keep_stage = true` when the target path is inside `/xreactor_stage/`.
+- For low-space staging writes, cleanup may still remove logs/backups and may delete the old install root if needed, but it should no longer delete already downloaded staged files.
 
 ## Connector/write limits observed
 
@@ -96,6 +106,7 @@ Recommended future cleanup:
 
 ## Recommended next order
 
-1. Run full manifest metadata regeneration locally.
-2. Remove manifest-metadata exceptions from the guard test.
-3. Later: refactor ENERGY defaults into one shared module with tests.
+1. Re-run the installer ingame after deleting the failed partial `/xreactor_stage` if it still exists.
+2. Run full manifest metadata regeneration locally.
+3. Remove manifest-metadata exceptions from the guard test.
+4. Later: refactor ENERGY defaults into one shared module with tests.
