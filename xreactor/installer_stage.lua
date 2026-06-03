@@ -71,6 +71,22 @@ local function write_cached_metadata(ctx, entry, target_path, body)
   return ok, err
 end
 
+local function ordered_entries(expected)
+  local list = {}
+  for rel, entry in pairs(expected or {}) do
+    local e = entry or { path = rel }
+    e.path = e.path or rel
+    table.insert(list, e)
+  end
+  table.sort(list, function(a, b)
+    local sa = tonumber(a.size_bytes) or 0
+    local sb = tonumber(b.size_bytes) or 0
+    if sa ~= sb then return sa > sb end
+    return tostring(a.path or "") < tostring(b.path or "")
+  end)
+  return list
+end
+
 function M.stage_expected_files(ctx, expected)
   if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
     ctx.info("Removing stale stage root")
@@ -85,7 +101,7 @@ function M.stage_expected_files(ctx, expected)
   end
   ctx.info("Installing files into stage root: " .. ctx.constants.STAGE_ROOT)
 
-  for _, entry in pairs(expected) do
+  for _, entry in ipairs(ordered_entries(expected)) do
     local target_path = ctx.constants.STAGE_ROOT .. "/" .. entry.path
     local ok, err
     local metadata_body = metadata_body_for(ctx, entry.path)
