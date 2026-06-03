@@ -289,7 +289,8 @@ local ROLE_OPTIONS = {
   { label = "ENERGY", role = "ENERGY" },
   { label = "WATER", role = "WATER" },
   { label = "FUEL", role = "FUEL" },
-  { label = "REPROCESSING", role = "REPROCESSING" }
+  { label = "REPROCESSING", role = "REPROCESSING" },
+  { label = "LOG", role = "LOG" }
 }
 
 local function prompt_role_selection()
