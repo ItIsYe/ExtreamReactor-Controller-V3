@@ -17,12 +17,14 @@ Important boundaries:
 - Added LOG/LOG_COLLECTOR telemetry schema entries in `xreactor/shared/telemetry_schema.lua`.
 - Updated the corresponding manifest metadata for `shared/telemetry_schema.lua`.
 - Added `tools/stamp_release_metadata.py` so concrete release builds can stamp immutable release metadata without changing the moving `beta` branch install policy.
+- Documented ENERGY config ownership in this status document: `nodes/energy/main.lua` is the current authoritative runtime-default source; `nodes/energy/config.lua` is the installable/user-facing template.
 
 ### Attempted but not completed through the connector
 
 - `xreactor/shared/constants.lua` LOG role/channel additions were attempted, but the repository write was blocked by the connector safety filter.
 - `xreactor/core/bootstrap.lua` first-start LOG role support was prepared, but not committed because constants/bootstrap code writes are currently blocked by the connector safety filter.
 - Direct README command examples with full raw installer URLs were also blocked by the connector filter; the placeholder form remains in the committed README, while the exact URLs were added manually outside this automation.
+- A separate ENERGY config ownership doc was attempted, but new doc-file creation was blocked by the connector; this status document is the current authoritative documentation for that point.
 
 ## Current high-level state
 
@@ -194,6 +196,7 @@ Current notes:
 - Telemetry/UI consume snapshots and last-good values rather than performing heavy peripheral reads directly.
 - ENERGY heartbeats are intentionally lightweight and flushed separately so liveness is not blocked by slow matrix/storage reads.
 - The current runtime is effectively single-storage/single-matrix per ENERGY node even though discovery may see multiple candidates; MASTER can still aggregate multiple ENERGY nodes.
+- ENERGY config default ownership is currently split: `nodes/energy/main.lua` is authoritative at runtime; `nodes/energy/config.lua` is the installable/user-facing template and must be kept in sync until a dedicated defaults module exists.
 
 ### Support nodes
 
@@ -295,11 +298,16 @@ Next action:
 
 ### 5. ENERGY config duplication
 
-ENERGY has defaults in both `nodes/energy/config.lua` and `nodes/energy/main.lua`. Some runtime-only defaults are present in `main.lua` but not mirrored in the separate config file.
+ENERGY has defaults in both `nodes/energy/config.lua` and `nodes/energy/main.lua`. Current documentation decision:
+
+- `nodes/energy/main.lua` is the authoritative runtime-default source.
+- `nodes/energy/config.lua` is the installable/user-facing template.
+- Any future ENERGY default change must update both when the setting is user-facing.
+- `nodes/energy/config_normalizer.lua` must be updated when a field needs validation, migration, clamping, or compatibility behavior.
 
 Next action:
 
-- Consolidate or clearly document the authoritative source for ENERGY defaults.
+- Prefer a future focused refactor to introduce a single shared ENERGY defaults module.
 
 ## Recommended next order
 
@@ -309,7 +317,7 @@ Recommended order before further feature work:
 2. Finish LOG role constants/bootstrap integration.
 3. Use release stamping helper for immutable release builds.
 4. Resolve MASTER alert-message-type drift.
-5. Consolidate or document ENERGY config defaults.
+5. Refactor ENERGY defaults into a shared module when tests are available.
 
 ## Current conclusion
 
