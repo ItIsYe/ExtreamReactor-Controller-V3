@@ -22,15 +22,21 @@ Boundaries:
 - Added LOG/LOG_COLLECTOR role constants and LOG channel constant to `xreactor/shared/constants.lua`.
 - Updated `xreactor/manifest.lua` metadata for `shared/constants.lua`.
 - Fixed installer low-space cleanup so active `/xreactor_stage` is not deleted while writing staged files.
+- Changed installer staging order so files with known larger `size_bytes` are downloaded/written first.
 
 ## Ingame test finding
 
-During an ingame installer attempt, low-space write cleanup removed the active stage directory while files were still being downloaded. This caused staged validation to fail with missing earlier-stage files such as `core/bootstrap.lua`.
+During ingame installer attempts, two low-space staging problems were observed.
+
+First, low-space write cleanup removed the active stage directory while files were still being downloaded. That caused staged validation to fail with missing earlier-stage files such as `core/bootstrap.lua`.
+
+Second, after preserving the active stage, the install could still fail when a large file such as `core/comms.lua` was attempted late in the stage after smaller files had already consumed most of the remaining free space.
 
 Fix status:
 
 - `xreactor/installer_storage.lua` now supports `keep_stage = true` and preserves the active stage during cleanup.
 - `xreactor/installer_main.lua` now passes `keep_stage = true` when the target path is inside `/xreactor_stage/`.
+- `xreactor/installer_stage.lua` now stages files ordered by known size descending, with path name as a stable tie-breaker.
 - For low-space staging writes, cleanup may still remove logs/backups and may delete the old install root if needed, but it should no longer delete already downloaded staged files.
 
 ## Connector/write limits observed
