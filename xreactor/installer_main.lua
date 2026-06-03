@@ -19,6 +19,7 @@ local ROLE_CHOICES = {
 local ROLE_KEY_MAP = { MASTER = "master", RT = "rt", ENERGY = "energy", WATER = "water", FUEL = "fuel", REPROCESSING = "reprocessing", LOG = "log" }
 local RUNTIME_MODULES = { "installer_main.lua", "installer_http.lua", "installer_manifest.lua", "installer_stage.lua", "installer_startup.lua", "installer_storage.lua" }
 local BETA_BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
+local WRITE_BUFFER_BYTES = 1024
 
 local function sanitize(value)
   local s = tostring(value or "unknown"):lower():gsub("[^a-z0-9_%-]+", "_"):gsub("^_+", ""):gsub("_+$", "")
@@ -64,6 +65,10 @@ local function crc32(content)
   return string.format("%08x", bit32.bxor(crc, 0xFFFFFFFF))
 end
 
+local function starts_with(text, prefix)
+  return tostring(text or ""):sub(1, #tostring(prefix or "")) == tostring(prefix or "")
+end
+
 local function build_context(constants)
   constants.BASE_URL = BETA_BASE_URL
   constants.MANIFEST_URL = BETA_BASE_URL .. "manifest.lua"
@@ -95,15 +100,51 @@ local function build_context(constants)
     local c = f.readAll(); f.close(); return c
   end
 
+  function ctx.free_space() return fs.getFreeSpace and normalize_free_space(fs.getFreeSpace("/")) or nil end
+
+  function ctx.cleanup_for_write(target_path, bytes_needed, reason)
+    local free = ctx.free_space()
+    local need = math.max(0, tonumber(bytes_needed) or 0) + WRITE_BUFFER_BYTES
+    if free == nil or free == math.huge or free >= need then return true end
+    ctx.warn(string.format("Low-space write cleanup target=%s free=%s need=%d reason=%s", tostring(target_path), tostring(free), need, tostring(reason or "write")))
+    storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = true })
+    free = ctx.free_space()
+    if free ~= nil and free ~= math.huge and free >= need then return true end
+    if starts_with(target_path, ctx.constants.STAGE_ROOT .. "/") and ctx.fs.exists(ctx.constants.INSTALL_ROOT) then
+      ctx.warn("Deleting existing install root during staging to complete low-space write")
+      ctx.fs.delete(ctx.constants.INSTALL_ROOT)
+      ctx.low_space_replace = true
+    end
+    free = ctx.free_space()
+    if free == nil or free == math.huge or free >= need then return true end
+    return false, string.format("not enough free space for write target=%s free=%s need=%d", tostring(target_path), tostring(free), need)
+  end
+
   function ctx.write_file(path, data)
+    local ok_space, space_err = ctx.cleanup_for_write(path, type(data) == "string" and #data or 0, "pre-write")
+    if not ok_space then return false, space_err end
     local dir = fs.getDir(path)
     if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
     local f = fs.open(path, "w")
+    if not f then
+      ctx.cleanup_for_write(path, type(data) == "string" and #data or 0, "open-failed")
+      f = fs.open(path, "w")
+    end
     if not f then return false, "open failed" end
-    f.write(data); f.close(); return true
+    local ok_write, write_err = pcall(function() f.write(data) end)
+    pcall(function() f.close() end)
+    if ok_write then return true end
+    ctx.warn("Write failed; retrying after cleanup: " .. tostring(write_err))
+    if fs.exists(path) then pcall(fs.delete, path) end
+    local ok_retry_space, retry_space_err = ctx.cleanup_for_write(path, type(data) == "string" and #data or 0, "write-failed")
+    if not ok_retry_space then return false, retry_space_err end
+    f = fs.open(path, "w")
+    if not f then return false, "open failed after cleanup" end
+    ok_write, write_err = pcall(function() f.write(data) end)
+    pcall(function() f.close() end)
+    if not ok_write then if fs.exists(path) then pcall(fs.delete, path) end; return false, tostring(write_err or "write failed") end
+    return true
   end
-
-  function ctx.free_space() return fs.getFreeSpace and normalize_free_space(fs.getFreeSpace("/")) or nil end
 
   function ctx.cache_bust_token(kind, rel, attempt)
     local t = "0"
@@ -147,6 +188,8 @@ local function build_context(constants)
     if not size_ok then return false, string.format("size mismatch for %s expected=%s actual=%s", rel, tostring(entry and entry.size_bytes), tostring(size_actual)) end
     local hash_ok, hash_actual = ctx.hash_matches(entry or {}, body)
     if not hash_ok then return false, string.format("hash mismatch for %s expected=%s actual=%s", rel, tostring(entry and entry.hash), tostring(hash_actual)) end
+    local ok_space, space_err = ctx.cleanup_for_write(target, #body, "downloaded-body")
+    if not ok_space then return false, space_err end
     local ok, err = ctx.write_file(target, body)
     if not ok then return false, err end
     return ctx.validate_download(target)
@@ -199,9 +242,7 @@ end
 
 local function add_virtual_role_files(expected, role_label)
   expected["core/utils.lua"] = expected["core/utils.lua"] or { path = "core/utils.lua", always = true }
-  if tostring(role_label):upper() == "LOG" then
-    expected["nodes/log_collector/main.lua"] = { path = "nodes/log_collector/main.lua", required_for = { "LOG" } }
-  end
+  if tostring(role_label):upper() == "LOG" then expected["nodes/log_collector/main.lua"] = { path = "nodes/log_collector/main.lua", required_for = { "LOG" } } end
 end
 
 local function enforce_release_metadata_strategy(ctx, expected)
@@ -235,6 +276,8 @@ local function refresh_installer_runtime(ctx)
     if not body then return false, "download failed for " .. rel .. " (" .. tostring(err) .. ")" end
     if installer_http.is_html_content(body) then return false, "unexpected HTML for " .. rel end
     if rel:sub(-4) == ".lua" then local loader, parse_err = load(body, "=" .. rel, "t", {}); if not loader then return false, "lua parse error for " .. rel .. " (" .. tostring(parse_err) .. ")" end end
+    local ok_space, space_err = ctx.cleanup_for_write(path, #body, "self-refresh")
+    if not ok_space then return false, space_err end
     if ctx.read_file(path) ~= body then local ok, write_err = ctx.write_file(path, body); if not ok then return false, write_err end; if rel == "installer_main.lua" then self_changed = true end end
   end
   if self_changed then _G.__XREACTOR_INSTALLER_SELF_REFRESHED = true; dofile(ctx.constants.INSTALL_ROOT .. "/installer_main.lua").run(ctx.constants); return true end
@@ -253,14 +296,10 @@ local function prepare_low_space_replace(ctx, plan, role, reason)
 end
 
 local function preflight_or_replace(ctx, plan, role, mode)
-  local ok, err = storage_lib.preflight_storage(ctx, plan, { allow_cleanup = true, cleanup_logs = mode == "install", cleanup_backup = true })
+  storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = true })
+  local ok, err = storage_lib.preflight_storage(ctx, plan, { allow_cleanup = true, cleanup_logs = true, cleanup_backup = true })
   if ok then prepare_low_space_replace(ctx, plan, role, "preflight-low-but-continuing"); return true end
-  if prepare_low_space_replace(ctx, plan, role, err) then
-    local refreshed = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, plan.expected or {}, mode, ctx.constants)
-    local ok2, err2 = storage_lib.preflight_storage(ctx, refreshed, { allow_cleanup = true, cleanup_logs = false, cleanup_backup = true })
-    if ok2 then return true end
-    ctx.fatal("Storage preflight failed even after low-space replace: " .. tostring(err2))
-  end
+  if prepare_low_space_replace(ctx, plan, role, err) then return true end
   ctx.fatal("Storage preflight failed: " .. tostring(err))
 end
 
