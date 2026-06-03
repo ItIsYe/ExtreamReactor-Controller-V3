@@ -26,11 +26,30 @@ Current next cleanup order:
 
 ## Schnellinstallation
 
-On a new CC:Tweaked computer with HTTP enabled, download the root `installer` from the `beta` branch, save it as `/installer`, then run `/installer`.
+On a new CC:Tweaked computer with HTTP enabled, use one of these two command paths.
+
+Use `<installer-url>` for the raw GitHub URL of the root `installer` file on the `beta` branch.
+
+### 1) Temporärer Bootstrap-Start
+
+Runs the installer directly once. This does **not** keep `/installer` on disk.
+
+```text
+wget run <installer-url>
+```
+
+### 2) Empfohlene permanente Installation
+
+Downloads the installer to `/installer`, then runs it. From there the installer downloads the manifest and all required base + role files into `/xreactor`.
+
+```text
+wget <installer-url> /installer
+/installer
+```
 
 The installer shows `Neuinstallation`, `Update`, and `Abbrechen`. It installs the runtime under `/xreactor` and writes the XReactor startup entry when safe to do so.
 
-Note: `wget run` only runs a temporary copy. For normal installs, save the installer permanently as `/installer` first.
+Note: use the temporary `wget run` command only for a one-time bootstrap. For normal installs or later updates, keep the installer permanently as `/installer`.
 
 ## System goals
 
