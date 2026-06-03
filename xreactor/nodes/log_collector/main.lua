@@ -15,6 +15,7 @@ local FALLBACK_ROOT = "/xreactor_collected_logs"
 local MAX_LOG_BYTES = 8192
 local ROTATE_KEEP = 3
 local MIN_FREE_BYTES = 1024
+local SELF_ROLE = "LOG_COLLECTOR"
 
 local stats = {
   received = 0,
@@ -29,7 +30,9 @@ local stats = {
   last_level = "-",
   last_error = nil,
   log_root = nil,
-  modem = nil
+  modem = nil,
+  display = nil,
+  display_name = "term"
 }
 
 local function c(name)
@@ -215,6 +218,11 @@ local function sanitize(value)
   return text
 end
 
+local function node_id()
+  if os and type(os.getComputerID) == "function" then return "pc-" .. tostring(os.getComputerID()) end
+  return "log-collector"
+end
+
 local function format_line(payload)
   local ts = payload.ts or (os.epoch and os.epoch("utc")) or "?"
   return string.format("[%s] %s | %s | %s | %s", tostring(ts), tostring(payload.role or "?"), tostring(payload.prefix or "LOG"), tostring(payload.level or "INFO"), tostring(payload.message or payload.line or ""))
@@ -272,10 +280,10 @@ local function try_write_to_disk(disk_entry, payload, allow_aggressive_prune)
   local root = disk_entry.root
   stats.log_root = root
   local role = sanitize(payload.role or "unknown")
-  local node_id = sanitize(payload.node_id or "unknown")
+  local id = sanitize(payload.node_id or "unknown")
   local dir = root .. "/" .. role
   if not ensure_dir(dir) then return false, "mkdir failed" end
-  local path = dir .. "/" .. node_id .. ".log"
+  local path = dir .. "/" .. id .. ".log"
   rotate_file(path)
   if free_space(root) < MIN_FREE_BYTES then prune_any_logs(root, false) end
   if free_space(root) < 256 and allow_aggressive_prune then prune_any_logs(root, true) end
@@ -317,6 +325,22 @@ local function write_log(payload)
   return false, tostring(err or last_err or "all disks full")
 end
 
+local function self_log(message, level)
+  local payload = {
+    type = "LOG_EVENT",
+    proto = "xreactor-log-v1",
+    node_id = node_id(),
+    role = SELF_ROLE,
+    prefix = "LOG",
+    level = level or "INFO",
+    message = message,
+    ts = os and os.epoch and os.epoch("utc") or nil
+  }
+  local ok, err = write_log(payload)
+  if not ok then stats.last_error = err end
+  return ok
+end
+
 local function find_modem()
   if not peripheral or not peripheral.getNames then return nil, nil end
   local names = peripheral.getNames()
@@ -336,6 +360,60 @@ local function find_modem()
     end
   end
   return fallback_name, fallback_modem
+end
+
+local REMOTE_MONITOR_METHODS = { "write", "blit", "clear", "clearLine", "getSize", "setCursorPos", "getCursorPos", "setCursorBlink", "setTextColor", "setTextColour", "setBackgroundColor", "setBackgroundColour", "scroll", "setTextScale", "getTextScale" }
+
+local function make_remote_monitor(modem, remote_name)
+  if not modem or type(modem.callRemote) ~= "function" then return nil end
+  local proxy = {}
+  for _, method in ipairs(REMOTE_MONITOR_METHODS) do
+    proxy[method] = function(...)
+      return modem.callRemote(remote_name, method, ...)
+    end
+  end
+  return proxy
+end
+
+local function is_remote_monitor(modem, remote_name)
+  if type(modem.getTypeRemote) == "function" then
+    local ok, ptype = pcall(modem.getTypeRemote, remote_name)
+    if ok and ptype == "monitor" then return true end
+  end
+  if type(modem.hasTypeRemote) == "function" then
+    local ok, result = pcall(modem.hasTypeRemote, remote_name, "monitor")
+    if ok and result == true then return true end
+  end
+  return false
+end
+
+local function find_display()
+  if peripheral and type(peripheral.getNames) == "function" then
+    for _, name in ipairs(peripheral.getNames() or {}) do
+      if peripheral.getType(name) == "monitor" then
+        local mon = peripheral.wrap(name)
+        if mon then return name, mon end
+      end
+    end
+    for _, modem_name in ipairs(peripheral.getNames() or {}) do
+      if peripheral.getType(modem_name) == "modem" then
+        local modem = peripheral.wrap(modem_name)
+        if modem and type(modem.getNamesRemote) == "function" and type(modem.callRemote) == "function" then
+          local ok, remotes = pcall(modem.getNamesRemote)
+          if ok and type(remotes) == "table" then
+            table.sort(remotes)
+            for _, remote_name in ipairs(remotes) do
+              if is_remote_monitor(modem, remote_name) then
+                local mon = make_remote_monitor(modem, remote_name)
+                if mon then return remote_name .. "@" .. modem_name, mon end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return "term", term
 end
 
 local function draw_disk_bar(y)
@@ -368,43 +446,66 @@ local function draw()
   x = x + badge(x, 2, stats.last_error and "WARN" or "OK", status) + 1
   x = x + badge(x, 2, "CH " .. tostring(CHANNEL), "INFO") + 1
   x = x + badge(x, 2, tostring(stats.modem or "NO-MODEM"), stats.modem and "OK" or "ERR")
-  line(2, 4, "Disk Ring", c("cyan"))
-  draw_disk_bar(5)
-  line(2, 6, string.format("Active %s/%s  %s", tostring(stats.disk_index), tostring(#stats.disks), tostring(disk_entry.mount or "n/a")), c("white"))
-  line(2, 7, fit("Root " .. tostring(stats.log_root or "n/a"), w - 2), c("lightGray"))
+  line(2, 3, fit("Display " .. tostring(stats.display_name or "term"), w - 2), c("lightGray"))
+  line(2, 5, "Disk Ring", c("cyan"))
+  draw_disk_bar(6)
+  line(2, 7, string.format("Active %s/%s  %s", tostring(stats.disk_index), tostring(#stats.disks), tostring(disk_entry.mount or "n/a")), c("white"))
+  line(2, 8, fit("Root " .. tostring(stats.log_root or "n/a"), w - 2), c("lightGray"))
   local free = free_space(stats.log_root or "/")
-  line(2, 8, "Free " .. tostring(free) .. " bytes", free < MIN_FREE_BYTES and c("yellow") or c("lime"))
-  progress(2, 9, math.max(8, w - 3), free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free < MIN_FREE_BYTES and "WARN" or "OK")
-  line(2, 11, "Traffic", c("cyan"))
-  line(2, 12, string.format("Recv %-7s Written %-7s Drop %-5s", tostring(stats.received), tostring(stats.written), tostring(stats.dropped)), c("white"))
-  line(2, 13, string.format("Switch %-5s Rotate %-5s Prune %-5s", tostring(stats.disk_switches), tostring(stats.rotated), tostring(stats.pruned)), c("lightGray"))
-  line(2, 15, "Last", c("cyan"))
-  line(2, 16, fit(tostring(stats.last_node) .. "  " .. tostring(stats.last_level), w - 3), c("white"))
+  line(2, 9, "Free " .. tostring(free) .. " bytes", free < MIN_FREE_BYTES and c("yellow") or c("lime"))
+  progress(2, 10, math.max(8, w - 3), free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free < MIN_FREE_BYTES and "WARN" or "OK")
+  line(2, 12, "Traffic", c("cyan"))
+  line(2, 13, string.format("Recv %-7s Written %-7s Drop %-5s", tostring(stats.received), tostring(stats.written), tostring(stats.dropped)), c("white"))
+  line(2, 14, string.format("Switch %-5s Rotate %-5s Prune %-5s", tostring(stats.disk_switches), tostring(stats.rotated), tostring(stats.pruned)), c("lightGray"))
+  line(2, 16, "Last", c("cyan"))
+  line(2, 17, fit(tostring(stats.last_node) .. "  " .. tostring(stats.last_level), w - 3), c("white"))
   if stats.last_error then
-    line(2, 18, "Error", c("red"))
-    line(2, 19, fit(tostring(stats.last_error), w - 3), c("red"))
-  elseif h >= 18 then
-    line(2, 18, "Status stable", c("lime"))
+    line(2, 19, "Error", c("red"))
+    line(2, 20, fit(tostring(stats.last_error), w - 3), c("red"))
+  elseif h >= 19 then
+    line(2, 19, "Status stable", c("lime"))
   end
   set_fg(c("white")); set_bg(c("black"))
 end
 
+local function redirect_display()
+  local name, display = find_display()
+  stats.display_name = name or "term"
+  stats.display = display or term
+  if display and display ~= term and term.redirect then
+    local ok = pcall(term.redirect, display)
+    if ok and type(display.setTextScale) == "function" then pcall(display.setTextScale, 0.5) end
+  end
+end
+
 local function run()
   refresh_disks_if_needed(true)
+  redirect_display()
   local modem_name, modem = find_modem()
   stats.modem = modem_name
-  if not modem then error("No modem found for LOG collector", 0) end
+  self_log("LOG collector startup display=" .. tostring(stats.display_name) .. " disks=" .. tostring(#stats.disks), "INFO")
+  if not modem then self_log("No modem found for LOG collector", "ERROR"); error("No modem found for LOG collector", 0) end
   modem.open(CHANNEL)
+  self_log("Listening on log channel " .. tostring(CHANNEL) .. " modem=" .. tostring(modem_name), "INFO")
   draw()
+  local status_timer = os.startTimer and os.startTimer(30) or nil
   while true do
-    local _, _, channel, _, message = os.pullEvent("modem_message")
-    if channel == CHANNEL and type(message) == "table" and message.type == "LOG_EVENT" then
-      stats.received = stats.received + 1
-      stats.last_node = message.node_id or "?"
-      stats.last_level = message.level or "?"
-      local ok, err = write_log(message)
-      if ok then stats.written = stats.written + 1; stats.last_error = nil else stats.dropped = stats.dropped + 1; stats.last_error = err end
-      if stats.received % 5 == 0 or not ok then draw() end
+    local event = { os.pullEvent() }
+    if event[1] == "modem_message" then
+      local channel = event[3]
+      local message = event[5]
+      if channel == CHANNEL and type(message) == "table" and message.type == "LOG_EVENT" then
+        stats.received = stats.received + 1
+        stats.last_node = message.node_id or "?"
+        stats.last_level = message.level or "?"
+        local ok, err = write_log(message)
+        if ok then stats.written = stats.written + 1; stats.last_error = nil else stats.dropped = stats.dropped + 1; stats.last_error = err end
+        if stats.received % 5 == 0 or not ok then draw() end
+      end
+    elseif event[1] == "timer" and event[2] == status_timer then
+      self_log("Collector status received=" .. tostring(stats.received) .. " written=" .. tostring(stats.written) .. " dropped=" .. tostring(stats.dropped), "DEBUG")
+      draw()
+      status_timer = os.startTimer and os.startTimer(30) or nil
     end
   end
 end
