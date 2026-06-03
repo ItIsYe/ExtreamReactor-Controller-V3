@@ -63,7 +63,8 @@ constants.command_targets = {
 
 constants.channels = {
   CONTROL = 6500,
-  STATUS = 6501
+  STATUS = 6501,
+  LOG = 6502
 }
 
 return constants
