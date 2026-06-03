@@ -7,9 +7,21 @@ This document captures the current architecture/code-reading status of the `beta
 Important boundaries:
 
 - No in-game test was performed.
-- No runtime code was changed for this document.
 - No full regression run is claimed here.
-- Findings are based on repository code inspection of the current runtime blocks.
+- Findings are based on repository code inspection and the cleanup commits recorded below.
+
+## Cleanup progress after audit
+
+### Completed
+
+- Added LOG/LOG_COLLECTOR telemetry schema entries in `xreactor/shared/telemetry_schema.lua`.
+- Updated the corresponding manifest metadata for `shared/telemetry_schema.lua`.
+
+### Attempted but not completed through the connector
+
+- `xreactor/shared/constants.lua` LOG role/channel additions were attempted, but the repository write was blocked by the connector safety filter.
+- `xreactor/core/bootstrap.lua` first-start LOG role support was prepared, but not committed because constants/bootstrap code writes are currently blocked by the connector safety filter.
+- Direct README command examples with full raw installer URLs were also blocked by the connector filter; the placeholder form remains in the committed README, while the exact URLs were added manually outside this automation.
 
 ## Current high-level state
 
@@ -215,7 +227,9 @@ Current notes:
 
 - LOG collector listens on the log channel and writes incoming `LOG_EVENT` payloads to a disk ring or fallback directory.
 - It performs disk discovery, write probing, log rotation, and pruning.
-- LOG collector is represented in the manifest role list, but integration is not yet consistent across all shared role constants/schema/bootstrap paths.
+- LOG collector is represented in the manifest role list.
+- LOG/LOG_COLLECTOR now exists in `telemetry_schema.lua`.
+- LOG is still not fully integrated in `shared.constants.lua` or bootstrap first-start role selection because those runtime writes were blocked by the connector.
 
 ### Test/guard infrastructure inspected
 
@@ -234,26 +248,31 @@ Current notes:
 
 ## Current open work items
 
-These are the next cleanup/fix items identified by code inspection. They are documentation status, not yet completed fixes.
+These are the next cleanup/fix items identified by code inspection.
 
 ### 1. Manifest metadata consistency
 
 `xreactor/manifest.lua` still contains several entries without `size_bytes` / CRC32 `hash` metadata. The installer can still download and Lua-parse files without metadata, but storage preflight and integrity reporting are less precise when sizes/hashes are absent.
 
+Progress:
+
+- `shared/telemetry_schema.lua` metadata was updated after the LOG schema change.
+
 Next action:
 
-- Regenerate/fill manifest metadata for all shipped runtime files.
+- Run `python3 tools/regenerate_manifest_metadata.py` from a real repository checkout.
+- Commit the resulting full-manifest metadata update.
 - Remove temporary manifest-metadata exceptions from `tests/manifest_entrypoint_require_coverage_test.py` when the metadata is complete.
 
 ### 2. LOG role integration consistency
 
-The manifest contains a LOG/LOG_COLLECTOR role entry for `nodes/log_collector/main.lua`, but shared constants/schema/bootstrap/startup role surfaces are not yet fully aligned with LOG as a first-class role.
+The manifest contains a LOG/LOG_COLLECTOR role entry for `nodes/log_collector/main.lua`. `telemetry_schema.lua` now includes LOG/LOG_COLLECTOR telemetry fields.
 
-Next action:
+Remaining next action:
 
-- Decide whether LOG is an official installer/startup role or a standalone utility.
-- If official: add consistent role constants, schema/build/startup documentation, and installer/bootstrap flow support.
-- If standalone: document it as a manual utility and keep it out of normal role selection.
+- Add LOG/LOG_COLLECTOR constants in `shared.constants.lua`.
+- Add LOG to `core.bootstrap.lua` first-start role selection if LOG should be an official installer/startup role.
+- Keep the README LOG role section aligned with that final decision.
 
 ### 3. Release/build identity
 
@@ -261,8 +280,8 @@ Next action:
 
 Next action:
 
-- Decide whether beta branch identity is acceptable for dev installs.
-- For releases, stamp a concrete commit/version/build identifier.
+- Keep `commit_sha = "beta"` for dev branch installs if that is intentional.
+- For release builds, stamp a concrete commit/version/build identifier via release tooling.
 
 ### 4. MASTER alert message type drift
 
@@ -285,12 +304,12 @@ Next action:
 
 Recommended order before further feature work:
 
-1. Manifest metadata cleanup.
-2. LOG role integration decision and implementation.
-3. Release/build identity cleanup.
-4. MASTER alert-message-type cleanup.
-5. ENERGY config-default consolidation.
+1. Finish manifest metadata cleanup with the repo-local regeneration tool.
+2. Finish LOG role constants/bootstrap integration.
+3. Decide beta-vs-release build identity policy.
+4. Resolve MASTER alert-message-type drift.
+5. Consolidate or document ENERGY config defaults.
 
 ## Current conclusion
 
-Architecture is in a better state than the older non-RT closeout document suggests, but it is not final-release clean yet. The main remaining risks are packaging/integration consistency rather than the broad runtime split itself. Runtime code should remain untouched until the documentation-only update is committed and reviewed.
+Architecture is in a better state than the older non-RT closeout document suggests, but it is not final-release clean yet. The main remaining risks are packaging/integration consistency rather than the broad runtime split itself. The cleanup is partially underway; Doku must remain updated with every code change.
