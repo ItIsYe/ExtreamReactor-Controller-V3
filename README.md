@@ -35,7 +35,7 @@ Use `<installer-url>` for the raw GitHub URL of the root `installer` file on the
 Runs the installer directly once. This does **not** keep `/installer` on disk.
 
 ```text
-wget run <installer-url>
+wget run https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer
 ```
 
 ### 2) Empfohlene permanente Installation
@@ -43,7 +43,7 @@ wget run <installer-url>
 Downloads the installer to `/installer`, then runs it. From there the installer downloads the manifest and all required base + role files into `/xreactor`.
 
 ```text
-wget <installer-url> /installer
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer
 /installer
 ```
 
