@@ -16,6 +16,7 @@ Important boundaries:
 
 - Added LOG/LOG_COLLECTOR telemetry schema entries in `xreactor/shared/telemetry_schema.lua`.
 - Updated the corresponding manifest metadata for `shared/telemetry_schema.lua`.
+- Added `tools/stamp_release_metadata.py` so concrete release builds can stamp immutable release metadata without changing the moving `beta` branch install policy.
 
 ### Attempted but not completed through the connector
 
@@ -276,12 +277,12 @@ Remaining next action:
 
 ### 3. Release/build identity
 
-`xreactor/release.lua` still uses branch-style identity rather than a concrete immutable release/commit identity.
+`xreactor/release.lua` intentionally remains branch-style for moving beta installs. Concrete immutable release/build identity is now handled by `tools/stamp_release_metadata.py`.
 
 Next action:
 
 - Keep `commit_sha = "beta"` for dev branch installs if that is intentional.
-- For release builds, stamp a concrete commit/version/build identifier via release tooling.
+- For release builds, run `tools/stamp_release_metadata.py` with a concrete commit SHA and release ID, then commit the stamped `xreactor/release.lua` as part of release preparation.
 
 ### 4. MASTER alert message type drift
 
@@ -306,7 +307,7 @@ Recommended order before further feature work:
 
 1. Finish manifest metadata cleanup with the repo-local regeneration tool.
 2. Finish LOG role constants/bootstrap integration.
-3. Decide beta-vs-release build identity policy.
+3. Use release stamping helper for immutable release builds.
 4. Resolve MASTER alert-message-type drift.
 5. Consolidate or document ENERGY config defaults.
 
