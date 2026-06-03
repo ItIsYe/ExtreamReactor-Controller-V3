@@ -69,6 +69,11 @@ local function starts_with(text, prefix)
   return tostring(text or ""):sub(1, #tostring(prefix or "")) == tostring(prefix or "")
 end
 
+local function is_log_role(role_label)
+  local role = tostring(role_label or ""):upper()
+  return role == "LOG" or role == "LOG_COLLECTOR"
+end
+
 local function build_context(constants)
   constants.BASE_URL = BETA_BASE_URL
   constants.MANIFEST_URL = BETA_BASE_URL .. "manifest.lua"
@@ -242,8 +247,12 @@ local function select_role()
 end
 
 local function add_virtual_role_files(expected, role_label)
-  expected["core/utils.lua"] = expected["core/utils.lua"] or { path = "core/utils.lua", always = true }
-  if tostring(role_label):upper() == "LOG" then expected["nodes/log_collector/main.lua"] = { path = "nodes/log_collector/main.lua", required_for = { "LOG" } } end
+  if not is_log_role(role_label) then
+    expected["core/utils.lua"] = expected["core/utils.lua"] or { path = "core/utils.lua", always = true }
+  end
+  if is_log_role(role_label) then
+    expected["nodes/log_collector/main.lua"] = { path = "nodes/log_collector/main.lua", required_for = { "LOG", "LOG_COLLECTOR" } }
+  end
 end
 
 local function enforce_release_metadata_strategy(ctx, expected)
