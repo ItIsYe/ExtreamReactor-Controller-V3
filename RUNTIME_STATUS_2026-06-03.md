@@ -9,6 +9,24 @@ Boundaries:
 - No full regression run is claimed here.
 - This file must stay current with every cleanup change.
 
+## Latest uploaded logs
+
+The uploaded `xreactor_logs.zip` contained only:
+
+- `master/pc-53.log`
+- `rt/pc-52.log`
+
+Missing from that archive:
+
+- ENERGY node logs.
+- LOG collector self-log.
+
+Interpretation:
+
+- MASTER and RT are sending/being collected.
+- ENERGY either was not running, did not have a usable modem path to the collector, did not reach logger init, or its remote log traffic did not arrive at the LOG collector.
+- LOG collector did not previously write its own startup/status events into the collected log tree.
+
 ## Completed during cleanup
 
 - Added LOG/LOG_COLLECTOR telemetry schema entries in `xreactor/shared/telemetry_schema.lua`.
@@ -26,6 +44,10 @@ Boundaries:
 - Changed installer manifest selection so LOG/LOG_COLLECTOR no longer receives all base files automatically.
 - Marked `shared/constants.lua` explicit `always=true`, because the LOG collector reads it.
 - Changed virtual role-file injection so `core/utils.lua` is not added for LOG/LOG_COLLECTOR.
+- Added `tests/log_role_manifest_minimal_test.py` to guard minimal LOG role manifest selection.
+- Extended MASTER monitor discovery in `core/monitor_manager.lua` to include monitors reachable through wired modem remote peripherals.
+- Updated LOG collector to write startup/status self-log events under role `LOG_COLLECTOR`.
+- Updated LOG collector UI to redirect to a local monitor or modem-attached remote monitor when available.
 
 ## Ingame test finding
 
@@ -43,6 +65,25 @@ Fix status:
 - `xreactor/installer_manifest.lua` now treats base files as implicit for normal roles, but not for LOG/LOG_COLLECTOR.
 - LOG/LOG_COLLECTOR install should now include only explicit always files plus LOG-specific files, rather than large MASTER/RT/ENERGY runtime base files.
 
+## UI / monitor status
+
+MASTER UI:
+
+- `core/monitor_manager.lua` now discovers both directly attached monitors and monitors exposed through wired modem remote peripheral APIs.
+- Remote monitors are wrapped through `modem.callRemote(...)` proxy methods.
+- Discovered remote monitor entries include their source modem in `remote_modem` for diagnostics.
+
+LOG collector UI:
+
+- The collector now prefers a local monitor if present.
+- If no local monitor is present, it searches modem remote peripherals for monitors.
+- If a remote monitor is found, the collector redirects `term` to that monitor and renders the LOG dashboard there.
+- If no monitor exists, it falls back to the local terminal.
+
+Note:
+
+- A broader patch for `adapters/monitor.lua` was attempted so every node using `monitor.find(...)` also gets remote-monitor support, but that write was blocked by the connector safety filter. MASTER and LOG collector paths are covered.
+
 ## Connector/write limits observed
 
 The available GitHub write endpoint replaces complete files; there is no line-based patch endpoint in the currently available connector tool set. Some small intended runtime edits therefore still require sending the full target file, and a few full-file writes were blocked by the connector safety layer. Splitting changes into smaller semantic commits worked for the constants/bootstrap cleanup.
@@ -52,6 +93,7 @@ Known blocked or deferred write attempts:
 - README update after manual full installer URL insertion.
 - Separate ENERGY config ownership doc file.
 - GitHub issue creation for follow-up tracking.
+- General `adapters/monitor.lua` remote-monitor support.
 
 ## Architecture status
 
@@ -75,6 +117,7 @@ Completed:
 - LOG channel `6502` exists in `shared.constants.lua`.
 - LOG is available in bootstrap first-start role selection.
 - Installer role 7 now has minimal LOG-specific manifest selection instead of inheriting all base files.
+- LOG collector now writes its own `LOG_COLLECTOR` startup/status log entries.
 
 Expected LOG role installed files:
 
@@ -132,6 +175,8 @@ Recommended future cleanup:
 ## Recommended next order
 
 1. Re-run the LOG-role installer ingame after deleting the failed partial `/xreactor_stage` if it still exists.
-2. Run full manifest metadata regeneration locally.
-3. Remove manifest-metadata exceptions from the guard test.
-4. Later: refactor ENERGY defaults into one shared module with tests.
+2. Start/verify ENERGY node and check whether a new `energy/...log` file appears in the collector output.
+3. Verify MASTER and LOG collector UIs render on the modem-attached monitor.
+4. Run full manifest metadata regeneration locally.
+5. Remove manifest-metadata exceptions from the guard test.
+6. Later: refactor ENERGY defaults into one shared module with tests.
