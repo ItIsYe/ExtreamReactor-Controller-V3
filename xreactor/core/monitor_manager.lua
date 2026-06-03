@@ -4,6 +4,13 @@ local monitor_adapter = require("adapters.monitor")
 
 local manager = {}
 
+local REMOTE_MONITOR_METHODS = {
+  "write", "blit", "clear", "clearLine", "getSize", "setCursorPos", "getCursorPos",
+  "setCursorBlink", "getCursorBlink", "setTextColor", "setTextColour", "getTextColor", "getTextColour",
+  "setBackgroundColor", "setBackgroundColour", "getBackgroundColor", "getBackgroundColour",
+  "isColor", "isColour", "scroll", "setTextScale", "getTextScale"
+}
+
 local function safe_wrapped_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then
     return false, "missing method"
@@ -34,7 +41,7 @@ end
 local function build_devices(names)
   local devices = {}
   for _, name in ipairs(names or {}) do
-    local methods = utils.safe_get_methods(name) or {}
+    local methods = utils.safe_get_methods(name) or REMOTE_MONITOR_METHODS
     table.insert(devices, { name = name, type = "monitor", kind = "monitor", methods = methods, bound = true, found = true })
   end
   return devices
@@ -60,8 +67,58 @@ local function min_size_message(self, name, width, height)
   )
 end
 
+local function make_remote_monitor(modem, remote_name)
+  if not modem or type(modem.callRemote) ~= "function" then return nil end
+  local proxy = { __remote_name = remote_name }
+  for _, method in ipairs(REMOTE_MONITOR_METHODS) do
+    proxy[method] = function(...)
+      return modem.callRemote(remote_name, method, ...)
+    end
+  end
+  return proxy
+end
+
+local function remote_type_is_monitor(modem, remote_name)
+  if type(modem.getTypeRemote) == "function" then
+    local ok, ptype = pcall(modem.getTypeRemote, remote_name)
+    if ok and ptype == "monitor" then return true end
+  end
+  if type(modem.hasTypeRemote) == "function" then
+    local ok, result = pcall(modem.hasTypeRemote, remote_name, "monitor")
+    if ok and result == true then return true end
+  end
+  return false
+end
+
+local function discover_remote_monitors()
+  local monitors = {}
+  if not peripheral or type(peripheral.getNames) ~= "function" then return monitors end
+  for _, modem_name in ipairs(peripheral.getNames() or {}) do
+    if peripheral.getType(modem_name) == "modem" then
+      local ok_wrap, modem = pcall(peripheral.wrap, modem_name)
+      if ok_wrap and modem and type(modem.getNamesRemote) == "function" and type(modem.callRemote) == "function" then
+        local ok_names, remote_names = pcall(modem.getNamesRemote)
+        if ok_names and type(remote_names) == "table" then
+          for _, remote_name in ipairs(remote_names) do
+            if remote_type_is_monitor(modem, remote_name) then
+              monitors[remote_name] = { modem_name = modem_name, modem = modem }
+            end
+          end
+        end
+      end
+    end
+  end
+  return monitors
+end
+
 function manager:new_wrapped_monitor(name)
-  local mon = utils.safe_wrap(name)
+  local remote = self.remote_monitors and self.remote_monitors[name]
+  local mon = nil
+  if remote then
+    mon = make_remote_monitor(remote.modem, name)
+  else
+    mon = utils.safe_wrap(name)
+  end
   if mon then self.wrap_cache[name] = mon else self.wrap_cache[name] = nil end
   return mon
 end
@@ -70,6 +127,11 @@ function manager:get_wrapped_monitor(name)
   local mon = self.wrap_cache[name]
   if mon and type(mon.getSize) == "function" then return mon end
   return self:new_wrapped_monitor(name)
+end
+
+local function monitor_is_present(self, name)
+  if peripheral and peripheral.isPresent and peripheral.isPresent(name) then return true end
+  return self.remote_monitors and self.remote_monitors[name] ~= nil
 end
 
 function manager.new(opts)
@@ -84,7 +146,8 @@ function manager.new(opts)
     registry = registry_lib.new({ role = opts.role or "master_monitor", node_id = opts.node_id or "MASTER", path = opts.path }),
     disabled = {},
     scale_cache = {},
-    wrap_cache = {}
+    wrap_cache = {},
+    remote_monitors = {}
   }
   return setmetatable(self, { __index = manager })
 end
@@ -92,10 +155,20 @@ end
 function manager:scan()
   local names = {}
   local present_names = {}
+  local seen = {}
+  self.remote_monitors = discover_remote_monitors()
   for _, name in ipairs(peripheral.getNames() or {}) do
-    if peripheral.getType(name) == "monitor" then
+    if peripheral.getType(name) == "monitor" and not seen[name] then
       table.insert(names, name)
       present_names[name] = true
+      seen[name] = true
+    end
+  end
+  for name, _ in pairs(self.remote_monitors or {}) do
+    if not seen[name] then
+      table.insert(names, name)
+      present_names[name] = true
+      seen[name] = true
     end
   end
   table.sort(names)
@@ -117,7 +190,7 @@ function manager:scan()
   local order = self.registry:get_order_index()
   local entries = {}
   for _, entry in ipairs(self.registry:list("monitor")) do
-    if entry and entry.name and peripheral.isPresent(entry.name) then table.insert(entries, entry) end
+    if entry and entry.name and monitor_is_present(self, entry.name) then table.insert(entries, entry) end
   end
   table.sort(entries, function(a, b)
     local rank_a = order[a.id] or math.huge
@@ -181,7 +254,8 @@ function manager:scan()
         size_tag = size_tag,
         text_scale = effective_scale,
         layout_class = classify_layout(width, height, size_tag),
-        last_applied_scale = self.scale_cache[entry.name]
+        last_applied_scale = self.scale_cache[entry.name],
+        remote_modem = self.remote_monitors[entry.name] and self.remote_monitors[entry.name].modem_name or nil
       })
     else
       utils.log(self.log_prefix, "Monitor wrap failed for " .. tostring(entry.name), "WARN")
