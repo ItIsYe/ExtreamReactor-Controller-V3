@@ -18,6 +18,9 @@ Boundaries:
 - Documented ENERGY config ownership: `nodes/energy/main.lua` is the authoritative runtime-default source; `nodes/energy/config.lua` is the installable/user-facing template.
 - Added LOG to `xreactor/core/bootstrap.lua` first-start role selection.
 - Updated `xreactor/manifest.lua` metadata for `core/bootstrap.lua`.
+- Added `ALERT_SUMMARY` to `xreactor/shared/constants.lua` to match the existing MASTER message-handler branch.
+- Added `tests/message_type_reference_guard_test.py` to guard `constants.message_types.*` references.
+- Updated `xreactor/manifest.lua` metadata for `shared/constants.lua`.
 
 ## Connector/write limits observed
 
@@ -25,7 +28,7 @@ The available GitHub write endpoint replaces complete files; there is no line-ba
 
 Known blocked or deferred write attempts:
 
-- `xreactor/shared/constants.lua` LOG/LOG_COLLECTOR role/channel additions.
+- `xreactor/shared/constants.lua` full LOG/LOG_COLLECTOR role/channel additions.
 - README update after manual full installer URL insertion.
 - Separate ENERGY config ownership doc file.
 - GitHub issue creation for follow-up tracking.
@@ -77,15 +80,10 @@ For release builds:
 
 ## MASTER alert message type drift
 
-Still open:
+Resolved:
 
-- `xreactor/master/message_handlers.lua` references `constants.message_types.ALERT_SUMMARY`.
-- `xreactor/shared/constants.lua` does not currently define `ALERT_SUMMARY`.
-
-Next decision:
-
-- Either define `ALERT_SUMMARY` intentionally in constants,
-- or remove/replace the dead branch if alert summaries are now represented through STATUS payloads.
+- `xreactor/shared/constants.lua` now defines `ALERT_SUMMARY`.
+- `tests/message_type_reference_guard_test.py` will catch future undefined `constants.message_types.*` references.
 
 ## ENERGY config defaults
 
@@ -103,7 +101,6 @@ Recommended future cleanup:
 ## Recommended next order
 
 1. Finish `shared.constants.lua` LOG constants/channel update from a local checkout or via a connector-safe method.
-2. Resolve `ALERT_SUMMARY` drift.
-3. Run full manifest metadata regeneration locally.
-4. Remove manifest-metadata exceptions from the guard test.
-5. Later: refactor ENERGY defaults into one shared module with tests.
+2. Run full manifest metadata regeneration locally.
+3. Remove manifest-metadata exceptions from the guard test.
+4. Later: refactor ENERGY defaults into one shared module with tests.
