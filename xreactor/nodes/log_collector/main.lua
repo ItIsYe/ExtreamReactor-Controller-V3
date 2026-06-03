@@ -56,11 +56,6 @@ local function fit(text, width)
   return raw:sub(1, w - 1) .. "~"
 end
 
-local function pad(text, width)
-  local s = fit(text, width)
-  return s .. string.rep(" ", math.max(0, width - #s))
-end
-
 local function line(x, y, text, fg, bg)
   local w = ({ term.getSize() })[1] or 40
   term.setCursorPos(x, y)
@@ -341,25 +336,29 @@ local function self_log(message, level)
   return ok
 end
 
-local function find_modem()
-  if not peripheral or not peripheral.getNames then return nil, nil end
+local function find_modems()
+  local found = {}
+  if not peripheral or not peripheral.getNames then return found end
   local names = peripheral.getNames()
-  local fallback_name, fallback_modem = nil, nil
+  table.sort(names)
+  local wireless, wired = {}, {}
   for _, name in ipairs(names) do
     if peripheral.getType(name) == "modem" then
       local modem = peripheral.wrap(name)
-      if modem then
-        local wireless = false
+      if modem and type(modem.open) == "function" then
+        local is_wireless = false
         if type(modem.isWireless) == "function" then
           local ok, result = pcall(modem.isWireless)
-          wireless = ok and result == true
+          is_wireless = ok and result == true
         end
-        if wireless then return name, modem end
-        fallback_name, fallback_modem = fallback_name or name, fallback_modem or modem
+        local entry = { name = name, modem = modem, wireless = is_wireless }
+        if is_wireless then wireless[#wireless + 1] = entry else wired[#wired + 1] = entry end
       end
     end
   end
-  return fallback_name, fallback_modem
+  for _, entry in ipairs(wireless) do found[#found + 1] = entry end
+  for _, entry in ipairs(wired) do found[#found + 1] = entry end
+  return found
 end
 
 local REMOTE_MONITOR_METHODS = { "write", "blit", "clear", "clearLine", "getSize", "setCursorPos", "getCursorPos", "setCursorBlink", "setTextColor", "setTextColour", "setBackgroundColor", "setBackgroundColour", "scroll", "setTextScale", "getTextScale" }
@@ -481,12 +480,16 @@ end
 local function run()
   refresh_disks_if_needed(true)
   redirect_display()
-  local modem_name, modem = find_modem()
-  stats.modem = modem_name
+  local modems = find_modems()
+  local modem_names = {}
+  for _, entry in ipairs(modems) do
+    local ok = pcall(entry.modem.open, CHANNEL)
+    if ok then modem_names[#modem_names + 1] = entry.name end
+  end
+  stats.modem = table.concat(modem_names, ",")
   self_log("LOG collector startup display=" .. tostring(stats.display_name) .. " disks=" .. tostring(#stats.disks), "INFO")
-  if not modem then self_log("No modem found for LOG collector", "ERROR"); error("No modem found for LOG collector", 0) end
-  modem.open(CHANNEL)
-  self_log("Listening on log channel " .. tostring(CHANNEL) .. " modem=" .. tostring(modem_name), "INFO")
+  if #modem_names == 0 then self_log("No modem found for LOG collector", "ERROR"); error("No modem found for LOG collector", 0) end
+  self_log("Listening on log channel " .. tostring(CHANNEL) .. " modems=" .. tostring(stats.modem), "INFO")
   draw()
   local status_timer = os.startTimer and os.startTimer(30) or nil
   while true do
