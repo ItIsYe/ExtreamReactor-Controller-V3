@@ -23,6 +23,9 @@ Boundaries:
 - Updated `xreactor/manifest.lua` metadata for `shared/constants.lua`.
 - Fixed installer low-space cleanup so active `/xreactor_stage` is not deleted while writing staged files.
 - Changed installer staging order so files with known larger `size_bytes` are downloaded/written first.
+- Changed installer manifest selection so LOG/LOG_COLLECTOR no longer receives all base files automatically.
+- Marked `shared/constants.lua` explicit `always=true`, because the LOG collector reads it.
+- Changed virtual role-file injection so `core/utils.lua` is not added for LOG/LOG_COLLECTOR.
 
 ## Ingame test finding
 
@@ -37,7 +40,8 @@ Fix status:
 - `xreactor/installer_storage.lua` now supports `keep_stage = true` and preserves the active stage during cleanup.
 - `xreactor/installer_main.lua` now passes `keep_stage = true` when the target path is inside `/xreactor_stage/`.
 - `xreactor/installer_stage.lua` now stages files ordered by known size descending, with path name as a stable tie-breaker.
-- For low-space staging writes, cleanup may still remove logs/backups and may delete the old install root if needed, but it should no longer delete already downloaded staged files.
+- `xreactor/installer_manifest.lua` now treats base files as implicit for normal roles, but not for LOG/LOG_COLLECTOR.
+- LOG/LOG_COLLECTOR install should now include only explicit always files plus LOG-specific files, rather than large MASTER/RT/ENERGY runtime base files.
 
 ## Connector/write limits observed
 
@@ -70,6 +74,21 @@ Completed:
 - LOG/LOG_COLLECTOR exists in `shared.constants.lua`.
 - LOG channel `6502` exists in `shared.constants.lua`.
 - LOG is available in bootstrap first-start role selection.
+- Installer role 7 now has minimal LOG-specific manifest selection instead of inheriting all base files.
+
+Expected LOG role installed files:
+
+- `installer_http.lua`
+- `installer_main.lua`
+- `installer_manifest.lua`
+- `installer_stage.lua`
+- `installer_startup.lua`
+- `installer_storage.lua`
+- `release.lua`
+- `start.lua`
+- `shared/build_info.lua`
+- `shared/constants.lua`
+- `nodes/log_collector/main.lua`
 
 ## Manifest metadata status
 
@@ -112,7 +131,7 @@ Recommended future cleanup:
 
 ## Recommended next order
 
-1. Re-run the installer ingame after deleting the failed partial `/xreactor_stage` if it still exists.
+1. Re-run the LOG-role installer ingame after deleting the failed partial `/xreactor_stage` if it still exists.
 2. Run full manifest metadata regeneration locally.
 3. Remove manifest-metadata exceptions from the guard test.
 4. Later: refactor ENERGY defaults into one shared module with tests.
