@@ -18,6 +18,7 @@ constants.message_types = {
   STATUS = "STATUS",
   COMMAND = "COMMAND",
   ALERT = "ALERT",
+  ALERT_SUMMARY = "ALERT_SUMMARY",
   ACK = "ACK",
   ACK_DELIVERED = "ACK_DELIVERED",
   ACK_APPLIED = "ACK_APPLIED",
