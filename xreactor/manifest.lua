@@ -5,7 +5,7 @@ return {
   hash_algo = "crc32",
   base_files = {
       { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460" },
-      { path = "core/bootstrap.lua", size_bytes = 10874, hash = "4a180335" },
+      { path = "core/bootstrap.lua", size_bytes = 10909, hash = "c99887b8" },
       { path = "core/comms.lua", size_bytes = 24518, hash = "4f174212" },
       { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
       { path = "core/logger.lua", size_bytes = 30592, hash = "1688d3c8" },
