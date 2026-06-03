@@ -37,7 +37,7 @@ return {
       { path = "start.lua", always = true },
       { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
       { path = "shared/colors.lua", size_bytes = 332, hash = "445d12af" },
-      { path = "shared/constants.lua", size_bytes = 1384, hash = "db560e96" },
+      { path = "shared/constants.lua", size_bytes = 1419, hash = "7c5c402a" },
       { path = "shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
       { path = "shared/telemetry_schema.lua", size_bytes = 938, hash = "9567b224" },
   },
