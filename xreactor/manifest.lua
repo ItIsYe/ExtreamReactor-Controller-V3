@@ -39,7 +39,7 @@ return {
       { path = "shared/colors.lua", size_bytes = 332, hash = "445d12af" },
       { path = "shared/constants.lua", size_bytes = 1384, hash = "db560e96" },
       { path = "shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
-      { path = "shared/telemetry_schema.lua", size_bytes = 680, hash = "42e7fe19" },
+      { path = "shared/telemetry_schema.lua", size_bytes = 938, hash = "9567b224" },
   },
   dev_files = {
   },
