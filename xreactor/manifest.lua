@@ -89,7 +89,7 @@ return {
       { path = "nodes/rt/telemetry.lua", size_bytes = 23168, hash = "ff2ac860" },
     },
     energy = {
-      { path = "nodes/energy/main.lua", size_bytes = 37631, hash = "0d076219", required_for = { "ENERGY" } },
+      { path = "nodes/energy/main.lua", required_for = { "ENERGY" } },
       { path = "nodes/energy/adapter_probe.lua", size_bytes = 1412, hash = "90090e97" },
       { path = "nodes/energy/command_handler.lua", size_bytes = 6639, hash = "e380d15c" },
       { path = "nodes/energy/config.lua", size_bytes = 3917, hash = "f00e4d69" },
