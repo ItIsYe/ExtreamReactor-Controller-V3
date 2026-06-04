@@ -8,7 +8,8 @@ local CONFIG = {
   REMOTE_LOG_CHANNEL = 6502,
   REMOTE_LOG_PENDING_LIMIT = 64,
   REMOTE_LOG_RETRY_EVERY = 4,
-  REMOTE_LOG_MAX_SENDS = 6
+  REMOTE_LOG_MAX_SENDS = 6,
+  REMOTE_LOG_MODEM_REFRESH_SECONDS = 10
 }
 
 local utils = {}
@@ -28,9 +29,11 @@ local remote_log_state = {
   resent = 0,
   dropped = 0,
   acked = 0,
+  modem_refreshes = 0,
   pending = {},
   pending_order = {},
-  next_retry_at = 0
+  next_retry_at = 0,
+  next_modem_refresh_at = 0
 }
 
 local function read_file(path)
@@ -130,6 +133,23 @@ local function discover_log_modems()
   return list
 end
 
+local function refresh_log_modems(force)
+  if not remote_log_state.initialized then return end
+  local now = now_ticks()
+  if not force and #remote_log_state.modems > 0 and now < (remote_log_state.next_modem_refresh_at or 0) then return end
+  remote_log_state.next_modem_refresh_at = now + CONFIG.REMOTE_LOG_MODEM_REFRESH_SECONDS
+  local discovered = discover_log_modems()
+  remote_log_state.modems = discovered
+  remote_log_state.modem_names = {}
+  for _, entry in ipairs(remote_log_state.modems) do
+    remote_log_state.modem_names[#remote_log_state.modem_names + 1] = entry.name
+    if type(entry.modem.open) == "function" then
+      pcall(entry.modem.open, CONFIG.REMOTE_LOG_CHANNEL)
+    end
+  end
+  remote_log_state.modem_refreshes = (remote_log_state.modem_refreshes or 0) + 1
+end
+
 local function settings_bool(key, fallback)
   if settings and type(settings.get) == "function" then
     local value = settings.get(key)
@@ -148,18 +168,12 @@ local function init_remote_log(opts)
   remote_log_state.node_id = opts.node_id or resolve_node_id()
   remote_log_state.role = opts.prefix or read_role_config_value()
   remote_log_state.boot_id = make_boot_id(remote_log_state.node_id)
-  remote_log_state.modems = discover_log_modems()
-  remote_log_state.modem_names = {}
-  for _, entry in ipairs(remote_log_state.modems) do
-    remote_log_state.modem_names[#remote_log_state.modem_names + 1] = entry.name
-    if type(entry.modem.open) == "function" then
-      pcall(entry.modem.open, CONFIG.REMOTE_LOG_CHANNEL)
-    end
-  end
   remote_log_state.initialized = true
+  refresh_log_modems(true)
 end
 
 local function transmit_payload(payload)
+  refresh_log_modems(false)
   if not remote_log_state.enabled or #remote_log_state.modems == 0 then
     return 0
   end
@@ -195,6 +209,7 @@ end
 
 local function retry_pending(force)
   if not remote_log_state.initialized then return end
+  refresh_log_modems(false)
   local now = now_ticks()
   if not force and now < (remote_log_state.next_retry_at or 0) then return end
   remote_log_state.next_retry_at = now + CONFIG.REMOTE_LOG_RETRY_EVERY
@@ -218,6 +233,7 @@ end
 
 local function handle_remote_ack(message)
   if type(message) ~= "table" or message.type ~= "LOG_ACK" then return false end
+  if not remote_log_state.initialized then return true end
   if message.to_node and tostring(message.to_node) ~= tostring(remote_log_state.node_id or resolve_node_id()) then return true end
   if message.event_id and forget_pending(message.event_id) then remote_log_state.acked = remote_log_state.acked + 1 end
   return true
@@ -228,6 +244,9 @@ local function send_remote_log(prefix, level, message)
     if not remote_log_state.initialized then init_remote_log({ prefix = prefix }) end
     handle_remote_ack(message)
     retry_pending(false)
+    if not remote_log_state.enabled or #remote_log_state.modems == 0 then
+      refresh_log_modems(true)
+    end
     if not remote_log_state.enabled or #remote_log_state.modems == 0 then
       remote_log_state.dropped = remote_log_state.dropped + 1
       return
@@ -485,6 +504,7 @@ function utils.remote_log_status()
     enabled = remote_log_state.enabled == true,
     modem = table.concat(remote_log_state.modem_names or {}, ","),
     modems = remote_log_state.modem_names,
+    modem_refreshes = remote_log_state.modem_refreshes,
     node_id = remote_log_state.node_id,
     role = remote_log_state.role,
     boot_id = remote_log_state.boot_id,
