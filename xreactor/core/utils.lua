@@ -5,7 +5,10 @@ local CONFIG = {
   ROLE_CONFIG_PATH = "/xreactor/config/role.lua",
   LOG_NAME_SEPARATOR = "_",
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
-  REMOTE_LOG_CHANNEL = 6502
+  REMOTE_LOG_CHANNEL = 6502,
+  REMOTE_LOG_PENDING_LIMIT = 64,
+  REMOTE_LOG_RETRY_EVERY = 4,
+  REMOTE_LOG_MAX_SENDS = 6
 }
 
 local utils = {}
@@ -19,8 +22,14 @@ local remote_log_state = {
   modem_names = {},
   node_id = nil,
   role = nil,
+  seq = 0,
   sent = 0,
-  dropped = 0
+  resent = 0,
+  dropped = 0,
+  acked = 0,
+  pending = {},
+  pending_order = {},
+  next_retry_at = 0
 }
 
 local function read_file(path)
@@ -59,6 +68,18 @@ local function resolve_node_id()
     return "pc-" .. tostring(os.getComputerID())
   end
   return "unknown-node"
+end
+
+local function now_ticks()
+  if os and type(os.clock) == "function" then
+    local ok, value = pcall(os.clock)
+    if ok and type(value) == "number" then return value end
+  end
+  if os and type(os.epoch) == "function" then
+    local ok, value = pcall(os.epoch, "utc")
+    if ok and type(value) == "number" then return math.floor(value / 1000) end
+  end
+  return 0
 end
 
 local function discover_log_modems()
@@ -110,35 +131,108 @@ local function init_remote_log(opts)
   remote_log_state.modem_names = {}
   for _, entry in ipairs(remote_log_state.modems) do
     remote_log_state.modem_names[#remote_log_state.modem_names + 1] = entry.name
+    if type(entry.modem.open) == "function" then
+      pcall(entry.modem.open, CONFIG.REMOTE_LOG_CHANNEL)
+    end
   end
   remote_log_state.initialized = true
+end
+
+local function transmit_payload(payload)
+  if not remote_log_state.enabled or #remote_log_state.modems == 0 then
+    return 0
+  end
+  local delivered = 0
+  for _, entry in ipairs(remote_log_state.modems) do
+    local sent_ok = pcall(function()
+      entry.modem.transmit(CONFIG.REMOTE_LOG_CHANNEL, CONFIG.REMOTE_LOG_CHANNEL, payload)
+    end)
+    if sent_ok then delivered = delivered + 1 end
+  end
+  return delivered
+end
+
+local function forget_pending(event_id)
+  if not event_id or not remote_log_state.pending[event_id] then return false end
+  remote_log_state.pending[event_id] = nil
+  for i = #remote_log_state.pending_order, 1, -1 do
+    if remote_log_state.pending_order[i] == event_id then table.remove(remote_log_state.pending_order, i) end
+  end
+  return true
+end
+
+local function add_pending(payload)
+  if not payload or not payload.event_id then return end
+  if remote_log_state.pending[payload.event_id] then return end
+  while #remote_log_state.pending_order >= CONFIG.REMOTE_LOG_PENDING_LIMIT do
+    local old_id = table.remove(remote_log_state.pending_order, 1)
+    if old_id then remote_log_state.pending[old_id] = nil; remote_log_state.dropped = remote_log_state.dropped + 1 end
+  end
+  remote_log_state.pending[payload.event_id] = { payload = payload, sends = 1, last_send = now_ticks() }
+  remote_log_state.pending_order[#remote_log_state.pending_order + 1] = payload.event_id
+end
+
+local function retry_pending(force)
+  if not remote_log_state.initialized then return end
+  local now = now_ticks()
+  if not force and now < (remote_log_state.next_retry_at or 0) then return end
+  remote_log_state.next_retry_at = now + CONFIG.REMOTE_LOG_RETRY_EVERY
+  local snapshot = {}
+  for _, event_id in ipairs(remote_log_state.pending_order) do snapshot[#snapshot + 1] = event_id end
+  for _, event_id in ipairs(snapshot) do
+    local item = remote_log_state.pending[event_id]
+    if item and item.payload then
+      if item.sends >= CONFIG.REMOTE_LOG_MAX_SENDS then
+        forget_pending(event_id)
+        remote_log_state.dropped = remote_log_state.dropped + 1
+      else
+        local delivered = transmit_payload(item.payload)
+        item.sends = item.sends + 1
+        item.last_send = now
+        if delivered > 0 then remote_log_state.resent = remote_log_state.resent + 1 end
+      end
+    end
+  end
+end
+
+local function handle_remote_ack(message)
+  if type(message) ~= "table" or message.type ~= "LOG_ACK" then return false end
+  if message.to_node and tostring(message.to_node) ~= tostring(remote_log_state.node_id or resolve_node_id()) then return true end
+  if message.event_id and forget_pending(message.event_id) then remote_log_state.acked = remote_log_state.acked + 1 end
+  return true
 end
 
 local function send_remote_log(prefix, level, message)
   local ok = pcall(function()
     if not remote_log_state.initialized then init_remote_log({ prefix = prefix }) end
+    handle_remote_ack(message)
+    retry_pending(false)
     if not remote_log_state.enabled or #remote_log_state.modems == 0 then
       remote_log_state.dropped = remote_log_state.dropped + 1
       return
     end
+    remote_log_state.seq = (remote_log_state.seq or 0) + 1
+    local node_id = remote_log_state.node_id or resolve_node_id()
     local payload = {
       type = "LOG_EVENT",
-      proto = "xreactor-log-v1",
-      node_id = remote_log_state.node_id or resolve_node_id(),
+      proto = "xreactor-log-v2",
+      node_id = node_id,
       role = remote_log_state.role or read_role_config_value(),
       prefix = tostring(prefix or "LOG"),
       level = tostring(level or "INFO"),
       message = tostring(message or ""),
-      ts = os and os.epoch and os.epoch("utc") or nil
+      seq = remote_log_state.seq,
+      event_id = tostring(node_id) .. ":" .. tostring(remote_log_state.seq),
+      ts = os and os.epoch and os.epoch("utc") or nil,
+      ack = true
     }
-    local delivered = 0
-    for _, entry in ipairs(remote_log_state.modems) do
-      local sent_ok = pcall(function()
-        entry.modem.transmit(CONFIG.REMOTE_LOG_CHANNEL, CONFIG.REMOTE_LOG_CHANNEL, payload)
-      end)
-      if sent_ok then delivered = delivered + 1 end
+    local delivered = transmit_payload(payload)
+    if delivered > 0 then
+      remote_log_state.sent = remote_log_state.sent + 1
+      add_pending(payload)
+    else
+      remote_log_state.dropped = remote_log_state.dropped + 1
     end
-    if delivered > 0 then remote_log_state.sent = remote_log_state.sent + 1 else remote_log_state.dropped = remote_log_state.dropped + 1 end
   end)
   if not ok then remote_log_state.dropped = remote_log_state.dropped + 1 end
 end
@@ -276,6 +370,16 @@ function utils.log(prefix, message, level)
   if not ok then pcall(print, "WARN: logging suppressed due to non-fatal logger failure") end
 end
 
+function utils.handle_remote_log_message(message)
+  if not remote_log_state.initialized then init_remote_log({}) end
+  return handle_remote_ack(message)
+end
+
+function utils.flush_remote_logs()
+  if not remote_log_state.initialized then init_remote_log({}) end
+  retry_pending(true)
+end
+
 function utils.safe_peripheral_call(name, method, ...)
   if not name or not peripheral.isPresent(name) then return nil, "peripheral missing" end
   local results = table.pack(pcall(peripheral.call, name, method, ...))
@@ -359,8 +463,12 @@ function utils.remote_log_status()
     modems = remote_log_state.modem_names,
     node_id = remote_log_state.node_id,
     role = remote_log_state.role,
+    seq = remote_log_state.seq,
     sent = remote_log_state.sent,
-    dropped = remote_log_state.dropped
+    resent = remote_log_state.resent,
+    dropped = remote_log_state.dropped,
+    acked = remote_log_state.acked,
+    pending = #remote_log_state.pending_order
   }
 end
 
