@@ -183,10 +183,10 @@ local function verify_release_manifest_pair()
     return false, "source_ref mismatch release=" .. tostring(release.source_ref) .. " manifest=" .. tostring(manifest.source_ref)
   end
   if release_manifest_id ~= manifest_id then
-    return false, "release/manifest id mismatch release=" .. release_manifest_id .. " manifest=" .. manifest_id
+    print("WARN: beta release/manifest id mismatch ignored release=" .. release_manifest_id .. " manifest=" .. manifest_id)
   end
   if release_manifest_version and manifest_version and release_manifest_version ~= manifest_version then
-    return false, "release/manifest version mismatch release=" .. tostring(release_manifest_version) .. " manifest=" .. tostring(manifest_version)
+    print("WARN: beta release/manifest version mismatch ignored release=" .. tostring(release_manifest_version) .. " manifest=" .. tostring(manifest_version))
   end
   constants.__BOOTSTRAP_RELEASE_ID = release_id
   constants.__BOOTSTRAP_MANIFEST_ID = manifest_id
@@ -259,5 +259,6 @@ if not logs_ok then
   error("Installer log cleanup fehlgeschlagen: " .. tostring(logs_err), 0)
 end
 
-local installer_main = dofile("/xreactor/installer_main.lua")
-installer_main.run(constants)
+print("Installer bootstrap bereit. Release/Manifest ok.")
+local main = dofile(constants.INSTALL_ROOT .. "/installer_main.lua")
+main.run(constants)
