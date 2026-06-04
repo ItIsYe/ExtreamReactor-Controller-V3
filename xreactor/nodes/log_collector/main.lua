@@ -15,6 +15,7 @@ local FALLBACK_ROOT = "/xreactor_collected_logs"
 local MAX_LOG_BYTES = 8192
 local ROTATE_KEEP = 3
 local MIN_FREE_BYTES = 1024
+local DEDUPE_LIMIT = 512
 local SELF_ROLE = "LOG_COLLECTOR"
 local MONITOR_NAME_FILE = "/xreactor/config/log_monitor.txt"
 
@@ -22,6 +23,8 @@ local stats = {
   received = 0,
   written = 0,
   dropped = 0,
+  duplicates = 0,
+  ack_sent = 0,
   paused_dropped = 0,
   rotated = 0,
   pruned = 0,
@@ -37,10 +40,13 @@ local stats = {
   last_error = nil,
   log_root = nil,
   modem = nil,
+  modems = {},
   display = nil,
   display_name = "term",
   paused = false,
-  pause_button = nil
+  pause_button = nil,
+  seen = {},
+  seen_order = {}
 }
 
 local function c(name)
@@ -208,9 +214,7 @@ local function discover_log_disks()
     disks[#disks + 1] = { mount = "/", root = FALLBACK_ROOT, fallback = true }
   end
   table.sort(disks, function(a, b) return tostring(a.mount) < tostring(b.mount) end)
-  for i, disk_entry in ipairs(disks) do
-    disk_entry.id = i
-  end
+  for i, disk_entry in ipairs(disks) do disk_entry.id = i end
   return disks
 end
 
@@ -277,9 +281,7 @@ local function rotate_file(path)
   local size = fs.getSize(path)
   if size < MAX_LOG_BYTES then return false end
   safe_delete(path .. "." .. tostring(ROTATE_KEEP))
-  for i = ROTATE_KEEP - 1, 1, -1 do
-    safe_move(path .. "." .. tostring(i), path .. "." .. tostring(i + 1))
-  end
+  for i = ROTATE_KEEP - 1, 1, -1 do safe_move(path .. "." .. tostring(i), path .. "." .. tostring(i + 1)) end
   safe_move(path, path .. ".1")
   stats.rotated = stats.rotated + 1
   return true
@@ -366,19 +368,53 @@ local function write_log(payload)
   return false, tostring(err or last_err or "all disks full")
 end
 
+local function remember_event(event_id)
+  if type(event_id) ~= "string" or event_id == "" or stats.seen[event_id] then return end
+  stats.seen[event_id] = true
+  stats.seen_order[#stats.seen_order + 1] = event_id
+  while #stats.seen_order > DEDUPE_LIMIT do
+    local old = table.remove(stats.seen_order, 1)
+    if old then stats.seen[old] = nil end
+  end
+end
+
+local function has_seen(event_id)
+  return type(event_id) == "string" and event_id ~= "" and stats.seen[event_id] == true
+end
+
+local function send_ack(payload, status)
+  if type(payload) ~= "table" or not payload.ack or not payload.event_id or not payload.node_id then return end
+  local ack = {
+    type = "LOG_ACK",
+    proto = "xreactor-log-v2",
+    event_id = payload.event_id,
+    to_node = payload.node_id,
+    collector_node = node_id(),
+    status = status or "written",
+    ts = os and os.epoch and os.epoch("utc") or nil
+  }
+  for _, entry in ipairs(stats.modems or {}) do
+    if entry.modem and type(entry.modem.transmit) == "function" then
+      local ok = pcall(entry.modem.transmit, CHANNEL, CHANNEL, ack)
+      if ok then stats.ack_sent = stats.ack_sent + 1 end
+    end
+  end
+end
+
 local function self_log(message, level)
   local payload = {
     type = "LOG_EVENT",
-    proto = "xreactor-log-v1",
+    proto = "xreactor-log-v2",
     node_id = node_id(),
     role = SELF_ROLE,
     prefix = "LOG",
     level = level or "INFO",
     message = message,
+    event_id = node_id() .. ":self:" .. tostring(os and os.epoch and os.epoch("utc") or math.random(1, 999999)),
     ts = os and os.epoch and os.epoch("utc") or nil
   }
   local ok, err = write_log(payload)
-  if not ok and err ~= "paused" then stats.last_error = err end
+  if ok then remember_event(payload.event_id) elseif err ~= "paused" then stats.last_error = err end
   return ok
 end
 
@@ -518,7 +554,6 @@ local function find_display()
     if remote_mon then return remote_name, remote_mon end
     stats.last_error = "configured monitor not found: " .. tostring(configured)
   end
-
   if peripheral and type(peripheral.getNames) == "function" then
     local names = peripheral.getNames() or {}
     table.sort(names)
@@ -527,7 +562,6 @@ local function find_display()
       if local_mon then return local_name, local_mon end
     end
   end
-
   local remote_name, remote_mon = try_remote_monitor(nil, nil)
   if remote_mon then return remote_name, remote_mon end
   return "term", term
@@ -575,17 +609,18 @@ draw = function()
   line(2, 11, "Free " .. tostring(free) .. " bytes at " .. tostring(stats.log_root or "n/a"), free < MIN_FREE_BYTES and c("yellow") or c("lime"))
   progress(2, 12, math.max(8, w - 3), free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free < MIN_FREE_BYTES and "WARN" or "OK")
   line(2, 14, "Traffic", c("cyan"))
-  line(2, 15, string.format("Recv %-7s Written %-7s Drop %-5s", tostring(stats.received), tostring(stats.written), tostring(stats.dropped)), c("white"))
-  line(2, 16, string.format("PausedDrop %-5s Switch %-5s Rotate %-5s", tostring(stats.paused_dropped), tostring(stats.disk_switches), tostring(stats.rotated)), c("lightGray"))
-  line(2, 18, "Last", c("cyan"))
-  line(2, 19, fit(tostring(stats.last_node) .. "  " .. tostring(stats.last_level), w - 3), c("white"))
-  if stats.last_error and h >= 21 then
-    line(2, 21, "Error", c("red"))
-    line(2, 22, fit(tostring(stats.last_error), w - 3), c("red"))
-  elseif stats.paused and h >= 21 then
-    line(2, 21, "Disk writes paused for backup/download", c("yellow"))
-  elseif h >= 21 then
-    line(2, 21, "Status stable", c("lime"))
+  line(2, 15, string.format("Recv %-6s Write %-6s Drop %-5s Dup %-5s", tostring(stats.received), tostring(stats.written), tostring(stats.dropped), tostring(stats.duplicates)), c("white"))
+  line(2, 16, string.format("ACK %-7s PausedDrop %-5s", tostring(stats.ack_sent), tostring(stats.paused_dropped)), c("lightGray"))
+  line(2, 17, string.format("Switch %-5s Rotate %-5s Prune %-5s", tostring(stats.disk_switches), tostring(stats.rotated), tostring(stats.pruned)), c("lightGray"))
+  line(2, 19, "Last", c("cyan"))
+  line(2, 20, fit(tostring(stats.last_node) .. "  " .. tostring(stats.last_level), w - 3), c("white"))
+  if stats.last_error and h >= 22 then
+    line(2, 22, "Error", c("red"))
+    line(2, 23, fit(tostring(stats.last_error), w - 3), c("red"))
+  elseif stats.paused and h >= 22 then
+    line(2, 22, "Disk writes paused; ACKs withheld so senders retry", c("yellow"))
+  elseif h >= 22 then
+    line(2, 22, "Status stable", c("lime"))
   end
   set_fg(c("white")); set_bg(c("black"))
 end
@@ -605,6 +640,28 @@ local function redirect_display()
   end
 end
 
+local function handle_log_event(message)
+  stats.received = stats.received + 1
+  stats.last_node = message.node_id or "?"
+  stats.last_level = message.level or "?"
+  if has_seen(message.event_id) then
+    stats.duplicates = stats.duplicates + 1
+    send_ack(message, "duplicate")
+    return true, "duplicate"
+  end
+  local ok, err = write_log(message)
+  if ok then
+    stats.written = stats.written + 1
+    stats.last_error = nil
+    if message.event_id then remember_event(message.event_id) end
+    send_ack(message, "written")
+    return true
+  end
+  stats.dropped = stats.dropped + 1
+  if err ~= "paused" then stats.last_error = err end
+  return false, err
+end
+
 local function run()
   refresh_disks_if_needed(true)
   redirect_display()
@@ -612,7 +669,7 @@ local function run()
   local modem_names = {}
   for _, entry in ipairs(modems) do
     local ok = pcall(entry.modem.open, CHANNEL)
-    if ok then modem_names[#modem_names + 1] = entry.name end
+    if ok then modem_names[#modem_names + 1] = entry.name; stats.modems[#stats.modems + 1] = entry end
   end
   stats.modem = table.concat(modem_names, ",")
   self_log("LOG collector startup display=" .. tostring(stats.display_name) .. " disks=" .. tostring(#stats.disks), "INFO")
@@ -626,17 +683,7 @@ local function run()
       local channel = event[3]
       local message = event[5]
       if channel == CHANNEL and type(message) == "table" and message.type == "LOG_EVENT" then
-        stats.received = stats.received + 1
-        stats.last_node = message.node_id or "?"
-        stats.last_level = message.level or "?"
-        local ok, err = write_log(message)
-        if ok then
-          stats.written = stats.written + 1
-          stats.last_error = nil
-        else
-          stats.dropped = stats.dropped + 1
-          if err ~= "paused" then stats.last_error = err end
-        end
+        local ok = handle_log_event(message)
         if stats.received % 5 == 0 or not ok then draw() end
       end
     elseif event[1] == "monitor_touch" then
@@ -650,7 +697,7 @@ local function run()
       if keys and (key_code == keys.p or key_code == keys.space) then toggle_pause() end
     elseif event[1] == "timer" and event[2] == status_timer then
       if not stats.paused then
-        self_log("Collector status received=" .. tostring(stats.received) .. " written=" .. tostring(stats.written) .. " dropped=" .. tostring(stats.dropped), "DEBUG")
+        self_log("Collector status received=" .. tostring(stats.received) .. " written=" .. tostring(stats.written) .. " dropped=" .. tostring(stats.dropped) .. " dup=" .. tostring(stats.duplicates) .. " ack=" .. tostring(stats.ack_sent), "DEBUG")
       end
       draw()
       status_timer = os.startTimer and os.startTimer(30) or nil
