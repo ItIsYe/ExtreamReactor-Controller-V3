@@ -46,7 +46,9 @@ function M.flatten_manifest(manifest, include_dev_files)
   local merged = {}
   local base_files = M.normalize_file_list(manifest.base_files)
   for _, entry in ipairs(base_files) do
-    entry.__base = true
+    if entry.always == nil then
+      entry.always = true
+    end
   end
   M.merge_unique(merged, base_files, include_dev_files)
 
@@ -85,29 +87,14 @@ function M.role_matches(required_for, role_label)
   return false
 end
 
-local function is_log_role(role_label)
-  local role = tostring(role_label or ""):upper()
-  return role == "LOG" or role == "LOG_COLLECTOR"
-end
-
 function M.select_expected_files(manifest, role_label, include_dev_files)
   local expected = {}
-  local log_role = is_log_role(role_label)
   for _, entry in ipairs(M.flatten_manifest(manifest, include_dev_files)) do
-    local include = entry.always == true or M.role_matches(entry.required_for, role_label)
-    if not include and entry.__base == true and not log_role then
-      include = true
-    end
-    if include then
+    if entry.always == true or M.role_matches(entry.required_for, role_label) then
       expected[entry.path] = entry
     end
   end
   return expected
-end
-
-function M.files_for_role(manifest, role_key, role_label, include_dev_files)
-  local label = role_label or role_key
-  return M.select_expected_files(manifest, label, include_dev_files)
 end
 
 return M
