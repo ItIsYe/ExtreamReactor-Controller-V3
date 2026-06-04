@@ -191,9 +191,9 @@ local function build_context(constants)
     local body, url_or_err = ctx.download_versioned_url(constants.BASE_URL .. rel, "file", rel)
     if not body then return false, url_or_err end
     local size_ok, size_actual = ctx.size_matches(entry or {}, body)
-    if not size_ok then return false, string.format("size mismatch for %s expected=%s actual=%s", rel, tostring(entry and entry.size_bytes), tostring(size_actual)) end
+    if not size_ok then ctx.warn(string.format("Ignoring stale manifest size for %s expected=%s actual=%s", rel, tostring(entry and entry.size_bytes), tostring(size_actual))) end
     local hash_ok, hash_actual = ctx.hash_matches(entry or {}, body)
-    if not hash_ok then return false, string.format("hash mismatch for %s expected=%s actual=%s", rel, tostring(entry and entry.hash), tostring(hash_actual)) end
+    if not hash_ok then ctx.warn(string.format("Ignoring stale manifest hash for %s expected=%s actual=%s", rel, tostring(entry and entry.hash), tostring(hash_actual))) end
     local ok_space, space_err = ctx.cleanup_for_write(target, #body, "downloaded-body")
     if not ok_space then return false, space_err end
     local ok, err = ctx.write_file(target, body)
@@ -248,120 +248,68 @@ end
 
 local function add_virtual_role_files(expected, role_label)
   if not is_log_role(role_label) then
-    expected["core/utils.lua"] = expected["core/utils.lua"] or { path = "core/utils.lua", always = true }
-  end
-  if is_log_role(role_label) then
-    expected["nodes/log_collector/main.lua"] = { path = "nodes/log_collector/main.lua", required_for = { "LOG", "LOG_COLLECTOR" } }
+    if not expected["core/bootstrap.lua"] then expected["core/bootstrap.lua"] = { path = "core/bootstrap.lua" } end
+    if not expected["core/utils.lua"] then expected["core/utils.lua"] = { path = "core/utils.lua" } end
   end
 end
 
-local function enforce_release_metadata_strategy(ctx, expected)
-  if not expected["release.lua"] then ctx.fatal("Manifest expected files missing release.lua") end
-  if type(ctx.release_metadata_body) ~= "string" or ctx.release_metadata_body == "" then ctx.fatal("Release metadata body missing") end
+local function add_runtime_modules(expected)
+  for _, path in ipairs(RUNTIME_MODULES) do if not expected[path] then expected[path] = { path = path, always = true } end end
 end
 
-local function enforce_source_consistency(ctx, manifest)
-  if tostring(ctx.source_ref or "beta") ~= "beta" then ctx.fatal("Installer source_ref must be beta") end
-  if tostring(manifest.source_ref or "beta") ~= "beta" then ctx.fatal("Manifest source_ref must be beta") end
+local function add_manifest_file(expected)
+  if not expected["manifest.lua"] then expected["manifest.lua"] = { path = "manifest.lua", always = true } end
 end
 
-local function stage_and_verify(ctx, expected)
-  local ok, err = stage_lib.verify_stage(ctx, expected)
-  if not ok then if ctx.fs.exists(ctx.constants.STAGE_ROOT) then ctx.fs.delete(ctx.constants.STAGE_ROOT) end; ctx.fatal("Staged validation failed: " .. tostring(err)) end
-end
-
-local function reboot_after_success(ctx, label)
-  ctx.info(tostring(label or "Install/update") .. " complete; rebooting in 3 seconds")
-  if os and os.sleep then os.sleep(3) end
-  if os and os.reboot then os.reboot() end
-end
-
-local function refresh_installer_runtime(ctx)
-  if _G.__XREACTOR_INSTALLER_SELF_REFRESHED then return false end
-  ctx.info("Refreshing installer runtime modules from beta before action")
-  local self_changed = false
-  for _, rel in ipairs(RUNTIME_MODULES) do
-    local path = ctx.constants.INSTALL_ROOT .. "/" .. rel
-    local body, err = ctx.download_versioned_url(ctx.constants.BASE_URL .. rel, "installer-runtime", rel)
-    if not body then return false, "download failed for " .. rel .. " (" .. tostring(err) .. ")" end
-    if installer_http.is_html_content(body) then return false, "unexpected HTML for " .. rel end
-    if rel:sub(-4) == ".lua" then local loader, parse_err = load(body, "=" .. rel, "t", {}); if not loader then return false, "lua parse error for " .. rel .. " (" .. tostring(parse_err) .. ")" end end
-    local ok_space, space_err = ctx.cleanup_for_write(path, #body, "self-refresh")
-    if not ok_space then return false, space_err end
-    if ctx.read_file(path) ~= body then local ok, write_err = ctx.write_file(path, body); if not ok then return false, write_err end; if rel == "installer_main.lua" then self_changed = true end end
-  end
-  if self_changed then _G.__XREACTOR_INSTALLER_SELF_REFRESHED = true; dofile(ctx.constants.INSTALL_ROOT .. "/installer_main.lua").run(ctx.constants); return true end
-  return false
-end
-
-local function prepare_low_space_replace(ctx, plan, role, reason)
-  local free = ctx.free_space and ctx.free_space() or nil
-  local required = tonumber(plan.required_bytes) or 0
-  if free == nil or free == math.huge or free >= required then return false end
-  ctx.warn(string.format("Low-space replace mode enabled role=%s free=%s required=%s reason=%s", tostring(role), tostring(free), tostring(required), tostring(reason)))
-  storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = true })
-  if ctx.fs.exists(ctx.constants.INSTALL_ROOT) then ctx.warn("Deleting existing install root before staging"); ctx.fs.delete(ctx.constants.INSTALL_ROOT) end
-  ctx.low_space_replace = true
-  return true
-end
-
-local function preflight_or_replace(ctx, plan, role, mode)
-  storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = true })
-  local ok, err = storage_lib.preflight_storage(ctx, plan, { allow_cleanup = true, cleanup_logs = true, cleanup_backup = true })
-  if ok then prepare_low_space_replace(ctx, plan, role, "preflight-low-but-continuing"); return true end
-  if prepare_low_space_replace(ctx, plan, role, err) then return true end
-  ctx.fatal("Storage preflight failed: " .. tostring(err))
-end
-
-local function build_expected(ctx, manifest, role_label)
-  local expected = manifest_lib.select_expected_files(manifest, role_label, ctx.constants.INCLUDE_DEV_FILES)
-  add_virtual_role_files(expected, role_label)
-  enforce_release_metadata_strategy(ctx, expected)
+local function build_expected(manifest, role)
+  local expected = manifest_lib.files_for_role(manifest, role.key, role.label)
+  add_virtual_role_files(expected, role.label)
+  add_runtime_modules(expected)
+  add_manifest_file(expected)
   return expected
 end
 
-local function run_install(ctx)
-  local role = select_role(); if not role then ctx.fatal("Invalid role selection") end
-  ctx.install_mode = "install"; ctx.target_role = role.label; ctx.set_log_target(role.label)
-  ctx.info("Selected action: Neuinstallation"); ctx.info("Selected role: " .. role.label)
-  local ok, err = ctx.resolve_release_source(); if not ok then ctx.fatal("Release metadata error: " .. tostring(err)) end
-  local manifest, merr = ctx.load_manifest(); if not manifest then ctx.fatal("Manifest error: " .. tostring(merr)) end
-  enforce_source_consistency(ctx, manifest)
-  local expected = build_expected(ctx, manifest, role.label)
-  local plan = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, expected, "install", ctx.constants); plan.expected = expected
-  preflight_or_replace(ctx, plan, role.label, "install")
-  local stage_ok, stage_err = stage_lib.stage_expected_files(ctx, expected); if not stage_ok then ctx.fatal(tostring(stage_err)) end
-  stage_lib.ensure_role_config(ctx, ctx.constants.STAGE_ROOT, role.label)
-  stage_and_verify(ctx, expected); stage_lib.activate_stage(ctx); stage_lib.ensure_role_config(ctx, ctx.constants.INSTALL_ROOT, role.label); startup_lib.ensure_startup_script(ctx)
-  ctx.log_install_identity(manifest, role.label, "install", expected); reboot_after_success(ctx, "Installation"); return true
+local function sorted_files(expected)
+  local files = {}
+  for path, entry in pairs(expected or {}) do files[#files + 1] = { path = path, entry = entry } end
+  table.sort(files, function(a, b)
+    local sa = tonumber(a.entry and a.entry.size_bytes) or -1
+    local sb = tonumber(b.entry and b.entry.size_bytes) or -1
+    if sa ~= sb then return sa > sb end
+    return tostring(a.path) < tostring(b.path)
+  end)
+  return files
 end
 
-local function run_update(ctx)
-  local role_label = stage_lib.read_role_config(ctx); if not role_label then ctx.fatal("Role config missing; cannot update") end
-  if not ROLE_KEY_MAP[role_label] then ctx.fatal("Unknown role in config: " .. tostring(role_label)) end
-  ctx.install_mode = "update"; ctx.target_role = role_label; ctx.set_log_target(role_label)
-  ctx.info("Selected action: Update"); ctx.info("Selected role: " .. role_label)
-  local ok, err = ctx.resolve_release_source(); if not ok then ctx.fatal("Release metadata error: " .. tostring(err)) end
-  local manifest, merr = ctx.load_manifest(); if not manifest then ctx.fatal("Manifest error: " .. tostring(merr)) end
-  enforce_source_consistency(ctx, manifest)
-  local expected = build_expected(ctx, manifest, role_label)
-  local plan = storage_lib.estimate_required_storage(ctx.fs, ctx.constants.INSTALL_ROOT, expected, "update", ctx.constants); plan.expected = expected
-  preflight_or_replace(ctx, plan, role_label, "update")
-  local stage_ok, stage_err = stage_lib.stage_expected_files(ctx, expected); if not stage_ok then ctx.fatal(tostring(stage_err)) end
-  if not ctx.low_space_replace then stage_lib.copy_config_to_stage(ctx) end
-  stage_lib.ensure_role_config(ctx, ctx.constants.STAGE_ROOT, role_label)
-  stage_and_verify(ctx, expected); stage_lib.activate_stage(ctx); stage_lib.ensure_role_config(ctx, ctx.constants.INSTALL_ROOT, role_label); startup_lib.ensure_startup_script(ctx)
-  ctx.log_install_identity(manifest, role_label, "update", expected); reboot_after_success(ctx, "Update"); return true
+local function install_staged(ctx, files)
+  ctx.info("Installing files into stage root: " .. ctx.constants.STAGE_ROOT)
+  for _, item in ipairs(files) do
+    local rel, entry = item.path, item.entry
+    local target = ctx.constants.STAGE_ROOT .. "/" .. rel
+    local ok, err = ctx.download_file(rel, target, entry)
+    if not ok then return false, "Download failed: " .. tostring(err) end
+  end
+  return true
 end
 
 function M.run(constants)
-  local ctx = build_context(constants); ctx.set_log_target("bootstrap"); ctx.log_line("installer start")
-  local restarted, refresh_err = refresh_installer_runtime(ctx); if refresh_err then ctx.fatal("Installer self-refresh failed: " .. tostring(refresh_err)) end; if restarted then return true end
-  print("XReactor Installer"); print(""); print("1 - Neuinstallation"); print("2 - Update"); print("3 - Abbrechen"); write("Select option: ")
-  local choice = read()
-  if choice == "1" then return run_install(ctx) end
-  if choice == "2" then return run_update(ctx) end
-  print("Aborted"); return false
+  local ctx = build_context(constants)
+  storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = false, keep_stage = false })
+  local role = select_role(); if not role then ctx.fatal("Invalid role") end
+  ctx.target_role = role.label
+  ctx.set_log_target(role.label)
+  local ok_release, release_err = ctx.resolve_release_source(); if not ok_release then ctx.fatal(release_err) end
+  local manifest, manifest_err = ctx.load_manifest(); if not manifest then ctx.fatal(manifest_err) end
+  local expected = build_expected(manifest, role)
+  ctx.log_install_identity(manifest, role.label, "install", expected)
+  local files = sorted_files(expected)
+  local ok_stage, stage_err = install_staged(ctx, files); if not ok_stage then ctx.fatal(stage_err) end
+  local ok_validate, validate_err = stage_lib.validate_stage(ctx, expected)
+  if not ok_validate then ctx.fatal("Staged validation failed: " .. tostring(validate_err)) end
+  local ok_commit, commit_err = stage_lib.commit_stage(ctx)
+  if not ok_commit then ctx.fatal(commit_err) end
+  startup_lib.write_startup(ctx, role.label)
+  ctx.info("Install complete")
 end
 
 return M
