@@ -52,6 +52,9 @@ Interpretation:
 - Updated LOG collector to open the log channel on all available modems instead of only one preferred modem.
 - Hardened LOG collector-only monitor UI: supports configured monitor selection, modem-attached remote monitors, and terminal fallback inside `nodes/log_collector/main.lua` only.
 - Added `tests/log_collector_remote_monitor_scope_test.py` to guard that remote-monitor support remains scoped to LOG collector and does not modify MASTER monitor manager.
+- Updated LOG collector UI to always show the last written disk ID/index, mount/root/path, and mark that disk in the disk ring with `*`.
+- Added LOG collector disk-write pause/resume control via monitor touch, terminal mouse click, `p`, or space.
+- Added `tests/log_collector_ui_disk_pause_test.py` to guard the active-disk display and pause control.
 
 ## Ingame test finding
 
@@ -99,6 +102,12 @@ LOG collector UI:
 - If no local monitor is present, it searches modem remote peripherals for monitors.
 - If a remote monitor is found, the collector redirects `term` to that monitor and renders the LOG dashboard there.
 - If no monitor exists, it falls back to the local terminal.
+- The disk ring uses `*` to mark the last successful write target.
+- `Writing Disk #...` shows the last written disk ID/index and mount.
+- `Path ...` shows the exact log file path last written.
+- `Next Disk #...` shows the current next-attempt disk index.
+- A pause/resume button is shown on the LOG UI. While paused, incoming log events are not written to disk and are counted as paused drops so disks can be safely copied/downloaded.
+- Pause/resume input works through monitor touch, terminal mouse click, `p`, or space.
 
 ## Connector/write limits observed
 
@@ -136,6 +145,7 @@ Completed:
 - LOG collector now writes its own `LOG_COLLECTOR` startup/status log entries.
 - LOG collector listens on all detected modems.
 - LOG collector UI supports modem-attached monitors without touching MASTER UI code.
+- LOG collector UI always shows the active/last-written disk and supports disk-write pause/resume.
 
 Expected LOG role installed files:
 
@@ -192,10 +202,11 @@ Recommended future cleanup:
 
 ## Recommended next order
 
-1. Reinstall/update LOG collector so it receives the new collector-only monitor UI.
+1. Reinstall/update LOG collector so it receives the new collector UI.
 2. Optional: set `xreactor.log_monitor` to the desired monitor name or `<remote>@<modem>` before starting LOG collector.
 3. Start LOG collector and verify the dashboard appears on the modem-attached monitor.
-4. Then start/update ENERGY and verify `energy/...log` appears.
-5. Run full manifest metadata regeneration locally.
-6. Remove manifest-metadata exceptions from the guard test.
-7. Later: refactor ENERGY defaults into one shared module with tests.
+4. Verify the UI shows `Writing Disk #...`, the `*` marker in the disk ring, and that the pause/resume button works.
+5. Then start/update ENERGY and verify `energy/...log` appears.
+6. Run full manifest metadata regeneration locally.
+7. Remove manifest-metadata exceptions from the guard test.
+8. Later: refactor ENERGY defaults into one shared module with tests.
