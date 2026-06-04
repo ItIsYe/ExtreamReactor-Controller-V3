@@ -105,4 +105,9 @@ function M.select_expected_files(manifest, role_label, include_dev_files)
   return expected
 end
 
+function M.files_for_role(manifest, role_key, role_label, include_dev_files)
+  local label = role_label or role_key
+  return M.select_expected_files(manifest, label, include_dev_files)
+end
+
 return M
