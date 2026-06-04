@@ -259,6 +259,13 @@ if not logs_ok then
   error("Installer log cleanup fehlgeschlagen: " .. tostring(logs_err), 0)
 end
 
+_G.__xreactor_installer_completed = false
+_G.__xreactor_installer_role = nil
 print("Installer bootstrap bereit. Release/Manifest ok.")
 local main = dofile(constants.INSTALL_ROOT .. "/installer_main.lua")
 main.run(constants)
+if _G.__xreactor_installer_completed == true then
+  print("Install complete; rebooting...")
+  if os and type(os.sleep) == "function" then os.sleep(1) end
+  if os and type(os.reboot) == "function" then os.reboot() end
+end
