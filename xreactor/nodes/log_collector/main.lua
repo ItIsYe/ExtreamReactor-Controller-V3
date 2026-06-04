@@ -16,6 +16,7 @@ local MAX_LOG_BYTES = 8192
 local ROTATE_KEEP = 3
 local MIN_FREE_BYTES = 1024
 local SELF_ROLE = "LOG_COLLECTOR"
+local MONITOR_NAME_FILE = "/xreactor/config/log_monitor.txt"
 
 local stats = {
   received = 0,
@@ -54,6 +55,19 @@ local function fit(text, width)
   if #raw <= w then return raw end
   if w <= 2 then return raw:sub(1, w) end
   return raw:sub(1, w - 1) .. "~"
+end
+
+local function trim_text(text)
+  return tostring(text or ""):match("^%s*(.-)%s*$") or ""
+end
+
+local function read_small_file(path)
+  if not fs.exists(path) then return nil end
+  local f = fs.open(path, "r")
+  if not f then return nil end
+  local content = f.readAll()
+  f.close()
+  return content
 end
 
 local function line(x, y, text, fg, bg)
@@ -361,7 +375,12 @@ local function find_modems()
   return found
 end
 
-local REMOTE_MONITOR_METHODS = { "write", "blit", "clear", "clearLine", "getSize", "setCursorPos", "getCursorPos", "setCursorBlink", "setTextColor", "setTextColour", "setBackgroundColor", "setBackgroundColour", "scroll", "setTextScale", "getTextScale" }
+local REMOTE_MONITOR_METHODS = {
+  "write", "blit", "clear", "clearLine", "getSize", "setCursorPos", "getCursorPos",
+  "setCursorBlink", "getCursorBlink", "setTextColor", "setTextColour", "getTextColor", "getTextColour",
+  "setBackgroundColor", "setBackgroundColour", "getBackgroundColor", "getBackgroundColour",
+  "isColor", "isColour", "scroll", "setTextScale", "getTextScale"
+}
 
 local function make_remote_monitor(modem, remote_name)
   if not modem or type(modem.callRemote) ~= "function" then return nil end
@@ -386,32 +405,84 @@ local function is_remote_monitor(modem, remote_name)
   return false
 end
 
-local function find_display()
-  if peripheral and type(peripheral.getNames) == "function" then
-    for _, name in ipairs(peripheral.getNames() or {}) do
-      if peripheral.getType(name) == "monitor" then
-        local mon = peripheral.wrap(name)
-        if mon then return name, mon end
-      end
-    end
-    for _, modem_name in ipairs(peripheral.getNames() or {}) do
-      if peripheral.getType(modem_name) == "modem" then
-        local modem = peripheral.wrap(modem_name)
-        if modem and type(modem.getNamesRemote) == "function" and type(modem.callRemote) == "function" then
-          local ok, remotes = pcall(modem.getNamesRemote)
-          if ok and type(remotes) == "table" then
-            table.sort(remotes)
-            for _, remote_name in ipairs(remotes) do
-              if is_remote_monitor(modem, remote_name) then
-                local mon = make_remote_monitor(modem, remote_name)
-                if mon then return remote_name .. "@" .. modem_name, mon end
-              end
+local function configured_display_name()
+  local candidates = {}
+  if settings and type(settings.get) == "function" then
+    candidates[#candidates + 1] = settings.get("xreactor.log_monitor")
+    candidates[#candidates + 1] = settings.get("xreactor.log.monitor")
+    candidates[#candidates + 1] = settings.get("xreactor.monitor.log")
+  end
+  candidates[#candidates + 1] = read_small_file(MONITOR_NAME_FILE)
+  for _, value in ipairs(candidates) do
+    local text = trim_text(value or "")
+    if text ~= "" then return text end
+  end
+  return nil
+end
+
+local function split_display_spec(spec)
+  local text = trim_text(spec or "")
+  if text == "" then return nil, nil end
+  local remote, modem = text:match("^([^@]+)@(.+)$")
+  if remote and modem then return trim_text(remote), trim_text(modem) end
+  return text, nil
+end
+
+local function try_local_monitor(name)
+  if not name or not peripheral or type(peripheral.getType) ~= "function" then return nil end
+  if peripheral.getType(name) == "monitor" then
+    local ok, mon = pcall(peripheral.wrap, name)
+    if ok and mon then return name, mon end
+  end
+  return nil
+end
+
+local function try_remote_monitor(target_name, target_modem)
+  if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
+  local names = peripheral.getNames() or {}
+  table.sort(names)
+  for _, modem_name in ipairs(names) do
+    if (not target_modem or tostring(modem_name) == tostring(target_modem)) and peripheral.getType(modem_name) == "modem" then
+      local ok_wrap, modem = pcall(peripheral.wrap, modem_name)
+      if ok_wrap and modem and type(modem.getNamesRemote) == "function" and type(modem.callRemote) == "function" then
+        local ok, remotes = pcall(modem.getNamesRemote)
+        if ok and type(remotes) == "table" then
+          table.sort(remotes)
+          for _, remote_name in ipairs(remotes) do
+            if (not target_name or tostring(remote_name) == tostring(target_name)) and is_remote_monitor(modem, remote_name) then
+              local mon = make_remote_monitor(modem, remote_name)
+              if mon then return remote_name .. "@" .. modem_name, mon end
             end
           end
         end
       end
     end
   end
+  return nil
+end
+
+local function find_display()
+  local configured = configured_display_name()
+  if configured then
+    local requested_name, requested_modem = split_display_spec(configured)
+    local local_name, local_mon = try_local_monitor(requested_name)
+    if local_mon then return local_name, local_mon end
+    local remote_name, remote_mon = try_remote_monitor(requested_name, requested_modem)
+    if remote_mon then return remote_name, remote_mon end
+    stats.last_error = "configured monitor not found: " .. tostring(configured)
+  end
+
+  if peripheral and type(peripheral.getNames) == "function" then
+    local names = peripheral.getNames() or {}
+    table.sort(names)
+    for _, name in ipairs(names) do
+      local local_name, local_mon = try_local_monitor(name)
+      if local_mon then return local_name, local_mon end
+    end
+  end
+
+  local remote_name, remote_mon = try_remote_monitor(nil, nil)
+  if remote_mon then return remote_name, remote_mon end
   return "term", term
 end
 
@@ -472,8 +543,13 @@ local function redirect_display()
   stats.display_name = name or "term"
   stats.display = display or term
   if display and display ~= term and term.redirect then
-    local ok = pcall(term.redirect, display)
-    if ok and type(display.setTextScale) == "function" then pcall(display.setTextScale, 0.5) end
+    if type(display.setTextScale) == "function" then pcall(display.setTextScale, 0.5) end
+    local ok, err = pcall(term.redirect, display)
+    if not ok then
+      stats.last_error = "display redirect failed: " .. tostring(err)
+      stats.display_name = "term"
+      stats.display = term
+    end
   end
 end
 
