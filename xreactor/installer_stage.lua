@@ -6,7 +6,13 @@ function M.ensure_role_config(ctx, root_path, role_label)
   local ok, err = ctx.write_file(role_path, content)
   if not ok then
     ctx.warn("Failed to write role config: " .. tostring(err))
+    return false, err
   end
+  if root_path == ctx.constants.INSTALL_ROOT then
+    _G.__xreactor_installer_completed = true
+    _G.__xreactor_installer_role = role_label
+  end
+  return true
 end
 
 function M.read_role_config(ctx)
