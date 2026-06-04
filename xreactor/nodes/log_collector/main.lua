@@ -22,18 +22,25 @@ local stats = {
   received = 0,
   written = 0,
   dropped = 0,
+  paused_dropped = 0,
   rotated = 0,
   pruned = 0,
   disk_switches = 0,
   disks = {},
   disk_index = 1,
+  last_write_index = nil,
+  last_write_mount = "-",
+  last_write_root = "-",
+  last_write_path = "-",
   last_node = "-",
   last_level = "-",
   last_error = nil,
   log_root = nil,
   modem = nil,
   display = nil,
-  display_name = "term"
+  display_name = "term",
+  paused = false,
+  pause_button = nil
 }
 
 local function c(name)
@@ -103,6 +110,20 @@ local function progress(x, y, width, pct, status)
     term.write(" ")
   end
   set_bg(c("black")); set_fg(c("white"))
+end
+
+local function draw_pause_button(x, y)
+  local label = stats.paused and " RESUME DISK WRITES " or " PAUSE DISK WRITES "
+  stats.pause_button = { x = x, y = y, w = #label, h = 1 }
+  term.setCursorPos(x, y)
+  set_fg(c("black"))
+  set_bg(stats.paused and c("lime") or c("yellow"))
+  term.write(label)
+  set_fg(c("white")); set_bg(c("black"))
+end
+
+local function button_hit(button, x, y)
+  return button and x >= button.x and x < button.x + button.w and y >= button.y and y < button.y + button.h
 end
 
 local function ensure_dir(path)
@@ -187,6 +208,9 @@ local function discover_log_disks()
     disks[#disks + 1] = { mount = "/", root = FALLBACK_ROOT, fallback = true }
   end
   table.sort(disks, function(a, b) return tostring(a.mount) < tostring(b.mount) end)
+  for i, disk_entry in ipairs(disks) do
+    disk_entry.id = i
+  end
   return disks
 end
 
@@ -314,10 +338,18 @@ local function try_write_to_disk(disk_entry, payload, allow_aggressive_prune)
     end)
   end
   if not ok then return false, tostring(err or "write failed") end
+  stats.last_write_index = disk_entry.id or stats.disk_index
+  stats.last_write_mount = disk_entry.mount or "?"
+  stats.last_write_root = root
+  stats.last_write_path = path
   return true
 end
 
 local function write_log(payload)
+  if stats.paused then
+    stats.paused_dropped = stats.paused_dropped + 1
+    return false, "paused"
+  end
   refresh_disks_if_needed(false)
   local count = math.max(1, #stats.disks)
   local last_err = nil
@@ -346,8 +378,21 @@ local function self_log(message, level)
     ts = os and os.epoch and os.epoch("utc") or nil
   }
   local ok, err = write_log(payload)
-  if not ok then stats.last_error = err end
+  if not ok and err ~= "paused" then stats.last_error = err end
   return ok
+end
+
+local function toggle_pause()
+  if stats.paused then
+    stats.paused = false
+    stats.last_error = nil
+    self_log("Collector disk writes resumed by operator", "INFO")
+  else
+    self_log("Collector disk writes paused by operator", "WARN")
+    stats.paused = true
+    stats.last_error = nil
+  end
+  draw()
 end
 
 local function find_modems()
@@ -495,9 +540,10 @@ local function draw_disk_bar(y)
   for i = 1, disks do
     local d = stats.disks[i]
     local free = free_space(d and d.root or "/")
-    local status = (i == stats.disk_index) and "INFO" or (free < MIN_FREE_BYTES and "WARN" or "OK")
+    local status = (i == stats.last_write_index) and "INFO" or (free < MIN_FREE_BYTES and "WARN" or "OK")
     local label = tostring(i)
     if disks <= 8 then label = tostring(i) .. ":" .. tostring(d and d.mount or "?"):gsub("/disk", "d") end
+    if i == stats.last_write_index then label = "*" .. label end
     x = x + badge(x, y, fit(label, per - 2), status)
     if x > max_width then break end
   end
@@ -511,29 +557,33 @@ local function draw()
   set_bg(c("black")); set_fg(c("white"))
   line(1, 1, string.rep(" ", w), c("black"), c("gray"))
   line(2, 1, " XReactor LOG ", c("black"), c("gray"))
-  local status = stats.last_error and "WARN" or "OK"
+  local status = stats.paused and "WARN" or (stats.last_error and "WARN" or "OK")
   local x = 2
-  x = x + badge(x, 2, stats.last_error and "WARN" or "OK", status) + 1
+  x = x + badge(x, 2, stats.paused and "PAUSED" or (stats.last_error and "WARN" or "OK"), status) + 1
   x = x + badge(x, 2, "CH " .. tostring(CHANNEL), "INFO") + 1
   x = x + badge(x, 2, tostring(stats.modem or "NO-MODEM"), stats.modem and "OK" or "ERR")
   line(2, 3, fit("Display " .. tostring(stats.display_name or "term"), w - 2), c("lightGray"))
-  line(2, 5, "Disk Ring", c("cyan"))
-  draw_disk_bar(6)
-  line(2, 7, string.format("Active %s/%s  %s", tostring(stats.disk_index), tostring(#stats.disks), tostring(disk_entry.mount or "n/a")), c("white"))
-  line(2, 8, fit("Root " .. tostring(stats.log_root or "n/a"), w - 2), c("lightGray"))
+  draw_pause_button(2, 4)
+  line(2, 6, "Disk Ring (* = last write target)", c("cyan"))
+  draw_disk_bar(7)
+  line(2, 8, string.format("Next    Disk #%s/%s  %s", tostring(stats.disk_index), tostring(#stats.disks), tostring(disk_entry.mount or "n/a")), c("lightGray"))
+  line(2, 9, string.format("Writing Disk #%s  %s", tostring(stats.last_write_index or "-"), tostring(stats.last_write_mount or "-")), stats.paused and c("yellow") or c("lime"))
+  line(2, 10, fit("Path " .. tostring(stats.last_write_path or "-"), w - 2), c("lightGray"))
   local free = free_space(stats.log_root or "/")
-  line(2, 9, "Free " .. tostring(free) .. " bytes", free < MIN_FREE_BYTES and c("yellow") or c("lime"))
-  progress(2, 10, math.max(8, w - 3), free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free < MIN_FREE_BYTES and "WARN" or "OK")
-  line(2, 12, "Traffic", c("cyan"))
-  line(2, 13, string.format("Recv %-7s Written %-7s Drop %-5s", tostring(stats.received), tostring(stats.written), tostring(stats.dropped)), c("white"))
-  line(2, 14, string.format("Switch %-5s Rotate %-5s Prune %-5s", tostring(stats.disk_switches), tostring(stats.rotated), tostring(stats.pruned)), c("lightGray"))
-  line(2, 16, "Last", c("cyan"))
-  line(2, 17, fit(tostring(stats.last_node) .. "  " .. tostring(stats.last_level), w - 3), c("white"))
-  if stats.last_error then
-    line(2, 19, "Error", c("red"))
-    line(2, 20, fit(tostring(stats.last_error), w - 3), c("red"))
-  elseif h >= 19 then
-    line(2, 19, "Status stable", c("lime"))
+  line(2, 11, "Free " .. tostring(free) .. " bytes at " .. tostring(stats.log_root or "n/a"), free < MIN_FREE_BYTES and c("yellow") or c("lime"))
+  progress(2, 12, math.max(8, w - 3), free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free < MIN_FREE_BYTES and "WARN" or "OK")
+  line(2, 14, "Traffic", c("cyan"))
+  line(2, 15, string.format("Recv %-7s Written %-7s Drop %-5s", tostring(stats.received), tostring(stats.written), tostring(stats.dropped)), c("white"))
+  line(2, 16, string.format("PausedDrop %-5s Switch %-5s Rotate %-5s", tostring(stats.paused_dropped), tostring(stats.disk_switches), tostring(stats.rotated)), c("lightGray"))
+  line(2, 18, "Last", c("cyan"))
+  line(2, 19, fit(tostring(stats.last_node) .. "  " .. tostring(stats.last_level), w - 3), c("white"))
+  if stats.last_error and h >= 21 then
+    line(2, 21, "Error", c("red"))
+    line(2, 22, fit(tostring(stats.last_error), w - 3), c("red"))
+  elseif stats.paused and h >= 21 then
+    line(2, 21, "Disk writes paused for backup/download", c("yellow"))
+  elseif h >= 21 then
+    line(2, 21, "Status stable", c("lime"))
   end
   set_fg(c("white")); set_bg(c("black"))
 end
@@ -578,11 +628,28 @@ local function run()
         stats.last_node = message.node_id or "?"
         stats.last_level = message.level or "?"
         local ok, err = write_log(message)
-        if ok then stats.written = stats.written + 1; stats.last_error = nil else stats.dropped = stats.dropped + 1; stats.last_error = err end
+        if ok then
+          stats.written = stats.written + 1
+          stats.last_error = nil
+        else
+          stats.dropped = stats.dropped + 1
+          if err ~= "paused" then stats.last_error = err end
+        end
         if stats.received % 5 == 0 or not ok then draw() end
       end
+    elseif event[1] == "monitor_touch" then
+      local x_pos, y_pos = event[3], event[4]
+      if button_hit(stats.pause_button, x_pos, y_pos) then toggle_pause() end
+    elseif event[1] == "mouse_click" then
+      local x_pos, y_pos = event[3], event[4]
+      if button_hit(stats.pause_button, x_pos, y_pos) then toggle_pause() end
+    elseif event[1] == "key" then
+      local key_code = event[2]
+      if keys and (key_code == keys.p or key_code == keys.space) then toggle_pause() end
     elseif event[1] == "timer" and event[2] == status_timer then
-      self_log("Collector status received=" .. tostring(stats.received) .. " written=" .. tostring(stats.written) .. " dropped=" .. tostring(stats.dropped), "DEBUG")
+      if not stats.paused then
+        self_log("Collector status received=" .. tostring(stats.received) .. " written=" .. tostring(stats.written) .. " dropped=" .. tostring(stats.dropped), "DEBUG")
+      end
       draw()
       status_timer = os.startTimer and os.startTimer(30) or nil
     end
