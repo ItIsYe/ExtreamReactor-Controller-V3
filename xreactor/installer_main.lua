@@ -4,6 +4,38 @@ local startup_lib = dofile("/xreactor/installer_startup.lua")
 local storage_lib = dofile("/xreactor/installer_storage.lua")
 local installer_http = dofile("/xreactor/installer_http.lua")
 
+if not manifest_lib.files_for_role and manifest_lib.select_expected_files then
+  manifest_lib.files_for_role = function(manifest, role_key, role_label, include_dev_files)
+    return manifest_lib.select_expected_files(manifest, role_label or role_key, include_dev_files)
+  end
+end
+if not stage_lib.validate_stage and stage_lib.verify_stage then
+  stage_lib.validate_stage = stage_lib.verify_stage
+end
+if not stage_lib.commit_stage and stage_lib.activate_stage then
+  stage_lib.commit_stage = function(ctx)
+    if stage_lib.copy_config_to_stage then stage_lib.copy_config_to_stage(ctx) end
+    return stage_lib.activate_stage(ctx)
+  end
+end
+if not startup_lib.write_startup and startup_lib.ensure_startup_script then
+  startup_lib.write_startup = startup_lib.ensure_startup_script
+end
+
+local function require_function(lib, name, label)
+  if type(lib) ~= "table" or type(lib[name]) ~= "function" then
+    error("Installer module API missing: " .. tostring(label) .. "." .. tostring(name), 0)
+  end
+end
+
+require_function(manifest_lib, "files_for_role", "installer_manifest")
+require_function(stage_lib, "validate_stage", "installer_stage")
+require_function(stage_lib, "commit_stage", "installer_stage")
+require_function(startup_lib, "write_startup", "installer_startup")
+require_function(storage_lib, "cleanup_stage_and_logs", "installer_storage")
+require_function(installer_http, "download_url", "installer_http")
+require_function(installer_http, "is_html_content", "installer_http")
+
 local M = {}
 
 local ROLE_CHOICES = {
