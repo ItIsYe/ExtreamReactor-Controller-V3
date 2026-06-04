@@ -59,6 +59,9 @@ Interpretation:
 - Routed `LOG_ACK` messages through `services/comms_service.lua` before normal protocol receive so shared-service nodes can clear pending remote log events.
 - Added LOG collector dedupe and ACK handling in `nodes/log_collector/main.lua`; duplicate events are acknowledged but not written again.
 - Added `tests/log_reliable_transport_guard_test.py` to guard event IDs, retries, ACK routing, collector dedupe, and multi-modem send/ACK behavior.
+- Verification fix: sender `event_id` now includes a boot/session component (`boot_id`) so node restarts cannot collide with earlier sequence numbers.
+- Verification fix: `utils.flush_remote_logs()` no longer forces retries on every service tick; retry cadence is throttled unless explicitly called with `true`.
+- Updated `tests/log_reliable_transport_guard_test.py` to guard reboot-safe log IDs and throttled retry flushing.
 
 ## Ingame test finding
 
@@ -82,8 +85,9 @@ ENERGY/logging issue scope:
 
 - No MASTER UI code should be changed for this issue.
 - Sender-side remote logging discovers all local modems and transmits every log event on every available modem, including multiple wireless modems and wired modems.
-- Sender-side log events now carry `event_id = node_id:seq`, `seq`, and `ack=true`.
+- Sender-side log events now carry reboot-safe `event_id = boot_id:seq`, `boot_id`, `seq`, and `ack=true`.
 - Sender-side remote logging keeps a bounded pending buffer and retries unacknowledged events a limited number of times.
+- Retry flushing is cadence-limited; shared service ticks no longer force a retransmit every tick.
 - `services/comms_service.lua` routes `LOG_ACK` messages to `core.utils` before normal protocol receive, so ACK packets do not disturb the main control/status protocol.
 - Collector-side logging opens the log channel on every available modem.
 - Collector-side logging deduplicates by `event_id` and sends `LOG_ACK` back through every available modem after a successful write.
@@ -100,7 +104,7 @@ Expected result after reinstall/update:
 
 Reliability boundary:
 
-- This is now retry/dedupe/ACK based, but still not a fully persistent store-and-forward queue. If a sender reboots before ACK or exceeds the bounded pending retry window, those remote log events can still be lost.
+- This is now retry/dedupe/ACK based, but still not a fully persistent store-and-forward queue. If a sender reboots before ACK, only logs still held in memory are retried. Reboot-safe IDs avoid false dedupe collisions after restart, but they do not persist unsent events across restart.
 
 ## UI / monitor status
 
@@ -162,7 +166,7 @@ Completed:
 - LOG collector listens on all detected modems.
 - LOG collector UI supports modem-attached monitors without touching MASTER UI code.
 - LOG collector UI always shows the active/last-written disk and supports disk-write pause/resume.
-- LOG transport now includes event IDs, dedupe, ACKs, retries, and multiple-wireless-modem support.
+- LOG transport now includes reboot-safe event IDs, dedupe, ACKs, cadence-limited retries, and multiple-wireless-modem support.
 
 Expected LOG role installed files:
 
