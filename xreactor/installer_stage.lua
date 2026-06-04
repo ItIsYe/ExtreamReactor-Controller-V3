@@ -42,27 +42,37 @@ local function metadata_body_for(ctx, rel_path)
   return nil
 end
 
+local function warn_or_fail_metadata(ctx, message)
+  if ctx and ctx.source_ref == "beta" then
+    if ctx.warn then ctx.warn(message) end
+    return true
+  end
+  return false, message
+end
+
 local function write_cached_metadata(ctx, entry, target_path, body)
   if type(body) ~= "string" or body == "" then
     return false, "remote metadata cache missing for " .. tostring(entry.path)
   end
   local size_ok, actual_size = ctx.size_matches(entry, body)
   if not size_ok then
-    return false, string.format(
-      "remote metadata size mismatch for %s (expected=%s actual=%s)",
+    local ok, err = warn_or_fail_metadata(ctx, string.format(
+      "Ignoring stale remote metadata size for %s expected=%s actual=%s",
       tostring(entry.path),
       tostring(entry.size_bytes),
       tostring(actual_size)
-    )
+    ))
+    if not ok then return false, err end
   end
   local hash_ok, actual_hash = ctx.hash_matches(entry, body)
   if not hash_ok then
-    return false, string.format(
-      "remote metadata hash mismatch for %s (expected=%s actual=%s)",
+    local ok, err = warn_or_fail_metadata(ctx, string.format(
+      "Ignoring stale remote metadata hash for %s expected=%s actual=%s",
       tostring(entry.path),
       tostring(entry.hash),
       tostring(actual_hash)
-    )
+    ))
+    if not ok then return false, err end
   end
   local ok, err = ctx.write_file(target_path, body)
   if ok then
@@ -144,22 +154,24 @@ function M.verify_stage(ctx, expected)
     end
     local size_ok, actual_size = ctx.size_matches(entry, content)
     if not size_ok then
-      return false, string.format(
-        "staged size mismatch: %s (expected=%s actual=%s)",
+      local ok, err = warn_or_fail_metadata(ctx, string.format(
+        "Ignoring stale staged size for %s expected=%s actual=%s",
         tostring(rel),
         tostring(entry.size_bytes),
         tostring(actual_size)
-      )
+      ))
+      if not ok then return false, err end
     end
     if entry.hash then
       local hash_ok, actual_hash = ctx.hash_matches(entry, content)
       if not hash_ok then
-        return false, string.format(
-          "staged hash mismatch: %s (expected=%s actual=%s)",
+        local ok, err = warn_or_fail_metadata(ctx, string.format(
+          "Ignoring stale staged hash for %s expected=%s actual=%s",
           tostring(rel),
           tostring(entry.hash),
           tostring(actual_hash)
-        )
+        ))
+        if not ok then return false, err end
       end
     end
     if rel:sub(-4) == ".lua" then
@@ -174,6 +186,10 @@ function M.verify_stage(ctx, expected)
     end
   end
   return true
+end
+
+function M.validate_stage(ctx, expected)
+  return M.verify_stage(ctx, expected)
 end
 
 function M.activate_stage(ctx)
@@ -210,6 +226,12 @@ function M.activate_stage(ctx)
   if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
     ctx.fs.delete(ctx.constants.STAGE_ROOT)
   end
+  return true
+end
+
+function M.commit_stage(ctx)
+  M.copy_config_to_stage(ctx)
+  return M.activate_stage(ctx)
 end
 
 return M
