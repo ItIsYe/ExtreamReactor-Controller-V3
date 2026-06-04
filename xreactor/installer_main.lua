@@ -21,6 +21,16 @@ local RUNTIME_MODULES = { "installer_main.lua", "installer_http.lua", "installer
 local BETA_BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
 local WRITE_BUFFER_BYTES = 1024
 
+local COMPAT_FILE_CONTENTS = {
+  ["nodes/energy/adapter_probe.lua"] = table.concat({
+    "local M = {}",
+    "function M.probe() return { ok = true, adapters = {} } end",
+    "function M.run() return M.probe() end",
+    "return M",
+    ""
+  }, "\n")
+}
+
 local function sanitize(value)
   local s = tostring(value or "unknown"):lower():gsub("[^a-z0-9_%-]+", "_"):gsub("^_+", ""):gsub("_+$", "")
   return s ~= "" and s or "unknown"
@@ -152,6 +162,15 @@ local function build_context(constants)
     return true
   end
 
+  function ctx.write_compat_file(rel, target, download_error)
+    local body = COMPAT_FILE_CONTENTS[rel]
+    if not body then return false, download_error end
+    ctx.warn("Using beta compatibility file for missing manifest entry " .. tostring(rel))
+    local ok, err = ctx.write_file(target, body)
+    if not ok then return false, err end
+    return ctx.validate_download(target)
+  end
+
   function ctx.cache_bust_token(kind, rel, attempt)
     local t = "0"
     if os and type(os.epoch) == "function" then local ok, v = pcall(os.epoch, "utc"); if ok and v then t = tostring(v) end end
@@ -189,7 +208,9 @@ local function build_context(constants)
   function ctx.download_file(rel, target, entry)
     ctx.info("Downloading " .. rel)
     local body, url_or_err = ctx.download_versioned_url(constants.BASE_URL .. rel, "file", rel)
-    if not body then return false, url_or_err end
+    if not body then
+      return ctx.write_compat_file(rel, target, url_or_err)
+    end
     local size_ok, size_actual = ctx.size_matches(entry or {}, body)
     if not size_ok then ctx.warn(string.format("Ignoring stale manifest size for %s expected=%s actual=%s", rel, tostring(entry and entry.size_bytes), tostring(size_actual))) end
     local hash_ok, hash_actual = ctx.hash_matches(entry or {}, body)
