@@ -382,6 +382,8 @@ local function self_log(message, level)
   return ok
 end
 
+local draw
+
 local function toggle_pause()
   if stats.paused then
     stats.paused = false
@@ -392,7 +394,7 @@ local function toggle_pause()
     stats.paused = true
     stats.last_error = nil
   end
-  draw()
+  if draw then draw() end
 end
 
 local function find_modems()
@@ -549,7 +551,7 @@ local function draw_disk_bar(y)
   end
 end
 
-local function draw()
+draw = function()
   refresh_disks_if_needed(false)
   local disk_entry = current_disk() or {}
   local w, h = term.getSize()
