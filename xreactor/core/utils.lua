@@ -22,6 +22,7 @@ local remote_log_state = {
   modem_names = {},
   node_id = nil,
   role = nil,
+  boot_id = nil,
   seq = 0,
   sent = 0,
   resent = 0,
@@ -82,6 +83,25 @@ local function now_ticks()
   return 0
 end
 
+local function make_boot_id(node_id)
+  local epoch = 0
+  if os and type(os.epoch) == "function" then
+    local ok, value = pcall(os.epoch, "utc")
+    if ok and type(value) == "number" then epoch = value end
+  end
+  local computer = "unknown"
+  if os and type(os.getComputerID) == "function" then
+    local ok, value = pcall(os.getComputerID)
+    if ok then computer = tostring(value) end
+  end
+  local random_part = "0"
+  if math and type(math.random) == "function" then
+    local ok, value = pcall(math.random, 100000, 999999)
+    if ok then random_part = tostring(value) end
+  end
+  return tostring(node_id or "node") .. ":boot:" .. tostring(computer) .. ":" .. tostring(epoch) .. ":" .. random_part
+end
+
 local function discover_log_modems()
   local list = {}
   if not peripheral or type(peripheral.getNames) ~= "function" then return list end
@@ -127,6 +147,7 @@ local function init_remote_log(opts)
   end
   remote_log_state.node_id = opts.node_id or resolve_node_id()
   remote_log_state.role = opts.prefix or read_role_config_value()
+  remote_log_state.boot_id = make_boot_id(remote_log_state.node_id)
   remote_log_state.modems = discover_log_modems()
   remote_log_state.modem_names = {}
   for _, entry in ipairs(remote_log_state.modems) do
@@ -213,6 +234,8 @@ local function send_remote_log(prefix, level, message)
     end
     remote_log_state.seq = (remote_log_state.seq or 0) + 1
     local node_id = remote_log_state.node_id or resolve_node_id()
+    local boot_id = remote_log_state.boot_id or make_boot_id(node_id)
+    remote_log_state.boot_id = boot_id
     local payload = {
       type = "LOG_EVENT",
       proto = "xreactor-log-v2",
@@ -222,7 +245,8 @@ local function send_remote_log(prefix, level, message)
       level = tostring(level or "INFO"),
       message = tostring(message or ""),
       seq = remote_log_state.seq,
-      event_id = tostring(node_id) .. ":" .. tostring(remote_log_state.seq),
+      boot_id = boot_id,
+      event_id = tostring(boot_id) .. ":" .. tostring(remote_log_state.seq),
       ts = os and os.epoch and os.epoch("utc") or nil,
       ack = true
     }
@@ -337,7 +361,7 @@ function utils.load_config(path, defaults)
     end
   end
   meta.reason = err or "invalid"
-  return fallback, meta
+  return fallback
 end
 
 function utils.write_config(path, tbl)
@@ -375,9 +399,9 @@ function utils.handle_remote_log_message(message)
   return handle_remote_ack(message)
 end
 
-function utils.flush_remote_logs()
+function utils.flush_remote_logs(force)
   if not remote_log_state.initialized then init_remote_log({}) end
-  retry_pending(true)
+  retry_pending(force == true)
 end
 
 function utils.safe_peripheral_call(name, method, ...)
@@ -463,6 +487,7 @@ function utils.remote_log_status()
     modems = remote_log_state.modem_names,
     node_id = remote_log_state.node_id,
     role = remote_log_state.role,
+    boot_id = remote_log_state.boot_id,
     seq = remote_log_state.seq,
     sent = remote_log_state.sent,
     resent = remote_log_state.resent,
