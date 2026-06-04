@@ -13,6 +13,31 @@ def test_log_collector_shows_last_write_disk_identity():
     assert "* = last write target" in text
 
 
+def test_log_collector_rotates_next_disk_after_successful_write():
+    text = LOG_COLLECTOR.read_text(encoding="utf-8")
+    assert "advance_disk_after_write" in text
+    assert "if ok then\n      advance_disk_after_write()" in text
+    assert "Next    Disk #" in text
+    assert "Switch %-5s" in text
+
+
+def test_log_collector_prune_does_not_delete_active_log_files():
+    text = LOG_COLLECTOR.read_text(encoding="utf-8")
+    assert "name:match(\"%.log%.%d+$\")" in text
+    assert "name:match(\"%.old$\")" in text
+    assert "name:match(\"%.bak$\")" in text
+    assert "aggressive" not in text
+    assert "name:match(\"%.log$\")" not in text
+
+
+def test_log_collector_refreshes_modems_after_startup():
+    text = LOG_COLLECTOR.read_text(encoding="utf-8")
+    assert "MODEM_REFRESH_SECONDS" in text
+    assert "refresh_collector_modems" in text
+    assert "ModemRefresh" in text
+    assert "refresh_collector_modems(false)" in text
+
+
 def test_log_collector_has_pause_button_and_input_handlers():
     text = LOG_COLLECTOR.read_text(encoding="utf-8")
     assert "PAUSE DISK WRITES" in text
@@ -20,7 +45,7 @@ def test_log_collector_has_pause_button_and_input_handlers():
     assert "monitor_touch" in text
     assert "mouse_click" in text
     assert "paused_dropped" in text
-    assert "Disk writes paused for backup/download" in text
+    assert "ACKs withheld so senders retry" in text
 
 
 def test_log_collector_pause_redraw_is_forward_declared():
