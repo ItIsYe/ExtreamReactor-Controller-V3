@@ -31,6 +31,7 @@ end
 require_function(manifest_lib, "files_for_role", "installer_manifest")
 require_function(stage_lib, "validate_stage", "installer_stage")
 require_function(stage_lib, "commit_stage", "installer_stage")
+require_function(stage_lib, "ensure_role_config", "installer_stage")
 require_function(startup_lib, "write_startup", "installer_startup")
 require_function(storage_lib, "cleanup_stage_and_logs", "installer_storage")
 require_function(installer_http, "download_url", "installer_http")
@@ -361,6 +362,7 @@ function M.run(constants)
   if not ok_validate then ctx.fatal("Staged validation failed: " .. tostring(validate_err)) end
   local ok_commit, commit_err = stage_lib.commit_stage(ctx)
   if not ok_commit then ctx.fatal(commit_err) end
+  stage_lib.ensure_role_config(ctx, ctx.constants.INSTALL_ROOT, role.label)
   startup_lib.write_startup(ctx, role.label)
   ctx.info("Install complete")
 end
