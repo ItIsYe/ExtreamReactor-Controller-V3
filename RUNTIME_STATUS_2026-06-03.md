@@ -62,6 +62,11 @@ Interpretation:
 - Verification fix: sender `event_id` now includes a boot/session component (`boot_id`) so node restarts cannot collide with earlier sequence numbers.
 - Verification fix: `utils.flush_remote_logs()` no longer forces retries on every service tick; retry cadence is throttled unless explicitly called with `true`.
 - Updated `tests/log_reliable_transport_guard_test.py` to guard reboot-safe log IDs and throttled retry flushing.
+- Follow-up fix: sender-side remote logging now refreshes its modem list after startup so ENERGY and other nodes can begin logging even if no modem was usable during initial logger setup.
+- Follow-up fix: LOG collector now refreshes its modem list after startup and shows `ModemRefresh` on the UI.
+- Follow-up fix: LOG collector advances the next write disk after every successful write, making disk rotation visible instead of staying on disk 1 until a failure.
+- Follow-up fix: LOG collector pruning no longer deletes active `.log` files; it prunes only rotated/old/backup files.
+- Updated `tests/log_collector_ui_disk_pause_test.py` to guard visible disk rotation, collector modem refresh, and active-log preservation.
 
 ## Ingame test finding
 
@@ -87,9 +92,10 @@ ENERGY/logging issue scope:
 - Sender-side remote logging discovers all local modems and transmits every log event on every available modem, including multiple wireless modems and wired modems.
 - Sender-side log events now carry reboot-safe `event_id = boot_id:seq`, `boot_id`, `seq`, and `ack=true`.
 - Sender-side remote logging keeps a bounded pending buffer and retries unacknowledged events a limited number of times.
+- Sender-side remote logging periodically refreshes modem discovery after startup; this protects nodes whose modem appears or becomes usable after logger init.
 - Retry flushing is cadence-limited; shared service ticks no longer force a retransmit every tick.
 - `services/comms_service.lua` routes `LOG_ACK` messages to `core.utils` before normal protocol receive, so ACK packets do not disturb the main control/status protocol.
-- Collector-side logging opens the log channel on every available modem.
+- Collector-side logging opens the log channel on every available modem and periodically refreshes the modem list.
 - Collector-side logging deduplicates by `event_id` and sends `LOG_ACK` back through every available modem after a successful write.
 - Duplicate events are acknowledged again but not written again.
 - During pause, the collector does not write and does not ACK, so senders can retry after resume.
@@ -124,7 +130,8 @@ LOG collector UI:
 - The disk ring uses `*` to mark the last successful write target.
 - `Writing Disk #...` shows the last written disk ID/index and mount.
 - `Path ...` shows the exact log file path last written.
-- `Next Disk #...` shows the current next-attempt disk index.
+- `Next Disk #...` shows the current next-attempt disk index, which now advances after successful writes.
+- `ModemRefresh` shows how often the collector refreshed modem discovery after startup.
 - A pause/resume button is shown on the LOG UI. While paused, incoming log events are not written to disk and are counted as paused drops so disks can be safely copied/downloaded.
 - Pause/resume input works through monitor touch, terminal mouse click, `p`, or space.
 - The LOG UI now shows duplicate and ACK counters.
@@ -163,10 +170,11 @@ Completed:
 - LOG is available in bootstrap first-start role selection.
 - Installer role 7 now has minimal LOG-specific manifest selection instead of inheriting all base files.
 - LOG collector now writes its own `LOG_COLLECTOR` startup/status log entries.
-- LOG collector listens on all detected modems.
+- LOG collector listens on all detected modems and refreshes modem discovery after startup.
 - LOG collector UI supports modem-attached monitors without touching MASTER UI code.
 - LOG collector UI always shows the active/last-written disk and supports disk-write pause/resume.
-- LOG transport now includes reboot-safe event IDs, dedupe, ACKs, cadence-limited retries, and multiple-wireless-modem support.
+- LOG collector rotates the next write disk after each successful write and preserves active `.log` files during pruning.
+- LOG transport now includes reboot-safe event IDs, dedupe, ACKs, cadence-limited retries, post-start modem refresh, and multiple-wireless-modem support.
 
 Expected LOG role installed files:
 
@@ -226,9 +234,9 @@ Recommended future cleanup:
 1. Reinstall/update LOG collector and all nodes that should use reliable remote logging, especially ENERGY.
 2. Optional: set `xreactor.log_monitor` to the desired monitor name or `<remote>@<modem>` before starting LOG collector.
 3. Start LOG collector and verify the dashboard appears on the modem-attached monitor.
-4. Verify the UI shows `Writing Disk #...`, the `*` marker in the disk ring, duplicate count, ACK count, and that the pause/resume button works.
+4. Verify the UI shows `Writing Disk #...`, the `*` marker in the disk ring, duplicate count, ACK count, `ModemRefresh`, and that `Next Disk #...` advances after writes.
 5. Then start/update ENERGY and verify `energy/...log` appears.
-6. Check sender `utils.remote_log_status()` locally if needed: pending should decrease as ACKs arrive.
+6. Check sender `utils.remote_log_status()` locally if needed: pending should decrease as ACKs arrive and `modem_refreshes` should increase over time.
 7. Run full manifest metadata regeneration locally.
 8. Remove manifest-metadata exceptions from the guard test.
 9. Later: refactor ENERGY defaults into one shared module with tests.
