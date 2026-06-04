@@ -12,6 +12,8 @@ def test_sender_uses_event_ids_pending_retries_and_acks():
     assert "REMOTE_LOG_MAX_SENDS" in text
     assert "event_id" in text
     assert "seq" in text
+    assert "boot_id" in text
+    assert "make_boot_id" in text
     assert "LOG_ACK" in text
     assert "pending_order" in text
     assert "retry_pending" in text
@@ -33,6 +35,15 @@ def test_comms_service_routes_log_ack_before_protocol_receive():
     assert "utils.handle_remote_log_message" in text
     assert "return true" in text
     assert "utils.flush_remote_logs" in text
+
+
+def test_comms_service_flushes_retries_without_forcing_every_tick():
+    utils_text = UTILS.read_text(encoding="utf-8")
+    service_text = COMMS_SERVICE.read_text(encoding="utf-8")
+    assert "function utils.flush_remote_logs(force)" in utils_text
+    assert "retry_pending(force == true)" in utils_text
+    assert "utils.flush_remote_logs()" in service_text
+    assert "utils.flush_remote_logs(true)" not in service_text
 
 
 def test_collector_dedupes_and_acks_log_events():
