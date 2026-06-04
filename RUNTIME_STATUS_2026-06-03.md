@@ -50,7 +50,8 @@ Interpretation:
 - Updated `core/utils.lua` remote logging so nodes transmit log events on all available modems instead of only one preferred modem.
 - Updated LOG collector to write startup/status self-log events under role `LOG_COLLECTOR`.
 - Updated LOG collector to open the log channel on all available modems instead of only one preferred modem.
-- Updated LOG collector UI to redirect to a local monitor or modem-attached remote monitor when available.
+- Hardened LOG collector-only monitor UI: supports configured monitor selection, modem-attached remote monitors, and terminal fallback inside `nodes/log_collector/main.lua` only.
+- Added `tests/log_collector_remote_monitor_scope_test.py` to guard that remote-monitor support remains scoped to LOG collector and does not modify MASTER monitor manager.
 
 ## Ingame test finding
 
@@ -88,10 +89,13 @@ Expected result after reinstall/update:
 MASTER UI:
 
 - MASTER UI code was restored to the previous behavior and is not part of the current logging fix.
+- `core/monitor_manager.lua` must not contain LOG-only remote-monitor behavior.
 
 LOG collector UI:
 
-- The collector now prefers a local monitor if present.
+- The collector now prefers a configured display if set.
+- Supported config inputs are `settings.set("xreactor.log_monitor", "<monitor>")`, `settings.set("xreactor.log_monitor", "<remote>@<modem>")`, or `/xreactor/config/log_monitor.txt`.
+- If no configured display is found, it tries a local monitor.
 - If no local monitor is present, it searches modem remote peripherals for monitors.
 - If a remote monitor is found, the collector redirects `term` to that monitor and renders the LOG dashboard there.
 - If no monitor exists, it falls back to the local terminal.
@@ -131,6 +135,7 @@ Completed:
 - Installer role 7 now has minimal LOG-specific manifest selection instead of inheriting all base files.
 - LOG collector now writes its own `LOG_COLLECTOR` startup/status log entries.
 - LOG collector listens on all detected modems.
+- LOG collector UI supports modem-attached monitors without touching MASTER UI code.
 
 Expected LOG role installed files:
 
@@ -187,9 +192,10 @@ Recommended future cleanup:
 
 ## Recommended next order
 
-1. Reinstall/update LOG collector and ENERGY node so both receive the new logging code.
-2. Start LOG collector first, then ENERGY.
-3. Check whether `log_collector/...log` and `energy/...log` appear in the collector output.
-4. Run full manifest metadata regeneration locally.
-5. Remove manifest-metadata exceptions from the guard test.
-6. Later: refactor ENERGY defaults into one shared module with tests.
+1. Reinstall/update LOG collector so it receives the new collector-only monitor UI.
+2. Optional: set `xreactor.log_monitor` to the desired monitor name or `<remote>@<modem>` before starting LOG collector.
+3. Start LOG collector and verify the dashboard appears on the modem-attached monitor.
+4. Then start/update ENERGY and verify `energy/...log` appears.
+5. Run full manifest metadata regeneration locally.
+6. Remove manifest-metadata exceptions from the guard test.
+7. Later: refactor ENERGY defaults into one shared module with tests.
