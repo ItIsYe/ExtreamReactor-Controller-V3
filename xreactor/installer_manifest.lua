@@ -2,7 +2,36 @@ local M = {}
 
 local SKIP = {
   ["nodes/energy/adapter_probe.lua"] = true,
-  ["nodes/rt/commands.lua"] = true
+  ["nodes/rt/commands.lua"] = true,
+  ["nodes/rt/controllers.lua"] = true,
+  ["nodes/rt/discovery.lua"] = true,
+  ["nodes/rt/ramp.lua"] = true,
+  ["nodes/rt/safety.lua"] = true,
+  ["nodes/rt/state.lua"] = true,
+  ["nodes/rt/telemetry.lua"] = true
+}
+
+local EXTRA_BY_ROLE = {
+  RT = {
+    "adapters/reactor.lua",
+    "adapters/turbine.lua",
+    "core/control_rails.lua",
+    "core/fluid.lua",
+    "core/turbine_ctrl.lua",
+    "core/turbine_regulator.lua",
+    "nodes/rt/command_handler.lua",
+    "nodes/rt/config_normalizer.lua",
+    "nodes/rt/discovery_log.lua",
+    "nodes/rt/discovery_runtime.lua",
+    "nodes/rt/flow_apply_helpers.lua",
+    "nodes/rt/health_payload.lua",
+    "nodes/rt/module_lifecycle.lua",
+    "nodes/rt/monitor_ui.lua",
+    "nodes/rt/reactor_steam_guard.lua",
+    "nodes/rt/startup_diagnostics.lua",
+    "nodes/rt/state_handlers.lua",
+    "nodes/rt/status_snapshot.lua"
+  }
 }
 
 local function clean_entry(entry, strip)
@@ -58,6 +87,13 @@ local function add(expected, entry)
   end
 end
 
+local function add_role_extras(expected, role_label)
+  local extras = EXTRA_BY_ROLE[tostring(role_label or ""):upper()]
+  for _, path in ipairs(extras or {}) do
+    if not SKIP[path] then add(expected, { path = path, required_for = { tostring(role_label or "") } }) end
+  end
+end
+
 function M.select_expected_files(manifest, role_label, include_dev_files)
   local expected = {}
   local strip = strip_metadata(manifest)
@@ -77,6 +113,8 @@ function M.select_expected_files(manifest, role_label, include_dev_files)
       end
     end
   end
+
+  add_role_extras(expected, role_label)
 
   if include_dev_files then
     for _, raw in ipairs(manifest.dev_files or {}) do add(expected, clean_entry(raw, strip)) end
