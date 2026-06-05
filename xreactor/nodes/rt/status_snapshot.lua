@@ -75,23 +75,67 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
   return list
 end
 
-local function turbines_stable_for_capacity(turbines, target_rpm)
-  if type(turbines) ~= "table" or #turbines == 0 then return false, "NO_TURBINES" end
+local function summarize_capacity_sample(turbines, target_rpm, total_output)
+  local total = type(turbines) == "table" and #turbines or 0
+  if total == 0 then
+    return { ok = false, reason = "NO_TURBINES", total = 0, stable = 0, producing = 0, sample_output = 0, required = 1 }
+  end
+
   local target = numeric_value(target_rpm) or 900
   local tolerance = math.max(10, target * 0.10)
+  local stable = 0
   local producing = 0
+  local stable_output = 0
+  local rpm_missing = 0
+  local coil_off = 0
+  local out_of_band = 0
+
   for _, turbine in ipairs(turbines) do
     local rpm = numeric_value(turbine.rpm)
-    local energy = numeric_value(turbine.energy)
+    local energy = numeric_value(turbine.energy) or 0
     local coil = turbine.coil_engaged
-    if not rpm then return false, "RPM_UNAVAILABLE" end
-    if math.abs(rpm - target) > tolerance then return false, "RPM_NOT_STABLE_10PCT" end
-    if not energy or energy <= 0 then return false, "OUTPUT_UNAVAILABLE" end
-    if coil == false then return false, "COIL_OFF" end
-    producing = producing + 1
+    if not rpm then
+      rpm_missing = rpm_missing + 1
+    elseif math.abs(rpm - target) <= tolerance then
+      if coil == false then
+        coil_off = coil_off + 1
+      elseif energy > 0 then
+        stable = stable + 1
+        producing = producing + 1
+        stable_output = stable_output + energy
+      end
+    else
+      out_of_band = out_of_band + 1
+    end
   end
-  if producing <= 0 then return false, "NO_OUTPUT" end
-  return true, "STABLE_10PCT"
+
+  local required = 1
+  local observed_total = numeric_value(total_output) or 0
+  local sample_output = stable_output > 0 and stable_output or observed_total
+  local ok = stable >= required and sample_output > 0
+  local reason
+  if ok then
+    reason = "STABLE_PROGRESSIVE_10PCT"
+  elseif stable < required then
+    reason = "NOT_ENOUGH_STABLE_TURBINES_10PCT"
+  else
+    reason = "OUTPUT_UNAVAILABLE"
+  end
+
+  return {
+    ok = ok,
+    reason = reason,
+    total = total,
+    stable = stable,
+    producing = producing,
+    sample_output = sample_output,
+    required = required,
+    target = target,
+    tolerance = tolerance,
+    rpm_missing = rpm_missing,
+    coil_off = coil_off,
+    out_of_band = out_of_band
+  }
 end
 
 function M.update_capacity_learning(ctx, turbines, actual_output)
@@ -103,25 +147,52 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
     reason = "INIT"
   }
   local learning = ctx.capacity_learning
-  if learning.locked then return learning end
+  local sample = summarize_capacity_sample(turbines, ctx.targets and ctx.targets.rpm, actual_output)
 
-  local output = numeric_value(actual_output) or 0
-  local stable, reason = turbines_stable_for_capacity(turbines, ctx.targets and ctx.targets.rpm)
-  learning.reason = reason
-  if stable and output > 0 then
+  learning.reason = sample.reason
+  learning.total_turbines = sample.total
+  learning.stable_turbines = sample.stable
+  learning.producing_turbines = sample.producing
+  learning.required_stable_turbines = sample.required
+  learning.sample_output = sample.sample_output
+  learning.rpm_missing = sample.rpm_missing
+  learning.out_of_band_turbines = sample.out_of_band
+  learning.coil_off_turbines = sample.coil_off
+
+  if sample.ok then
     learning.stable_samples = (learning.stable_samples or 0) + 1
-    learning.max_candidate = math.max(learning.max_candidate or 0, output)
-    if learning.stable_samples >= 3 then
+    learning.max_candidate = math.max(learning.max_candidate or 0, sample.sample_output or 0)
+    if not learning.locked and learning.stable_samples >= 3 then
       learning.max_output = learning.max_candidate
       learning.locked = true
-      learning.reason = "LOCKED_STABLE_10PCT_MAX"
+      learning.reason = "LOCKED_PROGRESSIVE_10PCT_MAX"
       if type(ctx.log) == "function" then
-        pcall(ctx.log, "INFO", string.format("RT capacity locked output=%.2f samples=%d tolerance=10pct", learning.max_output, learning.stable_samples))
+        pcall(ctx.log, "INFO", string.format(
+          "RT capacity locked output=%.2f samples=%d stable_turbines=%d/%d tolerance=10pct",
+          learning.max_output,
+          learning.stable_samples,
+          sample.stable,
+          sample.total
+        ))
+      end
+    elseif learning.locked and sample.sample_output and sample.sample_output > (learning.max_output or 0) then
+      learning.max_output = sample.sample_output
+      learning.reason = "UPDATED_PROGRESSIVE_10PCT_MAX"
+      if type(ctx.log) == "function" then
+        pcall(ctx.log, "INFO", string.format(
+          "RT capacity updated output=%.2f stable_turbines=%d/%d tolerance=10pct",
+          learning.max_output,
+          sample.stable,
+          sample.total
+        ))
       end
     end
   else
-    learning.stable_samples = 0
+    if not learning.locked then
+      learning.stable_samples = 0
+    end
   end
+
   return learning
 end
 
@@ -145,6 +216,10 @@ function M.build_status_payload(ctx)
     capacity_ready = capacity and capacity.locked == true or false,
     capacity_source = capacity and capacity.reason or "UNKNOWN",
     capacity_stable_samples = capacity and capacity.stable_samples or 0,
+    capacity_stable_turbines = capacity and capacity.stable_turbines or 0,
+    capacity_total_turbines = capacity and capacity.total_turbines or 0,
+    capacity_required_stable_turbines = capacity and capacity.required_stable_turbines or 1,
+    capacity_sample_output = capacity and capacity.sample_output or 0,
     turbine_rpm = ctx.targets.rpm,
     steam = ctx.targets.steam,
     capabilities = health_payload.capabilities,
