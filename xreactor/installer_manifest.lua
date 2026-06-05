@@ -1,6 +1,9 @@
 local M = {}
 
-local SKIP = { ["nodes/energy/adapter_probe.lua"] = true }
+local SKIP = {
+  ["nodes/energy/adapter_probe.lua"] = true,
+  ["nodes/rt/commands.lua"] = true
+}
 
 local function clean_entry(entry, strip)
   if type(entry) == "string" then entry = { path = entry } end
