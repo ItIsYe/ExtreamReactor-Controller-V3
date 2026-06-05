@@ -78,20 +78,20 @@ end
 local function turbines_stable_for_capacity(turbines, target_rpm)
   if type(turbines) ~= "table" or #turbines == 0 then return false, "NO_TURBINES" end
   local target = numeric_value(target_rpm) or 900
-  local tolerance = math.max(10, math.floor(target * 0.03))
+  local tolerance = math.max(10, target * 0.10)
   local producing = 0
   for _, turbine in ipairs(turbines) do
     local rpm = numeric_value(turbine.rpm)
     local energy = numeric_value(turbine.energy)
     local coil = turbine.coil_engaged
     if not rpm then return false, "RPM_UNAVAILABLE" end
-    if math.abs(rpm - target) > tolerance then return false, "RPM_NOT_STABLE" end
+    if math.abs(rpm - target) > tolerance then return false, "RPM_NOT_STABLE_10PCT" end
     if not energy or energy <= 0 then return false, "OUTPUT_UNAVAILABLE" end
     if coil == false then return false, "COIL_OFF" end
     producing = producing + 1
   end
   if producing <= 0 then return false, "NO_OUTPUT" end
-  return true, "STABLE"
+  return true, "STABLE_10PCT"
 end
 
 function M.update_capacity_learning(ctx, turbines, actual_output)
@@ -114,9 +114,9 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
     if learning.stable_samples >= 3 then
       learning.max_output = learning.max_candidate
       learning.locked = true
-      learning.reason = "LOCKED_STABLE_MAX"
+      learning.reason = "LOCKED_STABLE_10PCT_MAX"
       if type(ctx.log) == "function" then
-        pcall(ctx.log, "INFO", string.format("RT capacity locked output=%.2f samples=%d", learning.max_output, learning.stable_samples))
+        pcall(ctx.log, "INFO", string.format("RT capacity locked output=%.2f samples=%d tolerance=10pct", learning.max_output, learning.stable_samples))
       end
     end
   else
