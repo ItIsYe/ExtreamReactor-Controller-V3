@@ -17,6 +17,11 @@ local function number_or_nil(value)
   return nil
 end
 
+local function capacity_learning_locked(ctx)
+  local learning = ctx and ctx.capacity_learning
+  return type(learning) == "table" and learning.locked == true and number_or_nil(learning.max_output) and number_or_nil(learning.max_output) > 0
+end
+
 local function current_capacity(ctx)
   local learning = ctx.capacity_learning
   if type(learning) == "table" and learning.locked == true then
@@ -52,6 +57,19 @@ local function set_setpoints(command, ctx, record)
   end
 
   local value = command.value or {}
+  if not capacity_learning_locked(ctx) then
+    local learning = ctx.capacity_learning or {}
+    return record({
+      ok = false,
+      error = "capacity learning not locked",
+      reason_code = "CAPACITY_LEARNING",
+      capacity_ready = false,
+      capacity_source = learning.reason or "LEARNING",
+      capacity_stable_samples = learning.stable_samples or 0,
+      command_value = value
+    })
+  end
+
   local targets = ctx.targets
   if type(value.target_rpm) == "number" then
     targets.rpm = value.target_rpm
