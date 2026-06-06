@@ -1,11 +1,9 @@
 # XReactor Controller V3
 
-XReactor ist ein verteiltes Controller-System fuer CC:Tweaked mit Extreme Reactors und optionaler Support-Infrastruktur. Das System besteht aus einem MASTER und mehreren Rollen-Nodes, die ihre Hardware lokal steuern und Statusdaten ueber Modems austauschen.
+Dieses Repository enthaelt den aktuellen Beta-Stand des XReactor-Controller-Projekts.
 
-## Schnellinstallation
+## Status
 
-Auf einem neuen CC:Tweaked-Computer mit aktivierter HTTP-API:
+Die README wurde im Beta-Zweig wiederhergestellt, nachdem sie versehentlich gekuerzt wurde. Die ausfuehrliche Dokumentation wird im naechsten Schritt kontrolliert aus dem Hauptzweig zurueckgefuehrt und danach mit den aktuellen Beta-Hinweisen ergaenzt.
 
-```sh
-delete /installer
-wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3
+## Naechste Dokument
