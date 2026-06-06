@@ -11,4 +11,4 @@ The current repository ships:
 
 ## Schnellinstallation
 
-Auf einem neuen CC:Tweaked-Computer mit aktivierter HTTP-API kann der Installer dauerhaft als `/installer` abgelegt und danach gestartet werden
+Auf einem neuen CC:Tweaked-Computer mit aktivierter HTTP
