@@ -1,11 +1,7 @@
 # XReactor Controller V3
 
-XReactor is a distributed controller stack for **CC:Tweaked** systems connected to **Extreme Reactors** and optional support infrastructure. It is built around one **MASTER** computer and multiple role nodes. Hardware control stays local to the node that owns the peripherals; MASTER aggregates state and sends control intent.
+XReactor is a distributed controller stack for **CC:Tweaked** systems connected to **Extreme Reactors** and optional support infrastructure. It is built around one **MASTER** computer and several specialized role nodes that manage hardware locally and exchange state over wireless modem channels.
 
-## Aktueller Dokumentationsstand
+The current repository ships:
 
-Stand: **2026-06-03**.
-
-The current architecture/status audit is tracked in:
-
-- [`RUNTIME_STATUS_2026-06-03
+- a **single-file installer** (`installer`) for fresh
