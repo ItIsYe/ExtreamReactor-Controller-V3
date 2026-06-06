@@ -1,14 +1,21 @@
-# Fuel-Logistik Roadmap
+# Fuel Logistics Roadmap
 
-Diese Roadmap beschreibt eine spaetere Erweiterung der bestehenden FUEL-Node.
+This document tracks a later extension of the existing FUEL node.
 
-## Prioritaet
+## Priority
 
-Diese Erweiterung ist zurueckgestellt. Zuerst muessen MASTER, RT und ENERGY stabil zusammenarbeiten.
+This work is postponed. MASTER, RT, and ENERGY must work reliably first.
 
-Vorbedingungen:
+## Goal
 
-1. MASTER steuert RT zuverlaessig.
-2. RT-Lernmodus laeuft unabhaengig vom MASTER.
-3. ENERGY liefert stabile Statusdaten.
-4. LOG-Collector samm
+The FUEL node should later handle rule based item routing between known inventory peripherals.
+
+## Scope
+
+The extension stays inside the FUEL node. No new role is planned.
+
+The implementation should use inventory peripherals found through a wired modem. A configuration file will define source, target, item filter, limits, and batch size for each route.
+
+## Status
+
+Planned only. Not active yet.
