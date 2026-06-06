@@ -2,8 +2,11 @@
 
 Dieses Repository enthaelt den aktuellen Beta-Stand des XReactor-Controller-Projekts.
 
-## Status
+## Dokumentation
 
-Die README wurde im Beta-Zweig wiederhergestellt, nachdem sie versehentlich gekuerzt wurde. Die ausfuehrliche Dokumentation wird im naechsten Schritt kontrolliert aus dem Hauptzweig zurueckgefuehrt und danach mit den aktuellen Beta-Hinweisen ergaenzt.
+Die lange Projektdokumentation wird nicht mehr direkt in dieser README gepflegt. Sie wird in kleinere Dateien unter `docs/` aufgeteilt, damit die Beta-Dokumentation nicht wieder durch grosse Einzelupdates beschaedigt wird.
 
-## Naechste Dokument
+Wichtige Dokumente:
+
+- `RUNTIME_STATUS_2026-06-03.md` - aktueller technischer Status und offene Punkte
+- `docs/FUEL_LOGISTICS_ROADMAP.md` - spaetere Fuel-Logistik ueber Inventory-Peripherals
