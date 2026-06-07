@@ -15,4 +15,4 @@ Fuel logistics over wired inventory peripherals is a later roadmap item and must
 
 ## Role updates
 
-The runtime now supports role `LOG` and alias `LOG_COLLECTOR`.
+The runtime now supports role `
