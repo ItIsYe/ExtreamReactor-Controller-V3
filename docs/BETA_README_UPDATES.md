@@ -1,6 +1,6 @@
 # Beta README Update Notes
 
-This file tracks README-relevant beta changes that must stay visible while the README is maintained manually.
+This file tracks README-relevant beta changes while the README is maintained manually.
 
 ## Current beta priorities
 
@@ -15,4 +15,12 @@ Fuel logistics over wired inventory peripherals is a later roadmap item and must
 
 ## Role updates
 
-The runtime now supports role `
+The runtime supports role LOG and alias LOG_COLLECTOR.
+
+Installer role menu should list:
+
+1. MASTER
+2. RT
+3. ENERGY
+4. WATER
+5.
