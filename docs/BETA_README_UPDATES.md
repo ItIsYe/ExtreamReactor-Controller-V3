@@ -4,13 +4,15 @@ This file tracks README-relevant beta changes that must stay visible while the R
 
 ## Current beta priorities
 
-The current active stabilization priority is:
+The active stabilization priority is:
 
-1. MASTER to RT coordination
-2. RT local learning and hardware control
-3. ENERGY telemetry and logging
-4. LOG collector receiving ENERGY and self logs
+1. MASTER to RT coordination.
+2. RT local learning and hardware control.
+3. ENERGY telemetry and logging.
+4. LOG collector receiving ENERGY logs and its own self logs.
 
 Fuel logistics over wired inventory peripherals is a later roadmap item and must wait until MASTER, RT, and ENERGY work together reliably.
 
 ## Role updates
+
+The runtime now supports role `LOG` and alias `LOG_COLLECTOR`.
