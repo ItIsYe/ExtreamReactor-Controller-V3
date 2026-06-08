@@ -11,7 +11,4 @@ return {
       { path = "core/logger.lua" },
       { path = "core/network.lua" },
       { path = "core/non_rt_config.lua" },
-      { path = "core/non_rt_payload.lua" },
-      { path = "core/protocol.lua" },
-      { path = "core/registry.lua" },
-      { path =
+      { path = "core
