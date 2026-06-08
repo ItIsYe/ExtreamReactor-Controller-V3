@@ -1,19 +1,21 @@
--- Offline validator for GitHub Actions.
--- Runs outside Minecraft/CC:Tweaked and therefore only performs static checks.
-
-local ROOT = "."
 local errors = {}
-local warnings = {}
 
-local function fail(message)
-  errors[#errors + 1] = tostring(message)
+local function fail(msg)
+  errors[#errors + 1] = tostring(msg)
 end
 
-local function warn(message)
-  warnings[#warnings + 1] = tostring(message)
+local function read_all(path)
+  local f = io.open(path, "rb")
+  if not f then return nil end
+  local s = f:read("*a")
+  f:close()
+  return s
 end
 
-local function path_join(a, b)
-  if a == "." or a == "" then return b end
-  return a .. "/" .. b
+local function exists(path)
+  local f = io.open(path, "rb")
+  if f then f:close(); return true end
+  return false
 end
+
+local function load
