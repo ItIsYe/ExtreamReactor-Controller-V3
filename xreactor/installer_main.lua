@@ -353,6 +353,11 @@ local function clean_existing_installation(ctx)
   return true
 end
 
+local function clean_or_fatal(ctx)
+  local ok_clean, clean_err = clean_existing_installation(ctx)
+  if not ok_clean then ctx.fatal(clean_err) end
+end
+
 local function choose_role_for_reinstall(ctx)
   local existing_label = stage_lib.read_role_config(ctx)
   if existing_label then
@@ -362,17 +367,20 @@ local function choose_role_for_reinstall(ctx)
       print("Vorhandene Rolle gefunden: " .. tostring(existing_role.label))
       if prompt_yes_no("Diese Rolle behalten und komplett neu installieren?") then
         ctx.info("Keeping existing role for full reinstall: " .. tostring(existing_role.label))
-        return existing_role
+        return existing_role, false
       end
       ctx.info("Existing role will be replaced: " .. tostring(existing_role.label))
-    else
-      ctx.warn("Unknown existing role ignored: " .. tostring(existing_label))
+      clean_or_fatal(ctx)
+      local replacement = select_role()
+      if not replacement then ctx.fatal("Invalid role") end
+      return replacement, true
     end
+    ctx.warn("Unknown existing role ignored: " .. tostring(existing_label))
   end
 
   local role = select_role()
   if not role then ctx.fatal("Invalid role") end
-  return role
+  return role, false
 end
 
 local function add_virtual_role_files(expected, role_label)
@@ -424,12 +432,13 @@ end
 function M.run(constants)
   local ctx = build_context(constants)
   storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = false, keep_stage = false })
-  local role = choose_role_for_reinstall(ctx)
+  local role, already_cleaned = choose_role_for_reinstall(ctx)
   ctx.target_role = role.label
   ctx.set_log_target(role.label)
   ctx.install_mode = "reinstall"
-  local ok_clean, clean_err = clean_existing_installation(ctx)
-  if not ok_clean then ctx.fatal(clean_err) end
+  if not already_cleaned then
+    clean_or_fatal(ctx)
+  end
   local ok_release, release_err = ctx.resolve_release_source(); if not ok_release then ctx.fatal(release_err) end
   local manifest, manifest_err = ctx.load_manifest(); if not manifest then ctx.fatal(manifest_err) end
   local expected = build_expected(manifest, role)
