@@ -32,6 +32,7 @@ require_function(manifest_lib, "files_for_role", "installer_manifest")
 require_function(stage_lib, "validate_stage", "installer_stage")
 require_function(stage_lib, "commit_stage", "installer_stage")
 require_function(stage_lib, "ensure_role_config", "installer_stage")
+require_function(stage_lib, "read_role_config", "installer_stage")
 require_function(startup_lib, "write_startup", "installer_startup")
 require_function(storage_lib, "cleanup_stage_and_logs", "installer_storage")
 require_function(installer_http, "download_url", "installer_http")
@@ -49,7 +50,17 @@ local ROLE_CHOICES = {
   ["7"] = { key = "log", label = "LOG" }
 }
 
-local ROLE_KEY_MAP = { MASTER = "master", RT = "rt", ENERGY = "energy", WATER = "water", FUEL = "fuel", REPROCESSING = "reprocessing", LOG = "log" }
+local ROLE_KEY_MAP = {
+  MASTER = "master",
+  RT = "rt",
+  ENERGY = "energy",
+  WATER = "water",
+  FUEL = "fuel",
+  REPROCESSING = "reprocessing",
+  LOG = "log",
+  LOG_COLLECTOR = "log"
+}
+
 local RUNTIME_MODULES = { "installer_main.lua", "installer_http.lua", "installer_manifest.lua", "installer_stage.lua", "installer_startup.lua", "installer_storage.lua" }
 local BETA_BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
 local WRITE_BUFFER_BYTES = 1024
@@ -295,9 +306,73 @@ local function build_context(constants)
 end
 
 local function select_role()
-  print(""); print("1 MASTER"); print("2 RT"); print("3 ENERGY"); print("4 WATER"); print("5 FUEL"); print("6 REPROCESSING"); print("7 LOG")
+  print("")
+  print("1 MASTER")
+  print("2 RT")
+  print("3 ENERGY")
+  print("4 WATER")
+  print("5 FUEL")
+  print("6 REPROCESSING")
+  print("7 LOG")
   write("Select role: ")
   return ROLE_CHOICES[read()]
+end
+
+local function prompt_yes_no(question)
+  while true do
+    write(question .. " [j/n]: ")
+    local answer = tostring(read() or ""):lower()
+    if answer == "j" or answer == "ja" or answer == "y" or answer == "yes" then return true end
+    if answer == "n" or answer == "nein" or answer == "no" then return false end
+    print("Bitte j oder n eingeben.")
+  end
+end
+
+local function role_from_label(role_label)
+  local normalized = tostring(role_label or ""):upper()
+  local key = ROLE_KEY_MAP[normalized]
+  if not key then return nil end
+  return { key = key, label = normalized }
+end
+
+local function clean_existing_installation(ctx)
+  ctx.info("Cleaning old installation before full reinstall")
+  local paths = {
+    ctx.constants.STAGE_ROOT,
+    ctx.constants.BACKUP_ROOT,
+    ctx.constants.INSTALL_ROOT,
+    ctx.constants.STARTUP_PATH
+  }
+  for _, path in ipairs(paths) do
+    if type(path) == "string" and path ~= "" and ctx.fs.exists(path) then
+      ctx.info("Deleting " .. tostring(path))
+      local ok, err = pcall(ctx.fs.delete, path)
+      if not ok then return false, "delete failed for " .. tostring(path) .. ": " .. tostring(err) end
+    end
+  end
+  return true
+end
+
+local function choose_role_for_reinstall(ctx)
+  local existing_label = stage_lib.read_role_config(ctx)
+  if existing_label then
+    local existing_role = role_from_label(existing_label)
+    if existing_role then
+      print("")
+      print("Vorhandene Rolle gefunden: " .. tostring(existing_role.label))
+      if prompt_yes_no("Diese Rolle behalten und komplett neu installieren?") then
+        ctx.info("Keeping existing role for full reinstall: " .. tostring(existing_role.label))
+        return existing_role
+      end
+      ctx.info("Existing role will be replaced: " .. tostring(existing_role.label))
+    else
+      ctx.warn("Unknown existing role ignored: " .. tostring(existing_label))
+    end
+  end
+
+  local role = select_role()
+  if not role then ctx.fatal("Invalid role") end
+  return role
 end
 
 local function add_virtual_role_files(expected, role_label)
@@ -349,13 +424,16 @@ end
 function M.run(constants)
   local ctx = build_context(constants)
   storage_lib.cleanup_stage_and_logs(ctx, { cleanup_logs = true, cleanup_backup = false, keep_stage = false })
-  local role = select_role(); if not role then ctx.fatal("Invalid role") end
+  local role = choose_role_for_reinstall(ctx)
   ctx.target_role = role.label
   ctx.set_log_target(role.label)
+  ctx.install_mode = "reinstall"
+  local ok_clean, clean_err = clean_existing_installation(ctx)
+  if not ok_clean then ctx.fatal(clean_err) end
   local ok_release, release_err = ctx.resolve_release_source(); if not ok_release then ctx.fatal(release_err) end
   local manifest, manifest_err = ctx.load_manifest(); if not manifest then ctx.fatal(manifest_err) end
   local expected = build_expected(manifest, role)
-  ctx.log_install_identity(manifest, role.label, "install", expected)
+  ctx.log_install_identity(manifest, role.label, "reinstall", expected)
   local files = sorted_files(expected)
   local ok_stage, stage_err = install_staged(ctx, files); if not ok_stage then ctx.fatal(stage_err) end
   local ok_validate, validate_err = stage_lib.validate_stage(ctx, expected)
