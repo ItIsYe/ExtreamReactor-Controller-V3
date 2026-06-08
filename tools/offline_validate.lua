@@ -4,18 +4,18 @@ local function fail(msg)
   errors[#errors + 1] = tostring(msg)
 end
 
-local function read_all(path)
-  local f = io.open(path, "rb")
-  if not f then return nil end
-  local s = f:read("*a")
-  f:close()
-  return s
-end
-
 local function exists(path)
   local f = io.open(path, "rb")
   if f then f:close(); return true end
   return false
 end
 
-local function load
+local required = {
+  "installer",
+  "xreactor/start.lua",
+  "xreactor/manifest.lua",
+  "xreactor/release.lua",
+  "xreactor/installer_main.lua",
+  "xreactor/installer_manifest.lua",
+  "xreactor/installer_stage.lua",
+  "xreactor/installer_start
