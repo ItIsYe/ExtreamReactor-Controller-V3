@@ -55,4 +55,5 @@ def test_log_role_forbidden_heavy_files_are_not_explicit_log_required():
 def test_installer_manifest_has_special_log_role_selection():
     text = INSTALLER_MANIFEST.read_text(encoding="utf-8")
     assert "is_log_role" in text
-    assert "entry.__base == true and not log_role" in text
+    assert "entry.always == true" in text
+    assert "not log_role" in text

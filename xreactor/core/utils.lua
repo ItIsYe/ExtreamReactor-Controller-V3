@@ -242,7 +242,8 @@ end
 local function send_remote_log(prefix, level, message)
   local ok = pcall(function()
     if not remote_log_state.initialized then init_remote_log({ prefix = prefix }) end
-    handle_remote_ack(message)
+    -- ACKs are processed via comms_service.handle_event -> handle_remote_log_message,
+    -- not here (message is a log text string, not an ACK packet).
     retry_pending(false)
     if not remote_log_state.enabled or #remote_log_state.modems == 0 then
       refresh_log_modems(true)

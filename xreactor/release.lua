@@ -4,7 +4,7 @@ return {
   source_ref = "beta",
   manifest_id = "manifest-v28",
   manifest_version = 28,
-  manifest_file_count = 106,
+  manifest_file_count = 122,
   hash_algo = "none",
   manifest_path = "xreactor/manifest.lua",
   installer_core_version = "2.0",
