@@ -126,13 +126,13 @@ return {
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
     },
     fuel = {
-    { path = "nodes/fuel/config.lua", size_bytes = 6360, hash = "8d75e7f9", required_for={"FUEL"} },
+    { path = "nodes/fuel/config.lua", size_bytes = 6941, hash = "6bacccb4", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 3015, hash = "3b830087", required_for={"FUEL"} },
     { path = "nodes/fuel/main.lua", size_bytes = 17152, hash = "387cee5e", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     },
     reprocessing = {
-    { path = "nodes/reprocessor/config.lua", size_bytes = 5233, hash = "8106e96c", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/config.lua", size_bytes = 5829, hash = "f2ba6d9e", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 2144, hash = "9d594b4f", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/main.lua", size_bytes = 17352, hash = "385f9350", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },

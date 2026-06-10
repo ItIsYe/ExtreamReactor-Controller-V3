@@ -134,13 +134,18 @@ function M:refresh_peripherals()
     end
     local ok, w = pcall(peripheral.wrap, entry.chest)
     if ok and w then
+      -- Detect Mekanism Logistical Transporter by type name or explicit flag.
+      local ptype_str = tostring(peripheral.getType(entry.chest) or ""):lower()
+      local is_transporter = entry.transporter == true
+        or ptype_str:find("logistical_transporter", 1, true) ~= nil
       supply[#supply + 1] = {
-        name  = entry.chest,
-        label = entry.label or entry.chest,
-        item  = entry.item,
-        min   = tonumber(entry.min) or 16,
-        max   = tonumber(entry.max) or 64,
-        wrapped = w,
+        name           = entry.chest,
+        label          = entry.label or entry.chest,
+        item           = entry.item,
+        min            = tonumber(entry.min) or 16,
+        max            = tonumber(entry.max) or 64,
+        is_transporter = is_transporter,
+        wrapped        = w,
       }
     else
       self.warn_once("supply_wrap_" .. i, "Logistics: supply chest wrap failed: " .. entry.chest)
@@ -192,13 +197,21 @@ function M:_run_supply(cycle_log)
       goto continue
     end
 
-    -- Count current level in chest
-    local current = chest_count(target.wrapped, target.item)
-    if current >= target.min then goto continue end  -- chest is sufficiently full
-
-    -- How much do we need?
-    local needed = target.max - current
-    if needed <= 0 then goto continue end
+    -- For Mekanism Logistical Transporters: skip fill check.
+    -- Transporters move items immediately — list() shows near-empty in-transit state.
+    -- Instead export a fixed batch every cycle as long as ME has enough.
+    -- For standard chests: check actual fill level.
+    local current, needed
+    if target.is_transporter then
+      -- Transporter: export up to 'max' items per cycle regardless of transporter state.
+      current = 0
+      needed  = target.max
+    else
+      current = chest_count(target.wrapped, target.item)
+      if current >= target.min then goto continue end
+      needed = target.max - current
+      if needed <= 0 then goto continue end
+    end
 
     -- How much is in ME?
     local me_info, _ = safe_call(bridge.wrapped, "getItem", { name = target.item })
@@ -220,9 +233,14 @@ function M:_run_supply(cycle_log)
       local moved = type(result) == "number" and result or 0
       if moved > 0 then
         exported = exported + moved
-        cycle_log[#cycle_log + 1] = string.format(
-          "ME→%s [%s] %s x%d (was %d/%d)",
-          target.name, target.label, target.item, moved, current, target.max)
+        if target.is_transporter then
+          cycle_log[#cycle_log + 1] = string.format(
+            "ME→transporter[%s] %s x%d", target.label, target.item, moved)
+        else
+          cycle_log[#cycle_log + 1] = string.format(
+            "ME→%s [%s] %s x%d (was %d/%d)",
+            target.name, target.label, target.item, moved, current, target.max)
+        end
       end
     end
 

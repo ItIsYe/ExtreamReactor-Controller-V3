@@ -92,19 +92,28 @@ local CONFIG = {
     discovery_interval = 60,      -- seconds between peripheral re-discovery
     me_bridge          = "me_bridge",  -- AP 1.21.1+; use "meBridge" on older versions
     --
-    -- supply: one entry per FUEL TYPE.
-    -- CC exports from ME when the shared chest drops below 'min'.
-    -- Mekanism pipes distribute from this chest to all connected reactors.
-    -- { chest = "fuel_chest_0",  item = "bigreactors:yellorium_ingot",
-    --   label = "Yellorium",  min = 64,  max = 256 }
-    -- { chest = "fuel_chest_1",  item = "bigreactors:blutonium_ingot",
-    --   label = "Blutonium",  min = 32,  max = 128 }
+    -- supply: one entry per ITEM TYPE.
+    -- 'chest' can be a standard chest OR a Mekanism Logistical Transporter name
+    -- (visible via Wired Modem as "mekanism:ultimate_logistical_transporter_N").
+    -- For transporters: add transporter=true — fill check is skipped since items
+    -- transit immediately; CC exports a fixed batch (max) each cycle.
+    -- For chests: CC exports when level drops below 'min', fills up to 'max'.
+    --
+    -- Chest example:
+    --   { chest = "chest_0", item = "bigreactors:yellorium_ingot",
+    --      label = "Yellorium", min = 64, max = 256 }
+    -- Transporter example (Wired Modem required):
+    --   { chest = "mekanism:ultimate_logistical_transporter_0",
+    --      item  = "bigreactors:yellorium_ingot",
+    --      label = "Yellorium transporter", max = 64, transporter = true }
     supply  = {},
     --
-    -- collect: the shared waste collection chest(s).
-    -- Mekanism brings all reactor waste here; CC imports it into ME.
-    -- Skip if AE2 Import Bus handles waste chest → ME automatically.
-    -- { chest = "waste_chest_0", label = "Reactor waste" }
+    -- collect: chests or transporters to drain INTO ME.
+    -- Transporter: 'list()' shows in-transit items; importItemFromPeripheral
+    -- pulls whatever Mekanism has routed into/through the transporter.
+    -- Skip entries if AE2 Import Bus handles the return trip automatically.
+    -- { chest = "waste_chest_0", label = "Waste collection" }
+    -- { chest = "mekanism:ultimate_logistical_transporter_1", label = "Waste transporter" }
     collect = {},
   }
 }
