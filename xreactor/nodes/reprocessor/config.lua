@@ -61,26 +61,39 @@ local CONFIG = {
   -- Logistics routing for the REPROCESSOR node.
   --
   -- Physical setup:
-  --   ME Bridge ──export──► waste_chest ──Mekanism pipes──► Reprocessor input
-  --   ME Bridge ◄──import── fuel_out_chest ◄─Mekanism pipes── Reprocessor output
-  --   (or AE2 Import Bus handles fuel_out_chest → ME automatically without CC)
+  -- Logistics routing for the REPROCESSOR node.
   --
-  -- Set enabled=true to activate.
+  -- Physical setup:
+  --   ONE shared Mekanism pipe network per item type.
+  --   Mekanism distributes waste to ALL connected reprocessors automatically.
+  --
+  --   ME Bridge ──Cyanite──► [waste_in_chest] ──Mekanism waste pipe──► Reprocessor A
+  --                                                                └──► Reprocessor B
+  --
+  --   [fuel_out_chest] ◄──Mekanism output pipe──── Reprocessor A
+  --                    ◄─────────────────────────  Reprocessor B
+  --   ME Bridge ◄────── fuel_out_chest
+  --
+  -- One chest per ITEM TYPE — not per reprocessor.
   DEFAULT_LOGISTICS = {
     enabled            = false,
     interval           = 10,
     discovery_interval = 60,
     me_bridge          = "me_bridge",
     --
-    -- supply: one entry per reprocessor. CC exports waste when chest drops below 'min'.
-    -- Each chest connects via dedicated short pipe to ONE reprocessor input only.
+    -- supply: one entry per WASTE TYPE to process.
+    -- CC exports from ME when the shared input chest drops below 'min'.
+    -- Mekanism distributes from this chest to all connected reprocessors.
     -- { chest = "reproc_in_0", item = "bigreactors:cyanite_ingot",
-    --   label = "Reprocessor A", min = 4, max = 32 }
+    --   label = "Cyanite",   min = 16, max = 64 }
+    -- { chest = "reproc_in_1", item = "bigreactors:magentite_ingot",
+    --   label = "Magentite", min = 8,  max = 32 }
     supply  = {},
     --
-    -- collect: one entry per reprocessor output chest. CC imports processed fuel into ME.
-    -- Skip entries if AE2 Import Bus handles output chest → ME automatically.
-    -- { chest = "reproc_out_0", label = "Reprocessor A output" }
+    -- collect: the shared output chest where processed fuel arrives.
+    -- CC imports it into ME.
+    -- Skip if AE2 Import Bus handles output chest -> ME automatically.
+    -- { chest = "reproc_out_0", label = "Reprocessor output" }
     collect = {},
   }
 }

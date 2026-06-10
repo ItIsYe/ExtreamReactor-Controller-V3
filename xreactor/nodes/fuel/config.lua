@@ -69,21 +69,42 @@ local CONFIG = {
   --
   -- Set enabled=true to activate. Mekanism pipes/transporters handle the
   -- chest ↔ reactor movement; CC only talks to the ME Bridge and the chests.
+  -- Logistics routing for the FUEL node.
+  --
+  -- Physical setup:
+  --   ONE shared Mekanism pipe network per item type.
+  --   Mekanism distributes items to ALL connected reactors automatically.
+  --   CC only manages the ME ↔ chest interface.
+  --
+  --   ME Bridge ──Yellorium──► [fuel_chest_0] ──┬─ Mekanism fuel pipe ──► Reactor A
+  --                                             ├─────────────────────► Reactor B
+  --                                             └─────────────────────► Reactor C
+  --
+  --   [waste_chest_0] ◄──┬── Mekanism waste pipe ──── Reactor A
+  --                      ├────────────────────────── Reactor B
+  --   ME Bridge ◄──────  └────────────────────────── Reactor C
+  --
+  -- One chest per ITEM TYPE (not per reactor).
+  -- Mekanism routing handles distribution across all reactors.
   DEFAULT_LOGISTICS = {
     enabled            = false,
-    interval           = 10,
-    discovery_interval = 60,
-    me_bridge          = "me_bridge",  -- AP name on 1.21.1+; use "meBridge" on older versions
+    interval           = 10,      -- seconds between cycles
+    discovery_interval = 60,      -- seconds between peripheral re-discovery
+    me_bridge          = "me_bridge",  -- AP 1.21.1+; use "meBridge" on older versions
     --
-    -- supply: one entry per reactor. CC exports fuel when chest drops below 'min'.
-    -- Each chest is connected by a SHORT, DEDICATED Mekanism pipe to ONE reactor only.
-    -- { chest = "chest_0", item = "bigreactors:yellorium_ingot",
-    --   label = "Reactor A", min = 16, max = 64 }
+    -- supply: one entry per FUEL TYPE.
+    -- CC exports from ME when the shared chest drops below 'min'.
+    -- Mekanism pipes distribute from this chest to all connected reactors.
+    -- { chest = "fuel_chest_0",  item = "bigreactors:yellorium_ingot",
+    --   label = "Yellorium",  min = 64,  max = 256 }
+    -- { chest = "fuel_chest_1",  item = "bigreactors:blutonium_ingot",
+    --   label = "Blutonium",  min = 32,  max = 128 }
     supply  = {},
     --
-    -- collect: one entry per reactor waste output chest. CC imports all contents into ME.
+    -- collect: the shared waste collection chest(s).
+    -- Mekanism brings all reactor waste here; CC imports it into ME.
     -- Skip if AE2 Import Bus handles waste chest → ME automatically.
-    -- { chest = "chest_2", label = "Reactor A waste" }
+    -- { chest = "waste_chest_0", label = "Reactor waste" }
     collect = {},
   }
 }
