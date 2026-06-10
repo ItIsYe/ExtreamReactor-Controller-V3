@@ -45,9 +45,11 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.max_per_cycle) ~= "number" or lg.max_per_cycle <= 0 then
     lg.max_per_cycle = (defaults.logistics and defaults.logistics.max_per_cycle) or 64
   end
-  if type(lg.sources) ~= "table" then lg.sources = {} end
-  if type(lg.destinations) ~= "table" then lg.destinations = {} end
-  if type(lg.routes) ~= "table" then lg.routes = {} end
+  if type(lg.supply)  ~= "table" then lg.supply  = {} end
+  if type(lg.collect) ~= "table" then lg.collect = {} end
+  if type(lg.me_bridge) ~= "string" then
+    lg.me_bridge = (defaults.logistics and defaults.logistics.me_bridge) or "me_bridge"
+  end
   -- Validate destination tags
   local valid_tags = { reactor_injector = true, reprocessor = true, fuel_storage = true, me = true, reactor_output = true, generic = true }
   for i, dest in ipairs(lg.destinations) do

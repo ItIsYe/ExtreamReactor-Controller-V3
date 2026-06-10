@@ -67,26 +67,21 @@ local CONFIG = {
   --
   -- Set enabled=true to activate.
   DEFAULT_LOGISTICS = {
-    enabled             = false,
-    interval            = 10,
-    discovery_interval  = 60,
-    max_per_cycle       = 64,
+    enabled            = false,
+    interval           = 10,
+    discovery_interval = 60,
+    me_bridge          = "me_bridge",
     --
-    -- sources: ME Bridge (waste) + reprocessor output chest.
-    --   { name = "me_bridge",       tag = "me" }                  -- ME  (waste comes from here)
-    --   { name = "reproc_out_0",    tag = "reprocessor_output" }  -- chest where reprocessor drops fuel
-    sources             = {},
+    -- supply: one entry per reprocessor. CC exports waste when chest drops below 'min'.
+    -- Each chest connects via dedicated short pipe to ONE reprocessor input only.
+    -- { chest = "reproc_in_0", item = "bigreactors:cyanite_ingot",
+    --   label = "Reprocessor A", min = 4, max = 32 }
+    supply  = {},
     --
-    -- destinations: waste input chest + ME Bridge (for processed fuel return).
-    --   { name = "reproc_in_0",     tag = "reprocessor_input" }   -- chest Mekanism picks waste from
-    --   { name = "me_bridge",       tag = "me" }                  -- ME  (processed fuel goes here)
-    -- NOTE: if you use AE2 Import Bus for fuel return, omit the me_bridge destination.
-    destinations        = {},
-    --
-    -- routes: explicit mappings for waste → reprocessor and fuel → ME.
-    -- { match = "bigreactors:cyanite_ingot",  from = "me",                 to = "reprocessor_input" }
-    -- { match = "bigreactors:blutonium_ingot", from = "reprocessor_output", to = "me" }
-    routes              = {},
+    -- collect: one entry per reprocessor output chest. CC imports processed fuel into ME.
+    -- Skip entries if AE2 Import Bus handles output chest → ME automatically.
+    -- { chest = "reproc_out_0", label = "Reprocessor A output" }
+    collect = {},
   }
 }
 

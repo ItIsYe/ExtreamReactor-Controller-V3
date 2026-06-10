@@ -70,28 +70,21 @@ local CONFIG = {
   -- Set enabled=true to activate. Mekanism pipes/transporters handle the
   -- chest ↔ reactor movement; CC only talks to the ME Bridge and the chests.
   DEFAULT_LOGISTICS = {
-    enabled             = false,   -- Must be explicitly enabled.
-    interval            = 10,      -- Seconds between routing cycles.
-    discovery_interval  = 60,      -- Seconds between peripheral re-discovery.
-    max_per_cycle       = 64,      -- Max items to move per cycle per source.
+    enabled            = false,
+    interval           = 10,
+    discovery_interval = 60,
+    me_bridge          = "me_bridge",  -- AP name on 1.21.1+; use "meBridge" on older versions
     --
-    -- sources: ME Bridge (fuel) + waste output chest.
-    --   { name = "me_bridge",     tag = "me" }              -- ME system  (fuel comes from here)
-    --   { name = "waste_chest_0", tag = "reactor_output" }  -- chest where reactor drops waste
-    sources             = {},
+    -- supply: one entry per reactor. CC exports fuel when chest drops below 'min'.
+    -- Each chest is connected by a SHORT, DEDICATED Mekanism pipe to ONE reactor only.
+    -- { chest = "chest_0", item = "bigreactors:yellorium_ingot",
+    --   label = "Reactor A", min = 16, max = 64 }
+    supply  = {},
     --
-    -- destinations: fuel input chest + ME Bridge (for waste return).
-    --   { name = "fuel_chest_0",  tag = "reactor_injector" } -- chest Mekanism picks fuel from
-    --   { name = "me_bridge",     tag = "me" }               -- ME system  (waste goes back here)
-    -- NOTE: if you use AE2 Import Bus for waste return, omit the me_bridge destination.
-    destinations        = {},
-    --
-    -- routes: optional overrides (built-in covers all ATM10/ER2 items).
-    -- { match = "bigreactors:yellorium_ingot", from = "me", to = "reactor_injector",
-    --   min_in_me = 64,    -- only export if ME has more than this many
-    --   max_in_chest = 128 -- stop exporting if chest already has this many
-    -- }
-    routes              = {},
+    -- collect: one entry per reactor waste output chest. CC imports all contents into ME.
+    -- Skip if AE2 Import Bus handles waste chest → ME automatically.
+    -- { chest = "chest_2", label = "Reactor A waste" }
+    collect = {},
   }
 }
 
