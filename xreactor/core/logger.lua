@@ -471,16 +471,21 @@ local function flush_buffer_to_dir(target_dir)
   local path = string.format("%s/%s.log", target_dir, state.log_name or "xreactor")
   local dir_ok, dir_reason = ensure_dir(target_dir)
   if not dir_ok then
-    error("log-op=ensure_dir path=" .. tostring(target_dir) .. " reason=" .. tostring(dir_reason))
+    -- Cannot create log dir: degrade to memory-only, do not crash.
+    state.disk_error = "ensure_dir:" .. tostring(dir_reason)
+    return
   end
   local pending_bytes = estimate_buffer_bytes()
   local preflight_ok, preflight_reason = preflight_write(target_dir, path, pending_bytes)
   if not preflight_ok then
-    error("log-op=preflight path=" .. tostring(path) .. " reason=" .. tostring(preflight_reason))
+    -- Preflight failed: degrade to memory-only, do not crash.
+    state.disk_error = "preflight:" .. tostring(preflight_reason)
+    return
   end
   local rotate_ok, rotate_reason = rotate_log_if_needed(path, target_dir)
   if not rotate_ok then
-    error("log-op=rotate path=" .. tostring(path) .. " reason=" .. tostring(rotate_reason))
+    -- Rotation failed: continue writing to existing file, do not crash.
+    state.disk_error = "rotate:" .. tostring(rotate_reason)
   end
   local file
   local open_ok, open_result = pcall(fs.open, path, "a")
@@ -508,19 +513,21 @@ local function flush_buffer_to_dir(target_dir)
     local write_ok, write_err = pcall(file.write, line .. "\n")
     if not write_ok then
       local _, free_now = get_free_space(target_dir)
-      local close_ok, close_err = pcall(file.close)
-      error("log-op=write path=" .. tostring(path)
-        .. " line_index=" .. tostring(index)
-        .. " reason=" .. summarize_error(write_err)
-        .. " free_now=" .. tostring(free_now)
-        .. " close_ok=" .. tostring(close_ok)
-        .. " close_err=" .. tostring(close_err))
+      pcall(file.close)
+      -- Disk full or write error: degrade to memory-only mode, DO NOT crash.
+      state.disk_error = "write:" .. summarize_error(write_err)
+      state.disk_error_free = free_now
+      state.disk_writes_suppressed = (state.disk_writes_suppressed or 0) + (#state.buffer - index + 1)
+      -- Drop remaining lines from this flush to avoid partial writes.
+      return
     end
   end
   local close_ok, close_err = pcall(file.close)
   if not close_ok then
     local _, free_now = get_free_space(target_dir)
-    error("log-op=close path=" .. tostring(path) .. " reason=" .. summarize_error(close_err) .. " free_now=" .. tostring(free_now))
+    -- Close failure: record but do not crash.
+    state.disk_error = "close:" .. summarize_error(close_err)
+    state.disk_error_free = free_now
   end
   state.log_dir = target_dir
   state.log_path = path

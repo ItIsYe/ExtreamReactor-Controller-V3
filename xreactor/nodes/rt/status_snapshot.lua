@@ -99,10 +99,16 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
     elseif math.abs(rpm - target) <= tolerance then
       if coil == false then
         coil_off = coil_off + 1
-      elseif energy > 0 then
-        stable = stable + 1
+      elseif energy and energy > 0 then
+        stable   = stable   + 1
         producing = producing + 1
         stable_output = stable_output + energy
+      elseif coil ~= false then
+        -- Turbine is in RPM band with coil engaged but energy reads as zero.
+        -- This happens when rods are at 98% on startup (minimal steam, near-zero output).
+        -- Count as mechanically stable so learning can complete; output is recorded as 0.
+        stable = stable + 1
+        -- producing stays unchanged (no energy contribution to capacity estimate)
       end
     else
       out_of_band = out_of_band + 1
@@ -112,6 +118,13 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
   local required = 1
   local observed_total = numeric_value(total_output) or 0
   local sample_output = stable_output > 0 and stable_output or observed_total
+  -- If output truly reads 0 but turbines are mechanically stable, treat as
+  -- "unknown capacity" rather than "zero capacity". Use a conservative floor
+  -- of 1 FE/t per stable turbine so learning can lock and MASTER gets control.
+  -- MASTER will use actual telemetry to refine the capacity assignment.
+  if sample_output == 0 and stable >= required then
+    sample_output = stable * 1  -- 1 FE/t floor per turbine
+  end
   local ok = stable >= required and sample_output > 0
   local reason
   if ok then

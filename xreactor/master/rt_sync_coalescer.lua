@@ -1,7 +1,7 @@
 local M = {}
 
 M.DEFAULT_SHUTDOWN_CANDIDATE_STABILITY_MS = 1500
-M.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS = 15000
+M.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS = 60000  -- 60s cooldown after cancelled shutdown
 
 local function payload_looks_rt(payload)
   if type(payload) ~= 'table' then return false end

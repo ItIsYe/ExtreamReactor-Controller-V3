@@ -19,6 +19,9 @@ local CONFIG = {
   ROD_MIN = 0, -- Minimum control rod insertion.
   ROD_MAX = 98, -- Maximum control rod insertion.
   INITIAL_ROD_LEVEL = 98, -- Initial rod level on startup.
+  LEARNING_ROD_LEVEL = 50, -- Rod level during capacity learning (AUTONOM pre-lock).
+                           -- Lower than max so turbines generate enough steam/power
+                           -- for the capacity learning energy > 0 check to pass.
   MIN_APPLY_INTERVAL = 1.5, -- Minimum interval between rod applications.
   REACTOR_STEP = 5, -- Reactor rod step adjustment.
   MIN_ACTIVE_RPM = 100, -- Minimum RPM to consider turbine active.
@@ -1414,6 +1417,15 @@ local function updateControl()
         goto continue_control_reactor
       end
       ensure_reactor_ctrl(name)
+      -- During capacity learning: use a lower rod level to generate enough steam
+      -- so turbines produce energy and the learning energy>0 check passes.
+      -- Once capacity is locked, the normal setpoint control takes over.
+      local capacity_locked = runtime_ctx.capacity_learning
+        and runtime_ctx.capacity_learning.locked == true
+      if not capacity_locked then
+        local learning_level = CONFIG.LEARNING_ROD_LEVEL or 50
+        applyReactorRods(learning_level, false, "LEARNING_PHASE")
+      end
       if not runtime_ctx.autonom_control_logged then
         runtime_ctx.autonom_control_logged = true
         log("INFO", "AUTONOM actuator control active")
