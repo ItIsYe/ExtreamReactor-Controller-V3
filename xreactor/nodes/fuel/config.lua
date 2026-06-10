@@ -62,92 +62,50 @@ local CONFIG = {
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
   -- Logistics routing for the FUEL node.
   --
-  -- Physical setup:
-  --   ME Bridge ──export──► fuel_chest ──Mekanism pipes──► Reactor solid injector
-  --   ME Bridge ◄──import── waste_chest ◄─Mekanism pipes── Reactor waste output
-  --   (or AE2 Import Bus handles waste_chest → ME automatically without CC)
+  -- Each reactor has its OWN entry. The FUEL node reads fuel levels DIRECTLY
+  -- from the reactor's ER2 Computer Port via Wired Modem and only exports
+  -- fuel to the reactor that is actually requesting it.
   --
-  -- Set enabled=true to activate. Mekanism pipes/transporters handle the
-  -- chest ↔ reactor movement; CC only talks to the ME Bridge and the chests.
-  -- Logistics routing for the FUEL node.
+  -- Hardware (FUEL computer must have):
+  --   Wired Modem → ER2 Reactor Computer Ports + dedicated inlet transporter/chest
+  --   Wireless Modem → MASTER communication
   --
-  -- Physical setup:
-  --   ONE shared Mekanism pipe network per item type.
-  --   Mekanism distributes items to ALL connected reactors automatically.
-  --   CC only manages the ME ↔ chest interface.
-  --
-  --   ME Bridge ──Yellorium──► [fuel_chest_0] ──┬─ Mekanism fuel pipe ──► Reactor A
-  --                                             ├─────────────────────► Reactor B
-  --                                             └─────────────────────► Reactor C
-  --
-  --   [waste_chest_0] ◄──┬── Mekanism waste pipe ──── Reactor A
-  --                      ├────────────────────────── Reactor B
-  --   ME Bridge ◄──────  └────────────────────────── Reactor C
-  --
-  -- One chest per ITEM TYPE (not per reactor).
-  -- Mekanism routing handles distribution across all reactors.
   DEFAULT_LOGISTICS = {
     enabled            = false,
-    interval           = 10,      -- seconds between cycles
-    discovery_interval = 60,      -- seconds between peripheral re-discovery
-    me_bridge          = "me_bridge",  -- AP 1.21.1+; use "meBridge" on older versions
+    interval           = 5,       -- seconds between supply checks (short for responsiveness)
+    discovery_interval = 60,
+    me_bridge          = "me_bridge",   -- AP 1.21.1+; "meBridge" on older
     --
-    -- supply: one entry per ITEM TYPE.
-    -- 'chest' can be a standard chest OR a Mekanism Logistical Transporter name
-    -- (visible via Wired Modem as "mekanism:ultimate_logistical_transporter_N").
-    -- For transporters: add transporter=true — fill check is skipped since items
-    -- transit immediately; CC exports a fixed batch (max) each cycle.
-    -- For chests: CC exports when level drops below 'min', fills up to 'max'.
+    -- reactors: one entry per reactor.
+    --   reactor_port  = peripheral name of the ER2 Reactor Computer Port (Wired Modem)
+    --   inlet         = where to deliver fuel (transporter or chest — must be dedicated
+    --                   to THIS reactor; no shared pipes for targeted delivery)
+    --   item          = fuel item name
+    --   request_below = fuel ratio below which reactor requests resupply (0.0–1.0)
+    --   fill_amount   = how many items to export per resupply event
+    --   min_in_me     = minimum ME stock to maintain (never export below this)
     --
-    -- Chest example:
-    --   { chest = "chest_0", item = "bigreactors:yellorium_ingot",
-    --      label = "Yellorium", min = 64, max = 256 }
-    -- Transporter example (Wired Modem required):
-    --   { chest = "mekanism:ultimate_logistical_transporter_0",
-    --      item  = "bigreactors:yellorium_ingot",
-    --      label = "Yellorium transporter", max = 64, transporter = true }
-    supply  = {},
+    -- Example (two reactors on Wired Modem network):
+    -- { name          = "Reaktor A",
+    --   reactor_port  = "BigReactors-Reactor_0",
+    --   inlet         = "mekanism:ultimate_logistical_transporter_0",
+    --   item          = "bigreactors:yellorium_ingot",
+    --   request_below = 0.25,
+    --   fill_amount   = 64,
+    --   min_in_me     = 128 },
+    -- { name          = "Reaktor B",
+    --   reactor_port  = "BigReactors-Reactor_1",
+    --   inlet         = "mekanism:ultimate_logistical_transporter_1",
+    --   item          = "bigreactors:yellorium_ingot",
+    --   request_below = 0.25,
+    --   fill_amount   = 64,
+    --   min_in_me     = 128 },
+    reactors           = {},
     --
-    -- collect: chests or transporters to drain INTO ME.
-    -- Transporter: 'list()' shows in-transit items; importItemFromPeripheral
-    -- pulls whatever Mekanism has routed into/through the transporter.
-    -- Skip entries if AE2 Import Bus handles the return trip automatically.
-    -- { chest = "waste_chest_0", label = "Waste collection" }
-    -- { chest = "mekanism:ultimate_logistical_transporter_1", label = "Waste transporter" }
-    collect = {},
+    -- waste: peripheral(s) where reactor waste arrives — CC drains into ME.
+    -- { name = "Reaktor A Waste", outlet = "mekanism:ultimate_logistical_transporter_2" },
+    waste              = {},
   }
-}
-
-local CURRENT_VERSION = 2
-
-return {
-  version = CURRENT_VERSION,
-  role = CONFIG.DEFAULT_ROLE,
-  node_id = CONFIG.DEFAULT_NODE_ID,
-  debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
-  reset_log_on_start = CONFIG.DEFAULT_RESET_LOG_ON_START,
-  wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
-  storage_bus = CONFIG.DEFAULT_STORAGE_BUS,
-  target = CONFIG.DEFAULT_TARGET,
-  minimum_reserve = CONFIG.DEFAULT_MINIMUM_RESERVE,
-  heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
-  discovery_interval = CONFIG.DEFAULT_DISCOVERY_INTERVAL,
-  status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
-  channels = {
-    control = CONFIG.DEFAULT_CONTROL_CHANNEL,
-    status = CONFIG.DEFAULT_STATUS_CHANNEL
-  },
-  comms = {
-    ack_timeout_s = CONFIG.DEFAULT_COMMS_ACK_TIMEOUT,
-    max_retries = CONFIG.DEFAULT_COMMS_MAX_RETRIES,
-    backoff_base_s = CONFIG.DEFAULT_COMMS_BACKOFF_BASE,
-    backoff_cap_s = CONFIG.DEFAULT_COMMS_BACKOFF_CAP,
-    dedupe_ttl_s = CONFIG.DEFAULT_COMMS_DEDUPE_TTL,
-    dedupe_limit = CONFIG.DEFAULT_COMMS_DEDUPE_LIMIT,
-    peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT,
-    queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
-    drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
-  },
   rails     = CONFIG.DEFAULT_RAILS,
   logistics = CONFIG.DEFAULT_LOGISTICS
 }

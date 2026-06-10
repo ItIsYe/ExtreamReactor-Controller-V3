@@ -1,39 +1,47 @@
 -- nodes/fuel/logistics_router.lua
 --
--- Demand-driven supply management for Fuel and Reprocessor nodes.
+-- Demand-driven, per-reactor fuel supply management.
 --
--- Each reactor and reprocessor gets its OWN dedicated buffer chest.
--- CC monitors each chest independently and tops it up from ME only when
--- the chest falls below a configured minimum level.
--- This ensures each reactor/reprocessor receives its own allocation —
--- items are never routed to the wrong destination.
+-- Core principle: ONLY the reactor that has requested fuel receives it.
+-- No broadcast, no shared distribution, no accidental cross-supply.
 --
--- Physical setup (one per reactor or reprocessor):
+-- How it works:
+--   1. Each reactor has its own entry in config.logistics.reactors.
+--   2. Every cycle: FUEL node reads getFuelAmount()/getFuelStats() directly
+--      from the reactor's computer port peripheral (via Wired Modem).
+--   3. If fuel_level / capacity < request_below → that reactor requests fuel.
+--   4. ME Bridge exports exactly the calculated amount to that reactor's
+--      dedicated inlet peripheral (transporter or chest).
+--   5. No other reactor is affected.
 --
---   [ME Bridge]──exportItemToPeripheral──►[Dedicated chest]──Mekanism pipe──►[Reactor/Reprocessor]
---   [ME Bridge]◄──importItemFromPeripheral──[Dedicated chest]◄─Mekanism pipe──[Output]
+-- Hardware requirements:
+--   - Wired Modem on the FUEL computer, connected to:
+--       • Each reactor's ER2 Computer Port  (for fuel level polling)
+--       • Each reactor's dedicated inlet transporter/chest (for delivery)
+--   - Wireless Modem on the FUEL computer  (for MASTER communication)
+--   - ME Bridge accessible (wired or by name)
 --
--- Each chest is a short, direct pipe run to ONE specific reactor/reprocessor.
--- No shared routing, no colour channels, no cross-contamination possible.
+-- Config model (in config.logistics):
 --
--- Config model:
+--   me_bridge = "me_bridge",
 --
---   me_bridge = "me_bridge"  (peripheral name; AP uses "me_bridge" on 1.21.1)
---
---   supply = {               -- chests to keep filled FROM ME
---     { chest = "chest_0",   item = "bigreactors:yellorium_ingot",
---       label = "Reactor A", min = 16, max = 64 },
---     { chest = "chest_1",   item = "bigreactors:yellorium_ingot",
---       label = "Reactor B", min = 16, max = 64 },
+--   reactors = {
+--     { name              = "Reactor A",
+--       reactor_port      = "BigReactors-Reactor_0",  -- ER2 computer port peripheral
+--       inlet             = "mekanism:ultimate_logistical_transporter_0",
+--       item              = "bigreactors:yellorium_ingot",
+--       request_below     = 0.25,  -- request when fuel_level < 25% of capacity
+--       fill_amount       = 64,    -- how many items to export per request
+--       min_in_me         = 32,    -- don't export if ME has fewer than this
+--     },
 --   },
 --
---   collect = {              -- chests to drain INTO ME
---     { chest = "chest_2",   label = "Waste A" },
---     { chest = "chest_3",   label = "Waste B" },
+--   -- Waste collection: drain waste output chests/transporters into ME.
+--   waste = {
+--     { name  = "Reactor A waste",
+--       outlet = "mekanism:ultimate_logistical_transporter_1",
+--     },
 --   },
---
--- Route safety: waste items (cyanite/magentite/rossinite/waste) are NEVER
--- exported to a supply chest, even if explicitly configured.
 
 local M = {}
 
@@ -49,38 +57,39 @@ end
 
 local function safe_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then
-    return nil, "no_method"
+    return nil, "no_method:" .. tostring(method)
   end
   local ok, r = pcall(obj[method], ...)
   if not ok then return nil, tostring(r) end
   return r, nil
 end
 
--- Count a specific item in a standard inventory.
-local function chest_count(wrapped, item_name)
-  local items, _ = safe_call(wrapped, "list")
-  if not items then return 0 end
-  local n = 0
-  for _, s in pairs(items) do
-    if type(s) == "table" and s.name == item_name then
-      n = n + (s.count or 0)
-    end
-  end
-  return n
+local function is_transporter_name(name)
+  return tostring(name or ""):lower():find("logistical_transporter", 1, true) ~= nil
 end
 
--- Count all items in a standard inventory (for collect chests).
-local function chest_total(wrapped)
-  local items, _ = safe_call(wrapped, "list")
-  if not items then return 0 end
-  local n = 0
-  for _, s in pairs(items) do
-    if type(s) == "table" then n = n + (s.count or 0) end
+-- ---- reactor fuel level reading --------------------------------------------
+
+-- Read current fuel amount and capacity from an ER2 reactor computer port.
+-- Returns: fuel_amount (mB), capacity (mB) or nil, nil on failure.
+local function read_reactor_fuel(reactor_wrapped)
+  -- Try getFuelStats() first (single call, returns table)
+  local stats, _ = safe_call(reactor_wrapped, "getFuelStats")
+  if type(stats) == "table" then
+    local amount   = type(stats.fuelAmount)   == "number" and stats.fuelAmount   or nil
+    local capacity = type(stats.fuelCapacity) == "number" and stats.fuelCapacity or nil
+    if amount and capacity then return amount, capacity end
   end
-  return n
+  -- Fallback: individual calls
+  local amount,   _ = safe_call(reactor_wrapped, "getFuelAmount")
+  local capacity, _ = safe_call(reactor_wrapped, "getFuelAmountMax")
+  if type(amount) == "number" and type(capacity) == "number" then
+    return amount, capacity
+  end
+  return nil, nil
 end
 
--- ---- constructor ------------------------------------------------------------
+-- ---- constructor -----------------------------------------------------------
 
 function M.new(opts)
   opts = opts or {}
@@ -89,9 +98,9 @@ function M.new(opts)
     log       = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
     _state = {
-      bridge        = nil,  -- wrapped ME Bridge
-      supply_chests = {},   -- wrapped supply chests
-      collect_chests= {},   -- wrapped collect chests
+      bridge        = nil,
+      reactors      = {},   -- { name, label, reactor, inlet, item, cfg }
+      waste_outlets = {},   -- { name, label, outlet }
       total_exported= 0,
       total_imported= 0,
       total_errors  = 0,
@@ -103,144 +112,186 @@ function M.new(opts)
   return setmetatable(self, { __index = M })
 end
 
--- ---- peripheral discovery ---------------------------------------------------
+-- ---- peripheral discovery --------------------------------------------------
 
 function M:refresh_peripherals()
-  local cfg = (self.config.logistics or self.config) or {}
-  local bridge_name = cfg.me_bridge or "me_bridge"
+  local cfg = self.config.logistics or self.config or {}
 
   -- ME Bridge
-  local bridge = nil
+  local bridge_name = cfg.me_bridge or "me_bridge"
+  self._state.bridge = nil
   if peripheral.isPresent(bridge_name) then
     local ok, w = pcall(peripheral.wrap, bridge_name)
     if ok and w then
-      bridge = { name = bridge_name, wrapped = w }
-      self.log("DEBUG", "Logistics: ME Bridge connected: " .. bridge_name)
+      self._state.bridge = { name = bridge_name, wrapped = w }
+      self.log("DEBUG", "Logistics: ME Bridge: " .. bridge_name)
     else
-      self.warn_once("bridge_wrap", "Logistics: failed to wrap ME Bridge: " .. bridge_name)
+      self.warn_once("bridge_wrap", "Logistics: ME Bridge wrap failed: " .. bridge_name)
     end
   else
-    self.warn_once("bridge_absent", "Logistics: ME Bridge not present: " .. bridge_name)
-  end
-  self._state.bridge = bridge
-
-  -- Supply chests (ME → chest)
-  local supply = {}
-  for i, entry in ipairs(cfg.supply or {}) do
-    if not entry.chest or not entry.item then goto skip end
-    if not peripheral.isPresent(entry.chest) then
-      self.warn_once("supply_absent_" .. i, "Logistics: supply chest absent: " .. entry.chest)
-      goto skip
-    end
-    local ok, w = pcall(peripheral.wrap, entry.chest)
-    if ok and w then
-      -- Detect Mekanism Logistical Transporter by type name or explicit flag.
-      local ptype_str = tostring(peripheral.getType(entry.chest) or ""):lower()
-      local is_transporter = entry.transporter == true
-        or ptype_str:find("logistical_transporter", 1, true) ~= nil
-      supply[#supply + 1] = {
-        name           = entry.chest,
-        label          = entry.label or entry.chest,
-        item           = entry.item,
-        min            = tonumber(entry.min) or 16,
-        max            = tonumber(entry.max) or 64,
-        is_transporter = is_transporter,
-        wrapped        = w,
-      }
-    else
-      self.warn_once("supply_wrap_" .. i, "Logistics: supply chest wrap failed: " .. entry.chest)
-    end
-    ::skip::
+    self.warn_once("bridge_absent", "Logistics: ME Bridge absent: " .. bridge_name)
   end
 
-  -- Collect chests (chest → ME)
-  local collect = {}
-  for i, entry in ipairs(cfg.collect or {}) do
-    if not entry.chest then goto skip2 end
-    if not peripheral.isPresent(entry.chest) then
-      self.warn_once("collect_absent_" .. i, "Logistics: collect chest absent: " .. entry.chest)
-      goto skip2
-    end
-    local ok, w = pcall(peripheral.wrap, entry.chest)
-    if ok and w then
-      collect[#collect + 1] = {
-        name    = entry.chest,
-        label   = entry.label or entry.chest,
-        wrapped = w,
-      }
-    else
-      self.warn_once("collect_wrap_" .. i, "Logistics: collect chest wrap failed: " .. entry.chest)
-    end
-    ::skip2::
-  end
+  -- Per-reactor entries
+  local reactors = {}
+  for i, entry in ipairs(cfg.reactors or {}) do
+    local label = entry.name or ("Reactor " .. i)
 
-  self._state.supply_chests  = supply
-  self._state.collect_chests = collect
+    -- Reactor computer port (for fuel level polling)
+    local reactor_port = nil
+    if entry.reactor_port and peripheral.isPresent(entry.reactor_port) then
+      local ok, w = pcall(peripheral.wrap, entry.reactor_port)
+      if ok and w then
+        reactor_port = { name = entry.reactor_port, wrapped = w }
+      else
+        self.warn_once("reactor_wrap_" .. i,
+          "Logistics: reactor port wrap failed: " .. entry.reactor_port)
+      end
+    elseif entry.reactor_port then
+      self.warn_once("reactor_absent_" .. i,
+        "Logistics: reactor port absent: " .. entry.reactor_port
+        .. " (needs Wired Modem connection)")
+    end
+
+    -- Inlet: dedicated transporter or chest for THIS reactor
+    local inlet = nil
+    if entry.inlet and peripheral.isPresent(entry.inlet) then
+      local ok, w = pcall(peripheral.wrap, entry.inlet)
+      if ok and w then
+        inlet = { name = entry.inlet, wrapped = w,
+                  is_transporter = is_transporter_name(entry.inlet)
+                                or (entry.transporter == true) }
+      else
+        self.warn_once("inlet_wrap_" .. i,
+          "Logistics: inlet wrap failed: " .. entry.inlet)
+      end
+    elseif entry.inlet then
+      self.warn_once("inlet_absent_" .. i,
+        "Logistics: inlet absent: " .. entry.inlet
+        .. " (needs Wired Modem connection)")
+    end
+
+    reactors[#reactors + 1] = {
+      label        = label,
+      reactor      = reactor_port,
+      inlet        = inlet,
+      item         = entry.item or "",
+      request_below = tonumber(entry.request_below) or 0.25,
+      fill_amount  = tonumber(entry.fill_amount)   or 64,
+      min_in_me    = tonumber(entry.min_in_me)     or 32,
+      cfg          = entry,
+    }
+  end
+  self._state.reactors = reactors
+
+  -- Waste outlets
+  local waste_outlets = {}
+  for i, entry in ipairs(cfg.waste or {}) do
+    local label = entry.name or ("Waste " .. i)
+    if entry.outlet and peripheral.isPresent(entry.outlet) then
+      local ok, w = pcall(peripheral.wrap, entry.outlet)
+      if ok and w then
+        waste_outlets[#waste_outlets + 1] = {
+          label   = label,
+          name    = entry.outlet,
+          wrapped = w,
+        }
+      else
+        self.warn_once("outlet_wrap_" .. i,
+          "Logistics: waste outlet wrap failed: " .. entry.outlet)
+      end
+    elseif entry.outlet then
+      self.warn_once("outlet_absent_" .. i,
+        "Logistics: waste outlet absent: " .. entry.outlet)
+    end
+  end
+  self._state.waste_outlets = waste_outlets
+
   self.log("DEBUG", string.format(
-    "Logistics: bridge=%s supply=%d collect=%d",
-    bridge and bridge.name or "NONE", #supply, #collect
+    "Logistics: bridge=%s reactors=%d waste_outlets=%d",
+    self._state.bridge and self._state.bridge.name or "NONE",
+    #reactors, #waste_outlets
   ))
 end
 
--- ---- supply cycle (ME → chests) ---------------------------------------------
+-- ---- supply cycle (demand-driven, per reactor) -----------------------------
 
 function M:_run_supply(cycle_log)
   local bridge = self._state.bridge
   if not bridge then return 0, 0 end
   local exported, errors = 0, 0
 
-  for _, target in ipairs(self._state.supply_chests) do
-    -- Safety: waste must never go into a supply chest
-    if is_waste(target.item) then
-      self.warn_once("waste_supply:" .. target.item,
-        "SAFETY BLOCK: waste item '" .. target.item .. "' configured as supply — skipping")
+  for _, r in ipairs(self._state.reactors) do
+    if not r.inlet then
+      self.warn_once("no_inlet:" .. r.label,
+        "Logistics: no inlet configured for " .. r.label)
       goto continue
     end
 
-    -- For Mekanism Logistical Transporters: skip fill check.
-    -- Transporters move items immediately — list() shows near-empty in-transit state.
-    -- Instead export a fixed batch every cycle as long as ME has enough.
-    -- For standard chests: check actual fill level.
-    local current, needed
-    if target.is_transporter then
-      -- Transporter: export up to 'max' items per cycle regardless of transporter state.
-      current = 0
-      needed  = target.max
+    -- Safety: fuel item must not be waste
+    if is_waste(r.item) then
+      self.warn_once("waste_fuel:" .. r.item,
+        "SAFETY BLOCK: item '" .. r.item .. "' is waste — cannot use as fuel supply")
+      goto continue
+    end
+
+    -- Determine if this reactor is requesting fuel
+    local requesting = false
+    local fuel_pct = nil
+
+    if r.reactor then
+      -- Direct reading via Wired Modem: most accurate
+      local fuel_amt, capacity = read_reactor_fuel(r.reactor.wrapped)
+      if fuel_amt and capacity and capacity > 0 then
+        fuel_pct = fuel_amt / capacity
+        requesting = fuel_pct < r.request_below
+        self.log("DEBUG", string.format(
+          "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
+          r.label, fuel_pct * 100, fuel_amt, capacity,
+          requesting and "YES" or "no"))
+      else
+        -- Reactor port present but can't read level → be conservative, skip
+        self.warn_once("fuel_read_fail:" .. r.label,
+          "Logistics: cannot read fuel level for " .. r.label .. " — skipping")
+        goto continue
+      end
     else
-      current = chest_count(target.wrapped, target.item)
-      if current >= target.min then goto continue end
-      needed = target.max - current
-      if needed <= 0 then goto continue end
+      -- No reactor_port configured: fall back to always-supply mode (fill inlet)
+      -- This is less precise but works without direct peripheral access.
+      requesting = true
+      self.log("DEBUG", "Logistics: " .. r.label
+        .. " has no reactor_port — using always-supply mode")
     end
 
-    -- How much is in ME?
-    local me_info, _ = safe_call(bridge.wrapped, "getItem", { name = target.item })
+    if not requesting then goto continue end
+
+    -- Check ME availability
+    local me_info, _ = safe_call(bridge.wrapped, "getItem", { name = r.item })
     local in_me = type(me_info) == "table" and (me_info.amount or 0) or 0
-    if in_me <= 0 then
+    if in_me < r.min_in_me then
       self.log("DEBUG", string.format(
-        "Logistics: supply %s: %s not in ME", target.label, target.item))
+        "Logistics: %s: ME has %d %s (need >%d) — skip",
+        r.label, in_me, r.item, r.min_in_me))
       goto continue
     end
 
-    local push = math.min(needed, in_me)
+    local push = math.min(r.fill_amount, in_me - r.min_in_me)
+    if push <= 0 then goto continue end
+
     local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
-      { name = target.item, count = push }, target.name)
+      { name = r.item, count = push }, r.inlet.name)
     if not ok then
-      self.warn_once("exp_err:" .. target.name,
-        "exportItemToPeripheral → " .. target.name .. ": " .. tostring(result))
+      self.warn_once("exp_err:" .. r.inlet.name,
+        "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
       errors = errors + 1
     else
       local moved = type(result) == "number" and result or 0
       if moved > 0 then
         exported = exported + moved
-        if target.is_transporter then
-          cycle_log[#cycle_log + 1] = string.format(
-            "ME→transporter[%s] %s x%d", target.label, target.item, moved)
-        else
-          cycle_log[#cycle_log + 1] = string.format(
-            "ME→%s [%s] %s x%d (was %d/%d)",
-            target.name, target.label, target.item, moved, current, target.max)
-        end
+        local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
+        cycle_log[#cycle_log + 1] = string.format(
+          "ME→[%s]%s %s x%d via %s",
+          r.label, pct_str, r.item, moved, r.inlet.name)
       end
     end
 
@@ -249,98 +300,87 @@ function M:_run_supply(cycle_log)
   return exported, errors
 end
 
--- ---- collect cycle (chests → ME) --------------------------------------------
+-- ---- collect cycle (waste → ME) --------------------------------------------
 
 function M:_run_collect(cycle_log)
   local bridge = self._state.bridge
   if not bridge then return 0, 0 end
   local imported, errors = 0, 0
 
-  for _, src in ipairs(self._state.collect_chests) do
-    local total = chest_total(src.wrapped)
-    if total <= 0 then goto continue end
-
-    -- Import everything from this chest into ME
-    -- importItemFromPeripheral with no item filter imports all
+  for _, outlet in ipairs(self._state.waste_outlets) do
     local ok, result = pcall(bridge.wrapped.importItemFromPeripheral,
-      {}, src.name)
+      {}, outlet.name)
     if not ok then
-      -- Fallback: some AP versions need an item specified; enumerate and import each
-      local items, _ = safe_call(src.wrapped, "list")
+      -- Fallback: import item by item
+      local items, _ = safe_call(outlet.wrapped, "list")
       if items then
         for _, stack in pairs(items) do
           if type(stack) == "table" and stack.name then
             local ok2, res2 = pcall(bridge.wrapped.importItemFromPeripheral,
-              { name = stack.name, count = stack.count or 64 }, src.name)
+              { name = stack.name, count = stack.count or 64 }, outlet.name)
             if ok2 then
               local n = type(res2) == "number" and res2 or 0
+              imported = imported + n
               if n > 0 then
-                imported = imported + n
                 cycle_log[#cycle_log + 1] = string.format(
-                  "%s→ME [%s] %s x%d", src.name, src.label, stack.name, n)
+                  "[%s]→ME %s x%d", outlet.label, stack.name, n)
               end
             else
               errors = errors + 1
-              self.warn_once("imp_err:" .. src.name .. ":" .. stack.name,
-                "importItemFromPeripheral failed: " .. tostring(res2))
+              self.warn_once("imp_err:" .. outlet.name,
+                "importItemFromPeripheral from " .. outlet.name .. ": " .. tostring(res2))
             end
           end
         end
       else
         errors = errors + 1
-        self.warn_once("imp_err:" .. src.name,
-          "importItemFromPeripheral failed: " .. tostring(result))
+        self.warn_once("imp_err_all:" .. outlet.name,
+          "importItemFromPeripheral (all) from " .. outlet.name .. ": " .. tostring(result))
       end
     else
       local moved = type(result) == "number" and result or 0
+      imported = imported + moved
       if moved > 0 then
-        imported = imported + moved
         cycle_log[#cycle_log + 1] = string.format(
-          "%s→ME [%s] all x%d", src.name, src.label, moved)
+          "[%s]→ME all x%d", outlet.label, moved)
       end
     end
-
-    ::continue::
   end
   return imported, errors
 end
 
--- ---- main cycle -------------------------------------------------------------
+-- ---- main cycle ------------------------------------------------------------
 
 function M:run_cycle()
   local cycle_log = {}
   local exp, err1 = self:_run_supply(cycle_log)
   local imp, err2 = self:_run_collect(cycle_log)
-  local total_errors = err1 + err2
+  local errs = err1 + err2
 
   self._state.total_exported = self._state.total_exported + exp
   self._state.total_imported = self._state.total_imported + imp
-  self._state.total_errors   = self._state.total_errors   + total_errors
-
+  self._state.total_errors   = self._state.total_errors   + errs
   self._state.last_cycle = {
-    ts       = os.epoch("utc"),
-    exported = exp, imported = imp, errors = total_errors,
-    supply   = #self._state.supply_chests,
-    collect  = #self._state.collect_chests,
-    moves    = cycle_log,
+    ts = os.epoch("utc"), exported = exp, imported = imp, errors = errs,
+    moves = cycle_log,
   }
 
   if exp > 0 or imp > 0 then
     self.log("INFO", string.format(
       "Logistics: exported=%d imported=%d errors=%d | %s",
-      exp, imp, total_errors, table.concat(cycle_log, " | ")))
-  elseif total_errors > 0 then
-    self.log("WARN", "Logistics: exported=0 imported=0 errors=" .. total_errors)
+      exp, imp, errs, table.concat(cycle_log, " | ")))
+  elseif errs > 0 then
+    self.log("WARN", "Logistics: exported=0 imported=0 errors=" .. errs)
   else
     self.log("DEBUG", "Logistics: nothing to do")
   end
   return self._state.last_cycle
 end
 
--- ---- service tick -----------------------------------------------------------
+-- ---- service tick ----------------------------------------------------------
 
 function M:tick()
-  local cfg = (self.config.logistics or self.config) or {}
+  local cfg = self.config.logistics or self.config or {}
   if cfg.enabled ~= true then return end
 
   local now = os.epoch("utc")
@@ -350,38 +390,40 @@ function M:tick()
     self._state.last_refresh = now
   end
 
-  local interval_ms = (tonumber(cfg.interval) or 10) * 1000
+  local interval_ms = (tonumber(cfg.interval) or 5) * 1000
   if now - self._state.last_run_ts < interval_ms then return end
   self._state.last_run_ts = now
   self:run_cycle()
 end
 
--- ---- status -----------------------------------------------------------------
+-- ---- status ----------------------------------------------------------------
 
 function M:get_summary()
   local s = self._state
-  local cfg = (self.config.logistics or self.config) or {}
-  local supply_status = {}
-  for _, t in ipairs(s.supply_chests) do
-    local current = chest_count(t.wrapped, t.item)
-    supply_status[#supply_status + 1] = {
-      label   = t.label,
-      item    = t.item,
-      current = current,
-      min     = t.min,
-      max     = t.max,
-      ok      = current >= t.min,
+  local cfg = self.config.logistics or self.config or {}
+  local reactor_status = {}
+  for _, r in ipairs(s.reactors) do
+    local fuel_pct = nil
+    if r.reactor then
+      local amt, cap = read_reactor_fuel(r.reactor.wrapped)
+      if amt and cap and cap > 0 then fuel_pct = math.floor(amt / cap * 100) end
+    end
+    reactor_status[#reactor_status + 1] = {
+      label         = r.label,
+      fuel_pct      = fuel_pct,
+      inlet         = r.inlet and r.inlet.name or nil,
+      reactor_port  = r.reactor and r.reactor.name or nil,
+      connected     = r.reactor ~= nil and r.inlet ~= nil,
     }
   end
   return {
     enabled        = cfg.enabled == true,
     bridge         = s.bridge and s.bridge.name or nil,
-    supply_count   = #s.supply_chests,
-    collect_count  = #s.collect_chests,
+    reactors       = reactor_status,
+    waste_outlets  = #s.waste_outlets,
     total_exported = s.total_exported,
     total_imported = s.total_imported,
     total_errors   = s.total_errors,
-    supply         = supply_status,
     last_cycle     = s.last_cycle,
   }
 end
