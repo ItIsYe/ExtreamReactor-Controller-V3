@@ -40,6 +40,7 @@ local support_ui_pages = require("nodes.support.ui_pages")
 local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.fuel.role_descriptor")
 local config_normalizer = require("nodes.fuel.config_normalizer")
+local logistics_router = require("nodes.fuel.logistics_router")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.FUEL_NODE, -- Node role identifier.
@@ -95,6 +96,7 @@ local services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local fuel_health = health.new({})
 local storage
+local router
 local devices = {
   monitor = nil,
   monitor_name = nil,
@@ -128,6 +130,17 @@ local function cache()
       utils.log("FUEL", "WARN: storage bus wrap failed: " .. tostring(err))
     end
   end
+end
+
+local function get_router()
+  if not router then
+    router = logistics_router.new({
+      config    = config,
+      log       = function(level, msg) utils.log("FUEL", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+    })
+  end
+  return router
 end
 
 local function discover()
@@ -249,6 +262,7 @@ local function build_status_payload()
   payload.reserve = amount
   payload.minimum_reserve = reserve
   payload.sources = { { id = devices.storage_name or "unknown", amount = amount } }
+  payload.logistics = get_router():get_summary()
   payload.bindings = fuel_health.bindings
   payload.bindings_summary = health.summarize_bindings(fuel_health.bindings)
   return payload
@@ -430,4 +444,6 @@ local function init()
 end
 
 init()
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms)
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+  get_router():tick()
+end)

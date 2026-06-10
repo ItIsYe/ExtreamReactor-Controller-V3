@@ -59,7 +59,25 @@ local CONFIG = {
     }
   },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/fuel.log.
-  DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
+  DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
+  -- Logistics routing defaults. Set enabled=true and configure sources/destinations to activate.
+  DEFAULT_LOGISTICS = {
+    enabled             = false,   -- Must be explicitly enabled.
+    interval            = 10,      -- Seconds between routing cycles.
+    discovery_interval  = 60,      -- Seconds between peripheral re-discovery.
+    max_per_cycle       = 64,      -- Max item count to move per cycle per source.
+    -- Source inventories to pull items from (chests, ME bridges, Logistical Transporters).
+    -- Each entry: "peripheral_name" or { name = "peripheral_name" }
+    sources             = {},
+    -- Destination inventories with their role tag.
+    -- Each entry: { name = "peripheral_name", tag = "reactor_injector" | "reprocessor" | "generic" }
+    -- tag "reactor_injector" activates the waste-safety block.
+    destinations        = {},
+    -- Explicit item routes (override built-in classifier).
+    -- Each entry: { match = "exact:item:name", tag = "reactor_injector" }
+    --          or { pattern = "substring", tag = "reprocessor", max_push = 16 }
+    routes              = {},
+  }
 }
 
 local CURRENT_VERSION = 2
@@ -92,5 +110,6 @@ return {
     queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
     drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
   },
-  rails = CONFIG.DEFAULT_RAILS
+  rails     = CONFIG.DEFAULT_RAILS,
+  logistics = CONFIG.DEFAULT_LOGISTICS
 }
