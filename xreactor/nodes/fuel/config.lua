@@ -61,30 +61,36 @@ local CONFIG = {
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/fuel.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
   -- Logistics routing for the FUEL node.
-  -- Responsibility:
-  --   1. Fuel:  ME system  → reactor solid injectors
-  --   2. Waste: reactor output chests → ME system
   --
-  -- Set enabled=true and configure sources/destinations to activate.
+  -- Physical setup:
+  --   ME Bridge ──export──► fuel_chest ──Mekanism pipes──► Reactor solid injector
+  --   ME Bridge ◄──import── waste_chest ◄─Mekanism pipes── Reactor waste output
+  --   (or AE2 Import Bus handles waste_chest → ME automatically without CC)
+  --
+  -- Set enabled=true to activate. Mekanism pipes/transporters handle the
+  -- chest ↔ reactor movement; CC only talks to the ME Bridge and the chests.
   DEFAULT_LOGISTICS = {
     enabled             = false,   -- Must be explicitly enabled.
     interval            = 10,      -- Seconds between routing cycles.
     discovery_interval  = 60,      -- Seconds between peripheral re-discovery.
-    max_per_cycle       = 64,      -- Max item count to move per cycle per source.
+    max_per_cycle       = 64,      -- Max items to move per cycle per source.
     --
-    -- sources: where to pull items FROM.
-    --   { name = "me_bridge_0",       tag = "me" }          -- ME system (fuel source)
-    --   { name = "reactorOutput_0",   tag = "reactor_output" } -- reactor waste output chest
+    -- sources: ME Bridge (fuel) + waste output chest.
+    --   { name = "me_bridge",     tag = "me" }              -- ME system  (fuel comes from here)
+    --   { name = "waste_chest_0", tag = "reactor_output" }  -- chest where reactor drops waste
     sources             = {},
     --
-    -- destinations: where to push items TO.
-    --   { name = "reactorInjector_0", tag = "reactor_injector" } -- reactor solid fuel input
-    --   { name = "me_bridge_0",       tag = "me" }               -- ME system (waste destination)
+    -- destinations: fuel input chest + ME Bridge (for waste return).
+    --   { name = "fuel_chest_0",  tag = "reactor_injector" } -- chest Mekanism picks fuel from
+    --   { name = "me_bridge",     tag = "me" }               -- ME system  (waste goes back here)
+    -- NOTE: if you use AE2 Import Bus for waste return, omit the me_bridge destination.
     destinations        = {},
     --
-    -- routes: explicit item→dest-tag mapping (overrides built-in classifier).
-    --   { match   = "bigreactors:yellorium_ingot", from = "me", to = "reactor_injector" }
-    --   { pattern = "cyanite",                     from = "reactor_output", to = "me" }
+    -- routes: optional overrides (built-in covers all ATM10/ER2 items).
+    -- { match = "bigreactors:yellorium_ingot", from = "me", to = "reactor_injector",
+    --   min_in_me = 64,    -- only export if ME has more than this many
+    --   max_in_chest = 128 -- stop exporting if chest already has this many
+    -- }
     routes              = {},
   }
 }

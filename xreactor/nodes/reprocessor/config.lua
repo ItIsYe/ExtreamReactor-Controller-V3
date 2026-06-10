@@ -59,30 +59,33 @@ local CONFIG = {
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
   -- Logistics routing for the REPROCESSOR node.
-  -- Responsibility:
-  --   1. Waste input:  ME system           → reprocessor input inventories
-  --   2. Fuel output:  reprocessor outputs → ME system
   --
-  -- Set enabled=true and configure sources/destinations to activate.
+  -- Physical setup:
+  --   ME Bridge ──export──► waste_chest ──Mekanism pipes──► Reprocessor input
+  --   ME Bridge ◄──import── fuel_out_chest ◄─Mekanism pipes── Reprocessor output
+  --   (or AE2 Import Bus handles fuel_out_chest → ME automatically without CC)
+  --
+  -- Set enabled=true to activate.
   DEFAULT_LOGISTICS = {
     enabled             = false,
     interval            = 10,
     discovery_interval  = 60,
     max_per_cycle       = 64,
     --
-    -- sources:
-    --   { name = "me_bridge_0",         tag = "me" }              -- ME (waste source)
-    --   { name = "reprocessorOutput_0", tag = "reprocessor_output" } -- reprocessor output chest
+    -- sources: ME Bridge (waste) + reprocessor output chest.
+    --   { name = "me_bridge",       tag = "me" }                  -- ME  (waste comes from here)
+    --   { name = "reproc_out_0",    tag = "reprocessor_output" }  -- chest where reprocessor drops fuel
     sources             = {},
     --
-    -- destinations:
-    --   { name = "reprocessorInput_0",  tag = "reprocessor_input" } -- reprocessor input
-    --   { name = "me_bridge_0",         tag = "me" }                -- ME (fuel destination)
+    -- destinations: waste input chest + ME Bridge (for processed fuel return).
+    --   { name = "reproc_in_0",     tag = "reprocessor_input" }   -- chest Mekanism picks waste from
+    --   { name = "me_bridge",       tag = "me" }                  -- ME  (processed fuel goes here)
+    -- NOTE: if you use AE2 Import Bus for fuel return, omit the me_bridge destination.
     destinations        = {},
     --
-    -- routes:
-    --   { match = "bigreactors:cyanite_ingot",   from = "me",                 to = "reprocessor_input" }
-    --   { match = "bigreactors:blutonium_ingot",  from = "reprocessor_output", to = "me" }
+    -- routes: explicit mappings for waste → reprocessor and fuel → ME.
+    -- { match = "bigreactors:cyanite_ingot",  from = "me",                 to = "reprocessor_input" }
+    -- { match = "bigreactors:blutonium_ingot", from = "reprocessor_output", to = "me" }
     routes              = {},
   }
 }

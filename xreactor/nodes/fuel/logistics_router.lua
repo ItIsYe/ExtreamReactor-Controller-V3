@@ -1,52 +1,58 @@
 -- nodes/fuel/logistics_router.lua
 --
 -- Item logistics router for Fuel and Reprocessor nodes.
--- Handles two peripheral types with different APIs:
 --
---   "me_bridge"  Advanced Peripherals ME Bridge (me_bridge / meBridge)
---                  source → dest:  bridge.exportItemToPeripheral(item, destName)
---                  dest ← source:  bridge.importItemFromPeripheral(item, srcName)
---                  list:           bridge.listItems()  → {name, amount, ...}
+-- Physical setup (per node):
 --
---   "inventory"  Standard CC inventory (chests, injectors, reprocessor I/O)
---                  source → dest:  src.pushItems(destName, slot, count)
---                  list:           src.list()          → {[slot]={name, count}}
+--   ME Bridge ─── exportItemToPeripheral ──► buffer chest ─── Mekanism pipes ──► target
+--   ME Bridge ◄── importItemFromPeripheral── buffer chest ◄── Mekanism pipes ─── source
+--                (or AE2 Import Bus handles the return trip without CC involvement)
 --
--- Route rules (config.logistics.routes):
---   { match = "exact:item:name", from = "me_bridge", to = "reactor_injector" }
---   { pattern = "cyanite",       from = "reactor_output", to = "me_bridge" }
+-- The CC computer only interacts with:
+--   - The ME Bridge  (Advanced Peripherals: me_bridge / meBridge)
+--   - The buffer chest  (standard Minecraft inventory)
 --
--- SAFETY: items matching WASTE_PATTERNS are NEVER exported to a destination
--- whose tag is "reactor_injector", regardless of config.
+-- Mekanism Logistical Transporters (or other pipes) handle the physical
+-- movement between chest and reactor/reprocessor. CC does not interact
+-- with those pipes directly.
 --
--- Usage:
---   local router = require("nodes.fuel.logistics_router")
---   local r = router.new({ config = config, log = fn, warn_once = fn })
---   -- in service loop:
---   r:tick()
---   local summary = r:get_summary()
+-- ME Bridge API (Advanced Peripherals):
+--   exportItemToPeripheral(item, containerName) → number moved
+--   importItemFromPeripheral(item, containerName) → number moved
+--   listItems() → list of {name, amount, displayName, ...}
+--   getItem({name=...}) → {name, amount, ...} or nil
+--
+-- Route model:
+--   from = "me"              source is ME system (uses exportItemToPeripheral)
+--   from = "chest"           source is a buffer chest (uses inventory list + importItemFromPeripheral)
+--   to   = "chest"           destination is a buffer chest (receives the export)
+--   to   = "me"              destination is ME system (receives the import)
+--
+-- Each route entry: { match=..., from=..., to=..., min_in_me=N, max_in_chest=N, max_push=N }
+--
+-- Safety: items matching WASTE_PATTERNS are NEVER exported to a chest whose
+-- tag is "reactor_injector". Hard-coded, not configurable.
 
 local M = {}
 
--- Hard-coded waste patterns — checked case-insensitively against item name.
 local WASTE_PATTERNS = { "cyanite", "magentite", "rossinite", "waste" }
+local REACTOR_TAGS   = { "reactor_injector", "fuel_input" }
 
--- Tags where waste must never go.
-local REACTOR_TAGS = { "reactor_injector", "fuel_input" }
-
--- Built-in item → destination-tag mapping for ATM10 / ER2.
--- The user can override or extend via config.logistics.routes.
+-- Built-in ATM10/ER2 routes.
+-- from/to tags match the tag field on source/destination config entries.
 local DEFAULT_ROUTES = {
-  -- Fuel ingots: ME → reactor injector
+  -- Fuel ingots: ME → reactor injector chest
   ["bigreactors:yellorium_ingot"]  = { from = "me", to = "reactor_injector" },
   ["bigreactors:blutonium_ingot"]  = { from = "me", to = "reactor_injector" },
   ["bigreactors:verderium_ingot"]  = { from = "me", to = "reactor_injector" },
   ["mekanism:uranium_ingot"]       = { from = "me", to = "reactor_injector" },
   ["mekanism:plutonium_pellet"]    = { from = "me", to = "reactor_injector" },
-  -- Waste: reactor output → ME
+  -- Waste: reactor output chest → ME
   ["bigreactors:cyanite_ingot"]    = { from = "reactor_output", to = "me" },
   ["bigreactors:magentite_ingot"]  = { from = "reactor_output", to = "me" },
   ["bigreactors:rossinite_ingot"]  = { from = "reactor_output", to = "me" },
+  -- Reprocessor output (used by REPROC node): processed fuel → ME
+  ["bigreactors:blutonium_ingot_processed"] = { from = "reprocessor_output", to = "me" },
 }
 
 -- ---- helpers ----------------------------------------------------------------
@@ -70,24 +76,43 @@ local function safe_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then
     return nil, "no_method:" .. tostring(method)
   end
-  local ok, result = pcall(obj[method], ...)
-  if not ok then return nil, tostring(result) end
-  return result, nil
+  local ok, r = pcall(obj[method], ...)
+  if not ok then return nil, tostring(r) end
+  return r, nil
 end
 
--- Detect peripheral type: "me_bridge" or "inventory"
 local function detect_ptype(name)
   local ok, methods = pcall(peripheral.getMethods, name)
   if not ok or type(methods) ~= "table" then return nil end
   local ms = {}
   for _, m in ipairs(methods) do ms[m] = true end
-  if ms.exportItemToPeripheral or ms.importItemFromPeripheral or ms.listItems then
-    return "me_bridge"
-  end
-  if ms.list then
-    return "inventory"
-  end
+  if ms.exportItemToPeripheral or ms.listItems then return "me_bridge" end
+  if ms.list then return "inventory" end
   return nil
+end
+
+local function inventory_free_slots(wrapped)
+  -- Returns number of empty slots; nil if size() unavailable.
+  local size, err = safe_call(wrapped, "size")
+  if not size then return nil end
+  local items, _ = safe_call(wrapped, "list")
+  if not items then return nil end
+  local used = 0
+  for _ in pairs(items) do used = used + 1 end
+  return math.max(0, size - used)
+end
+
+local function inventory_count(wrapped, item_name)
+  -- Count how many of a specific item are in a standard inventory.
+  local items, _ = safe_call(wrapped, "list")
+  if not items then return 0 end
+  local total = 0
+  for _, stack in pairs(items) do
+    if type(stack) == "table" and stack.name == item_name then
+      total = total + (stack.count or 0)
+    end
+  end
+  return total
 end
 
 -- ---- constructor ------------------------------------------------------------
@@ -101,11 +126,12 @@ function M.new(opts)
     _state = {
       sources       = {},
       destinations  = {},
-      me_bridges    = {},  -- all known ME bridges (can be source AND dest)
+      me_bridge     = nil,   -- the single ME Bridge entry (used for both export and import)
       total_moved   = 0,
       total_errors  = 0,
       last_cycle    = nil,
       last_refresh  = 0,
+      last_run_ts   = 0,
     },
   }
   return setmetatable(self, { __index = M })
@@ -115,78 +141,65 @@ end
 
 function M:refresh_peripherals()
   local cfg = self.config.logistics or {}
-  local sources_cfg = cfg.sources or {}
-  local dests_cfg   = cfg.destinations or {}
 
-  local function wrap_entry(entry)
+  local function wrap(entry)
     local name = type(entry) == "string" and entry or (type(entry) == "table" and entry.name)
     local tag  = (type(entry) == "table" and entry.tag) or "generic"
     if not name or not peripheral.isPresent(name) then
-      self.warn_once("absent:" .. tostring(name), "Logistics peripheral absent: " .. tostring(name))
+      self.warn_once("absent:" .. tostring(name), "Logistics: peripheral absent: " .. tostring(name))
       return nil
     end
     local ptype = detect_ptype(name)
     if not ptype then
-      self.warn_once("notype:" .. name, "Cannot determine type for peripheral: " .. name)
+      self.warn_once("notype:" .. name, "Logistics: unknown type for: " .. name)
       return nil
     end
     local ok, wrapped = pcall(peripheral.wrap, name)
     if not ok or not wrapped then
-      self.warn_once("wrap:" .. name, "Failed to wrap peripheral: " .. name)
+      self.warn_once("wrap:" .. name, "Logistics: wrap failed: " .. name)
       return nil
     end
     return { name = name, tag = tag, ptype = ptype, wrapped = wrapped }
   end
 
-  local sources, dests, bridges = {}, {}, {}
-  for _, e in ipairs(sources_cfg) do
-    local p = wrap_entry(e)
+  local sources, dests, me_bridge = {}, {}, nil
+  for _, e in ipairs(cfg.sources or {}) do
+    local p = wrap(e)
     if p then
+      if p.ptype == "me_bridge" then me_bridge = p end
       sources[#sources + 1] = p
-      if p.ptype == "me_bridge" then bridges[p.name] = p end
     end
   end
-  for _, e in ipairs(dests_cfg) do
-    local p = wrap_entry(e)
+  for _, e in ipairs(cfg.destinations or {}) do
+    local p = wrap(e)
     if p then
+      if p.ptype == "me_bridge" and not me_bridge then me_bridge = p end
       dests[#dests + 1] = p
-      if p.ptype == "me_bridge" then bridges[p.name] = p end
     end
   end
 
   self._state.sources      = sources
   self._state.destinations = dests
-  self._state.me_bridges   = bridges
+  self._state.me_bridge    = me_bridge
 
   self.log("DEBUG", string.format(
-    "Logistics: %d sources, %d destinations (%d ME bridges)",
-    #sources, #dests, (function() local n=0 for _ in pairs(bridges) do n=n+1 end return n end)()
+    "Logistics: %d sources, %d destinations, ME Bridge: %s",
+    #sources, #dests, me_bridge and me_bridge.name or "none"
   ))
 end
 
--- ---- item classification ----------------------------------------------------
+-- ---- route matching ---------------------------------------------------------
 
--- Returns matching route config entry or nil.
 function M:_match_route(item_name)
   local cfg = self.config.logistics or {}
-  local routes = cfg.routes or {}
   local lower = tostring(item_name):lower()
-
-  for _, r in ipairs(routes) do
-    if r.match and lower == tostring(r.match):lower() then return r end
+  for _, r in ipairs(cfg.routes or {}) do
+    if r.match   and lower == tostring(r.match):lower()              then return r end
     if r.pattern and lower:find(tostring(r.pattern):lower(), 1, true) then return r end
   end
-
-  -- Fall back to built-in table.
-  local builtin = DEFAULT_ROUTES[lower]
-  if builtin then return builtin end
-
-  return nil
+  return DEFAULT_ROUTES[lower]
 end
 
--- ---- destination lookup -----------------------------------------------------
-
--- Find a destination peripheral by tag.
 function M:_find_dest(tag)
   for _, d in ipairs(self._state.destinations) do
     if d.tag == tag then return d end
@@ -194,192 +207,167 @@ function M:_find_dest(tag)
   return nil
 end
 
--- Find a source peripheral by tag.
-function M:_find_source(tag)
-  for _, s in ipairs(self._state.sources) do
-    if s.tag == tag then return s end
+-- ---- ME → chest (export) ----------------------------------------------------
+
+function M:_export_me_to_chest(item_name, route, cycle_log)
+  local bridge = self._state.me_bridge
+  if not bridge then
+    self.warn_once("no_bridge", "Logistics: no ME Bridge configured")
+    return 0, 1
   end
-  return nil
-end
 
--- ---- move helpers -----------------------------------------------------------
+  local dest = self:_find_dest(route.to or "")
+  if not dest then
+    self.warn_once("no_dest:" .. tostring(route.to),
+      "Logistics: no destination for tag '" .. tostring(route.to) .. "'")
+    return 0, 1
+  end
 
--- ME Bridge → inventory: exportItemToPeripheral
-local function me_to_inventory(bridge, item_name, count, dest_name, cycle_log, log_fn, warn_fn)
-  local ok_v, result = pcall(bridge.wrapped.exportItemToPeripheral,
-    { name = item_name, count = count }, dest_name)
-  if not ok_v then
-    warn_fn("me_exp:" .. dest_name, "exportItemToPeripheral failed -> " .. dest_name .. ": " .. tostring(result))
+  -- Safety block: waste must not go to reactor injector chest
+  if is_waste(item_name) and tag_is_reactor(dest.tag) then
+    self.warn_once("waste_block:" .. item_name,
+      "SAFETY BLOCK: waste '" .. item_name .. "' blocked from reactor tag '" .. dest.tag .. "'")
+    return 0, 0
+  end
+
+  -- How much is in ME?
+  local me_info, _ = safe_call(bridge.wrapped, "getItem", { name = item_name })
+  local in_me = type(me_info) == "table" and (me_info.amount or 0) or 0
+  local min_in_me = tonumber(route.min_in_me) or 0
+  if in_me <= min_in_me then
+    self.log("DEBUG", string.format("Logistics: skip export %s (in_me=%d <= min=%d)",
+      item_name, in_me, min_in_me))
+    return 0, 0
+  end
+
+  -- How full is the destination chest?
+  if dest.ptype == "inventory" then
+    local free = inventory_free_slots(dest.wrapped)
+    if free ~= nil and free == 0 then
+      self.warn_once("chest_full:" .. dest.name,
+        "Logistics: destination chest full: " .. dest.name)
+      return 0, 0
+    end
+    local max_in_chest = tonumber(route.max_in_chest)
+    if max_in_chest then
+      local already = inventory_count(dest.wrapped, item_name)
+      if already >= max_in_chest then
+        self.log("DEBUG", string.format(
+          "Logistics: skip export %s chest=%s already=%d max=%d",
+          item_name, dest.name, already, max_in_chest))
+        return 0, 0
+      end
+    end
+  end
+
+  local cfg = self.config.logistics or {}
+  local push = math.min(in_me - min_in_me, tonumber(cfg.max_per_cycle) or 64)
+  if route.max_push then push = math.min(push, tonumber(route.max_push)) end
+  if push <= 0 then return 0, 0 end
+
+  local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
+    { name = item_name, count = push }, dest.name)
+  if not ok then
+    self.warn_once("exp_err:" .. dest.name,
+      "exportItemToPeripheral -> " .. dest.name .. ": " .. tostring(result))
     return 0, 1
   end
   local moved = type(result) == "number" and result or 0
   if moved > 0 then
-    cycle_log[#cycle_log + 1] = string.format("ME→%s %s x%d", dest_name, item_name, moved)
+    cycle_log[#cycle_log + 1] = string.format("ME→%s %s x%d", dest.name, item_name, moved)
   end
   return moved, 0
 end
 
--- Inventory → ME Bridge: importItemFromPeripheral
-local function inventory_to_me(bridge, item_name, count, src_name, cycle_log, log_fn, warn_fn)
-  local ok_v, result = pcall(bridge.wrapped.importItemFromPeripheral,
-    { name = item_name, count = count }, src_name)
-  if not ok_v then
-    warn_fn("me_imp:" .. src_name, "importItemFromPeripheral failed from " .. src_name .. ": " .. tostring(result))
-    return 0, 1
-  end
-  local moved = type(result) == "number" and result or 0
-  if moved > 0 then
-    cycle_log[#cycle_log + 1] = string.format("%s→ME %s x%d", src_name, item_name, moved)
-  end
-  return moved, 0
-end
+-- ---- chest → ME (import) ----------------------------------------------------
 
--- Inventory → Inventory: pushItems
-local function inventory_to_inventory(src, count, slot, dest_name, item_name, cycle_log, warn_fn)
-  local ok_v, result = pcall(src.wrapped.pushItems, dest_name, slot, count)
-  if not ok_v then
-    warn_fn("inv_push:" .. dest_name, "pushItems failed: " .. tostring(result))
+function M:_import_chest_to_me(src, item_name, route, cycle_log)
+  local bridge = self._state.me_bridge
+  if not bridge then
+    self.warn_once("no_bridge", "Logistics: no ME Bridge configured")
+    return 0, 1
+  end
+
+  local cfg = self.config.logistics or {}
+  local push = tonumber(cfg.max_per_cycle) or 64
+  if route.max_push then push = math.min(push, tonumber(route.max_push)) end
+
+  local ok, result = pcall(bridge.wrapped.importItemFromPeripheral,
+    { name = item_name, count = push }, src.name)
+  if not ok then
+    self.warn_once("imp_err:" .. src.name,
+      "importItemFromPeripheral from " .. src.name .. ": " .. tostring(result))
     return 0, 1
   end
   local moved = type(result) == "number" and result or 0
   if moved > 0 then
-    cycle_log[#cycle_log + 1] = string.format("%s→%s %s x%d", src.name, dest_name, item_name, moved)
+    cycle_log[#cycle_log + 1] = string.format("%s→ME %s x%d", src.name, item_name, moved)
   end
   return moved, 0
 end
 
 -- ---- routing cycle ----------------------------------------------------------
 
-function M:_process_me_source(src, cycle_log)
-  -- Source is an ME Bridge: listItems → match → exportItemToPeripheral to dest
-  local cfg = self.config.logistics or {}
-  local max = tonumber(cfg.max_per_cycle) or 64
-  local items, err = safe_call(src.wrapped, "listItems")
-  if not items then
-    self.warn_once("me_list:" .. src.name, "listItems failed: " .. tostring(err))
-    return 0, 1
-  end
-
-  local moved_total, errors_total = 0, 0
-  for _, stack in pairs(type(items) == "table" and items or {}) do
-    if moved_total >= max then break end
-    if type(stack) ~= "table" or not stack.name then goto continue end
-
-    local item_name = stack.name
-    local available = stack.amount or 0
-    if available <= 0 then goto continue end
-
-    local route = self:_match_route(item_name)
-    if not route then goto continue end
-
-    -- Safety: waste never goes to reactor
-    if is_waste(item_name) and tag_is_reactor(route.to or "") then
-      self.warn_once("waste_block:" .. item_name,
-        "SAFETY BLOCK: waste " .. item_name .. " would route to reactor tag '" .. tostring(route.to) .. "'")
-      goto continue
-    end
-
-    local dest = self:_find_dest(route.to or "")
-    if not dest then
-      self.warn_once("no_dest:" .. tostring(route.to),
-        "No destination for tag '" .. tostring(route.to) .. "' (needed by " .. item_name .. ")")
-      goto continue
-    end
-
-    local push = math.min(available, max - moved_total)
-    if route.max_push then push = math.min(push, tonumber(route.max_push) or push) end
-
-    local m, e = me_to_inventory(src, item_name, push, dest.name, cycle_log,
-      self.log, self.warn_once)
-    moved_total = moved_total + m
-    errors_total = errors_total + e
-
-    ::continue::
-  end
-  return moved_total, errors_total
-end
-
-function M:_process_inventory_source(src, cycle_log)
-  -- Source is a standard inventory: list → match → push to dest or ME
-  local cfg = self.config.logistics or {}
-  local max = tonumber(cfg.max_per_cycle) or 64
-  local items, err = safe_call(src.wrapped, "list")
-  if not items then
-    self.warn_once("inv_list:" .. src.name, "list() failed: " .. tostring(err))
-    return 0, 1
-  end
-
-  local moved_total, errors_total = 0, 0
-  for slot, stack in pairs(type(items) == "table" and items or {}) do
-    if moved_total >= max then break end
-    if type(stack) ~= "table" or not stack.name then goto continue end
-
-    local item_name = stack.name
-    local count = stack.count or 1
-
-    local route = self:_match_route(item_name)
-    if not route then goto continue end
-
-    if is_waste(item_name) and tag_is_reactor(route.to or "") then
-      self.warn_once("waste_block:" .. item_name,
-        "SAFETY BLOCK: waste " .. item_name .. " → reactor tag '" .. tostring(route.to) .. "'")
-      goto continue
-    end
-
-    local push = math.min(count, max - moved_total)
-    if route.max_push then push = math.min(push, tonumber(route.max_push) or push) end
-
-    -- Destination is ME Bridge?
-    local dest_tag = route.to or ""
-    local dest = self:_find_dest(dest_tag)
-    if dest and dest.ptype == "me_bridge" then
-      -- inv → ME
-      local m, e = inventory_to_me(dest, item_name, push, src.name, cycle_log,
-        self.log, self.warn_once)
-      moved_total = moved_total + m
-      errors_total = errors_total + e
-    elseif dest then
-      -- inv → inv
-      local m, e = inventory_to_inventory(src, push, slot, dest.name, item_name,
-        cycle_log, self.warn_once)
-      moved_total = moved_total + m
-      errors_total = errors_total + e
-    else
-      self.warn_once("no_dest:" .. dest_tag,
-        "No destination for tag '" .. dest_tag .. "' (needed by " .. item_name .. ")")
-    end
-
-    ::continue::
-  end
-  return moved_total, errors_total
-end
-
 function M:run_cycle()
   local cycle_log = {}
   local total_moved, total_errors = 0, 0
 
+  -- Pass 1: ME → chests  (sources tagged "me")
   for _, src in ipairs(self._state.sources) do
-    local m, e
-    if src.ptype == "me_bridge" then
-      m, e = self:_process_me_source(src, cycle_log)
-    else
-      m, e = self:_process_inventory_source(src, cycle_log)
+    if src.ptype ~= "me_bridge" then goto continue end
+
+    -- listItems to find what's available for export
+    local items, err = safe_call(src.wrapped, "listItems")
+    if not items then
+      self.warn_once("list_err:" .. src.name, "listItems failed: " .. tostring(err))
+      goto continue
     end
-    total_moved  = total_moved  + m
-    total_errors = total_errors + e
+
+    for _, stack in pairs(type(items) == "table" and items or {}) do
+      if type(stack) ~= "table" or not stack.name then goto skip end
+      local route = self:_match_route(stack.name)
+      if not route then goto skip end
+      if tostring(route.from or ""):lower() ~= "me" then goto skip end
+
+      local m, e = self:_export_me_to_chest(stack.name, route, cycle_log)
+      total_moved  = total_moved  + m
+      total_errors = total_errors + e
+      ::skip::
+    end
+    ::continue::
+  end
+
+  -- Pass 2: chests → ME  (sources tagged anything except "me")
+  for _, src in ipairs(self._state.sources) do
+    if src.ptype ~= "inventory" then goto continue end
+
+    local items, err = safe_call(src.wrapped, "list")
+    if not items then
+      self.warn_once("list_err:" .. src.name, "list() failed: " .. tostring(err))
+      goto continue
+    end
+
+    for _, stack in pairs(type(items) == "table" and items or {}) do
+      if type(stack) ~= "table" or not stack.name then goto skip end
+      local route = self:_match_route(stack.name)
+      if not route then goto skip end
+      if tostring(route.to or ""):lower() ~= "me" then goto skip end
+
+      local m, e = self:_import_chest_to_me(src, stack.name, route, cycle_log)
+      total_moved  = total_moved  + m
+      total_errors = total_errors + e
+      ::skip::
+    end
+    ::continue::
   end
 
   self._state.total_moved  = self._state.total_moved  + total_moved
   self._state.total_errors = self._state.total_errors + total_errors
-
-  local summary = {
-    ts    = os.epoch("utc"),
-    moved = total_moved, errors = total_errors,
-    sources = #self._state.sources,
-    destinations = #self._state.destinations,
+  self._state.last_cycle   = {
+    ts = os.epoch("utc"), moved = total_moved, errors = total_errors,
+    sources = #self._state.sources, destinations = #self._state.destinations,
     moves = cycle_log,
   }
-  self._state.last_cycle = summary
 
   if total_moved > 0 then
     self.log("INFO", string.format("Logistics: moved=%d errors=%d (%s)",
@@ -389,7 +377,7 @@ function M:run_cycle()
   else
     self.log("DEBUG", "Logistics: nothing to move")
   end
-  return summary
+  return self._state.last_cycle
 end
 
 -- ---- service tick -----------------------------------------------------------
@@ -406,7 +394,7 @@ function M:tick()
   end
 
   local interval_ms = (tonumber(cfg.interval) or 10) * 1000
-  if now - (self._state.last_run_ts or 0) < interval_ms then return end
+  if now - self._state.last_run_ts < interval_ms then return end
   self._state.last_run_ts = now
   self:run_cycle()
 end
@@ -420,6 +408,7 @@ function M:get_summary()
     enabled      = cfg.enabled == true,
     sources      = #s.sources,
     destinations = #s.destinations,
+    me_bridge    = s.me_bridge and s.me_bridge.name or nil,
     total_moved  = s.total_moved,
     total_errors = s.total_errors,
     last_cycle   = s.last_cycle,
