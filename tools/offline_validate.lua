@@ -136,11 +136,23 @@ if manifest then
   ok("manifest file references checked")
 end
 
+-- Runtime-generated files that are written by the installer and intentionally
+-- absent from the repository. start.lua references them by path but they only
+-- exist after a successful installation.
+local RUNTIME_GENERATED = {
+  ["/xreactor/config/role.lua"] = true,
+  ["/xreactor/config/node_id.txt"] = true,
+}
+
 local start_body = read_all("xreactor/start.lua") or ""
 for quoted in start_body:gmatch('"(/xreactor/[^"]+%.lua)"') do
-  local rel = quoted:gsub("^/xreactor/", "xreactor/")
-  if not exists(rel) then
-    fail("start.lua references missing file: " .. quoted)
+  if RUNTIME_GENERATED[quoted] then
+    ok("start.lua runtime-generated (expected absent): " .. quoted)
+  else
+    local rel = quoted:gsub("^/xreactor/", "xreactor/")
+    if not exists(rel) then
+      fail("start.lua references missing file: " .. quoted)
+    end
   end
 end
 ok("start.lua entrypoint references checked")
