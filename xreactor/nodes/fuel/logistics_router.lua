@@ -44,6 +44,7 @@
 --   },
 
 local M = {}
+local redstone_router_lib = require("nodes.fuel.redstone_router")
 
 local WASTE_PATTERNS = { "cyanite", "magentite", "rossinite", "waste" }
 
@@ -101,6 +102,7 @@ function M.new(opts)
       bridge        = nil,
       reactors      = {},   -- { name, label, reactor, inlet, item, cfg }
       waste_outlets = {},   -- { name, label, outlet }
+      rs_router     = nil,  -- redstone_router instance (if configured)
       total_exported= 0,
       total_imported= 0,
       total_errors  = 0,
@@ -207,6 +209,19 @@ function M:refresh_peripherals()
   end
   self._state.waste_outlets = waste_outlets
 
+  -- Redstone router (optional — for Mekanism pipe valve control)
+  local cfg = self.config.logistics or self.config or {}
+  if cfg.redstone_routes and #cfg.redstone_routes > 0 then
+    if not self._state.rs_router then
+      self._state.rs_router = redstone_router_lib.new({
+        config    = self.config,
+        log       = self.log,
+        warn_once = self.warn_once,
+      })
+    end
+    self._state.rs_router:refresh()
+  end
+
   self.log("DEBUG", string.format(
     "Logistics: bridge=%s reactors=%d waste_outlets=%d",
     self._state.bridge and self._state.bridge.name or "NONE",
@@ -278,21 +293,40 @@ function M:_run_supply(cycle_log)
     local push = math.min(r.fill_amount, in_me - r.min_in_me)
     if push <= 0 then goto continue end
 
-    local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
-      { name = r.item, count = push }, r.inlet.name)
-    if not ok then
-      self.warn_once("exp_err:" .. r.inlet.name,
-        "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
-      errors = errors + 1
-    else
-      local moved = type(result) == "number" and result or 0
-      if moved > 0 then
-        exported = exported + moved
-        local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
-        cycle_log[#cycle_log + 1] = string.format(
-          "ME→[%s]%s %s x%d via %s",
-          r.label, pct_str, r.item, moved, r.inlet.name)
+    local cfg_l = self.config.logistics or self.config or {}
+    local rs    = self._state.rs_router
+    local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
+
+    local moved = 0
+    local exp_ok = false
+
+    local function do_export()
+      local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
+        { name = r.item, count = push }, r.inlet.name)
+      if not ok then
+        self.warn_once("exp_err:" .. r.inlet.name,
+          "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
+        errors = errors + 1
+      else
+        moved   = type(result) == "number" and result or 0
+        exp_ok  = true
       end
+    end
+
+    if rs and rs:route_count() > 0 then
+      -- Redstone routing: open valve for THIS reactor, block all others
+      rs:route_and_act(r.label, do_export, valve_ms)
+    else
+      -- No redstone routing configured: export directly
+      do_export()
+    end
+
+    if exp_ok and moved > 0 then
+      exported = exported + moved
+      local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
+      cycle_log[#cycle_log + 1] = string.format(
+        "ME→[%s]%s %s x%d via %s",
+        r.label, pct_str, r.item, moved, r.inlet.name)
     end
 
     ::continue::

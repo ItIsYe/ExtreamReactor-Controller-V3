@@ -105,6 +105,22 @@ local CONFIG = {
     -- waste: peripheral(s) where reactor waste arrives — CC drains into ME.
     -- { name = "Reaktor A Waste", outlet = "mekanism:ultimate_logistical_transporter_2" },
     waste              = {},
+    --
+    -- redstone_routes: map redstone outputs to reactors for pipe valve control.
+    -- Pipe must be configured: "High Redstone = Interrupt" in Mekanism.
+    -- CC sets ALL outputs HIGH (blocked), then opens ONLY the target's output.
+    --
+    -- side: built-in CC side (top/bottom/left/right/front/back)
+    --   OR: integrator output name (if using Redstone Integrator peripheral)
+    -- integrator: Redstone Integrator peripheral name (optional)
+    -- valve_open_ms: how long to keep valve open after export (default 2000ms)
+    --
+    -- { reactor = "RT-1", label = "Reaktor A", side = "right" },
+    -- { reactor = "RT-2", label = "Reaktor B", side = "left"  },
+    -- { reactor = "RT-3", label = "Reaktor C", side = "top",
+    --   integrator = "redstone_integrator_0" },
+    redstone_routes    = {},
+    valve_open_ms      = 2000,
   }
   rails     = CONFIG.DEFAULT_RAILS,
   logistics = CONFIG.DEFAULT_LOGISTICS
