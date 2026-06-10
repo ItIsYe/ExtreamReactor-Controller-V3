@@ -105,10 +105,13 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
         stable_output = stable_output + energy
       elseif coil ~= false then
         -- Turbine is in RPM band with coil engaged but energy reads as zero.
-        -- This happens when rods are at 98% on startup (minimal steam, near-zero output).
-        -- Count as mechanically stable so learning can complete; output is recorded as 0.
+        -- Count as mechanically stable for diagnostics (stable_turbines counter).
+        -- This does NOT trigger a capacity lock — locking still requires sample_output > 0.
+        -- With LEARNING_ROD_LEVEL = 50, the reactor will soon produce enough steam
+        -- for energy > 0, at which point the producing counter and sample_output
+        -- will be updated and learning will complete normally.
         stable = stable + 1
-        -- producing stays unchanged (no energy contribution to capacity estimate)
+        -- producing and stable_output unchanged: no real energy to record
       end
     else
       out_of_band = out_of_band + 1
@@ -118,13 +121,9 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
   local required = 1
   local observed_total = numeric_value(total_output) or 0
   local sample_output = stable_output > 0 and stable_output or observed_total
-  -- If output truly reads 0 but turbines are mechanically stable, treat as
-  -- "unknown capacity" rather than "zero capacity". Use a conservative floor
-  -- of 1 FE/t per stable turbine so learning can lock and MASTER gets control.
-  -- MASTER will use actual telemetry to refine the capacity assignment.
-  if sample_output == 0 and stable >= required then
-    sample_output = stable * 1  -- 1 FE/t floor per turbine
-  end
+  -- Learning only locks when actual energy is measured (sample_output > 0).
+  -- If turbines are mechanically stable but show zero energy, we wait for
+  -- LEARNING_ROD_LEVEL (50% rods) to produce enough steam for real measurements.
   local ok = stable >= required and sample_output > 0
   local reason
   if ok then

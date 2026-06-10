@@ -99,7 +99,7 @@ return {
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2525, hash = "3e823eea", required_for={"RT"} },
     { path = "nodes/rt/state_handlers.lua", size_bytes = 8485, hash = "6c8b12e2", required_for={"RT"} },
-    { path = "nodes/rt/status_snapshot.lua", size_bytes = 9839, hash = "760227cb", required_for={"RT"} },
+    { path = "nodes/rt/status_snapshot.lua", size_bytes = 9866, hash = "faeecc56", required_for={"RT"} },
     },
     energy = {
     { path = "adapters/energy_storage.lua", size_bytes = 3648, hash = "fd2dc2e5", required_for={"ENERGY"} },
