@@ -39,6 +39,7 @@ local support_ui_pages = require("nodes.support.ui_pages")
 local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.reprocessor.role_descriptor")
 local config_normalizer = require("nodes.reprocessor.config_normalizer")
+local logistics_router = require("nodes.fuel.logistics_router")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.REPROCESSOR_NODE, -- Node role identifier.
@@ -92,6 +93,7 @@ local services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local reproc_health = health.new({})
 local buffers = {}
+local router
 local devices = {
   monitor = nil,
   monitor_name = nil,
@@ -258,6 +260,7 @@ local function build_status_payload()
   })
   payload.buffers = read_buffers()
   payload.standby = standby
+  payload.logistics = get_router():get_summary()
   payload.bindings = reproc_health.bindings
   payload.bindings_summary = health.summarize_bindings(reproc_health.bindings)
   return payload
@@ -345,6 +348,17 @@ local function process_buffers()
       pcall(buf.process)
     end
   end
+end
+
+local function get_router()
+  if not router then
+    router = logistics_router.new({
+      config    = config,
+      log       = function(level, msg) utils.log("REPROC", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+    })
+  end
+  return router
 end
 
 local function handle_command(message)
@@ -440,6 +454,7 @@ end
 init()
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   process_buffers()
+  get_router():tick()
   if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
     standby = true
   end

@@ -57,7 +57,19 @@ local CONFIG = {
     }
   },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
-  DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
+  DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
+  -- Logistics routing for reprocessor output (finished fuel back to fuel storage).
+  -- Configure sources as the reprocessor output chest(s) and destinations as
+  -- the fuel input storage. Disabled by default.
+  DEFAULT_LOGISTICS = {
+    enabled             = false,
+    interval            = 10,
+    discovery_interval  = 60,
+    max_per_cycle       = 64,
+    sources             = {},
+    destinations        = {},
+    routes              = {},
+  }
 }
 
 local CURRENT_VERSION = 2
@@ -88,5 +100,6 @@ return {
     queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
     drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
   },
-  rails = CONFIG.DEFAULT_RAILS
+  rails     = CONFIG.DEFAULT_RAILS,
+  logistics = CONFIG.DEFAULT_LOGISTICS
 }

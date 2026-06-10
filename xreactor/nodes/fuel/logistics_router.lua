@@ -30,6 +30,11 @@ local REACTOR_TAGS = { "reactor", "reactor_injector", "fuel_input" }
 
 -- Default ATM10/ER2 item name → destination-tag mapping used when no explicit
 -- routes are configured.  The user overrides this via config.logistics.routes.
+--
+-- Tags:
+--   reactor_injector  Reactor solid fuel input  (safety block active: waste never goes here)
+--   reprocessor       Reprocessor waste input
+--   fuel_storage      Reprocessor output → back to fuel storage (Blutonium, Magentite-fuel)
 local DEFAULT_ITEM_CLASSIFIER = {
   -- Solid fuels → reactor injectors
   ["bigreactors:yellorium_ingot"]  = "reactor_injector",
@@ -42,6 +47,10 @@ local DEFAULT_ITEM_CLASSIFIER = {
   ["bigreactors:cyanite_ingot"]    = "reprocessor",
   ["bigreactors:magentite_ingot"]  = "reprocessor",
   ["bigreactors:rossinite_ingot"]  = "reprocessor",
+  -- Reprocessor output (processed fuel) → fuel storage
+  -- These are the same ingot types but come OUT of the reprocessor;
+  -- the reprocessor node routes them via tag = "fuel_storage".
+  -- No entry needed here because the reprocessor config uses explicit routes.
 }
 
 -- ---- helpers ---------------------------------------------------------------
