@@ -30,29 +30,8 @@ function M.run(ctx)
       resources = { label = "Resources", render = ctx.resources_ui.render, interval = 2.0 },
       alerts = { label = "Alerts", render = ctx.alerts_ui.render, hit_test = ctx.alerts_ui.hit_test, interval = 0.5 },
       alarms = { label = "Logs", render = ctx.alarms_ui.render, interval = 1.0 },
-      router = (function()
-        local page = ctx.router_config_ui and ctx.router_config_ui.make_page({
-          model    = {},
-          send_cmd = function(node_id, cmd, payload)
-            if ctx.comms then ctx.comms.send_command(node_id, cmd, payload) end
-          end,
-          log = function(level, msg) end,
-        })
-        if not page then return { label = "Router", render = function() end, interval = 999 } end
-        return {
-          label    = "Fuel-Router",
-          interval = 1.0,
-          render   = function(mon, box, snapshot)
-            page.instance.model = snapshot or {}
-            page.instance:draw(mon, box.x, box.y, box.w, box.h)
-          end,
-          hit_test = function(event)
-            if page.handle_input then return page.handle_input(event) end
-          end,
-        }
-      end)(),
     },
-    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms", "router" },
+    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms" },
     on_action = function(action)
       if ctx.refs.ui_controller then
         return ctx.refs.ui_controller.handle_action(action)

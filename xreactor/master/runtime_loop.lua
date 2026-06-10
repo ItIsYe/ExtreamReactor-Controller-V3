@@ -52,7 +52,7 @@ local function run_master()
   init_runtime.run({
     config = config, utils = utils, constants = constants, health = health, node_id = node_id, layout_config_path = runtime.tuning.layout_config_path,
     monitor_manager = monitor_manager, multiview_ui = multiview_ui, overview_ui = overview_ui, energy_ui = energy_ui, rt_ui = rt_ui,
-    resources_ui = resources_ui, alerts_ui = alerts_ui, alarms_ui = alarms_ui, router_config_ui = router_config_ui, comms_service = comms_service, service_manager = service_manager,
+    resources_ui = resources_ui, alerts_ui = alerts_ui, alarms_ui = alarms_ui, comms_service = comms_service, service_manager = service_manager,
     rt_sync_coalescer_lib = rt_sync_coalescer_lib, alert_service_lib = alert_service_lib, telemetry_service = telemetry_service, control_service = control_service,
     ui_service = ui_service, sequencer_lib = sequencer_lib, message_handlers = message_handlers, ui_controller_lib = ui_controller_lib,
     runtime_context = runtime_context, recovery_status = recovery_status, nodes = runtime.state.nodes, alarms = runtime.state.alarms,

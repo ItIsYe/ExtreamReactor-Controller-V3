@@ -41,6 +41,7 @@ local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.fuel.role_descriptor")
 local config_normalizer = require("nodes.fuel.config_normalizer")
 local logistics_router = require("nodes.fuel.logistics_router")
+local router_ui_lib     = require("nodes.fuel.router_ui")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.FUEL_NODE, -- Node role identifier.
@@ -97,6 +98,7 @@ local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.ro
 local fuel_health = health.new({})
 local storage
 local router
+local router_ui_instance
 local devices = {
   monitor = nil,
   monitor_name = nil,
@@ -141,6 +143,28 @@ local function get_router()
     })
   end
   return router
+end
+
+local function get_router_ui()
+  if not router_ui_instance then
+    router_ui_instance = router_ui_lib.new({
+      redstone_router = get_router()._state and get_router()._state.rs_router or nil,
+      log             = function(level, msg) utils.log("FUEL", msg, level) end,
+      get_reactors    = function()
+        -- Return known nodes from registry as reactor candidates
+        local list = {}
+        if devices.registry_devices then
+          for _, dev in ipairs(devices.registry_devices or {}) do
+            if dev.type == "reactor" or (dev.id and tostring(dev.id):find("RT")) then
+              list[#list + 1] = { id = dev.id or dev.name, label = dev.id or dev.name }
+            end
+          end
+        end
+        return list
+      end,
+    })
+  end
+  return router_ui_instance
 end
 
 local function discover()
@@ -336,6 +360,12 @@ local function render_monitor()
           local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
           support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
           ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+        end },
+        { name = "Router", render = function(target)
+          get_router_ui():render(target, ui, colors)
+        end,
+        handle_touch = function(x, y)
+          return get_router_ui():handle_touch(x, y)
         end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
@@ -343,6 +373,14 @@ local function render_monitor()
     })
   end
   monitor_router:render(mon, model)
+end
+
+local function handle_monitor_touch(x, y)
+  -- Forward touch to current page if it handles touch
+  local page = monitor_router and monitor_router:current()
+  if page and type(page.handle_touch) == "function" then
+    return page.handle_touch(x, y)
+  end
 end
 
 local function handle_command(message)
@@ -444,6 +482,16 @@ local function init()
 end
 
 init()
+-- Add touch handler as a lightweight service entry
+services:add({
+  name = "router_touch",
+  tick = function(dt, event)
+    if event and event[1] == "monitor_touch" then
+      handle_monitor_touch(event[3], event[4])
+    end
+  end
+})
+
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   get_router():tick()
 end)
