@@ -3,12 +3,12 @@ from pathlib import Path
 text = Path('xreactor/master/ui/rt_dashboard.lua').read_text(encoding='utf-8')
 
 checks = [
-    'RT-Uebersicht',
+    'RT-Flotte',
     'Sequencer / Queue',
-    'for i, rt in ipairs(model.rt_nodes or {}) do',
+    'prioritized_rt_nodes(model.rt_nodes',
     'Soll %.1f',
     'Ist %.1f',
-    'Workflow '
+    'Queue: ',
 ]
 for item in checks:
     if item not in text:

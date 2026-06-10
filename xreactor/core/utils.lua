@@ -291,8 +291,9 @@ local function sanitize_snapshot(value, active)
   local out = {}
   for key, val in next, value do
     local key_type = type(key)
-    if key_type ~= "string" and key_type ~= "number" and key_type ~= "boolean" then key = tostring(key) end
-    out[key] = sanitize_snapshot(val, active)
+    -- Lua 5.4: for-loop variables are const; use safe_key instead of reassigning key
+    local safe_key = (key_type ~= "string" and key_type ~= "number" and key_type ~= "boolean") and tostring(key) or key
+    out[safe_key] = sanitize_snapshot(val, active)
   end
   active[value] = nil
   return out
