@@ -132,6 +132,14 @@ local function build_context(constants)
   constants.BASE_URL = BETA_BASE_URL
   constants.MANIFEST_URL = BETA_BASE_URL .. "manifest.lua"
   constants.RELEASE_URL = BETA_BASE_URL .. "release.lua"
+  constants.DOWNLOAD_TIMEOUT_SECONDS = constants.DOWNLOAD_TIMEOUT_SECONDS or 15
+  constants.DOWNLOAD_RETRIES = constants.DOWNLOAD_RETRIES or 3
+  constants.DOWNLOAD_RETRY_DELAY_SECONDS = constants.DOWNLOAD_RETRY_DELAY_SECONDS or 2
+  -- Per-attempt timeout and retry config for HTTP downloads.
+  -- Prevents hanging indefinitely when GitHub is slow or unresponsive.
+  constants.DOWNLOAD_TIMEOUT_SECONDS = constants.DOWNLOAD_TIMEOUT_SECONDS or 15
+  constants.DOWNLOAD_RETRIES = constants.DOWNLOAD_RETRIES or 3
+  constants.DOWNLOAD_RETRY_DELAY_SECONDS = constants.DOWNLOAD_RETRY_DELAY_SECONDS or 2
   local ctx = { constants = constants, fs = fs, source_ref = "beta" }
 
   function ctx.safe_mkdir(path) if fs.exists(path) then return fs.isDir(path) end local ok = pcall(fs.makeDir, path); return ok and fs.exists(path) and fs.isDir(path) end
@@ -224,14 +232,19 @@ local function build_context(constants)
   function ctx.cache_busted_url(url, kind, rel, attempt) return append_query(url, "xr_cb", ctx.cache_bust_token(kind, rel, attempt)) end
 
   function ctx.download_versioned_url(url, kind, rel)
-    local retries = tonumber(constants.DOWNLOAD_RETRIES) or 1
-    local delay = tonumber(constants.DOWNLOAD_RETRY_DELAY_SECONDS) or 0
+    local retries = tonumber(constants.DOWNLOAD_RETRIES) or 3
+    local delay   = tonumber(constants.DOWNLOAD_RETRY_DELAY_SECONDS) or 2
+    local timeout = tonumber(constants.DOWNLOAD_TIMEOUT_SECONDS) or 15
+    -- Pass retries=1 to download_url (outer loop handles retries with cache-busting)
     local last = nil
     for attempt = 1, retries do
       local u = ctx.cache_busted_url(url, kind, rel, attempt)
-      local body, err = installer_http.download_url(http, u, 1, delay, nil)
+      ctx.info(string.format("Downloading %s (attempt %d/%d timeout=%ds)", rel, attempt, retries, timeout))
+      local body, err = installer_http.download_url(http, u, 1, delay,
+        function(msg) ctx.warn(msg) end, timeout)
       if body then return body, u end
       last = err
+      ctx.warn(string.format("Download failed %s attempt %d/%d: %s", rel, attempt, retries, tostring(err)))
       if attempt < retries and os and os.sleep and delay > 0 then os.sleep(delay) end
     end
     return nil, tostring(last or "download failed")
