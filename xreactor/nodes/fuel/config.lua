@@ -121,7 +121,7 @@ local CONFIG = {
     --   integrator = "redstone_integrator_0" },
     redstone_routes    = {},
     valve_open_ms      = 2000,
-  }
+  },
   rails     = CONFIG.DEFAULT_RAILS,
   logistics = CONFIG.DEFAULT_LOGISTICS
 }

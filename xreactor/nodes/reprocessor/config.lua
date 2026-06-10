@@ -86,7 +86,7 @@ local CONFIG = {
     --   fill_amount  = 16,
     --   min_in_me    = 32 },
     reprocessors       = {},
-  }
+  },
   rails     = CONFIG.DEFAULT_RAILS,
   logistics = CONFIG.DEFAULT_LOGISTICS
 }
