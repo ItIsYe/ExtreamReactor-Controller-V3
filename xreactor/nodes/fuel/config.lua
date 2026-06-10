@@ -60,22 +60,31 @@ local CONFIG = {
   },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/fuel.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
-  -- Logistics routing defaults. Set enabled=true and configure sources/destinations to activate.
+  -- Logistics routing for the FUEL node.
+  -- Responsibility:
+  --   1. Fuel:  ME system  → reactor solid injectors
+  --   2. Waste: reactor output chests → ME system
+  --
+  -- Set enabled=true and configure sources/destinations to activate.
   DEFAULT_LOGISTICS = {
     enabled             = false,   -- Must be explicitly enabled.
     interval            = 10,      -- Seconds between routing cycles.
     discovery_interval  = 60,      -- Seconds between peripheral re-discovery.
     max_per_cycle       = 64,      -- Max item count to move per cycle per source.
-    -- Source inventories to pull items from (chests, ME bridges, Logistical Transporters).
-    -- Each entry: "peripheral_name" or { name = "peripheral_name" }
+    --
+    -- sources: where to pull items FROM.
+    --   { name = "me_bridge_0",       tag = "me" }          -- ME system (fuel source)
+    --   { name = "reactorOutput_0",   tag = "reactor_output" } -- reactor waste output chest
     sources             = {},
-    -- Destination inventories with their role tag.
-    -- Each entry: { name = "peripheral_name", tag = "reactor_injector" | "reprocessor" | "generic" }
-    -- tag "reactor_injector" activates the waste-safety block.
+    --
+    -- destinations: where to push items TO.
+    --   { name = "reactorInjector_0", tag = "reactor_injector" } -- reactor solid fuel input
+    --   { name = "me_bridge_0",       tag = "me" }               -- ME system (waste destination)
     destinations        = {},
-    -- Explicit item routes (override built-in classifier).
-    -- Each entry: { match = "exact:item:name", tag = "reactor_injector" }
-    --          or { pattern = "substring", tag = "reprocessor", max_push = 16 }
+    --
+    -- routes: explicit item→dest-tag mapping (overrides built-in classifier).
+    --   { match   = "bigreactors:yellorium_ingot", from = "me", to = "reactor_injector" }
+    --   { pattern = "cyanite",                     from = "reactor_output", to = "me" }
     routes              = {},
   }
 }

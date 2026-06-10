@@ -34,7 +34,7 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.sources) ~= "table" then lg.sources = {} end
   if type(lg.destinations) ~= "table" then lg.destinations = {} end
   if type(lg.routes) ~= "table" then lg.routes = {} end
-  local valid_tags = { reactor_injector = true, reprocessor = true, fuel_storage = true, generic = true }
+  local valid_tags = { reprocessor_input = true, reprocessor_output = true, me = true, reactor_injector = true, generic = true }
   for i, dest in ipairs(lg.destinations) do
     if type(dest) == "table" and dest.tag and not valid_tags[dest.tag] then
       add_warning(string.format(

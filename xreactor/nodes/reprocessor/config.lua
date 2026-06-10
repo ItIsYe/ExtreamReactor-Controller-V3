@@ -58,16 +58,31 @@ local CONFIG = {
   },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
-  -- Logistics routing for reprocessor output (finished fuel back to fuel storage).
-  -- Configure sources as the reprocessor output chest(s) and destinations as
-  -- the fuel input storage. Disabled by default.
+  -- Logistics routing for the REPROCESSOR node.
+  -- Responsibility:
+  --   1. Waste input:  ME system           → reprocessor input inventories
+  --   2. Fuel output:  reprocessor outputs → ME system
+  --
+  -- Set enabled=true and configure sources/destinations to activate.
   DEFAULT_LOGISTICS = {
     enabled             = false,
     interval            = 10,
     discovery_interval  = 60,
     max_per_cycle       = 64,
+    --
+    -- sources:
+    --   { name = "me_bridge_0",         tag = "me" }              -- ME (waste source)
+    --   { name = "reprocessorOutput_0", tag = "reprocessor_output" } -- reprocessor output chest
     sources             = {},
+    --
+    -- destinations:
+    --   { name = "reprocessorInput_0",  tag = "reprocessor_input" } -- reprocessor input
+    --   { name = "me_bridge_0",         tag = "me" }                -- ME (fuel destination)
     destinations        = {},
+    --
+    -- routes:
+    --   { match = "bigreactors:cyanite_ingot",   from = "me",                 to = "reprocessor_input" }
+    --   { match = "bigreactors:blutonium_ingot",  from = "reprocessor_output", to = "me" }
     routes              = {},
   }
 }
