@@ -7,7 +7,7 @@ return {
 
   base_files = {
   { path = "installer_http.lua", size_bytes = 1774, hash = "2d627c52", always=true },
-  { path = "installer_main.lua", size_bytes = 19798, hash = "91b13c2e", always=true },
+  { path = "installer_main.lua", size_bytes = 20437, hash = "7e023a6f", always=true },
   { path = "installer_manifest.lua", size_bytes = 4673, hash = "7aa0c027", always=true },
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true },
   { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always=true },

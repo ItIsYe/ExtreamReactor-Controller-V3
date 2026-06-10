@@ -444,6 +444,19 @@ function M.run(constants)
   local expected = build_expected(manifest, role)
   ctx.log_install_identity(manifest, role.label, "reinstall", expected)
   local files = sorted_files(expected)
+
+  -- Preflight: check disk space. If low, automatically delete logs and old
+  -- backup/stage dirs to reclaim space before aborting.
+  local storage_plan = storage_lib.estimate_required_storage(
+    ctx.fs, ctx.constants.INSTALL_ROOT, expected, ctx.install_mode, ctx.constants)
+  local ok_space, space_err = storage_lib.preflight_storage(ctx, storage_plan, {
+    allow_cleanup  = true,   -- automatically reclaim space if needed
+    cleanup_logs   = true,   -- delete /xreactor_logs/* to recover space
+    cleanup_backup = true,   -- delete old backup dir
+    keep_stage     = false,
+  })
+  if not ok_space then ctx.fatal(space_err) end
+
   local ok_stage, stage_err = install_staged(ctx, files); if not ok_stage then ctx.fatal(stage_err) end
   local ok_validate, validate_err = stage_lib.validate_stage(ctx, expected)
   if not ok_validate then ctx.fatal("Staged validation failed: " .. tostring(validate_err)) end
