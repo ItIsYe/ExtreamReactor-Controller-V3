@@ -186,6 +186,18 @@ function M.process_startup(ctx)
     ctx.set_active_startup(nil)
     return
   end
+  -- Guard: peripheral may have gone offline since startup was enqueued.
+  -- safe_wrapped_call handles nil obj gracefully, but be explicit here so
+  -- alarms are fired and the startup is cleanly cancelled.
+  if not module.peripheral then
+    ctx.log("WARN", ("Startup cancelled: peripheral offline for module=%s"):format(tostring(module.id)))
+    module.state = "ERROR"
+    module.progress = 0
+    module.limits = { "OFFLINE" }
+    ctx.set_active_startup(nil)
+    ctx.add_alarm(ctx.comms.network.id, "WARN", "Startup cancelled: peripheral offline for " .. module.id)
+    return
+  end
   local ok, limits = M.check_interlocks(ctx, module)
   if not ok then
     module.state = "ERROR"

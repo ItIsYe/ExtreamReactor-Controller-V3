@@ -316,7 +316,7 @@ function M.build_reactor_status_details(devices, reactor_adapter, log_prefix)
     if type(info) ~= "table" then info = {} end
     local rods = info.control_rod_level
     if rods == nil and reactor_adapter and type(reactor_adapter.read_control_rods) == "function" and entry and entry.name then rods = reactor_adapter.read_control_rods(entry.name, log_prefix) end
-    list[#list + 1] = { id = entry.id, bound = entry.bound ~= false, temperature = info.temperature, fuel = info.fuel, energy = info.energy, waste = info.waste, active = info.active, rods = rods, steam_production = info.steam, coolant_amount = info.coolant_amount, coolant_amount_max = info.coolant_amount_max, coolant_filled_percentage = info.coolant_filled_percentage }
+    list[#list + 1] = { id = entry.id, bound = entry.bound ~= false, temperature = info.temperature, fuel = info.fuel, energy_stored = info.energy_stored, energy_output = info.energy_output, waste = info.waste, active = info.active, is_actively_cooled = info.is_actively_cooled, rods = rods, steam_production = info.steam, coolant_amount = info.coolant_amount, coolant_amount_max = info.coolant_amount_max, coolant_filled_percentage = info.coolant_filled_percentage }
   end
   return list
 end

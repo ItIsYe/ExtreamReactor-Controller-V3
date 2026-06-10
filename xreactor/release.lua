@@ -5,7 +5,7 @@ return {
   manifest_id = "manifest-v28",
   manifest_version = 28,
   manifest_file_count = 122,
-  hash_algo = "none",
+  hash_algo = "crc32",
   manifest_path = "xreactor/manifest.lua",
   installer_core_version = "2.0",
   installer_core_hash = "runtime-update",

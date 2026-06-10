@@ -50,7 +50,10 @@ local function clean_entry(entry, strip)
 end
 
 local function strip_metadata(manifest)
-  return type(manifest) == "table" and (tostring(manifest.hash_algo or "") == "none" or tostring(manifest.source_ref or "") == "beta")
+  -- Strip size_bytes/hash only when hash_algo is explicitly "none".
+  -- "beta" source_ref no longer implies stripped metadata now that
+  -- regenerate_manifest_metadata.py maintains correct CRC32 values.
+  return type(manifest) == "table" and tostring(manifest.hash_algo or "") == "none"
 end
 
 local function is_log_role(role_label)
