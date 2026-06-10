@@ -68,7 +68,15 @@ function M.update_module_limits(ctx, module)
       table.insert(limits, "TEMP")
     end
     module.coolant_safety_state = module.coolant_safety_state or {}
-    local coolant_eval = ctx.evaluate_reactor_coolant(module.peripheral, module.coolant_safety_state)
+    -- Skip coolant check for passively-cooled reactors (no coolant loop).
+    -- If isActivelyCooled is available and returns false, coolant checks are meaningless.
+    local skip_coolant = module.caps and module.caps.isActivelyCooled
+      and module.peripheral and type(module.peripheral.isActivelyCooled) == "function"
+      and (function()
+        local ok, v = pcall(module.peripheral.isActivelyCooled)
+        return ok and v == false
+      end)()
+    local coolant_eval = skip_coolant and nil or ctx.evaluate_reactor_coolant(module.peripheral, module.coolant_safety_state)
     module.coolant_safety_diag = coolant_eval
     if coolant_eval and module.last_coolant_condition ~= coolant_eval.condition then
       ctx.log("DEBUG", ("Coolant safety diag module=%s condition=%s amount=%s max=%s ratio=%s ratio_raw=%s threshold=%s recover_threshold=%s hysteresis=%s source=%s source_method=%s measurement_state=%s measurement_valid=%s stale_fallback=%s low_ticks=%s trip_samples=%s invalid_ticks=%s invalid_grace=%s zero_glitch_pending=%s zero_glitch_ticks=%s"):format(

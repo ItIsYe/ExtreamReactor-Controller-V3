@@ -234,6 +234,16 @@ function M.new(opts)
       nodes[id] = nodes[id] or legacy
       log(("Node identity remapped: %s -> %s"):format(tostring(sender_id), tostring(id)))
     end
+    -- Detect duplicate node_id: same ID, same role, but different sender (different computer)
+    local existing = nodes[id]
+    if existing and existing.sender_id and sender_id ~= "UNKNOWN"
+        and existing.sender_id ~= sender_id
+        and existing.last_seen and (os.epoch("utc") - existing.last_seen) < 30000 then
+      log(("WARN: Duplicate node_id detected id=%s role=%s existing_sender=%s new_sender=%s -- assign unique node_id in /xreactor/config/node_id.txt"):format(
+        tostring(id), tostring(role_hint or normalize_role(message.role)),
+        tostring(existing.sender_id), tostring(sender_id)
+      ))
+    end
     nodes[id] = nodes[id] or { id = id, role = role_hint or normalize_role(message.role), status = constants.status_levels.OFFLINE }
     apply_role_hint(nodes[id], role_hint, "message")
     if nodes[id].down_since then

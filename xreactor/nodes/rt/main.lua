@@ -490,7 +490,8 @@ local function build_capabilities(name)
     setInductorEngaged = has_method(methods, "setInductorEngaged"),
     setAllControlRodLevels = has_method(methods, "setAllControlRodLevels"),
     setControlRodsLevels = has_method(methods, "setControlRodsLevels"),
-    setControlRodLevel = has_method(methods, "setControlRodLevel")
+    setControlRodLevel = has_method(methods, "setControlRodLevel"),
+    isActivelyCooled = has_method(methods, "isActivelyCooled")
   }
 end
 local function read_turbine_rpm(turbine, caps)

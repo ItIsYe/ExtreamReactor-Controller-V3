@@ -32,6 +32,12 @@ local function resolve_profile(methods)
   if methods.getStoredPower and methods.getMaxStoredPower then
     return { stored = "getStoredPower", capacity = "getMaxStoredPower" }
   end
+  -- ER2 passive reactor port: has getEnergyStored + getEnergyProducedLastTick but no capacity
+  -- individual method. Capacity is only in getEnergyStats().energyCapacity (a table call).
+  -- We expose stored and output; capacity is reported as nil/n/a.
+  if methods.getEnergyStored and methods.getEnergyProducedLastTick then
+    return { stored = "getEnergyStored", capacity = nil, output = "getEnergyProducedLastTick" }
+  end
   return nil
 end
 
