@@ -43,7 +43,7 @@ local function load_log_mode()
   if settings and type(settings.get) == "function" then
     local stored = settings.get("xreactor.log_mode")
     if stored and type(stored) == "string" then
-      local valid = { all = true, disk = true, remote = true, terminal = true }
+      local valid = { all = true, disk = true, remote = true, terminal = true, none = true }
       if valid[stored] then current_log_mode = stored end
     end
   end

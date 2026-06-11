@@ -533,6 +533,9 @@ local function flush_buffer_to_dir(target_dir)
     state.disk_error = "close:" .. summarize_error(close_err)
     state.disk_error_free = free_now
   end
+  -- Success: clear any previous disk error so recovery is visible in status.
+  state.disk_error = nil
+  state.disk_error_free = nil
   state.log_dir = target_dir
   state.log_path = path
 end

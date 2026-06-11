@@ -1507,7 +1507,7 @@ local function updateControl()
         and runtime_ctx.capacity_learning.locked == true
       if not capacity_locked then
         local learning_level = CONFIG.LEARNING_ROD_LEVEL or 50
-        applyReactorRods(learning_level, false, "LEARNING_PHASE")
+        applyReactorRods(learning_level, true, "LEARNING_PHASE")  -- bypass regulator_min_rods cap
       end
       if not runtime_ctx.autonom_control_logged then
         runtime_ctx.autonom_control_logged = true
