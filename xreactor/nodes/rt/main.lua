@@ -22,6 +22,7 @@ local CONFIG = {
   LEARNING_ROD_LEVEL = 50, -- Rod level during capacity learning (AUTONOM pre-lock).
                            -- Lower than max so turbines generate enough steam/power
                            -- for the capacity learning energy > 0 check to pass.
+  CAPACITY_CACHE_PATH = "/xreactor/config/capacity_cache.lua",
   MIN_APPLY_INTERVAL = 1.5, -- Minimum interval between rod applications.
   REACTOR_STEP = 5, -- Reactor rod step adjustment.
   MIN_ACTIVE_RPM = 100, -- Minimum RPM to consider turbine active.
@@ -243,6 +244,41 @@ local STATE = {
   MASTER = "MASTER",
   SAFE = "SAFE"
 }
+-- ---- Capacity cache (disk persistence) ------------------------------------
+-- Saves the locked capacity value so reboots don't require re-learning.
+
+local function save_capacity_cache(learning)
+  if type(learning) ~= "table" or not learning.locked then return end
+  local path = CONFIG.CAPACITY_CACHE_PATH
+  local dir  = fs.getDir(path)
+  if dir ~= "" and not fs.exists(dir) then
+    pcall(fs.makeDir, dir)
+  end
+  local ok, f = pcall(fs.open, path, "w")
+  if not ok or not f then return end
+  f.writeLine("-- RT capacity cache - auto-generated, do not edit")
+  f.writeLine("return {")
+  f.writeLine(string.format("  locked = true,"))
+  f.writeLine(string.format("  max_output = %s,", tostring(learning.max_output or 0)))
+  f.writeLine(string.format("  stable_samples = %s,", tostring(learning.stable_samples or 0)))
+  f.writeLine(string.format("  reason = %q,", tostring(learning.reason or "LOADED_FROM_CACHE")))
+  f.writeLine("}")
+  pcall(f.close)
+end
+
+local function load_capacity_cache()
+  local path = CONFIG.CAPACITY_CACHE_PATH
+  if not fs.exists(path) then return nil end
+  local ok, data = pcall(dofile, path)
+  if ok and type(data) == "table" and data.locked == true
+      and type(data.max_output) == "number" and data.max_output > 0 then
+    data.reason = data.reason or "LOADED_FROM_CACHE"
+    return data
+  end
+  return nil
+end
+-- ---- End capacity cache ----------------------------------------------------
+
 local current_state = STATE.INIT
 local node_state_machine
 -- Keep runtime tuning/mode symbols bundled to lower top-level local pressure
@@ -697,6 +733,15 @@ local function apply_initial_reactor_rods()
     ctrl.last_applied = nil
     log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(CONFIG.INITIAL_ROD_LEVEL) .. "%")
   end
+  -- Attempt to load persisted capacity from disk.
+  -- If found, skip re-learning on this boot.
+  local cached = load_capacity_cache()
+  if cached then
+    runtime_ctx.capacity_learning = cached
+    log("INFO", string.format(
+      "Capacity loaded from cache: max_output=%.2f reason=%s",
+      cached.max_output, tostring(cached.reason)))
+  end
   applyReactorRods(CONFIG.INITIAL_ROD_LEVEL, false, "STARTUP_INIT")
 end
 local function read_current_rods()
@@ -835,6 +880,22 @@ local function updateReactorControl()
     return
   end
   runtime_ctx.last_reactor_tick = now
+  -- During capacity learning: suspend the steam_margin regulator.
+  -- Rods are held at LEARNING_ROD_LEVEL (50%) by updateControl() each tick.
+  -- If the steam_margin regulator also runs here, it fights the learning-phase
+  -- setter and causes rod oscillation that can prevent turbines reaching 900 RPM.
+  local lrn = runtime_ctx.capacity_learning
+  local cap_locked = lrn and lrn.locked == true
+  if not cap_locked then
+    log("INFO", string.format(
+      "CapacityLearning: samples=%d/3 stable=%s/%s output=%s reason=%s (steam_margin suspended)",
+      lrn and lrn.stable_samples or 0,
+      tostring(lrn and lrn.stable_turbines or 0),
+      tostring(lrn and lrn.total_turbines or "?"),
+      tostring(lrn and lrn.sample_output or 0),
+      tostring(lrn and lrn.reason or "WAITING")))
+    return
+  end
   log_reactor_control_state()
   controlReactor()
   log_reactor_control_tick()
@@ -1719,7 +1780,18 @@ local function build_status_payload(status_level)
   }
   local payload = status_snapshot_lib.build_status_payload(ctx_table)
   -- Write back: update_capacity_learning may have mutated ctx_table.capacity_learning
+  local prev_locked = runtime_ctx.capacity_learning
+    and runtime_ctx.capacity_learning.locked == true
   runtime_ctx.capacity_learning = ctx_table.capacity_learning
+  -- Persist to disk on the first successful lock.
+  if not prev_locked and runtime_ctx.capacity_learning
+      and runtime_ctx.capacity_learning.locked == true then
+    save_capacity_cache(runtime_ctx.capacity_learning)
+    log("INFO", string.format(
+      "Capacity locked and cached: max_output=%.2f path=%s",
+      runtime_ctx.capacity_learning.max_output or 0,
+      CONFIG.CAPACITY_CACHE_PATH))
+  end
   return payload
 end
 
