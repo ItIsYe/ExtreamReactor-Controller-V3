@@ -98,6 +98,7 @@ local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.ro
 local fuel_health = health.new({})
 local storage
 local router
+local rs_router_instance
 local router_ui_instance
 local devices = {
   monitor = nil,
@@ -134,12 +135,24 @@ local function cache()
   end
 end
 
+local function get_rs_router()
+  if not rs_router_instance then
+    rs_router_instance = redstone_router_lib.new({
+      config    = config,
+      log       = function(level, msg) utils.log("FUEL", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+    })
+  end
+  return rs_router_instance
+end
+
 local function get_router()
   if not router then
     router = logistics_router.new({
       config    = config,
       log       = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
+      rs_router = get_rs_router(),  -- share rs_router with router_ui
     })
   end
   return router
@@ -148,7 +161,8 @@ end
 local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
-      redstone_router = get_router()._state and get_router()._state.rs_router or nil,
+      redstone_router = get_rs_router(),
+      config_path     = "/xreactor/config/fuel_routes.lua",
       log             = function(level, msg) utils.log("FUEL", msg, level) end,
       get_reactors    = function()
         -- Primary source: reactors configured in config.logistics.reactors

@@ -98,6 +98,7 @@ function M.new(opts)
     config    = opts.config or {},
     log       = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
+    external_rs_router = opts.rs_router or nil,  -- shared rs_router injected from main.lua
     _state = {
       bridge        = nil,
       reactors      = {},   -- { name, label, reactor, inlet, item, cfg }
@@ -209,9 +210,14 @@ function M:refresh_peripherals()
   end
   self._state.waste_outlets = waste_outlets
 
-  -- Redstone router (optional — for Mekanism pipe valve control)
-  local cfg = self.config.logistics or self.config or {}
-  if cfg.redstone_routes and #cfg.redstone_routes > 0 then
+  -- Redstone router: prefer external (shared with router_ui); fall back to own.
+  -- Config key is redstone_tree (tree topology, set by router_ui on save).
+  local cfg_rs = self.config.logistics or self.config or {}
+  local has_tree = type(cfg_rs.redstone_tree) == "table" and #cfg_rs.redstone_tree > 0
+  if self.external_rs_router then
+    self._state.rs_router = self.external_rs_router
+    if has_tree then self._state.rs_router:refresh() end
+  elseif has_tree then
     if not self._state.rs_router then
       self._state.rs_router = redstone_router_lib.new({
         config    = self.config,
@@ -220,6 +226,8 @@ function M:refresh_peripherals()
       })
     end
     self._state.rs_router:refresh()
+  else
+    self._state.rs_router = nil
   end
 
   self.log("DEBUG", string.format(

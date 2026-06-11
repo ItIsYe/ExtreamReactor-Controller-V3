@@ -15,23 +15,25 @@
 
 local M = {}
 
-local ROUTE_CONFIG_PATH = "/xreactor/config/fuel_routes.lua"
+local DEFAULT_ROUTE_CONFIG_PATH = "/xreactor/config/fuel_routes.lua"
 
 local BUILTIN_SIDES = { "top", "bottom", "left", "right", "front", "back" }
 
 -- ---- disk persistence ------------------------------------------------------
 
-local function load_routes()
-  if not fs.exists(ROUTE_CONFIG_PATH) then return {} end
-  local ok, result = pcall(dofile, ROUTE_CONFIG_PATH)
+local function load_routes(path)
+  path = path or DEFAULT_ROUTE_CONFIG_PATH
+  if not fs.exists(path) then return {} end
+  local ok, result = pcall(dofile, path)
   if ok and type(result) == "table" then return result end
   return {}
 end
 
-local function save_routes(routes)
-  local dir = fs.getDir(ROUTE_CONFIG_PATH)
+local function save_routes(routes, path)
+  path = path or DEFAULT_ROUTE_CONFIG_PATH
+  local dir = fs.getDir(path)
   if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
-  local f = fs.open(ROUTE_CONFIG_PATH, "w")
+  local f = fs.open(path, "w")
   if not f then return false end
   f.writeLine("-- Fuel router configuration -- auto-generated, do not edit manually")
   f.writeLine("return {")
@@ -57,6 +59,7 @@ function M.new(opts)
     redstone_router = opts.redstone_router,  -- redstone_router instance to update on save
     log             = opts.log or function() end,
     get_reactors    = opts.get_reactors or function() return {} end,
+    config_path     = opts.config_path or DEFAULT_ROUTE_CONFIG_PATH,
     _ui = {
       selected_side = nil,
       selected_int  = nil,
@@ -69,7 +72,7 @@ function M.new(opts)
     },
   }
   -- Load persisted routes on startup
-  self._ui.routes = load_routes()
+  self._ui.routes = load_routes(opts.config_path or DEFAULT_ROUTE_CONFIG_PATH)
   return setmetatable(self, { __index = M })
 end
 
@@ -294,21 +297,22 @@ end
 
 function M:_do_save()
   local u = self._ui
-  local ok = save_routes(u.routes)
+  local ok = save_routes(u.routes, self.config_path)
   if ok then
     self.log("INFO", "RouterUI: saved " .. #u.routes .. " routes to " .. ROUTE_CONFIG_PATH)
     u.dirty = false
-    -- Apply immediately to redstone_router
+    -- Apply immediately to redstone_router.
+    -- Write as redstone_tree (flat list = single-level tree, no arms).
+    -- Multi-level branching requires manual config editing.
     if self.redstone_router then
-      -- Push routes into config and refresh
       local cfg = self.redstone_router.config
       local lg = cfg.logistics or cfg
-      lg.redstone_routes = {}
+      lg.redstone_tree = {}
       for _, r in ipairs(u.routes) do
-        lg.redstone_routes[#lg.redstone_routes + 1] = {
-          reactor    = r.reactor,
-          label      = r.label,
+        lg.redstone_tree[#lg.redstone_tree + 1] = {
           side       = r.side,
+          label      = r.label,
+          reactor    = r.reactor,
           integrator = r.integrator,
         }
       end

@@ -367,17 +367,6 @@ local function process_buffers()
   end
 end
 
-local function get_router()
-  if not router then
-    router = logistics_router.new({
-      config    = config,
-      log       = function(level, msg) utils.log("REPROC", msg, level) end,
-      warn_once = function(key, msg) warn_once(key, msg) end,
-    })
-  end
-  return router
-end
-
 local function get_rs_router()
   if not rs_router then
     rs_router = redstone_router_lib.new({
@@ -389,10 +378,23 @@ local function get_rs_router()
   return rs_router
 end
 
+local function get_router()
+  if not router then
+    router = logistics_router.new({
+      config    = config,
+      log       = function(level, msg) utils.log("REPROC", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+      rs_router = get_rs_router(),  -- share rs_router with router_ui
+    })
+  end
+  return router
+end
+
 local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
       redstone_router = get_rs_router(),
+      config_path     = "/xreactor/config/reproc_routes.lua",
       log             = function(level, msg) utils.log("REPROC", msg, level) end,
       get_reactors    = function()
         local list, seen = {}, {}
