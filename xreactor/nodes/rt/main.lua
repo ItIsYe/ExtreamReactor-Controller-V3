@@ -1312,11 +1312,33 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   if type(rpm) == "number" then
     ctrl.rpm = rpm
   end
-  if type(ctrl.effective_max_flow) ~= "number" and caps and caps.getFluidFlowRateMaxMax and turbine.getFluidFlowRateMaxMax then
-    local max_ok, max_value = safe_wrapped_call(turbine, "getFluidFlowRateMaxMax")
-    if max_ok and type(max_value) == "number" and max_value > 0 then
-      ctrl.effective_max_flow = math.min(CONFIG.MAX_FLOW, math.max(CONFIG.MIN_FLOW, math.floor(max_value + 0.5)))
+  -- Read hardware max flow once and store in hardware_max_flow.
+  if type(ctrl.hardware_max_flow) ~= "number" then
+    if type(ctrl.effective_max_flow) == "number" then
+      ctrl.hardware_max_flow = ctrl.effective_max_flow
+    elseif caps and caps.getFluidFlowRateMaxMax and turbine.getFluidFlowRateMaxMax then
+      local max_ok, max_value = safe_wrapped_call(turbine, "getFluidFlowRateMaxMax")
+      if max_ok and type(max_value) == "number" and max_value > 0 then
+        ctrl.hardware_max_flow = math.min(CONFIG.MAX_FLOW, math.max(CONFIG.MIN_FLOW, math.floor(max_value + 0.5)))
+      end
     end
+  end
+  -- Apply power target percentage as flow cap.
+  -- targets.power_percent (0-100) from MASTER SET_SETPOINTS scales the flow:
+  --   100% → hardware max flow (full turbine output at target RPM)
+  --     0% → CONFIG.MIN_FLOW (turbine idles at minimum steam intake)
+  -- This is the mechanism that translates MASTER's load assignment into
+  -- actual hardware output: the turbines' RPM and power output will be
+  -- proportional to this cap.
+  local power_pct = type(runtime_ctx.targets) == "table"
+    and type(runtime_ctx.targets.power_percent) == "number"
+    and runtime_ctx.targets.power_percent or nil
+  if power_pct ~= nil then
+    power_pct = math.max(0, math.min(100, power_pct))
+    local hw_max = ctrl.hardware_max_flow or CONFIG.MAX_FLOW
+    ctrl.effective_max_flow = math.max(CONFIG.MIN_FLOW, math.floor(hw_max * (power_pct / 100)))
+  else
+    ctrl.effective_max_flow = ctrl.hardware_max_flow
   end
   local startup_observed_flow, startup_reader = read_turbine_flow(turbine, caps)
   if type(startup_observed_flow) == "number" then
