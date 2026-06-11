@@ -93,7 +93,7 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 9137, hash = "31ad3d94", required_for={"RT"} },
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 10399, hash = "50d81d1a", required_for={"RT"} },
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
-    { path = "nodes/rt/main.lua", size_bytes = 91697, hash = "ade1f6d1", required_for={"RT"} },
+    { path = "nodes/rt/main.lua", size_bytes = 92324, hash = "64dd1317", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 26972, hash = "f7b7c4c2", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 20646, hash = "ea107a45", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
@@ -128,7 +128,7 @@ return {
     fuel = {
     { path = "nodes/fuel/config.lua", size_bytes = 5586, hash = "48c5be2b", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 3722, hash = "40524d32", required_for={"FUEL"} },
-    { path = "nodes/fuel/main.lua", size_bytes = 18754, hash = "8ce20fb2", required_for={"FUEL"} },
+    { path = "nodes/fuel/main.lua", size_bytes = 19432, hash = "0a947a31", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     },
     reprocessing = {

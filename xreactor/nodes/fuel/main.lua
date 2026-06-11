@@ -151,12 +151,28 @@ local function get_router_ui()
       redstone_router = get_router()._state and get_router()._state.rs_router or nil,
       log             = function(level, msg) utils.log("FUEL", msg, level) end,
       get_reactors    = function()
-        -- Return known nodes from registry as reactor candidates
+        -- Primary source: reactors configured in config.logistics.reactors
+        -- (these are the actual peripheral names already set up by the user)
         local list = {}
-        if devices.registry_devices then
-          for _, dev in ipairs(devices.registry_devices or {}) do
-            if dev.type == "reactor" or (dev.id and tostring(dev.id):find("RT")) then
-              list[#list + 1] = { id = dev.id or dev.name, label = dev.id or dev.name }
+        local seen = {}
+        local lg = config.logistics or {}
+        for _, entry in ipairs(lg.reactors or {}) do
+          local label = entry.name or entry.label or entry.reactor_port or "?"
+          local id    = entry.label or entry.name or label
+          if not seen[id] then
+            seen[id] = true
+            list[#list + 1] = { id = id, label = label }
+          end
+        end
+        -- Fallback: scan wired-modem peripherals for ER2 reactor computer ports
+        if #list == 0 then
+          for _, name in ipairs(peripheral.getNames() or {}) do
+            local ptype = tostring(peripheral.getType(name) or ""):lower()
+            if ptype:find("reactor") or name:lower():find("reactor") then
+              if not seen[name] then
+                seen[name] = true
+                list[#list + 1] = { id = name, label = name }
+              end
             end
           end
         end

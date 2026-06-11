@@ -256,11 +256,13 @@ local function save_capacity_cache(learning)
   end
   local ok, f = pcall(fs.open, path, "w")
   if not ok or not f then return end
+  local turbine_count = #(config.turbines or {})
   f.writeLine("-- RT capacity cache - auto-generated, do not edit")
   f.writeLine("return {")
   f.writeLine(string.format("  locked = true,"))
   f.writeLine(string.format("  max_output = %s,", tostring(learning.max_output or 0)))
   f.writeLine(string.format("  stable_samples = %s,", tostring(learning.stable_samples or 0)))
+  f.writeLine(string.format("  turbine_count = %s,", tostring(turbine_count)))
   f.writeLine(string.format("  reason = %q,", tostring(learning.reason or "LOADED_FROM_CACHE")))
   f.writeLine("}")
   pcall(f.close)
@@ -270,12 +272,22 @@ local function load_capacity_cache()
   local path = CONFIG.CAPACITY_CACHE_PATH
   if not fs.exists(path) then return nil end
   local ok, data = pcall(dofile, path)
-  if ok and type(data) == "table" and data.locked == true
-      and type(data.max_output) == "number" and data.max_output > 0 then
-    data.reason = data.reason or "LOADED_FROM_CACHE"
-    return data
+  if not ok or type(data) ~= "table" or data.locked ~= true
+      or type(data.max_output) ~= "number" or data.max_output <= 0 then
+    return nil
   end
-  return nil
+  -- Invalidate if turbine count changed since the cache was written.
+  -- A different turbine count means a different max_output; re-learning is needed.
+  local current_count = #(config.turbines or {})
+  if type(data.turbine_count) == "number" and data.turbine_count ~= current_count then
+    log("WARN", string.format(
+      "Capacity cache invalidated: turbine_count changed %d→%d, re-learning required",
+      data.turbine_count, current_count))
+    pcall(fs.delete, path)
+    return nil
+  end
+  data.reason = data.reason or "LOADED_FROM_CACHE"
+  return data
 end
 -- ---- End capacity cache ----------------------------------------------------
 
