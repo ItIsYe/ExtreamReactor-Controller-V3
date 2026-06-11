@@ -44,6 +44,16 @@ local binding = require("nodes.rt.binding")
 local discovery_log = require("nodes.rt.discovery_log")
 local rails = require("core.control_rails")
 local ensure_turbine_ctrl = require("core.turbine_ctrl")
+-- Find the module entry for a turbine by its peripheral name.
+local function get_turbine_module(name)
+  for _, module in pairs(runtime_ctx.modules or {}) do
+    if module.type == "turbine" and module.name == name then
+      return module
+    end
+  end
+  return nil
+end
+
 local function get_turbine_ctrl(name)
   local ctrl = ensure_turbine_ctrl(name)
   if type(ctrl.rails) ~= "table" then
@@ -1312,33 +1322,11 @@ local function apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
   if type(rpm) == "number" then
     ctrl.rpm = rpm
   end
-  -- Read hardware max flow once and store in hardware_max_flow.
-  if type(ctrl.hardware_max_flow) ~= "number" then
-    if type(ctrl.effective_max_flow) == "number" then
-      ctrl.hardware_max_flow = ctrl.effective_max_flow
-    elseif caps and caps.getFluidFlowRateMaxMax and turbine.getFluidFlowRateMaxMax then
-      local max_ok, max_value = safe_wrapped_call(turbine, "getFluidFlowRateMaxMax")
-      if max_ok and type(max_value) == "number" and max_value > 0 then
-        ctrl.hardware_max_flow = math.min(CONFIG.MAX_FLOW, math.max(CONFIG.MIN_FLOW, math.floor(max_value + 0.5)))
-      end
+  if type(ctrl.effective_max_flow) ~= "number" and caps and caps.getFluidFlowRateMaxMax and turbine.getFluidFlowRateMaxMax then
+    local max_ok, max_value = safe_wrapped_call(turbine, "getFluidFlowRateMaxMax")
+    if max_ok and type(max_value) == "number" and max_value > 0 then
+      ctrl.effective_max_flow = math.min(CONFIG.MAX_FLOW, math.max(CONFIG.MIN_FLOW, math.floor(max_value + 0.5)))
     end
-  end
-  -- Apply power target percentage as flow cap.
-  -- targets.power_percent (0-100) from MASTER SET_SETPOINTS scales the flow:
-  --   100% → hardware max flow (full turbine output at target RPM)
-  --     0% → CONFIG.MIN_FLOW (turbine idles at minimum steam intake)
-  -- This is the mechanism that translates MASTER's load assignment into
-  -- actual hardware output: the turbines' RPM and power output will be
-  -- proportional to this cap.
-  local power_pct = type(runtime_ctx.targets) == "table"
-    and type(runtime_ctx.targets.power_percent) == "number"
-    and runtime_ctx.targets.power_percent or nil
-  if power_pct ~= nil then
-    power_pct = math.max(0, math.min(100, power_pct))
-    local hw_max = ctrl.hardware_max_flow or CONFIG.MAX_FLOW
-    ctrl.effective_max_flow = math.max(CONFIG.MIN_FLOW, math.floor(hw_max * (power_pct / 100)))
-  else
-    ctrl.effective_max_flow = ctrl.hardware_max_flow
   end
   local startup_observed_flow, startup_reader = read_turbine_flow(turbine, caps)
   if type(startup_observed_flow) == "number" then
@@ -1503,6 +1491,30 @@ local function updateControl()
     if not ok_inductor then
       warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
+    end
+    -- Check module state before applying flow regulation.
+    -- Turbines in OFF state should not be regulated to 900 RPM;
+    -- instead set flow to minimum so they wind down naturally.
+    -- Coil disengages automatically when RPM drops below the disengage threshold.
+    -- Turbines in STARTING state are handled by module_lifecycle, skip main loop.
+    local module_for_turbine = get_turbine_module(name)
+    local module_st = module_for_turbine and module_for_turbine.state or nil
+    local can_regulate, regulate_skip_reason = turbine_regulator.should_regulate_module_state(module_st)
+    if not can_regulate then
+      track_skip(regulate_skip_reason)
+      if module_st == "OFF" then
+        -- Actively set flow to minimum so turbine decelerates and coil disengages.
+        local ctrl_off = get_turbine_ctrl(name)
+        local min_f = CONFIG.MIN_FLOW or 0
+        if (ctrl_off.requested_flow or 0) ~= min_f then
+          local ok_w, _ = pcall(setTurbineFlow, turbine, caps, min_f)
+          if ok_w then
+            ctrl_off.requested_flow = min_f
+            ctrl_off.flow           = min_f
+          end
+        end
+      end
+      goto continue_control_turbine
     end
     local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     if not set_ok then
