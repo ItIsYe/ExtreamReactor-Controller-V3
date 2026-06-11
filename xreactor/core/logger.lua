@@ -202,11 +202,11 @@ local function disk_write_test(path)
   local ok, err = pcall(function()
     local dir_ok, dir_reason = ensure_dir(path)
     if not dir_ok then
-      error("probe-dir-failed:" .. tostring(dir_reason))
+      return false, "probe-dir-failed:" .. tostring(dir_reason)
     end
     local file = fs.open(probe, "w")
     if not file then
-      error("probe-open-failed")
+      return false, "probe-open-failed"
     end
     file.write("probe")
     file.close()
@@ -506,7 +506,11 @@ local function flush_buffer_to_dir(target_dir)
       elseif not retry_result then
         failure = failure .. "|retry-returned-nil"
       end
-      error("log-op=open path=" .. tostring(path) .. " reason=" .. failure .. " free_now=" .. tostring(free_now) .. " pending=" .. tostring(pending_bytes) .. " cleanup={" .. summarize_cleanup(cleanup, target_dir) .. "}")
+      -- File open failed: degrade to memory-only mode, DO NOT crash.
+      state.disk_error = "open:" .. failure
+      state.disk_error_free = free_now
+      state.disk_writes_suppressed = (state.disk_writes_suppressed or 0) + #state.buffer
+      return
     end
   end
   for index, line in ipairs(state.buffer) do

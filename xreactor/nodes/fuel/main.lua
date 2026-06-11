@@ -389,7 +389,13 @@ local function render_monitor()
           support_ui_pages.render_alert_banner(target, ui, model)
           local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
           support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
-          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 5 })
+          -- Log mode buttons on bottom line
+          support_ui_pages.render_log_mode_button(target, utils, x or 1, h - 1, w - 2)
+        end,
+        handle_touch = function(x, y)
+          local w2, h2 = ui.getSize(mon)
+          return support_ui_pages.handle_log_mode_touch(x, y, (h2 or 20) - 1, utils, 1)
         end },
         { name = "Router", render = function(target)
           get_router_ui():render(target, ui, colors)

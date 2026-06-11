@@ -69,6 +69,44 @@ function M.build_common_model(args)
   }
 end
 
+function M.render_log_mode_button(target, utils_ref, x, y, w)
+  -- Renders mode buttons: Log: [All][Disk][Rmt][Term]
+  -- Active mode highlighted green. Call handle_log_mode_touch() for touch input.
+  if not utils_ref then return end
+  local mode   = utils_ref.get_log_mode and utils_ref.get_log_mode() or "all"
+  local modes  = { "all", "disk", "remote", "terminal" }
+  local labels = { all = "All ", disk = "Disk", remote = "Rmt ", terminal = "Term" }
+  local btn_w  = 4
+  local cx     = (x or 2)
+  target.setBackgroundColor(colors.black)
+  target.setTextColor(colors.gray)
+  target.setCursorPos(cx, y or 2)
+  target.write("Log:")
+  cx = cx + 4
+  for _, m in ipairs(modes) do
+    target.setCursorPos(cx, y or 2)
+    target.setBackgroundColor(mode == m and colors.green or colors.gray)
+    target.setTextColor(mode == m and colors.black or colors.white)
+    target.write(labels[m] or m)
+    target.setBackgroundColor(colors.black)
+    cx = cx + btn_w
+  end
+end
+
+function M.handle_log_mode_touch(tx, ty, btn_y, utils_ref, x)
+  if not utils_ref or ty ~= (btn_y or 0) then return false end
+  local modes = { "all", "disk", "remote", "terminal" }
+  local cx    = (x or 2) + 4
+  for _, m in ipairs(modes) do
+    if tx >= cx and tx < cx + 4 then
+      if utils_ref.set_log_mode then utils_ref.set_log_mode(m) end
+      return true
+    end
+    cx = cx + 4
+  end
+  return false
+end
+
 function M.common_diagnostic_rows(model, discovery_failed)
   return {
     { text = ("Health: %s"):format(model.status), status = model.status },

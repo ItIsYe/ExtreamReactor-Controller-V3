@@ -16,6 +16,39 @@ local utils = {}
 
 local logger = require("core.logger")
 
+-- Log mode: controls where log output goes.
+-- "all"      (default) disk + remote LOG_COLLECTOR
+-- "disk"     disk only, no remote
+-- "remote"   remote LOG_COLLECTOR only, no disk writes
+-- "terminal" print to terminal only (no disk, no remote)
+local current_log_mode = "all"
+
+function utils.set_log_mode(mode)
+  local valid = { all = true, disk = true, remote = true, terminal = true }
+  if not valid[mode] then return false end
+  current_log_mode = mode
+  if settings and type(settings.set) == "function" then
+    pcall(settings.set, "xreactor.log_mode", mode)
+    pcall(settings.save)
+  end
+  return true
+end
+
+function utils.get_log_mode()
+  return current_log_mode
+end
+
+local function load_log_mode()
+  if settings and type(settings.get) == "function" then
+    local stored = settings.get("xreactor.log_mode")
+    if stored and type(stored) == "string" then
+      local valid = { all = true, disk = true, remote = true, terminal = true }
+      if valid[stored] then current_log_mode = stored end
+    end
+  end
+end
+load_log_mode()
+
 local remote_log_state = {
   initialized = false,
   enabled = true,
@@ -410,9 +443,18 @@ end
 
 function utils.log(prefix, message, level)
   local resolved_prefix = prefix or CONFIG.LOGGER_DEFAULT_PREFIX
-  send_remote_log(resolved_prefix, level or "INFO", message)
-  local ok = pcall(logger.log, resolved_prefix, message, level)
-  if not ok then pcall(print, "WARN: logging suppressed due to non-fatal logger failure") end
+  local mode = current_log_mode or "all"
+  if mode == "terminal" then
+    pcall(print, string.format("[%s] %s", resolved_prefix, tostring(message)))
+    return
+  end
+  if mode == "all" or mode == "remote" then
+    send_remote_log(resolved_prefix, level or "INFO", message)
+  end
+  if mode == "all" or mode == "disk" then
+    local ok = pcall(logger.log, resolved_prefix, message, level)
+    if not ok then pcall(print, "WARN: logging suppressed due to non-fatal logger failure") end
+  end
 end
 
 function utils.handle_remote_log_message(message)

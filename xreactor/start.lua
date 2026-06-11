@@ -203,6 +203,20 @@ safe_log(
   )
 )
 
+-- Give LOG_COLLECTOR node time to start first so log messages
+-- from this node's startup aren't missed.
+-- LOG_COLLECTOR and MASTER skip the delay.
+local LOG_COLLECTOR_STARTUP_DELAY_S = 5
+if role ~= "LOG" and role ~= "LOG_COLLECTOR" and role ~= "MASTER" then
+  safe_print(string.format(
+    "Waiting %ds for LOG_COLLECTOR to start... (role=%s)",
+    LOG_COLLECTOR_STARTUP_DELAY_S, role))
+  for i = LOG_COLLECTOR_STARTUP_DELAY_S, 1, -1 do
+    safe_print(string.format("  Starting in %d...", i))
+    os.sleep(1)
+  end
+end
+
 local ok = shell.run(entry)
 if not ok then
   safe_log("STARTUP", "ERROR: Failed to start role: " .. tostring(role))
