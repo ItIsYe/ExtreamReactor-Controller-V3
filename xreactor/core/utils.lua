@@ -21,10 +21,11 @@ local logger = require("core.logger")
 -- "disk"     disk only, no remote
 -- "remote"   remote LOG_COLLECTOR only, no disk writes
 -- "terminal" print to terminal only (no disk, no remote)
+-- "none"     no logging at all (silent)
 local current_log_mode = "all"
 
 function utils.set_log_mode(mode)
-  local valid = { all = true, disk = true, remote = true, terminal = true }
+  local valid = { all = true, disk = true, remote = true, terminal = true, none = true }
   if not valid[mode] then return false end
   current_log_mode = mode
   if settings and type(settings.set) == "function" then
@@ -444,6 +445,7 @@ end
 function utils.log(prefix, message, level)
   local resolved_prefix = prefix or CONFIG.LOGGER_DEFAULT_PREFIX
   local mode = current_log_mode or "all"
+  if mode == "none" then return end
   if mode == "terminal" then
     pcall(print, string.format("[%s] %s", resolved_prefix, tostring(message)))
     return

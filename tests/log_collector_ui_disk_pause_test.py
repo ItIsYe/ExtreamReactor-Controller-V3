@@ -15,8 +15,12 @@ def test_log_collector_shows_last_write_disk_identity():
 
 def test_log_collector_rotates_next_disk_after_successful_write():
     text = LOG_COLLECTOR.read_text(encoding="utf-8")
+    # advance_disk_after_write still exists (called on disk-full switch)
     assert "advance_disk_after_write" in text
-    assert "if ok then\n      advance_disk_after_write()" in text
+    # New behavior: stay on current disk until full, only switch on error.
+    # write_log no longer calls advance_disk_after_write() after a success.
+    assert "if ok then" in text
+    assert "switch_next_disk()" in text
     assert "Next    Disk #" in text
     assert "Switch %-5s" in text
 

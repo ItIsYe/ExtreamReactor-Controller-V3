@@ -14,7 +14,7 @@ local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local FALLBACK_ROOT = "/xreactor_collected_logs"
 local MAX_LOG_BYTES = 8192
 local ROTATE_KEEP = 3
-local MIN_FREE_BYTES = 1024
+local MIN_FREE_BYTES = 8192  -- minimum free bytes before switching disk
 local DEDUPE_LIMIT = 512
 local MODEM_REFRESH_SECONDS = 10
 local SELF_ROLE = "LOG_COLLECTOR"
@@ -357,6 +357,27 @@ local function try_write_to_disk(disk_entry, payload)
   return true
 end
 
+-- Wipe ALL log files in a root directory to reclaim space (fresh start).
+local function wipe_logs(root)
+  local wiped = 0
+  local function wipe_dir(dir)
+    if not fs.exists(dir) or not fs.isDir(dir) then return end
+    local ok, entries = pcall(fs.list, dir)
+    if not ok or type(entries) ~= "table" then return end
+    for _, name in ipairs(entries) do
+      local path = fs.combine(dir, name)
+      if fs.isDir(path) then
+        wipe_dir(path)
+      else
+        safe_delete(path)
+        wiped = wiped + 1
+      end
+    end
+  end
+  wipe_dir(root)
+  return wiped
+end
+
 local function write_log(payload)
   if stats.paused then
     stats.paused_dropped = stats.paused_dropped + 1
@@ -365,15 +386,26 @@ local function write_log(payload)
   refresh_disks_if_needed(false)
   local count = math.max(1, #stats.disks)
   local last_err = nil
-  for _ = 1, count do
+  for attempt = 1, count do
     local disk_entry = current_disk()
     local ok, err = try_write_to_disk(disk_entry, payload)
     if ok then
-      advance_disk_after_write()
+      -- Stay on this disk; only switch when it's full.
       return true
     end
     last_err = err
+    -- Current disk is full. Move to next disk.
+    local prev_index = stats.disk_index
     switch_next_disk()
+    -- If we wrapped around (back to first disk), wipe it to start fresh.
+    if attempt == count and stats.disk_index == 1 then
+      local disk_entry_wipe = current_disk()
+      if disk_entry_wipe then
+        local wiped = wipe_logs(disk_entry_wipe.root)
+        stats.disk_switches = stats.disk_switches + 1
+        stats.last_error = string.format("all disks full, wiped disk[1] (%d files)", wiped)
+      end
+    end
   end
   return false, tostring(last_err or "all disks full")
 end
