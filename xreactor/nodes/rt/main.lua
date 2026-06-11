@@ -1492,29 +1492,31 @@ local function updateControl()
       warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
-    -- Check module state before applying flow regulation.
-    -- Turbines in OFF state should not be regulated to 900 RPM;
-    -- instead set flow to minimum so they wind down naturally.
-    -- Coil disengages automatically when RPM drops below the disengage threshold.
-    -- Turbines in STARTING state are handled by module_lifecycle, skip main loop.
-    local module_for_turbine = get_turbine_module(name)
-    local module_st = module_for_turbine and module_for_turbine.state or nil
-    local can_regulate, regulate_skip_reason = turbine_regulator.should_regulate_module_state(module_st)
-    if not can_regulate then
-      track_skip(regulate_skip_reason)
-      if module_st == "OFF" then
-        -- Actively set flow to minimum so turbine decelerates and coil disengages.
-        local ctrl_off = get_turbine_ctrl(name)
-        local min_f = CONFIG.MIN_FLOW or 0
-        if (ctrl_off.requested_flow or 0) ~= min_f then
-          local ok_w, _ = pcall(setTurbineFlow, turbine, caps, min_f)
-          if ok_w then
-            ctrl_off.requested_flow = min_f
-            ctrl_off.flow           = min_f
+    -- Module state check: only in MASTER mode where MASTER explicitly manages
+    -- which turbine modules are ON or OFF via STARTUP_STAGE commands.
+    -- In AUTONOM mode all modules start at OFF (no MASTER has sent commands),
+    -- so we skip the check there — all turbines run freely to 900 RPM for
+    -- capacity learning and local operation.
+    if current_state == STATE.MASTER then
+      local module_for_turbine = get_turbine_module(name)
+      local module_st = module_for_turbine and module_for_turbine.state or nil
+      local can_regulate, regulate_skip_reason = turbine_regulator.should_regulate_module_state(module_st)
+      if not can_regulate then
+        track_skip(regulate_skip_reason)
+        if module_st == "OFF" then
+          -- Actively set flow to minimum so turbine decelerates and coil disengages.
+          local ctrl_off = get_turbine_ctrl(name)
+          local min_f = CONFIG.MIN_FLOW or 0
+          if (ctrl_off.requested_flow or 0) ~= min_f then
+            local ok_w, _ = pcall(setTurbineFlow, turbine, caps, min_f)
+            if ok_w then
+              ctrl_off.requested_flow = min_f
+              ctrl_off.flow           = min_f
+            end
           end
         end
+        goto continue_control_turbine
       end
-      goto continue_control_turbine
     end
     local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     if not set_ok then
@@ -1693,7 +1695,11 @@ local function add_alarm(sender, severity, message)
 end
 
 local function build_status_payload(status_level)
-  return status_snapshot_lib.build_status_payload({
+  -- Pass runtime_ctx.capacity_learning into the ctx so update_capacity_learning
+  -- reads and updates the PERSISTENT learning state, not an ephemeral copy.
+  -- The result is written back to runtime_ctx.capacity_learning so the
+  -- capacity_locked check in the AUTONOM/MASTER control loop sees live data.
+  local ctx_table = {
     status_level = status_level,
     node_state_machine = node_state_machine,
     current_state = current_state,
@@ -1707,8 +1713,14 @@ local function build_status_payload(status_level)
     startup_queue = runtime_ctx.startup_queue,
     turbine_adapter = adapters.turbine,
     reactor_adapter = adapters.reactor,
-    log_prefix = CONFIG.LOG_PREFIX
-  })
+    log_prefix = CONFIG.LOG_PREFIX,
+    capacity_learning = runtime_ctx.capacity_learning,  -- persistent state in
+    log = log,
+  }
+  local payload = status_snapshot_lib.build_status_payload(ctx_table)
+  -- Write back: update_capacity_learning may have mutated ctx_table.capacity_learning
+  runtime_ctx.capacity_learning = ctx_table.capacity_learning
+  return payload
 end
 
 local function broadcast_status(status_level)
@@ -1989,6 +2001,10 @@ local function build_state_context()
 end
 
 local function build_command_context()
+  -- NOTE: capacity_learning must be a live getter, not a static snapshot.
+  -- runtime_ctx.capacity_learning starts as nil and gets set by build_status_payload.
+  -- command_handler.new() captures this ctx once at startup; using a getter
+  -- ensures the command handler always sees the current learning state.
   return {
     protocol = protocol,
     constants = constants,
@@ -2005,7 +2021,9 @@ local function build_command_context()
     get_current_state = function() return current_state end,
     get_states = function() return states or {} end,
     set_last_command = function(value) runtime_ctx.last_command = value end,
-    set_last_command_ts = function(value) runtime_ctx.last_command_ts = value end
+    set_last_command_ts = function(value) runtime_ctx.last_command_ts = value end,
+    -- Live getter: capacity_learning is populated after the first status tick.
+    get_capacity_learning = function() return runtime_ctx.capacity_learning end,
   }
 end
 local handle_command

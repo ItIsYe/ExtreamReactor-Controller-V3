@@ -17,13 +17,21 @@ local function number_or_nil(value)
   return nil
 end
 
+local function get_learning(ctx)
+  -- Support both direct field (status_snapshot ctx) and getter (command ctx).
+  if ctx.get_capacity_learning then
+    return ctx.get_capacity_learning()
+  end
+  return ctx.capacity_learning
+end
+
 local function capacity_learning_locked(ctx)
-  local learning = ctx and ctx.capacity_learning
+  local learning = get_learning(ctx)
   return type(learning) == "table" and learning.locked == true and number_or_nil(learning.max_output) and number_or_nil(learning.max_output) > 0
 end
 
 local function current_capacity(ctx)
-  local learning = ctx.capacity_learning
+  local learning = get_learning(ctx)
   if type(learning) == "table" and learning.locked == true then
     local max_output = number_or_nil(learning.max_output)
     if max_output and max_output > 0 then return max_output, "learned" end
