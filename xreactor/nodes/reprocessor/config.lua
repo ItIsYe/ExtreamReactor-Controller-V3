@@ -86,6 +86,16 @@ local CONFIG = {
     --   fill_amount  = 16,
     --   min_in_me    = 32 },
     reprocessors       = {},
+    --
+    -- redstone_tree: pipe valve topology for targeted waste routing.
+    -- Mekanism pipes must be set to "High Redstone = Interrupt".
+    -- { side="right", label="Arm A", children={
+    --     { side="top",    label="Reprocessor A", reactor="REPROC-1" },
+    --     { side="bottom", label="Reprocessor B", reactor="REPROC-2" },
+    --   }
+    -- }
+    redstone_tree    = {},
+    valve_open_ms    = 2000,
   },
   rails     = CONFIG.DEFAULT_RAILS,
   logistics = CONFIG.DEFAULT_LOGISTICS
