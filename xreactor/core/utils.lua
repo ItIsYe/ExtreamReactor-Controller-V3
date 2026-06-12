@@ -7,7 +7,10 @@ local CONFIG = {
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
   REMOTE_LOG_CHANNEL = 6502,
   REMOTE_LOG_PENDING_LIMIT = 64,
-  REMOTE_LOG_RETRY_EVERY = 4,
+  REMOTE_LOG_RETRY_EVERY = 8,  -- was 4: too aggressive, caused ~42% duplicate
+                               -- rate observed in LOG_COLLECTOR stats (ACK
+                               -- round-trip over wireless often exceeds 4s
+                               -- on busy channels)
   REMOTE_LOG_MAX_SENDS = 6,
   REMOTE_LOG_MODEM_REFRESH_SECONDS = 10
 }

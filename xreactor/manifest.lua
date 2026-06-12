@@ -34,7 +34,7 @@ return {
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
   { path = "core/ui.lua", size_bytes = 11243, hash = "c7d90a12" },
   { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
-  { path = "core/utils.lua", size_bytes = 20632, hash = "f27c522c" },
+  { path = "core/utils.lua", size_bytes = 20885, hash = "7520805e" },
   { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
   { path = "services/alert_service.lua", size_bytes = 11418, hash = "d04e6700" },
   { path = "services/comms_service.lua", size_bytes = 8562, hash = "4b2957a5" },
