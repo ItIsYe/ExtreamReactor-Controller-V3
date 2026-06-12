@@ -1,7 +1,7 @@
--- xreactor/manifest.lua -- manifest-v30
+-- xreactor/manifest.lua -- manifest-v31
 return {
-  manifest_version = 30,
-  manifest_id = "manifest-v30",
+  manifest_version = 31,
+  manifest_id = "manifest-v31",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -12,7 +12,7 @@ return {
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true },
   { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always=true },
   { path = "installer_storage.lua", size_bytes = 8859, hash = "89a9376e", always=true },
-  { path = "release.lua", size_bytes = 345, hash = "d1a32ffd", always=true },
+  { path = "release.lua", size_bytes = 345, hash = "0163956b", always=true },
   { path = "start.lua", size_bytes = 6846, hash = "4c052210", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 1483, hash = "d2ed3e1d", always=true },
