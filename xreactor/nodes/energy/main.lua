@@ -445,7 +445,8 @@ local function init()
     ui = ui,
     colors = colors,
     ui_router = ui_router,
-    ui_state = ui_state
+    ui_state = ui_state,
+    utils = utils
   })
   ui_model_builder = ui_model_runtime.new({
     now_ms = now_ms,
@@ -579,7 +580,12 @@ local function main_loop()
       if event[1] == "modem_message" then
         comms:handle_event(event)
         run_heartbeat_pump(now_ms())
-      elseif event[1] == "monitor_touch" or event[1] == "key" then
+      elseif event[1] == "monitor_touch" or event[1] == "mouse_click" then
+        if devices.monitor and ui_state.router and ui_state.router.current
+            and ui_state.router:current() and ui_state.router:current().name == "Diagnostics" then
+          ui_pages.handle_diagnostics_touch(devices.monitor, event[3], event[4])
+        end
+      elseif event[1] == "key" then
         services:tick(nil, event)
       elseif event[1] == "timer" and event[2] == heartbeat_timer then
         run_heartbeat_pump(now_ms())

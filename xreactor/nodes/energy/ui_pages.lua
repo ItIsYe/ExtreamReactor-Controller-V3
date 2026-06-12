@@ -1,4 +1,5 @@
 local M = {}
+local support_ui_pages = require("nodes.support.ui_pages")
 
 local function format_energy(value)
   if value == nil then return "n/a" end
@@ -24,6 +25,7 @@ function M.new(opts)
   local colors = assert(opts.colors, "colors required")
   local ui_router = assert(opts.ui_router, "ui_router required")
   local ui_state = assert(opts.ui_state, "ui_state required")
+  local utils = opts.utils  -- optional: needed for log mode buttons
 
   local function render_header(mon, title, status, model)
     local w, h = ui.getSize(mon)
@@ -114,8 +116,21 @@ function M.new(opts)
       { text = ("Last error: %s (%s)"):format(model.last_error or "none", format_age(model.last_error_ts, now)) },
       { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", format_age(model.last_command_ts, now)) }
     }
-    ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 5) })
+    ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 6) })
+    if utils then
+      support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2)
+    end
   end
+
+  -- Touch handler for the Diagnostics page (log mode buttons).
+  -- Called from main.lua's monitor_touch/mouse_click event handler.
+  local function handle_diagnostics_touch(mon, x, y)
+    if not utils then return false end
+    local _, h = ui.getSize(mon)
+    if not h then return false end
+    return support_ui_pages.handle_log_mode_touch(x, y, h - 1, utils, 1)
+  end
+  M.handle_diagnostics_touch = handle_diagnostics_touch
 
   return {
     render_overview = render_overview,

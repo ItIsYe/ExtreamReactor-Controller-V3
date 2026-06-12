@@ -5,6 +5,9 @@ if type(package) == "table" and type(package.path) == "string" then
   end
 end
 
+local ok_utils, utils = pcall(require, "core.utils")
+if not ok_utils or type(utils) ~= "table" then utils = nil end
+
 local ok_constants, constants = pcall(require, "shared.constants")
 if not ok_constants or type(constants) ~= "table" then
   constants = { channels = { LOG = 6502 } }
@@ -48,6 +51,7 @@ local stats = {
   display_name = "term",
   paused = false,
   pause_button = nil,
+  log_mode_buttons = {},
   seen = {},
   seen_order = {}
 }
@@ -129,6 +133,29 @@ local function progress(x, y, width, pct, status)
   for i = 1, width do
     set_bg(i <= fill and fg or bg)
     term.write(" ")
+  end
+  set_bg(c("black")); set_fg(c("white"))
+end
+
+local function draw_log_mode_buttons(x, y)
+  -- LOG_COLLECTOR's own logging is independent of the log_collector channel
+  -- it receives (this controls THIS node's local utils.log() output).
+  if not utils then return end
+  local mode = utils.get_log_mode and utils.get_log_mode() or "all"
+  local modes  = { "all", "disk", "remote", "terminal", "none" }
+  local labels = { all = "All ", disk = "Disk", remote = "Rmt ", terminal = "Term", none = "Off " }
+  term.setCursorPos(x, y)
+  set_bg(c("black")); set_fg(c("gray"))
+  term.write("Log:")
+  local cx = x + 4
+  stats.log_mode_buttons = {}
+  for _, m in ipairs(modes) do
+    term.setCursorPos(cx, y)
+    set_bg(mode == m and c("lime") or c("gray"))
+    set_fg(mode == m and c("black") or c("white"))
+    term.write(labels[m] or m)
+    stats.log_mode_buttons[#stats.log_mode_buttons + 1] = { x = cx, y = y, w = 4, h = 1, mode = m }
+    cx = cx + 4
   end
   set_bg(c("black")); set_fg(c("white"))
 end
@@ -662,6 +689,7 @@ draw = function()
   x = x + badge(x, 2, tostring(stats.modem or "NO-MODEM"), stats.modem ~= "" and "OK" or "ERR")
   line(2, 3, fit("Display " .. tostring(stats.display_name or "term"), w - 2), c("lightGray"))
   draw_pause_button(2, 4)
+  draw_log_mode_buttons(2, 5)
   line(2, 6, "Disk Ring (* = last write target)", c("cyan"))
   draw_disk_bar(7)
   line(2, 8, string.format("Next    Disk #%s/%s  %s", tostring(stats.disk_index), tostring(#stats.disks), tostring(disk_entry.mount or "n/a")), c("lightGray"))
@@ -746,9 +774,19 @@ local function run()
     elseif event[1] == "monitor_touch" then
       local x_pos, y_pos = event[3], event[4]
       if button_hit(stats.pause_button, x_pos, y_pos) then toggle_pause() end
+      for _, b in ipairs(stats.log_mode_buttons or {}) do
+        if button_hit(b, x_pos, y_pos) and utils and utils.set_log_mode then
+          utils.set_log_mode(b.mode); draw()
+        end
+      end
     elseif event[1] == "mouse_click" then
       local x_pos, y_pos = event[3], event[4]
       if button_hit(stats.pause_button, x_pos, y_pos) then toggle_pause() end
+      for _, b in ipairs(stats.log_mode_buttons or {}) do
+        if button_hit(b, x_pos, y_pos) and utils and utils.set_log_mode then
+          utils.set_log_mode(b.mode); draw()
+        end
+      end
     elseif event[1] == "key" then
       local key_code = event[2]
       if keys and (key_code == keys.p or key_code == keys.space) then toggle_pause() end

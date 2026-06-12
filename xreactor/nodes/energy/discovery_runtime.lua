@@ -317,6 +317,13 @@ function M.new(opts)
 
     runtime.devices.monitor = monitor
     runtime.devices.monitor_name = monitor_name
+    -- Fallback: render to the computer's own terminal if no Monitor peripheral
+    -- is attached, so Diagnostics (incl. log mode buttons) is visible on the PC.
+    if not runtime.devices.monitor and term and type(term.current) == "function" then
+      runtime.devices.monitor = term.current()
+      runtime.devices.monitor_name = runtime.devices.monitor_name or "term"
+      runtime.devices.monitor_is_term = true
+    end
     runtime.devices.storages = storages
     runtime.devices.matrices = matrices
     runtime.devices.matrix_groups = matrix_groups

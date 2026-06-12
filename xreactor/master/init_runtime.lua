@@ -29,7 +29,7 @@ function M.run(ctx)
       rt = { label = "RT", render = ctx.rt_ui.render, interval = 1.0 },
       resources = { label = "Resources", render = ctx.resources_ui.render, interval = 2.0 },
       alerts = { label = "Alerts", render = ctx.alerts_ui.render, hit_test = ctx.alerts_ui.hit_test, interval = 0.5 },
-      alarms = { label = "Logs", render = ctx.alarms_ui.render, interval = 1.0 },
+      alarms = { label = "Logs", render = ctx.alarms_ui.render, hit_test = ctx.alarms_ui.handle_input, interval = 1.0 },
     },
     view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms" },
     on_action = function(action)

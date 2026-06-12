@@ -133,6 +133,13 @@ local function discover()
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
+  -- Fallback: render to the computer's own terminal if no Monitor peripheral
+  -- is attached, so Diagnostics (incl. log mode buttons) is visible on the PC.
+  if not devices.monitor and term and type(term.current) == "function" then
+    devices.monitor = term.current()
+    devices.monitor_name = devices.monitor_name or "term"
+    devices.monitor_is_term = true
+  end
 
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
   local tank_devices = support_discovery.collect_devices_by_methods(names, {
@@ -347,7 +354,12 @@ local function render_monitor()
           support_ui_pages.render_alert_banner(target, ui, model)
           local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
           support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
-          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 5 })
+          support_ui_pages.render_log_mode_button(target, utils, 1, h - 1, w - 2)
+        end,
+        handle_touch = function(x, y)
+          local w2, h2 = ui.getSize(mon)
+          return support_ui_pages.handle_log_mode_touch(x, y, (h2 or 20) - 1, utils, 1)
         end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
@@ -355,6 +367,13 @@ local function render_monitor()
     })
   end
   monitor_router:render(mon, model)
+end
+
+local function handle_monitor_touch(x, y)
+  local page = monitor_router and monitor_router:current()
+  if page and type(page.handle_touch) == "function" then
+    return page.handle_touch(x, y)
+  end
 end
 
 local function master_peer_state()
@@ -449,4 +468,13 @@ local function init()
 end
 
 init()
+services:add({
+  name = "router_touch",
+  tick = function(dt, event)
+    if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then
+      handle_monitor_touch(event[3], event[4])
+    end
+  end
+})
+
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, balance_loop)

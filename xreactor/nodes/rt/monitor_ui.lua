@@ -1,6 +1,9 @@
 local ui = require("core.ui")
 local ui_router = require("core.ui_router")
 local colors = require("shared.colors")
+local support_ui_pages = require("nodes.support.ui_pages")
+local ok_utils, utils = pcall(require, "core.utils")
+if not ok_utils or type(utils) ~= "table" then utils = nil end
 
 local M = {
   monitor_router = nil,
@@ -266,6 +269,9 @@ local function render_diagnostics(mon, model)
     end
     if #alerts > shown and y <= h then write_line(mon, y, "... +" .. tostring(#alerts - shown) .. " alerts", "muted") end
   end
+  if utils then
+    support_ui_pages.render_log_mode_button(mon, utils, 1, h, w - 2)
+  end
 end
 
 function M.collect_reactor_temp_stats(devices, reactor_adapter, log_prefix)
@@ -359,12 +365,23 @@ function M.update(monitor, ctx)
   if not M.monitor_router then
     M.monitor_router = ui_router.new({ pages = { { name = "Overview", render = render_overview }, { name = "Turbines", render = render_turbines }, { name = "Reactors", render = render_reactors }, { name = "Diagnostics", render = render_diagnostics } }, key_prev = { [keys.left] = true, [keys.pageUp] = true }, key_next = { [keys.right] = true, [keys.pageDown] = true } })
   end
+  M.last_monitor = monitor
   M.monitor_router:render(monitor, model)
   return snapshot
 end
 
 function M.handle_input(event)
   if M.monitor_router then M.monitor_router:handle_input(event) end
+  -- Log mode buttons on Diagnostics page (bottom row of monitor)
+  if utils and event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then
+    local page = M.monitor_router and M.monitor_router:current()
+    if page and page.name == "Diagnostics" and M.last_monitor then
+      local _, h = ui.getSize(M.last_monitor)
+      if h then
+        support_ui_pages.handle_log_mode_touch(event[3], event[4], h, utils, 1)
+      end
+    end
+  end
 end
 
 return M

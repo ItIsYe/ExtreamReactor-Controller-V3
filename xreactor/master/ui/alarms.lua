@@ -1,6 +1,7 @@
 local ui = require("core.ui")
 local colorset = require("shared.colors")
 local utils = require("core.utils")
+local support_ui_pages = require("nodes.support.ui_pages")
 local cache = {}
 
 local severity_rank = {
@@ -42,8 +43,20 @@ local function render(mon, model)
     local clr = colorset.get(alarm.severity) or colorset.get("WARNING")
     ui.text(mon, 2, 3 + row, string.format("%s %s", alarm.timestamp or "--:--", alarm.message or ""), clr, colorset.get("background"))
     row = row + 1
-    if 3 + row >= h then break end
+    if 3 + row >= h - 1 then break end
   end
+  support_ui_pages.render_log_mode_button(mon, utils, 1, h, w - 2)
 end
 
-return { render = render }
+-- hit_test(mon, x, y): called by ui_router/multiview on monitor_touch/mouse_click.
+local function hit_test(mon, x, y)
+  local _, h = ui.getSize(mon)
+  if not h then return false end
+  if support_ui_pages.handle_log_mode_touch(x, y, h, utils, 1) then
+    cache[mon] = nil  -- force redraw
+    return true
+  end
+  return false
+end
+
+return { render = render, hit_test = hit_test }
