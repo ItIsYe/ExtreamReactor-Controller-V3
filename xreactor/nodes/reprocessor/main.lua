@@ -149,6 +149,14 @@ local function discover()
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
+  -- Fallback: if no external monitor peripheral is attached, render to the
+  -- computer's own terminal so Diagnostics/Router pages (including the
+  -- log mode buttons) are visible on the PC console.
+  if not devices.monitor and term and type(term.current) == "function" then
+    devices.monitor = term.current()
+    devices.monitor_name = devices.monitor_name or "term"
+    devices.monitor_is_term = true
+  end
 
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
 
@@ -337,7 +345,7 @@ local function render_monitor()
           support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
           ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 5 })
           -- Log mode buttons on bottom line
-          support_ui_pages.render_log_mode_button(target, utils, x or 1, h - 1, w - 2)
+          support_ui_pages.render_log_mode_button(target, utils, 1, h - 1, w - 2)
         end,
         handle_touch = function(x, y)
           local w2, h2 = ui.getSize(mon)
@@ -525,7 +533,9 @@ init()
 services:add({
   name = "router_touch",
   tick = function(dt, event)
-    if event and event[1] == "monitor_touch" then
+    -- monitor_touch: external Monitor peripheral touch
+    -- mouse_click: Advanced Computer's own terminal (when monitor falls back to term)
+    if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then
       handle_monitor_touch(event[3], event[4])
     end
   end
