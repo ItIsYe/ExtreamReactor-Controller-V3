@@ -581,10 +581,13 @@ local function main_loop()
         comms:handle_event(event)
         run_heartbeat_pump(now_ms())
       elseif event[1] == "monitor_touch" or event[1] == "mouse_click" then
+        -- Log mode buttons on the Diagnostics page
         if devices.monitor and ui_state.router and ui_state.router.current
             and ui_state.router:current() and ui_state.router:current().name == "Diagnostics" then
           ui_pages.handle_diagnostics_touch(devices.monitor, event[3], event[4])
         end
+        -- Still forward to services (ui_service handles page navigation)
+        services:tick(nil, event)
       elseif event[1] == "key" then
         services:tick(nil, event)
       elseif event[1] == "timer" and event[2] == heartbeat_timer then

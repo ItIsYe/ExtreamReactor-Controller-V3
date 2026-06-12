@@ -130,13 +130,12 @@ function M.new(opts)
     if not h then return false end
     return support_ui_pages.handle_log_mode_touch(x, y, h - 1, utils, 1)
   end
-  M.handle_diagnostics_touch = handle_diagnostics_touch
-
   return {
     render_overview = render_overview,
     render_matrices = render_matrices,
     render_storages = render_storages,
-    render_diagnostics = render_diagnostics
+    render_diagnostics = render_diagnostics,
+    handle_diagnostics_touch = handle_diagnostics_touch
   }
 end
 
