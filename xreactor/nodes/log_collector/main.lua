@@ -140,6 +140,7 @@ end
 local function draw_log_mode_buttons(x, y)
   -- LOG_COLLECTOR's own logging is independent of the log_collector channel
   -- it receives (this controls THIS node's local utils.log() output).
+  -- Uses c() helper (already defined in this file) for color lookup.
   if not utils then return end
   local mode = utils.get_log_mode and utils.get_log_mode() or "all"
   local modes  = { "all", "disk", "remote", "terminal", "none" }

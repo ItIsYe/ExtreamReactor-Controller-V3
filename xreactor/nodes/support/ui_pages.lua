@@ -70,25 +70,31 @@ function M.build_common_model(args)
 end
 
 function M.render_log_mode_button(target, utils_ref, x, y, w)
-  -- Renders mode buttons: Log: [All][Disk][Rmt][Term]
+  -- Renders mode buttons: Log: [All][Disk][Rmt][Term][Off]
   -- Active mode highlighted green. Call handle_log_mode_touch() for touch input.
+  -- Uses numeric CC:Tweaked color constants directly (no 'colors' import in this module).
+  local CC_BLACK = 32768  -- colors.black
+  local CC_WHITE = 1      -- colors.white
+  local CC_GREEN = 32     -- colors.green
+  local CC_GRAY  = 256    -- colors.gray
   if not utils_ref then return end
+  if type(target.setBackgroundColor) ~= "function" then return end
   local mode   = utils_ref.get_log_mode and utils_ref.get_log_mode() or "all"
   local modes  = { "all", "disk", "remote", "terminal", "none" }
   local labels = { all = "All ", disk = "Disk", remote = "Rmt ", terminal = "Term", none = "Off " }
   local btn_w  = 4
   local cx     = (x or 2)
-  target.setBackgroundColor(colors.black)
-  target.setTextColor(colors.gray)
+  target.setBackgroundColor(CC_BLACK)
+  target.setTextColor(CC_GRAY)
   target.setCursorPos(cx, y or 2)
   target.write("Log:")
   cx = cx + 4
   for _, m in ipairs(modes) do
     target.setCursorPos(cx, y or 2)
-    target.setBackgroundColor(mode == m and colors.green or colors.gray)
-    target.setTextColor(mode == m and colors.black or colors.white)
+    target.setBackgroundColor(mode == m and CC_GREEN or CC_GRAY)
+    target.setTextColor(mode == m and CC_BLACK or CC_WHITE)
     target.write(labels[m] or m)
-    target.setBackgroundColor(colors.black)
+    target.setBackgroundColor(CC_BLACK)
     cx = cx + btn_w
   end
 end
