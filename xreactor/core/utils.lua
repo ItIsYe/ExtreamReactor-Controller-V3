@@ -7,10 +7,10 @@ local CONFIG = {
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
   REMOTE_LOG_CHANNEL = 6502,
   REMOTE_LOG_PENDING_LIMIT = 64,
-  REMOTE_LOG_RETRY_EVERY = 8,  -- was 4: too aggressive, caused ~42% duplicate
-                               -- rate observed in LOG_COLLECTOR stats (ACK
-                               -- round-trip over wireless often exceeds 4s
-                               -- on busy channels)
+  REMOTE_LOG_RETRY_EVERY = 16,  -- was 8→16: logs show 64-70% duplicate rate
+                                -- (node-55 with 25 turbines on busy channel).
+                                -- ACK round-trip on congested wireless
+                                -- frequently exceeds 8s, causing resends.
   REMOTE_LOG_MAX_SENDS = 6,
   REMOTE_LOG_MODEM_REFRESH_SECONDS = 10
 }
@@ -423,12 +423,27 @@ function utils.load_config(path, defaults)
 end
 
 function utils.write_config(path, tbl)
-  utils.ensure_dir(fs.getDir(path))
+  local dir = fs.getDir(path)
+  if dir ~= "" then utils.ensure_dir(dir) end
   local file = fs.open(path, "w")
-  if not file then error("Unable to write config at " .. path) end
+  if not file then
+    -- Do NOT call error() here: write_config is called from registry saves
+    -- and capacity cache saves. A hard error() would propagate as a runtime
+    -- error and crash the node (observed: RT crashed on registry save when
+    -- /xreactor/config/ dir was temporarily unavailable).
+    -- Log and return a boolean so callers can decide how to handle it.
+    pcall(print, "WARN: write_config failed to open " .. tostring(path))
+    return false, "open_failed"
+  end
   local serialized, err = safe_serialize(tbl)
-  if not serialized then error("Config serialize failed: " .. tostring(err)) end
-  file.write(serialized); file.close()
+  if not serialized then
+    pcall(file.close)
+    pcall(print, "WARN: write_config serialize failed: " .. tostring(err))
+    return false, "serialize_failed:" .. tostring(err)
+  end
+  file.write(serialized)
+  file.close()
+  return true
 end
 
 local function normalize_logger_opts(opts)
