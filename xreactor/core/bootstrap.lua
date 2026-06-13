@@ -192,7 +192,11 @@ local function compute_package_paths(module_name)
   end
   local name = module_name:gsub("%.", "/")
   for pattern in package.path:gmatch("[^;]+") do
-    table.insert(paths, pattern:gsub("%?", name))
+    -- string.gsub() returns (result, count). table.insert(t, a, b) with both
+    -- values forwarded is interpreted as table.insert(t, pos, value) where
+    -- pos=result (a string) -> "bad argument #2 to 'insert' (number expected,
+    -- got string)". Wrap in parens to discard the count.
+    table.insert(paths, (pattern:gsub("%?", name)))
   end
   return paths
 end
