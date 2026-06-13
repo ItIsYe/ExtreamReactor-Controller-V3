@@ -1981,6 +1981,14 @@ local function init_monitor()
   runtime_ctx.monitor_name = runtime_ctx.monitor and monitor_name_or_err or nil
   if not runtime_ctx.monitor then
     log(CONFIG.LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no configured monitor available"))
+    -- Fallback: render to the computer's own terminal so the Diagnostics page
+    -- (including log mode buttons) is visible on the PC console.
+    if term and type(term.current) == "function" then
+      runtime_ctx.monitor = term.current()
+      runtime_ctx.monitor_name = "term"
+      runtime_ctx.monitor_is_term = true
+      log(CONFIG.LOG_LEVEL.INFO, "Monitor UI: falling back to local terminal")
+    end
   elseif monitor_name_or_err then
     log(CONFIG.LOG_LEVEL.INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
   end

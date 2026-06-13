@@ -198,26 +198,30 @@ function list_disk_roots()
 end
 
 local function disk_write_test(path)
+  -- NOTE: pcall() only captures thrown errors, not return values from the inner
+  -- function. So we use a local result variable instead of returning inside pcall.
   local probe = path .. "/.xreactor_log_probe"
+  local result_ok, result_reason = false, "not_run"
   local ok, err = pcall(function()
     local dir_ok, dir_reason = ensure_dir(path)
     if not dir_ok then
-      return false, "probe-dir-failed:" .. tostring(dir_reason)
+      result_ok, result_reason = false, "probe-dir-failed:" .. tostring(dir_reason)
+      return
     end
     local file = fs.open(probe, "w")
     if not file then
-      return false, "probe-open-failed"
+      result_ok, result_reason = false, "probe-open-failed"
+      return
     end
     file.write("probe")
     file.close()
-    if fs.exists(probe) then
-      fs.delete(probe)
-    end
+    if fs.exists(probe) then fs.delete(probe) end
+    result_ok, result_reason = true, "ok"
   end)
   if not ok then
     return false, summarize_error(err)
   end
-  return true
+  return result_ok, result_reason
 end
 
 local function validate_log_target(path)
