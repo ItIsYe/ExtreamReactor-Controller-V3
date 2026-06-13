@@ -45,6 +45,11 @@ local binding = require("nodes.rt.binding")
 local discovery_log = require("nodes.rt.discovery_log")
 local rails = require("core.control_rails")
 local ensure_turbine_ctrl = require("core.turbine_ctrl")
+-- Forward declaration so closures defined below (e.g. get_turbine_module)
+-- capture this as an upvalue rather than treating it as a global.
+-- Initialized at the runtime_ctx = { ... } block further below.
+local runtime_ctx
+
 -- Find the module entry for a turbine by its peripheral name.
 local function get_turbine_module(name)
   for _, module in pairs(runtime_ctx.modules or {}) do
@@ -206,7 +211,7 @@ local devices = {
   last_scan_ts = nil,
   discovery_log_signature = nil
 }
-local runtime_ctx = {
+runtime_ctx = {
   master_alerts = {},
   peripherals = { reactors = {}, turbines = {} },
   targets = { power = 0, steam = 0, rpm = CONFIG.TARGET_RPM, enable_reactors = true, enable_turbines = true },
@@ -2137,7 +2142,6 @@ local function control_tick()
     node_state_machine:transition(constants.node_states.EMERGENCY)
   end
   node_state_machine:tick()
-  update_monitor()
   update_status_snapshot()
 end
 local function init()
@@ -2227,6 +2231,9 @@ end
 
 local function main_loop()
   log("INFO", "Entering event loop")
+  -- Separate monitor timer so UI updates run even when CONTROL tick is
+  -- retrying (5s retry delay would freeze the display otherwise).
+  local monitor_timer = os.startTimer(0.5)
   while true do
   local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
   while true do
@@ -2238,6 +2245,10 @@ local function main_loop()
       comms:handle_event(event)
     elseif event[1] == "timer" and event[2] == timer then
       break
+    elseif event[1] == "timer" and event[2] == monitor_timer then
+      -- Independent monitor refresh: runs ~every 0.5s regardless of CONTROL state
+      update_monitor()
+      monitor_timer = os.startTimer(0.5)
     elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key" then
       monitor_ui.handle_input(event)
     end

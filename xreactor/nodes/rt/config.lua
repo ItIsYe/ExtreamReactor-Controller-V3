@@ -131,7 +131,7 @@ return {
     }
   },
 
-  monitor_interval = 2,
+  monitor_interval = 1,  -- seconds between monitor redraws (was 2; monitor runs on own 0.5s timer)
   monitor_scale = 0.5,
   status_log = false
 }
