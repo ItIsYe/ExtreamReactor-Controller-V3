@@ -63,11 +63,14 @@ local function resolve_node_id(config)
     end
   end
 
+  -- Deterministic, stable machine-local id derived from the computer ID.
+  -- The computer ID is unique per computer and never changes, which makes it
+  -- a reliable network identity. We deliberately do NOT derive the node_id
+  -- from the computer LABEL: labels are human-facing (e.g. "XR-RT-54"), can be
+  -- changed, and previously caused the node to announce itself under a label
+  -- that did not match its persisted "node-<id>" identity, making MASTER see
+  -- two different ids for the same machine (one constantly going stale/offline).
   local generated = ("node-%s"):format(tostring(os.getComputerID and os.getComputerID() or "unknown"))
-  local label = os.getComputerLabel and os.getComputerLabel() or nil
-  if type(label) == "string" and label ~= "" and not is_role_default_id(label) then
-    generated = label
-  end
   utils.ensure_dir(fs.getDir(path))
   local file = fs.open(path, "w")
   if file then
