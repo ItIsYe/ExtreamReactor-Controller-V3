@@ -1,28 +1,46 @@
 -- nodes/fuel/redstone_router.lua
 --
--- Controls redstone outputs to route Mekanism pipe traffic to specific reactors.
+-- Tree-topology redstone valve routing for Mekanism pipe networks.
 --
--- Mekanism Logistical Transporters configured as "High = Interrupt":
---   redstone HIGH  → pipe BLOCKED at that segment
---   redstone LOW   → pipe OPEN (default)
+-- Physical topology example:
 --
--- Routing strategy: block ALL reactor pipes, then open ONLY the target.
--- This ensures items only flow to the reactor that requested fuel.
+--   Haupt-Pipe
+--     ├── [Ventil side="right"] Rechter Arm
+--     │       ├── [Ventil side="top"]    Reaktor A  (reactor="RT-1")
+--     │       └── [Ventil side="bottom"] Reaktor B  (reactor="RT-2")
+--     └── [Ventil side="left"]  Linker Arm
+--             ├── [Ventil side="front"]  Reaktor C  (reactor="RT-3")
+--             └── [Ventil side="back"]   Reaktor D  (reactor="RT-4")
 --
--- Hardware options:
---   A) CC computer built-in redstone (6 sides: top/bottom/left/right/front/back)
---   B) Redstone Integrator peripheral (16 named outputs, more reactors)
---   C) Both combined
+-- Routing to Reaktor A:
+--   Open:  right, top
+--   Block: left, bottom, front, back
 --
--- Route table (config.logistics.redstone_routes):
---   { reactor = "RT-1", label = "Reaktor A",
---     side    = "right",       -- built-in side OR integrator output name
---     integrator = nil         -- optional: "redstone_integrator_0"
+-- Mekanism pipe mode: High Redstone = Interrupt
+--   HIGH output → pipe BLOCKED
+--   LOW  output → pipe OPEN (default)
+--
+-- Config (config.logistics.redstone_tree):
+--   A recursive table. Each node has:
+--     side       = CC redstone output side (or integrator channel)
+--     label      = human-readable name
+--     reactor    = reactor node ID (only for leaf nodes = endpoints)
+--     integrator = optional: "redstone_integrator_0" for integrator outputs
+--     children   = list of child nodes (arms or reactors)
+--
+-- Example:
+--   redstone_tree = {
+--     { side="right", label="Rechter Arm", children={
+--         { side="top",    label="Reaktor A", reactor="RT-1" },
+--         { side="bottom", label="Reaktor B", reactor="RT-2" },
+--       }
+--     },
+--     { side="left", label="Linker Arm", children={
+--         { side="front", label="Reaktor C", reactor="RT-3" },
+--         { side="back",  label="Reaktor D", reactor="RT-4" },
+--       }
+--     },
 --   }
---
--- Timing (config.logistics.valve_open_ms):
---   How long to keep the target pipe open after exporting. Default 2000ms.
---   Mekanism moves items in ~2-4 ticks (100-200ms) but give headroom.
 
 local M = {}
 
@@ -37,6 +55,45 @@ local function safe_call(obj, method, ...)
   return r, nil
 end
 
+-- ---- tree helpers ----------------------------------------------------------
+
+-- Collect ALL valve descriptors from the tree (flattened).
+local function collect_all_valves(tree, out)
+  out = out or {}
+  for _, node in ipairs(tree or {}) do
+    if node.side then
+      out[#out + 1] = { side = node.side, integrator = node.integrator }
+    end
+    collect_all_valves(node.children or {}, out)
+  end
+  return out
+end
+
+-- Find the path (list of valve descriptors) from root to the target reactor.
+-- Returns a list of {side, integrator} in root→leaf order, or nil if not found.
+local function find_path(tree, target_id, path)
+  path = path or {}
+  for _, node in ipairs(tree or {}) do
+    local valve = node.side and { side = node.side, integrator = node.integrator } or nil
+    local next_path = valve and (function()
+      local p = {}
+      for _, v in ipairs(path) do p[#p + 1] = v end
+      p[#p + 1] = valve
+      return p
+    end)() or path
+
+    -- Is this the target reactor leaf?
+    if node.reactor == target_id or node.label == target_id then
+      return next_path
+    end
+
+    -- Recurse into children
+    local found = find_path(node.children or {}, target_id, next_path)
+    if found then return found end
+  end
+  return nil
+end
+
 -- ---- constructor -----------------------------------------------------------
 
 function M.new(opts)
@@ -46,9 +103,8 @@ function M.new(opts)
     log       = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
     _state = {
-      routes      = {},  -- compiled route table: { label, side, integrator, wrapped }
-      all_blocked = false,
-      integrators = {},  -- wrapped Redstone Integrator peripherals by name
+      all_valves  = {},   -- flattened list of all valve descriptors
+      integrators = {},   -- wrapped Redstone Integrator peripherals
     },
   }
   return setmetatable(self, { __index = M })
@@ -57,156 +113,148 @@ end
 -- ---- peripheral discovery --------------------------------------------------
 
 function M:refresh()
-  local cfg = self.config.logistics or self.config or {}
-  local routes_cfg = cfg.redstone_routes or {}
+  local cfg  = self.config.logistics or self.config or {}
+  local tree = cfg.redstone_tree or {}
 
-  -- Collect unique integrator names
-  local integrator_names = {}
-  for _, r in ipairs(routes_cfg) do
-    if r.integrator then integrator_names[r.integrator] = true end
+  -- Collect all valve descriptors
+  local all = collect_all_valves(tree)
+  self._state.all_valves = all
+
+  -- Wrap any integrator peripherals
+  local int_names = {}
+  for _, v in ipairs(all) do
+    if v.integrator then int_names[v.integrator] = true end
   end
-
-  -- Wrap integrators
   local integrators = {}
-  for name in pairs(integrator_names) do
+  for name in pairs(int_names) do
     if peripheral.isPresent(name) then
       local ok, w = pcall(peripheral.wrap, name)
       if ok and w then
         integrators[name] = w
-        self.log("DEBUG", "RedstoneRouter: integrator " .. name .. " connected")
+        self.log("DEBUG", "RedstoneRouter: integrator " .. name)
       else
-        self.warn_once("int_wrap:" .. name, "RedstoneRouter: wrap failed: " .. name)
+        self.warn_once("int:" .. name, "RedstoneRouter: integrator wrap failed: " .. name)
       end
     else
-      self.warn_once("int_absent:" .. name, "RedstoneRouter: integrator absent: " .. name)
+      self.warn_once("int_abs:" .. name, "RedstoneRouter: integrator absent: " .. name)
     end
   end
   self._state.integrators = integrators
 
-  -- Compile route table
-  local routes = {}
-  for i, r in ipairs(routes_cfg) do
-    if not r.side then
-      self.warn_once("route_no_side_" .. i, "RedstoneRouter: route " .. i .. " missing side")
-    else
-      local integrator = r.integrator and integrators[r.integrator] or nil
-      routes[#routes + 1] = {
-        label      = r.label or r.reactor or ("Route " .. i),
-        reactor_id = r.reactor,
-        side       = r.side,
-        integrator = integrator,
-        int_name   = r.integrator,
-      }
-    end
-  end
-  self._state.routes = routes
-
-  -- Start with all routes blocked (safe default)
+  -- Start safe: block all valves
   self:block_all()
 
-  self.log("DEBUG", "RedstoneRouter: " .. #routes .. " routes loaded")
+  self.log("DEBUG", string.format(
+    "RedstoneRouter: tree loaded, %d total valves", #all))
 end
 
 -- ---- redstone primitives ---------------------------------------------------
 
--- Set output for one route entry.
--- high=true: pipe BLOCKED; high=false: pipe OPEN
-function M:_set_output(route, high)
-  local side = route.side
-  if route.integrator then
-    -- Redstone Integrator: setOutput(side, bool)
-    local _, err = safe_call(route.integrator, "setOutput", side, high)
-    if err then
-      self.warn_once("rs_set:" .. route.label,
-        "RedstoneRouter: setOutput failed for " .. route.label .. ": " .. tostring(err))
+function M:_set_valve(valve, high)
+  local side = valve.side
+  if valve.integrator then
+    local w = self._state.integrators[valve.integrator]
+    if w then
+      safe_call(w, "setOutput", side, high)
     end
   elseif BUILTIN_SIDES[side] then
-    -- Built-in computer redstone
     pcall(redstone.setOutput, side, high)
   else
-    self.warn_once("rs_side:" .. side,
-      "RedstoneRouter: unknown side '" .. side .. "' (not builtin, no integrator)")
+    self.warn_once("bad_side:" .. tostring(side),
+      "RedstoneRouter: unknown side '" .. tostring(side) .. "'")
   end
 end
 
--- Block all routes (safe default — no fuel flows anywhere).
+-- Block every valve in the tree (safe default).
 function M:block_all()
-  for _, route in ipairs(self._state.routes) do
-    self:_set_output(route, true)  -- HIGH = blocked
+  for _, v in ipairs(self._state.all_valves) do
+    self:_set_valve(v, true)   -- HIGH = blocked
   end
-  self._state.all_blocked = true
-  self.log("DEBUG", "RedstoneRouter: all routes blocked")
 end
 
--- Open exactly ONE route (target), block all others.
--- Returns true if the target route was found.
-function M:open_only(reactor_id_or_label)
-  local found = false
-  for _, route in ipairs(self._state.routes) do
-    local match = (route.reactor_id == reactor_id_or_label)
-               or (route.label      == reactor_id_or_label)
-    if match then
-      self:_set_output(route, false)  -- LOW = open
-      found = true
-      self.log("DEBUG", "RedstoneRouter: opened route to " .. route.label)
-    else
-      self:_set_output(route, true)   -- HIGH = blocked
-    end
+-- Open only the valves on the path to target; block all others.
+-- Returns true if the path was found.
+function M:open_path_to(target_id)
+  local cfg  = self.config.logistics or self.config or {}
+  local tree = cfg.redstone_tree or {}
+
+  local path = find_path(tree, target_id)
+  if not path then
+    self.log("WARN", "RedstoneRouter: no path found for target: " .. tostring(target_id))
+    self:block_all()
+    return false
   end
-  if not found then
-    self.log("WARN", "RedstoneRouter: no route found for " .. tostring(reactor_id_or_label))
+
+  -- Build a set for O(1) lookup
+  local path_set = {}
+  for _, v in ipairs(path) do
+    path_set[(v.integrator or "") .. ":" .. v.side] = true
   end
-  self._state.all_blocked = not found
-  return found
+
+  -- Set all valves: open if on path, block otherwise
+  for _, v in ipairs(self._state.all_valves) do
+    local key = (v.integrator or "") .. ":" .. v.side
+    self:_set_valve(v, not path_set[key])  -- false=open for path, true=block otherwise
+  end
+
+  local sides = {}
+  for _, v in ipairs(path) do sides[#sides + 1] = v.side end
+  self.log("DEBUG", string.format(
+    "RedstoneRouter: routing to %s via [%s]",
+    tostring(target_id), table.concat(sides, " → ")))
+  return true
 end
 
 -- ---- timed routing sequence ------------------------------------------------
 
--- Open route for target, call action_fn(), then block all again.
--- valve_open_ms: how long to keep valve open AFTER action (default 2000ms).
-function M:route_and_act(reactor_id, action_fn, valve_open_ms)
-  if #self._state.routes == 0 then
-    -- No routes configured: act directly without redstone control
+function M:route_and_act(target_id, action_fn, valve_open_ms)
+  if #self._state.all_valves == 0 then
     if action_fn then action_fn() end
     return
   end
 
-  local opened = self:open_only(reactor_id)
-  if not opened then
-    self.log("WARN", "RedstoneRouter: could not open route for " .. tostring(reactor_id))
+  local ok = self:open_path_to(target_id)
+  if not ok then
+    self.log("WARN", "RedstoneRouter: cannot route to " .. tostring(target_id))
     self:block_all()
     return
   end
 
-  -- Small settle time before pushing items (1 tick ≈ 50ms)
-  os.sleep(0.05)
-
+  os.sleep(0.05)  -- 1 tick settle
   if action_fn then action_fn() end
-
-  -- Keep valve open for Mekanism to move items
-  local hold_ms = tonumber(valve_open_ms) or 2000
-  os.sleep(hold_ms / 1000)
-
+  os.sleep((tonumber(valve_open_ms) or 2000) / 1000)
   self:block_all()
 end
 
--- ---- status ----------------------------------------------------------------
+-- ---- introspection (for UI) ------------------------------------------------
 
-function M:get_routes()
-  local result = {}
-  for _, r in ipairs(self._state.routes) do
-    result[#result + 1] = {
-      label      = r.label,
-      reactor_id = r.reactor_id,
-      side       = r.side,
-      integrator = r.int_name,
-    }
-  end
-  return result
+function M:valve_count()
+  return #self._state.all_valves
 end
 
-function M:route_count()
-  return #self._state.routes
+-- Return flat list of { target_id, label, path_sides[] }
+function M:get_routing_table()
+  local cfg  = self.config.logistics or self.config or {}
+  local tree = cfg.redstone_tree or {}
+  local result = {}
+
+  local function walk(nodes)
+    for _, node in ipairs(nodes) do
+      if node.reactor then
+        local path = find_path(tree, node.reactor) or {}
+        local sides = {}
+        for _, v in ipairs(path) do sides[#sides + 1] = v.side end
+        result[#result + 1] = {
+          reactor = node.reactor,
+          label   = node.label or node.reactor,
+          path    = sides,
+        }
+      end
+      walk(node.children or {})
+    end
+  end
+  walk(tree)
+  return result
 end
 
 return M

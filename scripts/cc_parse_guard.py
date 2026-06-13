@@ -153,10 +153,17 @@ def real_parse(path: Path, parser_mode: str):
 
     lua = shutil.which("lua") or shutil.which("lua5.1") or shutil.which("lua5.2") or shutil.which("lua5.3") or shutil.which("lua5.4")
     if lua and parser_mode in ("any", "lua"):
-        proc = subprocess.run([lua, "-e", "assert(loadfile(arg[1]))", str(path)], capture_output=True, text=True)
+        # Embed the path directly in the snippet instead of relying on arg[1].
+        # Some lua builds (notably bare lua5.2 invoked via -e) do not populate
+        # the global 'arg' table, which made arg[1] nil and crashed the guard.
+        snippet = "assert(loadfile(%r))" % str(path)
+        proc = subprocess.run([lua, "-e", snippet], capture_output=True, text=True)
         if proc.returncode == 0:
             return True, f"lua:{lua}", ""
-        return False, f"lua:{lua}", (proc.stderr or proc.stdout or "").strip()
+        # Fall through to luac if lua -e failed for an environment reason
+        # (don't return here so 'any' mode can still try luac).
+        if parser_mode == "lua":
+            return False, f"lua:{lua}", (proc.stderr or proc.stdout or "").strip()
 
     luac = shutil.which("luac") or shutil.which("luac5.1") or shutil.which("luac5.2") or shutil.which("luac5.3") or shutil.which("luac5.4")
     if luac and parser_mode in ("any", "luac"):
