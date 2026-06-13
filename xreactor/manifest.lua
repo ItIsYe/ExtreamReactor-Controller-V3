@@ -148,7 +148,7 @@ return {
     { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY", "WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/runtime.lua", size_bytes = 2685, hash = "8cb1f807", required_for={"WATER", "FUEL", "REPROCESSING"} },
-    { path = "nodes/support/ui_pages.lua", size_bytes = 5097, hash = "e9f1a7c9", required_for={"WATER", "FUEL", "REPROCESSING"} },
+    { path = "nodes/support/ui_pages.lua", size_bytes = 5097, hash = "e9f1a7c9", required_for={"WATER", "FUEL", "REPROCESSING", "ENERGY", "RT", "MASTER"} },
     },
   },
 
