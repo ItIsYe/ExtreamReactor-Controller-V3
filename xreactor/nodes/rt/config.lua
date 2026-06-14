@@ -124,8 +124,8 @@ return {
       ema_alpha = 0.20
     },
     coil = {
-      engage_rpm = 850,
-      disengage_rpm = 750,
+      engage_rpm = 900,    -- engage coil at target RPM
+      disengage_rpm = 850, -- disengage coil when RPM drops below this
       cooldown_s = 1.0,
       ema_alpha = 0.2
     }

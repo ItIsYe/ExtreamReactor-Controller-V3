@@ -12,8 +12,8 @@ local CONFIG = {
   MIN_FLOW = 0, -- Minimum turbine flow.
   MAX_FLOW = 2000, -- Maximum turbine flow.
   FLOW_STEP = 50, -- Flow adjustment step size.
-  COIL_ENGAGE_RPM = 850, -- RPM at which coils engage.
-  COIL_DISENGAGE_RPM = 750, -- RPM at which coils disengage.
+  COIL_ENGAGE_RPM = 900, -- RPM at which coils engage (at target).
+  COIL_DISENGAGE_RPM = 850, -- RPM at which coils disengage (hysteresis band below target).
   START_FLOW = 0, -- Starting flow value when enabling turbines.
   ROD_TICK = 5.0, -- Control rod adjustment interval (seconds).
   ROD_MIN = 0, -- Minimum control rod insertion.
@@ -1484,7 +1484,10 @@ local set_reactors_active
 local set_turbines_active
 local apply_safe_controls
 local function updateControl()
-  if current_state ~= STATE.AUTONOM and current_state ~= STATE.MASTER then
+  -- No state guard: turbine flow regulation always runs whenever the node
+  -- is not in INIT. Every spinning turbine must be individually regulated
+  -- regardless of operating mode, master assignment, or learning phase.
+  if current_state == STATE.INIT then
     return
   end
   for _, name in ipairs(config.reactors or {}) do
@@ -1570,22 +1573,11 @@ local function updateControl()
       warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
-    -- Determine effective target RPM based on module state.
-    -- Flow regulation ALWAYS runs — the state only controls the target speed.
-    --   ON / STARTING / nil  →  normal target (900 RPM during learning or MASTER setpoint)
-    --   OFF / ERROR          →  0 RPM (controlled deceleration, coil disengages automatically)
-    -- This ensures every turbine always has proper closed-loop flow control,
-    -- regardless of startup sequencing or MASTER assignment state.
-    local effective_target_rpm = target_rpm
-    if current_state == STATE.MASTER then
-      local module_for_turbine = get_turbine_module(name)
-      local module_st = module_for_turbine and module_for_turbine.state or nil
-      if module_st == "OFF" or module_st == "ERROR" then
-        effective_target_rpm = 0
-      end
-      -- STARTING / ON / nil → keep effective_target_rpm = target_rpm (900)
-    end
-    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, effective_target_rpm)
+    -- Flow regulation always runs for every turbine, every tick.
+    -- target_rpm is always the configured target (900 RPM by default,
+    -- or the MASTER setpoint after capacity lock). No state or module
+    -- assignment overrides this — if a turbine is spinning, it is regulated.
+    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
     if not set_ok then
       warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
       track_skip(apply_reason or "FLOW_SET_CALL_FAILED")
