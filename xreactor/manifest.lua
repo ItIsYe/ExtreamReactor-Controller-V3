@@ -1,7 +1,7 @@
--- xreactor/manifest.lua -- manifest-v38
+-- xreactor/manifest.lua -- manifest-v39
 return {
-  manifest_version = 38,
-  manifest_id = "manifest-v38",
+  manifest_version = 39,
+  manifest_id = "manifest-v39",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -12,7 +12,7 @@ return {
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true },
   { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always=true },
   { path = "installer_storage.lua", size_bytes = 8859, hash = "89a9376e", always=true },
-  { path = "release.lua", size_bytes = 345, hash = "95966896", always=true },
+  { path = "release.lua", size_bytes = 345, hash = "4556d200", always=true },
   { path = "start.lua", size_bytes = 6846, hash = "4c052210", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 1483, hash = "d2ed3e1d", always=true },
@@ -84,7 +84,7 @@ return {
     { path = "core/control_rails.lua", size_bytes = 8017, hash = "01c1a770", required_for={"RT"} },
     { path = "core/fluid.lua", size_bytes = 5017, hash = "9a5c0bea", required_for={"RT"} },
     { path = "core/turbine_ctrl.lua", size_bytes = 2988, hash = "afe549dc", required_for={"RT"} },
-    { path = "core/turbine_regulator.lua", size_bytes = 16601, hash = "7e2685eb", required_for={"RT"} },
+    { path = "core/turbine_regulator.lua", size_bytes = 16939, hash = "23108945", required_for={"RT"} },
     { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48", required_for={"RT"} },
     { path = "nodes/rt/command_handler.lua", size_bytes = 10718, hash = "a8c95300", required_for={"RT"} },
     { path = "nodes/rt/config.lua", size_bytes = 3141, hash = "b57f4038", required_for={"RT"} },
