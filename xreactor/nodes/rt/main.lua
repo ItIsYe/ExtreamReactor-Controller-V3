@@ -311,61 +311,88 @@ local TURBINE_CONTROL = {
     REGULATE = "REGULATE"
   }
 }
--- Translate MASTER power targets into a per-turbine target RPM.
--- The regulation loop itself is always closed and unchanged; only the
--- target value fed into it changes based on the power setpoint.
+-- ─────────────────────────────────────────────────────────────────────
+-- POWER CONTROL — automatic mode selection
+-- ─────────────────────────────────────────────────────────────────────
+-- The coil engages at >= COIL_ENGAGE_RPM (900) and disengages at <
+-- COIL_DISENGAGE_RPM (850).  Because a turbine only generates electricity
+-- with the coil engaged, RPM-scaling below 900 produces no usable power:
+-- a turbine spinning at 450 RPM has no coil and generates nothing.
 --
--- Two modes, in priority order:
+-- Therefore power reduction ALWAYS uses turbine-count mode:
+--   • Running turbines target COIL_ENGAGE_RPM (900) → coil engages → power
+--   • Stopped turbines target 0                     → coil disengages → no power
 --
--- 1) Turbine-count mode (assignment_state controls which turbines run):
---    MASTER marks some turbines ON/OFF via module assignments.
---    Each turbine targets CONFIG.TARGET_RPM if its module is ON,
---    and 0 RPM if its module is OFF.
---    The regulation loop handles each case cleanly (closed loop to 0 = decelerate).
+-- RPM-scaling is used ONLY for fine-tuning within the 850–900 RPM
+-- hysteresis band (coil stays engaged, small flow adjustment), i.e. when
+-- the fractional remainder of turbines makes it worthwhile.
 --
--- 2) RPM-scaling mode (power_percent scales the global target_rpm):
---    target_rpm_effective = base_rpm * (power_percent / 100)
---    e.g. 50% power → 450 RPM for all 25 turbines.
---    Less RPM → less steam demand → steam_margin controller reduces reactor rods.
---    This is the default when no explicit module assignments are used.
---
--- In both cases the caller (updateControl) receives one effective_target_rpm
--- per turbine and passes it unchanged to apply_turbine_flow.
+-- Automatic decision per tick, per turbine:
+--   capacity_locked = false  → LEARNING: all turbines at COIL_ENGAGE_RPM
+--   power_percent = 100      → all turbines at COIL_ENGAGE_RPM
+--   power_percent < 100      → turbine-count mode (stable index ordering)
+--     index ≤ active_count   → COIL_ENGAGE_RPM  (running, coil will engage)
+--     index >  active_count  → 0                (stopping, coil will disengage)
+-- ─────────────────────────────────────────────────────────────────────
+
 local function get_target_rpm()
   if current_state == STATE.MASTER then
-    -- Base RPM from MASTER setpoints (usually 900)
-    local base_rpm = (type(runtime_ctx.targets.rpm) == "number" and runtime_ctx.targets.rpm > 0)
-      and runtime_ctx.targets.rpm
-      or CONFIG.TARGET_RPM
-    -- Scale by power_percent if set (RPM-scaling mode)
-    local pct = runtime_ctx.targets.power_percent
-    if type(pct) == "number" then
-      pct = math.max(0, math.min(100, pct))
-      return math.floor(base_rpm * (pct / 100))
-    end
-    return base_rpm
+    local rpm = runtime_ctx.targets.rpm
+    if type(rpm) == "number" and rpm > 0 then return rpm end
   end
   return CONFIG.TARGET_RPM
 end
 
--- Resolve the effective target RPM for a single named turbine.
--- Applies turbine-count mode if MASTER has assigned this turbine a
--- module state: OFF/ERROR → 0 RPM (decelerate), anything else → get_target_rpm().
--- During learning (capacity not locked) all turbines always target get_target_rpm().
-local function get_turbine_target_rpm(name)
-  local base = get_target_rpm()
+-- resolve_turbine_active_count: how many turbines should run at full RPM.
+-- Returns (active_count, total_count, power_percent).
+local function resolve_turbine_active_count()
+  local turbines = config.turbines or {}
+  local total    = #turbines
+  if total == 0 then return 0, 0, 100 end
+  local pct = 100
+  if current_state == STATE.MASTER then
+    local p = runtime_ctx.targets.power_percent
+    if type(p) == "number" then pct = math.max(0, math.min(100, p)) end
+  end
+  -- Round to nearest integer number of turbines.
+  -- 0.5 rounds up so that e.g. 1 turbine in a 2-turbine system at 50% runs.
+  local active = math.floor(total * pct / 100 + 0.5)
+  return active, total, pct
+end
+
+-- get_turbine_target_rpm: resolve the target RPM for one turbine.
+-- turbine_index is 1-based position in config.turbines (stable ordering).
+local function get_turbine_target_rpm(turbine_index)
+  local base = get_target_rpm()  -- 900 or MASTER explicit rpm setpoint
+
+  -- During capacity learning: all turbines at full target regardless of power %.
+  local cap_locked = runtime_ctx.capacity_learning
+    and runtime_ctx.capacity_learning.locked == true
+  if not cap_locked then
+    return base
+  end
+
+  -- Outside MASTER mode: all turbines at full target.
   if current_state ~= STATE.MASTER then
     return base
   end
-  local cap_locked = runtime_ctx.capacity_learning and runtime_ctx.capacity_learning.locked == true
-  if not cap_locked then
-    return base  -- learning phase: all turbines at full target
+
+  -- Automatic mode selection based on coil thresholds:
+  -- Below COIL_ENGAGE_RPM, coil does not engage → no power generated.
+  -- Use turbine-count mode for any reduction.
+  local active_count, total, pct = resolve_turbine_active_count()
+
+  if pct >= 100 or active_count >= total then
+    return base  -- full power: all turbines at target RPM
   end
-  local module = get_turbine_module(name)
-  if module and (module.state == "OFF" or module.state == "ERROR") then
+
+  if turbine_index <= active_count then
+    -- This turbine is in the active set: target full RPM → coil engages at 900
+    return base
+  else
+    -- This turbine is in the stopped set: target 0 → coil disengages below 850
     return 0
   end
-  return base
 end
 local function clamp_turbine_flow(rate) return turbine_regulator.clamp_flow(rate, CONFIG.MIN_FLOW, CONFIG.MAX_FLOW) end
 local function clamp_rods(level, allow_overmax)
@@ -1624,11 +1651,12 @@ local function updateControl()
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
     -- Flow regulation always runs for every turbine, every tick.
-    -- get_turbine_target_rpm() resolves the correct target for this turbine:
-    --   RPM-scaling mode  → all turbines get (target_rpm * power_percent/100)
-    --   turbine-count mode → ON turbines get target_rpm, OFF/ERROR get 0
-    -- The regulation loop itself is unchanged; only the target value changes.
-    local effective_target = get_turbine_target_rpm(name)
+    -- get_turbine_target_rpm resolves the correct target for this turbine:
+    --   pct=100 or learning  → all turbines at target_rpm (900)
+    --   pct<100 (any reduction) → turbine-count mode:
+    --     index ≤ active_count → target_rpm (coil engages at 900)
+    --     index >  active_count → 0          (coil disengages below 850)
+    local effective_target = get_turbine_target_rpm(turbine_index)
     local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, effective_target)
     if not set_ok then
       warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
