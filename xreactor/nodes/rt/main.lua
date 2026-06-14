@@ -311,11 +311,61 @@ local TURBINE_CONTROL = {
     REGULATE = "REGULATE"
   }
 }
+-- Translate MASTER power targets into a per-turbine target RPM.
+-- The regulation loop itself is always closed and unchanged; only the
+-- target value fed into it changes based on the power setpoint.
+--
+-- Two modes, in priority order:
+--
+-- 1) Turbine-count mode (assignment_state controls which turbines run):
+--    MASTER marks some turbines ON/OFF via module assignments.
+--    Each turbine targets CONFIG.TARGET_RPM if its module is ON,
+--    and 0 RPM if its module is OFF.
+--    The regulation loop handles each case cleanly (closed loop to 0 = decelerate).
+--
+-- 2) RPM-scaling mode (power_percent scales the global target_rpm):
+--    target_rpm_effective = base_rpm * (power_percent / 100)
+--    e.g. 50% power → 450 RPM for all 25 turbines.
+--    Less RPM → less steam demand → steam_margin controller reduces reactor rods.
+--    This is the default when no explicit module assignments are used.
+--
+-- In both cases the caller (updateControl) receives one effective_target_rpm
+-- per turbine and passes it unchanged to apply_turbine_flow.
 local function get_target_rpm()
-  if current_state == STATE.MASTER and type(runtime_ctx.targets.rpm) == "number" and runtime_ctx.targets.rpm > 0 then
-    return runtime_ctx.targets.rpm
+  if current_state == STATE.MASTER then
+    -- Base RPM from MASTER setpoints (usually 900)
+    local base_rpm = (type(runtime_ctx.targets.rpm) == "number" and runtime_ctx.targets.rpm > 0)
+      and runtime_ctx.targets.rpm
+      or CONFIG.TARGET_RPM
+    -- Scale by power_percent if set (RPM-scaling mode)
+    local pct = runtime_ctx.targets.power_percent
+    if type(pct) == "number" then
+      pct = math.max(0, math.min(100, pct))
+      return math.floor(base_rpm * (pct / 100))
+    end
+    return base_rpm
   end
   return CONFIG.TARGET_RPM
+end
+
+-- Resolve the effective target RPM for a single named turbine.
+-- Applies turbine-count mode if MASTER has assigned this turbine a
+-- module state: OFF/ERROR → 0 RPM (decelerate), anything else → get_target_rpm().
+-- During learning (capacity not locked) all turbines always target get_target_rpm().
+local function get_turbine_target_rpm(name)
+  local base = get_target_rpm()
+  if current_state ~= STATE.MASTER then
+    return base
+  end
+  local cap_locked = runtime_ctx.capacity_learning and runtime_ctx.capacity_learning.locked == true
+  if not cap_locked then
+    return base  -- learning phase: all turbines at full target
+  end
+  local module = get_turbine_module(name)
+  if module and (module.state == "OFF" or module.state == "ERROR") then
+    return 0
+  end
+  return base
 end
 local function clamp_turbine_flow(rate) return turbine_regulator.clamp_flow(rate, CONFIG.MIN_FLOW, CONFIG.MAX_FLOW) end
 local function clamp_rods(level, allow_overmax)
@@ -1574,10 +1624,12 @@ local function updateControl()
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
     -- Flow regulation always runs for every turbine, every tick.
-    -- target_rpm is always the configured target (900 RPM by default,
-    -- or the MASTER setpoint after capacity lock). No state or module
-    -- assignment overrides this — if a turbine is spinning, it is regulated.
-    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
+    -- get_turbine_target_rpm() resolves the correct target for this turbine:
+    --   RPM-scaling mode  → all turbines get (target_rpm * power_percent/100)
+    --   turbine-count mode → ON turbines get target_rpm, OFF/ERROR get 0
+    -- The regulation loop itself is unchanged; only the target value changes.
+    local effective_target = get_turbine_target_rpm(name)
+    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, effective_target)
     if not set_ok then
       warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
       track_skip(apply_reason or "FLOW_SET_CALL_FAILED")
