@@ -1,6 +1,6 @@
 # XReactor Controller V3 — Vollständige Projektdokumentation
 
-> Letzte Aktualisierung: beta-v43  
+> Letzte Aktualisierung: beta-v45  
 > Stack: CC:Tweaked · Extreme Reactors 2 · Mekanism · ATM10 (MC 1.21.1)
 
 ---
@@ -21,7 +21,7 @@
 12. [node_id System](#12-nodeid-system)
 13. [Ingame Konfiguration](#13-ingame-konfiguration)
 14. [Bekannte Einschränkungen](#14-bekannte-einschränkungen)
-15. [Changelog beta-v29 → beta-v43](#15-changelog-beta-v29--beta-v43)
+15. [Changelog beta-v29 → beta-v45](#15-changelog-beta-v29--beta-v45)
 
 ---
 
@@ -353,6 +353,8 @@ Telemetrie-Node für Wasser-Versorgung. Keine eigene Hardware-Steuerung.
 | v41 | Coil 900/850, updateControl ohne State-Guard |
 | v42 | power_percent → target_rpm Übersetzung |
 | v43 | Automatische Turbinen-Anzahl-Steuerung mit Coil-Awareness |
+| v44 | turbine_index Fix (war nil → Anzahl-Steuerung hatte keinen Effekt) |
+| v45 | Overspeed-Brake bei target_rpm=0 deaktiviert (Deadlock-Fix) |
 
 ---
 
@@ -465,7 +467,7 @@ Bei 25 Turbinen gibt es 26 diskrete Leistungsstufen (0%, 4%, 8%, ..., 100%). Zwi
 
 ---
 
-## 15. Changelog beta-v29 → beta-v43
+## 15. Changelog beta-v29 → beta-v45
 
 ### Kritische Bugfixes
 
