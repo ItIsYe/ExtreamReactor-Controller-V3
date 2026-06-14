@@ -2,7 +2,7 @@
 
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
-> **Branch:** `beta` — active development. Current release: **beta-v40** (manifest v40).
+> **Branch:** `beta` — active development. Current release: **beta-v43** (manifest v43).
 
 ---
 
@@ -36,7 +36,7 @@ The installer downloads the manifest, lets you pick a role, stages all required 
   └─────────┘  └────────┘  └─────────────┘  └─────┘
 ```
 
-**Key design rule:** MASTER sends only setpoints and intents. Each RT node makes local hardware decisions and writes directly to its own peripherals. No other node has hardware write access.
+**Key design rule:** MASTER sends only setpoints and intents. Each RT node makes local hardware decisions and writes directly to its own peripherals. No other node has hardware write access on reactors or turbines.
 
 ### Modem Channels
 
@@ -66,6 +66,10 @@ The installer downloads the manifest, lets you pick a role, stages all required 
 
 RT runs a fully local safety loop. MASTER setpoints are accepted only after RT completes its capacity-learning phase. The RT ↔ MASTER boundary is the central safety boundary of the system.
 
+### Why 900 RPM?
+
+**900 RPM is the efficiency optimum for Extreme Reactors 2 turbines.** At this speed the turbine converts steam to RF at maximum efficiency. Running below 900 RPM wastes steam per RF produced; there is no meaningful benefit to partial-speed operation. The system is therefore designed to always run active turbines at exactly 900 RPM and control power output exclusively by choosing how many turbines run.
+
 ### Startup Sequence
 
 ```
@@ -79,19 +83,48 @@ Boot
              └─ MASTER mode: accept SET_SETPOINTS, regulate normally
 ```
 
-### Turbine Flow Regulation
+### Power Control — Turbine Count Mode
 
-Every tick, **all turbines** receive individual closed-loop flow control regardless of their module state:
+**Power output is controlled exclusively by the number of active turbines.** Every running turbine is always regulated to exactly 900 RPM. Reducing power means stopping turbines, not slowing them down.
 
-| Module State | Effective Target RPM | Behaviour |
+```
+power_percent = 80%  →  20 of 25 turbines at 900 RPM (coil ON)
+                          5 of 25 turbines decelerating to 0 (coil OFF)
+
+power_percent = 50%  →  13 of 25 turbines at 900 RPM (coil ON)
+                         12 of 25 turbines decelerating to 0 (coil OFF)
+
+power_percent = 100% →  all 25 at 900 RPM
+power_percent =   0% →  all 25 decelerating to 0
+```
+
+`active_count = round(total_turbines × power_percent / 100)`
+
+Turbine priority is stable (by index order in config). No oscillation.
+
+### Why Not RPM Scaling?
+
+Coil engagement (electricity generation) requires **≥ 900 RPM** to engage, and disengages below 850 RPM. A turbine running at 450 RPM has no coil engagement and generates zero electricity. RPM reduction would spin turbines without producing power — worse efficiency than simply stopping the turbine. Therefore all power reductions use turbine count, not RPM.
+
+### Turbine Flow Regulation — Always Active
+
+Every turbine receives individual closed-loop flow control every tick, with no state-based exceptions:
+
+| Turbine Status | Effective Target RPM | Result |
 |---|---|---|
-| `ON` | 900 RPM (or MASTER setpoint) | Hold at target |
-| `STARTING` | 900 RPM | Ramp up in parallel with all others |
-| `OFF` | 0 RPM | Controlled deceleration, coil disengages |
-| `ERROR` | 0 RPM | Safe deceleration |
-| `nil` (learning) | 900 RPM | All turbines regulated freely |
+| Active (in power budget) | 900 RPM | Coil engages at 900 → electricity |
+| Inactive (over budget) | 0 RPM | Coil disengages below 850 → no electricity |
+| Learning phase (any) | 900 RPM | All turbines measure capacity together |
 
-Turbines are **never** left without flow control — state only changes the target, not whether regulation runs.
+The regulation loop (flow → RPM → coil) runs identically for all turbines. Only the target value differs.
+
+### Coil Engagement
+
+| RPM | Coil action |
+|-----|------------|
+| ≥ 900 | Engage (start generating) |
+| 850–899 | Hold current state (hysteresis) |
+| < 850 | Disengage (stop generating) |
 
 ### Capacity Cache
 
@@ -104,9 +137,9 @@ Turbines are **never** left without flow control — state only changes the targ
 
 | Parameter | Default |
 |-----------|---------|
-| Turbine RPM target | 900 RPM |
-| Coil engage | 855 RPM |
-| Coil disengage | 750 RPM |
+| Turbine RPM target | 900 RPM (efficiency optimum) |
+| Coil engage | ≥ 900 RPM |
+| Coil disengage | < 850 RPM |
 | Rod range (normal) | 80–98 % insertion |
 | Rod override (SCRAM) | 100 % (bypasses all limits) |
 | Steam guard high | 0.82 ratio |
@@ -161,28 +194,19 @@ Every node has a log mode button on its Diagnostics page (or PC terminal):
 
 Setting persists across reboots via CC settings (`xreactor.log_mode`).
 
-### Reliable Transport
-
-- Each event has a reboot-safe `event_id` (`boot_id:seq`)
-- Sender retries unacknowledged events up to 3 times (30s intervals)
-- Collector deduplicates by `event_id` and sends `LOG_ACK`
-- Pause/resume via button — paused events are not written but still acknowledged on resume
-
 ---
 
 ## Startup Delay
 
-All nodes except `LOG` and `MASTER` wait **5 seconds** on boot before starting their role. This ensures the LOG collector is ready to receive log events before other nodes start producing them.
+All nodes except `LOG` and `MASTER` wait **5 seconds** on boot before starting. This ensures the LOG collector is ready to receive log events before other nodes start producing them.
 
 ---
 
 ## node_id System
 
-Each computer's network identity is derived from its **CC computer ID** (`node-<id>`), not from its label. This is stable and unique.
+Each computer's network identity is `node-<computerID>` — stable and unique, never derived from the computer label. Written to `/xreactor/config/node_id.txt` on first boot.
 
-- Written to `/xreactor/config/node_id.txt` on first boot
-- Never derived from the computer label (`XR-RT-54` etc.) — labels are human-facing only
-- If a node appears constantly offline despite running: delete `/xreactor/config/node_id.txt` and reboot to regenerate
+If a node appears constantly offline despite running: delete `/xreactor/config/node_id.txt` and reboot to regenerate.
 
 ---
 
@@ -207,8 +231,8 @@ If no external Monitor peripheral is attached, all nodes render their UI directl
 
 | Field | Value |
 |-------|-------|
-| `release_id` | `beta-v40` |
-| `manifest_version` | 40 |
+| `release_id` | `beta-v43` |
+| `manifest_version` | 43 |
 | `manifest_file_count` | 125 |
 | `hash_algo` | `crc32` |
 
@@ -216,23 +240,13 @@ If no external Monitor peripheral is attached, all nodes render their UI directl
 
 ## Development
 
-### Running Tests
-
 ```sh
+# Run all tests
 python3 -m pytest tests/ -q
-```
 
-All 18 tests plus script-style guard tests should pass.
-
-### After Changing Files
-
-```sh
+# After changing any xreactor/ file
 python3 tools/regenerate_manifest_metadata.py
 ```
-
-Updates `size_bytes` and CRC32 `hash` in `manifest.lua`.
-
-### Branching
 
 - `beta` — all active development
 - `main` — frozen reference snapshot
