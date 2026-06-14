@@ -9,19 +9,10 @@ local function sanitize_number(value, fallback)
   return fallback
 end
 
+-- should_regulate_module_state kept for backwards-compat but no longer used
+-- by the main turbine regulation loop. Flow control always runs; the loop
+-- adjusts target_rpm per state (OFF/ERROR→0, STARTING/ON→normal target).
 function regulator.should_regulate_module_state(module_state)
-  if module_state == "ERROR" then
-    return false, "STATE_ERROR"
-  end
-  -- STARTING: allow normal RPM regulation so ALL queued startup turbines
-  -- ramp to 900 RPM in parallel. module_lifecycle.process_startup handles
-  -- only one turbine at a time (inductor + completion check); without this
-  -- change the other 23 STARTING turbines get zero flow control and either
-  -- overspeed, stall, or do nothing.
-  -- OFF: actively stopped by the caller (flow set to MIN), skip regulation.
-  if module_state == "OFF" then
-    return false, "STATE_OFF"
-  end
   return true, "STATE_OK"
 end
 

@@ -1570,38 +1570,22 @@ local function updateControl()
       warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
-    -- Module state check: only in MASTER mode AND only after capacity learning
-    -- is locked. During the LEARNING PHASE all 25 turbines must run freely at
-    -- 900 RPM so the full plant capacity can be measured. Skipping turbines
-    -- because MASTER hasn't sent setpoints yet (it can't until capacity is
-    -- known) would starve the reactor of steam consumers and prevent learning
-    -- from ever completing.
-    -- Observed failure: 20/25 turbines skipped (STATE_OFF) during learning →
-    -- only 5 turbines produced energy → NOT_ENOUGH_STABLE_TURBINES → stuck.
-    local cap_locked_for_module_check = runtime_ctx.capacity_learning
-      and runtime_ctx.capacity_learning.locked == true
-    if current_state == STATE.MASTER and cap_locked_for_module_check then
+    -- Determine effective target RPM based on module state.
+    -- Flow regulation ALWAYS runs — the state only controls the target speed.
+    --   ON / STARTING / nil  →  normal target (900 RPM during learning or MASTER setpoint)
+    --   OFF / ERROR          →  0 RPM (controlled deceleration, coil disengages automatically)
+    -- This ensures every turbine always has proper closed-loop flow control,
+    -- regardless of startup sequencing or MASTER assignment state.
+    local effective_target_rpm = target_rpm
+    if current_state == STATE.MASTER then
       local module_for_turbine = get_turbine_module(name)
       local module_st = module_for_turbine and module_for_turbine.state or nil
-      local can_regulate, regulate_skip_reason = turbine_regulator.should_regulate_module_state(module_st)
-      if not can_regulate then
-        track_skip(regulate_skip_reason)
-        if module_st == "OFF" then
-          -- Actively set flow to minimum so turbine decelerates and coil disengages.
-          local ctrl_off = get_turbine_ctrl(name)
-          local min_f = CONFIG.MIN_FLOW or 0
-          if (ctrl_off.requested_flow or 0) ~= min_f then
-            local ok_w, _ = pcall(setTurbineFlow, turbine, caps, min_f)
-            if ok_w then
-              ctrl_off.requested_flow = min_f
-              ctrl_off.flow           = min_f
-            end
-          end
-        end
-        goto continue_control_turbine
+      if module_st == "OFF" or module_st == "ERROR" then
+        effective_target_rpm = 0
       end
+      -- STARTING / ON / nil → keep effective_target_rpm = target_rpm (900)
     end
-    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
+    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, effective_target_rpm)
     if not set_ok then
       warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
       track_skip(apply_reason or "FLOW_SET_CALL_FAILED")
