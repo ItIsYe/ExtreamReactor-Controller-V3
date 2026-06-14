@@ -383,6 +383,14 @@ function regulator.overspeed_brake_state(input)
   if overspeed_rpm < 0 then
     return { active = false, reason = "RPM_UNAVAILABLE", flow = requested, engage_coil = false }
   end
+  -- When target_rpm = 0 (turbine should stop), do NOT activate overspeed brake.
+  -- With target=0, threshold = 0+band = ~20 RPM, so ANY spinning turbine would
+  -- permanently enter overspeed brake mode and get stuck (repeat_count=1490+).
+  -- For stop commands: simply set flow=0 and let the turbine decelerate naturally;
+  -- the coil follows normal RPM thresholds (engage>=900, disengage<850).
+  if target <= 0 then
+    return { active = false, reason = "TARGET_ZERO_NO_BRAKE", flow = 0, engage_coil = false }
+  end
   if overspeed_rpm <= (target + band) then
     return { active = false, reason = "NOT_OVERSPEED", flow = requested, engage_coil = false }
   end
