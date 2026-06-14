@@ -1602,6 +1602,7 @@ local function updateControl()
     end
   end
   local target_rpm = get_target_rpm()
+  local turbine_index = 0  -- 1-based index in config.turbines for count-mode ordering
   local eval_total, eval_decision, eval_skipped = 0, 0, 0
   local skip_reasons = {}
   local function track_skip(reason)
@@ -1611,6 +1612,7 @@ local function updateControl()
   end
   for _, name in ipairs(config.turbines or {}) do
     local ctrl = get_turbine_ctrl(name)
+    turbine_index = turbine_index + 1
     eval_total = eval_total + 1
     local ok, turbine = pcall(peripheral.wrap, name)
     if not ok or not turbine then
