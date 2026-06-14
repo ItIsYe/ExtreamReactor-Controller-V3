@@ -1570,12 +1570,17 @@ local function updateControl()
       warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
-    -- Module state check: only in MASTER mode where MASTER explicitly manages
-    -- which turbine modules are ON or OFF via STARTUP_STAGE commands.
-    -- In AUTONOM mode all modules start at OFF (no MASTER has sent commands),
-    -- so we skip the check there — all turbines run freely to 900 RPM for
-    -- capacity learning and local operation.
-    if current_state == STATE.MASTER then
+    -- Module state check: only in MASTER mode AND only after capacity learning
+    -- is locked. During the LEARNING PHASE all 25 turbines must run freely at
+    -- 900 RPM so the full plant capacity can be measured. Skipping turbines
+    -- because MASTER hasn't sent setpoints yet (it can't until capacity is
+    -- known) would starve the reactor of steam consumers and prevent learning
+    -- from ever completing.
+    -- Observed failure: 20/25 turbines skipped (STATE_OFF) during learning →
+    -- only 5 turbines produced energy → NOT_ENOUGH_STABLE_TURBINES → stuck.
+    local cap_locked_for_module_check = runtime_ctx.capacity_learning
+      and runtime_ctx.capacity_learning.locked == true
+    if current_state == STATE.MASTER and cap_locked_for_module_check then
       local module_for_turbine = get_turbine_module(name)
       local module_st = module_for_turbine and module_for_turbine.state or nil
       local can_regulate, regulate_skip_reason = turbine_regulator.should_regulate_module_state(module_st)

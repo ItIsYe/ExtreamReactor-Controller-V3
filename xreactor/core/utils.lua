@@ -7,11 +7,12 @@ local CONFIG = {
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
   REMOTE_LOG_CHANNEL = 6502,
   REMOTE_LOG_PENDING_LIMIT = 64,
-  REMOTE_LOG_RETRY_EVERY = 16,  -- was 8→16: logs show 64-70% duplicate rate
-                                -- (node-55 with 25 turbines on busy channel).
-                                -- ACK round-trip on congested wireless
-                                -- frequently exceeds 8s, causing resends.
-  REMOTE_LOG_MAX_SENDS = 6,
+  REMOTE_LOG_RETRY_EVERY = 30,  -- was 4→8→16→30: still 66% dup rate at 16s.
+                                -- node-52/55 with 25 turbines each + 7 nodes =
+                                -- very congested channel. Longer window reduces
+                                -- resends before ACK arrives.
+  REMOTE_LOG_MAX_SENDS = 3,    -- was 6: fewer resend attempts, total retry
+                                -- window = 90s (3×30s) is still acceptable.
   REMOTE_LOG_MODEM_REFRESH_SECONDS = 10
 }
 
