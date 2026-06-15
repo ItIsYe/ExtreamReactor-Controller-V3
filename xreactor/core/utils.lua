@@ -561,7 +561,31 @@ function utils.init_role_logger(role, node_id, opts)
   opts.prefix = role or opts.prefix
   opts.node_id = node_id or opts.node_id
   opts.log_name = opts.log_name or utils.build_log_name(role, node_id)
-  return utils.init_logger(opts)
+  -- Fix P4: number_or_nil zentral in utils -- war 3x dupliziert in
+-- message_handlers.lua, rt_sync.lua (als number_or), command_handler.lua
+function utils.number_or_nil(value)
+  if type(value) == "number" then return value end
+  if type(value) == "string" then
+    local n = tonumber(value)
+    if n then return n end
+  end
+  return nil
+end
+
+-- Fix P3: payload_looks_rt war in message_handlers.lua UND rt_sync_coalescer.lua
+-- dupliziert (leicht divergiert). Kanonische Version hier mit allen Bedingungen.
+function utils.payload_looks_rt(payload)
+  if type(payload) ~= "table" then return false end
+  if type(payload.rt) == "table" then return true end
+  if type(payload.turbines) == "table" or type(payload.reactors) == "table" or type(payload.modules) == "table" then return true end
+  if payload.turbine_rpm ~= nil or payload.steam ~= nil or payload.ramp_state ~= nil then return true end
+  -- message_handlers-Variante: mode+output+capabilities/bindings
+  if payload.mode ~= nil and (payload.output ~= nil or payload.state ~= nil)
+      and (payload.capabilities ~= nil or payload.bindings ~= nil) then return true end
+  return false
+end
+
+return utils.init_logger(opts)
 end
 
 function utils.remote_log_status()
