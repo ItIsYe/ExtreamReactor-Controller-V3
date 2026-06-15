@@ -498,6 +498,12 @@ local function init()
     start_delay = 0.20,
     runtime = matrix_runtime
   }))
+  -- Fix #2: status_max_age_ms war hardcodiert 1000ms → Cache wurde fast nie
+  -- genutzt weil der Telemetry-Service alle status_interval Sekunden sendet.
+  -- Neu: 90% des Send-Intervalls → Cache ist effektiv für aufeinanderfolgende Aufrufe.
+  local telemetry_status_interval_ms = math.max(1000,
+    math.floor((tonumber(config.status_interval) or 5) * 1000))
+  local telemetry_max_age_ms = math.floor(telemetry_status_interval_ms * 0.9)
   services:add(telemetry_service.new({
     name = "TELEMETRY",
     log_prefix = "TELEMETRY",
@@ -505,7 +511,7 @@ local function init()
     status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
     enable_heartbeat = false,
-    status_max_age_ms = 1000,
+    status_max_age_ms = telemetry_max_age_ms,
     build_payload = build_status_payload
   }))
   services:add(ui_service.new({
@@ -621,7 +627,32 @@ else
   if is_terminate_error(result_or_err) then
     shutdown("terminate received")
   else
+    -- Fix #4: Fehler anzeigen, auf Bestätigung warten, dann sauber neu starten.
+    -- Kein blindes re-throw das einen roten Crash-Screen ohne Kontrolle erzeugt.
     shutdown("runtime error: " .. tostring(result_or_err))
-    error(result_or_err, 0)
+    -- Crash-Screen: Fehler klar anzeigen
+    if term and term.setBackgroundColor and term.setTextColor and colors then
+      term.setBackgroundColor(colors.black)
+      term.setTextColor(colors.red)
+      term.clear()
+      term.setCursorPos(1, 1)
+      print("=== ENERGY NODE CRASH ===")
+      term.setTextColor(colors.white)
+      print("")
+      print(tostring(result_or_err))
+      print("")
+      term.setTextColor(colors.yellow)
+      print("Druecke eine Taste um neu zu starten...")
+      term.setTextColor(colors.white)
+    else
+      print("ENERGY NODE CRASH: " .. tostring(result_or_err))
+      print("Druecke eine Taste um neu zu starten...")
+    end
+    -- Auf Bestätigung warten
+    pcall(os.pullEvent, "key")
+    -- Sauberer Neustart via /startup
+    if os.reboot then
+      os.reboot()
+    end
   end
 end
