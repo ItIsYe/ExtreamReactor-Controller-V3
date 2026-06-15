@@ -133,13 +133,18 @@ function M.new(opts)
     end
     runtime.first_status_payload_ts = runtime.first_status_payload_ts or started_at
 
-    if total_duration > 1200 then
-      runtime.log(("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d"):format(
+    -- P2: Schwellwert aus Config statt hardcodiert 1200ms
+    local slow_payload_ms = math.max(200, math.floor(
+      tonumber(runtime.config.matrix_component_time_budget_ms) or 2000
+    ))
+    if total_duration > slow_payload_ms then
+      runtime.log(("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d threshold=%dms"):format(
         total_duration,
         energy_duration,
         matrix_duration,
         #(runtime.devices.storages or {}),
-        #(runtime.devices.matrices or {})
+        #(runtime.devices.matrices or {}),
+        slow_payload_ms
       ), "WARN")
     end
 
