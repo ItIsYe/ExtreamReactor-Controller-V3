@@ -228,7 +228,14 @@ runtime_ctx = {
   last_command = nil,
   last_command_ts = nil,
   warned = {},
-  autonom_state = { reactors = {}, turbines = {} },
+  autonom_state = {
+   reactors = {},
+   turbines = {},
+   pending_rod_direction = nil,
+   -- Turbinen-Rotation: welche Turbine trägt aktuell Teillast (1-basiert, rotiert).
+   partial_turbine_index = 1,
+   partial_turbine_last_rotate = 0
+ },
   autonom_control_logged = false,
   capability_cache = { reactors = {}, turbines = {} },
   reactor_ctrl = {}
@@ -341,56 +348,150 @@ local function get_target_rpm()
   return CONFIG.TARGET_RPM
 end
 
--- resolve_turbine_active_count: how many turbines should run at full RPM.
--- Returns (active_count, total_count, power_percent).
-local function resolve_turbine_active_count()
+-- resolve_turbine_plan: berechnet für jede Turbine Modus und Ziel-RPM.
+-- Rückgabe:
+--   full_count   Anzahl Turbinen auf 100% (Ziel-RPM = base)
+--   partial_idx  1-basierter Index der Teillast-Turbine (0 = keine)
+--   partial_rpm  Ziel-RPM der Teillast-Turbine
+--   stop_from    ab diesem Index (inkl.) sollen Turbinen austrudeln
+--   pct          effektiver Leistungsprozentsatz
+--
+-- Rotations-Logik:
+--   Die Teillast-Turbine rotiert jede PARTIAL_ROTATE_INTERVAL Sekunden
+--   über alle total Turbinen damit Betriebsstunden gleichmäßig verteilt werden.
+local PARTIAL_ROTATE_INTERVAL = 300  -- 5 Minuten
+
+local function resolve_turbine_plan()
   local turbines = config.turbines or {}
-  local total    = #turbines
-  if total == 0 then return 0, 0, 100 end
+  local total = #turbines
+  if total == 0 then
+    return 0, 0, 0, 1, 100
+  end
+
   local pct = 100
   if current_state == STATE.MASTER then
     local p = runtime_ctx.targets.power_percent
-    if type(p) == "number" then pct = math.max(0, math.min(100, p)) end
+    if type(p) == "number" then
+      pct = math.max(0, math.min(100, p))
+    end
   end
-  -- Round to nearest integer number of turbines.
-  -- 0.5 rounds up so that e.g. 1 turbine in a 2-turbine system at 50% runs.
-  local active = math.floor(total * pct / 100 + 0.5)
-  return active, total, pct
+
+  if pct >= 100 then
+    -- Alle Turbinen 100%
+    return total, 0, 0, total + 1, pct
+  end
+
+  if pct <= 0 then
+    -- Alle Turbinen aus
+    return 0, 0, 0, 1, pct
+  end
+
+  -- Wieviel Leistung brauchen wir in Turbinen-Einheiten?
+  local demand = total * pct / 100       -- z.B. 2.4 Turbinen bei 3x80%=240%
+
+  local full_count = math.floor(demand)  -- ganzzahlige Vollast-Turbinen
+  local remainder  = demand - full_count -- Restanteil (0..1), z.B. 0.4
+
+  -- Teillast-Turbine: falls remainder signifikant (>1% einer Turbine)
+  local partial_idx = 0
+  local partial_rpm = 0
+
+  if remainder > 0.01 and full_count < total then
+    -- Teillast-RPM proportional zum Restanteil
+    local base = get_target_rpm()
+    partial_rpm = math.floor(base * remainder + 0.5)
+
+    -- Rotation: partial_turbine_index zeigt welche Turbinen-Slot Teillast trägt.
+    -- Der Slot rotiert durch alle total Turbinen-Positionen.
+    local now = os.clock()
+    local last = runtime_ctx.autonom_state.partial_turbine_last_rotate or 0
+    if now - last >= PARTIAL_ROTATE_INTERVAL then
+      local prev = runtime_ctx.autonom_state.partial_turbine_index or 1
+      runtime_ctx.autonom_state.partial_turbine_index = (prev % total) + 1
+      runtime_ctx.autonom_state.partial_turbine_last_rotate = now
+    end
+
+    -- partial_idx ist der absolute Index in config.turbines (1-basiert)
+    -- der die Teillast trägt. Wir berechnen ihn so, dass er einen anderen
+    -- Slot als die full_count Vollast-Turbinen nimmt.
+    -- full_count Turbinen belegen Slots 1..full_count (virtuell).
+    -- Die Teillast-Turbine wird über alle Positionen rotiert.
+    -- Konkret: wir nehmen den rotierten Slot und mappen ihn auf einen
+    -- freien Index (jenseits der Vollast-Turbinen).
+    local rotate_slot = runtime_ctx.autonom_state.partial_turbine_index or 1
+    -- Stelle sicher dass rotate_slot im gültigen Bereich liegt
+    if rotate_slot < 1 or rotate_slot > total then
+      rotate_slot = 1
+      runtime_ctx.autonom_state.partial_turbine_index = 1
+    end
+    partial_idx = rotate_slot
+  end
+
+  -- stop_from: ab welchem Index austrudeln.
+  -- Wenn partial_idx gesetzt, läuft Turbine an partial_idx als Teillast.
+  -- Alle anderen Indizes > full_count die NICHT partial_idx sind → stop.
+  local stop_from = full_count + (partial_idx > 0 and 2 or 1)
+
+  return full_count, partial_idx, partial_rpm, stop_from, pct
 end
 
--- get_turbine_target_rpm: resolve the target RPM for one turbine.
--- turbine_index is 1-based position in config.turbines (stable ordering).
+-- get_turbine_target_rpm: Ziel-RPM für eine einzelne Turbine ermitteln.
+-- turbine_index ist 1-basierter Index in config.turbines (stabile Reihenfolge).
+-- Gibt zurück: target_rpm (Zahl)
 local function get_turbine_target_rpm(turbine_index)
-  local base = get_target_rpm()  -- 900 or MASTER explicit rpm setpoint
+  local base = get_target_rpm()  -- 900 oder expliziter Master-Setpoint
 
-  -- During capacity learning: all turbines at full target regardless of power %.
+  -- Während Capacity-Learning: alle Turbinen auf vollen Ziel-RPM.
   local cap_locked = runtime_ctx.capacity_learning
     and runtime_ctx.capacity_learning.locked == true
   if not cap_locked then
     return base
   end
 
-  -- Outside MASTER mode: all turbines at full target.
+  -- Außerhalb MASTER-Modus: alle Turbinen auf vollen Ziel-RPM.
   if current_state ~= STATE.MASTER then
     return base
   end
 
-  -- Automatic mode selection based on coil thresholds:
-  -- Below COIL_ENGAGE_RPM, coil does not engage → no power generated.
-  -- Use turbine-count mode for any reduction.
-  local active_count, total, pct = resolve_turbine_active_count()
+  local full_count, partial_idx, partial_rpm, stop_from, pct = resolve_turbine_plan()
 
-  if pct >= 100 or active_count >= total then
-    return base  -- full power: all turbines at target RPM
+  -- 100% Leistung: alle Turbinen auf base RPM
+  if pct >= 100 then
+    return base
   end
 
-  if turbine_index <= active_count then
-    -- This turbine is in the active set: target full RPM → coil engages at 900
-    return base
-  else
-    -- This turbine is in the stopped set: target 0 → coil disengages below 850
+  -- 0% Leistung: alle Turbinen auf 0
+  if pct <= 0 then
     return 0
   end
+
+  -- Vollast-Turbinen: Indizes 1..full_count AUSSER partial_idx
+  -- Teillast-Turbine: partial_idx
+  -- Alle anderen: 0 (austrudeln)
+  --
+  -- Wichtig: Die Vollast-Turbinen sind die ersten full_count Positionen
+  -- in der config-Reihenfolge, mit Ausnahme des partial_idx-Slots.
+  -- Wenn partial_idx in den ersten full_count fällt, rückt die letzte
+  -- Vollast-Turbine auf stop_from-1 nach.
+
+  if partial_idx > 0 and turbine_index == partial_idx then
+    return partial_rpm
+  end
+
+  -- Zähle wie viele Vollast-Slots vor diesem Index liegen
+  -- (ohne den partial_idx Slot mitzuzählen)
+  local full_slot = 0
+  for idx = 1, turbine_index do
+    if idx ~= partial_idx then
+      full_slot = full_slot + 1
+    end
+  end
+
+  if full_slot <= full_count then
+    return base  -- Vollast
+  end
+
+  return 0  -- austrudeln
 end
 local function clamp_turbine_flow(rate) return turbine_regulator.clamp_flow(rate, CONFIG.MIN_FLOW, CONFIG.MAX_FLOW) end
 local function clamp_rods(level, allow_overmax)
@@ -1014,7 +1115,13 @@ local function read_turbine_inductor_state(turbine, caps)
   end
   return nil, "INDUCTOR_UNAVAILABLE"
 end
-local function update_inductor_for_rpm(name, turbine, caps, rpm)
+-- update_inductor_for_rpm: Coil-Steuerung mit dynamischen Schwellen.
+-- target_rpm bestimmt die Engage/Disengage-Schwellen:
+--   Vollast (target=900):  engage=900, disengage=850  (aus config)
+--   Teillast (target=450): engage=450, disengage=~425 (proportional skaliert)
+--   Stop (target=0):       Coil folgt nur noch Overspeed-Logik in apply_turbine_flow
+-- Bei Overspeed (rpm > target + band) wird der Coil immer eingeklinkt (mitreißen).
+local function update_inductor_for_rpm(name, turbine, caps, rpm, target_rpm)
   local ctrl = get_turbine_ctrl(name)
   local measured_inductor, measured_api = read_turbine_inductor_state(turbine, caps)
   if type(measured_inductor) == "boolean" then
@@ -1035,13 +1142,48 @@ local function update_inductor_for_rpm(name, turbine, caps, rpm)
   if cooldown > 0 and now - (state.last_change_ts or 0) < cooldown then
     return true, true
   end
-  local engage_rpm = coil_cfg.engage_rpm or CONFIG.COIL_ENGAGE_RPM
-  local disengage_rpm = coil_cfg.disengage_rpm or CONFIG.COIL_DISENGAGE_RPM
-  if smoothed_rpm and smoothed_rpm >= engage_rpm and not engaged then
-    engaged = true
-  elseif (not smoothed_rpm or smoothed_rpm <= disengage_rpm) and engaged then
-    engaged = false
+
+  -- Basis-Schwellen aus Config (gelten für Vollast = TARGET_RPM)
+  local base_engage    = coil_cfg.engage_rpm    or CONFIG.COIL_ENGAGE_RPM     -- 900
+  local base_disengage = coil_cfg.disengage_rpm or CONFIG.COIL_DISENGAGE_RPM  -- 850
+  local base_target    = CONFIG.TARGET_RPM  -- 900
+
+  -- Dynamische Schwellen: proportional zur Ziel-RPM skalieren.
+  -- Bei target=0 (Stop): Coil-Normalbetrieb deaktiviert, nur Overspeed greift.
+  local engage_rpm, disengage_rpm
+  if type(target_rpm) == "number" and target_rpm > 0 and base_target > 0 then
+    local scale = target_rpm / base_target
+    engage_rpm    = math.floor(base_engage    * scale + 0.5)
+    disengage_rpm = math.floor(base_disengage * scale + 0.5)
+  elseif type(target_rpm) == "number" and target_rpm <= 0 then
+    -- Stop-Modus: Coil soll austrudeln — nur noch ausklinken wenn unter Disengage
+    engage_rpm    = base_engage     -- wird nie erreicht da flow=0
+    disengage_rpm = base_disengage
+  else
+    engage_rpm    = base_engage
+    disengage_rpm = base_disengage
   end
+
+  -- Overspeed-Schutz: immer einklinken wenn RPM zu hoch
+  -- (wird zusätzlich von enforce_overspeed_brake_coil in apply_turbine_flow gehandhabt)
+  local overspeed_band = coil_cfg.overspeed_band or 20
+  local is_overspeed = type(smoothed_rpm) == "number"
+    and type(target_rpm) == "number"
+    and target_rpm > 0
+    and smoothed_rpm > (target_rpm + overspeed_band)
+  if is_overspeed and not engaged then
+    engaged = true
+    log("INFO", ("Turbine coil name=%s engaged=true reason=OVERSPEED_BRAKE_NORMAL rpm=%s target=%s"):format(
+      tostring(name), tostring(rpm), tostring(target_rpm)))
+  elseif not is_overspeed then
+    -- Normale Hysterese-Logik
+    if smoothed_rpm and smoothed_rpm >= engage_rpm and not engaged then
+      engaged = true
+    elseif (not smoothed_rpm or smoothed_rpm <= disengage_rpm) and engaged then
+      engaged = false
+    end
+  end
+
   if engaged == ctrl.inductor_engaged then
     return true, true, measured_api
   end
@@ -1053,16 +1195,13 @@ local function update_inductor_for_rpm(name, turbine, caps, rpm)
   state.last_change_ts = now
   local ok, applied = pcall(setInductor, turbine, caps, engaged)
   if ok and applied then
-    local reason = "TARGET_TRACKING"
-    if ctrl.mode == "OVERSPEED_BRAKE" then
-      reason = "OVERSPEED_BRAKE"
-    end
+    local reason = is_overspeed and "OVERSPEED_BRAKE" or "TARGET_TRACKING"
+    if ctrl.mode == "OVERSPEED_BRAKE" then reason = "OVERSPEED_BRAKE" end
     ctrl.last_coil_reason = reason
-    log("INFO", ("Turbine coil name=%s engaged=%s reason=%s rpm=%s"):format(
-      tostring(name),
-      tostring(engaged),
-      tostring(reason),
-      tostring(rpm)
+    log("INFO", ("Turbine coil name=%s engaged=%s reason=%s rpm=%s target_rpm=%s engage_thr=%s disengage_thr=%s"):format(
+      tostring(name), tostring(engaged), tostring(reason),
+      tostring(rpm), tostring(target_rpm),
+      tostring(engage_rpm), tostring(disengage_rpm)
     ))
   end
   return ok, applied, measured_api
@@ -1631,18 +1770,19 @@ local function updateControl()
         rpm = value
       end
     end
-    local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
+    -- Ziel-RPM für diese Turbine bestimmen (vor Inductor-Update, damit
+    -- Coil-Schwellen korrekt zur Ziel-RPM skaliert werden).
+    local effective_target = get_turbine_target_rpm(turbine_index)
+    -- Coil-Steuerung: target_rpm übergeben damit Schwellen proportional skalieren.
+    local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm, effective_target)
     if not ok_inductor then
       warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
-    -- Flow regulation always runs for every turbine, every tick.
-    -- get_turbine_target_rpm resolves the correct target for this turbine:
-    --   pct=100 or learning  → all turbines at target_rpm (900)
-    --   pct<100 (any reduction) → turbine-count mode:
-    --     index ≤ active_count → target_rpm (coil engages at 900)
-    --     index >  active_count → 0          (coil disengages below 850)
-    local effective_target = get_turbine_target_rpm(turbine_index)
+    -- Flow-Regelung läuft für jede Turbine jeden Tick:
+    --   Vollast:   target_rpm = 900 → flow geregelt auf 900rpm
+    --   Teillast:  target_rpm = z.B. 450 → flow geregelt auf 450rpm, Coil skaliert
+    --   Stop:      target_rpm = 0 → flow=0, Turbine trudelt aus
     local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, effective_target)
     if not set_ok then
       warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
@@ -1900,7 +2040,7 @@ local REQUIRED_LIFECYCLE_CTX_FUNCTIONS = {
   "applyReactorRods",
   "ensure_reactor_ctrl",
   "update_turbine_flow_state",
-  "update_inductor_for_rpm",
+  "update_inductor_for_rpm",  -- signature: (name, turbine, caps, rpm, target_rpm)
   "setState",
   "warn_once",
   "warn_unsupported",
