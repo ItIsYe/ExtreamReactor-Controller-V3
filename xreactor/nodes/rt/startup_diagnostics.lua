@@ -67,19 +67,9 @@ function M.handle_startup_timeout(ctx)
       ctx.node_state_machine:transition(ctx.constants.node_states.LIMITED)
     end
   end
-  -- Fix #3: Direktmutation von ctx.active_startup / ctx.startup_queue umgangen.
-  -- main.lua übergibt Setter-Funktionen; wenn vorhanden, diese benutzen,
-  -- sonst direkte Zuweisung als Fallback (Abwärtskompatibilität).
-  if type(ctx.set_active_startup) == "function" then
-    ctx.set_active_startup(nil)
-  else
-    ctx.active_startup = nil
-  end
-  if type(ctx.set_startup_queue) == "function" then
-    ctx.set_startup_queue({})
-  else
-    ctx.startup_queue = {}
-  end
+  -- R2: Setter werden von main.lua immer übergeben (kein Fallback mehr nötig).
+  ctx.set_active_startup(nil)
+  ctx.set_startup_queue({})
   return true
 end
 
