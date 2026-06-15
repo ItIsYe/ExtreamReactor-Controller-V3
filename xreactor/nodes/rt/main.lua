@@ -2079,6 +2079,8 @@ local function reset_startup_watchdog()
 end
 
 local function handle_startup_timeout()
+  -- R2/R3: Setter übergeben damit startup_diagnostics sauber über die Abstraktion
+  -- schreibt. Direkte Mutation von runtime_ctx danach entfernt (war redundant + inkonsistent).
   startup_diagnostics.handle_startup_timeout({
     startup_watchdog_tripped = runtime_ctx.startup_watchdog_tripped,
     startup_started_ms = runtime_ctx.startup_started_ms,
@@ -2092,11 +2094,12 @@ local function handle_startup_timeout()
     update_status_snapshot = update_status_snapshot,
     broadcast_status = broadcast_status,
     active_startup = runtime_ctx.active_startup,
-    startup_queue = runtime_ctx.startup_queue
+    startup_queue = runtime_ctx.startup_queue,
+    set_active_startup = function(value) runtime_ctx.active_startup = value end,
+    set_startup_queue  = function(value) runtime_ctx.startup_queue = value end
   })
   runtime_ctx.startup_watchdog_tripped = true
-  runtime_ctx.active_startup = nil
-  runtime_ctx.startup_queue = {}
+  -- active_startup und startup_queue werden jetzt über Setter in startup_diagnostics gesetzt
 end
 local states
 
