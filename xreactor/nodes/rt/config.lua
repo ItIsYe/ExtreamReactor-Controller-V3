@@ -126,8 +126,9 @@ return {
       ema_alpha = 0.20
     },
     coil = {
-      engage_rpm = 900,    -- engage coil at target RPM
-      disengage_rpm = 850, -- disengage coil when RPM drops below this
+      engage_rpm = 900,    -- engage coil at target RPM (skaliert proportional bei Teillast)
+      disengage_rpm = 850, -- disengage coil when RPM drops below this (skaliert proportional)
+      overspeed_band = 20, -- RPM über Ziel-RPM ab dem Overspeed-Coil greift
       cooldown_s = 1.0,
       ema_alpha = 0.2
     }
