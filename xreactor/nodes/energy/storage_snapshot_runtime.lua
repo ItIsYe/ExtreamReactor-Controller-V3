@@ -72,7 +72,10 @@ function M.new(opts)
       total = { stored = 0, capacity = 0, input = 0, output = 0 }
     }
     local age = now - (snapshot.ts or 0)
-    if max_age_ms > 0 and age > max_age_ms and #(snapshot.stores or {}) == 0 then
+    -- Fix #1: Storage wird jetzt immer neu gelesen wenn age > max_age_ms,
+    -- nicht nur beim ersten Sample. Sonst zeigt die Node nach dem ersten
+    -- erfolgreichen Read permanent veraltete Werte.
+    if max_age_ms > 0 and age > max_age_ms then
       snapshot = sample_storage_stats(now)
       age = now - (snapshot.ts or 0)
     end
