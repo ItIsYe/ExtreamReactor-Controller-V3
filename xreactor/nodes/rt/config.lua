@@ -49,14 +49,16 @@ return {
   },
 
   autonom = {
+    -- control_rod_level: nicht mehr aktiv genutzt (INITIAL_ROD_LEVEL in CONFIG übernimmt).
+    -- Bleibt als Dokumentation erhalten, wird aber nicht ausgewertet.
     control_rod_level = 70,
     max_rpm = 900,
     min_flow = 0,
     max_flow = 2000,
     flow_step = 50,
     ramp_step = 50,
-    regulator_min_rods = 80,
-    regulator_max_rods = 98,
+    -- regulator_min_rods / regulator_max_rods: ENTFERNT.
+    -- Kanonische Rod-Grenzen stehen jetzt ausschließlich in rails.reactor_rods.min/.max.
     reactor_adjust_interval = 5.0,
     steam_reserve = 5000,
     steam_deficit = 5000
