@@ -174,6 +174,28 @@ function M.new(opts)
         )
         rt_node.queue_state = rt_node.queue_state or node.queue_state or node.state or "idle"
         rt_node.queue_step = rt_node.queue_step or node.queue_step or (node.last_command_result and node.last_command_result.transition) or "-"
+        -- Capacity-Learning Status aus dem Node-Payload lesen
+        local rt_data = node.rt or {}
+        rt_node.capacity_ready          = rt_data.capacity_ready == true or node.capacity_ready == true
+        rt_node.capacity_max            = pick_number(rt_data.capacity_max, node.capacity_max, 0)
+        rt_node.capacity_stable_samples = rt_data.capacity_stable_samples or 0
+        rt_node.capacity_stable_turbines= rt_data.capacity_stable_turbines or 0
+        rt_node.capacity_total_turbines = rt_data.capacity_total_turbines or 0
+        rt_node.capacity_source         = rt_data.capacity_source or "UNKNOWN"
+        -- Learning-Meldung für die UI aufbauen
+        if not rt_node.capacity_ready then
+          rt_node.learning_note = string.format(
+            "LEARNING %d/%d Turbinen stabil (%d Samples)",
+            rt_node.capacity_stable_turbines,
+            rt_node.capacity_total_turbines,
+            rt_node.capacity_stable_samples
+          )
+          rt.rt_learning = (rt.rt_learning or 0) + 1
+        else
+          rt_node.learning_note = string.format(
+            "READY %.0f RF/t", rt_node.capacity_max
+          )
+        end
         rt_node = normalize_rt_display(rt_node)
         if rt_node.assignment_state == "ASSIGNED" then
           rt.assigned = (rt.assigned or 0) + 1
@@ -243,7 +265,18 @@ function M.new(opts)
     overview.nodes_stale = overview.nodes_stale or 0
     energy.matrix_count = #energy.matrices
     overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d energy-matrix=%d src=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0, energy.matrix_count or 0, energy.matrix_sources or 0)
-    overview.rt_summary = string.format("RT active=%d startup=%d shutdown=%d stale=%d assigned=%d unassigned=%d unavailable=%d master=%d local=%d", rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0, rt.assigned or 0, rt.unassigned or 0, rt.unavailable or 0, rt.master_control or 0, rt.local_control or 0)
+    -- Learning-Meldung in rt_summary einbauen
+    local learning_count = rt.rt_learning or 0
+    local learning_hint = learning_count > 0
+      and string.format(" | LEARNING: %d Node(s) lernen noch ein", learning_count)
+      or ""
+    overview.rt_summary = string.format(
+      "RT active=%d startup=%d shutdown=%d stale=%d assigned=%d unassigned=%d unavailable=%d master=%d local=%d%s",
+      rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0,
+      rt.assigned or 0, rt.unassigned or 0, rt.unavailable or 0,
+      rt.master_control or 0, rt.local_control or 0,
+      learning_hint
+    )
     overview.energy_hint = string.format("Energy %.1f%% | Stored %.1f/%.1f | In %.1f Out %.1f | Mode %s | Matrices %d", energy.aggregate_percent or 0, energy.stored or 0, energy.capacity or 0, energy.input or 0, energy.output or 0, tostring(energy.mode or "-"), energy.matrix_count or 0)
     energy.energy_summary = overview.energy_hint
     overview.ops_hints[#overview.ops_hints + 1] = (overview.nodes_stale or 0) > 0 and "Stale Nodes erkannt: Kommunikationslage pruefen" or "Alle Nodes liefern frische Daten"
