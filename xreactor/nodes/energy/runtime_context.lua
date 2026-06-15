@@ -56,6 +56,10 @@ function M.new(opts)
     last_heartbeat_warn = 0,
     master_seen_ts = nil,
     master_alerts = {},
+    -- C2: first_status_payload_ts explizit initialisieren
+    -- (wird in status_payload.lua beim ersten Build gesetzt)
+    first_status_payload_ts = nil,
+    last_matrix_mode = nil,
     role = role
   }
 end
