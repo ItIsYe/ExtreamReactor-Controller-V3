@@ -61,8 +61,9 @@ function M.tick(runtime)
   if runtime.refs.sequencer then
     runtime.refs.sequencer:tick(runtime.state.nodes)
   end
-  if runtime.refs.rt_sync_coalescer then
-    runtime.refs.rt_sync_coalescer.flush()
+  -- M1: flush über den kanonischen runtime-Wrapper, nicht direkt auf Coalescer
+  if runtime.flush_rt_sync_queue then
+    runtime.flush_rt_sync_queue()
   end
   local rt_ops = runtime.libs.rt_ops
   if rt_ops then
