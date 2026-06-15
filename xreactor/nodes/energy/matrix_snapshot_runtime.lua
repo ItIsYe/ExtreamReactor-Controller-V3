@@ -295,7 +295,8 @@ end
 function runtime:poll_static_components(now_ts, groups)
   local component_poll_interval_ms = math.max(1, tonumber(self.config.matrix_component_poll_interval) or 30) * 1000
   local component_call_budget = math.max(1, math.floor(tonumber(self.config.matrix_component_call_budget) or 2))
-  local component_time_budget_ms = math.max(50, math.floor(tonumber(self.config.matrix_component_time_budget_ms) or 400))
+  -- P3: Fallback auf 2000ms (konsistent mit main.lua Default und config.DEFAULT_MATRIX_COMPONENT_TIME_BUDGET_MS)
+  local component_time_budget_ms = math.max(50, math.floor(tonumber(self.config.matrix_component_time_budget_ms) or 2000))
   local ordered = groups or {}
   if #ordered == 0 then
     return
