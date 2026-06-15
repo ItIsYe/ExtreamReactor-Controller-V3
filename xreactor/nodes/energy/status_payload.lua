@@ -57,11 +57,14 @@ function M.new(opts)
     energy.storage_capacity = energy.capacity
     energy.storage_input = energy.input
     energy.storage_output = energy.output
-    -- Backward compatibility: stored/capacity/input/output remain aggregate totals.
-    energy.stored = total_stored
+    -- C1: Kanonische Felder sind aggregate_stored/capacity/input/output.
+    -- stored/capacity/input/output werden als Aliase beibehalten (Abwärtskompatibilität).
+    -- Master liest: aggregate_stored (Gesamtspeicher), matrix_energy (nur Matrix),
+    --               storage_stored (nur Storages), matrix_in/out (Matrix-Fluss).
+    energy.stored   = total_stored
     energy.capacity = total_capacity
-    energy.input = total_input
-    energy.output = total_output
+    energy.input    = total_input
+    energy.output   = total_output
     local summary = {}
     table.sort(energy.stores, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
     for i = 1, math.min(3, #energy.stores) do
