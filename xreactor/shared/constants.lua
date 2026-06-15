@@ -28,13 +28,17 @@ constants.message_types = {
 }
 
 constants.node_states = {
-  OFF = "OFF",
-  STARTUP = "STARTUP",
-  RUNNING = "RUNNING",
-  LIMITED = "LIMITED",
-  AUTONOM = "AUTONOM",
-  MANUAL = "MANUAL",
-  EMERGENCY = "EMERGENCY"
+  OFF       = "OFF",
+  STARTUP   = "STARTUP",
+  RUNNING   = "RUNNING",
+  LIMITED   = "LIMITED",
+  AUTONOM   = "AUTONOM",
+  MANUAL    = "MANUAL",
+  EMERGENCY = "EMERGENCY",
+  -- Fix I1: SAFE fehlte — RT-Node kennt STATE.SAFE = "SAFE"
+  -- Ohne diesen Eintrag konnte Master SAFE-Nodes nie erkennen
+  -- (Sequencer, rt_sync mode_sync_action, is_startable)
+  SAFE      = "SAFE"
 }
 
 constants.status_levels = {
