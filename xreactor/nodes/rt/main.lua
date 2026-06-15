@@ -70,12 +70,7 @@ local function get_turbine_ctrl(name)
   end
   return ctrl
 end
--- Fix #7: turbine_ctrl wird sauber im runtime_ctx verwaltet,
--- kein Zugriff mehr auf _G/_ENV nötig.
-local turbine_ctrl_table = {}
-local function turbine_ctrl_store()
-  return turbine_ctrl_table
-end
+-- turbine_ctrl Store vollständig in core.turbine_ctrl (kein _G mehr).
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local ui = require("core.ui")
