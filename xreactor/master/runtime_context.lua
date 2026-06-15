@@ -106,9 +106,10 @@ function M.new_runtime(opts)
       trends = (opts and opts.trends) or nil,
     },
     tuning = {
-      layout_config_path = (opts and opts.layout_config_path) or "/xreactor/config/master_ui_layout.json",
-      node_offline_purge_after_ms = (opts and opts.node_offline_purge_after_ms) or 120000,
-      rt_sync_batch_window_ms = (opts and opts.rt_sync_batch_window_ms) or 250,
+      layout_config_path             = (opts and opts.layout_config_path) or "/xreactor/config/master_ui_layout.json",
+      -- Fix #2: node_offline_purge_after_ms konfigurierbar (config.DEFAULT_NODE_OFFLINE_PURGE_AFTER_S)
+      node_offline_purge_after_ms    = (opts and opts.node_offline_purge_after_ms) or 120000,
+      rt_sync_batch_window_ms        = (opts and opts.rt_sync_batch_window_ms) or 250,
       rt_shutdown_candidate_stability_ms = (opts and opts.rt_shutdown_candidate_stability_ms) or 1500,
     }
   }
