@@ -2,9 +2,9 @@
 
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
-> **Branch:** `beta` — active development. Current release: **beta-v45** (manifest v45).
+> **Branch:** `beta` — active development.
 >
-> See [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) for a full summary of recent work — useful for continuing in a new chat or with a different AI.
+> See [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) for the full technical reference.
 
 ---
 
@@ -64,57 +64,90 @@ The installer downloads the manifest, lets you pick a role, stages all required 
 
 ---
 
-## RT Node — Turbine Regulation
+## RT Node — Turbine & Reactor Control
 
 ### Why 900 RPM?
 
-**900 RPM is the efficiency optimum for ER2 turbines.** The coil (generator) only engages at ≥ 900 RPM, so any RPM below 900 produces no electricity. Power control therefore works exclusively by varying the **number of running turbines**, not their speed.
+**900 RPM is the efficiency optimum for ER2 turbines.** The coil (generator) only produces power at ≥ 900 RPM. Below that, the turbine consumes steam but generates no electricity.
 
-### Power Control — Automatic Turbine Count
+### Power Control — Turbine Count + Partial Load Rotation
+
+The RT node receives a `power_percent` setpoint (0–100%) from the MASTER. It converts this to a turbine plan:
 
 ```
-active_count = round(total_turbines × power_percent / 100)
+demand = total_turbines × power_percent / 100
 
-Example (25 turbines):
-  100% → 25 at 900 RPM  (all coils on)
-   80% → 20 at 900 RPM + 5 decelerating
-   50% → 13 at 900 RPM + 12 decelerating
-    0% → all decelerating to 0
+full_count  = floor(demand)          → these run at 900 RPM (coil ON)
+remainder   = demand − full_count    → one turbine runs at partial RPM
+rest                                 → coast to 0 (coil OFF)
+
+Example: 25 turbines, 54% → demand = 13.5
+  13 turbines at 900 RPM
+   1 turbine  at 450 RPM  (partial, coil thresholds scaled proportionally)
+  11 turbines coast to 0
 ```
 
-The flow regulation loop is **always closed** for every turbine — state only controls the target RPM (900 for active, 0 for stopped).
+**Rotation:** Every 5 minutes a `rotation_offset` shifts which physical turbines carry full load, partial load, or coast. All turbines share operating hours equally over time. Works for any number of turbines per node (e.g. 15 or 25).
 
 ### Coil Thresholds
 
-| RPM | Action |
-|-----|--------|
-| ≥ 900 | Engage (start generating) |
-| 850–899 | Hold current state |
-| < 850 | Disengage |
+Coil engage/disengage thresholds scale proportionally with the target RPM:
 
-### Turbine Regulation Rules
+| Condition | Full load (900 RPM) | Partial (e.g. 450 RPM) |
+|-----------|--------------------|-----------------------|
+| Engage coil | ≥ 900 RPM | ≥ 450 RPM |
+| Hold state | 850–899 RPM | 425–449 RPM |
+| Disengage | < 850 RPM | < 425 RPM |
+| Overspeed brake | > target + 20 RPM | > target + 20 RPM → coil forced ON |
 
-1. **Always regulated** — no state-based exceptions. Every turbine gets individual closed-loop flow control every tick.
-2. **Target RPM determines behavior** — active=900, stopping=0.
-3. **Overspeed brake disabled at target=0** — turbines stopping naturally; no OVERSPEED_BRAKE deadlock.
+### Capacity Learning
 
-### Startup / Capacity Learning
+On first boot (or after deleting the cache), the node learns its maximum output:
 
 ```
-Boot → 5s delay → Discover peripherals
-     → CAPACITY LEARNING
-         Rods: 50% (bypasses regulator_min_rods cap)
-         All 25 turbines regulated to 900 RPM simultaneously
-         3 stable samples with output > 0 → LOCKED
-         Cache saved: /xreactor/config/capacity_cache.lua
-     → MASTER mode: accept SET_SETPOINTS
+1. All turbines regulated to 900 RPM
+2. Reactor rods controlled by the normal rod regulator (same rules as production)
+3. Wait until ALL turbines are stable at target RPM with coil engaged and energy > 0
+4. Collect 3 consecutive stable samples
+5. Lock: max_output = peak of 3 samples
+6. Cache saved to /xreactor/config/capacity_cache.lua
 ```
+
+While learning, the MASTER receives `capacity_ready=false` and sends 0% setpoints. The Master UI shows `LEARNING X/N turbines stable (Y samples)` per node.
+
+After lock, `SET_SETPOINTS` commands are accepted and the MASTER begins normal power distribution.
+
+**Force re-learning:**
+```sh
+delete /xreactor/config/capacity_cache.lua
+reboot
+```
+
+### Reactor Rod Control
+
+The rod regulator runs at all times (including during learning) using the same rules:
+
+```
+steam_margin = available_steam − total_turbine_steam_demand
+Positive margin → insert rods (less steam)
+Negative margin → retract rods (more steam)
+
+Deadband:  ±5000 mB  (no action in this range)
+Step:      max ±5% per application
+Cooldown:  1.5s between adjustments
+Rod range: min=80% .. max=98% insertion (configurable in rails.reactor_rods)
+
+Safety overrides (bypass rod caps):
+  SCRAM / EMERGENCY → 100% insertion
+```
+
+Coolant protection reduces or blocks rod retraction when coolant ratio is low (soft limit 0.28, hard limit 0.22).
 
 ---
 
 ## FUEL & REPROCESSING — Routing
 
-Mekanism pipe valves must be set to **High Redstone = Interrupt**. Configure via the **Router tab** on the Monitor (or PC terminal). Routes save immediately to `/xreactor/config/fuel_routes.lua` / `reproc_routes.lua`.
+Mekanism pipe valves must be set to **High Redstone = Interrupt**. Configure via the **Router tab** on the Monitor (or PC terminal). Routes save to `/xreactor/config/fuel_routes.lua` / `reproc_routes.lua`.
 
 ---
 
@@ -133,16 +166,6 @@ Identity = `node-<computerID>`. Stored in `/xreactor/config/node_id.txt`. Never 
 ## PC Console Fallback
 
 No Monitor attached? All nodes render their UI directly on the terminal. Buttons are clickable via mouse on Advanced Computers.
-
----
-
-## Release
-
-| Field | Value |
-|-------|-------|
-| `release_id` | `beta-v45` |
-| `manifest_version` | 45 |
-| `manifest_file_count` | 125 |
 
 ---
 
