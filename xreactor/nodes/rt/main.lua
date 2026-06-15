@@ -684,14 +684,11 @@ local function read_turbine_flow(turbine, caps)
   return nil, "FLOW_UNAVAILABLE"
 end
 local function init_turbine_ctrl()
-  -- Fix #6/#10: Log-State zurücksetzen bei Neuinitialisierung,
-  -- damit Turbinen-Logs nach einem Restart nicht unterdrückt werden.
+  -- Log-State zurücksetzen (Fix #10).
   flow_apply_helpers.reset_log_state()
-  local turbine_ctrl = turbine_ctrl_store()
-  for key in pairs(turbine_ctrl) do
-    turbine_ctrl[key] = nil
-  end
-  runtime_ctx.autonom_state.turbines = turbine_ctrl
+  -- Ctrl-Store vollständig leeren via Modul-Reset (kein _G mehr).
+  ensure_turbine_ctrl.reset()
+  runtime_ctx.autonom_state.turbines = {}
   local turbines = config.turbines or {}
   log("INFO", "Detected " .. tostring(#turbines) .. " turbines")
   if #turbines < 1 then
