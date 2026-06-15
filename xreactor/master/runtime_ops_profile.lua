@@ -17,6 +17,7 @@ function M.estimate_base_power(runtime)
   for _, node in pairs(runtime.state.nodes) do
     if node.role == constants.roles.RT_NODE then
       rt_count = rt_count + 1
+      -- Fix #4: actual_output kanonisch; power_actual + output als Fallback
       local output = number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0)
       measured_total = measured_total + output
       local status = tostring(node.status or ""):upper()
@@ -81,7 +82,7 @@ function M.sample_trends(runtime)
   local power, stored, capacity, water_total = 0, 0, 0, 0
   for _, node in pairs(runtime.state.nodes) do
     if node.role == runtime.libs.constants.roles.RT_NODE then
-      power = power + (number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0))
+      power = power + (number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0))  -- actual_output kanonisch
     elseif node.role == runtime.libs.constants.roles.ENERGY_NODE then
       stored = stored + (node.stored or 0)
       capacity = capacity + (node.capacity or 0)
