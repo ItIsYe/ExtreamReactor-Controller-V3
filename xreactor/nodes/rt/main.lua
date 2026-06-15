@@ -1633,15 +1633,11 @@ local function updateControl()
       -- During capacity learning: use a lower rod level to generate enough steam
       -- so turbines produce energy and the learning energy>0 check passes.
       -- Once capacity is locked, the normal setpoint control takes over.
-      -- Während Capacity-Learning: Stäbe auf LEARNING_ROD_LEVEL halten
-      -- damit genug Dampf für die Turbinen entsteht. Der Steam-Margin-Regulator
-      -- ist während !cap_locked deaktiviert (updateReactorControl gibt früh zurück),
-      -- deshalb muss hier ein fixer Wert gesetzt werden.
-      local capacity_locked = runtime_ctx.capacity_learning
-        and runtime_ctx.capacity_learning.locked == true
-      if not capacity_locked then
-        applyReactorRods(CONFIG.LEARNING_ROD_LEVEL, true, "LEARNING_PHASE")
-      end
+      -- P5: Kein fixer LEARNING_ROD_LEVEL Override mehr.
+      -- Der normale Rod-Regulator läuft auch während des Learnings mit denselben
+      -- Vorgaben wie im Normalbetrieb. Während Learning laufen alle Turbinen auf
+      -- 900 RPM (get_turbine_target_rpm gibt base zurück wenn !cap_locked),
+      -- der Reaktor regelt sich selbst auf den entstehenden Dampfbedarf ein.
       if not runtime_ctx.autonom_control_logged then
         runtime_ctx.autonom_control_logged = true
         log("INFO", "AUTONOM actuator control active")
