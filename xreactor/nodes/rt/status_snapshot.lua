@@ -118,13 +118,12 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
     end
   end
 
+  -- required = total: alle Turbinen müssen stabil sein (wird unten auf total gesetzt).
   local required = 1
   local observed_total = numeric_value(total_output) or 0
   local sample_output = stable_output > 0 and stable_output or observed_total
-  -- Learning only locks when actual energy is measured (sample_output > 0).
-  -- If turbines are mechanically stable but show zero energy, we wait for
-  -- LEARNING_ROD_LEVEL (50% rods) to produce enough steam for real measurements.
-  local ok = stable >= required and sample_output > 0
+  -- Sample ist nur gültig wenn alle Turbinen stabil UND echte Energie gemessen.
+  local ok = stable >= required and producing >= required and sample_output > 0
   local reason
   if ok then
     reason = "STABLE_PROGRESSIVE_10PCT"
