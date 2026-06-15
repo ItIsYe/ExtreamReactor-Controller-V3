@@ -193,6 +193,7 @@ function M.evaluate_rt_node(node, opts)
   local mode = normalize_node_mode(node and node.mode)
   local status = node and node.status or constants.status_levels.OFFLINE
   local state = node and node.state or constants.node_states.OFF
+  -- Fix #4: actual_output kanonisch, power_actual + output Fallback
   local output = node and (number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0)) or 0
   if hold then
     return { controllable = false, reason = "GLOBAL_HOLD", mode = mode, status = status, state = state, output = output }
