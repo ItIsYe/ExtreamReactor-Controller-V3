@@ -34,7 +34,18 @@ local function run_master()
   local runtime = runtime_context.new_runtime({ trends = trends_lib.new(600) })
   runtime.config = config
   runtime.log = runtime_log
-  runtime.libs = { constants = constants, utils = utils, health = health, ui = ui, profiles = profiles, rt_sync = rt_sync, rt_sync_coalescer = rt_sync_coalescer_lib }
+  -- Fix P1: rt_ops und profile_ops in libs, damit housekeeping.tick() sie findet
+  runtime.libs = {
+    constants        = constants,
+    utils            = utils,
+    health           = health,
+    ui               = ui,
+    profiles         = profiles,
+    rt_sync          = rt_sync,
+    rt_sync_coalescer = rt_sync_coalescer_lib,
+    rt_ops           = rt_ops,
+    profile_ops      = profile_ops
+  }
   local recovery_status = bootstrap.get_recovery_status and bootstrap.get_recovery_status() or nil
 
   local function mark_rt_sync_dirty(node, reason)
@@ -62,8 +73,21 @@ local function run_master()
     update_node = function(message) return runtime.refs.node_message_handler.update_node(message) end,
     sync_rt_node = function(node, reason) rt_ops.sync_rt_node(runtime, node, reason) end,
     build_master_alert_payload = function() return housekeeping.build_master_alert_payload(runtime.refs.alert_service, config) end,
-    housekeeping_tick = function() housekeeping.handle_command_timeouts({ constants = constants, utils = utils, comms = runtime.refs.comms, nodes = runtime.state.nodes, log = runtime.log }); if runtime.refs.sequencer then runtime.refs.sequencer:tick(runtime.state.nodes) end; flush_rt_sync_queue(); rt_ops.check_timeouts(runtime); profile_ops.sample_trends(runtime) end,
-    ui_snapshot = function(event) return { event = event and event[1] or "tick", monitors = runtime.state.monitor_cache.list and #runtime.state.monitor_cache.list or 0, active_view = runtime.refs.view_manager and runtime.refs.view_manager.active_key or "overview", node_count = runtime_context.table_count(runtime.state.nodes), queue_depth = runtime.refs.sequencer and #runtime.refs.sequencer.queue or 0, rt_sync_pending = runtime.refs.rt_sync_coalescer and runtime.refs.rt_sync_coalescer.size() or 0, critical_blink = runtime.state.critical_blink_until, trends = runtime.state.last_trend_sample } end,
+    -- Fix P1/P6: housekeeping_tick jetzt als housekeeping.tick(runtime)
+    housekeeping_tick = function() housekeeping.tick(runtime) end,
+    ui_snapshot = function(event)
+      -- Fix P1: ui_snapshot aus dem Lambda-Knäuel befreit
+      return {
+        event             = event and event[1] or "tick",
+        monitors          = runtime.state.monitor_cache.list and #runtime.state.monitor_cache.list or 0,
+        active_view       = runtime.refs.view_manager and runtime.refs.view_manager.active_key or "overview",
+        node_count        = runtime_context.table_count(runtime.state.nodes),
+        queue_depth       = runtime.refs.sequencer and #runtime.refs.sequencer.queue or 0,
+        rt_sync_pending   = runtime.refs.rt_sync_coalescer and runtime.refs.rt_sync_coalescer.size() or 0,
+        critical_blink    = runtime.state.critical_blink_until,
+        trends            = runtime.state.last_trend_sample
+      }
+    end,
     ui_render = function()
       monitor_ops.refresh_monitors(runtime, false)
       if runtime.refs.ui_controller then
