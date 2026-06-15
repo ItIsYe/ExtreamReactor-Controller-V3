@@ -183,17 +183,22 @@ local function render_overview(mon, model)
   write_line(mon, y, string.format("RPM %s/%s Steam %s", fmt_short(snapshot.avg_rpm), fmt_short(model.target_rpm), fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
   write_line(mon, y, string.format("R:%d T:%d Cmd:%s M:%s", reactors, turbines, tostring(model.last_command or "-"), tostring(model.master_age or "-")), "text"); y = y + 1
 
+  -- Turbinen-Übersicht: max 5 Zeilen damit die Status-Infos oben immer sichtbar bleiben.
+  -- Für die vollständige Turbinen-Liste → Seite "Turbines" (Page 2).
   local list = snapshot.turbines or {}
+  local OVERVIEW_MAX_TURBINES = 5
   if y <= h - 1 and #list > 0 then
     table_header(mon, y, { "T", "RPM", "RF/t", "C" }, { 7, 7, 8, 4 }); y = y + 1
-    local max_rows = math.max(0, h - y)
+    local max_rows = math.max(0, math.min(OVERVIEW_MAX_TURBINES, h - y))
     local shown = math.min(#list, max_rows)
     for i = 1, shown do
       local t = list[i]
       table_row(mon, y, { tostring(t.id or i), fmt_short(t.rpm), fmt_short(t.energy), t.inductor and "ON" or "OFF" }, { 7, 7, 8, 4 }, (t.bound == false) and "WARNING" or "OK", 4)
       y = y + 1
     end
-    if #list > shown and y <= h then write_line(mon, y, "... +" .. tostring(#list - shown) .. " turbines", "muted") end
+    if #list > shown and y <= h then
+      write_line(mon, y, "..." .. tostring(#list - shown) .. " mehr → Seite 2", "muted")
+    end
   end
 end
 
