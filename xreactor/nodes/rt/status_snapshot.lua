@@ -175,33 +175,36 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
     learning.stable_samples = (learning.stable_samples or 0) + 1
     learning.max_candidate = math.max(learning.max_candidate or 0, sample.sample_output or 0)
     if not learning.locked and learning.stable_samples >= 3 then
+      -- P1: Lock nur wenn alle Turbinen stabil (sample.ok enforced durch required=total)
       learning.max_output = learning.max_candidate
       learning.locked = true
-      learning.reason = "LOCKED_PROGRESSIVE_10PCT_MAX"
+      learning.reason = "LOCKED_ALL_TURBINES_STABLE"
       if type(ctx.log) == "function" then
         pcall(ctx.log, "INFO", string.format(
-          "RT capacity locked output=%.2f samples=%d stable_turbines=%d/%d tolerance=10pct",
-          learning.max_output,
-          learning.stable_samples,
-          sample.stable,
-          sample.total
+          "RT capacity locked output=%.2f samples=%d stable=%d/%d",
+          learning.max_output, learning.stable_samples,
+          sample.stable, sample.total
         ))
       end
-    elseif learning.locked and sample.sample_output and sample.sample_output > (learning.max_output or 0) then
-      learning.max_output = sample.sample_output
-      learning.reason = "UPDATED_PROGRESSIVE_10PCT_MAX"
-      if type(ctx.log) == "function" then
-        pcall(ctx.log, "INFO", string.format(
-          "RT capacity updated output=%.2f stable_turbines=%d/%d tolerance=10pct",
-          learning.max_output,
-          sample.stable,
-          sample.total
-        ))
+    elseif learning.locked then
+      -- P3: Update nur wenn >1% über bisherigem Max — verhindert unnötige Cache-Writes.
+      local threshold = (learning.max_output or 0) * 1.01
+      if sample.sample_output and sample.sample_output > threshold then
+        learning.max_output = sample.sample_output
+        learning.reason = "UPDATED_ALL_TURBINES_STABLE"
+        if type(ctx.log) == "function" then
+          pcall(ctx.log, "INFO", string.format(
+            "RT capacity updated output=%.2f stable=%d/%d",
+            learning.max_output, sample.stable, sample.total
+          ))
+        end
       end
     end
   else
+    -- P4: stable_samples + max_candidate immer zurücksetzen wenn Sample ungültig
     if not learning.locked then
       learning.stable_samples = 0
+      learning.max_candidate  = 0
     end
   end
 
