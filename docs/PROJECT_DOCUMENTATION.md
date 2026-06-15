@@ -1,6 +1,6 @@
 # XReactor Controller V3 — Vollständige Projektdokumentation
 
-> Letzte Aktualisierung: beta-v45  
+> Letzte Aktualisierung: beta (aktuelle Session)
 > Stack: CC:Tweaked · Extreme Reactors 2 · Mekanism · ATM10 (MC 1.21.1)
 
 ---
@@ -21,7 +21,6 @@
 12. [node_id System](#12-nodeid-system)
 13. [Ingame Konfiguration](#13-ingame-konfiguration)
 14. [Bekannte Einschränkungen](#14-bekannte-einschränkungen)
-15. [Changelog beta-v29 → beta-v45](#15-changelog-beta-v29--beta-v45)
 
 ---
 
@@ -51,35 +50,35 @@ Das gesamte Steuerungssystem ist auf **maximale Energieeffizienz** ausgelegt. De
 
 ### Warum immer 900 RPM?
 
-**900 RPM ist das Effizienzoptimum für Extreme Reactors 2 Turbinen.** Bei genau 900 RPM wandelt die Turbine Dampf mit maximalem Wirkungsgrad in RF um. Darunter steigt der spezifische Dampfverbrauch pro RF — die Turbine produziert weniger Strom pro Dampfeinheit.
-
-Konsequenz: Es gibt **keinen sinnvollen Betrieb bei Teildrehzahl**. Eine Turbine bei 450 RPM ist ineffizienter als gar nicht zu laufen, weil sie Dampf verbraucht aber weniger Strom erzeugt.
+**900 RPM ist das Effizienzoptimum für Extreme Reactors 2 Turbinen.** Bei genau 900 RPM wandelt die Turbine Dampf mit maximalem Wirkungsgrad in RF um. Unterhalb von 900 RPM ist der Coil nicht eingeklinkt — die Turbine verbraucht Dampf erzeugt aber keinen Strom.
 
 ### Coil-Engagement und Stromerzeugung
 
-Der Generator-Coil (Induktor) erzeugt erst ab einer bestimmten Drehzahl nutzbar Strom:
+Der Generator-Coil (Induktor) skaliert seine Einschalt- und Ausschaltschwellen proportional zur Ziel-RPM:
 
-| RPM | Coil-Zustand | Stromerzeugung |
-|-----|-------------|----------------|
-| ≥ 900 | Einschalten | Ja, maximale Effizienz |
-| 850–899 | Zustand halten | Ja (wenn vorher eingeschaltet) |
-| < 850 | Ausschalten | Nein |
+| Betrieb | Ziel-RPM | Einschalten | Ausschalten |
+|---------|----------|-------------|-------------|
+| Vollast | 900 | ≥ 900 RPM | < 850 RPM |
+| Teillast 50% | 450 | ≥ 450 RPM | < 425 RPM |
+| Stop | 0 | — (austrudeln) | — |
+| Overspeed | any | > Ziel + 20 RPM → Coil FORCE ON (mitreißen) | — |
 
-**RPM-Skalierung funktioniert nicht für Leistungsreduzierung:** Eine Turbine bei 450 RPM hat keinen engagierten Coil → kein Strom → schlechter als stoppen.
-
-### Leistungsregelung: immer über Turbinen-Anzahl
-
-Das einzige effiziente Verfahren zur Leistungsreduzierung ist das **Stoppen von Turbinen**:
+### Leistungsregelung: Turbinen-Anzahl zuerst, Teillast als Fallback
 
 ```
-Leistung 80%  →  20 von 25 Turbinen bei 900 RPM (Coil AN)
-                  5 von 25 Turbinen bremsen auf 0 (Coil AUS)
+Nachfrage = Anzahl_Turbinen × power_percent / 100
 
-Leistung 50%  →  13 von 25 Turbinen bei 900 RPM (Coil AN)
-                 12 von 25 Turbinen bremsen auf 0 (Coil AUS)
+Vollast-Turbinen  = floor(Nachfrage)  → 900 RPM, Coil nach Schwelle
+Teillast-Turbine  = 1 (falls Restteil > 1%)  → anteilige RPM, Coil skaliert
+Stop-Turbinen     = Rest  → 0 RPM, austrudeln
+
+Beispiel: 25 Turbinen, 54% → Nachfrage = 13.5
+  13 Turbinen bei 900 RPM  (Coil AN bei ≥ 900)
+   1 Turbine  bei 450 RPM  (Coil AN bei ≥ 450, AUS bei < 425)
+  11 Turbinen trudeln aus   (flow = 0)
 ```
 
-Jede laufende Turbine läuft immer bei 900 RPM (Effizienzoptimum). Nur die Anzahl der laufenden Turbinen ändert sich.
+**Rotation:** Alle 5 Minuten rotiert ein `rotation_offset` die Zuweisung über alle physischen Turbinen-Positionen. Jede Turbine trägt alle Rollen gleichmäßig — vollständig unabhängig von der Turbinen-Anzahl pro Node (1 bis N).
 
 ---
 
@@ -110,12 +109,29 @@ Jeder Node hat eine stabile ID `node-<ComputerID>` in `/xreactor/config/node_id.
 
 Koordiniert alle Nodes, berechnet Leistungsverteilung, zeigt System-UI.
 
+### Setpoint-Verteilung
+
+Der Master berechnet einmal pro Sync-Zyklus einen Plan für alle RT-Nodes:
+
+```
+global_target (RF/t)
+  → aufgeteilt nach node.capacity_max pro Node
+  → assigned_percent = min(100, assigned_power / capacity_max × 100)
+  → gesendet als SET_SETPOINTS an jeden Node
+```
+
+**Wichtig:** Solange ein Node noch einlernt (`capacity_ready=false`), weist der Master diesem Node **0%** zu. Der Node lehnt Setpoints sowieso ab bis sein Learning abgeschlossen ist. Im Master-UI erscheint `LEARNING X/N Turbinen stabil (Y Samples)` pro lernenden Node und in der RT-Zusammenfassungszeile `LEARNING: N Node(s) lernen noch ein`.
+
+### Deduplizierung
+
+Setpoints werden nur gesendet wenn sich **funktionale Felder** geändert haben (power_percent, target_rpm, enable_reactors/turbines, assignment_state, desired_node_state). Interne Bezeichner wie `assignment_reason` lösen keine neuen Pakete aus.
+
 ### Monitor-UI Tabs
 
 | Tab | Inhalt |
 |-----|--------|
 | Overview | Gesamtsystem, Energie, Alerts |
-| RT-Dashboard | RT-Status, RPM, Kapazität |
+| RT-Dashboard | RT-Status, RPM, Kapazität, Learning-Status |
 | Energy | Matrix-Status |
 | Alerts | Alarme |
 | Logs | Log-Modus-Buttons |
@@ -126,7 +142,7 @@ Wenn kein externer Monitor: Fallback auf Terminal (`monitor_manager.lua`).
 
 ## 5. RT Node — Reaktor & Turbinen
 
-Die RT-Node betreibt eine vollständig lokale Sicherheitsschleife, unabhängig vom MASTER.
+Die RT-Node betreibt eine vollständig lokale Sicherheitsschleife, unabhängig vom MASTER. Jede Node kann beliebig viele Turbinen und Reaktoren verwalten.
 
 ### Startsequenz
 
@@ -134,78 +150,76 @@ Die RT-Node betreibt eine vollständig lokale Sicherheitsschleife, unabhängig v
 1. Boot → 5s warten (LOG_COLLECTOR soll zuerst starten)
 2. Peripherals entdecken (Reaktor + alle Turbinen)
 3. CAPACITY LEARNING
-4. Nach Lock: MASTER-Modus aktiv
+4. Nach Lock: MASTER-Modus aktiv, SET_SETPOINTS werden akzeptiert
 ```
 
 ### Capacity Learning
 
-**Ziel:** Maximale Energieproduktion der Anlage messen.
+**Ziel:** Maximale Energieproduktion der Anlage messen und dauerhaft cachen.
 
 ```
 Lernphase:
-├─ Reaktorstäbe: 50% (bypassed regulator_min_rods-Konfiguration!)
+├─ Reaktorstäbe: normaler Rod-Regulator aktiv (gleiche Regeln wie Normalbetrieb)
 ├─ ALLE Turbinen gleichzeitig auf 900 RPM regeln
-├─ 3 stabile Samples mit output > 0 → LOCK
+├─ Warten bis ALLE Turbinen stabil:
+│    - RPM innerhalb ±10% von Ziel-RPM
+│    - Coil eingeklinkt
+│    - Energie > 0 gemessen
+├─ 3 aufeinanderfolgende stabile Samples → LOCK
+│    (Abbruch bei einem instabilen Sample → Zähler zurück auf 0)
 └─ Cache: /xreactor/config/capacity_cache.lua
            (enthält max_output und turbine_count)
 
-Cache-Invalidierung: automatisch wenn turbine_count sich ändert
+Nach Lock:
+├─ max_output wird nur noch aktualisiert wenn neuer Wert > 1% über bisherigem Max
+└─ Cache-Invalidierung: automatisch wenn turbine_count sich ändert
 ```
 
-Während des Learnings werden `SET_SETPOINTS`-Befehle abgelehnt — das ist korrekt.
+Während des Learnings sendet der Master 0% — der Node behält `capacity_ready=false` bis der Lock abgeschlossen ist.
 
 ### Turbinen-Regelkreis — immer geschlossen
 
-Der Regelkreis läuft für **jede Turbine, jeden Tick**, ohne Ausnahme. Kein State, kein Modus, kein MASTER-Befehl kann die Regelung abschalten. Nur der **Zielwert** ändert sich:
+Der Flow-Regelkreis läuft für **jede Turbine, jeden Tick**, ohne Ausnahme:
 
 ```
-Lernphase (alle):           Ziel = 900 RPM → Coil AN bei 900
-Aktive Turbine (im Budget): Ziel = 900 RPM → Coil AN bei 900
-Inaktive Turbine (zu viel): Ziel =   0 RPM → Coil AUS wenn RPM < 850
-Fehler-State:               Ziel =   0 RPM → Coil AUS
+get_turbine_target_rpm(turbine_index):
+  Während Learning (cap_locked=false):   → base_rpm (900) für alle
+  Außerhalb MASTER-Modus:                → base_rpm für alle
+  Im MASTER-Modus mit cap_locked=true:
+    virt_slot = (index - 1 + rotation_offset) % total
+    virt_slot < full_count  → base_rpm   (Vollast)
+    virt_slot == full_count → partial_rpm (Teillast, falls remainder > 1%)
+    virt_slot > full_count  → 0          (austrudeln)
 ```
 
-### Automatische Leistungsregelung
+### Reaktor-Rod-Regelung
 
-```
-Berechnung:
-  active_count = round(Anzahl_Turbinen × power_percent / 100)
-  Reihenfolge: stabil nach Index in config.turbines
-
-Beispiel (25 Turbinen):
-  power_percent = 80%  →  active_count = 20
-    Turbine  1–20: Ziel 900 RPM (Coil engagiert bei 900 → Strom)
-    Turbine 21–25: Ziel   0 RPM (Coil aus bei < 850     → kein Strom)
-
-  power_percent = 50%  →  active_count = 13
-    Turbine  1–13: 900 RPM, Coil AN
-    Turbine 14–25:   0 RPM, Coil AUS
-
-  power_percent = 100% →  alle 25 bei 900 RPM
-  power_percent =   0% →  alle 25 bremsen auf 0
-```
-
-Warum nicht RPM-Skalierung: Coil engagiert sich erst bei ≥ 900 RPM. Eine Turbine bei 450 RPM erzeugt keinen Strom. Daher ist Turbinen-Anzahl immer effizienter.
-
-### Coil-Schwellwerte
-
-```
-Einschalten:  RPM ≥ 900  (am Zielwert)
-Halten:       RPM 850–899 (Hysterese, kein Wechsel)
-Ausschalten:  RPM < 850
-```
-
-### Steam Margin — Reaktor-Regelung
-
-Nach dem Capacity-Lock regelt der Steam-Margin-Regler die Reaktorstäbe:
+Der Rod-Regulator läuft **immer** — auch während des Capacity-Learnings:
 
 ```
 steam_margin = verfügbarer_Dampf − gesamter_Dampfbedarf_aller_Turbinen
-Positiver Margin → Reaktorstäbe schließen (weniger Dampf)
-Negativer Margin → Reaktorstäbe öffnen  (mehr Dampf)
+Positiver Margin → Stäbe reinfahren (weniger Dampf)
+Negativer Margin → Stäbe rausfahren (mehr Dampf)
+
+Deadband:         ±5000 mB
+Schrittweite:     max ±5% pro Anwendung
+Cooldown:         1.5s zwischen Anpassungen
+Regelbereich:     rails.reactor_rods.min=80% .. max=98% Insertion
+
+Kühlmittel-Schutz:
+  Ratio ≤ 0.28 (soft): max 2 Schritte raus
+  Ratio ≤ 0.22 (hard): kein Rausfahren
+  Ratio ≤ 0.20 (trip): Sicherheitsabschaltung
+
+Safety-Overrides (bypassen Rod-Caps):
+  SCRAM / EMERGENCY  → 100% Insertion
 ```
 
-Während des Learnings ist der Steam-Margin-Regler pausiert (Stäbe bleiben bei 50%).
+### Rod-Konfiguration
+
+Kanonischer Konfig-Pfad: `config.rails.reactor_rods.min` / `.max`
+
+Veraltete Pfade (`autonom.regulator_min_rods`, `autonom.min_rods`) werden automatisch auf den neuen Pfad migriert und loggen eine Warnung.
 
 ### Node-States
 
@@ -219,16 +233,21 @@ Während des Learnings ist der Steam-Margin-Regler pausiert (Stäbe bleiben bei 
 
 ### Safety-Parameter (Defaults)
 
-| Parameter | Wert | Grund |
-|-----------|------|-------|
-| Turbinen Ziel-RPM | 900 | Effizienzoptimum ER2 |
-| Coil einschalten | ≥ 900 RPM | Am Zielwert |
-| Coil ausschalten | < 850 RPM | Hysterese-Band |
-| Reaktorstäbe normal | 80–98% | Regelbereich |
-| Reaktorstäbe SCRAM | 100% | Bypassed alle Limits |
-| Reaktor Temperatur-Limit | 2000°C | Hardware-Schutz |
-| Steam Guard high | 0.82 | Vorwarnung |
-| Steam Guard critical | 0.92 | Notabschaltung |
+| Parameter | Wert | Konfigurierbar |
+|-----------|------|---------------|
+| Turbinen Ziel-RPM | 900 | `config.autonom.target_rpm` |
+| Coil einschalten (Vollast) | ≥ 900 RPM | `rails.coil.engage_rpm` |
+| Coil ausschalten (Vollast) | < 850 RPM | `rails.coil.disengage_rpm` |
+| Coil-Schwellen Teillast | proportional skaliert | automatisch |
+| Overspeed-Band | Ziel + 20 RPM | `rails.coil.overspeed_band` |
+| Teillast-Rotation | alle 5 Min | `ROTATE_INTERVAL` in main.lua |
+| Reaktorstäbe Regelbereich | 80–98% Insertion | `rails.reactor_rods.min/.max` |
+| Reaktorstäbe SCRAM | 100% | nicht konfigurierbar |
+| Temperatur-Trip | 2000°C | `config.autonom.max_temp` |
+| Steam Guard high | 0.82 | `rails.reactor_steam_guard.high_ratio` |
+| Steam Guard critical | 0.92 | `rails.reactor_steam_guard.critical_ratio` |
+| Learning: stabile Samples | 3 | hartcodiert |
+| Learning: Update-Schwelle | +1% über Max | hartcodiert |
 
 ---
 
@@ -242,10 +261,6 @@ Während des Learnings ist der Steam-Margin-Regler pausiert (Stäbe bleiben bei 
 matrix_component_time_budget_ms = 2000  -- Max Zeit pro Tick (Mekanism-API langsam)
 matrix_metric_call_budget = 6           -- Max API-Calls pro Payload
 ```
-
-### Ownership-Regel
-- `nodes/energy/main.lua` = authoritative Runtime-Defaults
-- `nodes/energy/config.lua` = installierbare/user-facing Template
 
 ---
 
@@ -261,25 +276,10 @@ Voraussetzungen:
 
 Konfiguration (ingame):
   Monitor-Tab "Router" → Pipe-Seite antippen → Ziel antippen → Speichern
-  (auch ohne Monitor: PC-Terminal mit Maus-Klick)
 
 Config-Dateien:
   FUEL:         /xreactor/config/fuel_routes.lua
   REPROCESSING: /xreactor/config/reproc_routes.lua
-```
-
-### Baum-Topologie (manuelle Config)
-
-```lua
-logistics = {
-  redstone_tree = {
-    { side = "right", label = "Arm A", children = {
-        { side = "top",    label = "Reaktor 1", reactor = "BigReactors-Reactor_0" },
-        { side = "bottom", label = "Reaktor 2", reactor = "BigReactors-Reactor_1" },
-    }},
-  },
-  valve_open_ms = 2000,
-}
 ```
 
 ---
@@ -304,18 +304,6 @@ MIN_FREE_BYTES = 8192
 | Deduplizierung | per event_id |
 | ACK | nach erfolgreichem Write |
 
-### UI-Anzeige
-
-| Element | Bedeutung |
-|---------|-----------|
-| `Writing Disk #N` | Letzte erfolgreiche Disk |
-| `* Disk A` | Aktive Disk (Sternchen) |
-| `received/written/dup` | Transport-Statistik |
-| `[PAUSE]/[RESUME]` | Disk-Write für Datei-Kopie pausieren |
-
-Log-Modus-Buttons (Zeile 5, für eigene Logs des LOG-Node):
-`[All][Disk][Rmt][Term][Off]`
-
 ---
 
 ## 9. WATER Node
@@ -336,26 +324,6 @@ Telemetrie-Node für Wasser-Versorgung. Keine eigene Hardware-Steuerung.
 5. /startup schreiben → Neustart
 ```
 
-### Manifest-Versionen (Auszug)
-
-| Version | Hauptänderungen |
-|---------|----------------|
-| v29–v31 | Log-Modus-Buttons, PC-Fallback, Retry-Fix |
-| v32 | Router-Dateien ins Manifest aufgenommen |
-| v33 | node_id Label-Bug-Fix (node-54 offline) |
-| v34 | ui_pages.lua für ENERGY/RT/MASTER |
-| v35 | Logger disk_write_test Fix, RT term-Fallback |
-| v36 | write_config kein Crash, Matrix-Budget 2000ms |
-| v37 | RT CONTROL crash (runtime_ctx forward-decl), UI-Timer |
-| v38 | Modul-State-Check bypass während Learning |
-| v39 | STARTING-Turbinen werden jetzt geregelt |
-| v40 | Flow-Regelung immer aktiv, target_rpm per State |
-| v41 | Coil 900/850, updateControl ohne State-Guard |
-| v42 | power_percent → target_rpm Übersetzung |
-| v43 | Automatische Turbinen-Anzahl-Steuerung mit Coil-Awareness |
-| v44 | turbine_index Fix (war nil → Anzahl-Steuerung hatte keinen Effekt) |
-| v45 | Overspeed-Brake bei target_rpm=0 deaktiviert (Deadlock-Fix) |
-
 ---
 
 ## 11. Logger & Log-Transport
@@ -372,13 +340,6 @@ Telemetrie-Node für Wasser-Versorgung. Keine eigene Hardware-Steuerung.
 
 Persistent via CC `settings.set("xreactor.log_mode", mode)`.
 
-### Wichtige Bugfixes
-
-- `disk_write_test()`: pcall-return-Bug behoben (Lua ignoriert innere Returns) → Logger schreibt jetzt korrekt auf Disk
-- `utils.write_config()`: kein `error()` mehr → RT crasht nie beim Registry-Save
-- `disk_error` wird nach erfolgreichem Write gecleart
-- Retry-Intervall: 4s → 8s → 16s → 30s (Duplikate reduziert)
-
 ### Startup-Delay
 
 Alle Nodes außer `LOG` und `MASTER` warten 5s beim Boot.
@@ -391,11 +352,10 @@ Alle Nodes außer `LOG` und `MASTER` warten 5s beim Boot.
 
 ```
 1. /xreactor/config/node_id.txt  → Single Source of Truth
-2. config.node_id               → wenn kein Role-Default (z.B. "RT-1")
-3. node-<computerID>            → immer stabil, nie vom Label
+2. node-<computerID>             → immer stabil, nie vom Label
 ```
 
-Computer-Labels (`XR-RT-54`) sind nur menschlich lesbar. Die Netzwerk-ID ist immer `node-<ComputerID>`.
+Computer-Labels sind nur menschlich lesbar. Die Netzwerk-ID ist immer `node-<ComputerID>`.
 
 ### Troubleshooting: Node offline
 
@@ -407,19 +367,6 @@ reboot
 ---
 
 ## 13. Ingame Konfiguration
-
-### Installation
-
-```sh
-wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer
-shell.run("/installer")
-```
-
-### Update
-
-```sh
-installer
-```
 
 ### Wichtige Config-Dateien
 
@@ -450,58 +397,17 @@ reboot
 
 ## 14. Bekannte Einschränkungen
 
-### Log-Duplikate (~30–40% nach Optimierung)
+### Teillast-RPM und Effizienz
 
-25 Turbinen × 2 RT-Nodes auf einem Kanal → hohes Nachrichtenaufkommen. Duplikate sind nicht verlustreich — Collector dedupliziert korrekt. Retry-Intervall auf 30s erhöht.
+Eine Teillast-Turbine (z.B. 450 RPM) erzeugt weniger Strom pro Dampfeinheit als eine Vollast-Turbine. Die Teillast wird nur eingesetzt wenn der angeforderte Prozentsatz nicht exakt auf eine ganzzahlige Turbinen-Anzahl passt. Für feinere Leistungsregelung ohne Teillast: mehr Turbinen verwenden.
 
-### Kapazitäts-Learning Voraussetzungen
+### Capacity-Learning Voraussetzungen
 
 Learning schlägt fehl wenn:
-- Reaktor kalt gestartet wird
-- Dampf-Kapazität für 25 Turbinen nicht ausreicht
+- Nicht genug Dampf für alle Turbinen gleichzeitig vorhanden ist
 - Turbinen nicht physisch angeschlossen sind
+- Eine Turbine keine Energie-Readback liefert (API-Fehler)
 
-### Integer-Schritte bei Turbinen-Anzahl
+### Log-Duplikate
 
-Bei 25 Turbinen gibt es 26 diskrete Leistungsstufen (0%, 4%, 8%, ..., 100%). Zwischen diesen Stufen ist keine feinstufigere Regelung möglich ohne RPM-Skalierung (die aber keinen Strom erzeugt). Für feine Leistungsregelung: mehr Turbinen verwenden.
-
----
-
-## 15. Changelog beta-v29 → beta-v45
-
-### Kritische Bugfixes
-
-**RT CONTROL crash beim SET_MODE MASTER (v37)**
-`runtime_ctx` war in `get_turbine_module()` als Global (nil) sichtbar — forward-declaration vor Zeile 49 fehlte. Fix: `local runtime_ctx` forward-deklariert.
-
-**RT Learning nie abgeschlossen — Deadlock (v38)**
-20/25 Turbinen wurden übersprungen (`STATE_OFF`) da MASTER keine Setpoints schicken konnte (wartete auf Capacity-Lock → Deadlock). Fix: Modul-State-Check nur nach Capacity-Lock.
-
-**Turbinen in Blöcken, nicht einzeln (v39/v40/v41)**
-`STATE_STARTING`-Turbinen wurden komplett übersprungen. `process_startup()` verarbeitete nur eine Turbine gleichzeitig → 23 unkontrolliert. Fix: alle Turbinen immer regeln.
-
-**Logger crasht bei Disk-Schreibfehler (v35/v36)**
-`disk_write_test()` nutzte `pcall(function() return false end)` — Lua ignoriert innere Return-Werte → Test immer OK. `utils.write_config()` warf `error()` → RT-Node-Crash. Beides behoben.
-
-**MASTER startet nicht (v33/v34)**
-`render_log_mode_button()` nutzte `colors.black` als Global — nicht verfügbar im Bootstrap. Fix: explizite CC-Farb-Zahlen (`CC_BLACK=32768` etc.). `ui_pages.lua` fehlte im Manifest für ENERGY/RT/MASTER.
-
-**node-54 ständig offline (v33)**
-`resolve_node_id()` nutzte Computer-Label (`XR-RT-54`) als Fallback-ID. MASTER sah zwei Identitäten. Fix: nur `node-<ComputerID>`, nie Label.
-
-**Router-Dateien nie installiert (v32)**
-`logistics_router.lua`, `redstone_router.lua`, `router_ui.lua` fehlten im Manifest → Installer lud sie nie. Fix: ins Manifest aufgenommen mit `required_for={FUEL,REPROCESSING}`.
-
-### Features
-
-| Feature | Version |
-|---------|---------|
-| Log-Modus-Buttons auf allen Nodes | v29/v30 |
-| PC-Console-Fallback (kein Monitor nötig) | v29/v30 |
-| Redstone-Router für REPROCESSING | v31 |
-| Capacity-Cache-Invalidierung bei Turbinen-Änderung | v28 |
-| Startup-Delay 5s (LOG zuerst) | v29 |
-| RT Monitor-Timer unabhängig vom Control-Tick | v37 |
-| LOG_COLLECTOR stay-on-disk + Wipe-on-Wraparound | v29 |
-| Turbinen immer einzeln geregelt, Coil 900/850 | v41 |
-| Automatische Turbinen-Anzahl-Steuerung | v43 |
+Viele Turbinen × mehrere RT-Nodes → hohes Nachrichtenaufkommen. Duplikate sind nicht verlustreich — der Collector dedupliziert korrekt per `event_id`.
