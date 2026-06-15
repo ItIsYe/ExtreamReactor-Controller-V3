@@ -155,7 +155,9 @@ function M.new(opts)
     rt.state = payload.state or rt.state or node.state
     rt.mode = payload.mode or rt.mode or node.mode
     rt.control_mode = payload.control_mode or rt.control_mode or payload.mode
-    rt.assignment_state = rt.assignment_state or payload.assignment_state
+    -- Fix I3: assignment_state kommt immer vom letzten Payload,
+    -- nicht sticky aus vorherigem Zustand (sonst veraltet er)
+    rt.assignment_state = payload.assignment_state or rt.assignment_state
     rt.assignment_reason = rt.assignment_reason or payload.assignment_reason or payload.bindings_summary
     rt.control_source = rt.control_source or payload.control_source
 
