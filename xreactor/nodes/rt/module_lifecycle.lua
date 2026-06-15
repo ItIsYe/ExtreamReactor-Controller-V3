@@ -114,9 +114,13 @@ end
 function M.check_interlocks(ctx, module)
   local limits = M.update_module_limits(ctx, module)
   if module.type == "turbine" then
+    -- Fix #4: Turbinen haben kein Kühlwasser-Interlock (WATER ist nur für Reaktoren).
+    -- RPM-Limit wird über update_module_limits gesetzt, aber blockiert startup nicht.
     for _, limit in ipairs(limits) do
-      if limit == "WATER" then
-        return false, limits
+      if limit == "RPM" then
+        -- RPM-Limit ist kein hard interlock beim Start, nur ein Warnsignal.
+        -- Der Startup-Prozess selbst wartet auf target RPM über turbine_regulator.startup_reached_target.
+        break
       end
     end
   elseif module.type == "reactor" then
@@ -253,8 +257,9 @@ function M.process_startup(ctx)
       ctx.set_active_startup(nil)
       return
     end
+    -- Fix #8: target_rpm wird einmal berechnet und im gesamten Turbinen-Startup-Block wiederverwendet.
+    local target_rpm = ctx.get_target_rpm()
     if module.caps and (module.caps.setFluidFlowRate or module.caps.setFluidFlowRateMax) then
-      local target_rpm = ctx.get_target_rpm()
       local ctrl = ctx.get_turbine_ctrl(module.name)
       local flow, mode = ctx.update_turbine_flow_state(rpm, target_rpm, ctrl)
       local ok_flow, flow_result = pcall(ctx.setTurbineFlow, module.peripheral, module.caps, ctrl.flow)
@@ -280,7 +285,6 @@ function M.process_startup(ctx)
       end
       ctx.log("DEBUG", "Turbine " .. module.name .. " rpm=" .. tostring(rpm) .. " flow=" .. tostring(flow) .. " mode=" .. tostring(mode))
     end
-    local target_rpm = ctx.get_target_rpm()
     rpm = rpm or 0
     if target_rpm > 0 then
       module.progress = safety.clamp(rpm / target_rpm, 0, 1)
