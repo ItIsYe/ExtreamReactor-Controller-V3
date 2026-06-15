@@ -31,7 +31,13 @@ local function run_master()
     tostring(release.manifest_version or "unknown")
   ), "INFO")
 
-  local runtime = runtime_context.new_runtime({ trends = trends_lib.new(600) })
+  local runtime = runtime_context.new_runtime({
+    trends = trends_lib.new(600),
+    -- Fix #2: node_offline_purge_after_ms aus config (DEFAULT_NODE_OFFLINE_PURGE_AFTER_S)
+    node_offline_purge_after_ms = math.floor(
+      (tonumber(config.node_offline_purge_after_s) or CONFIG.DEFAULT_NODE_OFFLINE_PURGE_AFTER_S or 120) * 1000
+    )
+  })
   runtime.config = config
   runtime.log = runtime_log
   -- Fix P1: rt_ops und profile_ops in libs, damit housekeeping.tick() sie findet
@@ -188,9 +194,34 @@ local function run_master()
   end
 end
 
+local function is_terminate_error(err)
+  return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
+end
+
 function M.run()
   local ok, err = xpcall(run_master, function(e) return e end)
-  if not ok then error(err, 0) end
+  if ok then return end
+  if is_terminate_error(err) then return end
+  -- Fix #1: Crash-Screen mit Bestätigung + sauberer Neustart (wie Energy-Node).
+  if term and term.setBackgroundColor and term.setTextColor and colors then
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.red)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("=== MASTER CRASH ===")
+    term.setTextColor(colors.white)
+    print("")
+    print(tostring(err))
+    print("")
+    term.setTextColor(colors.yellow)
+    print("Druecke eine Taste um neu zu starten...")
+    term.setTextColor(colors.white)
+  else
+    print("MASTER CRASH: " .. tostring(err))
+    print("Druecke eine Taste um neu zu starten...")
+  end
+  pcall(os.pullEvent, "key")
+  if os.reboot then os.reboot() end
 end
 
 return M
