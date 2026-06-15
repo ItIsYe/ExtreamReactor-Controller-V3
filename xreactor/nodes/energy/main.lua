@@ -39,7 +39,7 @@ local discovery_log = require("nodes.energy.discovery_log")
 local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
 local matrix_topology_cache = require("nodes.energy.matrix_topology_cache")
 local config_normalizer = require("nodes.energy.config_normalizer")
-local command_handler = require("nodes.energy.command_handler")
+local message_handler_lib = require("nodes.energy.command_handler")
 local status_payload_runtime = require("nodes.energy.status_payload")
 local ui_model_runtime = require("nodes.energy.ui_model")
 local energy_ui_pages = require("nodes.energy.ui_pages")
@@ -345,30 +345,23 @@ local function handle_message(message)
   return message_handler and message_handler.handle_message(message)
 end
 
-local function handle_command(message)
-  return message_handler and message_handler.handle_command(message)
-end
+-- handle_command absichtlich nicht implementiert:
+-- Energy-Node empfängt keine Commands vom Master (nur sendend).
 
 local function init()
   utils.log("ENERGY", "Initializing services (comms, discovery, telemetry, ui)", "INFO")
-  message_handler = command_handler.new({
-    protocol = protocol,
+  message_handler = message_handler_lib.new({
     constants = constants,
-    get_comms_id = function() return comms and comms.network and comms.network.id or config.node_id end,
-    set_last_command = function(command_error)
-      devices.last_command = command_error
-      devices.last_command_ts = os.epoch("utc")
-    end,
     mark_master_seen = function() runtime.master_seen_ts = os.epoch("utc") end,
     on_master_alerts = function(alerts) runtime.master_alerts = alerts end,
     on_proto_mismatch = function() devices.proto_mismatch = true end
   })
+  -- Energy empfängt keine Commands — on_command wird nicht gesetzt.
   comms = comms_service.new({
     name = "COMMS",
     config = config,
     log_prefix = "ENERGY",
-    on_message = handle_message,
-    on_command = handle_command
+    on_message = handle_message
   })
   services = service_manager.new({
     log_prefix = "ENERGY",
@@ -603,11 +596,8 @@ local function main_loop()
         break
       end
     end
-    if now_ms() - runtime.last_heartbeat >= hb_interval_ms then
-      run_heartbeat_pump(now_ms())
-      rearm_heartbeat_timer()
-    end
-    run_heartbeat_pump(now_ms())
+    -- C4: heartbeat_pump nur noch einmal nach services:tick() —
+    -- timer-basiertes Pumpen übernimmt die regelmäßige Sendung.
     services:tick()
     run_heartbeat_pump(now_ms())
   end
