@@ -8,14 +8,8 @@ local function log_command(ctx, level, message)
   utils.log("RT", message, level or "INFO")
 end
 
-local function number_or_nil(value)
-  if type(value) == "number" then return value end
-  if type(value) == "string" then
-    local parsed = tonumber(value)
-    if parsed then return parsed end
-  end
-  return nil
-end
+-- R1: number_or_nil jetzt in core.utils zentralisiert
+local number_or_nil = utils.number_or_nil
 
 local function get_learning(ctx)
   -- Support both direct field (status_snapshot ctx) and getter (command ctx).
