@@ -20,9 +20,13 @@ function M.build_module_payload(modules)
   local snapshot = {}
   for id, module in pairs(modules or {}) do
     snapshot[id] = {
-      state = module.state,
+      state    = module.state,
       progress = module.progress,
-      limits = module.limits
+      limits   = module.limits,
+      -- Fix: module.type mitschicken damit Master plan_modules()
+      -- den Typ korrekt bestimmen kann (statt fragiles name:find())
+      type     = module.type,
+      name     = module.name or id
     }
   end
   return snapshot
