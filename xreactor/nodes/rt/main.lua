@@ -348,96 +348,36 @@ local function get_target_rpm()
   return CONFIG.TARGET_RPM
 end
 
--- resolve_turbine_plan: berechnet für jede Turbine Modus und Ziel-RPM.
--- Rückgabe:
---   full_count   Anzahl Turbinen auf 100% (Ziel-RPM = base)
---   partial_idx  1-basierter Index der Teillast-Turbine (0 = keine)
---   partial_rpm  Ziel-RPM der Teillast-Turbine
---   stop_from    ab diesem Index (inkl.) sollen Turbinen austrudeln
---   pct          effektiver Leistungsprozentsatz
+-- TURBINEN-PLAN MIT GLEICHMÄSSIGER ROTATION
 --
--- Rotations-Logik:
---   Die Teillast-Turbine rotiert jede PARTIAL_ROTATE_INTERVAL Sekunden
---   über alle total Turbinen damit Betriebsstunden gleichmäßig verteilt werden.
-local PARTIAL_ROTATE_INTERVAL = 300  -- 5 Minuten
+-- Prinzip: Ein rotation_offset (0..total-1) rotiert alle ROTATE_INTERVAL
+-- Sekunden weiter. Jede physische Turbine bekommt einen virtuellen Slot:
+--   virt_slot = (phys_index - 1 + offset) % total
+-- Virtuelle Slots werden dann zugewiesen:
+--   0..full_count-1       → Vollast (900 RPM)
+--   full_count            → Teillast (anteilige RPM, falls remainder > 0.01)
+--   full_count+1..total-1 → Austrudeln (0 RPM)
+--
+-- Damit rotiert sowohl die Stop-Turbine als auch die Teillast-Turbine
+-- gleichmäßig durch alle physischen Positionen. Jede Turbine trägt
+-- im Laufe der Zeit jede Rolle.
+local ROTATE_INTERVAL = 300  -- 5 Minuten
 
-local function resolve_turbine_plan()
-  local turbines = config.turbines or {}
-  local total = #turbines
-  if total == 0 then
-    return 0, 0, 0, 1, 100
+local function get_rotation_offset()
+  local total = #(config.turbines or {})
+  if total == 0 then return 0 end
+  local now = os.clock()
+  local last = runtime_ctx.autonom_state.partial_turbine_last_rotate or 0
+  if now - last >= ROTATE_INTERVAL then
+    local prev = runtime_ctx.autonom_state.partial_turbine_index or 0
+    runtime_ctx.autonom_state.partial_turbine_index = (prev + 1) % total
+    runtime_ctx.autonom_state.partial_turbine_last_rotate = now
   end
-
-  local pct = 100
-  if current_state == STATE.MASTER then
-    local p = runtime_ctx.targets.power_percent
-    if type(p) == "number" then
-      pct = math.max(0, math.min(100, p))
-    end
-  end
-
-  if pct >= 100 then
-    -- Alle Turbinen 100%
-    return total, 0, 0, total + 1, pct
-  end
-
-  if pct <= 0 then
-    -- Alle Turbinen aus
-    return 0, 0, 0, 1, pct
-  end
-
-  -- Wieviel Leistung brauchen wir in Turbinen-Einheiten?
-  local demand = total * pct / 100       -- z.B. 2.4 Turbinen bei 3x80%=240%
-
-  local full_count = math.floor(demand)  -- ganzzahlige Vollast-Turbinen
-  local remainder  = demand - full_count -- Restanteil (0..1), z.B. 0.4
-
-  -- Teillast-Turbine: falls remainder signifikant (>1% einer Turbine)
-  local partial_idx = 0
-  local partial_rpm = 0
-
-  if remainder > 0.01 and full_count < total then
-    -- Teillast-RPM proportional zum Restanteil
-    local base = get_target_rpm()
-    partial_rpm = math.floor(base * remainder + 0.5)
-
-    -- Rotation: partial_turbine_index zeigt welche Turbinen-Slot Teillast trägt.
-    -- Der Slot rotiert durch alle total Turbinen-Positionen.
-    local now = os.clock()
-    local last = runtime_ctx.autonom_state.partial_turbine_last_rotate or 0
-    if now - last >= PARTIAL_ROTATE_INTERVAL then
-      local prev = runtime_ctx.autonom_state.partial_turbine_index or 1
-      runtime_ctx.autonom_state.partial_turbine_index = (prev % total) + 1
-      runtime_ctx.autonom_state.partial_turbine_last_rotate = now
-    end
-
-    -- partial_idx ist der absolute Index in config.turbines (1-basiert)
-    -- der die Teillast trägt. Wir berechnen ihn so, dass er einen anderen
-    -- Slot als die full_count Vollast-Turbinen nimmt.
-    -- full_count Turbinen belegen Slots 1..full_count (virtuell).
-    -- Die Teillast-Turbine wird über alle Positionen rotiert.
-    -- Konkret: wir nehmen den rotierten Slot und mappen ihn auf einen
-    -- freien Index (jenseits der Vollast-Turbinen).
-    local rotate_slot = runtime_ctx.autonom_state.partial_turbine_index or 1
-    -- Stelle sicher dass rotate_slot im gültigen Bereich liegt
-    if rotate_slot < 1 or rotate_slot > total then
-      rotate_slot = 1
-      runtime_ctx.autonom_state.partial_turbine_index = 1
-    end
-    partial_idx = rotate_slot
-  end
-
-  -- stop_from: ab welchem Index austrudeln.
-  -- Wenn partial_idx gesetzt, läuft Turbine an partial_idx als Teillast.
-  -- Alle anderen Indizes > full_count die NICHT partial_idx sind → stop.
-  local stop_from = full_count + (partial_idx > 0 and 2 or 1)
-
-  return full_count, partial_idx, partial_rpm, stop_from, pct
+  return runtime_ctx.autonom_state.partial_turbine_index or 0
 end
 
--- get_turbine_target_rpm: Ziel-RPM für eine einzelne Turbine ermitteln.
--- turbine_index ist 1-basierter Index in config.turbines (stabile Reihenfolge).
--- Gibt zurück: target_rpm (Zahl)
+-- get_turbine_target_rpm: Ziel-RPM für eine einzelne Turbine (1-basierter Index).
+-- Funktioniert korrekt für beliebig viele Turbinen (1..N).
 local function get_turbine_target_rpm(turbine_index)
   local base = get_target_rpm()  -- 900 oder expliziter Master-Setpoint
 
@@ -453,45 +393,35 @@ local function get_turbine_target_rpm(turbine_index)
     return base
   end
 
-  local full_count, partial_idx, partial_rpm, stop_from, pct = resolve_turbine_plan()
+  local total = #(config.turbines or {})
+  if total == 0 then return base end
 
-  -- 100% Leistung: alle Turbinen auf base RPM
-  if pct >= 100 then
-    return base
+  local pct = 100
+  local p = runtime_ctx.targets.power_percent
+  if type(p) == "number" then
+    pct = math.max(0, math.min(100, p))
   end
 
-  -- 0% Leistung: alle Turbinen auf 0
-  if pct <= 0 then
-    return 0
+  if pct >= 100 then return base end
+  if pct <= 0   then return 0    end
+
+  local demand     = total * pct / 100
+  local full_count = math.floor(demand)
+  local remainder  = demand - full_count
+  local has_partial = remainder > 0.01 and full_count < total
+  local partial_rpm = has_partial and math.floor(base * remainder + 0.5) or 0
+
+  -- Virtuellen Slot für diese physische Turbine berechnen
+  local offset    = get_rotation_offset()
+  local virt_slot = (turbine_index - 1 + offset) % total  -- 0-basiert
+
+  if virt_slot < full_count then
+    return base         -- Vollast
+  elseif has_partial and virt_slot == full_count then
+    return partial_rpm  -- Teillast
+  else
+    return 0            -- Austrudeln
   end
-
-  -- Vollast-Turbinen: Indizes 1..full_count AUSSER partial_idx
-  -- Teillast-Turbine: partial_idx
-  -- Alle anderen: 0 (austrudeln)
-  --
-  -- Wichtig: Die Vollast-Turbinen sind die ersten full_count Positionen
-  -- in der config-Reihenfolge, mit Ausnahme des partial_idx-Slots.
-  -- Wenn partial_idx in den ersten full_count fällt, rückt die letzte
-  -- Vollast-Turbine auf stop_from-1 nach.
-
-  if partial_idx > 0 and turbine_index == partial_idx then
-    return partial_rpm
-  end
-
-  -- Zähle wie viele Vollast-Slots vor diesem Index liegen
-  -- (ohne den partial_idx Slot mitzuzählen)
-  local full_slot = 0
-  for idx = 1, turbine_index do
-    if idx ~= partial_idx then
-      full_slot = full_slot + 1
-    end
-  end
-
-  if full_slot <= full_count then
-    return base  -- Vollast
-  end
-
-  return 0  -- austrudeln
 end
 local function clamp_turbine_flow(rate) return turbine_regulator.clamp_flow(rate, CONFIG.MIN_FLOW, CONFIG.MAX_FLOW) end
 local function clamp_rods(level, allow_overmax)
