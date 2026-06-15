@@ -3,13 +3,10 @@ local utils = require("core.utils")
 
 local M = {}
 
+-- P1: number_or_nil aus utils, number_or als lokaler Wrapper mit Fallback
+local number_or_nil = utils.number_or_nil
 local function number_or(value, fallback)
-  if type(value) == "number" then return value end
-  if type(value) == "string" then
-    local parsed = tonumber(value)
-    if parsed then return parsed end
-  end
-  return fallback
+  return number_or_nil(value) or fallback
 end
 
 local function normalize_node_mode(mode)
@@ -29,11 +26,28 @@ local function sort_by_priority_then_id(a, b)
   return (a.priority or 0) > (b.priority or 0)
 end
 
+-- P2: node_capacity gibt 0 zurück wenn der Node noch einlernt (capacity_ready=false).
+-- Damit rechnet der Master nicht mit einem falschen Platzhalter-Wert.
+-- Der Node wird mit 0% angesteuert bis sein echter Wert vorliegt.
+local function node_capacity_ready(node)
+  local rt = node and node.rt or {}
+  if rt.capacity_ready == true then return true end
+  if node and node.capacity_ready == true then return true end
+  return false
+end
+
 local function node_capacity(node, fallback)
   local capacity = number_or(node and node.capacity_max, nil)
     or number_or(node and node.rt and node.rt.capacity_max, nil)
     or number_or(node and node.measured_capacity_max, nil)
-  if capacity and capacity > 0 then return capacity, "measured" end
+  if capacity and capacity > 0 and node_capacity_ready(node) then
+    return capacity, "measured"
+  end
+  -- Node hat noch nicht eingelernt → 0 als Kapazität.
+  -- Master weist 0% zu; Node lehnt Setpoints sowieso ab bis Learning fertig.
+  if not node_capacity_ready(node) then
+    return 0, "learning"
+  end
   return math.max(1, number_or(fallback, 3000)), "fallback"
 end
 
@@ -78,13 +92,21 @@ function M.send_rt_setpoints(comms, node, setpoints)
   node.last_setpoints_ts = os.epoch("utc")
 end
 
+-- P6: same_setpoints() vergleicht nur funktionale Felder.
+-- assignment_reason und assignment_source sind interne Bezeichner;
+-- eine Änderung dort soll kein neues Paket auslösen.
 function M.same_setpoints(a, b)
   if not a or not b then return false end
-  return a.target_rpm == b.target_rpm and a.power_target == b.power_target and a.power_target_percent == b.power_target_percent and a.steam_target == b.steam_target and
-      a.enable_reactors == b.enable_reactors and a.enable_turbines == b.enable_turbines and
-      a.assignment_reason == b.assignment_reason and a.assignment_source == b.assignment_source and a.assignment_rank == b.assignment_rank and
-      a.assignment_state == b.assignment_state and a.controllable == b.controllable and
-      a.shutdown_stage == b.shutdown_stage and a.desired_node_state == b.desired_node_state
+  return a.target_rpm           == b.target_rpm
+     and a.power_target         == b.power_target
+     and a.power_target_percent == b.power_target_percent
+     and a.steam_target         == b.steam_target
+     and a.enable_reactors      == b.enable_reactors
+     and a.enable_turbines      == b.enable_turbines
+     and a.assignment_state     == b.assignment_state
+     and a.controllable         == b.controllable
+     and a.shutdown_stage       == b.shutdown_stage
+     and a.desired_node_state   == b.desired_node_state
 end
 
 local function same_shutdown_intent(a, b)
