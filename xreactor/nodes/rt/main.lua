@@ -70,15 +70,11 @@ local function get_turbine_ctrl(name)
   end
   return ctrl
 end
+-- Fix #7: turbine_ctrl wird sauber im runtime_ctx verwaltet,
+-- kein Zugriff mehr auf _G/_ENV nötig.
+local turbine_ctrl_table = {}
 local function turbine_ctrl_store()
-  local global = _G
-  if type(global) ~= "table" then
-    global = _ENV
-  end
-  if type(global) ~= "table" then
-    return {}
-  end
-  return global.turbine_ctrl or {}
+  return turbine_ctrl_table
 end
 local constants = require("shared.constants")
 local colors = require("shared.colors")
@@ -237,6 +233,8 @@ runtime_ctx = {
   capability_cache = { reactors = {}, turbines = {} },
   reactor_ctrl = {}
 }
+local last_status_snapshot  -- Fix #2: war versehentlich globale Variable
+local warn_once  -- Fix #1: forward declaration (wird vor Definition verwendet)
 local cache
 local build_modules
 local refresh_module_peripherals
@@ -674,6 +672,9 @@ local function read_turbine_flow(turbine, caps)
   return nil, "FLOW_UNAVAILABLE"
 end
 local function init_turbine_ctrl()
+  -- Fix #6/#10: Log-State zurücksetzen bei Neuinitialisierung,
+  -- damit Turbinen-Logs nach einem Restart nicht unterdrückt werden.
+  flow_apply_helpers.reset_log_state()
   local turbine_ctrl = turbine_ctrl_store()
   for key in pairs(turbine_ctrl) do
     turbine_ctrl[key] = nil
@@ -994,7 +995,9 @@ local function updateReactorControl()
   controlReactor()
   log_reactor_control_tick()
 end
-local function warn_once(key, message)
+-- Fix #1: warn_once war mit "local function" deklariert, was die forward-decl
+-- oben ignoriert hätte. Jetzt korrekte Zuweisung zur forward-decl.
+warn_once = function(key, message)
   if runtime_ctx.warned[key] then
     return
   end
