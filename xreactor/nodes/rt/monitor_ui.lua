@@ -177,7 +177,7 @@ local function render_overview(mon, model)
   local turbines = count_bound(summary, "turbine")
 
   write_line(mon, y, string.format("Power %s%%  Soll %s  Ist %s", fmt(p_pct, 1), fmt_short(target), fmt_short(actual)), p_status); y = y + 1
-  if w >= 20 then ui.progress(mon, 2, y, math.max(8, w - 3), math.min(100, p_pct), p_status) end; y = y + 1
+  if w >= 20 then ui.progress(mon, 2, y, math.max(8, w - 3), math.min(100, p_pct) / 100, p_status) end; y = y + 1
   write_line(mon, y, string.format("Master %s -> %s RF/t", fmt(model.target_percent, 1, "%"), fmt_short(target)), "text"); y = y + 1
   write_line(mon, y, string.format("Cap %s %s %.1f%%", fmt_short(capacity), model.capacity_ready and "lock" or "learn", cap_pct), capacity_status(model)); y = y + 1
   write_line(mon, y, string.format("RPM %s/%s Steam %s", fmt_short(snapshot.avg_rpm), fmt_short(model.target_rpm), fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
