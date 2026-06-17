@@ -127,10 +127,10 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
   local observed_total = numeric_value(total_output) or 0
   -- sample_output: eigene Messung bevorzugen, Gesamt-Output als Fallback
   local sample_output = stable_output > 0 and stable_output or observed_total
-  -- Sample gültig wenn alle Turbinen stabil UND Energie gemessen.
-  -- producing >= 1 reicht (mindestens eine Turbine mit messbarer Energie),
-  -- da energy-Readback-Lag bei manchen Turbinen kurzzeitig 0 zeigen kann.
-  local ok = stable >= required and producing >= 1 and sample_output > 0
+  -- Sample gültig wenn alle Turbinen im RPM-Band + Coil engaged UND Gesamtenergie > 0.
+  -- producing nicht als Bedingung: einzelne Turbinen können energy=0 melden
+  -- (Readback-Lag), aber sample_output (Gesamt) ist trotzdem > 0.
+  local ok = stable >= required and sample_output > 0
   local reason
   if ok then
     reason = "ALL_TURBINES_STABLE"
