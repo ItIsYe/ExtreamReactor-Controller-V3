@@ -4,8 +4,15 @@ local utils = require("core.utils")
 M.DEFAULT_SHUTDOWN_CANDIDATE_STABILITY_MS = 1500
 M.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS = 60000  -- 60s cooldown after cancelled shutdown
 
--- Fix P3: payload_looks_rt jetzt in utils zentralisiert
-local payload_looks_rt = utils.payload_looks_rt
+-- Fix P3: payload_looks_rt aus utils, mit Fallback für ältere utils-Versionen
+local payload_looks_rt = utils.payload_looks_rt or function(payload)
+  if type(payload) ~= "table" then return false end
+  return type(payload.turbines) == "table"
+      or type(payload.reactors) == "table"
+      or type(payload.modules)  == "table"
+      or payload.turbine_rpm ~= nil
+      or payload.steam ~= nil
+end
 
 local function bool_flag(value)
   return value and 'yes' or 'no'
