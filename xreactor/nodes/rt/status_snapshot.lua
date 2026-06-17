@@ -122,14 +122,18 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
     end
   end
 
-  -- required = total: alle Turbinen müssen stabil laufen für einen gültigen Sample.
-  local required = total
+  -- Option A: required = 1 — eine stabile Turbine reicht zum Locken.
+  -- max_output wird als stable_output / stable * total hochgerechnet damit
+  -- der Master die echte Gesamt-Kapazität bekommt, nicht nur die einer Turbine.
+  local required = 1
   local observed_total = numeric_value(total_output) or 0
-  -- sample_output: eigene Messung bevorzugen, Gesamt-Output als Fallback
   local sample_output = stable_output > 0 and stable_output or observed_total
-  -- Sample gültig wenn alle Turbinen im RPM-Band + Coil engaged UND Gesamtenergie > 0.
-  -- producing nicht als Bedingung: einzelne Turbinen können energy=0 melden
-  -- (Readback-Lag), aber sample_output (Gesamt) ist trotzdem > 0.
+  -- Hochrechnung: wenn nur ein Teil der Turbinen stabil ist,
+  -- schätze Gesamtkapazität proportional hoch.
+  if stable > 0 and stable < total and stable_output > 0 then
+    sample_output = math.floor(stable_output / stable * total)
+  end
+  -- Sample gültig wenn mindestens 1 Turbine stabil + Energie messbar.
   local ok = stable >= required and sample_output > 0
   local reason
   if ok then
