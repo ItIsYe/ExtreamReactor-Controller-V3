@@ -184,7 +184,12 @@ local function render_overview(mon, model)
   if not model.capacity_ready and y <= h - 1 then
     local REQUIRED_SAMPLES = 3
     local stable_t = num(model.capacity_stable_turbines, 0)
-    local total_t  = math.max(1, num(model.capacity_total_turbines, num(model.configured_turbines, 1)))
+    -- total_t: Priorität: capacity_total_turbines → turbines-Liste → configured_turbines
+    local turb_list = (snapshot and snapshot.turbines) or {}
+    local total_t  = math.max(1,
+      num(model.capacity_total_turbines, 0) > 0 and num(model.capacity_total_turbines, 0)
+      or #turb_list > 0 and #turb_list
+      or num(model.configured_turbines, 1))
     local samples  = num(model.capacity_stable_samples, 0)
     local turbine_pct = math.min(1, stable_t / total_t)
     local sample_pct  = math.min(1, samples / REQUIRED_SAMPLES)
