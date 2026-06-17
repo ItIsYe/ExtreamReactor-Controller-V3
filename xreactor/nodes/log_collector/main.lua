@@ -758,6 +758,18 @@ local function run()
   refresh_disks_if_needed(true)
   redirect_display()
   refresh_collector_modems(true)
+  -- Beim Start alle alten Logs auf allen Disks löschen damit
+  -- immer frische, vollständige Logs vorhanden sind.
+  local total_wiped = 0
+  for _, d in ipairs(stats.disks) do
+    if not d.fallback then
+      local wiped = wipe_logs(d.root)
+      total_wiped = total_wiped + wiped
+    end
+  end
+  if total_wiped > 0 then
+    self_log("LOG collector startup: wiped " .. tostring(total_wiped) .. " old log files", "INFO")
+  end
   self_log("LOG collector startup display=" .. tostring(stats.display_name) .. " disks=" .. tostring(#stats.disks), "INFO")
   if #stats.modems == 0 then self_log("No modem found for LOG collector", "ERROR"); error("No modem found for LOG collector", 0) end
   self_log("Listening on log channel " .. tostring(CHANNEL) .. " modems=" .. tostring(stats.modem), "INFO")
