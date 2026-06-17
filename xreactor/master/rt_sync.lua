@@ -4,7 +4,12 @@ local utils = require("core.utils")
 local M = {}
 
 -- P1: number_or_nil aus utils, number_or als lokaler Wrapper mit Fallback
-local number_or_nil = utils.number_or_nil
+-- number_or_nil aus utils, mit Fallback für ältere utils-Versionen
+local number_or_nil = utils.number_or_nil or function(v)
+  if type(v) == "number" then return v end
+  if type(v) == "string" then local n = tonumber(v); if n then return n end end
+  return nil
+end
 local function number_or(value, fallback)
   return number_or_nil(value) or fallback
 end
