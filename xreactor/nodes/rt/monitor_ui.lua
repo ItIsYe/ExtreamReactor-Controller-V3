@@ -176,31 +176,12 @@ local function render_overview(mon, model)
   local reactors = count_bound(summary, "reactor")
   local turbines = count_bound(summary, "turbine")
 
-  -- ── Linke Spalte: Statuszeilen ────────────────────────────────────────
-  -- Breite der linken Spalte: halbe Monitorbreite minus Trennzeichen
-  local left_w = math.floor(w / 2) - 1
-  local right_x = left_w + 3  -- rechte Spalte startet hier
-
-  -- Statuszeilen schreiben (linksbündig, begrenzt auf left_w)
-  local function left(row, text, status)
-    local s = tostring(text or "")
-    if #s > left_w then s = s:sub(1, left_w) end
-    ui.text(mon, 2, row, s .. string.rep(" ", left_w - #s),
-      colors.get(status or "text"), colors.get("background"))
-  end
-
-  local sy = y  -- Startreihe für Statuszeilen
-
-  left(sy, string.format("Power %s%%  Ist %s", fmt(p_pct, 1), fmt_short(actual)), p_status); sy = sy + 1
-  if left_w >= 8 then
-    ui.progress(mon, 2, sy, left_w, math.min(100, p_pct) / 100, p_status)
-    sy = sy + 1
-  end
-  left(sy, string.format("Master->%s RF/t", fmt_short(target)), "text"); sy = sy + 1
-  left(sy, string.format("Cap %s %s", fmt_short(capacity), model.capacity_ready and "lock" or "learn"), capacity_status(model)); sy = sy + 1
-
-  -- Learning-Fortschrittsbalken
-  if not model.capacity_ready and sy <= h - 1 then
+  -- ── Statuszeilen: volle Breite, wie gehabt ────────────────────────────
+  write_line(mon, y, string.format("Power %s%%  Soll %s  Ist %s", fmt(p_pct, 1), fmt_short(target), fmt_short(actual)), p_status); y = y + 1
+  if w >= 20 then ui.progress(mon, 2, y, math.max(8, w - 3), math.min(100, p_pct) / 100, p_status) end; y = y + 1
+  write_line(mon, y, string.format("Master %s -> %s RF/t", fmt(model.target_percent, 1, "%"), fmt_short(target)), "text"); y = y + 1
+  write_line(mon, y, string.format("Cap %s %s %.1f%%", fmt_short(capacity), model.capacity_ready and "lock" or "learn", cap_pct), capacity_status(model)); y = y + 1
+  if not model.capacity_ready and y <= h - 1 then
     local REQUIRED_SAMPLES = 3
     local stable_t = num(model.capacity_stable_turbines, 0)
     local total_t  = math.max(1, num(model.capacity_total_turbines, num(model.configured_turbines, 1)))
@@ -210,56 +191,47 @@ local function render_overview(mon, model)
     local learn_pct   = (turbine_pct * 0.5) + (sample_pct * 0.5)
     local learn_status = samples >= REQUIRED_SAMPLES and "OK"
                       or stable_t >= total_t and "LIMITED" or "WARN"
-    left(sy, string.format("Lrn T:%d/%d S:%d/%d %d%%",
+    write_line(mon, y, string.format("Lrn T:%d/%d S:%d/%d %d%%",
       stable_t, total_t, samples, REQUIRED_SAMPLES,
-      math.floor(learn_pct * 100)), learn_status); sy = sy + 1
-    if left_w >= 8 and sy <= h - 1 then
-      ui.progress(mon, 2, sy, left_w, learn_pct, learn_status); sy = sy + 1
+      math.floor(learn_pct * 100)), learn_status); y = y + 1
+    if w >= 20 and y <= h - 1 then
+      ui.progress(mon, 2, y, math.max(8, w - 3), learn_pct, learn_status); y = y + 1
     end
   end
+  write_line(mon, y, string.format("RPM %s/%s Steam %s", fmt_short(snapshot.avg_rpm), fmt_short(model.target_rpm), fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
+  write_line(mon, y, string.format("R:%d T:%d Cmd:%s M:%s", reactors, turbines, tostring(model.last_command or "-"), tostring(model.master_age or "-")), "text"); y = y + 1
 
-  left(sy, string.format("RPM %s/%s", fmt_short(snapshot.avg_rpm), fmt_short(model.target_rpm)), "muted"); sy = sy + 1
-  left(sy, string.format("Steam %s", fmt_short(snapshot.steam_amount)), "muted"); sy = sy + 1
-  left(sy, string.format("R:%d T:%d Cmd:%s", reactors, turbines, tostring(model.last_command or "-")), "text"); sy = sy + 1
-  left(sy, string.format("Master: %s", tostring(model.master_age or "-")), "text"); sy = sy + 1
+  -- ── Turbinen: zwei Spalten nebeneinander ──────────────────────────────
+  -- Spalte A: x=2, Spalte B: x=2 + col_w + 2
+  -- Jede Spalte: T(idx) RPM C  — Breite ca. halbe Monitorbreite
+  local list = snapshot.turbines or {}
+  if y <= h - 1 and #list > 0 then
+    local col_w   = math.floor((w - 3) / 2)  -- halbe Breite minus Lücke
+    local col_b_x = 2 + col_w + 2            -- x-Start rechte Spalte
+    local rows_avail = h - y - 1             -- Zeilen für Turbinen (ohne Header)
+    local per_col    = rows_avail             -- jede Spalte bekommt so viele Zeilen
 
-  -- ── Rechte Spalte: Turbinen in zwei Unter-Spalten ─────────────────────
-  -- Jede Unter-Spalte: Index(4) RPM(4) C(2) = 10 Zeichen, Abstand 1
-  -- Spalte A: right_x, Spalte B: right_x + 11
-  local list    = snapshot.turbines or {}
-  local col_w   = math.floor((w - right_x) / 2)  -- Breite einer Unter-Spalte
-  local col_b_x = right_x + col_w + 1
-  local turb_rows = h - y  -- verfügbare Zeilen für Turbinen
+    -- Header
+    local hdr = string.format("%-4s %-4s %-4s %-2s", "T", "RPM", "RF/t", "C")
+    ui.text(mon, 2,       y, hdr:sub(1, col_w), colors.get("text"), colors.get("background"))
+    ui.text(mon, col_b_x, y, hdr:sub(1, col_w), colors.get("text"), colors.get("background"))
+    y = y + 1
 
-  -- Header
-  local function th(x, cw)
-    local hdr = "T   " .. "RPM " .. "C"
-    ui.text(mon, x, y, hdr:sub(1, cw), colors.get("text"), colors.get("background"))
-  end
-  th(right_x, col_w)
-  th(col_b_x, col_w)
-
-  -- Turbinen-Zeilen: erste Hälfte links, zweite Hälfte rechts
-  local rows_avail = h - y - 1  -- Zeilen ab y+1
-  local per_col    = rows_avail  -- pro Spalte so viele wie Platz
-
-  local function turb_row(tx, ty, t, idx)
-    local id_s  = tostring(t.id or idx):sub(1, 4)
-    local rpm_s = fmt_short(t.rpm):sub(1, 4)
-    local c_s   = t.inductor and "ON" or "OF"
-    local txt   = string.format("%-4s%-4s%s", id_s, rpm_s, c_s)
-    local st    = (t.bound == false) and "WARNING"
-               or (t.inductor and "OK" or "OFFLINE")
-    ui.text(mon, tx, ty, txt:sub(1, col_w),
-      colors.get(st), colors.get("background"))
-  end
-
-  for idx, t in ipairs(list) do
-    local col = (idx <= per_col) and 1 or 2
-    local row = col == 1 and (idx) or (idx - per_col)
-    if row <= rows_avail then
-      local tx = col == 1 and right_x or col_b_x
-      turb_row(tx, y + row, t, idx)
+    for idx, t in ipairs(list) do
+      local col  = idx <= per_col and 1 or 2
+      local row  = col == 1 and idx or (idx - per_col)
+      local tx   = col == 1 and 2 or col_b_x
+      local ty   = y + row - 1
+      if ty <= h then
+        local id_s  = tostring(t.id or idx):sub(-4)   -- letzte 4 Ziffern der ID
+        local rpm_s = fmt_short(t.rpm)
+        local rf_s  = fmt_short(t.energy)
+        local c_s   = t.inductor and "ON" or "OF"
+        local txt   = string.format("%-4s %-4s %-4s %-2s", id_s, rpm_s, rf_s, c_s)
+        local st    = (t.bound == false) and "WARNING"
+                   or (t.inductor and "OK" or "OFFLINE")
+        ui.text(mon, tx, ty, txt:sub(1, col_w), colors.get(st), colors.get("background"))
+      end
     end
   end
 end
