@@ -32,6 +32,16 @@ local function redirect(mon, fn, context)
   return true
 end
 
+local function state_for(mon)
+  monitor_state[mon] = monitor_state[mon] or {
+    scale = nil,
+    size  = nil,
+    frame = 0,
+    force_redraw_frame = nil
+  }
+  return monitor_state[mon]
+end
+
 local function is_dirty(mon, key, snapshot)
   dirty_cache[mon] = dirty_cache[mon] or {}
   local state = state_for(mon)
@@ -50,16 +60,6 @@ local function is_dirty(mon, key, snapshot)
   if dirty_cache[mon][key] == snapshot then return false end
   dirty_cache[mon][key] = snapshot
   return true
-end
-
-local function state_for(mon)
-  monitor_state[mon] = monitor_state[mon] or {
-    scale = nil,
-    size  = nil,
-    frame = 0,
-    force_redraw_frame = nil
-  }
-  return monitor_state[mon]
 end
 
 local function safe_monitor_call(mon, method, ...)
