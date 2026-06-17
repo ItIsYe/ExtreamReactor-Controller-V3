@@ -122,17 +122,20 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
     end
   end
 
-  -- required = total: alle Turbinen müssen stabil sein (wird unten auf total gesetzt).
-  local required = 1
+  -- required = total: alle Turbinen müssen stabil laufen für einen gültigen Sample.
+  local required = total
   local observed_total = numeric_value(total_output) or 0
+  -- sample_output: eigene Messung bevorzugen, Gesamt-Output als Fallback
   local sample_output = stable_output > 0 and stable_output or observed_total
-  -- Sample ist nur gültig wenn alle Turbinen stabil UND echte Energie gemessen.
-  local ok = stable >= required and producing >= required and sample_output > 0
+  -- Sample gültig wenn alle Turbinen stabil UND Energie gemessen.
+  -- producing >= 1 reicht (mindestens eine Turbine mit messbarer Energie),
+  -- da energy-Readback-Lag bei manchen Turbinen kurzzeitig 0 zeigen kann.
+  local ok = stable >= required and producing >= 1 and sample_output > 0
   local reason
   if ok then
-    reason = "STABLE_PROGRESSIVE_10PCT"
+    reason = "ALL_TURBINES_STABLE"
   elseif stable < required then
-    reason = "NOT_ENOUGH_STABLE_TURBINES_10PCT"
+    reason = "NOT_ALL_STABLE"
   else
     reason = "OUTPUT_UNAVAILABLE"
   end
