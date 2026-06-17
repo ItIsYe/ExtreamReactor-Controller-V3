@@ -202,30 +202,32 @@ local function render_overview(mon, model)
   write_line(mon, y, string.format("R:%d T:%d Cmd:%s M:%s", reactors, turbines, tostring(model.last_command or "-"), tostring(model.master_age or "-")), "text"); y = y + 1
 
   -- ── Turbinen: zwei Spalten nebeneinander ──────────────────────────────
+  -- Turbinen-Header und -Zeilen ab y, zwei gleichbreite Spalten.
+  -- Spalte A: x=2, Spalte B: x=2+col_w+1
+  -- ID-Anzeige: laufende Nummer (1..N), nicht der Peripheral-Name
   local list = snapshot.turbines or {}
-  if y <= h - 1 and #list > 0 then
+  if #list > 0 then
     local col_w   = math.floor((w - 3) / 2)
     local col_b_x = 2 + col_w + 1
-    local rows_avail = h - y - 1        -- Zeilen verfügbar (ohne Header-Zeile)
-    -- per_col: Turbinen pro Spalte = halbe Gesamtzahl (aufgerundet)
+    -- per_col: erste Hälfte (aufgerundet) in Spalte A, Rest in Spalte B
     local per_col = math.ceil(#list / 2)
-    -- sicherstellen dass per_col nicht mehr als rows_avail ist
-    per_col = math.min(per_col, rows_avail)
 
     -- Header
-    local hdr = string.format("%-4s %-4s %-4s %-2s", "T", "RPM", "RF/t", "C")
+    local hdr = string.format("%-3s %-4s %-4s %-2s", "T", "RPM", "RF/t", "C")
     ui.text(mon, 2,       y, hdr:sub(1, col_w), colors.get("text"), colors.get("background"))
     ui.text(mon, col_b_x, y, hdr:sub(1, col_w), colors.get("text"), colors.get("background"))
     y = y + 1
 
     for idx, t in ipairs(list) do
-      local col = idx <= per_col and 1 or 2
-      local row = col == 1 and idx or (idx - per_col)
-      local tx  = col == 1 and 2 or col_b_x
-      local ty  = y + row - 1
+      -- Spalte und Zeile bestimmen
+      local in_col_b = idx > per_col
+      local row      = in_col_b and (idx - per_col) or idx
+      local tx       = in_col_b and col_b_x or 2
+      local ty       = y + row - 1
       if ty <= h then
-        local id_s = tostring(t.id or idx):sub(-4)
-        local txt  = string.format("%-4s %-4s %-4s %-2s",
+        -- Laufende Nummer statt Peripheral-Name
+        local id_s = tostring(idx)
+        local txt  = string.format("%-3s %-4s %-4s %-2s",
           id_s, fmt_short(t.rpm), fmt_short(t.energy),
           t.inductor and "ON" or "OF")
         local st = (t.bound == false) and "WARNING"
