@@ -177,6 +177,9 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
   if sample.ok then
     learning.stable_samples = (learning.stable_samples or 0) + 1
     learning.max_candidate = math.max(learning.max_candidate or 0, sample.sample_output or 0)
+    -- Letzten bekannten Turbinen-Stand für UI-Fortschrittsbalken speichern
+    learning.stable_turbines_last = sample.stable
+    learning.total_turbines_last  = sample.total
     if not learning.locked and learning.stable_samples >= 3 then
       -- P1: Lock nur wenn alle Turbinen stabil (sample.ok enforced durch required=total)
       learning.max_output = learning.max_candidate
@@ -209,6 +212,9 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
       learning.stable_samples = 0
       learning.max_candidate  = 0
     end
+    -- Turbinen-Stand auch bei ungültigem Sample aktualisieren (für UI)
+    learning.stable_turbines_last = sample.stable
+    learning.total_turbines_last  = sample.total
   end
 
   return learning
