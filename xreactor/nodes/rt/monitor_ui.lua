@@ -180,6 +180,29 @@ local function render_overview(mon, model)
   if w >= 20 then ui.progress(mon, 2, y, math.max(8, w - 3), math.min(100, p_pct) / 100, p_status) end; y = y + 1
   write_line(mon, y, string.format("Master %s -> %s RF/t", fmt(model.target_percent, 1, "%"), fmt_short(target)), "text"); y = y + 1
   write_line(mon, y, string.format("Cap %s %s %.1f%%", fmt_short(capacity), model.capacity_ready and "lock" or "learn", cap_pct), capacity_status(model)); y = y + 1
+  -- Learning-Fortschrittsbalken: nur während Learning sichtbar
+  if not model.capacity_ready and y <= h - 1 then
+    local REQUIRED_SAMPLES = 3
+    local stable_t  = num(model.capacity_stable_turbines, 0)
+    local total_t   = math.max(1, num(model.capacity_total_turbines, num(model.configured_turbines, 1)))
+    local samples   = num(model.capacity_stable_samples, 0)
+    -- Fortschritt: erst Turbinen stabilisieren (50%), dann Samples sammeln (50%)
+    local turbine_pct = math.min(1, stable_t / total_t)
+    local sample_pct  = math.min(1, samples / REQUIRED_SAMPLES)
+    local learn_pct   = (turbine_pct * 0.5) + (sample_pct * 0.5)
+    local learn_status = samples >= REQUIRED_SAMPLES and "OK"
+                      or stable_t >= total_t and "LIMITED"
+                      or "WARN"
+    write_line(mon, y,
+      string.format("Learn T:%d/%d S:%d/%d %d%%",
+        stable_t, total_t, samples, REQUIRED_SAMPLES,
+        math.floor(learn_pct * 100)),
+      learn_status); y = y + 1
+    if w >= 20 and y <= h - 1 then
+      ui.progress(mon, 2, y, math.max(8, w - 3), learn_pct, learn_status)
+      y = y + 1
+    end
+  end
   write_line(mon, y, string.format("RPM %s/%s Steam %s", fmt_short(snapshot.avg_rpm), fmt_short(model.target_rpm), fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
   write_line(mon, y, string.format("R:%d T:%d Cmd:%s M:%s", reactors, turbines, tostring(model.last_command or "-"), tostring(model.master_age or "-")), "text"); y = y + 1
 
@@ -338,7 +361,9 @@ function M.update_status_snapshot(ctx)
   local min_rpm, max_rpm, avg_rpm = M.collect_turbine_rpm_stats(ctx.devices, ctx.read_turbine_rpm, ctx.get_device_caps)
   local turbines, actual_output = M.build_turbine_status_details(ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
   local capacity = ctx.capacity_learning or {}
-  ctx.last_status_snapshot = { ts = os.epoch("utc"), node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id, summary = summary, min_temp = min_temp, max_temp = max_temp, avg_temp = avg_temp, min_rpm = min_rpm, max_rpm = max_rpm, avg_rpm = avg_rpm, steam_amount = ctx.get_available_steam(), target_power = ctx.targets and ctx.targets.power or nil, target_percent = ctx.targets and ctx.targets.power_percent or nil, target_rpm = ctx.targets and ctx.targets.rpm or nil, target_steam = ctx.targets and ctx.targets.steam or nil, actual_output = actual_output, capacity_max = capacity.max_output or (ctx.targets and ctx.targets.capacity_max) or 0, capacity_ready = capacity.locked == true, capacity_source = capacity.reason or (ctx.targets and ctx.targets.capacity_source) or "unknown", capacity_stable_samples = capacity.stable_samples or 0, reactors = M.build_reactor_status_details(ctx.devices, ctx.reactor_adapter, ctx.log_prefix), turbines = turbines }
+  ctx.last_status_snapshot = { ts = os.epoch("utc"), node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id, summary = summary, min_temp = min_temp, max_temp = max_temp, avg_temp = avg_temp, min_rpm = min_rpm, max_rpm = max_rpm, avg_rpm = avg_rpm, steam_amount = ctx.get_available_steam(), target_power = ctx.targets and ctx.targets.power or nil, target_percent = ctx.targets and ctx.targets.power_percent or nil, target_rpm = ctx.targets and ctx.targets.rpm or nil, target_steam = ctx.targets and ctx.targets.steam or nil, actual_output = actual_output, capacity_max = capacity.max_output or (ctx.targets and ctx.targets.capacity_max) or 0, capacity_ready = capacity.locked == true, capacity_source = capacity.reason or (ctx.targets and ctx.targets.capacity_source) or "unknown", capacity_stable_samples  = capacity.stable_samples or 0,
+                capacity_stable_turbines = capacity.stable_turbines_last or 0,
+                capacity_total_turbines  = capacity.total_turbines_last or 0, reactors = M.build_reactor_status_details(ctx.devices, ctx.reactor_adapter, ctx.log_prefix), turbines = turbines }
   return ctx.last_status_snapshot
 end
 
@@ -366,7 +391,9 @@ function M.update(monitor, ctx)
   local node_id = snapshot and snapshot.node_id or ctx.config.node_id
   local alert_payload = ctx.master_alerts and ctx.master_alerts.by_node and ctx.master_alerts.by_node[node_id] or nil
   local targets = ctx.targets or {}
-  local model = { snapshot = { snapshot = snapshot, local_alerts = alert_payload and alert_payload.critical or 0 }, health = health_payload, summary = summary, comms = comms_diag, metrics = metrics, master_state = master_state, master_age = master_age, last_scan = ctx.devices.last_scan_ts and (math.floor((now - ctx.devices.last_scan_ts) / 1000) .. "s") or "n/a", last_command = ctx.last_command, last_command_ts = ctx.last_command_ts and (math.floor((now - ctx.last_command_ts) / 1000) .. "s") or "n/a", local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0, node_id = node_id, current_state = ctx.current_state, node_state = ctx.node_state_machine and ctx.node_state_machine:state() or ctx.current_state, configured_reactors = ctx.configured_reactors, configured_turbines = ctx.configured_turbines, target_power = targets.power, target_percent = targets.power_percent, target_rpm = targets.rpm or (ctx.get_target_rpm and ctx.get_target_rpm()), target_steam = targets.steam, capacity_max = snapshot and snapshot.capacity_max or 0, capacity_ready = snapshot and snapshot.capacity_ready or false, capacity_source = snapshot and snapshot.capacity_source or "unknown", capacity_stable_samples = snapshot and snapshot.capacity_stable_samples or 0, binding = ctx.binding, build_label = ctx.build_label or ctx.manifest_id or ctx.release_id }
+  local model = { snapshot = { snapshot = snapshot, local_alerts = alert_payload and alert_payload.critical or 0 }, health = health_payload, summary = summary, comms = comms_diag, metrics = metrics, master_state = master_state, master_age = master_age, last_scan = ctx.devices.last_scan_ts and (math.floor((now - ctx.devices.last_scan_ts) / 1000) .. "s") or "n/a", last_command = ctx.last_command, last_command_ts = ctx.last_command_ts and (math.floor((now - ctx.last_command_ts) / 1000) .. "s") or "n/a", local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0, node_id = node_id, current_state = ctx.current_state, node_state = ctx.node_state_machine and ctx.node_state_machine:state() or ctx.current_state, configured_reactors = ctx.configured_reactors, configured_turbines = ctx.configured_turbines, target_power = targets.power, target_percent = targets.power_percent, target_rpm = targets.rpm or (ctx.get_target_rpm and ctx.get_target_rpm()), target_steam = targets.steam, capacity_max = snapshot and snapshot.capacity_max or 0, capacity_ready = snapshot and snapshot.capacity_ready or false, capacity_source = snapshot and snapshot.capacity_source or "unknown", capacity_stable_samples  = snapshot and snapshot.capacity_stable_samples or 0,
+                capacity_stable_turbines = snapshot and snapshot.capacity_stable_turbines or 0,
+                capacity_total_turbines  = snapshot and snapshot.capacity_total_turbines or 0, binding = ctx.binding, build_label = ctx.build_label or ctx.manifest_id or ctx.release_id }
   if not M.monitor_router then
     M.monitor_router = ui_router.new({ pages = { { name = "Overview", render = render_overview }, { name = "Turbines", render = render_turbines }, { name = "Reactors", render = render_reactors }, { name = "Diagnostics", render = render_diagnostics } }, key_prev = { [keys.left] = true, [keys.pageUp] = true }, key_next = { [keys.right] = true, [keys.pageDown] = true } })
   end
