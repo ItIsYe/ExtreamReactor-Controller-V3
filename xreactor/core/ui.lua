@@ -38,7 +38,12 @@ local function is_dirty(mon, key, snapshot)
   -- Force-redraw: wenn ui.panel() diesen Frame neu gezeichnet hat,
   -- müssen alle folgenden Widgets ebenfalls neu gezeichnet werden,
   -- auch wenn ihr Inhalt gleich geblieben ist (Dirty-Cache wäre sonst stale).
-  if state.force_redraw_frame and state.force_redraw_frame == state.frame then
+  -- frame > 0 Guard: verhindert false-positive wenn begin_frame() nicht aufgerufen wurde
+  -- (z.B. in view_manager Architekturen ohne begin_frame) → frame=0, force=0 → würde
+  -- immer true ergeben und alle Widgets permanent neu zeichnen → UI tot.
+  if state.force_redraw_frame
+      and state.force_redraw_frame == state.frame
+      and (state.frame or 0) > 0 then
     dirty_cache[mon][key] = snapshot
     return true
   end
@@ -156,8 +161,11 @@ function ui.panel(mon, x, y, w, h, title, status)
   -- Widgets seien noch sichtbar → Widgets werden nicht neu gezeichnet → leerer Monitor.
   local panel_state = state_for(mon)
   if (panel_state.frame or 0) > 0 then
+    -- begin_frame() wurde aufgerufen → frame-basiertes force_redraw verwenden
     panel_state.force_redraw_frame = panel_state.frame
   else
+    -- begin_frame() nicht aufgerufen (ältere Render-Architektur ohne Frame-Zähler)
+    -- → klassisches invalidate als Fallback, kein force_redraw_frame setzen
     ui.invalidate(mon)
   end
   redirect(mon, function()
