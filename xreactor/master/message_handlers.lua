@@ -39,8 +39,12 @@ function M.new(opts)
     return out
   end
 
-  -- Fix P4: number_or_nil jetzt in utils zentralisiert
-  local number_or_nil = utils.number_or_nil
+  -- Fix P4: number_or_nil aus utils, mit Fallback für ältere utils-Versionen
+  local number_or_nil = utils.number_or_nil or function(v)
+    if type(v) == "number" then return v end
+    if type(v) == "string" then local n = tonumber(v); if n then return n end end
+    return nil
+  end
 
   local function sum_turbine_output(turbines)
     if type(turbines) ~= "table" then return nil end
