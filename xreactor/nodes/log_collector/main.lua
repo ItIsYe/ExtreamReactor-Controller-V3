@@ -15,9 +15,9 @@ end
 
 local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local FALLBACK_ROOT = "/xreactor_collected_logs"
-local MAX_LOG_BYTES = 8192
-local ROTATE_KEEP = 3
-local MIN_FREE_BYTES = 8192  -- minimum free bytes before switching disk
+local MAX_LOG_BYTES = 524288  -- 512 KB pro Log-Datei (war 8 KB → zu klein für verbose Logs)
+local ROTATE_KEEP = 5  -- 5 Rotationen × 512 KB = max 2.5 MB pro Node
+local MIN_FREE_BYTES = 65536  -- 64 KB freier Platz Mindest-Schwelle
 local DEDUPE_LIMIT = 512
 local MODEM_REFRESH_SECONDS = 10
 local SELF_ROLE = "LOG_COLLECTOR"
