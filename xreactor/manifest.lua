@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 46,
-  manifest_id = "manifest-v46",
+  manifest_version = 47,
+  manifest_id = "manifest-v47",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -95,11 +95,11 @@ return {
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"}},
     { path = "nodes/rt/main.lua", size_bytes = 99128, hash = "d1a2c4bc", required_for={"RT"}},
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"}},
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 21646, hash = "b3bc3ca4", required_for={"RT"}},
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 23123, hash = "9322e80f", required_for={"RT"}},
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"}},
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"}},
     { path = "nodes/rt/state_handlers.lua", size_bytes = 8762, hash = "aa2155db", required_for={"RT"}},
-    { path = "nodes/rt/status_snapshot.lua", size_bytes = 10319, hash = "04f33838", required_for={"RT"}},
+    { path = "nodes/rt/status_snapshot.lua", size_bytes = 10668, hash = "ff8be868", required_for={"RT"}},
     },
     energy = {
     { path = "adapters/energy_storage.lua", size_bytes = 3648, hash = "fd2dc2e5", required_for={"ENERGY"}},
