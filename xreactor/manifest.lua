@@ -32,7 +32,7 @@ return {
   { path = "core/state_machine.lua", size_bytes = 842, hash = "4ae6c19c" },
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
-  { path = "core/ui.lua", size_bytes = 11243, hash = "c7d90a12" },
+  { path = "core/ui.lua", size_bytes = 12875, hash = "2b78f4f8"},
   { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
   { path = "core/utils.lua", size_bytes = 21615, hash = "6b9390b5" },
   { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
