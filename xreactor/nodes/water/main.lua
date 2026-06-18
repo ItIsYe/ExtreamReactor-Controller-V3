@@ -29,7 +29,8 @@ local monitor_adapter = require("adapters.monitor")
 local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
-local discovery_service = require("services.discovery_service")
+local discovery_service  = require("services.discovery_service")
+local redstone_router_lib = require("nodes.fuel.redstone_router")
 local ui_service = require("services.ui_service")
 local safety = require("core.safety")
 local non_rt_payload = require("core.non_rt_payload")
@@ -75,6 +76,19 @@ CONFIG.CONFIG_PATH = role_descriptor.config_path
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local balance_log_state = { last_action = "ok", last_log_ts = 0 }
+local cluster_rs_router = nil  -- Redstone-Router für Cluster-Steuerung
+local cluster_states    = {}   -- { [cluster_name] = { filling=bool, draining=bool } }
+
+local function get_cluster_rs_router()
+  if not cluster_rs_router then
+    cluster_rs_router = redstone_router_lib.new({
+      config    = config,
+      log       = function(level, msg) utils.log("WATER", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+    })
+  end
+  return cluster_rs_router
+end
 
 local function add_config_warning(message)
   table.insert(config_warnings, message)
@@ -218,6 +232,90 @@ local function should_log_balance(action, now)
   return false
 end
 
+-- Liest den Füllstand eines einzelnen Tank-Peripherals.
+local function read_tank_level(tank_name)
+  local t = tanks[tank_name]
+  if not t then return nil end
+  if t.tanks then
+    local ok, data = support_runtime.safe_wrapped_call(t, "tanks")
+    if ok and type(data) == "table" then
+      local total = 0
+      for _, info in pairs(data) do
+        if type(info) == "table" and type(info.amount) == "number" then
+          total = total + info.amount
+        end
+      end
+      return total
+    end
+  elseif t.getFluidAmount then
+    local ok, value = support_runtime.safe_wrapped_call(t, "getFluidAmount")
+    if ok and type(value) == "number" then return value end
+  end
+  return nil
+end
+
+-- Setzt einen Redstone-Output direkt (ohne Router) auf einer Seite.
+local function set_rs_output(side, state, integrator)
+  if integrator then
+    local ok, dev = pcall(peripheral.wrap, integrator)
+    if ok and dev and type(dev.setOutput) == "function" then
+      pcall(dev.setOutput, side, state)
+    end
+  else
+    pcall(redstone.setOutput, side, state)
+  end
+end
+
+-- Steuert Befüllung/Entleerung pro Cluster basierend auf Füllstand.
+local function manage_clusters()
+  local clusters = config.clusters or {}
+  if #clusters == 0 then return end
+  for _, cluster in ipairs(clusters) do
+    local name       = cluster.name or "?"
+    local tank_name  = cluster.tank
+    local min_vol    = tonumber(cluster.min_volume) or 0
+    local max_vol    = tonumber(cluster.max_volume) or math.huge
+    local fill_side  = cluster.fill_side
+    local drain_side = cluster.drain_side
+    local integrator = cluster.integrator
+
+    local level = tank_name and read_tank_level(tank_name)
+    if level == nil then
+      warn_once("cluster_read:" .. name, "Cluster " .. name .. ": tank not found: " .. tostring(tank_name))
+      goto continue
+    end
+
+    cluster_states[name] = cluster_states[name] or { filling = false, draining = false }
+    local state = cluster_states[name]
+
+    -- Befüllen: level unter Minimum → fill_side HIGH
+    if level < min_vol and not state.filling then
+      state.filling = true
+      state.draining = false
+      if fill_side  then set_rs_output(fill_side,  true,  integrator) end
+      if drain_side then set_rs_output(drain_side, false, integrator) end
+      utils.log("WATER", ("Cluster %s: filling (level=%.0f < min=%.0f)"):format(name, level, min_vol))
+    -- Entleeren: level über Maximum → drain_side HIGH
+    elseif level > max_vol and not state.draining then
+      state.draining = true
+      state.filling  = false
+      if fill_side  then set_rs_output(fill_side,  false, integrator) end
+      if drain_side then set_rs_output(drain_side, true,  integrator) end
+      utils.log("WATER", ("Cluster %s: draining (level=%.0f > max=%.0f)"):format(name, level, max_vol))
+    -- Im Zielbereich → alles aus
+    elseif level >= min_vol and level <= max_vol then
+      if state.filling or state.draining then
+        state.filling  = false
+        state.draining = false
+        if fill_side  then set_rs_output(fill_side,  false, integrator) end
+        if drain_side then set_rs_output(drain_side, false, integrator) end
+        utils.log("WATER", ("Cluster %s: in range (level=%.0f)"):format(name, level))
+      end
+    end
+    ::continue::
+  end
+end
+
 local function balance_loop()
   local total, _ = total_water()
   local now = os.epoch("utc")
@@ -282,7 +380,23 @@ local function build_status_payload()
     }
   })
   payload.total_water = total
-  payload.buffers = buffers
+  -- Cluster-Status
+  local cluster_info = {}
+  for _, cluster in ipairs(config.clusters or {}) do
+    local name  = cluster.name or "?"
+    local level = (cluster.tank and read_tank_level(cluster.tank)) or nil
+    local st    = cluster_states[name] or {}
+    table.insert(cluster_info, {
+      name    = name,
+      level   = level,
+      filling = st.filling  or false,
+      draining= st.draining or false,
+      min     = cluster.min_volume,
+      max     = cluster.max_volume,
+    })
+  end
+  payload.clusters = cluster_info
+  payload.buffers  = buffers
   payload.bindings = water_health.bindings
   payload.bindings_summary = health.summarize_bindings(water_health.bindings)
   return payload
@@ -477,4 +591,7 @@ services:add({
   end
 })
 
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, balance_loop)
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+  balance_loop()
+  manage_clusters()
+end)
