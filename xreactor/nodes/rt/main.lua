@@ -975,19 +975,17 @@ local function updateReactorControl()
     applyReactorRods(CONFIG.ROD_MAX, true, "SAFE_TICK")
     return
   end
-  -- Fix: wenn enable_reactors=false → Stäbe sofort auf 100% (maximale Insertion).
-  -- Reaktor bleibt aktiv aber produziert keine Leistung mehr.
-  -- Den Rod-Regulator allein zu überlassen ist falsch: bei vollem Dampftank
-  -- (margin=MAX) fährt er Stäbe auf 90-95% aber nicht schnell genug auf 100%
-  -- → Reaktor produziert Restwärme ohne Dampfabfuhr → Überhitzung → SAFE-Mode.
-  if runtime_ctx.targets.enable_reactors == false then
-    applyReactorRods(100, true, "TARGETS_DISABLE")
-    return
-  end
   if now - runtime_ctx.last_reactor_tick < config.autonom.reactor_adjust_interval then
     return
   end
   runtime_ctx.last_reactor_tick = now
+  -- Fix: wenn enable_reactors=false → Stäbe sofort auf 100% (maximale Insertion).
+  -- Gilt auch während Learning (vor cap_locked Check).
+  -- Reaktor bleibt aktiv aber auf Minimum — kein Dampf → keine Überhitzung.
+  if runtime_ctx.targets.enable_reactors == false then
+    applyReactorRods(100, true, "TARGETS_DISABLE")
+    return
+  end
   -- During capacity learning: suspend the steam_margin regulator.
   -- Rods are held at LEARNING_ROD_LEVEL (50%) by updateControl() each tick.
   -- If the steam_margin regulator also runs here, it fights the learning-phase
