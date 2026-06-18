@@ -979,17 +979,8 @@ local function updateReactorControl()
     return
   end
   runtime_ctx.last_reactor_tick = now
-  -- Fix: wenn enable_reactors=false → Stäbe sofort auf 100% (maximale Insertion).
-  -- Gilt auch während Learning (vor cap_locked Check).
-  -- Reaktor bleibt aktiv aber auf Minimum — kein Dampf → keine Überhitzung.
-  if runtime_ctx.targets.enable_reactors == false then
-    applyReactorRods(100, true, "TARGETS_DISABLE")
-    return
-  end
   -- During capacity learning: suspend the steam_margin regulator.
-  -- Rods are held at LEARNING_ROD_LEVEL (50%) by updateControl() each tick.
-  -- If the steam_margin regulator also runs here, it fights the learning-phase
-  -- setter and causes rod oscillation that can prevent turbines reaching 900 RPM.
+  -- Stäbe werden während Learning durch LEARNING_ROD_LEVEL geregelt (nicht hier).
   local lrn = runtime_ctx.capacity_learning
   local cap_locked = lrn and lrn.locked == true
   if not cap_locked then
@@ -1000,6 +991,13 @@ local function updateReactorControl()
       tostring(lrn and lrn.total_turbines or "?"),
       tostring(lrn and lrn.sample_output or 0),
       tostring(lrn and lrn.reason or "WAITING")))
+    return
+  end
+  -- Fix: nach dem Learning-Lock: wenn enable_reactors=false → Rods auf 100%.
+  -- Reaktor bleibt aktiv aber auf Minimum — verhindert Überhitzung bei
+  -- vollem Dampftank (margin=MAX fährt sonst Stäbe nur auf 90-95%).
+  if runtime_ctx.targets.enable_reactors == false then
+    applyReactorRods(100, true, "TARGETS_DISABLE")
     return
   end
   log_reactor_control_state()
