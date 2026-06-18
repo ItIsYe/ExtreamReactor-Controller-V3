@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 71,
-  manifest_id = "manifest-v71",
+  manifest_version = 72,
+  manifest_id = "manifest-v72",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -120,15 +120,15 @@ return {
     { path = "nodes/energy/ui_pages.lua", size_bytes = 8317, hash = "056a840d", required_for={"ENERGY"}},
     },
     water = {
-    { path = "nodes/water/config.lua", size_bytes = 3793, hash = "3b282920", required_for={"WATER"}},
+    { path = "nodes/water/config.lua", size_bytes = 4789, hash = "961b224e", required_for={"WATER"}},
     { path = "nodes/water/config_normalizer.lua", size_bytes = 989, hash = "09141fba", required_for={"WATER"}},
-    { path = "nodes/water/main.lua", size_bytes = 18322, hash = "0c1cd239", required_for={"WATER"}},
+    { path = "nodes/water/main.lua", size_bytes = 22727, hash = "2505cac0", required_for={"WATER"}},
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"}},
     },
     fuel = {
     { path = "nodes/fuel/config.lua", size_bytes = 5586, hash = "48c5be2b", required_for={"FUEL"}},
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 3722, hash = "40524d32", required_for={"FUEL"}},
-    { path = "nodes/fuel/main.lua", size_bytes = 20760, hash = "cb729ee4", required_for={"FUEL"}},
+    { path = "nodes/fuel/main.lua", size_bytes = 21208, hash = "f57fd644", required_for={"FUEL"}},
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"}},
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 16803, hash = "28477abd", required_for={"FUEL","REPROCESSING"}},
     { path = "nodes/fuel/redstone_router.lua", size_bytes = 8006, hash = "b9ce5b6d", required_for={"FUEL","REPROCESSING"}},
