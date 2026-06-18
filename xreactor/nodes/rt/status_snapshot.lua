@@ -178,17 +178,21 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
   learning.out_of_band_turbines = sample.out_of_band
   learning.coil_off_turbines = sample.coil_off
 
+  -- Letzten bekannten Turbinen-Stand für UI-Fortschrittsbalken speichern
+  learning.stable_turbines_last = sample.stable
+  learning.total_turbines_last  = sample.total
+
   if sample.ok then
     learning.stable_samples = (learning.stable_samples or 0) + 1
     learning.max_candidate = math.max(learning.max_candidate or 0, sample.sample_output or 0)
-    -- Letzten bekannten Turbinen-Stand für UI-Fortschrittsbalken speichern
-    learning.stable_turbines_last = sample.stable
-    learning.total_turbines_last  = sample.total
+    -- Gut-Fenster: zählt aufeinanderfolgende gültige Samples.
+    -- Ein kurzer Ausreißer (ungültiger Sample) setzt nur den Fenster-Zähler zurück,
+    -- nicht stable_samples — verhindert dass RPM-Schwankungen das Learning blockieren.
+    learning.ok_window = (learning.ok_window or 0) + 1
     if not learning.locked and learning.stable_samples >= 3 then
-      -- P1: Lock nur wenn alle Turbinen stabil (sample.ok enforced durch required=total)
       learning.max_output = learning.max_candidate
       learning.locked = true
-      learning.reason = "LOCKED_ALL_TURBINES_STABLE"
+      learning.reason = "LOCKED"
       if type(ctx.log) == "function" then
         pcall(ctx.log, "INFO", string.format(
           "RT capacity locked output=%.2f samples=%d stable=%d/%d",
@@ -197,11 +201,11 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
         ))
       end
     elseif learning.locked then
-      -- P3: Update nur wenn >1% über bisherigem Max — verhindert unnötige Cache-Writes.
+      -- Update wenn >1% über bisherigem Max
       local threshold = (learning.max_output or 0) * 1.01
       if sample.sample_output and sample.sample_output > threshold then
         learning.max_output = sample.sample_output
-        learning.reason = "UPDATED_ALL_TURBINES_STABLE"
+        learning.reason = "UPDATED"
         if type(ctx.log) == "function" then
           pcall(ctx.log, "INFO", string.format(
             "RT capacity updated output=%.2f stable=%d/%d",
@@ -211,14 +215,28 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
       end
     end
   else
-    -- P4: stable_samples + max_candidate immer zurücksetzen wenn Sample ungültig
+    -- Ungültiger Sample: Fenster-Zähler zurücksetzen.
+    -- stable_samples und max_candidate bleiben erhalten solange nicht gesperrt —
+    -- kurzzeitige Ausreißer sollen den Fortschritt nicht zunichtemachen.
+    learning.ok_window = 0
     if not learning.locked then
-      learning.stable_samples = 0
-      learning.max_candidate  = 0
+      -- Nur zurücksetzen wenn zu viele aufeinanderfolgende Fehler (>3 in Folge)
+      -- um echte Probleme (Reaktor aus, alle Turbinen weg) zu erkennen.
+      learning.consecutive_fail = (learning.consecutive_fail or 0) + 1
+      if learning.consecutive_fail > 3 then
+        learning.stable_samples   = 0
+        learning.max_candidate    = 0
+        learning.consecutive_fail = 0
+        if type(ctx.log) == "function" then
+          pcall(ctx.log, "WARN",
+            "CapacityLearning: reset after 3 consecutive failed samples reason=" .. tostring(sample.reason))
+        end
+      end
     end
-    -- Turbinen-Stand auch bei ungültigem Sample aktualisieren (für UI)
-    learning.stable_turbines_last = sample.stable
-    learning.total_turbines_last  = sample.total
+  end
+  -- Gut-Samples setzen consecutive_fail zurück
+  if sample.ok then
+    learning.consecutive_fail = 0
   end
 
   return learning
