@@ -154,8 +154,9 @@ local function render_compact_header(mon, model, title)
   local health = model.health and model.health.status or "OFFLINE"
   badge_line(mon, 2, {
     { "RT " .. tostring(health), health },
-    { "M " .. tostring(model.master_state or "?"), master_status(model) },
-    { tostring(model.current_state or "-"), tostring(model.current_state) == "MASTER" and "OK" or "LIMITED" },
+    { "M " .. tostring(model.master_state or "--"), master_status(model) },
+    { tostring(model.current_state or "-"),
+      ({MASTER="OK", AUTONOM="text", SAFE="ERROR", EMERGENCY="ERROR", LIMITED="WARN", INIT="muted"})[tostring(model.current_state)] or "WARN" },
     { model.capacity_ready and "CAP" or "LEARN", capacity_status(model) }
   })
   write_line(mon, 3, tostring(title) .. " | " .. tostring(model.node_id or "?") .. " | " .. tostring(model.node_state or "-"), "text")
@@ -180,7 +181,12 @@ local function render_overview(mon, model)
   write_line(mon, y, string.format("Power %s%%  Soll %s  Ist %s", fmt(p_pct, 1), fmt_short(target), fmt_short(actual)), p_status); y = y + 1
   if w >= 20 then ui.progress(mon, 2, y, math.max(8, w - 3), math.min(100, p_pct) / 100, p_status) end; y = y + 1
   write_line(mon, y, string.format("Master %s -> %s RF/t", fmt(model.target_percent, 1, "%"), fmt_short(target)), "text"); y = y + 1
-  write_line(mon, y, string.format("Cap %s %s %.1f%%", fmt_short(capacity), model.capacity_ready and "lock" or "learn", cap_pct), capacity_status(model)); y = y + 1
+  if model.capacity_ready then
+    write_line(mon, y, string.format("Cap %s lock %.1f%%", fmt_short(capacity), cap_pct), "OK")
+  else
+    write_line(mon, y, string.format("Cap -- learn (S:%d/3)", num(model.capacity_stable_samples, 0)), "WARN")
+  end
+  y = y + 1
   if not model.capacity_ready and y <= h - 1 then
     local REQUIRED_SAMPLES = 3
     local stable_t = num(model.capacity_stable_turbines, 0)
