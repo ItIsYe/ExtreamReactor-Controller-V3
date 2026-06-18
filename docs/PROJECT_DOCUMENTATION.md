@@ -183,9 +183,8 @@ Der Flow-Regelkreis läuft für **jede Turbine, jeden Tick**, ohne Ausnahme:
 
 ```
 get_turbine_target_rpm(turbine_index):
-  Während Learning (cap_locked=false):   → base_rpm (900) für alle
   Außerhalb MASTER-Modus:                → base_rpm für alle
-  Im MASTER-Modus mit cap_locked=true:
+  Im MASTER-Modus:
     virt_slot = (index - 1 + rotation_offset) % total
     virt_slot < full_count  → base_rpm   (Vollast)
     virt_slot == full_count → partial_rpm (Teillast, falls remainder > 1%)
@@ -194,20 +193,8 @@ get_turbine_target_rpm(turbine_index):
 
 ### Reaktor-Rod-Regelung
 
-Der Rod-Regulator arbeitet in zwei Phasen:
+Der Rod-Regulator läuft identisch während Learning und Normalbetrieb:
 
-**Während Capacity-Learning (`capacity_ready = false`):**
-```
-Stäbe fest auf LEARNING_ROD_LEVEL = 50% (bypassed min/max Caps)
-Rod-Regulator ist PAUSIERT — keine steam_margin Regelung
-Alle Turbinen werden gleichzeitig auf 900 RPM geregelt
-Reaktor läuft im natürlichen Gleichgewicht bei 50% Stäben
-
-Log-Indikator:
-  ROD_APPLY_SAFE_OVERRIDE source=LEARNING_PHASE requested=50 clamped=50
-```
-
-**Nach Learning-Lock (`capacity_ready = true`):**
 ```
 steam_margin = verfügbarer_Dampf − gesamter_Dampfbedarf_aller_Turbinen
 Positiver Margin → Stäbe reinfahren (weniger Dampf)
@@ -216,7 +203,7 @@ Negativer Margin → Stäbe rausfahren (mehr Dampf)
 Deadband:         ±5000 mB
 Schrittweite:     max ±5% pro Anwendung
 Cooldown:         1.5s zwischen Anpassungen
-Regelbereich:     rails.reactor_rods.min=80% .. max=98% Insertion
+Regelbereich:     rails.reactor_rods.min=80% .. max=100% Insertion
 
 Kühlmittel-Schutz:
   Ratio ≤ 0.28 (soft): max 2 Schritte raus
@@ -230,20 +217,12 @@ Log-Indikator:
   ReactorCtrl margin=<N> rods_current=<X> rods_target=<Y> source=AUTO_REGULATOR
 ```
 
-**Warum pausiert der Regulator während Learning?**
-Beim Start stehen die Stäbe auf 98% (INITIAL_ROD_LEVEL = fast zu, minimale Leistung).
-Der Regulator würde bei leerem steam_margin die Stäbe weiter reinfahren und so
-keinen Dampf erzeugen. LEARNING_ROD_LEVEL = 50% stellt sicher dass genug Dampf
-für alle 25 Turbinen entsteht damit der Learning-Prozess überhaupt abschließen kann.
-Nach dem Lock übernimmt AUTO_REGULATOR die Kontrolle vollständig.
-
 ### Rod-Konfiguration
 
 Kanonischer Konfig-Pfad: `config.rails.reactor_rods.min` / `.max`
 
 Veraltete Pfade (`autonom.regulator_min_rods`, `autonom.min_rods`) werden automatisch auf den neuen Pfad migriert und loggen eine Warnung.
 
-`CONFIG.LEARNING_ROD_LEVEL = 50` — fester Rod-Level während Learning (bypassed Caps).
 `CONFIG.INITIAL_ROD_LEVEL = 98` — Rod-Level beim allerersten Start (Stäbe fast zu).
 
 ### Node-States
@@ -266,7 +245,7 @@ Veraltete Pfade (`autonom.regulator_min_rods`, `autonom.min_rods`) werden automa
 | Coil-Schwellen Teillast | proportional skaliert | automatisch |
 | Overspeed-Band | Ziel + 20 RPM | `rails.coil.overspeed_band` |
 | Teillast-Rotation | alle 5 Min | `ROTATE_INTERVAL` in main.lua |
-| Reaktorstäbe Regelbereich | 80–98% Insertion | `rails.reactor_rods.min/.max` |
+| Reaktorstäbe Regelbereich | 80–100% Insertion | `rails.reactor_rods.min/.max` |
 | Reaktorstäbe SCRAM | 100% | nicht konfigurierbar |
 | Temperatur-Trip | 2000°C | `config.autonom.max_temp` |
 | Steam Guard high | 0.82 | `rails.reactor_steam_guard.high_ratio` |
