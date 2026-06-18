@@ -2059,7 +2059,9 @@ local function update_status_snapshot()
     log_prefix = "RT",
     get_device_caps = get_device_caps,
     get_available_steam = get_available_steam,
-    last_status_snapshot = last_status_snapshot
+    last_status_snapshot = last_status_snapshot,
+    -- Fix: capacity_learning übergeben damit UI-Snapshot T/S korrekt anzeigt
+    capacity_learning = runtime_ctx.capacity_learning
   })
   return last_status_snapshot
 end
