@@ -108,12 +108,9 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
         producing = producing + 1
         stable_output = stable_output + energy
       elseif coil ~= false then
-        -- Turbine is in RPM band with coil engaged but energy reads as zero.
-        -- Count as mechanically stable for diagnostics (stable_turbines counter).
-        -- This does NOT trigger a capacity lock — locking still requires sample_output > 0.
-        -- With LEARNING_ROD_LEVEL = 50, the reactor will soon produce enough steam
-        -- for energy > 0, at which point the producing counter and sample_output
-        -- will be updated and learning will complete normally.
+        -- Turbine is in RPM band with coil engaged but energy reads as zero (readback lag).
+        -- Count as mechanically stable for diagnostics.
+        -- Lock still requires sample_output > 0 — no energy means no valid sample.
         stable = stable + 1
         -- producing and stable_output unchanged: no real energy to record
       end
@@ -137,7 +134,7 @@ local function summarize_capacity_sample(turbines, target_rpm, total_output)
   local ok = stable >= required and sample_output > 0
   local reason
   if ok then
-    reason = "ALL_TURBINES_STABLE"
+    reason = "SAMPLE_OK"
   elseif stable < required then
     reason = "NOT_ALL_STABLE"
   else
