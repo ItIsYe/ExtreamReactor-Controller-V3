@@ -19,7 +19,6 @@ local CONFIG = {
   ROD_MIN = 0, -- Minimum control rod insertion.
   ROD_MAX = 98, -- Maximum control rod insertion.
   INITIAL_ROD_LEVEL = 98, -- Initial rod level on startup.
-  LEARNING_ROD_LEVEL = 50, -- Rod level during capacity learning (AUTONOM pre-lock).
                            -- Lower than max so turbines generate enough steam/power
                            -- for the capacity learning energy > 0 check to pass.
   CAPACITY_CACHE_PATH = "/xreactor/config/capacity_cache.lua",
@@ -979,21 +978,7 @@ local function updateReactorControl()
     return
   end
   runtime_ctx.last_reactor_tick = now
-  -- During capacity learning: suspend the steam_margin regulator.
-  -- Stäbe werden während Learning durch LEARNING_ROD_LEVEL geregelt (nicht hier).
-  local lrn = runtime_ctx.capacity_learning
-  local cap_locked = lrn and lrn.locked == true
-  if not cap_locked then
-    log("INFO", string.format(
-      "CapacityLearning: samples=%d/3 stable=%s/%s output=%s reason=%s (steam_margin suspended)",
-      lrn and lrn.stable_samples or 0,
-      tostring(lrn and lrn.stable_turbines or 0),
-      tostring(lrn and lrn.total_turbines or "?"),
-      tostring(lrn and lrn.sample_output or 0),
-      tostring(lrn and lrn.reason or "WAITING")))
-    return
-  end
-  -- Fix: nach dem Learning-Lock: wenn enable_reactors=false → Rods auf 100%.
+  -- Fix: wenn enable_reactors=false → Rods auf 100%.
   -- Reaktor bleibt aktiv aber auf Minimum — verhindert Überhitzung bei
   -- vollem Dampftank (margin=MAX fährt sonst Stäbe nur auf 90-95%).
   if runtime_ctx.targets.enable_reactors == false then
@@ -1635,14 +1620,6 @@ local function updateControl()
         goto continue_control_reactor
       end
       ensure_reactor_ctrl(name)
-      -- During capacity learning: use a lower rod level to generate enough steam
-      -- so turbines produce energy and the learning energy>0 check passes.
-      -- Once capacity is locked, the normal setpoint control takes over.
-      -- P5: Kein fixer LEARNING_ROD_LEVEL Override mehr.
-      -- Der normale Rod-Regulator läuft auch während des Learnings mit denselben
-      -- Vorgaben wie im Normalbetrieb. Während Learning laufen alle Turbinen auf
-      -- 900 RPM (get_turbine_target_rpm gibt base zurück wenn !cap_locked),
-      -- der Reaktor regelt sich selbst auf den entstehenden Dampfbedarf ein.
       if not runtime_ctx.autonom_control_logged then
         runtime_ctx.autonom_control_logged = true
         log("INFO", "AUTONOM actuator control active")
