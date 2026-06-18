@@ -439,7 +439,15 @@ local function handle_command(message)
     return
   end
   if command.target == constants.command_targets.SET_RESERVE then
-    reserve = command.value
+    local new_reserve = tonumber(command.value)
+    if type(new_reserve) == "number" and new_reserve >= 0 then
+      reserve = new_reserve
+      utils.log("FUEL", "Reserve updated to " .. tostring(reserve))
+    else
+      utils.log("FUEL", "SET_RESERVE rejected: invalid value=" .. tostring(command.value), "WARN")
+      return support_command_handler.finish_with_result(devices,
+        { ok = false, error = "invalid reserve value", reason_code = "INVALID_VALUE" })
+    end
   elseif command.target == constants.command_targets.MODE and command.value == constants.node_states.MANUAL then
     -- manual mode acknowledged but not changing behavior
   else
