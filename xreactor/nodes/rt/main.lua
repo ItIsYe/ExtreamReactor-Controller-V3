@@ -17,7 +17,7 @@ local CONFIG = {
   START_FLOW = 0, -- Starting flow value when enabling turbines.
   ROD_TICK = 5.0, -- Control rod adjustment interval (seconds).
   ROD_MIN = 0, -- Minimum control rod insertion.
-  ROD_MAX = 98, -- Maximum control rod insertion.
+  ROD_MAX = 100, -- Maximum control rod insertion.
   INITIAL_ROD_LEVEL = 98, -- Initial rod level on startup.
                            -- Lower than max so turbines generate enough steam/power
                            -- for the capacity learning energy > 0 check to pass.
@@ -978,13 +978,6 @@ local function updateReactorControl()
     return
   end
   runtime_ctx.last_reactor_tick = now
-  -- Fix: wenn enable_reactors=false → Rods auf 100%.
-  -- Reaktor bleibt aktiv aber auf Minimum — verhindert Überhitzung bei
-  -- vollem Dampftank (margin=MAX fährt sonst Stäbe nur auf 90-95%).
-  if runtime_ctx.targets.enable_reactors == false then
-    applyReactorRods(100, true, "TARGETS_DISABLE")
-    return
-  end
   log_reactor_control_state()
   controlReactor()
   log_reactor_control_tick()
