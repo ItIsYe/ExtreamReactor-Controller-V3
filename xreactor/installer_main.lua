@@ -477,6 +477,13 @@ function M.run(constants)
   if not ok_commit then ctx.fatal(commit_err) end
   stage_lib.ensure_role_config(ctx, ctx.constants.INSTALL_ROOT, role.label)
   startup_lib.write_startup(ctx, role.label)
+  -- Sicherstellen dass xreactor.log_mode = "all" gesetzt ist damit
+  -- Remote-Logging zum Log-Collector funktioniert. Überschreibt alte Werte.
+  if settings and type(settings.set) == "function" then
+    settings.set("xreactor.log_mode", "all")
+    if type(settings.save) == "function" then settings.save() end
+    ctx.info("Log mode set to 'all' (remote + disk)")
+  end
   ctx.info("Install complete")
 end
 
