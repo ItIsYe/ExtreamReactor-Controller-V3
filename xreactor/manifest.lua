@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 68,
-  manifest_id = "manifest-v68",
+  manifest_version = 69,
+  manifest_id = "manifest-v69",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -147,7 +147,7 @@ return {
     { path = "nodes/support/command_handler.lua", size_bytes = 4590, hash = "568a2b45", required_for={"WATER", "FUEL", "REPROCESSING"}},
     { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER", "FUEL", "REPROCESSING"}},
     { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY", "WATER", "FUEL", "REPROCESSING"}},
-    { path = "nodes/support/runtime.lua", size_bytes = 2685, hash = "8cb1f807", required_for={"WATER", "FUEL", "REPROCESSING"}},
+    { path = "nodes/support/runtime.lua", size_bytes = 3819, hash = "86032e94", required_for={"WATER", "FUEL", "REPROCESSING"}},
     { path = "nodes/support/ui_pages.lua", size_bytes = 5097, hash = "e9f1a7c9", required_for={"WATER", "FUEL", "REPROCESSING", "ENERGY", "RT", "MASTER"}},
     },
   },
