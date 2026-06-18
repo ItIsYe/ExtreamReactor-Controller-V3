@@ -127,15 +127,7 @@ reboot
 
 The rod regulator has two phases:
 
-**During Capacity Learning (`capacity_ready = false`):**
-```
-Rods held at LEARNING_ROD_LEVEL = 50% (bypasses min/max caps)
-Rod regulator is PAUSED — no steam_margin control
-All turbines regulated to 900 RPM simultaneously
-Reactor follows natural equilibrium at 50% rods
-```
-
-**After Learning Lock (`capacity_ready = true`):**
+**Rod regulator runs identically during Learning and normal operation:**
 ```
 steam_margin = available_steam − total_turbine_steam_demand
 Positive margin → insert rods (less steam produced)
@@ -144,7 +136,7 @@ Negative margin → retract rods (more steam produced)
 Deadband:  ±5000 mB  (no action in this range)
 Step:      max ±5% per application
 Cooldown:  1.5s between adjustments
-Rod range: min=80% .. max=98% insertion (configurable in rails.reactor_rods)
+Rod range: min=80% .. max=100% insertion (configurable in rails.reactor_rods)
 
 Safety overrides (bypass rod caps):
   SCRAM / EMERGENCY → 100% insertion (immediate)
@@ -155,10 +147,6 @@ Coolant protection reduces or blocks rod retraction when coolant ratio is low (s
 **Log indicator for active rod control:**
 ```
 ReactorCtrl margin=<N> rods_current=<X> rods_target=<Y> source=AUTO_REGULATOR
-```
-During learning you will see instead:
-```
-ROD_APPLY_SAFE_OVERRIDE source=LEARNING_PHASE requested=50 clamped=50
 ```
 
 ---
