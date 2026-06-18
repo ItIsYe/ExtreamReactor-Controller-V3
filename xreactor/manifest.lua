@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 67,
-  manifest_id = "manifest-v67",
+  manifest_version = 68,
+  manifest_id = "manifest-v68",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -99,7 +99,7 @@ return {
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"}},
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"}},
     { path = "nodes/rt/state_handlers.lua", size_bytes = 8762, hash = "aa2155db", required_for={"RT"}},
-    { path = "nodes/rt/status_snapshot.lua", size_bytes = 10733, hash = "01d25141", required_for={"RT"}},
+    { path = "nodes/rt/status_snapshot.lua", size_bytes = 11470, hash = "c5af0558", required_for={"RT"}},
     },
     energy = {
     { path = "adapters/energy_storage.lua", size_bytes = 3648, hash = "fd2dc2e5", required_for={"ENERGY"}},
