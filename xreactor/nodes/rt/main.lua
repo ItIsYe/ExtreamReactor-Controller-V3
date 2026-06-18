@@ -975,6 +975,15 @@ local function updateReactorControl()
     applyReactorRods(CONFIG.ROD_MAX, true, "SAFE_TICK")
     return
   end
+  -- Fix: wenn enable_reactors=false → Reaktor sofort deaktivieren.
+  -- Den Rod-Regulator darauf zu verlassen dass er den Reaktor langsam
+  -- runterfährt ist falsch: bei vollem Dampftank (margin=MAX) steigen
+  -- Stäbe auf 90-95% aber der Reaktor produziert noch Restwärme
+  -- ohne Dampfabfuhr → Überhitzung → SAFE-Mode.
+  if runtime_ctx.targets.enable_reactors == false then
+    set_reactors_active(false, "TARGETS_DISABLE")
+    return
+  end
   if now - runtime_ctx.last_reactor_tick < config.autonom.reactor_adjust_interval then
     return
   end
