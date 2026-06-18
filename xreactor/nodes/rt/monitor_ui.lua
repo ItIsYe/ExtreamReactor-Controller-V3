@@ -157,9 +157,15 @@ local function render_compact_header(mon, model, title)
     { "M " .. tostring(model.master_state or "--"), master_status(model) },
     { tostring(model.current_state or "-"),
       ({MASTER="OK", AUTONOM="text", SAFE="ERROR", EMERGENCY="ERROR", LIMITED="WARN", INIT="muted"})[tostring(model.current_state)] or "WARN" },
-    { model.capacity_ready and "CAP" or "LEARN", capacity_status(model) }
+    { model.capacity_ready and "CAP" or "LEARN", capacity_status(model) },
+    -- Assignment-State Badge: nur wenn abweichend von "active"
+    (model.assignment_state and model.assignment_state ~= "active" and model.assignment_state ~= "")
+      and { tostring(model.assignment_state):upper(), "WARN" }
+      or nil
   })
-  write_line(mon, 3, tostring(title) .. " | " .. tostring(model.node_id or "?") .. " | " .. tostring(model.node_state or "-"), "text")
+  local node_state_str = tostring(model.node_state or "-")
+  local state_color = ({running="OK", startup="LIMITED", shutdown="WARN", limited="WARN"})[node_state_str] or "text"
+  write_line(mon, 3, tostring(title) .. " | " .. tostring(model.node_id or "?") .. " | " .. node_state_str, state_color)
   return 4
 end
 
@@ -209,7 +215,15 @@ local function render_overview(mon, model)
       ui.progress(mon, 2, y, math.max(8, w - 3), learn_pct, learn_status); y = y + 1
     end
   end
-  write_line(mon, y, string.format("RPM %s/%s Steam %s", fmt_short(snapshot.avg_rpm), fmt_short(model.target_rpm), fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
+  local trpm = num(model.target_rpm, 0)
+  local assignment = tostring(model.assignment_state or "")
+  local in_standby = trpm == 0 or assignment == "shutdown" or assignment == "unavailable"
+  if in_standby then
+    local standby_reason = assignment ~= "" and assignment or "standby"
+    write_line(mon, y, string.format("STANDBY (%s)  RPM %s", standby_reason, fmt_short(snapshot.avg_rpm)), "WARN"); y = y + 1
+  else
+    write_line(mon, y, string.format("RPM %s/%s Steam %s", fmt_short(snapshot.avg_rpm), fmt_short(model.target_rpm), fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
+  end
   write_line(mon, y, string.format("R:%d T:%d Cmd:%s M:%s", reactors, turbines, tostring(model.last_command or "-"), tostring(model.master_age or "-")), "text"); y = y + 1
 
   -- ── Turbinen: zwei Spalten nebeneinander ──────────────────────────────
@@ -240,9 +254,10 @@ local function render_overview(mon, model)
         local id_s = tostring(idx)
         local txt  = string.format("%-3s %-4s %-4s %-2s",
           id_s, fmt_short(t.rpm), fmt_short(t.energy),
-          t.inductor and "ON" or "OF")
+          t.inductor and "ON" or (in_standby and "SBY" or "OF"))
         local st = (t.bound == false) and "WARNING"
-                or (t.inductor and "OK" or "OFFLINE")
+                or (t.inductor and "OK"
+                or (in_standby and "muted" or "OFFLINE"))
         ui.text(mon, tx, ty, txt:sub(1, col_w), colors.get(st), colors.get("background"))
       end
     end
