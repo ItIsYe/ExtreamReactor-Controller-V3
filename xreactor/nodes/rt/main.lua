@@ -375,7 +375,8 @@ end
 local function get_turbine_target_rpm(turbine_index)
   local base = get_target_rpm()  -- 900 oder expliziter Master-Setpoint
 
-  -- Während Capacity-Learning: alle Turbinen auf vollen Ziel-RPM.
+  -- Solange Capacity nicht gelocked: alle Turbinen auf vollen Ziel-RPM.
+  -- (Sicherheitscheck: nach Lock im MASTER-Modus greift die Verteilungslogik)
   local cap_locked = runtime_ctx.capacity_learning
     and runtime_ctx.capacity_learning.locked == true
   if not cap_locked then
