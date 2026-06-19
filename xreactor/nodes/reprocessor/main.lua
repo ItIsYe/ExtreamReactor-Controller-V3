@@ -189,6 +189,28 @@ local function hello()
   comms:send_hello({ buffers = summary.kinds.buffer and summary.kinds.buffer.bound or 0 })
 end
 
+-- P2 Fix: Kapazität pro Buffer lesen (zusätzlich zu stored) damit Master/UI
+-- den Füllstand als Prozent anzeigen können, nicht nur die absolute Zahl.
+local function read_buffer_capacity(buf)
+  if buf.size then
+    local ok, value = support_runtime.safe_wrapped_call(buf, "size")
+    if ok and type(value) == "number" then return value end
+  end
+  if buf.getSize then
+    local ok, value = support_runtime.safe_wrapped_call(buf, "getSize")
+    if ok and type(value) == "number" then return value end
+  end
+  if buf.getCapacity then
+    local ok, value = support_runtime.safe_wrapped_call(buf, "getCapacity")
+    if ok and type(value) == "number" then return value end
+  end
+  if buf.getMaxWaste then
+    local ok, value = support_runtime.safe_wrapped_call(buf, "getMaxWaste")
+    if ok and type(value) == "number" then return value end
+  end
+  return nil
+end
+
 local function read_buffers()
   local info = {}
   for name, buf in pairs(buffers) do
@@ -219,7 +241,9 @@ local function read_buffers()
         warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value))
       end
     end
-    table.insert(info, { id = name, stored = stored })
+    local capacity = read_buffer_capacity(buf)
+    local percent = (capacity and capacity > 0) and math.floor(stored / capacity * 1000 + 0.5) / 10 or nil
+    table.insert(info, { id = name, stored = stored, capacity = capacity, percent = percent })
   end
   return info
 end
@@ -271,6 +295,10 @@ local function build_status_payload()
     }
   })
   payload.buffers = read_buffers()
+  -- P4: process()-Status pro Buffer im Payload mitgeben (ok/error/unsupported)
+  for _, entry in ipairs(payload.buffers) do
+    entry.process_state = process_state[entry.id]
+  end
   payload.standby = standby
   payload.logistics = get_router():get_summary()
   payload.bindings = reproc_health.bindings
@@ -372,11 +400,33 @@ local function handle_monitor_touch(x, y)
   end
 end
 
+-- P4 Fix: process()-Aufrufe protokollieren (Erfolg/Fehler/nicht vorhanden)
+-- damit erkennbar ist ob die Wiederaufbereitung tatsächlich läuft.
+local process_state = {}  -- { [name] = "ok" | "error" | "unsupported" }
+
 local function process_buffers()
   if standby then return end
-  for _, buf in pairs(buffers) do
+  for name, buf in pairs(buffers) do
     if buf.process then
-      pcall(buf.process)
+      local ok, err = pcall(buf.process)
+      local prev = process_state[name]
+      if ok then
+        if prev ~= "ok" then
+          utils.log("REPROC", "process() OK for " .. tostring(name))
+        end
+        process_state[name] = "ok"
+      else
+        if prev ~= "error" then
+          utils.log("REPROC", "process() failed for " .. tostring(name) .. ": " .. tostring(err), "WARN")
+        end
+        process_state[name] = "error"
+      end
+    else
+      if process_state[name] ~= "unsupported" then
+        warn_once("no_process:" .. tostring(name),
+          "Buffer " .. tostring(name) .. " has no process() method — not a reprocessor port")
+      end
+      process_state[name] = "unsupported"
     end
   end
 end
@@ -543,7 +593,11 @@ services:add({
 
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   process_buffers()
-  get_router():tick()
+  -- P1 Fix: Logistics-Router pausiert ebenfalls im Standby, nicht nur process_buffers().
+  -- Vorher lief der Router weiter und transportierte Abfall obwohl MODE OFF gesetzt war.
+  if not standby then
+    get_router():tick()
+  end
   -- rs_router peripherals are refreshed via route_and_act in the logistics cycle
   if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
     standby = true
