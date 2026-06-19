@@ -78,7 +78,7 @@ function M.new_state()
     warned = {},
     power_target = 0,
     active_profile = "BASELOAD",
-    auto_profile = false,
+    auto_profile = true,
     rt_global_off_hold = false,
     critical_blink_until = 0,
     last_draw = 0,
