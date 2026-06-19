@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 79,
-  manifest_id = "manifest-v79",
+  manifest_version = 80,
+  manifest_id = "manifest-v80",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -142,7 +142,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"}},
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 32284, hash = "98fcbf7c", required_for={"LOG"}},
+    { path = "nodes/log_collector/main.lua", size_bytes = 33116, hash = "458874f6", required_for={"LOG"}},
     },
     shared_support = {
     { path = "nodes/support/command_handler.lua", size_bytes = 4590, hash = "568a2b45", required_for={"WATER", "FUEL", "REPROCESSING"}},
