@@ -113,7 +113,7 @@ return {
       max_step_down_when_coolant_soft = 2,
       max_step_down_when_coolant_hard = 0,
       min = 80,
-      max = 98,
+      max = 100,
       ema_alpha = 0.25
     },
     reactor_steam_guard = {
