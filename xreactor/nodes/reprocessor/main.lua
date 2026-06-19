@@ -39,9 +39,9 @@ local support_ui_pages = require("nodes.support.ui_pages")
 local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.reprocessor.role_descriptor")
 local config_normalizer = require("nodes.reprocessor.config_normalizer")
-local logistics_router    = require("nodes.fuel.logistics_router")
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 local router_ui_lib       = require("nodes.fuel.router_ui")
+local feed_router_lib     = require("nodes.reprocessor.feed_router")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.REPROCESSOR_NODE, -- Node role identifier.
@@ -300,7 +300,7 @@ local function build_status_payload()
     entry.process_state = process_state[entry.id]
   end
   payload.standby = standby
-  payload.logistics = get_router():get_summary()
+  payload.feed = get_feed_router():get_summary()
   payload.bindings = reproc_health.bindings
   payload.bindings_summary = health.summarize_bindings(reproc_health.bindings)
   return payload
@@ -442,9 +442,9 @@ local function get_rs_router()
   return rs_router
 end
 
-local function get_router()
+local function get_feed_router()
   if not router then
-    router = logistics_router.new({
+    router = feed_router_lib.new({
       config    = config,
       log       = function(level, msg) utils.log("REPROC", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
@@ -462,10 +462,10 @@ local function get_router_ui()
       log             = function(level, msg) utils.log("REPROC", msg, level) end,
       get_reactors    = function()
         local list, seen = {}, {}
-        local lg = config.logistics or {}
-        for _, entry in ipairs(lg.reprocessors or {}) do
-          local label = entry.name or entry.label or entry.reactor_port or "?"
-          local id    = entry.label or entry.name or label
+        local fd = config.feed or {}
+        for _, entry in ipairs(fd.targets or {}) do
+          local label = entry.label or entry.inlet or "?"
+          local id    = entry.label or label
           if not seen[id] then
             seen[id] = true
             list[#list + 1] = { id = id, label = label }
@@ -596,7 +596,7 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   -- P1 Fix: Logistics-Router pausiert ebenfalls im Standby, nicht nur process_buffers().
   -- Vorher lief der Router weiter und transportierte Abfall obwohl MODE OFF gesetzt war.
   if not standby then
-    get_router():tick()
+    get_feed_router():tick()
   end
   -- rs_router peripherals are refreshed via route_and_act in the logistics cycle
   if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
