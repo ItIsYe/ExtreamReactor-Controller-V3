@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 81,
-  manifest_id = "manifest-v81",
+  manifest_version = 82,
+  manifest_id = "manifest-v82",
   source_ref = "beta",
   hash_algo = "crc32",
 
