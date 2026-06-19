@@ -58,45 +58,40 @@ local CONFIG = {
   },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
-  -- Logistics routing for the REPROCESSOR node.
+  -- Feed-Logik für die REPROCESSOR-Node.
   --
-  -- Each reprocessor has its OWN entry. Only reprocessors with available
-  -- capacity receive waste from ME. Output (processed fuel) is collected
-  -- back into ME automatically.
+  -- Reprocessoren haben KEINEN eigenen Computer-Port — der Füllstand kann
+  -- nicht direkt abgefragt werden. Statt Füllstand-basiertem Nachfüllen wird
+  -- in zufälligen Abständen reihum jeder Reprocessor mit genau
+  -- feed_amount (Standard 2) Cyanite befüllt — das Minimum damit der
+  -- Reprocessor überhaupt arbeitet.
   --
-  DEFAULT_LOGISTICS = {
+  DEFAULT_FEED = {
     enabled            = false,
-    interval           = 5,
-    discovery_interval = 60,
     me_bridge          = "me_bridge",
+    waste_item         = "bigreactors:cyanite_ingot",
+    feed_amount        = 2,      -- Items pro Befüllung (Minimum zum Arbeiten)
+    interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befüllungen
+    interval_max_s     = 60,     -- Höchst-Wartezeit zwischen Befüllungen (zufällig dazwischen)
+    valve_open_ms       = 2000,  -- Wie lange das Ventil offen bleibt
+    discovery_interval = 60,
     --
-    -- reprocessors: one entry per ER2 Reprocessor.
-    --   reactor_port  = peripheral name of the ER2 Reprocessor Computer Port
-    --   inlet         = dedicated transporter/chest for waste input
-    --   outlet        = dedicated transporter/chest for processed fuel output
-    --   waste_item    = item to send in (e.g. "bigreactors:cyanite_ingot")
-    --   fill_amount   = how many waste items to send per cycle
-    --   min_in_me     = minimum waste stock to keep in ME
+    -- targets: eine Eintrag pro Reprocessor-Inlet (kein reactor_port nötig!)
+    --   label = Anzeigename
+    --   inlet = Transporter/Chest direkt am Reprocessor-Eingang
+    -- { label = "Reprocessor A", inlet = "mekanism:transporter_2" },
+    targets            = {},
     --
-    -- { name         = "Reprocessor A",
-    --   reactor_port = "BigReactors-Reprocessor_0",  -- if accessible
-    --   inlet        = "mekanism:ultimate_logistical_transporter_2",
-    --   outlet       = "mekanism:ultimate_logistical_transporter_3",
-    --   waste_item   = "bigreactors:cyanite_ingot",
-    --   fill_amount  = 16,
-    --   min_in_me    = 32 },
-    reprocessors       = {},
-    --
-    -- redstone_tree: pipe valve topology for targeted waste routing.
-    -- Mekanism pipes must be set to "High Redstone = Interrupt".
+    -- redstone_tree: gleiche Baum-Topologie wie bei der Fuel-Node.
+    -- Mekanism Pipes müssen auf "High Redstone = Interrupt" stehen.
     -- { side="right", label="Arm A", children={
-    --     { side="top",    label="Reprocessor A", reactor="REPROC-1" },
-    --     { side="bottom", label="Reprocessor B", reactor="REPROC-2" },
+    --     { side="top",    label="Reprocessor A", reactor="Reprocessor A" },
+    --     { side="bottom", label="Reprocessor B", reactor="Reprocessor B" },
     --   }
     -- }
-    redstone_tree    = {},
-    valve_open_ms    = 2000,
+    -- Hinweis: "reactor"-Feld referenziert hier den target.label.
+    redstone_tree      = {},
   },
-  rails     = CONFIG.DEFAULT_RAILS,
-  logistics = CONFIG.DEFAULT_LOGISTICS
+  rails = CONFIG.DEFAULT_RAILS,
+  feed  = CONFIG.DEFAULT_FEED
 }
