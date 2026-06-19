@@ -34,6 +34,7 @@ local stats = {
   pruned = 0,
   disk_switches = 0,
   disks = {},
+  disk_diag = {},
   disk_index = 1,
   last_write_index = nil,
   last_write_mount = "-",
@@ -200,43 +201,51 @@ end
 
 local function detect_disk_mounts()
   local roots, seen = {}, {}
-  -- Fix: peripheral-vernetzte Disk-Drives (über Wired Modem) werden NICHT von
-  -- disk.getMountPath(name) erkannt — diese API erwartet eine Computer-Seite
-  -- (z.B. "left"), keinen Peripheral-Namen. Für vernetzte Drives muss das
-  -- Peripheral selbst gewrappt und peripheral.getMountPath() aufgerufen werden.
-  -- Vorher fiel das System dadurch immer auf den lokalen Fallback-Pfad zurück.
+  local diag = {}  -- Diagnose-Zeilen: was wurde pro Peripheral gefunden/versucht
   if peripheral and type(peripheral.getNames) == "function" then
     local ok, names = pcall(peripheral.getNames)
+    diag[#diag+1] = "getNames ok=" .. tostring(ok) .. " count=" .. tostring(type(names)=="table" and #names or "n/a")
     if ok and type(names) == "table" then
       for _, name in ipairs(names) do
+        local ok_type, ptype = pcall(peripheral.getType, name)
         local is_drive = false
         if peripheral.hasType then
-          local ok_type, result = pcall(peripheral.hasType, name, "drive")
-          is_drive = ok_type and result == true
+          local ok_ht, result = pcall(peripheral.hasType, name, "drive")
+          is_drive = ok_ht and result == true
         else
-          local ok_type, ptype = pcall(peripheral.getType, name)
           is_drive = ok_type and ptype == "drive"
         end
+        diag[#diag+1] = string.format("  %s type=%s is_drive=%s", tostring(name), tostring(ptype), tostring(is_drive))
         if is_drive then
-          -- Bevorzugt: gewrapptes Peripheral direkt fragen (funktioniert für
-          -- vernetzte UND direkt angeschlossene Drives über Wired Modem).
           local mount = nil
           local ok_wrap, drv = pcall(peripheral.wrap, name)
+          diag[#diag+1] = string.format("    wrap ok=%s has_getMountPath=%s",
+            tostring(ok_wrap), tostring(ok_wrap and drv and type(drv.getMountPath)=="function"))
           if ok_wrap and drv and type(drv.getMountPath) == "function" then
             local ok_mount, m = pcall(drv.getMountPath)
+            diag[#diag+1] = string.format("    drv.getMountPath() ok=%s value=%s", tostring(ok_mount), tostring(m))
             if ok_mount and type(m) == "string" and m ~= "" then mount = m end
           end
-          -- Fallback: globale disk-API mit dem Namen als Seite versuchen
-          -- (deckt den Fall ab, dass das Drive direkt an einer Computer-Seite hängt).
+          if not mount and ok_wrap and drv and type(drv.isDiskPresent) == "function" then
+            local ok_p, present = pcall(drv.isDiskPresent)
+            diag[#diag+1] = string.format("    drv.isDiskPresent() ok=%s value=%s", tostring(ok_p), tostring(present))
+          end
           if not mount and disk and type(disk.getMountPath) == "function" then
             local ok_mount2, m2 = pcall(disk.getMountPath, name)
+            diag[#diag+1] = string.format("    disk.getMountPath(name) ok=%s value=%s", tostring(ok_mount2), tostring(m2))
             if ok_mount2 and type(m2) == "string" and m2 ~= "" then mount = m2 end
           end
-          if mount then add_unique(roots, seen, mount) end
+          if mount then
+            add_unique(roots, seen, mount)
+            diag[#diag+1] = "    => MOUNT FOUND: " .. tostring(mount)
+          else
+            diag[#diag+1] = "    => NO MOUNT FOUND"
+          end
         end
       end
     end
   end
+  stats.disk_diag = diag
   if fs and fs.list then
     local ok, entries = pcall(fs.list, "/")
     if ok and type(entries) == "table" then
@@ -818,6 +827,12 @@ local function run_loop()
     self_log("LOG collector startup: wiped " .. tostring(total_wiped) .. " old log files", "INFO")
   end
   self_log("LOG collector startup display=" .. tostring(stats.display_name) .. " disks=" .. tostring(#stats.disks), "INFO")
+  -- Diagnose: detaillierter Disk-Erkennungs-Trace ins Log schreiben, damit bei
+  -- Problemen mit der Disk-Erkennung sofort sichtbar ist was gefunden/nicht
+  -- gefunden wurde, ohne dass jemand vor Ort am Monitor stehen muss.
+  for _, diag_line in ipairs(stats.disk_diag or {}) do
+    self_log("DiskDiag: " .. diag_line, "INFO")
+  end
   if #stats.modems == 0 then self_log("No modem found for LOG collector", "ERROR"); error("No modem found for LOG collector", 0) end
   self_log("Listening on log channel " .. tostring(CHANNEL) .. " modems=" .. tostring(stats.modem), "INFO")
   draw()
