@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 73,
-  manifest_id = "manifest-v73",
+  manifest_version = 74,
+  manifest_id = "manifest-v74",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -135,9 +135,10 @@ return {
     { path = "nodes/fuel/router_ui.lua", size_bytes = 10358, hash = "f0d6523e", required_for={"FUEL","REPROCESSING"}},
     },
     reprocessing = {
-    { path = "nodes/reprocessor/config.lua", size_bytes = 4129, hash = "d5e5ee02", required_for={"REPROCESSING"}},
-    { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 1766, hash = "c45bd644", required_for={"REPROCESSING"}},
-    { path = "nodes/reprocessor/main.lua", size_bytes = 23097, hash = "218b013c", required_for={"REPROCESSING"}},
+    { path = "nodes/reprocessor/config.lua", size_bytes = 4058, hash = "61160847", required_for={"REPROCESSING"}},
+    { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 2097, hash = "7b4dd612", required_for={"REPROCESSING"}},
+  { path = "nodes/reprocessor/feed_router.lua", size_bytes = 7060, hash = "475ecc96"},
+    { path = "nodes/reprocessor/main.lua", size_bytes = 23063, hash = "5883670b", required_for={"REPROCESSING"}},
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"}},
     },
     log = {
