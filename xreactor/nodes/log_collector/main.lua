@@ -296,9 +296,15 @@ end
 
 -- Wird nach der self_log-Definition gesetzt; vorher ein No-Op.
 local flush_disk_detect_debug_fn = function() end
+-- Re-Entrancy-Schutz: self_log() -> write_log() -> current_disk() ->
+-- refresh_disks_if_needed() würde sonst in Endlos-Rekursion laufen, weil
+-- das Flushen der Diagnose-Logs selbst wieder Disk-Zugriffe auslöst.
+local refreshing_disks = false
 
 local function refresh_disks_if_needed(force)
+  if refreshing_disks then return end
   if force or #stats.disks == 0 or stats.received % 200 == 0 then
+    refreshing_disks = true
     local current_root = stats.log_root
     stats.disks = discover_log_disks()
     stats.disk_index = 1
@@ -308,7 +314,11 @@ local function refresh_disks_if_needed(force)
       end
     end
     stats.log_root = stats.disks[stats.disk_index] and stats.disks[stats.disk_index].root or FALLBACK_ROOT
+    -- refreshing_disks bleibt true während des Flush, damit ein verschachtelter
+    -- self_log()-Aufruf (write_log -> current_disk -> refresh_disks_if_needed)
+    -- garantiert sofort zurückkehrt statt erneut zu discovern.
     flush_disk_detect_debug_fn()
+    refreshing_disks = false
   end
 end
 
