@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 75,
-  manifest_id = "manifest-v75",
+  manifest_version = 76,
+  manifest_id = "manifest-v76",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -57,10 +57,10 @@ return {
     { path = "master/main.lua", size_bytes = 244, hash = "5f009046", required_for={"MASTER"}},
     { path = "master/message_handlers.lua", size_bytes = 19707, hash = "53d2e5cb", required_for={"MASTER"}},
     { path = "master/monitor_sessions.lua", size_bytes = 5830, hash = "0db7c0da", required_for={"MASTER"}},
-    { path = "master/profiles.lua", size_bytes = 164, hash = "9068a725", required_for={"MASTER"}},
+    { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
     { path = "master/rt_sync.lua", size_bytes = 20616, hash = "467065d1", required_for={"MASTER"}},
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"}},
-    { path = "master/runtime_context.lua", size_bytes = 5759, hash = "d0871d98", required_for={"MASTER"}},
+    { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"}},
     { path = "master/runtime_loop.lua", size_bytes = 13608, hash = "2fd580a1", required_for={"MASTER"}},
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"}},
     { path = "master/runtime_ops_profile.lua", size_bytes = 5173, hash = "64733c05", required_for={"MASTER"}},
