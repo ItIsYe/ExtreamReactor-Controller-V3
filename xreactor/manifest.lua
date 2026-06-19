@@ -142,7 +142,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"}},
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 33116, hash = "458874f6", required_for={"LOG"}},
+    { path = "nodes/log_collector/main.lua", size_bytes = 34207, hash = "7fc81cc7", required_for={"LOG"}},
     },
     shared_support = {
     { path = "nodes/support/command_handler.lua", size_bytes = 4590, hash = "568a2b45", required_for={"WATER", "FUEL", "REPROCESSING"}},
