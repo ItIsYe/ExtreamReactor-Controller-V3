@@ -15,9 +15,17 @@ end
 
 local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local FALLBACK_ROOT = "/xreactor_collected_logs"
-local MAX_LOG_BYTES = 2097152  -- 2 MB pro Log-Datei (auf externer Disk reichlich Platz)
-local ROTATE_KEEP = 8  -- 8 Rotationen × 2 MB = max 16 MB pro Node
-local MIN_FREE_BYTES = 262144  -- 256 KB freier Platz Mindest-Schwelle
+-- Fix: Standard CC:Tweaked Floppy-Disketten haben oft nur ~125 KB Gesamtkapazität.
+-- Die vorherigen Werte (2 MB Dateigröße, 256 KB Mindest-Frei) waren für eine
+-- "große externe Festplatte" gedacht, aber auf einer normalen Floppy bedeutete
+-- das: JEDE Schreibanfrage wurde sofort als "disk full" gewertet, weil die
+-- Diskette selbst kleiner als die Mindestschwelle war — kein Log kam je an.
+-- Diese Werte sind jetzt so klein, dass sie auch auf einer Standard-Floppy
+-- (125 KB) noch sinnvoll funktionieren. Wer eine größere Disk (Computer-Block
+-- mit mehr Speicher) nutzt, profitiert trotzdem von der Rotation.
+local MAX_LOG_BYTES = 16384   -- 16 KB pro Log-Datei (passt auf Standard-Floppy)
+local ROTATE_KEEP = 3         -- 3 Rotationen × 16 KB = max 48 KB pro Node
+local MIN_FREE_BYTES = 8192   -- 8 KB freier Platz Mindest-Schwelle
 local DEDUPE_LIMIT = 512
 local MODEM_REFRESH_SECONDS = 10
 local SELF_ROLE = "LOG_COLLECTOR"
@@ -190,6 +198,17 @@ local function free_space(path)
     value = tonumber(value) or 0
   end
   return tonumber(value) or 0
+end
+
+-- Fix: Mindestschwelle relativ zur tatsächlichen Disk-Kapazität bestimmen.
+-- Eine feste Mindestschwelle (z.B. 8 KB) kann auf sehr kleinen Disketten immer
+-- noch zu groß sein, oder auf großen Festplatten unnötig konservativ wirken.
+-- Hier: min(konfigurierter Wert, 10% der Gesamtkapazität) — passt sich an.
+local function effective_min_free(path)
+  if not fs.getCapacity then return MIN_FREE_BYTES end
+  local ok, cap = pcall(fs.getCapacity, path or "/")
+  if not ok or type(cap) ~= "number" or cap <= 0 then return MIN_FREE_BYTES end
+  return math.min(MIN_FREE_BYTES, math.floor(cap * 0.1))
 end
 
 local function add_unique(list, seen, path)
@@ -404,7 +423,7 @@ local function prune_any_logs(root)
       elseif name:match("%.log%.%d+$") or name:match("%.old$") or name:match("%.bak$") then
         safe_delete(path)
         removed = removed + 1
-        if free_space(root) >= MIN_FREE_BYTES then return end
+        if free_space(root) >= effective_min_free(root) then return end
       end
     end
   end
@@ -427,7 +446,7 @@ local function try_write_to_disk(disk_entry, payload)
   local path = dir .. "/" .. id .. ".log"
   rotate_file(path)
   local fs_free = free_space(root)
-  if fs_free < MIN_FREE_BYTES then prune_any_logs(root) end
+  if fs_free < effective_min_free(root) then prune_any_logs(root) end
   fs_free = free_space(root)
   if fs_free < 256 then
     stats.last_write_debug = "disk full: root=" .. tostring(root) .. " free=" .. tostring(fs_free)
