@@ -15,9 +15,9 @@ end
 
 local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local FALLBACK_ROOT = "/xreactor_collected_logs"
-local MAX_LOG_BYTES = 524288  -- 512 KB pro Log-Datei (war 8 KB → zu klein für verbose Logs)
-local ROTATE_KEEP = 5  -- 5 Rotationen × 512 KB = max 2.5 MB pro Node
-local MIN_FREE_BYTES = 65536  -- 64 KB freier Platz Mindest-Schwelle
+local MAX_LOG_BYTES = 2097152  -- 2 MB pro Log-Datei (auf externer Disk reichlich Platz)
+local ROTATE_KEEP = 8  -- 8 Rotationen × 2 MB = max 16 MB pro Node
+local MIN_FREE_BYTES = 262144  -- 256 KB freier Platz Mindest-Schwelle
 local DEDUPE_LIMIT = 512
 local MODEM_REFRESH_SECONDS = 10
 local SELF_ROLE = "LOG_COLLECTOR"
@@ -200,7 +200,12 @@ end
 
 local function detect_disk_mounts()
   local roots, seen = {}, {}
-  if peripheral and disk and type(peripheral.getNames) == "function" and type(disk.getMountPath) == "function" then
+  -- Fix: peripheral-vernetzte Disk-Drives (über Wired Modem) werden NICHT von
+  -- disk.getMountPath(name) erkannt — diese API erwartet eine Computer-Seite
+  -- (z.B. "left"), keinen Peripheral-Namen. Für vernetzte Drives muss das
+  -- Peripheral selbst gewrappt und peripheral.getMountPath() aufgerufen werden.
+  -- Vorher fiel das System dadurch immer auf den lokalen Fallback-Pfad zurück.
+  if peripheral and type(peripheral.getNames) == "function" then
     local ok, names = pcall(peripheral.getNames)
     if ok and type(names) == "table" then
       for _, name in ipairs(names) do
@@ -213,8 +218,21 @@ local function detect_disk_mounts()
           is_drive = ok_type and ptype == "drive"
         end
         if is_drive then
-          local ok_mount, mount = pcall(disk.getMountPath, name)
-          if ok_mount then add_unique(roots, seen, mount) end
+          -- Bevorzugt: gewrapptes Peripheral direkt fragen (funktioniert für
+          -- vernetzte UND direkt angeschlossene Drives über Wired Modem).
+          local mount = nil
+          local ok_wrap, drv = pcall(peripheral.wrap, name)
+          if ok_wrap and drv and type(drv.getMountPath) == "function" then
+            local ok_mount, m = pcall(drv.getMountPath)
+            if ok_mount and type(m) == "string" and m ~= "" then mount = m end
+          end
+          -- Fallback: globale disk-API mit dem Namen als Seite versuchen
+          -- (deckt den Fall ab, dass das Drive direkt an einer Computer-Seite hängt).
+          if not mount and disk and type(disk.getMountPath) == "function" then
+            local ok_mount2, m2 = pcall(disk.getMountPath, name)
+            if ok_mount2 and type(m2) == "string" and m2 ~= "" then mount = m2 end
+          end
+          if mount then add_unique(roots, seen, mount) end
         end
       end
     end
@@ -693,7 +711,8 @@ draw = function()
   draw_log_mode_buttons(2, 5)
   line(2, 6, "Disk Ring (* = last write target)", c("cyan"))
   draw_disk_bar(7)
-  line(2, 8, string.format("Next    Disk #%s/%s  %s", tostring(stats.disk_index), tostring(#stats.disks), tostring(disk_entry.mount or "n/a")), c("lightGray"))
+  local is_fallback = disk_entry and disk_entry.fallback
+  line(2, 8, string.format("Next    Disk #%s/%s  %s%s", tostring(stats.disk_index), tostring(#stats.disks), tostring(disk_entry.mount or "n/a"), is_fallback and "  [FALLBACK - keine externe Disk gefunden!]" or ""), is_fallback and c("red") or c("lightGray"))
   line(2, 9, string.format("Writing Disk #%s  %s", tostring(stats.last_write_index or "-"), tostring(stats.last_write_mount or "-")), stats.paused and c("yellow") or c("lime"))
   line(2, 10, fit("Path " .. tostring(stats.last_write_path or "-"), w - 2), c("lightGray"))
   local free = free_space(stats.log_root or "/")
