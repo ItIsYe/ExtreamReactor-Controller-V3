@@ -208,7 +208,7 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     add_warning("rails.reactor_rods.min nicht gesetzt; default=" .. tostring(rail_rods.min))
   end
   if type(rail_rods.max) ~= "number" then
-    rail_rods.max = type(defaults_rods.max) == "number" and defaults_rods.max or 98
+    rail_rods.max = type(defaults_rods.max) == "number" and defaults_rods.max or 100
     add_warning("rails.reactor_rods.max nicht gesetzt; default=" .. tostring(rail_rods.max))
   end
 
