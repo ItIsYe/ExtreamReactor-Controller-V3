@@ -754,7 +754,35 @@ local function handle_log_event(message)
   return false, err
 end
 
-local function run()
+local function is_terminate(err)
+  return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
+end
+
+local function crash_screen(err)
+  if term and term.setBackgroundColor and colors then
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.red)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("=== LOG COLLECTOR CRASH ===")
+    term.setTextColor(colors.white)
+    print("")
+    print(tostring(err))
+    print("")
+    print("received=" .. tostring(stats.received) .. " written=" .. tostring(stats.written)
+      .. " dropped=" .. tostring(stats.dropped))
+    print("")
+    term.setTextColor(colors.yellow)
+    print("Druecke eine Taste um neu zu starten...")
+    term.setTextColor(colors.white)
+  else
+    print("CRASH: " .. tostring(err))
+  end
+  pcall(os.pullEvent, "key")
+  if os.reboot then os.reboot() end
+end
+
+local function run_loop()
   refresh_disks_if_needed(true)
   redirect_display()
   refresh_collector_modems(true)
@@ -781,8 +809,14 @@ local function run()
       local channel = event[3]
       local message = event[5]
       if channel == CHANNEL and type(message) == "table" and message.type == "LOG_EVENT" then
-        local ok = handle_log_event(message)
-        if stats.received % 5 == 0 or not ok then draw() end
+        -- pcall: ein einzelner kaputter LOG_EVENT darf nicht den gesamten
+        -- Collector zum Absturz bringen (sonst gehen alle Logs danach verloren).
+        local call_ok, ok = pcall(handle_log_event, message)
+        if not call_ok then
+          stats.dropped = stats.dropped + 1
+          stats.last_error = "handle_log_event crashed: " .. tostring(ok)
+        end
+        if stats.received % 5 == 0 or not call_ok or not ok then draw() end
       end
     elseif event[1] == "monitor_touch" then
       local x_pos, y_pos = event[3], event[4]
@@ -812,6 +846,13 @@ local function run()
       status_timer = os.startTimer and os.startTimer(30) or nil
     end
   end
+end
+
+local function run()
+  local ok, err = xpcall(run_loop, function(e) return e end)
+  if ok then return end
+  if is_terminate(err) then return end
+  crash_screen(err)
 end
 
 run()
