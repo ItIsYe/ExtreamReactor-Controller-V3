@@ -336,7 +336,15 @@ local function advance_disk_after_write()
 end
 
 local function switch_next_disk()
-  refresh_disks_if_needed(true)
+  -- Bei nur einer Disk bringt eine erzwungene Re-Discovery nichts außer Spam
+  -- (jeder fehlgeschlagene Schreibversuch löste vorher eine komplette
+  -- force=true Discovery aus). Nur neu discovern wenn wir noch keine Disk
+  -- kennen oder explizit mehrere Disks vorhanden sein könnten.
+  if #stats.disks > 1 then
+    refresh_disks_if_needed(true)
+  elseif #stats.disks == 0 then
+    refresh_disks_if_needed(true)
+  end
   if #stats.disks == 0 then return nil end
   advance_disk_after_write()
   return stats.disks[stats.disk_index]
@@ -412,23 +420,35 @@ local function try_write_to_disk(disk_entry, payload)
   local role = sanitize(payload.role or "unknown")
   local id = sanitize(payload.node_id or "unknown")
   local dir = root .. "/" .. role
-  if not ensure_dir(dir) then return false, "mkdir failed" end
+  if not ensure_dir(dir) then
+    stats.last_write_debug = "mkdir failed: dir=" .. tostring(dir) .. " exists=" .. tostring(fs.exists(dir)) .. " isDir=" .. tostring(fs.exists(dir) and fs.isDir(dir))
+    return false, "mkdir failed"
+  end
   local path = dir .. "/" .. id .. ".log"
   rotate_file(path)
-  if free_space(root) < MIN_FREE_BYTES then prune_any_logs(root) end
-  if free_space(root) < 256 then return false, "disk full" end
+  local fs_free = free_space(root)
+  if fs_free < MIN_FREE_BYTES then prune_any_logs(root) end
+  fs_free = free_space(root)
+  if fs_free < 256 then
+    stats.last_write_debug = "disk full: root=" .. tostring(root) .. " free=" .. tostring(fs_free)
+    return false, "disk full"
+  end
   local line_text = format_line(payload) .. "\n"
   local ok, err = pcall(function()
     local h = fs.open(path, "a")
-    if not h then error("open failed") end
+    if not h then error("open failed path=" .. tostring(path)) end
     h.write(line_text)
     h.close()
   end)
-  if not ok then return false, tostring(err or "write failed") end
+  if not ok then
+    stats.last_write_debug = "write failed: path=" .. tostring(path) .. " err=" .. tostring(err)
+    return false, tostring(err or "write failed")
+  end
   stats.last_write_index = disk_entry.id or stats.disk_index
   stats.last_write_mount = disk_entry.mount or "?"
   stats.last_write_root = root
   stats.last_write_path = path
+  stats.last_write_debug = nil
   return true
 end
 
@@ -469,17 +489,24 @@ local function write_log(payload)
       return true
     end
     last_err = err
-    -- Current disk is full. Move to next disk.
-    local prev_index = stats.disk_index
-    switch_next_disk()
-    -- If we wrapped around (back to first disk), wipe it to start fresh.
-    if attempt == count and stats.disk_index == 1 then
-      local disk_entry_wipe = current_disk()
-      if disk_entry_wipe then
-        local wiped = wipe_logs(disk_entry_wipe.root)
-        stats.disk_switches = stats.disk_switches + 1
-        stats.last_error = string.format("all disks full, wiped disk[1] (%d files)", wiped)
+    -- Fix: nur bei "disk full" wiped/wechselt werden — andere Fehler
+    -- (mkdir failed, write failed) bedeuten NICHT dass die Disk voll ist
+    -- und sollten kein Wipe der vorhandenen Logs auslösen.
+    if err == "disk full" then
+      switch_next_disk()
+      -- If we wrapped around (back to first disk), wipe it to start fresh.
+      if attempt == count and stats.disk_index == 1 then
+        local disk_entry_wipe = current_disk()
+        if disk_entry_wipe then
+          local wiped = wipe_logs(disk_entry_wipe.root)
+          stats.disk_switches = stats.disk_switches + 1
+          stats.last_error = string.format("all disks full, wiped disk[1] (%d files)", wiped)
+        end
       end
+    else
+      -- Anderer Fehler (z.B. mkdir/write fehlgeschlagen) — nicht wiped,
+      -- einfach abbrechen und Grund über last_write_debug sichtbar machen.
+      break
     end
   end
   return false, tostring(last_err or "all disks full")
@@ -808,7 +835,12 @@ local function handle_log_event(message)
     return true
   end
   stats.dropped = stats.dropped + 1
-  if err ~= "paused" then stats.last_error = err end
+  if err ~= "paused" then
+    stats.last_error = err
+    if stats.last_write_debug then
+      stats.last_error = stats.last_error .. " | " .. stats.last_write_debug
+    end
+  end
   return false, err
 end
 
