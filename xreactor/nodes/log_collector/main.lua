@@ -15,17 +15,9 @@ end
 
 local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local FALLBACK_ROOT = "/xreactor_collected_logs"
--- Fix: Standard CC:Tweaked Floppy-Disketten haben oft nur ~125 KB Gesamtkapazität.
--- Die vorherigen Werte (2 MB Dateigröße, 256 KB Mindest-Frei) waren für eine
--- "große externe Festplatte" gedacht, aber auf einer normalen Floppy bedeutete
--- das: JEDE Schreibanfrage wurde sofort als "disk full" gewertet, weil die
--- Diskette selbst kleiner als die Mindestschwelle war — kein Log kam je an.
--- Diese Werte sind jetzt so klein, dass sie auch auf einer Standard-Floppy
--- (125 KB) noch sinnvoll funktionieren. Wer eine größere Disk (Computer-Block
--- mit mehr Speicher) nutzt, profitiert trotzdem von der Rotation.
-local MAX_LOG_BYTES = 16384   -- 16 KB pro Log-Datei (passt auf Standard-Floppy)
-local ROTATE_KEEP = 3         -- 3 Rotationen × 16 KB = max 48 KB pro Node
-local MIN_FREE_BYTES = 8192   -- 8 KB freier Platz Mindest-Schwelle
+local MAX_LOG_BYTES = 2097152  -- 2 MB pro Log-Datei (auf externer Disk reichlich Platz)
+local ROTATE_KEEP = 8  -- 8 Rotationen × 2 MB = max 16 MB pro Node
+local MIN_FREE_BYTES = 262144  -- 256 KB freier Platz Mindest-Schwelle
 local DEDUPE_LIMIT = 512
 local MODEM_REFRESH_SECONDS = 10
 local SELF_ROLE = "LOG_COLLECTOR"
@@ -200,17 +192,6 @@ local function free_space(path)
   return tonumber(value) or 0
 end
 
--- Fix: Mindestschwelle relativ zur tatsächlichen Disk-Kapazität bestimmen.
--- Eine feste Mindestschwelle (z.B. 8 KB) kann auf sehr kleinen Disketten immer
--- noch zu groß sein, oder auf großen Festplatten unnötig konservativ wirken.
--- Hier: min(konfigurierter Wert, 10% der Gesamtkapazität) — passt sich an.
-local function effective_min_free(path)
-  if not fs.getCapacity then return MIN_FREE_BYTES end
-  local ok, cap = pcall(fs.getCapacity, path or "/")
-  if not ok or type(cap) ~= "number" or cap <= 0 then return MIN_FREE_BYTES end
-  return math.min(MIN_FREE_BYTES, math.floor(cap * 0.1))
-end
-
 local function add_unique(list, seen, path)
   if type(path) ~= "string" or path == "" or seen[path] then return end
   seen[path] = true
@@ -299,8 +280,12 @@ end
 
 local function discover_log_disks()
   local disks = {}
+  local probe_dbg = {}
   for _, mount in ipairs(detect_disk_mounts()) do
-    if ensure_dir(mount) and write_probe(mount) then
+    local ed_ok = ensure_dir(mount)
+    local wp_ok = ed_ok and write_probe(mount)
+    probe_dbg[#probe_dbg+1] = "mount=" .. tostring(mount) .. " ensure_dir=" .. tostring(ed_ok) .. " write_probe=" .. tostring(wp_ok)
+    if ed_ok and wp_ok then
       disks[#disks + 1] = { mount = mount, root = mount .. "/xreactor_logs" }
     end
   end
@@ -310,6 +295,9 @@ local function discover_log_disks()
   end
   table.sort(disks, function(a, b) return tostring(a.mount) < tostring(b.mount) end)
   for i, disk_entry in ipairs(disks) do disk_entry.id = i end
+  -- Diagnose puffern (self_log evtl. noch nicht verfügbar) — gleiches Pattern
+  -- wie bei detect_disk_mounts: wird beim nächsten flush mitgeloggt.
+  stats.disk_probe_debug = probe_dbg
   return disks
 end
 
@@ -423,7 +411,7 @@ local function prune_any_logs(root)
       elseif name:match("%.log%.%d+$") or name:match("%.old$") or name:match("%.bak$") then
         safe_delete(path)
         removed = removed + 1
-        if free_space(root) >= effective_min_free(root) then return end
+        if free_space(root) >= MIN_FREE_BYTES then return end
       end
     end
   end
@@ -446,7 +434,7 @@ local function try_write_to_disk(disk_entry, payload)
   local path = dir .. "/" .. id .. ".log"
   rotate_file(path)
   local fs_free = free_space(root)
-  if fs_free < effective_min_free(root) then prune_any_logs(root) end
+  if fs_free < MIN_FREE_BYTES then prune_any_logs(root) end
   fs_free = free_space(root)
   if fs_free < 256 then
     stats.last_write_debug = "disk full: root=" .. tostring(root) .. " free=" .. tostring(fs_free)
@@ -629,10 +617,16 @@ end
 -- nachvollziehbar ist. Ab jetzt ist self_log verfügbar, also die Forward-Referenz
 -- aus refresh_disks_if_needed() mit der echten Implementierung überschreiben.
 flush_disk_detect_debug_fn = function()
-  if not stats.disk_detect_debug then return end
-  for _, l in ipairs(stats.disk_detect_debug) do self_log("DiskDetect: " .. l, "DEBUG") end
-  self_log("DiskDetect: roots_found=" .. tostring(stats.disk_detect_roots_found or 0), "INFO")
-  stats.disk_detect_debug = nil
+  if stats.disk_detect_debug then
+    for _, l in ipairs(stats.disk_detect_debug) do self_log("DiskDetect: " .. l, "DEBUG") end
+    self_log("DiskDetect: roots_found=" .. tostring(stats.disk_detect_roots_found or 0), "INFO")
+    stats.disk_detect_debug = nil
+  end
+  if stats.disk_probe_debug then
+    for _, l in ipairs(stats.disk_probe_debug) do self_log("DiskProbe: " .. l, "DEBUG") end
+    self_log("DiskProbe: usable_disks=" .. tostring(#stats.disks), "INFO")
+    stats.disk_probe_debug = nil
+  end
 end
 
 local draw
