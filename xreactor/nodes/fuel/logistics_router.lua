@@ -81,11 +81,20 @@ local function read_reactor_fuel(reactor_wrapped)
     local capacity = type(stats.fuelCapacity) == "number" and stats.fuelCapacity or nil
     if amount and capacity then return amount, capacity end
   end
-  -- Fallback: individual calls
+  -- Fallback: individual calls (ER2 Reactor)
   local amount,   _ = safe_call(reactor_wrapped, "getFuelAmount")
   local capacity, _ = safe_call(reactor_wrapped, "getFuelAmountMax")
   if type(amount) == "number" and type(capacity) == "number" then
     return amount, capacity
+  end
+  -- P3 Fix: ER2 Reprocessor-Ports haben keine Fuel-API, sondern eine Waste-API.
+  -- Versuche getWaste()/getMaxWaste() als weiteren Fallback damit der Router
+  -- auch für Reprocessor-Buffer den echten Füllstand lesen kann statt auf
+  -- always-supply-mode (kein reactor_port) zurückzufallen.
+  local waste,     _ = safe_call(reactor_wrapped, "getWaste")
+  local max_waste, _ = safe_call(reactor_wrapped, "getMaxWaste")
+  if type(waste) == "number" and type(max_waste) == "number" then
+    return waste, max_waste
   end
   return nil, nil
 end
