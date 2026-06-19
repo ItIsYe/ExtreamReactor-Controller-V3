@@ -58,7 +58,7 @@ function M.apply_profile(runtime, name)
     end
     runtime.flush_rt_sync_queue({ force = true })
   else
-    runtime.log(("Profile %s applied but base power is unavailable; target unchanged"):format(tostring(name)), "WARN")
+    runtime.log(("Profile %s applied but base power is unavailable (rt_count=0 or estimate failed); target unchanged at %.2f"):format(tostring(name), tonumber(runtime.state.power_target) or 0), "WARN")
   end
 end
 
@@ -105,7 +105,12 @@ function M.sample_trends(runtime)
   end
   runtime.refs.trends:push("water", water_total)
   if runtime.state.auto_profile then
-    if energy_pct > 90 and runtime.state.active_profile ~= "IDLE" then
+    -- Fix: power_target=0 beim Start (noch kein Profilwechsel ausgelöst) ist ein
+    -- Sonderfall — sonst bleibt assigned=0% für immer obwohl auto_profile aktiv ist.
+    -- Erzwingt einen einmaligen apply_profile()-Aufruf auch ohne Profilwechsel.
+    if (not runtime.state.power_target or runtime.state.power_target <= 0) then
+      M.apply_profile(runtime, runtime.state.active_profile or "BASELOAD")
+    elseif energy_pct > 90 and runtime.state.active_profile ~= "IDLE" then
       M.apply_profile(runtime, "IDLE")
     elseif energy_pct < 30 and runtime.state.active_profile ~= "PEAK" then
       M.apply_profile(runtime, "PEAK")
