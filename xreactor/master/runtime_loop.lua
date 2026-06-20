@@ -182,12 +182,49 @@ local function run_master()
     end
   end
 
+  -- TEMPORÄR: Remote-Update-Auslöser per Redstone auf "top" des Master-PCs.
+  -- Broadcastet REMOTE_UPDATE an alle bekannten Nodes (Master selbst nicht
+  -- mitgezählt — der müsste sich getrennt selbst aktualisieren). Gedacht für
+  -- die aktive Entwicklungsphase; kann später wieder entfernt werden.
+  -- Steigende Flanke (false->true) löst aus, damit ein Dauersignal nicht
+  -- endlos viele Updates auslöst.
+  local last_redstone_top = false
+  local function broadcast_remote_update()
+    runtime.log("Redstone-Trigger (top): broadcasting REMOTE_UPDATE an alle Nodes", "WARN")
+    local sent = 0
+    for node_id, node in pairs(runtime.state.nodes or {}) do
+      local ok = pcall(function()
+        runtime.refs.comms:send_command(node_id, { target = constants.command_targets.REMOTE_UPDATE })
+      end)
+      if ok then sent = sent + 1 end
+    end
+    runtime.log(("Remote-Update Broadcast an %d Node(s) gesendet"):format(sent), "WARN")
+    -- Master aktualisiert sich danach selbst (kurze Verzögerung damit der
+    -- Broadcast an alle anderen Nodes garantiert raus ist, bevor der Master
+    -- selbst rebootet und damit das Funknetz kurzzeitig verliert).
+    runtime.log("Master aktualisiert sich selbst in 3s...", "WARN")
+    if os and type(os.sleep) == "function" then os.sleep(3) end
+    local remote_update = require("core.remote_update")
+    remote_update.run(function(level, text) runtime.log(text, level) end)
+  end
+
+  local function check_redstone_update_trigger()
+    if not redstone or type(redstone.getInput) ~= "function" then return end
+    local ok, current = pcall(redstone.getInput, "top")
+    if not ok then return end
+    if current and not last_redstone_top then
+      broadcast_remote_update()
+    end
+    last_redstone_top = current and true or false
+  end
+
   while true do
     local timer = os.startTimer(0.5)
     while true do
       local event = { os.pullEvent() }
       if event[1] == "modem_message" then runtime.refs.comms:handle_event(event)
       elseif event[1] == "monitor_touch" or event[1] == "key" or event[1] == "char" then runtime.refs.services:tick(nil, event)
+      elseif event[1] == "redstone" then check_redstone_update_trigger()
       elseif event[1] == "timer" and event[2] == timer then break end
     end
     runtime.refs.services:tick()
