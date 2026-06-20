@@ -6,6 +6,9 @@ local constants = {
   LOG_PATH = "/xreactor_logs/installer_bootstrap.log",
   STARTUP_PATH = "/startup",
   STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n",
+  REPO = "ItIsYe/ExtreamReactor-Controller-V3",
+  BRANCH = "beta",
+  BRANCH_API_URL = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta",
   BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/",
   MANIFEST_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/manifest.lua",
   RELEASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/release.lua",
@@ -17,6 +20,37 @@ local constants = {
   STORAGE_UPDATE_BUFFER_BYTES = 8192,
   STORAGE_MIN_REQUIRED_BYTES = 4096
 }
+
+-- Fix: ein zwischengeschalteter Cache (CDN oder Modpack-HTTP-Proxy) lieferte
+-- konsequent eine veraltete Version aus, obwohl der Query-Cache-Bust-Parameter
+-- gesetzt war — manche Proxies normalisieren/ignorieren Query-Strings.
+-- Robusterer Ansatz: den aktuellen Commit-SHA des beta-Branches per API
+-- abfragen und DAMIT statt mit dem Branch-Namen "beta" die Datei-URLs bauen.
+-- SHA-basierte raw.githubusercontent.com URLs sind inhärent unveränderlich
+-- (ein SHA referenziert genau einen Snapshot) — ein Cache kann hier nicht
+-- "stale" sein, weil sich der Inhalt unter dieser URL nie ändert.
+local function resolve_branch_sha()
+  if not http or type(http.get) ~= "function" then return nil end
+  local ok, response = pcall(http.get, constants.BRANCH_API_URL)
+  if not ok or not response then return nil end
+  local ok_read, body = pcall(response.readAll)
+  pcall(response.close)
+  if not ok_read or type(body) ~= "string" then return nil end
+  local sha = body:match('"sha"%s*:%s*"(%x+)"')
+  return sha
+end
+
+local branch_sha = resolve_branch_sha()
+if branch_sha then
+  local sha_base = "https://raw.githubusercontent.com/" .. constants.REPO .. "/" .. branch_sha .. "/xreactor/"
+  constants.BASE_URL = sha_base
+  constants.MANIFEST_URL = sha_base .. "manifest.lua"
+  constants.RELEASE_URL = sha_base .. "release.lua"
+  constants.RESOLVED_SHA = branch_sha  -- an installer_main.lua weiterreichen
+  print("Installer nutzt SHA-Pin: " .. branch_sha:sub(1, 10) .. " (Cache-sicher)")
+else
+  print("WARN: Branch-SHA nicht aufloesbar, nutze Branch-Pfad (evtl. Cache-Risiko)")
+end
 
 local function is_html_content(content)
   if type(content) ~= "string" then
