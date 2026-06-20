@@ -40,6 +40,18 @@ require_function(installer_http, "is_html_content", "installer_http")
 
 local M = {}
 
+-- Seed math.random einmalig beim Laden dieses Moduls, damit der
+-- Cache-Bust-Token in cache_bust_token() nicht bei jedem CC:Tweaked-Neustart
+-- denselben deterministischen Wert liefert.
+do
+  local seed = 0
+  if os and type(os.epoch) == "function" then
+    local ok, v = pcall(os.epoch, "utc")
+    if ok and v then seed = v end
+  end
+  math.randomseed(seed)
+end
+
 local ROLE_CHOICES = {
   ["1"] = { key = "master", label = "MASTER" },
   ["2"] = { key = "rt", label = "RT" },
@@ -224,9 +236,17 @@ local function build_context(constants)
   end
 
   function ctx.cache_bust_token(kind, rel, attempt)
+    -- Fix: ctx.release_id/ctx.manifest_id sind beim Download von manifest.lua
+    -- und release.lua SELBST noch nil (werden erst danach gesetzt) — der
+    -- Cache-Bust-Query war dadurch für genau diese beiden kritischen
+    -- Downloads praktisch wirkungslos und ein zwischengeschalteter Cache
+    -- (CDN oder lokaler HTTP-Proxy) konnte eine alte Version weiter ausliefern.
+    -- Jetzt: garantiert eindeutiger Token aus Zeitstempel + Zufallszahl,
+    -- unabhängig vom Lade-Fortschritt.
     local t = "0"
     if os and type(os.epoch) == "function" then local ok, v = pcall(os.epoch, "utc"); if ok and v then t = tostring(v) end end
-    return table.concat({ sanitize(kind), sanitize(ctx.release_id), sanitize(ctx.manifest_id), sanitize(rel), tostring(attempt or 1), t }, "-")
+    local rnd = tostring(math.random(100000, 999999))
+    return table.concat({ sanitize(kind), sanitize(rel), tostring(attempt or 1), t, rnd }, "-")
   end
 
   function ctx.cache_busted_url(url, kind, rel, attempt) return append_query(url, "xr_cb", ctx.cache_bust_token(kind, rel, attempt)) end
