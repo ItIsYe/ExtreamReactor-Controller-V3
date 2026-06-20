@@ -62,7 +62,9 @@ constants.command_targets = {
   REQUEST_STATUS = "REQUEST_STATUS",
   SET_RESERVE = "SET_RESERVE",
   REQUEST_STARTUP_MODULE = "REQUEST_STARTUP_MODULE",
-  REQUEST_SHUTDOWN_MODULE = "REQUEST_SHUTDOWN_MODULE"
+  REQUEST_SHUTDOWN_MODULE = "REQUEST_SHUTDOWN_MODULE",
+  -- TEMPORÄR: Remote-Update über alle Nodes, siehe core/remote_update.lua.
+  REMOTE_UPDATE = "REMOTE_UPDATE"
 }
 
 constants.channels = {
