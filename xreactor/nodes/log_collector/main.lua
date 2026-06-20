@@ -266,6 +266,20 @@ local function detect_disk_mounts()
   return roots
 end
 
+-- Forward-Deklaration: wipe_logs wird unten (nach safe_delete) implementiert,
+-- aber bereits hier von write_probe als Auto-Recovery genutzt.
+local wipe_logs
+
+local function try_probe_write(path)
+  return pcall(function()
+    local h = fs.open(path, "w")
+    if not h then error("fs.open returned nil") end
+    h.write("probe")
+    h.close()
+    fs.delete(path)
+  end)
+end
+
 local function write_probe(root)
   local dir = root .. "/xreactor_logs"
   local ed = ensure_dir(dir)
@@ -273,14 +287,17 @@ local function write_probe(root)
   local path = dir .. "/.collector_probe"
   local cap, fr = capacity(root), free_space(root)
   diag(root .. ": cap=" .. tostring(cap) .. " free=" .. tostring(fr))
-  local ok, err = pcall(function()
-    local h = fs.open(path, "w")
-    if not h then error("fs.open returned nil") end
-    h.write("probe")
-    h.close()
-    fs.delete(path)
-  end)
+  local ok, err = try_probe_write(path)
   diag(root .. ": probe_write ok=" .. tostring(ok) .. (ok and "" or (" err=" .. tostring(err))))
+  if not ok and wipe_logs then
+    -- Fix: Disk könnte mit alten Logs vollgeschrieben sein (z.B. aus einer
+    -- früheren Version mit zu großen Limits). Automatisch aufräumen und
+    -- den Probe-Versuch einmal wiederholen, bevor endgültig aufgegeben wird.
+    local wiped = wipe_logs(root)
+    diag(root .. ": auto-wipe " .. tostring(wiped) .. " files, retrying probe")
+    ok, err = try_probe_write(path)
+    diag(root .. ": probe_write retry ok=" .. tostring(ok) .. (ok and "" or (" err=" .. tostring(err))))
+  end
   return ok
 end
 
@@ -462,7 +479,7 @@ local function try_write_to_disk(disk_entry, payload)
 end
 
 -- Wipe ALL log files in a root directory to reclaim space (fresh start).
-local function wipe_logs(root)
+wipe_logs = function(root)
   local wiped = 0
   local function wipe_dir(dir)
     if not fs.exists(dir) or not fs.isDir(dir) then return end
