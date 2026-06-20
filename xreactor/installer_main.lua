@@ -140,10 +140,30 @@ local function is_log_role(role_label)
   return role == "LOG" or role == "LOG_COLLECTOR"
 end
 
+-- Fix: Cache-Problem — ein zwischengeschalteter Proxy/CDN lieferte konsequent
+-- alte Inhalte aus, weil Query-Cache-Bust-Parameter ignoriert wurden.
+-- SHA-basierte raw.githubusercontent.com URLs sind inhärent unveränderlich
+-- und damit Cache-sicher. Stufe 1 (installer Bootstrap) löst den aktuellen
+-- beta-HEAD-SHA bereits auf und übergibt ihn über constants.RESOLVED_SHA —
+-- falls das fehlt (z.B. älterer Bootstrap noch im Einsatz), hier selbst nachholen.
+local function resolve_branch_sha_main()
+  if not http or type(http.get) ~= "function" then return nil end
+  local ok, response = pcall(http.get, "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta")
+  if not ok or not response then return nil end
+  local ok_read, body = pcall(response.readAll)
+  pcall(response.close)
+  if not ok_read or type(body) ~= "string" then return nil end
+  return body:match('"sha"%s*:%s*"(%x+)"')
+end
+
 local function build_context(constants)
-  constants.BASE_URL = BETA_BASE_URL
-  constants.MANIFEST_URL = BETA_BASE_URL .. "manifest.lua"
-  constants.RELEASE_URL = BETA_BASE_URL .. "release.lua"
+  local sha = constants.RESOLVED_SHA or resolve_branch_sha_main()
+  local base = sha
+    and ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. sha .. "/xreactor/")
+    or BETA_BASE_URL
+  constants.BASE_URL = base
+  constants.MANIFEST_URL = base .. "manifest.lua"
+  constants.RELEASE_URL = base .. "release.lua"
   constants.DOWNLOAD_TIMEOUT_SECONDS = constants.DOWNLOAD_TIMEOUT_SECONDS or 15
   constants.DOWNLOAD_RETRIES = constants.DOWNLOAD_RETRIES or 3
   constants.DOWNLOAD_RETRY_DELAY_SECONDS = constants.DOWNLOAD_RETRY_DELAY_SECONDS or 2
@@ -322,11 +342,18 @@ local function build_context(constants)
     if not ok or type(release) ~= "table" then return false, release or "invalid release" end
     ctx.release_metadata_body = body
     ctx.release_id = tostring(release.release_id or "unknown")
-    constants.BASE_URL = BETA_BASE_URL
-    constants.MANIFEST_URL = BETA_BASE_URL .. "manifest.lua"
-    constants.RELEASE_URL = BETA_BASE_URL .. "release.lua"
+    -- SHA-Pin beibehalten (falls vorhanden) statt auf den potenziell
+    -- gecachten Branch-Pfad zurückzufallen — betrifft alle weiteren
+    -- Einzeldatei-Downloads laut Manifest.
+    local sha = constants.RESOLVED_SHA
+    local base = sha
+      and ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. sha .. "/xreactor/")
+      or BETA_BASE_URL
+    constants.BASE_URL = base
+    constants.MANIFEST_URL = base .. "manifest.lua"
+    constants.RELEASE_URL = base .. "release.lua"
     ctx.source_ref = "beta"
-    ctx.info("Installer source fixed to beta branch")
+    ctx.info("Installer source fixed to beta branch" .. (sha and (" (sha-pinned " .. sha:sub(1,10) .. ")") or ""))
     return true
   end
 
