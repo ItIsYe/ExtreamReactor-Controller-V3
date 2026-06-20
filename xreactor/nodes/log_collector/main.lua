@@ -175,22 +175,38 @@ local function button_hit(button, x, y)
   return button and x >= button.x and x < button.x + button.w and y >= button.y and y < button.y + button.h
 end
 
+-- live_diag: On-Screen-Diagnose unabhängig vom Self-Log-Mechanismus.
+-- Self-Logging selbst hängt am Disk-Schreiben (write_log -> current_disk ->
+-- refresh_disks_if_needed), daher kann ein Disk-Problem seine eigene
+-- Diagnose-Nachricht verschlucken. live_diag ist eine einfache Liste die nur
+-- im Arbeitsspeicher lebt und direkt im UI gerendert wird (siehe draw()).
+local live_diag = {}
+local function diag(line)
+  live_diag[#live_diag + 1] = line
+  if #live_diag > 12 then table.remove(live_diag, 1) end
+end
+
 local function ensure_dir(path)
   if fs.exists(path) then return fs.isDir(path) end
   local ok = pcall(fs.makeDir, path)
   return ok and fs.exists(path) and fs.isDir(path)
 end
 
-local function free_space(path)
-  if not fs.getFreeSpace then return math.huge end
-  local ok, value = pcall(fs.getFreeSpace, path or "/")
-  if not ok then return 0 end
-  if type(value) == "string" then
-    if value == "unlimited" then return math.huge end
-    value = tonumber(value) or 0
-  end
-  return tonumber(value) or 0
+-- Exakt nach offizieller CC:Tweaked fs-Doku: getCapacity = Gesamtgröße,
+-- getFreeSpace = verbleibender Platz. Beide können "unlimited" als String
+-- liefern (z.B. für den Root-Mount /).
+local function fs_query(fn_name, path)
+  local fn = fs[fn_name]
+  if type(fn) ~= "function" then return nil end
+  local ok, value = pcall(fn, path or "/")
+  if not ok then return nil end
+  if value == "unlimited" then return math.huge end
+  if type(value) == "string" then value = tonumber(value) end
+  return tonumber(value)
 end
+
+local function free_space(path) return fs_query("getFreeSpace", path) or 0 end
+local function capacity(path) return fs_query("getCapacity", path) end
 
 local function add_unique(list, seen, path)
   if type(path) ~= "string" or path == "" or seen[path] then return end
@@ -198,60 +214,45 @@ local function add_unique(list, seen, path)
   list[#list + 1] = path
 end
 
+-- Disk-Discovery: exakt nach offizieller CC:Tweaked disk-API Doku.
+-- "To use a locally attached drive, specify side as one of the six sides;
+--  to use a remote disk drive, specify its name (e.g. drive_0)."
+-- Die globale disk-API unterstützt BEIDE Fälle direkt mit dem Peripheral-
+-- Namen als Argument — kein peripheral.wrap() nötig.
 local function detect_disk_mounts()
   local roots, seen = {}, {}
-  local dbg = {}  -- Diagnose-Zeilen für self_log, damit Disk-Erkennung nachvollziehbar ist
-  -- Fix: peripheral-vernetzte Disk-Drives (über Wired Modem) werden NICHT von
-  -- disk.getMountPath(name) erkannt — diese API erwartet eine Computer-Seite
-  -- (z.B. "left"), keinen Peripheral-Namen. Für vernetzte Drives muss das
-  -- Peripheral selbst gewrappt und peripheral.getMountPath() aufgerufen werden.
-  -- Vorher fiel das System dadurch immer auf den lokalen Fallback-Pfad zurück.
+  diag("--- disk scan ---")
   if peripheral and type(peripheral.getNames) == "function" then
     local ok, names = pcall(peripheral.getNames)
-    dbg[#dbg+1] = "peripheral.getNames ok=" .. tostring(ok) .. " count=" .. tostring(type(names)=="table" and #names or 0)
+    diag("getNames ok=" .. tostring(ok) .. " n=" .. tostring(type(names)=="table" and #names or 0))
     if ok and type(names) == "table" then
       for _, name in ipairs(names) do
-        local is_drive = false
-        local type_str = "?"
-        if peripheral.hasType then
-          local ok_type, result = pcall(peripheral.hasType, name, "drive")
-          is_drive = ok_type and result == true
-          local ok_gt, gt = pcall(peripheral.getType, name)
-          type_str = ok_gt and tostring(gt) or "err"
-        else
-          local ok_type, ptype = pcall(peripheral.getType, name)
-          is_drive = ok_type and ptype == "drive"
-          type_str = ok_type and tostring(ptype) or "err"
-        end
-        dbg[#dbg+1] = "peripheral " .. tostring(name) .. " type=" .. type_str .. " is_drive=" .. tostring(is_drive)
+        local ok_type, ptype = pcall(peripheral.getType, name)
+        local is_drive = ok_type and ptype == "drive"
         if is_drive then
-          -- Bevorzugt: gewrapptes Peripheral direkt fragen (funktioniert für
-          -- vernetzte UND direkt angeschlossene Drives über Wired Modem).
           local mount = nil
-          local ok_wrap, drv = pcall(peripheral.wrap, name)
-          if ok_wrap and drv and type(drv.getMountPath) == "function" then
-            local ok_mount, m = pcall(drv.getMountPath)
-            dbg[#dbg+1] = "  wrap.getMountPath name=" .. tostring(name) .. " ok=" .. tostring(ok_mount) .. " result=" .. tostring(m)
-            if ok_mount and type(m) == "string" and m ~= "" then mount = m end
+          if disk and type(disk.getMountPath) == "function" then
+            local ok_m, m = pcall(disk.getMountPath, name)
+            diag(name .. ": disk.getMountPath ok=" .. tostring(ok_m) .. " => " .. tostring(m))
+            if ok_m and type(m) == "string" and m ~= "" then mount = m end
+          end
+          if not mount then
+            local ok_wrap, drv = pcall(peripheral.wrap, name)
+            if ok_wrap and drv and type(drv.getMountPath) == "function" then
+              local ok_m2, m2 = pcall(drv.getMountPath)
+              diag(name .. ": wrap.getMountPath ok=" .. tostring(ok_m2) .. " => " .. tostring(m2))
+              if ok_m2 and type(m2) == "string" and m2 ~= "" then mount = m2 end
+            end
+          end
+          if mount then
+            add_unique(roots, seen, mount)
           else
-            dbg[#dbg+1] = "  wrap failed or no getMountPath: ok_wrap=" .. tostring(ok_wrap) .. " has_fn=" .. tostring(ok_wrap and drv and type(drv.getMountPath) == "function")
+            diag(name .. ": KEIN Mount-Pfad gefunden (Diskette eingelegt?)")
           end
-          -- Fallback: globale disk-API mit dem Namen als Seite versuchen
-          -- (deckt den Fall ab, dass das Drive direkt an einer Computer-Seite hängt).
-          if not mount and disk and type(disk.getMountPath) == "function" then
-            local ok_mount2, m2 = pcall(disk.getMountPath, name)
-            dbg[#dbg+1] = "  disk.getMountPath name=" .. tostring(name) .. " ok=" .. tostring(ok_mount2) .. " result=" .. tostring(m2)
-            if ok_mount2 and type(m2) == "string" and m2 ~= "" then mount = m2 end
-          end
-          if mount then add_unique(roots, seen, mount) end
         end
       end
     end
   end
-  -- self_log ist beim ersten Aufruf (Boot) noch nicht initialisiert, daher
-  -- Diagnose-Zeilen in stats puffern; werden sobald möglich nachgeloggt.
-  stats.disk_detect_debug = dbg
-  stats.disk_detect_roots_found = #roots
   if fs and fs.list then
     local ok, entries = pcall(fs.list, "/")
     if ok and type(entries) == "table" then
@@ -261,48 +262,47 @@ local function detect_disk_mounts()
       end
     end
   end
+  diag("mounts found: " .. table.concat(roots, ", "))
   return roots
 end
 
 local function write_probe(root)
   local dir = root .. "/xreactor_logs"
-  if not ensure_dir(dir) then return false end
+  local ed = ensure_dir(dir)
+  if not ed then diag(root .. ": ensure_dir FAILED"); return false end
   local path = dir .. "/.collector_probe"
-  local ok = pcall(function()
+  local cap, fr = capacity(root), free_space(root)
+  diag(root .. ": cap=" .. tostring(cap) .. " free=" .. tostring(fr))
+  local ok, err = pcall(function()
     local h = fs.open(path, "w")
-    if not h then error("open failed") end
+    if not h then error("fs.open returned nil") end
     h.write("probe")
     h.close()
     fs.delete(path)
   end)
+  diag(root .. ": probe_write ok=" .. tostring(ok) .. (ok and "" or (" err=" .. tostring(err))))
   return ok
 end
 
 local function discover_log_disks()
   local disks = {}
-  local probe_dbg = {}
   for _, mount in ipairs(detect_disk_mounts()) do
-    local ed_ok = ensure_dir(mount)
-    local wp_ok = ed_ok and write_probe(mount)
-    probe_dbg[#probe_dbg+1] = "mount=" .. tostring(mount) .. " ensure_dir=" .. tostring(ed_ok) .. " write_probe=" .. tostring(wp_ok)
-    if ed_ok and wp_ok then
+    if write_probe(mount) then
       disks[#disks + 1] = { mount = mount, root = mount .. "/xreactor_logs" }
     end
   end
   if #disks == 0 then
     ensure_dir(FALLBACK_ROOT)
     disks[#disks + 1] = { mount = "/", root = FALLBACK_ROOT, fallback = true }
+    diag("=> FALLBACK aktiv (keine nutzbare externe Disk)")
+  else
+    diag("=> " .. #disks .. " nutzbare Disk(s)")
   end
   table.sort(disks, function(a, b) return tostring(a.mount) < tostring(b.mount) end)
   for i, disk_entry in ipairs(disks) do disk_entry.id = i end
-  -- Diagnose puffern (self_log evtl. noch nicht verfügbar) — gleiches Pattern
-  -- wie bei detect_disk_mounts: wird beim nächsten flush mitgeloggt.
-  stats.disk_probe_debug = probe_dbg
   return disks
 end
 
--- Wird nach der self_log-Definition gesetzt; vorher ein No-Op.
-local flush_disk_detect_debug_fn = function() end
 -- Re-Entrancy-Schutz: self_log() -> write_log() -> current_disk() ->
 -- refresh_disks_if_needed() würde sonst in Endlos-Rekursion laufen, weil
 -- das Flushen der Diagnose-Logs selbst wieder Disk-Zugriffe auslöst.
@@ -321,10 +321,6 @@ local function refresh_disks_if_needed(force)
       end
     end
     stats.log_root = stats.disks[stats.disk_index] and stats.disks[stats.disk_index].root or FALLBACK_ROOT
-    -- refreshing_disks bleibt true während des Flush, damit ein verschachtelter
-    -- self_log()-Aufruf (write_log -> current_disk -> refresh_disks_if_needed)
-    -- garantiert sofort zurückkehrt statt erneut zu discovern.
-    flush_disk_detect_debug_fn()
     refreshing_disks = false
   end
 end
@@ -428,7 +424,9 @@ local function try_write_to_disk(disk_entry, payload)
   local id = sanitize(payload.node_id or "unknown")
   local dir = root .. "/" .. role
   if not ensure_dir(dir) then
-    stats.last_write_debug = "mkdir failed: dir=" .. tostring(dir) .. " exists=" .. tostring(fs.exists(dir)) .. " isDir=" .. tostring(fs.exists(dir) and fs.isDir(dir))
+    local msg = "mkdir failed: dir=" .. tostring(dir)
+    stats.last_write_debug = msg
+    diag(msg)
     return false, "mkdir failed"
   end
   local path = dir .. "/" .. id .. ".log"
@@ -437,18 +435,22 @@ local function try_write_to_disk(disk_entry, payload)
   if fs_free < MIN_FREE_BYTES then prune_any_logs(root) end
   fs_free = free_space(root)
   if fs_free < 256 then
-    stats.last_write_debug = "disk full: root=" .. tostring(root) .. " free=" .. tostring(fs_free)
+    local msg = "disk full: root=" .. tostring(root) .. " free=" .. tostring(fs_free)
+    stats.last_write_debug = msg
+    diag(msg)
     return false, "disk full"
   end
   local line_text = format_line(payload) .. "\n"
   local ok, err = pcall(function()
     local h = fs.open(path, "a")
-    if not h then error("open failed path=" .. tostring(path)) end
+    if not h then error("fs.open returned nil for path=" .. tostring(path)) end
     h.write(line_text)
     h.close()
   end)
   if not ok then
-    stats.last_write_debug = "write failed: path=" .. tostring(path) .. " err=" .. tostring(err)
+    local msg = "write failed: path=" .. tostring(path) .. " err=" .. tostring(err)
+    stats.last_write_debug = msg
+    diag(msg)
     return false, tostring(err or "write failed")
   end
   stats.last_write_index = disk_entry.id or stats.disk_index
@@ -611,22 +613,6 @@ local function self_log(message, level)
   local ok, err = write_log(payload)
   if ok then remember_event(payload.event_id) elseif err ~= "paused" then stats.last_error = err end
   return ok
-end
-
--- Diagnose-Zeilen aus detect_disk_mounts() jetzt loggen, damit die Disk-Erkennung
--- nachvollziehbar ist. Ab jetzt ist self_log verfügbar, also die Forward-Referenz
--- aus refresh_disks_if_needed() mit der echten Implementierung überschreiben.
-flush_disk_detect_debug_fn = function()
-  if stats.disk_detect_debug then
-    for _, l in ipairs(stats.disk_detect_debug) do self_log("DiskDetect: " .. l, "DEBUG") end
-    self_log("DiskDetect: roots_found=" .. tostring(stats.disk_detect_roots_found or 0), "INFO")
-    stats.disk_detect_debug = nil
-  end
-  if stats.disk_probe_debug then
-    for _, l in ipairs(stats.disk_probe_debug) do self_log("DiskProbe: " .. l, "DEBUG") end
-    self_log("DiskProbe: usable_disks=" .. tostring(#stats.disks), "INFO")
-    stats.disk_probe_debug = nil
-  end
 end
 
 local draw
@@ -811,6 +797,17 @@ draw = function()
     line(2, 23, "Disk writes paused; ACKs withheld so senders retry", c("yellow"))
   elseif h >= 23 then
     line(2, 23, "Status stable", c("lime"))
+  end
+  -- Live-Diagnose der letzten Disk-Erkennung/Schreibversuche — unabhängig
+  -- vom Self-Log-Mechanismus, der bei einem Disk-Problem selbst stumm
+  -- bleiben kann (write_log haengt am selben Disk-Pfad).
+  if #live_diag > 0 and h >= 27 then
+    line(2, 26, "Disk Diagnose (live)", c("cyan"))
+    local max_lines = math.min(#live_diag, h - 27)
+    for di = 1, max_lines do
+      local entry = live_diag[#live_diag - max_lines + di]
+      line(2, 26 + di, fit(tostring(entry), w - 3), c("lightGray"))
+    end
   end
   set_fg(c("white")); set_bg(c("black"))
 end
