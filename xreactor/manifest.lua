@@ -1,13 +1,13 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 88,
-  manifest_id = "manifest-v88",
+  manifest_version = 89,
+  manifest_id = "manifest-v89",
   source_ref = "beta",
   hash_algo = "crc32",
 
   base_files = {
   { path = "installer_http.lua", size_bytes = 4688, hash = "ea6f7420", always=true},
-  { path = "installer_main.lua", size_bytes = 22690, hash = "94747e97", always=true},
+  { path = "installer_main.lua", size_bytes = 24217, hash = "64ec2f98", always=true},
   { path = "installer_manifest.lua", size_bytes = 4673, hash = "7aa0c027", always=true},
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true},
   { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always=true},
