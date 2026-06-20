@@ -379,6 +379,12 @@ local function select_role()
 end
 
 local function prompt_yes_no(question)
+  -- Remote-Update (siehe core/remote_update.lua): läuft non-interaktiv über
+  -- Funk ohne Tastatur, also automatisch "ja" — bestehende Rolle behalten.
+  if _G.__xreactor_remote_update then
+    print(question .. " [j/n]: j (remote update, automatisch)")
+    return true
+  end
   while true do
     write(question .. " [j/n]: ")
     local answer = tostring(read() or ""):lower()
