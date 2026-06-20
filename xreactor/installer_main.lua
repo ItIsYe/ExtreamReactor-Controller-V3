@@ -401,8 +401,50 @@ local function role_from_label(role_label)
   return { key = key, label = normalized }
 end
 
+-- Fix: clean_existing_installation löscht INSTALL_ROOT komplett, darunter
+-- /xreactor/config/node_id.txt und /xreactor/config/capacity_cache.lua.
+-- Bei jedem "Rolle behalten + komplett neu installieren" ging dadurch die
+-- Node-Identität und das gelernte Capacity-Learning verloren — die Node
+-- musste nach jedem Reinstall (auch via Remote-Update) das Learning komplett
+-- neu durchlaufen. Diese beiden Dateien werden jetzt vor dem Clean gesichert
+-- und danach wiederhergestellt.
+local PRESERVE_ON_REINSTALL = {
+  "config/node_id.txt",
+  "config/capacity_cache.lua",
+}
+
+local function backup_preserved_files(ctx)
+  local backups = {}
+  for _, rel in ipairs(PRESERVE_ON_REINSTALL) do
+    local path = ctx.constants.INSTALL_ROOT .. "/" .. rel
+    if ctx.fs.exists(path) and not ctx.fs.isDir(path) then
+      local ok, content = pcall(ctx.read_file, path)
+      if ok and content then
+        backups[rel] = content
+        ctx.info("Preserving " .. rel .. " across reinstall")
+      end
+    end
+  end
+  return backups
+end
+
+local function restore_preserved_files(ctx, backups)
+  for rel, content in pairs(backups) do
+    local path = ctx.constants.INSTALL_ROOT .. "/" .. rel
+    local dir = path:match("^(.*)/[^/]+$")
+    if dir and not ctx.fs.exists(dir) then pcall(ctx.fs.makeDir, dir) end
+    local ok, err = pcall(ctx.write_file, path, content)
+    if ok then
+      ctx.info("Restored " .. rel .. " after reinstall")
+    else
+      ctx.warn("Failed to restore " .. rel .. ": " .. tostring(err))
+    end
+  end
+end
+
 local function clean_existing_installation(ctx)
   ctx.info("Cleaning old installation before full reinstall")
+  local preserved = backup_preserved_files(ctx)
   local paths = {
     ctx.constants.STAGE_ROOT,
     ctx.constants.BACKUP_ROOT,
@@ -416,6 +458,7 @@ local function clean_existing_installation(ctx)
       if not ok then return false, "delete failed for " .. tostring(path) .. ": " .. tostring(err) end
     end
   end
+  ctx._preserved_files = preserved
   return true
 end
 
@@ -529,6 +572,11 @@ function M.run(constants)
   local ok_commit, commit_err = stage_lib.commit_stage(ctx)
   if not ok_commit then ctx.fatal(commit_err) end
   stage_lib.ensure_role_config(ctx, ctx.constants.INSTALL_ROOT, role.label)
+  -- node_id.txt und capacity_cache.lua wiederherstellen (falls beim Clean
+  -- gesichert) — siehe clean_existing_installation()/backup_preserved_files().
+  if ctx._preserved_files then
+    restore_preserved_files(ctx, ctx._preserved_files)
+  end
   startup_lib.write_startup(ctx, role.label)
   -- Sicherstellen dass xreactor.log_mode = "all" gesetzt ist damit
   -- Remote-Logging zum Log-Collector funktioniert. Überschreibt alte Werte.
