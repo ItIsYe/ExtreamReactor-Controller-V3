@@ -208,6 +208,14 @@ local function make_dispatch()
     ["SCRAM"] = function(_, ctx)
       ctx.apply_mode(ctx.STATE.SAFE)
       return nil
+    end,
+    -- TEMPORÄR: Remote-Update — siehe core/remote_update.lua. Kann später
+    -- wieder entfernt werden, sobald die aktive Entwicklungsphase vorbei ist.
+    ["REMOTE_UPDATE"] = function(_, ctx)
+      ctx.log("WARN", "Remote-Update command received, starting installer...")
+      local remote_update = require("core.remote_update")
+      remote_update.run(function(level, text) ctx.log(level, text) end)
+      return nil
     end
   }
 end
@@ -254,6 +262,14 @@ local function new(ctx)
       log_result("UNKNOWN", result)
       return result
     end
+    -- REMOTE_UPDATE darf auch im SAFE-Mode laufen (Update könnte genau den
+    -- Bug beheben, der zum SAFE-Mode geführt hat).
+    if command.target == "REMOTE_UPDATE" then
+      local handler = dispatch_by_target["REMOTE_UPDATE"]
+      handler(command, ctx)
+      return record({ ok = true })
+    end
+
     if ctx.get_current_state() == ctx.STATE.SAFE then
       local result = record({ ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" })
       log_result(command.target or "UNKNOWN", result)
