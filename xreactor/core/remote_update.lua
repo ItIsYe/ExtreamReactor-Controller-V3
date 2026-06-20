@@ -54,7 +54,16 @@ function M.run(log_fn)
   _G.__xreactor_remote_update = true
 
   log("INFO", "Remote-Update: starte Installer...")
-  local ok_run, err = pcall(function() shell.run(path) end)
+  -- Fix: shell.run() ist nur in einer interaktiven Shell-Umgebung verfügbar.
+  -- Diese Funktion läuft als Hintergrund-Code (per dofile geladen), wo
+  -- die globale shell-API nicht existiert ("attempt to index global 'shell'").
+  -- dofile() ist die native, shell-unabhängige Alternative dafür.
+  local ok_run, err
+  if type(shell) == "table" and type(shell.run) == "function" then
+    ok_run, err = pcall(function() shell.run(path) end)
+  else
+    ok_run, err = pcall(function() dofile(path) end)
+  end
   if not ok_run then
     log("ERROR", "Remote-Update: Installer-Lauf fehlgeschlagen: " .. tostring(err))
     return false, tostring(err)
