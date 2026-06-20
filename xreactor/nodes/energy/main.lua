@@ -345,8 +345,21 @@ local function handle_message(message)
   return message_handler and message_handler.handle_message(message)
 end
 
--- handle_command absichtlich nicht implementiert:
--- Energy-Node empfängt keine Commands vom Master (nur sendend).
+-- TEMPORÄR: Energy-Node empfängt sonst keine Commands vom Master (nur
+-- sendend) — REMOTE_UPDATE ist die einzige Ausnahme, damit auch diese Node
+-- per Funk aktualisiert werden kann. Siehe core/remote_update.lua.
+local function handle_command(message)
+  local payload = type(message) == "table" and message.payload or nil
+  local command = payload and payload.command
+  if type(command) == "table" and command.target == "REMOTE_UPDATE" then
+    if comms then comms:send_ack(message, true, { updating = true }) end
+    utils.log("ENERGY", "Remote-Update command received, starting installer...", "WARN")
+    local remote_update = require("core.remote_update")
+    remote_update.run(function(level, text) utils.log("ENERGY", text, level) end)
+    return { ok = true }
+  end
+  return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
+end
 
 local function init()
   utils.log("ENERGY", "Initializing services (comms, discovery, telemetry, ui)", "INFO")
@@ -356,12 +369,12 @@ local function init()
     on_master_alerts = function(alerts) runtime.master_alerts = alerts end,
     on_proto_mismatch = function() devices.proto_mismatch = true end
   })
-  -- Energy empfängt keine Commands — on_command wird nicht gesetzt.
   comms = comms_service.new({
     name = "COMMS",
     config = config,
     log_prefix = "ENERGY",
-    on_message = handle_message
+    on_message = handle_message,
+    on_command = handle_command
   })
   services = service_manager.new({
     log_prefix = "ENERGY",
