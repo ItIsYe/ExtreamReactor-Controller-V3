@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 97,
-  manifest_id = "manifest-v97",
+  manifest_version = 98,
+  manifest_id = "manifest-v98",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -57,7 +57,7 @@ return {
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"}},
     { path = "master/main.lua", size_bytes = 244, hash = "5f009046", required_for={"MASTER"}},
     { path = "master/message_handlers.lua", size_bytes = 19707, hash = "53d2e5cb", required_for={"MASTER"}},
-    { path = "master/monitor_sessions.lua", size_bytes = 5830, hash = "0db7c0da", required_for={"MASTER"}},
+    { path = "master/monitor_sessions.lua", size_bytes = 6439, hash = "ba9c6810", required_for={"MASTER"}},
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
     { path = "master/rt_sync.lua", size_bytes = 20616, hash = "467065d1", required_for={"MASTER"}},
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"}},
