@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 104,
-  manifest_id = "manifest-v104",
+  manifest_version = 105,
+  manifest_id = "manifest-v105",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -88,6 +88,7 @@ return {
     { path = "core/turbine_regulator.lua", size_bytes = 17134, hash = "50ce7402", required_for={"RT"}},
     { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48", required_for={"RT"}},
     { path = "nodes/rt/command_handler.lua", size_bytes = 11948, hash = "96fd3ad6", required_for={"RT"}},
+    { path = "nodes/rt/capacity_cache.lua", size_bytes = 2988, hash = "810c6a20", required_for={"RT"}},
     { path = "nodes/rt/config.lua", size_bytes = 3612, hash = "26aa9cc3", required_for={"RT"}},
     { path = "nodes/rt/config_normalizer.lua", size_bytes = 23318, hash = "b6909930", required_for={"RT"}},
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"}},
