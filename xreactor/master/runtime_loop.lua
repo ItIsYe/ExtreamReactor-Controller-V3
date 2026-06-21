@@ -191,14 +191,24 @@ local function run_master()
   local last_redstone_top = false
   local function broadcast_remote_update()
     runtime.log("Redstone-Trigger (top): broadcasting REMOTE_UPDATE an alle Nodes", "WARN")
+    local known = runtime.state.nodes or {}
+    local known_count = 0
+    for _ in pairs(known) do known_count = known_count + 1 end
+    if known_count == 0 then
+      -- Fix: wenn der Trigger zu früh nach einem Boot kommt (noch keine Node
+      -- hat sich registriert), würde "sent=0" geloggt und scheinbar nichts
+      -- passieren — ohne klaren Hinweis warum. Das jetzt explizit sichtbar
+      -- machen statt stillschweigend leer zu bleiben.
+      runtime.log("Remote-Update: KEINE Nodes bekannt — Trigger zu frueh nach Boot? Bitte ~30s warten und erneut versuchen.", "ERROR")
+    end
     local sent = 0
-    for node_id, node in pairs(runtime.state.nodes or {}) do
+    for node_id, node in pairs(known) do
       local ok = pcall(function()
         runtime.refs.comms:send_command(node_id, { target = constants.command_targets.REMOTE_UPDATE })
       end)
       if ok then sent = sent + 1 end
     end
-    runtime.log(("Remote-Update Broadcast an %d Node(s) gesendet"):format(sent), "WARN")
+    runtime.log(("Remote-Update Broadcast an %d Node(s) gesendet (bekannt=%d)"):format(sent, known_count), "WARN")
     -- Fix: comms:send_command() legt die Nachricht nur in eine interne Queue,
     -- der tatsächliche Funk-Versand (modem.transmit) passiert erst beim
     -- nächsten services:tick() Aufruf. os.sleep() blockiert den gesamten
