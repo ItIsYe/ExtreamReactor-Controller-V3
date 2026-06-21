@@ -352,10 +352,11 @@ local function handle_command(message)
   local payload = type(message) == "table" and message.payload or nil
   local command = payload and payload.command
   if type(command) == "table" and command.target == "REMOTE_UPDATE" then
-    if comms then comms:send_ack(message, true, { updating = true }) end
-    utils.log("ENERGY", "Remote-Update command received, starting installer...", "WARN")
-    local remote_update = require("core.remote_update")
-    remote_update.run(function(level, text) utils.log("ENERGY", text, level) end)
+    require("core.remote_update").handle_command({
+      log_prefix = "ENERGY",
+      utils = utils,
+      send_ack = comms and function() comms:send_ack(message, true, { updating = true }) end or nil,
+    })
     return { ok = true }
   end
   return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
