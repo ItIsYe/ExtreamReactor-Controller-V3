@@ -1,13 +1,10 @@
 -- nodes/rt/capacity_cache.lua
 --
--- Disk-Persistenz für das Capacity-Learning der RT-Node. Ausgelagert aus
--- main.lua (Modularisierung "Punkt 1", Gruppe C — risikoarmer, klar
--- abgegrenzter Teil ohne enge Verflechtung mit Reaktor-/Turbinen-Regelung).
---
--- Schreibt/liest eine generierte Lua-Datei unter CONFIG.CAPACITY_CACHE_PATH
--- (Standard: /xreactor/config/capacity_cache.lua), die den zuletzt
--- gelockten max_output-Wert enthält, damit eine Node nach einem Reboot
--- nicht jedes Mal das komplette Capacity-Learning neu durchlaufen muss.
+-- Disk-Persistenz für das Capacity-Learning der RT-Node. Speichert/lädt den
+-- zuletzt gemessenen max_output-Wert, damit eine Node nach einem Reboot
+-- nicht bei 0 anfängt, sondern direkt mit dem zuletzt bekannten Wert
+-- startet — die laufende Messung (siehe status_snapshot.lua,
+-- update_capacity_learning) aktualisiert ihn danach weiter ganz normal.
 --
 -- WICHTIG: diese Datei liegt innerhalb von INSTALL_ROOT und wird bei einem
 -- Reinstall daher gelöscht — der Installer sichert/stellt sie deshalb
@@ -17,7 +14,7 @@ local M = {}
 
 -- opts: { path = string, turbine_count = number }
 function M.save(learning, opts)
-  if type(learning) ~= "table" or not learning.locked then return false, "not locked" end
+  if type(learning) ~= "table" or not learning.ready then return false, "not ready" end
   opts = opts or {}
   local path = opts.path
   if type(path) ~= "string" or path == "" then return false, "no path" end
@@ -32,9 +29,8 @@ function M.save(learning, opts)
   local turbine_count = tonumber(opts.turbine_count) or 0
   f.writeLine("-- RT capacity cache - auto-generated, do not edit")
   f.writeLine("return {")
-  f.writeLine("  locked = true,")
+  f.writeLine("  ready = true,")
   f.writeLine(string.format("  max_output = %s,", tostring(learning.max_output or 0)))
-  f.writeLine(string.format("  stable_samples = %s,", tostring(learning.stable_samples or 0)))
   f.writeLine(string.format("  turbine_count = %s,", tostring(turbine_count)))
   f.writeLine(string.format("  reason = %q,", tostring(learning.reason or "LOADED_FROM_CACHE")))
   f.writeLine("}")
@@ -50,23 +46,17 @@ function M.load(opts)
   if type(path) ~= "string" or path == "" or not fs.exists(path) then return nil end
 
   local ok, data = pcall(dofile, path)
-  if not ok or type(data) ~= "table" or data.locked ~= true
+  if not ok or type(data) ~= "table" or data.ready ~= true
       or type(data.max_output) ~= "number" or data.max_output <= 0 then
     return nil
   end
 
-  -- Invalidate if turbine count changed since the cache was written.
-  -- A different turbine count means a different max_output; re-learning
-  -- is needed.
-  local current_count = tonumber(opts.turbine_count) or 0
-  if type(data.turbine_count) == "number" and data.turbine_count ~= current_count then
-    log("WARN", string.format(
-      "Capacity cache invalidated: turbine_count changed %d->%d, re-learning required",
-      data.turbine_count, current_count))
-    pcall(fs.delete, path)
-    return nil
-  end
-
+  -- Hinweis: anders als vorher wird der Cache NICHT mehr bei abweichender
+  -- turbine_count gelöscht/verworfen — die laufende Messung passt den Wert
+  -- ohnehin automatisch an, sobald sich die Turbinenzahl geändert hat
+  -- (mehr Turbinen -> höhere Messung wird automatisch übernommen, siehe
+  -- update_capacity_learning "UPDATED"-Fall). Der gecachte Wert ist nur ein
+  -- Startpunkt, kein dauerhaft fixierter Lock-Zustand mehr.
   data.reason = data.reason or "LOADED_FROM_CACHE"
   return data
 end
