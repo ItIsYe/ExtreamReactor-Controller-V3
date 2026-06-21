@@ -4,20 +4,48 @@
 -- Nodes häufig neue Versionen brauchen ohne jede einzeln manuell am PC
 -- den Installer ausführen zu müssen. Kann später wieder entfernt werden.
 --
--- Führt den XReactor-Installer auf dieser Node aus und rebooted danach.
 -- Wird ausgelöst durch:
---   a) REMOTE_UPDATE Command vom Master (über Control-Kanal)
---   b) Redstone-Signal auf "top" des Master-Computers selbst
+--   a) REMOTE_UPDATE Command vom Master (über Control-Kanal) — jede Node
+--      ruft beim Empfang M.handle_command(opts) auf (siehe unten)
+--   b) Redstone-Signal auf "top" des Master-Computers selbst, das den
+--      Broadcast an alle Nodes auslöst UND den Master selbst aktualisiert
 --      (siehe master/runtime_loop.lua)
 --
 -- Der Installer läuft non-interaktiv: vorhandene Rolle wird automatisch
 -- beibehalten (keine Rückfrage), damit das über Funk ohne Tastatureingabe
 -- funktioniert.
+--
+-- M.handle_command(opts) ist die EINE zentrale Stelle für "ein REMOTE_UPDATE
+-- Command kam an, was jetzt?" — vorher war dieselbe Logik (ACK senden, kurz
+-- loggen, M.run aufrufen) an 4 verschiedenen Stellen im Code dupliziert
+-- (rt/command_handler.lua, support/command_handler.lua, energy/main.lua,
+-- master/runtime_loop.lua), jede mit leicht abweichendem Code. Künftige
+-- Verhaltensänderungen (z.B. Versions-Check vor dem Update, Bestätigung
+-- abwarten) müssen jetzt nur noch hier einmal geändert werden.
+--
+-- opts:
+--   log_prefix (string)   — z.B. "RT", "ENERGY", "SUPPORT" (für Log-Zeilen)
+--   utils (table, optional) — falls vorhanden, nutzt utils.log(prefix, msg, level)
+--   log_fn (function, optional) — alternativ direkter Log-Callback(level, text)
+--   send_ack (function, optional) — wird VOR dem Update-Start aufgerufen,
+--     um dem Master sofort zu bestätigen dass das Command angekommen ist
+--     (der eigentliche Installer-Lauf braucht Zeit und rebootet danach,
+--     ein Status-Antwort-Roundtrip macht zu diesem Zeitpunkt keinen Sinn mehr)
 
 local M = {}
 
+local function make_log(opts)
+  if type(opts.log_fn) == "function" then
+    return opts.log_fn
+  end
+  if type(opts.utils) == "table" and type(opts.utils.log) == "function" then
+    local prefix = opts.log_prefix or "NODE"
+    return function(level, text) opts.utils.log(prefix, text, level) end
+  end
+  return function() end
+end
+
 -- Lädt den Installer von GitHub frisch herunter und führt ihn aus.
--- non_interactive=true unterdrückt die "Rolle behalten? [j/n]" Abfrage.
 function M.run(log_fn)
   local log = type(log_fn) == "function" and log_fn or function() end
 
@@ -54,10 +82,10 @@ function M.run(log_fn)
   _G.__xreactor_remote_update = true
 
   log("INFO", "Remote-Update: starte Installer...")
-  -- Fix: shell.run() ist nur in einer interaktiven Shell-Umgebung verfügbar.
-  -- Diese Funktion läuft als Hintergrund-Code (per dofile geladen), wo
-  -- die globale shell-API nicht existiert ("attempt to index global 'shell'").
-  -- dofile() ist die native, shell-unabhängige Alternative dafür.
+  -- shell.run() ist nur in einer interaktiven Shell-Umgebung verfügbar.
+  -- Diese Funktion läuft typischerweise als Hintergrund-Code (per dofile
+  -- geladen), wo die globale shell-API nicht existiert. dofile() ist die
+  -- native, shell-unabhängige Alternative dafür.
   local ok_run, err
   if type(shell) == "table" and type(shell.run) == "function" then
     ok_run, err = pcall(function() shell.run(path) end)
@@ -75,27 +103,12 @@ function M.run(log_fn)
   return true
 end
 
--- ── Zentraler Command-Handler ───────────────────────────────────────────────
--- Bündelt die Logik, die vorher an 4 Stellen (support/command_handler.lua,
--- rt/command_handler.lua, energy/main.lua, jeweils leicht unterschiedlich)
--- dupliziert war: loggen, optional ACK senden, M.run() aufrufen. Eine
--- künftige Verhaltensänderung (z.B. Bestätigung vor dem Update, Versions-
--- Vergleich vor dem Ausführen) muss damit nur noch an einer Stelle gepflegt
--- werden.
---
--- opts:
---   log_prefix  - String für utils.log() Präfix (z.B. "RT", "ENERGY")
---   utils       - core.utils Modul (für utils.log)
---   send_ack    - optionale Funktion(payload) zum Senden eines ACK vor dem
---                 Start des Updates (Comms-Schicht je nach Node verschieden)
+-- Zentraler Einstiegspunkt für alle Node-Typen, wenn ein REMOTE_UPDATE
+-- Command vom Master ankommt. Sendet (falls möglich) zuerst ein ACK, loggt
+-- den Start, und ruft dann M.run() auf.
 function M.handle_command(opts)
   opts = opts or {}
-  local log_prefix = opts.log_prefix or "NODE"
-  local function log(level, text)
-    if opts.utils and type(opts.utils.log) == "function" then
-      opts.utils.log(log_prefix, text, level)
-    end
-  end
+  local log = make_log(opts)
   if type(opts.send_ack) == "function" then
     pcall(opts.send_ack)
   end
