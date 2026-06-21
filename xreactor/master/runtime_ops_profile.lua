@@ -1,3 +1,65 @@
+-- master/runtime_ops_profile.lua
+--
+-- ════════════════════════════════════════════════════════════════════════
+-- DATENFLUSS: power_target -> RT-Node Setpoint (vollständige Kette)
+-- ════════════════════════════════════════════════════════════════════════
+-- Diese Datei ist NUR der erste Schritt einer Kette über 4 Dateien. Wer
+-- hier etwas ändert, sollte den gesamten Fluss kennen — sonst entstehen
+-- wieder schwer auffindbare Bugs wie der SHED-Selbstverstärkungs-Loop
+-- (siehe estimate_base_power(), Fix v100).
+--
+-- 1) runtime_ops_profile.lua (DIESE DATEI)
+--    M.sample_trends(runtime)   — läuft periodisch über housekeeping.lua,
+--      berechnet energy_pct aus den Energy-Node-Daten und wechselt bei
+--      Schwellenüberschreitung automatisch das Profil (BASELOAD/PEAK/IDLE),
+--      falls runtime.state.auto_profile == true (siehe v76/v78 Fixes —
+--      vorher blieb power_target ohne Trigger für immer bei 0).
+--    M.apply_profile(runtime, name)
+--      -> ruft M.estimate_base_power(runtime) auf, um eine RF/t-Basis zu
+--         bekommen, dann: runtime.state.power_target = base * profile.target
+--      -> estimate_base_power() Priorität: 1) measured_total (Summe der
+--         tatsächlichen RT-Node-Outputs) 2) learned_capacity_total (Summe
+--         der gelockten Capacity-Learning-Werte — Fix v100, verhindert dass
+--         eine kurzzeitig auf 0 RF/t stehende Node fälschlich als
+--         "Kapazitätsüberschuss" markiert wird) 3) runtime.state.power_target
+--         (vorheriger Wert) 4) capacity-fallback (generischer Wert,
+--         standardmäßig winzig — nur Notlösung wenn NICHTS bekannt ist)
+--
+-- 2) master/rt_sync.lua
+--    Liest runtime.state.power_target als ctx.power_target (= global_target).
+--    Verteilt das auf alle aktiven RT-Nodes proportional zu ihrer
+--    node_capacity() (siehe node_capacity_ready() dort — prüft
+--    rt.capacity_ready / node.capacity_ready, siehe Punkt 4 unten).
+--    Berechnet pro Node: assigned_power, assigned_percent, assignment_state
+--    ("active" / "shed" / "shutdown" / "startup" / "standby" / "unavailable").
+--    Baut daraus das SET_SETPOINTS Command-Payload (inkl. assignment_state,
+--    power_target_percent, rpm, steam, enable_reactors).
+--
+-- 3) master/rt_sync_coalescer.lua
+--    Bündelt mehrere Setpoint-Änderungen in einem kurzen Zeitfenster (statt
+--    bei jeder kleinen Schwankung sofort ein neues Command zu senden) —
+--    vergleicht alte/neue Werte (siehe a.power_target == b.power_target
+--    Vergleichslogik dort) um unnötige Funk-Last zu vermeiden.
+--
+-- 4) Auf der RT-Node: nodes/rt/command_handler.lua empfängt SET_SETPOINTS,
+--    schreibt die Felder in runtime_ctx.targets (targets.power,
+--    targets.power_percent, targets.rpm, targets.assignment_state — siehe
+--    Fix v97, assignment_state wurde vorher nur geloggt, nie gespeichert).
+--    nodes/rt/monitor_ui.lua liest targets.* für die Anzeige (model.target_power
+--    etc.) und sendet via status_snapshot.lua periodisch capacity_ready /
+--    capacity_max zurück an den Master — WICHTIG: capacity_ready landet im
+--    Master NICHT über einen expliziten Zuweisungs-Code, sondern automatisch
+--    über das generische utils.merge(nodes[id], message.payload) in
+--    master/message_handlers.lua (Zeile mit payload_looks_rt) — das war beim
+--    ersten Durchverfolgen dieser Kette nicht offensichtlich.
+--
+-- KURZ: power_target (hier) -> assigned_percent (rt_sync.lua)
+--       -> SET_SETPOINTS (rt_sync_coalescer.lua, gebündelt)
+--       -> targets.* (RT command_handler.lua)
+--       -> UI-Anzeige + capacity_ready zurück an Master (via utils.merge,
+--          NICHT explizit zugewiesen)
+-- ════════════════════════════════════════════════════════════════════════
+
 local M = {}
 
 local function number_or(value, fallback)
