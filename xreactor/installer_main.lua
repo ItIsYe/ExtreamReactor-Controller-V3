@@ -542,11 +542,25 @@ local function sorted_files(expected)
   return files
 end
 
-local function install_staged(ctx, files)
-  ctx.info("Installing files into stage root: " .. ctx.constants.STAGE_ROOT)
+-- Fix: Direkt-Update statt Stage+Verify+Swap, wenn die Rolle bereits
+-- installiert ist (Remote-Update / wiederholte Updates). Das klassische
+-- Stage-Verfahren baut die komplette neue Version ZUERST parallel zur alten
+-- in einem temporären Ordner auf, bevor erst danach atomar getauscht wird —
+-- sinnvoll für robuste Erstinstallationen (Schutz gegen Stromausfall mitten
+-- im Schreiben), aber bei kleinen Disks (z.B. RT-Node ~395 KB Payload) sehr
+-- speicherhungrig: kurzzeitig wird fast die doppelte Dateimenge gebraucht.
+-- Bei einem Update (Rolle bekannt, clean_existing_installation() ist schon
+-- gelaufen) entfällt der Vorteil des Stage-Verfahrens ohnehin größtenteils
+-- (es gibt nichts Altes mehr, das parallel weiterlaufen müsste) — daher hier
+-- direktes Datei-für-Datei-Schreiben in INSTALL_ROOT, ohne Stage-Kopie.
+-- Kein Rollback-Schutz mehr bei Abbruch mitten im Schreiben (bewusst in Kauf
+-- genommen für den Speicher-Vorteil), aber jede Datei wird einzeln über
+-- ctx.validate_download() geprüft (Größe/Hash/Lua-Syntax) bevor es weitergeht.
+local function install_direct(ctx, files)
+  ctx.info("Direkt-Update: schreibe Dateien direkt nach " .. ctx.constants.INSTALL_ROOT)
   for _, item in ipairs(files) do
     local rel, entry = item.path, item.entry
-    local target = ctx.constants.STAGE_ROOT .. "/" .. rel
+    local target = ctx.constants.INSTALL_ROOT .. "/" .. rel
     local ok, err = ctx.download_file(rel, target, entry)
     if not ok then return false, "Download failed: " .. tostring(err) end
   end
@@ -559,7 +573,13 @@ function M.run(constants)
   local role, already_cleaned = choose_role_for_reinstall(ctx)
   ctx.target_role = role.label
   ctx.set_log_target(role.label)
-  ctx.install_mode = "reinstall"
+  -- Fix: install_mode="update" statt "reinstall" für die Speicherbedarfs-
+  -- Berechnung (storage_lib.estimate_required_storage). Seit dem Umstieg auf
+  -- install_direct() (Direkt-Schreiben statt Stage+Swap) gibt es keinen
+  -- Stage-Peak mehr — "update"-Modus nutzt den kleineren, passenderen
+  -- STORAGE_UPDATE_BUFFER_BYTES-Puffer statt des für Stage-Verfahren
+  -- bemessenen STORAGE_BUFFER_BYTES.
+  ctx.install_mode = "update"
   if not already_cleaned then
     clean_or_fatal(ctx)
   end
@@ -581,11 +601,12 @@ function M.run(constants)
   })
   if not ok_space then ctx.fatal(space_err) end
 
-  local ok_stage, stage_err = install_staged(ctx, files); if not ok_stage then ctx.fatal(stage_err) end
-  local ok_validate, validate_err = stage_lib.validate_stage(ctx, expected)
-  if not ok_validate then ctx.fatal("Staged validation failed: " .. tostring(validate_err)) end
-  local ok_commit, commit_err = stage_lib.commit_stage(ctx)
-  if not ok_commit then ctx.fatal(commit_err) end
+  -- INSTALL_ROOT wurde bereits vollständig durch clean_existing_installation()
+  -- entfernt (egal ob hier oder in choose_role_for_reinstall()) — es existiert
+  -- an dieser Stelle nie eine alte Installation, die parallel weiterlaufen
+  -- müsste. Direktes Schreiben spart den kompletten Stage-Speicherbedarf.
+  local ok_install, install_err = install_direct(ctx, files)
+  if not ok_install then ctx.fatal(install_err) end
   stage_lib.ensure_role_config(ctx, ctx.constants.INSTALL_ROOT, role.label)
   -- node_id.txt und capacity_cache.lua wiederherstellen (falls beim Clean
   -- gesichert) — siehe clean_existing_installation()/backup_preserved_files().
