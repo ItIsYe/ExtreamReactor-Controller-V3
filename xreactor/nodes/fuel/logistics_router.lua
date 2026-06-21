@@ -87,10 +87,14 @@ local function read_reactor_fuel(reactor_wrapped)
   if type(amount) == "number" and type(capacity) == "number" then
     return amount, capacity
   end
-  -- P3 Fix: ER2 Reprocessor-Ports haben keine Fuel-API, sondern eine Waste-API.
-  -- Versuche getWaste()/getMaxWaste() als weiteren Fallback damit der Router
-  -- auch für Reprocessor-Buffer den echten Füllstand lesen kann statt auf
-  -- always-supply-mode (kein reactor_port) zurückzufallen.
+  -- Fallback für ER2-Peripherals mit Waste- statt Fuel-API (z.B. wenn ein
+  -- reactor_port versehentlich auf eine Waste-Maschine zeigt). Hinweis: der
+  -- eigentliche Reprocessor-Versorgungsweg läuft seit der Einführung von
+  -- nodes/reprocessor/feed_router.lua NICHT mehr über diesen Router — dort
+  -- gibt es keinen reactor_port und keinen Füllstand-Check (random-Intervall-
+  -- Befüllung ohne Peripheral-Abfrage, siehe feed_router.lua). Dieser
+  -- Fallback ist also nur noch ein generisches Sicherheitsnetz, kein
+  -- aktiv genutzter Reprocessor-Pfad.
   local waste,     _ = safe_call(reactor_wrapped, "getWaste")
   local max_waste, _ = safe_call(reactor_wrapped, "getMaxWaste")
   if type(waste) == "number" and type(max_waste) == "number" then
