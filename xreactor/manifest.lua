@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 106,
-  manifest_id = "manifest-v106",
+  manifest_version = 107,
+  manifest_id = "manifest-v107",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -74,7 +74,7 @@ return {
     { path = "master/ui/multiview.lua", size_bytes = 5389, hash = "ced614e4", required_for={"MASTER"}},
     { path = "master/ui/overview.lua", size_bytes = 10888, hash = "20dca0c4", required_for={"MASTER"}},
     { path = "master/ui/resources.lua", size_bytes = 5634, hash = "3c3f86d2", required_for={"MASTER"}},
-    { path = "master/ui/rt_dashboard.lua", size_bytes = 11303, hash = "8d5ab195", required_for={"MASTER"}},
+    { path = "master/ui/rt_dashboard.lua", size_bytes = 11831, hash = "e587af2a", required_for={"MASTER"}},
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"}},
     { path = "master/ui_controller.lua", size_bytes = 28281, hash = "c579b3a5", required_for={"MASTER"}},
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"}},
