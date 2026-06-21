@@ -44,6 +44,7 @@ local binding = require("nodes.rt.binding")
 local discovery_log = require("nodes.rt.discovery_log")
 local rails = require("core.control_rails")
 local ensure_turbine_ctrl = require("core.turbine_ctrl")
+local capacity_cache = require("nodes.rt.capacity_cache")
 -- Forward declaration so closures defined below (e.g. get_turbine_module)
 -- capture this as an upvalue rather than treating it as a global.
 -- Initialized at the runtime_ctx = { ... } block further below.
@@ -249,49 +250,24 @@ local STATE = {
   SAFE = "SAFE"
 }
 -- ---- Capacity cache (disk persistence) ------------------------------------
--- Saves the locked capacity value so reboots don't require re-learning.
+-- Ausgelagert nach nodes/rt/capacity_cache.lua (Modularisierung, siehe
+-- Projekt-Notizen "Punkt 1" — Gruppe C). Dünne Wrapper hier, damit alle
+-- bestehenden Aufrufstellen (save_capacity_cache(...), load_capacity_cache())
+-- unverändert bleiben.
 
 local function save_capacity_cache(learning)
-  if type(learning) ~= "table" or not learning.locked then return end
-  local path = CONFIG.CAPACITY_CACHE_PATH
-  local dir  = fs.getDir(path)
-  if dir ~= "" and not fs.exists(dir) then
-    pcall(fs.makeDir, dir)
-  end
-  local ok, f = pcall(fs.open, path, "w")
-  if not ok or not f then return end
-  local turbine_count = #(config.turbines or {})
-  f.writeLine("-- RT capacity cache - auto-generated, do not edit")
-  f.writeLine("return {")
-  f.writeLine(string.format("  locked = true,"))
-  f.writeLine(string.format("  max_output = %s,", tostring(learning.max_output or 0)))
-  f.writeLine(string.format("  stable_samples = %s,", tostring(learning.stable_samples or 0)))
-  f.writeLine(string.format("  turbine_count = %s,", tostring(turbine_count)))
-  f.writeLine(string.format("  reason = %q,", tostring(learning.reason or "LOADED_FROM_CACHE")))
-  f.writeLine("}")
-  pcall(f.close)
+  capacity_cache.save(learning, {
+    path = CONFIG.CAPACITY_CACHE_PATH,
+    turbine_count = #(config.turbines or {}),
+  })
 end
 
 local function load_capacity_cache()
-  local path = CONFIG.CAPACITY_CACHE_PATH
-  if not fs.exists(path) then return nil end
-  local ok, data = pcall(dofile, path)
-  if not ok or type(data) ~= "table" or data.locked ~= true
-      or type(data.max_output) ~= "number" or data.max_output <= 0 then
-    return nil
-  end
-  -- Invalidate if turbine count changed since the cache was written.
-  -- A different turbine count means a different max_output; re-learning is needed.
-  local current_count = #(config.turbines or {})
-  if type(data.turbine_count) == "number" and data.turbine_count ~= current_count then
-    log("WARN", string.format(
-      "Capacity cache invalidated: turbine_count changed %d→%d, re-learning required",
-      data.turbine_count, current_count))
-    pcall(fs.delete, path)
-    return nil
-  end
-  data.reason = data.reason or "LOADED_FROM_CACHE"
-  return data
+  return capacity_cache.load({
+    path = CONFIG.CAPACITY_CACHE_PATH,
+    turbine_count = #(config.turbines or {}),
+    log = log,
+  })
 end
 -- ---- End capacity cache ----------------------------------------------------
 
@@ -375,11 +351,13 @@ end
 local function get_turbine_target_rpm(turbine_index)
   local base = get_target_rpm()  -- 900 oder expliziter Master-Setpoint
 
-  -- Solange Capacity nicht gelocked: alle Turbinen auf vollen Ziel-RPM.
-  -- (Sicherheitscheck: nach Lock im MASTER-Modus greift die Verteilungslogik)
-  local cap_locked = runtime_ctx.capacity_learning
-    and runtime_ctx.capacity_learning.locked == true
-  if not cap_locked then
+  -- Solange Capacity noch nicht gemessen (ready=false): alle Turbinen auf
+  -- vollen Ziel-RPM (900) — exakt das Verfahren mit dem die Kapazität
+  -- überhaupt erst gemessen werden kann. Sobald eine erste Messung
+  -- vorliegt (ready=true), greift im MASTER-Modus die Lastverteilung.
+  local cap_ready = runtime_ctx.capacity_learning
+    and runtime_ctx.capacity_learning.ready == true
+  if not cap_ready then
     return base
   end
 
@@ -1881,15 +1859,18 @@ local function build_status_payload(status_level)
   }
   local payload = status_snapshot_lib.build_status_payload(ctx_table)
   -- Write back: update_capacity_learning may have mutated ctx_table.capacity_learning
-  local prev_locked = runtime_ctx.capacity_learning
-    and runtime_ctx.capacity_learning.locked == true
+  local prev_max_output = runtime_ctx.capacity_learning
+    and runtime_ctx.capacity_learning.max_output or 0
   runtime_ctx.capacity_learning = ctx_table.capacity_learning
-  -- Persist to disk on the first successful lock.
-  if not prev_locked and runtime_ctx.capacity_learning
-      and runtime_ctx.capacity_learning.locked == true then
+  -- Persist to disk wann immer ein neuer (höherer) Kapazitätswert gemessen
+  -- wurde — nicht mehr nur beim allerersten Lock. Die kontinuierliche
+  -- Messung kann den Wert jederzeit nach oben korrigieren (z.B. mehr
+  -- Turbinen werden später hinzugefügt), der Cache soll das nachziehen.
+  if runtime_ctx.capacity_learning and runtime_ctx.capacity_learning.ready == true
+      and runtime_ctx.capacity_learning.max_output > prev_max_output then
     save_capacity_cache(runtime_ctx.capacity_learning)
     log("INFO", string.format(
-      "Capacity locked and cached: max_output=%.2f path=%s",
+      "Capacity cached: max_output=%.2f path=%s",
       runtime_ctx.capacity_learning.max_output or 0,
       CONFIG.CAPACITY_CACHE_PATH))
   end
