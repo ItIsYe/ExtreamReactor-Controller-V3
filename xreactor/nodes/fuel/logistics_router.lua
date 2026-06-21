@@ -87,14 +87,12 @@ local function read_reactor_fuel(reactor_wrapped)
   if type(amount) == "number" and type(capacity) == "number" then
     return amount, capacity
   end
-  -- Fallback für ER2-Peripherals mit Waste- statt Fuel-API (z.B. wenn ein
-  -- reactor_port versehentlich auf eine Waste-Maschine zeigt). Hinweis: der
-  -- eigentliche Reprocessor-Versorgungsweg läuft seit der Einführung von
-  -- nodes/reprocessor/feed_router.lua NICHT mehr über diesen Router — dort
-  -- gibt es keinen reactor_port und keinen Füllstand-Check (random-Intervall-
-  -- Befüllung ohne Peripheral-Abfrage, siehe feed_router.lua). Dieser
-  -- Fallback ist also nur noch ein generisches Sicherheitsnetz, kein
-  -- aktiv genutzter Reprocessor-Pfad.
+  -- Generisches Sicherheitsnetz: falls ein reactor_port auf ein Peripheral
+  -- mit Waste- statt Fuel-API zeigt. NICHT für den Reprocessor gedacht —
+  -- der hat seit nodes/reprocessor/feed_router.lua einen eigenen Versorgungs-
+  -- weg ohne reactor_port und ohne Füllstand-Check (random-Intervall-
+  -- Befüllung, siehe feed_router.lua). Dieser Router hier wird aktuell
+  -- nur von der Fuel-Node genutzt.
   local waste,     _ = safe_call(reactor_wrapped, "getWaste")
   local max_waste, _ = safe_call(reactor_wrapped, "getMaxWaste")
   if type(waste) == "number" and type(max_waste) == "number" then
