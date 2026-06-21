@@ -303,7 +303,7 @@ local function render_overview(mon, model)
         stable_turbines = stable_turbines + 1
       end
     end
-    write_line(mon, y, string.format("Turbinen  %d/%d aktiv  Ø %s RPM", stable_turbines, #turb_list, fmt_short(snapshot.avg_rpm)), "muted"); y = y + 1
+    write_line(mon, y, string.format("Turbinen  %d/%d aktiv  Avg %s RPM", stable_turbines, #turb_list, fmt_short(snapshot.avg_rpm)), "muted"); y = y + 1
     write_line(mon, y, string.format("Dampf     %s mB/t", fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
     if model.capacity_ready then
       write_line(mon, y, string.format("Kapazitaet %s RF/t  [GELOCKT]", fmt_short(capacity)), "muted"); y = y + 1
@@ -384,7 +384,7 @@ local function render_turbines(mon, model)
   -- ── Sammelzeile für normal laufende Turbinen ────────────────────────────
   if #normal > 0 then
     local avg_rpm = normal_rpm_sum / #normal
-    write_line(mon, y, string.format("%d Turbinen normal  Ø %s RPM  %s RF/t Ø",
+    write_line(mon, y, string.format("%d Turbinen normal  Avg %s RPM  %s RF/t Avg",
       #normal, fmt_short(avg_rpm), fmt_short(normal_energy_sum / #normal)), "OK"); y = y + 1
     if w >= 20 then
       ui.progress(mon, 2, y, math.max(8, w - 3), 1, "OK"); y = y + 1
