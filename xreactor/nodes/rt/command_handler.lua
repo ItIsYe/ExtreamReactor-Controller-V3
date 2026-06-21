@@ -220,9 +220,10 @@ local function make_dispatch()
     -- TEMPORÄR: Remote-Update — siehe core/remote_update.lua. Kann später
     -- wieder entfernt werden, sobald die aktive Entwicklungsphase vorbei ist.
     ["REMOTE_UPDATE"] = function(_, ctx)
-      ctx.log("WARN", "Remote-Update command received, starting installer...")
-      local remote_update = require("core.remote_update")
-      remote_update.run(function(level, text) ctx.log(level, text) end)
+      require("core.remote_update").handle_command({
+        log_prefix = "RT",
+        utils = { log = function(_, text, level) ctx.log(level, text) end },
+      })
       return nil
     end
   }
