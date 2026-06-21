@@ -199,6 +199,17 @@ local function run_master()
       if ok then sent = sent + 1 end
     end
     runtime.log(("Remote-Update Broadcast an %d Node(s) gesendet"):format(sent), "WARN")
+    -- Fix: comms:send_command() legt die Nachricht nur in eine interne Queue,
+    -- der tatsächliche Funk-Versand (modem.transmit) passiert erst beim
+    -- nächsten services:tick() Aufruf. os.sleep() blockiert den gesamten
+    -- Event-Loop und verhindert dass dieser Tick je läuft — die Broadcasts
+    -- waren beim Reboot noch nie wirklich gesendet worden.
+    -- Jetzt: Queue über mehrere echte Ticks aktiv leeren BEVOR geschlafen wird.
+    runtime.log("Versende Broadcast-Queue...", "WARN")
+    for _ = 1, 10 do
+      runtime.refs.services:tick()
+      if os and type(os.sleep) == "function" then os.sleep(0.1) end
+    end
     -- Master aktualisiert sich danach selbst (kurze Verzögerung damit der
     -- Broadcast an alle anderen Nodes garantiert raus ist, bevor der Master
     -- selbst rebootet und damit das Funknetz kurzzeitig verliert).
