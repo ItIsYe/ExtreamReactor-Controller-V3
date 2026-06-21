@@ -145,7 +145,21 @@ function M.new(opts)
     local rt = { rt_nodes = {}, queue = c.sequencer.queue or {}, ramp_profile = c.sequencer.ramp_profile, sequence_state = c.sequencer.state, rt_global_off_hold = overview.rt_global_off_hold, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, unavailable = 0, local_control = 0, master_control = 0, assignment_state = 'UNASSIGNED', assignment_reason = '-', control_source = 'LOCAL', display_mode = 'RT-Fleet aktiv', fleet_summary = '-', queue_summary = '-' }
     local energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = 'OFFLINE', aggregate_percent = 0, mode = '-', energy_summary = 'Energy 0.0% | Stored 0.0/0.0 | In 0.0 Out 0.0 | Mode - | Matrices 0', matrix_count = 0, matrix_sources = 0, support_online = 0, support_stale = 0, matrix_only = false }
 
+    -- Fix: jede Node-Iteration einzeln pcall-geschützt. Vorher: ein Fehler
+    -- bei der Verarbeitung EINER Node (egal ob RT/Energy/Fuel/etc.) crashte
+    -- den ganzen Loop und damit ALLE 3 Models (overview/rt/energy)
+    -- gleichzeitig — auch wenn nur eine einzelne Node kaputte/unerwartete
+    -- Payload-Felder hatte (klassisches Boot-Race-Condition-Szenario, siehe
+    -- v99 build_models_safe()-Fix). Eine komplette Aufteilung in 3 getrennte
+    -- Funktionen würde den gemeinsamen Node-Loop verdreifachen (die 3 Models
+    -- werden bewusst in EINEM Durchlauf gemeinsam befüllt) — das wäre ein
+    -- größerer strukturelles Rewrite. Pro-Node-pcall erreicht das eigentliche
+    -- Ziel (Fehlerisolierung) mit minimalem Risiko: eine kaputte Node wird
+    -- übersprungen und geloggt, alle anderen Nodes tragen weiter normal zu
+    -- allen 3 Models bei.
+    local node_errors = 0
     for _, node in pairs(c.nodes or {}) do
+      local ok_node, node_err = pcall(function()
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or -1)
       local stale = age >= 0 and age > 15
       local freshness_note = stale and 'stale' or 'live'
@@ -243,6 +257,16 @@ function M.new(opts)
       if node.role == c.constants.roles.FUEL_NODE then energy.resources.fuel_total = (energy.resources.fuel_total or 0) + ((node.fuel and node.fuel.amount) or 0); energy.resources.fuel_sources = (energy.resources.fuel_sources or 0) + 1 end
       if node.role == c.constants.roles.WATER_NODE then energy.resources.water_total = (energy.resources.water_total or 0) + ((node.water and node.water.total) or 0) end
       if node.role == c.constants.roles.REPROCESSOR_NODE then energy.resources.reprocessing_state = (node.reprocessor and (node.reprocessor.state or node.reprocessor.mode)) or '-' end
+      end)
+      if not ok_node then
+        node_errors = node_errors + 1
+        if c.log then
+          c.log("build_models: error processing node " .. tostring(node and node.id or "?") .. ": " .. tostring(node_err), "ERROR")
+        end
+      end
+    end
+    if node_errors > 0 then
+      overview.ops_hints[#overview.ops_hints + 1] = string.format("%d Node(s) bei der Modell-Berechnung uebersprungen (siehe Logs)", node_errors)
     end
     if (overview.power_target or 0) <= 0 and (overview.power_actual or 0) > 0 then
       overview.power_target = overview.power_actual * profile_target_factor(overview.active_profile)
