@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 106,
-  manifest_id = "manifest-v106",
+  manifest_version = 104,
+  manifest_id = "manifest-v104",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -35,7 +35,7 @@ return {
   { path = "core/ui.lua", size_bytes = 12875, hash = "2b78f4f8"},
   { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67"},
   { path = "core/utils.lua", size_bytes = 22758, hash = "6b637f02"},
-  { path = "core/remote_update.lua", size_bytes = 4301, hash = "304d52eb"},
+  { path = "core/remote_update.lua", size_bytes = 4869, hash = "3c69de48"},
   { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c"},
   { path = "services/alert_service.lua", size_bytes = 11418, hash = "d04e6700"},
   { path = "services/comms_service.lua", size_bytes = 8562, hash = "4b2957a5"},
@@ -87,7 +87,7 @@ return {
     { path = "core/turbine_ctrl.lua", size_bytes = 2663, hash = "d1b27731", required_for={"RT"}},
     { path = "core/turbine_regulator.lua", size_bytes = 17134, hash = "50ce7402", required_for={"RT"}},
     { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48", required_for={"RT"}},
-    { path = "nodes/rt/command_handler.lua", size_bytes = 11968, hash = "e409ffe8", required_for={"RT"}},
+    { path = "nodes/rt/command_handler.lua", size_bytes = 11948, hash = "96fd3ad6", required_for={"RT"}},
     { path = "nodes/rt/config.lua", size_bytes = 3612, hash = "26aa9cc3", required_for={"RT"}},
     { path = "nodes/rt/config_normalizer.lua", size_bytes = 23318, hash = "b6909930", required_for={"RT"}},
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"}},
@@ -131,7 +131,7 @@ return {
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 3722, hash = "40524d32", required_for={"FUEL"}},
     { path = "nodes/fuel/main.lua", size_bytes = 21208, hash = "f57fd644", required_for={"FUEL"}},
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"}},
-    { path = "nodes/fuel/logistics_router.lua", size_bytes = 17613, hash = "91a95a5d", required_for={"FUEL","REPROCESSING"}},
+    { path = "nodes/fuel/logistics_router.lua", size_bytes = 17457, hash = "abd2252f", required_for={"FUEL","REPROCESSING"}},
     { path = "nodes/fuel/redstone_router.lua", size_bytes = 8006, hash = "b9ce5b6d", required_for={"FUEL","REPROCESSING"}},
     { path = "nodes/fuel/router_ui.lua", size_bytes = 10358, hash = "f0d6523e", required_for={"FUEL","REPROCESSING"}},
     },
