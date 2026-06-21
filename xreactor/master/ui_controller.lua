@@ -305,9 +305,35 @@ function M.new(opts)
     return { overview = overview, rt = rt, energy = energy, resources = {} }
   end
 
+  -- Fix: build_models() lief völlig ungeschützt. Ein Fehler dort (z.B. weil
+  -- eine gerade erst registrierte Node noch unvollständige/ungewöhnlich
+  -- geformte Payload-Felder hat — klassisches Race-Condition-Szenario beim
+  -- Boot, wenn der Master schneller online ist als z.B. eine Energy-Node)
+  -- crashte den GESAMTEN draw()-Aufruf, BEVOR das pcall() in multiview.lua
+  -- greifen konnte (das schützt nur render(), nicht den Model-Aufbau davor).
+  -- Folge: die UI blieb in einem kaputten Zustand hängen, ohne dass die
+  -- bestehende RENDER ERROR/VIEW ERROR Anzeige je zum Zug kam — nur ein
+  -- manueller Reboot half, weil dann genug Zeit für vollständige Node-Daten
+  -- verging. Jetzt: build_models() ist selbst abgesichert; bei Fehlschlag
+  -- werden sichere leere Default-Modelle verwendet und der Fehler geloggt,
+  -- sodass die UI weiterläuft statt hängen zu bleiben.
+  local function build_models_safe()
+    local ok, models = pcall(build_models)
+    if ok and type(models) == "table" then return models end
+    if c.log then
+      c.log("build_models() failed, using safe defaults: " .. tostring(models), "ERROR")
+    end
+    return {
+      overview = { system_status = "WARNING", profile_list = { "BASELOAD", "PEAK", "IDLE" }, nodes = {}, alert_rows = {}, alert_summary = "Modellfehler — siehe Logs", alert_counts = { INFO = 0, WARN = 1, CRITICAL = 0 }, energy_overview = { percent = 0, status = "OFFLINE", trend = "Trend stabil" }, rt_online = 0, power_actual = 0, clock_label = os.date("!%H:%M UTC"), ops_hints = { "Modellaufbau fehlgeschlagen, Daten folgen in Kürze" }, peer_summary = "Peers live=0 stale=0 rt=0 energy-matrix=0 src=0", rt_summary = "RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0", controls_summary = "Profile=- | AUTO=AUS | RT-HOLD=AUS", nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Initialisierung...", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" },
+      rt = { rt_nodes = {}, queue = {}, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, unavailable = 0, local_control = 0, master_control = 0, assignment_state = "UNASSIGNED", assignment_reason = "-", control_source = "LOCAL", display_mode = "RT-Fleet aktiv", fleet_summary = "-", queue_summary = "-" },
+      energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = "OFFLINE", aggregate_percent = 0, mode = "-", energy_summary = "Energy 0.0% | Stored 0.0/0.0 | In 0.0 Out 0.0 | Mode - | Matrices 0", matrix_count = 0, matrix_sources = 0, support_online = 0, support_stale = 0, matrix_only = false },
+      resources = {}
+    }
+  end
+
   local controller = {}
   controller.draw = function()
-      local models = build_models()
+      local models = build_models_safe()
       controller._last_models = models
       local monitors = c.state.monitor_cache.list or {}
       local rendered = c.view_manager:render(monitors, models) or {}
