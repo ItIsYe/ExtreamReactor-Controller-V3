@@ -111,11 +111,19 @@ end
 
 local CAPACITY_LEARNING_TARGET_RPM = 900
 local CAPACITY_LEARNING_TOLERANCE_RPM = 15
+-- Fix: eine einzelne Turbine als Stichprobe für alle 25 hochzurechnen ist
+-- zu ungenau (Dampfverteilung/Position können einzelne Turbinen über- oder
+-- unterdurchschnittlich liefern lassen). Jetzt: mindestens 80% der
+-- Turbinen müssen am Ziel sein, bevor überhaupt eine Messung akzeptiert
+-- wird — Kompromiss zwischen Genauigkeit (Hochrechnung aus wenigen
+-- Ausreißern vermeiden) und Geschwindigkeit (nicht auf 100% warten, falls
+-- einzelne Turbinen mal länger ausfallen).
+local CAPACITY_LEARNING_MIN_FRACTION = 0.8
 
 -- Misst die aktuelle Kapazität aus den Turbinen, die JETZT am Ziel sind.
--- Gibt (output, at_target_count, total_count) zurück. output ist die auf
--- alle Turbinen hochgerechnete Gesamtleistung, oder nil wenn keine einzige
--- Turbine gerade am Ziel ist (dann bleibt der zuletzt bekannte Wert gültig).
+-- Gibt (output, at_target_count, total_count) zurück. output ist nil wenn
+-- nicht mindestens CAPACITY_LEARNING_MIN_FRACTION der Turbinen am Ziel
+-- sind — dann bleibt der zuletzt bekannte Wert gültig (kein Reset).
 local function measure_capacity(turbines)
   local total = type(turbines) == "table" and #turbines or 0
   if total == 0 then return nil, 0, 0 end
@@ -135,9 +143,13 @@ local function measure_capacity(turbines)
     end
   end
 
-  if at_target == 0 then return nil, 0, total end
+  local min_required = math.max(1, math.ceil(total * CAPACITY_LEARNING_MIN_FRACTION))
+  if at_target < min_required then return nil, at_target, total end
 
-  -- Durchschnitt der Turbinen am Ziel, hochgerechnet auf alle Turbinen.
+  -- Mindestens 80% der Turbinen sind tatsächlich am Ziel — Durchschnitt
+  -- dieser breiten Stichprobe auf die Gesamtzahl hochrechnen (für die
+  -- wenigen ggf. noch nicht erfassten Turbinen, z.B. kurzzeitig rotierend
+  -- im Teillast-Slot).
   local output = math.floor((at_target_output / at_target) * total)
   return output, at_target, total
 end
