@@ -11,6 +11,7 @@ end
 
 function M.estimate_base_power(runtime)
   local measured_total = 0
+  local learned_capacity_total = 0
   local rt_count = 0
   local available_count = 0
   local constants = runtime.libs.constants
@@ -20,6 +21,15 @@ function M.estimate_base_power(runtime)
       -- Fix #4: actual_output kanonisch; power_actual + output als Fallback
       local output = number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0)
       measured_total = measured_total + output
+      -- Fix: gelernte Kapazität (vom Capacity-Learning auf der RT-Node)
+      -- separat aufsummieren — DAS ist der realistische Maßstab für eine
+      -- Node die gerade 0 RF/t liefert (z.B. weil sie im letzten SHED-Zyklus
+      -- heruntergefahren wurde), nicht der winzige generische Fallback-Wert.
+      local capacity_ready = (node.rt and node.rt.capacity_ready == true) or node.capacity_ready == true
+      if capacity_ready then
+        local cap = number_or(node.capacity_max, nil) or number_or(node.rt and node.rt.capacity_max, nil)
+        if cap then learned_capacity_total = learned_capacity_total + cap end
+      end
       local status = tostring(node.status or ""):upper()
       if status ~= tostring(constants.status_levels.OFFLINE):upper() then
         available_count = available_count + 1
@@ -27,6 +37,12 @@ function M.estimate_base_power(runtime)
     end
   end
   if measured_total > 0 then return measured_total, "measured" end
+  -- Fix: gelernte Kapazität ist ein deutlich realistischerer Schätzwert als
+  -- der generische capacity-fallback (3000 RF/t Default — vernachlässigbar
+  -- gegenüber realen Reaktor-Kapazitäten im Millionen-Bereich). Verhindert
+  -- den selbstverstärkenden SHED-Loop: Node liefert kurz 0 -> winziges Ziel
+  -- berechnet -> Node als "Überschuss" markiert -> bleibt abgeschaltet.
+  if learned_capacity_total > 0 then return learned_capacity_total, "learned-capacity" end
   if runtime.state.power_target and runtime.state.power_target > 0 then return runtime.state.power_target, "previous-target" end
   local setpoints = runtime.config.rt_setpoints or {}
   local per_node_capacity = math.max(1, number_or(setpoints.power_per_node_capacity, 3000))
