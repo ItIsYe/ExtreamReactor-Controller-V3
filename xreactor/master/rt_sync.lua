@@ -418,6 +418,19 @@ function M.sync_rt_node(ctx, node)
   if not assigned then return end
   local desired = assigned.setpoints
   local trigger = tostring(ctx.trigger or "unknown")
+
+  -- Fix: assignment_state wurde NUR geschrieben, wenn ein neues Funk-Command
+  -- tatsächlich gesendet wurde (siehe send_rt_setpoints -> node.last_setpoints).
+  -- Bei ACK_MATCH/Dedup (der HÄUFIGSTE Fall im Normalbetrieb — kein neues
+  -- Command nötig weil die Node schon den richtigen Wert hat) blieb
+  -- node.assignment_state für die UI dauerhaft leer/UNASSIGNED, obwohl der
+  -- Master intern längst korrekt "active"/ASSIGNED plant. Jetzt: der Plan-
+  -- Wert wird bei JEDEM sync_rt_node()-Lauf in node geschrieben, unabhängig
+  -- vom Dedup-Pfad — Dedup spart nur den Funkversand, nicht die UI-Daten.
+  node.assignment_state = assigned.assignment_state
+  node.assignment_reason = assigned.assignment_reason
+  node.control_source = assigned.mode
+  node.capacity_source = assigned.capacity_source
   if ctx.log then
     ctx.log(("RT plan node=%s trigger=%s state=%s controllable=%s reason=%s assigned=%.2f percent=%.1f capacity=%.2f source=%s mode=%s status=%s"):format(
       tostring(node_id), trigger, tostring(desired.assignment_state), tostring(assigned.controllable), tostring(assigned.assignment_reason), tonumber(desired.power_target) or 0,
