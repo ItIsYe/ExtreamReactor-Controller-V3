@@ -561,9 +561,16 @@ function M.update_status_snapshot(ctx)
   local min_rpm, max_rpm, avg_rpm = M.collect_turbine_rpm_stats(ctx.devices, ctx.read_turbine_rpm, ctx.get_device_caps)
   local turbines, actual_output = M.build_turbine_status_details(ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
   local capacity = ctx.capacity_learning or {}
-  ctx.last_status_snapshot = { ts = os.epoch("utc"), node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id, summary = summary, min_temp = min_temp, max_temp = max_temp, avg_temp = avg_temp, min_rpm = min_rpm, max_rpm = max_rpm, avg_rpm = avg_rpm, steam_amount = ctx.get_available_steam(), target_power = ctx.targets and ctx.targets.power or nil, target_percent = ctx.targets and ctx.targets.power_percent or nil, target_rpm = ctx.targets and ctx.targets.rpm or nil, target_steam = ctx.targets and ctx.targets.steam or nil, actual_output = actual_output, capacity_max = capacity.max_output or (ctx.targets and ctx.targets.capacity_max) or 0, capacity_ready = capacity.locked == true, capacity_source = capacity.reason or (ctx.targets and ctx.targets.capacity_source) or "unknown", capacity_stable_samples  = capacity.stable_samples or 0,
-                capacity_stable_turbines = capacity.stable_turbines_last or 0,
-                capacity_total_turbines  = capacity.total_turbines_last or 0, reactors = M.build_reactor_status_details(ctx.devices, ctx.reactor_adapter, ctx.log_prefix), turbines = turbines }
+  -- Fix: capacity.locked/.stable_samples/.stable_turbines_last/.total_turbines_last
+  -- gab es in der neuen, vereinfachten Learning-Logik (status_snapshot.lua,
+  -- update_capacity_learning) nicht mehr — sie heißen jetzt .ready/.at_target/
+  -- .total_turbines. Diese Stelle hier ist eine ZWEITE, unabhängige Stelle die
+  -- denselben ctx.capacity_learning liest (für die lokale UI-Anzeige auf der
+  -- Node selbst, getrennt vom Status-Payload an den Master) — beide Stellen
+  -- müssen bei jeder Änderung an der Learning-Struktur synchron gehalten werden.
+  ctx.last_status_snapshot = { ts = os.epoch("utc"), node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id, summary = summary, min_temp = min_temp, max_temp = max_temp, avg_temp = avg_temp, min_rpm = min_rpm, max_rpm = max_rpm, avg_rpm = avg_rpm, steam_amount = ctx.get_available_steam(), target_power = ctx.targets and ctx.targets.power or nil, target_percent = ctx.targets and ctx.targets.power_percent or nil, target_rpm = ctx.targets and ctx.targets.rpm or nil, target_steam = ctx.targets and ctx.targets.steam or nil, actual_output = actual_output, capacity_max = capacity.max_output or (ctx.targets and ctx.targets.capacity_max) or 0, capacity_ready = capacity.ready == true, capacity_source = capacity.reason or (ctx.targets and ctx.targets.capacity_source) or "unknown", capacity_stable_samples  = capacity.ready and 1 or 0,
+                capacity_stable_turbines = capacity.at_target or 0,
+                capacity_total_turbines  = capacity.total_turbines or 0, reactors = M.build_reactor_status_details(ctx.devices, ctx.reactor_adapter, ctx.log_prefix), turbines = turbines }
   return ctx.last_status_snapshot
 end
 
