@@ -156,17 +156,53 @@ local function render_compact_header(mon, model, title)
     { "RT " .. tostring(health), health },
     { "M " .. tostring(model.master_state or "--"), master_status(model) },
     { tostring(model.current_state or "-"),
-      ({MASTER="OK", AUTONOM="text", SAFE="ERROR", EMERGENCY="ERROR", LIMITED="WARN", INIT="muted"})[tostring(model.current_state)] or "WARN" },
+      ({MASTER="OK", AUTONOM="text", SAFE="EMERGENCY", EMERGENCY="EMERGENCY", LIMITED="WARNING", INIT="muted"})[tostring(model.current_state)] or "WARNING" },
     { model.capacity_ready and "CAP" or "LEARN", capacity_status(model) },
     -- Assignment-State Badge: nur wenn abweichend von "active"
     (model.assignment_state and model.assignment_state ~= "active" and model.assignment_state ~= "")
-      and { tostring(model.assignment_state):upper(), "WARN" }
+      and { tostring(model.assignment_state):upper(), "WARNING" }
       or nil
   })
   local node_state_str = tostring(model.node_state or "-")
-  local state_color = ({running="OK", startup="LIMITED", shutdown="WARN", limited="WARN"})[node_state_str] or "text"
+  local state_color = ({running="OK", startup="LIMITED", shutdown="WARNING", limited="WARNING"})[node_state_str] or "text"
   write_line(mon, 3, tostring(title) .. " | " .. tostring(model.node_id or "?") .. " | " .. node_state_str, state_color)
   return 4
+end
+
+-- ── Status-Logik: ein eindeutiger Klartext-Status statt OK/WARN/LIMITED-Raten ──
+-- Ersetzt das alte power_state(), das bei target=0 IMMER "LIMITED" zeigte,
+-- egal ob das Absicht war (Standby/Shutdown) oder ein Problem.
+local function rt_status(model)
+  if not model.capacity_ready then
+    local samples = num(model.capacity_stable_samples, 0)
+    return "LERNT EIN", "LIMITED", string.format("Sample %d/3", samples)
+  end
+  local assignment = tostring(model.assignment_state or "")
+  if assignment == "shutdown" then
+    return "STANDBY (Befehl)", "muted", "Master hat Abschaltung angefordert"
+  end
+  if assignment == "shed" then
+    return "FAEHRT RUNTER", "WARNING", "Master reduziert Zuweisung"
+  end
+  if assignment == "startup" then
+    return "FAEHRT HOCH", "LIMITED", "Wird vom Master gestartet"
+  end
+  local target = num(model.target_power, 0)
+  local actual = num(model.snapshot and model.snapshot.snapshot and model.snapshot.snapshot.actual_output, 0)
+  if target <= 0 then
+    return "WARTET AUF AUFTRAG", "muted", "Kein Soll-Wert vom Master"
+  end
+  local ratio = actual / target
+  if ratio >= 0.85 and ratio <= 1.15 then
+    return "LIEFERT NORMAL", "OK", nil
+  end
+  if ratio < 0.5 then
+    return "LIEFERT ZU WENIG", "EMERGENCY", string.format("%.0f%% des Solls", ratio * 100)
+  end
+  if ratio > 1.3 then
+    return "LIEFERT ZU VIEL", "WARNING", string.format("%.0f%% des Solls", ratio * 100)
+  end
+  return "WEICHT AB", "WARNING", string.format("%.0f%% des Solls", ratio * 100)
 end
 
 local function render_overview(mon, model)
@@ -175,131 +211,197 @@ local function render_overview(mon, model)
   local health   = model.health and model.health.status or "OFFLINE"
   local w, h     = clear_and_title(mon, "RT OVERVIEW", health)
   local y        = render_compact_header(mon, model, "Overview")
-  local actual   = num(snapshot.actual_output, 0)
-  local target   = num(model.target_power, num(snapshot.target_power, 0))
-  local p_status, p_pct = power_state(actual, target)
-  local capacity = num(model.capacity_max, 0)
-  local cap_pct  = capacity > 0 and math.min(100, (actual / capacity) * 100) or 0
-  local reactors = count_bound(summary, "reactor")
-  local turbines = count_bound(summary, "turbine")
 
-  -- ── Statuszeilen: volle Breite, wie gehabt ────────────────────────────
-  write_line(mon, y, string.format("Power %s%%  Soll %s  Ist %s", fmt(p_pct, 1), fmt_short(target), fmt_short(actual)), p_status); y = y + 1
-  if w >= 20 then ui.progress(mon, 2, y, math.max(8, w - 3), math.min(100, p_pct) / 100, p_status) end; y = y + 1
-  write_line(mon, y, string.format("Master %s -> %s RF/t", fmt(model.target_percent, 1, "%"), fmt_short(target)), "text"); y = y + 1
-  if model.capacity_ready then
-    write_line(mon, y, string.format("Cap %s lock %.1f%%", fmt_short(capacity), cap_pct), "OK")
-  else
-    write_line(mon, y, string.format("Cap -- learn (S:%d/3)", num(model.capacity_stable_samples, 0)), "WARN")
-  end
-  y = y + 1
-  if not model.capacity_ready and y <= h - 1 then
-    local REQUIRED_SAMPLES = 3
+  local actual    = num(snapshot.actual_output, 0)
+  local target    = num(model.target_power, num(snapshot.target_power, 0))
+  local capacity  = num(model.capacity_max, 0)
+  local cap_pct   = capacity > 0 and math.min(100, (actual / capacity) * 100) or 0
+  local reactors  = count_bound(summary, "reactor")
+  local turbines  = count_bound(summary, "turbine")
+  local turb_list = snapshot.turbines or {}
+
+  -- ── Kernzeile: ein eindeutiger Status, groß und zuerst ──────────────────
+  local status_text, status_key, status_detail = rt_status(model)
+  write_line(mon, y, ">> " .. status_text .. " <<", status_key); y = y + 1
+  if not model.capacity_ready then
+    -- Während Learning: Lernfortschritt statt Soll/Ist zeigen (es gibt
+    -- noch keinen sinnvollen Soll-Wert, solange Capacity nicht feststeht).
     local stable_t = num(model.capacity_stable_turbines, 0)
-    -- total_t: Priorität: capacity_total_turbines → turbines-Liste → configured_turbines
-    local turb_list = (snapshot and snapshot.turbines) or {}
     local total_t  = math.max(1,
       num(model.capacity_total_turbines, 0) > 0 and num(model.capacity_total_turbines, 0)
       or #turb_list > 0 and #turb_list
       or num(model.configured_turbines, 1))
     local samples  = num(model.capacity_stable_samples, 0)
-    local turbine_pct = math.min(1, stable_t / total_t)
-    local sample_pct  = math.min(1, samples / REQUIRED_SAMPLES)
-    local learn_pct   = (turbine_pct * 0.5) + (sample_pct * 0.5)
-    local learn_status = samples >= REQUIRED_SAMPLES and "OK"
-                      or stable_t >= total_t and "LIMITED" or "WARN"
-    write_line(mon, y, string.format("Lrn T:%d/%d S:%d/%d %d%%",
-      stable_t, total_t, samples, REQUIRED_SAMPLES,
-      math.floor(learn_pct * 100)), learn_status); y = y + 1
-    if w >= 20 and y <= h - 1 then
-      ui.progress(mon, 2, y, math.max(8, w - 3), learn_pct, learn_status); y = y + 1
+    write_line(mon, y, string.format("%d von %d Turbinen stabil  (%s)", stable_t, total_t, status_detail or ""), "text"); y = y + 1
+    if w >= 20 then
+      local learn_pct = math.min(1, ((stable_t / total_t) * 0.5) + ((samples / 3) * 0.5))
+      ui.progress(mon, 2, y, math.max(8, w - 3), learn_pct, "LIMITED"); y = y + 1
+    end
+  else
+    write_line(mon, y, string.format("%s / %s RF/t (%.0f%%)", fmt_short(actual), fmt_short(target), target > 0 and (actual / target * 100) or 0), "text"); y = y + 1
+    if w >= 20 then
+      local ratio = target > 0 and math.min(1.5, actual / target) or 0
+      ui.progress(mon, 2, y, math.max(8, w - 3), math.min(1, ratio), status_key); y = y + 1
+    end
+    if status_detail and y <= h - 1 then
+      write_line(mon, y, status_detail, "muted"); y = y + 1
     end
   end
-  local trpm = num(model.target_rpm, 0)
-  local assignment = tostring(model.assignment_state or "")
-  local in_standby = trpm == 0 or assignment == "shutdown" or assignment == "unavailable"
-  if in_standby then
-    local standby_reason = assignment ~= "" and assignment or "standby"
-    write_line(mon, y, string.format("STANDBY (%s)  RPM %s", standby_reason, fmt_short(snapshot.avg_rpm)), "WARN"); y = y + 1
-  else
-    write_line(mon, y, string.format("RPM %s/%s Steam %s", fmt_short(snapshot.avg_rpm), fmt_short(model.target_rpm), fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
-  end
-  write_line(mon, y, string.format("R:%d T:%d Cmd:%s M:%s", reactors, turbines, tostring(model.last_command or "-"), tostring(model.master_age or "-")), "text"); y = y + 1
+  y = y + 1
 
-  -- ── Turbinen: zwei Spalten nebeneinander ──────────────────────────────
-  -- Turbinen-Header und -Zeilen ab y, zwei gleichbreite Spalten.
-  -- Spalte A: x=2, Spalte B: x=2+col_w+1
-  -- ID-Anzeige: laufende Nummer (1..N), nicht der Peripheral-Name
-  local list = snapshot.turbines or {}
-  if #list > 0 then
-    local col_w   = math.floor((w - 3) / 2)
-    local col_b_x = 2 + col_w + 1
-    -- per_col: erste Hälfte (aufgerundet) in Spalte A, Rest in Spalte B
-    local per_col = math.ceil(#list / 2)
+  -- ── Block: Reaktor / Turbinen / Dampf / Kapazität — alles auf einen Blick ──
+  if y <= h - 4 then
+    local reactor_temp = num(snapshot.avg_temp, nil)
+    local rod_pct = nil
+    local first_reactor = snapshot.reactors and snapshot.reactors[1]
+    if first_reactor then rod_pct = num(first_reactor.rods, nil) end
+    if rod_pct then
+      local label = string.format("Reaktor %.0f%% Stab", rod_pct)
+      if reactor_temp then label = label .. "  " .. fmt_short(reactor_temp) .. "C" end
+      write_line(mon, y, label, "muted"); y = y + 1
+      if w >= 20 and y <= h - 1 then
+        ui.progress(mon, 2, y, math.max(8, w - 3), math.max(0, math.min(100, rod_pct)) / 100,
+          (rod_pct >= 80) and "OK" or (rod_pct >= 40 and "LIMITED" or "WARNING")); y = y + 1
+      end
+    elseif reactor_temp then
+      write_line(mon, y, string.format("Reaktor   %sC", fmt_short(reactor_temp)), "muted"); y = y + 1
+    end
 
-    -- Header
-    local hdr = string.format("%-3s %-4s %-4s %-2s", "T", "RPM", "RF/t", "C")
-    ui.text(mon, 2,       y, hdr:sub(1, col_w), colors.get("text"), colors.get("background"))
-    ui.text(mon, col_b_x, y, hdr:sub(1, col_w), colors.get("text"), colors.get("background"))
-    y = y + 1
-
-    for idx, t in ipairs(list) do
-      -- Spalte und Zeile bestimmen
-      local in_col_b = idx > per_col
-      local row      = in_col_b and (idx - per_col) or idx
-      local tx       = in_col_b and col_b_x or 2
-      local ty       = y + row - 1
-      if ty <= h then
-        -- Laufende Nummer statt Peripheral-Name
-        local id_s = tostring(idx)
-        local txt  = string.format("%-3s %-4s %-4s %-2s",
-          id_s, fmt_short(t.rpm), fmt_short(t.energy),
-          t.inductor and "ON" or (in_standby and "SBY" or "OF"))
-        local st = (t.bound == false) and "WARNING"
-                or (t.inductor and "OK"
-                or (in_standby and "muted" or "OFFLINE"))
-        ui.text(mon, tx, ty, txt:sub(1, col_w), colors.get(st), colors.get("background"))
+    local stable_turbines = 0
+    for _, t in ipairs(turb_list) do
+      if t.rpm and num(model.target_rpm, 0) > 0 and math.abs(num(t.rpm, 0) - num(model.target_rpm, 0)) <= math.max(20, num(model.target_rpm, 0) * 0.1) then
+        stable_turbines = stable_turbines + 1
       end
     end
+    write_line(mon, y, string.format("Turbinen  %d/%d aktiv  Ø %s RPM", stable_turbines, #turb_list, fmt_short(snapshot.avg_rpm)), "muted"); y = y + 1
+    write_line(mon, y, string.format("Dampf     %s mB/t", fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
+    if model.capacity_ready then
+      write_line(mon, y, string.format("Kapazitaet %s RF/t  [GELOCKT]", fmt_short(capacity)), "muted"); y = y + 1
+    end
   end
+
+  -- ── Fußzeile: Verbindungsstatus ──────────────────────────────────────────
+  if y <= h - 1 then
+    write_line(mon, h, string.format("Master %s (%s)  Cmd:%s",
+      tostring(model.master_state or "?"), tostring(model.master_age or "-"),
+      tostring(model.last_command or "-")), "muted")
+  end
+end
+
+-- ── Turbinen-Auffälligkeits-Klassifikation ─────────────────────────────────
+local function classify_turbine(t, target_rpm)
+  if t.bound == false then
+    return true, "nicht erreichbar"
+  end
+  local rpm = num(t.rpm, 0)
+  if target_rpm > 0 then
+    local dev = math.abs(rpm - target_rpm) / target_rpm
+    if dev > 0.10 then
+      if rpm < target_rpm * 0.5 then
+        return true, "faehrt hoch"
+      end
+      return true, string.format("%.0f%% Abw.", dev * 100)
+    end
+    if not t.inductor and rpm >= target_rpm * 0.9 then
+      return true, "Coil aus trotz Ziel-RPM"
+    end
+  end
+  return false, nil
 end
 
 local function render_turbines(mon, model)
   local snapshot = monitor_snapshot(model) or {}
   local health = model.health and model.health.status or "OFFLINE"
-  local _, h = clear_and_title(mon, "RT TURBINES", health)
+  local w, h = clear_and_title(mon, "RT TURBINES", health)
   local y = render_compact_header(mon, model, "Turbines")
   local turbines = snapshot.turbines or {}
-  write_line(mon, y, string.format("Total %d  Out %s  AvgRPM %s", #turbines, fmt_short(snapshot.actual_output), fmt_short(snapshot.avg_rpm)), "text"); y = y + 1
-  table_header(mon, y, { "ID", "RPM", "Flow", "RF/t", "C" }, { 8, 7, 7, 8, 4 }); y = y + 1
-  local max_rows = math.max(0, h - y)
-  local shown = math.min(#turbines, max_rows)
-  for i = 1, shown do
-    local t = turbines[i]
-    local status = (t.bound == false) and "WARNING" or "OK"
-    if t.rpm and num(model.target_rpm, 0) > 0 and math.abs(num(t.rpm, 0) - num(model.target_rpm, 0)) > 40 then status = "WARNING" end
-    table_row(mon, y, { tostring(t.id or i), fmt_short(t.rpm), fmt_short(t.flow), fmt_short(t.energy), t.inductor and "ON" or "OFF" }, { 8, 7, 7, 8, 4 }, status, 5)
-    y = y + 1
+  local target_rpm = num(model.target_rpm, 0)
+
+  -- Turbinen in normal/auffällig aufteilen
+  local normal, flagged = {}, {}
+  local normal_rpm_sum, normal_energy_sum = 0, 0
+  for _, t in ipairs(turbines) do
+    local is_flagged, reason = classify_turbine(t, target_rpm)
+    if is_flagged then
+      flagged[#flagged + 1] = { t = t, reason = reason }
+    else
+      normal[#normal + 1] = t
+      normal_rpm_sum = normal_rpm_sum + num(t.rpm, 0)
+      normal_energy_sum = normal_energy_sum + num(t.energy, 0)
+    end
   end
-  if #turbines == 0 then write_line(mon, y, "Keine Turbinen sichtbar", "WARNING")
-  elseif #turbines > shown and y <= h then write_line(mon, y, "... +" .. tostring(#turbines - shown) .. " more", "muted") end
+
+  -- ── Sammelzeile für normal laufende Turbinen ────────────────────────────
+  if #normal > 0 then
+    local avg_rpm = normal_rpm_sum / #normal
+    write_line(mon, y, string.format("%d Turbinen normal  Ø %s RPM  %s RF/t Ø",
+      #normal, fmt_short(avg_rpm), fmt_short(normal_energy_sum / #normal)), "OK"); y = y + 1
+    if w >= 20 then
+      ui.progress(mon, 2, y, math.max(8, w - 3), 1, "OK"); y = y + 1
+    end
+  else
+    write_line(mon, y, "Keine Turbinen laufen normal", "WARNING"); y = y + 1
+  end
+  y = y + 1
+
+  -- ── Auffällige Turbinen — Details, oder zusammengefasst bei vielen ─────
+  if #flagged == 0 then
+    if y <= h - 1 then write_line(mon, y, "Keine Auffaelligkeiten", "OK"); y = y + 1 end
+  else
+    write_line(mon, y, string.format("AUFFAELLIG (%d)", #flagged), "WARNING"); y = y + 1
+    local max_detail_rows = math.max(0, h - y - 1)
+    -- Bei vielen Auffälligkeiten (typ. Startup-Phase): ab Limit nur noch
+    -- zusammengefasst zeigen statt Zeile für Zeile (sonst wieder Listen-Wand).
+    local detail_limit = math.min(#flagged, max_detail_rows, 8)
+    for i = 1, detail_limit do
+      local f = flagged[i]
+      local t = f.t
+      write_line(mon, y, string.format("T%-4s RPM %-5s Coil %-3s  %s -> %s",
+        tostring(t.id or i), fmt_short(t.rpm), t.inductor and "ON" or "OFF",
+        fmt_short(t.energy), f.reason or "?"), "WARNING")
+      y = y + 1
+      if y > h then break end
+    end
+    if #flagged > detail_limit and y <= h then
+      -- Häufigsten Grund unter den verbleibenden ermitteln für eine sinnvolle Zusammenfassung
+      local reason_counts = {}
+      for i = detail_limit + 1, #flagged do
+        local r = flagged[i].reason or "?"
+        reason_counts[r] = (reason_counts[r] or 0) + 1
+      end
+      local top_reason, top_count = "?", 0
+      for r, c in pairs(reason_counts) do if c > top_count then top_reason, top_count = r, c end end
+      write_line(mon, y, string.format("... +%d weitere (meist: %s)", #flagged - detail_limit, top_reason), "muted")
+    end
+  end
 end
 
 local function render_reactors(mon, model)
   local snapshot = monitor_snapshot(model) or {}
   local health = model.health and model.health.status or "OFFLINE"
-  local _, h = clear_and_title(mon, "RT REACTORS", health)
+  local w, h = clear_and_title(mon, "RT REACTORS", health)
   local y = render_compact_header(mon, model, "Reactors")
   local reactors = snapshot.reactors or {}
   write_line(mon, y, string.format("Total %d  AvgT %sC  Steam %s", #reactors, fmt_short(snapshot.avg_temp), fmt_short(snapshot.steam_amount)), "text"); y = y + 1
-  table_header(mon, y, { "ID", "Temp", "Rod", "Act", "Steam" }, { 8, 8, 6, 5, 8 }); y = y + 1
-  local max_rows = math.max(0, h - y)
-  local shown = math.min(#reactors, max_rows)
-  for i = 1, shown do
-    local r = reactors[i]
+  -- Pro Reaktor: Statuszeile + Rod-Balken statt nur Zahl (vorher: reine
+  -- Tabellenspalte "Rod 87" — auf einen Blick schwer einzuordnen ob das
+  -- viel oder wenig ist; der Balken zeigt es sofort visuell).
+  local shown = 0
+  for i, r in ipairs(reactors) do
+    if y > h - 1 then break end
     local status = (r.bound == false) and "WARNING" or (r.active == false and "LIMITED" or "OK")
-    table_row(mon, y, { tostring(r.id or i), fmt_short(r.temperature), fmt_short(r.rods), r.active and "ON" or "OFF", fmt_short(r.steam_production) }, { 8, 8, 6, 5, 8 }, status, 4)
-    y = y + 1
+    write_line(mon, y, string.format("R%-3s %sC  %s  Steam %s",
+      tostring(r.id or i), fmt_short(r.temperature),
+      r.active and "AN" or "AUS", fmt_short(r.steam_production)), status); y = y + 1
+    local rod_pct = num(r.rods, nil)
+    if rod_pct and w >= 20 and y <= h then
+      write_line(mon, y, string.format("  Stab %.0f%%", rod_pct), "muted"); y = y + 1
+      if y <= h then
+        ui.progress(mon, 2, y, math.max(8, w - 3), math.max(0, math.min(100, rod_pct)) / 100,
+          (rod_pct >= 80) and "OK" or (rod_pct >= 40 and "LIMITED" or "WARNING")); y = y + 1
+      end
+    end
+    shown = shown + 1
   end
   if #reactors == 0 then write_line(mon, y, "Keine Reaktoren sichtbar", "WARNING")
   elseif #reactors > shown and y <= h then write_line(mon, y, "... +" .. tostring(#reactors - shown) .. " more", "muted") end
