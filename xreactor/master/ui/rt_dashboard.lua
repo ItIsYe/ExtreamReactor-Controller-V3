@@ -40,6 +40,18 @@ local function rt_setpoints(rt)
   return (rt and (rt.last_setpoints or rt.setpoints or rt.targets)) or {}
 end
 
+-- Fix: "Soll %.1f%% | Ist %.1f%%" formatierte echte RF/t-Leistungswerte
+-- (Millionen-Bereich) faelschlich als Prozentwerte mit %% — sah aus wie
+-- "Soll 374457673.5% | Ist 683435215.9%" statt der korrekten RF/t-Einheit.
+local function fmt_rf(value)
+  local n = tonumber(value)
+  if not n then return "-" end
+  local abs = math.abs(n)
+  if abs >= 1000000 then return string.format("%.1fM", n / 1000000) end
+  if abs >= 1000 then return string.format("%.1fk", n / 1000) end
+  return string.format("%.1f", n)
+end
+
 local function rt_target(rt)
   local sp = rt_setpoints(rt)
   return first_number(rt and rt.target, rt and rt.power_target, sp.power_target, sp.target, sp.output_target, 0)
@@ -128,7 +140,7 @@ local function render_rt_card(mon, x, y, w, rt)
   local target = rt_target(rt)
   local actual = rt_actual(rt)
   widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt_state(rt)), rt.status or "OFFLINE", 9)
-  ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %.1f%% | Ist %.1f%%", target, actual), box.w), colors.get("text"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %s | Ist %s RF/t", fmt_rf(target), fmt_rf(actual)), box.w), colors.get("text"), colors.get("background"))
   ui.text(mon, box.x, box.y + 2, widgets.fit("State: " .. tostring(rt_state(rt)) .. " | Mode: " .. tostring(rt_local_mode(rt)), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 3, widgets.fit(rt_hardware_summary(rt), box.w), colors.get("text"), colors.get("background"))
   ui.text(mon, box.x, box.y + 4, widgets.fit(rt_runtime_summary(rt), box.w), colors.get("text"), colors.get("background"))
