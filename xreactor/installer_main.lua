@@ -428,12 +428,27 @@ local function backup_preserved_files(ctx)
   return backups
 end
 
+-- Fix: ctx.write_file() ruft cleanup_for_write() auf, das bei knappem
+-- Speicher als letzten Ausweg den GESAMTEN INSTALL_ROOT löscht (gedacht für
+-- den Frisch-Install-Fall). Beim Restore der gesicherten Dateien direkt NACH
+-- einer frischen Installation wäre das katastrophal — es würde die gerade
+-- fertig installierten Dateien wieder zerstören. Restore nutzt daher einen
+-- direkten, simplen fs.open()-Schreibvorgang ohne jede Cleanup-Eskalation.
+local function restore_file_direct(path, content)
+  local dir = fs.getDir(path)
+  if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+  local f = fs.open(path, "w")
+  if not f then return false, "open failed" end
+  local ok, err = pcall(function() f.write(content) end)
+  pcall(function() f.close() end)
+  if not ok then return false, tostring(err) end
+  return true
+end
+
 local function restore_preserved_files(ctx, backups)
   for rel, content in pairs(backups) do
     local path = ctx.constants.INSTALL_ROOT .. "/" .. rel
-    local dir = path:match("^(.*)/[^/]+$")
-    if dir and not ctx.fs.exists(dir) then pcall(ctx.fs.makeDir, dir) end
-    local ok, err = pcall(ctx.write_file, path, content)
+    local ok, err = restore_file_direct(path, content)
     if ok then
       ctx.info("Restored " .. rel .. " after reinstall")
     else
