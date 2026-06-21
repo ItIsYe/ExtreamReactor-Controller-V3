@@ -93,7 +93,10 @@ function M.build(ctx)
   end
 
   local function limited_on_tick()
-    ctx.targets.power = ctx.targets.power * 0.5
+    -- Fix #9: ctx.targets.power * 0.5 war ein Bug -- halbierte den Power-Target
+    -- jeden einzelnen Tick (~alle 0.2s), was den Wert innerhalb von Sekunden
+    -- auf null reduziert hätte. Im LIMITED-State laufen Reactor/Turbine normal weiter;
+    -- die Leistungsreduzierung wird vom Master via SET_SETPOINTS gesteuert.
     adjust_reactors()
     adjust_turbines()
     ctx.monitor_master()

@@ -59,38 +59,69 @@ local CONFIG = {
     }
   },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/fuel.log.
-  DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
-}
-
-local CURRENT_VERSION = 2
-
-return {
-  version = CURRENT_VERSION,
-  role = CONFIG.DEFAULT_ROLE,
-  node_id = CONFIG.DEFAULT_NODE_ID,
-  debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
-  reset_log_on_start = CONFIG.DEFAULT_RESET_LOG_ON_START,
-  wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
-  storage_bus = CONFIG.DEFAULT_STORAGE_BUS,
-  target = CONFIG.DEFAULT_TARGET,
-  minimum_reserve = CONFIG.DEFAULT_MINIMUM_RESERVE,
-  heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
-  discovery_interval = CONFIG.DEFAULT_DISCOVERY_INTERVAL,
-  status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
-  channels = {
-    control = CONFIG.DEFAULT_CONTROL_CHANNEL,
-    status = CONFIG.DEFAULT_STATUS_CHANNEL
+  DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
+  -- Logistics routing for the FUEL node.
+  --
+  -- Each reactor has its OWN entry. The FUEL node reads fuel levels DIRECTLY
+  -- from the reactor's ER2 Computer Port via Wired Modem and only exports
+  -- fuel to the reactor that is actually requesting it.
+  --
+  -- Hardware (FUEL computer must have):
+  --   Wired Modem → ER2 Reactor Computer Ports + dedicated inlet transporter/chest
+  --   Wireless Modem → MASTER communication
+  --
+  DEFAULT_LOGISTICS = {
+    enabled            = false,
+    interval           = 5,       -- seconds between supply checks (short for responsiveness)
+    discovery_interval = 60,
+    me_bridge          = "me_bridge",   -- AP 1.21.1+; "meBridge" on older
+    --
+    -- reactors: one entry per reactor.
+    --   reactor_port  = peripheral name of the ER2 Reactor Computer Port (Wired Modem)
+    --   inlet         = where to deliver fuel (transporter or chest — must be dedicated
+    --                   to THIS reactor; no shared pipes for targeted delivery)
+    --   item          = fuel item name
+    --   request_below = fuel ratio below which reactor requests resupply (0.0–1.0)
+    --   fill_amount   = how many items to export per resupply event
+    --   min_in_me     = minimum ME stock to maintain (never export below this)
+    --
+    -- Example (two reactors on Wired Modem network):
+    -- { name          = "Reaktor A",
+    --   reactor_port  = "BigReactors-Reactor_0",
+    --   inlet         = "mekanism:ultimate_logistical_transporter_0",
+    --   item          = "bigreactors:yellorium_ingot",
+    --   request_below = 0.25,
+    --   fill_amount   = 64,
+    --   min_in_me     = 128 },
+    -- { name          = "Reaktor B",
+    --   reactor_port  = "BigReactors-Reactor_1",
+    --   inlet         = "mekanism:ultimate_logistical_transporter_1",
+    --   item          = "bigreactors:yellorium_ingot",
+    --   request_below = 0.25,
+    --   fill_amount   = 64,
+    --   min_in_me     = 128 },
+    reactors           = {},
+    --
+    -- waste: peripheral(s) where reactor waste arrives — CC drains into ME.
+    -- { name = "Reaktor A Waste", outlet = "mekanism:ultimate_logistical_transporter_2" },
+    waste              = {},
+    --
+    -- redstone_routes: map redstone outputs to reactors for pipe valve control.
+    -- Pipe must be configured: "High Redstone = Interrupt" in Mekanism.
+    -- CC sets ALL outputs HIGH (blocked), then opens ONLY the target's output.
+    --
+    -- side: built-in CC side (top/bottom/left/right/front/back)
+    --   OR: integrator output name (if using Redstone Integrator peripheral)
+    -- integrator: Redstone Integrator peripheral name (optional)
+    -- valve_open_ms: how long to keep valve open after export (default 2000ms)
+    --
+    -- { reactor = "RT-1", label = "Reaktor A", side = "right" },
+    -- { reactor = "RT-2", label = "Reaktor B", side = "left"  },
+    -- { reactor = "RT-3", label = "Reaktor C", side = "top",
+    --   integrator = "redstone_integrator_0" },
+    redstone_routes    = {},
+    valve_open_ms      = 2000,
   },
-  comms = {
-    ack_timeout_s = CONFIG.DEFAULT_COMMS_ACK_TIMEOUT,
-    max_retries = CONFIG.DEFAULT_COMMS_MAX_RETRIES,
-    backoff_base_s = CONFIG.DEFAULT_COMMS_BACKOFF_BASE,
-    backoff_cap_s = CONFIG.DEFAULT_COMMS_BACKOFF_CAP,
-    dedupe_ttl_s = CONFIG.DEFAULT_COMMS_DEDUPE_TTL,
-    dedupe_limit = CONFIG.DEFAULT_COMMS_DEDUPE_LIMIT,
-    peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT,
-    queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
-    drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
-  },
-  rails = CONFIG.DEFAULT_RAILS
+  rails     = CONFIG.DEFAULT_RAILS,
+  logistics = CONFIG.DEFAULT_LOGISTICS
 }

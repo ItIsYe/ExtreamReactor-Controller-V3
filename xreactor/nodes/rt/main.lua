@@ -12,13 +12,16 @@ local CONFIG = {
   MIN_FLOW = 0, -- Minimum turbine flow.
   MAX_FLOW = 2000, -- Maximum turbine flow.
   FLOW_STEP = 50, -- Flow adjustment step size.
-  COIL_ENGAGE_RPM = 850, -- RPM at which coils engage.
-  COIL_DISENGAGE_RPM = 750, -- RPM at which coils disengage.
+  COIL_ENGAGE_RPM = 900, -- RPM at which coils engage (at target).
+  COIL_DISENGAGE_RPM = 850, -- RPM at which coils disengage (hysteresis band below target).
   START_FLOW = 0, -- Starting flow value when enabling turbines.
   ROD_TICK = 5.0, -- Control rod adjustment interval (seconds).
   ROD_MIN = 0, -- Minimum control rod insertion.
-  ROD_MAX = 98, -- Maximum control rod insertion.
+  ROD_MAX = 100, -- Maximum control rod insertion.
   INITIAL_ROD_LEVEL = 98, -- Initial rod level on startup.
+                           -- Lower than max so turbines generate enough steam/power
+                           -- for the capacity learning energy > 0 check to pass.
+  CAPACITY_CACHE_PATH = "/xreactor/config/capacity_cache.lua",
   MIN_APPLY_INTERVAL = 1.5, -- Minimum interval between rod applications.
   REACTOR_STEP = 5, -- Reactor rod step adjustment.
   MIN_ACTIVE_RPM = 100, -- Minimum RPM to consider turbine active.
@@ -41,6 +44,21 @@ local binding = require("nodes.rt.binding")
 local discovery_log = require("nodes.rt.discovery_log")
 local rails = require("core.control_rails")
 local ensure_turbine_ctrl = require("core.turbine_ctrl")
+-- Forward declaration so closures defined below (e.g. get_turbine_module)
+-- capture this as an upvalue rather than treating it as a global.
+-- Initialized at the runtime_ctx = { ... } block further below.
+local runtime_ctx
+
+-- Find the module entry for a turbine by its peripheral name.
+local function get_turbine_module(name)
+  for _, module in pairs(runtime_ctx.modules or {}) do
+    if module.type == "turbine" and module.name == name then
+      return module
+    end
+  end
+  return nil
+end
+
 local function get_turbine_ctrl(name)
   local ctrl = ensure_turbine_ctrl(name)
   if type(ctrl.rails) ~= "table" then
@@ -51,16 +69,7 @@ local function get_turbine_ctrl(name)
   end
   return ctrl
 end
-local function turbine_ctrl_store()
-  local global = _G
-  if type(global) ~= "table" then
-    global = _ENV
-  end
-  if type(global) ~= "table" then
-    return {}
-  end
-  return global.turbine_ctrl or {}
-end
+-- turbine_ctrl Store vollständig in core.turbine_ctrl (kein _G mehr).
 local constants = require("shared.constants")
 local colors = require("shared.colors")
 local ui = require("core.ui")
@@ -192,7 +201,7 @@ local devices = {
   last_scan_ts = nil,
   discovery_log_signature = nil
 }
-local runtime_ctx = {
+runtime_ctx = {
   master_alerts = {},
   peripherals = { reactors = {}, turbines = {} },
   targets = { power = 0, steam = 0, rpm = CONFIG.TARGET_RPM, enable_reactors = true, enable_turbines = true },
@@ -213,11 +222,20 @@ local runtime_ctx = {
   last_command = nil,
   last_command_ts = nil,
   warned = {},
-  autonom_state = { reactors = {}, turbines = {} },
+  autonom_state = {
+   reactors = {},
+   turbines = {},
+   pending_rod_direction = nil,
+   -- Turbinen-Rotation: welche Turbine trägt aktuell Teillast (1-basiert, rotiert).
+   partial_turbine_index = 1,
+   partial_turbine_last_rotate = 0
+ },
   autonom_control_logged = false,
   capability_cache = { reactors = {}, turbines = {} },
   reactor_ctrl = {}
 }
+local last_status_snapshot  -- Fix #2: war versehentlich globale Variable
+local warn_once  -- Fix #1: forward declaration (wird vor Definition verwendet)
 local cache
 local build_modules
 local refresh_module_peripherals
@@ -230,6 +248,53 @@ local STATE = {
   MASTER = "MASTER",
   SAFE = "SAFE"
 }
+-- ---- Capacity cache (disk persistence) ------------------------------------
+-- Saves the locked capacity value so reboots don't require re-learning.
+
+local function save_capacity_cache(learning)
+  if type(learning) ~= "table" or not learning.locked then return end
+  local path = CONFIG.CAPACITY_CACHE_PATH
+  local dir  = fs.getDir(path)
+  if dir ~= "" and not fs.exists(dir) then
+    pcall(fs.makeDir, dir)
+  end
+  local ok, f = pcall(fs.open, path, "w")
+  if not ok or not f then return end
+  local turbine_count = #(config.turbines or {})
+  f.writeLine("-- RT capacity cache - auto-generated, do not edit")
+  f.writeLine("return {")
+  f.writeLine(string.format("  locked = true,"))
+  f.writeLine(string.format("  max_output = %s,", tostring(learning.max_output or 0)))
+  f.writeLine(string.format("  stable_samples = %s,", tostring(learning.stable_samples or 0)))
+  f.writeLine(string.format("  turbine_count = %s,", tostring(turbine_count)))
+  f.writeLine(string.format("  reason = %q,", tostring(learning.reason or "LOADED_FROM_CACHE")))
+  f.writeLine("}")
+  pcall(f.close)
+end
+
+local function load_capacity_cache()
+  local path = CONFIG.CAPACITY_CACHE_PATH
+  if not fs.exists(path) then return nil end
+  local ok, data = pcall(dofile, path)
+  if not ok or type(data) ~= "table" or data.locked ~= true
+      or type(data.max_output) ~= "number" or data.max_output <= 0 then
+    return nil
+  end
+  -- Invalidate if turbine count changed since the cache was written.
+  -- A different turbine count means a different max_output; re-learning is needed.
+  local current_count = #(config.turbines or {})
+  if type(data.turbine_count) == "number" and data.turbine_count ~= current_count then
+    log("WARN", string.format(
+      "Capacity cache invalidated: turbine_count changed %d→%d, re-learning required",
+      data.turbine_count, current_count))
+    pcall(fs.delete, path)
+    return nil
+  end
+  data.reason = data.reason or "LOADED_FROM_CACHE"
+  return data
+end
+-- ---- End capacity cache ----------------------------------------------------
+
 local current_state = STATE.INIT
 local node_state_machine
 -- Keep runtime tuning/mode symbols bundled to lower top-level local pressure
@@ -245,11 +310,113 @@ local TURBINE_CONTROL = {
     REGULATE = "REGULATE"
   }
 }
+-- ─────────────────────────────────────────────────────────────────────
+-- POWER CONTROL — automatic mode selection
+-- ─────────────────────────────────────────────────────────────────────
+-- The coil engages at >= COIL_ENGAGE_RPM (900) and disengages at <
+-- COIL_DISENGAGE_RPM (850).  Because a turbine only generates electricity
+-- with the coil engaged, RPM-scaling below 900 produces no usable power:
+-- a turbine spinning at 450 RPM has no coil and generates nothing.
+--
+-- Therefore power reduction ALWAYS uses turbine-count mode:
+--   • Running turbines target COIL_ENGAGE_RPM (900) → coil engages → power
+--   • Stopped turbines target 0                     → coil disengages → no power
+--
+-- RPM-scaling is used ONLY for fine-tuning within the 850–900 RPM
+-- hysteresis band (coil stays engaged, small flow adjustment), i.e. when
+-- the fractional remainder of turbines makes it worthwhile.
+--
+-- Automatic decision per tick, per turbine:
+--   capacity_locked = false  → LEARNING: all turbines at COIL_ENGAGE_RPM
+--   power_percent = 100      → all turbines at COIL_ENGAGE_RPM
+--   power_percent < 100      → turbine-count mode (stable index ordering)
+--     index ≤ active_count   → COIL_ENGAGE_RPM  (running, coil will engage)
+--     index >  active_count  → 0                (stopping, coil will disengage)
+-- ─────────────────────────────────────────────────────────────────────
+
 local function get_target_rpm()
-  if current_state == STATE.MASTER and type(runtime_ctx.targets.rpm) == "number" and runtime_ctx.targets.rpm > 0 then
-    return runtime_ctx.targets.rpm
+  if current_state == STATE.MASTER then
+    local rpm = runtime_ctx.targets.rpm
+    if type(rpm) == "number" and rpm > 0 then return rpm end
   end
   return CONFIG.TARGET_RPM
+end
+
+-- TURBINEN-PLAN MIT GLEICHMÄSSIGER ROTATION
+--
+-- Prinzip: Ein rotation_offset (0..total-1) rotiert alle ROTATE_INTERVAL
+-- Sekunden weiter. Jede physische Turbine bekommt einen virtuellen Slot:
+--   virt_slot = (phys_index - 1 + offset) % total
+-- Virtuelle Slots werden dann zugewiesen:
+--   0..full_count-1       → Vollast (900 RPM)
+--   full_count            → Teillast (anteilige RPM, falls remainder > 0.01)
+--   full_count+1..total-1 → Austrudeln (0 RPM)
+--
+-- Damit rotiert sowohl die Stop-Turbine als auch die Teillast-Turbine
+-- gleichmäßig durch alle physischen Positionen. Jede Turbine trägt
+-- im Laufe der Zeit jede Rolle.
+local ROTATE_INTERVAL = 300  -- 5 Minuten
+
+local function get_rotation_offset()
+  local total = #(config.turbines or {})
+  if total == 0 then return 0 end
+  local now = os.clock()
+  local last = runtime_ctx.autonom_state.partial_turbine_last_rotate or 0
+  if now - last >= ROTATE_INTERVAL then
+    local prev = runtime_ctx.autonom_state.partial_turbine_index or 0
+    runtime_ctx.autonom_state.partial_turbine_index = (prev + 1) % total
+    runtime_ctx.autonom_state.partial_turbine_last_rotate = now
+  end
+  return runtime_ctx.autonom_state.partial_turbine_index or 0
+end
+
+-- get_turbine_target_rpm: Ziel-RPM für eine einzelne Turbine (1-basierter Index).
+-- Funktioniert korrekt für beliebig viele Turbinen (1..N).
+local function get_turbine_target_rpm(turbine_index)
+  local base = get_target_rpm()  -- 900 oder expliziter Master-Setpoint
+
+  -- Solange Capacity nicht gelocked: alle Turbinen auf vollen Ziel-RPM.
+  -- (Sicherheitscheck: nach Lock im MASTER-Modus greift die Verteilungslogik)
+  local cap_locked = runtime_ctx.capacity_learning
+    and runtime_ctx.capacity_learning.locked == true
+  if not cap_locked then
+    return base
+  end
+
+  -- Außerhalb MASTER-Modus: alle Turbinen auf vollen Ziel-RPM.
+  if current_state ~= STATE.MASTER then
+    return base
+  end
+
+  local total = #(config.turbines or {})
+  if total == 0 then return base end
+
+  local pct = 100
+  local p = runtime_ctx.targets.power_percent
+  if type(p) == "number" then
+    pct = math.max(0, math.min(100, p))
+  end
+
+  if pct >= 100 then return base end
+  if pct <= 0   then return 0    end
+
+  local demand     = total * pct / 100
+  local full_count = math.floor(demand)
+  local remainder  = demand - full_count
+  local has_partial = remainder > 0.01 and full_count < total
+  local partial_rpm = has_partial and math.floor(base * remainder + 0.5) or 0
+
+  -- Virtuellen Slot für diese physische Turbine berechnen
+  local offset    = get_rotation_offset()
+  local virt_slot = (turbine_index - 1 + offset) % total  -- 0-basiert
+
+  if virt_slot < full_count then
+    return base         -- Vollast
+  elseif has_partial and virt_slot == full_count then
+    return partial_rpm  -- Teillast
+  else
+    return 0            -- Austrudeln
+  end
 end
 local function clamp_turbine_flow(rate) return turbine_regulator.clamp_flow(rate, CONFIG.MIN_FLOW, CONFIG.MAX_FLOW) end
 local function clamp_rods(level, allow_overmax)
@@ -257,39 +424,20 @@ local function clamp_rods(level, allow_overmax)
   local max_limit = allow_overmax and 100 or CONFIG.ROD_MAX
   return safety.clamp(level, CONFIG.ROD_MIN, max_limit)
 end
+-- Kanonische Rod-Grenzen: ausschließlich rails.reactor_rods.min/.max.
+-- autonom.regulator_min/max_rods werden in config_normalizer auf dieselben Werte synchronisiert.
 local function get_effective_regulator_rod_caps()
-  local autonom = config and config.autonom or {}
   local rod_rails = config and config.rails and config.rails.reactor_rods or {}
-  local autonom_min = type(autonom.regulator_min_rods) == "number" and autonom.regulator_min_rods or nil
-  local autonom_max = type(autonom.regulator_max_rods) == "number" and autonom.regulator_max_rods or nil
-  local rails_min = type(rod_rails.min) == "number" and rod_rails.min or nil
-  local rails_max = type(rod_rails.max) == "number" and rod_rails.max or nil
-  local cfg_min = autonom_min or rails_min or CONFIG.ROD_MIN
-  local cfg_max = autonom_max or rails_max or CONFIG.ROD_MAX
-  if type(autonom_min) == "number" and type(rails_min) == "number" then
-    -- Use the stricter minimum (more inserted rods => less power) when both config paths are present.
-    cfg_min = math.max(autonom_min, rails_min)
-  end
-  if type(autonom_max) == "number" and type(rails_max) == "number" then
-    cfg_max = math.min(autonom_max, rails_max)
-  end
-  cfg_min = safety.clamp(cfg_min, CONFIG.ROD_MIN, CONFIG.ROD_MAX); cfg_max = safety.clamp(cfg_max, CONFIG.ROD_MIN, CONFIG.ROD_MAX)
+  local cfg_min = type(rod_rails.min) == "number" and rod_rails.min or CONFIG.ROD_MIN
+  local cfg_max = type(rod_rails.max) == "number" and rod_rails.max or CONFIG.ROD_MAX
+  cfg_min = safety.clamp(cfg_min, CONFIG.ROD_MIN, CONFIG.ROD_MAX)
+  cfg_max = safety.clamp(cfg_max, CONFIG.ROD_MIN, CONFIG.ROD_MAX)
   if cfg_min > cfg_max then cfg_min, cfg_max = cfg_max, cfg_min end
   return cfg_min, cfg_max
 end
 do
   local cfg_min, cfg_max = get_effective_regulator_rod_caps()
-  local autonom_min = config.autonom and config.autonom.regulator_min_rods
-  local autonom_max = config.autonom and config.autonom.regulator_max_rods
-  local rails_min = config.rails and config.rails.reactor_rods and config.rails.reactor_rods.min
-  local rails_max = config.rails and config.rails.reactor_rods and config.rails.reactor_rods.max
-  log("INFO", "Rod cap config loaded cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max) .. " autonom_min=" .. tostring(autonom_min) .. " autonom_max=" .. tostring(autonom_max) .. " rails_min=" .. tostring(rails_min) .. " rails_max=" .. tostring(rails_max))
-  if type(autonom_min) == "number" and type(rails_min) == "number" and autonom_min ~= rails_min then
-    log("WARN", "ROD_CAP_CONFIG_MIN_MISMATCH autonom_min=" .. tostring(autonom_min) .. " rails_min=" .. tostring(rails_min) .. " effective_min=" .. tostring(cfg_min))
-  end
-  if type(autonom_max) == "number" and type(rails_max) == "number" and autonom_max ~= rails_max then
-    log("WARN", "ROD_CAP_CONFIG_MAX_MISMATCH autonom_max=" .. tostring(autonom_max) .. " rails_max=" .. tostring(rails_max) .. " effective_max=" .. tostring(cfg_max))
-  end
+  log("INFO", "Rod caps: min=" .. tostring(cfg_min) .. "% max=" .. tostring(cfg_max) .. "% (rails.reactor_rods)")
 end
 local function resolve_steam_tank_name()
   if runtime_state.steam_tank_name and peripheral.isPresent(runtime_state.steam_tank_name) then
@@ -490,7 +638,8 @@ local function build_capabilities(name)
     setInductorEngaged = has_method(methods, "setInductorEngaged"),
     setAllControlRodLevels = has_method(methods, "setAllControlRodLevels"),
     setControlRodsLevels = has_method(methods, "setControlRodsLevels"),
-    setControlRodLevel = has_method(methods, "setControlRodLevel")
+    setControlRodLevel = has_method(methods, "setControlRodLevel"),
+    isActivelyCooled = has_method(methods, "isActivelyCooled")
   }
 end
 local function read_turbine_rpm(turbine, caps)
@@ -530,11 +679,11 @@ local function read_turbine_flow(turbine, caps)
   return nil, "FLOW_UNAVAILABLE"
 end
 local function init_turbine_ctrl()
-  local turbine_ctrl = turbine_ctrl_store()
-  for key in pairs(turbine_ctrl) do
-    turbine_ctrl[key] = nil
-  end
-  runtime_ctx.autonom_state.turbines = turbine_ctrl
+  -- Log-State zurücksetzen (Fix #10).
+  flow_apply_helpers.reset_log_state()
+  -- Ctrl-Store vollständig leeren via Modul-Reset (kein _G mehr).
+  ensure_turbine_ctrl.reset()
+  runtime_ctx.autonom_state.turbines = {}
   local turbines = config.turbines or {}
   log("INFO", "Detected " .. tostring(#turbines) .. " turbines")
   if #turbines < 1 then
@@ -683,6 +832,15 @@ local function apply_initial_reactor_rods()
     ctrl.last_applied = nil
     log("INFO", "Reactor " .. name .. " initial rods set to " .. tostring(CONFIG.INITIAL_ROD_LEVEL) .. "%")
   end
+  -- Attempt to load persisted capacity from disk.
+  -- If found, skip re-learning on this boot.
+  local cached = load_capacity_cache()
+  if cached then
+    runtime_ctx.capacity_learning = cached
+    log("INFO", string.format(
+      "Capacity loaded from cache: max_output=%.2f reason=%s",
+      cached.max_output, tostring(cached.reason)))
+  end
   applyReactorRods(CONFIG.INITIAL_ROD_LEVEL, false, "STARTUP_INIT")
 end
 local function read_current_rods()
@@ -825,7 +983,9 @@ local function updateReactorControl()
   controlReactor()
   log_reactor_control_tick()
 end
-local function warn_once(key, message)
+-- Fix #1: warn_once war mit "local function" deklariert, was die forward-decl
+-- oben ignoriert hätte. Jetzt korrekte Zuweisung zur forward-decl.
+warn_once = function(key, message)
   if runtime_ctx.warned[key] then
     return
   end
@@ -861,7 +1021,13 @@ local function read_turbine_inductor_state(turbine, caps)
   end
   return nil, "INDUCTOR_UNAVAILABLE"
 end
-local function update_inductor_for_rpm(name, turbine, caps, rpm)
+-- update_inductor_for_rpm: Coil-Steuerung mit dynamischen Schwellen.
+-- target_rpm bestimmt die Engage/Disengage-Schwellen:
+--   Vollast (target=900):  engage=900, disengage=850  (aus config)
+--   Teillast (target=450): engage=450, disengage=~425 (proportional skaliert)
+--   Stop (target=0):       Coil folgt nur noch Overspeed-Logik in apply_turbine_flow
+-- Bei Overspeed (rpm > target + band) wird der Coil immer eingeklinkt (mitreißen).
+local function update_inductor_for_rpm(name, turbine, caps, rpm, target_rpm)
   local ctrl = get_turbine_ctrl(name)
   local measured_inductor, measured_api = read_turbine_inductor_state(turbine, caps)
   if type(measured_inductor) == "boolean" then
@@ -882,13 +1048,48 @@ local function update_inductor_for_rpm(name, turbine, caps, rpm)
   if cooldown > 0 and now - (state.last_change_ts or 0) < cooldown then
     return true, true
   end
-  local engage_rpm = coil_cfg.engage_rpm or CONFIG.COIL_ENGAGE_RPM
-  local disengage_rpm = coil_cfg.disengage_rpm or CONFIG.COIL_DISENGAGE_RPM
-  if smoothed_rpm and smoothed_rpm >= engage_rpm and not engaged then
-    engaged = true
-  elseif (not smoothed_rpm or smoothed_rpm <= disengage_rpm) and engaged then
-    engaged = false
+
+  -- Basis-Schwellen aus Config (gelten für Vollast = TARGET_RPM)
+  local base_engage    = coil_cfg.engage_rpm    or CONFIG.COIL_ENGAGE_RPM     -- 900
+  local base_disengage = coil_cfg.disengage_rpm or CONFIG.COIL_DISENGAGE_RPM  -- 850
+  local base_target    = CONFIG.TARGET_RPM  -- 900
+
+  -- Dynamische Schwellen: proportional zur Ziel-RPM skalieren.
+  -- Bei target=0 (Stop): Coil-Normalbetrieb deaktiviert, nur Overspeed greift.
+  local engage_rpm, disengage_rpm
+  if type(target_rpm) == "number" and target_rpm > 0 and base_target > 0 then
+    local scale = target_rpm / base_target
+    engage_rpm    = math.floor(base_engage    * scale + 0.5)
+    disengage_rpm = math.floor(base_disengage * scale + 0.5)
+  elseif type(target_rpm) == "number" and target_rpm <= 0 then
+    -- Stop-Modus: Coil soll austrudeln — nur noch ausklinken wenn unter Disengage
+    engage_rpm    = base_engage     -- wird nie erreicht da flow=0
+    disengage_rpm = base_disengage
+  else
+    engage_rpm    = base_engage
+    disengage_rpm = base_disengage
   end
+
+  -- Overspeed-Schutz: immer einklinken wenn RPM zu hoch
+  -- (wird zusätzlich von enforce_overspeed_brake_coil in apply_turbine_flow gehandhabt)
+  local overspeed_band = coil_cfg.overspeed_band or 20
+  local is_overspeed = type(smoothed_rpm) == "number"
+    and type(target_rpm) == "number"
+    and target_rpm > 0
+    and smoothed_rpm > (target_rpm + overspeed_band)
+  if is_overspeed and not engaged then
+    engaged = true
+    log("INFO", ("Turbine coil name=%s engaged=true reason=OVERSPEED_BRAKE_NORMAL rpm=%s target=%s"):format(
+      tostring(name), tostring(rpm), tostring(target_rpm)))
+  elseif not is_overspeed then
+    -- Normale Hysterese-Logik
+    if smoothed_rpm and smoothed_rpm >= engage_rpm and not engaged then
+      engaged = true
+    elseif (not smoothed_rpm or smoothed_rpm <= disengage_rpm) and engaged then
+      engaged = false
+    end
+  end
+
   if engaged == ctrl.inductor_engaged then
     return true, true, measured_api
   end
@@ -900,16 +1101,13 @@ local function update_inductor_for_rpm(name, turbine, caps, rpm)
   state.last_change_ts = now
   local ok, applied = pcall(setInductor, turbine, caps, engaged)
   if ok and applied then
-    local reason = "TARGET_TRACKING"
-    if ctrl.mode == "OVERSPEED_BRAKE" then
-      reason = "OVERSPEED_BRAKE"
-    end
+    local reason = is_overspeed and "OVERSPEED_BRAKE" or "TARGET_TRACKING"
+    if ctrl.mode == "OVERSPEED_BRAKE" then reason = "OVERSPEED_BRAKE" end
     ctrl.last_coil_reason = reason
-    log("INFO", ("Turbine coil name=%s engaged=%s reason=%s rpm=%s"):format(
-      tostring(name),
-      tostring(engaged),
-      tostring(reason),
-      tostring(rpm)
+    log("INFO", ("Turbine coil name=%s engaged=%s reason=%s rpm=%s target_rpm=%s engage_thr=%s disengage_thr=%s"):format(
+      tostring(name), tostring(engaged), tostring(reason),
+      tostring(rpm), tostring(target_rpm),
+      tostring(engage_rpm), tostring(disengage_rpm)
     ))
   end
   return ok, applied, measured_api
@@ -1392,7 +1590,10 @@ local set_reactors_active
 local set_turbines_active
 local apply_safe_controls
 local function updateControl()
-  if current_state ~= STATE.AUTONOM and current_state ~= STATE.MASTER then
+  -- No state guard: turbine flow regulation always runs whenever the node
+  -- is not in INIT. Every spinning turbine must be individually regulated
+  -- regardless of operating mode, master assignment, or learning phase.
+  if current_state == STATE.INIT then
     return
   end
   for _, name in ipairs(config.reactors or {}) do
@@ -1421,6 +1622,7 @@ local function updateControl()
     end
   end
   local target_rpm = get_target_rpm()
+  local turbine_index = 0  -- 1-based index in config.turbines for count-mode ordering
   local eval_total, eval_decision, eval_skipped = 0, 0, 0
   local skip_reasons = {}
   local function track_skip(reason)
@@ -1430,6 +1632,7 @@ local function updateControl()
   end
   for _, name in ipairs(config.turbines or {}) do
     local ctrl = get_turbine_ctrl(name)
+    turbine_index = turbine_index + 1
     eval_total = eval_total + 1
     local ok, turbine = pcall(peripheral.wrap, name)
     if not ok or not turbine then
@@ -1464,12 +1667,20 @@ local function updateControl()
         rpm = value
       end
     end
-    local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm)
+    -- Ziel-RPM für diese Turbine bestimmen (vor Inductor-Update, damit
+    -- Coil-Schwellen korrekt zur Ziel-RPM skaliert werden).
+    local effective_target = get_turbine_target_rpm(turbine_index)
+    -- Coil-Steuerung: target_rpm übergeben damit Schwellen proportional skalieren.
+    local ok_inductor, inductor_result = update_inductor_for_rpm(name, turbine, caps, rpm, effective_target)
     if not ok_inductor then
       warn_once("turbine_inductor:" .. name, "Turbine inductor update failed for " .. name .. ": " .. tostring(inductor_result))
       track_skip("INDUCTOR_UPDATE_FAILED_NONFATAL")
     end
-    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, target_rpm)
+    -- Flow-Regelung läuft für jede Turbine jeden Tick:
+    --   Vollast:   target_rpm = 900 → flow geregelt auf 900rpm
+    --   Teillast:  target_rpm = z.B. 450 → flow geregelt auf 450rpm, Coil skaliert
+    --   Stop:      target_rpm = 0 → flow=0, Turbine trudelt aus
+    local set_ok, result, _, apply_reason = apply_turbine_flow(name, turbine, caps, rpm, effective_target)
     if not set_ok then
       warn_once("turbine_flow:" .. name, "Turbine flow update failed for " .. name .. ": " .. tostring(result) .. " reason=" .. tostring(apply_reason))
       track_skip(apply_reason or "FLOW_SET_CALL_FAILED")
@@ -1646,7 +1857,11 @@ local function add_alarm(sender, severity, message)
 end
 
 local function build_status_payload(status_level)
-  return status_snapshot_lib.build_status_payload({
+  -- Pass runtime_ctx.capacity_learning into the ctx so update_capacity_learning
+  -- reads and updates the PERSISTENT learning state, not an ephemeral copy.
+  -- The result is written back to runtime_ctx.capacity_learning so the
+  -- capacity_locked check in the AUTONOM/MASTER control loop sees live data.
+  local ctx_table = {
     status_level = status_level,
     node_state_machine = node_state_machine,
     current_state = current_state,
@@ -1660,8 +1875,25 @@ local function build_status_payload(status_level)
     startup_queue = runtime_ctx.startup_queue,
     turbine_adapter = adapters.turbine,
     reactor_adapter = adapters.reactor,
-    log_prefix = CONFIG.LOG_PREFIX
-  })
+    log_prefix = CONFIG.LOG_PREFIX,
+    capacity_learning = runtime_ctx.capacity_learning,  -- persistent state in
+    log = log,
+  }
+  local payload = status_snapshot_lib.build_status_payload(ctx_table)
+  -- Write back: update_capacity_learning may have mutated ctx_table.capacity_learning
+  local prev_locked = runtime_ctx.capacity_learning
+    and runtime_ctx.capacity_learning.locked == true
+  runtime_ctx.capacity_learning = ctx_table.capacity_learning
+  -- Persist to disk on the first successful lock.
+  if not prev_locked and runtime_ctx.capacity_learning
+      and runtime_ctx.capacity_learning.locked == true then
+    save_capacity_cache(runtime_ctx.capacity_learning)
+    log("INFO", string.format(
+      "Capacity locked and cached: max_output=%.2f path=%s",
+      runtime_ctx.capacity_learning.max_output or 0,
+      CONFIG.CAPACITY_CACHE_PATH))
+  end
+  return payload
 end
 
 local function broadcast_status(status_level)
@@ -1705,7 +1937,7 @@ local REQUIRED_LIFECYCLE_CTX_FUNCTIONS = {
   "applyReactorRods",
   "ensure_reactor_ctrl",
   "update_turbine_flow_state",
-  "update_inductor_for_rpm",
+  "update_inductor_for_rpm",  -- signature: (name, turbine, caps, rpm, target_rpm)
   "setState",
   "warn_once",
   "warn_unsupported",
@@ -1827,7 +2059,9 @@ local function update_status_snapshot()
     log_prefix = "RT",
     get_device_caps = get_device_caps,
     get_available_steam = get_available_steam,
-    last_status_snapshot = last_status_snapshot
+    last_status_snapshot = last_status_snapshot,
+    -- Fix: capacity_learning übergeben damit UI-Snapshot T/S korrekt anzeigt
+    capacity_learning = runtime_ctx.capacity_learning
   })
   return last_status_snapshot
 end
@@ -1838,6 +2072,14 @@ local function init_monitor()
   runtime_ctx.monitor_name = runtime_ctx.monitor and monitor_name_or_err or nil
   if not runtime_ctx.monitor then
     log(CONFIG.LOG_LEVEL.WARN, "Monitor UI disabled: " .. tostring(monitor_name_or_err or "no configured monitor available"))
+    -- Fallback: render to the computer's own terminal so the Diagnostics page
+    -- (including log mode buttons) is visible on the PC console.
+    if term and type(term.current) == "function" then
+      runtime_ctx.monitor = term.current()
+      runtime_ctx.monitor_name = "term"
+      runtime_ctx.monitor_is_term = true
+      log(CONFIG.LOG_LEVEL.INFO, "Monitor UI: falling back to local terminal")
+    end
   elseif monitor_name_or_err then
     log(CONFIG.LOG_LEVEL.INFO, "Monitor UI initialized on " .. tostring(monitor_name_or_err))
   end
@@ -1876,6 +2118,8 @@ local function reset_startup_watchdog()
 end
 
 local function handle_startup_timeout()
+  -- R2/R3: Setter übergeben damit startup_diagnostics sauber über die Abstraktion
+  -- schreibt. Direkte Mutation von runtime_ctx danach entfernt (war redundant + inkonsistent).
   startup_diagnostics.handle_startup_timeout({
     startup_watchdog_tripped = runtime_ctx.startup_watchdog_tripped,
     startup_started_ms = runtime_ctx.startup_started_ms,
@@ -1889,11 +2133,12 @@ local function handle_startup_timeout()
     update_status_snapshot = update_status_snapshot,
     broadcast_status = broadcast_status,
     active_startup = runtime_ctx.active_startup,
-    startup_queue = runtime_ctx.startup_queue
+    startup_queue = runtime_ctx.startup_queue,
+    set_active_startup = function(value) runtime_ctx.active_startup = value end,
+    set_startup_queue  = function(value) runtime_ctx.startup_queue = value end
   })
   runtime_ctx.startup_watchdog_tripped = true
-  runtime_ctx.active_startup = nil
-  runtime_ctx.startup_queue = {}
+  -- active_startup und startup_queue werden jetzt über Setter in startup_diagnostics gesetzt
 end
 local states
 
@@ -1942,6 +2187,10 @@ local function build_state_context()
 end
 
 local function build_command_context()
+  -- NOTE: capacity_learning must be a live getter, not a static snapshot.
+  -- runtime_ctx.capacity_learning starts as nil and gets set by build_status_payload.
+  -- command_handler.new() captures this ctx once at startup; using a getter
+  -- ensures the command handler always sees the current learning state.
   return {
     protocol = protocol,
     constants = constants,
@@ -1958,7 +2207,9 @@ local function build_command_context()
     get_current_state = function() return current_state end,
     get_states = function() return states or {} end,
     set_last_command = function(value) runtime_ctx.last_command = value end,
-    set_last_command_ts = function(value) runtime_ctx.last_command_ts = value end
+    set_last_command_ts = function(value) runtime_ctx.last_command_ts = value end,
+    -- Live getter: capacity_learning is populated after the first status tick.
+    get_capacity_learning = function() return runtime_ctx.capacity_learning end,
   }
 end
 local handle_command
@@ -1980,7 +2231,6 @@ local function control_tick()
     node_state_machine:transition(constants.node_states.EMERGENCY)
   end
   node_state_machine:tick()
-  update_monitor()
   update_status_snapshot()
 end
 local function init()
@@ -2070,6 +2320,9 @@ end
 
 local function main_loop()
   log("INFO", "Entering event loop")
+  -- Separate monitor timer so UI updates run even when CONTROL tick is
+  -- retrying (5s retry delay would freeze the display otherwise).
+  local monitor_timer = os.startTimer(0.5)
   while true do
   local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
   while true do
@@ -2081,7 +2334,11 @@ local function main_loop()
       comms:handle_event(event)
     elseif event[1] == "timer" and event[2] == timer then
       break
-    elseif event[1] == "monitor_touch" or event[1] == "key" then
+    elseif event[1] == "timer" and event[2] == monitor_timer then
+      -- Independent monitor refresh: runs ~every 0.5s regardless of CONTROL state
+      update_monitor()
+      monitor_timer = os.startTimer(0.5)
+    elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key" then
       monitor_ui.handle_input(event)
     end
   end

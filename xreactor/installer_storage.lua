@@ -79,9 +79,13 @@ function M.cleanup_stage_and_logs(ctx, opts)
   opts = opts or {}
   local reclaimed = { stage = 0, backup = 0, logs = 0, rotated = 0, temp = 0 }
   if ctx.fs.exists(ctx.constants.STAGE_ROOT) then
-    reclaimed.stage = M.measure_tree_size(ctx.fs, ctx.constants.STAGE_ROOT)
-    ctx.info("Cleaning stale stage directory")
-    ctx.fs.delete(ctx.constants.STAGE_ROOT)
+    if opts.keep_stage then
+      ctx.info("Keeping active stage directory during cleanup")
+    else
+      reclaimed.stage = M.measure_tree_size(ctx.fs, ctx.constants.STAGE_ROOT)
+      ctx.info("Cleaning stale stage directory")
+      ctx.fs.delete(ctx.constants.STAGE_ROOT)
+    end
   end
   if opts.cleanup_backup and ctx.fs.exists(ctx.constants.BACKUP_ROOT) then
     reclaimed.backup = M.measure_tree_size(ctx.fs, ctx.constants.BACKUP_ROOT)

@@ -9,16 +9,10 @@ local function sanitize_number(value, fallback)
   return fallback
 end
 
+-- should_regulate_module_state kept for backwards-compat but no longer used
+-- by the main turbine regulation loop. Flow control always runs; the loop
+-- adjusts target_rpm per state (OFF/ERROR→0, STARTING/ON→normal target).
 function regulator.should_regulate_module_state(module_state)
-  if module_state == "ERROR" then
-    return false, "STATE_ERROR"
-  end
-  if module_state == "STARTING" then
-    return false, "STATE_STARTING"
-  end
-  if module_state == "OFF" then
-    return false, "STATE_OFF"
-  end
   return true, "STATE_OK"
 end
 
@@ -388,6 +382,14 @@ function regulator.overspeed_brake_state(input)
   local overspeed_rpm = math.max(rpm, live_rpm)
   if overspeed_rpm < 0 then
     return { active = false, reason = "RPM_UNAVAILABLE", flow = requested, engage_coil = false }
+  end
+  -- When target_rpm = 0 (turbine should stop), do NOT activate overspeed brake.
+  -- With target=0, threshold = 0+band = ~20 RPM, so ANY spinning turbine would
+  -- permanently enter overspeed brake mode and get stuck (repeat_count=1490+).
+  -- For stop commands: simply set flow=0 and let the turbine decelerate naturally;
+  -- the coil follows normal RPM thresholds (engage>=900, disengage<850).
+  if target <= 0 then
+    return { active = false, reason = "TARGET_ZERO_NO_BRAKE", flow = 0, engage_coil = false }
   end
   if overspeed_rpm <= (target + band) then
     return { active = false, reason = "NOT_OVERSPEED", flow = requested, engage_coil = false }

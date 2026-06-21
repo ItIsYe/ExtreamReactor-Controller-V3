@@ -67,8 +67,9 @@ function M.handle_startup_timeout(ctx)
       ctx.node_state_machine:transition(ctx.constants.node_states.LIMITED)
     end
   end
-  ctx.active_startup = nil
-  ctx.startup_queue = {}
+  -- R2: Setter werden von main.lua immer übergeben (kein Fallback mehr nötig).
+  ctx.set_active_startup(nil)
+  ctx.set_startup_queue({})
   return true
 end
 

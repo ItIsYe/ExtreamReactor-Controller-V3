@@ -6,7 +6,9 @@ constants.roles = {
   ENERGY_NODE = "ENERGY-NODE",
   FUEL_NODE = "FUEL-NODE",
   WATER_NODE = "WATER-NODE",
-  REPROCESSOR_NODE = "REPROCESSOR-NODE"
+  REPROCESSOR_NODE = "REPROCESSOR-NODE",
+  LOG = "LOG",
+  LOG_COLLECTOR = "LOG_COLLECTOR"
 }
 
 constants.proto_ver = { major = 1, minor = 0 }
@@ -18,6 +20,7 @@ constants.message_types = {
   STATUS = "STATUS",
   COMMAND = "COMMAND",
   ALERT = "ALERT",
+  ALERT_SUMMARY = "ALERT_SUMMARY",
   ACK = "ACK",
   ACK_DELIVERED = "ACK_DELIVERED",
   ACK_APPLIED = "ACK_APPLIED",
@@ -25,13 +28,17 @@ constants.message_types = {
 }
 
 constants.node_states = {
-  OFF = "OFF",
-  STARTUP = "STARTUP",
-  RUNNING = "RUNNING",
-  LIMITED = "LIMITED",
-  AUTONOM = "AUTONOM",
-  MANUAL = "MANUAL",
-  EMERGENCY = "EMERGENCY"
+  OFF       = "OFF",
+  STARTUP   = "STARTUP",
+  RUNNING   = "RUNNING",
+  LIMITED   = "LIMITED",
+  AUTONOM   = "AUTONOM",
+  MANUAL    = "MANUAL",
+  EMERGENCY = "EMERGENCY",
+  -- Fix I1: SAFE fehlte — RT-Node kennt STATE.SAFE = "SAFE"
+  -- Ohne diesen Eintrag konnte Master SAFE-Nodes nie erkennen
+  -- (Sequencer, rt_sync mode_sync_action, is_startable)
+  SAFE      = "SAFE"
 }
 
 constants.status_levels = {
@@ -55,12 +62,15 @@ constants.command_targets = {
   REQUEST_STATUS = "REQUEST_STATUS",
   SET_RESERVE = "SET_RESERVE",
   REQUEST_STARTUP_MODULE = "REQUEST_STARTUP_MODULE",
-  REQUEST_SHUTDOWN_MODULE = "REQUEST_SHUTDOWN_MODULE"
+  REQUEST_SHUTDOWN_MODULE = "REQUEST_SHUTDOWN_MODULE",
+  -- TEMPORÄR: Remote-Update über alle Nodes, siehe core/remote_update.lua.
+  REMOTE_UPDATE = "REMOTE_UPDATE"
 }
 
 constants.channels = {
   CONTROL = 6500,
-  STATUS = 6501
+  STATUS = 6501,
+  LOG = 6502
 }
 
 return constants

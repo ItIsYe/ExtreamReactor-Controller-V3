@@ -27,6 +27,17 @@ local function safe_size(mon)
   return w, h
 end
 
+local function unpack_input_args(monitor_name, x, y)
+  if type(monitor_name) == "table" then
+    local event = monitor_name
+    if event[1] == "monitor_touch" then
+      return event[2], event[3], event[4], event[1]
+    end
+    return nil, nil, nil, tostring(event[1] or "unknown")
+  end
+  return monitor_name, x, y, "direct"
+end
+
 function M.new(opts)
   local self = {
     views = opts.views or {},
@@ -89,20 +100,30 @@ function M:render(monitors, data_map)
 end
 
 function M:handle_input(monitor_name, x, y)
+  local input_kind
+  monitor_name, x, y, input_kind = unpack_input_args(monitor_name, x, y)
+  if not monitor_name then
+    self.last_input = { monitor = "-", x = x, y = y, view = "-", input = input_kind, hit = nil, dispatched = false, handled = false, ignored = true }
+    return
+  end
+
   local session = self.sessions:get_session_by_name(monitor_name)
-  if not session then return end
+  if not session then
+    self.last_input = { monitor = monitor_name, x = x, y = y, view = "-", input = input_kind, hit = nil, dispatched = false, handled = false, missing_session = true }
+    return
+  end
 
   local view_key = self.sessions:resolve_view_key(session)
   local view = self.views[view_key]
   if not (view and view.hit_test and self.on_action) then
-    local payload = { monitor = session.name, x = x, y = y, view = view_key, hit = nil, dispatched = false, handled = false }
+    local payload = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = nil, dispatched = false, handled = false }
     self.last_input = payload
     self.sessions:note_input(session, payload)
     return
   end
 
   local ok, hit = pcall(view.hit_test, session.mon, x, y)
-  local payload = { monitor = session.name, x = x, y = y, view = view_key, hit = ok and hit or nil, dispatched = false, handled = false }
+  local payload = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = ok and hit or nil, dispatched = false, handled = false }
 
   if not ok or type(hit) ~= "table" or not hit.type then
     payload.clears_hitboxes = true

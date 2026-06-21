@@ -2,6 +2,18 @@ local M = {}
 
 local TURBINE_LOG_STATE = {}
 
+-- Fix #10: Erlaubt explizites Zurücksetzen des Log-States (z.B. bei Node-Neustart),
+-- damit Logs nach einem Restart nicht fälschlicherweise unterdrückt werden.
+function M.reset_log_state(name)
+  if name then
+    TURBINE_LOG_STATE[name] = nil
+  else
+    for k in pairs(TURBINE_LOG_STATE) do
+      TURBINE_LOG_STATE[k] = nil
+    end
+  end
+end
+
 local function turbine_log_interval(fields)
   local bottleneck = tostring(fields and fields.bottleneck or "NONE")
   if bottleneck == "FLOW_READBACK_LAG" then

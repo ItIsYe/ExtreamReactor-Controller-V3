@@ -233,11 +233,15 @@ end
 function comms_service:handle_event(event)
   if event[1] == "modem_message" then
     local _, _, _, _, message = table.unpack(event)
+    if utils.handle_remote_log_message and utils.handle_remote_log_message(message) then
+      return true
+    end
     self.comms.receive(message)
   end
 end
 
 function comms_service:tick(now)
+  if utils.flush_remote_logs then utils.flush_remote_logs() end
   self.comms.tick(now)
 end
 

@@ -31,6 +31,18 @@ local telemetry_schema = {
     REPROCESSOR = {
       buffers = "table",
       standby = "boolean"
+    },
+    LOG = {
+      received = "number",
+      written = "number",
+      dropped = "number",
+      log_root = "string"
+    },
+    LOG_COLLECTOR = {
+      received = "number",
+      written = "number",
+      dropped = "number",
+      log_root = "string"
     }
   }
 }

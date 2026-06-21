@@ -58,11 +58,28 @@ local CONFIG = {
       ema_alpha = 0.2
     }
   },
+  -- Cluster-Steuerung: Wasser-Management pro Reaktor-Cluster (je 4 Reaktoren).
+  -- Jeder Cluster hat einen Tank + Redstone-Ausgänge zum Befüllen/Entleeren.
+  -- fill_side:  Redstone-Seite/Integrator-Output zum Aktivieren der Zufuhr-Pumpe
+  -- drain_side: Redstone-Seite/Integrator-Output zum Aktivieren der Abfuhr-Pumpe
+  -- min_volume: Mindest-Volumen → fill_side HIGH wenn darunter
+  -- max_volume: Maximal-Volumen → drain_side HIGH wenn darüber
+  -- integrator: optional, Redstone-Integrator Peripheral-Name
+  DEFAULT_CLUSTERS = {
+    -- Beispiel-Konfiguration für zwei Cluster:
+    -- { name = "Cluster A", tank = "dynamicTank_1",
+    --   min_volume = 100000, max_volume = 180000,
+    --   fill_side = "left", drain_side = "right" },
+    -- { name = "Cluster B", tank = "dynamicTank_2",
+    --   min_volume = 100000, max_volume = 180000,
+    --   fill_side = "top", drain_side = "bottom",
+    --   integrator = "redstone_integrator_0" },
+  },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/water.log.
   DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
 }
 
-local CURRENT_VERSION = 2
+local CURRENT_VERSION = 3
 
 return {
   version = CURRENT_VERSION,
@@ -74,6 +91,7 @@ return {
   loop_tanks = CONFIG.DEFAULT_LOOP_TANKS,
   target_volume = CONFIG.DEFAULT_TARGET_VOLUME,
   balance_log_interval_s = CONFIG.DEFAULT_BALANCE_LOG_INTERVAL,
+  clusters = CONFIG.DEFAULT_CLUSTERS,
   heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
   discovery_interval = CONFIG.DEFAULT_DISCOVERY_INTERVAL,
   status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,

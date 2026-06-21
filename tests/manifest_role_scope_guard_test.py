@@ -24,6 +24,7 @@ ROLE_ENTRYPOINTS = {
     "WATER": XREACTOR_ROOT / "nodes" / "water" / "main.lua",
     "FUEL": XREACTOR_ROOT / "nodes" / "fuel" / "main.lua",
     "REPROCESSING": XREACTOR_ROOT / "nodes" / "reprocessor" / "main.lua",
+    "LOG": XREACTOR_ROOT / "nodes" / "log_collector" / "main.lua",
 }
 
 def parse_required_for(tail: str):
@@ -80,10 +81,26 @@ def collect_requires(lua_file: pathlib.Path):
     content = lua_file.read_text(encoding='utf-8')
     return {module_to_path(m.group(1)) for m in REQUIRE_RE.finditer(content)}
 
+def collect_requires_transitive(entry: pathlib.Path):
+    """BFS over all reachable require() calls from an entry point."""
+    visited, queue = set(), [entry]
+    all_requires = set()
+    while queue:
+        current = queue.pop(0)
+        if current in visited or not current.exists():
+            continue
+        visited.add(current)
+        for mod_path in collect_requires(current):
+            all_requires.add(mod_path)
+            candidate = XREACTOR_ROOT / mod_path
+            if candidate.exists() and candidate not in visited:
+                queue.append(candidate)
+    return all_requires
+
 def expected_roles_from_entrypoints():
     mapping = {path: set() for path in ROLE_CANDIDATES}
     for role, entrypoint in ROLE_ENTRYPOINTS.items():
-        requires = collect_requires(entrypoint)
+        requires = collect_requires_transitive(entrypoint)
         for candidate in ROLE_CANDIDATES:
             if candidate in requires:
                 mapping[candidate].add(role)

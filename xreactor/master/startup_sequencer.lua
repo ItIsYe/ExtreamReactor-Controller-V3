@@ -11,18 +11,27 @@ local states = {
   waiting_stable = "WAITING_STABLE"
 }
 
+-- Fix 2: plan_modules nutzt module.type aus dem Payload (statt fragiles name:find()).
+-- Die RT-Node schickt module.type = "turbine"/"reactor" im Status-Payload mit.
+-- Turbinen zuerst, dann Reaktoren (Turbinen müssen laufen bevor Reaktor hochfährt).
 local function plan_modules(node_id, modules)
-  local steps = {}
+  local turbines = {}
+  local reactors = {}
   for name, mod in pairs(modules or {}) do
-    if name:find("turbine") then
-      table.insert(steps, { node_id = node_id, module_id = name, module_type = "turbine" })
+    local mod_type = type(mod) == "table" and mod.type or nil
+    -- Fallback auf name:find() wenn type fehlt (ältere RT-Node Versionen)
+    if mod_type == "turbine" or (not mod_type and name:find("turbine")) then
+      table.insert(turbines, { node_id = node_id, module_id = name, module_type = "turbine" })
+    elseif mod_type == "reactor" or (not mod_type and name:find("reactor")) then
+      table.insert(reactors, { node_id = node_id, module_id = name, module_type = "reactor" })
     end
   end
-  for name in pairs(modules or {}) do
-    if name:find("reactor") then
-      table.insert(steps, { node_id = node_id, module_id = name, module_type = "reactor" })
-    end
-  end
+  -- Stabile Sortierung damit Reihenfolge deterministisch ist
+  table.sort(turbines, function(a, b) return a.module_id < b.module_id end)
+  table.sort(reactors, function(a, b) return a.module_id < b.module_id end)
+  local steps = {}
+  for _, s in ipairs(turbines) do table.insert(steps, s) end
+  for _, s in ipairs(reactors) do table.insert(steps, s) end
   return steps
 end
 
@@ -94,7 +103,9 @@ local function should_emergency(node, config)
     return true
   end
   local snapshot = node.snapshot or {}
-  if safety.should_scram({ temperature = snapshot.max_temp, max_temperature = 950 }) then
+  -- Fix 4: Temperatur-Schwelle aus config statt hardcodiert 950°C
+  local scram_temp = (config and config.scram_temperature) or 950
+  if safety.should_scram({ temperature = snapshot.max_temp, max_temperature = scram_temp }) then
     return true
   end
   local rpm_limit = config and config.rpm_crit_high or nil
@@ -151,6 +162,11 @@ function sequencer.new(comms, ramp_profile, opts)
 
   function self.tick(nodes)
     if self.state == states.idle and #self.queue > 0 then
+      -- Fix 3: skip_until_ts respektieren (Backoff bei nicht-startbaren Nodes)
+      local front = self.queue[1]
+      if front and front.skip_until_ts and now_ms() < front.skip_until_ts then
+        return
+      end
       if not self.queue[1].module_id then
         self.build_steps(nodes)
         if #self.queue == 0 or not self.queue[1].module_id then return end
@@ -159,8 +175,13 @@ function sequencer.new(comms, ramp_profile, opts)
       local node = nodes and nodes[self.active.node_id]
       local ok, reason = is_startable(node)
       if not ok then
-        utils.log("SEQ", ("Skip startup node=%s reason=%s"):format(tostring(self.active.node_id), tostring(reason)), "WARN")
-        table.insert(self.queue, 1, self.active)
+        -- Fix 3: Backoff-Timestamp setzen damit wir nicht jeden Tick
+        -- dieselbe nicht-startbare Node versuchen (busy-loop + Log-Spam).
+        local retry_entry = self.active
+        retry_entry.skip_until_ts = now_ms() + 5000  -- 5s Backoff
+        utils.log("SEQ", ("Skip startup node=%s reason=%s retry_in=5s"):format(
+          tostring(self.active.node_id), tostring(reason)), "WARN")
+        table.insert(self.queue, 1, retry_entry)
         self.active = nil
         return
       end

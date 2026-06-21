@@ -1,5 +1,26 @@
 local M = {}
 
+-- P3: Plan wird einmal pro Sync-Zyklus gebaut und im runtime.state gecacht.
+-- Alle Nodes bekommen denselben Plan; kein N-facher Rebuild.
+local function get_or_build_plan(runtime)
+  local rt_sync = runtime.libs.rt_sync
+  local now = os.epoch("utc")
+  -- Plan gilt für den aktuellen Tick (max 200ms alt)
+  if runtime.state._setpoint_plan and runtime.state._setpoint_plan_ts
+      and (now - runtime.state._setpoint_plan_ts) < 200 then
+    return runtime.state._setpoint_plan
+  end
+  local plan = rt_sync.build_node_setpoint_plan({
+    config       = runtime.config,
+    nodes        = runtime.state.nodes,
+    power_target = runtime.state.power_target,
+    rt_global_off = runtime.state.rt_global_off_hold
+  })
+  runtime.state._setpoint_plan    = plan
+  runtime.state._setpoint_plan_ts = now
+  return plan
+end
+
 function M.sync_rt_node(runtime, node, reason)
   if not node or node.role ~= runtime.libs.constants.roles.RT_NODE then return end
   local rt_sync = runtime.libs.rt_sync
@@ -14,12 +35,25 @@ function M.sync_rt_node(runtime, node, reason)
     return
   end
 
-  local plan = rt_sync.build_node_setpoint_plan({
-    config = runtime.config,
-    nodes = runtime.state.nodes,
-    power_target = runtime.state.power_target,
-    rt_global_off = runtime.state.rt_global_off_hold
-  })
+  -- P4: Capacity-Learning prüfen — Node lehnt Setpoints ab bis er eingelernt hat.
+  -- Master sendet trotzdem (mit 0%) damit der Node den Lern-Status kennt,
+  -- aber loggt eine INFO-Meldung solange Learning läuft.
+  local rt = node.rt or {}
+  if not (rt.capacity_ready == true or node.capacity_ready == true) then
+    if not node._learning_logged or (now - (node._learning_logged or 0)) > 10000 then
+      node._learning_logged = now
+      runtime.log((
+        "RT node still learning capacity node=%s stable_samples=%s stable_turbines=%s/%s"
+      ):format(
+        tostring(node.id),
+        tostring(rt.capacity_stable_samples or 0),
+        tostring(rt.capacity_stable_turbines or 0),
+        tostring(rt.capacity_total_turbines or 0)
+      ), "INFO")
+    end
+  end
+
+  local plan = get_or_build_plan(runtime)
 
   node.shutdown_workflow = node.shutdown_workflow or {}
   local workflow = node.shutdown_workflow
@@ -177,14 +211,14 @@ function M.sync_rt_node(runtime, node, reason)
   end
 
   rt_sync.sync_rt_node({
-    config = runtime.config,
-    comms = runtime.refs.comms,
-    nodes = runtime.state.nodes,
-    plan = plan,
-    power_target = runtime.state.power_target,
+    config        = runtime.config,
+    comms         = runtime.refs.comms,
+    nodes         = runtime.state.nodes,
+    plan          = plan,  -- P3: gecachter Plan, nicht pro Node neu gebaut
+    power_target  = runtime.state.power_target,
     rt_global_off = runtime.state.rt_global_off_hold,
-    trigger = tostring(reason or "coalesced:unspecified"),
-    log = function(message, level) runtime.log(message, level or "INFO") end
+    trigger       = tostring(reason or "coalesced:unspecified"),
+    log           = function(message, level) runtime.log(message, level or "INFO") end
   }, node)
 end
 

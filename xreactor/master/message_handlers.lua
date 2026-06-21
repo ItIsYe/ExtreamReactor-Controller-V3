@@ -39,6 +39,30 @@ function M.new(opts)
     return out
   end
 
+  -- Fix P4: number_or_nil aus utils, mit Fallback für ältere utils-Versionen
+  local number_or_nil = utils.number_or_nil or function(v)
+    if type(v) == "number" then return v end
+    if type(v) == "string" then local n = tonumber(v); if n then return n end end
+    return nil
+  end
+
+  local function sum_turbine_output(turbines)
+    if type(turbines) ~= "table" then return nil end
+    local total = 0
+    local count = 0
+    for _, turbine in pairs(turbines) do
+      if type(turbine) == "table" then
+        local value = number_or_nil(turbine.energy or turbine.output or turbine.power_actual or turbine.actual_output)
+        if value then
+          total = total + value
+          count = count + 1
+        end
+      end
+    end
+    if count > 0 then return total end
+    return nil
+  end
+
   local function normalize_role(raw)
     if raw == nil then return nil end
     local value = tostring(raw):upper():gsub("_", "-")
@@ -51,14 +75,8 @@ function M.new(opts)
     return raw
   end
 
-  local function payload_looks_rt(payload)
-    if type(payload) ~= "table" then return false end
-    if type(payload.rt) == "table" then return true end
-    if type(payload.turbines) == "table" or type(payload.reactors) == "table" or type(payload.modules) == "table" then return true end
-    if payload.turbine_rpm ~= nil or payload.steam ~= nil or payload.ramp_state ~= nil then return true end
-    if payload.mode ~= nil and (payload.output ~= nil or payload.state ~= nil) and (payload.capabilities ~= nil or payload.bindings ~= nil) then return true end
-    return false
-  end
+  -- Fix P3: payload_looks_rt jetzt in utils zentralisiert
+  local payload_looks_rt = utils.payload_looks_rt
 
   local function infer_message_role(message)
     local payload = message and message.payload or nil
@@ -120,24 +138,39 @@ function M.new(opts)
     return rt_sync.same_setpoints(rt_sync.normalize_setpoints(value), rt_sync.normalize_setpoints(last))
   end
 
+  -- Fix P2: populate_rt_status bereinigt.
+  -- Kanonische Felder: rt.actual_output, rt.power_target, node.actual_output, node.power_target.
+  -- Aliase (output, power_actual, target_output) werden einmalig am Ende gesetzt.
   local function populate_rt_status(node, payload)
     if type(node) ~= "table" or type(payload) ~= "table" then return end
     node.rt = payload.rt or node.rt or {}
     if type(node.rt) ~= "table" then node.rt = {} end
     local rt = node.rt
+
+    -- Kanonische Werte berechnen
+    local actual_output = number_or_nil(payload.actual_output or payload.power_actual)
+      or sum_turbine_output(payload.turbines)
+      or number_or_nil(rt.actual_output)
+    local power_target = number_or_nil(payload.power_target or payload.target_output or payload.output)
+
+    -- rt-Felder: Identität und Modus
     rt.id = rt.id or node.id or payload.id or payload.node_id
     rt.status = payload.status or rt.status or node.status
     rt.state = payload.state or rt.state or node.state
-    rt.node_state = payload.state or rt.node_state
     rt.mode = payload.mode or rt.mode or node.mode
-    rt.local_mode = payload.mode or rt.local_mode or rt.mode
     rt.control_mode = payload.control_mode or rt.control_mode or payload.mode
-    rt.node_mode = payload.state or rt.node_mode or payload.node_state or payload.mode
-    rt.output = payload.output or rt.output
-    rt.actual_output = payload.output or rt.actual_output or rt.output
-    rt.power_actual = payload.output or rt.power_actual
+    -- Fix I3: assignment_state kommt immer vom letzten Payload,
+    -- nicht sticky aus vorherigem Zustand (sonst veraltet er)
+    rt.assignment_state = payload.assignment_state or rt.assignment_state
+    rt.assignment_reason = rt.assignment_reason or payload.assignment_reason or payload.bindings_summary
+    rt.control_source = rt.control_source or payload.control_source
+
+    -- rt-Felder: Leistung (kanonisch)
+    rt.actual_output = actual_output or rt.actual_output or 0
+    rt.power_target = power_target or rt.power_target
+
+    -- rt-Felder: Hardware-Daten
     rt.turbine_rpm = payload.turbine_rpm or rt.turbine_rpm
-    rt.rpm = payload.turbine_rpm or rt.rpm
     rt.steam = payload.steam or rt.steam
     rt.capabilities = payload.capabilities or rt.capabilities
     rt.bindings = payload.bindings or rt.bindings
@@ -148,11 +181,10 @@ function M.new(opts)
     rt.registry = payload.registry or rt.registry
     rt.snapshot = payload.snapshot or rt.snapshot
     rt.ramp_state = payload.ramp_state or rt.ramp_state
-    rt.assignment_state = rt.assignment_state or payload.assignment_state
-    rt.assignment_reason = rt.assignment_reason or payload.assignment_reason or payload.bindings_summary
-    rt.control_source = rt.control_source or payload.control_source
     if type(payload.turbines) == "table" then rt.turbine_count = #payload.turbines end
     if type(payload.reactors) == "table" then rt.reactor_count = #payload.reactors end
+
+    -- Modul-Zähler
     if type(payload.modules) == "table" then
       local total, running, stable, limited, error_count = 0, 0, 0, 0, 0
       for _, module in pairs(payload.modules) do
@@ -169,6 +201,18 @@ function M.new(opts)
       rt.modules_limited = limited
       rt.modules_error = error_count
     end
+
+    -- node-Felder: kanonisch + Aliase einmalig
+    node.actual_output = rt.actual_output
+    node.power_target  = rt.power_target
+    -- Abwärtskompatible Aliase
+    node.output        = node.actual_output
+    node.power_actual  = node.actual_output
+    node.target_output = node.power_target
+    rt.power_actual    = rt.actual_output
+    rt.output          = rt.actual_output
+    rt.target_output   = rt.power_target
+    rt.capacity_max    = number_or_nil(payload.capacity_max) or rt.capacity_max
   end
 
   local function update_node(message)
@@ -196,6 +240,16 @@ function M.new(opts)
       nodes[sender_id] = nil
       nodes[id] = nodes[id] or legacy
       log(("Node identity remapped: %s -> %s"):format(tostring(sender_id), tostring(id)))
+    end
+    -- Detect duplicate node_id: same ID, same role, but different sender (different computer)
+    local existing = nodes[id]
+    if existing and existing.sender_id and sender_id ~= "UNKNOWN"
+        and existing.sender_id ~= sender_id
+        and existing.last_seen and (os.epoch("utc") - existing.last_seen) < 30000 then
+      log(("WARN: Duplicate node_id detected id=%s role=%s existing_sender=%s new_sender=%s -- assign unique node_id in /xreactor/config/node_id.txt"):format(
+        tostring(id), tostring(role_hint or normalize_role(message.role)),
+        tostring(existing.sender_id), tostring(sender_id)
+      ))
     end
     nodes[id] = nodes[id] or { id = id, role = role_hint or normalize_role(message.role), status = constants.status_levels.OFFLINE }
     apply_role_hint(nodes[id], role_hint, "message")
@@ -273,11 +327,7 @@ function M.new(opts)
       nodes[id].registry = message.payload.registry or nodes[id].registry
       nodes[id].last_error = message.payload.last_error or nodes[id].last_error
       nodes[id].last_error_ts = message.payload.last_error_ts or nodes[id].last_error_ts
-      if nodes[id].role == constants.roles.RT_NODE then
-        populate_rt_status(nodes[id], message.payload)
-      else
-        support_status.apply(nodes[id], message.payload, constants)
-      end
+      -- Fix P7: doppelter populate_rt_status Aufruf entfernt (war auch vor health-Block)
       if previous_mode and nodes[id].mode and previous_mode ~= nodes[id].mode then
         log(("Node %s mode: %s"):format(id, tostring(nodes[id].mode)))
       end
@@ -328,8 +378,10 @@ function M.new(opts)
       else
         log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
       end
-    elseif message.type == constants.message_types.ALERT then
-      add_alarm(id, message.payload.severity, message.payload.message)
+    elseif message.type == constants.message_types.ALERT_SUMMARY then
+      -- Alert summary payload can be routed to the alert service in later iterations.
+    else
+      add_alarm(id, "WARN", "Unknown message type " .. tostring(message.type))
     end
   end
 

@@ -36,6 +36,24 @@ function M.handle_common(ctx, msg)
   end
 
   local cmd = msg.cmd
+
+  -- TEMPORÄR: Remote-Update — installiert/aktualisiert die Node per Funk-
+  -- Befehl ohne dass jemand am PC den Installer manuell starten muss.
+  -- Kann später wieder entfernt werden.
+  if cmd == "REMOTE_UPDATE" then
+    if ctx and ctx.comms then
+      ctx.comms:send_ack(msg, true, { updating = true })
+    end
+    if ctx and ctx.utils then
+      ctx.utils.log(ctx.log_prefix or "SUPPORT", "Remote-Update command received, starting installer...", "WARN")
+    end
+    local remote_update = require("core.remote_update")
+    remote_update.run(function(level, text)
+      if ctx and ctx.utils then ctx.utils.log(ctx.log_prefix or "SUPPORT", text, level) end
+    end)
+    return true
+  end
+
   if cmd == "PING" then
     if ctx and ctx.comms then
       ctx.comms:send_ack(msg, true, { pong = true })

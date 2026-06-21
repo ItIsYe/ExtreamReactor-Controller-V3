@@ -31,10 +31,27 @@ local function run_master()
     tostring(release.manifest_version or "unknown")
   ), "INFO")
 
-  local runtime = runtime_context.new_runtime({ trends = trends_lib.new(600) })
+  local runtime = runtime_context.new_runtime({
+    trends = trends_lib.new(600),
+    -- Fix #2: node_offline_purge_after_ms aus config (DEFAULT_NODE_OFFLINE_PURGE_AFTER_S)
+    node_offline_purge_after_ms = math.floor(
+      (tonumber(config.node_offline_purge_after_s) or CONFIG.DEFAULT_NODE_OFFLINE_PURGE_AFTER_S or 120) * 1000
+    )
+  })
   runtime.config = config
   runtime.log = runtime_log
-  runtime.libs = { constants = constants, utils = utils, health = health, ui = ui, profiles = profiles, rt_sync = rt_sync, rt_sync_coalescer = rt_sync_coalescer_lib }
+  -- Fix P1: rt_ops und profile_ops in libs, damit housekeeping.tick() sie findet
+  runtime.libs = {
+    constants        = constants,
+    utils            = utils,
+    health           = health,
+    ui               = ui,
+    profiles         = profiles,
+    rt_sync          = rt_sync,
+    rt_sync_coalescer = rt_sync_coalescer_lib,
+    rt_ops           = rt_ops,
+    profile_ops      = profile_ops
+  }
   local recovery_status = bootstrap.get_recovery_status and bootstrap.get_recovery_status() or nil
 
   local function mark_rt_sync_dirty(node, reason)
@@ -62,8 +79,21 @@ local function run_master()
     update_node = function(message) return runtime.refs.node_message_handler.update_node(message) end,
     sync_rt_node = function(node, reason) rt_ops.sync_rt_node(runtime, node, reason) end,
     build_master_alert_payload = function() return housekeeping.build_master_alert_payload(runtime.refs.alert_service, config) end,
-    housekeeping_tick = function() housekeeping.handle_command_timeouts({ constants = constants, utils = utils, comms = runtime.refs.comms, nodes = runtime.state.nodes, log = runtime.log }); if runtime.refs.sequencer then runtime.refs.sequencer:tick(runtime.state.nodes) end; flush_rt_sync_queue(); rt_ops.check_timeouts(runtime); profile_ops.sample_trends(runtime) end,
-    ui_snapshot = function(event) return { event = event and event[1] or "tick", monitors = runtime.state.monitor_cache.list and #runtime.state.monitor_cache.list or 0, active_view = runtime.refs.view_manager and runtime.refs.view_manager.active_key or "overview", node_count = runtime_context.table_count(runtime.state.nodes), queue_depth = runtime.refs.sequencer and #runtime.refs.sequencer.queue or 0, rt_sync_pending = runtime.refs.rt_sync_coalescer and runtime.refs.rt_sync_coalescer.size() or 0, critical_blink = runtime.state.critical_blink_until, trends = runtime.state.last_trend_sample } end,
+    -- Fix P1/P6: housekeeping_tick jetzt als housekeeping.tick(runtime)
+    housekeeping_tick = function() housekeeping.tick(runtime) end,
+    ui_snapshot = function(event)
+      -- Fix P1: ui_snapshot aus dem Lambda-Knäuel befreit
+      return {
+        event             = event and event[1] or "tick",
+        monitors          = runtime.state.monitor_cache.list and #runtime.state.monitor_cache.list or 0,
+        active_view       = runtime.refs.view_manager and runtime.refs.view_manager.active_key or "overview",
+        node_count        = runtime_context.table_count(runtime.state.nodes),
+        queue_depth       = runtime.refs.sequencer and #runtime.refs.sequencer.queue or 0,
+        rt_sync_pending   = runtime.refs.rt_sync_coalescer and runtime.refs.rt_sync_coalescer.size() or 0,
+        critical_blink    = runtime.state.critical_blink_until,
+        trends            = runtime.state.last_trend_sample
+      }
+    end,
     ui_render = function()
       monitor_ops.refresh_monitors(runtime, false)
       if runtime.refs.ui_controller then
@@ -152,21 +182,94 @@ local function run_master()
     end
   end
 
+  -- TEMPORÄR: Remote-Update-Auslöser per Redstone auf "top" des Master-PCs.
+  -- Broadcastet REMOTE_UPDATE an alle bekannten Nodes (Master selbst nicht
+  -- mitgezählt — der müsste sich getrennt selbst aktualisieren). Gedacht für
+  -- die aktive Entwicklungsphase; kann später wieder entfernt werden.
+  -- Steigende Flanke (false->true) löst aus, damit ein Dauersignal nicht
+  -- endlos viele Updates auslöst.
+  local last_redstone_top = false
+  local function broadcast_remote_update()
+    runtime.log("Redstone-Trigger (top): broadcasting REMOTE_UPDATE an alle Nodes", "WARN")
+    local sent = 0
+    for node_id, node in pairs(runtime.state.nodes or {}) do
+      local ok = pcall(function()
+        runtime.refs.comms:send_command(node_id, { target = constants.command_targets.REMOTE_UPDATE })
+      end)
+      if ok then sent = sent + 1 end
+    end
+    runtime.log(("Remote-Update Broadcast an %d Node(s) gesendet"):format(sent), "WARN")
+    -- Fix: comms:send_command() legt die Nachricht nur in eine interne Queue,
+    -- der tatsächliche Funk-Versand (modem.transmit) passiert erst beim
+    -- nächsten services:tick() Aufruf. os.sleep() blockiert den gesamten
+    -- Event-Loop und verhindert dass dieser Tick je läuft — die Broadcasts
+    -- waren beim Reboot noch nie wirklich gesendet worden.
+    -- Jetzt: Queue über mehrere echte Ticks aktiv leeren BEVOR geschlafen wird.
+    runtime.log("Versende Broadcast-Queue...", "WARN")
+    for _ = 1, 10 do
+      runtime.refs.services:tick()
+      if os and type(os.sleep) == "function" then os.sleep(0.1) end
+    end
+    -- Master aktualisiert sich danach selbst (kurze Verzögerung damit der
+    -- Broadcast an alle anderen Nodes garantiert raus ist, bevor der Master
+    -- selbst rebootet und damit das Funknetz kurzzeitig verliert).
+    runtime.log("Master aktualisiert sich selbst in 3s...", "WARN")
+    if os and type(os.sleep) == "function" then os.sleep(3) end
+    local remote_update = require("core.remote_update")
+    remote_update.run(function(level, text) runtime.log(text, level) end)
+  end
+
+  local function check_redstone_update_trigger()
+    if not redstone or type(redstone.getInput) ~= "function" then return end
+    local ok, current = pcall(redstone.getInput, "top")
+    if not ok then return end
+    if current and not last_redstone_top then
+      broadcast_remote_update()
+    end
+    last_redstone_top = current and true or false
+  end
+
   while true do
     local timer = os.startTimer(0.5)
     while true do
       local event = { os.pullEvent() }
       if event[1] == "modem_message" then runtime.refs.comms:handle_event(event)
       elseif event[1] == "monitor_touch" or event[1] == "key" or event[1] == "char" then runtime.refs.services:tick(nil, event)
+      elseif event[1] == "redstone" then check_redstone_update_trigger()
       elseif event[1] == "timer" and event[2] == timer then break end
     end
     runtime.refs.services:tick()
   end
 end
 
+local function is_terminate_error(err)
+  return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
+end
+
 function M.run()
   local ok, err = xpcall(run_master, function(e) return e end)
-  if not ok then error(err, 0) end
+  if ok then return end
+  if is_terminate_error(err) then return end
+  -- Fix #1: Crash-Screen mit Bestätigung + sauberer Neustart (wie Energy-Node).
+  if term and term.setBackgroundColor and term.setTextColor and colors then
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.red)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("=== MASTER CRASH ===")
+    term.setTextColor(colors.white)
+    print("")
+    print(tostring(err))
+    print("")
+    term.setTextColor(colors.yellow)
+    print("Druecke eine Taste um neu zu starten...")
+    term.setTextColor(colors.white)
+  else
+    print("MASTER CRASH: " .. tostring(err))
+    print("Druecke eine Taste um neu zu starten...")
+  end
+  pcall(os.pullEvent, "key")
+  if os.reboot then os.reboot() end
 end
 
 return M

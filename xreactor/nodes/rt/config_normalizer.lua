@@ -173,52 +173,59 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     config_values.autonom.steam_deficit = defaults.autonom.steam_deficit
     add_warning("autonom.steam_deficit missing/invalid; defaulting to " .. tostring(defaults.autonom.steam_deficit))
   end
+  -- Rod-Cap Migration: kanonischer Pfad ist rails.reactor_rods.min/.max.
+  -- Ältere Pfade (autonom.regulator_min/max_rods, autonom.min/max_rods) werden
+  -- auf rails.reactor_rods.min/.max migriert und dann verworfen.
   local autonom = config_values.autonom
-  local rail_rods = type(config_values.rails) == "table" and type(config_values.rails.reactor_rods) == "table" and config_values.rails.reactor_rods or {}
-  if type(autonom.regulator_min_rods) ~= "number" then
-    if type(autonom.min_rods) == "number" then
-      autonom.regulator_min_rods = autonom.min_rods
-      add_warning("autonom.min_rods is deprecated; mapped to autonom.regulator_min_rods")
-    elseif type(rail_rods.min) == "number" then
-      autonom.regulator_min_rods = rail_rods.min
-      add_warning("autonom.regulator_min_rods missing/invalid; mapped from rails.reactor_rods.min")
-    else
-      autonom.regulator_min_rods = defaults.autonom.regulator_min_rods
-      add_warning("autonom.regulator_min_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.regulator_min_rods))
-    end
+  config_values.rails = config_values.rails or {}
+  config_values.rails.reactor_rods = config_values.rails.reactor_rods or {}
+  local rail_rods = config_values.rails.reactor_rods
+  local defaults_rods = defaults.rails and defaults.rails.reactor_rods or {}
+
+  -- Schritt 1: deprecated autonom.min_rods / max_rods -> autonom.regulator_min/max_rods
+  if type(autonom.min_rods) == "number" and type(autonom.regulator_min_rods) ~= "number" then
+    autonom.regulator_min_rods = autonom.min_rods
+    add_warning("autonom.min_rods ist veraltet; bitte auf rails.reactor_rods.min umstellen")
   end
-  if type(autonom.regulator_max_rods) ~= "number" then
-    if type(autonom.max_rods) == "number" then
-      autonom.regulator_max_rods = autonom.max_rods
-      add_warning("autonom.max_rods is deprecated; mapped to autonom.regulator_max_rods")
-    elseif type(rail_rods.max) == "number" then
-      autonom.regulator_max_rods = rail_rods.max
-      add_warning("autonom.regulator_max_rods missing/invalid; mapped from rails.reactor_rods.max")
-    else
-      autonom.regulator_max_rods = defaults.autonom.regulator_max_rods
-      add_warning("autonom.regulator_max_rods missing/invalid; defaulting to " .. tostring(defaults.autonom.regulator_max_rods))
-    end
+  if type(autonom.max_rods) == "number" and type(autonom.regulator_max_rods) ~= "number" then
+    autonom.regulator_max_rods = autonom.max_rods
+    add_warning("autonom.max_rods ist veraltet; bitte auf rails.reactor_rods.max umstellen")
   end
-  if type(autonom.regulator_min_rods) == "number" and type(autonom.min_rods) == "number" and autonom.regulator_min_rods ~= autonom.min_rods then
-    add_warning("autonom.min_rods deprecated and ignored because autonom.regulator_min_rods is set")
+
+  -- Schritt 2: autonom.regulator_min/max_rods -> rails.reactor_rods.min/.max (falls noch nicht gesetzt)
+  if type(autonom.regulator_min_rods) == "number" and type(rail_rods.min) ~= "number" then
+    rail_rods.min = autonom.regulator_min_rods
+    add_warning("autonom.regulator_min_rods ist veraltet; bitte auf rails.reactor_rods.min umstellen")
   end
-  if type(autonom.regulator_max_rods) == "number" and type(autonom.max_rods) == "number" and autonom.regulator_max_rods ~= autonom.max_rods then
-    add_warning("autonom.max_rods deprecated and ignored because autonom.regulator_max_rods is set")
+  if type(autonom.regulator_max_rods) == "number" and type(rail_rods.max) ~= "number" then
+    rail_rods.max = autonom.regulator_max_rods
+    add_warning("autonom.regulator_max_rods ist veraltet; bitte auf rails.reactor_rods.max umstellen")
   end
-  local min_before = autonom.regulator_min_rods
-  local max_before = autonom.regulator_max_rods
-  autonom.regulator_min_rods = clamp_range(autonom.regulator_min_rods, 0, 100)
-  autonom.regulator_max_rods = clamp_range(autonom.regulator_max_rods, 0, 100)
-  if autonom.regulator_min_rods ~= min_before then
-    add_warning("autonom.regulator_min_rods out of range; clamping to " .. tostring(autonom.regulator_min_rods))
+
+  -- Schritt 3: Defaults setzen falls nichts konfiguriert
+  if type(rail_rods.min) ~= "number" then
+    rail_rods.min = type(defaults_rods.min) == "number" and defaults_rods.min or 0
+    add_warning("rails.reactor_rods.min nicht gesetzt; default=" .. tostring(rail_rods.min))
   end
-  if autonom.regulator_max_rods ~= max_before then
-    add_warning("autonom.regulator_max_rods out of range; clamping to " .. tostring(autonom.regulator_max_rods))
+  if type(rail_rods.max) ~= "number" then
+    rail_rods.max = type(defaults_rods.max) == "number" and defaults_rods.max or 100
+    add_warning("rails.reactor_rods.max nicht gesetzt; default=" .. tostring(rail_rods.max))
   end
-  if autonom.regulator_min_rods > autonom.regulator_max_rods then
-    autonom.regulator_min_rods, autonom.regulator_max_rods = autonom.regulator_max_rods, autonom.regulator_min_rods
-    add_warning("autonom.regulator_min_rods > autonom.regulator_max_rods; swapping values")
+
+  -- Schritt 4: Clamp und Sanity-Check
+  rail_rods.min = clamp_range(rail_rods.min, 0, 100)
+  rail_rods.max = clamp_range(rail_rods.max, 0, 100)
+  if rail_rods.min > rail_rods.max then
+    rail_rods.min, rail_rods.max = rail_rods.max, rail_rods.min
+    add_warning("rails.reactor_rods.min > .max; Werte getauscht")
   end
+
+  -- Schritt 5: autonom.regulator_* auf kanonische Werte synchronisieren (Abwärtskompatibilität)
+  autonom.regulator_min_rods = rail_rods.min
+  autonom.regulator_max_rods = rail_rods.max
+  -- Veraltete Felder bereinigen
+  autonom.min_rods = nil
+  autonom.max_rods = nil
   if type(config_values.monitor_interval) ~= "number" or config_values.monitor_interval <= 0 then
     config_values.monitor_interval = defaults.monitor_interval
     add_warning("monitor_interval missing/invalid; defaulting to " .. tostring(defaults.monitor_interval))
@@ -378,8 +385,8 @@ function M.apply_runtime_defaults(config, defaults, runtime)
   config.autonom.max_flow = math.min(config.autonom.max_flow or max_flow, max_flow)
   config.autonom.flow_step = config.autonom.flow_step or flow_step
   config.autonom.ramp_step = config.autonom.ramp_step or config.autonom.flow_step
-  config.autonom.regulator_min_rods = config.autonom.regulator_min_rods or defaults.autonom.regulator_min_rods
-  config.autonom.regulator_max_rods = config.autonom.regulator_max_rods or defaults.autonom.regulator_max_rods
+  -- regulator_min/max_rods werden in validate_config auf rails.reactor_rods.min/.max gesetzt
+  -- und von dort synchronisiert. Kein separater Default hier nötig.
   config.autonom.reactor_adjust_interval = config.autonom.reactor_adjust_interval or rod_tick
   config.autonom.steam_reserve = config.autonom.steam_reserve or defaults.autonom.steam_reserve
   config.autonom.steam_deficit = config.autonom.steam_deficit or defaults.autonom.steam_deficit

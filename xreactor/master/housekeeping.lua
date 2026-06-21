@@ -48,4 +48,31 @@ function M.build_master_alert_payload(alert_service, config)
   return { alerts = { ts = os.epoch("utc"), by_node = by_node } }
 end
 
+-- Fix P6: housekeeping_tick war ein unlesbares inline-Lambda in runtime_loop.lua.
+-- Jetzt saubere Funktion hier, runtime_loop ruft housekeeping.tick(runtime) auf.
+function M.tick(runtime)
+  M.handle_command_timeouts({
+    constants = runtime.libs.constants,
+    utils = runtime.libs.utils,
+    comms = runtime.refs.comms,
+    nodes = runtime.state.nodes,
+    log = runtime.log
+  })
+  if runtime.refs.sequencer then
+    runtime.refs.sequencer:tick(runtime.state.nodes)
+  end
+  -- M1: flush über den kanonischen runtime-Wrapper, nicht direkt auf Coalescer
+  if runtime.flush_rt_sync_queue then
+    runtime.flush_rt_sync_queue()
+  end
+  local rt_ops = runtime.libs.rt_ops
+  if rt_ops then
+    rt_ops.check_timeouts(runtime)
+  end
+  local profile_ops = runtime.libs.profile_ops
+  if profile_ops then
+    profile_ops.sample_trends(runtime)
+  end
+end
+
 return M

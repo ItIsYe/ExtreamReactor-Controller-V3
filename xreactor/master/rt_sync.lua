@@ -3,9 +3,15 @@ local utils = require("core.utils")
 
 local M = {}
 
+-- P1: number_or_nil aus utils, number_or als lokaler Wrapper mit Fallback
+-- number_or_nil aus utils, mit Fallback für ältere utils-Versionen
+local number_or_nil = utils.number_or_nil or function(v)
+  if type(v) == "number" then return v end
+  if type(v) == "string" then local n = tonumber(v); if n then return n end end
+  return nil
+end
 local function number_or(value, fallback)
-  if type(value) == "number" then return value end
-  return fallback
+  return number_or_nil(value) or fallback
 end
 
 local function normalize_node_mode(mode)
@@ -25,11 +31,37 @@ local function sort_by_priority_then_id(a, b)
   return (a.priority or 0) > (b.priority or 0)
 end
 
+-- P2: node_capacity gibt 0 zurück wenn der Node noch einlernt (capacity_ready=false).
+-- Damit rechnet der Master nicht mit einem falschen Platzhalter-Wert.
+-- Der Node wird mit 0% angesteuert bis sein echter Wert vorliegt.
+local function node_capacity_ready(node)
+  local rt = node and node.rt or {}
+  if rt.capacity_ready == true then return true end
+  if node and node.capacity_ready == true then return true end
+  return false
+end
+
+local function node_capacity(node, fallback)
+  local capacity = number_or(node and node.capacity_max, nil)
+    or number_or(node and node.rt and node.rt.capacity_max, nil)
+    or number_or(node and node.measured_capacity_max, nil)
+  if capacity and capacity > 0 and node_capacity_ready(node) then
+    return capacity, "measured"
+  end
+  -- Node hat noch nicht eingelernt → 0 als Kapazität.
+  -- Master weist 0% zu; Node lehnt Setpoints sowieso ab bis Learning fertig.
+  if not node_capacity_ready(node) then
+    return 0, "learning"
+  end
+  return math.max(1, number_or(fallback, 3000)), "fallback"
+end
+
 function M.normalize_setpoints(setpoints)
   local payload = setpoints or {}
   return {
     target_rpm = payload.target_rpm,
     power_target = payload.power_target,
+    power_target_percent = payload.power_target_percent,
     steam_target = payload.steam_target,
     enable_reactors = payload.enable_reactors,
     enable_turbines = payload.enable_turbines,
@@ -65,13 +97,21 @@ function M.send_rt_setpoints(comms, node, setpoints)
   node.last_setpoints_ts = os.epoch("utc")
 end
 
+-- P6: same_setpoints() vergleicht nur funktionale Felder.
+-- assignment_reason und assignment_source sind interne Bezeichner;
+-- eine Änderung dort soll kein neues Paket auslösen.
 function M.same_setpoints(a, b)
   if not a or not b then return false end
-  return a.target_rpm == b.target_rpm and a.power_target == b.power_target and a.steam_target == b.steam_target and
-      a.enable_reactors == b.enable_reactors and a.enable_turbines == b.enable_turbines and
-      a.assignment_reason == b.assignment_reason and a.assignment_source == b.assignment_source and a.assignment_rank == b.assignment_rank and
-      a.assignment_state == b.assignment_state and a.controllable == b.controllable and
-      a.shutdown_stage == b.shutdown_stage and a.desired_node_state == b.desired_node_state
+  return a.target_rpm           == b.target_rpm
+     and a.power_target         == b.power_target
+     and a.power_target_percent == b.power_target_percent
+     and a.steam_target         == b.steam_target
+     and a.enable_reactors      == b.enable_reactors
+     and a.enable_turbines      == b.enable_turbines
+     and a.assignment_state     == b.assignment_state
+     and a.controllable         == b.controllable
+     and a.shutdown_stage       == b.shutdown_stage
+     and a.desired_node_state   == b.desired_node_state
 end
 
 local function same_shutdown_intent(a, b)
@@ -84,6 +124,7 @@ local function same_shutdown_intent(a, b)
   return a.desired_node_state == b.desired_node_state and
       a.shutdown_stage == b.shutdown_stage and
       (tonumber(a.power_target) or 0) == (tonumber(b.power_target) or 0) and
+      (tonumber(a.power_target_percent) or 0) == (tonumber(b.power_target_percent) or 0) and
       (tonumber(a.steam_target) or 0) == (tonumber(b.steam_target) or 0) and
       a.enable_reactors == b.enable_reactors and
       a.enable_turbines == b.enable_turbines
@@ -157,7 +198,8 @@ function M.evaluate_rt_node(node, opts)
   local mode = normalize_node_mode(node and node.mode)
   local status = node and node.status or constants.status_levels.OFFLINE
   local state = node and node.state or constants.node_states.OFF
-  local output = node and number_or(node.output, 0) or 0
+  -- Fix #4: actual_output kanonisch, power_actual + output Fallback
+  local output = node and (number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0)) or 0
   if hold then
     return { controllable = false, reason = "GLOBAL_HOLD", mode = mode, status = status, state = state, output = output }
   end
@@ -185,20 +227,24 @@ function M.build_node_setpoint_plan(ctx)
   local now = os.epoch("utc")
   local plan = {}
   local active, pending_startup = {}, {}
-  local max_node_power = math.max(1, number_or(base.power_per_node_capacity, 3000))
-  local startup_margin = math.max(0, number_or(base.startup_margin_power, max_node_power * 0.2))
+  local fallback_capacity = math.max(1, number_or(base.power_per_node_capacity, 3000))
+  local startup_margin = math.max(0, number_or(base.startup_margin_power, fallback_capacity * 0.2))
 
   for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE then
       local eval = M.evaluate_rt_node(node, { rt_global_off = hold })
       local shutdown = node and node.shutdown_workflow or {}
+      local capacity, capacity_source = node_capacity(node, fallback_capacity)
       local entry = {
         node = node,
         eval = eval,
         id = utils.normalize_node_id(node.id),
         mode = eval.mode,
         status = eval.status,
+        capacity = capacity,
+        capacity_source = capacity_source,
         assigned_power = 0,
+        assigned_percent = 0,
         assignment_rank = nil,
         assignment_reason = eval.reason,
         assignment_state = "unavailable",
@@ -219,24 +265,42 @@ function M.build_node_setpoint_plan(ctx)
   table.sort(active, sort_by_priority_then_id)
   table.sort(pending_startup, function(a, b) return (a.id or "") < (b.id or "") end)
 
-  local needed_nodes = global_target > 0 and math.max(1, math.ceil(global_target / max_node_power)) or 0
-  local available_nodes = #active + #pending_startup
-  needed_nodes = math.min(needed_nodes, available_nodes)
-  local keep_count = math.min(#active, needed_nodes)
-
   local remaining = global_target
+  local needed_nodes = 0
+  local capacity_seen = 0
+  for _, entry in ipairs(active) do
+    if remaining > 0 then
+      needed_nodes = needed_nodes + 1
+      capacity_seen = capacity_seen + entry.capacity
+      remaining = math.max(0, remaining - entry.capacity)
+    end
+  end
+  if remaining > startup_margin then
+    for _, entry in ipairs(pending_startup) do
+      if remaining > startup_margin then
+        needed_nodes = needed_nodes + 1
+        capacity_seen = capacity_seen + entry.capacity
+        remaining = math.max(0, remaining - entry.capacity)
+      end
+    end
+  end
+  local keep_count = math.min(#active, needed_nodes)
+  remaining = global_target
+
   for idx, entry in ipairs(active) do
     if idx <= keep_count then
-      local assign = math.min(max_node_power, remaining)
-      if idx == keep_count then assign = remaining end
+      local assign = math.min(entry.capacity, remaining)
+      if idx == keep_count then assign = math.min(entry.capacity, remaining) end
       assign = math.max(0, assign)
       entry.assigned_power = assign
+      entry.assigned_percent = entry.capacity > 0 and math.min(100, (assign / entry.capacity) * 100) or 0
       entry.assignment_rank = idx
       entry.assignment_state = "active"
       entry.assignment_reason = idx == 1 and "PRIMARY_ACTIVE" or "DEMAND_ACTIVE"
       remaining = math.max(0, remaining - assign)
     else
       entry.assigned_power = 0
+      entry.assigned_percent = 0
       entry.assignment_rank = idx
       if idx == keep_count + 1 then
         local ready_at = entry.shutdown_ready_at or 0
@@ -269,6 +333,7 @@ function M.build_node_setpoint_plan(ctx)
       entry.assignment_reason = "STARTUP_WAIT"
       entry.assignment_state = "standby"
       entry.assigned_power = 0
+      entry.assigned_percent = 0
     end
   end
 
@@ -292,10 +357,11 @@ function M.build_node_setpoint_plan(ctx)
       target_rpm = base.target_rpm,
       steam_target = enabled and base.steam_target or 0,
       power_target = enabled and entry.assigned_power or 0,
+      power_target_percent = enabled and entry.assigned_percent or 0,
       enable_reactors = enabled and (base.enable_reactors == true) or false,
       enable_turbines = enabled and (base.enable_turbines == true) or false,
       assignment_reason = entry.assignment_reason,
-      assignment_source = "master.rt_sync.plan",
+      assignment_source = "master.rt_sync.plan.capacity",
       assignment_state = entry.assignment_state,
       assignment_rank = entry.assignment_rank,
       controllable = entry.controllable,
@@ -311,7 +377,8 @@ function M.build_node_setpoint_plan(ctx)
     controllable_count = #active + #pending_startup,
     required_nodes = needed_nodes,
     startup_candidate_id = startup_candidate and startup_candidate.id or nil,
-    shutdown_candidate_id = shutdown_candidate and shutdown_candidate.id or nil
+    shutdown_candidate_id = shutdown_candidate and shutdown_candidate.id or nil,
+    capacity_seen = capacity_seen
   }
 end
 
@@ -352,8 +419,9 @@ function M.sync_rt_node(ctx, node)
   local desired = assigned.setpoints
   local trigger = tostring(ctx.trigger or "unknown")
   if ctx.log then
-    ctx.log(("RT plan node=%s trigger=%s state=%s controllable=%s reason=%s assigned=%.2f mode=%s status=%s"):format(
+    ctx.log(("RT plan node=%s trigger=%s state=%s controllable=%s reason=%s assigned=%.2f percent=%.1f capacity=%.2f source=%s mode=%s status=%s"):format(
       tostring(node_id), trigger, tostring(desired.assignment_state), tostring(assigned.controllable), tostring(assigned.assignment_reason), tonumber(desired.power_target) or 0,
+      tonumber(desired.power_target_percent) or 0, tonumber(assigned.capacity) or 0, tostring(assigned.capacity_source),
       tostring(assigned.mode), tostring(assigned.status)
     ), assigned.controllable and "INFO" or "WARN")
   end

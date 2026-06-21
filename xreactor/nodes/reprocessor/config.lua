@@ -57,36 +57,41 @@ local CONFIG = {
     }
   },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
-  DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
-}
-
-local CURRENT_VERSION = 2
-
-return {
-  version = CURRENT_VERSION,
-  role = CONFIG.DEFAULT_ROLE,
-  node_id = CONFIG.DEFAULT_NODE_ID,
-  debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,
-  reset_log_on_start = CONFIG.DEFAULT_RESET_LOG_ON_START,
-  wireless_modem = CONFIG.DEFAULT_WIRELESS_MODEM,
-  buffers = CONFIG.DEFAULT_BUFFERS,
-  heartbeat_interval = CONFIG.DEFAULT_HEARTBEAT_INTERVAL,
-  discovery_interval = CONFIG.DEFAULT_DISCOVERY_INTERVAL,
-  status_interval = CONFIG.DEFAULT_STATUS_INTERVAL,
-  channels = {
-    control = CONFIG.DEFAULT_CONTROL_CHANNEL,
-    status = CONFIG.DEFAULT_STATUS_CHANNEL
+  DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
+  -- Feed-Logik für die REPROCESSOR-Node.
+  --
+  -- Reprocessoren haben KEINEN eigenen Computer-Port — der Füllstand kann
+  -- nicht direkt abgefragt werden. Statt Füllstand-basiertem Nachfüllen wird
+  -- in zufälligen Abständen reihum jeder Reprocessor mit genau
+  -- feed_amount (Standard 2) Cyanite befüllt — das Minimum damit der
+  -- Reprocessor überhaupt arbeitet.
+  --
+  DEFAULT_FEED = {
+    enabled            = false,
+    me_bridge          = "me_bridge",
+    waste_item         = "bigreactors:cyanite_ingot",
+    feed_amount        = 2,      -- Items pro Befüllung (Minimum zum Arbeiten)
+    interval_min_s     = 20,     -- Mindest-Wartezeit zwischen Befüllungen
+    interval_max_s     = 60,     -- Höchst-Wartezeit zwischen Befüllungen (zufällig dazwischen)
+    valve_open_ms       = 2000,  -- Wie lange das Ventil offen bleibt
+    discovery_interval = 60,
+    --
+    -- targets: eine Eintrag pro Reprocessor-Inlet (kein reactor_port nötig!)
+    --   label = Anzeigename
+    --   inlet = Transporter/Chest direkt am Reprocessor-Eingang
+    -- { label = "Reprocessor A", inlet = "mekanism:transporter_2" },
+    targets            = {},
+    --
+    -- redstone_tree: gleiche Baum-Topologie wie bei der Fuel-Node.
+    -- Mekanism Pipes müssen auf "High Redstone = Interrupt" stehen.
+    -- { side="right", label="Arm A", children={
+    --     { side="top",    label="Reprocessor A", reactor="Reprocessor A" },
+    --     { side="bottom", label="Reprocessor B", reactor="Reprocessor B" },
+    --   }
+    -- }
+    -- Hinweis: "reactor"-Feld referenziert hier den target.label.
+    redstone_tree      = {},
   },
-  comms = {
-    ack_timeout_s = CONFIG.DEFAULT_COMMS_ACK_TIMEOUT,
-    max_retries = CONFIG.DEFAULT_COMMS_MAX_RETRIES,
-    backoff_base_s = CONFIG.DEFAULT_COMMS_BACKOFF_BASE,
-    backoff_cap_s = CONFIG.DEFAULT_COMMS_BACKOFF_CAP,
-    dedupe_ttl_s = CONFIG.DEFAULT_COMMS_DEDUPE_TTL,
-    dedupe_limit = CONFIG.DEFAULT_COMMS_DEDUPE_LIMIT,
-    peer_timeout_s = CONFIG.DEFAULT_COMMS_PEER_TIMEOUT,
-    queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
-    drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
-  },
-  rails = CONFIG.DEFAULT_RAILS
+  rails = CONFIG.DEFAULT_RAILS,
+  feed  = CONFIG.DEFAULT_FEED
 }

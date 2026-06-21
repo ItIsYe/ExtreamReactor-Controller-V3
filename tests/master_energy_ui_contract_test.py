@@ -3,11 +3,12 @@ from pathlib import Path
 text = Path('xreactor/master/ui/energy.lua').read_text(encoding='utf-8')
 
 checks = [
-    'Energy',
-    'Matrix-/Storage-Details',
+    'Energy Summary',
+    'Matrix / Storage',
+    'Matrix-Detail',
     'Ressourcen',
-    'Verbundene Support-Nodes',
-    'model.support_nodes'
+    'Support-Nodes',
+    'model.support_nodes',
 ]
 for item in checks:
     if item not in text:

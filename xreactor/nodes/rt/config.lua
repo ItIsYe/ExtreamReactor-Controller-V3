@@ -49,14 +49,16 @@ return {
   },
 
   autonom = {
+    -- control_rod_level: nicht mehr aktiv genutzt (INITIAL_ROD_LEVEL in CONFIG übernimmt).
+    -- Bleibt als Dokumentation erhalten, wird aber nicht ausgewertet.
     control_rod_level = 70,
     max_rpm = 900,
     min_flow = 0,
     max_flow = 2000,
     flow_step = 50,
     ramp_step = 50,
-    regulator_min_rods = 80,
-    regulator_max_rods = 98,
+    -- regulator_min_rods / regulator_max_rods: ENTFERNT.
+    -- Kanonische Rod-Grenzen stehen jetzt ausschließlich in rails.reactor_rods.min/.max.
     reactor_adjust_interval = 5.0,
     steam_reserve = 5000,
     steam_deficit = 5000
@@ -111,7 +113,7 @@ return {
       max_step_down_when_coolant_soft = 2,
       max_step_down_when_coolant_hard = 0,
       min = 80,
-      max = 98,
+      max = 100,
       ema_alpha = 0.25
     },
     reactor_steam_guard = {
@@ -124,14 +126,15 @@ return {
       ema_alpha = 0.20
     },
     coil = {
-      engage_rpm = 850,
-      disengage_rpm = 750,
+      engage_rpm = 900,    -- engage coil at target RPM (skaliert proportional bei Teillast)
+      disengage_rpm = 850, -- disengage coil when RPM drops below this (skaliert proportional)
+      overspeed_band = 20, -- RPM über Ziel-RPM ab dem Overspeed-Coil greift
       cooldown_s = 1.0,
       ema_alpha = 0.2
     }
   },
 
-  monitor_interval = 2,
+  monitor_interval = 1,  -- seconds between monitor redraws (was 2; monitor runs on own 0.5s timer)
   monitor_scale = 0.5,
   status_log = false
 }

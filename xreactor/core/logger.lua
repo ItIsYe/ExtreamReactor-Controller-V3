@@ -198,26 +198,30 @@ function list_disk_roots()
 end
 
 local function disk_write_test(path)
+  -- NOTE: pcall() only captures thrown errors, not return values from the inner
+  -- function. So we use a local result variable instead of returning inside pcall.
   local probe = path .. "/.xreactor_log_probe"
+  local result_ok, result_reason = false, "not_run"
   local ok, err = pcall(function()
     local dir_ok, dir_reason = ensure_dir(path)
     if not dir_ok then
-      error("probe-dir-failed:" .. tostring(dir_reason))
+      result_ok, result_reason = false, "probe-dir-failed:" .. tostring(dir_reason)
+      return
     end
     local file = fs.open(probe, "w")
     if not file then
-      error("probe-open-failed")
+      result_ok, result_reason = false, "probe-open-failed"
+      return
     end
     file.write("probe")
     file.close()
-    if fs.exists(probe) then
-      fs.delete(probe)
-    end
+    if fs.exists(probe) then fs.delete(probe) end
+    result_ok, result_reason = true, "ok"
   end)
   if not ok then
     return false, summarize_error(err)
   end
-  return true
+  return result_ok, result_reason
 end
 
 local function validate_log_target(path)
@@ -471,16 +475,21 @@ local function flush_buffer_to_dir(target_dir)
   local path = string.format("%s/%s.log", target_dir, state.log_name or "xreactor")
   local dir_ok, dir_reason = ensure_dir(target_dir)
   if not dir_ok then
-    error("log-op=ensure_dir path=" .. tostring(target_dir) .. " reason=" .. tostring(dir_reason))
+    -- Cannot create log dir: degrade to memory-only, do not crash.
+    state.disk_error = "ensure_dir:" .. tostring(dir_reason)
+    return
   end
   local pending_bytes = estimate_buffer_bytes()
   local preflight_ok, preflight_reason = preflight_write(target_dir, path, pending_bytes)
   if not preflight_ok then
-    error("log-op=preflight path=" .. tostring(path) .. " reason=" .. tostring(preflight_reason))
+    -- Preflight failed: degrade to memory-only, do not crash.
+    state.disk_error = "preflight:" .. tostring(preflight_reason)
+    return
   end
   local rotate_ok, rotate_reason = rotate_log_if_needed(path, target_dir)
   if not rotate_ok then
-    error("log-op=rotate path=" .. tostring(path) .. " reason=" .. tostring(rotate_reason))
+    -- Rotation failed: continue writing to existing file, do not crash.
+    state.disk_error = "rotate:" .. tostring(rotate_reason)
   end
   local file
   local open_ok, open_result = pcall(fs.open, path, "a")
@@ -501,27 +510,36 @@ local function flush_buffer_to_dir(target_dir)
       elseif not retry_result then
         failure = failure .. "|retry-returned-nil"
       end
-      error("log-op=open path=" .. tostring(path) .. " reason=" .. failure .. " free_now=" .. tostring(free_now) .. " pending=" .. tostring(pending_bytes) .. " cleanup={" .. summarize_cleanup(cleanup, target_dir) .. "}")
+      -- File open failed: degrade to memory-only mode, DO NOT crash.
+      state.disk_error = "open:" .. failure
+      state.disk_error_free = free_now
+      state.disk_writes_suppressed = (state.disk_writes_suppressed or 0) + #state.buffer
+      return
     end
   end
   for index, line in ipairs(state.buffer) do
     local write_ok, write_err = pcall(file.write, line .. "\n")
     if not write_ok then
       local _, free_now = get_free_space(target_dir)
-      local close_ok, close_err = pcall(file.close)
-      error("log-op=write path=" .. tostring(path)
-        .. " line_index=" .. tostring(index)
-        .. " reason=" .. summarize_error(write_err)
-        .. " free_now=" .. tostring(free_now)
-        .. " close_ok=" .. tostring(close_ok)
-        .. " close_err=" .. tostring(close_err))
+      pcall(file.close)
+      -- Disk full or write error: degrade to memory-only mode, DO NOT crash.
+      state.disk_error = "write:" .. summarize_error(write_err)
+      state.disk_error_free = free_now
+      state.disk_writes_suppressed = (state.disk_writes_suppressed or 0) + (#state.buffer - index + 1)
+      -- Drop remaining lines from this flush to avoid partial writes.
+      return
     end
   end
   local close_ok, close_err = pcall(file.close)
   if not close_ok then
     local _, free_now = get_free_space(target_dir)
-    error("log-op=close path=" .. tostring(path) .. " reason=" .. summarize_error(close_err) .. " free_now=" .. tostring(free_now))
+    -- Close failure: record but do not crash.
+    state.disk_error = "close:" .. summarize_error(close_err)
+    state.disk_error_free = free_now
   end
+  -- Success: clear any previous disk error so recovery is visible in status.
+  state.disk_error = nil
+  state.disk_error_free = nil
   state.log_dir = target_dir
   state.log_path = path
 end

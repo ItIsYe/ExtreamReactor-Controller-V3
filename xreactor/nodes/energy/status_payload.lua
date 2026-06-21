@@ -57,11 +57,14 @@ function M.new(opts)
     energy.storage_capacity = energy.capacity
     energy.storage_input = energy.input
     energy.storage_output = energy.output
-    -- Backward compatibility: stored/capacity/input/output remain aggregate totals.
-    energy.stored = total_stored
+    -- C1: Kanonische Felder sind aggregate_stored/capacity/input/output.
+    -- stored/capacity/input/output werden als Aliase beibehalten (Abwärtskompatibilität).
+    -- Master liest: aggregate_stored (Gesamtspeicher), matrix_energy (nur Matrix),
+    --               storage_stored (nur Storages), matrix_in/out (Matrix-Fluss).
+    energy.stored   = total_stored
     energy.capacity = total_capacity
-    energy.input = total_input
-    energy.output = total_output
+    energy.input    = total_input
+    energy.output   = total_output
     local summary = {}
     table.sort(energy.stores, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
     for i = 1, math.min(3, #energy.stores) do
@@ -133,13 +136,18 @@ function M.new(opts)
     end
     runtime.first_status_payload_ts = runtime.first_status_payload_ts or started_at
 
-    if total_duration > 1200 then
-      runtime.log(("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d"):format(
+    -- P2: Schwellwert aus Config statt hardcodiert 1200ms
+    local slow_payload_ms = math.max(200, math.floor(
+      tonumber(runtime.config.matrix_component_time_budget_ms) or 2000
+    ))
+    if total_duration > slow_payload_ms then
+      runtime.log(("Status payload slow: total=%dms storage=%dms matrix=%dms storages=%d matrices=%d threshold=%dms"):format(
         total_duration,
         energy_duration,
         matrix_duration,
         #(runtime.devices.storages or {}),
-        #(runtime.devices.matrices or {})
+        #(runtime.devices.matrices or {}),
+        slow_payload_ms
       ), "WARN")
     end
 

@@ -1,15 +1,17 @@
 local M = {}
+local utils = require("core.utils")
 
 M.DEFAULT_SHUTDOWN_CANDIDATE_STABILITY_MS = 1500
-M.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS = 15000
+M.DEFAULT_SHUTDOWN_RESTART_COOLDOWN_MS = 60000  -- 60s cooldown after cancelled shutdown
 
-local function payload_looks_rt(payload)
-  if type(payload) ~= 'table' then return false end
-  if type(payload.rt) == 'table' then return true end
-  if type(payload.turbines) == 'table' or type(payload.reactors) == 'table' or type(payload.modules) == 'table' then return true end
-  if payload.turbine_rpm ~= nil or payload.steam ~= nil or payload.ramp_state ~= nil then return true end
-  if payload.mode ~= nil and (payload.output ~= nil or payload.state ~= nil) then return true end
-  return false
+-- Fix P3: payload_looks_rt aus utils, mit Fallback für ältere utils-Versionen
+local payload_looks_rt = utils.payload_looks_rt or function(payload)
+  if type(payload) ~= "table" then return false end
+  return type(payload.turbines) == "table"
+      or type(payload.reactors) == "table"
+      or type(payload.modules)  == "table"
+      or payload.turbine_rpm ~= nil
+      or payload.steam ~= nil
 end
 
 local function bool_flag(value)

@@ -32,16 +32,34 @@ local function redirect(mon, fn, context)
   return true
 end
 
+local function state_for(mon)
+  monitor_state[mon] = monitor_state[mon] or {
+    scale = nil,
+    size  = nil,
+    frame = 0,
+    force_redraw_frame = nil
+  }
+  return monitor_state[mon]
+end
+
 local function is_dirty(mon, key, snapshot)
   dirty_cache[mon] = dirty_cache[mon] or {}
+  local state = state_for(mon)
+  -- Force-redraw: wenn ui.panel() diesen Frame neu gezeichnet hat,
+  -- müssen alle folgenden Widgets ebenfalls neu gezeichnet werden,
+  -- auch wenn ihr Inhalt gleich geblieben ist (Dirty-Cache wäre sonst stale).
+  -- frame > 0 Guard: verhindert false-positive wenn begin_frame() nicht aufgerufen wurde
+  -- (z.B. in view_manager Architekturen ohne begin_frame) → frame=0, force=0 → würde
+  -- immer true ergeben und alle Widgets permanent neu zeichnen → UI tot.
+  if state.force_redraw_frame
+      and state.force_redraw_frame == state.frame
+      and (state.frame or 0) > 0 then
+    dirty_cache[mon][key] = snapshot
+    return true
+  end
   if dirty_cache[mon][key] == snapshot then return false end
   dirty_cache[mon][key] = snapshot
   return true
-end
-
-local function state_for(mon)
-  monitor_state[mon] = monitor_state[mon] or { scale = nil, size = nil }
-  return monitor_state[mon]
 end
 
 local function safe_monitor_call(mon, method, ...)
@@ -137,6 +155,19 @@ function ui.panel(mon, x, y, w, h, title, status)
   local snapshot = table.concat({ tostring(w), tostring(h), tostring(title), tostring(status) }, "|")
   local key = ("panel:%d:%d"):format(x, y)
   if not is_dirty(mon, key, snapshot) then return end
+  -- Panel wird neu gezeichnet: force_redraw_frame setzen damit alle folgenden
+  -- ui.text/badge/progress Aufrufe in diesem Frame ebenfalls neu zeichnen.
+  -- Ohne diesen Fix: Panel cleared den Bereich, aber dirty_cache denkt die
+  -- Widgets seien noch sichtbar → Widgets werden nicht neu gezeichnet → leerer Monitor.
+  local panel_state = state_for(mon)
+  if (panel_state.frame or 0) > 0 then
+    -- begin_frame() wurde aufgerufen → frame-basiertes force_redraw verwenden
+    panel_state.force_redraw_frame = panel_state.frame
+  else
+    -- begin_frame() nicht aufgerufen (ältere Render-Architektur ohne Frame-Zähler)
+    -- → klassisches invalidate als Fallback, kein force_redraw_frame setzen
+    ui.invalidate(mon)
+  end
   redirect(mon, function()
     local border_color = colors.get(status) or colors.get("accent") or colors.text
     term.setBackgroundColor(colors.background)
@@ -248,6 +279,9 @@ function ui.begin_frame(mon)
   local w, h = ui.getSize(mon)
   if not w or not h then return end
   local state = state_for(mon)
+  -- Frame-Zähler hochsetzen, force_redraw_frame aus vorherigem Frame zurücksetzen
+  state.frame = (state.frame or 0) + 1
+  state.force_redraw_frame = nil
   local size_key = ("%dx%d"):format(w, h)
   if state.size ~= size_key then
     state.size = size_key

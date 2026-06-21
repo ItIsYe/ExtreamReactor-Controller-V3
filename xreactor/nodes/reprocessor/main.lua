@@ -39,6 +39,9 @@ local support_ui_pages = require("nodes.support.ui_pages")
 local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.reprocessor.role_descriptor")
 local config_normalizer = require("nodes.reprocessor.config_normalizer")
+local redstone_router_lib = require("nodes.fuel.redstone_router")
+local router_ui_lib       = require("nodes.fuel.router_ui")
+local feed_router_lib     = require("nodes.reprocessor.feed_router")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.REPROCESSOR_NODE, -- Node role identifier.
@@ -92,6 +95,9 @@ local services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local reproc_health = health.new({})
 local buffers = {}
+local router
+local rs_router
+local router_ui_instance
 local devices = {
   monitor = nil,
   monitor_name = nil,
@@ -143,6 +149,14 @@ local function discover()
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
+  -- Fallback: if no external monitor peripheral is attached, render to the
+  -- computer's own terminal so Diagnostics/Router pages (including the
+  -- log mode buttons) are visible on the PC console.
+  if not devices.monitor and term and type(term.current) == "function" then
+    devices.monitor = term.current()
+    devices.monitor_name = devices.monitor_name or "term"
+    devices.monitor_is_term = true
+  end
 
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
 
@@ -175,6 +189,28 @@ local function hello()
   comms:send_hello({ buffers = summary.kinds.buffer and summary.kinds.buffer.bound or 0 })
 end
 
+-- P2 Fix: Kapazität pro Buffer lesen (zusätzlich zu stored) damit Master/UI
+-- den Füllstand als Prozent anzeigen können, nicht nur die absolute Zahl.
+local function read_buffer_capacity(buf)
+  if buf.size then
+    local ok, value = support_runtime.safe_wrapped_call(buf, "size")
+    if ok and type(value) == "number" then return value end
+  end
+  if buf.getSize then
+    local ok, value = support_runtime.safe_wrapped_call(buf, "getSize")
+    if ok and type(value) == "number" then return value end
+  end
+  if buf.getCapacity then
+    local ok, value = support_runtime.safe_wrapped_call(buf, "getCapacity")
+    if ok and type(value) == "number" then return value end
+  end
+  if buf.getMaxWaste then
+    local ok, value = support_runtime.safe_wrapped_call(buf, "getMaxWaste")
+    if ok and type(value) == "number" then return value end
+  end
+  return nil
+end
+
 local function read_buffers()
   local info = {}
   for name, buf in pairs(buffers) do
@@ -205,7 +241,9 @@ local function read_buffers()
         warn_once("buffer_read:" .. tostring(name), "Buffer read failed for " .. tostring(name) .. ": " .. tostring(value))
       end
     end
-    table.insert(info, { id = name, stored = stored })
+    local capacity = read_buffer_capacity(buf)
+    local percent = (capacity and capacity > 0) and math.floor(stored / capacity * 1000 + 0.5) / 10 or nil
+    table.insert(info, { id = name, stored = stored, capacity = capacity, percent = percent })
   end
   return info
 end
@@ -257,7 +295,12 @@ local function build_status_payload()
     }
   })
   payload.buffers = read_buffers()
+  -- P4: process()-Status pro Buffer im Payload mitgeben (ok/error/unsupported)
+  for _, entry in ipairs(payload.buffers) do
+    entry.process_state = process_state[entry.id]
+  end
   payload.standby = standby
+  payload.feed = get_feed_router():get_summary()
   payload.bindings = reproc_health.bindings
   payload.bindings_summary = health.summarize_bindings(reproc_health.bindings)
   return payload
@@ -328,7 +371,19 @@ local function render_monitor()
           support_ui_pages.render_alert_banner(target, ui, model)
           local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
           support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
-          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 5 })
+          -- Log mode buttons on bottom line
+          support_ui_pages.render_log_mode_button(target, utils, 1, h - 1, w - 2)
+        end,
+        handle_touch = function(x, y)
+          local w2, h2 = ui.getSize(mon)
+          return support_ui_pages.handle_log_mode_touch(x, y, (h2 or 20) - 1, utils, 1)
+        end },
+        { name = "Router", render = function(target)
+          get_router_ui():render(target, ui, colors)
+        end,
+        handle_touch = function(x, y)
+          return get_router_ui():handle_touch(x, y)
         end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
@@ -338,13 +393,100 @@ local function render_monitor()
   monitor_router:render(mon, model)
 end
 
+local function handle_monitor_touch(x, y)
+  local page = monitor_router and monitor_router:current()
+  if page and type(page.handle_touch) == "function" then
+    return page.handle_touch(x, y)
+  end
+end
+
+-- P4 Fix: process()-Aufrufe protokollieren (Erfolg/Fehler/nicht vorhanden)
+-- damit erkennbar ist ob die Wiederaufbereitung tatsächlich läuft.
+local process_state = {}  -- { [name] = "ok" | "error" | "unsupported" }
+
 local function process_buffers()
   if standby then return end
-  for _, buf in pairs(buffers) do
+  for name, buf in pairs(buffers) do
     if buf.process then
-      pcall(buf.process)
+      local ok, err = pcall(buf.process)
+      local prev = process_state[name]
+      if ok then
+        if prev ~= "ok" then
+          utils.log("REPROC", "process() OK for " .. tostring(name))
+        end
+        process_state[name] = "ok"
+      else
+        if prev ~= "error" then
+          utils.log("REPROC", "process() failed for " .. tostring(name) .. ": " .. tostring(err), "WARN")
+        end
+        process_state[name] = "error"
+      end
+    else
+      if process_state[name] ~= "unsupported" then
+        warn_once("no_process:" .. tostring(name),
+          "Buffer " .. tostring(name) .. " has no process() method — not a reprocessor port")
+      end
+      process_state[name] = "unsupported"
     end
   end
+end
+
+local function get_rs_router()
+  if not rs_router then
+    rs_router = redstone_router_lib.new({
+      config    = config,
+      log       = function(level, msg) utils.log("REPROC", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+    })
+  end
+  return rs_router
+end
+
+local function get_feed_router()
+  if not router then
+    router = feed_router_lib.new({
+      config    = config,
+      log       = function(level, msg) utils.log("REPROC", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+      rs_router = get_rs_router(),  -- share rs_router with router_ui
+    })
+  end
+  return router
+end
+
+local function get_router_ui()
+  if not router_ui_instance then
+    router_ui_instance = router_ui_lib.new({
+      redstone_router = get_rs_router(),
+      config_path     = "/xreactor/config/reproc_routes.lua",
+      log             = function(level, msg) utils.log("REPROC", msg, level) end,
+      get_reactors    = function()
+        local list, seen = {}, {}
+        local fd = config.feed or {}
+        for _, entry in ipairs(fd.targets or {}) do
+          local label = entry.label or entry.inlet or "?"
+          local id    = entry.label or label
+          if not seen[id] then
+            seen[id] = true
+            list[#list + 1] = { id = id, label = label }
+          end
+        end
+        if #list == 0 then
+          for _, name in ipairs(peripheral.getNames() or {}) do
+            local ptype = tostring(peripheral.getType(name) or ""):lower()
+            if ptype:find("reprocessor") or name:lower():find("reprocessor") then
+              if not seen[name] then
+                seen[name] = true
+                list[#list + 1] = { id = name, label = name }
+              end
+            end
+          end
+        end
+        return list
+      end,
+    })
+  end
+  return router_ui_instance
 end
 
 local function handle_command(message)
@@ -438,8 +580,25 @@ local function init()
 end
 
 init()
+services:add({
+  name = "router_touch",
+  tick = function(dt, event)
+    -- monitor_touch: external Monitor peripheral touch
+    -- mouse_click: Advanced Computer's own terminal (when monitor falls back to term)
+    if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then
+      handle_monitor_touch(event[3], event[4])
+    end
+  end
+})
+
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   process_buffers()
+  -- P1 Fix: Logistics-Router pausiert ebenfalls im Standby, nicht nur process_buffers().
+  -- Vorher lief der Router weiter und transportierte Abfall obwohl MODE OFF gesetzt war.
+  if not standby then
+    get_feed_router():tick()
+  end
+  -- rs_router peripherals are refreshed via route_and_act in the logistics cycle
   if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then
     standby = true
   end

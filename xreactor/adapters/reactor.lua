@@ -205,9 +205,29 @@ function reactor.inspect(name, log_prefix)
   local methods, method_set = build_method_set(name)
   local active = read_active(name, method_set, log_prefix)
   local temp = read_first_number(name, method_set, { "getFuelTemperature", "getTemperature", "getCasingTemperature" }, log_prefix)
-  local fuel = read_number(name, "getFuelAmount", log_prefix)
-  local waste = read_number(name, "getWasteAmount", log_prefix)
-  local energy = read_first_number(name, method_set, { "getEnergyStored", "getEnergyProducedLastTick" }, log_prefix)
+
+  -- Fast-path: ER2 getEnergyStats/getFuelStats return all energy/fuel fields in one call.
+  -- Fall back to individual calls when the table methods are absent.
+  local energy, energy_output_from_stats, fuel, waste
+  if has_method(method_set, "getEnergyStats") then
+    local stats = safe_call(name, "getEnergyStats", log_prefix)
+    if type(stats) == "table" then
+      energy = type(stats.energyStored) == "number" and stats.energyStored or nil
+      energy_output_from_stats = type(stats.energyProducedLastTick) == "number" and stats.energyProducedLastTick or nil
+    end
+  end
+  if energy == nil then
+    energy = read_first_number(name, method_set, { "getEnergyStored", "getEnergyProducedLastTick" }, log_prefix)
+  end
+  if has_method(method_set, "getFuelStats") then
+    local fstats = safe_call(name, "getFuelStats", log_prefix)
+    if type(fstats) == "table" then
+      fuel = type(fstats.fuelAmount) == "number" and fstats.fuelAmount or nil
+      waste = type(fstats.wasteAmount) == "number" and fstats.wasteAmount or nil
+    end
+  end
+  if fuel == nil then fuel = read_number(name, "getFuelAmount", log_prefix) end
+  if waste == nil then waste = read_number(name, "getWasteAmount", log_prefix) end
   local rods = reactor.read_control_rods(name, log_prefix)
   local steam = read_number(
     name,
@@ -241,7 +261,9 @@ function reactor.inspect(name, log_prefix)
       temperature = has_method(method_set, "getFuelTemperature") or has_method(method_set, "getTemperature"),
       fuel = has_method(method_set, "getFuelAmount"),
       waste = has_method(method_set, "getWasteAmount"),
-      energy = has_method(method_set, "getEnergyStored") or has_method(method_set, "getEnergyProducedLastTick"),
+      energy_stored = has_method(method_set, "getEnergyStored"),
+      energy_output = has_method(method_set, "getEnergyProducedLastTick"),
+      actively_cooled = has_method(method_set, "isActivelyCooled"),
       rods = has_method(method_set, "getControlRodLevel")
         or has_method(method_set, "getControlRodLevels")
         or has_method(method_set, "getControlRodsLevels")
@@ -260,7 +282,9 @@ function reactor.inspect(name, log_prefix)
       temperature = "number",
       fuel = "number",
       waste = "number",
-      energy = "number",
+      energy_stored = "number",
+      energy_output = "number",
+      is_actively_cooled = "boolean",
       control_rod_level = "number",
       steam = "number",
       steam_amount_max = "number",
@@ -274,7 +298,9 @@ function reactor.inspect(name, log_prefix)
     temperature = temp,
     fuel = fuel,
     waste = waste,
-    energy = energy,
+    energy_stored = energy,
+    energy_output = energy_output_from_stats or read_number(name, "getEnergyProducedLastTick", log_prefix),
+    is_actively_cooled = has_method(method_set, "isActivelyCooled") and (safe_call(name, "isActivelyCooled", log_prefix) == true) or false,
     control_rod_level = rods,
     steam = steam,
     steam_amount_max = steam_max,
@@ -298,6 +324,23 @@ function reactor.apply_rod_level(name, level, log_prefix)
   end
   local methods, method_set = build_method_set(name)
 
+  -- setAllControlRodLevels is the canonical ER2 single-call method (one arg, no indexing).
+  -- Preferred over setControlRodsLevels to avoid the 0-vs-1-based table key ambiguity.
+  if has_method(method_set, "setAllControlRodLevels") then
+    local ok, err = utils.safe_peripheral_call(name, "setAllControlRodLevels", normalized_level)
+    if err then
+      log_rod_error(log_prefix, name, "setAllControlRodLevels", err)
+      return nil, err
+    end
+    if ok == false then
+      log_rod_error(log_prefix, name, "setAllControlRodLevels", "returned false")
+      return nil, "returned false"
+    end
+    log_rod_path(log_prefix, name, "setAllControlRodLevels", "level=" .. tostring(normalized_level))
+    return true
+  end
+
+  -- setControlRodsLevels fallback: use 1-based Lua array (standard CC serialisation).
   if has_method(method_set, "setControlRodsLevels") then
     local rod_count = count_rods(name, method_set)
     if not rod_count or rod_count < 1 then
@@ -305,7 +348,7 @@ function reactor.apply_rod_level(name, level, log_prefix)
       return nil, "unable to resolve rod count"
     end
     local levels = {}
-    for index = 0, rod_count - 1 do
+    for index = 1, rod_count do
       levels[index] = normalized_level
     end
     local ok, err = utils.safe_peripheral_call(name, "setControlRodsLevels", levels)
@@ -318,20 +361,6 @@ function reactor.apply_rod_level(name, level, log_prefix)
       return nil, "returned false"
     end
     log_rod_path(log_prefix, name, "setControlRodsLevels", "count=" .. tostring(rod_count) .. " level=" .. tostring(normalized_level))
-    return true
-  end
-
-  if has_method(method_set, "setAllControlRodLevels") then
-    local ok, err = utils.safe_peripheral_call(name, "setAllControlRodLevels", normalized_level)
-    if err then
-      log_rod_error(log_prefix, name, "setAllControlRodLevels", err)
-      return nil, err
-    end
-    if ok == false then
-      log_rod_error(log_prefix, name, "setAllControlRodLevels", "returned false")
-      return nil, "returned false"
-    end
-    log_rod_path(log_prefix, name, "setAllControlRodLevels", "level=" .. tostring(normalized_level))
     return true
   end
 

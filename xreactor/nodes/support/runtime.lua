@@ -68,25 +68,61 @@ function M.safe_wrapped_call(obj, method, ...)
   return pcall(obj[method], ...)
 end
 
-function M.run_event_loop(receive_timeout, services, comms, after_cycle)
-  while true do
-    local timer = os.startTimer(receive_timeout)
-    while true do
-      local event = { os.pullEvent() }
-      if event[1] == "modem_message" then
-        comms:handle_event(event)
-        services:tick(nil, event)
-      elseif event[1] == "timer" and event[2] == timer then
-        break
-      elseif event[1] == "monitor_touch" or event[1] == "key" then
-        services:tick(nil, event)
-      end
-    end
-    if type(after_cycle) == "function" then
-      after_cycle()
-    end
-    services:tick()
+local function is_terminate(err)
+  return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
+end
+
+local function crash_screen(err)
+  if term and term.setBackgroundColor and colors then
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.red)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("=== NODE CRASH ===")
+    term.setTextColor(colors.white)
+    print("")
+    print(tostring(err))
+    print("")
+    term.setTextColor(colors.yellow)
+    print("Druecke eine Taste um neu zu starten...")
+    term.setTextColor(colors.white)
+  else
+    print("CRASH: " .. tostring(err))
   end
+  pcall(os.pullEvent, "key")
+  if os.reboot then os.reboot() end
+end
+
+function M.run_event_loop(receive_timeout, services, comms, after_cycle)
+  local ok, err = xpcall(function()
+    while true do
+      local timer = os.startTimer(receive_timeout)
+      while true do
+        local event = { os.pullEvent() }
+        if event[1] == "modem_message" then
+          comms:handle_event(event)
+          services:tick(nil, event)
+        elseif event[1] == "timer" and event[2] == timer then
+          break
+        elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key" then
+          services:tick(nil, event)
+        end
+      end
+      if type(after_cycle) == "function" then
+        local ok2, err2 = pcall(after_cycle)
+        if not ok2 then
+          -- Fehler in after_cycle loggen aber nicht crashen
+          pcall(function()
+            require("core.utils").log("RUNTIME", "after_cycle error: " .. tostring(err2), "ERROR")
+          end)
+        end
+      end
+      services:tick()
+    end
+  end, function(e) return e end)
+  if ok then return end
+  if is_terminate(err) then return end
+  crash_screen(err)
 end
 
 return M

@@ -36,6 +36,12 @@ function M.new(opts)
       if v ~= nil and tostring(v) ~= "" and tostring(v) ~= "-" then return v end
     end
   end
+  local function profile_target_factor(profile_name)
+    local key = tostring(profile_name or "BASELOAD"):upper()
+    if key == "PEAK" then return 1.0 end
+    if key == "IDLE" then return 0.2 end
+    return 0.6
+  end
   local function normalize_assignment(state)
     local map = {
       active = "ASSIGNED", startup = "ASSIGNED", standby = "ASSIGNED",
@@ -168,6 +174,28 @@ function M.new(opts)
         )
         rt_node.queue_state = rt_node.queue_state or node.queue_state or node.state or "idle"
         rt_node.queue_step = rt_node.queue_step or node.queue_step or (node.last_command_result and node.last_command_result.transition) or "-"
+        -- Capacity-Learning Status aus dem Node-Payload lesen
+        local rt_data = node.rt or {}
+        rt_node.capacity_ready          = rt_data.capacity_ready == true or node.capacity_ready == true
+        rt_node.capacity_max            = pick_number(rt_data.capacity_max, node.capacity_max, 0)
+        rt_node.capacity_stable_samples = rt_data.capacity_stable_samples or 0
+        rt_node.capacity_stable_turbines= rt_data.capacity_stable_turbines or 0
+        rt_node.capacity_total_turbines = rt_data.capacity_total_turbines or 0
+        rt_node.capacity_source         = rt_data.capacity_source or "UNKNOWN"
+        -- Learning-Meldung für die UI aufbauen
+        if not rt_node.capacity_ready then
+          rt_node.learning_note = string.format(
+            "LEARNING %d/%d Turbinen stabil (%d Samples)",
+            rt_node.capacity_stable_turbines,
+            rt_node.capacity_total_turbines,
+            rt_node.capacity_stable_samples
+          )
+          rt.rt_learning = (rt.rt_learning or 0) + 1
+        else
+          rt_node.learning_note = string.format(
+            "READY %.0f RF/t", rt_node.capacity_max
+          )
+        end
         rt_node = normalize_rt_display(rt_node)
         if rt_node.assignment_state == "ASSIGNED" then
           rt.assigned = (rt.assigned or 0) + 1
@@ -179,7 +207,7 @@ function M.new(opts)
         if rt_node.control_source == "MASTER" then rt.master_control = (rt.master_control or 0) + 1 else rt.local_control = (rt.local_control or 0) + 1 end
         if stale then rt.rt_stale = (rt.rt_stale or 0) + 1 end
         rt.rt_nodes[#rt.rt_nodes+1] = rt_node
-        overview.power_actual = overview.power_actual + (rt_node.actual_output or rt_node.output or 0)
+        overview.power_actual = overview.power_actual + pick_number(rt_node.actual_output, rt_node.output, node.output, node.actual_output, 0)
         local state = tostring(rt_node.state or '')
         if state == 'RUNNING' then rt.rt_active = rt.rt_active + 1 elseif state == 'STARTUP' then rt.rt_startup = rt.rt_startup + 1 elseif state == 'SHUTDOWN' then rt.rt_shutdown = rt.rt_shutdown + 1 end
       elseif node.role == c.constants.roles.ENERGY_NODE then
@@ -216,6 +244,9 @@ function M.new(opts)
       if node.role == c.constants.roles.WATER_NODE then energy.resources.water_total = (energy.resources.water_total or 0) + ((node.water and node.water.total) or 0) end
       if node.role == c.constants.roles.REPROCESSOR_NODE then energy.resources.reprocessing_state = (node.reprocessor and (node.reprocessor.state or node.reprocessor.mode)) or '-' end
     end
+    if (overview.power_target or 0) <= 0 and (overview.power_actual or 0) > 0 then
+      overview.power_target = overview.power_actual * profile_target_factor(overview.active_profile)
+    end
     table.sort(overview.nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
     table.sort(rt.rt_nodes, function(a,b) return tostring(a.id or '') < tostring(b.id or '') end)
     if #rt.rt_nodes == 0 then
@@ -234,7 +265,18 @@ function M.new(opts)
     overview.nodes_stale = overview.nodes_stale or 0
     energy.matrix_count = #energy.matrices
     overview.peer_summary = string.format('Peers live=%d stale=%d rt=%d energy-matrix=%d src=%d', overview.nodes_live, overview.nodes_stale, overview.rt_online or 0, energy.matrix_count or 0, energy.matrix_sources or 0)
-    overview.rt_summary = string.format("RT active=%d startup=%d shutdown=%d stale=%d assigned=%d unassigned=%d unavailable=%d master=%d local=%d", rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0, rt.assigned or 0, rt.unassigned or 0, rt.unavailable or 0, rt.master_control or 0, rt.local_control or 0)
+    -- Learning-Meldung in rt_summary einbauen
+    local learning_count = rt.rt_learning or 0
+    local learning_hint = learning_count > 0
+      and string.format(" | LEARNING: %d Node(s) lernen noch ein", learning_count)
+      or ""
+    overview.rt_summary = string.format(
+      "RT active=%d startup=%d shutdown=%d stale=%d assigned=%d unassigned=%d unavailable=%d master=%d local=%d%s",
+      rt.rt_active or 0, rt.rt_startup or 0, rt.rt_shutdown or 0, rt.rt_stale or 0,
+      rt.assigned or 0, rt.unassigned or 0, rt.unavailable or 0,
+      rt.master_control or 0, rt.local_control or 0,
+      learning_hint
+    )
     overview.energy_hint = string.format("Energy %.1f%% | Stored %.1f/%.1f | In %.1f Out %.1f | Mode %s | Matrices %d", energy.aggregate_percent or 0, energy.stored or 0, energy.capacity or 0, energy.input or 0, energy.output or 0, tostring(energy.mode or "-"), energy.matrix_count or 0)
     energy.energy_summary = overview.energy_hint
     overview.ops_hints[#overview.ops_hints + 1] = (overview.nodes_stale or 0) > 0 and "Stale Nodes erkannt: Kommunikationslage pruefen" or "Alle Nodes liefern frische Daten"
@@ -301,30 +343,21 @@ function M.new(opts)
           end
         end
       end
-    end
-  controller.handle_input = function(event)
-      if event[1] == 'monitor_touch' then c.view_manager:handle_input(event[2], event[3], event[4]) end
-    end
+  end
   controller.handle_action = function(action)
-      if type(action) ~= "table" or not action.type then return false, "invalid-action" end
-      local handled = false
-      if action.type == 'profile' and action.name then
-        c.calc.apply_profile(action.name)
-        handled = true
-      elseif action.type == 'auto' then
-        c.calc.set_auto_profile(not (c.calc.get_auto_profile and c.calc.get_auto_profile()))
-        handled = true
-      elseif action.type == 'rt_hold' then
-        c.calc.set_rt_global_off_hold(not (c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold()))
-        handled = true
-      end
-      if c.log then
-        c.log(("UI action dispatch: type=%s view=%s monitor=%s handled=%s"):format(
-          tostring(action.type), tostring(action.view or "-"), tostring(action.monitor or "-"), tostring(handled)
-        ), handled and "DEBUG" or "WARN")
-      end
-      return handled
+    if not action or not action.type then return false end
+    if action.type == "profile" and action.name and c.calc.apply_profile then c.calc.apply_profile(action.name); return true end
+    if action.type == "auto" and c.calc.set_auto_profile then c.calc.set_auto_profile(not (c.calc.get_auto_profile and c.calc.get_auto_profile())); return true end
+    if action.type == "rt_hold" and c.calc.set_rt_global_off_hold then c.calc.set_rt_global_off_hold(not (c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold())); return true end
+    return false
+  end
+  controller.handle_input = function(event)
+    if c.view_manager and c.view_manager.handle_input then
+      local hit = c.view_manager:handle_input(event)
+      if hit then return controller.handle_action(hit) end
     end
+    return false
+  end
   return controller
 end
 

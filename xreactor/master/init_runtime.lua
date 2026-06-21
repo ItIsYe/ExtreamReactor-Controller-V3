@@ -1,5 +1,16 @@
 local M = {}
 
+-- Fix P5: ctx-Interface ist bewusst flach gehalten für CC:Tweaked-Kompatibilität,
+-- aber die Felder sind jetzt in logische Gruppen dokumentiert:
+--
+--  ctx.config          -- Master-Config (heartbeat_interval, rt_setpoints, ...)
+--  ctx.utils/constants/health/... -- Bibliotheken
+--  ctx.refs            -- Mutable refs (wird von M.run befüllt: comms, services, ...)
+--  ctx.nodes/alarms/trends/...    -- Shared State
+--  ctx.*_tick / ctx.*_render / ctx.*_snapshot  -- Callbacks aus runtime_loop
+--  ctx.get_*/set_*     -- State-Accessor-Lambdas
+--
+-- Neue Felder bitte in die passende Gruppe oben einsortieren.
 function M.run(ctx)
   local configured_scale = ctx.config.monitor_scale
   if configured_scale == nil then
@@ -29,7 +40,7 @@ function M.run(ctx)
       rt = { label = "RT", render = ctx.rt_ui.render, interval = 1.0 },
       resources = { label = "Resources", render = ctx.resources_ui.render, interval = 2.0 },
       alerts = { label = "Alerts", render = ctx.alerts_ui.render, hit_test = ctx.alerts_ui.hit_test, interval = 0.5 },
-      alarms = { label = "Logs", render = ctx.alarms_ui.render, interval = 1.0 }
+      alarms = { label = "Logs", render = ctx.alarms_ui.render, hit_test = ctx.alarms_ui.handle_input, interval = 1.0 },
     },
     view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms" },
     on_action = function(action)

@@ -40,6 +40,8 @@ local support_ui_pages = require("nodes.support.ui_pages")
 local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.fuel.role_descriptor")
 local config_normalizer = require("nodes.fuel.config_normalizer")
+local logistics_router = require("nodes.fuel.logistics_router")
+local router_ui_lib     = require("nodes.fuel.router_ui")
 
 local DEFAULT_CONFIG = {
   role = constants.roles.FUEL_NODE, -- Node role identifier.
@@ -95,6 +97,9 @@ local services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local fuel_health = health.new({})
 local storage
+local router
+local rs_router_instance
+local router_ui_instance
 local devices = {
   monitor = nil,
   monitor_name = nil,
@@ -130,6 +135,68 @@ local function cache()
   end
 end
 
+local function get_rs_router()
+  if not rs_router_instance then
+    rs_router_instance = redstone_router_lib.new({
+      config    = config,
+      log       = function(level, msg) utils.log("FUEL", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+    })
+  end
+  return rs_router_instance
+end
+
+local function get_router()
+  if not router then
+    router = logistics_router.new({
+      config    = config,
+      log       = function(level, msg) utils.log("FUEL", msg, level) end,
+      warn_once = function(key, msg) warn_once(key, msg) end,
+      rs_router = get_rs_router(),  -- share rs_router with router_ui
+    })
+  end
+  return router
+end
+
+local function get_router_ui()
+  if not router_ui_instance then
+    router_ui_instance = router_ui_lib.new({
+      redstone_router = get_rs_router(),
+      config_path     = "/xreactor/config/fuel_routes.lua",
+      log             = function(level, msg) utils.log("FUEL", msg, level) end,
+      get_reactors    = function()
+        -- Primary source: reactors configured in config.logistics.reactors
+        -- (these are the actual peripheral names already set up by the user)
+        local list = {}
+        local seen = {}
+        local lg = config.logistics or {}
+        for _, entry in ipairs(lg.reactors or {}) do
+          local label = entry.name or entry.label or entry.reactor_port or "?"
+          local id    = entry.label or entry.name or label
+          if not seen[id] then
+            seen[id] = true
+            list[#list + 1] = { id = id, label = label }
+          end
+        end
+        -- Fallback: scan wired-modem peripherals for ER2 reactor computer ports
+        if #list == 0 then
+          for _, name in ipairs(peripheral.getNames() or {}) do
+            local ptype = tostring(peripheral.getType(name) or ""):lower()
+            if ptype:find("reactor") or name:lower():find("reactor") then
+              if not seen[name] then
+                seen[name] = true
+                list[#list + 1] = { id = name, label = name }
+              end
+            end
+          end
+        end
+        return list
+      end,
+    })
+  end
+  return router_ui_instance
+end
+
 local function discover()
   local names
   local registry_devices
@@ -137,6 +204,14 @@ local function discover()
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
+  -- Fallback: if no external monitor peripheral is attached, render to the
+  -- computer's own terminal so Diagnostics/Router pages (including the
+  -- log mode buttons) are visible on the PC console.
+  if not devices.monitor and term and type(term.current) == "function" then
+    devices.monitor = term.current()
+    devices.monitor_name = devices.monitor_name or "term"
+    devices.monitor_is_term = true
+  end
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
   local storage_devices = support_discovery.collect_devices_by_methods(names, {
     kind = "storage",
@@ -249,6 +324,7 @@ local function build_status_payload()
   payload.reserve = amount
   payload.minimum_reserve = reserve
   payload.sources = { { id = devices.storage_name or "unknown", amount = amount } }
+  payload.logistics = get_router():get_summary()
   payload.bindings = fuel_health.bindings
   payload.bindings_summary = health.summarize_bindings(fuel_health.bindings)
   return payload
@@ -321,7 +397,19 @@ local function render_monitor()
           support_ui_pages.render_alert_banner(target, ui, model)
           local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
           support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
-          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
+          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 5 })
+          -- Log mode buttons on bottom line
+          support_ui_pages.render_log_mode_button(target, utils, 1, h - 1, w - 2)
+        end,
+        handle_touch = function(x, y)
+          local w2, h2 = ui.getSize(mon)
+          return support_ui_pages.handle_log_mode_touch(x, y, (h2 or 20) - 1, utils, 1)
+        end },
+        { name = "Router", render = function(target)
+          get_router_ui():render(target, ui, colors)
+        end,
+        handle_touch = function(x, y)
+          return get_router_ui():handle_touch(x, y)
         end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
@@ -329,6 +417,14 @@ local function render_monitor()
     })
   end
   monitor_router:render(mon, model)
+end
+
+local function handle_monitor_touch(x, y)
+  -- Forward touch to current page if it handles touch
+  local page = monitor_router and monitor_router:current()
+  if page and type(page.handle_touch) == "function" then
+    return page.handle_touch(x, y)
+  end
 end
 
 local function handle_command(message)
@@ -343,7 +439,15 @@ local function handle_command(message)
     return
   end
   if command.target == constants.command_targets.SET_RESERVE then
-    reserve = command.value
+    local new_reserve = tonumber(command.value)
+    if type(new_reserve) == "number" and new_reserve >= 0 then
+      reserve = new_reserve
+      utils.log("FUEL", "Reserve updated to " .. tostring(reserve))
+    else
+      utils.log("FUEL", "SET_RESERVE rejected: invalid value=" .. tostring(command.value), "WARN")
+      return support_command_handler.finish_with_result(devices,
+        { ok = false, error = "invalid reserve value", reason_code = "INVALID_VALUE" })
+    end
   elseif command.target == constants.command_targets.MODE and command.value == constants.node_states.MANUAL then
     -- manual mode acknowledged but not changing behavior
   else
@@ -430,4 +534,18 @@ local function init()
 end
 
 init()
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms)
+-- Add touch handler as a lightweight service entry
+services:add({
+  name = "router_touch",
+  tick = function(dt, event)
+    -- monitor_touch: external Monitor peripheral touch
+    -- mouse_click: Advanced Computer's own terminal (when monitor falls back to term)
+    if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then
+      handle_monitor_touch(event[3], event[4])
+    end
+  end
+})
+
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+  get_router():tick()
+end)

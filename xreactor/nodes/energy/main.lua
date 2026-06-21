@@ -39,7 +39,7 @@ local discovery_log = require("nodes.energy.discovery_log")
 local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
 local matrix_topology_cache = require("nodes.energy.matrix_topology_cache")
 local config_normalizer = require("nodes.energy.config_normalizer")
-local command_handler = require("nodes.energy.command_handler")
+local message_handler_lib = require("nodes.energy.command_handler")
 local status_payload_runtime = require("nodes.energy.status_payload")
 local ui_model_runtime = require("nodes.energy.ui_model")
 local energy_ui_pages = require("nodes.energy.ui_pages")
@@ -62,15 +62,15 @@ local DEFAULT_CONFIG = {
   scan_interval = 2, -- Seconds between lightweight discovery checks (heavy discovery runs only on topology change/forced interval).
   discovery_force_rescan_interval = 300, -- Defensive full discovery interval (seconds) even without observed topology changes.
   matrix_metric_poll_interval = 3.0, -- Seconds between expensive matrix energy metric reads (stored/capacity/input/output).
-  matrix_metric_call_budget = 4, -- Max expensive matrix metric peripheral calls per payload build to avoid long blocking ticks.
-  matrix_metric_time_budget_ms = 800, -- Max cumulative time spent on expensive matrix metric calls per payload build.
-  matrix_metric_slow_call_ms = 150, -- Calls above this duration are treated as expensive outliers and polled less frequently.
+  matrix_metric_call_budget = 6, -- Max expensive matrix metric peripheral calls per payload build to avoid long blocking ticks.
+  matrix_metric_time_budget_ms = 2000, -- Max cumulative time spent on expensive matrix metric calls per payload build.
+  matrix_metric_slow_call_ms = 400, -- Calls above this duration are treated as expensive outliers and polled less frequently.
   matrix_metric_slow_poll_multiplier = 4.0, -- Extra cadence multiplier for expensive outlier matrix metric calls.
   matrix_metric_per_matrix_budget = 1, -- Max expensive matrix metric calls per matrix/per payload build so one port cannot dominate a tick.
   matrix_sample_min_tick_spacing_ms = 400, -- Lower bound between matrix sampling ticks to reduce bursty load under heavy service loops.
   matrix_component_poll_interval = 30, -- Seconds between matrix component count reads (cells/providers/ports).
   matrix_component_call_budget = 2, -- Max matrix component count calls per sampling tick to avoid periodic spikes.
-  matrix_component_time_budget_ms = 400, -- Max time budget for matrix component calls per sampling tick.
+  matrix_component_time_budget_ms = 2000, -- Max Zeit-Budget pro Tick für Matrix-Komponenten-Abfragen.
   ui_refresh_interval = 1.0, -- Seconds between monitor UI refreshes.
   ui_scale = 0.5, -- Monitor text scale for the ENERGY node UI.
   monitor = {
@@ -345,20 +345,26 @@ local function handle_message(message)
   return message_handler and message_handler.handle_message(message)
 end
 
+-- TEMPORÄR: Energy-Node empfängt sonst keine Commands vom Master (nur
+-- sendend) — REMOTE_UPDATE ist die einzige Ausnahme, damit auch diese Node
+-- per Funk aktualisiert werden kann. Siehe core/remote_update.lua.
 local function handle_command(message)
-  return message_handler and message_handler.handle_command(message)
+  local payload = type(message) == "table" and message.payload or nil
+  local command = payload and payload.command
+  if type(command) == "table" and command.target == "REMOTE_UPDATE" then
+    if comms then comms:send_ack(message, true, { updating = true }) end
+    utils.log("ENERGY", "Remote-Update command received, starting installer...", "WARN")
+    local remote_update = require("core.remote_update")
+    remote_update.run(function(level, text) utils.log("ENERGY", text, level) end)
+    return { ok = true }
+  end
+  return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
 end
 
 local function init()
   utils.log("ENERGY", "Initializing services (comms, discovery, telemetry, ui)", "INFO")
-  message_handler = command_handler.new({
-    protocol = protocol,
+  message_handler = message_handler_lib.new({
     constants = constants,
-    get_comms_id = function() return comms and comms.network and comms.network.id or config.node_id end,
-    set_last_command = function(command_error)
-      devices.last_command = command_error
-      devices.last_command_ts = os.epoch("utc")
-    end,
     mark_master_seen = function() runtime.master_seen_ts = os.epoch("utc") end,
     on_master_alerts = function(alerts) runtime.master_alerts = alerts end,
     on_proto_mismatch = function() devices.proto_mismatch = true end
@@ -445,7 +451,8 @@ local function init()
     ui = ui,
     colors = colors,
     ui_router = ui_router,
-    ui_state = ui_state
+    ui_state = ui_state,
+    utils = utils
   })
   ui_model_builder = ui_model_runtime.new({
     now_ms = now_ms,
@@ -497,6 +504,12 @@ local function init()
     start_delay = 0.20,
     runtime = matrix_runtime
   }))
+  -- Fix #2: status_max_age_ms war hardcodiert 1000ms → Cache wurde fast nie
+  -- genutzt weil der Telemetry-Service alle status_interval Sekunden sendet.
+  -- Neu: 90% des Send-Intervalls → Cache ist effektiv für aufeinanderfolgende Aufrufe.
+  local telemetry_status_interval_ms = math.max(1000,
+    math.floor((tonumber(config.status_interval) or 5) * 1000))
+  local telemetry_max_age_ms = math.floor(telemetry_status_interval_ms * 0.9)
   services:add(telemetry_service.new({
     name = "TELEMETRY",
     log_prefix = "TELEMETRY",
@@ -504,7 +517,7 @@ local function init()
     status_interval = config.status_interval or config.heartbeat_interval,
     heartbeat_interval = config.heartbeat_interval,
     enable_heartbeat = false,
-    status_max_age_ms = 1000,
+    status_max_age_ms = telemetry_max_age_ms,
     build_payload = build_status_payload
   }))
   services:add(ui_service.new({
@@ -579,7 +592,15 @@ local function main_loop()
       if event[1] == "modem_message" then
         comms:handle_event(event)
         run_heartbeat_pump(now_ms())
-      elseif event[1] == "monitor_touch" or event[1] == "key" then
+      elseif event[1] == "monitor_touch" or event[1] == "mouse_click" then
+        -- Log mode buttons on the Diagnostics page
+        if devices.monitor and ui_state.router and ui_state.router.current
+            and ui_state.router:current() and ui_state.router:current().name == "Diagnostics" then
+          ui_pages.handle_diagnostics_touch(devices.monitor, event[3], event[4])
+        end
+        -- Still forward to services (ui_service handles page navigation)
+        services:tick(nil, event)
+      elseif event[1] == "key" then
         services:tick(nil, event)
       elseif event[1] == "timer" and event[2] == heartbeat_timer then
         run_heartbeat_pump(now_ms())
@@ -588,11 +609,8 @@ local function main_loop()
         break
       end
     end
-    if now_ms() - runtime.last_heartbeat >= hb_interval_ms then
-      run_heartbeat_pump(now_ms())
-      rearm_heartbeat_timer()
-    end
-    run_heartbeat_pump(now_ms())
+    -- C4: heartbeat_pump nur noch einmal nach services:tick() —
+    -- timer-basiertes Pumpen übernimmt die regelmäßige Sendung.
     services:tick()
     run_heartbeat_pump(now_ms())
   end
@@ -612,7 +630,32 @@ else
   if is_terminate_error(result_or_err) then
     shutdown("terminate received")
   else
+    -- Fix #4: Fehler anzeigen, auf Bestätigung warten, dann sauber neu starten.
+    -- Kein blindes re-throw das einen roten Crash-Screen ohne Kontrolle erzeugt.
     shutdown("runtime error: " .. tostring(result_or_err))
-    error(result_or_err, 0)
+    -- Crash-Screen: Fehler klar anzeigen
+    if term and term.setBackgroundColor and term.setTextColor and colors then
+      term.setBackgroundColor(colors.black)
+      term.setTextColor(colors.red)
+      term.clear()
+      term.setCursorPos(1, 1)
+      print("=== ENERGY NODE CRASH ===")
+      term.setTextColor(colors.white)
+      print("")
+      print(tostring(result_or_err))
+      print("")
+      term.setTextColor(colors.yellow)
+      print("Druecke eine Taste um neu zu starten...")
+      term.setTextColor(colors.white)
+    else
+      print("ENERGY NODE CRASH: " .. tostring(result_or_err))
+      print("Druecke eine Taste um neu zu starten...")
+    end
+    -- Auf Bestätigung warten
+    pcall(os.pullEvent, "key")
+    -- Sauberer Neustart via /startup
+    if os.reboot then
+      os.reboot()
+    end
   end
 end
