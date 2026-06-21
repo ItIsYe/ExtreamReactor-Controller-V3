@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 96,
-  manifest_id = "manifest-v96",
+  manifest_version = 97,
+  manifest_id = "manifest-v97",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -87,7 +87,7 @@ return {
     { path = "core/turbine_ctrl.lua", size_bytes = 2663, hash = "d1b27731", required_for={"RT"}},
     { path = "core/turbine_regulator.lua", size_bytes = 17134, hash = "50ce7402", required_for={"RT"}},
     { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48", required_for={"RT"}},
-    { path = "nodes/rt/command_handler.lua", size_bytes = 11518, hash = "7995cbcc", required_for={"RT"}},
+    { path = "nodes/rt/command_handler.lua", size_bytes = 12011, hash = "1aef3bff", required_for={"RT"}},
     { path = "nodes/rt/config.lua", size_bytes = 3612, hash = "26aa9cc3", required_for={"RT"}},
     { path = "nodes/rt/config_normalizer.lua", size_bytes = 23318, hash = "b6909930", required_for={"RT"}},
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"}},
@@ -96,7 +96,7 @@ return {
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"}},
     { path = "nodes/rt/main.lua", size_bytes = 97841, hash = "8d587963", required_for={"RT"}},
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"}},
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 25142, hash = "9603b984", required_for={"RT"}},
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 25187, hash = "a0947b1e", required_for={"RT"}},
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"}},
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"}},
     { path = "nodes/rt/state_handlers.lua", size_bytes = 8762, hash = "aa2155db", required_for={"RT"}},
