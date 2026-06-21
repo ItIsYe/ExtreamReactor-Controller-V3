@@ -113,6 +113,14 @@ local function set_setpoints(command, ctx, record)
   if value.enable_turbines ~= nil then
     targets.enable_turbines = value.enable_turbines and true or false
   end
+  -- Fix: assignment_state wurde vom Master gesendet und nur fürs Logging
+  -- ausgewertet (value_summary), aber nie tatsächlich in targets gespeichert.
+  -- Die UI (monitor_ui.lua render_overview) liest model.assignment_state
+  -- für den STANDBY-Indikator (z.B. "shutdown"/"unavailable") — ohne diese
+  -- Zeile war das Feld immer nil und der Indikator faktisch unerreichbar.
+  if value.assignment_state ~= nil then
+    targets.assignment_state = tostring(value.assignment_state)
+  end
   local desired_state = value.desired_node_state
   local machine = ctx.node_state_machine
   local states = ctx.get_states()
