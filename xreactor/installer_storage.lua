@@ -210,7 +210,7 @@ function M.preflight_storage(ctx, storage_plan, opts)
 
   if storage_plan.mode == "update" then
     ctx.warn(string.format(
-      "Storage preflight continuing in low-space update mode (free=%s required=%d payload=%d); staging will fail safely if space is still insufficient",
+      "Storage preflight continuing in low-space update mode (free=%s required=%d payload=%d); per-file write will fail safely if space is still insufficient",
       tostring(free_bytes),
       required_bytes,
       storage_plan.payload_bytes or 0
