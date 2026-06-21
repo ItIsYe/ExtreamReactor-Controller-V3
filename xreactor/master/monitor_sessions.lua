@@ -10,14 +10,25 @@ local function resolve_role(index)
   return is_primary_index(index) and PRIMARY_ROLE_MAP[index] or "aux"
 end
 
+-- Fix: aux-Monitore (4.+) sollen ein fest dediziertes Error/Warning-Display
+-- sein, nicht durch Touch umschaltbar — daher ebenfalls "locked" wie die
+-- 3 primären Monitore, nur eben auf AUX_DEFAULT_VIEW statt einer der
+-- primären Rollen.
 local function resolve_locked(index)
-  return is_primary_index(index)
+  return true
 end
+
+-- TEMPORÄR/dauerhaft: 4. physischer Monitor (und jeder weitere "aux"-Monitor)
+-- wird automatisch fest auf die Fehler/Warnungs-Anzeige ("alarms") gepinnt,
+-- statt die normale Default-View (Overview) zu zeigen. Dient ausschließlich
+-- als dediziertes Error/Warning-Display, unabhängig von den 3 primären
+-- Monitoren (overview/rt/energy), die davon NICHT betroffen sind.
+local AUX_DEFAULT_VIEW = "alarms"
 
 local function default_view(index, view_order)
   local role = resolve_role(index)
   if role ~= "aux" then return role end
-  return (view_order and view_order[1]) or "overview"
+  return AUX_DEFAULT_VIEW
 end
 
 local function copy_hit(hit)
