@@ -63,7 +63,11 @@ function M:bind_primary_role(session, index)
   if not session then return end
   session.role = resolve_role(index)
   session.locked = resolve_locked(index)
-  if session.locked then session.view_key = session.role end
+  -- Fix: dieselbe Korrektur wie in resolve_binding() — "aux" ist kein
+  -- gültiger view_key, muss über default_view() aufgelöst werden.
+  if session.locked then
+    session.view_key = (session.role ~= "aux") and session.role or default_view(index, self.view_order)
+  end
 end
 
 function M:resolve_view_key(session, index)
@@ -76,7 +80,18 @@ function M:resolve_binding(index, prior)
   local prior_session = prior or {}
   local role = resolve_role(index)
   local locked = resolve_locked(index)
-  local view_key = locked and role or (prior_session.view_key or default_view(index, self.view_order))
+  -- Fix: "locked and role" setzte den view_key für aux-Monitore fälschlich
+  -- auf den ROLLENNAMEN "aux" — eine View mit diesem Namen existiert nicht
+  -- ("view-missing-or-no-render"). Nur PRIMÄRE Rollen (overview/rt/energy)
+  -- haben einen view_key, der direkt dem Rollennamen entspricht; aux-Monitore
+  -- müssen immer über default_view() aufgelöst werden (das liefert
+  -- AUX_DEFAULT_VIEW = "alarms").
+  local view_key
+  if locked and role ~= "aux" then
+    view_key = role
+  else
+    view_key = default_view(index, self.view_order)
+  end
   return role, locked, view_key
 end
 
