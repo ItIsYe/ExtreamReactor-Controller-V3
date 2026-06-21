@@ -166,7 +166,18 @@ function M.update_capacity_learning(ctx, turbines, actual_output)
     reason = "INIT"
   }
   local learning = ctx.capacity_learning
-  local sample = summarize_capacity_sample(turbines, ctx.targets and ctx.targets.rpm, actual_output)
+  -- Fix: ctx.targets.rpm kann gueltig 0 sein (z.B. Master sendet
+  -- assignment_state=shed/shutdown oder Profil=IDLE/0%) — "or 900" greift
+  -- dann NICHT (0 ist kein nil/false), die Stabilitaets-Toleranz wurde also
+  -- um target=0 statt um die tatsaechliche Regel-RPM (900, siehe get_target_rpm()
+  -- in main.lua) berechnet. Turbinen die korrekt bei 900 RPM liefen, fielen
+  -- dadurch IMMER als "out_of_band" durch — das Learning kam nie ueber
+  -- Sample 0/3 hinaus, obwohl die Turbinen sichtbar liefen. Hier denselben
+  -- Fallback wie get_target_rpm() nachbilden: nur ein POSITIVER targets.rpm
+  -- gilt als gueltiges Ziel, sonst der Default 900.
+  local learning_target_rpm = ctx.targets and type(ctx.targets.rpm) == "number" and ctx.targets.rpm > 0
+    and ctx.targets.rpm or nil
+  local sample = summarize_capacity_sample(turbines, learning_target_rpm, actual_output)
 
   learning.reason = sample.reason
   learning.total_turbines = sample.total
