@@ -217,12 +217,12 @@ local function make_dispatch()
       ctx.apply_mode(ctx.STATE.SAFE)
       return nil
     end,
-    -- TEMPORÄR: Remote-Update — siehe core/remote_update.lua. Kann später
-    -- wieder entfernt werden, sobald die aktive Entwicklungsphase vorbei ist.
+    -- TEMPORÄR: Remote-Update — zentrale Logik in core/remote_update.lua.
+    -- Kann später wieder entfernt werden, sobald die aktive Entwicklungsphase
+    -- vorbei ist.
     ["REMOTE_UPDATE"] = function(_, ctx)
       require("core.remote_update").handle_command({
-        log_prefix = "RT",
-        utils = { log = function(_, text, level) ctx.log(level, text) end },
+        log_fn = function(level, text) ctx.log(level, text) end,
       })
       return nil
     end
