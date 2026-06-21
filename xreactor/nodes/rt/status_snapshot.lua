@@ -79,186 +79,129 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
   return list
 end
 
-local function summarize_capacity_sample(turbines, target_rpm, total_output)
-  local total = type(turbines) == "table" and #turbines or 0
-  if total == 0 then
-    return { ok = false, reason = "NO_TURBINES", total = 0, stable = 0, producing = 0, sample_output = 0, required = 1 }
-  end
+-- ════════════════════════════════════════════════════════════════════════
+-- CAPACITY LEARNING — komplett neu geschrieben (siehe Projekt-Notizen)
+-- ════════════════════════════════════════════════════════════════════════
+-- Zweck: die RT-Node kennt ihre maximale Leistungsfähigkeit nicht von
+-- vornherein (hängt von Reaktor-Größe, Turbinen-Anzahl, Mod-Konfiguration
+-- ab) und muss sie messen, damit der Master weiß wie viel diese Node
+-- liefern kann.
+--
+-- PRINZIP (bewusst einfach gehalten):
+--   - Das Ziel für die Kapazitätsmessung ist IMMER fest 900 RPM
+--     (CAPACITY_LEARNING_TARGET_RPM) — komplett unabhängig vom Master.
+--     Das Learning soll ja gerade funktionieren BEVOR der Master sinnvoll
+--     zuweisen kann; eine Abhängigkeit von Master-Setpoints war der Bug,
+--     der das Learning vorher dauerhaft blockiert hat.
+--   - Die Reaktor-Steuerung wird davon NICHT berührt — die regelt
+--     eigenständig über den Steam-Margin-Regler in main.lua weiter.
+--   - Eine Turbine zählt als "am Ziel", wenn Coil eingerastet ist UND die
+--     RPM nah genug an 900 liegt UND sie tatsächlich Energie liefert.
+--   - Aus allen Turbinen am Ziel wird der Durchschnitts-Output berechnet
+--     und auf die Gesamtzahl der Turbinen hochgerechnet — das ergibt die
+--     aktuelle Kapazitätsmessung.
+--   - Die Messung läuft KONTINUIERLICH weiter (kein einmaliges Lock-und-
+--     fertig): steigt der gemessene Wert, wird er sofort übernommen (z.B.
+--     mehr Turbinen werden später hinzugefügt). Ein kurzzeitiger Einbruch
+--     (z.B. eine Turbine kurz offline) lässt den zuletzt bekannten
+--     Höchstwert unverändert, bis eine neue, vollständige Messung vorliegt.
+--   - "ready" (für den Master: capacity_ready) wird true, sobald
+--     mindestens eine gültige Messung vorliegt — ab dann kann der Master
+--     mit dem Wert planen, auch wenn er sich später noch leicht anpasst.
 
-  local target = numeric_value(target_rpm) or 900
-  local tolerance = math.max(10, target * 0.10)
-  local stable = 0
-  local producing = 0
-  local stable_output = 0
-  local rpm_missing = 0
-  local coil_off = 0
-  local out_of_band = 0
+local CAPACITY_LEARNING_TARGET_RPM = 900
+local CAPACITY_LEARNING_TOLERANCE_RPM = 15
+
+-- Misst die aktuelle Kapazität aus den Turbinen, die JETZT am Ziel sind.
+-- Gibt (output, at_target_count, total_count) zurück. output ist die auf
+-- alle Turbinen hochgerechnete Gesamtleistung, oder nil wenn keine einzige
+-- Turbine gerade am Ziel ist (dann bleibt der zuletzt bekannte Wert gültig).
+local function measure_capacity(turbines)
+  local total = type(turbines) == "table" and #turbines or 0
+  if total == 0 then return nil, 0, 0 end
+
+  local at_target = 0
+  local at_target_output = 0
 
   for _, turbine in ipairs(turbines) do
     local rpm = numeric_value(turbine.rpm)
     local energy = numeric_value(turbine.energy) or 0
     local coil = turbine.coil_engaged
-    if not rpm then
-      rpm_missing = rpm_missing + 1
-    elseif math.abs(rpm - target) <= tolerance then
-      if coil == false then
-        coil_off = coil_off + 1
-      elseif energy and energy > 0 then
-        stable   = stable   + 1
-        producing = producing + 1
-        stable_output = stable_output + energy
-      elseif coil ~= false then
-        -- Turbine is in RPM band with coil engaged but energy reads as zero (readback lag).
-        -- Count as mechanically stable for diagnostics.
-        -- Lock still requires sample_output > 0 — no energy means no valid sample.
-        stable = stable + 1
-        -- producing and stable_output unchanged: no real energy to record
-      end
-    else
-      out_of_band = out_of_band + 1
+    if rpm and coil ~= false
+        and math.abs(rpm - CAPACITY_LEARNING_TARGET_RPM) <= CAPACITY_LEARNING_TOLERANCE_RPM
+        and energy > 0 then
+      at_target = at_target + 1
+      at_target_output = at_target_output + energy
     end
   end
 
-  -- Option A: required = 1 — eine stabile Turbine reicht zum Locken.
-  -- max_output wird als stable_output / stable * total hochgerechnet damit
-  -- der Master die echte Gesamt-Kapazität bekommt, nicht nur die einer Turbine.
-  local required = 1
-  local observed_total = numeric_value(total_output) or 0
-  local sample_output = stable_output > 0 and stable_output or observed_total
-  -- Hochrechnung: wenn nur ein Teil der Turbinen stabil ist,
-  -- schätze Gesamtkapazität proportional hoch.
-  if stable > 0 and stable < total and stable_output > 0 then
-    sample_output = math.floor(stable_output / stable * total)
-  end
-  -- Sample gültig wenn mindestens 1 Turbine stabil + Energie messbar.
-  local ok = stable >= required and sample_output > 0
-  local reason
-  if ok then
-    reason = "SAMPLE_OK"
-  elseif stable < required then
-    reason = "NOT_ALL_STABLE"
-  else
-    reason = "OUTPUT_UNAVAILABLE"
-  end
+  if at_target == 0 then return nil, 0, total end
 
-  return {
-    ok = ok,
-    reason = reason,
-    total = total,
-    stable = stable,
-    producing = producing,
-    sample_output = sample_output,
-    required = required,
-    target = target,
-    tolerance = tolerance,
-    rpm_missing = rpm_missing,
-    coil_off = coil_off,
-    out_of_band = out_of_band
-  }
+  -- Durchschnitt der Turbinen am Ziel, hochgerechnet auf alle Turbinen.
+  local output = math.floor((at_target_output / at_target) * total)
+  return output, at_target, total
 end
 
 function M.update_capacity_learning(ctx, turbines, actual_output)
   ctx.capacity_learning = ctx.capacity_learning or {
-    locked = false,
-    stable_samples = 0,
-    max_candidate = 0,
+    ready = false,
     max_output = 0,
+    at_target = 0,
+    total_turbines = 0,
     reason = "INIT"
   }
   local learning = ctx.capacity_learning
-  -- Fix: ctx.targets.rpm kann gueltig 0 sein (z.B. Master sendet
-  -- assignment_state=shed/shutdown oder Profil=IDLE/0%) — "or 900" greift
-  -- dann NICHT (0 ist kein nil/false), die Stabilitaets-Toleranz wurde also
-  -- um target=0 statt um die tatsaechliche Regel-RPM (900, siehe get_target_rpm()
-  -- in main.lua) berechnet. Turbinen die korrekt bei 900 RPM liefen, fielen
-  -- dadurch IMMER als "out_of_band" durch — das Learning kam nie ueber
-  -- Sample 0/3 hinaus, obwohl die Turbinen sichtbar liefen. Hier denselben
-  -- Fallback wie get_target_rpm() nachbilden: nur ein POSITIVER targets.rpm
-  -- gilt als gueltiges Ziel, sonst der Default 900.
-  local learning_target_rpm = ctx.targets and type(ctx.targets.rpm) == "number" and ctx.targets.rpm > 0
-    and ctx.targets.rpm or nil
-  local sample = summarize_capacity_sample(turbines, learning_target_rpm, actual_output)
 
-  learning.reason = sample.reason
-  learning.total_turbines = sample.total
-  learning.stable_turbines = sample.stable
-  learning.producing_turbines = sample.producing
-  learning.required_stable_turbines = sample.required
-  learning.sample_output = sample.sample_output
-  learning.rpm_missing = sample.rpm_missing
-  learning.out_of_band_turbines = sample.out_of_band
-  learning.coil_off_turbines = sample.coil_off
+  local measured, at_target, total = measure_capacity(turbines)
+  learning.at_target = at_target
+  learning.total_turbines = total
 
-  -- Letzten bekannten Turbinen-Stand für UI-Fortschrittsbalken speichern
-  learning.stable_turbines_last = sample.stable
-  learning.total_turbines_last  = sample.total
-
-  if sample.ok then
-    learning.stable_samples = (learning.stable_samples or 0) + 1
-    learning.max_candidate = math.max(learning.max_candidate or 0, sample.sample_output or 0)
-    -- Gut-Fenster: zählt aufeinanderfolgende gültige Samples.
-    -- Ein kurzer Ausreißer (ungültiger Sample) setzt nur den Fenster-Zähler zurück,
-    -- nicht stable_samples — verhindert dass RPM-Schwankungen das Learning blockieren.
-    learning.ok_window = (learning.ok_window or 0) + 1
-    if not learning.locked and learning.stable_samples >= 3 then
-      learning.max_output = learning.max_candidate
-      learning.locked = true
-      learning.reason = "LOCKED"
+  if measured then
+    if not learning.ready then
+      -- Erste gültige Messung: sofort übernehmen, Node ist ab jetzt "ready".
+      learning.max_output = measured
+      learning.ready = true
+      learning.reason = "MEASURED"
       if type(ctx.log) == "function" then
         pcall(ctx.log, "INFO", string.format(
-          "RT capacity locked output=%.2f samples=%d stable=%d/%d",
-          learning.max_output, learning.stable_samples,
-          sample.stable, sample.total
-        ))
+          "RT capacity measured output=%.2f at_target=%d/%d", measured, at_target, total))
       end
-    elseif learning.locked then
-      -- Update wenn >1% über bisherigem Max
-      local threshold = (learning.max_output or 0) * 1.01
-      if sample.sample_output and sample.sample_output > threshold then
-        learning.max_output = sample.sample_output
-        learning.reason = "UPDATED"
-        if type(ctx.log) == "function" then
-          pcall(ctx.log, "INFO", string.format(
-            "RT capacity updated output=%.2f stable=%d/%d",
-            learning.max_output, sample.stable, sample.total
-          ))
-        end
+    elseif measured > learning.max_output then
+      -- Höherer Wert gemessen (z.B. mehr Turbinen verfügbar) -> übernehmen.
+      learning.max_output = measured
+      learning.reason = "UPDATED"
+      if type(ctx.log) == "function" then
+        pcall(ctx.log, "INFO", string.format(
+          "RT capacity updated output=%.2f at_target=%d/%d", measured, at_target, total))
       end
+    else
+      -- Gemessener Wert liegt auf/unter dem bisherigen Maximum (z.B. weil
+      -- gerade nicht alle Turbinen am Ziel sind) — bisherigen Höchstwert
+      -- behalten, nicht jede kurzzeitige Schwankung übernehmen.
+      learning.reason = "STABLE"
     end
   else
-    -- Ungültiger Sample: Fenster-Zähler zurücksetzen.
-    -- stable_samples und max_candidate bleiben erhalten solange nicht gesperrt —
-    -- kurzzeitige Ausreißer sollen den Fortschritt nicht zunichtemachen.
-    learning.ok_window = 0
-    if not learning.locked then
-      -- Nur zurücksetzen wenn zu viele aufeinanderfolgende Fehler (>3 in Folge)
-      -- um echte Probleme (Reaktor aus, alle Turbinen weg) zu erkennen.
-      learning.consecutive_fail = (learning.consecutive_fail or 0) + 1
-      if learning.consecutive_fail > 3 then
-        learning.stable_samples   = 0
-        learning.max_candidate    = 0
-        learning.consecutive_fail = 0
-        if type(ctx.log) == "function" then
-          pcall(ctx.log, "WARN",
-            "CapacityLearning: reset after 3 consecutive failed samples reason=" .. tostring(sample.reason))
-        end
-      end
-    end
-  end
-  -- Gut-Samples setzen consecutive_fail zurück
-  if sample.ok then
-    learning.consecutive_fail = 0
+    -- Aktuell keine einzige Turbine am Ziel (z.B. Reaktor fährt gerade
+    -- hoch/runter) — bisherigen Wert unverändert lassen, nicht zurücksetzen.
+    learning.reason = total == 0 and "NO_TURBINES" or "NONE_AT_TARGET"
   end
 
   return learning
 end
-
 function M.build_status_payload(ctx)
   local health_payload = ctx.build_health_payload()
   local turbines, actual_output = M.build_turbine_snapshots(ctx.registry, ctx.turbine_adapter, ctx.modules, ctx.log_prefix, ctx.targets)
   local reactors = M.build_reactor_snapshots(ctx.registry, ctx.reactor_adapter, ctx.modules, ctx.log_prefix)
   local capacity = M.update_capacity_learning(ctx, turbines, actual_output)
   local capacity_max = capacity and capacity.max_output or 0
+  -- Hinweis: capacity_stable_samples/capacity_stable_turbines/
+  -- capacity_required_stable_turbines sind Alt-Feldnamen aus der vorherigen
+  -- Lock-basierten Learning-Logik — UI (monitor_ui.lua) und Master
+  -- (ui_controller.lua) lesen sie noch für die Fortschritts-Anzeige. Die
+  -- neue, einfachere Learning-Logik kennt kein "Sample-Fenster" mehr,
+  -- daher hier sinnvoll auf die neuen Konzepte gemappt: stable_turbines =
+  -- Turbinen aktuell am 900-RPM-Ziel, stable_samples = 1 sobald ready
+  -- (kein Lock-Fortschritt mehr nötig, die UI zeigt einfach "fertig").
   return {
     status = ctx.status_level,
     state = ctx.node_state_machine:state(),
@@ -270,13 +213,13 @@ function M.build_status_payload(ctx)
     actual_output = actual_output,
     power_actual = actual_output,
     capacity_max = capacity_max,
-    capacity_ready = capacity and capacity.locked == true or false,
+    capacity_ready = capacity and capacity.ready == true or false,
     capacity_source = capacity and capacity.reason or "UNKNOWN",
-    capacity_stable_samples = capacity and capacity.stable_samples or 0,
-    capacity_stable_turbines = capacity and capacity.stable_turbines or 0,
+    capacity_stable_samples = capacity and capacity.ready and 1 or 0,
+    capacity_stable_turbines = capacity and capacity.at_target or 0,
     capacity_total_turbines = capacity and capacity.total_turbines or 0,
-    capacity_required_stable_turbines = capacity and capacity.required_stable_turbines or 1,
-    capacity_sample_output = capacity and capacity.sample_output or 0,
+    capacity_required_stable_turbines = 1,
+    capacity_sample_output = capacity_max,
     turbine_rpm = ctx.targets.rpm,
     steam = ctx.targets.steam,
     capabilities = health_payload.capabilities,
