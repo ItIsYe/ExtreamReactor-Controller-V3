@@ -75,4 +75,32 @@ function M.run(log_fn)
   return true
 end
 
+-- ── Zentraler Command-Handler ───────────────────────────────────────────────
+-- Bündelt die Logik, die vorher an 4 Stellen (support/command_handler.lua,
+-- rt/command_handler.lua, energy/main.lua, jeweils leicht unterschiedlich)
+-- dupliziert war: loggen, optional ACK senden, M.run() aufrufen. Eine
+-- künftige Verhaltensänderung (z.B. Bestätigung vor dem Update, Versions-
+-- Vergleich vor dem Ausführen) muss damit nur noch an einer Stelle gepflegt
+-- werden.
+--
+-- opts:
+--   log_prefix  - String für utils.log() Präfix (z.B. "RT", "ENERGY")
+--   utils       - core.utils Modul (für utils.log)
+--   send_ack    - optionale Funktion(payload) zum Senden eines ACK vor dem
+--                 Start des Updates (Comms-Schicht je nach Node verschieden)
+function M.handle_command(opts)
+  opts = opts or {}
+  local log_prefix = opts.log_prefix or "NODE"
+  local function log(level, text)
+    if opts.utils and type(opts.utils.log) == "function" then
+      opts.utils.log(log_prefix, text, level)
+    end
+  end
+  if type(opts.send_ack) == "function" then
+    pcall(opts.send_ack)
+  end
+  log("WARN", "Remote-Update command received, starting installer...")
+  return M.run(log)
+end
+
 return M
