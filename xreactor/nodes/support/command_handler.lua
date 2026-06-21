@@ -41,16 +41,11 @@ function M.handle_common(ctx, msg)
   -- Befehl ohne dass jemand am PC den Installer manuell starten muss.
   -- Kann später wieder entfernt werden.
   if cmd == "REMOTE_UPDATE" then
-    if ctx and ctx.comms then
-      ctx.comms:send_ack(msg, true, { updating = true })
-    end
-    if ctx and ctx.utils then
-      ctx.utils.log(ctx.log_prefix or "SUPPORT", "Remote-Update command received, starting installer...", "WARN")
-    end
-    local remote_update = require("core.remote_update")
-    remote_update.run(function(level, text)
-      if ctx and ctx.utils then ctx.utils.log(ctx.log_prefix or "SUPPORT", text, level) end
-    end)
+    require("core.remote_update").handle_command({
+      log_prefix = (ctx and ctx.log_prefix) or "SUPPORT",
+      utils = ctx and ctx.utils,
+      send_ack = (ctx and ctx.comms) and function() ctx.comms:send_ack(msg, true, { updating = true }) end or nil,
+    })
     return true
   end
 
