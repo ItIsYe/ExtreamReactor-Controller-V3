@@ -14,6 +14,35 @@ local function try_set_scale(monitor, scale)
   if monitor and type(scale) == "number" then ui.setScale(monitor, scale) end
 end
 
+-- ── Automatische Layout-Klassifizierung nach Monitorgröße ──────────────────
+-- Übernimmt das Prinzip aus master/monitor_manager.lua (classify_size /
+-- classify_layout), angepasst für die RT-Node. Bisher war monitor_scale=0.5
+-- fix konfiguriert und das Layout ging immer von der kleinsten realistischen
+-- Zeichengröße aus — auf einem größeren physischen Monitor blieb der
+-- zusätzliche Platz ungenutzt (nur mehr Leerraum statt mehr Information).
+-- Jetzt: anhand der TATSÄCHLICHEN Zeichengröße (nach setTextScale) wird pro
+-- Render-Aufruf eine Layout-Klasse bestimmt, die den Render-Funktionen
+-- erlaubt, bei mehr Platz auch mehr Informationsdichte zu zeigen statt nur
+-- mehr Whitespace.
+local LAYOUT_THRESHOLDS = {
+  -- Flächen-Grenzwerte (Zeichen breit * Zeichen hoch) für die Klassifizierung
+  compact_max_area = 700,   -- bis hierhin: kompaktestes Layout (bisheriger Stand)
+  medium_max_area  = 1400,  -- bis hierhin: mittleres Layout (etwas mehr Details)
+                              -- darüber: large (volle Detaildichte)
+}
+
+local function classify_rt_layout(w, h)
+  local width, height = tonumber(w) or 0, tonumber(h) or 0
+  local area = width * height
+  if area <= LAYOUT_THRESHOLDS.compact_max_area or width < 30 or height < 16 then
+    return "compact"
+  end
+  if area <= LAYOUT_THRESHOLDS.medium_max_area or width < 50 or height < 24 then
+    return "medium"
+  end
+  return "large"
+end
+
 local function normalize_monitor_result(result)
   if type(result) == "table" then
     if result.mon then return result.mon, result.name end
@@ -210,6 +239,7 @@ local function render_overview(mon, model)
   local summary  = model.summary or {}
   local health   = model.health and model.health.status or "OFFLINE"
   local w, h     = clear_and_title(mon, "RT OVERVIEW", health)
+  local layout   = classify_rt_layout(w, h)
   local y        = render_compact_header(mon, model, "Overview")
 
   local actual    = num(snapshot.actual_output, 0)
@@ -277,14 +307,29 @@ local function render_overview(mon, model)
     write_line(mon, y, string.format("Dampf     %s mB/t", fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
     if model.capacity_ready then
       write_line(mon, y, string.format("Kapazitaet %s RF/t  [GELOCKT]", fmt_short(capacity)), "muted"); y = y + 1
+      -- Mehr Platz vorhanden (medium/large): zusätzliche Detailzeile statt
+      -- nur mehr Leerraum zu lassen.
+      if layout ~= "compact" and y <= h - 2 then
+        write_line(mon, y, string.format("  Quelle: %s", tostring(model.capacity_source or "-")), "muted"); y = y + 1
+      end
+    end
+    -- Bei "large" (viel Platz übrig): zusätzliche Geräte-/Verbindungszeile,
+    -- die auf compact/medium aus Platzgründen weggelassen wird.
+    if layout == "large" and y <= h - 2 then
+      write_line(mon, y, string.format("Reaktoren %d  Turbinen-Geraete %d  Scan %s",
+        reactors, turbines, tostring(model.last_scan or "-")), "muted"); y = y + 1
     end
   end
 
   -- ── Fußzeile: Verbindungsstatus ──────────────────────────────────────────
   if y <= h - 1 then
-    write_line(mon, h, string.format("Master %s (%s)  Cmd:%s",
+    local footer = string.format("Master %s (%s)  Cmd:%s",
       tostring(model.master_state or "?"), tostring(model.master_age or "-"),
-      tostring(model.last_command or "-")), "muted")
+      tostring(model.last_command or "-"))
+    if layout == "large" then
+      footer = footer .. string.format("  Build %s", tostring(model.build_label or "-"))
+    end
+    write_line(mon, h, footer, "muted")
   end
 end
 
@@ -313,6 +358,7 @@ local function render_turbines(mon, model)
   local snapshot = monitor_snapshot(model) or {}
   local health = model.health and model.health.status or "OFFLINE"
   local w, h = clear_and_title(mon, "RT TURBINES", health)
+  local layout = classify_rt_layout(w, h)
   local y = render_compact_header(mon, model, "Turbines")
   local turbines = snapshot.turbines or {}
   local target_rpm = num(model.target_rpm, 0)
@@ -320,14 +366,18 @@ local function render_turbines(mon, model)
   -- Turbinen in normal/auffällig aufteilen
   local normal, flagged = {}, {}
   local normal_rpm_sum, normal_energy_sum = 0, 0
+  local normal_rpm_min, normal_rpm_max = nil, nil
   for _, t in ipairs(turbines) do
     local is_flagged, reason = classify_turbine(t, target_rpm)
     if is_flagged then
       flagged[#flagged + 1] = { t = t, reason = reason }
     else
       normal[#normal + 1] = t
-      normal_rpm_sum = normal_rpm_sum + num(t.rpm, 0)
+      local rpm = num(t.rpm, 0)
+      normal_rpm_sum = normal_rpm_sum + rpm
       normal_energy_sum = normal_energy_sum + num(t.energy, 0)
+      normal_rpm_min = normal_rpm_min and math.min(normal_rpm_min, rpm) or rpm
+      normal_rpm_max = normal_rpm_max and math.max(normal_rpm_max, rpm) or rpm
     end
   end
 
@@ -338,6 +388,12 @@ local function render_turbines(mon, model)
       #normal, fmt_short(avg_rpm), fmt_short(normal_energy_sum / #normal)), "OK"); y = y + 1
     if w >= 20 then
       ui.progress(mon, 2, y, math.max(8, w - 3), 1, "OK"); y = y + 1
+    end
+    -- Mehr Platz vorhanden (medium/large): Min/Max-Spanne zusätzlich zeigen
+    -- statt nur den Durchschnitt — hilft zu erkennen ob die Gruppe wirklich
+    -- gleichmäßig läuft oder der Schnitt nur zufällig passt.
+    if layout ~= "compact" and normal_rpm_min and y <= h - 1 then
+      write_line(mon, y, string.format("  Spanne %s..%s RPM", fmt_short(normal_rpm_min), fmt_short(normal_rpm_max)), "muted"); y = y + 1
     end
   else
     write_line(mon, y, "Keine Turbinen laufen normal", "WARNING"); y = y + 1
@@ -352,7 +408,10 @@ local function render_turbines(mon, model)
     local max_detail_rows = math.max(0, h - y - 1)
     -- Bei vielen Auffälligkeiten (typ. Startup-Phase): ab Limit nur noch
     -- zusammengefasst zeigen statt Zeile für Zeile (sonst wieder Listen-Wand).
-    local detail_limit = math.min(#flagged, max_detail_rows, 8)
+    -- Mehr Platz (medium/large) -> mehr Auffällige im Detail zeigen statt
+    -- vorzeitig zusammenzufassen.
+    local layout_detail_cap = ({ compact = 5, medium = 8, large = 20 })[layout] or 8
+    local detail_limit = math.min(#flagged, max_detail_rows, layout_detail_cap)
     for i = 1, detail_limit do
       local f = flagged[i]
       local t = f.t
