@@ -64,6 +64,7 @@ local capacity_cache  = require("nodes.rt.capacity_cache")
 local monitor_ui      = require("nodes.rt.monitor_ui")
 local command_handler_lib = require("nodes.rt.command_handler")
 local state_handlers  = require("nodes.rt.state_handlers")
+local module_lifecycle = require("nodes.rt.module_lifecycle")
 local status_snapshot_lib = require("nodes.rt.status_snapshot")
 local discovery_runtime   = require("nodes.rt.discovery_runtime")
 local health_payload      = require("nodes.rt.health_payload")
@@ -546,14 +547,139 @@ local function init()
   services:init()
 
   -- State Machine
+  -- lifecycle_ctx: Context für module_lifecycle Funktionen (scram, apply_safe_controls etc.)
+  -- Wird als Closure in state_ctx eingebaut damit state_handlers alles direkt aufrufen kann.
+  local function make_lifecycle_ctx()
+    return {
+      -- State
+      STATE             = STATE,
+      log               = log,
+      warn_once         = warn_once,
+      config            = config,
+      constants         = constants,
+      comms             = comms,
+      modules           = {},
+      peripherals       = devices,
+      configured_reactors = runtime_config.configured_reactors,
+      configured_turbines = runtime_config.configured_turbines,
+      binding           = require("nodes.rt.binding"),
+      -- State-Machine
+      get_current_state    = current_state,
+      current_state        = current_state,
+      node_state_machine   = node_state_machine,
+      setState             = function(s) current_state_value = s end,
+      -- Targets
+      targets           = ctx and ctx.targets or {},
+      -- Turbinen/Reaktor-Funktionen (aus den neuen Modulen)
+      get_turbine_ctrl  = function(name) return turbine_control.get_turbine_ctrl(ctx, name) end,
+      get_device_caps   = function(k,n) return turbine_control.get_device_caps(ctx, k, n) end,
+      get_target_rpm    = function() return turbine_control.get_target_rpm(ctx) end,
+      clamp_turbine_flow = function(r) return turbine_control.clamp_turbine_flow(ctx, r) end,
+      setTurbineFlow    = function(t,c,r) return turbine_control.setTurbineFlow and
+                           turbine_control.setTurbineFlow(ctx,t,c,r) end,
+      setTurbineActive  = function(t,c,a) return turbine_control.setTurbineActive(ctx,t,c,a) end,
+      update_inductor_for_rpm = function(n,t,c,r,tr)
+        return turbine_control.update_inductor_for_rpm(ctx,n,t,c,r,tr) end,
+      update_turbine_flow_state = function(r,tr,ctrl)
+        return turbine_control.update_turbine_flow_state(ctx,r,tr,ctrl) end,
+      ensure_reactor_ctrl = function(n) return reactor_control.ensure_reactor_ctrl(ctx,n) end,
+      get_effective_regulator_rod_caps = function()
+        return reactor_control.get_effective_regulator_rod_caps(ctx) end,
+      applyReactorRods  = function(t,o,s) return reactor_control.applyReactorRods(ctx,t,o,s) end,
+      setReactorActive  = function(r,c,a) return reactor_control.setReactorActive(ctx,r,c,a) end,
+      read_current_rods = function() return reactor_control.read_current_rods(ctx) end,
+      evaluate_reactor_coolant = function(r,s)
+        return reactor_control.evaluate_reactor_coolant(ctx,r,s) end,
+      ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
+      -- Startup-State (einfache Closures auf lokale Variablen)
+      get_active_startup           = function() return nil end,
+      set_active_startup           = function() end,
+      get_startup_queue            = function() return {} end,
+      set_startup_queue            = function() end,
+      get_startup_started_ms       = function() return 0 end,
+      set_startup_started_ms       = function() end,
+      get_startup_watchdog_tripped = function() return false end,
+      set_startup_watchdog_tripped = function() end,
+      add_alarm    = function(_, sev, msg) if comms then comms:send_alert(sev, msg) end end,
+      -- CC:Tweaked CONFIG-Werte
+      START_FLOW   = CONFIG.START_FLOW   or 100,
+      RPM_TOL      = CONFIG.RPM_TOLERANCE or 15,
+      TURBINE_MODE = CONFIG.TURBINE_MODE_RAMP or "RAMP",
+      -- Diagnose-Stub (ramp_duration braucht discovery-Context)
+      ramp_duration = function() return 30 end,
+    }
+  end
+
   local state_ctx = {
-    STATE = STATE, config = config, log = log,
-    is_master_connected = is_master_connected,
-    get_current_state = current_state,
-    set_current_state = function(v) current_state_value = v end,
+    -- Basis
+    STATE             = STATE,
+    config            = config,
+    constants         = constants,
+    log               = log,
+    comms             = comms,
+    devices           = devices,
+    modules           = {},
+    targets           = ctx and ctx.targets or {},
+    TARGET_RPM        = CONFIG.TARGET_RPM,
+    -- Zustands-Accessoren
+    is_master_connected    = is_master_connected,
+    get_current_state      = current_state,
+    set_current_state      = function(v) current_state_value = v end,
     get_node_state_machine = function() return node_state_machine end,
-    adjust_turbines = function() turbine_control.updateControl(ctx) end,
-    adjust_reactors = function() reactor_control.updateReactorControl(ctx) end,
+    allowed_transitions    = nil,
+    -- Regelungs-Callbacks
+    adjust_turbines   = function() turbine_control.updateControl(ctx) end,
+    adjust_reactors   = function() reactor_control.updateReactorControl(ctx) end,
+    get_target_rpm    = function() return turbine_control.get_target_rpm(ctx) end,
+    ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
+    clamp_autonom_targets = function()
+      if ctx and ctx.targets then
+        local t = ctx.targets
+        t.power   = math.max(0, t.power   or 0)
+        t.steam   = math.max(0, t.steam   or 0)
+        t.rpm     = math.max(0, t.rpm     or CONFIG.TARGET_RPM)
+      end
+    end,
+    -- Master-Monitoring
+    monitor_master = function()
+      if not is_master_connected() then
+        if current_state() == STATE.MASTER then
+          log("WARN", "Master disconnected — switching to AUTONOM")
+          current_state_value = STATE.AUTONOM
+        end
+      end
+    end,
+    -- Alarm
+    add_alarm = function(_, sev, msg)
+      if comms then comms:send_alert(sev, msg) end
+    end,
+    -- Startup-State-Stubs (RT-Node hat keine Modul-Startup-Sequenz)
+    get_active_startup           = function() return nil end,
+    set_active_startup           = function() end,
+    get_startup_queue            = function() return {} end,
+    set_startup_queue            = function() end,
+    get_startup_started_ms       = function() return 0 end,
+    set_startup_started_ms       = function() end,
+    get_startup_watchdog_tripped = function() return false end,
+    set_startup_watchdog_tripped = function() end,
+    reset_startup_watchdog       = function() end,
+    handle_startup_timeout       = function() end,
+    start_module                 = function() end,
+    -- Lifecycle-Funktionen (delegieren an module_lifecycle mit vollem Context)
+    scram = function()
+      module_lifecycle.scram(make_lifecycle_ctx())
+    end,
+    apply_safe_controls = function()
+      module_lifecycle.apply_safe_controls(make_lifecycle_ctx())
+    end,
+    set_reactors_active = function(active, reason)
+      local lctx = make_lifecycle_ctx()
+      module_lifecycle.set_reactors_active(lctx, active, reason)
+    end,
+    set_turbines_active = function(active, reason)
+      local lctx = make_lifecycle_ctx()
+      module_lifecycle.set_turbines_active(lctx, active, reason)
+    end,
   }
   states_table = state_handlers.build(state_ctx)
   node_state_machine = machine.new(states_table, constants.node_states.OFF)
