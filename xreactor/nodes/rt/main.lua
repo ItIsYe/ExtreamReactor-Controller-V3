@@ -165,6 +165,7 @@ local warned = {}
 local last_command, last_command_ts
 local last_status_snapshot
 local capacity_learning_state  -- persistenter Learning-State
+local pending_remote_update = false  -- deferred: REMOTE_UPDATE ausserhalb Event-Handler ausfuehren
 
 -- ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
@@ -445,6 +446,13 @@ local function build_command_ctx()
     get_capacity_learning = function()
       return ctx and ctx.capacity_learning or capacity_learning_state
     end,
+    -- REMOTE_UPDATE: Flag setzen statt direkt ausfuehren, damit http.get()
+    -- im Haupt-Thread laeuft und nicht im Event-Handler blockiert.
+    -- (CC:Tweaked http ist async -- http_success Event kann nicht ankommen
+    --  wenn wir uns bereits in einem os.pullEvent-Handler befinden)
+    set_pending_remote_update = function()
+      pending_remote_update = true
+    end,
   }
 end
 
@@ -577,4 +585,10 @@ end
 -- ── Start ────────────────────────────────────────────────────────────────────
 
 init()
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms)
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+  if pending_remote_update then
+    pending_remote_update = false
+    log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
+    require("core.remote_update").run(log)
+  end
+end)
