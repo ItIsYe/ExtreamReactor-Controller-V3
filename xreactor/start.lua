@@ -203,16 +203,45 @@ safe_log(
   )
 )
 
--- Give LOG_COLLECTOR node time to start first so log messages
--- from this node's startup aren't missed.
--- LOG_COLLECTOR and MASTER skip the delay.
-local LOG_COLLECTOR_STARTUP_DELAY_S = 5
-if role ~= "LOG" and role ~= "LOG_COLLECTOR" and role ~= "MASTER" then
+-- Gestaffelte Startreihenfolge: LOG_COLLECTOR → MASTER → Nodes
+--
+-- Warum: Nodes senden beim Start sofort ein HELLO. Wenn der Master
+-- noch nicht bereit ist (bootet noch), geht dieses HELLO verloren
+-- und die Node wartet bis zum nächsten heartbeat_interval (~2-5s)
+-- bevor sie sich erneut meldet. Das ist kein Datenverlust (Nodes
+-- reconnecten automatisch via AUTONOM-Mode), aber eine unnötige
+-- Verzögerung bei der ersten Master-Synchronisation.
+--
+-- Reihenfolge:
+--   LOG/LOG_COLLECTOR:  0s — sofort, damit Logs vom Start an erfasst werden
+--   MASTER:             2s — kurz nach LOG_COLLECTOR, damit Logs vom Boot erfasst
+--   ALLE ANDEREN:       8s — 5s für LOG_COLLECTOR + 3s Vorsprung für Master
+--
+-- Hinweis: Ein statischer Delay ist kein Garant (Master könnte länger
+-- brauchen), aber er deckt den Normalfall ab. Nodes sind bereits
+-- resilient gegen einen nicht-erreichbaren Master (AUTONOM-Mode).
+
+local STARTUP_DELAYS = {
+  LOG          = 0,
+  LOG_COLLECTOR = 0,
+  MASTER       = 2,
+}
+local STARTUP_DELAY_DEFAULT = 8  -- alle anderen Nodes
+
+local startup_delay = STARTUP_DELAYS[role]
+if startup_delay == nil then
+  startup_delay = STARTUP_DELAY_DEFAULT
+end
+
+if startup_delay > 0 then
+  local reason = (role == "MASTER")
+    and "LOG_COLLECTOR"
+    or  "LOG_COLLECTOR + MASTER"
   safe_print(string.format(
-    "Waiting %ds for LOG_COLLECTOR to start... (role=%s)",
-    LOG_COLLECTOR_STARTUP_DELAY_S, role))
-  for i = LOG_COLLECTOR_STARTUP_DELAY_S, 1, -1 do
-    safe_print(string.format("  Starting in %d...", i))
+    "Warte %ds auf %s... (role=%s)",
+    startup_delay, reason, role))
+  for i = startup_delay, 1, -1 do
+    safe_print(string.format("  Start in %ds...", i))
     os.sleep(1)
   end
 end
