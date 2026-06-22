@@ -372,6 +372,14 @@ local function build_status_payload(status_level)
     turbine_adapter      = adapters.turbine,
     reactor_adapter      = adapters.reactor,
     log_prefix           = CONFIG.LOG_PREFIX,
+    -- Felder für status_snapshot.build_turbine_snapshots / build_reactor_snapshots
+    get_available_steam  = function() return reactor_control.get_available_steam(ctx) end,
+    get_device_caps      = function(k,n) return turbine_control.get_device_caps(ctx,k,n) end,
+    read_turbine_rpm     = function(t,c) return turbine_control.read_turbine_rpm(ctx,t,c) end,
+    read_turbine_flow    = function(t,c) return turbine_control.read_turbine_flow(ctx,t,c) end,
+    last_status_snapshot = last_status_snapshot,
+    monitor_ui           = monitor_ui,
+    status_snapshot      = status_snapshot_lib,
   }
   local payload = status_snapshot_lib.build_status_payload(ctx_snap)
   -- Learning-State zurückschreiben
