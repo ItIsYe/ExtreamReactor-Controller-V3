@@ -217,13 +217,24 @@ local function make_dispatch()
       ctx.apply_mode(ctx.STATE.SAFE)
       return nil
     end,
-    -- TEMPORÄR: Remote-Update — zentrale Logik in core/remote_update.lua.
-    -- Kann später wieder entfernt werden, sobald die aktive Entwicklungsphase
-    -- vorbei ist.
+    -- REMOTE_UPDATE: Nicht direkt ausfuehren — Flag setzen fuer den
+    -- Haupt-Thread. CC:Tweaked http.get() ist async und sendet http_success/
+    -- http_failure Events. Diese koennen nicht ankommen wenn wir uns bereits
+    -- in einem os.pullEvent-Handler (modem_message) befinden — der Installer
+    -- wuerde ewig blockieren. Deferred-Ausfuehrung nach dem aktuellen Tick
+    -- im Haupt-Thread loest das Problem.
     ["REMOTE_UPDATE"] = function(_, ctx)
-      require("core.remote_update").handle_command({
-        log_fn = function(level, text) ctx.log(level, text) end,
-      })
+      if type(ctx.set_pending_remote_update) == "function" then
+        ctx.set_pending_remote_update()
+        if type(ctx.log) == "function" then
+          ctx.log("WARN", "Remote-Update: Command empfangen, starte nach aktuellem Tick...")
+        end
+      else
+        -- Fallback fuer aeltere ctx-Versionen ohne deferred support
+        require("core.remote_update").handle_command({
+          log_fn = type(ctx.log) == "function" and ctx.log or nil,
+        })
+      end
       return nil
     end
   }
