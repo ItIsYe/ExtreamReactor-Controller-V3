@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 125,
-  manifest_id = "manifest-v125",
+  manifest_version = 126,
+  manifest_id = "manifest-v126",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -87,7 +87,7 @@ return {
     { path = "core/turbine_ctrl.lua", size_bytes = 2663, hash = "d1b27731", required_for={"RT"}},
     { path = "core/turbine_regulator.lua", size_bytes = 17134, hash = "50ce7402", required_for={"RT"}},
     { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48", required_for={"RT"}},
-    { path = "nodes/rt/command_handler.lua", size_bytes = 10147, hash = "1f5ce466", required_for={"RT"}},
+    { path = "nodes/rt/command_handler.lua", size_bytes = 10422, hash = "79a7c1b6", required_for={"RT"}},
     { path = "nodes/rt/reactor_control.lua", size_bytes = 23125, hash = "bd0e4e58", required_for={"RT"}},
     { path = "nodes/rt/turbine_control.lua", size_bytes = 43878, hash = "87a552b4", required_for={"RT"}},
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 3983, hash = "0dee3a0d", required_for={"RT"}},
