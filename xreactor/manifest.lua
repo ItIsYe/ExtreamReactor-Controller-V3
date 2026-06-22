@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 119,
-  manifest_id = "manifest-v119",
+  manifest_version = 120,
+  manifest_id = "manifest-v120",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -59,7 +59,7 @@ return {
     { path = "master/message_handlers.lua", size_bytes = 19707, hash = "53d2e5cb", required_for={"MASTER"}},
     { path = "master/monitor_sessions.lua", size_bytes = 7108, hash = "c8d0956b", required_for={"MASTER"}},
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
-    { path = "master/rt_sync.lua", size_bytes = 21429, hash = "f384b975", required_for={"MASTER"}},
+    { path = "master/rt_sync.lua", size_bytes = 20555, hash = "690296ee", required_for={"MASTER"}},
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"}},
     { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"}},
     { path = "master/runtime_loop.lua", size_bytes = 16716, hash = "debfaa67", required_for={"MASTER"}},
@@ -87,7 +87,7 @@ return {
     { path = "core/turbine_ctrl.lua", size_bytes = 2663, hash = "d1b27731", required_for={"RT"}},
     { path = "core/turbine_regulator.lua", size_bytes = 17134, hash = "50ce7402", required_for={"RT"}},
     { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48", required_for={"RT"}},
-    { path = "nodes/rt/command_handler.lua", size_bytes = 13099, hash = "dcaf4ffa", required_for={"RT"}},
+    { path = "nodes/rt/command_handler.lua", size_bytes = 10974, hash = "a5197cf7", required_for={"RT"}},
     { path = "nodes/rt/reactor_control.lua", size_bytes = 23125, hash = "bd0e4e58", required_for={"RT"}},
     { path = "nodes/rt/turbine_control.lua", size_bytes = 42364, hash = "5ca0ecb5", required_for={"RT"}},
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 3983, hash = "0dee3a0d", required_for={"RT"}},
