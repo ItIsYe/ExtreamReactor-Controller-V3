@@ -271,6 +271,7 @@ local function build_ctx()
     get_turbine_ctrl  = function(name)
       return turbine_control.get_turbine_ctrl(ctx, name)
     end,
+    warned            = {},   -- Dedup-Map für warn_once
   }
 end
 
@@ -364,6 +365,13 @@ local function build_status_payload(status_level)
     log_prefix           = CONFIG.LOG_PREFIX,
     capacity_learning    = ctx and ctx.capacity_learning or capacity_learning_state,
     log                  = log,
+    config               = config,
+    modules              = {},
+    active_startup       = nil,
+    startup_queue        = {},
+    turbine_adapter      = adapters.turbine,
+    reactor_adapter      = adapters.reactor,
+    log_prefix           = CONFIG.LOG_PREFIX,
   }
   local payload = status_snapshot_lib.build_status_payload(ctx_snap)
   -- Learning-State zurückschreiben
@@ -397,7 +405,15 @@ local function update_monitor()
     get_device_caps = function(k, n) return turbine_control.get_device_caps(ctx, k, n) end,
     get_available_steam = function() return reactor_control.get_available_steam(ctx) end,
     last_status_snapshot = last_status_snapshot,
-    capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state,
+    capacity_learning    = ctx and ctx.capacity_learning or capacity_learning_state,
+    constants            = constants,
+    targets              = ctx and ctx.targets or {},
+    node_state_machine   = node_state_machine,
+    registry             = registry,
+    last_command_ts      = last_command_ts,
+    build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
+    manifest_id          = "manifest-v128",
+    release_id           = "beta-v128",
   })
 end
 
@@ -452,6 +468,8 @@ local function build_command_ctx()
     set_pending_remote_update = function()
       pending_remote_update = true
     end,
+    log = log,
+    capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state,
   }
 end
 
@@ -607,6 +625,10 @@ local function init()
       TURBINE_MODE = CONFIG.TURBINE_MODE_RAMP or "RAMP",
       -- Diagnose-Stub (ramp_duration braucht discovery-Context)
       ramp_duration = function() return 30 end,
+      warn_unsupported = function(name, reason)
+        warn_once("unsupported:" .. tostring(name),
+          "Device unsupported: " .. tostring(name) .. " (" .. tostring(reason or "") .. ")")
+      end,
     }
   end
 
