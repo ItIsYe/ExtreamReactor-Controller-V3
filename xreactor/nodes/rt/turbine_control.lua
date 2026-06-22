@@ -130,20 +130,25 @@ end
 
 -- Ziel-RPM für eine einzelne Turbine basierend auf dem Prozent-Sollwert.
 --
--- Modell: Turbinen kennen nur zwei sinnvolle Zustände:
---   AN  = base RPM (900) — Coil engaged, volle Leistung
---   AUS = 0             — kein Flow, Turbine läuft aus
+-- 3-Zustands-Modell:
+--   VOLLAST   = base RPM (900)         — Coil bei base_engage einrastet
+--   PUFFER    = base × Fraktionsanteil — Coil skaliert mit (scale = puffer/base)
+--   AUS       = 0                      — Flow=0, Turbine läuft aus
 --
--- Teillast durch Anzahl AN-Turbinen steuern, nicht durch reduziertes RPM.
--- Beispiel 80%: 20 Turbinen AN (900 RPM), 5 Turbinen AUS (0 RPM).
--- Die AUS-Turbinen rotieren regelmäßig (partial_turbine_index), damit
--- keine Turbine dauerhaft kalt bleibt.
+-- Beispiel 50%, n=25:
+--   full      = floor(0.5 × 25) = 12  → 12 Turbinen auf 900 RPM
+--   remainder = 0.5 × 25 - 12 = 0.5  → 1 Pufferturbine auf 450 RPM
+--   off       = 25 - 12 - 1   = 12   → 12 Turbinen auf 0 (aus)
+--   Ist-Leistung: (12 × 900 + 450) / (25 × 900) = 50% ✅
 --
--- Warum NICHT reduziertes RPM?
---   Eine Turbine bei 450 RPM liefert NICHT 50% Leistung — der Coil ist
---   bei niedrigem RPM nicht engaged und die Turbine produziert nahezu
---   null RF/t. Das alte Modell (partial_rpm = base × percent) hat daher
---   nie die erwartete Leistung geliefert.
+-- Beispiel 83%, n=25:
+--   full = 20, remainder = 0.75, puffer = 675 RPM, off = 4
+--   Ist-Leistung: (20 × 900 + 675) / 22500 = 83% ✅
+--
+-- Die Pufferturbine und AUS-Turbinen rotieren (partial_turbine_index),
+-- damit keine Turbine dauerhaft kalt bleibt.
+-- Der Coil in update_inductor_for_rpm skaliert seine Schwellwerte
+-- proportional zu target_rpm — bei 450 RPM Ziel rastet er bei ~450 ein.
 function M.get_turbine_target_rpm(ctx, turbine_index)
   local base = M.get_target_rpm(ctx)
   local cap_ready = ctx.capacity_learning and ctx.capacity_learning.ready == true
@@ -157,19 +162,28 @@ function M.get_turbine_target_rpm(ctx, turbine_index)
   if type(power_pct) ~= "number" then power_pct = 100 end
   power_pct = ctx.safety.clamp(power_pct, 0, 100)
 
-  -- Anzahl AN-Turbinen = floor(pct/100 × n)
-  -- Anzahl AUS-Turbinen = n - AN (diese rotieren)
-  local on_count  = math.floor(power_pct / 100 * n)
-  local off_count = n - on_count
-  if off_count == 0 then return base end  -- 100%: alle AN
+  local exact     = power_pct / 100 * n
+  local full      = math.floor(exact)       -- Anzahl Vollast-Turbinen
+  local remainder = exact - full            -- Fraktionsanteil 0..1
+  local has_partial = remainder > 0.001 and full < n
+  local partial_rpm = has_partial and math.max(1, math.floor(base * remainder + 0.5)) or 0
 
-  -- Welcher Slot ist diese Turbine nach Rotation?
-  local offset    = get_rotation_offset(ctx)
+  -- Slot-Zuweisung nach Rotation:
+  --   Slots 1..off_count          → AUS (0 RPM)
+  --   Slot  off_count+1           → PUFFER (partial_rpm), nur wenn has_partial
+  --   Slots off_count+2..n (oder off_count+1 wenn kein Puffer) → VOLLAST
+  local off_count = n - full - (has_partial and 1 or 0)
+
+  local offset     = get_rotation_offset(ctx)
   local slot_index = ((turbine_index - 1 + offset) % n) + 1
+
   if slot_index <= off_count then
-    return 0  -- AUS: Flow-Regler rampt auf 0, Turbine läuft aus
+    return 0             -- AUS
+  elseif has_partial and slot_index == off_count + 1 then
+    return partial_rpm   -- PUFFER
+  else
+    return base          -- VOLLAST
   end
-  return base  -- AN: 900 RPM, Coil engaged, volle Leistung
 end
 
 -- ── Turbinen-Initialisierung ─────────────────────────────────────────────────
