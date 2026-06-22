@@ -56,22 +56,20 @@ local function node_capacity(node, fallback)
   return math.max(1, number_or(fallback, 3000)), "fallback"
 end
 
+-- Nur steuerungsrelevante Felder — RT-Node regelt Flow, Coil, Reaktor-Stab
+-- vollständig autonom aus power_target_percent. Redundante Felder entfernt:
+--   target_rpm      → RT nutzt immer CONFIG.TARGET_RPM (900)
+--   steam_target    → Reaktor regelt autonom über Steam-Margin-Regler
+--   power_target    → RT nutzt nur den Prozentwert, nicht den absoluten RF/t
+--   enable_reactors/turbines → folgen aus assignment_state via State-Machine
+--   assignment_reason/source/rank/controllable → reine Diagnose-Felder
 function M.normalize_setpoints(setpoints)
   local payload = setpoints or {}
   return {
-    target_rpm = payload.target_rpm,
-    power_target = payload.power_target,
     power_target_percent = payload.power_target_percent,
-    steam_target = payload.steam_target,
-    enable_reactors = payload.enable_reactors,
-    enable_turbines = payload.enable_turbines,
-    assignment_reason = payload.assignment_reason,
-    assignment_source = payload.assignment_source,
-    assignment_rank = payload.assignment_rank,
-    assignment_state = payload.assignment_state,
-    controllable = payload.controllable,
-    shutdown_stage = payload.shutdown_stage,
-    desired_node_state = payload.desired_node_state
+    assignment_state     = payload.assignment_state,
+    shutdown_stage       = payload.shutdown_stage,
+    desired_node_state   = payload.desired_node_state,
   }
 end
 
@@ -102,14 +100,8 @@ end
 -- eine Änderung dort soll kein neues Paket auslösen.
 function M.same_setpoints(a, b)
   if not a or not b then return false end
-  return a.target_rpm           == b.target_rpm
-     and a.power_target         == b.power_target
-     and a.power_target_percent == b.power_target_percent
-     and a.steam_target         == b.steam_target
-     and a.enable_reactors      == b.enable_reactors
-     and a.enable_turbines      == b.enable_turbines
+  return a.power_target_percent == b.power_target_percent
      and a.assignment_state     == b.assignment_state
-     and a.controllable         == b.controllable
      and a.shutdown_stage       == b.shutdown_stage
      and a.desired_node_state   == b.desired_node_state
 end
@@ -121,13 +113,9 @@ local function same_shutdown_intent(a, b)
   local shutdown_like_a = state_a == "shutdown" or state_a == "shed" or state_a == "standby"
   local shutdown_like_b = state_b == "shutdown" or state_b == "shed" or state_b == "standby"
   if not shutdown_like_a or not shutdown_like_b then return false end
-  return a.desired_node_state == b.desired_node_state and
-      a.shutdown_stage == b.shutdown_stage and
-      (tonumber(a.power_target) or 0) == (tonumber(b.power_target) or 0) and
-      (tonumber(a.power_target_percent) or 0) == (tonumber(b.power_target_percent) or 0) and
-      (tonumber(a.steam_target) or 0) == (tonumber(b.steam_target) or 0) and
-      a.enable_reactors == b.enable_reactors and
-      a.enable_turbines == b.enable_turbines
+  return a.desired_node_state   == b.desired_node_state
+     and a.shutdown_stage       == b.shutdown_stage
+     and (tonumber(a.power_target_percent) or 0) == (tonumber(b.power_target_percent) or 0)
 end
 
 local function should_debounce_resend(node, desired, now)
@@ -354,19 +342,11 @@ function M.build_node_setpoint_plan(ctx)
       desired_node_state = constants.node_states.LIMITED
     end
     entry.setpoints = M.normalize_setpoints({
-      target_rpm = base.target_rpm,
-      steam_target = enabled and base.steam_target or 0,
-      power_target = enabled and entry.assigned_power or 0,
       power_target_percent = enabled and entry.assigned_percent or 0,
-      enable_reactors = enabled and (base.enable_reactors == true) or false,
-      enable_turbines = enabled and (base.enable_turbines == true) or false,
-      assignment_reason = entry.assignment_reason,
-      assignment_source = "master.rt_sync.plan.capacity",
-      assignment_state = entry.assignment_state,
-      assignment_rank = entry.assignment_rank,
-      controllable = entry.controllable,
-      shutdown_stage = entry.assignment_state == "shutdown" and "REQUEST_OFF" or (entry.assignment_state == "shed" and "RAMPDOWN" or nil),
-      desired_node_state = desired_node_state
+      assignment_state     = entry.assignment_state,
+      shutdown_stage       = entry.assignment_state == "shutdown" and "REQUEST_OFF"
+                             or (entry.assignment_state == "shed" and "RAMPDOWN" or nil),
+      desired_node_state   = desired_node_state,
     })
   end
 
