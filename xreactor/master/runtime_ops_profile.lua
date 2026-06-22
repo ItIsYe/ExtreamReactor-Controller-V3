@@ -22,8 +22,8 @@
 --         der gelockten Capacity-Learning-Werte — Fix v100, verhindert dass
 --         eine kurzzeitig auf 0 RF/t stehende Node fälschlich als
 --         "Kapazitätsüberschuss" markiert wird) 3) runtime.state.power_target
---         (vorheriger Wert) 4) capacity-fallback (generischer Wert,
---         standardmäßig winzig — nur Notlösung wenn NICHTS bekannt ist)
+--         (vorheriger Wert)
+--         4) 0 / "unavailable" — kein generischer Fallback mehr
 --
 -- 2) master/rt_sync.lua
 --    Liest runtime.state.power_target als ctx.power_target (= global_target).
@@ -99,19 +99,16 @@ function M.estimate_base_power(runtime)
     end
   end
   if measured_total > 0 then return measured_total, "measured" end
-  -- Fix: gelernte Kapazität ist ein deutlich realistischerer Schätzwert als
-  -- der generische capacity-fallback (3000 RF/t Default — vernachlässigbar
-  -- gegenüber realen Reaktor-Kapazitäten im Millionen-Bereich). Verhindert
-  -- den selbstverstärkenden SHED-Loop: Node liefert kurz 0 -> winziges Ziel
-  -- berechnet -> Node als "Überschuss" markiert -> bleibt abgeschaltet.
+  -- Gelernte Kapazität (vom Capacity-Learning der RT-Nodes): der einzig
+  -- realistische Schätzwert wenn gerade nichts produziert wird (z.B. nach
+  -- Reboot oder SHED). Kein generischer Fallback mehr — ein fixer Wert wie
+  -- 3000 RF/t wäre bei realen Reaktoren (5-50 MRF/t) um Grössenordnungen
+  -- falsch und würde die Prozent-Berechnung verfälschen.
   if learned_capacity_total > 0 then return learned_capacity_total, "learned-capacity" end
+  -- Vorheriger Zielwert: besser als gar nichts wenn noch kein Learning vorliegt.
   if runtime.state.power_target and runtime.state.power_target > 0 then return runtime.state.power_target, "previous-target" end
-  local setpoints = runtime.config.rt_setpoints or {}
-  local per_node_capacity = math.max(1, number_or(setpoints.power_per_node_capacity, 3000))
-  local capacity_nodes = math.max(available_count, rt_count)
-  if capacity_nodes > 0 then
-    return capacity_nodes * per_node_capacity, "capacity-fallback"
-  end
+  -- Nichts bekannt: 0 zurückgeben. Master weist dann 0% zu bis das
+  -- Capacity-Learning auf mindestens einer Node abgeschlossen ist.
   return 0, "unavailable"
 end
 
