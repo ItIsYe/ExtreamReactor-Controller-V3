@@ -160,24 +160,7 @@ local function clear_and_title(mon, title, status)
   return w, h
 end
 
-local function table_header(mon, y, labels, widths)
-  local x = 2
-  for i, label in ipairs(labels or {}) do
-    local cw = widths[i] or 8
-    ui.text(mon, x, y, pad(label, cw - 1), colors.get("muted"), colors.get("background"))
-    x = x + cw
-  end
-end
 
-local function table_row(mon, y, values, widths, status, status_col)
-  local x = 2
-  for i, value in ipairs(values or {}) do
-    local cw = widths[i] or 8
-    local key = (i == (status_col or 1)) and (status or "text") or (i == #values and "muted" or "text")
-    ui.text(mon, x, y, pad(value or "-", cw - 1), colors.get(key), colors.get("background"))
-    x = x + cw
-  end
-end
 
 local function render_compact_header(mon, model, title)
   local health = model.health and model.health.status or "OFFLINE"
