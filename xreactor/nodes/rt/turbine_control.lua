@@ -128,6 +128,22 @@ local function get_rotation_offset(ctx)
   return autonom.partial_turbine_index or 0
 end
 
+-- Ziel-RPM für eine einzelne Turbine basierend auf dem Prozent-Sollwert.
+--
+-- Modell: Turbinen kennen nur zwei sinnvolle Zustände:
+--   AN  = base RPM (900) — Coil engaged, volle Leistung
+--   AUS = 0             — kein Flow, Turbine läuft aus
+--
+-- Teillast durch Anzahl AN-Turbinen steuern, nicht durch reduziertes RPM.
+-- Beispiel 80%: 20 Turbinen AN (900 RPM), 5 Turbinen AUS (0 RPM).
+-- Die AUS-Turbinen rotieren regelmäßig (partial_turbine_index), damit
+-- keine Turbine dauerhaft kalt bleibt.
+--
+-- Warum NICHT reduziertes RPM?
+--   Eine Turbine bei 450 RPM liefert NICHT 50% Leistung — der Coil ist
+--   bei niedrigem RPM nicht engaged und die Turbine produziert nahezu
+--   null RF/t. Das alte Modell (partial_rpm = base × percent) hat daher
+--   nie die erwartete Leistung geliefert.
 function M.get_turbine_target_rpm(ctx, turbine_index)
   local base = M.get_target_rpm(ctx)
   local cap_ready = ctx.capacity_learning and ctx.capacity_learning.ready == true
@@ -141,17 +157,19 @@ function M.get_turbine_target_rpm(ctx, turbine_index)
   if type(power_pct) ~= "number" then power_pct = 100 end
   power_pct = ctx.safety.clamp(power_pct, 0, 100)
 
-  -- Teillast-Slot: eine Turbine läuft mit reduziertem Flow (rotiert)
-  local partial_slots = math.max(0, n - math.floor(power_pct / 100 * n))
-  if partial_slots == 0 then return base end
+  -- Anzahl AN-Turbinen = floor(pct/100 × n)
+  -- Anzahl AUS-Turbinen = n - AN (diese rotieren)
+  local on_count  = math.floor(power_pct / 100 * n)
+  local off_count = n - on_count
+  if off_count == 0 then return base end  -- 100%: alle AN
 
-  local offset = get_rotation_offset(ctx)
+  -- Welcher Slot ist diese Turbine nach Rotation?
+  local offset    = get_rotation_offset(ctx)
   local slot_index = ((turbine_index - 1 + offset) % n) + 1
-  if slot_index <= partial_slots then
-    local partial_rpm = math.floor(base * (power_pct / 100) + 0.5)
-    return math.max(0, partial_rpm)
+  if slot_index <= off_count then
+    return 0  -- AUS: Flow-Regler rampt auf 0, Turbine läuft aus
   end
-  return base
+  return base  -- AN: 900 RPM, Coil engaged, volle Leistung
 end
 
 -- ── Turbinen-Initialisierung ─────────────────────────────────────────────────
