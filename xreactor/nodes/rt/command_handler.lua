@@ -107,7 +107,10 @@ local function set_setpoints(command, ctx, record)
     })
   end
   ctx.request_startup_if_needed("SET_SETPOINTS")
-  return nil
+  -- command_value mitsenden damit ack_matches_setpoints() auf Master-Seite
+  -- greifen kann (ACK_MATCH Dedup). Ohne command_value würde der Master jede
+  -- Sekunde ein neues Paket senden (should_debounce_resend = 1000ms Fenster).
+  return record({ ok = true, command_value = value })
 end
 
 local function set_scalar_target(command, ctx, key, fallback)
