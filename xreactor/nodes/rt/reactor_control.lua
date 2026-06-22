@@ -238,6 +238,18 @@ end
 
 -- ── Rod-Ansteuerung ─────────────────────────────────────────────────────────
 
+-- Prüft ob ein Reaktor-Peripheral einen Rod-Write-Pfad hat.
+-- Wird von turbine_control.updateControl() genutzt um zu entscheiden
+-- ob ein Reaktor gesteuert werden kann.
+function M.has_reactor_rod_write_path(caps)
+  return caps and (
+    caps.setAllControlRodLevels or
+    caps.setControlRodsLevels   or
+    caps.setControlRodLevel     or
+    caps.getControlRods
+  ) and true or false
+end
+
 function M.setReactorActive(ctx, reactor, caps, active)
   if caps.setActive then reactor.setActive(active); return true end
   return false
