@@ -130,7 +130,8 @@ function M.build(ctx)
     ctx.reset_startup_watchdog()
     ctx.scram()
     ctx.targets.power, ctx.targets.steam, ctx.targets.rpm = 0, 0, 0
-    ctx.add_alarm(ctx.comms.network.id, "EMERGENCY", "SCRAM triggered")
+    local _alarm_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or "RT"
+    ctx.add_alarm(_alarm_id, "EMERGENCY", "SCRAM triggered")
   end
 
   local function emergency_on_tick()
