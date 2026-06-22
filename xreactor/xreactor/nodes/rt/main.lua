@@ -366,7 +366,6 @@ local function build_status_payload(status_level)
     capacity_learning    = ctx and ctx.capacity_learning or capacity_learning_state,
     log                  = log,
     config               = config,
-    modules              = {},
     active_startup       = nil,
     startup_queue        = {},
     turbine_adapter      = adapters.turbine,
