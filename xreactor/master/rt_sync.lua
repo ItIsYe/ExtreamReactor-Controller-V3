@@ -41,19 +41,22 @@ local function node_capacity_ready(node)
   return false
 end
 
-local function node_capacity(node, fallback)
-  local capacity = number_or(node and node.capacity_max, nil)
-    or number_or(node and node.rt and node.rt.capacity_max, nil)
-    or number_or(node and node.measured_capacity_max, nil)
-  if capacity and capacity > 0 and node_capacity_ready(node) then
-    return capacity, "measured"
-  end
-  -- Node hat noch nicht eingelernt → 0 als Kapazität.
-  -- Master weist 0% zu; Node lehnt Setpoints sowieso ab bis Learning fertig.
+local function node_capacity(node)
+  -- Kein Fallback: Kapazität kommt ausschliesslich vom Capacity-Learning
+  -- der RT-Node. Solange noch nicht eingelernt gilt capacity=0 und die
+  -- Node wird nicht zugeteilt. Ein fixer Fallback-Wert (z.B. 3000 RF/t)
+  -- wäre bei realen Reaktoren (5-50 MRF/t) um Grössenordnungen falsch und
+  -- würde die Prozent-Berechnung komplett verfälschen.
   if not node_capacity_ready(node) then
     return 0, "learning"
   end
-  return math.max(1, number_or(fallback, 3000)), "fallback"
+  local capacity = number_or(node and node.capacity_max, nil)
+    or number_or(node and node.rt and node.rt.capacity_max, nil)
+    or number_or(node and node.measured_capacity_max, nil)
+  if capacity and capacity > 0 then
+    return capacity, "measured"
+  end
+  return 0, "learning"
 end
 
 -- Nur steuerungsrelevante Felder — RT-Node regelt Flow, Coil, Reaktor-Stab
@@ -215,14 +218,13 @@ function M.build_node_setpoint_plan(ctx)
   local now = os.epoch("utc")
   local plan = {}
   local active, pending_startup = {}, {}
-  local fallback_capacity = math.max(1, number_or(base.power_per_node_capacity, 3000))
-  local startup_margin = math.max(0, number_or(base.startup_margin_power, fallback_capacity * 0.2))
+  local startup_margin = math.max(0, number_or(base.startup_margin_power, 0))
 
   for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE then
       local eval = M.evaluate_rt_node(node, { rt_global_off = hold })
       local shutdown = node and node.shutdown_workflow or {}
-      local capacity, capacity_source = node_capacity(node, fallback_capacity)
+      local capacity, capacity_source = node_capacity(node)
       local entry = {
         node = node,
         eval = eval,
@@ -272,36 +274,62 @@ function M.build_node_setpoint_plan(ctx)
       end
     end
   end
+  -- Proportionale Zuweisung: nur die benötigten Nodes werden aktiviert,
+  -- und diese bekommen alle denselben Prozentsatz.
+  --
+  -- Ablauf:
+  --   1. Sortiere nach Kapazität (grösste zuerst) — damit werden immer die
+  --      leistungsstärksten Nodes bevorzugt, nicht zufällig die mit dem
+  --      aktuell höchsten Output.
+  --   2. Zähle wie viele Nodes für global_target nötig sind (greedy).
+  --   3. Verteile global_target gleichmässig NUR auf die benötigten Nodes:
+  --        uniform_pct = global_target / sum(benötigte Kapazitäten) × 100
+  --   4. Nicht benötigte Nodes: SHED/standby.
+  --
+  -- Vorteile:
+  --   - Gleichmässige Auslastung (kein Reaktor dauerhaft auf 100%)
+  --   - Kein Yo-Yo-Effekt
+  --   - Bei 1 Node: identisches Ergebnis wie vorher
+  --   - Skaliert korrekt auf N Nodes mit unterschiedlichen Kapazitäten
+
+  -- Nodes nach Kapazität sortieren (grösste zuerst)
+  table.sort(active, function(a, b)
+    if a.capacity ~= b.capacity then return a.capacity > b.capacity end
+    return (a.id or "") < (b.id or "")
+  end)
+
+  -- Summe der Kapazitäten der benötigten Nodes
+  local needed_capacity = 0
+  for i = 1, needed_nodes do
+    if active[i] then needed_capacity = needed_capacity + active[i].capacity end
+  end
+  local uniform_pct = needed_capacity > 0
+    and math.min(100, global_target / needed_capacity * 100)
+    or 0
+
   local keep_count = math.min(#active, needed_nodes)
-  remaining = global_target
 
   for idx, entry in ipairs(active) do
+    entry.assignment_rank = idx
     if idx <= keep_count then
-      local assign = math.min(entry.capacity, remaining)
-      if idx == keep_count then assign = math.min(entry.capacity, remaining) end
-      assign = math.max(0, assign)
-      entry.assigned_power = assign
-      entry.assigned_percent = entry.capacity > 0 and math.min(100, (assign / entry.capacity) * 100) or 0
-      entry.assignment_rank = idx
-      entry.assignment_state = "active"
-      entry.assignment_reason = idx == 1 and "PRIMARY_ACTIVE" or "DEMAND_ACTIVE"
-      remaining = math.max(0, remaining - assign)
+      entry.assigned_percent = uniform_pct
+      entry.assigned_power   = entry.capacity * uniform_pct / 100
+      entry.assignment_state  = "active"
+      entry.assignment_reason = "PROPORTIONAL_ACTIVE"
     else
-      entry.assigned_power = 0
-      entry.assigned_percent = 0
-      entry.assignment_rank = idx
+      entry.assigned_power    = 0
+      entry.assigned_percent  = 0
+      entry.assignment_rank   = idx
       if idx == keep_count + 1 then
         local ready_at = entry.shutdown_ready_at or 0
         local requested_at = entry.shutdown_requested_at or now
         local ramp_ms = math.max(1000, number_or(base.shutdown_ramp_ms, 6000))
-        if ready_at <= 0 then
-          ready_at = requested_at + ramp_ms
-        end
+        if ready_at <= 0 then ready_at = requested_at + ramp_ms end
         local shutdown_ready = now >= ready_at
-        entry.assignment_state = shutdown_ready and "shutdown" or "shed"
+        entry.assignment_state  = shutdown_ready and "shutdown" or "shed"
         entry.assignment_reason = shutdown_ready and "SHUTDOWN_READY" or "SHED_EXCESS_CAPACITY"
       else
-        entry.assignment_state = "standby"
+        entry.assignment_state  = "standby"
         entry.assignment_reason = "STANDBY"
       end
     end
