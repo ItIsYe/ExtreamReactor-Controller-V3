@@ -349,7 +349,7 @@ local function build_status_payload(status_level)
         devices = devices, registry = registry, binding = binding,
         configured_reactors = runtime_config.configured_reactors,
         configured_turbines = runtime_config.configured_turbines,
-        health = rt_health, warn_once = warn_once,
+        health = health, warn_once = warn_once,
         startup_watchdog_tripped = false,
         rt_health = rt_health,
         configured_caps = runtime_config.configured_caps,
