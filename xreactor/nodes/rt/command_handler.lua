@@ -23,14 +23,22 @@ local function get_learning(ctx)
   return ctx.capacity_learning
 end
 
+-- Fix: neues capacity_learning Modul (nodes/rt/capacity_learning.lua) setzt
+-- .ready = true, nicht .locked (altes Feld aus der Lock-basierten Logik).
+-- Vorher: SET_SETPOINTS wurde IMMER abgelehnt ("capacity learning not locked"),
+-- weil learning.locked immer nil war — Master konnte nie Vorgaben senden.
 local function capacity_learning_locked(ctx)
   local learning = get_learning(ctx)
-  return type(learning) == "table" and learning.locked == true and number_or_nil(learning.max_output) and number_or_nil(learning.max_output) > 0
+  return type(learning) == "table"
+    and (learning.ready == true or learning.locked == true)
+    and number_or_nil(learning.max_output)
+    and number_or_nil(learning.max_output) > 0
 end
 
 local function current_capacity(ctx)
   local learning = get_learning(ctx)
-  if type(learning) == "table" and learning.locked == true then
+  if type(learning) == "table"
+      and (learning.ready == true or learning.locked == true) then
     local max_output = number_or_nil(learning.max_output)
     if max_output and max_output > 0 then return max_output, "learned" end
   end
@@ -71,7 +79,9 @@ local function set_setpoints(command, ctx, record)
       reason_code = "CAPACITY_LEARNING",
       capacity_ready = false,
       capacity_source = learning.reason or "LEARNING",
-      capacity_stable_samples = learning.stable_samples or 0,
+      -- Fix: stable_samples existiert nicht mehr im neuen Learning-State,
+      -- at_target ist der neue Name (Turbinen die gerade am Ziel sind).
+      capacity_stable_samples = learning.at_target or learning.stable_samples or 0,
       command_value = value
     })
   end
