@@ -51,14 +51,10 @@ end
 local function value_summary(value)
   if type(value) == "table" then
     local parts = {}
-    if value.target_rpm ~= nil then parts[#parts + 1] = "target_rpm=" .. tostring(value.target_rpm) end
-    if value.power_target_percent ~= nil then parts[#parts + 1] = "power_target_percent=" .. tostring(value.power_target_percent) end
-    if value.power_target ~= nil then parts[#parts + 1] = "power_target=" .. tostring(value.power_target) end
-    if value.steam_target ~= nil then parts[#parts + 1] = "steam_target=" .. tostring(value.steam_target) end
-    if value.enable_reactors ~= nil then parts[#parts + 1] = "enable_reactors=" .. tostring(value.enable_reactors) end
-    if value.enable_turbines ~= nil then parts[#parts + 1] = "enable_turbines=" .. tostring(value.enable_turbines) end
-    if value.assignment_state ~= nil then parts[#parts + 1] = "assignment_state=" .. tostring(value.assignment_state) end
-    if value.desired_node_state ~= nil then parts[#parts + 1] = "desired_node_state=" .. tostring(value.desired_node_state) end
+    if value.power_target_percent ~= nil then parts[#parts + 1] = "pct=" .. tostring(value.power_target_percent) end
+    if value.assignment_state    ~= nil then parts[#parts + 1] = "state=" .. tostring(value.assignment_state) end
+    if value.desired_node_state  ~= nil then parts[#parts + 1] = "node_state=" .. tostring(value.desired_node_state) end
+    if value.shutdown_stage      ~= nil then parts[#parts + 1] = "shutdown=" .. tostring(value.shutdown_stage) end
     if #parts > 0 then return table.concat(parts, ",") end
     return "table"
   end
@@ -86,48 +82,15 @@ local function set_setpoints(command, ctx, record)
     })
   end
 
+  -- Master sendet nur den Prozentwert — RT berechnet Flow, Coil,
+  -- Reaktor-Stab vollständig autonom daraus.
   local targets = ctx.targets
-  if type(value.target_rpm) == "number" then
-    targets.rpm = value.target_rpm
-  end
   local pct = number_or_nil(value.power_target_percent)
   if pct then
     pct = math.max(0, math.min(100, pct))
     targets.power_percent = pct
-    local capacity, source = current_capacity(ctx)
-    if capacity and capacity > 0 then
-      targets.power = capacity * (pct / 100)
-      targets.capacity_max = capacity
-      targets.capacity_source = source
-      log_command(ctx, "INFO", ("Percent setpoint applied percent=%.1f capacity=%.2f source=%s local_power=%.2f"):format(pct, capacity, tostring(source), targets.power))
-    elseif type(value.power_target) == "number" then
-      targets.power = value.power_target
-      targets.capacity_source = "fallback-absolute"
-      log_command(ctx, "WARN", ("Percent setpoint capacity unavailable; using absolute fallback power=%.2f percent=%.1f"):format(targets.power, pct))
-    else
-      targets.power = 0
-      targets.capacity_source = "unavailable"
-      log_command(ctx, "WARN", ("Percent setpoint capacity unavailable; target forced to 0 percent=%.1f"):format(pct))
-    end
-  elseif type(value.power_target) == "number" then
-    targets.power = value.power_target
-    targets.power_percent = nil
-    targets.capacity_source = "absolute"
+    log_command(ctx, "INFO", ("Setpoint applied percent=%.1f"):format(pct))
   end
-  if type(value.steam_target) == "number" then
-    targets.steam = value.steam_target
-  end
-  if value.enable_reactors ~= nil then
-    targets.enable_reactors = value.enable_reactors and true or false
-  end
-  if value.enable_turbines ~= nil then
-    targets.enable_turbines = value.enable_turbines and true or false
-  end
-  -- Fix: assignment_state wurde vom Master gesendet und nur fürs Logging
-  -- ausgewertet (value_summary), aber nie tatsächlich in targets gespeichert.
-  -- Die UI (monitor_ui.lua render_overview) liest model.assignment_state
-  -- für den STANDBY-Indikator (z.B. "shutdown"/"unavailable") — ohne diese
-  -- Zeile war das Feld immer nil und der Indikator faktisch unerreichbar.
   if value.assignment_state ~= nil then
     targets.assignment_state = tostring(value.assignment_state)
   end
