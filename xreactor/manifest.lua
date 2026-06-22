@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 123,
-  manifest_id = "manifest-v123",
+  manifest_version = 124,
+  manifest_id = "manifest-v124",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -66,7 +66,7 @@ return {
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"}},
     { path = "master/runtime_ops_profile.lua", size_bytes = 11031, hash = "0fc5232c", required_for={"MASTER"}},
     { path = "master/runtime_ops_rt.lua", size_bytes = 16286, hash = "cc9b1b4d", required_for={"MASTER"}},
-    { path = "master/startup_sequencer.lua", size_bytes = 10624, hash = "4257d7fa", required_for={"MASTER"}},
+    { path = "master/startup_sequencer.lua", size_bytes = 10582, hash = "b537bd44", required_for={"MASTER"}},
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"}},
     { path = "master/ui/alarms.lua", size_bytes = 1827, hash = "9b9ff1af", required_for={"MASTER"}},
     { path = "master/ui/alerts.lua", size_bytes = 25335, hash = "746207f8", required_for={"MASTER"}},
@@ -98,9 +98,9 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 9137, hash = "31ad3d94", required_for={"RT"}},
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 10746, hash = "6664e2ce", required_for={"RT"}},
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"}},
-    { path = "nodes/rt/main.lua", size_bytes = 24160, hash = "6661a40f", required_for={"RT"}},
+    { path = "nodes/rt/main.lua", size_bytes = 24030, hash = "d0e4088c", required_for={"RT"}},
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"}},
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 32557, hash = "8c584f32", required_for={"RT"}},
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 31927, hash = "30e85bdb", required_for={"RT"}},
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"}},
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"}},
     { path = "nodes/rt/state_handlers.lua", size_bytes = 8762, hash = "aa2155db", required_for={"RT"}},
