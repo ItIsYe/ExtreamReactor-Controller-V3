@@ -131,7 +131,7 @@ function M.build(ctx)
     ctx.scram()
     ctx.targets.power, ctx.targets.steam, ctx.targets.rpm = 0, 0, 0
     local _alarm_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or "RT"
-    ctx.add_alarm(_alarm_id, "EMERGENCY", "SCRAM triggered")
+    ctx.add_alarm(_alarm_id, "EMERGENCY", "Emergency stop active")
   end
 
   local function emergency_on_tick()
@@ -200,9 +200,18 @@ function M.set_state(ctx, new_state, transition_reason)
   if current_state == new_state then
     return false
   end
-  if not ctx.allowed_transitions[current_state] or not ctx.allowed_transitions[current_state][new_state] then
-    return false
+
+  -- Some RT contexts intentionally omit allowed_transitions. Treat a missing
+  -- table as permissive instead of crashing on nil indexing. If a table is
+  -- provided, keep the strict allow-list behaviour.
+  local allowed_transitions = ctx.allowed_transitions
+  if type(allowed_transitions) == "table" then
+    local from_state = allowed_transitions[current_state]
+    if type(from_state) ~= "table" or not from_state[new_state] then
+      return false
+    end
   end
+
   ctx.set_current_state(new_state)
   if new_state == ctx.STATE.AUTONOM then
     ctx.log("INFO", "Entering AUTONOM mode reason=" .. tostring(transition_reason or "STATE_REQUEST"))
