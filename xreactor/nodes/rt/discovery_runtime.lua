@@ -53,6 +53,66 @@ function M.build_binding_signature(reactors, turbines)
   return table.concat(ids, "|")
 end
 
+local function method_sample_for(name, limit)
+  local ok, methods = pcall(peripheral.getMethods, name)
+  if not ok or type(methods) ~= "table" then
+    return "methods unavailable"
+  end
+  table.sort(methods)
+  local out = {}
+  local max_methods = math.min(#methods, limit or 10)
+  for i = 1, max_methods do
+    out[#out + 1] = tostring(methods[i])
+  end
+  if #methods > max_methods then
+    out[#out + 1] = "...+" .. tostring(#methods - max_methods)
+  end
+  if #out == 0 then
+    return "no methods"
+  end
+  return table.concat(out, ",")
+end
+
+local function zero_visible_diagnostic_signature(names)
+  local parts = {}
+  for _, name in ipairs(names or {}) do
+    local ok_type, type_name = pcall(peripheral.getType, name)
+    parts[#parts + 1] = table.concat({
+      tostring(name),
+      ok_type and tostring(type_name or "n/a") or "type unavailable",
+      method_sample_for(name, 10)
+    }, "|")
+  end
+  table.sort(parts)
+  return table.concat(parts, "\n")
+end
+
+local function log_zero_visible_diagnostics(ctx, names)
+  ctx.log("WARN", string.format(
+    "RT discovery found zero reactor/turbine peripherals; peripheral_count=%d config_path=/xreactor/config/rt.lua",
+    #(names or {})
+  ))
+  ctx.log("WARN", "RT discovery note: empty reactors/turbines lists mean auto-discovery; zero visible means no supported peripheral signature was detected")
+  if #(names or {}) == 0 then
+    ctx.log("WARN", "RT discovery: peripheral.getNames() returned no peripherals for this computer")
+    return
+  end
+  local max_lines = math.min(#names, 16)
+  for i = 1, max_lines do
+    local name = names[i]
+    local ok_type, type_name = pcall(peripheral.getType, name)
+    ctx.log("INFO", string.format(
+      "RT discovery peripheral name=%s type=%s methods=%s",
+      tostring(name),
+      ok_type and tostring(type_name or "n/a") or "type unavailable",
+      method_sample_for(name, 10)
+    ))
+  end
+  if #names > max_lines then
+    ctx.log("INFO", "RT discovery peripheral list truncated; remaining=" .. tostring(#names - max_lines))
+  end
+end
+
 function M.refresh_bindings(ctx)
   local reactors = ctx.registry:get_bound_devices("reactor")
   local turbines = ctx.registry:get_bound_devices("turbine")
@@ -186,6 +246,15 @@ function M.discover(ctx)
   local discovery_signature = ctx.discovery_log.build_signature(summary, binding_decisions)
   local log_details = ctx.discovery_log.should_log_details(ctx.devices.discovery_log_signature, discovery_signature, discovery_had_errors)
   ctx.devices.discovery_log_signature = discovery_signature
+  local zero_visible = visible_counts.reactor == 0 and visible_counts.turbine == 0
+  local zero_diag_signature = zero_visible and zero_visible_diagnostic_signature(names) or nil
+  local log_zero_diag = zero_visible and ctx.devices.zero_visible_diag_signature ~= zero_diag_signature
+  if zero_visible then
+    ctx.devices.zero_visible_diag_signature = zero_diag_signature
+  else
+    ctx.devices.zero_visible_diag_signature = nil
+  end
+
   if log_details then
     for _, decision in ipairs(binding_decisions) do
       local action = decision.bound and "bound" or "rejected"
@@ -213,6 +282,10 @@ function M.discover(ctx)
       bound_counts.reactor,
       bound_counts.turbine
     ))
+  end
+
+  if log_zero_diag then
+    log_zero_visible_diagnostics(ctx, names)
   end
 
   ctx.registry:sync(registry_devices)
