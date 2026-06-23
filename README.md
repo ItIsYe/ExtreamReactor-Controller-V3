@@ -2,8 +2,8 @@
 
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
-> **Branch:** `beta` — active development.
->
+> **Branch:** `beta` — active development.  
+> **Manifest:** v133 · 131 files · ATM10 (MC 1.21.1)  
 > See [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) for the full technical reference.
 
 ---
@@ -20,6 +20,8 @@ shell.run("/installer")
 The installer downloads the manifest, lets you pick a role, stages all required files, writes `/startup`, and reboots automatically.
 
 **Update / reinstall:** Run `/installer` again — detects existing role and asks whether to keep or change it.
+
+**Remote Update:** Trigger a Redstone signal on the `top` side of the MASTER computer. The Master broadcasts a `REMOTE_UPDATE` command to all connected nodes and updates itself. Each node downloads the installer and reboots automatically (non-interactive).
 
 ---
 
@@ -38,14 +40,14 @@ The installer downloads the manifest, lets you pick a role, stages all required 
   └─────────┘  └────────┘  └─────────────┘  └─────┘
 ```
 
-**Key design rule:** MASTER sends only setpoints and intents. Each RT node makes local hardware decisions and writes directly to its own peripherals.
+**Key design rule (SCADA principle):** MASTER sends only a percentage setpoint (`power_target_percent`) and a state intent (`assignment_state`). Each RT node autonomously decides how many turbines run, which are at partial load, and how to position reactor rods — the Master has no knowledge of individual turbine RPM or flow rates.
 
 ### Modem Channels
 
 | Channel | Purpose |
 |---------|---------|
-| 6500 | Control — MASTER → nodes |
-| 6501 | Status — nodes → MASTER |
+| 6500 | Control — MASTER → nodes (commands, setpoints) |
+| 6501 | Status — nodes → MASTER (heartbeat, status payloads) |
 | 6502 | Log transport — all nodes → LOG collector |
 
 ---
@@ -64,120 +66,110 @@ The installer downloads the manifest, lets you pick a role, stages all required 
 
 ---
 
-## RT Node — Turbine & Reactor Control
+## Boot Sequence
+
+Nodes start in a fixed order to ensure the Master is ready before nodes announce themselves:
+
+| Role | Delay | Waits for |
+|------|-------|-----------|
+| LOG / LOG_COLLECTOR | 0s | — starts immediately |
+| MASTER | 2s | LOG_COLLECTOR |
+| RT, FUEL, WATER, all others | 8s | LOG_COLLECTOR + MASTER |
+
+---
+
+## RT Node — Reactor & Turbine Control
+
+### Module Structure (SCADA Rewrite)
+
+The RT node was fully rewritten following SCADA principles. Instead of one 2350-line `main.lua`, logic is split into focused modules:
+
+| Module | Lines | Responsibility |
+|--------|-------|----------------|
+| `nodes/rt/main.lua` | ~750 | Boot, service wiring, ctx assembly |
+| `nodes/rt/reactor_control.lua` | ~540 | Rod control, steam-margin regulator |
+| `nodes/rt/turbine_control.lua` | ~930 | Flow, inductor, overspeed, rotation |
+| `nodes/rt/capacity_learning.lua` | ~110 | Continuous capacity measurement |
+| `nodes/rt/status_snapshot.lua` | ~160 | Status payload for Master |
+| `nodes/rt/state_handlers.lua` | ~270 | State machine (AUTONOM/MASTER/SAFE) |
 
 ### Why 900 RPM?
 
-**900 RPM is the efficiency optimum for ER2 turbines.** The coil (generator) only produces power at ≥ 900 RPM. Below that, the turbine consumes steam but generates no electricity.
+**900 RPM is the efficiency optimum for ER2 turbines.** The coil (generator) only produces power at ≥ 900 RPM. Below that, the turbine consumes steam but generates no electricity. The RT node always targets 900 RPM as the base operating point.
 
-### Power Control — Turbine Count + Partial Load Rotation
+### Power Control — 3-State Turbine Model
 
-The RT node receives a `power_percent` setpoint (0–100%) from the MASTER. It converts this to a turbine plan:
+The RT node receives a single `power_target_percent` (0–100 %) from the Master and converts it into a turbine plan autonomously:
 
 ```
-demand = total_turbines × power_percent / 100
-
-full_count  = floor(demand)          → these run at 900 RPM (coil ON)
-remainder   = demand − full_count    → one turbine runs at partial RPM
-rest                                 → coast to 0 (coil OFF)
-
-Example: 25 turbines, 54% → demand = 13.5
-  13 turbines at 900 RPM
-   1 turbine  at 450 RPM  (partial, coil thresholds scaled proportionally)
-  11 turbines coast to 0
+exact       = n_turbines × power_percent / 100
+full_count  = floor(exact)            → run at 900 RPM (coil ON)
+remainder   = exact − full_count      → one buffer turbine at remainder × 900 RPM
+off_count   = n − full_count − 1      → flow = 0, coil OFF (rotate periodically)
 ```
 
-**Rotation:** Every 5 minutes a `rotation_offset` shifts which physical turbines carry full load, partial load, or coast. All turbines share operating hours equally over time. Works for any number of turbines per node (e.g. 15 or 25).
+Example at 50 %, 25 turbines:
+- **12 turbines** → 900 RPM, full power
+- **1 buffer turbine** → 450 RPM, coil scales with target RPM
+- **12 turbines** → 0 RPM (rotating — no turbine stays cold permanently)
 
-### Coil Thresholds
+The coil engage/disengage thresholds scale proportionally with the target RPM, so the buffer turbine produces the correct fractional power.
 
-Coil engage/disengage thresholds scale proportionally with the target RPM:
+### Setpoints (Master → RT)
 
-| Condition | Full load (900 RPM) | Partial (e.g. 450 RPM) |
-|-----------|--------------------|-----------------------|
-| Engage coil | ≥ 900 RPM | ≥ 450 RPM |
-| Hold state | 850–899 RPM | 425–449 RPM |
-| Disengage | < 850 RPM | < 425 RPM |
-| Overspeed brake | > target + 20 RPM | > target + 20 RPM → coil forced ON |
+The Master sends only four fields:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `power_target_percent` | number 0–100 | How much of RT capacity to deliver |
+| `assignment_state` | string | `"active"` / `"shed"` / `"shutdown"` / `"standby"` |
+| `shutdown_stage` | string\|nil | `"REQUEST_OFF"` / `"RAMPDOWN"` |
+| `desired_node_state` | string | `"RUNNING"` / `"LIMITED"` / `"OFF"` |
+
+The RT node calculates everything else itself (turbine count, flow rates, rod positions).
 
 ### Capacity Learning
 
-On first boot (or after deleting the cache), the node learns its maximum output:
+Before the Master can send useful setpoints, the RT node must measure its own maximum output. Learning runs continuously and independently:
 
-```
-1. All turbines regulated to 900 RPM
-2. Reactor rods controlled by the normal rod regulator (same rules as production)
-3. Wait until ALL turbines are stable at target RPM with coil engaged and energy > 0
-4. Collect 3 consecutive stable samples
-5. Lock: max_output = peak of 3 samples
-6. Cache saved to /xreactor/config/capacity_cache.lua
-```
+- Target: always 900 RPM (regardless of current setpoints)
+- Minimum fraction: 80 % of turbines must be at target RPM for a reading to count
+- Once `capacity_ready = true`, the Master can assign proportional load
+- Result is cached to disk (`/xreactor/config/capacity_cache.lua`) and survives reboots
 
-While learning, the MASTER receives `capacity_ready=false` and sends 0% setpoints. The Master UI shows `LEARNING X/N turbines stable (Y samples)` per node.
+### Multi-Node Assignment (proportional)
 
-After lock, `SET_SETPOINTS` commands are accepted and the MASTER begins normal power distribution.
+When multiple RT nodes are available, the Master assigns load proportionally:
 
-**Force re-learning:**
-```sh
-delete /xreactor/config/capacity_cache.lua
-reboot
-```
+1. Sort nodes by capacity (largest first)
+2. Determine how many nodes are needed (greedy fill)
+3. Assign `global_target / sum(needed_capacities) × 100 %` to each needed node equally
 
-### Reactor Rod Control
-
-The rod regulator has two phases:
-
-**Rod regulator runs identically during Learning and normal operation:**
-```
-steam_margin = available_steam − total_turbine_steam_demand
-Positive margin → insert rods (less steam produced)
-Negative margin → retract rods (more steam produced)
-
-Deadband:  ±5000 mB  (no action in this range)
-Step:      max ±5% per application
-Cooldown:  1.5s between adjustments
-Rod range: min=80% .. max=100% insertion (configurable in rails.reactor_rods)
-
-Safety overrides (bypass rod caps):
-  SCRAM / EMERGENCY → 100% insertion (immediate)
-```
-
-Coolant protection reduces or blocks rod retraction when coolant ratio is low (soft limit 0.28, hard limit 0.22).
-
-**Log indicator for active rod control:**
-```
-ReactorCtrl margin=<N> rods_current=<X> rods_target=<Y> source=AUTO_REGULATOR
-```
+No node runs at 100 % while another idles — all active nodes share the same percentage.
 
 ---
 
-## FUEL & REPROCESSING — Routing
+## Peripheral Detection
 
-Mekanism pipe valves must be set to **High Redstone = Interrupt**. Configure via the **Router tab** on the Monitor (or PC terminal). Routes save to `/xreactor/config/fuel_routes.lua` / `reproc_routes.lua`.
+The system uses `peripheral.getType()` and string matching to detect ER2 devices:
 
----
+- Type contains `"reactor"` → bound as reactor
+- Type contains `"turbine"` → bound as turbine
 
-## LOG Collector
+Compatible type names: `BigReactors-Reactor`, `BigReactors-Turbine`, `extremereactors:turbine_part`, and variants.
 
-Disk ring-buffer: fills one disk, then switches to next, wipes first when all full. Log mode buttons on all nodes: `[All][Disk][Rmt][Term][Off]`.
-
----
-
-## node_id System
-
-Identity = `node-<computerID>`. Stored in `/xreactor/config/node_id.txt`. Never derived from the computer label. If a node appears offline but is running: delete `node_id.txt` and reboot.
+Rod-level writes use a 4-step fallback: `setAllControlRodLevels` → `setControlRodsLevels` → `setControlRodLevel` → `getControlRods.setLevel`.
 
 ---
 
-## PC Console Fallback
+## Remote Update
 
-No Monitor attached? All nodes render their UI directly on the terminal. Buttons are clickable via mouse on Advanced Computers.
+Trigger: Redstone signal on **top** of the MASTER computer.
 
----
+Flow:
+1. Master broadcasts `REMOTE_UPDATE` to all nodes and updates itself
+2. Each node sets a deferred flag (does not block the event loop)
+3. After the current event cycle, the node downloads the installer from GitHub
+4. Installer runs non-interactively (existing role kept), then `os.reboot()`
 
-## Development
-
-```sh
-python3 -m pytest tests/ -q                        # run all tests
-python3 tools/regenerate_manifest_metadata.py      # after changing any xreactor/ file
-```
+The deferred mechanism is required because CC:Tweaked's `http.get()` is asynchronous — it cannot receive the `http_success` event while already inside a `modem_message` handler.
