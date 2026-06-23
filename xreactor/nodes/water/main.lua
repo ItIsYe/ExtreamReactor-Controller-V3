@@ -79,16 +79,6 @@ local balance_log_state = { last_action = "ok", last_log_ts = 0 }
 local cluster_rs_router = nil  -- Redstone-Router für Cluster-Steuerung
 local cluster_states    = {}   -- { [cluster_name] = { filling=bool, draining=bool } }
 
-local function get_cluster_rs_router()
-  if not cluster_rs_router then
-    cluster_rs_router = redstone_router_lib.new({
-      config    = config,
-      log       = function(level, msg) utils.log("WATER", msg, level) end,
-      warn_once = function(key, msg) warn_once(key, msg) end,
-    })
-  end
-  return cluster_rs_router
-end
 
 local function add_config_warning(message)
   table.insert(config_warnings, message)
