@@ -1,6 +1,6 @@
 # XReactor Controller V3 — Vollständige Projektdokumentation
 
-> Letzte Aktualisierung: beta (aktuelle Session)
+> Letzte Aktualisierung: beta-v133  
 > Stack: CC:Tweaked · Extreme Reactors 2 · Mekanism · ATM10 (MC 1.21.1)
 
 ---
@@ -8,410 +8,233 @@
 ## Inhaltsverzeichnis
 
 1. [Systemüberblick](#1-systemüberblick)
-2. [Designprinzip: maximale Effizienz](#2-designprinzip-maximale-effizienz)
+2. [SCADA-Designprinzip](#2-scada-designprinzip)
 3. [Netzwerk & Protokoll](#3-netzwerk--protokoll)
 4. [MASTER Node](#4-master-node)
 5. [RT Node — Reaktor & Turbinen](#5-rt-node--reaktor--turbinen)
-6. [ENERGY Node](#6-energy-node)
-7. [FUEL & REPROCESSING Node](#7-fuel--reprocessing-node)
-8. [LOG Collector Node](#8-log-collector-node)
-9. [WATER Node](#9-water-node)
-10. [Installer & Manifest](#10-installer--manifest)
-11. [Logger & Log-Transport](#11-logger--log-transport)
-12. [node_id System](#12-nodeid-system)
-13. [Ingame Konfiguration](#13-ingame-konfiguration)
-14. [Bekannte Einschränkungen](#14-bekannte-einschränkungen)
+6. [Startsequenz](#6-startsequenz)
+7. [Remote Update](#7-remote-update)
+8. [Peripheral-Erkennung](#8-peripheral-erkennung)
 
 ---
 
 ## 1. Systemüberblick
 
-XReactor Controller V3 ist ein verteiltes Steuerungssystem für Extreme Reactors 2 und Mekanism-Infrastruktur. Das System besteht aus mehreren CC:Tweaked-Computern (Nodes), die über Ender-Modeme miteinander kommunizieren.
+Ein MASTER-Computer koordiniert alle Nodes. Nodes melden ihren Status, der Master berechnet Sollwerte und sendet sie zurück. Hardware-Steuerung bleibt strikt lokal auf der Node die die Peripherie besitzt.
 
-**Zentrales Design-Prinzip:** MASTER schickt nur Sollwerte und Absichten. Jeder RT-Node trifft lokale Hardware-Entscheidungen und schreibt selbst auf seine Peripherals. Kein anderer Node hat direkten Hardware-Write-Zugriff auf Reaktoren oder Turbinen.
-
-### Node-Rollen
-
-| Rolle | Computer | Hauptaufgabe |
-|-------|---------|-------------|
-| MASTER | Advanced Computer | Koordination, UI, Setpoints |
-| RT | Advanced Computer | Reaktor + Turbinen steuern |
-| ENERGY | Advanced Computer | Mekanism-Matrix überwachen |
-| FUEL | Advanced Computer | Brennstoff-Logistics |
-| REPROCESSING | Advanced Computer | Waste-Verarbeitung |
-| LOG | Advanced Computer | Log-Sammlung auf Disk |
-| WATER | Advanced Computer | Wasser-Versorgung |
+```
+┌──────────────────────────────────────────────────────┐
+│                       MASTER                         │
+│  UI · Alerts · Telemetry · Setpoints · Profiles      │
+└──────┬───────────────────────────┬───────────────────┘
+       │ Ender Modem (ch 6500/6501)│
+  ┌────▼────┐  ┌────────┐  ┌──────▼──────┐  ┌─────┐
+  │   RT    │  │ ENERGY │  │ WATER/FUEL/ │  │ LOG │
+  │Reactor  │  │Matrix  │  │REPROCESSING │  │     │
+  │Turbines │  │Storage │  │ Support     │  │     │
+  └─────────┘  └────────┘  └─────────────┘  └─────┘
+```
 
 ---
 
-## 2. Designprinzip: maximale Effizienz
+## 2. SCADA-Designprinzip
 
-Das gesamte Steuerungssystem ist auf **maximale Energieeffizienz** ausgelegt. Der wichtigste Parameter ist die Turbinen-RPM.
+**Master kennt das Ziel. Nodes kennen den Weg.**
 
-### Warum immer 900 RPM?
+- Master sendet nur `power_target_percent` (0–100 %) und einen Zustandsintent
+- RT-Node berechnet autonom: Anzahl aktiver Turbinen, Flow pro Turbine, Induktor-Timing, Reaktor-Stab-Position
+- Master hat keine Kenntnis über individuelle Turbinen-RPM oder Flow-Werte
 
-**900 RPM ist das Effizienzoptimum für Extreme Reactors 2 Turbinen.** Bei genau 900 RPM wandelt die Turbine Dampf mit maximalem Wirkungsgrad in RF um. Unterhalb von 900 RPM ist der Coil nicht eingeklinkt — die Turbine verbraucht Dampf erzeugt aber keinen Strom.
-
-### Coil-Engagement und Stromerzeugung
-
-Der Generator-Coil (Induktor) skaliert seine Einschalt- und Ausschaltschwellen proportional zur Ziel-RPM:
-
-| Betrieb | Ziel-RPM | Einschalten | Ausschalten |
-|---------|----------|-------------|-------------|
-| Vollast | 900 | ≥ 900 RPM | < 850 RPM |
-| Teillast 50% | 450 | ≥ 450 RPM | < 425 RPM |
-| Stop | 0 | — (austrudeln) | — |
-| Overspeed | any | > Ziel + 20 RPM → Coil FORCE ON (mitreißen) | — |
-
-### Leistungsregelung: Turbinen-Anzahl zuerst, Teillast als Fallback
-
-```
-Nachfrage = Anzahl_Turbinen × power_percent / 100
-
-Vollast-Turbinen  = floor(Nachfrage)  → 900 RPM, Coil nach Schwelle
-Teillast-Turbine  = 1 (falls Restteil > 1%)  → anteilige RPM, Coil skaliert
-Stop-Turbinen     = Rest  → 0 RPM, austrudeln
-
-Beispiel: 25 Turbinen, 54% → Nachfrage = 13.5
-  13 Turbinen bei 900 RPM  (Coil AN bei ≥ 900)
-   1 Turbine  bei 450 RPM  (Coil AN bei ≥ 450, AUS bei < 425)
-  11 Turbinen trudeln aus   (flow = 0)
-```
-
-**Rotation:** Alle 5 Minuten rotiert ein `rotation_offset` die Zuweisung über alle physischen Turbinen-Positionen. Jede Turbine trägt alle Rollen gleichmäßig — vollständig unabhängig von der Turbinen-Anzahl pro Node (1 bis N).
+Dies entspricht dem SCADA-Prinzip (Supervisory Control and Data Acquisition): zentrales Monitoring und Sollwertvorgabe, dezentrale Ausführung.
 
 ---
 
 ## 3. Netzwerk & Protokoll
 
-### Modem-Kanäle
+### Kanäle
 
 | Kanal | Richtung | Inhalt |
-|-------|---------|--------|
+|-------|----------|--------|
 | 6500 | MASTER → Nodes | Commands, Setpoints |
-| 6501 | Nodes → MASTER | Telemetrie, Heartbeat |
-| 6502 | Nodes → LOG | Log-Events |
+| 6501 | Nodes → MASTER | Status-Payloads, Heartbeats |
+| 6502 | alle → LOG | Log-Zeilen |
 
-### Physische Topologie
+### Message-Typen
 
-```
-Alle Nodes ← Ender Modem → Drahtloses Netz (Kanäle 6500/6501/6502)
-FUEL/REPROC → Wired Modem → Transporter/Reaktor-Ports (Logistics)
-```
-
-### node_id — Netzwerk-Identität
-
-Jeder Node hat eine stabile ID `node-<ComputerID>` in `/xreactor/config/node_id.txt`. Niemals vom Computer-Label abgeleitet (Labels sind nur menschlich lesbar).
+| Typ | Beschreibung |
+|-----|-------------|
+| `HELLO` | Node meldet sich beim Start beim Master an |
+| `STATUS` | periodischer Status-Payload (Heartbeat + Daten) |
+| `SET_SETPOINTS` | Master sendet Sollwerte an RT-Node |
+| `SET_MODE` | Master sendet State-Transition |
+| `REMOTE_UPDATE` | Master triggert Installer-Update |
+| `ACK` | Node bestätigt empfangenes Command |
 
 ---
 
 ## 4. MASTER Node
 
-Koordiniert alle Nodes, berechnet Leistungsverteilung, zeigt System-UI.
+### Leistungsschätzung (`runtime_ops_profile.lua`)
 
-### Setpoint-Verteilung
+Priorität für `power_target`:
+1. `measured_total` — Summe der tatsächlichen RT-Outputs (beste Schätzung)
+2. `learned_capacity_total` — Summe der gelernten Kapazitäten (bei SHED/Reboot)
+3. `power_target` vom letzten Tick (Kontinuität)
+4. Kein generischer Fallback mehr (wurde entfernt — 3000 RF/t war um Größenordnungen falsch)
 
-Der Master berechnet einmal pro Sync-Zyklus einen Plan für alle RT-Nodes:
+### Multi-Node-Zuweisung (`rt_sync.lua`)
+
+Proportionale Verteilung statt Greedy:
 
 ```
-global_target (RF/t)
-  → aufgeteilt nach node.capacity_max pro Node
-  → assigned_percent = min(100, assigned_power / capacity_max × 100)
-  → gesendet als SET_SETPOINTS an jeden Node
+1. Nodes nach Kapazität sortieren (größte zuerst)
+2. Greedy: zählen wie viele Nodes für global_target benötigt werden
+3. uniform_pct = global_target / Summe(benötigte Kapazitäten) × 100
+4. Alle benötigten Nodes bekommen denselben Prozentsatz
 ```
 
-**Wichtig:** Solange ein Node noch einlernt (`capacity_ready=false`), weist der Master diesem Node **0%** zu. Der Node lehnt Setpoints sowieso ab bis sein Learning abgeschlossen ist. Im Master-UI erscheint `LEARNING X/N Turbinen stabil (Y Samples)` pro lernenden Node und in der RT-Zusammenfassungszeile `LEARNING: N Node(s) lernen noch ein`.
+Vorteil: gleichmäßige Auslastung, kein Yo-Yo-Effekt, korrekte Skalierung auf N Nodes.
 
-### Deduplizierung
+### Setpoint-Paket (Master → RT)
 
-Setpoints werden nur gesendet wenn sich **funktionale Felder** geändert haben (power_percent, target_rpm, enable_reactors/turbines, assignment_state, desired_node_state). Interne Bezeichner wie `assignment_reason` lösen keine neuen Pakete aus.
+Nur 4 Felder werden gesendet:
 
-### Monitor-UI Tabs
+| Feld | Typ | Bedeutung |
+|------|-----|-----------|
+| `power_target_percent` | number 0–100 | Prozent der Gesamtkapazität |
+| `assignment_state` | string | `active` / `shed` / `shutdown` / `standby` |
+| `shutdown_stage` | string\|nil | `REQUEST_OFF` / `RAMPDOWN` |
+| `desired_node_state` | string | `RUNNING` / `LIMITED` / `OFF` |
 
-| Tab | Inhalt |
-|-----|--------|
-| Overview | Gesamtsystem, Energie, Alerts |
-| RT-Dashboard | RT-Status, RPM, Kapazität, Learning-Status |
-| Energy | Matrix-Status |
-| Alerts | Alarme |
-| Logs | Log-Modus-Buttons |
-
-Wenn kein externer Monitor: Fallback auf Terminal (`monitor_manager.lua`).
+Entfernt: `target_rpm`, `steam_target`, `power_target` (absolut), `enable_reactors`, `enable_turbines`, `assignment_reason/source/rank`, `controllable`.
 
 ---
 
 ## 5. RT Node — Reaktor & Turbinen
 
-Die RT-Node betreibt eine vollständig lokale Sicherheitsschleife, unabhängig vom MASTER. Jede Node kann beliebig viele Turbinen und Reaktoren verwalten.
+### Modulstruktur
 
-### Startsequenz
+| Datei | Zeilen | Verantwortlichkeit |
+|-------|--------|-------------------|
+| `nodes/rt/main.lua` | ~750 | Boot, Service-Wiring, ctx-Assembly |
+| `nodes/rt/reactor_control.lua` | ~540 | Rod-Steuerung, Steam-Margin-Regler |
+| `nodes/rt/turbine_control.lua` | ~930 | Flow, Induktor, Overspeed, Rotation |
+| `nodes/rt/capacity_learning.lua` | ~110 | Kontinuierliche Kapazitätsmessung |
+| `nodes/rt/status_snapshot.lua` | ~160 | Status-Payload für Master |
+| `nodes/rt/state_handlers.lua` | ~270 | State-Machine (AUTONOM/MASTER/SAFE) |
+| `nodes/rt/command_handler.lua` | ~285 | SET_SETPOINTS, REMOTE_UPDATE |
+| `nodes/rt/module_lifecycle.lua` | ~625 | SCRAM, Safe-Controls, Startup |
+| `nodes/rt/monitor_ui.lua` | ~610 | Lokales Display |
+
+### ctx-Architektur
+
+Alle Fachmodule erhalten einen expliziten `ctx`-Parameter mit ihren Abhängigkeiten. Keine globalen Closures. Vorteile:
+- Fehler in `reactor_control` betreffen nur die Reaktor-Regelung
+- Fehler in `turbine_control` betreffen nur die Turbinen-Regelung
+- Jede Abhängigkeit ist am Funktionskopf sichtbar
+
+### Reaktor-Steuerung
+
+**Steam-Margin-Regler:** Der Reaktor wird ausschließlich über Stab-Level geregelt. Der Regler misst die Steam-Tank-Füllstand und passt die Stäbe so an, dass die Turbinen immer genug Dampf haben ohne den Tank zu überfluten.
+
+**Rod-Write-Fallback** (4 Stufen, alle ER2-Varianten abgedeckt):
+1. `setAllControlRodLevels` (primär, ER2 2.x)
+2. `setControlRodsLevels` (Tabellenform)
+3. `setControlRodLevel` (pro Stab, 0-indiziert mit 1-Fallback)
+4. `getControlRods().setLevel` (Objekt-Methode)
+
+### Turbinen-Steuerung
+
+**Ziel-RPM: 900** (fix, aus `CONFIG.TARGET_RPM`). Coil rastet bei ≥ 900 RPM ein.
+
+**3-Zustands-Teillast-Modell:**
 
 ```
-1. Boot → 5s warten (LOG_COLLECTOR soll zuerst starten)
-2. Peripherals entdecken (Reaktor + alle Turbinen)
-3. CAPACITY LEARNING
-4. Nach Lock: MASTER-Modus aktiv, SET_SETPOINTS werden akzeptiert
+exact      = n × power_percent / 100
+full       = floor(exact)          → 900 RPM, Coil ON
+remainder  = exact − full          → 1 Puffer-Turbine: remainder × 900 RPM
+off        = n − full − 1          → 0 RPM (rotiert, damit keine Turbine dauerhaft kalt)
 ```
+
+Der Coil der Puffer-Turbine skaliert: `engage_rpm = 900 × scale` → korrekte Leistung.
+
+Rotation über `partial_turbine_index` — alle N Sekunden wechseln Puffer- und AUS-Turbinen.
 
 ### Capacity Learning
 
-**Ziel:** Maximale Energieproduktion der Anlage messen und dauerhaft cachen.
-
 ```
-Lernphase:
-├─ Reaktorstäbe: normaler Rod-Regulator aktiv (gleiche Regeln wie Normalbetrieb)
-├─ ALLE Turbinen gleichzeitig auf 900 RPM regeln
-├─ Warten bis ALLE Turbinen stabil:
-│    - RPM innerhalb ±10% von Ziel-RPM
-│    - Coil eingeklinkt
-│    - Energie > 0 gemessen
-├─ 3 aufeinanderfolgende stabile Samples → LOCK
-│    (Abbruch bei einem instabilen Sample → Zähler zurück auf 0)
-└─ Cache: /xreactor/config/capacity_cache.lua
-           (enthält max_output und turbine_count)
-
-Nach Lock:
-├─ max_output wird nur noch aktualisiert wenn neuer Wert > 1% über bisherigem Max
-└─ Cache-Invalidierung: automatisch wenn turbine_count sich ändert
+ready = false  →  Node wartet, Master weist 0 % zu
+ready = true   →  Master kann proportionalen Load zuweisen
 ```
 
-Während des Learnings sendet der Master 0% — der Node behält `capacity_ready=false` bis der Lock abgeschlossen ist.
+- Misst kontinuierlich bei 900 RPM (unabhängig vom Master)
+- Min. 80 % der Turbinen müssen am Ziel sein für gültige Messung
+- Höhere Werte werden sofort übernommen, niedrigere ignoriert (kein Reset bei kurzem Einbruch)
+- Ergebnis wird in `capacity_cache.lua` persistiert
 
-### Turbinen-Regelkreis — immer geschlossen
+### State-Machine
 
-Der Flow-Regelkreis läuft für **jede Turbine, jeden Tick**, ohne Ausnahme:
-
-```
-get_turbine_target_rpm(turbine_index):
-  Außerhalb MASTER-Modus:                → base_rpm für alle
-  Im MASTER-Modus:
-    virt_slot = (index - 1 + rotation_offset) % total
-    virt_slot < full_count  → base_rpm   (Vollast)
-    virt_slot == full_count → partial_rpm (Teillast, falls remainder > 1%)
-    virt_slot > full_count  → 0          (austrudeln)
-```
-
-### Reaktor-Rod-Regelung
-
-Der Rod-Regulator läuft identisch während Learning und Normalbetrieb:
-
-```
-steam_margin = verfügbarer_Dampf − gesamter_Dampfbedarf_aller_Turbinen
-Positiver Margin → Stäbe reinfahren (weniger Dampf)
-Negativer Margin → Stäbe rausfahren (mehr Dampf)
-
-Deadband:         ±5000 mB
-Schrittweite:     max ±5% pro Anwendung
-Cooldown:         1.5s zwischen Anpassungen
-Regelbereich:     rails.reactor_rods.min=80% .. max=100% Insertion
-
-Kühlmittel-Schutz:
-  Ratio ≤ 0.28 (soft): max 2 Schritte raus
-  Ratio ≤ 0.22 (hard): kein Rausfahren
-  Ratio ≤ 0.20 (trip): Sicherheitsabschaltung
-
-Safety-Overrides (bypassen Rod-Caps):
-  SCRAM / EMERGENCY  → 100% Insertion (sofort)
-
-Log-Indikator:
-  ReactorCtrl margin=<N> rods_current=<X> rods_target=<Y> source=AUTO_REGULATOR
-```
-
-### Rod-Konfiguration
-
-Kanonischer Konfig-Pfad: `config.rails.reactor_rods.min` / `.max`
-
-Veraltete Pfade (`autonom.regulator_min_rods`, `autonom.min_rods`) werden automatisch auf den neuen Pfad migriert und loggen eine Warnung.
-
-`CONFIG.INITIAL_ROD_LEVEL = 98` — Rod-Level beim allerersten Start (Stäbe fast zu).
-
-### Node-States
-
-| State | Bedeutung |
-|-------|-----------|
-| `INIT` | Bootstrap, noch keine Peripherals |
-| `AUTONOM` | Kein MASTER verbunden, lokaler Betrieb |
-| `MASTER` | MASTER verbunden, Capacity gelocked |
-| `LIMITED` | Teillast |
-| `EMERGENCY` | SCRAM/Temperatur-Trip, Stäbe auf 100% |
-
-### Safety-Parameter (Defaults)
-
-| Parameter | Wert | Konfigurierbar |
-|-----------|------|---------------|
-| Turbinen Ziel-RPM | 900 | `config.autonom.target_rpm` |
-| Coil einschalten (Vollast) | ≥ 900 RPM | `rails.coil.engage_rpm` |
-| Coil ausschalten (Vollast) | < 850 RPM | `rails.coil.disengage_rpm` |
-| Coil-Schwellen Teillast | proportional skaliert | automatisch |
-| Overspeed-Band | Ziel + 20 RPM | `rails.coil.overspeed_band` |
-| Teillast-Rotation | alle 5 Min | `ROTATE_INTERVAL` in main.lua |
-| Reaktorstäbe Regelbereich | 80–100% Insertion | `rails.reactor_rods.min/.max` |
-| Reaktorstäbe SCRAM | 100% | nicht konfigurierbar |
-| Temperatur-Trip | 2000°C | `config.autonom.max_temp` |
-| Steam Guard high | 0.82 | `rails.reactor_steam_guard.high_ratio` |
-| Steam Guard critical | 0.92 | `rails.reactor_steam_guard.critical_ratio` |
-| Learning: stabile Samples | 3 | hartcodiert |
-| Learning: Update-Schwelle | +1% über Max | hartcodiert |
+| Zustand | Beschreibung |
+|---------|-------------|
+| `AUTONOM` | Kein Master erreichbar — Node regelt selbstständig auf Vollast |
+| `MASTER` | Master aktiv, folgt Setpoints |
+| `SAFE` | Notabschaltung — alle Turbinen/Reaktoren deaktiviert |
 
 ---
 
-## 6. ENERGY Node
+## 6. Startsequenz
 
-Überwacht Mekanism Induction Matrices und sendet Energie-Telemetrie.
+```
+LOG/LOG_COLLECTOR  → 0s  (sofort)
+MASTER             → 2s  (wartet auf LOG)
+Alle anderen Nodes → 8s  (warten auf LOG + MASTER)
+```
 
-### Matrix-Budget
+Nodes senden beim Start `HELLO`. Wenn Master noch nicht bereit ist, wird das nächste Heartbeat-Interval (2–5s) abgewartet. Die Startsequenz minimiert verlorene HELLOs.
+
+---
+
+## 7. Remote Update
+
+**Trigger:** Redstone-Signal auf Seite `top` des MASTER-Computers.
+
+**Flow:**
+```
+Master:  Redstone-Event → broadcast REMOTE_UPDATE → alle Nodes
+Master:  remote_update.run() für sich selbst
+
+RT-Node: REMOTE_UPDATE empfangen → pending_remote_update = true (kein Block!)
+RT-Node: nach aktuellem Event-Zyklus (max. 0.5s) → after_cycle()
+RT-Node: http.get(GitHub) → Installer auf Disk schreiben
+RT-Node: dofile(installer) → non-interaktiv (__xreactor_remote_update = true)
+RT-Node: os.reboot()
+```
+
+**Warum deferred?** CC:Tweaked's `http.get()` ist asynchron und wartet auf `http_success`-Events über `os.pullEvent()`. Innerhalb eines `modem_message`-Handlers kann dieses Event nicht ankommen → ewiges Warten. Der Deferred-Mechanismus (v117) löst das.
+
+---
+
+## 8. Peripheral-Erkennung
+
+**Erkennung über `peripheral.getType()`:**
 
 ```lua
-matrix_component_time_budget_ms = 2000  -- Max Zeit pro Tick (Mekanism-API langsam)
-matrix_metric_call_budget = 6           -- Max API-Calls pro Payload
+type:find("turbine") → turbine
+type:find("reactor") → reactor
 ```
 
----
+Unterstützte Typ-Namen: `BigReactors-Reactor`, `BigReactors-Turbine`, `extremereactors:turbine_part` und weitere.
 
-## 7. FUEL & REPROCESSING Node
+**ER2 Turbine API (genutzte Methoden):**
+- `getRotorSpeed()` → aktuelles RPM
+- `setFluidFlowRateMax(rate)` → Flow in mB/t setzen
+- `setInductorEngaged(bool)` → Coil ein/aus
+- `getFluidFlowRateMaxMax()` → maximaler Flow
+- `getEnergyProducedLastTick()` → RF/t
 
-### Redstone-Ventil-Routing
-
-```
-Voraussetzungen:
-  - Wired Modem für Peripheral-Zugriff
-  - Ender Modem für MASTER-Kommunikation
-  - Mekanism-Pipes: "High Redstone = Interrupt"
-
-Konfiguration (ingame):
-  Monitor-Tab "Router" → Pipe-Seite antippen → Ziel antippen → Speichern
-
-Config-Dateien:
-  FUEL:         /xreactor/config/fuel_routes.lua
-  REPROCESSING: /xreactor/config/reproc_routes.lua
-```
-
----
-
-## 8. LOG Collector Node
-
-### Disk-Strategie
-
-```
-Disk A → voll → Disk B → voll → Disk C → voll
-  → alle voll: Disk A leeren → von vorne (Ring-Buffer)
-MIN_FREE_BYTES = 8192
-```
-
-### Reliable Transport
-
-| Eigenschaft | Wert |
-|-------------|------|
-| Event-ID | `boot_id:seq` (reboot-sicher) |
-| Max Retries | 3 |
-| Retry-Intervall | 30s |
-| Deduplizierung | per event_id |
-| ACK | nach erfolgreichem Write |
-
----
-
-## 9. WATER Node
-
-Telemetrie-Node für Wasser-Versorgung. Keine eigene Hardware-Steuerung.
-
----
-
-## 10. Installer & Manifest
-
-### Ablauf
-
-```
-1. manifest.lua + release.lua von GitHub laden
-2. Rolle auswählen (oder bestehende behalten)
-3. Dateien nach required_for filtern
-4. Staging: große Dateien zuerst
-5. /startup schreiben → Neustart
-```
-
----
-
-## 11. Logger & Log-Transport
-
-### Log-Modi
-
-| Modus | Verhalten |
-|-------|-----------|
-| `all` | Disk + Remote LOG (Standard) |
-| `disk` | Nur lokale Disk |
-| `remote` | Nur Remote LOG Collector |
-| `terminal` | Nur Terminal |
-| `none` | Kein Logging |
-
-Persistent via CC `settings.set("xreactor.log_mode", mode)`.
-
-### Startup-Delay
-
-Alle Nodes außer `LOG` und `MASTER` warten 5s beim Boot.
-
----
-
-## 12. node_id System
-
-### Priorität
-
-```
-1. /xreactor/config/node_id.txt  → Single Source of Truth
-2. node-<computerID>             → immer stabil, nie vom Label
-```
-
-Computer-Labels sind nur menschlich lesbar. Die Netzwerk-ID ist immer `node-<ComputerID>`.
-
-### Troubleshooting: Node offline
-
-```sh
-delete /xreactor/config/node_id.txt
-reboot
-```
-
----
-
-## 13. Ingame Konfiguration
-
-### Wichtige Config-Dateien
-
-| Datei | Inhalt |
-|-------|--------|
-| `/xreactor/config/role.lua` | Gewählte Rolle |
-| `/xreactor/config/node_id.txt` | Netzwerk-ID |
-| `/xreactor/config/capacity_cache.lua` | RT: max_output + turbine_count |
-| `/xreactor/config/fuel_routes.lua` | FUEL: Ventil-Routing |
-| `/xreactor/config/reproc_routes.lua` | REPROC: Ventil-Routing |
-
-### Re-Learning erzwingen
-
-```sh
-delete /xreactor/config/capacity_cache.lua
-reboot
-```
-
-### Log-Modus (per Befehl)
-
-```lua
-settings.set("xreactor.log_mode", "disk")
-settings.save()
-reboot
-```
-
----
-
-## 14. Bekannte Einschränkungen
-
-### Teillast-RPM und Effizienz
-
-Eine Teillast-Turbine (z.B. 450 RPM) erzeugt weniger Strom pro Dampfeinheit als eine Vollast-Turbine. Die Teillast wird nur eingesetzt wenn der angeforderte Prozentsatz nicht exakt auf eine ganzzahlige Turbinen-Anzahl passt. Für feinere Leistungsregelung ohne Teillast: mehr Turbinen verwenden.
-
-### Capacity-Learning Voraussetzungen
-
-Learning schlägt fehl wenn:
-- Nicht genug Dampf für alle Turbinen gleichzeitig vorhanden ist
-- Turbinen nicht physisch angeschlossen sind
-- Eine Turbine keine Energie-Readback liefert (API-Fehler)
-
-### Log-Duplikate
-
-Viele Turbinen × mehrere RT-Nodes → hohes Nachrichtenaufkommen. Duplikate sind nicht verlustreich — der Collector dedupliziert korrekt per `event_id`.
+**ER2 Reaktor API (genutzte Methoden):**
+- `setActive(bool)` → Reaktor ein/aus
+- `setAllControlRodLevels(level)` → alle Stäbe (primäre Methode)
+- `getHotFluidAmount()` → Steam-Füllstand
+- `getHotFluidAmountMax()` → Steam-Kapazität
+- `getFuelTemperature()` → Brennstoff-Temperatur
