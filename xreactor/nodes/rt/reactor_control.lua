@@ -26,7 +26,7 @@
 --   ctx.reactor_steam_guard_state-- Steam-Guard EMA-State
 --   ctx.config     -- node config (reactors, turbines, rails, safety, autonom)
 --   ctx.CONFIG     -- Konstanten (ROD_MIN, ROD_MAX, etc.)
---   ctx.adapters   -- { reactor = ..., turbine = ... }
+--   ctx.adapters   -- { reactor = ..., turbine }
 --   ctx.safety     -- safety-Modul
 --   ctx.rails      -- rails-Modul
 --   ctx.fluid      -- fluid-Modul
@@ -161,6 +161,7 @@ end
 -- der Turbinen kennen muss, um den Reaktor korrekt zu steuern.
 function M.get_total_steam_demand(ctx)
   local total = 0
+  local learning_ready = ctx.capacity_learning and ctx.capacity_learning.ready == true
   for _, name in ipairs(ctx.config.turbines or {}) do
     local ctrl = ctx.get_turbine_ctrl(name)
     local rpm = ctrl.rpm
@@ -177,8 +178,11 @@ function M.get_total_steam_demand(ctx)
         if ok and type(value) == "number" then rpm = value end
       end
     end
-    if type(rpm) == "number" and rpm > ctx.CONFIG.MIN_ACTIVE_RPM then
-      total = total + (ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow or 0)
+    local requested = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow or 0
+    local rpm_active = type(rpm) == "number" and rpm > ctx.CONFIG.MIN_ACTIVE_RPM
+    local learning_startup_demand = not learning_ready and requested > 0
+    if rpm_active or learning_startup_demand then
+      total = total + requested
     end
   end
   return total
