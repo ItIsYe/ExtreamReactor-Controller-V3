@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 134,
-  manifest_id = "manifest-v134",
+  manifest_version = 135,
+  manifest_id = "manifest-v135",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -12,7 +12,7 @@ return {
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true},
   { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
-  { path = "release.lua", size_bytes = 348, hash = "e279131d", always=true},
+  { path = "release.lua", size_bytes = 347, hash = "4115da29", always=true},
   { path = "start.lua", size_bytes = 7852, hash = "5afa6c02", always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
   { path = "shared/constants.lua", size_bytes = 1818, hash = "915017d7", always=true},
@@ -86,7 +86,7 @@ return {
     { path = "core/fluid.lua", size_bytes = 5017, hash = "9a5c0bea", required_for={"RT"}},
     { path = "core/turbine_ctrl.lua", size_bytes = 2663, hash = "d1b27731", required_for={"RT"}},
     { path = "core/turbine_regulator.lua", size_bytes = 17134, hash = "50ce7402", required_for={"RT"}},
-    { path = "nodes/rt/binding.lua", size_bytes = 3470, hash = "0406bc48", required_for={"RT"}},
+    { path = "nodes/rt/binding.lua", size_bytes = 3507, hash = "87255444", required_for={"RT"}},
     { path = "nodes/rt/command_handler.lua", size_bytes = 10422, hash = "79a7c1b6", required_for={"RT"}},
     { path = "nodes/rt/reactor_control.lua", size_bytes = 23518, hash = "de1b0888", required_for={"RT"}},
     { path = "nodes/rt/turbine_control.lua", size_bytes = 43878, hash = "87a552b4", required_for={"RT"}},
@@ -95,7 +95,7 @@ return {
     { path = "nodes/rt/config.lua", size_bytes = 3612, hash = "26aa9cc3", required_for={"RT"}},
     { path = "nodes/rt/config_normalizer.lua", size_bytes = 23318, hash = "b6909930", required_for={"RT"}},
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"}},
-    { path = "nodes/rt/discovery_runtime.lua", size_bytes = 9137, hash = "31ad3d94", required_for={"RT"}},
+    { path = "nodes/rt/discovery_runtime.lua", size_bytes = 11682, hash = "6198a6d0", required_for={"RT"}},
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 10746, hash = "6664e2ce", required_for={"RT"}},
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"}},
     { path = "nodes/rt/main.lua", size_bytes = 31802, hash = "1e95fb98", required_for={"RT"}},
@@ -103,7 +103,7 @@ return {
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 31927, hash = "30e85bdb", required_for={"RT"}},
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"}},
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"}},
-    { path = "nodes/rt/state_handlers.lua", size_bytes = 8838, hash = "7b4ac7b3", required_for={"RT"}},
+    { path = "nodes/rt/state_handlers.lua", size_bytes = 9180, hash = "e5040b7e", required_for={"RT"}},
     { path = "nodes/rt/status_snapshot.lua", size_bytes = 5932, hash = "5448d394", required_for={"RT"}},
     },
     energy = {
