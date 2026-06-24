@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 138,
-  manifest_id = "manifest-v138",
+  manifest_version = 139,
+  manifest_id = "manifest-v139",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -35,7 +35,7 @@ return {
   { path = "core/ui.lua", size_bytes = 12875, hash = "2b78f4f8"},
   { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67"},
   { path = "core/utils.lua", size_bytes = 22758, hash = "6b637f02"},
-  { path = "core/remote_update.lua", size_bytes = 4869, hash = "3c69de48"},
+  { path = "core/remote_update.lua", size_bytes = 4995, hash = "d92cc168"},
   { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c"},
   { path = "services/alert_service.lua", size_bytes = 11418, hash = "d04e6700"},
   { path = "services/comms_service.lua", size_bytes = 8562, hash = "4b2957a5"},
@@ -65,7 +65,7 @@ return {
     { path = "master/runtime_loop.lua", size_bytes = 16716, hash = "debfaa67", required_for={"MASTER"}},
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"}},
     { path = "master/runtime_ops_profile.lua", size_bytes = 10866, hash = "0588f70a", required_for={"MASTER"}},
-    { path = "master/runtime_ops_rt.lua", size_bytes = 16286, hash = "cc9b1b4d", required_for={"MASTER"}},
+    { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"}},
     { path = "master/startup_sequencer.lua", size_bytes = 10582, hash = "b537bd44", required_for={"MASTER"}},
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"}},
     { path = "master/ui/alarms.lua", size_bytes = 1827, hash = "9b9ff1af", required_for={"MASTER"}},
