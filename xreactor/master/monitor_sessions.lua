@@ -15,7 +15,9 @@ end
 -- 3 primären Monitore, nur eben auf AUX_DEFAULT_VIEW statt einer der
 -- primären Rollen.
 local function resolve_locked(index)
-  return true
+  -- Primäre Monitore (1-3) sind fest locked.
+  -- AUX-Monitore (4+) sind umschaltbar per Touch.
+  return is_primary_index(index)
 end
 
 -- TEMPORÄR/dauerhaft: 4. physischer Monitor (und jeder weitere "aux"-Monitor)
@@ -23,7 +25,10 @@ end
 -- statt die normale Default-View (Overview) zu zeigen. Dient ausschließlich
 -- als dediziertes Error/Warning-Display, unabhängig von den 3 primären
 -- Monitoren (overview/rt/energy), die davon NICHT betroffen sind.
-local AUX_DEFAULT_VIEW = "alarms"
+-- Views die auf AUX-Monitoren per Touch durchgeschaltet werden können.
+-- Reihenfolge bestimmt den Zyklus. Erster Eintrag ist der Start-View.
+local AUX_VIEWS = { "alarms", "overview", "rt", "energy", "alerts" }
+local AUX_DEFAULT_VIEW = AUX_VIEWS[1]
 
 local function default_view(index, view_order)
   local role = resolve_role(index)
@@ -44,6 +49,29 @@ local function normalize_payload(payload)
   for k, v in pairs(payload) do out[k] = v end
   if payload.hit then out.hit = copy_hit(payload.hit) end
   return out
+end
+
+-- Schaltet einen AUX-Monitor auf die nächste View im Zyklus.
+-- Gibt den neuen view_key zurück.
+function M.cycle_aux_view(session)
+  if not session or session.locked then return end
+  local current = session.view_key or AUX_DEFAULT_VIEW
+  local next_view = AUX_VIEWS[1]
+  for i, v in ipairs(AUX_VIEWS) do
+    if v == current then
+      next_view = AUX_VIEWS[(i % #AUX_VIEWS) + 1]
+      break
+    end
+  end
+  session.view_key = next_view
+  session.dirty    = true
+  session.dirty_reason = "user-cycle"
+  return next_view
+end
+
+-- Gibt die AUX-View-Liste zurück (für Badge-Anzeige etc.)
+function M.get_aux_views()
+  return AUX_VIEWS
 end
 
 function M.new(opts)
