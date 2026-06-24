@@ -532,6 +532,9 @@ local function init()
             and message.payload and message.payload.alerts then
           master_alerts = message.payload.alerts
         end
+        if not master_seen_ts then
+          log("INFO", "Master connected: " .. tostring(message.role or "?"))
+        end
       end
     end
   })
@@ -726,6 +729,8 @@ local function init()
   monitor_ui.init(devices.monitor, config.monitor, config.monitor_scale)
 
   -- Hello + erster Heartbeat
+  log("INFO", string.format("HELLO sent: reactors=%d turbines=%d",
+    #devices.reactors, #devices.turbines))
   comms:send_hello({
     reactors = #devices.reactors,
     turbines  = #devices.turbines,
