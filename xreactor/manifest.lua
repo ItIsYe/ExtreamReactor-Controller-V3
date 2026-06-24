@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 140,
-  manifest_id = "manifest-v140",
+  manifest_version = 141,
+  manifest_id = "manifest-v141",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -57,7 +57,7 @@ return {
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"}},
     { path = "master/main.lua", size_bytes = 244, hash = "5f009046", required_for={"MASTER"}},
     { path = "master/message_handlers.lua", size_bytes = 19707, hash = "53d2e5cb", required_for={"MASTER"}},
-    { path = "master/monitor_sessions.lua", size_bytes = 7108, hash = "c8d0956b", required_for={"MASTER"}},
+    { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"}},
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
     { path = "master/rt_sync.lua", size_bytes = 21620, hash = "da4d653f", required_for={"MASTER"}},
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"}},
@@ -71,7 +71,7 @@ return {
     { path = "master/ui/alarms.lua", size_bytes = 5242, hash = "e1cede7e", required_for={"MASTER"}},
     { path = "master/ui/alerts.lua", size_bytes = 25335, hash = "746207f8", required_for={"MASTER"}},
     { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"}},
-    { path = "master/ui/multiview.lua", size_bytes = 5389, hash = "ced614e4", required_for={"MASTER"}},
+    { path = "master/ui/multiview.lua", size_bytes = 5946, hash = "5c8089b0", required_for={"MASTER"}},
     { path = "master/ui/overview.lua", size_bytes = 10888, hash = "20dca0c4", required_for={"MASTER"}},
     { path = "master/ui/resources.lua", size_bytes = 5634, hash = "3c3f86d2", required_for={"MASTER"}},
     { path = "master/ui/rt_dashboard.lua", size_bytes = 11831, hash = "e587af2a", required_for={"MASTER"}},
