@@ -301,20 +301,88 @@ local function write_probe(root)
   return ok
 end
 
-local function discover_log_disks()
-  local disks = {}
-  for _, mount in ipairs(detect_disk_mounts()) do
-    if write_probe(mount) then
-      disks[#disks + 1] = { mount = mount, root = mount .. "/xreactor_logs" }
+local ROLE_ASSIGNMENT_ORDER = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
+
+local function get_disk_label(mount)
+  if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
+  local ok, names = pcall(peripheral.getNames)
+  if not ok or type(names) ~= "table" then return nil end
+  for _, name in ipairs(names) do
+    local ok_t, ptype = pcall(peripheral.getType, name)
+    if ok_t and ptype == "drive" then
+      local ok_w, drv = pcall(peripheral.wrap, name)
+      if ok_w and drv then
+        local mfn = drv.getMountPath or function() return nil end
+        local ok_m, m = pcall(mfn)
+        if ok_m and m == mount then
+          local lfn = drv.getDiskLabel or function() return nil end
+          local ok_l, label = pcall(lfn)
+          if ok_l then return label end
+        end
+      end
     end
   end
+  return nil
+end
+
+local function set_disk_label(mount, label)
+  if not peripheral or type(peripheral.getNames) ~= "function" then return false end
+  local ok, names = pcall(peripheral.getNames)
+  if not ok or type(names) ~= "table" then return false end
+  for _, name in ipairs(names) do
+    local ok_t, ptype = pcall(peripheral.getType, name)
+    if ok_t and ptype == "drive" then
+      local ok_w, drv = pcall(peripheral.wrap, name)
+      if ok_w and drv then
+        local mfn = drv.getMountPath or function() return nil end
+        local ok_m, m = pcall(mfn)
+        if ok_m and m == mount then
+          if type(drv.setDiskLabel) == "function" then
+            local ok_s = pcall(drv.setDiskLabel, label)
+            return ok_s
+          end
+        end
+      end
+    end
+  end
+  return false
+end
+
+local function discover_log_disks()
+  local disks = {}
+  local unlabeled_index = 0
+
+  for _, mount in ipairs(detect_disk_mounts()) do
+    if write_probe(mount) then
+      local label = get_disk_label(mount)
+      if not label or label == "" then
+        unlabeled_index = unlabeled_index + 1
+        local assigned = ROLE_ASSIGNMENT_ORDER[unlabeled_index]
+        if assigned then
+          local ok_set = set_disk_label(mount, assigned)
+          if ok_set then
+            label = assigned
+            diag(mount .. ": auto-labeled => " .. assigned)
+          else
+            diag(mount .. ": auto-label FAILED fuer " .. assigned)
+          end
+        end
+      else
+        diag(mount .. ": label=" .. tostring(label))
+      end
+      disks[#disks + 1] = { mount = mount, root = mount .. "/xreactor_logs", label = label or "" }
+    end
+  end
+
   if #disks == 0 then
     ensure_dir(FALLBACK_ROOT)
-    disks[#disks + 1] = { mount = "/", root = FALLBACK_ROOT, fallback = true }
+    disks[#disks + 1] = { mount = "/", root = FALLBACK_ROOT, fallback = true, label = "" }
     diag("=> FALLBACK aktiv (keine nutzbare externe Disk)")
   else
     diag("=> " .. #disks .. " nutzbare Disk(s)")
+    for _, d in ipairs(disks) do diag("   " .. tostring(d.mount) .. " label=" .. tostring(d.label)) end
   end
+
   table.sort(disks, function(a, b) return tostring(a.mount) < tostring(b.mount) end)
   for i, disk_entry in ipairs(disks) do disk_entry.id = i end
   return disks
