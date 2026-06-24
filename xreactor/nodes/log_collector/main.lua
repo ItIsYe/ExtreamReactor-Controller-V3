@@ -365,41 +365,40 @@ end
 
 local function discover_log_disks()
   local disks = {}
-  local unlabeled_index = 0
-
+  -- Erst sammeln, dann sortieren, dann Index zuweisen.
+  local raw = {}
   for _, mount in ipairs(detect_disk_mounts()) do
     if write_probe(mount) then
-      local label = get_disk_label(mount)
-      if not label or label == "" then
-        unlabeled_index = unlabeled_index + 1
-        local assigned = ROLE_ASSIGNMENT_ORDER[unlabeled_index]
-        if assigned then
-          local ok_set = set_disk_label(mount, assigned)
-          if ok_set then
-            label = assigned
-            diag(mount .. ": auto-labeled => " .. assigned)
-          else
-            diag(mount .. ": auto-label FAILED fuer " .. assigned)
-          end
-        end
-      else
-        diag(mount .. ": label=" .. tostring(label))
-      end
-      disks[#disks + 1] = { mount = mount, root = mount .. "/xreactor_logs", label = label or "" }
+      raw[#raw + 1] = mount
     end
+  end
+  table.sort(raw)  -- alphabetisch: /disk < /disk1 < /disk2 ...
+
+  for idx, mount in ipairs(raw) do
+    -- Index-basiertes Routing: Position bestimmt die Rolle.
+    -- disk 1 (/disk) → RT, disk 2 (/disk1) → MASTER etc.
+    -- Kein disk.setDiskLabel() nötig — keine API-Kompatibilitätsprobleme.
+    local role_name = ROLE_ASSIGNMENT_ORDER[idx] or ""
+    diag(mount .. ": idx=" .. tostring(idx) .. " role=" .. tostring(role_name))
+    disks[#disks + 1] = {
+      mount      = mount,
+      root       = mount .. "/xreactor_logs",
+      label      = role_name,
+      role_index = idx,
+      id         = idx,
+    }
   end
 
   if #disks == 0 then
     ensure_dir(FALLBACK_ROOT)
-    disks[#disks + 1] = { mount = "/", root = FALLBACK_ROOT, fallback = true, label = "" }
+    disks[#disks + 1] = { mount = "/", root = FALLBACK_ROOT, fallback = true, label = "", id = 1 }
     diag("=> FALLBACK aktiv (keine nutzbare externe Disk)")
   else
-    diag("=> " .. #disks .. " nutzbare Disk(s)")
-    for _, d in ipairs(disks) do diag("   " .. tostring(d.mount) .. " label=" .. tostring(d.label)) end
+    diag("=> " .. #disks .. " Disk(s)")
+    for _, d in ipairs(disks) do
+      diag("   " .. tostring(d.mount) .. " role=" .. tostring(d.label))
+    end
   end
-
-  table.sort(disks, function(a, b) return tostring(a.mount) < tostring(b.mount) end)
-  for i, disk_entry in ipairs(disks) do disk_entry.id = i end
   return disks
 end
 
