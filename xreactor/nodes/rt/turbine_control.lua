@@ -921,10 +921,13 @@ function M.updateControl(ctx)
     reason_parts[#reason_parts + 1] = tostring(reason) .. "=" .. tostring(count)
   end
   table.sort(reason_parts)
-  ctx.log("DEBUG", "TurbineTick evaluated=" .. tostring(eval_total)
-    .. " decisions=" .. tostring(eval_decision)
-    .. " skipped=" .. tostring(eval_skipped)
-    .. " skip_reasons=" .. (#reason_parts > 0 and table.concat(reason_parts, ",") or "none"))
+  -- TurbineTick nur loggen wenn Entscheidungen getroffen wurden (nicht leere Ticks)
+  if eval_decision > 0 then
+    ctx.log("DEBUG", "TurbineTick evaluated=" .. tostring(eval_total)
+      .. " decisions=" .. tostring(eval_decision)
+      .. " skipped=" .. tostring(eval_skipped)
+      .. " skip_reasons=" .. (#reason_parts > 0 and table.concat(reason_parts, ",") or "none"))
+  end
 end
 
 return M
