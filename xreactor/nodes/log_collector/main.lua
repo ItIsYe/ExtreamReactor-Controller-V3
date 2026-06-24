@@ -423,17 +423,23 @@ local function advance_disk_after_write()
   stats.disk_switches = stats.disk_switches + 1
 end
 
-local function switch_next_disk()
-  -- Bei nur einer Disk bringt eine erzwungene Re-Discovery nichts außer Spam
-  -- (jeder fehlgeschlagene Schreibversuch löste vorher eine komplette
-  -- force=true Discovery aus). Nur neu discovern wenn wir noch keine Disk
-  -- kennen oder explizit mehrere Disks vorhanden sein könnten.
+local function switch_next_disk(role)
   if #stats.disks > 1 then
     refresh_disks_if_needed(true)
   elseif #stats.disks == 0 then
     refresh_disks_if_needed(true)
   end
   if #stats.disks == 0 then return nil end
+  -- Bei Label-Routing: bevorzuge andere Disk mit passendem Label (z.B. Disk 2 = RT)
+  -- statt blind Round-Robin zu machen.
+  if role then
+    local preferred = find_disk_for_role(role)
+    if preferred then
+      stats.disk_index = preferred
+      stats.log_root   = stats.disks[preferred] and stats.disks[preferred].root or stats.log_root
+      return stats.disks[stats.disk_index]
+    end
+  end
   advance_disk_after_write()
   return stats.disks[stats.disk_index]
 end
@@ -586,11 +592,11 @@ local function write_log(payload)
     return false, "paused"
   end
   refresh_disks_if_needed(false)
-  -- Rolle-zu-Disk Routing: bevorzuge Disk mit passendem Label
+  -- Routing NACH refresh: Label-Infos sind jetzt in stats.disks verfuegbar
   local role = type(payload) == "table" and payload.role or nil
   if role and #stats.disks > 0 then
     local preferred = find_disk_for_role(role)
-    if preferred ~= stats.disk_index then
+    if preferred and preferred ~= stats.disk_index then
       stats.disk_index = preferred
       stats.log_root   = stats.disks[preferred] and stats.disks[preferred].root or stats.log_root
     end
@@ -609,7 +615,7 @@ local function write_log(payload)
     -- (mkdir failed, write failed) bedeuten NICHT dass die Disk voll ist
     -- und sollten kein Wipe der vorhandenen Logs auslösen.
     if err == "disk full" then
-      switch_next_disk()
+      switch_next_disk(role)
       -- If we wrapped around (back to first disk), wipe it to start fresh.
       if attempt == count and stats.disk_index == 1 then
         local disk_entry_wipe = current_disk()
