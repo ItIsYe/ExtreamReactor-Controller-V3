@@ -90,7 +90,9 @@ function M:render(monitors, data_map)
     if self.sessions:is_primary(session) then
       ui.badge(session.mon, 2, 1, widgets.fit((badge_view or "PRIMARY"):upper(), 20), "LIMITED")
     else
-      ui.badge(session.mon, 2, 1, widgets.fit(("AUX " .. tostring(badge_view or "overview")):upper(), 20), "OK")
+      -- AUX: zeige aktuelle View + Hinweis dass Touch wechselt
+      local aux_label = "AUX:" .. (badge_view or "?"):upper()
+      ui.badge(session.mon, 2, 1, widgets.fit(aux_label, 22), "OK")
     end
     ::continue::
   end
@@ -114,6 +116,21 @@ function M:handle_input(monitor_name, x, y)
   end
 
   local view_key = self.sessions:resolve_view_key(session)
+
+  -- AUX-Monitor (nicht locked) → Touch wechselt View im Zyklus
+  if not session.locked then
+    local new_view = self.sessions.cycle_aux_view(self.sessions, session)
+    local payload = {
+      monitor = session.name, x = x, y = y,
+      view = view_key, new_view = new_view,
+      input = input_kind, hit = nil, dispatched = true, handled = true,
+      aux_cycle = true
+    }
+    self.last_input = payload
+    self.sessions:note_input(session, payload)
+    return
+  end
+
   local view = self.views[view_key]
   if not (view and view.hit_test and self.on_action) then
     local payload = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = nil, dispatched = false, handled = false }
