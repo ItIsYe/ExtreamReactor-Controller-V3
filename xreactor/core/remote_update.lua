@@ -56,9 +56,10 @@ function M.run(log_fn)
   end
 
   local url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer"
-  local ok_fetch, response = pcall(http.get, url)
+  -- Timeout 15s: verhindert ewiges Haengen wenn GitHub nicht erreichbar
+  local ok_fetch, response = pcall(http.get, url, nil, { timeout = 15 })
   if not ok_fetch or not response then
-    log("ERROR", "Remote-Update: Installer-Download fehlgeschlagen")
+    log("ERROR", "Remote-Update: Installer-Download fehlgeschlagen (timeout oder Netzwerkfehler)")
     return false, "download failed"
   end
   local body = response.readAll()
