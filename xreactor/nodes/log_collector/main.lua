@@ -450,8 +450,8 @@ local function find_disk_for_role(role)
 end
 
 local function switch_next_disk(role)
+  stats.disk_switches = (stats.disk_switches or 0) + 1
   -- Immer force-refresh: neue Disketten sollen sofort erkannt werden.
-  -- Auch bei nur einer bekannten Disk — vielleicht wurde eine neue eingelegt.
   refresh_disks_if_needed(true)
   if #stats.disks == 0 then return nil end
   -- Bei Label-Routing: bevorzuge andere Disk mit passendem Label (z.B. Disk 2 = RT)
@@ -563,10 +563,16 @@ local function try_write_to_disk(disk_entry, payload)
     h.close()
   end)
   if not ok then
-    local msg = "write failed: path=" .. tostring(path) .. " err=" .. tostring(err)
+    local err_str = tostring(err or "write failed")
+    local msg = "write failed: path=" .. tostring(path) .. " err=" .. err_str
     stats.last_write_debug = msg
     diag(msg)
-    return false, tostring(err or "write failed")
+    -- "Out of space" von fs.open() ist dasselbe wie "disk full" —
+    -- als "disk full" zurückgeben damit write_log auf die nächste Disk wechselt.
+    if err_str:lower():find("out of space", 1, true) or err_str:lower():find("no space", 1, true) then
+      return false, "disk full"
+    end
+    return false, err_str
   end
   stats.last_write_index = disk_entry.id or stats.disk_index
   stats.last_write_mount = disk_entry.mount or "?"
