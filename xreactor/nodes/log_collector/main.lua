@@ -304,19 +304,22 @@ end
 local ROLE_ASSIGNMENT_ORDER = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
 
 local function get_disk_label(mount)
+  -- disk.getMountPath(name) ist die korrekte CC:Tweaked API.
+  -- drv.getMountPath() existiert NICHT auf dem Drive-Peripheral.
   if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
   local ok, names = pcall(peripheral.getNames)
   if not ok or type(names) ~= "table" then return nil end
   for _, name in ipairs(names) do
     local ok_t, ptype = pcall(peripheral.getType, name)
     if ok_t and ptype == "drive" then
-      local ok_w, drv = pcall(peripheral.wrap, name)
-      if ok_w and drv then
-        local mfn = drv.getMountPath or function() return nil end
-        local ok_m, m = pcall(mfn)
-        if ok_m and m == mount then
-          local lfn = drv.getDiskLabel or function() return nil end
-          local ok_l, label = pcall(lfn)
+      local drive_mount = nil
+      if disk and type(disk.getMountPath) == "function" then
+        local ok_m, m = pcall(disk.getMountPath, name)
+        if ok_m and type(m) == "string" and m ~= "" then drive_mount = m end
+      end
+      if drive_mount == mount then
+        if disk and type(disk.getDiskLabel) == "function" then
+          local ok_l, label = pcall(disk.getDiskLabel, name)
           if ok_l then return label end
         end
       end
@@ -332,15 +335,15 @@ local function set_disk_label(mount, label)
   for _, name in ipairs(names) do
     local ok_t, ptype = pcall(peripheral.getType, name)
     if ok_t and ptype == "drive" then
-      local ok_w, drv = pcall(peripheral.wrap, name)
-      if ok_w and drv then
-        local mfn = drv.getMountPath or function() return nil end
-        local ok_m, m = pcall(mfn)
-        if ok_m and m == mount then
-          if type(drv.setDiskLabel) == "function" then
-            local ok_s = pcall(drv.setDiskLabel, label)
-            return ok_s
-          end
+      local drive_mount = nil
+      if disk and type(disk.getMountPath) == "function" then
+        local ok_m, m = pcall(disk.getMountPath, name)
+        if ok_m and type(m) == "string" and m ~= "" then drive_mount = m end
+      end
+      if drive_mount == mount then
+        if disk and type(disk.setDiskLabel) == "function" then
+          local ok_s = pcall(disk.setDiskLabel, name, label)
+          return ok_s
         end
       end
     end
