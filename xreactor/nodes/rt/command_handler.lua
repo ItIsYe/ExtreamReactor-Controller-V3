@@ -73,7 +73,9 @@ local function set_setpoints(command, ctx, record)
   if pct then
     pct = math.max(0, math.min(100, pct))
     targets.power_percent = pct
-    log_command(ctx, "INFO", ("Setpoint applied percent=%.1f"):format(pct))
+    log_command(ctx, "INFO", string.format(
+      "SET_SETPOINTS pct=%.1f%% state=%s",
+      pct, tostring(value.assignment_state or "?")))
   end
   if value.assignment_state ~= nil then
     targets.assignment_state = tostring(value.assignment_state)
