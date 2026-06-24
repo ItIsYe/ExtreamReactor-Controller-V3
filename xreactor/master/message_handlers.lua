@@ -203,8 +203,10 @@ function M.new(opts)
     end
 
     -- node-Felder: kanonisch + Aliase einmalig
-    node.actual_output = rt.actual_output
-    node.power_target  = rt.power_target
+    node.actual_output  = rt.actual_output
+    node.power_target   = rt.power_target
+    if rt.capacity_ready == true then node.capacity_ready = true end
+    node.capacity_max   = rt.capacity_max or node.capacity_max
     -- Abwärtskompatible Aliase
     node.output        = node.actual_output
     node.power_actual  = node.actual_output
@@ -212,7 +214,11 @@ function M.new(opts)
     rt.power_actual    = rt.actual_output
     rt.output          = rt.actual_output
     rt.target_output   = rt.power_target
-    rt.capacity_max    = number_or_nil(payload.capacity_max) or rt.capacity_max
+    rt.capacity_max     = number_or_nil(payload.capacity_max) or rt.capacity_max
+    if payload.capacity_ready == true then rt.capacity_ready = true end
+    rt.capacity_source  = payload.capacity_source or rt.capacity_source
+    rt.capacity_stable_turbines  = number_or_nil(payload.capacity_stable_turbines) or rt.capacity_stable_turbines
+    rt.capacity_total_turbines   = number_or_nil(payload.capacity_total_turbines) or rt.capacity_total_turbines
   end
 
   local function update_node(message)
