@@ -1042,7 +1042,8 @@ local function run_loop()
           stats.dropped = stats.dropped + 1
           stats.last_error = "handle_log_event crashed: " .. tostring(ok)
         end
-        if stats.received % 5 == 0 or not call_ok or not ok then draw() end
+        -- draw() nur alle 20 Events oder bei Fehler — reduziert UI-Flackern
+        if stats.received % 20 == 0 or not call_ok or not ok then draw() end
       end
     elseif event[1] == "monitor_touch" then
       local x_pos, y_pos = event[3], event[4]
