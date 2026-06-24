@@ -499,12 +499,34 @@ wipe_logs = function(root)
   return wiped
 end
 
+-- Findet bevorzugte Disk für eine Rolle per Label-Match.
+local function find_disk_for_role(role)
+  local r = type(role) == "string" and role:upper() or ""
+  for i, d in ipairs(stats.disks) do
+    if type(d.label) == "string" and d.label:upper() == r then return i end
+  end
+  -- Kein Label-Match: Disk ohne Label (Fallback-Disk)
+  for i, d in ipairs(stats.disks) do
+    if not d.label or d.label == "" then return i end
+  end
+  return stats.disk_index
+end
+
 local function write_log(payload)
   if stats.paused then
     stats.paused_dropped = stats.paused_dropped + 1
     return false, "paused"
   end
   refresh_disks_if_needed(false)
+  -- Rolle-zu-Disk Routing: bevorzuge Disk mit passendem Label
+  local role = type(payload) == "table" and payload.role or nil
+  if role and #stats.disks > 0 then
+    local preferred = find_disk_for_role(role)
+    if preferred ~= stats.disk_index then
+      stats.disk_index = preferred
+      stats.log_root   = stats.disks[preferred] and stats.disks[preferred].root or stats.log_root
+    end
+  end
   local count = math.max(1, #stats.disks)
   local last_err = nil
   for attempt = 1, count do
