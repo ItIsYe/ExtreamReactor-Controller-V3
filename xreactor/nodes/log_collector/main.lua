@@ -297,15 +297,20 @@ local function write_probe(root)
   local ok, err = try_probe_write(path)
   diag(root .. ": probe_write ok=" .. tostring(ok) .. (ok and "" or (" err=" .. tostring(err))))
   if not ok and wipe_logs then
-    -- Fix: Disk könnte mit alten Logs vollgeschrieben sein (z.B. aus einer
-    -- früheren Version mit zu großen Limits). Automatisch aufräumen und
-    -- den Probe-Versuch einmal wiederholen, bevor endgültig aufgegeben wird.
+    -- Disk voll mit alten Logs: automatisch aufräumen und nochmal versuchen.
     local wiped = wipe_logs(root)
     diag(root .. ": auto-wipe " .. tostring(wiped) .. " files, retrying probe")
     ok, err = try_probe_write(path)
     diag(root .. ": probe_write retry ok=" .. tostring(ok) .. (ok and "" or (" err=" .. tostring(err))))
   end
-  return ok
+  -- Wichtig: Disk trotzdem als bekannt registrieren auch wenn probe fehlschlägt
+  -- (z.B. wegen voller Disk nach wipe). Ohne das fällt der Collector in den
+  -- Fallback-Modus und schreibt nach /xreactor_collected_logs.
+  if not ok then
+    diag(root .. ": probe fehlgeschlagen aber Disk als bekannt markiert (wird bei Schreibversuch pruned)")
+    return true
+  end
+  return true
 end
 
 local ROLE_ASSIGNMENT_ORDER = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
@@ -431,6 +436,18 @@ local function advance_disk_after_write()
   if stats.disk_index > #stats.disks then stats.disk_index = 1 end
   stats.log_root = stats.disks[stats.disk_index] and stats.disks[stats.disk_index].root or stats.log_root
   stats.disk_switches = stats.disk_switches + 1
+end
+
+local function find_disk_for_role(role)
+  local r = type(role) == "string" and role:upper() or ""
+  for i, d in ipairs(stats.disks) do
+    if type(d.label) == "string" and d.label:upper() == r then return i end
+  end
+  -- Kein Label-Match: Disk ohne Label (Fallback-Disk)
+  for i, d in ipairs(stats.disks) do
+    if not d.label or d.label == "" then return i end
+  end
+  return stats.disk_index
 end
 
 local function switch_next_disk(role)
@@ -582,18 +599,6 @@ wipe_logs = function(root)
 end
 
 -- Findet bevorzugte Disk für eine Rolle per Label-Match.
-local function find_disk_for_role(role)
-  local r = type(role) == "string" and role:upper() or ""
-  for i, d in ipairs(stats.disks) do
-    if type(d.label) == "string" and d.label:upper() == r then return i end
-  end
-  -- Kein Label-Match: Disk ohne Label (Fallback-Disk)
-  for i, d in ipairs(stats.disks) do
-    if not d.label or d.label == "" then return i end
-  end
-  return stats.disk_index
-end
-
 local function write_log(payload)
   if stats.paused then
     stats.paused_dropped = stats.paused_dropped + 1
