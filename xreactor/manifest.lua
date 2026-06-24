@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v45
 return {
-  manifest_version = 139,
-  manifest_id = "manifest-v139",
+  manifest_version = 140,
+  manifest_id = "manifest-v140",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -68,7 +68,7 @@ return {
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"}},
     { path = "master/startup_sequencer.lua", size_bytes = 10582, hash = "b537bd44", required_for={"MASTER"}},
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"}},
-    { path = "master/ui/alarms.lua", size_bytes = 1827, hash = "9b9ff1af", required_for={"MASTER"}},
+    { path = "master/ui/alarms.lua", size_bytes = 5242, hash = "e1cede7e", required_for={"MASTER"}},
     { path = "master/ui/alerts.lua", size_bytes = 25335, hash = "746207f8", required_for={"MASTER"}},
     { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"}},
     { path = "master/ui/multiview.lua", size_bytes = 5389, hash = "ced614e4", required_for={"MASTER"}},
