@@ -535,7 +535,7 @@ end
 
 function M.updateReactorControl(ctx)
   local now = os.clock()
-  ctx.log("DEBUG", "Reactor control tick")
+  -- Reactor control tick debug (zu häufig entfernt)
   if ctx.current_state() == ctx.STATE.SAFE then
     M.applyReactorRods(ctx, ctx.CONFIG.ROD_MAX, true, "SAFE_TICK")
     return
