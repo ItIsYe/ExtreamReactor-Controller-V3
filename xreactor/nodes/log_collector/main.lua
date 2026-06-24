@@ -15,9 +15,16 @@ end
 
 local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local FALLBACK_ROOT = "/xreactor_collected_logs"
-local MAX_LOG_BYTES = 2097152  -- 2 MB pro Log-Datei (auf externer Disk reichlich Platz)
-local ROTATE_KEEP = 8  -- 8 Rotationen × 2 MB = max 16 MB pro Node
-local MIN_FREE_BYTES = 262144  -- 256 KB freier Platz Mindest-Schwelle
+-- CC:Tweaked Disketten haben 1MB Kapazität.
+-- MAX_LOG_BYTES: maximale Größe einer Log-Datei bevor sie rotiert wird.
+-- 128KB = sinnvoller Wert: Rotation bevor die Disk voll ist.
+local MAX_LOG_BYTES = 131072   -- 128 KB pro Log-Datei
+-- ROTATE_KEEP: wie viele alte Rotationen behalten.
+-- 3 × 128KB = 384KB pro Node — passt auf eine 1MB Disk mit Puffer.
+local ROTATE_KEEP = 3
+-- MIN_FREE_BYTES: Mindest-Freiraum bevor prune_any_logs() greift.
+-- 8KB ist ausreichend — CC:Tweaked Disketten sind klein, großzügiger Puffer sinnlos.
+local MIN_FREE_BYTES = 8192    -- 8 KB freier Platz Mindest-Schwelle
 local DEDUPE_LIMIT = 512
 local MODEM_REFRESH_SECONDS = 10
 local SELF_ROLE = "LOG_COLLECTOR"
@@ -427,11 +434,9 @@ local function advance_disk_after_write()
 end
 
 local function switch_next_disk(role)
-  if #stats.disks > 1 then
-    refresh_disks_if_needed(true)
-  elseif #stats.disks == 0 then
-    refresh_disks_if_needed(true)
-  end
+  -- Immer force-refresh: neue Disketten sollen sofort erkannt werden.
+  -- Auch bei nur einer bekannten Disk — vielleicht wurde eine neue eingelegt.
+  refresh_disks_if_needed(true)
   if #stats.disks == 0 then return nil end
   -- Bei Label-Routing: bevorzuge andere Disk mit passendem Label (z.B. Disk 2 = RT)
   -- statt blind Round-Robin zu machen.
