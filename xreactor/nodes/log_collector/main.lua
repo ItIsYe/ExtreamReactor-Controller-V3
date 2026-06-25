@@ -385,12 +385,7 @@ local function badge_ui(x, y, text, status)
   local bg = status == "OK" and c("lime") or status == "WARN" and c("yellow")
     or status == "ERR" and c("red") or status == "INFO" and c("cyan") or c("gray")
   local label = " " .. fit(text, 10) .. " "
-  term.setCursorPos(x, y)
-  term.setTextColor(c("black") or 1)
-  term.setBackgroundColor(bg or c("gray"))
-  term.write(label)
-  term.setTextColor(c("white") or 1)
-  term.setBackgroundColor(c("black") or 32768)
+  buf_line(x, y, label, c("black") or 1, bg or c("gray"))
   return #label
 end
 
@@ -398,23 +393,14 @@ local function progress_ui(x, y, w, pct, ok)
   local p = math.max(0, math.min(1, tonumber(pct) or 0))
   local fill = math.floor(w * p)
   local fg = ok and c("lime") or c("yellow")
-  term.setCursorPos(x, y)
-  for i = 1, w do
-    term.setBackgroundColor(i <= fill and fg or c("gray"))
-    term.write(" ")
-  end
-  term.setBackgroundColor(c("black") or 32768)
+  local bar = string.rep("|", fill) .. string.rep(" ", w - fill)
+  buf_line(x, y, bar, fg, c("gray"))
 end
 
 local function draw_pause_btn(x, y)
   local label = stats.paused and " RESUME DISK WRITES " or " PAUSE DISK WRITES "
   stats.pause_button = { x=x, y=y, w=#label, h=1 }
-  term.setCursorPos(x, y)
-  term.setTextColor(c("black") or 1)
-  term.setBackgroundColor(stats.paused and c("lime") or c("yellow"))
-  term.write(label)
-  term.setTextColor(c("white") or 1)
-  term.setBackgroundColor(c("black") or 32768)
+  buf_line(x, y, label, c("black") or 1, stats.paused and c("lime") or c("yellow"))
 end
 
 local function draw_logmode_btns(x, y)
@@ -422,20 +408,17 @@ local function draw_logmode_btns(x, y)
   local mode = utils.get_log_mode and utils.get_log_mode() or "all"
   local modes = { "all", "disk", "remote", "terminal", "none" }
   local labels = { all="All ", disk="Disk", remote="Rmt ", terminal="Term", none="Off " }
-  term.setCursorPos(x, y)
-  term.setTextColor(c("gray")); term.setBackgroundColor(c("black"))
-  term.write("Log:")
+  buf_line(x, y, "Log:", c("gray"), c("black"))
   local cx = x + 4
   stats.log_mode_buttons = {}
   for _, m in ipairs(modes) do
-    term.setCursorPos(cx, y)
-    term.setBackgroundColor(mode == m and c("lime") or c("gray"))
-    term.setTextColor(mode == m and c("black") or c("white"))
-    term.write(labels[m] or m)
+    local lbl = labels[m] or m
+    buf_line(cx, y, lbl,
+      mode == m and c("black") or c("white"),
+      mode == m and c("lime") or c("gray"))
     stats.log_mode_buttons[#stats.log_mode_buttons+1] = { x=cx, y=y, w=4, h=1, mode=m }
     cx = cx + 4
   end
-  term.setTextColor(c("white")); term.setBackgroundColor(c("black"))
 end
 
 local function btn_hit(btn, x, y)
@@ -478,6 +461,8 @@ draw = function()
     local label = (i == stats.last_write_index and "*" or "") .. tostring(i) .. ":" .. d.role:sub(1,3)
     dx = dx + badge_ui(dx, 7, label, st)
     if dx > w - 4 then break end
+  -- Nur geänderte Zeilen auf Monitor schreiben
+  flush_buf()
   end
 
   -- Zeile 8-12: Disk-Status
