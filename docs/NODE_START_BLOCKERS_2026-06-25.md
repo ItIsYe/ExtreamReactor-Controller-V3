@@ -1,44 +1,40 @@
 # Node Start Blockers — 2026-06-25
 
-Dieses Dokument ist eine Übergabe an die nächste KI / den nächsten Bearbeiter.
+Dieses Dokument ist die aktuelle Übergabe für den `beta`-Stand.
 
-Stand: `beta` nach LOG collector rewrite und Release/Manifest `v156`.
-
-## Verification update — 2026-06-25
-
-Aktuelle Nachprüfung gegen `beta`: Die andere KI hat die hier dokumentierten Start-/Runtime-Blocker **nicht** behoben. Die relevanten Code-Stellen sind im aktuellen Repo weiterhin unverändert vorhanden.
-
-Ergebnis der Nachprüfung:
-
-- `xreactor/nodes/rt/main.lua`: **offen** — fehlendes Komma in `monitor_ui.update(...)`, veraltete `manifest-v128` / `beta-v128` UI-Werte und falsche Master-connected-Logik sind weiterhin vorhanden.
-- `xreactor/nodes/fuel/main.lua`: **offen** — `redstone_router_lib` wird weiterhin benutzt, aber nicht required; Scope-Fehler bei `is_master_connected()` / `master_peer_state()` ist weiterhin vorhanden.
-- `xreactor/nodes/water/main.lua`: **offen** — Scope-Fehler bei `is_master_connected()` / `master_peer_state()` ist weiterhin vorhanden.
-- `xreactor/nodes/reprocessor/main.lua`: **offen** — Scope-Fehler bei `process_state` und `get_feed_router()` ist weiterhin vorhanden.
-- `xreactor/nodes/energy/main.lua`: **offen** — `record_error` wird weiterhin an Runtime-Module übergeben, aber in der Datei nicht sichtbar definiert.
-- `xreactor/nodes/log_collector/main.lua`: **offen/niedrigere Priorität** — Header-Segment-Overlap im inkrementellen UI ist weiterhin vorhanden (`fill_line(1, ...)` plus `line_ui(2, 1, ...)`). Kein Startblocker, aber UI-Folgefix.
+Letzte Nachprüfung: 2026-06-25, nach den v158-Änderungen.
 
 Wichtig:
 
 - Kein Ingame-Test wurde für diese Analyse gemacht.
 - Nichts wurde ingame installiert.
-- `xreactor/manifest.lua` ist absichtlich auf `hash_algo = "none"` gesetzt. Das ist **kein Fehler** und soll für diese Fixrunde nicht zurückgedreht werden.
-- Dieses Dokument beschreibt die noch offenen Code-Blocker. Es ist keine Aussage, dass die Fixes bereits umgesetzt wurden.
+- Diese Datei beschreibt nur die statische Repo-Prüfung.
 
-## Kurzfazit
+## Verification update — 2026-06-25 / v158
 
-Vor einem späteren Ingame-Test sollten mindestens diese Punkte gefixt werden:
+Aktuelle Nachprüfung gegen `beta`:
 
-1. `xreactor/nodes/rt/main.lua` — Syntax-/Parse-Blocker in `update_monitor()`.
-2. `xreactor/nodes/fuel/main.lua` — fehlender `redstone_router_lib` require und Lua-Scope-Fehler.
-3. `xreactor/nodes/water/main.lua` — Lua-Scope-Fehler.
-4. `xreactor/nodes/reprocessor/main.lua` — Lua-Scope-Fehler bei `process_state` und `get_feed_router()`.
-5. `xreactor/nodes/energy/main.lua` — `record_error` absichern.
-6. `xreactor/nodes/log_collector/main.lua` — Header-Segment-Overlap im inkrementellen UI bereinigen.
-7. Danach statische Lua-Parse-/Require-Prüfung über alle betroffenen Rollen.
+- `xreactor/nodes/fuel/main.lua`: **gefixt sichtbar** — `redstone_router_lib` ist jetzt required; `is_master_connected` und `master_peer_state` sind vorwärts deklariert und später per Zuweisung gesetzt.
+- `xreactor/nodes/water/main.lua`: **gefixt sichtbar** — `is_master_connected` und `master_peer_state` sind vorwärts deklariert und später per Zuweisung gesetzt.
+- `xreactor/nodes/reprocessor/main.lua`: **gefixt sichtbar** — `process_state` und `get_feed_router` stehen vor `build_status_payload()`; `get_feed_router` wird später per Zuweisung gesetzt.
+- `xreactor/nodes/energy/main.lua`: **teilweise/gefixt genug für Callback** — `record_error` ist jetzt definiert und wird an Runtime-Module übergeben. Kleiner Hinweis: Die Funktion steht vor `local devices = runtime.devices`; dadurch schreibt `if devices then devices.last_error = msg end` wahrscheinlich nicht in das lokale `devices`, aber Logging funktioniert und der fehlende Callback-Blocker ist weg.
+- `xreactor/nodes/log_collector/main.lua`: **gefixt sichtbar** — Header wird jetzt als ein einziges volles Segment gerendert; das vorherige `fill_line(1, ...)` + `line_ui(2, 1, ...)` Overlap ist weg.
+- `xreactor/nodes/rt/main.lua`: **weiterhin offen** — fehlendes Komma in `monitor_ui.update(...)` ist weiterhin vorhanden. Zusätzlich ist die Master-connected-Logik weiterhin falsch. Die UI-Werte wurden zwar auf `manifest-v157` / `beta-v157` geändert, aber Manifest/Release stehen aktuell bereits auf `v158`.
+- `xreactor/manifest.lua` / `xreactor/release.lua`: **geändert, prüfen** — aktueller Stand ist `manifest-v158` / `beta-v158` mit `hash_algo = "crc32"`. Das weicht von der früheren Übergabe ab, in der `hash_algo = "none"` absichtlich gesetzt war. Das ist nur dann okay, wenn die CRC/Size-Metadaten wirklich aus einem echten Checkout sauber regeneriert wurden.
+
+## Aktueller Kurzstatus
+
+Vor einem späteren Ingame-Test bleiben mindestens diese Punkte offen:
+
+1. `xreactor/nodes/rt/main.lua` — Syntax-/Parse-Blocker in `update_monitor()` fixen.
+2. `xreactor/nodes/rt/main.lua` — Master-connected-Logik fixen.
+3. `xreactor/nodes/rt/main.lua` — UI-Buildwerte nicht hart/falsch auf `v157` lassen, sondern passend zu Release/Manifest `v158` machen oder dynamisch aus Build/Release lesen.
+4. `xreactor/manifest.lua` / `xreactor/release.lua` — verifizieren, ob `hash_algo = "crc32"` wirklich sauber regeneriert wurde. Falls nicht, wieder bewusste Beta-Strategie festlegen.
+5. Statische Lua-Parse-/Require-Prüfung über alle Rollen laufen lassen.
 
 ---
 
-## 1. RT node: Parse-/Syntax-Blocker
+## 1. RT node: weiterhin Parse-/Syntax-Blocker
 
 Datei:
 
@@ -46,7 +42,7 @@ Datei:
 xreactor/nodes/rt/main.lua
 ```
 
-Bereich:
+Aktueller Bereich:
 
 ```lua
 last_status_snapshot = monitor_ui.update(mon, {
@@ -55,17 +51,13 @@ last_status_snapshot = monitor_ui.update(mon, {
   read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
   read_turbine_flow = function(t, c) return turbine_control.read_turbine_flow(ctx, t, c) end,
   ...
-  get_device_caps = function(k, n) return turbine_control.get_device_caps(ctx, k, n) end,
-  get_available_steam = function() return reactor_control.get_available_steam(ctx) end,
-  ...
 })
 ```
 
 Problem:
 
-- Nach `build_health_payload = function() ... end` fehlt ein Komma.
-- Prüfen, ob nach weiteren Funktionsfeldern ebenfalls Kommas fehlen.
-- Dadurch ist `nodes/rt/main.lua` sehr wahrscheinlich nicht parsebar und RT startet nicht.
+- Nach `build_health_payload = function() ... end` fehlt weiterhin ein Komma.
+- Dadurch ist `nodes/rt/main.lua` weiterhin sehr wahrscheinlich nicht parsebar.
 
 Minimaler Fix:
 
@@ -80,19 +72,19 @@ get_device_caps = function(k, n) return turbine_control.get_device_caps(ctx, k, 
 get_available_steam = function() return reactor_control.get_available_steam(ctx) end,
 ```
 
-Zusatzproblem in derselben Tabelle:
+Zusatzproblem:
 
 ```lua
-manifest_id = "manifest-v128",
-release_id  = "beta-v128",
+manifest_id = "manifest-v157",
+release_id  = "beta-v157",
 ```
 
-Das ist veraltet. Aktuell ist Release/Manifest `v156`.
+Aktuell stehen Manifest/Release aber auf `v158`. Diese Werte sollten nicht hart codiert bleiben.
 
 Empfohlener Fix:
 
-- Nicht hart codieren.
-- Entweder aus `xreactor/release.lua` lesen oder die Felder entfernen, falls `monitor_ui` sie nur optional anzeigt.
+- Entweder aus `xreactor/release.lua` / `shared.build_info` lesen.
+- Oder die Felder entfernen, falls `monitor_ui` sie nur optional anzeigt.
 
 Weiteres RT-Logikproblem:
 
@@ -126,7 +118,9 @@ end
 
 ---
 
-## 2. FUEL node: fehlender require und Scope-Fehler
+## 2. Bereits sichtbar gefixte Punkte
+
+### FUEL
 
 Datei:
 
@@ -134,81 +128,13 @@ Datei:
 xreactor/nodes/fuel/main.lua
 ```
 
-### 2.1 Fehlender require
+Aktueller Status:
 
-Aktuell wird benutzt:
+- `local redstone_router_lib = require("nodes.fuel.redstone_router")` ist vorhanden.
+- `local is_master_connected` und `local master_peer_state` stehen vor `build_status_payload()`.
+- Spätere Funktionsdefinitionen wurden zu Zuweisungen geändert.
 
-```lua
-rs_router_instance = redstone_router_lib.new({
-  config    = config,
-  log       = function(level, msg) utils.log("FUEL", msg, level) end,
-  warn_once = function(key, msg) warn_once(key, msg) end,
-})
-```
-
-Aber oben fehlt der Require für `redstone_router_lib`.
-
-Empfohlener Fix im require-Block:
-
-```lua
-local redstone_router_lib = require("nodes.fuel.redstone_router")
-```
-
-Sinnvoll direkt neben:
-
-```lua
-local logistics_router = require("nodes.fuel.logistics_router")
-local router_ui_lib     = require("nodes.fuel.router_ui")
-```
-
-### 2.2 Lua-Scope-Fehler
-
-`build_status_payload()` ruft auf:
-
-```lua
-local master_ok = is_master_connected()
-```
-
-`is_master_connected()` wird aber erst später als `local function is_master_connected()` deklariert.
-
-In Lua ist eine spätere `local function` nicht automatisch für bereits definierte frühere Funktionen sichtbar. `build_status_payload()` sieht dann wahrscheinlich ein globales `is_master_connected` und crasht zur Laufzeit.
-
-Empfohlener Fix:
-
-Vor `build_status_payload()` einfügen:
-
-```lua
-local master_peer_state
-local is_master_connected
-```
-
-Spätere Funktionsdeklarationen ändern von:
-
-```lua
-local function master_peer_state()
-  ...
-end
-
-local function is_master_connected()
-  ...
-end
-```
-
-zu:
-
-```lua
-master_peer_state = function()
-  ...
-end
-
-is_master_connected = function()
-  ...
-end
-```
-
----
-
-## 3. WATER node: Scope-Fehler
+### WATER
 
 Datei:
 
@@ -216,59 +142,12 @@ Datei:
 xreactor/nodes/water/main.lua
 ```
 
-Problem:
+Aktueller Status:
 
-`build_status_payload()` ruft auf:
+- `local is_master_connected` und `local master_peer_state` stehen vor `build_status_payload()`.
+- Spätere Funktionsdefinitionen wurden zu Zuweisungen geändert.
 
-```lua
-local master_ok = is_master_connected()
-```
-
-`render_monitor()` nutzt indirekt/extern den Master-Peer-State.
-
-Die Funktionen werden später als lokale Funktionen deklariert:
-
-```lua
-local function master_peer_state()
-  return role_logic.master_peer_state(comms, constants.roles.MASTER)
-end
-
-local function is_master_connected()
-  return role_logic.is_master_connected({ ... })
-end
-```
-
-Das ist für frühere Funktionskörper nicht sicher sichtbar.
-
-Empfohlener Fix:
-
-Vor `build_status_payload()` einfügen:
-
-```lua
-local master_peer_state
-local is_master_connected
-```
-
-Spätere Deklarationen ändern zu:
-
-```lua
-master_peer_state = function()
-  return role_logic.master_peer_state(comms, constants.roles.MASTER)
-end
-
-is_master_connected = function()
-  return role_logic.is_master_connected({
-    comms = comms,
-    master_role = constants.roles.MASTER,
-    last_seen_ts = master_seen_ts,
-    heartbeat_interval = config.heartbeat_interval
-  })
-end
-```
-
----
-
-## 4. REPROCESSING node: Scope-Fehler
+### REPROCESSING
 
 Datei:
 
@@ -276,74 +155,12 @@ Datei:
 xreactor/nodes/reprocessor/main.lua
 ```
 
-Problem 1:
+Aktueller Status:
 
-`build_status_payload()` nutzt:
+- `local get_feed_router` und `local process_state = {}` stehen vor `build_status_payload()`.
+- `get_feed_router = function() ... end` steht später und ist dadurch für frühere Funktionskörper sichtbar.
 
-```lua
-entry.process_state = process_state[entry.id]
-```
-
-`process_state` wird aber erst später deklariert:
-
-```lua
-local process_state = {}
-```
-
-Problem 2:
-
-`build_status_payload()` nutzt:
-
-```lua
-payload.feed = get_feed_router():get_summary()
-```
-
-`get_feed_router()` wird aber erst später als `local function get_feed_router()` deklariert.
-
-Empfohlener Fix:
-
-Vor `build_status_payload()` einfügen:
-
-```lua
-local process_state = {}
-local get_feed_router
-```
-
-Spätere Zeile:
-
-```lua
-local process_state = {}
-```
-
-entfernen oder ändern zu:
-
-```lua
-process_state = process_state or {}
-```
-
-Spätere Funktion ändern von:
-
-```lua
-local function get_feed_router()
-  ...
-end
-```
-
-zu:
-
-```lua
-get_feed_router = function()
-  ...
-end
-```
-
-Achtung:
-
-- `get_router_ui()` ruft ebenfalls `get_feed_router()`/Router-Funktionen indirekt. Nach der Umstellung auf Forward Declaration sollte das stabil bleiben.
-
----
-
-## 5. ENERGY node: `record_error` absichern
+### ENERGY
 
 Datei:
 
@@ -351,49 +168,12 @@ Datei:
 xreactor/nodes/energy/main.lua
 ```
 
-Auffälligkeit:
+Aktueller Status:
 
-`record_error` wird an mehrere Runtime-Module übergeben:
+- `record_error` ist jetzt definiert und wird an Runtime-Module übergeben.
+- Kleiner Follow-up: Die Funktion steht vor der lokalen `devices`-Deklaration. Dadurch loggt sie zwar, schreibt aber vermutlich nicht nach `devices.last_error`. Bei Bedarf Funktion hinter `local devices = runtime.devices` verschieben.
 
-```lua
-record_error = record_error
-```
-
-Sichtbar u.a. bei:
-
-- `matrix_snapshot_runtime.new(...)`
-- `discovery_runtime.new(...)`
-- `storage_snapshot_runtime.new(...)`
-
-In den sichtbaren oberen Deklarationen wurde keine lokale Definition von `record_error` gefunden.
-
-Risiko:
-
-- Falls die Runtime-Module `nil` tolerieren, ist es nur unsauber.
-- Falls sie `record_error(...)` direkt aufrufen, crasht ENERGY zur Laufzeit.
-
-Empfohlener sicherer Fix vor der ersten Nutzung:
-
-```lua
-local function record_error(scope, err)
-  local message = tostring(scope or "runtime") .. ": " .. tostring(err or "unknown")
-  if devices then
-    devices.last_error = message
-  end
-  if utils and type(utils.log) == "function" then
-    pcall(utils.log, "ENERGY", message, "WARN")
-  end
-end
-```
-
-Einfügeort:
-
-- Nach `local devices = runtime.devices`, weil dann `devices` verfügbar ist.
-- Vor `init()`, weil dort `record_error` an die Runtime-Module übergeben wird.
-
----
-
-## 6. LOG collector UI: Header-Segment-Overlap
+### LOG collector
 
 Datei:
 
@@ -401,34 +181,43 @@ Datei:
 xreactor/nodes/log_collector/main.lua
 ```
 
-Problem:
+Aktueller Status:
 
-Im inkrementellen UI-Renderer wird der Header aktuell als zwei Segmente gezeichnet:
-
-```lua
-fill_line(1, color("black", 32768), color("gray", 128))
-line_ui(2, 1, " XReactor LOG Collector v2 ", color("black", 32768), color("gray", 128))
-```
-
-Da `flush_ui()` Segmente per `pairs(...)` schreibt, ist die Reihenfolge nicht stabil. Das volle Fill-Segment kann den Headertext überschreiben.
-
-Empfohlener Fix:
-
-- Header als ein einziges volles Segment schreiben.
-- `fill_line(1, ...)` dort entfernen.
-
-Beispiel:
-
-```lua
-local title = " XReactor LOG Collector v2 "
-line_ui(1, 1, title .. string.rep(" ", math.max(0, w - #title)), color("black", 32768), color("gray", 128))
-```
+- Header-Segment-Overlap ist sichtbar gefixt.
+- Der Header wird nun als ein einziges volles Segment geschrieben.
 
 ---
 
-## 7. Danach statisch prüfen
+## 3. Manifest / Release Prüfpunkt
 
-Nach den Fixes sollte zuerst **ohne Ingame-Test** geprüft werden:
+Aktueller Stand:
+
+```lua
+manifest_version = 158
+manifest_id = "manifest-v158"
+hash_algo = "crc32"
+```
+
+und:
+
+```lua
+release_id = "beta-v158"
+manifest_id = "manifest-v158"
+hash_algo = "crc32"
+```
+
+Hinweis:
+
+- Frühere Übergabe sagte: `hash_algo = "none"` war absichtlich.
+- Jetzt wurde wieder auf `crc32` umgestellt.
+- Das ist nur dann sauber, wenn alle `size_bytes` und `hash` Werte aus einem echten Checkout korrekt regeneriert wurden.
+- Ohne diese Prüfung kann der Installer später wegen falscher CRC/Size blockieren.
+
+---
+
+## 4. Danach statisch prüfen
+
+Nach dem RT-Fix und Manifest/CRC-Check sollte zuerst **ohne Ingame-Test** geprüft werden:
 
 ```text
 1. Lua-Parse über alle xreactor/**/*.lua
@@ -441,33 +230,16 @@ Nach den Fixes sollte zuerst **ohne Ingame-Test** geprüft werden:
    - xreactor/nodes/fuel/main.lua
    - xreactor/nodes/reprocessor/main.lua
    - xreactor/nodes/log_collector/main.lua
-4. Prüfen, dass Manifest/Release v156 weiterhin absichtlich hash_algo = "none" behalten.
+4. Manifest/Release v158 + crc32-Metadaten prüfen.
 5. Erst danach entscheiden, ob später ein Ingame-Test sinnvoll ist.
 ```
 
-## Nicht ändern in dieser Fixrunde
-
-Nicht zurückdrehen:
-
-```lua
-hash_algo = "none"
-```
-
-Grund:
-
-- Das ist aktuell bewusst für den beweglichen `beta` Stand gesetzt.
-- Manifest-Metadaten sollen später aus einem echten Checkout sauber regeneriert werden.
-
 ## Priorität
 
-Empfohlene Reihenfolge:
-
 1. RT Syntax fixen.
-2. FUEL require + Scope fixen.
-3. WATER Scope fixen.
-4. REPROCESSING Scope fixen.
-5. ENERGY `record_error` guard einbauen.
-6. LOG collector UI Header-Segment fixen.
-7. Statische Checks laufen lassen.
+2. RT Master-connected-Logik fixen.
+3. RT Build/Release-Anzeige auf v158/dynamisch korrigieren.
+4. Manifest/Release CRC32-Metadaten verifizieren.
+5. Statische Checks laufen lassen.
 
-Vor diesen Fixes sollte das Repo weiterhin nicht ingame installiert oder getestet werden.
+Bis diese Punkte erledigt sind: weiterhin nicht ingame installieren oder testen.
