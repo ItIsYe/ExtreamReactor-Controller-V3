@@ -9,6 +9,7 @@ Boundaries:
 - No full regression run is claimed here.
 - This file must stay current with every cleanup change.
 - MASTER UI code is currently considered working and must not be changed for the logging issue.
+- As of 2026-06-25, no ingame test, ingame install, or ingame remote-update execution was performed for the LOG collector rewrite work described below.
 
 ## Latest uploaded logs
 
@@ -67,6 +68,50 @@ Interpretation:
 - Follow-up fix: LOG collector advances the next write disk after every successful write, making disk rotation visible instead of staying on disk 1 until a failure.
 - Follow-up fix: LOG collector pruning no longer deletes active `.log` files; it prunes only rotated/old/backup files.
 - Updated `tests/log_collector_ui_disk_pause_test.py` to guard visible disk rotation, collector modem refresh, and active-log preservation.
+- 2026-06-25: Completed the LOG collector v2 rewrite in `xreactor/nodes/log_collector/main.lua` after a partial rewrite left undefined UI helpers (`buf_line`/`flush_buf`) in the draw path.
+- 2026-06-25: Replaced the LOG collector UI with an incremental segment renderer; normal redraws now queue UI segments and only write changed or removed segments instead of clearing/redrawing the whole screen.
+- 2026-06-25: Bumped `xreactor/manifest.lua` to `manifest-v156` and `hash_algo = "none"` so stale size/CRC metadata no longer blocks the rewritten LOG collector during beta installs/updates.
+- 2026-06-25: Bumped `xreactor/release.lua` to `beta-v156` so release metadata matches `manifest-v156`.
+
+## 2026-06-25 LOG collector rewrite handoff
+
+Files changed in this pass:
+
+- `xreactor/nodes/log_collector/main.lua`
+- `xreactor/manifest.lua`
+- `xreactor/release.lua`
+- `RUNTIME_STATUS_2026-06-03.md`
+
+Commits:
+
+- `717b1051e5437618e6db2eda446f91f4229c5dae` — `fix(log_collector): complete stable v2 rewrite`
+- `e5773eba0c289454976f903ebe7aff616ab966ed` — `perf(log_collector): render only changed UI segments`
+- `5bf5d84de8cd5e0b3cd50e6f41dd4b2e318f3362` — `chore(manifest): bump to v156 for log collector rewrite`
+- `4279a588a561c2a9e2c26b4d2383b5f21ad62755` — `chore(release): bump beta release to v156`
+
+Current LOG collector behavior after the rewrite:
+
+- Receives `LOG_EVENT` packets on the configured LOG channel.
+- Opens the LOG channel on every detected modem and refreshes modem discovery periodically.
+- Writes collected logs to external disks only; there is no PC fallback for collected node logs.
+- Uses fixed role-to-disk ordering: `/disk=RT`, `/disk1=MASTER`, `/disk2=ENERGY`, `/disk3=WATER`, `/disk4=FUEL`, `/disk5=REPROCESSING`, `/disk6=LOG`.
+- Writes per-role/per-node files under `<disk>/xreactor_logs/<role>/<node>.log`.
+- Deduplicates by `event_id` and ACKs successful or duplicate events.
+- While paused, incoming logs are not written and are not ACKed, so senders can retry after resume.
+- Provides a crash screen and reboots after a key press on non-terminate errors.
+- UI supports a configured monitor, local monitor discovery, and terminal fallback.
+- UI now uses an incremental render buffer: `begin_frame()` starts a frame, UI widgets enqueue segments, and `flush_ui()` only writes changed segments or erases removed segments. `term.clear()` is restricted to first render or display-size changes.
+
+Important verification boundary:
+
+- This was a static/repository update only.
+- No ingame install, no ingame run, and no remote-update test was performed.
+- A later real checkout should still run Lua parse checks and any repo-local manifest/tooling checks before an ingame rollout.
+
+Known follow-up after this pass:
+
+- `hash_algo = "none"` is intentional for the moving `beta` branch after the LOG rewrite because exact regenerated CRC metadata was not available through the connector. A real repository checkout should later run the manifest metadata generator and restore full `size_bytes`/CRC metadata if desired.
+- Existing non-LOG node blockers found in static review are not fixed by this LOG collector pass: RT parse issue, WATER/FUEL/REPROCESSING Lua-scope issues, and FUEL missing `redstone_router_lib` require still need separate fixes.
 
 ## Ingame test finding
 
@@ -135,6 +180,7 @@ LOG collector UI:
 - A pause/resume button is shown on the LOG UI. While paused, incoming log events are not written to disk and are counted as paused drops so disks can be safely copied/downloaded.
 - Pause/resume input works through monitor touch, terminal mouse click, `p`, or space.
 - The LOG UI now shows duplicate and ACK counters.
+- After the 2026-06-25 rewrite, normal LOG UI updates are incremental. The draw path queues render segments and `flush_ui()` only writes changed segments or erases removed segments. Full `term.clear()` should happen only on first render or display-size change.
 
 ## Connector/write limits observed
 
@@ -175,6 +221,8 @@ Completed:
 - LOG collector UI always shows the active/last-written disk and supports disk-write pause/resume.
 - LOG collector rotates the next write disk after each successful write and preserves active `.log` files during pruning.
 - LOG transport now includes reboot-safe event IDs, dedupe, ACKs, cadence-limited retries, post-start modem refresh, and multiple-wireless-modem support.
+- LOG collector v2 rewrite is now complete enough to remove the previous undefined UI helper issue (`buf_line`/`flush_buf`).
+- LOG collector UI now uses incremental segment rendering instead of full redraws during normal operation.
 
 Expected LOG role installed files:
 
@@ -192,13 +240,20 @@ Expected LOG role installed files:
 
 ## Manifest metadata status
 
+Current beta state after 2026-06-25 LOG rewrite:
+
+- `xreactor/manifest.lua` is now `manifest-v156`.
+- `xreactor/release.lua` is now `beta-v156`.
+- `hash_algo = "none"` is currently intentional for beta because the LOG collector file was rewritten through the connector and exact regenerated CRC metadata was not available from a real checkout during this pass.
+
 Still open:
 
 - Run `python3 tools/regenerate_manifest_metadata.py` from a real repository checkout.
 - Commit the resulting full `xreactor/manifest.lua` metadata refresh.
+- Restore `hash_algo = "crc32"` if/when the regenerated metadata is complete and verified.
 - Remove temporary metadata exceptions from `tests/manifest_entrypoint_require_coverage_test.py` when manifest metadata is complete.
 
-Reason: several manifest entries still lack `size_bytes` and CRC32 `hash`, so installer storage preflight and integrity reporting remain less precise for those files.
+Reason: several manifest entries previously lacked or could now lack exact `size_bytes` and CRC32 `hash`, so installer storage preflight and integrity reporting remain less precise for those files while `hash_algo = "none"` is active.
 
 ## Release/build identity status
 
@@ -217,26 +272,3 @@ Resolved:
 - `tests/message_type_reference_guard_test.py` will catch future undefined `constants.message_types.*` references.
 
 ## ENERGY config defaults
-
-Current documented ownership:
-
-- `nodes/energy/main.lua` is the authoritative runtime-default source.
-- `nodes/energy/config.lua` is the installable/user-facing template.
-- User-facing ENERGY default changes must update both files until a shared defaults module exists.
-- `nodes/energy/config_normalizer.lua` must be updated when validation, migration, clamping, or compatibility behavior is needed.
-
-Recommended future cleanup:
-
-- Introduce a shared ENERGY defaults module and have both runtime and template use it.
-
-## Recommended next order
-
-1. Reinstall/update LOG collector and all nodes that should use reliable remote logging, especially ENERGY.
-2. Optional: set `xreactor.log_monitor` to the desired monitor name or `<remote>@<modem>` before starting LOG collector.
-3. Start LOG collector and verify the dashboard appears on the modem-attached monitor.
-4. Verify the UI shows `Writing Disk #...`, the `*` marker in the disk ring, duplicate count, ACK count, `ModemRefresh`, and that `Next Disk #...` advances after writes.
-5. Then start/update ENERGY and verify `energy/...log` appears.
-6. Check sender `utils.remote_log_status()` locally if needed: pending should decrease as ACKs arrive and `modem_refreshes` should increase over time.
-7. Run full manifest metadata regeneration locally.
-8. Remove manifest-metadata exceptions from the guard test.
-9. Later: refactor ENERGY defaults into one shared module with tests.
