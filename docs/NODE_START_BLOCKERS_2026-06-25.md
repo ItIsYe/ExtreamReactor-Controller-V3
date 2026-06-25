@@ -4,6 +4,19 @@ Dieses Dokument ist eine Übergabe an die nächste KI / den nächsten Bearbeiter
 
 Stand: `beta` nach LOG collector rewrite und Release/Manifest `v156`.
 
+## Verification update — 2026-06-25
+
+Aktuelle Nachprüfung gegen `beta`: Die andere KI hat die hier dokumentierten Start-/Runtime-Blocker **nicht** behoben. Die relevanten Code-Stellen sind im aktuellen Repo weiterhin unverändert vorhanden.
+
+Ergebnis der Nachprüfung:
+
+- `xreactor/nodes/rt/main.lua`: **offen** — fehlendes Komma in `monitor_ui.update(...)`, veraltete `manifest-v128` / `beta-v128` UI-Werte und falsche Master-connected-Logik sind weiterhin vorhanden.
+- `xreactor/nodes/fuel/main.lua`: **offen** — `redstone_router_lib` wird weiterhin benutzt, aber nicht required; Scope-Fehler bei `is_master_connected()` / `master_peer_state()` ist weiterhin vorhanden.
+- `xreactor/nodes/water/main.lua`: **offen** — Scope-Fehler bei `is_master_connected()` / `master_peer_state()` ist weiterhin vorhanden.
+- `xreactor/nodes/reprocessor/main.lua`: **offen** — Scope-Fehler bei `process_state` und `get_feed_router()` ist weiterhin vorhanden.
+- `xreactor/nodes/energy/main.lua`: **offen** — `record_error` wird weiterhin an Runtime-Module übergeben, aber in der Datei nicht sichtbar definiert.
+- `xreactor/nodes/log_collector/main.lua`: **offen/niedrigere Priorität** — Header-Segment-Overlap im inkrementellen UI ist weiterhin vorhanden (`fill_line(1, ...)` plus `line_ui(2, 1, ...)`). Kein Startblocker, aber UI-Folgefix.
+
 Wichtig:
 
 - Kein Ingame-Test wurde für diese Analyse gemacht.
@@ -20,7 +33,8 @@ Vor einem späteren Ingame-Test sollten mindestens diese Punkte gefixt werden:
 3. `xreactor/nodes/water/main.lua` — Lua-Scope-Fehler.
 4. `xreactor/nodes/reprocessor/main.lua` — Lua-Scope-Fehler bei `process_state` und `get_feed_router()`.
 5. `xreactor/nodes/energy/main.lua` — `record_error` absichern.
-6. Danach statische Lua-Parse-/Require-Prüfung über alle betroffenen Rollen.
+6. `xreactor/nodes/log_collector/main.lua` — Header-Segment-Overlap im inkrementellen UI bereinigen.
+7. Danach statische Lua-Parse-/Require-Prüfung über alle betroffenen Rollen.
 
 ---
 
@@ -379,7 +393,40 @@ Einfügeort:
 
 ---
 
-## 6. Danach statisch prüfen
+## 6. LOG collector UI: Header-Segment-Overlap
+
+Datei:
+
+```text
+xreactor/nodes/log_collector/main.lua
+```
+
+Problem:
+
+Im inkrementellen UI-Renderer wird der Header aktuell als zwei Segmente gezeichnet:
+
+```lua
+fill_line(1, color("black", 32768), color("gray", 128))
+line_ui(2, 1, " XReactor LOG Collector v2 ", color("black", 32768), color("gray", 128))
+```
+
+Da `flush_ui()` Segmente per `pairs(...)` schreibt, ist die Reihenfolge nicht stabil. Das volle Fill-Segment kann den Headertext überschreiben.
+
+Empfohlener Fix:
+
+- Header als ein einziges volles Segment schreiben.
+- `fill_line(1, ...)` dort entfernen.
+
+Beispiel:
+
+```lua
+local title = " XReactor LOG Collector v2 "
+line_ui(1, 1, title .. string.rep(" ", math.max(0, w - #title)), color("black", 32768), color("gray", 128))
+```
+
+---
+
+## 7. Danach statisch prüfen
 
 Nach den Fixes sollte zuerst **ohne Ingame-Test** geprüft werden:
 
@@ -420,6 +467,7 @@ Empfohlene Reihenfolge:
 3. WATER Scope fixen.
 4. REPROCESSING Scope fixen.
 5. ENERGY `record_error` guard einbauen.
-6. Statische Checks laufen lassen.
+6. LOG collector UI Header-Segment fixen.
+7. Statische Checks laufen lassen.
 
 Vor diesen Fixes sollte das Repo weiterhin nicht ingame installiert oder getestet werden.
