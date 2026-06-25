@@ -69,8 +69,9 @@ constants.command_targets = {
 
 constants.channels = {
   CONTROL = 6500,
-  STATUS = 6501,
-  LOG = 6502
+  STATUS  = 6501,
+  LOG     = 6503   -- separater Kanal; Log-Traffic laeuft ueber Wired-Modem
+                   -- getrennt vom Control/Status-Traffic (6500/6501 via Ender-Modem)
 }
 
 return constants
