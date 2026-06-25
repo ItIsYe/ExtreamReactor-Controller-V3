@@ -350,8 +350,6 @@ function M.update_inductor_for_rpm(ctx, name, turbine, caps, rpm, target_rpm)
 
   if is_overspeed and not engaged then
     engaged = true
-    ctx.log("INFO", ("Turbine coil name=%s engaged=true reason=OVERSPEED_BRAKE_NORMAL"
-      .. " rpm=%s target=%s"):format(tostring(name), tostring(rpm), tostring(target_rpm)))
   elseif not is_overspeed then
     if smoothed_rpm and smoothed_rpm >= engage_rpm and not engaged then
       engaged = true
@@ -373,11 +371,6 @@ function M.update_inductor_for_rpm(ctx, name, turbine, caps, rpm, target_rpm)
     local reason = is_overspeed and "OVERSPEED_BRAKE" or "TARGET_TRACKING"
     if ctrl.mode == "OVERSPEED_BRAKE" then reason = "OVERSPEED_BRAKE" end
     ctrl.last_coil_reason = reason
-    ctx.log("INFO", ("Turbine coil name=%s engaged=%s reason=%s rpm=%s"
-      .. " target_rpm=%s engage_thr=%s disengage_thr=%s"):format(
-      tostring(name), tostring(engaged), tostring(reason),
-      tostring(rpm), tostring(target_rpm),
-      tostring(engage_rpm), tostring(disengage_rpm)))
   end
   return ok, applied, measured_api
 end
@@ -692,14 +685,10 @@ local function finalize_turbine_flow_apply(ctx, name, ctrl, ap)
   }, ctx.log)
 
   if not ctrl.logged then
-    ctx.log("INFO", "Turbine " .. name .. " active, initial flow "
-      .. tostring(ctrl.requested_flow))
     ctrl.logged = true
   end
   if ap.requested_flow == 0 and type(ap.effective_min_flow) == "number"
       and ap.effective_min_changed then
-    ctx.log("INFO", "Turbine " .. name .. " effective minimum flow detected at "
-      .. tostring(ap.effective_min_flow))
   end
   if ap.decision and ap.decision.overspeed_brake and ap.requested_flow == 0
       and type(ap.confirmed_flow) == "number"
@@ -731,10 +720,6 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
     ctrl.confirmed_flow = synced
     if not ctrl.startup_synced
         and ctx.turbine_regulator.sync_startup_state(ctrl, synced) then
-      ctx.log("DEBUG", "TurbineSync name=" .. name
-        .. " source=confirmed_flow synced_flow=" .. tostring(synced)
-        .. " flow_api=" .. tostring(startup_reader)
-        .. " effective_min_flow=" .. tostring(ctrl.effective_min_flow))
       return true, false, "startup-sync-hold", "STARTUP_SYNC"
     end
   end
@@ -822,7 +807,6 @@ function M.updateControl(ctx)
       ctx.reactor_control.ensure_reactor_ctrl(ctx, name)
       if not ctx.autonom_control_logged then
         ctx.autonom_control_logged = true
-        ctx.log("INFO", "AUTONOM actuator control active")
       end
       ::continue_control_reactor::
     end
@@ -858,9 +842,6 @@ function M.updateControl(ctx)
       if ctrl.flow_api_missing_ticks >= 5 then
         warn_unsupported(ctx, name, flow_api_reason)
       else
-        ctx.log("DEBUG", "TurbineCtrl startup-wait name=" .. tostring(name)
-          .. " reason=" .. tostring(flow_api_reason)
-          .. " missing_ticks=" .. tostring(ctrl.flow_api_missing_ticks))
       end
       goto continue_control_turbine
     end
@@ -902,16 +883,12 @@ function M.updateControl(ctx)
     end
     if not result then
       track_skip(apply_reason or "FLOW_SET_SKIPPED")
-      ctx.log("DEBUG", "TurbineCtrl skip name=" .. name
-        .. " reason=" .. tostring(apply_reason)
-        .. " state=" .. tostring(ctx.current_state()))
       goto continue_control_turbine
     end
 
     eval_decision = eval_decision + 1
     if not ctx.autonom_control_logged then
       ctx.autonom_control_logged = true
-      ctx.log("INFO", "AUTONOM actuator control active")
     end
     ::continue_control_turbine::
   end
@@ -923,10 +900,6 @@ function M.updateControl(ctx)
   table.sort(reason_parts)
   -- TurbineTick nur loggen wenn Entscheidungen getroffen wurden (nicht leere Ticks)
   if eval_decision > 0 then
-    ctx.log("DEBUG", "TurbineTick evaluated=" .. tostring(eval_total)
-      .. " decisions=" .. tostring(eval_decision)
-      .. " skipped=" .. tostring(eval_skipped)
-      .. " skip_reasons=" .. (#reason_parts > 0 and table.concat(reason_parts, ",") or "none"))
   end
 end
 
