@@ -3,6 +3,7 @@
 -- Receives LOG_EVENT packets via modem and writes them to external disks.
 -- One disk slot per role: /disk=RT, /disk1=MASTER, /disk2=ENERGY, ...
 -- No PC fallback for collected logs: if no writable disk exists, logs are dropped.
+-- UI is incremental: only changed render segments are written to the terminal/monitor.
 
 -- ── Dependencies ────────────────────────────────────────────────────────────
 if type(package) == "table" and type(package.path) == "string" then
@@ -436,7 +437,15 @@ local function self_log(message, level)
   if ok then remember(event_id) elseif err ~= "paused" then stats.last_error = err end
 end
 
--- ── UI helpers ──────────────────────────────────────────────────────────────
+-- ── Incremental UI renderer ─────────────────────────────────────────────────
+local ui_buffer = {
+  prev = {},
+  current = {},
+  force = true,
+  last_w = nil,
+  last_h = nil,
+}
+
 local function display_size()
   if not term or type(term.getSize) ~= "function" then return 40, 20 end
   local ok, w, h = pcall(term.getSize)
@@ -444,20 +453,94 @@ local function display_size()
   return 40, 20
 end
 
-local function line_ui(x, y, text, fg, bg)
-  if not term then return end
-  local w = ({ display_size() })[1]
-  pcall(term.setCursorPos, x, y)
-  if bg and term.setBackgroundColor then pcall(term.setBackgroundColor, bg) end
-  if fg and term.setTextColor then pcall(term.setTextColor, fg) end
-  if term.write then pcall(term.write, fit(text, math.max(1, w - x + 1))) end
+local function begin_frame()
+  local w, h = display_size()
+  ui_buffer.current = {}
+  if ui_buffer.last_w ~= w or ui_buffer.last_h ~= h then
+    ui_buffer.force = true
+    ui_buffer.last_w = w
+    ui_buffer.last_h = h
+  end
+  return w, h
+end
+
+local function segment_key(x, y, text)
+  return tostring(y) .. ":" .. tostring(x) .. ":" .. tostring(#tostring(text or ""))
+end
+
+local function queue_segment(x, y, text, fg, bg)
+  text = tostring(text or "")
+  if text == "" then return end
+  local key = segment_key(x, y, text)
+  ui_buffer.current[key] = {
+    x = x,
+    y = y,
+    text = text,
+    fg = fg or color("white", 1),
+    bg = bg or color("black", 32768),
+  }
+end
+
+local function write_segment(seg)
+  if not term or not seg then return end
+  pcall(term.setCursorPos, seg.x, seg.y)
+  if term.setBackgroundColor then pcall(term.setBackgroundColor, seg.bg) end
+  if term.setTextColor then pcall(term.setTextColor, seg.fg) end
+  if term.write then pcall(term.write, seg.text) end
   if term.setTextColor then pcall(term.setTextColor, color("white", 1)) end
   if term.setBackgroundColor then pcall(term.setBackgroundColor, color("black", 32768)) end
 end
 
-local function clear_line(y)
+local function same_segment(a, b)
+  return a and b
+    and a.x == b.x and a.y == b.y
+    and a.text == b.text and a.fg == b.fg and a.bg == b.bg
+end
+
+local function erase_segment(seg)
+  if not seg then return end
+  write_segment({
+    x = seg.x,
+    y = seg.y,
+    text = string.rep(" ", #tostring(seg.text or "")),
+    fg = color("white", 1),
+    bg = color("black", 32768),
+  })
+end
+
+local function flush_ui()
+  if ui_buffer.force then
+    if term and term.setBackgroundColor then term.setBackgroundColor(color("black", 32768)) end
+    if term and term.setTextColor then term.setTextColor(color("white", 1)) end
+    if term and term.clear then term.clear() end
+    ui_buffer.prev = {}
+  end
+
+  for key, old in pairs(ui_buffer.prev) do
+    if not ui_buffer.current[key] then
+      erase_segment(old)
+    end
+  end
+
+  for key, seg in pairs(ui_buffer.current) do
+    if ui_buffer.force or not same_segment(seg, ui_buffer.prev[key]) then
+      write_segment(seg)
+    end
+  end
+
+  ui_buffer.prev = ui_buffer.current
+  ui_buffer.current = {}
+  ui_buffer.force = false
+end
+
+local function line_ui(x, y, text, fg, bg)
   local w = ({ display_size() })[1]
-  line_ui(1, y, string.rep(" ", w), color("white", 1), color("black", 32768))
+  queue_segment(x, y, fit(text, math.max(1, w - x + 1)), fg, bg)
+end
+
+local function fill_line(y, fg, bg)
+  local w = ({ display_size() })[1]
+  queue_segment(1, y, string.rep(" ", w), fg or color("white", 1), bg or color("black", 32768))
 end
 
 local function badge_ui(x, y, label, status)
@@ -467,7 +550,7 @@ local function badge_ui(x, y, label, status)
   elseif status == "ERR" then bg = color("red", 16384)
   elseif status == "INFO" then bg = color("cyan", 2048) end
   local text = " " .. fit(label, 10) .. " "
-  line_ui(x, y, text, color("black", 32768), bg)
+  queue_segment(x, y, text, color("black", 32768), bg)
   return #text
 end
 
@@ -475,13 +558,13 @@ local function progress_ui(x, y, width, pct, good)
   local p = math.max(0, math.min(1, tonumber(pct) or 0))
   local fill = math.floor(width * p)
   local bar = string.rep("|", fill) .. string.rep(" ", math.max(0, width - fill))
-  line_ui(x, y, bar, good and color("lime", 32) or color("yellow", 16), color("gray", 128))
+  queue_segment(x, y, bar, good and color("lime", 32) or color("yellow", 16), color("gray", 128))
 end
 
 local function draw_pause_button(x, y)
   local label = stats.paused and " RESUME DISK WRITES " or " PAUSE DISK WRITES "
   stats.pause_button = { x = x, y = y, w = #label, h = 1 }
-  line_ui(x, y, label, color("black", 32768), stats.paused and color("lime", 32) or color("yellow", 16))
+  queue_segment(x, y, label, color("black", 32768), stats.paused and color("lime", 32) or color("yellow", 16))
 end
 
 local function draw_log_mode_buttons(x, y)
@@ -495,7 +578,7 @@ local function draw_log_mode_buttons(x, y)
   for _, item in ipairs(modes) do
     local selected = mode == item
     local label = labels[item] or item
-    line_ui(cx, y, label,
+    queue_segment(cx, y, label,
       selected and color("black", 32768) or color("white", 1),
       selected and color("lime", 32) or color("gray", 128))
     stats.log_mode_buttons[#stats.log_mode_buttons + 1] = { x = cx, y = y, w = #label, h = 1, mode = item }
@@ -511,12 +594,9 @@ local function draw()
   refresh_disks(false)
   refresh_modems(false)
 
-  local w, h = display_size()
-  if term and term.setBackgroundColor then term.setBackgroundColor(color("black", 32768)) end
-  if term and term.setTextColor then term.setTextColor(color("white", 1)) end
-  if term and term.clear then term.clear() end
+  local w, h = begin_frame()
 
-  line_ui(1, 1, string.rep(" ", w), color("black", 32768), color("gray", 128))
+  fill_line(1, color("black", 32768), color("gray", 128))
   line_ui(2, 1, " XReactor LOG Collector v2 ", color("black", 32768), color("gray", 128))
 
   local status = "OK"
@@ -579,6 +659,7 @@ local function draw()
     end
   end
 
+  flush_ui()
   stats.last_draw_s = now_s()
 end
 
