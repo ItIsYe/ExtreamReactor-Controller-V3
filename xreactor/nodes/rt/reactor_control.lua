@@ -494,6 +494,30 @@ function M.updateReactorControl(ctx)
   -- Reactor control tick debug (zu häufig entfernt)
   if ctx.current_state() == ctx.STATE.SAFE then
     M.applyReactorRods(ctx, ctx.CONFIG.ROD_MAX, true, "SAFE_TICK")
+    -- SAFE-Exit: Wenn alle Reaktoren unter Limit - Hysterese gekühlt sind
+    -- verlassen wir den SAFE-Mode automatisch damit kein Neustart nötig ist.
+    local safe_cfg = ctx.config.safety or {}
+    local limit       = safe_cfg.max_temperature    or 2000
+    local hysteresis  = safe_cfg.temperature_hysteresis or 50
+    local recover_at  = limit - hysteresis  -- z.B. 1950°C
+    local all_cool    = true
+    for _, name in ipairs(ctx.config.reactors or {}) do
+      local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name]
+      if reactor then
+        local ok_f, fuel = pcall(function() return reactor.getFuelTemperature() end)
+        local ok_c, cas  = pcall(function() return reactor.getCasingTemperature() end)
+        local temp = (ok_f and type(fuel) == "number" and fuel > 0 and fuel)
+                  or (ok_c and type(cas)  == "number" and cas  > 0 and cas)
+                  or recover_at + 1  -- unbekannt → sicher bleiben
+        if temp >= recover_at then all_cool = false; break end
+      end
+    end
+    if all_cool and #(ctx.config.reactors or {}) > 0 then
+      ctx.log("INFO", string.format(
+        "SAFE-Mode Exit: alle Reaktoren unter %.0f°C (limit=%.0f hysteresis=%.0f)",
+        recover_at, limit, hysteresis))
+      ctx.setState(ctx.STATE.MASTER, "SAFETY_TEMPERATURE_RECOVERED")
+    end
     return
   end
   if now - ctx.last_reactor_tick <
