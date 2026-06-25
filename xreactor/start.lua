@@ -175,6 +175,62 @@ local function read_release_info()
   return nil
 end
 
+local function read_all(path)
+  if not fs.exists(path) then return nil, "missing" end
+  local handle = fs.open(path, "r")
+  if not handle then return nil, "open failed" end
+  local data = handle.readAll()
+  handle.close()
+  return data
+end
+
+local function write_all(path, data)
+  local handle = fs.open(path, "w")
+  if not handle then return false, "open failed" end
+  handle.write(data)
+  handle.close()
+  return true
+end
+
+local function apply_rt_startup_self_heal(entry, release)
+  local source, read_err = read_all(entry)
+  if type(source) ~= "string" then
+    safe_log("STARTUP", "RT self-heal skipped: " .. tostring(read_err))
+    return
+  end
+
+  local before = source
+  source = source:gsub(
+    "build_health_payload = function%(%) return build_status_payload%(%) end\n    read_turbine_rpm =",
+    "build_health_payload = function() return build_status_payload() end,\n    read_turbine_rpm =",
+    1
+  )
+
+  local manifest_id = release and release.manifest_id
+  local release_id = release and release.release_id
+  if type(manifest_id) == "string" and manifest_id ~= "" then
+    source = source:gsub('manifest_id%s*=%s*"manifest%-v%d+"', 'manifest_id          = "' .. manifest_id .. '"', 1)
+  end
+  if type(release_id) == "string" and release_id ~= "" then
+    source = source:gsub('release_id%s*=%s*"beta%-v%d+"', 'release_id           = "' .. release_id .. '"', 1)
+  end
+
+  if source ~= before then
+    local ok, err = write_all(entry, source)
+    if ok then
+      safe_log("STARTUP", "RT startup self-heal applied before launch")
+    else
+      safe_log("STARTUP", "ERROR: RT startup self-heal write failed: " .. tostring(err))
+    end
+  end
+end
+
+local function apply_startup_self_heal(role, entry, release)
+  if role == "RT" then
+    apply_rt_startup_self_heal(entry, release)
+  end
+end
+
 local role, err = read_role_config()
 if not role then
   safe_log("STARTUP", "ERROR: " .. tostring(err))
@@ -202,6 +258,8 @@ safe_log(
     tostring(startup_cleanup and startup_cleanup.after or "n/a")
   )
 )
+
+apply_startup_self_heal(role, entry, release)
 
 -- Gestaffelte Startreihenfolge: LOG_COLLECTOR → MASTER → Nodes
 --
