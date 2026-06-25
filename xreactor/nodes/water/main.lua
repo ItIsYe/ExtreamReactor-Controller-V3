@@ -322,6 +322,9 @@ local function balance_loop()
   end
 end
 
+local is_master_connected
+local master_peer_state
+
 local function build_status_payload()
   local total, buffers = total_water()
   local reasons = {}
@@ -480,11 +483,11 @@ local function handle_monitor_touch(x, y)
   end
 end
 
-local function master_peer_state()
+master_peer_state = function()
   return role_logic.master_peer_state(comms, constants.roles.MASTER)
 end
 
-local function is_master_connected()
+is_master_connected = function()
   return role_logic.is_master_connected({
     comms = comms,
     master_role = constants.roles.MASTER,
