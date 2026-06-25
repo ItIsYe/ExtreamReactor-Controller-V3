@@ -596,8 +596,9 @@ local function draw()
 
   local w, h = begin_frame()
 
-  fill_line(1, color("black", 32768), color("gray", 128))
-  line_ui(2, 1, " XReactor LOG Collector v2 ", color("black", 32768), color("gray", 128))
+  local title = " XReactor LOG Collector v2 "
+  line_ui(1, 1, title .. string.rep(" ", math.max(0, w - #title)),
+    color("black", 32768), color("gray", 128))
 
   local status = "OK"
   if stats.last_error then status = "WARN" end
