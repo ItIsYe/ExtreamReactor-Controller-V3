@@ -3,8 +3,19 @@
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
 > **Branch:** `beta` — active development.  
-> **Manifest:** v133 · 131 files · ATM10 (MC 1.21.1)  
+> **Manifest / Release:** `manifest-v156` / `beta-v156` · 131 files · ATM10 (MC 1.21.1)  
+> **Beta status:** known node start blockers are documented in [docs/NODE_START_BLOCKERS_2026-06-25.md](docs/NODE_START_BLOCKERS_2026-06-25.md). Do not treat this branch as ready for ingame rollout until those blockers are fixed and statically checked.  
 > See [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) for the full technical reference.
+
+---
+
+## Current Handoff / Cleanup Docs
+
+- [docs/README.md](docs/README.md) — documentation index.
+- [docs/NODE_START_BLOCKERS_2026-06-25.md](docs/NODE_START_BLOCKERS_2026-06-25.md) — current RT/FUEL/WATER/REPROCESSING/ENERGY blockers and fix notes.
+- [RUNTIME_STATUS_2026-06-03.md](RUNTIME_STATUS_2026-06-03.md) — runtime audit / cleanup handoff history.
+
+Important beta note: `xreactor/manifest.lua` currently uses `hash_algo = "none"` intentionally for the moving beta branch. Do not revert that as part of normal cleanup; regenerate manifest metadata from a real checkout first if CRC32 checks should be restored.
 
 ---
 
