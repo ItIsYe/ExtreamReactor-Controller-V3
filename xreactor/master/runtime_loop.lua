@@ -188,9 +188,10 @@ local function run_master()
   -- die aktive Entwicklungsphase; kann später wieder entfernt werden.
   -- Steigende Flanke (false->true) löst aus, damit ein Dauersignal nicht
   -- endlos viele Updates auslöst.
-  local last_redstone_top = false
+  local last_redstone = { top=false, bottom=false, left=false, right=false, front=false, back=false }
+  local REDSTONE_SIDES = { "top", "bottom", "left", "right", "front", "back" }
   local function broadcast_remote_update()
-    runtime.log("Redstone-Trigger (top): broadcasting REMOTE_UPDATE an alle Nodes", "WARN")
+    runtime.log("Redstone-Trigger: broadcasting REMOTE_UPDATE an alle Nodes", "WARN")
     local known = runtime.state.nodes or {}
     local known_count = 0
     for _ in pairs(known) do known_count = known_count + 1 end
@@ -223,20 +224,22 @@ local function run_master()
     -- Master aktualisiert sich danach selbst (kurze Verzögerung damit der
     -- Broadcast an alle anderen Nodes garantiert raus ist, bevor der Master
     -- selbst rebootet und damit das Funknetz kurzzeitig verliert).
-    runtime.log("Master aktualisiert sich selbst in 3s...", "WARN")
-    if os and type(os.sleep) == "function" then os.sleep(3) end
+    runtime.log("Master aktualisiert sich selbst...", "WARN")
     local remote_update = require("core.remote_update")
     remote_update.run(function(level, text) runtime.log(text, level) end)
   end
 
   local function check_redstone_update_trigger()
     if not redstone or type(redstone.getInput) ~= "function" then return end
-    local ok, current = pcall(redstone.getInput, "top")
-    if not ok then return end
-    if current and not last_redstone_top then
-      broadcast_remote_update()
+    for _, side in ipairs(REDSTONE_SIDES) do
+      local ok, current = pcall(redstone.getInput, side)
+      if ok and current and not last_redstone[side] then
+        broadcast_remote_update()
+        for _, s in ipairs(REDSTONE_SIDES) do last_redstone[s] = true end
+        return
+      end
+      if ok then last_redstone[side] = current and true or false end
     end
-    last_redstone_top = current and true or false
   end
 
   while true do
