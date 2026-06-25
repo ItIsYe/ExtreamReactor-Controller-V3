@@ -166,8 +166,11 @@ local function discover_log_modems()
       end
     end
   end
-  for _, entry in ipairs(wireless) do list[#list + 1] = entry end
+  -- Wired zuerst: Log-Traffic soll das Wired-Modem nutzen,
+  -- nicht das Ender-Modem (wireless) das fuer Control/Status benutzt wird.
+  -- So blockieren Log-Retries nie den Control-Loop.
   for _, entry in ipairs(wired) do list[#list + 1] = entry end
+  for _, entry in ipairs(wireless) do list[#list + 1] = entry end
   return list
 end
 
