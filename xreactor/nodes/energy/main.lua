@@ -156,6 +156,14 @@ local matrix_runtime
 local topology_cache
 local energy_health = health.new({})
 local runtime = runtime_context.new({ config = config, role = "energy" })
+local function record_error(scope, err)
+  local msg = tostring(scope or "runtime") .. ": " .. tostring(err or "unknown")
+  if devices then devices.last_error = msg end
+  if utils and type(utils.log) == "function" then
+    pcall(utils.log, "ENERGY", msg, "WARN")
+  end
+end
+
 local devices = runtime.devices
 local ui_state = runtime.ui_state
 local status_payload_cache = runtime.status_payload_cache
