@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v156
 return {
-  manifest_version = 161,
-  manifest_id = "manifest-v161",
+  manifest_version = 162,
+  manifest_id = "manifest-v162",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -32,7 +32,7 @@ return {
   { path = "core/state_machine.lua", size_bytes = 842, hash = "4ae6c19c"},
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d"},
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948"},
-  { path = "core/ui.lua", size_bytes = 12875, hash = "2b78f4f8"},
+  { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e"},
   { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67"},
   { path = "core/utils.lua", size_bytes = 23711, hash = "c57d619c"},
   { path = "core/remote_update.lua", size_bytes = 4995, hash = "d92cc168"},
@@ -62,7 +62,7 @@ return {
     { path = "master/rt_sync.lua", size_bytes = 21620, hash = "da4d653f", required_for={"MASTER"}},
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"}},
     { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"}},
-    { path = "master/runtime_loop.lua", size_bytes = 16716, hash = "debfaa67", required_for={"MASTER"}},
+    { path = "master/runtime_loop.lua", size_bytes = 16934, hash = "57cf1104", required_for={"MASTER"}},
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"}},
     { path = "master/runtime_ops_profile.lua", size_bytes = 10866, hash = "0588f70a", required_for={"MASTER"}},
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"}},
@@ -92,7 +92,7 @@ return {
     { path = "nodes/rt/turbine_control.lua", size_bytes = 42319, hash = "02f343b9", required_for={"RT"}},
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 3983, hash = "0dee3a0d", required_for={"RT"}},
     { path = "nodes/rt/capacity_cache.lua", size_bytes = 2657, hash = "c51d7bd1", required_for={"RT"}},
-    { path = "nodes/rt/config.lua", size_bytes = 3612, hash = "26aa9cc3", required_for={"RT"}},
+    { path = "nodes/rt/config.lua", size_bytes = 3616, hash = "91962a35", required_for={"RT"}},
     { path = "nodes/rt/config_normalizer.lua", size_bytes = 23318, hash = "b6909930", required_for={"RT"}},
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"}},
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 11682, hash = "6198a6d0", required_for={"RT"}},
