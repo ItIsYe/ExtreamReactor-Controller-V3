@@ -40,7 +40,8 @@ local support_ui_pages = require("nodes.support.ui_pages")
 local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.fuel.role_descriptor")
 local config_normalizer = require("nodes.fuel.config_normalizer")
-local logistics_router = require("nodes.fuel.logistics_router")
+local logistics_router     = require("nodes.fuel.logistics_router")
+local redstone_router_lib  = require("nodes.fuel.redstone_router")
 local router_ui_lib     = require("nodes.fuel.router_ui")
 
 local DEFAULT_CONFIG = {
@@ -273,6 +274,9 @@ local function enforce_reserve(current)
   return adjusted
 end
 
+local is_master_connected
+local master_peer_state
+
 local function build_status_payload()
   local amount = enforce_reserve(read_fuel())
   local has_storage = storage ~= nil
@@ -456,11 +460,11 @@ local function handle_command(message)
   return support_command_handler.finish(devices, true)
 end
 
-local function master_peer_state()
+master_peer_state = function()
   return role_logic.master_peer_state(comms, constants.roles.MASTER)
 end
 
-local function is_master_connected()
+is_master_connected = function()
   return role_logic.is_master_connected({
     comms = comms,
     master_role = constants.roles.MASTER,
