@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v156
 return {
-  manifest_version = 159,
-  manifest_id = "manifest-v159",
+  manifest_version = 160,
+  manifest_id = "manifest-v160",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -98,7 +98,7 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 11682, hash = "6198a6d0", required_for={"RT"}},
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 10746, hash = "6664e2ce", required_for={"RT"}},
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"}},
-    { path = "nodes/rt/main.lua", size_bytes = 32036, hash = "b9bee4f1", required_for={"RT"}},
+    { path = "nodes/rt/main.lua", size_bytes = 32087, hash = "204538e3", required_for={"RT"}},
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"}},
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 31927, hash = "30e85bdb", required_for={"RT"}},
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"}},
