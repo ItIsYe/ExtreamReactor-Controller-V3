@@ -6,12 +6,12 @@ local CONFIG = {
   LOG_NAME_SEPARATOR = "_",
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
   REMOTE_LOG_CHANNEL = 6502,
-  REMOTE_LOG_PENDING_LIMIT = 64,
-  REMOTE_LOG_RETRY_EVERY = 30,  -- was 4→8→16→30: still 66% dup rate at 16s.
+  REMOTE_LOG_PENDING_LIMIT = 16,  -- reduziert: weniger Retry-Last wenn Collector haengt
+  REMOTE_LOG_RETRY_EVERY = 60,   -- seltener retrien: weniger Modem-Traffic bei Collector-Problemen
                                 -- node-52/55 with 25 turbines each + 7 nodes =
                                 -- very congested channel. Longer window reduces
                                 -- resends before ACK arrives.
-  REMOTE_LOG_MAX_SENDS = 3,    -- was 6: fewer resend attempts, total retry
+  REMOTE_LOG_MAX_SENDS = 2,    -- schneller aufgeben: Log-Retries blockieren nicht den Control-Loop
                                 -- window = 90s (3×30s) is still acceptable.
   REMOTE_LOG_MODEM_REFRESH_SECONDS = 10
 }
