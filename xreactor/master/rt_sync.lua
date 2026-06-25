@@ -463,12 +463,21 @@ function M.sync_rt_node(ctx, node)
     return
   end
 
+  -- Alle 10 Ticks wird der Setpoint IMMER gesendet, auch wenn ACK_MATCH.
+  -- Das stellt sicher dass Nodes nach SAFE-Mode, Reboot oder kurzer
+  -- Verbindungsunterbrechung den aktuellen Sollwert bekommen ohne
+  -- dass der Master manuell neu gestartet werden muss.
+  node._setpoint_tick = (node._setpoint_tick or 0) + 1
+  local force_resend = (node._setpoint_tick % 10) == 0
   local ack = node.last_command_result
-  if ack_matches_setpoints(node, ack, desired) then
+  if not force_resend and ack_matches_setpoints(node, ack, desired) then
     if ctx.log then
       ctx.log(("RT setpoints deduped node=%s trigger=%s reason=ACK_MATCH"):format(tostring(node_id), trigger))
     end
     return
+  end
+  if force_resend and ctx.log then
+    ctx.log(("RT setpoints force-resend node=%s tick=%d"):format(tostring(node_id), node._setpoint_tick), "INFO")
   end
 
   local shutdown_target = desired.desired_node_state == constants.node_states.OFF and desired.assignment_state == "shutdown"
