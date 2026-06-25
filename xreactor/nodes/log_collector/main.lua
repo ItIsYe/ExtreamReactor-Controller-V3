@@ -23,8 +23,8 @@ end
 
 -- ── Configuration ───────────────────────────────────────────────────────────
 local CHANNEL          = constants.channels and constants.channels.LOG or 6502
-local MAX_LOG_BYTES    = 819200   -- 800 KB per active log file on a 1 MB CC disk
-local MIN_FREE_BYTES   = 4096
+local MAX_LOG_BYTES    = 524288   -- 512 KB per active log file; leaves headroom on 1 MB CC disk
+local MIN_FREE_BYTES   = 8192    -- 8 KB; triggers wipe before disk fills completely
 local DEDUPE_LIMIT     = 512
 local MODEM_REFRESH_S  = 10
 local DISK_REFRESH_S   = 30
@@ -226,18 +226,26 @@ end
 
 local function discover_disks()
   local disks = {}
+  local seen_mounts = {}
   local mounts = find_disk_mounts()
   for index, mount in ipairs(mounts) do
-    local role = ROLE_ORDER[index] or ("DISK" .. tostring(index))
-    local root = mount .. "/xreactor_logs"
-    if probe_disk(mount) then
+    -- Dedup: gleichen Mount nicht zweimal eintragen
+    if seen_mounts[mount] then
+      diag("duplicate mount skipped: " .. tostring(mount))
+    elseif probe_disk(mount) then
+      seen_mounts[mount] = true
+      local role = ROLE_ORDER[index] or ("DISK" .. tostring(index))
+      local root = mount .. "/xreactor_logs"
       disks[#disks + 1] = { id = index, mount = mount, root = root, role = role }
+      diag("disk ok: " .. tostring(mount) .. " role=" .. tostring(role))
     else
       diag("disk probe failed: " .. tostring(mount))
     end
   end
   if #disks == 0 then
     diag("no writable disk found; collected logs will be dropped")
+  else
+    diag(tostring(#disks) .. " disk(s) ready")
   end
   return disks
 end
