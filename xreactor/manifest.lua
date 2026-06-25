@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v156
 return {
-  manifest_version = 155,
-  manifest_id = "manifest-v155",
+  manifest_version = 156,
+  manifest_id = "manifest-v156",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -52,7 +52,7 @@ return {
   roles = {
     master = {
     { path = "core/alert_rules.lua", size_bytes = 13600, hash = "3ef37a5e", required_for={"MASTER"}},
-    { path = "master/config.lua", size_bytes = 6221, hash = "6dac4f39", required_for={"MASTER"}},
+    { path = "master/config.lua", size_bytes = 6221, hash = "2e0fba18", required_for={"MASTER"}},
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"}},
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"}},
     { path = "master/main.lua", size_bytes = 244, hash = "5f009046", required_for={"MASTER"}},
