@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v156
 return {
-  manifest_version = 153,
-  manifest_id = "manifest-v153",
+  manifest_version = 154,
+  manifest_id = "manifest-v154",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "release.lua", size_bytes = 348, hash = "58698923", always=true},
   { path = "start.lua", size_bytes = 7852, hash = "5afa6c02", always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
-  { path = "shared/constants.lua", size_bytes = 1818, hash = "915017d7", always=true},
+  { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true},
   { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460"},
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38"},
   { path = "core/comms.lua", size_bytes = 24518, hash = "4f174212"},
@@ -34,7 +34,7 @@ return {
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948"},
   { path = "core/ui.lua", size_bytes = 12875, hash = "2b78f4f8"},
   { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67"},
-  { path = "core/utils.lua", size_bytes = 22855, hash = "53d43ffe"},
+  { path = "core/utils.lua", size_bytes = 23044, hash = "0e71346e"},
   { path = "core/remote_update.lua", size_bytes = 4995, hash = "d92cc168"},
   { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c"},
   { path = "services/alert_service.lua", size_bytes = 11418, hash = "d04e6700"},
