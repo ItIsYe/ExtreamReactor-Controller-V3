@@ -153,37 +153,38 @@ local function is_ender_modem(modem)
 end
 
 local function discover_log_modems()
+  -- Sammelt ALLE wireless Modems alphabetisch sortiert.
+  -- network.lua nimmt immer das ERSTE (alphabetisch) fuer Control/Status.
+  -- Dieses Modul gibt das ZWEITE (oder spaetere) zurueck fuer Logs.
+  -- Bei nur einem Modem: dasselbe als Fallback damit Logs nicht komplett ausfallen.
   local list = {}
   if not peripheral or type(peripheral.getNames) ~= "function" then return list end
   local ok, names = pcall(peripheral.getNames)
   if not ok or type(names) ~= "table" then return list end
   table.sort(names)
-  local normal_wireless = {}  -- normales Wireless-Modem → bevorzugt fuer Logs
-  local ender_modems    = {}  -- Ender-Modem → Fallback wenn kein normales da
-  local wired           = {}  -- Wired-Modem → letzter Ausweg
+  local all_wireless = {}
   for _, name in ipairs(names) do
     local type_ok, ptype = pcall(peripheral.getType, name)
     if type_ok and ptype == "modem" then
       local wrap_ok, modem = pcall(peripheral.wrap, name)
       if wrap_ok and modem and type(modem.transmit) == "function" then
         local is_wireless = type(modem.isWireless) == "function" and
-                            (function() local ok, r = pcall(modem.isWireless); return ok and r == true end)()
+                            (function() local ok2, r = pcall(modem.isWireless); return ok2 and r == true end)()
         if is_wireless then
-          if is_ender_modem(modem) then
-            ender_modems[#ender_modems + 1] = { name = name, modem = modem, ender = true }
-          else
-            normal_wireless[#normal_wireless + 1] = { name = name, modem = modem, ender = false }
-          end
-        else
-          wired[#wired + 1] = { name = name, modem = modem, ender = false }
+          all_wireless[#all_wireless + 1] = { name = name, modem = modem }
         end
       end
     end
   end
-  -- Reihenfolge: normales Wireless zuerst (fuer Logs), dann Ender als Fallback, dann Wired.
-  for _, e in ipairs(normal_wireless) do list[#list + 1] = e end
-  for _, e in ipairs(ender_modems)    do list[#list + 1] = e end
-  for _, e in ipairs(wired)           do list[#list + 1] = e end
+  if #all_wireless == 0 then return list end
+  -- Zweites Modem fuer Logs (Index 2+), erstes nur als Fallback
+  for i = 2, #all_wireless do
+    list[#list + 1] = all_wireless[i]
+  end
+  if #list == 0 then
+    -- Nur ein Modem vorhanden: dasselbe fuer Logs (geteilter Kanal)
+    list[1] = all_wireless[1]
+  end
   return list
 end
 
