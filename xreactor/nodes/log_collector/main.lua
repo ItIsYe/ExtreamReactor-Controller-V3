@@ -16,15 +16,15 @@ end
 local CHANNEL = constants.channels and constants.channels.LOG or 6502
 local FALLBACK_ROOT = "/xreactor_collected_logs"
 -- CC:Tweaked Disketten haben 1MB Kapazität.
--- MAX_LOG_BYTES: maximale Größe einer Log-Datei bevor sie rotiert wird.
--- 128KB = sinnvoller Wert: Rotation bevor die Disk voll ist.
-local MAX_LOG_BYTES = 131072   -- 128 KB pro Log-Datei
--- ROTATE_KEEP: wie viele alte Rotationen behalten.
--- 3 × 128KB = 384KB pro Node — passt auf eine 1MB Disk mit Puffer.
-local ROTATE_KEEP = 3
+-- Eine Disk pro Rolle (z.B. /disk=RT, /disk1=MASTER etc.), je 1MB.
+-- MAX_LOG_BYTES: ab dieser Größe wird die Log-Datei rotiert.
+-- 800KB = nutzt fast die gesamte Diskette für aktive Logs.
+local MAX_LOG_BYTES = 819200   -- 800 KB pro Log-Datei
+-- ROTATE_KEEP: Anzahl alter Rotationen die behalten werden.
+-- 0 = keine Rotation, bei voll wird die gesamte Disk geleert (wipe).
+local ROTATE_KEEP = 0
 -- MIN_FREE_BYTES: Mindest-Freiraum bevor prune_any_logs() greift.
--- 8KB ist ausreichend — CC:Tweaked Disketten sind klein, großzügiger Puffer sinnlos.
-local MIN_FREE_BYTES = 8192    -- 8 KB freier Platz Mindest-Schwelle
+local MIN_FREE_BYTES = 4096    -- 4 KB
 local DEDUPE_LIMIT = 512
 local MODEM_REFRESH_SECONDS = 10
 local SELF_ROLE = "LOG_COLLECTOR"
@@ -227,45 +227,19 @@ end
 -- Die globale disk-API unterstützt BEIDE Fälle direkt mit dem Peripheral-
 -- Namen als Argument — kein peripheral.wrap() nötig.
 local function detect_disk_mounts()
+  -- Nur fs.list("/") nutzen: findet alle /disk, /disk1, /disk2 etc.
+  -- Die peripheral.getNames() Methode fand dieselben Disks nochmal
+  -- und führte zu Duplikaten in der Disk-Liste.
   local roots, seen = {}, {}
   diag("--- disk scan ---")
-  if peripheral and type(peripheral.getNames) == "function" then
-    local ok, names = pcall(peripheral.getNames)
-    diag("getNames ok=" .. tostring(ok) .. " n=" .. tostring(type(names)=="table" and #names or 0))
-    if ok and type(names) == "table" then
-      for _, name in ipairs(names) do
-        local ok_type, ptype = pcall(peripheral.getType, name)
-        local is_drive = ok_type and ptype == "drive"
-        if is_drive then
-          local mount = nil
-          if disk and type(disk.getMountPath) == "function" then
-            local ok_m, m = pcall(disk.getMountPath, name)
-            diag(name .. ": disk.getMountPath ok=" .. tostring(ok_m) .. " => " .. tostring(m))
-            if ok_m and type(m) == "string" and m ~= "" then mount = m end
-          end
-          if not mount then
-            local ok_wrap, drv = pcall(peripheral.wrap, name)
-            if ok_wrap and drv and type(drv.getMountPath) == "function" then
-              local ok_m2, m2 = pcall(drv.getMountPath)
-              diag(name .. ": wrap.getMountPath ok=" .. tostring(ok_m2) .. " => " .. tostring(m2))
-              if ok_m2 and type(m2) == "string" and m2 ~= "" then mount = m2 end
-            end
-          end
-          if mount then
-            add_unique(roots, seen, mount)
-          else
-            diag(name .. ": KEIN Mount-Pfad gefunden (Diskette eingelegt?)")
-          end
-        end
-      end
-    end
-  end
   if fs and fs.list then
     local ok, entries = pcall(fs.list, "/")
     if ok and type(entries) == "table" then
       table.sort(entries)
       for _, entry in ipairs(entries) do
-        if type(entry) == "string" and entry:match("^disk%d*$") then add_unique(roots, seen, "/" .. entry) end
+        if type(entry) == "string" and entry:match("^disk%d*$") then
+          add_unique(roots, seen, "/" .. entry)
+        end
       end
     end
   end
@@ -390,9 +364,10 @@ local function discover_log_disks()
   end
 
   if #disks == 0 then
-    ensure_dir(FALLBACK_ROOT)
-    disks[#disks + 1] = { mount = "/", root = FALLBACK_ROOT, fallback = true, label = "", id = 1 }
-    diag("=> FALLBACK aktiv (keine nutzbare externe Disk)")
+    -- Kein Fallback auf den Computer selbst — keine Logs auf /xreactor_collected_logs.
+    -- Wenn keine externe Disk vorhanden: Logs werden verworfen (Drop) bis eine Disk eingelegt wird.
+    -- Der nächste refresh_disks_if_needed() Aufruf findet sie dann automatisch.
+    diag("=> Keine externe Disk verfuegbar — Logs werden verworfen bis Disk eingelegt")
   else
     diag("=> " .. #disks .. " Disk(s)")
     for _, d in ipairs(disks) do
@@ -633,16 +608,12 @@ local function write_log(payload)
     -- (mkdir failed, write failed) bedeuten NICHT dass die Disk voll ist
     -- und sollten kein Wipe der vorhandenen Logs auslösen.
     if err == "disk full" then
-      switch_next_disk(role)
-      -- If we wrapped around (back to first disk), wipe it to start fresh.
-      if attempt == count and stats.disk_index == 1 then
-        local disk_entry_wipe = current_disk()
-        if disk_entry_wipe then
-          local wiped = wipe_logs(disk_entry_wipe.root)
-          stats.disk_switches = stats.disk_switches + 1
-          stats.last_error = string.format("all disks full, wiped disk[1] (%d files)", wiped)
-        end
-      end
+      -- Eine Disk pro Rolle: es gibt keine andere Disk zum Wechseln.
+      -- Stattdessen: Disk sofort leeren und nochmal versuchen.
+      -- Die ältesten Logs werden gelöscht damit neue Platz haben.
+      local wiped = wipe_logs and wipe_logs(disk_entry and disk_entry.root or stats.log_root) or 0
+      stats.disk_switches = (stats.disk_switches or 0) + 1
+      diag("disk full — wiped " .. tostring(wiped) .. " files, retrying")
     else
       -- Anderer Fehler (z.B. mkdir/write fehlgeschlagen) — nicht wiped,
       -- einfach abbrechen und Grund über last_write_debug sichtbar machen.
