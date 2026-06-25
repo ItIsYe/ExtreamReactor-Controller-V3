@@ -1,10 +1,10 @@
 -- nodes/log_collector/main.lua
--- XReactor LOG Collector — v2 Rewrite
--- Empfängt Logs von allen Nodes via Modem, schreibt auf externe Disketten.
--- Eine Diskette pro Rolle: /disk=RT, /disk1=MASTER, /disk2=ENERGY etc.
--- Bei voller Disk: alte Logs löschen und neu schreiben (kein PC-Fallback).
+-- XReactor LOG Collector — completed v2 rewrite
+-- Receives LOG_EVENT packets via modem and writes them to external disks.
+-- One disk slot per role: /disk=RT, /disk1=MASTER, /disk2=ENERGY, ...
+-- No PC fallback for collected logs: if no writable disk exists, logs are dropped.
 
--- ── Abhängigkeiten ────────────────────────────────────────────────────────
+-- ── Dependencies ────────────────────────────────────────────────────────────
 if type(package) == "table" and type(package.path) == "string" then
   local extra = ";/xreactor/?.lua;/xreactor/?/init.lua;/xreactor/?/main.lua"
   if not package.path:find("/xreactor/%?%.lua", 1, false) then
@@ -20,126 +20,177 @@ if not ok_const or type(constants) ~= "table" then
   constants = { channels = { LOG = 6502 } }
 end
 
--- ── Konfiguration ─────────────────────────────────────────────────────────
-local CHANNEL             = constants.channels and constants.channels.LOG or 6502
-local MAX_LOG_BYTES       = 819200   -- 800 KB: nutzt fast die gesamte 1 MB Diskette
-local MIN_FREE_BYTES      = 4096     -- 4 KB Mindestschwelle vor prune
-local DEDUPE_LIMIT        = 512      -- Max. gecachte Event-IDs
-local MODEM_REFRESH_S     = 10       -- Sekunden zwischen Modem-Refreshes
-local SELF_ROLE           = "LOG_COLLECTOR"
-local MONITOR_CFG_FILE    = "/xreactor/config/log_monitor.txt"
+-- ── Configuration ───────────────────────────────────────────────────────────
+local CHANNEL          = constants.channels and constants.channels.LOG or 6502
+local MAX_LOG_BYTES    = 819200   -- 800 KB per active log file on a 1 MB CC disk
+local MIN_FREE_BYTES   = 4096
+local DEDUPE_LIMIT     = 512
+local MODEM_REFRESH_S  = 10
+local DISK_REFRESH_S   = 30
+local DRAW_INTERVAL_S  = 5
+local SELF_ROLE        = "LOG_COLLECTOR"
+local MONITOR_CFG_FILE = "/xreactor/config/log_monitor.txt"
+local ROLE_ORDER       = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
 
--- Disketten-Reihenfolge: /disk=RT, /disk1=MASTER, /disk2=ENERGY ...
-local ROLE_ORDER = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
-
--- ── Zustand ───────────────────────────────────────────────────────────────
+-- ── Runtime state ───────────────────────────────────────────────────────────
 local stats = {
-  received = 0, written = 0, dropped = 0, duplicates = 0,
-  ack_sent = 0, paused_dropped = 0, wiped = 0,
-  disks = {}, disk_index = 1,
-  last_write_index = nil, last_write_mount = "-",
-  last_write_path = "-", last_node = "-", last_level = "-",
-  last_error = nil, log_root = nil,
-  modem = nil, modems = {}, modem_refreshes = 0,
+  received = 0,
+  written = 0,
+  dropped = 0,
+  duplicates = 0,
+  ack_sent = 0,
+  paused_dropped = 0,
+  wiped = 0,
+  disks = {},
+  disk_index = 1,
+  last_write_index = nil,
+  last_write_mount = "-",
+  last_write_path = "-",
+  last_node = "-",
+  last_role = "-",
+  last_level = "-",
+  last_error = nil,
+  log_root = nil,
+  modem = "",
+  modems = {},
+  modem_refreshes = 0,
+  disk_refreshes = 0,
   next_modem_refresh = 0,
-  display = nil, display_name = "term",
-  paused = false, pause_button = nil, log_mode_buttons = {},
-  seen = {}, seen_order = {},
+  next_disk_refresh = 0,
+  display = nil,
+  display_name = "term",
+  paused = false,
+  pause_button = nil,
+  log_mode_buttons = {},
+  seen = {},
+  seen_order = {},
+  last_draw_s = 0,
 }
 
--- Live-Diagnose: nur im RAM, rendert direkt im UI (unabhängig von Disk-IO)
 local live_diag = {}
-local function diag(msg)
-  live_diag[#live_diag + 1] = tostring(msg)
-  if #live_diag > 12 then table.remove(live_diag, 1) end
+
+-- ── Generic helpers ─────────────────────────────────────────────────────────
+local function color(name, fallback)
+  if colors and colors[name] then return colors[name] end
+  return fallback or 1
 end
 
--- ── Hilfsfunktionen ───────────────────────────────────────────────────────
-local function c(name)
-  return colors and colors[name] or nil
-end
-
-local function fit(text, w)
-  local s = tostring(text or ""):gsub("[\n\r]", " ")
-  w = math.max(1, tonumber(w) or #s)
-  if #s <= w then return s end
-  return s:sub(1, w - 1) .. "~"
-end
-
-local function trim(s)
-  return tostring(s or ""):match("^%s*(.-)%s*$") or ""
-end
-
-local function safe_read(path)
-  if not fs.exists(path) then return nil end
-  local f = fs.open(path, "r")
-  if not f then return nil end
-  local s = f.readAll(); f.close(); return s
+local function diag(message)
+  live_diag[#live_diag + 1] = tostring(message or "")
+  while #live_diag > 12 do table.remove(live_diag, 1) end
 end
 
 local function now_s()
   if os and type(os.epoch) == "function" then
-    local ok, v = pcall(os.epoch, "utc")
-    if ok and type(v) == "number" then return math.floor(v / 1000) end
+    local ok, value = pcall(os.epoch, "utc")
+    if ok and type(value) == "number" then return math.floor(value / 1000) end
+  end
+  if os and type(os.clock) == "function" then
+    local ok, value = pcall(os.clock)
+    if ok and type(value) == "number" then return math.floor(value) end
   end
   return 0
 end
 
-local function free_space(path)
-  if type(fs.getFreeSpace) ~= "function" then return 0 end
-  local ok, v = pcall(fs.getFreeSpace, path or "/")
-  if not ok then return 0 end
-  if v == "unlimited" then return math.huge end
-  return tonumber(v) or 0
+local function now_ms()
+  if os and type(os.epoch) == "function" then
+    local ok, value = pcall(os.epoch, "utc")
+    if ok and type(value) == "number" then return value end
+  end
+  return now_s() * 1000
 end
 
-local function ensure_dir(path)
-  if fs.exists(path) then return fs.isDir(path) end
-  local ok = pcall(fs.makeDir, path)
-  return ok and fs.exists(path) and fs.isDir(path)
-end
-
-local function safe_del(path)
-  if fs.exists(path) then pcall(fs.delete, path) end
-end
-
-local function sanitize(v)
-  local s = tostring(v or "unknown"):lower():gsub("[^a-z0-9_%-]+", "_")
-  s = s:gsub("^_+", ""):gsub("_+$", "")
-  return s ~= "" and s or "unknown"
-end
-
-local function node_id()
+local function computer_node_id()
   if os and type(os.getComputerID) == "function" then
     return "pc-" .. tostring(os.getComputerID())
   end
   return "log-collector"
 end
 
--- ── Disk-Management ───────────────────────────────────────────────────────
--- Alle Log-Dateien auf einer Disk löschen (bei voller Disk)
+local function fit(text, width)
+  local s = tostring(text or ""):gsub("[\r\n]", " ")
+  local w = math.max(1, tonumber(width) or #s)
+  if #s <= w then return s end
+  if w <= 1 then return s:sub(1, 1) end
+  return s:sub(1, w - 1) .. "~"
+end
+
+local function trim(text)
+  return tostring(text or ""):match("^%s*(.-)%s*$") or ""
+end
+
+local function safe_read(path)
+  if not (fs and fs.exists and fs.open) then return nil end
+  if not fs.exists(path) then return nil end
+  local handle = fs.open(path, "r")
+  if not handle then return nil end
+  local data = handle.readAll()
+  handle.close()
+  return data
+end
+
+local function safe_delete(path)
+  if fs and fs.exists and fs.delete and fs.exists(path) then
+    pcall(fs.delete, path)
+  end
+end
+
+local function ensure_dir(path)
+  if not (fs and fs.exists and fs.isDir and fs.makeDir) then return false end
+  if fs.exists(path) then return fs.isDir(path) end
+  local ok = pcall(fs.makeDir, path)
+  return ok and fs.exists(path) and fs.isDir(path)
+end
+
+local function free_space(path)
+  if not (fs and type(fs.getFreeSpace) == "function") then return 0 end
+  local ok, value = pcall(fs.getFreeSpace, path or "/")
+  if not ok then return 0 end
+  if value == "unlimited" then return math.huge end
+  return tonumber(value) or 0
+end
+
+local function sanitize(value)
+  local s = tostring(value or "unknown"):lower():gsub("[^a-z0-9_%-]+", "_")
+  s = s:gsub("^_+", ""):gsub("_+$", "")
+  return s ~= "" and s or "unknown"
+end
+
+local function role_index(role)
+  local wanted = tostring(role or ""):upper()
+  for i, name in ipairs(ROLE_ORDER) do
+    if name == wanted then return i end
+  end
+  return nil
+end
+
+-- ── Disk handling ───────────────────────────────────────────────────────────
 local function wipe_disk(root)
   local wiped = 0
+  if not (fs and fs.exists and fs.isDir and fs.list) then return 0 end
+
   local function sweep(dir)
     if not fs.exists(dir) or not fs.isDir(dir) then return end
     local ok, entries = pcall(fs.list, dir)
     if not ok or type(entries) ~= "table" then return end
     for _, name in ipairs(entries) do
-      local p = fs.combine(dir, name)
-      if fs.isDir(p) then sweep(p)
-      else safe_del(p); wiped = wiped + 1 end
+      local path = fs.combine(dir, name)
+      if fs.isDir(path) then
+        sweep(path)
+      else
+        safe_delete(path)
+        wiped = wiped + 1
+      end
     end
   end
+
   sweep(root)
-  stats.wiped = (stats.wiped or 0) + wiped
+  stats.wiped = stats.wiped + wiped
   return wiped
 end
 
--- Findet alle externen Disketten über fs.list("/")
--- Gibt alphabetisch sortierte Liste zurück: /disk, /disk1, /disk2 ...
 local function find_disk_mounts()
   local mounts = {}
-  diag("--- disk scan ---")
   if not (fs and fs.list) then return mounts end
   local ok, entries = pcall(fs.list, "/")
   if not ok or type(entries) ~= "table" then return mounts end
@@ -149,83 +200,76 @@ local function find_disk_mounts()
       mounts[#mounts + 1] = "/" .. entry
     end
   end
-  diag("mounts: " .. (#mounts > 0 and table.concat(mounts, ", ") or "keine"))
   return mounts
 end
 
--- Probe-Schreib-Test: kann auf diese Disk geschrieben werden?
-local function probe_disk(root)
-  local dir = root .. "/xreactor_logs"
-  if not ensure_dir(dir) then return false end
-  local path = dir .. "/.probe"
-  local ok = pcall(function()
-    local h = fs.open(path, "w")
-    if not h then error("fs.open nil") end
-    h.write("x"); h.close()
-    fs.delete(path)
-  end)
-  if not ok then
-    -- Disk voll: leeren und nochmal
-    wipe_disk(dir)
-    ok = pcall(function()
-      local h = fs.open(path, "w")
-      if not h then error("fs.open nil after wipe") end
-      h.write("x"); h.close()
-      fs.delete(path)
-    end)
+local function probe_disk(mount)
+  local root = mount .. "/xreactor_logs"
+  if not ensure_dir(root) then return false end
+  local probe = root .. "/.probe"
+
+  local function write_probe()
+    local handle = fs.open(probe, "w")
+    if not handle then error("fs.open returned nil") end
+    handle.write("ok")
+    handle.close()
+    fs.delete(probe)
   end
-  return ok
+
+  local ok = pcall(write_probe)
+  if ok then return true end
+
+  wipe_disk(root)
+  return pcall(write_probe)
 end
 
-local refreshing = false
-
 local function discover_disks()
-  local mounts = find_disk_mounts()
   local disks = {}
-  for idx, mount in ipairs(mounts) do
+  local mounts = find_disk_mounts()
+  for index, mount in ipairs(mounts) do
+    local role = ROLE_ORDER[index] or ("DISK" .. tostring(index))
     local root = mount .. "/xreactor_logs"
     if probe_disk(mount) then
-      local role = ROLE_ORDER[idx] or ("DISK" .. idx)
-      diag(mount .. " → " .. role)
-      disks[#disks + 1] = { mount = mount, root = root, role = role, id = idx }
+      disks[#disks + 1] = { id = index, mount = mount, root = root, role = role }
     else
-      diag(mount .. " → probe FAILED")
+      diag("disk probe failed: " .. tostring(mount))
     end
   end
   if #disks == 0 then
-    diag("KEINE Disk verfügbar — Logs werden verworfen")
-  else
-    diag(tostring(#disks) .. " Disk(s) bereit")
+    diag("no writable disk found; collected logs will be dropped")
   end
   return disks
 end
 
 local function refresh_disks(force)
-  if refreshing then return end
-  if not force and #stats.disks > 0 and stats.received % 200 ~= 0 then return end
-  refreshing = true
+  local ts = now_s()
+  if not force and ts < stats.next_disk_refresh then return end
+  stats.next_disk_refresh = ts + DISK_REFRESH_S
   stats.disks = discover_disks()
-  stats.disk_index = 1
+  stats.disk_refreshes = stats.disk_refreshes + 1
   stats.log_root = stats.disks[1] and stats.disks[1].root or nil
-  refreshing = false
 end
 
--- Gibt die Disk für eine Rolle zurück (nach ROLE_ORDER Index)
 local function disk_for_role(role)
-  if not role then return stats.disks[stats.disk_index] end
-  local r = tostring(role):upper()
-  for _, d in ipairs(stats.disks) do
-    if d.role == r then return d end
+  if #stats.disks == 0 then return nil end
+  local idx = role_index(role)
+  if idx then
+    for _, disk in ipairs(stats.disks) do
+      if disk.id == idx or disk.role == tostring(role or ""):upper() then
+        return disk
+      end
+    end
   end
-  return stats.disks[stats.disk_index]
+  return stats.disks[stats.disk_index] or stats.disks[1]
 end
 
--- ── Log schreiben ─────────────────────────────────────────────────────────
-local function format_line(payload)
-  local ts = payload.ts or (os.epoch and os.epoch("utc")) or "?"
+local function format_log_line(payload)
+  local ts = payload.ts or now_ms()
   return string.format("[%s] %s | %s | %s | %s",
-    tostring(ts), tostring(payload.role or "?"),
-    tostring(payload.prefix or "LOG"), tostring(payload.level or "INFO"),
+    tostring(ts),
+    tostring(payload.role or "?"),
+    tostring(payload.prefix or "LOG"),
+    tostring(payload.level or "INFO"),
     tostring(payload.message or payload.line or ""))
 end
 
@@ -234,6 +278,7 @@ local function write_log(payload)
     stats.paused_dropped = stats.paused_dropped + 1
     return false, "paused"
   end
+
   refresh_disks(false)
   if #stats.disks == 0 then
     stats.dropped = stats.dropped + 1
@@ -241,67 +286,65 @@ local function write_log(payload)
   end
 
   local disk = disk_for_role(payload.role)
-  if not disk then return false, "no disk" end
+  if not disk then
+    stats.dropped = stats.dropped + 1
+    return false, "no disk for role"
+  end
 
   local role_dir = disk.root .. "/" .. sanitize(payload.role or "unknown")
-  if not ensure_dir(role_dir) then return false, "mkdir failed" end
+  if not ensure_dir(role_dir) then
+    stats.dropped = stats.dropped + 1
+    return false, "mkdir failed"
+  end
 
   local path = role_dir .. "/" .. sanitize(payload.node_id or "unknown") .. ".log"
-
-  -- Datei rotieren wenn zu groß
   if fs.exists(path) and fs.getSize(path) >= MAX_LOG_BYTES then
-    safe_del(path)
+    safe_delete(path)
   end
 
-  -- Platz prüfen
-  local free = free_space(disk.mount)
-  if free < MIN_FREE_BYTES then
-    -- Disk leeren und neu starten
+  if free_space(disk.mount) < MIN_FREE_BYTES then
     local wiped = wipe_disk(disk.root)
-    diag("disk full: wiped " .. tostring(wiped) .. " files on " .. disk.mount)
-    free = free_space(disk.mount)
+    diag("disk full: wiped " .. tostring(wiped) .. " file(s) on " .. tostring(disk.mount))
   end
 
-  local line_text = format_line(payload) .. "\n"
+  local line = format_log_line(payload) .. "\n"
   local ok, err = pcall(function()
-    local h = fs.open(path, "a")
-    if not h then error("fs.open nil") end
-    h.write(line_text); h.close()
+    local handle = fs.open(path, "a")
+    if not handle then error("fs.open returned nil") end
+    handle.write(line)
+    handle.close()
   end)
 
   if not ok then
-    local es = tostring(err or "write failed")
-    diag("write failed: " .. es:sub(1, 60))
-    -- Bei "Out of space": Disk leeren und nochmal
-    if es:lower():find("out of space", 1, true) or es:lower():find("no space", 1, true) then
+    local message = tostring(err or "write failed")
+    local lower = message:lower()
+    if lower:find("out of space", 1, true) or lower:find("no space", 1, true) then
       local wiped = wipe_disk(disk.root)
-      diag("out of space: wiped " .. tostring(wiped) .. " files, retry")
+      diag("write out-of-space: wiped " .. tostring(wiped) .. " file(s), retry")
       ok, err = pcall(function()
-        local h = fs.open(path, "a")
-        if not h then error("fs.open nil after wipe") end
-        h.write(line_text); h.close()
+        local handle = fs.open(path, "a")
+        if not handle then error("fs.open returned nil after wipe") end
+        handle.write(line)
+        handle.close()
       end)
-      if ok then
-        stats.last_write_index = disk.id
-        stats.last_write_mount = disk.mount
-        stats.last_write_path  = path
-        stats.last_error = nil
-        return true
-      end
     end
-    stats.last_error = tostring(err or "write failed"):sub(1, 80)
+  end
+
+  if not ok then
+    stats.last_error = tostring(err or "write failed"):sub(1, 90)
+    stats.dropped = stats.dropped + 1
     return false, stats.last_error
   end
 
   stats.last_write_index = disk.id
   stats.last_write_mount = disk.mount
-  stats.last_write_path  = path
-  stats.log_root         = disk.root
+  stats.last_write_path = path
+  stats.log_root = disk.root
   stats.last_error = nil
   return true
 end
 
--- ── Deduplizierung ────────────────────────────────────────────────────────
+-- ── Dedupe ─────────────────────────────────────────────────────────────────
 local function seen(event_id)
   return type(event_id) == "string" and event_id ~= "" and stats.seen[event_id] == true
 end
@@ -316,26 +359,42 @@ local function remember(event_id)
   end
 end
 
--- ── Modem ─────────────────────────────────────────────────────────────────
+-- ── Modem handling ──────────────────────────────────────────────────────────
+local function is_modem_name(name)
+  if not peripheral or type(peripheral.getType) ~= "function" then return false end
+  local ok, ptype = pcall(peripheral.getType, name)
+  if not ok then return false end
+  if ptype == "modem" then return true end
+  if type(ptype) == "table" then
+    for _, item in pairs(ptype) do if item == "modem" then return true end end
+  end
+  return tostring(ptype or ""):lower():find("modem", 1, true) ~= nil
+end
+
 local function refresh_modems(force)
-  local now = now_s()
-  if not force and now < stats.next_modem_refresh then return end
-  stats.next_modem_refresh = now + MODEM_REFRESH_S
+  local ts = now_s()
+  if not force and ts < stats.next_modem_refresh then return end
+  stats.next_modem_refresh = ts + MODEM_REFRESH_S
   stats.modems = {}
+
   local names = {}
-  if not (peripheral and peripheral.getNames) then return end
-  local ok, perifs = pcall(peripheral.getNames)
-  if not ok then return end
-  for _, name in ipairs(perifs) do
-    if peripheral.getType(name) == "modem" then
-      local ok2, m = pcall(peripheral.wrap, name)
-      if ok2 and m and type(m.open) == "function" then
-        pcall(m.open, CHANNEL)
-        stats.modems[#stats.modems + 1] = m
-        names[#names + 1] = name
+  if peripheral and type(peripheral.getNames) == "function" then
+    local ok, perifs = pcall(peripheral.getNames)
+    if ok and type(perifs) == "table" then
+      table.sort(perifs)
+      for _, name in ipairs(perifs) do
+        if is_modem_name(name) then
+          local ok_wrap, modem = pcall(peripheral.wrap, name)
+          if ok_wrap and modem and type(modem.open) == "function" then
+            pcall(modem.open, CHANNEL)
+            stats.modems[#stats.modems + 1] = modem
+            names[#names + 1] = name
+          end
+        end
       end
     end
   end
+
   stats.modem = table.concat(names, ",")
   stats.modem_refreshes = stats.modem_refreshes + 1
 end
@@ -343,196 +402,220 @@ end
 local function send_ack(payload, status)
   if not payload.ack or not payload.event_id then return end
   local ack = {
-    type = "LOG_ACK", proto = "xreactor-log-v2",
-    event_id = payload.event_id, to_node = payload.node_id,
-    collector_node = node_id(), status = status or "written",
-    ts = os.epoch and os.epoch("utc") or nil
+    type = "LOG_ACK",
+    proto = "xreactor-log-v2",
+    event_id = payload.event_id,
+    to_node = payload.node_id,
+    collector_node = computer_node_id(),
+    status = status or "written",
+    ts = now_ms(),
   }
-  for _, m in ipairs(stats.modems or {}) do
-    if type(m.transmit) == "function" then
-      local ok = pcall(m.transmit, CHANNEL, CHANNEL, ack)
+  for _, modem in ipairs(stats.modems or {}) do
+    if type(modem.transmit) == "function" then
+      local ok = pcall(modem.transmit, CHANNEL, CHANNEL, ack)
       if ok then stats.ack_sent = stats.ack_sent + 1 end
     end
   end
 end
 
--- ── Self-Log ──────────────────────────────────────────────────────────────
-local function self_log(msg, level)
+-- ── Self log ────────────────────────────────────────────────────────────────
+local function self_log(message, level)
+  local event_id = computer_node_id() .. ":self:" .. tostring(now_ms())
   local payload = {
-    type = "LOG_EVENT", proto = "xreactor-log-v2",
-    node_id = node_id(), role = SELF_ROLE, prefix = "LOG",
-    level = level or "INFO", message = msg,
-    event_id = node_id() .. ":self:" .. tostring(now_s()),
-    ts = os.epoch and os.epoch("utc") or nil
+    type = "LOG_EVENT",
+    proto = "xreactor-log-v2",
+    node_id = computer_node_id(),
+    role = SELF_ROLE,
+    prefix = "LOG",
+    level = level or "INFO",
+    message = tostring(message or ""),
+    event_id = event_id,
+    ts = now_ms(),
   }
   local ok, err = write_log(payload)
-  if ok then remember(payload.event_id)
-  elseif err ~= "paused" then stats.last_error = err end
+  if ok then remember(event_id) elseif err ~= "paused" then stats.last_error = err end
 end
 
--- ── Display / UI ──────────────────────────────────────────────────────────
+-- ── UI helpers ──────────────────────────────────────────────────────────────
+local function display_size()
+  if not term or type(term.getSize) ~= "function" then return 40, 20 end
+  local ok, w, h = pcall(term.getSize)
+  if ok then return tonumber(w) or 40, tonumber(h) or 20 end
+  return 40, 20
+end
+
 local function line_ui(x, y, text, fg, bg)
-  local w = ({ term.getSize() })[1] or 40
-  term.setCursorPos(x, y)
-  if fg then term.setTextColor(fg) end
-  if bg then term.setBackgroundColor(bg) end
-  term.write(fit(text, math.max(1, w - x + 1)))
-  term.setTextColor(c("white") or 1)
-  term.setBackgroundColor(c("black") or 32768)
+  if not term then return end
+  local w = ({ display_size() })[1]
+  pcall(term.setCursorPos, x, y)
+  if bg and term.setBackgroundColor then pcall(term.setBackgroundColor, bg) end
+  if fg and term.setTextColor then pcall(term.setTextColor, fg) end
+  if term.write then pcall(term.write, fit(text, math.max(1, w - x + 1))) end
+  if term.setTextColor then pcall(term.setTextColor, color("white", 1)) end
+  if term.setBackgroundColor then pcall(term.setBackgroundColor, color("black", 32768)) end
 end
 
-local function badge_ui(x, y, text, status)
-  local bg = status == "OK" and c("lime") or status == "WARN" and c("yellow")
-    or status == "ERR" and c("red") or status == "INFO" and c("cyan") or c("gray")
-  local label = " " .. fit(text, 10) .. " "
-  buf_line(x, y, label, c("black") or 1, bg or c("gray"))
-  return #label
+local function clear_line(y)
+  local w = ({ display_size() })[1]
+  line_ui(1, y, string.rep(" ", w), color("white", 1), color("black", 32768))
 end
 
-local function progress_ui(x, y, w, pct, ok)
+local function badge_ui(x, y, label, status)
+  local bg = color("gray", 128)
+  if status == "OK" then bg = color("lime", 32)
+  elseif status == "WARN" then bg = color("yellow", 16)
+  elseif status == "ERR" then bg = color("red", 16384)
+  elseif status == "INFO" then bg = color("cyan", 2048) end
+  local text = " " .. fit(label, 10) .. " "
+  line_ui(x, y, text, color("black", 32768), bg)
+  return #text
+end
+
+local function progress_ui(x, y, width, pct, good)
   local p = math.max(0, math.min(1, tonumber(pct) or 0))
-  local fill = math.floor(w * p)
-  local fg = ok and c("lime") or c("yellow")
-  local bar = string.rep("|", fill) .. string.rep(" ", w - fill)
-  buf_line(x, y, bar, fg, c("gray"))
+  local fill = math.floor(width * p)
+  local bar = string.rep("|", fill) .. string.rep(" ", math.max(0, width - fill))
+  line_ui(x, y, bar, good and color("lime", 32) or color("yellow", 16), color("gray", 128))
 end
 
-local function draw_pause_btn(x, y)
+local function draw_pause_button(x, y)
   local label = stats.paused and " RESUME DISK WRITES " or " PAUSE DISK WRITES "
-  stats.pause_button = { x=x, y=y, w=#label, h=1 }
-  buf_line(x, y, label, c("black") or 1, stats.paused and c("lime") or c("yellow"))
+  stats.pause_button = { x = x, y = y, w = #label, h = 1 }
+  line_ui(x, y, label, color("black", 32768), stats.paused and color("lime", 32) or color("yellow", 16))
 end
 
-local function draw_logmode_btns(x, y)
+local function draw_log_mode_buttons(x, y)
+  stats.log_mode_buttons = {}
   if not utils then return end
   local mode = utils.get_log_mode and utils.get_log_mode() or "all"
   local modes = { "all", "disk", "remote", "terminal", "none" }
-  local labels = { all="All ", disk="Disk", remote="Rmt ", terminal="Term", none="Off " }
-  buf_line(x, y, "Log:", c("gray"), c("black"))
+  local labels = { all = "All ", disk = "Disk", remote = "Rmt ", terminal = "Term", none = "Off " }
+  line_ui(x, y, "Log:", color("gray", 128), color("black", 32768))
   local cx = x + 4
-  stats.log_mode_buttons = {}
-  for _, m in ipairs(modes) do
-    local lbl = labels[m] or m
-    buf_line(cx, y, lbl,
-      mode == m and c("black") or c("white"),
-      mode == m and c("lime") or c("gray"))
-    stats.log_mode_buttons[#stats.log_mode_buttons+1] = { x=cx, y=y, w=4, h=1, mode=m }
-    cx = cx + 4
+  for _, item in ipairs(modes) do
+    local selected = mode == item
+    local label = labels[item] or item
+    line_ui(cx, y, label,
+      selected and color("black", 32768) or color("white", 1),
+      selected and color("lime", 32) or color("gray", 128))
+    stats.log_mode_buttons[#stats.log_mode_buttons + 1] = { x = cx, y = y, w = #label, h = 1, mode = item }
+    cx = cx + #label
   end
 end
 
-local function btn_hit(btn, x, y)
-  return btn and x >= btn.x and x < btn.x+btn.w and y >= btn.y and y < btn.y+btn.h
+local function button_hit(button, x, y)
+  return button and x >= button.x and x < button.x + button.w and y >= button.y and y < button.y + button.h
 end
 
-local draw
-draw = function()
+local function draw()
   refresh_disks(false)
   refresh_modems(false)
-  local w, h = term.getSize()
-  term.clear()
-  term.setTextColor(c("white") or 1)
-  term.setBackgroundColor(c("black") or 32768)
 
-  -- Zeile 1: Header
-  line_ui(1, 1, string.rep(" ", w), c("black"), c("gray"))
-  line_ui(2, 1, " XReactor LOG ", c("black"), c("gray"))
+  local w, h = display_size()
+  if term and term.setBackgroundColor then term.setBackgroundColor(color("black", 32768)) end
+  if term and term.setTextColor then term.setTextColor(color("white", 1)) end
+  if term and term.clear then term.clear() end
 
-  -- Zeile 2: Status-Badges
-  local status = stats.paused and "WARN" or (stats.last_error and "WARN" or "OK")
+  line_ui(1, 1, string.rep(" ", w), color("black", 32768), color("gray", 128))
+  line_ui(2, 1, " XReactor LOG Collector v2 ", color("black", 32768), color("gray", 128))
+
+  local status = "OK"
+  if stats.last_error then status = "WARN" end
+  if #stats.modems == 0 or #stats.disks == 0 then status = "ERR" end
+  if stats.paused then status = "WARN" end
+
   local bx = 2
   bx = bx + badge_ui(bx, 2, stats.paused and "PAUSED" or status, status) + 1
   bx = bx + badge_ui(bx, 2, "CH " .. tostring(CHANNEL), "INFO") + 1
-  bx = bx + badge_ui(bx, 2, tostring(stats.modem ~= "" and stats.modem or "NO-MODEM"),
-    stats.modem and stats.modem ~= "" and "OK" or "ERR")
+  bx = bx + badge_ui(bx, 2, stats.modem ~= "" and stats.modem or "NO-MODEM", stats.modem ~= "" and "OK" or "ERR") + 1
+  badge_ui(bx, 2, "DISKS " .. tostring(#stats.disks), #stats.disks > 0 and "OK" or "ERR")
 
-  -- Zeile 3-5: Buttons
-  line_ui(2, 3, fit("Display " .. tostring(stats.display_name or "term"), w-2), c("lightGray"))
-  draw_pause_btn(2, 4)
-  draw_logmode_btns(2, 5)
+  line_ui(2, 3, "Display: " .. tostring(stats.display_name or "term"), color("lightGray", 256))
+  draw_pause_button(2, 4)
+  draw_log_mode_buttons(2, 5)
 
-  -- Zeile 6-7: Disk-Ring
-  line_ui(2, 6, "Disk Ring (* = aktive Disk)", c("cyan"))
+  line_ui(2, 6, "Disk Ring (/disk=RT, /disk1=MASTER, /disk2=ENERGY, ...)", color("cyan", 2048))
   local dx = 2
-  for i, d in ipairs(stats.disks) do
-    local free = free_space(d.mount)
-    local st = i == stats.last_write_index and "INFO"
-      or (free < MIN_FREE_BYTES and "WARN" or "OK")
-    local label = (i == stats.last_write_index and "*" or "") .. tostring(i) .. ":" .. d.role:sub(1,3)
-    dx = dx + badge_ui(dx, 7, label, st)
+  for _, disk in ipairs(stats.disks) do
+    local free = free_space(disk.mount)
+    local disk_status = free < MIN_FREE_BYTES and "WARN" or "OK"
+    local label = (disk.id == stats.last_write_index and "*" or "") .. tostring(disk.id) .. ":" .. tostring(disk.role):sub(1, 3)
+    dx = dx + badge_ui(dx, 7, label, disk_status)
     if dx > w - 4 then break end
-  -- Nur geänderte Zeilen auf Monitor schreiben
-  flush_buf()
   end
 
-  -- Zeile 8-12: Disk-Status
-  local cur = stats.disks[stats.last_write_index or 1] or {}
-  line_ui(2, 8, string.format("Disk %s/%s  %s  → %s",
-    tostring(stats.last_write_index or "-"), tostring(#stats.disks),
-    tostring(cur.mount or "-"), tostring(cur.role or "-")), c("lightGray"))
-  line_ui(2, 9, "Path " .. fit(tostring(stats.last_write_path or "-"), w-7), c("lightGray"))
-  local free = free_space(cur.mount or "/")
-  local free_ok = free > MIN_FREE_BYTES * 4
-  line_ui(2, 10, "Free " .. tostring(free) .. " bytes", free_ok and c("lime") or c("yellow"))
-  progress_ui(2, 11, math.max(8, w-3),
-    free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free_ok)
+  local current = stats.disks[stats.last_write_index or 1] or stats.disks[1]
+  if current then
+    line_ui(2, 8, string.format("Last disk: %s role=%s", tostring(current.mount), tostring(current.role)), color("lightGray", 256))
+    line_ui(2, 9, "Path: " .. fit(stats.last_write_path or "-", w - 8), color("lightGray", 256))
+    local free = free_space(current.mount)
+    local free_ok = free > MIN_FREE_BYTES * 4
+    line_ui(2, 10, "Free: " .. tostring(free) .. " bytes", free_ok and color("lime", 32) or color("yellow", 16))
+    progress_ui(2, 11, math.max(8, w - 3), free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free_ok)
+  else
+    line_ui(2, 8, "No writable disk. Logs are dropped until a disk is attached.", color("red", 16384))
+  end
 
-  -- Zeile 13-18: Traffic
-  line_ui(2, 13, "Traffic", c("cyan"))
-  line_ui(2, 14, string.format("Recv %-6s Write %-6s Drop %-5s Dup %-5s",
-    stats.received, stats.written, stats.dropped, stats.duplicates), c("white"))
-  line_ui(2, 15, string.format("ACK %-7s Wiped %-5s Paused %-5s",
-    stats.ack_sent, stats.wiped or 0, stats.paused_dropped), c("lightGray"))
-  line_ui(2, 16, string.format("Modem-Refreshes %-3s", stats.modem_refreshes), c("lightGray"))
-  line_ui(2, 18, "Last: " .. fit(tostring(stats.last_node) .. " " .. tostring(stats.last_level), w-8), c("white"))
+  line_ui(2, 13, "Traffic", color("cyan", 2048))
+  line_ui(2, 14, string.format("Recv %-6s Write %-6s Drop %-6s Dup %-6s", stats.received, stats.written, stats.dropped, stats.duplicates), color("white", 1))
+  line_ui(2, 15, string.format("ACK %-7s Wiped %-5s PauseDrop %-5s", stats.ack_sent, stats.wiped, stats.paused_dropped), color("lightGray", 256))
+  line_ui(2, 16, string.format("Refresh modem=%s disk=%s", stats.modem_refreshes, stats.disk_refreshes), color("lightGray", 256))
+  line_ui(2, 18, "Last: " .. fit(tostring(stats.last_role) .. "/" .. tostring(stats.last_node) .. " " .. tostring(stats.last_level), w - 8), color("white", 1))
 
-  -- Zeile 20+: Fehler oder Status
   if stats.last_error and h >= 20 then
-    line_ui(2, 20, "Error", c("red"))
-    line_ui(2, 21, fit(tostring(stats.last_error), w-3), c("red"))
+    line_ui(2, 20, "Error: " .. fit(stats.last_error, w - 9), color("red", 16384))
   elseif stats.paused and h >= 20 then
-    line_ui(2, 20, "PAUSED — Logs werden verworfen", c("yellow"))
+    line_ui(2, 20, "PAUSED: incoming logs are acknowledged only when written/duplicate; paused logs are dropped.", color("yellow", 16))
   elseif h >= 20 then
-    line_ui(2, 20, "Status OK", c("lime"))
+    line_ui(2, 20, "Status OK", color("lime", 32))
   end
 
-  -- Zeile 23+: Live-Diagnose
   if #live_diag > 0 and h >= 23 then
-    line_ui(2, 22, "Disk Diagnose:", c("cyan"))
-    local max_lines = math.min(#live_diag, h - 23)
-    for i = 1, max_lines do
-      local entry = live_diag[#live_diag - max_lines + i]
-      line_ui(2, 22 + i, fit(tostring(entry), w-3), c("lightGray"))
+    line_ui(2, 22, "Diagnostics:", color("cyan", 2048))
+    local rows = math.min(#live_diag, h - 22)
+    for i = 1, rows do
+      local entry = live_diag[#live_diag - rows + i]
+      line_ui(2, 22 + i, fit(entry, w - 3), color("lightGray", 256))
     end
   end
+
+  stats.last_draw_s = now_s()
 end
 
--- ── Display-Erkennung ─────────────────────────────────────────────────────
+-- ── Display selection ───────────────────────────────────────────────────────
 local function find_display()
-  local cfg = trim(safe_read(MONITOR_CFG_FILE) or "")
-  if cfg ~= "" then
-    local ok, mon = pcall(peripheral.wrap, cfg)
-    if ok and mon then return cfg, mon end
+  local configured = trim(safe_read(MONITOR_CFG_FILE) or "")
+  if configured ~= "" and peripheral and peripheral.wrap then
+    local ok, monitor = pcall(peripheral.wrap, configured)
+    if ok and monitor then return configured, monitor end
   end
-  if peripheral and peripheral.getNames then
+
+  if peripheral and type(peripheral.getNames) == "function" then
     local ok, names = pcall(peripheral.getNames)
-    if ok and names then
+    if ok and type(names) == "table" then
       table.sort(names)
       for _, name in ipairs(names) do
-        if peripheral.getType(name) == "monitor" then
-          local ok2, mon = pcall(peripheral.wrap, name)
-          if ok2 and mon then return name, mon end
+        local ok_type, ptype = pcall(peripheral.getType, name)
+        if ok_type and tostring(ptype or ""):lower():find("monitor", 1, true) then
+          local ok_wrap, monitor = pcall(peripheral.wrap, name)
+          if ok_wrap and monitor then return name, monitor end
         end
       end
     end
   end
+
   return "term", term
 end
 
--- ── Hauptschleife ─────────────────────────────────────────────────────────
-local function handle_event(message)
+-- ── Packet handling ─────────────────────────────────────────────────────────
+local function valid_log_event(message)
+  return type(message) == "table" and message.type == "LOG_EVENT"
+end
+
+local function handle_log_event(message)
   stats.received = stats.received + 1
-  stats.last_node  = message.node_id or "?"
+  stats.last_node = message.node_id or "?"
+  stats.last_role = message.role or "?"
   stats.last_level = message.level or "?"
 
   if seen(message.event_id) then
@@ -544,11 +627,9 @@ local function handle_event(message)
   local ok, err = write_log(message)
   if ok then
     stats.written = stats.written + 1
-    stats.last_error = nil
     remember(message.event_id)
     send_ack(message, "written")
   else
-    stats.dropped = stats.dropped + 1
     if err ~= "paused" then stats.last_error = err end
   end
 end
@@ -560,87 +641,92 @@ local function toggle_pause()
   draw()
 end
 
-local function run()
-  -- Display einrichten
-  local dname, dmon = find_display()
-  stats.display_name = dname
-  stats.display = dmon
-  if dmon and dmon ~= term and term.redirect then
-    if type(dmon.setTextScale) == "function" then pcall(dmon.setTextScale, 0.5) end
-    pcall(term.redirect, dmon)
-  end
-
-  -- Disks und Modems initialisieren
-  refresh_disks(true)
-  refresh_modems(true)
-
-  if #stats.modems == 0 then
-    term.clear(); term.setCursorPos(1,1)
-    print("FEHLER: Kein Modem gefunden!")
-    print("Bitte Modem anschliessen und neu starten.")
-    os.pullEvent("key")
+local function handle_touch(x, y)
+  if button_hit(stats.pause_button, x, y) then
+    toggle_pause()
     return
   end
-
-  self_log("LOG Collector gestartet — disks=" .. tostring(#stats.disks)
-    .. " modem=" .. tostring(stats.modem), "INFO")
-  draw()
-
-  local timer = os.startTimer and os.startTimer(30)
-
-  while true do
-    local ev = { os.pullEvent() }
-    local name = ev[1]
-
-    if name == "modem_message" then
-      local channel, msg = ev[3], ev[5]
-      if channel == CHANNEL and type(msg) == "table" and msg.type == "LOG_EVENT" then
-        local ok, err = pcall(handle_event, msg)
-        if not ok then
-          stats.dropped = stats.dropped + 1
-          stats.last_error = "handle crashed: " .. tostring(err):sub(1,60)
-        end
-        if stats.received % 20 == 0 or not ok then draw() end
+  if utils and utils.set_log_mode then
+    for _, button in ipairs(stats.log_mode_buttons or {}) do
+      if button_hit(button, x, y) then
+        utils.set_log_mode(button.mode)
+        draw()
+        return
       end
-
-    elseif name == "monitor_touch" or name == "mouse_click" then
-      local x, y = ev[3], ev[4]
-      if btn_hit(stats.pause_button, x, y) then toggle_pause() end
-      for _, b in ipairs(stats.log_mode_buttons or {}) do
-        if btn_hit(b, x, y) and utils and utils.set_log_mode then
-          utils.set_log_mode(b.mode); draw()
-        end
-      end
-
-    elseif name == "key" then
-      if keys and (ev[2] == keys.p or ev[2] == keys.space) then toggle_pause() end
-
-    elseif name == "timer" and ev[2] == timer then
-      refresh_modems(false)
-      self_log(string.format("Status recv=%d write=%d drop=%d dup=%d",
-        stats.received, stats.written, stats.dropped, stats.duplicates), "DEBUG")
-      draw()
-      timer = os.startTimer and os.startTimer(30)
     end
   end
 end
 
--- ── Start ─────────────────────────────────────────────────────────────────
+-- ── Main loop ───────────────────────────────────────────────────────────────
+local function run()
+  local display_name, display = find_display()
+  stats.display_name = display_name
+  stats.display = display
+
+  if display and display ~= term and term and term.redirect then
+    if type(display.setTextScale) == "function" then pcall(display.setTextScale, 0.5) end
+    pcall(term.redirect, display)
+  end
+
+  refresh_disks(true)
+  refresh_modems(true)
+  self_log("LOG Collector started; disks=" .. tostring(#stats.disks) .. " modem=" .. tostring(stats.modem), "INFO")
+  draw()
+
+  local timer = os.startTimer and os.startTimer(1)
+  while true do
+    local event = { os.pullEvent() }
+    local name = event[1]
+
+    if name == "modem_message" then
+      local channel = event[3]
+      local message = event[5]
+      if channel == CHANNEL and valid_log_event(message) then
+        local ok, err = pcall(handle_log_event, message)
+        if not ok then
+          stats.dropped = stats.dropped + 1
+          stats.last_error = "handle crashed: " .. tostring(err):sub(1, 70)
+          diag(stats.last_error)
+        end
+        if stats.received % 20 == 0 or not ok then draw() end
+      end
+    elseif name == "monitor_touch" then
+      handle_touch(event[3], event[4])
+    elseif name == "mouse_click" then
+      handle_touch(event[3], event[4])
+    elseif name == "key" then
+      if keys and (event[2] == keys.p or event[2] == keys.space) then toggle_pause() end
+    elseif name == "disk" or name == "disk_eject" or name == "peripheral" or name == "peripheral_detach" then
+      refresh_disks(true)
+      refresh_modems(true)
+      draw()
+    elseif name == "timer" and event[2] == timer then
+      refresh_disks(false)
+      refresh_modems(false)
+      if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
+      timer = os.startTimer and os.startTimer(1)
+    end
+  end
+end
+
+-- ── Crash screen ────────────────────────────────────────────────────────────
 local ok, err = xpcall(run, function(e) return e end)
 if ok then return end
-if tostring(err or ""):lower():find("terminate") then return end
+if tostring(err or ""):lower():find("terminate", 1, true) then return end
 
--- Crash-Screen
 if term then
-  term.setBackgroundColor(colors and colors.black or 32768)
-  term.setTextColor(colors and colors.red or 16384)
-  term.clear(); term.setCursorPos(1,1)
+  if term.setBackgroundColor then term.setBackgroundColor(color("black", 32768)) end
+  if term.setTextColor then term.setTextColor(color("red", 16384)) end
+  if term.clear then term.clear() end
+  if term.setCursorPos then term.setCursorPos(1, 1) end
   print("=== LOG COLLECTOR CRASH ===")
-  term.setTextColor(colors and colors.white or 1)
+  if term.setTextColor then term.setTextColor(color("white", 1)) end
+  print("")
   print(tostring(err))
-  print("recv=" .. stats.received .. " write=" .. stats.written .. " drop=" .. stats.dropped)
-  term.setTextColor(colors and colors.yellow or 16)
+  print("")
+  print("recv=" .. tostring(stats.received) .. " write=" .. tostring(stats.written) .. " drop=" .. tostring(stats.dropped))
+  if term.setTextColor then term.setTextColor(color("yellow", 16)) end
   print("Taste druecken um neu zu starten...")
 end
 pcall(os.pullEvent, "key")
-if os.reboot then os.reboot() end
+if os and os.reboot then os.reboot() end
