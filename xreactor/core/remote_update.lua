@@ -1,40 +1,27 @@
 -- core/remote_update.lua
 --
--- TEMPORÄRES FEATURE — gedacht für die aktive Entwicklungsphase, in der
--- Nodes häufig neue Versionen brauchen ohne jede einzeln manuell am PC
--- den Installer ausführen zu müssen. Kann später wieder entfernt werden.
+-- Funk-Update bleibt vorhanden, ist aber ab jetzt explizit arming-geschuetzt.
+-- Ohne lokale Freigabedatei wird kein Installer geladen und kein Update gestartet.
 --
--- Wird ausgelöst durch:
---   a) REMOTE_UPDATE Command vom Master (über Control-Kanal) — jede Node
---      ruft beim Empfang M.handle_command(opts) auf (siehe unten)
---   b) Redstone-Signal auf "top" des Master-Computers selbst, das den
---      Broadcast an alle Nodes auslöst UND den Master selbst aktualisiert
---      (siehe master/runtime_loop.lua)
+-- Arming-Datei auf jedem Computer:
+--   /xreactor/config/remote_update.lua
 --
--- Der Installer läuft non-interaktiv: vorhandene Rolle wird automatisch
--- beibehalten (keine Rückfrage), damit das über Funk ohne Tastatureingabe
--- funktioniert.
+-- Minimal:
+--   return { enabled = true }
 --
--- M.handle_command(opts) ist die EINE zentrale Stelle für "ein REMOTE_UPDATE
--- Command kam an, was jetzt?" — vorher war dieselbe Logik (ACK senden, kurz
--- loggen, M.run aufrufen) an 4 verschiedenen Stellen im Code dupliziert
--- (rt/command_handler.lua, support/command_handler.lua, energy/main.lua,
--- master/runtime_loop.lua), jede mit leicht abweichendem Code. Künftige
--- Verhaltensänderungen (z.B. Versions-Check vor dem Update, Bestätigung
--- abwarten) müssen jetzt nur noch hier einmal geändert werden.
+-- Optional enger:
+--   return { enabled = true, token = "mein-token" }
 --
--- opts:
---   log_prefix (string)   — z.B. "RT", "ENERGY", "SUPPORT" (für Log-Zeilen)
---   utils (table, optional) — falls vorhanden, nutzt utils.log(prefix, msg, level)
---   log_fn (function, optional) — alternativ direkter Log-Callback(level, text)
---   send_ack (function, optional) — wird VOR dem Update-Start aufgerufen,
---     um dem Master sofort zu bestätigen dass das Command angekommen ist
---     (der eigentliche Installer-Lauf braucht Zeit und rebootet danach,
---     ein Status-Antwort-Roundtrip macht zu diesem Zeitpunkt keinen Sinn mehr)
+-- Wenn ein Token gesetzt ist, muss der Command payload.command.token denselben Wert
+-- enthalten. Damit bleibt Remote-Update nutzbar, aber ein versehentliches Redstone-
+-- Signal oder altes Broadcast-Paket startet nicht mehr sofort den Installer.
 
 local M = {}
 
+local ARMING_CONFIG_PATH = "/xreactor/config/remote_update.lua"
+
 local function make_log(opts)
+  opts = opts or {}
   if type(opts.log_fn) == "function" then
     return opts.log_fn
   end
@@ -45,18 +32,65 @@ local function make_log(opts)
   return function() end
 end
 
+local function load_arming_config()
+  if not fs or type(fs.exists) ~= "function" or type(fs.open) ~= "function" then
+    return nil, "fs unavailable"
+  end
+  if not fs.exists(ARMING_CONFIG_PATH) then
+    return nil, "not armed"
+  end
+  local handle = fs.open(ARMING_CONFIG_PATH, "r")
+  if not handle then return nil, "arming config unreadable" end
+  local content = handle.readAll()
+  handle.close()
+  local loader, err = load(content, "=remote_update_arming", "t", {})
+  if not loader then return nil, "arming config parse failed: " .. tostring(err) end
+  local ok, result = pcall(loader)
+  if not ok then return nil, "arming config failed: " .. tostring(result) end
+  if type(result) ~= "table" or result.enabled ~= true then
+    return nil, "not armed"
+  end
+  return result
+end
+
+local function command_token(opts)
+  local message = opts and opts.message or nil
+  local payload = type(message) == "table" and message.payload or nil
+  local command = type(payload) == "table" and payload.command or nil
+  if type(command) == "table" then return command.token end
+  return opts and opts.token or nil
+end
+
+function M.is_armed(opts)
+  local cfg, reason = load_arming_config()
+  if not cfg then return false, reason end
+  if cfg.token ~= nil then
+    local token = command_token(opts)
+    if tostring(token or "") ~= tostring(cfg.token) then
+      return false, "token mismatch"
+    end
+  end
+  return true, "armed"
+end
+
 -- Lädt den Installer von GitHub frisch herunter und führt ihn aus.
-function M.run(log_fn)
+function M.run(log_fn, opts)
+  opts = opts or {}
   local log = type(log_fn) == "function" and log_fn or function() end
 
-  log("INFO", "Remote-Update: lade Installer...")
+  local armed, arm_reason = M.is_armed(opts)
+  if not armed then
+    log("WARN", "Remote-Update blocked: " .. tostring(arm_reason) .. " (create " .. ARMING_CONFIG_PATH .. " to arm)")
+    return false, arm_reason or "not armed"
+  end
+
+  log("INFO", "Remote-Update: arming OK, lade Installer...")
   if not http or type(http.get) == "nil" then
     log("ERROR", "Remote-Update: http nicht verfuegbar, abgebrochen")
     return false, "no http"
   end
 
   local url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer"
-  -- Timeout 15s: verhindert ewiges Haengen wenn GitHub nicht erreichbar
   local ok_fetch, response = pcall(http.get, url, nil, { timeout = 15 })
   if not ok_fetch or not response then
     log("ERROR", "Remote-Update: Installer-Download fehlgeschlagen (timeout oder Netzwerkfehler)")
@@ -78,15 +112,9 @@ function M.run(log_fn)
   h.write(body)
   h.close()
 
-  -- non-interaktiv: bestehende Rolle automatisch beibehalten/neu installieren
-  -- (entspricht Druecken von "j" bei der "Diese Rolle behalten?" Abfrage).
   _G.__xreactor_remote_update = true
 
   log("INFO", "Remote-Update: starte Installer...")
-  -- shell.run() ist nur in einer interaktiven Shell-Umgebung verfügbar.
-  -- Diese Funktion läuft typischerweise als Hintergrund-Code (per dofile
-  -- geladen), wo die globale shell-API nicht existiert. dofile() ist die
-  -- native, shell-unabhängige Alternative dafür.
   local ok_run, err
   if type(shell) == "table" and type(shell.run) == "function" then
     ok_run, err = pcall(function() shell.run(path) end)
@@ -104,17 +132,19 @@ function M.run(log_fn)
   return true
 end
 
--- Zentraler Einstiegspunkt für alle Node-Typen, wenn ein REMOTE_UPDATE
--- Command vom Master ankommt. Sendet (falls möglich) zuerst ein ACK, loggt
--- den Start, und ruft dann M.run() auf.
 function M.handle_command(opts)
   opts = opts or {}
   local log = make_log(opts)
+  local armed, arm_reason = M.is_armed(opts)
+  if not armed then
+    log("WARN", "Remote-Update command blocked: " .. tostring(arm_reason) .. " (not armed)")
+    return false, arm_reason or "not armed"
+  end
   if type(opts.send_ack) == "function" then
     pcall(opts.send_ack)
   end
-  log("WARN", "Remote-Update command received, starting installer...")
-  return M.run(log)
+  log("WARN", "Remote-Update command accepted, starting installer...")
+  return M.run(log, opts)
 end
 
 return M
