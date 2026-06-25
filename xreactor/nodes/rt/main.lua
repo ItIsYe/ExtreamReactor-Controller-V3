@@ -419,8 +419,8 @@ local function update_monitor()
     registry             = registry,
     last_command_ts      = last_command_ts,
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
-    manifest_id          = "manifest-v157",
-    release_id           = "beta-v157",
+    manifest_id          = "manifest-v158",
+    release_id           = "beta-v158",
   })
 end
 
@@ -527,12 +527,13 @@ local function init()
         devices.proto_mismatch = true; return
       end
       if message.role == constants.roles.MASTER then
+        local was_connected = master_seen_ts ~= nil
         master_seen_ts = os.epoch("utc")
         if message.type == constants.message_types.STATUS
             and message.payload and message.payload.alerts then
           master_alerts = message.payload.alerts
         end
-        if not master_seen_ts then
+        if not was_connected then
           log("INFO", "Master connected: " .. tostring(message.role or "?"))
         end
       end
