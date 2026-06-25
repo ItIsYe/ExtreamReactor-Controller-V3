@@ -248,6 +248,9 @@ local function read_buffers()
   return info
 end
 
+local get_feed_router
+local process_state = {}
+
 local function build_status_payload()
   local reasons = {}
   if not next(buffers) then
@@ -401,8 +404,7 @@ local function handle_monitor_touch(x, y)
 end
 
 -- P4 Fix: process()-Aufrufe protokollieren (Erfolg/Fehler/nicht vorhanden)
--- damit erkennbar ist ob die Wiederaufbereitung tatsächlich läuft.
-local process_state = {}  -- { [name] = "ok" | "error" | "unsupported" }
+-- damit erkennbar ist ob die Wiederaufbereitung tatsächlich läuft.  -- { [name] = "ok" | "error" | "unsupported" }
 
 local function process_buffers()
   if standby then return end
@@ -442,7 +444,7 @@ local function get_rs_router()
   return rs_router
 end
 
-local function get_feed_router()
+get_feed_router = function()
   if not router then
     router = feed_router_lib.new({
       config    = config,
