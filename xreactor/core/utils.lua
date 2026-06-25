@@ -143,34 +143,47 @@ local function make_boot_id(node_id)
   return tostring(node_id or "node") .. ":boot:" .. tostring(computer) .. ":" .. tostring(epoch) .. ":" .. random_part
 end
 
+-- Erkennt ob ein Modem ein Ender-Modem (unbegrenzte Reichweite) ist.
+-- Ender-Modem: getRange() → math.huge; normales Wireless: getRange() → ~64.
+local function is_ender_modem(modem)
+  if type(modem.getRange) ~= "function" then return false end
+  local ok, range = pcall(modem.getRange)
+  if not ok or type(range) ~= "number" then return false end
+  return range >= 65536  -- math.huge oder sehr grosser Wert = Ender-Modem
+end
+
 local function discover_log_modems()
   local list = {}
   if not peripheral or type(peripheral.getNames) ~= "function" then return list end
   local ok, names = pcall(peripheral.getNames)
   if not ok or type(names) ~= "table" then return list end
   table.sort(names)
-  local wired = {}
-  local wireless = {}
+  local normal_wireless = {}  -- normales Wireless-Modem → bevorzugt fuer Logs
+  local ender_modems    = {}  -- Ender-Modem → Fallback wenn kein normales da
+  local wired           = {}  -- Wired-Modem → letzter Ausweg
   for _, name in ipairs(names) do
     local type_ok, ptype = pcall(peripheral.getType, name)
     if type_ok and ptype == "modem" then
       local wrap_ok, modem = pcall(peripheral.wrap, name)
       if wrap_ok and modem and type(modem.transmit) == "function" then
-        local is_wireless = false
-        if type(modem.isWireless) == "function" then
-          local wireless_ok, result = pcall(modem.isWireless)
-          is_wireless = wireless_ok and result == true
+        local is_wireless = type(modem.isWireless) == "function" and
+                            (function() local ok, r = pcall(modem.isWireless); return ok and r == true end)()
+        if is_wireless then
+          if is_ender_modem(modem) then
+            ender_modems[#ender_modems + 1] = { name = name, modem = modem, ender = true }
+          else
+            normal_wireless[#normal_wireless + 1] = { name = name, modem = modem, ender = false }
+          end
+        else
+          wired[#wired + 1] = { name = name, modem = modem, ender = false }
         end
-        local entry = { name = name, modem = modem, wireless = is_wireless }
-        if is_wireless then wireless[#wireless + 1] = entry else wired[#wired + 1] = entry end
       end
     end
   end
-  -- Wireless zuerst: Log-Modem ist ein separates Ender-Modem auf Kanal 6503.
-  -- Nodes haben zwei Ender-Modems: eines fuer Control (6500/6501),
-  -- eines fuer Logs (6503). Alle wireless Modems werden versucht.
-  for _, entry in ipairs(wireless) do list[#list + 1] = entry end
-  for _, entry in ipairs(wired) do list[#list + 1] = entry end
+  -- Reihenfolge: normales Wireless zuerst (fuer Logs), dann Ender als Fallback, dann Wired.
+  for _, e in ipairs(normal_wireless) do list[#list + 1] = e end
+  for _, e in ipairs(ender_modems)    do list[#list + 1] = e end
+  for _, e in ipairs(wired)           do list[#list + 1] = e end
   return list
 end
 
