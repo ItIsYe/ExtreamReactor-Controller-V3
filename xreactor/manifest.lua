@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v156
 return {
-  manifest_version = 160,
-  manifest_id = "manifest-v160",
+  manifest_version = 152,
+  manifest_id = "manifest-v152",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -147,7 +147,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"}},
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 28502, hash = "4e2dc384", required_for={"LOG"}},
+    { path = "nodes/log_collector/main.lua", size_bytes = 28907, hash = "801b9316", required_for={"LOG"}},
     },
     shared_support = {
     { path = "nodes/support/command_handler.lua", size_bytes = 5102, hash = "8aeba298", required_for={"WATER", "FUEL", "REPROCESSING"}},
