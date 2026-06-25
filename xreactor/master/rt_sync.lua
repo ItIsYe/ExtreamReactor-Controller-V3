@@ -109,18 +109,6 @@ function M.same_setpoints(a, b)
      and a.desired_node_state   == b.desired_node_state
 end
 
-local function same_shutdown_intent(a, b)
-  if not a or not b then return false end
-  local state_a = a.assignment_state
-  local state_b = b.assignment_state
-  local shutdown_like_a = state_a == "shutdown" or state_a == "shed" or state_a == "standby"
-  local shutdown_like_b = state_b == "shutdown" or state_b == "shed" or state_b == "standby"
-  if not shutdown_like_a or not shutdown_like_b then return false end
-  return a.desired_node_state   == b.desired_node_state
-     and a.shutdown_stage       == b.shutdown_stage
-     and (tonumber(a.power_target_percent) or 0) == (tonumber(b.power_target_percent) or 0)
-end
-
 local function should_debounce_resend(node, desired, now)
   local min_gap_ms = 1000
   local last_ts = tonumber(node.last_setpoints_ts) or 0
