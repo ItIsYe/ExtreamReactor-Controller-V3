@@ -172,10 +172,8 @@ function M.resolve_target_action(reason, decision)
 end
 
 function M.log_turbine_control_metrics(fields, log)
-  local should_log, repeat_count = should_log_turbine_control(fields or {})
-  if not should_log then
-    return
-  end
+  -- TurbineCtrl DEBUG deaktiviert: zu viel Output (repeat_count=1000+ pro Turbine)
+  return
   log("DEBUG", "TurbineCtrl name=" .. tostring(fields.name)
       .. " repeat_count=" .. tostring(repeat_count)
       .. " rpm=" .. tostring(fields.rpm)
