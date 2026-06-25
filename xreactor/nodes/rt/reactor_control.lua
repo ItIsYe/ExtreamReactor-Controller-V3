@@ -290,18 +290,10 @@ function M.applyReactorRods(ctx, target, allow_overmax, source)
     local cap_clamped, cap_reason = ctx.rails.clamp_with_reason(
       clamped, cfg_min, cfg_max)
     if cap_reason == "MIN" then
-      ctx.log("DEBUG", "ROD_APPLY_CLAMPED_BY_CONFIG_MIN source=" .. tostring(source)
-        .. " requested=" .. tostring(clamped) .. " clamped=" .. tostring(cap_clamped)
-        .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max))
     elseif cap_reason == "MAX" then
-      ctx.log("DEBUG", "ROD_APPLY_CLAMPED_BY_CONFIG_MAX source=" .. tostring(source)
-        .. " requested=" .. tostring(clamped) .. " clamped=" .. tostring(cap_clamped)
-        .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max))
     end
     clamped = cap_clamped
   elseif allow_overmax then
-    ctx.log("DEBUG", "ROD_APPLY_SAFE_OVERRIDE source=" .. tostring(source)
-      .. " requested=" .. tostring(target) .. " clamped=" .. tostring(clamped))
   end
 
   if ctx.last_applied_rods == clamped then
@@ -339,7 +331,6 @@ function M.applyReactorRods(ctx, target, allow_overmax, source)
     ctx.last_rod_direction = applied_direction
   end
   ctx.autonom_state.pending_rod_direction = nil
-  ctx.log("INFO", "Applied rods " .. tostring(clamped) .. "% source=" .. tostring(source))
   return true
 end
 
@@ -367,18 +358,11 @@ function M.log_reactor_control_state(ctx)
   ctx.last_reactor_debug_log = now
   local sample_rods = M.read_current_rods(ctx) or ctx.last_applied_rods or "n/a"
   local tick_age = now - ctx.last_reactor_tick
-  ctx.log("DEBUG", "ReactorCtrl state=" .. tostring(ctx.current_state())
-    .. " rods=" .. tostring(sample_rods)
-    .. " ticks=" .. string.format("%.1f", tick_age) .. "s")
 end
 
 function M.log_reactor_control_tick(ctx)
   local sample_demand = ctx.last_reactor_demand
   local age = os.clock() - ctx.last_rod_change_ts
-  ctx.log("DEBUG", "ReactorCtrl demand=" .. tostring(sample_demand)
-    .. " dir=" .. tostring(ctx.last_rod_direction)
-    .. " age=" .. string.format("%.1f", age))
-  ctx.log("INFO", "ReactorCtrl demand=" .. tostring(sample_demand))
 end
 
 -- ── Kernregler: Steam-Margin → Rod-Niveau ───────────────────────────────────
@@ -412,13 +396,7 @@ function M.controlReactor(ctx)
     local clamped_target, clamp_reason = ctx.rails.clamp_with_reason(
       target_rods, cfg_min, cfg_max)
     if clamp_reason == "MIN" then
-      ctx.log("DEBUG", "ROD_TARGET_CLAMPED_BY_CONFIG_MIN current=" .. tostring(current_rods)
-        .. " target=" .. tostring(target_rods) .. " clamped=" .. tostring(clamped_target)
-        .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max))
     elseif clamp_reason == "MAX" then
-      ctx.log("DEBUG", "ROD_TARGET_CLAMPED_BY_CONFIG_MAX current=" .. tostring(current_rods)
-        .. " target=" .. tostring(target_rods) .. " clamped=" .. tostring(clamped_target)
-        .. " cfg_min=" .. tostring(cfg_min) .. " cfg_max=" .. tostring(cfg_max))
     end
     target_rods = clamped_target
   end
@@ -462,9 +440,6 @@ function M.controlReactor(ctx)
 
   if applied_rods == current_rods then
     if ramp_diag and ramp_diag.reason == "RAMP_APPLIED" then
-      ctx.log("DEBUG", "ROD_RAMP_APPLIED requested_delta=" .. tostring(ramp_diag.requested_delta)
-        .. " applied_delta=" .. tostring(ramp_diag.applied_delta)
-        .. " current=" .. tostring(current_rods) .. " target=" .. tostring(target_rods))
     end
     return
   end
@@ -502,31 +477,12 @@ function M.controlReactor(ctx)
       tostring(guard_diag and guard_diag.unavailable == true)))
 
     if limited then
-      ctx.log("DEBUG", "ROD_TARGET_CLAMPED_BY_RATE_LIMIT current=" .. tostring(current_rods)
-        .. " target=" .. tostring(target_rods)
-        .. " requested_delta=" .. tostring(ramp_diag.requested_delta)
-        .. " applied_delta=" .. tostring(ramp_diag.applied_delta)
-        .. " max_step=" .. tostring(ramp_diag.max_step))
     end
     if ramp_diag and ramp_diag.coolant_limited then
-      ctx.log("DEBUG", "ROD_CHANGE_LIMITED_BY_COOLANT_MARGIN ratio="
-        .. tostring(min_coolant_ratio)
-        .. " mode=" .. tostring(ramp_diag.coolant_reason)
-        .. " requested_delta=" .. tostring(ramp_diag.requested_delta)
-        .. " applied_delta=" .. tostring(ramp_diag.applied_delta))
     end
     if guard_diag and guard_diag.blocked_opening then
-      ctx.log("DEBUG", "ROD_OPEN_BLOCKED_BY_INTERNAL_STEAM_GUARD ratio_ema="
-        .. tostring(guard_diag.ema_ratio)
-        .. " current=" .. tostring(current_rods)
-        .. " requested_target=" .. tostring(pre_guard_target_rods)
-        .. " adjusted_target=" .. tostring(target_rods))
     end
     if guard_diag and guard_diag.forced_closing then
-      ctx.log("DEBUG", "ROD_CLOSE_FORCED_BY_INTERNAL_STEAM_GUARD ratio_ema="
-        .. tostring(guard_diag.ema_ratio)
-        .. " current=" .. tostring(current_rods)
-        .. " adjusted_target=" .. tostring(target_rods))
     end
   end
 end
