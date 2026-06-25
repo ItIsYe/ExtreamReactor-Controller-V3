@@ -1,9 +1,9 @@
--- xreactor/manifest.lua -- manifest-v156
+-- xreactor/manifest.lua -- manifest-v165
 return {
   manifest_version = 165,
   manifest_id = "manifest-v165",
   source_ref = "beta",
-  hash_algo = "crc32",
+  hash_algo = "none",
 
   base_files = {
   { path = "installer_http.lua", size_bytes = 4688, hash = "ea6f7420", always=true},
