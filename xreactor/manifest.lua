@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v156
 return {
-  manifest_version = 160,
-  manifest_id = "manifest-v160",
+  manifest_version = 161,
+  manifest_id = "manifest-v161",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -111,7 +111,7 @@ return {
     { path = "adapters/induction_matrix.lua", size_bytes = 15124, hash = "c3006e4d", required_for={"ENERGY"}},
     { path = "services/matrix_sampling_service.lua", size_bytes = 867, hash = "fff32232", required_for={"ENERGY"}},
     { path = "nodes/energy/command_handler.lua", size_bytes = 1329, hash = "e6b074ac", required_for={"ENERGY"}},
-    { path = "nodes/energy/config.lua", size_bytes = 6714, hash = "5a060977", required_for={"ENERGY"}},
+    { path = "nodes/energy/config.lua", size_bytes = 7016, hash = "79588fd7", required_for={"ENERGY"}},
     { path = "nodes/energy/config_normalizer.lua", size_bytes = 6260, hash = "0f3e5f0e", required_for={"ENERGY"}},
     { path = "nodes/energy/discovery_log.lua", size_bytes = 2433, hash = "4f723e27", required_for={"ENERGY"}},
     { path = "nodes/energy/discovery_runtime.lua", size_bytes = 17168, hash = "4d225311", required_for={"ENERGY"}},
