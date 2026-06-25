@@ -419,8 +419,8 @@ local function update_monitor()
     registry             = registry,
     last_command_ts      = last_command_ts,
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
-    manifest_id          = "manifest-v128",
-    release_id           = "beta-v128",
+    manifest_id          = "manifest-v157",
+    release_id           = "beta-v157",
   })
 end
 
