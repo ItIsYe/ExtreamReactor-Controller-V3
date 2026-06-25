@@ -109,39 +109,6 @@ function M.same_setpoints(a, b)
      and a.desired_node_state   == b.desired_node_state
 end
 
-local function should_debounce_resend(node, desired, now)
-  local min_gap_ms = 1000
-  local last_ts = tonumber(node.last_setpoints_ts) or 0
-  if last_ts <= 0 then return false end
-  if not M.same_setpoints(node.last_setpoints, desired) then return false end
-  local last_result = node.last_command_result
-  if type(last_result) == "table" and last_result.ok == false then
-    return false
-  end
-  if (now - last_ts) > min_gap_ms then return false end
-  return true
-end
-
-local function ack_matches_setpoints(node, ack, desired)
-  if type(ack) ~= "table" then return false end
-  if ack.ok == false then return false end
-  local setpoints_target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET
-  local legacy_target = constants.command_targets.POWER_TARGET
-  if ack.command_target ~= setpoints_target and ack.command_target ~= legacy_target then
-    return false
-  end
-  local ack_value = ack.command_value
-  if type(ack_value) ~= "table" then return false end
-  local ack_matches_desired = M.same_setpoints(M.normalize_setpoints(ack_value), desired)
-  if not ack_matches_desired then return false end
-  local ack_at = tonumber(ack.at) or 0
-  local last_setpoints_ts = tonumber(node and node.last_setpoints_ts) or 0
-  if last_setpoints_ts > 0 and ack_at > 0 and ack_at < last_setpoints_ts then
-    return false
-  end
-  return true
-end
-
 function M.set_default_mode(ctx, node)
   local mode = node.desired_mode or ctx.config.rt_default_mode or "MASTER"
   M.send_rt_mode(ctx.comms, node, mode)
@@ -434,70 +401,15 @@ function M.sync_rt_node(ctx, node)
       tostring(assigned.mode), tostring(assigned.status)
     ), assigned.controllable and "INFO" or "WARN")
   end
-  if should_debounce_resend(node, desired, now) then
-    if ctx.log then
-      ctx.log(("RT setpoints deduped node=%s trigger=%s state=%s reason=%s age_ms=%d"):format(
-        tostring(node_id), trigger, tostring(desired.assignment_state), tostring(desired.assignment_reason), now - (node.last_setpoints_ts or now)
-      ))
-    end
-    return
+  -- Setpoint immer senden.
+  if ctx.log then
+    ctx.log(("RT setpoints send node=%s trigger=%s pct=%.1f state=%s"):format(
+      tostring(node_id), trigger,
+      tonumber(desired.power_target_percent) or 0,
+      tostring(desired.assignment_state)
+    ), "INFO")
   end
-
-  local workflow = node.shutdown_workflow or {}
-  if workflow.stage == "REQUESTED" or workflow.stage == "WAITING_STATE" then
-    if ctx.log then
-      ctx.log(("RT setpoints deduped node=%s trigger=%s reason=SHUTDOWN_WORKFLOW_%s"):format(tostring(node_id), trigger, tostring(workflow.stage)))
-    end
-    return
-  end
-
-  -- Alle 10 Ticks wird der Setpoint IMMER gesendet, auch wenn ACK_MATCH.
-  -- Das stellt sicher dass Nodes nach SAFE-Mode, Reboot oder kurzer
-  -- Verbindungsunterbrechung den aktuellen Sollwert bekommen ohne
-  -- dass der Master manuell neu gestartet werden muss.
-  node._setpoint_tick = (node._setpoint_tick or 0) + 1
-  local force_resend = (node._setpoint_tick % 10) == 0
-  local ack = node.last_command_result
-  if not force_resend and ack_matches_setpoints(node, ack, desired) then
-    if ctx.log then
-      ctx.log(("RT setpoints deduped node=%s trigger=%s reason=ACK_MATCH"):format(tostring(node_id), trigger))
-    end
-    return
-  end
-  if force_resend and ctx.log then
-    ctx.log(("RT setpoints force-resend node=%s tick=%d"):format(tostring(node_id), node._setpoint_tick), "INFO")
-  end
-
-  local shutdown_target = desired.desired_node_state == constants.node_states.OFF and desired.assignment_state == "shutdown"
-  if shutdown_target and ack and ack.ok ~= false and ack.command_target == (constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET) then
-    local ack_state = ack.desired_node_state or (ack.command_value and ack.command_value.desired_node_state)
-    local ack_transition = ack.transition or (ack.command_value and ack.command_value.transition)
-    if ack_state == constants.node_states.OFF and (ack_transition == "REQUESTED" or ack_transition == "ALREADY_IN_STATE") then
-      if ctx.log then
-        ctx.log(("RT shutdown resend skipped node=%s trigger=%s ack_transition=%s"):format(tostring(node_id), trigger, tostring(ack_transition)))
-      end
-      return
-    end
-  end
-
-  local last_result = node.last_command_result
-  local last_failed = type(last_result) == "table" and last_result.ok == false
-  if not last_failed and same_shutdown_intent(node.last_setpoints, desired) then
-    if ctx.log then
-      ctx.log(("RT shutdown setpoints deduped node=%s trigger=%s stage=%s target=%s"):format(
-        tostring(node_id), trigger, tostring(desired.shutdown_stage), tostring(desired.desired_node_state)
-      ))
-    end
-    return
-  end
-  if not M.same_setpoints(node.last_setpoints, desired) then
-    if ctx.log then
-      ctx.log(("RT command send node=%s trigger=%s state=%s reason=%s"):format(
-        tostring(node_id), trigger, tostring(desired.assignment_state), tostring(desired.assignment_reason)
-      ), "INFO")
-    end
-    M.send_rt_setpoints(ctx.comms, node, desired)
-  end
+  M.send_rt_setpoints(ctx.comms, node, desired)
 end
 
 return M
