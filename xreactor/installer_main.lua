@@ -614,6 +614,9 @@ function M.run(constants)
     restore_preserved_files(ctx, ctx._preserved_files)
   end
   startup_lib.write_startup(ctx, role.label)
+  if type(startup_lib.ensure_auto_update_config) == "function" then
+    startup_lib.ensure_auto_update_config(ctx)
+  end
   -- Sicherstellen dass xreactor.log_mode = "all" gesetzt ist damit
   -- Remote-Logging zum Log-Collector funktioniert. Überschreibt alte Werte.
   if settings and type(settings.set) == "function" then
