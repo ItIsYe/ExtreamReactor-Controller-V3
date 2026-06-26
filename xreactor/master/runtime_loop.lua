@@ -52,6 +52,8 @@ local function run_master()
     rt_ops           = rt_ops,
     profile_ops      = profile_ops
   }
+  -- Global verfügbar machen damit message_handlers.lua darauf zugreifen kann
+  _G.xreactor_runtime = runtime
   local recovery_status = bootstrap.get_recovery_status and bootstrap.get_recovery_status() or nil
 
   local function mark_rt_sync_dirty(node, reason)
