@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 173,
-  manifest_id = "manifest-v173",
+  manifest_version = 174,
+  manifest_id = "manifest-v174",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -13,7 +13,7 @@ return {
   { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
   { path = "release.lua", size_bytes = 348, hash = "b1eaab4f", always=true},
-  { path = "start.lua", size_bytes = 7852, hash = "5afa6c02", always=true},
+  { path = "start.lua", size_bytes = 9696, hash = "d04f722f", always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
   { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true},
   { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460"},
@@ -112,7 +112,7 @@ return {
     { path = "adapters/induction_matrix.lua", size_bytes = 15124, hash = "c3006e4d", required_for={"ENERGY"}},
     { path = "services/matrix_sampling_service.lua", size_bytes = 867, hash = "fff32232", required_for={"ENERGY"}},
     { path = "nodes/energy/command_handler.lua", size_bytes = 1329, hash = "e6b074ac", required_for={"ENERGY"}},
-    { path = "nodes/energy/config.lua", size_bytes = 7016, hash = "79588fd7", required_for={"ENERGY"}},
+    { path = "nodes/energy/config.lua", size_bytes = 6386, hash = "01bd47be", required_for={"ENERGY"}},
     { path = "nodes/energy/config_normalizer.lua", size_bytes = 6260, hash = "0f3e5f0e", required_for={"ENERGY"}},
     { path = "nodes/energy/discovery_log.lua", size_bytes = 2433, hash = "4f723e27", required_for={"ENERGY"}},
     { path = "nodes/energy/discovery_runtime.lua", size_bytes = 17168, hash = "4d225311", required_for={"ENERGY"}},
