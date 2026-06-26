@@ -230,42 +230,78 @@ function M.handle_command(opts)
   end
   log("WARN", "Remote-Update command accepted, starting installer...")
   -- Versions-Check: remote release.lua holen und mit lokaler vergleichen.
+-- SHA-PIN + Retries + HTML-Check — gleiche Robustheit wie M.run.
 -- Gibt nil zurück wenn nicht erreichbar oder gleich, sonst remote_version.
 function M.check_version(log)
   log = log or function() end
   if not http or type(http.get) ~= "function" then return nil end
-  -- Branch-SHA auflösen damit CDN-Cache umgangen wird
+
+  -- SHA aufloesen (3 Versuche, 3s Pause)
   local sha = nil
-  do
-    local ok, r = pcall(http.get,
-      "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta",
-      nil, { timeout = 10 })
+  for attempt = 1, 3 do
+    local ok, r = pcall(http.get, INSTALLER_API_URL, nil, { timeout = 10 })
     if ok and r then
       local ok2, body = pcall(r.readAll); pcall(r.close)
       if ok2 and type(body) == "string" then
         sha = body:match('"sha"%s*:%s*"(%x+)"')
+        if sha then break end
       end
     end
+    if attempt < 3 then
+      if os and type(os.sleep) == "function" then os.sleep(3) end
+    end
   end
-  local url = sha
-    and ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. sha .. "/xreactor/release.lua")
-    or  "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/release.lua"
-  local ok, r = pcall(http.get, url, nil, { timeout = 10 })
-  if not ok or not r then log("WARN", "AutoUpdate: release.lua nicht erreichbar"); return nil end
-  local ok2, body = pcall(r.readAll); pcall(r.close)
-  if not ok2 or type(body) ~= "string" then return nil end
-  local remote_v = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
-  if not remote_v then return nil end
+
+  -- release.lua URLs: SHA zuerst, dann Branch als Fallback
+  local urls = {}
+  if sha then
+    urls[1] = "https://raw.githubusercontent.com/" .. INSTALLER_REPO .. "/" .. sha .. "/xreactor/release.lua"
+    urls[2] = "https://raw.githubusercontent.com/" .. INSTALLER_REPO .. "/beta/xreactor/release.lua"
+  else
+    urls[1] = "https://raw.githubusercontent.com/" .. INSTALLER_REPO .. "/beta/xreactor/release.lua"
+  end
+
+  local remote_v = nil
+  for _, url in ipairs(urls) do
+    for attempt = 1, 3 do
+      local ok, r = pcall(http.get, url, nil, { timeout = 10 })
+      if ok and r then
+        local ok2, body = pcall(r.readAll); pcall(r.close)
+        if ok2 and type(body) == "string" and #body > 10 then
+          if is_html(body) then
+            log("WARN", ("AutoUpdate: HTML-Antwort Versuch %d"):format(attempt))
+          else
+            remote_v = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
+            if remote_v then break end
+          end
+        end
+      end
+      if attempt < 3 then
+        if os and type(os.sleep) == "function" then os.sleep(3) end
+      end
+    end
+    if remote_v then break end
+  end
+
+  if not remote_v then
+    log("WARN", "AutoUpdate: Remote-Version nicht abrufbar")
+    return nil
+  end
+
   -- Lokale Version
   local local_v = nil
   if fs and fs.exists("/xreactor/release.lua") then
-    local h = fs.open("/xreactor/release.lua", "r")
-    if h then
+    local ok_h, h = pcall(fs.open, "/xreactor/release.lua", "r")
+    if ok_h and h then
       local src = h.readAll(); h.close()
       local_v = tonumber(src:match("manifest_version%s*=%s*(%d+)"))
     end
   end
-  if not local_v then log("WARN", "AutoUpdate: lokale Version unbekannt"); return nil end
+  if not local_v then
+    log("WARN", "AutoUpdate: lokale Version unbekannt")
+    return nil
+  end
+
   log("INFO", ("AutoUpdate: lokal=v%d remote=v%d"):format(local_v, remote_v))
   if remote_v <= local_v then return nil end
   return remote_v
@@ -324,7 +360,9 @@ function M.auto_check_loop(log, check_interval_s)
               if attempt < 3 then os.sleep(5) end
             end
             if not success then
-              log("ERROR", "AutoUpdate: alle 3 Versuche fehlgeschlagen — naechster Check in " .. check_interval_s .. "s")
+              log("ERROR", ("AutoUpdate: alle 3 Versuche fehlgeschlagen — naechster Check in %ds"):format(check_interval_s))
+              -- Extra-Wartezeit nach fehlgeschlagenem Update (kein Retry-Spam)
+              if os and type(os.sleep) == "function" then os.sleep(60) end
             else
               return  -- reboot wurde ausgelöst
             end
