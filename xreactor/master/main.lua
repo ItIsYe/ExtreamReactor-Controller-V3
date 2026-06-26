@@ -21,11 +21,16 @@ local function make_log()
 end
 
 local auto_log = make_log()
-local auto_loop = remote_update.auto_check_loop(auto_log, 120)
+-- Defensiv: auto_check_loop nur wenn vorhanden
+local auto_loop = type(remote_update.auto_check_loop) == "function"
+  and remote_update.auto_check_loop(auto_log, 120)
+  or nil
 
--- parallel.waitForAny: wenn einer der Threads endet (Update oder Absturz)
--- endet der gesamte Prozess und start.lua startet alles neu.
-parallel.waitForAny(
-  function() runtime_loop.run() end,
-  auto_loop
-)
+if auto_loop then
+  parallel.waitForAny(
+    function() runtime_loop.run() end,
+    auto_loop
+  )
+else
+  runtime_loop.run()
+end
