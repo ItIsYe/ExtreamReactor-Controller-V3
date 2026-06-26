@@ -208,10 +208,15 @@ function M.new(opts)
     if rt.capacity_ready == true then node.capacity_ready = true end
     node.capacity_max   = rt.capacity_max or node.capacity_max
     -- Sobald capacity_max bekannt: Profile-Retry ausloesen wenn power_target=0
-    if (rt.capacity_max or 0) > 0 and (tonumber(runtime.state.power_target) or 0) == 0 then
-      if type(runtime.libs) == "table" and type(runtime.libs.profile_ops) == "table"
-         and type(runtime.libs.profile_ops.retry_pending_profile) == "function" then
-        runtime.libs.profile_ops.retry_pending_profile(runtime)
+    -- runtime ist nicht im direkten Scope — nutze _G.xreactor_runtime
+    if (rt.capacity_max or 0) > 0 then
+      local rt_ref = _G.xreactor_runtime
+      if type(rt_ref) == "table" and type(rt_ref.state) == "table"
+         and (tonumber(rt_ref.state.power_target) or 0) == 0
+         and type(rt_ref.libs) == "table"
+         and type(rt_ref.libs.profile_ops) == "table"
+         and type(rt_ref.libs.profile_ops.retry_pending_profile) == "function" then
+        rt_ref.libs.profile_ops.retry_pending_profile(rt_ref)
       end
     end
     -- Abwärtskompatible Aliase
