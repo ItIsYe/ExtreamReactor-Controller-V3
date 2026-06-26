@@ -73,57 +73,142 @@ function M.is_armed(opts)
   return true, "armed"
 end
 
+-- Hilfsfunktionen fuer robuste Downloads
+local INSTALLER_URL_BRANCH = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer"
+local INSTALLER_API_URL    = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
+local INSTALLER_REPO       = "ItIsYe/ExtreamReactor-Controller-V3"
+
+local function is_html(body)
+  if type(body) ~= "string" then return false end
+  local s = body:sub(1, 200):lower()
+  return s:find("<html", 1, true) ~= nil or s:find("<!doctype", 1, true) ~= nil
+end
+
+local function resolve_installer_sha(log)
+  if not http or type(http.get) ~= "function" then return nil end
+  local ok, r = pcall(http.get, INSTALLER_API_URL, nil, { timeout = 10 })
+  if not ok or not r then
+    log("WARN", "Remote-Update: Branch-SHA nicht auflösbar (API timeout)")
+    return nil
+  end
+  local ok2, body = pcall(r.readAll); pcall(r.close)
+  if not ok2 or type(body) ~= "string" then return nil end
+  local sha = body:match('"sha"%s*:%s*"(%x+)"')
+  if sha then
+    log("INFO", "Remote-Update: SHA-PIN " .. sha:sub(1, 10))
+  end
+  return sha
+end
+
+local function download_installer(log)
+  -- SHA-PIN aufloesen damit CDN-Cache umgangen wird
+  local sha = resolve_installer_sha(log)
+  local urls = {}
+  if sha then
+    -- SHA-basierte URL zuerst (Cache-sicher)
+    urls[1] = "https://raw.githubusercontent.com/" .. INSTALLER_REPO .. "/" .. sha .. "/installer"
+    urls[2] = INSTALLER_URL_BRANCH  -- Fallback
+  else
+    urls[1] = INSTALLER_URL_BRANCH
+  end
+
+  local MAX_RETRIES = 4
+  local RETRY_DELAYS = { 2, 5, 10, 20 }  -- exponentiell
+
+  for _, url in ipairs(urls) do
+    for attempt = 1, MAX_RETRIES do
+      log("INFO", ("Remote-Update: Download Versuch %d/%d url=%s"):format(
+        attempt, MAX_RETRIES, url:sub(1, 60)))
+      local ok, r = pcall(http.get, url, nil, { timeout = 20 })
+      if ok and r then
+        local ok2, body = pcall(r.readAll); pcall(r.close)
+        if ok2 and type(body) == "string" and #body > 100 then
+          if is_html(body) then
+            log("WARN", ("Remote-Update: HTML-Antwort (CDN-Fehler), Versuch %d"):format(attempt))
+          else
+            log("INFO", ("Remote-Update: Download OK (%d bytes)"):format(#body))
+            return body, url
+          end
+        else
+          log("WARN", ("Remote-Update: leerer/ungültiger Body, Versuch %d"):format(attempt))
+        end
+      else
+        local err = type(r) == "string" and r or "timeout/network"
+        log("WARN", ("Remote-Update: HTTP-Fehler Versuch %d: %s"):format(attempt, err))
+      end
+      -- Warte vor nächstem Versuch (ausser nach letztem)
+      if attempt < MAX_RETRIES then
+        local delay = RETRY_DELAYS[attempt] or 20
+        log("INFO", ("Remote-Update: warte %ds..."):format(delay))
+        if os and type(os.sleep) == "function" then os.sleep(delay) end
+      end
+    end
+    -- URL fehlgeschlagen → nächste URL versuchen
+    if #urls > 1 then
+      log("WARN", "Remote-Update: erste URL fehlgeschlagen, versuche Fallback-URL...")
+    end
+  end
+  return nil, "alle Download-Versuche fehlgeschlagen"
+end
+
 -- Lädt den Installer von GitHub frisch herunter und führt ihn aus.
+-- Immer von GitHub (kein lokaler Installer-Cache) damit die neuste
+-- Version des Installers selbst genutzt wird.
 function M.run(log_fn, opts)
   opts = opts or {}
   local log = type(log_fn) == "function" and log_fn or function() end
 
   local armed, arm_reason = M.is_armed(opts)
   if not armed then
-    log("WARN", "Remote-Update blocked: " .. tostring(arm_reason) .. " (create " .. ARMING_CONFIG_PATH .. " to arm)")
+    log("WARN", "Remote-Update blocked: " .. tostring(arm_reason) ..
+        " (create " .. ARMING_CONFIG_PATH .. " to arm)")
     return false, arm_reason or "not armed"
   end
 
-  log("INFO", "Remote-Update: arming OK, lade Installer...")
-  if not http or type(http.get) == "nil" then
-    log("ERROR", "Remote-Update: http nicht verfuegbar, abgebrochen")
+  if not http or type(http.get) ~= "function" then
+    log("ERROR", "Remote-Update: http nicht verfuegbar")
     return false, "no http"
   end
 
-  local url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer"
-  local ok_fetch, response = pcall(http.get, url, nil, { timeout = 15 })
-  if not ok_fetch or not response then
-    log("ERROR", "Remote-Update: Installer-Download fehlgeschlagen (timeout oder Netzwerkfehler)")
-    return false, "download failed"
-  end
-  local body = response.readAll()
-  pcall(response.close)
-  if type(body) ~= "string" or #body == 0 then
-    log("ERROR", "Remote-Update: leerer Installer-Inhalt")
-    return false, "empty body"
+  log("INFO", "Remote-Update: arming OK, lade Installer von GitHub...")
+
+  local body, url_or_err = download_installer(log)
+  if not body then
+    log("ERROR", "Remote-Update: " .. tostring(url_or_err))
+    return false, url_or_err
   end
 
+  -- Auf Disk schreiben
   local path = "/xreactor_remote_update_installer.lua"
-  local h = fs.open(path, "w")
-  if not h then
-    log("ERROR", "Remote-Update: konnte Installer nicht auf Disk schreiben")
+  local ok_w, h_or_err = pcall(fs.open, path, "w")
+  if not ok_w or not h_or_err then
+    log("ERROR", "Remote-Update: Schreiben fehlgeschlagen: " .. tostring(h_or_err))
     return false, "write failed"
   end
-  h.write(body)
-  h.close()
+  local h = h_or_err
+  local ok_write = pcall(h.write, h, body)
+  pcall(h.close, h)
+  if not ok_write then
+    log("ERROR", "Remote-Update: Datei-Write fehlgeschlagen")
+    return false, "write error"
+  end
 
   _G.__xreactor_remote_update = true
-
   log("INFO", "Remote-Update: starte Installer...")
-  local ok_run, err
+
+  local ok_run, run_err
   if type(shell) == "table" and type(shell.run) == "function" then
-    ok_run, err = pcall(function() shell.run(path) end)
+    ok_run, run_err = pcall(shell.run, path)
   else
-    ok_run, err = pcall(function() dofile(path) end)
+    ok_run, run_err = pcall(dofile, path)
   end
+
+  -- Aufräumen
+  pcall(fs.delete, path)
+
   if not ok_run then
-    log("ERROR", "Remote-Update: Installer-Lauf fehlgeschlagen: " .. tostring(err))
-    return false, tostring(err)
+    log("ERROR", "Remote-Update: Installer-Lauf fehlgeschlagen: " .. tostring(run_err))
+    return false, tostring(run_err)
   end
 
   log("INFO", "Remote-Update: Installer fertig, rebooting...")
