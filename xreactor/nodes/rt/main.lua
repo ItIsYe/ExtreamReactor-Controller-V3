@@ -747,7 +747,7 @@ init()
 
 local remote_update = require("core.remote_update")
 local auto_loop = remote_update.auto_check_loop(
-  function(level, msg) log(level, msg) end, 300)
+  function(level, msg) log(level, msg) end, 120)
 
 parallel.waitForAny(
   function()
