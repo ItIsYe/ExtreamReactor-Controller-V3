@@ -624,10 +624,18 @@ local function main_loop()
   end
 end
 
+-- Auto-Update Loop parallel zum Haupt-Loop
+local remote_update = require("core.remote_update")
+local auto_loop = remote_update.auto_check_loop(
+  function(level, msg) log(level or "INFO", msg) end, 120)
+
 local ok, result_or_err = xpcall(function()
   init()
   send_presence_heartbeat(now_ms())
-  return main_loop()
+  parallel.waitForAny(
+    function() return main_loop() end,
+    auto_loop
+  )
 end, function(err)
   return err
 end)
