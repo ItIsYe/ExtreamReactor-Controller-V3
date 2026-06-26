@@ -744,10 +744,20 @@ end
 -- ── Start ────────────────────────────────────────────────────────────────────
 
 init()
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
-  if pending_remote_update then
-    pending_remote_update = false
-    log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
-    require("core.remote_update").run(log)
-  end
-end)
+
+local remote_update = require("core.remote_update")
+local auto_loop = remote_update.auto_check_loop(
+  function(level, msg) log(level, msg) end, 300)
+
+parallel.waitForAny(
+  function()
+    support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+      if pending_remote_update then
+        pending_remote_update = false
+        log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
+        require("core.remote_update").run(log)
+      end
+    end)
+  end,
+  auto_loop
+)
