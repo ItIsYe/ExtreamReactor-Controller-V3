@@ -1,16 +1,16 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 183,
-  manifest_id = "manifest-v183",
+  manifest_version = 184,
+  manifest_id = "manifest-v184",
   source_ref = "beta",
   hash_algo = "none",
 
   base_files = {
   { path = "installer_http.lua", size_bytes = 4688, hash = "ea6f7420", always=true},
-  { path = "installer_main.lua", size_bytes = 28630, hash = "1ffaa3c3", always=true},
+  { path = "installer_main.lua", size_bytes = 28751, hash = "d7b62b03", always=true},
   { path = "installer_manifest.lua", size_bytes = 4673, hash = "7aa0c027", always=true},
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true},
-  { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always=true},
+  { path = "installer_startup.lua", size_bytes = 1487, hash = "99155a25", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
   { path = "release.lua", size_bytes = 348, hash = "f5ee3e2c", always=true},
   { path = "start.lua", size_bytes = 10449, hash = "e00f14c6", always=true},
