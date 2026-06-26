@@ -207,6 +207,13 @@ function M.new(opts)
     node.power_target   = rt.power_target
     if rt.capacity_ready == true then node.capacity_ready = true end
     node.capacity_max   = rt.capacity_max or node.capacity_max
+    -- Sobald capacity_max bekannt: Profile-Retry ausloesen wenn power_target=0
+    if (rt.capacity_max or 0) > 0 and (tonumber(runtime.state.power_target) or 0) == 0 then
+      if type(runtime.libs) == "table" and type(runtime.libs.profile_ops) == "table"
+         and type(runtime.libs.profile_ops.retry_pending_profile) == "function" then
+        runtime.libs.profile_ops.retry_pending_profile(runtime)
+      end
+    end
     -- Abwärtskompatible Aliase
     node.output        = node.actual_output
     node.power_actual  = node.actual_output
