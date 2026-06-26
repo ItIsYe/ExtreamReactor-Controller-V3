@@ -21,7 +21,7 @@ local function make_log()
 end
 
 local auto_log = make_log()
-local auto_loop = remote_update.auto_check_loop(auto_log, 300)
+local auto_loop = remote_update.auto_check_loop(auto_log, 120)
 
 -- parallel.waitForAny: wenn einer der Threads endet (Update oder Absturz)
 -- endet der gesamte Prozess und start.lua startet alles neu.
