@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 180,
-  manifest_id = "manifest-v180",
+  manifest_version = 181,
+  manifest_id = "manifest-v181",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -57,13 +57,13 @@ return {
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"}},
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"}},
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"}},
-    { path = "master/message_handlers.lua", size_bytes = 20636, hash = "9d46db88", required_for={"MASTER"}},
+    { path = "master/message_handlers.lua", size_bytes = 20833, hash = "2d2736b2", required_for={"MASTER"}},
     { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"}},
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
     { path = "master/rt_sync.lua", size_bytes = 17394, hash = "e565fff1", required_for={"MASTER"}},
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"}},
     { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"}},
-    { path = "master/runtime_loop.lua", size_bytes = 16934, hash = "57cf1104", required_for={"MASTER"}},
+    { path = "master/runtime_loop.lua", size_bytes = 17045, hash = "b1dbd148", required_for={"MASTER"}},
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"}},
     { path = "master/runtime_ops_profile.lua", size_bytes = 11983, hash = "28ee5f71", required_for={"MASTER"}},
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"}},
