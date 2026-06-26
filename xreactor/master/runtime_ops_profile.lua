@@ -87,10 +87,14 @@ function M.estimate_base_power(runtime)
       -- separat aufsummieren — DAS ist der realistische Maßstab für eine
       -- Node die gerade 0 RF/t liefert (z.B. weil sie im letzten SHED-Zyklus
       -- heruntergefahren wurde), nicht der winzige generische Fallback-Wert.
+      -- capacity_ready: entweder explizit bestätigt oder capacity_max > 0 vorhanden
       local capacity_ready = (node.rt and node.rt.capacity_ready == true) or node.capacity_ready == true
-      if capacity_ready then
-        local cap = number_or(node.capacity_max, nil) or number_or(node.rt and node.rt.capacity_max, nil)
-        if cap then learned_capacity_total = learned_capacity_total + cap end
+      local cap = number_or(node.capacity_max, nil) or number_or(node.rt and node.rt.capacity_max, nil)
+      if cap and cap > 0 then
+        -- Kapazität nutzen sobald sie bekannt ist — auch ohne capacity_ready Flag
+        learned_capacity_total = learned_capacity_total + cap
+      elseif capacity_ready then
+        -- Fallback: capacity_ready aber kein Wert → ignorieren
       end
       local status = tostring(node.status or ""):upper()
       if status ~= tostring(constants.status_levels.OFFLINE):upper() then
@@ -134,7 +138,27 @@ function M.apply_profile(runtime, name)
     runtime.flush_rt_sync_queue({ force = true })
   else
     runtime.log(("Profile %s applied but base power is unavailable (rt_count=0 or estimate failed); target unchanged at %.2f"):format(tostring(name), tonumber(runtime.state.power_target) or 0), "WARN")
+    -- Merken dass das Profil noch nicht angewendet werden konnte.
+    -- apply_profile_retry() wird vom RT-Sync aufgerufen sobald
+    -- eine RT-Node capacity_ready=true liefert.
+    runtime.state.pending_profile_retry = name
   end
+end
+
+-- Wird aufgerufen wenn eine RT-Node capacity_ready meldet.
+-- Falls ein Profil bisher nicht angewendet werden konnte (power_target=0),
+-- wird es jetzt nochmal versucht.
+function M.retry_pending_profile(runtime)
+  local pending = runtime.state.pending_profile_retry
+  if not pending then return end
+  local current_target = tonumber(runtime.state.power_target) or 0
+  if current_target > 0 then
+    runtime.state.pending_profile_retry = nil
+    return
+  end
+  runtime.log(("Profile retry: %s (power_target war 0)"):format(tostring(pending)), "INFO")
+  runtime.state.pending_profile_retry = nil
+  M.apply_profile(runtime, pending)
 end
 
 function M.set_rt_global_hold(runtime, enabled)
