@@ -32,4 +32,29 @@ function M.ensure_startup_script(ctx)
   ctx.info("Startup file configured")
 end
 
+function M.ensure_auto_update_config(ctx)
+  local CONFIG_PATH = "/xreactor/config/remote_update.lua"
+  local CONFIG_DIR  = "/xreactor/config"
+  if ctx.fs.exists(CONFIG_PATH) then
+    ctx.info("Auto-update config already exists")
+    return
+  end
+  if not ctx.fs.exists(CONFIG_DIR) then
+    pcall(ctx.fs.makeDir, CONFIG_DIR)
+  end
+  local content = [[
+return {
+  enabled      = true,
+  auto_update  = true,
+  check_interval_s = 120,
+}
+]]
+  local ok, err = ctx.write_file(CONFIG_PATH, content)
+  if not ok then
+    ctx.warn("Failed to write auto-update config: " .. tostring(err))
+    return
+  end
+  ctx.info("Auto-update config created")
+end
+
 return M
