@@ -308,12 +308,12 @@ function M.check_version(log)
 end
 
 -- Startet einen periodischen Versions-Check als parallelen os.timer-Loop.
--- check_interval_s: Sekunden zwischen Checks (default 300 = 5 min).
+-- check_interval_s: Sekunden zwischen Checks (default 120 = 2 min).
 -- Wird vom Node-Main über parallel.waitForAny() oder os.timer eingehängt.
 -- Gibt eine Funktion zurück die in parallel.waitForAny() läuft.
 function M.auto_check_loop(log, check_interval_s)
   log = log or function() end
-  check_interval_s = tonumber(check_interval_s) or 300
+  check_interval_s = tonumber(check_interval_s) or 120
   return function()
     while true do
       -- Warte zuerst — nach einem frischen Install ist Update unnötig
