@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 169,
-  manifest_id = "manifest-v169",
+  manifest_version = 170,
+  manifest_id = "manifest-v170",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -56,7 +56,7 @@ return {
     { path = "master/config.lua", size_bytes = 6221, hash = "2e0fba18", required_for={"MASTER"}},
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"}},
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"}},
-    { path = "master/main.lua", size_bytes = 244, hash = "5f009046", required_for={"MASTER"}},
+    { path = "master/main.lua", size_bytes = 1098, hash = "cdcaaad5", required_for={"MASTER"}},
     { path = "master/message_handlers.lua", size_bytes = 20636, hash = "9d46db88", required_for={"MASTER"}},
     { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"}},
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
@@ -99,7 +99,7 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 11682, hash = "6198a6d0", required_for={"RT"}},
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 10721, hash = "4262a5d6", required_for={"RT"}},
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"}},
-    { path = "nodes/rt/main.lua", size_bytes = 32087, hash = "204538e3", required_for={"RT"}},
+    { path = "nodes/rt/main.lua", size_bytes = 32322, hash = "78e274c8", required_for={"RT"}},
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"}},
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 31927, hash = "30e85bdb", required_for={"RT"}},
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"}},
