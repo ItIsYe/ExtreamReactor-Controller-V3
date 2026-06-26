@@ -144,7 +144,113 @@ function M.handle_command(opts)
     pcall(opts.send_ack)
   end
   log("WARN", "Remote-Update command accepted, starting installer...")
-  return M.run(log, opts)
+  -- Versions-Check: remote release.lua holen und mit lokaler vergleichen.
+-- Gibt nil zurück wenn nicht erreichbar oder gleich, sonst remote_version.
+function M.check_version(log)
+  log = log or function() end
+  if not http or type(http.get) ~= "function" then return nil end
+  -- Branch-SHA auflösen damit CDN-Cache umgangen wird
+  local sha = nil
+  do
+    local ok, r = pcall(http.get,
+      "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta",
+      nil, { timeout = 10 })
+    if ok and r then
+      local ok2, body = pcall(r.readAll); pcall(r.close)
+      if ok2 and type(body) == "string" then
+        sha = body:match('"sha"%s*:%s*"(%x+)"')
+      end
+    end
+  end
+  local url = sha
+    and ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. sha .. "/xreactor/release.lua")
+    or  "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/release.lua"
+  local ok, r = pcall(http.get, url, nil, { timeout = 10 })
+  if not ok or not r then log("WARN", "AutoUpdate: release.lua nicht erreichbar"); return nil end
+  local ok2, body = pcall(r.readAll); pcall(r.close)
+  if not ok2 or type(body) ~= "string" then return nil end
+  local remote_v = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
+  if not remote_v then return nil end
+  -- Lokale Version
+  local local_v = nil
+  if fs and fs.exists("/xreactor/release.lua") then
+    local h = fs.open("/xreactor/release.lua", "r")
+    if h then
+      local src = h.readAll(); h.close()
+      local_v = tonumber(src:match("manifest_version%s*=%s*(%d+)"))
+    end
+  end
+  if not local_v then log("WARN", "AutoUpdate: lokale Version unbekannt"); return nil end
+  log("INFO", ("AutoUpdate: lokal=v%d remote=v%d"):format(local_v, remote_v))
+  if remote_v <= local_v then return nil end
+  return remote_v
+end
+
+-- Startet einen periodischen Versions-Check als parallelen os.timer-Loop.
+-- check_interval_s: Sekunden zwischen Checks (default 300 = 5 min).
+-- Wird vom Node-Main über parallel.waitForAny() oder os.timer eingehängt.
+-- Gibt eine Funktion zurück die in parallel.waitForAny() läuft.
+function M.auto_check_loop(log, check_interval_s)
+  log = log or function() end
+  check_interval_s = tonumber(check_interval_s) or 300
+  return function()
+    while true do
+      -- Warte zuerst — nach einem frischen Install ist Update unnötig
+      local timer_id = os.startTimer and os.startTimer(check_interval_s) or nil
+      if timer_id then
+        -- Warte auf den Timer-Event (ohne den Rest des Systems zu blockieren)
+        repeat
+          local ev, id = os.pullEvent("timer")
+        until id == timer_id
+      else
+        os.sleep(check_interval_s)
+      end
+      -- Armed?
+      local cfg_armed, _ = M.is_armed()
+      if not cfg_armed then
+        log("DEBUG", "AutoUpdate: nicht armed, skip")
+      else
+        -- Arming-Config auf auto_update prüfen
+        local h2 = fs and fs.exists(ARMING_CONFIG_PATH) and fs.open(ARMING_CONFIG_PATH, "r")
+        local auto_enabled = false
+        if h2 then
+          local src = h2.readAll(); h2.close()
+          local loader = load(src, "=arm", "t", {})
+          if loader then
+            local ok2, cfg2 = pcall(loader)
+            if ok2 and type(cfg2) == "table" then
+              auto_enabled = cfg2.auto_update == true
+            end
+          end
+        end
+        if not auto_enabled then
+          log("DEBUG", "AutoUpdate: auto_update nicht aktiviert")
+        else
+          local new_v = M.check_version(log)
+          if new_v then
+            log("WARN", ("AutoUpdate: neue Version v%d — starte Update"):format(new_v))
+            -- 3 Versuche
+            local success = false
+            for attempt = 1, 3 do
+              log("INFO", ("AutoUpdate: Versuch %d/3"):format(attempt))
+              local ok_run, err_run = M.run(log)
+              if ok_run then success = true; break end
+              log("WARN", ("AutoUpdate: Versuch %d fehlgeschlagen: %s"):format(attempt, tostring(err_run)))
+              if attempt < 3 then os.sleep(5) end
+            end
+            if not success then
+              log("ERROR", "AutoUpdate: alle 3 Versuche fehlgeschlagen — naechster Check in " .. check_interval_s .. "s")
+            else
+              return  -- reboot wurde ausgelöst
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+return M.run(log, opts)
 end
 
 return M
