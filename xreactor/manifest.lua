@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 178,
-  manifest_id = "manifest-v178",
+  manifest_version = 179,
+  manifest_id = "manifest-v179",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -13,7 +13,7 @@ return {
   { path = "installer_startup.lua", size_bytes = 845, hash = "6939c5e9", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
   { path = "release.lua", size_bytes = 348, hash = "95b7d100", always=true},
-  { path = "start.lua", size_bytes = 9696, hash = "d04f722f", always=true},
+  { path = "start.lua", size_bytes = 10449, hash = "e00f14c6", always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
   { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true},
   { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460"},
@@ -56,7 +56,7 @@ return {
     { path = "master/config.lua", size_bytes = 6221, hash = "2e0fba18", required_for={"MASTER"}},
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"}},
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"}},
-    { path = "master/main.lua", size_bytes = 1130, hash = "57567d48", required_for={"MASTER"}},
+    { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"}},
     { path = "master/message_handlers.lua", size_bytes = 20636, hash = "9d46db88", required_for={"MASTER"}},
     { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"}},
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
@@ -116,7 +116,7 @@ return {
     { path = "nodes/energy/config_normalizer.lua", size_bytes = 6260, hash = "0f3e5f0e", required_for={"ENERGY"}},
     { path = "nodes/energy/discovery_log.lua", size_bytes = 2433, hash = "4f723e27", required_for={"ENERGY"}},
     { path = "nodes/energy/discovery_runtime.lua", size_bytes = 17168, hash = "4d225311", required_for={"ENERGY"}},
-    { path = "nodes/energy/main.lua", size_bytes = 25897, hash = "84cfb22a", required_for={"ENERGY"}},
+    { path = "nodes/energy/main.lua", size_bytes = 25503, hash = "0fd2908d", required_for={"ENERGY"}},
     { path = "nodes/energy/matrix_snapshot_runtime.lua", size_bytes = 17943, hash = "9b8b5405", required_for={"ENERGY"}},
     { path = "nodes/energy/matrix_topology_cache.lua", size_bytes = 2052, hash = "54dc9081", required_for={"ENERGY"}},
     { path = "nodes/energy/runtime_context.lua", size_bytes = 2098, hash = "c352f2d4", required_for={"ENERGY"}},
