@@ -304,8 +304,30 @@ if startup_delay > 0 then
   end
 end
 
-local ok = shell.run(entry)
+-- Auto-Update Loop parallel zum Node-Prozess.
+-- Läuft in start.lua damit er unabhängig vom Node-Code ist —
+-- auch alte Node-Versionen bekommen Updates ohne zu crashen.
+local function run_with_auto_update()
+  local auto_loop = nil
+  local ok_ru, remote_update = pcall(dofile, "/xreactor/core/remote_update.lua")
+  if ok_ru and type(remote_update) == "table"
+     and type(remote_update.auto_check_loop) == "function" then
+    auto_loop = remote_update.auto_check_loop(
+      function(level, msg) safe_log("AUTO_UPDATE", tostring(msg)) end, 120)
+  end
+
+  if auto_loop then
+    parallel.waitForAny(
+      function() shell.run(entry) end,
+      auto_loop
+    )
+  else
+    shell.run(entry)
+  end
+end
+
+local ok, run_err = pcall(run_with_auto_update)
 if not ok then
-  safe_log("STARTUP", "ERROR: Failed to start role: " .. tostring(role))
+  safe_log("STARTUP", "ERROR: Failed to start role: " .. tostring(role) .. " - " .. tostring(run_err))
   error("Failed to start role: " .. tostring(role), 0)
 end
