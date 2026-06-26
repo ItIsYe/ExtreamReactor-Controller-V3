@@ -745,24 +745,11 @@ end
 
 init()
 
-local remote_update = require("core.remote_update")
--- Defensiv: auto_check_loop ist nur in neueren Versionen vorhanden
-local auto_loop = type(remote_update.auto_check_loop) == "function"
-  and remote_update.auto_check_loop(function(level, msg) log(level, msg) end, 120)
-  or nil
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+  if pending_remote_update then
+    pending_remote_update = false
+    log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
+    require("core.remote_update").run(log)
+  end
+end)
 
-local function main_fn()
-  support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
-    if pending_remote_update then
-      pending_remote_update = false
-      log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
-      require("core.remote_update").run(log)
-    end
-  end)
-end
-
-if auto_loop then
-  parallel.waitForAny(main_fn, auto_loop)
-else
-  main_fn()
-end
