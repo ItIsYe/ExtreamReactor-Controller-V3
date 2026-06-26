@@ -319,10 +319,11 @@ function M.auto_check_loop(log, check_interval_s)
       -- Warte zuerst — nach einem frischen Install ist Update unnötig
       local timer_id = os.startTimer and os.startTimer(check_interval_s) or nil
       if timer_id then
-        -- Warte auf den Timer-Event (ohne den Rest des Systems zu blockieren)
+        -- Warte auf den Timer — os.pullEvent ohne Filter damit andere Events
+        -- (modem, redstone) den Timer nicht blockieren wenn parallel läuft.
         repeat
-          local ev, id = os.pullEvent("timer")
-        until id == timer_id
+          local ev, id = os.pullEvent()
+        until ev == "timer" and id == timer_id
       else
         os.sleep(check_interval_s)
       end
