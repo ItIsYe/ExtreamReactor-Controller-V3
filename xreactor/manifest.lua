@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 189,
-  manifest_id = "manifest-v189",
+  manifest_version = 190,
+  manifest_id = "manifest-v190",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -116,7 +116,7 @@ return {
     { path = "nodes/energy/config_normalizer.lua", size_bytes = 6260, hash = "0f3e5f0e", required_for={"ENERGY"}},
     { path = "nodes/energy/discovery_log.lua", size_bytes = 2433, hash = "4f723e27", required_for={"ENERGY"}},
     { path = "nodes/energy/discovery_runtime.lua", size_bytes = 17168, hash = "4d225311", required_for={"ENERGY"}},
-    { path = "nodes/energy/main.lua", size_bytes = 25528, hash = "2d24bc31", required_for={"ENERGY"}},
+    { path = "nodes/energy/main.lua", size_bytes = 25533, hash = "0404da60", required_for={"ENERGY"}},
     { path = "nodes/energy/matrix_snapshot_runtime.lua", size_bytes = 17943, hash = "9b8b5405", required_for={"ENERGY"}},
     { path = "nodes/energy/matrix_topology_cache.lua", size_bytes = 2052, hash = "54dc9081", required_for={"ENERGY"}},
     { path = "nodes/energy/runtime_context.lua", size_bytes = 2098, hash = "c352f2d4", required_for={"ENERGY"}},
