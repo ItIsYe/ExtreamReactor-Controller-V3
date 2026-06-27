@@ -13,8 +13,8 @@ local CONFIG = {
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
 bootstrap.setup({
   role = "reprocessor",
-  log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
-  log_path = CONFIG.BOOTSTRAP_LOG_PATH
+  log_enabled = false,  -- kein lokales Log auf Node-Disk
+  log_path = nil  -- kein lokales Log auf Node-Disk
 })
 local require = bootstrap.require
 local constants = require("shared.constants")
