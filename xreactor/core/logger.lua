@@ -787,7 +787,11 @@ function logger.init(opts)
         local fallback_ok, fallback_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
         state.startup_action = "startup_disk_reject_nonfatal(original=" .. tostring(startup_result) .. ",fallback=" .. tostring(fallback_ok and fallback_result or fallback_result) .. ")"
       end
-      safe_print("LOG: " .. tostring(state.log_path or state.log_dir or "?") .. " [" .. tostring(state.log_source or "?") .. "]")
+      do
+        local p = tostring(state.log_path or state.log_dir or "?")
+        local f = p:match("([^/]+)$") or p  -- nur Dateiname
+        safe_print("LOG: " .. f .. " [" .. tostring(state.log_source or "?") .. "]")
+      end
     end
   end)
   if not ok then
