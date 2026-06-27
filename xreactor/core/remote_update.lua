@@ -319,23 +319,40 @@ function M.auto_check_loop(log, check_interval_s)
       -- Warte zuerst — nach einem frischen Install ist Update unnötig
       local timer_id = os.startTimer and os.startTimer(check_interval_s) or nil
       log("INFO", ("AutoUpdate: naechster Check in %ds"):format(check_interval_s))
+      -- Terminal-Countdown: immer dieselbe Zeile überschreiben
+      local term_ok = type(term) == "table" and type(term.getCursorPos) == "function"
+      local cx, cy
+      if term_ok then cx, cy = term.getCursorPos() end
+      local function update_countdown_line(secs)
+        if not term_ok or not cy then return end
+        local cur_x, cur_y = term.getCursorPos()
+        term.setCursorPos(1, cy)
+        local w = term.getSize and select(1, term.getSize()) or 51
+        local line = ("[AUTO] Naechster Update-Check in %3ds"):format(secs)
+        term.write(line .. string.rep(" ", math.max(0, w - #line)))
+        term.setCursorPos(cur_x, cur_y)
+      end
       if timer_id then
-        -- Warte auf den Timer — os.pullEvent ohne Filter damit andere Events
-        -- (modem, redstone) den Timer nicht blockieren wenn parallel läuft.
         local remaining = check_interval_s
-        local countdown_timer = os.startTimer and os.startTimer(1) or nil
+        update_countdown_line(remaining)
+        local sec_timer = os.startTimer and os.startTimer(1) or nil
         repeat
           local ev, id = os.pullEvent()
-          if ev == "timer" then
-            if id == countdown_timer then
-              remaining = remaining - 1
-              if remaining > 0 and remaining % 30 == 0 then
-                log("INFO", ("AutoUpdate: naechster Check in %ds"):format(remaining))
-              end
-              countdown_timer = os.startTimer and os.startTimer(1) or nil
+          if ev == "timer" and id == sec_timer then
+            remaining = remaining - 1
+            update_countdown_line(remaining)
+            if remaining > 0 and remaining % 30 == 0 then
+              log("INFO", ("AutoUpdate: naechster Check in %ds"):format(remaining))
             end
+            sec_timer = os.startTimer and os.startTimer(1) or nil
           end
         until ev == "timer" and id == timer_id
+        -- Zeile leeren wenn Check startet
+        if term_ok and cy then
+          local w = term.getSize and select(1, term.getSize()) or 51
+          term.setCursorPos(1, cy); term.write(string.rep(" ", w))
+          term.setCursorPos(1, cy)
+        end
       else
         os.sleep(check_interval_s)
       end
