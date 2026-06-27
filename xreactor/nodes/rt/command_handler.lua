@@ -73,9 +73,14 @@ local function set_setpoints(command, ctx, record)
   if pct then
     pct = math.max(0, math.min(100, pct))
     targets.power_percent = pct
+    -- targets.power aus capacity_max berechnen damit UI "soll" korrekt anzeigt
+    local cap = ctx.capacity_learning and ctx.capacity_learning.max_output or 0
+    if cap > 0 then
+      targets.power = cap * pct / 100
+    end
     log_command(ctx, "INFO", string.format(
-      "SET_SETPOINTS pct=%.1f%% state=%s",
-      pct, tostring(value.assignment_state or "?")))
+      "SET_SETPOINTS pct=%.1f%% state=%s power=%.0f",
+      pct, tostring(value.assignment_state or "?"), targets.power or 0))
   end
   if value.assignment_state ~= nil then
     targets.assignment_state = tostring(value.assignment_state)
