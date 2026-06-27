@@ -383,7 +383,15 @@ function M.new(opts)
         shutdown_stage = result.shutdown_stage
       }
       nodes[id].last_command_error = result.ok == false and (result.error or "unknown") or nil
-      if result.ok == false then log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN") end
+      if result.ok == false then
+        local reason_code = result.reason_code or ""
+        -- CAPACITY_LEARNING ist kein Fehler sondern temporärer Zustand — kein WARN
+        if reason_code == "CAPACITY_LEARNING" then
+          log(("Command skipped on %s: %s (capacity learning in progress)"):format(id, result.error or ""), "INFO")
+        else
+          log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN")
+        end
+      end
       sequencer:notify_ack(id, result.module_id)
       local workflow_stage = nodes[id].shutdown_workflow and nodes[id].shutdown_workflow.stage or nil
       local workflow_waiting = workflow_stage == "REQUEST_STATE" or workflow_stage == "REQUESTED" or workflow_stage == "WAITING_STATE"
