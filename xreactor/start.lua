@@ -299,28 +299,24 @@ local function run_with_auto_update()
   local auto_loop = nil
   local ok_ru, remote_update = pcall(dofile, "/xreactor/core/remote_update.lua")
 
-  -- window.create: Terminal aufteilen damit Countdown-Zeile unabhängig ist
-  -- Hauptfenster: alle Zeilen ausser der letzten
-  -- Countdown-Fenster: nur letzte Zeile
-  local main_win = nil
+  -- Status-Fenster: nur die letzte Terminal-Zeile für den Countdown
+  -- Hauptprozess läuft auf dem nativen Terminal — kein redirect nötig
   local status_win = nil
   if type(window) == "table" and type(window.create) == "function"
      and type(term) == "table" and type(term.getSize) == "function" then
     local w, h = term.getSize()
     if h > 1 then
-      main_win   = window.create(term.native(), 1, 1, w, h - 1, true)
-      status_win = window.create(term.native(), 1, h, w, 1,     true)
-      -- Hauptprozess bekommt das kleinere Fenster
-      term.redirect(main_win)
+      status_win = window.create(term.native(), 1, h, w, 1, true)
     end
   end
 
   local function write_status(msg)
-    if not status_win then safe_print(msg); return end
-    status_win.setCursorPos(1, 1)
-    status_win.clearLine()
-    local w = select(1, status_win.getSize())
-    status_win.write(msg:sub(1, w))
+    if status_win then
+      status_win.setCursorPos(1, 1)
+      status_win.clearLine()
+      local w = select(1, status_win.getSize())
+      status_win.write(msg:sub(1, w))
+    end
   end
 
   if ok_ru and type(remote_update) == "table"
@@ -340,9 +336,6 @@ local function run_with_auto_update()
   else
     shell.run(entry)
   end
-
-  -- Terminal wiederherstellen
-  if main_win then pcall(term.redirect, term.native()) end
 end
 
 local ok, run_err = pcall(run_with_auto_update)
