@@ -245,7 +245,7 @@ end
 
 local release = read_release_info() or {}
 local start_msg = string.format(
-  "Starting XReactor | role=%-8s | %s | files=%s",
+  "XReactor %-6s | %s | %s files",
   tostring(role),
   tostring(release.release_id or "unknown"),
   tostring(release.manifest_file_count or "?")
