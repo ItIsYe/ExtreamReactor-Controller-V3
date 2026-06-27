@@ -12,7 +12,7 @@ return {
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true},
   { path = "installer_startup.lua", size_bytes = 1487, hash = "99155a25", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
-  { path = "release.lua", size_bytes = 348, hash = "2ec1623e", always=true},
+  { path = "release.lua", size_bytes = 348, hash = "4356cc37", always=true},
   { path = "start.lua", size_bytes = 10006, hash = "08d779a3", always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
   { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true},
