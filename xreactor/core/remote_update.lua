@@ -319,44 +319,19 @@ function M.auto_check_loop(log, check_interval_s)
       -- Warte zuerst — nach einem frischen Install ist Update unnötig
       local timer_id = os.startTimer and os.startTimer(check_interval_s) or nil
       log("INFO", ("AutoUpdate: naechster Check in %ds"):format(check_interval_s))
-      -- Letzte Terminal-Zeile fuer Countdown reservieren
-      local function draw_countdown(secs)
-        if not (type(term) == "table" and type(term.getSize) == "function") then return end
-        local w, h = term.getSize()
-        local cx, cy = term.getCursorPos()
-        -- Cursor in letzte Zeile
-        term.setCursorPos(1, h)
-        term.clearLine()
-        if secs > 0 then
-          term.write(("[AUTO] Update-Check in %3ds"):format(secs))
-        else
-          term.write("[AUTO] Pruefe neue Version...")
-        end
-        -- Cursor zurueck
-        term.setCursorPos(cx, cy)
-      end
       if timer_id then
         local remaining = check_interval_s
-        draw_countdown(remaining)
         local sec_timer = os.startTimer and os.startTimer(1) or nil
         repeat
           local ev, id = os.pullEvent()
           if ev == "timer" and id == sec_timer then
             remaining = remaining - 1
-            draw_countdown(remaining)
             if remaining > 0 and remaining % 30 == 0 then
               log("INFO", ("AutoUpdate: naechster Check in %ds"):format(remaining))
             end
             sec_timer = os.startTimer and os.startTimer(1) or nil
           end
         until ev == "timer" and id == timer_id
-        -- Zeile leeren
-        if type(term) == "table" and type(term.getSize) == "function" then
-          local w, h = term.getSize()
-          local cx, cy = term.getCursorPos()
-          term.setCursorPos(1, h); term.clearLine()
-          term.setCursorPos(cx, cy)
-        end
       else
         os.sleep(check_interval_s)
       end
