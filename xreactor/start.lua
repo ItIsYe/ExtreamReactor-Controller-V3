@@ -301,32 +301,15 @@ local function run_with_auto_update()
   local auto_loop = nil
   local ok_ru, remote_update = pcall(dofile, "/xreactor/core/remote_update.lua")
 
-  -- Status-Fenster: nur die letzte Terminal-Zeile für den Countdown
-  -- Hauptprozess läuft auf dem nativen Terminal — kein redirect nötig
-  local status_win = nil
-  if type(window) == "table" and type(window.create) == "function"
-     and type(term) == "table" and type(term.getSize) == "function" then
-    local w, h = term.getSize()
-    if h > 1 then
-      status_win = window.create(term.native(), 1, h, w, 1, true)
-    end
-  end
-
-  local function write_status(msg)
-    if status_win then
-      status_win.setCursorPos(1, 1)
-      status_win.clearLine()
-      local w = select(1, status_win.getSize())
-      status_win.write(msg:sub(1, w))
-    end
-  end
-
   if ok_ru and type(remote_update) == "table"
      and type(remote_update.auto_check_loop) == "function" then
     auto_loop = remote_update.auto_check_loop(
       function(level, msg)
         safe_log("AUTO_UPDATE", tostring(msg))
-        write_status("[AUTO] " .. tostring(msg))
+        -- Alle Meldungen als normale Zeile ausgeben
+        if level ~= "DEBUG" then
+          safe_print("[AUTO] " .. tostring(msg))
+        end
       end, 120)
   end
 
