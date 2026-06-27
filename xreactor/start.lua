@@ -1,3 +1,4 @@
+-- XReactor start.lua v185
 local ROLE_CONFIG_PATH = "/xreactor/config/role.lua"
 
 local ROLE_PATHS = {
