@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 194,
-  manifest_id = "manifest-v194",
+  manifest_version = 195,
+  manifest_id = "manifest-v195",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -20,7 +20,7 @@ return {
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38"},
   { path = "core/comms.lua", size_bytes = 24518, hash = "4f174212"},
   { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f"},
-  { path = "core/logger.lua", size_bytes = 31297, hash = "35081950"},
+  { path = "core/logger.lua", size_bytes = 31227, hash = "b82648cd"},
   { path = "core/monitor_manager.lua", size_bytes = 7592, hash = "7bdff373"},
   { path = "core/network.lua", size_bytes = 15309, hash = "7504d3dd"},
   { path = "core/non_rt_config.lua", size_bytes = 4183, hash = "6f5bf45f"},
