@@ -244,20 +244,12 @@ if not entry then
 end
 
 local release = read_release_info() or {}
-safe_log(
-  "STARTUP",
-  string.format(
-    "Starting XReactor role=%s release=%s manifest=%s files=%s cleanup=%s removed=%s free_before=%s free_after=%s",
-    tostring(role),
-    tostring(release.release_id or release.commit_sha or "unknown"),
-    tostring(release.manifest_id or release.manifest_version or "unknown"),
-    tostring(release.manifest_file_count or "unknown"),
-    tostring(startup_cleanup and startup_cleanup.ran or false),
-    tostring(startup_cleanup and startup_cleanup.removed or 0),
-    tostring(startup_cleanup and startup_cleanup.before or "n/a"),
-    tostring(startup_cleanup and startup_cleanup.after or "n/a")
-  )
-)
+safe_log("STARTUP", string.format(
+  "Starting XReactor | role=%-12s | %s | files=%s",
+  tostring(role),
+  tostring(release.release_id or "unknown"),
+  tostring(release.manifest_file_count or "?")
+))
 
 apply_startup_self_heal(role, entry, release)
 
