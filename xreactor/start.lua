@@ -244,12 +244,14 @@ if not entry then
 end
 
 local release = read_release_info() or {}
-safe_log("STARTUP", string.format(
-  "Starting XReactor | role=%-12s | %s | files=%s",
+local start_msg = string.format(
+  "Starting XReactor | role=%-8s | %s | files=%s",
   tostring(role),
   tostring(release.release_id or "unknown"),
   tostring(release.manifest_file_count or "?")
-))
+)
+safe_log("STARTUP", start_msg)
+safe_print(start_msg)
 
 apply_startup_self_heal(role, entry, release)
 
