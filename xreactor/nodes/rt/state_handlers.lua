@@ -175,7 +175,7 @@ function M.request_startup_if_needed(ctx, reason)
     return false
   end
   local machine_state = ctx.get_node_state_machine() and ctx.get_node_state_machine().state and ctx.get_node_state_machine():state() or nil
-  if machine_state ~= ctx.constants.node_states.RUNNING and machine_state ~= ctx.constants.node_states.OFF then
+  if machine_state ~= (ctx.constants or constants).node_states.RUNNING and machine_state ~= (ctx.constants or constants).node_states.OFF then
     return false
   end
   local needs_turbine = ctx.targets.enable_turbines ~= false and has_off_modules(ctx.modules, "turbine")
@@ -191,7 +191,7 @@ function M.request_startup_if_needed(ctx, reason)
     tostring(needs_turbine),
     tostring(needs_reactor)
   ))
-  ctx.get_node_state_machine():transition(ctx.constants.node_states.STARTUP)
+  ctx.get_node_state_machine():transition((ctx.constants or constants).node_states.STARTUP)
   return true
 end
 
@@ -235,19 +235,21 @@ end
 function M.apply_mode(ctx, mode)
   if mode == ctx.STATE.AUTONOM then
     if M.set_state(ctx, ctx.STATE.AUTONOM, "MODE_APPLY") then
-      ctx.get_node_state_machine():transition(ctx.constants.node_states.AUTONOM)
+      ctx.get_node_state_machine():transition((ctx.constants or constants).node_states.AUTONOM)
     end
   elseif mode == ctx.STATE.MASTER then
     if M.set_state(ctx, ctx.STATE.MASTER, "MODE_APPLY") then
       local current = ctx.get_node_state_machine():state()
-      if current == ctx.constants.node_states.OFF or current == ctx.constants.node_states.AUTONOM then
-        ctx.get_node_state_machine():transition(ctx.constants.node_states.STARTUP)
+      local ns = (ctx.constants or constants).node_states
+      if current == ns.OFF or current == ns.AUTONOM then
+        ctx.get_node_state_machine():transition(ns.STARTUP)
       end
     end
   elseif mode == ctx.STATE.SAFE then
     M.set_state(ctx, ctx.STATE.SAFE, "MODE_APPLY")
-    if ctx.get_node_state_machine():state() ~= ctx.constants.node_states.EMERGENCY then
-      ctx.get_node_state_machine():transition(ctx.constants.node_states.EMERGENCY)
+    local ns2 = (ctx.constants or constants).node_states
+    if ctx.get_node_state_machine():state() ~= ns2.EMERGENCY then
+      ctx.get_node_state_machine():transition(ns2.EMERGENCY)
     end
   end
 end
@@ -264,7 +266,7 @@ function M.monitor_master(ctx)
   if not connected then
     if M.set_state(ctx, ctx.STATE.AUTONOM, "MASTER_TIMEOUT_AUTONOM_FALLBACK") then
       ctx.log("WARN", "Master timeout detected, switching to AUTONOM")
-      ctx.get_node_state_machine():transition(ctx.constants.node_states.AUTONOM)
+      ctx.get_node_state_machine():transition((ctx.constants or constants).node_states.AUTONOM)
     end
   end
 end
