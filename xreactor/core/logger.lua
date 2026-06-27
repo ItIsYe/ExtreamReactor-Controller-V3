@@ -787,7 +787,7 @@ function logger.init(opts)
         local fallback_ok, fallback_result = pcall(startup_prepare, state.log_path, startup_mode, state.log_dir)
         state.startup_action = "startup_disk_reject_nonfatal(original=" .. tostring(startup_result) .. ",fallback=" .. tostring(fallback_ok and fallback_result or fallback_result) .. ")"
       end
-      safe_print(string.format("LOG: %s (%s)", state.log_path or state.log_dir or "?", tostring(state.log_source or "?")))
+      safe_print("LOG: " .. tostring(state.log_path or state.log_dir or "?") .. " [" .. tostring(state.log_source or "?") .. "]")
     end
   end)
   if not ok then
