@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 186,
-  manifest_id = "manifest-v186",
+  manifest_version = 187,
+  manifest_id = "manifest-v187",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -104,7 +104,7 @@ return {
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 31927, hash = "30e85bdb", required_for={"RT"}},
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"}},
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"}},
-    { path = "nodes/rt/state_handlers.lua", size_bytes = 9180, hash = "e5040b7e", required_for={"RT"}},
+    { path = "nodes/rt/state_handlers.lua", size_bytes = 9257, hash = "bb391437", required_for={"RT"}},
     { path = "nodes/rt/status_snapshot.lua", size_bytes = 5932, hash = "5448d394", required_for={"RT"}},
     },
     energy = {
