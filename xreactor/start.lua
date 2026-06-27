@@ -251,7 +251,6 @@ local start_msg = string.format(
   tostring(release.manifest_file_count or "?")
 )
 safe_log("STARTUP", start_msg)
-safe_print(start_msg)
 
 apply_startup_self_heal(role, entry, release)
 
@@ -293,6 +292,7 @@ if startup_delay > 0 then
     os.sleep(1)
   end
 end
+safe_print(start_msg)
 
 -- Auto-Update Loop parallel zum Node-Prozess.
 -- Läuft in start.lua damit er unabhängig vom Node-Code ist —
