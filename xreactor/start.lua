@@ -287,7 +287,7 @@ if startup_delay > 0 then
   local reason = (role == "MASTER") and "LOG_COLLECTOR" or "LOG_COLLECTOR + MASTER"
   safe_print(string.format("[BOOT] Warte %ds auf %s...", startup_delay, reason))
   for i = startup_delay, 1, -1 do
-    -- Countdown intern, keine Ausgabe
+    safe_print(string.format("  Start in %ds...", i))
     os.sleep(1)
   end
 end
