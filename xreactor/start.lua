@@ -301,7 +301,13 @@ local function run_with_auto_update()
   if ok_ru and type(remote_update) == "table"
      and type(remote_update.auto_check_loop) == "function" then
     auto_loop = remote_update.auto_check_loop(
-      function(level, msg) safe_log("AUTO_UPDATE", tostring(msg)) end, 120)
+      function(level, msg)
+        safe_log("AUTO_UPDATE", tostring(msg))
+        -- INFO-Meldungen auch auf PC-Terminal ausgeben
+        if level == "INFO" or level == "WARN" or level == "ERROR" then
+          safe_print("[AUTO] " .. tostring(msg))
+        end
+      end, 120)
   end
 
   if auto_loop then
