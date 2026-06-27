@@ -585,43 +585,46 @@ end
 
 local function main_loop()
   utils.log("ENERGY", "Entering event loop", "INFO")
-  local hb_interval_ms = heartbeat_interval_ms()
-  local heartbeat_timer = os.startTimer(hb_interval_ms / 1000)
-  local function rearm_heartbeat_timer()
-    heartbeat_timer = os.startTimer(hb_interval_ms / 1000)
-  end
-  while true do
-    local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
+
+  -- Heartbeat-Thread: sendet Heartbeat pünktlich, verarbeitet Modem-Events.
+  -- Wird NIEMALS durch Matrix-Polling blockiert.
+  local function heartbeat_loop()
     while true do
-      local event = { os.pullEventRaw() }
-      if event[1] == "terminate" then
-        return "terminate received"
-      end
-      if event[1] == "modem_message" then
-        comms:handle_event(event)
-        run_heartbeat_pump(now_ms())
-      elseif event[1] == "monitor_touch" or event[1] == "mouse_click" then
-        -- Log mode buttons on the Diagnostics page
-        if devices.monitor and ui_state.router and ui_state.router.current
-            and ui_state.router:current() and ui_state.router:current().name == "Diagnostics" then
-          ui_pages.handle_diagnostics_touch(devices.monitor, event[3], event[4])
+      local hb_interval_ms = heartbeat_interval_ms()
+      local heartbeat_timer = os.startTimer(hb_interval_ms / 1000)
+      while true do
+        local event = { os.pullEventRaw() }
+        if event[1] == "terminate" then return "terminate received" end
+        if event[1] == "modem_message" then
+          comms:handle_event(event)
+          run_heartbeat_pump(now_ms())
+        elseif event[1] == "monitor_touch" or event[1] == "mouse_click" then
+          if devices.monitor and ui_state.router and ui_state.router.current
+              and ui_state.router:current() and ui_state.router:current().name == "Diagnostics" then
+            ui_pages.handle_diagnostics_touch(devices.monitor, event[3], event[4])
+          end
+          services:tick(nil, event)
+        elseif event[1] == "key" then
+          services:tick(nil, event)
+        elseif event[1] == "timer" and event[2] == heartbeat_timer then
+          run_heartbeat_pump(now_ms())
+          heartbeat_timer = os.startTimer(hb_interval_ms / 1000)
         end
-        -- Still forward to services (ui_service handles page navigation)
-        services:tick(nil, event)
-      elseif event[1] == "key" then
-        services:tick(nil, event)
-      elseif event[1] == "timer" and event[2] == heartbeat_timer then
-        run_heartbeat_pump(now_ms())
-        rearm_heartbeat_timer()
-      elseif event[1] == "timer" and event[2] == timer then
-        break
       end
     end
-    -- C4: heartbeat_pump nur noch einmal nach services:tick() —
-    -- timer-basiertes Pumpen übernimmt die regelmäßige Sendung.
-    services:tick()
-    run_heartbeat_pump(now_ms())
   end
+
+  -- Matrix-Thread: services:tick() (MATRIX_SAMPLE) läuft hier — darf blockieren.
+  local function matrix_loop()
+    while true do
+      os.sleep(CONFIG.RECEIVE_TIMEOUT)
+      services:tick()
+      run_heartbeat_pump(now_ms())
+    end
+  end
+
+  parallel.waitForAny(heartbeat_loop, matrix_loop)
+  return "loop ended"
 end
 
 -- Auto-Update Loop parallel zum Haupt-Loop
