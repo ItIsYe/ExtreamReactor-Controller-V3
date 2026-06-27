@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 196,
-  manifest_id = "manifest-v196",
+  manifest_version = 197,
+  manifest_id = "manifest-v197",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -13,14 +13,14 @@ return {
   { path = "installer_startup.lua", size_bytes = 1487, hash = "99155a25", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
   { path = "release.lua", size_bytes = 348, hash = "6bc62931", always=true},
-  { path = "start.lua", size_bytes = 10708, hash = "fb31cd16", always=true},
+  { path = "start.lua", size_bytes = 10757, hash = "25c38619", always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
   { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true},
   { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460"},
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38"},
   { path = "core/comms.lua", size_bytes = 24518, hash = "4f174212"},
   { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f"},
-  { path = "core/logger.lua", size_bytes = 31227, hash = "b82648cd"},
+  { path = "core/logger.lua", size_bytes = 31234, hash = "ea1b3c53"},
   { path = "core/monitor_manager.lua", size_bytes = 7592, hash = "7bdff373"},
   { path = "core/network.lua", size_bytes = 15309, hash = "7504d3dd"},
   { path = "core/non_rt_config.lua", size_bytes = 4183, hash = "6f5bf45f"},
