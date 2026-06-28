@@ -1,0 +1,65 @@
+-- master/loop.lua
+-- Event-Loop des Masters. Sauber getrennt von Bootstrap/Init.
+
+local M = {}
+
+local REDSTONE_SIDES = { "top", "bottom", "left", "right", "front", "back" }
+
+local function make_redstone_handler(runtime, log, constants)
+  local last = {}
+  for _, s in ipairs(REDSTONE_SIDES) do last[s] = false end
+  return function()
+    if not redstone or type(redstone.getInput) ~= "function" then return end
+    for _, side in ipairs(REDSTONE_SIDES) do
+      local ok, current = pcall(redstone.getInput, side)
+      if ok and current and not last[side] then
+        log("Redstone-Trigger: broadcasting REMOTE_UPDATE", "WARN")
+        local nodes = runtime.state.nodes or {}
+        local count = 0; for _ in pairs(nodes) do count = count + 1 end
+        if count == 0 then
+          log("Remote-Update: KEINE Nodes bekannt", "ERROR")
+        end
+        local sent = 0
+        for node_id in pairs(nodes) do
+          local ok2 = pcall(function()
+            runtime.refs.comms:send_command(node_id, { target = constants.command_targets.REMOTE_UPDATE })
+          end)
+          if ok2 then sent = sent + 1 end
+        end
+        log(("Broadcast: sent=%d known=%d"):format(sent, count), "WARN")
+        for _ = 1, 10 do runtime.refs.services:tick(); os.sleep(0.05) end
+        log("Master aktualisiert sich selbst...", "WARN")
+        local remote_update = require("core.remote_update")
+        remote_update.run(function(level, text) log(text, level) end)
+        for _, s2 in ipairs(REDSTONE_SIDES) do last[s2] = true end
+        return
+      end
+      if ok then last[side] = current and true or false end
+    end
+  end
+end
+
+function M.run(runtime, constants)
+  local log = runtime.log
+  local check_redstone = make_redstone_handler(runtime, log, constants)
+  log("Entering event loop", "INFO")
+  while true do
+    local timer = os.startTimer(0.5)
+    while true do
+      local event = { os.pullEvent() }
+      local ev = event[1]
+      if ev == "modem_message" then
+        runtime.refs.comms:handle_event(event)
+      elseif ev == "monitor_touch" or ev == "key" or ev == "char" then
+        runtime.refs.services:tick(nil, event)
+      elseif ev == "redstone" then
+        check_redstone()
+      elseif ev == "timer" and event[2] == timer then
+        break
+      end
+    end
+    runtime.refs.services:tick()
+  end
+end
+
+return M
