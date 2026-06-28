@@ -229,7 +229,10 @@ function M.handle_command(opts)
     pcall(opts.send_ack)
   end
   log("WARN", "Remote-Update command accepted, starting installer...")
-  -- Versions-Check: remote release.lua holen und mit lokaler vergleichen.
+  return M.run(log)
+end
+
+-- Versions-Check: remote release.lua holen und mit lokaler vergleichen.
 -- SHA-PIN + Retries + HTML-Check — gleiche Robustheit wie M.run.
 -- Gibt nil zurück wenn nicht erreichbar oder gleich, sonst remote_version.
 function M.check_version(log)
@@ -307,9 +310,7 @@ function M.check_version(log)
   return remote_v
 end
 
--- Startet einen periodischen Versions-Check als parallelen os.timer-Loop.
--- check_interval_s: Sekunden zwischen Checks (default 120 = 2 min).
--- Wird vom Node-Main über parallel.waitForAny() oder os.timer eingehängt.
+-- Startet einen periodischen Versions-Check als parallelen Loop.
 -- Gibt eine Funktion zurück die in parallel.waitForAny() läuft.
 function M.auto_check_loop(log, check_interval_s)
   log = log or function() end
@@ -320,36 +321,29 @@ function M.auto_check_loop(log, check_interval_s)
       local timer_id = os.startTimer and os.startTimer(check_interval_s) or nil
       log("INFO", ("AutoUpdate: naechster Check in %ds"):format(check_interval_s))
       if timer_id then
-        local remaining = check_interval_s
-        local sec_timer = os.startTimer and os.startTimer(1) or nil
         repeat
           local ev, id = os.pullEvent()
-          if ev == "timer" and id == sec_timer then
-            remaining = remaining - 1
-            if remaining > 0 and remaining % 30 == 0 then
-              log("INFO", ("AutoUpdate: naechster Check in %ds"):format(remaining))
-            end
-            sec_timer = os.startTimer and os.startTimer(1) or nil
-          end
         until ev == "timer" and id == timer_id
       else
         os.sleep(check_interval_s)
       end
       -- Armed?
-      local cfg_armed, _ = M.is_armed()
+      local cfg_armed = M.is_armed()
       if not cfg_armed then
         log("DEBUG", "AutoUpdate: nicht armed, skip")
       else
-        -- Arming-Config auf auto_update prüfen
-        local h2 = fs and fs.exists(ARMING_CONFIG_PATH) and fs.open(ARMING_CONFIG_PATH, "r")
+        -- auto_update in Config prüfen
         local auto_enabled = false
-        if h2 then
-          local src = h2.readAll(); h2.close()
-          local loader = load(src, "=arm", "t", {})
-          if loader then
-            local ok2, cfg2 = pcall(loader)
-            if ok2 and type(cfg2) == "table" then
-              auto_enabled = cfg2.auto_update == true
+        if fs and fs.exists(ARMING_CONFIG_PATH) then
+          local h2 = fs.open(ARMING_CONFIG_PATH, "r")
+          if h2 then
+            local src = h2.readAll(); h2.close()
+            local loader = load(src, "=arm", "t", {})
+            if loader then
+              local ok2, cfg2 = pcall(loader)
+              if ok2 and type(cfg2) == "table" then
+                auto_enabled = cfg2.auto_update == true
+              end
             end
           end
         end
@@ -359,7 +353,6 @@ function M.auto_check_loop(log, check_interval_s)
           local new_v = M.check_version(log)
           if new_v then
             log("WARN", ("AutoUpdate: neue Version v%d — starte Update"):format(new_v))
-            -- 3 Versuche
             local success = false
             for attempt = 1, 3 do
               log("INFO", ("AutoUpdate: Versuch %d/3"):format(attempt))
@@ -370,19 +363,15 @@ function M.auto_check_loop(log, check_interval_s)
             end
             if not success then
               log("ERROR", ("AutoUpdate: alle 3 Versuche fehlgeschlagen — naechster Check in %ds"):format(check_interval_s))
-              -- Extra-Wartezeit nach fehlgeschlagenem Update (kein Retry-Spam)
               if os and type(os.sleep) == "function" then os.sleep(60) end
             else
-              return  -- reboot wurde ausgelöst
+              return  -- reboot ausgelöst
             end
           end
         end
       end
     end
   end
-end
-
-return M.run(log, opts)
 end
 
 return M
