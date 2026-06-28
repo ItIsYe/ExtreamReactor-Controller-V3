@@ -1,11 +1,13 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 196,
-  manifest_id = "manifest-v196",
+  manifest_version = 197,
+  manifest_id = "manifest-v197",
   source_ref = "beta",
   hash_algo = "none",
 
   base_files = {
+  { path = "services/heartbeat_service.lua", size_bytes = 2643, hash = "973887e9"},
+  { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6"},
   { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c"},
   { path = "master/loop.lua", size_bytes = 2339, hash = "0e3415b9"},
   { path = "nodes/energy/heartbeat.lua", size_bytes = 2627, hash = "58f67fea"},
