@@ -302,15 +302,17 @@ local function run_with_auto_update()
   local auto_loop = nil
   local ok_ru, remote_update = pcall(dofile, "/xreactor/core/remote_update.lua")
 
-  if ok_ru and type(remote_update) == "table"
-     and type(remote_update.auto_check_loop) == "function" then
+  if not ok_ru then
+    safe_print("[AUTO] remote_update load failed: " .. tostring(remote_update))
+  elseif type(remote_update) ~= "table" then
+    safe_print("[AUTO] remote_update is not a table: " .. type(remote_update))
+  elseif type(remote_update.auto_check_loop) ~= "function" then
+    safe_print("[AUTO] auto_check_loop nicht verfuegbar")
+  else
+    safe_print("[AUTO] Auto-Update Loop wird gestartet (Intervall 120s)")
     auto_loop = remote_update.auto_check_loop(
       function(level, msg)
-        safe_log("AUTO_UPDATE", tostring(msg))
-        -- Alle Meldungen als normale Zeile ausgeben
-        if level ~= "DEBUG" then
-          safe_print("[AUTO] " .. tostring(msg))
-        end
+        safe_print("[AUTO_UPDATE] " .. tostring(msg))
       end, 120)
   end
 
