@@ -1,11 +1,13 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 195,
-  manifest_id = "manifest-v195",
+  manifest_version = 196,
+  manifest_id = "manifest-v196",
   source_ref = "beta",
   hash_algo = "none",
 
   base_files = {
+  { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c"},
+  { path = "master/loop.lua", size_bytes = 2339, hash = "0e3415b9"},
   { path = "nodes/energy/heartbeat.lua", size_bytes = 2627, hash = "58f67fea"},
   { path = "nodes/energy/matrix.lua", size_bytes = 1079, hash = "ef46a3f2"},
   { path = "installer/http.lua", size_bytes = 4100, hash = "2e05f6fd", always=true},
@@ -65,13 +67,13 @@ return {
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"}},
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"}},
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"}},
-    { path = "master/message_handlers.lua", size_bytes = 21181, hash = "6396e680", required_for={"MASTER"}},
+    { path = "master/message_handlers.lua", size_bytes = 21372, hash = "ad77b73e", required_for={"MASTER"}},
     { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"}},
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
     { path = "master/rt_sync.lua", size_bytes = 17394, hash = "e565fff1", required_for={"MASTER"}},
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"}},
     { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"}},
-    { path = "master/runtime_loop.lua", size_bytes = 17045, hash = "b1dbd148", required_for={"MASTER"}},
+    { path = "master/runtime_loop.lua", size_bytes = 9880, hash = "fc4ec810", required_for={"MASTER"}},
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"}},
     { path = "master/runtime_ops_profile.lua", size_bytes = 11983, hash = "28ee5f71", required_for={"MASTER"}},
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"}},
