@@ -210,7 +210,8 @@ function M.new(opts)
     -- Sobald capacity_max bekannt: Profile-Retry ausloesen wenn power_target=0
     -- runtime ist nicht im direkten Scope — nutze _G.xreactor_runtime
     if (rt.capacity_max or 0) > 0 then
-      local rt_ref = _G.xreactor_runtime
+      -- Nutze direkten runtime-Kontext (kein _G-Hack)
+      local rt_ref = M._runtime or _G.xreactor_runtime
       if type(rt_ref) == "table" and type(rt_ref.state) == "table"
          and (tonumber(rt_ref.state.power_target) or 0) == 0
          and type(rt_ref.libs) == "table"
@@ -412,6 +413,11 @@ function M.new(opts)
   end
 
   return { update_node = update_node }
+end
+
+-- set_runtime: direkten runtime-Zugriff ermöglichen ohne _G
+function M.set_runtime(runtime)
+  M._runtime = runtime
 end
 
 return M
