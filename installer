@@ -541,9 +541,11 @@ local function run_update(sha)
             if f then
               pcall(function() f.write(body) end); pcall(f.close)
               _G.__xreactor_remote_update = true
-              local ok_run = pcall(shell.run, tmp)
+              -- shell nicht verfügbar in parallel-Coroutine → dofile nutzen
+              local ok_run, run_err = pcall(dofile, tmp)
               pcall(fs.delete, tmp)
               if ok_run then log("Update OK — Neustart"); os.sleep(1); os.reboot(); return true end
+              log("dofile Fehler: " .. tostring(run_err))
             end
           end
       end
