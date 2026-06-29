@@ -24,7 +24,7 @@ return {
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true},
   { path = "installer_startup.lua", size_bytes = 1487, hash = "99155a25", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
-  { path = "release.lua", size_bytes = 273, hash = "317bcb13", always=true, always=true, always=true, always=true, always=true, always=true, always=true},
+  { path = "release.lua", size_bytes = 273, hash = "a7261d1a", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true},
   { path = "start.lua", size_bytes = 3823, hash = "18c3278d", always=true, always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
   { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true},
