@@ -36,9 +36,9 @@ function M.write(path, content)
   local tmp = path .. ".xr_tmp"
   local f = fs.open(tmp, "w")
   if not f then return false, "open failed: " .. tmp end
-  local ok, err = pcall(f.write, f, content)
-  pcall(f.close, f)
-  if not ok then pcall(fs.delete, tmp); return false, tostring(err) end
+  local write_ok, write_err = pcall(function() f.write(content) end)
+  pcall(f.close)
+  if not write_ok then pcall(fs.delete, tmp); return false, tostring(write_err) end
   if fs.exists(path) then pcall(fs.delete, path) end
   local ok2, mv_err = pcall(fs.move, tmp, path)
   if not ok2 then pcall(fs.delete, tmp); return false, "move failed: " .. tostring(mv_err) end
