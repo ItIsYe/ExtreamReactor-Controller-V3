@@ -11,6 +11,45 @@ local GITHUB_RAW    = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-C
 
 local function log(msg) pcall(print, "[AUTO] " .. tostring(msg)) end
 
+-- HTTP-Download parallel-sicher:
+-- Nutzt http.request (async) + wartet auf http_success/http_failure Event.
+-- Andere Coroutinen sehen alle anderen Events weiterhin.
+local function http_get_async(url)
+  if not http or type(http.request) ~= "function" then
+    -- Fallback: synchrones http.get (funktioniert nur ohne parallel)
+    local ok, r = pcall(http.get, url)
+    if not ok or not r then return nil, "http.get failed" end
+    local ok2, body = pcall(r.readAll); pcall(r.close)
+    if ok2 and type(body) == "string" then return body end
+    return nil, "readAll failed"
+  end
+  -- Async-Pfad: http.request + Event warten
+  local ok_req = pcall(http.request, url)
+  if not ok_req then return nil, "http.request failed" end
+  -- Warte auf http_success oder http_failure für diese URL
+  -- Timeout: 300 Ticks = 15 Sekunden
+  local timer = os.startTimer(15)
+  while true do
+    local ev, p1, p2, p3 = os.pullEvent()
+    if ev == "http_success" and p1 == url then
+      if p2 then
+        local ok2, body = pcall(p2.readAll); pcall(p2.close)
+        if ok2 and type(body) == "string" and #body > 0 then
+          return body
+        end
+        return nil, "readAll failed"
+      end
+      return nil, "empty response"
+    elseif ev == "http_failure" and p1 == url then
+      if p3 then pcall(p3.close) end
+      return nil, tostring(p2 or "http_failure")
+    elseif ev == "timer" and p1 == timer then
+      return nil, "timeout"
+    end
+    -- Alle anderen Events ignorieren (andere Coroutinen kriegen sie trotzdem)
+  end
+end
+
 local function arming()
   if not fs or not fs.exists(ARMING_PATH) then
     log("Config fehlt: " .. ARMING_PATH)
@@ -33,13 +72,10 @@ end
 local function resolve_sha()
   if not http or type(http.get) ~= "function" then return nil end
   for attempt = 1, 3 do
-    local ok, r = pcall(http.get, GITHUB_API)
-    if ok and r then
-      local ok2, body = pcall(r.readAll); pcall(r.close)
-      if ok2 and type(body) == "string" then
-        local sha = body:match('"sha"%s*:%s*"(%x+)"')
-        if sha then return sha end
-      end
+    local body = http_get_async(GITHUB_API)
+    if body then
+      local sha = body:match('"sha"%s*:%s*"(%x+)"')
+      if sha then return sha end
     end
     if attempt < 3 then os.sleep(3) end
   end
@@ -60,15 +96,12 @@ local function fetch_remote_version(sha)
   } or { GITHUB_RAW .. "beta/xreactor/release.lua" }
   for _, url in ipairs(urls) do
     for attempt = 1, 3 do
-      local ok, r = pcall(http.get, url)
-      if ok and r then
-        local ok2, body = pcall(r.readAll); pcall(r.close)
-        if ok2 and type(body) == "string" and #body > 10 then
-          local s = body:sub(1, 200):lower()
-          if not s:find("<html", 1, true) and not s:find("<!doctype", 1, true) then
-            local v = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
-            if v then return v end
-          end
+      local body, err = http_get_async(url)
+      if body then
+        local s = body:sub(1, 200):lower()
+        if not s:find("<html", 1, true) and not s:find("<!doctype", 1, true) then
+          local v = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
+          if v then return v end
         end
       end
       if attempt < 3 then os.sleep(3) end
@@ -85,10 +118,8 @@ local function run_update(sha)
   for _, url in ipairs(urls) do
     for attempt = 1, 4 do
       local delays = {2, 5, 10, 20}
-      local ok, r = pcall(http.get, url)
-      if ok and r then
-        local ok2, body = pcall(r.readAll); pcall(r.close)
-        if ok2 and type(body) == "string" and #body > 100 then
+      local body = http_get_async(url)
+      if body and #body > 100 then
           local s = body:sub(1, 200):lower()
           if not s:find("<html", 1, true) and not s:find("<!doctype", 1, true) then
             local tmp = "/xreactor_auto_update_installer.lua"
@@ -101,7 +132,6 @@ local function run_update(sha)
               if ok_run then log("Update OK — Neustart"); os.sleep(1); os.reboot(); return true end
             end
           end
-        end
       end
       if attempt < 4 then os.sleep(delays[attempt] or 20) end
     end
