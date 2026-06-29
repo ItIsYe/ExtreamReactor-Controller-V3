@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 199,
-  manifest_id = "manifest-v199",
+  manifest_version = 200,
+  manifest_id = "manifest-v200",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -9,14 +9,14 @@ return {
   { path = "services/heartbeat_service.lua", size_bytes = 2643, hash = "973887e9"},
   { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6"},
   { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c"},
-  { path = "master/loop.lua", size_bytes = 2339, hash = "0e3415b9"},
-  { path = "nodes/energy/heartbeat.lua", size_bytes = 2627, hash = "58f67fea"},
+  { path = "master/loop.lua", size_bytes = 2411, hash = "e980ca5e"},
+  { path = "nodes/energy/heartbeat.lua", size_bytes = 2746, hash = "a142dc47"},
   { path = "nodes/energy/matrix.lua", size_bytes = 1079, hash = "ef46a3f2"},
   { path = "installer/http.lua", size_bytes = 3192, hash = "fe55b6ce", always=true},
   { path = "installer/manifest.lua", size_bytes = 4233, hash = "5c242de9", always=true},
   { path = "installer/stage.lua", size_bytes = 3289, hash = "ebedda5e", always=true},
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true},
-  { path = "installer/auto_update.lua", size_bytes = 5217, hash = "24069b08", always=true},
+  { path = "installer/auto_update.lua", size_bytes = 5289, hash = "60a00d1b", always=true},
   { path = "installer/init.lua", size_bytes = 4481, hash = "f9ae3a57", always=true},
   { path = "installer_http.lua", size_bytes = 4688, hash = "ea6f7420", always=true},
   { path = "installer_main.lua", size_bytes = 28751, hash = "d7b62b03", always=true},
