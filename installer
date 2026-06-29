@@ -1,115 +1,858 @@
--- /installer
--- Bootstrap: lädt xreactor/installer/init.lua und führt ihn aus.
+-- /installer (monolithisch — alle Module eingebettet)
+-- Kein Download der Module nötig — alles in einer Datei.
 
 local INSTALL_ROOT = "/xreactor"
-local GITHUB_API   = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 local GITHUB_RAW   = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
+local GITHUB_API   = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 
 local function p(msg) pcall(print, tostring(msg)) end
 
--- HTTP verfügbar?
-if not http then
-  error("HTTP API nicht verfuegbar! Aktiviere HTTP in der CC-Config.", 0)
+if not http then error("HTTP nicht verfuegbar! Bitte HTTP in CC-Config aktivieren.", 0) end
+
+-- ── Eingebettete Module ──────────────────────────────────────────────────────
+-- Werden via load() ausgeführt und geben ihr Modul-Table zurück.
+
+local function load_module(name, src)
+  local fn, err = load(src, "=" .. name, "t", _ENV)
+  if not fn then error("Modul " .. name .. " Syntaxfehler: " .. tostring(err), 0) end
+  local ok, mod = pcall(fn)
+  if not ok then error("Modul " .. name .. " Ladefehler: " .. tostring(mod), 0) end
+  return mod
 end
 
-local function download(url)
-  -- Versuch 1: http.get
-  local ok, r = pcall(http.get, url)
-  if ok and r then
-    local ok2, body = pcall(r.readAll); pcall(r.close)
-    if ok2 and type(body) == "string" and #body > 0 then
-      local s = body:sub(1, 200):lower()
-      if s:find("<html", 1, true) or s:find("<!doctype", 1, true) then
-        return nil, "HTML-Antwort (CDN-Fehler)"
-      end
-      return body
-    end
-    return nil, "readAll fehlgeschlagen"
-  end
-  -- Fehlermeldung ausgeben
-  local err_msg = type(r) == "string" and r or "http.get fehlgeschlagen"
-  return nil, err_msg
-end
 
-local function download_retry(url, label)
-  local delays = {0, 3, 5}
+local http_src = [==[
+-- installer/http.lua
+-- Download-Modul: SHA-PIN, Retries, HTML-Check
+-- CC:Tweaked kompatibel: http.get(url) ohne timeout-Parameter
+
+local M = {}
+
+local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
+local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
+
+-- SHA auflösen (3 Versuche)
+function M.resolve_sha()
+  if not http or type(http.get) ~= "function" then return nil end
   for attempt = 1, 3 do
-    if attempt > 1 then
-      p("  Versuch " .. attempt .. "/3 fuer " .. label)
-      os.sleep(delays[attempt])
+    local ok, r = pcall(http.get, GITHUB_API)
+    if ok and r then
+      local ok2, body = pcall(r.readAll); pcall(r.close)
+      if ok2 and type(body) == "string" then
+        local sha = body:match('"sha"%s*:%s*"(%x+)"')
+        if sha then return sha end
+      end
     end
-    local body, err = download(url)
-    if body then return body end
-    p("  WARN: " .. tostring(err))
+    if attempt < 3 then os.sleep(3) end
   end
-  return nil, "alle Versuche fehlgeschlagen"
+  return nil
 end
 
-local function write(path, content)
+-- HTML-Erkennung (CDN-Fehlerseiten)
+function M.is_html(body)
+  if type(body) ~= "string" then return false end
+  local s = body:sub(1, 200):lower()
+  return s:find("<html", 1, true) ~= nil or s:find("<!doctype", 1, true) ~= nil
+end
+
+-- Einfacher synchroner Download einer URL.
+-- Gibt body oder nil, err zurück.
+local function try_once(url)
+  if not http or type(http.get) ~= "function" then return nil, "no http" end
+  local ok, r = pcall(http.get, url)
+  if not ok or not r then return nil, "http.get failed" end
+  -- Response-Code prüfen wenn verfügbar
+  if type(r.getResponseCode) == "function" then
+    local code = r.getResponseCode()
+    if code ~= 200 then pcall(r.close); return nil, "HTTP " .. tostring(code) end
+  end
+  local ok2, body = pcall(r.readAll); pcall(r.close)
+  if not ok2 or type(body) ~= "string" then return nil, "read failed" end
+  return body
+end
+
+-- Download mit Retries und Cache-Busting.
+-- opts: { retries=4, delays={2,5,10,20} }
+function M.download(url, opts)
+  opts = opts or {}
+  local retries = opts.retries or 4
+  local delays  = opts.delays  or {2, 5, 10, 20}
+  local last_err
+  for attempt = 1, retries do
+    -- Cache-Bust
+    local sep = url:find("?", 1, true) and "&" or "?"
+    local t   = tostring(os.epoch and os.epoch("utc") or os.time())
+    local u   = url .. sep .. "xr_cb=" .. attempt .. "_" .. t
+    local body, err = try_once(u)
+    if body then
+      if M.is_html(body) then
+        last_err = "unexpected HTML (CDN error)"
+      else
+        return body, url
+      end
+    else
+      last_err = err
+    end
+    if attempt < retries then
+      os.sleep(delays[attempt] or 20)
+    end
+  end
+  return nil, tostring(last_err or "download failed after " .. retries .. " retries")
+end
+
+-- Lädt eine Datei aus dem xreactor-Verzeichnis des Repos.
+-- SHA-URL zuerst, Branch-URL als Fallback.
+function M.download_file(rel_path, sha, opts)
+  local urls = {}
+  if sha then
+    urls[1] = GITHUB_RAW .. sha  .. "/xreactor/" .. rel_path
+    urls[2] = GITHUB_RAW .. "beta/xreactor/" .. rel_path
+  else
+    urls[1] = GITHUB_RAW .. "beta/xreactor/" .. rel_path
+  end
+  local last_err
+  for _, url in ipairs(urls) do
+    local body, err = M.download(url, opts)
+    if body then return body, url end
+    last_err = err
+  end
+  return nil, "alle URLs fehlgeschlagen fuer " .. rel_path .. ": " .. tostring(last_err)
+end
+
+return M
+
+]==]
+
+local manifest_src = [==[
+-- installer/manifest.lua
+-- Manifest laden, Dateien vergleichen, erwartete Dateien pro Rolle bestimmen.
+
+local M = {}
+
+local LOG_ROLES = { LOG = true, LOG_COLLECTOR = true }
+
+local SKIP = {
+  ["nodes/energy/adapter_probe.lua"] = true,
+  ["nodes/rt/commands.lua"]          = true,
+  ["nodes/rt/controllers.lua"]       = true,
+  ["nodes/rt/discovery.lua"]         = true,
+  ["nodes/rt/ramp.lua"]              = true,
+  ["nodes/rt/safety.lua"]            = true,
+  ["nodes/rt/state.lua"]             = true,
+  ["nodes/rt/telemetry.lua"]         = true,
+}
+
+local ROLE_EXTRAS = {
+  RT = {
+    "adapters/reactor.lua", "adapters/turbine.lua",
+    "core/control_rails.lua", "core/fluid.lua",
+    "core/turbine_ctrl.lua", "core/turbine_regulator.lua",
+    "nodes/rt/command_handler.lua", "nodes/rt/config_normalizer.lua",
+    "nodes/rt/discovery_log.lua", "nodes/rt/discovery_runtime.lua",
+    "nodes/rt/flow_apply_helpers.lua", "nodes/rt/health_payload.lua",
+    "nodes/rt/module_lifecycle.lua", "nodes/rt/monitor_ui.lua",
+    "nodes/rt/reactor_steam_guard.lua", "nodes/rt/startup_diagnostics.lua",
+    "nodes/rt/state_handlers.lua", "nodes/rt/status_snapshot.lua",
+  }
+}
+
+local function crc32(content)
+  local CRC = {}
+  for i = 0, 255 do
+    local c = i
+    for _ = 1, 8 do
+      if bit32.band(c, 1) == 1 then
+        c = bit32.bxor(bit32.rshift(c, 1), 0xEDB88320)
+      else
+        c = bit32.rshift(c, 1)
+      end
+    end
+    CRC[i] = c
+  end
+  local crc = 0xFFFFFFFF
+  for i = 1, #content do
+    local idx = bit32.band(bit32.bxor(crc, string.byte(content, i)), 0xFF)
+    crc = bit32.bxor(bit32.rshift(crc, 8), CRC[idx])
+  end
+  return string.format("%08x", bit32.bxor(crc, 0xFFFFFFFF))
+end
+M.crc32 = crc32
+
+function M.is_current(path, entry)
+  if not fs.exists(path) then return false, "missing" end
+  local f = fs.open(path, "r")
+  if not f then return false, "unreadable" end
+  local content = f.readAll(); f.close()
+  if entry.size_bytes and #content ~= entry.size_bytes then
+    return false, "size_mismatch"
+  end
+  if entry.hash and entry.hash ~= "" then
+    local actual = crc32(content)
+    if actual:lower() ~= entry.hash:lower() then
+      return false, "hash_mismatch"
+    end
+  end
+  return true
+end
+
+function M.load_remote(url, http_mod)
+  local body, err = http_mod.download(url)
+  if not body then return nil, err end
+  if http_mod.is_html(body) then return nil, "unexpected HTML" end
+  local loader, lerr = load(body, "=manifest", "t", {})
+  if not loader then return nil, "parse: " .. tostring(lerr) end
+  local ok, result = pcall(loader)
+  if not ok or type(result) ~= "table" then
+    return nil, "invalid manifest: " .. tostring(result)
+  end
+  return result
+end
+
+function M.files_for_role(manifest, role_label)
+  local is_log = LOG_ROLES[role_label:upper()] == true
+  local expected = {}
+
+  local function add(entry)
+    if type(entry) == "string" then entry = { path = entry } end
+    if type(entry) ~= "table" or not entry.path then return end
+    if SKIP[entry.path] then return end
+    expected[entry.path] = entry
+  end
+
+  for _, e in ipairs(manifest.base_files or {}) do
+    if not is_log or e.always == true then add(e) end
+  end
+
+  if not is_log then
+    for rkey, rentries in pairs(manifest.roles or {}) do
+      for _, e in ipairs(rentries or {}) do
+        if type(e) == "table" then
+          local rf = e.required_for
+          local matches = e.always == true
+          if not matches and type(rf) == "table" then
+            for _, v in ipairs(rf) do
+              if tostring(v):upper() == role_label:upper() then matches = true; break end
+            end
+          end
+          if matches then add(e) end
+        end
+      end
+    end
+  end
+
+  local installer_files = {
+    "installer/http.lua", "installer/manifest.lua", "installer/stage.lua",
+    "installer/ui.lua", "installer/auto_update.lua", "installer/init.lua",
+    "manifest.lua", "release.lua", "start.lua",
+  }
+  for _, p in ipairs(installer_files) do
+    if not expected[p] then expected[p] = { path = p, always = true } end
+  end
+
+  local extras = ROLE_EXTRAS[role_label:upper()] or {}
+  for _, p in ipairs(extras) do
+    if not SKIP[p] and not expected[p] then expected[p] = { path = p } end
+  end
+
+  return expected
+end
+
+return M
+
+]==]
+
+local stage_src = [==[
+-- installer/stage.lua
+-- Dateien herunterladen und schreiben. Atomic write, Speicher-Check.
+
+local M = {}
+local WRITE_BUFFER = 1024
+
+local function free_space()
+  if not fs.getFreeSpace then return nil end
+  local ok, v = pcall(fs.getFreeSpace, "/")
+  if not ok then return nil end
+  if type(v) == "string" then
+    if v:lower() == "unlimited" then return math.huge end
+    v = tonumber(v)
+  end
+  if type(v) == "number" then return v < 0 and math.huge or v end
+  return nil
+end
+
+local function reclaim(needed)
+  local free = free_space()
+  if free and free >= needed then return true end
+  if fs.exists("/xreactor_logs")       then pcall(fs.delete, "/xreactor_logs") end
+  pcall(fs.makeDir, "/xreactor_logs")
+  if fs.exists("/xreactor_backup_prev") then pcall(fs.delete, "/xreactor_backup_prev") end
+  if fs.exists("/xreactor_stage")       then pcall(fs.delete, "/xreactor_stage") end
+  free = free_space()
+  return free == nil or free >= needed
+end
+
+function M.write(path, content)
   local dir = fs.getDir(path)
   if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
-  local f = fs.open(path, "w")
-  if not f then return false, "open fehlgeschlagen: " .. path end
-  f.write(content); f.close()
-  -- Verifikation
-  if not fs.exists(path) then return false, "Datei nach Schreiben nicht vorhanden" end
+  if not reclaim(#content + WRITE_BUFFER) then
+    return false, "not enough space for " .. path
+  end
+  local tmp = path .. ".xr_tmp"
+  local f = fs.open(tmp, "w")
+  if not f then return false, "open failed: " .. tmp end
+  local write_ok, write_err = pcall(function() f.write(content) end)
+  pcall(f.close)
+  if not write_ok then pcall(fs.delete, tmp); return false, tostring(write_err) end
+  if fs.exists(path) then pcall(fs.delete, path) end
+  local ok2, mv_err = pcall(fs.move, tmp, path)
+  if not ok2 then pcall(fs.delete, tmp); return false, "move failed: " .. tostring(mv_err) end
   return true
+end
+
+function M.read(path)
+  if not fs.exists(path) then return nil end
+  local f = fs.open(path, "r")
+  if not f then return nil end
+  local c = f.readAll(); f.close(); return c
+end
+
+function M.verify(path, entry)
+  if not fs.exists(path) then return false, "missing: " .. path end
+  local content = M.read(path)
+  if not content then return false, "unreadable: " .. path end
+  if entry and entry.size_bytes and #content ~= entry.size_bytes then
+    return false, string.format("size mismatch %s: got %d expected %d",
+      path, #content, entry.size_bytes)
+  end
+  if path:sub(-4) == ".lua" then
+    local loader, lerr = load(content, "=" .. path, "t", {})
+    if not loader then return false, "lua syntax: " .. path .. ": " .. tostring(lerr) end
+  end
+  return true
+end
+
+function M.install(files, install_root, http_mod, sha, progress_fn)
+  local total = #files
+  for i, item in ipairs(files) do
+    local rel   = item.path
+    local entry = item.entry or {}
+    local dest  = install_root .. "/" .. rel
+    local content = item.content
+    if not content then
+      local body, err = http_mod.download_file(rel, sha)
+      if not body then return false, "download failed: " .. rel .. " — " .. tostring(err) end
+      if http_mod.is_html(body) then return false, "unexpected HTML for: " .. rel end
+      content = body
+    end
+    local ok, werr = M.write(dest, content)
+    if not ok then return false, werr end
+    local ok2, verr = M.verify(dest, entry)
+    if not ok2 then return false, verr end
+    if progress_fn then progress_fn(i, total, rel) end
+  end
+  return true
+end
+
+return M
+
+]==]
+
+local ui_src = [==[
+-- installer/ui.lua
+-- Terminal-Ausgabe für den Installer.
+
+local M = {}
+local function p(msg) pcall(print, tostring(msg)) end
+local function w(msg) pcall(write, tostring(msg)) end
+
+function M.header(title) p(""); p("=== " .. tostring(title) .. " ==="); p("") end
+function M.info(msg)  p("[INFO] " .. tostring(msg)) end
+function M.warn(msg)  p("[WARN] " .. tostring(msg)) end
+function M.error(msg) p("[ERR ] " .. tostring(msg)) end
+function M.ok(msg)    p("[ OK ] " .. tostring(msg)) end
+
+function M.progress(done, total, label)
+  local pct = total > 0 and math.floor(done / total * 100) or 0
+  p(string.format("  [%3d%%] %d/%d %s", pct, done, total, tostring(label or "")))
+end
+
+local ROLES = {
+  { key = "master",       label = "MASTER"       },
+  { key = "rt",           label = "RT"           },
+  { key = "energy",       label = "ENERGY"       },
+  { key = "water",        label = "WATER"        },
+  { key = "fuel",         label = "FUEL"         },
+  { key = "reprocessing", label = "REPROCESSING" },
+  { key = "log",          label = "LOG"          },
+}
+
+function M.select_role()
+  p("")
+  for i, r in ipairs(ROLES) do p(string.format("  %d) %s", i, r.label)) end
+  p("")
+  w("Rolle wählen [1-" .. #ROLES .. "]: ")
+  local choice = tonumber(read() or "")
+  if choice and ROLES[choice] then return ROLES[choice] end
+  return nil
+end
+
+function M.confirm(question)
+  if _G.__xreactor_remote_update then p(question .. " [j/n]: j (automatisch)"); return true end
+  while true do
+    w(question .. " [j/n]: ")
+    local a = (read() or ""):lower()
+    if a == "j" or a == "ja" or a == "y" or a == "yes" then return true end
+    if a == "n" or a == "nein" or a == "no" then return false end
+    p("Bitte j oder n eingeben.")
+  end
+end
+
+return M
+
+]==]
+
+local au_src = [==[
+-- installer/auto_update.lua
+-- Periodischer Versions-Check und automatisches Update.
+-- Läuft OHNE Bootstrap — nur fs, http, os, print verfügbar.
+
+local M = {}
+
+local ARMING_PATH   = "/xreactor/config/remote_update.lua"
+local RELEASE_PATH  = "/xreactor/release.lua"
+local GITHUB_API    = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
+local GITHUB_RAW    = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
+
+local function log(msg) pcall(print, "[AUTO] " .. tostring(msg)) end
+
+local function arming()
+  if not fs or not fs.exists(ARMING_PATH) then return nil end
+  local f = fs.open(ARMING_PATH, "r"); if not f then return nil end
+  local src = f.readAll(); f.close()
+  local loader = load(src, "=arm", "t", {}); if not loader then return nil end
+  local ok, cfg = pcall(loader)
+  if not ok or type(cfg) ~= "table" or cfg.enabled ~= true then return nil end
+  return cfg
+end
+
+local function resolve_sha()
+  if not http or type(http.get) ~= "function" then return nil end
+  for attempt = 1, 3 do
+    local ok, r = pcall(http.get, GITHUB_API, nil, { timeout = 10 })
+    if ok and r then
+      local ok2, body = pcall(r.readAll); pcall(r.close)
+      if ok2 and type(body) == "string" then
+        local sha = body:match('"sha"%s*:%s*"(%x+)"')
+        if sha then return sha end
+      end
+    end
+    if attempt < 3 then os.sleep(3) end
+  end
+  return nil
+end
+
+local function read_version(path)
+  if not fs or not fs.exists(path) then return nil end
+  local f = fs.open(path, "r"); if not f then return nil end
+  local src = f.readAll(); f.close()
+  return tonumber(src:match("manifest_version%s*=%s*(%d+)"))
+end
+
+local function fetch_remote_version(sha)
+  local urls = sha and {
+    GITHUB_RAW .. sha .. "/xreactor/release.lua",
+    GITHUB_RAW .. "beta/xreactor/release.lua",
+  } or { GITHUB_RAW .. "beta/xreactor/release.lua" }
+  for _, url in ipairs(urls) do
+    for attempt = 1, 3 do
+      local ok, r = pcall(http.get, url, nil, { timeout = 10 })
+      if ok and r then
+        local ok2, body = pcall(r.readAll); pcall(r.close)
+        if ok2 and type(body) == "string" and #body > 10 then
+          local s = body:sub(1, 200):lower()
+          if not s:find("<html", 1, true) and not s:find("<!doctype", 1, true) then
+            local v = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
+            if v then return v end
+          end
+        end
+      end
+      if attempt < 3 then os.sleep(3) end
+    end
+  end
+  return nil
+end
+
+local function run_update(sha)
+  local urls = sha and {
+    GITHUB_RAW .. sha .. "/installer",
+    GITHUB_RAW .. "beta/installer",
+  } or { GITHUB_RAW .. "beta/installer" }
+  for _, url in ipairs(urls) do
+    for attempt = 1, 4 do
+      local delays = {2, 5, 10, 20}
+      local ok, r = pcall(http.get, url, nil, { timeout = 20 })
+      if ok and r then
+        local ok2, body = pcall(r.readAll); pcall(r.close)
+        if ok2 and type(body) == "string" and #body > 100 then
+          local s = body:sub(1, 200):lower()
+          if not s:find("<html", 1, true) and not s:find("<!doctype", 1, true) then
+            local tmp = "/xreactor_auto_update_installer.lua"
+            local f = fs.open(tmp, "w")
+            if f then
+              pcall(function() f.write(body) end); pcall(f.close)
+              _G.__xreactor_remote_update = true
+              local ok_run = pcall(shell.run, tmp)
+              pcall(fs.delete, tmp)
+              if ok_run then log("Update OK — Neustart"); os.sleep(1); os.reboot(); return true end
+            end
+          end
+        end
+      end
+      if attempt < 4 then os.sleep(delays[attempt] or 20) end
+    end
+  end
+  return false, "alle Download-Versuche fehlgeschlagen"
+end
+
+function M.make_loop(interval_s)
+  interval_s = tonumber(interval_s) or 120
+  return function()
+    log("Loop gestartet (Intervall " .. interval_s .. "s)")
+    while true do
+      local timer = os.startTimer(interval_s)
+      if timer then
+        repeat local ev, id = os.pullEvent() until ev == "timer" and id == timer
+      else
+        os.sleep(interval_s)
+      end
+
+      local cfg = arming()
+      if not cfg then
+        log("nicht armed — skip")
+      elseif cfg.auto_update ~= true then
+        log("auto_update deaktiviert — skip")
+      else
+        log("Prüfe Version...")
+        local sha      = resolve_sha()
+        local remote_v = fetch_remote_version(sha)
+        local local_v  = read_version(RELEASE_PATH)
+        if not remote_v then
+          log("Remote-Version nicht abrufbar")
+        elseif not local_v then
+          log("Lokale Version unbekannt")
+        elseif remote_v <= local_v then
+          log("Aktuell (lokal=v" .. local_v .. " remote=v" .. remote_v .. ")")
+        else
+          log("NEU: lokal=v" .. local_v .. " → remote=v" .. remote_v)
+          local success = false
+          for attempt = 1, 3 do
+            log("Versuch " .. attempt .. "/3")
+            local ok_u, err_u = run_update(sha)
+            if ok_u then success = true; break end
+            log("Fehlgeschlagen: " .. tostring(err_u))
+            if attempt < 3 then os.sleep(5) end
+          end
+          if not success then log("Alle Versuche fehlgeschlagen — Pause 60s"); os.sleep(60) end
+        end
+      end
+    end
+  end
+end
+
+return M
+
+]==]
+
+local init_src = [==[
+-- installer/init.lua
+-- Einstiegspunkt. Wird von /installer via dofile aufgerufen.
+
+local http_mod     = dofile("/xreactor/installer/http.lua")
+local manifest_mod = dofile("/xreactor/installer/manifest.lua")
+local stage_mod    = dofile("/xreactor/installer/stage.lua")
+local ui_mod       = dofile("/xreactor/installer/ui.lua")
+
+local INSTALL_ROOT    = "/xreactor"
+local STARTUP_PATH    = "/startup.lua"
+local STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n"
+local GITHUB_RAW      = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
+
+local function p(msg) pcall(print, tostring(msg)) end
+
+local sha = http_mod.resolve_sha()
+local base_url = sha
+  and (GITHUB_RAW .. sha .. "/xreactor/")
+  or  (GITHUB_RAW .. "beta/xreactor/")
+p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar")
+
+local manifest, merr = manifest_mod.load_remote(base_url .. "manifest.lua", http_mod)
+if not manifest then error("Manifest: " .. tostring(merr), 0) end
+p("Manifest: " .. tostring(manifest.manifest_id or manifest.manifest_version))
+
+-- Rolle bestimmen
+local role = nil
+local role_path = INSTALL_ROOT .. "/config/role.lua"
+if fs.exists(role_path) then
+  local f = fs.open(role_path, "r"); if f then
+    local src = f.readAll(); f.close()
+    local loader = load(src, "=role", "t", {})
+    if loader then
+      local ok, result = pcall(loader)
+      if ok and type(result) == "table" and type(result.role) == "string" then
+        local existing = result.role
+        p("Vorhandene Rolle: " .. existing)
+        if _G.__xreactor_remote_update or ui_mod.confirm("Rolle '" .. existing .. "' behalten?") then
+          role = { key = existing:lower(), label = existing:upper() }
+        end
+      end
+    end
+  end
+end
+if not role then
+  role = ui_mod.select_role()
+  if not role then error("Ungültige Rolle", 0) end
+end
+
+ui_mod.header("Installiere " .. role.label)
+
+-- Wichtige Dateien sichern
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua" }
+local preserved = {}
+for _, rel in ipairs(PRESERVE) do
+  local src = INSTALL_ROOT .. "/" .. rel
+  if fs.exists(src) then
+    local f = fs.open(src, "r"); if f then preserved[rel] = f.readAll(); f.close() end
+  end
+end
+
+-- Alte Installation löschen
+if fs.exists(INSTALL_ROOT) then
+  p("Entferne alte Installation..."); pcall(fs.delete, INSTALL_ROOT)
+end
+pcall(fs.makeDir, INSTALL_ROOT)
+
+-- Dateien installieren
+local expected = manifest_mod.files_for_role(manifest, role.label)
+local file_list = {}
+for rel, entry in pairs(expected) do table.insert(file_list, { path = rel, entry = entry }) end
+table.sort(file_list, function(a, b)
+  local sa = tonumber((a.entry or {}).size_bytes) or 0
+  local sb = tonumber((b.entry or {}).size_bytes) or 0
+  if sa ~= sb then return sa > sb end
+  return a.path < b.path
+end)
+
+p("Installiere " .. #file_list .. " Dateien...")
+local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, sha,
+  function(done, total, rel) ui_mod.progress(done, total, rel) end)
+if not ok then error("Installation: " .. tostring(err), 0) end
+
+-- Gesicherte Dateien wiederherstellen
+for rel, content in pairs(preserved) do
+  local dst = INSTALL_ROOT .. "/" .. rel
+  local dir = fs.getDir(dst)
+  if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+  local f = fs.open(dst, "w"); if f then f.write(content); f.close() end
+  p("Wiederhergestellt: " .. rel)
+end
+
+-- Rolle konfigurieren
+stage_mod.write(INSTALL_ROOT .. "/config/role.lua",
+  string.format("return { role = %q }\n", role.label))
+
+-- startup.lua
+local existing_startup = nil
+if fs.exists(STARTUP_PATH) then
+  local f = fs.open(STARTUP_PATH, "r"); if f then existing_startup = f.readAll(); f.close() end
+end
+local is_xreactor = existing_startup and (
+  existing_startup:find("/xreactor/start.lua", 1, true) or
+  existing_startup:find("XReactor", 1, true))
+if not existing_startup or is_xreactor then
+  stage_mod.write(STARTUP_PATH, STARTUP_CONTENT); p("startup.lua konfiguriert")
+else
+  p("WARN: startup.lua nicht von XReactor — unverändert")
+end
+
+-- Auto-Update Config
+local auto_cfg = INSTALL_ROOT .. "/config/remote_update.lua"
+if not fs.exists(auto_cfg) then
+  stage_mod.write(auto_cfg,
+    "return {\n  enabled = true,\n  auto_update = true,\n  check_interval_s = 120,\n}\n")
+  p("Auto-Update Config angelegt")
+end
+
+ui_mod.ok("Installation abgeschlossen: " .. role.label)
+_G.__xreactor_installer_completed = true
+_G.__xreactor_installer_role = role.label
+
+]==]
+
+
+-- Module laden
+local http_mod     = load_module("http",        http_src)
+local manifest_mod = load_module("manifest",    manifest_src)
+local stage_mod    = load_module("stage",       stage_src)
+local ui_mod       = load_module("ui",          ui_src)
+-- auto_update und init werden separat geschrieben
+
+-- ── Download-Funktion ────────────────────────────────────────────────────────
+local function download(url)
+  local ok, r = pcall(http.get, url)
+  if not ok or not r then
+    return nil, type(r)=="string" and r or "http.get fehlgeschlagen"
+  end
+  local ok2, body = pcall(r.readAll); pcall(r.close)
+  if not ok2 or type(body)~="string" or #body==0 then return nil, "readAll fehlgeschlagen" end
+  if http_mod.is_html(body) then return nil, "HTML-Antwort (CDN)" end
+  return body
 end
 
 -- SHA auflösen
 local sha = nil
-p("Verbinde mit GitHub API...")
 local ok_sha, r_sha = pcall(http.get, GITHUB_API)
 if ok_sha and r_sha then
   local ok2, body = pcall(r_sha.readAll); pcall(r_sha.close)
-  if ok2 and type(body) == "string" then
+  if ok2 and type(body)=="string" then
     sha = body:match('"sha"%s*:%s*"(%x+)"')
   end
-else
-  p("WARN: GitHub API nicht erreichbar: " .. tostring(r_sha))
+end
+p(sha and ("SHA: "..sha:sub(1,12)) or "WARN: SHA nicht auflösbar")
+
+local base = sha
+  and (GITHUB_RAW..sha.."/xreactor/")
+  or  (GITHUB_RAW.."beta/xreactor/")
+
+-- ── Manifest laden ───────────────────────────────────────────────────────────
+p("Lade Manifest...")
+local man_body, man_err
+man_body, man_err = download(base.."manifest.lua")
+if not man_body and sha then
+  man_body, man_err = download(GITHUB_RAW.."beta/xreactor/manifest.lua")
+end
+if not man_body then error("Manifest Download fehlgeschlagen: "..tostring(man_err), 0) end
+
+local manifest, merr = manifest_mod.load_remote(base.."manifest.lua", {
+  download = download, is_html = http_mod.is_html
+})
+-- Fallback: Manifest direkt parsen
+if not manifest then
+  local fn, lerr = load(man_body, "=manifest", "t", {})
+  if not fn then error("Manifest Parse: "..tostring(lerr), 0) end
+  local ok3, result = pcall(fn)
+  if not ok3 or type(result)~="table" then error("Manifest ungültig: "..tostring(result), 0) end
+  manifest = result
+end
+p("Manifest: "..tostring(manifest.manifest_id or manifest.manifest_version))
+
+-- ── Rolle bestimmen ──────────────────────────────────────────────────────────
+local role = nil
+local role_path = INSTALL_ROOT.."/config/role.lua"
+if fs.exists(role_path) then
+  local f = fs.open(role_path, "r"); if f then
+    local src = f.readAll(); f.close()
+    local loader = load(src, "=role", "t", {})
+    if loader then
+      local ok4, result = pcall(loader)
+      if ok4 and type(result)=="table" and type(result.role)=="string" then
+        local existing = result.role
+        p("Vorhandene Rolle: "..existing)
+        if _G.__xreactor_remote_update or ui_mod.confirm("Rolle '"..existing.."' behalten?") then
+          role = { key=existing:lower(), label=existing:upper() }
+        end
+      end
+    end
+  end
+end
+if not role then
+  role = ui_mod.select_role()
+  if not role then error("Keine Rolle gewählt", 0) end
+end
+ui_mod.header("Installiere "..role.label)
+
+-- ── Wichtige Dateien sichern ─────────────────────────────────────────────────
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua" }
+local preserved = {}
+for _, rel in ipairs(PRESERVE) do
+  local src = INSTALL_ROOT.."/"..rel
+  if fs.exists(src) then
+    local f = fs.open(src, "r"); if f then preserved[rel]=f.readAll(); f.close() end
+  end
 end
 
-if sha then
-  p("SHA: " .. sha:sub(1, 12))
-else
-  p("WARN: SHA nicht auflösbar — nutze Branch-URL")
+-- ── Alte Installation löschen ────────────────────────────────────────────────
+if fs.exists(INSTALL_ROOT) then
+  p("Entferne alte Installation...")
+  pcall(fs.delete, INSTALL_ROOT)
 end
+pcall(fs.makeDir, INSTALL_ROOT)
 
-local MODULES = {
-  "installer/http.lua", "installer/manifest.lua", "installer/stage.lua",
-  "installer/ui.lua", "installer/auto_update.lua", "installer/init.lua",
+-- ── Eingebettete Module zuerst schreiben ─────────────────────────────────────
+local embedded = {
+  ["installer/http.lua"]        = http_src,
+  ["installer/manifest.lua"]    = manifest_src,
+  ["installer/stage.lua"]       = stage_src,
+  ["installer/ui.lua"]          = ui_src,
+  ["installer/auto_update.lua"] = au_src,
+  ["installer/init.lua"]        = init_src,
 }
+for rel, content in pairs(embedded) do
+  local ok5, werr = stage_mod.write(INSTALL_ROOT.."/"..rel, content)
+  if not ok5 then error("Schreiben: "..rel.." — "..tostring(werr), 0) end
+end
+p("Eingebettete Module geschrieben")
 
-p("Lade Installer-Module (" .. #MODULES .. ")...")
-for _, rel in ipairs(MODULES) do
-  local body, err
-
-  -- SHA-URL zuerst
-  if sha then
-    body, err = download_retry(GITHUB_RAW .. sha .. "/xreactor/" .. rel, rel)
+-- ── Dateien installieren ─────────────────────────────────────────────────────
+local expected = manifest_mod.files_for_role(manifest, role.label)
+local file_list = {}
+for rel, entry in pairs(expected) do
+  -- Eingebettete Module überspringen (schon geschrieben)
+  if not embedded[rel] then
+    table.insert(file_list, { path=rel, entry=entry })
   end
+end
+table.sort(file_list, function(a,b) return a.path < b.path end)
 
-  -- Branch-URL als Fallback (immer)
-  if not body then
-    body, err = download_retry(GITHUB_RAW .. "beta/xreactor/" .. rel, rel)
-  end
+p("Installiere "..#file_list.." Dateien...")
+local ok6, err6 = stage_mod.install(
+  file_list, INSTALL_ROOT,
+  { download_file = function(rel, s) return download(base..rel) end,
+    is_html = http_mod.is_html },
+  sha,
+  function(done, total, rel) ui_mod.progress(done, total, rel) end
+)
+if not ok6 then error("Installation: "..tostring(err6), 0) end
 
-  if not body then
-    error("FEHLER: " .. rel .. " konnte nicht geladen werden.\n"
-      .. "Bitte prüfe:\n"
-      .. "  1. HTTP in CC-Config aktiviert?\n"
-      .. "  2. raw.githubusercontent.com in Whitelist?\n"
-      .. "  3. Internetverbindung vorhanden?\n"
-      .. "Fehler: " .. tostring(err), 0)
-  end
-
-  local ok_w, werr = write(INSTALL_ROOT .. "/" .. rel, body)
-  if not ok_w then error("Schreiben: " .. tostring(werr), 0) end
-  p("  OK " .. rel .. " (" .. #body .. " bytes)")
+-- ── Wiederherstellen ─────────────────────────────────────────────────────────
+for rel, content in pairs(preserved) do
+  local dst = INSTALL_ROOT.."/"..rel
+  local dir = fs.getDir(dst)
+  if dir and dir~="" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+  local f = fs.open(dst, "w"); if f then f.write(content); f.close() end
+  p("Wiederhergestellt: "..rel)
 end
 
-p("Starte Installer...")
-dofile(INSTALL_ROOT .. "/installer/init.lua")
-if _G.__xreactor_installer_completed then
-  p("Fertig -- Neustart..."); os.sleep(1); os.reboot()
+-- ── Rolle + Config ───────────────────────────────────────────────────────────
+stage_mod.write(INSTALL_ROOT.."/config/role.lua",
+  string.format("return { role = %q }\n", role.label))
+
+local auto_cfg = INSTALL_ROOT.."/config/remote_update.lua"
+if not fs.exists(auto_cfg) then
+  stage_mod.write(auto_cfg,
+    "return {\n  enabled = true,\n  auto_update = true,\n  check_interval_s = 120,\n}\n")
 end
+
+local startup_path = "/startup.lua"
+local startup_content = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n"
+local existing = nil
+if fs.exists(startup_path) then
+  local f = fs.open(startup_path, "r"); if f then existing=f.readAll(); f.close() end
+end
+if not existing or existing:find("/xreactor/start.lua", 1, true) then
+  stage_mod.write(startup_path, startup_content)
+  p("startup.lua konfiguriert")
+end
+
+ui_mod.ok("Installation abgeschlossen: "..role.label)
+_G.__xreactor_installer_completed = true
+_G.__xreactor_installer_role = role.label
