@@ -85,7 +85,7 @@ local function run_update(sha)
             local tmp = "/xreactor_auto_update_installer.lua"
             local f = fs.open(tmp, "w")
             if f then
-              pcall(f.write, f, body); pcall(f.close, f)
+              pcall(function() f.write(body) end); pcall(f.close)
               _G.__xreactor_remote_update = true
               local ok_run = pcall(shell.run, tmp)
               pcall(fs.delete, tmp)
