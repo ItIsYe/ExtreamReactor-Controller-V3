@@ -223,19 +223,17 @@ function M.files_for_role(manifest, role_label)
     if not is_log or e.always == true then add(e) end
   end
 
-  if not is_log then
-    for rkey, rentries in pairs(manifest.roles or {}) do
-      for _, e in ipairs(rentries or {}) do
-        if type(e) == "table" then
-          local rf = e.required_for
-          local matches = e.always == true
-          if not matches and type(rf) == "table" then
-            for _, v in ipairs(rf) do
-              if tostring(v):upper() == role_label:upper() then matches = true; break end
-            end
+  for rkey, rentries in pairs(manifest.roles or {}) do
+    for _, e in ipairs(rentries or {}) do
+      if type(e) == "table" then
+        local rf = e.required_for
+        local matches = e.always == true
+        if not matches and type(rf) == "table" then
+          for _, v in ipairs(rf) do
+            if tostring(v):upper() == role_label:upper() then matches = true; break end
           end
-          if matches then add(e) end
         end
+        if matches then add(e) end
       end
     end
   end
