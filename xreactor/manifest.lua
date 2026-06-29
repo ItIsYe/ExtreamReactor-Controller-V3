@@ -1,7 +1,7 @@
--- xreactor/manifest.lua -- manifest-v223
+-- xreactor/manifest.lua -- manifest-v224
 return {
-  manifest_version = 223,
-  manifest_id = "manifest-v223",
+  manifest_version = 224,
+  manifest_id = "manifest-v224",
   source_ref = "beta",
   hash_algo = "none",
 
