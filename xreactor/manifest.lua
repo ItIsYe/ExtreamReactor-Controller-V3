@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 197,
-  manifest_id = "manifest-v197",
+  manifest_version = 198,
+  manifest_id = "manifest-v198",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -12,7 +12,7 @@ return {
   { path = "master/loop.lua", size_bytes = 2339, hash = "0e3415b9"},
   { path = "nodes/energy/heartbeat.lua", size_bytes = 2627, hash = "58f67fea"},
   { path = "nodes/energy/matrix.lua", size_bytes = 1079, hash = "ef46a3f2"},
-  { path = "installer/http.lua", size_bytes = 4100, hash = "2e05f6fd", always=true},
+  { path = "installer/http.lua", size_bytes = 3192, hash = "fe55b6ce", always=true},
   { path = "installer/manifest.lua", size_bytes = 4233, hash = "5c242de9", always=true},
   { path = "installer/stage.lua", size_bytes = 3256, hash = "600c702e", always=true},
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true},
