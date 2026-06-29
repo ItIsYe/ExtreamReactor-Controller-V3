@@ -856,3 +856,8 @@ end
 ui_mod.ok("Installation abgeschlossen: "..role.label)
 _G.__xreactor_installer_completed = true
 _G.__xreactor_installer_role = role.label
+
+-- Neustart
+p("Neustart in 2 Sekunden...")
+os.sleep(2)
+os.reboot()
