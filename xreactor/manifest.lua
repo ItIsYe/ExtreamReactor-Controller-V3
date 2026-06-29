@@ -25,7 +25,7 @@ return {
   { path = "installer_startup.lua", size_bytes = 1487, hash = "99155a25", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
   { path = "release.lua", size_bytes = 273, hash = "6c7ed83d", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true},
-  { path = "start.lua", size_bytes = 3823, hash = "18c3278d", always=true, always=true},
+  { path = "start.lua", size_bytes = 3817, hash = "18c3278d", always=true, always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
   { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true},
   { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460"},
