@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 211,
-  manifest_id = "manifest-v211",
+  manifest_version = 212,
+  manifest_id = "manifest-v212",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/manifest.lua", size_bytes = 4233, hash = "5c242de9", always=true},
   { path = "installer/stage.lua", size_bytes = 3289, hash = "ebedda5e", always=true},
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true},
-  { path = "installer/auto_update.lua", size_bytes = 5626, hash = "e9f4edfe", always=true},
+  { path = "installer/auto_update.lua", size_bytes = 5624, hash = "8617554c", always=true},
   { path = "installer/init.lua", size_bytes = 4481, hash = "f9ae3a57", always=true},
   { path = "installer_http.lua", size_bytes = 4688, hash = "ea6f7420", always=true},
   { path = "installer_main.lua", size_bytes = 28751, hash = "d7b62b03", always=true},
@@ -24,7 +24,7 @@ return {
   { path = "installer_stage.lua", size_bytes = 7475, hash = "4c136db1", always=true},
   { path = "installer_startup.lua", size_bytes = 1487, hash = "99155a25", always=true},
   { path = "installer_storage.lua", size_bytes = 8866, hash = "c5809f7f", always=true},
-  { path = "release.lua", size_bytes = 273, hash = "531c2a90", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true},
+  { path = "release.lua", size_bytes = 273, hash = "bc89f978", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true},
   { path = "start.lua", size_bytes = 3823, hash = "18c3278d", always=true, always=true},
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true},
   { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true},
