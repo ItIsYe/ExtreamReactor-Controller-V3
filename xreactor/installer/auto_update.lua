@@ -109,47 +109,53 @@ local function run_update(sha)
   return false, "alle Download-Versuche fehlgeschlagen"
 end
 
+-- Führt einen einzelnen Versions-Check durch.
+local function do_check()
+  local cfg = arming()
+  if not cfg then log("nicht armed — skip"); return end
+  if cfg.auto_update ~= true then log("auto_update=false — skip"); return end
+
+  log("Prüfe Version...")
+  local sha      = resolve_sha()
+  local remote_v = fetch_remote_version(sha)
+  local local_v  = read_version(RELEASE_PATH)
+
+  if not remote_v then
+    log("Remote-Version nicht abrufbar")
+  elseif not local_v then
+    log("Lokale Version unbekannt")
+  elseif remote_v <= local_v then
+    log("Aktuell (v" .. local_v .. ")")
+  else
+    log("NEU: v" .. local_v .. " -> v" .. remote_v .. " — Update startet")
+    local success = false
+    for attempt = 1, 3 do
+      log("Versuch " .. attempt .. "/3")
+      local ok_u, err_u = run_update(sha)
+      if ok_u then success = true; break end
+      log("Fehlgeschlagen: " .. tostring(err_u))
+      if attempt < 3 then os.sleep(5) end
+    end
+    if not success then
+      log("Alle Versuche fehlgeschlagen — Pause 60s")
+      os.sleep(60)
+    end
+  end
+end
+
 function M.make_loop(interval_s)
   interval_s = tonumber(interval_s) or 120
   return function()
     log("Loop gestartet (Intervall " .. interval_s .. "s)")
+    -- Erster Check nach 30s damit nicht zu lange gewartet wird
+    local first = os.startTimer(30)
+    repeat local ev, id = os.pullEvent() until ev == "timer" and id == first
+    do_check()
+    -- Danach regulärer Intervall
     while true do
-      -- Eigener Timer mit ungefiltertem pullEvent — parallel-sicher
-      local sleep_timer = os.startTimer(interval_s)
-      repeat
-        local ev, id = os.pullEvent()
-      until ev == "timer" and id == sleep_timer
-      log("Timer abgelaufen — starte Check")
-
-      local cfg = arming()
-      if not cfg then
-        log("nicht armed — skip")
-      elseif cfg.auto_update ~= true then
-        log("auto_update deaktiviert — skip")
-      else
-        log("Prüfe Version...")
-        local sha      = resolve_sha()
-        local remote_v = fetch_remote_version(sha)
-        local local_v  = read_version(RELEASE_PATH)
-        if not remote_v then
-          log("Remote-Version nicht abrufbar")
-        elseif not local_v then
-          log("Lokale Version unbekannt")
-        elseif remote_v <= local_v then
-          log("Aktuell (lokal=v" .. local_v .. " remote=v" .. remote_v .. ")")
-        else
-          log("NEU: lokal=v" .. local_v .. " → remote=v" .. remote_v)
-          local success = false
-          for attempt = 1, 3 do
-            log("Versuch " .. attempt .. "/3")
-            local ok_u, err_u = run_update(sha)
-            if ok_u then success = true; break end
-            log("Fehlgeschlagen: " .. tostring(err_u))
-            if attempt < 3 then os.sleep(5) end
-          end
-          if not success then log("Alle Versuche fehlgeschlagen — Pause 60s"); os.sleep(60) end
-        end
-      end
+      local t = os.startTimer(interval_s)
+      repeat local ev, id = os.pullEvent() until ev == "timer" and id == t
+      do_check()
     end
   end
 end
