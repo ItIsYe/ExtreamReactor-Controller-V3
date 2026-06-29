@@ -95,9 +95,9 @@ end
 
 local function run()
   if auto_loop then
-    parallel.waitForAny(function() shell.run(entry) end, auto_loop)
+    parallel.waitForAny(function() dofile(entry) end, auto_loop)
   else
-    shell.run(entry)
+    dofile(entry)
   end
 end
 
