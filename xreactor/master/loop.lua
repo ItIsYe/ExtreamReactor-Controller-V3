@@ -58,7 +58,9 @@ function M.run(runtime, constants)
         break
       end
     end
-    runtime.refs.services:tick()
+    if runtime.refs.services then
+      pcall(runtime.refs.services.tick, runtime.refs.services)
+    end
   end
 end
 
