@@ -33,7 +33,7 @@ end
 local function resolve_sha()
   if not http or type(http.get) ~= "function" then return nil end
   for attempt = 1, 3 do
-    local ok, r = pcall(http.get, GITHUB_API, nil, { timeout = 10 })
+    local ok, r = pcall(http.get, GITHUB_API)
     if ok and r then
       local ok2, body = pcall(r.readAll); pcall(r.close)
       if ok2 and type(body) == "string" then
@@ -60,7 +60,7 @@ local function fetch_remote_version(sha)
   } or { GITHUB_RAW .. "beta/xreactor/release.lua" }
   for _, url in ipairs(urls) do
     for attempt = 1, 3 do
-      local ok, r = pcall(http.get, url, nil, { timeout = 10 })
+      local ok, r = pcall(http.get, url)
       if ok and r then
         local ok2, body = pcall(r.readAll); pcall(r.close)
         if ok2 and type(body) == "string" and #body > 10 then
@@ -85,7 +85,7 @@ local function run_update(sha)
   for _, url in ipairs(urls) do
     for attempt = 1, 4 do
       local delays = {2, 5, 10, 20}
-      local ok, r = pcall(http.get, url, nil, { timeout = 20 })
+      local ok, r = pcall(http.get, url)
       if ok and r then
         local ok2, body = pcall(r.readAll); pcall(r.close)
         if ok2 and type(body) == "string" and #body > 100 then
