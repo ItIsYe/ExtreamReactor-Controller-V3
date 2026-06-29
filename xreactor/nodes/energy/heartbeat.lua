@@ -35,7 +35,7 @@ function M.run(ctx)
       end
     end
     ctx.send_heartbeat(now)
-    ctx.comms:tick(now)
+    if ctx.comms then pcall(ctx.comms.tick, ctx.comms, now) end
     ctx.last_heartbeat_ts = now
   end
 
@@ -54,13 +54,14 @@ function M.run(ctx)
         if should_send() then do_heartbeat() end
       elseif ev == "monitor_touch" or ev == "mouse_click" then
         -- UI-Touch weiterleiten
-        if ctx.devices.monitor and ctx.ui_state.router then
+        if ctx.devices and ctx.devices.monitor and ctx.ui_state and ctx.ui_state.router then
           local current = ctx.ui_state.router:current()
           if current and current.name == "Diagnostics" then
-            ctx.ui_pages.handle_diagnostics_touch(ctx.devices.monitor, event[3], event[4])
+            pcall(ctx.ui_pages.handle_diagnostics_touch,
+              ctx.devices.monitor, event[3], event[4])
           end
         end
-        ctx.services:tick(nil, event)
+        if ctx.services then ctx.services:tick(nil, event) end
       elseif ev == "key" then
         ctx.services:tick(nil, event)
       elseif ev == "timer" and event[2] == timer then
