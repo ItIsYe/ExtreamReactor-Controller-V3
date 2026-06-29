@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v165
 return {
-  manifest_version = 198,
-  manifest_id = "manifest-v198",
+  manifest_version = 199,
+  manifest_id = "manifest-v199",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -14,9 +14,9 @@ return {
   { path = "nodes/energy/matrix.lua", size_bytes = 1079, hash = "ef46a3f2"},
   { path = "installer/http.lua", size_bytes = 3192, hash = "fe55b6ce", always=true},
   { path = "installer/manifest.lua", size_bytes = 4233, hash = "5c242de9", always=true},
-  { path = "installer/stage.lua", size_bytes = 3256, hash = "600c702e", always=true},
+  { path = "installer/stage.lua", size_bytes = 3289, hash = "ebedda5e", always=true},
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true},
-  { path = "installer/auto_update.lua", size_bytes = 5208, hash = "8078598b", always=true},
+  { path = "installer/auto_update.lua", size_bytes = 5217, hash = "24069b08", always=true},
   { path = "installer/init.lua", size_bytes = 4481, hash = "f9ae3a57", always=true},
   { path = "installer_http.lua", size_bytes = 4688, hash = "ea6f7420", always=true},
   { path = "installer_main.lua", size_bytes = 28751, hash = "d7b62b03", always=true},
