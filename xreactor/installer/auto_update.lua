@@ -105,12 +105,9 @@ function M.make_loop(interval_s)
   return function()
     log("Loop gestartet (Intervall " .. interval_s .. "s)")
     while true do
-      local timer = os.startTimer(interval_s)
-      if timer then
-        repeat local ev, id = os.pullEvent() until ev == "timer" and id == timer
-      else
-        os.sleep(interval_s)
-      end
+      -- os.sleep ist in parallel.waitForAny korrekt — gibt Kontrolle ab
+      -- ohne Timer-Events zu stehlen die andere Threads brauchen
+      os.sleep(interval_s)
 
       local cfg = arming()
       if not cfg then
