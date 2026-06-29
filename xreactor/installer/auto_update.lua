@@ -12,12 +12,21 @@ local GITHUB_RAW    = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-C
 local function log(msg) pcall(print, "[AUTO] " .. tostring(msg)) end
 
 local function arming()
-  if not fs or not fs.exists(ARMING_PATH) then return nil end
+  if not fs or not fs.exists(ARMING_PATH) then
+    log("Config fehlt: " .. ARMING_PATH)
+    return nil
+  end
   local f = fs.open(ARMING_PATH, "r"); if not f then return nil end
   local src = f.readAll(); f.close()
-  local loader = load(src, "=arm", "t", {}); if not loader then return nil end
+  -- _ENV statt {} damit return in der Config funktioniert
+  local loader, lerr = load(src, "=arm", "t", _ENV)
+  if not loader then
+    log("Config Parse-Fehler: " .. tostring(lerr)); return nil
+  end
   local ok, cfg = pcall(loader)
-  if not ok or type(cfg) ~= "table" or cfg.enabled ~= true then return nil end
+  if not ok then log("Config Fehler: " .. tostring(cfg)); return nil end
+  if type(cfg) ~= "table" then log("Config kein Table: " .. type(cfg)); return nil end
+  if cfg.enabled ~= true then log("Config: enabled=false — skip"); return nil end
   return cfg
 end
 
@@ -105,13 +114,12 @@ function M.make_loop(interval_s)
   return function()
     log("Loop gestartet (Intervall " .. interval_s .. "s)")
     while true do
-      -- Eigener Timer — os.pullEvent() ohne Filter damit andere
-      -- Coroutinen ihre Events bekommen (parallel-sicher)
+      -- Eigener Timer mit ungefiltertem pullEvent — parallel-sicher
       local sleep_timer = os.startTimer(interval_s)
-      while true do
+      repeat
         local ev, id = os.pullEvent()
-        if ev == "timer" and id == sleep_timer then break end
-      end
+      until ev == "timer" and id == sleep_timer
+      log("Timer abgelaufen — starte Check")
 
       local cfg = arming()
       if not cfg then
