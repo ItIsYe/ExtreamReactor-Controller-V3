@@ -649,11 +649,23 @@ for _, rel in ipairs(PRESERVE) do
   end
 end
 
--- Alte Installation löschen
+-- Alte Installation löschen (role.lua vorher sichern)
+local _saved_role = nil
+local _role_path = INSTALL_ROOT .. "/config/role.lua"
+if fs.exists(_role_path) then
+  local _f = fs.open(_role_path, "r")
+  if _f then _saved_role = _f.readAll(); _f.close() end
+end
 if fs.exists(INSTALL_ROOT) then
   p("Entferne alte Installation..."); pcall(fs.delete, INSTALL_ROOT)
 end
 pcall(fs.makeDir, INSTALL_ROOT)
+-- role.lua wiederherstellen damit Neustart der Installation möglich bleibt
+if _saved_role then
+  pcall(fs.makeDir, INSTALL_ROOT .. "/config")
+  local _f = fs.open(_role_path, "w")
+  if _f then _f.write(_saved_role); _f.close() end
+end
 
 -- Dateien installieren
 local expected = manifest_mod.files_for_role(manifest, role.label)
