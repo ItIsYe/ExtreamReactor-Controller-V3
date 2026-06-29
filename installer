@@ -8,12 +8,14 @@ local GITHUB_RAW   = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Co
 local function p(msg) pcall(print, tostring(msg)) end
 
 local function download(url)
-  local ok, r = pcall(http.get, url, nil, { timeout = 20 })
+  local ok, r = pcall(http.get, url)
   if not ok or not r then return nil, "download failed" end
   local ok2, body = pcall(r.readAll); pcall(r.close)
   if not ok2 or type(body) ~= "string" then return nil, "read failed" end
   local s = body:sub(1, 200):lower()
-  if s:find("<html", 1, true) or s:find("<!doctype", 1, true) then return nil, "unexpected HTML" end
+  if s:find("<html", 1, true) or s:find("<!doctype", 1, true) then
+    return nil, "unexpected HTML"
+  end
   return body
 end
 
@@ -24,12 +26,15 @@ local function write(path, content)
   f.write(content); f.close(); return true
 end
 
+-- SHA auflösen (ohne timeout-Argument — CC:Tweaked kompatibel)
 local sha = nil
 if http and type(http.get) == "function" then
-  local ok, r = pcall(http.get, GITHUB_API, nil, { timeout = 10 })
+  local ok, r = pcall(http.get, GITHUB_API)
   if ok and r then
     local ok2, body = pcall(r.readAll); pcall(r.close)
-    if ok2 and type(body) == "string" then sha = body:match('"sha"%s*:%s*"(%x+)"') end
+    if ok2 and type(body) == "string" then
+      sha = body:match('"sha"%s*:%s*"(%x+)"')
+    end
   end
 end
 
@@ -37,7 +42,7 @@ local base = sha
   and (GITHUB_RAW .. sha .. "/xreactor/")
   or  (GITHUB_RAW .. "beta/xreactor/")
 
-p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar")
+p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar — nutze Branch-URL")
 
 local MODULES = {
   "installer/http.lua", "installer/manifest.lua", "installer/stage.lua",
@@ -47,13 +52,20 @@ local MODULES = {
 p("Lade Installer-Module...")
 for _, rel in ipairs(MODULES) do
   local body, err = download(base .. rel)
-  if not body then error("Download: " .. rel .. " — " .. tostring(err), 0) end
-  if not write(INSTALL_ROOT .. "/" .. rel, body) then error("Schreiben: " .. rel, 0) end
-  p("  ✓ " .. rel)
+  -- Fallback auf Branch-URL wenn SHA-URL fehlschlägt
+  if not body and sha then
+    p("  Fallback fuer " .. rel)
+    body, err = download(GITHUB_RAW .. "beta/xreactor/" .. rel)
+  end
+  if not body then error("Download: " .. rel .. " -- " .. tostring(err), 0) end
+  if not write(INSTALL_ROOT .. "/" .. rel, body) then
+    error("Schreiben fehlgeschlagen: " .. rel, 0)
+  end
+  p("  OK " .. rel)
 end
 
 p("Starte Installer...")
 dofile(INSTALL_ROOT .. "/installer/init.lua")
 if _G.__xreactor_installer_completed then
-  p("Fertig — Neustart..."); os.sleep(1); os.reboot()
+  p("Fertig -- Neustart..."); os.sleep(1); os.reboot()
 end
