@@ -1,22 +1,29 @@
-# Node Start Blockers — 2026-06-25
+# Node Start Blockers — aktueller Stand
 
-Aktuelle statische Nachprüfung: 2026-06-25, `beta` / `beta-v165`.
+Aktuelle statische Nachprüfung: 2026-06-30, `beta` / `beta-v236`.
 
 Wichtig:
 
-- Kein Ingame-Test wurde gemacht.
+- Kein Ingame-Test wurde für diese Prüfung gemacht.
 - Nichts wurde ingame installiert.
-- Diese Datei beschreibt nur den statisch geprüften Repo-Stand.
+- Auf Wunsch wurde der RT-Codeblocker **nicht** im Code behoben, sondern nur dokumentiert.
+- Diese Datei beschreibt den aktuell sichtbaren Repo-Stand und offene Prüfpunkte.
 
 ## Ergebnis
 
-Die vorherige Aussage „Alle Punkte aus dieser Datei wurden behoben (beta-v160)“ war nicht korrekt.
+Der frühere `beta-v165`-Stand ist überholt. Das Repo steht aktuell auf `manifest-v236` / `beta-v236`, aber mehrere Doku- und Konsistenzpunkte sind offen.
 
-Mehrere frühere Blocker sind sichtbar gefixt, aber `RT` hat weiterhin einen harten Parse-/Syntax-Blocker.
+Der wichtigste technische Blocker bleibt:
 
-## Aktuell weiterhin offen
+```text
+xreactor/nodes/rt/main.lua
+```
 
-### 1. RT Parse-/Syntax-Blocker
+Dort fehlt weiterhin ein Komma in der Tabelle für `monitor_ui.update(...)`. Dieser Punkt wurde bewusst **nicht** behoben, sondern nur dokumentiert.
+
+## Aktuell offen
+
+### 1. RT Parse-/Syntax-Blocker — bewusst nur dokumentiert
 
 Datei:
 
@@ -38,41 +45,101 @@ last_status_snapshot = monitor_ui.update(mon, {
 
 Problem:
 
-- Nach `build_health_payload = function() ... end` fehlt weiterhin ein Komma.
-- Dadurch ist `xreactor/nodes/rt/main.lua` weiterhin sehr wahrscheinlich nicht parsebar.
-- Das blockiert den RT-Node-Start.
-
-Minimaler Fix:
+- Nach `build_health_payload = function() ... end` fehlt ein Komma.
+- Minimal korrekt wäre:
 
 ```lua
 build_health_payload = function() return build_status_payload() end,
 read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
-read_turbine_flow = function(t, c) return turbine_control.read_turbine_flow(ctx, t, c) end,
-reactor_adapter = adapters.reactor,
-turbine_adapter = adapters.turbine,
-log_prefix = CONFIG.LOG_PREFIX,
-get_device_caps = function(k, n) return turbine_control.get_device_caps(ctx, k, n) end,
-get_available_steam = function() return reactor_control.get_available_steam(ctx) end,
 ```
 
-### 2. RT Build-Werte noch hart codiert
+Einschätzung:
 
-Aktueller Stand in `xreactor/nodes/rt/main.lua`:
+- Das ist sehr wahrscheinlich ein harter Lua-Parsefehler für RT.
+- `xreactor/start.lua` enthält aktuell keinen Self-Heal mehr, der diese Stelle vor dem Start repariert.
+- Solange dieser Punkt offen ist, sollte RT nicht als sauber startfähig gelten.
+
+Status:
+
+```text
+OFFEN — nicht im Code behoben, nur dokumentiert.
+```
+
+### 2. RT Build-Werte sind veraltet/hart codiert
+
+Datei:
+
+```text
+xreactor/nodes/rt/main.lua
+```
+
+Aktuell sichtbar:
 
 ```lua
 manifest_id = "manifest-v158",
 release_id  = "beta-v158",
 ```
 
-Aktueller Release-/Manifest-Stand ist aber `v165`.
+Aktueller Release-/Manifest-Stand:
+
+```text
+manifest-v236 / beta-v236
+```
+
+Problem:
+
+- Anzeige/Diagnose im RT-Monitor ist dadurch falsch.
+- Kein direkter Startblocker, aber verwirrend beim Debuggen.
 
 Empfehlung:
 
 - Nicht hart codieren.
 - Dynamisch aus `xreactor/release.lua` oder `shared.build_info` lesen.
-- Alternativ auf `manifest-v165` / `beta-v165` aktualisieren, aber dynamisch ist besser.
 
-### 3. Manifest-Kommentar inkonsistent
+Status:
+
+```text
+OFFEN — nur dokumentiert.
+```
+
+### 3. Manifest/Release `hash_algo` inkonsistent
+
+Dateien:
+
+```text
+xreactor/manifest.lua
+xreactor/release.lua
+```
+
+Aktuell sichtbar:
+
+```lua
+-- manifest.lua
+manifest_version = 236
+manifest_id = "manifest-v236"
+hash_algo = "none"
+```
+
+```lua
+-- release.lua
+release_id = "beta-v236"
+manifest_id = "manifest-v236"
+hash_algo = "crc32"
+```
+
+Problem:
+
+- Manifest und Release widersprechen sich.
+- Für den beweglichen Beta-Stand war `hash_algo = "none"` vorher bewusst gesetzt.
+- Wenn CRC32 genutzt werden soll, müssen alle `size_bytes`/`hash` Werte aus einem echten Checkout sauber regeneriert und geprüft werden.
+
+Status:
+
+```text
+OFFEN — nur dokumentiert.
+```
+
+### 4. Manifest-Kommentar inkonsistent
 
 Datei:
 
@@ -80,114 +147,146 @@ Datei:
 xreactor/manifest.lua
 ```
 
-Aktueller Inhalt beginnt sinngemäß mit:
+Aktuell sichtbar:
 
 ```lua
--- xreactor/manifest.lua -- manifest-v156
+-- xreactor/manifest.lua -- manifest-v225
 return {
-  manifest_version = 165,
-  manifest_id = "manifest-v165",
-  hash_algo = "crc32",
+  manifest_version = 236,
+  manifest_id = "manifest-v236",
 ```
 
 Problem:
 
-- Der Kommentar sagt noch `manifest-v156`.
-- Die Werte sagen `manifest-v165`.
+- Kommentar sagt `manifest-v225`.
+- Werte sagen `manifest-v236`.
 
-Das ist kein Runtime-Blocker, aber sollte für saubere Übergabe korrigiert werden.
+Status:
 
-### 4. CRC32 muss verifiziert bleiben
+```text
+OFFEN — kein Runtime-Blocker, aber Doku-/Hygieneproblem.
+```
 
-Manifest/Release stehen aktuell auf:
+### 5. Remote-Update Token-Weitergabe prüfen
+
+Datei:
+
+```text
+xreactor/core/remote_update.lua
+```
+
+Aktuell sichtbar:
 
 ```lua
-hash_algo = "crc32"
+function M.handle_command(opts)
+  ...
+  return M.run(log)
+end
 ```
 
-Das ist nur dann sauber, wenn die `size_bytes` und `hash` Werte wirklich aus einem echten Checkout korrekt regeneriert wurden.
+Problem:
 
-Falls das nicht sicher ist, kann der Installer später wegen falscher CRC/Size-Werte blockieren.
+- `handle_command(opts)` prüft zuerst `opts`, inklusive möglichem Token.
+- Danach ruft es `M.run(log)` ohne `opts` auf.
+- `M.run(log_fn, opts)` prüft Arming erneut.
+- Wenn ein Token verwendet wird, könnte die zweite Prüfung ohne `opts` an `token mismatch` scheitern.
 
-## Sichtbar gefixt
+Empfehlung:
 
-### FUEL
-
-Datei:
-
-```text
-xreactor/nodes/fuel/main.lua
-```
-
-Status:
-
-- `redstone_router_lib` ist required.
-- `is_master_connected` und `master_peer_state` sind vorwärts deklariert.
-- Die späteren Funktionen sind per Zuweisung gesetzt.
-
-### WATER
-
-Datei:
-
-```text
-xreactor/nodes/water/main.lua
+```lua
+return M.run(log, opts)
 ```
 
 Status:
 
-- `is_master_connected` und `master_peer_state` sind vorwärts deklariert.
-- Die späteren Funktionen sind per Zuweisung gesetzt.
+```text
+OFFEN — nur dokumentiert.
+```
 
-### REPROCESSING
+### 6. README / Doku-Versionen waren veraltet
 
-Datei:
+Mehrere Dokumente zeigten noch ältere Versionen:
+
+- `docs/NODE_START_BLOCKERS_2026-06-25.md` vorher `beta-v165`
+- `docs/README.md` vorher `manifest-v156` / `beta-v156`
+- `docs/PROJECT_DOCUMENTATION.md` vorher `beta-v133`
+- Root `README.md` vorher `manifest-v225` / `beta-v225`
+
+Status:
 
 ```text
-xreactor/nodes/reprocessor/main.lua
+DOKU-WIRD-AKTUALISIERT — diese Datei ist jetzt auf beta-v236 aktualisiert.
+```
+
+## Sichtbar verbessert gegenüber den alten Logs
+
+### Master → RT Setpoints
+
+Der aktuelle `xreactor/master/rt_sync.lua` sendet Setpoints sichtbar immer per:
+
+```lua
+M.send_rt_setpoints(ctx.comms, node, desired)
+```
+
+Das alte Log-Problem `RT setpoints deduped ... ACK_MATCH` ist im aktuellen Code nicht mehr sichtbar.
+
+Status:
+
+```text
+SICHTBAR VERBESSERT — später ingame/logbasiert erneut prüfen.
+```
+
+### Remote-Update Schutz
+
+`xreactor/core/remote_update.lua` ist sichtbar arming-geschützt:
+
+```text
+/xreactor/config/remote_update.lua
+return { enabled = true }
+```
+
+Optional mit Token:
+
+```lua
+return { enabled = true, token = "..." }
 ```
 
 Status:
 
-- `get_feed_router` und `process_state` stehen vor `build_status_payload()`.
-- `get_feed_router` wird später per Zuweisung gesetzt.
-
-### ENERGY
-
-Datei:
-
 ```text
-xreactor/nodes/energy/main.lua
+SICHTBAR VERBESSERT — Token-Weitergabe siehe offener Punkt 5.
 ```
+
+### Auto-Update / Startstruktur
+
+`xreactor/start.lua` startet inzwischen zusätzlich einen Auto-Update-Loop, wenn `installer/auto_update.lua` vorhanden ist.
 
 Status:
 
-- `record_error` ist definiert und wird an Runtime-Module übergeben.
-
-Kleiner Hinweis:
-
-- Die Funktion steht vor `local devices = runtime.devices`.
-- Dadurch schreibt `if devices then devices.last_error = msg end` vermutlich nicht in das lokale `devices`.
-- Logging funktioniert trotzdem; der ursprüngliche fehlende Callback-Blocker ist weg.
-
-### LOG collector
-
-Datei:
-
 ```text
-xreactor/nodes/log_collector/main.lua
+SICHTBAR NEU — bei späteren Tests besonders Logs zu Auto-Update und Install-Restart prüfen.
 ```
 
-Status:
+## Bekannte alte Punkte, die im aktuellen Code nicht mehr im Vordergrund stehen
 
-- Header-Segment-Overlap ist sichtbar gefixt.
-- Der Header wird als ein einziges volles Segment gerendert.
+Diese älteren Blocker wurden in früheren Prüfungen sichtbar behoben oder sind durch Umbauten nicht mehr der Hauptfokus:
 
-## Nächste Priorität
+- FUEL: `redstone_router_lib` require / Scope-Fixes.
+- WATER: `is_master_connected` / `master_peer_state` Scope-Fixes.
+- REPROCESSING: `process_state` / `get_feed_router` Scope-Fixes.
+- ENERGY: `record_error` Callback ist vorhanden.
+- LOG Collector: Header-Overlap war sichtbar gefixt.
 
-1. RT-Komma in `monitor_ui.update(...)` fixen.
-2. RT Build-Werte dynamisch oder auf v165 aktualisieren.
-3. Manifest-Kommentar von `manifest-v156` auf `manifest-v165` korrigieren.
-4. CRC32-Metadaten durch echten Checkout/statischen Check verifizieren.
-5. Danach Lua-Parse-/Require-Prüfung über alle Rollen laufen lassen.
+Diese Punkte sollten bei einer späteren vollständigen statischen Prüfung trotzdem erneut kontrolliert werden.
 
-Bis Punkt 1 erledigt ist: `beta` weiterhin nicht ingame installieren oder testen.
+## Nächste empfohlene Reihenfolge
+
+1. RT-Kommafehler in `xreactor/nodes/rt/main.lua` beheben.
+2. RT Build-Werte dynamisch machen oder auf `v236` aktualisieren.
+3. Manifest/Release `hash_algo` vereinheitlichen.
+4. Manifest-Kommentar auf `manifest-v236` korrigieren.
+5. Remote-Update `M.run(log, opts)` prüfen/patchen, falls Token genutzt werden soll.
+6. Danach statische Lua-Parse-/Require-Prüfung über alle Rollen.
+7. Erst danach späterer Ingame-Test.
+
+Bis Punkt 1 erledigt ist, gilt RT weiterhin als nicht sauber startbereit.
