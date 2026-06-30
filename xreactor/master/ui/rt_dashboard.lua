@@ -238,8 +238,22 @@ local function render(mon, model)
   local rows_data = {}
   for i, q in ipairs(model.queue or {}) do
     if i > math.max(1, queue.h - 1) then break end
+    -- Fix (2026-06-30): q.node_id war in der Praxis manchmal eine Tabelle
+    -- statt eines Strings (Ursache nicht abschliessend geklärt — vermutlich
+    -- ein verschachteltes entry/node-Objekt statt entry.id, das versehentlich
+    -- an sequencer.enqueue() durchgereicht wurde). tostring() auf einer
+    -- Tabelle ergibt "table: 0x...", was als kaputter Text im UI auftauchte
+    -- ("RT-table:_e895348"). Defensive Absicherung: nur echte Strings/Zahlen
+    -- anzeigen, alles andere als "?" behandeln und einmalig loggen, damit
+    -- ein erneutes Auftreten im Master-Log sichtbar wird.
+    local node_id_display
+    if type(q.node_id) == "string" or type(q.node_id) == "number" then
+      node_id_display = tostring(q.node_id)
+    else
+      node_id_display = "?"
+    end
     rows_data[#rows_data + 1] = {
-      text = widgets.fit(string.format("%d. RT-%s -> %s (%s)", i, tostring(q.node_id or "?"), tostring(q.module_id or q.action or "step"), tostring(q.state or "pending")), queue.w),
+      text = widgets.fit(string.format("%d. RT-%s -> %s (%s)", i, node_id_display, tostring(q.module_id or q.action or "step"), tostring(q.state or "pending")), queue.w),
       status = "LIMITED"
     }
   end
