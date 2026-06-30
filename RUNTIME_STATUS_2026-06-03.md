@@ -1,5 +1,25 @@
 # XReactor Runtime Status — 2026-06-03
 
+## Update 2026-06-30 (Installer / Auto-Update Härtung, v220 → v225)
+
+Diese Sektion dokumentiert die Arbeit vom 2026-06-30 zusätzlich zum darunterliegenden, unveränderten Audit-Stand vom 2026-06-03/04-22.
+
+**Behoben:**
+- ENERGY Auto-Update brach mit `attempt to index global 'shell' (a nil value)` ab (`installer/auto_update.lua:130`) — `shell.run` ist in `parallel`-Coroutinen nicht verfügbar. Fix: `dofile()` statt `shell.run()`.
+- LOG-Boot brach mit `No such program` ab — `start.lua` rief `shell.run(entry)` mit einem absoluten Pfad auf, nicht einem Programmnamen. Fix: `dofile(entry)`.
+- Installer brach mit `size mismatch /xreactor/start.lua: got 3817 expected 3823` ab — `manifest.lua`-`size_bytes` für `start.lua` war nach dem `dofile`-Fix nicht nachgezogen worden.
+- LOG erhielt nach erfolgreicher Installation trotzdem `File not found` bei `/xreactor/nodes/log_collector/main.lua` — der Installer hatte für die LOG-Rolle nie `manifest.roles.log` ausgewertet (`if not is_log then` blockierte den gesamten Role-Files-Block für LOG). Fix: Role-Files werden jetzt für alle Rollen ausgewertet, base_files bleiben für LOG weiterhin auf `always=true` beschränkt. LOG-Dateianzahl stieg dadurch von 11 auf 12 (korrekt).
+- RT Auto-Update hing nach `Versuch 1/3` ohne weitere Log-Ausgabe — `resolve_sha()` rief zusätzlich `api.github.com` auf; auf dem event-intensiven RT-Node konnte der async HTTP-Wait dadurch stecken bleiben. Fix: `resolve_sha()` entfernt, Auto-Updater fetcht `release.lua` und `installer` direkt über `raw.githubusercontent.com/.../beta/...` ohne SHA-Auflösung.
+- Installer löschte beim Reinstall `/xreactor/config/role.lua` mit, bevor neu installiert wurde — bei einem fehlgeschlagenen/abgebrochenen Reinstall (relevant bei großen Rollen wie MASTER/RT, da `/xreactor` komplett gelöscht statt über Stage/Backup gewechselt wird) ging die Rollenzuordnung verloren. Fix: `role.lua` wird vor dem Löschen gelesen und sofort nach dem Neuanlegen von `/xreactor` wiederhergestellt — in beiden Installer-Codepfaden (Erstinstallation und Auto-Update-Reinstall).
+
+**Versionsverlauf dieser Session:** v218 (Sessionstart) → v220 (LOG `dofile`-Test) → v221 (`start.lua` `dofile`-Fix) → v222 (LOG-Manifest-Fix) → v223 (Auto-Updater-Rollout-Test alle Nodes) → v224 (RT Auto-Update-Hang-Fix, kein `api.github.com` mehr) → v225 (role.lua-Erhalt im Installer).
+
+**Bestätigt funktionierend:** Auto-Updater läuft jetzt stabil auf ENERGY, LOG, MASTER, RT (nach manuellem einmaligem Installer-Lauf je Node zum Nachziehen der gefixten Installer-Logik).
+
+**Offenes Problem (nicht behoben, neu aufgefallen):** Setpoint-Übertragung/-Berechnung zwischen MASTER und Nodes funktioniert aktuell nicht zuverlässig. Root Cause noch nicht untersucht — nächster Arbeitspunkt.
+
+---
+
 ## Scope
 
 This document tracks the current code-reading and cleanup status of the `beta` branch after the 2026-06-03 runtime audit.
