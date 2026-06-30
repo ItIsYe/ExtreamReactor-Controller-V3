@@ -200,8 +200,18 @@ function M.new(opts)
           rt_node.node_mode,
           stale
         )
-        rt_node.queue_state = rt_node.queue_state or node.queue_state or node.state or "idle"
-        rt_node.queue_step = rt_node.queue_step or node.queue_step or (node.last_command_result and node.last_command_result.transition) or "-"
+        -- Fix (2026-06-30): defensiv gegen Tabellenwerte absichern — eine
+        -- der Quellen hier (rt_node.queue_state, node.queue_state, node.state)
+        -- lieferte in der Praxis vereinzelt eine Tabelle statt eines Strings,
+        -- was im UI als "table: 0x..." auftauchte (siehe rt_dashboard.lua
+        -- safe_text()). Ursache nicht abschliessend geklärt; hier zusaetzlich
+        -- an der Quelle abgesichert, nicht nur im Rendering.
+        local function string_or_nil(v)
+          if type(v) == "string" or type(v) == "number" then return tostring(v) end
+          return nil
+        end
+        rt_node.queue_state = string_or_nil(rt_node.queue_state) or string_or_nil(node.queue_state) or string_or_nil(node.state) or "idle"
+        rt_node.queue_step = string_or_nil(rt_node.queue_step) or string_or_nil(node.queue_step) or string_or_nil(node.last_command_result and node.last_command_result.transition) or "-"
         -- Capacity-Learning Status aus dem Node-Payload lesen
         local rt_data = node.rt or {}
         rt_node.capacity_ready          = rt_data.capacity_ready == true or node.capacity_ready == true
