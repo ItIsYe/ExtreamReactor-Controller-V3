@@ -1,8 +1,17 @@
 # XReactor Controller V3 — Rewrite-Spezifikation
-**Für: Coding-KI / Entwickler**  
-**Repo:** `ItIsYe/ExtreamReactor-Controller-V3` Branch: `beta`  
-**Stand:** v192 (aktuell deployed)  
+**Für: Coding-KI / Entwickler**
+**Repo:** `ItIsYe/ExtreamReactor-Controller-V3` Branch: `beta`
+**Ursprünglicher Stand bei Spec-Erstellung:** v192
 **Sprache:** Lua 5.1 (CC:Tweaked / CraftOS 1.9, Minecraft 1.21.1)
+
+> **Status (2026-06-30): Alle vier Phasen umgesetzt, aktueller Stand v225.**
+> Diese Spezifikation bleibt als Architektur-Referenz gültig und beschreibt weiterhin akkurat den Aufbau der umgesetzten Module (Installer, Energy, Master, Shared Services). Nach der initialen Umsetzung wurden zusätzliche Härtungsfixes am Auto-Updater nötig, die über die ursprüngliche Spec hinausgehen (siehe README.md → "CC:Tweaked Parallel-Coroutine Constraints" und RUNTIME_STATUS_2026-06-03.md → Update 2026-06-30):
+> - `shell.run()` durch `dofile()` ersetzt in `installer/auto_update.lua` und `start.lua` (`shell` nicht verfügbar in `parallel`-Coroutinen).
+> - SHA-Auflösung via `api.github.com` aus dem Auto-Update-Check-Pfad entfernt (verursachte Hänger auf RT).
+> - Reinstall sichert/restauriert jetzt `/xreactor/config/role.lua` explizit, da kein Stage/Backup-Mechanismus mehr existiert (siehe MIGRATION.md).
+> - `files_for_role()`-Logik für LOG/LOG_COLLECTOR gefixt (lud zuvor keine rollenspezifischen Dateien).
+>
+> Offen, nicht Teil dieser Spec: Setpoint-Übertragung MASTER ↔ Nodes ist aktuell fehlerhaft (siehe README.md, MIGRATION.md, TESTPLAN.md).
 
 ---
 
