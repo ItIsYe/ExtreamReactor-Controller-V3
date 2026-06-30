@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v225
 return {
-  manifest_version = 228,
-  manifest_id = "manifest-v228",
+  manifest_version = 229,
+  manifest_id = "manifest-v229",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -77,7 +77,7 @@ return {
     { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"}},
     { path = "master/runtime_loop.lua", size_bytes = 9880, hash = "fc4ec810", required_for={"MASTER"}},
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"}},
-    { path = "master/runtime_ops_profile.lua", size_bytes = 11983, hash = "28ee5f71", required_for={"MASTER"}},
+    { path = "master/runtime_ops_profile.lua", size_bytes = 13822, hash = "28ee5f71", required_for={"MASTER"}},
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"}},
     { path = "master/startup_sequencer.lua", size_bytes = 10582, hash = "b537bd44", required_for={"MASTER"}},
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"}},
