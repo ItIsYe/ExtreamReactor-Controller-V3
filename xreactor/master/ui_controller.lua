@@ -326,7 +326,64 @@ function M.new(opts)
     energy.resource_summary = string.format("Fuel %.1f | Water %.1f | Reproc %s", energy.resources.fuel_total or 0, energy.resources.water_total or 0, tostring(energy.resources.reprocessing_state or "-"))
     overview.clock_label = os.date('!%H:%M UTC')
     rt.rt_global_off_hold = overview.rt_global_off_hold
-    return { overview = overview, rt = rt, energy = energy, resources = {} }
+
+    -- Fix (2026-06-30): "alerts"-Model fehlte in data_map komplett — weder die
+    -- "Alerts"-View noch der AUX-Monitor-Badge (multiview.lua) bekamen je die
+    -- echten alert_service-Daten (active alerts mit severity/title/message),
+    -- nur die manuell geloggten add_alarm()-Events landeten auf dem "Logs"-
+    -- View. Folge: AUX-Monitor blieb dauerhaft grün/"Keine aktiven Alarme"
+    -- trotz aktiver CRITICAL/WARN-Alerts aus dem alert_service. Hier wird das
+    -- vollstaendige Model gebaut, das alerts.lua's render() erwartet
+    -- (model.counts, model.summary, model.active).
+    local alerts_active = c.alert_service and c.alert_service:get_active() or {}
+    local alerts_history = c.alert_service and c.alert_service:get_history() or {}
+    local alerts_model = {
+      counts = counts,
+      summary = summary,
+      active = alerts_active,
+      history = alerts_history,
+      mutes = (c.alert_service and c.alert_service.state and c.alert_service.state.mutes) or { rules = {}, nodes = {} },
+      now_ms = now,
+      config = c.config or {},
+    }
+
+    -- Fix (2026-06-30): "alarms"-Model ("Logs"-View, AUX-Monitor) zeigte
+    -- bisher NUR die manuell via add_alarm() geloggten Events (Startup
+    -- rejected, Emergency stop active, ...), niemals die automatisch vom
+    -- alert_service erkannten Bedingungen (z.B. niedriger Energiespeicher-
+    -- stand). Jetzt werden beide Quellen kombiniert: aktive alert_service-
+    -- Alerts zuerst (sie sind die dringendsten), danach die manuellen Events.
+    -- Severity wird von CRITICAL/WARN/INFO auf das von alarms.lua erwartete
+    -- Schema EMERGENCY/WARNING/OK gemappt.
+    local function map_alert_severity(sev)
+      local s = tostring(sev or ""):upper()
+      if s == "CRITICAL" then return "EMERGENCY" end
+      if s == "WARN" or s == "WARNING" then return "WARNING" end
+      return "LIMITED"
+    end
+    local combined_alarms = {}
+    for _, a in ipairs(alerts_active) do
+      combined_alarms[#combined_alarms + 1] = {
+        severity = map_alert_severity(a.severity),
+        message = tostring(a.title or a.message or a.code or "Alert"),
+        detail = tostring(a.message or a.detail or a.source or ""),
+        timestamp = a.timestamp or overview.clock_label,
+      }
+    end
+    for _, a in ipairs(c.alarms or {}) do
+      combined_alarms[#combined_alarms + 1] = {
+        severity = a.severity,
+        message = a.message,
+        detail = a.sender_id,
+        timestamp = a.timestamp,
+      }
+    end
+    local alarms_model = {
+      alarms = combined_alarms,
+      header_blink = (counts.CRITICAL or 0) > 0,
+    }
+
+    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model }
   end
 
   -- Fix: build_models() lief völlig ungeschützt. Ein Fehler dort (z.B. weil
@@ -351,7 +408,9 @@ function M.new(opts)
       overview = { system_status = "WARNING", profile_list = { "BASELOAD", "PEAK", "IDLE" }, nodes = {}, alert_rows = {}, alert_summary = "Modellfehler — siehe Logs", alert_counts = { INFO = 0, WARN = 1, CRITICAL = 0 }, energy_overview = { percent = 0, status = "OFFLINE", trend = "Trend stabil" }, rt_online = 0, power_actual = 0, clock_label = os.date("!%H:%M UTC"), ops_hints = { "Modellaufbau fehlgeschlagen, Daten folgen in Kürze" }, peer_summary = "Peers live=0 stale=0 rt=0 energy-matrix=0 src=0", rt_summary = "RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0", controls_summary = "Profile=- | AUTO=AUS | RT-HOLD=AUS", nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Initialisierung...", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" },
       rt = { rt_nodes = {}, queue = {}, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, unavailable = 0, local_control = 0, master_control = 0, assignment_state = "UNASSIGNED", assignment_reason = "-", control_source = "LOCAL", display_mode = "RT-Fleet aktiv", fleet_summary = "-", queue_summary = "-" },
       energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = "OFFLINE", aggregate_percent = 0, mode = "-", energy_summary = "Energy 0.0% | Stored 0.0/0.0 | In 0.0 Out 0.0 | Mode - | Matrices 0", matrix_count = 0, matrix_sources = 0, support_online = 0, support_stale = 0, matrix_only = false },
-      resources = {}
+      resources = {},
+      alerts = { counts = { INFO = 0, WARN = 0, CRITICAL = 0 }, summary = "Keine aktiven Meldungen", active = {}, history = {}, mutes = { rules = {}, nodes = {} }, now_ms = os.epoch('utc'), config = {} },
+      alarms = { alarms = {}, header_blink = false }
     }
   end
 
