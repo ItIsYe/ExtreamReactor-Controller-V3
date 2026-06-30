@@ -264,6 +264,14 @@ function M.build_node_setpoint_plan(ctx)
 
   local keep_count = math.min(#active, needed_nodes)
 
+  -- Fix (2026-06-30): assigned_power/assigned_percent existierten bisher nur
+  -- lokal auf entry (verworfen nach dieser Funktion) — node.assigned_power
+  -- wurde nie persistiert. Das UI (rt_dashboard.lua rt_target()) zeigte
+  -- daher rt.power_target an, ein veraltetes Konzept aus der Zeit vor dem
+  -- SCADA-Rewrite (RT bekommt nur noch power_target_percent, berechnet
+  -- seinen RF/t-Output selbst) — das Feld wird von RT nie mehr gesendet und
+  -- zeigte dauerhaft 0 im UI, obwohl der Master intern korrekt einen
+  -- Soll-Wert berechnet hatte. Jetzt: zusaetzlich auf node persistieren.
   for idx, entry in ipairs(active) do
     entry.assignment_rank = idx
     if idx <= keep_count then
@@ -288,6 +296,10 @@ function M.build_node_setpoint_plan(ctx)
         entry.assignment_reason = "STANDBY"
       end
     end
+    if type(entry.node) == "table" then
+      entry.node.assigned_power = entry.assigned_power
+      entry.node.assigned_percent = entry.assigned_percent
+    end
   end
 
   local startup_candidate = nil
@@ -305,6 +317,10 @@ function M.build_node_setpoint_plan(ctx)
       entry.assignment_state = "standby"
       entry.assigned_power = 0
       entry.assigned_percent = 0
+      if type(entry.node) == "table" then
+        entry.node.assigned_power = 0
+        entry.node.assigned_percent = 0
+      end
     end
   end
 
