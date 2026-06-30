@@ -18,7 +18,9 @@ if not ok_utils or type(utils) ~= "table" then utils = nil end
 
 local ok_const, constants = pcall(require, "shared.constants")
 if not ok_const or type(constants) ~= "table" then
-  constants = { channels = { LOG = 6502 } }
+  -- Fix (2026-06-30): Fallback war 6502, muss zu shared.constants.channels.LOG
+  -- (6503) passen, sonst driftet der Fallback-Pfad vom Normalfall ab.
+  constants = { channels = { LOG = 6503 } }
 end
 
 -- ── Configuration ───────────────────────────────────────────────────────────
