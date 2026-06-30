@@ -143,8 +143,20 @@ function M.new(opts)
   -- Aliase (output, power_actual, target_output) werden einmalig am Ende gesetzt.
   local function populate_rt_status(node, payload)
     if type(node) ~= "table" or type(payload) ~= "table" then return end
-    node.rt = payload.rt or node.rt or {}
+    -- Fix (2026-06-30): node.rt = payload.rt or node.rt or {} ERSETZTE die
+    -- bisherige node.rt-Tabelle bei jedem STATUS-Tick komplett durch eine
+    -- neue Tabelle aus dem Netzwerk-Payload. Das verwarf persistente Felder,
+    -- die NICHT von RT selbst gesendet werden, sondern vom Master/UI-
+    -- Controller in node.rt geschrieben wurden (z.B. assignment_state aus
+    -- ui_controller.normalize_rt_display() — siehe infer_assignment_state()
+    -- Fix daneben). Jetzt: bestehende node.rt-Tabelle wiederverwenden und
+    -- payload.rt-Felder hineinmergen, statt die Referenz zu ersetzen.
     if type(node.rt) ~= "table" then node.rt = {} end
+    if type(payload.rt) == "table" then
+      for k, v in pairs(payload.rt) do
+        node.rt[k] = v
+      end
+    end
     local rt = node.rt
 
     -- Kanonische Werte berechnen
