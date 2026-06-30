@@ -193,7 +193,18 @@ function M.new(opts)
         rt_node.node_mode = first_nonempty(rt_node.node_mode, rt_node.mode, node_mode, "-")
         rt_node.mode = rt_node.node_mode
         rt_node.assignment_state = infer_assignment_state(rt_node, node)
-        rt_node.control_source = rt_node.control_source or node.control_source or (node.last_setpoints and node.last_setpoints.control_source) or (node.bindings and node.bindings.control_source)
+        -- Fix (2026-06-30): dieselbe Sticky-Falle wie bei assignment_state
+        -- (siehe infer_assignment_state()) — rt_node ist bei vorhandenem
+        -- node.rt eine direkte Referenz darauf. normalize_rt_display()
+        -- schreibt control_source DIREKT in rt_node (Zeile ~110:
+        -- rt_node.control_source = control). Beim naechsten Aufruf hier
+        -- gewann "rt_node.control_source or ..." dann IMMER den zuvor
+        -- (ggf. falsch auf "LOCAL" normalisierten) Wert, noch bevor der
+        -- stabile, vom Master-RT-Sync gesetzte node.control_source ueberhaupt
+        -- geprueft wurde — node.control_source kam nie mehr zum Zug, sobald
+        -- rt_node.control_source einmal "LOCAL" geworden war. Jetzt:
+        -- node.control_source zuerst pruefen.
+        rt_node.control_source = node.control_source or (node.last_setpoints and node.last_setpoints.control_source) or (node.bindings and node.bindings.control_source) or rt_node.control_source
         rt_node.assignment_reason = normalize_assignment_reason(
           rt_node.assignment_reason or node.assignment_reason or (node.last_setpoints and node.last_setpoints.assignment_reason) or node.bindings_summary,
           rt_node.assignment_state,
