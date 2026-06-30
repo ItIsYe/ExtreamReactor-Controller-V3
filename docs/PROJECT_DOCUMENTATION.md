@@ -1,7 +1,36 @@
-# XReactor Controller V3 — Vollständige Projektdokumentation
+# XReactor Controller V3 — Projektdokumentation
 
-> Letzte Aktualisierung: beta-v133  
+> Letzte Aktualisierung: beta-v236  
 > Stack: CC:Tweaked · Extreme Reactors 2 · Mekanism · ATM10 (MC 1.21.1)
+
+---
+
+## Aktueller Status
+
+Stand: `beta` / `manifest-v236` / `beta-v236`.
+
+Diese Dokumentation beschreibt den aktuellen Architekturstand und die offenen Prüfpunkte. Es wurde bei dieser Doku-Aktualisierung kein Ingame-Test durchgeführt und nichts ingame installiert.
+
+Wichtigster offener Punkt:
+
+```text
+xreactor/nodes/rt/main.lua
+```
+
+In der Tabelle für `monitor_ui.update(...)` fehlt weiterhin ein Komma nach dem `build_health_payload` Funktionsfeld. Dieser Codefehler wurde auf Wunsch nicht behoben, sondern nur dokumentiert. Solange dieser Punkt offen ist, gilt RT nicht als sauber startfähig.
+
+Weitere offene Prüfpunkte:
+
+- RT-Monitorwerte sind noch auf `manifest-v158` / `beta-v158` hart codiert.
+- `xreactor/manifest.lua` und `xreactor/release.lua` verwenden aktuell unterschiedliche `hash_algo` Werte.
+- `xreactor/manifest.lua` hat einen älteren Header-Kommentar als seine eigentlichen Manifestwerte.
+- Remote-Update ist geschützt und robuster, aber die Optionsweitergabe im Command-Pfad sollte später geprüft werden.
+
+Details stehen in:
+
+```text
+docs/NODE_START_BLOCKERS_2026-06-25.md
+```
 
 ---
 
@@ -13,21 +42,22 @@
 4. [MASTER Node](#4-master-node)
 5. [RT Node — Reaktor & Turbinen](#5-rt-node--reaktor--turbinen)
 6. [Startsequenz](#6-startsequenz)
-7. [Remote Update](#7-remote-update)
+7. [Update-System](#7-update-system)
 8. [Peripheral-Erkennung](#8-peripheral-erkennung)
+9. [Offene technische Prüfpunkte](#9-offene-technische-prüfpunkte)
 
 ---
 
 ## 1. Systemüberblick
 
-Ein MASTER-Computer koordiniert alle Nodes. Nodes melden ihren Status, der Master berechnet Sollwerte und sendet sie zurück. Hardware-Steuerung bleibt strikt lokal auf der Node die die Peripherie besitzt.
+Ein MASTER-Computer koordiniert alle Nodes. Nodes melden ihren Status, der Master berechnet Sollwerte und sendet sie zurück. Hardware-Steuerung bleibt strikt lokal auf der Node, die die Peripherie besitzt.
 
-```
+```text
 ┌──────────────────────────────────────────────────────┐
 │                       MASTER                         │
 │  UI · Alerts · Telemetry · Setpoints · Profiles      │
 └──────┬───────────────────────────┬───────────────────┘
-       │ Ender Modem (ch 6500/6501)│
+       │ Ender Modem ch 6500/6501 │
   ┌────▼────┐  ┌────────┐  ┌──────▼──────┐  ┌─────┐
   │   RT    │  │ ENERGY │  │ WATER/FUEL/ │  │ LOG │
   │Reactor  │  │Matrix  │  │REPROCESSING │  │     │
@@ -41,11 +71,11 @@ Ein MASTER-Computer koordiniert alle Nodes. Nodes melden ihren Status, der Maste
 
 **Master kennt das Ziel. Nodes kennen den Weg.**
 
-- Master sendet nur `power_target_percent` (0–100 %) und einen Zustandsintent
-- RT-Node berechnet autonom: Anzahl aktiver Turbinen, Flow pro Turbine, Induktor-Timing, Reaktor-Stab-Position
-- Master hat keine Kenntnis über individuelle Turbinen-RPM oder Flow-Werte
+- Master sendet nur `power_target_percent` und einen Zustandsintent.
+- RT-Node berechnet autonom: Turbinenzustände, Flow, Induktor-Timing und Reaktor-Stab-Position.
+- Master muss keine individuellen Turbinen-RPM oder Flow-Werte steuern.
 
-Dies entspricht dem SCADA-Prinzip (Supervisory Control and Data Acquisition): zentrales Monitoring und Sollwertvorgabe, dezentrale Ausführung.
+Dies entspricht dem SCADA-Prinzip: zentrales Monitoring und Sollwertvorgabe, dezentrale Ausführung.
 
 ---
 
@@ -64,49 +94,49 @@ Dies entspricht dem SCADA-Prinzip (Supervisory Control and Data Acquisition): ze
 | Typ | Beschreibung |
 |-----|-------------|
 | `HELLO` | Node meldet sich beim Start beim Master an |
-| `STATUS` | periodischer Status-Payload (Heartbeat + Daten) |
+| `STATUS` | periodischer Status-Payload |
+| `HEARTBEAT` | kurzer Lebens-/State-Puls |
 | `SET_SETPOINTS` | Master sendet Sollwerte an RT-Node |
 | `SET_MODE` | Master sendet State-Transition |
-| `REMOTE_UPDATE` | Master triggert Installer-Update |
-| `ACK` | Node bestätigt empfangenes Command |
+| `REMOTE_UPDATE` | Update-Befehl über das Netzwerk |
+| `ACK` / `ACK_APPLIED` | Node bestätigt empfangenes oder angewendetes Command |
 
 ---
 
 ## 4. MASTER Node
 
-### Leistungsschätzung (`runtime_ops_profile.lua`)
+### Leistungsschätzung
 
 Priorität für `power_target`:
-1. `measured_total` — Summe der tatsächlichen RT-Outputs (beste Schätzung)
-2. `learned_capacity_total` — Summe der gelernten Kapazitäten (bei SHED/Reboot)
-3. `power_target` vom letzten Tick (Kontinuität)
-4. Kein generischer Fallback mehr (wurde entfernt — 3000 RF/t war um Größenordnungen falsch)
 
-### Multi-Node-Zuweisung (`rt_sync.lua`)
+1. `measured_total` — Summe der tatsächlichen RT-Outputs.
+2. `learned_capacity_total` — Summe gelernter RT-Kapazitäten.
+3. `power_target` vom letzten Tick als Kontinuität.
+4. Kein generischer 3000-RF/t-Fallback mehr.
 
-Proportionale Verteilung statt Greedy:
+### Multi-Node-Zuweisung
 
+Aktueller `rt_sync.lua`-Ansatz:
+
+```text
+1. Nodes nach Kapazität sortieren.
+2. Zählen, wie viele Nodes für global_target benötigt werden.
+3. uniform_pct = global_target / Summe(benötigte Kapazitäten) × 100.
+4. Nur benötigte Nodes werden aktiv zugeteilt.
 ```
-1. Nodes nach Kapazität sortieren (größte zuerst)
-2. Greedy: zählen wie viele Nodes für global_target benötigt werden
-3. uniform_pct = global_target / Summe(benötigte Kapazitäten) × 100
-4. Alle benötigten Nodes bekommen denselben Prozentsatz
-```
 
-Vorteil: gleichmäßige Auslastung, kein Yo-Yo-Effekt, korrekte Skalierung auf N Nodes.
+### Setpoint-Paket Master → RT
 
-### Setpoint-Paket (Master → RT)
-
-Nur 4 Felder werden gesendet:
+Gesendet werden nur funktionale Felder:
 
 | Feld | Typ | Bedeutung |
 |------|-----|-----------|
-| `power_target_percent` | number 0–100 | Prozent der Gesamtkapazität |
-| `assignment_state` | string | `active` / `shed` / `shutdown` / `standby` |
-| `shutdown_stage` | string\|nil | `REQUEST_OFF` / `RAMPDOWN` |
-| `desired_node_state` | string | `RUNNING` / `LIMITED` / `OFF` |
+| `power_target_percent` | number 0–100 | Prozent der gelernten Node-Kapazität |
+| `assignment_state` | string | `active`, `shed`, `shutdown`, `standby` |
+| `shutdown_stage` | string/nil | Shutdown-/Rampdown-Intent |
+| `desired_node_state` | string/nil | gewünschter Node-State |
 
-Entfernt: `target_rpm`, `steam_target`, `power_target` (absolut), `enable_reactors`, `enable_turbines`, `assignment_reason/source/rank`, `controllable`.
+Der aktuelle Code sendet Setpoints sichtbar wieder über `M.send_rt_setpoints(...)`. Das alte Log-Problem `RT setpoints deduped ... ACK_MATCH` ist im aktuellen `rt_sync.lua` nicht mehr sichtbar, muss aber später ingame/logbasiert erneut geprüft werden.
 
 ---
 
@@ -114,127 +144,122 @@ Entfernt: `target_rpm`, `steam_target`, `power_target` (absolut), `enable_reacto
 
 ### Modulstruktur
 
-| Datei | Zeilen | Verantwortlichkeit |
-|-------|--------|-------------------|
-| `nodes/rt/main.lua` | ~750 | Boot, Service-Wiring, ctx-Assembly |
-| `nodes/rt/reactor_control.lua` | ~540 | Rod-Steuerung, Steam-Margin-Regler |
-| `nodes/rt/turbine_control.lua` | ~930 | Flow, Induktor, Overspeed, Rotation |
-| `nodes/rt/capacity_learning.lua` | ~110 | Kontinuierliche Kapazitätsmessung |
-| `nodes/rt/status_snapshot.lua` | ~160 | Status-Payload für Master |
-| `nodes/rt/state_handlers.lua` | ~270 | State-Machine (AUTONOM/MASTER/SAFE) |
-| `nodes/rt/command_handler.lua` | ~285 | SET_SETPOINTS, REMOTE_UPDATE |
-| `nodes/rt/module_lifecycle.lua` | ~625 | SCRAM, Safe-Controls, Startup |
-| `nodes/rt/monitor_ui.lua` | ~610 | Lokales Display |
+| Datei | Verantwortlichkeit |
+|-------|-------------------|
+| `nodes/rt/main.lua` | Boot, Service-Wiring, ctx-Assembly |
+| `nodes/rt/reactor_control.lua` | Rod-Steuerung, Steam-Margin-Regler |
+| `nodes/rt/turbine_control.lua` | Flow, Induktor, Overspeed, Rotation |
+| `nodes/rt/capacity_learning.lua` | kontinuierliche Kapazitätsmessung |
+| `nodes/rt/status_snapshot.lua` | Status-Payload für Master |
+| `nodes/rt/state_handlers.lua` | State-Machine |
+| `nodes/rt/command_handler.lua` | Commands, Setpoints, Update-Command |
+| `nodes/rt/module_lifecycle.lua` | SCRAM, Safe-Controls, Startup |
+| `nodes/rt/monitor_ui.lua` | lokales Display |
 
-### ctx-Architektur
+### Offener RT-Codeblocker
 
-Alle Fachmodule erhalten einen expliziten `ctx`-Parameter mit ihren Abhängigkeiten. Keine globalen Closures. Vorteile:
-- Fehler in `reactor_control` betreffen nur die Reaktor-Regelung
-- Fehler in `turbine_control` betreffen nur die Turbinen-Regelung
-- Jede Abhängigkeit ist am Funktionskopf sichtbar
+In `nodes/rt/main.lua` fehlt ein Komma in der `monitor_ui.update(...)` Parameter-Tabelle:
 
-### Reaktor-Steuerung
-
-**Steam-Margin-Regler:** Der Reaktor wird ausschließlich über Stab-Level geregelt. Der Regler misst die Steam-Tank-Füllstand und passt die Stäbe so an, dass die Turbinen immer genug Dampf haben ohne den Tank zu überfluten.
-
-**Rod-Write-Fallback** (4 Stufen, alle ER2-Varianten abgedeckt):
-1. `setAllControlRodLevels` (primär, ER2 2.x)
-2. `setControlRodsLevels` (Tabellenform)
-3. `setControlRodLevel` (pro Stab, 0-indiziert mit 1-Fallback)
-4. `getControlRods().setLevel` (Objekt-Methode)
-
-### Turbinen-Steuerung
-
-**Ziel-RPM: 900** (fix, aus `CONFIG.TARGET_RPM`). Coil rastet bei ≥ 900 RPM ein.
-
-**3-Zustands-Teillast-Modell:**
-
-```
-exact      = n × power_percent / 100
-full       = floor(exact)          → 900 RPM, Coil ON
-remainder  = exact − full          → 1 Puffer-Turbine: remainder × 900 RPM
-off        = n − full − 1          → 0 RPM (rotiert, damit keine Turbine dauerhaft kalt)
+```lua
+build_health_payload = function() return build_status_payload() end
+read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
 ```
 
-Der Coil der Puffer-Turbine skaliert: `engage_rpm = 900 × scale` → korrekte Leistung.
+Korrekt wäre:
 
-Rotation über `partial_turbine_index` — alle N Sekunden wechseln Puffer- und AUS-Turbinen.
+```lua
+build_health_payload = function() return build_status_payload() end,
+read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
+```
+
+Dieser Punkt wurde bewusst nicht gepatcht und bleibt offen.
 
 ### Capacity Learning
 
+```text
+ready = false  → Master weist 0 Prozent zu
+ready = true   → Master kann proportionalen Load zuweisen
 ```
-ready = false  →  Node wartet, Master weist 0 % zu
-ready = true   →  Master kann proportionalen Load zuweisen
-```
 
-- Misst kontinuierlich bei 900 RPM (unabhängig vom Master)
-- Min. 80 % der Turbinen müssen am Ziel sein für gültige Messung
-- Höhere Werte werden sofort übernommen, niedrigere ignoriert (kein Reset bei kurzem Einbruch)
-- Ergebnis wird in `capacity_cache.lua` persistiert
-
-### State-Machine
-
-| Zustand | Beschreibung |
-|---------|-------------|
-| `AUTONOM` | Kein Master erreichbar — Node regelt selbstständig auf Vollast |
-| `MASTER` | Master aktiv, folgt Setpoints |
-| `SAFE` | Notabschaltung — alle Turbinen/Reaktoren deaktiviert |
+- Misst kontinuierlich bei 900 RPM.
+- Mindestens 80 Prozent der Turbinen müssen am Ziel sein.
+- Höhere Werte werden übernommen, niedrigere ignoriert.
+- Ergebnis wird über `capacity_cache.lua` persistiert.
 
 ---
 
 ## 6. Startsequenz
 
-```
-LOG/LOG_COLLECTOR  → 0s  (sofort)
-MASTER             → 2s  (wartet auf LOG)
-Alle anderen Nodes → 8s  (warten auf LOG + MASTER)
+Aktuelle `xreactor/start.lua`:
+
+- liest `/xreactor/config/role.lua`
+- ermittelt den Entrypoint je Rolle
+- startet optional parallel einen Auto-Update-Loop über `installer/auto_update.lua`
+- startet dann die Rollen-Datei per `dofile(entry)`
+
+Startverzögerungen:
+
+```text
+LOG/LOG_COLLECTOR  → 0s
+MASTER             → 2s
+Alle anderen Nodes → 8s
 ```
 
-Nodes senden beim Start `HELLO`. Wenn Master noch nicht bereit ist, wird das nächste Heartbeat-Interval (2–5s) abgewartet. Die Startsequenz minimiert verlorene HELLOs.
+Wichtig: Der frühere Startup-Self-Heal für den RT-Kommafehler ist aktuell nicht sichtbar vorhanden.
 
 ---
 
-## 7. Remote Update
+## 7. Update-System
 
-**Trigger:** Redstone-Signal auf Seite `top` des MASTER-Computers.
+Der Stand enthält ein Update-/Auto-Update-System mit:
 
-**Flow:**
-```
-Master:  Redstone-Event → broadcast REMOTE_UPDATE → alle Nodes
-Master:  remote_update.run() für sich selbst
+- Auto-Update-Loop aus `installer/auto_update.lua`
+- Versionsvergleich gegen den aktuellen Branch-Stand
+- Installer-Neulauf mit Rollenerhalt
+- Remote-Update-Schutz über lokale Freigabe
+- robustere Downloads mit SHA-Pin/Fallback/Retry/HTML-Prüfung
 
-RT-Node: REMOTE_UPDATE empfangen → pending_remote_update = true (kein Block!)
-RT-Node: nach aktuellem Event-Zyklus (max. 0.5s) → after_cycle()
-RT-Node: http.get(GitHub) → Installer auf Disk schreiben
-RT-Node: dofile(installer) → non-interaktiv (__xreactor_remote_update = true)
-RT-Node: os.reboot()
-```
-
-**Warum deferred?** CC:Tweaked's `http.get()` ist asynchron und wartet auf `http_success`-Events über `os.pullEvent()`. Innerhalb eines `modem_message`-Handlers kann dieses Event nicht ankommen → ewiges Warten. Der Deferred-Mechanismus (v117) löst das.
+Offener Prüfpunkt: Im Command-Pfad sollte geprüft werden, ob Optionen aus `handle_command(opts)` auch an `M.run(...)` weitergereicht werden müssen, besonders wenn Token-basierte Freigabe genutzt wird.
 
 ---
 
 ## 8. Peripheral-Erkennung
 
-**Erkennung über `peripheral.getType()`:**
+Erkennung erfolgt über `peripheral.getType()` und Adapter:
 
 ```lua
 type:find("turbine") → turbine
 type:find("reactor") → reactor
 ```
 
-Unterstützte Typ-Namen: `BigReactors-Reactor`, `BigReactors-Turbine`, `extremereactors:turbine_part` und weitere.
+Genutzte ER2 Turbine API:
 
-**ER2 Turbine API (genutzte Methoden):**
-- `getRotorSpeed()` → aktuelles RPM
-- `setFluidFlowRateMax(rate)` → Flow in mB/t setzen
-- `setInductorEngaged(bool)` → Coil ein/aus
-- `getFluidFlowRateMaxMax()` → maximaler Flow
-- `getEnergyProducedLastTick()` → RF/t
+- `getRotorSpeed()`
+- `setFluidFlowRateMax(rate)`
+- `setInductorEngaged(bool)`
+- `getFluidFlowRateMaxMax()`
+- `getEnergyProducedLastTick()`
 
-**ER2 Reaktor API (genutzte Methoden):**
-- `setActive(bool)` → Reaktor ein/aus
-- `setAllControlRodLevels(level)` → alle Stäbe (primäre Methode)
-- `getHotFluidAmount()` → Steam-Füllstand
-- `getHotFluidAmountMax()` → Steam-Kapazität
-- `getFuelTemperature()` → Brennstoff-Temperatur
+Genutzte ER2 Reaktor API:
+
+- `setActive(bool)`
+- `setAllControlRodLevels(level)`
+- `setControlRodLevel(...)` Fallbacks
+- `getHotFluidAmount()`
+- `getHotFluidAmountMax()`
+- `getFuelTemperature()`
+
+---
+
+## 9. Offene technische Prüfpunkte
+
+Aktuell offen und vor einem Ingame-Test zu klären:
+
+1. RT-Kommafehler in `nodes/rt/main.lua` beheben.
+2. RT-Monitor-Buildwerte `manifest-v158` / `beta-v158` dynamisch machen oder aktualisieren.
+3. `manifest.lua` und `release.lua` beim `hash_algo` vereinheitlichen.
+4. Manifest-Kommentar auf die echte Manifest-Version bringen.
+5. Remote-Update-Optionsweitergabe prüfen.
+6. Statische Lua-Parse-/Require-Prüfung über alle Rollen ausführen.
+
+Bis Punkt 1 erledigt ist, gilt RT weiterhin als nicht sauber startbereit.
