@@ -1,6 +1,13 @@
 local M = {}
 
-local DEFAULT_CHANNEL = 6502
+-- Fix (2026-06-30): DEFAULT_CHANNEL war 6502, aber shared/constants.lua
+-- definiert channels.LOG = 6503 (dort als bewusst gewaehlter, von
+-- Control/Status getrennter Kanal dokumentiert). log_collector/main.lua
+-- liest den Kanal aus shared.constants (6503), waehrend remote_log.lua
+-- (Sender auf RT/Energy/Master) bisher fest 6502 nutzte — kompletter
+-- Kanal-Mismatch, LOG empfing dadurch dauerhaft NICHTS (Recv 0), obwohl
+-- alle Sender korrekt funkten und ein Ender Modem vorhanden war.
+local DEFAULT_CHANNEL = 6503
 local NODE_ID_PATH = "/xreactor/config/node_id.txt"
 local ROLE_CONFIG_PATH = "/xreactor/config/role.lua"
 
