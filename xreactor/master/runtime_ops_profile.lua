@@ -102,13 +102,22 @@ function M.estimate_base_power(runtime)
       end
     end
   end
-  if measured_total > 0 then return measured_total, "measured" end
-  -- Gelernte Kapazität (vom Capacity-Learning der RT-Nodes): der einzig
-  -- realistische Schätzwert wenn gerade nichts produziert wird (z.B. nach
-  -- Reboot oder SHED). Kein generischer Fallback mehr — ein fixer Wert wie
-  -- 3000 RF/t wäre bei realen Reaktoren (5-50 MRF/t) um Grössenordnungen
-  -- falsch und würde die Prozent-Berechnung verfälschen.
+  -- Fix (2026-06-30): gelernte Maximalkapazität bevorzugen statt des aktuell
+  -- GEMESSENEN Outputs. Vorher lieferte measured_total (sobald > 0) immer den
+  -- Vorrang vor learned_capacity_total — das friert die Profil-Basis aber auf
+  -- den Output-Stand zum Zeitpunkt des letzten Profilwechsels ein. Wechselt
+  -- das System z.B. von BASELOAD (60%) auf PEAK (100%) während die Reaktoren
+  -- noch auf BASELOAD-Niveau liefen, wird power_target = measured_total * 1.0
+  -- berechnet — also praktisch der alte BASELOAD-Output, NICHT die tatsächliche
+  -- Maximalkapazität. Power_target bleibt dann dauerhaft unter dem, was die
+  -- Reaktoren tatsächlich leisten könnten, weil apply_profile() nur einmalig
+  -- beim Wechsel feuert und sich power_target seitdem nicht mehr automatisch
+  -- nach oben korrigiert. learned_capacity_total (aus dem RT-Capacity-Learning)
+  -- ist der einzige Wert, der die echte Obergrenze widerspiegelt, daher hat er
+  -- jetzt Vorrang sobald er verfügbar ist; measured_total bleibt der Fallback
+  -- falls noch kein Node capacity_ready meldet.
   if learned_capacity_total > 0 then return learned_capacity_total, "learned-capacity" end
+  if measured_total > 0 then return measured_total, "measured" end
   -- Vorheriger Zielwert: besser als gar nichts wenn noch kein Learning vorliegt.
   if runtime.state.power_target and runtime.state.power_target > 0 then return runtime.state.power_target, "previous-target" end
   -- Nichts bekannt: 0 zurückgeben. Master weist dann 0% zu bis das
@@ -213,6 +222,24 @@ function M.sample_trends(runtime)
       M.apply_profile(runtime, "IDLE")
     elseif energy_pct < 30 and runtime.state.active_profile ~= "PEAK" then
       M.apply_profile(runtime, "PEAK")
+    else
+      -- Fix (2026-06-30): power_target periodisch nachziehen, wenn die
+      -- gelernte RT-Maximalkapazität deutlich (>5%) über dem aus dem letzten
+      -- apply_profile()-Aufruf eingefrorenen Wert liegt. Ohne diesen Zweig
+      -- bleibt power_target dauerhaft auf dem measured_total-Snapshot vom
+      -- Zeitpunkt des letzten Profilwechsels haengen, selbst wenn die
+      -- Reaktoren inzwischen deutlich mehr liefern koennten (z.B. weil das
+      -- Capacity-Learning erst nach dem PEAK-Wechsel abgeschlossen wurde).
+      -- Re-Apply nur alle ~30s pruefen, um nicht jeden Tick neu zu rechnen.
+      runtime.state.last_capacity_recheck = runtime.state.last_capacity_recheck or 0
+      if now - runtime.state.last_capacity_recheck >= 30000 then
+        runtime.state.last_capacity_recheck = now
+        local base = M.estimate_base_power(runtime)
+        local current_target = tonumber(runtime.state.power_target) or 0
+        if base > 0 and current_target > 0 and base > current_target * 1.05 then
+          M.apply_profile(runtime, runtime.state.active_profile or "BASELOAD")
+        end
+      end
     end
   end
 end
