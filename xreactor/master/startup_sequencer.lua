@@ -135,6 +135,23 @@ function sequencer.new(comms, ramp_profile, opts)
   }
 
   function self.enqueue(node_id, reason)
+    -- Fix (2026-06-30): node_id wurde an utils.normalize_node_id() weiter-
+    -- gereicht, OHNE vorher zu prüfen ob es ueberhaupt ein String/Number ist.
+    -- normalize_node_id() ruft intern tostring(value) auf — wird also
+    -- versehentlich ein ganzes node-Objekt (Tabelle) statt node.id uebergeben,
+    -- entsteht ein syntaktisch gueltiger, aber inhaltlich kaputter String wie
+    -- "table:_0x59c40aab", der dann unbemerkt durchs ganze System lief und
+    -- im UI als "RT-table:_0x..." auftauchte (siehe rt_dashboard.lua
+    -- safe_text()-Fix, der das nicht mehr abfangen kann, weil zu diesem
+    -- Zeitpunkt bereits ein valider String vorliegt). Hier wird die Eingabe
+    -- jetzt VOR der Normalisierung typgeprueft.
+    if type(node_id) ~= "string" and type(node_id) ~= "number" then
+      if utils.log then
+        utils.log("SEQ", ("enqueue() called with non-string node_id (type=%s) reason=%s — ignored"):format(
+          type(node_id), tostring(reason or "unknown")), "WARN")
+      end
+      return
+    end
     local normalized = utils.normalize_node_id(node_id)
     for _, entry in ipairs(self.queue) do
       if entry.node_id == normalized and not entry.module_id then
