@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v225
 return {
-  manifest_version = 233,
-  manifest_id = "manifest-v233",
+  manifest_version = 234,
+  manifest_id = "manifest-v234",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -39,7 +39,7 @@ return {
   { path = "core/non_rt_payload.lua", size_bytes = 558, hash = "b9c0175d"},
   { path = "core/protocol.lua", size_bytes = 6423, hash = "6c324af5"},
   { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9"},
-  { path = "core/remote_log.lua", size_bytes = 4202, hash = "b1320caf"},
+  { path = "core/remote_log.lua", size_bytes = 4698, hash = "b1320caf"},
   { path = "core/safety.lua", size_bytes = 7851, hash = "3d0160cc"},
   { path = "core/state_machine.lua", size_bytes = 842, hash = "4ae6c19c"},
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d"},
@@ -160,7 +160,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"}},
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 28907, hash = "801b9316", required_for={"LOG"}},
+    { path = "nodes/log_collector/main.lua", size_bytes = 30660, hash = "801b9316", required_for={"LOG"}},
     },
     shared_support = {
     { path = "nodes/support/command_handler.lua", size_bytes = 5102, hash = "8aeba298", required_for={"WATER", "FUEL", "REPROCESSING"}},
