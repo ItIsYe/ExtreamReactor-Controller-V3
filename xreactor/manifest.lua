@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v225
 return {
-  manifest_version = 229,
-  manifest_id = "manifest-v229",
+  manifest_version = 230,
+  manifest_id = "manifest-v230",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -69,7 +69,7 @@ return {
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"}},
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"}},
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"}},
-    { path = "master/message_handlers.lua", size_bytes = 21973, hash = "ad77b73e", required_for={"MASTER"}},
+    { path = "master/message_handlers.lua", size_bytes = 22651, hash = "ad77b73e", required_for={"MASTER"}},
     { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"}},
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"}},
     { path = "master/rt_sync.lua", size_bytes = 17394, hash = "e565fff1", required_for={"MASTER"}},
@@ -87,9 +87,9 @@ return {
     { path = "master/ui/multiview.lua", size_bytes = 7775, hash = "5c8089b0", required_for={"MASTER"}},
     { path = "master/ui/overview.lua", size_bytes = 10888, hash = "20dca0c4", required_for={"MASTER"}},
     { path = "master/ui/resources.lua", size_bytes = 5634, hash = "3c3f86d2", required_for={"MASTER"}},
-    { path = "master/ui/rt_dashboard.lua", size_bytes = 11831, hash = "e587af2a", required_for={"MASTER"}},
+    { path = "master/ui/rt_dashboard.lua", size_bytes = 12602, hash = "e587af2a", required_for={"MASTER"}},
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"}},
-    { path = "master/ui_controller.lua", size_bytes = 28281, hash = "c579b3a5", required_for={"MASTER"}},
+    { path = "master/ui_controller.lua", size_bytes = 32227, hash = "c579b3a5", required_for={"MASTER"}},
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"}},
     },
     rt = {
