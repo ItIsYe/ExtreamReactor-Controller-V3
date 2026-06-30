@@ -205,6 +205,13 @@ function M.new(opts)
         -- rt_node.control_source einmal "LOCAL" geworden war. Jetzt:
         -- node.control_source zuerst pruefen.
         rt_node.control_source = node.control_source or (node.last_setpoints and node.last_setpoints.control_source) or (node.bindings and node.bindings.control_source) or rt_node.control_source
+        -- Fix (2026-06-30): "Soll"-Anzeige im UI zeigte dauerhaft 0, weil
+        -- rt_target() (rt_dashboard.lua) auf rt.power_target zurueckfiel —
+        -- ein Feld, das RT seit dem SCADA-Rewrite nie mehr sendet (RT bekommt
+        -- nur noch power_target_percent, berechnet seinen Output selbst).
+        -- node.assigned_power (jetzt von rt_sync.lua persistiert) ist der
+        -- tatsaechliche, vom Master berechnete RF/t-Sollwert pro Node.
+        rt_node.target = node.assigned_power or rt_node.target
         rt_node.assignment_reason = normalize_assignment_reason(
           rt_node.assignment_reason or node.assignment_reason or (node.last_setpoints and node.last_setpoints.assignment_reason) or node.bindings_summary,
           rt_node.assignment_state,
