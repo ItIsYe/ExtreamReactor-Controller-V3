@@ -134,19 +134,32 @@ local function hidden_rt_summary(nodes)
   return stale, local_ctrl, unassigned
 end
 
+-- Fix (2026-06-30): mehrere Felder auf rt_node (queue_state, assignment_state,
+-- control_source, display_mode) sind theoretisch nie als Tabelle vorgesehen,
+-- traten aber in der Praxis vereinzelt als Tabelle statt String auf (siehe
+-- "Queue: table: 0x..." Anzeige-Bug). Ursache nicht abschliessend geklärt;
+-- diese Hilfsfunktion verhindert defensiv, dass eine Tabelle ungefiltert als
+-- "table: 0x..." im UI landet, unabhaengig wo genau im Datenfluss sie entsteht.
+local function safe_text(value, fallback)
+  if type(value) == "string" or type(value) == "number" then
+    return tostring(value)
+  end
+  return fallback or "-"
+end
+
 local function render_rt_card(mon, x, y, w, rt)
-  local node_id = tostring(rt.id or rt.node_id or "UNKNOWN")
+  local node_id = safe_text(rt.id or rt.node_id, "UNKNOWN")
   local box = widgets.panel_box(mon, x, y, w, 10, "RT-" .. node_id, rt.status or "OFFLINE")
   local target = rt_target(rt)
   local actual = rt_actual(rt)
-  widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, tostring(rt_state(rt)), rt.status or "OFFLINE", 9)
+  widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, safe_text(rt_state(rt)), rt.status or "OFFLINE", 9)
   ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %s | Ist %s RF/t", fmt_rf(target), fmt_rf(actual)), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 2, widgets.fit("State: " .. tostring(rt_state(rt)) .. " | Mode: " .. tostring(rt_local_mode(rt)), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 2, widgets.fit("State: " .. safe_text(rt_state(rt)) .. " | Mode: " .. safe_text(rt_local_mode(rt)), box.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, box.x, box.y + 3, widgets.fit(rt_hardware_summary(rt), box.w), colors.get("text"), colors.get("background"))
   ui.text(mon, box.x, box.y + 4, widgets.fit(rt_runtime_summary(rt), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 5, widgets.fit("Seen " .. tostring(rt.last_seen_age or "-") .. "s | " .. tostring(rt.assignment_state or "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 6, widgets.fit("Source: " .. tostring(rt.control_source or "-") .. " | " .. tostring(rt.display_mode or "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 7, widgets.fit("Queue: " .. tostring(rt.queue_state or "idle") .. " | " .. tostring(rt.queue_step or "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 5, widgets.fit("Seen " .. tostring(rt.last_seen_age or "-") .. "s | " .. safe_text(rt.assignment_state, "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 6, widgets.fit("Source: " .. safe_text(rt.control_source, "-") .. " | " .. safe_text(rt.display_mode, "-"), box.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, box.x, box.y + 7, widgets.fit("Queue: " .. safe_text(rt.queue_state, "idle") .. " | " .. safe_text(rt.queue_step, "-"), box.w), colors.get("muted"), colors.get("background"))
   ui.progress(mon, box.x, box.y + 8, math.max(8, box.w), math.max(0, math.min(100, actual)) / 100, rt.status or "OFFLINE")
 end
 
