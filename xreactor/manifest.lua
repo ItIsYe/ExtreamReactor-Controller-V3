@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v225
 return {
-  manifest_version = 231,
-  manifest_id = "manifest-v231",
+  manifest_version = 232,
+  manifest_id = "manifest-v232",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -79,7 +79,7 @@ return {
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"}},
     { path = "master/runtime_ops_profile.lua", size_bytes = 13822, hash = "28ee5f71", required_for={"MASTER"}},
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"}},
-    { path = "master/startup_sequencer.lua", size_bytes = 10582, hash = "b537bd44", required_for={"MASTER"}},
+    { path = "master/startup_sequencer.lua", size_bytes = 11613, hash = "b537bd44", required_for={"MASTER"}},
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"}},
     { path = "master/ui/alarms.lua", size_bytes = 5242, hash = "e1cede7e", required_for={"MASTER"}},
     { path = "master/ui/alerts.lua", size_bytes = 25335, hash = "746207f8", required_for={"MASTER"}},
