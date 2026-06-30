@@ -53,9 +53,23 @@ function M.new(opts)
     return map[key] or raw:upper()
   end
   local function infer_assignment_state(rt_node, node)
+    -- Fix (2026-06-30): node.assignment_state (vom Master-RT-Sync in
+    -- rt_sync.lua gesetzt, stabil über STATUS-Ticks hinweg) muss VOR
+    -- rt_node.assignment_state geprüft werden. Grund: rt_node ist bei
+    -- vorhandenem node.rt eine direkte Referenz auf node.rt — und
+    -- message_handlers.populate_rt_status() ersetzt node.rt bei JEDEM
+    -- STATUS-Tick komplett durch das frische payload.rt (node.rt = payload.rt
+    -- or node.rt or {}), statt es zu mergen. Ein zuvor vom UI gesetztes
+    -- rt_node.assignment_state="ASSIGNED" (siehe normalize_rt_display(), das
+    -- direkt in rt_node mutiert) geht dadurch bei der naechsten STATUS-
+    -- Nachricht sofort wieder verloren — RT selbst sendet ohnehin nie ein
+    -- eigenes assignment_state-Feld im Payload. Je nach Timing zwischen
+    -- STATUS-Empfang und naechstem UI-Render zeigte das zufaellig fuer manche
+    -- Nodes UNASSIGNED, fuer andere (gleicher Code!) ASSIGNED — reines
+    -- Zufallstiming, kein Unterschied im Verhalten der RT-Node selbst.
     local raw = first_nonempty(
-      rt_node.assignment_state,
       node.assignment_state,
+      rt_node.assignment_state,
       node.bindings_state,
       node.bindings and node.bindings.assignment_state,
       node.last_setpoints and node.last_setpoints.assignment_state
