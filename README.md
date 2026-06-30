@@ -2,20 +2,10 @@
 
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
-> **Branch:** `beta` — active development.  
-> **Manifest / Release:** `manifest-v156` / `beta-v156` · 131 files · ATM10 (MC 1.21.1)  
-> **Beta status:** known node start blockers are documented in [docs/NODE_START_BLOCKERS_2026-06-25.md](docs/NODE_START_BLOCKERS_2026-06-25.md). Do not treat this branch as ready for ingame rollout until those blockers are fixed and statically checked.  
-> See [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) for the full technical reference.
-
----
-
-## Current Handoff / Cleanup Docs
-
-- [docs/README.md](docs/README.md) — documentation index.
-- [docs/NODE_START_BLOCKERS_2026-06-25.md](docs/NODE_START_BLOCKERS_2026-06-25.md) — current RT/FUEL/WATER/REPROCESSING/ENERGY blockers and fix notes.
-- [RUNTIME_STATUS_2026-06-03.md](RUNTIME_STATUS_2026-06-03.md) — runtime audit / cleanup handoff history.
-
-Important beta note: `xreactor/manifest.lua` currently uses `hash_algo = "none"` intentionally for the moving beta branch. Do not revert that as part of normal cleanup; regenerate manifest metadata from a real checkout first if CRC32 checks should be restored.
+> **Branch:** `beta` — active development.
+> **Manifest / Release:** `manifest-v225` / `beta-v225` · ATM10 (MC 1.21.1)
+> **Status:** Phase 1–4 rewrite complete (modular installer, async Energy node, Master without globals, shared services). Auto-Updater hardened and running on all node types. Known open issue: setpoint transmission/calculation between MASTER and nodes is currently broken again — under investigation.
+> See [REWRITE_SPEC.md](REWRITE_SPEC.md) for the full rewrite reference.
 
 ---
 
@@ -24,15 +14,21 @@ Important beta note: `xreactor/manifest.lua` currently uses `hash_algo = "none"`
 On any new CC:Tweaked computer with HTTP enabled:
 
 ```sh
-wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer
-shell.run("/installer")
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer
+installer
 ```
 
 The installer downloads the manifest, lets you pick a role, stages all required files, writes `/startup`, and reboots automatically.
 
-**Update / reinstall:** Run `/installer` again — detects existing role and asks whether to keep or change it.
+**Update / reinstall:** Run `installer` again. The installer now preserves `/xreactor/config/role.lua` across reinstalls — the existing role is detected and restored even though `/xreactor` is fully deleted and rebuilt to avoid stale/orphaned files and disk space issues (important for large roles like MASTER and RT).
 
-**Remote Update:** Trigger a Redstone signal on the `top` side of the MASTER computer. The Master broadcasts a `REMOTE_UPDATE` command to all connected nodes and updates itself. Each node downloads the installer and reboots automatically (non-interactive).
+**Auto-Update (built-in, no Redstone trigger needed):** Every node runs an `auto_update_service` loop alongside its normal logic (`parallel.waitForAny`). Every 120 seconds (first check after 30s on boot) it compares the local `manifest_version` (from `xreactor/release.lua`) against the version published on the `beta` branch. If a newer version is available, the node downloads the current monolithic `installer` from `raw.githubusercontent.com`, re-runs it non-interactively (existing role preserved), and reboots automatically.
+
+Bump the version to trigger a rollout:
+- `xreactor/manifest.lua` → `manifest_version`, `manifest_id`
+- `xreactor/release.lua` → `release_id`, `manifest_id`, `manifest_version`
+
+**Every fix or behavior change to the installer/auto-updater must be paired with a version bump**, otherwise nodes won't detect or pull the update.
 
 ---
 
@@ -52,6 +48,8 @@ The installer downloads the manifest, lets you pick a role, stages all required 
 ```
 
 **Key design rule (SCADA principle):** MASTER sends only a percentage setpoint (`power_target_percent`) and a state intent (`assignment_state`). Each RT node autonomously decides how many turbines run, which are at partial load, and how to position reactor rods — the Master has no knowledge of individual turbine RPM or flow rates.
+
+> **Known issue (2026-06-30):** setpoint transmission/calculation between MASTER and nodes is currently not working correctly. Root cause not yet identified — investigation pending.
 
 ### Modem Channels
 
@@ -73,7 +71,9 @@ The installer downloads the manifest, lets you pick a role, stages all required 
 | `WATER` | `nodes/water/main.lua` | Ender Modem |
 | `FUEL` | `nodes/fuel/main.lua` | Ender Modem, Wired Modem |
 | `REPROCESSING` | `nodes/reprocessor/main.lua` | Ender Modem, Wired Modem |
-| `LOG` | `nodes/log_collector/main.lua` | Disk Drive(s), Ender Modem |
+| `LOG` / `LOG_COLLECTOR` | `nodes/log_collector/main.lua` | Disk Drive(s), Ender Modem |
+
+**LOG receives a minimal file set** (currently ~12 files: always-on base files + `nodes/log_collector/main.lua` itself). It does not receive Master/RT/Energy-specific modules. This is intentional — see `installer/manifest.lua`'s `files_for_role()`.
 
 ---
 
@@ -85,7 +85,36 @@ Nodes start in a fixed order to ensure the Master is ready before nodes announce
 |------|-------|-----------|
 | LOG / LOG_COLLECTOR | 0s | — starts immediately |
 | MASTER | 2s | LOG_COLLECTOR |
-| RT, FUEL, WATER, all others | 8s | LOG_COLLECTOR + MASTER |
+| RT, ENERGY, FUEL, WATER, all others | 8s | LOG_COLLECTOR + MASTER |
+
+Every node enters `parallel.waitForAny(node_thread, auto_update_loop)` after boot, so the Auto-Updater runs concurrently with normal node operation without blocking it.
+
+---
+
+## Installer Architecture (Phase 1 Rewrite)
+
+The installer is distributed as **one monolithic file** (`/installer` in repo root) so a fresh computer only needs a single `wget`. Internally it embeds the modular `installer/` source files as Lua long-strings and writes them out to `/xreactor/installer/` on the target:
+
+| Module | Responsibility |
+|--------|---------------|
+| `installer/http.lua` | HTTP helpers |
+| `installer/manifest.lua` | Manifest parsing, `files_for_role()` (which files a role needs) |
+| `installer/stage.lua` | Download/staging of files with retry |
+| `installer/ui.lua` | Role selection UI |
+| `installer/auto_update.lua` | Background version-check + self-update loop (parallel-safe) |
+| `installer/init.lua` | Entry point, orchestration |
+
+**Reinstall behavior:** Before deleting `/xreactor`, the installer reads and caches `/xreactor/config/role.lua` in memory, deletes the whole directory (avoids orphaned/stale files and disk space bloat on large roles like MASTER/RT), recreates the directory, and immediately restores `role.lua` — so a re-run of the installer after a failed/interrupted install still knows which role to (re)install.
+
+### CC:Tweaked Parallel-Coroutine Constraints (hard-won, do not violate)
+
+These limitations caused real bugs during the rewrite and must be respected in any code that runs inside `parallel.waitForAny`:
+
+- `shell` is **not available** inside a `parallel` coroutine — use `dofile(path)` instead of `shell.run(path)`.
+- `http.get(url)` has no usable 3-argument timeout form in this context — use async `http.request` + listen for `http_success` / `http_failure` events instead.
+- `os.pullEvent()` must remain unfiltered in parallel threads so other coroutines still receive their events; don't use `os.pullEventRaw` or a filtered pull that could swallow events meant for siblings.
+- `f.write(content)` must be called directly, not via `pcall(f.write, f, content)` (wrong self-argument order causes silent failures).
+- Avoid extra dependent HTTP round-trips (e.g. resolving a commit SHA via `api.github.com`) inside the update-check path — every additional external call is another place the async event wait can stall, especially on event-heavy nodes like RT. Fetch `beta` branch files directly via `raw.githubusercontent.com`.
 
 ---
 
@@ -139,6 +168,8 @@ The Master sends only four fields:
 
 The RT node calculates everything else itself (turbine count, flow rates, rod positions).
 
+> **Currently broken (2026-06-30):** setpoint transmission/calculation is not reliably reaching or being applied at the node side. Not yet root-caused; treat RT/Energy power control as untrusted until fixed.
+
 ### Capacity Learning
 
 Before the Master can send useful setpoints, the RT node must measure its own maximum output. Learning runs continuously and independently:
@@ -160,6 +191,44 @@ No node runs at 100 % while another idles — all active nodes share the same pe
 
 ---
 
+## Energy Node (Phase 2 Rewrite)
+
+The Energy node's previously blocking `main.lua` (674 lines) was split into:
+
+| Module | Responsibility |
+|--------|---------------|
+| `nodes/energy/main.lua` | Boot, wiring, `parallel.waitForAny(heartbeat, matrix)` |
+| `nodes/energy/heartbeat.lua` | Heartbeat thread, runs independently of matrix polling |
+| `nodes/energy/matrix.lua` | Mekanism Induction Matrix polling/control thread |
+
+No more blocking calls inside the main loop — heartbeat and matrix monitoring run as separate coroutines via `parallel.waitForAny`, so a slow matrix peripheral call no longer delays heartbeat/status reporting.
+
+---
+
+## Master (Phase 3 Rewrite)
+
+The Master's `runtime_loop`, `init_runtime`, and `runtime_context` were consolidated and the `_G.xreactor_runtime` global hack removed:
+
+| Module | Responsibility |
+|--------|---------------|
+| `master/context.lua` | Runtime context construction (replaces global state) |
+| `master/loop.lua` / `master/runtime_loop.lua` | Main loop orchestration |
+
+`message_handlers` now receive the runtime context explicitly via `set_runtime()` instead of reading a global. Setpoint-Flow and Profiles were moved into their own dedicated modules as part of this phase.
+
+---
+
+## Shared Services (Phase 4 Rewrite)
+
+Reusable across all node types:
+
+| Module | Responsibility |
+|--------|---------------|
+| `xreactor/services/heartbeat_service.lua` | Shared heartbeat logic, used by all nodes |
+| `xreactor/services/auto_update_service.lua` | Shared auto-update loop logic, used by all nodes |
+
+---
+
 ## Peripheral Detection
 
 The system uses `peripheral.getType()` and string matching to detect ER2 devices:
@@ -173,14 +242,8 @@ Rod-level writes use a 4-step fallback: `setAllControlRodLevels` → `setControl
 
 ---
 
-## Remote Update
+## Known Open Issues (2026-06-30)
 
-Trigger: Redstone signal on **top** of the MASTER computer.
-
-Flow:
-1. Master broadcasts `REMOTE_UPDATE` to all nodes and updates itself
-2. Each node sets a deferred flag (does not block the event loop)
-3. After the current event cycle, the node downloads the installer from GitHub
-4. Installer runs non-interactively (existing role kept), then `os.reboot()`
-
-The deferred mechanism is required because CC:Tweaked's `http.get()` is asynchronous — it cannot receive the `http_success` event while already inside a `modem_message` handler.
+- **Setpoint transmission/calculation (Master ↔ RT/Energy) is broken** — under investigation, no root cause identified yet.
+- `node-55` (RT) reports `reactors=0` — confirmed in-game hardware issue (missing cable to reactor), not a software bug.
+- Legacy flat `installer_*.lua` files (`installer_main.lua` etc.) still present in the repo root/`xreactor/` from before the Phase 1 rewrite — safe to delete, kept only for reference during the transition.
