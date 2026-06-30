@@ -205,6 +205,19 @@ function M.new(opts)
     -- node-Felder: kanonisch + Aliase einmalig
     node.actual_output  = rt.actual_output
     node.power_target   = rt.power_target
+    -- Fix (2026-06-30): rt.capacity_max/rt.capacity_ready aus dem aktuellen
+    -- payload MUESSEN vor der Ableitung von node.capacity_max/node.capacity_ready
+    -- aktualisiert werden. Vorher stand dieser Block hier unten (nach der
+    -- node.*-Ableitung), wodurch node.capacity_max/node.capacity_ready immer
+    -- den Wert aus dem VORHERIGEN STATUS-Zyklus widerspiegelten (off-by-one
+    -- payload) statt des gerade eingetroffenen — das fuehrte dazu, dass
+    -- rt_sync.node_capacity() veraltete/fehlende Kapazitaetswerte sah und der
+    -- Master falsche oder gar keine Setpoints zuteilte.
+    rt.capacity_max     = number_or_nil(payload.capacity_max) or rt.capacity_max
+    if payload.capacity_ready == true then rt.capacity_ready = true end
+    rt.capacity_source  = payload.capacity_source or rt.capacity_source
+    rt.capacity_stable_turbines  = number_or_nil(payload.capacity_stable_turbines) or rt.capacity_stable_turbines
+    rt.capacity_total_turbines   = number_or_nil(payload.capacity_total_turbines) or rt.capacity_total_turbines
     if rt.capacity_ready == true then node.capacity_ready = true end
     node.capacity_max   = rt.capacity_max or node.capacity_max
     -- Sobald capacity_max bekannt: Profile-Retry ausloesen wenn power_target=0
@@ -227,11 +240,6 @@ function M.new(opts)
     rt.power_actual    = rt.actual_output
     rt.output          = rt.actual_output
     rt.target_output   = rt.power_target
-    rt.capacity_max     = number_or_nil(payload.capacity_max) or rt.capacity_max
-    if payload.capacity_ready == true then rt.capacity_ready = true end
-    rt.capacity_source  = payload.capacity_source or rt.capacity_source
-    rt.capacity_stable_turbines  = number_or_nil(payload.capacity_stable_turbines) or rt.capacity_stable_turbines
-    rt.capacity_total_turbines   = number_or_nil(payload.capacity_total_turbines) or rt.capacity_total_turbines
   end
 
   local function update_node(message)
