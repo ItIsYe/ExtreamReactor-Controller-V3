@@ -87,12 +87,32 @@ function M:render(monitors, data_map)
     end
 
     local badge_view = self.sessions:resolve_view_key(session)
+    -- Badge-Status (oben links) muss den echten globalen Alarmstatus zeigen,
+    -- unabhängig davon welche View gerade auf diesem Monitor sichtbar ist —
+    -- vorher war der Status hier fest auf "OK"/"LIMITED" hartcodiert, sodass
+    -- der Monitor auch bei aktiven CRITICAL/WARN-Alarmen dauerhaft grün/gelb
+    -- blieb statt den Zustand widerzuspiegeln. Quelle: overview.alert_counts
+    -- (von ui_controller.build_models() aus alert_service:get_counts()),
+    -- das einzige Model das die globalen Zählwerte mitführt — ein eigenes
+    -- "alerts"-Model existiert in data_map nicht.
+    local overview_data = data_map.overview or {}
+    local counts = overview_data.alert_counts or {}
+    local crit_count = tonumber(counts.CRITICAL) or 0
+    local warn_count = tonumber(counts.WARN) or 0
+    local badge_status
+    if crit_count > 0 then
+      badge_status = "EMERGENCY"
+    elseif warn_count > 0 then
+      badge_status = "WARNING"
+    else
+      badge_status = "OK"
+    end
     if self.sessions:is_primary(session) then
-      ui.badge(session.mon, 2, 1, widgets.fit((badge_view or "PRIMARY"):upper(), 20), "LIMITED")
+      ui.badge(session.mon, 2, 1, widgets.fit((badge_view or "PRIMARY"):upper(), 20), badge_status)
     else
       -- AUX: zeige aktuelle View + Hinweis dass Touch wechselt
       local aux_label = "AUX:" .. (badge_view or "?"):upper()
-      ui.badge(session.mon, 2, 1, widgets.fit(aux_label, 22), "OK")
+      ui.badge(session.mon, 2, 1, widgets.fit(aux_label, 22), badge_status)
     end
     ::continue::
   end
