@@ -386,7 +386,21 @@ local function refresh_modems(force)
   stats.next_modem_refresh = ts + MODEM_REFRESH_S
   stats.modems = {}
 
+  -- Fix (2026-06-30): LOG hat typischerweise sowohl ein Ender Modem
+  -- (wireless, fuer Funkempfang von RT/Energy/Master STATUS/LOG-Events) als
+  -- auch ein normales (wired) Modem fuer lokale Disk-/Monitor-Peripherals.
+  -- is_modem_name() filterte beide gleich und oeffnete CHANNEL auf JEDEM
+  -- gefundenen Modem — das fuehrte dazu, dass auf einem System mit beiden
+  -- Modem-Typen der Funkempfang dauerhaft leer blieb (Recv 0 ueber lange
+  -- Zeit), weil wired und wireless Modems in CC:Tweaked getrennte Funknetze
+  -- sind und nur das Ender Modem ueberhaupt Nachrichten von entfernten
+  -- Nodes (RT/Energy/Master) empfangen kann. Jetzt: wireless Modems werden
+  -- bevorzugt geoeffnet UND zusaetzlich, defensiv, weiterhin alle gefundenen
+  -- Modems geoeffnet (falls z.B. nur ein wired Modem vorhanden ist, soll das
+  -- Verhalten wie zuvor erhalten bleiben) — aber wireless wird zuerst geprueft
+  -- und separat geloggt, damit ein fehlendes Ender Modem sofort sichtbar ist.
   local names = {}
+  local wireless_found = false
   if peripheral and type(peripheral.getNames) == "function" then
     local ok, perifs = pcall(peripheral.getNames)
     if ok and type(perifs) == "table" then
@@ -395,13 +409,24 @@ local function refresh_modems(force)
         if is_modem_name(name) then
           local ok_wrap, modem = pcall(peripheral.wrap, name)
           if ok_wrap and modem and type(modem.open) == "function" then
+            local is_wireless = false
+            if type(modem.isWireless) == "function" then
+              local ok_w, result = pcall(modem.isWireless)
+              is_wireless = ok_w and result == true
+            end
+            if is_wireless then wireless_found = true end
             pcall(modem.open, CHANNEL)
             stats.modems[#stats.modems + 1] = modem
-            names[#names + 1] = name
+            names[#names + 1] = name .. (is_wireless and "*" or "")
           end
         end
       end
     end
+  end
+
+  if not wireless_found and not stats.warned_no_wireless then
+    stats.warned_no_wireless = true
+    pcall(print, "[LOG] WARNUNG: kein Ender/Wireless-Modem gefunden — Funkempfang von RT/Energy/Master wird nicht funktionieren (nur lokale wired Modems erkannt)")
   end
 
   stats.modem = table.concat(names, ",")
