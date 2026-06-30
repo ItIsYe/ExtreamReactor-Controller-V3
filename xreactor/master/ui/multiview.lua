@@ -114,6 +114,24 @@ function M:render(monitors, data_map)
       local aux_label = "AUX:" .. (badge_view or "?"):upper()
       ui.badge(session.mon, 2, 1, widgets.fit(aux_label, 22), badge_status)
     end
+
+    -- Bei aktiven CRITICAL/WARN-Alarmen die dringendste Meldung als Text
+    -- unter dem Badge anzeigen, damit man sie sieht ohne erst manuell auf
+    -- die "alerts"-View umschalten zu müssen (Touch-Zyklus). Quelle ist
+    -- overview.alert_rows (bis zu 4 Einträge, sortiert nach Dringlichkeit
+    -- in ui_controller.build_models() über alert_service:get_top_critical()).
+    if badge_status ~= "OK" then
+      local rows = overview_data.alert_rows or {}
+      local top_row = rows[1]
+      if top_row then
+        local w2 = select(1, ui.getSize(session.mon)) or 30
+        local alert_text = widgets.fit(
+          tostring(top_row.title or "Alert") .. ": " .. tostring(top_row.text or ""),
+          math.max(10, w2 - 3)
+        )
+        ui.text(session.mon, 2, 2, alert_text, 0xFFFFFF, 0x000000)
+      end
+    end
     ::continue::
   end
 
