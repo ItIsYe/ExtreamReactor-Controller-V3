@@ -640,7 +640,14 @@ end
 ui_mod.header("Installiere " .. role.label)
 
 -- Wichtige Dateien sichern
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua" }
+-- Fix (2026-06-30): role.lua war hier ueber einen separaten, redundanten
+-- _saved_role-Sonderfall behandelt (nur in DIESEM Codepfad, nicht im
+-- Auto-Update-Reinstall-Pfad weiter unten in derselben Datei) — dadurch ging
+-- die Rollenzuordnung bei einem Auto-Update-Reinstall verloren, weil dieser
+-- zweite Pfad role.lua weiterhin ungeschuetzt mitloeschte. Jetzt einheitlich:
+-- role.lua ist Teil der regulaeren PRESERVE-Liste wie node_id.txt und
+-- capacity_cache.lua, in BEIDEN Codepfaden.
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua" }
 local preserved = {}
 for _, rel in ipairs(PRESERVE) do
   local src = INSTALL_ROOT .. "/" .. rel
@@ -649,23 +656,11 @@ for _, rel in ipairs(PRESERVE) do
   end
 end
 
--- Alte Installation löschen (role.lua vorher sichern)
-local _saved_role = nil
-local _role_path = INSTALL_ROOT .. "/config/role.lua"
-if fs.exists(_role_path) then
-  local _f = fs.open(_role_path, "r")
-  if _f then _saved_role = _f.readAll(); _f.close() end
-end
+-- Alte Installation löschen
 if fs.exists(INSTALL_ROOT) then
   p("Entferne alte Installation..."); pcall(fs.delete, INSTALL_ROOT)
 end
 pcall(fs.makeDir, INSTALL_ROOT)
--- role.lua wiederherstellen damit Neustart der Installation möglich bleibt
-if _saved_role then
-  pcall(fs.makeDir, INSTALL_ROOT .. "/config")
-  local _f = fs.open(_role_path, "w")
-  if _f then _f.write(_saved_role); _f.close() end
-end
 
 -- Dateien installieren
 local expected = manifest_mod.files_for_role(manifest, role.label)
@@ -807,7 +802,11 @@ end
 ui_mod.header("Installiere "..role.label)
 
 -- ── Wichtige Dateien sichern ─────────────────────────────────────────────────
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua" }
+-- Fix (2026-06-30): role.lua fehlte hier in PRESERVE — das ist der
+-- Auto-Update-Reinstall-Pfad, der bei jedem automatischen Update durchlaeuft.
+-- Ohne role.lua in dieser Liste ging die Rollenzuordnung bei jedem
+-- Auto-Update verloren, der Node bootete danach ohne konfigurierte Rolle.
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua" }
 local preserved = {}
 for _, rel in ipairs(PRESERVE) do
   local src = INSTALL_ROOT.."/"..rel
