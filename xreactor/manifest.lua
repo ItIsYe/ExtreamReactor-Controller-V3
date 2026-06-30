@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v225
 return {
-  manifest_version = 232,
-  manifest_id = "manifest-v232",
+  manifest_version = 233,
+  manifest_id = "manifest-v233",
   source_ref = "beta",
   hash_algo = "none",
 
@@ -89,7 +89,7 @@ return {
     { path = "master/ui/resources.lua", size_bytes = 5634, hash = "3c3f86d2", required_for={"MASTER"}},
     { path = "master/ui/rt_dashboard.lua", size_bytes = 13235, hash = "e587af2a", required_for={"MASTER"}},
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"}},
-    { path = "master/ui_controller.lua", size_bytes = 32925, hash = "c579b3a5", required_for={"MASTER"}},
+    { path = "master/ui_controller.lua", size_bytes = 33707, hash = "c579b3a5", required_for={"MASTER"}},
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"}},
     },
     rt = {
