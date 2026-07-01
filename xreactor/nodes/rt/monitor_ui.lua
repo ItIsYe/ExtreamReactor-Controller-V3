@@ -164,18 +164,24 @@ end
 
 local function render_compact_header(mon, model, title)
   local health = model.health and model.health.status or "OFFLINE"
+  local assignment = tostring(model.assignment_state or "")
+  -- Badge-Texte kurz halten damit alle auf schmalen Monitoren (26 Zeichen)
+  -- nebeneinander passen ohne sich zu überlagern. Maximale Gesamtbreite bei
+  -- 5 Badges: ~26 Zeichen. Faustregel: max 4-5 Zeichen pro Badge.
+  local assign_badge = nil
+  if assignment == "shed" or assignment == "shutdown" then
+    assign_badge = { "SHD", "WARNING" }
+  elseif assignment == "startup" then
+    assign_badge = { "SRT", "LIMITED" }
+  end
   badge_line(mon, 2, {
     { "RT " .. tostring(health), health },
     { "M " .. tostring(model.master_state or "--"), master_status(model) },
     { tostring(model.current_state or "-"),
       ({MASTER="OK", AUTONOM="text", SAFE="EMERGENCY", EMERGENCY="EMERGENCY", LIMITED="WARNING", INIT="muted"})[tostring(model.current_state)] or "WARNING" },
-    { model.capacity_ready and "CAP" or "LEARN", capacity_status(model) },
-    -- Assignment-State Badge: nur bei STARTUP anzeigen (SHED/SHUTDOWN ist
-    -- bereits aus der Hauptstatuszeile >> HERUNTERFAHREN << ersichtlich;
-    -- zu viele Badges auf schmalen Monitoren verursachten Überlappung)
-    (model.assignment_state == "startup")
-      and { "STARTUP", "LIMITED" }
-      or nil
+    { model.capacity_ready and "CAP" or "LRN", capacity_status(model) },
+    assign_badge
+  })
   })
   local node_state_str = tostring(model.node_state or "-")
   local state_color = ({running="OK", startup="LIMITED", shutdown="WARNING", limited="WARNING"})[node_state_str] or "text"
