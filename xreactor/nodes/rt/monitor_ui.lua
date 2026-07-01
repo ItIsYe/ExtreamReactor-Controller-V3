@@ -170,9 +170,11 @@ local function render_compact_header(mon, model, title)
     { tostring(model.current_state or "-"),
       ({MASTER="OK", AUTONOM="text", SAFE="EMERGENCY", EMERGENCY="EMERGENCY", LIMITED="WARNING", INIT="muted"})[tostring(model.current_state)] or "WARNING" },
     { model.capacity_ready and "CAP" or "LEARN", capacity_status(model) },
-    -- Assignment-State Badge: nur wenn abweichend von "active"
-    (model.assignment_state and model.assignment_state ~= "active" and model.assignment_state ~= "")
-      and { tostring(model.assignment_state):upper(), "WARNING" }
+    -- Assignment-State Badge: nur bei STARTUP anzeigen (SHED/SHUTDOWN ist
+    -- bereits aus der Hauptstatuszeile >> HERUNTERFAHREN << ersichtlich;
+    -- zu viele Badges auf schmalen Monitoren verursachten Überlappung)
+    (model.assignment_state == "startup")
+      and { "STARTUP", "LIMITED" }
       or nil
   })
   local node_state_str = tostring(model.node_state or "-")
@@ -191,10 +193,10 @@ local function rt_status(model)
   end
   local assignment = tostring(model.assignment_state or "")
   if assignment == "shutdown" then
-    return "STANDBY (Befehl)", "muted", "Master hat Abschaltung angefordert"
+    return "HERUNTERFAHREN", "muted", "Master hat Abschaltung angefordert"
   end
   if assignment == "shed" then
-    return "FAEHRT RUNTER", "WARNING", "Master reduziert Zuweisung"
+    return "HERUNTERFAHREN", "muted", "Master: Kapazitaet nicht benoetigt"
   end
   if assignment == "startup" then
     return "FAEHRT HOCH", "LIMITED", "Wird vom Master gestartet"
@@ -202,6 +204,11 @@ local function rt_status(model)
   local target = num(model.target_power, 0)
   local actual = num(model.snapshot and model.snapshot.snapshot and model.snapshot.snapshot.actual_output, 0)
   if target <= 0 then
+    -- Fix (2026-07-01): wenn target=0 aber actual noch hoch ist, fahren
+    -- Turbinen gerade runter — nicht als Fehler ("LIEFERT ZU WENIG") anzeigen
+    if actual > 0 then
+      return "HERUNTERFAHREN", "muted", "Turbinen fahren ab"
+    end
     return "WARTET AUF AUFTRAG", "muted", "Kein Soll-Wert vom Master"
   end
   local ratio = actual / target
