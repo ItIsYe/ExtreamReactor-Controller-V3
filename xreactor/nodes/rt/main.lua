@@ -427,8 +427,20 @@ local function update_monitor()
     registry             = registry,
     last_command_ts      = last_command_ts,
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
-    manifest_id          = "manifest-v158",
-    release_id           = "beta-v158",
+    manifest_id          = (function()
+                             local ok, rel = pcall(require, "xreactor.release")
+                             if not ok or type(rel) ~= "table" then
+                               ok, rel = pcall(dofile, "/xreactor/release.lua")
+                             end
+                             return (type(rel) == "table" and rel.manifest_id) or "unknown"
+                           end)(),
+    release_id           = (function()
+                             local ok, rel = pcall(require, "xreactor.release")
+                             if not ok or type(rel) ~= "table" then
+                               ok, rel = pcall(dofile, "/xreactor/release.lua")
+                             end
+                             return (type(rel) == "table" and rel.release_id) or "unknown"
+                           end)(),
   })
 end
 
