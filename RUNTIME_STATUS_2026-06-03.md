@@ -1,5 +1,50 @@
 # XReactor Runtime Status — 2026-06-03
 
+## Update 2026-07-01 (v236 → v242 — Full System Hardening + UI Overhaul)
+
+Diese Session hat das System von v236 auf v242 gebracht. Alle bekannten offenen Punkte aus früheren Dokumenten wurden behoben.
+
+**Auto-Updater & Installer:**
+- `role.lua` jetzt in BEIDEN Installer-Codepfaden (manuell + Auto-Update-Reinstall) in der PRESERVE-Liste — zuvor ging die Rollenzuordnung bei jedem Auto-Update verloren (Node bootete ohne Rolle → `No such program`).
+- `installer/auto_update.lua`: `resolve_sha()` entfernt (api.github.com-Call verursachte Hänger auf RT), nur noch direkte `raw.githubusercontent.com/beta/...`-Fetches.
+- `enqueue()` im Sequencer verwirft jetzt Tabellen-Objekte als `node_id` statt sie durch `normalize_node_id()` in kaputte Strings zu verwandeln (`RT-table:_0x...`-Anzeigefehler behoben).
+
+**Master — Setpoint/Kapazitäts-Fixes:**
+- `message_handlers.populate_rt_status()`: `rt.capacity_max`/`rt.capacity_ready` werden jetzt VOR der Ableitung von `node.capacity_max`/`node.capacity_ready` aus dem Payload gesetzt (Off-by-one-Zyklus-Bug — brach Setpoint-Zuteilung für alle RT-Nodes).
+- `node.rt` wird jetzt gemergt statt komplett ersetzt bei STATUS-Ticks (verhindert Verlust von UI-gesetzten Feldern).
+- `node.assigned_power`/`node.assigned_percent` werden jetzt persistent auf `node` geschrieben (waren vorher nur lokal in `entry` — daher zeigte Master-UI immer `Soll 0.0` für RT-Nodes).
+- `runtime_ops_profile.estimate_base_power()`: gelernte Maximalkapazität wird jetzt bevorzugt gegenüber dem aktuell gemessenen (möglicherweise gedrosselten) Output — verhindert dauerhaftes Einfrieren von `power_target` auf altem BASELOAD-Snapshot nach PEAK-Wechsel.
+- Periodisches `power_target`-Nachziehen alle 30s wenn gelernte Kapazität >5% über aktuellem Soll.
+
+**Master — UI-Fixes:**
+- `control_source` (Source: LOCAL/MASTER) hatte denselben Sticky-Bug wie `assignment_state` — jetzt korrigierte Priorität.
+- `infer_assignment_state()`: `node.assignment_state` (Master-Sync) hat jetzt Vorrang vor `rt_node.assignment_state` (instabil, durch STATUS-Ticks zurückgesetzt).
+- AUX-Monitor-Badge: hardkodiertes `OK`/`LIMITED` durch echten Alert-Service-Status ersetzt.
+- AUX-Alarmview komplett überarbeitet: Live-Alarmliste aus `alert_service`, Farben nach Severity (CRITICAL=rot, WARN=gelb), Timestamp pro Eintrag, Touch-to-ACK.
+- `alerts`/`alarms`-Model fehlte in `build_models()` — Views bekamen nie echte `alert_service`-Daten.
+- `multiview.lua`: Alarmtext der dringendsten Meldung wird jetzt unter dem Badge angezeigt.
+
+**RT-Node:**
+- `target_power`/`target_percent` fehlten im `monitor_ui.update()`-Model — RT-UI zeigte dauerhaft `Soll 0.0` und `WARTET AUF AUFTRAG` auch unter aktiver Master-Steuerung.
+- `manifest_id`/`release_id` werden jetzt dynamisch aus `/xreactor/release.lua` geladen statt hartkodiert `v158`.
+- RT-Kommafehler in `monitor_ui.update()` (fehlende Komma nach `build_health_payload`) behoben.
+
+**Energy-Node:**
+- `NO_STORAGE`-Health-Alert feuerte dauerhaft auf Matrix-only Nodes (kein separater Storage-Adapter) — jetzt nur noch wenn weder Matrix noch Storage vorhanden.
+
+**LOG-Collector:**
+- Kanal-Mismatch behoben: `core/remote_log.lua` sendete auf 6502, `shared/constants.lua` definiert `channels.LOG = 6503` — LOG empfing dauerhaft nichts (`Recv 0`). Beide Seiten jetzt auf 6503.
+- Wireless-Modem-Erkennung ergänzt (zeigt `*` im Modem-Status für Ender-Modems).
+
+**Sonstiges:**
+- `core/remote_update.lua`: `handle_command()` reicht jetzt `opts` (inkl. Token) an `M.run()` weiter.
+- Manifest: alle 143 Einträge mit korrekten `size_bytes` + CRC32-Hashes regeneriert, `hash_algo = "crc32"` wiederhergestellt (war seit Rewrite auf `"none"`).
+- `xreactor/xreactor/nodes/` (verwaistes Duplikat-Verzeichnis) — bekannt, noch nicht aufgeräumt, dokumentiert für nächste Doku-Runde.
+
+**Versionsverlauf dieser Session:** v220 (Sessionstart) → v242 (Abschluss). Alle Blocker aus `NODE_START_BLOCKERS_2026-06-25.md` und `PROJECT_DOCUMENTATION.md` Abschnitt 9 behoben.
+
+---
+
 ## Update 2026-06-30 (Installer / Auto-Update Härtung, v220 → v225)
 
 Diese Sektion dokumentiert die Arbeit vom 2026-06-30 zusätzlich zum darunterliegenden, unveränderten Audit-Stand vom 2026-06-03/04-22.
