@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v225
 return {
-  manifest_version = 241,
-  manifest_id = "manifest-v241",
+  manifest_version = 242,
+  manifest_id = "manifest-v242",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -48,7 +48,7 @@ return {
   { path = "core/ui_router.lua", size_bytes = 6305, hash = "e626dd67" },
   { path = "core/utils.lua", size_bytes = 23711, hash = "c57d619c" },
   { path = "core/auto_update.lua", size_bytes = 5174, hash = "332b3250" },
-  { path = "core/remote_update.lua", size_bytes = 13254, hash = "0c783535" },
+  { path = "core/remote_update.lua", size_bytes = 13576, hash = "ac163240" },
   { path = "core/alerts.lua", size_bytes = 7905, hash = "976d542c" },
   { path = "services/alert_service.lua", size_bytes = 11418, hash = "d04e6700" },
   { path = "services/comms_service.lua", size_bytes = 8562, hash = "4b2957a5" },
