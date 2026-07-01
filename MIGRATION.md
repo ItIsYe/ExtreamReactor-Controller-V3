@@ -66,7 +66,9 @@ Hart erarbeitete Einschränkungen, die beim Schreiben von Installer-/Auto-Update
 - Rolle (`/xreactor/config/role.lua`) — explizit gesichert und wiederhergestellt vor/nach dem Löschen von `/xreactor`.
 - `/startup`, sofern ein nicht-XReactor-Startup absichtlich geschützt ist.
 
-**Nicht mehr automatisch erhalten** (da `/xreactor` komplett gelöscht wird): sonstige Runtime-Configs unter `/xreactor/config/*` außer `role.lua`, z. B. `capacity_cache.lua`. Das ist ein bekannter Trade-off des Delete+Reinstall-Ansatzes gegen Speicherplatzprobleme bei großen Rollen — bei Bedarf vor einem manuellen Reinstall sichern.
+**Nicht mehr automatisch erhalten** (da `/xreactor` komplett gelöscht wird): sonstige Runtime-Configs unter `/xreactor/config/*` außer den explizit in `PRESERVE` gelisteten Dateien.
+
+**In `PRESERVE` gesichert (seit 2026-07-01, v235):** `config/node_id.txt`, `config/capacity_cache.lua`, `config/role.lua` — alle drei überleben Reinstalls und Auto-Updates in beiden Installer-Codepfaden.
 
 ---
 
