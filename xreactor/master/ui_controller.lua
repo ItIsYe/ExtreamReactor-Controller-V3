@@ -379,6 +379,12 @@ function M.new(opts)
     -- (model.counts, model.summary, model.active).
     local alerts_active = c.alert_service and c.alert_service:get_active() or {}
     local alerts_history = c.alert_service and c.alert_service:get_history() or {}
+    local alert_svc = c.alert_service
+    local function on_ack(id)
+      if alert_svc and type(alert_svc.ack) == "function" then
+        alert_svc:ack(id)
+      end
+    end
     local alerts_model = {
       counts = counts,
       summary = summary,
@@ -387,6 +393,7 @@ function M.new(opts)
       mutes = (c.alert_service and c.alert_service.state and c.alert_service.state.mutes) or { rules = {}, nodes = {} },
       now_ms = now,
       config = c.config or {},
+      on_ack = on_ack,
     }
 
     -- Fix (2026-06-30): "alarms"-Model ("Logs"-View, AUX-Monitor) zeigte
@@ -421,8 +428,9 @@ function M.new(opts)
       }
     end
     local alarms_model = {
-      alarms = combined_alarms,
+      active = alerts_active,
       header_blink = (counts.CRITICAL or 0) > 0,
+      on_ack = on_ack,
     }
 
     return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model }
