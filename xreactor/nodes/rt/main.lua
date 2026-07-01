@@ -415,6 +415,14 @@ local function update_monitor()
     capacity_learning    = ctx and ctx.capacity_learning or capacity_learning_state,
     constants            = constants,
     targets              = ctx and ctx.targets or {},
+    -- Fix (2026-07-01): target_power und target_percent fehlten im Model —
+    -- monitor_ui.lua liest model.target_power direkt, nicht model.targets.power.
+    -- Ohne diese Felder zeigte die RT-UI dauerhaft "Soll 0.0" und
+    -- "WARTET AUF AUFTRAG" obwohl der Node korrekt unter Master-Steuerung lief.
+    -- ctx.targets.power wird in command_handler.lua bei SET_SETPOINTS gesetzt:
+    -- targets.power = capacity * pct / 100 (absoluter RF/t-Sollwert).
+    target_power         = ctx and ctx.targets and ctx.targets.power or 0,
+    target_percent       = ctx and ctx.targets and ctx.targets.power_percent or 0,
     node_state_machine   = node_state_machine,
     registry             = registry,
     last_command_ts      = last_command_ts,
