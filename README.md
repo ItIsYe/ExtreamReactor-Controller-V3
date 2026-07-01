@@ -3,9 +3,10 @@
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
 > **Branch:** `beta` — active development.
-> **Manifest / Release:** `manifest-v236` / `beta-v236` · ATM10 (MC 1.21.1)
-> **Status:** Phase 1–4 rewrite active. Current known blocker: RT still has a documented Lua table comma issue in `xreactor/nodes/rt/main.lua`; this was intentionally not patched in the latest documentation-only update. See `docs/NODE_START_BLOCKERS_2026-06-25.md` before any rollout.
-> See [REWRITE_SPEC.md](REWRITE_SPEC.md) for the full rewrite reference.
+> **Manifest / Release:** `manifest-v242` / `beta-v242` · ATM10 (MC 1.21.1)
+> **Status:** Phase 1–4 rewrite complete. All known blockers resolved as of 2026-07-01 (v242). Auto-updater stable on all node types. Active development continues on v242+.
+> See `docs/NODE_START_BLOCKERS_2026-06-25.md` for the resolved blocker history.
+> See [REWRITE_SPEC.md](REWRITE_SPEC.md) for the full rewrite reference and [RUNTIME_STATUS_2026-06-03.md](RUNTIME_STATUS_2026-06-03.md) for session history.
 
 ---
 
