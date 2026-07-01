@@ -229,7 +229,11 @@ function M.handle_command(opts)
     pcall(opts.send_ack)
   end
   log("WARN", "Remote-Update command accepted, starting installer...")
-  return M.run(log)
+  -- Fix (2026-07-01): opts (inkl. command.token) muss an M.run weitergereicht
+  -- werden, damit der Token-Check in M.run()/M.is_armed() denselben Token sieht
+  -- wie handle_command(). Vorher wurde log ohne opts uebergeben, was dazu fuehren
+  -- konnte, dass M.is_armed(opts) in M.run() ohne Token-Kontext ablief.
+  return M.run(log, opts)
 end
 
 -- Versions-Check: remote release.lua holen und mit lokaler vergleichen.
