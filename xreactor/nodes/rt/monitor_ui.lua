@@ -182,7 +182,6 @@ local function render_compact_header(mon, model, title)
     { model.capacity_ready and "CAP" or "LRN", capacity_status(model) },
     assign_badge
   })
-  })
   local node_state_str = tostring(model.node_state or "-")
   local state_color = ({running="OK", startup="LIMITED", shutdown="WARNING", limited="WARNING"})[node_state_str] or "text"
   write_line(mon, 3, tostring(title) .. " | " .. tostring(model.node_id or "?") .. " | " .. node_state_str, state_color)
