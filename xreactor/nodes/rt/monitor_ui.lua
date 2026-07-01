@@ -298,7 +298,11 @@ local function render_overview(mon, model)
         stable_turbines = stable_turbines + 1
       end
     end
-    write_line(mon, y, string.format("Turbinen  %d/%d aktiv  Avg %s RPM", stable_turbines, #turb_list, fmt_short(snapshot.avg_rpm)), "muted"); y = y + 1
+    -- Turbinen-Zeile nur anzeigen wenn NICHT im Learning-Modus — dort
+    -- wird sie bereits als "X von Y Turbinen stabil" angezeigt (Zeile oben)
+    if model.capacity_ready then
+      write_line(mon, y, string.format("Turbinen  %d/%d aktiv  Avg %s RPM", stable_turbines, #turb_list, fmt_short(snapshot.avg_rpm)), "muted"); y = y + 1
+    end
     write_line(mon, y, string.format("Dampf     %s mB/t", fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
     if model.capacity_ready then
       write_line(mon, y, string.format("Kapazitaet %s RF/t  [GELOCKT]", fmt_short(capacity)), "muted"); y = y + 1
