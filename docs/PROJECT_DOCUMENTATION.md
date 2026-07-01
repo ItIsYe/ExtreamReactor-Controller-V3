@@ -253,13 +253,11 @@ Genutzte ER2 Reaktor API:
 
 ## 9. Offene technische Prüfpunkte
 
-Aktuell offen und vor einem Ingame-Test zu klären:
+**Stand 2026-07-01: Alle Punkte behoben (v240-v242).**
 
-1. RT-Kommafehler in `nodes/rt/main.lua` beheben.
-2. RT-Monitor-Buildwerte `manifest-v158` / `beta-v158` dynamisch machen oder aktualisieren.
-3. `manifest.lua` und `release.lua` beim `hash_algo` vereinheitlichen.
-4. Manifest-Kommentar auf die echte Manifest-Version bringen.
-5. Remote-Update-Optionsweitergabe prüfen.
-6. Statische Lua-Parse-/Require-Prüfung über alle Rollen ausführen.
-
-Bis Punkt 1 erledigt ist, gilt RT weiterhin als nicht sauber startbereit.
+1. ✓ RT-Kommafehler in `nodes/rt/main.lua` — behoben in v237/v241.
+2. ✓ RT-Monitor-Buildwerte — jetzt dynamisch aus `release.lua` geladen (v241).
+3. ✓ `hash_algo` vereinheitlicht — CRC32 wiederhergestellt, alle 143 Einträge regeneriert (v240).
+4. ✓ Manifest-Metadaten aktuell — vollständig regeneriert via `tools/regenerate_manifest_metadata.py` (v240).
+5. ✓ Remote-Update-Optionsweitergabe — `handle_command()` reicht jetzt `opts` (inkl. Token) an `M.run()` weiter (v242).
+6. ✓ Statische Lua-Prüfung — 147 Dateien geprüft, keine offensichtlichen Parse-Fehler gefunden (v241).
