@@ -182,6 +182,7 @@ local function render_compact_header(mon, model, title)
     { model.capacity_ready and "CAP" or "LRN", capacity_status(model) },
     assign_badge
   })
+  })
   local node_state_str = tostring(model.node_state or "-")
   local state_color = ({running="OK", startup="LIMITED", shutdown="WARNING", limited="WARNING"})[node_state_str] or "text"
   write_line(mon, 3, tostring(title) .. " | " .. tostring(model.node_id or "?") .. " | " .. node_state_str, state_color)
@@ -298,11 +299,7 @@ local function render_overview(mon, model)
         stable_turbines = stable_turbines + 1
       end
     end
-    -- Turbinen-Zeile nur anzeigen wenn NICHT im Learning-Modus — dort
-    -- wird sie bereits als "X von Y Turbinen stabil" angezeigt (Zeile oben)
-    if model.capacity_ready then
-      write_line(mon, y, string.format("Turbinen  %d/%d aktiv  Avg %s RPM", stable_turbines, #turb_list, fmt_short(snapshot.avg_rpm)), "muted"); y = y + 1
-    end
+    write_line(mon, y, string.format("Turbinen  %d/%d aktiv  Avg %s RPM", stable_turbines, #turb_list, fmt_short(snapshot.avg_rpm)), "muted"); y = y + 1
     write_line(mon, y, string.format("Dampf     %s mB/t", fmt_short(snapshot.steam_amount)), "muted"); y = y + 1
     if model.capacity_ready then
       write_line(mon, y, string.format("Kapazitaet %s RF/t  [GELOCKT]", fmt_short(capacity)), "muted"); y = y + 1
@@ -580,48 +577,6 @@ function M.init(monitor_adapter, configured_monitor, monitor_scale)
   return monitor, name_or_err
 end
 
--- ── Ampel-Monitor: 1x3 Monitor, nur Farbe, kein Text ──────────────────────
--- Wird automatisch erkannt: ein zweiter Monitor (nicht der Hauptmonitor),
--- der genau 1 Zeichen breit und 3 Zeichen hoch ist (nach Skalierung).
--- Farbe je nach aktuellem Status:
---   Grün   — LIEFERT NORMAL
---   Gelb   — LERNT EIN, FAEHRT HOCH, WARTET AUF AUFTRAG
---   Orange — WEICHT AB, LIEFERT ZU VIEL
---   Rot    — LIEFERT ZU WENIG, EMERGENCY
---   Grau   — HERUNTERFAHREN, STANDBY
-local AMPEL_COLORS = {
-  OK       = 0x00FF00,  -- Grün
-  LIMITED  = 0xFFFF00,  -- Gelb
-  WARNING  = 0xFF8800,  -- Orange
-  EMERGENCY= 0xFF0000,  -- Rot
-  muted    = 0x444444,  -- Grau
-}
-
-local function render_ampel(main_monitor, model)
-  if not peripheral or type(peripheral.getNames) ~= "function" then return end
-  local ok, names = pcall(peripheral.getNames)
-  if not ok or type(names) ~= "table" then return end
-  for _, name in ipairs(names) do
-    local ok_t, ptype = pcall(peripheral.getType, name)
-    if ok_t and tostring(ptype):find("monitor") then
-      local ok_w, mon = pcall(peripheral.wrap, name)
-      if ok_w and mon and mon ~= main_monitor then
-        -- Skalierung auf 1 setzen und Größe prüfen
-        pcall(mon.setTextScale, 1)
-        local ok_s, w, h = pcall(mon.getSize)
-        if ok_s and w == 1 and h == 3 then
-          -- Status-Farbe bestimmen
-          local _, status_key = rt_status(model)
-          local color = AMPEL_COLORS[status_key] or AMPEL_COLORS.muted
-          -- Ganzen Monitor in der Ampelfarbe füllen
-          pcall(mon.setBackgroundColor, color)
-          pcall(mon.clear)
-        end
-      end
-    end
-  end
-end
-
 function M.update(monitor, ctx)
   if not monitor then return ctx.last_status_snapshot end
   local now = os.epoch("utc")
@@ -647,7 +602,6 @@ function M.update(monitor, ctx)
   end
   M.last_monitor = monitor
   M.monitor_router:render(monitor, model)
-  render_ampel(monitor, model)
   return snapshot
 end
 
