@@ -576,68 +576,13 @@ function M.init(monitor_adapter, configured_monitor, monitor_scale)
   return monitor, name_or_err
 end
 
--- ── Ampel-Monitor: 1x3 Monitor, nur Farbe, kein Text ──────────────────────
--- UI-Redesign Schritt 4 (2026-07-01), zweiter, sorgfaeltigerer Versuch nach
--- einem fehlgeschlagenen ersten Anlauf am selben Tag, der versehentlich den
--- Haupt-Monitor treffen und die komplette RT-Anzeige lahmlegen konnte.
--- Diesmal: JEDE Zeile in pcall(), Ampel-Fehler koennen den Hauptmonitor
--- niemals mehr beeinflussen. Der Haupt-Monitor wird per PERIPHERAL-NAME
--- ausgeschlossen (M.main_monitor_name, von M.init() gesetzt) — zusaetzlich
--- filtert die 1x3-Groessenpruefung ihn ohnehin fast immer heraus, da
--- Hauptmonitore ueblicherweise deutlich groesser sind.
-local AMPEL_COLORS = {
-  OK        = 0x00FF00,
-  LIMITED   = 0xFFFF00,
-  WARNING   = 0xFF8800,
-  EMERGENCY = 0xFF0000,
-  muted     = 0x444444,
-}
-
-local ampel_cache = { name = nil, last_color = nil }
-
-local function find_ampel_monitor(main_monitor_name)
-  if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
-  local ok, names = pcall(peripheral.getNames)
-  if not ok or type(names) ~= "table" then return nil end
-  for _, name in ipairs(names) do
-    -- Der Haupt-Monitor wird per NAME ausgeschlossen (nicht per
-    -- Objektidentitaet wie im ersten, fehlgeschlagenen Versuch) — das ist
-    -- robuster, da peripheral.wrap() bei jedem Aufruf ein neues Wrapper-
-    -- Objekt liefern kann, auch fuer denselben physischen Monitor.
-    if name ~= main_monitor_name then
-      local ok_t, ptype = pcall(peripheral.getType, name)
-      if ok_t and tostring(ptype):find("monitor", 1, true) then
-        local ok_w, mon = pcall(peripheral.wrap, name)
-        if ok_w and mon then
-          local ok_scale = pcall(mon.setTextScale, 1)
-          local ok_s, w, h = pcall(mon.getSize)
-          if ok_scale and ok_s and w == 1 and h == 3 then
-            return name, mon
-          end
-        end
-      end
-    end
-  end
-  return nil
-end
-
--- Öffentliche Einstiegsfunktion — wird von M.update() aufgerufen, ist aber
--- selbst komplett fehlerisoliert. Ein Fehler hier kann niemals nach oben
--- durchschlagen und den Haupt-Monitor-Render blockieren.
-local function safe_render_ampel(main_monitor_name, status_key)
-  pcall(function()
-    local name, mon = find_ampel_monitor(main_monitor_name)
-    if not name or not mon then return end
-    local color = AMPEL_COLORS[status_key] or AMPEL_COLORS.muted
-    -- Nur neu zeichnen wenn sich Monitor oder Farbe geändert haben —
-    -- vermeidet unnötige clear()-Aufrufe bei jedem Update-Tick.
-    if ampel_cache.name == name and ampel_cache.last_color == color then return end
-    ampel_cache.name = name
-    ampel_cache.last_color = color
-    mon.setBackgroundColor(color)
-    mon.clear()
-  end)
-end
+-- ── Ampel-Monitor (optional) ────────────────────────────────────────────
+-- Ausgelagert nach xreactor/optional/ampel.lua (2026-07-01) — vorher hier
+-- als lokaler Code dupliziert mit derselben Logik in nodes/energy/
+-- ui_pages.lua. Siehe dort für die vollstaendige Implementierungs-
+-- Dokumentation (Fehlerisolierung, Cache-Verhalten, Auswahlkriterien).
+local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
+local ampel_instance = ok_ampel_mod and ampel_mod.new() or nil
 
 function M.update(monitor, ctx)
   if not monitor then return ctx.last_status_snapshot end
@@ -665,17 +610,12 @@ function M.update(monitor, ctx)
   M.last_monitor = monitor
   M.monitor_router:render(monitor, model)
 
-  -- Ampel-Update: komplett fehlerisoliert (siehe safe_render_ampel oben).
-  -- monitor selbst ist der Name/Handle des Hauptmonitors, der ausgeschlossen
-  -- werden muss — ctx.monitor_name ist der konfigurierte Name des
-  -- Hauptmonitors, falls verfuegbar; sonst best-effort ohne Namensfilter
-  -- (find_ampel_monitor schliesst dann nur per "not main_monitor_name" nichts
-  -- aus, was in der Praxis selten vorkommt da der Hauptmonitor i.d.R. einen
-  -- konfigurierten Namen hat).
+  -- Ampel-Update: komplett fehlerisoliert (siehe optional/ampel.lua).
   pcall(function()
+    if not ampel_instance then return end
     local ok_status, _text, status_key = pcall(rt_status, model)
     if ok_status and status_key then
-      safe_render_ampel(M.main_monitor_name, status_key)
+      ampel_instance.render(M.main_monitor_name, status_key)
     end
   end)
 
