@@ -205,6 +205,8 @@ function M.new(opts)
         -- rt_node.control_source einmal "LOCAL" geworden war. Jetzt:
         -- node.control_source zuerst pruefen.
         rt_node.control_source = node.control_source or (node.last_setpoints and node.last_setpoints.control_source) or (node.bindings and node.bindings.control_source) or rt_node.control_source
+        rt_node.maintenance_mode = node.maintenance_mode == true
+        rt_node.id = rt_node.id or node.id
         -- Fix (2026-06-30): "Soll"-Anzeige im UI zeigte dauerhaft 0, weil
         -- rt_target() (rt_dashboard.lua) auf rt.power_target zurueckfiel —
         -- ein Feld, das RT seit dem SCADA-Rewrite nie mehr sendet (RT bekommt
@@ -523,6 +525,22 @@ function M.new(opts)
     if action.type == "profile" and action.name and c.calc.apply_profile then c.calc.apply_profile(action.name); return true end
     if action.type == "auto" and c.calc.set_auto_profile then c.calc.set_auto_profile(not (c.calc.get_auto_profile and c.calc.get_auto_profile())); return true end
     if action.type == "rt_hold" and c.calc.set_rt_global_off_hold then c.calc.set_rt_global_off_hold(not (c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold())); return true end
+    -- Wartungsmodus pro Node (Feature, 2026-07-01): togglet node.maintenance_mode
+    -- direkt auf dem Node-Objekt im Registry. rt_sync.evaluate_rt_node() liest
+    -- dieses Feld und schliesst den Node dann aus der Zuweisung aus, unabhaengig
+    -- vom globalen RT-Hold. Der Node bleibt online/sichtbar (im Unterschied zu
+    -- OFFLINE) und wird nicht automatisch von rt_sync neu bewertet wie bei SHED.
+    if action.type == "maintenance_toggle" and action.node_id and c.nodes then
+      local node = c.nodes[action.node_id]
+      if node then
+        node.maintenance_mode = not (node.maintenance_mode == true)
+        if c.log then
+          c.log(("Maintenance mode %s for node=%s"):format(
+            node.maintenance_mode and "ENABLED" or "disabled", tostring(action.node_id)), "INFO")
+        end
+        return true
+      end
+    end
     return false
   end
   controller.handle_input = function(event)
