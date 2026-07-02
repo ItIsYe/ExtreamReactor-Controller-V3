@@ -1,4 +1,4 @@
--- xreactor/manifest.lua -- manifest-v225
+-- xreactor/manifest.lua -- manifest-v260
 return {
   manifest_version = 260,
   manifest_id = "manifest-v260",
