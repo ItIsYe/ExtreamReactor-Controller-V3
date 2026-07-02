@@ -1,7 +1,7 @@
-# Migration Guide (aktueller Repo-Stand — v225)
+# Migration Guide (aktueller Repo-Stand — v261)
 
 ## Ziel
-Diese Migration beschreibt den **aktuellen Installer- und Repo-Stand** für ExtreamReactor-Controller-V3 auf dem `beta`-Branch, Stand Phase-1-bis-4-Rewrite + Auto-Update-Härtung (2026-06-30).
+Diese Migration beschreibt den **aktuellen Installer- und Repo-Stand** für ExtreamReactor-Controller-V3 auf dem `beta`-Branch, Stand Phase-1-bis-4-Rewrite + Auto-Update-Härtung + UI-Redesign (2026-07-01).
 
 Wichtig:
 - Der normale Installer-Lauf ist **beta-only**.
@@ -60,6 +60,9 @@ Hart erarbeitete Einschränkungen, die beim Schreiben von Installer-/Auto-Update
 - `os.pullEvent()` in parallelen Threads ungefiltert lassen, damit Geschwister-Coroutinen ihre Events weiterhin bekommen.
 - `f.write(content)` direkt aufrufen, nicht über `pcall(f.write, f, content)`.
 
+### 5. Log-Transport-Kanal ist 6503, nicht 6502
+War lange ein realer Bug: der Sender (`core/remote_log.lua`) nutzte fest `6502`, während `shared/constants.lua` den LOG-Kanal als `6503` definiert (bewusst getrennt von Control/Status 6500/6501). Der LOG-Collector empfing dadurch über einen längeren Zeitraum nichts (`Recv 0`), obwohl alles andere korrekt konfiguriert war. Fixed 2026-06-30 — beide Seiten nutzen jetzt `6503`.
+
 ---
 
 ## Was beim Update/Reinstall erhalten bleibt
@@ -77,8 +80,13 @@ RT ist **nicht** mehr „unverändert/frozen“. Das Modul wurde im Rahmen der S
 
 ---
 
-## Bekanntes offenes Problem (2026-06-30)
-**Setpoint-Übertragung/-Berechnung zwischen MASTER und Nodes funktioniert aktuell nicht zuverlässig.** Root Cause noch nicht identifiziert. RT-/Energy-Power-Control-Verhalten ist bis zur Behebung als nicht vertrauenswürdig zu betrachten.
+## Historisch gelöste Probleme (Kontext für zukünftiges Debugging)
+
+Diese Punkte waren zeitweise offen, sind aber inzwischen gefixt — hier gelistet, damit nicht erneut Zeit in bereits geschlossene Themen investiert wird:
+
+- **Setpoint-Übertragung/-Berechnung MASTER ↔ Nodes** (offen bis 2026-06-30/07-01): zwei getrennte reale Bugs — ein Feld-Reihenfolge-Fehler in `populate_rt_status()` (message_handlers.lua) ließ `node.capacity_max`/`capacity_ready` immer einen Zyklus veraltet erscheinen, und `estimate_base_power()` bevorzugte den aktuell gemessenen (ggf. gedrosselten) Output statt der gelernten Maximalkapazität für das PEAK-Profil. Beide gefixt, siehe RUNTIME_STATUS_2026-06-03.md.
+- **LOG-Collector empfängt nichts** (Recv 0): Kanal-Mismatch 6502 vs. 6503, siehe oben.
+- **role.lua ging bei jedem Auto-Update verloren**: nur im manuellen Installer-Codepfad geschützt, nicht im (weit häufiger durchlaufenen) Auto-Update-Reinstall-Pfad. Gefixt 2026-07-01, beide Pfade nutzen jetzt dieselbe `PRESERVE`-Liste.
 
 ---
 
@@ -104,13 +112,12 @@ RT ist **nicht** mehr „unverändert/frozen“. Das Modul wurde im Rahmen der S
 4. Neue/role-spezifische Dateien sind korrekt in `manifest.lua` unter `roles.<role>` mit passendem `required_for` eingetragen.
 5. Bei Änderungen an `installer/auto_update.lua` oder `start.lua`: gegen die Parallel-Coroutine-Constraints oben prüfen (`shell`, `http.get` Timeout, `os.pullEvent`).
 6. RT-Bootpfad wurde auf offensichtliche Folgeblocker mitgeprüft.
-7. Bekannte offene Probleme (siehe oben) sind in README.md und hier konsistent dokumentiert.
+7. Neue/geänderte Datei-Größen (`size_bytes`) in `manifest.lua` wurden für JEDE geänderte Datei nachgezogen — ein Mismatch bricht die Installation für jeden Node ab, der diese Datei braucht.
 
 ---
 
 ## Abschlussbewertung dieses Dokuments
-Dieses Dokument beschreibt den **Ist-Stand nach dem Phase-1–4-Rewrite und der Auto-Update-Härtung** (v225). Es ersetzt den älteren Stage/Backup/Activate-Ansatz vollständig — dieser existiert im aktuellen Installer-Code nicht mehr.
+Dieses Dokument beschreibt den **Ist-Stand nach dem Phase-1–4-Rewrite, der Auto-Update-Härtung und dem UI-Redesign** (v261). Es ersetzt den älteren Stage/Backup/Activate-Ansatz vollständig — dieser existiert im aktuellen Installer-Code nicht mehr.
 
 Offen/nicht abgeschlossen:
-- Setpoint-Übertragung MASTER ↔ Nodes (siehe oben).
-- Vollständige Migration der historischen Shutdown-Workflow-Guards von text-/tokenbasierten Prüfungen zu rein verhaltensbasierten Semantikprüfungen — dieser Punkt war bereits in der Vorversion dieses Dokuments offen und wurde im Rahmen der aktuellen Arbeit nicht angefasst.
+- Vollständige Migration der historischen Shutdown-Workflow-Guards von text-/tokenbasierten Prüfungen zu rein verhaltensbasierten Semantikprüfungen — dieser Punkt war bereits in einer früheren Version dieses Dokuments offen und wurde bislang nicht angefasst.
