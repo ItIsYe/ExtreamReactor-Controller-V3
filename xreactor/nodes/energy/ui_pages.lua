@@ -1,5 +1,10 @@
 local M = {}
 local support_ui_pages = require("nodes.support.ui_pages")
+-- Ampel-Monitor (optional) ausgelagert nach xreactor/optional/ampel.lua
+-- (2026-07-01) — vorher hier dupliziert mit derselben Logik wie in
+-- nodes/rt/monitor_ui.lua.
+local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
+local ampel_instance = ok_ampel_mod and ampel_mod.new() or nil
 
 local function format_energy(value)
   if value == nil then return "n/a" end
@@ -123,19 +128,9 @@ function M.new(opts)
   end
 
   -- ── Ampel-Statusmonitor (1x3, optional) ─────────────────────────────────
-  -- Analog zum RT-Ampel-Monitor (nodes/rt/monitor_ui.lua): ein zweiter,
-  -- exakt 1x3 grosser Monitor wird automatisch erkannt und zeigt eine reine
-  -- Statusfarbe je nach Energiestand. Vollstaendig pcall-isoliert auf jeder
-  -- Ebene — kann den Hauptmonitor bei einem Fehler nicht beeinflussen.
-  local AMPEL_COLORS = {
-    OK        = 0x00FF00,
-    LIMITED   = 0xFFFF00,
-    WARNING   = 0xFF8800,
-    EMERGENCY = 0xFF0000,
-    muted     = 0x444444,
-  }
-  local ampel_cache = { name = nil, last_color = nil }
-
+  -- Nutzt das gemeinsame Modul xreactor/optional/ampel.lua (siehe dort für
+  -- Fehlerisolierung/Cache-Verhalten). Nur die Energy-spezifische Status-
+  -- Ermittlung bleibt hier lokal.
   local function energy_status_key(model)
     local total = model and model.total or {}
     local pct = tonumber(total.percent)
@@ -147,40 +142,9 @@ function M.new(opts)
     return "OK"
   end
 
-  local function find_ampel_monitor(main_monitor_name)
-    if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
-    local ok, names = pcall(peripheral.getNames)
-    if not ok or type(names) ~= "table" then return nil end
-    for _, name in ipairs(names) do
-      if name ~= main_monitor_name then
-        local ok_t, ptype = pcall(peripheral.getType, name)
-        if ok_t and tostring(ptype):find("monitor", 1, true) then
-          local ok_w, mon = pcall(peripheral.wrap, name)
-          if ok_w and mon then
-            local ok_scale = pcall(mon.setTextScale, 1)
-            local ok_s, w, h = pcall(mon.getSize)
-            if ok_scale and ok_s and w == 1 and h == 3 then
-              return name, mon
-            end
-          end
-        end
-      end
-    end
-    return nil
-  end
-
   local function render_ampel(main_monitor_name, model)
-    pcall(function()
-      local name, mon = find_ampel_monitor(main_monitor_name)
-      if not name or not mon then return end
-      local status_key = energy_status_key(model)
-      local color = AMPEL_COLORS[status_key] or AMPEL_COLORS.muted
-      if ampel_cache.name == name and ampel_cache.last_color == color then return end
-      ampel_cache.name = name
-      ampel_cache.last_color = color
-      mon.setBackgroundColor(color)
-      mon.clear()
-    end)
+    if not ampel_instance then return end
+    ampel_instance.render(main_monitor_name, energy_status_key(model))
   end
 
   -- Touch handler for the Diagnostics page (log mode buttons).
