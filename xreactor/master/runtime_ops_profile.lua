@@ -213,14 +213,26 @@ function M.sample_trends(runtime)
   end
   runtime.refs.trends:push("water", water_total)
   if runtime.state.auto_profile then
+    -- Feature (2026-07-01): PEAK/IDLE-Schwellwerte konfigurierbar statt fest
+    -- 90/30 codiert. runtime.state.idle_threshold_pct/peak_threshold_pct
+    -- koennen zur Laufzeit ueber das Master-UI gesetzt werden (siehe
+    -- ui_controller.lua "set_idle_threshold"/"set_peak_threshold" Actions).
+    -- Defaults bleiben identisch zu vorher (90/30), aendert also nichts am
+    -- Verhalten solange niemand die Schwellen manuell anpasst.
+    local idle_threshold = tonumber(runtime.state.idle_threshold_pct) or tonumber(runtime.config and runtime.config.idle_threshold_pct) or 90
+    local peak_threshold = tonumber(runtime.state.peak_threshold_pct) or tonumber(runtime.config and runtime.config.peak_threshold_pct) or 30
+    -- Sicherheits-Clamp: IDLE-Schwelle muss ueber PEAK-Schwelle liegen,
+    -- sonst waeren beide Bedingungen gleichzeitig erfuellbar bzw. es
+    -- entstuende eine Luecke/Ueberlappung im Profilverhalten.
+    idle_threshold = math.max(idle_threshold, peak_threshold + 5)
     -- Fix: power_target=0 beim Start (noch kein Profilwechsel ausgelöst) ist ein
     -- Sonderfall — sonst bleibt assigned=0% für immer obwohl auto_profile aktiv ist.
     -- Erzwingt einen einmaligen apply_profile()-Aufruf auch ohne Profilwechsel.
     if (not runtime.state.power_target or runtime.state.power_target <= 0) then
       M.apply_profile(runtime, runtime.state.active_profile or "BASELOAD")
-    elseif energy_pct > 90 and runtime.state.active_profile ~= "IDLE" then
+    elseif energy_pct > idle_threshold and runtime.state.active_profile ~= "IDLE" then
       M.apply_profile(runtime, "IDLE")
-    elseif energy_pct < 30 and runtime.state.active_profile ~= "PEAK" then
+    elseif energy_pct < peak_threshold and runtime.state.active_profile ~= "PEAK" then
       M.apply_profile(runtime, "PEAK")
     else
       -- Fix (2026-06-30): power_target periodisch nachziehen, wenn die
