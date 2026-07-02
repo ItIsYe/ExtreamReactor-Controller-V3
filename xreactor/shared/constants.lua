@@ -24,7 +24,14 @@ constants.message_types = {
   ACK = "ACK",
   ACK_DELIVERED = "ACK_DELIVERED",
   ACK_APPLIED = "ACK_APPLIED",
-  ERROR = "ERROR"
+  ERROR = "ERROR",
+  -- Feature (2026-07-01): Pocket-Computer Fernabfrage. Ein optionaler
+  -- Query/Response-Mechanismus, komplett unabhaengig vom normalen
+  -- HEARTBEAT/STATUS-Fluss — ein Pocket Computer sendet POCKET_QUERY und
+  -- bekommt vom Master eine einmalige POCKET_STATUS-Antwort mit einer
+  -- kompakten Zusammenfassung (kein Dauerabo, jede Abfrage ist einzeln).
+  POCKET_QUERY = "POCKET_QUERY",
+  POCKET_STATUS = "POCKET_STATUS"
 }
 
 constants.node_states = {
