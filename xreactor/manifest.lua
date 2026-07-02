@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 264,
-  manifest_id = "manifest-v264",
+  manifest_version = 265,
+  manifest_id = "manifest-v265",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -61,12 +61,12 @@ return {
     { path = "core/alert_rules.lua", size_bytes = 16128, hash = "3ef37a5e", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 6221, hash = "2e0fba18", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"} },
-    { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"} },
+    { path = "master/init_runtime.lua", size_bytes = 7338, hash = "eba62959", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
     { path = "master/message_handlers.lua", size_bytes = 22651, hash = "f94edbd6", required_for={"MASTER"} },
     { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"} },
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"} },
-    { path = "master/rt_sync.lua", size_bytes = 18285, hash = "3703ea68", required_for={"MASTER"} },
+    { path = "master/rt_sync.lua", size_bytes = 19025, hash = "3703ea68", required_for={"MASTER"} },
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"} },
     { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"} },
     { path = "master/runtime_loop.lua", size_bytes = 9880, hash = "fc4ec810", required_for={"MASTER"} },
@@ -81,10 +81,10 @@ return {
     { path = "master/ui/multiview.lua", size_bytes = 8343, hash = "1476b565", required_for={"MASTER"} },
     { path = "master/ui/overview.lua", size_bytes = 11531, hash = "20dca0c4", required_for={"MASTER"} },
     { path = "master/ui/resources.lua", size_bytes = 5634, hash = "3c3f86d2", required_for={"MASTER"} },
-    { path = "master/ui/rt_dashboard.lua", size_bytes = 13235, hash = "519597ca", required_for={"MASTER"} },
+    { path = "master/ui/rt_dashboard.lua", size_bytes = 14563, hash = "519597ca", required_for={"MASTER"} },
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"} },
     { path = "master/ui/layout.lua", size_bytes = 6263, hash = "new", required_for={"MASTER"} },
-    { path = "master/ui_controller.lua", size_bytes = 35073, hash = "89b29492", required_for={"MASTER"} },
+    { path = "master/ui_controller.lua", size_bytes = 36027, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
     rt = {
