@@ -147,9 +147,19 @@ local function safe_text(value, fallback)
   return fallback or "-"
 end
 
-local function render_rt_card(mon, x, y, w, rt)
+local function render_rt_card(mon, x, y, w, rt, hits)
   local node_id = safe_text(rt.id or rt.node_id, "UNKNOWN")
-  local box = widgets.panel_box(mon, x, y, w, 10, "RT-" .. node_id, rt.status or "OFFLINE")
+  local maintenance = rt.maintenance_mode == true
+  -- Wartungsmodus (Feature, 2026-07-01): Titel-Status wird bei aktivem
+  -- Wartungsmodus auf "LIMITED" (gelb) gesetzt statt dem normalen Status,
+  -- damit auf einen Blick erkennbar ist, dass der Node manuell aus der
+  -- Zuweisung genommen wurde — unabhaengig davon ob er sonst OK/RUNNING waere.
+  local box = widgets.panel_box(mon, x, y, w, 10, "RT-" .. node_id .. (maintenance and " [WARTUNG]" or ""), maintenance and "LIMITED" or (rt.status or "OFFLINE"))
+  -- Titelzeile als Touch-Zone fuer Wartungsmodus-Toggle registrieren, sofern
+  -- eine echte Node-ID vorhanden ist (nicht beim "keine RT-Nodes"-Platzhalter).
+  if hits and rt.id and rt.id ~= "NO-RT" then
+    hits[#hits + 1] = { type = "maintenance_toggle", node_id = rt.id, x1 = box.x, x2 = box.x + math.max(0, box.w - 1), y1 = y, y2 = y }
+  end
   local target = rt_target(rt)
   local actual = rt_actual(rt)
   widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, safe_text(rt_state(rt)), rt.status or "OFFLINE", 9)
@@ -178,10 +188,13 @@ local function render_overflow_card(mon, x, y, w, hidden_nodes)
   end
 end
 
+local hit_cache = setmetatable({}, { __mode = "k" })
+
 local function render(mon, model)
   local w, h = ui.getSize(mon)
   local is_large = (w * h) >= 900 and w >= 48 and h >= 18
   ui.panel(mon, 1, 1, w, h, "RT", "OK")
+  local hits = {}
 
   local summary_h = is_large and 8 or 7
   local summary = widgets.panel_box(mon, 2, 2, w - 2, summary_h, "RT-Flotte", "OK")
@@ -198,6 +211,7 @@ local function render(mon, model)
   ui.text(mon, summary.x, summary.y + 2, widgets.fit("Queue: " .. tostring(model.queue_summary or "-"), summary.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, summary.x, summary.y + 3, widgets.fit("Assignment " .. tostring(model.assignment_state or "-") .. " | Grund " .. tostring(model.assignment_reason or "-"), summary.w), colors.get("muted"), colors.get("background"))
   ui.text(mon, summary.x, summary.y + 4, widgets.fit("Mode " .. tostring(model.display_mode or "-") .. " | Local " .. tostring(model.local_control or 0) .. " | Master " .. tostring(model.master_control or 0), summary.w), colors.get("muted"), colors.get("background"))
+  ui.text(mon, summary.x, summary.y + math.min(5, summary_h - 2), widgets.fit("Kartentitel antippen = Wartungsmodus ein/aus", summary.w), colors.get("muted"), colors.get("background"))
 
   local queue_h = is_large and 7 or 6
   local cards_top = 2 + summary_h + 1
@@ -217,7 +231,7 @@ local function render(mon, model)
     local idx = i - 1
     local r = math.floor(idx / cols)
     local c = idx % cols
-    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 11, card_w, ordered[i])
+    render_rt_card(mon, 2 + c * (card_w + gap), cards_top + r * 11, card_w, ordered[i], hits)
     drawn = drawn + 1
   end
 
@@ -274,6 +288,17 @@ local function render(mon, model)
     rows_data[1] = { text = "Queue leer - keine aktiven Sequenzen", status = "OFFLINE" }
   end
   ui.list(mon, queue.x, queue.y, queue.w, rows_data, { max_rows = queue.h })
+  hit_cache[mon] = hits
 end
 
-return { render = render }
+local function hit_test(mon, x, y)
+  for _, hit in ipairs(hit_cache[mon] or {}) do
+    local y1 = hit.y1 or hit.y
+    local y2 = hit.y2 or hit.y
+    if y >= y1 and y <= y2 and x >= hit.x1 and x <= hit.x2 then
+      return hit
+    end
+  end
+end
+
+return { render = render, hit_test = hit_test }
