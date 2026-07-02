@@ -1,5 +1,25 @@
 # XReactor Runtime Status — 2026-06-03
 
+## Update 2026-07-01 (Fortsetzung 2, v261 → v262 — Repo-Hygiene)
+
+**Gelöscht (verifiziert unreferenziert/tot):**
+- 6 lose `installer_*.lua`-Dateien im Repo-Root (`installer_http.lua`, `installer_main.lua`, `installer_manifest.lua`, `installer_stage.lua`, `installer_startup.lua`, `installer_storage.lua`, zusammen ~55KB) — seit dem Umbau auf den monolithischen `installer` von keinem aktiven Code mehr `require()`'d oder `dofile()`'d, nur noch als tote `always=true`-Einträge im Manifest, wurden auf jedem Node unnötig mitinstalliert.
+- `xreactor/xreactor/nodes/rt/main.lua` + `state_handlers.lua` — verwaistes Duplikat-Verzeichnis, bereits seit mindestens v134 im historischen Handoff-Dokument als "vermutlich versehentlich" vermerkt, aber nie entfernt.
+- `docs/handoff/2026-06-23-v136-*.md` (3 Dateien) — vollständig überholter Zwischenstand (v136), Inhalt längst in `SESSION_HANDOFF.md`/`RUNTIME_STATUS_2026-06-03.md` konsolidiert.
+- 9 Tests, die den mittlerweile ersetzten Stage-basierten Installer-Mechanismus prüften und dabei direkt vom Dateisystem `xreactor/installer_stage.lua` etc. lasen.
+
+**Gefunden und korrigiert (Kollateralschäden der Löschung, durch systematische Nachprüfung entdeckt):**
+- `tests/master_shipped_lua_parse_guard_test.py` referenzierte `xreactor/installer_manifest.lua` — auf die tatsächlich aktuelle Datei `xreactor/installer/manifest.lua` umgebogen statt gelöscht, da der Test selbst (genereller Parse-/Patch-Artefakt-Guard) weiterhin wertvoll ist.
+- `tools/offline_validate.lua` — läuft bei **jedem Push auf `beta`** via `.github/workflows/offline-tests.yml` — hatte einen `required`-Dateien-Check, der die 6 gelöschten Dateien weiterhin als Pflicht voraussetzte. Wäre ohne diesen Fix bei jedem folgenden CI-Lauf fehlgeschlagen. Gefunden erst in einer zweiten, gründlicheren Verifikationsrunde nach der ersten (unvollständigen) Hygiene-Runde — Lehre: nach jeder Lösch-Aktion alle verbleibenden Dateien (nicht nur `tests/`) auf Referenzen zu den gelöschten Pfaden durchsuchen, nicht nur die offensichtlichsten Kandidaten.
+
+**Manifest:** `manifest_file_count` 145 → 139 (die 6 toten Einträge entfernt). Vollständige Konsistenzprüfung nach der Runde: alle 139 Manifest-Einträge existieren im Repo, alle `size_bytes` stimmen, keine Waisen außer `manifest.lua` selbst (erwartungsgemäß).
+
+**Doku:** `docs/PROJECT_DOCUMENTATION.md` war eine parallel gepflegte, unabhängige Kopie der Architektur-Doku aus README.md und war dabei zeitweise vom echten Code abgewichen (dokumentierte die `power_target`-Prioritätsreihenfolge invertiert — genau der Bug-Zustand vor dem eigentlichen Fix). Auf einen schlanken Verweis reduziert, technische Details (Multi-Node-Zuweisungsformel, Setpoint-Feldtabelle) nach README.md konsolidiert, um diese Art Drift strukturell zu vermeiden. `docs/README.md`-Index entsprechend neu sortiert (README.md jetzt als Hauptreferenz zuerst gelistet).
+
+**Versionsverlauf:** v261 → v262 (Manifest-Cleanup).
+
+---
+
 ## Update 2026-07-01 (Fortsetzung, v242 → v261 — Turbine-Log, UI-Redesign, Manifest-Integrity)
 
 Fortsetzung der Session unten (v236→v242) auf demselben Tag. Deckt teilweise ähnliche Themen ab (Setpoint/UI-Fixes wurden parallel/nacheinander in zwei Arbeitsabschnitten bearbeitet) — beide Abschnitte bleiben hier stehen für vollständige Nachvollziehbarkeit.
