@@ -292,6 +292,13 @@ local function init()
       if ui_state.router then
         ui_state.router:render(devices.monitor, { data = model })
       end
+      -- Ampel-Statusmonitor: komplett fehlerisoliert, kann den Hauptmonitor
+      -- oberhalb nicht beeinflussen selbst wenn render_ampel intern scheitert.
+      pcall(function()
+        if type(ui_pages.render_ampel) == "function" then
+          ui_pages.render_ampel(devices.monitor_name, model)
+        end
+      end)
     end,
     handle_input = function(event)
       if ui_state.router then ui_state.router:handle_input(event) end
