@@ -433,6 +433,21 @@ function M.new(opts)
       on_ack = on_ack,
     }
 
+    -- UI-Redesign Schritt 2 (2026-07-01): Kompakte RT-Fleet-Zusammenfassung
+    -- für die Overview-Seite, damit man den RT-Status sieht ohne extra
+    -- auf die RT-View wechseln zu müssen.
+    local rt_total = #(rt.rt_nodes or {})
+    local rt_active_count = rt.rt_active or 0
+    local rt_fleet_status = "OK"
+    if rt_total > 0 and rt_active_count == 0 then rt_fleet_status = "WARNING" end
+    if rt_total == 0 then rt_fleet_status = "OFFLINE" end
+    overview.rt_fleet_summary = {
+      active = rt_active_count,
+      total = rt_total,
+      assignment = rt.assignment_state or "-",
+      status = rt_fleet_status,
+    }
+
     return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model }
   end
 
