@@ -693,10 +693,21 @@ local function finalize_turbine_flow_apply(ctx, name, ctrl, ap)
   if ap.decision and ap.decision.overspeed_brake and ap.requested_flow == 0
       and type(ap.confirmed_flow) == "number"
       and ap.confirmed_flow > (ap.flow_tolerance or 0) then
-    ctx.log("WARN", ("Overspeed brake pending name=%s requested_flow=0"
-      .. " confirmed_flow=%s readback_state=%s detail=%s retries=%s"):format(
-      tostring(name), tostring(ap.confirmed_flow), tostring(ap.readback_state),
-      tostring(ap.readback_detail), tostring(ctrl.pending_retries)))
+    -- Fix (2026-07-01): diese Warnung feuerte bei JEDEM Tick ohne Drosselung,
+    -- solange der Overspeed-Bremszustand anhielt (mehrmals pro Sekunde) —
+    -- das flutete den Log-Ringpuffer komplett und verdrängte alle anderen,
+    -- moeglicherweise wichtigeren Log-Eintraege (SET_SETPOINTS, ReactorCtrl
+    -- etc. waren im Ringpuffer kaum noch sichtbar). Jetzt: max. 1x alle 5s
+    -- pro Turbine.
+    local now_ms = os.epoch and os.epoch("utc") or (os.clock() * 1000)
+    local last_log = ctrl.last_overspeed_log_ms or 0
+    if (now_ms - last_log) >= 5000 then
+      ctrl.last_overspeed_log_ms = now_ms
+      ctx.log("WARN", ("Overspeed brake pending name=%s requested_flow=0"
+        .. " confirmed_flow=%s readback_state=%s detail=%s retries=%s"):format(
+        tostring(name), tostring(ap.confirmed_flow), tostring(ap.readback_state),
+        tostring(ap.readback_detail), tostring(ctrl.pending_retries)))
+    end
   end
 end
 
