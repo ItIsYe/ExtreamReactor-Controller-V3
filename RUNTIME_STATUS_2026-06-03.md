@@ -1,5 +1,29 @@
 # XReactor Runtime Status — 2026-06-03
 
+## Update 2026-07-01 (Fortsetzung, v242 → v261 — Turbine-Log, UI-Redesign, Manifest-Integrity)
+
+Fortsetzung der Session unten (v236→v242) auf demselben Tag. Deckt teilweise ähnliche Themen ab (Setpoint/UI-Fixes wurden parallel/nacheinander in zwei Arbeitsabschnitten bearbeitet) — beide Abschnitte bleiben hier stehen für vollständige Nachvollziehbarkeit.
+
+**Turbine-Log-Spam:**
+- "Overspeed brake pending"-Warnung in `turbine_control.lua` loggte ungedrosselt bei jedem Tick, solange der Overspeed-Bremszustand anhielt — flutete den 1000-Zeilen-Log-Ringpuffer innerhalb weniger Sekunden und verdrängte alle anderen Log-Einträge (SET_SETPOINTS, ReactorCtrl-Änderungen waren dadurch kaum noch sichtbar). Jetzt rate-limitiert auf max. 1x/5s pro Turbine (`ctrl.last_overspeed_log_ms`).
+- Root Cause der eigentlichen Overspeed-Meldung war eine physisch übersättigte Turbine (in-game bestätigt und behoben) — kein Software-Bug, aber das Logging-Verhalten dabei war ein echter Bug.
+
+**UI-Redesign (4 Schritte, auf expliziten Wunsch nach wiederholten Badge-Überlappungen/fehlenden-doppelten-Werten):**
+1. **`master/ui/layout.lua`** (neu): zentrales Badge-Layout-System. `layout.badge_row()` kennt die Monitorbreite vorher und degradiert gestuft (volle Labels → Kurzformen → niedrigste Priorität entfernen), statt live zu raten und im Zweifel zu überlappen. In `multiview.lua` als erster Anwendungsfall eingebaut.
+2. **Overview-Summary erweitert**: `overview.rt_fleet_summary` (aktiv/gesamt Nodes, Zuweisungsstatus) und Freshness-Zeile ergänzt, damit die Overview-Seite wirklich "alles auf einen Blick" zeigt statt nur einen Teil.
+3. **Model-Konsistenz verifiziert**: alle von `rt_dashboard.lua`/`energy.lua` erwarteten `model.*`-Felder wurden gegen `ui_controller.build_models()` abgeglichen — keine strukturell fehlenden Felder gefunden; die konkreten "fehlt/doppelt"-Symptome waren bereits durch gezielte Bugfixes behoben (Sticky-Referenzen, Feld-Reihenfolge), nicht durch fehlendes Schema.
+4. **Ampel-Status-Monitor** (1x3, optional, RT-Node): zweiter, sorgfältigerer Versuch nach einem fehlgeschlagenen ersten Anlauf am selben Tag (siehe unten). Zeigt reine Statusfarbe (grün/gelb/orange/rot/grau) ohne Text, automatisch erkannt über Größe (1 breit × 3 hoch). Vollständig `pcall`-isoliert auf jeder Ebene; Hauptmonitor wird per tatsächlich aufgelöstem Namen (`M.main_monitor_name`, von `M.init()` gesetzt) ausgeschlossen — eine Zwischenversion hatte fälschlich ein nicht-existentes `ctx.config.monitor_name`-Feld referenziert.
+
+**Ampel-Monitor — fehlgeschlagener erster Versuch (wichtig für zukünftiges Debugging):**
+Der allererste Ampel-Patch am 2026-07-01 verursachte einen kompletten Ausfall der RT-Turbinen-/Reaktor-Erkennung auf der Anzeige (nicht der tatsächlichen Steuerung — die lief laut Log unbeeinflusst weiter). Nach mehreren fehlgeschlagenen Rollback-Versuchen (jeweils mit neuen `size_bytes`-Mismatches, da das Nachziehen der Manifest-Größe vergessen wurde) wurde der bekannt funktionierende v242-Stand von `monitor_ui.lua` wiederhergestellt und der Ampel-Support von Grund auf neu, mit vollständiger Fehlerisolierung, gebaut. Lehre: bei mehrfachen Rollback-Versuchen IMMER `size_bytes` nach jedem Push verifizieren, nicht nur beim ersten.
+
+**Manifest-Integritätsprüfung (Audit, kein Bugfix):**
+Vollständige Prüfung aller 145 manifestierten Dateien: `size_bytes` gegen echte Repo-Dateigröße abgeglichen. Zwei echte Abweichungen gefunden und behoben (`master/ui/multiview.lua`, `nodes/rt/monitor_ui.lua` — beide nach einem Zwischenpatch nicht nachgezogen). `manifest_file_count` in `release.lua` war veraltet (144 statt tatsächlich 145 Einträgen), korrigiert. `release_id`/`manifest_id`/`manifest_version` zwischen `manifest.lua` und `release.lua` konsistent verifiziert.
+
+**Versionsverlauf dieses Abschnitts:** v242 (Ausgangspunkt) → v243 (RT-Monitor HERUNTERFAHREN-Status statt LIEFERT-ZU-WENIG bei SHED) → v244 (kürzere Badges) → v245 (Ampel v1, fehlerhaft) → v246–v247 (size_bytes-Fixes) → v248 (doppelte Turbinen-Zeile bei Learning behoben) → v249–v254 (mehrere Rollback-Versuche wegen Ampel-v1-Ausfall) → v255 (Overspeed-Log-Rate-Limit) → v256–v259 (UI-Redesign Schritte 1–4) → v260 (Manifest-Integritätsfix) → v261 (Ampel main-monitor-name-Bugfix).
+
+---
+
 ## Update 2026-07-01 (v236 → v242 — Full System Hardening + UI Overhaul)
 
 Diese Session hat das System von v236 auf v242 gebracht. Alle bekannten offenen Punkte aus früheren Dokumenten wurden behoben.
