@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 267,
-  manifest_id = "manifest-v267",
+  manifest_version = 268,
+  manifest_id = "manifest-v268",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -44,7 +44,7 @@ return {
   { path = "core/auto_update.lua", size_bytes = 5174, hash = "332b3250" },
   { path = "core/remote_update.lua", size_bytes = 13576, hash = "ac163240" },
   { path = "core/alerts.lua", size_bytes = 8789, hash = "976d542c" },
-  { path = "services/alert_service.lua", size_bytes = 11521, hash = "d04e6700" },
+  { path = "services/alert_service.lua", size_bytes = 12678, hash = "d04e6700" },
   { path = "services/comms_service.lua", size_bytes = 8562, hash = "4b2957a5" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4" },
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },
@@ -84,6 +84,8 @@ return {
     { path = "master/ui/rt_dashboard.lua", size_bytes = 14563, hash = "519597ca", required_for={"MASTER"} },
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"} },
     { path = "master/ui/layout.lua", size_bytes = 6263, hash = "new", required_for={"MASTER"} },
+    { path = "optional/ampel.lua", size_bytes = 3437, hash = "new", always=true },
+    { path = "optional/speaker_alarm.lua", size_bytes = 2861, hash = "new", always=true },
     { path = "master/ui_controller.lua", size_bytes = 38834, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
@@ -108,7 +110,7 @@ return {
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
     { path = "nodes/rt/main.lua", size_bytes = 33475, hash = "ac098c39", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"} },
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 36031, hash = "30e85bdb", required_for={"RT"} },
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 33475, hash = "30e85bdb", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"} },
     { path = "nodes/rt/state_handlers.lua", size_bytes = 9257, hash = "bb391437", required_for={"RT"} },
@@ -130,7 +132,7 @@ return {
     { path = "nodes/energy/status_payload.lua", size_bytes = 9140, hash = "767f2ce2", required_for={"ENERGY"} },
     { path = "nodes/energy/storage_snapshot_runtime.lua", size_bytes = 3479, hash = "52992366", required_for={"ENERGY"} },
     { path = "nodes/energy/ui_model.lua", size_bytes = 6005, hash = "faa185db", required_for={"ENERGY"} },
-    { path = "nodes/energy/ui_pages.lua", size_bytes = 10732, hash = "056a840d", required_for={"ENERGY"} },
+    { path = "nodes/energy/ui_pages.lua", size_bytes = 9536, hash = "056a840d", required_for={"ENERGY"} },
     },
     water = {
     { path = "nodes/water/config.lua", size_bytes = 4789, hash = "961b224e", required_for={"WATER"} },
