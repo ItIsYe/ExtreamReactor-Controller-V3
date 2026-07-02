@@ -1,36 +1,15 @@
 # XReactor Controller V3 — Projektdokumentation
 
-> Letzte Aktualisierung: beta-v236  
+> Letzte Aktualisierung: beta-v261
 > Stack: CC:Tweaked · Extreme Reactors 2 · Mekanism · ATM10 (MC 1.21.1)
 
 ---
 
 ## Aktueller Status
 
-Stand: `beta` / `manifest-v236` / `beta-v236`.
+Stand: `beta` / `manifest-v261` / `beta-v261`.
 
-Diese Dokumentation beschreibt den aktuellen Architekturstand und die offenen Prüfpunkte. Es wurde bei dieser Doku-Aktualisierung kein Ingame-Test durchgeführt und nichts ingame installiert.
-
-Wichtigster offener Punkt:
-
-```text
-xreactor/nodes/rt/main.lua
-```
-
-In der Tabelle für `monitor_ui.update(...)` fehlt weiterhin ein Komma nach dem `build_health_payload` Funktionsfeld. Dieser Codefehler wurde auf Wunsch nicht behoben, sondern nur dokumentiert. Solange dieser Punkt offen ist, gilt RT nicht als sauber startfähig.
-
-Weitere offene Prüfpunkte:
-
-- RT-Monitorwerte sind noch auf `manifest-v158` / `beta-v158` hart codiert.
-- `xreactor/manifest.lua` und `xreactor/release.lua` verwenden aktuell unterschiedliche `hash_algo` Werte.
-- `xreactor/manifest.lua` hat einen älteren Header-Kommentar als seine eigentlichen Manifestwerte.
-- Remote-Update ist geschützt und robuster, aber die Optionsweitergabe im Command-Pfad sollte später geprüft werden.
-
-Details stehen in:
-
-```text
-docs/NODE_START_BLOCKERS_2026-06-25.md
-```
+Keine bekannten offenen Blocker zum Zeitpunkt dieser Aktualisierung. Details zur vollständigen Fix-Historie stehen in `docs/NODE_START_BLOCKERS_2026-06-25.md` und `RUNTIME_STATUS_2026-06-03.md` (Repo-Root).
 
 ---
 
@@ -87,7 +66,9 @@ Dies entspricht dem SCADA-Prinzip: zentrales Monitoring und Sollwertvorgabe, dez
 |-------|----------|--------|
 | 6500 | MASTER → Nodes | Commands, Setpoints |
 | 6501 | Nodes → MASTER | Status-Payloads, Heartbeats |
-| 6502 | alle → LOG | Log-Zeilen |
+| 6503 | alle → LOG | Log-Zeilen |
+
+> War lange Zeit `6502` im Sendercode (`core/remote_log.lua`), während `shared/constants.lua` bereits `6503` definierte — ein realer Kanal-Mismatch, der den LOG-Collector nichts empfangen ließ. Fixed 2026-06-30.
 
 ### Message-Typen
 
@@ -107,12 +88,14 @@ Dies entspricht dem SCADA-Prinzip: zentrales Monitoring und Sollwertvorgabe, dez
 
 ### Leistungsschätzung
 
-Priorität für `power_target`:
+Priorität für `power_target` (`estimate_base_power()` in `runtime_ops_profile.lua`):
 
-1. `measured_total` — Summe der tatsächlichen RT-Outputs.
-2. `learned_capacity_total` — Summe gelernter RT-Kapazitäten.
+1. `learned_capacity_total` — Summe gelernter RT-Maximalkapazitäten. **Hat Vorrang**, seit 2026-06-30/07-01 gefixt.
+2. `measured_total` — Summe der tatsächlichen, aktuell gemessenen RT-Outputs. Nur Fallback, wenn noch keine Node `capacity_ready` meldet.
 3. `power_target` vom letzten Tick als Kontinuität.
-4. Kein generischer 3000-RF/t-Fallback mehr.
+4. Kein generischer 3000-RF/t-Fallback.
+
+> Vorher war die Reihenfolge umgekehrt (`measured_total` zuerst) — das führte dazu, dass `power_target` beim Wechsel auf das PEAK-Profil auf dem aktuell gemessenen (ggf. durch das vorherige, niedrigere Profil gedrosselten) Output einfror, statt zur echten gelernten Maximalkapazität zu wachsen. Zusätzlich zieht `sample_trends()` alle ~30s nach, falls die gelernte Kapazität deutlich (>5%) über dem aktuellen `power_target` liegt — verhindert dauerhaftes Einfrieren auch ohne erneuten Profilwechsel.
 
 ### Multi-Node-Zuweisung
 
@@ -136,7 +119,7 @@ Gesendet werden nur funktionale Felder:
 | `shutdown_stage` | string/nil | Shutdown-/Rampdown-Intent |
 | `desired_node_state` | string/nil | gewünschter Node-State |
 
-Der aktuelle Code sendet Setpoints sichtbar wieder über `M.send_rt_setpoints(...)`. Das alte Log-Problem `RT setpoints deduped ... ACK_MATCH` ist im aktuellen `rt_sync.lua` nicht mehr sichtbar, muss aber später ingame/logbasiert erneut geprüft werden.
+Der Master persistiert jetzt zusätzlich `assigned_power`/`assigned_percent` direkt auf das Node-Objekt (`rt_sync.lua`) — vorher blieben diese berechneten Werte nur lokal in einer temporären Struktur und wurden verworfen, was dazu führte, dass die Master-UI dauerhaft `Soll 0.0` für jeden RT-Node zeigte, obwohl der globale Sollwert korrekt war. Fixed 2026-07-01.
 
 ---
 
@@ -156,23 +139,9 @@ Der aktuelle Code sendet Setpoints sichtbar wieder über `M.send_rt_setpoints(..
 | `nodes/rt/module_lifecycle.lua` | SCRAM, Safe-Controls, Startup |
 | `nodes/rt/monitor_ui.lua` | lokales Display |
 
-### Offener RT-Codeblocker
+### RT-Monitor: Ampel-Statusmonitor (neu, 2026-07-01)
 
-In `nodes/rt/main.lua` fehlt ein Komma in der `monitor_ui.update(...)` Parameter-Tabelle:
-
-```lua
-build_health_payload = function() return build_status_payload() end
-read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
-```
-
-Korrekt wäre:
-
-```lua
-build_health_payload = function() return build_status_payload() end,
-read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
-```
-
-Dieser Punkt wurde bewusst nicht gepatcht und bleibt offen.
+Ein optionaler zweiter Monitor, exakt 1×3 groß (Wired Modem), wird automatisch erkannt und zeigt eine reine Statusfarbe ohne Text (grün/gelb/orange/rot/grau je nach Betriebszustand). Vollständig `pcall`-isoliert — kann den Hauptmonitor bei einem internen Fehler nicht mehr beeinflussen.
 
 ### Capacity Learning
 
@@ -204,8 +173,6 @@ LOG/LOG_COLLECTOR  → 0s
 MASTER             → 2s
 Alle anderen Nodes → 8s
 ```
-
-Wichtig: Der frühere Startup-Self-Heal für den RT-Kommafehler ist aktuell nicht sichtbar vorhanden.
 
 ---
 
@@ -251,13 +218,36 @@ Genutzte ER2 Reaktor API:
 
 ---
 
-## 9. Offene technische Prüfpunkte
+## 9. Historie behobener technischer Punkte
 
-**Stand 2026-07-01: Alle Punkte behoben (v240-v242).**
+Chronologisch, älteste zuerst. Vollständige Details in `RUNTIME_STATUS_2026-06-03.md` (Repo-Root).
 
-1. ✓ RT-Kommafehler in `nodes/rt/main.lua` — behoben in v237/v241.
-2. ✓ RT-Monitor-Buildwerte — jetzt dynamisch aus `release.lua` geladen (v241).
-3. ✓ `hash_algo` vereinheitlicht — CRC32 wiederhergestellt, alle 143 Einträge regeneriert (v240).
-4. ✓ Manifest-Metadaten aktuell — vollständig regeneriert via `tools/regenerate_manifest_metadata.py` (v240).
-5. ✓ Remote-Update-Optionsweitergabe — `handle_command()` reicht jetzt `opts` (inkl. Token) an `M.run()` weiter (v242).
-6. ✓ Statische Lua-Prüfung — 147 Dateien geprüft, keine offensichtlichen Parse-Fehler gefunden (v241).
+**Stand v240–v242 (2026-07-01):**
+1. RT-Kommafehler in `nodes/rt/main.lua` — behoben.
+2. RT-Monitor-Buildwerte — dynamisch aus `release.lua` geladen statt hartkodiert.
+3. `hash_algo` vereinheitlicht (CRC32), Manifest-Metadaten regeneriert.
+4. Remote-Update-Optionsweitergabe (`handle_command()` reicht `opts` inkl. Token an `M.run()` weiter).
+5. Statische Lua-Prüfung über alle Dateien.
+
+**Stand v220–v235 (2026-06-30):**
+6. Installer/Auto-Updater: `shell.run()` → `dofile()` in `auto_update.lua`/`start.lua` (nicht verfügbar in `parallel`-Coroutinen).
+7. `resolve_sha()` (api.github.com-Call) aus dem Auto-Update-Check-Pfad entfernt — verursachte Hänger auf RT.
+8. `role.lua`-Erhalt bei Reinstall vereinheitlicht auf beide Installer-Codepfade (manuell + Auto-Update).
+9. LOG-Manifest-Vollständigkeit (`files_for_role()`) gefixt — LOG erhielt zuvor nicht alle nötigen Dateien.
+10. Log-Transport-Kanal-Mismatch (6502 vs. 6503) gefixt.
+
+**Stand v229–v236 (2026-06-30/07-01):**
+11. Setpoint-Fluss (Master → RT): Feld-Reihenfolge-Bug in `populate_rt_status()` behoben (capacity_max/capacity_ready waren immer einen Zyklus veraltet).
+12. PEAK-Profil-Berechnung: gelernte Maximalkapazität hat jetzt Vorrang vor aktuell gemessenem Output (siehe Abschnitt 4 oben).
+13. `assigned_power`/`assigned_percent` werden jetzt persistent auf das Node-Objekt geschrieben (vorher nur lokal, verworfen — UI zeigte `Soll 0.0`).
+
+**Stand v243–v261 (2026-07-01, UI-Redesign):**
+14. `node.rt` wird bei STATUS-Ticks gemergt statt komplett ersetzt (verhinderte Sticky-Bugs bei `assignment_state`/`control_source`).
+15. Neues zentrales Badge-Layout-System (`master/ui/layout.lua`) — garantiert keine Badge-Überlappung mehr auf beliebig schmalen Monitoren.
+16. Overview-Seite um RT-Fleet-Kurzzusammenfassung erweitert.
+17. Doppelte Turbinen-Zeile im RT-Monitor während Capacity-Learning behoben.
+18. Neuer optionaler 1×3-Ampel-Statusmonitor (siehe Abschnitt 5).
+19. "Overspeed brake pending"-Log-Spam auf 1x/5s pro Turbine begrenzt.
+20. Vollständige Manifest-Integritätsprüfung: zwei reale `size_bytes`-Mismatches gefunden und behoben, `manifest_file_count` korrigiert.
+
+Keine bekannten offenen Punkte zum Zeitpunkt dieser Aktualisierung.
