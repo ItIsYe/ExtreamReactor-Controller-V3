@@ -150,8 +150,19 @@ local function render(mon, model)
     widgets.stat_card(mon, box.x, box.y, box.w, "Leistung", string.format("Soll %.1f", model.power_target or 0), string.format("Ist %.1f MRF/t", model.power_actual or 0), "LIMITED", (model.power_target or 0) > 0 and math.min(100, ((model.power_actual or 0) / model.power_target) * 100) or 0)
     local energy = model.energy_overview or {}
     widgets.stat_card(mon, box.x, box.y + 6, box.w, "Energie", string.format("%.1f %%", energy.percent or 0), tostring(energy.trend or "Trend stabil"), energy.status or "OFFLINE", energy.percent or 0)
+    -- UI-Redesign Schritt 2 (2026-07-01): RT-Fleet-Kurzstatus ergänzt, damit
+    -- die Overview-Seite wirklich alles zeigt, ohne auf die RT-View wechseln
+    -- zu müssen. Zeigt nur die Zusammenfassung (aktiv/gesamt, Zuweisung),
+    -- Details bleiben weiterhin auf der RT-Seite.
+    local rt_fleet = model.rt_fleet_summary or {}
+    ui.text(mon, box.x, box.y + 12, widgets.fit(
+      string.format("RT-Fleet: %d/%d aktiv | %s",
+        rt_fleet.active or 0, rt_fleet.total or 0, tostring(rt_fleet.assignment or "-")),
+      box.w), colors.get(rt_fleet.status or "text"), colors.get("background"))
     local fresh_status = (model.nodes_stale or 0) > 0 and "WARNING" or "OK"
-    widgets.stat_card(mon, box.x, box.y + 12, box.w, "Node Freshness", tostring(model.nodes_live or 0) .. " live", tostring(model.nodes_stale or 0) .. " stale", fresh_status)
+    ui.text(mon, box.x, box.y + 13, widgets.fit(
+      string.format("Freshness: %d live / %d stale", model.nodes_live or 0, model.nodes_stale or 0),
+      box.w), colors.get(fresh_status), colors.get("background"))
     local hints = model.ops_hints or {}
     if hints[1] then
       ui.text(mon, box.x, box.y + math.max(0, box.h - 2), widgets.fit("Hinweis: " .. tostring(hints[1]), box.w), colors.get("muted"), colors.get("background"))
