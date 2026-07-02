@@ -1,4 +1,4 @@
-# Testplan (aktueller Stand — v225)
+# Testplan (aktueller Stand — v261)
 
 ## Install/Update (aktualisiert: monolithischer Installer, Delete+Reinstall statt Stage/Backup)
 1. **Fresh Install (lokal)**: `wget .../beta/installer` + `installer` starten, Rolle wählen, Abschluss prüfen (Dateianzahl + Reboot im Installer-Log).
@@ -108,8 +108,22 @@
 4. **Optional lokal mit Lua-Interpreter**: ausgewählte `.lua`-Regressionen für Installer/MASTER/ENERGY/Support ergänzend ausführen.
 5. **Wichtig**: `tests/rt_main_structure_guard_test.py` ist ein RT-Größen-Guard und gehört in einen separaten RT-Audit-Track (kein Non-RT-Abschlusskriterium).
 
-## Bekanntes offenes Problem (2026-06-30)
-**Setpoint-Übertragung/-Berechnung zwischen MASTER und Nodes (RT/ENERGY) ist aktuell nicht zuverlässig.** Root Cause noch nicht identifiziert, kein dedizierter Regressionstest dafür vorhanden. Bis zur Behebung gilt jeder manuelle/automatisierte Test, der sich auf korrekte `power_target_percent`-Anwendung verlässt, als nicht aussagekräftig für den Produktivbetrieb.
+## Setpoint-Fluss (gelöst, 2026-06-30/07-01 — jetzt aktiv testen statt als unzuverlässig zu behandeln)
+Zwei reale Bugs (siehe MIGRATION.md → "Historisch gelöste Probleme") wurden gefunden und behoben:
+1. **capacity_max/capacity_ready Feld-Reihenfolge** in `populate_rt_status()` — Test: nach STATUS-Empfang muss `node.capacity_max`/`capacity_ready` den Stand aus dem GERADE eingetroffenen Payload zeigen, nicht den vorherigen.
+2. **PEAK-Profil Basisleistung** — bei PEAK muss `estimate_base_power()` `learned_capacity_total` bevorzugen, nicht den aktuell gemessenen (ggf. gedrosselten) Output. Test: `power_target` soll nach einem Wechsel auf PEAK innerhalb der nächsten periodischen Neuberechnung (alle ~30s) Richtung gelernter Maximalkapazität steigen, nicht auf dem Stand zum Zeitpunkt des Profilwechsels einfrieren.
+
+Bis ein dedizierter Regressionstest existiert, gilt: manuelle Verifikation über Master-Overview (`Soll` vs. `Ist` RF/t, sollten sich bei PEAK und ausreichender Kapazität annähern) nach jeder Änderung an `rt_sync.lua` oder `runtime_ops_profile.lua`.
+
+## UI-Redesign (2026-07-01)
+1. **layout.badge_row()** (`master/ui/layout.lua`): bei beliebig vielen/langen Badges darf die Gesamtbreite NIE die Monitorbreite überschreiten. Test: künstlich viele/lange Badge-Labels übergeben, prüfen dass Kürzung/Priorisierung greift statt Überlappung.
+2. **Overview RT-Fleet-Summary**: `overview.rt_fleet_summary` muss `active`/`total`/`assignment`/`status` konsistent mit der echten RT-View zeigen (kein separater, potenziell abweichender Berechnungspfad).
+3. **Ampel-Monitor Isolation**: absichtlicher Fehlertest — Ampel-Monitor abklemmen/entfernen während RT läuft, Hauptmonitor darf davon UNBEEINFLUSST bleiben (keine eingefrorene/verzerrte Anzeige). Ein früherer, ungetesteter erster Versuch dieses Features hatte genau das nicht sichergestellt und legte beim Fehlschlagen die komplette RT-Anzeige lahm.
+4. **node.rt Merge statt Replace**: bei jedem STATUS-Tick müssen bereits vom UI-Layer in `node.rt` geschriebene Felder (z. B. `assignment_state`) erhalten bleiben, dürfen nicht durch das frische Payload komplett überschrieben werden.
+5. **assigned_power/assigned_percent Persistenz**: `node.assigned_power` muss nach jedem `rt_sync.lua`-Durchlauf gesetzt sein für jeden Node im `active`-Array — Regressionsfall zeigte 0.0 auf jeder RT-Card trotz korrektem globalen Soll.
+
+## Turbinen-Log-Rate-Limiting (2026-07-01)
+"Overspeed brake pending" darf max. 1x pro 5s pro Turbine geloggt werden (`ctrl.last_overspeed_log_ms`). Regressionsfall: ungedrosselte Warnung flutete den Log-Ringpuffer (nur 1000 Zeilen) komplett innerhalb weniger Sekunden und verdrängte andere, wichtigere Log-Einträge (SET_SETPOINTS, ReactorCtrl-Änderungen).
 
 ## Audit-Protokoll (2026-04-27)
 
