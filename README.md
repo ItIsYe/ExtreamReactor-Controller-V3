@@ -3,7 +3,7 @@
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
 > **Branch:** `beta` — active development.
-> **Manifest / Release:** `manifest-v261` / `beta-v261` · ATM10 (MC 1.21.1)
+> **Manifest / Release:** `manifest-v262` / `beta-v262` · ATM10 (MC 1.21.1)
 > **Status:** Phase 1–4 rewrite complete. Installer, auto-updater, setpoint flow, and UI have all been hardened through targeted bugfixes (see RUNTIME_STATUS_2026-06-03.md for the full session history). A UI-Redesign (layout system, summary view, Ampel status monitor) was completed 2026-07-01.
 > See [REWRITE_SPEC.md](REWRITE_SPEC.md) for the full rewrite reference and [RUNTIME_STATUS_2026-06-03.md](RUNTIME_STATUS_2026-06-03.md) for session history.
 
@@ -191,7 +191,8 @@ These were real bugs found and fixed during the 2026-06-30/07-01 hardening sessi
 - LOG collector received nothing (`Recv 0`) due to a channel mismatch: senders used 6502, `shared/constants.lua` defines LOG channel as 6503 — fixed.
 - `role.lua` was preserved across reinstalls only in the manual-install codepath, not in the (far more frequently triggered) auto-update reinstall codepath — every auto-update silently wiped the node's role assignment — fixed.
 - "Overspeed brake pending" turbine warning logged on every tick with no rate limit, flooding the log ring buffer and pushing out other, potentially more important log lines — now rate-limited to 1x/5s per turbine.
+- Repo hygiene pass (2026-07-01, v262): removed 6 orphaned `installer_*.lua` files in the repo root (dead since the monolithic installer rewrite, never `require`'d/`dofile`'d, only referenced by a stale manifest entry), the duplicate `xreactor/xreactor/` path (orphaned since at least v134), and 9 tests for the since-replaced stage-based installer mechanism. `tools/offline_validate.lua`'s required-file check (run by CI on every push) still expected the deleted files to exist and would have failed every subsequent run — fixed alongside the cleanup.
 
 ## Known Open Issues
 
-None tracked as open at time of writing (2026-07-01, v261). See RUNTIME_STATUS_2026-06-03.md for the full, dated session log if something regresses.
+None tracked as open at time of writing (2026-07-01, v262). See RUNTIME_STATUS_2026-06-03.md for the full, dated session log if something regresses.
