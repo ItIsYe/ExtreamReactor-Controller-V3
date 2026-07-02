@@ -1,6 +1,6 @@
 # Node Start Blockers — ERLEDIGT
 
-> Letzte Aktualisierung: **2026-07-01**, `beta-v261`
+> Letzte Aktualisierung: **2026-07-01**, `beta-v262`
 > Status: **Alle Punkte behoben.**
 
 ---
@@ -55,3 +55,9 @@ Datei: `xreactor/manifest.lua`
 Alle 143 Manifest-Einträge wurden mit korrekten `size_bytes` und CRC32-Hashes
 regeneriert (`tools/regenerate_manifest_metadata.py`). `hash_algo` ist wieder
 `"crc32"`. Behoben in v240 (2026-07-01).
+
+## Punkt 8 — Toter Code im Manifest / Repo-Hygiene ✓ BEHOBEN
+
+Dateien: 6 lose `installer_*.lua` im Root, `xreactor/xreactor/nodes/rt/*`, 9 Tests, `tools/offline_validate.lua`
+
+Auf Nutzerwunsch systematisch durchgeprüft: 6 seit dem monolithischen Installer-Umbau unreferenzierte `installer_*.lua`-Dateien im Root (~55KB, wurden auf jedem Node unnötig mitinstalliert), das seit mindestens v134 bekannte, nie aufgeräumte Duplikat-Verzeichnis `xreactor/xreactor/`, sowie 9 Tests für den längst ersetzten Stage-Installer-Mechanismus wurden gelöscht. Bei der Nachprüfung wurde zusätzlich eine tote Referenz im CI-Skript `tools/offline_validate.lua` gefunden (hätte ab dem nächsten Push jeden CI-Lauf fehlschlagen lassen) und korrigiert. Manifest bereinigt (145 → 139 Einträge). Behoben in v262 (2026-07-01).
