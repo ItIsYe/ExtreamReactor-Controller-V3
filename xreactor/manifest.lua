@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 270,
-  manifest_id = "manifest-v270",
+  manifest_version = 271,
+  manifest_id = "manifest-v271",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -21,7 +21,7 @@ return {
   { path = "release.lua", size_bytes = 273, hash = "a7aa72d3", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
   { path = "start.lua", size_bytes = 3817, hash = "9524769b", always=true, always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
-  { path = "shared/constants.lua", size_bytes = 1968, hash = "0c5fb837", always=true },
+  { path = "shared/constants.lua", size_bytes = 2395, hash = "0c5fb837", always=true },
   { path = "adapters/monitor.lua", size_bytes = 5312, hash = "34f32460" },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38" },
   { path = "core/comms.lua", size_bytes = 24518, hash = "4f174212" },
@@ -63,7 +63,7 @@ return {
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 7338, hash = "eba62959", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
-    { path = "master/message_handlers.lua", size_bytes = 22651, hash = "f94edbd6", required_for={"MASTER"} },
+    { path = "master/message_handlers.lua", size_bytes = 23923, hash = "f94edbd6", required_for={"MASTER"} },
     { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"} },
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"} },
     { path = "master/rt_sync.lua", size_bytes = 19025, hash = "3703ea68", required_for={"MASTER"} },
@@ -86,6 +86,7 @@ return {
     { path = "master/ui/layout.lua", size_bytes = 6263, hash = "new", required_for={"MASTER"} },
     { path = "optional/ampel.lua", size_bytes = 3437, hash = "new", optional=true, feature="ampel" },
     { path = "optional/speaker_alarm.lua", size_bytes = 2861, hash = "new", optional=true, feature="speaker_alarm" },
+    { path = "optional/pocket_query_handler.lua", size_bytes = 3528, hash = "new", optional=true, feature="pocket_query", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 38834, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
