@@ -568,6 +568,11 @@ function M.init(monitor_adapter, configured_monitor, monitor_scale)
   M.monitor_router = nil; M.last_monitor_update = 0
   local monitor, name_or_err = resolve_monitor(monitor_adapter, configured_monitor, monitor_scale)
   if not monitor then return nil, name_or_err end
+  -- Fix (2026-07-01): Name des Haupt-Monitors persistent speichern, damit
+  -- die Ampel-Logik in M.update() ihn zum Ausschliessen des Hauptmonitors
+  -- nutzen kann (ctx.config.monitor_name existiert NICHT in der RT-Config —
+  -- das war eine falsche Annahme im ersten Ampel-Redesign-Versuch).
+  M.main_monitor_name = name_or_err
   return monitor, name_or_err
 end
 
@@ -576,8 +581,10 @@ end
 -- einem fehlgeschlagenen ersten Anlauf am selben Tag, der versehentlich den
 -- Haupt-Monitor treffen und die komplette RT-Anzeige lahmlegen konnte.
 -- Diesmal: JEDE Zeile in pcall(), Ampel-Fehler koennen den Hauptmonitor
--- niemals mehr beeinflussen, und der Haupt-Monitor wird explizit per
--- Objektidentitaet ausgeschlossen (nicht nur per Namensvergleich).
+-- niemals mehr beeinflussen. Der Haupt-Monitor wird per PERIPHERAL-NAME
+-- ausgeschlossen (M.main_monitor_name, von M.init() gesetzt) — zusaetzlich
+-- filtert die 1x3-Groessenpruefung ihn ohnehin fast immer heraus, da
+-- Hauptmonitore ueblicherweise deutlich groesser sind.
 local AMPEL_COLORS = {
   OK        = 0x00FF00,
   LIMITED   = 0xFFFF00,
@@ -668,7 +675,7 @@ function M.update(monitor, ctx)
   pcall(function()
     local ok_status, _text, status_key = pcall(rt_status, model)
     if ok_status and status_key then
-      safe_render_ampel(ctx.config and ctx.config.monitor_name, status_key)
+      safe_render_ampel(M.main_monitor_name, status_key)
     end
   end)
 
