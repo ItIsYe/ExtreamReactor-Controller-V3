@@ -1,4 +1,4 @@
-# Testplan (aktueller Stand — v261)
+# Testplan (aktueller Stand — v262)
 
 ## Install/Update (aktualisiert: monolithischer Installer, Delete+Reinstall statt Stage/Backup)
 1. **Fresh Install (lokal)**: `wget .../beta/installer` + `installer` starten, Rolle wählen, Abschluss prüfen (Dateianzahl + Reboot im Installer-Log).
@@ -124,6 +124,9 @@ Bis ein dedizierter Regressionstest existiert, gilt: manuelle Verifikation über
 
 ## Turbinen-Log-Rate-Limiting (2026-07-01)
 "Overspeed brake pending" darf max. 1x pro 5s pro Turbine geloggt werden (`ctrl.last_overspeed_log_ms`). Regressionsfall: ungedrosselte Warnung flutete den Log-Ringpuffer (nur 1000 Zeilen) komplett innerhalb weniger Sekunden und verdrängte andere, wichtigere Log-Einträge (SET_SETPOINTS, ReactorCtrl-Änderungen).
+
+## Repo-Hygiene (2026-07-01)
+9 Tests für den mittlerweile ersetzten Stage-basierten Installer-Mechanismus (`tests/installer_stage_install_behavior_test.lua` und weitere, die direkt `xreactor/installer_main.lua`/`installer_stage.lua`/etc. vom Dateisystem lasen) wurden zusammen mit den referenzierten toten Dateien gelöscht. `tests/master_shipped_lua_parse_guard_test.py` hatte eine tote Referenz auf `xreactor/installer_manifest.lua` und wurde auf die aktuelle Datei `xreactor/installer/manifest.lua` korrigiert statt gelöscht (der Test selbst — ein generischer Parse-/Patch-Artefakt-Guard über das gesamte `xreactor/`-Verzeichnis — bleibt wertvoll). `tools/offline_validate.lua` (läuft in der CI bei jedem Push) hatte einen `required`-Dateien-Check, der die 6 gelöschten Dateien weiterhin als Pflicht voraussetzte und bei jedem folgenden Lauf fehlgeschlagen wäre — korrigiert.
 
 ## Audit-Protokoll (2026-04-27)
 
