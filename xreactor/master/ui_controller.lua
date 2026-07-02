@@ -380,7 +380,21 @@ function M.new(opts)
     -- vollstaendige Model gebaut, das alerts.lua's render() erwartet
     -- (model.counts, model.summary, model.active).
     local alerts_active = c.alert_service and c.alert_service:get_active() or {}
-    local alerts_history = c.alert_service and c.alert_service:get_history() or {}
+    -- Feature (2026-07-01): Zeitstempel-Filter fuer die Alarm-Historie.
+    -- c.state.history_window_key ("1h"/"24h"/"all") wird per Touch in
+    -- alarms.lua umgeschaltet (siehe history_window_cycle Action unten).
+    -- Default "all" entspricht dem alten, ungefilterten Verhalten.
+    local history_window_key = tostring(c.state.history_window_key or "all")
+    local history_windows_ms = { ["1h"] = 3600000, ["24h"] = 86400000 }
+    local since_ms = nil
+    if history_windows_ms[history_window_key] then
+      since_ms = now - history_windows_ms[history_window_key]
+    end
+    local alerts_history = c.alert_service
+      and (type(c.alert_service.get_history_filtered) == "function"
+        and c.alert_service:get_history_filtered({ since_ms = since_ms })
+        or c.alert_service:get_history())
+      or {}
     local alert_svc = c.alert_service
     local function on_ack(id)
       if alert_svc and type(alert_svc.ack) == "function" then
@@ -392,6 +406,7 @@ function M.new(opts)
       summary = summary,
       active = alerts_active,
       history = alerts_history,
+      history_window_key = history_window_key,
       mutes = (c.alert_service and c.alert_service.state and c.alert_service.state.mutes) or { rules = {}, nodes = {} },
       now_ms = now,
       config = c.config or {},
@@ -553,6 +568,25 @@ function M.new(opts)
     if action.type == "idle_threshold_adjust" and action.delta and c.state then
       local cur = tonumber(c.state.idle_threshold_pct) or 90
       c.state.idle_threshold_pct = math.max(20, math.min(99, cur + action.delta))
+      return true
+    end
+    -- Alarm-Historie Zeitfenster (Feature, 2026-07-01): zyklisch zwischen
+    -- "1h" -> "24h" -> "all" -> "1h" ... umschalten, per Touch in alarms.lua.
+    if action.type == "history_window_cycle" and c.state then
+      local cur = tostring(c.state.history_window_key or "all")
+      local order = { ["1h"] = "24h", ["24h"] = "all", ["all"] = "1h" }
+      c.state.history_window_key = order[cur] or "1h"
+      return true
+    end
+    -- Fix (2026-07-01): alarms.lua.handle_input gab frueher direkt via
+    -- model.on_ack(id) einen Callback aus — das funktionierte nur, wenn die
+    -- (falsche) handle_input-Signatur (event, model) je aufgerufen worden
+    -- waere, was aufgrund des Signatur-Mismatches mit multiview.lua's
+    -- Aufrufmuster (mon, x, y) nie der Fall war. Jetzt: handle_input gibt ein
+    -- normales Action-Table zurueck, hier zentral behandelt wie alle anderen
+    -- Actions.
+    if action.type == "alarm_ack" and action.alarm_id and c.alert_service and type(c.alert_service.ack) == "function" then
+      c.alert_service:ack(action.alarm_id)
       return true
     end
     return false
