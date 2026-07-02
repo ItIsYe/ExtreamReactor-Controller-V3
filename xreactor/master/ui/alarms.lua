@@ -1,4 +1,4 @@
--- master/ui/alarms.lua (redesign 2026-07-01)
+-- master/ui/alarms.lua (redesign 2026-07-01, Historie-Filter ergänzt)
 --
 -- AUX-Monitor Alarmliste:
 --   - Aktive Alarme aus alert_service (CRITICAL/WARN/INFO)
@@ -8,6 +8,13 @@
 --   - Automatisch weg wenn nicht mehr aktiv
 --   - Touch auf einen Eintrag -> ACK (quittiert, abgedunkelt)
 --   - on_ack(id) Callback wird von ui_controller aus alert_service bedient
+--   - Footer zeigt aktuelles Historie-Zeitfenster (1h/24h/all); Touch auf den
+--     Footer schaltet zyklisch weiter (history_window_cycle Action). Zeigt
+--     weiterhin primaer AKTIVE Alarme (unveraendertes Verhalten); die
+--     model.history-Liste (bereits nach Zeitfenster gefiltert) wird nur
+--     genutzt um im Footer eine Zusatzzahl "X in Historie" anzuzeigen —
+--     kein separater Vollbild-Modus, um die bewaehrte, einfache Ansicht
+--     nicht unnoetig zu verkomplizieren.
 
 local ui       = require("core.ui")
 local colorset = require("shared.colors")
@@ -50,9 +57,11 @@ local function sorted_alerts(active)
 end
 
 local hit_zones = {}   -- { id, y1, y2 } für Touch-ACK
+local footer_hit_zone = nil -- { y1, y2 } für Historie-Zeitfenster-Wechsel
 
 local function render(mon, model)
   hit_zones = {}
+  footer_hit_zone = nil
   local active = model and model.active or {}
   local alerts, n_pending, n_acked = sorted_alerts(active)
 
@@ -72,10 +81,18 @@ local function render(mon, model)
 
   -- ── Footer ────────────────────────────────────────────────────────────────
   local ts_now = os.date and os.date("!%H:%M UTC") or "--:--"
-  local footer = string.format(" %s | %d aktiv  %d quittiert ", ts_now, n_pending, n_acked)
+  local window_labels = { ["1h"] = "1h", ["24h"] = "24h", ["all"] = "alle" }
+  local window_key = tostring(model and model.history_window_key or "all")
+  local window_label = window_labels[window_key] or "alle"
+  local history_count = model and model.history and #model.history or 0
+  local footer = string.format(" %s | %d aktiv  %d quittiert | Hist:%s(%d) ", ts_now, n_pending, n_acked, window_label, history_count)
   ui.text(mon, 1, h,
     footer .. string.rep(" ", math.max(0, w - #footer)),
     colorset.get("muted"), colorset.get("background"))
+  -- Ganze Footer-Zeile als Touch-Zone fuer den Zeitfenster-Wechsel — einfacher
+  -- als eine praezise Teilzone im Text zu berechnen, und der Footer hat sonst
+  -- keine andere Funktion.
+  footer_hit_zone = { y1 = h, y2 = h }
 
   -- ── Kein Alarm: grüner Bildschirm ─────────────────────────────────────────
   if #alerts == 0 then
@@ -141,19 +158,23 @@ local function render(mon, model)
   end
 end
 
-local function handle_input(event, model)
-  if not event or event[1] ~= "monitor_touch" then return false end
-  local _mon, _tx, ty = event[2], event[3], event[4]
-  if not ty then return false end
+-- Fix (2026-07-01): Signatur war (event, model) — passt aber nicht zum
+-- tatsaechlichen Aufrufmuster in multiview.lua (M:handle_input ruft
+-- view.hit_test(session.mon, x, y) mit DREI Positionsargumenten auf, wie bei
+-- allen anderen Views/hit_test-Funktionen im System). Jetzt konsistent zur
+-- echten Aufrufsignatur: (mon, x, y), gibt bei Treffer direkt ein
+-- Action-Table zurueck (ui_controller.handle_action behandelt beide Typen).
+local function handle_input(mon, x, y)
+  if not y then return nil end
+  if footer_hit_zone and y >= footer_hit_zone.y1 and y <= footer_hit_zone.y2 then
+    return { type = "history_window_cycle" }
+  end
   for _, zone in ipairs(hit_zones) do
-    if ty >= zone.y1 and ty <= zone.y2 then
-      if model and type(model.on_ack) == "function" then
-        model.on_ack(zone.id)
-      end
-      return true
+    if y >= zone.y1 and y <= zone.y2 then
+      return { type = "alarm_ack", alarm_id = zone.id }
     end
   end
-  return false
+  return nil
 end
 
 return { render = render, handle_input = handle_input }
