@@ -77,6 +77,20 @@ function alert_service.new(opts)
       state.mutes.nodes[key] = nil
     end
   end
+  -- Optionale akustische Alarmierung (Feature, 2026-07-01): standardmaessig
+  -- aktiv (opt-out via config.enable_speaker_alarm = false statt opt-in),
+  -- da das Modul selbst komplett harmlos ist wenn kein Speaker angeschlossen
+  -- ist (findet einfach keinen und tut nichts). require() ist pcall-
+  -- geschuetzt fuer den Fall, dass optional/speaker_alarm.lua auf einem
+  -- Node fehlt (z.B. altes Manifest vor diesem Feature).
+  local speaker_alarm = nil
+  if config.enable_speaker_alarm ~= false then
+    local ok_spk_mod, spk_mod = pcall(require, "optional.speaker_alarm")
+    if ok_spk_mod then
+      local ok_spk_inst, spk_inst = pcall(spk_mod.new, {})
+      if ok_spk_inst then speaker_alarm = spk_inst end
+    end
+  end
   local self = {
     log_prefix = opts.log_prefix or "ALERT",
     config = config,
@@ -91,7 +105,8 @@ function alert_service.new(opts)
     clear_pending = {},
     last_eval_duration_ms = 0,
     last_eval_ts = 0,
-    muted_last = 0
+    muted_last = 0,
+    speaker_alarm = speaker_alarm
   }
   return setmetatable(self, { __index = alert_service })
 end
@@ -244,6 +259,15 @@ function alert_service:tick()
   self.muted_last = muted_count
   self.last_eval_duration_ms = now_ms() - eval_start
   self.last_eval_ts = eval_start
+
+  -- Optionale akustische Alarmierung (Feature, 2026-07-01): siehe
+  -- xreactor/optional/speaker_alarm.lua. Vollstaendig fehlerisoliert —
+  -- fehlt der Speaker oder ist opts.speaker_alarm nicht gesetzt, passiert
+  -- hier einfach nichts.
+  if self.speaker_alarm then
+    local counts = self:get_counts_by_severity()
+    pcall(self.speaker_alarm.notify, (counts.CRITICAL or 0) > 0)
+  end
 end
 
 function alert_service:get_active()
