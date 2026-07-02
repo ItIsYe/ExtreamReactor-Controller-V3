@@ -296,6 +296,29 @@ function alerts:get_history()
   return self.history
 end
 
+-- Feature (2026-07-01): Zeitstempel-gefilterte Historie fuer das Master-UI
+-- (Logs/Alarms-View). Vorher gab es nur get_history() ohne Filter — bei
+-- history_size=100 war das noch ueberschaubar, aber je nach Alarmfrequenz
+-- konnten aeltere Eintraege schnell aus dem Blick geraten. opts.since_ms
+-- und opts.until_ms sind absolute os.epoch("utc")-Zeitstempel; beide
+-- optional (weggelassen = keine untere/obere Grenze).
+function alerts:get_history_filtered(opts)
+  opts = opts or {}
+  local since_ms = tonumber(opts.since_ms)
+  local until_ms = tonumber(opts.until_ms)
+  if not since_ms and not until_ms then
+    return self.history
+  end
+  local out = {}
+  for _, entry in ipairs(self.history) do
+    local ts = tonumber(entry.ts) or 0
+    if (not since_ms or ts >= since_ms) and (not until_ms or ts <= until_ms) then
+      out[#out + 1] = entry
+    end
+  end
+  return out
+end
+
 function alerts:get_counts_by_severity()
   if not self.counts_cache then
     local counts = { INFO = 0, WARN = 0, CRITICAL = 0 }
