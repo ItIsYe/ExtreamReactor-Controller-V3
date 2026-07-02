@@ -50,6 +50,17 @@ Bump the version to trigger a rollout:
 
 **Key design rule (SCADA principle):** MASTER sends only a percentage setpoint (`power_target_percent`) and a state intent (`assignment_state`). Each RT node autonomously decides how many turbines run, which are at partial load, and how to position reactor rods — the Master has no knowledge of individual turbine RPM or flow rates.
 
+**Setpoint fields (Master → RT):**
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `power_target_percent` | number 0–100 | Percent of the node's learned capacity |
+| `assignment_state` | string | `active`, `shed`, `shutdown`, `standby` |
+| `shutdown_stage` | string/nil | Shutdown/rampdown intent |
+| `desired_node_state` | string/nil | Desired node state |
+
+**Multi-node assignment** (`rt_sync.lua`): nodes are sorted by capacity; the master counts how many are needed for `global_target`; `uniform_pct = global_target / sum(needed capacities) × 100`; only the needed nodes are assigned active load, the rest go to `shed`/`standby`. The computed `assigned_power`/`assigned_percent` are persisted directly on the node object so the UI shows a stable value — this used to only exist in a temporary, discarded structure, which caused the UI to permanently show `Soll 0.0` per RT node. Fixed 2026-07-01.
+
 The setpoint flow (Master → RT_sync → node.assigned_power/percent → UI) and the PEAK-profile power-target calculation were both hardened on 2026-06-30/07-01 after two separate real bugs (a field-ordering bug in `message_handlers.lua` and a `measured_total`-vs-`learned_capacity_total` preference bug in `runtime_ops_profile.lua`) caused setpoints to silently stay too low. Both are fixed; see RUNTIME_STATUS_2026-06-03.md for details.
 
 ### Modem Channels
