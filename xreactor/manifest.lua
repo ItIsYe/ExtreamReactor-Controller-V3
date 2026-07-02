@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 268,
-  manifest_id = "manifest-v268",
+  manifest_version = 269,
+  manifest_id = "manifest-v269",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -84,8 +84,8 @@ return {
     { path = "master/ui/rt_dashboard.lua", size_bytes = 14563, hash = "519597ca", required_for={"MASTER"} },
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"} },
     { path = "master/ui/layout.lua", size_bytes = 6263, hash = "new", required_for={"MASTER"} },
-    { path = "optional/ampel.lua", size_bytes = 3437, hash = "new", always=true },
-    { path = "optional/speaker_alarm.lua", size_bytes = 2861, hash = "new", always=true },
+    { path = "optional/ampel.lua", size_bytes = 3437, hash = "new", optional=true, feature="ampel" },
+    { path = "optional/speaker_alarm.lua", size_bytes = 2861, hash = "new", optional=true, feature="speaker_alarm" },
     { path = "master/ui_controller.lua", size_bytes = 38834, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
