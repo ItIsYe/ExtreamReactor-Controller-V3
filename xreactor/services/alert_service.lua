@@ -254,6 +254,10 @@ function alert_service:get_history()
   return self.alerts:get_history()
 end
 
+function alert_service:get_history_filtered(opts)
+  return self.alerts:get_history_filtered(opts)
+end
+
 function alert_service:get_counts()
   return self.alerts:get_counts_by_severity()
 end
