@@ -37,7 +37,7 @@ function M.run(ctx)
     views = {
       overview = { label = "Overview", render = ctx.overview_ui.render, hit_test = ctx.overview_ui.hit_test, interval = 0.5 },
       energy = { label = "Energy", render = ctx.energy_ui.render, interval = 1.0 },
-      rt = { label = "RT", render = ctx.rt_ui.render, interval = 1.0 },
+      rt = { label = "RT", render = ctx.rt_ui.render, hit_test = ctx.rt_ui.hit_test, interval = 1.0 },
       resources = { label = "Resources", render = ctx.resources_ui.render, interval = 2.0 },
       alerts = { label = "Alerts", render = ctx.alerts_ui.render, hit_test = ctx.alerts_ui.hit_test, interval = 0.5 },
       alarms = { label = "Logs", render = ctx.alarms_ui.render, hit_test = ctx.alarms_ui.handle_input, interval = 1.0 },
