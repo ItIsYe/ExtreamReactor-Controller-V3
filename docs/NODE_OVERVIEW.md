@@ -1,5 +1,7 @@
 # XReactor Controller V3 — Node-Dokumentation
 
+> Stand: v261 (2026-07-01)
+
 ## Systemübersicht
 
 Das System besteht aus 8 Nodes die über Ender-Modems auf drei Kanälen kommunizieren:
@@ -8,7 +10,9 @@ Das System besteht aus 8 Nodes die über Ender-Modems auf drei Kanälen kommuniz
 |-------|-------|
 | 6500 | Control — Master → Nodes (Commands, Setpoints) |
 | 6501 | Status — Nodes → Master (Heartbeat, Status-Payloads) |
-| 6502 | Log — alle Nodes → Log-Collector |
+| 6503 | Log — alle Nodes → Log-Collector |
+
+> Hinweis: Log lief lange über 6502, was ein realer Bug war (Sender nutzte 6502, `shared/constants.lua` definiert 6503) — der Log-Collector empfing dadurch nichts. Fixed 2026-06-30, seitdem korrekt auf 6503.
 
 ---
 
@@ -36,6 +40,10 @@ Das System besteht aus 8 Nodes die über Ender-Modems auf drei Kanälen kommuniz
 **Wichtige Konfiguration:**
 - `DEFAULT_NODE_OFFLINE_PURGE_AFTER_S = 120` — wann eine offline Node entfernt wird
 - `DEFAULT_SEQUENCER_SCRAM_TEMPERATURE = 950` — Temperatur-Limit im Sequencer
+
+**UI-Redesign (2026-07-01):** Badge-Leisten (die farbigen Status-Labels wie `RT OK | MASTER | CAP`) laufen jetzt über `master/ui/layout.lua`, das die Monitorbreite vorher kennt und Text gestuft kürzt/weglässt statt zu überlappen. Die Overview-Seite zeigt zusätzlich eine RT-Fleet-Kurzzusammenfassung (aktiv/gesamt, Zuweisung), ohne dass man zur RT-Seite wechseln muss.
+
+**Bekannte, inzwischen gefixte Bugs (relevant falls sich ähnliches Verhalten wiederholt):** der Setpoint-Fluss zum RT-Node fror zeitweise auf einem zu niedrigen Wert ein (Feld-Reihenfolge-Bug beim Verarbeiten von STATUS-Nachrichten, plus eine falsche Priorisierung von "aktuell gemessener Output" statt "gelernte Maximalkapazität" bei der PEAK-Profil-Berechnung). Beide gefixt am 2026-06-30/07-01, siehe RUNTIME_STATUS_2026-06-03.md.
 
 ---
 
@@ -85,6 +93,10 @@ Rotation-Offset: alle 5 Min rotiert welche Turbinen Vollast haben
 - `TARGET_RPM = 900` — Ziel-RPM für alle Turbinen
 - `ROD_MAX = 100`, `ROD_MIN = 80` — Regelbereich
 - `INITIAL_ROD_LEVEL = 98` — Startwert beim allerersten Boot
+
+**Ampel-Statusmonitor (optional, 2026-07-01):** ein zweiter, exakt 1×3 großer Monitor (Wired Modem) wird automatisch erkannt und zeigt eine reine Statusfarbe ohne Text (grün = liefert normal, gelb = lernt/fährt hoch/wartet, orange = weicht ab, rot = liefert zu wenig, grau = fährt runter/Standby). Vollständig fehlerisoliert (`pcall` auf jeder Ebene) — ein Ausfall der Ampel-Logik kann den Hauptmonitor nicht mehr beeinflussen (ein erster Versuch dieses Features hatte genau das noch nicht sichergestellt und legte kurzzeitig die komplette RT-Anzeige lahm).
+
+**Turbinen-Log-Rate-Limit:** die "Overspeed brake pending"-Warnung ist auf max. 1×/5s pro Turbine gedrosselt — sie konnte vorher bei anhaltendem Overspeed-Zustand den gesamten Log-Ringpuffer (1000 Zeilen) innerhalb weniger Sekunden fluten und andere Log-Einträge verdrängen.
 
 ---
 
@@ -251,7 +263,7 @@ Support-Node selbst:
 **Rolle:** Empfängt Log-Nachrichten aller Nodes zentral und schreibt sie auf Disk.
 
 **Was er tut:**
-- Lauscht auf Kanal 6502 für LOG_EVENT-Nachrichten aller Nodes
+- Lauscht auf Kanal 6503 für LOG_EVENT-Nachrichten aller Nodes (nicht 6502 — siehe Hinweis oben in der Kanal-Tabelle; dieser Mismatch war ein realer, länger unentdeckter Bug)
 - Schreibt Logs sortiert nach Node-ID in separate Dateien
 - Sendet ACK zurück an Sender (für Retry-Logik)
 - Rotiert Log-Dateien bei Überschreitung der Größengrenze
@@ -304,11 +316,13 @@ T+Nm   RT-Node: normaler Betrieb mit Rod-Regler
 
 ## Installer
 
-Der Installer (`installer` Datei im Root) ist ein selbständiger Bootstrap:
-1. Lädt `installer_main.lua` und weitere Module von GitHub
-2. Lässt den Nutzer eine Rolle auswählen (oder erkennt bestehende)
-3. Lädt alle Dateien laut Manifest herunter
-4. Validiert jeden Hash (CRC32) vor dem Commit
-5. Schreibt `/startup` für automatischen Start
-6. **Setzt `xreactor.log_mode = "all"`** in CC:Tweaked Settings (seit v71)
-7. Rebooted nach erfolgreichem Install
+Der Installer (`installer` Datei im Repo-Root) ist ein einziges, monolithisches Skript — die Module `installer/http.lua`, `installer/manifest.lua`, `installer/stage.lua`, `installer/ui.lua`, `installer/auto_update.lua`, `installer/init.lua` sind als eingebettete Lua-Long-Strings direkt im Root-Skript enthalten, es müssen keine separaten Dateien wie `installer_main.lua` mehr von GitHub geladen werden.
+
+1. `wget .../beta/installer` genügt für einen kompletten Frischinstall.
+2. Lässt den Nutzer eine Rolle auswählen (oder erkennt bei Reinstall die bestehende aus `/xreactor/config/role.lua`).
+3. Lädt alle für die Rolle nötigen Dateien laut `manifest.lua` direkt von `raw.githubusercontent.com` herunter, prüft jede gegen die dort hinterlegte `size_bytes` (bricht mit `size mismatch` ab, wenn das Manifest nach einer Codeänderung nicht mitgepflegt wurde — das ist der häufigste Installer-Fehlerfall).
+4. `/xreactor` wird bei jeder (Re-)Installation komplett gelöscht und neu aufgebaut (kein Stage/Backup-Mechanismus mehr) — verhindert verwaiste Altdateien und Speicherplatzprobleme bei großen Rollen wie MASTER/RT. `role.lua`, `node_id.txt` und `capacity_cache.lua` werden dabei explizit gesichert und danach wiederhergestellt (PRESERVE-Liste, in beiden Installer-Codepfaden — manuell und Auto-Update-Reinstall — identisch, seit 2026-07-01).
+5. Schreibt `/startup.lua` für automatischen Start.
+6. Rebootet nach erfolgreichem Install.
+
+**Auto-Update läuft parallel zum normalen Node-Betrieb** (`parallel.waitForAny`), erster Check 30s nach Boot, danach alle 120s — kein manueller Trigger nötig. Jede Code-Änderung muss mit einem Versions-Bump (`manifest_version`/`release_id` in `manifest.lua`+`release.lua`) einhergehen, sonst erkennt kein Node das Update.
