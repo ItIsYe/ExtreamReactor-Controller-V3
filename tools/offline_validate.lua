@@ -59,17 +59,17 @@ local function shell_lines(cmd)
   return out
 end
 
+-- Fix (2026-07-01, repo hygiene): die 6 losen installer_*.lua-Dateien im
+-- Repo-Root existierten seit dem Umbau auf den monolithischen `installer`
+-- nicht mehr in der aktiven Codepath — sie waren nirgends mehr required()/
+-- dofile()'d, nur noch tote Verweise im Manifest. Wurden geloescht. Diese
+-- required-Liste pruefte bisher ihre Existenz und wuerde das jetzt bewusst
+-- richtige Fehlen als Fehler melden — korrigiert.
 local required = {
   "installer",
   "xreactor/start.lua",
   "xreactor/manifest.lua",
   "xreactor/release.lua",
-  "xreactor/installer_main.lua",
-  "xreactor/installer_manifest.lua",
-  "xreactor/installer_stage.lua",
-  "xreactor/installer_startup.lua",
-  "xreactor/installer_storage.lua",
-  "xreactor/installer_http.lua",
 }
 
 for _, path in ipairs(required) do
