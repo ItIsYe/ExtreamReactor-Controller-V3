@@ -254,7 +254,39 @@ function M.new(opts)
     rt.target_output   = rt.power_target
   end
 
+  -- Optionale Pocket-Computer-Fernabfrage (Feature, 2026-07-01): siehe
+  -- xreactor/optional/pocket_query_handler.lua. pcall(require, ...) sorgt
+  -- dafuer, dass bei fehlendem Modul (Feature nicht installiert) einfach
+  -- nichts passiert und der normale Dispatch unveraendert weiterlaeuft.
+  local ok_pocket_mod, pocket_mod = pcall(require, "optional.pocket_query_handler")
+  local pocket_handler = ok_pocket_mod and pocket_mod or nil
+
+  local function build_pocket_snapshot()
+    -- Minimaler, robuster Snapshot fuer die Pocket-Antwort — greift nur auf
+    -- bereits vorhandene, einfache Zaehlwerte zu, keine teuren Neuberechnungen.
+    local rt_active, rt_total = 0, 0
+    for _, n in pairs(nodes) do
+      if n.role == constants.roles.RT_NODE then
+        rt_total = rt_total + 1
+        if tostring(n.assignment_state or "") == "active" then rt_active = rt_active + 1 end
+      end
+    end
+    return {
+      rt_active = rt_active,
+      rt_total = rt_total,
+    }
+  end
+
   local function update_node(message)
+    if pocket_handler then
+      local ok_handled, handled = pcall(pocket_handler.handle, message, {
+        comms = comms(),
+        constants = constants,
+        log = log,
+        build_snapshot = build_pocket_snapshot,
+      })
+      if ok_handled and handled then return end
+    end
     if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
       local mismatch_id = utils.normalize_node_id(message.src)
       if mismatch_id ~= "UNKNOWN" then
