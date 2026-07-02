@@ -152,7 +152,7 @@ function M.new(opts)
     local top = c.alert_service and c.alert_service:get_top_critical(3) or {}
     local summary = c.alert_service and c.alert_service:get_summary() or 'Keine aktiven Meldungen'
 
-    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '', ops_hints = {}, peer_summary = 'Peers live=0 stale=0 rt=0 energy-matrix=0 src=0', rt_summary = 'RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0', controls_summary = 'Profile=- | AUTO=AUS | RT-HOLD=AUS', nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Normalbetrieb", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" }
+    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, peak_threshold_pct = tonumber(c.state.peak_threshold_pct) or 30, idle_threshold_pct = tonumber(c.state.idle_threshold_pct) or 90, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '', ops_hints = {}, peer_summary = 'Peers live=0 stale=0 rt=0 energy-matrix=0 src=0', rt_summary = 'RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0', controls_summary = 'Profile=- | AUTO=AUS | RT-HOLD=AUS', nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Normalbetrieb", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" }
     if (counts.CRITICAL or 0) > 0 then overview.system_status = 'EMERGENCY' elseif (counts.WARN or 0) > 0 then overview.system_status = 'WARNING' end
     for i, a in ipairs(top) do if i > 4 then break end overview.alert_rows[#overview.alert_rows+1] = { title = tostring(a.title or a.code or 'Alert'), text = tostring(a.message or a.detail or 'Keine Details'), status = normalize_status(a.severity or 'WARNING') } end
 
@@ -540,6 +540,20 @@ function M.new(opts)
         end
         return true
       end
+    end
+    -- PEAK/IDLE-Schwellwerte anpassen (Feature, 2026-07-01): waren vorher
+    -- fest 90%/30% im Code (runtime_ops_profile.lua). Touch auf +/- Buttons
+    -- im Overview aendert sie in 5%-Schritten. c.state ist dieselbe Tabelle
+    -- wie runtime.state, daher direkte Zuweisung ohne separaten Setter.
+    if action.type == "peak_threshold_adjust" and action.delta and c.state then
+      local cur = tonumber(c.state.peak_threshold_pct) or 30
+      c.state.peak_threshold_pct = math.max(5, math.min(80, cur + action.delta))
+      return true
+    end
+    if action.type == "idle_threshold_adjust" and action.delta and c.state then
+      local cur = tonumber(c.state.idle_threshold_pct) or 90
+      c.state.idle_threshold_pct = math.max(20, math.min(99, cur + action.delta))
+      return true
     end
     return false
   end
