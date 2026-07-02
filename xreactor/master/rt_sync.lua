@@ -146,6 +146,17 @@ function M.evaluate_rt_node(node, opts)
   local state = node and node.state or constants.node_states.OFF
   -- Fix #4: actual_output kanonisch, power_actual + output Fallback
   local output = node and (number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0)) or 0
+  -- Wartungsmodus: node-spezifischer, manuell gesetzter Ausschluss aus der
+  -- Zuweisungslogik, unabhängig vom globalen RT-HOLD. Wird ueber
+  -- node.maintenance_mode gesetzt (persistiert auf dem Node-Objekt im
+  -- Master, z. B. per UI-Toggle) — der Node bleibt online/sichtbar, wird
+  -- aber vom Sequencer/rt_sync nie als aktiv/pending_startup betrachtet,
+  -- unterscheidet sich damit klar von OFFLINE (Node antwortet ja weiterhin)
+  -- und von SHED (das ist eine automatische, kapazitaetsgetriebene
+  -- Master-Entscheidung, kein manueller Ausschluss).
+  if node and node.maintenance_mode == true then
+    return { controllable = false, reason = "MAINTENANCE", mode = mode, status = status, state = state, output = output }
+  end
   if hold then
     return { controllable = false, reason = "GLOBAL_HOLD", mode = mode, status = status, state = state, output = output }
   end
