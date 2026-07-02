@@ -365,6 +365,62 @@ function rules:evaluate(context)
     end
   end
 
+  -- Redundanz-Warnung: wenn nur noch genau ein RT-Node aktiv zugewiesen ist,
+  -- und dieser Node bei einem Ausfall den globalen Leistungsbedarf allein
+  -- nicht mehr decken könnte, warnt der Master proaktiv — bevor der zweite
+  -- Node tatsächlich ausfällt, nicht erst danach. Nutzt dieselben Felder
+  -- (node.assignment_state, node.capacity_max, context.power_target) wie
+  -- die uebrige Setpoint-/Zuweisungslogik in rt_sync.lua.
+  do
+    local active_rt = {}
+    local total_capacity = 0
+    for _, node in pairs(nodes) do
+      if node.role == constants.roles.RT_NODE then
+        local state = tostring(node.assignment_state or "")
+        if state == "active" then
+          active_rt[#active_rt + 1] = node
+        end
+        -- Gesamtkapazität ueber ALLE RT-Nodes (nicht nur aktive) — das ist
+        -- die theoretisch verfuegbare Reserve, falls ein weiterer Node
+        -- online genommen werden koennte.
+        total_capacity = total_capacity + number_or(node.capacity_max, 0)
+      end
+    end
+
+    local redundancy_active = false
+    local sole_node = nil
+    if #active_rt == 1 then
+      sole_node = active_rt[1]
+      local sole_capacity = number_or(sole_node.capacity_max, 0)
+      local target = tonumber(context.power_target) or 0
+      -- Warnt nur wenn tatsaechlich Bedarf besteht (target > 0) und die
+      -- verbleibende Gesamtkapazitaet OHNE diesen einen Node (also
+      -- total_capacity - sole_capacity) den Bedarf nicht mehr decken wuerde.
+      local remaining_without_sole = total_capacity - sole_capacity
+      redundancy_active = target > 0 and remaining_without_sole < target
+    end
+
+    local redundancy_key = "RT_NO_REDUNDANCY"
+    emit(redundancy_key, redundancy_active, {
+      raise_after_s = cfg.redundancy_warn_after_s or base_opts.raise_after_s,
+      clear_after_s = cfg.alert_clear_after_s or cfg.alert_clear_s or base_opts.clear_after_s,
+      cooldown_s = cfg.redundancy_cooldown_s or 60
+    }, function()
+      return {
+        code = "RT_NO_REDUNDANCY",
+        severity = "WARN",
+        scope = "SYSTEM",
+        source = sole_node and build_source(sole_node, nil) or { node_id = "MASTER", role = "MASTER" },
+        title = "No RT redundancy",
+        message = string.format(
+          "Nur %s liefert aktiv — bei Ausfall waere der Bedarf nicht gedeckt",
+          sole_node and tostring(sole_node.id) or "1 Node"
+        ),
+        details = { active_nodes = 1, total_capacity = total_capacity, power_target = context.power_target }
+      }
+    end)
+  end
+
   if context.recovery_notice then
     local recovery = context.recovery_notice
     local active = recovery.active
