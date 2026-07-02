@@ -1,5 +1,6 @@
 local ui = require("core.ui")
 local widgets = require("master.ui.widgets")
+local layout = require("master.ui.layout")
 local sessions_lib = require("master.monitor_sessions")
 
 local M = {}
@@ -107,12 +108,21 @@ function M:render(monitors, data_map)
     else
       badge_status = "OK"
     end
+    -- UI-Redesign Schritt 1 (2026-07-01): layout.badge_row() statt direktem
+    -- ui.badge() — garantiert, dass die Badge-Leiste NIE über die
+    -- Monitorbreite hinauslaeuft. Vorher fest verdrahteter Einzel-Badge, der
+    -- bei sehr schmalen Monitoren abgeschnitten werden konnte ohne Fallback.
+    local wm, _ = ui.getSize(session.mon)
+    wm = wm or 26
     if self.sessions:is_primary(session) then
-      ui.badge(session.mon, 2, 1, widgets.fit((badge_view or "PRIMARY"):upper(), 20), badge_status)
+      layout.badge_row(session.mon, 2, 1, math.max(6, wm - 3), {
+        { label = (badge_view or "PRIMARY"):upper(), short = (badge_view or "PRI"):upper():sub(1, 4), status = badge_status, priority = 1 },
+      })
     else
       -- AUX: zeige aktuelle View + Hinweis dass Touch wechselt
-      local aux_label = "AUX:" .. (badge_view or "?"):upper()
-      ui.badge(session.mon, 2, 1, widgets.fit(aux_label, 22), badge_status)
+      layout.badge_row(session.mon, 2, 1, math.max(6, wm - 3), {
+        { label = "AUX:" .. (badge_view or "?"):upper(), short = "AUX", status = badge_status, priority = 1 },
+      })
     end
 
     -- Bei aktiven CRITICAL/WARN-Alarmen die dringendste Meldung als Text
