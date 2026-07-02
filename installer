@@ -208,14 +208,29 @@ function M.load_remote(url, http_mod)
   return result
 end
 
-function M.files_for_role(manifest, role_label)
+function M.files_for_role(manifest, role_label, selected_features)
   local is_log = LOG_ROLES[role_label:upper()] == true
+  -- Feature (2026-07-01): optional=true Dateien (xreactor/optional/*) werden
+  -- NICHT automatisch installiert, egal welche Rolle gewaehlt wird — sie
+  -- sind reine Opt-in-Erweiterungen (Ampel-Monitor, Speaker-Alarm, ...) fuer
+  -- zusaetzliche, physisch vorhandene Peripherals. Nur wenn der Nutzer beim
+  -- Installer-Lauf explizit zustimmt (selected_features[entry.feature] ==
+  -- true), wird die Datei mit aufgenommen. Ohne Auswahl bleibt der Ordner
+  -- xreactor/optional/ auf dem Node komplett leer/nicht vorhanden — der
+  -- zugehoerige require()-Aufruf in monitor_ui.lua/ui_pages.lua/
+  -- alert_service.lua ist pcall-geschuetzt und ueberspringt den gesamten
+  -- Feature-Code sauber, wenn die Datei fehlt.
+  selected_features = selected_features or {}
   local expected = {}
 
   local function add(entry)
     if type(entry) == "string" then entry = { path = entry } end
     if type(entry) ~= "table" or not entry.path then return end
     if SKIP[entry.path] then return end
+    if entry.optional == true then
+      local feature = entry.feature or entry.path
+      if selected_features[feature] ~= true then return end
+    end
     expected[entry.path] = entry
   end
 
@@ -647,12 +662,66 @@ ui_mod.header("Installiere " .. role.label)
 -- zweite Pfad role.lua weiterhin ungeschuetzt mitloeschte. Jetzt einheitlich:
 -- role.lua ist Teil der regulaeren PRESERVE-Liste wie node_id.txt und
 -- capacity_cache.lua, in BEIDEN Codepfaden.
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua" }
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua" }
 local preserved = {}
 for _, rel in ipairs(PRESERVE) do
   local src = INSTALL_ROOT .. "/" .. rel
   if fs.exists(src) then
     local f = fs.open(src, "r"); if f then preserved[rel] = f.readAll(); f.close() end
+  end
+end
+
+-- Feature (2026-07-01): bestehende Auswahl optionaler Features laden (falls
+-- vorhanden — z.B. bei einem Reinstall). Bei einer Erstinstallation ist das
+-- leer und der Nutzer wird unten interaktiv gefragt.
+local function load_selected_features()
+  local raw = preserved["config/optional_features.lua"]
+  if not raw then return {} end
+  local ok, loaded = pcall(function()
+    local chunk = load(raw, "=optional_features", "t", {})
+    if not chunk then return nil end
+    return chunk()
+  end)
+  if ok and type(loaded) == "table" then return loaded end
+  return {}
+end
+local selected_features = load_selected_features()
+
+-- Optionale Features interaktiv abfragen (nur bei manuellem Installer-Lauf,
+-- nicht beim automatischen Auto-Update-Reinstall — dort wird die zuvor
+-- gespeicherte Auswahl einfach uebernommen, kein erneutes Nachfragen).
+-- Bekannte optionale Peripherals werden aus dem Manifest selbst abgeleitet
+-- (jeder Eintrag mit optional=true und einem feature-Namen), damit neue
+-- optionale Module in Zukunft automatisch hier auftauchen, ohne dass diese
+-- Abfrage-Logik jedes Mal angepasst werden muss.
+local function collect_optional_feature_names(manifest_tbl)
+  local seen, names = {}, {}
+  for _, e in ipairs(manifest_tbl.base_files or {}) do
+    if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] then
+      seen[e.feature] = true
+      names[#names + 1] = e.feature
+    end
+  end
+  table.sort(names)
+  return names
+end
+
+if term and term.setCursorPos then
+  local feature_names = collect_optional_feature_names(manifest)
+  if #feature_names > 0 then
+    p("")
+    p("Optionale Peripherie-Erweiterungen (nur installieren wenn Hardware vorhanden ist):")
+    for _, fname in ipairs(feature_names) do
+      local already = selected_features[fname] == true
+      io.write("  " .. fname .. " installieren? [j/N" .. (already and ", bereits aktiv" or "") .. "]: ")
+      local answer = read and read() or ""
+      if tostring(answer):lower() == "j" or tostring(answer):lower() == "y" then
+        selected_features[fname] = true
+      elseif tostring(answer) ~= "" then
+        selected_features[fname] = false
+      end
+      -- Leere Eingabe bei Reinstall = bestehende Auswahl beibehalten (already).
+    end
   end
 end
 
@@ -663,7 +732,7 @@ end
 pcall(fs.makeDir, INSTALL_ROOT)
 
 -- Dateien installieren
-local expected = manifest_mod.files_for_role(manifest, role.label)
+local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
 local file_list = {}
 for rel, entry in pairs(expected) do table.insert(file_list, { path = rel, entry = entry }) end
 table.sort(file_list, function(a, b)
@@ -685,6 +754,21 @@ for rel, content in pairs(preserved) do
   if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
   local f = fs.open(dst, "w"); if f then f.write(content); f.close() end
   p("Wiederhergestellt: " .. rel)
+end
+
+-- Feature (2026-07-01): aktuelle (ggf. gerade interaktiv geaenderte) Auswahl
+-- optionaler Features persistieren — ueberschreibt das reine PRESERVE-
+-- Backup mit dem tatsaechlich aktuellen Stand, damit eine Aenderung bei
+-- diesem Lauf auch beim naechsten Auto-Update-Reinstall erhalten bleibt.
+do
+  local parts = { "return {\n" }
+  for fname, enabled in pairs(selected_features) do
+    if enabled == true then
+      parts[#parts + 1] = "  [" .. string.format("%q", fname) .. "] = true,\n"
+    end
+  end
+  parts[#parts + 1] = "}\n"
+  stage_mod.write(INSTALL_ROOT .. "/config/optional_features.lua", table.concat(parts))
 end
 
 -- Rolle konfigurieren
@@ -806,12 +890,31 @@ ui_mod.header("Installiere "..role.label)
 -- Auto-Update-Reinstall-Pfad, der bei jedem automatischen Update durchlaeuft.
 -- Ohne role.lua in dieser Liste ging die Rollenzuordnung bei jedem
 -- Auto-Update verloren, der Node bootete danach ohne konfigurierte Rolle.
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua" }
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua" }
 local preserved = {}
 for _, rel in ipairs(PRESERVE) do
   local src = INSTALL_ROOT.."/"..rel
   if fs.exists(src) then
     local f = fs.open(src, "r"); if f then preserved[rel]=f.readAll(); f.close() end
+  end
+end
+
+-- Feature (2026-07-01): beim automatischen Auto-Update-Reinstall wird NICHT
+-- erneut interaktiv nach optionalen Features gefragt (kein Nutzer anwesend,
+-- der Prozess soll unbeaufsichtigt durchlaufen) — die zuvor gespeicherte
+-- Auswahl wird einfach uebernommen. War optional_features.lua noch nie
+-- geschrieben (z.B. alter Node vor diesem Feature), bleibt die Auswahl leer
+-- und keine optionalen Dateien werden installiert — sicherer Default.
+local selected_features = {}
+do
+  local raw = preserved["config/optional_features.lua"]
+  if raw then
+    local ok, loaded = pcall(function()
+      local chunk = load(raw, "=optional_features", "t", {})
+      if not chunk then return nil end
+      return chunk()
+    end)
+    if ok and type(loaded) == "table" then selected_features = loaded end
   end
 end
 
@@ -838,7 +941,7 @@ end
 p("Eingebettete Module geschrieben")
 
 -- ── Dateien installieren ─────────────────────────────────────────────────────
-local expected = manifest_mod.files_for_role(manifest, role.label)
+local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
 local file_list = {}
 for rel, entry in pairs(expected) do
   -- Eingebettete Module überspringen (schon geschrieben)
