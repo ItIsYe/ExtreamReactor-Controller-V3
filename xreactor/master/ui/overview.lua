@@ -127,6 +127,39 @@ local function render(mon, model)
     ui.text(mon, box.x, box.y + 5, widgets.fit("Profil " .. tostring(model.active_profile or "-") .. " | " .. tostring(model.controls_summary or "-"), box.w), colors.get("text"), colors.get("background"))
     ui.text(mon, box.x, box.y + 6, widgets.fit(string.format("Soll %.1f | Ist %.1f MRF/t", model.power_target or 0, model.power_actual or 0), box.w), colors.get("muted"), colors.get("background"))
     ui.text(mon, box.x, box.y + 7, widgets.fit(string.format("Nodes %d live / %d stale | RT %d online", model.nodes_live or 0, model.nodes_stale or 0, model.rt_online or 0), box.w), colors.get("text"), colors.get("background"))
+    -- PEAK/IDLE-Schwellwerte (Feature, 2026-07-01): waren vorher fest 90/30%
+    -- im Code, jetzt per Touch in 5%-Schritten anpassbar. Nur anzeigen wenn
+    -- noch Platz in der Box ist (kompakte Layouts lassen diese Zeile weg).
+    if box.h >= 9 then
+      local thr_y = box.y + 8
+      local peak_pct = tonumber(model.peak_threshold_pct) or 30
+      local idle_pct = tonumber(model.idle_threshold_pct) or 90
+      -- Robuster als Format-String-Positions-Parsing: jedes Segment einzeln
+      -- rendern und die x-Position dabei mitfuehren, damit Touch-Zonen und
+      -- Text garantiert uebereinstimmen statt ueber Zeichen-Offsets geraten
+      -- zu werden.
+      local cx = box.x
+      local function put(text, color_key)
+        local t = tostring(text)
+        ui.text(mon, cx, thr_y, t, colors.get(color_key or "muted"), colors.get("background"))
+        local start_x = cx
+        cx = cx + #t
+        return start_x, cx - 1
+      end
+      put(string.format("PEAK<%d%% ", peak_pct))
+      local pm1, pm2 = put("[-]")
+      put(" ")
+      local pp1, pp2 = put("[+]")
+      put("  ")
+      put(string.format("IDLE>%d%% ", idle_pct))
+      local im1, im2 = put("[-]")
+      put(" ")
+      local ip1, ip2 = put("[+]")
+      hits[#hits + 1] = { type = "peak_threshold_adjust", delta = -5, x1 = pm1, x2 = pm2, y1 = thr_y, y2 = thr_y }
+      hits[#hits + 1] = { type = "peak_threshold_adjust", delta = 5, x1 = pp1, x2 = pp2, y1 = thr_y, y2 = thr_y }
+      hits[#hits + 1] = { type = "idle_threshold_adjust", delta = -5, x1 = im1, x2 = im2, y1 = thr_y, y2 = thr_y }
+      hits[#hits + 1] = { type = "idle_threshold_adjust", delta = 5, x1 = ip1, x2 = ip2, y1 = thr_y, y2 = thr_y }
+    end
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + left_w + 1, content_top, "Meldungen", function()
