@@ -571,6 +571,67 @@ function M.init(monitor_adapter, configured_monitor, monitor_scale)
   return monitor, name_or_err
 end
 
+-- ── Ampel-Monitor: 1x3 Monitor, nur Farbe, kein Text ──────────────────────
+-- UI-Redesign Schritt 4 (2026-07-01), zweiter, sorgfaeltigerer Versuch nach
+-- einem fehlgeschlagenen ersten Anlauf am selben Tag, der versehentlich den
+-- Haupt-Monitor treffen und die komplette RT-Anzeige lahmlegen konnte.
+-- Diesmal: JEDE Zeile in pcall(), Ampel-Fehler koennen den Hauptmonitor
+-- niemals mehr beeinflussen, und der Haupt-Monitor wird explizit per
+-- Objektidentitaet ausgeschlossen (nicht nur per Namensvergleich).
+local AMPEL_COLORS = {
+  OK        = 0x00FF00,
+  LIMITED   = 0xFFFF00,
+  WARNING   = 0xFF8800,
+  EMERGENCY = 0xFF0000,
+  muted     = 0x444444,
+}
+
+local ampel_cache = { name = nil, last_color = nil }
+
+local function find_ampel_monitor(main_monitor_name)
+  if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
+  local ok, names = pcall(peripheral.getNames)
+  if not ok or type(names) ~= "table" then return nil end
+  for _, name in ipairs(names) do
+    -- Der Haupt-Monitor wird per NAME ausgeschlossen (nicht per
+    -- Objektidentitaet wie im ersten, fehlgeschlagenen Versuch) — das ist
+    -- robuster, da peripheral.wrap() bei jedem Aufruf ein neues Wrapper-
+    -- Objekt liefern kann, auch fuer denselben physischen Monitor.
+    if name ~= main_monitor_name then
+      local ok_t, ptype = pcall(peripheral.getType, name)
+      if ok_t and tostring(ptype):find("monitor", 1, true) then
+        local ok_w, mon = pcall(peripheral.wrap, name)
+        if ok_w and mon then
+          local ok_scale = pcall(mon.setTextScale, 1)
+          local ok_s, w, h = pcall(mon.getSize)
+          if ok_scale and ok_s and w == 1 and h == 3 then
+            return name, mon
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- Öffentliche Einstiegsfunktion — wird von M.update() aufgerufen, ist aber
+-- selbst komplett fehlerisoliert. Ein Fehler hier kann niemals nach oben
+-- durchschlagen und den Haupt-Monitor-Render blockieren.
+local function safe_render_ampel(main_monitor_name, status_key)
+  pcall(function()
+    local name, mon = find_ampel_monitor(main_monitor_name)
+    if not name or not mon then return end
+    local color = AMPEL_COLORS[status_key] or AMPEL_COLORS.muted
+    -- Nur neu zeichnen wenn sich Monitor oder Farbe geändert haben —
+    -- vermeidet unnötige clear()-Aufrufe bei jedem Update-Tick.
+    if ampel_cache.name == name and ampel_cache.last_color == color then return end
+    ampel_cache.name = name
+    ampel_cache.last_color = color
+    mon.setBackgroundColor(color)
+    mon.clear()
+  end)
+end
+
 function M.update(monitor, ctx)
   if not monitor then return ctx.last_status_snapshot end
   local now = os.epoch("utc")
@@ -596,6 +657,21 @@ function M.update(monitor, ctx)
   end
   M.last_monitor = monitor
   M.monitor_router:render(monitor, model)
+
+  -- Ampel-Update: komplett fehlerisoliert (siehe safe_render_ampel oben).
+  -- monitor selbst ist der Name/Handle des Hauptmonitors, der ausgeschlossen
+  -- werden muss — ctx.monitor_name ist der konfigurierte Name des
+  -- Hauptmonitors, falls verfuegbar; sonst best-effort ohne Namensfilter
+  -- (find_ampel_monitor schliesst dann nur per "not main_monitor_name" nichts
+  -- aus, was in der Praxis selten vorkommt da der Hauptmonitor i.d.R. einen
+  -- konfigurierten Namen hat).
+  pcall(function()
+    local ok_status, _text, status_key = pcall(rt_status, model)
+    if ok_status and status_key then
+      safe_render_ampel(ctx.config and ctx.config.monitor_name, status_key)
+    end
+  end)
+
   return snapshot
 end
 
