@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-> Letzte Aktualisierung: **beta-v261** (2026-07-01)
+> Letzte Aktualisierung: **beta-v262** (2026-07-01)
 > Branch: `beta` — Repo: `ItIsYe/ExtreamReactor-Controller-V3`
 > Dieses Dokument fasst den aktuellen Stand zusammen und dient als Einstiegspunkt für neue Chat-Sessions.
 
@@ -8,8 +8,8 @@
 
 ## Aktueller Stand
 
-- **Manifest-Version:** v261
-- **Dateien:** 145 manifestierte Dateien
+- **Manifest-Version:** v262
+- **Dateien:** 139 manifestierte Dateien (145 → 139 nach Repo-Hygiene-Cleanup, siehe unten)
 - **Working Tree:** letzte bekannte Änderungen committed, `manifest.lua`/`release.lua` konsistent (`size_bytes` vollständig gegen echte Repo-Größen verifiziert)
 - **ATM10 / MC 1.21.1 / Extreme Reactors 2 / Mekanism / CC:Tweaked**
 - Keine bekannten offenen Blocker. Vollständige, chronologische Fix-Historie in `RUNTIME_STATUS_2026-06-03.md` (Repo-Root).
@@ -41,6 +41,13 @@ Kanal-Mismatch: Sender (`core/remote_log.lua`) nutzte `6502`, `shared/constants.
 - "Overspeed brake pending"-Log-Spam auf 1×/5s pro Turbine begrenzt (flutete vorher den 1000-Zeilen-Log-Ringpuffer bei anhaltendem Overspeed innerhalb weniger Sekunden).
 - Doppelte Turbinen-Zeile im RT-Monitor während Capacity-Learning behoben.
 - `sequencer.enqueue()` (Master) lehnt jetzt Nicht-String/Number-`node_id` ab, statt sie über `normalize_node_id()` in einen kaputten, aber gültigen String wie `"table:_0x..."` zu verwandeln.
+
+### Repo-Hygiene (v261 → v262, 2026-07-01)
+- 6 lose `installer_*.lua`-Dateien im Root gelöscht (~55KB, seit dem monolithischen Installer-Umbau unreferenziert, wurden auf jedem Node unnötig mitinstalliert).
+- Verwaistes Duplikat-Verzeichnis `xreactor/xreactor/nodes/rt/` gelöscht (seit ≥v134 bekannt, nie aufgeräumt).
+- 3 veraltete v136-Handoff-Notizen und 9 Tests für den ersetzten Stage-Installer-Mechanismus gelöscht.
+- `tools/offline_validate.lua` (läuft bei jedem Push in der CI) hatte einen `required`-Dateien-Check, der die 6 gelöschten Dateien weiterhin voraussetzte — wäre sonst ab dem nächsten Push dauerhaft rot gewesen. Gefunden erst in einer zweiten, gründlicheren Nachprüfungsrunde.
+- `docs/PROJECT_DOCUMENTATION.md` war eine parallel gepflegte, unabhängige Kopie der README.md-Architekturdoku und dabei zeitweise vom echten Code abgewichen (dokumentierte die `power_target`-Prioritätsreihenfolge invertiert). Auf einen schlanken Verweis reduziert, Inhalte nach README.md konsolidiert.
 
 ---
 
@@ -95,8 +102,8 @@ xreactor/
     remote_log.lua          Kanal jetzt 6503
   services/
   installer                 monolithisch, PRESERVE-Liste in beiden Codepfaden identisch
-  manifest.lua               v261, 145 Dateien
-  release.lua                beta-v261
+  manifest.lua               v262, 139 Dateien
+  release.lua                beta-v262
 ```
 
 ---
