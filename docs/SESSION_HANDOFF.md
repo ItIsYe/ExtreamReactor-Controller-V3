@@ -1,147 +1,109 @@
 # Session Handoff — XReactor Controller V3
 
-> Letzte Aktualisierung: **beta-v134**  
-> Branch: `beta` — Repo: `ItIsYe/ExtreamReactor-Controller-V3`  
+> Letzte Aktualisierung: **beta-v261** (2026-07-01)
+> Branch: `beta` — Repo: `ItIsYe/ExtreamReactor-Controller-V3`
 > Dieses Dokument fasst den aktuellen Stand zusammen und dient als Einstiegspunkt für neue Chat-Sessions.
 
 ---
 
 ## Aktueller Stand
 
-- **Manifest-Version:** v134
-- **Dateien:** 131 Lua-Dateien
-- **Working Tree:** letzte bekannte Änderungen committed
-- **ATM10 / MC 1.21.1 / Extreme Reactors 2 / CC:Tweaked**
-- **Wichtig:** User hat weiterhin keine dauerhafte Ingame-Installation/Freigabe für riskante Tests gegeben. Repo-/Log-/Diagnosearbeit ist okay; Ingame-Aktionen nur nach expliziter Freigabe.
+- **Manifest-Version:** v261
+- **Dateien:** 145 manifestierte Dateien
+- **Working Tree:** letzte bekannte Änderungen committed, `manifest.lua`/`release.lua` konsistent (`size_bytes` vollständig gegen echte Repo-Größen verifiziert)
+- **ATM10 / MC 1.21.1 / Extreme Reactors 2 / Mekanism / CC:Tweaked**
+- Keine bekannten offenen Blocker. Vollständige, chronologische Fix-Historie in `RUNTIME_STATUS_2026-06-03.md` (Repo-Root).
 
 ---
 
-## Letzte Änderung: RT Discovery Diagnostics (2026-06-23)
+## Was in dieser Entwicklungsphase (2026-06-30 bis 2026-07-01) passiert ist
 
-Aus hochgeladenen Logs (`rt/node-52.log`) ergab sich:
+### Installer/Auto-Updater-Härtung
+- `role.lua`-Erhalt bei Reinstall vereinheitlicht auf beide Installer-Codepfade (manueller Install UND Auto-Update-Reinstall) — vorher ging die Rollenzuordnung bei jedem Auto-Update verloren, weil nur der seltener durchlaufene manuelle Pfad geschützt war.
+- `resolve_sha()` (Extra-Call gegen `api.github.com`) aus dem Auto-Update-Check-Pfad entfernt — verursachte Hänger auf event-intensiven Nodes wie RT.
+- `shell.run()` → `dofile()` an mehreren Stellen (`start.lua`, `auto_update.lua`) — `shell` ist in `parallel`-Coroutinen nicht verfügbar.
 
-- Keine `ERROR`/`WARN`/Tracebacks.
-- Sehr starker DEBUG-Spam durch zu häufigen Control-Tick.
-- Discovery meldete dauerhaft: `visible reactors=0 turbines=0 | bound reactors=0 turbines=0`.
+### Setpoint-Fluss Master → RT (war zeitweise komplett kaputt)
+- Feld-Reihenfolge-Bug in `message_handlers.populate_rt_status()`: `node.capacity_max`/`capacity_ready` wurden aus dem **vorherigen** STATUS-Zyklus abgeleitet statt dem gerade eingetroffenen Payload.
+- `runtime_ops_profile.estimate_base_power()`: bevorzugte den aktuell gemessenen (ggf. gedrosselten) Output statt der gelernten Maximalkapazität — `power_target` fror beim PEAK-Profilwechsel auf einem alten, niedrigen Wert ein. **Wichtig für zukünftige Sessions:** die Priorität ist jetzt `learned_capacity_total` zuerst, `measured_total` nur als Fallback — falls das jemals wieder umgekehrt erscheint, ist das ein Regressions-Bug, kein beabsichtigtes Verhalten.
+- `assigned_power`/`assigned_percent` wurden in `rt_sync.lua` korrekt berechnet, aber nie auf das persistente Node-Objekt geschrieben (nur lokal, verworfen) — UI zeigte deshalb `Soll 0.0`.
 
-Wichtige Diagnose: Leere `reactors = {}` / `turbines = {}` sind **kein Fehler**, sondern aktivieren Auto-Discovery. Das Problem ist erst dann klar, wenn `visible=0`: Dann erkennt die RT-Node gar keine unterstützten Reactor/Turbine-Peripherals.
+### LOG-Collector empfing nichts
+Kanal-Mismatch: Sender (`core/remote_log.lua`) nutzte `6502`, `shared/constants.lua` definiert den LOG-Kanal als `6503`. Beide jetzt auf `6503`.
 
-### Gepatchte Dateien
+### UI-Redesign (4 Schritte, auf expliziten Nutzerwunsch nach wiederholten Badge-Überlappungen/fehlenden Werten)
+1. Neues zentrales `master/ui/layout.lua` — `layout.badge_row()` kennt die Monitorbreite vorher, degradiert gestuft (volle Labels → Kurzformen → niedrigste Priorität entfernen) statt live zu überlappen.
+2. Overview-Seite (`master/ui/overview.lua`) um RT-Fleet-Kurzzusammenfassung erweitert.
+3. Model-Konsistenz zwischen `ui_controller.build_models()` und den View-Erwartungen verifiziert.
+4. Neuer optionaler 1×3-Ampel-Statusmonitor auf RT-Nodes (`nodes/rt/monitor_ui.lua`), automatisch erkannt, reine Statusfarbe. **Wichtige Lehre aus einem gescheiterten ersten Versuch:** ein früher Ampel-Patch hatte keine ausreichende Fehlerisolierung und legte beim Fehlschlagen die komplette RT-Turbinen-Anzeige lahm. Der finale, funktionierende Stand hat `pcall`-Schutz auf jeder Ebene und schließt den Hauptmonitor per tatsächlich aufgelöstem Namen aus (`M.main_monitor_name`, von `M.init()` gesetzt) — nicht per erfundenem Config-Feld.
 
-| Datei | Änderung |
-|-------|----------|
-| `xreactor/nodes/rt/discovery_runtime.lua` | Wenn 0 Reactor/Turbine sichtbar sind, wird einmal pro geänderter Peripheral-Signatur eine Diagnose geloggt: Anzahl `peripheral.getNames()`, Config-Pfad, sichtbare Peripheral-Namen, Typen und Methodensamples. Keine Änderung an Binding-/Steuerlogik. |
-| `xreactor/nodes/rt/binding.lua` | Fehlermeldungen zeigen jetzt den echten RT-Config-Pfad `/xreactor/config/rt.lua` statt des alten/irreführenden Pfads `/xreactor/nodes/rt/config.lua`. |
-
-### Worauf die nächste KI achten soll
-
-Nach dem nächsten Log-Upload bitte nach diesen neuen Zeilen suchen:
-
-```text
-RT discovery found zero reactor/turbine peripherals; peripheral_count=...
-RT discovery peripheral name=... type=... methods=...
-```
-
-Interpretation:
-
-- `peripheral_count=0`: Der RT-Computer sieht gar keine Peripherals. Dann liegt es an Verkabelung/Wired-Modem/Computer-Position.
-- `peripheral_count>0`, aber weiter `visible=0`: Peripherals sind sichtbar, aber `binding.detect_kind()` erkennt deren Typ/Methodensignatur nicht. Dann `binding.lua` um die echten Typen/Methoden erweitern.
-- `visible>0`, aber `bound=0`: Dann ist Auto-Discovery/Explicit-Config/Binding-Policy zu prüfen.
+### Weitere Fixes
+- "Overspeed brake pending"-Log-Spam auf 1×/5s pro Turbine begrenzt (flutete vorher den 1000-Zeilen-Log-Ringpuffer bei anhaltendem Overspeed innerhalb weniger Sekunden).
+- Doppelte Turbinen-Zeile im RT-Monitor während Capacity-Learning behoben.
+- `sequencer.enqueue()` (Master) lehnt jetzt Nicht-String/Number-`node_id` ab, statt sie über `normalize_node_id()` in einen kaputten, aber gültigen String wie `"table:_0x..."` zu verwandeln.
 
 ---
 
-## Was in dieser Entwicklungsphase passiert ist
+## Bekannte, weiterhin offene, nicht-kritische Punkte
 
-### RT-Node Komplett-Rewrite (SCADA-Architektur)
-Die `nodes/rt/main.lua` wurde von 2350 Zeilen auf ~750 Zeilen reduziert. Fachlogik lebt jetzt in separaten Modulen mit expliziten `ctx`-Parametern statt versteckter Closures:
-
-| Modul | Verantwortlichkeit |
-|-------|-------------------|
-| `reactor_control.lua` | Rod-Steuerung, Steam-Margin-Regler |
-| `turbine_control.lua` | Flow, Induktor, Overspeed, Rotation |
-| `capacity_learning.lua` | Eigenständiges Learning-Modul |
-| `status_snapshot.lua` | Status-Payload für Master |
-
-### Setpoint-Schema (vereinfacht)
-Master sendet jetzt nur noch 4 Felder statt 12:
-- `power_target_percent` — der einzige steuerungsrelevante Wert
-- `assignment_state` — active/shed/shutdown/standby
-- `shutdown_stage` — REQUEST_OFF / RAMPDOWN
-- `desired_node_state` — RUNNING / LIMITED / OFF
-
-Entfernt: `target_rpm`, `steam_target`, `power_target`, `enable_reactors`, `enable_turbines`, `assignment_reason`, `assignment_source`, `assignment_rank`, `controllable`
-
-### 3-Zustands-Teillast-Modell
-Turbinen kennen drei Zustände: Vollast (900 RPM), Puffer (fraction × 900 RPM), AUS (0). Bei 50 % mit 25 Turbinen: 12 × 900 RPM + 1 × 450 RPM + 12 × 0 RPM = exakt 50 %.
-
-### Proportionale Multi-Node-Zuweisung
-Statt Greedy (erste Node voll, zweite bekommt Rest) verteilt der Master gleichmäßig: alle aktiven Nodes bekommen denselben Prozentsatz. Kein capacity-Fallback mehr.
-
-### Remote-Update Fix (Deferred)
-`REMOTE_UPDATE` Command setzt jetzt nur ein Flag und gibt sofort zurück. Der eigentliche `http.get()` läuft im Hauptthread nach dem aktuellen Event-Zyklus. Das behebt den Blocking-Bug: CC:Tweaked kann `http_success` Events nicht empfangen wenn bereits in einem `modem_message`-Handler.
-
-### Startsequenz
-LOG → 0s, MASTER → 2s, NODES → 8s. War vorher flach (alle 5s Delay).
+- **Verwaistes Duplikat-Verzeichnis `xreactor/xreactor/nodes/`** — seit mindestens v134 bekannt (siehe historischer Handoff-Text), nie aufgeräumt, ist reiner Repo-Müll, nicht im Installer/Manifest referenziert. Auf Nutzerwunsch bewusst weiterhin nicht angefasst — beim nächsten größeren Aufräum-Task berücksichtigen.
+- `enable_reactors`/`enable_turbines` in `ctx.targets`: werden empfangen und gespeichert, aber nicht mehr ausgewertet (State-Machine übernimmt das seit dem SCADA-Rewrite) — kein Bug, bewusst so.
+- Keine automatisierten Tests mehr aktiv im Sinne von pytest-Lua-Simulation (historisch entfernt, da CC:Tweaked-Code nicht vollständig außerhalb der echten Umgebung simulierbar ist). Verifikation läuft über echte Installer-Läufe + Log-Analyse.
 
 ---
 
-## Bekannte offene Punkte
-
-- `enable_reactors` / `enable_turbines` in `ctx.targets`: werden empfangen und gespeichert, aber nicht ausgewertet. State-Machine übernimmt das. Kein Bug, bewusst.
-- Keine automatischen Tests mehr (pytest entfernt — Lua in Python nicht vollständig simulierbar für CC:Tweaked-Code).
-- Aus Logs: Control-Tick spammt bei leerer RT-Node massiv DEBUG (`Reactor control tick`, `TurbineTick evaluated=0...`). Nächster kleiner Fix sollte ein Intervall-Guard für den Control-Service in `nodes/rt/main.lua` sein.
-- Prüfen: `state_handlers.lua` nutzt `ctx.allowed_transitions`; sicherstellen, dass RT-State-Context entweder eine Tabelle setzt oder `set_state()` nil-safe ist.
-- Prüfen/aufräumen: Falls noch ein doppelter Pfad `xreactor/xreactor/...` im Repo existiert, ist das vermutlich versehentlich und sollte nicht in Install-/Review-Pfade einfließen.
-
----
-
-## Wichtige Konfigurationswerte
+## Wichtige Konfigurationswerte (aktueller Stand)
 
 | Wert | Default | Beschreibung |
 |------|---------|-------------|
 | `TARGET_RPM` | 900 | Ziel-RPM für alle Turbinen |
 | `RECEIVE_TIMEOUT` | 0.5s | Event-Loop Timeout |
-| `INITIAL_ROD_LEVEL` | 100 % | Stäbe beim Boot vollständig eingefahren |
-| Capacity-Learning Min-Fraction | 80 % | Mindestanteil Turbinen am Ziel |
+| Capacity-Learning Min-Fraction | 80 % | Mindestanteil Turbinen gleichzeitig am Ziel-RPM für eine gültige Messung — bewusst so, kein Bug (siehe Diskussion in RUNTIME_STATUS) |
 | Modem Control | 6500 | Master → Nodes |
 | Modem Status | 6501 | Nodes → Master |
-| Modem Log | 6502 | alle → LOG |
-| RT Config | `/xreactor/config/rt.lua` | echte Laufzeit-Config der RT-Node |
+| Modem Log | **6503** | alle → LOG (war lange fälschlich als 6502 im Sendercode) |
+| Ampel-Monitor Größe | 1×1 breit × 3 hoch | exakte Größe für Auto-Erkennung |
+| Auto-Update-Intervall | 120s (erster Check nach 30s) | pro Node, läuft in `parallel.waitForAny` neben normaler Node-Logik |
 
 ---
 
-## Repo-Struktur (relevante Pfade)
+## Repo-Struktur (relevante Pfade, aktualisiert)
 
 ```
 xreactor/
   nodes/rt/
-    main.lua               Boot + Service-Wiring (~750Z)
-    reactor_control.lua    Rod-Steuerung (~540Z)
-    turbine_control.lua    Turbinen-Regelung (~930Z)
-    capacity_learning.lua  Eigenständiges Learning (~110Z)
-    status_snapshot.lua    Status-Payload (~160Z)
-    state_handlers.lua     State-Machine (~270Z)
-    command_handler.lua    SET_SETPOINTS, REMOTE_UPDATE (~285Z)
-    module_lifecycle.lua   SCRAM, Safe-Controls (~625Z)
-    monitor_ui.lua         Lokales Display (~610Z)
-    discovery_runtime.lua  Peripheral-Erkennung + neue zero-visible Diagnose
-    binding.lua            Binding-Policy + Geräte-Erkennung
+    main.lua               Boot + Service-Wiring
+    reactor_control.lua    Rod-Steuerung
+    turbine_control.lua    Turbinen-Regelung (inkl. rate-limitiertem Overspeed-Log)
+    capacity_learning.lua  Eigenständiges Learning
+    status_snapshot.lua    Status-Payload
+    state_handlers.lua     State-Machine
+    monitor_ui.lua         Lokales Display + Ampel-Statusmonitor (neu)
+    discovery_runtime.lua  Peripheral-Erkennung
+    binding.lua            Binding-Policy
   master/
-    rt_sync.lua            Proportionale Zuweisung + Setpoint-Bau
-    runtime_ops_profile.lua  Leistungsschätzung (kein Fallback)
+    rt_sync.lua             Proportionale Zuweisung, persistiert jetzt assigned_power/percent
+    runtime_ops_profile.lua Leistungsschätzung, learned_capacity_total priorisiert
+    message_handlers.lua   node.rt wird gemerged statt ersetzt
+    ui_controller.lua      build_models(), inkl. alerts/alarms/rt_fleet_summary Models
+    ui/
+      layout.lua            NEU — zentrales Badge-Layout-System
+      overview.lua          erweitert um RT-Fleet-Summary
+      multiview.lua         nutzt layout.badge_row()
+      rt_dashboard.lua       defensive safe_text() gegen Tabellenwerte in Anzeigefeldern
   core/
-    remote_update.lua      Deferred Remote-Installer
-  adapters/
-    reactor.lua            ER2 Reaktor-Adapter (4-stufiger Rod-Fallback)
-    turbine.lua            ER2 Turbinen-Adapter
-  manifest.lua             v134, 131 Dateien
-  release.lua              beta-v134
+    remote_log.lua          Kanal jetzt 6503
+  services/
+  installer                 monolithisch, PRESERVE-Liste in beiden Codepfaden identisch
+  manifest.lua               v261, 145 Dateien
+  release.lua                beta-v261
 ```
 
 ---
 
-## Zugang / Arbeitsweise
+## Zugang / Arbeitsweise (unverändert gültig)
 
 - Keine Tokens in Chats speichern oder anfordern.
 - Bei Connector-Schreibzugriff langsam und atomar arbeiten: Datei lesen, eine kleine Änderung, Commit prüfen.
-- Möglichst nicht direkt große Umbauten auf `beta`; User kann aber explizit direkte kleine `beta`-Patches erlauben.
+- Jede Code-Änderung braucht einen Versions-Bump in `manifest.lua`+`release.lua`, sonst zieht kein Node das Update.
+- Jede Größenänderung einer manifestierten Datei braucht ein Nachziehen von `size_bytes` im selben Zug — sonst bricht die Installation mit `size mismatch` ab. Bei mehreren aufeinanderfolgenden Patches an derselben Datei diesen Schritt nicht vergessen (war mehrfach Ursache für vermeidbare Fehlschläge in dieser Session).
