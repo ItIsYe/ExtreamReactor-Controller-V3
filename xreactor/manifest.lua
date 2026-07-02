@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 263,
-  manifest_id = "manifest-v263",
+  manifest_version = 264,
+  manifest_id = "manifest-v264",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -58,7 +58,7 @@ return {
 
   roles = {
     master = {
-    { path = "core/alert_rules.lua", size_bytes = 13600, hash = "3ef37a5e", required_for={"MASTER"} },
+    { path = "core/alert_rules.lua", size_bytes = 16128, hash = "3ef37a5e", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 6221, hash = "2e0fba18", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 7307, hash = "eba62959", required_for={"MASTER"} },
