@@ -511,7 +511,42 @@ function M.new(opts)
     end)
     local updates_model = { nodes = update_nodes }
 
-    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model }
+    -- AUX-Seite "System Map" (Feature, 2026-07-02): Zustand pro Rolle
+    -- aggregiert (nicht pro einzelnem Node) fuer die grafische
+    -- Anlagenuebersicht. Prioritaet je Rolle: der schlechteste Einzelzustand
+    -- gewinnt (analog zur MASTER-Gesamtampel-Logik) — z.B. wenn 1 von 3
+    -- RT-Nodes im SAFE-Zustand ist, zeigt der gesamte RT-Block Rot.
+    local function severity_rank(status)
+      local ranks = { EMERGENCY = 5, red = 5, WARNING = 4, orange = 4, LIMITED = 3, yellow = 3, OK = 1, green = 1, OFFLINE = 0, muted = 0 }
+      return ranks[tostring(status or "")] or 2
+    end
+    local role_status = {}
+    local role_counts = {}
+    for id, node in pairs(c.nodes or {}) do
+      local role = tostring(node.role or "?")
+      role_counts[role] = (role_counts[role] or 0) + 1
+      local this_status = "OK"
+      if node.offline or node.stale then
+        this_status = "OFFLINE"
+      elseif node.maintenance_mode == true then
+        this_status = "LIMITED"
+      elseif role == c.constants.roles.RT_NODE then
+        local node_state = tostring(node.state or "")
+        if node_state == "SAFE" or node_state == "EMERGENCY" then this_status = "EMERGENCY"
+        elseif node.capacity_ready ~= true then this_status = "LIMITED" end
+      end
+      local prev = role_status[role]
+      if not prev or severity_rank(this_status) > severity_rank(prev) then
+        role_status[role] = this_status
+      end
+    end
+    local system_map_model = {
+      role_status = role_status,
+      role_counts = role_counts,
+      alert_counts = counts,
+    }
+
+    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model }
   end
 
   -- Fix: build_models() lief völlig ungeschützt. Ein Fehler dort (z.B. weil
