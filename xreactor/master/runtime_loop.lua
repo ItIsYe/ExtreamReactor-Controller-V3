@@ -38,6 +38,7 @@ local function run_master()
   local maintenance_ui      = require("master.ui.maintenance")
   local updates_ui          = require("master.ui.updates")
   local system_map_ui       = require("master.ui.system_map")
+  local config_editor_ui    = require("master.ui.config_editor")
   local multiview_ui        = require("master.ui.multiview")
   local ui_controller_lib   = require("master.ui_controller")
   local ui_diagnostics      = require("master.ui_diagnostics")
@@ -92,6 +93,7 @@ local function run_master()
     overview_ui = overview_ui, energy_ui = energy_ui, rt_ui = rt_ui,
     resources_ui = resources_ui, alerts_ui = alerts_ui, alarms_ui = alarms_ui,
     maintenance_ui = maintenance_ui, updates_ui = updates_ui, system_map_ui = system_map_ui,
+    config_editor_ui = config_editor_ui,
     comms_service = comms_service, service_manager = service_manager,
     rt_sync_coalescer_lib = rt_sync_coalescer_lib, alert_service_lib = alert_service_lib,
     telemetry_service = telemetry_service, control_service = control_service,
@@ -122,6 +124,34 @@ local function run_master()
     get_critical_blink_until = function() return runtime.state.critical_blink_until end,
     get_rt_global_off_hold   = function() return runtime.state.rt_global_off_hold end,
     set_rt_global_off_hold   = function(v) profile_ops.set_rt_global_hold(runtime, v) end,
+    -- Feature (2026-07-02): Config-Editor am Monitor. Sendet SET_RESERVE/
+    -- SET_TARGET Commands an den ersten gefundenen FUEL/WATER-Node — bei
+    -- mehreren Nodes derselben Rolle betrifft das nur den ersten (Grenze
+    -- fuer diese erste Version, ausreichend fuer die typische 1-Node-pro-
+    -- Rolle-Konfiguration). runtime.state.auto_update_enabled ist rein
+    -- lokal (kein Command noetig, jeder Node liest sein eigenes
+    -- config/remote_update.lua — echtes Verteilen dieser Einstellung an
+    -- alle Nodes ist eine spaetere Erweiterung).
+    set_fuel_reserve = function(amount)
+      for id, node in pairs(runtime.state.nodes or {}) do
+        if node.role == constants.roles.FUEL_NODE then
+          runtime.refs.comms:send_command(id, { target = constants.command_targets.SET_RESERVE, value = amount })
+          return true, id
+        end
+      end
+      return false, "kein FUEL-Node gefunden"
+    end,
+    set_water_target = function(amount)
+      for id, node in pairs(runtime.state.nodes or {}) do
+        if node.role == constants.roles.WATER_NODE then
+          runtime.refs.comms:send_command(id, { target = constants.command_targets.SET_TARGET, value = amount })
+          return true, id
+        end
+      end
+      return false, "kein WATER-Node gefunden"
+    end,
+    get_auto_update_enabled = function() return runtime.state.auto_update_enabled ~= false end,
+    set_auto_update_enabled = function(v) runtime.state.auto_update_enabled = v end,
     last_draw = runtime.state.last_draw, refs = runtime.refs,
     ui_snapshot = function(event)
       return {
