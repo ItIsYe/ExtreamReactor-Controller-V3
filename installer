@@ -568,11 +568,19 @@ local function do_check()
     log("NEU: v" .. local_v .. " -> v" .. remote_v .. " — Update startet")
     -- update_available Sound-Event (Feature 2026-07-02): vollstaendig
     -- fehlerisoliert, laeuft auf JEDEM Node der auto_update.lua nutzt.
+    -- Fix: der Installer laeuft als eigenstaendiges Skript OHNE den
+    -- bootstrap.lua-Modulnamensraum, den die eigentlichen Node-Programme
+    -- fuer require("optional.xxx") nutzen — require() haette hier IMMER
+    -- fehlgeschlagen (pcall haette den Fehler zwar abgefangen, aber der
+    -- Sound waere nie tatsaechlich gespielt worden). dofile() mit
+    -- absolutem Pfad ist das im Installer durchgaengig genutzte Muster.
     pcall(function()
-      local ok_spk_mod, spk_mod = pcall(require, "optional.speaker_alarm")
-      if ok_spk_mod then
-        local speaker = spk_mod.new()
-        pcall(speaker.play, "update_available")
+      if fs.exists("/xreactor/optional/speaker_alarm.lua") then
+        local ok_spk_mod, spk_mod = pcall(dofile, "/xreactor/optional/speaker_alarm.lua")
+        if ok_spk_mod and type(spk_mod) == "table" and type(spk_mod.new) == "function" then
+          local speaker = spk_mod.new()
+          pcall(speaker.play, "update_available")
+        end
       end
     end)
     local success = false
