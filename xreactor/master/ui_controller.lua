@@ -492,7 +492,26 @@ function M.new(opts)
     end)
     local maintenance_model = { nodes = maintenance_nodes }
 
-    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model }
+    -- AUX-Seite "Updates" (Feature, 2026-07-02): Node-Version-Übersicht.
+    -- node.manifest_version wird von message_handlers.lua aus dem
+    -- HEARTBEAT-Payload gespeichert (siehe dort, "Feature 2026-07-02").
+    local update_nodes = {}
+    for id, node in pairs(c.nodes or {}) do
+      update_nodes[#update_nodes + 1] = {
+        id = id,
+        role = tostring(node.role or "?"),
+        manifest_version = node.manifest_version,
+        offline = node.offline == true,
+        stale = node.stale == true,
+      }
+    end
+    table.sort(update_nodes, function(a, b)
+      if a.role ~= b.role then return a.role < b.role end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local updates_model = { nodes = update_nodes }
+
+    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model }
   end
 
   -- Fix: build_models() lief völlig ungeschützt. Ein Fehler dort (z.B. weil
