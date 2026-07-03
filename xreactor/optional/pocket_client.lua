@@ -55,7 +55,7 @@ local function draw(status_line, summary_text, err_text)
     print(err_text)
   end
   print("")
-  print("[Q] Beenden")
+  print("[Q] Beenden  [C] Befehl senden")
 end
 
 local function send_query(modem)
@@ -69,7 +69,7 @@ local function send_query(modem)
   pcall(modem.transmit, CHANNEL, CHANNEL, message)
 end
 
-local function wait_for_response(modem, timeout_s)
+local function wait_for_response(modem, timeout_s, expected_type)
   local deadline = os.clock() + timeout_s
   while os.clock() < deadline do
     local timer_id = os.startTimer(math.max(0.1, deadline - os.clock()))
@@ -78,7 +78,7 @@ local function wait_for_response(modem, timeout_s)
       -- os.pullEvent("modem_message") liefert:
       -- (event, side, channel, replyChannel, message, distance)
       local side, channel, reply_channel, message = p1, p2, p3, p4
-      if type(message) == "table" and message.type == "POCKET_STATUS" then
+      if type(message) == "table" and message.type == expected_type then
         os.cancelTimer(timer_id)
         return message
       end
@@ -87,6 +87,71 @@ local function wait_for_response(modem, timeout_s)
     end
   end
   return nil
+end
+
+-- Feature (2026-07-02): Fernsteuerungs-Menü mit Token-Sicherheitsabfrage.
+-- Sendet NIEMALS automatisch etwas — jeder Befehl braucht eine explizite
+-- Menuewahl UND das aktuelle, am Master-Overview abgelesene Token. Ohne
+-- korrektes Token weist der Master den Befehl zurueck (siehe
+-- optional/pocket_query_handler.lua auf der Master-Seite).
+local function prompt_command_menu(modem)
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("Befehl waehlen:")
+  print("  1) RT-Hold umschalten")
+  print("  2) Profil setzen")
+  print("  3) Wartungsmodus fuer Node umschalten")
+  print("  0) Abbrechen")
+  io.write("> ")
+  local choice = read and read() or ""
+
+  local action, params = nil, {}
+  if choice == "1" then
+    action = "rt_hold_toggle"
+  elseif choice == "2" then
+    io.write("Profil (BASELOAD/PEAK/IDLE): ")
+    params.profile = read and read() or ""
+    action = "profile_set"
+  elseif choice == "3" then
+    io.write("Node-ID: ")
+    params.node_id = read and read() or ""
+    action = "maintenance_toggle"
+  else
+    return
+  end
+
+  io.write("Token (am Master-Overview ablesen): ")
+  local token = read and read() or ""
+  if tostring(token) == "" then
+    print("Abgebrochen — kein Token eingegeben.")
+    os.sleep(1.5)
+    return
+  end
+
+  local message = {
+    type = "POCKET_COMMAND",
+    sender_id = MY_ID,
+    src = MY_ID,
+    ts = os.epoch and os.epoch("utc") or 0,
+    payload = { action = action, params = params, token = token }
+  }
+  pcall(modem.transmit, CHANNEL, CHANNEL, message)
+
+  print("")
+  print("Warte auf Bestaetigung...")
+  local response = wait_for_response(modem, RESPONSE_TIMEOUT_S, "POCKET_COMMAND_RESULT")
+  if response and response.payload then
+    if response.payload.ok then
+      print("OK: " .. tostring(response.payload.reason or "Befehl ausgefuehrt"))
+    else
+      print("ABGELEHNT: " .. tostring(response.payload.reason or "Unbekannter Fehler"))
+    end
+  else
+    print("Keine Antwort vom Master erhalten.")
+  end
+  print("")
+  print("Weiter mit beliebiger Taste...")
+  os.pullEvent("key")
 end
 
 local function main()
@@ -101,14 +166,15 @@ local function main()
 
   while true do
     send_query(modem)
-    local response = wait_for_response(modem, RESPONSE_TIMEOUT_S)
+    local response = wait_for_response(modem, RESPONSE_TIMEOUT_S, "POCKET_STATUS")
     if response and response.payload and response.payload.summary then
       draw("OK - verbunden", response.payload.summary, nil)
     else
       draw("Keine Antwort vom Master", nil, "Master offline oder ausser Reichweite?")
     end
 
-    -- Auf naechste Abfrage warten, dabei "Q" zum Beenden erlauben.
+    -- Auf naechste Abfrage warten, dabei "Q" zum Beenden und "C" fuer das
+    -- Befehlsmenue erlauben.
     local wait_deadline = os.clock() + QUERY_INTERVAL_S
     local should_quit = false
     while os.clock() < wait_deadline do
@@ -117,6 +183,10 @@ local function main()
       if event == "key" and p1 == keys.q then
         should_quit = true
         os.cancelTimer(timer_id)
+        break
+      elseif event == "key" and p1 == keys.c then
+        os.cancelTimer(timer_id)
+        prompt_command_menu(modem)
         break
       elseif event == "timer" and p1 == timer_id then
         break
