@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 271,
-  manifest_id = "manifest-v271",
+  manifest_version = 272,
+  manifest_id = "manifest-v272",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -87,6 +87,7 @@ return {
     { path = "optional/ampel.lua", size_bytes = 3437, hash = "new", optional=true, feature="ampel" },
     { path = "optional/speaker_alarm.lua", size_bytes = 2861, hash = "new", optional=true, feature="speaker_alarm" },
     { path = "optional/pocket_query_handler.lua", size_bytes = 3528, hash = "new", optional=true, feature="pocket_query", required_for={"MASTER"} },
+    { path = "optional/startup_report.lua", size_bytes = 3306, hash = "new", optional=true, feature="startup_report", required_for={"RT"} },
     { path = "master/ui_controller.lua", size_bytes = 38834, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
@@ -109,7 +110,7 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 11682, hash = "6198a6d0", required_for={"RT"} },
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 6519, hash = "2e07b58d", required_for={"RT"} },
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
-    { path = "nodes/rt/main.lua", size_bytes = 33475, hash = "ac098c39", required_for={"RT"} },
+    { path = "nodes/rt/main.lua", size_bytes = 34692, hash = "ac098c39", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 33475, hash = "30e85bdb", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
@@ -133,7 +134,7 @@ return {
     { path = "nodes/energy/status_payload.lua", size_bytes = 9140, hash = "767f2ce2", required_for={"ENERGY"} },
     { path = "nodes/energy/storage_snapshot_runtime.lua", size_bytes = 3479, hash = "52992366", required_for={"ENERGY"} },
     { path = "nodes/energy/ui_model.lua", size_bytes = 6005, hash = "faa185db", required_for={"ENERGY"} },
-    { path = "nodes/energy/ui_pages.lua", size_bytes = 9536, hash = "056a840d", required_for={"ENERGY"} },
+    { path = "nodes/energy/ui_pages.lua", size_bytes = 10799, hash = "056a840d", required_for={"ENERGY"} },
     },
     water = {
     { path = "nodes/water/config.lua", size_bytes = 4789, hash = "961b224e", required_for={"WATER"} },
