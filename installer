@@ -662,7 +662,7 @@ ui_mod.header("Installiere " .. role.label)
 -- zweite Pfad role.lua weiterhin ungeschuetzt mitloeschte. Jetzt einheitlich:
 -- role.lua ist Teil der regulaeren PRESERVE-Liste wie node_id.txt und
 -- capacity_cache.lua, in BEIDEN Codepfaden.
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua" }
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua", "config/ampel_thresholds.lua" }
 local preserved = {}
 for _, rel in ipairs(PRESERVE) do
   local src = INSTALL_ROOT .. "/" .. rel
@@ -890,7 +890,7 @@ ui_mod.header("Installiere "..role.label)
 -- Auto-Update-Reinstall-Pfad, der bei jedem automatischen Update durchlaeuft.
 -- Ohne role.lua in dieser Liste ging die Rollenzuordnung bei jedem
 -- Auto-Update verloren, der Node bootete danach ohne konfigurierte Rolle.
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua" }
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua", "config/ampel_thresholds.lua" }
 local preserved = {}
 for _, rel in ipairs(PRESERVE) do
   local src = INSTALL_ROOT.."/"..rel
