@@ -159,6 +159,14 @@ local function render(mon, model)
       hits[#hits + 1] = { type = "peak_threshold_adjust", delta = 5, x1 = pp1, x2 = pp2, y1 = thr_y, y2 = thr_y }
       hits[#hits + 1] = { type = "idle_threshold_adjust", delta = -5, x1 = im1, x2 = im2, y1 = thr_y, y2 = thr_y }
       hits[#hits + 1] = { type = "idle_threshold_adjust", delta = 5, x1 = ip1, x2 = ip2, y1 = thr_y, y2 = thr_y }
+      -- Pocket-Command-Token (Feature, 2026-07-02): rotierendes 6-stelliges
+      -- Token, das am Pocket-Client eingegeben werden muss um
+      -- Fernsteuerungsbefehle (RT-Hold, Profilwechsel, Wartungsmodus)
+      -- auszufuehren. Nur anzeigen wenn box.h Platz fuer eine weitere
+      -- Zeile hat (kompakte Layouts lassen es weg wie die Schwellwerte).
+      if model.pocket_token and box.h >= 10 then
+        ui.text(mon, box.x, thr_y + 1, widgets.fit("Pocket-Token: " .. tostring(model.pocket_token), box.w), colors.get("muted"), colors.get("background"))
+      end
     end
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
