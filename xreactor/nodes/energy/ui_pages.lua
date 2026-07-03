@@ -136,9 +136,33 @@ function M.new(opts)
     local pct = tonumber(total.percent)
     if model and model.degraded then return "WARNING" end
     if not pct then return "muted" end
-    if pct < 15 then return "EMERGENCY" end
-    if pct < 30 then return "WARNING" end
-    if pct > 95 then return "LIMITED" end
+    -- Feature (2026-07-01): Schwellwerte konfigurierbar statt fest 15/30/95
+    -- codiert, analog zu den PEAK/IDLE-Schwellen am Master. Liest aus
+    -- /xreactor/config/ampel_thresholds.lua, falls vorhanden (persistiert
+    -- ueber Reinstalls, da diese Datei Teil der PRESERVE-Liste im
+    -- Installer ist). Ohne diese Datei gelten unveraendert die bisherigen
+    -- Defaults 15/30/95 — kein Verhaltensunterschied ohne manuelle Anpassung.
+    local emergency_below, warning_below, limited_above = 15, 30, 95
+    local cfg_path = "/xreactor/config/ampel_thresholds.lua"
+    if fs and fs.exists and fs.exists(cfg_path) then
+      local ok_read, cfg = pcall(function()
+        local f = fs.open(cfg_path, "r")
+        if not f then return nil end
+        local raw = f.readAll()
+        f.close()
+        local chunk = load(raw, "=ampel_thresholds", "t", {})
+        if not chunk then return nil end
+        return chunk()
+      end)
+      if ok_read and type(cfg) == "table" then
+        emergency_below = tonumber(cfg.emergency_below_pct) or emergency_below
+        warning_below = tonumber(cfg.warning_below_pct) or warning_below
+        limited_above = tonumber(cfg.limited_above_pct) or limited_above
+      end
+    end
+    if pct < emergency_below then return "EMERGENCY" end
+    if pct < warning_below then return "WARNING" end
+    if pct > limited_above then return "LIMITED" end
     return "OK"
   end
 
