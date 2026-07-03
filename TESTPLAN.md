@@ -1,4 +1,4 @@
-# Testplan (aktueller Stand — v262)
+# Testplan (aktueller Stand — v274)
 
 ## Install/Update (aktualisiert: monolithischer Installer, Delete+Reinstall statt Stage/Backup)
 1. **Fresh Install (lokal)**: `wget .../beta/installer` + `installer` starten, Rolle wählen, Abschluss prüfen (Dateianzahl + Reboot im Installer-Log).
