@@ -1,7 +1,7 @@
--- xreactor/manifest.lua -- manifest-v260
+-- xreactor/manifest.lua -- manifest-v286
 return {
-  manifest_version = 285,
-  manifest_id = "manifest-v285",
+  manifest_version = 286,
+  manifest_id = "manifest-v286",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -18,7 +18,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true },
   { path = "installer/auto_update.lua", size_bytes = 6908, hash = "e41f9bfe", always=true },
   { path = "installer/init.lua", size_bytes = 4481, hash = "f9ae3a57", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "a7aa72d3", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
+  { path = "release.lua", size_bytes = 273, hash = "f8362941", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
   { path = "start.lua", size_bytes = 3817, hash = "9524769b", always=true, always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 3098, hash = "0c5fb837", always=true },
@@ -117,7 +117,7 @@ return {
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
     { path = "nodes/rt/main.lua", size_bytes = 35332, hash = "ac098c39", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"} },
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 34186, hash = "30e85bdb", required_for={"RT"} },
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 25697, hash = "159857c2", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"} },
     { path = "nodes/rt/state_handlers.lua", size_bytes = 9257, hash = "bb391437", required_for={"RT"} },
