@@ -1,7 +1,7 @@
--- xreactor/manifest.lua -- manifest-v286
+-- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 286,
-  manifest_id = "manifest-v286",
+  manifest_version = 287,
+  manifest_id = "manifest-v287",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -18,7 +18,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true },
   { path = "installer/auto_update.lua", size_bytes = 6908, hash = "e41f9bfe", always=true },
   { path = "installer/init.lua", size_bytes = 4481, hash = "f9ae3a57", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "f8362941", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
+  { path = "release.lua", size_bytes = 273, hash = "a2ba9819", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
   { path = "start.lua", size_bytes = 3817, hash = "9524769b", always=true, always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 3098, hash = "0c5fb837", always=true },
@@ -86,8 +86,8 @@ return {
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"} },
     { path = "master/ui/layout.lua", size_bytes = 6263, hash = "new", required_for={"MASTER"} },
     { path = "master/ui/maintenance.lua", size_bytes = 3241, hash = "new", required_for={"MASTER"} },
-    { path = "master/ui/updates.lua", size_bytes = 3379, hash = "new", required_for={"MASTER"} },
-    { path = "master/ui/system_map.lua", size_bytes = 3699, hash = "new", required_for={"MASTER"} },
+    { path = "master/ui/updates.lua", size_bytes = 4395, hash = "5f81b7d1", required_for={"MASTER"} },
+    { path = "master/ui/system_map.lua", size_bytes = 5437, hash = "9e8b02ba", required_for={"MASTER"} },
     { path = "master/ui/config_editor.lua", size_bytes = 3385, hash = "new", required_for={"MASTER"} },
     { path = "optional/ampel.lua", size_bytes = 3437, hash = "new", optional=true, feature="ampel" },
     { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "new", optional=true, feature="speaker_alarm" },
@@ -139,7 +139,7 @@ return {
     { path = "nodes/energy/status_payload.lua", size_bytes = 9140, hash = "767f2ce2", required_for={"ENERGY"} },
     { path = "nodes/energy/storage_snapshot_runtime.lua", size_bytes = 3479, hash = "52992366", required_for={"ENERGY"} },
     { path = "nodes/energy/ui_model.lua", size_bytes = 6005, hash = "faa185db", required_for={"ENERGY"} },
-    { path = "nodes/energy/ui_pages.lua", size_bytes = 10799, hash = "056a840d", required_for={"ENERGY"} },
+    { path = "nodes/energy/ui_pages.lua", size_bytes = 12314, hash = "ccc2edb6", required_for={"ENERGY"} },
     },
     water = {
     { path = "nodes/water/config.lua", size_bytes = 4789, hash = "961b224e", required_for={"WATER"} },
