@@ -585,7 +585,9 @@ local function init()
   if ok_report_mod then
     pcall(function()
       local checks = { report_mod.check_wireless_modem() }
-      report_mod.run(checks, { log = function(_, msg) utils.log("REPROC", msg, "INFO") end })
+      local ok_spk, spk_mod = pcall(require, "optional.speaker_alarm")
+      local speaker = ok_spk and spk_mod.new() or nil
+      report_mod.run(checks, { log = function(_, msg) utils.log("REPROC", msg, "INFO") end, speaker = speaker })
     end)
   end
 
