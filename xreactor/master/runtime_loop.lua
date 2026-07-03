@@ -37,6 +37,7 @@ local function run_master()
   local alerts_ui           = require("master.ui.alerts")
   local maintenance_ui      = require("master.ui.maintenance")
   local updates_ui          = require("master.ui.updates")
+  local system_map_ui       = require("master.ui.system_map")
   local multiview_ui        = require("master.ui.multiview")
   local ui_controller_lib   = require("master.ui_controller")
   local ui_diagnostics      = require("master.ui_diagnostics")
@@ -90,7 +91,7 @@ local function run_master()
     monitor_manager = monitor_manager, multiview_ui = multiview_ui,
     overview_ui = overview_ui, energy_ui = energy_ui, rt_ui = rt_ui,
     resources_ui = resources_ui, alerts_ui = alerts_ui, alarms_ui = alarms_ui,
-    maintenance_ui = maintenance_ui, updates_ui = updates_ui,
+    maintenance_ui = maintenance_ui, updates_ui = updates_ui, system_map_ui = system_map_ui,
     comms_service = comms_service, service_manager = service_manager,
     rt_sync_coalescer_lib = rt_sync_coalescer_lib, alert_service_lib = alert_service_lib,
     telemetry_service = telemetry_service, control_service = control_service,
