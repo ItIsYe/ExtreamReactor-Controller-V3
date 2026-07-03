@@ -168,8 +168,52 @@ function alerts:resolve(key)
   end
   self.active_by_key[key] = nil
   self.active_by_id[alert.id] = nil
+  -- Feature 2026-07-02 (Alarm-Quittierung/Lifecycle): den resolvten Alert
+  -- mit Aufloesungszeitstempel in die History pushen. Vorher ging der
+  -- letzte bekannte Zustand beim Entfernen aus active_by_key komplett
+  -- verloren — resolve() selbst pushte nichts. Ohne diesen Eintrag kann
+  -- raise() spaeter nicht erkennen, ob ein neu auftretender Alert mit
+  -- demselben key ein "Wieder aufgetreten"-Fall ist oder ein echtes
+  -- Erstauftreten.
+  local resolved_snapshot = {}
+  for k, v in pairs(alert) do resolved_snapshot[k] = v end
+  resolved_snapshot.resolved_ts = now_ms()
+  resolved_snapshot.alert_key = key
+  self:_push_history(resolved_snapshot)
   self:_mark_dirty()
   return alert
+end
+
+-- lifecycle_state(alert): leitet einen der 5 benannten Zustaende aus den
+-- bestehenden Feldern ab (Feature 2026-07-02, rein additiv — veraendert
+-- keine bestehende Ack-/Resolve-Logik, nur eine zusaetzliche Sicht darauf):
+--   "neu"               — noch nie quittiert, jünger als NEW_WINDOW_MS
+--   "aktiv"              — laeuft, noch nicht quittiert, aelter als NEW_WINDOW_MS
+--   "quittiert"          — acknowledged == true
+--   "wieder_aufgetreten"  — key war krzl. in der History als resolved markiert,
+--                            und ist jetzt (innerhalb REOCCUR_WINDOW_MS) erneut aktiv
+local NEW_WINDOW_MS = 60000
+local REOCCUR_WINDOW_MS = 3600000
+
+function alerts:lifecycle_state(alert)
+  if not alert then return "unbekannt" end
+  if alert.resolved_ts then return "behoben" end
+  local now = now_ms()
+  -- "Wieder aufgetreten": in der History nach einem kuerzlich resolvten
+  -- Eintrag mit demselben Key suchen, der VOR diesem Alert resolved wurde.
+  for _, hist_entry in ipairs(self.history) do
+    if hist_entry.alert_key and hist_entry.resolved_ts
+        and hist_entry.resolved_ts < (alert.ts_first or now)
+        and (now - hist_entry.resolved_ts) <= REOCCUR_WINDOW_MS then
+      local same_source = (hist_entry.code == alert.code)
+        and (hist_entry.source and alert.source
+          and hist_entry.source.node_id == alert.source.node_id)
+      if same_source then return "wieder_aufgetreten" end
+    end
+  end
+  if alert.acknowledged then return "quittiert" end
+  if (now - (alert.ts_first or now)) <= NEW_WINDOW_MS then return "neu" end
+  return "aktiv"
 end
 
 function alerts:set_ack(id, value)
