@@ -31,7 +31,16 @@ constants.message_types = {
   -- bekommt vom Master eine einmalige POCKET_STATUS-Antwort mit einer
   -- kompakten Zusammenfassung (kein Dauerabo, jede Abfrage ist einzeln).
   POCKET_QUERY = "POCKET_QUERY",
-  POCKET_STATUS = "POCKET_STATUS"
+  POCKET_STATUS = "POCKET_STATUS",
+  -- Feature (2026-07-02): Pocket-Computer-Fernsteuerung. POCKET_COMMAND
+  -- traegt eine Aktion (rt_hold_toggle/profile_set/maintenance_toggle) PLUS
+  -- ein Sicherheits-Token, das der Nutzer am Master (nicht am Pocket
+  -- Computer!) einsehen und manuell eintippen muss — verhindert
+  -- versehentliche Steuerbefehle durch einen falsch adressierten oder
+  -- automatisierten Query. POCKET_COMMAND_RESULT ist die Bestaetigungs-
+  -- oder Fehlerantwort.
+  POCKET_COMMAND = "POCKET_COMMAND",
+  POCKET_COMMAND_RESULT = "POCKET_COMMAND_RESULT"
 }
 
 constants.node_states = {
