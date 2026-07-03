@@ -314,6 +314,21 @@ local function init()
     matrices  = summary.kinds.matrix  and summary.kinds.matrix.bound  or 0,
     monitor   = devices.monitor and 1 or 0
   })
+
+  -- Startup-Diagnose-Report (Kernfunktion, 2026-07-01): siehe
+  -- xreactor/core/startup_report.lua.
+  local report_mod = require("core.startup_report")
+  pcall(function()
+    local checks = { report_mod.check_wireless_modem() }
+    local kinds = summary.kinds or {}
+    local matrices = kinds.matrix or {}
+    local storages = kinds.storage or {}
+    checks[#checks + 1] = { name = "Matrix/Storage erkannt", ok = (matrices.bound or 0) > 0 or (storages.bound or 0) > 0,
+      detail = string.format("matrix=%d storage=%d", matrices.bound or 0, storages.bound or 0) }
+    checks[#checks + 1] = { name = "Monitor gefunden", ok = devices.monitor ~= nil }
+    report_mod.run(checks, { log = log })
+  end)
+
   log("Node ready: " .. comms.network.id)
 end
 
