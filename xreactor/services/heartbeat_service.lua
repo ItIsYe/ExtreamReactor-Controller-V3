@@ -5,6 +5,30 @@
 
 local M = {}
 
+-- Feature (2026-07-02): manifest_version wird einmalig aus dem lokal
+-- installierten /xreactor/release.lua gelesen und automatisch an JEDEN
+-- Heartbeat-Payload angehaengt (build_state-Ergebnis wird gemergt, nicht
+-- ersetzt). Zentral hier statt in jedem einzelnen Node-Typ dupliziert —
+-- ermoeglicht die AUX-Monitor "Updates"-Seite am Master, die Version pro
+-- Node anzuzeigen. Wird nur einmal beim Erstellen des Services gelesen
+-- (aendert sich sowieso nicht zur Laufzeit, nur nach einem Reinstall/
+-- Reboot), nicht bei jedem einzelnen Heartbeat neu von der Disk gelesen.
+local function read_local_manifest_version()
+  local ok, version = pcall(function()
+    if not fs or not fs.exists or not fs.exists("/xreactor/release.lua") then return nil end
+    local f = fs.open("/xreactor/release.lua", "r")
+    if not f then return nil end
+    local raw = f.readAll()
+    f.close()
+    local chunk = load(raw, "=release", "t", {})
+    if not chunk then return nil end
+    local data = chunk()
+    return type(data) == "table" and data.manifest_version or nil
+  end)
+  if ok then return version end
+  return nil
+end
+
 -- Erstellt einen neuen Heartbeat-Service.
 -- opts:
 --   comms          — comms_service Instanz (required)
@@ -19,6 +43,7 @@ function M.new(opts)
   local build_state = opts.build_state or function() return {} end
   local log         = opts.log or function() end
   local on_send     = opts.on_send
+  local manifest_version = read_local_manifest_version()
 
   local state = {
     last_ts      = 0,
@@ -44,6 +69,9 @@ function M.new(opts)
       end
     end
     local hb_state = build_state(now_ms)
+    if type(hb_state) == "table" and manifest_version then
+      hb_state.manifest_version = manifest_version
+    end
     comms:send_heartbeat(hb_state)
     comms:tick(now_ms)
     state.last_ts = now_ms
