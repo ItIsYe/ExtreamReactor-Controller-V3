@@ -542,7 +542,9 @@ local function init()
     pcall(function()
       local checks = { report_mod.check_wireless_modem() }
       checks[#checks + 1] = { name = "Storage-Bus gefunden", ok = storage ~= nil }
-      report_mod.run(checks, { log = function(_, msg) utils.log("FUEL", msg, "INFO") end })
+      local ok_spk, spk_mod = pcall(require, "optional.speaker_alarm")
+      local speaker = ok_spk and spk_mod.new() or nil
+      report_mod.run(checks, { log = function(_, msg) utils.log("FUEL", msg, "INFO") end, speaker = speaker })
     end)
   end
 
