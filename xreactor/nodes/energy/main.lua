@@ -326,7 +326,9 @@ local function init()
     checks[#checks + 1] = { name = "Matrix/Storage erkannt", ok = (matrices.bound or 0) > 0 or (storages.bound or 0) > 0,
       detail = string.format("matrix=%d storage=%d", matrices.bound or 0, storages.bound or 0) }
     checks[#checks + 1] = { name = "Monitor gefunden", ok = devices.monitor ~= nil }
-    report_mod.run(checks, { log = log })
+    local ok_spk, spk_mod = pcall(require, "optional.speaker_alarm")
+    local speaker = ok_spk and spk_mod.new() or nil
+    report_mod.run(checks, { log = log, speaker = speaker })
   end)
 
   log("Node ready: " .. comms.network.id)
