@@ -25,15 +25,16 @@ end
 -- statt die normale Default-View (Overview) zu zeigen. Dient ausschließlich
 -- als dediziertes Error/Warning-Display, unabhängig von den 3 primären
 -- Monitoren (overview/rt/energy), die davon NICHT betroffen sind.
--- Views die auf AUX-Monitoren per Touch durchgeschaltet werden können.
--- Reihenfolge bestimmt den Zyklus. Erster Eintrag ist der Start-View.
-local AUX_VIEWS = { "alarms", "overview", "rt", "energy", "alerts" }
-local AUX_DEFAULT_VIEW = AUX_VIEWS[1]
+-- Fallback-Liste falls self.view_order nicht gesetzt ist (sollte in der
+-- Praxis nicht vorkommen, master/init_runtime.lua übergibt immer eine
+-- vollständige Liste über bind_or_update()).
+local AUX_VIEWS_FALLBACK = { "alarms", "overview", "rt", "energy", "alerts" }
 
 local function default_view(index, view_order)
   local role = resolve_role(index)
   if role ~= "aux" then return role end
-  return AUX_DEFAULT_VIEW
+  local views = view_order or AUX_VIEWS_FALLBACK
+  return views[1] or "overview"
 end
 
 local function copy_hit(hit)
@@ -53,13 +54,28 @@ end
 
 -- Schaltet einen AUX-Monitor auf die nächste View im Zyklus.
 -- Gibt den neuen view_key zurück.
-function M.cycle_aux_view(session)
+-- Fix (2026-07-02): diese Funktion hatte zwei Bugs gleichzeitig.
+-- 1. Signatur war function M.cycle_aux_view(session) — beim Aufruf
+--    self.sessions:cycle_aux_view(session) (Methodensyntax) bekam der
+--    EINZIGE Parameter tatsaechlich `self` (das Sessions-Objekt), das
+--    eigentliche `session`-Argument wurde stillschweigend verworfen.
+--    Der Code funktionierte nur zufaellig, weil session.view_key/.locked
+--    auf dem falschen Objekt (self) meist nil/falsy waren und so ein
+--    Verhalten erzeugten, das oberflaechlich wie ein Zyklus aussah.
+-- 2. Die View-Liste war eine hartcodierte Modul-Konstante (AUX_VIEWS),
+--    unabhaengig von der view_order, die master/init_runtime.lua beim
+--    Boot tatsaechlich uebergibt — neue Views (maintenance/updates/
+--    system_map/config_editor) tauchten im AUX-Zyklus nie auf, egal wie
+--    view_order konfiguriert war.
+function M:cycle_aux_view(session)
   if not session or session.locked then return end
-  local current = session.view_key or AUX_DEFAULT_VIEW
-  local next_view = AUX_VIEWS[1]
-  for i, v in ipairs(AUX_VIEWS) do
+  local views = self.view_order or AUX_VIEWS_FALLBACK
+  if #views == 0 then return end
+  local current = session.view_key or views[1]
+  local next_view = views[1]
+  for i, v in ipairs(views) do
     if v == current then
-      next_view = AUX_VIEWS[(i % #AUX_VIEWS) + 1]
+      next_view = views[(i % #views) + 1]
       break
     end
   end
@@ -70,8 +86,8 @@ function M.cycle_aux_view(session)
 end
 
 -- Gibt die AUX-View-Liste zurück (für Badge-Anzeige etc.)
-function M.get_aux_views()
-  return AUX_VIEWS
+function M:get_aux_views()
+  return self.view_order or AUX_VIEWS_FALLBACK
 end
 
 function M.new(opts)
