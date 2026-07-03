@@ -157,6 +157,21 @@ local function run_master()
     tostring(runtime.refs.services ~= nil),
     tostring(runtime.refs.ui_controller ~= nil)), "INFO")
 
+  -- Startup-Diagnose-Report (Kernfunktion, 2026-07-01): siehe
+  -- xreactor/core/startup_report.lua.
+  local ok_report_mod, report_mod = pcall(require, "core.startup_report")
+  if ok_report_mod then
+    pcall(function()
+      local checks = { report_mod.check_wireless_modem() }
+      checks[#checks + 1] = { name = "Comms initialisiert", ok = runtime.refs.comms ~= nil }
+      checks[#checks + 1] = { name = "Services initialisiert", ok = runtime.refs.services ~= nil }
+      checks[#checks + 1] = { name = "UI initialisiert", ok = runtime.refs.ui_controller ~= nil }
+      checks[#checks + 1] = { name = "Monitor(e) gefunden",
+        ok = runtime.state.monitor_cache and runtime.state.monitor_cache.list and #runtime.state.monitor_cache.list > 0 }
+      report_mod.run(checks, { log = log })
+    end)
+  end
+
   monitor_ops.refresh_monitors(runtime, true)
   if runtime.refs.services then runtime.refs.services:tick() end
 
