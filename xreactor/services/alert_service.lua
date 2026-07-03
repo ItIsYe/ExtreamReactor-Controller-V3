@@ -261,9 +261,10 @@ function alert_service:tick()
   self.last_eval_ts = eval_start
 
   -- Optionale akustische Alarmierung (Feature, 2026-07-01, erweitert
-  -- 2026-07-02 um Entwarnungs-Ton): siehe xreactor/optional/speaker_alarm.lua.
-  -- Vollstaendig fehlerisoliert — fehlt der Speaker oder ist
-  -- opts.speaker_alarm nicht gesetzt, passiert hier einfach nichts.
+  -- 2026-07-02 um Entwarnungs-Ton + zusaetzliche Ereignis-Sounds): siehe
+  -- xreactor/optional/speaker_alarm.lua. Vollstaendig fehlerisoliert —
+  -- fehlt der Speaker oder ist opts.speaker_alarm nicht gesetzt, passiert
+  -- hier einfach nichts.
   if self.speaker_alarm then
     local counts = self:get_counts_by_severity()
     local critical_active = (counts.CRITICAL or 0) > 0
@@ -276,6 +277,29 @@ function alert_service:tick()
       pcall(self.speaker_alarm.play, "clear")
     end
     self.last_critical_active = critical_active
+
+    -- node_offline / safe_mode: nur beim NEUEN Auftreten eines konkreten
+    -- Alerts spielen, nicht bei jedem tick() solange er noch aktiv ist —
+    -- verfolgt dafuer die zuletzt gesehenen aktiven Alert-IDs pro Code.
+    self.seen_offline_ids = self.seen_offline_ids or {}
+    self.seen_safe_ids = self.seen_safe_ids or {}
+    local active = self.alerts:get_active()
+    local still_offline, still_safe = {}, {}
+    for _, alert in ipairs(active) do
+      if alert.code == "NODE_COMMS_DOWN" then
+        still_offline[alert.id] = true
+        if not self.seen_offline_ids[alert.id] then
+          pcall(self.speaker_alarm.play, "node_offline")
+        end
+      elseif alert.code == "RT_SAFE_MODE" or alert.code == "RT_EMERGENCY" then
+        still_safe[alert.id] = true
+        if not self.seen_safe_ids[alert.id] then
+          pcall(self.speaker_alarm.play, "safe_mode")
+        end
+      end
+    end
+    self.seen_offline_ids = still_offline
+    self.seen_safe_ids = still_safe
   end
 end
 
