@@ -277,6 +277,56 @@ function M.new(opts)
     }
   end
 
+  -- Feature (2026-07-02): Pocket-Command-Token. Ein 6-stelliges, alle 5
+  -- Minuten rotierendes Token wird am Master-Overview angezeigt (siehe
+  -- ui_controller.lua). Der Nutzer muss es manuell am Pocket Computer
+  -- eingeben — verhindert versehentliche/automatisierte Steuerbefehle ohne
+  -- physischen Zugriff auf den Master-Monitor.
+  local pocket_token_state = { token = nil, generated_at = 0 }
+  local POCKET_TOKEN_TTL_MS = 5 * 60 * 1000
+  local function current_pocket_token()
+    local now = os.epoch and os.epoch("utc") or 0
+    if not pocket_token_state.token or (now - pocket_token_state.generated_at) >= POCKET_TOKEN_TTL_MS then
+      math.randomseed(now)
+      pocket_token_state.token = tostring(math.random(100000, 999999))
+      pocket_token_state.generated_at = now
+    end
+    return pocket_token_state.token
+  end
+  -- Für die UI zugänglich machen (Overview zeigt das aktuelle Token an).
+  M.get_pocket_token = current_pocket_token
+
+  -- execute_command(action, params): fuehrt die eigentliche Fernsteuerungs-
+  -- Aktion aus. Bewusst eine begrenzte, feste Liste erlaubter Aktionen
+  -- (kein generischer "eval"-Mechanismus) — jede neue Aktion muss hier
+  -- explizit ergaenzt werden.
+  local function execute_command(action, params)
+    local rt_ref = M._runtime or _G.xreactor_runtime
+    if type(rt_ref) ~= "table" or type(rt_ref.state) ~= "table" then
+      return false, "Runtime nicht verfuegbar"
+    end
+    params = params or {}
+    if action == "rt_hold_toggle" then
+      rt_ref.state.rt_global_off_hold = not (rt_ref.state.rt_global_off_hold == true)
+      return true, "RT-Hold jetzt " .. (rt_ref.state.rt_global_off_hold and "AN" or "AUS")
+    elseif action == "profile_set" then
+      local target = tostring(params.profile or ""):upper()
+      if target ~= "BASELOAD" and target ~= "PEAK" and target ~= "IDLE" then
+        return false, "Ungueltiges Profil: " .. tostring(params.profile)
+      end
+      rt_ref.state.active_profile = target
+      rt_ref.state.power_target = 0 -- erzwingt Neuberechnung im naechsten sample_trends()-Zyklus
+      return true, "Profil gesetzt: " .. target
+    elseif action == "maintenance_toggle" then
+      local node_id = params.node_id
+      local node = node_id and nodes[node_id]
+      if not node then return false, "Node nicht gefunden: " .. tostring(node_id) end
+      node.maintenance_mode = not (node.maintenance_mode == true)
+      return true, ("Maintenance %s fuer %s"):format(node.maintenance_mode and "AN" or "AUS", tostring(node_id))
+    end
+    return false, "Unbekannte Aktion: " .. tostring(action)
+  end
+
   local function update_node(message)
     if pocket_handler then
       local ok_handled, handled = pcall(pocket_handler.handle, message, {
@@ -284,6 +334,8 @@ function M.new(opts)
         constants = constants,
         log = log,
         build_snapshot = build_pocket_snapshot,
+        current_token = current_pocket_token(),
+        execute_command = execute_command,
       })
       if ok_handled and handled then return end
     end
