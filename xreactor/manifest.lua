@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 274,
-  manifest_id = "manifest-v274",
+  manifest_version = 275,
+  manifest_id = "manifest-v275",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -9,7 +9,7 @@ return {
   { path = "services/heartbeat_service.lua", size_bytes = 2643, hash = "973887e9" },
   { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6" },
   { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c" },
-  { path = "master/loop.lua", size_bytes = 2411, hash = "e980ca5e" },
+  { path = "master/loop.lua", size_bytes = 3111, hash = "e980ca5e" },
   { path = "nodes/energy/heartbeat.lua", size_bytes = 2746, hash = "a142dc47" },
   { path = "nodes/energy/matrix.lua", size_bytes = 1079, hash = "ef46a3f2" },
   { path = "installer/http.lua", size_bytes = 3192, hash = "fe55b6ce", always=true },
@@ -88,6 +88,7 @@ return {
     { path = "optional/ampel.lua", size_bytes = 3437, hash = "new", optional=true, feature="ampel" },
     { path = "optional/speaker_alarm.lua", size_bytes = 4101, hash = "new", optional=true, feature="speaker_alarm" },
     { path = "optional/pocket_query_handler.lua", size_bytes = 3528, hash = "new", optional=true, feature="pocket_query", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 4467, hash = "new", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 38834, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
