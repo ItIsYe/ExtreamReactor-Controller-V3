@@ -19,13 +19,32 @@
 --   "warning" — mittlere Dringlichkeit
 --   "startup" — kurzer, freundlicher Ton beim Node-Boot (optional nutzbar)
 
+-- Vordefinierte Ereignis-Presets (jeder Aufrufer kann eigene ergaenzen):
+--   "alarm"            — dringlich, tiefer Ton (CRITICAL-Alarme; Alias:
+--                         "critical" — identischer Klang, unterschiedlicher
+--                         Name je nach Aufrufer-Vorliebe)
+--   "clear"             — Entwarnung, heller Ton (Alarm hat sich aufgeloest)
+--   "warning"           — mittlere Dringlichkeit
+--   "startup"           — kurzer, freundlicher Ton beim Node-Boot
+--   "node_offline"      — ein Node ist offline gegangen (unterscheidbar von
+--                          "warning", damit man am Klang erkennt WAS los ist)
+--   "safe_mode"         — RT-Node ist in SAFE/EMERGENCY-Zustand gewechselt
+--   "capacity_learned"  — Capacity-Learning eines RT-Node abgeschlossen
+--                          (positives Ereignis, kein Alarm)
+--   "update_available"  — Auto-Updater hat eine neue Version erkannt
+
 local M = {}
 
 M.PRESETS = {
-  alarm   = { instrument = "bass",  pitch = 4,  volume = 3, cooldown_ms = 8000 },
-  clear   = { instrument = "bell",  pitch = 12, volume = 2, cooldown_ms = 4000 },
-  warning = { instrument = "harp",  pitch = 8,  volume = 2, cooldown_ms = 8000 },
-  startup = { instrument = "chime", pitch = 10, volume = 1, cooldown_ms = 0 },
+  alarm             = { instrument = "bass",   pitch = 4,  volume = 3, cooldown_ms = 8000 },
+  critical          = { instrument = "bass",   pitch = 4,  volume = 3, cooldown_ms = 8000 },
+  clear             = { instrument = "bell",   pitch = 12, volume = 2, cooldown_ms = 4000 },
+  warning           = { instrument = "harp",   pitch = 8,  volume = 2, cooldown_ms = 8000 },
+  startup           = { instrument = "chime",  pitch = 10, volume = 1, cooldown_ms = 0 },
+  node_offline      = { instrument = "bit",    pitch = 6,  volume = 2, cooldown_ms = 15000 },
+  safe_mode         = { instrument = "bass",   pitch = 2,  volume = 3, cooldown_ms = 8000 },
+  capacity_learned  = { instrument = "pling",  pitch = 14, volume = 1, cooldown_ms = 2000 },
+  update_available  = { instrument = "chime",  pitch = 8,  volume = 1, cooldown_ms = 30000 },
 }
 
 local function find_speaker()
