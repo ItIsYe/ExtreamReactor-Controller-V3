@@ -77,6 +77,9 @@ constants.command_targets = {
   MODE = "MODE",
   REQUEST_STATUS = "REQUEST_STATUS",
   SET_RESERVE = "SET_RESERVE",
+  -- Feature (2026-07-02): Config-Editor am Monitor — WATER-Ziel-Fuellmenge
+  -- fernsteuerbar, analog zu SET_RESERVE bei FUEL.
+  SET_TARGET = "SET_TARGET",
   REQUEST_STARTUP_MODULE = "REQUEST_STARTUP_MODULE",
   REQUEST_SHUTDOWN_MODULE = "REQUEST_SHUTDOWN_MODULE",
   -- TEMPORÄR: Remote-Update über alle Nodes, siehe core/remote_update.lua.
