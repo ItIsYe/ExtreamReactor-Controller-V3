@@ -797,7 +797,9 @@ local function run()
       local checks = { report_mod.check_wireless_modem() }
       checks[#checks + 1] = { name = "Disk-Laufwerke", ok = #stats.disks > 0,
         detail = string.format("%d gefunden", #stats.disks) }
-      report_mod.run(checks, { log = function(_, msg) self_log(msg, "INFO") end })
+      local ok_spk, spk_mod = pcall(require, "optional.speaker_alarm")
+      local speaker = ok_spk and spk_mod.new() or nil
+      report_mod.run(checks, { log = function(_, msg) self_log(msg, "INFO") end, speaker = speaker })
     end)
   end
 
