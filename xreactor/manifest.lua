@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 284,
-  manifest_id = "manifest-v284",
+  manifest_version = 285,
+  manifest_id = "manifest-v285",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -65,7 +65,7 @@ return {
     { path = "master/init_runtime.lua", size_bytes = 8131, hash = "eba62959", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
     { path = "master/message_handlers.lua", size_bytes = 27127, hash = "f94edbd6", required_for={"MASTER"} },
-    { path = "master/monitor_sessions.lua", size_bytes = 8082, hash = "37d2cd5c", required_for={"MASTER"} },
+    { path = "master/monitor_sessions.lua", size_bytes = 9131, hash = "37d2cd5c", required_for={"MASTER"} },
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"} },
     { path = "master/rt_sync.lua", size_bytes = 19025, hash = "3703ea68", required_for={"MASTER"} },
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"} },
