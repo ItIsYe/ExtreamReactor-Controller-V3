@@ -507,6 +507,22 @@ local function handle_command(message)
   if not command then
     return
   end
+  -- Feature (2026-07-02): Config-Editor am Monitor — Ziel-Fuellmenge
+  -- fernsteuerbar, analog zu SET_RESERVE bei FUEL. config.target_volume
+  -- wird bereits als Anzeigewert genutzt (siehe "Overview"-Seite unten),
+  -- war aber bisher nur lokal in der Config-Datei aenderbar.
+  if command.target == constants.command_targets.SET_TARGET then
+    local new_target = tonumber(command.value)
+    if type(new_target) == "number" and new_target >= 0 then
+      config.target_volume = new_target
+      utils.log("WATER", "Target volume updated to " .. tostring(new_target))
+    else
+      utils.log("WATER", "SET_TARGET rejected: invalid value=" .. tostring(command.value), "WARN")
+      return support_command_handler.finish_with_result(devices,
+        { ok = false, error = "invalid target value", reason_code = "INVALID_VALUE" })
+    end
+    return support_command_handler.finish(devices, true)
+  end
   return support_command_handler.reject_unsupported(devices)
 end
 
