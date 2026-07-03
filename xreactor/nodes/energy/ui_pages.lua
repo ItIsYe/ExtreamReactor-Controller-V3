@@ -30,6 +30,15 @@ local function fit(text, width)
   return s:sub(1, w - 1) .. "~"
 end
 
+local function status_from_percent(pct, degraded)
+  if degraded then return "WARNING" end
+  if pct == nil then return "muted" end
+  if pct < 0.15 then return "EMERGENCY" end
+  if pct < 0.30 then return "WARNING" end
+  if pct > 0.95 then return "LIMITED" end
+  return "OK"
+end
+
 function M.new(opts)
   local ui = assert(opts.ui, "ui required")
   local colors = assert(opts.colors, "colors required")
@@ -42,11 +51,8 @@ function M.new(opts)
     if not w or not h then return end
     ui.panel(mon, 1, 1, w, h, title, status)
     ui.text(mon, 2, 2, ("ENERGY NODE | %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
-    if page_text and w >= 30 then
-      ui.rightText(mon, 2, 2, w - 2, page_text, colors.get("muted"), colors.get("background"))
-    else
-      ui.rightText(mon, 2, 2, w - 2, model.health_status or status, colors.get(status), colors.get("background"))
-    end
+    if page_text and w >= 30 then ui.rightText(mon, 2, 2, w - 2, page_text, colors.get("muted"), colors.get("background"))
+    else ui.rightText(mon, 2, 2, w - 2, model.health_status or status, colors.get(status), colors.get("background")) end
     if model.local_alerts_critical and model.local_alerts_critical > 0 then
       local label = "CRIT " .. tostring(model.local_alerts_critical)
       ui.badge(mon, math.max(2, w - (#label + 2)), 1, label, "EMERGENCY")
@@ -77,14 +83,12 @@ function M.new(opts)
 
   local function render_overview(mon, model)
     local status = model.degraded and "WARNING" or "OK"
-    render_header(mon, "ENERGY OVERVIEW", status, model, "SEITE 1")
+    render_header(mon, "ENERGY OVERVIEW", status, model, "SEITE 1/4")
     local w, h = ui.getSize(mon); if not w or not h then return end
     local total = model.total or {}
     local banner, banner_status = storage_banner(model)
     local line = 4
-
     ui.text(mon, 2, line, ">> " .. banner .. " <<", colors.get(banner_status), colors.get("background")); line = line + 2
-
     if w >= 48 then
       ui.text(mon, 2, line, fit(string.format("ENERGIE %s | INPUT %sRF/t | OUTPUT %sRF/t", format_percent(total.percent), format_energy(total.input), format_energy(total.output)), w - 3), colors.get("text"), colors.get("background")); line = line + 1
       ui.text(mon, 2, line, fit(string.format("MATRICES %d | STORAGES %d | MASTER %s", #model.matrices, model.storages_count or 0, tostring(model.master_state or "?")), w - 3), colors.get("text"), colors.get("background")); line = line + 2
@@ -93,84 +97,112 @@ function M.new(opts)
       ui.text(mon, 2, line, "IN " .. format_energy(total.input) .. "  OUT " .. format_energy(total.output), colors.get("text"), colors.get("background")); line = line + 1
       ui.text(mon, 2, line, string.format("Matrices %d  Storages %d", #model.matrices, model.storages_count or 0), colors.get("text"), colors.get("background")); line = line + 2
     end
-
     ui.text(mon, 2, line, "ENERGY STORAGE", colors.get("text"), colors.get("background")); line = line + 1
     ui.progress(mon, 2, line, math.max(8, w - 4), total.percent or 0, banner_status); line = line + 1
     ui.text(mon, 2, line, fit(("%s / %s  (%s)"):format(format_energy(total.stored), format_energy(total.capacity), format_percent(total.percent)), w - 3), colors.get("text"), colors.get("background")); line = line + 2
-
     local trend, trend_status = trend_label(total)
-    local m1 = model.matrices[1]
-    local m2 = model.matrices[2]
+    local m1, m2 = model.matrices[1], model.matrices[2]
     if line <= h - 2 then
       ui.text(mon, 2, line, fit(string.format("MATRIX A %s | MATRIX B %s | TREND %s", m1 and format_percent(m1.percent) or "n/a", m2 and format_percent(m2.percent) or "n/a", trend), w - 3), colors.get(trend_status), colors.get("background")); line = line + 1
     end
-    if line <= h - 1 then
-      ui.text(mon, 2, line, fit(string.format("MASTER %s (%s) | LAST SCAN %s", tostring(model.master_state or "?"), tostring(model.master_age or "-"), model.last_scan_ts and format_age(model.last_scan_ts, os.epoch("utc")) or "n/a"), w - 3), colors.get("muted"), colors.get("background"))
-    end
+    if line <= h - 1 then ui.text(mon, 2, line, fit(string.format("MASTER %s (%s) | LAST SCAN %s", tostring(model.master_state or "?"), tostring(model.master_age or "-"), model.last_scan_ts and format_age(model.last_scan_ts, os.epoch("utc")) or "n/a"), w - 3), colors.get("muted"), colors.get("background")) end
   end
 
   local function render_matrices(mon, model)
     local status = model.degraded and "WARNING" or "OK"
-    render_header(mon, "ENERGY MATRICES", status, model, nil)
+    render_header(mon, "ENERGY MATRICES", status, model, "SEITE 2/4")
     local w, h = ui.getSize(mon); if not w or not h then return end
-    local list_start, footer_lines, total_lines, card_lines = 5, 2, 4, 4
-    local available = math.max(0, (h - footer_lines - total_lines) - list_start + 1)
-    local pagination = ui_router.paginate(model.matrices, math.max(1, math.floor(available / card_lines)), ui_state.matrix_page)
+    local line = 4
+    local cards = math.max(1, math.floor((h - 9) / 4))
+    local pagination = ui_router.paginate(model.matrices, cards, ui_state.matrix_page)
     ui_state.matrix_page = pagination.page
-    local line = list_start
     for idx = pagination.start_index, pagination.end_index do
       local entry = model.matrices[idx]
-      if entry then
+      if entry and line <= h - 7 then
         local pct = entry.percent or 0
-        local label = entry.alias and entry.name and entry.alias ~= entry.name and (("%s (%s)"):format(entry.alias, entry.name)) or (entry.label or entry.name or ("Matrix " .. tostring(idx)))
-        ui.text(mon, 2, line, label, colors.get("text"), colors.get("background"))
-        ui.rightText(mon, 2, line, w - 2, format_percent(pct), colors.get(entry.status == "DEGRADED" and "WARNING" or status), colors.get("background")); line = line + 1
-        ui.progress(mon, 2, line, w - 4, pct, entry.status == "DEGRADED" and "WARNING" or status); line = line + 1
-        ui.text(mon, 2, line, ("E: %s / %s"):format(format_energy(entry.stored), format_energy(entry.capacity)), colors.get("text"), colors.get("background")); line = line + 1
-        ui.text(mon, 2, line, ("IN %s  OUT %s"):format(format_energy(entry.input), format_energy(entry.output)), colors.get("text"), colors.get("background")); line = line + 1
+        local key = entry.status == "DEGRADED" and "WARNING" or status_from_percent(pct, false)
+        local label = entry.alias and entry.name and entry.alias ~= entry.name and (("%s (%s)"):format(entry.alias, entry.name)) or (entry.label or entry.name or ("MATRIX " .. tostring(idx)))
+        ui.text(mon, 2, line, fit(string.format("%s  %s", label, format_percent(pct)), w - 3), colors.get(key), colors.get("background")); line = line + 1
+        if w >= 48 then
+          ui.text(mon, 2, line, fit(string.format("STORED %s | CAP %s | IN %s | OUT %s", format_energy(entry.stored), format_energy(entry.capacity), format_energy(entry.input), format_energy(entry.output)), w - 3), colors.get("text"), colors.get("background")); line = line + 1
+        else
+          ui.text(mon, 2, line, fit(string.format("E %s/%s IN %s OUT %s", format_energy(entry.stored), format_energy(entry.capacity), format_energy(entry.input), format_energy(entry.output)), w - 3), colors.get("text"), colors.get("background")); line = line + 1
+        end
+        ui.progress(mon, 2, line, math.max(8, w - 4), pct, key); line = line + 2
       end
     end
     local total = model.total or {}
-    line = h - footer_lines - total_lines + 1
-    ui.text(mon, 2, line, ("GESAMT (%d)"):format(#model.matrices), colors.get("text"), colors.get("background")); line = line + 1
-    ui.progress(mon, 2, line, w - 4, total.percent or 0, status); line = line + 1
-    ui.text(mon, 2, line, ("E: %s / %s (%s)"):format(format_energy(total.stored), format_energy(total.capacity), format_percent(total.percent)), colors.get("text"), colors.get("background")); line = line + 1
-    ui.text(mon, 2, line, (total.input ~= nil or total.output ~= nil) and ("IN " .. format_energy(total.input) .. "  OUT " .. format_energy(total.output)) or "IN/OUT n/a", colors.get("text"), colors.get("background"))
+    local fy = math.max(line, h - 4)
+    if fy <= h - 1 then
+      ui.text(mon, 2, fy, fit(string.format("GESAMT %s / %s | %s | IN %s OUT %s", format_energy(total.stored), format_energy(total.capacity), format_percent(total.percent), format_energy(total.input), format_energy(total.output)), w - 3), colors.get("text"), colors.get("background")); fy = fy + 1
+      if fy <= h - 1 then ui.progress(mon, 2, fy, math.max(8, w - 4), total.percent or 0, status_from_percent(total.percent, model.degraded)) end
+    end
   end
 
   local function render_storages(mon, model)
     local status = model.degraded and "WARNING" or "OK"
-    render_header(mon, "ENERGY STORAGES", status, model, nil)
+    render_header(mon, "ENERGY STORAGES", status, model, "SEITE 3/4")
     local w, h = ui.getSize(mon); if not w or not h then return end
-    local rows = {}
-    table.sort(model.storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
-    for _, s in ipairs(model.storages) do
-      local pct = s.capacity and s.capacity > 0 and (s.stored / s.capacity) or 0
-      table.insert(rows, { text = string.format("%s %s", s.id, format_percent(pct)), status = status })
-    end
-    if #rows == 0 then table.insert(rows, { text = "none", status = "WARNING" }) end
-    local pagination = ui_router.paginate(rows, math.max(1, h - 6), ui_state.storage_page)
+    local storages = {}
+    for _, s in ipairs(model.storages or {}) do storages[#storages + 1] = s end
+    table.sort(storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
+    local line = 4
+    local max_rows = math.max(1, h - 9)
+    local pagination = ui_router.paginate(storages, max_rows, ui_state.storage_page)
     ui_state.storage_page = pagination.page
-    local page_rows = {}
-    for idx = pagination.start_index, pagination.end_index do table.insert(page_rows, rows[idx]) end
-    ui.list(mon, 2, 5, w - 2, page_rows, { max_rows = math.max(1, h - 6) })
+    local total_stored, total_capacity = 0, 0
+    for _, s in ipairs(storages) do total_stored = total_stored + (tonumber(s.stored) or 0); total_capacity = total_capacity + (tonumber(s.capacity) or 0) end
+    for idx = pagination.start_index, pagination.end_index do
+      local s = storages[idx]
+      if s then
+        local pct = s.capacity and s.capacity > 0 and ((s.stored or 0) / s.capacity) or 0
+        local key = status_from_percent(pct, false)
+        local id = tostring(s.id or s.name or ("ST-" .. tostring(idx)))
+        if w >= 48 then
+          ui.text(mon, 2, line, fit(string.format("%-14s ENERGY %-8s / %-8s | %s | HEALTH %s", id, format_energy(s.stored), format_energy(s.capacity), format_percent(pct), key), w - 3), colors.get(key), colors.get("background"))
+        else
+          ui.text(mon, 2, line, fit(string.format("%s %s/%s %s", id, format_energy(s.stored), format_energy(s.capacity), format_percent(pct)), w - 3), colors.get(key), colors.get("background"))
+        end
+        line = line + 1
+        if line <= h - 5 then ui.progress(mon, 2, line, math.max(8, w - 4), pct, key); line = line + 1 end
+      end
+    end
+    if #storages == 0 then ui.text(mon, 2, line, "KEINE STORAGES GEFUNDEN", colors.get("WARNING"), colors.get("background")) end
+    local total_pct = total_capacity > 0 and total_stored / total_capacity or 0
+    local fy = math.max(line + 1, h - 3)
+    if fy <= h - 1 then
+      ui.text(mon, 2, fy, fit(string.format("GESAMT SPEICHER %s | %s / %s", format_percent(total_pct), format_energy(total_stored), format_energy(total_capacity)), w - 3), colors.get(status_from_percent(total_pct, false)), colors.get("background")); fy = fy + 1
+      if fy <= h - 1 then ui.progress(mon, 2, fy, math.max(8, w - 4), total_pct, status_from_percent(total_pct, false)) end
+    end
   end
 
   local function render_diagnostics(mon, model)
     local status = model.degraded and "WARNING" or "OK"
-    render_header(mon, "ENERGY DIAGNOSTICS", status, model, nil)
+    render_header(mon, "ENERGY DIAGNOSTICS", status, model, "SEITE 4/4")
     local w, h = ui.getSize(mon); if not w or not h then return end
     local now = os.epoch("utc")
-    local rows = {
-      { text = ("Health: %s"):format(model.health_status or status), status = status },
-      { text = ("Reasons: %s"):format(model.degraded_reason or "none") },
-      { text = ("Registry total:%d bound:%d missing:%d"):format(model.registry_summary.total or 0, model.registry_summary.bound or 0, model.registry_summary.missing or 0) },
-      { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
-      { text = ("Last scan: %s (%s)"):format(model.scan_result or "n/a", format_age(model.last_scan_ts, now)) },
-      { text = ("Last error: %s (%s)"):format(model.last_error or "none", format_age(model.last_error_ts, now)) },
-      { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", format_age(model.last_command_ts, now)) }
-    }
-    ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 6) })
+    local line = 4
+    local reason = model.degraded_reason or "none"
+    local summary = model.registry_summary or {}
+    ui.text(mon, 2, line, fit(string.format("GESUNDHEIT %s | DEGRADATION %s", tostring(model.health_status or status), reason), w - 3), colors.get(status), colors.get("background")); line = line + 1
+    ui.text(mon, 2, line, fit(string.format("REGISTRY %d total / %d bound / %d missing | MASTER %s age %s", summary.total or 0, summary.bound or 0, summary.missing or 0, tostring(model.master_state or "?"), tostring(model.master_age or "-")), w - 3), colors.get((summary.missing or 0) > 0 and "WARNING" or "text"), colors.get("background")); line = line + 2
+    ui.text(mon, 2, line, fit(string.format("LETZTER SCAN %s (%s)", tostring(model.scan_result or "n/a"), format_age(model.last_scan_ts, now)), w - 3), colors.get("text"), colors.get("background")); line = line + 1
+    ui.text(mon, 2, line, fit(string.format("LETZTER FEHLER %s (%s)", tostring(model.last_error or "none"), format_age(model.last_error_ts, now)), w - 3), colors.get(model.last_error and "WARNING" or "text"), colors.get("background")); line = line + 1
+    ui.text(mon, 2, line, fit(string.format("LETZTER BEFEHL %s (%s)", tostring(model.last_command or "none"), format_age(model.last_command_ts, now)), w - 3), colors.get("LIMITED"), colors.get("background")); line = line + 2
+    local total = model.total or {}
+    local key = status_from_percent(total.percent, model.degraded)
+    ui.text(mon, 2, line, fit(string.format("AMPEL %s | STORAGE %s | INPUT %s | OUTPUT %s", key, format_percent(total.percent), format_energy(total.input), format_energy(total.output)), w - 3), colors.get(key), colors.get("background")); line = line + 2
+    local alerts = model.local_alerts or {}
+    if #alerts > 0 and line <= h - 2 then
+      ui.text(mon, 2, line, "DIAGNOSE LISTE", colors.get("text"), colors.get("background")); line = line + 1
+      local shown = math.min(#alerts, math.max(0, h - line - 1))
+      for i = 1, shown do
+        local a = alerts[i]
+        local sev = tostring(a.severity or "INFO")
+        local k = sev == "CRITICAL" and "EMERGENCY" or (sev == "WARN" or sev == "WARNING") and "WARNING" or "LIMITED"
+        ui.text(mon, 2, line, fit(string.format("%-9s %-12s %s", sev, tostring(a.code or "-"), tostring(a.title or a.message or "alert")), w - 3), colors.get(k), colors.get("background")); line = line + 1
+      end
+    end
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
   end
 
