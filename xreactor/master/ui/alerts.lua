@@ -204,9 +204,14 @@ local function decorate_rows(rows, entries, state, start_idx, end_idx)
       local sev = (alert.severity or "INFO"):sub(1, 1)
       local ack = alert.acknowledged and "A" or " "
       local muted = alert.muted and "M" or " "
+      -- Feature 2026-07-02 (Alarm-Lifecycle): "R" markiert Alerts, die
+      -- kuerzlich als resolved galten und jetzt erneut aufgetreten sind
+      -- (alert.lifecycle_state == "wieder_aufgetreten", von
+      -- alert_service:get_active() automatisch angehaengt).
+      local reoccur = (alert.lifecycle_state == "wieder_aufgetreten") and "R" or " "
       local source = alert.source or {}
       local label = alert.title or source.device_id or source.node_id or "Alert"
-      row.text = string.format("%s%s%s%s %s", prefix, sev, ack, muted, tostring(label))
+      row.text = string.format("%s%s%s%s%s %s", prefix, sev, ack, muted, reoccur, tostring(label))
       row.id = alert.id
       table.insert(visible_ids, alert.id)
     elseif row and entry and entry.type == "group" then
