@@ -1,5 +1,28 @@
 # XReactor Runtime Status — 2026-06-03
 
+## Update 2026-07-02 (v262 → v274 — Neue optionale Peripherie-Features + Kernfeatures)
+
+**Neue optionale Peripherie-Features (`xreactor/optional/`, opt-in per Installer, siehe `config/optional_features.lua`):**
+- **Ampel-Monitor auf ENERGY erweitert** (v263): vorher nur RT, jetzt auch für Energy-Matrix-Nodes nutzbar. Code aus RT extrahiert und als gemeinsames Modul `optional/ampel.lua` konsolidiert (v268), um Duplikation zu vermeiden — beide Nodes rufen dasselbe `ampel.new()` auf.
+- **Speaker-Alarm generalisiert** (v267 initial nur MASTER/CRITICAL, v274 auf alle Node-Typen erweitert): `optional/speaker_alarm.lua` bietet jetzt eine generische, ereignisbasierte `play(event_name, overrides)`-API mit Presets (`alarm`, `clear`, `warning`, `startup`) statt nur eines binären "CRITICAL an/aus"-Interfaces. Jeder Node-Typ (RT/ENERGY/FUEL/WATER/REPROCESSOR/LOG/MASTER) kann eine eigene Instanz erstellen. Neu: "clear"-Ton bei Entwarnung (Übergang CRITICAL-aktiv → inaktiv), Startup-Ton auf jedem Node beim Boot.
+- **Pocket-Computer-Fernabfrage** (v270/271): neue Message-Typen `POCKET_QUERY`/`POCKET_STATUS`. `optional/pocket_query_handler.lua` (Master-seitig, opt-in Feature `pocket_query`) beantwortet Anfragen mit kompakter Statuszusammenfassung. `optional/pocket_client.lua` ist ein eigenständiges, manuell zu installierendes Skript für den Pocket Computer selbst (kein Teil des Rollen-Installers, da Pocket Computer sich bewusst nicht als Node registrieren).
+- **Echter Opt-in-Mechanismus im Installer** (v269/270): `optional=true`-Manifest-Einträge werden standardmäßig NICHT installiert. Der Installer fragt bei manuellem Lauf interaktiv nach jedem per Manifest erkannten Feature (`collect_optional_feature_names()`, dynamisch, keine hartcodierte Liste), speichert die Auswahl in `/xreactor/config/optional_features.lua`, die über Reinstalls/Auto-Updates erhalten bleibt ohne erneut zu fragen.
+
+**Neue Kernfeatures (kein Opt-in, Teil des Standard-Rollouts):**
+- **Startup-Diagnose-Report** (`core/startup_report.lua`, v272/273): zunächst versehentlich als optionales Feature gebaut, auf Korrektur hin in `core/` verschoben und als `always=true` markiert — ist Kernfunktion. Auf allen 7 Node-Typen eingebunden (RT/ENERGY/MASTER/FUEL/WATER/REPROCESSOR/LOG), jeweils mit rollenspezifischen Checks. Gibt am Boot-Ende eine einzige `=== Startup-Diagnose ===`-Zusammenfassung aus statt verstreuter Log-Zeilen.
+- **RT-Redundanz-Warnung** (`core/alert_rules.lua`, v264): neue Regel `RT_NO_REDUNDANCY` — warnt (WARN-Level), wenn nur ein RT-Node aktiv zugewiesen ist UND die verbleibende Kapazität aller anderen Nodes den globalen Bedarf bei dessen Ausfall nicht decken würde. Proaktiv, mit 60s Cooldown.
+- **Wartungsmodus pro Node** (v265): Touch auf den Kartentitel einer RT-Node im Master-UI togglet `node.maintenance_mode`. Höchste Priorität in `rt_sync.evaluate_rt_node()`, noch vor globalem RT-Hold — Node bleibt online/sichtbar, wird aber komplett aus der Zuweisung genommen. Erforderte eine zuvor fehlende `hit_test`-Verdrahtung für die RT-View (`init_runtime.lua` hatte sie nie registriert, obwohl `overview`/`alerts` sie hatten).
+- **Konfigurierbare PEAK/IDLE-Schwellwerte** (v266): vorher fest 90%/30% im Code, jetzt per `[-]`/`[+]`-Touch im Overview in 5%-Schritten änderbar, mit Sicherheits-Clamp (IDLE muss über PEAK bleiben).
+- **Konfigurierbare Ampel-Schwellen für ENERGY** (v272): vorher fest 15/30/95%, jetzt optional über `/xreactor/config/ampel_thresholds.lua` anpassbar (liest per `fs.open`/`load()`, nicht `require()` — Konfigurationsdateien sind kein Teil des Lua-Modulsystems).
+
+**Wichtige Korrektur während der Session:** Startup-Diagnose wurde zunächst fälschlich als `optional/`-Feature (Opt-in) gebaut. Auf Nutzerhinweis korrigiert — es ist Kernfunktion und soll auf jedem Node ohne Auswahl installiert sein. Datei von `optional/startup_report.lua` nach `core/startup_report.lua` verschoben, Manifest-Eintrag von `optional=true` auf `always=true` geändert, alle 7 Boot-Einbindungen von `pcall(require, "optional.startup_report")` (defensiv, könnte fehlen) auf direktes `require("core.startup_report")` (MASTER/RT) bzw. weiterhin defensivem `pcall(require, "core.startup_report")` (restliche Rollen, zur Sicherheit) umgestellt.
+
+**Vollständige Nachverifikation (auf Nutzerwunsch):** Manifest-Konsistenz erneut komplett geprüft (143 Einträge, 0 Mismatches), Klammerbalance aller 25 relevanten Dateien geprüft (alle sauber), Speaker-/Ampel-/Pocket-Query-Verdrahtung in allen Aufrufern verifiziert (korrekt, initial fälschlich als "fehlend" markiert durch zu einfaches Suchmuster, das `pcall(require, ...)` nicht erfasste), keine verwaisten Referenzen auf den alten `optional/startup_report.lua`-Pfad gefunden, `last_critical_active`-Zustand für den neuen "clear"-Ton auf korrektes Verhalten beim allerersten Boot-Tick geprüft (kein Fehlton).
+
+**Versionsverlauf:** v262 (Hygiene-Ausgangspunkt) → v263 (Ampel für ENERGY) → v264 (RT-Redundanz-Warnung) → v265 (Wartungsmodus) → v266 (konfigurierbare PEAK/IDLE-Schwellen) → v267–v268 (Speaker-Alarm v1, Ampel-Konsolidierung) → v269–v270 (echter Opt-in-Mechanismus) → v271 (Pocket-Query) → v272–v273 (Startup-Report zunächst optional, dann als Kernfunktion korrigiert) → v274 (Speaker generalisiert auf alle Node-Typen, Entwarnungs-Ton).
+
+---
+
 ## Update 2026-07-01 (Fortsetzung 2, v261 → v262 — Repo-Hygiene)
 
 **Gelöscht (verifiziert unreferenziert/tot):**
