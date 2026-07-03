@@ -421,6 +421,30 @@ function rules:evaluate(context)
     end)
   end
 
+  -- RT-SAFE-Warnung (Feature 2026-07-02, fuer Speaker-Alarm-Event
+  -- "safe_mode"): pro RT-Node ein eigener CRITICAL-Alert, wenn der Node im
+  -- SAFE- oder EMERGENCY-Zustand ist. Vorher gab es dafuer keinen expliziten
+  -- Alert-Code — der Zustand war zwar in node.state sichtbar, loeste aber
+  -- keinen eigenen Alarm aus.
+  for _, node in pairs(nodes) do
+    if node.role == constants.roles.RT_NODE then
+      local node_state = tostring(node.state or "")
+      local is_safe = node_state == "SAFE" or node_state == "EMERGENCY"
+      local safe_key = string.format("RT_SAFE_MODE|%s", tostring(node.id))
+      emit(safe_key, is_safe, base_opts, function()
+        return {
+          code = "RT_SAFE_MODE",
+          severity = "CRITICAL",
+          scope = "NODE",
+          source = build_source(node, nil),
+          title = "RT node in SAFE/EMERGENCY",
+          message = string.format("%s ist im Zustand %s", tostring(node.id), node_state),
+          details = { state = node_state }
+        }
+      end)
+    end
+  end
+
   if context.recovery_notice then
     local recovery = context.recovery_notice
     local active = recovery.active
