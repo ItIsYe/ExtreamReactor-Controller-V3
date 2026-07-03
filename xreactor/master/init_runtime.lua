@@ -44,8 +44,9 @@ function M.run(ctx)
       maintenance = { label = "Maintenance", render = ctx.maintenance_ui.render, hit_test = ctx.maintenance_ui.hit_test, interval = 1.0 },
       updates = { label = "Updates", render = ctx.updates_ui.render, interval = 2.0 },
       system_map = { label = "System Map", render = ctx.system_map_ui.render, interval = 2.0 },
+      config_editor = { label = "Config", render = ctx.config_editor_ui.render, hit_test = ctx.config_editor_ui.hit_test, interval = 1.0 },
     },
-    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms", "maintenance", "updates", "system_map" },
+    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms", "maintenance", "updates", "system_map", "config_editor" },
     on_action = function(action)
       if ctx.refs.ui_controller then
         return ctx.refs.ui_controller.handle_action(action)
@@ -138,7 +139,11 @@ function M.run(ctx)
       get_power_target = ctx.get_power_target,
       get_critical_blink_until = ctx.get_critical_blink_until,
       get_rt_global_off_hold = ctx.get_rt_global_off_hold,
-      set_rt_global_off_hold = ctx.set_rt_global_off_hold
+      set_rt_global_off_hold = ctx.set_rt_global_off_hold,
+      set_fuel_reserve = ctx.set_fuel_reserve,
+      set_water_target = ctx.set_water_target,
+      get_auto_update_enabled = ctx.get_auto_update_enabled,
+      set_auto_update_enabled = ctx.set_auto_update_enabled
     }
   })
   ctx.utils.log("MASTER", ("UI wiring ready: monitors=%d view_manager=%s ui_controller=%s"):format(
