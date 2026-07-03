@@ -357,6 +357,14 @@ function M.new(opts)
       nodes[id].stale = false
       nodes[id].managed = true
       nodes[id].recovering = false
+      -- Feature (2026-07-02): manifest_version pro Node speichern, damit
+      -- die AUX-Monitor "Updates"-Seite sehen kann, ob alle Nodes dieselbe
+      -- Version haben. Wird von services/heartbeat_service.lua automatisch
+      -- an jeden Heartbeat-Payload angehaengt.
+      if message.payload.manifest_version ~= nil then
+        nodes[id].manifest_version = tonumber(message.payload.manifest_version)
+        nodes[id].manifest_version_seen_ts = message.ts or (os.epoch and os.epoch("utc")) or 0
+      end
       if nodes[id].health and nodes[id].health.reasons and nodes[id].health.reasons[health.reasons.COMMS_DOWN] then
         nodes[id].health.reasons[health.reasons.COMMS_DOWN] = nil
         log(("Node %s reason removed: %s (heartbeat)"):format(id, health.reasons.COMMS_DOWN))
