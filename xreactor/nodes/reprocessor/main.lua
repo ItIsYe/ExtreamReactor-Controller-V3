@@ -578,6 +578,17 @@ local function init()
   }))
   services:init()
   hello()
+
+  -- Startup-Diagnose-Report (Kernfunktion, 2026-07-01): siehe
+  -- xreactor/core/startup_report.lua.
+  local ok_report_mod, report_mod = pcall(require, "core.startup_report")
+  if ok_report_mod then
+    pcall(function()
+      local checks = { report_mod.check_wireless_modem() }
+      report_mod.run(checks, { log = function(_, msg) utils.log("REPROC", msg, "INFO") end })
+    end)
+  end
+
   utils.log("REPROC", "Node ready: " .. comms.network.id)
 end
 
