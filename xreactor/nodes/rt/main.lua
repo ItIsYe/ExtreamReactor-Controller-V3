@@ -779,7 +779,12 @@ local function init()
       detail = string.format("%d/%d gebunden", turbines.bound or 0, turbines.total or 0) }
     checks[#checks + 1] = { name = "Monitor gefunden", ok = devices.monitor ~= nil }
     checks[#checks + 1] = { name = "Rolle konfiguriert", ok = tostring(config.role or "") == "RT" }
-    report_mod.run(checks, { log = log })
+    -- Speaker (Feature, 2026-07-02): optional, pcall(require, ...) da nicht
+    -- immer installiert. Der Speaker-Effekt gilt jetzt fuer JEDEN Node-Typ,
+    -- nicht nur MASTER (dort ursprungl. nur fuer CRITICAL-Alarme gedacht).
+    local ok_spk, spk_mod = pcall(require, "optional.speaker_alarm")
+    local speaker = ok_spk and spk_mod.new() or nil
+    report_mod.run(checks, { log = log, speaker = speaker })
   end)
 
   log("INFO", "RT-Node ready: " .. (comms.network and comms.network.id or node_id))
