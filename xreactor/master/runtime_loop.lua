@@ -168,7 +168,12 @@ local function run_master()
       checks[#checks + 1] = { name = "UI initialisiert", ok = runtime.refs.ui_controller ~= nil }
       checks[#checks + 1] = { name = "Monitor(e) gefunden",
         ok = runtime.state.monitor_cache and runtime.state.monitor_cache.list and #runtime.state.monitor_cache.list > 0 }
-      report_mod.run(checks, { log = log })
+      -- Speaker-Instanz wiederverwenden, falls alert_service bereits eine
+      -- erstellt hat (2026-07-02) — vermeidet doppelte Speaker-Peripheral-
+      -- Suche und stellt sicher, dass Startup-Sound und Alarm-Sound
+      -- konsistent dieselbe Instanz nutzen.
+      local speaker = runtime.refs.alert_service and runtime.refs.alert_service.speaker_alarm or nil
+      report_mod.run(checks, { log = log, speaker = speaker })
     end)
   end
 
