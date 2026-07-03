@@ -260,13 +260,22 @@ function alert_service:tick()
   self.last_eval_duration_ms = now_ms() - eval_start
   self.last_eval_ts = eval_start
 
-  -- Optionale akustische Alarmierung (Feature, 2026-07-01): siehe
-  -- xreactor/optional/speaker_alarm.lua. Vollstaendig fehlerisoliert —
-  -- fehlt der Speaker oder ist opts.speaker_alarm nicht gesetzt, passiert
-  -- hier einfach nichts.
+  -- Optionale akustische Alarmierung (Feature, 2026-07-01, erweitert
+  -- 2026-07-02 um Entwarnungs-Ton): siehe xreactor/optional/speaker_alarm.lua.
+  -- Vollstaendig fehlerisoliert — fehlt der Speaker oder ist
+  -- opts.speaker_alarm nicht gesetzt, passiert hier einfach nichts.
   if self.speaker_alarm then
     local counts = self:get_counts_by_severity()
-    pcall(self.speaker_alarm.notify, (counts.CRITICAL or 0) > 0)
+    local critical_active = (counts.CRITICAL or 0) > 0
+    if critical_active then
+      pcall(self.speaker_alarm.play, "alarm")
+    elseif self.last_critical_active == true then
+      -- Uebergang von "war aktiv" zu "jetzt nicht mehr aktiv" — Entwarnung
+      -- nur EINMAL beim Uebergang spielen, nicht dauerhaft solange kein
+      -- Alarm aktiv ist (das waere sinnlos haeufig).
+      pcall(self.speaker_alarm.play, "clear")
+    end
+    self.last_critical_active = critical_active
   end
 end
 
