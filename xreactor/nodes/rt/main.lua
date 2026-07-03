@@ -758,26 +758,29 @@ local function init()
   })
   build_status_payload(constants.status_levels.OK)
 
-  -- Optionaler Startup-Diagnose-Report (Feature, 2026-07-01): siehe
-  -- xreactor/optional/startup_report.lua. pcall(require, ...) sorgt dafuer,
-  -- dass ohne installiertes Feature einfach nichts passiert.
-  local ok_report_mod, report_mod = pcall(require, "optional.startup_report")
-  if ok_report_mod then
-    pcall(function()
-      local checks = { report_mod.check_wireless_modem() }
-      local summary = registry and registry.get_summary and registry:get_summary() or {}
-      local kinds = summary.kinds or {}
-      local reactors = kinds.reactor or {}
-      local turbines = kinds.turbine or {}
-      checks[#checks + 1] = { name = "Reaktor erkannt", ok = (reactors.bound or 0) > 0,
-        detail = string.format("%d/%d gebunden", reactors.bound or 0, reactors.total or 0) }
-      checks[#checks + 1] = { name = "Turbinen erkannt", ok = (turbines.bound or 0) > 0,
-        detail = string.format("%d/%d gebunden", turbines.bound or 0, turbines.total or 0) }
-      checks[#checks + 1] = { name = "Monitor gefunden", ok = devices.monitor ~= nil }
-      checks[#checks + 1] = { name = "Rolle konfiguriert", ok = tostring(config.role or "") == "RT" }
-      report_mod.run(checks, { log = log })
-    end)
-  end
+  -- Startup-Diagnose-Report (Kernfunktion, 2026-07-01): siehe
+  -- xreactor/core/startup_report.lua. Kein pcall(require, ...) mehr noetig
+  -- — das Modul ist immer installiert (kein Opt-in), require() darf hier
+  -- also normal fehlschlagen (mit klarem Fehler) falls es fehlt, statt
+  -- den Fehlerzustand still zu verschlucken. Der eigentliche Aufruf bleibt
+  -- trotzdem in pcall() gewrappt, da einzelne Peripheral-Abfragen darin
+  -- (z.B. Modem-Erkennung) theoretisch scheitern koennten — der Boot-
+  -- Vorgang selbst darf davon nie blockiert werden.
+  local report_mod = require("core.startup_report")
+  pcall(function()
+    local checks = { report_mod.check_wireless_modem() }
+    local summary = registry and registry.get_summary and registry:get_summary() or {}
+    local kinds = summary.kinds or {}
+    local reactors = kinds.reactor or {}
+    local turbines = kinds.turbine or {}
+    checks[#checks + 1] = { name = "Reaktor erkannt", ok = (reactors.bound or 0) > 0,
+      detail = string.format("%d/%d gebunden", reactors.bound or 0, reactors.total or 0) }
+    checks[#checks + 1] = { name = "Turbinen erkannt", ok = (turbines.bound or 0) > 0,
+      detail = string.format("%d/%d gebunden", turbines.bound or 0, turbines.total or 0) }
+    checks[#checks + 1] = { name = "Monitor gefunden", ok = devices.monitor ~= nil }
+    checks[#checks + 1] = { name = "Rolle konfiguriert", ok = tostring(config.role or "") == "RT" }
+    report_mod.run(checks, { log = log })
+  end)
 
   log("INFO", "RT-Node ready: " .. (comms.network and comms.network.id or node_id))
 end
