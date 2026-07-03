@@ -619,6 +619,24 @@ function M.update(monitor, ctx)
     end
   end)
 
+  -- capacity_learned Sound-Event (Feature 2026-07-02): spielt EINMAL beim
+  -- Uebergang von "noch nicht bereit" zu "Kapazitaet gelernt", nicht bei
+  -- jedem weiteren Update-Zyklus solange capacity_ready weiterhin true ist.
+  pcall(function()
+    if M.last_capacity_ready == nil then
+      M.last_capacity_ready = model.capacity_ready == true
+      return
+    end
+    if model.capacity_ready == true and M.last_capacity_ready == false then
+      local ok_spk_mod, spk_mod = pcall(require, "optional.speaker_alarm")
+      if ok_spk_mod then
+        local speaker = spk_mod.new()
+        pcall(speaker.play, "capacity_learned")
+      end
+    end
+    M.last_capacity_ready = model.capacity_ready == true
+  end)
+
   return snapshot
 end
 
