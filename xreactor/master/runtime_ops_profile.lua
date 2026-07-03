@@ -221,6 +221,15 @@ function M.sample_trends(runtime)
     -- Verhalten solange niemand die Schwellen manuell anpasst.
     local idle_threshold = tonumber(runtime.state.idle_threshold_pct) or tonumber(runtime.config and runtime.config.idle_threshold_pct) or 90
     local peak_threshold = tonumber(runtime.state.peak_threshold_pct) or tonumber(runtime.config and runtime.config.peak_threshold_pct) or 30
+    -- Feature (2026-07-02): vierte Stufe — bei sehr hohem Fuellstand (Default
+    -- 98%, konfigurierbar ueber runtime.state.shed_threshold_pct) wird der
+    -- globale power_target explizit auf 0 gesetzt. rt_sync.build_node_
+    -- setpoint_plan() braucht dann keinen einzigen aktiven RT-Node mehr und
+    -- setzt alle auf shed/standby — ohne diese Stufe wuerde IDLE (90%) zwar
+    -- die Leistung auf 20% des Bedarfs senken, aber nie ganz auf 0 gehen,
+    -- selbst wenn der Speicher praktisch voll ist.
+    local shed_threshold = tonumber(runtime.state.shed_threshold_pct) or tonumber(runtime.config and runtime.config.shed_threshold_pct) or 98
+    shed_threshold = math.max(shed_threshold, idle_threshold + 1)
     -- Sicherheits-Clamp: IDLE-Schwelle muss ueber PEAK-Schwelle liegen,
     -- sonst waeren beide Bedingungen gleichzeitig erfuellbar bzw. es
     -- entstuende eine Luecke/Ueberlappung im Profilverhalten.
@@ -228,7 +237,13 @@ function M.sample_trends(runtime)
     -- Fix: power_target=0 beim Start (noch kein Profilwechsel ausgelöst) ist ein
     -- Sonderfall — sonst bleibt assigned=0% für immer obwohl auto_profile aktiv ist.
     -- Erzwingt einen einmaligen apply_profile()-Aufruf auch ohne Profilwechsel.
-    if (not runtime.state.power_target or runtime.state.power_target <= 0) then
+    if energy_pct >= shed_threshold then
+      if runtime.state.power_target ~= 0 or runtime.state.active_profile ~= "IDLE" then
+        runtime.state.active_profile = "IDLE"
+        runtime.state.power_target = 0
+        if runtime.log then runtime.log(("Energy %.1f%% >= Shed-Schwelle %.1f%% — power_target auf 0 gesetzt, alle RT auf shed"):format(energy_pct, shed_threshold), "INFO") end
+      end
+    elseif (not runtime.state.power_target or runtime.state.power_target <= 0) then
       M.apply_profile(runtime, runtime.state.active_profile or "BASELOAD")
     elseif energy_pct > idle_threshold and runtime.state.active_profile ~= "IDLE" then
       M.apply_profile(runtime, "IDLE")
