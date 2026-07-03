@@ -566,6 +566,15 @@ local function do_check()
     log("Aktuell (v" .. local_v .. ")")
   else
     log("NEU: v" .. local_v .. " -> v" .. remote_v .. " — Update startet")
+    -- update_available Sound-Event (Feature 2026-07-02): vollstaendig
+    -- fehlerisoliert, laeuft auf JEDEM Node der auto_update.lua nutzt.
+    pcall(function()
+      local ok_spk_mod, spk_mod = pcall(require, "optional.speaker_alarm")
+      if ok_spk_mod then
+        local speaker = spk_mod.new()
+        pcall(speaker.play, "update_available")
+      end
+    end)
     local success = false
     for attempt = 1, 3 do
       log("Versuch " .. attempt .. "/3")
