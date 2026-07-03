@@ -119,6 +119,7 @@ function M.run(ctx)
     view_manager = ctx.refs.view_manager,
     trends = ctx.trends,
     trend_cache = ctx.trend_cache,
+    node_message_handler = ctx.refs.node_message_handler,
     state = {
       monitor_cache = ctx.monitor_cache,
       last_draw = ctx.last_draw,
