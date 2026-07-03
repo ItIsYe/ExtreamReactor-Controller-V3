@@ -1,10 +1,7 @@
 local M = {}
 local support_ui_pages = require("nodes.support.ui_pages")
--- Ampel-Monitor (optional) ausgelagert nach xreactor/optional/ampel.lua
--- (2026-07-01) — vorher hier dupliziert mit derselben Logik wie in
--- nodes/rt/monitor_ui.lua.
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
-local ampel_instance = ok_ampel_mod and ampel_mod.new() or nil
+local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 
 local function format_energy(value)
   if value == nil then return "n/a" end
@@ -25,44 +22,96 @@ local function format_age(ts, now)
   return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
 end
 
+local function fit(text, width)
+  local s = tostring(text or "")
+  local w = math.max(1, tonumber(width) or #s)
+  if #s <= w then return s end
+  if w <= 2 then return s:sub(1, w) end
+  return s:sub(1, w - 1) .. "~"
+end
+
 function M.new(opts)
   local ui = assert(opts.ui, "ui required")
   local colors = assert(opts.colors, "colors required")
   local ui_router = assert(opts.ui_router, "ui_router required")
   local ui_state = assert(opts.ui_state, "ui_state required")
-  local utils = opts.utils  -- optional: needed for log mode buttons
+  local utils = opts.utils
 
-  local function render_header(mon, title, status, model)
+  local function render_header(mon, title, status, model, page_text)
     local w, h = ui.getSize(mon)
     if not w or not h then return end
     ui.panel(mon, 1, 1, w, h, title, status)
-    ui.text(mon, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
-    ui.rightText(mon, 2, 2, w - 2, model.health_status or status, colors.get(status), colors.get("background"))
+    ui.text(mon, 2, 2, ("ENERGY NODE | %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
+    if page_text and w >= 30 then
+      ui.rightText(mon, 2, 2, w - 2, page_text, colors.get("muted"), colors.get("background"))
+    else
+      ui.rightText(mon, 2, 2, w - 2, model.health_status or status, colors.get(status), colors.get("background"))
+    end
     if model.local_alerts_critical and model.local_alerts_critical > 0 then
       local label = "CRIT " .. tostring(model.local_alerts_critical)
-      ui.badge(mon, w - (#label + 2), 1, label, "EMERGENCY")
+      ui.badge(mon, math.max(2, w - (#label + 2)), 1, label, "EMERGENCY")
     end
+  end
+
+  local function storage_banner(model)
+    local total = model.total or {}
+    local pct = tonumber(total.percent)
+    if model.degraded then return "STORAGE WARNING", "WARNING" end
+    if pct == nil then return "STORAGE UNKNOWN", "muted" end
+    if pct < 0.15 then return "STORAGE CRITICAL", "EMERGENCY" end
+    if pct < 0.30 then return "STORAGE LOW", "WARNING" end
+    if pct > 0.95 then return "STORAGE HIGH", "LIMITED" end
+    return "STORAGE NORMAL", "OK"
+  end
+
+  local function trend_label(total)
+    local input = tonumber(total.input)
+    local output = tonumber(total.output)
+    if not input or not output then return "UNKNOWN", "muted" end
+    local delta = input - output
+    local base = math.max(1, math.abs(input), math.abs(output))
+    if math.abs(delta) / base < 0.05 then return "STABLE", "OK" end
+    if delta > 0 then return "CHARGING", "LIMITED" end
+    return "DRAINING", "WARNING"
   end
 
   local function render_overview(mon, model)
     local status = model.degraded and "WARNING" or "OK"
-    render_header(mon, "ENERGY NODE", status, model)
-    local w = select(1, ui.getSize(mon)); if not w then return end
-    local line = 4
-    ui.text(mon, 2, line, ("Matrices: %d"):format(#model.matrices), colors.get("text"), colors.get("background")); line = line + 1
-    ui.text(mon, 2, line, ("Storages: %d"):format(model.storages_count or 0), colors.get("text"), colors.get("background")); line = line + 2
+    render_header(mon, "ENERGY OVERVIEW", status, model, "SEITE 1")
+    local w, h = ui.getSize(mon); if not w or not h then return end
     local total = model.total or {}
-    ui.text(mon, 2, line, "GESAMT", colors.get("text"), colors.get("background")); line = line + 1
-    ui.progress(mon, 2, line, w - 4, total.percent or 0, status); line = line + 1
-    ui.text(mon, 2, line, ("E: %s / %s (%s)"):format(format_energy(total.stored), format_energy(total.capacity), format_percent(total.percent)), colors.get("text"), colors.get("background")); line = line + 1
-    local flow = (total.input ~= nil or total.output ~= nil) and ("IN " .. format_energy(total.input) .. "  OUT " .. format_energy(total.output)) or "IN/OUT n/a"
-    ui.text(mon, 2, line, flow, colors.get("text"), colors.get("background")); line = line + 2
-    ui.text(mon, 2, line, ("Last scan: %s"):format(model.last_scan_ts and format_age(model.last_scan_ts, os.epoch("utc")) or "n/a"), colors.get("text"), colors.get("background"))
+    local banner, banner_status = storage_banner(model)
+    local line = 4
+
+    ui.text(mon, 2, line, ">> " .. banner .. " <<", colors.get(banner_status), colors.get("background")); line = line + 2
+
+    if w >= 48 then
+      ui.text(mon, 2, line, fit(string.format("ENERGIE %s | INPUT %sRF/t | OUTPUT %sRF/t", format_percent(total.percent), format_energy(total.input), format_energy(total.output)), w - 3), colors.get("text"), colors.get("background")); line = line + 1
+      ui.text(mon, 2, line, fit(string.format("MATRICES %d | STORAGES %d | MASTER %s", #model.matrices, model.storages_count or 0, tostring(model.master_state or "?")), w - 3), colors.get("text"), colors.get("background")); line = line + 2
+    else
+      ui.text(mon, 2, line, "Energie " .. format_percent(total.percent), colors.get("text"), colors.get("background")); line = line + 1
+      ui.text(mon, 2, line, "IN " .. format_energy(total.input) .. "  OUT " .. format_energy(total.output), colors.get("text"), colors.get("background")); line = line + 1
+      ui.text(mon, 2, line, string.format("Matrices %d  Storages %d", #model.matrices, model.storages_count or 0), colors.get("text"), colors.get("background")); line = line + 2
+    end
+
+    ui.text(mon, 2, line, "ENERGY STORAGE", colors.get("text"), colors.get("background")); line = line + 1
+    ui.progress(mon, 2, line, math.max(8, w - 4), total.percent or 0, banner_status); line = line + 1
+    ui.text(mon, 2, line, fit(("%s / %s  (%s)"):format(format_energy(total.stored), format_energy(total.capacity), format_percent(total.percent)), w - 3), colors.get("text"), colors.get("background")); line = line + 2
+
+    local trend, trend_status = trend_label(total)
+    local m1 = model.matrices[1]
+    local m2 = model.matrices[2]
+    if line <= h - 2 then
+      ui.text(mon, 2, line, fit(string.format("MATRIX A %s | MATRIX B %s | TREND %s", m1 and format_percent(m1.percent) or "n/a", m2 and format_percent(m2.percent) or "n/a", trend), w - 3), colors.get(trend_status), colors.get("background")); line = line + 1
+    end
+    if line <= h - 1 then
+      ui.text(mon, 2, line, fit(string.format("MASTER %s (%s) | LAST SCAN %s", tostring(model.master_state or "?"), tostring(model.master_age or "-"), model.last_scan_ts and format_age(model.last_scan_ts, os.epoch("utc")) or "n/a"), w - 3), colors.get("muted"), colors.get("background"))
+    end
   end
 
   local function render_matrices(mon, model)
     local status = model.degraded and "WARNING" or "OK"
-    render_header(mon, "ENERGY MATRICES", status, model)
+    render_header(mon, "ENERGY MATRICES", status, model, nil)
     local w, h = ui.getSize(mon); if not w or not h then return end
     local list_start, footer_lines, total_lines, card_lines = 5, 2, 4, 4
     local available = math.max(0, (h - footer_lines - total_lines) - list_start + 1)
@@ -91,7 +140,7 @@ function M.new(opts)
 
   local function render_storages(mon, model)
     local status = model.degraded and "WARNING" or "OK"
-    render_header(mon, "ENERGY STORAGES", status, model)
+    render_header(mon, "ENERGY STORAGES", status, model, nil)
     local w, h = ui.getSize(mon); if not w or not h then return end
     local rows = {}
     table.sort(model.storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
@@ -109,7 +158,7 @@ function M.new(opts)
 
   local function render_diagnostics(mon, model)
     local status = model.degraded and "WARNING" or "OK"
-    render_header(mon, "ENERGY DIAGNOSTICS", status, model)
+    render_header(mon, "ENERGY DIAGNOSTICS", status, model, nil)
     local w, h = ui.getSize(mon); if not w or not h then return end
     local now = os.epoch("utc")
     local rows = {
@@ -122,36 +171,21 @@ function M.new(opts)
       { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", format_age(model.last_command_ts, now)) }
     }
     ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 6) })
-    if utils then
-      support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2)
-    end
+    if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
   end
 
-  -- ── Ampel-Statusmonitor (1x3, optional) ─────────────────────────────────
-  -- Nutzt das gemeinsame Modul xreactor/optional/ampel.lua (siehe dort für
-  -- Fehlerisolierung/Cache-Verhalten). Nur die Energy-spezifische Status-
-  -- Ermittlung bleibt hier lokal.
   local function energy_status_key(model)
     local total = model and model.total or {}
     local pct = tonumber(total.percent)
     if model and model.degraded then return "WARNING" end
     if not pct then return "muted" end
-    -- Feature (2026-07-01): Schwellwerte konfigurierbar statt fest 15/30/95
-    -- codiert, analog zu den PEAK/IDLE-Schwellen am Master. Liest aus
-    -- /xreactor/config/ampel_thresholds.lua, falls vorhanden (persistiert
-    -- ueber Reinstalls, da diese Datei Teil der PRESERVE-Liste im
-    -- Installer ist). Ohne diese Datei gelten unveraendert die bisherigen
-    -- Defaults 15/30/95 — kein Verhaltensunterschied ohne manuelle Anpassung.
     local emergency_below, warning_below, limited_above = 15, 30, 95
     local cfg_path = "/xreactor/config/ampel_thresholds.lua"
     if fs and fs.exists and fs.exists(cfg_path) then
       local ok_read, cfg = pcall(function()
-        local f = fs.open(cfg_path, "r")
-        if not f then return nil end
-        local raw = f.readAll()
-        f.close()
-        local chunk = load(raw, "=ampel_thresholds", "t", {})
-        if not chunk then return nil end
+        local f = fs.open(cfg_path, "r"); if not f then return nil end
+        local raw = f.readAll(); f.close()
+        local chunk = load(raw, "=ampel_thresholds", "t", {}); if not chunk then return nil end
         return chunk()
       end)
       if ok_read and type(cfg) == "table" then
@@ -171,14 +205,13 @@ function M.new(opts)
     ampel_instance.render(main_monitor_name, energy_status_key(model))
   end
 
-  -- Touch handler for the Diagnostics page (log mode buttons).
-  -- Called from main.lua's monitor_touch/mouse_click event handler.
   local function handle_diagnostics_touch(mon, x, y)
     if not utils then return false end
     local _, h = ui.getSize(mon)
     if not h then return false end
     return support_ui_pages.handle_log_mode_touch(x, y, h - 1, utils, 1)
   end
+
   return {
     render_overview = render_overview,
     render_matrices = render_matrices,
