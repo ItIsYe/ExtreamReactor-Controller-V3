@@ -280,7 +280,15 @@ function alert_service:tick()
 end
 
 function alert_service:get_active()
-  return self.alerts:get_active()
+  local active = self.alerts:get_active()
+  -- Feature 2026-07-02 (Alarm-Lifecycle): lifecycle_state direkt an jeden
+  -- Alert anhaengen, damit UI-Views es einfach als alert.lifecycle_state
+  -- lesen koennen, ohne selbst Zugriff auf das interne alerts-Objekt oder
+  -- dessen History zu brauchen.
+  for _, alert in ipairs(active) do
+    alert.lifecycle_state = self.alerts:lifecycle_state(alert)
+  end
+  return active
 end
 
 function alert_service:get_history()
