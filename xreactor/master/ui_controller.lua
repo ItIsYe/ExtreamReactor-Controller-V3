@@ -547,7 +547,18 @@ function M.new(opts)
       alert_counts = counts,
     }
 
-    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model }
+    -- Config-Editor am Monitor (Feature, 2026-07-02): zentrale Seite fuer
+    -- Werte, die vorher nur ueber Config-Dateien direkt bearbeitbar waren.
+    local config_editor_model = {
+      peak_threshold_pct = tonumber(c.state.peak_threshold_pct) or 30,
+      idle_threshold_pct = tonumber(c.state.idle_threshold_pct) or 90,
+      rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold,
+      fuel_reserve_pct = tonumber(c.state.fuel_reserve_pct) or 2000,
+      water_target_pct = tonumber(c.state.water_target_pct) or 0,
+      auto_update_enabled = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled(),
+    }
+
+    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model, config_editor = config_editor_model }
   end
 
   -- Fix: build_models() lief völlig ungeschützt. Ein Fehler dort (z.B. weil
@@ -650,6 +661,27 @@ function M.new(opts)
     if action.type == "idle_threshold_adjust" and action.delta and c.state then
       local cur = tonumber(c.state.idle_threshold_pct) or 90
       c.state.idle_threshold_pct = math.max(20, math.min(99, cur + action.delta))
+      return true
+    end
+    -- Config-Editor am Monitor (Feature, 2026-07-02): Fuel-Reserve/
+    -- Water-Target in festen Schritten anpassen, Auto-Update umschalten.
+    if action.type == "fuel_reserve_adjust" and action.delta and c.calc.set_fuel_reserve then
+      local cur = tonumber(c.state.fuel_reserve_pct) or 2000
+      local new_val = math.max(0, cur + action.delta)
+      c.state.fuel_reserve_pct = new_val
+      c.calc.set_fuel_reserve(new_val)
+      return true
+    end
+    if action.type == "water_target_adjust" and action.delta and c.calc.set_water_target then
+      local cur = tonumber(c.state.water_target_pct) or 0
+      local new_val = math.max(0, cur + action.delta)
+      c.state.water_target_pct = new_val
+      c.calc.set_water_target(new_val)
+      return true
+    end
+    if action.type == "auto_update_toggle" and c.calc.set_auto_update_enabled then
+      local cur = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled()
+      c.calc.set_auto_update_enabled(not cur)
       return true
     end
     -- Alarm-Historie Zeitfenster (Feature, 2026-07-01): zyklisch zwischen
