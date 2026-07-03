@@ -465,7 +465,34 @@ function M.new(opts)
       status = rt_fleet_status,
     }
 
-    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model }
+    -- Wartungsmodus-Übersichtsseite (Feature, 2026-07-02): alle Nodes
+    -- über alle Rollen hinweg mit AUTO/MAINTENANCE-Status, unabhängig vom
+    -- rollenspezifischen rt-Modell oben (das nur RT-Nodes enthält). LOG
+    -- wird bewusst als "nicht kritisch" markiert — Wartung am Log-Collector
+    -- soll keine Anlagenstörung auslösen, nur den Node selbst betreffen.
+    local maintenance_nodes = {}
+    for id, node in pairs(c.nodes or {}) do
+      local role = tostring(node.role or "?")
+      local in_maintenance = node.maintenance_mode == true
+      local status = "OK"
+      if in_maintenance then
+        status = (role == c.constants.roles.LOG_COLLECTOR) and "LIMITED" or "WARNING"
+      end
+      maintenance_nodes[#maintenance_nodes + 1] = {
+        id = id,
+        role = role,
+        maintenance_mode = in_maintenance,
+        status = status,
+        last_seen_age = node.last_seen_age,
+      }
+    end
+    table.sort(maintenance_nodes, function(a, b)
+      if a.role ~= b.role then return a.role < b.role end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local maintenance_model = { nodes = maintenance_nodes }
+
+    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model }
   end
 
   -- Fix: build_models() lief völlig ungeschützt. Ein Fehler dort (z.B. weil
