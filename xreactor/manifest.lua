@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v260
 return {
-  manifest_version = 281,
-  manifest_id = "manifest-v281",
+  manifest_version = 282,
+  manifest_id = "manifest-v282",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -45,7 +45,7 @@ return {
   { path = "core/auto_update.lua", size_bytes = 5174, hash = "332b3250" },
   { path = "core/remote_update.lua", size_bytes = 13576, hash = "ac163240" },
   { path = "core/alerts.lua", size_bytes = 11048, hash = "976d542c" },
-  { path = "services/alert_service.lua", size_bytes = 13526, hash = "d04e6700" },
+  { path = "services/alert_service.lua", size_bytes = 14551, hash = "d04e6700" },
   { path = "services/comms_service.lua", size_bytes = 8562, hash = "4b2957a5" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4" },
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },
@@ -59,7 +59,7 @@ return {
 
   roles = {
     master = {
-    { path = "core/alert_rules.lua", size_bytes = 16128, hash = "3ef37a5e", required_for={"MASTER"} },
+    { path = "core/alert_rules.lua", size_bytes = 17159, hash = "3ef37a5e", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 6221, hash = "2e0fba18", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 7758, hash = "eba62959", required_for={"MASTER"} },
@@ -89,7 +89,7 @@ return {
     { path = "master/ui/updates.lua", size_bytes = 3379, hash = "new", required_for={"MASTER"} },
     { path = "master/ui/system_map.lua", size_bytes = 3699, hash = "new", required_for={"MASTER"} },
     { path = "optional/ampel.lua", size_bytes = 3437, hash = "new", optional=true, feature="ampel" },
-    { path = "optional/speaker_alarm.lua", size_bytes = 4101, hash = "new", optional=true, feature="speaker_alarm" },
+    { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "new", optional=true, feature="speaker_alarm" },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "new", optional=true, feature="pocket_query", required_for={"MASTER"} },
     { path = "optional/master_ampel.lua", size_bytes = 4467, hash = "new", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 42573, hash = "89b29492", required_for={"MASTER"} },
@@ -116,7 +116,7 @@ return {
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
     { path = "nodes/rt/main.lua", size_bytes = 35332, hash = "ac098c39", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"} },
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 33475, hash = "30e85bdb", required_for={"RT"} },
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 34186, hash = "30e85bdb", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"} },
     { path = "nodes/rt/state_handlers.lua", size_bytes = 9257, hash = "bb391437", required_for={"RT"} },
