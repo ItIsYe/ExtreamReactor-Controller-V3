@@ -788,6 +788,19 @@ local function run()
   refresh_disks(true)
   refresh_modems(true)
   self_log("LOG Collector started; disks=" .. tostring(#stats.disks) .. " modem=" .. tostring(stats.modem), "INFO")
+
+  -- Startup-Diagnose-Report (Kernfunktion, 2026-07-01): siehe
+  -- xreactor/core/startup_report.lua.
+  local ok_report_mod, report_mod = pcall(require, "core.startup_report")
+  if ok_report_mod then
+    pcall(function()
+      local checks = { report_mod.check_wireless_modem() }
+      checks[#checks + 1] = { name = "Disk-Laufwerke", ok = #stats.disks > 0,
+        detail = string.format("%d gefunden", #stats.disks) }
+      report_mod.run(checks, { log = function(_, msg) self_log(msg, "INFO") end })
+    end)
+  end
+
   draw()
 
   local timer = os.startTimer and os.startTimer(1)
