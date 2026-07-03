@@ -3,8 +3,8 @@
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
 > **Branch:** `beta` — active development.
-> **Manifest / Release:** `manifest-v262` / `beta-v262` · ATM10 (MC 1.21.1)
-> **Status:** Phase 1–4 rewrite complete. Installer, auto-updater, setpoint flow, and UI have all been hardened through targeted bugfixes (see RUNTIME_STATUS_2026-06-03.md for the full session history). A UI-Redesign (layout system, summary view, Ampel status monitor) was completed 2026-07-01.
+> **Manifest / Release:** `manifest-v274` / `beta-v274` · ATM10 (MC 1.21.1)
+> **Status:** Phase 1–4 rewrite complete. Installer, auto-updater, setpoint flow, and UI have all been hardened through targeted bugfixes (see RUNTIME_STATUS_2026-06-03.md for the full session history). A UI-Redesign (layout system, summary view, Ampel status monitor) was completed 2026-07-01, followed by a repo hygiene pass and a set of new opt-in peripheral features (`xreactor/optional/`: Ampel, Speaker alarm, Pocket Computer query) plus core additions (RT redundancy warning, per-node maintenance mode, configurable PEAK/IDLE thresholds, mandatory startup diagnostics) on 2026-07-01/02.
 > See [REWRITE_SPEC.md](REWRITE_SPEC.md) for the full rewrite reference and [RUNTIME_STATUS_2026-06-03.md](RUNTIME_STATUS_2026-06-03.md) for session history.
 
 ---
@@ -147,19 +147,44 @@ Learning runs continuously and independently. A measurement only counts when **a
 
 Once `capacity_ready = true`, the result is cached to disk (`/xreactor/config/capacity_cache.lua`, preserved across reinstalls) and the Master prefers `learned_capacity_total` over the currently measured output when computing the PEAK power target — this was itself a bug fix (see RUNTIME_STATUS_2026-06-03.md).
 
-### Ampel Status Monitor (optional, 1x3)
+### Optional Peripheral Features (`xreactor/optional/`)
 
-Attach a second monitor (wired modem, scaled to exactly 1 wide × 3 tall) to an RT node and it is auto-detected — no configuration needed. It shows a solid color reflecting the node's current status, no text:
+A small set of features are **opt-in only** — they require additional physical hardware (a second monitor, a Speaker, a Pocket Computer) and are never installed unless explicitly selected. Running `installer` interactively asks about each one (`ampel installieren? [j/N]`, etc.); the choice is persisted to `/xreactor/config/optional_features.lua` and survives reinstalls/auto-updates without re-prompting. If a feature isn't installed, the corresponding `require()` call in the core code is `pcall`-guarded and the entire code path is silently skipped — no error, no effect.
 
-| Color | Meaning |
-|-------|---------|
-| Green | Delivering normally |
-| Yellow | Learning capacity, starting up, or waiting for a setpoint |
-| Orange | Output deviates from target, or over-delivering |
-| Red | Under-delivering (emergency) |
-| Gray | Shutting down / on standby (SHED) |
+#### Ampel Status Monitor (1×3, RT and ENERGY)
 
-Implementation notes: the Ampel logic in `monitor_ui.lua` is fully `pcall`-isolated on every level and identifies the main monitor by the name `M.init()` actually resolved (`M.main_monitor_name`) — an earlier version incorrectly referenced a non-existent `ctx.config.monitor_name` config field, and an even earlier attempt could, on failure, corrupt the main monitor's rendering state entirely. Both were fixed 2026-07-01.
+Attach a second monitor (wired modem, scaled to exactly 1 wide × 3 tall) to an RT **or** ENERGY node and it is auto-detected — no configuration needed beyond selecting the `ampel` feature during install. Shows a solid color reflecting the node's current status, no text. Shared implementation in `xreactor/optional/ampel.lua`, used by both `nodes/rt/monitor_ui.lua` and `nodes/energy/ui_pages.lua` (previously duplicated code, consolidated 2026-07-01).
+
+| Color | RT meaning | ENERGY meaning |
+|-------|-----------|-----------------|
+| Green | Delivering normally | Storage % within normal range |
+| Yellow | Learning capacity, starting up, or waiting for a setpoint | Below the warning threshold |
+| Orange | Output deviates from target, or over-delivering | Above the "nearly full" threshold |
+| Red | Under-delivering (emergency) | Below the critical threshold |
+| Gray | Shutting down / on standby (SHED) | Degraded / no data |
+
+ENERGY's thresholds (default 15/30/95%) are configurable via `/xreactor/config/ampel_thresholds.lua` (`emergency_below_pct`, `warning_below_pct`, `limited_above_pct`), preserved across reinstalls; without that file the defaults apply unchanged.
+
+Implementation notes: the Ampel logic is fully `pcall`-isolated on every level and identifies the main monitor by name (not object identity) to exclude it reliably — an earlier, less careful first attempt could, on failure, corrupt the main monitor's rendering state entirely. Fixed 2026-07-01.
+
+#### Speaker Alarm (any node type)
+
+An attached CC:Tweaked Speaker (any name, auto-detected) plays short tones for named events, with a per-event cooldown so it can't spam. `xreactor/optional/speaker_alarm.lua` exposes a generic `play(event_name, overrides)` API usable by **any** node type, not just MASTER:
+
+| Event | Default trigger |
+|-------|-----------------|
+| `alarm` | MASTER: at least one CRITICAL alert active |
+| `clear` | MASTER: transition from CRITICAL-active to no-CRITICAL (all-clear) |
+| `startup` | Any node: played once at the end of boot, alongside the startup diagnostic report |
+
+MASTER's `alert_service` and every node's boot sequence create their own Speaker instance and pass it into the relevant call; instances don't share cooldown state across node types.
+
+#### Pocket Computer Remote Query
+
+Lets a Pocket Computer (or any other computer not registered as a regular node) query MASTER for a compact status summary without walking up to a monitor. Two parts:
+
+- **Master side** (`xreactor/optional/pocket_query_handler.lua`, feature name `pocket_query`): answers `POCKET_QUERY` messages on the STATUS channel (6501) with a one-shot `POCKET_STATUS` reply — no subscription, no node registration.
+- **Client** (`xreactor/optional/pocket_client.lua`): a standalone script, **not** part of the role-based installer flow (Pocket Computers deliberately don't register as nodes). Copy it manually onto the Pocket Computer (e.g. via floppy disk) and run it; it polls every 5s and displays the reply, `[Q]` to quit.
 
 ---
 
@@ -179,7 +204,18 @@ The `overview` view (`master/ui/overview.lua`) is the single "everything at a gl
 
 ---
 
-## Known Resolved Issues (historical, kept for context)
+## Core Features Added 2026-07-01/02
+
+These are **not** opt-in — they're part of the standard install on every affected role.
+
+- **Startup diagnostic report** (`xreactor/core/startup_report.lua`): every node type prints a one-shot `=== Startup-Diagnose ===` summary at the end of boot (Ender Modem found, role-specific peripherals bound, monitor found, etc.), instead of scattered individual log lines that had to be pieced together manually. Optionally plays a Speaker "startup" tone if that feature is installed.
+- **RT redundancy warning** (`xreactor/core/alert_rules.lua`, code `RT_NO_REDUNDANCY`): MASTER raises a WARN-level alert when exactly one RT node is actively assigned and the remaining (non-active) nodes' combined learned capacity wouldn't cover current demand if that sole node failed — proactive, before an actual failure, not after.
+- **Per-node maintenance mode**: touch a RT card's title on the Master UI to toggle `node.maintenance_mode`. A node in maintenance is excluded from setpoint assignment (highest priority, even above global RT-Hold) but stays online/visible — distinct from OFFLINE (no response) and SHED (automatic, capacity-driven).
+- **Configurable PEAK/IDLE thresholds**: the energy-percent thresholds that trigger automatic profile switching (previously hardcoded 90%/30%) are now adjustable via `[-]`/`[+]` touch buttons on the Overview screen, in 5%-steps, with a safety clamp keeping IDLE above PEAK.
+
+---
+
+
 
 These were real bugs found and fixed during the 2026-06-30/07-01 hardening sessions. Listed here so future debugging doesn't waste time re-investigating already-closed issues:
 
@@ -195,4 +231,4 @@ These were real bugs found and fixed during the 2026-06-30/07-01 hardening sessi
 
 ## Known Open Issues
 
-None tracked as open at time of writing (2026-07-01, v262). See RUNTIME_STATUS_2026-06-03.md for the full, dated session log if something regresses.
+None tracked as open at time of writing (2026-07-02, v274). See RUNTIME_STATUS_2026-06-03.md for the full, dated session log if something regresses.
