@@ -1,69 +1,90 @@
 -- xreactor/optional/speaker_alarm.lua
 --
--- Optionale Peripherie: akustischer Alarm über einen CC:Tweaked Speaker.
+-- Optionale Peripherie: generischer, ereignisbasierter Speaker-Support.
 --
 -- Zweck: ein angeschlossener Speaker (beliebiger Name, automatisch erkannt)
--- spielt einen Warnton, sobald ein CRITICAL-Alarm aktiv ist. Ergaenzt die
--- visuelle Anzeige (Master-UI, Ampel-Monitor) um eine akustische Ebene, die
--- auch auffällt wenn man gerade nicht auf einen Monitor schaut.
+-- kann von JEDEM Node-Typ (nicht nur Master) fuer beliebige benannte
+-- Ereignisse genutzt werden — nicht nur "CRITICAL-Alarm", sondern jeder
+-- Aufrufer definiert eigene Sound-Events mit eigenem Ton/Cooldown. Ergaenzt
+-- die visuelle Anzeige (Master-UI, Ampel-Monitor) um eine akustische Ebene,
+-- die auch auffaellt wenn man gerade nicht auf einen Monitor schaut.
 --
 -- Design-Prinzip (siehe auch optional/ampel.lua): vollstaendig pcall-
 -- isoliert. Fehlt der Speaker, fehlt Note Block Studio o.ä. — das Modul
 -- gibt dann einfach nichts von sich, ohne den Rest des Systems zu stoeren.
+--
+-- Vordefinierte Ereignis-Presets (jeder Aufrufer kann eigene ergaenzen):
+--   "alarm"   — dringlich, tiefer Ton (CRITICAL-Alarme)
+--   "clear"   — Entwarnung, heller Ton (Alarm hat sich aufgeloest)
+--   "warning" — mittlere Dringlichkeit
+--   "startup" — kurzer, freundlicher Ton beim Node-Boot (optional nutzbar)
 
 local M = {}
 
--- Nicht zu oft feuern: ein Alarmton alle COOLDOWN_MS, solange CRITICAL
--- aktiv bleibt, statt bei jedem einzelnen Tick zu piepen (das waere sowohl
--- nervig als auch — analog zum frueheren "Overspeed brake pending"-Log-
--- Spam-Bug — potenziell ein Performance-/Spam-Problem, wenn play_sound()
--- sehr haeufig aufgerufen wird).
-local COOLDOWN_MS = 8000
+M.PRESETS = {
+  alarm   = { instrument = "bass",  pitch = 4,  volume = 3, cooldown_ms = 8000 },
+  clear   = { instrument = "bell",  pitch = 12, volume = 2, cooldown_ms = 4000 },
+  warning = { instrument = "harp",  pitch = 8,  volume = 2, cooldown_ms = 8000 },
+  startup = { instrument = "chime", pitch = 10, volume = 1, cooldown_ms = 0 },
+}
 
-function M.new(opts)
-  opts = opts or {}
-  local self = {
-    last_played_ms = 0,
-    instrument = opts.instrument or "harp",
-    pitch = opts.pitch or 6,
-    volume = opts.volume or 3,
-  }
-
-  local function find_speaker()
-    if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
-    local ok, names = pcall(peripheral.getNames)
-    if not ok or type(names) ~= "table" then return nil end
-    for _, name in ipairs(names) do
-      local ok_t, ptype = pcall(peripheral.getType, name)
-      if ok_t and tostring(ptype):find("speaker", 1, true) then
-        local ok_w, spk = pcall(peripheral.wrap, name)
-        if ok_w and spk then return spk end
-      end
+local function find_speaker()
+  if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
+  local ok, names = pcall(peripheral.getNames)
+  if not ok or type(names) ~= "table" then return nil end
+  for _, name in ipairs(names) do
+    local ok_t, ptype = pcall(peripheral.getType, name)
+    if ok_t and tostring(ptype):find("speaker", 1, true) then
+      local ok_w, spk = pcall(peripheral.wrap, name)
+      if ok_w and spk then return spk end
     end
-    return nil
   end
+  return nil
+end
 
-  -- notify(critical_active): critical_active ist ein Boolean, ob gerade
-  -- mindestens ein CRITICAL-Alarm aktiv ist (z.B. counts.CRITICAL > 0 vom
-  -- alert_service). Bei jedem Aufruf mit critical_active=true wird
-  -- (unter Beachtung des Cooldowns) ein kurzer Alarmton gespielt.
+-- M.new(): erstellt eine Speaker-Instanz mit eigenem Cooldown-Zustand pro
+-- Ereignis-Namen. Jeder Node-Typ (RT, ENERGY, MASTER, FUEL, WATER,
+-- REPROCESSOR, LOG) kann seine eigene Instanz erstellen und beliebige
+-- Ereignisse ausloesen, ohne sich gegenseitig zu beeinflussen.
+function M.new()
+  local self = { last_played_ms = {} }
+
+  -- play(event_name, overrides): event_name ist entweder ein Key aus
+  -- M.PRESETS ("alarm"/"clear"/"warning"/"startup") oder ein beliebiger
+  -- eigener String, sofern overrides selbst instrument/pitch/volume/
+  -- cooldown_ms mitgibt. Cooldown wird PRO event_name unabhaengig verfolgt
+  -- — ein "alarm"-Cooldown blockiert kein "clear" und umgekehrt.
   -- Vollstaendig pcall-isoliert, kann keine Exception nach aussen werfen.
-  function self.notify(critical_active)
-    if not critical_active then return end
+  function self.play(event_name, overrides)
     pcall(function()
+      local preset = M.PRESETS[event_name] or {}
+      overrides = overrides or {}
+      local instrument = overrides.instrument or preset.instrument or "harp"
+      local pitch = overrides.pitch or preset.pitch or 6
+      local volume = overrides.volume or preset.volume or 3
+      local cooldown_ms = overrides.cooldown_ms or preset.cooldown_ms or 5000
+
       local now = os.epoch and os.epoch("utc") or (os.clock() * 1000)
-      if (now - self.last_played_ms) < COOLDOWN_MS then return end
+      local last = self.last_played_ms[event_name] or 0
+      if cooldown_ms > 0 and (now - last) < cooldown_ms then return end
+
       local spk = find_speaker()
       if not spk then return end
       if type(spk.playNote) == "function" then
-        -- playNote(instrument, volume, pitch) — zwei kurze Toene im
-        -- Wechsel klingen eher nach "Alarm" als ein einzelner Ton.
-        pcall(spk.playNote, self.instrument, self.volume, self.pitch)
+        pcall(spk.playNote, instrument, volume, pitch)
       elseif type(spk.playSound) == "function" then
-        pcall(spk.playSound, "block.note_block.pling", self.volume, 1.0)
+        pcall(spk.playSound, "block.note_block.pling", volume, 1.0)
       end
-      self.last_played_ms = now
+      self.last_played_ms[event_name] = now
     end)
+  end
+
+  -- Abwaertskompatibel: notify(critical_active) entspricht dem alten,
+  -- Master-spezifischen Interface (nur "alarm" wenn CRITICAL aktiv ist).
+  -- Bestehende Aufrufer (z.B. services/alert_service.lua) funktionieren
+  -- unveraendert weiter, ohne Anpassung.
+  function self.notify(critical_active)
+    if critical_active then self.play("alarm") end
   end
 
   return self
