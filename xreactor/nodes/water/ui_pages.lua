@@ -93,7 +93,7 @@ function M.new(opts)
     for _, c in ipairs(p.clusters or {}) do
       if y > h - 2 then break end
       local state = c.filling and "FILLING" or c.draining and "DRAINING" or "STABLE"
-      local key = c.filling or c.draining and "LIMITED" or "OK"
+      local key = (c.filling or c.draining) and "LIMITED" or "OK"
       ui.text(mon, 2, y, fit(string.format("%-14s LEVEL %-9s MIN %-9s MAX %-9s %s", tostring(c.name or "?"), short(c.level), short(c.min), short(c.max), state), w - 3), colors.get(key), colors.get("background")); y = y + 1
     end
     if #(p.clusters or {}) == 0 then ui.text(mon, 2, y, "Keine Cluster konfiguriert.", colors.get("muted"), colors.get("background")); y = y + 1 end
