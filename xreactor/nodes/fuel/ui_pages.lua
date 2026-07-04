@@ -1,12 +1,5 @@
 local M = {}
-
-local function fit(text, width)
-  local s = tostring(text or "")
-  local w = math.max(1, tonumber(width) or #s)
-  if #s <= w then return s end
-  if w <= 2 then return s:sub(1, w) end
-  return s:sub(1, w - 1) .. "~"
-end
+local mux = require("core.mockup_ui")
 
 local function short(value, suffix)
   local n = tonumber(value)
@@ -19,85 +12,107 @@ end
 
 function M.new(opts)
   local ui = assert(opts.ui, "ui required")
-  local colors = assert(opts.colors, "colors required")
   local support_ui_pages = assert(opts.support_ui_pages, "support_ui_pages required")
   local utils = opts.utils
   local devices = opts.devices or {}
 
-  local function header(mon, model, title, page)
-    local w, h = ui.getSize(mon)
+  local function header(mon, model, title, page, icon)
     local status = model.status or "OK"
-    ui.panel(mon, 1, 1, w, h, title, status)
-    ui.text(mon, 2, 2, string.format("FUEL NODE | %s", tostring(model.node_id or "?")), colors.get("text"), colors.get("background"))
-    if page and w >= 30 then ui.rightText(mon, 2, 2, w - 2, page, colors.get("muted"), colors.get("background")) end
-    return w, h, status
+    mux.clear(mon)
+    mux.header(mon, { title = title, node_id = model.node_id or "FU-?", page = page, status = status, icon = icon or "fuel" })
+    local w = ({ mon.getSize() })[1]
+    if w >= 42 then
+      mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING")
+      mux.status_dot(mon, math.floor(w * 0.42), 3, tostring(model.status or "OK"), status)
+      mux.status_dot(mon, math.floor(w * 0.72), 3, "FUEL LINK", status)
+    end
+    return mon.getSize()
   end
 
   local function overview(mon, model)
-    local w, h, status = header(mon, model, "FUEL OVERVIEW", "SEITE 1/4")
+    local w, h = header(mon, model, "FUEL NODE", "SEITE 1/4", "fuel")
     local p = model.payload or {}
     local reserve = tonumber(p.reserve) or 0
     local minimum = tonumber(p.minimum_reserve) or 0
-    local target = math.max(minimum, reserve)
-    local ratio = target > 0 and math.max(0, math.min(1, reserve / target)) or 0
-    local key = reserve < minimum and "WARNING" or status == "OK" and "OK" or "WARNING"
-    local banner = reserve < minimum and "RESERVE LOW" or "RESERVE NORMAL"
+    local target = math.max(minimum, reserve, 1)
+    local ratio = math.max(0, math.min(1, reserve / target))
     local logistics = p.logistics or {}
     local routes_active = tonumber(logistics.active_routes or logistics.active or logistics.routes_active) or 0
     local routes_total = tonumber(logistics.total_routes or logistics.total or logistics.routes_total) or 0
-    local y = 4
+    local key = reserve < minimum and "WARNING" or model.status == "OK" and "OK" or "WARNING"
+    mux.banner(mon, 2, 5, w - 3, reserve < minimum and "RESERVE LOW" or "RESERVE NORMAL", key, "fuel")
 
-    ui.text(mon, 2, y, ">> " .. banner .. " <<", colors.get(key), colors.get("background")); y = y + 2
-    if w >= 48 then
-      ui.text(mon, 2, y, fit(string.format("RESERVE %s | MIN %s | ROUTEN %d/%d | MASTER %s", short(reserve, "mB"), short(minimum, "mB"), routes_active, routes_total, tostring(model.master_state or "?")), w - 3), colors.get("text"), colors.get("background")); y = y + 2
+    if w >= 54 and h >= 18 then
+      local gap = 1
+      local cw = math.floor((w - 4 - gap * 2) / 3)
+      mux.metric_card(mon, 2, 7, cw, 4, { label = "RESERVE", value = short(reserve, "mB"), status = key, icon = "fuel" })
+      mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "MINIMUM", value = short(minimum, "mB"), status = "LIMITED", icon = "storage" })
+      mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
+      mux.section(mon, 2, 12, w - 3, "FUEL RESERVE", key, "fuel")
+      mux.outlined_progress(mon, 2, 14, w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
+      mux.kpi_strip(mon, 2, 16, w - 3, {
+        { label = "ROUTEN", value = string.format("%d/%d", routes_active, routes_total), status = routes_active > 0 and "OK" or "LIMITED", icon = "network" },
+        { label = "STORAGE", value = tostring(devices.storage_name or "none"), status = devices.storage_name and "OK" or "WARNING", icon = "storage" },
+        { label = "MODE", value = "AUTO", status = "OK", icon = "config" },
+        { label = "SOURCE", value = tostring(#(p.sources or {})), status = "OK", icon = "fuel" },
+      })
     else
-      ui.text(mon, 2, y, string.format("Reserve %s", short(reserve, "mB")), colors.get("text"), colors.get("background")); y = y + 1
-      ui.text(mon, 2, y, string.format("Minimum %s", short(minimum, "mB")), colors.get("text"), colors.get("background")); y = y + 2
+      mux.kpi_strip(mon, 2, 7, w - 3, {
+        { label = "RESERVE", value = short(reserve), status = key, icon = "fuel" },
+        { label = "MIN", value = short(minimum), status = "LIMITED", icon = "storage" },
+        { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+      })
+      mux.section(mon, 2, 10, w - 3, "RESERVE", key, "fuel")
+      mux.outlined_progress(mon, 2, 12, w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
     end
-    ui.text(mon, 2, y, string.format("GESAMT RESERVE %.0f%%", ratio * 100), colors.get(key), colors.get("background")); y = y + 1
-    ui.progress(mon, 2, y, math.max(8, w - 4), ratio, key); y = y + 2
 
-    local sources = p.sources or {}
-    ui.text(mon, 2, y, "QUELLEN & SPEICHER", colors.get("LIMITED"), colors.get("background")); y = y + 1
-    local max_rows = math.max(1, h - y - 2)
-    for i = 1, math.min(#sources, max_rows) do
-      local s = sources[i]
-      local amount = tonumber(s.amount) or 0
-      local sr = reserve > 0 and math.max(0, math.min(1, amount / reserve)) or 0
-      if w >= 42 then
-        ui.text(mon, 2, y, fit(string.format("%-18s %10s | %5.0f%% | AKTIV", tostring(s.id or ("SOURCE " .. i)), short(amount, "mB"), sr * 100), w - 3), colors.get("OK"), colors.get("background"))
-      else
-        ui.text(mon, 2, y, fit(string.format("%s %s %.0f%%", tostring(s.id or i), short(amount, "mB"), sr * 100), w - 3), colors.get("OK"), colors.get("background"))
-      end
-      y = y + 1
+    if h >= 20 then
+      mux.section(mon, 2, h - 4, w - 3, "QUELLEN & SPEICHER", "LIMITED", "storage")
+      local source = (p.sources or {})[1]
+      mux.data_row(mon, 2, h - 2, w - 3, { label = source and tostring(source.id or "SOURCE") or "Keine Quelle", value = source and short(source.amount, "mB") or "-", status = source and "OK" or "WARNING", icon = "fuel" })
     end
-    if #sources == 0 then ui.text(mon, 2, y, "Keine Quelle gebunden.", colors.get("WARNING"), colors.get("background")) end
-    if h >= 3 then ui.text(mon, 2, h - 1, fit(string.format("MASTER %s | AUTO MODE | VERTEILUNG | LAST SCAN %s", tostring(model.master_state or "?"), tostring(model.last_scan or "-")), w - 3), colors.get("muted"), colors.get("background")) end
+    mux.footer_nav(mon, h, w, { center = "FUEL OVERVIEW" })
   end
 
   local function details(mon, model)
-    local w, h = header(mon, model, "FUEL DETAILS", "SEITE 2/4")
+    local w, h = header(mon, model, "FUEL DETAILS", "SEITE 2/4", "network")
     local p = model.payload or {}
     local logistics = p.logistics or {}
-    local y = 4
-    ui.text(mon, 2, y, "LOGISTICS / ROUTES", colors.get("LIMITED"), colors.get("background")); y = y + 2
-    local rows = {
-      { text = string.format("Storage: %s", tostring(devices.storage_name or "none")) },
-      { text = string.format("Reserve: %s", short(p.reserve, "mB")) },
-      { text = string.format("Minimum: %s", short(p.minimum_reserve, "mB")) },
-      { text = string.format("Router active:%s total:%s", tostring(logistics.active_routes or logistics.active or "n/a"), tostring(logistics.total_routes or logistics.total or "n/a")) },
-      { text = string.format("Registry total:%d bound:%d missing:%d", model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
-      { text = string.format("Last scan: %s", tostring(model.last_scan or "-")) },
-    }
-    ui.list(mon, 2, y, w - 2, rows, { max_rows = math.max(1, h - y - 1) })
+    local summary = model.summary or {}
+    mux.kpi_strip(mon, 2, 5, w - 3, {
+      { label = "RESERVE", value = short(p.reserve, "mB"), status = "OK", icon = "fuel" },
+      { label = "MIN", value = short(p.minimum_reserve, "mB"), status = "LIMITED", icon = "storage" },
+      { label = "BOUND", value = tostring(summary.bound or 0), status = "OK", icon = "network" },
+      { label = "MISSING", value = tostring(summary.missing or 0), status = (summary.missing or 0) > 0 and "WARNING" or "OK", icon = "warning" },
+    })
+    mux.section(mon, 2, 8, w - 3, "LOGISTICS / ROUTES", "LIMITED", "network")
+    mux.data_row(mon, 2, 10, w - 3, { label = "Storage", value = tostring(devices.storage_name or "none"), status = devices.storage_name and "OK" or "WARNING", icon = "storage" })
+    mux.data_row(mon, 2, 11, w - 3, { label = "Active routes", value = tostring(logistics.active_routes or logistics.active or "n/a"), status = "OK", icon = "network" })
+    mux.data_row(mon, 2, 12, w - 3, { label = "Total routes", value = tostring(logistics.total_routes or logistics.total or "n/a"), status = "text", icon = "network" })
+    mux.data_row(mon, 2, 13, w - 3, { label = "Last scan", value = tostring(model.last_scan or "-"), status = "LIMITED", icon = "network" })
+    mux.footer_nav(mon, h, w, { center = "FUEL DETAILS" })
   end
 
   local function diagnostics(mon, model)
-    local w, h = header(mon, model, "FUEL DIAGNOSTICS", "SEITE 3/4")
+    local w, h = header(mon, model, "FUEL DIAGNOSTICS", "SEITE 3/4", "network")
+    local summary = model.summary or {}
+    mux.kpi_strip(mon, 2, 5, w - 3, {
+      { label = "HEALTH", value = tostring(model.status or "OK"), status = model.status or "OK", icon = "ok" },
+      { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+      { label = "MISSING", value = tostring(summary.missing or 0), status = (summary.missing or 0) > 0 and "WARNING" or "OK", icon = "warning" },
+      { label = "SCAN", value = tostring(model.last_scan or "-"), status = "LIMITED", icon = "network" },
+    })
+    mux.section(mon, 2, 8, w - 3, "SYSTEM DIAGNOSTICS", "LIMITED", "network")
     local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
     support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
-    ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 6) })
+    local y = 10
+    for i = 1, math.min(#rows, math.max(0, h - y - 1)) do
+      local r = rows[i]
+      mux.data_row(mon, 2, y, w - 3, { label = tostring(r.text or ""), value = "", status = r.status or "text", icon = "network" })
+      y = y + 1
+    end
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
+    mux.footer_nav(mon, h, w, { center = "DIAGNOSTICS" })
   end
 
   local function diagnostics_touch(mon, x, y)
