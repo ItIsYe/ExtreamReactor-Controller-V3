@@ -57,10 +57,14 @@ function M.new(opts)
     local w = ({ mon.getSize() })[1]
     if w >= 42 then
       mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING")
-      mux.status_dot(mon, math.floor(w * 0.40), 3, model.degraded and "DEGRADED" or "HEALTHY", status)
-      mux.status_dot(mon, math.floor(w * 0.72), 3, tostring(model.health_status or status), status)
+      mux.status_dot(mon, math.floor(w * 0.38), 3, model.degraded and "DEGRADED" or "HEALTHY", status)
+      mux.status_dot(mon, math.floor(w * 0.70), 3, tostring(model.health_status or status), status)
     end
     return mon.getSize()
+  end
+
+  local function section_arrow(mon, x, y, w, title, status, icon)
+    mux.section(mon, x, y, w, "> " .. title, status, icon)
   end
 
   local function storage_banner(model)
@@ -75,83 +79,116 @@ function M.new(opts)
   end
 
   local function render_overview(mon, model)
-    local w, h = page_header(mon, model, "ENERGY NODE", "SEITE 1/4", "energy")
+    local w, h = page_header(mon, model, "ENERGY NODE", "1/4", "energy")
     local total = model.total or {}
     local banner, key = storage_banner(model)
     local trend, trend_key = trend_label(total)
-    mux.banner(mon, 2, 5, w - 3, banner, key, "energy")
+    mux.banner(mon, 2, 5, w - 3, "> " .. banner, key, nil)
 
-    if w >= 54 and h >= 18 then
-      local gap = 1
+    local gap = 1
+    if w >= 54 then
       local cw = math.floor((w - 4 - gap * 2) / 3)
       mux.metric_card(mon, 2, 7, cw, 4, { label = "ENERGIE", value = format_percent(total.percent), status = key, icon = "energy" })
       mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "INPUT", value = format_energy(total.input), unit = "RF/t", status = "LIMITED", icon = "input" })
       mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "OUTPUT", value = format_energy(total.output), unit = "RF/t", status = "OK", icon = "output" })
-
-      mux.section(mon, 2, 12, w - 3, "ENERGY STORAGE", key, "storage")
-      mux.outlined_progress(mon, 2, 14, w - 3, total.percent or 0, key, format_percent(total.percent))
-      mux.kpi_strip(mon, 2, 16, w - 3, {
-        { label = "MATRICES", value = tostring(#(model.matrices or {})), status = "OK", icon = "storage" },
-        { label = "STORAGES", value = tostring(model.storages_count or #(model.storages or {})), status = "OK", icon = "storage" },
-        { label = "TREND", value = trend, status = trend_key, icon = "flow" },
-        { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
-      })
     else
       mux.kpi_strip(mon, 2, 7, w - 3, {
         { label = "ENERGIE", value = format_percent(total.percent), status = key, icon = "energy" },
         { label = "INPUT", value = format_energy(total.input), status = "LIMITED", icon = "input" },
         { label = "OUTPUT", value = format_energy(total.output), status = "OK", icon = "output" },
       })
-      mux.section(mon, 2, 10, w - 3, "STORAGE", key, "storage")
-      mux.outlined_progress(mon, 2, 12, w - 3, total.percent or 0, key, format_percent(total.percent))
-      mux.data_row(mon, 2, 14, w - 3, { label = "Trend", value = trend, status = trend_key, icon = "flow" })
+    end
+
+    section_arrow(mon, 2, 12, w - 3, "ENERGY STORAGE", key, "storage")
+    mux.outlined_progress(mon, 2, 14, w - 3, total.percent or 0, key, format_percent(total.percent))
+    if h >= 16 then
+      mux.data_row(mon, 2, 15, w - 3, { label = format_energy(total.stored) .. " / " .. format_energy(total.capacity), value = "RF", status = "text", icon = "storage" })
     end
 
     if h >= 20 then
-      local m1, m2 = (model.matrices or {})[1], (model.matrices or {})[2]
-      mux.section(mon, 2, h - 4, w - 3, "MATRIX SNAPSHOT", "LIMITED", "storage")
-      mux.data_row(mon, 2, h - 2, w - 3, { label = "A " .. (m1 and format_percent(m1.percent) or "n/a") .. " | B " .. (m2 and format_percent(m2.percent) or "n/a"), value = trend, status = trend_key })
+      local cw = math.floor((w - 5 - 3) / 4)
+      local items = {
+        { label = "MATRIX A", value = (model.matrices or {})[1] and format_percent((model.matrices or {})[1].percent) or "n/a", status = "OK", icon = "storage" },
+        { label = "MATRIX B", value = (model.matrices or {})[2] and format_percent((model.matrices or {})[2].percent) or "n/a", status = "OK", icon = "storage" },
+        { label = "TREND", value = trend, status = trend_key, icon = "flow" },
+        { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+      }
+      for i, item in ipairs(items) do
+        mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 17, cw, 4, item)
+      end
     end
+
     mux.footer_nav(mon, h, w, { center = "ENERGY OVERVIEW" })
   end
 
   local function render_matrices(mon, model)
-    local w, h = page_header(mon, model, "ENERGY MATRICES", "SEITE 2/4", "storage")
+    local w, h = page_header(mon, model, "ENERGY MATRICES", "2/4", "storage")
     local matrices = model.matrices or {}
-    local cards_per_page = math.max(1, math.floor((h - 10) / 6))
+    local cards_per_page = w >= 60 and 2 or 1
+    if h < 18 then cards_per_page = 1 end
     local pagination = ui_router.paginate(matrices, cards_per_page, ui_state.matrix_page)
     ui_state.matrix_page = pagination.page
 
-    mux.kpi_strip(mon, 2, 5, w - 3, {
-      { label = "MATRICES", value = tostring(#matrices), status = "OK", icon = "storage" },
-      { label = "TOTAL", value = format_percent((model.total or {}).percent), status = status_from_percent((model.total or {}).percent, model.degraded), icon = "energy" },
-      { label = "INPUT", value = format_energy((model.total or {}).input), status = "LIMITED", icon = "input" },
-      { label = "OUTPUT", value = format_energy((model.total or {}).output), status = "OK", icon = "output" },
-    })
+    if w >= 54 then
+      local cw = math.floor((w - 5 - 3) / 4)
+      local top = {
+        { label = "MATRICES", value = tostring(#matrices), status = "OK", icon = "storage" },
+        { label = "TOTAL", value = format_percent((model.total or {}).percent), status = status_from_percent((model.total or {}).percent, model.degraded), icon = "energy" },
+        { label = "INPUT", value = format_energy((model.total or {}).input), status = "LIMITED", icon = "input" },
+        { label = "OUTPUT", value = format_energy((model.total or {}).output), status = "OK", icon = "output" },
+      }
+      for i, item in ipairs(top) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 5, cw, 4, item) end
+    else
+      mux.kpi_strip(mon, 2, 5, w - 3, {
+        { label = "MATRICES", value = tostring(#matrices), status = "OK", icon = "storage" },
+        { label = "TOTAL", value = format_percent((model.total or {}).percent), status = "OK", icon = "energy" },
+        { label = "INPUT", value = format_energy((model.total or {}).input), status = "LIMITED", icon = "input" },
+        { label = "OUTPUT", value = format_energy((model.total or {}).output), status = "OK", icon = "output" },
+      })
+    end
 
-    local y = 8
-    for idx = pagination.start_index, pagination.end_index do
-      local entry = matrices[idx]
-      if entry and y <= h - 7 then
-        local pct = entry.percent or 0
-        local key = entry.status == "DEGRADED" and "WARNING" or status_from_percent(pct, false)
-        local label = entry.alias or entry.label or entry.name or ("MATRIX " .. tostring(idx))
-        mux.card(mon, 2, y, w - 3, 5, { title = tostring(label), status = key, icon = "storage" })
-        mux.kpi_strip(mon, 4, y + 1, w - 7, {
-          { label = "FILL", value = format_percent(pct), status = key, icon = "energy" },
-          { label = "STORED", value = format_energy(entry.stored), status = key, icon = "storage" },
-          { label = "INPUT", value = format_energy(entry.input), status = "LIMITED", icon = "input" },
-          { label = "OUTPUT", value = format_energy(entry.output), status = "OK", icon = "output" },
-        })
-        mux.outlined_progress(mon, 4, y + 3, w - 7, pct, key, format_percent(pct))
-        y = y + 6
+    local start_y = 10
+    if w >= 60 then
+      local gap = 2
+      local card_w = math.floor((w - 4 - gap) / 2)
+      local col = 0
+      for idx = pagination.start_index, pagination.end_index do
+        local entry = matrices[idx]
+        if entry then
+          local pct = entry.percent or 0
+          local key = entry.status == "DEGRADED" and "WARNING" or status_from_percent(pct, false)
+          local label = entry.alias or entry.label or entry.name or ("MATRIX " .. tostring(idx))
+          local x = 2 + col * (card_w + gap)
+          mux.card(mon, x, start_y, card_w, math.max(8, h - start_y - 1), { title = tostring(label) .. "   ONLINE", status = key, icon = "storage" })
+          mux.metric_card(mon, x + 2, start_y + 2, card_w - 4, 4, { label = "FILL", value = format_percent(pct), status = key, icon = "energy" })
+          mux.outlined_progress(mon, x + 2, start_y + 7, card_w - 4, pct, key, format_percent(pct))
+          mux.data_row(mon, x + 2, start_y + 9, card_w - 4, { label = format_energy(entry.stored) .. " / " .. format_energy(entry.capacity), value = "RF", status = "text", icon = "storage" })
+          mux.data_row(mon, x + 2, start_y + 11, card_w - 4, { label = "INPUT", value = format_energy(entry.input) .. " RF/t", status = "LIMITED", icon = "input" })
+          mux.data_row(mon, x + 2, start_y + 12, card_w - 4, { label = "OUTPUT", value = format_energy(entry.output) .. " RF/t", status = "OK", icon = "output" })
+          col = col + 1
+        end
+      end
+    else
+      local y = start_y
+      for idx = pagination.start_index, pagination.end_index do
+        local entry = matrices[idx]
+        if entry then
+          local pct = entry.percent or 0
+          local key = entry.status == "DEGRADED" and "WARNING" or status_from_percent(pct, false)
+          local label = entry.alias or entry.label or entry.name or ("MATRIX " .. tostring(idx))
+          mux.card(mon, 2, y, w - 3, 8, { title = tostring(label) .. "   ONLINE", status = key, icon = "storage" })
+          mux.metric_card(mon, 4, y + 1, w - 7, 4, { label = "FILL", value = format_percent(pct), status = key, icon = "energy" })
+          mux.outlined_progress(mon, 4, y + 5, w - 7, pct, key, format_percent(pct))
+          y = y + 9
+        end
       end
     end
-    mux.footer_nav(mon, h, w, { center = "MATRICES" })
+
+    mux.footer_nav(mon, h, w, { center = "ENERGY MATRICES" })
   end
 
   local function render_storages(mon, model)
-    local w, h = page_header(mon, model, "ENERGY STORAGES", "SEITE 3/4", "storage")
+    local w, h = page_header(mon, model, "ENERGY STORAGES", "3/4", "storage")
     local storages = {}
     for _, s in ipairs(model.storages or {}) do storages[#storages + 1] = s end
     table.sort(storages, function(a, b) return (a.capacity or 0) > (b.capacity or 0) end)
@@ -163,69 +200,93 @@ function M.new(opts)
     end
     local total_pct = total_capacity > 0 and total_stored / total_capacity or 0
     local total_key = status_from_percent(total_pct, model.degraded)
-    mux.kpi_strip(mon, 2, 5, w - 3, {
-      { label = "STORAGES", value = tostring(#storages), status = "OK", icon = "storage" },
-      { label = "GESAMT", value = format_percent(total_pct), status = total_key, icon = "energy" },
-      { label = "STORED", value = format_energy(total_stored), status = total_key, icon = "storage" },
-      { label = "CAPACITY", value = format_energy(total_capacity), status = "LIMITED", icon = "storage" },
-    })
-    mux.section(mon, 2, 8, w - 3, "STORAGE BANK", total_key, "storage")
-    mux.outlined_progress(mon, 2, 10, w - 3, total_pct, total_key, format_percent(total_pct))
 
-    local max_rows = math.max(1, h - 13)
+    if w >= 54 then
+      local cw = math.floor((w - 5 - 3) / 4)
+      local top = {
+        { label = "STORAGES", value = tostring(#storages), status = "OK", icon = "storage" },
+        { label = "TOTAL", value = format_percent(total_pct), status = total_key, icon = "energy" },
+        { label = "STORED", value = format_energy(total_stored), status = total_key, icon = "storage" },
+        { label = "CAPACITY", value = format_energy(total_capacity), status = "LIMITED", icon = "storage" },
+      }
+      for i, item in ipairs(top) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 5, cw, 4, item) end
+    else
+      mux.kpi_strip(mon, 2, 5, w - 3, {
+        { label = "STORAGES", value = tostring(#storages), status = "OK", icon = "storage" },
+        { label = "TOTAL", value = format_percent(total_pct), status = total_key, icon = "energy" },
+        { label = "STORED", value = format_energy(total_stored), status = total_key, icon = "storage" },
+        { label = "CAPACITY", value = format_energy(total_capacity), status = "LIMITED", icon = "storage" },
+      })
+    end
+
+    section_arrow(mon, 2, 10, w - 3, "STORAGE BANK", total_key, "storage")
+    mux.outlined_progress(mon, 2, 12, w - 3, total_pct, total_key, format_percent(total_pct))
+
+    local max_rows = math.max(1, h - 15)
     local pagination = ui_router.paginate(storages, max_rows, ui_state.storage_page)
     ui_state.storage_page = pagination.page
-    local y = 12
+    local y = 14
     for idx = pagination.start_index, pagination.end_index do
       local s = storages[idx]
       if s then
         local pct = s.capacity and s.capacity > 0 and ((s.stored or 0) / s.capacity) or 0
         local key = status_from_percent(pct, false)
-        mux.data_row(mon, 2, y, w - 3, { label = tostring(s.id or s.name or ("ST-" .. idx)), value = format_energy(s.stored) .. "/" .. format_energy(s.capacity) .. " " .. format_percent(pct), status = key, icon = "storage" })
-        y = y + 1
+        mux.card(mon, 2, y, w - 3, 5, { title = tostring(s.id or s.name or ("ST-" .. idx)) .. "   ONLINE", status = key, icon = "storage" })
+        mux.data_row(mon, 4, y + 1, w - 7, { label = "ENERGY", value = format_percent(pct), status = key, icon = "energy" })
+        mux.outlined_progress(mon, 4, y + 3, w - 7, pct, key, format_energy(s.stored) .. " / " .. format_energy(s.capacity))
+        y = y + 6
       end
     end
-    if #storages == 0 then mux.warning_box(mon, 2, 12, w - 3, { "Keine Storages gefunden", "Discovery / Binding pruefen" }, "WARNING") end
-    mux.footer_nav(mon, h, w, { center = "STORAGES" })
+    if #storages == 0 then mux.warning_box(mon, 2, 14, w - 3, { "Keine Storages gefunden", "Discovery / Binding pruefen" }, "WARNING") end
+
+    mux.footer_nav(mon, h, w, { center = "ENERGY STORAGES" })
   end
 
   local function render_diagnostics(mon, model)
-    local w, h = page_header(mon, model, "ENERGY DIAGNOSTICS", "SEITE 4/4", "network")
+    local w, h = page_header(mon, model, "ENERGY DIAGNOSTICS", "4/4", "network")
     local summary = model.registry_summary or {}
     local total = model.total or {}
     local storage_key = status_from_percent(total.percent, model.degraded)
-    mux.kpi_strip(mon, 2, 5, w - 3, {
+
+    local top = {
       { label = "HEALTH", value = tostring(model.health_status or (model.degraded and "WARNING" or "OK")), status = model.degraded and "WARNING" or "OK", icon = "ok" },
       { label = "MASTER", value = tostring(model.master_state or "?") .. " " .. tostring(model.master_age or ""), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
-      { label = "MISSING", value = tostring(summary.missing or 0), status = (summary.missing or 0) > 0 and "WARNING" or "OK", icon = "warning" },
-      { label = "STORAGE", value = format_percent(total.percent), status = storage_key, icon = "energy" },
-    })
-
-    mux.section(mon, 2, 8, w - 3, "REGISTRY & DISCOVERY", "LIMITED", "network")
-    mux.data_row(mon, 2, 10, w - 3, { label = "Registry", value = string.format("%d total / %d bound / %d missing", summary.total or 0, summary.bound or 0, summary.missing or 0), status = (summary.missing or 0) > 0 and "WARNING" or "text", icon = "network" })
-    mux.data_row(mon, 2, 11, w - 3, { label = "Last scan", value = tostring(model.scan_result or "n/a") .. " / " .. format_age(model.last_scan_ts, os.epoch("utc")), status = "text", icon = "network" })
-    mux.data_row(mon, 2, 12, w - 3, { label = "Last error", value = tostring(model.last_error or "none"), status = model.last_error and "WARNING" or "OK", icon = "warning" })
-    mux.data_row(mon, 2, 13, w - 3, { label = "Last command", value = tostring(model.last_command or "none"), status = "LIMITED", icon = "config" })
-
-    mux.section(mon, 2, 15, w - 3, "ENERGY LOGIC", storage_key, "energy")
-    mux.data_row(mon, 2, 17, w - 3, { label = "Storage status", value = storage_key, status = storage_key, icon = "energy" })
-    mux.data_row(mon, 2, 18, w - 3, { label = "Input", value = format_energy(total.input), status = "LIMITED", icon = "input" })
-    mux.data_row(mon, 2, 19, w - 3, { label = "Output", value = format_energy(total.output), status = "OK", icon = "output" })
-
-    local alerts = model.local_alerts or {}
-    if #alerts > 0 and h >= 24 then
-      mux.section(mon, 2, 21, w - 3, "AKTIVE ALERTE", "WARNING", "warning")
-      local y = 23
-      for i = 1, math.min(#alerts, math.max(0, h - y - 1)) do
-        local a = alerts[i]
-        local sev = tostring(a.severity or "INFO")
-        local key = sev == "CRITICAL" and "EMERGENCY" or (sev == "WARN" or sev == "WARNING") and "WARNING" or "LIMITED"
-        mux.data_row(mon, 2, y, w - 3, { label = tostring(a.code or sev), value = tostring(a.title or a.message or "alert"), status = key, icon = "warning" })
-        y = y + 1
-      end
+      { label = "STORAGES", value = tostring(model.storages_count or #(model.storages or {})), status = "OK", icon = "storage" },
+      { label = "ALARMS", value = tostring(#(model.local_alerts or {})), status = #(model.local_alerts or {}) > 0 and "WARNING" or "OK", icon = "warning" },
+    }
+    if w >= 54 then
+      local cw = math.floor((w - 5 - 3) / 4)
+      for i, item in ipairs(top) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 5, cw, 4, item) end
+    else
+      mux.kpi_strip(mon, 2, 5, w - 3, top)
     end
+
+    section_arrow(mon, 2, 10, math.floor((w - 5) / 2), "SYSTEM INFO", "LIMITED", "network")
+    if w >= 58 then
+      local left_w = math.floor((w - 5) / 2)
+      local right_x = 3 + left_w
+      local right_w = w - right_x - 1
+      mux.card(mon, 2, 12, left_w, math.max(8, h - 13), { title = "SYSTEM INFO", status = "LIMITED", icon = "network" })
+      mux.data_row(mon, 4, 14, left_w - 4, { label = "REGISTRY", value = string.format("%d/%d/%d", summary.total or 0, summary.bound or 0, summary.missing or 0), status = (summary.missing or 0) > 0 and "WARNING" or "OK", icon = "network" })
+      mux.data_row(mon, 4, 15, left_w - 4, { label = "LAST SCAN", value = tostring(model.scan_result or "n/a") .. " " .. format_age(model.last_scan_ts, os.epoch("utc")), status = "text", icon = "network" })
+      mux.data_row(mon, 4, 16, left_w - 4, { label = "LAST ERROR", value = tostring(model.last_error or "none"), status = model.last_error and "WARNING" or "OK", icon = "warning" })
+      mux.data_row(mon, 4, 17, left_w - 4, { label = "COMMAND", value = tostring(model.last_command or "none"), status = "LIMITED", icon = "config" })
+
+      mux.card(mon, right_x, 12, right_w, math.max(8, h - 13), { title = "INPUT / OUTPUT", status = storage_key, icon = "energy" })
+      mux.data_row(mon, right_x + 2, 14, right_w - 4, { label = "STORAGE", value = format_percent(total.percent), status = storage_key, icon = "storage" })
+      mux.data_row(mon, right_x + 2, 15, right_w - 4, { label = "INPUT", value = format_energy(total.input) .. " RF/t", status = "LIMITED", icon = "input" })
+      mux.data_row(mon, right_x + 2, 16, right_w - 4, { label = "OUTPUT", value = format_energy(total.output) .. " RF/t", status = "OK", icon = "output" })
+      local trend, trend_key = trend_label(total)
+      mux.data_row(mon, right_x + 2, 17, right_w - 4, { label = "TREND", value = trend, status = trend_key, icon = "flow" })
+    else
+      mux.data_row(mon, 2, 12, w - 3, { label = "REGISTRY", value = string.format("%d/%d/%d", summary.total or 0, summary.bound or 0, summary.missing or 0), status = (summary.missing or 0) > 0 and "WARNING" or "OK", icon = "network" })
+      mux.data_row(mon, 2, 13, w - 3, { label = "STORAGE", value = format_percent(total.percent), status = storage_key, icon = "storage" })
+      mux.data_row(mon, 2, 14, w - 3, { label = "INPUT", value = format_energy(total.input), status = "LIMITED", icon = "input" })
+      mux.data_row(mon, 2, 15, w - 3, { label = "OUTPUT", value = format_energy(total.output), status = "OK", icon = "output" })
+    end
+
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
-    mux.footer_nav(mon, h, w, { center = "DIAGNOSTICS" })
+    mux.footer_nav(mon, h, w, { center = "ENERGY DIAGNOSTICS" })
   end
 
   local function energy_status_key(model)
