@@ -1,42 +1,40 @@
 local M = {}
+local mux = require("core.mockup_ui")
 
 function M.draw_status_page(target, ui, colors, title, lines)
   local w, h = target.getSize()
-  target.setBackgroundColor(colors.bg)
-  target.clear()
-  ui.panel(target, 1, 1, w, h, colors.panel)
-  ui.write_center(target, 1, title, colors.title, colors.panel)
-  local y = 3
+  mux.clear(target)
+  mux.header(target, { title = title or "STATUS", node_id = "LOCAL NODE", page = "STATUS", status = "OK", icon = "network" })
+  mux.section(target, 2, 5, w - 3, "> SYSTEM STATUS", "LIMITED", "network")
+  local y = 7
   for _, line in ipairs(lines or {}) do
     if y >= h then break end
-    ui.write_at(target, 2, y, tostring(line), colors.text, colors.panel)
+    mux.data_row(target, 2, y, w - 3, { label = tostring(line), value = "", status = "text", icon = "network" })
     y = y + 1
   end
+  if #(lines or {}) == 0 then
+    mux.warning_box(target, 2, 7, w - 3, { "Keine Statusdaten", "Warte auf Telemetrie" }, "LIMITED")
+  end
+  mux.footer_nav(target, h, w, { center = "SYSTEM STATUS" })
 end
 
 function M.format_age(ts, now)
-  if not ts then
-    return "n/a"
-  end
+  if not ts then return "n/a" end
   return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
 end
 
 function M.render_alert_banner(target, ui, model)
   if model.local_alerts_critical and model.local_alerts_critical > 0 then
     local w = select(1, ui.getSize(target))
-    if not w then
-      return
-    end
+    if not w then return end
     local label = "CRIT " .. tostring(model.local_alerts_critical)
     ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
   end
 end
 
 function M.append_local_alert_rows(rows, alerts)
-  if type(alerts) ~= "table" or #alerts == 0 then
-    return rows
-  end
-  table.insert(rows, { text = "Local Alerts:", status = "WARNING" })
+  if type(alerts) ~= "table" or #alerts == 0 then return rows end
+  table.insert(rows, { text = "> Local Alerts", status = "WARNING" })
   for _, alert in ipairs(alerts) do
     local sev = alert.severity and alert.severity:sub(1, 1) or "?"
     local title = alert.title or alert.message or alert.code or "alert"
@@ -70,20 +68,17 @@ function M.build_common_model(args)
 end
 
 function M.render_log_mode_button(target, utils_ref, x, y, w)
-  -- Renders mode buttons: Log: [All][Disk][Rmt][Term][Off]
-  -- Active mode highlighted green. Call handle_log_mode_touch() for touch input.
-  -- Uses numeric CC:Tweaked color constants directly (no 'colors' import in this module).
-  local CC_BLACK = 32768  -- colors.black
-  local CC_WHITE = 1      -- colors.white
-  local CC_GREEN = 32     -- colors.green
-  local CC_GRAY  = 256    -- colors.gray
+  local CC_BLACK = 32768
+  local CC_WHITE = 1
+  local CC_GREEN = 32
+  local CC_GRAY  = 256
   if not utils_ref then return end
   if type(target.setBackgroundColor) ~= "function" then return end
-  local mode   = utils_ref.get_log_mode and utils_ref.get_log_mode() or "all"
-  local modes  = { "all", "disk", "remote", "terminal", "none" }
+  local mode = utils_ref.get_log_mode and utils_ref.get_log_mode() or "all"
+  local modes = { "all", "disk", "remote", "terminal", "none" }
   local labels = { all = "All ", disk = "Disk", remote = "Rmt ", terminal = "Term", none = "Off " }
-  local btn_w  = 4
-  local cx     = (x or 2)
+  local btn_w = 4
+  local cx = (x or 2)
   target.setBackgroundColor(CC_BLACK)
   target.setTextColor(CC_GRAY)
   target.setCursorPos(cx, y or 2)
@@ -102,7 +97,7 @@ end
 function M.handle_log_mode_touch(tx, ty, btn_y, utils_ref, x)
   if not utils_ref or ty ~= (btn_y or 0) then return false end
   local modes = { "all", "disk", "remote", "terminal", "none" }
-  local cx    = (x or 2) + 4
+  local cx = (x or 2) + 4
   for _, m in ipairs(modes) do
     if tx >= cx and tx < cx + 4 then
       if utils_ref.set_log_mode then utils_ref.set_log_mode(m) end
@@ -117,19 +112,11 @@ function M.common_diagnostic_rows(model, discovery_failed)
   return {
     { text = ("Health: %s"):format(model.status), status = model.status },
     { text = ("Discovery: %s"):format(discovery_failed and "FAILED" or "OK"), status = discovery_failed and "WARNING" or "OK" },
-    { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
-    { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age) },
-    { text = ("Comms q:%d inflight:%d retries:%d"):format(
-      model.comms.queue_depth or 0,
-      model.comms.inflight_count or 0,
-      model.metrics.retries or 0
-    ) },
-    { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(
-      model.metrics.dropped or 0,
-      model.metrics.dedupe_hits or 0,
-      model.metrics.timeouts or 0
-    ) },
-    { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts) }
+    { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0), status = (model.summary.missing or 0) > 0 and "WARNING" or "OK" },
+    { text = ("Master link: %s age:%s"):format(model.master_state, model.master_age), status = model.master_state == "OK" and "OK" or "WARNING" },
+    { text = ("Comms q:%d inflight:%d retries:%d"):format(model.comms.queue_depth or 0, model.comms.inflight_count or 0, model.metrics.retries or 0), status = (model.metrics.retries or 0) > 0 and "LIMITED" or "OK" },
+    { text = ("Comms dropped:%d dedupe:%d timeouts:%d"):format(model.metrics.dropped or 0, model.metrics.dedupe_hits or 0, model.metrics.timeouts or 0), status = ((model.metrics.dropped or 0) + (model.metrics.timeouts or 0)) > 0 and "WARNING" or "OK" },
+    { text = ("Last cmd: %s (%s)"):format(model.last_command or "none", model.last_command_ts), status = "text" }
   }
 end
 
