@@ -1,12 +1,5 @@
 local M = {}
-
-local function fit(text, width)
-  local s = tostring(text or "")
-  local w = math.max(1, tonumber(width) or #s)
-  if #s <= w then return s end
-  if w <= 2 then return s:sub(1, w) end
-  return s:sub(1, w - 1) .. "~"
-end
+local mux = require("core.mockup_ui")
 
 local function short(value, suffix)
   local n = tonumber(value)
@@ -25,88 +18,116 @@ end
 
 function M.new(opts)
   local ui = assert(opts.ui, "ui required")
-  local colors = assert(opts.colors, "colors required")
   local support_ui_pages = assert(opts.support_ui_pages, "support_ui_pages required")
   local utils = opts.utils
   local config = opts.config or {}
   local devices = opts.devices or {}
 
-  local function header(mon, model, title, page)
-    local w, h = ui.getSize(mon)
+  local function header(mon, model, title, page, icon)
     local status = model.status or "OK"
-    ui.panel(mon, 1, 1, w, h, title, status)
-    ui.text(mon, 2, 2, string.format("WATER NODE | %s", tostring(model.node_id or "?")), colors.get("text"), colors.get("background"))
-    if page and w >= 30 then ui.rightText(mon, 2, 2, w - 2, page, colors.get("muted"), colors.get("background")) end
-    return w, h, status
+    mux.clear(mon)
+    mux.header(mon, { title = title, node_id = model.node_id or "WA-?", page = page, status = status, icon = icon or "water" })
+    local w = ({ mon.getSize() })[1]
+    if w >= 42 then
+      mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING")
+      mux.status_dot(mon, math.floor(w * 0.42), 3, tostring(model.status or "OK"), status)
+      mux.status_dot(mon, math.floor(w * 0.72), 3, "WATER LINK", status)
+    end
+    return mon.getSize()
   end
 
   local function overview(mon, model)
-    local w, h, status = header(mon, model, "WATER OVERVIEW", "SEITE 1/3")
+    local w, h = header(mon, model, "WATER NODE", "SEITE 1/3", "water")
     local p = model.payload or {}
     local total = tonumber(p.total_water) or 0
     local target = tonumber(config.target_volume) or 0
     local ratio = pct_from(total, target)
-    local banner = status == "OK" and "WASSER NORMAL" or "WASSER WARNING"
-    local key = status == "OK" and "OK" or "WARNING"
     local buffers = p.buffers or {}
     local clusters = p.clusters or {}
     local filling, draining = false, false
     for _, c in ipairs(clusters) do filling = filling or c.filling == true; draining = draining or c.draining == true end
+    local key = model.status == "OK" and "OK" or "WARNING"
+    local banner = filling and "WASSER WIRD GEFUELLT" or draining and "WASSER WIRD ENTLEERT" or model.status == "OK" and "WASSER NORMAL" or "WASSER WARNING"
+    mux.banner(mon, 2, 5, w - 3, banner, (filling or draining) and "LIMITED" or key, "water")
 
-    local y = 4
-    ui.text(mon, 2, y, ">> " .. banner .. " <<", colors.get(key), colors.get("background")); y = y + 2
-    if w >= 48 then
-      ui.text(mon, 2, y, fit(string.format("GESAMT %s | TANKS %d | FUELLEN %s | ENTLEEREN %s | MASTER %s", short(total, "mB"), #buffers, filling and "AKTIV" or "AUTO", draining and "AKTIV" or "AUTO", tostring(model.master_state or "?")), w - 3), colors.get("text"), colors.get("background")); y = y + 2
+    if w >= 54 and h >= 18 then
+      local gap = 1
+      local cw = math.floor((w - 4 - gap * 2) / 3)
+      mux.metric_card(mon, 2, 7, cw, 4, { label = "GESAMT", value = short(total, "mB"), status = key, icon = "water" })
+      mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "TANKS", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" })
+      mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
+      mux.section(mon, 2, 12, w - 3, "GESAMT FUELLSTAND", key, "water")
+      mux.outlined_progress(mon, 2, 14, w - 3, ratio or 0, key, ratio and string.format("%.0f%%", ratio * 100) or "n/a")
+      mux.kpi_strip(mon, 2, 16, w - 3, {
+        { label = "CLUSTER", value = tostring(#clusters), status = "OK", icon = "network" },
+        { label = "FILL", value = filling and "ON" or "OFF", status = filling and "LIMITED" or "OK", icon = "input" },
+        { label = "DRAIN", value = draining and "ON" or "OFF", status = draining and "LIMITED" or "OK", icon = "output" },
+        { label = "TARGET", value = short(target, "mB"), status = "LIMITED", icon = "storage" },
+      })
     else
-      ui.text(mon, 2, y, string.format("Gesamt %s  Tanks %d", short(total, "mB"), #buffers), colors.get("text"), colors.get("background")); y = y + 1
-      ui.text(mon, 2, y, string.format("Master %s", tostring(model.master_state or "?")), colors.get("text"), colors.get("background")); y = y + 2
+      mux.kpi_strip(mon, 2, 7, w - 3, {
+        { label = "GESAMT", value = short(total), status = key, icon = "water" },
+        { label = "TANKS", value = tostring(#buffers), status = "OK", icon = "storage" },
+        { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+      })
+      mux.section(mon, 2, 10, w - 3, "FUELLSTAND", key, "water")
+      mux.outlined_progress(mon, 2, 12, w - 3, ratio or 0, key, ratio and string.format("%.0f%%", ratio * 100) or "n/a")
     end
 
-    ui.text(mon, 2, y, string.format("GESAMT FUELLSTAND %s", ratio and string.format("%.0f%%", ratio * 100) or "n/a"), colors.get(key), colors.get("background")); y = y + 1
-    ui.progress(mon, 2, y, math.max(8, w - 4), ratio or 0, key); y = y + 2
-
-    local max_rows = math.max(1, h - y - 2)
-    for i = 1, math.min(#buffers, max_rows) do
-      local b = buffers[i]
-      local name = tostring(b.id or ("TANK " .. i))
-      local bpct = target > 0 and math.max(0, math.min(1, (tonumber(b.level) or 0) / target)) or 0
-      local bkey = bpct < 0.15 and "WARNING" or "OK"
-      if w >= 42 then
-        ui.text(mon, 2, y, fit(string.format("%-16s %10s | %5.0f%%", name, short(b.level, "mB"), bpct * 100), w - 3), colors.get(bkey), colors.get("background"))
-      else
-        ui.text(mon, 2, y, fit(string.format("%s %s %.0f%%", name, short(b.level, "mB"), bpct * 100), w - 3), colors.get(bkey), colors.get("background"))
-      end
-      y = y + 1
-      if y <= h - 2 then ui.progress(mon, 2, y, math.max(8, w - 4), bpct, bkey); y = y + 1 end
+    if h >= 20 then
+      mux.section(mon, 2, h - 4, w - 3, "TANK SNAPSHOT", "LIMITED", "storage")
+      local b = buffers[1]
+      mux.data_row(mon, 2, h - 2, w - 3, { label = b and tostring(b.id or "Tank A") or "Kein Tank", value = b and short(b.level, "mB") or "-", status = b and "OK" or "WARNING", icon = "storage" })
     end
-
-    if h >= 3 then
-      ui.text(mon, 2, h - 1, fit(string.format("CLUSTER %d | FILL %s | DRAIN %s | LAST SCAN %s", #clusters, filling and "ON" or "OFF", draining and "ON" or "OFF", tostring(model.last_scan or "-")), w - 3), colors.get("muted"), colors.get("background"))
-    end
+    mux.footer_nav(mon, h, w, { center = "WATER OVERVIEW" })
   end
 
   local function details(mon, model)
-    local w, h = header(mon, model, "WATER DETAILS", "SEITE 2/3")
+    local w, h = header(mon, model, "WATER DETAILS", "SEITE 2/3", "storage")
     local p = model.payload or {}
-    local y = 4
-    ui.text(mon, 2, y, "TANKS / CLUSTER", colors.get("LIMITED"), colors.get("background")); y = y + 2
-    for _, c in ipairs(p.clusters or {}) do
-      if y > h - 2 then break end
+    local clusters = p.clusters or {}
+    local buffers = p.buffers or {}
+    mux.kpi_strip(mon, 2, 5, w - 3, {
+      { label = "TANKS", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" },
+      { label = "CLUSTER", value = tostring(#clusters), status = "OK", icon = "network" },
+      { label = "TOTAL", value = short(p.total_water, "mB"), status = "OK", icon = "water" },
+      { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+    })
+    mux.section(mon, 2, 8, w - 3, "TANKS / CLUSTER", "LIMITED", "water")
+    local y = 10
+    for _, c in ipairs(clusters) do
+      if y > h - 5 then break end
       local state = c.filling and "FILLING" or c.draining and "DRAINING" or "STABLE"
       local key = (c.filling or c.draining) and "LIMITED" or "OK"
-      ui.text(mon, 2, y, fit(string.format("%-14s LEVEL %-9s MIN %-9s MAX %-9s %s", tostring(c.name or "?"), short(c.level), short(c.min), short(c.max), state), w - 3), colors.get(key), colors.get("background")); y = y + 1
+      mux.card(mon, 2, y, w - 3, 4, { title = tostring(c.name or "CLUSTER"), status = key, icon = "water" })
+      mux.data_row(mon, 4, y + 1, w - 7, { label = "LEVEL " .. short(c.level), value = state, status = key, icon = "water" })
+      mux.data_row(mon, 4, y + 2, w - 7, { label = "MIN " .. short(c.min), value = "MAX " .. short(c.max), status = "text" })
+      y = y + 5
     end
-    if #(p.clusters or {}) == 0 then ui.text(mon, 2, y, "Keine Cluster konfiguriert.", colors.get("muted"), colors.get("background")); y = y + 1 end
-    y = y + 1
-    ui.text(mon, 2, y, fit(string.format("REGISTRY total:%d bound:%d missing:%d", model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0), w - 3), colors.get((model.summary.missing or 0) > 0 and "WARNING" or "text"), colors.get("background"))
+    if #clusters == 0 then mux.warning_box(mon, 2, 10, w - 3, { "Keine Cluster konfiguriert", "Config pruefen" }, "WARNING") end
+    mux.footer_nav(mon, h, w, { center = "WATER DETAILS" })
   end
 
   local function diagnostics(mon, model)
-    local w, h = header(mon, model, "WATER DIAGNOSTICS", "SEITE 3/3")
+    local w, h = header(mon, model, "WATER DIAGNOSTICS", "SEITE 3/3", "network")
+    local summary = model.summary or {}
+    mux.kpi_strip(mon, 2, 5, w - 3, {
+      { label = "HEALTH", value = tostring(model.status or "OK"), status = model.status or "OK", icon = "ok" },
+      { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+      { label = "MISSING", value = tostring(summary.missing or 0), status = (summary.missing or 0) > 0 and "WARNING" or "OK", icon = "warning" },
+      { label = "SCAN", value = tostring(model.last_scan or "-"), status = "LIMITED", icon = "network" },
+    })
+    mux.section(mon, 2, 8, w - 3, "SYSTEM DIAGNOSTICS", "LIMITED", "network")
     local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
     support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
-    ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 6) })
+    local y = 10
+    for i = 1, math.min(#rows, math.max(0, h - y - 1)) do
+      local r = rows[i]
+      mux.data_row(mon, 2, y, w - 3, { label = tostring(r.text or ""), value = "", status = r.status or "text", icon = "network" })
+      y = y + 1
+    end
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
+    mux.footer_nav(mon, h, w, { center = "DIAGNOSTICS" })
   end
 
   local function diagnostics_touch(mon, x, y)
