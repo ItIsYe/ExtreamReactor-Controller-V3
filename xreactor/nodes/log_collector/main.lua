@@ -24,7 +24,7 @@ if not ok_const or type(constants) ~= "table" then
 end
 
 -- ── Configuration ───────────────────────────────────────────────────────────
-local CHANNEL          = constants.channels and constants.channels.LOG or 6502
+local CHANNEL          = constants.channels and constants.channels.LOG or 6503
 local MAX_LOG_BYTES    = 524288   -- 512 KB per active log file; leaves headroom on 1 MB CC disk
 local MIN_FREE_BYTES   = 8192    -- 8 KB; triggers wipe before disk fills completely
 local DEDUPE_LIMIT     = 512
