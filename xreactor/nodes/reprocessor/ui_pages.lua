@@ -1,12 +1,5 @@
 local M = {}
-
-local function fit(text, width)
-  local s = tostring(text or "")
-  local w = math.max(1, tonumber(width) or #s)
-  if #s <= w then return s end
-  if w <= 2 then return s:sub(1, w) end
-  return s:sub(1, w - 1) .. "~"
-end
+local mux = require("core.mockup_ui")
 
 local function short(value, suffix)
   local n = tonumber(value)
@@ -17,88 +10,132 @@ local function short(value, suffix)
   return string.format("%.0f%s", n, suffix or "")
 end
 
+local function state_key(state)
+  local s = tostring(state or "unknown")
+  if s == "ok" then return "OK" end
+  if s == "error" then return "EMERGENCY" end
+  if s == "unsupported" then return "WARNING" end
+  return "LIMITED"
+end
+
 function M.new(opts)
   local ui = assert(opts.ui, "ui required")
-  local colors = assert(opts.colors, "colors required")
   local support_ui_pages = assert(opts.support_ui_pages, "support_ui_pages required")
   local utils = opts.utils
   local devices = opts.devices or {}
 
-  local function header(mon, model, title, page)
-    local w, h = ui.getSize(mon)
+  local function header(mon, model, title, page, icon)
     local status = model.status or "OK"
-    ui.panel(mon, 1, 1, w, h, title, status)
-    ui.text(mon, 2, 2, string.format("REPROCESSING NODE | %s", tostring(model.node_id or "?")), colors.get("text"), colors.get("background"))
-    if page and w >= 34 then ui.rightText(mon, 2, 2, w - 2, page, colors.get("muted"), colors.get("background")) end
-    return w, h, status
+    mux.clear(mon)
+    mux.header(mon, { title = title, node_id = model.node_id or "RP-?", page = page, status = status, icon = icon or "recycle" })
+    local w = ({ mon.getSize() })[1]
+    if w >= 42 then
+      mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING")
+      mux.status_dot(mon, math.floor(w * 0.42), 3, tostring(model.status or "OK"), status)
+      mux.status_dot(mon, math.floor(w * 0.72), 3, "PROCESS LINK", status)
+    end
+    return mon.getSize()
   end
 
-  local function overview(mon, model)
-    local w, h, status = header(mon, model, "REPROCESSING OVERVIEW", "SEITE 1/4")
-    local p = model.payload or {}
-    local buffers = p.buffers or {}
-    local feed = p.feed or {}
+  local function totals(payload)
     local stored, capacity, active = 0, 0, 0
+    local buffers = payload.buffers or {}
     for _, b in ipairs(buffers) do
       stored = stored + (tonumber(b.stored) or 0)
       capacity = capacity + (tonumber(b.capacity) or 0)
       if b.process_state == "ok" then active = active + 1 end
     end
+    return stored, capacity, active, buffers
+  end
+
+  local function overview(mon, model)
+    local w, h = header(mon, model, "REPROCESSING NODE", "SEITE 1/4", "recycle")
+    local p = model.payload or {}
+    local stored, capacity, active, buffers = totals(p)
     local ratio = capacity > 0 and math.max(0, math.min(1, stored / capacity)) or 0
-    local key = status == "OK" and "OK" or "WARNING"
-    local banner = p.standby and "AUFBEREITUNG STANDBY" or status == "OK" and "AUFBEREITUNG NORMAL" or "AUFBEREITUNG WARNING"
+    local feed = p.feed or {}
     local routes_active = tonumber(feed.active_routes or feed.active or feed.routes_active) or 0
     local routes_total = tonumber(feed.total_routes or feed.total or feed.routes_total) or 0
-    local y = 4
+    local key = p.standby and "LIMITED" or model.status == "OK" and "OK" or "WARNING"
+    local banner = p.standby and "AUFBEREITUNG STANDBY" or model.status == "OK" and "AUFBEREITUNG NORMAL" or "AUFBEREITUNG WARNING"
+    mux.banner(mon, 2, 5, w - 3, banner, key, "recycle")
 
-    ui.text(mon, 2, y, ">> " .. banner .. " <<", colors.get(p.standby and "LIMITED" or key), colors.get("background")); y = y + 2
-    if w >= 52 then
-      ui.text(mon, 2, y, fit(string.format("ABFALL PUFFER %.0f%% | VERARBEITUNG %s | LINIEN %d/%d | ROUTEN %d/%d | MASTER %s", ratio * 100, p.standby and "STANDBY" or "AKTIV", active, #buffers, routes_active, routes_total, tostring(model.master_state or "?")), w - 3), colors.get("text"), colors.get("background")); y = y + 2
+    if w >= 54 and h >= 18 then
+      local gap = 1
+      local cw = math.floor((w - 4 - gap * 2) / 3)
+      mux.metric_card(mon, 2, 7, cw, 4, { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" })
+      mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = active > 0 and "OK" or "LIMITED", icon = "recycle" })
+      mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
+      mux.section(mon, 2, 12, w - 3, "PUFFER AUSLASTUNG", key, "storage")
+      mux.outlined_progress(mon, 2, 14, w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
+      mux.kpi_strip(mon, 2, 16, w - 3, {
+        { label = "STORED", value = short(stored), status = key, icon = "storage" },
+        { label = "CAPACITY", value = short(capacity), status = "LIMITED", icon = "storage" },
+        { label = "ROUTEN", value = string.format("%d/%d", routes_active, routes_total), status = routes_active > 0 and "OK" or "LIMITED", icon = "network" },
+        { label = "MODE", value = p.standby and "STANDBY" or "ACTIVE", status = key, icon = "config" },
+      })
     else
-      ui.text(mon, 2, y, string.format("Puffer %.0f%%  Linien %d/%d", ratio * 100, active, #buffers), colors.get("text"), colors.get("background")); y = y + 1
-      ui.text(mon, 2, y, string.format("Master %s", tostring(model.master_state or "?")), colors.get("text"), colors.get("background")); y = y + 2
+      mux.kpi_strip(mon, 2, 7, w - 3, {
+        { label = "BUFFER", value = string.format("%.0f%%", ratio * 100), status = key, icon = "storage" },
+        { label = "LINIEN", value = string.format("%d/%d", active, #buffers), status = "OK", icon = "recycle" },
+        { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+      })
+      mux.section(mon, 2, 10, w - 3, "PUFFER", key, "storage")
+      mux.outlined_progress(mon, 2, 12, w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
     end
 
-    ui.text(mon, 2, y, string.format("PUFFER AUSLASTUNG %.0f%%  %s/%s", ratio * 100, short(stored), short(capacity)), colors.get(key), colors.get("background")); y = y + 1
-    ui.progress(mon, 2, y, math.max(8, w - 4), ratio, key); y = y + 2
-    ui.text(mon, 2, y, "VERARBEITUNGSLINIEN", colors.get("LIMITED"), colors.get("background")); y = y + 1
-
-    local max_rows = math.max(1, h - y - 2)
-    for i = 1, math.min(#buffers, max_rows) do
-      local b = buffers[i]
-      local state = tostring(b.process_state or "unknown")
-      local bkey = state == "ok" and "OK" or state == "error" and "EMERGENCY" or state == "unsupported" and "WARNING" or "LIMITED"
-      local br = tonumber(b.percent) and math.max(0, math.min(1, tonumber(b.percent) / 100)) or 0
-      if w >= 46 then
-        ui.text(mon, 2, y, fit(string.format("%02d %-18s | %-11s | STORED %-9s | %5.0f%%", i, tostring(b.id or "?"), state:upper(), short(b.stored), br * 100), w - 3), colors.get(bkey), colors.get("background"))
-      else
-        ui.text(mon, 2, y, fit(string.format("%02d %s %s %.0f%%", i, tostring(b.id or "?"), state:upper(), br * 100), w - 3), colors.get(bkey), colors.get("background"))
-      end
-      y = y + 1
+    if h >= 20 then
+      mux.section(mon, 2, h - 4, w - 3, "VERARBEITUNGSLINIEN", "LIMITED", "recycle")
+      local b = buffers[1]
+      mux.data_row(mon, 2, h - 2, w - 3, { label = b and tostring(b.id or "LINE 1") or "Keine Linie", value = b and tostring(b.process_state or "unknown"):upper() or "-", status = b and state_key(b.process_state) or "WARNING", icon = "recycle" })
     end
-    if #buffers == 0 then ui.text(mon, 2, y, "Keine Buffer gefunden.", colors.get("WARNING"), colors.get("background")) end
-    if h >= 3 then ui.text(mon, 2, h - 1, fit(string.format("DURCHSATZ STATUS | FEED ROUTES %d/%d | LAST SCAN %s", routes_active, routes_total, tostring(model.last_scan or "-")), w - 3), colors.get("muted"), colors.get("background")) end
+    mux.footer_nav(mon, h, w, { center = "REPROCESSING" })
   end
 
   local function details(mon, model)
-    local w, h = header(mon, model, "REPROCESSING DETAILS", "SEITE 2/4")
+    local w, h = header(mon, model, "REPROCESSING DETAILS", "SEITE 2/4", "recycle")
     local p = model.payload or {}
-    local y = 4
-    ui.text(mon, 2, y, "BUFFER / PROCESS STATE", colors.get("LIMITED"), colors.get("background")); y = y + 2
-    for _, b in ipairs(p.buffers or {}) do
-      if y > h - 2 then break end
-      local state = tostring(b.process_state or "unknown")
-      local key = state == "ok" and "OK" or state == "error" and "EMERGENCY" or "WARNING"
-      ui.text(mon, 2, y, fit(string.format("%-18s STORED %-9s CAP %-9s FILL %-6s PROCESS %s", tostring(b.id or "?"), short(b.stored), short(b.capacity), b.percent and string.format("%.1f%%", b.percent) or "n/a", state), w - 3), colors.get(key), colors.get("background")); y = y + 1
+    local _, _, _, buffers = totals(p)
+    mux.kpi_strip(mon, 2, 5, w - 3, {
+      { label = "BUFFER", value = tostring(#buffers), status = #buffers > 0 and "OK" or "WARNING", icon = "storage" },
+      { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+      { label = "STANDBY", value = p.standby and "YES" or "NO", status = p.standby and "LIMITED" or "OK", icon = "config" },
+      { label = "SCAN", value = tostring(model.last_scan or "-"), status = "LIMITED", icon = "network" },
+    })
+    mux.section(mon, 2, 8, w - 3, "BUFFER / PROCESS STATE", "LIMITED", "recycle")
+    local y = 10
+    for _, b in ipairs(buffers) do
+      if y > h - 5 then break end
+      local key = state_key(b.process_state)
+      mux.card(mon, 2, y, w - 3, 4, { title = tostring(b.id or "BUFFER"), status = key, icon = "recycle" })
+      mux.data_row(mon, 4, y + 1, w - 7, { label = "STORED " .. short(b.stored), value = "CAP " .. short(b.capacity), status = key, icon = "storage" })
+      mux.data_row(mon, 4, y + 2, w - 7, { label = "FILL " .. (b.percent and string.format("%.1f%%", b.percent) or "n/a"), value = tostring(b.process_state or "unknown"):upper(), status = key, icon = "recycle" })
+      y = y + 5
     end
+    if #buffers == 0 then mux.warning_box(mon, 2, 10, w - 3, { "Keine Buffer gefunden", "Discovery / Binding pruefen" }, "WARNING") end
+    mux.footer_nav(mon, h, w, { center = "PROCESS DETAILS" })
   end
 
   local function diagnostics(mon, model)
-    local w, h = header(mon, model, "REPROCESSING DIAGNOSTICS", "SEITE 3/4")
+    local w, h = header(mon, model, "REPROCESSING DIAGNOSTICS", "SEITE 3/4", "network")
+    local summary = model.summary or {}
+    mux.kpi_strip(mon, 2, 5, w - 3, {
+      { label = "HEALTH", value = tostring(model.status or "OK"), status = model.status or "OK", icon = "ok" },
+      { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" },
+      { label = "MISSING", value = tostring(summary.missing or 0), status = (summary.missing or 0) > 0 and "WARNING" or "OK", icon = "warning" },
+      { label = "SCAN", value = tostring(model.last_scan or "-"), status = "LIMITED", icon = "network" },
+    })
+    mux.section(mon, 2, 8, w - 3, "SYSTEM DIAGNOSTICS", "LIMITED", "network")
     local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
     support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
-    ui.list(mon, 2, 4, w - 2, rows, { max_rows = math.max(1, h - 6) })
+    local y = 10
+    for i = 1, math.min(#rows, math.max(0, h - y - 1)) do
+      local r = rows[i]
+      mux.data_row(mon, 2, y, w - 3, { label = tostring(r.text or ""), value = "", status = r.status or "text", icon = "network" })
+      y = y + 1
+    end
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
+    mux.footer_nav(mon, h, w, { center = "DIAGNOSTICS" })
   end
 
   local function diagnostics_touch(mon, x, y)
