@@ -1,6 +1,4 @@
-local ui = require("core.ui")
-local colors = require("shared.colors")
-local widgets = require("master.ui.widgets")
+local mux = require("core.mockup_ui")
 
 local function own_manifest_version()
   local ok, version = pcall(function()
@@ -47,60 +45,68 @@ local function node_name(node)
 end
 
 local function render(mon, model)
-  local w, h = ui.getSize(mon)
+  local w, h = mon.getSize()
   local own_version = own_manifest_version()
   local release_id = own_release_id() or (own_version and ("beta-v" .. tostring(own_version)) or "?")
   local nodes = (model and model.nodes) or {}
 
-  local attention = 0
+  local attention, offline, current = 0, 0, 0
   for _, node in ipairs(nodes) do
     local _, key = status_for(node, own_version)
     if key ~= "OK" and key ~= "muted" then attention = attention + 1 end
+    if key == "muted" then offline = offline + 1 end
+    if key == "OK" then current = current + 1 end
   end
 
-  ui.panel(mon, 1, 1, w, h, "AUX MONITOR | UPDATES", attention > 0 and "WARNING" or "OK")
-  ui.badge(mon, 2, 2, "RELEASE v" .. tostring(own_version or "?"), "OK")
-  local bx = math.min(w - 12, 18)
-  if bx > 2 then ui.badge(mon, bx, 2, tostring(#nodes) .. " NODES", "OK") end
-  local ax = math.max(2, w - 14)
-  if ax > bx + 4 then ui.badge(mon, ax, 2, tostring(attention) .. " ATTENTION", attention > 0 and "WARNING" or "OK") end
+  local page_status = attention > 0 and "WARNING" or "OK"
+  mux.clear(mon)
+  mux.header(mon, { title = "AUX UPDATES", node_id = "MASTER AUX", page = "UPDATES", status = page_status, icon = "network" })
+  mux.status_dot(mon, 2, 3, "RELEASE v" .. tostring(own_version or "?"), "OK")
+  if w >= 42 then mux.status_dot(mon, math.floor(w * 0.38), 3, string.format("NODES %d", #nodes), "OK") end
+  if w >= 62 then mux.status_dot(mon, math.floor(w * 0.70), 3, string.format("ATTN %d", attention), attention > 0 and "WARNING" or "OK") end
 
-  local row_y = 5
-  ui.text(mon, 2, row_y, widgets.fit("NODE", math.max(8, math.floor(w * 0.35))), colors.get("muted"), colors.get("background"))
-  if w >= 34 then ui.text(mon, math.floor(w * 0.48), row_y, "VERSION", colors.get("muted"), colors.get("background")) end
-  ui.rightText(mon, 2, row_y, w - 2, "STATUS", colors.get("muted"), colors.get("background"))
-  row_y = row_y + 1
+  if w >= 54 then
+    local cw = math.floor((w - 5 - 3) / 4)
+    local items = {
+      { label = "CURRENT", value = tostring(current), status = "OK", icon = "ok" },
+      { label = "UPDATE", value = tostring(attention), status = attention > 0 and "LIMITED" or "OK", icon = "network" },
+      { label = "OFFLINE", value = tostring(offline), status = offline > 0 and "WARNING" or "OK", icon = "warning" },
+      { label = "RELEASE", value = "v" .. tostring(own_version or "?"), status = "OK", icon = "config" },
+    }
+    for i, item in ipairs(items) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 5, cw, 4, item) end
+  end
 
-  local max_rows = math.max(1, h - row_y - 2)
+  mux.section(mon, 2, 10, w - 3, "> NODE VERSION STATUS", page_status, "network")
+  local y = 12
+  mux.table_header(mon, 2, y, w - 3, {
+    { label = "NODE", width = math.max(12, math.floor((w - 3) * 0.42)) },
+    { label = "VERSION", width = math.max(10, math.floor((w - 3) * 0.26)) },
+    { label = "STATUS", width = math.max(8, math.floor((w - 3) * 0.30)) },
+  })
+  y = y + 2
+
+  local max_rows = math.max(1, h - y - 2)
   local shown = 0
   for _, node in ipairs(nodes) do
     if shown >= max_rows then break end
     local label, key = status_for(node, own_version)
-    local name = widgets.fit(node_name(node), w >= 50 and 18 or 12)
     local version = (node.offline or node.stale) and "-" or tostring(tonumber(node.manifest_version) or "?")
-
-    if w >= 42 then
-      ui.text(mon, 2, row_y, name, colors.get(key), colors.get("background"))
-      ui.text(mon, math.floor(w * 0.48), row_y, "v" .. version, colors.get(key), colors.get("background"))
-      ui.rightText(mon, 2, row_y, w - 2, label, colors.get(key), colors.get("background"))
-    else
-      local line = string.format("%-12s v%-5s %s", name, version, label)
-      ui.text(mon, 2, row_y, widgets.fit(line, w - 3), colors.get(key), colors.get("background"))
-    end
-    row_y = row_y + 1
+    local line = string.format("%-18s %-12s %-10s", mux.fit(node_name(node), 18), "v" .. version, label)
+    mux.data_row(mon, 2, y, w - 3, { label = line, value = "", status = key, icon = key == "OK" and "ok" or "warning" })
+    y = y + 1
     shown = shown + 1
   end
 
   if #nodes == 0 then
-    ui.text(mon, 2, row_y, "Keine Nodes bekannt.", colors.get("muted"), colors.get("background"))
-  elseif #nodes > shown and row_y <= h - 2 then
-    ui.text(mon, 2, row_y, string.format("... +%d weitere", #nodes - shown), colors.get("muted"), colors.get("background"))
+    mux.warning_box(mon, 2, y, w - 3, { "Keine Nodes bekannt", "Heartbeat / Registry pruefen" }, "WARNING")
+  elseif #nodes > shown and y <= h - 2 then
+    mux.data_row(mon, 2, y, w - 3, { label = string.format("+%d weitere Nodes", #nodes - shown), value = "", status = "LIMITED", icon = "network" })
   end
 
-  if h >= 3 then
-    local footer = string.format("CURRENT RELEASE %s | %d NODES NEED ATTENTION", tostring(release_id), attention)
-    ui.text(mon, 2, h - 1, widgets.fit(footer, w - 3), colors.get(attention > 0 and "WARNING" or "text"), colors.get("background"))
+  if h >= 5 then
+    mux.banner(mon, 2, h - 4, w - 3, string.format("CURRENT RELEASE %s | %d NODES NEED ATTENTION", tostring(release_id), attention), page_status, "network")
   end
+  mux.footer_nav(mon, h, w, { center = "AUX UPDATES" })
 end
 
 return { render = render }
