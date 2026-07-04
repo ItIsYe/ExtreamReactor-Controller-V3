@@ -17,6 +17,15 @@ end
 local source, read_err = read_all(MAIN_PATH)
 if not source then error("LOG mockup loader: " .. tostring(read_err), 0) end
 
+-- The proven runtime already prefers shared.constants.channels.LOG, but its literal
+-- fallback still says 6502 although the LOG channel is 6503. Normalize only that
+-- exact fallback expression before compiling the runtime chunk.
+source = source:gsub(
+  "local CHANNEL%s*=%s*constants%.channels and constants%.channels%.LOG or 6502",
+  "local CHANNEL          = constants.channels and constants.channels.LOG or 6503",
+  1
+)
+
 local draw_start = source:find("local function draw()", 1, true)
 local display_marker = source:find("-- ── Display selection", 1, true)
 if not draw_start or not display_marker or display_marker <= draw_start then
