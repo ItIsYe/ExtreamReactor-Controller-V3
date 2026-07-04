@@ -12,8 +12,8 @@ local ROLE_ENTRY = {
   WATER         = INSTALL_ROOT .. "/nodes/water/main.lua",
   FUEL          = INSTALL_ROOT .. "/nodes/fuel/main.lua",
   REPROCESSING  = INSTALL_ROOT .. "/nodes/reprocessor/main.lua",
-  LOG           = INSTALL_ROOT .. "/nodes/log_collector/main.lua",
-  LOG_COLLECTOR = INSTALL_ROOT .. "/nodes/log_collector/main.lua",
+  LOG           = INSTALL_ROOT .. "/nodes/log_collector/mockup_main.lua",
+  LOG_COLLECTOR = INSTALL_ROOT .. "/nodes/log_collector/mockup_main.lua",
 }
 
 local function p(msg) pcall(print, tostring(msg)) end
