@@ -1,6 +1,5 @@
-local ui = require("core.ui")
+local mux = require("core.mockup_ui")
 local colors = require("shared.colors")
-local widgets = require("master.ui.widgets")
 
 local function status_weight(status)
   local s = tostring(status or "OFFLINE"):upper()
@@ -40,9 +39,6 @@ local function rt_setpoints(rt)
   return (rt and (rt.last_setpoints or rt.setpoints or rt.targets)) or {}
 end
 
--- Fix: "Soll %.1f%% | Ist %.1f%%" formatierte echte RF/t-Leistungswerte
--- (Millionen-Bereich) faelschlich als Prozentwerte mit %% — sah aus wie
--- "Soll 374457673.5% | Ist 683435215.9%" statt der korrekten RF/t-Einheit.
 local function fmt_rf(value)
   local n = tonumber(value)
   if not n then return "-" end
@@ -75,7 +71,7 @@ local function rt_hardware_summary(rt)
   local modules = first_number(rt and rt.module_count, count_table(rt and rt.modules), 0)
   local stable = first_number(rt and rt.modules_stable, 0)
   local limited = first_number(rt and rt.modules_limited, 0)
-  return string.format("HW R:%d T:%d M:%d S:%d L:%d", reactors, turbines, modules, stable, limited)
+  return string.format("R:%d T:%d M:%d S:%d L:%d", reactors, turbines, modules, stable, limited)
 end
 
 local function rt_runtime_summary(rt)
@@ -87,37 +83,23 @@ end
 local function rt_score(rt)
   local score = status_weight(rt and rt.status) * 1000
   local assignment = tostring(rt and rt.assignment_state or ""):upper()
-  if assignment == "UNASSIGNED" then
-    score = score + 700
-  elseif assignment == "UNAVAILABLE" then
-    score = score + 600
-  elseif assignment ~= "ASSIGNED" then
-    score = score + 450
-  end
-  if tostring(rt and rt.control_source or ""):upper() == "LOCAL" then
-    score = score + 300
-  end
+  if assignment == "UNASSIGNED" then score = score + 700
+  elseif assignment == "UNAVAILABLE" then score = score + 600
+  elseif assignment ~= "ASSIGNED" then score = score + 450 end
+  if tostring(rt and rt.control_source or ""):upper() == "LOCAL" then score = score + 300 end
   local age = tonumber(rt and rt.last_seen_age) or -1
-  if age > 0 then
-    score = score + math.min(age, 300)
-  end
-  local target = rt_target(rt)
-  local actual = rt_actual(rt)
+  if age > 0 then score = score + math.min(age, 300) end
+  local target, actual = rt_target(rt), rt_actual(rt)
   score = score + math.min(200, math.abs(target - actual) * 5)
   return score
 end
 
 local function prioritized_rt_nodes(nodes)
   local list = {}
-  for _, node in ipairs(nodes or {}) do
-    list[#list + 1] = node
-  end
+  for _, node in ipairs(nodes or {}) do list[#list + 1] = node end
   table.sort(list, function(a, b)
-    local sa = rt_score(a)
-    local sb = rt_score(b)
-    if sa ~= sb then
-      return sa > sb
-    end
+    local sa, sb = rt_score(a), rt_score(b)
+    if sa ~= sb then return sa > sb end
     return tostring(a and a.id or "") < tostring(b and b.id or "")
   end)
   return list
@@ -134,12 +116,9 @@ local function hidden_rt_summary(nodes)
   return stale, local_ctrl, unassigned
 end
 
--- Fix (2026-06-30): mehrere Felder auf rt_node (queue_state, assignment_state,
--- control_source, display_mode) sind theoretisch nie als Tabelle vorgesehen,
--- traten aber in der Praxis vereinzelt als Tabelle statt String auf (siehe
--- "Queue: table: 0x..." Anzeige-Bug). Ursache nicht abschliessend geklärt;
--- diese Hilfsfunktion verhindert defensiv, dass eine Tabelle ungefiltert als
--- "table: 0x..." im UI landet, unabhaengig wo genau im Datenfluss sie entsteht.
+-- Fix (2026-06-30): siehe historische Doku — mehrere rt_node-Felder traten
+-- vereinzelt als Tabelle statt String auf ("Queue: table: 0x..."-Bug).
+-- Diese Hilfsfunktion bleibt als defensive Absicherung erhalten.
 local function safe_text(value, fallback)
   if type(value) == "string" or type(value) == "number" then
     return tostring(value)
@@ -150,71 +129,68 @@ end
 local function render_rt_card(mon, x, y, w, rt, hits)
   local node_id = safe_text(rt.id or rt.node_id, "UNKNOWN")
   local maintenance = rt.maintenance_mode == true
-  -- Wartungsmodus (Feature, 2026-07-01): Titel-Status wird bei aktivem
-  -- Wartungsmodus auf "LIMITED" (gelb) gesetzt statt dem normalen Status,
-  -- damit auf einen Blick erkennbar ist, dass der Node manuell aus der
-  -- Zuweisung genommen wurde — unabhaengig davon ob er sonst OK/RUNNING waere.
-  local box = widgets.panel_box(mon, x, y, w, 10, "RT-" .. node_id .. (maintenance and " [WARTUNG]" or ""), maintenance and "LIMITED" or (rt.status or "OFFLINE"))
-  -- Titelzeile als Touch-Zone fuer Wartungsmodus-Toggle registrieren, sofern
-  -- eine echte Node-ID vorhanden ist (nicht beim "keine RT-Nodes"-Platzhalter).
+  local status_key = maintenance and "LIMITED" or (rt.status or "OFFLINE")
+  local h = 10
+
+  mux.card(mon, x, y, w, h, { title = "RT-" .. node_id .. (maintenance and " [WARTUNG]" or ""), status = status_key, icon = "reactor" })
+  -- Titelzeile als Touch-Zone fuer Wartungsmodus-Toggle registrieren.
   if hits and rt.id and rt.id ~= "NO-RT" then
-    hits[#hits + 1] = { type = "maintenance_toggle", node_id = rt.id, x1 = box.x, x2 = box.x + math.max(0, box.w - 1), y1 = y, y2 = y }
+    hits[#hits + 1] = { type = "maintenance_toggle", node_id = rt.id, x1 = x, x2 = x + math.max(0, w - 1), y1 = y, y2 = y }
   end
-  local target = rt_target(rt)
-  local actual = rt_actual(rt)
-  widgets.status_badge(mon, box.x + math.max(0, box.w - 10), box.y, safe_text(rt_state(rt)), rt.status or "OFFLINE", 9)
-  ui.text(mon, box.x, box.y + 1, widgets.fit(string.format("Soll %s | Ist %s RF/t", fmt_rf(target), fmt_rf(actual)), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 2, widgets.fit("State: " .. safe_text(rt_state(rt)) .. " | Mode: " .. safe_text(rt_local_mode(rt)), box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 3, widgets.fit(rt_hardware_summary(rt), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 4, widgets.fit(rt_runtime_summary(rt), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 5, widgets.fit("Seen " .. tostring(rt.last_seen_age or "-") .. "s | " .. safe_text(rt.assignment_state, "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 6, widgets.fit("Source: " .. safe_text(rt.control_source, "-") .. " | " .. safe_text(rt.display_mode, "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 7, widgets.fit("Queue: " .. safe_text(rt.queue_state, "idle") .. " | " .. safe_text(rt.queue_step, "-"), box.w), colors.get("muted"), colors.get("background"))
-  ui.progress(mon, box.x, box.y + 8, math.max(8, box.w), math.max(0, math.min(100, actual)) / 100, rt.status or "OFFLINE")
+
+  local target, actual = rt_target(rt), rt_actual(rt)
+  local bx, by, bw = x + 2, y + 1, w - 4
+  mux.data_row(mon, bx, by, bw, { label = "SOLL/IST", value = fmt_rf(target) .. " / " .. fmt_rf(actual) .. " RF/t", status = status_key })
+  mux.data_row(mon, bx, by + 1, bw, { label = "STATE", value = safe_text(rt_state(rt)) .. " | " .. safe_text(rt_local_mode(rt)), status = "muted" })
+  mux.data_row(mon, bx, by + 2, bw, { label = "HW", value = rt_hardware_summary(rt), status = "text" })
+  mux.data_row(mon, bx, by + 3, bw, { label = "RUN", value = rt_runtime_summary(rt), status = "text" })
+  mux.data_row(mon, bx, by + 4, bw, { label = "SEEN", value = tostring(rt.last_seen_age or "-") .. "s | " .. safe_text(rt.assignment_state, "-"), status = "muted" })
+  mux.data_row(mon, bx, by + 5, bw, { label = "SRC", value = safe_text(rt.control_source, "-") .. " | " .. safe_text(rt.display_mode, "-"), status = "muted" })
+  mux.data_row(mon, bx, by + 6, bw, { label = "QUEUE", value = safe_text(rt.queue_state, "idle") .. " | " .. safe_text(rt.queue_step, "-"), status = "muted" })
+  mux.outlined_progress(mon, bx, by + 7, bw, math.max(0, math.min(100, actual)) / 100, status_key, nil)
 end
 
 local function render_overflow_card(mon, x, y, w, hidden_nodes)
-  local box = widgets.panel_box(mon, x, y, w, 10, "Weitere RT", (#hidden_nodes > 0) and "LIMITED" or "OK")
-  local hidden = #hidden_nodes
+  local h = 10
+  mux.card(mon, x, y, w, h, { title = "Weitere RT", status = (#hidden_nodes > 0) and "LIMITED" or "OK", icon = "reactor" })
   local stale, local_ctrl, unassigned = hidden_rt_summary(hidden_nodes)
-  ui.text(mon, box.x, box.y, widgets.fit("+" .. tostring(hidden) .. " weitere RT-Nodes", box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 1, widgets.fit("Anzeige priorisiert Problemknoten", box.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 3, widgets.fit("Stale: " .. tostring(stale), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 4, widgets.fit("Local Ctrl: " .. tostring(local_ctrl), box.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, box.x, box.y + 5, widgets.fit("Offen/Unavailable: " .. tostring(unassigned), box.w), colors.get("text"), colors.get("background"))
+  local bx, by, bw = x + 2, y + 1, w - 4
+  mux.data_row(mon, bx, by, bw, { label = "VERSTECKT", value = "+" .. tostring(#hidden_nodes) .. " RT-Nodes", status = "text" })
+  mux.data_row(mon, bx, by + 2, bw, { label = "STALE", value = tostring(stale), status = "text" })
+  mux.data_row(mon, bx, by + 3, bw, { label = "LOCAL CTRL", value = tostring(local_ctrl), status = "text" })
+  mux.data_row(mon, bx, by + 4, bw, { label = "OFFEN", value = tostring(unassigned), status = "text" })
   if hidden_nodes[1] then
-    ui.text(mon, box.x, box.y + 7, widgets.fit("Top hidden: RT-" .. tostring(hidden_nodes[1].id or "?"), box.w), colors.get("muted"), colors.get("background"))
-    ui.text(mon, box.x, box.y + 8, widgets.fit(tostring(hidden_nodes[1].assignment_reason or "-"), box.w), colors.get("muted"), colors.get("background"))
+    mux.data_row(mon, bx, by + 6, bw, { label = "TOP", value = "RT-" .. tostring(hidden_nodes[1].id or "?"), status = "muted" })
+    mux.data_row(mon, bx, by + 7, bw, { label = "GRUND", value = tostring(hidden_nodes[1].assignment_reason or "-"), status = "muted" })
   end
 end
 
 local hit_cache = setmetatable({}, { __mode = "k" })
 
 local function render(mon, model)
-  local w, h = ui.getSize(mon)
-  local is_large = (w * h) >= 900 and w >= 48 and h >= 18
-  ui.panel(mon, 1, 1, w, h, "RT", "OK")
+  local w, h = mon.getSize()
+  mux.clear(mon)
+  local hold_status = model.rt_global_off_hold and "WARNING" or "OK"
+  mux.header(mon, { title = "RT FLEET", page = "FLEET STATUS", status = (model.unassigned or 0) > 0 and "WARNING" or "OK", icon = "reactor" })
   local hits = {}
 
-  local summary_h = is_large and 8 or 7
-  local summary = widgets.panel_box(mon, 2, 2, w - 2, summary_h, "RT-Flotte", "OK")
-  local badge_cols = widgets.split_columns(summary.w, is_large and { 2, 2, 2, 2 } or { 2, 2, 2, 2 }, 1)
-  local sx = summary.x
-  widgets.status_badge(mon, sx, summary.y, tostring(model.rt_active or 0) .. " AKTIV", "OK", badge_cols[1])
-  sx = sx + badge_cols[1] + 1
-  widgets.status_badge(mon, sx, summary.y, tostring(model.assigned or 0) .. " ASSIGN", (model.unassigned or 0) > 0 and "WARNING" or "OK", badge_cols[2])
-  sx = sx + badge_cols[2] + 1
-  widgets.status_badge(mon, sx, summary.y, tostring(model.master_control or 0) .. " MASTER", "LIMITED", badge_cols[3])
-  sx = sx + badge_cols[3] + 1
-  widgets.status_badge(mon, sx, summary.y, model.rt_global_off_hold and "RT HOLD" or "RT FREI", model.rt_global_off_hold and "WARNING" or "OK", badge_cols[4])
-  ui.text(mon, summary.x, summary.y + 1, widgets.fit("Fleet: " .. tostring(model.fleet_summary or "-"), summary.w), colors.get("text"), colors.get("background"))
-  ui.text(mon, summary.x, summary.y + 2, widgets.fit("Queue: " .. tostring(model.queue_summary or "-"), summary.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, summary.x, summary.y + 3, widgets.fit("Assignment " .. tostring(model.assignment_state or "-") .. " | Grund " .. tostring(model.assignment_reason or "-"), summary.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, summary.x, summary.y + 4, widgets.fit("Mode " .. tostring(model.display_mode or "-") .. " | Local " .. tostring(model.local_control or 0) .. " | Master " .. tostring(model.master_control or 0), summary.w), colors.get("muted"), colors.get("background"))
-  ui.text(mon, summary.x, summary.y + math.min(5, summary_h - 2), widgets.fit("Kartentitel antippen = Wartungsmodus ein/aus", summary.w), colors.get("muted"), colors.get("background"))
+  mux.status_dot(mon, 2, 3, tostring(model.rt_active or 0) .. " AKTIV", "OK")
+  if w >= 30 then mux.status_dot(mon, math.floor(w * 0.28), 3, tostring(model.assigned or 0) .. " ASSIGN", (model.unassigned or 0) > 0 and "WARNING" or "OK") end
+  if w >= 46 then mux.status_dot(mon, math.floor(w * 0.50), 3, tostring(model.master_control or 0) .. " MASTER", "LIMITED") end
+  if w >= 62 then mux.status_dot(mon, math.floor(w * 0.72), 3, model.rt_global_off_hold and "RT HOLD" or "RT FREI", hold_status) end
 
-  local queue_h = is_large and 7 or 6
-  local cards_top = 2 + summary_h + 1
+  local summary_top = 5
+  mux.section(mon, 2, summary_top, w - 3, "RT-FLOTTE", "OK", "reactor")
+  mux.data_row(mon, 2, summary_top + 2, w - 3, { label = "FLEET", value = tostring(model.fleet_summary or "-"), status = "text" })
+  mux.data_row(mon, 2, summary_top + 3, w - 3, { label = "QUEUE", value = tostring(model.queue_summary or "-"), status = "muted" })
+  mux.data_row(mon, 2, summary_top + 4, w - 3, { label = "ASSIGN", value = tostring(model.assignment_state or "-") .. " | " .. tostring(model.assignment_reason or "-"), status = "muted" })
+  mux.data_row(mon, 2, summary_top + 5, w - 3, { label = "MODE", value = tostring(model.display_mode or "-") .. " | Local " .. tostring(model.local_control or 0) .. " | Master " .. tostring(model.master_control or 0), status = "muted" })
+  if h >= 24 then
+    mux.data_row(mon, 2, summary_top + 6, w - 3, { label = "HINWEIS", value = "Kartentitel antippen = Wartungsmodus", status = "muted" })
+  end
+
+  local queue_h = h >= 30 and 6 or 5
+  local cards_top = summary_top + 8
   local cards_h = math.max(10, h - queue_h - cards_top - 1)
   local cols = (w >= 140) and 3 or 2
   local gap = 1
@@ -237,57 +213,50 @@ local function render(mon, model)
 
   if #ordered == 0 then
     render_rt_card(mon, 2, cards_top, math.max(24, card_w), {
-      id = "NO-RT",
-      status = "OFFLINE",
-      state = "IDLE",
+      id = "NO-RT", status = "OFFLINE", state = "IDLE",
       assignment_state = tostring(model.assignment_state or "UNASSIGNED"),
       assignment_reason = tostring(model.assignment_reason or "Keine RT-Nodes sichtbar"),
       control_source = tostring(model.control_source or "LOCAL"),
       display_mode = tostring(model.display_mode or "RT-Hauptansicht aktiv"),
-      queue_state = "idle",
-      queue_step = "-",
-      node_mode = "-",
-      last_seen_age = "-",
-      output = 0
+      queue_state = "idle", queue_step = "-", node_mode = "-",
+      last_seen_age = "-", output = 0
     })
   elseif overflow then
     local hidden_nodes = {}
-    for i = visible_count + 1, #ordered do
-      hidden_nodes[#hidden_nodes + 1] = ordered[i]
-    end
+    for i = visible_count + 1, #ordered do hidden_nodes[#hidden_nodes + 1] = ordered[i] end
     local idx = drawn
     local r = math.floor(idx / cols)
     local c = idx % cols
     render_overflow_card(mon, 2 + c * (card_w + gap), cards_top + r * 11, card_w, hidden_nodes)
   end
 
-  local queue = widgets.panel_box(mon, 2, h - queue_h, w - 2, queue_h, "Sequencer / Queue", "LIMITED")
-  local rows_data = {}
+  local queue_y = h - queue_h
+  mux.section(mon, 2, queue_y, w - 3, "SEQUENCER / QUEUE", "LIMITED", "network")
+  local y = queue_y + 2
+  local max_rows = math.max(1, queue_h - 2)
+  local shown = 0
   for i, q in ipairs(model.queue or {}) do
-    if i > math.max(1, queue.h - 1) then break end
-    -- Fix (2026-06-30): q.node_id war in der Praxis manchmal eine Tabelle
-    -- statt eines Strings (Ursache nicht abschliessend geklärt — vermutlich
-    -- ein verschachteltes entry/node-Objekt statt entry.id, das versehentlich
-    -- an sequencer.enqueue() durchgereicht wurde). tostring() auf einer
-    -- Tabelle ergibt "table: 0x...", was als kaputter Text im UI auftauchte
-    -- ("RT-table:_e895348"). Defensive Absicherung: nur echte Strings/Zahlen
-    -- anzeigen, alles andere als "?" behandeln und einmalig loggen, damit
-    -- ein erneutes Auftreten im Master-Log sichtbar wird.
+    if shown >= max_rows then break end
+    -- Fix (2026-06-30): q.node_id kann in der Praxis vereinzelt eine
+    -- Tabelle statt String sein — defensive Absicherung bleibt erhalten.
     local node_id_display
     if type(q.node_id) == "string" or type(q.node_id) == "number" then
       node_id_display = tostring(q.node_id)
     else
       node_id_display = "?"
     end
-    rows_data[#rows_data + 1] = {
-      text = widgets.fit(string.format("%d. RT-%s -> %s (%s)", i, node_id_display, tostring(q.module_id or q.action or "step"), tostring(q.state or "pending")), queue.w),
-      status = "LIMITED"
-    }
+    mux.data_row(mon, 2, y, w - 3, {
+      label = string.format("%d. RT-%s", i, node_id_display),
+      value = tostring(q.module_id or q.action or "step") .. " (" .. tostring(q.state or "pending") .. ")",
+      status = "LIMITED",
+    })
+    y = y + 1
+    shown = shown + 1
   end
-  if #rows_data == 0 then
-    rows_data[1] = { text = "Queue leer - keine aktiven Sequenzen", status = "OFFLINE" }
+  if shown == 0 then
+    mux.data_row(mon, 2, y, w - 3, { label = "QUEUE", value = "leer - keine aktiven Sequenzen", status = "muted" })
   end
-  ui.list(mon, queue.x, queue.y, queue.w, rows_data, { max_rows = queue.h })
+
   hit_cache[mon] = hits
 end
 
