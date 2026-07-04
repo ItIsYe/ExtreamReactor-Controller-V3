@@ -1,25 +1,8 @@
--- nodes/fuel/router_ui.lua
---
--- Local router configuration UI for the FUEL node's own monitor.
--- Runs directly on the FUEL computer — no MASTER connection needed.
---
--- Interaction (monitor touch):
---   1. Tap a redstone output side (left column) → SELECTED (yellow)
---   2. Tap a reactor name (right column)        → route ASSIGNED (green)
---   3. Tap an already-selected/assigned side    → REMOVE assignment
---   [Speichern] saves config to /xreactor/config/fuel_routes.lua
---   [Reset]     clears all routes
---
--- Config is loaded from and saved to disk so it survives reboots.
--- The redstone_router is updated immediately on save.
-
 local M = {}
+local mux = require("core.mockup_ui")
 
 local DEFAULT_ROUTE_CONFIG_PATH = "/xreactor/config/fuel_routes.lua"
-
 local BUILTIN_SIDES = { "top", "bottom", "left", "right", "front", "back" }
-
--- ---- disk persistence ------------------------------------------------------
 
 local function load_routes(path)
   path = path or DEFAULT_ROUTE_CONFIG_PATH
@@ -51,38 +34,31 @@ local function save_routes(routes, path)
   return true
 end
 
--- ---- constructor -----------------------------------------------------------
-
 function M.new(opts)
   opts = opts or {}
   local self = {
-    redstone_router = opts.redstone_router,  -- redstone_router instance to update on save
-    log             = opts.log or function() end,
-    get_reactors    = opts.get_reactors or function() return {} end,
-    config_path     = opts.config_path or DEFAULT_ROUTE_CONFIG_PATH,
+    redstone_router = opts.redstone_router,
+    log = opts.log or function() end,
+    get_reactors = opts.get_reactors or function() return {} end,
+    config_path = opts.config_path or DEFAULT_ROUTE_CONFIG_PATH,
     _ui = {
       selected_side = nil,
-      selected_int  = nil,
-      routes        = {},      -- { side, integrator, reactor, label }
-      dirty         = false,
-      side_btns     = {},
-      reactor_btns  = {},
-      save_btn      = nil,
-      reset_btn     = nil,
+      selected_int = nil,
+      routes = {},
+      dirty = false,
+      side_btns = {},
+      reactor_btns = {},
+      save_btn = nil,
+      reset_btn = nil,
     },
   }
-  -- Load persisted routes on startup
-  self._ui.routes = load_routes(opts.config_path or DEFAULT_ROUTE_CONFIG_PATH)
+  self._ui.routes = load_routes(self.config_path)
   return setmetatable(self, { __index = M })
 end
 
--- ---- route helpers ---------------------------------------------------------
-
 function M:_find(side, integrator)
   for _, r in ipairs(self._ui.routes) do
-    if r.side == side and (r.integrator or nil) == (integrator or nil) then
-      return r
-    end
+    if r.side == side and (r.integrator or nil) == (integrator or nil) then return r end
   end
   return nil
 end
@@ -90,170 +66,96 @@ end
 function M:_remove(side, integrator)
   local new = {}
   for _, r in ipairs(self._ui.routes) do
-    if not (r.side == side and (r.integrator or nil) == (integrator or nil)) then
-      new[#new + 1] = r
-    end
+    if not (r.side == side and (r.integrator or nil) == (integrator or nil)) then new[#new + 1] = r end
   end
   self._ui.routes = new
-  self._ui.dirty  = true
+  self._ui.dirty = true
 end
 
 function M:_assign(side, integrator, reactor_id, label)
   self:_remove(side, integrator)
   self._ui.routes[#self._ui.routes + 1] = {
-    side       = side,
+    side = side,
     integrator = integrator or nil,
-    reactor    = reactor_id,
-    label      = label,
+    reactor = reactor_id,
+    label = label,
   }
   self._ui.dirty = true
 end
 
--- ---- render ----------------------------------------------------------------
-
 function M:render(target, ui, colors)
   local w, h = ui.getSize(target)
   if not w or not h then return end
-
   local u = self._ui
-  local col_w = math.floor((w - 3) / 2)
-  local mid   = col_w + 3
-
-  -- Background
-  target.setBackgroundColor(colors.get("background"))
-  target.clear()
-
-  -- Panel
-  ui.panel(target, 1, 1, w, h, "Fuel-Router Konfiguration", "OK")
-
-  -- Headers
-  target.setCursorPos(2, 2)
-  target.setTextColor(colors.get("text"))
-  target.setBackgroundColor(colors.get("panel"))
-  target.write("Redstone-Ausgaben")
-
-  target.setCursorPos(mid, 2)
-  target.setTextColor(colors.get("success") or colors.cyan)
-  target.write("Reaktoren")
-
-  -- Divider
-  for row = 3, h - 3 do
-    target.setCursorPos(mid - 1, row)
-    target.setBackgroundColor(colors.get("background"))
-    target.setTextColor(colors.get("disabled") or colors.gray)
-    target.write("|")
-  end
-
-  -- Left column: sides
-  local side_btns = {}
   local reactors = self.get_reactors()
+  local page_status = u.dirty and "LIMITED" or "OK"
 
+  mux.clear(target)
+  mux.header(target, { title = "ROUTER CONFIG", node_id = "LOCAL NODE", page = "4/4", status = page_status, icon = "network" })
+  mux.status_dot(target, 2, 3, string.format("ROUTEN %d", #u.routes), #u.routes > 0 and "OK" or "LIMITED")
+  if w >= 40 then mux.status_dot(target, math.floor(w * 0.38), 3, u.dirty and "UNSAVED" or "SAVED", u.dirty and "LIMITED" or "OK") end
+  if w >= 62 then mux.status_dot(target, math.floor(w * 0.70), 3, string.format("ZIELE %d", #reactors), #reactors > 0 and "OK" or "WARNING") end
+
+  local gap = 2
+  local left_w = math.floor((w - 4 - gap) / 2)
+  local right_x = 2 + left_w + gap
+  local right_w = w - right_x - 1
+  local body_h = math.max(8, h - 10)
+
+  mux.card(target, 2, 5, left_w, body_h, { title = "REDSTONE AUSGAENGE", status = "LIMITED", icon = "output" })
+  mux.card(target, right_x, 5, right_w, body_h, { title = "REAKTOR ZIELE", status = #reactors > 0 and "OK" or "WARNING", icon = "reactor" })
+
+  local side_btns = {}
+  local sy = 7
   for i, side in ipairs(BUILTIN_SIDES) do
-    local row = i + 2
-    if row > h - 3 then break end
+    if sy > 5 + body_h - 2 then break end
     local assigned = self:_find(side, nil)
-    local is_sel   = u.selected_side == side and u.selected_int == nil
-
-    local bg = is_sel   and colors.yellow
-             or assigned and colors.green
-             or             colors.get("background")
-    local fg = (bg ~= colors.get("background")) and colors.black
-             or colors.get("text")
-
-    local label = side
-    if assigned then
-      label = side .. " → " .. (assigned.label or assigned.reactor or "?"):sub(1, col_w - 6)
-    end
-
-    target.setCursorPos(2, row)
-    target.setBackgroundColor(bg)
-    target.setTextColor(fg)
-    target.write((" " .. label .. string.rep(" ", col_w)):sub(1, col_w))
-    target.setBackgroundColor(colors.get("background"))
-
-    side_btns[#side_btns + 1] = {
-      x1 = 2, x2 = 2 + col_w, y = row,
-      side = side, integrator = nil,
-    }
+    local selected = u.selected_side == side and u.selected_int == nil
+    local key = selected and "LIMITED" or assigned and "OK" or "muted"
+    local value = assigned and tostring(assigned.label or assigned.reactor or "?") or "FREI"
+    mux.data_row(target, 4, sy, left_w - 4, { label = tostring(side):upper(), value = value, status = key, icon = selected and "config" or "output" })
+    side_btns[#side_btns + 1] = { x1 = 4, x2 = 1 + left_w - 1, y = sy, side = side, integrator = nil }
+    sy = sy + 1
   end
   u.side_btns = side_btns
 
-  -- Right column: reactors
-  local rx_btns = {}
-  for i, rx in ipairs(reactors) do
-    local row = i + 2
-    if row > h - 3 then break end
-    local is_assigned = false
-    for _, r in ipairs(u.routes) do
-      if r.reactor == rx.id then is_assigned = true; break end
-    end
-
-    local bg = is_assigned and colors.green or colors.get("background")
-    local fg = is_assigned and colors.black  or (colors.get("success") or colors.cyan)
-
-    target.setCursorPos(mid, row)
-    target.setBackgroundColor(bg)
-    target.setTextColor(fg)
-    target.write((" " .. (rx.label or rx.id) .. string.rep(" ", col_w)):sub(1, col_w))
-    target.setBackgroundColor(colors.get("background"))
-
-    rx_btns[#rx_btns + 1] = {
-      x1 = mid, x2 = mid + col_w, y = row,
-      id = rx.id, label = rx.label or rx.id,
-    }
+  local reactor_btns = {}
+  local ry = 7
+  for _, rx in ipairs(reactors) do
+    if ry > 5 + body_h - 2 then break end
+    local assigned = false
+    for _, route in ipairs(u.routes) do if route.reactor == rx.id then assigned = true; break end end
+    local key = assigned and "OK" or "text"
+    mux.data_row(target, right_x + 2, ry, right_w - 4, { label = tostring(rx.label or rx.id), value = assigned and "ASSIGNED" or "READY", status = key, icon = "reactor" })
+    reactor_btns[#reactor_btns + 1] = { x1 = right_x + 2, x2 = right_x + right_w - 3, y = ry, id = rx.id, label = rx.label or rx.id }
+    ry = ry + 1
   end
-  u.reactor_btns = rx_btns
+  u.reactor_btns = reactor_btns
 
-  -- Hint line
-  local hint = u.selected_side
-    and ("Ausgang '" .. u.selected_side .. "' gewählt → Reaktor antippen zum Zuweisen")
-    or  "Linke Spalte antippen um Ausgang zu wählen"
-  target.setCursorPos(2, h - 2)
-  target.setBackgroundColor(colors.get("background"))
-  target.setTextColor(colors.get("disabled") or colors.gray)
-  target.write(hint:sub(1, w - 2))
+  if #reactors == 0 then
+    mux.warning_box(target, right_x + 2, 7, right_w - 4, { "Keine Ziele gefunden", "Discovery pruefen" }, "WARNING")
+  end
 
-  -- Buttons row
-  local btn_y = h - 1
-  local save_lbl = u.dirty and "[* Speichern ]" or "[ Speichern  ]"
-  target.setCursorPos(2, btn_y)
-  target.setBackgroundColor(u.dirty and colors.orange or colors.gray)
-  target.setTextColor(colors.white)
-  target.write(save_lbl)
-  target.setBackgroundColor(colors.get("background"))
-  u.save_btn = { x1 = 2, x2 = 2 + #save_lbl - 1, y = btn_y }
+  if h >= 18 then
+    local hint = u.selected_side
+      and ("AUSGANG " .. tostring(u.selected_side):upper() .. " GEWAEHLT -> ZIEL ANTIPPEN")
+      or "AUSGANG ANTIPPEN -> DANACH ZIEL ANTIPPEN"
+    mux.banner(target, 2, h - 4, w - 3, hint, u.selected_side and "LIMITED" or "muted", "network")
+  end
 
-  local reset_lbl = "[ Reset ]"
-  local rx_start = w - #reset_lbl
-  target.setCursorPos(rx_start, btn_y)
-  target.setBackgroundColor(colors.red)
-  target.setTextColor(colors.white)
-  target.write(reset_lbl)
-  target.setBackgroundColor(colors.get("background"))
-  u.reset_btn = { x1 = rx_start, x2 = w, y = btn_y }
-
-  -- Route count
-  local count_lbl = #u.routes .. " Routen" .. (u.dirty and " (ungespeichert)" or "")
-  local count_x = math.floor((w - #count_lbl) / 2)
-  target.setCursorPos(count_x, btn_y)
-  target.setBackgroundColor(colors.get("background"))
-  target.setTextColor(u.dirty and colors.orange or colors.get("text"))
-  target.write(count_lbl)
+  local btn_y = h - 2
+  local save_lbl = u.dirty and "[ SPEICHERN * ]" or "[ SPEICHERN ]"
+  local reset_lbl = "[ RESET ]"
+  mux.data_row(target, 2, btn_y, w - 3, { label = save_lbl, value = reset_lbl, status = u.dirty and "LIMITED" or "OK", icon = "config" })
+  u.save_btn = { x1 = 2, x2 = 2 + #save_lbl + 3, y = btn_y }
+  u.reset_btn = { x1 = math.max(2, w - #reset_lbl - 2), x2 = w - 1, y = btn_y }
+  mux.footer_nav(target, h, w, { left = "AUSGANG", center = "ROUTER CONFIG", right = "ZIEL" })
 end
-
--- ---- touch input -----------------------------------------------------------
 
 function M:handle_touch(x, y)
   local u = self._ui
-
-  -- Save button
   local sb = u.save_btn
-  if sb and y == sb.y and x >= sb.x1 and x <= sb.x2 then
-    self:_do_save()
-    return true
-  end
-
-  -- Reset button
+  if sb and y == sb.y and x >= sb.x1 and x <= sb.x2 then self:_do_save(); return true end
   local rb = u.reset_btn
   if rb and y == rb.y and x >= rb.x1 and x <= rb.x2 then
     u.routes = {}
@@ -261,58 +163,47 @@ function M:handle_touch(x, y)
     u.dirty = true
     return true
   end
-
-  -- Side buttons
   for _, btn in ipairs(u.side_btns) do
     if y == btn.y and x >= btn.x1 and x <= btn.x2 then
       if u.selected_side == btn.side and u.selected_int == btn.integrator then
-        -- Second tap: deselect (or remove if assigned)
         self:_remove(btn.side, btn.integrator)
         u.selected_side = nil
-        u.selected_int  = nil
+        u.selected_int = nil
       else
         u.selected_side = btn.side
-        u.selected_int  = btn.integrator
+        u.selected_int = btn.integrator
       end
       return true
     end
   end
-
-  -- Reactor buttons (only if a side is selected)
   if u.selected_side then
     for _, btn in ipairs(u.reactor_btns) do
       if y == btn.y and x >= btn.x1 and x <= btn.x2 then
         self:_assign(u.selected_side, u.selected_int, btn.id, btn.label)
         u.selected_side = nil
-        u.selected_int  = nil
+        u.selected_int = nil
         return true
       end
     end
   end
-
   return false
 end
-
--- ---- save ------------------------------------------------------------------
 
 function M:_do_save()
   local u = self._ui
   local ok = save_routes(u.routes, self.config_path)
   if ok then
-    self.log("INFO", "RouterUI: saved " .. #u.routes .. " routes to " .. ROUTE_CONFIG_PATH)
+    self.log("INFO", "RouterUI: saved " .. #u.routes .. " routes to " .. tostring(self.config_path))
     u.dirty = false
-    -- Apply immediately to redstone_router.
-    -- Write as redstone_tree (flat list = single-level tree, no arms).
-    -- Multi-level branching requires manual config editing.
     if self.redstone_router then
       local cfg = self.redstone_router.config
       local lg = cfg.logistics or cfg
       lg.redstone_tree = {}
       for _, r in ipairs(u.routes) do
         lg.redstone_tree[#lg.redstone_tree + 1] = {
-          side       = r.side,
-          label      = r.label,
-          reactor    = r.reactor,
+          side = r.side,
+          label = r.label,
+          reactor = r.reactor,
           integrator = r.integrator,
         }
       end
@@ -320,11 +211,9 @@ function M:_do_save()
       self.log("INFO", "RouterUI: redstone_router updated with " .. #u.routes .. " routes")
     end
   else
-    self.log("WARN", "RouterUI: failed to save routes to " .. ROUTE_CONFIG_PATH)
+    self.log("WARN", "RouterUI: failed to save routes to " .. tostring(self.config_path))
   end
 end
-
--- ---- public: get current routes --------------------------------------------
 
 function M:get_routes()
   return self._ui.routes
