@@ -749,6 +749,25 @@ local function init()
   end
   monitor_ui.init(devices.monitor, config.monitor, config.monitor_scale)
 
+  -- Feature (2026-07-05): Monitor-Skalierung per Touch auf der
+  -- Diagnostics-Seite einstellbar (statt nur ueber config/rt.lua von Hand
+  -- editierbar). ctx.monitor_scale wird von monitor_ui.lua ins Model
+  -- gelesen und angezeigt; dieser Callback wendet eine Aenderung sofort
+  -- live an (ui.setScale via monitor_adapter/try_set_scale-Pfad in
+  -- monitor_ui.lua selbst reagiert automatisch beim naechsten Render, da
+  -- M.init erneut aufgerufen wird) und persistiert sie in config/rt.lua,
+  -- damit sie einen Reboot ueberlebt.
+  ctx.monitor_scale = config.monitor_scale
+  monitor_ui.on_scale_change = function(delta)
+    local cur = tonumber(ctx.monitor_scale) or tonumber(config.monitor_scale) or 0.5
+    local new_scale = math.max(0.5, math.min(5, cur + delta))
+    ctx.monitor_scale = new_scale
+    config.monitor_scale = new_scale
+    monitor_ui.set_scale(devices.monitor, new_scale)
+    pcall(utils.write_config, CONFIG.CONFIG_PATH, config)
+    log("INFO", ("Monitor scale changed to %.1f"):format(new_scale))
+  end
+
   -- Hello + erster Heartbeat
   log("INFO", string.format("HELLO sent: reactors=%d turbines=%d",
     #devices.reactors, #devices.turbines))
