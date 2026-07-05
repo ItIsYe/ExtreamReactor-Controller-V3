@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 296,
-  manifest_id = "manifest-v296",
+  manifest_version = 297,
+  manifest_id = "manifest-v297",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -92,7 +92,7 @@ return {
     { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "new", optional=true, feature="speaker_alarm" },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "new", optional=true, feature="pocket_query", required_for={"MASTER"} },
     { path = "optional/master_ampel.lua", size_bytes = 4467, hash = "new", optional=true, feature="master_ampel", required_for={"MASTER"} },
-    { path = "master/ui_controller.lua", size_bytes = 44311, hash = "89b29492", required_for={"MASTER"} },
+    { path = "master/ui_controller.lua", size_bytes = 44824, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
     rt = {
