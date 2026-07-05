@@ -123,9 +123,21 @@ function M.render_overview(mon, model)
   end
 
   if h >= 24 then
-    local r = s.reactors and s.reactors[1] or {}
+    -- Fix (2026-07-02): zeigte bisher nur reactors[1].rods — bei einem RT-Node
+    -- mit mehreren baugleichen Reaktoren (z.B. 2 Reaktoren + gemeinsamer
+    -- Turbinen-Pool an einem Datenbus) wurde der zweite Reaktor hier
+    -- komplett ignoriert. Jetzt: Durchschnitt ueber alle gefundenen
+    -- Reaktoren, plus Anzeige der Reaktor-Anzahl damit sichtbar ist ob
+    -- ein Durchschnitt (>1) oder ein Einzelwert (1) gezeigt wird.
+    local rods_sum, rods_n = 0, 0
+    for _, r in ipairs(s.reactors or {}) do
+      local v = tonumber(r.rods)
+      if v then rods_sum = rods_sum + v; rods_n = rods_n + 1 end
+    end
+    local rods_avg = rods_n > 0 and (rods_sum / rods_n) or 0
+    local rods_label = rods_n > 1 and ("RODS AVG " .. fmt(rods_avg, 0, "%") .. " (" .. tostring(rods_n) .. "x)") or ("RODS " .. fmt(rods_avg, 0, "%"))
     section_arrow(mon, 2, 21, w - 3, "LIVE SUMMARY", "LIMITED", "network")
-    mux.data_row(mon, 2, 23, w - 3, { label = "RODS " .. fmt(r.rods, 0, "%") .. "   |   STEAM " .. short(s.steam_amount), value = "RPM " .. fmt(s.avg_rpm, 0, ""), status = "text" })
+    mux.data_row(mon, 2, 23, w - 3, { label = rods_label .. "   |   STEAM " .. short(s.steam_amount), value = "RPM " .. fmt(s.avg_rpm, 0, ""), status = "text" })
   end
 
   mux.footer_nav(mon, h, w, { center = "RT OVERVIEW" })
