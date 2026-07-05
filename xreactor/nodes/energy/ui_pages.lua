@@ -118,7 +118,7 @@ function M.new(opts)
       end
     end
 
-    mux.footer_nav(mon, h, w, { center = "ENERGY OVERVIEW" })
+    return mux.footer_nav(mon, h, w, { center = "ENERGY OVERVIEW" })
   end
 
   local function render_matrices(mon, model)
@@ -184,7 +184,7 @@ function M.new(opts)
       end
     end
 
-    mux.footer_nav(mon, h, w, { center = "ENERGY MATRICES" })
+    return mux.footer_nav(mon, h, w, { center = "ENERGY MATRICES" })
   end
 
   local function render_storages(mon, model)
@@ -239,7 +239,7 @@ function M.new(opts)
     end
     if #storages == 0 then mux.warning_box(mon, 2, 14, w - 3, { "Keine Storages gefunden", "Discovery / Binding pruefen" }, "WARNING") end
 
-    mux.footer_nav(mon, h, w, { center = "ENERGY STORAGES" })
+    return mux.footer_nav(mon, h, w, { center = "ENERGY STORAGES" })
   end
 
   local function render_diagnostics(mon, model)
@@ -286,7 +286,7 @@ function M.new(opts)
     end
 
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
-    mux.footer_nav(mon, h, w, { center = "ENERGY DIAGNOSTICS" })
+    return mux.footer_nav(mon, h, w, { center = "ENERGY DIAGNOSTICS" })
   end
 
   local function energy_status_key(model)
