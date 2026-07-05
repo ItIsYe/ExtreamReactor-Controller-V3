@@ -90,7 +90,13 @@ end
 function M.collect_turbine_rpm_stats(devices, read_turbine_rpm, get_device_caps)
   local min_rpm, max_rpm, sum_rpm, count = nil, nil, 0, 0
   for _, entry in ipairs(devices.turbines or {}) do
-    local rpm = read_turbine_rpm(entry.peripheral, get_device_caps("turbine", entry.id))
+    -- Fix (2026-07-06): derselbe doppelte Fehler wie in
+    -- build_turbine_status_details() — entry.peripheral existiert nie,
+    -- und get_device_caps braucht entry.name (echten Peripheral-Namen),
+    -- nicht entry.id (interne Registry-ID). Das war die direkte Ursache
+    -- fuer "RPM -" im Overview, da avg_rpm hier immer nil blieb.
+    local turbine = entry.name and peripheral.wrap(entry.name) or nil
+    local rpm = read_turbine_rpm(turbine, get_device_caps("turbine", entry.name))
     if type(rpm) == "number" then
       count = count + 1
       sum_rpm = sum_rpm + rpm
@@ -113,7 +119,16 @@ function M.build_turbine_status_details(devices, turbine_adapter, read_turbine_r
     -- war der eigentliche Grund fuer IST=0.0, Balken=0%, RPM=-, obwohl
     -- die Registry selbst (fuer Overview-Zaehler) korrekt befuellt war.
     local turbine = entry.name and peripheral.wrap(entry.name) or nil
-    local caps = get_device_caps("turbine", entry.id)
+    -- Fix (2026-07-06): get_device_caps(ctx, kind, name) erwartet den
+    -- ECHTEN CC:Tweaked-Peripheral-Namen als drittes Argument (fuer
+    -- peripheral.isPresent(name)/build_capabilities(name) intern in
+    -- turbine_control.lua) — entry.id ist aber die interne, generierte
+    -- Registry-ID (z.B. "turbine:BigReactors-Turbine_5:1"), kein gueltiger
+    -- Peripheral-Name. Mit dem falschen Namen liefert peripheral.
+    -- isPresent() false, caps bleibt leer/nutzlos, wodurch read_turbine_
+    -- rpm/flow trotz jetzt korrekt gewrapptem turbine-Objekt weiterhin
+    -- keine funktionierenden Capability-Checks durchfuehren konnten.
+    local caps = get_device_caps("turbine", entry.name)
     local info = turbine_adapter and type(turbine_adapter.inspect) == "function" and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
     if type(info) ~= "table" then info = {} end
     local energy = num(info.energy, nil)
