@@ -1,17 +1,13 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 295,
-  manifest_id = "manifest-v295",
+  manifest_version = 296,
+  manifest_id = "manifest-v296",
   source_ref = "beta",
   hash_algo = "crc32",
 
   base_files = {
   { path = "services/heartbeat_service.lua", size_bytes = 3938, hash = "973887e9" },
   { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6" },
-  { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c", required_for={"MASTER"} },
-  { path = "master/loop.lua", size_bytes = 3111, hash = "e980ca5e", required_for={"MASTER"} },
-  { path = "nodes/energy/heartbeat.lua", size_bytes = 2746, hash = "a142dc47", required_for={"ENERGY"} },
-  { path = "nodes/energy/matrix.lua", size_bytes = 1079, hash = "ef46a3f2", required_for={"ENERGY"} },
   { path = "installer/http.lua", size_bytes = 3192, hash = "fe55b6ce", always=true },
   { path = "installer/manifest.lua", size_bytes = 4233, hash = "5c242de9", always=true },
   { path = "installer/stage.lua", size_bytes = 3289, hash = "ebedda5e", always=true },
@@ -60,6 +56,8 @@ return {
 
   roles = {
     master = {
+    { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c", required_for={"MASTER"} },
+    { path = "master/loop.lua", size_bytes = 3111, hash = "e980ca5e", required_for={"MASTER"} },
     { path = "core/alert_rules.lua", size_bytes = 17159, hash = "3ef37a5e", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 6221, hash = "2e0fba18", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"} },
@@ -126,6 +124,8 @@ return {
     { path = "nodes/rt/status_snapshot.lua", size_bytes = 5932, hash = "5448d394", required_for={"RT"} },
     },
     energy = {
+    { path = "nodes/energy/heartbeat.lua", size_bytes = 2746, hash = "a142dc47", required_for={"ENERGY"} },
+    { path = "nodes/energy/matrix.lua", size_bytes = 1079, hash = "ef46a3f2", required_for={"ENERGY"} },
     { path = "adapters/energy_storage.lua", size_bytes = 3648, hash = "fd2dc2e5", required_for={"ENERGY"} },
     { path = "adapters/induction_matrix.lua", size_bytes = 15124, hash = "c3006e4d", required_for={"ENERGY"} },
     { path = "services/matrix_sampling_service.lua", size_bytes = 867, hash = "fff32232", required_for={"ENERGY"} },
