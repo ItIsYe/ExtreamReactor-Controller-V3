@@ -148,6 +148,33 @@ function M.read_reactor_internal_steam_fill_ratio(ctx)
   return nil, nil, nil
 end
 
+-- Feature (2026-07-06): echte Pro-Reaktor-Variante fuer unabhaengige
+-- Regelung mehrerer Reaktoren an einem RT-Node. Liest NUR den internen
+-- Dampf-Fuellstand des angegebenen Reaktors, nicht die Summe aller.
+-- Grund fuer diesen Ansatz statt Turbinen-Zuordnung: es gibt keine
+-- explizite Turbinen-zu-Reaktor-Zuordnung im System (rein gemeinsamer
+-- Datenbus), aber jeder Reaktor hat seinen EIGENEN internen Dampf-
+-- Speicher, unabhaengig davon welche Turbinen tatsaechlich daran haengen.
+-- Sinkt der Fuellstand eines Reaktors (er liefert weniger Dampf als seine
+-- angeschlossenen Turbinen verbrauchen), muss dieser Reaktor individuell
+-- hochgeregelt werden — unabhaengig vom Zustand des anderen Reaktors.
+function M.read_reactor_internal_steam_fill_ratio_for(ctx, name)
+  local reactor = ctx.peripherals.reactors[name]
+  if not reactor then
+    local wrapped = ctx.utils.safe_wrap(name)
+    if wrapped then reactor = wrapped end
+  end
+  if not reactor then return nil, nil, nil end
+  local amount = ctx.fluid.read_amount(reactor,
+    { "getHotFluidAmount", "getSteamAmount", "getSteam" })
+  if type(amount) ~= "number" then return nil, nil, nil end
+  local capacity = ctx.fluid.read_capacity(reactor,
+    { "getHotFluidAmountMax", "getSteamAmountMax",
+      "getHotFluidCapacity", "getSteamCapacity" })
+  if type(capacity) ~= "number" or capacity <= 0 then return nil, nil, nil end
+  return ctx.safety.clamp(amount / capacity, 0, 1), amount, capacity
+end
+
 function M.get_available_steam(ctx)
   local tank_amount = M.read_steam_tank_amount(ctx)
   if type(tank_amount) == "number" then return tank_amount end
@@ -276,6 +303,63 @@ function M.read_current_rods(ctx)
   return nil
 end
 
+-- Feature (2026-07-06): Pro-Reaktor-Variante, liest NUR den Rod-Wert des
+-- angegebenen Reaktors (nicht "irgendeinen ersten gefundenen" wie
+-- M.read_current_rods oben, das fuer die individuelle Regelung mehrerer
+-- Reaktoren ungeeignet ist).
+function M.read_current_rods_for(ctx, name)
+  local current_rods = ctx.adapters.reactor.read_control_rods(name, ctx.CONFIG.LOG_PREFIX)
+  local ctrl = M.ensure_reactor_ctrl(ctx, name)
+  if type(current_rods) == "number" then
+    ctrl.last_known_rods = current_rods
+    return current_rods
+  end
+  if type(ctrl.last_known_rods) == "number" then
+    return ctrl.last_known_rods
+  end
+  return nil
+end
+
+-- Feature (2026-07-06): echte Pro-Reaktor-Variante fuer unabhaengige
+-- Regelung. Nutzt EIGENES Rate-Limiting (ctrl.last_rod_apply_ts) statt des
+-- globalen ctx.last_rod_apply_ts/ctx.last_applied_rods — sonst wuerde ein
+-- Rod-Write auf Reaktor A das Rate-Limit fuer Reaktor B ebenfalls
+-- auslösen, obwohl beide unabhaengig regeln sollen. Schreibt NUR auf den
+-- angegebenen Reaktor, nicht auf alle in ctx.reactor_ctrl.
+function M.applyReactorRodsFor(ctx, name, target, allow_overmax, source)
+  local ctrl = M.ensure_reactor_ctrl(ctx, name)
+  local now = os.clock()
+  if now - (ctrl.last_rod_apply_ts or 0) < ctx.CONFIG.MIN_APPLY_INTERVAL then
+    return false
+  end
+  if type(target) ~= "number" then return false end
+  source = source or "UNSPECIFIED"
+
+  local clamped = M.clamp_rods(ctx, target, allow_overmax)
+  if not allow_overmax and ctx.current_state() ~= ctx.STATE.SAFE then
+    local cfg_min, cfg_max = M.get_effective_regulator_rod_caps(ctx)
+    local cap_clamped, _cap_reason = ctx.rails.clamp_with_reason(clamped, cfg_min, cfg_max)
+    clamped = cap_clamped
+  end
+
+  if ctrl.last_applied == clamped then
+    ctrl.pending_rod_direction = nil
+    return false
+  end
+
+  local ok_apply, err_apply = ctx.adapters.reactor.apply_rod_level(name, clamped, ctx.CONFIG.LOG_PREFIX)
+  if not ok_apply then
+    ctx.warn_once("reactor_rods:" .. name,
+      "Reactor control rod write failed for " .. tostring(name) .. ": " .. tostring(err_apply))
+    return false
+  end
+
+  ctrl.last_applied = clamped
+  ctrl.last_known_rods = clamped
+  ctrl.last_rod_apply_ts = now
+  return true, clamped
+end
+
 function M.applyReactorRods(ctx, target, allow_overmax, source)
   local now = os.clock()
   if now - ctx.last_rod_apply_ts < ctx.CONFIG.MIN_APPLY_INTERVAL then
@@ -366,6 +450,118 @@ function M.log_reactor_control_tick(ctx)
 end
 
 -- ── Kernregler: Steam-Margin → Rod-Niveau ───────────────────────────────────
+
+-- ── Individuelle Pro-Reaktor-Regelung (Feature, 2026-07-06) ─────────────────
+--
+-- Ersatz fuer M.controlReactor() bei Setups mit mehreren Reaktoren an einem
+-- RT-Node (z.B. 2 Reaktoren + gemeinsamer 50-Turbinen-Pool an einem
+-- Datenbus, ohne explizite Turbinen-zu-Reaktor-Zuordnung). Da nicht
+-- bekannt ist, welche Turbine zu welchem Reaktor Dampf liefert, wird
+-- stattdessen der EIGENE interne Dampf-Fuellstand jedes Reaktors als
+-- Regelgroesse genutzt: sinkt der Fuellstand (der Reaktor liefert weniger
+-- Dampf als seine tatsaechlich angeschlossenen Turbinen verbrauchen),
+-- werden seine Rods individuell hochgeregelt — unabhaengig vom Zustand
+-- des anderen Reaktors. Jeder Reaktor bekommt dafuer einen eigenen
+-- EMA-/Rails-State (ctrl.rails_state) und eigenen Steam-Guard-State
+-- (ctrl.steam_guard_state), statt der bisherigen globalen ctx.reactor_
+-- rails_state/ctx.reactor_steam_guard_state, die alle Reaktoren zwang,
+-- exakt denselben Rod-Wert zu bekommen.
+--
+-- Zielwert der Regelung: internal_fill_ratio soll um einen konfigurierten
+-- Sollwert (Default 50%, ctx.config.rails.reactor_fill_target) stabil
+-- bleiben — sinkt er, braucht der Reaktor mehr Leistung (Rods runter,
+-- mehr Reaktion, mehr Dampf); steigt er ueber den Zielwert, kann der
+-- Reaktor gedrosselt werden (Rods hoch).
+function M.controlReactorsIndividually(ctx)
+  local reactors = ctx.config.reactors or {}
+  if #reactors == 0 then return end
+
+  local rod_cfg = ctx.config.rails and ctx.config.rails.reactor_rods or {}
+  local steam_guard_cfg = ctx.config.rails and ctx.config.rails.reactor_steam_guard or {}
+  local fill_target = (ctx.config.rails and ctx.config.rails.reactor_fill_target) or 0.5
+
+  for _, name in ipairs(reactors) do
+    local ctrl = M.ensure_reactor_ctrl(ctx, name)
+    ctrl.rails_state = ctrl.rails_state or ctx.rails.new_state()
+    ctrl.steam_guard_state = ctrl.steam_guard_state or {}
+
+    local current_rods = M.read_current_rods_for(ctx, name)
+    if type(current_rods) ~= "number" then
+      ctx.warn_once("reactor_rods_unreadable:" .. name,
+        "Reactor control rods unreadable for " .. tostring(name))
+      goto continue_reactor
+    end
+
+    local fill_ratio, fill_amount, fill_capacity =
+      M.read_reactor_internal_steam_fill_ratio_for(ctx, name)
+    if type(fill_ratio) ~= "number" then
+      -- Kein lesbarer interner Dampf-Speicher fuer diesen Reaktor (z.B.
+      -- Peripheral kurzzeitig nicht erreichbar) — diesen Tick fuer DIESEN
+      -- Reaktor uebergehen, der andere Reaktor ist davon nicht betroffen.
+      goto continue_reactor
+    end
+
+    -- Fuellstand UNTER dem Zielwert = positive Margin (mehr Leistung
+    -- noetig, Rods sollen sinken); darueber = negative Margin (drosseln).
+    -- Vorzeichen so gewaehlt, dass dieselbe rails.step()-Logik wie beim
+    -- alten, globalen steam_margin-Regler weiterverwendet werden kann.
+    local fill_margin = (fill_target - fill_ratio) * (fill_capacity or 1)
+
+    local smoothed_margin = ctx.rails.smooth(
+      ctrl.rails_state, "steam_margin", fill_margin, rod_cfg.ema_alpha)
+    local target_rods, direction = ctx.rails.step(
+      current_rods, smoothed_margin, ctrl.rails_state, rod_cfg, os.clock())
+    target_rods = ctx.safety.clamp(target_rods, ctx.CONFIG.ROD_MIN, ctx.CONFIG.ROD_MAX)
+
+    local cfg_min, cfg_max = M.get_effective_regulator_rod_caps(ctx)
+    local clamped_target, _clamp_reason = ctx.rails.clamp_with_reason(target_rods, cfg_min, cfg_max)
+    target_rods = clamped_target
+
+    local guard_target = target_rods
+    local guard_diag = { unavailable = true, high_active = false, critical_active = false,
+      blocked_opening = false, forced_closing = false }
+    if steam_guard_cfg.enabled ~= false then
+      guard_target, guard_diag = ctx.reactor_steam_guard.apply(
+        current_rods, target_rods, fill_ratio, steam_guard_cfg, ctrl.steam_guard_state)
+      if type(guard_target) == "number" then target_rods = guard_target end
+    end
+
+    local reactor = ctx.peripherals.reactors[name]
+    local coolant_sample = reactor and ctx.fluid.read_coolant_sample(reactor, ctx.safe_wrapped_call) or nil
+    local coolant_ratio = coolant_sample and coolant_sample.coolant_ratio or nil
+
+    local applied_rods, ramp_diag = ctx.rails.ramp_target(
+      current_rods, target_rods, rod_cfg, {
+        state             = ctrl.rails_state,
+        now               = os.clock(),
+        coolant_ratio     = coolant_ratio,
+        safety_min_water  = ctx.config.safety and ctx.config.safety.min_water
+      })
+    applied_rods = ctx.safety.clamp(applied_rods, ctx.CONFIG.ROD_MIN, ctx.CONFIG.ROD_MAX)
+
+    if applied_rods == current_rods then
+      goto continue_reactor
+    end
+
+    if direction ~= 0 then
+      ctrl.pending_rod_direction = direction > 0 and "UP" or "DOWN"
+    end
+
+    local applied, clamped_applied = M.applyReactorRodsFor(ctx, name, applied_rods, false, "AUTO_REGULATOR_INDIVIDUAL")
+    if applied then
+      ctx.log("INFO", string.format(
+        "ReactorCtrl[%s] fill=%.1f%% margin=%.1f rods_current=%.1f rods_target=%.1f applied=%.1f"
+        .. " ramp_reason=%s coolant_ratio=%s steam_guard_high=%s steam_guard_critical=%s",
+        tostring(name), fill_ratio * 100, fill_margin, current_rods, target_rods, clamped_applied or applied_rods,
+        tostring(ramp_diag and ramp_diag.reason or "n/a"),
+        tostring(coolant_ratio),
+        tostring(guard_diag and guard_diag.high_active == true),
+        tostring(guard_diag and guard_diag.critical_active == true)))
+    end
+
+    ::continue_reactor::
+  end
+end
 
 function M.controlReactor(ctx)
   local turbine_count = #(ctx.config.turbines or {})
@@ -526,7 +722,18 @@ function M.updateReactorControl(ctx)
   end
   ctx.last_reactor_tick = now
   M.log_reactor_control_state(ctx)
-  M.controlReactor(ctx)
+  -- Feature (2026-07-06): bei genau einem Reaktor bleibt die bisherige,
+  -- global-gemeinsame Regelung (M.controlReactor) unveraendert aktiv —
+  -- kein Verhaltenswechsel fuer die grosse Mehrheit der Setups mit nur
+  -- einem Reaktor pro RT-Node. Bei mehreren Reaktoren an einem Node (z.B.
+  -- 2 Reaktoren + gemeinsamer Turbinen-Pool) wird jeder Reaktor jetzt
+  -- individuell anhand seines EIGENEN internen Dampf-Fuellstands
+  -- geregelt, siehe M.controlReactorsIndividually().
+  if #(ctx.config.reactors or {}) > 1 then
+    M.controlReactorsIndividually(ctx)
+  else
+    M.controlReactor(ctx)
+  end
   M.log_reactor_control_tick(ctx)
 end
 
