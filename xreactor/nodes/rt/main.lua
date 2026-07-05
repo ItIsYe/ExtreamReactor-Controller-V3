@@ -838,7 +838,12 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   local now_ms_val = os.epoch and os.epoch("utc") or 0
   if now_ms_val - last_rediscover_ms >= REDISCOVER_INTERVAL_MS then
     last_rediscover_ms = now_ms_val
-    pcall(discover)
+    local ok_discover, discover_err = pcall(discover)
+    if ok_discover then
+      log("INFO", string.format("Re-Discovery: reactors=%d turbines=%d", #devices.reactors, #devices.turbines))
+    else
+      log("ERROR", "Re-Discovery fehlgeschlagen: " .. tostring(discover_err))
+    end
   end
 end)
 
