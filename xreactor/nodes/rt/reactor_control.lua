@@ -503,9 +503,21 @@ function M.controlReactorsIndividually(ctx)
 
     -- Fuellstand UNTER dem Zielwert = positive Margin (mehr Leistung
     -- noetig, Rods sollen sinken); darueber = negative Margin (drosseln).
-    -- Vorzeichen so gewaehlt, dass dieselbe rails.step()-Logik wie beim
-    -- alten, globalen steam_margin-Regler weiterverwendet werden kann.
-    local fill_margin = (fill_target - fill_ratio) * (fill_capacity or 1)
+    -- Fix (2026-07-06): KRITISCHER Vorzeichenfehler. rails.step() erhoeht
+    -- die Rods (= WENIGER Leistung) bei POSITIVEM error, und senkt sie
+    -- (= MEHR Leistung) bei NEGATIVEM error — siehe core/control_rails.lua
+    -- rails.step(): "next_value = current + direction * step" mit
+    -- direction=1 bei error>=deadband. Beim alten, globalen Regler war das
+    -- korrekt: steam_margin = available_steam - demand, also viel
+    -- UEBERSCHUSS (positiv) => Rods hoch/drosseln, WENIG Dampf (negativ)
+    -- => Rods runter/mehr Leistung. Meine urspruengliche Formel
+    -- (fill_target - fill_ratio) hatte das Vorzeichen VERTAUSCHT: bei
+    -- LEEREM Tank (fill_ratio klein) wurde das Ergebnis POSITIV, was Rods
+    -- HOCH (0% Leistung) statt RUNTER (mehr Leistung) ausloeste — exakt
+    -- das beobachtete Fehlverhalten. Korrekt: (fill_ratio - fill_target),
+    -- damit ein leerer Tank (fill_ratio klein) zu einem NEGATIVEN Wert
+    -- fuehrt, genau wie "wenig Dampf" beim alten Regler.
+    local fill_margin = (fill_ratio - fill_target) * (fill_capacity or 1)
 
     local smoothed_margin = ctx.rails.smooth(
       ctrl.rails_state, "steam_margin", fill_margin, rod_cfg.ema_alpha)
