@@ -270,13 +270,20 @@ local function init()
       })
       ui_state.model = model
       local pages = {
-        { name = "Overview",     render = function(t, v) ui_pages.render_overview(t, v.data or v) end },
-        { name = "Matrices",     render = function(t, v) ui_pages.render_matrices(t, v.data or v) end },
+        -- Fix (2026-07-06): diese Wrapper gaben den Rueckgabewert von
+        -- ui_pages.render_xxx() (die footer_nav()-Touch-Koordinaten fuer
+        -- ZURUECK/WEITER) bisher nicht zurueck — der Router bekam immer
+        -- nil und konnte seine Touch-Zonen nie auf die sichtbaren Buttons
+        -- legen. Derselbe Bug wie zuvor bei RT (dort direkt behoben durch
+        -- return-Statements in mockup_pages.lua selbst), hier zusaetzlich
+        -- durch diese anonyme Wrapper-Schicht verursacht.
+        { name = "Overview",     render = function(t, v) return ui_pages.render_overview(t, v.data or v) end },
+        { name = "Matrices",     render = function(t, v) return ui_pages.render_matrices(t, v.data or v) end },
       }
       if #(model.storages or {}) > 0 then
-        table.insert(pages, { name = "Storages", render = function(t, v) ui_pages.render_storages(t, v.data or v) end })
+        table.insert(pages, { name = "Storages", render = function(t, v) return ui_pages.render_storages(t, v.data or v) end })
       end
-      table.insert(pages, { name = "Diagnostics", render = function(t, v) ui_pages.render_diagnostics(t, v.data or v) end })
+      table.insert(pages, { name = "Diagnostics", render = function(t, v) return ui_pages.render_diagnostics(t, v.data or v) end })
       if not ui_state.router or ui_state.router:count() ~= #pages then
         ui_state.router = ui_router.new(devices.monitor, {
           title = "ENERGY", pages = pages, interval = config.ui_refresh_interval,
