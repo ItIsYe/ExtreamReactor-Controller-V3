@@ -104,7 +104,15 @@ end
 function M.build_turbine_status_details(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix)
   local list, total_output = {}, 0
   for _, entry in ipairs(devices.turbines or {}) do
-    local turbine = entry.peripheral
+    -- Fix (2026-07-06): entry.peripheral existiert NIE in der Registry-
+    -- Struktur (siehe core/registry.lua registry:register() — Eintraege
+    -- haben nur id/name/type/signature, kein gewrapptes Peripheral-
+    -- Objekt). read_turbine_rpm/read_turbine_flow brauchen aber das
+    -- echte, gewrappte Objekt (turbine.getRotorSpeed() etc.), nicht nur
+    -- den Namen — mit turbine=nil gaben sie immer nil/"-" zurueck. Das
+    -- war der eigentliche Grund fuer IST=0.0, Balken=0%, RPM=-, obwohl
+    -- die Registry selbst (fuer Overview-Zaehler) korrekt befuellt war.
+    local turbine = entry.name and peripheral.wrap(entry.name) or nil
     local caps = get_device_caps("turbine", entry.id)
     local info = turbine_adapter and type(turbine_adapter.inspect) == "function" and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
     if type(info) ~= "table" then info = {} end
