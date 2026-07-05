@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 292,
-  manifest_id = "manifest-v292",
+  manifest_version = 293,
+  manifest_id = "manifest-v293",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -119,6 +119,7 @@ return {
     { path = "nodes/rt/main.lua", size_bytes = 35332, hash = "ac098c39", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 13123, hash = "159857c2", required_for={"RT"} },
+    { path = "nodes/rt/mockup_pages.lua", size_bytes = 15044, hash = "new", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"} },
     { path = "nodes/rt/state_handlers.lua", size_bytes = 9257, hash = "bb391437", required_for={"RT"} },
@@ -146,12 +147,14 @@ return {
     { path = "nodes/water/config.lua", size_bytes = 4789, hash = "961b224e", required_for={"WATER"} },
     { path = "nodes/water/config_normalizer.lua", size_bytes = 989, hash = "09141fba", required_for={"WATER"} },
     { path = "nodes/water/main.lua", size_bytes = 18843, hash = "dd1236f0", required_for={"WATER"} },
+    { path = "nodes/water/ui_pages.lua", size_bytes = 10841, hash = "new", required_for={"WATER"} },
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
     },
     fuel = {
     { path = "nodes/fuel/config.lua", size_bytes = 5586, hash = "48c5be2b", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 3722, hash = "40524d32", required_for={"FUEL"} },
     { path = "nodes/fuel/main.lua", size_bytes = 16850, hash = "181bc955", required_for={"FUEL"} },
+    { path = "nodes/fuel/ui_pages.lua", size_bytes = 11850, hash = "new", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 17457, hash = "abd2252f", required_for={"FUEL","REPROCESSING"} },
     { path = "nodes/fuel/redstone_router.lua", size_bytes = 8006, hash = "b9ce5b6d", required_for={"FUEL","REPROCESSING"} },
@@ -162,6 +165,7 @@ return {
     { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 2097, hash = "7b4dd612", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/feed_router.lua", size_bytes = 7060, hash = "475ecc96" },
     { path = "nodes/reprocessor/main.lua", size_bytes = 18381, hash = "5613b787", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 11050, hash = "new", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     },
     log = {
