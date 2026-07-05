@@ -86,7 +86,26 @@ function M.render_overview(mon, model)
   local w, h = page_header(mon, model, "RT NODE CONTROL", "1/4", "reactor")
   local s = snapshot(model)
   local status_text, status_key = rt_status(model)
-  mux.banner(mon, 2, 5, w - 3, "> " .. status_text, status_key, nil)
+
+  -- Fix (2026-07-05): alle Bloecke standen bisher auf festen Zeilen (5,
+  -- 7, 12, 14, 16, 21, 23), unabhaengig von der tatsaechlichen
+  -- Monitorhoehe h. Auf physisch grossen Monitoren (z.B. h=45+) blieb der
+  -- gesamte Bereich zwischen Zeile ~23 und dem Footer (an Zeile h) leer,
+  -- der Inhalt wirkte winzig und weit oben zusammengedraengt. Jetzt: die
+  -- verfuegbare Content-Hoehe (zwischen Header-Ende und Footer-Start)
+  -- wird ermittelt und die Bloecke proportional darauf verteilt.
+  local content_top = 5
+  local content_bottom = math.max(content_top + 18, h - 2)
+  local content_h = content_bottom - content_top
+  -- Referenz-Layout ging von ~19 Zeilen Content aus (5..23); Skalierungs-
+  -- faktor daraus ableiten, mit 1.0 als Minimum (nie kleiner als das
+  -- urspruengliche, kompakte Layout, nur grosszuegiger bei mehr Platz).
+  local scale = math.max(1.0, content_h / 19)
+  local function y_at(base_offset)
+    return content_top + math.floor((base_offset) * scale)
+  end
+
+  mux.banner(mon, 2, y_at(0), w - 3, "> " .. status_text, status_key, nil)
 
   local target = num(model.target_power, num(s.target_power, 0))
   local actual = num(s.actual_output, 0)
@@ -97,29 +116,31 @@ function M.render_overview(mon, model)
   local reactors = bound_count(model.summary, "reactor")
 
   local gap = 1
+  local row1_y = y_at(2)
   if w >= 54 then
     local cw = math.floor((w - 4 - gap * 2) / 3)
-    mux.metric_card(mon, 2, 7, cw, 4, { label = "SOLL", value = short(target), unit = "RF/t", status = "LIMITED", icon = "master" })
-    mux.metric_card(mon, 2 + cw + gap, 7, cw, 4, { label = "IST", value = short(actual), unit = "RF/t", status = status_key, icon = "energy" })
-    mux.metric_card(mon, 2 + (cw + gap) * 2, 7, cw, 4, { label = "MASTER %", value = fmt(master_pct, 1, "%"), status = "OK", icon = "master" })
+    mux.metric_card(mon, 2, row1_y, cw, 4, { label = "SOLL", value = short(target), unit = "RF/t", status = "LIMITED", icon = "master" })
+    mux.metric_card(mon, 2 + cw + gap, row1_y, cw, 4, { label = "IST", value = short(actual), unit = "RF/t", status = status_key, icon = "energy" })
+    mux.metric_card(mon, 2 + (cw + gap) * 2, row1_y, cw, 4, { label = "MASTER %", value = fmt(master_pct, 1, "%"), status = "OK", icon = "master" })
   else
-    mux.kpi_strip(mon, 2, 7, w - 3, {
+    mux.kpi_strip(mon, 2, row1_y, w - 3, {
       { label = "SOLL", value = short(target), status = "LIMITED", icon = "master" },
       { label = "IST", value = short(actual), status = status_key, icon = "energy" },
       { label = "MASTER %", value = fmt(master_pct, 0, "%"), status = "OK", icon = "master" },
     })
   end
 
-  section_arrow(mon, 2, 12, w - 3, "LEISTUNG & KAPAZITAET", "LIMITED", "energy")
-  mux.outlined_progress(mon, 2, 14, w - 3, ratio, ratio > 0.9 and "WARNING" or "OK", string.format("%.0f%%", ratio * 100))
+  section_arrow(mon, 2, y_at(7), w - 3, "LEISTUNG & KAPAZITAET", "LIMITED", "energy")
+  mux.outlined_progress(mon, 2, y_at(9), w - 3, ratio, ratio > 0.9 and "WARNING" or "OK", string.format("%.0f%%", ratio * 100))
 
   if h >= 19 then
     local cell_gap = 1
     local cw = math.floor((w - 5 - cell_gap * 3) / 4)
-    mux.metric_card(mon, 2, 16, cw, 4, { label = "TURBINEN", value = tostring(turbines), status = "OK", icon = "turbine" })
-    mux.metric_card(mon, 2 + cw + cell_gap, 16, cw, 4, { label = "REAKTOREN", value = tostring(reactors), status = reactors > 0 and "OK" or "WARNING", icon = "reactor" })
-    mux.metric_card(mon, 2 + (cw + cell_gap) * 2, 16, cw, 4, { label = "CAPACITY", value = short(capacity), status = capacity_key(model), icon = "storage" })
-    mux.metric_card(mon, 2 + (cw + cell_gap) * 3, 16, cw, 4, { label = "RPM", value = fmt(s.avg_rpm, 0, ""), status = "OK", icon = "turbine" })
+    local row2_y = y_at(11)
+    mux.metric_card(mon, 2, row2_y, cw, 4, { label = "TURBINEN", value = tostring(turbines), status = "OK", icon = "turbine" })
+    mux.metric_card(mon, 2 + cw + cell_gap, row2_y, cw, 4, { label = "REAKTOREN", value = tostring(reactors), status = reactors > 0 and "OK" or "WARNING", icon = "reactor" })
+    mux.metric_card(mon, 2 + (cw + cell_gap) * 2, row2_y, cw, 4, { label = "CAPACITY", value = short(capacity), status = capacity_key(model), icon = "storage" })
+    mux.metric_card(mon, 2 + (cw + cell_gap) * 3, row2_y, cw, 4, { label = "RPM", value = fmt(s.avg_rpm, 0, ""), status = "OK", icon = "turbine" })
   end
 
   if h >= 24 then
@@ -136,8 +157,8 @@ function M.render_overview(mon, model)
     end
     local rods_avg = rods_n > 0 and (rods_sum / rods_n) or 0
     local rods_label = rods_n > 1 and ("RODS AVG " .. fmt(rods_avg, 0, "%") .. " (" .. tostring(rods_n) .. "x)") or ("RODS " .. fmt(rods_avg, 0, "%"))
-    section_arrow(mon, 2, 21, w - 3, "LIVE SUMMARY", "LIMITED", "network")
-    mux.data_row(mon, 2, 23, w - 3, { label = rods_label .. "   |   STEAM " .. short(s.steam_amount), value = "RPM " .. fmt(s.avg_rpm, 0, ""), status = "text" })
+    section_arrow(mon, 2, y_at(16), w - 3, "LIVE SUMMARY", "LIMITED", "network")
+    mux.data_row(mon, 2, y_at(18), w - 3, { label = rods_label .. "   |   STEAM " .. short(s.steam_amount), value = "RPM " .. fmt(s.avg_rpm, 0, ""), status = "text" })
   end
 
   return mux.footer_nav(mon, h, w, { center = "RT OVERVIEW" })
