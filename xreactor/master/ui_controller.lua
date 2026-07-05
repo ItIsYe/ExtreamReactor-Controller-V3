@@ -485,6 +485,14 @@ function M.new(opts)
         maintenance_mode = in_maintenance,
         status = status,
         last_seen_age = node.last_seen_age,
+        -- Fix (2026-07-02): master/ui/maintenance.lua prueft node.offline/
+        -- node.stale fuer die OFFLINE-Statusanzeige (siehe dort:
+        -- "if node.offline or node.stale then return 'muted' end" und die
+        -- ONLINE/MAINT/OFFLINE-Ableitung), aber diese Felder wurden hier nie
+        -- gesetzt — ein tatsaechlich offline gegangener Node erschien
+        -- faelschlich immer als ONLINE oder MAINT, nie als OFFLINE.
+        offline = node.offline == true,
+        stale = node.stale == true,
       }
     end
     table.sort(maintenance_nodes, function(a, b)
