@@ -2,6 +2,7 @@ local ui = require("core.ui")
 local widgets = require("master.ui.widgets")
 local layout = require("master.ui.layout")
 local sessions_lib = require("master.monitor_sessions")
+local utils = require("core.utils")
 
 local M = {}
 
@@ -18,6 +19,76 @@ end
 local function should_hard_clear(session)
   if not session then return false end
   return session.rebind_pending == true or session.dirty_reason == "rebind"
+end
+
+-- Fix (2026-07-02, Teil 2): Touch-ausgeloeste Zustandswechsel (z.B.
+-- cycle_aux_view() nach Antippen eines AUX-Monitors, oder ein
+-- maintenance_toggle/rt_hold/profile-Wechsel) setzen session.dirty = true.
+-- Diese muessen IMMER sofort ein Redraw erzwingen, auch wenn das Model
+-- zufaellig textuell identisch serialisiert wie beim letzten Mal (z.B.
+-- Wechsel zurueck auf eine View, deren Daten sich seit dem letzten Besuch
+-- nicht veraendert haben) — sonst wuerde ein Touch-Wechsel unsichtbar
+-- bleiben, bis irgendein anderer Wert sich zufaellig aendert.
+local function should_force_redraw(session)
+  return should_hard_clear(session) or session.dirty == true
+end
+
+-- Fix (2026-07-02): view.render() wurde bisher bei JEDEM M:render()-Aufruf
+-- unconditional ausgefuehrt — das deklarierte view.interval-Feld (aus
+-- init_runtime.lua, z.B. 0.5/1.0/2.0s) wurde nirgends ausgewertet. In der
+-- Praxis bedeutete das: sobald sich IRGENDWO im System eine einzelne Zahl
+-- aenderte (z.B. RT-Leistung, die sich fast jeden Tick minimal aendert),
+-- wurde mux.clear() + kompletter Re-Draw fuer ALLE 10 Views auf ALLEN
+-- Monitoren ausgefuehrt, nicht nur fuer die tatsaechlich betroffene Seite.
+-- Jetzt: pro (Monitor, View)-Kombination wird das jeweilige Model
+-- serialisiert und mit dem letzten bekannten Stand verglichen. Nur bei
+-- echter Aenderung, bei Touch-Interaktion, oder wenn view.interval
+-- abgelaufen ist, wird tatsaechlich neu gezeichnet. Ein zusaetzliches
+-- Force-Intervall (4x view.interval, min. 5s) erzwingt trotzdem ein
+-- periodisches Redraw, damit die Anzeige nie "einfriert" falls der
+-- Snapshot-Vergleich aus irgendeinem Grund (z.B. Zeitstempel-Feld, das
+-- sich technisch aendert aber visuell nichts Neues zeigt) staendig
+-- "geaendert" meldet, oder umgekehrt niemals als geaendert erkannt wird.
+local render_state = setmetatable({}, { __mode = "k" })
+
+local function serialize_model(model)
+  if utils and utils.safe_serialize then
+    return utils.safe_serialize(model) or tostring(model)
+  end
+  local ok, serialized = pcall(textutils.serialize, model)
+  return ok and serialized or tostring(model)
+end
+
+local function should_render_view(session, view_key, view, model)
+  local now = os.epoch and os.epoch("utc") or 0
+  local key = tostring(session.name or session.id or "?") .. "|" .. tostring(view_key)
+  local state = render_state[key]
+  if not state then
+    state = { last_snapshot = nil, last_draw = 0, last_force = 0 }
+    render_state[key] = state
+  end
+
+  local interval_ms = math.max(0.1, tonumber(view and view.interval) or 1.0) * 1000
+  local force_interval_ms = math.max(interval_ms * 4, 5000)
+
+  local due = (now - state.last_draw) >= interval_ms
+  local force_due = (now - state.last_force) >= force_interval_ms
+
+  if should_force_redraw(session) then
+    return true, state, now
+  end
+  if not due then
+    return false, state, now
+  end
+
+  local snapshot = serialize_model(model)
+  local changed = snapshot ~= state.last_snapshot
+  state.last_snapshot = snapshot
+
+  if changed or force_due then
+    return true, state, now
+  end
+  return false, state, now
 end
 
 local function safe_size(mon)
@@ -66,10 +137,22 @@ function M:render(monitors, data_map)
     end
 
     if view and view.render then
+      local model = data_map[view_key] or {}
+      local do_render = should_render_view(session, view_key, view, model)
+      if not do_render then
+        -- Kein neuer Draw noetig (Model unveraendert, Intervall nicht
+        -- abgelaufen, kein Force-Redraw faellig). WICHTIG: hier bewusst
+        -- KEIN self.sessions:note_render_success(session) — das wuerde
+        -- session.dirty faelschlich auf false zuruecksetzen, obwohl gar
+        -- nicht neu gezeichnet wurde. session.dirty/first_draw_done bleiben
+        -- unveraendert, bis tatsaechlich gerendert wird.
+        rendered[#rendered + 1] = { ok = true, view = view_key, monitor = session.name, role = session.role, id = session.id, skipped = true }
+        goto continue
+      end
       local ok, err = pcall(function()
         ui.begin_frame(session.mon)
         if should_hard_clear(session) then ui.clear(session.mon) end
-        view.render(session.mon, data_map[view_key] or {})
+        view.render(session.mon, model)
       end)
 
       if ok then
