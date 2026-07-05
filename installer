@@ -713,11 +713,26 @@ local selected_features = load_selected_features()
 -- Abfrage-Logik jedes Mal angepasst werden muss.
 local function collect_optional_feature_names(manifest_tbl)
   local seen, names = {}, {}
-  for _, e in ipairs(manifest_tbl.base_files or {}) do
-    if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] then
-      seen[e.feature] = true
-      names[#names + 1] = e.feature
+  local function scan(entries)
+    for _, e in ipairs(entries or {}) do
+      if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] then
+        seen[e.feature] = true
+        names[#names + 1] = e.feature
+      end
     end
+  end
+  -- Fix (2026-07-06): CRITICAL. Durchsuchte bisher NUR manifest.base_files
+  -- — aber alle 4 optionalen Features (ampel/speaker_alarm/pocket_query/
+  -- master_ampel) wurden im Zuge des v296-Fixes (der behob, dass base_
+  -- files-Eintraege required_for ignorieren und JEDER Rolle bedingungslos
+  -- installiert wurden) aus base_files in die passenden roles-Sub-Bloecke
+  -- verschoben. Seitdem fand diese Funktion KEIN einziges optionales
+  -- Feature mehr, die interaktive "installieren? [j/N]"-Abfrage beim
+  -- manuellen Installer-Lauf erschien fuer sie nie mehr — genau das vom
+  -- Nutzer beobachtete "keine Zusatzsachen mehr installierbar".
+  scan(manifest_tbl.base_files)
+  for _, rentries in pairs(manifest_tbl.roles or {}) do
+    scan(rentries)
   end
   table.sort(names)
   return names
