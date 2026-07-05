@@ -195,6 +195,16 @@ function M.init(monitor_adapter, configured_monitor, monitor_scale)
   return monitor, name_or_err
 end
 
+-- Feature (2026-07-05): Skalierung live aendern OHNE M.monitor_router
+-- zurueckzusetzen — M.init() wuerde das tun (bewusst, fuer den normalen
+-- Boot-Fall), was aber bei einer Touch-ausgeloesten Skalen-Aenderung den
+-- Nutzer ungewollt von der aktuellen Seite (z.B. Diagnostics 4/4) zurueck
+-- auf Overview werfen wuerde.
+function M.set_scale(monitor, scale)
+  if not monitor then return end
+  try_set_scale(monitor, scale)
+end
+
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 
@@ -305,6 +315,23 @@ function M.handle_input(event)
     if page and page.name == "Diagnostics" and M.last_monitor then
       local _, h = ui.getSize(M.last_monitor)
       if h then support_ui_pages.handle_log_mode_touch(event[3], event[4], h, utils, 1) end
+      -- Feature (2026-07-05): Monitor-Skalierung per Touch. War im
+      -- vorherigen Commit (338a10d5fa) versehentlich nur teilweise
+      -- gepusht — nur das Model-Feld monitor_scale kam an, dieser
+      -- Handler-Block fehlte komplett, weshalb die Buttons visuell
+      -- sichtbar aber komplett funktionslos waren.
+      local hits = mockup_pages.scale_hit_cache and mockup_pages.scale_hit_cache[M.last_monitor]
+      if hits then
+        local x, y = event[3], event[4]
+        local function in_zone(zone)
+          return zone and y == zone.y and x >= zone.x1 and x <= zone.x2
+        end
+        if in_zone(hits.minus) and type(M.on_scale_change) == "function" then
+          M.on_scale_change(-0.5)
+        elseif in_zone(hits.plus) and type(M.on_scale_change) == "function" then
+          M.on_scale_change(0.5)
+        end
+      end
     end
   end
 end
