@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 309,
-  manifest_id = "manifest-v309",
+  manifest_version = 310,
+  manifest_id = "manifest-v310",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -116,7 +116,7 @@ return {
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
     { path = "nodes/rt/main.lua", size_bytes = 37830, hash = "ac098c39", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"} },
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 16317, hash = "159857c2", required_for={"RT"} },
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 17447, hash = "159857c2", required_for={"RT"} },
     { path = "nodes/rt/mockup_pages.lua", size_bytes = 17793, hash = "new", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"} },
