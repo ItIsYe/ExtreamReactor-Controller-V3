@@ -476,7 +476,34 @@ function M.controlReactorsIndividually(ctx)
   local reactors = ctx.config.reactors or {}
   if #reactors == 0 then return end
 
-  local rod_cfg = ctx.config.rails and ctx.config.rails.reactor_rods or {}
+  -- Fix (2026-07-06): die individuelle Pro-Reaktor-Regelung nutzte bisher
+  -- dieselbe rod_cfg wie die alte, globale Regelung (config.rails.
+  -- reactor_rods) — deren Werte (max_step=8, cooldown_s=1.5) waren fuer
+  -- einen GEMITTELTEN Wert ueber viele Turbinen kalibriert, der sich
+  -- naturgemaess langsam aendert. Der individuelle interne Tank-
+  -- Fuellstand EINES Reaktors kann sich aber viel schneller/staerker
+  -- veraendern (voller Turbinen-Pool zieht schnell Dampf ab) — mit den
+  -- alten Werten war die Reaktion trotz korrekt funktionierender
+  -- Unabhaengigkeit spuerbar zu traege (max. 8 Rod-Punkte alle 1.5s).
+  -- Eigene, deutlich reaktionsschnellere Defaults hier, ueberschreibbar
+  -- via config.rails.reactor_rods_individual falls jemand andere Werte
+  -- braucht; faellt sonst auf sinnvolle, aggressivere Defaults zurueck
+  -- statt die geteilte reactor_rods-Config zu uebernehmen.
+  local individual_rod_cfg_override = ctx.config.rails and ctx.config.rails.reactor_rods_individual
+  local base_rod_cfg = ctx.config.rails and ctx.config.rails.reactor_rods or {}
+  local rod_cfg = individual_rod_cfg_override or {
+    deadband_up = 5000, deadband_down = 5000,
+    hysteresis_up = 500, hysteresis_down = 500,
+    max_step_up = 20, max_step_down = 20,
+    max_apply_step_up = 20, max_apply_step_down = 20,
+    cooldown_s = 0.5, apply_cooldown_s = 0.5,
+    coolant_ramp_soft_limit_ratio = base_rod_cfg.coolant_ramp_soft_limit_ratio or 0.28,
+    coolant_ramp_hard_limit_ratio = base_rod_cfg.coolant_ramp_hard_limit_ratio or 0.22,
+    max_step_down_when_coolant_soft = base_rod_cfg.max_step_down_when_coolant_soft or 2,
+    max_step_down_when_coolant_hard = base_rod_cfg.max_step_down_when_coolant_hard or 0,
+    min = base_rod_cfg.min or 80, max = base_rod_cfg.max or 100,
+    ema_alpha = 0.4,
+  }
   local steam_guard_cfg = ctx.config.rails and ctx.config.rails.reactor_steam_guard or {}
   local fill_target = (ctx.config.rails and ctx.config.rails.reactor_fill_target) or 0.5
 
@@ -728,8 +755,17 @@ function M.updateReactorControl(ctx)
     end
     return
   end
-  if now - ctx.last_reactor_tick <
-      (ctx.config.autonom and ctx.config.autonom.reactor_adjust_interval or 1) then
+  -- Fix (2026-07-06): reactor_adjust_interval war global auf 5.0s
+  -- kalibriert — bei mehreren Reaktoren mit individueller Regelung ist
+  -- das zusaetzlich zur (bereits gesenkten) internen Cooldown-Zeit ein
+  -- weiterer, aeusserer Trägheitsfaktor. Bei >1 Reaktor wird ein kuerzeres
+  -- Intervall genutzt (Default 1.0s), Single-Reaktor-Setups bleiben
+  -- unveraendert bei reactor_adjust_interval (Default 5.0s).
+  local multi_reactor = #(ctx.config.reactors or {}) > 1
+  local tick_interval = multi_reactor
+    and ((ctx.config.autonom and ctx.config.autonom.reactor_adjust_interval_individual) or 1.0)
+    or (ctx.config.autonom and ctx.config.autonom.reactor_adjust_interval or 1)
+  if now - ctx.last_reactor_tick < tick_interval then
     return
   end
   ctx.last_reactor_tick = now
