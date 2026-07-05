@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 304,
-  manifest_id = "manifest-v304",
+  manifest_version = 305,
+  manifest_id = "manifest-v305",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -114,7 +114,7 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 11682, hash = "6198a6d0", required_for={"RT"} },
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 6519, hash = "2e07b58d", required_for={"RT"} },
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
-    { path = "nodes/rt/main.lua", size_bytes = 35332, hash = "ac098c39", required_for={"RT"} },
+    { path = "nodes/rt/main.lua", size_bytes = 36533, hash = "ac098c39", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27375, hash = "fa733934", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 13123, hash = "159857c2", required_for={"RT"} },
     { path = "nodes/rt/mockup_pages.lua", size_bytes = 16964, hash = "new", required_for={"RT"} },
