@@ -117,6 +117,23 @@ function M.refresh_bindings(ctx)
   local reactors = ctx.registry:get_bound_devices("reactor")
   local turbines = ctx.registry:get_bound_devices("turbine")
   local signature = M.build_binding_signature(reactors, turbines)
+  -- Fix (2026-07-06): CRITICAL. ctx.devices.reactors/turbines wurden bisher
+  -- NUR gesetzt, wenn sich die binding_signature seit dem letzten Aufruf
+  -- geaendert hat — bei unveraenderter Signatur (der Normalfall bei jedem
+  -- Tick, da sich die Bindung ja selten aendert) lief ein sofortiges
+  -- return VOR der Zuweisung. Sollte devices.reactors/turbines aus
+  -- irgendeinem Grund (Race-Condition beim allerersten Boot-Discover,
+  -- oder schlicht weil binding_signature initial schon zufaellig
+  -- uebereinstimmte) einmal leer geblieben sein, blieb es das FUER IMMER,
+  -- da jeder folgende Aufruf denselben Skip nahm — beobachtet im Log als
+  -- "Discovery unchanged ... bound reactors=1 turbines=25" GEFOLGT von
+  -- "Re-Discovery: reactors=0 turbines=0" (das eigene Log direkt danach,
+  -- das den tatsaechlichen, leeren Zustand von ctx.devices zeigte).
+  -- Jetzt: reactors/turbines werden IMMER zugewiesen, der Signatur-
+  -- Vergleich entscheidet nur noch ob die teuren Nebenoperationen
+  -- (Cache-Schreiben, Modul-Neuaufbau) noetig sind.
+  ctx.devices.reactors = reactors
+  ctx.devices.turbines = turbines
   if ctx.devices.binding_signature == signature then
     return
   end
@@ -131,8 +148,6 @@ function M.refresh_bindings(ctx)
   end
   ctx.config.reactors = reactor_names
   ctx.config.turbines = turbine_names
-  ctx.devices.reactors = reactors
-  ctx.devices.turbines = turbines
   M.cache(ctx)
   ctx.build_modules()
   ctx.refresh_module_peripherals()
