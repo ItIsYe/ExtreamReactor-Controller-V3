@@ -3,6 +3,22 @@
 -- function inside the same Lua chunk. This preserves access to all existing local
 -- stats, incremental-buffer helpers, touch buttons, disk logic and modem logic.
 
+-- Fix (2026-07-05): nodes/log_collector/main.lua ruft historisch NIE
+-- bootstrap.setup() auf — der LOG-Collector war komplett eigenstaendig ohne
+-- projektinternes require()-Modulsystem (im Gegensatz zu MASTER/RT/ENERGY/
+-- WATER/FUEL/REPROCESSOR, die alle bootstrap.setup() in main.lua aufrufen).
+-- Die neue mockup_ui.lua-Integration braucht aber require("nodes.log_
+-- collector.mockup_ui") — ohne bootstrap.setup() ist require() dafuer die
+-- native, nicht-funktionierende CC:Tweaked-Standardfunktion, was zu
+-- "attempt to call a nil value" fuehrte (require selbst existierte in
+-- diesem Kontext nicht als brauchbare Funktion). bootstrap.setup() setzt
+-- require GLOBAL (_G.require), daher reicht ein einmaliger Aufruf hier,
+-- bevor main.lua eingelesen/gepatcht/ausgefuehrt wird.
+local ok_bootstrap, bootstrap = pcall(dofile, "/xreactor/core/bootstrap.lua")
+if ok_bootstrap and type(bootstrap) == "table" and type(bootstrap.setup) == "function" then
+  pcall(bootstrap.setup, { role = "log" })
+end
+
 local MAIN_PATH = "/xreactor/nodes/log_collector/main.lua"
 
 local function read_all(path)
