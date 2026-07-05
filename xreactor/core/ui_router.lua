@@ -228,11 +228,27 @@ function router:render(mon, model)
   end
   self.last_snapshot = snapshot
   self.list_controls = nil
+  local page_footer = nil
   if page and page.render then
-    page.render(mon, model)
+    page_footer = page.render(mon, model)
   end
   local w, h = ui.getSize(mon)
   if not w or not h then
+    return
+  end
+  -- Fix (2026-07-05): wenn die Seite selbst schon einen sichtbaren Footer
+  -- mit ZURUECK/WEITER-Buttons gezeichnet hat (mux.footer_nav(), gibt
+  -- { left = {x1,x2,y}, right = {x1,x2,y} } zurueck), NICHT zusaetzlich
+  -- einen eigenen "< Page X/Y >"-Indikator ueber dieselbe Zeile zeichnen —
+  -- das ueberschrieb den sichtbaren Text und liess trotzdem nur die
+  -- eigenen (jetzt unsichtbaren) Touch-Zonen aktiv, waehrend die
+  -- tatsaechlich sichtbaren Buttons nie eine funktionierende Touch-Zone
+  -- hatten. Stattdessen: footer.prev/next direkt auf die von der Seite
+  -- zurueckgegebenen, tatsaechlich sichtbaren Button-Koordinaten legen.
+  if type(page_footer) == "table" and page_footer.left and page_footer.right then
+    self.footer.prev = { x1 = page_footer.left.x1, x2 = page_footer.left.x2, y = page_footer.left.y }
+    self.footer.next = { x1 = page_footer.right.x1, x2 = page_footer.right.x2, y = page_footer.right.y }
+    self.footer.indicator = nil
     return
   end
   local page_count = math.max(1, #self.pages)
