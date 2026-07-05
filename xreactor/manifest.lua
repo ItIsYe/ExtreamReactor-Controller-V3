@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 299,
-  manifest_id = "manifest-v299",
+  manifest_version = 300,
+  manifest_id = "manifest-v300",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -170,7 +170,7 @@ return {
     },
     log = {
     { path = "nodes/log_collector/main.lua", size_bytes = 31324, hash = "ceb1fc06", required_for={"LOG"} },
-    { path = "nodes/log_collector/mockup_main.lua", size_bytes = 2732, hash = "new", required_for={"LOG"} },
+    { path = "nodes/log_collector/mockup_main.lua", size_bytes = 3743, hash = "new", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_ui.lua", size_bytes = 6190, hash = "new", required_for={"LOG"} },
     { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", required_for={"LOG"} },
     },
