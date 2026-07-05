@@ -794,11 +794,32 @@ end
 
 init()
 
+-- Fix (2026-07-05): discover() lief bisher NUR EINMAL beim Boot (in
+-- init()). Falls beim allerersten Scan Peripherals noch nicht bereit
+-- waren (Chunk laedt noch, Ender-Modem noch nicht stabil) oder aus
+-- anderem Grund devices.reactors/turbines leer blieben, gab es NIE einen
+-- zweiten Versuch — waehrend die Registry selbst (ctx.registry, von
+-- Overview genutzt) unter Umstaenden ueber einen anderen Pfad dennoch
+-- aktuelle Werte zeigte. Das erklaerte den beobachteten Widerspruch:
+-- Overview zeigte "25 Turbinen", die Turbinen-Detailseite zeigte "0" —
+-- beide lasen aus derselben Registry, aber devices.turbines/reactors
+-- (fuer die Detailseiten) wurden nur beim Boot einmalig befuellt.
+-- Jetzt: alle 60s ein erneuter discover()-Aufruf im laufenden Betrieb,
+-- damit sich ein einmalig fehlgeschlagener/unvollstaendiger Scan von
+-- selbst korrigiert, sobald die Peripherals tatsaechlich bereit sind.
+local last_rediscover_ms = os.epoch and os.epoch("utc") or 0
+local REDISCOVER_INTERVAL_MS = 60000
+
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   if pending_remote_update then
     pending_remote_update = false
     log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
     require("core.remote_update").run(log)
+  end
+  local now_ms_val = os.epoch and os.epoch("utc") or 0
+  if now_ms_val - last_rediscover_ms >= REDISCOVER_INTERVAL_MS then
+    last_rediscover_ms = now_ms_val
+    pcall(discover)
   end
 end)
 
