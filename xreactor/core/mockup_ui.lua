@@ -206,19 +206,36 @@ function M.table_header(mon, x, y, w, columns)
   write(mon, x, y + 1, string.rep("-", w), colors.get("OFFLINE"), colors.get("background"))
 end
 
+-- Fix (2026-07-05): footer_nav() zeichnete bisher NUR Text ("< ZURUECK" /
+-- "WEITER >"), gab aber nie Touch-Koordinaten zurueck. Der Router
+-- (core/ui_router.lua) zeichnet danach an derselben Zeile seinen eigenen
+-- "< Page X/Y >"-Indikator und registriert NUR dessen eigene, unsichtbar
+-- gewordene Touch-Zonen (self.footer.prev/next) — die tatsaechlich
+-- sichtbaren Mockup-Buttons hatten also nie eine funktionierende Touch-
+-- Zone dahinter, obwohl sie wie klickbare Buttons aussahen. Jetzt gibt
+-- diese Funktion { left = {x1,x2,y}, right = {x1,x2,y} } zurueck, das der
+-- Aufrufer (ui_router.lua) nutzt um seine eigenen Touch-Zonen auf die
+-- tatsaechlich sichtbaren Buttons zu legen statt auf seinen eigenen,
+-- ueberschriebenen Footer-Text.
 function M.footer_nav(mon, y, w, opts)
   opts = opts or {}
   write(mon, 1, y, string.rep(" ", w), colors.get("text"), colors.get("OFFLINE"))
   local left = opts.left or "< ZURUECK"
   local center = opts.center or ""
   local right = opts.right or "WEITER >"
-  write(mon, 2, y, fit(left, math.floor(w / 3) - 1), colors.get("text"), colors.get("OFFLINE"))
+  local left_text = fit(left, math.floor(w / 3) - 1)
+  write(mon, 2, y, left_text, colors.get("text"), colors.get("OFFLINE"))
   if center ~= "" then
     local cx = math.max(2, math.floor((w - #center) / 2))
     write(mon, cx, y, fit(center, math.floor(w / 3)), colors.get("muted"), colors.get("OFFLINE"))
   end
-  local rx = math.max(2, w - #right - 1)
-  write(mon, rx, y, fit(right, math.floor(w / 3)), colors.get("text"), colors.get("OFFLINE"))
+  local right_text = fit(right, math.floor(w / 3))
+  local rx = math.max(2, w - #right_text - 1)
+  write(mon, rx, y, right_text, colors.get("text"), colors.get("OFFLINE"))
+  return {
+    left = { x1 = 2, x2 = 2 + #left_text - 1, y = y },
+    right = { x1 = rx, x2 = rx + #right_text - 1, y = y },
+  }
 end
 
 function M.warning_box(mon, x, y, w, lines, status)
