@@ -109,25 +109,6 @@ end
 
 function M.build_turbine_status_details(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix)
   local list, total_output = {}, 0
-  -- Diagnose (2026-07-06): vorherige Fixes (entry.peripheral, get_device_
-  -- caps-Parameter) behoben zwei echte Bugs, aendern aber weiterhin nichts
-  -- am beobachteten Symptom. Bevor ein dritter Fix geraten wird: einmaliges
-  -- Log pro Node-Boot, das den TATSAECHLICHEN Zustand zeigt (wie viele
-  -- Turbinen in devices.turbines, welcher Name, ob peripheral.isPresent
-  -- dafuer true/false ist) — damit die naechste Diagnose auf echten Daten
-  -- statt weiteren Vermutungen basiert.
-  if not M._diag_logged_turbines and utils then
-    M._diag_logged_turbines = true
-    local count = #(devices.turbines or {})
-    utils.log(log_prefix or "RT", string.format("DIAG build_turbine_status_details: devices.turbines count=%d", count), "WARN")
-    for i, entry in ipairs(devices.turbines or {}) do
-      if i <= 3 then
-        local present = entry.name and peripheral.isPresent(entry.name)
-        utils.log(log_prefix or "RT", string.format("DIAG turbine[%d]: name=%s id=%s bound=%s present=%s",
-          i, tostring(entry.name), tostring(entry.id), tostring(entry.bound), tostring(present)), "WARN")
-      end
-    end
-  end
   for _, entry in ipairs(devices.turbines or {}) do
     -- Fix (2026-07-06): entry.peripheral existiert NIE in der Registry-
     -- Struktur (siehe core/registry.lua registry:register() — Eintraege
