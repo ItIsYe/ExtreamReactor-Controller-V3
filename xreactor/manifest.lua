@@ -1,15 +1,15 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 294,
-  manifest_id = "manifest-v294",
+  manifest_version = 295,
+  manifest_id = "manifest-v295",
   source_ref = "beta",
   hash_algo = "crc32",
 
   base_files = {
   { path = "services/heartbeat_service.lua", size_bytes = 3938, hash = "973887e9" },
   { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6" },
-  { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c" },
-  { path = "master/loop.lua", size_bytes = 3111, hash = "e980ca5e" },
+  { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c", required_for={"MASTER"} },
+  { path = "master/loop.lua", size_bytes = 3111, hash = "e980ca5e", required_for={"MASTER"} },
   { path = "nodes/energy/heartbeat.lua", size_bytes = 2746, hash = "a142dc47", required_for={"ENERGY"} },
   { path = "nodes/energy/matrix.lua", size_bytes = 1079, hash = "ef46a3f2", required_for={"ENERGY"} },
   { path = "installer/http.lua", size_bytes = 3192, hash = "fe55b6ce", always=true },
