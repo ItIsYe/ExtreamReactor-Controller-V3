@@ -286,10 +286,20 @@ function M.render_diagnostics(mon, model)
   local retries = num(metrics.retries, 0)
   local net_key = dropped > 0 and "WARNING" or master_key(model)
 
+  -- Fix (2026-07-05): metrics.sent/metrics.received existieren nicht im
+  -- comms-Metrik-Objekt (siehe core/comms.lua state.metrics — die echten
+  -- Felder sind dropped/queue_dropped/retries/timeouts/dedupe_hits) — die
+  -- TX/RX-Anzeige zeigte deshalb immer konstant "0/0", unabhaengig vom
+  -- tatsaechlichen Netzwerkverkehr. Jetzt: Retries/Timeouts/Dedupe-Hits,
+  -- die tatsaechlich vorhanden sind und echte Diagnose-Aussagekraft haben.
+  local timeouts = num(metrics.timeouts, 0)
+  local dedupe_hits = num(metrics.dedupe_hits, 0)
+  local queue_dropped = num(metrics.queue_dropped, 0)
+
   local top = {
     { label = "HEALTH", value = health(model), status = health(model), icon = "ok" },
     { label = "MASTER", value = tostring(model.master_state or "?") .. " " .. tostring(model.master_age or ""), status = master_key(model), icon = "master" },
-    { label = "TX/RX", value = tostring(metrics.sent or 0) .. "/" .. tostring(metrics.received or 0), status = net_key, icon = "network" },
+    { label = "RETRY/TO", value = tostring(retries) .. "/" .. tostring(timeouts), status = net_key, icon = "network" },
     { label = "DROP", value = tostring(dropped), status = dropped > 0 and "WARNING" or "OK", icon = "warning" },
   }
 
@@ -309,7 +319,8 @@ function M.render_diagnostics(mon, model)
   section_arrow(mon, 2, 17, w - 3, "SYSTEM", capacity_key(model), "storage")
   mux.data_row(mon, 2, 19, w - 3, { label = "CAPACITY", value = (model.capacity_ready and "READY " or "LEARNING ") .. short(model.capacity_max, "RF/t"), status = capacity_key(model), icon = "storage" })
   mux.data_row(mon, 2, 20, w - 3, { label = "RETRIES", value = tostring(retries), status = retries > 0 and "LIMITED" or "OK", icon = "network" })
-  mux.data_row(mon, 2, 21, w - 3, { label = "LAST COMMAND", value = tostring(model.last_command or "none") .. " / " .. tostring(model.last_command_ts or "-"), status = "text", icon = "config" })
+  mux.data_row(mon, 2, 21, w - 3, { label = "QUEUE DROP / DEDUP", value = tostring(queue_dropped) .. " / " .. tostring(dedupe_hits), status = queue_dropped > 0 and "WARNING" or "OK", icon = "network" })
+  mux.data_row(mon, 2, 22, w - 3, { label = "LAST COMMAND", value = tostring(model.last_command or "none") .. " / " .. tostring(model.last_command_ts or "-"), status = "text", icon = "config" })
 
   local alerts = model.local_alerts or {}
   if h >= 26 then
