@@ -322,6 +322,23 @@ function M.render_diagnostics(mon, model)
   mux.data_row(mon, 2, 21, w - 3, { label = "QUEUE DROP / DEDUP", value = tostring(queue_dropped) .. " / " .. tostring(dedupe_hits), status = queue_dropped > 0 and "WARNING" or "OK", icon = "network" })
   mux.data_row(mon, 2, 22, w - 3, { label = "LAST COMMAND", value = tostring(model.last_command or "none") .. " / " .. tostring(model.last_command_ts or "-"), status = "text", icon = "config" })
 
+  -- Feature (2026-07-05): Monitor-Skalierung direkt am Bildschirm per
+  -- Touch einstellbar, statt nur ueber config/rt.lua von Hand editierbar.
+  -- Touch-Koordinaten werden in M.scale_hit_cache abgelegt (siehe unten,
+  -- vom Aufrufer in monitor_ui.lua per M.handle_input ausgewertet).
+  do
+    local cur_scale = tonumber(model.monitor_scale) or 0.5
+    local row_y = 23
+    mux.data_row(mon, 2, row_y, w - 16, { label = "MONITOR SCALE", value = string.format("%.1f", cur_scale), status = "text", icon = "config" })
+    local bx = w - 12
+    mux.data_row(mon, bx, row_y, 8, { label = "[-] [+]", value = "", status = "LIMITED" })
+    M.scale_hit_cache = M.scale_hit_cache or {}
+    M.scale_hit_cache[mon] = {
+      minus = { x1 = bx, x2 = bx + 2, y = row_y },
+      plus = { x1 = bx + 4, x2 = bx + 6, y = row_y },
+    }
+  end
+
   local alerts = model.local_alerts or {}
   if h >= 26 then
     section_arrow(mon, 2, 23, w - 3, "AKTIVE ALARME", #alerts > 0 and "WARNING" or "OK", "warning")
