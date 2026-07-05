@@ -253,6 +253,10 @@ function M.update(monitor, ctx)
     capacity_total_turbines = snapshot and snapshot.capacity_total_turbines or 0,
     binding = ctx.binding,
     build_label = ctx.build_label or ctx.manifest_id or ctx.release_id,
+    -- Feature (2026-07-05): Monitor-Skalierung per Touch auf der
+    -- Diagnostics-Seite einstellbar. ctx.monitor_scale wird von main.lua
+    -- gesetzt (der aktuell wirksame, ggf. per Touch geaenderte Wert).
+    monitor_scale = ctx.monitor_scale,
   }
 
   if not M.monitor_router then
