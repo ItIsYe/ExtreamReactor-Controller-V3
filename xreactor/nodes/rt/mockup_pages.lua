@@ -140,7 +140,7 @@ function M.render_overview(mon, model)
     mux.data_row(mon, 2, 23, w - 3, { label = rods_label .. "   |   STEAM " .. short(s.steam_amount), value = "RPM " .. fmt(s.avg_rpm, 0, ""), status = "text" })
   end
 
-  mux.footer_nav(mon, h, w, { center = "RT OVERVIEW" })
+  return mux.footer_nav(mon, h, w, { center = "RT OVERVIEW" })
 end
 
 function M.render_turbines(mon, model)
@@ -199,7 +199,7 @@ function M.render_turbines(mon, model)
     y = y + 1
   end
 
-  mux.footer_nav(mon, h, w, { center = "TURBINEN" })
+  return mux.footer_nav(mon, h, w, { center = "TURBINEN" })
 end
 
 local function reactor_key(r)
@@ -255,7 +255,7 @@ function M.render_reactors(mon, model)
     end
   end
 
-  mux.footer_nav(mon, h, w, { center = "REAKTOREN" })
+  return mux.footer_nav(mon, h, w, { center = "REAKTOREN" })
 end
 
 function M.render_diagnostics(mon, model)
@@ -307,7 +307,7 @@ function M.render_diagnostics(mon, model)
     end
   end
 
-  mux.footer_nav(mon, h, w, { center = "DIAGNOSTICS" })
+  return mux.footer_nav(mon, h, w, { center = "DIAGNOSTICS" })
 end
 
 return M
