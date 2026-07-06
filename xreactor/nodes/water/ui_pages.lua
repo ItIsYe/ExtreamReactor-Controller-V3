@@ -101,7 +101,7 @@ function M.new(opts)
       mux.data_row(mon, 2, 24, w - 3, { label = b and tostring(b.id or "TANK 1") or "KEIN TANK", value = b and short(b.level, "mB") or "-", status = b and "OK" or "WARNING", icon = "storage" })
     end
 
-    mux.footer_nav(mon, h, w, { center = "WATER OVERVIEW" })
+    return mux.footer_nav(mon, h, w, { center = "WATER OVERVIEW" })
   end
 
   local function details(mon, model)
@@ -148,7 +148,7 @@ function M.new(opts)
       mux.warning_box(mon, 2, 12, w - 3, { "Keine Cluster konfiguriert", "Config pruefen" }, "WARNING")
     end
 
-    mux.footer_nav(mon, h, w, { center = "WATER DETAILS" })
+    return mux.footer_nav(mon, h, w, { center = "WATER DETAILS" })
   end
 
   local function diagnostics(mon, model)
@@ -201,7 +201,7 @@ function M.new(opts)
     end
 
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
-    mux.footer_nav(mon, h, w, { center = "WATER DIAGNOSTICS" })
+    return mux.footer_nav(mon, h, w, { center = "WATER DIAGNOSTICS" })
   end
 
   local function diagnostics_touch(mon, x, y)
