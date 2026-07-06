@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-> Letzte Aktualisierung: **beta-v274** (2026-07-01)
+> Letzte Aktualisierung: **beta-v318** (2026-07-01)
 > Branch: `beta` — Repo: `ItIsYe/ExtreamReactor-Controller-V3`
 > Dieses Dokument fasst den aktuellen Stand zusammen und dient als Einstiegspunkt für neue Chat-Sessions.
 
@@ -8,7 +8,7 @@
 
 ## Aktueller Stand
 
-- **Manifest-Version:** v274
+- **Manifest-Version:** v318
 - **Dateien:** 139 manifestierte Dateien (145 → 139 nach Repo-Hygiene-Cleanup, siehe unten)
 - **Working Tree:** letzte bekannte Änderungen committed, `manifest.lua`/`release.lua` konsistent (`size_bytes` vollständig gegen echte Repo-Größen verifiziert)
 - **ATM10 / MC 1.21.1 / Extreme Reactors 2 / Mekanism / CC:Tweaked**
@@ -42,7 +42,7 @@ Kanal-Mismatch: Sender (`core/remote_log.lua`) nutzte `6502`, `shared/constants.
 - Doppelte Turbinen-Zeile im RT-Monitor während Capacity-Learning behoben.
 - `sequencer.enqueue()` (Master) lehnt jetzt Nicht-String/Number-`node_id` ab, statt sie über `normalize_node_id()` in einen kaputten, aber gültigen String wie `"table:_0x..."` zu verwandeln.
 
-### Repo-Hygiene (v261 → v274, 2026-07-01)
+### Repo-Hygiene (v261 → v318, 2026-07-01)
 - 6 lose `installer_*.lua`-Dateien im Root gelöscht (~55KB, seit dem monolithischen Installer-Umbau unreferenziert, wurden auf jedem Node unnötig mitinstalliert).
 - Verwaistes Duplikat-Verzeichnis `xreactor/xreactor/nodes/rt/` gelöscht (seit ≥v134 bekannt, nie aufgeräumt).
 - 3 veraltete v136-Handoff-Notizen und 9 Tests für den ersetzten Stage-Installer-Mechanismus gelöscht.
@@ -102,8 +102,8 @@ xreactor/
     remote_log.lua          Kanal jetzt 6503
   services/
   installer                 monolithisch, PRESERVE-Liste in beiden Codepfaden identisch
-  manifest.lua               v274, 139 Dateien
-  release.lua                beta-v274
+  manifest.lua               v318, 139 Dateien
+  release.lua                beta-v318
 ```
 
 ---
