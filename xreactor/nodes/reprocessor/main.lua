@@ -219,9 +219,9 @@ local function render_monitor()
   if not monitor_router then
     monitor_router = ui_router.new({
       pages = {
-        { name = "Overview", render = function(target) reproc_ui.render_overview(target, model) end },
-        { name = "Details", render = function(target) reproc_ui.render_details(target, model) end },
-        { name = "Diagnostics", render = function(target) reproc_ui.render_diagnostics(target, model) end,
+        { name = "Overview", render = function(target) return reproc_ui.render_overview(target, model) end },
+        { name = "Details", render = function(target) return reproc_ui.render_details(target, model) end },
+        { name = "Diagnostics", render = function(target) return reproc_ui.render_diagnostics(target, model) end,
           handle_touch = function(x, y) return reproc_ui.handle_diagnostics_touch(mon, x, y) end },
         { name = "Router", render = function(target) get_router_ui():render(target, ui, colors) end,
           handle_touch = function(x, y) return get_router_ui():handle_touch(x, y) end }
