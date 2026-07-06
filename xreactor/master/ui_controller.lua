@@ -564,6 +564,10 @@ function M.new(opts)
       fuel_reserve_pct = tonumber(c.state.fuel_reserve_pct) or 2000,
       water_target_pct = tonumber(c.state.water_target_pct) or 0,
       auto_update_enabled = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled(),
+      -- Feature (2026-07-06): Zielwert fuer individuelle Pro-Reaktor-
+      -- Regelung, als Prozent (0-100) fuer die UI; wird beim Senden durch
+      -- 100 geteilt (siehe handle_action "reactor_fill_target_adjust").
+      reactor_fill_target_pct = tonumber(c.state.reactor_fill_target_pct) or 50,
     }
 
     return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model, config_editor = config_editor_model }
@@ -678,6 +682,17 @@ function M.new(opts)
       local new_val = math.max(0, cur + action.delta)
       c.state.fuel_reserve_pct = new_val
       c.calc.set_fuel_reserve(new_val)
+      return true
+    end
+    -- Feature (2026-07-06): Zielwert fuer individuelle Pro-Reaktor-
+    -- Regelung. UI arbeitet in Prozent (0-100, Schritte typischerweise
+    -- 5%), das RT-Command SET_REACTOR_FILL_TARGET erwartet aber 0.0-1.0 —
+    -- Umrechnung hier vor dem Senden.
+    if action.type == "reactor_fill_target_adjust" and action.delta and c.calc.set_reactor_fill_target then
+      local cur = tonumber(c.state.reactor_fill_target_pct) or 50
+      local new_val = math.max(0, math.min(100, cur + action.delta))
+      c.state.reactor_fill_target_pct = new_val
+      c.calc.set_reactor_fill_target(new_val / 100)
       return true
     end
     if action.type == "water_target_adjust" and action.delta and c.calc.set_water_target then
