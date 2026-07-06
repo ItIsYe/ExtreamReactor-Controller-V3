@@ -184,6 +184,22 @@ local function make_dispatch()
       ctx.apply_mode(ctx.STATE.SAFE)
       return nil
     end,
+    -- Feature (2026-07-06): Zielwert fuer den internen Dampf-Fuellstand
+    -- bei individueller Pro-Reaktor-Regelung, per Master-Config-Editor
+    -- fernsteuerbar (analog zu SET_RESERVE bei FUEL, SET_TARGET bei WATER).
+    ["SET_REACTOR_FILL_TARGET"] = function(command, ctx)
+      local value = tonumber(command.value)
+      if type(value) ~= "number" or value < 0 or value > 1 then
+        if type(ctx.log) == "function" then
+          ctx.log("WARN", "SET_REACTOR_FILL_TARGET rejected: invalid value=" .. tostring(command.value))
+        end
+        return nil
+      end
+      if type(ctx.set_reactor_fill_target) == "function" then
+        ctx.set_reactor_fill_target(value)
+      end
+      return nil
+    end,
     -- REMOTE_UPDATE: Nicht direkt ausfuehren — Flag setzen fuer den
     -- Haupt-Thread. CC:Tweaked http.get() ist async und sendet http_success/
     -- http_failure Events. Diese koennen nicht ankommen wenn wir uns bereits
