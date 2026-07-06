@@ -889,15 +889,40 @@ local ui_mod       = load_module("ui",          ui_src)
 -- auto_update und init werden separat geschrieben
 
 -- ── Download-Funktion ────────────────────────────────────────────────────────
+-- Fix (2026-07-06): diese primitive Bootstrap-Download-Funktion (genutzt
+-- fuer den ALLERERSTEN Download aller Kern-Dateien, bevor /xreactor
+-- ueberhaupt existiert und die robustere http_mod.download() mit
+-- eingebautem Retry verfuegbar waere) hatte KEINEN Retry-Mechanismus —
+-- ein einzelner transienter http.get()-Fehlschlag (z.B. GitHub-Rate-Limit
+-- oder kurzzeitiger Netzwerk-Hickup bei einer der 76 Dateien) liess die
+-- komplette Erstinstallation sofort abbrechen. Jetzt mit 4 Versuchen und
+-- steigender Wartezeit, analog zur bereits vorhandenen, robusteren
+-- http_mod.M.download()-Logik.
 local function download(url)
-  local ok, r = pcall(http.get, url)
-  if not ok or not r then
-    return nil, type(r)=="string" and r or "http.get fehlgeschlagen"
+  local last_err
+  for attempt = 1, 4 do
+    local ok, r = pcall(http.get, url)
+    if ok and r then
+      local ok2, body = pcall(r.readAll); pcall(r.close)
+      if ok2 and type(body) == "string" and #body > 0 then
+        if http_mod.is_html(body) then
+          last_err = "HTML-Antwort (CDN)"
+        else
+          return body
+        end
+      else
+        last_err = "readAll fehlgeschlagen"
+      end
+    else
+      last_err = type(r) == "string" and r or "http.get fehlgeschlagen"
+    end
+    if attempt < 4 then
+      p("  Download-Versuch " .. attempt .. " fehlgeschlagen (" .. tostring(last_err) .. "), erneut in " .. (attempt * 2) .. "s ...")
+      os.sleep(attempt * 2)
+    end
   end
-  local ok2, body = pcall(r.readAll); pcall(r.close)
-  if not ok2 or type(body)~="string" or #body==0 then return nil, "readAll fehlgeschlagen" end
-  if http_mod.is_html(body) then return nil, "HTML-Antwort (CDN)" end
-  return body
+  return nil, last_err
+end
 end
 
 -- SHA auflösen
