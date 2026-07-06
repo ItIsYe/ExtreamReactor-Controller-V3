@@ -923,7 +923,6 @@ local function download(url)
   end
   return nil, last_err
 end
-end
 
 -- SHA auflösen
 local sha = nil
@@ -1017,6 +1016,58 @@ do
       return chunk()
     end)
     if ok and type(loaded) == "table" then selected_features = loaded end
+  end
+end
+
+-- Fix (2026-07-06): CRITICAL. Dieser komplette Codeblock (SHA aufloesen /
+-- Manifest laden / Rolle bestimmen / PRESERVE / Alte Installation loeschen
+-- / Dateien installieren, ab Zeile ~928) ist der Code-Pfad, der TATSAECHLICH
+-- laeuft, wenn der Nutzer den Installer manuell startet UND "Rolle
+-- behalten? Ja" bestaetigt — NICHT init_src weiter oben (das erreicht man
+-- nur, wenn man /xreactor/installer/init.lua separat aufruft, was in der
+-- Praxis kaum vorkommt). Der urspruengliche Kommentar "beim automatischen
+-- Auto-Update-Reinstall wird NICHT erneut interaktiv gefragt" war korrekt
+-- fuer den EIGENTLICH GEMEINTEN automatischen Auto-Update-Zyklus (kein
+-- Nutzer anwesend) — aber die Bedingung dafuer fehlte komplett, wodurch
+-- JEDER manuelle "Rolle behalten"-Lauf ebenfalls faelschlich uebersprungen
+-- wurde. Jetzt: nur bei echtem, unbeaufsichtigtem Auto-Update
+-- (_G.__xreactor_remote_update == true) wird die gespeicherte Auswahl
+-- stillschweigend uebernommen; bei jedem manuellen Lauf wird interaktiv
+-- gefragt (Standard-Antwort = zuvor gespeicherte Auswahl beibehalten, bei
+-- leerer Eingabe).
+if not _G.__xreactor_remote_update and term and term.setCursorPos then
+  local function collect_optional_feature_names_reinstall(manifest_tbl)
+    local seen, names = {}, {}
+    local function scan(entries)
+      for _, e in ipairs(entries or {}) do
+        if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] then
+          seen[e.feature] = true
+          names[#names + 1] = e.feature
+        end
+      end
+    end
+    scan(manifest_tbl.base_files)
+    for _, rentries in pairs(manifest_tbl.roles or {}) do
+      scan(rentries)
+    end
+    table.sort(names)
+    return names
+  end
+  local feature_names = collect_optional_feature_names_reinstall(manifest)
+  if #feature_names > 0 then
+    p("")
+    p("Optionale Peripherie-Erweiterungen (nur installieren wenn Hardware vorhanden ist):")
+    for _, fname in ipairs(feature_names) do
+      local already = selected_features[fname] == true
+      io.write("  " .. fname .. " installieren? [j/N" .. (already and ", bereits aktiv" or "") .. "]: ")
+      local answer = read and read() or ""
+      if tostring(answer):lower() == "j" or tostring(answer):lower() == "y" then
+        selected_features[fname] = true
+      elseif tostring(answer) ~= "" then
+        selected_features[fname] = false
+      end
+      -- Leere Eingabe = bestehende Auswahl beibehalten (already).
+    end
   end
 end
 
