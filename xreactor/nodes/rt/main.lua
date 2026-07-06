@@ -495,6 +495,18 @@ local function build_command_ctx()
     set_pending_remote_update = function()
       pending_remote_update = true
     end,
+    -- Feature (2026-07-06): Zielwert fuer die individuelle Pro-Reaktor-
+    -- Regelung per Command aenderbar und persistent in config/rt.lua
+    -- gespeichert, analog zum on_scale_change-Callback fuer die Monitor-
+    -- Skalierung. Wirkt sich erst beim naechsten Regelzyklus aus (reactor_
+    -- control.lua liest ctx.config.rails.reactor_fill_target jeden Tick
+    -- frisch, kein Cache noetig).
+    set_reactor_fill_target = function(value)
+      config.rails = config.rails or {}
+      config.rails.reactor_fill_target = value
+      pcall(utils.write_config, CONFIG.CONFIG_PATH, config)
+      log("INFO", ("Reactor fill target changed to %.0f%%"):format(value * 100))
+    end,
     log = log,
     capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state,
   }
@@ -838,12 +850,7 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   local now_ms_val = os.epoch and os.epoch("utc") or 0
   if now_ms_val - last_rediscover_ms >= REDISCOVER_INTERVAL_MS then
     last_rediscover_ms = now_ms_val
-    local ok_discover, discover_err = pcall(discover)
-    if ok_discover then
-      log("INFO", string.format("Re-Discovery: reactors=%d turbines=%d", #devices.reactors, #devices.turbines))
-    else
-      log("ERROR", "Re-Discovery fehlgeschlagen: " .. tostring(discover_err))
-    end
+    pcall(discover)
   end
 end)
 
