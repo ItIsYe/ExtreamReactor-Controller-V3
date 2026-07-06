@@ -88,19 +88,39 @@ local function clear_name_cache(name)
   known_monitor_names[cache_name] = nil
 end
 
+-- Fix (2026-07-06): CRITICAL. Ein per Wired Modem angeschlossener 1x3-
+-- Ampel-Monitor konnte bisher versehentlich als HAUPT-Monitor gewaehlt
+-- werden — entweder weil preferred_name (aus der Node-Config) zufaellig
+-- darauf zeigte, oder weil strategy="first" rein alphabetisch nach
+-- Peripheral-Namen sortierte, OHNE jegliche Groessenpruefung. Ein 1x3-
+-- Monitor ist fuer die Haupt-UI (mehrzeilige Karten, Tabellen etc.)
+-- voellig ungeeignet und ausschliesslich fuer optional/ampel.lua gedacht.
+-- Mindestgroesse: mehr als 3 Zeilen ODER mehr als 1 Spalte QUALIFIZIERT
+-- einen Monitor als potenziellen Hauptmonitor; ein reiner 1x3 (oder noch
+-- kleinerer) wird hier abgelehnt, auch wenn er preferred_name entspricht.
+local function is_too_small_for_main(mon)
+  local ok, w, h = pcall(function() return mon.getSize() end)
+  if not ok or type(w) ~= "number" or type(h) ~= "number" then return false end
+  return w <= 1 and h <= 3
+end
+
 function monitor.find(preferred_name, strategy, scale, log_prefix)
   if preferred_name and peripheral.getType(preferred_name) == "monitor" then
     local mon = wrap_monitor(preferred_name, log_prefix)
-    if mon then
+    if mon and not is_too_small_for_main(mon) then
       maybe_set_scale(mon, preferred_name, scale, log_prefix)
       return { name = preferred_name, mon = mon }
+    end
+    if mon and is_too_small_for_main(mon) then
+      log_once(log_prefix, "preferred_too_small:" .. tostring(preferred_name),
+        "Configured monitor " .. tostring(preferred_name) .. " is 1x3 (Ampel-sized) - refusing to use it as the main monitor, searching for another one")
     end
   end
   local candidates = {}
   for _, name in ipairs(peripheral.getNames() or {}) do
     if peripheral.getType(name) == "monitor" then
       local mon = wrap_monitor(name, log_prefix)
-      if mon then
+      if mon and not is_too_small_for_main(mon) then
         table.insert(candidates, { name = name, mon = mon })
       end
     end
