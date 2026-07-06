@@ -106,7 +106,7 @@ local function discover()
   local allow_set = {}
   for _, name in ipairs(config.buffers or {}) do allow_set[name] = true end
   local allow_all = #config.buffers == 0
-  local monitor_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  local monitor_entry = monitor_adapter.find(nil, "largest", 0.5, CONFIG.LOG_PREFIX)
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
