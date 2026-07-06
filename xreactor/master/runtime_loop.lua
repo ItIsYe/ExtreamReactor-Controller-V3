@@ -150,6 +150,24 @@ local function run_master()
       end
       return false, "kein WATER-Node gefunden"
     end,
+    -- Feature (2026-07-06): Zielwert (0.0-1.0) fuer den internen Dampf-
+    -- Fuellstand bei individueller Pro-Reaktor-Regelung. Anders als
+    -- set_fuel_reserve/set_water_target (die nur an EINEN Node senden,
+    -- da typischerweise nur eine FUEL/WATER-Node existiert) wird dieser
+    -- Wert an ALLE RT-Nodes gesendet — es koennen mehrere unabhaengige
+    -- RT-Nodes existieren, von denen mehrere jeweils >1 Reaktor haben
+    -- koennten, und alle sollen denselben Zielwert nutzen.
+    set_reactor_fill_target = function(value)
+      local sent_count = 0
+      for id, node in pairs(runtime.state.nodes or {}) do
+        if node.role == constants.roles.RT_NODE then
+          runtime.refs.comms:send_command(id, { target = "SET_REACTOR_FILL_TARGET", value = value })
+          sent_count = sent_count + 1
+        end
+      end
+      if sent_count == 0 then return false, "kein RT-Node gefunden" end
+      return true, sent_count
+    end,
     get_auto_update_enabled = function() return runtime.state.auto_update_enabled ~= false end,
     set_auto_update_enabled = function(v) runtime.state.auto_update_enabled = v end,
     last_draw = runtime.state.last_draw, refs = runtime.refs,
