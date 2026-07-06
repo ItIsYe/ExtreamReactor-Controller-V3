@@ -37,7 +37,7 @@ end
 local function resolve_monitor(monitor_adapter, preferred_name, monitor_scale)
   if type(monitor_adapter) ~= "table" then return nil, "monitor adapter missing" end
   if type(monitor_adapter.find) == "function" then
-    local monitor, name = normalize_monitor_result(monitor_adapter.find(preferred_name, "first", monitor_scale, "RT"))
+    local monitor, name = normalize_monitor_result(monitor_adapter.find(preferred_name, "largest", monitor_scale, "RT"))
     if monitor then return monitor, name end
   end
   if type(monitor_adapter.wrap) == "function" and preferred_name then
