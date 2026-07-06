@@ -218,12 +218,30 @@ local function prompt_command_menu(modem)
     draw("KEINE ANTWORT", nil, "Master antwortet nicht")
   end
   os.pullEvent("key")
+  -- Hinweis: os.pullEventRaw waere hier riskant (fehlerhafter Filter
+  -- koennte Events verschlucken); "key" allein reicht als Bestaetigung
+  -- nach der Ergebnisanzeige — anders als der Hauptloop oben, wo Touch
+  -- die einzig realistische Eingabemethode fuer Pocket Computer ist,
+  -- dient dies hier nur als kurze "weiter"-Bestaetigung, jeder Tastendruck
+  -- (auch ueber die eingebaute Bildschirmtastatur) erfuellt das bereits.
 end
 
 local function main()
-  local modem_name, modem = find_modem()
+  -- Fix (2026-07-06): bekannter CC:Tweaked-Bug — frisch gecraftete Pocket
+  -- Computer mit eingebautem Wireless-Modem registrieren das Peripheral
+  -- manchmal nicht sofort (siehe cc-tweaked/CC-Tweaked#1888). Ein kurzer
+  -- Retry mit Wartezeit behebt das in den meisten Faellen von selbst,
+  -- ohne dass der Nutzer den Computer manuell aus- und wieder einschalten
+  -- muss (der dokumentierte Workaround waere: Computer kurz ins Inventar/
+  -- eine Kiste legen, 5s warten, wieder herausnehmen).
+  local modem_name, modem
+  for attempt = 1, 5 do
+    modem_name, modem = find_modem()
+    if modem then break end
+    os.sleep(0.5)
+  end
   if not modem then
-    draw("FEHLER", nil, "Kein Ender Modem gefunden")
+    draw("FEHLER", nil, "Kein Wireless-Modem gefunden. Falls der Pocket Computer gerade erst gecraftet wurde: kurz ins Inventar legen, 5s warten, wieder herausnehmen (bekannter CC:Tweaked-Registrierungsbug), dann neu starten.")
     return
   end
   pcall(modem.open, CHANNEL)
@@ -242,7 +260,7 @@ local function main()
     local should_quit = false
     while os.clock() < wait_deadline do
       local timer_id = os.startTimer(math.max(0.1, wait_deadline - os.clock()))
-      local event, p1 = os.pullEvent()
+      local event, p1, p2, p3 = os.pullEvent()
       if event == "key" and p1 == keys.q then
         should_quit = true
         os.cancelTimer(timer_id)
@@ -251,6 +269,24 @@ local function main()
         os.cancelTimer(timer_id)
         prompt_command_menu(modem)
         break
+      elseif event == "mouse_click" or event == "monitor_touch" then
+        -- Fix (2026-07-06): Pocket Computer haben keine physische
+        -- Tastatur — nur "key"-Events zu unterstuetzen waere fuer das
+        -- eingebaute Touch-Display unpraktisch. Footer zeigt bereits
+        -- "[Q] ENDE" links / "[C] BEFEHL" rechts; Touch auf die jeweilige
+        -- Bildschirmhaelfte in der Footer-Zeile loest dieselbe Aktion aus.
+        local touch_x = event == "monitor_touch" and p2 or p1
+        local touch_y = event == "monitor_touch" and p3 or p2
+        local w, h = term.getSize()
+        if touch_y == h then
+          os.cancelTimer(timer_id)
+          if touch_x <= math.floor(w / 2) then
+            should_quit = true
+          else
+            prompt_command_menu(modem)
+          end
+          break
+        end
       elseif event == "timer" and p1 == timer_id then
         break
       end
