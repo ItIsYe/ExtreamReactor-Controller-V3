@@ -100,7 +100,7 @@ function M.new(opts)
       mux.data_row(mon, 2, 24, w - 3, { label = b and tostring(b.id or "LINE 1") or "KEINE LINIE", value = b and tostring(b.process_state or "unknown"):upper() or "-", status = b and state_key(b.process_state) or "WARNING", icon = "recycle" })
     end
 
-    mux.footer_nav(mon, h, w, { center = "REPROCESSING" })
+    return mux.footer_nav(mon, h, w, { center = "REPROCESSING" })
   end
 
   local function details(mon, model)
@@ -141,7 +141,7 @@ function M.new(opts)
     end
 
     if #buffers == 0 then mux.warning_box(mon, 2, 12, w - 3, { "Keine Buffer gefunden", "Discovery / Binding pruefen" }, "WARNING") end
-    mux.footer_nav(mon, h, w, { center = "PROCESS DETAILS" })
+    return mux.footer_nav(mon, h, w, { center = "PROCESS DETAILS" })
   end
 
   local function diagnostics(mon, model)
@@ -194,7 +194,7 @@ function M.new(opts)
     end
 
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
-    mux.footer_nav(mon, h, w, { center = "REPROC DIAGNOSTICS" })
+    return mux.footer_nav(mon, h, w, { center = "REPROC DIAGNOSTICS" })
   end
 
   local function diagnostics_touch(mon, x, y)
