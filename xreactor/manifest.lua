@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 321,
-  manifest_id = "manifest-v321",
+  manifest_version = 322,
+  manifest_id = "manifest-v322",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -146,14 +146,14 @@ return {
     water = {
     { path = "nodes/water/config.lua", size_bytes = 4789, hash = "961b224e", required_for={"WATER"} },
     { path = "nodes/water/config_normalizer.lua", size_bytes = 989, hash = "09141fba", required_for={"WATER"} },
-    { path = "nodes/water/main.lua", size_bytes = 18864, hash = "dd1236f0", required_for={"WATER"} },
+    { path = "nodes/water/main.lua", size_bytes = 18866, hash = "dd1236f0", required_for={"WATER"} },
     { path = "nodes/water/ui_pages.lua", size_bytes = 10862, hash = "new", required_for={"WATER"} },
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
     },
     fuel = {
     { path = "nodes/fuel/config.lua", size_bytes = 5586, hash = "48c5be2b", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 3722, hash = "40524d32", required_for={"FUEL"} },
-    { path = "nodes/fuel/main.lua", size_bytes = 16871, hash = "181bc955", required_for={"FUEL"} },
+    { path = "nodes/fuel/main.lua", size_bytes = 16873, hash = "181bc955", required_for={"FUEL"} },
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 11871, hash = "new", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 17457, hash = "abd2252f", required_for={"FUEL","REPROCESSING"} },
@@ -164,7 +164,7 @@ return {
     { path = "nodes/reprocessor/config.lua", size_bytes = 4058, hash = "61160847", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 2097, hash = "7b4dd612", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/feed_router.lua", size_bytes = 7060, hash = "475ecc96" },
-    { path = "nodes/reprocessor/main.lua", size_bytes = 18402, hash = "5613b787", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/main.lua", size_bytes = 18404, hash = "5613b787", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 11071, hash = "new", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     },
