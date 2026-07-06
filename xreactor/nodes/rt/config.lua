@@ -65,6 +65,13 @@ return {
   },
 
   rails = {
+    -- Feature (2026-07-06): Zielwert (0.0-1.0) fuer den internen Dampf-
+    -- Fuellstand bei individueller Pro-Reaktor-Regelung (nur relevant bei
+    -- >1 Reaktor pro RT-Node, siehe reactor_control.lua
+    -- controlReactorsIndividually()). Ueber die Config-Editor-Seite am
+    -- Master per Touch aenderbar und persistent in dieser Datei
+    -- gespeichert. Standardwert 50%.
+    reactor_fill_target = 0.5,
     ramp_profiles = {
       NORMAL = { up = 1.0, down = 1.0 },
       SLOW = { up = 0.5, down = 0.5 },
