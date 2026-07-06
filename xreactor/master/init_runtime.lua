@@ -142,6 +142,7 @@ function M.run(ctx)
       set_rt_global_off_hold = ctx.set_rt_global_off_hold,
       set_fuel_reserve = ctx.set_fuel_reserve,
       set_water_target = ctx.set_water_target,
+      set_reactor_fill_target = ctx.set_reactor_fill_target,
       get_auto_update_enabled = ctx.get_auto_update_enabled,
       set_auto_update_enabled = ctx.set_auto_update_enabled
     }
