@@ -294,9 +294,9 @@ local function render_monitor()
   if not monitor_router then
     monitor_router = ui_router.new({
       pages = {
-        { name = "Overview", render = function(target) water_ui.render_overview(target, model) end },
-        { name = "Details", render = function(target) water_ui.render_details(target, model) end },
-        { name = "Diagnostics", render = function(target) water_ui.render_diagnostics(target, model) end,
+        { name = "Overview", render = function(target) return water_ui.render_overview(target, model) end },
+        { name = "Details", render = function(target) return water_ui.render_details(target, model) end },
+        { name = "Diagnostics", render = function(target) return water_ui.render_diagnostics(target, model) end,
           handle_touch = function(x, y) return water_ui.handle_diagnostics_touch(mon, x, y) end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
