@@ -74,7 +74,18 @@ local function should_render_view(session, view_key, view, model)
   local due = (now - state.last_draw) >= interval_ms
   local force_due = (now - state.last_force) >= force_interval_ms
 
+  -- Fix (2026-07-06): CRITICAL. state.last_draw/state.last_force wurden
+  -- bisher NIE aktualisiert (blieben dauerhaft bei ihrem Initialwert 0).
+  -- Praktische Folge: "due" war ab dem allerersten Tick fuer immer true
+  -- (now - 0 ist quasi immer >= interval_ms), das Intervall-Gating griff
+  -- also nie. Das haette eigentlich zu HAEUFIGEREM statt selteneren
+  -- Rendering fuehren muessen — der eigentliche, dazu passende Bug liegt
+  -- an anderer Stelle (separat behoben), aber dieser fehlende State-
+  -- Update ist trotzdem ein echter Bug im Rate-Limiting selbst und wird
+  -- hier korrigiert, damit view.interval tatsaechlich wirksam ist.
   if should_force_redraw(session) then
+    state.last_draw = now
+    state.last_force = now
     return true, state, now
   end
   if not due then
@@ -84,8 +95,10 @@ local function should_render_view(session, view_key, view, model)
   local snapshot = serialize_model(model)
   local changed = snapshot ~= state.last_snapshot
   state.last_snapshot = snapshot
+  state.last_draw = now
 
   if changed or force_due then
+    state.last_force = now
     return true, state, now
   end
   return false, state, now
