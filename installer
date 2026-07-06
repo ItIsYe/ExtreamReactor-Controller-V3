@@ -9,6 +9,51 @@ local function p(msg) pcall(print, tostring(msg)) end
 
 if not http then error("HTTP nicht verfuegbar! Bitte HTTP in CC-Config aktivieren.", 0) end
 
+-- Feature (2026-07-06): POCKET ist keine echte Node-Rolle — kein Modem-
+-- Sync, keine Heartbeats, kein Manifest-Eintrag, keine Registrierung beim
+-- Master. Sie installiert lediglich das eigenstaendige optional/pocket_
+-- client.lua Skript als Boot-Programm, OHNE irgendetwas vom normalen
+-- /xreactor-Ordner herunterzuladen. Muss ganz am Anfang laufen, VOR dem
+-- normalen Rollenmenue (installer/init.lua, das erst nach dem Download
+-- aller Kern-Dateien erreichbar ist) — ein Pocket Computer soll keinen
+-- vollen Node-Installationsprozess durchlaufen. Vorher musste pocket_
+-- client.lua manuell von GitHub heruntergeladen werden (z.B. per
+-- Diskette); jetzt per einfacher Auswahl direkt im Installer.
+do
+  p("")
+  p("Rolle waehlen:")
+  p("  1) Normale Node-Rolle (MASTER/RT/ENERGY/WATER/FUEL/REPROCESSING/LOG)")
+  p("  2) POCKET (Fernabfrage-Client fuer Pocket Computer)")
+  p("")
+  io.write("Auswahl [1-2]: ")
+  local pocket_choice = read and read() or ""
+  if pocket_choice == "2" then
+    p("")
+    p("Lade optional/pocket_client.lua ...")
+    local url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/optional/pocket_client.lua"
+    local ok_req, response = pcall(http.get, url)
+    if not ok_req or not response then
+      error("POCKET-Client Download fehlgeschlagen: " .. tostring(response), 0)
+    end
+    local content = response.readAll()
+    response.close()
+    if not content or content == "" then
+      error("POCKET-Client Download leer", 0)
+    end
+    local f = fs.open("/startup.lua", "w")
+    if not f then
+      error("Konnte /startup.lua nicht schreiben", 0)
+    end
+    f.write(content)
+    f.close()
+    p("POCKET-Client installiert als /startup.lua.")
+    p("Neustart in 2 Sekunden ...")
+    os.sleep(2)
+    os.reboot()
+    return
+  end
+end
+
 -- ── Eingebettete Module ──────────────────────────────────────────────────────
 -- Werden via load() ausgeführt und geben ihr Modul-Table zurück.
 
