@@ -88,7 +88,7 @@ function M.new(opts)
       mux.data_row(mon, 2, 24, w - 3, { label = source and tostring(source.id or "SOURCE") or "KEINE QUELLE", value = source and short(source.amount, "mB") or "-", status = source and "OK" or "WARNING", icon = "fuel" })
     end
 
-    mux.footer_nav(mon, h, w, { center = "FUEL OVERVIEW" })
+    return mux.footer_nav(mon, h, w, { center = "FUEL OVERVIEW" })
   end
 
   local function details(mon, model)
@@ -139,7 +139,7 @@ function M.new(opts)
       mux.data_row(mon, 2, 15, w - 3, { label = "Last scan", value = tostring(model.last_scan or "-"), status = "LIMITED", icon = "network" })
     end
 
-    mux.footer_nav(mon, h, w, { center = "FUEL DETAILS" })
+    return mux.footer_nav(mon, h, w, { center = "FUEL DETAILS" })
   end
 
   local function diagnostics(mon, model)
@@ -192,7 +192,7 @@ function M.new(opts)
     end
 
     if utils then support_ui_pages.render_log_mode_button(mon, utils, 1, h - 1, w - 2) end
-    mux.footer_nav(mon, h, w, { center = "FUEL DIAGNOSTICS" })
+    return mux.footer_nav(mon, h, w, { center = "FUEL DIAGNOSTICS" })
   end
 
   local function diagnostics_touch(mon, x, y)
