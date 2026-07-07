@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 329,
-  manifest_id = "manifest-v329",
+  manifest_version = 330,
+  manifest_id = "manifest-v330",
   source_ref = "beta",
   hash_algo = "crc32",
 
