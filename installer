@@ -558,6 +558,21 @@ local function run_update(sha)
   -- verworfen. Jetzt wird jeder Fehlschlag mit Grund geloggt, und der
   -- letzte Fehlergrund wird zurückgegeben statt eines generischen Strings.
   local last_err = "unbekannt"
+  local tmp = "/xreactor_auto_update_installer.lua"
+
+  -- Fix (2026-07-07): Diagnose bestätigt "fs.open fehlgeschlagen (Speicher
+  -- voll?)" als echten Grund — CC:Tweaked-Computer haben ein internes
+  -- Speicherlimit (Server-Config computer.diskSpaceLimit, Standard oft
+  -- ~1000 KB). Defensive Bereinigung: ein evtl. verwaister Temp-Rest von
+  -- einem durch Absturz/Stromausfall unterbrochenen frueheren Versuch
+  -- (vor dem pcall(fs.delete, tmp) je erreicht wurde) wird jetzt VOR jedem
+  -- neuen Versuch entfernt, und die tatsaechliche freie/genutzte Speicher-
+  -- menge wird bei einem fs.open-Fehlschlag mitgeloggt statt nur vermutet.
+  if fs and fs.exists and fs.exists(tmp) then
+    pcall(fs.delete, tmp)
+    log("verwaiste Temp-Datei " .. tmp .. " vor Update-Versuch entfernt")
+  end
+
   for _, url in ipairs(urls) do
     for attempt = 1, 4 do
       local delays = {2, 5, 10, 20}
@@ -568,10 +583,14 @@ local function run_update(sha)
             last_err = "unerwartetes HTML (CDN-Fehlerseite) von " .. url
             log("Versuch " .. attempt .. " (" .. url .. "): " .. last_err)
           else
-            local tmp = "/xreactor_auto_update_installer.lua"
             local f = fs.open(tmp, "w")
             if not f then
-              last_err = "fs.open fuer " .. tmp .. " fehlgeschlagen (Speicher voll?)"
+              local free = "?"
+              if fs and type(fs.getFreeSpace) == "function" then
+                local ok_fs, v = pcall(fs.getFreeSpace, "/")
+                if ok_fs then free = tostring(v) end
+              end
+              last_err = "fs.open fuer " .. tmp .. " fehlgeschlagen — freier Speicher: " .. free .. " Bytes, benoetigt: " .. #body .. " Bytes"
               log("Versuch " .. attempt .. " (" .. url .. "): " .. last_err)
             else
               pcall(function() f.write(body) end); pcall(f.close)
