@@ -39,9 +39,43 @@ function M.write(path, content)
   local write_ok, write_err = pcall(function() f.write(content) end)
   pcall(f.close)
   if not write_ok then pcall(fs.delete, tmp); return false, tostring(write_err) end
-  if fs.exists(path) then pcall(fs.delete, path) end
+
+  -- Fix (2026-07-07): CRITICAL. Vorher wurde die Zieldatei ERST geloescht
+  -- und ERST DANACH die neue Datei an ihre Stelle bewegt — dazwischen
+  -- existierte "path" fuer einen kurzen Moment ueberhaupt nicht. Ein
+  -- Absturz/Neustart/Stromausfall genau in diesem Fenster (bei
+  -- "/startup.lua" beobachtet: Computer bootete danach zu "No such
+  -- program", weil die Startdatei schlicht fehlte) hinterliess eine
+  -- fehlende Datei ohne jede Moeglichkeit zur Wiederherstellung. Jetzt:
+  -- die alte Datei wird zu einem Backup-Namen VERSCHOBEN statt geloescht
+  -- (die Zieldatei existiert also durchgehend, entweder als alte oder als
+  -- neue Version), das eigentliche Ersetzen ist nur noch der finale Move-
+  -- Schritt, und bei einem Fehlschlag wird das Backup zurueckgeschoben.
+  local backup = path .. ".xr_prev"
+  local had_old = fs.exists(path)
+  if had_old then
+    if fs.exists(backup) then pcall(fs.delete, backup) end
+    local ok_bak = pcall(fs.move, path, backup)
+    if not ok_bak then
+      -- Backup fehlgeschlagen (z.B. kein Platz) — als letzter Ausweg alten
+      -- Weg nehmen, lieber ein winziges Risiko-Fenster als der Verlust der
+      -- neuen Datei durch einen fehlgeschlagenen Move ueber eine
+      -- existierende Datei.
+      pcall(fs.delete, path)
+    end
+  end
+
   local ok2, mv_err = pcall(fs.move, tmp, path)
-  if not ok2 then pcall(fs.delete, tmp); return false, "move failed: " .. tostring(mv_err) end
+  if not ok2 then
+    pcall(fs.delete, tmp)
+    -- Neue Datei konnte nicht an ihren Platz — altes Backup zurueckholen,
+    -- damit "path" nicht dauerhaft fehlt.
+    if had_old and fs.exists(backup) and not fs.exists(path) then
+      pcall(fs.move, backup, path)
+    end
+    return false, "move failed: " .. tostring(mv_err)
+  end
+  if had_old and fs.exists(backup) then pcall(fs.delete, backup) end
   return true
 end
 
