@@ -146,6 +146,47 @@ local function run_update(sha)
     log("verwaiste Temp-Datei " .. tmp .. " vor Update-Versuch entfernt")
   end
 
+  -- Fix (2026-07-07): der manuelle Installer (installer/stage.lua) hat
+  -- schon eine reclaim()-Funktion, die vor jedem Schreibvorgang bei
+  -- Platzmangel /xreactor_logs, /xreactor_backup_prev und /xreactor_stage
+  -- aufraeumt — auto_update.lua nutzte das bisher NIE, sondern schrieb die
+  -- Temp-Datei direkt ohne jeden Reclaim-Versuch. Der lokale Log-Puffer
+  -- kann bis zu 200 KB einnehmen (core/logger.lua MAX_BYTES) und wurde nie
+  -- automatisch vom Auto-Updater entfernt — wahrscheinlicher Hauptgrund
+  -- fuer "Speicher voll". Gleiche Logik jetzt hier nachgebaut.
+  local function free_space_root()
+    if not (fs and type(fs.getFreeSpace) == "function") then return nil end
+    local ok, v = pcall(fs.getFreeSpace, "/")
+    if not ok then return nil end
+    if type(v) == "string" then
+      if v:lower() == "unlimited" then return math.huge end
+      v = tonumber(v)
+    end
+    if type(v) == "number" then return v < 0 and math.huge or v end
+    return nil
+  end
+
+  local function reclaim(needed)
+    local free = free_space_root()
+    if free and free >= needed then return true end
+    local reclaimed = {}
+    if fs.exists("/xreactor_logs") then
+      pcall(fs.delete, "/xreactor_logs"); reclaimed[#reclaimed+1] = "/xreactor_logs"
+    end
+    pcall(fs.makeDir, "/xreactor_logs")
+    if fs.exists("/xreactor_backup_prev") then
+      pcall(fs.delete, "/xreactor_backup_prev"); reclaimed[#reclaimed+1] = "/xreactor_backup_prev"
+    end
+    if fs.exists("/xreactor_stage") then
+      pcall(fs.delete, "/xreactor_stage"); reclaimed[#reclaimed+1] = "/xreactor_stage"
+    end
+    if #reclaimed > 0 then
+      log("Speicher freigeraeumt: " .. table.concat(reclaimed, ", "))
+    end
+    free = free_space_root()
+    return free == nil or free >= needed
+  end
+
   for _, url in ipairs(urls) do
     for attempt = 1, 4 do
       local delays = {2, 5, 10, 20}
@@ -156,14 +197,13 @@ local function run_update(sha)
             last_err = "unerwartetes HTML (CDN-Fehlerseite) von " .. url
             log("Versuch " .. attempt .. " (" .. url .. "): " .. last_err)
           else
+            reclaim(#body + 1024)
             local f = fs.open(tmp, "w")
             if not f then
               local free = "?"
-              if fs and type(fs.getFreeSpace) == "function" then
-                local ok_fs, v = pcall(fs.getFreeSpace, "/")
-                if ok_fs then free = tostring(v) end
-              end
-              last_err = "fs.open fuer " .. tmp .. " fehlgeschlagen — freier Speicher: " .. free .. " Bytes, benoetigt: " .. #body .. " Bytes"
+              local ok_fs, v = pcall(free_space_root)
+              if ok_fs and v then free = tostring(v) end
+              last_err = "fs.open fuer " .. tmp .. " fehlgeschlagen (auch nach reclaim) — freier Speicher: " .. free .. " Bytes, benoetigt: " .. #body .. " Bytes"
               log("Versuch " .. attempt .. " (" .. url .. "): " .. last_err)
             else
               pcall(function() f.write(body) end); pcall(f.close)
