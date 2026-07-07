@@ -238,6 +238,28 @@ function M:render(monitors, data_map)
         ui.text(session.mon, 2, 2, alert_text, 0xFFFFFF, 0x000000)
       end
     end
+    -- Feature (2026-07-06): sichtbare [<]/[>]-Navigations-Buttons am
+    -- unteren Bildschirmrand fuer AUX-Monitore. Vorher gab es UEBERHAUPT
+    -- KEINE sichtbaren Buttons — jeder Touch irgendwo auf dem Bildschirm
+    -- loeste einen Vorwaerts-Zyklus aus, ohne jegliche visuelle
+    -- Kennzeichnung dass das ueberhaupt moeglich ist. Jetzt: expliziter
+    -- Footer mit "< ZURUECK" links / "WEITER >" rechts, beide mit
+    -- funktionierenden Touch-Zonen, gespeichert in self.aux_nav_hitboxes.
+    if not self.sessions:is_primary(session) then
+      local wm2, footer_h = ui.getSize(session.mon)
+      wm2 = wm2 or 26
+      footer_h = footer_h or 6
+      local left_text = "< ZURUECK"
+      local right_text = "WEITER >"
+      ui.text(session.mon, 2, footer_h, widgets.fit(left_text, math.floor(wm2 / 2) - 1), 0xFFFFFF, 0x000000)
+      local right_x = math.max(2, wm2 - #right_text - 1)
+      ui.text(session.mon, right_x, footer_h, right_text, 0xFFFFFF, 0x000000)
+      self.aux_nav_hitboxes = self.aux_nav_hitboxes or {}
+      self.aux_nav_hitboxes[session.name] = {
+        prev = { x1 = 2, x2 = 2 + #left_text - 1, y = footer_h },
+        next = { x1 = right_x, x2 = right_x + #right_text - 1, y = footer_h },
+      }
+    end
     ::continue::
   end
 
@@ -261,9 +283,27 @@ function M:handle_input(monitor_name, x, y)
 
   local view_key = self.sessions:resolve_view_key(session)
 
-  -- AUX-Monitor (nicht locked) → Touch wechselt View im Zyklus
+  -- AUX-Monitor (nicht locked) → Touch auf [<]/[>]-Buttons wechselt View
   if not session.locked then
-    local new_view = self.sessions.cycle_aux_view(self.sessions, session)
+    -- Fix (2026-07-06): vorher loeste JEDER Touch irgendwo auf dem
+    -- Bildschirm einen Vorwaerts-Zyklus aus, ohne dass sichtbare Buttons
+    -- existierten. Jetzt: nur Touch auf die tatsaechlich sichtbaren
+    -- [<]/[>]-Buttons (Koordinaten aus self.aux_nav_hitboxes, gesetzt beim
+    -- letzten Render) loest einen Wechsel aus, mit korrekter Richtung.
+    local hitboxes = self.aux_nav_hitboxes and self.aux_nav_hitboxes[session.name]
+    local direction = nil
+    if hitboxes then
+      if hitboxes.prev and y == hitboxes.prev.y and x >= hitboxes.prev.x1 and x <= hitboxes.prev.x2 then
+        direction = -1
+      elseif hitboxes.next and y == hitboxes.next.y and x >= hitboxes.next.x1 and x <= hitboxes.next.x2 then
+        direction = 1
+      end
+    end
+    if not direction then
+      self.last_input = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = nil, dispatched = false, handled = false, outside_nav_buttons = true }
+      return
+    end
+    local new_view = self.sessions.cycle_aux_view(self.sessions, session, direction)
     local payload = {
       monitor = session.name, x = x, y = y,
       view = view_key, new_view = new_view,
