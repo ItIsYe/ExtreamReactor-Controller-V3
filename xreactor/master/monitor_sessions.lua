@@ -67,18 +67,23 @@ end
 --    Boot tatsaechlich uebergibt — neue Views (maintenance/updates/
 --    system_map/config_editor) tauchten im AUX-Zyklus nie auf, egal wie
 --    view_order konfiguriert war.
-function M:cycle_aux_view(session)
+-- Feature (2026-07-06): direction-Parameter ergaenzt (1 = vorwaerts,
+-- -1 = rueckwaerts), damit sichtbare [<]/[>]-Buttons am AUX-Monitor beide
+-- Richtungen unterstuetzen koennen statt nur "immer weiter" bei jedem
+-- beliebigen Touch irgendwo auf dem Bildschirm (das bisherige Verhalten,
+-- ohne sichtbare Buttons dafuer).
+function M:cycle_aux_view(session, direction)
   if not session or session.locked then return end
   local views = self.view_order or AUX_VIEWS_FALLBACK
   if #views == 0 then return end
+  direction = (direction == -1) and -1 or 1
   local current = session.view_key or views[1]
-  local next_view = views[1]
+  local current_index = 1
   for i, v in ipairs(views) do
-    if v == current then
-      next_view = views[(i % #views) + 1]
-      break
-    end
+    if v == current then current_index = i break end
   end
+  local next_index = ((current_index - 1 + direction) % #views) + 1
+  local next_view = views[next_index]
   session.view_key = next_view
   session.dirty    = true
   session.dirty_reason = "user-cycle"
