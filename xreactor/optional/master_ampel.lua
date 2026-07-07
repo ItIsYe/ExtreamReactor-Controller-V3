@@ -28,12 +28,17 @@
 
 local M = {}
 
+-- Fix (2026-07-06): CRITICAL, derselbe Bug wie in optional/ampel.lua —
+-- rohe RGB-Hex-Werte statt echter colors.xxx Bitmask-Konstanten. mon.
+-- setBackgroundColor() akzeptiert nur Zweierpotenzen aus der colors-API;
+-- ein ungueltiger Wert wirft einen Fehler, der hier durch pcall()
+-- verschluckt wurde — Bildschirm blieb dauerhaft schwarz.
 local COLORS = {
-  green  = 0x00FF00,
-  yellow = 0xFFFF00,
-  orange = 0xFF8800,
-  red    = 0xFF0000,
-  gray   = 0x444444,
+  green  = colors.green,
+  yellow = colors.yellow,
+  orange = colors.orange,
+  red    = colors.red,
+  gray   = colors.gray,
 }
 
 local cache = { name = nil, last_color = nil }
