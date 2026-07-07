@@ -52,23 +52,23 @@ local function find_ampel_monitor()
     if ok_t and tostring(ptype):find("monitor", 1, true) then
       local ok_w, mon = pcall(peripheral.wrap, name)
       if ok_w and mon then
-        -- Fix (2026-07-07): CRITICAL REGRESSION. Dieser Scan lief bisher bei
-        -- JEDEM M.update()-Aufruf (alle ~3s, dauerhaft) ueber ALLE Monitore
-        -- am Master OHNE Ausschluss des Haupt-Overview-Monitors, und setzte
-        -- testweise setTextScale(5) — ohne bei einem Fehlschlag (nicht 1x3)
-        -- die Original-Skala wiederherzustellen. Das hat den Haupt-Monitor
-        -- alle 3 Sekunden erneut auf Skala 5 zurueckgeworfen, selbst nachdem
-        -- monitor_manager ihn korrekt automatisch skaliert hatte — sichtbar
-        -- als kurzes komplettes Gruen-Aufflackern (falscher 1x3-Treffer
-        -- durch einen Resize-Timing-Glitch) gefolgt von dauerhaft zu großer
-        -- Schrift. Jetzt: Original-Skala sichern und bei Fehlschlag sofort
-        -- wiederherstellen, plus Ergebnis-Cache (unten in M.update) statt
-        -- Neu-Scan bei jedem Tick.
         local ok_orig, orig_scale = pcall(mon.getTextScale)
-        local ok_scale = pcall(mon.setTextScale, 5)
+        -- Fix (2026-07-07) #2: gleiche Korrektur wie in optional/ampel.lua -
+        -- Skala 1 mit mathematisch hergeleiteter Erwartung statt geratener
+        -- Zahl. Laut offizieller Doku: einzelner Block bei Skala 1 = 7x5
+        -- Zeichen, 3x3-Cluster = 29x19 gesamt. Daraus verifiziert:
+        -- breite(N)=11N-4, hoehe(M)=7M-2. Fuer 1 breit x 3 hoch: w=7 (exakt,
+        -- unabhaengig von der Hoehe), h=19 (mit Toleranz 17-21 falls die
+        -- Bauhoehe leicht abweicht).
+        local ok_scale = pcall(mon.setTextScale, 1)
         local ok_s, w, h = pcall(mon.getSize)
-        if ok_scale and ok_s and w == 1 and h == 3 then
+        local is_ampel_shape = ok_scale and ok_s and type(w) == "number" and type(h) == "number"
+          and w == 7 and h >= 17 and h <= 21
+        if is_ampel_shape then
           return name, mon
+        end
+        if ok_s and type(w) == "number" then
+          pcall(print, "[MASTER_AMPEL] Kandidat " .. tostring(name) .. " bei Skala 1: w=" .. tostring(w) .. " h=" .. tostring(h) .. " (erwartet 7x17-21, kein Treffer)")
         end
         if ok_scale and ok_orig and type(orig_scale) == "number" then
           pcall(mon.setTextScale, orig_scale)

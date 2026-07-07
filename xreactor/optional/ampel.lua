@@ -73,13 +73,35 @@ function M.new()
           local ok_w, mon = pcall(peripheral.wrap, name)
           if ok_w and mon then
             local ok_orig, orig_scale = pcall(mon.getTextScale)
-            local ok_scale = pcall(mon.setTextScale, 5)
+            -- Fix (2026-07-07) #2: die vorherigen zwei Versuche (Skala 5
+            -- exakt 1x3, dann Skala 0.5 mit Groessen-Heuristik) waren beide
+            -- unbegruendete Vermutungen ueber die CC:Tweaked-Zeichenaufloesung
+            -- und haben die Ampel weiterhin nicht gefunden. Diesmal echte
+            -- Herleitung: laut offizieller Doku hat ein einzelner Monitorblock
+            -- bei Skala 1 exakt 7x5 Zeichen, ein 3x3-Cluster insgesamt 29x19.
+            -- Daraus folgt (verifiziert gegen beide Punkte): breite(N) =
+            -- 11*N-4, hoehe(M) = 7*M-2. Fuer einen 1 breit x 3 hoch Stack
+            -- (N=1, M=3): breite = 11*1-4 = 7 (exakt, unabhaengig von der
+            -- Hoehe, da nur 1 Spalte), hoehe = 7*3-2 = 19. w=7 wird exakt
+            -- verlangt (mathematisch sicher fuer N=1), h bekommt eine kleine
+            -- Toleranz (17-21) falls die tatsaechliche Bauhoehe leicht von 3
+            -- Bloecken abweicht oder die Formel um 1-2 daneben liegt.
+            local ok_scale = pcall(mon.setTextScale, 1)
             local ok_s, w, h = pcall(mon.getSize)
-            if ok_scale and ok_s and w == 1 and h == 3 then
+            local is_ampel_shape = ok_scale and ok_s and type(w) == "number" and type(h) == "number"
+              and w == 7 and h >= 17 and h <= 21
+            if is_ampel_shape then
               return name, mon
             end
+            -- Diagnose (nur bei Fehlschlag, siehe M.new()-Cache fuer Rate-
+            -- Limit): zeigt beim naechsten Mal die tatsaechlichen Zahlen,
+            -- damit eine weitere Anpassung auf echten Daten basiert statt
+            -- auf einer dritten Vermutung.
+            if ok_s and type(w) == "number" then
+              pcall(print, "[AMPEL] Kandidat " .. tostring(name) .. " bei Skala 1: w=" .. tostring(w) .. " h=" .. tostring(h) .. " (erwartet 7x17-21, kein Treffer)")
+            end
             -- Kein Treffer: Ursprungs-Skala sofort wiederherstellen, statt
-            -- den Monitor bei 5 haengen zu lassen.
+            -- den Monitor bei der Sondierungs-Skala haengen zu lassen.
             if ok_scale and ok_orig and type(orig_scale) == "number" then
               pcall(mon.setTextScale, orig_scale)
             end
