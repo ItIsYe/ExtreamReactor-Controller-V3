@@ -756,25 +756,33 @@ local selected_features = load_selected_features()
 -- (jeder Eintrag mit optional=true und einem feature-Namen), damit neue
 -- optionale Module in Zukunft automatisch hier auftauchen, ohne dass diese
 -- Abfrage-Logik jedes Mal angepasst werden muss.
-local function collect_optional_feature_names(manifest_tbl)
+local function collect_optional_feature_names(manifest_tbl, role_label)
   local seen, names = {}, {}
+  local function matches_role(entry)
+    -- Fix (2026-07-06): CRITICAL. Diese Funktion listete bisher JEDES
+    -- optional=true Feature im gesamten Manifest auf, unabhaengig davon
+    -- ob dessen required_for die aktuell gewaehlte Rolle ueberhaupt
+    -- zulaesst — z.B. wurde "ampel installieren?" (required_for={"RT",
+    -- "ENERGY",...}, explizit OHNE "MASTER") trotzdem beim Installieren
+    -- von MASTER angezeigt, obwohl master_ampel das dafuer vorgesehene,
+    -- getrennte Feature ist. Jetzt: ein Feature erscheint nur, wenn es
+    -- entweder KEIN required_for hat (fuer jede Rolle gedacht) oder die
+    -- gewaehlte Rolle explizit in required_for auftaucht.
+    if type(entry.required_for) ~= "table" then return true end
+    if not role_label then return true end
+    for _, v in ipairs(entry.required_for) do
+      if tostring(v):upper() == tostring(role_label):upper() then return true end
+    end
+    return false
+  end
   local function scan(entries)
     for _, e in ipairs(entries or {}) do
-      if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] then
+      if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] and matches_role(e) then
         seen[e.feature] = true
         names[#names + 1] = e.feature
       end
     end
   end
-  -- Fix (2026-07-06): CRITICAL. Durchsuchte bisher NUR manifest.base_files
-  -- — aber alle 4 optionalen Features (ampel/speaker_alarm/pocket_query/
-  -- master_ampel) wurden im Zuge des v296-Fixes (der behob, dass base_
-  -- files-Eintraege required_for ignorieren und JEDER Rolle bedingungslos
-  -- installiert wurden) aus base_files in die passenden roles-Sub-Bloecke
-  -- verschoben. Seitdem fand diese Funktion KEIN einziges optionales
-  -- Feature mehr, die interaktive "installieren? [j/N]"-Abfrage beim
-  -- manuellen Installer-Lauf erschien fuer sie nie mehr — genau das vom
-  -- Nutzer beobachtete "keine Zusatzsachen mehr installierbar".
   scan(manifest_tbl.base_files)
   for _, rentries in pairs(manifest_tbl.roles or {}) do
     scan(rentries)
@@ -784,7 +792,7 @@ local function collect_optional_feature_names(manifest_tbl)
 end
 
 if term and term.setCursorPos then
-  local feature_names = collect_optional_feature_names(manifest)
+  local feature_names = collect_optional_feature_names(manifest, role.label)
   if #feature_names > 0 then
     p("")
     p("Optionale Peripherie-Erweiterungen (nur installieren wenn Hardware vorhanden ist):")
@@ -1036,11 +1044,22 @@ end
 -- gefragt (Standard-Antwort = zuvor gespeicherte Auswahl beibehalten, bei
 -- leerer Eingabe).
 if not _G.__xreactor_remote_update and term and term.setCursorPos then
-  local function collect_optional_feature_names_reinstall(manifest_tbl)
+  local function collect_optional_feature_names_reinstall(manifest_tbl, role_label)
     local seen, names = {}, {}
+    local function matches_role(entry)
+      -- Fix (2026-07-06): dieselbe fehlende Rollen-Filterung wie bei der
+      -- ersten collect_optional_feature_names() weiter oben — ein Feature
+      -- mit required_for durfte nur bei passender Rolle erscheinen.
+      if type(entry.required_for) ~= "table" then return true end
+      if not role_label then return true end
+      for _, v in ipairs(entry.required_for) do
+        if tostring(v):upper() == tostring(role_label):upper() then return true end
+      end
+      return false
+    end
     local function scan(entries)
       for _, e in ipairs(entries or {}) do
-        if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] then
+        if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] and matches_role(e) then
           seen[e.feature] = true
           names[#names + 1] = e.feature
         end
@@ -1053,7 +1072,7 @@ if not _G.__xreactor_remote_update and term and term.setCursorPos then
     table.sort(names)
     return names
   end
-  local feature_names = collect_optional_feature_names_reinstall(manifest)
+  local feature_names = collect_optional_feature_names_reinstall(manifest, role.label)
   if #feature_names > 0 then
     p("")
     p("Optionale Peripherie-Erweiterungen (nur installieren wenn Hardware vorhanden ist):")
