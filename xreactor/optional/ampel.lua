@@ -43,11 +43,25 @@ M.COLORS = {
 -- M.new(), damit RT- und ENERGY-Instanzen (falls beide je liefen) sich
 -- nicht gegenseitig beeinflussen.
 function M.new()
-  local self = { cache = { name = nil, last_color = nil } }
+  local self = { cache = { name = nil, last_color = nil, resolved = false, ampel_name = nil, next_probe = 0 } }
 
-  -- Sucht einen Monitor, der NICHT der als main_monitor_name uebergebene
-  -- Hauptmonitor ist, und dessen Groesse nach setTextScale(1) exakt 1x3
-  -- betraegt. Gibt (name, handle) zurueck oder nil.
+  -- Fix (2026-07-07): CRITICAL REGRESSION. Der Scale-5-Fix (v337) probte
+  -- JEDEN Nicht-Haupt-Monitor bei JEDEM render()-Aufruf mit setTextScale(5),
+  -- um seine Groesse zu pruefen — aber wenn der Monitor NICHT die 1x3-Ampel
+  -- war (z.B. ein normales Overview/Fleet/Energy-Display), blieb die Skala
+  -- fuer immer bei 5 haengen, weil nie zurueckgesetzt wurde. Das ist genau
+  -- der Grund fuer "erst normale UI, dann kurz gruen, dann viel zu grosse
+  -- UI" — der allererste Ampel-Render-Durchlauf hat jeden anderen Monitor
+  -- auf dem Node dauerhaft kaputtskaliert. Jetzt: (1) die urspruengliche
+  -- Skala jedes Kandidaten wird VOR dem Probe gesichert und bei einem
+  -- Fehlschlag sofort wiederhergestellt, (2) das Ergebnis wird gecacht und
+  -- nur alle 30s neu geprueft statt bei jedem Tick, damit andere Monitore
+  -- gar nicht erst wiederholt angefasst werden.
+  local function probe_interval_elapsed()
+    local now = (os.clock and os.clock()) or 0
+    return now >= self.cache.next_probe
+  end
+
   local function find_ampel_monitor(main_monitor_name)
     if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
     local ok, names = pcall(peripheral.getNames)
@@ -58,20 +72,16 @@ function M.new()
         if ok_t and tostring(ptype):find("monitor", 1, true) then
           local ok_w, mon = pcall(peripheral.wrap, name)
           if ok_w and mon then
-            -- Fix (2026-07-07): CRITICAL. setTextScale(1) war hier gesetzt,
-            -- aber laut CC:Tweaked-Doku hat ein einzelner Monitorblock
-            -- bei Scale 1 bereits eine Zeichenaufloesung von 7x5 — ein
-            -- "1 breit x 3 hoch" Bloecke-Cluster ergibt bei Scale 1
-            -- rechnerisch ca. 7x19 Zeichen, NIEMALS 1x3. Der w==1/h==3
-            -- Check konnte bei Scale 1 also nie zutreffen — das war der
-            -- eigentliche Grund, warum die Ampel trotz des Farbfixes
-            -- (v327) weiterhin nicht gefunden wurde. Scale 5 (Maximum)
-            -- skaliert dieselbe physische Groesse auf ca. 1x3-4 Zeichen
-            -- herunter, was den Check tatsaechlich treffen kann.
+            local ok_orig, orig_scale = pcall(mon.getTextScale)
             local ok_scale = pcall(mon.setTextScale, 5)
             local ok_s, w, h = pcall(mon.getSize)
             if ok_scale and ok_s and w == 1 and h == 3 then
               return name, mon
+            end
+            -- Kein Treffer: Ursprungs-Skala sofort wiederherstellen, statt
+            -- den Monitor bei 5 haengen zu lassen.
+            if ok_scale and ok_orig and type(orig_scale) == "number" then
+              pcall(mon.setTextScale, orig_scale)
             end
           end
         end
@@ -87,7 +97,17 @@ function M.new()
   -- werfen, unabhaengig davon was intern schiefgeht.
   function self.render(main_monitor_name, status_key)
     pcall(function()
-      local name, mon = find_ampel_monitor(main_monitor_name)
+      local name, mon
+      if self.cache.resolved and self.cache.ampel_name then
+        local ok_w, cached_mon = pcall(peripheral.wrap, self.cache.ampel_name)
+        if ok_w and cached_mon then name, mon = self.cache.ampel_name, cached_mon end
+      end
+      if not name and probe_interval_elapsed() then
+        name, mon = find_ampel_monitor(main_monitor_name)
+        self.cache.resolved = true
+        self.cache.ampel_name = name
+        self.cache.next_probe = ((os.clock and os.clock()) or 0) + 30
+      end
       if not name or not mon then return end
       local color = M.COLORS[status_key] or M.COLORS.muted
       if self.cache.name == name and self.cache.last_color == color then return end

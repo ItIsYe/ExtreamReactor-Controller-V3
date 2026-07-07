@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 338,
-  manifest_id = "manifest-v338",
+  manifest_version = 339,
+  manifest_id = "manifest-v339",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true },
   { path = "installer/auto_update.lua", size_bytes = 12415, hash = "cc42df01", always=true },
   { path = "installer/init.lua", size_bytes = 4481, hash = "f9ae3a57", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "2589c8a5", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "7f0579fd", always=true },
   { path = "start.lua", size_bytes = 3831, hash = "9524769b", always=true, always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 3098, hash = "0c5fb837", always=true },
@@ -88,10 +88,10 @@ return {
     { path = "master/ui/updates.lua", size_bytes = 4824, hash = "5f81b7d1", required_for={"MASTER"} },
     { path = "master/ui/system_map.lua", size_bytes = 5782, hash = "9e8b02ba", required_for={"MASTER"} },
     { path = "master/ui/config_editor.lua", size_bytes = 4177, hash = "new", required_for={"MASTER"} },
-    { path = "optional/ampel.lua", size_bytes = 4754, hash = "b961e4ac", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
+    { path = "optional/ampel.lua", size_bytes = 5691, hash = "54cfaf41", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "new", optional=true, feature="speaker_alarm" },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "new", optional=true, feature="pocket_query", required_for={"MASTER"} },
-    { path = "optional/master_ampel.lua", size_bytes = 5147, hash = "90a20930", optional=true, feature="master_ampel", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 6426, hash = "53a31f47", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 45750, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },

@@ -41,7 +41,7 @@ local COLORS = {
   gray   = colors.gray,
 }
 
-local cache = { name = nil, last_color = nil }
+local cache = { name = nil, last_color = nil, resolved = false, ampel_name = nil, next_probe = 0 }
 
 local function find_ampel_monitor()
   if not peripheral or type(peripheral.getNames) ~= "function" then return nil end
@@ -52,15 +52,26 @@ local function find_ampel_monitor()
     if ok_t and tostring(ptype):find("monitor", 1, true) then
       local ok_w, mon = pcall(peripheral.wrap, name)
       if ok_w and mon then
-        -- Fix (2026-07-07): CRITICAL, gleicher Bug wie in optional/ampel.lua
-        -- - Scale 1 ergibt fuer ein "1 breit x 3 hoch" Bloecke-Cluster
-        -- rechnerisch ca. 7x19 Zeichen statt 1x3, der Check konnte nie
-        -- zutreffen. Scale 5 (Maximum) skaliert auf ca. 1x3-4 Zeichen
-        -- herunter.
+        -- Fix (2026-07-07): CRITICAL REGRESSION. Dieser Scan lief bisher bei
+        -- JEDEM M.update()-Aufruf (alle ~3s, dauerhaft) ueber ALLE Monitore
+        -- am Master OHNE Ausschluss des Haupt-Overview-Monitors, und setzte
+        -- testweise setTextScale(5) — ohne bei einem Fehlschlag (nicht 1x3)
+        -- die Original-Skala wiederherzustellen. Das hat den Haupt-Monitor
+        -- alle 3 Sekunden erneut auf Skala 5 zurueckgeworfen, selbst nachdem
+        -- monitor_manager ihn korrekt automatisch skaliert hatte — sichtbar
+        -- als kurzes komplettes Gruen-Aufflackern (falscher 1x3-Treffer
+        -- durch einen Resize-Timing-Glitch) gefolgt von dauerhaft zu großer
+        -- Schrift. Jetzt: Original-Skala sichern und bei Fehlschlag sofort
+        -- wiederherstellen, plus Ergebnis-Cache (unten in M.update) statt
+        -- Neu-Scan bei jedem Tick.
+        local ok_orig, orig_scale = pcall(mon.getTextScale)
         local ok_scale = pcall(mon.setTextScale, 5)
         local ok_s, w, h = pcall(mon.getSize)
         if ok_scale and ok_s and w == 1 and h == 3 then
           return name, mon
+        end
+        if ok_scale and ok_orig and type(orig_scale) == "number" then
+          pcall(mon.setTextScale, orig_scale)
         end
       end
     end
@@ -113,7 +124,20 @@ end
 -- (master/loop.lua), komplett fehlerisoliert.
 function M.update(runtime, constants)
   pcall(function()
-    local name, mon = find_ampel_monitor()
+    local name, mon
+    if cache.resolved and cache.ampel_name then
+      local ok_w, cached_mon = pcall(peripheral.wrap, cache.ampel_name)
+      if ok_w and cached_mon then name, mon = cache.ampel_name, cached_mon end
+    end
+    if not name then
+      local now = (os.clock and os.clock()) or 0
+      if not cache.resolved or now >= cache.next_probe then
+        name, mon = find_ampel_monitor()
+        cache.resolved = true
+        cache.ampel_name = name
+        cache.next_probe = now + 60
+      end
+    end
     if not name or not mon then return end
     local color_key = M.determine_color(runtime, constants)
     local color = COLORS[color_key] or COLORS.gray
