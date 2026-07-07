@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 336,
-  manifest_id = "manifest-v336",
+  manifest_version = 337,
+  manifest_id = "manifest-v337",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -59,7 +59,7 @@ return {
     { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c", required_for={"MASTER"} },
     { path = "master/loop.lua", size_bytes = 3111, hash = "e980ca5e", required_for={"MASTER"} },
     { path = "core/alert_rules.lua", size_bytes = 17159, hash = "3ef37a5e", required_for={"MASTER"} },
-    { path = "master/config.lua", size_bytes = 6221, hash = "2e0fba18", required_for={"MASTER"} },
+    { path = "master/config.lua", size_bytes = 7111, hash = "2cb175fc", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 2801, hash = "ffbc176f", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 8192, hash = "eba62959", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
