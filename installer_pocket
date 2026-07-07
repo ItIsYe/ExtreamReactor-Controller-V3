@@ -1,0 +1,61 @@
+-- /installer_pocket
+-- Eigenstaendiger Installer NUR fuer den POCKET-Fernabfrage-Client.
+--
+-- Feature (2026-07-06): war zuvor als Option "2" im normalen /installer
+-- integriert, aber bewusst wieder herausgenommen, um den Hauptinstaller
+-- (der fuer echte Node-Rollen mit Manifest/Discovery/Auto-Update gedacht
+-- ist) sauber getrennt zu halten von diesem komplett anderen, viel
+-- simpleren Anwendungsfall (nur eine einzelne Datei herunterladen, kein
+-- Manifest, kein Modem-Sync, keine Registrierung beim Master).
+--
+-- Nutzung: auf dem Pocket Computer per wget herunterladen und ausfuehren:
+--   wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer_pocket installer_pocket
+--   installer_pocket
+
+local function p(msg) pcall(print, tostring(msg)) end
+
+if not http then
+  error("HTTP nicht verfuegbar! Bitte HTTP in der CC:Tweaked-Konfiguration aktivieren.", 0)
+end
+
+p("=== XReactor POCKET-Client Installer ===")
+p("")
+p("Lade optional/pocket_client.lua ...")
+
+local url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/optional/pocket_client.lua"
+
+local content, last_err
+for attempt = 1, 4 do
+  local ok_req, response = pcall(http.get, url)
+  if ok_req and response then
+    local ok_read, body = pcall(response.readAll)
+    pcall(response.close)
+    if ok_read and type(body) == "string" and #body > 0 then
+      content = body
+      break
+    end
+    last_err = "readAll fehlgeschlagen"
+  else
+    last_err = type(response) == "string" and response or "http.get fehlgeschlagen"
+  end
+  if attempt < 4 then
+    p("  Download-Versuch " .. attempt .. " fehlgeschlagen (" .. tostring(last_err) .. "), erneut in " .. (attempt * 2) .. "s ...")
+    os.sleep(attempt * 2)
+  end
+end
+
+if not content then
+  error("POCKET-Client Download fehlgeschlagen nach 4 Versuchen: " .. tostring(last_err), 0)
+end
+
+local f = fs.open("/startup.lua", "w")
+if not f then
+  error("Konnte /startup.lua nicht schreiben", 0)
+end
+f.write(content)
+f.close()
+
+p("POCKET-Client installiert als /startup.lua.")
+p("Neustart in 2 Sekunden ...")
+os.sleep(2)
+os.reboot()
