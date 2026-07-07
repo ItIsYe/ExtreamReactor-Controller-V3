@@ -58,7 +58,17 @@ function M.new()
         if ok_t and tostring(ptype):find("monitor", 1, true) then
           local ok_w, mon = pcall(peripheral.wrap, name)
           if ok_w and mon then
-            local ok_scale = pcall(mon.setTextScale, 1)
+            -- Fix (2026-07-07): CRITICAL. setTextScale(1) war hier gesetzt,
+            -- aber laut CC:Tweaked-Doku hat ein einzelner Monitorblock
+            -- bei Scale 1 bereits eine Zeichenaufloesung von 7x5 — ein
+            -- "1 breit x 3 hoch" Bloecke-Cluster ergibt bei Scale 1
+            -- rechnerisch ca. 7x19 Zeichen, NIEMALS 1x3. Der w==1/h==3
+            -- Check konnte bei Scale 1 also nie zutreffen — das war der
+            -- eigentliche Grund, warum die Ampel trotz des Farbfixes
+            -- (v327) weiterhin nicht gefunden wurde. Scale 5 (Maximum)
+            -- skaliert dieselbe physische Groesse auf ca. 1x3-4 Zeichen
+            -- herunter, was den Check tatsaechlich treffen kann.
+            local ok_scale = pcall(mon.setTextScale, 5)
             local ok_s, w, h = pcall(mon.getSize)
             if ok_scale and ok_s and w == 1 and h == 3 then
               return name, mon

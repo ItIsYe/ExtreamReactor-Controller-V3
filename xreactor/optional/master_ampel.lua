@@ -52,7 +52,12 @@ local function find_ampel_monitor()
     if ok_t and tostring(ptype):find("monitor", 1, true) then
       local ok_w, mon = pcall(peripheral.wrap, name)
       if ok_w and mon then
-        local ok_scale = pcall(mon.setTextScale, 1)
+        -- Fix (2026-07-07): CRITICAL, gleicher Bug wie in optional/ampel.lua
+        -- - Scale 1 ergibt fuer ein "1 breit x 3 hoch" Bloecke-Cluster
+        -- rechnerisch ca. 7x19 Zeichen statt 1x3, der Check konnte nie
+        -- zutreffen. Scale 5 (Maximum) skaliert auf ca. 1x3-4 Zeichen
+        -- herunter.
+        local ok_scale = pcall(mon.setTextScale, 5)
         local ok_s, w, h = pcall(mon.getSize)
         if ok_scale and ok_s and w == 1 and h == 3 then
           return name, mon

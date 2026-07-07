@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 333,
-  manifest_id = "manifest-v333",
+  manifest_version = 334,
+  manifest_id = "manifest-v334",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -88,10 +88,10 @@ return {
     { path = "master/ui/updates.lua", size_bytes = 4824, hash = "5f81b7d1", required_for={"MASTER"} },
     { path = "master/ui/system_map.lua", size_bytes = 5782, hash = "9e8b02ba", required_for={"MASTER"} },
     { path = "master/ui/config_editor.lua", size_bytes = 4177, hash = "new", required_for={"MASTER"} },
-    { path = "optional/ampel.lua", size_bytes = 4034, hash = "new", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
+    { path = "optional/ampel.lua", size_bytes = 4754, hash = "b961e4ac", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "new", optional=true, feature="speaker_alarm" },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "new", optional=true, feature="pocket_query", required_for={"MASTER"} },
-    { path = "optional/master_ampel.lua", size_bytes = 4833, hash = "new", optional=true, feature="master_ampel", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 5147, hash = "90a20930", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 45750, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
