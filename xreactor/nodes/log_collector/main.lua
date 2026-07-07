@@ -1,7 +1,8 @@
 -- nodes/log_collector/main.lua
 -- XReactor LOG Collector — completed v2 rewrite
 -- Receives LOG_EVENT packets via modem and writes them to external disks.
--- One disk slot per role: /disk=RT, /disk1=MASTER, /disk2=ENERGY, ...
+-- 4 disk slots per role, grouped in fixed physical plug order: /disk../disk3=RT,
+-- /disk4../disk7=MASTER, /disk8../disk11=ENERGY, ... (see DISKS_PER_ROLE/ROLE_ORDER).
 -- No PC fallback for collected logs: if no writable disk exists, logs are dropped.
 -- UI is incremental: only changed render segments are written to the terminal/monitor.
 
@@ -33,6 +34,14 @@ local DISK_REFRESH_S   = 30
 local DRAW_INTERVAL_S  = 5
 local SELF_ROLE        = "LOG_COLLECTOR"
 local MONITOR_CFG_FILE = "/xreactor/config/log_monitor.txt"
+-- Fix (2026-07-07): vorher exakt 1 Disk pro Rolle (positionsbasiert via
+-- ROLE_ORDER[index]). User hat pro Rolle 3 weitere Disks ingame ergänzt
+-- (jetzt 4 pro Rolle) — DISKS_PER_ROLE gruppiert die sortierten Mounts in
+-- Blöcken zu je 4 statt 1:1 auf eine Rolle zu mappen. Feste physische
+-- Steckreihenfolge vorausgesetzt: die ersten 4 Disks = RT, die naechsten 4 =
+-- MASTER usw. (Variante B, siehe disk_for_role() fuer die Rotation
+-- innerhalb einer Rollen-Gruppe).
+local DISKS_PER_ROLE   = 4
 local ROLE_ORDER       = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
 
 -- ── Runtime state ───────────────────────────────────────────────────────────
@@ -197,11 +206,22 @@ local function find_disk_mounts()
   if not (fs and fs.list) then return mounts end
   local ok, entries = pcall(fs.list, "/")
   if not ok or type(entries) ~= "table" then return mounts end
-  table.sort(entries)
+  local matched = {}
   for _, entry in ipairs(entries) do
     if type(entry) == "string" and entry:match("^disk%d*$") then
-      mounts[#mounts + 1] = "/" .. entry
+      -- "disk" itself (no suffix) is drive #0, "disk1" is #1, etc.
+      local n = tonumber(entry:match("^disk(%d*)$")) or 0
+      matched[#matched + 1] = { n = n, name = entry }
     end
+  end
+  -- Fix (2026-07-07): table.sort() auf den rohen Strings sortierte
+  -- lexikografisch ("disk10" kam vor "disk2") — bei mehr als 9 Disks
+  -- (jetzt Standard: 4 pro Rolle × 7 Rollen = 28) wurde die physische
+  -- Reihenfolge dadurch durcheinandergewuerfelt. Jetzt numerischer Sort
+  -- auf dem Suffix.
+  table.sort(matched, function(a, b) return a.n < b.n end)
+  for _, m in ipairs(matched) do
+    mounts[#mounts + 1] = "/" .. m.name
   end
   return mounts
 end
@@ -236,10 +256,17 @@ local function discover_disks()
       diag("duplicate mount skipped: " .. tostring(mount))
     elseif probe_disk(mount) then
       seen_mounts[mount] = true
-      local role = ROLE_ORDER[index] or ("DISK" .. tostring(index))
+      -- Fix (2026-07-07): Gruppierung statt 1:1 — Disks 1..4 = ROLE_ORDER[1],
+      -- Disks 5..8 = ROLE_ORDER[2], usw. (fixe physische Steckreihenfolge).
+      local role_group = math.floor((index - 1) / DISKS_PER_ROLE) + 1
+      local slot_in_role = ((index - 1) % DISKS_PER_ROLE) + 1
+      local role = ROLE_ORDER[role_group] or ("DISK" .. tostring(role_group))
       local root = mount .. "/xreactor_logs"
-      disks[#disks + 1] = { id = index, mount = mount, root = root, role = role }
-      diag("disk ok: " .. tostring(mount) .. " role=" .. tostring(role))
+      disks[#disks + 1] = {
+        id = index, mount = mount, root = root, role = role,
+        role_group = role_group, slot = slot_in_role,
+      }
+      diag("disk ok: " .. tostring(mount) .. " role=" .. tostring(role) .. " slot=" .. tostring(slot_in_role) .. "/" .. DISKS_PER_ROLE)
     else
       diag("disk probe failed: " .. tostring(mount))
     end
@@ -264,14 +291,52 @@ end
 local function disk_for_role(role)
   if #stats.disks == 0 then return nil end
   local idx = role_index(role)
-  if idx then
-    for _, disk in ipairs(stats.disks) do
-      if disk.id == idx or disk.role == tostring(role or ""):upper() then
-        return disk
-      end
+  if not idx then
+    -- Unbekannte Rolle: wie zuvor Fallback auf irgendeine Disk, damit
+    -- nichts komplett verloren geht.
+    return stats.disks[stats.disk_index] or stats.disks[1]
+  end
+
+  -- Fix (2026-07-07): vorher wurde IMMER die erste zur Rolle passende Disk
+  -- zurückgegeben — bei jetzt DISKS_PER_ROLE=4 Disks pro Rolle blieben die
+  -- anderen 3 komplett ungenutzt, egal wie voll die erste war. Jetzt:
+  -- Round-Robin über alle Disks der Rolle, mit persistentem Cursor pro
+  -- Rolle (stats.role_cursor), und ein Health-Check überspringt Disks
+  -- unterhalb des Frei-Speicher-Schwellwerts.
+  local group = {}
+  for _, disk in ipairs(stats.disks) do
+    if disk.role_group == idx or disk.role == tostring(role or ""):upper() then
+      group[#group + 1] = disk
     end
   end
-  return stats.disks[stats.disk_index] or stats.disks[1]
+  if #group == 0 then return nil end
+  table.sort(group, function(a, b) return (a.slot or a.id) < (b.slot or b.id) end)
+
+  stats.role_cursor = stats.role_cursor or {}
+  local cursor = stats.role_cursor[idx] or 0
+
+  -- Erste Runde: ab Cursor+1 die erste gesunde (genug freier Platz) Disk
+  -- der Gruppe suchen, dabei einmal komplett rundlaufen.
+  local healthy_threshold = MIN_FREE_BYTES * 4
+  for step = 1, #group do
+    local pos = ((cursor + step - 1) % #group) + 1
+    local disk = group[pos]
+    local free = free_space(disk.mount)
+    if free == math.huge or free >= healthy_threshold then
+      stats.role_cursor[idx] = pos
+      return disk
+    end
+  end
+
+  -- Alle Disks der Gruppe unter dem Schwellwert: die mit dem meisten
+  -- freien Platz nehmen (write_log()'s Wipe-Logik greift danach ggf. noch).
+  local best, best_free = group[1], -1
+  for _, disk in ipairs(group) do
+    local free = free_space(disk.mount)
+    if free == math.huge then free = math.huge end
+    if free > best_free then best, best_free = disk, free end
+  end
+  return best
 end
 
 local function format_log_line(payload)
@@ -650,7 +715,7 @@ local function draw()
   draw_pause_button(2, 4)
   draw_log_mode_buttons(2, 5)
 
-  line_ui(2, 6, "Disk Ring (/disk=RT, /disk1=MASTER, /disk2=ENERGY, ...)", color("cyan", 2048))
+  line_ui(2, 6, "Disk Ring (" .. DISKS_PER_ROLE .. "x pro Rolle: RT/MASTER/ENERGY/WATER/FUEL/REPROC/LOG)", color("cyan", 2048))
   local dx = 2
   for _, disk in ipairs(stats.disks) do
     local free = free_space(disk.mount)

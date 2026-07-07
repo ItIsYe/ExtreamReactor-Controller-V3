@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 331,
-  manifest_id = "manifest-v331",
+  manifest_version = 332,
+  manifest_id = "manifest-v332",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -169,7 +169,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 31324, hash = "ceb1fc06", required_for={"LOG"} },
+    { path = "nodes/log_collector/main.lua", size_bytes = 34593, hash = "a635eda7", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_main.lua", size_bytes = 3743, hash = "new", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_ui.lua", size_bytes = 6190, hash = "new", required_for={"LOG"} },
     { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", required_for={"LOG"} },
