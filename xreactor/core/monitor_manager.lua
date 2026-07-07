@@ -72,6 +72,33 @@ function manager:get_wrapped_monitor(name)
   return self:new_wrapped_monitor(name)
 end
 
+-- Feature (2026-07-06): Automatische, groessenabhaengige Skalierung statt
+-- einer einzigen festen Skala fuer JEDEN Monitor. Vorher bekam z.B. ein
+-- kleiner AUX-Monitor dieselbe Skala wie ein grosser Haupt-Monitor —
+-- entweder zu grobe Schrift auf grossen Bildschirmen (viel ungenutzter
+-- Platz) oder zu feine/gedraengte Darstellung auf kleinen. Ablauf: zuerst
+-- Skala 0.5 setzen (feinste Stufe, damit getSize() die physische
+-- Blockgroesse in Zeichen liefert), dann anhand der gemessenen Flaeche
+-- eine passende finale Skala waehlen. Nur aktiv wenn KEINE feste Skala
+-- (opts.scale) explizit uebergeben wurde — bestehende Konfigurationen mit
+-- fest gesetzter monitor_scale bleiben unveraendert.
+local function compute_auto_scale(mon, log_prefix)
+  local ok_probe, err_probe = monitor_adapter.safe_set_scale(mon, nil, 0.5, log_prefix)
+  local ok_size, w, h = safe_wrapped_call(mon, "getSize")
+  if not ok_size or type(w) ~= "number" or type(h) ~= "number" then
+    return 0.5
+  end
+  -- w/h sind hier Zeichen-Anzahl bei Skala 0.5. Ein 1x3-Block-Monitor
+  -- (Ampel) zeigt bei Skala 0.5 ungefaehr 32 breit x 6 hoch — bleibt bei
+  -- 0.5, damit die Ampel-Groessenerkennung (die exakt w=1,h=3 NACH einem
+  -- eigenen setTextScale(1) braucht) unberuehrt bleibt; diese Funktion
+  -- wird nur fuer normale/AUX-Monitore aufgerufen, nicht fuer den 1x3.
+  local area = w * h
+  if area >= 6000 then return 1.0 end   -- sehr grosser Monitor (z.B. 4x4+ Bloecke)
+  if area >= 3000 then return 0.75 end  -- grosser Monitor (z.B. 3x2/2x3 Bloecke)
+  return 0.5                            -- kompakter/AUX-Monitor: feinste Stufe, maximal Platz nutzen
+end
+
 function manager.new(opts)
   opts = opts or {}
   local scale = tonumber(opts.scale)
@@ -144,6 +171,23 @@ function manager:scan()
           utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " text scale applied=" .. tostring(self.scale), "DEBUG")
         else
           utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " text scale unchanged=" .. tostring(self.scale), "DEBUG")
+        end
+      elseif self.auto_scale ~= false then
+        -- Feature (2026-07-06): keine feste Skala konfiguriert -> pro
+        -- Monitor automatisch anhand der physischen Groesse berechnen.
+        -- Nur einmal pro Monitor-Name berechnen (gecached), nicht bei
+        -- jedem Scan-Durchlauf neu, da compute_auto_scale() selbst schon
+        -- einen setTextScale(0.5)-Sondierungsschritt braucht.
+        local cached_scale = self.scale_cache[entry.name]
+        if cached_scale == nil then
+          local auto_scale = compute_auto_scale(mon, self.log_prefix)
+          local scale_ok, scale_err = monitor_adapter.safe_set_scale(mon, entry.name, auto_scale, self.log_prefix)
+          if scale_ok then
+            self.scale_cache[entry.name] = auto_scale
+            utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " auto scale applied=" .. tostring(auto_scale), "DEBUG")
+          else
+            utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " auto scale failed: " .. tostring(scale_err), "WARN")
+          end
         end
       end
       local effective_scale = self.scale
