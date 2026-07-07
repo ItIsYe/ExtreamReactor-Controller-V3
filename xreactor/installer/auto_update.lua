@@ -69,16 +69,26 @@ local function arming()
   return cfg
 end
 
+-- Fix (2026-07-07): resolve_sha() wird bei JEDEM do_check() (alle 120s, pro
+-- Node) aufgerufen und schlug bei mehreren gleichzeitig laufenden Nodes
+-- hinter derselben Server-IP das unauthentifizierte api.github.com-Limit
+-- (60 Requests/Stunde/IP) tot — beobachtet: 403 "rate limit exceeded".
+-- Die SHA wird nur für Cache-Busting/Konsistenz gebraucht, nicht zwingend
+-- fürs Funktionieren (fetch_remote_version()/run_update() haben bereits
+-- einen SHA-losen "beta/..."-Fallback). Deshalb: nur noch 1 Versuch statt 3,
+-- kein Retry-Sleep mehr, und der Fehlergrund wird geloggt statt
+-- stillschweigend verschluckt — so bleibt sichtbar, ob ein Fehlschlag am
+-- Rate-Limit lag oder an etwas anderem.
 local function resolve_sha()
   if not http or type(http.get) ~= "function" then return nil end
-  for attempt = 1, 3 do
-    local body = http_get_async(GITHUB_API)
-    if body then
-      local sha = body:match('"sha"%s*:%s*"(%x+)"')
-      if sha then return sha end
-    end
-    if attempt < 3 then os.sleep(3) end
+  local body, err = http_get_async(GITHUB_API)
+  if body then
+    local sha = body:match('"sha"%s*:%s*"(%x+)"')
+    if sha then return sha end
+    log("SHA-Aufloesung: Antwort ohne 'sha'-Feld (evtl. Rate-Limit-Fehlerseite)")
+    return nil
   end
+  log("SHA-Aufloesung fehlgeschlagen: " .. tostring(err or "unbekannt") .. " — nutze SHA-losen Fallback")
   return nil
 end
 
@@ -115,30 +125,46 @@ local function run_update(sha)
     GITHUB_RAW .. sha .. "/installer",
     GITHUB_RAW .. "beta/installer",
   } or { GITHUB_RAW .. "beta/installer" }
+  -- Fix (2026-07-07): vorher wurde bei einem Fehlschlag nur pauschal
+  -- "alle Download-Versuche fehlgeschlagen" geloggt — der tatsächliche
+  -- Grund (Timeout, HTTP-Code, leere Antwort, unerwartetes HTML) wurde
+  -- verworfen. Jetzt wird jeder Fehlschlag mit Grund geloggt, und der
+  -- letzte Fehlergrund wird zurückgegeben statt eines generischen Strings.
+  local last_err = "unbekannt"
   for _, url in ipairs(urls) do
     for attempt = 1, 4 do
       local delays = {2, 5, 10, 20}
-      local body = http_get_async(url)
+      local body, err = http_get_async(url)
       if body and #body > 100 then
           local s = body:sub(1, 200):lower()
-          if not s:find("<html", 1, true) and not s:find("<!doctype", 1, true) then
+          if s:find("<html", 1, true) or s:find("<!doctype", 1, true) then
+            last_err = "unerwartetes HTML (CDN-Fehlerseite) von " .. url
+            log("Versuch " .. attempt .. " (" .. url .. "): " .. last_err)
+          else
             local tmp = "/xreactor_auto_update_installer.lua"
             local f = fs.open(tmp, "w")
-            if f then
+            if not f then
+              last_err = "fs.open fuer " .. tmp .. " fehlgeschlagen (Speicher voll?)"
+              log("Versuch " .. attempt .. " (" .. url .. "): " .. last_err)
+            else
               pcall(function() f.write(body) end); pcall(f.close)
               _G.__xreactor_remote_update = true
               -- shell nicht verfügbar in parallel-Coroutine → dofile nutzen
               local ok_run, run_err = pcall(dofile, tmp)
               pcall(fs.delete, tmp)
               if ok_run then log("Update OK — Neustart"); os.sleep(1); os.reboot(); return true end
-              log("dofile Fehler: " .. tostring(run_err))
+              last_err = "dofile Fehler: " .. tostring(run_err)
+              log("Versuch " .. attempt .. " (" .. url .. "): " .. last_err)
             end
           end
+      else
+        last_err = (err and tostring(err)) or (body and ("Antwort zu kurz: " .. #body .. " Bytes") or "kein Body")
+        log("Versuch " .. attempt .. " (" .. url .. "): " .. last_err)
       end
       if attempt < 4 then os.sleep(delays[attempt] or 20) end
     end
   end
-  return false, "alle Download-Versuche fehlgeschlagen"
+  return false, "alle Download-Versuche fehlgeschlagen — letzter Grund: " .. tostring(last_err)
 end
 
 -- Führt einen einzelnen Versions-Check durch.
