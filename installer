@@ -665,6 +665,20 @@ if fs.exists(role_path) then
   end
 end
 if not role then
+  -- Fix (2026-07-06): CRITICAL. Bei _G.__xreactor_remote_update==true
+  -- (unbeaufsichtigter automatischer Auto-Update-Lauf, KEIN Nutzer
+  -- anwesend) durfte hier NIEMALS auf eine interaktive Rollenauswahl
+  -- (read()) gewartet werden — falls config/role.lua aus irgendeinem
+  -- Grund fehlte, leer war, oder nicht geparst werden konnte, blieb der
+  -- gesamte Auto-Update-Prozess fuer immer haengen (kein Timeout, keine
+  -- Nutzereingabe kommt je), was sich als "haengt regelmaessig" aeusserte.
+  -- Jetzt: bei automatischem Lauf ohne gueltige Rolle sofort mit Fehler
+  -- abbrechen, statt endlos zu warten — der aufrufende auto_update.lua-
+  -- Loop faengt das als fehlgeschlagenen Versuch ab und pausiert/versucht
+  -- es spaeter erneut, anstatt den ganzen Computer einzufrieren.
+  if _G.__xreactor_remote_update then
+    error("Automatisches Update abgebrochen: config/role.lua fehlt oder ist ungueltig — keine Rolle bekannt und keine interaktive Auswahl im unbeaufsichtigten Modus moeglich.", 0)
+  end
   role = ui_mod.select_role()
   if not role then error("Ungültige Rolle", 0) end
 end
@@ -944,6 +958,14 @@ if fs.exists(role_path) then
   end
 end
 if not role then
+  -- Fix (2026-07-06): CRITICAL, identisch zum ersten Vorkommen weiter
+  -- oben — dieser Codeblock ist der tatsaechliche Pfad, der bei JEDEM
+  -- automatischen Auto-Update durchlaeuft (siehe Kommentar unten). Ohne
+  -- diesen Schutz haette ein fehlendes/ungueltiges role.lua den gesamten
+  -- unbeaufsichtigten Update-Prozess fuer immer haengen lassen.
+  if _G.__xreactor_remote_update then
+    error("Automatisches Update abgebrochen: config/role.lua fehlt oder ist ungueltig — keine Rolle bekannt und keine interaktive Auswahl im unbeaufsichtigten Modus moeglich.", 0)
+  end
   role = ui_mod.select_role()
   if not role then error("Keine Rolle gewählt", 0) end
 end
