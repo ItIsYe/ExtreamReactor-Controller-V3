@@ -3,6 +3,11 @@ local widgets = require("master.ui.widgets")
 local layout = require("master.ui.layout")
 local sessions_lib = require("master.monitor_sessions")
 local utils = require("core.utils")
+-- Fix (2026-07-07): siehe unten bei den ui.text()-Aufrufen — dieses Modul
+-- nutzte bisher rohe 24-Bit-RGB-Hex-Werte statt echter colors.xxx
+-- Bitmask-Konstanten (derselbe Bug wie der urspruengliche Ampel-Farbfehler,
+-- v327 — nur hier nie mitgefixt, da in einer anderen Datei).
+local colors_palette = require("shared.colors")
 
 local M = {}
 
@@ -12,7 +17,7 @@ local function render_error(mon, w, h, title, message)
   end
   ui.clear(mon)
   ui.panel(mon, 1, 1, w, h, title, "EMERGENCY")
-  ui.text(mon, 2, 3, widgets.fit(tostring(message), math.max(10, w - 3)), 0xFFFFFF, 0x000000)
+  ui.text(mon, 2, 3, widgets.fit(tostring(message), math.max(10, w - 3)), colors_palette.get("text"), colors_palette.get("background"))
   return true
 end
 
@@ -235,7 +240,7 @@ function M:render(monitors, data_map)
           tostring(top_row.title or "Alert") .. ": " .. tostring(top_row.text or ""),
           math.max(10, w2 - 3)
         )
-        ui.text(session.mon, 2, 2, alert_text, 0xFFFFFF, 0x000000)
+        ui.text(session.mon, 2, 2, alert_text, colors_palette.get("text"), colors_palette.get("background"))
       end
     end
     -- Feature (2026-07-06): sichtbare [<]/[>]-Navigations-Buttons am
@@ -251,9 +256,9 @@ function M:render(monitors, data_map)
       footer_h = footer_h or 6
       local left_text = "< ZURUECK"
       local right_text = "WEITER >"
-      ui.text(session.mon, 2, footer_h, widgets.fit(left_text, math.floor(wm2 / 2) - 1), 0xFFFFFF, 0x000000)
+      ui.text(session.mon, 2, footer_h, widgets.fit(left_text, math.floor(wm2 / 2) - 1), colors_palette.get("text"), colors_palette.get("background"))
       local right_x = math.max(2, wm2 - #right_text - 1)
-      ui.text(session.mon, right_x, footer_h, right_text, 0xFFFFFF, 0x000000)
+      ui.text(session.mon, right_x, footer_h, right_text, colors_palette.get("text"), colors_palette.get("background"))
       self.aux_nav_hitboxes = self.aux_nav_hitboxes or {}
       self.aux_nav_hitboxes[session.name] = {
         prev = { x1 = 2, x2 = 2 + #left_text - 1, y = footer_h },
