@@ -21,12 +21,20 @@
 
 local M = {}
 
+-- Fix (2026-07-06): CRITICAL. Diese Werte waren rohe 24-Bit-RGB-Hex-Zahlen
+-- (0x00FF00 etc.) — aber mon.setBackgroundColor() erwartet die speziellen
+-- colors.xxx Bitmask-Konstanten (Zweierpotenzen: colors.white=1, colors.
+-- red=16384, ...), KEINE beliebigen RGB-Werte. Ein ungueltiger Farbwert
+-- wirft laut CC:Tweaked-Doku einen Fehler ("Values outside the range of
+-- a valid colour will error"), der hier durch pcall() verschluckt wurde
+-- — der Ampel-Bildschirm blieb dadurch dauerhaft schwarz, ohne sichtbaren
+-- Fehler. Jetzt mit den echten colors-API-Konstanten.
 M.COLORS = {
-  OK        = 0x00FF00,
-  LIMITED   = 0xFFFF00,
-  WARNING   = 0xFF8800,
-  EMERGENCY = 0xFF0000,
-  muted     = 0x444444,
+  OK        = colors.green,
+  LIMITED   = colors.yellow,
+  WARNING   = colors.orange,
+  EMERGENCY = colors.red,
+  muted     = colors.gray,
 }
 
 -- Ein Cache pro Aufrufer-Modul (RT, ENERGY, ...), damit der Ampel-Monitor
