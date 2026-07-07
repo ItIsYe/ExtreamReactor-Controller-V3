@@ -277,12 +277,18 @@ function M:handle_input(monitor_name, x, y)
   monitor_name, x, y, input_kind = unpack_input_args(monitor_name, x, y)
   if not monitor_name then
     self.last_input = { monitor = "-", x = x, y = y, view = "-", input = input_kind, hit = nil, dispatched = false, handled = false, ignored = true }
+    if utils and utils.log and input_kind ~= "direct" then
+      utils.log("MASTER", "AUX touch ignored: unparseable event kind=" .. tostring(input_kind), "WARN")
+    end
     return
   end
 
   local session = self.sessions:get_session_by_name(monitor_name)
   if not session then
     self.last_input = { monitor = monitor_name, x = x, y = y, view = "-", input = input_kind, hit = nil, dispatched = false, handled = false, missing_session = true }
+    if utils and utils.log then
+      utils.log("MASTER", "AUX touch ignored: no session for monitor=" .. tostring(monitor_name), "WARN")
+    end
     return
   end
 
@@ -303,6 +309,24 @@ function M:handle_input(monitor_name, x, y)
       elseif hitboxes.next and y == hitboxes.next.y and x >= hitboxes.next.x1 and x <= hitboxes.next.x2 then
         direction = 1
       end
+    end
+    -- Fix (2026-07-07): Diagnose-Logging ueber das echte Log-System (nicht
+    -- nur print()), damit ein Touch-Fehlschlag im naechsten Log-Export
+    -- sichtbar ist — zeigt Touch-Koordinaten, gespeicherte Hitbox-Koordinaten
+    -- (falls vorhanden) und ob/warum kein Treffer erkannt wurde.
+    if utils and utils.log then
+      local hb_desc = "none"
+      if hitboxes then
+        hb_desc = string.format(
+          "prev(y=%s,x=%s-%s) next(y=%s,x=%s-%s)",
+          tostring(hitboxes.prev and hitboxes.prev.y), tostring(hitboxes.prev and hitboxes.prev.x1), tostring(hitboxes.prev and hitboxes.prev.x2),
+          tostring(hitboxes.next and hitboxes.next.y), tostring(hitboxes.next and hitboxes.next.x1), tostring(hitboxes.next and hitboxes.next.x2)
+        )
+      end
+      utils.log("MASTER", string.format(
+        "AUX touch monitor=%s x=%s y=%s locked=%s hitboxes=%s direction=%s",
+        tostring(session.name), tostring(x), tostring(y), tostring(session.locked), hb_desc, tostring(direction)
+      ), "INFO")
     end
     if not direction then
       self.last_input = { monitor = session.name, x = x, y = y, view = view_key, input = input_kind, hit = nil, dispatched = false, handled = false, outside_nav_buttons = true }
