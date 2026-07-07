@@ -99,6 +99,20 @@ local function read_version(path)
   return tonumber(src:match("manifest_version%s*=%s*(%d+)"))
 end
 
+-- Fix (2026-07-07): installer/http.lua's M.download() haengt bei jedem
+-- Versuch einen Cache-Buster an ("?xr_cb=..."), aber auto_update.lua rief
+-- http_get_async() bisher IMMER mit der nackten URL auf. raw.githubuser
+-- content.com cached 5 Minuten (max-age=300) — bei mehreren schnellen
+-- Pushes hintereinander (z.B. mehrere bump-Commits in kurzer Zeit) konnte
+-- der Auto-Updater so eine veraltete, zwischengespeicherte Version
+-- bekommen, obwohl GitHub selbst laengst aktueller war. Jeder Versuch
+-- bekommt jetzt einen eigenen, unterschiedlichen Cache-Buster.
+local function cache_bust(url, attempt)
+  local sep = url:find("?", 1, true) and "&" or "?"
+  local t = tostring(os.epoch and os.epoch("utc") or os.time())
+  return url .. sep .. "xr_cb=" .. tostring(attempt) .. "_" .. t
+end
+
 local function fetch_remote_version(sha)
   local urls = sha and {
     GITHUB_RAW .. sha .. "/xreactor/release.lua",
@@ -106,7 +120,7 @@ local function fetch_remote_version(sha)
   } or { GITHUB_RAW .. "beta/xreactor/release.lua" }
   for _, url in ipairs(urls) do
     for attempt = 1, 3 do
-      local body, err = http_get_async(url)
+      local body, err = http_get_async(cache_bust(url, attempt))
       if body then
         local s = body:sub(1, 200):lower()
         if not s:find("<html", 1, true) and not s:find("<!doctype", 1, true) then
@@ -190,7 +204,7 @@ local function run_update(sha)
   for _, url in ipairs(urls) do
     for attempt = 1, 4 do
       local delays = {2, 5, 10, 20}
-      local body, err = http_get_async(url)
+      local body, err = http_get_async(cache_bust(url, attempt))
       if body and #body > 100 then
           local s = body:sub(1, 200):lower()
           if s:find("<html", 1, true) or s:find("<!doctype", 1, true) then
