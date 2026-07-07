@@ -1,8 +1,10 @@
 -- nodes/log_collector/main.lua
 -- XReactor LOG Collector — completed v2 rewrite
 -- Receives LOG_EVENT packets via modem and writes them to external disks.
--- 4 disk slots per role, grouped in fixed physical plug order: /disk../disk3=RT,
--- /disk4../disk7=MASTER, /disk8../disk11=ENERGY, ... (see DISKS_PER_ROLE/ROLE_ORDER).
+-- 4 disk slots per role. Disks are auto-labeled on first detection with a
+-- persistent "XR-<ROLE>-<slot>" label (drive.setDiskLabel) — role/slot then
+-- comes from the label, not from plug order. Unlabeled disks get the next
+-- free slot of the first role that still has room (see DISKS_PER_ROLE/ROLE_ORDER).
 -- No PC fallback for collected logs: if no writable disk exists, logs are dropped.
 -- UI is incremental: only changed render segments are written to the terminal/monitor.
 
@@ -201,29 +203,71 @@ local function wipe_disk(root)
   return wiped
 end
 
-local function find_disk_mounts()
-  local mounts = {}
-  if not (fs and fs.list) then return mounts end
-  local ok, entries = pcall(fs.list, "/")
-  if not ok or type(entries) ~= "table" then return mounts end
-  local matched = {}
-  for _, entry in ipairs(entries) do
-    if type(entry) == "string" and entry:match("^disk%d*$") then
-      -- "disk" itself (no suffix) is drive #0, "disk1" is #1, etc.
-      local n = tonumber(entry:match("^disk(%d*)$")) or 0
-      matched[#matched + 1] = { n = n, name = entry }
+local function is_drive_name(name)
+  if not peripheral or type(peripheral.getType) ~= "function" then return false end
+  local ok, ptype = pcall(peripheral.getType, name)
+  if not ok then return false end
+  if ptype == "drive" then return true end
+  if type(ptype) == "table" then
+    for _, item in pairs(ptype) do if item == "drive" then return true end end
+  end
+  return tostring(ptype or ""):lower():find("drive", 1, true) ~= nil
+end
+
+-- Fix (2026-07-07): echtes Disk-Labeling statt reiner Steckreihenfolge.
+-- LOG_LABEL_PATTERN erkennt persistente Rollen-Labels der Form
+-- "XR-<ROLE>-<slot>" (z.B. "XR-RT-1"), geschrieben via drive.setDiskLabel().
+-- Eine bereits so gelabelte Disk behält ihre Rolle/ihren Slot dauerhaft —
+-- unabhängig von Steckposition, Neustart oder Umstecken. Nur eine frische,
+-- unbeschriftete Disk bekommt beim allerersten Erkennen ein neues Label
+-- zugewiesen (nächster freier Slot der am wenigsten befüllten Rolle).
+local LOG_LABEL_PATTERN = "^XR%-([%u_]+)%-(%d+)$"
+
+local function make_label(role, slot)
+  return "XR-" .. tostring(role):upper() .. "-" .. tostring(slot)
+end
+
+local function parse_label(label)
+  if type(label) ~= "string" then return nil, nil end
+  local role, slot = label:match(LOG_LABEL_PATTERN)
+  if not role or not slot then return nil, nil end
+  slot = tonumber(slot)
+  for _, name in ipairs(ROLE_ORDER) do
+    if name == role then return role, slot end
+  end
+  return nil, nil
+end
+
+-- Findet alle Disk-Laufwerke (peripheral-Typ "drive") mit eingelegter Disk.
+-- Gibt eine Liste { name=peripheral_name, wrapped=..., mount=..., label=... }
+-- zurück, sortiert nach Mount-Pfad (numerisch) für eine stabile, deterministische
+-- Reihenfolge bei der Neuzuweisung unbeschrifteter Disks.
+local function find_drives()
+  local found = {}
+  if not (peripheral and type(peripheral.getNames) == "function") then return found end
+  local ok, names = pcall(peripheral.getNames)
+  if not ok or type(names) ~= "table" then return found end
+  for _, name in ipairs(names) do
+    if is_drive_name(name) then
+      local ok_wrap, drv = pcall(peripheral.wrap, name)
+      if ok_wrap and drv then
+        local present = type(drv.isDiskPresent) == "function" and (pcall(drv.isDiskPresent) and drv.isDiskPresent()) or false
+        if present then
+          local ok_mp, mount_path = pcall(drv.getMountPath)
+          if ok_mp and type(mount_path) == "string" and mount_path ~= "" then
+            local ok_lbl, label = pcall(drv.getDiskLabel)
+            found[#found + 1] = {
+              name = name, wrapped = drv, mount = "/" .. mount_path,
+              label = (ok_lbl and label) or nil,
+              n = tonumber(mount_path:match("^disk(%d*)$")) or 0,
+            }
+          end
+        end
+      end
     end
   end
-  -- Fix (2026-07-07): table.sort() auf den rohen Strings sortierte
-  -- lexikografisch ("disk10" kam vor "disk2") — bei mehr als 9 Disks
-  -- (jetzt Standard: 4 pro Rolle × 7 Rollen = 28) wurde die physische
-  -- Reihenfolge dadurch durcheinandergewuerfelt. Jetzt numerischer Sort
-  -- auf dem Suffix.
-  table.sort(matched, function(a, b) return a.n < b.n end)
-  for _, m in ipairs(matched) do
-    mounts[#mounts + 1] = "/" .. m.name
-  end
-  return mounts
+  table.sort(found, function(a, b) return a.n < b.n end)
+  return found
 end
 
 local function probe_disk(mount)
@@ -248,29 +292,75 @@ end
 
 local function discover_disks()
   local disks = {}
-  local seen_mounts = {}
-  local mounts = find_disk_mounts()
-  for index, mount in ipairs(mounts) do
-    -- Dedup: gleichen Mount nicht zweimal eintragen
-    if seen_mounts[mount] then
-      diag("duplicate mount skipped: " .. tostring(mount))
-    elseif probe_disk(mount) then
-      seen_mounts[mount] = true
-      -- Fix (2026-07-07): Gruppierung statt 1:1 — Disks 1..4 = ROLE_ORDER[1],
-      -- Disks 5..8 = ROLE_ORDER[2], usw. (fixe physische Steckreihenfolge).
-      local role_group = math.floor((index - 1) / DISKS_PER_ROLE) + 1
-      local slot_in_role = ((index - 1) % DISKS_PER_ROLE) + 1
-      local role = ROLE_ORDER[role_group] or ("DISK" .. tostring(role_group))
-      local root = mount .. "/xreactor_logs"
-      disks[#disks + 1] = {
-        id = index, mount = mount, root = root, role = role,
-        role_group = role_group, slot = slot_in_role,
-      }
-      diag("disk ok: " .. tostring(mount) .. " role=" .. tostring(role) .. " slot=" .. tostring(slot_in_role) .. "/" .. DISKS_PER_ROLE)
-    else
-      diag("disk probe failed: " .. tostring(mount))
+  local drives = find_drives()
+
+  -- Slot-Belegung pro Rolle aus bereits gültig gelabelten Disks ermitteln,
+  -- damit Neuzuweisungen keine bestehenden Slots doppelt vergeben.
+  local used_slots = {}
+  for _, name in ipairs(ROLE_ORDER) do used_slots[name] = {} end
+  for _, d in ipairs(drives) do
+    local role, slot = parse_label(d.label)
+    if role and slot and slot >= 1 and slot <= DISKS_PER_ROLE and not used_slots[role][slot] then
+      used_slots[role][slot] = true
     end
   end
+
+  local function next_free_slot(role)
+    for slot = 1, DISKS_PER_ROLE do
+      if not used_slots[role][slot] then return slot end
+    end
+    return nil
+  end
+
+  local function next_role_with_space()
+    for _, role in ipairs(ROLE_ORDER) do
+      if next_free_slot(role) then return role end
+    end
+    return nil
+  end
+
+  for _, d in ipairs(drives) do
+    if not probe_disk(d.mount) then
+      diag("disk probe failed: " .. tostring(d.mount))
+    else
+      local role, slot = parse_label(d.label)
+      local newly_labeled = false
+
+      if not role then
+        -- Unbeschriftete (oder fremd-beschriftete) Disk: naechste freie
+        -- Rolle/Slot zuweisen und dauerhaft auf die Disk schreiben.
+        role = next_role_with_space()
+        if role then
+          slot = next_free_slot(role)
+          used_slots[role][slot] = true
+          local new_label = make_label(role, slot)
+          local ok_set = pcall(d.wrapped.setDiskLabel, new_label)
+          if ok_set then
+            newly_labeled = true
+            diag("disk gelabelt: " .. tostring(d.mount) .. " -> " .. new_label)
+          else
+            diag("Label setzen fehlgeschlagen fuer " .. tostring(d.mount) .. " (" .. new_label .. ")")
+          end
+        else
+          diag("keine freie Rolle/Slot mehr fuer unbeschriftete Disk " .. tostring(d.mount) .. " (alle Rollen voll)")
+        end
+      end
+
+      if role and slot then
+        local root = d.mount .. "/xreactor_logs"
+        disks[#disks + 1] = {
+          id = #disks + 1, mount = d.mount, root = root, role = role,
+          role_group = role_index(role), slot = slot,
+          drive_name = d.name, labeled = not newly_labeled,
+        }
+        diag("disk ok: " .. tostring(d.mount) .. " role=" .. role .. " slot=" .. slot .. "/" .. DISKS_PER_ROLE
+          .. (newly_labeled and " (neu gelabelt)" or ""))
+      else
+        diag("disk ohne Rollenzuordnung uebersprungen: " .. tostring(d.mount))
+      end
+    end
+  end
+
   if #disks == 0 then
     diag("no writable disk found; collected logs will be dropped")
   else
