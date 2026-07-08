@@ -3,7 +3,7 @@
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
 > **Branch:** `beta` — active development.
-> **Manifest / Release:** `manifest-v318` / `beta-v318` · ATM10 (MC 1.21.1)
+> **Manifest / Release:** `manifest-v343` / `beta-v343` · ATM10 (MC 1.21.1)
 > **Status:** Phase 1–4 rewrite complete. Since v274: a new shared "Mockup Dashboard Toolkit" (`core/mockup_ui.lua`) was rolled out across most node-local displays and 4 new AUX pages (Maintenance, Updates, System Map, Config Editor); several critical data-pipeline bugs were found and fixed (see RUNTIME_STATUS_2026-06-03.md for full details, including a `refresh_bindings()` early-return bug that silently left `devices.turbines`/`devices.reactors` empty forever once triggered); and RT nodes with more than one reactor now regulate each reactor independently based on its own internal steam fill ratio (configurable target, default 50%, editable live via the Config Editor).
 > See [REWRITE_SPEC.md](REWRITE_SPEC.md) for the full rewrite reference and [RUNTIME_STATUS_2026-06-03.md](RUNTIME_STATUS_2026-06-03.md) for session history.
 
@@ -59,7 +59,7 @@ Bump the version to trigger a rollout:
 | `shutdown_stage` | string/nil | Shutdown/rampdown intent |
 | `desired_node_state` | string/nil | Desired node state |
 
-**Multi-node assignment** (`rt_sync.lua`): nodes are sorted by capacity; the master counts how many are needed for `global_target`; `uniform_pct = global_target / sum(needed capacities) × 100`; only the needed nodes are assigned active load, the rest go to `shed`/`standby`. The computed `assigned_power`/`assigned_percent` are persisted directly on the node object so the UI shows a stable value — this used to only exist in a temporary, discarded structure, which caused the UI to permanently show `Soll 0.0` per RT node. Fixed 2026-07-01.
+**Multi-node assignment** (`rt_sync.lua`): nodes are sorted by capacity; the master counts how many are needed for `global_target`; `uniform_pct = global_target / sum(needed capacities) × 100`; only the needed nodes are assigned active load, the rest go to `shed`/`standby`. The computed `assigned_power`/`assigned_percent` are persisted directly on the node object so the UI shows a stable value — this used to only exist in a temporary, discarded structure, which caused the UI to permanently show `Soll 0.0` per RT node. Fixed 2026-07-07.
 
 The setpoint flow (Master → RT_sync → node.assigned_power/percent → UI) and the PEAK-profile power-target calculation were both hardened on 2026-06-30/07-01 after two separate real bugs (a field-ordering bug in `message_handlers.lua` and a `measured_total`-vs-`learned_capacity_total` preference bug in `runtime_ops_profile.lua`) caused setpoints to silently stay too low. Both are fixed; see RUNTIME_STATUS_2026-06-03.md for details.
 
@@ -209,7 +209,7 @@ Lets a Pocket Computer (or any other computer not registered as a regular node) 
 
 ### Layout System (`master/ui/layout.lua`)
 
-Badge rows (the small colored status labels like `RT OK | M OK | MASTER | CAP | SHD`) are built centrally through `layout.badge_row()`, which knows the monitor width in advance and degrades gracefully: full labels if there's room, short forms if not, lowest-priority badges dropped last if it still doesn't fit. This replaced ad-hoc per-view badge rendering that could silently overlap or get cut off on narrow monitors — a recurring problem before this was introduced 2026-07-01.
+Badge rows (the small colored status labels like `RT OK | M OK | MASTER | CAP | SHD`) are built centrally through `layout.badge_row()`, which knows the monitor width in advance and degrades gracefully: full labels if there's room, short forms if not, lowest-priority badges dropped last if it still doesn't fit. This replaced ad-hoc per-view badge rendering that could silently overlap or get cut off on narrow monitors — a recurring problem before this was introduced 2026-07-07.
 
 ### Overview / Summary
 
@@ -260,8 +260,8 @@ These were real bugs found and fixed during the 2026-06-30/07-01 hardening sessi
 - LOG collector received nothing (`Recv 0`) due to a channel mismatch: senders used 6502, `shared/constants.lua` defines LOG channel as 6503 — fixed.
 - `role.lua` was preserved across reinstalls only in the manual-install codepath, not in the (far more frequently triggered) auto-update reinstall codepath — every auto-update silently wiped the node's role assignment — fixed.
 - "Overspeed brake pending" turbine warning logged on every tick with no rate limit, flooding the log ring buffer and pushing out other, potentially more important log lines — now rate-limited to 1x/5s per turbine.
-- Repo hygiene pass (2026-07-01, v262): removed 6 orphaned `installer_*.lua` files in the repo root (dead since the monolithic installer rewrite, never `require`'d/`dofile`'d, only referenced by a stale manifest entry), the duplicate `xreactor/xreactor/` path (orphaned since at least v134), and 9 tests for the since-replaced stage-based installer mechanism. `tools/offline_validate.lua`'s required-file check (run by CI on every push) still expected the deleted files to exist and would have failed every subsequent run — fixed alongside the cleanup.
+- Repo hygiene pass (2026-07-07, v262): removed 6 orphaned `installer_*.lua` files in the repo root (dead since the monolithic installer rewrite, never `require`'d/`dofile`'d, only referenced by a stale manifest entry), the duplicate `xreactor/xreactor/` path (orphaned since at least v134), and 9 tests for the since-replaced stage-based installer mechanism. `tools/offline_validate.lua`'s required-file check (run by CI on every push) still expected the deleted files to exist and would have failed every subsequent run — fixed alongside the cleanup.
 
 ## Known Open Issues
 
-None tracked as open at time of writing (2026-07-06, v318). See RUNTIME_STATUS_2026-06-03.md for the full, dated session log if something regresses.
+None tracked as open at time of writing (2026-07-07, v343). See RUNTIME_STATUS_2026-06-03.md for the full, dated session log if something regresses.

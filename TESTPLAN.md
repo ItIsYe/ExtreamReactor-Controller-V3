@@ -1,4 +1,4 @@
-# Testplan (aktueller Stand — v318)
+# Testplan (aktueller Stand — v343)
 
 ## Install/Update (aktualisiert: monolithischer Installer, Delete+Reinstall statt Stage/Backup)
 1. **Fresh Install (lokal)**: `wget .../beta/installer` + `installer` starten, Rolle wählen, Abschluss prüfen (Dateianzahl + Reboot im Installer-Log).
@@ -115,17 +115,17 @@ Zwei reale Bugs (siehe MIGRATION.md → "Historisch gelöste Probleme") wurden g
 
 Bis ein dedizierter Regressionstest existiert, gilt: manuelle Verifikation über Master-Overview (`Soll` vs. `Ist` RF/t, sollten sich bei PEAK und ausreichender Kapazität annähern) nach jeder Änderung an `rt_sync.lua` oder `runtime_ops_profile.lua`.
 
-## UI-Redesign (2026-07-01)
+## UI-Redesign (2026-07-07)
 1. **layout.badge_row()** (`master/ui/layout.lua`): bei beliebig vielen/langen Badges darf die Gesamtbreite NIE die Monitorbreite überschreiten. Test: künstlich viele/lange Badge-Labels übergeben, prüfen dass Kürzung/Priorisierung greift statt Überlappung.
 2. **Overview RT-Fleet-Summary**: `overview.rt_fleet_summary` muss `active`/`total`/`assignment`/`status` konsistent mit der echten RT-View zeigen (kein separater, potenziell abweichender Berechnungspfad).
 3. **Ampel-Monitor Isolation**: absichtlicher Fehlertest — Ampel-Monitor abklemmen/entfernen während RT läuft, Hauptmonitor darf davon UNBEEINFLUSST bleiben (keine eingefrorene/verzerrte Anzeige). Ein früherer, ungetesteter erster Versuch dieses Features hatte genau das nicht sichergestellt und legte beim Fehlschlagen die komplette RT-Anzeige lahm.
 4. **node.rt Merge statt Replace**: bei jedem STATUS-Tick müssen bereits vom UI-Layer in `node.rt` geschriebene Felder (z. B. `assignment_state`) erhalten bleiben, dürfen nicht durch das frische Payload komplett überschrieben werden.
 5. **assigned_power/assigned_percent Persistenz**: `node.assigned_power` muss nach jedem `rt_sync.lua`-Durchlauf gesetzt sein für jeden Node im `active`-Array — Regressionsfall zeigte 0.0 auf jeder RT-Card trotz korrektem globalen Soll.
 
-## Turbinen-Log-Rate-Limiting (2026-07-01)
+## Turbinen-Log-Rate-Limiting (2026-07-07)
 "Overspeed brake pending" darf max. 1x pro 5s pro Turbine geloggt werden (`ctrl.last_overspeed_log_ms`). Regressionsfall: ungedrosselte Warnung flutete den Log-Ringpuffer (nur 1000 Zeilen) komplett innerhalb weniger Sekunden und verdrängte andere, wichtigere Log-Einträge (SET_SETPOINTS, ReactorCtrl-Änderungen).
 
-## Repo-Hygiene (2026-07-01)
+## Repo-Hygiene (2026-07-07)
 9 Tests für den mittlerweile ersetzten Stage-basierten Installer-Mechanismus (`tests/installer_stage_install_behavior_test.lua` und weitere, die direkt `xreactor/installer_main.lua`/`installer_stage.lua`/etc. vom Dateisystem lasen) wurden zusammen mit den referenzierten toten Dateien gelöscht. `tests/master_shipped_lua_parse_guard_test.py` hatte eine tote Referenz auf `xreactor/installer_manifest.lua` und wurde auf die aktuelle Datei `xreactor/installer/manifest.lua` korrigiert statt gelöscht (der Test selbst — ein generischer Parse-/Patch-Artefakt-Guard über das gesamte `xreactor/`-Verzeichnis — bleibt wertvoll). `tools/offline_validate.lua` (läuft in der CI bei jedem Push) hatte einen `required`-Dateien-Check, der die 6 gelöschten Dateien weiterhin als Pflicht voraussetzte und bei jedem folgenden Lauf fehlgeschlagen wäre — korrigiert.
 
 ## Audit-Protokoll (2026-04-27)

@@ -1,7 +1,7 @@
-# Migration Guide (aktueller Repo-Stand — v318)
+# Migration Guide (aktueller Repo-Stand — v343)
 
 ## Ziel
-Diese Migration beschreibt den **aktuellen Installer- und Repo-Stand** für ExtreamReactor-Controller-V3 auf dem `beta`-Branch, Stand Phase-1-bis-4-Rewrite + Auto-Update-Härtung + UI-Redesign (2026-07-01).
+Diese Migration beschreibt den **aktuellen Installer- und Repo-Stand** für ExtreamReactor-Controller-V3 auf dem `beta`-Branch, Stand Phase-1-bis-4-Rewrite + Auto-Update-Härtung + UI-Redesign (2026-07-07).
 
 Wichtig:
 - Der normale Installer-Lauf ist **beta-only**.
@@ -71,7 +71,7 @@ War lange ein realer Bug: der Sender (`core/remote_log.lua`) nutzte fest `6502`,
 
 **Nicht mehr automatisch erhalten** (da `/xreactor` komplett gelöscht wird): sonstige Runtime-Configs unter `/xreactor/config/*` außer den explizit in `PRESERVE` gelisteten Dateien.
 
-**In `PRESERVE` gesichert (seit 2026-07-01, v235):** `config/node_id.txt`, `config/capacity_cache.lua`, `config/role.lua` — alle drei überleben Reinstalls und Auto-Updates in beiden Installer-Codepfaden.
+**In `PRESERVE` gesichert (seit 2026-07-07, v235):** `config/node_id.txt`, `config/capacity_cache.lua`, `config/role.lua` — alle drei überleben Reinstalls und Auto-Updates in beiden Installer-Codepfaden.
 
 ---
 
@@ -86,7 +86,7 @@ Diese Punkte waren zeitweise offen, sind aber inzwischen gefixt — hier geliste
 
 - **Setpoint-Übertragung/-Berechnung MASTER ↔ Nodes** (offen bis 2026-06-30/07-01): zwei getrennte reale Bugs — ein Feld-Reihenfolge-Fehler in `populate_rt_status()` (message_handlers.lua) ließ `node.capacity_max`/`capacity_ready` immer einen Zyklus veraltet erscheinen, und `estimate_base_power()` bevorzugte den aktuell gemessenen (ggf. gedrosselten) Output statt der gelernten Maximalkapazität für das PEAK-Profil. Beide gefixt, siehe RUNTIME_STATUS_2026-06-03.md.
 - **LOG-Collector empfängt nichts** (Recv 0): Kanal-Mismatch 6502 vs. 6503, siehe oben.
-- **role.lua ging bei jedem Auto-Update verloren**: nur im manuellen Installer-Codepfad geschützt, nicht im (weit häufiger durchlaufenen) Auto-Update-Reinstall-Pfad. Gefixt 2026-07-01, beide Pfade nutzen jetzt dieselbe `PRESERVE`-Liste.
+- **role.lua ging bei jedem Auto-Update verloren**: nur im manuellen Installer-Codepfad geschützt, nicht im (weit häufiger durchlaufenen) Auto-Update-Reinstall-Pfad. Gefixt 2026-07-07, beide Pfade nutzen jetzt dieselbe `PRESERVE`-Liste.
 
 ---
 
@@ -117,7 +117,7 @@ Diese Punkte waren zeitweise offen, sind aber inzwischen gefixt — hier geliste
 ---
 
 ## Abschlussbewertung dieses Dokuments
-Dieses Dokument beschreibt den **Ist-Stand nach dem Phase-1–4-Rewrite, der Auto-Update-Härtung und dem UI-Redesign** (v318). Es ersetzt den älteren Stage/Backup/Activate-Ansatz vollständig — dieser existiert im aktuellen Installer-Code nicht mehr.
+Dieses Dokument beschreibt den **Ist-Stand nach dem Phase-1–4-Rewrite, der Auto-Update-Härtung und dem UI-Redesign** (v343). Es ersetzt den älteren Stage/Backup/Activate-Ansatz vollständig — dieser existiert im aktuellen Installer-Code nicht mehr.
 
 Offen/nicht abgeschlossen:
 - Vollständige Migration der historischen Shutdown-Workflow-Guards von text-/tokenbasierten Prüfungen zu rein verhaltensbasierten Semantikprüfungen — dieser Punkt war bereits in einer früheren Version dieses Dokuments offen und wurde bislang nicht angefasst.

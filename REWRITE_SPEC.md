@@ -4,14 +4,14 @@
 **Ursprünglicher Stand bei Spec-Erstellung:** v192
 **Sprache:** Lua 5.1 (CC:Tweaked / CraftOS 1.9, Minecraft 1.21.1)
 
-> **Status (2026-07-01): Alle vier Phasen umgesetzt, aktueller Stand v318.**
+> **Status (2026-07-07): Alle vier Phasen umgesetzt, aktueller Stand v343.**
 > Diese Spezifikation bleibt als Architektur-Referenz gültig und beschreibt weiterhin akkurat den Aufbau der umgesetzten Module (Installer, Energy, Master, Shared Services). Nach der initialen Umsetzung wurden zusätzliche Härtungsfixes nötig, die über die ursprüngliche Spec hinausgehen (siehe README.md und RUNTIME_STATUS_2026-06-03.md für die vollständige, datierte Historie):
 > - `shell.run()` durch `dofile()` ersetzt in `installer/auto_update.lua` und `start.lua` (`shell` nicht verfügbar in `parallel`-Coroutinen).
 > - SHA-Auflösung via `api.github.com` aus dem Auto-Update-Check-Pfad entfernt (verursachte Hänger auf RT).
 > - Reinstall sichert/restauriert `/xreactor/config/role.lua` (und weitere PRESERVE-Dateien) in BEIDEN Installer-Codepfaden, da kein Stage/Backup-Mechanismus mehr existiert (siehe MIGRATION.md).
 > - `files_for_role()`-Logik für LOG/LOG_COLLECTOR gefixt.
 > - Log-Transport-Kanal-Mismatch (6502 vs. 6503) gefixt.
-> - Setpoint-Fluss (Master → RT) und PEAK-Profil-Berechnung gehärtet — beide waren zeitweise fehlerhaft, sind seit 2026-07-01 gefixt.
+> - Setpoint-Fluss (Master → RT) und PEAK-Profil-Berechnung gehärtet — beide waren zeitweise fehlerhaft, sind seit 2026-07-07 gefixt.
 > - UI-Redesign (zentrales Badge-Layout-System, erweiterte Summary-Seite, Ampel-Statusmonitor) abgeschlossen.
 >
 > Keine bekannten offenen Blocker zum Zeitpunkt dieses Updates.
