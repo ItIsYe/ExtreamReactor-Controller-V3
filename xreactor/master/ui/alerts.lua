@@ -303,16 +303,18 @@ local function render(mon, model)
 
   ui.text(mon, 2, 2, model.summary or "", colorset.get("text"), colorset.get("background"))
 
-  -- Feature (2026-07-08): visuelle Ueberarbeitung — vorher waren alle
-  -- Steuerelemente (Ansicht/Sortierung/Gruppierung/Filter/Suche) ohne
-  -- jede Trennung direkt untereinander gequetscht. Jetzt in klar
-  -- getrennte Abschnitte gegliedert (Trennlinien + Abschnitts-Label),
-  -- wie bei den anderen Seiten ueblich. Aeusserer Rahmen (ui.panel)
-  -- unveraendert. Alle Touch-Zonen (state.buttons) werden weiterhin aus
-  -- denselben x/y-Variablen abgeleitet, mit denen auch gezeichnet wird —
-  -- bleiben also automatisch synchron mit dem neuen Layout.
-  local separator = string.rep("-", math.max(1, w - 3))
-  ui.text(mon, 2, 3, separator, colorset.get("muted"), colorset.get("background"))
+  -- Feature (2026-07-08) #2: erster Versuch (nur eine duenne Trennlinie)
+  -- hat optisch kaum was gebracht. Jetzt eine echte umrandete Box um den
+  -- gesamten Steuerungsbereich (Ansicht/Sortierung/Gruppierung/Filter/
+  -- Suche) — genau wie die "+-Steuerung-+"-Boxen auf der Overview-Seite.
+  -- Die Box teilt sich die linke/rechte Rahmenspalte mit dem aeusseren
+  -- Panel (gleiche Breite w), daher bleiben alle x-Koordinaten der
+  -- Buttons unveraendert bei x=2 — nur eine zusaetzliche obere/untere
+  -- Randlinie mit Titel wird sichtbar. Touch-Zonen bleiben dadurch exakt
+  -- an derselben Stelle wie die sichtbaren Buttons.
+  local controls_top = 3
+  local controls_bottom = 8
+  ui.panel(mon, 1, controls_top, w, controls_bottom - controls_top + 1, "STEUERUNG", "OK")
 
   state.buttons = {}
 
@@ -388,9 +390,11 @@ local function render(mon, model)
   state.buttons.search_clear = { x1 = w - (#clear_label + 2), x2 = w - 1, y = search_y }
   state.buttons.search_focus = { x1 = 2, x2 = w - (#clear_label + 4), y = search_y }
 
-  ui.text(mon, 2, 8, separator, colorset.get("muted"), colorset.get("background"))
+  -- Zeile 8 ist die untere Rahmenlinie der STEUERUNG-Box (s.o.) — hier
+  -- NICHT ueberschreiben. Liste startet direkt danach mit eigenem Label.
+  ui.text(mon, 2, 9, "OFFENE ALARME", colorset.get("muted"), colorset.get("background"))
 
-  local list_top = 9
+  local list_top = 10
   local footer_rows = 4
   local list_height = math.max(3, h - list_top - footer_rows)
 
