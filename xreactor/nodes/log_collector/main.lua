@@ -1005,33 +1005,54 @@ local function run()
     local event = { os.pullEvent() }
     local name = event[1]
 
-    if name == "modem_message" then
-      local channel = event[3]
-      local message = event[5]
-      if channel == CHANNEL and valid_log_event(message) then
-        local ok, err = pcall(handle_log_event, message)
-        if not ok then
-          stats.dropped = stats.dropped + 1
-          stats.last_error = "handle crashed: " .. tostring(err):sub(1, 70)
-          diag(stats.last_error)
+    -- Fix (2026-07-07): CRITICAL. Bisher war nur handle_log_event() per
+    -- pcall abgesichert — ein Fehler in draw()/refresh_disks()/
+    -- refresh_modems() (z.B. durch eine unerwartete Peripherie-Antwort)
+    -- toetete den GESAMTEN Loop. Das fuehrt zum Crash-Screen ganz unten,
+    -- der auf einen Tastendruck wartet — ohne physische Anwesenheit blieb
+    -- der Collector danach fuer immer haengen, obwohl "der Computer noch
+    -- lief". Jetzt ist jeder Event-Zweig einzeln pcall-isoliert: ein
+    -- Fehler wird geloggt, der Loop laeuft beim naechsten Event normal
+    -- weiter, statt den ganzen Node lahmzulegen.
+    local branch_ok, branch_err = pcall(function()
+      if name == "modem_message" then
+        local channel = event[3]
+        local message = event[5]
+        if channel == CHANNEL and valid_log_event(message) then
+          local ok, err = pcall(handle_log_event, message)
+          if not ok then
+            stats.dropped = stats.dropped + 1
+            stats.last_error = "handle crashed: " .. tostring(err):sub(1, 70)
+            diag(stats.last_error)
+          end
+          if stats.received % 20 == 0 or not ok then draw() end
         end
-        if stats.received % 20 == 0 or not ok then draw() end
+      elseif name == "monitor_touch" then
+        handle_touch(event[3], event[4])
+      elseif name == "mouse_click" then
+        handle_touch(event[3], event[4])
+      elseif name == "key" then
+        if keys and (event[2] == keys.p or event[2] == keys.space) then toggle_pause() end
+      elseif name == "disk" or name == "disk_eject" or name == "peripheral" or name == "peripheral_detach" then
+        refresh_disks(true)
+        refresh_modems(true)
+        draw()
+      elseif name == "timer" and event[2] == timer then
+        refresh_disks(false)
+        refresh_modems(false)
+        if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
+        timer = os.startTimer and os.startTimer(1)
       end
-    elseif name == "monitor_touch" then
-      handle_touch(event[3], event[4])
-    elseif name == "mouse_click" then
-      handle_touch(event[3], event[4])
-    elseif name == "key" then
-      if keys and (event[2] == keys.p or event[2] == keys.space) then toggle_pause() end
-    elseif name == "disk" or name == "disk_eject" or name == "peripheral" or name == "peripheral_detach" then
-      refresh_disks(true)
-      refresh_modems(true)
-      draw()
-    elseif name == "timer" and event[2] == timer then
-      refresh_disks(false)
-      refresh_modems(false)
-      if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
-      timer = os.startTimer and os.startTimer(1)
+    end)
+    if not branch_ok then
+      stats.last_error = "loop crashed on event=" .. tostring(name) .. ": " .. tostring(branch_err):sub(1, 80)
+      diag(stats.last_error)
+      pcall(self_log, stats.last_error, "ERROR")
+      -- Timer evtl. durch den Fehler nicht neu gestartet — sicherstellen,
+      -- dass der naechste "timer"-Zweig weiterhin ausgeloest wird.
+      if name == "timer" and event[2] == timer and os.startTimer then
+        timer = os.startTimer(1)
+      end
     end
   end
 end
@@ -1055,5 +1076,18 @@ if term then
   if term.setTextColor then term.setTextColor(color("yellow", 16)) end
   print("Taste druecken um neu zu starten...")
 end
-pcall(os.pullEvent, "key")
+-- Fix (2026-07-07): CRITICAL. Bisher wartete der Crash-Screen per
+-- pcall(os.pullEvent, "key") UNBEGRENZT auf einen Tastendruck — ohne
+-- physische Anwesenheit blieb der Node fuer immer auf diesem Screen
+-- haengen (vermutlich die Erklaerung fuer "laeuft seit Stunden, loggt
+-- aber seit dem Neustart nichts mehr"). Jetzt: max. 30s warten, danach
+-- automatischer Reboot-Versuch, auch ohne Tastendruck.
+local ok_wait = pcall(function()
+  local timer_id = os.startTimer(30)
+  while true do
+    local ev = { os.pullEvent() }
+    if ev[1] == "key" then return end
+    if ev[1] == "timer" and ev[2] == timer_id then return end
+  end
+end)
 if os and os.reboot then os.reboot() end
