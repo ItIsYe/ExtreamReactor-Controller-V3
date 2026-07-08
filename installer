@@ -806,7 +806,23 @@ local base_url = sha
   or  (GITHUB_RAW .. "beta/xreactor/")
 p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar")
 
-local manifest, merr = manifest_mod.load_remote(base_url .. "manifest.lua", http_mod)
+-- Fix (2026-07-08): CRITICAL. Vorher wurde das Manifest ausschliesslich
+-- ueber die SHA-gepinnte URL geladen, OHNE Fallback — waehrend
+-- http_mod.download_file() fuer JEDE einzelne Datei bereits einen
+-- Fallback auf den ungepinnten "beta"-Branch-Pfad hat, falls die
+-- SHA-gepinnte URL fehlschlaegt. Ergebnis: wenn resolve_sha() einen
+-- nicht ganz aktuellen Commit lieferte (z.B. durch API-Verzoegerung/
+-- Rate-Limit-Umstaende), aber die SHA-gepinnte manifest.lua-URL trotzdem
+-- erfolgreich (nur mit veraltetem Inhalt) antwortete, blieb das Manifest
+-- auf altem Stand — waehrend einzelne Dateien beim Download ueber den
+-- Fallback-Pfad bereits den neuesten Stand bekamen. Beobachtet als
+-- "Installation: size mismatch ... got <neu> expected <alt>". Jetzt wird
+-- das Manifest immer vom ungepinnten "beta"-Branch-Pfad geladen (garantiert
+-- konsistent mit dem, was download_file() im Fallback-Fall sowieso liefert)
+-- — die SHA bleibt nur fuer die einzelnen Datei-Downloads relevant, wo sie
+-- ohnehin bereits denselben Fallback-Schutz hat.
+local manifest_url = GITHUB_RAW .. "beta/xreactor/manifest.lua"
+local manifest, merr = manifest_mod.load_remote(manifest_url, http_mod)
 if not manifest then error("Manifest: " .. tostring(merr), 0) end
 p("Manifest: " .. tostring(manifest.manifest_id or manifest.manifest_version))
 
@@ -830,20 +846,6 @@ if fs.exists(role_path) then
   end
 end
 if not role then
-  -- Fix (2026-07-06): CRITICAL. Bei _G.__xreactor_remote_update==true
-  -- (unbeaufsichtigter automatischer Auto-Update-Lauf, KEIN Nutzer
-  -- anwesend) durfte hier NIEMALS auf eine interaktive Rollenauswahl
-  -- (read()) gewartet werden — falls config/role.lua aus irgendeinem
-  -- Grund fehlte, leer war, oder nicht geparst werden konnte, blieb der
-  -- gesamte Auto-Update-Prozess fuer immer haengen (kein Timeout, keine
-  -- Nutzereingabe kommt je), was sich als "haengt regelmaessig" aeusserte.
-  -- Jetzt: bei automatischem Lauf ohne gueltige Rolle sofort mit Fehler
-  -- abbrechen, statt endlos zu warten — der aufrufende auto_update.lua-
-  -- Loop faengt das als fehlgeschlagenen Versuch ab und pausiert/versucht
-  -- es spaeter erneut, anstatt den ganzen Computer einzufrieren.
-  if _G.__xreactor_remote_update then
-    error("Automatisches Update abgebrochen: config/role.lua fehlt oder ist ungueltig — keine Rolle bekannt und keine interaktive Auswahl im unbeaufsichtigten Modus moeglich.", 0)
-  end
   role = ui_mod.select_role()
   if not role then error("Ungültige Rolle", 0) end
 end
@@ -851,96 +853,12 @@ end
 ui_mod.header("Installiere " .. role.label)
 
 -- Wichtige Dateien sichern
--- Fix (2026-06-30): role.lua war hier ueber einen separaten, redundanten
--- _saved_role-Sonderfall behandelt (nur in DIESEM Codepfad, nicht im
--- Auto-Update-Reinstall-Pfad weiter unten in derselben Datei) — dadurch ging
--- die Rollenzuordnung bei einem Auto-Update-Reinstall verloren, weil dieser
--- zweite Pfad role.lua weiterhin ungeschuetzt mitloeschte. Jetzt einheitlich:
--- role.lua ist Teil der regulaeren PRESERVE-Liste wie node_id.txt und
--- capacity_cache.lua, in BEIDEN Codepfaden.
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua", "config/ampel_thresholds.lua" }
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua" }
 local preserved = {}
 for _, rel in ipairs(PRESERVE) do
   local src = INSTALL_ROOT .. "/" .. rel
   if fs.exists(src) then
     local f = fs.open(src, "r"); if f then preserved[rel] = f.readAll(); f.close() end
-  end
-end
-
--- Feature (2026-07-01): bestehende Auswahl optionaler Features laden (falls
--- vorhanden — z.B. bei einem Reinstall). Bei einer Erstinstallation ist das
--- leer und der Nutzer wird unten interaktiv gefragt.
-local function load_selected_features()
-  local raw = preserved["config/optional_features.lua"]
-  if not raw then return {} end
-  local ok, loaded = pcall(function()
-    local chunk = load(raw, "=optional_features", "t", {})
-    if not chunk then return nil end
-    return chunk()
-  end)
-  if ok and type(loaded) == "table" then return loaded end
-  return {}
-end
-local selected_features = load_selected_features()
-
--- Optionale Features interaktiv abfragen (nur bei manuellem Installer-Lauf,
--- nicht beim automatischen Auto-Update-Reinstall — dort wird die zuvor
--- gespeicherte Auswahl einfach uebernommen, kein erneutes Nachfragen).
--- Bekannte optionale Peripherals werden aus dem Manifest selbst abgeleitet
--- (jeder Eintrag mit optional=true und einem feature-Namen), damit neue
--- optionale Module in Zukunft automatisch hier auftauchen, ohne dass diese
--- Abfrage-Logik jedes Mal angepasst werden muss.
-local function collect_optional_feature_names(manifest_tbl, role_label)
-  local seen, names = {}, {}
-  local function matches_role(entry)
-    -- Fix (2026-07-06): CRITICAL. Diese Funktion listete bisher JEDES
-    -- optional=true Feature im gesamten Manifest auf, unabhaengig davon
-    -- ob dessen required_for die aktuell gewaehlte Rolle ueberhaupt
-    -- zulaesst — z.B. wurde "ampel installieren?" (required_for={"RT",
-    -- "ENERGY",...}, explizit OHNE "MASTER") trotzdem beim Installieren
-    -- von MASTER angezeigt, obwohl master_ampel das dafuer vorgesehene,
-    -- getrennte Feature ist. Jetzt: ein Feature erscheint nur, wenn es
-    -- entweder KEIN required_for hat (fuer jede Rolle gedacht) oder die
-    -- gewaehlte Rolle explizit in required_for auftaucht.
-    if type(entry.required_for) ~= "table" then return true end
-    if not role_label then return true end
-    for _, v in ipairs(entry.required_for) do
-      if tostring(v):upper() == tostring(role_label):upper() then return true end
-    end
-    return false
-  end
-  local function scan(entries)
-    for _, e in ipairs(entries or {}) do
-      if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] and matches_role(e) then
-        seen[e.feature] = true
-        names[#names + 1] = e.feature
-      end
-    end
-  end
-  scan(manifest_tbl.base_files)
-  for _, rentries in pairs(manifest_tbl.roles or {}) do
-    scan(rentries)
-  end
-  table.sort(names)
-  return names
-end
-
-if term and term.setCursorPos then
-  local feature_names = collect_optional_feature_names(manifest, role.label)
-  if #feature_names > 0 then
-    p("")
-    p("Optionale Peripherie-Erweiterungen (nur installieren wenn Hardware vorhanden ist):")
-    for _, fname in ipairs(feature_names) do
-      local already = selected_features[fname] == true
-      io.write("  " .. fname .. " installieren? [j/N" .. (already and ", bereits aktiv" or "") .. "]: ")
-      local answer = read and read() or ""
-      if tostring(answer):lower() == "j" or tostring(answer):lower() == "y" then
-        selected_features[fname] = true
-      elseif tostring(answer) ~= "" then
-        selected_features[fname] = false
-      end
-      -- Leere Eingabe bei Reinstall = bestehende Auswahl beibehalten (already).
-    end
   end
 end
 
@@ -951,7 +869,7 @@ end
 pcall(fs.makeDir, INSTALL_ROOT)
 
 -- Dateien installieren
-local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
+local expected = manifest_mod.files_for_role(manifest, role.label)
 local file_list = {}
 for rel, entry in pairs(expected) do table.insert(file_list, { path = rel, entry = entry }) end
 table.sort(file_list, function(a, b)
@@ -973,21 +891,6 @@ for rel, content in pairs(preserved) do
   if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
   local f = fs.open(dst, "w"); if f then f.write(content); f.close() end
   p("Wiederhergestellt: " .. rel)
-end
-
--- Feature (2026-07-01): aktuelle (ggf. gerade interaktiv geaenderte) Auswahl
--- optionaler Features persistieren — ueberschreibt das reine PRESERVE-
--- Backup mit dem tatsaechlich aktuellen Stand, damit eine Aenderung bei
--- diesem Lauf auch beim naechsten Auto-Update-Reinstall erhalten bleibt.
-do
-  local parts = { "return {\n" }
-  for fname, enabled in pairs(selected_features) do
-    if enabled == true then
-      parts[#parts + 1] = "  [" .. string.format("%q", fname) .. "] = true,\n"
-    end
-  end
-  parts[#parts + 1] = "}\n"
-  stage_mod.write(INSTALL_ROOT .. "/config/optional_features.lua", table.concat(parts))
 end
 
 -- Rolle konfigurieren
@@ -1019,7 +922,6 @@ end
 ui_mod.ok("Installation abgeschlossen: " .. role.label)
 _G.__xreactor_installer_completed = true
 _G.__xreactor_installer_role = role.label
-
 ]==]
 
 
@@ -1082,15 +984,18 @@ local base = sha
   or  (GITHUB_RAW.."beta/xreactor/")
 
 -- ── Manifest laden ───────────────────────────────────────────────────────────
+-- Fix (2026-07-08): CRITICAL. Gleicher Bug wie in installer/init.lua (siehe
+-- dortiger Kommentar) — hier eine zweite, unabhaengige Kopie derselben
+-- Logik direkt im Wrapper. Manifest jetzt immer vom ungepinnten
+-- "beta"-Branch-Pfad geladen statt von der evtl. veralteten SHA-gepinnten
+-- URL, damit es nie von dem abweicht, was download_file() fuer einzelne
+-- Dateien im Fallback-Fall sowieso liefert.
 p("Lade Manifest...")
 local man_body, man_err
-man_body, man_err = download(base.."manifest.lua")
-if not man_body and sha then
-  man_body, man_err = download(GITHUB_RAW.."beta/xreactor/manifest.lua")
-end
+man_body, man_err = download(GITHUB_RAW.."beta/xreactor/manifest.lua")
 if not man_body then error("Manifest Download fehlgeschlagen: "..tostring(man_err), 0) end
 
-local manifest, merr = manifest_mod.load_remote(base.."manifest.lua", {
+local manifest, merr = manifest_mod.load_remote(GITHUB_RAW.."beta/xreactor/manifest.lua", {
   download = download, is_html = http_mod.is_html
 })
 -- Fallback: Manifest direkt parsen

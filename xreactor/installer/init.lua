@@ -19,7 +19,23 @@ local base_url = sha
   or  (GITHUB_RAW .. "beta/xreactor/")
 p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar")
 
-local manifest, merr = manifest_mod.load_remote(base_url .. "manifest.lua", http_mod)
+-- Fix (2026-07-08): CRITICAL. Vorher wurde das Manifest ausschliesslich
+-- ueber die SHA-gepinnte URL geladen, OHNE Fallback — waehrend
+-- http_mod.download_file() fuer JEDE einzelne Datei bereits einen
+-- Fallback auf den ungepinnten "beta"-Branch-Pfad hat, falls die
+-- SHA-gepinnte URL fehlschlaegt. Ergebnis: wenn resolve_sha() einen
+-- nicht ganz aktuellen Commit lieferte (z.B. durch API-Verzoegerung/
+-- Rate-Limit-Umstaende), aber die SHA-gepinnte manifest.lua-URL trotzdem
+-- erfolgreich (nur mit veraltetem Inhalt) antwortete, blieb das Manifest
+-- auf altem Stand — waehrend einzelne Dateien beim Download ueber den
+-- Fallback-Pfad bereits den neuesten Stand bekamen. Beobachtet als
+-- "Installation: size mismatch ... got <neu> expected <alt>". Jetzt wird
+-- das Manifest immer vom ungepinnten "beta"-Branch-Pfad geladen (garantiert
+-- konsistent mit dem, was download_file() im Fallback-Fall sowieso liefert)
+-- — die SHA bleibt nur fuer die einzelnen Datei-Downloads relevant, wo sie
+-- ohnehin bereits denselben Fallback-Schutz hat.
+local manifest_url = GITHUB_RAW .. "beta/xreactor/manifest.lua"
+local manifest, merr = manifest_mod.load_remote(manifest_url, http_mod)
 if not manifest then error("Manifest: " .. tostring(merr), 0) end
 p("Manifest: " .. tostring(manifest.manifest_id or manifest.manifest_version))
 
