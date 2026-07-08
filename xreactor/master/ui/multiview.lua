@@ -138,6 +138,36 @@ function M.new(opts)
   return setmetatable(self, { __index = M })
 end
 
+-- Feature (2026-07-08): AUX-Monitore zeigen abwechselnd verschiedene Views
+-- (overview/rt/energy/...) im Zyklus, aber jeder View-Renderer berechnet
+-- sein eigenes Layout unabhaengig ueber mon.getSize() — manche (z.B.
+-- rt_dashboard.lua, dessen "SEQUENCER/QUEUE"-Sektion bis nah an die letzte
+-- Zeile reicht) ueberlappen dadurch optisch mit dem "< ZURUECK"/"WEITER >"
+-- Footer, den multiview.lua danach an der WIRKLICH letzten Zeile zeichnet.
+-- Technisch funktionierten die Buttons bereits (Touch/Hitbox/Zyklus alle
+-- korrekt), nur visuell kollidierten sie mit dichtem View-Inhalt.
+--
+-- Statt jeden View-Renderer einzeln anzupassen (fehleranfaellig, muesste
+-- bei jedem neuen View wiederholt werden): ein duenner Proxy um mon, der
+-- NUR getSize() faelscht (eine Zeile weniger) — der View-Renderer berechnet
+-- sein komplettes Layout dadurch automatisch eine Zeile kuerzer und ruehrt
+-- die echte letzte Zeile nie an. Alle anderen Methoden (write, setCursorPos,
+-- setTextColor, clear, ...) werden unveraendert an den echten mon
+-- durchgereicht. multiview.lua selbst nutzt weiterhin den echten mon fuer
+-- Badge/Footer, die die volle Hoehe brauchen.
+local function height_clamped_mon(mon, extra_rows)
+  return setmetatable({}, { __index = function(_, k)
+    if k == "getSize" then
+      return function()
+        local w, h = mon.getSize()
+        if type(h) == "number" then h = math.max(1, h - extra_rows) end
+        return w, h
+      end
+    end
+    return mon[k]
+  end })
+end
+
 function M:render(monitors, data_map)
   data_map = data_map or {}
   self.sessions:bind_or_update(monitors or {}, nil, self.view_order)
@@ -170,7 +200,11 @@ function M:render(monitors, data_map)
       local ok, err = pcall(function()
         ui.begin_frame(session.mon)
         if should_hard_clear(session) then ui.clear(session.mon) end
-        view.render(session.mon, model)
+        local render_mon = session.mon
+        if not self.sessions:is_primary(session) then
+          render_mon = height_clamped_mon(session.mon, 1)
+        end
+        view.render(render_mon, model)
       end)
 
       if ok then
