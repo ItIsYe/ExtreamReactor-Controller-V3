@@ -303,9 +303,20 @@ local function render(mon, model)
 
   ui.text(mon, 2, 2, model.summary or "", colorset.get("text"), colorset.get("background"))
 
+  -- Feature (2026-07-08): visuelle Ueberarbeitung — vorher waren alle
+  -- Steuerelemente (Ansicht/Sortierung/Gruppierung/Filter/Suche) ohne
+  -- jede Trennung direkt untereinander gequetscht. Jetzt in klar
+  -- getrennte Abschnitte gegliedert (Trennlinien + Abschnitts-Label),
+  -- wie bei den anderen Seiten ueblich. Aeusserer Rahmen (ui.panel)
+  -- unveraendert. Alle Touch-Zonen (state.buttons) werden weiterhin aus
+  -- denselben x/y-Variablen abgeleitet, mit denen auch gezeichnet wird —
+  -- bleiben also automatisch synchron mit dem neuen Layout.
+  local separator = string.rep("-", math.max(1, w - 3))
+  ui.text(mon, 2, 3, separator, colorset.get("muted"), colorset.get("background"))
+
   state.buttons = {}
 
-  local view_y = 3
+  local view_y = 4
   local view_active_status = state.view == "active" and "OK" or "OFFLINE"
   local view_hist_status = state.view == "history" and "OK" or "OFFLINE"
   ui.badge(mon, 2, view_y, "ACTIVE", view_active_status)
@@ -332,7 +343,7 @@ local function render(mon, model)
   state.buttons.group_flat = { x1 = group_x, x2 = group_x + #" FLAT " - 1, y = view_y }
   state.buttons.group_node = { x1 = group_x + 6, x2 = group_x + 6 + #" BY NODE " - 1, y = view_y }
 
-  local filter_y = 4
+  local filter_y = 5
   local filter_x = 2
   ui.text(mon, filter_x, filter_y, "Sev", colorset.get("text"), colorset.get("background"))
   filter_x = filter_x + 4
@@ -357,7 +368,7 @@ local function render(mon, model)
   ui.badge(mon, filter_x + 1, filter_y, ack_label, state.filters.show_acknowledged and "OK" or "OFFLINE")
   state.buttons.toggle_ack = { x1 = filter_x + 1, x2 = filter_x + 1 + #(" " .. ack_label .. " ") - 1, y = filter_y }
 
-  local role_y = 5
+  local role_y = 6
   local role_x = 2
   ui.text(mon, role_x, role_y, "Role", colorset.get("text"), colorset.get("background"))
   role_x = role_x + 5
@@ -368,7 +379,7 @@ local function render(mon, model)
     role_x = role_x + #(" " .. entry.label .. " ") + 1
   end
 
-  local search_y = 6
+  local search_y = 7
   local search_active = state.search_active and "*" or ""
   local search_text = string.format("Search%s: %s", search_active, state.search ~= "" and state.search or "--")
   ui.text(mon, 2, search_y, search_text, colorset.get("text"), colorset.get("background"))
@@ -377,7 +388,9 @@ local function render(mon, model)
   state.buttons.search_clear = { x1 = w - (#clear_label + 2), x2 = w - 1, y = search_y }
   state.buttons.search_focus = { x1 = 2, x2 = w - (#clear_label + 4), y = search_y }
 
-  local list_top = 7
+  ui.text(mon, 2, 8, separator, colorset.get("muted"), colorset.get("background"))
+
+  local list_top = 9
   local footer_rows = 4
   local list_height = math.max(3, h - list_top - footer_rows)
 
