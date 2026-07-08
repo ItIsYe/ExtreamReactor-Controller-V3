@@ -429,9 +429,26 @@ local function disk_for_role(role)
   return best
 end
 
+-- Fix (2026-07-07): Log-Zeilen speicherten bisher nur rohe Epoch-
+-- Millisekunden ("[1783449311486]") — von Auge nicht lesbar, man musste sie
+-- manuell umrechnen um zu sehen, wie alt ein Log-Export tatsächlich ist.
+-- Das hat in dieser Session wiederholt dazu gefuehrt, dass ungewollt
+-- derselbe alte Export mehrfach fuer "aktuell" gehalten wurde. Jetzt wird
+-- zusaetzlich ein lesbares Datum+Uhrzeit (UTC) vor die rohe Millisekunden-
+-- zahl gestellt — die Rohzahl bleibt erhalten (fuer exaktes Sortieren/
+-- Parsen), das Datum kommt on top.
+local function format_timestamp(ts)
+  local ok, formatted = pcall(function()
+    return os.date("!%Y-%m-%d %H:%M:%S", math.floor(tonumber(ts) / 1000))
+  end)
+  if ok and formatted then return formatted end
+  return "?"
+end
+
 local function format_log_line(payload)
   local ts = payload.ts or now_ms()
-  return string.format("[%s] %s | %s | %s | %s",
+  return string.format("[%s | %s] %s | %s | %s | %s",
+    format_timestamp(ts),
     tostring(ts),
     tostring(payload.role or "?"),
     tostring(payload.prefix or "LOG"),
