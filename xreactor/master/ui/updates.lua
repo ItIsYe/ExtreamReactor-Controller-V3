@@ -106,7 +106,8 @@ local function render(mon, model)
   if h >= 5 then
     mux.banner(mon, 2, h - 4, w - 3, string.format("CURRENT RELEASE %s | %d NODES NEED ATTENTION", tostring(release_id), attention), page_status, "network")
   end
-  mux.footer_nav(mon, h, w, { center = "AUX UPDATES" })
+  -- Fix (2026-07-08): siehe system_map.lua — dekorative, ungenutzte
+  -- Zeile mit identischem Default-Text wie der echte AUX-Footer entfernt.
 end
 
 return { render = render }

@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 351,
-  manifest_id = "manifest-v351",
+  manifest_version = 352,
+  manifest_id = "manifest-v352",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 4481, hash = "f9ae3a57", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "41ff008d", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "ae6ad365", always=true },
   { path = "start.lua", size_bytes = 4892, hash = "28772c55", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 3098, hash = "0c5fb837", always=true },
@@ -85,8 +85,8 @@ return {
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"} },
     { path = "master/ui/layout.lua", size_bytes = 6263, hash = "new", required_for={"MASTER"} },
     { path = "master/ui/maintenance.lua", size_bytes = 4360, hash = "new", required_for={"MASTER"} },
-    { path = "master/ui/updates.lua", size_bytes = 4824, hash = "5f81b7d1", required_for={"MASTER"} },
-    { path = "master/ui/system_map.lua", size_bytes = 5782, hash = "9e8b02ba", required_for={"MASTER"} },
+    { path = "master/ui/updates.lua", size_bytes = 4914, hash = "577f9890", required_for={"MASTER"} },
+    { path = "master/ui/system_map.lua", size_bytes = 6136, hash = "c62cf990", required_for={"MASTER"} },
     { path = "master/ui/config_editor.lua", size_bytes = 4177, hash = "new", required_for={"MASTER"} },
     { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "new", optional=true, feature="speaker_alarm" },

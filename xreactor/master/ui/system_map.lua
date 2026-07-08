@@ -91,7 +91,12 @@ local function render(mon, model)
     mux.data_row(mon, rx + 2, 20, rw - 4, { label = "LOG", value = tostring(log_n), status = log_key, icon = "network" })
   end
 
-  mux.footer_nav(mon, h, w, { center = "SYSTEM MAP" })
+  -- Fix (2026-07-08): mux.footer_nav() zeichnete hier eine rein dekorative
+  -- Zeile mit Default-Text "< ZURUECK"/"WEITER >" — identisch zum echten,
+  -- funktionalen AUX-Zyklus-Footer, den multiview.lua jetzt am unteren
+  -- Bildschirmrand zeichnet. Der Rueckgabewert wurde nie genutzt (keine
+  -- eigene Interaktion dahinter), daher entfernt statt mit dem echten
+  -- Footer zu kollidieren/duplizieren.
 end
 
 return { render = render }
