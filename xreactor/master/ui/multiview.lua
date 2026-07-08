@@ -202,7 +202,11 @@ function M:render(monitors, data_map)
         if should_hard_clear(session) then ui.clear(session.mon) end
         local render_mon = session.mon
         if not self.sessions:is_primary(session) then
-          render_mon = height_clamped_mon(session.mon, 1)
+          -- Feature (2026-07-08): 2 statt 1 reservierte Zeile — eine
+          -- fuer den Footer selbst, eine als sichtbare Luecke davor, damit
+          -- dichter View-Inhalt (z.B. rt_dashboard.lua's Queue-Sektion)
+          -- nicht direkt an den Buttons klebt.
+          render_mon = height_clamped_mon(session.mon, 2)
         end
         view.render(render_mon, model)
       end)
