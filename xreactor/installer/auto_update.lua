@@ -224,6 +224,19 @@ local function run_update(sha)
               _G.__xreactor_remote_update = true
               -- shell nicht verfügbar in parallel-Coroutine → dofile nutzen
               local ok_run, run_err = pcall(dofile, tmp)
+              -- Fix (2026-07-08): CRITICAL. Diese globale Variable wurde
+              -- nie zurueckgesetzt — blieb fuer den Rest der aktuellen
+              -- Boot-Session auf true stehen. Ein manueller Installer-Lauf
+              -- IN DERSELBEN Session (ohne zwischenzeitlichen Reboot, z.B.
+              -- direkt nach einem gescheiterten Auto-Update-Versuch) erbte
+              -- dadurch faelschlich den "unbeaufsichtigt"-Modus und
+              -- verweigerte die interaktive Rollenauswahl, selbst wenn ein
+              -- Mensch direkt am Terminal sass ("config/role.lua fehlt
+              -- oder ist ungueltig — keine interaktive Auswahl im
+              -- unbeaufsichtigten Modus moeglich"). Jetzt wird die Variable
+              -- sofort nach Gebrauch zurueckgesetzt, egal ob der Update-
+              -- Versuch erfolgreich war oder nicht.
+              _G.__xreactor_remote_update = nil
               pcall(fs.delete, tmp)
               if ok_run then log("Update OK — Neustart"); os.sleep(1); os.reboot(); return true end
               last_err = "dofile Fehler: " .. tostring(run_err)
