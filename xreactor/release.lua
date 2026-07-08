@@ -1,9 +1,9 @@
 return {
-  release_id = "beta-v344",
+  release_id = "beta-v345",
   commit_sha = "beta",
   source_ref = "beta",
-  manifest_id = "manifest-v344",
-  manifest_version = 344,
+  manifest_id = "manifest-v345",
+  manifest_version = 345,
   manifest_file_count = 156,
   hash_algo = "crc32",
   manifest_path = "xreactor/manifest.lua",

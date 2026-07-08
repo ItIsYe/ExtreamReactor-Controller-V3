@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 344,
-  manifest_id = "manifest-v344",
+  manifest_version = 345,
+  manifest_id = "manifest-v345",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 1747, hash = "ddb7c854", always=true },
   { path = "installer/auto_update.lua", size_bytes = 12415, hash = "cc42df01", always=true },
   { path = "installer/init.lua", size_bytes = 4481, hash = "f9ae3a57", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "cfda2783", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "955696db", always=true },
   { path = "start.lua", size_bytes = 3831, hash = "9524769b", always=true, always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 3098, hash = "0c5fb837", always=true },
@@ -169,7 +169,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 38769, hash = "41569e39", required_for={"LOG"} },
+    { path = "nodes/log_collector/main.lua", size_bytes = 39690, hash = "dfc9359f", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_main.lua", size_bytes = 3743, hash = "new", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_ui.lua", size_bytes = 6190, hash = "new", required_for={"LOG"} },
     { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", required_for={"LOG"} },

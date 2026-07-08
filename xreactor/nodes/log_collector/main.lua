@@ -156,12 +156,35 @@ local function ensure_dir(path)
   return ok and fs.exists(path) and fs.isDir(path)
 end
 
+-- Perf (2026-07-07): free_space() wird ueber disk_for_role() bei JEDEM
+-- eingehenden Log-Event aufgerufen (im Betrieb alle paar hundert ms), und
+-- die Rotation prueft dabei bis zu DISKS_PER_ROLE (4) Mounts pro Aufruf.
+-- fs.getFreeSpace() ist kein Gratis-Tabellenzugriff — bei dieser Frequenz
+-- unnoetig oft aufgerufen, obwohl sich freier Speicher innerhalb weniger
+-- Sekunden praktisch nie relevant aendert. Kurzer TTL-Cache (2s) pro Mount,
+-- ohne das eigentliche Verhalten (Rotation bei Platzmangel) zu aendern —
+-- nur die Abfragehaeufigkeit sinkt.
+local free_space_cache = {}
+local FREE_SPACE_CACHE_TTL = 2
 local function free_space(path)
   if not (fs and type(fs.getFreeSpace) == "function") then return 0 end
-  local ok, value = pcall(fs.getFreeSpace, path or "/")
-  if not ok then return 0 end
-  if value == "unlimited" then return math.huge end
-  return tonumber(value) or 0
+  local key = path or "/"
+  local now = os.clock and os.clock() or 0
+  local cached = free_space_cache[key]
+  if cached and (now - cached.at) < FREE_SPACE_CACHE_TTL then
+    return cached.value
+  end
+  local ok, value = pcall(fs.getFreeSpace, key)
+  local result = 0
+  if ok then
+    if value == "unlimited" then
+      result = math.huge
+    else
+      result = tonumber(value) or 0
+    end
+  end
+  free_space_cache[key] = { value = result, at = now }
+  return result
 end
 
 local function sanitize(value)
