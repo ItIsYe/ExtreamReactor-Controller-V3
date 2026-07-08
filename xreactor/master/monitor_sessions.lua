@@ -139,7 +139,27 @@ function M:resolve_binding(index, prior)
   if locked and role ~= "aux" then
     view_key = role
   else
-    view_key = default_view(index, self.view_order)
+    -- Fix (2026-07-08): CRITICAL. `prior` wurde entgegengenommen, aber nie
+    -- gelesen — bind_or_update() ruft resolve_binding() bei JEDEM
+    -- render()-Tick (alle ~0.5-1s) auf, wodurch der view_key eines
+    -- AUX-Monitors bei jedem einzelnen Tick auf default_view() (immer
+    -- views[1], typischerweise "overview") zurueckgesetzt wurde. Per Touch
+    -- per cycle_aux_view() umgeschaltete Views ("< ZURUECK"/"WEITER >")
+    -- wurden dadurch binnen der naechsten Render-Runde sofort wieder
+    -- verworfen — der Touch selbst funktionierte (direction wurde korrekt
+    -- erkannt, view_key kurzzeitig korrekt gesetzt), aber sichtbar blieb
+    -- davon nichts. Jetzt: ein bereits vorhandener, gueltiger
+    -- prior_session.view_key wird beibehalten; nur beim allerersten
+    -- Binden (kein prior vorhanden) wird auf default_view() zurueckgegriffen.
+    local prior_view = prior_session.view_key
+    local prior_valid = false
+    if prior_view then
+      local views = self.view_order or AUX_VIEWS_FALLBACK
+      for _, v in ipairs(views) do
+        if v == prior_view then prior_valid = true break end
+      end
+    end
+    view_key = prior_valid and prior_view or default_view(index, self.view_order)
   end
   return role, locked, view_key
 end
