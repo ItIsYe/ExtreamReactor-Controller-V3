@@ -102,4 +102,23 @@ local function run()
 end
 
 local ok, err = pcall(run)
-if not ok then p("[BOOT] FEHLER: " .. tostring(err)); error("Failed: " .. role, 0) end
+if not ok then
+  p("[BOOT] FEHLER: " .. tostring(err))
+  -- Fix (2026-07-07): CRITICAL. parallel.waitForAny(role_loop, auto_loop)
+  -- bedeutet: wirft EINE der beiden Coroutinen (z.B. der Auto-Updater beim
+  -- Ausfuehren eines frisch heruntergeladenen, evtl. fehlerhaften
+  -- Installer-Skripts via dofile(tmp)) einen unabgefangenen Fehler, stirbt
+  -- die GESAMTE parallel.waitForAny-Ausfuehrung — inklusive der eigentlich
+  -- gesunden Rollen-Hauptschleife. Bisher wurde der Fehler hier zwar
+  -- geloggt, aber dann per error(...) ERNEUT geworfen — das crashte den
+  -- gesamten Computer bis in die CraftOS-Shell, wo er ohne physisches
+  -- Eingreifen fuer immer haengen blieb (vermutliche Hauptursache fuer
+  -- "Node laeuft seit Stunden, loggt aber seit dem letzten Neustart
+  -- nichts mehr"). Jetzt: statt erneut zu werfen, nach kurzer Pause ein
+  -- automatischer Reboot-Versuch — der Computer heilt sich selbst, auch
+  -- wenn der Fehler in der naechsten Runde erneut auftritt (dann eben
+  -- wiederholter Reboot statt endlosem Stillstand).
+  os.sleep(2)
+  if os and os.reboot then os.reboot() end
+  error("Failed: " .. role, 0)
+end

@@ -736,17 +736,34 @@ end
 
 function M.make_loop(interval_s)
   interval_s = tonumber(interval_s) or 120
+  -- Fix (2026-07-07): CRITICAL — vermutlich der eigentliche Absturzort.
+  -- do_check() lief bisher komplett ungeschuetzt in dieser Loop. Da
+  -- auto_loop via parallel.waitForAny() NEBEN der Rollen-Hauptschleife
+  -- laeuft (siehe start.lua), toetet JEDER unabgefangene Fehler hier
+  -- (egal ob in resolve_sha(), fetch_remote_version(), run_update() oder
+  -- reclaim()) nicht nur den Auto-Updater, sondern über
+  -- parallel.waitForAny auch die eigentlich gesunde Rollen-Hauptschleife
+  -- — und frueher liess start.lua diesen Fehler unbehandelt bis zum
+  -- Computer-Absturz durchlaufen. Jetzt: jeder do_check()-Aufruf ist
+  -- pcall-isoliert, ein Fehler wird geloggt, die Loop laeuft beim
+  -- naechsten Intervall normal weiter statt den ganzen Node zu toeten.
+  local function safe_check()
+    local ok, err = pcall(do_check)
+    if not ok then
+      log("do_check() Fehler abgefangen: " .. tostring(err):sub(1, 120))
+    end
+  end
   return function()
     log("Loop gestartet (Intervall " .. interval_s .. "s)")
     -- Erster Check nach 30s damit nicht zu lange gewartet wird
     local first = os.startTimer(30)
     repeat local ev, id = os.pullEvent() until ev == "timer" and id == first
-    do_check()
+    safe_check()
     -- Danach regulärer Intervall
     while true do
       local t = os.startTimer(interval_s)
       repeat local ev, id = os.pullEvent() until ev == "timer" and id == t
-      do_check()
+      safe_check()
     end
   end
 end
