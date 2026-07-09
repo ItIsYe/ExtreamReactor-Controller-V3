@@ -99,9 +99,30 @@ end
 -- einen Monitor als potenziellen Hauptmonitor; ein reiner 1x3 (oder noch
 -- kleinerer) wird hier abgelehnt, auch wenn er preferred_name entspricht.
 local function is_too_small_for_main(mon)
+  -- Fix (2026-07-09): CRITICAL. Diese Funktion mass bisher bei der
+  -- AKTUELLEN Skala des Monitors -- Monitore merken sich ihre Skala aber
+  -- als PHYSISCHE Block-Eigenschaft, unabhaengig von Software-Neuinstalls.
+  -- Falls ein Monitor aus einer frueheren Session (z.B. durch den
+  -- inzwischen gefixten Ampel-Scale-Corruption-Bug, siehe optional/
+  -- ampel.lua Fix-Historie) noch bei einer extremen Skala wie 5 haengt,
+  -- misst getSize() dort faelschlich winzige Werte (z.B. 1x1) -- ein
+  -- eigentlich normal grosser Hauptmonitor wuerde dadurch faelschlich als
+  -- "Ampel-gross" abgelehnt. Jetzt: Skala wird VOR der Messung explizit
+  -- auf 1 gesetzt (der verifizierten Referenz-Skala fuer die 7x19-Formel
+  -- einer echten 1x3-Ampel, siehe optional/ampel.lua) und danach wieder
+  -- auf den Ursprungswert zurueckgesetzt, damit die Messung unabhaengig
+  -- von jeglichem Skalen-Altzustand ist.
+  local ok_orig, orig_scale = pcall(function() return mon.getTextScale() end)
+  pcall(function() mon.setTextScale(1) end)
   local ok, w, h = pcall(function() return mon.getSize() end)
+  if ok_orig and type(orig_scale) == "number" then
+    pcall(function() mon.setTextScale(orig_scale) end)
+  end
   if not ok or type(w) ~= "number" or type(h) ~= "number" then return false end
-  return w <= 1 and h <= 3
+  -- Verifizierte Formel (siehe optional/ampel.lua): 1 Block breit x 3
+  -- Bloecke hoch bei Skala 1 = exakt 7x19 Zeichen. Kleine Toleranz fuer
+  -- Hoehe (17-21), falls die tatsaechliche Bauhoehe leicht abweicht.
+  return w == 7 and h >= 17 and h <= 21
 end
 
 function monitor.find(preferred_name, strategy, scale, log_prefix)
