@@ -208,18 +208,17 @@ function M.load_remote(url, http_mod)
   return result
 end
 
+-- Fix (2026-07-08): CRITICAL. Diese Funktion hatte seit dem "Phase 1"-
+-- Rewrite (2026-06-28) keine Filterung fuer optional=true Eintraege mehr —
+-- jeder passende Eintrag wurde unconditional aufgenommen, unabhaengig von
+-- der Nutzerauswahl. Nur die eingebettete Kopie im monolithischen
+-- /installer hatte die urspruengliche 3-Parameter-Version mit Feature-
+-- Filterung noch (dort ueberlebt, weil der eingebettete Block seit dem
+-- Rewrite nie neu gebaut wurde). Hier aus der eingebetteten Version
+-- wiederhergestellt, damit installer/init.lua's interaktive Auswahl
+-- (siehe dort) wieder tatsaechlich etwas bewirkt.
 function M.files_for_role(manifest, role_label, selected_features)
   local is_log = LOG_ROLES[role_label:upper()] == true
-  -- Feature (2026-07-01): optional=true Dateien (xreactor/optional/*) werden
-  -- NICHT automatisch installiert, egal welche Rolle gewaehlt wird — sie
-  -- sind reine Opt-in-Erweiterungen (Ampel-Monitor, Speaker-Alarm, ...) fuer
-  -- zusaetzliche, physisch vorhandene Peripherals. Nur wenn der Nutzer beim
-  -- Installer-Lauf explizit zustimmt (selected_features[entry.feature] ==
-  -- true), wird die Datei mit aufgenommen. Ohne Auswahl bleibt der Ordner
-  -- xreactor/optional/ auf dem Node komplett leer/nicht vorhanden — der
-  -- zugehoerige require()-Aufruf in monitor_ui.lua/ui_pages.lua/
-  -- alert_service.lua ist pcall-geschuetzt und ueberspringt den gesamten
-  -- Feature-Code sauber, wenn die Datei fehlt.
   selected_features = selected_features or {}
   local expected = {}
 
@@ -846,6 +845,28 @@ if fs.exists(role_path) then
   end
 end
 if not role then
+  -- Fix (2026-07-06): CRITICAL. Bei _G.__xreactor_remote_update==true
+  -- (unbeaufsichtigter automatischer Auto-Update-Lauf, KEIN Nutzer
+  -- anwesend) durfte hier NIEMALS auf eine interaktive Rollenauswahl
+  -- (read()) gewartet werden — falls config/role.lua aus irgendeinem
+  -- Grund fehlte, leer war, oder nicht geparst werden konnte, blieb der
+  -- gesamte Auto-Update-Prozess fuer immer haengen (kein Timeout, keine
+  -- Nutzereingabe kommt je), was sich als "haengt regelmaessig" aeusserte.
+  -- Jetzt: bei automatischem Lauf ohne gueltige Rolle sofort mit Fehler
+  -- abbrechen, statt endlos zu warten — der aufrufende auto_update.lua-
+  -- Loop faengt das als fehlgeschlagenen Versuch ab und pausiert/versucht
+  -- es spaeter erneut, anstatt den ganzen Computer einzufrieren.
+  --
+  -- Fix (2026-07-08): Dieser Schutz war zwischenzeitlich (seit dem
+  -- "Phase 1"-Rewrite von installer/manifest.lua, 2026-06-28) aus dieser
+  -- Quelldatei verschwunden — nur die eingebettete Kopie im monolithischen
+  -- /installer hatte ihn noch. Beim Neubau des eingebetteten init_src-
+  -- Blocks fuer den SHA-Pinning-Fix (v357) wurde dadurch versehentlich
+  -- auch diese Schutzfunktion mit ueberschrieben. Hier aus der Diff-
+  -- Historie wiederhergestellt.
+  if _G.__xreactor_remote_update then
+    error("Automatisches Update abgebrochen: config/role.lua fehlt oder ist ungueltig — keine Rolle bekannt und keine interaktive Auswahl im unbeaufsichtigten Modus moeglich.", 0)
+  end
   role = ui_mod.select_role()
   if not role then error("Ungültige Rolle", 0) end
 end
@@ -853,12 +874,97 @@ end
 ui_mod.header("Installiere " .. role.label)
 
 -- Wichtige Dateien sichern
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua" }
+local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua", "config/ampel_thresholds.lua" }
 local preserved = {}
 for _, rel in ipairs(PRESERVE) do
   local src = INSTALL_ROOT .. "/" .. rel
   if fs.exists(src) then
     local f = fs.open(src, "r"); if f then preserved[rel] = f.readAll(); f.close() end
+  end
+end
+
+-- Feature (2026-07-01): bestehende Auswahl optionaler Features laden (falls
+-- vorhanden — z.B. bei einem Reinstall). Bei einer Erstinstallation ist das
+-- leer und der Nutzer wird unten interaktiv gefragt.
+--
+-- Fix (2026-07-08): diese komplette optionale-Features-Auswahl (Laden,
+-- interaktive Abfrage, Persistieren) war seit dem "Phase 1"-Rewrite aus
+-- dieser Quelldatei verschwunden — nur der veraltete, separate Wrapper-
+-- Codepfad im monolithischen /installer hatte sie noch. Ohne sie wurden
+-- optionale Peripherie-Features (Ampel, Speaker-Alarm, Pocket-Query)
+-- beim manuellen Installer-Lauf ungefragt IMMER mitinstalliert, sobald
+-- die Rolle passte — keine Nutzerwahl mehr moeglich. Hier wiederhergestellt.
+local function load_selected_features()
+  local raw = preserved["config/optional_features.lua"]
+  if not raw then return {} end
+  local ok, loaded = pcall(function()
+    local chunk = load(raw, "=optional_features", "t", {})
+    if not chunk then return nil end
+    return chunk()
+  end)
+  if ok and type(loaded) == "table" then return loaded end
+  return {}
+end
+local selected_features = load_selected_features()
+
+-- Optionale Features interaktiv abfragen (nur bei manuellem Installer-Lauf,
+-- nicht beim automatischen Auto-Update-Reinstall — dort wird die zuvor
+-- gespeicherte Auswahl einfach uebernommen, kein erneutes Nachfragen).
+-- Bekannte optionale Peripherals werden aus dem Manifest selbst abgeleitet
+-- (jeder Eintrag mit optional=true und einem feature-Namen), damit neue
+-- optionale Module in Zukunft automatisch hier auftauchen, ohne dass diese
+-- Abfrage-Logik jedes Mal angepasst werden muss.
+local function collect_optional_feature_names(manifest_tbl, role_label)
+  local seen, names = {}, {}
+  local function matches_role(entry)
+    -- Fix (2026-07-06): CRITICAL. Diese Funktion listete bisher JEDES
+    -- optional=true Feature im gesamten Manifest auf, unabhaengig davon
+    -- ob dessen required_for die aktuell gewaehlte Rolle ueberhaupt
+    -- zulaesst — z.B. wurde "ampel installieren?" (required_for={"RT",
+    -- "ENERGY",...}, explizit OHNE "MASTER") trotzdem beim Installieren
+    -- von MASTER angezeigt, obwohl master_ampel das dafuer vorgesehene,
+    -- getrennte Feature ist. Jetzt: ein Feature erscheint nur, wenn es
+    -- entweder KEIN required_for hat (fuer jede Rolle gedacht) oder die
+    -- gewaehlte Rolle explizit in required_for auftaucht.
+    if type(entry.required_for) ~= "table" then return true end
+    if not role_label then return true end
+    for _, v in ipairs(entry.required_for) do
+      if tostring(v):upper() == tostring(role_label):upper() then return true end
+    end
+    return false
+  end
+  local function scan(entries)
+    for _, e in ipairs(entries or {}) do
+      if type(e) == "table" and e.optional == true and e.feature and not seen[e.feature] and matches_role(e) then
+        seen[e.feature] = true
+        names[#names + 1] = e.feature
+      end
+    end
+  end
+  scan(manifest_tbl.base_files)
+  for _, rentries in pairs(manifest_tbl.roles or {}) do
+    scan(rentries)
+  end
+  table.sort(names)
+  return names
+end
+
+if term and term.setCursorPos and not _G.__xreactor_remote_update then
+  local feature_names = collect_optional_feature_names(manifest, role.label)
+  if #feature_names > 0 then
+    p("")
+    p("Optionale Peripherie-Erweiterungen (nur installieren wenn Hardware vorhanden ist):")
+    for _, fname in ipairs(feature_names) do
+      local already = selected_features[fname] == true
+      io.write("  " .. fname .. " installieren? [j/N" .. (already and ", bereits aktiv" or "") .. "]: ")
+      local answer = read and read() or ""
+      if tostring(answer):lower() == "j" or tostring(answer):lower() == "y" then
+        selected_features[fname] = true
+      elseif tostring(answer) ~= "" then
+        selected_features[fname] = false
+      end
+      -- Leere Eingabe bei Reinstall = bestehende Auswahl beibehalten (already).
+    end
   end
 end
 
@@ -869,7 +975,7 @@ end
 pcall(fs.makeDir, INSTALL_ROOT)
 
 -- Dateien installieren
-local expected = manifest_mod.files_for_role(manifest, role.label)
+local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
 local file_list = {}
 for rel, entry in pairs(expected) do table.insert(file_list, { path = rel, entry = entry }) end
 table.sort(file_list, function(a, b)
@@ -891,6 +997,21 @@ for rel, content in pairs(preserved) do
   if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
   local f = fs.open(dst, "w"); if f then f.write(content); f.close() end
   p("Wiederhergestellt: " .. rel)
+end
+
+-- Feature (2026-07-01): aktuelle (ggf. gerade interaktiv geaenderte) Auswahl
+-- optionaler Features persistieren — ueberschreibt das reine PRESERVE-
+-- Backup mit dem tatsaechlich aktuellen Stand, damit eine Aenderung bei
+-- diesem Lauf auch beim naechsten Auto-Update-Reinstall erhalten bleibt.
+do
+  local parts = { "return {\n" }
+  for fname, enabled in pairs(selected_features) do
+    if enabled == true then
+      parts[#parts + 1] = "  [" .. string.format("%q", fname) .. "] = true,\n"
+    end
+  end
+  parts[#parts + 1] = "}\n"
+  stage_mod.write(INSTALL_ROOT .. "/config/optional_features.lua", table.concat(parts))
 end
 
 -- Rolle konfigurieren
@@ -922,6 +1043,7 @@ end
 ui_mod.ok("Installation abgeschlossen: " .. role.label)
 _G.__xreactor_installer_completed = true
 _G.__xreactor_installer_role = role.label
+
 ]==]
 
 

@@ -82,14 +82,28 @@ function M.load_remote(url, http_mod)
   return result
 end
 
-function M.files_for_role(manifest, role_label)
+-- Fix (2026-07-08): CRITICAL. Diese Funktion hatte seit dem "Phase 1"-
+-- Rewrite (2026-06-28) keine Filterung fuer optional=true Eintraege mehr —
+-- jeder passende Eintrag wurde unconditional aufgenommen, unabhaengig von
+-- der Nutzerauswahl. Nur die eingebettete Kopie im monolithischen
+-- /installer hatte die urspruengliche 3-Parameter-Version mit Feature-
+-- Filterung noch (dort ueberlebt, weil der eingebettete Block seit dem
+-- Rewrite nie neu gebaut wurde). Hier aus der eingebetteten Version
+-- wiederhergestellt, damit installer/init.lua's interaktive Auswahl
+-- (siehe dort) wieder tatsaechlich etwas bewirkt.
+function M.files_for_role(manifest, role_label, selected_features)
   local is_log = LOG_ROLES[role_label:upper()] == true
+  selected_features = selected_features or {}
   local expected = {}
 
   local function add(entry)
     if type(entry) == "string" then entry = { path = entry } end
     if type(entry) ~= "table" or not entry.path then return end
     if SKIP[entry.path] then return end
+    if entry.optional == true then
+      local feature = entry.feature or entry.path
+      if selected_features[feature] ~= true then return end
+    end
     expected[entry.path] = entry
   end
 
@@ -97,19 +111,17 @@ function M.files_for_role(manifest, role_label)
     if not is_log or e.always == true then add(e) end
   end
 
-  if not is_log then
-    for rkey, rentries in pairs(manifest.roles or {}) do
-      for _, e in ipairs(rentries or {}) do
-        if type(e) == "table" then
-          local rf = e.required_for
-          local matches = e.always == true
-          if not matches and type(rf) == "table" then
-            for _, v in ipairs(rf) do
-              if tostring(v):upper() == role_label:upper() then matches = true; break end
-            end
+  for rkey, rentries in pairs(manifest.roles or {}) do
+    for _, e in ipairs(rentries or {}) do
+      if type(e) == "table" then
+        local rf = e.required_for
+        local matches = e.always == true
+        if not matches and type(rf) == "table" then
+          for _, v in ipairs(rf) do
+            if tostring(v):upper() == role_label:upper() then matches = true; break end
           end
-          if matches then add(e) end
         end
+        if matches then add(e) end
       end
     end
   end
