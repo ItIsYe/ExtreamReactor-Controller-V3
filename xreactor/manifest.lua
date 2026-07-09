@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 367,
-  manifest_id = "manifest-v367",
+  manifest_version = 368,
+  manifest_id = "manifest-v368",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 11761, hash = "75945f3a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "d06650a9", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "e9f1e066", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -92,6 +92,17 @@ return {
     { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "44a8e65d", optional=true, feature="speaker_alarm" },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "abe22b63", optional=true, feature="pocket_query", required_for={"MASTER"} },
+    -- Feature (2026-07-09): eigenstaendiges Pocket-Computer-Client-Skript.
+    -- Bewusst OHNE Auto-Installation -- Pocket Computer ist kein waehlbarer
+    -- Rollen-Typ im Installer, laeuft daher nie automatisch bei irgendeiner
+    -- Rollen-Installation mit ("manual install only", siehe Commit-Historie
+    -- der Datei). optional=true + leeres required_for={} sorgt dafuer,
+    -- dass es weder automatisch installiert noch als Auswahl-Prompt bei
+    -- IRGENDEINER Rolle auftaucht (siehe collect_optional_feature_names()
+    -- in installer/init.lua: required_for={} matched keine Rolle). Trotzdem
+    -- im Manifest gefuehrt, damit Groesse/Hash verifizierbar sind, falls
+    -- die Datei gezielt manuell heruntergeladen wird.
+    { path = "optional/pocket_client.lua", size_bytes = 10846, hash = "10601ed6", optional=true, feature="pocket_client", required_for={} },
     { path = "optional/master_ampel.lua", size_bytes = 6373, hash = "f3d68ef7", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 45750, hash = "89b29492", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
