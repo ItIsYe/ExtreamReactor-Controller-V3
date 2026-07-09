@@ -1,5 +1,6 @@
 local M = {}
 local mux = require("core.mockup_ui")
+local colorset = require("shared.colors")
 
 local DEFAULT_ROUTE_CONFIG_PATH = "/xreactor/config/fuel_routes.lua"
 local BUILTIN_SIDES = { "top", "bottom", "left", "right", "front", "back" }
@@ -172,8 +173,7 @@ function M:_render_tree(target, ui, w, h)
   mux.status_dot(target, 2, 3, string.format("VENTILE %d", self.redstone_router and self.redstone_router:valve_count() or 0), #tree > 0 and "OK" or "WARNING")
   if w >= 40 then mux.status_dot(target, math.floor(w * 0.35), 3, string.format("PFADE %d", #routes), #routes > 0 and "OK" or "LIMITED") end
 
-  local banner_text
-  local banner_key
+  local banner_text, banner_key
   if active.target then
     banner_text = "AKTIV -> " .. tostring(active.target) .. " VIA " .. table.concat(active.path or {}, " > ")
     banner_key = "OK"
@@ -201,7 +201,7 @@ function M:_render_tree(target, ui, w, h)
   local max_scroll = math.max(0, #rows - visible)
   u.scroll = math.max(0, math.min(u.scroll or 0, max_scroll))
 
-  ui.text(target, 4, body_top + 1, "ROOT / HAUPT-PIPE", "OK", "background")
+  ui.text(target, 4, body_top + 1, "ROOT / HAUPT-PIPE", colorset.get("OK"), colorset.get("background"))
   local y = first_y
   for i = u.scroll + 1, math.min(#rows, u.scroll + visible) do
     local row = rows[i]
@@ -213,7 +213,7 @@ function M:_render_tree(target, ui, w, h)
     local label = valve_label(node) .. " " .. tostring(node.label or node.reactor or "Ast")
     if node.reactor then label = label .. " -> " .. tostring(node.reactor) end
     if is_target then label = label .. (recent and " [LAST]" or " [ACTIVE]") end
-    ui.text(target, 4, y, mux.fit(prefix .. label, tree_w - 4), status, "background")
+    ui.text(target, 4, y, mux.fit(prefix .. label, tree_w - 4), colorset.get(status), colorset.get("background"))
     y = y + 1
   end
 
@@ -224,7 +224,7 @@ function M:_render_tree(target, ui, w, h)
   if max_scroll > 0 then
     local sy = body_top + body_h - 2
     local info = string.format("%d-%d/%d", u.scroll + 1, math.min(#rows, u.scroll + visible), #rows)
-    ui.text(target, 4, sy, info, "muted", "background")
+    ui.text(target, 4, sy, info, colorset.get("muted"), colorset.get("background"))
     ui.badge(target, math.max(4, tree_w - 12), sy, "UP", u.scroll > 0 and "LIMITED" or "OFFLINE")
     ui.badge(target, math.max(10, tree_w - 6), sy, "DN", u.scroll < max_scroll and "LIMITED" or "OFFLINE")
     u.scroll_up = u.scroll > 0 and { x1 = math.max(4, tree_w - 12), x2 = math.max(4, tree_w - 12) + 3, y = sy } or nil
@@ -314,7 +314,6 @@ function M:render(target, ui, colors)
   mux.clear(target)
   mux.header(target, { title = "REDSTONE ROUTING", node_id = "FUEL NODE", page = "4/4", status = page_status, icon = "network" })
   self:_render_mode_tabs(target, ui, w)
-
   if u.mode == "edit" then self:_render_edit(target, ui, w, h) else self:_render_tree(target, ui, w, h) end
   return mux.footer_nav(target, h, w, { center = u.mode == "tree" and "ROUTING TREE" or "ROUTER EDIT" })
 end
@@ -331,9 +330,7 @@ function M:handle_touch(x, y)
   end
 
   if hit(u.save_btn) then self:_do_save(); return true end
-  if hit(u.reset_btn) then
-    u.routes = {}; u.selected_side = nil; u.dirty = true; return true
-  end
+  if hit(u.reset_btn) then u.routes = {}; u.selected_side = nil; u.dirty = true; return true end
   for _, btn in ipairs(u.side_btns or {}) do
     if y == btn.y and x >= btn.x1 and x <= btn.x2 then
       if u.selected_side == btn.side and u.selected_int == btn.integrator then
