@@ -1,6 +1,6 @@
 # XReactor Controller V3 — Node-Dokumentation
 
-> Stand: v343 (2026-07-07)
+> Stand: v358 (2026-07-07)
 
 ## Systemübersicht
 

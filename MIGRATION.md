@@ -1,4 +1,4 @@
-# Migration Guide (aktueller Repo-Stand — v343)
+# Migration Guide (aktueller Repo-Stand — v358)
 
 ## Ziel
 Diese Migration beschreibt den **aktuellen Installer- und Repo-Stand** für ExtreamReactor-Controller-V3 auf dem `beta`-Branch, Stand Phase-1-bis-4-Rewrite + Auto-Update-Härtung + UI-Redesign (2026-07-07).
@@ -117,7 +117,7 @@ Diese Punkte waren zeitweise offen, sind aber inzwischen gefixt — hier geliste
 ---
 
 ## Abschlussbewertung dieses Dokuments
-Dieses Dokument beschreibt den **Ist-Stand nach dem Phase-1–4-Rewrite, der Auto-Update-Härtung und dem UI-Redesign** (v343). Es ersetzt den älteren Stage/Backup/Activate-Ansatz vollständig — dieser existiert im aktuellen Installer-Code nicht mehr.
+Dieses Dokument beschreibt den **Ist-Stand nach dem Phase-1–4-Rewrite, der Auto-Update-Härtung und dem UI-Redesign** (v358). Es ersetzt den älteren Stage/Backup/Activate-Ansatz vollständig — dieser existiert im aktuellen Installer-Code nicht mehr.
 
 Offen/nicht abgeschlossen:
 - Vollständige Migration der historischen Shutdown-Workflow-Guards von text-/tokenbasierten Prüfungen zu rein verhaltensbasierten Semantikprüfungen — dieser Punkt war bereits in einer früheren Version dieses Dokuments offen und wurde bislang nicht angefasst.
