@@ -178,7 +178,7 @@ end
 local function discover()
   local names
   local registry_devices
-  local monitor_entry = monitor_adapter.find(nil, "largest", 0.5, CONFIG.LOG_PREFIX)
+  local monitor_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
@@ -379,6 +379,25 @@ is_master_connected = function()
 end
 
 local function init()
+  -- Fix (2026-07-09): RT initialisiert den Monitor EINMAL DIREKT beim
+  -- Start (synchron, noch vor dem Event-Loop), FUEL verliess sich bisher
+  -- ausschliesslich auf den periodischen discover()-Callback ueber
+  -- discovery_service — falls der aus irgendeinem Grund verzoegert
+  -- startet oder der allererste Durchlauf fehlschlaegt, blieb devices.
+  -- monitor bis dahin nil und render_monitor()/render_ampel() hatten
+  -- nichts zum Zeichnen. Jetzt wie bei RT: sofortige, direkte Erst-
+  -- erkennung hier, discover() aktualisiert/bestaetigt das danach weiter
+  -- periodisch. Strategie ebenfalls wie RT auf "first" umgestellt (statt
+  -- "largest") fuer Konsistenz zwischen den Rollen.
+  local mon_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  devices.monitor = mon_entry and mon_entry.mon or nil
+  devices.monitor_name = mon_entry and mon_entry.name or nil
+  if not devices.monitor and term and type(term.current) == "function" then
+    devices.monitor = term.current(); devices.monitor_name = devices.monitor_name or "term"; devices.monitor_is_term = true
+  end
+  utils.log(CONFIG.LOG_PREFIX, "Monitor-Erstinit: " .. tostring(devices.monitor_name)
+    .. (devices.monitor and "" or " (KEIN Monitor gefunden!)"), devices.monitor and "INFO" or "WARN")
+
   services = service_manager.new({ log_prefix = "FUEL" })
   comms = comms_service.new({
     config = config, log_prefix = "FUEL", on_command = handle_command,

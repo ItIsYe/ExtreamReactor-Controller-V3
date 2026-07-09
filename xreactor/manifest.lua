@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 366,
-  manifest_id = "manifest-v366",
+  manifest_version = 367,
+  manifest_id = "manifest-v367",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 11761, hash = "75945f3a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "8aeae1f1", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "d06650a9", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -154,7 +154,7 @@ return {
     fuel = {
     { path = "nodes/fuel/config.lua", size_bytes = 6789, hash = "467f5506", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 3722, hash = "40524d32", required_for={"FUEL"} },
-    { path = "nodes/fuel/main.lua", size_bytes = 22693, hash = "d5fcfeba", required_for={"FUEL"} },
+    { path = "nodes/fuel/main.lua", size_bytes = 23976, hash = "a75252f4", required_for={"FUEL"} },
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 11871, hash = "acf7c9f1", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 21113, hash = "11b4ceb3", required_for={"FUEL","REPROCESSING"} },
