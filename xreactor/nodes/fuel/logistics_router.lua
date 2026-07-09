@@ -140,6 +140,13 @@ function M.new(opts)
       last_cycle    = nil,
       last_refresh  = 0,
       last_run_ts   = 0,
+      -- Feature (2026-07-08): current_request — anders als das kurze
+      -- Ventil-Fenster in redstone_router.lua (nur waehrend valve_open_ms
+      -- aktiv), umfasst dieser Status den GESAMTEN Entscheidungs- bis
+      -- Lieferzyklus fuer den Reaktor, der gerade aktiv beliefert wird.
+      -- Fachlich eindeutige Grundlage fuer die externe UI-Hervorhebung
+      -- (siehe get_current_request()).
+      current_request = nil,  -- { reactor_id, label, state="requesting"|"delivering"|nil }
     },
   }
   return setmetatable(self, { __index = M })
@@ -267,52 +274,74 @@ function M:_run_supply(cycle_log)
   if not bridge then return 0, 0 end
   local exported, errors = 0, 0
 
+  -- Fix (2026-07-08): Phase 1 -- ermitteln, WELCHE Reaktoren gerade Fuel
+  -- anfordern, OHNE sie schon zu beliefern. Vorher wurde stur in
+  -- Config-Reihenfolge beliefert; bei mehreren gleichzeitigen Requests
+  -- hatte einfach der zuerst in der Config stehende Reaktor Vorrang,
+  -- unabhaengig davon wie kritisch sein Fuellstand tatsaechlich war.
+  -- Jetzt: alle anfordernden Reaktoren sammeln, dann nach Prioritaet
+  -- sortieren (niedrigster Fuellstand zuerst -- passt zum "kein Reaktor
+  -- wird ausgehungert"-Grundprinzip). Reaktoren ohne reactor_id (Always-
+  -- Supply-Fallback, kein Fuellstand bekannt) werden NACH allen bekannten
+  -- Fuellstaenden eingeplant, in Config-Reihenfolge untereinander, da ihre
+  -- Dringlichkeit nicht vergleichbar ist.
+  local candidates = {}
   for _, r in ipairs(self._state.reactors) do
     if not r.inlet then
       self.warn_once("no_inlet:" .. r.label,
         "Logistics: no inlet configured for " .. r.label)
-      goto continue
-    end
-
-    -- Safety: fuel item must not be waste
-    if is_waste(r.item) then
+    elseif is_waste(r.item) then
       self.warn_once("waste_fuel:" .. r.item,
         "SAFETY BLOCK: item '" .. r.item .. "' is waste — cannot use as fuel supply")
-      goto continue
-    end
-
-    -- Determine if this reactor is requesting fuel
-    local requesting = false
-    local fuel_pct = nil
-
-    if r.reactor_id then
-      -- Fix (2026-07-08): netzwerkbasiert statt direkter Peripherie-Zugriff
-      -- (siehe read_reactor_fuel_from_network() oben).
-      local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
-      if fuel_amt and capacity and capacity > 0 then
-        fuel_pct = fuel_amt / capacity
-        requesting = fuel_pct < r.request_below
-        self.log("DEBUG", string.format(
-          "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
-          r.label, fuel_pct * 100, fuel_amt, capacity,
-          requesting and "YES" or "no"))
-      else
-        -- Keine (ausreichend frischen) Netzwerkdaten fuer diesen Reaktor
-        -- -> konservativ ueberspringen statt zu raten.
-        self.warn_once("fuel_read_fail:" .. r.label,
-          "Logistics: no fresh network fuel data for " .. r.label
-          .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
-        goto continue
-      end
     else
-      -- Keine reactor_id konfiguriert: fall back to always-supply mode (fill inlet)
-      -- This is less precise but works without any fuel-level data.
-      requesting = true
-      self.log("DEBUG", "Logistics: " .. r.label
-        .. " has no reactor_id — using always-supply mode")
+      local requesting, fuel_pct = false, nil
+      if r.reactor_id then
+        local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
+        if fuel_amt and capacity and capacity > 0 then
+          fuel_pct = fuel_amt / capacity
+          requesting = fuel_pct < r.request_below
+          self.log("DEBUG", string.format(
+            "Logistics: %s fuel=%.1f%% (%.0f/%.0f mB) request=%s",
+            r.label, fuel_pct * 100, fuel_amt, capacity,
+            requesting and "YES" or "no"))
+        else
+          self.warn_once("fuel_read_fail:" .. r.label,
+            "Logistics: no fresh network fuel data for " .. r.label
+            .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
+        end
+      else
+        requesting = true
+        self.log("DEBUG", "Logistics: " .. r.label
+          .. " has no reactor_id — using always-supply mode")
+      end
+      if requesting then
+        candidates[#candidates + 1] = { r = r, fuel_pct = fuel_pct, order = #candidates + 1 }
+      end
     end
+  end
 
-    if not requesting then goto continue end
+  table.sort(candidates, function(a, b)
+    -- Bekannter Fuellstand geht immer vor unbekanntem (Always-Supply).
+    if (a.fuel_pct ~= nil) ~= (b.fuel_pct ~= nil) then
+      return a.fuel_pct ~= nil
+    end
+    if a.fuel_pct and b.fuel_pct and a.fuel_pct ~= b.fuel_pct then
+      return a.fuel_pct < b.fuel_pct  -- niedrigster Fuellstand zuerst
+    end
+    return a.order < b.order  -- stabile Reihenfolge bei Gleichstand/beide unbekannt
+  end)
+
+  -- Phase 2: der Reihe nach tatsaechlich beliefern.
+  for _, cand in ipairs(candidates) do
+    local r, fuel_pct = cand.r, cand.fuel_pct
+
+    -- Feature (2026-07-08): current_request VOR dem eigentlichen Export
+    -- setzen (nicht erst waehrend des kurzen Ventil-Fensters) -- deckt den
+    -- kompletten Entscheidungs- bis Lieferzyklus ab, fachlich eindeutige
+    -- Grundlage fuer die UI-Hervorhebung (siehe get_summary()).
+    self._state.current_request = {
+      reactor_id = r.reactor_id, label = r.label, state = "requesting",
+    }
 
     -- Check ME availability
     local me_info, _ = safe_call(bridge.wrapped, "getItem", { name = r.item })
@@ -327,44 +356,48 @@ function M:_run_supply(cycle_log)
     local push = math.min(r.fill_amount, in_me - r.min_in_me)
     if push <= 0 then goto continue end
 
-    local cfg_l = self.config.logistics or self.config or {}
-    local rs    = self._state.rs_router
-    local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
+    do
+      local cfg_l = self.config.logistics or self.config or {}
+      local rs    = self._state.rs_router
+      local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
 
-    local moved = 0
-    local exp_ok = false
+      local moved = 0
+      local exp_ok = false
 
-    local function do_export()
-      local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
-        { name = r.item, count = push }, r.inlet.name)
-      if not ok then
-        self.warn_once("exp_err:" .. r.inlet.name,
-          "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
-        errors = errors + 1
-      else
-        moved   = type(result) == "number" and result or 0
-        exp_ok  = true
+      local function do_export()
+        self._state.current_request.state = "delivering"
+        local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
+          { name = r.item, count = push }, r.inlet.name)
+        if not ok then
+          self.warn_once("exp_err:" .. r.inlet.name,
+            "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
+          errors = errors + 1
+        else
+          moved   = type(result) == "number" and result or 0
+          exp_ok  = true
+        end
       end
-    end
 
-    if rs and rs:route_count() > 0 then
-      -- Redstone routing: open valve for THIS reactor, block all others
-      rs:route_and_act(r.label, do_export, valve_ms)
-    else
-      -- No redstone routing configured: export directly
-      do_export()
-    end
+      if rs and rs:route_count() > 0 then
+        -- Redstone routing: open valve for THIS reactor, block all others
+        rs:route_and_act(r.label, do_export, valve_ms)
+      else
+        -- No redstone routing configured: export directly
+        do_export()
+      end
 
-    if exp_ok and moved > 0 then
-      exported = exported + moved
-      local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
-      cycle_log[#cycle_log + 1] = string.format(
-        "ME→[%s]%s %s x%d via %s",
-        r.label, pct_str, r.item, moved, r.inlet.name)
+      if exp_ok and moved > 0 then
+        exported = exported + moved
+        local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
+        cycle_log[#cycle_log + 1] = string.format(
+          "ME→[%s]%s %s x%d via %s",
+          r.label, pct_str, r.item, moved, r.inlet.name)
+      end
     end
 
     ::continue::
   end
+  self._state.current_request = nil
   return exported, errors
 end
 
@@ -489,6 +522,11 @@ function M:get_summary()
     bridge         = s.bridge and s.bridge.name or nil,
     reactors       = reactor_status,
     waste_outlets  = #s.waste_outlets,
+    -- Feature (2026-07-08): current_request — siehe _run_supply() oben.
+    -- Deckt den ganzen Entscheidungs-/Lieferzyklus ab, nicht nur das kurze
+    -- Ventil-Fenster (das bleibt separat ueber rs_router:get_active_route()
+    -- verfuegbar, falls Redstone-Routing konfiguriert ist).
+    current_request = s.current_request,
     total_exported = s.total_exported,
     total_imported = s.total_imported,
     total_errors   = s.total_errors,
