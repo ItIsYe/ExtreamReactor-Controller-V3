@@ -103,6 +103,8 @@ function M.new(opts)
       side_btns = {}, reactor_btns = {}, save_btn = nil, reset_btn = nil,
       tree_btn = nil, edit_btn = nil,
       scroll = 0, scroll_up = nil, scroll_down = nil,
+      target = nil, ui = nil, colors = nil,
+      redrawing = false,
     },
   }
   self._ui.routes = load_routes(self.config_path)
@@ -142,6 +144,19 @@ function M:_active_route()
     if ok and type(route) == "table" then return route end
   end
   return {}
+end
+
+-- UI-only invalidation path: ui_router caches by the external FUEL model, while
+-- TREE/EDIT/scroll/selection live locally in this view. Re-render the current
+-- page immediately after a local interaction so the visible UI cannot lag behind
+-- a successful touch. Routing and persistence behavior are deliberately untouched.
+function M:_redraw()
+  local u = self._ui
+  if u.redrawing or not u.target or not u.ui then return end
+  u.redrawing = true
+  local ok, err = pcall(self.render, self, u.target, u.ui, u.colors)
+  u.redrawing = false
+  if not ok then self.log("WARN", "RouterUI redraw failed: " .. tostring(err)) end
 end
 
 function M:_render_mode_tabs(target, ui, w)
@@ -310,6 +325,7 @@ function M:render(target, ui, colors)
   local w, h = ui.getSize(target)
   if not w or not h then return end
   local u = self._ui
+  u.target, u.ui, u.colors = target, ui, colors
   local page_status = u.mode == "edit" and u.dirty and "LIMITED" or "OK"
   mux.clear(target)
   mux.header(target, { title = "REDSTONE ROUTING", node_id = "FUEL NODE", page = "4/4", status = page_status, icon = "network" })
@@ -321,23 +337,55 @@ end
 function M:handle_touch(x, y)
   local u = self._ui
   local function hit(b) return b and y == b.y and x >= b.x1 and x <= b.x2 end
-  if hit(u.tree_btn) then u.mode = "tree"; return true end
-  if hit(u.edit_btn) then u.mode = "edit"; return true end
+
+  if hit(u.tree_btn) then
+    u.mode = "tree"
+    self:_redraw()
+    return true
+  end
+  if hit(u.edit_btn) then
+    u.mode = "edit"
+    self:_redraw()
+    return true
+  end
   if u.mode == "tree" then
-    if hit(u.scroll_up) then u.scroll = math.max(0, (u.scroll or 0) - 1); return true end
-    if hit(u.scroll_down) then u.scroll = (u.scroll or 0) + 1; return true end
+    if hit(u.scroll_up) then
+      u.scroll = math.max(0, (u.scroll or 0) - 1)
+      self:_redraw()
+      return true
+    end
+    if hit(u.scroll_down) then
+      u.scroll = (u.scroll or 0) + 1
+      self:_redraw()
+      return true
+    end
     return false
   end
 
-  if hit(u.save_btn) then self:_do_save(); return true end
-  if hit(u.reset_btn) then u.routes = {}; u.selected_side = nil; u.dirty = true; return true end
+  if hit(u.save_btn) then
+    self:_do_save()
+    self:_redraw()
+    return true
+  end
+  if hit(u.reset_btn) then
+    u.routes = {}
+    u.selected_side = nil
+    u.selected_int = nil
+    u.dirty = true
+    self:_redraw()
+    return true
+  end
   for _, btn in ipairs(u.side_btns or {}) do
     if y == btn.y and x >= btn.x1 and x <= btn.x2 then
       if u.selected_side == btn.side and u.selected_int == btn.integrator then
-        self:_remove(btn.side, btn.integrator); u.selected_side = nil; u.selected_int = nil
+        self:_remove(btn.side, btn.integrator)
+        u.selected_side = nil
+        u.selected_int = nil
       else
-        u.selected_side = btn.side; u.selected_int = btn.integrator
+        u.selected_side = btn.side
+        u.selected_int = btn.integrator
       end
+      self:_redraw()
       return true
     end
   end
@@ -345,7 +393,9 @@ function M:handle_touch(x, y)
     for _, btn in ipairs(u.reactor_btns or {}) do
       if y == btn.y and x >= btn.x1 and x <= btn.x2 then
         self:_assign(u.selected_side, u.selected_int, btn.id, btn.label)
-        u.selected_side = nil; u.selected_int = nil
+        u.selected_side = nil
+        u.selected_int = nil
+        self:_redraw()
         return true
       end
     end
