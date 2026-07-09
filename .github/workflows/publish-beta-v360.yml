@@ -1,0 +1,72 @@
+name: Publish beta v360 metadata
+
+on:
+  push:
+    branches: [beta]
+    paths:
+      - '.github/workflows/publish-beta-v360.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync-release-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout beta
+        uses: actions/checkout@v5
+        with:
+          ref: beta
+          fetch-depth: 0
+
+      - name: Set v360 release metadata
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          release = Path('xreactor/release.lua')
+          text = release.read_text(encoding='utf-8')
+          text = re.sub(r'release_id\s*=\s*"[^"]+"', 'release_id = "beta-v360"', text)
+          text = re.sub(r'manifest_id\s*=\s*"[^"]+"', 'manifest_id = "manifest-v360"', text)
+          text = re.sub(r'manifest_version\s*=\s*\d+', 'manifest_version = 360', text)
+          release.write_text(text, encoding='utf-8')
+
+          manifest = Path('xreactor/manifest.lua')
+          text = manifest.read_text(encoding='utf-8')
+          text = re.sub(r'^-- xreactor/manifest\.lua -- manifest-v\d+', '-- xreactor/manifest.lua -- manifest-v360', text, flags=re.M)
+          text = re.sub(r'manifest_version\s*=\s*\d+', 'manifest_version = 360', text, count=1)
+          text = re.sub(r'manifest_id\s*=\s*"[^"]+"', 'manifest_id = "manifest-v360"', text, count=1)
+          manifest.write_text(text, encoding='utf-8')
+
+      - name: Regenerate exact size and CRC32 metadata
+        run: python scripts/manifest_sync.py --write
+
+      - name: Validate manifest consistency
+        run: python scripts/manifest_sync.py
+
+      - name: Verify release metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          release = Path('xreactor/release.lua').read_text(encoding='utf-8')
+          manifest = Path('xreactor/manifest.lua').read_text(encoding='utf-8')
+          assert 'beta-v360' in release
+          assert 'manifest-v360' in release
+          assert 'manifest_version = 360' in release
+          assert 'manifest_id = "manifest-v360"' in manifest
+          assert 'manifest_version = 360' in manifest
+          print('v360 metadata verified')
+          PY
+
+      - name: Commit synchronized metadata
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add xreactor/manifest.lua xreactor/release.lua
+          if git diff --cached --quiet; then
+            echo "No metadata changes to commit"
+            exit 0
+          fi
+          git commit -m "chore(release): publish beta-v360 routing tree UI"
+          git push origin HEAD:beta
