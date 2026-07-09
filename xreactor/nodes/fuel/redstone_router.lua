@@ -1,26 +1,5 @@
 -- nodes/fuel/redstone_router.lua
---
 -- Tree-topology redstone valve routing for Mekanism pipe networks.
---
--- Physical topology example:
---
---   Haupt-Pipe
---     ├── [Ventil side="right"] Rechter Arm
---     │       ├── [Ventil side="top"]    Reaktor A  (reactor="RT-1")
---     │       └── [Ventil side="bottom"] Reaktor B  (reactor="RT-2")
---     └── [Ventil side="left"]  Linker Arm
---             ├── [Ventil side="front"]  Reaktor C  (reactor="RT-3")
---             └── [Ventil side="back"]   Reaktor D  (reactor="RT-4")
---
--- Routing to Reaktor A:
---   Open:  right, top
---   Block: left, bottom, front, back
---
--- Mekanism pipe mode: High Redstone = Interrupt
---   HIGH output → pipe BLOCKED
---   LOW  output → pipe OPEN (default)
---
--- Config (config.logistics.redstone_tree): recursive node tree.
 
 local M = {}
 
@@ -67,7 +46,15 @@ function M.new(opts)
     config = opts.config or {},
     log = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
-    _state = { all_valves = {}, integrators = {} },
+    _state = {
+      all_valves = {},
+      integrators = {},
+      active_target = nil,
+      active_path = nil,
+      last_target = nil,
+      last_path = nil,
+      last_active_ts = nil,
+    },
   }
   return setmetatable(self, { __index = M })
 end
@@ -134,6 +121,12 @@ function M:open_path_to(target_id)
 
   local sides = {}
   for _, v in ipairs(path) do sides[#sides + 1] = v.side end
+  self._state.active_target = target_id
+  self._state.active_path = sides
+  self._state.last_target = target_id
+  self._state.last_path = sides
+  self._state.last_active_ts = os.epoch and os.epoch("utc") or nil
+
   self.log("DEBUG", string.format("RedstoneRouter: routing to %s via [%s]", tostring(target_id), table.concat(sides, " → ")))
   return true
 end
@@ -147,26 +140,26 @@ function M:route_and_act(target_id, action_fn, valve_open_ms)
   if not ok then
     self.log("WARN", "RedstoneRouter: cannot route to " .. tostring(target_id))
     self:block_all()
+    self._state.active_target = nil
+    self._state.active_path = nil
     return
   end
   os.sleep(0.05)
   if action_fn then action_fn() end
   os.sleep((tonumber(valve_open_ms) or 2000) / 1000)
   self:block_all()
+  self._state.active_target = nil
+  self._state.active_path = nil
 end
 
 function M:valve_count()
   return #self._state.all_valves
 end
 
--- Compatibility/introspection: logistics_router already treats this as the number
--- of configured reactor routes. Keep it separate from valve_count(), because a
--- single reactor path can contain multiple valves.
 function M:route_count()
   return #self:get_routing_table()
 end
 
--- Expose the configured recursive topology read-only by convention for UI use.
 function M:get_tree()
   local cfg = self.config.logistics or self.config or {}
   return cfg.redstone_tree or {}
@@ -178,6 +171,16 @@ function M:get_path_to(target_id)
   local sides = {}
   for _, v in ipairs(path) do sides[#sides + 1] = v.side end
   return sides
+end
+
+function M:get_active_route()
+  return {
+    target = self._state.active_target,
+    path = self._state.active_path,
+    last_target = self._state.last_target,
+    last_path = self._state.last_path,
+    last_active_ts = self._state.last_active_ts,
+  }
 end
 
 function M:get_routing_table()
