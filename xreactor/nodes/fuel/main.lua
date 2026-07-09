@@ -28,6 +28,11 @@ local discovery_service = require("services.discovery_service")
 local ui_service = require("services.ui_service")
 local safety = require("core.safety")
 local non_rt_payload = require("core.non_rt_payload")
+-- Fix (2026-07-09): FUEL-Node rief das Ampel-Modul bisher ueberhaupt nie
+-- auf (RT/Energy tun das schon laenger) -- der 1x3-Ampel-Monitor blieb
+-- dadurch immer schwarz/inaktiv, egal wie er verkabelt war.
+local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
+local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 local support_discovery = require("nodes.support.discovery")
 local support_runtime = require("nodes.support.runtime")
 local role_logic = require("nodes.support.role_logic")
@@ -255,6 +260,21 @@ local function build_status_payload()
   return payload
 end
 
+-- Fix (2026-07-09): Ampel-Status fuer FUEL ableiten, analog zu rt_status()
+-- in nodes/rt/monitor_ui.lua. Master-Verbindung > aktive Fehler > kritisch
+-- niedriger Reaktor-Fuellstand > gerade aktive Lieferung > normal.
+local function fuel_ampel_status(model)
+  if model.master_state and model.master_state ~= "OK" then return "WARNING" end
+  local logistics = (model.payload and model.payload.logistics) or {}
+  if logistics.enabled == false then return "muted" end
+  if tonumber(logistics.total_errors or 0) > 0 then return "WARNING" end
+  for _, r in ipairs(logistics.reactors or {}) do
+    if type(r.fuel_pct) == "number" and r.fuel_pct < 10 then return "EMERGENCY" end
+  end
+  if logistics.current_request then return "LIMITED" end
+  return "OK"
+end
+
 local function render_monitor()
   if not devices.monitor then return end
   local mon = devices.monitor
@@ -286,6 +306,11 @@ local function render_monitor()
     })
   end
   monitor_router:render(mon, model)
+
+  pcall(function()
+    if not ampel_instance then return end
+    ampel_instance.render(devices.monitor_name, fuel_ampel_status(model))
+  end)
 end
 
 local function handle_monitor_touch(x, y)
