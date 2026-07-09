@@ -73,6 +73,12 @@ function M.tick(runtime)
   if profile_ops then
     profile_ops.sample_trends(runtime)
   end
+  -- Feature (2026-07-08): Reaktor-Fuellstand periodisch an FUEL-Nodes
+  -- weiterleiten (siehe master/fuel_relay.lua).
+  local fuel_relay = runtime.libs.fuel_relay
+  if fuel_relay then
+    fuel_relay.tick(runtime)
+  end
 end
 
 return M

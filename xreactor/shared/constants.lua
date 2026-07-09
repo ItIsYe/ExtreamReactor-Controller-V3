@@ -82,6 +82,11 @@ constants.command_targets = {
   SET_TARGET = "SET_TARGET",
   REQUEST_STARTUP_MODULE = "REQUEST_STARTUP_MODULE",
   REQUEST_SHUTDOWN_MODULE = "REQUEST_SHUTDOWN_MODULE",
+  -- Feature (2026-07-08): Master leitet den per RT-Status gesammelten
+  -- Reaktor-Fuellstand (fuel_amount/fuel_capacity je Reaktor) an FUEL-
+  -- Nodes weiter — die FUEL-Node hat selbst keinen Wired-Modem-Zugriff
+  -- auf die Reaktoren, nur aufs ME-System. Siehe master/fuel_relay.lua.
+  FUEL_STATUS = "FUEL_STATUS",
   -- TEMPORÄR: Remote-Update über alle Nodes, siehe core/remote_update.lua.
   REMOTE_UPDATE = "REMOTE_UPDATE"
 }

@@ -77,7 +77,13 @@ local CONFIG = {
     me_bridge          = "me_bridge",   -- AP 1.21.1+; "meBridge" on older
     --
     -- reactors: one entry per reactor.
-    --   reactor_port  = peripheral name of the ER2 Reactor Computer Port (Wired Modem)
+    --   reactor_id    = ID of the reactor as reported by its RT node's status
+    --                   (Fix 2026-07-08: FUEL has no Wired Modem link to the
+    --                   reactor itself, only to the ME system — fuel level
+    --                   comes via network relay from Master, see
+    --                   master/fuel_relay.lua, not a local peripheral read.
+    --                   Check the RT node's own log/dashboard for the exact
+    --                   reactor id string it reports.)
     --   inlet         = where to deliver fuel (transporter or chest — must be dedicated
     --                   to THIS reactor; no shared pipes for targeted delivery)
     --   item          = fuel item name
@@ -85,16 +91,16 @@ local CONFIG = {
     --   fill_amount   = how many items to export per resupply event
     --   min_in_me     = minimum ME stock to maintain (never export below this)
     --
-    -- Example (two reactors on Wired Modem network):
+    -- Example (two reactors, RT-reported fuel level, ME-connected delivery):
     -- { name          = "Reaktor A",
-    --   reactor_port  = "BigReactors-Reactor_0",
+    --   reactor_id    = "node-52-reactor-0",
     --   inlet         = "mekanism:ultimate_logistical_transporter_0",
     --   item          = "bigreactors:yellorium_ingot",
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
     -- { name          = "Reaktor B",
-    --   reactor_port  = "BigReactors-Reactor_1",
+    --   reactor_id    = "node-52-reactor-1",
     --   inlet         = "mekanism:ultimate_logistical_transporter_1",
     --   item          = "bigreactors:yellorium_ingot",
     --   request_below = 0.25,

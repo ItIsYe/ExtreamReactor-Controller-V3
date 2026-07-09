@@ -7,8 +7,15 @@
 --
 -- How it works:
 --   1. Each reactor has its own entry in config.logistics.reactors.
---   2. Every cycle: FUEL node reads getFuelAmount()/getFuelStats() directly
---      from the reactor's computer port peripheral (via Wired Modem).
+--   2. Every cycle: FUEL node reads the reactor's fuel level from the
+--      network-relayed status cache (see read_reactor_fuel_from_network())
+--      -- NOT from a local peripheral. FUEL has no Wired Modem link to the
+--      reactors themselves, only to the ME system. The RT node controlling
+--      each reactor already reads fuel level locally (it has the wired
+--      link) and reports it as part of its regular status update; Master
+--      relays this to FUEL nodes (master/fuel_relay.lua), with a fallback
+--      to directly overhearing RT's status broadcasts if Master hasn't
+--      relayed recently.
 --   3. If fuel_level / capacity < request_below → that reactor requests fuel.
 --   4. ME Bridge exports exactly the calculated amount to that reactor's
 --      dedicated inlet peripheral (transporter or chest).
@@ -16,7 +23,6 @@
 --
 -- Hardware requirements:
 --   - Wired Modem on the FUEL computer, connected to:
---       • Each reactor's ER2 Computer Port  (for fuel level polling)
 --       • Each reactor's dedicated inlet transporter/chest (for delivery)
 --   - Wireless Modem on the FUEL computer  (for MASTER communication)
 --   - ME Bridge accessible (wired or by name)
@@ -27,7 +33,14 @@
 --
 --   reactors = {
 --     { name              = "Reactor A",
---       reactor_port      = "BigReactors-Reactor_0",  -- ER2 computer port peripheral
+--       -- Fix (2026-07-08): FUEL-Node hat keinen Wired-Modem-Zugriff auf
+--       -- den Reaktor selbst (nur aufs ME-System via ME Bridge) -- der
+--       -- Fuellstand kommt stattdessen per Netzwerk (Master-Relay, siehe
+--       -- master/fuel_relay.lua, mit Fallback auf direktes Mithoeren der
+--       -- RT-Status-Broadcasts). reactor_id muss der ID entsprechen, die
+--       -- der zustaendige RT-Node fuer diesen Reaktor meldet (sichtbar
+--       -- z.B. im RT-Node-Log/Dashboard).
+--       reactor_id        = "node-52-reactor-0",
 --       inlet             = "mekanism:ultimate_logistical_transporter_0",
 --       item              = "bigreactors:yellorium_ingot",
 --       request_below     = 0.25,  -- request when fuel_level < 25% of capacity
@@ -69,36 +82,39 @@ local function is_transporter_name(name)
   return tostring(name or ""):lower():find("logistical_transporter", 1, true) ~= nil
 end
 
--- ---- reactor fuel level reading --------------------------------------------
+-- ---- reactor fuel level reading (network-based) ----------------------------
 
--- Read current fuel amount and capacity from an ER2 reactor computer port.
--- Returns: fuel_amount (mB), capacity (mB) or nil, nil on failure.
-local function read_reactor_fuel(reactor_wrapped)
-  -- Try getFuelStats() first (single call, returns table)
-  local stats, _ = safe_call(reactor_wrapped, "getFuelStats")
-  if type(stats) == "table" then
-    local amount   = type(stats.fuelAmount)   == "number" and stats.fuelAmount   or nil
-    local capacity = type(stats.fuelCapacity) == "number" and stats.fuelCapacity or nil
-    if amount and capacity then return amount, capacity end
+-- Fix (2026-07-08): CRITICAL architecture correction. Diese Funktion las
+-- bisher direkt von einem "reactor_port"-Peripheral -- die FUEL-Node hat
+-- aber KEINEN Wired-Modem-Zugriff auf die Reaktoren, nur aufs ME-System.
+-- Jede Nutzung dieser Funktion lief also faktisch immer in den Fallback
+-- "kein reactor_port konfiguriert" -> Always-Supply-Modus, ohne dass das
+-- je auffiel, weil FUEL bisher nie im Einsatz war (0 FUEL-Nodes in der
+-- Flotte). Jetzt: Fuellstand kommt aus dem netzwerkbasierten Cache
+-- (fuel_status_cache in nodes/fuel/main.lua), befuellt per Master-Relay
+-- (primaer) oder direktem Mithoeren der RT-Status-Broadcasts (Fallback,
+-- z.B. bei Master-Ausfall). Die juengere der beiden Quellen gewinnt; ist
+-- keine von beiden innerhalb von MAX_AGE_MS aktuell, gilt der Fuellstand
+-- als nicht lesbar (konservativ: Reaktor wird diesen Zyklus uebersprungen,
+-- statt zu raten -- exakt dasselbe Verhalten wie zuvor bei einem
+-- Peripherie-Lesefehler).
+local MAX_FUEL_DATA_AGE_MS = 30000
+
+local function read_reactor_fuel_from_network(fuel_status, reactor_id)
+  if not fuel_status or not reactor_id then return nil, nil end
+  local now = os.epoch("utc")
+  local best = nil
+  for _, source in ipairs({ fuel_status.master_relay, fuel_status.direct_heard }) do
+    local entry = source and source[reactor_id]
+    if entry and entry.ts and (now - entry.ts) <= MAX_FUEL_DATA_AGE_MS then
+      if not best or entry.ts > best.ts then best = entry end
+    end
   end
-  -- Fallback: individual calls (ER2 Reactor)
-  local amount,   _ = safe_call(reactor_wrapped, "getFuelAmount")
-  local capacity, _ = safe_call(reactor_wrapped, "getFuelAmountMax")
-  if type(amount) == "number" and type(capacity) == "number" then
-    return amount, capacity
+  if not best then return nil, nil end
+  if type(best.fuel_amount) ~= "number" or type(best.fuel_capacity) ~= "number" then
+    return nil, nil
   end
-  -- Generisches Sicherheitsnetz: falls ein reactor_port auf ein Peripheral
-  -- mit Waste- statt Fuel-API zeigt. NICHT für den Reprocessor gedacht —
-  -- der hat seit nodes/reprocessor/feed_router.lua einen eigenen Versorgungs-
-  -- weg ohne reactor_port und ohne Füllstand-Check (random-Intervall-
-  -- Befüllung, siehe feed_router.lua). Dieser Router hier wird aktuell
-  -- nur von der Fuel-Node genutzt.
-  local waste,     _ = safe_call(reactor_wrapped, "getWaste")
-  local max_waste, _ = safe_call(reactor_wrapped, "getMaxWaste")
-  if type(waste) == "number" and type(max_waste) == "number" then
-    return waste, max_waste
-  end
-  return nil, nil
+  return best.fuel_amount, best.fuel_capacity
 end
 
 -- ---- constructor -----------------------------------------------------------
@@ -110,6 +126,9 @@ function M.new(opts)
     log       = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
     external_rs_router = opts.rs_router or nil,  -- shared rs_router injected from main.lua
+    -- Feature (2026-07-08): netzwerkbasierter Fuellstand-Cache (siehe
+    -- read_reactor_fuel_from_network() oben), von main.lua injiziert.
+    fuel_status = opts.fuel_status or { master_relay = {}, direct_heard = {} },
     _state = {
       bridge        = nil,
       reactors      = {},   -- { name, label, reactor, inlet, item, cfg }
@@ -151,21 +170,14 @@ function M:refresh_peripherals()
   for i, entry in ipairs(cfg.reactors or {}) do
     local label = entry.name or ("Reactor " .. i)
 
-    -- Reactor computer port (for fuel level polling)
-    local reactor_port = nil
-    if entry.reactor_port and peripheral.isPresent(entry.reactor_port) then
-      local ok, w = pcall(peripheral.wrap, entry.reactor_port)
-      if ok and w then
-        reactor_port = { name = entry.reactor_port, wrapped = w }
-      else
-        self.warn_once("reactor_wrap_" .. i,
-          "Logistics: reactor port wrap failed: " .. entry.reactor_port)
-      end
-    elseif entry.reactor_port then
-      self.warn_once("reactor_absent_" .. i,
-        "Logistics: reactor port absent: " .. entry.reactor_port
-        .. " (needs Wired Modem connection)")
-    end
+    -- Fix (2026-07-08): kein Wired-Peripherie-Zugriff mehr auf den Reaktor
+    -- selbst -- nur noch die ID merken, unter der der zustaendige RT-Node
+    -- diesen Reaktor im Netzwerk meldet (siehe read_reactor_fuel_from_
+    -- network() oben). entry.reactor_port (alt) wird als Fallback-Alias
+    -- akzeptiert, falls jemand eine alte Config noch nicht umbenannt hat --
+    -- der Wert wird dann einfach als reactor_id interpretiert, es wird
+    -- aber KEIN Peripheral mehr gewrapped.
+    local reactor_id = entry.reactor_id or entry.reactor_port
 
     -- Inlet: dedicated transporter or chest for THIS reactor
     local inlet = nil
@@ -187,7 +199,7 @@ function M:refresh_peripherals()
 
     reactors[#reactors + 1] = {
       label        = label,
-      reactor      = reactor_port,
+      reactor_id   = reactor_id,
       inlet        = inlet,
       item         = entry.item or "",
       request_below = tonumber(entry.request_below) or 0.25,
@@ -273,9 +285,10 @@ function M:_run_supply(cycle_log)
     local requesting = false
     local fuel_pct = nil
 
-    if r.reactor then
-      -- Direct reading via Wired Modem: most accurate
-      local fuel_amt, capacity = read_reactor_fuel(r.reactor.wrapped)
+    if r.reactor_id then
+      -- Fix (2026-07-08): netzwerkbasiert statt direkter Peripherie-Zugriff
+      -- (siehe read_reactor_fuel_from_network() oben).
+      local fuel_amt, capacity = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
       if fuel_amt and capacity and capacity > 0 then
         fuel_pct = fuel_amt / capacity
         requesting = fuel_pct < r.request_below
@@ -284,17 +297,19 @@ function M:_run_supply(cycle_log)
           r.label, fuel_pct * 100, fuel_amt, capacity,
           requesting and "YES" or "no"))
       else
-        -- Reactor port present but can't read level → be conservative, skip
+        -- Keine (ausreichend frischen) Netzwerkdaten fuer diesen Reaktor
+        -- -> konservativ ueberspringen statt zu raten.
         self.warn_once("fuel_read_fail:" .. r.label,
-          "Logistics: cannot read fuel level for " .. r.label .. " — skipping")
+          "Logistics: no fresh network fuel data for " .. r.label
+          .. " (reactor_id=" .. tostring(r.reactor_id) .. ") — skipping")
         goto continue
       end
     else
-      -- No reactor_port configured: fall back to always-supply mode (fill inlet)
-      -- This is less precise but works without direct peripheral access.
+      -- Keine reactor_id konfiguriert: fall back to always-supply mode (fill inlet)
+      -- This is less precise but works without any fuel-level data.
       requesting = true
       self.log("DEBUG", "Logistics: " .. r.label
-        .. " has no reactor_port — using always-supply mode")
+        .. " has no reactor_id — using always-supply mode")
     end
 
     if not requesting then goto continue end
@@ -457,16 +472,16 @@ function M:get_summary()
   local reactor_status = {}
   for _, r in ipairs(s.reactors) do
     local fuel_pct = nil
-    if r.reactor then
-      local amt, cap = read_reactor_fuel(r.reactor.wrapped)
+    if r.reactor_id then
+      local amt, cap = read_reactor_fuel_from_network(self.fuel_status, r.reactor_id)
       if amt and cap and cap > 0 then fuel_pct = math.floor(amt / cap * 100) end
     end
     reactor_status[#reactor_status + 1] = {
       label         = r.label,
       fuel_pct      = fuel_pct,
       inlet         = r.inlet and r.inlet.name or nil,
-      reactor_port  = r.reactor and r.reactor.name or nil,
-      connected     = r.reactor ~= nil and r.inlet ~= nil,
+      reactor_id    = r.reactor_id,
+      connected     = r.reactor_id ~= nil and r.inlet ~= nil,
     }
   end
   return {

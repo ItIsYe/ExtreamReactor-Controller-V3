@@ -26,6 +26,7 @@ local function run_master()
   local monitor_ops         = require("master.runtime_ops_monitor")
   local profile_ops         = require("master.runtime_ops_profile")
   local rt_ops              = require("master.runtime_ops_rt")
+  local fuel_relay           = require("master.fuel_relay")
   local message_handlers    = require("master.message_handlers")
   local profiles            = require("master.profiles")
   local sequencer_lib       = require("master.startup_sequencer")
@@ -72,7 +73,7 @@ local function run_master()
     constants = constants, utils = utils, health = health, ui = ui,
     profiles = profiles, rt_sync = rt_sync,
     rt_sync_coalescer = rt_sync_coalescer_lib,
-    rt_ops = rt_ops, profile_ops = profile_ops
+    rt_ops = rt_ops, profile_ops = profile_ops, fuel_relay = fuel_relay
   }
 
   local function mark_rt_sync_dirty(node, reason)

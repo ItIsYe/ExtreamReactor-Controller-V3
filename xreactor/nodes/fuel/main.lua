@@ -78,6 +78,18 @@ local fuel_health = health.new({})
 local storage
 local router
 local rs_router_instance
+-- Feature (2026-07-08): Reaktor-Fuellstand kommt NICHT mehr per Wired-Modem
+-- direkt vom Reaktor (FUEL hat keinen Zugriff darauf, nur aufs ME-System) —
+-- stattdessen: primaer per Master-Relay (siehe master/fuel_relay.lua,
+-- FUEL_STATUS-Kommando), mit Fallback auf direktes Mithoeren der RT->Master
+-- Status-Broadcasts falls Master laengere Zeit nicht mehr relayed hat
+-- (z.B. Master-Ausfall). Beide Quellen tragen ihre eigene Frische (ts) und
+-- werden in logistics_router:read_reactor_fuel_from_network() zusammen-
+-- gefuehrt (juengste gewinnt, mit Max-Alter-Schwelle).
+local fuel_status_cache = {
+  master_relay = {},   -- [reactor_id] = { fuel_amount, fuel_capacity, ts }
+  direct_heard = {},   -- [reactor_id] = { fuel_amount, fuel_capacity, ts }
+}
 local router_ui_instance
 local devices = {
   monitor = nil, monitor_name = nil, storage_name = nil, discovery_failed = false,
@@ -120,6 +132,7 @@ local function get_router()
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
       rs_router = get_rs_router(),
+      fuel_status = fuel_status_cache,
     })
   end
   return router
@@ -135,7 +148,7 @@ local function get_router_ui()
         local list, seen = {}, {}
         local lg = config.logistics or {}
         for _, entry in ipairs(lg.reactors or {}) do
-          local label = entry.name or entry.label or entry.reactor_port or "?"
+          local label = entry.name or entry.label or entry.reactor_id or entry.reactor_port or "?"
           local id = entry.label or entry.name or label
           if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
         end
@@ -291,6 +304,24 @@ local function handle_command(message)
       utils.log("FUEL", "SET_RESERVE rejected: invalid value=" .. tostring(command.value), "WARN")
       return support_command_handler.finish_with_result(devices, { ok = false, error = "invalid reserve value", reason_code = "INVALID_VALUE" })
     end
+  elseif command.target == constants.command_targets.FUEL_STATUS then
+    -- Feature (2026-07-08): Master-Relay des Reaktor-Fuellstands (siehe
+    -- master/fuel_relay.lua). value = { [reactor_id] = { fuel_amount,
+    -- fuel_capacity, label, source_node, ts } }.
+    if type(command.value) == "table" then
+      local now = os.epoch("utc")
+      for reactor_id, entry in pairs(command.value) do
+        if type(entry) == "table" then
+          fuel_status_cache.master_relay[reactor_id] = {
+            fuel_amount = entry.fuel_amount,
+            fuel_capacity = entry.fuel_capacity,
+            ts = now,  -- lokale Empfangszeit, nicht die von Master gemeldete —
+                       -- so bleibt die Frischepruefung unabhaengig von evtl.
+                       -- abweichenden Uhren zwischen den Computern.
+          }
+        end
+      end
+    end
   elseif command.target == constants.command_targets.MODE and command.value == constants.node_states.MANUAL then
   else
     return support_command_handler.reject_unsupported(devices)
@@ -345,4 +376,31 @@ end
 
 init()
 services:add({ name = "router_touch", tick = function(dt, event) if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then handle_monitor_touch(event[3], event[4]) end end })
+
+-- Feature (2026-07-08): Fallback-Pfad fuer den Reaktor-Fuellstand, falls
+-- Master laengere Zeit nicht relayed hat (z.B. Master-Ausfall). Der
+-- STATUS-Kanal (6501) ist auf jedem Node ohnehin schon geoeffnet (siehe
+-- core/network.lua open_modem()) — hier wird er zusaetzlich passiv
+-- mitgehoert, ohne selbst etwas zu senden. RT-Status-Broadcasts, die
+-- eigentlich an MASTER gerichtet sind, werden dabei ignoriert von allen
+-- die nicht danach suchen; wir lesen hier nur mit, senden nichts.
+services:add({ name = "fuel_status_overhear", tick = function(dt, event)
+  if not (event and event[1] == "modem_message") then return end
+  local message = event[5]
+  if type(message) ~= "table" then return end
+  if message.type ~= constants.message_types.STATUS then return end
+  if message.role ~= constants.roles.RT_NODE then return end
+  local reactors = message.payload and message.payload.reactors
+  if type(reactors) ~= "table" then return end
+  local now = os.epoch("utc")
+  for _, r in ipairs(reactors) do
+    if type(r) == "table" and r.id and (r.fuel_amount ~= nil or r.fuel_capacity ~= nil) then
+      fuel_status_cache.direct_heard[r.id] = {
+        fuel_amount = r.fuel_amount,
+        fuel_capacity = r.fuel_capacity,
+        ts = now,
+      }
+    end
+  end
+end })
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() get_router():tick() end)
