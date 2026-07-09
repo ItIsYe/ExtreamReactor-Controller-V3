@@ -5,9 +5,9 @@
 -- Hintergrund (2026-07-09): der "Integrator" an diesem Pipe-Netz ist bei
 -- diesem Setup selbst ein CC:Tweaked-Computer -- kein direkt am FUEL-
 -- Computer gewrapptes Mekanism-Peripheral. Er sitzt physisch am Ventil,
--- hat KEIN Wired Modem zu FUEL, sondern wird per Wireless Modem ueber den
--- normalen CONTROL-Kanal angesprochen (Kommando SET_VALVE, direkt von
--- FUEL gesendet, siehe nodes/fuel/redstone_router.lua). Bewusst extrem
+-- hat KEIN Wired Modem zu FUEL, sondern wird per Wireless Modem ueber
+-- einen eigenen, dedizierten Kanal angesprochen (Kommando SET_VALVE,
+-- direkt von FUEL gesendet, siehe nodes/fuel/redstone_router.lua). Bewusst extrem
 -- schlank gehalten -- kein Monitor, keine Peripherie-Discovery, keine
 -- komplexe UI. Registriert sich aber ganz normal per HELLO/Heartbeat wie
 -- jeder andere Node, damit FUEL/Master es automatisch als online
@@ -89,26 +89,49 @@ end
 -- Verbindung zu FUEL/Master ueberhaupt steht.
 apply_valve(current_high)
 
-local function handle_command(message)
-  local command = message and message.payload and message.payload.command
-  if not command then return end
-  if command.target == constants.command_targets.SET_VALVE then
-    local high = command.value and command.value.high
-    if type(high) ~= "boolean" then
-      utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltiges 'high' ignoriert", "WARN")
-      return
-    end
-    last_command_ts = os.epoch("utc")
-    apply_valve(high)
+-- Feature (2026-07-09): FUEL<->VALVE Ventil-Kommandos laufen ueber einen
+-- EIGENEN, dedizierten Kanal (constants.channels.VALVE = 6504) -- explizit
+-- getrennt von CONTROL/STATUS/LOG, auf Wunsch komplett unabhaengig von der
+-- normalen comms_service-Pipeline (kein Ack/Retry/Dedup-Overhead, roh per
+-- modem.transmit/pullEvent fuer minimale Latenz). HELLO/Heartbeat (fuer
+-- Auto-Discovery durch FUEL) laufen weiterhin normal ueber comms_service/
+-- CONTROL+STATUS wie bei jedem anderen Node -- nur die eigentlichen
+-- Ventil-Kommandos sind isoliert.
+local valve_modem = peripheral.find("modem", function(_, m) return m.isWireless and m.isWireless() end)
+if valve_modem then
+  local ok_open = pcall(valve_modem.open, constants.channels.VALVE)
+  if ok_open then
+    utils.log(CONFIG.LOG_PREFIX, "Eigener Ventil-Kanal " .. constants.channels.VALVE .. " geoeffnet", "INFO")
+  else
+    utils.log(CONFIG.LOG_PREFIX, "Ventil-Kanal " .. constants.channels.VALVE .. " konnte nicht geoeffnet werden", "ERROR")
   end
+else
+  utils.log(CONFIG.LOG_PREFIX, "Kein Wireless Modem gefunden — Ventil-Kanal inaktiv", "ERROR")
+end
+
+local function handle_valve_channel_event(event)
+  if event[1] ~= "modem_message" then return end
+  local channel, _, message = event[2], event[3], event[4]
+  if channel ~= constants.channels.VALVE then return end
+  if type(message) ~= "table" or message.type ~= "SET_VALVE" then return end
+  if message.dst ~= node_id then return end  -- nicht fuer diese Node bestimmt
+  if type(message.high) ~= "boolean" then
+    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltiges 'high' ignoriert", "WARN")
+    return
+  end
+  last_command_ts = os.epoch("utc")
+  apply_valve(message.high)
 end
 
 local comms = comms_service.new({
-  config = config, log_prefix = CONFIG.LOG_PREFIX, on_command = handle_command,
+  config = config, log_prefix = CONFIG.LOG_PREFIX,
 })
 
 local services = service_manager.new()
 services:add(comms)
+services:add({ name = "valve_channel", tick = function(dt, event)
+  if event then handle_valve_channel_event(event) end
+end })
 
 -- Fail-Safe: kein SET_VALVE-Kommando seit laengerer Zeit (deutlich mehr
 -- als der normale Ventil-Öffnungs-Zyklus) -> zurueck in den blockierten

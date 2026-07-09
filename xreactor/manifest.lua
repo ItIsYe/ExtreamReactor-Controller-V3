@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 364,
-  manifest_id = "manifest-v364",
+  manifest_version = 365,
+  manifest_id = "manifest-v365",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,10 +14,10 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 11761, hash = "75945f3a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "3ff38341", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "657f3219", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
-  { path = "shared/constants.lua", size_bytes = 4039, hash = "1657aef4", always=true },
+  { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
     { path = "core/mockup_ui.lua", size_bytes = 9963, hash = "4456b076", always=true },
   { path = "adapters/monitor.lua", size_bytes = 6611, hash = "34f32460" },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38" },
@@ -158,7 +158,7 @@ return {
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 11871, hash = "acf7c9f1", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 21113, hash = "11b4ceb3", required_for={"FUEL","REPROCESSING"} },
-    { path = "nodes/fuel/redstone_router.lua", size_bytes = 16435, hash = "b997357a", required_for={"FUEL","REPROCESSING"} },
+    { path = "nodes/fuel/redstone_router.lua", size_bytes = 16934, hash = "cbf2b52b", required_for={"FUEL","REPROCESSING"} },
     { path = "nodes/fuel/router_ui.lua", size_bytes = 16766, hash = "cc83b468", required_for={"FUEL","REPROCESSING"} },
     },
     reprocessing = {
@@ -170,7 +170,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 1527, hash = "08ff10c7", required_for={"VALVE"} },
-    { path = "nodes/valve/main.lua", size_bytes = 6262, hash = "e26f1d58", required_for={"VALVE"} },
+    { path = "nodes/valve/main.lua", size_bytes = 7586, hash = "f8946960", required_for={"VALVE"} },
     },
     log = {
     { path = "nodes/log_collector/main.lua", size_bytes = 41528, hash = "715fb952", required_for={"LOG"} },

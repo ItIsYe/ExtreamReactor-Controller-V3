@@ -161,15 +161,23 @@ end
 
 function M.new(opts)
   opts = opts or {}
+  -- Feature (2026-07-09): eigener, dedizierter Funkkanal fuer SET_VALVE
+  -- (constants.channels.VALVE = 6504), bewusst getrennt von der normalen
+  -- comms_service-Pipeline (kein CONTROL/STATUS-Traffic) -- roh per
+  -- modem.transmit, kein Ack/Retry-Overhead.
+  local valve_modem = nil
+  local ok_find, m = pcall(peripheral.find, "modem", function(_, mm) return mm.isWireless and mm.isWireless() end)
+  if ok_find and m then
+    valve_modem = m
+    pcall(valve_modem.open, constants.channels.VALVE)
+  end
   local self = {
     config = opts.config or {},
     log = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
-    -- Feature (2026-07-09): fuer netzwerkbasierte VALVE-Nodes (siehe
-    -- nodes/valve/main.lua) -- wenn gesetzt, werden Integratoren, die
-    -- als bekannter/erreichbarer Peer erkannt werden, per SET_VALVE-
-    -- Kommando angesprochen statt per lokalem peripheral.wrap().
+    -- Fuer Auto-Discovery erreichbarer VALVE-Nodes (siehe refresh()).
     comms = opts.comms or nil,
+    valve_modem = valve_modem,
     _state = {
       all_valves = {},
       integrators = {},
@@ -252,15 +260,18 @@ function M:_set_valve(valve, high)
   if valve.integrator then
     local w = self._state.integrators[valve.integrator]
     if w and w.network then
-      -- Feature (2026-07-09): VALVE-Node per Funk ansprechen. Fire-and-
-      -- forget mit Ack/Retry im Hintergrund (siehe comms_service:send_
-      -- command) -- wir warten hier NICHT synchron auf die Bestaetigung,
-      -- da das den ganzen Logistics-Zyklus blockieren wuerde. route_and_
-      -- act() legt nach dem Oeffnen bereits eine kurze Pause ein, die dem
-      -- Funkbefehl Zeit zum Ankommen gibt.
-      local ok = self.comms and pcall(function()
-        self.comms:send_command(w.node_id, { target = constants.command_targets.SET_VALVE, value = { high = high } })
-      end)
+      -- Feature (2026-07-09): eigener Funkkanal statt der normalen
+      -- comms_service-Pipeline (siehe M.new() oben) -- rohes
+      -- modem.transmit, fire-and-forget (kein Ack/Retry). Gelegentlich
+      -- verlorene Pakete sind unkritisch: der naechste Logistics-Zyklus
+      -- versucht es einfach erneut, und die VALVE-Node faellt nach 20s
+      -- ohne Kommando ohnehin in den blockierten Fail-Safe-Zustand.
+      if not self.valve_modem then
+        self.warn_once("no_valve_modem", "RedstoneRouter: kein Wireless Modem fuer den Ventil-Kanal gefunden")
+        return false
+      end
+      local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE,
+        { type = "SET_VALVE", dst = w.node_id, high = high })
       if not ok then
         self.warn_once("valve_net_fail:" .. valve.integrator,
           "RedstoneRouter: SET_VALVE an " .. valve.integrator .. " konnte nicht gesendet werden")

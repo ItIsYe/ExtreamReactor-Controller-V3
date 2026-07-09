@@ -93,10 +93,6 @@ constants.command_targets = {
   -- Nodes weiter — die FUEL-Node hat selbst keinen Wired-Modem-Zugriff
   -- auf die Reaktoren, nur aufs ME-System. Siehe master/fuel_relay.lua.
   FUEL_STATUS = "FUEL_STATUS",
-  -- Feature (2026-07-09): FUEL -> VALVE-Node direkt (Peer-zu-Peer ueber
-  -- den gemeinsamen CONTROL-Kanal, kein Master-Umweg -- Latenz ist beim
-  -- kurzen Ventil-Fenster relevant). value = { high = bool }.
-  SET_VALVE = "SET_VALVE",
   -- TEMPORÄR: Remote-Update über alle Nodes, siehe core/remote_update.lua.
   REMOTE_UPDATE = "REMOTE_UPDATE"
 }
@@ -104,8 +100,14 @@ constants.command_targets = {
 constants.channels = {
   CONTROL = 6500,
   STATUS  = 6501,
-  LOG     = 6503   -- separater Kanal; Log-Traffic laeuft ueber Wired-Modem
-                   -- getrennt vom Control/Status-Traffic (6500/6501 via Ender-Modem)
+  LOG     = 6503,  -- separater Kanal; Log-Traffic laeuft ueber Wired-Modem
+                    -- getrennt vom Control/Status-Traffic (6500/6501 via Ender-Modem)
+  -- Feature (2026-07-09): eigener, dedizierter Kanal fuer FUEL<->VALVE
+  -- Ventil-Kommandos, bewusst getrennt von CONTROL/STATUS/LOG. Laeuft
+  -- ausserhalb der normalen comms_service-Pipeline (siehe nodes/valve/
+  -- main.lua und nodes/fuel/redstone_router.lua) -- kein Ack/Retry-
+  -- Overhead, reines rohes modem.transmit/pullEvent fuer minimale Latenz.
+  VALVE   = 6504,
 }
 
 return constants
