@@ -129,7 +129,7 @@ local comms = comms_service.new({
 
 local services = service_manager.new()
 services:add(comms)
-services:add({ name = "valve_channel", tick = function(dt, event)
+services:add({ name = "valve_channel", tick = function(_self, dt, event)
   if event then handle_valve_channel_event(event) end
 end })
 

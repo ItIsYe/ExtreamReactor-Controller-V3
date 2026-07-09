@@ -375,5 +375,5 @@ local function init()
 end
 
 init()
-services:add({ name = "router_touch", tick = function(dt, event) if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then handle_monitor_touch(event[3], event[4]) end end })
+services:add({ name = "router_touch", tick = function(_self, dt, event) if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then handle_monitor_touch(event[3], event[4]) end end })
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() balance_loop(); manage_clusters() end)

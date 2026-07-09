@@ -278,6 +278,27 @@ local function fuel_ampel_status(model)
   return "OK"
 end
 
+-- Fix (2026-07-09): CRITICAL. render_monitor() brach bisher ganz am
+-- Anfang ab ("if not devices.monitor then return end"), BEVOR der
+-- Ampel-Aufruf (der bisher am Ende derselben Funktion sass) je erreicht
+-- wurde. Wenn also (noch) kein separater Hauptmonitor verkabelt ist --
+-- z.B. weil bisher nur die Ampel angeschlossen wurde -- rendert WEDER
+-- die Haupt-UI NOCH die Ampel, obwohl die Ampel-Erkennung selbst
+-- komplett unabhaengig vom Hauptmonitor laeuft. Jetzt eigenstaendige
+-- Funktion, die unabhaengig von devices.monitor aufgerufen wird.
+local function render_ampel()
+  if not ampel_instance then return end
+  pcall(function()
+    local payload = build_status_payload()
+    local peer = master_peer_state()
+    local model = {
+      master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN",
+      payload = payload,
+    }
+    ampel_instance.render(devices.monitor_name, fuel_ampel_status(model))
+  end)
+end
+
 local function render_monitor()
   if not devices.monitor then return end
   local mon = devices.monitor
@@ -309,11 +330,6 @@ local function render_monitor()
     })
   end
   monitor_router:render(mon, model)
-
-  pcall(function()
-    if not ampel_instance then return end
-    ampel_instance.render(devices.monitor_name, fuel_ampel_status(model))
-  end)
 end
 
 local function handle_monitor_touch(x, y)
@@ -387,6 +403,18 @@ local function init()
     render = render_monitor,
     handle_input = function(event) if monitor_router then monitor_router:handle_input(event) end end
   }))
+  -- Fix (2026-07-09): eigener, von der Haupt-UI unabhaengiger Tick fuer
+  -- die Ampel (siehe render_ampel() oben) -- laeuft auch wenn (noch)
+  -- kein Hauptmonitor gefunden wurde. ampel_instance.render() hat sein
+  -- eigenes internes Caching (max. alle 30s ein Rescan, Redraw nur bei
+  -- Farbwechsel), daher ist ein Aufruf bei jedem Tick unproblematisch.
+  local ampel_tick_acc = 0
+  services:add({ name = "ampel_render", tick = function(_self, dt)
+    ampel_tick_acc = ampel_tick_acc + (tonumber(dt) or 0.5)
+    if ampel_tick_acc < 1 then return end
+    ampel_tick_acc = 0
+    render_ampel()
+  end })
   services:init()
   hello()
   local ok_report_mod, report_mod = pcall(require, "core.startup_report")
@@ -403,7 +431,7 @@ local function init()
 end
 
 init()
-services:add({ name = "router_touch", tick = function(dt, event) if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then handle_monitor_touch(event[3], event[4]) end end })
+services:add({ name = "router_touch", tick = function(_self, dt, event) if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then handle_monitor_touch(event[3], event[4]) end end })
 
 -- Feature (2026-07-08): Fallback-Pfad fuer den Reaktor-Fuellstand, falls
 -- Master laengere Zeit nicht relayed hat (z.B. Master-Ausfall). Der
@@ -412,7 +440,7 @@ services:add({ name = "router_touch", tick = function(dt, event) if event and (e
 -- mitgehoert, ohne selbst etwas zu senden. RT-Status-Broadcasts, die
 -- eigentlich an MASTER gerichtet sind, werden dabei ignoriert von allen
 -- die nicht danach suchen; wir lesen hier nur mit, senden nichts.
-services:add({ name = "fuel_status_overhear", tick = function(dt, event)
+services:add({ name = "fuel_status_overhear", tick = function(_self, dt, event)
   if not (event and event[1] == "modem_message") then return end
   local message = event[5]
   if type(message) ~= "table" then return end
