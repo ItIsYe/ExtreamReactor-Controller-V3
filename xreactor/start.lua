@@ -11,6 +11,9 @@ local ROLE_ENTRY = {
   ENERGY        = INSTALL_ROOT .. "/nodes/energy/main.lua",
   WATER         = INSTALL_ROOT .. "/nodes/water/main.lua",
   FUEL          = INSTALL_ROOT .. "/nodes/fuel/main.lua",
+  -- Feature (2026-07-09): eigenstaendiger Redstone-Valve-Controller,
+  -- siehe nodes/valve/main.lua.
+  VALVE         = INSTALL_ROOT .. "/nodes/valve/main.lua",
   REPROCESSING  = INSTALL_ROOT .. "/nodes/reprocessor/main.lua",
   LOG           = INSTALL_ROOT .. "/nodes/log_collector/mockup_main.lua",
   LOG_COLLECTOR = INSTALL_ROOT .. "/nodes/log_collector/mockup_main.lua",

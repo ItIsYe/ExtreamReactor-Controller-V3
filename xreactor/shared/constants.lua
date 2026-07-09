@@ -8,7 +8,13 @@ constants.roles = {
   WATER_NODE = "WATER-NODE",
   REPROCESSOR_NODE = "REPROCESSOR-NODE",
   LOG = "LOG",
-  LOG_COLLECTOR = "LOG_COLLECTOR"
+  LOG_COLLECTOR = "LOG_COLLECTOR",
+  -- Feature (2026-07-09): eigenstaendiger Redstone-Valve-Controller
+  -- (physischer Integrator ist bei diesem Setup selbst ein CC:Tweaked-
+  -- Computer, der per Wireless Modem angesteuert wird und lokal
+  -- redstone.setOutput() schaltet -- kein direkt gewraptes Peripheral am
+  -- FUEL-Computer). Untergeordnet zu FUEL (siehe installer role select).
+  VALVE_NODE = "VALVE-NODE",
 }
 
 constants.proto_ver = { major = 1, minor = 0 }
@@ -87,6 +93,10 @@ constants.command_targets = {
   -- Nodes weiter — die FUEL-Node hat selbst keinen Wired-Modem-Zugriff
   -- auf die Reaktoren, nur aufs ME-System. Siehe master/fuel_relay.lua.
   FUEL_STATUS = "FUEL_STATUS",
+  -- Feature (2026-07-09): FUEL -> VALVE-Node direkt (Peer-zu-Peer ueber
+  -- den gemeinsamen CONTROL-Kanal, kein Master-Umweg -- Latenz ist beim
+  -- kurzen Ventil-Fenster relevant). value = { high = bool }.
+  SET_VALVE = "SET_VALVE",
   -- TEMPORÄR: Remote-Update über alle Nodes, siehe core/remote_update.lua.
   REMOTE_UPDATE = "REMOTE_UPDATE"
 }

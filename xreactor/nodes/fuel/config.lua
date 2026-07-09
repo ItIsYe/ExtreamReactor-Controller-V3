@@ -116,15 +116,26 @@ local CONFIG = {
     -- Pipe must be configured: "High Redstone = Interrupt" in Mekanism.
     -- CC sets ALL outputs HIGH (blocked), then opens ONLY the target's output.
     --
-    -- side: built-in CC side (top/bottom/left/right/front/back)
-    --   OR: integrator output name (if using Redstone Integrator peripheral)
-    -- integrator: Redstone Integrator peripheral name (optional)
+    -- side: built-in CC side (top/bottom/left/right/front/back) -- this is
+    --   the side on the FUEL computer itself (direct redstone) OR, if
+    --   'integrator' is set, the side on THAT integrator/VALVE node.
+    -- integrator (optional): identifies a separate valve controller.
+    --   Fix (2026-07-09): in this setup the "integrator" is itself a small
+    --   standalone CC:Tweaked computer sitting at the valve (role VALVE,
+    --   see nodes/valve/main.lua) -- it has no Wired Modem to FUEL, only
+    --   a Wireless Modem, and is addressed by its node_id (auto-discovered
+    --   once it's online and broadcasting, see redstone_router.lua
+    --   refresh()). Set integrator = "<valve node_id>" here, e.g.
+    --   "VALVE-1" (check the VALVE node's own boot log for its assigned
+    --   node_id). A local Mekanism Redstone Integrator peripheral (wired
+    --   directly to FUEL) also still works as a fallback if the name
+    --   doesn't match a known VALVE node_id.
     -- valve_open_ms: how long to keep valve open after export (default 2000ms)
     --
     -- { reactor = "RT-1", label = "Reaktor A", side = "right" },
     -- { reactor = "RT-2", label = "Reaktor B", side = "left"  },
-    -- { reactor = "RT-3", label = "Reaktor C", side = "top",
-    --   integrator = "redstone_integrator_0" },
+    -- { reactor = "RT-3", label = "Reaktor C", side = "front",
+    --   integrator = "VALVE-1" },
     redstone_routes    = {},
     valve_open_ms      = 2000,
   },

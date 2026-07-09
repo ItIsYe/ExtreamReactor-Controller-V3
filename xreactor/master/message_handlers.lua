@@ -72,6 +72,7 @@ function M.new(opts)
     if value == "FUEL" or value == "FUEL-NODE" or value == "FUELNODE" then return constants.roles.FUEL_NODE end
     if value == "WATER" or value == "WATER-NODE" or value == "WATERNODE" then return constants.roles.WATER_NODE end
     if value == "REPROCESSING" or value == "REPROCESSOR" or value == "REPROCESSOR-NODE" or value == "REPROCESSING-NODE" then return constants.roles.REPROCESSOR_NODE end
+    if value == "VALVE" or value == "FUEL-VALVE" or value == "VALVE-NODE" or value == "FUELVALVE" then return constants.roles.VALVE_NODE end
     return raw
   end
 

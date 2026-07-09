@@ -1,6 +1,8 @@
 -- nodes/fuel/redstone_router.lua
 -- Tree-topology redstone valve routing for Mekanism pipe networks.
 
+local constants = require("shared.constants")
+
 local M = {}
 
 local BUILTIN_SIDES = {
@@ -163,6 +165,11 @@ function M.new(opts)
     config = opts.config or {},
     log = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
+    -- Feature (2026-07-09): fuer netzwerkbasierte VALVE-Nodes (siehe
+    -- nodes/valve/main.lua) -- wenn gesetzt, werden Integratoren, die
+    -- als bekannter/erreichbarer Peer erkannt werden, per SET_VALVE-
+    -- Kommando angesprochen statt per lokalem peripheral.wrap().
+    comms = opts.comms or nil,
     _state = {
       all_valves = {},
       integrators = {},
@@ -213,17 +220,26 @@ function M:refresh()
   local int_names = {}
   for _, v in ipairs(all) do if v.integrator then int_names[v.integrator] = true end end
   local integrators = {}
+  local known_peers = self.comms and self.comms:get_peers() or {}
   for name in pairs(int_names) do
-    if peripheral.isPresent(name) then
+    if known_peers[name] and not known_peers[name].down then
+      -- Feature (2026-07-09): Auto-Discovery -- der Integrator meldet
+      -- sich selbststaendig per HELLO/Heartbeat (wie jeder andere Node),
+      -- FUEL muss ihn nicht manuell als Peripheral konfigurieren. "name"
+      -- ist hier die node_id des VALVE-Node aus dem redstone_tree.
+      integrators[name] = { network = true, node_id = name }
+      self.log("DEBUG", "RedstoneRouter: integrator " .. name .. " (VALVE-Node, per Funk erreichbar)")
+    elseif peripheral.isPresent(name) then
       local ok, w = pcall(peripheral.wrap, name)
       if ok and w then
-        integrators[name] = w
-        self.log("DEBUG", "RedstoneRouter: integrator " .. name)
+        integrators[name] = { network = false, wrapped = w }
+        self.log("DEBUG", "RedstoneRouter: integrator " .. name .. " (lokales Peripheral)")
       else
         self.warn_once("int:" .. name, "RedstoneRouter: integrator wrap failed: " .. name)
       end
     else
-      self.warn_once("int_abs:" .. name, "RedstoneRouter: integrator absent: " .. name)
+      self.warn_once("int_abs:" .. name,
+        "RedstoneRouter: integrator '" .. name .. "' weder als VALVE-Node per Funk erreichbar noch als lokales Peripheral gefunden")
     end
   end
   self._state.integrators = integrators
@@ -235,12 +251,26 @@ function M:_set_valve(valve, high)
   local side = valve.side
   if valve.integrator then
     local w = self._state.integrators[valve.integrator]
-    if w then
-      local ok = safe_call(w, "setOutput", side, high)
+    if w and w.network then
+      -- Feature (2026-07-09): VALVE-Node per Funk ansprechen. Fire-and-
+      -- forget mit Ack/Retry im Hintergrund (siehe comms_service:send_
+      -- command) -- wir warten hier NICHT synchron auf die Bestaetigung,
+      -- da das den ganzen Logistics-Zyklus blockieren wuerde. route_and_
+      -- act() legt nach dem Oeffnen bereits eine kurze Pause ein, die dem
+      -- Funkbefehl Zeit zum Ankommen gibt.
+      local ok = self.comms and pcall(function()
+        self.comms:send_command(w.node_id, { target = constants.command_targets.SET_VALVE, value = { high = high } })
+      end)
+      if not ok then
+        self.warn_once("valve_net_fail:" .. valve.integrator,
+          "RedstoneRouter: SET_VALVE an " .. valve.integrator .. " konnte nicht gesendet werden")
+        return false
+      end
+      return true
+    end
+    if w and w.wrapped then
+      local ok = safe_call(w.wrapped, "setOutput", side, high)
       if ok == nil then
-        -- Fix (2026-07-08): setOutput() selbst kann fehlschlagen (z.B.
-        -- Integrator kurzzeitig nicht reagierend) — vorher wurde das
-        -- Ergebnis von safe_call() komplett ignoriert.
         self.warn_once("valve_set_fail:" .. valve.integrator .. ":" .. tostring(side),
           "RedstoneRouter: Ventil-Schaltung fehlgeschlagen (" .. valve.integrator .. "/" .. tostring(side) .. ")")
         return false
@@ -333,7 +363,15 @@ function M:route_and_act(target_id, action_fn, valve_open_ms)
     self._state.active_path = nil
     return
   end
-  os.sleep(0.05)
+  -- Feature (2026-07-09): bei netzwerkbasierten VALVE-Nodes (Funk statt
+  -- lokalem Peripheral) laenger warten, bevor der Export beginnt -- ein
+  -- Funkbefehl braucht spuerbar laenger als ein direkter Methodenaufruf.
+  local uses_network = false
+  for _, v in ipairs(self._state.all_valves) do
+    local w = v.integrator and self._state.integrators[v.integrator]
+    if w and w.network then uses_network = true; break end
+  end
+  os.sleep(uses_network and 0.4 or 0.05)
   if action_fn then action_fn() end
   os.sleep((tonumber(valve_open_ms) or 2000) / 1000)
   self:block_all()

@@ -125,6 +125,9 @@ local function get_rs_router()
       config = config,
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
+      -- Feature (2026-07-09): fuer Auto-Discovery netzwerkbasierter
+      -- VALVE-Nodes (siehe redstone_router.lua refresh()).
+      comms = comms,
     })
   end
   return rs_router_instance
