@@ -45,7 +45,17 @@ function M.build_status_payload(ctx)
     health = { status = fuel_health.status, reasons = health.reasons_list(fuel_health), last_seen_ts = fuel_health.last_seen_ts, bindings = fuel_health.bindings, capabilities = fuel_health.capabilities },
     discovery_failed = devices.discovery_failed, master_connected = master_ok,
     master_seen_s = ctx.master_seen_ts and math.max(0, math.floor((os.epoch("utc") - ctx.master_seen_ts) / 1000)) or nil,
-    queue = ctx.comms and ctx.comms:queue_depth() or 0,
+    -- Fix (2026-07-09): CRITICAL, uralter Bug (existierte schon lange vor
+    -- dieser Session, nicht Teil des Modularisierungs-Refactors). comms:
+    -- queue_depth() existiert als Methode gar nicht -- comms_service hat
+    -- nur get_diagnostics(), das ein queue_depth-FELD zurueckgibt. Dieser
+    -- Aufruf warf bei JEDEM einzigen UI-Service-Tick einen Fehler ("attempt
+    -- to call method 'queue_depth' (a nil value)"), der vom Service-Manager
+    -- stillschweigend abgefangen wurde (siehe service_manager.lua pcall) --
+    -- render_monitor() wurde dadurch NIE erreicht. Das erklaert vermutlich
+    -- den kompletten "FUEL-Monitor bleibt schwarz"-Fall von Anfang an,
+    -- unabhaengig von allen anderen in dieser Session gefixten Themen.
+    queue = ctx.comms and ctx.comms:get_diagnostics().queue_depth or 0,
     peers = ctx.comms and ctx.comms.peer_state and ctx.comms.peer_state.peers or nil,
     alerts = ctx.master_alerts, protocol_mismatch = devices.proto_mismatch,
     last_command = devices.last_command, last_command_ts = devices.last_command_ts,

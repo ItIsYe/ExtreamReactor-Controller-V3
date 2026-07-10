@@ -158,7 +158,7 @@ local function build_status_payload()
     ts = os.epoch("utc"), role = config.role, node_id = node_id,
     health = { status = valve_health.status, reasons = health.reasons_list(valve_health), last_seen_ts = valve_health.last_seen_ts },
     master_connected = comms:is_master_reachable(),
-    queue = comms:queue_depth(),
+    queue = comms and comms:get_diagnostics().queue_depth or 0,
   })
 end
 services:add(telemetry_service.new({
