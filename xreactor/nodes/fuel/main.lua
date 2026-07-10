@@ -273,7 +273,7 @@ local function init()
       return { page = fuel_monitor_ui.current_page_index(), payload = payload, master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN", alerts = alert_payload and alert_payload.critical or 0, last_command = devices.last_command, last_command_ts = devices.last_command_ts }
     end,
     render = render_monitor,
-    handle_input = function(event) fuel_monitor_ui.handle_touch(event and event[3], event and event[4]) end
+    handle_input = function(event) fuel_monitor_ui.handle_input(event) end
   }))
   -- Fix (2026-07-09): eigener, von der Haupt-UI unabhaengiger Tick fuer
   -- die Ampel -- laeuft auch wenn (noch) kein Hauptmonitor gefunden

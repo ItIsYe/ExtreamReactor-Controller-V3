@@ -86,6 +86,20 @@ function M.render_monitor(ctx)
   monitor_router:render(mon, model)
 end
 
+-- Fix (2026-07-09): CRITICAL. Beim Modularisierungs-Refactor wurde hier
+-- nur der seitenspezifische Touch-Handler (page.handle_touch, z.B. fuer
+-- die Router-Seite) aufgerufen -- der eigentliche Aufruf, der die
+-- WEITER/ZURUECK-Footer-Navigation behandelt (monitor_router:handle_
+-- input(event)), fehlte komplett. Jetzt wieder wie im Original: main.lua
+-- muss M.handle_input(event) mit dem VOLLEN Event aufrufen (nicht nur
+-- x/y), das leitet zuerst an den Router selbst weiter (Seiten-Navigation)
+-- und DANACH an die seitenspezifische Touch-Behandlung.
+function M.handle_input(event)
+  if monitor_router then monitor_router:handle_input(event) end
+  local x, y = event and event[3], event and event[4]
+  M.handle_touch(x, y)
+end
+
 function M.handle_touch(x, y)
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then return page.handle_touch(x, y) end
