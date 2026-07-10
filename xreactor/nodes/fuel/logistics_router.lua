@@ -517,11 +517,22 @@ function M:get_summary()
       connected     = r.reactor_id ~= nil and r.inlet ~= nil,
     }
   end
+  local total_routes, active_routes = 0, 0
+  for _, r in ipairs(reactor_status) do
+    total_routes = total_routes + 1
+    if r.connected then active_routes = active_routes + 1 end
+  end
   return {
     enabled        = cfg.enabled == true,
     bridge         = s.bridge and s.bridge.name or nil,
     reactors       = reactor_status,
     waste_outlets  = #s.waste_outlets,
+    -- Fix (2026-07-09): ui_pages.lua (Overview/Details-Seiten) las diese
+    -- beiden Felder schon immer aus, get_summary() hat sie aber nie
+    -- geliefert -- die "ROUTEN"-Anzeige zeigte dadurch immer 0/0, egal
+    -- wie viele Reaktoren tatsaechlich konfiguriert/verbunden waren.
+    total_routes   = total_routes,
+    active_routes  = active_routes,
     -- Feature (2026-07-08): current_request — siehe _run_supply() oben.
     -- Deckt den ganzen Entscheidungs-/Lieferzyklus ab, nicht nur das kurze
     -- Ventil-Fenster (das bleibt separat ueber rs_router:get_active_route()

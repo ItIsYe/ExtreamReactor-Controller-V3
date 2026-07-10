@@ -47,6 +47,16 @@ function M.normalize(config_values, defaults, add_warning, utils)
   end
   if type(lg.reactors)     ~= "table" then lg.reactors     = {} end
   if type(lg.waste)        ~= "table" then lg.waste        = {} end
+  -- Fix (2026-07-09): kein Hinweis existierte bisher, wenn Reaktoren
+  -- konfiguriert sind, "enabled" aber noch false ist -- ein leicht zu
+  -- uebersehender Zustand, in dem alle Reaktor-Eintraege fehlerfrei
+  -- validieren, aber M:tick() trotzdem sofort zurueckkehrt (keine
+  -- Belieferung passiert), ohne dass irgendwo eine Meldung erscheint.
+  if lg.enabled == false and #lg.reactors > 0 then
+    add_warning(string.format(
+      "logistics.enabled=false trotz %d konfigurierter Reaktoren — es wird KEIN Fuel exportiert, bis enabled=true gesetzt wird",
+      #lg.reactors))
+  end
   if type(lg.me_bridge)    ~= "string" then
     lg.me_bridge = (defaults.logistics and defaults.logistics.me_bridge) or "me_bridge"
   end

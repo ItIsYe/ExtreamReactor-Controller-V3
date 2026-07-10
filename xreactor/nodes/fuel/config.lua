@@ -62,13 +62,20 @@ local CONFIG = {
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
   -- Logistics routing for the FUEL node.
   --
-  -- Each reactor has its OWN entry. The FUEL node reads fuel levels DIRECTLY
-  -- from the reactor's ER2 Computer Port via Wired Modem and only exports
-  -- fuel to the reactor that is actually requesting it.
+  -- Each reactor has its OWN entry. Fix (2026-07-08): FUEL has NO Wired
+  -- Modem link to the reactors themselves, only to the ME system — fuel
+  -- levels come via network (Master relay, with a direct-overhear
+  -- fallback if Master is down; see nodes/fuel/logistics_router.lua and
+  -- master/fuel_relay.lua). Only exports fuel to the reactor that is
+  -- actually requesting it, prioritized by lowest fuel level first when
+  -- multiple reactors request simultaneously.
   --
   -- Hardware (FUEL computer must have):
-  --   Wired Modem → ER2 Reactor Computer Ports + dedicated inlet transporter/chest
-  --   Wireless Modem → MASTER communication
+  --   Wired Modem → ME Bridge + each reactor's dedicated inlet transporter/chest
+  --   Wireless Modem → MASTER communication + reactor fuel-level relay
+  --   (Redstone valve control, if used: see nodes/valve/main.lua — those
+  --   are separate standalone computers on their own dedicated channel,
+  --   not wired to this computer at all.)
   --
   DEFAULT_LOGISTICS = {
     enabled            = false,
