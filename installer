@@ -838,7 +838,42 @@ local ui_mod       = dofile("/xreactor/installer/ui.lua")
 
 local INSTALL_ROOT    = "/xreactor"
 local STARTUP_PATH    = "/startup.lua"
-local STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n"
+-- Fix (2026-07-10): CRITICAL. installer/stage.lua's atomarer Schreib-
+-- vorgang (M.write()) hat zwar das lange Zeitfenster von frueher beseitigt
+-- (siehe dortiger Fix-Kommentar vom 2026-07-07), aber es bleibt ein extrem
+-- kurzes Restfenster zwischen "alte Datei -> Backup verschieben" und
+-- "neue Datei -> Zielpfad verschieben" (zwei getrennte fs.move()-Aufrufe;
+-- CC:Tweaked's fs.move() kann eine bereits existierende Zieldatei nicht
+-- direkt ueberschreiben, ein echter Single-Step-Atomic-Replace ist damit
+-- nicht moeglich). Bei GENUG Update-Durchlaeufen (LOG_COLLECTOR hat die
+-- meisten Dateien zu aktualisieren, daher haeufiger betroffen) wird dieses
+-- seltene Fenster irgendwann getroffen -- ein Absturz/Neustart/Chunk-
+-- Unload GENAU in diesem Moment liess start.lua fehlen, CraftOS zeigte
+-- "No such program" beim Boot, ohne jede Moeglichkeit zur Selbstheilung,
+-- da /startup.lua bisher blind "shell.run(...)" aufrief. Jetzt prueft
+-- /startup.lua selbst zuerst, ob die Zieldatei existiert -- falls nicht,
+-- wird automatisch das ".xr_prev"-Backup (vom letzten erfolgreichen
+-- Schreibvorgang) zurueckgeholt, BEVOR CraftOS ueberhaupt die Chance hat
+-- "No such program" zu zeigen. Nur wenn WEDER Ziel NOCH Backup existieren
+-- (z.B. beim allerersten Boot vor der Erstinstallation), erscheint eine
+-- klare, hilfreiche Fehlermeldung statt der kryptischen CraftOS-Meldung.
+local STARTUP_CONTENT = [===[-- XReactor startup
+local target = "/xreactor/start.lua"
+if not fs.exists(target) then
+  local backup = target .. ".xr_prev"
+  if fs.exists(backup) then
+    pcall(fs.move, backup, target)
+  end
+end
+if fs.exists(target) then
+  shell.run(target)
+else
+  print("[BOOT] FEHLER: " .. target .. " fehlt (kein Backup gefunden).")
+  print("[BOOT] Bitte Installer erneut ausfuehren:")
+  print("[BOOT]   wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer installer")
+  print("[BOOT]   installer")
+end
+]===]
 local GITHUB_RAW      = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
 
 local function p(msg) pcall(print, tostring(msg)) end

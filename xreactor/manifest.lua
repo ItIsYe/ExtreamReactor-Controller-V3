@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 377,
-  manifest_id = "manifest-v377",
+  manifest_version = 378,
+  manifest_id = "manifest-v378",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -13,8 +13,8 @@ return {
   { path = "installer/stage.lua", size_bytes = 6479, hash = "77ef7e63", always=true },
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
-  { path = "installer/init.lua", size_bytes = 11761, hash = "75945f3a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "1fadcf03", always=true },
+  { path = "installer/init.lua", size_bytes = 13632, hash = "12dec89a", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "f88d5fc9", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
