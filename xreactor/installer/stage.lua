@@ -101,23 +101,65 @@ function M.verify(path, entry)
   return true
 end
 
+-- Fix (2026-07-10): GitHub's raw.githubusercontent.com kann direkt nach
+-- einem frischen Push kurzzeitig noch alten Inhalt an manche Edge-Server
+-- ausliefern (Origin-seitige Propagationsverzoegerung, nicht durch
+-- Cache-Busting behebbar, da das nur lokales/Proxy-Caching umgeht). Bei
+-- einem Size/Hash-Mismatch direkt nach dem Download wird jetzt mit einer
+-- kurzen Pause automatisch neu geladen (frischer Cache-Buster-Zeitstempel
+-- bei jedem Versuch durch http_mod.download_file()), statt die gesamte
+-- Installation sofort abzubrechen. Nur fuer echte Downloads relevant
+-- (item.content vorab bereitgestellte Inhalte wuerden bei einem
+-- Mismatch nicht durch Neu-Download geloest, das waere ein echter Bug).
+local VERIFY_MAX_ATTEMPTS = 4
+local VERIFY_RETRY_DELAY_S = 2
+
 function M.install(files, install_root, http_mod, sha, progress_fn)
   local total = #files
   for i, item in ipairs(files) do
     local rel   = item.path
     local entry = item.entry or {}
     local dest  = install_root .. "/" .. rel
-    local content = item.content
-    if not content then
-      local body, err = http_mod.download_file(rel, sha)
-      if not body then return false, "download failed: " .. rel .. " — " .. tostring(err) end
-      if http_mod.is_html(body) then return false, "unexpected HTML for: " .. rel end
-      content = body
+    local last_err
+
+    if item.content then
+      -- Vorab bereitgestellter Inhalt (kein Netzwerk-Download) -- kein
+      -- Retry sinnvoll, ein Mismatch hier ist ein echter Fehler.
+      local ok, werr = M.write(dest, item.content)
+      if not ok then return false, werr end
+      local ok2, verr = M.verify(dest, entry)
+      if not ok2 then return false, verr end
+    else
+      local success = false
+      for attempt = 1, VERIFY_MAX_ATTEMPTS do
+        local body, err = http_mod.download_file(rel, sha)
+        if not body then
+          last_err = "download failed: " .. rel .. " — " .. tostring(err)
+        elseif http_mod.is_html(body) then
+          last_err = "unexpected HTML for: " .. rel
+        else
+          local ok, werr = M.write(dest, body)
+          if not ok then
+            last_err = werr
+          else
+            local ok2, verr = M.verify(dest, entry)
+            if ok2 then
+              success = true
+              break
+            end
+            last_err = verr
+          end
+        end
+        if attempt < VERIFY_MAX_ATTEMPTS then
+          if progress_fn then
+            progress_fn(i, total, rel .. " (Versuch " .. attempt .. " fehlgeschlagen, erneuter Versuch...)")
+          end
+          os.sleep(VERIFY_RETRY_DELAY_S)
+        end
+      end
+      if not success then return false, last_err end
     end
-    local ok, werr = M.write(dest, content)
-    if not ok then return false, werr end
-    local ok2, verr = M.verify(dest, entry)
-    if not ok2 then return false, verr end
+
     if progress_fn then progress_fn(i, total, rel) end
   end
   return true
