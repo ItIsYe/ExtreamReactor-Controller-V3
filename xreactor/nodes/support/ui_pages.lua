@@ -56,11 +56,27 @@ end
 -- bereinigter Snapshot ohne die bekannten Rausch-Zeitstempel, aber mit
 -- allem inhaltlich Relevanten (damit z.B. ein geaenderter Fuellstand
 -- weiterhin korrekt ein Redraw ausloest).
+-- Fix (2026-07-10): der erste Scrub-Versuch entfernte nur exakt "ts",
+-- "last_seen_ts", "timestamp" -- master_seen_s (Alter der letzten
+-- Master-Verbindung in SEKUNDEN, jeden Aufruf frisch berechnet) wurde
+-- dabei uebersehen, weil der Feldname nicht exakt passte. Diese Art von
+-- "tickt jede Sekunde hoch"-Feld poisoned den Snapshot-Vergleich genauso
+-- wie ein roher Epoch-Zeitstempel -- nur eben sekundenweise statt
+-- millisekundenweise, was optisch trotzdem wie staendiges Flackern
+-- wirkt. Jetzt per Namensmuster erkannt (nicht nur exakte Treffer):
+-- alles was auf "_ts", "_s", "_seen_s", "_age", "_age_s" endet, oder
+-- "ts"/"age"/"elapsed" direkt heisst.
+local function is_noisy_field(key)
+  if key == "ts" or key == "timestamp" or key == "age" or key == "elapsed" then return true end
+  local k = tostring(key)
+  return k:match("_ts$") or k:match("_seen_s$") or k:match("_age$") or k:match("_age_s$") or k:match("_elapsed$")
+end
+
 local function scrub_timestamps(value)
   if type(value) ~= "table" then return value end
   local out = {}
   for k, v in pairs(value) do
-    if k == "ts" or k == "last_seen_ts" or k == "timestamp" then
+    if is_noisy_field(k) then
       -- bewusst weggelassen -- reines Rauschen fuer den Vergleich
     else
       out[k] = scrub_timestamps(v)
