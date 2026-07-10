@@ -44,13 +44,38 @@ function M.append_local_alert_rows(rows, alerts)
   return rows
 end
 
+-- Fix (2026-07-09): CRITICAL. build_common_model() lieferte bisher KEIN
+-- 'snapshot'-Feld -- core/ui_router.lua's Render-Diff-Pruefung
+-- (build_snapshot() dort) faellt in diesem Fall auf eine Serialisierung
+-- des KOMPLETTEN Models zurueck, inklusive roher Epoch-Zeitstempel
+-- (payload.ts, payload.health.last_seen_ts, ...), die sich bei JEDEM
+-- Aufruf aendern -- die Diff-Pruefung erkannte dadurch faelschlich IMMER
+-- eine Aenderung und loeste ein hartes Voll-Neu-Rendern aus, selbst wenn
+-- sich inhaltlich nichts geaendert hatte. RT (und andere Nodes, die ihr
+-- eigenes model.snapshot bauen) waren davon nicht betroffen. Hier: ein
+-- bereinigter Snapshot ohne die bekannten Rausch-Zeitstempel, aber mit
+-- allem inhaltlich Relevanten (damit z.B. ein geaenderter Fuellstand
+-- weiterhin korrekt ein Redraw ausloest).
+local function scrub_timestamps(value)
+  if type(value) ~= "table" then return value end
+  local out = {}
+  for k, v in pairs(value) do
+    if k == "ts" or k == "last_seen_ts" or k == "timestamp" then
+      -- bewusst weggelassen -- reines Rauschen fuer den Vergleich
+    else
+      out[k] = scrub_timestamps(v)
+    end
+  end
+  return out
+end
+
 function M.build_common_model(args)
   local payload = args.payload
   local peer = args.master_peer
   local now = args.now
   local comms_diag = args.comms_diag or {}
   local metrics = comms_diag.metrics or {}
-  return {
+  local model = {
     payload = payload,
     status = payload.health and payload.health.status or "OK",
     summary = args.summary,
@@ -65,6 +90,12 @@ function M.build_common_model(args)
     local_alerts_critical = args.local_alerts_critical or 0,
     node_id = args.node_id
   }
+  model.snapshot = {
+    page_data = scrub_timestamps(payload),
+    status = model.status, summary = model.summary, master_state = model.master_state,
+    local_alerts = model.local_alerts, local_alerts_critical = model.local_alerts_critical,
+  }
+  return model
 end
 
 function M.render_log_mode_button(target, utils_ref, x, y, w)
