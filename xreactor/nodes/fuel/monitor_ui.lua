@@ -18,6 +18,7 @@ local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 
 local monitor_router = nil
+local current_mon = nil
 
 -- Fix (2026-07-09): Ampel-Status fuer FUEL ableiten, analog zu rt_status()
 -- in nodes/rt/monitor_ui.lua. Master-Verbindung > aktive Fehler > kritisch
@@ -68,14 +69,31 @@ function M.render_monitor(ctx)
     local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = current_node_id
   })
+  -- Fix (2026-07-10): CRITICAL. Die Seiten wurden bisher mit Closures wie
+  -- "function(target) return fuel_ui.render_overview(target, model) end"
+  -- gebaut -- das faengt "model" (und bei Diagnostics auch "mon") beim
+  -- ALLERERSTEN Aufruf ein und friert es fuer immer ein, da monitor_router
+  -- nur EINMAL (lazy init) gebaut wird, waehrend render_monitor() bei
+  -- jedem Tick ein NEUES model erzeugt. Jede Seite zeigte dadurch dauerhaft
+  -- den Stand vom allerersten Render, egal was sich seitdem geaendert hat
+  -- -- exakt das gemeldete "immer hartes Rendern"-Symptom (der Diff-Check
+  -- in ui_router.lua vergleicht zwar korrekt das FRISCHE model, aber die
+  -- tatsaechlich gezeichnete Seite nutzte trotzdem immer die eingefrorene
+  -- Kopie), und vermutlich auch Ursache dafuer, dass manche Seiten (mit
+  -- noch unvollstaendigen Daten beim allerersten Aufruf) dauerhaft leer/
+  -- fehlerhaft blieben. Jetzt wie bei RT: render_overview/render_details/
+  -- render_diagnostics werden DIREKT als page.render zugewiesen -- ihre
+  -- Signatur ist bereits exakt (mon, model), passt 1:1 zu dem, was
+  -- router:render(mon, model) tatsaechlich an page.render() durchreicht.
+  current_mon = mon
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
     monitor_router = ctx.ui_router.new({
       pages = {
-        { name = "Overview", render = function(target) return fuel_ui.render_overview(target, model) end },
-        { name = "Details", render = function(target) return fuel_ui.render_details(target, model) end },
-        { name = "Diagnostics", render = function(target) return fuel_ui.render_diagnostics(target, model) end,
-          handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(mon, x, y) end },
+        { name = "Overview", render = ctx.fuel_ui.render_overview },
+        { name = "Details", render = ctx.fuel_ui.render_details },
+        { name = "Diagnostics", render = ctx.fuel_ui.render_diagnostics,
+          handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
         { name = "Router", render = function(target) ctx.get_router_ui():render(target, ctx.ui, ctx.colors) end,
           handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }
       },
