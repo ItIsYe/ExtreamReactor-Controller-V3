@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 380,
-  manifest_id = "manifest-v380",
+  manifest_version = 381,
+  manifest_id = "manifest-v381",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 13632, hash = "12dec89a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "3a2dd4f4", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "60a165ac", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -37,7 +37,7 @@ return {
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
   { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e" },
-  { path = "core/ui_router.lua", size_bytes = 7333, hash = "59f6ef44" },
+  { path = "core/ui_router.lua", size_bytes = 8439, hash = "d8f22dc9" },
   { path = "core/utils.lua", size_bytes = 23711, hash = "c57d619c" },
   { path = "core/auto_update.lua", size_bytes = 5174, hash = "332b3250" },
   { path = "core/remote_update.lua", size_bytes = 13576, hash = "ac163240" },
@@ -48,7 +48,7 @@ return {
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },
   { path = "services/service_manager.lua", size_bytes = 5943, hash = "ac30751e" },
   { path = "services/telemetry_service.lua", size_bytes = 5651, hash = "1bdb3693" },
-  { path = "services/ui_service.lua", size_bytes = 2810, hash = "7b5bd3df" },
+  { path = "services/ui_service.lua", size_bytes = 2710, hash = "e7778ac8" },
   { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece" },
   { path = "shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
   { path = "shared/telemetry_schema.lua", size_bytes = 938, hash = "9567b224" },

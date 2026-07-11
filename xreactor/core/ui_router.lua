@@ -97,6 +97,22 @@ function router:set(index)
   if next_index ~= self.index then
     self.index = next_index
     self.last_snapshot = nil
+    -- Fix (2026-07-11): CRITICAL. Ein Seitenwechsel setzte bisher nur
+    -- last_snapshot zurueck (erzwingt, dass render() den Inhalts-Vergleich
+    -- als "geaendert" erkennt), aber NICHT last_draw -- render()s eigene,
+    -- SEPARATE Zeit-Drossel ("ts - self.last_draw < self.interval * 1000")
+    -- blieb davon unberuehrt und konnte den naechsten Render-Versuch
+    -- trotzdem verzoegern. Die Footer-Touch-Zonen (footer.prev/next)
+    -- werden aber NUR beim tatsaechlichen Neuzeichnen aktualisiert (siehe
+    -- render()) -- solange die Zeit-Drossel noch blockierte, blieben die
+    -- Touch-Zonen auf der ALTEN Seite eingefroren. Ein Tap auf "WEITER"
+    -- direkt danach traf dadurch die falschen (alten) Koordinaten, was
+    -- sich als "springt zufaellig zwischen erster und letzter Seite"
+    -- aeusserte. Jetzt wird die Zeit-Drossel bei einem echten Seiten-
+    -- wechsel ebenfalls zurueckgesetzt -- der naechste render()-Aufruf
+    -- (der durch den throttle-fix in ui_service.lua bei einem Touch-Event
+    -- ohnehin sofort erfolgt) zeichnet garantiert sofort neu.
+    self.last_draw = 0
   end
 end
 
