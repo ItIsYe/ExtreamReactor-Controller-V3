@@ -192,8 +192,23 @@ local function hello() comms:send_hello({ reserve = reserve }) end
 local is_master_connected
 local master_peer_state
 
+-- Feature (2026-07-11): build_status_payload() macht echte, nicht ganz
+-- billige Arbeit (Peripherie-Lesen, Registry-/Logistik-Zusammenfassung)
+-- und wurde bisher UNABHAENGIG voneinander sowohl von render_monitor()
+-- als auch von render_ampel() aufgerufen -- beide laufen ungefaehr im
+-- selben ~1s-Rhythmus, faktisch also zweimal dieselbe Arbeit pro Zyklus.
+-- Kurzlebiger Cache (300ms, deutlich unter dem 1s-Renderintervall) haelt
+-- diese beiden Aufrufe innerhalb desselben Zyklus zusammen, ohne die
+-- Aktualitaet spuerbar zu beeintraechtigen.
+local payload_cache, payload_cache_ts = nil, 0
+local PAYLOAD_CACHE_TTL_MS = 300
+
 local function build_status_payload()
-  return status_snapshot_lib.build_status_payload({
+  local now = os.epoch("utc")
+  if payload_cache and (now - payload_cache_ts) < PAYLOAD_CACHE_TTL_MS then
+    return payload_cache
+  end
+  payload_cache = status_snapshot_lib.build_status_payload({
     config = config, devices = devices, fuel_health = fuel_health,
     comms = comms, registry = registry, health = health,
     non_rt_payload = non_rt_payload, master_alerts = master_alerts,
@@ -202,6 +217,8 @@ local function build_status_payload()
     enforce_reserve = function(current) return fuel_storage.enforce_reserve(current, reserve, safety, utils) end,
     is_master_connected = is_master_connected, get_router = get_router,
   })
+  payload_cache_ts = now
+  return payload_cache
 end
 
 local function render_monitor()
