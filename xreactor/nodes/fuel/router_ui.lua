@@ -324,7 +324,17 @@ function M:_render_edit(target, ui, w, h)
   -- den mode-tabs/anderen Status-Punkten in dieser Reihe vermeiden).
   if w >= 40 then
     local save_label, save_key
-    if u.save.state == "FAILED" then
+    -- Fix (2026-07-12): REST-P0.2. Bisher wurde "NUR LESEN"/Schreibschutz
+    -- nur REAKTIV sichtbar, nachdem jemand SPEICHERN/RESET/eine Zuweisung
+    -- tatsaechlich versucht hatte (u.save.error wurde erst DANN gesetzt).
+    -- Das Dokument verlangt einen durchgehend sichtbaren Hinweis, sobald
+    -- ein verschachtelter Baum geladen ist -- nicht erst nach einem
+    -- fehlgeschlagenen Versuch. Hat oberste Prioritaet vor allen anderen
+    -- Save-Zustaenden, da der Schreibschutz sicherheitsrelevanter ist als
+    -- der reine Speicherstatus.
+    if u.tree_has_nesting then
+      save_label, save_key = "NUR LESEN - VERSCHACHTELTER BAUM", "LIMITED"
+    elseif u.save.state == "FAILED" then
       save_label, save_key = "FEHLER: " .. mux.fit(tostring(u.save.error or "?"), 24), "WARNING"
     elseif u.save.state == "SAVING" then
       save_label, save_key = "WIRD GESPEICHERT...", "LIMITED"
@@ -433,10 +443,27 @@ function M:handle_touch(x, y)
   end
 
   if hit(u.save_btn) then
+    -- Fix (2026-07-12): REST-P0.2 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+    -- FIX_2026-07-12.md). tree_has_nesting wurde bisher zwar erkannt und
+    -- als Hinweis "[VERSCHACHTELT!]" angezeigt, aber SPEICHERN blieb
+    -- trotzdem benutzbar -- der flache Editor baut beim Speichern immer
+    -- eine NEUE, flache Liste, die einen echten verschachtelten Baum
+    -- strukturell zerstoeren wuerde. Bis ein echter Baumeditor existiert:
+    -- hartes Schreibverbot, solange ein verschachtelter Baum geladen ist.
+    if u.tree_has_nesting then
+      u.save.state = "FAILED"
+      u.save.error = "Verschachtelter Baum ist im flachen Editor schreibgeschuetzt"
+      return true
+    end
     self:_do_save()
     return true
   end
   if hit(u.reset_btn) then
+    if u.tree_has_nesting then
+      u.save.state = "FAILED"
+      u.save.error = "Verschachtelter Baum ist im flachen Editor schreibgeschuetzt"
+      return true
+    end
     u.routes = {}
     u.selected_side = nil
     u.selected_int = nil
@@ -445,6 +472,11 @@ function M:handle_touch(x, y)
   end
   for _, btn in ipairs(u.side_btns or {}) do
     if y == btn.y and x >= btn.x1 and x <= btn.x2 then
+      if u.tree_has_nesting then
+        u.save.state = "FAILED"
+        u.save.error = "Verschachtelter Baum ist im flachen Editor schreibgeschuetzt"
+        return true
+      end
       if u.selected_side == btn.side and u.selected_int == btn.integrator then
         self:_remove(btn.side, btn.integrator)
         u.selected_side = nil
@@ -459,6 +491,11 @@ function M:handle_touch(x, y)
   if u.selected_side then
     for _, btn in ipairs(u.reactor_btns or {}) do
       if y == btn.y and x >= btn.x1 and x <= btn.x2 then
+        if u.tree_has_nesting then
+          u.save.state = "FAILED"
+          u.save.error = "Verschachtelter Baum ist im flachen Editor schreibgeschuetzt"
+          return true
+        end
         self:_assign(u.selected_side, u.selected_int, btn.id, btn.label)
         u.selected_side = nil
         u.selected_int = nil
