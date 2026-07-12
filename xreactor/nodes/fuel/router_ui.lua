@@ -103,11 +103,52 @@ function M.new(opts)
       side_btns = {}, reactor_btns = {}, save_btn = nil, reset_btn = nil,
       tree_btn = nil, edit_btn = nil,
       scroll = 0, scroll_up = nil, scroll_down = nil,
-      target = nil, ui = nil, colors = nil,
-      redrawing = false,
+      -- Feature (2026-07-11): UI-P0.8 (siehe docs/CODING_AI_FUEL_UI_
+      -- PRIORITY_FIX_2026-07-12.md). Expliziter Save-Zustand statt nur
+      -- eines einzelnen "dirty"-Flags -- die Seite kann dadurch klar
+      -- zwischen GESPEICHERT/WIRD GESPEICHERT/FEHLGESCHLAGEN unterscheiden
+      -- und den exakten Fehler anzeigen statt nur "hat nicht geklappt".
+      save = { state = "IDLE", error = nil, saved_at = nil },
     },
   }
-  self._ui.routes = load_routes(self.config_path)
+  -- Fix (2026-07-11): CRITICAL, UI-P0.8. Vorher wurde beim Start aus der
+  -- SEPARATEN Datei fuel_routes.lua geladen (load_routes()) -- komplett
+  -- unabhaengig von config.logistics.redstone_tree, dem tatsaechlich
+  -- operativ genutzten Zustand (siehe redstone_router.lua). Die Seite
+  -- konnte dadurch etwas ANDERES anzeigen als das, was der Router
+  -- tatsaechlich verwendet. Jetzt: redstone_tree ist die alleinige
+  -- kanonische Quelle -- die (bereits vorhandene, fuer die Baumansicht
+  -- genutzte) flatten_tree()-Funktion liefert die flache Editor-Ansicht
+  -- direkt aus dem echten operativen Baum, keine separate Datei mehr.
+  if self.redstone_router and self.redstone_router.config then
+    local cfg = self.redstone_router.config
+    local lg = cfg.logistics or cfg
+    local tree = lg.redstone_tree or {}
+    local flat = flatten_tree(tree)
+    for _, row in ipairs(flat) do
+      if row.node.reactor then
+        self._ui.routes[#self._ui.routes + 1] = {
+          side = row.node.side, integrator = row.node.integrator,
+          reactor = row.node.reactor, label = row.node.label or row.node.reactor,
+        }
+      end
+    end
+    -- Fix (2026-07-11): falls der geladene Baum verschachtelt ist (echte
+    -- Kind-Knoten unterhalb eines Ventils, nicht nur ein flacher Endpunkt),
+    -- kann dieser rein flache Editor das NICHT abbilden -- ein Speichern
+    -- wuerde diese Struktur zerstoeren. Deutlich sichtbare Warnung statt
+    -- stillschweigendem Datenverlust beim naechsten Speichern.
+    local function has_nested_children(nodes)
+      for _, node in ipairs(nodes or {}) do
+        if type(node.children) == "table" and #node.children > 0 then return true end
+        if has_nested_children(node.children) then return true end
+      end
+      return false
+    end
+    self._ui.tree_has_nesting = has_nested_children(tree)
+  else
+    self._ui.routes = load_routes(self.config_path)
+  end
   return setmetatable(self, { __index = M })
 end
 
@@ -146,18 +187,20 @@ function M:_active_route()
   return {}
 end
 
--- UI-only invalidation path: ui_router caches by the external FUEL model, while
--- TREE/EDIT/scroll/selection live locally in this view. Re-render the current
--- page immediately after a local interaction so the visible UI cannot lag behind
--- a successful touch. Routing and persistence behavior are deliberately untouched.
-function M:_redraw()
-  local u = self._ui
-  if u.redrawing or not u.target or not u.ui then return end
-  u.redrawing = true
-  local ok, err = pcall(self.render, self, u.target, u.ui, u.colors)
-  u.redrawing = false
-  if not ok then self.log("WARN", "RouterUI redraw failed: " .. tostring(err)) end
-end
+-- Fix (2026-07-11): UI-P0.7 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_FIX_
+-- 2026-07-12.md). M:_redraw() rief render() bisher DIREKT und
+-- SELBSTSTAENDIG auf, ausserhalb des zentralen ui_service -> monitor_ui
+-- -> ui_router-Renderpfads -- das konnte mit einem regulaeren, zentral
+-- ausgeloesten Render-Durchlauf kollidieren (zwei unabhaengige
+-- Zeichenversuche fuer denselben Frame) und Snapshot-/Zustandsvergleiche
+-- auseinanderlaufen lassen. Jetzt entfernt: handle_touch() aendert nur
+-- noch den lokalen Zustand (u.mode, u.selected_side, ...) und gibt true
+-- zurueck (Event konsumiert) -- da ein konsumierter Touch bereits laut
+-- UI-P0.5 (services/ui_service.lua) als "interaktiv" GARANTIERT im
+-- selben Eventzyklus einen zentralen Render-Durchlauf ausloest (die
+-- Zeit-Drossel wird fuer interaktive Events umgangen), bleibt die
+-- Aenderung trotzdem sofort sichtbar -- nur eben ueber den einen,
+-- zentralen Pfad statt einem zweiten, parallelen.
 
 function M:_render_mode_tabs(target, ui, w)
   local u = self._ui
@@ -272,8 +315,26 @@ end
 function M:_render_edit(target, ui, w, h)
   local u = self._ui
   local reactors = self.get_reactors()
-  mux.status_dot(target, 2, 3, string.format("ROUTEN %d", #u.routes), #u.routes > 0 and "OK" or "LIMITED")
-  if w >= 40 then mux.status_dot(target, math.floor(w * 0.35), 3, u.dirty and "UNSAVED" or "SAVED", u.dirty and "LIMITED" or "OK") end
+  local nest_suffix = u.tree_has_nesting and " [VERSCHACHTELT!]" or ""
+  mux.status_dot(target, 2, 3, string.format("ROUTEN %d", #u.routes) .. nest_suffix, #u.routes > 0 and "OK" or "LIMITED", math.floor(w * 0.33))
+  -- Fix (2026-07-11): UI-P0.8. Vorher nur ein simples SAVED/UNSAVED.
+  -- Jetzt unterscheidet dieselbe Zeile klar zwischen GESPEICHERT=AKTIV,
+  -- WIRD GESPEICHERT, FEHLGESCHLAGEN (mit Kurzfehler) und UNGESPEICHERTE
+  -- AENDERUNGEN -- ohne eine zusaetzliche Zeile zu belegen (Kollision mit
+  -- den mode-tabs/anderen Status-Punkten in dieser Reihe vermeiden).
+  if w >= 40 then
+    local save_label, save_key
+    if u.save.state == "FAILED" then
+      save_label, save_key = "FEHLER: " .. mux.fit(tostring(u.save.error or "?"), 24), "WARNING"
+    elseif u.save.state == "SAVING" then
+      save_label, save_key = "WIRD GESPEICHERT...", "LIMITED"
+    elseif u.dirty then
+      save_label, save_key = "UNGESPEICHERT", "LIMITED"
+    else
+      save_label, save_key = "GESPEICHERT=AKTIV", "OK"
+    end
+    mux.status_dot(target, math.floor(w * 0.35), 3, save_label, save_key, math.max(1, w - math.floor(w * 0.35) - 2))
+  end
 
   local gap = 2
   local left_w = math.floor((w - 4 - gap) / 2)
@@ -339,8 +400,7 @@ function M:render(target, ui, colors, should_clear)
   local w, h = ui.getSize(target)
   if not w or not h then return end
   local u = self._ui
-  u.target, u.ui, u.colors = target, ui, colors
-  local page_status = u.mode == "edit" and u.dirty and "LIMITED" or "OK"
+  local page_status = u.save.state == "FAILED" and "WARNING" or (u.mode == "edit" and u.dirty and "LIMITED" or "OK")
   if should_clear then mux.clear(target) end
   mux.header(target, { title = "REDSTONE ROUTING", node_id = "FUEL NODE", page = "4/4", status = page_status, icon = "network" })
   self:_render_mode_tabs(target, ui, w)
@@ -354,23 +414,19 @@ function M:handle_touch(x, y)
 
   if hit(u.tree_btn) then
     u.mode = "tree"
-    self:_redraw()
     return true
   end
   if hit(u.edit_btn) then
     u.mode = "edit"
-    self:_redraw()
     return true
   end
   if u.mode == "tree" then
     if hit(u.scroll_up) then
       u.scroll = math.max(0, (u.scroll or 0) - 1)
-      self:_redraw()
       return true
     end
     if hit(u.scroll_down) then
       u.scroll = (u.scroll or 0) + 1
-      self:_redraw()
       return true
     end
     return false
@@ -378,7 +434,6 @@ function M:handle_touch(x, y)
 
   if hit(u.save_btn) then
     self:_do_save()
-    self:_redraw()
     return true
   end
   if hit(u.reset_btn) then
@@ -386,7 +441,6 @@ function M:handle_touch(x, y)
     u.selected_side = nil
     u.selected_int = nil
     u.dirty = true
-    self:_redraw()
     return true
   end
   for _, btn in ipairs(u.side_btns or {}) do
@@ -399,7 +453,6 @@ function M:handle_touch(x, y)
         u.selected_side = btn.side
         u.selected_int = btn.integrator
       end
-      self:_redraw()
       return true
     end
   end
@@ -409,7 +462,6 @@ function M:handle_touch(x, y)
         self:_assign(u.selected_side, u.selected_int, btn.id, btn.label)
         u.selected_side = nil
         u.selected_int = nil
-        self:_redraw()
         return true
       end
     end
@@ -417,25 +469,78 @@ function M:handle_touch(x, y)
   return false
 end
 
+-- Fix (2026-07-11): CRITICAL, UI-P0.8. Kompletter Neuaufbau des Save-
+-- Ablaufs. Vorher: in fuel_routes.lua UND (getrennt, ohne Validierung)
+-- direkt in redstone_tree geschrieben, ohne jede Rueckversicherung dass
+-- das Ergebnis tatsaechlich gueltig ist -- ein kaputter Baum wurde
+-- erst beim naechsten refresh_peripherals()-Zyklus des Routers bemerkt
+-- (siehe redstone_router.lua refresh(), block_all() bei Ungueltigkeit),
+-- nicht sofort hier beim Speichern selbst. Jetzt: 1) redstone_tree direkt
+-- aus den Editor-Routes bauen, 2) mit derselben validate_tree()-Funktion
+-- pruefen, die auch der Router selbst beim naechsten refresh() verwenden
+-- wuerde, 3) NUR bei gueltigem Ergebnis tatsaechlich committen + Router
+-- aktualisieren, 4) expliziten Save-Zustand setzen (SAVED/FAILED mit
+-- genauem Fehler), den die Seite anzeigen kann, statt nur eines
+-- Boolean-Logeintrags.
 function M:_do_save()
   local u = self._ui
-  local ok = save_routes(u.routes, self.config_path)
-  if ok then
-    self.log("INFO", "RouterUI: saved " .. #u.routes .. " routes to " .. tostring(self.config_path))
-    u.dirty = false
-    if self.redstone_router then
-      local cfg = self.redstone_router.config
-      local lg = cfg.logistics or cfg
-      lg.redstone_tree = {}
-      for _, r in ipairs(u.routes) do
-        lg.redstone_tree[#lg.redstone_tree + 1] = { side = r.side, label = r.label, reactor = r.reactor, integrator = r.integrator }
-      end
-      self.redstone_router:refresh()
-      self.log("INFO", "RouterUI: redstone_router updated with " .. #u.routes .. " routes")
-    end
-  else
-    self.log("WARN", "RouterUI: failed to save routes to " .. tostring(self.config_path))
+  u.save.state = "SAVING"
+
+  local new_tree = {}
+  for _, r in ipairs(u.routes) do
+    new_tree[#new_tree + 1] = { side = r.side, label = r.label, reactor = r.reactor, integrator = r.integrator }
   end
+
+  local redstone_router_lib = self.redstone_router and self.redstone_router.validate_tree
+    and self.redstone_router or nil
+  if redstone_router_lib then
+    local validation = redstone_router_lib.validate_tree(new_tree)
+    if not validation.ok then
+      local first_err = validation.errors[1]
+      u.save.state = "FAILED"
+      u.save.error = first_err and ("[" .. first_err.code .. "] " .. first_err.message) or "unbekannter Validierungsfehler"
+      u.save.saved_at = nil
+      self.log("WARN", "RouterUI: Speichern abgelehnt (Validierung fehlgeschlagen): " .. tostring(u.save.error))
+      return false
+    end
+  end
+
+  local ok = save_routes(u.routes, self.config_path)
+  if not ok then
+    u.save.state = "FAILED"
+    u.save.error = "Datei-Schreibfehler (" .. tostring(self.config_path) .. ")"
+    self.log("WARN", "RouterUI: failed to save routes to " .. tostring(self.config_path))
+    return false
+  end
+
+  if self.redstone_router then
+    local cfg = self.redstone_router.config
+    local lg = cfg.logistics or cfg
+    lg.redstone_tree = new_tree
+    self.redstone_router:refresh()
+    -- Fix (2026-07-11): UI-P0.8. Nach dem Schreiben den operativen
+    -- Zustand ZURUECKLESEN statt blind anzunehmen, dass er dem gerade
+    -- Geschriebenen entspricht -- validate_tree() innerhalb von refresh()
+    -- koennte theoretisch etwas anderes ergeben (z.B. falls refresh()
+    -- selbst weitere Normalisierung vornimmt). So bleibt "AKTIV" in der
+    -- UI immer eine echte Aussage ueber den tatsaechlichen Router-Zustand.
+    local validation_state = self.redstone_router.get_validation and self.redstone_router:get_validation() or { ok = true }
+    if not validation_state.ok then
+      u.save.state = "FAILED"
+      local first_err = validation_state.errors and validation_state.errors[1]
+      u.save.error = first_err and ("Router lehnt gespeicherten Baum ab: [" .. first_err.code .. "] " .. first_err.message) or "Router lehnt gespeicherten Baum ab"
+      self.log("WARN", "RouterUI: " .. tostring(u.save.error))
+      return false
+    end
+    self.log("INFO", "RouterUI: redstone_router updated with " .. #u.routes .. " routes")
+  end
+
+  u.dirty = false
+  u.save.state = "SAVED"
+  u.save.error = nil
+  u.save.saved_at = os.epoch and os.epoch("utc") or nil
+  self.log("INFO", "RouterUI: saved " .. #u.routes .. " routes to " .. tostring(self.config_path))
+  return true
 end
 
 function M:get_routes()
