@@ -221,14 +221,25 @@ local function build_status_payload()
   return payload_cache
 end
 
-local function render_monitor()
-  fuel_monitor_ui.render_monitor({
+-- Feature (2026-07-11): UI-P0.4. Ein zentraler ctx-Aufbau fuer sowohl
+-- Model-Bau als auch Zeichnung -- vermeidet, dass beide Stellen leicht
+-- unterschiedliche ctx-Felder verwenden.
+local function fuel_ui_ctx()
+  return {
     devices = devices, build_status_payload = build_status_payload, comms = comms,
     master_peer_state = master_peer_state, registry = registry, config = config,
     master_alerts = master_alerts, support_ui_pages = support_ui_pages,
     ui_router = core_ui_router, fuel_ui = fuel_ui, get_router_ui = get_router_ui,
     ui = ui, colors = colors, keys = keys,
-  })
+  }
+end
+
+local function build_fuel_model(event)
+  return fuel_monitor_ui.build_model(fuel_ui_ctx())
+end
+
+local function render_monitor(model, event)
+  fuel_monitor_ui.render_monitor(fuel_ui_ctx(), model)
 end
 
 local function render_ampel()
@@ -280,11 +291,7 @@ local function init()
   services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { reserve = reserve } end }))
   services:add(ui_service.new({
     interval = 1,
-    snapshot = function()
-      local payload = build_status_payload(); local peer = master_peer_state(); local nid = comms and comms.network and comms.network.id or config.node_id
-      local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[nid] or nil
-      return { page = fuel_monitor_ui.current_page_index(), payload = payload, master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN", alerts = alert_payload and alert_payload.critical or 0, last_command = devices.last_command, last_command_ts = devices.last_command_ts }
-    end,
+    build_model = build_fuel_model,
     render = render_monitor,
     handle_input = function(event) fuel_monitor_ui.handle_input(event) end
   }))

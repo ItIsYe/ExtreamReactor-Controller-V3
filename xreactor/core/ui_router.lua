@@ -3,10 +3,6 @@ local colors = require("shared.colors")
 
 local router = {}
 
-local function now_ms()
-  return os.epoch("utc")
-end
-
 local function clamp(value, min, max)
   if value < min then
     return min
@@ -67,8 +63,6 @@ function router.new(mon_or_opts, opts)
     pages = opts.pages or {},
     index = opts.index or 1,
     last_snapshot = nil,
-    last_draw = 0,
-    interval = opts.interval or 0.5,
     footer = {
       prev = nil,
       next = nil,
@@ -96,23 +90,15 @@ function router:set(index)
   local next_index = clamp(index, 1, total)
   if next_index ~= self.index then
     self.index = next_index
+    -- Fix (2026-07-11): Frueherer Kommentar hier (v381) beschrieb einen
+    -- last_draw-Reset, der noetig war um render()s eigene, SEPARATE
+    -- Zeit-Drossel zu umgehen -- diese Drossel wurde inzwischen (UI-P0.5,
+    -- siehe docs/CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md) komplett
+    -- entfernt, der Workaround ist dadurch obsolet. Ein Reset von
+    -- last_snapshot allein reicht jetzt aus, damit render()s
+    -- Inhalts-Vergleich den Seitenwechsel garantiert als "geaendert"
+    -- erkennt und sofort neu zeichnet.
     self.last_snapshot = nil
-    -- Fix (2026-07-11): CRITICAL. Ein Seitenwechsel setzte bisher nur
-    -- last_snapshot zurueck (erzwingt, dass render() den Inhalts-Vergleich
-    -- als "geaendert" erkennt), aber NICHT last_draw -- render()s eigene,
-    -- SEPARATE Zeit-Drossel ("ts - self.last_draw < self.interval * 1000")
-    -- blieb davon unberuehrt und konnte den naechsten Render-Versuch
-    -- trotzdem verzoegern. Die Footer-Touch-Zonen (footer.prev/next)
-    -- werden aber NUR beim tatsaechlichen Neuzeichnen aktualisiert (siehe
-    -- render()) -- solange die Zeit-Drossel noch blockierte, blieben die
-    -- Touch-Zonen auf der ALTEN Seite eingefroren. Ein Tap auf "WEITER"
-    -- direkt danach traf dadurch die falschen (alten) Koordinaten, was
-    -- sich als "springt zufaellig zwischen erster und letzter Seite"
-    -- aeusserte. Jetzt wird die Zeit-Drossel bei einem echten Seiten-
-    -- wechsel ebenfalls zurueckgesetzt -- der naechste render()-Aufruf
-    -- (der durch den throttle-fix in ui_service.lua bei einem Touch-Event
-    -- ohnehin sofort erfolgt) zeichnet garantiert sofort neu.
-    self.last_draw = 0
   end
 end
 
@@ -232,11 +218,20 @@ end
 function router:render(mon, model)
   if not mon then return end
   ui.begin_frame(mon)
-  local ts = now_ms()
-  if ts - self.last_draw < self.interval * 1000 then
-    return
-  end
-  self.last_draw = ts
+  -- Fix (2026-07-11): UI-P0.5 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+  -- FIX_2026-07-12.md). Diese Funktion hatte bisher eine EIGENE,
+  -- unabhaengige Zeit-Drossel (self.interval/self.last_draw) zusaetzlich
+  -- zu der bereits vorhandenen aeusseren Drossel in services/ui_service.lua.
+  -- Ein Seitenwechsel setzte zwar last_snapshot zurueck (siehe router:set()),
+  -- aber solange DIESE innere Zeit-Drossel noch nicht abgelaufen war, kam
+  -- render() trotzdem nie bis zum eigentlichen Zeichnen -- Footer-Touch-
+  -- Zonen blieben dadurch auf der alten Seite eingefroren. v381 hat das nur
+  -- kaschiert (last_draw bei jedem Seitenwechsel mit zurueckgesetzt), ohne
+  -- die eigentliche doppelte Zustaendigkeit zu beseitigen. Jetzt: Zeit-
+  -- planung liegt ausschliesslich in ui_service.lua (dessen "due"/
+  -- "interactive"-Logik entscheidet bereits, WANN render() ueberhaupt
+  -- aufgerufen wird) -- diese Funktion hier entscheidet nur noch anhand
+  -- des Inhalts-Snapshots, ob sich am WAS etwas geaendert hat.
   local page = self:current()
   local snapshot = build_snapshot(page and page.name, model)
   if snapshot == self.last_snapshot then

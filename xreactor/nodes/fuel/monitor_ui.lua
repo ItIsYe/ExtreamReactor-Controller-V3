@@ -49,13 +49,20 @@ function M.render_ampel(ctx)
   end)
 end
 
+-- Feature (2026-07-11): UI-P0.4 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+-- FIX_2026-07-12.md). Model-Aufbau von der eigentlichen Zeichnung
+-- getrennt -- M.build_model() wird GENAU EINMAL pro UI-Zyklus von
+-- services/ui_service.lua aufgerufen (ueber build_model=...), das
+-- Ergebnis wird DIREKT an M.render_monitor() durchgereicht. Vorher baute
+-- render_monitor() sein eigenes, unabhaengiges Model -- moeglicherweise
+-- mit anderen Werten als das, was fuer den Snapshot-Vergleich benutzt
+-- wurde (Zeitstempel/Registry-/Comms-Auswertung konnten zwischen den
+-- beiden Aufrufen leicht auseinanderlaufen).
+--
 -- ctx: { devices, build_status_payload, comms, master_peer_state, registry,
---        config, master_alerts, support_ui_pages, ui_router, fuel_ui,
---        get_router_ui, ui, colors, keys }
-function M.render_monitor(ctx)
+--        config, master_alerts, support_ui_pages }
+function M.build_model(ctx)
   local devices = ctx.devices
-  if not devices.monitor then return end
-  local mon = devices.monitor
   local payload = ctx.build_status_payload()
   local comms_diag = ctx.comms and ctx.comms:get_diagnostics() or {}
   local peer = ctx.master_peer_state()
@@ -63,12 +70,20 @@ function M.render_monitor(ctx)
   local now = os.epoch("utc")
   local current_node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id
   local alert_payload = ctx.master_alerts and ctx.master_alerts.by_node and ctx.master_alerts.by_node[current_node_id] or nil
-  local model = ctx.support_ui_pages.build_common_model({
+  return ctx.support_ui_pages.build_common_model({
     payload = payload, summary = summary, comms_diag = comms_diag, master_peer = peer, now = now,
     last_scan_ts = devices.last_scan_ts, last_command = devices.last_command, last_command_ts = devices.last_command_ts,
     local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = current_node_id
   })
+end
+
+-- ctx: { devices, ui_router, fuel_ui, get_router_ui, ui, colors, keys }
+-- model: das bereits fertig gebaute Model (siehe M.build_model() oben)
+function M.render_monitor(ctx, model)
+  local devices = ctx.devices
+  if not devices.monitor then return end
+  local mon = devices.monitor
   -- Fix (2026-07-10): CRITICAL. Die Seiten wurden bisher mit Closures wie
   -- "function(target) return fuel_ui.render_overview(target, model) end"
   -- gebaut -- das faengt "model" (und bei Diagnostics auch "mon") beim
