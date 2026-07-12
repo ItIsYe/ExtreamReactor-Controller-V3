@@ -247,8 +247,23 @@ function router:render(mon, model)
   -- aufgerufen wird) -- diese Funktion hier entscheidet nur noch anhand
   -- des Inhalts-Snapshots, ob sich am WAS etwas geaendert hat.
   local page = self:current()
+
+  -- Feature (2026-07-11): UI-P1.2 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+  -- FIX_2026-07-12.md). Transitions-Erkennung MUSS vor dem Inhalts-
+  -- Snapshot-Vergleich passieren: ein Monitorwechsel (oder Groessen-/
+  -- Skalenaenderung) bei ansonsten UNVERAENDERTEM Model wuerde vom reinen
+  -- Inhalts-Snapshot gar nicht erkannt -- render() haette sonst komplett
+  -- uebersprungen, der neue Monitor waere NIE tatsaechlich gezeichnet
+  -- worden und die alten Touch-Zonen (footer.prev/next) haetten
+  -- faelschlich weiter auf den alten Monitor gezeigt.
+  local cur_w, cur_h = ui.getSize(mon)
+  local is_transition = (self.last_render_mon ~= mon)
+    or (self.last_render_page_index ~= self.index)
+    or (self.last_render_w ~= cur_w)
+    or (self.last_render_h ~= cur_h)
+
   local snapshot = build_snapshot(page and page.name, model)
-  if snapshot == self.last_snapshot then
+  if not is_transition and snapshot == self.last_snapshot then
     return
   end
   self.last_snapshot = snapshot
@@ -260,19 +275,47 @@ function router:render(mon, model)
   -- hierhin ueberhaupt gekommen sind, siehe Snapshot-Check oben) bleibt
   -- should_clear false, die Seite ueberschreibt dann nur ihre eigenen
   -- Felder statt den kompletten Bildschirm zu loeschen.
-  local cur_w, cur_h = ui.getSize(mon)
-  local should_clear = (self.last_render_mon ~= mon)
-    or (self.last_render_page_index ~= self.index)
-    or (self.last_render_w ~= cur_w)
-    or (self.last_render_h ~= cur_h)
+  local should_clear = is_transition
   self.last_render_mon = mon
   self.last_render_page_index = self.index
   self.last_render_w = cur_w
   self.last_render_h = cur_h
 
+  -- Feature (2026-07-11): UI-P1.1. Ein Fehler in page.render() wurde
+  -- bisher entweder gar nicht abgefangen (Absturz bis zum aeusseren
+  -- service_manager-pcall, der Bildschirm blieb dann auf dem letzten
+  -- Stand oder halb gezeichnet stehen) oder durch grossflaechige pcalls
+  -- in aufrufenden Modulen stillschweigend verschluckt -- beides fuehrt
+  -- zu einem schwarzen/veralteten Monitor ohne erkennbare Ursache. Jetzt:
+  -- page.render() wird hier gezielt pcall-abgesichert, ein Fehler zeigt
+  -- eine minimale, aus einfachen ui.*-Grundfunktionen aufgebaute
+  -- Fallback-Seite (unabhaengig von der potenziell fehlerhaften Seiten-
+  -- Zeichenfunktion) UND wird in self.last_error/self.error_count fuer
+  -- die Diagnostics-Seite festgehalten -- der Node selbst stuerzt dabei
+  -- nie ab, der Nutzer sieht aber IMMER einen erklaerten Zustand statt
+  -- Stille.
   local page_footer = nil
   if page and page.render then
-    page_footer = page.render(mon, model, should_clear)
+    local ok, result = pcall(page.render, mon, model, should_clear)
+    if ok then
+      page_footer = result
+    else
+      self.error_count = (self.error_count or 0) + 1
+      self.last_error = {
+        page = tostring(page.name or "?"),
+        code = "RENDER_FAILED",
+        message = tostring(result),
+        ts = os.epoch and os.epoch("utc") or nil,
+      }
+      pcall(function()
+        ui.clear(mon)
+        ui.text(mon, 2, 2, "FUEL UI ERROR", colors.get("WARNING"), colors.get("background"))
+        ui.text(mon, 2, 4, "Seite: " .. tostring(page.name or "?"), colors.get("text"), colors.get("background"))
+        ui.text(mon, 2, 5, "Code: RENDER_FAILED", colors.get("text"), colors.get("background"))
+        ui.text(mon, 2, 7, "Details im LOG_COLLECTOR-Export.", colors.get("muted"), colors.get("background"))
+        ui.text(mon, 2, 9, "Naechster Zyklus versucht erneut zu zeichnen.", colors.get("muted"), colors.get("background"))
+      end)
+    end
   end
   local w, h = ui.getSize(mon)
   if not w or not h then

@@ -44,6 +44,15 @@ function M.new(opts)
   end
 
   local function fuel_state(model, reserve, minimum)
+    -- Fix (2026-07-11): UI-P1.3 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+    -- FIX_2026-07-12.md). "logistics.enabled == false" (siehe frueherer
+    -- Fund diese Session: dieser Zustand kann tagelang unbemerkt bleiben,
+    -- da alle anderen Warnungen normal weiterlaufen) wurde hier bisher
+    -- NIE geprueft -- die Haupt-Banner zeigte weiterhin "RESERVE NORMAL"
+    -- o.ae., obwohl der komplette Fuel-Export abgeschaltet ist. Jetzt hat
+    -- dieser Zustand Prioritaet vor allen anderen Banner-Texten.
+    local logistics = model.payload and model.payload.logistics or {}
+    if logistics.enabled == false then return "LOGISTICS DISABLED", "LIMITED" end
     if reserve < minimum then return "RESERVE LOW", "WARNING" end
     if model.status ~= "OK" then return "FUEL WARNING", "WARNING" end
     return "RESERVE NORMAL", "OK"
