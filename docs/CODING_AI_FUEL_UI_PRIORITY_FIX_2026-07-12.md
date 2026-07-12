@@ -1,24 +1,50 @@
 # Coding-AI-Aufgaben: offene FUEL-UI-Restpunkte
 
-Stand: 2026-07-12  
+Stand der erneuten Prüfung: 2026-07-12  
 Geprüfter Branch: `beta`  
-Geprüfter Head: `8d3316889ee7c18787a170102e0818ea55ed16df` (`beta-v390`)  
-Ausgangsdokument: `docs/CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md`
+Aktueller Branch-Head: `b274660626fdf2dfa99122916b94c3f87dfa6d0c`  
+Letzter Programmcodestand der FUEL-UI: `8d3316889ee7c18787a170102e0818ea55ed16df` (`beta-v390`)  
 
-## Zweck dieser bereinigten Datei
+## Ergebnis der erneuten Prüfung
 
-Alle im aktuellen Code vollständig umgesetzten FUEL-UI-Aufgaben wurden aus dieser Datei entfernt.
+Seit der letzten Dokumentbereinigung wurden keine weiteren Programmänderungen eingecheckt. Der aktuelle Branch-Head enthält nur die zuvor erfolgte Dokumentbereinigung; der ausführbare FUEL-UI-Code entspricht weiterhin `beta-v390`.
 
-Diese Datei enthält nur noch:
+Von den verbleibenden Punkten ist aktuell:
 
-- nicht umgesetzte Punkte,
-- nur teilweise umgesetzte Punkte,
-- fehlende Regressionstests,
-- noch nicht nachgewiesene Abnahmekriterien.
+| Punkt | Status |
+|---|---|
+| Router-Persistenz über Neustart | **OFFEN** |
+| Schutz verschachtelter Routingbäume | **TEILWEISE UMGESETZT** |
+| Sichtbarer VALVE-Online-/Bestätigungsstatus | **TEILWEISE UMGESETZT** |
+| Vollständige Renderfehlerdiagnose | **TEILWEISE UMGESETZT** |
+| Monitor-Lifecycle einschließlich Textskalierung | **TEILWEISE UMGESETZT** |
+| Einheitliche FUEL-View-States | **TEILWEISE UMGESETZT** |
+| UI-Diagnosemetriken | **OFFEN** |
+| Automatisierte Regressionstests und CI | **OFFEN** |
 
-Die vorhandenen Eingabe-, Model-, Render- und Basis-Fallback-Fixes sollen nicht erneut umgebaut werden, außer ein Regressionstest weist einen konkreten Fehler nach.
+Keiner dieser acht Restpunkte ist vollständig abgeschlossen.
 
-## Sicherheitsbedingung
+## Bereits umgesetzt – nicht erneut umbauen
+
+Folgende Kernfixes sind vorhanden und wurden deshalb aus der Aufgabenliste entfernt:
+
+- jeder Touch läuft nur noch über einen zentralen Inputpfad,
+- der zusätzliche `router_touch`-Service wurde entfernt,
+- konsumierte Navigation wird nicht mehr an die neue Seite weitergereicht,
+- `mouse_click` und `monitor_touch` werden bei Navigation gleich behandelt,
+- der UI-Service baut pro Zyklus genau ein Model,
+- Snapshotvergleich und Rendering verwenden dasselbe Modelobjekt,
+- die zweite unabhängige Zeitdrossel im `ui_router` wurde entfernt,
+- interaktive Eingaben umgehen die normale Zeitdrossel,
+- normale Datenänderungen lösen keinen vollständigen Monitor-Clear mehr aus,
+- direkte Router-UI-Selbst-Redraws wurden entfernt,
+- Page-Renderfehler erzeugen bereits eine sichtbare Basis-Fallbackseite,
+- Monitorobjekt-, Seiten-, Breiten- und Höhenwechsel erzwingen einen neuen Render,
+- `LOGISTICS DISABLED` wird im Overview-Banner angezeigt.
+
+Diese Bereiche nur ändern, wenn ein neuer Regressionstest einen konkreten Fehler nachweist.
+
+## Sicherheitsbedingung für alle weiteren Arbeiten
 
 Während Entwicklung und Tests gilt verbindlich:
 
@@ -30,130 +56,147 @@ Zusätzlich:
 
 - keine realen Fuel-Exporte,
 - keine realen Ventilöffnungen,
-- ME-/Ventilmethoden mocken oder Dry-Run verwenden,
+- ME-/Ventilmethoden mocken oder einen Dry-Run-Modus verwenden,
 - UI-Tests dürfen niemals echten Brennstoff transportieren.
 
 ---
 
 # REST-P0.1 – Router-Konfiguration muss einen Neustart wirklich überleben
 
-## Aktueller Zustand
+**Status: OFFEN**
 
-Die Router-UI schreibt weiterhin nach:
+## Bereits vorhanden
 
-```text
-/xreactor/config/fuel_routes.lua
-```
+Die Router-UI:
 
-Beim Speichern wird zusätzlich nur der aktuell laufende In-Memory-Wert geändert:
+- schreibt nach `/xreactor/config/fuel_routes.lua`,
+- validiert den neu aufgebauten flachen Baum vor dem Commit,
+- setzt während der laufenden Sitzung:
 
 ```lua
 lg.redstone_tree = new_tree
 self.redstone_router:refresh()
 ```
 
-Beim nächsten Start erzeugt `main.lua` den operativen Router jedoch aus der geladenen FUEL-Konfiguration. Die gespeicherte Datei `fuel_routes.lua` wird vor dem Erzeugen des Routers nicht in `config.logistics.redstone_tree` geladen.
+- liest danach den Validierungszustand des laufenden Routers zurück,
+- zeigt innerhalb derselben Laufzeit `GESPEICHERT=AKTIV`, wenn der Router den Baum akzeptiert.
 
-`router_ui.new()` lädt bei vorhandenem `redstone_router.config` ausdrücklich aus:
+## Noch nicht umgesetzt
+
+### 1. Gespeicherte Datei wird beim normalen Start nicht geladen
+
+Beim Start erzeugt `main.lua` den operativen Router aus der geladenen FUEL-Konfiguration. Vorher wird `/xreactor/config/fuel_routes.lua` nicht nach `config.logistics.redstone_tree` übernommen.
+
+`router_ui.new()` lädt bei vorhandenem `redstone_router.config` aus:
 
 ```lua
 config.logistics.redstone_tree
 ```
 
-und ignoriert in diesem Normalfall die zuvor geschriebene `fuel_routes.lua`.
+Der Dateifallback `load_routes(self.config_path)` wird im normalen FUEL-Start nicht verwendet.
 
-## Folge
+### 2. Speichern ist nicht atomar
 
-Der Zustand kann innerhalb derselben Laufzeit als:
+`save_routes()` verwendet direkt:
 
-```text
-GESPEICHERT=AKTIV
+```lua
+fs.open(path, "w")
 ```
 
-angezeigt werden, nach einem Neustart aber wieder auf den alten Configwert zurückfallen.
+Damit kann ein Schreibabbruch die letzte gültige Datei zerstören.
 
-Die bisherige Aussage „gespeichert“ ist deshalb noch kein nachgewiesener persistenter Zustand.
+### 3. Kein Reload der finalen Datei
+
+Die geschriebene Datei wird nach dem Schreiben nicht erneut eingelesen und nicht noch einmal gegen die tatsächliche Dateiversion validiert.
+
+### 4. Kein Reboottest
+
+Es existiert kein eingecheckter Test, der Speichern, Neustart und erneutes Laden des operativen Routers prüft.
 
 ## Verbindlicher Fix
 
 Es muss genau eine dauerhaft kanonische Routequelle geben.
 
-### Bevorzugte Variante
+Bevorzugt:
 
 ```text
 /xreactor/config/fuel_routes.lua
 ```
 
-wird die kanonische Routequelle.
-
-Ablauf beim Start:
+### Startablauf
 
 1. `fuel_routes.lua` laden.
-2. Struktur und Pfade validieren.
-3. Ergebnis vor Erzeugung des operativen Routers nach `config.logistics.redstone_tree` übernehmen.
-4. Bei ungültiger Datei keinen Export erlauben.
-5. Exakten Fehler auf der Router- und Diagnostics-Seite anzeigen.
+2. Lua-Struktur sicher einlesen.
+3. vollständigen Baum validieren.
+4. vor Erzeugung oder Refresh des Routers nach `config.logistics.redstone_tree` übernehmen.
+5. bei ungültiger Datei Routing auf `INVALID` setzen.
+6. keinen Fuel-Export erlauben.
+7. exakten Fehler auf Router- und Diagnostics-Seite anzeigen.
 
-Ablauf beim Speichern:
-
-1. neuen Baum im Speicher erstellen,
-2. validieren,
-3. atomar in temporäre Datei schreiben,
-4. temporäre Datei erneut einlesen,
-5. erneut validieren,
-6. temporäre Datei auf Zielpfad verschieben,
-7. endgültige Datei erneut einlesen,
-8. in `config.logistics.redstone_tree` übernehmen,
-9. operativen Router aktualisieren,
-10. aktiven Zustand zurücklesen,
-11. erst dann `SAVED/AKTIV` anzeigen.
-
-## Atomare Schreibstrategie
+### Atomarer Speichervorgang
 
 ```text
 fuel_routes.lua.tmp
   -> schreiben
-  -> lesen und validieren
-  -> bestehende Datei optional nach .prev verschieben
+  -> tmp erneut einlesen
+  -> tmp validieren
+  -> bestehende Zieldatei nach .prev verschieben
   -> tmp nach fuel_routes.lua verschieben
-  -> finale Datei lesen und validieren
-  -> .prev entfernen
+  -> finale Datei erneut einlesen
+  -> finale Datei erneut validieren
+  -> operativen Router aktualisieren
+  -> aktiven Zustand zurücklesen
+  -> .prev erst danach entfernen
 ```
 
-Ein einfaches direktes `fs.open(path, "w")` reicht nicht.
+Erst nach vollständigem Erfolg darf die UI anzeigen:
+
+```text
+GESPEICHERT=AKTIV
+```
 
 ## Abnahmetests
 
-1. Route speichern.
-2. Computer vollständig neu starten.
-3. Route muss weiterhin in der UI sichtbar sein.
-4. Route muss weiterhin im operativen `redstone_router` aktiv sein.
-5. beschädigte Datei darf nicht als aktiv gelten.
-6. Schreibabbruch darf die letzte gültige Datei nicht zerstören.
+- Route speichern.
+- Computer vollständig neu starten.
+- Route bleibt in der UI sichtbar.
+- Route ist im operativen `redstone_router` aktiv.
+- beschädigte Datei wird nicht aktiviert.
+- Schreibabbruch erhält die letzte gültige Datei.
+- Reloadfehler führt zu `FAILED`, nicht zu `SAVED`.
 
 ---
 
-# REST-P0.2 – Verschachtelte Routingbäume dürfen beim Speichern nicht zerstört werden
+# REST-P0.2 – Verschachtelte Routingbäume dürfen nicht zerstört werden
 
-## Aktueller Zustand
+**Status: TEILWEISE UMGESETZT**
 
-Die UI erkennt bereits, ob ein Baum verschachtelte `children` enthält, und zeigt einen Hinweis wie:
+## Bereits vorhanden
+
+Die Router-UI:
+
+- erkennt `children` in einem verschachtelten Baum,
+- setzt `tree_has_nesting`,
+- zeigt einen Hinweis wie:
 
 ```text
 [VERSCHACHTELT!]
 ```
 
-Der Editor bildet den Baum anschließend aber weiterhin als flache Endpunktliste ab.
+- kann den Baum in der Tree-Ansicht grundsätzlich darstellen.
 
-`_do_save()` prüft `tree_has_nesting` nicht. Ein Speichern kann deshalb den verschachtelten Baum in eine flache Liste umwandeln.
+## Noch nicht umgesetzt
 
-## Risiko
+- `_do_save()` prüft `tree_has_nesting` nicht.
+- `SPEICHERN` bleibt benutzbar.
+- `RESET` bleibt benutzbar.
+- Zuweisungen bleiben benutzbar.
+- Der flache Editor baut beim Speichern weiterhin eine neue flache Liste auf.
+- Der verschachtelte Originalbaum kann dadurch strukturell zerstört werden.
 
-Ein physisch korrekt modellierter mehrstufiger Ventilbaum kann durch einen einzigen UI-Speichervorgang strukturell zerstört werden.
+## Verbindlicher Mindestfix
 
-## Mindestfix
-
-Solange der Editor keine echte Baumstruktur bearbeiten kann:
+Solange kein echter Baumeditor vorhanden ist:
 
 ```lua
 if u.tree_has_nesting then
@@ -163,51 +206,92 @@ if u.tree_has_nesting then
 end
 ```
 
-Die UI muss sichtbar anzeigen:
+Die UI muss deutlich anzeigen:
 
 ```text
 NUR LESEN – VERSCHACHTELTER BAUM
 ```
 
-`RESET`, Zuweisungen und `SPEICHERN` müssen in diesem Zustand deaktiviert oder hart abgelehnt werden.
+In diesem Zustand:
 
-## Vollständige spätere Lösung
+- `SPEICHERN` deaktivieren oder hart ablehnen,
+- `RESET` deaktivieren oder hart ablehnen,
+- Zuweisungen deaktivieren,
+- Originaldatei und operativen Baum unverändert lassen.
+
+## Spätere vollständige Lösung
 
 Ein echter Baumeditor muss:
 
 - Eltern-/Kind-Beziehungen erhalten,
 - Integrator und Seite pro Knoten bearbeiten,
 - Knoten einfügen, verschieben und löschen,
-- Zyklen und doppelte Reaktoren verhindern,
+- Zyklen verhindern,
+- doppelte Reaktoren verhindern,
 - vor dem Commit den vollständigen Baum validieren.
 
 ## Abnahmetests
 
 - verschachtelten Baum laden,
-- UI darf ihn anzeigen,
-- Speichern im flachen Editor muss abgelehnt werden,
-- Originaldatei und operativer Baum bleiben byte-/strukturidentisch.
+- Tree-Ansicht zeigt ihn korrekt,
+- Editor zeigt Read-only-Zustand,
+- Speichern wird abgelehnt,
+- Reset wird abgelehnt,
+- Originaldatei bleibt byteidentisch,
+- operativer Baum bleibt strukturidentisch.
 
 ---
 
-# REST-P0.3 – Offline- und unbestätigte Ventile in der Router-UI anzeigen
+# REST-P0.3 – Offline- und unbestätigte Ventile sichtbar anzeigen
 
-## Aktueller Zustand
+**Status: TEILWEISE UMGESETZT**
 
-Die Router-Seite zeigt unter anderem:
+## Bereits im Backend vorhanden
+
+`redstone_router.refresh()`:
+
+- liest bekannte Kommunikations-Peers,
+- erkennt erreichbare VALVE-Nodes als Netzwerk-Integratoren,
+- kann lokale Integrator-Peripherien erkennen,
+- protokolliert Warnungen bei fehlenden Integratoren,
+- gibt bei einem nicht schaltbaren Integrator aus `_set_valve()` `false` zurück.
+
+## Noch nicht in der UI vorhanden
+
+Die Router-Seite zeigt derzeit nur:
 
 - Anzahl Ventile,
 - Anzahl Pfade,
+- Baumstruktur,
 - aktiven oder letzten Pfad,
 - gespeicherten/ungespeicherten Zustand.
 
-Es fehlt weiterhin die im ursprünglichen Auftrag verlangte eindeutige Anzeige:
+Es fehlt pro VALVE-Node:
 
 ```text
-VENTIL OFFLINE
+ONLINE
+OFFLINE
+STALE
+UNKNOWN
 ```
 
-Die UI prüft nicht sichtbar pro Route, ob ein konfigurierter entfernter VALVE-Node aktuell erreichbar und bestätigt ist.
+Außerdem fehlen:
+
+- Alter des letzten Kontakts,
+- Zuordnung zu den betroffenen Routen,
+- angeforderter Ventilzustand,
+- bestätigter Ventilzustand,
+- sichtbarer Unterschied zwischen konfiguriert und tatsächlich erreichbar.
+
+## Wichtige technische Grenze
+
+Die Funkventilsteuerung arbeitet weiterhin fire-and-forget. Ein erfolgreicher lokaler `modem.transmit()`-Aufruf bestätigt nicht, dass:
+
+- die VALVE-Node das Paket empfangen hat,
+- Redstone wirklich geschaltet wurde,
+- der gewünschte Zustand erreicht wurde.
+
+Eine Anzeige wie `CONFIRMED BLOCKED` ist deshalb erst nach Einführung eines ACK-/Statusprotokolls fachlich korrekt möglich.
 
 ## Zielmodell
 
@@ -215,26 +299,28 @@ Die UI prüft nicht sichtbar pro Route, ob ein konfigurierter entfernter VALVE-N
 model.router_ui.valves = {
   {
     id = "VALVE-1",
-    online = true,
-    age_s = 1.2,
     configured = true,
-    confirmed_state = "BLOCKED",
+    online = true,
+    stale = false,
+    age_s = 1.2,
     requested_state = "BLOCKED",
+    confirmed_state = "BLOCKED",
     state_matches = true,
+    affected_routes = { "Reactor-A" },
   }
 }
 ```
 
-## Darstellung
+## Darstellungsanforderung
 
-Für jeden entfernten Ventilknoten mindestens:
+Mindestens:
 
 ```text
 VALVE-1  ONLINE   BLOCKED
 VALVE-2  OFFLINE  UNKNOWN
 ```
 
-Eine Route darf nicht als vollständig `AKTIV/OK` erscheinen, wenn ein benötigtes Ventil:
+Eine Route darf nicht als vollständig `AKTIV/OK` gelten, wenn ein benötigtes Ventil:
 
 - offline,
 - stale,
@@ -243,63 +329,81 @@ Eine Route darf nicht als vollständig `AKTIV/OK` erscheinen, wenn ein benötigt
 
 ## Abnahmetests
 
-- VALVE-Peer online → grün/ONLINE,
-- Peer timeout → sichtbar OFFLINE,
-- Peer kommt zurück → Anzeige erholt sich ohne Reboot,
-- Route mit Offline-Ventil wird nicht als betriebsbereit markiert.
+- VALVE online → sichtbar `ONLINE`,
+- Peer timeout → sichtbar `OFFLINE`,
+- Peer kommt zurück → Erholung ohne Reboot,
+- Route mit Offline-Ventil ist nicht betriebsbereit,
+- verlorenes ACK → Zustand `UNCONFIRMED`,
+- falscher bestätigter Zustand → Route `DEGRADED/ERROR`.
 
 ---
 
 # REST-P1.1 – Renderfehler vollständig diagnostizierbar machen
 
-## Bereits vorhandener Teil
+**Status: TEILWEISE UMGESETZT**
 
-Ein Fehler in `page.render()` wird abgefangen und eine sichtbare Fallbackseite angezeigt.
+## Bereits vorhanden
 
-## Noch offen
+`core/ui_router.lua`:
 
-### 1. Fehler wird nicht zuverlässig ins Log geschrieben
+- kapselt `page.render()` in `pcall`,
+- erhöht `error_count`,
+- speichert `last_error` mit Seite, Code, Meldung und Zeit,
+- zeichnet eine sichtbare Fallbackseite,
+- lässt den Node nach einem Page-Fehler weiterlaufen.
 
-Der Fehler wird im Routerobjekt als `last_error` gespeichert, aber der Catch-Pfad ruft keinen Logger auf.
+## Noch nicht umgesetzt
 
-Die Fallbackseite behauptet:
+### 1. Fehler wird nicht garantiert geloggt
+
+Der Catch-Pfad schreibt den konkreten abgefangenen Fehler nicht über einen Logger.
+
+Die Fallbackseite behauptet aktuell:
 
 ```text
 Details im LOG_COLLECTOR-Export.
 ```
 
-Der abgefangene Fehler wird dort durch diesen Codepfad jedoch nicht garantiert eingetragen.
+Das ist durch diesen Fehlerpfad nicht garantiert.
 
-### 2. Diagnostics-Seite zeigt `last_error` und `error_count` nicht an
+### 2. Diagnostics-Seite erhält die Daten nicht
 
-Der Zustand liegt nur intern im `ui_router` und wird nicht in das FUEL-UI-Model beziehungsweise die Diagnostics-Zeilen übernommen.
+`monitor_ui.build_model()` übernimmt weder `error_count` noch `last_error` aus dem `ui_router`.
 
-### 3. Kein Stacktrace
+Die FUEL-Diagnostics-Seite zeigt diese Werte nicht an.
 
-Aktuell wird nur `pcall()` verwendet. Für die Logdiagnose soll `xpcall()` mit Traceback verwendet werden, sofern verfügbar.
+### 3. Kein Traceback
 
-### 4. Shared-Router enthält hart codierten FUEL-Text
+Es wird `pcall()` statt `xpcall()` mit Traceback verwendet.
 
-`core/ui_router.lua` ist ein gemeinsam genutztes Modul, zeichnet aber fest:
+### 4. Shared-Router enthält fest codierten FUEL-Text
+
+Das gemeinsam genutzte `core/ui_router.lua` zeichnet fest:
 
 ```text
 FUEL UI ERROR
 ```
 
-Bei einem Fehler einer anderen Rolle wäre diese Anzeige falsch.
+Bei einer anderen Rolle wäre die Anzeige falsch.
+
+### 5. Model-Build- und Monitor-Write-Fehler sind nicht gleichwertig behandelt
+
+Der vorhandene Fallback deckt primär Fehler innerhalb `page.render()` ab. Ein Fehler vor dem Page-Render oder beim Modelbau benötigt ebenfalls einen sichtbaren und geloggten Fallbackpfad.
 
 ## Verbindlicher Fix
 
-`ui_router.new()` erhält rollen-/seitenspezifische Optionen:
+`ui_router.new()` erhält konfigurierbare Optionen:
 
 ```lua
 {
   error_title = "FUEL UI ERROR",
-  on_render_error = function(err) ... end,
+  on_render_error = function(error_info)
+    -- loggen und Diagnose übernehmen
+  end,
 }
 ```
 
-Zusätzlich öffentliche Diagnose:
+Öffentliche Diagnose:
 
 ```lua
 function router:get_diagnostics()
@@ -310,13 +414,13 @@ function router:get_diagnostics()
 end
 ```
 
-Der FUEL-Modelbau übernimmt diese Daten:
+FUEL-Model:
 
 ```lua
 model.ui_diagnostics = monitor_router:get_diagnostics()
 ```
 
-Die Diagnostics-Seite zeigt:
+Diagnostics-Seite zeigt:
 
 - Fehleranzahl,
 - betroffene Seite,
@@ -324,29 +428,28 @@ Die Diagnostics-Seite zeigt:
 - Alter des letzten Fehlers,
 - kurze Fehlermeldung.
 
-Der vollständige Traceback geht ins Log.
+Der vollständige Traceback muss ins lokale Log und damit in den Log-Collector gelangen.
 
 ## Abnahmetests
 
-- absichtlicher Renderfehler erzeugt sichtbare Fallbackseite,
-- Fehler steht tatsächlich im lokalen/Remote-Log,
+- Page-Renderfehler zeigt Fallback,
+- Fehler steht im lokalen Log,
+- Fehler erscheint im Log-Collector,
 - Diagnostics zeigt denselben Fehler,
-- andere Rolle erhält keinen Text `FUEL UI ERROR`,
-- erfolgreiche spätere Darstellung funktioniert ohne Reboot.
+- andere Rollen erhalten keinen Text `FUEL UI ERROR`,
+- Model-Build-Fehler zeigt Fallback,
+- Monitor-Write-Fehler wird diagnostiziert,
+- spätere erfolgreiche Darstellung funktioniert ohne Reboot.
 
 ---
 
-# REST-P1.2 – Textskalierung und Monitor-Lifecycle vollständig erkennen
+# REST-P1.2 – Monitor-Lifecycle einschließlich Textskalierung
 
-## Bereits vorhandener Teil
+**Status: TEILWEISE UMGESETZT**
 
-Monitorobjekt, Seitenindex, Breite und Höhe werden vor dem Snapshotvergleich geprüft. Ein Monitor- oder Größenwechsel erzwingt dadurch einen neuen vollständigen Render.
+## Bereits vorhanden
 
-## Noch offen
-
-Der Code speichert und vergleicht keinen echten Textskalierungswert.
-
-Die Kommentare sprechen zwar von einer Größen-/Skalenänderung, tatsächlich geprüft werden nur:
+Vor dem Snapshot-Skip prüft der `ui_router`:
 
 ```lua
 last_render_mon
@@ -355,66 +458,97 @@ last_render_w
 last_render_h
 ```
 
-Ein explizites Feld wie `last_render_scale` fehlt.
+Dadurch erzwingen folgende Änderungen einen neuen vollständigen Render:
 
-Außerdem fehlen fest eingecheckte Tests für:
+- anderes Monitorobjekt,
+- andere Seite,
+- andere Breite,
+- andere Höhe.
 
-- `peripheral`,
-- `peripheral_detach`,
-- Monitorwechsel gleicher Größe,
-- reine Skalierungsänderung,
-- Wiederanschluss nach Ausfall.
+Ein gleich großer Ersatzmonitor wird aufgrund der geänderten Objektidentität grundsätzlich erkannt.
 
-## Fix
+## Noch nicht umgesetzt
+
+- kein `getTextScale()`,
+- kein `last_render_scale`,
+- reine Skalierungsänderung wird nicht ausdrücklich erkannt,
+- keine eigenen Lifecycle-Diagnosewerte,
+- keine eingecheckten Tests für `peripheral`,
+- keine eingecheckten Tests für `peripheral_detach`,
+- kein eingecheckter Test für Wiederanschluss,
+- kein eingecheckter Test für reine Skalierungsänderung.
+
+## Verbindlicher Fix
 
 Falls verfügbar:
 
 ```lua
-local ok, scale = pcall(mon.getTextScale)
+local ok, current_scale = pcall(mon.getTextScale)
 ```
 
-Routerzustand ergänzen:
+Routerzustand:
 
 ```lua
 last_render_scale = nil
 ```
 
-Transition ergänzen:
+Transition:
 
 ```lua
 or self.last_render_scale ~= current_scale
 ```
 
-Nach einer Transition:
+Nach jeder Transition:
 
 - Frame-/Dirty-Cache invalidieren,
-- Footer- und List-Touchzonen löschen,
-- einmal vollständig neu zeichnen,
-- neue Geometrie verwenden.
+- Footer-Touchzonen löschen,
+- List-Touchzonen löschen,
+- genau einmal vollständig zeichnen,
+- neue Geometrie speichern.
 
 ## Abnahmetests
 
-- Scale ändern, ohne andere Daten zu ändern,
+- Scale ändern, ohne andere Modeldaten zu ändern,
 - genau ein vollständiger Redraw,
-- Touchzonen entsprechen anschließend der neuen Geometrie,
-- alter Monitor wird getrennt und gleich großer neuer Monitor angeschlossen,
-- neuer Monitor wird trotz identischem Model gezeichnet.
+- neue Touchzonen passen zur neuen Geometrie,
+- Monitor trennen,
+- gleich großen Ersatzmonitor anschließen,
+- neuer Monitor wird trotz identischem Model gezeichnet,
+- Wiederanschluss funktioniert ohne Reboot.
 
 ---
 
-# REST-P1.3 – Alle wichtigen FUEL-UI-Zustände explizit darstellen
+# REST-P1.3 – Einheitliche FUEL-View-States
 
-## Bereits vorhandener Teil
+**Status: TEILWEISE UMGESETZT**
 
-Der Overview-Banner zeigt inzwischen:
+## Bereits vorhanden
+
+Der Overview-Banner unterscheidet aktuell unter anderem:
 
 ```text
 LOGISTICS DISABLED
+RESERVE LOW
+FUEL WARNING
+RESERVE NORMAL
 ```
 
-## Noch offen
+Weitere einzelne Informationen sind verteilt vorhanden:
 
-Die übrigen verlangten Zustände sind nicht als einheitlicher `view_state` umgesetzt:
+- Storage `MISSING`,
+- MASTER-Warnstatus,
+- aktive Lieferung als `LIMITED` in der Ampellogik,
+- einzelne Warnfarben und Diagnosezeilen.
+
+## Noch nicht umgesetzt
+
+Es gibt kein gemeinsames, priorisiertes:
+
+```lua
+model.view_state
+```
+
+Folgende Zustände sind nicht als einheitlicher Gesamtzustand umgesetzt:
 
 ```text
 LOADING
@@ -428,7 +562,7 @@ DELIVERING
 ERROR
 ```
 
-Teilweise werden einzelne Werte oder Warnfarben angezeigt, aber nicht als eindeutiger, priorisierter Gesamtzustand mit Ursache und Handlungshinweis.
+Dadurch verwenden Header, Banner, Ampel und Diagnostics nicht dieselbe fachliche Priorisierung.
 
 ## Zielmodell
 
@@ -438,13 +572,11 @@ model.view_state = {
   severity = "WARNING",
   title = "Keine aktuellen Reaktordaten",
   detail = "Warte auf MASTER/RT-Status",
-  action = "MASTER- und RT-Verbindung prüfen",
+  action = "MASTER- und RT-Verbindung pruefen",
 }
 ```
 
-## Priorität
-
-Empfohlen:
+## Empfohlene Priorität
 
 1. `ERROR`
 2. `NO CONFIG`
@@ -457,15 +589,16 @@ Empfohlen:
 9. `READY`
 10. `LOADING`
 
-Die konkrete Reihenfolge muss fachlich geprüft werden; ein sicherheitsrelevanter Fehler darf nicht von einem niedrigeren Zustand verdeckt werden.
+Die genaue Reihenfolge muss fachlich geprüft werden. Ein sicherheitsrelevanter Fehler darf nie von einem niedrigeren Zustand verdeckt werden.
 
 ## Darstellung
 
-Jede Hauptseite verwendet denselben `view_state` für:
+Derselbe `view_state` steuert:
 
 - Headerstatus,
 - Hauptbanner,
 - Ampelstatus,
+- Details-Zustand,
 - Diagnostics-Zeile.
 
 Ein schwarzer oder leerer Monitor ist niemals ein gültiger Zustand.
@@ -478,13 +611,25 @@ Für jeden Zustand:
 - erwarteten `view_state.code` prüfen,
 - Bannertext prüfen,
 - Statusfarbe prüfen,
-- prioritäre Kombinationen prüfen.
+- Ampelstatus prüfen,
+- Diagnostics-Zeile prüfen,
+- Kombinationen mit höherer Priorität prüfen.
 
 ---
 
-# REST-P1.4 – UI-Diagnosemetriken ergänzen
+# REST-P1.4 – UI-Diagnosemetriken
 
-Die ursprüngliche Aufgabenbeschreibung verlangte nachvollziehbare Render- und Inputmetriken. Diese sind im aktuellen Code nicht als zusammenhängende Diagnose verfügbar.
+**Status: OFFEN**
+
+## Aktueller Zustand
+
+Es existieren einzelne interne Werte wie:
+
+- `last_draw`,
+- `last_snapshot`,
+- `error_count`.
+
+Es gibt aber keinen zusammenhängenden Diagnosezustand für Input-, Model- und Renderverhalten.
 
 ## Ziel
 
@@ -503,27 +648,43 @@ ui_diag = {
 }
 ```
 
-Die Diagnostics-Seite soll mindestens anzeigen:
+Die Diagnostics-Seite zeigt mindestens:
 
 - Modelbauten,
-- committed/skipped Frames,
+- angeforderte Frames,
+- committed Frames,
+- übersprungene Frames,
 - Full-Clears,
 - Renderfehler,
-- letzten Rendertime-Wert.
+- letzte Renderdauer.
 
-Die Zähler dürfen selbst keinen permanenten Redraw verursachen. Sie gehören deshalb nicht ungefiltert in den normalen Seitensnapshot.
+## Wichtige Regel
+
+Die Metriken dürfen nicht selbst permanent neue Redraws auslösen. Sie dürfen deshalb nicht ungefiltert Bestandteil des normalen Seitensnapshots sein.
+
+## Abnahmetests
+
+- ein Touch erhöht `pointer_events_received` genau einmal,
+- ein Page-Handler erhöht `page_handler_calls` höchstens einmal,
+- passives unverändertes Event erhöht keinen committed Frame,
+- Seitenwechsel erhöht genau einen Full-Clear,
+- normale Reserveänderung erhöht keinen Full-Clear,
+- Renderfehler erhöht `render_errors`,
+- Diagnoseanzeige erzeugt kein Renderfeedback-Loop.
 
 ---
 
-# TEST-P0 – Geforderte Regressionstests fehlen als Repository-Dateien
+# TEST-P0 – Automatisierte Regressionstests und CI
+
+**Status: OFFEN**
 
 ## Befund
 
-Die fünf Umsetzungscommits enthalten Änderungen an Produktionscode und Manifest, aber keine hinzugefügten oder geänderten Testdateien.
+Die bisherigen FUEL-UI-Umsetzungscommits änderten Produktionscode und Manifest, aber legten keine dauerhaften FUEL-UI-Testdateien an.
 
-Die Committexte beschreiben „in isolation“ ausgeführte Prüfungen. Diese sind nicht als wiederholbare Regressionstests im Repository vorhanden.
+Die Committexte erwähnen einmalige isolierte Prüfungen. Diese sind keine wiederholbaren Repository-Regressionstests.
 
-Für den geprüften Head sind außerdem keine Commit-Statuschecks registriert.
+Für den aktuellen Branch-Head sind keine Commit-Statuschecks registriert.
 
 ## Verbindliche Testdateien
 
@@ -539,7 +700,7 @@ tests/fuel_ui_view_state_test.lua
 tests/fuel_ui_performance_test.lua
 ```
 
-## Noch fehlende Inputtests
+## Inputtests
 
 1. `monitor_touch` erzeugt genau eine Aktion.
 2. `mouse_click` erzeugt genau eine Aktion.
@@ -547,89 +708,96 @@ tests/fuel_ui_performance_test.lua
 4. `ZURÜCK` wechselt nur die Seite.
 5. Router-Ausgang bleibt ausgewählt.
 6. Reaktorzuweisung erzeugt genau eine Route.
-7. zweiter Tap besitzt genau die definierte Semantik.
+7. zweiter Tap besitzt exakt die definierte Semantik.
 8. schneller Doppeltap erzeugt keine unkontrollierte Mehrfachaktion.
 9. Key-Navigation wird einmal verarbeitet.
-10. konsumiertes Event erreicht keine folgende Seite.
+10. konsumiertes Event erreicht keine nachfolgende Seite.
 
-## Noch fehlende Rendertests
+## Model- und Rendertests
 
 11. unverändertes Model erzeugt keine Monitorwrites.
 12. Reserveänderung erzeugt keinen Full-Clear.
-13. Masterstatusänderung schreibt nur erforderliche Bereiche.
+13. Masterstatusänderung schreibt nur notwendige Bereiche.
 14. Seitenwechsel erzeugt genau einen vollständigen Framewechsel.
 15. Interaktion ist im selben Eventzyklus sichtbar.
 16. langsamer Monitor bleibt konsistent.
 17. Größenänderung baut Frame und Touchzonen neu.
 18. Monitorwechsel verwirft alten Cache.
-19. `build_status_payload()` höchstens einmal pro UI-Zyklus.
+19. `build_status_payload()` wird höchstens einmal pro UI-Zyklus aufgerufen.
 20. Snapshot und gezeichnetes Model sind dieselbe Generation beziehungsweise dasselbe Objekt.
 
-## Noch fehlende Routertests
+## Routertests
 
 21. gespeicherte und aktive Route stimmen überein.
 22. Validierungsfehler ist sichtbar.
 23. Offline-VALVE ist sichtbar.
 24. Save-Fehler behält `dirty=true`.
-25. Reboot lädt dieselbe Route wieder.
+25. Neustart lädt dieselbe Route wieder.
 26. kein direkter `_redraw()`-Pfad.
 27. Auswahl bleibt nach zentralem Render erhalten.
 28. Scrollzustand bleibt nach Datenupdate erhalten.
 29. `RESET` wird genau einmal ausgeführt.
-30. `SPEICHERN` erzeugt genau einen atomaren Schreibversuch.
+30. `SPEICHERN` erzeugt genau einen atomaren Schreibvorgang.
 31. verschachtelter Baum ist im flachen Editor schreibgeschützt.
+32. Schreibabbruch erhält die letzte gültige Routendatei.
 
-## Noch fehlende Fehlertests
+## Fehlertests
 
-32. Page-Renderfehler zeigt Fallback statt Schwarzbild.
-33. Ampelfehler beeinflusst Hauptmonitor nicht.
-34. fehlender Payload zeigt erklärten Zustand.
-35. Monitor-Write-Fehler wird diagnostiziert.
-36. Model-Build-Fehler zeigt Fallback.
-37. UI erholt sich ohne Reboot.
-38. Renderfehler erscheint im Log und in Diagnostics.
+33. Page-Renderfehler zeigt Fallback statt Schwarzbild.
+34. Ampelfehler beeinflusst Hauptmonitor nicht.
+35. fehlender Payload zeigt erklärten Zustand.
+36. Monitor-Write-Fehler wird diagnostiziert.
+37. Model-Build-Fehler zeigt Fallback.
+38. UI erholt sich ohne Reboot.
+39. Renderfehler erscheint im Log und in Diagnostics.
+40. shared `ui_router` zeigt den richtigen rollenspezifischen Fehlertext.
 
-## Noch fehlende Performance-/Lifecycle-Tests
+## Performance- und Lifecycle-Tests
 
-39. unveränderte UI erzeugt über 60 Sekunden keine permanenten Full-Clears.
-40. Full-Clears steigen nur bei erlaubten Transitionen.
-41. Reserveupdate schreibt deutlich weniger als einen ganzen Bildschirm.
-42. 100 Modemevents erzeugen nicht 100 Modelbauten.
-43. reine Textskalierungsänderung erzwingt einen Full-Redraw.
-44. gleich großer Ersatzmonitor wird trotzdem gezeichnet.
+41. unveränderte UI erzeugt über 60 Sekunden keine permanenten Full-Clears.
+42. Full-Clears steigen nur bei erlaubten Transitionen.
+43. Reserveupdate schreibt deutlich weniger als einen ganzen Bildschirm.
+44. 100 Modemevents erzeugen nicht 100 Modelbauten.
+45. reine Textskalierungsänderung erzwingt genau einen Full-Redraw.
+46. gleich großer Ersatzmonitor wird trotzdem gezeichnet.
+47. `peripheral_detach` hinterlässt keine alten Touchzonen.
+48. Wiederanschluss funktioniert ohne Reboot.
 
 ## CI-Anforderung
 
-Diese Tests müssen in der vorhandenen Testausführung beziehungsweise einem GitHub-Actions-Workflow automatisch laufen.
-
-Ein Committext oder ein einmaliger lokaler Simulationslauf ist kein dauerhafter Regressionstest.
-
----
-
-# Bearbeitungsreihenfolge der verbleibenden Punkte
-
-1. REST-P0.2 – verschachtelte Bäume sofort schreibschützen
-2. REST-P0.1 – echte persistente kanonische Routequelle und atomisches Speichern
-3. REST-P0.3 – VALVE-Online-/Bestätigungsstatus in Router-UI
-4. REST-P1.1 – Fehler loggen und in Diagnostics anzeigen
-5. REST-P1.2 – echte Skalierungs-/Lifecycle-Erkennung
-6. REST-P1.3 – einheitliche View-States
-7. REST-P1.4 – UI-Diagnosemetriken
-8. TEST-P0 – alle Regressionstests fest einchecken und in CI ausführen
+- Tests müssen automatisch ausgeführt werden.
+- Fehler müssen den Workflow fehlschlagen lassen.
+- Der aktuelle Branch-Head muss einen sichtbaren Commitstatus erhalten.
+- Ein Committext oder ein einmaliger lokaler Simulationslauf gilt nicht als Regressionstest.
 
 ---
+
+# Verbindliche Bearbeitungsreihenfolge
+
+1. **REST-P0.2:** verschachtelte Bäume sofort schreibschützen.
+2. **REST-P0.1:** echte persistente Routequelle und atomisches Speichern.
+3. **REST-P0.3:** sichtbarer VALVE-Online-/Bestätigungsstatus.
+4. **REST-P1.1:** Renderfehler loggen und in Diagnostics anzeigen.
+5. **REST-P1.2:** echte Textskalierungs- und Lifecycle-Erkennung.
+6. **REST-P1.3:** einheitliche View-States.
+7. **REST-P1.4:** UI-Diagnosemetriken.
+8. **TEST-P0:** alle Regressionstests einchecken und in CI ausführen.
 
 # Verbleibende Definition of Done
 
-- verschachtelte Routingbäume können durch die flache UI nicht zerstört werden
-- gespeicherte Routen bleiben nach vollständigem Neustart operativ aktiv
-- Speichern erfolgt atomar und wird durch Reload verifiziert
-- Offline-/stale/unbestätigte Ventile sind sichtbar
-- Renderfehler werden sichtbar, geloggt und in Diagnostics angezeigt
-- shared `ui_router` zeigt keine fest codierte falsche Rolle
-- reine Textskalierungsänderungen werden erkannt
-- alle wichtigen FUEL-Betriebszustände besitzen einen eindeutigen `view_state`
-- UI-Diagnosemetriken sind verfügbar, ohne selbst Renderrauschen zu erzeugen
-- alle 44 verbleibenden Regressionstests sind als Repository-Dateien vorhanden
-- Tests laufen automatisch und erfolgreich
-- reale Fuel-Ausgabe bleibt während UI-Tests deaktiviert
+- verschachtelte Routingbäume können durch den flachen Editor nicht verändert oder zerstört werden,
+- gespeicherte Routen bleiben nach vollständigem Neustart operativ aktiv,
+- Speichern erfolgt atomar und wird durch Reload verifiziert,
+- Offline-, stale und unbestätigte Ventile sind sichtbar,
+- Route mit problematischem Ventil erscheint nicht als betriebsbereit,
+- Renderfehler werden sichtbar, geloggt und in Diagnostics angezeigt,
+- der shared `ui_router` besitzt keinen fest codierten falschen Rollentext,
+- Model-Build- und Monitor-Write-Fehler besitzen einen sichtbaren Fehlerpfad,
+- reine Textskalierungsänderungen werden erkannt,
+- Monitortrennung und Wiederanschluss funktionieren ohne Reboot,
+- alle wichtigen FUEL-Betriebszustände besitzen einen eindeutigen `view_state`,
+- UI-Diagnosemetriken sind verfügbar, ohne Renderrauschen zu erzeugen,
+- alle 48 Regressionstests sind als Repository-Dateien vorhanden,
+- Tests laufen automatisch und erfolgreich,
+- der Branch besitzt sichtbare CI-Statuschecks,
+- reale Fuel-Ausgabe bleibt während UI-Tests deaktiviert.
