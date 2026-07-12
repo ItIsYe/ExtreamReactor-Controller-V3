@@ -494,6 +494,27 @@ local function write_log(payload)
   local disk = disk_for_role(payload.role)
   if not disk then
     stats.dropped = stats.dropped + 1
+    -- Fix (2026-07-11): CRITICAL. Vorher wurde hier nur der allgemeine
+    -- "Drop"-Zaehler in der Statuszeile hochgezaehlt -- ein Blick auf den
+    -- Monitor haette den Anstieg zeigen koennen, aber nichts wies aktiv
+    -- darauf hin, WARUM oder fuer WELCHE Rolle Logs verloren gehen. Bei
+    -- diesem Fehlerbild (komplette Diskgruppe einer Rolle leer, z.B. durch
+    -- verlorene/neu belegte Label) gingen dadurch tagelang unbemerkt ALLE
+    -- Logs einer ganzen Rolle verloren (beobachtet: RT und ENERGY), waehrend
+    -- andere Rollen mit intakter Diskgruppe ganz normal weiterliefen -- von
+    -- aussen sah es aus wie "die Nodes haben aufgehoert zu senden", dabei
+    -- kamen die Log-Zeilen durchaus an, wurden aber hier verworfen. Jetzt:
+    -- aktive, aber pro Rolle auf 1x alle 5 Minuten begrenzte Warnung direkt
+    -- auf dem Bildschirm (diag()), damit das binnen Minuten auffaellt statt
+    -- erst bei einer manuellen Log-Analyse Tage spaeter.
+    local role_key = tostring(payload.role or "unknown"):upper()
+    stats.no_disk_warned = stats.no_disk_warned or {}
+    local last_warn = stats.no_disk_warned[role_key] or 0
+    local now = now_s()
+    if now - last_warn >= 300 then
+      stats.no_disk_warned[role_key] = now
+      diag("!! KEINE DISK fuer Rolle " .. role_key .. " -- Logs gehen verloren! Disk-Labels pruefen.")
+    end
     return false, "no disk for role"
   end
 
