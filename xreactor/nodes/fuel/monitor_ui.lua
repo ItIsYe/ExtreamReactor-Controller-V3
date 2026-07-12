@@ -109,7 +109,7 @@ function M.render_monitor(ctx, model)
         { name = "Details", render = ctx.fuel_ui.render_details },
         { name = "Diagnostics", render = ctx.fuel_ui.render_diagnostics,
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        { name = "Router", render = function(target) ctx.get_router_ui():render(target, ctx.ui, ctx.colors) end,
+        { name = "Router", render = function(target, model, should_clear) ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
           handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [ctx.keys.left] = true, [ctx.keys.pageUp] = true },

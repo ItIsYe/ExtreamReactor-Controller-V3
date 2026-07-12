@@ -63,6 +63,20 @@ function router.new(mon_or_opts, opts)
     pages = opts.pages or {},
     index = opts.index or 1,
     last_snapshot = nil,
+    -- Feature (2026-07-11): UI-P0.6 (siehe docs/CODING_AI_FUEL_UI_
+    -- PRIORITY_FIX_2026-07-12.md), "Mindestloesung"-Variante. Statt eines
+    -- vollen Framebuffers: nur bei Boot, Seiten-, Monitor- oder Groessen-
+    -- wechsel wird der Bildschirm vollstaendig geloescht (mux.clear());
+    -- bei einer normalen Inhaltsaenderung (z.B. veraenderter Reservewert)
+    -- ueberschreiben die Seiten nur ihre eigenen Zeilen/Felder -- setzt
+    -- voraus, dass jede core/mockup_ui.lua-Zeichenfunktion ihre Flaeche
+    -- selbst vollstaendig neu schreibt (fuer die zwei ungeschuetzten
+    -- Faelle status_dot/kpi_strip wurde das vorab abgesichert, siehe
+    -- core/mockup_ui.lua Fix-Kommentare vom selben Datum).
+    last_render_page_index = nil,
+    last_render_mon = nil,
+    last_render_w = nil,
+    last_render_h = nil,
     footer = {
       prev = nil,
       next = nil,
@@ -239,9 +253,26 @@ function router:render(mon, model)
   end
   self.last_snapshot = snapshot
   self.list_controls = nil
+
+  -- Feature (2026-07-11): UI-P0.6. should_clear ist true bei Erstrender,
+  -- Seitenwechsel, Monitorwechsel oder Groessen-/Skalenaenderung -- bei
+  -- einer normalen Inhaltsaenderung (der einzige Grund, warum wir bis
+  -- hierhin ueberhaupt gekommen sind, siehe Snapshot-Check oben) bleibt
+  -- should_clear false, die Seite ueberschreibt dann nur ihre eigenen
+  -- Felder statt den kompletten Bildschirm zu loeschen.
+  local cur_w, cur_h = ui.getSize(mon)
+  local should_clear = (self.last_render_mon ~= mon)
+    or (self.last_render_page_index ~= self.index)
+    or (self.last_render_w ~= cur_w)
+    or (self.last_render_h ~= cur_h)
+  self.last_render_mon = mon
+  self.last_render_page_index = self.index
+  self.last_render_w = cur_w
+  self.last_render_h = cur_h
+
   local page_footer = nil
   if page and page.render then
-    page_footer = page.render(mon, model)
+    page_footer = page.render(mon, model, should_clear)
   end
   local w, h = ui.getSize(mon)
   if not w or not h then

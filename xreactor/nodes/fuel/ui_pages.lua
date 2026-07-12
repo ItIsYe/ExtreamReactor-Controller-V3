@@ -16,15 +16,25 @@ function M.new(opts)
   local utils = opts.utils
   local devices = opts.devices or {}
 
-  local function header(mon, model, title, page, icon)
+  local function header(mon, model, title, page, icon, should_clear)
     local status = model.status or "OK"
-    mux.clear(mon)
+    -- Fix (2026-07-11): UI-P0.6 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+    -- FIX_2026-07-12.md). mux.clear() loescht den KOMPLETTEN Monitor und
+    -- wurde bisher bei JEDEM Render aufgerufen, auch fuer eine reine
+    -- Datenaenderung (z.B. neuer Reservewert) -- sichtbares Flackern durch
+    -- kurzzeitig leeren Bildschirm bei jedem Redraw. Jetzt nur noch bei
+    -- Erstrender/Seiten-/Monitor-/Groessenwechsel (should_clear von
+    -- core/ui_router.lua). mux.header() selbst fuellt Zeile 1-3 ohnehin
+    -- bei jedem Aufruf neu (Titelleiste bleibt dadurch immer aktuell),
+    -- und status_dot()/die restlichen hier verwendeten mux-Funktionen
+    -- ueberschreiben ihre jeweilige Flaeche bereits vollstaendig selbst.
+    if should_clear ~= false then mux.clear(mon) end
     mux.header(mon, { title = title, node_id = model.node_id or "FU-?", page = page, status = status, icon = icon or "fuel" })
     local w = ({ mon.getSize() })[1]
     if w >= 42 then
-      mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING")
-      mux.status_dot(mon, math.floor(w * 0.38), 3, tostring(model.status or "OK"), status)
-      mux.status_dot(mon, math.floor(w * 0.70), 3, "FUEL LINK", status)
+      mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING", 20)
+      mux.status_dot(mon, math.floor(w * 0.38), 3, tostring(model.status or "OK"), status, 20)
+      mux.status_dot(mon, math.floor(w * 0.70), 3, "FUEL LINK", status, 16)
     end
     return mon.getSize()
   end
@@ -39,8 +49,8 @@ function M.new(opts)
     return "RESERVE NORMAL", "OK"
   end
 
-  local function overview(mon, model)
-    local w, h = header(mon, model, "FUEL NODE", "1/4", "fuel")
+  local function overview(mon, model, should_clear)
+    local w, h = header(mon, model, "FUEL NODE", "1/4", "fuel", should_clear)
     local p = model.payload or {}
     local reserve = tonumber(p.reserve) or 0
     local minimum = tonumber(p.minimum_reserve) or 0
@@ -91,8 +101,8 @@ function M.new(opts)
     return mux.footer_nav(mon, h, w, { center = "FUEL OVERVIEW" })
   end
 
-  local function details(mon, model)
-    local w, h = header(mon, model, "FUEL DETAILS", "2/4", "network")
+  local function details(mon, model, should_clear)
+    local w, h = header(mon, model, "FUEL DETAILS", "2/4", "network", should_clear)
     local p = model.payload or {}
     local logistics = p.logistics or {}
     local summary = model.summary or {}
@@ -142,8 +152,8 @@ function M.new(opts)
     return mux.footer_nav(mon, h, w, { center = "FUEL DETAILS" })
   end
 
-  local function diagnostics(mon, model)
-    local w, h = header(mon, model, "FUEL DIAGNOSTICS", "3/4", "network")
+  local function diagnostics(mon, model, should_clear)
+    local w, h = header(mon, model, "FUEL DIAGNOSTICS", "3/4", "network", should_clear)
     local summary = model.summary or {}
     local alerts = model.local_alerts or {}
     local top = {

@@ -80,10 +80,19 @@ function M.header(mon, opts)
   end
 end
 
-function M.status_dot(mon, x, y, label, status)
+function M.status_dot(mon, x, y, label, status, width)
   local key = status or "OK"
   local dot = key == "OK" and "*" or "!"
-  write(mon, x, y, dot .. " " .. tostring(label or key), colors.get(key), colors.get("background"))
+  local text = dot .. " " .. tostring(label or key)
+  -- Fix (2026-07-11): UI-P0.6-Vorarbeit. Aktuell durch mux.header()s
+  -- eigenen Zeilen-Fill (Zeile 1-3) bereits abgesichert (jeder Aufrufer
+  -- ruft status_dot() direkt nach mux.header()), zusaetzlich hier optional
+  -- auf eine feste Breite aufgepolstert fuer den Fall, dass status_dot()
+  -- kuenftig auch ausserhalb dieses Kontexts verwendet wird.
+  if width and width > #text then
+    text = text .. string.rep(" ", width - #text)
+  end
+  write(mon, x, y, text, colors.get(key), colors.get("background"))
 end
 
 function M.section(mon, x, y, w, title, status, icon)
@@ -179,8 +188,18 @@ function M.kpi_strip(mon, x, y, w, items)
   for i, item in ipairs(items) do
     local cx = x + (i - 1) * (cell_w + 1)
     local icon = item.icon and ("[" .. M.icon(item.icon) .. "] ") or ""
-    write(mon, cx, y, fit(icon .. tostring(item.label or ""), cell_w), colors.get("muted"), colors.get("background"))
-    write(mon, cx, y + 1, fit(tostring(item.value or "-"), cell_w), colors.get(item.status or "OK"), colors.get("background"))
+    -- Fix (2026-07-11): UI-P0.6-Vorarbeit (siehe docs/CODING_AI_FUEL_UI_
+    -- PRIORITY_FIX_2026-07-12.md). fit() kuerzt nur, polstert aber NICHT
+    -- auf die volle Feldbreite auf -- wenn ein Wert kuerzer wird als beim
+    -- vorherigen Aufruf, blieben alte Zeichen dahinter sichtbar stehen.
+    -- Jetzt explizit mit Leerzeichen auf cell_w aufgefuellt, damit dieser
+    -- Aufruf unabhaengig vom vorherigen Inhalt immer die komplette Zelle
+    -- ueberschreibt (Voraussetzung dafuer, aussen auf mux.clear() zu
+    -- verzichten).
+    local label_text = fit(icon .. tostring(item.label or ""), cell_w)
+    write(mon, cx, y, label_text .. string.rep(" ", math.max(0, cell_w - #label_text)), colors.get("muted"), colors.get("background"))
+    local value_text = fit(tostring(item.value or "-"), cell_w)
+    write(mon, cx, y + 1, value_text .. string.rep(" ", math.max(0, cell_w - #value_text)), colors.get(item.status or "OK"), colors.get("background"))
   end
 end
 

@@ -321,13 +321,27 @@ function M:_render_edit(target, ui, w, h)
   u.reset_btn = { x1 = math.max(2, w - #reset_lbl - 2), x2 = w - 1, y = btn_y }
 end
 
-function M:render(target, ui, colors)
+-- Fix (2026-07-11): UI-P0.6 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_FIX_
+-- 2026-07-12.md). should_clear ist optional und defaultet auf TRUE --
+-- der direkte M:_redraw()-Aufrufpfad (nach einem lokalen Touch, siehe
+-- Kommentar dort) ruft render() bisher mit nur 3 Argumenten auf und
+-- bekommt dadurch weiterhin unveraendert bei JEDEM Touch ein volles
+-- Clear+Redraw (bewusst so belassen -- durch echte Nutzerinteraktion
+-- begrenzt, nicht durch Netzwerk-Spam wie beim aeusseren Render-Pfad,
+-- daher fuer Phase 3 kein Problem). NUR der zentrale Render-Pfad
+-- (core/ui_router.lua -> hier durchgereicht) uebergibt den echten
+-- should_clear-Wert und kann das Clearing dadurch gezielt unterdruecken.
+-- Das vollstaendige Entfernen des direkten _redraw()-Pfads (UI-P0.7) ist
+-- expliziter Phase-4-Umfang im Dokument, hier bewusst noch nicht
+-- angefasst.
+function M:render(target, ui, colors, should_clear)
+  if should_clear == nil then should_clear = true end
   local w, h = ui.getSize(target)
   if not w or not h then return end
   local u = self._ui
   u.target, u.ui, u.colors = target, ui, colors
   local page_status = u.mode == "edit" and u.dirty and "LIMITED" or "OK"
-  mux.clear(target)
+  if should_clear then mux.clear(target) end
   mux.header(target, { title = "REDSTONE ROUTING", node_id = "FUEL NODE", page = "4/4", status = page_status, icon = "network" })
   self:_render_mode_tabs(target, ui, w)
   if u.mode == "edit" then self:_render_edit(target, ui, w, h) else self:_render_tree(target, ui, w, h) end
