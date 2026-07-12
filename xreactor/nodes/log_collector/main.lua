@@ -962,6 +962,16 @@ local function handle_log_event(message)
     stats.written = stats.written + 1
     remember(message.event_id)
     send_ack(message, "written")
+    -- Feature (2026-07-11): Pro-Node "zuletzt erfolgreich geschrieben"
+    -- merken -- Grundlage fuer den Frische-Watchdog (siehe check_log_
+    -- freshness() weiter unten). Nur bei ERFOLGREICHEM Schreiben aktualisiert,
+    -- absichtlich NICHT bei stats.received allein -- ein Node, dessen Logs
+    -- zwar ankommen aber verworfen werden (z.B. "no disk for role"), soll
+    -- hier trotzdem als "nicht mehr aktuell geschrieben" auffallen.
+    stats.node_last_written = stats.node_last_written or {}
+    stats.node_last_written[tostring(message.node_id or "?")] = {
+      ts = now_s(), role = tostring(message.role or "?")
+    }
   else
     if err ~= "paused" then stats.last_error = err end
   end
@@ -991,6 +1001,38 @@ local function handle_touch(x, y)
 end
 
 -- ── Main loop ───────────────────────────────────────────────────────────────
+-- Feature (2026-07-11): allgemeiner Frische-Watchdog. Ergaenzt die
+-- spezifische "no disk for role"-Warnung (die nur EINE moegliche Ursache
+-- abdeckt) um eine generelle Pruefung: hat eine BEKANNTE Node (die
+-- mindestens einmal erfolgreich geschrieben hat) seit mehr als
+-- STALE_THRESHOLD_S nichts Neues mehr geschrieben? Deckt damit auch
+-- andere Ursachen ab (Node abgestuerzt, Netzwerkproblem, o.ae.), nicht
+-- nur die Disk-Zuordnung. Rate-begrenzt pro Node, damit eine dauerhaft
+-- stille Node nicht bei jedem Tick erneut warnt.
+local STALE_THRESHOLD_S = 300  -- 5 Minuten ohne neuen Log-Eintrag = auffaellig
+local STALE_REWARN_S = 300     -- danach hoechstens alle 5 Minuten erneut warnen
+stats.node_stale_warned = stats.node_stale_warned or {}
+
+local function check_log_freshness()
+  if not stats.node_last_written then return end
+  local now = now_s()
+  for node_id, info in pairs(stats.node_last_written) do
+    local age = now - (info.ts or now)
+    if age >= STALE_THRESHOLD_S then
+      local last_warn = stats.node_stale_warned[node_id] or 0
+      if now - last_warn >= STALE_REWARN_S then
+        stats.node_stale_warned[node_id] = now
+        diag(string.format("!! %s (%s) seit %ds ohne neuen Log-Eintrag", node_id, info.role or "?", age))
+      end
+    else
+      -- wieder aktuell -- Warn-Sperre aufheben, damit ein ERNEUTES
+      -- Verstummen sofort wieder warnt statt bis zum naechsten
+      -- 5-Minuten-Fenster zu warten.
+      stats.node_stale_warned[node_id] = nil
+    end
+  end
+end
+
 local function run()
   local display_name, display = find_display()
   stats.display_name = display_name
@@ -1061,6 +1103,7 @@ local function run()
       elseif name == "timer" and event[2] == timer then
         refresh_disks(false)
         refresh_modems(false)
+        check_log_freshness()
         if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
         timer = os.startTimer and os.startTimer(1)
       end
