@@ -112,10 +112,29 @@ end
 -- muss M.handle_input(event) mit dem VOLLEN Event aufrufen (nicht nur
 -- x/y), das leitet zuerst an den Router selbst weiter (Seiten-Navigation)
 -- und DANACH an die seitenspezifische Touch-Behandlung.
+--
+-- Fix (2026-07-11): CRITICAL (UI-P0.2, siehe docs/CODING_AI_FUEL_UI_
+-- PRIORITY_FIX_2026-07-12.md). Der Rueckgabewert von monitor_router:
+-- handle_input() wurde bisher IGNORIERT -- ein Footer-Touch, der die
+-- Seite wechselte, wurde DANACH trotzdem noch an den seitenspezifischen
+-- Handler der NEU ausgewaehlten Seite weitergereicht. Lag an denselben
+-- Koordinaten zufaellig ein Button der neuen Seite, wurde er zusaetzlich
+-- ausgeloest (z.B. Seitenwechsel + gleichzeitiges Setzen/Loeschen einer
+-- Routerauswahl). Jetzt: sobald eine Ebene das Event konsumiert (true
+-- zurueckgibt), stoppt die Weitergabe sofort -- exakt wie im Dokument
+-- vorgeschrieben. M.handle_input() selbst gibt jetzt ebenfalls true/false
+-- zurueck (Event konsumiert oder nicht), damit aufrufende Ebenen (z.B.
+-- ein kuenftiger zentraler Dispatcher) das respektieren koennen.
 function M.handle_input(event)
-  if monitor_router then monitor_router:handle_input(event) end
-  local x, y = event and event[3], event and event[4]
-  M.handle_touch(x, y)
+  if monitor_router and monitor_router:handle_input(event) then
+    return true
+  end
+  local page = monitor_router and monitor_router:current()
+  if page and type(page.handle_touch) == "function" then
+    local x, y = event and event[3], event and event[4]
+    return page.handle_touch(x, y) == true
+  end
+  return false
 end
 
 function M.handle_touch(x, y)

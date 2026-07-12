@@ -237,10 +237,6 @@ local function render_ampel()
   })
 end
 
-local function handle_monitor_touch(x, y)
-  return fuel_monitor_ui.handle_touch(x, y)
-end
-
 local function handle_command(message)
   return fuel_command_handler.handle(message, {
     support_command_handler = support_command_handler, constants = constants,
@@ -302,7 +298,18 @@ local function init()
     ampel_tick_acc = 0
     render_ampel()
   end })
-  services:add({ name = "router_touch", tick = function(_self, dt, event) if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then handle_monitor_touch(event[3], event[4]) end end })
+  -- Fix (2026-07-11): CRITICAL (UI-P0.1, siehe docs/CODING_AI_FUEL_UI_
+  -- PRIORITY_FIX_2026-07-12.md). Dieser Service verarbeitete JEDEN
+  -- monitor_touch/mouse_click EIN ZWEITES MAL zusaetzlich zu ui_service's
+  -- eigenem handle_input-Pfad (der bereits fuel_monitor_ui.handle_input()
+  -- fuer jedes Event aufruft) -- derselbe physische Touch erreichte die
+  -- aktuelle Seite dadurch mindestens zweimal. Sichtbare Folge z.B. bei
+  -- Toggle-Buttons (Router-Seite: Ausgang auswaehlen): erster Aufruf
+  -- setzt den Zustand, zweiter Aufruf mit denselben Koordinaten hebt ihn
+  -- sofort wieder auf -- "Auswahl blinkt kurz auf und verschwindet
+  -- wieder". Jetzt entfernt: es gibt nur noch EINEN zentralen Input-Pfad
+  -- (ui_service -> fuel_monitor_ui.handle_input), jeder physische Touch
+  -- wird dadurch garantiert genau einmal verarbeitet.
   services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants))
   services:init()
   hello()

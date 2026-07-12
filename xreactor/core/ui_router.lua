@@ -158,7 +158,7 @@ function router:handle_input(event)
         return true
       end
     end
-  elseif kind == "monitor_touch" then
+  elseif kind == "monitor_touch" or kind == "mouse_click" then
     local x, y = event[3], event[4]
     local prev = self.footer.prev
     if prev and y == prev.y and x >= prev.x1 and x <= prev.x2 then
