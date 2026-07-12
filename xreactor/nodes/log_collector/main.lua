@@ -83,6 +83,56 @@ local stats = {
 
 local live_diag = {}
 
+-- Feature (2026-07-11): Crash-Loop-Schutz. Der bestehende Absturz-
+-- Bildschirm (siehe Dateiende) wartet bereits nur begrenzt (30s) und
+-- rebootet dann automatisch -- das verhindert bereits "haengt fuer immer
+-- fest ohne physische Anwesenheit". Was noch fehlte: wenn der Computer
+-- bei JEDEM Neustart sofort wieder abstuerzt (z.B. durch einen dauerhaft
+-- kaputten Zustand), wuerde er sich in einer Endlos-Neustart-Schleife
+-- verfangen -- alle 30s ein Reboot, ohne dass sich je etwas bessert, und
+-- ohne dass das irgendwo sichtbar wird. Persistente Absturz-Historie
+-- (einfache Datei mit Zeitstempeln, ueberlebt Reboots) erkennt dieses
+-- Muster und verlaengert die Wartezeit deutlich, statt den Server mit
+-- Reboots im Sekundentakt zu belasten.
+local CRASH_HISTORY_PATH = "/xreactor_crash_history.txt"
+local CRASH_LOOP_WINDOW_S = 120   -- Beobachtungsfenster: letzte 2 Minuten
+local CRASH_LOOP_THRESHOLD = 3    -- ab 3 Abstuerzen in diesem Fenster gilt es als Loop
+local CRASH_LOOP_WAIT_S = 300     -- bei erkannter Schleife: 5 statt 30 Sekunden warten
+
+local function read_crash_history()
+  if not (fs and fs.exists and fs.exists(CRASH_HISTORY_PATH)) then return {} end
+  local ok, handle = pcall(fs.open, CRASH_HISTORY_PATH, "r")
+  if not ok or not handle then return {} end
+  local content = handle.readAll() or ""
+  handle.close()
+  local out = {}
+  for line in content:gmatch("[^\n]+") do
+    local n = tonumber(line)
+    if n then out[#out + 1] = n end
+  end
+  return out
+end
+
+local function record_crash_and_check_loop()
+  local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
+  local history = read_crash_history()
+  -- Nur Eintraege innerhalb des Beobachtungsfensters behalten (alte
+  -- Abstuerze sollen nicht ewig mitzaehlen).
+  local recent = {}
+  for _, ts in ipairs(history) do
+    if now - ts <= CRASH_LOOP_WINDOW_S then recent[#recent + 1] = ts end
+  end
+  recent[#recent + 1] = now
+  pcall(function()
+    local handle = fs.open(CRASH_HISTORY_PATH, "w")
+    if handle then
+      handle.write(table.concat(recent, "\n") .. "\n")
+      handle.close()
+    end
+  end)
+  return #recent >= CRASH_LOOP_THRESHOLD, #recent
+end
+
 -- ── Generic helpers ─────────────────────────────────────────────────────────
 local function color(name, fallback)
   if colors and colors[name] then return colors[name] end
@@ -1126,6 +1176,8 @@ local ok, err = xpcall(run, function(e) return e end)
 if ok then return end
 if tostring(err or ""):lower():find("terminate", 1, true) then return end
 
+local is_loop, crash_count = record_crash_and_check_loop()
+
 if term then
   if term.setBackgroundColor then term.setBackgroundColor(color("black", 32768)) end
   if term.setTextColor then term.setTextColor(color("red", 16384)) end
@@ -1137,6 +1189,14 @@ if term then
   print(tostring(err))
   print("")
   print("recv=" .. tostring(stats.received) .. " write=" .. tostring(stats.written) .. " drop=" .. tostring(stats.dropped))
+  if is_loop then
+    if term.setTextColor then term.setTextColor(color("red", 16384)) end
+    print("")
+    print("!! CRASH-LOOP ERKANNT (" .. tostring(crash_count) .. " Abstuerze in " .. CRASH_LOOP_WINDOW_S .. "s) !!")
+    print("Warte " .. CRASH_LOOP_WAIT_S .. "s vor dem naechsten Neustart-Versuch,")
+    print("um den Server nicht mit Reboots im Sekundentakt zu belasten.")
+    print("Bitte Ursache manuell pruefen (siehe Fehler oben).")
+  end
   if term.setTextColor then term.setTextColor(color("yellow", 16)) end
   print("Taste druecken um neu zu starten...")
 end
@@ -1146,8 +1206,12 @@ end
 -- haengen (vermutlich die Erklaerung fuer "laeuft seit Stunden, loggt
 -- aber seit dem Neustart nichts mehr"). Jetzt: max. 30s warten, danach
 -- automatischer Reboot-Versuch, auch ohne Tastendruck.
+-- Feature (2026-07-11): bei erkannter Crash-Loop (siehe oben) wird diese
+-- Wartezeit auf CRASH_LOOP_WAIT_S (5 Minuten) verlaengert, statt weiter
+-- alle 30s neu zu starten ohne dass sich je etwas bessert.
+local wait_s = is_loop and CRASH_LOOP_WAIT_S or 30
 local ok_wait = pcall(function()
-  local timer_id = os.startTimer(30)
+  local timer_id = os.startTimer(wait_s)
   while true do
     local ev = { os.pullEvent() }
     if ev[1] == "key" then return end
