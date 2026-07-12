@@ -2,12 +2,12 @@
 
 Stand der erneuten Prüfung: 2026-07-12  
 Geprüfter Branch: `beta`  
-Aktueller Branch-Head: `b274660626fdf2dfa99122916b94c3f87dfa6d0c`  
-Letzter Programmcodestand der FUEL-UI: `8d3316889ee7c18787a170102e0818ea55ed16df` (`beta-v390`)  
+Geprüfter Ausgangs-Head vor den reinen Dokumentänderungen: `b274660626fdf2dfa99122916b94c3f87dfa6d0c`  
+Geprüfter Programmcodestand der FUEL-UI: `8d3316889ee7c18787a170102e0818ea55ed16df` (`beta-v390`)  
 
 ## Ergebnis der erneuten Prüfung
 
-Seit der letzten Dokumentbereinigung wurden keine weiteren Programmänderungen eingecheckt. Der aktuelle Branch-Head enthält nur die zuvor erfolgte Dokumentbereinigung; der ausführbare FUEL-UI-Code entspricht weiterhin `beta-v390`.
+Seit `beta-v390` wurden keine weiteren Programmänderungen an der FUEL-UI eingecheckt. Die späteren Commits aktualisieren ausschließlich dieses Aufgabendokument und verändern den geprüften ausführbaren Code nicht.
 
 Von den verbleibenden Punkten ist aktuell:
 
