@@ -74,7 +74,37 @@ local DEFAULT_CONFIG = {
   }
 }
 
-CONFIG.CONFIG_PATH = role_descriptor.config_path
+-- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md). role_descriptor.config_path zeigte
+-- bisher auf "/xreactor/nodes/fuel/config.lua" -- genau die Quelldatei,
+-- die Teil des Manifests ist und bei JEDEM Auto-Update (alle ~120s)
+-- frisch von GitHub heruntergeladen und ueberschrieben wird. Jede
+-- manuelle Bearbeitung dieser Datei (z.B. logistics.reactors eintragen,
+-- logistics.enabled=true setzen -- exakt die Config-Anleitung dieser
+-- ganzen Session) ging spaetestens beim naechsten Update-Zyklus wieder
+-- verloren, ohne jede Warnung. Jetzt: kanonische Nutzer-Config an einem
+-- vom Manifest komplett unberuehrten Pfad, mit einmaliger Migration
+-- eines eventuell bereits vorhandenen Standes aus der alten Quelldatei
+-- (rettet zumindest den Stand, der GENAU JETZT noch da ist -- Bearbeitungen,
+-- die bereits von einem frueheren Auto-Update-Zyklus ueberschrieben
+-- wurden, sind technisch nicht mehr rekonstruierbar).
+local USER_CONFIG_PATH = "/xreactor/config/fuel.lua"
+if not fs.exists(USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
+  local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
+  if ok_read and handle then
+    local content = handle.readAll()
+    handle.close()
+    local dir = fs.getDir(USER_CONFIG_PATH)
+    if dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+    local ok_write, out = pcall(fs.open, USER_CONFIG_PATH, "w")
+    if ok_write and out then
+      out.write(content)
+      out.close()
+      utils.log(CONFIG.LOG_PREFIX, "Config-Migration: " .. role_descriptor.config_path .. " -> " .. USER_CONFIG_PATH .. " (einmalig, schuetzt vor Auto-Update-Verlust)", "INFO")
+    end
+  end
+end
+CONFIG.CONFIG_PATH = USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
