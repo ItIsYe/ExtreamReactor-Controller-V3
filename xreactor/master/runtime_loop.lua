@@ -283,18 +283,40 @@ end
 function M.run()
   local ok, err = xpcall(run_master, function(e) return e end)
   if ok or is_terminate(err) then return end
+  -- Fix (2026-07-13): CRITICAL (SHARED-P0.2, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). Vorher eigenes, dupliziertes
+  -- Crash-Handling hier, das UNBEGRENZT auf einen physischen Tastendruck
+  -- wartete, bevor ueberhaupt rebootet wurde. Jetzt: dieselbe bereits
+  -- fuer FUEL/WATER/REPROCESSOR/RT/ENERGY/LOG_COLLECTOR bewaehrte Logik
+  -- (begrenzte Wartezeit, automatischer Reboot, Crash-Loop-Erkennung)
+  -- wiederverwendet. dofile() statt require(), da die Bootstrap-
+  -- konfigurierte require-Funktion nur innerhalb von run_master()
+  -- lokal verfuegbar ist, nicht hier auf M.run()-Ebene.
+  local ok_mod, support_runtime = pcall(dofile, "/xreactor/nodes/support/runtime.lua")
+  if ok_mod and support_runtime and support_runtime.crash_screen then
+    support_runtime.crash_screen(err)
+    return
+  end
+  -- Fallback, falls das Shared-Modul selbst nicht geladen werden kann --
+  -- besser ein einfacher, aber trotzdem NICHT unbegrenzt wartender
+  -- Crash-Screen als ein komplett unbeaufsichtigter Haenger.
   if term and term.setTextColor and colors then
     term.setBackgroundColor(colors.black); term.setTextColor(colors.red)
     term.clear(); term.setCursorPos(1, 1)
     print("=== MASTER CRASH ==="); print("")
     term.setTextColor(colors.white); print(tostring(err)); print("")
-    term.setTextColor(colors.yellow); print("Druecke eine Taste um neu zu starten...")
+    term.setTextColor(colors.yellow); print("Automatischer Neustart in 20s, oder Taste druecken...")
     term.setTextColor(colors.white)
   else
     print("MASTER CRASH: " .. tostring(err))
-    print("Druecke eine Taste um neu zu starten...")
   end
-  pcall(os.pullEvent, "key")
+  pcall(function()
+    local timer_id = os.startTimer(20)
+    while true do
+      local ev = { os.pullEvent() }
+      if ev[1] == "key" or (ev[1] == "timer" and ev[2] == timer_id) then return end
+    end
+  end)
   if os.reboot then os.reboot() end
 end
 

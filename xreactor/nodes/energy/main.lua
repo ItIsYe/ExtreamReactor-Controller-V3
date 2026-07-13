@@ -42,6 +42,7 @@ local discovery_log          = require("nodes.energy.discovery_log")
 local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
 local matrix_topology_cache  = require("nodes.energy.matrix_topology_cache")
 local config_normalizer      = require("nodes.energy.config_normalizer")
+local support_runtime        = require("nodes.support.runtime")
 local message_handler_lib    = require("nodes.energy.command_handler")
 local status_payload_runtime = require("nodes.energy.status_payload")
 local ui_model_runtime       = require("nodes.energy.ui_model")
@@ -414,18 +415,13 @@ elseif is_terminate(result) then
   shutdown("terminate received")
 else
   shutdown("runtime error: " .. tostring(result))
-  if term and term.setTextColor and colors then
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.red)
-    term.clear(); term.setCursorPos(1, 1)
-    print("=== ENERGY NODE CRASH ==="); print("")
-    term.setTextColor(colors.white); print(tostring(result)); print("")
-    term.setTextColor(colors.yellow); print("Druecke eine Taste um neu zu starten...")
-    term.setTextColor(colors.white)
-  else
-    print("ENERGY NODE CRASH: " .. tostring(result))
-    print("Druecke eine Taste um neu zu starten...")
-  end
-  pcall(os.pullEvent, "key")
-  if os.reboot then os.reboot() end
+  -- Fix (2026-07-13): CRITICAL (SHARED-P0.2, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). Vorher eigener, dupliziertes
+  -- Crash-Handling hier, das UNBEGRENZT auf einen physischen Tastendruck
+  -- wartete (pcall(os.pullEvent,"key")), bevor ueberhaupt rebootet wurde
+  -- -- ohne physische Anwesenheit blieb ENERGY bei einem Fehler fuer
+  -- immer haengen. Jetzt: dieselbe bereits fuer FUEL/WATER/REPROCESSOR/
+  -- RT/LOG_COLLECTOR bewaehrte Logik (begrenzte Wartezeit, automatischer
+  -- Reboot, Crash-Loop-Erkennung) wiederverwendet statt dupliziert.
+  support_runtime.crash_screen("runtime error: " .. tostring(result))
 end

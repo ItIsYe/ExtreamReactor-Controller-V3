@@ -197,4 +197,10 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle)
   crash_screen(err)
 end
 
+-- Feature (2026-07-13): SHARED-P0.2. Als M.crash_screen exportiert, damit
+-- ENERGY und MASTER (die ihre eigenen, separaten Crash-Handling-
+-- Einstiegspunkte haben, nicht ueber M.run_event_loop() laufen) dieselbe
+-- Logik wiederverwenden koennen, statt sie zu duplizieren.
+M.crash_screen = crash_screen
+
 return M
