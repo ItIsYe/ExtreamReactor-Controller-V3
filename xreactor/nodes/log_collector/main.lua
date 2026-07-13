@@ -530,6 +530,15 @@ local function format_log_line(payload)
     tostring(payload.message or payload.line or ""))
 end
 
+-- Fix (2026-07-13): LOG-P1. Vorwaertsdeklaration, da write_log() weiter
+-- unten flush_bucket() bereits aufruft (ERROR/CRITICAL-Sofort-Flush),
+-- flush_bucket() selbst aber erst danach definiert wird.
+local flush_bucket
+local flush_due
+local FLUSH_LINES = 8
+local FLUSH_INTERVAL_MS = 200
+local MAX_PENDING_LINES_PER_PATH = 128
+
 local function write_log(payload)
   if stats.paused then
     stats.paused_dropped = stats.paused_dropped + 1
@@ -586,10 +595,55 @@ local function write_log(payload)
   end
 
   local line = format_log_line(payload) .. "\n"
+  -- Fix (2026-07-13): CRITICAL (LOG-P1, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md). Vorher wurde fuer JEDES einzelne Logevent
+  -- eine Datei geoeffnet, EINE Zeile geschrieben, wieder geschlossen --
+  -- teurer Datei-I/O pro Event. Jetzt: die Zeile wird nur noch in einen
+  -- kleinen Pro-Pfad-Puffer eingereiht (guenstige Tabellen-Operation), der
+  -- eigentliche Schreibvorgang passiert gebuendelt in flush_bucket() (siehe
+  -- unten), ausgeloest entweder durch flush_lines (8 Zeilen) oder
+  -- flush_interval_ms (200ms) oder sofort bei ERROR/CRITICAL. WICHTIG: das
+  -- ACK ("written") darf weiterhin erst nach TATSAECHLICH erfolgreicher
+  -- Persistierung gesendet werden -- das passiert deshalb nicht mehr hier,
+  -- sondern in flush_bucket() nach dem bestaetigten Schreiberfolg.
+  stats.pending_writes = stats.pending_writes or {}
+  local bucket = stats.pending_writes[path]
+  if not bucket then
+    -- Fix (2026-07-13): last_flush_attempt_ms muss bei der ERSTELLUNG
+    -- eines Puffers auf die AKTUELLE Zeit gesetzt werden, nicht auf 0 --
+    -- sonst wuerde die naechste flush_due()-Pruefung (now - 0 >= 200ms)
+    -- IMMER sofort "faellig" ergeben, egal wie kurz der Puffer gerade erst
+    -- angelegt wurde, und das Zeitintervall waere komplett wirkungslos.
+    bucket = { lines = {}, payloads = {}, last_flush_attempt_ms = now_ms(), disk = disk }
+    stats.pending_writes[path] = bucket
+  end
+  if #bucket.lines >= MAX_PENDING_LINES_PER_PATH then
+    stats.dropped = stats.dropped + 1
+    stats.last_error = "backpressure: " .. tostring(path) .. " puffer voll"
+    return false, "backpressure"
+  end
+  bucket.lines[#bucket.lines + 1] = line
+  bucket.payloads[#bucket.payloads + 1] = payload
+  if payload.level == "ERROR" or payload.level == "CRITICAL" then
+    flush_bucket(path)
+  end
+  return "queued"
+end
+
+-- Fuehrt den tatsaechlichen (gebuendelten) Schreibvorgang fuer einen
+-- Zielpfad aus -- alle aktuell gepufferten Zeilen in EINEM Open/Write/
+-- Close-Zyklus. Nur bei bestaetigtem Erfolg werden ACKs gesendet und
+-- stats.written/node_last_written aktualisiert; bei einem Fehlschlag
+-- bleiben die Zeilen unveraendert im Puffer fuer den naechsten Versuch
+-- (kein Datenverlust, kein verfruehtes ACK).
+flush_bucket = function(path)
+  local bucket = stats.pending_writes and stats.pending_writes[path]
+  if not bucket or #bucket.lines == 0 then return end
+  local combined = table.concat(bucket.lines)
   local ok, err = pcall(function()
     local handle = fs.open(path, "a")
     if not handle then error("fs.open returned nil") end
-    handle.write(line)
+    handle.write(combined)
     handle.close()
   end)
 
@@ -597,12 +651,12 @@ local function write_log(payload)
     local message = tostring(err or "write failed")
     local lower = message:lower()
     if lower:find("out of space", 1, true) or lower:find("no space", 1, true) then
-      local wiped = wipe_disk(disk.root)
+      local wiped = wipe_disk(bucket.disk and bucket.disk.root or fs.getDir(path))
       diag("write out-of-space: wiped " .. tostring(wiped) .. " file(s), retry")
       ok, err = pcall(function()
         local handle = fs.open(path, "a")
         if not handle then error("fs.open returned nil after wipe") end
-        handle.write(line)
+        handle.write(combined)
         handle.close()
       end)
     end
@@ -610,16 +664,37 @@ local function write_log(payload)
 
   if not ok then
     stats.last_error = tostring(err or "write failed"):sub(1, 90)
-    stats.dropped = stats.dropped + 1
-    return false, stats.last_error
+    -- Puffer bewusst NICHT leeren -- naechster flush_due()-Durchlauf
+    -- versucht dieselben (noch unbestaetigten) Zeilen erneut.
+    return
   end
 
-  stats.last_write_index = disk.id
-  stats.last_write_mount = disk.mount
+  for _, payload in ipairs(bucket.payloads) do
+    stats.written = stats.written + 1
+    send_ack(payload, "written")
+    stats.node_last_written = stats.node_last_written or {}
+    stats.node_last_written[tostring(payload.node_id or "?")] = { ts = now_s(), role = tostring(payload.role or "?") }
+  end
+  if bucket.disk then
+    stats.last_write_index = bucket.disk.id
+    stats.last_write_mount = bucket.disk.mount
+  end
   stats.last_write_path = path
-  stats.log_root = disk.root
   stats.last_error = nil
-  return true
+  stats.pending_writes[path] = nil
+end
+
+-- Periodisch (Timer-Tick) aufgerufen: prueft alle offenen Puffer gegen
+-- flush_lines/flush_interval_ms und flusht faellige.
+flush_due = function()
+  if not stats.pending_writes then return end
+  local now = now_ms()
+  for path, bucket in pairs(stats.pending_writes) do
+    if #bucket.lines >= FLUSH_LINES or (now - (bucket.last_flush_attempt_ms or 0)) >= FLUSH_INTERVAL_MS then
+      bucket.last_flush_attempt_ms = now
+      flush_bucket(path)
+    end
+  end
 end
 
 -- ── Dedupe ─────────────────────────────────────────────────────────────────
@@ -1057,19 +1132,21 @@ local function handle_log_event(message)
 
   local ok, err = write_log(message)
   if ok then
-    stats.written = stats.written + 1
+    -- Fix (2026-07-13): LOG-P1. write_log() liefert jetzt "queued" (nicht
+    -- mehr "true") -- die Zeile wurde erfolgreich in den Batch-Puffer
+    -- aufgenommen, aber NOCH NICHT geschrieben/geackt (das passiert
+    -- asynchron in flush_bucket()). remember() bleibt bewusst HIER (nicht
+    -- erst beim Flush) -- schuetzt weiterhin gegen einen schnellen Retry
+    -- desselben Event_id, der eintrifft, BEVOR der Batch tatsaechlich
+    -- geflusht wurde.
     remember(message.event_id)
-    send_ack(message, "written")
-    -- Feature (2026-07-11): Pro-Node "zuletzt erfolgreich geschrieben"
-    -- merken -- Grundlage fuer den Frische-Watchdog (siehe check_log_
-    -- freshness() weiter unten). Nur bei ERFOLGREICHEM Schreiben aktualisiert,
-    -- absichtlich NICHT bei stats.received allein -- ein Node, dessen Logs
-    -- zwar ankommen aber verworfen werden (z.B. "no disk for role"), soll
-    -- hier trotzdem als "nicht mehr aktuell geschrieben" auffallen.
-    stats.node_last_written = stats.node_last_written or {}
-    stats.node_last_written[tostring(message.node_id or "?")] = {
-      ts = now_s(), role = tostring(message.role or "?")
-    }
+    -- Fix (2026-07-13): LOG-P1. Zusaetzlich zum periodischen 1s-Timer-Tick
+    -- (Sicherheitsnetz, siehe timer-Zweig weiter unten) wird nach JEDEM
+    -- Event direkt geprueft, ob ein Puffer bereits faellig ist -- sonst
+    -- koennte ein erreichtes flush_lines-Limit (8 Zeilen) bis zu 1s auf den
+    -- naechsten Timer-Tick warten muessen, obwohl das Intervall eigentlich
+    -- 200ms betragen soll.
+    flush_due()
   else
     if err ~= "paused" then stats.last_error = err end
   end
@@ -1216,6 +1293,7 @@ local function run()
         refresh_disks(false)
         refresh_modems(false)
         check_log_freshness()
+        flush_due()
         if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
         timer = os.startTimer and os.startTimer(1)
       end
