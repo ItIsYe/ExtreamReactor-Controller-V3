@@ -1,6 +1,75 @@
 local M = {}
 local mux = require("core.mockup_ui")
 
+-- Feature (2026-07-12): REST-P1.3 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+-- FIX_2026-07-12.md). Bisher entschieden Header, Hauptbanner, Ampel und
+-- Diagnostics JEWEILS UNABHAENGIG voneinander, welcher Zustand gerade
+-- vorliegt (z.B. fuel_state() kannte nur RESERVE-bezogene Zustaende,
+-- die Ampel kannte "LIMITED" fuer eine aktive Lieferung, Diagnostics
+-- kannte wieder andere Werte) -- die Anzeigen konnten sich dadurch
+-- inhaltlich widersprechen. Ab jetzt EINE priorisierte Funktion, deren
+-- Ergebnis alle vier Stellen gemeinsam nutzen.
+--
+-- Prioritaet (hoechste zuerst -- ein sicherheitsrelevanter Zustand darf
+-- nie von einem niedrigeren verdeckt werden, wie vom Dokument gefordert):
+--   1. ERROR              -- Protokoll-Fehlanpassung mit Master (Comms
+--                            grundlegend kaputt)
+--   2. NO_CONFIG           -- keine Reaktoren konfiguriert
+--   3. ROUTING_INVALID     -- Start-Ladevorgang der Routen fehlgeschlagen
+--   4. VALVE_OFFLINE       -- mindestens ein konfiguriertes Ventil offline
+--   5. NO_STORAGE          -- kein Speicher-Bus gebunden
+--   6. NO_FRESH_RT_DATA    -- keine Master-Verbindung (naeherungsweise:
+--                            ohne Master gibt es auch keine relayten
+--                            RT-Fuellstandsdaten, siehe fuel_status_
+--                            network.lua)
+--   7. LOGISTICS_DISABLED  -- logistics.enabled == false
+--   8. DELIVERING          -- gerade eine aktive Anfrage in Bearbeitung
+--   9. READY               -- normaler, gesunder Betrieb
+--  10. LOADING             -- noch keine erste Discovery abgeschlossen
+function M.compute_view_state(model, devices, reserve, minimum)
+  local payload = model.payload or {}
+  local logistics = payload.logistics or {}
+  local bindings = payload.bindings or {}
+
+  if not devices or devices.last_scan_ts == nil then
+    return { code = "LOADING", severity = "LIMITED", title = "Lade...", detail = "Erste Discovery laeuft noch", action = nil }
+  end
+  if payload.protocol_mismatch then
+    return { code = "ERROR", severity = "WARNING", title = "Protokoll-Fehler", detail = "Versions-Mismatch mit MASTER", action = "Alle Nodes auf dieselbe Version aktualisieren" }
+  end
+  local reactor_count = #(logistics.reactors or {})
+  if reactor_count == 0 then
+    return { code = "NO_CONFIG", severity = "LIMITED", title = "Keine Reaktoren konfiguriert", detail = "logistics.reactors ist leer", action = "Reaktoren in der Konfiguration eintragen" }
+  end
+  if payload.routing_load_status and payload.routing_load_status.ok == false then
+    return { code = "ROUTING_INVALID", severity = "WARNING", title = "Routing ungueltig", detail = tostring(payload.routing_load_status.message or payload.routing_load_status.code or "?"), action = "fuel_routes.lua pruefen/neu speichern" }
+  end
+  if payload.valve_summary and (payload.valve_summary.offline or 0) > 0 then
+    return { code = "VALVE_OFFLINE", severity = "WARNING", title = "Ventil offline", detail = payload.valve_summary.offline .. " von " .. payload.valve_summary.total .. " Ventilen nicht erreichbar", action = "VALVE-Node(s) pruefen" }
+  end
+  if (bindings.storage or 0) == 0 then
+    return { code = "NO_STORAGE", severity = "WARNING", title = "Kein Speicher gebunden", detail = "storage_bus nicht gefunden", action = "Wired Modem/ME Bridge pruefen" }
+  end
+  if payload.master_connected == false then
+    return { code = "NO_FRESH_RT_DATA", severity = "WARNING", title = "Keine aktuellen Reaktordaten", detail = "Warte auf MASTER/RT-Status", action = "MASTER- und RT-Verbindung pruefen" }
+  end
+  if logistics.enabled == false then
+    return { code = "LOGISTICS_DISABLED", severity = "LIMITED", title = "Logistik deaktiviert", detail = "logistics.enabled = false", action = "logistics.enabled auf true setzen, sobald bereit" }
+  end
+  -- Feature (2026-07-12): im Dokument nicht explizit in der Prioritaetsliste
+  -- genannt, aber operativ wichtig genug (war der urspruengliche
+  -- Haupt-Check, bevor LOGISTICS_DISABLED ergaenzt wurde) -- rangiert
+  -- unterhalb der Infrastruktur-Probleme, aber oberhalb von DELIVERING/
+  -- READY, da eine niedrige Reserve aktives Handeln erfordert.
+  if reserve and minimum and reserve < minimum then
+    return { code = "RESERVE_LOW", severity = "WARNING", title = "Reserve niedrig", detail = tostring(reserve) .. " < " .. tostring(minimum), action = "Nachschub sicherstellen" }
+  end
+  if logistics.current_request then
+    return { code = "DELIVERING", severity = "LIMITED", title = "Lieferung aktiv", detail = tostring(logistics.current_request), action = nil }
+  end
+  return { code = "READY", severity = "OK", title = "Bereit", detail = nil, action = nil }
+end
+
 local function short(value, suffix)
   local n = tonumber(value)
   if not n then return "n/a" end
@@ -44,18 +113,15 @@ function M.new(opts)
   end
 
   local function fuel_state(model, reserve, minimum)
-    -- Fix (2026-07-11): UI-P1.3 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
-    -- FIX_2026-07-12.md). "logistics.enabled == false" (siehe frueherer
-    -- Fund diese Session: dieser Zustand kann tagelang unbemerkt bleiben,
-    -- da alle anderen Warnungen normal weiterlaufen) wurde hier bisher
-    -- NIE geprueft -- die Haupt-Banner zeigte weiterhin "RESERVE NORMAL"
-    -- o.ae., obwohl der komplette Fuel-Export abgeschaltet ist. Jetzt hat
-    -- dieser Zustand Prioritaet vor allen anderen Banner-Texten.
-    local logistics = model.payload and model.payload.logistics or {}
-    if logistics.enabled == false then return "LOGISTICS DISABLED", "LIMITED" end
-    if reserve < minimum then return "RESERVE LOW", "WARNING" end
-    if model.status ~= "OK" then return "FUEL WARNING", "WARNING" end
-    return "RESERVE NORMAL", "OK"
+    -- Fix (2026-07-12): REST-P1.3. view_state wird jetzt zentral einmal
+    -- in monitor_ui.lua's build_model() berechnet (siehe dortiger
+    -- Kommentar) -- hier nur noch lesen, nicht mehr neu berechnen, damit
+    -- garantiert derselbe Wert wie bei Ampel/Diagnostics verwendet wird.
+    -- Fallback fuer den (theoretischen) Fall, dass view_state fehlt.
+    local vs = model.view_state or M.compute_view_state(model, devices, reserve, minimum)
+    local label = vs.title
+    if vs.detail then label = label .. ": " .. vs.detail end
+    return label, vs.severity
   end
 
   local function overview(mon, model, should_clear)
@@ -181,6 +247,15 @@ function M.new(opts)
 
     local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
     support_ui_pages.append_local_alert_rows(rows, alerts)
+    -- Feature (2026-07-12): REST-P1.3. Derselbe view_state, der auch
+    -- Header/Banner/Ampel steuert, jetzt auch explizit als eigene
+    -- Diagnostics-Zeile sichtbar.
+    if model.view_state then
+      rows[#rows + 1] = {
+        text = "VIEW-STATE: " .. tostring(model.view_state.code) .. (model.view_state.action and (" -- " .. model.view_state.action) or ""),
+        status = model.view_state.severity or "text",
+      }
+    end
     -- Feature (2026-07-12): REST-P1.1. UI-Renderfehler (error_count/
     -- last_error, vom shared ui_router ueber build_model() ins Model
     -- uebernommen) waren bisher nirgends auf der Diagnostics-Seite
@@ -238,6 +313,11 @@ function M.new(opts)
     render_details = details,
     render_diagnostics = diagnostics,
     handle_diagnostics_touch = diagnostics_touch,
+    -- Feature (2026-07-12): REST-P1.3. Damit render_ampel() (das ein
+    -- eigenes, minimales Model unabhaengig von overview()/fuel_state()
+    -- aufbaut) denselben priorisierten view_state verwenden kann statt
+    -- einer eigenen, abweichenden Logik.
+    compute_view_state = M.compute_view_state,
   }
 end
 

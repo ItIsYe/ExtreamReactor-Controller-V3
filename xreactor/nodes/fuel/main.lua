@@ -255,6 +255,7 @@ local function build_status_payload()
     read_fuel = function() return fuel_storage.read_fuel(warn_once, support_runtime) end,
     enforce_reserve = function(current) return fuel_storage.enforce_reserve(current, reserve, safety, utils) end,
     is_master_connected = is_master_connected, get_router = get_router,
+    routing_load_status = routing_load_status, get_rs_router = get_rs_router,
   })
   payload_cache_ts = now
   return payload_cache
@@ -294,6 +295,7 @@ end
 local function render_ampel()
   fuel_monitor_ui.render_ampel({
     build_status_payload = build_status_payload, master_peer_state = master_peer_state, devices = devices,
+    fuel_ui = fuel_ui,
   })
 end
 

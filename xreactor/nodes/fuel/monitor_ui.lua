@@ -20,32 +20,33 @@ local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampe
 local monitor_router = nil
 local current_mon = nil
 
--- Fix (2026-07-09): Ampel-Status fuer FUEL ableiten, analog zu rt_status()
--- in nodes/rt/monitor_ui.lua. Master-Verbindung > aktive Fehler > kritisch
--- niedriger Reaktor-Fuellstand > gerade aktive Lieferung > normal.
-local function fuel_ampel_status(model)
-  if model.master_state and model.master_state ~= "OK" then return "WARNING" end
-  local logistics = (model.payload and model.payload.logistics) or {}
-  if logistics.enabled == false then return "muted" end
-  if tonumber(logistics.total_errors or 0) > 0 then return "WARNING" end
-  for _, r in ipairs(logistics.reactors or {}) do
+-- Feature (2026-07-12): REST-P1.3. Bildet den priorisierten view_state
+-- (siehe ui_pages.lua M.compute_view_state()) auf einen Ampel-Farbcode
+-- ab. Die EMERGENCY-Sonderpruefung fuer einen kritisch niedrigen
+-- PRO-REAKTOR-Fuellstand bleibt als zusaetzliche Eskalation erhalten --
+-- das ist ein eigenstaendiges Signal, das die Prioritaetsliste des
+-- Dokuments nicht abdeckt (dort geht es um FUEL-Node-Zustaende, nicht um
+-- einzelne Reaktor-Fuellstaende).
+local VIEW_STATE_TO_AMPEL = {
+  ERROR = "EMERGENCY", NO_CONFIG = "WARNING", ROUTING_INVALID = "WARNING",
+  VALVE_OFFLINE = "WARNING", NO_STORAGE = "WARNING", NO_FRESH_RT_DATA = "WARNING",
+  LOGISTICS_DISABLED = "muted", RESERVE_LOW = "WARNING", DELIVERING = "LIMITED",
+  READY = "OK", LOADING = "LIMITED",
+}
+local function fuel_ampel_status(view_state, logistics)
+  for _, r in ipairs((logistics or {}).reactors or {}) do
     if type(r.fuel_pct) == "number" and r.fuel_pct < 10 then return "EMERGENCY" end
   end
-  if logistics.current_request then return "LIMITED" end
-  return "OK"
+  return VIEW_STATE_TO_AMPEL[view_state.code] or "WARNING"
 end
 
--- ctx: { build_status_payload, master_peer_state, devices }
+-- ctx: { build_status_payload, master_peer_state, devices, fuel_ui }
 function M.render_ampel(ctx)
   if not ampel_instance then return end
   pcall(function()
     local payload = ctx.build_status_payload()
-    local peer = ctx.master_peer_state()
-    local model = {
-      master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN",
-      payload = payload,
-    }
-    ampel_instance.render(ctx.devices.monitor_name, fuel_ampel_status(model))
+    local view_state = ctx.fuel_ui.compute_view_state({ payload = payload }, ctx.devices, payload.reserve, payload.minimum_reserve)
+    ampel_instance.render(ctx.devices.monitor_name, fuel_ampel_status(view_state, payload.logistics))
   end)
 end
 
@@ -86,8 +87,14 @@ function M.build_model(ctx)
   -- wird durch das bestehende Zeitstempel-Muster in scrub_timestamps()
   -- ohnehin schon aus dem Snapshot herausgefiltert.
   model.ui_diagnostics = M.get_diagnostics()
+  -- Feature (2026-07-12): REST-P1.3. view_state EINMAL zentral berechnet
+  -- (statt nur als Nebeneffekt eines overview()-Aufrufs, der bei anderen
+  -- aktiven Seiten gar nicht laeuft) -- Header/Banner/Ampel/Diagnostics
+  -- lesen jetzt alle DENSELBEN bereits fertigen Wert.
+  model.view_state = ctx.fuel_ui.compute_view_state(model, devices, payload.reserve, payload.minimum_reserve)
   if type(model.snapshot) == "table" then
     model.snapshot.ui_error_count = model.ui_diagnostics.error_count
+    model.snapshot.view_state_code = model.view_state.code
   end
   return model
 end

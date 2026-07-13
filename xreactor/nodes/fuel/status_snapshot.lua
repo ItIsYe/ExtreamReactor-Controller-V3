@@ -67,6 +67,24 @@ function M.build_status_payload(ctx)
   payload.logistics = ctx.get_router():get_summary()
   payload.bindings = fuel_health.bindings
   payload.bindings_summary = health.summarize_bindings(fuel_health.bindings)
+  -- Feature (2026-07-12): REST-P1.3 (siehe docs/CODING_AI_FUEL_UI_
+  -- PRIORITY_FIX_2026-07-12.md). Grundlage fuer den einheitlichen
+  -- view_state: routing_load_status (Start-Ladevorgang, siehe REST-P0.1)
+  -- und eine kompakte VALVE-Offline-Zusammenfassung (siehe REST-P0.3)
+  -- werden jetzt Teil des Payloads, damit sowohl Header/Banner/Ampel als
+  -- auch Diagnostics dieselbe zugrunde liegende Wahrheit verwenden.
+  payload.routing_load_status = ctx.routing_load_status
+  if ctx.get_rs_router then
+    local ok_rs, rs = pcall(ctx.get_rs_router)
+    if ok_rs and rs and rs.get_valve_status then
+      local ok_vs, valve_status = pcall(rs.get_valve_status, rs)
+      if ok_vs then
+        local offline = 0
+        for _, vs in ipairs(valve_status) do if vs.online == false then offline = offline + 1 end end
+        payload.valve_summary = { total = #valve_status, offline = offline }
+      end
+    end
+  end
   return payload
 end
 
