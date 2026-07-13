@@ -431,6 +431,17 @@ local function handle_command(message)
     local new_target = tonumber(command.value)
     if type(new_target) == "number" and new_target >= 0 then
       config.target_volume = new_target
+      -- Fix (2026-07-13): WATER-P0.4-Zusatz (siehe docs/CODING_AI_OTHER_
+      -- NODES_PERFORMANCE_2026-07-12.md). Vorher aenderte SET_TARGET nur
+      -- den Wert im Arbeitsspeicher -- beim naechsten Neustart war der
+      -- per Funk gesetzte Zielwert wieder weg. Jetzt wird die Aenderung
+      -- in die kanonische, geschuetzte WATER-Nutzerconfig geschrieben
+      -- (siehe GLOBAL-P0-Fix, CONFIG.CONFIG_PATH zeigt jetzt auf
+      -- /xreactor/config/water.lua statt der Manifest-Quelldatei).
+      local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
+      if not ok_write then
+        utils.log("WATER", "SET_TARGET: Persistierung fehlgeschlagen (" .. tostring(werr) .. ") -- Wert gilt nur bis zum naechsten Neustart", "WARN")
+      end
       utils.log("WATER", "Target volume updated to " .. tostring(new_target))
     else
       utils.log("WATER", "SET_TARGET rejected: invalid value=" .. tostring(command.value), "WARN")
