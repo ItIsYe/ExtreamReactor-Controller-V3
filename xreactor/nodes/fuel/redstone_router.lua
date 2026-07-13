@@ -188,6 +188,7 @@ function M.new(opts)
       last_active_ts = nil,
       tree_valid = nil,
       tree_errors = {},
+      tree_configured = false,
     },
   }
   return setmetatable(self, { __index = M })
@@ -196,6 +197,14 @@ end
 function M:refresh()
   local cfg = self.config.logistics or self.config or {}
   local tree = cfg.redstone_tree or {}
+  -- Feature (2026-07-13): CRITICAL Sicherheitsfund (siehe docs/CODING_AI_
+  -- OTHER_NODES_PERFORMANCE_2026-07-12.md, Sicherheitsregel zu REPROC-P0.3).
+  -- tree_configured haelt fest, ob ueberhaupt ein Baum in der Config
+  -- STAND (unabhaengig davon, ob er gueltig war) -- Grundlage fuer die
+  -- Unterscheidung in route_and_act() weiter unten zwischen "Routing war
+  -- nie gewollt" (sicher, Direkt-Export ok) und "Routing war konfiguriert,
+  -- aber kaputt/leer geworden" (GEFAEHRLICH, muss blockieren).
+  self._state.tree_configured = #tree > 0
 
   -- Feature (2026-07-08): strukturelle Validierung VOR jeder Aktivierung.
   -- Bei einem ungueltigen Baum: alle Ventile blockieren (Fail-Safe-
@@ -205,6 +214,16 @@ function M:refresh()
   -- zurueckfaellt statt mit einer kaputten Struktur zu arbeiten), und der
   -- Fehler wird geloggt (landet damit auch im Log-Collector-System) sowie
   -- ueber get_validation() fuer UI/zukuenftige Master-Alerts bereitgestellt.
+  --
+  -- Fix (2026-07-13): CRITICAL. Der urspruengliche Kommentar hier ("route_
+  -- count() bleibt 0, damit ... auf den ungerouteten Direkt-Export-Pfad
+  -- zurueckfaellt") widersprach sich selbst mit der Absicht "block_all(),
+  -- kein Fuel-Transfer moeglich" wenige Zeilen weiter unten -- route_and_
+  -- act() sah bei einem UNGUELTIGEN (aber tatsaechlich konfigurierten)
+  -- Baum ebenfalls all_valves==0 und fuehrte die Aktion trotzdem UNGE-
+  -- SCHUETZT direkt aus, exakt entgegen der block_all()-Absicht. Jetzt
+  -- unterschieden ueber tree_configured (siehe oben): ein Baum, der
+  -- KONFIGURIERT war aber ungueltig ist, blockiert jetzt tatsaechlich.
   local validation = M.validate_tree(tree)
   self._state.tree_valid = validation.ok
   self._state.tree_errors = validation.errors
@@ -374,8 +393,26 @@ function M:open_path_to(target_id)
 end
 
 function M:route_and_act(target_id, action_fn, valve_open_ms)
+  -- Fix (2026-07-13): CRITICAL (Sicherheitsregel, siehe docs/CODING_AI_
+  -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Vorher fiel JEDES "all_valves
+  -- == 0" ungeschuetzt in den Direkt-Export-Pfad -- das betraf nicht nur
+  -- den beabsichtigten Fall "kein Routing konfiguriert" (harmlos, wie ein
+  -- Einzel-Setup ohne Ventile), sondern GENAUSO den Fall "Routing WAR
+  -- konfiguriert, ist aber ungueltig/kaputt" (refresh() ruft in diesem
+  -- Fall bereits block_all() auf, in der ausdruecklichen Absicht "kein
+  -- Fuel-Transfer moeglich" -- diese Absicht wurde hier bisher durch den
+  -- Direkt-Export-Fallback wieder aufgehoben). Jetzt: nur wenn der Baum
+  -- GENUIN NIE konfiguriert war (tree_configured==false), gilt der
+  -- unagierte Direkt-Export als sicher. War ein Baum konfiguriert, aber
+  -- resultierte in 0 Ventilen (ungueltig oder anderweitig kaputt), wird
+  -- die Aktion jetzt hart verweigert statt ungeschuetzt ausgefuehrt.
   if #self._state.all_valves == 0 then
-    if action_fn then action_fn() end
+    if not self._state.tree_configured then
+      if action_fn then action_fn() end
+      return
+    end
+    self.log("ERROR", "RedstoneRouter: route_and_act() verweigert -- Routing war konfiguriert, aber 0 Ventile bekannt (ungueltiger/kaputter Baum). Kein ungeschuetzter Direkt-Export.")
+    self:block_all()
     return
   end
   local ok = self:open_path_to(target_id)
