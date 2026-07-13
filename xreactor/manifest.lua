@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 418,
-  manifest_id = "manifest-v418",
+  manifest_version = 419,
+  manifest_id = "manifest-v419",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 13632, hash = "12dec89a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "780e840f", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "22823557", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -104,7 +104,7 @@ return {
     -- die Datei gezielt manuell heruntergeladen wird.
     { path = "optional/pocket_client.lua", size_bytes = 10846, hash = "10601ed6", optional=true, feature="pocket_client", required_for={} },
     { path = "optional/master_ampel.lua", size_bytes = 6373, hash = "f3d68ef7", optional=true, feature="master_ampel", required_for={"MASTER"} },
-    { path = "master/ui_controller.lua", size_bytes = 47197, hash = "1c2fb5e3", required_for={"MASTER"} },
+    { path = "master/ui_controller.lua", size_bytes = 48721, hash = "09655455", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
     rt = {

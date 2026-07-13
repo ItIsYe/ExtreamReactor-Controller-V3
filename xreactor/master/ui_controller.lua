@@ -12,6 +12,29 @@ local utils = require("core.utils")
 -- Daten etc.) mit anzufassen -- liest die evtl. bereits vorhandene Datei
 -- zuerst ein und aktualisiert nur die konkret betroffenen Schluessel.
 local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
+-- Fix (2026-07-13): CRITICAL Folgefund waehrend MASTER-P1.1. Der AUTO-
+-- UPDATE-Schalter aenderte bisher nur runtime.state.auto_update_enabled
+-- -- das hatte KEINERLEI Wirkung auf den tatsaechlichen Update-
+-- Mechanismus (installer/auto_update.lua liest ausschliesslich
+-- /xreactor/config/remote_update.lua's "enabled"/"auto_update"-Felder,
+-- eine KOMPLETT SEPARATE Datei, die dieser Schalter nie beruehrte). Der
+-- Schalter war dadurch rein kosmetisch, ohne jede tatsaechliche Wirkung
+-- -- weder lokal auf MASTER selbst noch (wie im Dokument als
+-- "nodeuebergreifend" gefordert) auf andere Rollen. Jetzt schreibt der
+-- Schalter zusaetzlich in remote_update.lua -- das stellt zumindest
+-- MASTERs EIGENES Update-Verhalten korrekt her. Das per Funk an ALLE
+-- anderen Rollen propagieren ("nodeuebergreifend") ist ein eigenstaendiges,
+-- deutlich groesseres Feature (neuer Kommandotyp, ACK-Tracking pro Node)
+-- und bewusst NICHT Teil dieses Fixes.
+local REMOTE_UPDATE_ARMING_PATH = "/xreactor/config/remote_update.lua"
+local function set_local_auto_update_enabled(enabled)
+  local existing = {}
+  local ok, loaded = pcall(utils.load_config, REMOTE_UPDATE_ARMING_PATH, { enabled = true, auto_update = true, check_interval_s = 120 })
+  if ok and type(loaded) == "table" then existing = loaded end
+  existing.enabled = enabled
+  existing.auto_update = enabled
+  return pcall(utils.write_config, REMOTE_UPDATE_ARMING_PATH, existing) == true
+end
 local function persist_master_settings(fields)
   local existing = {}
   if utils.load_config then
@@ -729,8 +752,10 @@ function M.new(opts)
     end
     if action.type == "auto_update_toggle" and c.calc.set_auto_update_enabled then
       local cur = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled()
-      c.calc.set_auto_update_enabled(not cur)
-      persist_master_settings({ auto_update_enabled = not cur })
+      local new_val = not cur
+      c.calc.set_auto_update_enabled(new_val)
+      persist_master_settings({ auto_update_enabled = new_val })
+      set_local_auto_update_enabled(new_val)
       return true
     end
     -- Alarm-Historie Zeitfenster (Feature, 2026-07-01): zyklisch zwischen
