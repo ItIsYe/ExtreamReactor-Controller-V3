@@ -199,11 +199,23 @@ local function read_tank_level(tank_name)
 end
 
 local function set_rs_output(side, state, integrator)
+  -- Fix (2026-07-13): CRITICAL (WATER-P0.4, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). Vorher wurde das Ergebnis von
+  -- redstone.setOutput()/dev.setOutput() komplett verworfen -- der
+  -- Cluster-State (filling/draining) wurde unabhaengig davon geaendert,
+  -- ob der physische Write tatsaechlich erfolgreich war. Jetzt gibt
+  -- diese Funktion true/false zurueck, damit der Aufrufer den State nur
+  -- bei bestaetigtem Erfolg aktualisiert.
   if integrator then
     local ok, dev = pcall(peripheral.wrap, integrator)
-    if ok and dev and type(dev.setOutput) == "function" then pcall(dev.setOutput, side, state) end
+    if ok and dev and type(dev.setOutput) == "function" then
+      local ok2 = pcall(dev.setOutput, side, state)
+      return ok2 == true
+    end
+    return false
   else
-    pcall(redstone.setOutput, side, state)
+    local ok = pcall(redstone.setOutput, side, state)
+    return ok == true
   end
 end
 
@@ -217,27 +229,69 @@ local function manage_clusters()
     local max_vol = tonumber(cluster.max_volume) or math.huge
     local fill_side, drain_side, integrator = cluster.fill_side, cluster.drain_side, cluster.integrator
     local level = tank_name and read_tank_level(tank_name)
+    cluster_states[name] = cluster_states[name] or { filling = false, draining = false, read_failed = false, write_error = nil }
+    local state = cluster_states[name]
     if level == nil then
-      warn_once("cluster_read:" .. name, "Cluster " .. name .. ": tank not found: " .. tostring(tank_name))
+      -- Fix (2026-07-13): CRITICAL (WATER-P0.4). Vorher bei einem
+      -- Lesefehler nur eine Warnung + "goto continue" -- bereits aktive
+      -- Fill-/Drain-Ausgaenge blieben UNVERAENDERT eingeschaltet, obwohl
+      -- der aktuelle Tankstand gar nicht mehr bekannt ist. Sicherheits-
+      -- Standard jetzt BLOCK_ALL: bei unbekanntem Tankstand werden beide
+      -- Ausgaenge explizit abgeschaltet, nicht einfach beibehalten.
+      warn_once("cluster_read:" .. name, "Cluster " .. name .. ": tank not found/read failed: " .. tostring(tank_name) .. " -- BLOCK_ALL (beide Ausgaenge aus)")
+      state.read_failed = true
+      local ok_f = not fill_side or set_rs_output(fill_side, false, integrator)
+      local ok_d = not drain_side or set_rs_output(drain_side, false, integrator)
+      if ok_f and ok_d then
+        state.filling = false; state.draining = false
+      else
+        state.write_error = "BLOCK_ALL write failed"
+        utils.log("WATER", "Cluster " .. name .. ": BLOCK_ALL Write fehlgeschlagen -- Zustand unsicher", "ERROR")
+      end
       goto continue
     end
-    cluster_states[name] = cluster_states[name] or { filling = false, draining = false }
-    local state = cluster_states[name]
+    state.read_failed = false
     if level < min_vol and not state.filling then
-      state.filling = true; state.draining = false
-      if fill_side then set_rs_output(fill_side, true, integrator) end
-      if drain_side then set_rs_output(drain_side, false, integrator) end
-      utils.log("WATER", ("Cluster %s: filling (level=%.0f < min=%.0f)"):format(name, level, min_vol))
+      -- Fix (2026-07-13): CRITICAL (WATER-P0.4). State wird jetzt erst
+      -- NACH bestaetigtem Erfolg BEIDER Writes aktualisiert -- bei
+      -- Teilfehler werden bestmoeglich beide Ausgaenge deaktiviert statt
+      -- einen widerspruechlichen halb-angewendeten Zustand zu melden.
+      local ok_fill = not fill_side or set_rs_output(fill_side, true, integrator)
+      local ok_drain = not drain_side or set_rs_output(drain_side, false, integrator)
+      if ok_fill and ok_drain then
+        state.filling = true; state.draining = false
+        state.write_error = nil
+        utils.log("WATER", ("Cluster %s: filling (level=%.0f < min=%.0f)"):format(name, level, min_vol))
+      else
+        state.write_error = "fill write failed"
+        utils.log("WATER", "Cluster " .. name .. ": Fill-Write fehlgeschlagen -- versuche beide Ausgaenge zu deaktivieren", "ERROR")
+        if fill_side then set_rs_output(fill_side, false, integrator) end
+        if drain_side then set_rs_output(drain_side, false, integrator) end
+      end
     elseif level > max_vol and not state.draining then
-      state.draining = true; state.filling = false
-      if fill_side then set_rs_output(fill_side, false, integrator) end
-      if drain_side then set_rs_output(drain_side, true, integrator) end
-      utils.log("WATER", ("Cluster %s: draining (level=%.0f > max=%.0f)"):format(name, level, max_vol))
+      local ok_fill = not fill_side or set_rs_output(fill_side, false, integrator)
+      local ok_drain = not drain_side or set_rs_output(drain_side, true, integrator)
+      if ok_fill and ok_drain then
+        state.draining = true; state.filling = false
+        state.write_error = nil
+        utils.log("WATER", ("Cluster %s: draining (level=%.0f > max=%.0f)"):format(name, level, max_vol))
+      else
+        state.write_error = "drain write failed"
+        utils.log("WATER", "Cluster " .. name .. ": Drain-Write fehlgeschlagen -- versuche beide Ausgaenge zu deaktivieren", "ERROR")
+        if fill_side then set_rs_output(fill_side, false, integrator) end
+        if drain_side then set_rs_output(drain_side, false, integrator) end
+      end
     elseif level >= min_vol and level <= max_vol and (state.filling or state.draining) then
-      state.filling = false; state.draining = false
-      if fill_side then set_rs_output(fill_side, false, integrator) end
-      if drain_side then set_rs_output(drain_side, false, integrator) end
-      utils.log("WATER", ("Cluster %s: in range (level=%.0f)"):format(name, level))
+      local ok_fill = not fill_side or set_rs_output(fill_side, false, integrator)
+      local ok_drain = not drain_side or set_rs_output(drain_side, false, integrator)
+      if ok_fill and ok_drain then
+        state.filling = false; state.draining = false
+        state.write_error = nil
+        utils.log("WATER", ("Cluster %s: in range (level=%.0f)"):format(name, level))
+      else
+        state.write_error = "stop write failed"
+        utils.log("WATER", "Cluster " .. name .. ": Stop-Write fehlgeschlagen", "ERROR")
+      end
     end
     ::continue::
   end
@@ -288,7 +342,7 @@ local function build_status_payload()
     local name = cluster.name or "?"
     local level = (cluster.tank and read_tank_level(cluster.tank)) or nil
     local st = cluster_states[name] or {}
-    table.insert(cluster_info, { name = name, level = level, filling = st.filling or false, draining = st.draining or false, min = cluster.min_volume, max = cluster.max_volume })
+    table.insert(cluster_info, { name = name, level = level, filling = st.filling or false, draining = st.draining or false, min = cluster.min_volume, max = cluster.max_volume, read_failed = st.read_failed or false, write_error = st.write_error })
   end
   payload.clusters = cluster_info
   payload.buffers = buffers
