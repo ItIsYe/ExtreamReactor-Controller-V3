@@ -82,6 +82,30 @@ local DEFAULT_CONFIG = {
 }
 
 local config_warnings = {}
+-- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md). Wie bei FUEL bereits behoben: die
+-- urspruenglich hier hart codierte Quelldatei ist Teil des Manifests und
+-- wird bei jedem Auto-Update ueberschrieben -- jede manuelle Config-
+-- Bearbeitung ging dadurch spaetestens beim naechsten Update-Zyklus
+-- verloren.
+local ENERGY_SOURCE_CONFIG_PATH = CONFIG.CONFIG_PATH
+local ENERGY_USER_CONFIG_PATH = "/xreactor/config/energy.lua"
+if not fs.exists(ENERGY_USER_CONFIG_PATH) and fs.exists(ENERGY_SOURCE_CONFIG_PATH) then
+  local ok_read, handle = pcall(fs.open, ENERGY_SOURCE_CONFIG_PATH, "r")
+  if ok_read and handle then
+    local content = handle.readAll()
+    handle.close()
+    local dir = fs.getDir(ENERGY_USER_CONFIG_PATH)
+    if dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+    local ok_write, out = pcall(fs.open, ENERGY_USER_CONFIG_PATH, "w")
+    if ok_write and out then
+      out.write(content)
+      out.close()
+      utils.log(CONFIG.LOG_PREFIX or "ENERGY", "Config-Migration: " .. ENERGY_SOURCE_CONFIG_PATH .. " -> " .. ENERGY_USER_CONFIG_PATH, "INFO")
+    end
+  end
+end
+CONFIG.CONFIG_PATH = ENERGY_USER_CONFIG_PATH
 local config = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 config_normalizer.normalize(config, DEFAULT_CONFIG, utils, function(w) table.insert(config_warnings, w) end)
 

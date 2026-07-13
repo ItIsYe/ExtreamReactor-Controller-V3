@@ -14,6 +14,40 @@ local function run_master()
   local monitor_manager     = require("core.monitor_manager")
   local build_info          = require("shared.build_info")
   local config              = require("master.config")
+  -- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). MASTER hatte bisher UEBERHAUPT
+  -- KEINE Trennschicht zwischen Default- und Nutzerkonfiguration --
+  -- master/config.lua wurde direkt per require() geladen, ist Teil des
+  -- Manifests und wird bei jedem Auto-Update ueberschrieben. Jede
+  -- manuelle Bearbeitung (Schwellwerte, Monitorkonfiguration) ging
+  -- dadurch spaetestens beim naechsten Update-Zyklus verloren. Jetzt:
+  -- eine geschuetzte Nutzerdatei (kein Manifest-Eintrag) wird -- falls
+  -- vorhanden -- rekursiv ueber die Defaults gemergt. Einmalige
+  -- Migration eines eventuell noch vorhandenen Standes beim ersten
+  -- Boot mit diesem Fix.
+  local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
+  if not fs.exists(MASTER_USER_CONFIG_PATH) then
+    local ok_read, handle = pcall(fs.open, "/xreactor/master/config.lua", "r")
+    if ok_read and handle then
+      local content = handle.readAll()
+      handle.close()
+      local dir = fs.getDir(MASTER_USER_CONFIG_PATH)
+      if dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+      local ok_write, out = pcall(fs.open, MASTER_USER_CONFIG_PATH, "w")
+      if ok_write and out then
+        out.write(content)
+        out.close()
+        utils.log("MASTER", "Config-Migration: /xreactor/master/config.lua -> " .. MASTER_USER_CONFIG_PATH, "INFO")
+      end
+    end
+  end
+  if fs.exists(MASTER_USER_CONFIG_PATH) then
+    local ok_user, user_cfg = pcall(dofile, MASTER_USER_CONFIG_PATH)
+    if ok_user and type(user_cfg) == "table" then
+      utils.merge_defaults(user_cfg, config)
+      config = user_cfg
+    end
+  end
   local context             = require("master.context")
   local init_runtime        = require("master.init_runtime")
   local loop_mod            = require("master.loop")

@@ -57,7 +57,29 @@ local DEFAULT_CONFIG = {
   }
 }
 
-CONFIG.CONFIG_PATH = role_descriptor.config_path
+-- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md). Wie bei FUEL bereits behoben: die
+-- Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
+-- ueberschrieben -- jede manuelle Config-Bearbeitung (u.a. reproc_routes,
+-- Feed-Routing) ging dadurch spaetestens beim naechsten Update-Zyklus
+-- verloren.
+local REPROC_USER_CONFIG_PATH = "/xreactor/config/reprocessor.lua"
+if not fs.exists(REPROC_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
+  local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
+  if ok_read and handle then
+    local content = handle.readAll()
+    handle.close()
+    local dir = fs.getDir(REPROC_USER_CONFIG_PATH)
+    if dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+    local ok_write, out = pcall(fs.open, REPROC_USER_CONFIG_PATH, "w")
+    if ok_write and out then
+      out.write(content)
+      out.close()
+      utils.log(CONFIG.LOG_PREFIX or "REPROC", "Config-Migration: " .. role_descriptor.config_path .. " -> " .. REPROC_USER_CONFIG_PATH, "INFO")
+    end
+  end
+end
+CONFIG.CONFIG_PATH = REPROC_USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
