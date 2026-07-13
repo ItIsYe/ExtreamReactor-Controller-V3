@@ -256,6 +256,19 @@ function M.new(opts)
         status = model.view_state.severity or "text",
       }
     end
+    -- Feature (2026-07-12): REST-P1.4. Rohe UI-Metriken sichtbar machen --
+    -- absichtlich als reiner ANZEIGEWERT (nicht Teil des Snapshot-
+    -- Vergleichs, siehe monitor_ui.lua), damit das Betrachten dieser
+    -- Zeile selbst keine Endlos-Neuzeichenschleife erzeugt.
+    if uidiag then
+      rows[#rows + 1] = {
+        text = string.format("UI: frames %d/%d/%d clears=%d ptr=%d model=%d %dms",
+          uidiag.frames_committed or 0, uidiag.frames_skipped or 0, uidiag.frames_requested or 0,
+          uidiag.full_clears or 0, uidiag.pointer_events_received or 0, uidiag.model_builds or 0,
+          uidiag.last_render_ms or 0),
+        status = "text",
+      }
+    end
     -- Feature (2026-07-12): REST-P1.1. UI-Renderfehler (error_count/
     -- last_error, vom shared ui_router ueber build_model() ins Model
     -- uebernommen) waren bisher nirgends auf der Diagnostics-Seite

@@ -74,6 +74,17 @@ function router.new(mon_or_opts, opts)
     -- darin garantiert loggen (siehe main.lua-Verdrahtung), statt sich
     -- auf einen Text zu verlassen, der behauptet "steht im Log", es aber
     -- durch diesen Pfad bisher nicht garantiert tat.
+    -- Feature (2026-07-12): REST-P1.4 (siehe docs/CODING_AI_FUEL_UI_
+    -- PRIORITY_FIX_2026-07-12.md). Rohe Zaehler fuer Input-/Model-/
+    -- Renderverhalten -- WICHTIG: diese Werte duerfen NIEMALS Teil des
+    -- normalen Seiten-Snapshots (last_snapshot) werden, da sie sich
+    -- staendig aendern und sonst permanent neue Redraws erzwingen wuerden
+    -- (die Diagnostics-Seite selbst wuerde sich sonst in eine Endlos-
+    -- Neuzeichenschleife bringen). get_diagnostics() liefert sie separat.
+    ui_diag = {
+      frames_requested = 0, frames_committed = 0, frames_skipped = 0,
+      full_clears = 0, render_errors = 0, last_render_ms = 0,
+    },
     error_title = opts.error_title or "UI RENDER ERROR",
     on_render_error = opts.on_render_error,
     -- Feature (2026-07-11): UI-P0.6 (siehe docs/CODING_AI_FUEL_UI_
@@ -125,6 +136,16 @@ function router:get_diagnostics()
     -- staendig flackernder physischer Monitor (Skala aendert sich
     -- wiederholt) an einer steigenden Zahl erkennbar waere.
     transition_count = self.transition_count or 0,
+    -- Feature (2026-07-12): REST-P1.4. Rohe Input-/Render-Zaehler --
+    -- pointer_events_received/page_handler_calls/model_builds werden
+    -- ausserhalb des Routers gezaehlt (Input-Pfad bzw. build_model()) und
+    -- von der aufrufenden Rolle in dieses Ergebnis eingemischt.
+    frames_requested = self.ui_diag.frames_requested,
+    frames_committed = self.ui_diag.frames_committed,
+    frames_skipped = self.ui_diag.frames_skipped,
+    full_clears = self.ui_diag.full_clears,
+    render_errors = self.ui_diag.render_errors,
+    last_render_ms = self.ui_diag.last_render_ms,
   }
 end
 
@@ -267,6 +288,7 @@ function router:render_list_controls(mon, opts)
 end
 
 function router:render(mon, model)
+  self.ui_diag.frames_requested = self.ui_diag.frames_requested + 1
   if not mon then
     -- Fix (2026-07-12): REST-P1.2. Wenn der Monitor komplett verschwindet
     -- (peripheral_detach), gab render() bisher einfach nur zurueck --
@@ -321,8 +343,11 @@ function router:render(mon, model)
 
   local snapshot = build_snapshot(page and page.name, model)
   if not is_transition and snapshot == self.last_snapshot then
+    self.ui_diag.frames_skipped = self.ui_diag.frames_skipped + 1
     return
   end
+  self.ui_diag.frames_committed = self.ui_diag.frames_committed + 1
+  local render_start_ms = os.epoch and os.epoch("utc") or nil
   self.last_snapshot = snapshot
   self.list_controls = nil
 
@@ -349,6 +374,7 @@ function router:render(mon, model)
     self.footer.prev, self.footer.next, self.footer.indicator = nil, nil, nil
     self.list_controls = nil
     self.transition_count = (self.transition_count or 0) + 1
+    self.ui_diag.full_clears = self.ui_diag.full_clears + 1
   end
 
   -- Feature (2026-07-11): UI-P1.1. Ein Fehler in page.render() wurde
@@ -379,6 +405,7 @@ function router:render(mon, model)
       page_footer = result
     else
       self.error_count = (self.error_count or 0) + 1
+      self.ui_diag.render_errors = self.ui_diag.render_errors + 1
       self.last_error = {
         page = tostring(page.name or "?"),
         code = "RENDER_FAILED",
@@ -400,6 +427,9 @@ function router:render(mon, model)
         ui.text(mon, 2, 9, "Naechster Zyklus versucht erneut zu zeichnen.", colors.get("muted"), colors.get("background"))
       end)
     end
+  end
+  if render_start_ms then
+    self.ui_diag.last_render_ms = (os.epoch and os.epoch("utc") or render_start_ms) - render_start_ms
   end
   local w, h = ui.getSize(mon)
   if not w or not h then

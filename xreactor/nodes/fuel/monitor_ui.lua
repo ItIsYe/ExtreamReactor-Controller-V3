@@ -19,6 +19,10 @@ local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampe
 
 local monitor_router = nil
 local current_mon = nil
+-- Feature (2026-07-12): REST-P1.4. Zaehler, die AUSSERHALB des Routers
+-- entstehen -- werden in M.get_diagnostics() mit dem Router-eigenen
+-- Zustand zusammengefuehrt.
+local ui_diag_extra = { pointer_events_received = 0, page_handler_calls = 0, model_builds = 0 }
 
 -- Feature (2026-07-12): REST-P1.3. Bildet den priorisierten view_state
 -- (siehe ui_pages.lua M.compute_view_state()) auf einen Ampel-Farbcode
@@ -63,6 +67,7 @@ end
 -- ctx: { devices, build_status_payload, comms, master_peer_state, registry,
 --        config, master_alerts, support_ui_pages }
 function M.build_model(ctx)
+  ui_diag_extra.model_builds = ui_diag_extra.model_builds + 1
   local devices = ctx.devices
   local payload = ctx.build_status_payload()
   local comms_diag = ctx.comms and ctx.comms:get_diagnostics() or {}
@@ -164,12 +169,21 @@ end
 -- zurueck (Event konsumiert oder nicht), damit aufrufende Ebenen (z.B.
 -- ein kuenftiger zentraler Dispatcher) das respektieren koennen.
 function M.handle_input(event)
+  -- Feature (2026-07-12): REST-P1.4. Genau EIN Inkrement pro physischem
+  -- Touch-/Tasten-Event -- NICHT bei jedem Aufruf, da ui_service.lua
+  -- handle_input() fuer JEDES Event (auch passive modem_message)
+  -- aufruft. Nur echte Zeiger-/Tasten-Ereignisse zaehlen.
+  local kind = event and event[1]
+  if kind == "monitor_touch" or kind == "mouse_click" or kind == "key" or kind == "char" then
+    ui_diag_extra.pointer_events_received = ui_diag_extra.pointer_events_received + 1
+  end
   if monitor_router and monitor_router:handle_input(event) then
     return true
   end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
     local x, y = event and event[3], event and event[4]
+    ui_diag_extra.page_handler_calls = ui_diag_extra.page_handler_calls + 1
     return page.handle_touch(x, y) == true
   end
   return false
@@ -189,7 +203,11 @@ end
 -- diese Werte in das Model uebernehmen kann, damit die Diagnostics-Seite
 -- sie tatsaechlich anzeigt (vorher blieben sie nur intern im Router).
 function M.get_diagnostics()
-  return monitor_router and monitor_router.get_diagnostics and monitor_router:get_diagnostics() or { error_count = 0, last_error = nil }
+  local base = monitor_router and monitor_router.get_diagnostics and monitor_router:get_diagnostics() or { error_count = 0, last_error = nil }
+  base.pointer_events_received = ui_diag_extra.pointer_events_received
+  base.page_handler_calls = ui_diag_extra.page_handler_calls
+  base.model_builds = ui_diag_extra.model_builds
+  return base
 end
 
 return M
