@@ -146,6 +146,31 @@ local CONFIG = {
     redstone_routes    = {},
     valve_open_ms      = 2000,
   },
-  rails     = CONFIG.DEFAULT_RAILS,
-  logistics = CONFIG.DEFAULT_LOGISTICS
 }
+-- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md, Punkt 28.1). "rails = CONFIG.DEFAULT_RAILS"
+-- und "logistics = CONFIG.DEFAULT_LOGISTICS" standen bisher INNERHALB
+-- von CONFIG's eigenem Tabellenkonstruktor -- zu diesem Zeitpunkt ist
+-- die lokale Variable "CONFIG" noch nicht zugewiesen (klassische Lua-
+-- Falle: die Zuweisung passiert erst, wenn der GESAMTE rechte Ausdruck
+-- fertig ausgewertet ist), ein Zugriff darauf waere ein Laufzeitfehler
+-- ("attempt to index a nil value") gewesen, sobald diese Datei je
+-- tatsaechlich ausgefuehrt wurde. Da bisher zusaetzlich kein "return"
+-- existierte (siehe Fix weiter unten), wurde dieser Fehler nie sichtbar
+-- -- niemand hat diese Datei je erfolgreich geladen. Jetzt als separate
+-- Zuweisungen NACH dem Tabellenkonstruktor, wenn CONFIG bereits
+-- existiert.
+CONFIG.rails     = CONFIG.DEFAULT_RAILS
+CONFIG.logistics = CONFIG.DEFAULT_LOGISTICS
+-- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md, Punkt 28.1). Diese Datei hatte bisher
+-- UEBERHAUPT KEIN "return" -- dofile()/require() darauf lieferte
+-- dadurch immer nil statt der Config-Tabelle zurueck. utils.load_config()
+-- faellt in diesem Fall (data ist kein table) still auf DEFAULT_CONFIG
+-- zurueck -- diese ganze Datei war dadurch WIRKUNGSLOS, egal was
+-- hineingeschrieben wurde. Betraf auch die GLOBAL-P0-Migration (siehe
+-- main.lua): die kopiert den ROHEN TEXT dieser Datei unveraendert in die
+-- neue geschuetzte Nutzerdatei -- ohne dieses "return" waere auch die
+-- MIGRIERTE Datei dauerhaft wirkungslos geblieben, trotz korrekt
+-- geschuetztem Pfad.
+return CONFIG
