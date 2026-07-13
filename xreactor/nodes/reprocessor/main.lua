@@ -85,6 +85,35 @@ local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
 config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
+-- Fix (2026-07-13): CRITICAL (REPROC-P0.3 Folgefehler, siehe docs/
+-- CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md). Wie bei FUEL (REST-
+-- P0.1) bereits behoben: /xreactor/config/reproc_routes.lua (die vom
+-- Router-Editor geschriebene kanonische Routenquelle) wurde beim
+-- normalen REPROCESSOR-Start nie geladen -- gespeicherte Routen gingen
+-- bei jedem Neustart verloren.
+local routing_load_status = { ok = true, source = "config" }
+do
+  local routes_path = "/xreactor/config/reproc_routes.lua"
+  if fs.exists(routes_path) then
+    local ok_load, content = pcall(dofile, routes_path)
+    if not ok_load or type(content) ~= "table" then
+      routing_load_status = { ok = false, code = "ROUTES_FILE_UNREADABLE", message = tostring(content), source = routes_path }
+      add_config_warning("reproc_routes.lua konnte nicht geladen werden, Routing bleibt INVALID: " .. tostring(content))
+    else
+      local validation = redstone_router_lib.validate_tree(content)
+      if not validation.ok then
+        local fe = validation.errors[1]
+        routing_load_status = { ok = false, code = fe and fe.code or "INVALID", message = fe and fe.message or "Validierung fehlgeschlagen", source = routes_path }
+        add_config_warning("reproc_routes.lua ungueltig, Routing bleibt INVALID: " .. tostring(routing_load_status.message))
+      else
+        config.feed = config.feed or {}
+        config.feed.redstone_tree = content
+        routing_load_status = { ok = true, source = routes_path }
+      end
+    end
+  end
+end
+
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
   config_meta = config_meta, config_warnings = config_warnings
@@ -107,6 +136,7 @@ local master_alerts = {}
 local master_seen = os.epoch("utc")
 local standby = false
 local monitor_router = nil
+local current_mon = nil
 local process_state = {}
 local get_feed_router
 local reproc_ui = reproc_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
@@ -225,6 +255,7 @@ end
 local function render_monitor()
   if not devices.monitor then return end
   local mon = devices.monitor
+  current_mon = mon
   local payload = build_status_payload()
   local comms_diag = comms and comms:get_diagnostics() or {}
   local peer = master_peer_state()
@@ -238,14 +269,24 @@ local function render_monitor()
     local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = current_node_id
   })
+  -- Fix (2026-07-13): CRITICAL (REPROC-P0, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). Dieselben beiden Bugs, die schon
+  -- bei FUEL (v377/v386) und WATER gefixt wurden: Seiten-Closures froren
+  -- das Model vom allerersten Aufbau ein, statt das frische model-
+  -- Argument von router:render(mon, model) zu nutzen. Jetzt direkt
+  -- zugewiesen. Zusaetzlich: error_title/should_clear fuer die Router-
+  -- Seite ergaenzt -- der gemeinsam mit FUEL genutzte router_ui.lua zeigte
+  -- vorher immer "FUEL NODE" im Header, auch wenn er hier im REPROCESSOR
+  -- lief.
   if not monitor_router then
     monitor_router = ui_router.new({
+      error_title = "REPROC UI ERROR",
       pages = {
-        { name = "Overview", render = function(target) return reproc_ui.render_overview(target, model) end },
-        { name = "Details", render = function(target) return reproc_ui.render_details(target, model) end },
-        { name = "Diagnostics", render = function(target) return reproc_ui.render_diagnostics(target, model) end,
-          handle_touch = function(x, y) return reproc_ui.handle_diagnostics_touch(mon, x, y) end },
-        { name = "Router", render = function(target) get_router_ui():render(target, ui, colors) end,
+        { name = "Overview", render = reproc_ui.render_overview },
+        { name = "Details", render = reproc_ui.render_details },
+        { name = "Diagnostics", render = reproc_ui.render_diagnostics,
+          handle_touch = function(x, y) return reproc_ui.handle_diagnostics_touch(current_mon, x, y) end },
+        { name = "Router", render = function(target, m, should_clear) get_router_ui():render(target, ui, colors, should_clear) end,
           handle_touch = function(x, y) return get_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
@@ -255,9 +296,18 @@ local function render_monitor()
   monitor_router:render(mon, model)
 end
 
-local function handle_monitor_touch(x, y)
+-- Fix (2026-07-13): CRITICAL (REPROC-P0.2. Wie bei WATER: zentraler,
+-- einziger Input-Pfad, konsumierte Navigation stoppt die Weitergabe.
+local function handle_monitor_touch(event)
+  if monitor_router and monitor_router:handle_input(event) then
+    return true
+  end
   local page = monitor_router and monitor_router:current()
-  if page and type(page.handle_touch) == "function" then return page.handle_touch(x, y) end
+  if page and type(page.handle_touch) == "function" then
+    local x, y = event and event[3], event and event[4]
+    return page.handle_touch(x, y) == true
+  end
+  return false
 end
 
 local function process_buffers()
@@ -282,7 +332,20 @@ end
 
 local function get_rs_router()
   if not rs_router then
-    rs_router = redstone_router_lib.new({ config = config, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end })
+    -- Fix (2026-07-13): CRITICAL (REPROC-P0.3, siehe docs/CODING_AI_
+    -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Der gemeinsam mit FUEL
+    -- genutzte redstone_router.lua sucht ausschliesslich
+    -- "config.logistics.redstone_tree" oder "config.redstone_tree" --
+    -- REPROCESSOR definiert seine Route jedoch unter "config.feed.
+    -- redstone_tree". Bisher wurde die GESAMTE Root-Config uebergeben,
+    -- in der WEDER config.logistics NOCH ein Top-Level redstone_tree
+    -- existiert -- der Router sah dadurch im normalen Startpfad IMMER
+    -- einen leeren Baum, unabhaengig davon, was tatsaechlich
+    -- konfiguriert war. Route_and_act() fuehrte die Exportaktion bei
+    -- null bekannten Ventilen direkt OHNE Routing aus. Jetzt wird der
+    -- tatsaechliche Feed-Block uebergeben, in dem redstone_tree
+    -- tatsaechlich liegt.
+    rs_router = redstone_router_lib.new({ config = config.feed or {}, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end })
   end
   return rs_router
 end
@@ -298,6 +361,7 @@ local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
       redstone_router = get_rs_router(), config_path = "/xreactor/config/reproc_routes.lua",
+      routing_load_status = routing_load_status,
       log = function(level, msg) utils.log("REPROC", msg, level) end,
       get_reactors = function()
         local list, seen = {}, {}
@@ -356,7 +420,7 @@ local function init()
       return { page = monitor_router and monitor_router.index or 1, payload = payload, master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN", standby = standby, alerts = alert_payload and alert_payload.critical or 0, last_command = devices.last_command, last_command_ts = devices.last_command_ts }
     end,
     render = render_monitor,
-    handle_input = function(event) if monitor_router then monitor_router:handle_input(event) end end
+    handle_input = function(event) handle_monitor_touch(event) end
   }))
   services:init()
   hello()
@@ -373,7 +437,6 @@ local function init()
 end
 
 init()
-services:add({ name = "router_touch", tick = function(_self, dt, event) if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then handle_monitor_touch(event[3], event[4]) end end })
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   process_buffers()
   if not standby then get_feed_router():tick() end
