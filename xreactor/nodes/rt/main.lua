@@ -272,6 +272,40 @@ local function build_ctx()
       return turbine_control.get_turbine_ctrl(ctx, name)
     end,
     warned            = {},   -- Dedup-Map für warn_once
+    -- Fix (2026-07-13): CRITICAL (RT-P0.2, siehe docs/CODING_AI_OTHER_
+    -- NODES_PERFORMANCE_2026-07-12.md). reactor_control.lua's SAFE-
+    -- Recovery-Pfad (updateReactorControl(), beim Abkuehlen aller
+    -- Reaktoren unter die Recovery-Schwelle) ruft ctx.setState(ctx.
+    -- STATE.MASTER, "SAFETY_TEMPERATURE_RECOVERED") auf -- dieser
+    -- Context (build_ctx()'s Ergebnis, tatsaechlich fuer updateReactor
+    -- Control() verwendet) hatte bisher UEBERHAUPT kein setState-Feld,
+    -- nicht einmal node_state_machine selbst. Sobald alle Reaktoren aus
+    -- SAFE ausreichend abgekuehlt waren, schlug der Control-Service mit
+    -- "attempt to call a nil value" fehl und ging in Service-Backoff --
+    -- ausgerechnet im sicherheitskritischsten Moment (Recovery aus einem
+    -- Notzustand). node_state_machine ist eine Modul-Ebene-Variable
+    -- (siehe "local node_state_machine" oben) -- wird hier als Upvalue
+    -- referenziert; Lua-Closures greifen bei jedem Aufruf auf den
+    -- AKTUELLEN Wert zu, nicht auf den zum Zeitpunkt der Funktions-
+    -- erstellung, daher ist es unproblematisch, dass node_state_machine
+    -- erst NACH build_ctx()'s Aufruf tatsaechlich zugewiesen wird (siehe
+    -- "node_state_machine = machine.new(...)" weiter unten) -- setState
+    -- wird sowieso erst viel spaeter, waehrend des normalen Regelbetriebs,
+    -- tatsaechlich aufgerufen. Nutzt die bereits im gesamten RT-Code
+    -- etablierte transition(target)-API (siehe z.B. command_handler.lua/
+    -- module_lifecycle.lua) statt ein neues, inkonsistentes Muster
+    -- einzufuehren -- der "reason"-Parameter wird zwar nicht an
+    -- transition() weitergereicht (kein anderer Aufrufer im Projekt
+    -- nutzt einen Context-Parameter dafuer), aber wie vom Dokument
+    -- gefordert trotzdem geloggt.
+    setState = function(next_state, reason)
+      log("INFO", "State-Uebergang: " .. tostring(next_state) .. (reason and (" (" .. tostring(reason) .. ")") or ""))
+      if node_state_machine then
+        node_state_machine:transition(next_state)
+      else
+        warn_once("setState_no_machine", "setState aufgerufen bevor node_state_machine bereit war")
+      end
+    end,
   }
 end
 
