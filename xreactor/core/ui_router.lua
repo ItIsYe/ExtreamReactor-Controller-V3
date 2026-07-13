@@ -90,6 +90,14 @@ function router.new(mon_or_opts, opts)
     last_render_mon = nil,
     last_render_w = nil,
     last_render_h = nil,
+    -- Feature (2026-07-12): REST-P1.2 (siehe docs/CODING_AI_FUEL_UI_
+    -- PRIORITY_FIX_2026-07-12.md). Bisher wurde nur w/h ueberwacht -- eine
+    -- REINE Textskalierungsaenderung (getTextScale(), z.B. per Klick auf
+    -- den physischen Monitor selbst, ohne dass sich die BLOCK-Groesse
+    -- aendert) veraendert w/h NICHT zwangsweise identisch mit einer
+    -- echten Groessenaenderung und wurde dadurch nicht zuverlaessig als
+    -- eigene Transition erkannt.
+    last_render_scale = nil,
     footer = {
       prev = nil,
       next = nil,
@@ -112,6 +120,11 @@ function router:get_diagnostics()
   return {
     error_count = self.error_count or 0,
     last_error = self.last_error,
+    -- Feature (2026-07-12): REST-P1.2. Einfacher Lifecycle-Diagnosewert --
+    -- zaehlt Monitor-/Seiten-/Groessen-/Skalenwechsel, damit z.B. ein
+    -- staendig flackernder physischer Monitor (Skala aendert sich
+    -- wiederholt) an einer steigenden Zahl erkennbar waere.
+    transition_count = self.transition_count or 0,
   }
 end
 
@@ -254,7 +267,20 @@ function router:render_list_controls(mon, opts)
 end
 
 function router:render(mon, model)
-  if not mon then return end
+  if not mon then
+    -- Fix (2026-07-12): REST-P1.2. Wenn der Monitor komplett verschwindet
+    -- (peripheral_detach), gab render() bisher einfach nur zurueck --
+    -- die Footer-/Listen-Touchzonen von VOR der Trennung blieben aktiv
+    -- gesetzt. Ein (versehentlicher) Touch-Event auf einem inzwischen
+    -- ungueltigen/anderen Objekt haette dadurch stillschweigend falsche
+    -- Koordinaten benutzt. Jetzt: Zonen und die gespeicherte Geometrie
+    -- explizit verwerfen, damit ein Wiederanschluss (auch als neues
+    -- Monitor-Objekt) sicher wieder als Transition erkannt wird.
+    self.footer.prev, self.footer.next, self.footer.indicator = nil, nil, nil
+    self.list_controls = nil
+    self.last_render_mon = nil
+    return
+  end
   ui.begin_frame(mon)
   -- Fix (2026-07-11): UI-P0.5 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
   -- FIX_2026-07-12.md). Diese Funktion hatte bisher eine EIGENE,
@@ -281,10 +307,17 @@ function router:render(mon, model)
   -- worden und die alten Touch-Zonen (footer.prev/next) haetten
   -- faelschlich weiter auf den alten Monitor gezeigt.
   local cur_w, cur_h = ui.getSize(mon)
+  -- Feature (2026-07-12): REST-P1.2. getTextScale() ist nicht auf jedem
+  -- Monitor-Wrapper garantiert vorhanden (z.B. term.current() im
+  -- Terminal-Fallback) -- pcall-abgesichert, nil bei fehlender Methode
+  -- oder Fehlschlag zaehlt einfach nicht als eigene Transition-Quelle.
+  local scale_ok, cur_scale = pcall(mon.getTextScale)
+  if not scale_ok then cur_scale = nil end
   local is_transition = (self.last_render_mon ~= mon)
     or (self.last_render_page_index ~= self.index)
     or (self.last_render_w ~= cur_w)
     or (self.last_render_h ~= cur_h)
+    or (self.last_render_scale ~= cur_scale)
 
   local snapshot = build_snapshot(page and page.name, model)
   if not is_transition and snapshot == self.last_snapshot then
@@ -304,6 +337,19 @@ function router:render(mon, model)
   self.last_render_page_index = self.index
   self.last_render_w = cur_w
   self.last_render_h = cur_h
+  self.last_render_scale = cur_scale
+  if is_transition then
+    -- Feature (2026-07-12): REST-P1.2. Nach JEDER Transition (Monitor/
+    -- Seite/Groesse/Skala) muessen die Footer- und Listen-Touchzonen
+    -- explizit verworfen werden -- sie stammen sonst noch von der ALTEN
+    -- Geometrie und wuerden erst beim naechsten tatsaechlichen Touch-
+    -- Handling (zu spaet) durch die neuen Werte ueberschrieben. Das
+    -- eigentliche Neuzeichnen mit den frischen Zonen passiert weiter
+    -- unten in genau diesem Aufruf.
+    self.footer.prev, self.footer.next, self.footer.indicator = nil, nil, nil
+    self.list_controls = nil
+    self.transition_count = (self.transition_count or 0) + 1
+  end
 
   -- Feature (2026-07-11): UI-P1.1. Ein Fehler in page.render() wurde
   -- bisher entweder gar nicht abgefangen (Absturz bis zum aeusseren
