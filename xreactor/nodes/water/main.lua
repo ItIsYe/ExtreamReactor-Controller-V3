@@ -107,6 +107,7 @@ local devices = {
 local master_alerts = {}
 local master_seen_ts = nil
 local monitor_router = nil
+local current_mon = nil
 local water_ui = water_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
 
 local function warn_once(key, message)
@@ -299,6 +300,7 @@ end
 local function render_monitor()
   if not devices.monitor then return end
   local mon = devices.monitor
+  current_mon = mon
   local payload = build_status_payload()
   local comms_diag = comms and comms:get_diagnostics() or {}
   local peer = master_peer_state()
@@ -312,13 +314,27 @@ local function render_monitor()
     local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = current_node_id
   })
+  -- Fix (2026-07-13): CRITICAL (WATER-P0.1, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). Die Seiten wurden bisher ueber
+  -- Closures gebaut ("function(target) return water_ui.render_overview(
+  -- target, model) end"), die "model" beim ALLERERSTEN Aufruf einfangen
+  -- und fuer immer einfrieren, da monitor_router nur EINMAL (Lazy-Init)
+  -- gebaut wird, waehrend render_monitor() bei jedem Tick ein NEUES model
+  -- erzeugt -- exakt derselbe Bug, der schon bei FUEL gefunden und
+  -- gefixt wurde (siehe dortiger v377-Fix). WATER zeigte dadurch
+  -- dauerhaft den Tankstand/MASTER-Status/Alerts/Clusterzustand vom
+  -- allerersten Render, egal was sich seitdem geaendert hatte. Jetzt wie
+  -- bei FUEL: render_overview/render_details/render_diagnostics haben
+  -- bereits die exakte Signatur (mon, model), die router:render(mon,
+  -- model) tatsaechlich an page.render() durchreicht -- direkt
+  -- zugewiesen statt in eine Closure verpackt.
   if not monitor_router then
     monitor_router = ui_router.new({
       pages = {
-        { name = "Overview", render = function(target) return water_ui.render_overview(target, model) end },
-        { name = "Details", render = function(target) return water_ui.render_details(target, model) end },
-        { name = "Diagnostics", render = function(target) return water_ui.render_diagnostics(target, model) end,
-          handle_touch = function(x, y) return water_ui.handle_diagnostics_touch(mon, x, y) end }
+        { name = "Overview", render = water_ui.render_overview },
+        { name = "Details", render = water_ui.render_details },
+        { name = "Diagnostics", render = water_ui.render_diagnostics,
+          handle_touch = function(x, y) return water_ui.handle_diagnostics_touch(current_mon, x, y) end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },
       key_next = { [keys.right] = true, [keys.pageDown] = true }
@@ -327,9 +343,25 @@ local function render_monitor()
   monitor_router:render(mon, model)
 end
 
-local function handle_monitor_touch(x, y)
+-- Fix (2026-07-13): CRITICAL (WATER-P0.2). Zentraler, einziger Input-
+-- Pfad -- der bisherige separate "router_touch"-Service (siehe main.lua
+-- weiter unten, jetzt entfernt) verarbeitete JEDEN Touch ein ZWEITES
+-- Mal zusaetzlich zu diesem hier, UND der Rueckgabewert von
+-- monitor_router:handle_input() (true = bereits konsumiert, z.B.
+-- Seitenwechsel) wurde bisher ignoriert -- ein Footer-Touch, der die
+-- Seite wechselte, erreichte danach trotzdem noch den Touch-Handler der
+-- NEU geoeffneten Seite mit denselben Koordinaten (exakt der von FUEL
+-- schon gefundene "Auswahl blinkt auf und verschwindet wieder"-Bug).
+local function handle_monitor_touch(event)
+  if monitor_router and monitor_router:handle_input(event) then
+    return true
+  end
   local page = monitor_router and monitor_router:current()
-  if page and type(page.handle_touch) == "function" then return page.handle_touch(x, y) end
+  if page and type(page.handle_touch) == "function" then
+    local x, y = event and event[3], event and event[4]
+    return page.handle_touch(x, y) == true
+  end
+  return false
 end
 
 master_peer_state = function() return role_logic.master_peer_state(comms, constants.roles.MASTER) end
@@ -378,7 +410,7 @@ local function init()
       return { page = monitor_router and monitor_router.index or 1, payload = payload, master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN", alerts = alert_payload and alert_payload.critical or 0, last_command = devices.last_command, last_command_ts = devices.last_command_ts }
     end,
     render = render_monitor,
-    handle_input = function(event) if monitor_router then monitor_router:handle_input(event) end end
+    handle_input = function(event) handle_monitor_touch(event) end
   }))
   services:init()
   hello()
@@ -396,5 +428,4 @@ local function init()
 end
 
 init()
-services:add({ name = "router_touch", tick = function(_self, dt, event) if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then handle_monitor_touch(event[3], event[4]) end end })
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() balance_loop(); manage_clusters() end)
