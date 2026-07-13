@@ -92,6 +92,17 @@ local CONFIG = {
     -- Hinweis: "reactor"-Feld referenziert hier den target.label.
     redstone_tree      = {},
   },
-  rails = CONFIG.DEFAULT_RAILS,
-  feed  = CONFIG.DEFAULT_FEED
 }
+-- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md, Punkt 28.1, identischer Fund wie bei
+-- nodes/fuel/config.lua). "rails = CONFIG.DEFAULT_RAILS" und
+-- "feed = CONFIG.DEFAULT_FEED" standen bisher INNERHALB von CONFIG's
+-- eigenem Tabellenkonstruktor -- CONFIG war zu diesem Zeitpunkt noch
+-- nicht zugewiesen, ein Zugriff darauf waere ein Laufzeitfehler
+-- gewesen. Zusaetzlich fehlte "return" komplett -- diese Datei war
+-- dadurch, wie bei FUEL, vollstaendig wirkungslos, egal was
+-- hineingeschrieben wurde. Jetzt als separate Zuweisungen nach dem
+-- Tabellenkonstruktor, plus "return CONFIG" am Ende.
+CONFIG.rails = CONFIG.DEFAULT_RAILS
+CONFIG.feed  = CONFIG.DEFAULT_FEED
+return CONFIG
