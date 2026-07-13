@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 416,
-  manifest_id = "manifest-v416",
+  manifest_version = 417,
+  manifest_id = "manifest-v417",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 13632, hash = "12dec89a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "c5a2a59d", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "9f2e14c5", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -57,7 +57,7 @@ return {
   roles = {
     master = {
     { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c", required_for={"MASTER"} },
-    { path = "master/loop.lua", size_bytes = 3111, hash = "bd61ba27", required_for={"MASTER"} },
+    { path = "master/loop.lua", size_bytes = 3134, hash = "a9ad48b4", required_for={"MASTER"} },
     { path = "core/alert_rules.lua", size_bytes = 17159, hash = "f436f415", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 7111, hash = "2cb175fc", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 3022, hash = "568c36b9", required_for={"MASTER"} },
