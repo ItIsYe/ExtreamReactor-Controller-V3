@@ -405,8 +405,14 @@ local function init()
       if message.role == constants.roles.MASTER then
         master_seen = os.epoch("utc")
         if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then master_alerts = message.payload.alerts end
+        -- Fix (2026-07-13): REPROC-P0.4 (siehe docs/CODING_AI_OTHER_
+        -- NODES_PERFORMANCE_2026-07-12.md). Vorher stand dieser Check
+        -- AUSSERHALB der "message.role == MASTER"-Pruefung -- eine HELLO-
+        -- Nachricht von IRGENDEINER Node (RT/FUEL/WATER/...) hob den
+        -- Standby-Modus faelschlich auf. Jetzt nur noch bei bestaetigter
+        -- MASTER-Kommunikation.
+        if message.type == constants.message_types.HELLO then standby = false end
       end
-      if message.type == constants.message_types.HELLO then standby = false end
     end
   })
   services:add(comms)
@@ -438,7 +444,14 @@ end
 
 init()
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+  -- Fix (2026-07-13): REPROC-P0.4. Die Stale-Pruefung lief bisher NACH
+  -- process_buffers()/feed-Arbeit -- ein gerade erst abgelaufenes MASTER-
+  -- Timeout wirkte dadurch erst AB DEM NAECHSTEN Zyklus, waehrend genau
+  -- dieser Zyklus noch mit dem (bereits veralteten) alten standby-Wert
+  -- lief. Jetzt zuerst die Stale-Pruefung, danach erst Verarbeitung --
+  -- ein abgelaufenes MASTER-Timeout wirkt dadurch sofort, ohne einen
+  -- zusaetzlichen Zyklus durchrutschen zu lassen.
+  if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then standby = true end
   process_buffers()
   if not standby then get_feed_router():tick() end
-  if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then standby = true end
 end)
