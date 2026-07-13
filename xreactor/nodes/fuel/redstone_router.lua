@@ -257,6 +257,18 @@ end
 
 function M:_set_valve(valve, high)
   local side = valve.side
+  -- Feature (2026-07-12): REST-P0.3 (siehe docs/CODING_AI_FUEL_UI_
+  -- PRIORITY_FIX_2026-07-12.md). Angeforderten Zustand PRO INTEGRATOR
+  -- festhalten (unabhaengig davon, ob das Schalten tatsaechlich
+  -- erfolgreich war) -- Grundlage fuer die VALVE-Statusanzeige auf der
+  -- Router-Seite. Ehrlich benannt "requested", NICHT "confirmed": das
+  -- Funkprotokoll ist weiterhin fire-and-forget ohne ACK, ein
+  -- erfolgreicher modem.transmit() bestaetigt nicht, dass Redstone
+  -- tatsaechlich geschaltet wurde.
+  if valve.integrator then
+    self._state.valve_requested = self._state.valve_requested or {}
+    self._state.valve_requested[valve.integrator] = high and "BLOCKED" or "OPEN"
+  end
   if valve.integrator then
     local w = self._state.integrators[valve.integrator]
     if w and w.network then
@@ -392,6 +404,86 @@ end
 
 function M:valve_count()
   return #self._state.all_valves
+end
+
+-- Feature (2026-07-12): REST-P0.3 (siehe docs/CODING_AI_FUEL_UI_
+-- PRIORITY_FIX_2026-07-12.md). Fuehrt fuer jeden konfigurierten
+-- Netzwerk-Integrator (VALVE-Node) zusammen: Live-Peer-Status (online/
+-- stale/Alter, aus core/comms.lua's ohnehin schon vorhandener Peer-
+-- Verfolgung), den zuletzt angeforderten Zustand (siehe _set_valve()),
+-- und welche Reaktoren ueber diesen Integrator beliefert werden.
+--
+-- WICHTIG, ehrlich benannt: "confirmed_state"/"state_matches" sind
+-- bewusst NICHT vorhanden -- das Funkprotokoll ist weiterhin fire-and-
+-- forget ohne ACK (siehe Dokument), ein erfolgreich gesendetes Kommando
+-- bestaetigt nicht, dass Redstone tatsaechlich geschaltet wurde. Diese
+-- Funktion behauptet daher nur "requested_state" (was WIR zuletzt
+-- angefordert haben), niemals einen bestaetigten Ist-Zustand, den es
+-- technisch noch gar nicht geben kann.
+function M:get_valve_status()
+  local cfg = self.config.logistics or self.config or {}
+  local tree = cfg.redstone_tree or {}
+  local requested = self._state.valve_requested or {}
+  local peers = self.comms and self.comms:get_peers() or {}
+
+  -- Reaktor-Zuordnung: fuer jeden Reaktor-Endpunkt den Pfad ermitteln,
+  -- jedes Ventil auf diesem Pfad bekommt den Reaktor-Label zugeordnet.
+  local affected = {}
+  local function walk(nodes)
+    for _, node in ipairs(nodes or {}) do
+      if node.reactor then
+        local path = find_path(tree, node.reactor) or {}
+        for _, v in ipairs(path) do
+          if v.integrator then
+            affected[v.integrator] = affected[v.integrator] or {}
+            local list = affected[v.integrator]
+            local label = node.label or node.reactor
+            local already = false
+            for _, existing in ipairs(list) do if existing == label then already = true end end
+            if not already then list[#list + 1] = label end
+          end
+        end
+      end
+      if node.children then walk(node.children) end
+    end
+  end
+  walk(tree)
+
+  local seen_names, out = {}, {}
+  for _, v in ipairs(self._state.all_valves) do
+    if v.integrator and not seen_names[v.integrator] then
+      seen_names[v.integrator] = true
+      local w = self._state.integrators[v.integrator]
+      local peer = w and w.network and peers[v.integrator] or nil
+      local online, stale, age_s
+      if w and w.network then
+        online = peer ~= nil and peer.down ~= true
+        stale = peer ~= nil and peer.stale == true
+        age_s = peer and peer.age or nil
+      elseif w and w.wrapped then
+        -- lokales Peripheral statt Netzwerk-VALVE -- "online" heisst hier
+        -- schlicht "gerade als Peripheral erreichbar".
+        online = true
+        stale = false
+        age_s = 0
+      else
+        online = false
+        stale = false
+        age_s = nil
+      end
+      out[#out + 1] = {
+        id = v.integrator,
+        configured = true,
+        online = online,
+        stale = stale,
+        age_s = age_s,
+        requested_state = requested[v.integrator] or "UNKNOWN",
+        affected_routes = affected[v.integrator] or {},
+      }
+    end
+  end
+  table.sort(out, function(a, b) return a.id < b.id end)
+  return out
 end
 
 function M:route_count()

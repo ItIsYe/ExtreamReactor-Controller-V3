@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 392,
-  manifest_id = "manifest-v392",
+  manifest_version = 393,
+  manifest_id = "manifest-v393",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 13632, hash = "12dec89a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "eadee333", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "b052526b", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -174,8 +174,8 @@ return {
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 13400, hash = "bb124d64", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 21656, hash = "c047d64d", required_for={"FUEL","REPROCESSING"} },
-    { path = "nodes/fuel/redstone_router.lua", size_bytes = 16934, hash = "cbf2b52b", required_for={"FUEL","REPROCESSING"} },
-    { path = "nodes/fuel/router_ui.lua", size_bytes = 31178, hash = "f511738e", required_for={"FUEL","REPROCESSING"} },
+    { path = "nodes/fuel/redstone_router.lua", size_bytes = 20789, hash = "dd5fd3bc", required_for={"FUEL","REPROCESSING"} },
+    { path = "nodes/fuel/router_ui.lua", size_bytes = 32898, hash = "4179e35b", required_for={"FUEL","REPROCESSING"} },
     },
     reprocessing = {
     { path = "nodes/reprocessor/config.lua", size_bytes = 4058, hash = "61160847", required_for={"REPROCESSING"} },

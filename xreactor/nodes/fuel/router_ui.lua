@@ -321,7 +321,18 @@ function M:_render_tree(target, ui, w, h)
     end
   end
 
-  mux.status_dot(target, 2, 3, string.format("VENTILE %d", self.redstone_router and self.redstone_router:valve_count() or 0), #tree > 0 and "OK" or "WARNING")
+  local valve_status_summary = self.redstone_router and self.redstone_router.get_valve_status and self.redstone_router:get_valve_status() or {}
+  local offline_count = 0
+  for _, vs in ipairs(valve_status_summary) do if vs.online == false then offline_count = offline_count + 1 end end
+  local valve_label = string.format("VENTILE %d", self.redstone_router and self.redstone_router:valve_count() or 0)
+  local valve_key = "OK"
+  if offline_count > 0 then
+    valve_label = valve_label .. string.format(" (%d OFFLINE)", offline_count)
+    valve_key = "WARNING"
+  elseif #tree == 0 then
+    valve_key = "WARNING"
+  end
+  mux.status_dot(target, 2, 3, valve_label, valve_key, math.floor(w * 0.33))
   if w >= 40 then
     if self.routing_load_status and self.routing_load_status.ok == false then
       mux.status_dot(target, math.floor(w * 0.35), 3, "ROUTING INVALID: " .. mux.fit(tostring(self.routing_load_status.message or self.routing_load_status.code or "?"), 18), "WARNING", math.max(1, w - math.floor(w * 0.35) - 2))
@@ -391,15 +402,38 @@ function M:_render_tree(target, ui, w, h)
   end
 
   if wide then
+    -- Feature (2026-07-12): REST-P0.3. Vorher wurde eine Route rein anhand
+    -- von "ist sie gerade aktiv" als OK/LIMITED/muted eingestuft -- ein
+    -- benoetigtes Ventil konnte dabei offline oder stale sein, ohne dass
+    -- das sichtbar war. Jetzt: valve_status wird einmal geholt, jede
+    -- Route deren Pfad ein offline/stale Ventil enthaelt gilt NIE als
+    -- vollstaendig "OK", unabhaengig vom Aktivitaetsstatus.
+    local valve_status = valve_status_summary
+    local valve_by_id = {}
+    for _, vs in ipairs(valve_status) do valve_by_id[vs.id] = vs end
+    local function route_has_bad_valve(route_label)
+      for _, vs in ipairs(valve_status) do
+        for _, affected_label in ipairs(vs.affected_routes or {}) do
+          if affected_label == route_label and (vs.online == false or vs.stale == true) then
+            return true, vs.id
+          end
+        end
+      end
+      return false
+    end
+
     mux.card(target, route_x, body_top, route_w, body_h, { title = "REAKTOR-PFADE", status = #routes > 0 and "OK" or "WARNING", icon = "reactor" })
     local ry = body_top + 2
     for _, route in ipairs(routes) do
       if ry > body_top + body_h - 2 then break end
       local is_active = active_target and (tostring(route.reactor) == tostring(active_target) or tostring(route.label) == tostring(active_target))
-      local status = is_active and (recent and "LIMITED" or "OK") or "muted"
+      local has_bad_valve, bad_valve_id = route_has_bad_valve(tostring(route.label or route.reactor))
+      local status = has_bad_valve and "WARNING" or (is_active and (recent and "LIMITED" or "OK") or "muted")
+      local value_text = table.concat(route.path or {}, ">")
+      if has_bad_valve then value_text = value_text .. " [" .. bad_valve_id .. " OFFLINE]" end
       mux.data_row(target, route_x + 2, ry, route_w - 4, {
         label = tostring(route.label or route.reactor),
-        value = table.concat(route.path or {}, ">"),
+        value = value_text,
         status = status,
         icon = "reactor"
       })
