@@ -181,6 +181,19 @@ function M.new(opts)
 
     local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
     support_ui_pages.append_local_alert_rows(rows, alerts)
+    -- Feature (2026-07-12): REST-P1.1. UI-Renderfehler (error_count/
+    -- last_error, vom shared ui_router ueber build_model() ins Model
+    -- uebernommen) waren bisher nirgends auf der Diagnostics-Seite
+    -- sichtbar, obwohl sie intern schon korrekt verfolgt wurden.
+    local uidiag = model.ui_diagnostics
+    if uidiag and (uidiag.error_count or 0) > 0 then
+      local le = uidiag.last_error or {}
+      local age_txt = le.ts and support_ui_pages.format_age(le.ts, os.epoch("utc")) or "?"
+      rows[#rows + 1] = {
+        text = string.format("UI-FEHLER x%d (zuletzt: %s/%s vor %s)", uidiag.error_count, tostring(le.page or "?"), tostring(le.code or "?"), age_txt),
+        status = "WARNING",
+      }
+    end
 
     if w >= 58 then
       local left_w = math.floor((w - 5) / 2)

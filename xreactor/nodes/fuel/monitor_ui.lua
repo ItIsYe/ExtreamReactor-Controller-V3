@@ -70,12 +70,26 @@ function M.build_model(ctx)
   local now = os.epoch("utc")
   local current_node_id = ctx.comms and ctx.comms.network and ctx.comms.network.id or ctx.config.node_id
   local alert_payload = ctx.master_alerts and ctx.master_alerts.by_node and ctx.master_alerts.by_node[current_node_id] or nil
-  return ctx.support_ui_pages.build_common_model({
+  local model = ctx.support_ui_pages.build_common_model({
     payload = payload, summary = summary, comms_diag = comms_diag, master_peer = peer, now = now,
     last_scan_ts = devices.last_scan_ts, last_command = devices.last_command, last_command_ts = devices.last_command_ts,
     local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = current_node_id
   })
+  -- Feature (2026-07-12): REST-P1.1. Vorher hat build_model() den error_
+  -- count/last_error-Zustand des ui_routers nirgends uebernommen -- die
+  -- FUEL-Diagnostics-Seite konnte diese Werte dadurch gar nicht anzeigen,
+  -- obwohl der Router sie intern schon korrekt verfolgt hat. error_count
+  -- zusaetzlich in den Vergleichs-Snapshot aufgenommen (einfache Zahl,
+  -- billig zu vergleichen), damit ein NEUER Fehler sofort sichtbar wird,
+  -- falls die Diagnostics-Seite gerade angezeigt wird -- last_error.ts
+  -- wird durch das bestehende Zeitstempel-Muster in scrub_timestamps()
+  -- ohnehin schon aus dem Snapshot herausgefiltert.
+  model.ui_diagnostics = M.get_diagnostics()
+  if type(model.snapshot) == "table" then
+    model.snapshot.ui_error_count = model.ui_diagnostics.error_count
+  end
+  return model
 end
 
 -- ctx: { devices, ui_router, fuel_ui, get_router_ui, ui, colors, keys }
@@ -104,6 +118,8 @@ function M.render_monitor(ctx, model)
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
     monitor_router = ctx.ui_router.new({
+      error_title = "FUEL UI ERROR",
+      on_render_error = ctx.on_render_error,
       pages = {
         { name = "Overview", render = ctx.fuel_ui.render_overview },
         { name = "Details", render = ctx.fuel_ui.render_details },
@@ -159,6 +175,14 @@ end
 
 function M.current_page_index()
   return monitor_router and monitor_router.index or 1
+end
+
+-- Feature (2026-07-12): REST-P1.1. Reicht den error_count/last_error-
+-- Zustand des Routers weiter -- Grundlage dafuer, dass build_model()
+-- diese Werte in das Model uebernehmen kann, damit die Diagnostics-Seite
+-- sie tatsaechlich anzeigt (vorher blieben sie nur intern im Router).
+function M.get_diagnostics()
+  return monitor_router and monitor_router.get_diagnostics and monitor_router:get_diagnostics() or { error_count = 0, last_error = nil }
 end
 
 return M

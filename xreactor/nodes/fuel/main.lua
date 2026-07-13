@@ -270,6 +270,16 @@ local function fuel_ui_ctx()
     master_alerts = master_alerts, support_ui_pages = support_ui_pages,
     ui_router = core_ui_router, fuel_ui = fuel_ui, get_router_ui = get_router_ui,
     ui = ui, colors = colors, keys = keys,
+    -- Feature (2026-07-12): REST-P1.1. Garantiertes Logging eines
+    -- Renderfehlers -- vorher behauptete die Fallback-Seite nur "Details
+    -- im LOG_COLLECTOR-Export", ohne dass irgendein Codepfad das
+    -- tatsaechlich sichergestellt haette.
+    on_render_error = function(error_info)
+      utils.log("FUEL", string.format(
+        "UI-Renderfehler auf Seite '%s' [%s]: %s",
+        tostring(error_info.page), tostring(error_info.code), tostring(error_info.message)
+      ), "ERROR")
+    end,
   }
 end
 
@@ -332,6 +342,11 @@ local function init()
     interval = 1,
     build_model = build_fuel_model,
     render = render_monitor,
+    on_error = function(error_info)
+      utils.log("FUEL", string.format(
+        "UI-%s-Fehler: %s", tostring(error_info.stage), tostring(error_info.message)
+      ), "ERROR")
+    end,
     handle_input = function(event) fuel_monitor_ui.handle_input(event) end
   }))
   -- Fix (2026-07-09): eigener, von der Haupt-UI unabhaengiger Tick fuer

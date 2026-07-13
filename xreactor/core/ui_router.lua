@@ -63,6 +63,19 @@ function router.new(mon_or_opts, opts)
     pages = opts.pages or {},
     index = opts.index or 1,
     last_snapshot = nil,
+    -- Feature (2026-07-12): REST-P1.1 (siehe docs/CODING_AI_FUEL_UI_
+    -- PRIORITY_FIX_2026-07-12.md). core/ui_router.lua wird von mehreren
+    -- Rollen gemeinsam genutzt (FUEL/WATER/REPROCESSOR/ENERGY/RT) --
+    -- der Fallback-Text bei einem Renderfehler war bisher fest "FUEL UI
+    -- ERROR" codiert, bei jeder anderen Rolle waere das inhaltlich
+    -- falsch. error_title jetzt konfigurierbar (Default bleibt neutral).
+    -- on_render_error(error_info) wird zusaetzlich zur internen error_
+    -- count/last_error-Verfolgung aufgerufen -- die aufrufende Rolle kann
+    -- darin garantiert loggen (siehe main.lua-Verdrahtung), statt sich
+    -- auf einen Text zu verlassen, der behauptet "steht im Log", es aber
+    -- durch diesen Pfad bisher nicht garantiert tat.
+    error_title = opts.error_title or "UI RENDER ERROR",
+    on_render_error = opts.on_render_error,
     -- Feature (2026-07-11): UI-P0.6 (siehe docs/CODING_AI_FUEL_UI_
     -- PRIORITY_FIX_2026-07-12.md), "Mindestloesung"-Variante. Statt eines
     -- vollen Framebuffers: nur bei Boot, Seiten-, Monitor- oder Groessen-
@@ -89,6 +102,17 @@ function router.new(mon_or_opts, opts)
     list_key_next = list_key_next
   }
   return setmetatable(self, { __index = router })
+end
+
+-- Feature (2026-07-12): REST-P1.1. Oeffentliche Diagnose-Schnittstelle --
+-- die rollenspezifische Diagnostics-Seite kann darueber Fehleranzahl,
+-- betroffene Seite, Fehlercode/-meldung und Alter des letzten Fehlers
+-- anzeigen, statt dass diese Werte nur intern im router bleiben.
+function router:get_diagnostics()
+  return {
+    error_count = self.error_count or 0,
+    last_error = self.last_error,
+  }
 end
 
 function router:count()
@@ -296,7 +320,15 @@ function router:render(mon, model)
   -- Stille.
   local page_footer = nil
   if page and page.render then
-    local ok, result = pcall(page.render, mon, model, should_clear)
+    -- Fix (2026-07-12): REST-P1.1. pcall() -> xpcall() mit debug.traceback
+    -- (derselbe bereits im Projekt etablierte Fallback-Pattern wie
+    -- core/ui.lua's redirect()) -- last_error.message enthaelt jetzt den
+    -- vollstaendigen Stack statt nur der letzten Fehlerzeile, wesentlich
+    -- hilfreicher fuer die tatsaechliche Fehlersuche.
+    local ok, result = xpcall(function() return page.render(mon, model, should_clear) end, function(err)
+      if debug and debug.traceback then return debug.traceback(tostring(err), 2) end
+      return tostring(err)
+    end)
     if ok then
       page_footer = result
     else
@@ -307,9 +339,15 @@ function router:render(mon, model)
         message = tostring(result),
         ts = os.epoch and os.epoch("utc") or nil,
       }
+      -- Fix (2026-07-12): REST-P1.1. Die Fallbackseite behauptete bisher
+      -- "Details im LOG_COLLECTOR-Export", ohne dass dieser Pfad selbst
+      -- jemals tatsaechlich geloggt haette -- garantiert jetzt ueber den
+      -- optionalen on_render_error-Callback, den die aufrufende Rolle
+      -- an einen echten Logger anschliessen kann (siehe main.lua).
+      if self.on_render_error then pcall(self.on_render_error, self.last_error) end
       pcall(function()
         ui.clear(mon)
-        ui.text(mon, 2, 2, "FUEL UI ERROR", colors.get("WARNING"), colors.get("background"))
+        ui.text(mon, 2, 2, self.error_title, colors.get("WARNING"), colors.get("background"))
         ui.text(mon, 2, 4, "Seite: " .. tostring(page.name or "?"), colors.get("text"), colors.get("background"))
         ui.text(mon, 2, 5, "Code: RENDER_FAILED", colors.get("text"), colors.get("background"))
         ui.text(mon, 2, 7, "Details im LOG_COLLECTOR-Export.", colors.get("muted"), colors.get("background"))

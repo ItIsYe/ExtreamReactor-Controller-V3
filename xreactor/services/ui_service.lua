@@ -30,6 +30,10 @@ function ui.new(opts)
     -- unveraendert fuer alle anderen Rollen (WATER/REPROCESSOR/ENERGY/RT),
     -- die diesen Service ebenfalls nutzen.
     build_model = opts.build_model,
+    -- Feature (2026-07-12): REST-P1.1. Optionaler Callback fuer garantiertes
+    -- Logging eines Fehlers, der VOR page.render() auftritt (aktuell:
+    -- build_model()-Fehler). Analog zu core/ui_router.lua's on_render_error.
+    on_error = opts.on_error,
     last_draw = 0,
     last_force_draw = 0,
     last_snapshot = nil
@@ -71,7 +75,22 @@ function ui:tick(_, event)
     -- render() bekommt DASSELBE Objekt uebergeben, das fuer den Snapshot-
     -- Vergleich benutzt wurde, statt selbst nochmal unabhaengig einen
     -- (potenziell abweichenden) Payload/Model aufzubauen.
-    local model = self.build_model(event)
+    -- Fix (2026-07-12): REST-P1.1. Ein Fehler HIER (vor jedem page.render())
+    -- wurde bisher gar nicht abgefangen -- er entkam bis zum aeusseren
+    -- service_manager-pcall (stiller Retry, Bildschirm blieb auf dem
+    -- letzten Stand haengen, kein sichtbarer/geloggter Hinweis). Jetzt
+    -- xpcall mit Traceback, optionaler on_error-Callback fuer garantiertes
+    -- Logging, und sauberer Abbruch dieses Zyklus (naechster Zyklus
+    -- versucht es automatisch erneut) statt eines unkontrollierten
+    -- Absturzes.
+    local ok, model = xpcall(self.build_model, function(err)
+      if debug and debug.traceback then return debug.traceback(tostring(err), 2) end
+      return tostring(err)
+    end, event)
+    if not ok then
+      if self.on_error then pcall(self.on_error, { stage = "model_build", message = tostring(model) }) end
+      return
+    end
     local current_snapshot = snapshot_value(model and model.snapshot)
     local snapshot_changed = current_snapshot ~= self.last_snapshot
     if not interactive and not snapshot_changed and not force_due then
