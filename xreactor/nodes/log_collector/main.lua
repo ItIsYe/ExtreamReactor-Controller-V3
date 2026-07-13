@@ -34,6 +34,7 @@ local DEDUPE_LIMIT     = 512
 local MODEM_REFRESH_S  = 10
 local DISK_REFRESH_S   = 30
 local DRAW_INTERVAL_S  = 5
+local ACTIVE_DRAW_MIN_INTERVAL_S = 1  -- Fix (2026-07-13): LOG-P1.2
 local SELF_ROLE        = "LOG_COLLECTOR"
 local MONITOR_CFG_FILE = "/xreactor/config/log_monitor.txt"
 -- Fix (2026-07-07): vorher exakt 1 Disk pro Rolle (positionsbasiert via
@@ -622,6 +623,22 @@ local function write_log(payload)
 end
 
 -- ── Dedupe ─────────────────────────────────────────────────────────────────
+-- Fix (2026-07-13): CRITICAL (LOG-P1.2, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). table.remove(stats.seen_order, 1) verschob
+-- bisher bei JEDEM Ueberschreiten von DEDUPE_LIMIT (512) das GESAMTE
+-- restliche Array um eine Position -- O(n) statt O(1), und das bei einem
+-- Collector, der potenziell viele hundert Events pro Minute verarbeitet.
+-- Jetzt: Kopf-/Ende-Index-Paar (seen_head/seen_tail) statt eines echten
+-- Array-Shifts -- Entfernen ist nur noch "Kopf-Index um 1 erhoehen, alten
+-- Slot auf nil setzen" (O(1)). Um ein unbegrenztes Wachsen der Indizes
+-- selbst zu vermeiden, wird die Tabelle periodisch (alle 4096 entfernte
+-- Eintraege) einmalig kompaktiert -- das haelt die Gesamtkosten amortisiert
+-- O(1) pro Eintrag, weit seltener als vorher bei jedem einzelnen Event.
+stats.seen_head = 1
+stats.seen_tail = 0
+local COMPACT_INTERVAL = 4096
+local removed_since_compact = 0
+
 local function seen(event_id)
   return type(event_id) == "string" and event_id ~= "" and stats.seen[event_id] == true
 end
@@ -629,10 +646,26 @@ end
 local function remember(event_id)
   if type(event_id) ~= "string" or event_id == "" or stats.seen[event_id] then return end
   stats.seen[event_id] = true
-  stats.seen_order[#stats.seen_order + 1] = event_id
-  while #stats.seen_order > DEDUPE_LIMIT do
-    local old = table.remove(stats.seen_order, 1)
+  stats.seen_tail = stats.seen_tail + 1
+  stats.seen_order[stats.seen_tail] = event_id
+  while (stats.seen_tail - stats.seen_head + 1) > DEDUPE_LIMIT do
+    local old = stats.seen_order[stats.seen_head]
+    stats.seen_order[stats.seen_head] = nil
+    stats.seen_head = stats.seen_head + 1
     if old then stats.seen[old] = nil end
+    removed_since_compact = removed_since_compact + 1
+  end
+  if removed_since_compact >= COMPACT_INTERVAL then
+    local compacted = {}
+    local n = 0
+    for i = stats.seen_head, stats.seen_tail do
+      local v = stats.seen_order[i]
+      if v ~= nil then n = n + 1; compacted[n] = v end
+    end
+    stats.seen_order = compacted
+    stats.seen_head = 1
+    stats.seen_tail = n
+    removed_since_compact = 0
   end
 end
 
@@ -684,7 +717,7 @@ local function refresh_modems(force)
             end
             if is_wireless then wireless_found = true end
             pcall(modem.open, CHANNEL)
-            stats.modems[#stats.modems + 1] = modem
+            stats.modems[#stats.modems + 1] = { modem = modem, wireless = is_wireless }
             names[#names + 1] = name .. (is_wireless and "*" or "")
           end
         end
@@ -712,10 +745,25 @@ local function send_ack(payload, status)
     status = status or "written",
     ts = now_ms(),
   }
-  for _, modem in ipairs(stats.modems or {}) do
-    if type(modem.transmit) == "function" then
+  -- Fix (2026-07-13): CRITICAL (LOG-P1.2, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). Vorher wurde dasselbe ACK ueber
+  -- JEDES gefundene Modem gesendet -- bei Wireless+Wired gleichzeitig
+  -- kamen beim Sender mehrere identische ACKs fuer dasselbe Event an.
+  -- Jetzt: bevorzugtes Wireless-Modem wird EINMAL versucht, weitere
+  -- Modems (Fallback) nur bei tatsaechlichem Sendefehler.
+  local entries = stats.modems or {}
+  local ordered = {}
+  for _, entry in ipairs(entries) do
+    if entry.wireless then table.insert(ordered, 1, entry) else table.insert(ordered, entry) end
+  end
+  for _, entry in ipairs(ordered) do
+    local modem = entry.modem
+    if modem and type(modem.transmit) == "function" then
       local ok = pcall(modem.transmit, CHANNEL, CHANNEL, ack)
-      if ok then stats.ack_sent = stats.ack_sent + 1 end
+      if ok then
+        stats.ack_sent = stats.ack_sent + 1
+        return
+      end
     end
   end
 end
@@ -1138,7 +1186,21 @@ local function run()
             stats.last_error = "handle crashed: " .. tostring(err):sub(1, 70)
             diag(stats.last_error)
           end
-          if stats.received % 20 == 0 or not ok then draw() end
+          -- Fix (2026-07-13): CRITICAL (LOG-P1.2, siehe docs/CODING_AI_
+          -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Vorher wurde ZUSAETZLICH
+          -- zum bereits vorhandenen Timer-Intervall (DRAW_INTERVAL_S=5s)
+          -- bei jedem 20. empfangenen Event sofort gezeichnet -- bei hoher
+          -- Last (viele Events/s) konnte das den Zeichenaufwand deutlich
+          -- oefter ausloesen als beabsichtigt. Jetzt: eigenes, kuerzeres
+          -- Mindestintervall (1s) fuer "aktive" Zwischen-Zeichnungen waehrend
+          -- Events eintreffen, statt eine reine Ereigniszaehlung. Ein echter
+          -- Fehler (not ok) zeichnet weiterhin sofort, unabhaengig vom
+          -- Intervall -- das ist wichtige Diagnoseinformation.
+          local now_active = now_s()
+          if not ok or (now_active - (stats.last_active_draw_s or 0)) >= ACTIVE_DRAW_MIN_INTERVAL_S then
+            stats.last_active_draw_s = now_active
+            draw()
+          end
         end
       elseif name == "monitor_touch" then
         handle_touch(event[3], event[4])
