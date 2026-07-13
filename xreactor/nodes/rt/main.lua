@@ -434,8 +434,16 @@ local function update_monitor()
     current_state = current_state_value,
     configured_reactors = runtime_config.configured_reactors,
     configured_turbines = runtime_config.configured_turbines,
-    get_target_rpm = function() return reactor_control.get_target_rpm and
-      ctx.CONFIG.TARGET_RPM or CONFIG.TARGET_RPM end,
+    -- Fix (2026-07-13): RT-P1.3 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md). get_target_rpm() liegt tatsaechlich in
+    -- turbine_control (siehe Zeile ~671/732 weiter unten, dort korrekt
+    -- verwendet), nicht in reactor_control -- reactor_control.get_
+    -- target_rpm existiert nicht, ist also immer nil, wodurch dieser
+    -- "and"-Ausdruck IMMER auf den statischen Default (ctx.CONFIG.
+    -- TARGET_RPM oder CONFIG.TARGET_RPM, z.B. 900) zurueckfiel, egal
+    -- welchen Sollwert MASTER tatsaechlich gerade vorgibt. Der Monitor
+    -- zeigte dadurch praktisch immer denselben statischen Wert an.
+    get_target_rpm = function() return turbine_control.get_target_rpm(ctx) end,
     binding = binding,
     build_health_payload = function() return build_status_payload() end,
     read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
@@ -843,7 +851,13 @@ local function init()
     checks[#checks + 1] = { name = "Turbinen erkannt", ok = (turbines.bound or 0) > 0,
       detail = string.format("%d/%d gebunden", turbines.bound or 0, turbines.total or 0) }
     checks[#checks + 1] = { name = "Monitor gefunden", ok = devices.monitor ~= nil }
-    checks[#checks + 1] = { name = "Rolle konfiguriert", ok = tostring(config.role or "") == "RT" }
+    -- Fix (2026-07-13): RT-P1.2 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md). config.role ist immer "RT-NODE" (siehe
+    -- nodes/rt/config.lua), niemals das kurze "RT" -- dieser Vergleich
+    -- schlug dadurch IMMER fehl, selbst bei korrekt konfigurierter Rolle,
+    -- und zeigte "Rolle konfiguriert" faelschlich als Fehler im Startup-
+    -- Report an.
+    checks[#checks + 1] = { name = "Rolle konfiguriert", ok = tostring(config.role or "") == "RT-NODE" }
     -- Speaker (Feature, 2026-07-02): optional, pcall(require, ...) da nicht
     -- immer installiert. Der Speaker-Effekt gilt jetzt fuer JEDEN Node-Typ,
     -- nicht nur MASTER (dort ursprungl. nur fuer CRITICAL-Alarme gedacht).
