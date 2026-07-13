@@ -101,10 +101,44 @@ local valve_health = health.new({})
 local last_command_ts = nil
 local current_high = config.default_blocked ~= false  -- true = blockiert (Fail-Safe-Default)
 
+local last_write_error = nil
+local valve_initialized = false
+
+-- Fix (2026-07-13): VALVE-P0.2 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). current_high wurde bisher VOR dem
+-- eigentlichen redstone.setOutput()-Aufruf gesetzt, dessen Ergebnis
+-- komplett ignoriert. Heartbeat/Status konnten dadurch "blocked=true/
+-- false" melden, obwohl der physische Schreibvorgang fehlgeschlagen war
+-- (z.B. Redstone-Peripherie kurzzeitig nicht ansprechbar). Jetzt: State
+-- wird erst NACH erfolgreichem Write geaendert, ein Fehler wird in
+-- last_write_error festgehalten (fuer Telemetrie/Diagnose), identische
+-- Ziel-Zustaende werden nicht erneut geschrieben (kein unnoetiger
+-- Redstone-Traffic) -- last_command_ts wird aber TROTZDEM aktualisiert,
+-- damit der Fail-Safe-Timeout (siehe unten) korrekt weiss, dass gerade
+-- ein gueltiges Kommando eingetroffen ist, auch wenn es keine Aenderung
+-- war. valve_initialized stellt sicher, dass der PFLICHT-Boot-Write
+-- (siehe apply_valve(current_high) weiter unten, noch bevor irgendeine
+-- Verbindung steht) NICHT durch die Dedup-Pruefung uebersprungen wird,
+-- nur weil der Zielwert zufaellig mit dem bereits gesetzten Default
+-- uebereinstimmt -- ohne diesen expliziten Flag haette der allererste
+-- Aufruf faelschlich als "schon im Zielzustand" gegolten und den
+-- physischen Write nie ausgefuehrt.
 local function apply_valve(high)
+  last_command_ts = os.epoch("utc")
+  if valve_initialized and high == current_high then
+    return true  -- bereits im Zielzustand, kein erneuter Write noetig
+  end
+  local ok, err = pcall(redstone.setOutput, config.side, high)
+  if not ok then
+    last_write_error = tostring(err)
+    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (" .. config.side .. "): " .. tostring(err), "ERROR")
+    return false
+  end
   current_high = high
-  pcall(redstone.setOutput, config.side, high)
+  valve_initialized = true
+  last_write_error = nil
   utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (%s) -> %s", config.side, high and "BLOCKIERT" or "OFFEN"), "INFO")
+  return true
 end
 
 -- Fail-Safe-Grundzustand direkt beim Boot setzen, bevor irgendeine
@@ -133,7 +167,20 @@ end
 
 local function handle_valve_channel_event(event)
   if event[1] ~= "modem_message" then return end
-  local channel, _, message = event[2], event[3], event[4]
+  -- Fix (2026-07-13): CRITICAL (VALVE-P0, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). Standard-CC:Tweaked modem_message-
+  -- Event: event[2]=side, event[3]=channel, event[4]=replyChannel,
+  -- event[5]=message, event[6]=distance. Vorher wurde event[2] (side,
+  -- ein STRING wie "left") als Kanal gelesen und mit constants.channels.
+  -- VALVE (einer ZAHL) verglichen -- dieser Vergleich ist strukturell
+  -- IMMER falsch (String kann nie einer Zahl gleichen), die Funktion
+  -- brach dadurch bei JEDEM modem_message sofort ab, noch bevor die
+  -- eigentliche Nachricht (die faelschlich aus event[4]/replyChannel
+  -- statt event[5] gelesen worden waere) je ausgewertet wurde. VALVE-
+  -- Nodes konnten dadurch seit Einfuehrung dieser Rolle KEIN einziges
+  -- SET_VALVE-Kommando empfangen -- der 20s-Fail-Safe-Fallback (siehe
+  -- unten) griff dadurch dauerhaft, nicht nur bei echtem Verbindungsverlust.
+  local channel, message = event[3], event[5]
   if channel ~= constants.channels.VALVE then return end
   if type(message) ~= "table" or message.type ~= "SET_VALVE" then return end
   if message.dst ~= node_id then return end  -- nicht fuer diese Node bestimmt
@@ -141,7 +188,6 @@ local function handle_valve_channel_event(event)
     utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltiges 'high' ignoriert", "WARN")
     return
   end
-  last_command_ts = os.epoch("utc")
   apply_valve(message.high)
 end
 
@@ -188,7 +234,7 @@ services:add(telemetry_service.new({
   status_interval = config.status_interval or config.heartbeat_interval,
   heartbeat_interval = config.heartbeat_interval,
   build_payload = build_status_payload,
-  heartbeat_state = function() return { side = config.side, blocked = current_high } end,
+  heartbeat_state = function() return { side = config.side, blocked = current_high, write_error = last_write_error } end,
 }))
 
 utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: side=" .. config.side .. " node_id=" .. tostring(node_id), "INFO")

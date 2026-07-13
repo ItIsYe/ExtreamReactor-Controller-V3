@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 399,
-  manifest_id = "manifest-v399",
+  manifest_version = 400,
+  manifest_id = "manifest-v400",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 13632, hash = "12dec89a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "bcbdb0d8", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "a412517b", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -186,7 +186,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 1527, hash = "08ff10c7", required_for={"VALVE"} },
-    { path = "nodes/valve/main.lua", size_bytes = 8726, hash = "dd88c107", required_for={"VALVE"} },
+    { path = "nodes/valve/main.lua", size_bytes = 11440, hash = "9a2d8705", required_for={"VALVE"} },
     },
     log = {
     { path = "nodes/log_collector/main.lua", size_bytes = 47989, hash = "2a722dec", required_for={"LOG"} },
