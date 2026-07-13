@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 415,
-  manifest_id = "manifest-v415",
+  manifest_version = 416,
+  manifest_id = "manifest-v416",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 13632, hash = "12dec89a", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "2a377675", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "c5a2a59d", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -61,7 +61,7 @@ return {
     { path = "core/alert_rules.lua", size_bytes = 17159, hash = "f436f415", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 7111, hash = "2cb175fc", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 3022, hash = "568c36b9", required_for={"MASTER"} },
-    { path = "master/fuel_relay.lua", size_bytes = 2662, hash = "9c87a3f6", required_for={"MASTER"} },
+    { path = "master/fuel_relay.lua", size_bytes = 4291, hash = "ff7ae504", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 8192, hash = "2524e342", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
     { path = "master/message_handlers.lua", size_bytes = 27268, hash = "adae1217", required_for={"MASTER"} },
@@ -168,7 +168,7 @@ return {
     { path = "nodes/fuel/main.lua", size_bytes = 20201, hash = "4ee10f9e", required_for={"FUEL"} },
     { path = "nodes/fuel/status_snapshot.lua", size_bytes = 5027, hash = "2a145d2b", required_for={"FUEL"} },
     { path = "nodes/fuel/command_handler.lua", size_bytes = 2096, hash = "369baea1", required_for={"FUEL"} },
-    { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 3099, hash = "b9755b32", required_for={"FUEL"} },
+    { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 4031, hash = "9420efe6", required_for={"FUEL"} },
     { path = "nodes/fuel/monitor_ui.lua", size_bytes = 11559, hash = "112c3daf", required_for={"FUEL"} },
     { path = "nodes/fuel/storage.lua", size_bytes = 2275, hash = "370bf2fa", required_for={"FUEL"} },
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 19965, hash = "bb635523", required_for={"FUEL"} },

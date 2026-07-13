@@ -26,19 +26,32 @@ end
 
 -- Wird vom command_handler.lua aufgerufen, wenn ein FUEL_STATUS-Kommando
 -- von Master ankommt (siehe master/fuel_relay.lua fuer die Gegenseite).
--- value = { [reactor_id] = { fuel_amount, fuel_capacity, label, source_node, ts } }
+-- value = { [reactor_id] = { fuel_amount, fuel_capacity, label, source_node, ts, source_age_ms } }
 function M.ingest_master_relay(cache, value)
   if type(value) ~= "table" then return end
   local now = os.epoch("utc")
   for reactor_id, entry in pairs(value) do
     if type(entry) == "table" then
+      -- Fix (2026-07-13): CRITICAL (MASTER-P1.2, siehe docs/CODING_AI_
+      -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Bisher wurde hier IMMER
+      -- die lokale Empfangszeit als ts verwendet -- das schuetzte zwar
+      -- vor Uhrenabweichungen zwischen den Computern, ignorierte aber
+      -- komplett, WIE ALT die zugrunde liegende RT-Messung tatsaechlich
+      -- war (Master hat das bisher selbst falsch gemeldet, siehe
+      -- master/fuel_relay.lua-Fix vom selben Datum). Jetzt: Master sendet
+      -- source_age_ms (eine reine ZEITSPANNE, komplett auf Masters
+      -- eigener Uhr berechnet, kein Abgleich zweier absoluter Uhren
+      -- noetig) -- ts wird daraus lokal verankert ("now - source_age_ms"),
+      -- damit ein laengst ausgefallener RT-Node NICHT mehr beliebig lange
+      -- als "gerade frisch gemessen" erscheint, waehrend der urspruengliche
+      -- Schutz vor Uhrenabweichungen (kein direkter Vergleich von Masters
+      -- absolutem Zeitstempel gegen FUELs eigene Uhr) vollstaendig erhalten
+      -- bleibt.
+      local age_ms = tonumber(entry.source_age_ms) or 0
       cache.master_relay[reactor_id] = {
         fuel_amount = entry.fuel_amount,
         fuel_capacity = entry.fuel_capacity,
-        -- lokale Empfangszeit, nicht die von Master gemeldete — so bleibt
-        -- die Frischepruefung unabhaengig von evtl. abweichenden Uhren
-        -- zwischen den Computern.
-        ts = now,
+        ts = now - age_ms,
       }
     end
   end
