@@ -89,8 +89,20 @@ local function build_capabilities(name)
 end
 
 function M.get_device_caps(ctx, kind, name)
+  -- Fix (2026-07-13): CRITICAL (RT-P0.3, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). "or peripheral.isPresent(name)"
+  -- machte diese Bedingung im Normalbetrieb praktisch IMMER wahr (ein
+  -- angeschlossenes Peripheral IST fast immer "present") -- build_
+  -- capabilities() (ruft peripheral.getMethods() auf, ein echter
+  -- Peripherie-Methodenscan) lief dadurch bei praktisch JEDEM Aufruf im
+  -- Control-/UI-/Statuspfad erneut, statt nur einmal. discovery_runtime.
+  -- lua schreibt den Cache bereits separat und gezielt bei echten
+  -- Attach-/Detach-/Rebind-Ereignissen neu (siehe dortige capability_
+  -- cache[kind][name] = build_capabilities(name)-Aufrufe) -- diese
+  -- Funktion hier muss daher nur noch bei komplett FEHLENDEM Cache-
+  -- Eintrag neu aufbauen, nicht bei jedem "ist gerade angeschlossen"-Check.
   ctx.capability_cache[kind] = ctx.capability_cache[kind] or {}
-  if not ctx.capability_cache[kind][name] or peripheral.isPresent(name) then
+  if not ctx.capability_cache[kind][name] then
     ctx.capability_cache[kind][name] = build_capabilities(name)
   end
   return ctx.capability_cache[kind][name]
