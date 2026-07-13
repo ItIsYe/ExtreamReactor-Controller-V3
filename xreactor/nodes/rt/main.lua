@@ -150,6 +150,23 @@ local devices = {
 local master_seen_ts = nil
 local master_alerts  = {}
 
+-- Fix (2026-07-13): RT-P1.4 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). manifest_id/release_id wurden bisher bei
+-- JEDEM Aufruf der Status-Snapshot-Funktion (Monitor-Hotpath, laeuft
+-- periodisch) per require()/dofile() neu eingelesen -- unnoetiger
+-- Datei-I/O in einem Pfad, der so oft wie moeglich schlank bleiben soll.
+-- Einmalig beim Modul-Laden berechnet, danach nur noch referenziert.
+local RT_BUILD_INFO = (function()
+  local ok, rel = pcall(require, "xreactor.release")
+  if not ok or type(rel) ~= "table" then
+    ok, rel = pcall(dofile, "/xreactor/release.lua")
+  end
+  if type(rel) == "table" then
+    return { manifest_id = rel.manifest_id or "unknown", release_id = rel.release_id or "unknown" }
+  end
+  return { manifest_id = "unknown", release_id = "unknown" }
+end)()
+
 local comms, services
 local node_state_machine
 local current_state_value = "INIT"
@@ -469,20 +486,8 @@ local function update_monitor()
     registry             = registry,
     last_command_ts      = last_command_ts,
     build_label          = function(a, b) return tostring(a or "") .. tostring(b or "") end,
-    manifest_id          = (function()
-                             local ok, rel = pcall(require, "xreactor.release")
-                             if not ok or type(rel) ~= "table" then
-                               ok, rel = pcall(dofile, "/xreactor/release.lua")
-                             end
-                             return (type(rel) == "table" and rel.manifest_id) or "unknown"
-                           end)(),
-    release_id           = (function()
-                             local ok, rel = pcall(require, "xreactor.release")
-                             if not ok or type(rel) ~= "table" then
-                               ok, rel = pcall(dofile, "/xreactor/release.lua")
-                             end
-                             return (type(rel) == "table" and rel.release_id) or "unknown"
-                           end)(),
+    manifest_id          = RT_BUILD_INFO.manifest_id,
+    release_id           = RT_BUILD_INFO.release_id,
   })
 end
 
