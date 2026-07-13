@@ -14,12 +14,11 @@ local function load_routes(path)
   return {}
 end
 
-local function save_routes(routes, path)
-  path = path or DEFAULT_ROUTE_CONFIG_PATH
+local function write_routes_file(routes, path)
   local dir = fs.getDir(path)
   if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
-  local f = fs.open(path, "w")
-  if not f then return false end
+  local ok_open, f = pcall(fs.open, path, "w")
+  if not ok_open or not f then return false end
   f.writeLine("-- Fuel router configuration -- auto-generated, do not edit manually")
   f.writeLine("return {")
   for _, r in ipairs(routes) do
@@ -31,6 +30,96 @@ local function save_routes(routes, path)
   end
   f.writeLine("}")
   f.close()
+  return true
+end
+
+-- Fix (2026-07-12): REST-P0.1 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+-- FIX_2026-07-12.md). save_routes() schrieb bisher DIREKT auf den
+-- Zielpfad (fs.open(path, "w")) -- ein Schreibabbruch (Chunk-Unload,
+-- Absturz, Stromausfall im echten Leben) genau waehrend dieses einen
+-- Schreibvorgangs haette die letzte gueltige Routendatei zerstoert bzw.
+-- unvollstaendig hinterlassen, ohne jede Wiederherstellungsmoeglichkeit.
+-- Jetzt der komplette, im Dokument vorgeschriebene atomare Ablauf:
+--   1. Inhalt nach <path>.tmp schreiben
+--   2. .tmp erneut einlesen (bestaetigt: die Datei ist als Lua ladbar)
+--   3. .tmp-Inhalt validieren (validate_fn, z.B. validate_tree())
+--   4. bestehende Zieldatei (falls vorhanden) nach <path>.prev verschieben
+--   5. .tmp nach <path> verschieben
+--   6. finale Datei ERNEUT einlesen (bestaetigt: der Verschiebevorgang
+--      selbst hat nichts beschaedigt)
+--   7. finale Datei ERNEUT validieren
+--   8. .prev ERST NACH vollstaendigem Erfolg entfernen
+-- Bei jedem Fehlschlag wird die letzte bekannte gueltige Datei
+-- wiederhergestellt (falls schon verschoben) bzw. gar nicht erst
+-- angetastet (falls der Fehler vor Schritt 4 auftrat).
+local function save_routes_atomic(routes, path, validate_fn)
+  local tmp_path = path .. ".tmp"
+  local prev_path = path .. ".prev"
+
+  -- Schritt 1: nach .tmp schreiben
+  if not write_routes_file(routes, tmp_path) then
+    pcall(fs.delete, tmp_path)
+    return false, "TMP_WRITE_FAILED", "Konnte " .. tmp_path .. " nicht schreiben"
+  end
+
+  -- Schritt 2+3: .tmp einlesen und validieren
+  local ok_load, tmp_content = pcall(dofile, tmp_path)
+  if not ok_load or type(tmp_content) ~= "table" then
+    pcall(fs.delete, tmp_path)
+    return false, "TMP_READ_FAILED", "Frisch geschriebene .tmp-Datei liess sich nicht laden: " .. tostring(tmp_content)
+  end
+  if validate_fn then
+    local ok_valid, verr = validate_fn(tmp_content)
+    if not ok_valid then
+      pcall(fs.delete, tmp_path)
+      return false, "TMP_VALIDATE_FAILED", tostring(verr or "Validierung der .tmp-Datei fehlgeschlagen")
+    end
+  end
+
+  -- Schritt 4: bestehende Zieldatei sichern (falls vorhanden)
+  local had_old = fs.exists(path)
+  if had_old then
+    if fs.exists(prev_path) then pcall(fs.delete, prev_path) end
+    local ok_bak = pcall(fs.move, path, prev_path)
+    if not ok_bak then
+      pcall(fs.delete, tmp_path)
+      return false, "BACKUP_FAILED", "Konnte bestehende Datei nicht nach " .. prev_path .. " sichern"
+    end
+  end
+
+  -- Schritt 5: .tmp an die Zielposition verschieben
+  local ok_move = pcall(fs.move, tmp_path, path)
+  if not ok_move then
+    -- letzte gueltige Datei wiederherstellen, falls sie schon verschoben wurde
+    if had_old and fs.exists(prev_path) and not fs.exists(path) then
+      pcall(fs.move, prev_path, path)
+    end
+    pcall(fs.delete, tmp_path)
+    return false, "MOVE_FAILED", "Konnte .tmp nicht nach " .. path .. " verschieben"
+  end
+
+  -- Schritt 6+7: finale Datei erneut einlesen und validieren
+  local ok_final, final_content = pcall(dofile, path)
+  if not ok_final or type(final_content) ~= "table" then
+    if had_old and fs.exists(prev_path) then
+      pcall(fs.delete, path)
+      pcall(fs.move, prev_path, path)
+    end
+    return false, "FINAL_READ_FAILED", "Finale Datei liess sich nach dem Schreiben nicht laden: " .. tostring(final_content)
+  end
+  if validate_fn then
+    local ok_valid2, verr2 = validate_fn(final_content)
+    if not ok_valid2 then
+      if had_old and fs.exists(prev_path) then
+        pcall(fs.delete, path)
+        pcall(fs.move, prev_path, path)
+      end
+      return false, "FINAL_VALIDATE_FAILED", tostring(verr2 or "Validierung der finalen Datei fehlgeschlagen")
+    end
+  end
+
+  -- Schritt 8: erst jetzt, nach vollstaendigem Erfolg, .prev entfernen
+  if had_old and fs.exists(prev_path) then pcall(fs.delete, prev_path) end
   return true
 end
 
@@ -94,6 +183,10 @@ function M.new(opts)
     get_reactors = opts.get_reactors or function() return {} end,
     get_active_route = opts.get_active_route,
     config_path = opts.config_path or DEFAULT_ROUTE_CONFIG_PATH,
+    -- Feature (2026-07-12): REST-P0.1. Ergebnis des Start-Ladevorgangs
+    -- aus main.lua (fuel_routes.lua laden + validieren, VOR der Router-
+    -- Erzeugung) -- wird hier nur zur Anzeige durchgereicht.
+    routing_load_status = opts.routing_load_status,
     _ui = {
       mode = "tree",
       selected_side = nil,
@@ -229,7 +322,13 @@ function M:_render_tree(target, ui, w, h)
   end
 
   mux.status_dot(target, 2, 3, string.format("VENTILE %d", self.redstone_router and self.redstone_router:valve_count() or 0), #tree > 0 and "OK" or "WARNING")
-  if w >= 40 then mux.status_dot(target, math.floor(w * 0.35), 3, string.format("PFADE %d", #routes), #routes > 0 and "OK" or "LIMITED") end
+  if w >= 40 then
+    if self.routing_load_status and self.routing_load_status.ok == false then
+      mux.status_dot(target, math.floor(w * 0.35), 3, "ROUTING INVALID: " .. mux.fit(tostring(self.routing_load_status.message or self.routing_load_status.code or "?"), 18), "WARNING", math.max(1, w - math.floor(w * 0.35) - 2))
+    else
+      mux.status_dot(target, math.floor(w * 0.35), 3, string.format("PFADE %d", #routes), #routes > 0 and "OK" or "LIMITED")
+    end
+  end
 
   local banner_text, banner_key
   if active.target then
@@ -332,7 +431,15 @@ function M:_render_edit(target, ui, w, h)
     -- fehlgeschlagenen Versuch. Hat oberste Prioritaet vor allen anderen
     -- Save-Zustaenden, da der Schreibschutz sicherheitsrelevanter ist als
     -- der reine Speicherstatus.
-    if u.tree_has_nesting then
+    -- Fix (2026-07-12): REST-P0.1. Ein ungueltiger Start-Ladevorgang
+    -- (fuel_routes.lua fehlerhaft/unlesbar) hat oberste Prioritaet vor
+    -- ALLEN anderen Zustaenden, inklusive dem Schreibschutz bei
+    -- verschachtelten Baeumen -- ohne gueltig geladene Routen ist der
+    -- Router grundsaetzlich nicht betriebsbereit, unabhaengig davon, was
+    -- der Editor gerade lokal anzeigt.
+    if self.routing_load_status and self.routing_load_status.ok == false then
+      save_label, save_key = "ROUTING INVALID: " .. mux.fit(tostring(self.routing_load_status.message or self.routing_load_status.code or "?"), 20), "WARNING"
+    elseif u.tree_has_nesting then
       save_label, save_key = "NUR LESEN - VERSCHACHTELTER BAUM", "LIMITED"
     elseif u.save.state == "FAILED" then
       save_label, save_key = "FEHLER: " .. mux.fit(tostring(u.save.error or "?"), 24), "WARNING"
@@ -542,11 +649,21 @@ function M:_do_save()
     end
   end
 
-  local ok = save_routes(u.routes, self.config_path)
+  local ok, err_code, err_msg = save_routes_atomic(u.routes, self.config_path, function(content)
+    if type(content) ~= "table" then return false, "gespeicherter Inhalt ist keine Tabelle" end
+    if redstone_router_lib then
+      local v = redstone_router_lib.validate_tree(content)
+      if not v.ok then
+        local fe = v.errors[1]
+        return false, fe and ("[" .. fe.code .. "] " .. fe.message) or "Validierung fehlgeschlagen"
+      end
+    end
+    return true
+  end)
   if not ok then
     u.save.state = "FAILED"
-    u.save.error = "Datei-Schreibfehler (" .. tostring(self.config_path) .. ")"
-    self.log("WARN", "RouterUI: failed to save routes to " .. tostring(self.config_path))
+    u.save.error = tostring(err_code) .. ": " .. tostring(err_msg)
+    self.log("WARN", "RouterUI: atomarer Schreibvorgang fehlgeschlagen (" .. tostring(self.config_path) .. "): " .. tostring(err_code) .. " - " .. tostring(err_msg))
     return false
   end
 

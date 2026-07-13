@@ -80,6 +80,44 @@ local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
 config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
+-- Fix (2026-07-12): REST-P0.1 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+-- FIX_2026-07-12.md). /xreactor/config/fuel_routes.lua (die vom Router-
+-- Editor per atomarem Schreibvorgang geschriebene, kanonische
+-- Routenquelle) wurde beim normalen FUEL-Start bisher NIE geladen --
+-- gespeicherte Routen gingen bei JEDEM Neustart verloren, da der
+-- operative Router immer nur aus der unveraenderten FUEL-Konfiguration
+-- erzeugt wurde (der Editor haette zwar innerhalb derselben Laufzeit
+-- "GESPEICHERT=AKTIV" gezeigt, aber ohne jede Wirkung nach einem
+-- Neustart). Jetzt: VOR der allerersten Router-Erzeugung wird die Datei
+-- geladen und vollstaendig mit derselben validate_tree()-Funktion
+-- geprueft, die der Router selbst verwendet -- NUR bei Erfolg wird das
+-- Ergebnis nach config.logistics.redstone_tree uebernommen. Bei
+-- fehlender oder ungueltiger Datei bleibt redstone_tree unveraendert
+-- (kein Fuel-Export ohne gueltige Routen moeglich) und routing_load_
+-- status haelt den exakten Fehler fuer die Router-/Diagnostics-Seite fest.
+local routing_load_status = { ok = true, source = "config" }
+do
+  local routes_path = "/xreactor/config/fuel_routes.lua"
+  if fs.exists(routes_path) then
+    local ok_load, content = pcall(dofile, routes_path)
+    if not ok_load or type(content) ~= "table" then
+      routing_load_status = { ok = false, code = "ROUTES_FILE_UNREADABLE", message = tostring(content), source = routes_path }
+      add_config_warning("fuel_routes.lua konnte nicht geladen werden, Routing bleibt INVALID: " .. tostring(content))
+    else
+      local validation = redstone_router_lib.validate_tree(content)
+      if not validation.ok then
+        local fe = validation.errors[1]
+        routing_load_status = { ok = false, code = fe and fe.code or "INVALID", message = fe and fe.message or "Validierung fehlgeschlagen", source = routes_path }
+        add_config_warning("fuel_routes.lua ungueltig, Routing bleibt INVALID: " .. tostring(routing_load_status.message))
+      else
+        config.logistics = config.logistics or {}
+        config.logistics.redstone_tree = content
+        routing_load_status = { ok = true, source = routes_path }
+      end
+    end
+  end
+end
+
 local node_id = support_runtime.init_logging({
   utils = utils, config = config, runtime_config = CONFIG,
   config_meta = config_meta, config_warnings = config_warnings
@@ -138,6 +176,7 @@ local function get_router_ui()
       redstone_router = get_rs_router(),
       config_path = "/xreactor/config/fuel_routes.lua",
       log = function(level, msg) utils.log("FUEL", msg, level) end,
+      routing_load_status = routing_load_status,
       get_reactors = function()
         local list, seen = {}, {}
         local lg = config.logistics or {}
