@@ -204,7 +204,20 @@ local function init()
   matrix_runtime = matrix_snapshot_runtime.new({
     log_prefix = "ENERGY", config = config, debug_enabled = config.debug_logging,
     get_groups = function() return devices.matrix_groups or {} end,
-    heartbeat_pump = function() send_heartbeat(now_ms()) end,
+    -- Fix (2026-07-13): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_
+    -- NODES_PERFORMANCE_2026-07-12.md). heartbeat_pump() rief send_
+    -- heartbeat() bisher UNGEFILTERT bei jedem Matrix-Sample-Zyklus auf
+    -- (~alle 0.5s), unabhaengig vom eigentlich konfigurierten Heartbeat-
+    -- Intervall (Standard 2s) -- ein Heartbeat-Ziel muss nur SOOFT wie
+    -- konfiguriert bedient werden, nicht bei jeder Gelegenheit, bei der
+    -- der Aufrufer gerade "vorbeikommt". Jetzt dieselbe Intervallpruefung
+    -- wie im bereits korrekten inter_service_hook oben.
+    heartbeat_pump = function()
+      local now = now_ms()
+      if (now - hb_state.last_ts) >= heartbeat_interval_ms() then
+        send_heartbeat(now)
+      end
+    end,
     record_error = function(scope, err)
       devices.last_error = tostring(scope) .. ": " .. tostring(err)
     end
