@@ -1,4 +1,27 @@
 local M = {}
+local utils = require("core.utils")
+
+-- Fix (2026-07-13): CRITICAL (MASTER-P1.1, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md). PEAK-/IDLE-Schwellwert und der
+-- lokale AUTO-UPDATE-Schalter aenderten bisher nur runtime.state im
+-- Arbeitsspeicher -- nach einem Neustart waren sie wieder auf den
+-- Standardwert zurueckgesetzt. Schreibt die betroffenen Felder gezielt
+-- in die per GLOBAL-P0 bereits geschuetzte Nutzerdatei (/xreactor/config/
+-- master.lua, kein Manifest-Eintrag, uebersteht Auto-Updates), OHNE den
+-- Rest des Live-State-Objekts (Funktionsreferenzen, transiente Node-
+-- Daten etc.) mit anzufassen -- liest die evtl. bereits vorhandene Datei
+-- zuerst ein und aktualisiert nur die konkret betroffenen Schluessel.
+local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
+local function persist_master_settings(fields)
+  local existing = {}
+  if utils.load_config then
+    local ok, loaded = pcall(utils.load_config, MASTER_USER_CONFIG_PATH, {})
+    if ok and type(loaded) == "table" then existing = loaded end
+  end
+  for k, v in pairs(fields) do existing[k] = v end
+  local ok_write = pcall(utils.write_config, MASTER_USER_CONFIG_PATH, existing)
+  return ok_write == true
+end
 
 local function normalize_status(raw)
   local s = tostring(raw or "OFFLINE"):upper()
@@ -668,11 +691,13 @@ function M.new(opts)
     if action.type == "peak_threshold_adjust" and action.delta and c.state then
       local cur = tonumber(c.state.peak_threshold_pct) or 30
       c.state.peak_threshold_pct = math.max(5, math.min(80, cur + action.delta))
+      persist_master_settings({ peak_threshold_pct = c.state.peak_threshold_pct })
       return true
     end
     if action.type == "idle_threshold_adjust" and action.delta and c.state then
       local cur = tonumber(c.state.idle_threshold_pct) or 90
       c.state.idle_threshold_pct = math.max(20, math.min(99, cur + action.delta))
+      persist_master_settings({ idle_threshold_pct = c.state.idle_threshold_pct })
       return true
     end
     -- Config-Editor am Monitor (Feature, 2026-07-02): Fuel-Reserve/
@@ -705,6 +730,7 @@ function M.new(opts)
     if action.type == "auto_update_toggle" and c.calc.set_auto_update_enabled then
       local cur = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled()
       c.calc.set_auto_update_enabled(not cur)
+      persist_master_settings({ auto_update_enabled = not cur })
       return true
     end
     -- Alarm-Historie Zeitfenster (Feature, 2026-07-01): zyklisch zwischen
