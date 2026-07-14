@@ -28,7 +28,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | Installer / Benutzerconfig | **TEILWEISE BEHOBEN** | Config-Persistenz erledigt (GLOBAL-P0); Source-Pinning/CRC-Verify/Quiesce-Koordination laut `CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md` weiterhin offen |
 | Shared Runtime | **BEHOBEN** | Events dürfen keine periodischen Vollticks auslösen — erledigt (SHARED-P0); Event-Koaleszierung/ENERGY-Attach-Detach-Kopplung bleibt Teil von Abschnitt 7 |
 | MASTER | **WEITGEHEND ERLEDIGT** | mehrere FUEL-/WATER-Zielnodes eindeutig auswählen |
-| RT | **TEILWEISE BEHOBEN** | 10-Hz-Cadence + Turbinen-Flow-Write-Dedup erledigt (RT-P0); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick, Coil-Write-Dedup fehlt (RT-P1) |
+| RT | **TEILWEISE BEHOBEN** | 10-Hz-Cadence + Flow-/setActive-Write-Dedup erledigt (RT-P0/P1; Rod- und Coil-Writes waren bereits vorher korrekt dedupliziert); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick; Capability-Cache/Kind-Namen/Attach-Detach-Invalidierung/gemeinsamer UI-Snapshot/Discovery-Default noch offen (RT-P1) |
 | ENERGY | **WEITGEHEND ERLEDIGT** | Ingame-Nachweis mit künstlich verlangsamtem Matrixadapter steht aus; Architektur bereits verifiziert isoliert |
 | WATER | **WEITGEHEND ERLEDIGT** | Ingame- und Update-Regressionsnachweis |
 | FUEL | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
@@ -123,7 +123,8 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 
 - `RECEIVE_TIMEOUT` von 0.5s auf 0.1s gesenkt — Control-Tick läuft jetzt mit 10 Hz statt 2 Hz,
 - `reactor_adjust_interval`/`reactor_adjust_interval_individual` von 5.0s/1.0s auf 0.10s gesenkt,
-- Turbinen-Flow-Write dedupliziert (identischer Zielwert wird nicht erneut geschrieben), Overspeed-Bypass bleibt sofort wirksam.
+- Turbinen-Flow-Write dedupliziert (identischer Zielwert wird nicht erneut geschrieben), Overspeed-Bypass bleibt sofort wirksam,
+- `setActive`-Write (Reaktor + Turbine) im Control-Hotpath dedupliziert (RT-P1).
 
 ## Shared Runtime
 
@@ -278,14 +279,21 @@ Funktional verifiziert (Mock-Test gegen den echten Turbinen-Flow-Dedup-Code): 50
 
 **TEILWEISE OFFEN**
 
-Noch zu prüfen und mit Metriken abzuschließen:
+- identische `setActive`-, Flow-, Coil- und Rod-Writes vollständig unterdrücken:
+  - **Flow** (Turbine): BEHOBEN, siehe RT-P0-Abschnitt oben.
+  - **Rod**: war bereits vorher korrekt (`ctrl.last_applied == clamped`-Schutz).
+  - **Coil/Inductor**: war bereits vorher korrekt (`engaged == ctrl.inductor_engaged`-Schutz).
+  - **setActive** (Reaktor + Turbine): **BEHOBEN (2026-07-14)**. `reactor_control.lua`s `M.setReactorActive()` und `turbine_control.lua`s `M.setTurbineActive()` riefen `setActive()` bisher bei jedem Control-Tick unbedingt auf, obwohl der Aufrufer in `turbine_control.lua`s `updateControl()` immer denselben Zielwert (`true`) verlangt — seit der 10-Hz-Cadence (RT-P0) wären das 10 statt vorher 2 redundante Hardware-Writes pro Sekunde und Gerät gewesen. Beide Funktionen akzeptieren jetzt einen optionalen `ctrl`-Parameter (`reactor_ctrl[name]`/`turbine_ctrl_store[name]`) und unterdrücken den Write bei unverändertem Zielwert; die beiden tatsächlichen Hotpath-Aufrufstellen in `updateControl()` übergeben jetzt `ctrl`. Rückwärtskompatibel: andere Aufrufer ohne `ctrl` (z. B. `module_lifecycle.lua`s `M.set_reactors_active`/`M.set_turbines_active`, event-getriebene Zustandswechsel, nicht Teil des 10-Hz-Pfads) verhalten sich unverändert. `module_lifecycle.lua`s `M.process_startup()` (ebenfalls unbedingte `setActive`-Aufrufe) wird aktuell von keiner Stelle im Code aufgerufen (toter Pfad) — nicht angefasst, da nicht erreichbar.
 
-- identische `setActive`-, Flow-, Coil- und Rod-Writes vollständig unterdrücken,
+Noch zu prüfen und mit Metriken abzuschließen (nicht Teil dieser Umsetzung):
+
 - Capability-Cache exakt einmal pro Discoverygeneration,
 - Singular-/Plural-Kind-Namen normalisieren,
 - gezielte Invalidierung bei Attach/Detach,
 - gemeinsamer nicht-sicherheitskritischer Snapshot für UI und Telemetrie,
 - stabilen Discovery-Default nach erfolgreichem Boot verlangsamen.
+
+Funktional verifiziert (Mock-Test gegen die echten, aus den Quelldateien extrahierten Funktionen): erster Aufruf schreibt, 20 wiederholte Aufrufe mit demselben Zielwert erzeugen 0 weitere Writes, ein echter Wertwechsel schreibt sofort, Aufrufe ohne `ctrl` bleiben unbedingt (Rückwärtskompatibilität), fehlende `setActive`-Capability verhält sich wie zuvor.
 
 ---
 

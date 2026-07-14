@@ -303,8 +303,22 @@ local function setInductor(turbine, caps, engaged)
   return false
 end
 
-function M.setTurbineActive(ctx, turbine, caps, active)
-  if caps.setActive then turbine.setActive(active); return true end
+-- Fix (2026-07-14): CRITICAL. RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). Analog zu reactor_control.lua's
+-- setReactorActive()-Fix: setActive() lief bisher unbedingt bei jedem
+-- Control-Tick, obwohl der Aufrufer (updateControl() weiter unten) immer
+-- denselben Zielwert "true" verlangt. Optionaler ctrl-Parameter
+-- (turbine_ctrl_store[name]-Eintrag) unterdrueckt jetzt identische
+-- Writes, ruecklaufkompatibel ohne ctrl fuer andere Aufrufer
+-- (module_lifecycle.lua's Start-Rampe).
+function M.setTurbineActive(ctx, turbine, caps, active, ctrl)
+  if ctrl and ctrl.active_state == active then return true end
+  if caps.setActive then
+    turbine.setActive(active)
+    if ctrl then ctrl.active_state = active end
+    return true
+  end
+  if ctrl then ctrl.active_state = active end
   return true  -- keine API = trotzdem weitermachen
 end
 
@@ -855,8 +869,9 @@ function M.updateControl(ctx)
       if not ctx.reactor_control.has_reactor_rod_write_path(caps) then
         warn_unsupported(ctx, name); goto continue_control_reactor
       end
+      local reactor_ctrl = ctx.reactor_control.ensure_reactor_ctrl(ctx, name)
       local ok_active, active_result = pcall(
-        ctx.reactor_control.setReactorActive, ctx, reactor, caps, true)
+        ctx.reactor_control.setReactorActive, ctx, reactor, caps, true, reactor_ctrl)
       if not ok_active then
         ctx.warn_once("reactor_active:" .. name,
           "Reactor activate failed for " .. name .. ": " .. tostring(active_result))
@@ -867,7 +882,6 @@ function M.updateControl(ctx)
           "Reactor active API unavailable for " .. name)
         goto continue_control_reactor
       end
-      ctx.reactor_control.ensure_reactor_ctrl(ctx, name)
       if not ctx.autonom_control_logged then
         ctx.autonom_control_logged = true
       end
@@ -916,7 +930,7 @@ function M.updateControl(ctx)
     end
     ctrl.flow_api_missing_ticks = 0
 
-    local ok_active, active_result = pcall(M.setTurbineActive, ctx, turbine, caps, true)
+    local ok_active, active_result = pcall(M.setTurbineActive, ctx, turbine, caps, true, ctrl)
     if not ok_active then
       ctx.warn_once("turbine_active:" .. name,
         "Turbine activate failed for " .. name .. ": " .. tostring(active_result))

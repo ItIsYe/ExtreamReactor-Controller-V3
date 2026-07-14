@@ -281,8 +281,24 @@ function M.has_reactor_rod_write_path(caps)
   ) and true or false
 end
 
-function M.setReactorActive(ctx, reactor, caps, active)
-  if caps.setActive then reactor.setActive(active); return true end
+-- Fix (2026-07-14): CRITICAL. RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). setActive() wurde bisher bei JEDEM
+-- Control-Tick fuer JEDEN Reaktor unbedingt aufgerufen, obwohl der
+-- Zielwert (immer "true", siehe Aufrufer in turbine_control.lua's
+-- updateControl()) sich nach dem ersten erfolgreichen Write nie wieder
+-- aendert -- ein echter, dauerhaft redundanter Hardware-Write pro Tick.
+-- Seit der 10-Hz-Cadence (RT-P0) waere das 10 unnoetige Writes/Sekunde
+-- statt vorher 2. Optionaler ctrl-Parameter (reactor_ctrl[name]-Eintrag)
+-- erlaubt jetzt denselben "nur bei Aenderung schreiben"-Schutz wie
+-- bereits bei Rod- und Flow-Writes -- ruecklaufkompatibel: ohne ctrl
+-- (z.B. module_lifecycle.lua's Start-Rampe) unveraendertes Verhalten.
+function M.setReactorActive(ctx, reactor, caps, active, ctrl)
+  if ctrl and ctrl.active_state == active then return true end
+  if caps.setActive then
+    reactor.setActive(active)
+    if ctrl then ctrl.active_state = active end
+    return true
+  end
   return false
 end
 
