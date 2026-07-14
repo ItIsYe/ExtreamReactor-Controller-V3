@@ -20,3 +20,9 @@ jobs:
       - name: Run offline validator
         run: |
           lua5.2 tools/offline_validate.lua
+      - name: Run functional Lua tests
+        run: |
+          bash tools/run_lua_tests.sh lua5.2
+      - name: Run functional Python tests
+        run: |
+          bash tools/run_python_tests.sh python3

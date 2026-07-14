@@ -1,6 +1,5 @@
-package.path = package.path .. ";/workspace/ExtreamReactor-Controller-V3/?.lua"
 
-local rails = dofile("/workspace/ExtreamReactor-Controller-V3/xreactor/core/control_rails.lua")
+local rails = dofile("xreactor/core/control_rails.lua")
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -30,7 +29,7 @@ end
 
 
 local function test_rt_config_uses_single_authoritative_regulator_fields()
-  local cfg = dofile('/workspace/ExtreamReactor-Controller-V3/xreactor/nodes/rt/config.lua')
+  local cfg = dofile('xreactor/nodes/rt/config.lua')
   assert_true(type(cfg.autonom) == 'table', 'rt config must define autonom section')
   assert_true(cfg.autonom.min_rods == nil and cfg.autonom.max_rods == nil,
     'legacy autonom.min_rods/max_rods must be removed from defaults to avoid ambiguous caps')

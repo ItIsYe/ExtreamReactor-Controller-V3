@@ -35,7 +35,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | REPROCESSOR | **TEILWEISE** | Routing ohne blockierende Sleeps |
 | VALVE | **WEITGEHEND ERLEDIGT** | Paketverlust/Reconnect ingame nachweisen |
 | LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch |
-| Tests / CI | **KRITISCH OFFEN** | funktionale Lua-/Python-Tests wirklich ausführen |
+| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (58/135 Lua, 19/28 Python grün); 86 Tests bleiben einzeln zu triagieren |
 | Dokumentation | **BEREINIGT** | künftig nur eine aktuelle Aufgabenquelle pflegen |
 
 ---
@@ -103,6 +103,13 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - vollständiger Config-Restore nach erfolgreicher Installation, ebenfalls byte-genau verifiziert,
 - Recovery-Backup bleibt bei fehlgeschlagener Wiederherstellung erhalten statt gelöscht zu werden,
 - Fix identisch in `xreactor/installer/init.lua` und im tatsächlich ausgeführten Live-Pfad in `/installer` angewendet (inkl. der eingebetteten `init_src`-Kopie).
+
+## Tests / CI
+
+- `tests/cc_env_shim.lua` (os.epoch/colors/package.path-Kompatibilitaet fuer Host-Lua),
+- `tools/run_lua_tests.sh`/`tools/run_python_tests.sh` in `.github/workflows/offline-tests.yml` eingebunden,
+- explizite, kategorisierte Ausschlussliste fuer 77 Lua- und 9 Python-Tests (`tests/known_failing_*_tests.txt`),
+- 5 Tests mit fest kodiertem `/workspace/...`-Pfad auf repo-relative Pfade korrigiert (2 laufen dadurch jetzt grün).
 
 ## RT
 
@@ -377,21 +384,32 @@ Bis dahin werden `main.lua` und `mockup_main.lua` beide benötigt.
 
 ## Status
 
-**KRITISCH OFFEN**
+**TEILWEISE BEHOBEN (2026-07-14)**
 
-`.github/workflows/offline-tests.yml` führt weiterhin nur den Offline-Validator aus. Die funktionalen Dateien unter `tests/` werden nicht automatisch ausgeführt.
+`.github/workflows/offline-tests.yml` führte bisher nur den Offline-Validator aus. Die funktionalen Dateien unter `tests/` wurden nicht automatisch ausgeführt.
 
-## Verbindlicher Umbau
+## Umsetzung
 
-1. Offline-Validator.
-2. Alle kompatiblen `tests/*.lua`.
-3. Alle `tests/*.py`.
-4. Ausschlüsse nur explizit und begründet.
-5. Rollenweise Jobgruppen.
-6. Pflichtstatuscheck für `beta` und Pull Requests.
-7. Veraltete Tests aktualisieren oder löschen, wenn ihr Schutz vollständig ersetzt wurde.
+1. `tests/cc_env_shim.lua`: minimaler CC:Tweaked-Kompatibilitäts-Shim (`os.epoch`, `colors`, `package.path` für `xreactor/`), da Host-Lua kein CC:Tweaked ist. Enthält bewusst keine Testlogik, nur Umgebung.
+2. `tools/run_lua_tests.sh` / `tools/run_python_tests.sh`: führen jede `tests/*.lua` bzw. `tests/*.py` einzeln in einem eigenen Prozess aus (kein gemeinsamer globaler State zwischen Tests), mit dem Shim vorgeladen. Explizit ausgeschlossene Tests werden übersprungen, alles andere **muss** grün sein, sonst schlägt der Schritt fehl.
+3. `tests/known_failing_lua_tests.txt` / `tests/known_failing_python_tests.txt`: **explizite, begründete Ausschlussliste** (kein stiller Skip) — jeder Eintrag hat eine Kategorie (`STALE_API`, `STALE_STRUCTURE`, `NEEDS_MOCK`, `CONTENT_DRIFT`, `SYNTAX_ERROR`, `DUPLICATE_MANIFEST_PATH`) und wurde durch tatsächliches Ausführen aller Tests unter `lua5.2`/`python3` (identisch zur CI-Umgebung) ermittelt.
+4. `.github/workflows/offline-tests.yml`: zwei neue Schritte nach dem Offline-Validator, die beide Runner ausführen. Der Workflow triggert bereits auf `push`/`pull_request` für `main`/`beta` — als **Pflichtstatuscheck** muss das zusätzlich in den Branch-Protection-Regeln des Repos aktiviert werden (Repo-Einstellung, nicht per Workflow-Datei änderbar).
+5. Fünf Tests hatten eine fest kodierte, umgebungsfremde absolute Pfadangabe (`/workspace/ExtreamReactor-Controller-V3/...`) statt eines repo-relativen Pfads — korrigiert; zwei davon liefen danach direkt grün, drei zeigten echte, unabhängige Content-Abweichungen (jetzt in der Ausschlussliste als `CONTENT_DRIFT`/`STALE_API` dokumentiert).
 
-Wichtige Testgruppen:
+## Ergebnis
+
+- Lua: 58 von 135 laufen grün, 77 explizit ausgeschlossen und begründet.
+- Python: 19 von 28 laufen grün, 9 explizit ausgeschlossen und begründet.
+- Offline-Validator: vollständig grün unter `lua5.2` (die zuvor unter Host-`lua5.1` beobachteten Parse-Fehler waren ein reines Lua-5.1-vs-5.2-goto/label-Artefakt, nicht in der echten CI-Umgebung reproduzierbar).
+
+## Noch offen
+
+- Die 86 explizit ausgeschlossenen Tests sind **nicht repariert**, nur ehrlich dokumentiert und aus dem Pflicht-Grün-Pfad herausgenommen — jede einzelne Datei braucht eine gezielte Einzelfallprüfung (echte Regression vs. veraltete Erwartung vs. fehlendes Mock), das würde den Rahmen dieser Umsetzung sprengen. Priorität für Folgearbeit: die vier `is_master_connected`-Tests (`rt_control_service_tick_stability_test.lua`, `rt_main_state_context_guard_test.lua`, `rt_master_startup_off_state_regression_test.lua`, `rt_state_handler_context_wiring_test.lua`) zeigen ein wiederkehrendes, konsistentes Muster und sind der wahrscheinlichste Kandidat für einen echten (nicht nur veralteten) Fix.
+- `core/bootstrap.lua` ist doppelt in `xreactor/manifest.lua` gelistet (eigenständiger Bug, verursacht 2 der Ausschlüsse) — noch nicht behoben.
+- Rollenweise Jobgruppen (separate CI-Jobs pro Rolle) nicht umgesetzt — alle Tests laufen aktuell in einem Job.
+- Keine Tests wurden gelöscht; die im Original geforderte "Löschregel"-Prüfung (Abschnitt 12) wurde für keinen der ausgeschlossenen Tests einzeln durchgeführt.
+
+Wichtige Testgruppen (aus der ursprünglichen Vorgabe, ob sie tatsächlich existieren wurde nicht einzeln geprüft):
 
 ```text
 config_persistence_all_roles
