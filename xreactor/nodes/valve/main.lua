@@ -165,6 +165,38 @@ else
   utils.log(CONFIG.LOG_PREFIX, "Kein Wireless Modem gefunden — Ventil-Kanal inaktiv", "ERROR")
 end
 
+-- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). Kleiner Dedupe-Ringpuffer fuer bereits
+-- verarbeitete command_id -- ein per Retry erneut gesendetes (identisches)
+-- Kommando loest keinen zweiten Redstone-Write und keinen zweiten Log-
+-- Eintrag mehr aus, wird aber trotzdem erneut bestaetigt (falls das
+-- vorherige ACK selbst verloren ging -- genau dafuer ist Dedupe UND
+-- weiterhin-Acken beide noetig).
+local SEEN_COMMAND_LIMIT = 16
+local seen_command_ids = {}
+local seen_command_order = {}
+local function seen_command(id)
+  return id ~= nil and seen_command_ids[id] == true
+end
+local function remember_command(id)
+  if id == nil or seen_command_ids[id] then return end
+  seen_command_ids[id] = true
+  seen_command_order[#seen_command_order + 1] = id
+  while #seen_command_order > SEEN_COMMAND_LIMIT do
+    local old = table.remove(seen_command_order, 1)
+    if old then seen_command_ids[old] = nil end
+  end
+end
+
+local function send_valve_ack(reply_side, command_id, applied, high, err)
+  if not command_id or not reply_side then return end
+  local ok, modem = pcall(peripheral.wrap, reply_side)
+  if not ok or not modem or type(modem.transmit) ~= "function" then return end
+  pcall(modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+    type = "VALVE_ACK", command_id = command_id, applied = applied == true, high = high, error = err,
+  })
+end
+
 local function handle_valve_channel_event(event)
   if event[1] ~= "modem_message" then return end
   -- Fix (2026-07-13): CRITICAL (VALVE-P0, siehe docs/CODING_AI_OTHER_
@@ -180,15 +212,37 @@ local function handle_valve_channel_event(event)
   -- Nodes konnten dadurch seit Einfuehrung dieser Rolle KEIN einziges
   -- SET_VALVE-Kommando empfangen -- der 20s-Fail-Safe-Fallback (siehe
   -- unten) griff dadurch dauerhaft, nicht nur bei echtem Verbindungsverlust.
-  local channel, message = event[3], event[5]
+  local reply_side, channel, message = event[2], event[3], event[5]
   if channel ~= constants.channels.VALVE then return end
   if type(message) ~= "table" or message.type ~= "SET_VALVE" then return end
   if message.dst ~= node_id then return end  -- nicht fuer diese Node bestimmt
+  -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md). "fremder Sender auf Kanal 6504 kann
+  -- passende Kommandos senden" -- optionale, ABWAERTSKOMPATIBLE Pruefung:
+  -- falls config.trusted_source gesetzt ist, werden Kommandos von einem
+  -- ANDEREN src stillschweigend verworfen. Standardmaessig (Feld nicht
+  -- gesetzt) bleibt das Verhalten unveraendert (jeder Sender akzeptiert)
+  -- -- eine erzwungene Pflichtkonfiguration wuerde bestehende
+  -- Installationen ohne dieses Feld sofort funktionsunfaehig machen.
+  if config.trusted_source and message.src ~= config.trusted_source then
+    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE von nicht vertrauenswuerdiger Quelle ignoriert: " .. tostring(message.src), "WARN")
+    return
+  end
   if type(message.high) ~= "boolean" then
     utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltiges 'high' ignoriert", "WARN")
     return
   end
-  apply_valve(message.high)
+  -- Fix (2026-07-13): VALVE-P1. Dedupe -- ein per Retry wiederholtes
+  -- identisches Kommando (dieselbe command_id) loest keinen erneuten
+  -- Redstone-Write/Log-Eintrag aus, wird aber trotzdem erneut bestaetigt.
+  local applied
+  if seen_command(message.command_id) then
+    applied = (current_high == message.high)
+  else
+    remember_command(message.command_id)
+    applied = apply_valve(message.high)
+  end
+  send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error)
 end
 
 local comms = comms_service.new({

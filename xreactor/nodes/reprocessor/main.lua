@@ -483,6 +483,24 @@ local function init()
     end
   })
   services:add(comms)
+  -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md). Gleiche Verdrahtung wie bei FUEL: der
+  -- dedizierte Ventilkanal (6504) laeuft ausserhalb von comms_service.
+  services:add({ name = "valve_ack_listener", tick = function(_self, dt, event)
+    if not event or event[1] ~= "modem_message" then return end
+    local channel, message = event[3], event[5]
+    if channel ~= constants.channels.VALVE then return end
+    if type(message) == "table" and message.type == "VALVE_ACK" then
+      get_rs_router():handle_valve_ack(message)
+    end
+  end })
+  local last_valve_retry_check_ms = 0
+  services:add({ name = "valve_ack_retry", tick = function()
+    local now = os.epoch and os.epoch("utc") or 0
+    if now - last_valve_retry_check_ms < 1000 then return end
+    last_valve_retry_check_ms = now
+    get_rs_router():check_pending_acks()
+  end })
   services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
   services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { standby = standby } end }))
   services:add(ui_service.new({

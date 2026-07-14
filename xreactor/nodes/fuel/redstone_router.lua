@@ -284,30 +284,55 @@ function M:_set_valve(valve, high)
   -- Funkprotokoll ist weiterhin fire-and-forget ohne ACK, ein
   -- erfolgreicher modem.transmit() bestaetigt nicht, dass Redstone
   -- tatsaechlich geschaltet wurde.
+  -- Fix (2026-07-13): CRITICAL (VALVE-P1, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). "Der gewuenschte Zustand wird
+  -- aktuell nur pro Integrator-ID gespeichert. Fuer Nodes mit mehreren
+  -- Seiten muss der Schluessel mindestens (integrator, side) enthalten."
+  -- -- vorher konnte bei EINEM VALVE-Node mit MEHREREN angeschlossenen
+  -- Seiten der zuletzt gesetzte Zustand einer Seite den einer ANDEREN
+  -- Seite am selben Integrator stillschweigend ueberschreiben.
   if valve.integrator then
     self._state.valve_requested = self._state.valve_requested or {}
-    self._state.valve_requested[valve.integrator] = high and "BLOCKED" or "OPEN"
+    self._state.valve_requested[valve.integrator .. "|" .. tostring(side)] = high and "BLOCKED" or "OPEN"
   end
   if valve.integrator then
     local w = self._state.integrators[valve.integrator]
     if w and w.network then
-      -- Feature (2026-07-09): eigener Funkkanal statt der normalen
-      -- comms_service-Pipeline (siehe M.new() oben) -- rohes
-      -- modem.transmit, fire-and-forget (kein Ack/Retry). Gelegentlich
-      -- verlorene Pakete sind unkritisch: der naechste Logistics-Zyklus
-      -- versucht es einfach erneut, und die VALVE-Node faellt nach 20s
-      -- ohne Kommando ohnehin in den blockierten Fail-Safe-Zustand.
+      -- Fix (2026-07-13): CRITICAL (VALVE-P1, siehe docs/CODING_AI_OTHER_
+      -- NODES_PERFORMANCE_2026-07-12.md). Der Kanal war bisher komplett
+      -- fire-and-forget: kein ACK, kein Retry, keine Sequenznummer, kein
+      -- Dedupe. Das bestehende Fail-Safe-Verhalten (VALVE faellt nach 20s
+      -- ohne Kommando in BLOCKED) bleibt die LETZTE Verteidigungslinie,
+      -- ist aber kein Ersatz fuer eine tatsaechliche Zustellbestaetigung
+      -- -- ein verlorenes Kommando konnte bis zu 20s lang unbemerkt
+      -- bleiben. Jetzt: jedes Kommando bekommt eine eindeutige command_id,
+      -- wird als "pending" verfolgt (siehe check_pending_acks() weiter
+      -- unten, periodisch von der aufrufenden Rolle aufgerufen) und bei
+      -- fehlender Bestaetigung innerhalb eines Timeouts automatisch erneut
+      -- gesendet (begrenzte Anzahl Versuche). handle_valve_ack() verarbeitet
+      -- die Antwort und traegt den TATSAECHLICH bestaetigten Zustand ein.
       if not self.valve_modem then
         self.warn_once("no_valve_modem", "RedstoneRouter: kein Wireless Modem fuer den Ventil-Kanal gefunden")
         return false
       end
-      local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE,
-        { type = "SET_VALVE", dst = w.node_id, high = high })
+      self._state.command_seq = (self._state.command_seq or 0) + 1
+      local command_id = tostring(self.config.node_id or "FUEL") .. "-" .. tostring(os.epoch and os.epoch("utc") or 0) .. "-" .. tostring(self._state.command_seq)
+      local key = valve.integrator .. "|" .. tostring(side)
+      local message = {
+        type = "SET_VALVE", src = self.config.node_id, dst = w.node_id,
+        command_id = command_id, side = side, high = high, ts = os.epoch and os.epoch("utc") or 0,
+      }
+      local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
       if not ok then
         self.warn_once("valve_net_fail:" .. valve.integrator,
           "RedstoneRouter: SET_VALVE an " .. valve.integrator .. " konnte nicht gesendet werden")
         return false
       end
+      self._state.pending_valve_acks = self._state.pending_valve_acks or {}
+      self._state.pending_valve_acks[key] = {
+        command_id = command_id, dst = w.node_id, side = side, high = high,
+        integrator = valve.integrator, sent_ts = message.ts, retries = 0,
+      }
       return true
     end
     if w and w.wrapped then
@@ -457,6 +482,60 @@ end
 -- Funktion behauptet daher nur "requested_state" (was WIR zuletzt
 -- angefordert haben), niemals einen bestaetigten Ist-Zustand, den es
 -- technisch noch gar nicht geben kann.
+-- Feature (2026-07-13): VALVE-P1. Verarbeitet eine eingehende VALVE_ACK-
+-- Nachricht -- muss von der aufrufenden Rolle (FUEL/REPROCESSOR) aus
+-- ihrem comms-Message-Handler heraus aufgerufen werden, wenn eine
+-- Nachricht vom Typ "VALVE_ACK" ankommt. Loescht das zugehoerige pending-
+-- Kommando (kein weiterer Retry noetig) und traegt den TATSAECHLICH
+-- bestaetigten Zustand ein -- erst ab hier ist "confirmed_state" (im
+-- Gegensatz zu "requested_state") ehrlich moeglich.
+function M:handle_valve_ack(message)
+  if type(message) ~= "table" or message.type ~= "VALVE_ACK" or not message.command_id then return end
+  local pending = self._state.pending_valve_acks
+  if not pending then return end
+  for key, entry in pairs(pending) do
+    if entry.command_id == message.command_id then
+      pending[key] = nil
+      self._state.confirmed_valve_state = self._state.confirmed_valve_state or {}
+      self._state.confirmed_valve_state[key] = {
+        applied = message.applied == true,
+        high = message.high,
+        error = message.error,
+        confirmed_ts = os.epoch and os.epoch("utc") or 0,
+      }
+      return
+    end
+  end
+end
+
+-- Feature (2026-07-13): VALVE-P1. Von der aufrufenden Rolle periodisch
+-- (z.B. einmal pro Sekunde aus dem Haupt-Event-Loop) aufzurufen -- prueft
+-- alle noch unbestaetigten Kommandos gegen ein Timeout und sendet sie
+-- erneut (begrenzte Anzahl Versuche, danach wird aufgegeben und auf das
+-- bestehende 20s-Fail-Safe der VALVE-Node vertraut).
+local VALVE_ACK_TIMEOUT_MS = 3000
+local VALVE_ACK_MAX_RETRIES = 3
+function M:check_pending_acks()
+  if not self.valve_modem or not self._state.pending_valve_acks then return end
+  local now = os.epoch and os.epoch("utc") or 0
+  for key, entry in pairs(self._state.pending_valve_acks) do
+    if (now - (entry.sent_ts or 0)) >= VALVE_ACK_TIMEOUT_MS then
+      if entry.retries >= VALVE_ACK_MAX_RETRIES then
+        self.warn_once("valve_ack_timeout:" .. key,
+          "RedstoneRouter: SET_VALVE an " .. tostring(entry.dst) .. " (" .. key .. ") nach " .. VALVE_ACK_MAX_RETRIES .. " Versuchen unbestaetigt -- verlasse mich auf VALVE-Fail-Safe")
+        self._state.pending_valve_acks[key] = nil
+      else
+        entry.retries = entry.retries + 1
+        entry.sent_ts = now
+        pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+          type = "SET_VALVE", src = self.config.node_id, dst = entry.dst,
+          command_id = entry.command_id, side = entry.side, high = entry.high, ts = now,
+        })
+      end
+    end
+  end
+end
+
 function M:get_valve_status()
   local cfg = self.config.logistics or self.config or {}
   local tree = cfg.redstone_tree or {}
@@ -514,7 +593,7 @@ function M:get_valve_status()
         online = online,
         stale = stale,
         age_s = age_s,
-        requested_state = requested[v.integrator] or "UNKNOWN",
+        requested_state = requested[v.integrator .. "|" .. tostring(v.side)] or "UNKNOWN",
         affected_routes = affected[v.integrator] or {},
       }
     end
