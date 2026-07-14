@@ -151,24 +151,70 @@ local function hello()
   comms:send_hello({ tanks = summary.kinds.tank and summary.kinds.tank.bound or 0 })
 end
 
-local function total_water()
-  local total, buffers = 0, {}
-  for name, tank in pairs(tanks) do
-    local level = 0
-    if tank.tanks then
-      local ok, tank_data = support_runtime.safe_wrapped_call(tank, "tanks")
-      if ok and type(tank_data) == "table" then
-        for _, info in pairs(tank_data) do if type(info) == "table" and type(info.amount) == "number" then level = level + info.amount end end
-      elseif not ok then warn_once("tank_read:" .. tostring(name), "Tank read failed for " .. tostring(name) .. ": " .. tostring(tank_data)) end
-    elseif tank.getFluidAmount then
-      local ok, value = support_runtime.safe_wrapped_call(tank, "getFluidAmount")
-      if ok and type(value) == "number" then level = value
-      elseif not ok then warn_once("tank_read:" .. tostring(name), "Tank read failed for " .. tostring(name) .. ": " .. tostring(value)) end
+-- Feature (2026-07-13): WATER-P0.3 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). Tankdaten wurden bisher mehrfach PRO ZYKLUS
+-- unabhaengig voneinander gelesen: balance_loop() -> total_water(),
+-- manage_clusters() -> read_tank_level() pro Cluster, build_status_
+-- payload() -> total_water() UND erneut read_tank_level() pro Cluster --
+-- bis zu mehrere Peripherie-Calls fuer DENSELBEN physischen Tank
+-- innerhalb eines einzigen Zyklus. Jetzt: ein gemeinsamer, generations-
+-- basierter Snapshot (water_snapshot), der alle bekannten Tanks in
+-- EINEM Durchlauf liest -- total_water() und read_tank_level() greifen
+-- beide darauf zu und lesen nur dann tatsaechlich erneut, wenn der
+-- Snapshot aelter als WATER_SNAPSHOT_MAX_AGE_MS ist (kurz genug, um
+-- innerhalb desselben/naechsten Zyklus wiederverwendet zu werden, lang
+-- genug um echte doppelte Peripherie-Calls im selben Zyklus zu vermeiden).
+local WATER_SNAPSHOT_MAX_AGE_MS = 250
+local water_snapshot = { generation = 0, ts = 0, total = 0, by_name = {} }
+
+local function read_one_tank(name, t)
+  if t.tanks then
+    local ok, data = support_runtime.safe_wrapped_call(t, "tanks")
+    if ok and type(data) == "table" then
+      local total = 0
+      for _, info in pairs(data) do if type(info) == "table" and type(info.amount) == "number" then total = total + info.amount end end
+      return total, true, nil
     end
-    total = total + level
-    table.insert(buffers, { id = name, level = level })
+    return nil, false, tostring(data)
+  elseif t.getFluidAmount then
+    local ok, value = support_runtime.safe_wrapped_call(t, "getFluidAmount")
+    if ok and type(value) == "number" then return value, true, nil end
+    return nil, false, tostring(value)
   end
-  return total, buffers
+  return nil, false, "unsupported tank interface"
+end
+
+local function refresh_water_snapshot(force)
+  local now = os.epoch and os.epoch("utc") or 0
+  if not force and (now - water_snapshot.ts) < WATER_SNAPSHOT_MAX_AGE_MS then
+    return water_snapshot
+  end
+  local total, by_name = 0, {}
+  for name, tank in pairs(tanks) do
+    local level, ok, err = read_one_tank(name, tank)
+    if not ok then
+      warn_once("tank_read:" .. tostring(name), "Tank read failed for " .. tostring(name) .. ": " .. tostring(err))
+    end
+    local level_num = level or 0
+    total = total + level_num
+    by_name[name] = { level = level_num, ok = ok, error = err }
+  end
+  water_snapshot = {
+    generation = water_snapshot.generation + 1,
+    ts = now,
+    total = total,
+    by_name = by_name,
+  }
+  return water_snapshot
+end
+
+local function total_water()
+  local snap = refresh_water_snapshot(false)
+  local buffers = {}
+  for name, entry in pairs(snap.by_name) do
+    buffers[#buffers + 1] = { id = name, level = entry.level }
+  end
+  return snap.total, buffers
 end
 
 local function should_log_balance(action, now)
@@ -182,20 +228,11 @@ local function should_log_balance(action, now)
 end
 
 local function read_tank_level(tank_name)
-  local t = tanks[tank_name]
-  if not t then return nil end
-  if t.tanks then
-    local ok, data = support_runtime.safe_wrapped_call(t, "tanks")
-    if ok and type(data) == "table" then
-      local total = 0
-      for _, info in pairs(data) do if type(info) == "table" and type(info.amount) == "number" then total = total + info.amount end end
-      return total
-    end
-  elseif t.getFluidAmount then
-    local ok, value = support_runtime.safe_wrapped_call(t, "getFluidAmount")
-    if ok and type(value) == "number" then return value end
-  end
-  return nil
+  if not tanks[tank_name] then return nil end
+  local snap = refresh_water_snapshot(false)
+  local entry = snap.by_name[tank_name]
+  if not entry then return nil end
+  return entry.ok and entry.level or nil
 end
 
 local function set_rs_output(side, state, integrator)
@@ -345,6 +382,7 @@ local function build_status_payload()
     table.insert(cluster_info, { name = name, level = level, filling = st.filling or false, draining = st.draining or false, min = cluster.min_volume, max = cluster.max_volume, read_failed = st.read_failed or false, write_error = st.write_error })
   end
   payload.clusters = cluster_info
+  payload.water_snapshot_generation = water_snapshot.generation
   payload.buffers = buffers
   payload.bindings = water_health.bindings
   payload.bindings_summary = health.summarize_bindings(water_health.bindings)
