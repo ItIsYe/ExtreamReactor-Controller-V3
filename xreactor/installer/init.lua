@@ -48,6 +48,81 @@ local GITHUB_RAW      = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor
 
 local function p(msg) pcall(print, tostring(msg)) end
 
+-- Fix (2026-07-14): CRITICAL. GLOBAL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md. Vorher wurde nur
+-- eine kleine feste Dateiliste (PRESERVE) vor dem Loeschen von /xreactor
+-- gesichert. Rollenbezogene Configs (master.lua, rt.lua, energy.lua,
+-- water.lua, fuel.lua, reprocessor.lua, valve.lua), Routingdateien
+-- (fuel_routes.lua, reproc_routes.lua) und vor allem die Remote-Update-
+-- Arming-Config (Token, deaktivierter Zustand, Intervall) stehen in
+-- KEINEM Manifest -- sie werden ausschliesslich zur Laufzeit von den
+-- jeweiligen Nodes angelegt. Ein Update/Reinstall loeschte sie bisher
+-- ersatzlos; remote_update.lua wurde danach sogar automatisch mit
+-- unsicheren Defaults (kein Token) neu angelegt. Jetzt wird der GESAMTE
+-- Ordner /xreactor/config rekursiv gesichert (nicht nur eine Allowlist),
+-- als eine kompakte Datei AUSSERHALB von /xreactor geschrieben, sofort
+-- zurueckgelesen und byte-genau verifiziert -- ERST DANACH darf
+-- /xreactor geloescht werden. Kein vollstaendiges Installationsbackup
+-- (Speicherlimit von CC:Tweaked bleibt beachtet), nur der kleine
+-- config-Ordner.
+local CONFIG_DIR               = INSTALL_ROOT .. "/config"
+local RECOVERY_DIR             = "/xreactor_recovery"
+local RECOVERY_CONFIG_BACKUP   = RECOVERY_DIR .. "/config_backup.lua"
+-- Denylist statt Allowlist: nur nachweislich regenerierbare Installer-
+-- Zwischendateien werden ausgeschlossen. Alles andere in config/ bleibt
+-- standardmaessig erhalten, auch zukuenftige, heute noch unbekannte
+-- Configdateien.
+local CONFIG_RESTORE_DENY_SUFFIX = { ".xr_tmp", ".xr_prev" }
+
+local function config_restore_denied(rel)
+  for _, suffix in ipairs(CONFIG_RESTORE_DENY_SUFFIX) do
+    if rel:sub(-#suffix) == suffix then return true end
+  end
+  return false
+end
+
+local function list_files_recursive(dir, prefix, out)
+  prefix = prefix or ""
+  out = out or {}
+  if not fs.exists(dir) or not fs.isDir(dir) then return out end
+  local ok, entries = pcall(fs.list, dir)
+  if not ok or not entries then return out end
+  for _, name in ipairs(entries) do
+    local full = dir .. "/" .. name
+    local rel = (prefix == "" and name or (prefix .. "/" .. name))
+    if fs.isDir(full) then
+      list_files_recursive(full, rel, out)
+    else
+      out[#out + 1] = rel
+    end
+  end
+  return out
+end
+
+local function serialize_config_backup(files_map)
+  local parts = { "return {\n" }
+  for rel, content in pairs(files_map) do
+    parts[#parts + 1] = "  [" .. string.format("%q", rel) .. "] = " .. string.format("%q", content) .. ",\n"
+  end
+  parts[#parts + 1] = "}\n"
+  return table.concat(parts)
+end
+
+local function backup_config_dir()
+  local files_map = {}
+  if not fs.exists(CONFIG_DIR) then return files_map end
+  for _, rel in ipairs(list_files_recursive(CONFIG_DIR)) do
+    if not config_restore_denied(rel) then
+      local f = fs.open(CONFIG_DIR .. "/" .. rel, "r")
+      if f then
+        files_map[rel] = f.readAll()
+        f.close()
+      end
+    end
+  end
+  return files_map
+end
+
 local sha = http_mod.resolve_sha()
 local base_url = sha
   and (GITHUB_RAW .. sha .. "/xreactor/")
@@ -122,13 +197,39 @@ end
 
 ui_mod.header("Installiere " .. role.label)
 
--- Wichtige Dateien sichern
-local PRESERVE = { "config/node_id.txt", "config/capacity_cache.lua", "config/role.lua", "config/optional_features.lua", "config/ampel_thresholds.lua" }
-local preserved = {}
-for _, rel in ipairs(PRESERVE) do
-  local src = INSTALL_ROOT .. "/" .. rel
-  if fs.exists(src) then
-    local f = fs.open(src, "r"); if f then preserved[rel] = f.readAll(); f.close() end
+-- Gesamten config-Ordner sichern (siehe Fix-Kommentar oben). Backup wird
+-- sofort zurueckgelesen und byte-genau verifiziert, BEVOR /xreactor
+-- geloescht werden darf -- ein defektes Backup darf niemals als
+-- Sicherheitsnetz fuer das bevorstehende Loeschen gelten.
+local config_backup = backup_config_dir()
+do
+  local backup_count = 0
+  for _ in pairs(config_backup) do backup_count = backup_count + 1 end
+  if backup_count > 0 then
+    pcall(fs.makeDir, RECOVERY_DIR)
+    local serialized = serialize_config_backup(config_backup)
+    local ok_bak, bak_err = stage_mod.write(RECOVERY_CONFIG_BACKUP, serialized)
+    if not ok_bak then
+      error("Config-Backup fehlgeschlagen, breche vor Loeschen ab: " .. tostring(bak_err), 0)
+    end
+    local reread = stage_mod.read(RECOVERY_CONFIG_BACKUP)
+    local restored_map
+    if reread then
+      local loader = load(reread, "=config_backup", "t", {})
+      if loader then
+        local ok_call, result = pcall(loader)
+        if ok_call and type(result) == "table" then restored_map = result end
+      end
+    end
+    if not restored_map then
+      error("Config-Backup-Verifikation fehlgeschlagen (nicht lesbar) -- breche vor Loeschen ab.", 0)
+    end
+    for rel, content in pairs(config_backup) do
+      if restored_map[rel] ~= content then
+        error("Config-Backup-Verifikation fehlgeschlagen (Mismatch bei " .. rel .. ") -- breche vor Loeschen ab.", 0)
+      end
+    end
+    p("Config gesichert: " .. backup_count .. " Datei(en) -> " .. RECOVERY_CONFIG_BACKUP)
   end
 end
 
@@ -144,7 +245,7 @@ end
 -- beim manuellen Installer-Lauf ungefragt IMMER mitinstalliert, sobald
 -- die Rolle passte — keine Nutzerwahl mehr moeglich. Hier wiederhergestellt.
 local function load_selected_features()
-  local raw = preserved["config/optional_features.lua"]
+  local raw = config_backup["optional_features.lua"]
   if not raw then return {} end
   local ok, loaded = pcall(function()
     local chunk = load(raw, "=optional_features", "t", {})
@@ -223,6 +324,15 @@ if fs.exists(INSTALL_ROOT) then
 end
 pcall(fs.makeDir, INSTALL_ROOT)
 
+-- Minimal-Restore sofort nach Neuanlage des Roots: bricht die
+-- Installation danach ab (Downloadfehler, Stromausfall), bleiben Rolle
+-- und Remote-Update-Arming trotzdem erhalten -- kein Node ohne Rolle,
+-- kein unbeabsichtigtes Re-Arm mit unsicheren Defaults.
+for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
+  local content = config_backup[rel]
+  if content then stage_mod.write(CONFIG_DIR .. "/" .. rel, content) end
+end
+
 -- Dateien installieren
 local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
 local file_list = {}
@@ -239,13 +349,32 @@ local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, sha,
   function(done, total, rel) ui_mod.progress(done, total, rel) end)
 if not ok then error("Installation: " .. tostring(err), 0) end
 
--- Gesicherte Dateien wiederherstellen
-for rel, content in pairs(preserved) do
-  local dst = INSTALL_ROOT .. "/" .. rel
-  local dir = fs.getDir(dst)
-  if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
-  local f = fs.open(dst, "w"); if f then f.write(content); f.close() end
-  p("Wiederhergestellt: " .. rel)
+-- Gesamten config-Ordner wiederherstellen (ueberschreibt die bereits
+-- minimal wiederhergestellten Dateien mit demselben Inhalt -- idempotent).
+-- Jede Datei wird nach dem Schreiben erneut gelesen und byte-genau mit
+-- dem Backup verglichen. Bleibt etwas fehlgeschlagen, wird das Recovery-
+-- Backup NICHT geloescht, damit eine manuelle/spaetere Wiederherstellung
+-- weiterhin moeglich ist.
+do
+  local restored, failed = 0, {}
+  for rel, content in pairs(config_backup) do
+    local dst = CONFIG_DIR .. "/" .. rel
+    local ok_w, err_w = stage_mod.write(dst, content)
+    if not ok_w then
+      failed[#failed + 1] = rel .. " (" .. tostring(err_w) .. ")"
+    elseif stage_mod.read(dst) ~= content then
+      failed[#failed + 1] = rel .. " (verify mismatch)"
+    else
+      restored = restored + 1
+    end
+  end
+  if restored > 0 then p("Config wiederhergestellt: " .. restored .. " Datei(en)") end
+  if #failed > 0 then
+    p("WARN: Config-Wiederherstellung unvollstaendig: " .. table.concat(failed, ", "))
+    p("WARN: Recovery-Backup bleibt erhalten: " .. RECOVERY_CONFIG_BACKUP)
+  else
+    pcall(fs.delete, RECOVERY_CONFIG_BACKUP)
+  end
 end
 
 -- Feature (2026-07-01): aktuelle (ggf. gerade interaktiv geaenderte) Auswahl

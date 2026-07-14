@@ -25,7 +25,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 
 | Bereich | Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Benutzerconfig | **KRITISCH OFFEN** | vollständiger Configbestand über Update/Reinstall erhalten |
+| Installer / Benutzerconfig | **TEILWEISE BEHOBEN** | Config-Persistenz erledigt (GLOBAL-P0); Source-Pinning/CRC-Verify/Quiesce-Koordination laut `CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md` weiterhin offen |
 | Shared Runtime | **KRITISCH OFFEN** | Events dürfen keine periodischen Vollticks auslösen |
 | MASTER | **WEITGEHEND ERLEDIGT** | mehrere FUEL-/WATER-Zielnodes eindeutig auswählen |
 | RT | **KRITISCH OFFEN** | deterministische 10-Hz-Control-Cadence |
@@ -95,6 +95,15 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - Capacity wird seltener gelesen,
 - last-good Snapshots bleiben erhalten.
 
+## Installer
+
+- gesamter `/xreactor/config`-Ordner wird vor jedem Löschen rekursiv gesichert (Denylist statt Allowlist),
+- Backup wird sofort zurückgelesen und byte-genau verifiziert, bevor `/xreactor` gelöscht werden darf,
+- Minimal-Restore (`role.lua`, `remote_update.lua`, `node_id.txt`) sofort nach Neuanlage des Roots,
+- vollständiger Config-Restore nach erfolgreicher Installation, ebenfalls byte-genau verifiziert,
+- Recovery-Backup bleibt bei fehlgeschlagener Wiederherstellung erhalten statt gelöscht zu werden,
+- Fix identisch in `xreactor/installer/init.lua` und im tatsächlich ausgeführten Live-Pfad in `/installer` angewendet (inkl. der eingebetteten `init_src`-Kopie).
+
 ## LOG Collector
 
 - persistente Batch-Writes,
@@ -110,9 +119,9 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-14)**
 
-Der Installer sichert weiterhin nur eine kleine feste Dateiliste und löscht danach `/xreactor` vollständig.
+Der Installer sicherte zuvor nur eine kleine feste Dateiliste und löschte danach `/xreactor` vollständig.
 
 Nicht generell geschützt sind unter anderem:
 
@@ -130,16 +139,19 @@ config/remote_update.lua
 weitere Registry-, Layout- und Benutzerdateien
 ```
 
-## Verbindlicher Fix
+## Umsetzung
 
-1. Vollständigen Ordner `/xreactor/config` vor dem Löschen außerhalb von `/xreactor` sichern.
-2. Nach erfolgreicher Installation atomar wiederherstellen.
-3. Nur nachweislich regenerierbare temporäre Dateien über eine explizite Ausschlussliste behandeln.
-4. Configschema versionieren und neue Defaults migrationssicher ergänzen.
-5. Bei Installationsfehlern die letzte gültige Config wiederherstellen.
-6. Keine komplette Config aus ungefiltertem Runtime-State überschreiben.
+1. `/xreactor/config` wird rekursiv vollständig eingelesen und als eine Datei nach `/xreactor_recovery/config_backup.lua` geschrieben (außerhalb von `/xreactor`), bevor irgendetwas gelöscht wird.
+2. Das Backup wird sofort zurückgelesen und Eintrag für Eintrag byte-genau mit dem Original verglichen; bei jeder Abweichung bricht der Installer mit `error()` ab, **bevor** `fs.delete(INSTALL_ROOT)` erreicht wird.
+3. Denylist statt Allowlist: nur `.xr_tmp`/`.xr_prev`-Zwischendateien werden vom Restore ausgeschlossen, alles andere (auch zukünftige, heute unbekannte Configdateien) bleibt erhalten.
+4. Sofort nach Neuanlage von `/xreactor` werden `role.lua`, `remote_update.lua` und `node_id.txt` wiederhergestellt (Recovery-Fall bei Abbruch während des Downloads).
+5. Nach erfolgreicher Installation wird der gesamte Config-Bestand wiederhergestellt, jede Datei erneut gelesen und mit dem Backup verglichen; das Recovery-Backup wird nur bei vollständigem Erfolg gelöscht.
+6. Configschema-Versionierung/Default-Migration existiert bereits pro Node über `core/utils.lua` (`utils.load_config` + `migrate_config`/`merge_defaults`) und wird durch den Restore nicht berührt.
+7. Identischer Fix in `xreactor/installer/init.lua` **und** im tatsächlich ausgeführten Live-Pfad in `/installer` (inkl. eingebetteter `init_src`-Kopie) angewendet — beide Installationspfade waren zuvor unabhängig voneinander betroffen.
 
-## Abnahme
+Betroffene Dateien: `xreactor/installer/init.lua`, `installer`.
+
+## Abnahme (Regressionscheckliste)
 
 Für jede Rolle:
 
@@ -149,6 +161,8 @@ Für jede Rolle:
 - Werte und Routen bleiben erhalten,
 - neue Defaultfelder werden ergänzt,
 - defekte Config erzeugt sichtbare Warnung und sicheren Fallback.
+
+Funktional gegen ein Mock-Dateisystem verifiziert (Backup/Restore/Denylist/Verify-Abort); Ingame-Nachweis mit echter Hardware steht noch aus.
 
 ---
 
