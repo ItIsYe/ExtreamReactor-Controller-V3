@@ -674,16 +674,30 @@ function M.new(opts)
         end
       end
 
+      -- Fix (2026-07-13): MASTER-P2 (siehe docs/CODING_AI_OTHER_NODES_
+      -- PERFORMANCE_2026-07-12.md). Vorher erzeugte JEDER erfolgreiche
+      -- Monitor-Render eine EIGENE formatierte DEBUG-Zeile (string.format()
+      -- lief dabei IMMER, unabhaengig davon, ob DEBUG-Logging ueberhaupt
+      -- aktiv ist bzw. die Zeile am Ende tatsaechlich geschrieben wird).
+      -- Jetzt: Erfolge werden zu EINER zusammengefassten Zeile aggregiert
+      -- (guenstig zu bauen -- nur Zaehler, keine Pro-Monitor-Formatierung).
+      -- Fehlschlaege bleiben bewusst EINZELN und sofort sichtbar -- das
+      -- sind seltene, wichtige Diagnosedaten, keine Routine-Information.
+      local ok_count, fail_count = 0, 0
       for _, r in ipairs(rendered) do
-        if c.log then
-          if r.ok then
-            c.log(("UI render ok view=%s monitor=%s role=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role)), "DEBUG")
-          else
+        if r.ok then
+          ok_count = ok_count + 1
+        else
+          fail_count = fail_count + 1
+          if c.log then
             c.log(("UI render failed view=%s monitor=%s role=%s error=%s"):format(
               tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)
             ), "ERROR")
           end
         end
+      end
+      if c.log and ok_count > 0 and c.config and c.config.debug_logging then
+        c.log(("UI render ok: %d monitor(s)%s"):format(ok_count, fail_count > 0 and (", " .. fail_count .. " failed") or ""), "DEBUG")
       end
   end
   controller.handle_action = function(action)

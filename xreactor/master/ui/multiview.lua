@@ -64,6 +64,27 @@ local function serialize_model(model)
   return ok and serialized or tostring(model)
 end
 
+-- Feature (2026-07-13): MASTER-P2 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). "Bei mehreren Monitoren derselben View
+-- entstehen unnoetige wiederholte Serialisierungen" -- data_map[view_key]
+-- ist fuer ALLE Sessions, die dieselbe View zeigen, DIESELBE Objekt-
+-- referenz (siehe M:render() weiter unten: "local model = data_map[
+-- view_key]"), wurde aber trotzdem pro Session unabhaengig serialisiert.
+-- Pro-Render-Durchlauf-Cache (view_snapshot_cache, am Anfang jedes M:
+-- render()-Aufrufs geleert): serialisiert eine gegebene Objektreferenz
+-- innerhalb eines Durchlaufs nur EINMAL, alle Sessions mit derselben View
+-- teilen sich das Ergebnis.
+local view_snapshot_cache = {}
+local function serialize_model_cached(view_key, model)
+  local cached = view_snapshot_cache[view_key]
+  if cached and cached.model_ref == model then
+    return cached.snapshot
+  end
+  local snapshot = serialize_model(model)
+  view_snapshot_cache[view_key] = { model_ref = model, snapshot = snapshot }
+  return snapshot
+end
+
 local function should_render_view(session, view_key, view, model)
   local now = os.epoch and os.epoch("utc") or 0
   local key = tostring(session.name or session.id or "?") .. "|" .. tostring(view_key)
@@ -97,7 +118,7 @@ local function should_render_view(session, view_key, view, model)
     return false, state, now
   end
 
-  local snapshot = serialize_model(model)
+  local snapshot = serialize_model_cached(view_key, model)
   local changed = snapshot ~= state.last_snapshot
   state.last_snapshot = snapshot
   state.last_draw = now
@@ -170,6 +191,10 @@ end
 
 function M:render(monitors, data_map)
   data_map = data_map or {}
+  -- Fix (2026-07-13): MASTER-P2. Cache gilt nur INNERHALB eines einzelnen
+  -- render()-Durchlaufs -- am Anfang jedes Aufrufs geleert, damit er nicht
+  -- unbegrenzt waechst und immer den aktuellen model_ref korrekt widerspiegelt.
+  view_snapshot_cache = {}
   self.sessions:bind_or_update(monitors or {}, nil, self.view_order)
   local rendered = {}
 
