@@ -375,7 +375,7 @@ local function init()
   -- Handler oben. Analog zu VALVE-Nodes' eigenem "valve_channel"-Service:
   -- roher Event-Listener, der modem_message auf Kanal 6504 direkt an
   -- redstone_router.lua's handle_valve_ack() weiterreicht.
-  services:add({ name = "valve_ack_listener", tick = function(_self, dt, event)
+  services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
     if channel ~= constants.channels.VALVE then return end

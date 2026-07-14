@@ -130,52 +130,73 @@ function manager:init()
   self.running = true
 end
 
+-- Fix (2026-07-14): CRITICAL. SHARED-P0 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). Ein Event-getriebener Aufruf (event ~= nil --
+-- z.B. bei JEDEM einzelnen Modem-/Monitor-/Maus-/Tastendruck-Event aus
+-- nodes/support/runtime.lua's run_event_loop() bzw. den analogen Event-
+-- Loops in ENERGY/MASTER) fuehrte bisher IMMER den kompletten Service-
+-- Manager aus: Discovery, Telemetry, Alert, Matrix-Sampling und jeder rein
+-- periodische Ad-hoc-Service (z.B. "ampel_render", "valve_ack_retry",
+-- "valve_failsafe") bekam dadurch bei einer Flut von Netzwerkpaketen ein
+-- Vielfaches seiner eigentlich konfigurierten Tick-Rate zugemutet -- 1.000
+-- Modemevents erzeugten 1.000 Discovery-/Telemetry-/Control-Zyklen statt
+-- der beabsichtigten periodischen Rate. Jetzt bekommt ein Service seinen
+-- tick() bei einem Event-Aufruf nur dann ueberhaupt aufgerufen, wenn er
+-- sich explizit ueber service.wants_events = true dafuer angemeldet hat
+-- (comms_service und ui_service melden sich standardmaessig selbst an,
+-- siehe dort; einzelne rollenspezifische Ad-hoc-Services wie
+-- "valve_channel" oder "valve_ack_listener" melden sich gezielt selbst
+-- an, da sie echte Event-Reaktivitaet brauchen). Der reine periodische
+-- Tick (event == nil, aus dem Timer-Zweig jeder Event-Loop) bleibt fuer
+-- ALLE Services unveraendert -- kein Service verliert seine periodische
+-- Arbeit, sie laeuft nur nicht mehr zusaetzlich bei jedem einzelnen Event.
 function manager:tick(dt, event)
   local tick_started = now_ms()
   run_inter_service_hook(self, dt, event, "tick_start")
   for index, service in ipairs(self.services) do
     run_inter_service_hook(self, dt, event, "before_service", service, index)
-    local state = ensure_state(self, service)
-    if state.next_retry > now_ms() then
-      run_inter_service_hook(self, dt, event, "after_service", service, index)
-      goto continue
-    end
-    if service.init and not state.initialized then
-      local ok, err = pcall(service.init, service)
-      if not ok then
-        rethrow_terminate(err)
-        schedule_retry(self, service, index, state, "init", err)
-        run_inter_service_hook(self, dt, event, "after_service", service, index)
-        goto continue
+    local relevant = event == nil or (type(service) == "table" and service.wants_events == true)
+    if relevant then
+      local state = ensure_state(self, service)
+      if state.next_retry > now_ms() then
+        goto after_service
       end
-      state.initialized = true
-      clear_retry(state)
-    end
-    if service.tick then
-      local service_tick_started = now_ms()
-      local ok, err = pcall(service.tick, service, dt, event)
-      local service_tick_duration = now_ms() - service_tick_started
-      if service_tick_duration > self.service_tick_warn_ms then
-        utils.log(
-          self.log_prefix,
-          string.format(
-            "Service tick slow: %s took %dms (threshold=%dms)",
-            service_name(service, index),
-            service_tick_duration,
-            self.service_tick_warn_ms
-          ),
-          "WARN"
-        )
-      end
-      if not ok then
-        rethrow_terminate(err)
-        schedule_retry(self, service, index, state, "tick", err)
-      else
+      if service.init and not state.initialized then
+        local ok, err = pcall(service.init, service)
+        if not ok then
+          rethrow_terminate(err)
+          schedule_retry(self, service, index, state, "init", err)
+          goto after_service
+        end
+        state.initialized = true
         clear_retry(state)
       end
+      if service.tick then
+        local service_tick_started = now_ms()
+        local ok, err = pcall(service.tick, service, dt, event)
+        local service_tick_duration = now_ms() - service_tick_started
+        if service_tick_duration > self.service_tick_warn_ms then
+          utils.log(
+            self.log_prefix,
+            string.format(
+              "Service tick slow: %s took %dms (threshold=%dms)",
+              service_name(service, index),
+              service_tick_duration,
+              self.service_tick_warn_ms
+            ),
+            "WARN"
+          )
+        end
+        if not ok then
+          rethrow_terminate(err)
+          schedule_retry(self, service, index, state, "tick", err)
+        else
+          clear_retry(state)
+        end
+      end
     end
+    ::after_service::
     run_inter_service_hook(self, dt, event, "after_service", service, index)
-    ::continue::
   end
   run_inter_service_hook(self, dt, event, "tick_end")
   local tick_duration = now_ms() - tick_started

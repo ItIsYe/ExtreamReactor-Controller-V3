@@ -486,7 +486,7 @@ local function init()
   -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md). Gleiche Verdrahtung wie bei FUEL: der
   -- dedizierte Ventilkanal (6504) laeuft ausserhalb von comms_service.
-  services:add({ name = "valve_ack_listener", tick = function(_self, dt, event)
+  services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
     if channel ~= constants.channels.VALVE then return end

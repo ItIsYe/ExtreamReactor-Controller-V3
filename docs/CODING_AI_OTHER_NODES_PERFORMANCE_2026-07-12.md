@@ -26,7 +26,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | Bereich | Status | Wichtigster Restpunkt |
 |---|---|---|
 | Installer / Benutzerconfig | **TEILWEISE BEHOBEN** | Config-Persistenz erledigt (GLOBAL-P0); Source-Pinning/CRC-Verify/Quiesce-Koordination laut `CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md` weiterhin offen |
-| Shared Runtime | **KRITISCH OFFEN** | Events dürfen keine periodischen Vollticks auslösen |
+| Shared Runtime | **BEHOBEN** | Events dürfen keine periodischen Vollticks auslösen — erledigt (SHARED-P0); Event-Koaleszierung/ENERGY-Attach-Detach-Kopplung bleibt Teil von Abschnitt 7 |
 | MASTER | **WEITGEHEND ERLEDIGT** | mehrere FUEL-/WATER-Zielnodes eindeutig auswählen |
 | RT | **KRITISCH OFFEN** | deterministische 10-Hz-Control-Cadence |
 | ENERGY | **TEILWEISE** | langsame Matrixarbeit vollständig isolieren |
@@ -104,6 +104,13 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - Recovery-Backup bleibt bei fehlgeschlagener Wiederherstellung erhalten statt gelöscht zu werden,
 - Fix identisch in `xreactor/installer/init.lua` und im tatsächlich ausgeführten Live-Pfad in `/installer` angewendet (inkl. der eingebetteten `init_src`-Kopie).
 
+## Shared Runtime
+
+- Service-Manager ruft `tick()` bei Event-getriebenen Aufrufen jetzt nur noch für Services auf, die sich explizit über `wants_events = true` angemeldet haben,
+- COMMS und UI melden sich standardmäßig selbst an; rollenspezifische Event-Listener (`valve_channel`, `valve_ack_listener`, `fuel_status_overhear`) melden sich gezielt an,
+- Discovery/Telemetry/Alert/Matrix-Sampling und rein periodische Ad-hoc-Services laufen nur noch in ihrem konfigurierten Intervall, nicht mehr zusätzlich bei jedem Modem-/Monitor-/Maus-/Tastenevent,
+- periodischer Tick (`event == nil`) bleibt für alle Services unverändert, `inter_service_hook` (ENERGY-Heartbeat-Interleaving) unberührt.
+
 ## LOG Collector
 
 - persistente Batch-Writes,
@@ -170,33 +177,28 @@ Funktional gegen ein Mock-Dateisystem verifiziert (Backup/Restore/Denylist/Verif
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-14)**
 
-Die gemeinsame Support-Runtime führt bei Modem-, Monitor-, Maus- und Key-Events weiterhin den gesamten Service-Manager aus. Dadurch kann Eventverkehr zusätzliche Control-, Discovery-, UI-, Telemetrie- oder Maintenance-Zyklen erzeugen.
+Die gemeinsame Support-Runtime führte bei Modem-, Monitor-, Maus- und Key-Events weiterhin den gesamten Service-Manager aus. Dadurch konnte Eventverkehr zusätzliche Control-, Discovery-, UI-, Telemetrie- oder Maintenance-Zyklen erzeugen.
 
-## Ziel-API
+## Umsetzung
 
-```lua
-services:handle_event(event)
-services:tick_due(now_ms)
-```
+Statt der ursprünglich skizzierten `handle_event(event)`/`tick_due(now_ms)`-Doppel-API wurde eine kleinere, risikoärmere Lösung mit identischer Wirkung gewählt: `services/service_manager.lua`'s `manager:tick(dt, event)` prüft jetzt bei jedem Event-getriebenen Aufruf (`event ~= nil`) pro Service ein explizites `service.wants_events == true`-Opt-in, bevor dessen `tick()` überhaupt aufgerufen wird. Periodische Aufrufe (`event == nil`, aus dem Timer-Zweig jeder Event-Loop) bleiben für alle Services vollständig unverändert.
 
-Jeder Service besitzt getrennt:
+- `comms_service.lua` und `ui_service.lua` melden sich selbst standardmäßig an (`wants_events = true` im Konstruktor) — beide brauchen sofortige Reaktion auf Netzwerk- bzw. UI-Events.
+- Die rollenspezifischen Ad-hoc-Services, die echte Event-Reaktivität benötigen, melden sich gezielt selbst an: `valve_channel` (VALVE), `valve_ack_listener` (FUEL, REPROCESSOR), `fuel_status_overhear` (FUEL).
+- Rein periodische Services (Discovery, Telemetry, Alert, Matrix-Sampling sowie die Ad-hoc-Services `valve_failsafe`, `valve_ack_retry`, `ampel_render`, MASTERs `HOUSEKEEPING`) bekommen kein `wants_events` und werden bei Events komplett übersprungen — sie liefen ohnehin schon selbst intervallbasiert (`due`/`last_*`-Prüfung), laufen jetzt aber tatsächlich nur noch in ihrem konfigurierten Intervall statt zusätzlich bei jedem Event erneut.
+- `inter_service_hook` (von ENERGY für Heartbeat-Interleaving genutzt) feuert weiterhin unverändert für jeden Service bei jedem `tick()`-Aufruf, unabhängig vom Event-Gating.
 
-```lua
-handle_event(event)
-tick(now_ms)
-next_due_at
-```
+Betroffene Dateien: `xreactor/services/service_manager.lua`, `xreactor/services/comms_service.lua`, `xreactor/services/ui_service.lua`, `xreactor/nodes/valve/main.lua`, `xreactor/nodes/fuel/main.lua`, `xreactor/nodes/fuel/fuel_status_network.lua`, `xreactor/nodes/reprocessor/main.lua`. `nodes/support/runtime.lua` selbst musste nicht geändert werden, da das Gating vollständig im Service-Manager und den einzelnen Services lebt.
 
-## Anforderungen
+## Anforderungen (Abnahme)
 
-- Modemempfang und ACK sofort,
-- periodische Arbeit ausschließlich zeitbasiert,
-- Events koaleszieren,
-- Attach/Detach gezielt an Discovery,
-- UI-Events nur an UI-relevante Services,
-- 1.000 Modemevents erzeugen keine 1.000 Controlticks.
+- Modemempfang und ACK sofort — erhalten (`comms.wants_events = true`).
+- periodische Arbeit ausschließlich zeitbasiert — erreicht (Discovery/Telemetry/Alert/Matrix-Sampling laufen nur noch auf dem periodischen Pfad).
+- UI-Events nur an UI-relevante Services — erreicht.
+- 1.000 Modemevents erzeugen keine 1.000 Controlticks — funktional gegen echte Service-Objekte verifiziert (1000 simulierte Events lösten 0 Discovery-/Telemetry-Ticks aus, nur die angemeldeten Services liefen).
+- „Events koaleszieren" / gezielte Attach-Detach-Discovery-Kopplung: nicht Teil dieser Umsetzung, weiterhin offen (ENERGY-spezifisch, siehe Abschnitt 7).
 
 ---
 

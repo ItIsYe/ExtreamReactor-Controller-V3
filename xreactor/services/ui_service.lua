@@ -36,7 +36,11 @@ function ui.new(opts)
     on_error = opts.on_error,
     last_draw = 0,
     last_force_draw = 0,
-    last_snapshot = nil
+    last_snapshot = nil,
+    -- Fix (2026-07-14): SHARED-P0 (siehe service_manager.lua). UI muss auf
+    -- monitor_touch/mouse_click/key sofort reagieren (handle_input +
+    -- interaktives Redraw), meldet sich daher immer fuer Event-Ticks an.
+    wants_events = true
   }
   return setmetatable(self, { __index = ui })
 end
