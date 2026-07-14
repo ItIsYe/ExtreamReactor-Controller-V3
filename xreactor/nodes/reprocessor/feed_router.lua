@@ -131,8 +131,19 @@ local function feed_one(self, cfg)
     return
   end
 
-  -- Pfad zum Ziel-Reprocessor öffnen, Item exportieren, Pfad wieder schließen.
-  self.rs_router:route_and_act(target.label, function()
+  -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
+  -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). route_and_act()
+  -- blockierte bisher ~2.05-2.4s pro Befuellung -- ersetzt durch die
+  -- asynchrone Zustandsmaschine in redstone_router.lua (begin_transaction()
+  -- + tick(), von M:tick() weiter unten regelmaessig aufgerufen). "busy"
+  -- kann hier praktisch nur auftreten, wenn eine vorherige Befuellung
+  -- (Settle/Hold-Phase) noch nicht abgeschlossen ist -- bei einem
+  -- Zufallsintervall von mindestens einigen Sekunden zwischen zwei
+  -- feed_one()-Aufrufen und einer Transaktionsdauer von wenigen Sekunden
+  -- ein seltener Randfall. In diesem Fall wird die Befuellung schlicht
+  -- uebersprungen; das naechste zufaellige Intervall (siehe M:tick())
+  -- versucht es erneut, kein Datenverlust, kein haengender Zustand.
+  local started, reason = self.rs_router:begin_transaction(target.label, function()
     local result, err = safe_call(bridge, "exportItemToPeripheral", { name = item, count = amount }, target.inlet)
     local exported = type(result) == "table" and (result.amount or 0) or (type(result) == "number" and result or 0)
     if exported and exported > 0 then
@@ -148,6 +159,10 @@ local function feed_one(self, cfg)
         "FeedRouter: feed failed for " .. tostring(target.label) .. ": " .. tostring(err))
     end
   end, cfg.valve_open_ms)
+  if not started then
+    self.warn_once("router_busy:" .. tostring(reason),
+      "FeedRouter: Befuellung fuer " .. tostring(target.label) .. " uebersprungen (" .. tostring(reason) .. ")")
+  end
 end
 
 function M:tick()

@@ -442,4 +442,13 @@ local function init()
 end
 
 init()
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() get_router():tick() end)
+-- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
+-- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). get_rs_router():tick()
+-- treibt die asynchrone Ventil-Transaktion (begin_transaction() in
+-- logistics_router.lua) voran -- muss unabhaengig vom 5s-Logistics-
+-- Zyklus regelmaessig laufen, sonst wuerde eine laufende Transaktion nie
+-- ueber WAIT_SETTLE/HOLD_OPEN hinauskommen.
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+  get_router():tick()
+  get_rs_router():tick()
+end)

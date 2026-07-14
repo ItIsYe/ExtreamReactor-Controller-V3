@@ -539,4 +539,11 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then standby = true end
   process_buffers()
   if not standby then get_feed_router():tick() end
+  -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
+  -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). get_rs_router():tick()
+  -- treibt die asynchrone Ventil-Transaktion (begin_transaction() in
+  -- feed_router.lua) voran -- laeuft bewusst UNBEDINGT (auch im Standby),
+  -- damit eine bereits laufende Transaktion sauber abgeschlossen wird und
+  -- keine Ventile dauerhaft offen bleiben.
+  get_rs_router():tick()
 end)

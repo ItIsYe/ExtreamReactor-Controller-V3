@@ -31,8 +31,8 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | RT | **TEILWEISE BEHOBEN** | 10-Hz-Cadence + Turbinen-Flow-Write-Dedup erledigt (RT-P0); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick, Coil-Write-Dedup fehlt (RT-P1) |
 | ENERGY | **WEITGEHEND ERLEDIGT** | Ingame-Nachweis mit künstlich verlangsamtem Matrixadapter steht aus; Architektur bereits verifiziert isoliert |
 | WATER | **WEITGEHEND ERLEDIGT** | Ingame- und Update-Regressionsnachweis |
-| FUEL | **TEILWEISE** | Routing ohne blockierende Sleeps |
-| REPROCESSOR | **TEILWEISE** | Routing ohne blockierende Sleeps |
+| FUEL | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
+| REPROCESSOR | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
 | VALVE | **WEITGEHEND ERLEDIGT** | Paketverlust/Reconnect ingame nachweisen |
 | LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch |
 | Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (58/135 Lua, 19/28 Python grün); 86 Tests bleiben einzeln zu triagieren |
@@ -58,6 +58,13 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - Round-Robin-, Budget- und Backoff-Verarbeitung,
 - Routing-/Configpfade überarbeitet,
 - VALVE-ACK-Verarbeitung integriert.
+
+## FUEL / REPROCESSOR gemeinsamer Ventil-Router
+
+- `route_and_act()`s zwei blockierende `os.sleep()`-Aufrufe (~2.05-2.4s pro Lieferung) durch eine tick-getriebene Zustandsmaschine ersetzt (`begin_transaction()`/`tick()`),
+- nur eine aktive Transaktion gleichzeitig (Serialisierung), ACK-Timeout bricht sofort ab und blockiert alles,
+- FUELs Lieferschleife startet jetzt höchstens eine Ventil-Lieferung pro Zyklus statt mehrere hintereinander zu blockieren,
+- bestehender Sicherheitsschutz (ungültiger Baum verweigert Aktion) vollständig erhalten.
 
 ## VALVE / gemeinsamer Router
 
@@ -329,32 +336,46 @@ Ingame-Nachweis mit einem künstlich verlangsamten Matrix-Adapter steht weiterhi
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-14)**
 
-Der gemeinsame Router verwendet weiterhin blockierende Wartephasen für Settle- und Valve-open-Zeiten.
+Der gemeinsame Router (`nodes/fuel/redstone_router.lua`, von FUEL und REPROCESSOR geteilt) verwendete blockierende Wartephasen: `route_and_act()` rief zwei `os.sleep()`-Aufrufe auf (Settle-Zeit vor dem Export, Offenhaltezeit danach), zusammen üblicherweise 2.05–2.4s **pro Lieferung**. Da FUEL/REPROCESSOR als einzelne Coroutine laufen (kein `parallel.waitForAny`-Split wie bei ENERGY/RT), fror das den gesamten Node für diese Zeit ein — Heartbeat, Commands, UI und Failsafe eingeschlossen. FUELs Lieferschleife konnte das zusätzlich für mehrere Reaktoren pro Zyklus hintereinander tun (mehrere Sekunden bis weit über zehn Sekunden Blockade in einem einzigen Aufruf).
 
-## Ziel-State-Machine
+## Umsetzung
+
+`route_and_act()` wurde durch eine tick-getriebene Zustandsmaschine ersetzt:
 
 ```text
-IDLE
-OPEN_PATH
-WAIT_ACK
-WAIT_SETTLE
-EXPORT
-HOLD_OPEN
-BLOCK_ALL
-COMPLETE
-ERROR
+IDLE          -- kein aktiver Transfer (transaction == nil)
+WAIT_SETTLE   -- Pfad geöffnet, wartet auf Settle-Zeit (0.05s lokal / 0.4s Netzwerk-Ventil);
+                 bricht sofort ab (-> block_all), wenn ein beobachtetes SET_VALVE-Kommando
+                 endgültig unbestätigt aufgegeben wird (ACK-Timeout)
+EXPORT        -- Aktions-Callback läuft, sobald Settle-Zeit erreicht ist (Teil des WAIT_SETTLE-Ticks)
+HOLD_OPEN     -- Ventil bleibt für valve_open_ms offen
+COMPLETE/IDLE -- block_all(), Transaktion wird gelöscht, Router wieder frei
+ERROR         -- sofortiger Abbruch (ungültiger Baum, kein Pfad, ACK-Timeout) -> block_all()
 ```
+
+- `M:begin_transaction(target_id, action_fn, valve_open_ms)` startet die Transaktion nicht-blockierend und gibt sofort zurück (`true`/`false, reason`).
+- `M:tick(now_ms)` treibt eine laufende Transaktion voran — muss regelmäßig aus dem normalen Event-Loop aufgerufen werden (`nodes/fuel/main.lua`, `nodes/reprocessor/main.lua`, jetzt beide alle ~0.5s), **kein** `os.sleep()` mehr irgendwo im Pfad.
+- Nur eine Transaktion gleichzeitig: ein zweiter `begin_transaction()`-Aufruf während eine läuft wird mit `"busy"` abgelehnt — serialisiert Lieferungen strukturell, ohne separate Warteschlange.
+- `logistics_router.lua`s Lieferschleife (FUEL, mehrere Reaktoren) kaskadiert weiterhin durch Kandidaten mit unzureichendem ME-Bestand, startet aber pro Zyklus höchstens **eine** tatsächliche Ventil-Lieferung (bricht bei `"busy"` sofort ab, da ohnehin kein weiterer Kandidat gleichzeitig über denselben Ventilbaum beliefert werden könnte).
+- `feed_router.lua`s Zyklus (REPROCESSOR) war bereits Ein-Ziel-pro-Tick; nutzt jetzt `begin_transaction()` statt der blockierenden Funktion, überspringt sauber bei `"busy"`.
+- Alter Sicherheitsschutz vollständig erhalten: ungültiger/kaputter Baum verweigert die Aktion weiterhin hart (`invalid_tree`), nur ein genuin nie konfigurierter Baum erlaubt Direkt-Export (`direct_export`).
+- `M:shutdown_now()` als sofortiger Not-Aus-Pfad ergänzt (verwirft eine laufende Transaktion, blockiert augenblicklich alles) — aktuell nicht an einen bestehenden Shutdown-Befehl gebunden, da FUEL/REPROCESSOR keinen solchen Befehl von MASTER kennen; REPROCESSORs bestehender `standby`-Zustand lässt eine laufende Transaktion stattdessen sauber zu Ende laufen (kein neuer Export startet, offene Ventile werden trotzdem fristgerecht wieder blockiert).
+- `M:get_active_transaction()` für Sichtbarkeit ergänzt (Ziel + Zustand); Fehler werden weiterhin per `log("ERROR", ...)`/`warn_once` sichtbar gemacht.
+
+Betroffene Dateien: `xreactor/nodes/fuel/redstone_router.lua`, `xreactor/nodes/fuel/logistics_router.lua`, `xreactor/nodes/fuel/main.lua`, `xreactor/nodes/reprocessor/feed_router.lua`, `xreactor/nodes/reprocessor/main.lua`.
 
 ## Anforderungen
 
-- kein `os.sleep()` im normalen Routingpfad,
-- Heartbeat, Commands, UI und Failsafe bleiben aktiv,
-- ACK-Timeout führt zu `BLOCK_ALL`,
-- Shutdown blockiert sofort alle Ventile,
-- Lieferungen werden serialisiert oder klar budgetiert,
-- aktive Transaktion und Fehler sind sichtbar.
+- kein `os.sleep()` im normalen Routingpfad — erfüllt.
+- Heartbeat, Commands, UI und Failsafe bleiben aktiv — erfüllt (kein blockierender Aufruf mehr im gesamten Pfad).
+- ACK-Timeout führt zu `BLOCK_ALL` — erfüllt (siehe `_fail_transaction()`).
+- Shutdown blockiert sofort alle Ventile — teilweise: `shutdown_now()` existiert, ist aber an keinen bestehenden Shutdown-Befehl angebunden (keiner existiert für FUEL/REPROCESSOR); `standby` lässt laufende Transaktionen kontrolliert auslaufen statt abrupt abzubrechen.
+- Lieferungen werden serialisiert oder klar budgetiert — erfüllt (max. eine aktive Transaktion).
+- aktive Transaktion und Fehler sind sichtbar — erfüllt (`get_active_transaction()`, Fehler-Logging).
+
+Funktional verifiziert (Mock-Test gegen den echten State-Machine-Code, siehe `xreactor/nodes/fuel/redstone_router.lua`): kein `os.sleep()`-Aufruf über den gesamten Lebenszyklus; Happy Path (WAIT_SETTLE → Aktion → HOLD_OPEN → block_all/IDLE); zweiter Transaktionsversuch während einer laufenden wird abgelehnt; ACK-Timeout bricht sofort ab statt bis zum Settle-Ende zu warten; nie konfigurierter Baum exportiert direkt; konfigurierter aber ungültiger Baum verweigert die Aktion hart. Ingame-Nachweis mit echter Hardware (Paketverlust, echte Ventil-Latenz) steht weiterhin aus.
 
 ---
 
