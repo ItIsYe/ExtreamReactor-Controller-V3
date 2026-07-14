@@ -809,7 +809,23 @@ function M.updateControl(ctx)
 
   -- Reaktoren aktiv halten (delegiert an reactor_control)
   for _, name in ipairs(ctx.config.reactors or {}) do
-    local ok, reactor = pcall(peripheral.wrap, name)
+    -- Fix (2026-07-13): CRITICAL (RT-P0.4, siehe docs/CODING_AI_OTHER_
+    -- NODES_PERFORMANCE_2026-07-12.md). peripheral.wrap() wurde bisher
+    -- bei JEDEM Regelzyklus fuer JEDEN Reaktor erneut aufgerufen -- ein
+    -- echter Peripherie-Wrap ist teuer (Methodenintrospektion), und die
+    -- Discovery (discovery_runtime.lua) haelt bereits einen fertig
+    -- gewrappten Cache in ctx.peripherals.reactors[name] bereit, der bei
+    -- jedem Discovery-Refresh aktualisiert wird -- reactor_control.lua
+    -- nutzt genau diesen Cache bereits an mehreren Stellen, turbine_
+    -- control.lua's updateControl() alleine wrappte redundant neu. Fallback
+    -- auf einen direkten Wrap bleibt erhalten fuer den (seltenen) Fall,
+    -- dass ein Geraet aus irgendeinem Grund noch nicht im Discovery-Cache
+    -- steht.
+    local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name]
+    local ok = reactor ~= nil
+    if not ok then
+      ok, reactor = pcall(peripheral.wrap, name)
+    end
     if ok and reactor then
       local caps = M.get_device_caps(ctx, "reactors", name)
       if not ctx.reactor_control.has_reactor_rod_write_path(caps) then
@@ -849,7 +865,13 @@ function M.updateControl(ctx)
     turbine_index = turbine_index + 1
     eval_total = eval_total + 1
 
-    local ok, turbine = pcall(peripheral.wrap, name)
+    -- Fix (2026-07-13): RT-P0.4. Gleicher Fix wie oben bei Reaktoren --
+    -- Discovery-Cache verwenden statt bei jedem Zyklus neu zu wrappen.
+    local turbine = ctx.peripherals and ctx.peripherals.turbines and ctx.peripherals.turbines[name]
+    local ok = turbine ~= nil
+    if not ok then
+      ok, turbine = pcall(peripheral.wrap, name)
+    end
     if not ok or not turbine then
       track_skip("WRAP_FAILED")
       ctx.warn_once("turbine_wrap:" .. name,
