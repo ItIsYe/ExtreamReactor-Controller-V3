@@ -59,7 +59,18 @@ return {
     ramp_step = 50,
     -- regulator_min_rods / regulator_max_rods: ENTFERNT.
     -- Kanonische Rod-Grenzen stehen jetzt ausschließlich in rails.reactor_rods.min/.max.
-    reactor_adjust_interval = 5.0,
+    -- Fix (2026-07-14): CRITICAL. RT-P0 (siehe docs/CODING_AI_RT_CONTROL_
+    -- CADENCE_2026-07-12.md). 5.0s (bzw. 1.0s bei mehreren Reaktoren, siehe
+    -- reactor_adjust_interval_individual) widersprach der verbindlichen
+    -- 10-Hz-Vorgabe (reactor_control_interval_s = 0.10) fuer die Reaktor-
+    -- Fuel-Rod-Regelung -- Stabilitaet kommt ueber EMA/Deadband/Hysterese/
+    -- Ramp-Limits in core/control_rails.lua, nicht ueber ein langsames
+    -- aeusseres Intervall. Bereits bestehende, persistierte Configs
+    -- (config/rt.lua) behalten ihren alten Wert, bis manuell angepasst
+    -- oder neu installiert -- dieser Default gilt fuer Erstinstallationen
+    -- und fehlende/ungueltige Werte.
+    reactor_adjust_interval = 0.10,
+    reactor_adjust_interval_individual = 0.10,
     steam_reserve = 5000,
     steam_deficit = 5000
   },

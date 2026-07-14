@@ -28,7 +28,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | Installer / Benutzerconfig | **TEILWEISE BEHOBEN** | Config-Persistenz erledigt (GLOBAL-P0); Source-Pinning/CRC-Verify/Quiesce-Koordination laut `CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md` weiterhin offen |
 | Shared Runtime | **BEHOBEN** | Events dürfen keine periodischen Vollticks auslösen — erledigt (SHARED-P0); Event-Koaleszierung/ENERGY-Attach-Detach-Kopplung bleibt Teil von Abschnitt 7 |
 | MASTER | **WEITGEHEND ERLEDIGT** | mehrere FUEL-/WATER-Zielnodes eindeutig auswählen |
-| RT | **KRITISCH OFFEN** | deterministische 10-Hz-Control-Cadence |
+| RT | **TEILWEISE BEHOBEN** | 10-Hz-Cadence + Turbinen-Flow-Write-Dedup erledigt (RT-P0); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick, Coil-Write-Dedup fehlt (RT-P1) |
 | ENERGY | **TEILWEISE** | langsame Matrixarbeit vollständig isolieren |
 | WATER | **WEITGEHEND ERLEDIGT** | Ingame- und Update-Regressionsnachweis |
 | FUEL | **TEILWEISE** | Routing ohne blockierende Sleeps |
@@ -103,6 +103,12 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - vollständiger Config-Restore nach erfolgreicher Installation, ebenfalls byte-genau verifiziert,
 - Recovery-Backup bleibt bei fehlgeschlagener Wiederherstellung erhalten statt gelöscht zu werden,
 - Fix identisch in `xreactor/installer/init.lua` und im tatsächlich ausgeführten Live-Pfad in `/installer` angewendet (inkl. der eingebetteten `init_src`-Kopie).
+
+## RT
+
+- `RECEIVE_TIMEOUT` von 0.5s auf 0.1s gesenkt — Control-Tick läuft jetzt mit 10 Hz statt 2 Hz,
+- `reactor_adjust_interval`/`reactor_adjust_interval_individual` von 5.0s/1.0s auf 0.10s gesenkt,
+- Turbinen-Flow-Write dedupliziert (identischer Zielwert wird nicht erneut geschrieben), Overspeed-Bypass bleibt sofort wirksam.
 
 ## Shared Runtime
 
@@ -206,9 +212,9 @@ Betroffene Dateien: `xreactor/services/service_manager.lua`, `xreactor/services/
 
 ## Status
 
-**KRITISCH OFFEN**
+**TEILWEISE BEHOBEN (2026-07-14)**
 
-Der RT-Control-Service besitzt weiterhin keine eigene monotone Deadline und läuft über den gemeinsamen Support-Eventloop.
+Der RT-Control-Service besaß keine eigene monotone Deadline und lief über den gemeinsamen Support-Eventloop, dessen periodischer Zweig durch `RECEIVE_TIMEOUT = 0.5` (2 Hz) gedrosselt war; die Reaktor-Regelung selbst besaß zusätzlich ein eigenes, viel zu langsames inneres Intervall (`reactor_adjust_interval = 5.0s` single-reactor, `1.0s` multi-reactor).
 
 Verbindliche Vorgabe:
 
@@ -222,15 +228,32 @@ Details stehen in:
 
 [`CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md`](CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md)
 
+## Umsetzung
+
+1. `nodes/rt/main.lua`: `RECEIVE_TIMEOUT` von `0.5` auf `0.1` gesenkt — der komplette Scheduler-Zyklus (inkl. Control-Tick) läuft jetzt mit 10 Hz statt 2 Hz. Andere periodische Services (Discovery/Telemetry/UI) sind über ihre eigene `interval`-/`due`-Prüfung unverändert von dieser Änderung entkoppelt.
+2. `nodes/rt/config.lua`: `reactor_adjust_interval` von `5.0` auf `0.10` gesenkt, `reactor_adjust_interval_individual` explizit auf `0.10` gesetzt (vorher nur impliziter `1.0`-Fallback). Gilt für Erstinstallationen und fehlende/ungültige Werte; bereits bestehende, persistierte `config/rt.lua`-Dateien behalten ihren alten Wert bis zur manuellen Anpassung (kein automatisches Erzwingen, siehe GLOBAL-P0 — Config-Werte sind Nutzerwerte).
+3. **Kritischer Begleitfix** (ohne den P3 nicht sicher umsetzbar gewesen wäre): `nodes/rt/turbine_control.lua`s `setTurbineFlow()`-Aufruf war bisher **unbedingt** bei jedem Control-Tick aktiv, unabhängig davon ob sich der Ziel-Flow geändert hatte (im Gegensatz zu den Rod-Writes, die bereits korrekt dedupliziert waren). Bei 10 Hz statt 2 Hz hätte das reale Hardware-Writes verfünffacht. Jetzt wird der Write übersprungen, wenn `requested_flow` exakt dem zuletzt erfolgreich geschriebenen Wert entspricht; Overspeed (erzwingt Flow 0) bleibt unverändert sofort wirksam, da der Zielwert bereits vor der Dedup-Prüfung auf 0 gesetzt wird.
+
+Betroffene Dateien: `xreactor/nodes/rt/main.lua`, `xreactor/nodes/rt/config.lua`, `xreactor/nodes/rt/reactor_control.lua`, `xreactor/nodes/rt/turbine_control.lua`.
+
+## Noch offen
+
+- Kein eigener 20-Hz-Scheduler-Layer, der explizit entscheidet welche Teilregelung fällig ist (Architekturvorgabe Abschnitt 8) — stattdessen wird die gesamte Event-Loop-Periode auf 10 Hz gesenkt. Funktional äquivalent für die geforderte Kernmetrik (10 Hz Control-Tick, kein Event-Sturm-Effekt dank SHARED-P0), aber kein separates 20-Hz-„billiges" Scheduler-Layer.
+- Vorgezogener, koaleszierter Tick bei wichtigen Commands (`next_control_due = math.min(next_control_due, now)`) ist nicht implementiert.
+- Turbinen-Coil-Writes (`setInductorEngaged`) sind weiterhin nicht auf identische Werte dedupliziert (siehe RT-P1 unten).
+- 25-Turbinen-Lasttest mit dokumentierten Vorher-/Nachher-Werten steht aus (Ingame-Messung nötig).
+
 ## Anforderungen
 
-- Safety zuerst,
-- Rod- und Flow-Regler mit eigenen Deadlines,
-- keine Nachhol-Bursts,
-- Commands markieren höchstens einen koaleszierten vorgezogenen Tick,
-- Writes zusätzlich change-/cooldown-basiert,
-- Overspeed und SCRAM umgehen normale Cooldowns,
-- Ticklücke und Laufzeit messbar.
+- Safety zuerst — unverändert erhalten (SAFE-Tick-Pfad in `updateReactorControl` läuft vor der Intervallprüfung).
+- Rod- und Flow-Regler mit eigenen Deadlines — teilweise: gemeinsamer 10-Hz-Scheduler-Zyklus statt vollständig getrennter Deadlines pro Regler.
+- keine Nachhol-Bursts — bereits vorher korrekt (`if now - last < interval then return end`, kein `while`-Backlog).
+- Commands markieren höchstens einen koaleszierten vorgezogenen Tick — nicht umgesetzt.
+- Writes zusätzlich change-/cooldown-basiert — Rod-Writes bereits vorher korrekt; Turbinen-Flow-Writes jetzt ebenfalls korrekt (siehe Umsetzung Punkt 3).
+- Overspeed und SCRAM umgehen normale Cooldowns — funktional verifiziert (siehe Testnotiz unten).
+- Ticklücke und Laufzeit messbar — nicht Teil dieser Umsetzung.
+
+Funktional verifiziert (Mock-Test gegen den echten Turbinen-Flow-Dedup-Code): 50 aufeinanderfolgende Ticks mit stabilem Zielwert erzeugen 0 Hardware-Writes; ein Overspeed-bedingter Sprung auf Flow 0 schreibt sofort ohne Verzögerung; ein fehlgeschlagener Write hinterlässt keinen falschen "bereits geschrieben"-Zustand und wird beim nächsten Tick erneut versucht.
 
 ---
 

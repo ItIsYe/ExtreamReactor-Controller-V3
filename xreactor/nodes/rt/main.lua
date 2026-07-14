@@ -17,7 +17,17 @@ local CONFIG = {
   NODE_ID_PATH       = "/xreactor/config/node_id.txt",
   CONFIG_PATH        = nil,          -- wird von role_descriptor befüllt
   CAPACITY_CACHE_PATH = "/xreactor/config/capacity_cache.lua",
-  RECEIVE_TIMEOUT    = 0.5,
+  -- Fix (2026-07-14): CRITICAL. RT-P0 (siehe docs/CODING_AI_RT_CONTROL_
+  -- CADENCE_2026-07-12.md). 0.5s hiess: der periodische Scheduler-Zweig
+  -- von support_runtime.run_event_loop() (der Reaktor-/Turbinen-Control-
+  -- Tick ausloest, siehe services:add({name="control", ...}) unten) lief
+  -- nur alle 0.5s (2 Hz) -- weit unter der verbindlichen 10-Hz-Vorgabe
+  -- (reactor_control_interval_s = turbine_control_interval_s = 0.10).
+  -- 0.1s bringt den gesamten Scheduler-Zyklus auf die geforderten 10 Hz.
+  -- Andere periodische Services (Discovery/Telemetry/UI) sind bereits
+  -- ueber ihre eigene interval-/due-Pruefung von dieser Aenderung
+  -- entkoppelt und behalten ihre konfigurierte Rate.
+  RECEIVE_TIMEOUT    = 0.1,
   -- Rod-Grenzen
   ROD_MIN            = 0,
   ROD_MAX            = 100,

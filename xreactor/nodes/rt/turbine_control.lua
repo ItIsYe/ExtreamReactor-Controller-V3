@@ -756,7 +756,31 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
   if false then ctx.flow_apply_helpers.log_turbine_control_metrics({}) end
 
   local now_ts = os.clock()
-  local write = apply_turbine_flow_write(ctx, turbine, caps, requested_flow)
+  -- Fix (2026-07-14): CRITICAL. RT-P0/RT-P1 (siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md und CODING_AI_RT_CONTROL_CADENCE_
+  -- 2026-07-12.md). setTurbineFlow() wurde bisher bei JEDEM Control-Tick
+  -- bedingungslos aufgerufen, selbst wenn sich requested_flow seit dem
+  -- letzten erfolgreichen Write nicht geaendert hatte -- ein echter,
+  -- unnoetiger Hardware-Write pro Tick. Analog zu reactor_control.lua's
+  -- bereits vorhandenem "ctrl.last_applied == clamped"-Schutz bei Rod-
+  -- Writes wird der eigentliche setFluidFlowRate()-Aufruf jetzt uebersprungen,
+  -- wenn requested_flow exakt dem zuletzt erfolgreich geschriebenen Wert
+  -- entspricht. Overspeed bleibt unveraendert sofort wirksam: der
+  -- Overspeed-Zielwert (0) fliesst bereits VOR dieser Stelle in
+  -- requested_flow ein (siehe update_turbine_flow_state()/overspeed_brake
+  -- oben) -- weicht er vom zuletzt geschriebenen Wert ab, wird trotzdem
+  -- sofort geschrieben, kein zusaetzliches Cooldown-Warten.
+  local write
+  if requested_flow == ctrl.last_written_flow then
+    write = { ok = true, applied = true, setter = ctrl.last_write_setter,
+      write_state = "WRITE_SKIPPED_UNCHANGED", write_detail = "unchanged" }
+  else
+    write = apply_turbine_flow_write(ctx, turbine, caps, requested_flow)
+    if write.ok and write.applied then
+      ctrl.last_written_flow = requested_flow
+      ctrl.last_write_setter = write.setter
+    end
+  end
   local overspeed_coil_ok, overspeed_coil_reason =
     enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, decision)
 
