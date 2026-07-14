@@ -220,7 +220,7 @@ local function read_buffers()
   return info
 end
 
-local function build_status_payload()
+local function build_status_payload_uncached()
   local reasons = {}
   if not next(buffers) then reasons[health.reasons.NO_STORAGE] = true end
   if devices.discovery_failed or devices.registry_load_error then reasons[health.reasons.DISCOVERY_FAILED] = true end
@@ -230,7 +230,13 @@ local function build_status_payload()
   reproc_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
   reproc_health.reasons = reasons
   reproc_health.last_seen_ts = os.epoch("utc")
-  reproc_health.bindings = { buffers = #read_buffers() }
+  -- Fix (2026-07-13): CRITICAL (REPROC-P0.2, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). read_buffers() wurde bisher ZWEIMAL
+  -- innerhalb DESSELBEN Payload-Aufbaus ausgefuehrt -- einmal nur fuer die
+  -- Anzahl (#read_buffers()), einmal erneut fuer den tatsaechlichen Inhalt.
+  -- Jetzt einmal gelesen, Ergebnis fuer beides wiederverwendet.
+  local buffers_snapshot = read_buffers()
+  reproc_health.bindings = { buffers = #buffers_snapshot }
   reproc_health.capabilities = { buffers = #config.buffers }
   local payload = non_rt_payload.build_base({
     ts = os.epoch("utc"), role = config.role, node_id = config.node_id,
@@ -243,13 +249,34 @@ local function build_status_payload()
     last_command = devices.last_command, last_command_ts = devices.last_command_ts,
     registry = { summary = devices.registry_summary or registry:get_summary(), devices = registry:get_devices_by_kind(), diagnostics = registry:get_diagnostics() }
   })
-  payload.buffers = read_buffers()
+  payload.buffers = buffers_snapshot
   for _, entry in ipairs(payload.buffers) do entry.process_state = process_state[entry.id] end
   payload.standby = standby
   payload.feed = get_feed_router():get_summary()
   payload.bindings = reproc_health.bindings
   payload.bindings_summary = health.summarize_bindings(reproc_health.bindings)
   return payload
+end
+
+-- Fix (2026-07-13): REPROC-P0.2 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). "Danach entstehen weitere Aufrufe durch UI-
+-- Snapshot, Render und Telemetrie" -- build_status_payload() wurde bisher
+-- unabhaengig von render_monitor(), dem ui_service-Snapshot UND dem
+-- Telemetrie-Service jeweils komplett neu aufgebaut (jedes Mal read_
+-- buffers(), Registry-Zusammenfassung, etc.). Gleiches kurze TTL-Caching
+-- wie bereits bei FUEL (main.lua) etabliert -- innerhalb von 300ms wird
+-- derselbe bereits gebaute Payload wiederverwendet, statt ihn fuer jeden
+-- Konsumenten separat neu aufzubauen.
+local payload_cache, payload_cache_ts = nil, 0
+local PAYLOAD_CACHE_TTL_MS = 300
+local function build_status_payload()
+  local now = os.epoch("utc")
+  if payload_cache and (now - payload_cache_ts) < PAYLOAD_CACHE_TTL_MS then
+    return payload_cache
+  end
+  payload_cache = build_status_payload_uncached()
+  payload_cache_ts = now
+  return payload_cache
 end
 
 local function render_monitor()
@@ -310,22 +337,62 @@ local function handle_monitor_touch(event)
   return false
 end
 
+-- Feature (2026-07-13): CRITICAL (REPROC-P0.2, siehe docs/CODING_AI_
+-- OTHER_NODES_PERFORMANCE_2026-07-12.md). process_buffers() rief bisher
+-- bei JEDEM 0.5s-Hauptzyklus process() fuer ALLE Buffer nacheinander auf,
+-- unbudgetiert -- bei vielen konfigurierten Buffern (oder einem
+-- langsamen/haengenden Port) konnte das den Zyklus deutlich verlaengern.
+-- Jetzt: Round-Robin-Cursor ueber eine deterministisch sortierte
+-- Namensliste (hoechstens PROCESS_BUDGET_PER_CYCLE Buffer werden pro
+-- Aufruf TATSAECHLICH verarbeitet, der Rest kommt beim naechsten Zyklus
+-- automatisch dran -- kein Buffer wird dauerhaft ausgelassen), sowie
+-- Backoff fuer durchgehend fehlschlagende Ports (nach mehreren Fehlschlagen
+-- in Folge werden mehrere Zyklen uebersprungen, bevor erneut versucht wird
+-- -- vermeidet, einen bereits als defekt bekannten Port jeden Zyklus
+-- erneut anzusprechen).
+local PROCESS_BUDGET_PER_CYCLE = 4
+local PROCESS_BACKOFF_THRESHOLD = 4
+local PROCESS_BACKOFF_SKIP_CYCLES = 8
+local process_cursor = 1
+local process_fail_count = {}
+local process_skip_remaining = {}
+
 local function process_buffers()
   if standby then return end
-  for name, buf in pairs(buffers) do
-    if buf.process then
+  local names = {}
+  for name in pairs(buffers) do names[#names + 1] = name end
+  table.sort(names)
+  if #names == 0 then return end
+
+  local processed_this_cycle = 0
+  local attempts = 0
+  while processed_this_cycle < PROCESS_BUDGET_PER_CYCLE and attempts < #names do
+    attempts = attempts + 1
+    if process_cursor > #names then process_cursor = 1 end
+    local name = names[process_cursor]
+    process_cursor = process_cursor + 1
+    local buf = buffers[name]
+    if not buf.process then
+      if process_state[name] ~= "unsupported" then warn_once("no_process:" .. tostring(name), "Buffer " .. tostring(name) .. " has no process() method — not a reprocessor port") end
+      process_state[name] = "unsupported"
+    elseif (process_skip_remaining[name] or 0) > 0 then
+      process_skip_remaining[name] = process_skip_remaining[name] - 1
+    else
+      processed_this_cycle = processed_this_cycle + 1
       local ok, err = pcall(buf.process)
       local prev = process_state[name]
       if ok then
         if prev ~= "ok" then utils.log("REPROC", "process() OK for " .. tostring(name)) end
         process_state[name] = "ok"
+        process_fail_count[name] = 0
       else
         if prev ~= "error" then utils.log("REPROC", "process() failed for " .. tostring(name) .. ": " .. tostring(err), "WARN") end
         process_state[name] = "error"
+        process_fail_count[name] = (process_fail_count[name] or 0) + 1
+        if process_fail_count[name] >= PROCESS_BACKOFF_THRESHOLD then
+          process_skip_remaining[name] = PROCESS_BACKOFF_SKIP_CYCLES
+        end
       end
-    else
-      if process_state[name] ~= "unsupported" then warn_once("no_process:" .. tostring(name), "Buffer " .. tostring(name) .. " has no process() method — not a reprocessor port") end
-      process_state[name] = "unsupported"
     end
   end
 end
