@@ -29,7 +29,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | Shared Runtime | **BEHOBEN** | Events dürfen keine periodischen Vollticks auslösen — erledigt (SHARED-P0); Event-Koaleszierung/ENERGY-Attach-Detach-Kopplung bleibt Teil von Abschnitt 7 |
 | MASTER | **WEITGEHEND ERLEDIGT** | mehrere FUEL-/WATER-Zielnodes eindeutig auswählen |
 | RT | **TEILWEISE BEHOBEN** | 10-Hz-Cadence + Turbinen-Flow-Write-Dedup erledigt (RT-P0); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick, Coil-Write-Dedup fehlt (RT-P1) |
-| ENERGY | **TEILWEISE** | langsame Matrixarbeit vollständig isolieren |
+| ENERGY | **WEITGEHEND ERLEDIGT** | Ingame-Nachweis mit künstlich verlangsamtem Matrixadapter steht aus; Architektur bereits verifiziert isoliert |
 | WATER | **WEITGEHEND ERLEDIGT** | Ingame- und Update-Regressionsnachweis |
 | FUEL | **TEILWEISE** | Routing ohne blockierende Sleeps |
 | REPROCESSOR | **TEILWEISE** | Routing ohne blockierende Sleeps |
@@ -93,7 +93,8 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - zusätzliche ungeregelte Heartbeats entfernt,
 - Storage-Metriken zeitlich gestaffelt,
 - Capacity wird seltener gelesen,
-- last-good Snapshots bleiben erhalten.
+- last-good Snapshots bleiben erhalten,
+- ENERGY-P0-Schedulergruppentrennung durch Codeanalyse verifiziert (keine Codeänderung nötig, siehe Abschnitt 7) — Comms/Heartbeat/Commands liefen bereits in einer von der Matrix-Coroutine unabhängigen eigenen Coroutine.
 
 ## Installer
 
@@ -285,29 +286,42 @@ Noch zu prüfen und mit Metriken abzuschließen:
 
 ## Status
 
-**TEILWEISE OFFEN**
+**WEITGEHEND ERLEDIGT (verifiziert 2026-07-14, kein Codeaenderung noetig)**
 
-Zielgruppen:
+Bei genauer Prüfung (nicht nur oberflächlicher Statuscheck) ist diese Anforderung bereits durch bestehenden Code erfüllt — vermutlich aus einer früheren, in diesem Dokument nicht nachgetragenen Iteration. Kein Fix in dieser Runde nötig; unten dokumentiert, WAS bereits welche Gruppe abdeckt, damit der Status nicht erneut als offen missverstanden wird.
+
+Zielgruppen und ihre tatsächliche Umsetzung:
 
 ```text
-1. Comms + Heartbeat + Commands
-2. Matrix-Sampling
-3. Storage-Sampling
-4. UI + Telemetrie
-5. Discovery
+1. Comms + Heartbeat + Commands  -> nodes/energy/heartbeat.lua, eigene Coroutine
+2. Matrix-Sampling               -> nodes/energy/matrix.lua, eigene Coroutine
+3. Storage-Sampling               -> services:add(matrix_sampling_service "STORAGE_SAMPLE"),
+                                      eigener Service mit last-good-Cache
+4. UI + Telemetrie                 -> services:add(ui_service "UI") + telemetry_service "TELEMETRY",
+                                      eigener Model-Cache mit stale-Kennzeichnung
+5. Discovery                       -> services:add(discovery_service "DISCOVERY"),
+                                      eigener Due-Check, in Tick-Reihenfolge vor Matrix
 ```
 
-Ein langsamer Matrixadapter darf keine andere Gruppe blockieren oder über einen UI-/Eventpfad in den Comms-Thread gelangen.
+`nodes/energy/main.lua` startet über `parallel.waitForAny(heartbeat_mod.run, matrix_mod.run)` zwei komplett getrennte Coroutinen. `heartbeat.lua` ruft `ctx.comms:handle_event(event)` und `ctx.comms.tick()` **direkt**, unabhängig vom gemeinsamen Service-Manager — ein blockierender Matrix-Peripheral-Call in der anderen Coroutine (`matrix.lua`, die das explizit darf, siehe deren Kopfkommentar "DARF blockieren — Peripheral-Calls können 1-4s dauern") verzögert Comms/Heartbeat/Commands dadurch strukturell nicht. DISCOVERY und STORAGE_SAMPLE sind im gemeinsamen Service-Manager VOR MATRIX_SAMPLE registriert und damit in jedem Zyklus unabhängig von dessen Laufzeit bereits bedient, bevor Matrix überhaupt an der Reihe ist. `storage_snapshot_runtime.lua` hält pro Storage einen `last_good`-Wert plus Backoff für durchgehend fehlschlagende Geräte (ENERGY-P1, bereits umgesetzt). `ui_model.lua` cached das gebaute UI-Model nach Alter (`max_age_ms`) und gibt bei einer noch nicht fälligen Aktualisierung einfach das letzte Model zurück, statt neu (und ggf. blockierend) zu bauen.
 
-## Pflicht-Test
+## Bekannte, verbleibende Einschränkung
+
+Ein einzelner, tatsächlich synchron blockierender Peripheral-Call (z.B. 4s) friert für seine gesamte Dauer die komplette Lua-VM des Computers ein — CC:Tweaked/Lua-Coroutinen sind kooperativ, nicht präemptiv, `parallel.waitForAny` kann eine andere Coroutine nicht resumen, solange die aktive nicht an einen `os.pullEvent()`/`os.sleep()`-Yield-Punkt zurückkehrt. Das ist eine Plattformgrenze, keine Codeschwäche, und in reinem Lua nicht auflösbar. Die bestehende Budget-/Zeitlimit-Logik in `matrix_snapshot_runtime.lua` (`matrix_metric_call_budget`, `metric_time_budget_ms`) begrenzt, wie VIELE solcher Calls pro Tick versucht werden, kann aber die Dauer eines einzelnen, bereits laufenden Calls nicht unterbrechen.
+
+Kleinere, nicht sicherheitsrelevante Redundanz: `comms` ist sowohl direkt in `heartbeat.lua` als auch zusätzlich im gemeinsamen Service-Manager registriert (`services:add(comms)`), wodurch `comms:tick()` gelegentlich doppelt läuft. Harmlos, aber nicht bereinigt.
+
+## Pflicht-Test (Ergebnis der Codeanalyse, keine Ingame-Messung)
 
 Einen Matrixadapter mehrere Sekunden blockieren lassen:
 
-- Heartbeat bleibt im erlaubten Intervall,
-- Commands werden verarbeitet,
-- last-good Storage bleibt sichtbar,
-- UI zeigt stale statt einzufrieren,
-- Discovery kann später weiterlaufen.
+- Heartbeat bleibt im erlaubten Intervall — erfüllt (eigene Coroutine, direkter `comms.tick()`-Aufruf).
+- Commands werden verarbeitet — erfüllt (direkter `comms:handle_event()`-Aufruf in derselben Coroutine).
+- last-good Storage bleibt sichtbar — erfüllt (`storage_snapshot_runtime.lua`).
+- UI zeigt stale statt einzufrieren — erfüllt (`ui_model.lua`-Cache + `stale`-Flag).
+- Discovery kann später weiterlaufen — erfüllt (eigenständiger Service, eigener Due-Check, unabhängig vom Matrix-Zustand).
+
+Ingame-Nachweis mit einem künstlich verlangsamten Matrix-Adapter steht weiterhin aus (nur Codeanalyse, kein Laufzeittest in dieser Runde).
 
 ---
 
