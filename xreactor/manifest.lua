@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 433,
-  manifest_id = "manifest-v433",
+  manifest_version = 434,
+  manifest_id = "manifest-v434",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 19018, hash = "f4623837", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "e5b97d0a", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "65d84dc6", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -189,9 +189,10 @@ return {
     { path = "nodes/valve/main.lua", size_bytes = 14165, hash = "bdd3cf66", required_for={"VALVE"} },
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 55024, hash = "0c03601a", required_for={"LOG"} },
-    { path = "nodes/log_collector/mockup_main.lua", size_bytes = 3743, hash = "db104374", required_for={"LOG"} },
+    { path = "nodes/log_collector/main.lua", size_bytes = 54354, hash = "79945ea4", required_for={"LOG"} },
+    { path = "nodes/log_collector/mockup_main.lua", size_bytes = 1820, hash = "93f3bf36", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_ui.lua", size_bytes = 6190, hash = "75b0732e", required_for={"LOG"} },
+    { path = "nodes/log_collector/default_ui.lua", size_bytes = 4481, hash = "adeb5fa4", required_for={"LOG"} },
     { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", required_for={"LOG"} },
     },
     shared_support = {

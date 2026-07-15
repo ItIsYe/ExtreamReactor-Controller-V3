@@ -34,8 +34,8 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | FUEL | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
 | REPROCESSOR | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
 | VALVE | **WEITGEHEND ERLEDIGT** | Paketverlust/Reconnect ingame nachweisen |
-| LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch |
-| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (59/136 Lua, 19/28 Python grün); 86 Tests bleiben einzeln zu triagieren |
+| LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch erledigt (LOG-P2, Abschnitt 10); Paketverlust/Reconnect ingame nachweisen |
+| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (61/138 Lua, 19/28 Python grün); 86 Tests bleiben einzeln zu triagieren |
 | Dokumentation | **BEREINIGT** | künftig nur eine aktuelle Aufgabenquelle pflegen |
 
 ---
@@ -141,7 +141,8 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - sofortiger Flush für wichtige Fehlerlevel,
 - O(1)-Dedupe-Ringbuffer,
 - ein normaler ACK-Sendeweg,
-- rate-limitierte UI-Redraws bei Burstverkehr.
+- rate-limitierte UI-Redraws bei Burstverkehr,
+- Renderer ohne Laufzeit-Quelltextpatch: `draw()` ruft ein normales `M.render(ctx)`-Modul per `require()` auf, `mockup_main.lua` waehlt nur noch einen globalen Renderer-Selektor statt `main.lua` als Text zu lesen und zu patchen; sichtbarer Fallback bei fehlendem oder abstuerzendem Renderer (LOG-P2, siehe Abschnitt 10).
 
 ---
 
@@ -418,18 +419,20 @@ Diese drei Punkte sind für die typische Konfiguration (genau eine FUEL- und ein
 
 ## Status
 
-**OFFEN, Wartbarkeit**
+**BEHOBEN (2026-07-15)**
 
-`nodes/log_collector/mockup_main.lua` liest `main.lua` als Text und ersetzt die lokale `draw()`-Funktion anhand fester Marker.
+`nodes/log_collector/mockup_main.lua` las bisher `main.lua` als Text und ersetzte die lokale `draw()`-Funktion anhand fester Marker (`source:find("local function draw()", ...)` + `gsub`).
 
-Ziel:
+## Umsetzung
 
-- normale Renderer-Schnittstelle,
-- keine Quelltextmanipulation zur Laufzeit,
-- Runtime ruft Renderer-Modul auf,
-- sichtbarer Fallback bei Rendererfehler.
+1. `xreactor/nodes/log_collector/default_ui.lua` (neu): das bisherige inline `draw()`-Layout aus `main.lua`, unveraendert extrahiert in ein normales Renderer-Modul mit `M.render(ctx)` — exakt dieselbe Schnittstelle wie das bereits vorhandene `mockup_ui.lua`.
+2. `xreactor/nodes/log_collector/main.lua`: `draw()` baut jetzt einen `ctx`-Tisch und ruft das konfigurierte Renderer-Modul ganz normal per `require(RENDERER_MODULE)` auf (Default: `nodes.log_collector.default_ui`). Kein Text-Einlesen, kein `gsub`, kein `load()` eines gepatchten Strings mehr.
+3. Renderer-Auswahl ueber einen einfachen globalen Selektor `_G.XR_LOG_RENDERER_MODULE`, den `mockup_main.lua` vor dem Start setzt — funktional aequivalent zum bisherigen Text-Patch, aber ohne main.lua anzufassen.
+4. Sichtbarer Fallback: schlaegt `require(RENDERER_MODULE)` fehl (Modul fehlt) oder wirft `renderer.render(ctx)` einen Laufzeitfehler, zeigt `draw_fallback()` eine garantiert funktionierende Minimalanzeige (Fehlermeldung, Grundstatus) statt abzustuerzen oder leer zu bleiben; der Fehler wird zusaetzlich per `self_log()` protokolliert.
+5. `nodes/log_collector/mockup_main.lua`: auf 21 Zeilen reduziert — ruft `bootstrap.setup()` (weiterhin noetig, siehe Kommentar in der Datei), setzt den Renderer-Selektor, und fuehrt `main.lua` per `dofile()` unveraendert aus. Keine Text-Manipulation mehr.
+6. Funktionale Tests: `tests/log_collector_draw_renderer_dispatch_test.lua` (Happy Path, fehlendes Modul, Laufzeitfehler im Renderer, Selektor-Override — alle vier Faelle gegen die echten extrahierten Funktionen aus `main.lua`) und `tests/log_collector_default_ui_render_test.lua` (laedt das echte `default_ui.lua`-Modul, prueft `render(ctx)` mit und ohne verfuegbare Disk).
 
-Bis dahin werden `main.lua` und `mockup_main.lua` beide benötigt.
+`main.lua` und `mockup_main.lua` werden weiterhin beide benoetigt (unterschiedliche Renderer-Auswahl), aber `mockup_main.lua` patcht `main.lua` nicht mehr zur Laufzeit.
 
 ---
 
@@ -451,7 +454,7 @@ Bis dahin werden `main.lua` und `mockup_main.lua` beide benötigt.
 
 ## Ergebnis
 
-- Lua: 59 von 136 laufen grün, 77 explizit ausgeschlossen und begründet.
+- Lua: 61 von 138 laufen grün, 77 explizit ausgeschlossen und begründet.
 - Python: 19 von 28 laufen grün, 9 explizit ausgeschlossen und begründet.
 - Offline-Validator: vollständig grün unter `lua5.2` (die zuvor unter Host-`lua5.1` beobachteten Parse-Fehler waren ein reines Lua-5.1-vs-5.2-goto/label-Artefakt, nicht in der echten CI-Umgebung reproduzierbar).
 
