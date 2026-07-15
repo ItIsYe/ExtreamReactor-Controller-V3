@@ -28,14 +28,14 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | Installer / Benutzerconfig | **TEILWEISE BEHOBEN** | Config-Persistenz erledigt (GLOBAL-P0); Source-Pinning/CRC-Verify/Quiesce-Koordination laut `CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md` weiterhin offen |
 | Shared Runtime | **BEHOBEN** | Events dürfen keine periodischen Vollticks auslösen — erledigt (SHARED-P0); Event-Koaleszierung/ENERGY-Attach-Detach-Kopplung bleibt Teil von Abschnitt 7 |
 | MASTER | **WEITGEHEND ERLEDIGT** | Broadcast an alle FUEL-/WATER-Nodes einer Rolle erledigt (MASTER-P1); kritischer Startup-Sequencer-Aufrufbug behoben (MASTER-P2, Abschnitt 12); konkreten Einzelnode gezielt auswählen + echte ACK-Bestätigung bleibt offen |
-| RT | **TEILWEISE BEHOBEN** | 10-Hz-Cadence + Flow-/setActive-Write-Dedup erledigt (RT-P0/P1; Rod- und Coil-Writes waren bereits vorher korrekt dedupliziert); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick; Capability-Cache/Kind-Namen/Attach-Detach-Invalidierung/gemeinsamer UI-Snapshot/Discovery-Default noch offen (RT-P1) |
+| RT | **WEITGEHEND ERLEDIGT** | 10-Hz-Cadence + Flow-/setActive-Write-Dedup + Capability-Cache/Kind-Namen/Attach-Detach-Invalidierung/Discovery-Default-Slowdown erledigt (RT-P0/P1); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick; gemeinsamer UI/Telemetrie-Snapshot bewusst nur dokumentiert (siehe Abschnitt 6) |
 | ENERGY | **WEITGEHEND ERLEDIGT** | Ingame-Nachweis mit künstlich verlangsamtem Matrixadapter steht aus; Architektur bereits verifiziert isoliert |
 | WATER | **WEITGEHEND ERLEDIGT** | Ingame- und Update-Regressionsnachweis |
 | FUEL | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
 | REPROCESSOR | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
 | VALVE | **WEITGEHEND ERLEDIGT** | Paketverlust/Reconnect ingame nachweisen |
 | LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch erledigt (LOG-P2, Abschnitt 10); Paketverlust/Reconnect ingame nachweisen |
-| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (67/139 Lua, 20/28 Python grün); 80 Tests bleiben einzeln zu triagieren |
+| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (70/142 Lua, 20/28 Python grün); 80 Tests bleiben einzeln zu triagieren |
 | Dokumentation | **BEREINIGT** | künftig nur eine aktuelle Aufgabenquelle pflegen |
 
 ---
@@ -126,7 +126,10 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - `RECEIVE_TIMEOUT` von 0.5s auf 0.1s gesenkt — Control-Tick läuft jetzt mit 10 Hz statt 2 Hz,
 - `reactor_adjust_interval`/`reactor_adjust_interval_individual` von 5.0s/1.0s auf 0.10s gesenkt,
 - Turbinen-Flow-Write dedupliziert (identischer Zielwert wird nicht erneut geschrieben), Overspeed-Bypass bleibt sofort wirksam,
-- `setActive`-Write (Reaktor + Turbine) im Control-Hotpath dedupliziert (RT-P1).
+- `setActive`-Write (Reaktor + Turbine) im Control-Hotpath dedupliziert (RT-P1),
+- Capability-Cache berechnet neue Geräte jetzt gezielt statt bei jeder Bindungsänderung alle gebundenen Geräte neu, entfernt abgehängte Geräte statt sie für immer im Cache zu behalten,
+- `get_device_caps()` normalisiert Singular- ("reactor"/"turbine") und Plural-Kind-Namen ("reactors"/"turbines") auf denselben Cache-Schlüssel,
+- Discovery-Scan verlangsamt sich nach 3 unveränderten Scans in Folge auf effektiv 60s statt 10s, springt bei echter Attach-/Detach-Änderung sofort zurück auf die normale Kadenz.
 
 ## Shared Runtime
 
@@ -280,7 +283,7 @@ Funktional verifiziert (Mock-Test gegen den echten Turbinen-Flow-Dedup-Code): 50
 
 ## Status
 
-**TEILWEISE OFFEN**
+**WEITGEHEND BEHOBEN (2026-07-15)** — von den fünf ursprünglich offenen Folgepunkten sind vier behoben, einer (gemeinsamer UI/Telemetrie-Snapshot) bewusst nur dokumentiert und zurückgestellt (siehe Nachtrag unten).
 
 - identische `setActive`-, Flow-, Coil- und Rod-Writes vollständig unterdrücken:
   - **Flow** (Turbine): BEHOBEN, siehe RT-P0-Abschnitt oben.
@@ -288,13 +291,12 @@ Funktional verifiziert (Mock-Test gegen den echten Turbinen-Flow-Dedup-Code): 50
   - **Coil/Inductor**: war bereits vorher korrekt (`engaged == ctrl.inductor_engaged`-Schutz).
   - **setActive** (Reaktor + Turbine): **BEHOBEN (2026-07-14)**. `reactor_control.lua`s `M.setReactorActive()` und `turbine_control.lua`s `M.setTurbineActive()` riefen `setActive()` bisher bei jedem Control-Tick unbedingt auf, obwohl der Aufrufer in `turbine_control.lua`s `updateControl()` immer denselben Zielwert (`true`) verlangt — seit der 10-Hz-Cadence (RT-P0) wären das 10 statt vorher 2 redundante Hardware-Writes pro Sekunde und Gerät gewesen. Beide Funktionen akzeptieren jetzt einen optionalen `ctrl`-Parameter (`reactor_ctrl[name]`/`turbine_ctrl_store[name]`) und unterdrücken den Write bei unverändertem Zielwert; die beiden tatsächlichen Hotpath-Aufrufstellen in `updateControl()` übergeben jetzt `ctrl`. Rückwärtskompatibel: andere Aufrufer ohne `ctrl` (z. B. `module_lifecycle.lua`s `M.set_reactors_active`/`M.set_turbines_active`, event-getriebene Zustandswechsel, nicht Teil des 10-Hz-Pfads) verhalten sich unverändert. `module_lifecycle.lua`s `M.process_startup()` (ebenfalls unbedingte `setActive`-Aufrufe) wird aktuell von keiner Stelle im Code aufgerufen (toter Pfad) — nicht angefasst, da nicht erreichbar.
 
-Noch zu prüfen und mit Metriken abzuschließen (nicht Teil dieser Umsetzung):
+## Umsetzung (2026-07-15, Nachtrag)
 
-- Capability-Cache exakt einmal pro Discoverygeneration,
-- Singular-/Plural-Kind-Namen normalisieren,
-- gezielte Invalidierung bei Attach/Detach,
-- gemeinsamer nicht-sicherheitskritischer Snapshot für UI und Telemetrie,
-- stabilen Discovery-Default nach erfolgreichem Boot verlangsamen.
+- **Capability-Cache exakt einmal pro Discoverygeneration** + **gezielte Invalidierung bei Attach/Detach**: **BEHOBEN.** `discovery_runtime.lua`s `M.cache()` (läuft nur bei echter Bindungsänderung, siehe `refresh_bindings()`s `binding_signature`-Vergleich) rief bisher trotzdem für JEDES aktuell gebundene Gerät `build_capabilities()` neu auf, unabhängig davon ob sich dieses konkrete Gerät geändert hatte — bei z. B. 25 Turbinen und dem Attach/Detach einer einzigen liefen alle 25 `peripheral.getMethods()`-Scans erneut. Zusätzlich blieben Cache-Einträge abgehängter Geräte für immer stehen (unbegrenztes Wachstum bei häufig umgesteckter Hardware). Neue Funktion `refresh_capability_cache()` berechnet jetzt nur wirklich neue Namen, lässt bereits gecachte unangetastet und entfernt nicht mehr gebundene Namen aus dem Cache. Funktional verifiziert (`tests/rt_capability_cache_targeted_invalidation_test.lua`): erster Durchlauf berechnet alle Geräte, zweiter (unveränderter) Durchlauf berechnet nichts erneut, dritter Durchlauf (ein Gerät detached, eins neu attached) berechnet nur das neue Gerät und entfernt das abgehängte aus dem Cache.
+- **Singular-/Plural-Kind-Namen normalisieren**: **BEHOBEN.** Die Discovery-/Binding-Logik (`binding.lua`, Modul-`type`-Felder) verwendet durchgehend den Singular (`"reactor"`/`"turbine"`), während `capability_cache`/`get_device_caps()` intern den Plural (`"reactors"`/`"turbines"`) als Cache-Schlüssel erwarten. Alle bestehenden Aufrufstellen trafen zufällig die richtige Form, aber ein künftiger Aufruf mit dem im Rest des Codes üblichen Singular hätte still einen separaten, nie befüllten Cache-Namensraum erzeugt (kein Fehler, aber der Cache griffe nie). `turbine_control.lua`s `get_device_caps()` normalisiert jetzt beide Schreibweisen auf denselben Cache-Schlüssel. Funktional verifiziert (`tests/rt_get_device_caps_kind_normalization_test.lua`): singularer und pluraler Aufruf für dasselbe Gerät treffen denselben Cache-Eintrag, kein zusätzlicher Namensraum entsteht.
+- **Gemeinsamer nicht-sicherheitskritischer Snapshot für UI und Telemetrie**: **UNTERSUCHT, NICHT UMGESETZT (bewusst zurückgestellt).** Bestätigt: `main.lua`s `build_status_payload()` (Telemetrie/Master-Payload) und `monitor_ui.lua`s `M.update()` → `M.update_status_snapshot()` (Monitor-Anzeige) bauen unabhängig voneinander je einen vollen Geräte-Snapshot pro Tick, jeder mit eigenem vollständigem `reactor_adapter.inspect()`/`turbine_adapter.inspect()`-Durchlauf über ALLE gebundenen Geräte — `status_snapshot.lua`s `build_turbine_snapshots`/`build_reactor_snapshots` einerseits, `monitor_ui.lua`s `collect_reactor_temp_stats`/`build_turbine_status_details`/`build_reactor_status_details` andererseits. `nodes/rt/startup_diagnostics.lua` ruft zusätzlich `ctx.update_status_snapshot()` auf einem dritten Pfad. Das ist eine echte, aber rein durch Performance motivierte Redundanz (keine Fehlfunktion, keine falschen Werte) — ein Merge zu einem gemeinsamen Snapshot wäre ein tieferer Eingriff in UI- und Telemetriecode mit echtem Risiko für die Live-Operator-Anzeige, der nur per Mock-Test (kein CC:Tweaked/Minecraft verfügbar) abgesichert werden könnte. Auf Nutzerentscheidung hin bewusst nicht umgesetzt; präzise dokumentiert für eine spätere Runde mit Ingame-Verifikationsmöglichkeit.
+- **Stabilen Discovery-Default nach erfolgreichem Boot verlangsamen**: **BEHOBEN.** `discover()` lief bisher fest alle `config.scan_interval` (10s) für immer, unabhängig davon ob sich die gebundenen Geräte seit Ewigkeiten nicht mehr geändert hatten — jeder Lauf scannt `peripheral.getNames()` plus `getMethods()`/`getType()`/`adapter.inspect()` für jedes sichtbare Gerät. Nutzt den bereits vorhandenen `should_discover`-Erweiterungspunkt von `services/discovery_service.lua` (keine Änderung am geteilten Service nötig, der auch von WATER/FUEL/etc. genutzt wird): nach 3 unveränderten Scans in Folge (`binding_signature` bleibt gleich) wird nur noch jeder 6. fällige Scan tatsächlich ausgeführt (effektiv 60s statt 10s im stabilen Zustand); eine echte Bindungsänderung (Attach/Detach) setzt den Zähler sofort auf die normale Kadenz zurück. Funktional verifiziert (`tests/rt_discovery_stable_slowdown_test.lua`): Boot-Phase scannt bei jedem fälligen Tick, nach Erreichen der Stabilitätsschwelle läuft genau 1 von 6 fälligen Ticks, eine echte Änderung setzt sofort zurück.
 
 Funktional verifiziert (Mock-Test gegen die echten, aus den Quelldateien extrahierten Funktionen): erster Aufruf schreibt, 20 wiederholte Aufrufe mit demselben Zielwert erzeugen 0 weitere Writes, ein echter Wertwechsel schreibt sofort, Aufrufe ohne `ctrl` bleiben unbedingt (Rückwärtskompatibilität), fehlende `setActive`-Capability verhält sich wie zuvor.
 
@@ -455,7 +457,7 @@ Diese drei Punkte sind für die typische Konfiguration (genau eine FUEL- und ein
 
 ## Ergebnis
 
-- Lua: 67 von 139 laufen grün, 72 explizit ausgeschlossen und begründet.
+- Lua: 70 von 142 laufen grün, 72 explizit ausgeschlossen und begründet.
 - Python: 20 von 28 laufen grün, 8 explizit ausgeschlossen und begründet.
 - Offline-Validator: vollständig grün unter `lua5.2` (die zuvor unter Host-`lua5.1` beobachteten Parse-Fehler waren ein reines Lua-5.1-vs-5.2-goto/label-Artefakt, nicht in der echten CI-Umgebung reproduzierbar).
 

@@ -28,17 +28,41 @@ local function normalize_bound_names(ctx, kind, names)
   return normalized
 end
 
+-- Fix (2026-07-15): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
+-- 2026-07-12.md Abschnitt 6, "Capability-Cache exakt einmal pro Discovery-
+-- generation" / "gezielte Invalidierung bei Attach/Detach"). M.cache() lief
+-- bisher nur bei einer echten Bindungs-Aenderung (siehe refresh_bindings()s
+-- binding_signature-Vergleich), rechnete dabei aber IMMER build_capabilities()
+-- fuer JEDES aktuell gebundene Geraet neu -- bei z.B. 25 Turbinen und dem
+-- Attach/Detach EINER einzigen davon wurden alle 25 peripheral.getMethods()-
+-- Aufrufe erneut ausgefuehrt. Ausserdem blieben Cache-Eintraege abgehaengter
+-- (detachter) Geraete fuer immer im Cache stehen (unbegrenztes Wachstum bei
+-- haeufig umgestecker Hardware). Jetzt: nur wirklich neue Namen bekommen
+-- einen frischen build_capabilities()-Aufruf, bereits gecachte Namen bleiben
+-- unangetastet, nicht mehr gebundene Namen werden aus dem Cache entfernt.
+local function refresh_capability_cache(ctx, kind, names)
+  local cache = ctx.capability_cache[kind]
+  local still_bound = {}
+  for _, name in ipairs(names) do
+    still_bound[name] = true
+    if not cache[name] then
+      cache[name] = ctx.build_capabilities(name)
+    end
+  end
+  for name in pairs(cache) do
+    if not still_bound[name] then
+      cache[name] = nil
+    end
+  end
+end
+
 function M.cache(ctx)
   ctx.config.reactors = normalize_bound_names(ctx, "reactor", ctx.config.reactors or {})
   ctx.config.turbines = normalize_bound_names(ctx, "turbine", ctx.config.turbines or {})
   ctx.peripherals.reactors = ctx.utils.cache_peripherals(ctx.config.reactors) or {}
   ctx.peripherals.turbines = ctx.utils.cache_peripherals(ctx.config.turbines) or {}
-  for _, name in ipairs(ctx.config.reactors) do
-    ctx.capability_cache.reactors[name] = ctx.build_capabilities(name)
-  end
-  for _, name in ipairs(ctx.config.turbines) do
-    ctx.capability_cache.turbines[name] = ctx.build_capabilities(name)
-  end
+  refresh_capability_cache(ctx, "reactors", ctx.config.reactors)
+  refresh_capability_cache(ctx, "turbines", ctx.config.turbines)
 end
 
 function M.build_binding_signature(reactors, turbines)
