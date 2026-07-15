@@ -28,11 +28,11 @@ _G.fs = {
   delete = function(path) files[path] = nil end,
 }
 
-_G.bit32 = _G.bit32 or {
-  band = function(a, b) return a & b end,
-  bxor = function(a, b) return a ~ b end,
-  lshift = function(a, b) return a << b end,
-}
+-- bit32 (band/bxor/lshift) is native in Lua 5.2 (the CI test-runner
+-- interpreter, see tools/run_lua_tests.sh) and used internally by
+-- core/registry.lua's hash() -- no shim needed here. An earlier version of
+-- this fallback used Lua 5.3-only native bitwise operators (&, ~, <<),
+-- which made the whole file fail to even parse under lua5.2.
 _G.textutils = {
   serialize = function(value)
     local function encode(v)

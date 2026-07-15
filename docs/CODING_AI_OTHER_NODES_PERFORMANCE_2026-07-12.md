@@ -35,7 +35,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | REPROCESSOR | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
 | VALVE | **WEITGEHEND ERLEDIGT** | Paketverlust/Reconnect ingame nachweisen |
 | LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch erledigt (LOG-P2, Abschnitt 10); Paketverlust/Reconnect ingame nachweisen |
-| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (70/142 Lua, 20/28 Python grün); 80 Tests bleiben einzeln zu triagieren |
+| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (76/142 Lua, 20/28 Python grün); 6 Tests in dieser Runde behoben; 74 Tests bleiben einzeln zu triagieren |
 | Dokumentation | **BEREINIGT** | künftig nur eine aktuelle Aufgabenquelle pflegen |
 
 ---
@@ -406,15 +406,16 @@ FUEL-Reserve und WATER-Ziel durften bisher nicht von der zufälligen Tabellenrei
 2. `xreactor/master/ui_controller.lua`: die `fuel_reserve_adjust`/`water_target_adjust`-Action-Handler werten den Rückgabewert jetzt aus und melden einen Fehlschlag (kein passender Node) sichtbar über `add_alarm` statt ihn stillschweigend zu verwerfen.
 3. Funktionaler Test `tests/master_runtime_loop_multi_node_reserve_target_test.lua`: extrahiert die echten Funktionen aus `runtime_loop.lua` und verifiziert per Mock, dass bei mehreren Nodes derselben Rolle ALLE das Command erhalten (nicht nur der erste), dass Nodes anderer Rollen es nicht erhalten, und dass der "kein Node gefunden"-Fall korrekt `false` mit passender Fehlermeldung liefert.
 
-## Noch offen
+## Noch offen (2026-07-15, vertieft untersucht)
 
 Die UI benötigt für eine vollständige Lösung weiterhin:
 
-- Auswahl eines KONKRETEN Zielnodes (statt nur "alle Nodes der Rolle" oder "erster Node"), falls mehrere FUEL/WATER-Nodes tatsächlich unterschiedliche Reserven/Ziele haben sollen,
-- echte ACK-/Applied-Bestätigung vom Zielnode (aktuell wird nur der synchrone "Command wurde eingereiht"-Status ausgewertet, nicht die asynchrone Zustellungsbestätigung, die `comms_service.lua` bereits protokollseitig unterstützt),
+- Auswahl eines KONKRETEN Zielnodes (statt nur "alle Nodes der Rolle" oder "erster Node"), falls mehrere FUEL/WATER-Nodes tatsächlich unterschiedliche Reserven/Ziele haben sollen — würde eine neue Auswahl-UI-Komponente in `master/ui/config_editor.lua` (Live-Operator-Touchscreen) benötigen,
 - gespeicherte beziehungsweise eindeutig nachvollziehbare Auswahl, falls ein konkreter Zielnode eingeführt wird.
 
-Diese drei Punkte sind für die typische Konfiguration (genau eine FUEL- und eine WATER-Node) nicht sicherheitskritisch und wurden daher zurückgestellt.
+**Echte ACK-/Applied-Bestätigung — genauer untersucht, bewusst nicht umgesetzt.** `core/comms.lua` verfolgt ausstehende Commands zwar bereits intern (`state.inflight[message_id]`, `handle_ack()` löscht den Eintrag bei `ACK_APPLIED` und loggt das Ergebnis), aber es gibt **keine** Callback- oder Abfrage-Schnittstelle, über die ein Aufrufer wie `set_fuel_reserve`/`set_water_target` (synchron in `runtime_loop.lua`) das Ergebnis eines konkreten, vorher gesendeten Commands später erfährt — die Bestätigung landet aktuell ausschließlich als Log-Zeile, nirgendwo abfragbar. Eine echte Lösung bräuchte eine neue Callback-/Ergebnis-Tracking-Schnittstelle in `core/comms.lua` — einem von JEDER Rolle (RT/ENERGY/WATER/FUEL/REPROCESSOR/MASTER/LOG) gemeinsam genutzten Kernmodul. Das ist ein tiefer Eingriff in die gemeinsame Comms-Schicht mit echtem Risiko für alle Rollen, nur per Mock-Test absicherbar (kein CC:Tweaked/Minecraft verfügbar) — dasselbe Risikoprofil wie der zurückgestellte gemeinsame UI/Telemetrie-Snapshot (Abschnitt 6). Auf Basis derselben Entscheidung (siehe dort) bewusst nicht umgesetzt, präzise dokumentiert für eine spätere Runde mit Ingame-Verifikationsmöglichkeit.
+
+Für die typische Konfiguration (genau eine FUEL- und eine WATER-Node) sind alle drei Punkte nicht sicherheitskritisch.
 
 ---
 
@@ -457,7 +458,7 @@ Diese drei Punkte sind für die typische Konfiguration (genau eine FUEL- und ein
 
 ## Ergebnis
 
-- Lua: 70 von 142 laufen grün, 72 explizit ausgeschlossen und begründet.
+- Lua: 76 von 142 laufen grün, 66 explizit ausgeschlossen und begründet.
 - Python: 20 von 28 laufen grün, 8 explizit ausgeschlossen und begründet.
 - Offline-Validator: vollständig grün unter `lua5.2` (die zuvor unter Host-`lua5.1` beobachteten Parse-Fehler waren ein reines Lua-5.1-vs-5.2-goto/label-Artefakt, nicht in der echten CI-Umgebung reproduzierbar).
 
@@ -465,9 +466,11 @@ Diese drei Punkte sind für die typische Konfiguration (genau eine FUEL- und ein
 
 - **`core/bootstrap.lua` doppelt in `xreactor/manifest.lua`**: war einmal in `base_files` (ohne `always=true`) und einmal explizit unter `roles.log` gelistet — Letzteres war ein Workaround, weil `installer/manifest.lua`s `build_expected()` für die LOG-Rolle alle nicht-`always`-`base_files`-Einträge überspringt (LOG installiert bewusst nicht den vollen Basis-Dateisatz). Fix: `core/bootstrap.lua`s `base_files`-Eintrag bekommt jetzt `always=true` (wie andere Kernabhängigkeiten, z. B. `release.lua`, `start.lua`), der redundante `roles.log`-Eintrag wurde entfernt. `manifest_integrity_consistency_test.lua`/`manifest_hash_size_guard_test.py` laufen jetzt grün, ohne Verhaltensänderung für andere Rollen.
 - **Die vier `is_master_connected`-Tests**: bei genauer Prüfung stellte sich heraus, dass `is_master_connected` in der echten Runtime bereits korrekt verdrahtet war — die Tests bauten lediglich unvollständige Mock-Kontexte (fehlendes `is_master_connected`/`set_current_state` in der ctx-Tabelle), die an `state_handlers.lua`s eigenem, bereits vorher vorhandenem `assert_fn`-Guard scheiterten. Die Mocks wurden ergänzt; zusätzlich bekam `nodes/rt/main.lua` einen expliziten Guard + Diagnose-Log (`"State context ready (is_master_connected=true)"`) beim Aufbau des State-Context, bevor `state_handlers.build()` aufgerufen wird — redundant zum generischen Guard in `state_handlers.lua`, aber mit klarerem, RT-spezifischem Fehlertext für Operator-Logs.
-- **KRITISCHER Fund während dieser Prüfung, unabhängig vom `is_master_connected`-Muster**: `rt_master_startup_off_state_regression_test.lua`s dritter Testblock deckte einen echten, weitreichenden Bug in `xreactor/master/startup_sequencer.lua` auf — siehe eigener Abschnitt 12 unten (MASTER-P2). Das ist der bei weitem wichtigste Fund dieser Runde.
+- **KRITISCHER Fund während dieser Prüfung, unabhängig vom `is_master_connected`-Muster**: `rt_master_startup_off_state_regression_test.lua`s dritter Testblock deckte einen echten, weitreichenden Bug in `xreactor/master/startup_sequencer.lua` auf — siehe eigener Abschnitt 12 (MASTER-P2). Das ist der bei weitem wichtigste Fund dieser Runde.
+- **Sechs weitere Tests einzeln triagiert und behoben** (von den ursprünglich 86 explizit ausgeschlossenen): `registry_dirty_test.lua`/`registry_io_test.lua` (`SYNTAX_ERROR`) enthielten einen Lua-5.3-only-Bitoperator-Fallback (`&`/`~`/`<<`), der die gesamte Testdatei unter dem CI-Interpreter `lua5.2` gar nicht erst parsen ließ — entfernt, da `lua5.2` `bit32` bereits nativ bereitstellt (von `core/registry.lua`s Hash-Funktion ohnehin genutzt). `master_message_handler_node_id_canonicalization_test.lua`/`master_shutdown_degraded_semantics_test.lua`/`master_status_recovery_semantics_test.lua` (`STALE_API`, "mark_rt_sync_dirty required") bauten `message_handlers.new({...})`-Mocks ohne das inzwischen per `assert()` geforderte `mark_rt_sync_dirty`-Feld — echte, aber unvollständige Mocks, kein Produktivbug; ergänzt. `master_energy_aggregation_test.lua` (`NEEDS_MOCK`) erwartete ein `captured.nodes`-Feld im Energy-View-Model, das echte Feld heißt `support_nodes` (`ui_controller.lua` Zeile 326) — Test korrigiert.
 - Rollenweise Jobgruppen (separate CI-Jobs pro Rolle) weiterhin nicht umgesetzt — alle Tests laufen aktuell in einem Job.
-- Keine Tests wurden gelöscht; die im Original geforderte "Löschregel"-Prüfung (Abschnitt 12) wurde für keinen der ausgeschlossenen Tests einzeln durchgeführt.
+- Keine Tests wurden gelöscht; die im Original geforderte "Löschregel"-Prüfung (Abschnitt 13) wurde für keinen der ausgeschlossenen Tests einzeln durchgeführt.
+- Die verbleibenden 66 (Lua) + 8 (Python) ausgeschlossenen Tests sind weiterhin **nicht** einzeln triagiert — größtenteils `CONTENT_DRIFT` (echtes aktuelles Verhalten, Ursache noch nicht verifiziert) und `NEEDS_MOCK` (echtes CC:Tweaked-Peripheral/Monitor-Global nötig, kein pauschaler Shim möglich). Das ist weiterhin ein offener, potenziell mehrstündiger Folgeaufwand.
 
 Wichtige Testgruppen (aus der ursprünglichen Vorgabe, ob sie tatsächlich existieren wurde nicht einzeln geprüft):
 

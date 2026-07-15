@@ -46,7 +46,7 @@ end
 if captured.stored ~= 400 or captured.capacity ~= 800 then
   error(("expected aggregation 400/800, got %s/%s"):format(tostring(captured.stored), tostring(captured.capacity)))
 end
-if #captured.nodes ~= 2 then
+if #captured.support_nodes ~= 2 then
   error("expected two aggregated energy nodes")
 end
 

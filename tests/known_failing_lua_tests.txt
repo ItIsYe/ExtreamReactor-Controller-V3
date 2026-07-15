@@ -43,10 +43,8 @@ installer_standalone_bootstrap_test.lua # STALE_STRUCTURE (erwartet ensure_insta
 lifecycle_logging_contract_guard_test.lua # STALE_API (erwartet woertlichen "Startup"-Log-Token in master/main.lua)
 logger_runtime_degraded_nonfatal_test.lua # NEEDS_MOCK
 logger_startup_policy_test.lua # CONTENT_DRIFT
-master_energy_aggregation_test.lua # NEEDS_MOCK (state.nodes nil ohne vollen Master-Runtime-Kontext)
 master_energy_ui_contract_test.lua # NEEDS_MOCK (widgets.lua braucht echtes monitor:clearRegion)
 master_heartbeat_recovery_from_down_test.lua # CONTENT_DRIFT
-master_message_handler_node_id_canonicalization_test.lua # STALE_API (mark_rt_sync_dirty required, Signatur vermutlich geaendert)
 master_multiview_three_monitor_layout_test.lua # NEEDS_MOCK (ui/multiview.lua braucht echtes colors.panel-Setup)
 master_overview_ui_contract_test.lua # NEEDS_MOCK (ui/overview.lua braucht echtes monitor:rightText)
 master_regression_guards_test.lua # CONTENT_DRIFT (monitor_states nil)
@@ -58,16 +56,12 @@ master_rt_shutdown_workflow_semantic_guards_test.lua # STALE_API (workflow.stage
 master_rt_shutdown_workflow_semantics_guard_test.lua # STALE_API (RAMPDOWN Token erwartet)
 master_rt_sync_idle_window_semantics_test.lua # CONTENT_DRIFT
 master_shutdown_cooldown_stability_semantics_test.lua # CONTENT_DRIFT
-master_shutdown_degraded_semantics_test.lua # STALE_API (mark_rt_sync_dirty required)
-master_status_recovery_semantics_test.lua # STALE_API (mark_rt_sync_dirty required)
 master_timeout_grace_guard_test.lua # STALE_API (erwartet woertlichen down_grace_ms-Ausdruck)
 master_ui_shutdown_field_consistency_guard_test.lua # STALE_API (shutdown_workflow_stage Token erwartet)
 master_ui_shutdown_field_semantic_contract_test.lua # CONTENT_DRIFT
 network_modem_detection_test.lua # NEEDS_MOCK (peripheral-Autodetect ohne echtes Peripheral-Mock)
 reactor_control_rods_regression_test.lua # CONTENT_DRIFT
 reactor_rod_config_clamp_regression_test.lua # STALE_API (regulator_min_rods laut config.lua-Kommentar bewusst entfernt)
-registry_dirty_test.lua # SYNTAX_ERROR (') expected near '&'' in der Testdatei selbst)
-registry_io_test.lua # SYNTAX_ERROR ('end' expected near '&'' in der Testdatei selbst)
 release_metadata_consistency_test.lua # STALE_API (installer_core_hash wird nur bei stamp_release_metadata.py-Releases gesetzt, nicht im bewegten beta-Branch)
 rt_command_shutdown_ack_semantics_test.lua # CONTENT_DRIFT
 rt_command_shutdown_semantics_regression_test.lua # CONTENT_DRIFT
