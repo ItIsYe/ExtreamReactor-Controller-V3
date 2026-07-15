@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 432,
-  manifest_id = "manifest-v432",
+  manifest_version = 433,
+  manifest_id = "manifest-v433",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
   { path = "installer/init.lua", size_bytes = 19018, hash = "f4623837", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "bf35cc52", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "e5b97d0a", always=true },
   { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -70,7 +70,7 @@ return {
     { path = "master/rt_sync.lua", size_bytes = 19025, hash = "bfaff89a", required_for={"MASTER"} },
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"} },
     { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"} },
-    { path = "master/runtime_loop.lua", size_bytes = 16827, hash = "bac53b12", required_for={"MASTER"} },
+    { path = "master/runtime_loop.lua", size_bytes = 16926, hash = "cc3af4f3", required_for={"MASTER"} },
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"} },
     { path = "master/runtime_ops_profile.lua", size_bytes = 15968, hash = "85af1ef9", required_for={"MASTER"} },
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"} },
@@ -104,7 +104,7 @@ return {
     -- die Datei gezielt manuell heruntergeladen wird.
     { path = "optional/pocket_client.lua", size_bytes = 10846, hash = "10601ed6", optional=true, feature="pocket_client", required_for={} },
     { path = "optional/master_ampel.lua", size_bytes = 6373, hash = "f3d68ef7", optional=true, feature="master_ampel", required_for={"MASTER"} },
-    { path = "master/ui_controller.lua", size_bytes = 49585, hash = "147b025e", required_for={"MASTER"} },
+    { path = "master/ui_controller.lua", size_bytes = 49927, hash = "326fbb4e", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
     rt = {

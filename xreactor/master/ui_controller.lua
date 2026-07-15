@@ -743,7 +743,10 @@ function M.new(opts)
       local cur = tonumber(c.state.fuel_reserve_pct) or 2000
       local new_val = math.max(0, cur + action.delta)
       c.state.fuel_reserve_pct = new_val
-      c.calc.set_fuel_reserve(new_val)
+      local ok, err = c.calc.set_fuel_reserve(new_val)
+      if not ok and c.calc.add_alarm then
+        c.calc.add_alarm("MASTER", "WARN", "Fuel-Reserve-Anpassung fehlgeschlagen: " .. tostring(err))
+      end
       return true
     end
     -- Feature (2026-07-06): Zielwert fuer individuelle Pro-Reaktor-
@@ -761,7 +764,10 @@ function M.new(opts)
       local cur = tonumber(c.state.water_target_pct) or 0
       local new_val = math.max(0, cur + action.delta)
       c.state.water_target_pct = new_val
-      c.calc.set_water_target(new_val)
+      local ok, err = c.calc.set_water_target(new_val)
+      if not ok and c.calc.add_alarm then
+        c.calc.add_alarm("MASTER", "WARN", "Water-Target-Anpassung fehlgeschlagen: " .. tostring(err))
+      end
       return true
     end
     if action.type == "auto_update_toggle" and c.calc.set_auto_update_enabled then

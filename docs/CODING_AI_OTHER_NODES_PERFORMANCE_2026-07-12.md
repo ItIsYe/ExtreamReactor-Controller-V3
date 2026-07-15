@@ -27,7 +27,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 |---|---|---|
 | Installer / Benutzerconfig | **TEILWEISE BEHOBEN** | Config-Persistenz erledigt (GLOBAL-P0); Source-Pinning/CRC-Verify/Quiesce-Koordination laut `CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md` weiterhin offen |
 | Shared Runtime | **BEHOBEN** | Events dürfen keine periodischen Vollticks auslösen — erledigt (SHARED-P0); Event-Koaleszierung/ENERGY-Attach-Detach-Kopplung bleibt Teil von Abschnitt 7 |
-| MASTER | **WEITGEHEND ERLEDIGT** | mehrere FUEL-/WATER-Zielnodes eindeutig auswählen |
+| MASTER | **WEITGEHEND ERLEDIGT** | Broadcast an alle FUEL-/WATER-Nodes einer Rolle erledigt (MASTER-P1); konkreten Einzelnode gezielt auswählen + echte ACK-Bestätigung bleibt offen |
 | RT | **TEILWEISE BEHOBEN** | 10-Hz-Cadence + Flow-/setActive-Write-Dedup erledigt (RT-P0/P1; Rod- und Coil-Writes waren bereits vorher korrekt dedupliziert); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick; Capability-Cache/Kind-Namen/Attach-Detach-Invalidierung/gemeinsamer UI-Snapshot/Discovery-Default noch offen (RT-P1) |
 | ENERGY | **WEITGEHEND ERLEDIGT** | Ingame-Nachweis mit künstlich verlangsamtem Matrixadapter steht aus; Architektur bereits verifiziert isoliert |
 | WATER | **WEITGEHEND ERLEDIGT** | Ingame- und Update-Regressionsnachweis |
@@ -35,7 +35,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | REPROCESSOR | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
 | VALVE | **WEITGEHEND ERLEDIGT** | Paketverlust/Reconnect ingame nachweisen |
 | LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch |
-| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (58/135 Lua, 19/28 Python grün); 86 Tests bleiben einzeln zu triagieren |
+| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (59/136 Lua, 19/28 Python grün); 86 Tests bleiben einzeln zu triagieren |
 | Dokumentation | **BEREINIGT** | künftig nur eine aktuelle Aufgabenquelle pflegen |
 
 ---
@@ -83,7 +83,8 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - Terminal-`mouse_click`,
 - stale RT-Fuelwerte werden nicht mehr als frisch weitergereicht,
 - weniger wiederholte Modelserialisierung,
-- kein DEBUG-Log pro erfolgreichem Frame.
+- kein DEBUG-Log pro erfolgreichem Frame,
+- `set_fuel_reserve`/`set_water_target` senden jetzt an ALLE Nodes der jeweiligen Rolle statt nur an den ersten per `pairs()` gefundenen (MASTER-P1, siehe Abschnitt 9); sichtbare Fehlermeldung im Alarm-Log, falls keine passende Node existiert.
 
 ## RT
 
@@ -391,16 +392,25 @@ Funktional verifiziert (Mock-Test gegen den echten State-Machine-Code, siehe `xr
 
 ## Status
 
-**OFFEN**
+**TEILWEISE BEHOBEN (2026-07-14)**
 
-FUEL-Reserve und WATER-Ziel dürfen nicht von der zufälligen Tabellenreihenfolge des ersten gefundenen Nodes abhängen.
+FUEL-Reserve und WATER-Ziel durften bisher nicht von der zufälligen Tabellenreihenfolge des ersten gefundenen Nodes abhängen — genau das war der Fall.
 
-Die UI benötigt:
+## Umsetzung
 
-- konkreten Zielnode,
-- Option „alle Nodes der Rolle“,
-- sichtbare ACK-/Fehlerauswertung,
-- gespeicherte beziehungsweise eindeutig nachvollziehbare Auswahl.
+1. `xreactor/master/runtime_loop.lua`: `set_fuel_reserve`/`set_water_target` iterieren jetzt über ALLE Nodes mit passender Rolle (`FUEL_NODE`/`WATER_NODE`) statt beim ersten Treffer per `pairs()` sofort zurückzukehren — analog zum bereits vorhandenen, korrekten Muster von `set_reactor_fill_target` in derselben Datei. Rückgabe ist jetzt `true, sent_count` bzw. `false, "kein X-Node gefunden"`.
+2. `xreactor/master/ui_controller.lua`: die `fuel_reserve_adjust`/`water_target_adjust`-Action-Handler werten den Rückgabewert jetzt aus und melden einen Fehlschlag (kein passender Node) sichtbar über `add_alarm` statt ihn stillschweigend zu verwerfen.
+3. Funktionaler Test `tests/master_runtime_loop_multi_node_reserve_target_test.lua`: extrahiert die echten Funktionen aus `runtime_loop.lua` und verifiziert per Mock, dass bei mehreren Nodes derselben Rolle ALLE das Command erhalten (nicht nur der erste), dass Nodes anderer Rollen es nicht erhalten, und dass der "kein Node gefunden"-Fall korrekt `false` mit passender Fehlermeldung liefert.
+
+## Noch offen
+
+Die UI benötigt für eine vollständige Lösung weiterhin:
+
+- Auswahl eines KONKRETEN Zielnodes (statt nur "alle Nodes der Rolle" oder "erster Node"), falls mehrere FUEL/WATER-Nodes tatsächlich unterschiedliche Reserven/Ziele haben sollen,
+- echte ACK-/Applied-Bestätigung vom Zielnode (aktuell wird nur der synchrone "Command wurde eingereiht"-Status ausgewertet, nicht die asynchrone Zustellungsbestätigung, die `comms_service.lua` bereits protokollseitig unterstützt),
+- gespeicherte beziehungsweise eindeutig nachvollziehbare Auswahl, falls ein konkreter Zielnode eingeführt wird.
+
+Diese drei Punkte sind für die typische Konfiguration (genau eine FUEL- und eine WATER-Node) nicht sicherheitskritisch und wurden daher zurückgestellt.
 
 ---
 
@@ -441,7 +451,7 @@ Bis dahin werden `main.lua` und `mockup_main.lua` beide benötigt.
 
 ## Ergebnis
 
-- Lua: 58 von 135 laufen grün, 77 explizit ausgeschlossen und begründet.
+- Lua: 59 von 136 laufen grün, 77 explizit ausgeschlossen und begründet.
 - Python: 19 von 28 laufen grün, 9 explizit ausgeschlossen und begründet.
 - Offline-Validator: vollständig grün unter `lua5.2` (die zuvor unter Host-`lua5.1` beobachteten Parse-Fehler waren ein reines Lua-5.1-vs-5.2-goto/label-Artefakt, nicht in der echten CI-Umgebung reproduzierbar).
 
