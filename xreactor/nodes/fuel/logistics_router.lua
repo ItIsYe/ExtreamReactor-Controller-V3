@@ -331,7 +331,30 @@ function M:_run_supply(cycle_log)
     return a.order < b.order  -- stabile Reihenfolge bei Gleichstand/beide unbekannt
   end)
 
-  -- Phase 2: der Reihe nach tatsaechlich beliefern.
+  -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
+  -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). Diese Schleife
+  -- belieferte bisher ALLE Kandidaten in einem Rutsch -- jeder Durchlauf
+  -- mit Redstone-Routing rief rs:route_and_act() auf, das (vor diesem Fix)
+  -- 2.05-2.4s PRO Reaktor blockierte. Bei mehreren gleichzeitig
+  -- anfordernden Reaktoren blockierte ein einziger Aufruf von
+  -- M:_run_supply() dadurch mehrere bis weit ueber zehn Sekunden --
+  -- deutlich laenger als das eigene 5s-Zyklusintervall.
+  --
+  -- redstone_router.lua's route_and_act() wurde durch eine asynchrone
+  -- Zustandsmaschine ersetzt (begin_transaction() + tick(), siehe dort) --
+  -- pro Router immer nur EINE aktive Transaktion. Ist Routing konfiguriert,
+  -- wird deshalb pro Zyklus hoechstens EINE Lieferung tatsaechlich
+  -- GESTARTET: Kandidaten mit unzureichendem ME-Bestand werden weiterhin
+  -- der Reihe nach uebersprungen (Kaskade bleibt erhalten), aber sobald
+  -- der Router "busy" meldet (eine Transaktion laeuft noch), lohnt kein
+  -- weiterer Versuch in diesem Zyklus -- kein anderer Kandidat koennte
+  -- ohnehin gleichzeitig durch denselben (einzigen) Ventilbaum beliefert
+  -- werden. Ohne konfiguriertes Routing bleibt das Verhalten unveraendert
+  -- (Direkt-Export ist synchron und schnell, keine Serialisierung noetig).
+  local cfg_l = self.config.logistics or self.config or {}
+  local rs = self._state.rs_router
+  local routed = rs and rs:route_count() > 0
+
   for _, cand in ipairs(candidates) do
     local r, fuel_pct = cand.r, cand.fuel_pct
 
@@ -357,10 +380,7 @@ function M:_run_supply(cycle_log)
     if push <= 0 then goto continue end
 
     do
-      local cfg_l = self.config.logistics or self.config or {}
-      local rs    = self._state.rs_router
       local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
-
       local moved = 0
       local exp_ok = false
 
@@ -378,14 +398,37 @@ function M:_run_supply(cycle_log)
         end
       end
 
-      if rs and rs:route_count() > 0 then
-        -- Redstone routing: open valve for THIS reactor, block all others
-        rs:route_and_act(r.label, do_export, valve_ms)
-      else
-        -- No redstone routing configured: export directly
-        do_export()
+      if routed then
+        -- Redstone routing: Transaktion starten (asynchron, siehe oben).
+        -- Der eigentliche Export (und sein Log-Eintrag) passiert im
+        -- do_export()-Callback, sobald die Zustandsmaschine WAIT_SETTLE
+        -- verlaesst -- "moved"/"exp_ok" bleiben fuer den direkten
+        -- Log-Eintrag DIESES Zyklus daher 0/false im Normalfall.
+        local started, reason = rs:begin_transaction(r.label, do_export, valve_ms)
+        if not started then
+          if reason == "busy" then
+            self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — restliche Kandidaten diesen Zyklus uebersprungen")
+            self._state.current_request = nil
+            return exported, errors
+          end
+          self.log("DEBUG", "Logistics: " .. r.label .. ": Routing nicht moeglich (" .. tostring(reason) .. ") — naechster Kandidat")
+          goto continue
+        end
+        if exp_ok and moved > 0 then
+          exported = exported + moved
+          local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
+          cycle_log[#cycle_log + 1] = string.format(
+            "ME→[%s]%s %s x%d via %s",
+            r.label, pct_str, r.item, moved, r.inlet.name)
+        end
+        -- Nur eine Lieferung wird pro Zyklus tatsaechlich gestartet.
+        self._state.current_request = nil
+        return exported, errors
       end
 
+      -- No redstone routing configured: export directly, weiter zum
+      -- naechsten Kandidaten (unveraendertes Verhalten, keine Blockierung).
+      do_export()
       if exp_ok and moved > 0 then
         exported = exported + moved
         local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""

@@ -375,7 +375,7 @@ local function init()
   -- Handler oben. Analog zu VALVE-Nodes' eigenem "valve_channel"-Service:
   -- roher Event-Listener, der modem_message auf Kanal 6504 direkt an
   -- redstone_router.lua's handle_valve_ack() weiterreicht.
-  services:add({ name = "valve_ack_listener", tick = function(_self, dt, event)
+  services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
     if channel ~= constants.channels.VALVE then return end
@@ -442,4 +442,13 @@ local function init()
 end
 
 init()
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() get_router():tick() end)
+-- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
+-- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). get_rs_router():tick()
+-- treibt die asynchrone Ventil-Transaktion (begin_transaction() in
+-- logistics_router.lua) voran -- muss unabhaengig vom 5s-Logistics-
+-- Zyklus regelmaessig laufen, sonst wuerde eine laufende Transaktion nie
+-- ueber WAIT_SETTLE/HOLD_OPEN hinauskommen.
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
+  get_router():tick()
+  get_rs_router():tick()
+end)

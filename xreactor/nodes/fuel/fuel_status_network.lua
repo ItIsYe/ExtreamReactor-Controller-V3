@@ -63,7 +63,7 @@ end
 -- core/network.lua open_modem()) — hier wird er zusaetzlich passiv
 -- mitgehoert, ohne selbst etwas zu senden.
 function M.make_overhear_service(cache, constants)
-  return { name = "fuel_status_overhear", tick = function(_self, dt, event)
+  return { name = "fuel_status_overhear", wants_events = true, tick = function(_self, dt, event)
     if not (event and event[1] == "modem_message") then return end
     local message = event[5]
     if type(message) ~= "table" then return end

@@ -1,87 +1,33 @@
 -- LOG Collector mockup entrypoint.
--- Loads the proven collector runtime unchanged except for replacing its local draw()
--- function inside the same Lua chunk. This preserves access to all existing local
--- stats, incremental-buffer helpers, touch buttons, disk logic and modem logic.
+-- Runs the real collector runtime (main.lua) completely unmodified. Selects
+-- the "mockup" touch-monitor renderer instead of the default terminal
+-- layout via a renderer-selection global that main.lua's draw() reads
+-- (nodes/log_collector/default_ui.lua vs. nodes/log_collector/mockup_ui.lua,
+-- both implementing the same M.render(ctx) interface) — no runtime
+-- source-text patching involved (see LOG-P2, docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 10).
 
 -- Fix (2026-07-05): nodes/log_collector/main.lua ruft historisch NIE
 -- bootstrap.setup() auf — der LOG-Collector war komplett eigenstaendig ohne
 -- projektinternes require()-Modulsystem (im Gegensatz zu MASTER/RT/ENERGY/
 -- WATER/FUEL/REPROCESSOR, die alle bootstrap.setup() in main.lua aufrufen).
--- Die neue mockup_ui.lua-Integration braucht aber require("nodes.log_
--- collector.mockup_ui") — ohne bootstrap.setup() ist require() dafuer die
--- native, nicht-funktionierende CC:Tweaked-Standardfunktion, was zu
--- "attempt to call a nil value" fuehrte (require selbst existierte in
--- diesem Kontext nicht als brauchbare Funktion). bootstrap.setup() setzt
--- require GLOBAL (_G.require), daher reicht ein einmaliger Aufruf hier,
--- bevor main.lua eingelesen/gepatcht/ausgefuehrt wird.
+-- Die mockup_ui.lua-Integration braucht aber require("nodes.log_collector.
+-- mockup_ui") bzw. require("nodes.log_collector.default_ui") — ohne
+-- bootstrap.setup() ist require() dafuer die native, nicht-funktionierende
+-- CC:Tweaked-Standardfunktion, was zu "attempt to call a nil value" fuehrte
+-- (require selbst existierte in diesem Kontext nicht als brauchbare
+-- Funktion). bootstrap.setup() setzt require GLOBAL (_G.require), daher
+-- reicht ein einmaliger Aufruf hier, bevor main.lua ausgefuehrt wird.
 local ok_bootstrap, bootstrap = pcall(dofile, "/xreactor/core/bootstrap.lua")
 if ok_bootstrap and type(bootstrap) == "table" and type(bootstrap.setup) == "function" then
   pcall(bootstrap.setup, { role = "log" })
 end
 
+_G.XR_LOG_RENDERER_MODULE = "nodes.log_collector.mockup_ui"
+
 local MAIN_PATH = "/xreactor/nodes/log_collector/main.lua"
-
-local function read_all(path)
-  if not fs or not fs.exists or not fs.exists(path) then return nil, "missing " .. tostring(path) end
-  local f = fs.open(path, "r")
-  if not f then return nil, "cannot open " .. tostring(path) end
-  local src = f.readAll()
-  f.close()
-  return src
+if not fs or not fs.exists or not fs.exists(MAIN_PATH) then
+  error("LOG mockup loader: missing " .. MAIN_PATH, 0)
 end
 
-local source, read_err = read_all(MAIN_PATH)
-if not source then error("LOG mockup loader: " .. tostring(read_err), 0) end
-
--- Fix (2026-07-02): der Text-Patch, der hier frueher den 6502-Fallback im
--- eingelesenen main.lua auf 6503 korrigierte, ist entfallen, da main.lua
--- selbst jetzt direkt den korrekten Fallback (6503) enthaelt. Diese
--- doppelte Absicherung war ohnehin nur ein no-op sobald main.lua den
--- richtigen Wert hatte (source:gsub() findet dann einfach nichts und
--- aendert nichts), aber unnoetige Komplexitaet — direkt an der Quelle
--- (main.lua) fixen ist sauberer als ein Text-Patch bei jedem LOG-Boot.
-
-local draw_start = source:find("local function draw()", 1, true)
-local display_marker = source:find("-- ── Display selection", 1, true)
-if not draw_start or not display_marker or display_marker <= draw_start then
-  error("LOG mockup loader: draw markers not found", 0)
-end
-
-local replacement = [=[local function draw()
-  refresh_disks(false)
-  refresh_modems(false)
-
-  local ok_renderer, renderer = pcall(require, "nodes.log_collector.mockup_ui")
-  if not ok_renderer or type(renderer) ~= "table" or type(renderer.render) ~= "function" then
-    error("LOG mockup renderer unavailable: " .. tostring(renderer))
-  end
-
-  renderer.render({
-    stats = stats,
-    live_diag = live_diag,
-    channel = CHANNEL,
-    min_free_bytes = MIN_FREE_BYTES,
-    color = color,
-    now_s = now_s,
-    free_space = free_space,
-    begin_frame = begin_frame,
-    queue_segment = queue_segment,
-    line_ui = line_ui,
-    badge_ui = badge_ui,
-    progress_ui = progress_ui,
-    draw_pause_button = draw_pause_button,
-    draw_log_mode_buttons = draw_log_mode_buttons,
-    flush_ui = flush_ui,
-    log_mode = function()
-      return utils and utils.get_log_mode and utils.get_log_mode() or "all"
-    end,
-  })
-end
-
-]=]
-
-local patched = source:sub(1, draw_start - 1) .. replacement .. source:sub(display_marker)
-local chunk, load_err = load(patched, "@" .. MAIN_PATH .. "#mockup", "t", _ENV)
-if not chunk then error("LOG mockup loader syntax: " .. tostring(load_err), 0) end
-
-return chunk()
+return dofile(MAIN_PATH)

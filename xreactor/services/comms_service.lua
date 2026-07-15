@@ -64,7 +64,11 @@ function comms_service.new(opts)
     on_error = opts.on_error,
     network = nil,
     comms = nil,
-    rx_diag_seen = {}
+    rx_diag_seen = {},
+    -- Fix (2026-07-14): SHARED-P0 (siehe service_manager.lua). COMMS muss
+    -- ein gerade empfangenes modem_message sofort verarbeiten (ACK/Dedupe/
+    -- Retry-Reaktion), meldet sich daher immer fuer Event-Ticks an.
+    wants_events = true
   }
   return setmetatable(self, { __index = comms_service })
 end

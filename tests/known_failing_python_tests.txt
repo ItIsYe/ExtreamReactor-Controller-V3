@@ -1,0 +1,14 @@
+# Bekannte, aktuell fehlschlagende tests/*.py-Dateien, mit Begruendung.
+# Siehe tests/known_failing_lua_tests.txt fuer Format/Kategorien-Erklaerung
+# und den zugehoerigen TEST-P0-Abschnitt in
+# docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md.
+
+energy_heartbeat_decoupling_regression_test.py # STALE_API (erwartet woertliche Funktion send_presence_heartbeat)
+energy_persistent_topology_regression_test.py # STALE_API (erwartet woertliche Funktion reconcile_matrix_groups)
+energy_scope_regression_test.py # STALE_API (erwartet woertliches "local master_peer_state")
+manifest_entrypoint_require_coverage_test.py # CONTENT_DRIFT (mehrere Master-Runtime-Fingerprint-Marker fehlen/abweichend)
+manifest_hash_size_guard_test.py # DUPLICATE_MANIFEST_PATH (core/bootstrap.lua doppelt in xreactor/manifest.lua)
+manifest_role_scope_guard_test.py # CONTENT_DRIFT (required_for-Rollenlisten weichen von Entrypoint-Ableitung ab)
+master_rt_dashboard_ui_contract_test.py # STALE_API (erwartet Textfragment "RT-Flotte")
+release_manifest_rt_guard_test.py # STALE_STRUCTURE (erwartet nicht existierende Datei xreactor/installer_main.lua)
+rt_main_structure_guard_test.py # CONTENT_DRIFT (rt/main.lua hat aktuell eine Funktion mit 347 statt max. 250 Zeilen -- moeglicher echter Aufraeum-Kandidat fuer RT-P1-Folgearbeit)

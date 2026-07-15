@@ -303,8 +303,22 @@ local function setInductor(turbine, caps, engaged)
   return false
 end
 
-function M.setTurbineActive(ctx, turbine, caps, active)
-  if caps.setActive then turbine.setActive(active); return true end
+-- Fix (2026-07-14): CRITICAL. RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). Analog zu reactor_control.lua's
+-- setReactorActive()-Fix: setActive() lief bisher unbedingt bei jedem
+-- Control-Tick, obwohl der Aufrufer (updateControl() weiter unten) immer
+-- denselben Zielwert "true" verlangt. Optionaler ctrl-Parameter
+-- (turbine_ctrl_store[name]-Eintrag) unterdrueckt jetzt identische
+-- Writes, ruecklaufkompatibel ohne ctrl fuer andere Aufrufer
+-- (module_lifecycle.lua's Start-Rampe).
+function M.setTurbineActive(ctx, turbine, caps, active, ctrl)
+  if ctrl and ctrl.active_state == active then return true end
+  if caps.setActive then
+    turbine.setActive(active)
+    if ctrl then ctrl.active_state = active end
+    return true
+  end
+  if ctrl then ctrl.active_state = active end
   return true  -- keine API = trotzdem weitermachen
 end
 
@@ -756,7 +770,31 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
   if false then ctx.flow_apply_helpers.log_turbine_control_metrics({}) end
 
   local now_ts = os.clock()
-  local write = apply_turbine_flow_write(ctx, turbine, caps, requested_flow)
+  -- Fix (2026-07-14): CRITICAL. RT-P0/RT-P1 (siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md und CODING_AI_RT_CONTROL_CADENCE_
+  -- 2026-07-12.md). setTurbineFlow() wurde bisher bei JEDEM Control-Tick
+  -- bedingungslos aufgerufen, selbst wenn sich requested_flow seit dem
+  -- letzten erfolgreichen Write nicht geaendert hatte -- ein echter,
+  -- unnoetiger Hardware-Write pro Tick. Analog zu reactor_control.lua's
+  -- bereits vorhandenem "ctrl.last_applied == clamped"-Schutz bei Rod-
+  -- Writes wird der eigentliche setFluidFlowRate()-Aufruf jetzt uebersprungen,
+  -- wenn requested_flow exakt dem zuletzt erfolgreich geschriebenen Wert
+  -- entspricht. Overspeed bleibt unveraendert sofort wirksam: der
+  -- Overspeed-Zielwert (0) fliesst bereits VOR dieser Stelle in
+  -- requested_flow ein (siehe update_turbine_flow_state()/overspeed_brake
+  -- oben) -- weicht er vom zuletzt geschriebenen Wert ab, wird trotzdem
+  -- sofort geschrieben, kein zusaetzliches Cooldown-Warten.
+  local write
+  if requested_flow == ctrl.last_written_flow then
+    write = { ok = true, applied = true, setter = ctrl.last_write_setter,
+      write_state = "WRITE_SKIPPED_UNCHANGED", write_detail = "unchanged" }
+  else
+    write = apply_turbine_flow_write(ctx, turbine, caps, requested_flow)
+    if write.ok and write.applied then
+      ctrl.last_written_flow = requested_flow
+      ctrl.last_write_setter = write.setter
+    end
+  end
   local overspeed_coil_ok, overspeed_coil_reason =
     enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, decision)
 
@@ -831,8 +869,9 @@ function M.updateControl(ctx)
       if not ctx.reactor_control.has_reactor_rod_write_path(caps) then
         warn_unsupported(ctx, name); goto continue_control_reactor
       end
+      local reactor_ctrl = ctx.reactor_control.ensure_reactor_ctrl(ctx, name)
       local ok_active, active_result = pcall(
-        ctx.reactor_control.setReactorActive, ctx, reactor, caps, true)
+        ctx.reactor_control.setReactorActive, ctx, reactor, caps, true, reactor_ctrl)
       if not ok_active then
         ctx.warn_once("reactor_active:" .. name,
           "Reactor activate failed for " .. name .. ": " .. tostring(active_result))
@@ -843,7 +882,6 @@ function M.updateControl(ctx)
           "Reactor active API unavailable for " .. name)
         goto continue_control_reactor
       end
-      ctx.reactor_control.ensure_reactor_ctrl(ctx, name)
       if not ctx.autonom_control_logged then
         ctx.autonom_control_logged = true
       end
@@ -892,7 +930,7 @@ function M.updateControl(ctx)
     end
     ctrl.flow_api_missing_ticks = 0
 
-    local ok_active, active_result = pcall(M.setTurbineActive, ctx, turbine, caps, true)
+    local ok_active, active_result = pcall(M.setTurbineActive, ctx, turbine, caps, true, ctrl)
     if not ok_active then
       ctx.warn_once("turbine_active:" .. name,
         "Turbine activate failed for " .. name .. ": " .. tostring(active_result))

@@ -417,7 +417,32 @@ function M:open_path_to(target_id)
   return true
 end
 
-function M:route_and_act(target_id, action_fn, valve_open_ms)
+-- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
+-- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). route_and_act() war
+-- eine synchrone Funktion mit ZWEI eingebetteten os.sleep()-Aufrufen
+-- (Settle-Zeit vor dem Export, Offenhaltezeit danach) -- ueblicherweise
+-- 2.05-2.4s blockierend PRO Lieferung, und die aufrufende Rolle (siehe
+-- logistics_router.lua's Phase-2-Schleife) konnte das fuer MEHRERE
+-- Ziel-Reaktoren nacheinander in einem einzigen Zyklus tun. Waehrend
+-- dieser Zeit lief in FUEL/REPROCESSOR (kein parallel.waitForAny-Split
+-- wie bei ENERGY/RT, nur eine einzige Coroutine) buchstaeblich GAR NICHTS
+-- anderes -- Heartbeat, Commands, UI und das VALVE-Fail-Safe-Timing
+-- waren fuer die gesamte Dauer eingefroren.
+--
+-- Jetzt: begin_transaction() startet eine asynchrone Zustandsmaschine
+-- (IDLE -> WAIT_SETTLE -> EXPORT -> HOLD_OPEN -> COMPLETE/ERROR), die
+-- ausschliesslich ueber wiederholte tick(now_ms)-Aufrufe voranschreitet
+-- (von der aufrufenden Rolle regelmaessig aus ihrem normalen Event-Loop-
+-- Zyklus aufgerufen, siehe nodes/fuel/main.lua und nodes/reprocessor/
+-- main.lua). Kein os.sleep() mehr im Routingpfad. Nur eine Transaktion
+-- gleichzeitig -- ein zweiter begin_transaction()-Aufruf waehrend eine
+-- laeuft wird mit "busy" abgelehnt, wodurch Lieferungen strukturell
+-- serialisiert werden (der Aufrufer versucht es im naechsten Zyklus
+-- erneut, statt mehrere Lieferungen zu ueberlappen).
+function M:begin_transaction(target_id, action_fn, valve_open_ms)
+  if self._state.transaction then
+    return false, "busy"
+  end
   -- Fix (2026-07-13): CRITICAL (Sicherheitsregel, siehe docs/CODING_AI_
   -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Vorher fiel JEDES "all_valves
   -- == 0" ungeschuetzt in den Direkt-Export-Pfad -- das betraf nicht nur
@@ -434,11 +459,11 @@ function M:route_and_act(target_id, action_fn, valve_open_ms)
   if #self._state.all_valves == 0 then
     if not self._state.tree_configured then
       if action_fn then action_fn() end
-      return
+      return true, "direct_export"
     end
-    self.log("ERROR", "RedstoneRouter: route_and_act() verweigert -- Routing war konfiguriert, aber 0 Ventile bekannt (ungueltiger/kaputter Baum). Kein ungeschuetzter Direkt-Export.")
+    self.log("ERROR", "RedstoneRouter: begin_transaction() verweigert -- Routing war konfiguriert, aber 0 Ventile bekannt (ungueltiger/kaputter Baum). Kein ungeschuetzter Direkt-Export.")
     self:block_all()
-    return
+    return false, "invalid_tree"
   end
   local ok = self:open_path_to(target_id)
   if not ok then
@@ -446,22 +471,116 @@ function M:route_and_act(target_id, action_fn, valve_open_ms)
     self:block_all()
     self._state.active_target = nil
     self._state.active_path = nil
-    return
+    return false, "no_path"
   end
+
   -- Feature (2026-07-09): bei netzwerkbasierten VALVE-Nodes (Funk statt
   -- lokalem Peripheral) laenger warten, bevor der Export beginnt -- ein
   -- Funkbefehl braucht spuerbar laenger als ein direkter Methodenaufruf.
+  local cfg = self.config.logistics or self.config or {}
+  local tree = cfg.redstone_tree or {}
+  local path = find_path(tree, target_id) or {}
   local uses_network = false
-  for _, v in ipairs(self._state.all_valves) do
-    local w = v.integrator and self._state.integrators[v.integrator]
-    if w and w.network then uses_network = true; break end
+  local watched_keys = {}
+  for _, v in ipairs(path) do
+    if v.integrator then
+      local w = self._state.integrators[v.integrator]
+      if w and w.network then
+        uses_network = true
+        watched_keys[v.integrator .. "|" .. tostring(v.side)] = true
+      end
+    end
   end
-  os.sleep(uses_network and 0.4 or 0.05)
-  if action_fn then action_fn() end
-  os.sleep((tonumber(valve_open_ms) or 2000) / 1000)
+
+  local now_ms = os.epoch and os.epoch("utc") or 0
+  local settle_s = uses_network and 0.4 or 0.05
+  self._state.transaction = {
+    target_id = target_id,
+    action_fn = action_fn,
+    valve_open_ms = tonumber(valve_open_ms) or 2000,
+    state = "WAIT_SETTLE",
+    watched_keys = watched_keys,
+    settle_until = now_ms + math.floor(settle_s * 1000),
+    hold_until = nil,
+    started_ts = now_ms,
+  }
+  return true, "started"
+end
+
+function M:_fail_transaction(reason)
+  local tx = self._state.transaction
+  self.log("ERROR", string.format(
+    "RedstoneRouter: Transaktion zu %s abgebrochen (%s) -- blockiere sicherheitshalber alles",
+    tostring(tx and tx.target_id), tostring(reason)))
   self:block_all()
   self._state.active_target = nil
   self._state.active_path = nil
+  self._state.transaction = nil
+end
+
+-- Muss regelmaessig (z.B. alle 0.5s aus dem Haupt-Event-Loop der
+-- aufrufenden Rolle) aufgerufen werden, unabhaengig davon ob gerade eine
+-- neue Lieferung faellig ist -- treibt eine laufende Transaktion voran.
+-- Kein Tick-Backlog: verpasste Deadlines werden nicht nachgeholt, nur
+-- beim naechsten Aufruf als "faellig" erkannt (kein while-now>=due-Loop).
+function M:tick(now_ms)
+  now_ms = now_ms or (os.epoch and os.epoch("utc") or 0)
+  local tx = self._state.transaction
+  if not tx then return end
+
+  if tx.state == "WAIT_SETTLE" then
+    -- ACK-Timeout: ein beobachtetes SET_VALVE-Kommando wurde endgueltig
+    -- aufgegeben (check_pending_acks() hat es nach VALVE_ACK_MAX_RETRIES
+    -- entfernt, ohne dass eine Bestaetigung eintraf) oder explizit als
+    -- nicht angewendet bestaetigt -- Transaktion sofort abbrechen statt
+    -- auf eine moeglicherweise nie kommende Bestaetigung weiterzuwarten.
+    for key in pairs(tx.watched_keys) do
+      local still_pending = self._state.pending_valve_acks and self._state.pending_valve_acks[key]
+      local confirmed = self._state.confirmed_valve_state and self._state.confirmed_valve_state[key]
+      if not still_pending and not (confirmed and confirmed.applied == true) then
+        self:_fail_transaction("ack_timeout:" .. key)
+        return
+      end
+    end
+    if now_ms >= tx.settle_until then
+      if tx.action_fn then
+        local ok, err = pcall(tx.action_fn)
+        if not ok then
+          self.warn_once("transaction_action_error:" .. tostring(tx.target_id),
+            "RedstoneRouter: Aktions-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. tostring(err))
+        end
+      end
+      tx.state = "HOLD_OPEN"
+      tx.hold_until = now_ms + tx.valve_open_ms
+    end
+    return
+  end
+
+  if tx.state == "HOLD_OPEN" then
+    if now_ms >= tx.hold_until then
+      self:block_all()
+      self._state.active_target = nil
+      self._state.active_path = nil
+      self._state.transaction = nil
+    end
+    return
+  end
+end
+
+-- Sofortiger Shutdown-Pfad: blockiert augenblicklich alle Ventile und
+-- verwirft eine laufende Transaktion, unabhaengig von deren Zustand.
+function M:shutdown_now()
+  self._state.transaction = nil
+  self:block_all()
+  self._state.active_target = nil
+  self._state.active_path = nil
+end
+
+-- Sichtbarkeit fuer UI/Diagnose: aktive Transaktion und ihr Zustand.
+function M:get_active_transaction()
+  local tx = self._state.transaction
+  if not tx then return nil end
+  return { target_id = tx.target_id, state = tx.state, started_ts = tx.started_ts }
 end
 
 function M:valve_count()

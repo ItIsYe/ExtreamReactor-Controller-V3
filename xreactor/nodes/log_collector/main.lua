@@ -1014,78 +1014,70 @@ local function button_hit(button, x, y)
   return button and x >= button.x and x < button.x + button.w and y >= button.y and y < button.y + button.h
 end
 
+-- Fix (2026-07-15): LOG-P2 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
+-- 2026-07-12.md Abschnitt 10). draw() ruft jetzt ein normales Renderer-Modul
+-- ueber require() auf (Standard: default_ui.lua, das dieselbe Anzeige wie
+-- der bisherige inline-Code produziert). nodes/log_collector/mockup_main.lua
+-- waehlt darueber die alternative mockup_ui.lua-Anzeige, indem es vor dem
+-- dofile() dieser Datei den globalen Selektor XR_LOG_RENDERER_MODULE setzt —
+-- ohne main.lua als Text einzulesen und zu patchen. Schlaegt der Renderer
+-- fehl (fehlendes Modul, Laufzeitfehler), zeigt draw() einen sichtbaren,
+-- garantiert funktionierenden Fallback statt abzustuerzen oder leer zu bleiben.
+local RENDERER_MODULE = (type(_G) == "table" and _G.XR_LOG_RENDERER_MODULE) or "nodes.log_collector.default_ui"
+
+local function draw_fallback(renderer_name, reason)
+  local w, h = begin_frame()
+  line_ui(1, 1, string.rep(" ", w), color("black", 32768), color("red", 16384))
+  line_ui(2, 1, fit("LOG Collector - Renderer-Fehler", w - 3), color("white", 1), color("red", 16384))
+  line_ui(2, 3, "Renderer: " .. fit(tostring(renderer_name), w - 13), color("lightGray", 256))
+  line_ui(2, 4, "Fehler: " .. fit(tostring(reason), w - 11), color("yellow", 16))
+  line_ui(2, 6, string.format("Recv %s Write %s Drop %s", stats.received, stats.written, stats.dropped), color("white", 1))
+  line_ui(2, 7, "Disks: " .. tostring(#stats.disks) .. "  Modem: " .. tostring(stats.modem ~= "" and stats.modem or "NO-MODEM"), color("lightGray", 256))
+  if h >= 9 then
+    line_ui(2, 9, "Logs werden weiterhin empfangen/geschrieben.", color("lightGray", 256))
+  end
+  flush_ui()
+  stats.last_draw_s = now_s()
+end
+
 local function draw()
   refresh_disks(false)
   refresh_modems(false)
 
-  local w, h = begin_frame()
+  local ctx = {
+    stats = stats,
+    live_diag = live_diag,
+    channel = CHANNEL,
+    min_free_bytes = MIN_FREE_BYTES,
+    disks_per_role = DISKS_PER_ROLE,
+    color = color,
+    now_s = now_s,
+    free_space = free_space,
+    begin_frame = begin_frame,
+    queue_segment = queue_segment,
+    line_ui = line_ui,
+    badge_ui = badge_ui,
+    progress_ui = progress_ui,
+    draw_pause_button = draw_pause_button,
+    draw_log_mode_buttons = draw_log_mode_buttons,
+    flush_ui = flush_ui,
+    log_mode = function()
+      return utils and utils.get_log_mode and utils.get_log_mode() or "all"
+    end,
+  }
 
-  local title = " XReactor LOG Collector v2 "
-  line_ui(1, 1, title .. string.rep(" ", math.max(0, w - #title)),
-    color("black", 32768), color("gray", 128))
-
-  local status = "OK"
-  if stats.last_error then status = "WARN" end
-  if #stats.modems == 0 or #stats.disks == 0 then status = "ERR" end
-  if stats.paused then status = "WARN" end
-
-  local bx = 2
-  bx = bx + badge_ui(bx, 2, stats.paused and "PAUSED" or status, status) + 1
-  bx = bx + badge_ui(bx, 2, "CH " .. tostring(CHANNEL), "INFO") + 1
-  bx = bx + badge_ui(bx, 2, stats.modem ~= "" and stats.modem or "NO-MODEM", stats.modem ~= "" and "OK" or "ERR") + 1
-  badge_ui(bx, 2, "DISKS " .. tostring(#stats.disks), #stats.disks > 0 and "OK" or "ERR")
-
-  line_ui(2, 3, "Display: " .. tostring(stats.display_name or "term"), color("lightGray", 256))
-  draw_pause_button(2, 4)
-  draw_log_mode_buttons(2, 5)
-
-  line_ui(2, 6, "Disk Ring (" .. DISKS_PER_ROLE .. "x pro Rolle: RT/MASTER/ENERGY/WATER/FUEL/REPROC/LOG)", color("cyan", 2048))
-  local dx = 2
-  for _, disk in ipairs(stats.disks) do
-    local free = free_space(disk.mount)
-    local disk_status = free < MIN_FREE_BYTES and "WARN" or "OK"
-    local label = (disk.id == stats.last_write_index and "*" or "") .. tostring(disk.id) .. ":" .. tostring(disk.role):sub(1, 3)
-    dx = dx + badge_ui(dx, 7, label, disk_status)
-    if dx > w - 4 then break end
+  local ok_renderer, renderer = pcall(require, RENDERER_MODULE)
+  if not ok_renderer or type(renderer) ~= "table" or type(renderer.render) ~= "function" then
+    self_log("LOG renderer '" .. tostring(RENDERER_MODULE) .. "' unavailable: " .. tostring(renderer), "ERROR")
+    draw_fallback(RENDERER_MODULE, renderer)
+    return
   end
 
-  local current = stats.disks[stats.last_write_index or 1] or stats.disks[1]
-  if current then
-    line_ui(2, 8, string.format("Last disk: %s role=%s", tostring(current.mount), tostring(current.role)), color("lightGray", 256))
-    line_ui(2, 9, "Path: " .. fit(stats.last_write_path or "-", w - 8), color("lightGray", 256))
-    local free = free_space(current.mount)
-    local free_ok = free > MIN_FREE_BYTES * 4
-    line_ui(2, 10, "Free: " .. tostring(free) .. " bytes", free_ok and color("lime", 32) or color("yellow", 16))
-    progress_ui(2, 11, math.max(8, w - 3), free == math.huge and 1 or math.min(1, free / math.max(MIN_FREE_BYTES * 8, 1)), free_ok)
-  else
-    line_ui(2, 8, "No writable disk. Logs are dropped until a disk is attached.", color("red", 16384))
+  local ok_render, render_err = pcall(renderer.render, ctx)
+  if not ok_render then
+    self_log("LOG renderer '" .. tostring(RENDERER_MODULE) .. "' failed: " .. tostring(render_err), "ERROR")
+    draw_fallback(RENDERER_MODULE, render_err)
   end
-
-  line_ui(2, 13, "Traffic", color("cyan", 2048))
-  line_ui(2, 14, string.format("Recv %-6s Write %-6s Drop %-6s Dup %-6s", stats.received, stats.written, stats.dropped, stats.duplicates), color("white", 1))
-  line_ui(2, 15, string.format("ACK %-7s Wiped %-5s PauseDrop %-5s", stats.ack_sent, stats.wiped, stats.paused_dropped), color("lightGray", 256))
-  line_ui(2, 16, string.format("Refresh modem=%s disk=%s", stats.modem_refreshes, stats.disk_refreshes), color("lightGray", 256))
-  line_ui(2, 18, "Last: " .. fit(tostring(stats.last_role) .. "/" .. tostring(stats.last_node) .. " " .. tostring(stats.last_level), w - 8), color("white", 1))
-
-  if stats.last_error and h >= 20 then
-    line_ui(2, 20, "Error: " .. fit(stats.last_error, w - 9), color("red", 16384))
-  elseif stats.paused and h >= 20 then
-    line_ui(2, 20, "PAUSED: incoming logs are acknowledged only when written/duplicate; paused logs are dropped.", color("yellow", 16))
-  elseif h >= 20 then
-    line_ui(2, 20, "Status OK", color("lime", 32))
-  end
-
-  if #live_diag > 0 and h >= 23 then
-    line_ui(2, 22, "Diagnostics:", color("cyan", 2048))
-    local rows = math.min(#live_diag, h - 22)
-    for i = 1, rows do
-      local entry = live_diag[#live_diag - rows + i]
-      line_ui(2, 22 + i, fit(entry, w - 3), color("lightGray", 256))
-    end
-  end
-
-  flush_ui()
-  stats.last_draw_s = now_s()
 end
 
 -- ── Display selection ───────────────────────────────────────────────────────

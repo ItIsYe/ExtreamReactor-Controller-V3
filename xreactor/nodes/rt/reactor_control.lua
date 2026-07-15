@@ -281,8 +281,24 @@ function M.has_reactor_rod_write_path(caps)
   ) and true or false
 end
 
-function M.setReactorActive(ctx, reactor, caps, active)
-  if caps.setActive then reactor.setActive(active); return true end
+-- Fix (2026-07-14): CRITICAL. RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md). setActive() wurde bisher bei JEDEM
+-- Control-Tick fuer JEDEN Reaktor unbedingt aufgerufen, obwohl der
+-- Zielwert (immer "true", siehe Aufrufer in turbine_control.lua's
+-- updateControl()) sich nach dem ersten erfolgreichen Write nie wieder
+-- aendert -- ein echter, dauerhaft redundanter Hardware-Write pro Tick.
+-- Seit der 10-Hz-Cadence (RT-P0) waere das 10 unnoetige Writes/Sekunde
+-- statt vorher 2. Optionaler ctrl-Parameter (reactor_ctrl[name]-Eintrag)
+-- erlaubt jetzt denselben "nur bei Aenderung schreiben"-Schutz wie
+-- bereits bei Rod- und Flow-Writes -- ruecklaufkompatibel: ohne ctrl
+-- (z.B. module_lifecycle.lua's Start-Rampe) unveraendertes Verhalten.
+function M.setReactorActive(ctx, reactor, caps, active, ctrl)
+  if ctrl and ctrl.active_state == active then return true end
+  if caps.setActive then
+    reactor.setActive(active)
+    if ctrl then ctrl.active_state = active end
+    return true
+  end
   return false
 end
 
@@ -755,16 +771,17 @@ function M.updateReactorControl(ctx)
     end
     return
   end
-  -- Fix (2026-07-06): reactor_adjust_interval war global auf 5.0s
-  -- kalibriert — bei mehreren Reaktoren mit individueller Regelung ist
-  -- das zusaetzlich zur (bereits gesenkten) internen Cooldown-Zeit ein
-  -- weiterer, aeusserer Trägheitsfaktor. Bei >1 Reaktor wird ein kuerzeres
-  -- Intervall genutzt (Default 1.0s), Single-Reaktor-Setups bleiben
-  -- unveraendert bei reactor_adjust_interval (Default 5.0s).
+  -- Fix (2026-07-14): CRITICAL. RT-P0 (siehe docs/CODING_AI_RT_CONTROL_
+  -- CADENCE_2026-07-12.md). Die frueheren Defaults (5.0s single-reactor,
+  -- 1.0s multi-reactor, siehe config.lua-Fix-Kommentar vom selben Datum)
+  -- widersprachen der verbindlichen 10-Hz-Vorgabe -- Stabilitaet kommt
+  -- ueber EMA/Deadband/Hysterese/Ramp-Limits, nicht ueber ein langsames
+  -- aeusseres Intervall. Inline-Fallback hier ebenfalls auf 0.10s
+  -- angepasst (nur relevant falls autonom-Config-Zweig komplett fehlt).
   local multi_reactor = #(ctx.config.reactors or {}) > 1
   local tick_interval = multi_reactor
-    and ((ctx.config.autonom and ctx.config.autonom.reactor_adjust_interval_individual) or 1.0)
-    or (ctx.config.autonom and ctx.config.autonom.reactor_adjust_interval or 1)
+    and ((ctx.config.autonom and ctx.config.autonom.reactor_adjust_interval_individual) or 0.10)
+    or (ctx.config.autonom and ctx.config.autonom.reactor_adjust_interval or 0.10)
   if now - ctx.last_reactor_tick < tick_interval then
     return
   end

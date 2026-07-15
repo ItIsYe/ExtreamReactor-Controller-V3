@@ -160,36 +160,39 @@ local function run_master()
     get_rt_global_off_hold   = function() return runtime.state.rt_global_off_hold end,
     set_rt_global_off_hold   = function(v) profile_ops.set_rt_global_hold(runtime, v) end,
     -- Feature (2026-07-02): Config-Editor am Monitor. Sendet SET_RESERVE/
-    -- SET_TARGET Commands an den ersten gefundenen FUEL/WATER-Node — bei
-    -- mehreren Nodes derselben Rolle betrifft das nur den ersten (Grenze
-    -- fuer diese erste Version, ausreichend fuer die typische 1-Node-pro-
-    -- Rolle-Konfiguration). runtime.state.auto_update_enabled ist rein
+    -- SET_TARGET Commands an ALLE FUEL/WATER-Nodes (analog zu
+    -- set_reactor_fill_target unten) — bei mehreren Nodes derselben Rolle
+    -- erhalten alle denselben Wert statt nur ein nicht-deterministisch
+    -- ausgewaehlter erster Node. runtime.state.auto_update_enabled ist rein
     -- lokal (kein Command noetig, jeder Node liest sein eigenes
     -- config/remote_update.lua — echtes Verteilen dieser Einstellung an
     -- alle Nodes ist eine spaetere Erweiterung).
     set_fuel_reserve = function(amount)
+      local sent_count = 0
       for id, node in pairs(runtime.state.nodes or {}) do
         if node.role == constants.roles.FUEL_NODE then
           runtime.refs.comms:send_command(id, { target = constants.command_targets.SET_RESERVE, value = amount })
-          return true, id
+          sent_count = sent_count + 1
         end
       end
-      return false, "kein FUEL-Node gefunden"
+      if sent_count == 0 then return false, "kein FUEL-Node gefunden" end
+      return true, sent_count
     end,
     set_water_target = function(amount)
+      local sent_count = 0
       for id, node in pairs(runtime.state.nodes or {}) do
         if node.role == constants.roles.WATER_NODE then
           runtime.refs.comms:send_command(id, { target = constants.command_targets.SET_TARGET, value = amount })
-          return true, id
+          sent_count = sent_count + 1
         end
       end
-      return false, "kein WATER-Node gefunden"
+      if sent_count == 0 then return false, "kein WATER-Node gefunden" end
+      return true, sent_count
     end,
     -- Feature (2026-07-06): Zielwert (0.0-1.0) fuer den internen Dampf-
-    -- Fuellstand bei individueller Pro-Reaktor-Regelung. Anders als
-    -- set_fuel_reserve/set_water_target (die nur an EINEN Node senden,
-    -- da typischerweise nur eine FUEL/WATER-Node existiert) wird dieser
-    -- Wert an ALLE RT-Nodes gesendet — es koennen mehrere unabhaengige
+    -- Fuellstand bei individueller Pro-Reaktor-Regelung. Wie
+    -- set_fuel_reserve/set_water_target oben wird dieser Wert an ALLE
+    -- passenden Nodes gesendet — es koennen mehrere unabhaengige
     -- RT-Nodes existieren, von denen mehrere jeweils >1 Reaktor haben
     -- koennten, und alle sollen denselben Zielwert nutzen.
     set_reactor_fill_target = function(value)
