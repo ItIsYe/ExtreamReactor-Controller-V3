@@ -27,7 +27,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 |---|---|---|
 | Installer / Benutzerconfig | **TEILWEISE BEHOBEN** | Config-Persistenz erledigt (GLOBAL-P0); Source-Pinning/CRC-Verify/Quiesce-Koordination laut `CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md` weiterhin offen |
 | Shared Runtime | **BEHOBEN** | Events dürfen keine periodischen Vollticks auslösen — erledigt (SHARED-P0); Event-Koaleszierung/ENERGY-Attach-Detach-Kopplung bleibt Teil von Abschnitt 7 |
-| MASTER | **WEITGEHEND ERLEDIGT** | Broadcast an alle FUEL-/WATER-Nodes einer Rolle erledigt (MASTER-P1); konkreten Einzelnode gezielt auswählen + echte ACK-Bestätigung bleibt offen |
+| MASTER | **WEITGEHEND ERLEDIGT** | Broadcast an alle FUEL-/WATER-Nodes einer Rolle erledigt (MASTER-P1); kritischer Startup-Sequencer-Aufrufbug behoben (MASTER-P2, Abschnitt 12); konkreten Einzelnode gezielt auswählen + echte ACK-Bestätigung bleibt offen |
 | RT | **TEILWEISE BEHOBEN** | 10-Hz-Cadence + Flow-/setActive-Write-Dedup erledigt (RT-P0/P1; Rod- und Coil-Writes waren bereits vorher korrekt dedupliziert); kein separater 20-Hz-Scheduler-Layer, kein koaleszierter Command-Tick; Capability-Cache/Kind-Namen/Attach-Detach-Invalidierung/gemeinsamer UI-Snapshot/Discovery-Default noch offen (RT-P1) |
 | ENERGY | **WEITGEHEND ERLEDIGT** | Ingame-Nachweis mit künstlich verlangsamtem Matrixadapter steht aus; Architektur bereits verifiziert isoliert |
 | WATER | **WEITGEHEND ERLEDIGT** | Ingame- und Update-Regressionsnachweis |
@@ -35,7 +35,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | REPROCESSOR | **WEITGEHEND ERLEDIGT** | Routing ohne blockierende Sleeps erledigt (Abschnitt 8); Ingame-Nachweis mit echter Hardware steht aus |
 | VALVE | **WEITGEHEND ERLEDIGT** | Paketverlust/Reconnect ingame nachweisen |
 | LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch erledigt (LOG-P2, Abschnitt 10); Paketverlust/Reconnect ingame nachweisen |
-| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (61/138 Lua, 19/28 Python grün); 86 Tests bleiben einzeln zu triagieren |
+| Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (67/139 Lua, 20/28 Python grün); 80 Tests bleiben einzeln zu triagieren |
 | Dokumentation | **BEREINIGT** | künftig nur eine aktuelle Aufgabenquelle pflegen |
 
 ---
@@ -85,6 +85,7 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - weniger wiederholte Modelserialisierung,
 - kein DEBUG-Log pro erfolgreichem Frame,
 - `set_fuel_reserve`/`set_water_target` senden jetzt an ALLE Nodes der jeweiligen Rolle statt nur an den ersten per `pairs()` gefundenen (MASTER-P1, siehe Abschnitt 9); sichtbare Fehlermeldung im Alarm-Log, falls keine passende Node existiert.
+- **KRITISCH**: `startup_sequencer.lua`s `enqueue`/`tick`/`notify_ack`/`notify_stable`/`handle_timeout` waren Punkt-definiert, wurden aber überall (inkl. intern) per Doppelpunkt aufgerufen — das automatisch injizierte Objekt landete dadurch in jedem echten Argument, `enqueue()` fügte nie einen Node zur Warteschlange hinzu. Die gesamte MASTER-gesteuerte Startup-Sequenzierung war dadurch wirkungslos. Behoben durch Umstellung auf Doppelpunkt-Definition (MASTER-P2, siehe Abschnitt 12).
 
 ## RT
 
@@ -454,15 +455,16 @@ Diese drei Punkte sind für die typische Konfiguration (genau eine FUEL- und ein
 
 ## Ergebnis
 
-- Lua: 61 von 138 laufen grün, 77 explizit ausgeschlossen und begründet.
-- Python: 19 von 28 laufen grün, 9 explizit ausgeschlossen und begründet.
+- Lua: 67 von 139 laufen grün, 72 explizit ausgeschlossen und begründet.
+- Python: 20 von 28 laufen grün, 8 explizit ausgeschlossen und begründet.
 - Offline-Validator: vollständig grün unter `lua5.2` (die zuvor unter Host-`lua5.1` beobachteten Parse-Fehler waren ein reines Lua-5.1-vs-5.2-goto/label-Artefakt, nicht in der echten CI-Umgebung reproduzierbar).
 
-## Noch offen
+## Seit dem letzten Stand behoben (2026-07-15)
 
-- Die 86 explizit ausgeschlossenen Tests sind **nicht repariert**, nur ehrlich dokumentiert und aus dem Pflicht-Grün-Pfad herausgenommen — jede einzelne Datei braucht eine gezielte Einzelfallprüfung (echte Regression vs. veraltete Erwartung vs. fehlendes Mock), das würde den Rahmen dieser Umsetzung sprengen. Priorität für Folgearbeit: die vier `is_master_connected`-Tests (`rt_control_service_tick_stability_test.lua`, `rt_main_state_context_guard_test.lua`, `rt_master_startup_off_state_regression_test.lua`, `rt_state_handler_context_wiring_test.lua`) zeigen ein wiederkehrendes, konsistentes Muster und sind der wahrscheinlichste Kandidat für einen echten (nicht nur veralteten) Fix.
-- `core/bootstrap.lua` ist doppelt in `xreactor/manifest.lua` gelistet (eigenständiger Bug, verursacht 2 der Ausschlüsse) — noch nicht behoben.
-- Rollenweise Jobgruppen (separate CI-Jobs pro Rolle) nicht umgesetzt — alle Tests laufen aktuell in einem Job.
+- **`core/bootstrap.lua` doppelt in `xreactor/manifest.lua`**: war einmal in `base_files` (ohne `always=true`) und einmal explizit unter `roles.log` gelistet — Letzteres war ein Workaround, weil `installer/manifest.lua`s `build_expected()` für die LOG-Rolle alle nicht-`always`-`base_files`-Einträge überspringt (LOG installiert bewusst nicht den vollen Basis-Dateisatz). Fix: `core/bootstrap.lua`s `base_files`-Eintrag bekommt jetzt `always=true` (wie andere Kernabhängigkeiten, z. B. `release.lua`, `start.lua`), der redundante `roles.log`-Eintrag wurde entfernt. `manifest_integrity_consistency_test.lua`/`manifest_hash_size_guard_test.py` laufen jetzt grün, ohne Verhaltensänderung für andere Rollen.
+- **Die vier `is_master_connected`-Tests**: bei genauer Prüfung stellte sich heraus, dass `is_master_connected` in der echten Runtime bereits korrekt verdrahtet war — die Tests bauten lediglich unvollständige Mock-Kontexte (fehlendes `is_master_connected`/`set_current_state` in der ctx-Tabelle), die an `state_handlers.lua`s eigenem, bereits vorher vorhandenem `assert_fn`-Guard scheiterten. Die Mocks wurden ergänzt; zusätzlich bekam `nodes/rt/main.lua` einen expliziten Guard + Diagnose-Log (`"State context ready (is_master_connected=true)"`) beim Aufbau des State-Context, bevor `state_handlers.build()` aufgerufen wird — redundant zum generischen Guard in `state_handlers.lua`, aber mit klarerem, RT-spezifischem Fehlertext für Operator-Logs.
+- **KRITISCHER Fund während dieser Prüfung, unabhängig vom `is_master_connected`-Muster**: `rt_master_startup_off_state_regression_test.lua`s dritter Testblock deckte einen echten, weitreichenden Bug in `xreactor/master/startup_sequencer.lua` auf — siehe eigener Abschnitt 12 unten (MASTER-P2). Das ist der bei weitem wichtigste Fund dieser Runde.
+- Rollenweise Jobgruppen (separate CI-Jobs pro Rolle) weiterhin nicht umgesetzt — alle Tests laufen aktuell in einem Job.
 - Keine Tests wurden gelöscht; die im Original geforderte "Löschregel"-Prüfung (Abschnitt 12) wurde für keinen der ausgeschlossenen Tests einzeln durchgeführt.
 
 Wichtige Testgruppen (aus der ursprünglichen Vorgabe, ob sie tatsächlich existieren wurde nicht einzeln geprüft):
@@ -481,7 +483,44 @@ log_renderer_entrypoint
 
 ---
 
-# 12. Dokumentations- und Repository-Bereinigung
+# 12. MASTER-P2 – Startup-Sequencer Punkt-/Doppelpunkt-Aufrufbug (KRITISCH)
+
+## Status
+
+**BEHOBEN (2026-07-15)**
+
+`xreactor/master/startup_sequencer.lua`s `sequencer.new()` definierte `enqueue`, `tick`, `notify_ack`, `notify_stable` und `handle_timeout` per **Punkt-Syntax** (`function self.enqueue(node_id, reason)` usw.), wurde aber **ausnahmslos** per **Doppelpunkt-Syntax** aufgerufen:
+
+- `xreactor/master/housekeeping.lua:62`: `runtime.refs.sequencer:tick(runtime.state.nodes)`
+- `xreactor/master/message_handlers.lua:404,474,479,509`: `sequencer:enqueue(id)`, `sequencer:notify_stable(...)`, `sequencer:notify_ack(...)`
+- `xreactor/master/runtime_ops_rt.lua:116`: `runtime.refs.sequencer:enqueue(node.id, "DEMAND_STARTUP")`
+- intern in `startup_sequencer.lua` selbst: `self:handle_timeout(nodes, "WAITING_ACK", elapsed)` / `self:handle_timeout(nodes, "WAITING_STABLE", elapsed)`
+
+Ein Doppelpunkt-Aufruf (`obj:f(a, b)`) übergibt in Lua das Objekt selbst automatisch als **erstes** Argument (äquivalent zu `obj.f(obj, a, b)`). Da die Funktionen aber KEINEN `self`-Parameter deklarierten, landete das Sequencer-Objekt selbst in `node_id` (bei `enqueue`), in `nodes` (bei `tick`) bzw. in `nodes`/`stage`/`elapsed_ms` (bei `handle_timeout`) — jedes echte Argument rutschte um eine Position weiter.
+
+**Praktische Auswirkung**: `enqueue()`s eigene Typprüfung (`type(node_id) ~= "string" and type(node_id) ~= "number"`) griff bei jedem echten Aufruf, weil `node_id` jetzt eine Tabelle (das Sequencer-Objekt) statt eines Node-Namens war — die Funktion loggte höchstens eine WARN-Zeile und **fügte nie etwas zur Warteschlange hinzu**. `tick()` erhielt statt der echten Node-Registry das Sequencer-Objekt selbst als `nodes`, wodurch Node-Lookups intern ins Leere liefen. `handle_timeout()` (Eskalation bei Startup-Timeout auf `LIMITED`/`EMERGENCY`) erhielt bei jeder Auslösung vertauschte, falsche Argumente. Insgesamt: die MASTER-gesteuerte, sicherheitsrelevante Startup-Sequenzierung (Turbinen vor Reaktoren, ein Modul nach dem anderen, ACK- und Stabilitäts-gated) war **komplett wirkungslos**, solange sie über den normalen Aufrufpfad angestoßen wurde — unabhängig davon, seit wann dieser Zustand bestand.
+
+Entdeckt als Nebenbefund beim Beheben des dritten `is_master_connected`-Testblocks in `rt_master_startup_off_state_regression_test.lua` (Abschnitt 11): der Test scheiterte nach den ersten beiden Fixes weiterhin, mit einem Ergebnis, das erst nach genauer Analyse des tatsächlichen Aufrufmusters erklärbar war (nicht durch einen einfachen Backoff-Timing-Effekt, wie zunächst vermutet).
+
+## Umsetzung
+
+1. `xreactor/master/startup_sequencer.lua`: `enqueue`, `tick`, `notify_ack`, `notify_stable`, `handle_timeout` von Punkt- auf Doppelpunkt-Definition umgestellt (`function self:enqueue(...)` usw.) — passt jetzt zum tatsächlichen Aufrufmuster überall im Code, ohne dass ein einziger Aufrufer geändert werden musste. `build_steps` blieb Punkt-definiert, da es ausschließlich intern per Punkt-Syntax aufgerufen wird (`self.build_steps(nodes)`).
+2. Funktionaler Regressionstest `tests/master_startup_sequencer_colon_call_test.lua` (neu): ruft ausschließlich per Doppelpunkt auf (wie die echten Aufrufer) und deckt den kompletten Lebenszyklus ab — `enqueue` → `tick` (sendet `STARTUP_STAGE`) → `notify_ack` → `notify_stable`, sowie separat den `handle_timeout`-Pfad (Timeout während `WAITING_ACK` löst eine `MODE`-Eskalation aus und setzt den Sequencer zurück).
+3. `tests/rt_master_startup_off_state_regression_test.lua`s dritter Testblock (ursprünglich ein brüchiger Text-Grep gegen `xreactor/nodes/rt/main.lua` nach einem Transitions-Aufruf, der dort nie existierte, weil diese Logik tatsächlich in `state_handlers.lua`s `apply_mode()` lebt) wurde durch einen echten Funktionstest gegen `state_handlers.apply_mode()` ersetzt.
+
+Betroffene Dateien: `xreactor/master/startup_sequencer.lua`, `tests/rt_master_startup_off_state_regression_test.lua` (plus die drei anderen `is_master_connected`-Mock-Fixes, siehe Abschnitt 11).
+
+## Anforderungen (Abnahme)
+
+- `enqueue()` fügt bei jedem echten (Doppelpunkt-)Aufruf tatsächlich einen Eintrag zur Warteschlange hinzu — funktional verifiziert.
+- `tick()` erhält die echte Node-Registry und sendet `STARTUP_STAGE` sobald ein Modul bereit ist (MASTER-Modus, Modul `OFF`) — funktional verifiziert.
+- `notify_ack()`/`notify_stable()` treiben den Zustand `WAITING_ACK` → `WAITING_STABLE` → `IDLE` korrekt voran — funktional verifiziert.
+- `handle_timeout()` eskaliert bei Ablauf von `timeout_s` korrekt auf eine `MODE`-Eskalation und setzt den Sequencer zurück — funktional verifiziert.
+- Ingame-Nachweis mit echter RT-Node-Flotte (mehrere Nodes, mehrere Module, echte ACK-/Stable-Meldungen über das Netzwerk) steht weiterhin aus.
+
+---
+
+# 13. Dokumentations- und Repository-Bereinigung
 
 ## Gelöscht
 
@@ -521,7 +560,7 @@ Eine Datei wird erst entfernt, wenn sie:
 
 ---
 
-# 13. Priorität
+# 14. Priorität
 
 1. vollständige Config-Persistenz des Installers,
 2. Event- und Timerpfad trennen,
@@ -531,11 +570,12 @@ Eine Datei wird erst entfernt, wenn sie:
 6. nicht blockierendes FUEL-/REPROCESSOR-Routing,
 7. restliche RT-Hotpath-Arbeit,
 8. MASTER-Multi-Node-Auswahl,
-9. LOG-Renderer-Schnittstelle.
+9. LOG-Renderer-Schnittstelle,
+10. Startup-Sequencer Punkt-/Doppelpunkt-Aufrufbug (MASTER-P2, kritisch — erledigt).
 
 ---
 
-# 14. Definition of Done
+# 15. Definition of Done
 
 - Updates erhalten alle Benutzerconfigs und Routen.
 - Events erzeugen keine periodischen Vollticks.

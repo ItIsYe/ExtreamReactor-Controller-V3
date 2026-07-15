@@ -27,8 +27,6 @@
 #                    Erwartung -- noch zu klaeren, siehe TEST-P0-Folgearbeit).
 #   SYNTAX_ERROR   - die Testdatei selbst ist kein gueltiges Lua (nicht das
 #                    getestete Produktivmodul).
-#   DUPLICATE_MANIFEST_PATH - core/bootstrap.lua doppelt in xreactor/manifest.lua
-#                    gelistet; eigenstaendiger, von TEST-P0 unabhaengiger Bug.
 
 alert_rules_numeric_normalization_test.lua # CONTENT_DRIFT
 comms_peer_down_observation_debounce_test.lua # CONTENT_DRIFT
@@ -45,7 +43,6 @@ installer_standalone_bootstrap_test.lua # STALE_STRUCTURE (erwartet ensure_insta
 lifecycle_logging_contract_guard_test.lua # STALE_API (erwartet woertlichen "Startup"-Log-Token in master/main.lua)
 logger_runtime_degraded_nonfatal_test.lua # NEEDS_MOCK
 logger_startup_policy_test.lua # CONTENT_DRIFT
-manifest_integrity_consistency_test.lua # DUPLICATE_MANIFEST_PATH
 master_energy_aggregation_test.lua # NEEDS_MOCK (state.nodes nil ohne vollen Master-Runtime-Kontext)
 master_energy_ui_contract_test.lua # NEEDS_MOCK (widgets.lua braucht echtes monitor:clearRegion)
 master_heartbeat_recovery_from_down_test.lua # CONTENT_DRIFT
@@ -78,19 +75,15 @@ rt_command_shutdown_transition_test.lua # CONTENT_DRIFT
 rt_command_shutdown_workflow_semantics_test.lua # CONTENT_DRIFT
 rt_config_normalizer_rod_limits_test.lua # CONTENT_DRIFT (haengt vermutlich mit reactor_rod_config_clamp_regression_test.lua zusammen)
 rt_config_normalizer_steam_guard_test.lua # CONTENT_DRIFT
-rt_control_service_tick_stability_test.lua # STALE_API (is_master_connected in state_handlers-Kontext erwartet; wiederkehrendes Muster, siehe rt_main_state_context_guard_test.lua/rt_master_startup_off_state_regression_test.lua/rt_state_handler_context_wiring_test.lua -- moeglicher echter Fix-Kandidat fuer Folgearbeit)
 rt_control_tick_wiring_regression_test.lua # STALE_API (adjust_turbines-Funktion existiert nicht mehr unter diesem Namen)
 rt_dashboard_shutdown_verdict_semantics_test.lua # STALE_API (verdict = "REQUESTED" Token erwartet)
 rt_flow_apply_helpers_readback_lag_regression_test.lua # CONTENT_DRIFT
-rt_main_state_context_guard_test.lua # STALE_API (siehe rt_control_service_tick_stability_test.lua)
-rt_master_startup_off_state_regression_test.lua # STALE_API (siehe rt_control_service_tick_stability_test.lua)
 rt_module_lifecycle_control_rod_caps_test.lua # NEEDS_MOCK (evaluate_reactor_coolant im Test-Stub nicht bereitgestellt)
 rt_monitor_ui_adapter_snapshot_test.lua # NEEDS_MOCK (echtes peripheral-Global erwartet)
 rt_monitor_ui_init_regression_test.lua # CONTENT_DRIFT
 rt_safety_causality_logging_test.lua # CONTENT_DRIFT
 rt_schema_ctx_guard_test.lua # CONTENT_DRIFT
 rt_startup_diagnostics_timeout_test.lua # NEEDS_MOCK (set_active_startup im Test-Stub nicht bereitgestellt)
-rt_state_handler_context_wiring_test.lua # STALE_API (siehe rt_control_service_tick_stability_test.lua)
 rt_sync_ack_applied_no_resend_semantics_test.lua # CONTENT_DRIFT
 rt_sync_ack_dedupe_regression_test.lua # CONTENT_DRIFT
 rt_sync_dedupe_ack_guard_test.lua # CONTENT_DRIFT

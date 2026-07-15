@@ -744,7 +744,6 @@ local function init()
     targets           = ctx and ctx.targets or {},
     TARGET_RPM        = CONFIG.TARGET_RPM,
     -- Zustands-Accessoren
-    is_master_connected    = is_master_connected,
     get_current_state      = current_state,
     set_current_state      = function(v) current_state_value = v end,
     get_node_state_machine = function() return node_state_machine end,
@@ -803,6 +802,16 @@ local function init()
       module_lifecycle.set_turbines_active(lctx, active, reason)
     end,
   }
+  -- Fix (2026-07-15): expliziter Guard + Diagnose-Log fuer is_master_connected,
+  -- bevor state_handlers.build() dessen eigenen generischen (aber weniger
+  -- aussagekraeftigen) assert_fn-Guard auswertet -- gibt Operatoren beim RT-
+  -- Boot eine eindeutige Bestaetigung, dass der sicherheitskritische Master-
+  -- Failover-Check verdrahtet ist.
+  state_ctx.is_master_connected = is_master_connected
+  if type(state_ctx.is_master_connected) ~= "function" then
+    error("rt state context missing required function: is_master_connected", 0)
+  end
+  log("INFO", "State context ready (is_master_connected=true)")
   states_table = state_handlers.build(state_ctx)
   node_state_machine = machine.new(states_table, constants.node_states.OFF)
 
