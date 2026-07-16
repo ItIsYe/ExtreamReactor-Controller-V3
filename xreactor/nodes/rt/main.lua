@@ -104,6 +104,18 @@ local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG
 local config_warnings = {}
 local function add_config_warning(msg) table.insert(config_warnings, msg) end
 config_normalizer.migrate_legacy_paths(config, add_config_warning)
+-- Fix (2026-07-16): CRITICAL (RT-P1, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 5). Migriert bekannte historische
+-- Default-Werte (autonom.reactor_adjust_interval=5.0/reactor_adjust_
+-- interval_individual=1.0, vor dem 10-Hz-Fix) gezielt auf die neuen 0.10-
+-- Defaults, gesteuert ueber config.version -- laeuft NUR, wenn config.
+-- version noch unter dem Migrations-Stand liegt, und wird SOFORT
+-- persistiert, damit sie garantiert nur einmal ausgefuehrt wird (nicht bei
+-- jedem Boot erneut, siehe migrate_schema_version()-Kommentar in
+-- config_normalizer.lua fuer die genaue Begruendung).
+if config_normalizer.migrate_schema_version(config, DEFAULT_CONFIG, add_config_warning) then
+  pcall(utils.write_config, CONFIG.CONFIG_PATH, config)
+end
 config_normalizer.validate_config(config, DEFAULT_CONFIG, add_config_warning, utils)
 config_normalizer.apply_runtime_defaults(config, DEFAULT_CONFIG, {
   target_rpm = CONFIG.TARGET_RPM, min_flow = CONFIG.MIN_FLOW,

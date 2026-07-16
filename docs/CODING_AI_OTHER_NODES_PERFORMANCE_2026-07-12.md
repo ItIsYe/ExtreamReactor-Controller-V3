@@ -37,7 +37,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | Manifest / Rollen-Scope | **TEILWEISE UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes behoben (Abschnitt 10/17); `optional/speaker_alarm.lua` weiterhin ohne `required_for` |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
 | MASTER | **TEILWEISE UMGESETZT** | Sequencer-Aufrufsyntax und echter MASTER→RT-Modulstart behoben (Abschnitt 3); Einzelnode-/ACK-UI (Abschnitt 15) weiterhin offen |
-| RT | **TEILWEISE UMGESETZT** | Discovery-Deadline behoben (Abschnitt 4); Altconfig-Migration (Abschnitt 5) weiterhin offen |
+| RT | **WEITGEHEND UMGESETZT** | Discovery-Deadline und Altconfig-Migration behoben (Abschnitt 4/5); Controlmetriken (Jitter/Ticklücke, siehe Abschnitt 5 „Zusätzlich offen“) weiterhin offen |
 | ENERGY | **WEITGEHEND UMGESETZT** | Scheduler-/Heartbeat-Trennung behoben (Abschnitt 13) |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
 | FUEL | **WEITGEHEND UMGESETZT** | Startabsturz, Export-vor-Ventilbestätigung, Async-Lifecycle und ungültiges Routing→Direktexport behoben (Abschnitt 6/7/8/9); gemeinsamer Ventilkanal (VALVE, Abschnitt 12) ebenfalls behoben |
@@ -305,7 +305,17 @@ oder bei einem Skip den nächsten zulässigen Scan explizit verschieben. Attach/
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (Altconfig-Migration, 2026-07-16) — Schedulernachweis (siehe „Zusätzlich offen“ unten) weiterhin offen**
+
+`nodes/rt/config.lua` hatte bereits ein `version`/`CURRENT_VERSION`-Feld, das aber im gesamten Projekt nirgends gelesen/verglichen wurde — ein reines Deklarations-Feld ohne Wirkung. Eine bestehende, persistierte `config/rt.lua` mit den historischen Defaults `autonom.reactor_adjust_interval=5.0`/`reactor_adjust_interval_individual=1.0` (vor dem 10-Hz-Fix) blieb dadurch dauerhaft auf der alten, viel zu langsamen Regelkadenz — beide sind gültige Zahlen, die generische `type(...) ~= "number"`-Normalisierung fasst sie nie an.
+
+Fix:
+
+- `config.lua`s `CURRENT_VERSION` auf `5` erhöht (das erste Mal, dass dieses Feld tatsächlich benutzt wird).
+- Neue `config_normalizer.migrate_schema_version()`: migriert **gezielt nur die historischen Default-WERTE** (5.0/1.0) auf die neuen 0.10-Defaults, gesteuert über `config.version` — ein bewusst vom Nutzer auf einen anderen Wert gesetztes Intervall (z. B. 2.5) bleibt unangetastet. `main.lua` persistiert das Ergebnis sofort nach der Migration (`utils.write_config`), damit sie garantiert nur einmal läuft.
+- `reactor_adjust_interval_individual` bekommt zusätzlich eine reguläre `type(...) ~= "number"`-Normalisierung in `validate_config()` (fehlte bisher komplett — wurde nur über einen impliziten `or 0.10`-Fallback an der Nutzungsstelle in `reactor_control.lua` abgesichert).
+
+Pflicht-Test: `tests/rt_config_interval_schema_migration_test.lua` (neu) — treibt die echte `config_normalizer.lua` direkt: historische Defaults werden migriert; bewusst benutzerdefinierte Werte bleiben unangetastet (nur der Versionsstand wird trotzdem angehoben); ein bereits migrierter Stand wird nicht erneut verändert (auch wenn zufällig wieder 5.0/1.0 vorliegt); ein Config-Stand ganz ohne `version`-Feld wird ebenfalls migriert. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
 Neue Defaults stehen auf:
 
@@ -967,7 +977,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 7. ~~REPROCESSOR Standby-Cancel.~~ BEHOBEN (2026-07-16, siehe Abschnitt 11): `tests/reprocessor_standby_cancels_transaction_test.lua`.
 8. ~~ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13): `tests/energy_matrix_thread_scheduler_isolation_test.lua`.
 9. ~~RT Discovery mit Fake-Clock und realem Schedulerintervall.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4): `tests/rt_discovery_stable_slowdown_test.lua`.
-10. RT Altconfig-Migration.
+10. ~~RT Altconfig-Migration.~~ BEHOBEN (2026-07-16, siehe Abschnitt 5): `tests/rt_config_interval_schema_migration_test.lua`. Controlmetriken (Abschnitt 5, „Pflicht-Metriken“) weiterhin offen.
 11. Installer ein SHA + CRC.
 12. LOG-/Installer-Datenerhalt bei Full-/Probe-Fehlern.
 
@@ -985,7 +995,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 8. ~~**REPROCESSOR Standby-Cancel**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 11).
 9. ~~**ENERGY Scheduler-/Heartbeat-Trennung**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13).
 10. ~~**RT Discovery-Deadline korrekt umsetzen**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4).
-11. **RT Altconfig-Migration und Controlmetriken**.
+11. **RT Altconfig-Migration und Controlmetriken**. Altconfig-Migration BEHOBEN (2026-07-16, siehe Abschnitt 5); Controlmetriken weiterhin offen.
 12. **Installer ein SHA + CRC-Verifikation**.
 13. **keine automatische Log-Löschung** in Installer und LOG Collector.
 14. **Manifest optionale Features/Rollenscope**.
