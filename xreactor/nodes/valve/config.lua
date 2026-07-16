@@ -19,6 +19,14 @@ return {
   reset_log_on_start = true,
   wireless_modem  = nil,   -- nil = automatisch erkennen
   side            = "front",
+  -- Feature (2026-07-14): Aktor-Typ -- "redstone" (Standard, unveraendertes
+  -- Verhalten) oder "sorter" (Mekanism Logistical Sorter, gesteuert per
+  -- CC:Tweaked-Peripherie statt Redstone -- fuer Item-Brennstofftransport,
+  -- bei dem kein klassisches Redstone-Ventil existiert). Bei "sorter" wird
+  -- "side" oben ignoriert, stattdessen "sorter_name" (der Peripherie-Name
+  -- des Logistical Sorters, z.B. "logisticalSorter_1") verwendet.
+  actuator_type   = "redstone",
+  sorter_name     = "logisticalSorter_1",
   -- Fail-Safe-Grundzustand beim Boot/bei Verbindungsverlust: Ventil
   -- geschlossen (high=true blockiert bei Mekanism "High Redstone =
   -- Interrupt"-Konfiguration -- siehe redstone_router.lua Kommentar).

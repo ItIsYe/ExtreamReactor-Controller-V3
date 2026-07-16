@@ -51,6 +51,13 @@ local DEFAULT_CONFIG = {
   reset_log_on_start = true,
   wireless_modem = nil,
   side = "front",
+  -- Feature (2026-07-14): siehe config.lua fuer die ausfuehrliche
+  -- Begruendung -- hier zusaetzlich in DEFAULT_CONFIG, damit merge_
+  -- defaults() dieses Feld auch bei bereits migrierten/geschuetzten
+  -- Config-Dateien (siehe GLOBAL-P0) automatisch nachtraegt, nicht nur
+  -- bei einer komplett frischen Installation.
+  actuator_type = "redstone",
+  sorter_name = "logisticalSorter_1",
   default_blocked = true,
   heartbeat_interval = 2,
   status_interval = 5,
@@ -143,22 +150,62 @@ local valve_initialized = false
 -- (oder wenn ohnehin kein Write noetig war, da bereits im Zielzustand)
 -- aktualisiert -- ein Fehlschlag laesst den Watchdog auf dem AELTEREN
 -- Zeitstempel stehen, wodurch er eher (nicht spaeter) erneut eingreift.
+-- Feature (2026-07-14): Aktor-Abstraktion -- neben dem urspruenglichen
+-- Redstone-Ventil wird jetzt auch ein Mekanism Logistical Sorter als
+-- Aktor unterstuetzt (config.actuator_type = "sorter"). Hintergrund: bei
+-- reinem Item-Brennstofftransport (keine Fluid-/Gas-Leitung) gibt es kein
+-- klassisches Redstone-Ventil -- stattdessen wird der Sorter direkt per
+-- CC:Tweaked gesteuert (setAutoMode), Redstone wird dabei komplett
+-- umgangen. Der Sorter hat einen "Auto"-Modus, der -- wenn aktiv -- Items
+-- automatisch herauspumpt, UNABHAENGIG von jedem Redstone-Signal (siehe
+-- Mekanism-Wiki) -- genau das wird hier als Auf/Zu-Schalter genutzt.
+--
+-- Beide Aktoren teilen sich dieselbe abstrakte Semantik wie das restliche
+-- Ventil-Protokoll: high=true bedeutet BLOCKIERT (Fail-Safe-Grundzustand),
+-- high=false bedeutet OFFEN -- die Uebersetzung in die aktortyp-
+-- spezifische physische Aktion passiert ausschliesslich hier, der Rest
+-- des Nodes (apply_valve, Fail-Safe, Dedupe, ACK) bleibt unveraendert.
+local sorter_device = nil
+local function get_sorter()
+  if sorter_device then return sorter_device end
+  local ok, dev = pcall(peripheral.wrap, config.sorter_name)
+  if ok and dev then sorter_device = dev end
+  return sorter_device
+end
+
+local function write_actuator(high)
+  if config.actuator_type == "sorter" then
+    local sorter = get_sorter()
+    if not sorter then
+      return false, "Sorter '" .. tostring(config.sorter_name) .. "' nicht gefunden"
+    end
+    -- high=true (BLOCKIERT) -> Auto-Modus AUS; high=false (OFFEN) -> AN.
+    local ok, err = pcall(sorter.setAutoMode, not high)
+    if not ok then return false, tostring(err) end
+    return true
+  end
+  -- Standard: Redstone (unveraendertes Verhalten wie bisher).
+  local ok, err = pcall(redstone.setOutput, config.side, high)
+  if not ok then return false, tostring(err) end
+  return true
+end
+
 local function apply_valve(high)
   if valve_initialized and high == current_high then
     last_command_ts = os.epoch("utc")
     return true  -- bereits im Zielzustand, kein erneuter Write noetig
   end
-  local ok, err = pcall(redstone.setOutput, config.side, high)
+  local ok, err = write_actuator(high)
   if not ok then
     last_write_error = tostring(err)
-    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (" .. config.side .. "): " .. tostring(err), "ERROR")
+    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (" .. tostring(config.actuator_type or "redstone") .. "): " .. tostring(err), "ERROR")
     return false
   end
   current_high = high
   valve_initialized = true
   last_write_error = nil
   last_command_ts = os.epoch("utc")
-  utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (%s) -> %s", config.side, high and "BLOCKIERT" or "OFFEN"), "INFO")
+  utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (%s) -> %s", tostring(config.actuator_type or "redstone"), high and "BLOCKIERT" or "OFFEN"), "INFO")
   return true
 end
 
@@ -324,7 +371,11 @@ services:add(telemetry_service.new({
   status_interval = config.status_interval or config.heartbeat_interval,
   heartbeat_interval = config.heartbeat_interval,
   build_payload = build_status_payload,
-  heartbeat_state = function() return { side = config.side, blocked = current_high, write_error = last_write_error } end,
+  heartbeat_state = function() return {
+    side = config.side, blocked = current_high, write_error = last_write_error,
+    actuator_type = config.actuator_type or "redstone",
+    actuator_name = config.actuator_type == "sorter" and config.sorter_name or config.side,
+  } end,
 }))
 
 utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: side=" .. config.side .. " node_id=" .. tostring(node_id), "INFO")
