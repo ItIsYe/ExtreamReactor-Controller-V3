@@ -40,7 +40,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | RT | **KRITISCH TEILWEISE** | neuer Startup-Pfad besitzt reale Context-/Einheitenfehler; Modul-State-Update ist nicht verdrahtet |
 | ENERGY | **TEILWEISE BEHOBEN** | Schedulergruppen getrennt, Heartbeat besitzt aber weiterhin zwei Zeitquellen |
 | WATER | **WEITGEHEND UMGESETZT** | Persistenzfehler werden geloggt, Command kann trotzdem als angewendet bestätigt werden |
-| FUEL | **KRITISCH TEILWEISE** | Config/Async-Lifecycle behoben; Router kann aktuellen ACK mit altem bestätigten Zustand verwechseln |
+| FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
 | REPROCESSOR | **KRITISCH TEILWEISE** | Standby-Cancel behoben; Wireless-VALVE-Discovery ist nicht verdrahtet |
 | VALVE | **TEILWEISE BEHOBEN** | Retry behoben; Senderbindung standardmäßig aus und Sorter-Reconnect unvollständig |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Wipe behoben; Reclaim kann wegen stale Free-Space-Cache zu viele Dateien löschen |
@@ -57,7 +57,7 @@ Die kritischsten aktuellen Risiken sind:
 2. Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.
 3. RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.
 4. `module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.
-5. Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.
+5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
 6. REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.
 7. LOG-Reclaim prüft nach Löschungen einen gecachten Free-Space-Wert und kann unnötig viele Dateien entfernen.
 8. 72 Tests bleiben ausgeschlossen; ein grüner Lauf des geprüften Heads ist nicht nachgewiesen.
@@ -564,19 +564,15 @@ WATER bleibt statisch ansonsten weitgehend sauber. Notwendig sind Ingame-Tests f
 
 ## Status
 
-**KRITISCHER SAFETYFEHLER**
+**BEHOBEN (2026-07-17)**
 
-Die neue Batchlogik speichert pro Ventil:
+Bestätigt in `xreactor/nodes/fuel/redstone_router.lua`: die Batchlogik speicherte pro Ventil angefordertes `high`, ob ein ACK benötigt wird und das synchrone Ergebnis, aber NICHT die `command_id` des aktuellen Ventilkommandos. `handle_valve_ack()` legte im bestätigten Zustand (`confirmed_valve_state[key]`) ebenfalls keine Command-ID ab — dieser Zustand wird pro Ventilschlüssel nie gelöscht und überlebt beliebig viele nachfolgende Transaktionen. Wurde ein aktuelles Kommando nach allen Retries aus `pending_valve_acks` entfernt (verlorene ACKs), prüfte `_check_valve_batch()` nur noch, ob irgendein FRÜHER bestätigter Zustand für denselben Ventilschlüssel `applied=true` und denselben `high`-Wert besitzt — exakt der Fall bei der WAIT_FINAL_ACKS-Phase einer Transaktion, deren nächster Delivery-Zyklus in WAIT_BLOCK_ACKS erneut denselben `high=true`-Wert für dieselben Ventile anfordert.
 
-- angefordertes `high`,
-- ob ein ACK benötigt wird,
-- synchrones Ergebnis.
+Fix: `_set_valve()` gibt die erzeugte `command_id` als zweiten Rückgabewert zurück; `_request_valve_batch()` speichert sie in jedem Batcheintrag; `handle_valve_ack()` speichert `command_id` zusätzlich im Confirmed-State; `_check_valve_batch()` akzeptiert einen Confirmed-State nur noch, wenn dessen `command_id` exakt mit der `command_id` des AKTUELL angeforderten Kommandos übereinstimmt (zusätzlich zu `applied==true` und passendem `high`). Ein alter, zufällig passender Confirmed-State (andere oder fehlende `command_id`) zählt damit nicht mehr als Beweis für ein neues Kommando — das schließt automatisch auch den letzten Fix-Punkt ("vor einem neuen Command alten Confirmed-State nicht als aktuellen Beweis verwenden") mit ein, da jedes Kommando eine neue, aus Zeitstempel+Sequenznummer gebildete `command_id` erhält. Die zusätzlich vorgeschlagene Prüfung von "Bestätigungsalter und Peerstatus" wurde als durch die Command-ID-Bindung bereits abgedeckt bewertet: eine Bestätigung mit korrekter `command_id` kann per Konstruktion nicht älter sein als die aktuelle Anfrage (eindeutige ID pro Anfrage), und `VALVE_PHASE_TIMEOUT_MS` begrenzt ohnehin, wie lange eine Phase auf eine Bestätigung wartet.
 
-Sie speichert jedoch nicht die `command_id` des aktuellen Ventilkommandos. `handle_valve_ack()` legt im bestätigten Zustand ebenfalls keine Command-ID ab.
+Pflicht-Test: `tests/redstone_router_stale_confirmed_state_test.lua` — treibt die echte `begin_transaction()`/`tick()`-Zustandsmaschine über zwei aufeinanderfolgende Transaktionen: die erste läuft vollständig durch und hinterlässt in `confirmed_valve_state` für beide Ventile einen bestätigten `BLOCKED`-Zustand (`high=true`) aus ihrer WAIT_FINAL_ACKS-Phase; die zweite Transaktion sendet in ihrer eigenen WAIT_BLOCK_ACKS-Phase erneut `BLOCKED` (`high=true`) für dieselben Ventile — mit neuen, nachweislich anderen `command_id`s —, aber alle ihre ACKs gehen verloren (`check_pending_acks()` gibt nach `VALVE_ACK_MAX_RETRIES` auf). Beweist: die zweite Transaktion bricht sicherheitshalber ab (`transaction == nil`), ihr `action_fn` (Export) läuft niemals. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt (der beschriebene Bug reproduziert sich exakt wie im Audit beschrieben).
 
-Wenn ein aktuelles Kommando nach allen Retries aus `pending_valve_acks` entfernt wird, prüft `_check_valve_batch()` nur noch, ob irgendein früher bestätigter Zustand für denselben Ventilschlüssel `applied=true` und denselben `high`-Wert besitzt.
-
-## Beispiel
+## Beispiel (ursprünglich beobachtet)
 
 1. Ventil wurde früher bestätigt `BLOCKED`.
 2. neuer `BLOCKED`-Befehl wird gesendet.
@@ -585,18 +581,13 @@ Wenn ein aktuelles Kommando nach allen Retries aus `pending_valve_acks` entfernt
 5. alter bestätigter `BLOCKED`-Eintrag passt weiterhin.
 6. aktueller Batch kann fälschlich als bestätigt gelten.
 
-## Verbindlicher Fix
+## Verbindlicher Fix (umgesetzt)
 
 - `_set_valve()` gibt die erzeugte `command_id` zurück.
 - Batchentry speichert diese ID.
 - `handle_valve_ack()` speichert `command_id` im Confirmed-State.
 - `_check_valve_batch()` akzeptiert ausschließlich exakt dieselbe ID.
-- zusätzlich Bestätigungsalter und Peerstatus prüfen.
-- vor einem neuen Command alten Confirmed-State für denselben Schlüssel nicht als aktuellen Beweis verwenden.
-
-## Pflicht-Test
-
-Alter passender Confirmed-State + verlorene aktuelle ACKs muss zuverlässig zu `failed/timeout` und **keinem Export** führen.
+- vor einem neuen Command alten Confirmed-State für denselben Schlüssel nicht als aktuellen Beweis verwenden — durch die Command-ID-Bindung automatisch erfüllt.
 
 ---
 
@@ -806,7 +797,7 @@ Ein Test darf nur entfernt werden, wenn:
 3. RT-Produktions-Context-Shape.
 4. RT-Rampeneinheit mit Fake-Clock.
 5. produktive Verdrahtung von `update_module_states()`.
-6. Router-ACK muss aktuelle Command-ID matchen.
+6. ~~Router-ACK muss aktuelle Command-ID matchen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
 7. REPROCESSOR Wireless-VALVE-Discovery.
 8. ENERGY exakt eine Heartbeat-Zeitquelle.
 9. LOG-Reclaim mit Cacheinvalidierung.
@@ -857,7 +848,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 
 # 27. Verbindliche Bearbeitungsreihenfolge
 
-1. **ROUTER-P0:** aktuellen ACK über Command-ID statt alten Confirmed-State beweisen.
+1. ~~**ROUTER-P0:** aktuellen ACK über Command-ID statt alten Confirmed-State beweisen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
 2. **REPROCESSOR-P0:** COMMS-Peers an Wireless-Router verdrahten.
 3. **RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.
 4. **RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.
