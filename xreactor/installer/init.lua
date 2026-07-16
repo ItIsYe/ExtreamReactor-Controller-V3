@@ -349,8 +349,17 @@ table.sort(file_list, function(a, b)
 end)
 
 p("Installiere " .. #file_list .. " Dateien...")
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
+-- stage_mod.verify() prüfte bisher nur Existenz/Lesbarkeit/Größe/Syntax,
+-- nicht den CRC32-Hash aus dem Manifest -- eine Datei mit korrekter Größe
+-- und gültiger Lua-Syntax, aber verändertem Inhalt, konnte akzeptiert
+-- werden. manifest_mod.crc32 (bereits vorhanden, siehe M.is_current())
+-- wird jetzt durchgereicht, damit stage_mod.verify() jeden Write
+-- tatsächlich gegen den erwarteten Hash prüft.
 local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, ref,
-  function(done, total, rel) ui_mod.progress(done, total, rel) end)
+  function(done, total, rel) ui_mod.progress(done, total, rel) end,
+  manifest_mod.crc32)
 if not ok then error("Installation: " .. tostring(err), 0) end
 
 -- Gesamten config-Ordner wiederherstellen (ueberschreibt die bereits

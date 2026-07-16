@@ -434,13 +434,31 @@ function M.read(path)
   local c = f.readAll(); f.close(); return c
 end
 
-function M.verify(path, entry)
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
+-- manifest.lua enthaelt fuer jede Datei einen CRC32-Hash, aber diese
+-- Funktion pruefte bisher nur Existenz, Lesbarkeit, Groesse und (bei
+-- .lua-Dateien) Syntax -- eine Datei mit korrekter Groesse und gueltiger
+-- Syntax, aber veraendertem Inhalt (z.B. durch einen stillen
+-- Bit-/Uebertragungsfehler, der die Byteanzahl zufaellig unveraendert
+-- liess) wurde akzeptiert. "crc32_fn" wird optional vom Aufrufer
+-- durchgereicht (installer/init.lua uebergibt manifest.lua's bereits
+-- vorhandene M.crc32) -- kein neuer dofile()/require() hier, um
+-- stage.lua nicht von manifest.lua abhaengig zu machen.
+function M.verify(path, entry, crc32_fn)
   if not fs.exists(path) then return false, "missing: " .. path end
   local content = M.read(path)
   if not content then return false, "unreadable: " .. path end
   if entry and entry.size_bytes and #content ~= entry.size_bytes then
     return false, string.format("size mismatch %s: got %d expected %d",
       path, #content, entry.size_bytes)
+  end
+  if entry and entry.hash and entry.hash ~= "" and type(crc32_fn) == "function" then
+    local actual = crc32_fn(content)
+    if actual:lower() ~= tostring(entry.hash):lower() then
+      return false, string.format("hash mismatch %s: got %s expected %s",
+        path, actual, entry.hash)
+    end
   end
   if path:sub(-4) == ".lua" then
     local loader, lerr = load(content, "=" .. path, "t", {})
@@ -462,7 +480,7 @@ end
 local VERIFY_MAX_ATTEMPTS = 4
 local VERIFY_RETRY_DELAY_S = 2
 
-function M.install(files, install_root, http_mod, ref, progress_fn)
+function M.install(files, install_root, http_mod, ref, progress_fn, crc32_fn)
   local total = #files
   for i, item in ipairs(files) do
     local rel   = item.path
@@ -475,7 +493,7 @@ function M.install(files, install_root, http_mod, ref, progress_fn)
       -- Retry sinnvoll, ein Mismatch hier ist ein echter Fehler.
       local ok, werr = M.write(dest, item.content)
       if not ok then return false, werr end
-      local ok2, verr = M.verify(dest, entry)
+      local ok2, verr = M.verify(dest, entry, crc32_fn)
       if not ok2 then return false, verr end
     else
       local success = false
@@ -490,7 +508,7 @@ function M.install(files, install_root, http_mod, ref, progress_fn)
           if not ok then
             last_err = werr
           else
-            local ok2, verr = M.verify(dest, entry)
+            local ok2, verr = M.verify(dest, entry, crc32_fn)
             if ok2 then
               success = true
               break
@@ -1253,8 +1271,17 @@ table.sort(file_list, function(a, b)
 end)
 
 p("Installiere " .. #file_list .. " Dateien...")
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
+-- stage_mod.verify() prüfte bisher nur Existenz/Lesbarkeit/Größe/Syntax,
+-- nicht den CRC32-Hash aus dem Manifest -- eine Datei mit korrekter Größe
+-- und gültiger Lua-Syntax, aber verändertem Inhalt, konnte akzeptiert
+-- werden. manifest_mod.crc32 (bereits vorhanden, siehe M.is_current())
+-- wird jetzt durchgereicht, damit stage_mod.verify() jeden Write
+-- tatsächlich gegen den erwarteten Hash prüft.
 local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, ref,
-  function(done, total, rel) ui_mod.progress(done, total, rel) end)
+  function(done, total, rel) ui_mod.progress(done, total, rel) end,
+  manifest_mod.crc32)
 if not ok then error("Installation: " .. tostring(err), 0) end
 
 -- Gesamten config-Ordner wiederherstellen (ueberschreibt die bereits
@@ -1614,12 +1641,20 @@ end
 table.sort(file_list, function(a,b) return a.path < b.path end)
 
 p("Installiere "..#file_list.." Dateien...")
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
+-- manifest_mod.crc32 wird jetzt durchgereicht, damit stage_mod.verify()
+-- jeden Write tatsächlich gegen den erwarteten Hash prüft. Ausserdem wird
+-- "ref" statt der rohen "sha" durchgereicht (der Download-Shim ignoriert
+-- diesen Parameter ohnehin, "base" ist bereits konsistent aus "ref"
+-- gebaut -- siehe Abschnitt 14 -- aber "ref" ist der korrekte Name).
 local ok6, err6 = stage_mod.install(
   file_list, INSTALL_ROOT,
   { download_file = function(rel, s) return download(base..rel) end,
     is_html = http_mod.is_html },
-  sha,
-  function(done, total, rel) ui_mod.progress(done, total, rel) end
+  ref,
+  function(done, total, rel) ui_mod.progress(done, total, rel) end,
+  manifest_mod.crc32
 )
 if not ok6 then error("Installation: "..tostring(err6), 0) end
 

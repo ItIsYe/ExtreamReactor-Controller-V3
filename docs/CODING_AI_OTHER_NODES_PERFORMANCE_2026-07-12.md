@@ -33,7 +33,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Benutzerconfig | **TEILWEISE UMGESETZT** | einheitlicher SHA für Manifest und Dateien behoben (Abschnitt 14); CRC beim Write und keine pauschale Log-Löschung weiterhin offen |
+| Installer / Benutzerconfig | **TEILWEISE UMGESETZT** | einheitlicher SHA für Manifest und Dateien (Abschnitt 14) und CRC beim Write (Abschnitt 15) behoben; keine pauschale Log-Löschung weiterhin offen |
 | Manifest / Rollen-Scope | **TEILWEISE UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes behoben (Abschnitt 10/17); `optional/speaker_alarm.lua` weiterhin ohne `required_for` |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
 | MASTER | **TEILWEISE UMGESETZT** | Sequencer-Aufrufsyntax und echter MASTER→RT-Modulstart behoben (Abschnitt 3); Einzelnode-/ACK-UI (Abschnitt 15) weiterhin offen |
@@ -792,18 +792,15 @@ Pflicht-Test: `tests/installer_manifest_files_same_ref_test.lua` — prüft (1) 
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-16)**
 
-`manifest.lua` enthält CRC32-Hashes. `installer/stage.lua` prüft nach dem Schreiben jedoch nur:
+Bestätigt: `manifest.lua` enthält für jede Datei bereits einen CRC32-Hash (`M.crc32`, verwendet von `M.is_current()`), aber `installer/stage.lua`s `M.verify()` prüfte nach dem Schreiben nur Existenz, Lesbarkeit, Größe und (bei `.lua`-Dateien) Syntax — nie den Hash selbst. Eine Datei mit korrekter Größe und gültiger Syntax, aber verändertem Inhalt (z.B. durch einen stillen Bit-/Übertragungsfehler, der die Byteanzahl zufällig unverändert ließ), wurde akzeptiert. Bestätigt in allen betroffenen Codepfaden: `xreactor/installer/stage.lua`, dem eingebetteten `stage_src`-Block im monolithischen `/installer`, sowie beiden Aufrufstellen von `stage_mod.install()` dort (dem nie tatsächlich ausgeführten `init_src`-Block und dem eigenständigen Bootstrap-Wrapper).
 
-- Existenz,
-- Lesbarkeit,
-- Größe,
-- Lua-Syntax.
+Fix: `M.verify(path, entry, crc32_fn)` erhält einen optionalen dritten Parameter — prüft `entry.hash` gegen `crc32_fn(content)`, sobald ein `crc32_fn` übergeben wird. `stage.lua` bekommt dadurch keine neue `dofile()`/`require()`-Abhängigkeit zu `manifest.lua` — der Aufrufer (`installer/init.lua`, sowie beide Aufrufstellen im monolithischen `/installer`) reicht `manifest_mod.crc32` (bereits vorhanden) durch `M.install(files, install_root, http_mod, ref, progress_fn, crc32_fn)` durch. Identisch angewendet auf modularen und monolithischen Installer.
 
-Eine Datei mit korrekter Größe und gültiger Syntax, aber verändertem Inhalt kann akzeptiert werden.
+Pflicht-Test: `tests/installer_write_verifies_crc32_test.lua` — treibt die echten `M.write()`/`M.verify()`/`M.install()`-Funktionen über ein In-Memory-`fs`-Mock: (1) Inhalt mit korrekter Größe und korrektem Hash wird akzeptiert, exakt gleich langer aber inhaltlich veränderter Inhalt wird abgelehnt; (2) ein simulierter Download, der bei jedem Versuch denselben hash-falschen (aber größenkorrekten) Inhalt liefert, lässt `M.install()` insgesamt fehlschlagen statt die korrupte Datei nach Erschöpfen der Retries stillschweigend zu akzeptieren; (3) strukturell geprüft, dass `installer/init.lua` und beide Aufrufstellen im monolithischen `/installer` tatsächlich `manifest_mod.crc32` durchreichen. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
-## Fix
+## Fix (umgesetzt)
 
 `stage.verify()` muss `entry.hash` gegen CRC32 des geschriebenen Inhalts prüfen. Modularer und monolithischer Installer müssen dieselbe Implementierung verwenden.
 
@@ -978,7 +975,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 8. ~~ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13): `tests/energy_matrix_thread_scheduler_isolation_test.lua`.
 9. ~~RT Discovery mit Fake-Clock und realem Schedulerintervall.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4): `tests/rt_discovery_stable_slowdown_test.lua`.
 10. ~~RT Altconfig-Migration.~~ BEHOBEN (2026-07-16, siehe Abschnitt 5): `tests/rt_config_interval_schema_migration_test.lua`. Controlmetriken (Abschnitt 5, „Pflicht-Metriken“) weiterhin offen.
-11. ~~Installer ein SHA für Manifest und Dateien.~~ BEHOBEN (2026-07-16, siehe Abschnitt 14): `tests/installer_manifest_files_same_ref_test.lua`. CRC-Verifikation (Abschnitt 15) weiterhin offen.
+11. ~~Installer ein SHA für Manifest und Dateien.~~ BEHOBEN (2026-07-16, siehe Abschnitt 14): `tests/installer_manifest_files_same_ref_test.lua`. ~~CRC-Verifikation beim Write.~~ BEHOBEN (2026-07-16, siehe Abschnitt 15): `tests/installer_write_verifies_crc32_test.lua`.
 12. LOG-/Installer-Datenerhalt bei Full-/Probe-Fehlern.
 
 ---
@@ -996,7 +993,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 9. ~~**ENERGY Scheduler-/Heartbeat-Trennung**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13).
 10. ~~**RT Discovery-Deadline korrekt umsetzen**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4).
 11. **RT Altconfig-Migration und Controlmetriken**. Altconfig-Migration BEHOBEN (2026-07-16, siehe Abschnitt 5); Controlmetriken weiterhin offen.
-12. **Installer ein SHA + CRC-Verifikation**. SHA-Konsistenz BEHOBEN (2026-07-16, siehe Abschnitt 14); CRC-Verifikation (Abschnitt 15) weiterhin offen.
+12. ~~**Installer ein SHA + CRC-Verifikation**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 14 [SHA] und Abschnitt 15 [CRC]).
 13. **keine automatische Log-Löschung** in Installer und LOG Collector.
 14. **Manifest optionale Features/Rollenscope**.
 15. **MASTER Einzelnode-/ACK-UI**.
