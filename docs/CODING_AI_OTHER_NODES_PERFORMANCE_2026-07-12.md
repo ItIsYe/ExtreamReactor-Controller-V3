@@ -36,7 +36,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | Installer / Benutzerconfig | **TEILWEISE UMGESETZT** | einheitlicher SHA für Manifest und Dateien, CRC beim Write, keine pauschale Log-Löschung |
 | Manifest / Rollen-Scope | **TEILWEISE UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes behoben (Abschnitt 10/17); `optional/speaker_alarm.lua` weiterhin ohne `required_for` |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
-| MASTER | **KRITISCH TEILWEISE** | Sequencer-Aufrufsyntax behoben, echter MASTER→RT-Modulstart weiterhin nicht verdrahtet |
+| MASTER | **TEILWEISE UMGESETZT** | Sequencer-Aufrufsyntax und echter MASTER→RT-Modulstart behoben (Abschnitt 3); Einzelnode-/ACK-UI (Abschnitt 15) weiterhin offen |
 | RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
 | ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
@@ -101,6 +101,62 @@ FUEL, REPROCESSOR, VALVE, ENERGY, WATER, LOG und der Installer wurden in dieser 
 # 3. MASTER-P0 – Startup-Sequenz bleibt end-to-end funktionslos
 
 ## Status
+
+**BEHOBEN (2026-07-16)**
+
+`nodes/rt/main.lua` verdrahtete `request_startup_if_needed`/`start_module` (in
+`build_command_ctx()`) sowie `build_modules`/`refresh_module_peripherals` (in
+`build_discovery_context()`) bisher als reine No-Op-Stubs, und sowohl
+`make_lifecycle_ctx()` als auch `state_ctx` hatten `modules = {}` (immer neu
+bzw. dauerhaft leer) und Startup-State (`get_active_startup` etc.) als
+No-Op-Closures ("RT-Node hat keine Modul-Startup-Sequenz"). Dadurch blieb das
+Modul-Register für die gesamte RT-Node-Laufzeit leer — `module_lifecycle.
+start_module()`/`process_startup()` liefen ins Leere, RT's eigene lokale
+STARTUP-Sequenz (`state_handlers.lua` `startup_on_tick`) kam nie über OFF
+hinaus, und MASTER-gesteuerte `STARTUP_STAGE`-Kommandos wurden immer mit
+`STARTUP_REJECTED` beantwortet.
+
+Fix:
+
+- Modul-globaler, persistenter Startup-State (`modules_registry`,
+  `active_startup_id`, `startup_queue_list`, `startup_started_ms_value`,
+  `startup_watchdog_tripped_value`) statt lokaler No-Op-Stubs; `make_
+  lifecycle_ctx` per Vorwärtsdeklaration auch für `build_command_ctx()`
+  (welches vor `init()` läuft) erreichbar gemacht.
+- `build_discovery_context()`'s `build_modules`/`refresh_module_peripherals`
+  mutieren jetzt tatsächlich die geteilte `modules_registry`-Tabelle in
+  place (Neuzugänge ergänzt, verschwundene Geräte entfernt, bestehender
+  Fortschritt bleibt über Re-Discovery-Scans erhalten).
+- `build_command_ctx()`'s `start_module`/`request_startup_if_needed`
+  delegieren jetzt an die echte `module_lifecycle`-/`state_handlers`-Logik
+  mit vollem Kontext, statt nichts zu tun.
+- `module_lifecycle.process_startup(ctx)` läuft jetzt jeden Control-Tick
+  (vorher im gesamten Projekt nirgends aufgerufen — toter Code).
+- `state_ctx`'s Startup-State-Getter/Setter, `start_module` und `handle_
+  startup_timeout` sind jetzt echte Closures statt Stubs; `handle_startup_
+  timeout` verdrahtet `startup_diagnostics.lua` (vorher komplett unbenutzt)
+  über einen neuen `update_status_snapshot()`-Helper (Max-Temperatur/
+  Durchschnitts-RPM direkt aus den gebundenen Peripheriegeräten) und einen
+  neuen `broadcast_status(level)`-Helper (`comms:publish_status(build_
+  status_payload(level))`).
+- `build_status_payload()` reicht `modules`/`active_startup`/`startup_queue`
+  und `startup_watchdog_tripped` jetzt echt durch (waren hart auf
+  `{}`/`nil`/`{}`/`false` verdrahtet) — MASTER erhält damit über die normale
+  Status-Telemetrie sowohl den Modul-Fortschritt (`message_handlers.lua`
+  prüft `payload.modules[id].state == "STABLE"` für `notify_stable`) als
+  auch den degradierten Health-Zustand nach einem Watchdog-Timeout.
+
+Pflicht-Test: `tests/rt_master_startup_end_to_end_test.lua` (neu) — treibt
+den echten `command_handler.lua`-Pfad (`STARTUP_STAGE` → `ctx.start_module`
+→ `module_lifecycle`) mit Mock-Peripherals: Turbine startet zuerst, Reactor
+wird per `module_lifecycle`-eigenem "Startup busy"-Guard blockiert bis die
+Turbine bestätigt stabil ist, unbekannte Modul-ID wird abgelehnt, SAFE lehnt
+jeden Startup-Befehl ab, und ein Watchdog-Timeout versetzt den Node in
+LIMITED/EMERGENCY inklusive durchschlagender `CONTROL_DEGRADED`-Health.
+Verifiziert per `git stash`, dass der Test mit dem alten No-Op-Stub exakt am
+ersten Schritt (`start_module should be accepted`) fehlschlägt.
+
+## Status (vor dem Fix)
 
 **KRITISCH OFFEN**
 
@@ -808,7 +864,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 
 1. FUEL Defaultconfig-Start.
 2. REPROCESSOR vollständige Installationsdateiliste.
-3. MASTER→RT echter Startup-End-to-End-Pfad.
+3. ~~MASTER→RT echter Startup-End-to-End-Pfad.~~ BEHOBEN (2026-07-16, siehe Abschnitt 3): `tests/rt_master_startup_end_to_end_test.lua`.
 4. Router wartet auf Ziel- und Nebenventil-ACKs.
 5. FUEL Async-Lifecycle und Statistik.
 6. VALVE Failed-Write-Retry.
@@ -825,7 +881,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 
 1. **FUEL Config-Normalizer** – Startabsturz verhindern.
 2. **REPROCESSOR Manifest-Scope** – `feed_router.lua` sicher installieren.
-3. **MASTER→RT Startup-End-to-End** – echten `start_module`-Pfad verdrahten.
+3. ~~**MASTER→RT Startup-End-to-End** – echten `start_module`-Pfad verdrahten.~~ BEHOBEN (2026-07-16, siehe Abschnitt 3).
 4. **Router Safety** – alle Ziel- und Nebenventile vor Export bestätigen.
 5. **FUEL Async-Lifecycle** – Request, Statistik und Abschluss korrigieren.
 6. **Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.
