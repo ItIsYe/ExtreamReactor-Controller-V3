@@ -1,29 +1,27 @@
 # Aktueller Gesamt-Audit – XReactor Controller V3
 
-Stand: 2026-07-14  
+Stand: 2026-07-15  
 Branch: `beta`  
-Geprüfter ausführbarer Code-Head: `b1b15e292b94a177b98b5e49845bb70a2e4e143d`  
-Geprüfte Release: `beta-v427` / `manifest-v427`
-
-Die nachfolgenden Commits bis zu dieser Dateifassung betreffen ausschließlich Dokumentations- und Repository-Bereinigung. Der geprüfte ausführbare Code wurde dabei nicht verändert.
+Geprüfter ausführbarer Code-Head: `954022dba39c296da988254f9e49c6262553eb96`  
+Geprüfte Release: `beta-v434` / `manifest-v434`
 
 ## Zweck
 
-Diese Datei ist die einzige aktuelle, allgemeine Aufgabenquelle. Sie enthält:
+Diese Datei ist die aktuelle allgemeine Aufgabenquelle für Coding-AI und manuelle Prüfungen. Sie enthält ausschließlich:
 
-- weiterhin offene Punkte,
-- nur teilweise umgesetzte Punkte,
+- bestätigte offene Fehler,
+- teilweise umgesetzte Punkte,
+- neu hinzugekommene Regressionen,
 - verbindliche Prioritäten,
-- Test- und Abnahmeanforderungen,
-- den aktuellen Bereinigungsstand.
+- notwendige Tests und Abnahmekriterien.
 
-Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien ausgelagert.
+Die Prüfung erfolgte statisch anhand des tatsächlichen Codes auf `beta`. Commitmeldungen wurden nicht als Beweis übernommen. Echte Peripheral-, Netzwerk-, Neustart- und Update-Eigenschaften müssen zusätzlich in CC:Tweaked/Ingame nachgewiesen werden.
 
 ---
 
 # 1. Gesamtstatus
 
-| Bereich | Status | Wichtigster Restpunkt |
+| Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
 | Installer / Benutzerconfig | **TEILWEISE BEHOBEN** | Config-Persistenz erledigt (GLOBAL-P0); Source-Pinning/CRC-Verify/Quiesce-Koordination laut `CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md` weiterhin offen |
 | Shared Runtime | **BEHOBEN** | Events dürfen keine periodischen Vollticks auslösen — erledigt (SHARED-P0); Event-Koaleszierung/ENERGY-Attach-Detach-Kopplung bleibt Teil von Abschnitt 7 |
@@ -37,44 +35,64 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 | LOG Collector | **WEITGEHEND ERLEDIGT** | Renderer ohne Laufzeit-Quelltextpatch erledigt (LOG-P2, Abschnitt 10); Paketverlust/Reconnect ingame nachweisen |
 | Tests / CI | **TEILWEISE BEHOBEN** | Runner + explizite Ausschlussliste läuft in CI (76/142 Lua, 20/28 Python grün); 6 Tests in dieser Runde behoben; 74 Tests bleiben einzeln zu triagieren |
 | Dokumentation | **BEREINIGT** | künftig nur eine aktuelle Aufgabenquelle pflegen |
+| Installer / Benutzerconfig | **TEILWEISE UMGESETZT** | Manifest und Dateien aus demselben Commit laden; CRC beim Schreiben prüfen |
+| Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY verwendet weiterhin einen Volltick aller Services im Matrix-Thread |
+| MASTER | **TEILWEISE OFFEN** | Einzelnode-Auswahl und echte Command-/ACK-Auswertung |
+| RT | **TEILWEISE UMGESETZT** | bestehende 1-/5-s-Konfigurationen auf 0,1 s migrieren und echte Deadline-Metriken nachweisen |
+| ENERGY | **FEHLERHAFT TEILWEISE** | Matrix-Thread tickt alle Services und sendet Heartbeats zu häufig |
+| WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
+| FUEL | **KRITISCH FEHLERHAFT** | möglicher Startabsturz, unsichere ACK-State-Machine, fehlerhafte Async-Anbindung |
+| REPROCESSOR | **KRITISCH FEHLERHAFT** | fehlende Installationsdatei, unsichere Routing-/Standby-Transaktion |
+| VALVE | **TEILWEISE UMGESETZT** | fehlgeschlagene Writes dürfen nicht als dedupliziert abgeschlossen gelten |
+| LOG Collector | **TEILWEISE UMGESETZT** | Probe-Fehler darf niemals automatisch alle Logs löschen |
+| Tests / CI | **TEILWEISE UMGESETZT** | 77 Lua- und 9 Python-Tests sind weiterhin ausgeschlossen |
+| Dokumentation | **AKTUELL** | diese Datei künftig nach jedem Code-Audit aktualisieren |
 
 ---
 
-# 2. Seit dem vorherigen Audit wesentlich umgesetzt
+# 2. Bestätigt umgesetzt – nicht ohne konkreten Regressionstest erneut umbauen
+
+## Installer / Configbestand
+
+- `/xreactor/config` wird vor dem Löschen rekursiv gesichert.
+- Das Recovery-Backup liegt außerhalb von `/xreactor`.
+- Backup und Restore werden bytegenau verifiziert.
+- `.xr_tmp` und `.xr_prev` werden als regenerierbare Zwischenstände ausgeschlossen.
+- `role.lua`, `remote_update.lua` und `node_id.txt` werden früh wiederhergestellt.
+- Das Recovery-Backup bleibt bei einem fehlgeschlagenen Restore erhalten.
+
+## Shared Runtime
+
+- Event-getriebene Aufrufe des Service-Managers ticken nur Services mit `wants_events=true`.
+- COMMS und UI melden ihre Eventabhängigkeit explizit an.
+- normale Discovery-, Telemetrie- und periodische Services werden durch Modem- oder Touchbursts nicht mehr automatisch vollständig ausgeführt.
 
 ## WATER
 
-- gemeinsamer generationsbasierter Tank-Snapshot,
-- Tankwerte pro Generation nur einmal lesen,
-- sichere `BLOCK_ALL`-Policy bei unbekanntem Tankstand,
-- Stateänderung erst nach bestätigtem Redstone-Write,
-- persistentes `SET_TARGET`,
-- zentralisierte UI-Modell- und Touchpfade.
+- ein gemeinsamer generationsbasierter Tank-Snapshot ist vorhanden,
+- Tankwerte werden innerhalb der Snapshot-Altersgrenze wiederverwendet,
+- bei unbekanntem Tankstand gilt `BLOCK_ALL`,
+- Clusterstate wird erst nach bestätigtem Redstone-Write geändert,
+- bei Teilfehlern wird bestmöglich ein sicherer Ausgangszustand hergestellt,
+- `SET_TARGET` wird in der kanonischen WATER-Config persistiert,
+- das aktuelle UI-Model wird an die Seite übergeben,
+- der doppelte `router_touch`-Pfad wurde entfernt.
 
-## REPROCESSOR
+## RT
 
-- doppeltes `read_buffers()` im Payload entfernt,
-- gemeinsamer kurzer Payloadcache,
-- Round-Robin-, Budget- und Backoff-Verarbeitung,
-- Routing-/Configpfade überarbeitet,
-- VALVE-ACK-Verarbeitung integriert.
+- SAFE-Recovery besitzt jetzt einen verdrahteten `setState`-Pfad,
+- Capability-Scans werden nicht mehr bei jedem normalen Zugriff neu aufgebaut,
+- Ziel-RPM im Monitor stammt aus dem Turbinenregler,
+- Release-/Manifestinformationen werden nicht mehr im Render-Hotpath neu geladen,
+- Turbinen-Flow und `setActive` werden teilweise dedupliziert,
+- neue Defaults für Reactor-Control stehen auf 0,10 Sekunden.
 
-## FUEL / REPROCESSOR gemeinsamer Ventil-Router
+## VALVE
 
-- `route_and_act()`s zwei blockierende `os.sleep()`-Aufrufe (~2.05-2.4s pro Lieferung) durch eine tick-getriebene Zustandsmaschine ersetzt (`begin_transaction()`/`tick()`),
-- nur eine aktive Transaktion gleichzeitig (Serialisierung), ACK-Timeout bricht sofort ab und blockiert alles,
-- FUELs Lieferschleife startet jetzt höchstens eine Ventil-Lieferung pro Zyklus statt mehrere hintereinander zu blockieren,
-- bestehender Sicherheitsschutz (ungültiger Baum verweigert Aktion) vollständig erhalten.
-
-## VALVE / gemeinsamer Router
-
-- korrekte CC:Tweaked-Event-Indizes,
-- Stateänderung nur nach erfolgreichem Write,
-- ACK, Retry und Dedupe,
-- Sender-/Zielprüfung,
-- eindeutige `command_id`,
-- requested und confirmed getrennt,
-- Status pro Integrator und Seite.
+- Standard-CC:Tweaked-Indizes für `modem_message` sind korrigiert,
+- Ventilstate wird erst nach erfolgreichem `redstone.setOutput()` geändert,
+- ACK, Command-ID und Dedupe-Grundmechanismus existieren,
+- Boot-Fail-Safe und 20-s-Stale-Fail-Safe sind vorhanden.
 
 ## MASTER
 
@@ -86,42 +104,34 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - kein DEBUG-Log pro erfolgreichem Frame,
 - `set_fuel_reserve`/`set_water_target` senden jetzt an ALLE Nodes der jeweiligen Rolle statt nur an den ersten per `pairs()` gefundenen (MASTER-P1, siehe Abschnitt 9); sichtbare Fehlermeldung im Alarm-Log, falls keine passende Node existiert.
 - **KRITISCH**: `startup_sequencer.lua`s `enqueue`/`tick`/`notify_ack`/`notify_stable`/`handle_timeout` waren Punkt-definiert, wurden aber überall (inkl. intern) per Doppelpunkt aufgerufen — das automatisch injizierte Objekt landete dadurch in jedem echten Argument, `enqueue()` fügte nie einen Node zur Warteschlange hinzu. Die gesamte MASTER-gesteuerte Startup-Sequenzierung war dadurch wirkungslos. Behoben durch Umstellung auf Doppelpunkt-Definition (MASTER-P2, siehe Abschnitt 12).
+- FUEL-Reserve und WATER-Ziel werden an alle passenden Nodes der Rolle gesendet,
+- Terminal-`mouse_click` ist vorhanden,
+- stale RT-Fuelwerte werden nicht mehr einfach mit einem frischen Messzeitstempel weitergereicht,
+- häufige identische Modelserialisierung und Frame-Debuglogs wurden reduziert.
 
-## RT
+## LOG Collector
 
-- SAFE-Recovery-Contextfehler behoben,
-- Startup-Report-Rollenvergleich korrigiert,
-- dynamisches Ziel-RPM im Monitor,
-- Buildinfo aus dem Monitor-Hotpath entfernt,
-- doppelte manuelle Discovery entfernt,
-- Discovery-Wrapper werden im Controlpfad wiederverwendet,
-- Capability-/Wrapperarbeit teilweise reduziert.
-
-## ENERGY
-
-- zusätzliche ungeregelte Heartbeats entfernt,
-- Storage-Metriken zeitlich gestaffelt,
-- Capacity wird seltener gelesen,
-- last-good Snapshots bleiben erhalten,
-- ENERGY-P0-Schedulergruppentrennung durch Codeanalyse verifiziert (keine Codeänderung nötig, siehe Abschnitt 7) — Comms/Heartbeat/Commands liefen bereits in einer von der Matrix-Coroutine unabhängigen eigenen Coroutine.
-
-## Installer
-
-- gesamter `/xreactor/config`-Ordner wird vor jedem Löschen rekursiv gesichert (Denylist statt Allowlist),
-- Backup wird sofort zurückgelesen und byte-genau verifiziert, bevor `/xreactor` gelöscht werden darf,
-- Minimal-Restore (`role.lua`, `remote_update.lua`, `node_id.txt`) sofort nach Neuanlage des Roots,
-- vollständiger Config-Restore nach erfolgreicher Installation, ebenfalls byte-genau verifiziert,
-- Recovery-Backup bleibt bei fehlgeschlagener Wiederherstellung erhalten statt gelöscht zu werden,
-- Fix identisch in `xreactor/installer/init.lua` und im tatsächlich ausgeführten Live-Pfad in `/installer` angewendet (inkl. der eingebetteten `init_src`-Kopie).
+- Batch-Writes existieren,
+- ACK erfolgt erst nach bestätigter Persistierung,
+- wichtige Fehlerlevel können sofort geflusht werden,
+- Dedupe verwendet einen Ring-/Indexansatz,
+- der Renderer wird als normales Modul geladen und nicht mehr durch Sourcecode-Textpatching eingebaut.
 
 ## Tests / CI
 
-- `tests/cc_env_shim.lua` (os.epoch/colors/package.path-Kompatibilitaet fuer Host-Lua),
-- `tools/run_lua_tests.sh`/`tools/run_python_tests.sh` in `.github/workflows/offline-tests.yml` eingebunden,
-- explizite, kategorisierte Ausschlussliste fuer 77 Lua- und 9 Python-Tests (`tests/known_failing_*_tests.txt`),
-- 5 Tests mit fest kodiertem `/workspace/...`-Pfad auf repo-relative Pfade korrigiert (2 laufen dadurch jetzt grün).
+- `.github/workflows/offline-tests.yml` startet Offline-Validator, Lua-Runner und Python-Runner.
+- Jeder nicht ausgeschlossene Test muss erfolgreich sein.
+- Ausschlüsse sind in `tests/known_failing_lua_tests.txt` und `tests/known_failing_python_tests.txt` sichtbar dokumentiert.
 
-## RT
+---
+
+# 3. FUEL-P0.1 – Frische FUEL-Installation kann im Config-Normalizer abstürzen
+
+## Status
+
+**KRITISCH OFFEN**
+
+## Bestätigter Fehler
 
 - `RECEIVE_TIMEOUT` von 0.5s auf 0.1s gesenkt — Control-Tick läuft jetzt mit 10 Hz statt 2 Hz,
 - `reactor_adjust_interval`/`reactor_adjust_interval_individual` von 5.0s/1.0s auf 0.10s gesenkt,
@@ -130,166 +140,233 @@ Erledigte historische Aufgaben wurden entfernt oder in kurze Referenzdateien aus
 - Capability-Cache berechnet neue Geräte jetzt gezielt statt bei jeder Bindungsänderung alle gebundenen Geräte neu, entfernt abgehängte Geräte statt sie für immer im Cache zu behalten,
 - `get_device_caps()` normalisiert Singular- ("reactor"/"turbine") und Plural-Kind-Namen ("reactors"/"turbines") auf denselben Cache-Schlüssel,
 - Discovery-Scan verlangsamt sich nach 3 unveränderten Scans in Folge auf effektiv 60s statt 10s, springt bei echter Attach-/Detach-Änderung sofort zurück auf die normale Kadenz.
-
-## Shared Runtime
-
-- Service-Manager ruft `tick()` bei Event-getriebenen Aufrufen jetzt nur noch für Services auf, die sich explizit über `wants_events = true` angemeldet haben,
-- COMMS und UI melden sich standardmäßig selbst an; rollenspezifische Event-Listener (`valve_channel`, `valve_ack_listener`, `fuel_status_overhear`) melden sich gezielt an,
-- Discovery/Telemetry/Alert/Matrix-Sampling und rein periodische Ad-hoc-Services laufen nur noch in ihrem konfigurierten Intervall, nicht mehr zusätzlich bei jedem Modem-/Monitor-/Maus-/Tastenevent,
-- periodischer Tick (`event == nil`) bleibt für alle Services unverändert, `inter_service_hook` (ENERGY-Heartbeat-Interleaving) unberührt.
-
-## LOG Collector
-
-- persistente Batch-Writes,
-- ACK erst nach bestätigtem Write,
-- sofortiger Flush für wichtige Fehlerlevel,
-- O(1)-Dedupe-Ringbuffer,
-- ein normaler ACK-Sendeweg,
-- rate-limitierte UI-Redraws bei Burstverkehr,
-- Renderer ohne Laufzeit-Quelltextpatch: `draw()` ruft ein normales `M.render(ctx)`-Modul per `require()` auf, `mockup_main.lua` waehlt nur noch einen globalen Renderer-Selektor statt `main.lua` als Text zu lesen und zu patchen; sichtbarer Fallback bei fehlendem oder abstuerzendem Renderer (LOG-P2, siehe Abschnitt 10).
-
----
-
-# 3. GLOBAL-P0 – Benutzerkonfiguration updatesicher erhalten
-
-## Status
-
-**BEHOBEN (2026-07-14)**
-
-Der Installer sicherte zuvor nur eine kleine feste Dateiliste und löschte danach `/xreactor` vollständig.
-
-Nicht generell geschützt sind unter anderem:
-
-```text
-config/master.lua
-config/rt.lua
-config/energy.lua
-config/water.lua
-config/fuel.lua
-config/reprocessor.lua
-config/valve.lua
-config/fuel_routes.lua
-config/reproc_routes.lua
-config/remote_update.lua
-weitere Registry-, Layout- und Benutzerdateien
-```
-
-## Umsetzung
-
-1. `/xreactor/config` wird rekursiv vollständig eingelesen und als eine Datei nach `/xreactor_recovery/config_backup.lua` geschrieben (außerhalb von `/xreactor`), bevor irgendetwas gelöscht wird.
-2. Das Backup wird sofort zurückgelesen und Eintrag für Eintrag byte-genau mit dem Original verglichen; bei jeder Abweichung bricht der Installer mit `error()` ab, **bevor** `fs.delete(INSTALL_ROOT)` erreicht wird.
-3. Denylist statt Allowlist: nur `.xr_tmp`/`.xr_prev`-Zwischendateien werden vom Restore ausgeschlossen, alles andere (auch zukünftige, heute unbekannte Configdateien) bleibt erhalten.
-4. Sofort nach Neuanlage von `/xreactor` werden `role.lua`, `remote_update.lua` und `node_id.txt` wiederhergestellt (Recovery-Fall bei Abbruch während des Downloads).
-5. Nach erfolgreicher Installation wird der gesamte Config-Bestand wiederhergestellt, jede Datei erneut gelesen und mit dem Backup verglichen; das Recovery-Backup wird nur bei vollständigem Erfolg gelöscht.
-6. Configschema-Versionierung/Default-Migration existiert bereits pro Node über `core/utils.lua` (`utils.load_config` + `migrate_config`/`merge_defaults`) und wird durch den Restore nicht berührt.
-7. Identischer Fix in `xreactor/installer/init.lua` **und** im tatsächlich ausgeführten Live-Pfad in `/installer` (inkl. eingebetteter `init_src`-Kopie) angewendet — beide Installationspfade waren zuvor unabhängig voneinander betroffen.
-
-Betroffene Dateien: `xreactor/installer/init.lua`, `installer`.
-
-## Abnahme (Regressionscheckliste)
-
-Für jede Rolle:
-
-- Benutzerwerte ändern,
-- Auto-Update/Reinstall ausführen,
-- neu starten,
-- Werte und Routen bleiben erhalten,
-- neue Defaultfelder werden ergänzt,
-- defekte Config erzeugt sichtbare Warnung und sicheren Fallback.
-
-Funktional gegen ein Mock-Dateisystem verifiziert (Backup/Restore/Denylist/Verify-Abort); Ingame-Nachweis mit echter Hardware steht noch aus.
-
----
-
-# 4. SHARED-P0 – Event- und Timerpfad trennen
-
-## Status
-
-**BEHOBEN (2026-07-14)**
-
-Die gemeinsame Support-Runtime führte bei Modem-, Monitor-, Maus- und Key-Events weiterhin den gesamten Service-Manager aus. Dadurch konnte Eventverkehr zusätzliche Control-, Discovery-, UI-, Telemetrie- oder Maintenance-Zyklen erzeugen.
-
-## Umsetzung
-
-Statt der ursprünglich skizzierten `handle_event(event)`/`tick_due(now_ms)`-Doppel-API wurde eine kleinere, risikoärmere Lösung mit identischer Wirkung gewählt: `services/service_manager.lua`'s `manager:tick(dt, event)` prüft jetzt bei jedem Event-getriebenen Aufruf (`event ~= nil`) pro Service ein explizites `service.wants_events == true`-Opt-in, bevor dessen `tick()` überhaupt aufgerufen wird. Periodische Aufrufe (`event == nil`, aus dem Timer-Zweig jeder Event-Loop) bleiben für alle Services vollständig unverändert.
-
-- `comms_service.lua` und `ui_service.lua` melden sich selbst standardmäßig an (`wants_events = true` im Konstruktor) — beide brauchen sofortige Reaktion auf Netzwerk- bzw. UI-Events.
-- Die rollenspezifischen Ad-hoc-Services, die echte Event-Reaktivität benötigen, melden sich gezielt selbst an: `valve_channel` (VALVE), `valve_ack_listener` (FUEL, REPROCESSOR), `fuel_status_overhear` (FUEL).
-- Rein periodische Services (Discovery, Telemetry, Alert, Matrix-Sampling sowie die Ad-hoc-Services `valve_failsafe`, `valve_ack_retry`, `ampel_render`, MASTERs `HOUSEKEEPING`) bekommen kein `wants_events` und werden bei Events komplett übersprungen — sie liefen ohnehin schon selbst intervallbasiert (`due`/`last_*`-Prüfung), laufen jetzt aber tatsächlich nur noch in ihrem konfigurierten Intervall statt zusätzlich bei jedem Event erneut.
-- `inter_service_hook` (von ENERGY für Heartbeat-Interleaving genutzt) feuert weiterhin unverändert für jeden Service bei jedem `tick()`-Aufruf, unabhängig vom Event-Gating.
-
-Betroffene Dateien: `xreactor/services/service_manager.lua`, `xreactor/services/comms_service.lua`, `xreactor/services/ui_service.lua`, `xreactor/nodes/valve/main.lua`, `xreactor/nodes/fuel/main.lua`, `xreactor/nodes/fuel/fuel_status_network.lua`, `xreactor/nodes/reprocessor/main.lua`. `nodes/support/runtime.lua` selbst musste nicht geändert werden, da das Gating vollständig im Service-Manager und den einzelnen Services lebt.
-
-## Anforderungen (Abnahme)
-
-- Modemempfang und ACK sofort — erhalten (`comms.wants_events = true`).
-- periodische Arbeit ausschließlich zeitbasiert — erreicht (Discovery/Telemetry/Alert/Matrix-Sampling laufen nur noch auf dem periodischen Pfad).
-- UI-Events nur an UI-relevante Services — erreicht.
-- 1.000 Modemevents erzeugen keine 1.000 Controlticks — funktional gegen echte Service-Objekte verifiziert (1000 simulierte Events lösten 0 Discovery-/Telemetry-Ticks aus, nur die angemeldeten Services liefen).
-- „Events koaleszieren" / gezielte Attach-Detach-Discovery-Kopplung: nicht Teil dieser Umsetzung, weiterhin offen (ENERGY-spezifisch, siehe Abschnitt 7).
-
----
-
-# 5. RT-P0 – feste 10-Hz-Control-Cadence
-
-## Status
-
-**TEILWEISE BEHOBEN (2026-07-14)**
-
-Der RT-Control-Service besaß keine eigene monotone Deadline und lief über den gemeinsamen Support-Eventloop, dessen periodischer Zweig durch `RECEIVE_TIMEOUT = 0.5` (2 Hz) gedrosselt war; die Reaktor-Regelung selbst besaß zusätzlich ein eigenes, viel zu langsames inneres Intervall (`reactor_adjust_interval = 5.0s` single-reactor, `1.0s` multi-reactor).
-
-Verbindliche Vorgabe:
+`nodes/fuel/config_normalizer.lua` initialisiert:
 
 ```lua
-scheduler_interval_s = 0.05
-reactor_control_interval_s = 0.10
-turbine_control_interval_s = 0.10
+lg.reactors
+lg.waste
 ```
 
-Details stehen in:
+aber nicht:
 
-[`CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md`](CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md)
+```lua
+lg.destinations
+```
 
-## Umsetzung
+Anschließend wird ausgeführt:
 
-1. `nodes/rt/main.lua`: `RECEIVE_TIMEOUT` von `0.5` auf `0.1` gesenkt — der komplette Scheduler-Zyklus (inkl. Control-Tick) läuft jetzt mit 10 Hz statt 2 Hz. Andere periodische Services (Discovery/Telemetry/UI) sind über ihre eigene `interval`-/`due`-Prüfung unverändert von dieser Änderung entkoppelt.
-2. `nodes/rt/config.lua`: `reactor_adjust_interval` von `5.0` auf `0.10` gesenkt, `reactor_adjust_interval_individual` explizit auf `0.10` gesetzt (vorher nur impliziter `1.0`-Fallback). Gilt für Erstinstallationen und fehlende/ungültige Werte; bereits bestehende, persistierte `config/rt.lua`-Dateien behalten ihren alten Wert bis zur manuellen Anpassung (kein automatisches Erzwingen, siehe GLOBAL-P0 — Config-Werte sind Nutzerwerte).
-3. **Kritischer Begleitfix** (ohne den P3 nicht sicher umsetzbar gewesen wäre): `nodes/rt/turbine_control.lua`s `setTurbineFlow()`-Aufruf war bisher **unbedingt** bei jedem Control-Tick aktiv, unabhängig davon ob sich der Ziel-Flow geändert hatte (im Gegensatz zu den Rod-Writes, die bereits korrekt dedupliziert waren). Bei 10 Hz statt 2 Hz hätte das reale Hardware-Writes verfünffacht. Jetzt wird der Write übersprungen, wenn `requested_flow` exakt dem zuletzt erfolgreich geschriebenen Wert entspricht; Overspeed (erzwingt Flow 0) bleibt unverändert sofort wirksam, da der Zielwert bereits vor der Dedup-Prüfung auf 0 gesetzt wird.
+```lua
+for i, dest in ipairs(lg.destinations) do
+```
 
-Betroffene Dateien: `xreactor/nodes/rt/main.lua`, `xreactor/nodes/rt/config.lua`, `xreactor/nodes/rt/reactor_control.lua`, `xreactor/nodes/rt/turbine_control.lua`.
+Die aktuelle FUEL-Defaultkonfiguration enthält ebenfalls kein `destinations`-Feld.
 
-## Noch offen
+## Folge
 
-- Kein eigener 20-Hz-Scheduler-Layer, der explizit entscheidet welche Teilregelung fällig ist (Architekturvorgabe Abschnitt 8) — stattdessen wird die gesamte Event-Loop-Periode auf 10 Hz gesenkt. Funktional äquivalent für die geforderte Kernmetrik (10 Hz Control-Tick, kein Event-Sturm-Effekt dank SHARED-P0), aber kein separates 20-Hz-„billiges" Scheduler-Layer.
-- Vorgezogener, koaleszierter Tick bei wichtigen Commands (`next_control_due = math.min(next_control_due, now)`) ist nicht implementiert.
-- Turbinen-Coil-Writes (`setInductorEngaged`) sind weiterhin nicht auf identische Werte dedupliziert (siehe RT-P1 unten).
-- 25-Turbinen-Lasttest mit dokumentierten Vorher-/Nachher-Werten steht aus (Ingame-Messung nötig).
+Bei einer frischen Installation beziehungsweise einer Config ohne `logistics.destinations` kann die Node bereits während der Normalisierung mit `ipairs(nil)` abbrechen.
 
-## Anforderungen
+## Verbindlicher Fix
 
-- Safety zuerst — unverändert erhalten (SAFE-Tick-Pfad in `updateReactorControl` läuft vor der Intervallprüfung).
-- Rod- und Flow-Regler mit eigenen Deadlines — teilweise: gemeinsamer 10-Hz-Scheduler-Zyklus statt vollständig getrennter Deadlines pro Regler.
-- keine Nachhol-Bursts — bereits vorher korrekt (`if now - last < interval then return end`, kein `while`-Backlog).
-- Commands markieren höchstens einen koaleszierten vorgezogenen Tick — nicht umgesetzt.
-- Writes zusätzlich change-/cooldown-basiert — Rod-Writes bereits vorher korrekt; Turbinen-Flow-Writes jetzt ebenfalls korrekt (siehe Umsetzung Punkt 3).
-- Overspeed und SCRAM umgehen normale Cooldowns — funktional verifiziert (siehe Testnotiz unten).
-- Ticklücke und Laufzeit messbar — nicht Teil dieser Umsetzung.
+```lua
+if type(lg.destinations) ~= "table" then lg.destinations = {} end
+if type(lg.sources)      ~= "table" then lg.sources      = {} end
+if type(lg.routes)       ~= "table" then lg.routes       = {} end
+```
 
-Funktional verifiziert (Mock-Test gegen den echten Turbinen-Flow-Dedup-Code): 50 aufeinanderfolgende Ticks mit stabilem Zielwert erzeugen 0 Hardware-Writes; ein Overspeed-bedingter Sprung auf Flow 0 schreibt sofort ohne Verzögerung; ein fehlgeschlagener Write hinterlässt keinen falschen "bereits geschrieben"-Zustand und wird beim nächsten Tick erneut versucht.
+Danach alle später iterierten Felder vor der Iteration normalisieren.
+
+## Pflicht-Test
+
+- FUEL mit leerer Benutzerconfig starten.
+- FUEL mit aktueller Quelldefaultconfig starten.
+- FUEL mit `logistics={}` starten.
+- Alle drei Varianten müssen ohne Fehler bis `Node ready` gelangen.
 
 ---
 
-# 6. RT-P1 – verbleibende Hotpath-Arbeit
+# 4. INSTALL-P0.1 – REPROCESSOR wird unvollständig installiert
 
 ## Status
 
-**WEITGEHEND BEHOBEN (2026-07-15)** — von den fünf ursprünglich offenen Folgepunkten sind vier behoben, einer (gemeinsamer UI/Telemetrie-Snapshot) bewusst nur dokumentiert und zurückgestellt (siehe Nachtrag unten).
+**KRITISCH OFFEN**
 
-- identische `setActive`-, Flow-, Coil- und Rod-Writes vollständig unterdrücken:
-  - **Flow** (Turbine): BEHOBEN, siehe RT-P0-Abschnitt oben.
-  - **Rod**: war bereits vorher korrekt (`ctrl.last_applied == clamped`-Schutz).
-  - **Coil/Inductor**: war bereits vorher korrekt (`engaged == ctrl.inductor_engaged`-Schutz).
-  - **setActive** (Reaktor + Turbine): **BEHOBEN (2026-07-14)**. `reactor_control.lua`s `M.setReactorActive()` und `turbine_control.lua`s `M.setTurbineActive()` riefen `setActive()` bisher bei jedem Control-Tick unbedingt auf, obwohl der Aufrufer in `turbine_control.lua`s `updateControl()` immer denselben Zielwert (`true`) verlangt — seit der 10-Hz-Cadence (RT-P0) wären das 10 statt vorher 2 redundante Hardware-Writes pro Sekunde und Gerät gewesen. Beide Funktionen akzeptieren jetzt einen optionalen `ctrl`-Parameter (`reactor_ctrl[name]`/`turbine_ctrl_store[name]`) und unterdrücken den Write bei unverändertem Zielwert; die beiden tatsächlichen Hotpath-Aufrufstellen in `updateControl()` übergeben jetzt `ctrl`. Rückwärtskompatibel: andere Aufrufer ohne `ctrl` (z. B. `module_lifecycle.lua`s `M.set_reactors_active`/`M.set_turbines_active`, event-getriebene Zustandswechsel, nicht Teil des 10-Hz-Pfads) verhalten sich unverändert. `module_lifecycle.lua`s `M.process_startup()` (ebenfalls unbedingte `setActive`-Aufrufe) wird aktuell von keiner Stelle im Code aufgerufen (toter Pfad) — nicht angefasst, da nicht erreichbar.
+## Bestätigter Fehler
+
+`nodes/reprocessor/main.lua` benötigt:
+
+```lua
+require("nodes.reprocessor.feed_router")
+```
+
+Der Manifest-Eintrag für:
+
+```text
+nodes/reprocessor/feed_router.lua
+```
+
+besitzt keinen passenden `required_for={"REPROCESSING"}`-Scope.
+
+`installer/manifest.lua` nimmt Rollen-Dateien jedoch nur auf, wenn:
+
+- `always=true`, oder
+- `required_for` zur gewählten Rolle passt.
+
+## Folge
+
+Eine vollständige REPROCESSING-Installation beziehungsweise ein Reinstall kann `main.lua` installieren, `feed_router.lua` aber auslassen. Der Start endet dann am fehlenden `require()`.
+
+## Verbindlicher Fix
+
+- Manifest-Eintrag mit `required_for={"REPROCESSING"}` versehen.
+- denselben Fix in der eingebetteten Manifestkopie des monolithischen `/installer` anwenden.
+- zusätzlich einen automatischen Entrypoint-Require-Coverage-Test einführen.
+
+## Pflicht-Test
+
+1. leeres Dateisystem,
+2. Rolle REPROCESSING wählen,
+3. Installationsdateiliste erzeugen,
+4. alle statischen `require()`-Abhängigkeiten von `nodes/reprocessor/main.lua` müssen vorhanden sein,
+5. Start mit Mock-Peripherals darf nicht an fehlender Datei scheitern.
+
+---
+
+# 5. ROUTER-P0 – Export erst nach vollständig bestätigter Ventilstellung
+
+## Status
+
+**KRITISCH OFFEN**
+
+## Bestätigter Safetyfehler
+
+Die neue tick-getriebene State-Machine startet nach der kurzen Settle-Zeit den Export, obwohl ein Ventil-ACK noch `pending` sein kann. Die Settle-Zeit liegt deutlich unter dem ACK-Timeout.
+
+Damit kann der Export beginnen, bevor bestätigt ist, dass das Zielventil wirklich offen ist.
+
+Zusätzlich werden derzeit primär Ventile des geöffneten Zielpfads als ACK-kritisch betrachtet. Das erfolgreiche Blockieren aller Nebenwege ist jedoch ebenso sicherheitsrelevant.
+
+## Sicherheitsregel
+
+Export ist ausschließlich erlaubt, wenn für **alle betroffenen Ventile** gilt:
+
+```text
+ACK empfangen
+applied == true
+confirmed_state == requested_state
+Zielpfad offen
+alle Nebenpfade blockiert
+ACK nicht stale
+```
+
+## Ziel-State-Machine
+
+```text
+IDLE
+REQUEST_BLOCK_ALL
+WAIT_BLOCK_ACKS
+REQUEST_OPEN_TARGET
+WAIT_OPEN_ACKS
+WAIT_SETTLE
+EXPORT
+HOLD_OPEN
+REQUEST_BLOCK_FINAL
+WAIT_FINAL_ACKS
+COMPLETE / ERROR
+```
+
+## Abbruchbedingungen
+
+- irgendein NACK,
+- irgendein Timeout,
+- VALVE offline/stale,
+- Zielventil nicht bestätigt offen,
+- irgendein Nebenventil nicht bestätigt blockiert,
+- MASTER-/Standby-/Shutdown-Abbruch,
+- Exportcallback-Fehler.
+
+Bei jedem Abbruch:
+
+```text
+kein Export
+bestmöglich block_all
+Fehler sichtbar in UI/Telemetrie/Log
+Transaktion endet kontrolliert
+```
+
+---
+
+# 6. FUEL-P0.2 – Async-Lieferung verliert `current_request`
+
+## Status
+
+**KRITISCH OFFEN**
+
+## Bestätigter Fehler
+
+FUEL setzt vor dem Transaktionsstart ein `current_request`-Objekt. Der spätere Exportcallback greift darauf zu. Direkt nach dem erfolgreichen Start der asynchronen Transaktion wird `current_request` jedoch wieder auf `nil` gesetzt.
+
+Wenn der Callback später ausgeführt wird, kann ein Nil-Zugriff entstehen.
+
+Zusätzlich werden Exportmenge, Erfolgsstatus und Zykluslog in lokalen Variablen nach dem Rücksprung aus dem ursprünglichen Tick verändert. Diese Werte werden dadurch nicht zuverlässig in Statistik und Log übernommen.
+
+## Verbindlicher Fix
+
+Die Transaktion bekommt einen dauerhaft lebenden Kontext:
+
+```lua
+transaction = {
+  request = request,
+  reactor = reactor,
+  started_ts = now,
+  exported = 0,
+  state = "ROUTING",
+}
+```
+
+Callbacks dürfen nur diesen Transaktionskontext ändern. `current_request` wird erst bei `COMPLETE` oder `ERROR` entfernt.
+
+Statistik und Zykluslog werden im Abschlusscallback geschrieben, nicht im Starttick.
+
+## Pflicht-Tests
+
+- erfolgreicher asynchroner Export,
+- Exportcallback-Fehler,
+- ACK-Timeout vor Export,
+- Shutdown während `WAIT_OPEN_ACKS`,
+- korrekte Exportmenge in Statistik,
+- `current_request` bleibt bis zum Abschluss sichtbar.
+
+---
+
+# 7. FUEL/REPROC-P0.3 – Ungültiges Routing darf nie in direkten Export fallen
+
+## Status
+
+**KRITISCH OFFEN**
+
+## Bestätigter Fehler
+
+Der FUEL-Logistikrouter entscheidet vor dem Transaktionsstart anhand von:
+
+```lua
+rs:route_count() > 0
+```
+
+ob geroutet oder direkt exportiert wird.
+
+Ein ungültiger Baum kann null aktive Routen ergeben. Dadurch wird `begin_transaction()` gar nicht aufgerufen und dessen Invalid-Tree-Schutz umgangen. Stattdessen kann direkter Export erfolgen.
+
+**WEITGEHEND BEHOBEN (2026-07-15)** — von den fünf ursprünglich offenen Folgepunkten sind vier behoben, einer (gemeinsamer UI/Telemetrie-Snapshot) bewusst nur dokumentiert und zurückgestellt (siehe Nachtrag unten).
+Beim REPROCESSOR besteht der gleiche Sicherheitsgrundsatz: Eine vorhandene, aber unlesbare oder ungültige persistente Routendatei darf nicht wie „Routing wurde nie konfiguriert“ behandelt werden.
+
+## Verbindliche Zustände
+
+```text
+ROUTING_NOT_CONFIGURED
+ROUTING_VALID
+ROUTING_INVALID
+ROUTING_REQUIRED_BUT_EMPTY
+```
 
 ## Umsetzung (2026-07-15, Nachtrag)
 
@@ -297,118 +374,193 @@ Funktional verifiziert (Mock-Test gegen den echten Turbinen-Flow-Dedup-Code): 50
 - **Singular-/Plural-Kind-Namen normalisieren**: **BEHOBEN.** Die Discovery-/Binding-Logik (`binding.lua`, Modul-`type`-Felder) verwendet durchgehend den Singular (`"reactor"`/`"turbine"`), während `capability_cache`/`get_device_caps()` intern den Plural (`"reactors"`/`"turbines"`) als Cache-Schlüssel erwarten. Alle bestehenden Aufrufstellen trafen zufällig die richtige Form, aber ein künftiger Aufruf mit dem im Rest des Codes üblichen Singular hätte still einen separaten, nie befüllten Cache-Namensraum erzeugt (kein Fehler, aber der Cache griffe nie). `turbine_control.lua`s `get_device_caps()` normalisiert jetzt beide Schreibweisen auf denselben Cache-Schlüssel. Funktional verifiziert (`tests/rt_get_device_caps_kind_normalization_test.lua`): singularer und pluraler Aufruf für dasselbe Gerät treffen denselben Cache-Eintrag, kein zusätzlicher Namensraum entsteht.
 - **Gemeinsamer nicht-sicherheitskritischer Snapshot für UI und Telemetrie**: **UNTERSUCHT, NICHT UMGESETZT (bewusst zurückgestellt).** Bestätigt: `main.lua`s `build_status_payload()` (Telemetrie/Master-Payload) und `monitor_ui.lua`s `M.update()` → `M.update_status_snapshot()` (Monitor-Anzeige) bauen unabhängig voneinander je einen vollen Geräte-Snapshot pro Tick, jeder mit eigenem vollständigem `reactor_adapter.inspect()`/`turbine_adapter.inspect()`-Durchlauf über ALLE gebundenen Geräte — `status_snapshot.lua`s `build_turbine_snapshots`/`build_reactor_snapshots` einerseits, `monitor_ui.lua`s `collect_reactor_temp_stats`/`build_turbine_status_details`/`build_reactor_status_details` andererseits. `nodes/rt/startup_diagnostics.lua` ruft zusätzlich `ctx.update_status_snapshot()` auf einem dritten Pfad. Das ist eine echte, aber rein durch Performance motivierte Redundanz (keine Fehlfunktion, keine falschen Werte) — ein Merge zu einem gemeinsamen Snapshot wäre ein tieferer Eingriff in UI- und Telemetriecode mit echtem Risiko für die Live-Operator-Anzeige, der nur per Mock-Test (kein CC:Tweaked/Minecraft verfügbar) abgesichert werden könnte. Auf Nutzerentscheidung hin bewusst nicht umgesetzt; präzise dokumentiert für eine spätere Runde mit Ingame-Verifikationsmöglichkeit.
 - **Stabilen Discovery-Default nach erfolgreichem Boot verlangsamen**: **BEHOBEN.** `discover()` lief bisher fest alle `config.scan_interval` (10s) für immer, unabhängig davon ob sich die gebundenen Geräte seit Ewigkeiten nicht mehr geändert hatten — jeder Lauf scannt `peripheral.getNames()` plus `getMethods()`/`getType()`/`adapter.inspect()` für jedes sichtbare Gerät. Nutzt den bereits vorhandenen `should_discover`-Erweiterungspunkt von `services/discovery_service.lua` (keine Änderung am geteilten Service nötig, der auch von WATER/FUEL/etc. genutzt wird): nach 3 unveränderten Scans in Folge (`binding_signature` bleibt gleich) wird nur noch jeder 6. fällige Scan tatsächlich ausgeführt (effektiv 60s statt 10s im stabilen Zustand); eine echte Bindungsänderung (Attach/Detach) setzt den Zähler sofort auf die normale Kadenz zurück. Funktional verifiziert (`tests/rt_discovery_stable_slowdown_test.lua`): Boot-Phase scannt bei jedem fälligen Tick, nach Erreichen der Stabilitätsschwelle läuft genau 1 von 6 fälligen Ticks, eine echte Änderung setzt sofort zurück.
+Direkter Export ist nur zulässig, wenn ausdrücklich konfiguriert ist:
 
-Funktional verifiziert (Mock-Test gegen die echten, aus den Quelldateien extrahierten Funktionen): erster Aufruf schreibt, 20 wiederholte Aufrufe mit demselben Zielwert erzeugen 0 weitere Writes, ein echter Wertwechsel schreibt sofort, Aufrufe ohne `ctrl` bleiben unbedingt (Rückwärtskompatibilität), fehlende `setActive`-Capability verhält sich wie zuvor.
-
----
-
-# 7. ENERGY-P0 – Schedulergruppen isolieren
-
-## Status
-
-**WEITGEHEND ERLEDIGT (verifiziert 2026-07-14, kein Codeaenderung noetig)**
-
-Bei genauer Prüfung (nicht nur oberflächlicher Statuscheck) ist diese Anforderung bereits durch bestehenden Code erfüllt — vermutlich aus einer früheren, in diesem Dokument nicht nachgetragenen Iteration. Kein Fix in dieser Runde nötig; unten dokumentiert, WAS bereits welche Gruppe abdeckt, damit der Status nicht erneut als offen missverstanden wird.
-
-Zielgruppen und ihre tatsächliche Umsetzung:
-
-```text
-1. Comms + Heartbeat + Commands  -> nodes/energy/heartbeat.lua, eigene Coroutine
-2. Matrix-Sampling               -> nodes/energy/matrix.lua, eigene Coroutine
-3. Storage-Sampling               -> services:add(matrix_sampling_service "STORAGE_SAMPLE"),
-                                      eigener Service mit last-good-Cache
-4. UI + Telemetrie                 -> services:add(ui_service "UI") + telemetry_service "TELEMETRY",
-                                      eigener Model-Cache mit stale-Kennzeichnung
-5. Discovery                       -> services:add(discovery_service "DISCOVERY"),
-                                      eigener Due-Check, in Tick-Reihenfolge vor Matrix
+```lua
+routing_required = false
+allow_direct_export = true
 ```
 
-`nodes/energy/main.lua` startet über `parallel.waitForAny(heartbeat_mod.run, matrix_mod.run)` zwei komplett getrennte Coroutinen. `heartbeat.lua` ruft `ctx.comms:handle_event(event)` und `ctx.comms.tick()` **direkt**, unabhängig vom gemeinsamen Service-Manager — ein blockierender Matrix-Peripheral-Call in der anderen Coroutine (`matrix.lua`, die das explizit darf, siehe deren Kopfkommentar "DARF blockieren — Peripheral-Calls können 1-4s dauern") verzögert Comms/Heartbeat/Commands dadurch strukturell nicht. DISCOVERY und STORAGE_SAMPLE sind im gemeinsamen Service-Manager VOR MATRIX_SAMPLE registriert und damit in jedem Zyklus unabhängig von dessen Laufzeit bereits bedient, bevor Matrix überhaupt an der Reihe ist. `storage_snapshot_runtime.lua` hält pro Storage einen `last_good`-Wert plus Backoff für durchgehend fehlschlagende Geräte (ENERGY-P1, bereits umgesetzt). `ui_model.lua` cached das gebaute UI-Model nach Alter (`max_age_ms`) und gibt bei einer noch nicht fälligen Aktualisierung einfach das letzte Model zurück, statt neu (und ggf. blockierend) zu bauen.
-
-## Bekannte, verbleibende Einschränkung
-
-Ein einzelner, tatsächlich synchron blockierender Peripheral-Call (z.B. 4s) friert für seine gesamte Dauer die komplette Lua-VM des Computers ein — CC:Tweaked/Lua-Coroutinen sind kooperativ, nicht präemptiv, `parallel.waitForAny` kann eine andere Coroutine nicht resumen, solange die aktive nicht an einen `os.pullEvent()`/`os.sleep()`-Yield-Punkt zurückkehrt. Das ist eine Plattformgrenze, keine Codeschwäche, und in reinem Lua nicht auflösbar. Die bestehende Budget-/Zeitlimit-Logik in `matrix_snapshot_runtime.lua` (`matrix_metric_call_budget`, `metric_time_budget_ms`) begrenzt, wie VIELE solcher Calls pro Tick versucht werden, kann aber die Dauer eines einzelnen, bereits laufenden Calls nicht unterbrechen.
-
-Kleinere, nicht sicherheitsrelevante Redundanz: `comms` ist sowohl direkt in `heartbeat.lua` als auch zusätzlich im gemeinsamen Service-Manager registriert (`services:add(comms)`), wodurch `comms:tick()` gelegentlich doppelt läuft. Harmlos, aber nicht bereinigt.
-
-## Pflicht-Test (Ergebnis der Codeanalyse, keine Ingame-Messung)
-
-Einen Matrixadapter mehrere Sekunden blockieren lassen:
-
-- Heartbeat bleibt im erlaubten Intervall — erfüllt (eigene Coroutine, direkter `comms.tick()`-Aufruf).
-- Commands werden verarbeitet — erfüllt (direkter `comms:handle_event()`-Aufruf in derselben Coroutine).
-- last-good Storage bleibt sichtbar — erfüllt (`storage_snapshot_runtime.lua`).
-- UI zeigt stale statt einzufrieren — erfüllt (`ui_model.lua`-Cache + `stale`-Flag).
-- Discovery kann später weiterlaufen — erfüllt (eigenständiger Service, eigener Due-Check, unabhängig vom Matrix-Zustand).
-
-Ingame-Nachweis mit einem künstlich verlangsamten Matrix-Adapter steht weiterhin aus (nur Codeanalyse, kein Laufzeittest in dieser Runde).
+Sobald eine Routendatei vorhanden ist, ein Baum konfiguriert wurde oder Routing als erforderlich gilt, führt jeder ungültige/leere Zustand zu hartem Exportstopp.
 
 ---
 
-# 8. FUEL / REPROCESSOR – Routing nicht blockierend machen
+# 8. VALVE-P0 – Fehlgeschlagener Write darf nicht dedupliziert abgeschlossen werden
 
 ## Status
 
-**BEHOBEN (2026-07-14)**
+**KRITISCH OFFEN**
 
-Der gemeinsame Router (`nodes/fuel/redstone_router.lua`, von FUEL und REPROCESSOR geteilt) verwendete blockierende Wartephasen: `route_and_act()` rief zwei `os.sleep()`-Aufrufe auf (Settle-Zeit vor dem Export, Offenhaltezeit danach), zusammen üblicherweise 2.05–2.4s **pro Lieferung**. Da FUEL/REPROCESSOR als einzelne Coroutine laufen (kein `parallel.waitForAny`-Split wie bei ENERGY/RT), fror das den gesamten Node für diese Zeit ein — Heartbeat, Commands, UI und Failsafe eingeschlossen. FUELs Lieferschleife konnte das zusätzlich für mehrere Reaktoren pro Zyklus hintereinander tun (mehrere Sekunden bis weit über zehn Sekunden Blockade in einem einzigen Aufruf).
+## Bestätigter Fehler
 
-## Umsetzung
+Die VALVE-Node merkt eine `command_id`, bevor feststeht, ob `apply_valve()` erfolgreich war.
 
-`route_and_act()` wurde durch eine tick-getriebene Zustandsmaschine ersetzt:
+Schlägt der physische Write fehl, sendet der Router dieselbe Command-ID erneut. Die VALVE-Node erkennt das Kommando dann als bereits gesehen und führt keinen erneuten Write aus.
+
+## Folge
+
+Retry ist ausgerechnet beim Writefehler wirkungslos.
+
+## Verbindlicher Fix
+
+Eine Command-ID wird nur als erfolgreich abgeschlossen gespeichert, wenn:
 
 ```text
-IDLE          -- kein aktiver Transfer (transaction == nil)
-WAIT_SETTLE   -- Pfad geöffnet, wartet auf Settle-Zeit (0.05s lokal / 0.4s Netzwerk-Ventil);
-                 bricht sofort ab (-> block_all), wenn ein beobachtetes SET_VALVE-Kommando
-                 endgültig unbestätigt aufgegeben wird (ACK-Timeout)
-EXPORT        -- Aktions-Callback läuft, sobald Settle-Zeit erreicht ist (Teil des WAIT_SETTLE-Ticks)
-HOLD_OPEN     -- Ventil bleibt für valve_open_ms offen
-COMPLETE/IDLE -- block_all(), Transaktion wird gelöscht, Router wieder frei
-ERROR         -- sofortiger Abbruch (ungültiger Baum, kein Pfad, ACK-Timeout) -> block_all()
+Write erfolgreich
+Istzustand entspricht Sollzustand
+ACK applied=true wurde erzeugt
 ```
 
-- `M:begin_transaction(target_id, action_fn, valve_open_ms)` startet die Transaktion nicht-blockierend und gibt sofort zurück (`true`/`false, reason`).
-- `M:tick(now_ms)` treibt eine laufende Transaktion voran — muss regelmäßig aus dem normalen Event-Loop aufgerufen werden (`nodes/fuel/main.lua`, `nodes/reprocessor/main.lua`, jetzt beide alle ~0.5s), **kein** `os.sleep()` mehr irgendwo im Pfad.
-- Nur eine Transaktion gleichzeitig: ein zweiter `begin_transaction()`-Aufruf während eine läuft wird mit `"busy"` abgelehnt — serialisiert Lieferungen strukturell, ohne separate Warteschlange.
-- `logistics_router.lua`s Lieferschleife (FUEL, mehrere Reaktoren) kaskadiert weiterhin durch Kandidaten mit unzureichendem ME-Bestand, startet aber pro Zyklus höchstens **eine** tatsächliche Ventil-Lieferung (bricht bei `"busy"` sofort ab, da ohnehin kein weiterer Kandidat gleichzeitig über denselben Ventilbaum beliefert werden könnte).
-- `feed_router.lua`s Zyklus (REPROCESSOR) war bereits Ein-Ziel-pro-Tick; nutzt jetzt `begin_transaction()` statt der blockierenden Funktion, überspringt sauber bei `"busy"`.
-- Alter Sicherheitsschutz vollständig erhalten: ungültiger/kaputter Baum verweigert die Aktion weiterhin hart (`invalid_tree`), nur ein genuin nie konfigurierter Baum erlaubt Direkt-Export (`direct_export`).
-- `M:shutdown_now()` als sofortiger Not-Aus-Pfad ergänzt (verwirft eine laufende Transaktion, blockiert augenblicklich alles) — aktuell nicht an einen bestehenden Shutdown-Befehl gebunden, da FUEL/REPROCESSOR keinen solchen Befehl von MASTER kennen; REPROCESSORs bestehender `standby`-Zustand lässt eine laufende Transaktion stattdessen sauber zu Ende laufen (kein neuer Export startet, offene Ventile werden trotzdem fristgerecht wieder blockiert).
-- `M:get_active_transaction()` für Sichtbarkeit ergänzt (Ziel + Zustand); Fehler werden weiterhin per `log("ERROR", ...)`/`warn_once` sichtbar gemacht.
+Fehlgeschlagene Commands benötigen getrennten Zustand:
 
-Betroffene Dateien: `xreactor/nodes/fuel/redstone_router.lua`, `xreactor/nodes/fuel/logistics_router.lua`, `xreactor/nodes/fuel/main.lua`, `xreactor/nodes/reprocessor/feed_router.lua`, `xreactor/nodes/reprocessor/main.lua`.
+```lua
+seen[id] = {
+  requested_high = high,
+  applied = false,
+  last_error = err,
+  attempts = n,
+}
+```
 
-## Anforderungen
+Ein Retry derselben ID muss den Write erneut ausführen, solange `applied ~= true`.
 
-- kein `os.sleep()` im normalen Routingpfad — erfüllt.
-- Heartbeat, Commands, UI und Failsafe bleiben aktiv — erfüllt (kein blockierender Aufruf mehr im gesamten Pfad).
-- ACK-Timeout führt zu `BLOCK_ALL` — erfüllt (siehe `_fail_transaction()`).
-- Shutdown blockiert sofort alle Ventile — teilweise: `shutdown_now()` existiert, ist aber an keinen bestehenden Shutdown-Befehl angebunden (keiner existiert für FUEL/REPROCESSOR); `standby` lässt laufende Transaktionen kontrolliert auslaufen statt abrupt abzubrechen.
-- Lieferungen werden serialisiert oder klar budgetiert — erfüllt (max. eine aktive Transaktion).
-- aktive Transaktion und Fehler sind sichtbar — erfüllt (`get_active_transaction()`, Fehler-Logging).
-
-Funktional verifiziert (Mock-Test gegen den echten State-Machine-Code, siehe `xreactor/nodes/fuel/redstone_router.lua`): kein `os.sleep()`-Aufruf über den gesamten Lebenszyklus; Happy Path (WAIT_SETTLE → Aktion → HOLD_OPEN → block_all/IDLE); zweiter Transaktionsversuch während einer laufenden wird abgelehnt; ACK-Timeout bricht sofort ab statt bis zum Settle-Ende zu warten; nie konfigurierter Baum exportiert direkt; konfigurierter aber ungültiger Baum verweigert die Aktion hart. Ingame-Nachweis mit echter Hardware (Paketverlust, echte Ventil-Latenz) steht weiterhin aus.
+`last_command_ts` darf den Offen-Fail-Safe nur bei einem erfolgreich angewendeten beziehungsweise bestätigten sicheren Kommando verlängern. Ein fehlgeschlagenes BLOCK-Kommando darf ein offenes Ventil nicht weitere 20 Sekunden offen halten.
 
 ---
 
-# 9. MASTER-P1 – mehrere Zielnodes
+# 9. REPROC-P0 – Standby muss aktive Transaktion abbrechen
 
 ## Status
 
-**TEILWEISE BEHOBEN (2026-07-14)**
+**KRITISCH OFFEN**
 
-FUEL-Reserve und WATER-Ziel durften bisher nicht von der zufälligen Tabellenreihenfolge des ersten gefundenen Nodes abhängen — genau das war der Fall.
+## Bestätigter Fehler
 
-## Umsetzung
+REPROCESSOR setzt bei MASTER-Timeout `standby=true`, tickt den gemeinsamen Redstone-Router danach aber weiterhin.
 
-1. `xreactor/master/runtime_loop.lua`: `set_fuel_reserve`/`set_water_target` iterieren jetzt über ALLE Nodes mit passender Rolle (`FUEL_NODE`/`WATER_NODE`) statt beim ersten Treffer per `pairs()` sofort zurückzukehren — analog zum bereits vorhandenen, korrekten Muster von `set_reactor_fill_target` in derselben Datei. Rückgabe ist jetzt `true, sent_count` bzw. `false, "kein X-Node gefunden"`.
-2. `xreactor/master/ui_controller.lua`: die `fuel_reserve_adjust`/`water_target_adjust`-Action-Handler werten den Rückgabewert jetzt aus und melden einen Fehlschlag (kein passender Node) sichtbar über `add_alarm` statt ihn stillschweigend zu verwerfen.
-3. Funktionaler Test `tests/master_runtime_loop_multi_node_reserve_target_test.lua`: extrahiert die echten Funktionen aus `runtime_loop.lua` und verifiziert per Mock, dass bei mehreren Nodes derselben Rolle ALLE das Command erhalten (nicht nur der erste), dass Nodes anderer Rollen es nicht erhalten, und dass der "kein Node gefunden"-Fall korrekt `false` mit passender Fehlermeldung liefert.
+Eine bereits laufende Transaktion kann dadurch nach dem Eintritt in Standby noch aus `WAIT_SETTLE` in den Export wechseln.
+
+## Verbindlicher Fix
+
+Beim Wechsel nach Standby, MASTER_STALE, SAFE oder Shutdown:
+
+```lua
+feed_router:cancel("MASTER_STALE")
+redstone_router:shutdown_now("MASTER_STALE")
+```
+
+Danach:
+
+- keine Exportcallbacks mehr ausführen,
+- alle Ventile bestmöglich blockieren,
+- aktive Transaktion als abgebrochen protokollieren,
+- erst nach bestätigtem MASTER-Reconnect eine neue Transaktion zulassen.
+
+---
+
+# 10. ENERGY-P0 – Matrix-Thread ist nicht vollständig isoliert
+
+## Status
+
+**KRITISCH OFFEN**
+
+## Bestätigter Fehler
+
+`nodes/energy/matrix.lua` ruft weiterhin:
+
+```lua
+ctx.services:tick()
+```
+
+auf. Damit führt der vermeintliche Matrix-Thread nicht nur Matrix-Sampling aus, sondern potenziell:
+
+- Discovery,
+- Storage-Sampling,
+- Matrix-Sampling,
+- Telemetrie,
+- UI,
+- COMMS-Maintenance.
+
+Langsame Matrix-Calls können diese Services im Matrix-Thread gemeinsam verzögern.
+
+## Heartbeatfehler
+
+Nach jedem Matrixdurchlauf wird direkt:
+
+```lua
+ctx.send_heartbeat(ctx.now_ms())
+```
+
+aufgerufen. Die zentrale `send_heartbeat()`-Funktion prüft das konfigurierte Intervall nicht selbst.
+
+Bei `receive_timeout_s=0.5` können dadurch ungefähr alle 0,5 Sekunden Heartbeats gesendet werden, obwohl standardmäßig 2 Sekunden konfiguriert sind. Der separate Heartbeat-Thread existiert zusätzlich.
+
+## Verbindlicher Fix
+
+Der Matrix-Thread ruft ausschließlich einen dedizierten Matrixscheduler auf:
+
+```lua
+matrix_service:tick_due(now)
+```
+
+Keine vollständige `services:tick()`-Ausführung.
+
+Heartbeat nur über:
+
+```lua
+heartbeat:send_if_due(now)
+```
+
+mit einer einzigen zentralen `last_sent_ts`-Quelle.
+
+## Pflicht-Test
+
+Ein künstlicher 4-Sekunden-Matrixcall darf:
+
+- COMMS-Empfang nicht blockieren,
+- Heartbeatabstand nicht vervielfachen,
+- UI-Touch nicht blockieren,
+- Storage-/Discovery-Deadlines nicht unkontrolliert verschieben,
+- keine zusätzlichen Heartbeats erzeugen.
+
+---
+
+# 11. RT-P0 – Bestehende alte Taktwerte migrationssicher ersetzen
+
+## Status
+
+**KRITISCH OFFEN FÜR BESTEHENDE INSTALLATIONEN**
+
+## Bestätigtes Problem
+
+Neue Defaults stehen auf 0,10 Sekunden. Bereits persistierte Werte wie:
+
+```lua
+reactor_adjust_interval = 5.0
+reactor_adjust_interval_individual = 1.0
+```
+
+bleiben aber gültige Zahlen und werden vom Normalizer nicht ersetzt.
+
+Die allgemeine Default-Migration ergänzt nur fehlende Felder; sie ändert keine vorhandenen Altwerte.
+
+## Folge
+
+Neue Installationen können ungefähr mit dem gewünschten Grundtakt arbeiten, aktualisierte Bestandsnodes jedoch weiterhin nur alle 1 beziehungsweise 5 Sekunden.
+
+## Verbindlicher Fix
 
 ## Noch offen (2026-07-15, vertieft untersucht)
+Configschema erhöhen und gezielt migrieren:
 
-Die UI benötigt für eine vollständige Lösung weiterhin:
+```lua
+if old_version < TARGET_VERSION then
+  if value == nil or value == 5.0 then value = 0.10 end
+  if individual == nil or individual == 1.0 then individual = 0.10 end
+end
+```
+
+Benutzerdefinierte bewusst abweichende Werte dürfen nicht blind überschrieben werden. Dafür entweder:
 
 - Auswahl eines KONKRETEN Zielnodes (statt nur "alle Nodes der Rolle" oder "erster Node"), falls mehrere FUEL/WATER-Nodes tatsächlich unterschiedliche Reserven/Ziele haben sollen — würde eine neue Auswahl-UI-Komponente in `master/ui/config_editor.lua` (Live-Operator-Touchscreen) benötigen,
 - gespeicherte beziehungsweise eindeutig nachvollziehbare Auswahl, falls ein konkreter Zielnode eingeführt wird.
@@ -416,47 +568,59 @@ Die UI benötigt für eine vollständige Lösung weiterhin:
 **Echte ACK-/Applied-Bestätigung — genauer untersucht, bewusst nicht umgesetzt.** `core/comms.lua` verfolgt ausstehende Commands zwar bereits intern (`state.inflight[message_id]`, `handle_ack()` löscht den Eintrag bei `ACK_APPLIED` und loggt das Ergebnis), aber es gibt **keine** Callback- oder Abfrage-Schnittstelle, über die ein Aufrufer wie `set_fuel_reserve`/`set_water_target` (synchron in `runtime_loop.lua`) das Ergebnis eines konkreten, vorher gesendeten Commands später erfährt — die Bestätigung landet aktuell ausschließlich als Log-Zeile, nirgendwo abfragbar. Eine echte Lösung bräuchte eine neue Callback-/Ergebnis-Tracking-Schnittstelle in `core/comms.lua` — einem von JEDER Rolle (RT/ENERGY/WATER/FUEL/REPROCESSOR/MASTER/LOG) gemeinsam genutzten Kernmodul. Das ist ein tiefer Eingriff in die gemeinsame Comms-Schicht mit echtem Risiko für alle Rollen, nur per Mock-Test absicherbar (kein CC:Tweaked/Minecraft verfügbar) — dasselbe Risikoprofil wie der zurückgestellte gemeinsame UI/Telemetrie-Snapshot (Abschnitt 6). Auf Basis derselben Entscheidung (siehe dort) bewusst nicht umgesetzt, präzise dokumentiert für eine spätere Runde mit Ingame-Verifikationsmöglichkeit.
 
 Für die typische Konfiguration (genau eine FUEL- und eine WATER-Node) sind alle drei Punkte nicht sicherheitskritisch.
+- bekannte historische Defaultwerte erkennen, oder
+- ein `control_cadence_mode`/explizites Migrationsflag verwenden.
+
+## Pflicht-Metriken
+
+- Control-Ticks/s,
+- Reactor-Regler-Ticks/s,
+- Turbinen-Regler-Ticks/s,
+- maximale Ticklücke,
+- Write-Skips,
+- Deadlineüberschreitungen.
 
 ---
 
-# 10. LOG-P2 – Renderer ohne Sourcecode-Patch
+# 12. INSTALL-P0.2 – Manifest und Dateien müssen aus demselben Commit stammen
 
 ## Status
 
-**BEHOBEN (2026-07-15)**
+**OFFEN**
 
-`nodes/log_collector/mockup_main.lua` las bisher `main.lua` als Text und ersetzte die lokale `draw()`-Funktion anhand fester Marker (`source:find("local function draw()", ...)` + `gsub`).
+## Bestätigtes Problem
 
-## Umsetzung
+Der Installer kann:
 
-1. `xreactor/nodes/log_collector/default_ui.lua` (neu): das bisherige inline `draw()`-Layout aus `main.lua`, unveraendert extrahiert in ein normales Renderer-Modul mit `M.render(ctx)` — exakt dieselbe Schnittstelle wie das bereits vorhandene `mockup_ui.lua`.
-2. `xreactor/nodes/log_collector/main.lua`: `draw()` baut jetzt einen `ctx`-Tisch und ruft das konfigurierte Renderer-Modul ganz normal per `require(RENDERER_MODULE)` auf (Default: `nodes.log_collector.default_ui`). Kein Text-Einlesen, kein `gsub`, kein `load()` eines gepatchten Strings mehr.
-3. Renderer-Auswahl ueber einen einfachen globalen Selektor `_G.XR_LOG_RENDERER_MODULE`, den `mockup_main.lua` vor dem Start setzt — funktional aequivalent zum bisherigen Text-Patch, aber ohne main.lua anzufassen.
-4. Sichtbarer Fallback: schlaegt `require(RENDERER_MODULE)` fehl (Modul fehlt) oder wirft `renderer.render(ctx)` einen Laufzeitfehler, zeigt `draw_fallback()` eine garantiert funktionierende Minimalanzeige (Fehlermeldung, Grundstatus) statt abzustuerzen oder leer zu bleiben; der Fehler wird zusaetzlich per `self_log()` protokolliert.
-5. `nodes/log_collector/mockup_main.lua`: auf 21 Zeilen reduziert — ruft `bootstrap.setup()` (weiterhin noetig, siehe Kommentar in der Datei), setzt den Renderer-Selektor, und fuehrt `main.lua` per `dofile()` unveraendert aus. Keine Text-Manipulation mehr.
-6. Funktionale Tests: `tests/log_collector_draw_renderer_dispatch_test.lua` (Happy Path, fehlendes Modul, Laufzeitfehler im Renderer, Selektor-Override — alle vier Faelle gegen die echten extrahierten Funktionen aus `main.lua`) und `tests/log_collector_default_ui_render_test.lua` (laedt das echte `default_ui.lua`-Modul, prueft `render(ctx)` mit und ohne verfuegbare Disk).
+- das Manifest vom aktuellen `beta`-Branch laden,
+- einen separat ermittelten SHA für Dateien verwenden.
 
-`main.lua` und `mockup_main.lua` werden weiterhin beide benoetigt (unterschiedliche Renderer-Auswahl), aber `mockup_main.lua` patcht `main.lua` nicht mehr zur Laufzeit.
+Sind Branchmanifest und Datei-SHA nicht identisch, kann ein gültiger älterer Dateiinhalt gegen Metadaten des neueren Manifests geprüft werden.
+
+## Verbindlicher Fix
+
+1. Branch-SHA einmal auflösen.
+2. Manifest ausschließlich von genau diesem SHA laden.
+3. alle Dateien ausschließlich von demselben SHA laden.
+4. Release-/Manifest-SHA im Installationsreport anzeigen.
+5. Branch-Fallback nur als vollständiger neuer Installationsversuch, niemals gemischt innerhalb eines Laufs.
 
 ---
 
-# 11. TEST-P0 – funktionale Tests in CI
+# 13. INSTALL-P0.3 – CRC32 beim tatsächlichen Schreiben verifizieren
 
 ## Status
 
-**TEILWEISE BEHOBEN (2026-07-14)**
+**OFFEN**
 
-`.github/workflows/offline-tests.yml` führte bisher nur den Offline-Validator aus. Die funktionalen Dateien unter `tests/` wurden nicht automatisch ausgeführt.
+## Bestätigtes Problem
 
-## Umsetzung
+`installer/manifest.lua` besitzt CRC32-Prüfung. `installer/stage.lua` prüft nach dem Download jedoch nur:
 
-1. `tests/cc_env_shim.lua`: minimaler CC:Tweaked-Kompatibilitäts-Shim (`os.epoch`, `colors`, `package.path` für `xreactor/`), da Host-Lua kein CC:Tweaked ist. Enthält bewusst keine Testlogik, nur Umgebung.
-2. `tools/run_lua_tests.sh` / `tools/run_python_tests.sh`: führen jede `tests/*.lua` bzw. `tests/*.py` einzeln in einem eigenen Prozess aus (kein gemeinsamer globaler State zwischen Tests), mit dem Shim vorgeladen. Explizit ausgeschlossene Tests werden übersprungen, alles andere **muss** grün sein, sonst schlägt der Schritt fehl.
-3. `tests/known_failing_lua_tests.txt` / `tests/known_failing_python_tests.txt`: **explizite, begründete Ausschlussliste** (kein stiller Skip) — jeder Eintrag hat eine Kategorie (`STALE_API`, `STALE_STRUCTURE`, `NEEDS_MOCK`, `CONTENT_DRIFT`, `SYNTAX_ERROR`, `DUPLICATE_MANIFEST_PATH`) und wurde durch tatsächliches Ausführen aller Tests unter `lua5.2`/`python3` (identisch zur CI-Umgebung) ermittelt.
-4. `.github/workflows/offline-tests.yml`: zwei neue Schritte nach dem Offline-Validator, die beide Runner ausführen. Der Workflow triggert bereits auf `push`/`pull_request` für `main`/`beta` — als **Pflichtstatuscheck** muss das zusätzlich in den Branch-Protection-Regeln des Repos aktiviert werden (Repo-Einstellung, nicht per Workflow-Datei änderbar).
-5. Fünf Tests hatten eine fest kodierte, umgebungsfremde absolute Pfadangabe (`/workspace/ExtreamReactor-Controller-V3/...`) statt eines repo-relativen Pfads — korrigiert; zwei davon liefen danach direkt grün, drei zeigten echte, unabhängige Content-Abweichungen (jetzt in der Ausschlussliste als `CONTENT_DRIFT`/`STALE_API` dokumentiert).
+- Dateigröße,
+- Lua-Syntax.
 
-## Ergebnis
+Der im Manifest vorhandene Hash wird dort nicht ausgewertet.
 
 - Lua: 76 von 142 laufen grün, 66 explizit ausgeschlossen und begründet.
 - Python: 20 von 28 laufen grün, 8 explizit ausgeschlossen und begründet.
@@ -471,20 +635,51 @@ Für die typische Konfiguration (genau eine FUEL- und eine WATER-Node) sind alle
 - Rollenweise Jobgruppen (separate CI-Jobs pro Rolle) weiterhin nicht umgesetzt — alle Tests laufen aktuell in einem Job.
 - Keine Tests wurden gelöscht; die im Original geforderte "Löschregel"-Prüfung (Abschnitt 13) wurde für keinen der ausgeschlossenen Tests einzeln durchgeführt.
 - Die verbleibenden 66 (Lua) + 8 (Python) ausgeschlossenen Tests sind weiterhin **nicht** einzeln triagiert — größtenteils `CONTENT_DRIFT` (echtes aktuelles Verhalten, Ursache noch nicht verifiziert) und `NEEDS_MOCK` (echtes CC:Tweaked-Peripheral/Monitor-Global nötig, kein pauschaler Shim möglich). Das ist weiterhin ein offener, potenziell mehrstündiger Folgeaufwand.
+## Fix
 
-Wichtige Testgruppen (aus der ursprünglichen Vorgabe, ob sie tatsächlich existieren wurde nicht einzeln geprüft):
+`stage.verify()` muss zusätzlich den Manifest-Hash gegen den geschriebenen Inhalt prüfen. Dieselbe Implementierung muss im modularen Installer und in der eingebetteten `/installer`-Kopie gelten.
+
+## Pflicht-Test
+
+Eine Datei mit korrekter Größe, gültiger Lua-Syntax, aber verändertem Inhalt muss die Installation zuverlässig abbrechen.
+
+---
+
+# 14. LOG-P0 – Probe-Fehler darf kein Logarchiv löschen
+
+## Status
+
+**KRITISCH OFFEN**
+
+## Bestätigtes Problem
+
+Wenn `probe_disk()` beim Schreibtest fehlschlägt, wird aktuell der gesamte Ordner:
 
 ```text
-config_persistence_all_roles
-shared_event_timer_separation
-rt_fixed_cadence
-rt_control_event_storm
-energy_scheduler_isolation
-fuel_reprocessor_nonblocking_routing
-valve_packet_loss_retry
-master_multi_target_selection
-log_renderer_entrypoint
+<xreactor_logs>
 ```
+
+rekursiv geleert und danach erneut getestet.
+
+Ein Probe-Fehler kann aber auch durch temporäre Ursachen entstehen:
+
+- Disk kurzzeitig nicht verfügbar,
+- Mountproblem,
+- volles Medium,
+- I/O-Fehler,
+- Race beim Ein-/Ausstecken.
+
+## Folge
+
+Ein transienter Fehler kann das gesamte bestehende Logarchiv löschen.
+
+## Verbindlicher Fix
+
+- niemals vorhandene Logs automatisch löschen,
+- nur die eigene `.probe`-Datei entfernen,
+- Disk als `UNAVAILABLE`, `READ_ONLY`, `FULL` oder `IO_ERROR` markieren,
+- neue Logs puffern oder auf andere Disk ausweichen,
+- Löschen alter Logs nur durch explizite Retentionpolicy mit Mindestalter/Maximalgröße.
 
 ---
 
@@ -526,42 +721,54 @@ Betroffene Dateien: `xreactor/master/startup_sequencer.lua`, `tests/rt_master_st
 ---
 
 # 13. Dokumentations- und Repository-Bereinigung
+# 15. MANIFEST-P1 – Rollen- und optionale Dateien vollständig scopen
 
-## Gelöscht
+## Status
 
-- `.github/workflows/publish-beta-v360.yml` — fest auf v360 verdrahteter, gefährlicher Alt-Workflow.
-- `docs/CODING_AI_FUEL_NODE_DEEP_AUDIT_2026-07-12.md` — vollständig durch diesen Audit ersetzt.
-- `docs/NODE_OVERVIEW.md` — veraltete technische Duplikatdokumentation.
+**OFFEN**
 
-## Verdichtet und als kompatible Referenz behalten
+Zusätzlich zum fehlenden REPROCESSOR-`feed_router` müssen alle Manifestdateien überprüft werden:
 
-- `docs/CODING_AI_IMPLEMENTATION_TASKS_2026-07-12.md`
-- `docs/CODING_AI_PERFORMANCE_TASKS_2026-07-12.md`
-- `docs/CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md`
-- `docs/SESSION_HANDOFF.md`
-- `docs/PROJECT_DOCUMENTATION.md`
-- `docs/NODE_START_BLOCKERS_2026-06-25.md`
+- statische Entrypoint-Abhängigkeiten,
+- `required_for`,
+- `always`,
+- optionale Features,
+- doppelte Pfade.
 
-Diese Dateien enthalten nun nur noch aktuelle Verweise, stabile Aufgabenkennungen oder notwendige historische Hinweise.
+Bestätigt beziehungsweise bereits in der Testausschlussliste sichtbar:
 
-## Aktiv gepflegte Dokumente
+- `core/bootstrap.lua` ist doppelt im Manifest enthalten,
+- `optional/speaker_alarm.lua` besitzt keinen klaren Rollen-Scope und kann trotz Auswahl nicht in der Installationsmenge landen,
+- mehrere Manifest-Rollenscope-Tests sind wegen Content-Drift ausgeschlossen.
 
-- dieser Gesamt-Audit,
-- RT-Control-Cadence,
-- Installer-/Auto-Update-Audit,
-- `docs/README.md`,
-- kompakter Session-Handoff.
+## Pflicht-Test
 
-## Löschregel
+Für jede installierbare Rolle:
 
-Eine Datei wird erst entfernt, wenn sie:
+1. erwartete Dateiliste erzeugen,
+2. alle Entrypoint-`require()`- und `dofile()`-Abhängigkeiten transitiv prüfen,
+3. keine fehlende Datei,
+4. keine doppelten Manifestpfade,
+5. optionale Auswahl ändert die Dateiliste tatsächlich,
+6. nicht ausgewählte optionale Dateien fehlen tatsächlich.
 
-1. nicht in Manifest, Startup, Installer oder Workflow benötigt wird,
-2. nicht von `require`, `dofile`, `shell.run`, Tests oder Tools verwendet wird,
-3. keinen notwendigen manuellen Entry-Point darstellt,
-4. keinen Recovery-/Migrationszweck besitzt,
-5. nicht von weiterhin gültigen Links abhängig ist oder diese Links vorher aktualisiert wurden,
-6. durch Ersatzfunktion und Regressionstest abgesichert ist.
+---
+
+# 16. MASTER-P1 – Zielnode und echte Bestätigung
+
+## Status
+
+**TEILWEISE OFFEN**
+
+Das Senden an alle Nodes einer Rolle ist umgesetzt. Weiter offen:
+
+- konkreten einzelnen FUEL-/WATER-Node auswählen,
+- „alle Nodes“ explizit anzeigen,
+- Command-ID und ACK je Zielnode sichtbar auswerten,
+- Teilfehler darstellen,
+- persistente UI-Auswahl für den Zielnode.
+
+Eine Meldung „gesendet“ darf nicht mit „vom Ziel angewendet“ gleichgesetzt werden.
 
 ---
 
@@ -593,3 +800,148 @@ Eine Datei wird erst entfernt, wenn sie:
 - relevante Lua-/Python-Tests laufen verpflichtend in GitHub Actions.
 - jede gelöschte Datei ist durch Referenzscan und Tests als unbenötigt nachgewiesen.
 - der aktuelle ausführbare Code besitzt einen nachweislich grünen CI- und Ingame-Teststand.
+# 17. TEST-P0 – Ausschlusslisten abbauen
+
+## Status
+
+**KRITISCH TEILWEISE**
+
+Der Workflow führt funktionale Tests aus, überspringt aber weiterhin:
+
+```text
+77 Lua-Tests
+9 Python-Tests
+```
+
+Die Ausschlussliste enthält nicht nur sicher veraltete Tests, sondern auch Kategorien wie:
+
+- `CONTENT_DRIFT`,
+- `DUPLICATE_MANIFEST_PATH`,
+- mögliche echte RT-Contextfehler,
+- Manifest-Rollenscope-Abweichungen,
+- ENERGY-Architekturabweichungen.
+
+## Regel
+
+Ein Test darf nur gelöscht werden, wenn:
+
+1. die geschützte Anforderung nicht mehr existiert, oder
+2. dieselbe Anforderung vollständig durch einen aktuellen gleichwertigen Test geschützt wird.
+
+Andernfalls:
+
+- Test auf aktuelle API migrieren,
+- notwendige CC:Tweaked-Mocks ergänzen,
+- echten Produktionsfehler beheben,
+- aus Ausschlussliste entfernen.
+
+## Sofortige Priorität
+
+1. FUEL-Config-Starttest,
+2. REPROCESSOR-Installations-/Require-Coverage,
+3. Router-ACK-Safety,
+4. FUEL-Async-Lifecycle,
+5. VALVE-Failed-Write-Retry,
+6. REPROCESSOR-Standby-Cancel,
+7. ENERGY-Heartbeat-/Schedulerisolation,
+8. RT-Configmigration,
+9. Manifest-Duplikate/Rollenscope,
+10. Installer-SHA-/CRC-Konsistenz,
+11. LOG-Datenerhalt.
+
+Für den geprüften Merge-Commit wurden über die GitHub-Schnittstelle keine zugeordneten Statuschecks beziehungsweise Pull-Request-Workflow-Runs zurückgegeben. Ein vorhandener Workflow ist deshalb kein Nachweis, dass dieser konkrete Head erfolgreich geprüft wurde.
+
+---
+
+# 18. Verbindliche Bearbeitungsreihenfolge
+
+1. **FUEL Config-Normalizer** – Startabsturz verhindern.
+2. **REPROCESSOR Manifest-Scope** – `feed_router.lua` sicher installieren.
+3. **Router-ACK-Safety** – alle Ziel- und Nebenventile vor Export bestätigen.
+4. **FUEL Async-Lifecycle** – `current_request`, Statistik und Abschlusscallback korrigieren.
+5. **Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.
+6. **VALVE Failed-Write-Retry** und sichere Fail-Safe-Zeitstempel.
+7. **REPROCESSOR Standby-Cancel** laufender Transaktionen.
+8. **ENERGY Scheduler-/Heartbeat-Trennung**.
+9. **RT Altconfig-Migration auf 0,10 s**.
+10. **Installer ein SHA + CRC-Verifikation**.
+11. **LOG-Probe ohne Datenlöschung**.
+12. **Manifest-Duplikate, optionale Dateien und Rollen-Scope**.
+13. **MASTER Einzelnode-/ACK-UI**.
+14. **Ausschlusslisten Test für Test abbauen**.
+15. Danach Ingame-Last-, Reconnect-, Reboot- und Update-Tests.
+
+---
+
+# 19. Definition of Done
+
+## Installer
+
+- Manifest und alle Dateien stammen aus exakt demselben Commit.
+- Größe und CRC32 werden nach jedem Write geprüft.
+- jede Rolle erhält alle transitiven Entrypoint-Abhängigkeiten.
+- Benutzerconfigs und Routen überleben Update, Reinstall und Neustart.
+- optionale Auswahl verändert die installierte Dateimenge korrekt.
+
+## FUEL
+
+- frische Defaultconfig startet fehlerfrei.
+- kein Export bei ungültigem oder erforderlichem, aber leerem Routing.
+- Export erst nach vollständiger Bestätigung aller Ziel- und Nebenventile.
+- asynchroner Request bleibt bis COMPLETE/ERROR erhalten.
+- Statistik und Logs entsprechen der tatsächlich exportierten Menge.
+- Shutdown/Standby/Timeout führen zu block_all und keinem Export.
+
+## REPROCESSOR
+
+- `feed_router.lua` wird immer installiert.
+- persistentes Routing wird beim Start korrekt geladen.
+- ungültiges Routing blockiert Feed.
+- Standby/MASTER_STALE bricht laufende Transaktion ab.
+- keine Exportaktion nach Eintritt in Standby.
+
+## VALVE
+
+- fehlgeschlagene Writes werden bei Retry tatsächlich erneut ausgeführt.
+- Command-ID gilt erst nach erfolgreichem Apply als abgeschlossen.
+- NACK/Fehler bleibt sichtbar.
+- ein fehlgeschlagenes BLOCK-Kommando verlängert keinen unsicheren Offen-Zustand.
+
+## RT
+
+- bestehende historische Defaultintervalle werden migrationssicher auf 0,10 s aktualisiert.
+- echte Metriken belegen Controlfrequenz und maximale Ticklücke.
+- Eventbursts erzeugen keine zusätzlichen vollständigen Controlticks.
+- Write-Dedupe und Safety-Bypass bleiben korrekt.
+
+## ENERGY
+
+- Matrix-Thread tickt ausschließlich Matrixarbeit.
+- Comms/Heartbeat/UI bleiben bei langsamen Matrixcalls reaktionsfähig.
+- genau eine zentrale Heartbeat-Zeitquelle.
+- Heartbeatfrequenz entspricht der Config.
+
+## WATER
+
+- Snapshot, Block-All, Writes und persistentes Ziel funktionieren ingame.
+- Reboot und Update erhalten Config und Target.
+- UI zeigt aktuelle Werte und jeder Touch erzeugt genau eine Aktion.
+
+## MASTER
+
+- alle oder ein konkreter Zielnode auswählbar.
+- ACK je Zielnode sichtbar.
+- Teilfehler werden nicht als Gesamterfolg dargestellt.
+
+## LOG Collector
+
+- Probe-/Mount-/Full-Fehler löschen keine vorhandenen Logs.
+- Retention ist explizit, alters-/größenbasiert und nachvollziehbar.
+- ACK erfolgt weiterhin erst nach echter Persistierung.
+
+## Tests / CI
+
+- keine kritischen Produktionsfehler stehen auf einer Ausschlussliste.
+- Manifest-/Installations-, Routing-, Safety-, Config- und Reboottests laufen verpflichtend.
+- aktueller `beta`-Head besitzt einen nachweislich grünen Statuscheck.
+- gelöschte Tests erfüllen die dokumentierte Löschregel.
