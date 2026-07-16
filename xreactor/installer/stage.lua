@@ -114,7 +114,7 @@ end
 local VERIFY_MAX_ATTEMPTS = 4
 local VERIFY_RETRY_DELAY_S = 2
 
-function M.install(files, install_root, http_mod, sha, progress_fn)
+function M.install(files, install_root, http_mod, ref, progress_fn)
   local total = #files
   for i, item in ipairs(files) do
     local rel   = item.path
@@ -132,7 +132,7 @@ function M.install(files, install_root, http_mod, sha, progress_fn)
     else
       local success = false
       for attempt = 1, VERIFY_MAX_ATTEMPTS do
-        local body, err = http_mod.download_file(rel, sha)
+        local body, err = http_mod.download_file(rel, ref)
         if not body then
           last_err = "download failed: " .. rel .. " — " .. tostring(err)
         elseif http_mod.is_html(body) then

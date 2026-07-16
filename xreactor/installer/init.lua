@@ -123,28 +123,32 @@ local function backup_config_dir()
   return files_map
 end
 
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 14). Der
+-- vorherige Fix (2026-07-08, siehe Git-Historie) loeste das damals
+-- beschriebene Symptom, indem das Manifest immer vom ungepinnten
+-- "beta"-Branch-Pfad geladen wurde -- WAEHREND http_mod.download_file()
+-- fuer jede einzelne Datei weiterhin zuerst die SHA-gepinnte URL versuchte
+-- und nur bei DEREN Fehlschlag auf "beta" zurueckfiel. Damit konnten
+-- Manifest und Dateien innerhalb DESSELBEN Laufs weiterhin aus zwei
+-- verschiedenen Commits stammen (Manifest von "beta"-HEAD zum Zeitpunkt X,
+-- einzelne Dateien vom frueher aufgeloesten, moeglicherweise AELTEREN
+-- SHA) -- dieselbe Bugklasse wie zuvor, nur mit vertauschten Rollen.
+-- Jetzt wird EIN einziger Referenzpunkt ("ref": entweder die aufgeloeste
+-- SHA, oder bei Aufloesungsfehler explizit der String "beta") fuer den
+-- GESAMTEN Lauf bestimmt und sowohl fuers Manifest als auch fuer jede
+-- einzelne Datei verwendet -- http_mod.download_file() hat dafuer seinen
+-- eigenstaendigen Pro-Datei-Fallback verloren (siehe dortiger
+-- Fix-Kommentar). Schlaegt der gesamte Lauf fehl, bricht er komplett ab
+-- statt Quellen zu mischen; ein erneuter Versuch (manueller Neustart, oder
+-- auto_update.lua's Retry-Loop, der /installer bei jedem Versuch frisch
+-- herunterlaedt und dabei zwangslaeufig eine komplett neue SHA aufloest)
+-- beginnt konsistent von vorn.
 local sha = http_mod.resolve_sha()
-local base_url = sha
-  and (GITHUB_RAW .. sha .. "/xreactor/")
-  or  (GITHUB_RAW .. "beta/xreactor/")
-p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar")
+local ref = sha or "beta"
+p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar -- gesamter Lauf verwendet 'beta'")
 
--- Fix (2026-07-08): CRITICAL. Vorher wurde das Manifest ausschliesslich
--- ueber die SHA-gepinnte URL geladen, OHNE Fallback — waehrend
--- http_mod.download_file() fuer JEDE einzelne Datei bereits einen
--- Fallback auf den ungepinnten "beta"-Branch-Pfad hat, falls die
--- SHA-gepinnte URL fehlschlaegt. Ergebnis: wenn resolve_sha() einen
--- nicht ganz aktuellen Commit lieferte (z.B. durch API-Verzoegerung/
--- Rate-Limit-Umstaende), aber die SHA-gepinnte manifest.lua-URL trotzdem
--- erfolgreich (nur mit veraltetem Inhalt) antwortete, blieb das Manifest
--- auf altem Stand — waehrend einzelne Dateien beim Download ueber den
--- Fallback-Pfad bereits den neuesten Stand bekamen. Beobachtet als
--- "Installation: size mismatch ... got <neu> expected <alt>". Jetzt wird
--- das Manifest immer vom ungepinnten "beta"-Branch-Pfad geladen (garantiert
--- konsistent mit dem, was download_file() im Fallback-Fall sowieso liefert)
--- — die SHA bleibt nur fuer die einzelnen Datei-Downloads relevant, wo sie
--- ohnehin bereits denselben Fallback-Schutz hat.
-local manifest_url = GITHUB_RAW .. "beta/xreactor/manifest.lua"
+local manifest_url = GITHUB_RAW .. ref .. "/xreactor/manifest.lua"
 local manifest, merr = manifest_mod.load_remote(manifest_url, http_mod)
 if not manifest then error("Manifest: " .. tostring(merr), 0) end
 p("Manifest: " .. tostring(manifest.manifest_id or manifest.manifest_version))
@@ -345,7 +349,7 @@ table.sort(file_list, function(a, b)
 end)
 
 p("Installiere " .. #file_list .. " Dateien...")
-local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, sha,
+local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, ref,
   function(done, total, rel) ui_mod.progress(done, total, rel) end)
 if not ok then error("Installation: " .. tostring(err), 0) end
 

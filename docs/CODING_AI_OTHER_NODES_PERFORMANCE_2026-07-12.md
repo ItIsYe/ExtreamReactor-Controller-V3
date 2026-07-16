@@ -33,7 +33,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Benutzerconfig | **TEILWEISE UMGESETZT** | einheitlicher SHA für Manifest und Dateien, CRC beim Write, keine pauschale Log-Löschung |
+| Installer / Benutzerconfig | **TEILWEISE UMGESETZT** | einheitlicher SHA für Manifest und Dateien behoben (Abschnitt 14); CRC beim Write und keine pauschale Log-Löschung weiterhin offen |
 | Manifest / Rollen-Scope | **TEILWEISE UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes behoben (Abschnitt 10/17); `optional/speaker_alarm.lua` weiterhin ohne `required_for` |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
 | MASTER | **TEILWEISE UMGESETZT** | Sequencer-Aufrufsyntax und echter MASTER→RT-Modulstart behoben (Abschnitt 3); Einzelnode-/ACK-UI (Abschnitt 15) weiterhin offen |
@@ -768,17 +768,17 @@ Künstlicher 4-s-Matrixcall darf COMMS, Heartbeat, UI und andere Deadlines nicht
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-16)**
 
-Der Installer:
+Bestätigt in allen drei Implementierungen (`xreactor/installer/init.lua`, dem eingebetteten `init_src`-Block im monolithischen `/installer`, und dem eigenständigen Bootstrap-Wrapper am Ende von `/installer`): das Manifest wurde nach dem Fix vom 2026-07-08 zwar konsequent geladen, aber nicht aus derselben Quelle wie die einzelnen Dateien. `xreactor/installer/init.lua` lud das Manifest hartcodiert immer von `beta`, während `http_mod.download_file()` für jede Datei zuerst den SHA-gepinnten Pfad versuchte und nur bei dessen Fehlschlag auf `beta` zurückfiel. Im monolithischen Bootstrap-Wrapper war es sogar noch direkter falsch: die Manifest-URL war hartcodiert auf `beta`, während `base` (verwendet für **jede** Datei) bei erfolgreicher SHA-Auflösung immer SHA-gepinnt war — nicht nur im Fallback-Fall. In beiden Fällen konnten Manifestmetadaten und Dateiinhalte aus zwei verschiedenen Commits stammen.
 
-- löst einen SHA für Datei-Downloads auf,
-- lädt das Manifest aber immer vom bewegten `beta`-Branch,
-- einzelne Dateien können zusätzlich auf den Branch-Fallback wechseln.
+Fix: ein einziger Referenzpunkt (`ref`: entweder die aufgelöste SHA, oder bei Auflösungsfehler explizit der String `"beta"`) wird pro Lauf einmal bestimmt und sowohl für die Manifest-URL als auch für jede einzelne Datei verwendet. `http_mod.download_file(rel_path, ref, opts)` hat dafür seinen eigenständigen Pro-Datei-Fallback auf `beta` verloren — es lädt ausschließlich von der übergebenen `ref`. Schlägt ein Lauf komplett fehl, bricht er ab statt Quellen zu mischen; ein erneuter Versuch (manueller Neustart, oder `auto_update.lua`'s Retry-Loop, der `/installer` bei jedem Versuch frisch herunterlädt und dabei zwangsläufig eine komplett neue SHA auflöst) beginnt konsistent von vorn — das erfüllt Punkt 4 des Fixes, ohne eine zusätzliche interne Retry-Schleife mit Teilzustand-Rollback einführen zu müssen.
 
-Damit können Manifestmetadaten und Dateiinhalte aus unterschiedlichen Commits stammen.
+Identisch angewendet auf den modularen Installer (`xreactor/installer/http.lua`/`init.lua`/`stage.lua`) und den monolithischen Installer (`/installer`: `http_src`-, `init_src`- und `stage_src`-Blöcke sowie der eigenständige Bootstrap-Wrapper) — die Audit-Vorgabe „Modularer und monolithischer Installer müssen dieselbe Implementierung verwenden" gilt jetzt für alle vier betroffenen Codepfade.
 
-## Fix
+Pflicht-Test: `tests/installer_manifest_files_same_ref_test.lua` — prüft (1) funktional per Mock, dass `http_mod.download_file()` bei einer fehlschlagenden, konkret gepinnten `ref` nicht mehr automatisch auf `beta` ausweicht; (2) strukturell, dass `installer/init.lua` Manifest-URL und Datei-Installation aus derselben `ref`-Variable baut; (3) dass die eingebetteten Kopien im monolithischen `/installer` byte-identisch zu den Modul-Dateien sind, und dass der eigenständige Bootstrap-Wrapper `base` und die Manifest-URL ebenfalls konsistent aus `ref` baut. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
+
+## Fix (umgesetzt)
 
 1. Branch-SHA einmal auflösen.
 2. Manifest exakt von diesem SHA laden.
@@ -978,7 +978,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 8. ~~ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13): `tests/energy_matrix_thread_scheduler_isolation_test.lua`.
 9. ~~RT Discovery mit Fake-Clock und realem Schedulerintervall.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4): `tests/rt_discovery_stable_slowdown_test.lua`.
 10. ~~RT Altconfig-Migration.~~ BEHOBEN (2026-07-16, siehe Abschnitt 5): `tests/rt_config_interval_schema_migration_test.lua`. Controlmetriken (Abschnitt 5, „Pflicht-Metriken“) weiterhin offen.
-11. Installer ein SHA + CRC.
+11. ~~Installer ein SHA für Manifest und Dateien.~~ BEHOBEN (2026-07-16, siehe Abschnitt 14): `tests/installer_manifest_files_same_ref_test.lua`. CRC-Verifikation (Abschnitt 15) weiterhin offen.
 12. LOG-/Installer-Datenerhalt bei Full-/Probe-Fehlern.
 
 ---
@@ -996,7 +996,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 9. ~~**ENERGY Scheduler-/Heartbeat-Trennung**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13).
 10. ~~**RT Discovery-Deadline korrekt umsetzen**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4).
 11. **RT Altconfig-Migration und Controlmetriken**. Altconfig-Migration BEHOBEN (2026-07-16, siehe Abschnitt 5); Controlmetriken weiterhin offen.
-12. **Installer ein SHA + CRC-Verifikation**.
+12. **Installer ein SHA + CRC-Verifikation**. SHA-Konsistenz BEHOBEN (2026-07-16, siehe Abschnitt 14); CRC-Verifikation (Abschnitt 15) weiterhin offen.
 13. **keine automatische Log-Löschung** in Installer und LOG Collector.
 14. **Manifest optionale Features/Rollenscope**.
 15. **MASTER Einzelnode-/ACK-UI**.
