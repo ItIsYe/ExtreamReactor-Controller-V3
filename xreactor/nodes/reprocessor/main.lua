@@ -412,7 +412,23 @@ local function get_rs_router()
     -- null bekannten Ventilen direkt OHNE Routing aus. Jetzt wird der
     -- tatsaechliche Feed-Block uebergeben, in dem redstone_tree
     -- tatsaechlich liegt.
-    rs_router = redstone_router_lib.new({ config = config.feed or {}, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end })
+    --
+    -- Fix (2026-07-17): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_
+    -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 20). "comms" fehlte
+    -- hier komplett -- redstone_router.lua's refresh() nutzt self.comms:
+    -- get_peers(), um einen im Baum konfigurierten Integrator-Namen als
+    -- per Funk erreichbaren Wireless-VALVE-Node zu erkennen (siehe
+    -- FUEL's get_rs_router(), das comms=comms bereits uebergibt). Ohne
+    -- comms-Referenz blieb known_peers in refresh() immer leer, und ein
+    -- konfigurierter Integrator wurde nur noch als lokales lokales
+    -- Peripheral gesucht -- ein Wireless-VALVE-Routerbaum konnte fuer
+    -- REPROCESSOR dadurch als nicht schaltbar enden, obwohl der VALVE-
+    -- Node im Netzwerk online war. get_rs_router() wird erst zur
+    -- Laufzeit aufgerufen (lazy singleton), zu diesem Zeitpunkt ist
+    -- "comms" (weiter oben vorwaertsdeklariert, unten per comms_service.
+    -- new(...) zugewiesen) als Upvalue bereits gesetzt -- kein
+    -- nachtraeglicher Injektionspfad noetig.
+    rs_router = redstone_router_lib.new({ config = config.feed or {}, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
   end
   return rs_router
 end

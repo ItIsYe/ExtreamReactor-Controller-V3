@@ -41,7 +41,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | ENERGY | **TEILWEISE BEHOBEN** | Schedulergruppen getrennt, Heartbeat besitzt aber weiterhin zwei Zeitquellen |
 | WATER | **WEITGEHEND UMGESETZT** | Persistenzfehler werden geloggt, Command kann trotzdem als angewendet bestätigt werden |
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
-| REPROCESSOR | **KRITISCH TEILWEISE** | Standby-Cancel behoben; Wireless-VALVE-Discovery ist nicht verdrahtet |
+| REPROCESSOR | **WEITGEHEND UMGESETZT** | Standby-Cancel und Wireless-VALVE-Discovery behoben (Abschnitt 20) |
 | VALVE | **TEILWEISE BEHOBEN** | Retry behoben; Senderbindung standardmäßig aus und Sorter-Reconnect unvollständig |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Wipe behoben; Reclaim kann wegen stale Free-Space-Cache zu viele Dateien löschen |
 | Tests / CI | **KRITISCH TEILWEISE** | 66 Lua- und 6 Python-Tests ausgeschlossen; aktueller Head ohne nachgewiesenen grünen Lauf |
@@ -58,7 +58,7 @@ Die kritischsten aktuellen Risiken sind:
 3. RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.
 4. `module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.
 5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
-6. REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.
+6. ~~REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20).
 7. LOG-Reclaim prüft nach Löschungen einen gecachten Free-Space-Wert und kann unnötig viele Dateien entfernen.
 8. 72 Tests bleiben ausgeschlossen; ein grüner Lauf des geprüften Heads ist nicht nachgewiesen.
 
@@ -654,27 +654,18 @@ Zyklusstatistik referenziert diese ID und wird nicht über ein global austauschb
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-FUEL erzeugt den Redstone-Router mit:
+Bestätigt in `xreactor/nodes/reprocessor/main.lua`: FUEL erzeugt den Redstone-Router mit `comms = comms`, REPROCESSORs `get_rs_router()` erzeugte denselben Router dagegen komplett ohne `comms`. `redstone_router:refresh()` verwendet `self.comms:get_peers()`, um einen konfigurierten Integrator als erreichbaren Wireless-VALVE-Node zu erkennen — ohne COMMS-Referenz bleibt die Peer-Liste leer, danach wird nur noch nach einem lokalen Peripheral gleichen Namens gesucht.
 
-```lua
-comms = comms
-```
+Fix: `comms = comms` wird jetzt auch in REPROCESSORs `get_rs_router()` an `redstone_router_lib.new()` übergeben — identisch zu FUEL. `get_rs_router()` ist ein Lazy-Singleton, der erst zur Laufzeit (aus Event-Handlern/Tick-Loop) aufgerufen wird, zu diesem Zeitpunkt ist die vorwärtsdeklarierte `comms`-Upvalue bereits per `comms_service.new(...)` zugewiesen — keine zusätzliche nachträgliche Injektion nötig, die bestehende Konstruktionsreihenfolge reicht bereits aus.
 
-REPROCESSOR erzeugt denselben Router dagegen ohne `comms`.
+Pflicht-Test: `tests/reprocessor_wireless_valve_comms_wiring_test.lua` — prüft strukturell, dass `get_rs_router()`s Konstruktoraufruf tatsächlich `comms = comms` enthält, und demonstriert zusätzlich funktional mit dem echten `redstone_router.lua`-Modul den beobachtbaren Unterschied: ohne `comms` wird ein konfigurierter Wireless-Integrator gar nicht erkannt (`self._state.integrators[name] == nil`), mit `comms` wird er korrekt als `network=true` erkannt. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
-`redstone_router:refresh()` verwendet `self.comms:get_peers()`, um einen konfigurierten Integrator als erreichbaren Wireless-VALVE-Node zu erkennen. Ohne COMMS-Referenz bleibt die Peer-Liste leer. Danach wird nur noch nach einem lokalen Peripheral gleichen Namens gesucht.
+## Fix (umgesetzt)
 
-## Folge
-
-Der vorgesehene drahtlose VALVE-Pfad funktioniert für REPROCESSOR nicht zuverlässig. Ein Routerbaum mit Wireless-VALVE-Nodes kann als nicht schaltbar enden, obwohl die Nodes im Netzwerk online sind.
-
-## Fix
-
-- `get_rs_router()` nach initialisiertem COMMS erstellen oder COMMS nachträglich sicher injizieren.
 - `comms = comms` an `redstone_router_lib.new()` übergeben.
-- Reconnect-/Peer-Down-/Peer-Up-Test ergänzen.
+- Reconnect-/Peer-Down-/Peer-Up-Test bleibt als weiterführender Ingame-Nachweis offen (kein neuer statischer Fund).
 
 ---
 
@@ -798,7 +789,7 @@ Ein Test darf nur entfernt werden, wenn:
 4. RT-Rampeneinheit mit Fake-Clock.
 5. produktive Verdrahtung von `update_module_states()`.
 6. ~~Router-ACK muss aktuelle Command-ID matchen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
-7. REPROCESSOR Wireless-VALVE-Discovery.
+7. ~~REPROCESSOR Wireless-VALVE-Discovery.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
 8. ENERGY exakt eine Heartbeat-Zeitquelle.
 9. LOG-Reclaim mit Cacheinvalidierung.
 10. MASTER Config-Editor Applied-ACK je Zielnode.
@@ -849,7 +840,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 # 27. Verbindliche Bearbeitungsreihenfolge
 
 1. ~~**ROUTER-P0:** aktuellen ACK über Command-ID statt alten Confirmed-State beweisen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
-2. **REPROCESSOR-P0:** COMMS-Peers an Wireless-Router verdrahten.
+2. ~~**REPROCESSOR-P0:** COMMS-Peers an Wireless-Router verdrahten.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
 3. **RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.
 4. **RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.
 5. **RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.
