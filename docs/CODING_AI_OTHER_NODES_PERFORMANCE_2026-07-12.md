@@ -925,7 +925,9 @@ Es wurde in dieser Runde kein neuer statischer WATER-P0-Blocker gefunden.
 
 ## Status
 
-**OFFEN**
+**OFFEN — PAUSIERT (2026-07-16)**
+
+Bearbeitung auf ausdrücklichen Nutzerwunsch an dieser Stelle gestoppt (siehe Abschnitt 22, Punkt 15). Keine Code-Änderung vorgenommen. Umfang wurde recherchiert: die Transportschicht (`core/comms.lua`) hat bereits echtes ACK/Applied-Tracking mit `require_ack`/`require_applied`, Retry/Backoff und Timeouts, und `master/message_handlers.lua` speichert bereits `nodes[id].last_command_result` (ok/error/reason_code/command_target/command_value) bei jedem `ACK_APPLIED`. Ein konkreter, bereits bestätigter Bug: `master/ui_controller.lua`s `fuel_reserve_adjust`/`water_target_adjust`/`reactor_fill_target_adjust` schreiben den neuen Wert sofort beim Tastendruck optimistisch in den UI-State, VOR jeder Bestätigung, ohne spätere Abgleichung gegen `last_command_result` (im Gegensatz zu `master/ui/resources.lua`, das dieses Muster bereits korrekt anwendet). Die drei FUEL-/WATER-/Reactor-Fill-Setter in `master/runtime_loop.lua` fordern zudem `require_applied` bisher gar nicht an. Der fehlende Teil ist also hauptsächlich MASTER-seitige UI-/Runtime-Loop-Verdrahtung, keine neue Transport-Infrastruktur.
 
 Das Senden an alle FUEL-/WATER-Nodes einer Rolle ist umgesetzt. Weiter offen:
 
@@ -1001,7 +1003,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 12. ~~**Installer ein SHA + CRC-Verifikation**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 14 [SHA] und Abschnitt 15 [CRC]).
 13. ~~**keine automatische Log-Löschung** in Installer und LOG Collector.~~ BEHOBEN (2026-07-16, siehe Abschnitt 16).
 14. ~~**Manifest optionale Features/Rollenscope**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 17): `tests/manifest_speaker_alarm_role_scope_test.lua`.
-15. **MASTER Einzelnode-/ACK-UI**.
+15. **MASTER Einzelnode-/ACK-UI**. **PAUSIERT (2026-07-16)**: Umfang recherchiert (Transportschicht in `core/comms.lua` hat bereits echtes ACK/Applied-Tracking inkl. `last_command_result` pro Node — fehlt nur die Verdrahtung in `master/ui_controller.lua`s FUEL-/WATER-/Reactor-Fill-Handlern und eine Einzelnode-Auswahl-UI). Bearbeitung auf ausdrücklichen Nutzerwunsch hier gestoppt, bevor Code geändert wurde — kein Fix umgesetzt. Naechster Schritt bei Wiederaufnahme: Umfang mit dem Nutzer klaeren (siehe Recherche-Zusammenfassung in der Session) und dann wie gewohnt (Fix, Pflicht-Test, git-stash-Verifikation, Versions-Bump) umsetzen.
 16. **Ausschlusslisten Test für Test abbauen**.
 17. danach vollständige Ingame-Last-, Reconnect-, Reboot- und Update-Tests.
 
