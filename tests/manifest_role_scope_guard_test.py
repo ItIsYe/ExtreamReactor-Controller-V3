@@ -35,6 +35,13 @@ ROLE_ENTRYPOINTS = {
     "FUEL": XREACTOR_ROOT / "nodes" / "fuel" / "main.lua",
     "REPROCESSING": XREACTOR_ROOT / "nodes" / "reprocessor" / "main.lua",
     "LOG": XREACTOR_ROOT / "nodes" / "log_collector" / "main.lua",
+    # Fix (2026-07-17): VALVE was missing from this mapping entirely, so its
+    # real require("nodes.support.runtime") (nodes/valve/main.lua) was never
+    # scanned -- the manifest's correct required_for={"VALVE",...} (added by
+    # a real fix: a VALVE-only install couldn't boot without it) looked like
+    # unexplained drift because this tool's own entrypoint list never
+    # accounted for VALVE as a role at all.
+    "VALVE": XREACTOR_ROOT / "nodes" / "valve" / "main.lua",
 }
 
 def parse_required_for(tail: str):
