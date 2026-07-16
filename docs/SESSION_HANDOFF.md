@@ -1,9 +1,9 @@
 # Session Handoff – XReactor Controller V3
 
-Stand: 2026-07-14  
+Stand: 2026-07-16  
 Branch: `beta`  
-Geprüfter Code-Stand vor der Dokumentbereinigung: `b1b15e292b94a177b98b5e49845bb70a2e4e143d`  
-Release: `beta-v427` / `manifest-v427`
+Geprüfter Code-Stand: `ef37d74419c7e37ab3a099b43e7cf039d8427dca`  
+Release: `beta-v454` / `manifest-v454`
 
 ## Einstieg für neue Arbeit
 
@@ -28,6 +28,10 @@ Release: `beta-v427` / `manifest-v427`
 - WATER-Snapshot und Cluster-Failsafe,
 - REPROCESSOR-Bufferbudget und Payloadcache,
 - VALVE ACK/Retry/Dedupe/Auth,
+- VALVE unterstützt jetzt wahlweise Redstone ODER einen Mekanism Logistical
+  Sorter als Aktor (`config.actuator_type = "redstone" | "sorter"`) — für
+  Item-Brennstofftransport ohne klassisches Redstone-Ventil, umgeht dabei
+  bewusst Mekanisms Auto-Eject-Verhalten, das Redstone sonst überstimmt,
 - FUEL-UI-Eingabe- und Renderpfad,
 - MASTER-Persistenz, Terminal-Maus und stale Fuel-Relay,
 - LOG-Batching, O(1)-Dedupe und einzelner ACK-Sendeweg,
