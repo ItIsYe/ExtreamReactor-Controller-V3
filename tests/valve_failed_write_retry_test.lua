@@ -27,12 +27,17 @@ local function extract(content, start_marker, end_marker)
 end
 
 local SOURCE = read_file('xreactor/nodes/valve/main.lua')
--- Zwei getrennte Bloecke: apply_valve() (Block A) und die Dedupe-Helfer +
--- send_valve_ack() + handle_valve_channel_event() (Block B) -- dazwischen
--- liegen der Boot-Write-Aufruf und die Modem-Kanal-Oeffnung (echte
--- Seiteneffekte, peripheral.find()), die fuer diesen Test nicht gebraucht
--- und nicht extrahiert werden.
-local BLOCK_A = extract(SOURCE, 'local function apply_valve(high)', '\nend\n')
+-- Zwei getrennte Bloecke: get_sorter()/write_actuator()/apply_valve()
+-- (Block A) und die Dedupe-Helfer + send_valve_ack() +
+-- handle_valve_channel_event() (Block B) -- dazwischen liegen der
+-- Boot-Write-Aufruf und die Modem-Kanal-Oeffnung (echte Seiteneffekte,
+-- peripheral.find()), die fuer diesen Test nicht gebraucht und nicht
+-- extrahiert werden. apply_valve() ruft seit der Sorter-Aktor-Erweiterung
+-- write_actuator() auf statt redstone.setOutput() direkt -- Block A muss
+-- deshalb bei get_sorter()/write_actuator() beginnen, nicht erst bei
+-- apply_valve() selbst.
+local BLOCK_A = extract(SOURCE, 'local sorter_device = nil',
+  'BLOCKIERT" or "OFFEN"), "INFO")\n  return true\nend')
 local BLOCK_B = extract(SOURCE, 'local SEEN_COMMAND_LIMIT = 16',
   'send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error)\nend')
 local EXTRACTED = BLOCK_A .. '\n' .. BLOCK_B
