@@ -253,28 +253,60 @@ local function role_index(role)
 end
 
 -- ── Disk handling ───────────────────────────────────────────────────────────
-local function wipe_disk(root)
-  local wiped = 0
-  if not (fs and fs.exists and fs.isDir and fs.list) then return 0 end
-
-  local function sweep(dir)
-    if not fs.exists(dir) or not fs.isDir(dir) then return end
-    local ok, entries = pcall(fs.list, dir)
-    if not ok or type(entries) ~= "table" then return end
-    for _, name in ipairs(entries) do
-      local path = fs.combine(dir, name)
-      if fs.isDir(path) then
-        sweep(path)
-      else
-        safe_delete(path)
-        wiped = wiped + 1
-      end
+-- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16). Die
+-- vorherige "wipe_disk()" loeschte bei JEDEM Platzmangel-Ereignis (und bei
+-- jedem einzelnen fehlgeschlagenen probe_disk()-Aufruf, siehe dort) den
+-- KOMPLETTEN Rollen-Logordner in einem Schritt -- ein voruebergehender
+-- Full-/Mount-/Race-Fehler konnte so sämtliche bereits gesammelten Logs
+-- einer Rolle vollstaendig vernichten. Ersetzt durch eine gezielte,
+-- ausschliesslich alters-basierte Teilbereinigung: die JEWEILS aeltesten
+-- Dateien (nach Aenderungszeitstempel) werden nacheinander entfernt, bis
+-- genug Platz frei ist ODER nichts mehr zum Entfernen uebrig ist -- niemals
+-- der gesamte Ordner auf einmal.
+local function list_files_recursive(dir, out)
+  out = out or {}
+  if not (fs and fs.exists and fs.isDir and fs.list) then return out end
+  if not fs.exists(dir) or not fs.isDir(dir) then return out end
+  local ok, entries = pcall(fs.list, dir)
+  if not ok or type(entries) ~= "table" then return out end
+  for _, name in ipairs(entries) do
+    local path = fs.combine(dir, name)
+    if fs.isDir(path) then
+      list_files_recursive(path, out)
+    else
+      out[#out + 1] = path
     end
   end
+  return out
+end
 
-  sweep(root)
-  stats.wiped = stats.wiped + wiped
-  return wiped
+local function file_mtime(path)
+  if type(fs.attributes) == "function" then
+    local ok, attr = pcall(fs.attributes, path)
+    if ok and type(attr) == "table" and type(attr.modified) == "number" then
+      return attr.modified
+    end
+  end
+  return 0
+end
+
+-- Bewusst grosszuegigeres Ziel als der reine MIN_FREE_BYTES-Schwellwert,
+-- damit nicht sofort beim naechsten Log-Event erneut aufgeraeumt werden
+-- muss (dieselbe Marge, die disk_for_role() bereits als "gesund" ansieht).
+local RECLAIM_TARGET_BYTES = MIN_FREE_BYTES * 4
+
+local function reclaim_oldest(root, mount, needed)
+  local files = list_files_recursive(root)
+  table.sort(files, function(a, b) return file_mtime(a) < file_mtime(b) end)
+  local removed = 0
+  for _, path in ipairs(files) do
+    if free_space(mount) >= needed then break end
+    safe_delete(path)
+    removed = removed + 1
+  end
+  stats.wiped = stats.wiped + removed
+  return removed
 end
 
 local function is_drive_name(name)
@@ -344,6 +376,18 @@ local function find_drives()
   return found
 end
 
+-- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
+-- Ein einzelner fehlgeschlagener Schreibversuch (z.B. voruebergehender
+-- Mount-/IO-Fehler oder Race mit einer anderen Disk-Operation) loeschte
+-- bisher den GESAMTEN Rollen-Logordner der Disk, bevor ueberhaupt ein
+-- zweiter Versuch unternommen wurde -- die "Reparatur" vernichtete dabei
+-- saemtliche bereits gesammelten Logs dieser Rolle. Ein fehlgeschlagener
+-- Probe darf niemals mehr als die eigene ".probe"-Testdatei anfassen; bei
+-- einem Fehlschlag wird die Disk fuer diesen Zyklus einfach als nicht
+-- schreibbar gemeldet (discover_disks() ueberspringt sie dann) und beim
+-- naechsten regulaeren DISK_REFRESH_S-Zyklus erneut probiert -- kein
+-- destruktiver "Reparaturversuch".
 local function probe_disk(mount)
   local root = mount .. "/xreactor_logs"
   if not ensure_dir(root) then return false end
@@ -358,10 +402,12 @@ local function probe_disk(mount)
   end
 
   local ok = pcall(write_probe)
-  if ok then return true end
-
-  wipe_disk(root)
-  return pcall(write_probe)
+  if not ok then
+    -- Nur die eigene, evtl. haengengebliebene Probe-Datei aufraeumen --
+    -- sonst nichts anfassen.
+    pcall(function() if fs.exists(probe) then fs.delete(probe) end end)
+  end
+  return ok
 end
 
 local function discover_disks()
@@ -590,8 +636,10 @@ local function write_log(payload)
   end
 
   if free_space(disk.mount) < MIN_FREE_BYTES then
-    local wiped = wipe_disk(disk.root)
-    diag("disk full: wiped " .. tostring(wiped) .. " file(s) on " .. tostring(disk.mount))
+    local removed = reclaim_oldest(disk.root, disk.mount, RECLAIM_TARGET_BYTES)
+    if removed > 0 then
+      diag("disk full: removed " .. tostring(removed) .. " oldest log file(s) on " .. tostring(disk.mount))
+    end
   end
 
   local line = format_log_line(payload) .. "\n"
@@ -651,11 +699,13 @@ flush_bucket = function(path)
     local message = tostring(err or "write failed")
     local lower = message:lower()
     if lower:find("out of space", 1, true) or lower:find("no space", 1, true) then
-      local wiped = wipe_disk(bucket.disk and bucket.disk.root or fs.getDir(path))
-      diag("write out-of-space: wiped " .. tostring(wiped) .. " file(s), retry")
+      local root  = bucket.disk and bucket.disk.root or fs.getDir(path)
+      local mount = bucket.disk and bucket.disk.mount or root
+      local removed = reclaim_oldest(root, mount, RECLAIM_TARGET_BYTES)
+      diag("write out-of-space: removed " .. tostring(removed) .. " oldest log file(s), retry")
       ok, err = pcall(function()
         local handle = fs.open(path, "a")
-        if not handle then error("fs.open returned nil after wipe") end
+        if not handle then error("fs.open returned nil after reclaim") end
         handle.write(combined)
         handle.close()
       end)

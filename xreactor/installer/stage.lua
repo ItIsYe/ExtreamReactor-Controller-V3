@@ -16,11 +16,23 @@ local function free_space()
   return nil
 end
 
+-- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
+-- "/xreactor_logs" wurde hier bisher unconditional rekursiv geloescht,
+-- sobald waehrend einer Installation zu wenig freier Speicher uebrig war
+-- -- das ist aber KEIN installer-eigenes Zwischenverzeichnis, sondern der
+-- tatsaechliche lokale Log-Speicherort (core/logger.lua's DEFAULT_LOG_DIR,
+-- genutzt von jeder Rolle als lokaler Fallback bzw. von einer LOG_
+-- COLLECTOR-Rolle auf demselben Computer). Ein Platzmangel WAEHREND einer
+-- Installation durfte niemals als Erlaubnis gelten, vorhandene Logs zu
+-- vernichten. Jetzt werden nur noch echte, installer-eigene, jederzeit
+-- regenerierbare Zwischenverzeichnisse entfernt; reicht das nicht, gibt
+-- M.write() (und damit letztlich M.install()) einen klaren Fehler zurueck
+-- und die Installation bricht kontrolliert ab, statt Nutzerdaten zu
+-- opfern.
 local function reclaim(needed)
   local free = free_space()
   if free and free >= needed then return true end
-  if fs.exists("/xreactor_logs")       then pcall(fs.delete, "/xreactor_logs") end
-  pcall(fs.makeDir, "/xreactor_logs")
   if fs.exists("/xreactor_backup_prev") then pcall(fs.delete, "/xreactor_backup_prev") end
   if fs.exists("/xreactor_stage")       then pcall(fs.delete, "/xreactor_stage") end
   free = free_space()
@@ -86,13 +98,31 @@ function M.read(path)
   local c = f.readAll(); f.close(); return c
 end
 
-function M.verify(path, entry)
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
+-- manifest.lua enthaelt fuer jede Datei einen CRC32-Hash, aber diese
+-- Funktion pruefte bisher nur Existenz, Lesbarkeit, Groesse und (bei
+-- .lua-Dateien) Syntax -- eine Datei mit korrekter Groesse und gueltiger
+-- Syntax, aber veraendertem Inhalt (z.B. durch einen stillen
+-- Bit-/Uebertragungsfehler, der die Byteanzahl zufaellig unveraendert
+-- liess) wurde akzeptiert. "crc32_fn" wird optional vom Aufrufer
+-- durchgereicht (installer/init.lua uebergibt manifest.lua's bereits
+-- vorhandene M.crc32) -- kein neuer dofile()/require() hier, um
+-- stage.lua nicht von manifest.lua abhaengig zu machen.
+function M.verify(path, entry, crc32_fn)
   if not fs.exists(path) then return false, "missing: " .. path end
   local content = M.read(path)
   if not content then return false, "unreadable: " .. path end
   if entry and entry.size_bytes and #content ~= entry.size_bytes then
     return false, string.format("size mismatch %s: got %d expected %d",
       path, #content, entry.size_bytes)
+  end
+  if entry and entry.hash and entry.hash ~= "" and type(crc32_fn) == "function" then
+    local actual = crc32_fn(content)
+    if actual:lower() ~= tostring(entry.hash):lower() then
+      return false, string.format("hash mismatch %s: got %s expected %s",
+        path, actual, entry.hash)
+    end
   end
   if path:sub(-4) == ".lua" then
     local loader, lerr = load(content, "=" .. path, "t", {})
@@ -114,7 +144,7 @@ end
 local VERIFY_MAX_ATTEMPTS = 4
 local VERIFY_RETRY_DELAY_S = 2
 
-function M.install(files, install_root, http_mod, sha, progress_fn)
+function M.install(files, install_root, http_mod, ref, progress_fn, crc32_fn)
   local total = #files
   for i, item in ipairs(files) do
     local rel   = item.path
@@ -127,12 +157,12 @@ function M.install(files, install_root, http_mod, sha, progress_fn)
       -- Retry sinnvoll, ein Mismatch hier ist ein echter Fehler.
       local ok, werr = M.write(dest, item.content)
       if not ok then return false, werr end
-      local ok2, verr = M.verify(dest, entry)
+      local ok2, verr = M.verify(dest, entry, crc32_fn)
       if not ok2 then return false, verr end
     else
       local success = false
       for attempt = 1, VERIFY_MAX_ATTEMPTS do
-        local body, err = http_mod.download_file(rel, sha)
+        local body, err = http_mod.download_file(rel, ref)
         if not body then
           last_err = "download failed: " .. rel .. " — " .. tostring(err)
         elseif http_mod.is_html(body) then
@@ -142,7 +172,7 @@ function M.install(files, install_root, http_mod, sha, progress_fn)
           if not ok then
             last_err = werr
           else
-            local ok2, verr = M.verify(dest, entry)
+            local ok2, verr = M.verify(dest, entry, crc32_fn)
             if ok2 then
               success = true
               break

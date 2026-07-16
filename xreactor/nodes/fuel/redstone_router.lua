@@ -209,21 +209,33 @@ function M:refresh()
   -- Feature (2026-07-08): strukturelle Validierung VOR jeder Aktivierung.
   -- Bei einem ungueltigen Baum: alle Ventile blockieren (Fail-Safe-
   -- Grundzustand, kein Fuel-Transfer moeglich), all_valves/integrators
-  -- NICHT aus dem fehlerhaften Baum laden (route_count() bleibt 0, damit
-  -- logistics_router.lua sauber auf den ungerouteten Direkt-Export-Pfad
-  -- zurueckfaellt statt mit einer kaputten Struktur zu arbeiten), und der
-  -- Fehler wird geloggt (landet damit auch im Log-Collector-System) sowie
-  -- ueber get_validation() fuer UI/zukuenftige Master-Alerts bereitgestellt.
+  -- NICHT aus dem fehlerhaften Baum laden, und der Fehler wird geloggt
+  -- (landet damit auch im Log-Collector-System) sowie ueber get_
+  -- validation() fuer UI/zukuenftige Master-Alerts bereitgestellt.
   --
-  -- Fix (2026-07-13): CRITICAL. Der urspruengliche Kommentar hier ("route_
-  -- count() bleibt 0, damit ... auf den ungerouteten Direkt-Export-Pfad
-  -- zurueckfaellt") widersprach sich selbst mit der Absicht "block_all(),
-  -- kein Fuel-Transfer moeglich" wenige Zeilen weiter unten -- route_and_
-  -- act() sah bei einem UNGUELTIGEN (aber tatsaechlich konfigurierten)
-  -- Baum ebenfalls all_valves==0 und fuehrte die Aktion trotzdem UNGE-
-  -- SCHUETZT direkt aus, exakt entgegen der block_all()-Absicht. Jetzt
-  -- unterschieden ueber tree_configured (siehe oben): ein Baum, der
-  -- KONFIGURIERT war aber ungueltig ist, blockiert jetzt tatsaechlich.
+  -- Fix (2026-07-13): CRITICAL. tree_configured (siehe oben) unterscheidet
+  -- "Routing war nie gewollt" (sicher, Direkt-Export ok) von "Routing war
+  -- konfiguriert, aber kaputt/leer geworden" (GEFAEHRLICH, muss
+  -- blockieren) -- ein Baum, der KONFIGURIERT war aber ungueltig ist,
+  -- blockiert tatsaechlich (siehe begin_transaction()).
+  --
+  -- Fix (2026-07-16): CRITICAL (ROUTER-P0.9, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 9). Die vorherige Fassung
+  -- dieses Kommentars empfahl, dass "route_count() bleibt 0, damit
+  -- logistics_router.lua sauber auf den ungerouteten Direkt-Export-Pfad
+  -- zurueckfaellt" -- das war GENAU der Bug: route_count()/get_routing_
+  -- table() liest strukturell aus dem ROHEN cfg.redstone_tree (unabhaengig
+  -- von tree_valid/tree_configured hier) und kann bei einem kaputten Baum,
+  -- der GAR KEINE 'side'-Ventil-Eintraege mehr strukturell findet, selbst
+  -- 0 zurueckgeben, obwohl der Baum tatsaechlich KONFIGURIERT war (nur
+  -- kaputt). logistics_router.lua nutzte genau dieses 0 als Signal fuer
+  -- "nie konfiguriert" und fiel ungeschuetzt auf Direkt-Export zurueck --
+  -- exakt der Bug, den block_all()/begin_transaction()'s eigene "invalid_
+  -- tree"-Pruefung eigentlich verhindern sollte, aber NIE erreicht wurde,
+  -- weil logistics_router.lua begin_transaction() in diesem Fall gar nicht
+  -- erst aufrief. get_routing_state() (siehe unten) ist jetzt die einzige
+  -- Autoritaet fuer diese Entscheidung -- basiert auf tree_configured/
+  -- tree_valid/all_valves statt auf einem strukturellen Baum-Walk.
   local validation = M.validate_tree(tree)
   self._state.tree_valid = validation.ok
   self._state.tree_errors = validation.errors
@@ -374,47 +386,63 @@ function M:block_all()
   return all_ok
 end
 
-function M:open_path_to(target_id)
-  local cfg = self.config.logistics or self.config or {}
-  local tree = cfg.redstone_tree or {}
-  local path = find_path(tree, target_id)
-  if not path then
-    self.log("WARN", "RedstoneRouter: no path found for target: " .. tostring(target_id))
-    self:block_all()
-    return false
+local function valve_key(integrator, side)
+  return tostring(integrator or "") .. "|" .. tostring(side)
+end
+
+-- Fix (2026-07-16): CRITICAL (ROUTER-P0, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 8, "Verbindliche Sicherheitsregel").
+-- Sendet SET_VALVE fuer eine Liste von {side=, integrator=, high=}-
+-- Eintraegen und baut eine Bestaetigungs-Erwartung PRO Ventil auf.
+-- Netzwerk-Ventile (VALVE-Node per Funk) brauchen ein asynchrones ACK
+-- (siehe _set_valve()/handle_valve_ack() -- pending_valve_acks/confirmed_
+-- valve_state); lokale Peripherals und eingebaute Redstone-Seiten werden
+-- synchron geschaltet, ihr _set_valve()-Rueckgabewert IST bereits die
+-- Bestaetigung (kein Funk-Roundtrip noetig).
+function M:_request_valve_batch(entries)
+  local pending = {}
+  for _, entry in ipairs(entries) do
+    local key = valve_key(entry.integrator, entry.side)
+    local w = entry.integrator and self._state.integrators[entry.integrator] or nil
+    local needs_ack = w and w.network == true
+    local ok = self:_set_valve({ side = entry.side, integrator = entry.integrator }, entry.high)
+    pending[key] = {
+      integrator = entry.integrator, side = entry.side, high = entry.high,
+      needs_ack = needs_ack, sync_ok = ok,
+    }
   end
+  return pending
+end
 
-  local path_set = {}
-  for _, v in ipairs(path) do path_set[(v.integrator or "") .. ":" .. v.side] = true end
-  -- Fix (2026-07-08): Ventil-Schaltfehler auf dem eigentlichen Ziel-Pfad
-  -- (Ventil sollte OFFEN sein) werden jetzt als Routing-Fehlschlag
-  -- gewertet -- vorher wurde stur weitergemacht, selbst wenn ein noetiges
-  -- Ventil wegen offline-Integrator gar nicht geoeffnet werden konnte.
-  local path_open_failed = false
-  for _, v in ipairs(self._state.all_valves) do
-    local key = (v.integrator or "") .. ":" .. v.side
-    local should_be_open = path_set[key]
-    local ok = self:_set_valve(v, not should_be_open)
-    if should_be_open and not ok then path_open_failed = true end
+-- Prueft eine per _request_valve_batch() aufgebaute Bestaetigungs-
+-- Erwartung. Rueckgabe "ok": JEDES Ventil ist nachweislich im
+-- angeforderten Zustand (ACK vorhanden, applied==true, bestaetigtes high
+-- entspricht angefordertem high -- fuer synchrone Ventile: Schaltbefehl
+-- erfolgreich). "waiting": mindestens ein Netzwerk-ACK ist noch
+-- unterwegs (nicht aufgegeben), aber nichts ist bisher fehlgeschlagen.
+-- "failed": mindestens ein Ventil ist nachweislich NICHT im gewuenschten
+-- Zustand (synchroner Fehlschlag, oder ein Netzwerk-Kommando wurde nach
+-- VALVE_ACK_MAX_RETRIES aufgegeben ohne Bestaetigung -- check_pending_
+-- acks() loescht es dann aus pending_valve_acks OHNE confirmed_valve_
+-- state zu setzen, was hier als "nicht pending UND nicht bestaetigt"
+-- erkannt wird).
+function M:_check_valve_batch(pending)
+  local waiting = false
+  for key, entry in pairs(pending) do
+    if entry.needs_ack then
+      local still_pending = self._state.pending_valve_acks and self._state.pending_valve_acks[key]
+      local confirmed = self._state.confirmed_valve_state and self._state.confirmed_valve_state[key]
+      if still_pending then
+        waiting = true
+      elseif not (confirmed and confirmed.applied == true and confirmed.high == entry.high) then
+        return "failed", key
+      end
+    elseif not entry.sync_ok then
+      return "failed", key
+    end
   end
-
-  if path_open_failed then
-    self.log("ERROR", "RedstoneRouter: Pfad zu " .. tostring(target_id)
-      .. " konnte nicht vollstaendig geoeffnet werden (Ventil-Fehler) — blockiere sicherheitshalber alles")
-    self:block_all()
-    return false
-  end
-
-  local sides = {}
-  for _, v in ipairs(path) do sides[#sides + 1] = v.side end
-  self._state.active_target = target_id
-  self._state.active_path = sides
-  self._state.last_target = target_id
-  self._state.last_path = sides
-  self._state.last_active_ts = os.epoch and os.epoch("utc") or nil
-
-  self.log("DEBUG", string.format("RedstoneRouter: routing to %s via [%s]", tostring(target_id), table.concat(sides, " → ")))
-  return true
+  if waiting then return "waiting" end
+  return "ok"
 end
 
 -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
@@ -429,8 +457,7 @@ end
 -- anderes -- Heartbeat, Commands, UI und das VALVE-Fail-Safe-Timing
 -- waren fuer die gesamte Dauer eingefroren.
 --
--- Jetzt: begin_transaction() startet eine asynchrone Zustandsmaschine
--- (IDLE -> WAIT_SETTLE -> EXPORT -> HOLD_OPEN -> COMPLETE/ERROR), die
+-- Jetzt: begin_transaction() startet eine asynchrone Zustandsmaschine, die
 -- ausschliesslich ueber wiederholte tick(now_ms)-Aufrufe voranschreitet
 -- (von der aufrufenden Rolle regelmaessig aus ihrem normalen Event-Loop-
 -- Zyklus aufgerufen, siehe nodes/fuel/main.lua und nodes/reprocessor/
@@ -439,7 +466,33 @@ end
 -- laeuft wird mit "busy" abgelehnt, wodurch Lieferungen strukturell
 -- serialisiert werden (der Aufrufer versucht es im naechsten Zyklus
 -- erneut, statt mehrere Lieferungen zu ueberlappen).
-function M:begin_transaction(target_id, action_fn, valve_open_ms)
+--
+-- Fix (2026-07-16): CRITICAL (ROUTER-P0, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 8). Die alte Zustandsmaschine (IDLE
+-- -> WAIT_SETTLE -> EXPORT -> HOLD_OPEN -> COMPLETE/ERROR, ueber open_
+-- path_to() aufgebaut) hatte zwei bestaetigte Sicherheitsluecken:
+-- (1) WAIT_SETTLE gate'te den Export ueber eine feste Settle-Zeit
+--     (settle_until), NICHT ueber eine tatsaechliche Bestaetigung -- ein
+--     noch "pending" ACK loeste KEINEN Fehler aus, der Export lief nach
+--     Ablauf der Settle-Zeit trotzdem los, selbst wenn die Bestaetigung
+--     fuer ein beobachtetes Ventil schlicht noch unterwegs war.
+-- (2) watched_keys enthielt nur die Ziel-Pfad-Ventile (die geoeffnet
+--     werden sollen) -- ein fehlgeschlagenes Blockieren eines NEBEN-
+--     pfads (open_path_to()'s eigener Rueckgabewert wurde dafuer nicht
+--     einmal ausgewertet) verhinderte den Export nicht.
+-- Neue, zweiphasige Zustandsmaschine (siehe "Ziel-State-Machine" im
+-- Audit-Dokument): Phase 1 (WAIT_BLOCK_ACKS) blockiert und bestaetigt
+-- ALLE bekannten Ventile (nicht nur Nebenpfade) als deterministischen,
+-- sicheren Ausgangszustand; erst wenn JEDES Ventil nachweislich blockiert
+-- ist, oeffnet Phase 2 (WAIT_OPEN_ACKS) den Zielpfad und wartet ebenfalls
+-- auf dessen vollstaendige Bestaetigung. WAIT_SETTLE ist danach nur noch
+-- eine zusaetzliche physische Pufferzeit NACH bestaetigtem Zustand, kein
+-- Ersatz mehr fuer die Bestaetigung selbst. Jeder Fehlschlag oder
+-- Bestaetigungs-Timeout in beiden Phasen bricht sofort mit block_all() ab
+-- (_fail_transaction()). Nach dem Export (HOLD_OPEN) wird ebenfalls
+-- versucht, das finale Blockieren zu bestaetigen (WAIT_FINAL_ACKS), bevor
+-- die Transaktion als abgeschlossen gilt.
+function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
   if self._state.transaction then
     return false, "busy"
   end
@@ -465,42 +518,45 @@ function M:begin_transaction(target_id, action_fn, valve_open_ms)
     self:block_all()
     return false, "invalid_tree"
   end
-  local ok = self:open_path_to(target_id)
-  if not ok then
-    self.log("WARN", "RedstoneRouter: cannot route to " .. tostring(target_id))
+
+  local cfg = self.config.logistics or self.config or {}
+  local tree = cfg.redstone_tree or {}
+  local path = find_path(tree, target_id)
+  if not path then
+    self.log("WARN", "RedstoneRouter: no path found for target: " .. tostring(target_id))
     self:block_all()
     self._state.active_target = nil
     self._state.active_path = nil
     return false, "no_path"
   end
 
-  -- Feature (2026-07-09): bei netzwerkbasierten VALVE-Nodes (Funk statt
-  -- lokalem Peripheral) laenger warten, bevor der Export beginnt -- ein
-  -- Funkbefehl braucht spuerbar laenger als ein direkter Methodenaufruf.
-  local cfg = self.config.logistics or self.config or {}
-  local tree = cfg.redstone_tree or {}
-  local path = find_path(tree, target_id) or {}
-  local uses_network = false
-  local watched_keys = {}
-  for _, v in ipairs(path) do
-    if v.integrator then
-      local w = self._state.integrators[v.integrator]
-      if w and w.network then
-        uses_network = true
-        watched_keys[v.integrator .. "|" .. tostring(v.side)] = true
-      end
-    end
+  local block_entries = {}
+  for _, v in ipairs(self._state.all_valves) do
+    block_entries[#block_entries + 1] = { integrator = v.integrator, side = v.side, high = true }
   end
 
   local now_ms = os.epoch and os.epoch("utc") or 0
-  local settle_s = uses_network and 0.4 or 0.05
   self._state.transaction = {
     target_id = target_id,
     action_fn = action_fn,
+    -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 7). Bisher gab es KEINE
+    -- Rueckmeldung an den Aufrufer, wenn eine Transaktion abbrach BEVOR sie
+    -- jemals action_fn erreichte (z.B. Ventil-ACK-Fehlschlag oder Phasen-
+    -- Timeout waehrend WAIT_BLOCK_ACKS/WAIT_OPEN_ACKS) -- ein vom Aufrufer
+    -- gehaltener "laufende Lieferung"-Kontext (siehe logistics_router.lua's
+    -- current_request) blieb dadurch fuer immer auf "aktiv" haengen, da nur
+    -- action_fn ihn je aufraeumen konnte. opts.on_error(reason) wird von
+    -- _fail_transaction() IMMER aufgerufen, wenn die Transaktion abbricht
+    -- ohne dass action_fn je lief -- damit hat der Aufrufer garantiert
+    -- genau einen von zwei Abschluss-Pfaden (action_fn ODER on_error).
+    on_error = opts and opts.on_error or nil,
     valve_open_ms = tonumber(valve_open_ms) or 2000,
-    state = "WAIT_SETTLE",
-    watched_keys = watched_keys,
-    settle_until = now_ms + math.floor(settle_s * 1000),
+    state = "WAIT_BLOCK_ACKS",
+    pending = self:_request_valve_batch(block_entries),
+    path = path,
+    phase_started_ms = now_ms,
+    settle_until = nil,
     hold_until = nil,
     started_ts = now_ms,
   }
@@ -516,7 +572,23 @@ function M:_fail_transaction(reason)
   self._state.active_target = nil
   self._state.active_path = nil
   self._state.transaction = nil
+  if tx and tx.on_error then
+    local ok, err = pcall(tx.on_error, reason)
+    if not ok then
+      self.warn_once("tx_on_error_failed:" .. tostring(tx.target_id),
+        "RedstoneRouter: on_error-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. tostring(err))
+    end
+  end
 end
+
+-- Maximale Wartezeit auf eine Ventil-Bestaetigungs-Phase (Block oder
+-- Open), bevor die Transaktion als fehlgeschlagen abgebrochen wird.
+-- Deutlich groesser als das einzelne ACK-Timeout (VALVE_ACK_TIMEOUT_MS,
+-- siehe check_pending_acks() weiter unten), da check_pending_acks() erst
+-- nach VALVE_ACK_MAX_RETRIES aufgibt -- diese Phasen-Deadline ist nur ein
+-- zusaetzliches Sicherheitsnetz, falls ein Ventil dauerhaft "pending"
+-- haengen bleibt, ohne dass check_pending_acks() es je aufgibt.
+local VALVE_PHASE_TIMEOUT_MS = 15000
 
 -- Muss regelmaessig (z.B. alle 0.5s aus dem Haupt-Event-Loop der
 -- aufrufenden Rolle) aufgerufen werden, unabhaengig davon ob gerade eine
@@ -528,20 +600,64 @@ function M:tick(now_ms)
   local tx = self._state.transaction
   if not tx then return end
 
-  if tx.state == "WAIT_SETTLE" then
-    -- ACK-Timeout: ein beobachtetes SET_VALVE-Kommando wurde endgueltig
-    -- aufgegeben (check_pending_acks() hat es nach VALVE_ACK_MAX_RETRIES
-    -- entfernt, ohne dass eine Bestaetigung eintraf) oder explizit als
-    -- nicht angewendet bestaetigt -- Transaktion sofort abbrechen statt
-    -- auf eine moeglicherweise nie kommende Bestaetigung weiterzuwarten.
-    for key in pairs(tx.watched_keys) do
-      local still_pending = self._state.pending_valve_acks and self._state.pending_valve_acks[key]
-      local confirmed = self._state.confirmed_valve_state and self._state.confirmed_valve_state[key]
-      if not still_pending and not (confirmed and confirmed.applied == true) then
-        self:_fail_transaction("ack_timeout:" .. key)
-        return
-      end
+  if tx.state == "WAIT_BLOCK_ACKS" then
+    local status, failed_key = self:_check_valve_batch(tx.pending)
+    if status == "failed" then
+      self:_fail_transaction("block_ack_failed:" .. tostring(failed_key))
+      return
     end
+    if status == "waiting" then
+      if now_ms - tx.phase_started_ms >= VALVE_PHASE_TIMEOUT_MS then
+        self:_fail_transaction("block_ack_timeout")
+      end
+      return
+    end
+    -- Alle bekannten Ventile nachweislich blockiert -- jetzt den Zielpfad
+    -- oeffnen (Phase 2).
+    local uses_network = false
+    local open_entries = {}
+    for _, v in ipairs(tx.path) do
+      open_entries[#open_entries + 1] = { integrator = v.integrator, side = v.side, high = false }
+      local w = v.integrator and self._state.integrators[v.integrator]
+      if w and w.network then uses_network = true end
+    end
+    tx.pending = self:_request_valve_batch(open_entries)
+    tx.uses_network = uses_network
+    tx.state = "WAIT_OPEN_ACKS"
+    tx.phase_started_ms = now_ms
+    return
+  end
+
+  if tx.state == "WAIT_OPEN_ACKS" then
+    local status, failed_key = self:_check_valve_batch(tx.pending)
+    if status == "failed" then
+      self:_fail_transaction("open_ack_failed:" .. tostring(failed_key))
+      return
+    end
+    if status == "waiting" then
+      if now_ms - tx.phase_started_ms >= VALVE_PHASE_TIMEOUT_MS then
+        self:_fail_transaction("open_ack_timeout")
+      end
+      return
+    end
+    -- Zielpfad bestaetigt offen UND alle Nebenpfade bestaetigt blockiert
+    -- (Phase 1 lief bereits durch) -- ab hier ist die Sicherheitsregel
+    -- erfuellt. WAIT_SETTLE ist nur noch eine zusaetzliche physische
+    -- Pufferzeit (Mekanism-Rohrnetz-Ausgleich), kein Bestaetigungs-Ersatz.
+    local sides = {}
+    for _, v in ipairs(tx.path) do sides[#sides + 1] = v.side end
+    self._state.active_target = tx.target_id
+    self._state.active_path = sides
+    self._state.last_target = tx.target_id
+    self._state.last_path = sides
+    self._state.last_active_ts = now_ms
+    local settle_s = tx.uses_network and 0.4 or 0.05
+    tx.settle_until = now_ms + math.floor(settle_s * 1000)
+    tx.state = "WAIT_SETTLE"
+    return
+  end
+
+  if tx.state == "WAIT_SETTLE" then
     if now_ms >= tx.settle_until then
       if tx.action_fn then
         local ok, err = pcall(tx.action_fn)
@@ -558,22 +674,71 @@ function M:tick(now_ms)
 
   if tx.state == "HOLD_OPEN" then
     if now_ms >= tx.hold_until then
-      self:block_all()
-      self._state.active_target = nil
-      self._state.active_path = nil
-      self._state.transaction = nil
+      local final_entries = {}
+      for _, v in ipairs(self._state.all_valves) do
+        final_entries[#final_entries + 1] = { integrator = v.integrator, side = v.side, high = true }
+      end
+      tx.pending = self:_request_valve_batch(final_entries)
+      tx.state = "WAIT_FINAL_ACKS"
+      tx.phase_started_ms = now_ms
     end
+    return
+  end
+
+  if tx.state == "WAIT_FINAL_ACKS" then
+    -- Export ist bereits gelaufen (EXPORT-Phase oben) -- ein nicht
+    -- bestaetigtes finales Blockieren macht die bereits erfolgte
+    -- Lieferung nicht rueckgaengig, erzwingt aber trotzdem block_all()
+    -- als Fail-Safe statt die Transaktion endlos in WAIT_FINAL_ACKS zu
+    -- belassen.
+    local status = self:_check_valve_batch(tx.pending)
+    local timed_out = (now_ms - tx.phase_started_ms) >= VALVE_PHASE_TIMEOUT_MS
+    if status == "failed" then
+      self.log("ERROR", "RedstoneRouter: finale Ventil-Blockierung nach Export fehlgeschlagen -- erzwinge block_all()")
+    elseif status == "waiting" and not timed_out then
+      return
+    elseif status == "waiting" then
+      self.log("WARN", "RedstoneRouter: finale Ventil-Blockierung nach Export nicht rechtzeitig bestaetigt -- erzwinge block_all()")
+    end
+    self:block_all()
+    self._state.active_target = nil
+    self._state.active_path = nil
+    self._state.transaction = nil
     return
   end
 end
 
 -- Sofortiger Shutdown-Pfad: blockiert augenblicklich alle Ventile und
 -- verwirft eine laufende Transaktion, unabhaengig von deren Zustand.
-function M:shutdown_now()
+--
+-- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). War bisher toter Code
+-- (nirgends aufgerufen) und rief keinerlei Abschluss-Callback auf -- eine
+-- per shutdown_now() verworfene Transaktion war fuer den Aufrufer
+-- (logistics_router.lua/feed_router.lua) unsichtbar: weder action_fn noch
+-- ein Fehlerpfad liefen je, current_request/last_error blieben auf dem
+-- letzten Stand haengen statt sichtbar "abgebrochen" zu werden. Ruft jetzt
+-- (wie _fail_transaction()) tx.on_error(reason) auf, falls eine
+-- Transaktion aktiv war -- nutzt denselben Abschluss-Mechanismus wie beim
+-- FUEL-P0-Fix, kein zweiter Signalweg noetig.
+function M:shutdown_now(reason)
+  local tx = self._state.transaction
   self._state.transaction = nil
   self:block_all()
   self._state.active_target = nil
   self._state.active_path = nil
+  if tx then
+    self.log("WARN", string.format(
+      "RedstoneRouter: Transaktion zu %s durch shutdown_now() abgebrochen (%s)",
+      tostring(tx.target_id), tostring(reason or "shutdown")))
+    if tx.on_error then
+      local ok, err = pcall(tx.on_error, reason or "shutdown")
+      if not ok then
+        self.warn_once("tx_on_error_failed:" .. tostring(tx.target_id),
+          "RedstoneRouter: on_error-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. tostring(err))
+      end
+    end
+  end
 end
 
 -- Sichtbarkeit fuer UI/Diagnose: aktive Transaktion und ihr Zustand.
@@ -723,6 +888,42 @@ end
 
 function M:route_count()
   return #self:get_routing_table()
+end
+
+-- Fix (2026-07-16): CRITICAL (ROUTER-P0.9, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md Abschnitt 9). Einzige Autoritaet fuer
+-- die Frage "soll FUEL/REPROCESSOR ueberhaupt ungeroutet direkt
+-- exportieren, oder muss geroutet (oder hart blockiert) werden?" --
+-- ersetzt den vorherigen strukturellen route_count()>0-Check (siehe
+-- refresh()-Kommentar oben), der bei einem KONFIGURIERTEN aber kaputten
+-- Baum faelschlich 0 zurueckgeben und damit den ungeschuetzten Direkt-
+-- Export-Pfad ausloesen konnte. Basiert ausschliesslich auf dem in
+-- refresh() ermittelten Validierungszustand (tree_configured/tree_valid/
+-- all_valves), nicht auf einem erneuten rohen Baum-Walk.
+--   ROUTING_NOT_CONFIGURED    -- kein redstone_tree in der Config: Direkt-
+--                                export ist ausdruecklich sicher.
+--   ROUTING_INVALID           -- redstone_tree konfiguriert, aber
+--                                strukturell ungueltig (validate_tree()).
+--   ROUTING_REQUIRED_BUT_EMPTY -- redstone_tree konfiguriert und
+--                                strukturell gueltig, aber ohne ein
+--                                einziges tatsaechliches Ventil (side) --
+--                                Routing ist offensichtlich beabsichtigt,
+--                                kann aber nichts absichern.
+--   ROUTING_VALID             -- redstone_tree konfiguriert, gueltig, und
+--                                enthaelt mindestens ein Ventil.
+-- Fuer beide INVALID/EMPTY-Faelle gilt: hart blockieren, NIEMALS
+-- ungeschuetzter Direkt-Export.
+function M:get_routing_state()
+  if not self._state.tree_configured then
+    return "ROUTING_NOT_CONFIGURED"
+  end
+  if not self._state.tree_valid then
+    return "ROUTING_INVALID"
+  end
+  if #self._state.all_valves == 0 then
+    return "ROUTING_REQUIRED_BUT_EMPTY"
+  end
+  return "ROUTING_VALID"
 end
 
 function M:get_tree()

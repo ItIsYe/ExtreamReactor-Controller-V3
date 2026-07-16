@@ -167,23 +167,30 @@ function M.download(url, opts)
   return nil, tostring(last_err or "download failed after " .. retries .. " retries")
 end
 
--- Lädt eine Datei aus dem xreactor-Verzeichnis des Repos.
--- SHA-URL zuerst, Branch-URL als Fallback.
-function M.download_file(rel_path, sha, opts)
-  local urls = {}
-  if sha then
-    urls[1] = GITHUB_RAW .. sha  .. "/xreactor/" .. rel_path
-    urls[2] = GITHUB_RAW .. "beta/xreactor/" .. rel_path
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 14).
+-- Diese Funktion wich bisher bei einem Fehlschlag der SHA-gepinnten URL
+-- automatisch, pro Datei einzeln, auf den ungepinnten "beta"-Branch-Pfad
+-- aus -- waehrend installer/init.lua das Manifest entweder ausschliesslich
+-- SHA-gepinnt ODER ausschliesslich von "beta" laedt. In jeder Kombination
+-- konnten so Manifest und einzelne Dateien aus zwei verschiedenen Commits
+-- stammen. Jetzt wird EIN einziger, bereits vom Aufrufer entschiedener
+-- Referenzpunkt ("ref": entweder eine SHA oder explizit der String
+-- "beta") verwendet -- ohne eigenstaendigen Fallback hier. Der Aufrufer
+-- (installer/init.lua) legt "ref" fuer den GESAMTEN Lauf einmal fest und
+-- verwendet ihn sowohl fuers Manifest als auch fuer jede Datei; schlaegt
+-- der Lauf komplett fehl, muss ein erneuter, komplett frischer Versuch
+-- (mit neu aufgeloester SHA) gestartet werden, statt Quellen zu mischen.
+function M.download_file(rel_path, ref, opts)
+  local url
+  if ref and ref ~= "beta" then
+    url = GITHUB_RAW .. ref .. "/xreactor/" .. rel_path
   else
-    urls[1] = GITHUB_RAW .. "beta/xreactor/" .. rel_path
+    url = GITHUB_RAW .. "beta/xreactor/" .. rel_path
   end
-  local last_err
-  for _, url in ipairs(urls) do
-    local body, err = M.download(url, opts)
-    if body then return body, url end
-    last_err = err
-  end
-  return nil, "alle URLs fehlgeschlagen fuer " .. rel_path .. ": " .. tostring(last_err)
+  local body, err = M.download(url, opts)
+  if body then return body, url end
+  return nil, "Download fehlgeschlagen fuer " .. rel_path .. ": " .. tostring(err)
 end
 
 return M
@@ -357,11 +364,23 @@ local function free_space()
   return nil
 end
 
+-- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
+-- "/xreactor_logs" wurde hier bisher unconditional rekursiv geloescht,
+-- sobald waehrend einer Installation zu wenig freier Speicher uebrig war
+-- -- das ist aber KEIN installer-eigenes Zwischenverzeichnis, sondern der
+-- tatsaechliche lokale Log-Speicherort (core/logger.lua's DEFAULT_LOG_DIR,
+-- genutzt von jeder Rolle als lokaler Fallback bzw. von einer LOG_
+-- COLLECTOR-Rolle auf demselben Computer). Ein Platzmangel WAEHREND einer
+-- Installation durfte niemals als Erlaubnis gelten, vorhandene Logs zu
+-- vernichten. Jetzt werden nur noch echte, installer-eigene, jederzeit
+-- regenerierbare Zwischenverzeichnisse entfernt; reicht das nicht, gibt
+-- M.write() (und damit letztlich M.install()) einen klaren Fehler zurueck
+-- und die Installation bricht kontrolliert ab, statt Nutzerdaten zu
+-- opfern.
 local function reclaim(needed)
   local free = free_space()
   if free and free >= needed then return true end
-  if fs.exists("/xreactor_logs")       then pcall(fs.delete, "/xreactor_logs") end
-  pcall(fs.makeDir, "/xreactor_logs")
   if fs.exists("/xreactor_backup_prev") then pcall(fs.delete, "/xreactor_backup_prev") end
   if fs.exists("/xreactor_stage")       then pcall(fs.delete, "/xreactor_stage") end
   free = free_space()
@@ -427,13 +446,31 @@ function M.read(path)
   local c = f.readAll(); f.close(); return c
 end
 
-function M.verify(path, entry)
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
+-- manifest.lua enthaelt fuer jede Datei einen CRC32-Hash, aber diese
+-- Funktion pruefte bisher nur Existenz, Lesbarkeit, Groesse und (bei
+-- .lua-Dateien) Syntax -- eine Datei mit korrekter Groesse und gueltiger
+-- Syntax, aber veraendertem Inhalt (z.B. durch einen stillen
+-- Bit-/Uebertragungsfehler, der die Byteanzahl zufaellig unveraendert
+-- liess) wurde akzeptiert. "crc32_fn" wird optional vom Aufrufer
+-- durchgereicht (installer/init.lua uebergibt manifest.lua's bereits
+-- vorhandene M.crc32) -- kein neuer dofile()/require() hier, um
+-- stage.lua nicht von manifest.lua abhaengig zu machen.
+function M.verify(path, entry, crc32_fn)
   if not fs.exists(path) then return false, "missing: " .. path end
   local content = M.read(path)
   if not content then return false, "unreadable: " .. path end
   if entry and entry.size_bytes and #content ~= entry.size_bytes then
     return false, string.format("size mismatch %s: got %d expected %d",
       path, #content, entry.size_bytes)
+  end
+  if entry and entry.hash and entry.hash ~= "" and type(crc32_fn) == "function" then
+    local actual = crc32_fn(content)
+    if actual:lower() ~= tostring(entry.hash):lower() then
+      return false, string.format("hash mismatch %s: got %s expected %s",
+        path, actual, entry.hash)
+    end
   end
   if path:sub(-4) == ".lua" then
     local loader, lerr = load(content, "=" .. path, "t", {})
@@ -455,7 +492,7 @@ end
 local VERIFY_MAX_ATTEMPTS = 4
 local VERIFY_RETRY_DELAY_S = 2
 
-function M.install(files, install_root, http_mod, sha, progress_fn)
+function M.install(files, install_root, http_mod, ref, progress_fn, crc32_fn)
   local total = #files
   for i, item in ipairs(files) do
     local rel   = item.path
@@ -468,12 +505,12 @@ function M.install(files, install_root, http_mod, sha, progress_fn)
       -- Retry sinnvoll, ein Mismatch hier ist ein echter Fehler.
       local ok, werr = M.write(dest, item.content)
       if not ok then return false, werr end
-      local ok2, verr = M.verify(dest, entry)
+      local ok2, verr = M.verify(dest, entry, crc32_fn)
       if not ok2 then return false, verr end
     else
       local success = false
       for attempt = 1, VERIFY_MAX_ATTEMPTS do
-        local body, err = http_mod.download_file(rel, sha)
+        local body, err = http_mod.download_file(rel, ref)
         if not body then
           last_err = "download failed: " .. rel .. " — " .. tostring(err)
         elseif http_mod.is_html(body) then
@@ -483,7 +520,7 @@ function M.install(files, install_root, http_mod, sha, progress_fn)
           if not ok then
             last_err = werr
           else
-            local ok2, verr = M.verify(dest, entry)
+            local ok2, verr = M.verify(dest, entry, crc32_fn)
             if ok2 then
               success = true
               break
@@ -732,12 +769,23 @@ local function run_update(sha)
 
   -- Fix (2026-07-07): der manuelle Installer (installer/stage.lua) hat
   -- schon eine reclaim()-Funktion, die vor jedem Schreibvorgang bei
-  -- Platzmangel /xreactor_logs, /xreactor_backup_prev und /xreactor_stage
-  -- aufraeumt — auto_update.lua nutzte das bisher NIE, sondern schrieb die
-  -- Temp-Datei direkt ohne jeden Reclaim-Versuch. Der lokale Log-Puffer
-  -- kann bis zu 200 KB einnehmen (core/logger.lua MAX_BYTES) und wurde nie
-  -- automatisch vom Auto-Updater entfernt — wahrscheinlicher Hauptgrund
-  -- fuer "Speicher voll". Gleiche Logik jetzt hier nachgebaut.
+  -- Platzmangel aufraeumt — auto_update.lua nutzte das bisher NIE, sondern
+  -- schrieb die Temp-Datei direkt ohne jeden Reclaim-Versuch. Gleiche
+  -- Logik jetzt hier nachgebaut.
+  --
+  -- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
+  -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
+  -- Der Fix vom 2026-07-07 loeschte hier "/xreactor_logs" unconditional
+  -- als Platz-Reclaim-Massnahme, mit der (falschen) Begruendung, das sei
+  -- nur ein bis zu 200 KB grosser, jederzeit regenerierbarer Log-Puffer.
+  -- Tatsaechlich ist "/xreactor_logs" core/logger.lua's DEFAULT_LOG_DIR --
+  -- der echte lokale Log-Speicherort jeder Rolle (bzw. einer LOG_
+  -- COLLECTOR-Rolle auf demselben Computer). Ein Platzmangel durfte
+  -- niemals als Erlaubnis gelten, vorhandene Logs zu vernichten. Jetzt
+  -- werden nur noch echte, installer-eigene, jederzeit regenerierbare
+  -- Zwischenverzeichnisse entfernt; reicht das nicht, schlaegt der
+  -- Schreibversuch kontrolliert fehl (siehe run_update()'s bestehende
+  -- Fehlerbehandlung), statt Nutzerdaten zu opfern.
   local function free_space_root()
     if not (fs and type(fs.getFreeSpace) == "function") then return nil end
     local ok, v = pcall(fs.getFreeSpace, "/")
@@ -754,10 +802,6 @@ local function run_update(sha)
     local free = free_space_root()
     if free and free >= needed then return true end
     local reclaimed = {}
-    if fs.exists("/xreactor_logs") then
-      pcall(fs.delete, "/xreactor_logs"); reclaimed[#reclaimed+1] = "/xreactor_logs"
-    end
-    pcall(fs.makeDir, "/xreactor_logs")
     if fs.exists("/xreactor_backup_prev") then
       pcall(fs.delete, "/xreactor_backup_prev"); reclaimed[#reclaimed+1] = "/xreactor_backup_prev"
     end
@@ -1020,28 +1064,32 @@ local function backup_config_dir()
   return files_map
 end
 
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 14). Der
+-- vorherige Fix (2026-07-08, siehe Git-Historie) loeste das damals
+-- beschriebene Symptom, indem das Manifest immer vom ungepinnten
+-- "beta"-Branch-Pfad geladen wurde -- WAEHREND http_mod.download_file()
+-- fuer jede einzelne Datei weiterhin zuerst die SHA-gepinnte URL versuchte
+-- und nur bei DEREN Fehlschlag auf "beta" zurueckfiel. Damit konnten
+-- Manifest und Dateien innerhalb DESSELBEN Laufs weiterhin aus zwei
+-- verschiedenen Commits stammen (Manifest von "beta"-HEAD zum Zeitpunkt X,
+-- einzelne Dateien vom frueher aufgeloesten, moeglicherweise AELTEREN
+-- SHA) -- dieselbe Bugklasse wie zuvor, nur mit vertauschten Rollen.
+-- Jetzt wird EIN einziger Referenzpunkt ("ref": entweder die aufgeloeste
+-- SHA, oder bei Aufloesungsfehler explizit der String "beta") fuer den
+-- GESAMTEN Lauf bestimmt und sowohl fuers Manifest als auch fuer jede
+-- einzelne Datei verwendet -- http_mod.download_file() hat dafuer seinen
+-- eigenstaendigen Pro-Datei-Fallback verloren (siehe dortiger
+-- Fix-Kommentar). Schlaegt der gesamte Lauf fehl, bricht er komplett ab
+-- statt Quellen zu mischen; ein erneuter Versuch (manueller Neustart, oder
+-- auto_update.lua's Retry-Loop, der /installer bei jedem Versuch frisch
+-- herunterlaedt und dabei zwangslaeufig eine komplett neue SHA aufloest)
+-- beginnt konsistent von vorn.
 local sha = http_mod.resolve_sha()
-local base_url = sha
-  and (GITHUB_RAW .. sha .. "/xreactor/")
-  or  (GITHUB_RAW .. "beta/xreactor/")
-p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar")
+local ref = sha or "beta"
+p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar -- gesamter Lauf verwendet 'beta'")
 
--- Fix (2026-07-08): CRITICAL. Vorher wurde das Manifest ausschliesslich
--- ueber die SHA-gepinnte URL geladen, OHNE Fallback — waehrend
--- http_mod.download_file() fuer JEDE einzelne Datei bereits einen
--- Fallback auf den ungepinnten "beta"-Branch-Pfad hat, falls die
--- SHA-gepinnte URL fehlschlaegt. Ergebnis: wenn resolve_sha() einen
--- nicht ganz aktuellen Commit lieferte (z.B. durch API-Verzoegerung/
--- Rate-Limit-Umstaende), aber die SHA-gepinnte manifest.lua-URL trotzdem
--- erfolgreich (nur mit veraltetem Inhalt) antwortete, blieb das Manifest
--- auf altem Stand — waehrend einzelne Dateien beim Download ueber den
--- Fallback-Pfad bereits den neuesten Stand bekamen. Beobachtet als
--- "Installation: size mismatch ... got <neu> expected <alt>". Jetzt wird
--- das Manifest immer vom ungepinnten "beta"-Branch-Pfad geladen (garantiert
--- konsistent mit dem, was download_file() im Fallback-Fall sowieso liefert)
--- — die SHA bleibt nur fuer die einzelnen Datei-Downloads relevant, wo sie
--- ohnehin bereits denselben Fallback-Schutz hat.
-local manifest_url = GITHUB_RAW .. "beta/xreactor/manifest.lua"
+local manifest_url = GITHUB_RAW .. ref .. "/xreactor/manifest.lua"
 local manifest, merr = manifest_mod.load_remote(manifest_url, http_mod)
 if not manifest then error("Manifest: " .. tostring(merr), 0) end
 p("Manifest: " .. tostring(manifest.manifest_id or manifest.manifest_version))
@@ -1242,8 +1290,17 @@ table.sort(file_list, function(a, b)
 end)
 
 p("Installiere " .. #file_list .. " Dateien...")
-local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, sha,
-  function(done, total, rel) ui_mod.progress(done, total, rel) end)
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
+-- stage_mod.verify() prüfte bisher nur Existenz/Lesbarkeit/Größe/Syntax,
+-- nicht den CRC32-Hash aus dem Manifest -- eine Datei mit korrekter Größe
+-- und gültiger Lua-Syntax, aber verändertem Inhalt, konnte akzeptiert
+-- werden. manifest_mod.crc32 (bereits vorhanden, siehe M.is_current())
+-- wird jetzt durchgereicht, damit stage_mod.verify() jeden Write
+-- tatsächlich gegen den erwarteten Hash prüft.
+local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, ref,
+  function(done, total, rel) ui_mod.progress(done, total, rel) end,
+  manifest_mod.crc32)
 if not ok then error("Installation: " .. tostring(err), 0) end
 
 -- Gesamten config-Ordner wiederherstellen (ueberschreibt die bereits
@@ -1375,23 +1432,30 @@ if ok_sha and r_sha then
 end
 p(sha and ("SHA: "..sha:sub(1,12)) or "WARN: SHA nicht auflösbar")
 
-local base = sha
-  and (GITHUB_RAW..sha.."/xreactor/")
-  or  (GITHUB_RAW.."beta/xreactor/")
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 14). Der
+-- vorherige Fix (2026-07-08, siehe Git-Historie) loeste das damals
+-- beschriebene Symptom nur teilweise: das Manifest wurde zwar konsequent
+-- vom ungepinnten "beta"-Branch geladen, aber "base" (verwendet fuer JEDE
+-- einzelne Datei ueber die weiter unten gebaute download_file()-Bruecke)
+-- blieb SHA-gepinnt, sobald resolve_sha() erfolgreich war. Damit stammten
+-- Manifest und Dateien in diesem Wrapper-Codepfad IMMER (nicht nur im
+-- Fallback-Fall) aus zwei potenziell verschiedenen Commits, sobald ein SHA
+-- aufgeloest werden konnte. Jetzt wird EIN einziger Referenzpunkt ("ref":
+-- entweder die aufgeloeste SHA, oder bei Aufloesungsfehler explizit der
+-- String "beta") bestimmt und sowohl fuers Manifest als auch fuer "base"
+-- (und damit jede Datei) verwendet.
+local ref = sha or "beta"
+local base = GITHUB_RAW..ref.."/xreactor/"
 
 -- ── Manifest laden ───────────────────────────────────────────────────────────
--- Fix (2026-07-08): CRITICAL. Gleicher Bug wie in installer/init.lua (siehe
--- dortiger Kommentar) — hier eine zweite, unabhaengige Kopie derselben
--- Logik direkt im Wrapper. Manifest jetzt immer vom ungepinnten
--- "beta"-Branch-Pfad geladen statt von der evtl. veralteten SHA-gepinnten
--- URL, damit es nie von dem abweicht, was download_file() fuer einzelne
--- Dateien im Fallback-Fall sowieso liefert.
 p("Lade Manifest...")
+local manifest_url = base.."manifest.lua"
 local man_body, man_err
-man_body, man_err = download(GITHUB_RAW.."beta/xreactor/manifest.lua")
+man_body, man_err = download(manifest_url)
 if not man_body then error("Manifest Download fehlgeschlagen: "..tostring(man_err), 0) end
 
-local manifest, merr = manifest_mod.load_remote(GITHUB_RAW.."beta/xreactor/manifest.lua", {
+local manifest, merr = manifest_mod.load_remote(manifest_url, {
   download = download, is_html = http_mod.is_html
 })
 -- Fallback: Manifest direkt parsen
@@ -1596,12 +1660,20 @@ end
 table.sort(file_list, function(a,b) return a.path < b.path end)
 
 p("Installiere "..#file_list.." Dateien...")
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
+-- manifest_mod.crc32 wird jetzt durchgereicht, damit stage_mod.verify()
+-- jeden Write tatsächlich gegen den erwarteten Hash prüft. Ausserdem wird
+-- "ref" statt der rohen "sha" durchgereicht (der Download-Shim ignoriert
+-- diesen Parameter ohnehin, "base" ist bereits konsistent aus "ref"
+-- gebaut -- siehe Abschnitt 14 -- aber "ref" ist der korrekte Name).
 local ok6, err6 = stage_mod.install(
   file_list, INSTALL_ROOT,
   { download_file = function(rel, s) return download(base..rel) end,
     is_html = http_mod.is_html },
-  sha,
-  function(done, total, rel) ui_mod.progress(done, total, rel) end
+  ref,
+  function(done, total, rel) ui_mod.progress(done, total, rel) end,
+  manifest_mod.crc32
 )
 if not ok6 then error("Installation: "..tostring(err6), 0) end
 

@@ -158,11 +158,36 @@ local function feed_one(self, cfg)
       self.warn_once("feed_fail:" .. tostring(target.label),
         "FeedRouter: feed failed for " .. tostring(target.label) .. ": " .. tostring(err))
     end
-  end, cfg.valve_open_ms)
+  end, cfg.valve_open_ms, {
+    -- Fix (2026-07-16): CRITICAL (FUEL-P0-Folgefix, siehe docs/CODING_AI_
+    -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 7). Bricht die
+    -- Transaktion VOR dem Export ab (z.B. Ventil-ACK-Fehler oder Phasen-
+    -- Timeout), lief bisher weder der Erfolgs- noch ein Fehlerpfad --
+    -- last_error blieb stumm auf dem letzten (moeglicherweise laengst
+    -- veralteten) Wert stehen, obwohl diese Befuellung tatsaechlich
+    -- gescheitert ist.
+    on_error = function(reason)
+      self._state.last_error = "routing_failed:" .. tostring(reason)
+      self.warn_once("feed_route_fail:" .. tostring(target.label),
+        "FeedRouter: Routing-Transaktion fuer " .. tostring(target.label) .. " abgebrochen (" .. tostring(reason) .. ")")
+    end,
+  })
   if not started then
     self.warn_once("router_busy:" .. tostring(reason),
       "FeedRouter: Befuellung fuer " .. tostring(target.label) .. " uebersprungen (" .. tostring(reason) .. ")")
   end
+end
+
+-- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). Bricht eine laufende
+-- Ventil-Transaktion sofort ab (z.B. beim Uebergang in Standby/MASTER-
+-- Timeout), statt sie ueber rs_router:tick() "sauber" zu Ende laufen zu
+-- lassen. redstone_router.lua's shutdown_now() ruft dabei tx.on_error()
+-- auf (derselbe Mechanismus wie bei einem echten Transaktionsfehler), was
+-- automatisch last_error auf dieser FeedRouter-Instanz setzt -- der
+-- Abbruch bleibt dadurch fuer Diagnose/UI sichtbar.
+function M:cancel(reason)
+  self.rs_router:shutdown_now(reason)
 end
 
 function M:tick()

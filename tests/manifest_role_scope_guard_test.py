@@ -8,6 +8,16 @@ XREACTOR_ROOT = REPO_ROOT / "xreactor"
 MANIFEST_PATH = XREACTOR_ROOT / "manifest.lua"
 ENTRY_RE = re.compile(r'\{\s*path\s*=\s*"(?P<path>[^"]+)"(?P<tail>.*)\}\s*,?\s*$')
 REQUIRE_RE = re.compile(r"require\s*\(\s*[\"']([\w\._]+)[\"']\s*\)")
+# Fix (2026-07-16): MANIFEST-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
+# 2026-07-12.md). Dieser Test kannte bisher NUR require()-Aufrufe. dofile()
+# ist im gesamten Repo ein genauso legitimer, haeufig genutzter Ladeweg (z.B.
+# master/runtime_loop.lua's dofile("/xreactor/nodes/support/runtime.lua")) --
+# ohne dofile()-Erkennung meldete dieser Test fuer jede Datei, die nur per
+# dofile() erreicht wird, einen falschen Mismatch (CONTENT_DRIFT), obwohl der
+# Manifest-Scope tatsaechlich korrekt war.
+# Matches both dofile("path") and the common pcall(dofile, "path") idiom
+# used throughout this codebase (dofile passed as a bare callback reference).
+DOFILE_RE = re.compile(r"dofile\s*[,(]\s*[\"']([^\"']+)[\"']")
 
 ROLE_CANDIDATES = {
     "services/matrix_sampling_service.lua",
@@ -77,9 +87,17 @@ def roles_for_path(roles_entries, rel_path):
 def module_to_path(module_name: str):
     return module_name.replace('.', '/') + '.lua'
 
+def normalize_dofile_path(raw_path: str):
+    p = raw_path.lstrip('/')
+    if p.startswith('xreactor/'):
+        p = p[len('xreactor/'):]
+    return p
+
 def collect_requires(lua_file: pathlib.Path):
     content = lua_file.read_text(encoding='utf-8')
-    return {module_to_path(m.group(1)) for m in REQUIRE_RE.finditer(content)}
+    found = {module_to_path(m.group(1)) for m in REQUIRE_RE.finditer(content)}
+    found |= {normalize_dofile_path(m.group(1)) for m in DOFILE_RE.finditer(content)}
+    return found
 
 def collect_requires_transitive(entry: pathlib.Path):
     """BFS over all reachable require() calls from an entry point."""

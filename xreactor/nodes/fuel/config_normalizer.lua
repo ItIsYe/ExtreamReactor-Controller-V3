@@ -47,6 +47,17 @@ function M.normalize(config_values, defaults, add_warning, utils)
   end
   if type(lg.reactors)     ~= "table" then lg.reactors     = {} end
   if type(lg.waste)        ~= "table" then lg.waste        = {} end
+  -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md). destinations/sources/routes wurden bisher
+  -- NIE normalisiert -- weder DEFAULT_LOGISTICS noch eine leere
+  -- "logistics={}"-Benutzerconfig enthalten ein "destinations"-Feld. Der
+  -- Destination-Validierungsloop weiter unten ruft aber unbedingt
+  -- ipairs(lg.destinations) auf, was bei einer frischen oder teilweisen
+  -- Config sofort mit "bad argument #1 to 'ipairs' (table expected, got
+  -- nil)" abstuerzte, noch bevor die Node betriebsbereit war.
+  if type(lg.destinations) ~= "table" then lg.destinations = {} end
+  if type(lg.sources)      ~= "table" then lg.sources      = {} end
+  if type(lg.routes)       ~= "table" then lg.routes       = {} end
   -- Fix (2026-07-09): kein Hinweis existierte bisher, wenn Reaktoren
   -- konfiguriert sind, "enabled" aber noch false ist -- ein leicht zu
   -- uebersehender Zustand, in dem alle Reaktor-Eintraege fehlerfrei

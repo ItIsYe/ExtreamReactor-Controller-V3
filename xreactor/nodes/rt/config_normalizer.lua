@@ -27,6 +27,57 @@ function M.migrate_legacy_paths(config_values, add_warning)
   end
 end
 
+-- Fix (2026-07-16): CRITICAL (RT-P1, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 5, "Altconfig-Migration und
+-- Schedulernachweis"). Vor dem 10-Hz-Fix (2026-07-14) waren autonom.
+-- reactor_adjust_interval=5.0 und ein impliziter reactor_adjust_interval_
+-- individual-Fallback von 1.0 die Defaults -- beide sind gueltige Zahlen,
+-- die generische "type(...) ~= 'number'"-Normalisierung in validate_config()
+-- (siehe unten) fasst valide-aber-veraltete Werte deshalb NICHT an. Eine
+-- bereits laufende, aktualisierte Installation behaelt dadurch dauerhaft
+-- die alte, viel zu langsame Regelkadenz. Migriert GEZIELT nur die
+-- historischen Default-WERTE (nicht jeden beliebigen numerischen Wert --
+-- ein bewusst vom Nutzer gesetzter anderer Wert, z.B. 2.5, bleibt
+-- unangetastet), gesteuert ueber das bestehende (bisher nirgends
+-- ausgewertete) config.version-Feld -- laeuft dadurch garantiert nur
+-- einmal pro Installation (main.lua persistiert das Ergebnis sofort nach
+-- dieser Migration, siehe dort).
+local RT_CONFIG_VERSION_INTERVAL_MIGRATION = 5
+local LEGACY_REACTOR_ADJUST_INTERVAL = 5.0
+local LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL = 1.0
+
+function M.migrate_schema_version(config_values, defaults, add_warning)
+  if type(config_values) ~= "table" then
+    return false
+  end
+  local from_version = tonumber(config_values.version) or 1
+  local changed = false
+  if from_version < RT_CONFIG_VERSION_INTERVAL_MIGRATION then
+    local autonom = type(config_values.autonom) == "table" and config_values.autonom or nil
+    if autonom then
+      if autonom.reactor_adjust_interval == LEGACY_REACTOR_ADJUST_INTERVAL then
+        autonom.reactor_adjust_interval = defaults.autonom.reactor_adjust_interval
+        add_warning(string.format(
+          "autonom.reactor_adjust_interval migrated from historical default %s -> %s (config schema v%d)",
+          tostring(LEGACY_REACTOR_ADJUST_INTERVAL), tostring(defaults.autonom.reactor_adjust_interval), RT_CONFIG_VERSION_INTERVAL_MIGRATION))
+        changed = true
+      end
+      if autonom.reactor_adjust_interval_individual == LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL then
+        autonom.reactor_adjust_interval_individual = defaults.autonom.reactor_adjust_interval_individual
+        add_warning(string.format(
+          "autonom.reactor_adjust_interval_individual migrated from historical default %s -> %s (config schema v%d)",
+          tostring(LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL), tostring(defaults.autonom.reactor_adjust_interval_individual), RT_CONFIG_VERSION_INTERVAL_MIGRATION))
+        changed = true
+      end
+    end
+  end
+  if config_values.version ~= defaults.version then
+    config_values.version = defaults.version
+    changed = true
+  end
+  return changed
+end
+
 function M.validate_config(config_values, defaults, add_warning, utils)
   local normalized = utils.normalize_node_id(config_values.node_id)
   if normalized == "UNKNOWN" then
@@ -164,6 +215,18 @@ function M.validate_config(config_values, defaults, add_warning, utils)
   if type(config_values.autonom.reactor_adjust_interval) ~= "number" then
     config_values.autonom.reactor_adjust_interval = defaults.autonom.reactor_adjust_interval
     add_warning("autonom.reactor_adjust_interval missing/invalid; defaulting to " .. tostring(defaults.autonom.reactor_adjust_interval))
+  end
+  -- Fix (2026-07-16): RT-P1. Fehlte hier bisher komplett -- reactor_control.lua
+  -- las den Wert nur ueber einen "or 0.10"-Fallback AN DER VERWENDUNGSSTELLE,
+  -- nie ueber die Config-Normalisierung selbst (im Gegensatz zu jedem
+  -- anderen autonom.*-Feld hier). Ein ungueltiger (nicht-numerischer,
+  -- absichtlich oder versehentlich gesetzter) Wert haette dadurch NICHT
+  -- hier, sondern erst implizit an der Nutzungsstelle abgefangen werden
+  -- koennen -- fuer Konsistenz jetzt genauso normalisiert wie reactor_
+  -- adjust_interval direkt darueber.
+  if type(config_values.autonom.reactor_adjust_interval_individual) ~= "number" then
+    config_values.autonom.reactor_adjust_interval_individual = defaults.autonom.reactor_adjust_interval_individual
+    add_warning("autonom.reactor_adjust_interval_individual missing/invalid; defaulting to " .. tostring(defaults.autonom.reactor_adjust_interval_individual))
   end
   if type(config_values.autonom.steam_reserve) ~= "number" then
     config_values.autonom.steam_reserve = defaults.autonom.steam_reserve

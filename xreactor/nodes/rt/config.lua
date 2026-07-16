@@ -1,4 +1,17 @@
-local CURRENT_VERSION = 4
+-- Fix (2026-07-16): CRITICAL (RT-P1, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 5, "Altconfig-Migration und
+-- Schedulernachweis"). "version"/CURRENT_VERSION existierte bereits, wurde
+-- aber nirgends im Projekt tatsaechlich gelesen/verglichen -- ein reines
+-- Deklarations-Feld ohne Wirkung. Erhoeht auf 5, um config_normalizer.lua's
+-- neue migrate_schema_version() einen echten Ansatzpunkt zu geben: eine
+-- bestehende, persistierte config/rt.lua mit dem historischen Default
+-- autonom.reactor_adjust_interval=5.0 (bzw. reactor_adjust_interval_
+-- individual=1.0, siehe dortiger Fix-Kommentar) wird beim naechsten Boot
+-- GEZIELT auf den neuen 0.10-Default migriert (nicht blind ueberschrieben,
+-- falls der Nutzer bewusst einen ANDEREN Wert gesetzt hat) und die
+-- Migration wird als abgeschlossen persistiert (version=5), damit sie
+-- garantiert nur einmal laeuft.
+local CURRENT_VERSION = 5
 
 return {
   version = CURRENT_VERSION,
