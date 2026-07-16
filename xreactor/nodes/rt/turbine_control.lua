@@ -88,6 +88,28 @@ local function build_capabilities(name)
   }
 end
 
+-- Fix (2026-07-15): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
+-- 2026-07-12.md Abschnitt 6, "Singular-/Plural-Kind-Namen normalisieren").
+-- Der Rest der RT-Discovery/Binding-Logik (binding.lua's detect_kind()/
+-- should_bind_with_reason(), discovery_runtime.lua's Binding-Decisions,
+-- module.type) verwendet durchgehend den SINGULAR ("reactor"/"turbine"),
+-- waehrend ctx.capability_cache/get_device_caps() intern den PLURAL
+-- ("reactors"/"turbines") als Cache-Schluessel erwarten. Bisher stimmten
+-- alle bestehenden Aufrufstellen zufaellig ueberein, aber ein kuenftiger
+-- Aufruf mit dem (im Rest des Codes ueblichen) Singular wuerde still einen
+-- separaten, nie befuellten Cache-Namensraum erzeugen (kein Fehler, aber
+-- der Cache griffe nie -- jeder Aufruf haette einen echten peripheral.
+-- getMethods()-Scan zur Folge). normalize_kind() macht get_device_caps()
+-- robust gegen beide Schreibweisen.
+local KIND_TO_CACHE_KEY = {
+  reactor = "reactors", reactors = "reactors",
+  turbine = "turbines", turbines = "turbines",
+}
+
+local function normalize_kind(kind)
+  return KIND_TO_CACHE_KEY[kind] or kind
+end
+
 function M.get_device_caps(ctx, kind, name)
   -- Fix (2026-07-13): CRITICAL (RT-P0.3, siehe docs/CODING_AI_OTHER_
   -- NODES_PERFORMANCE_2026-07-12.md). "or peripheral.isPresent(name)"
@@ -101,6 +123,7 @@ function M.get_device_caps(ctx, kind, name)
   -- cache[kind][name] = build_capabilities(name)-Aufrufe) -- diese
   -- Funktion hier muss daher nur noch bei komplett FEHLENDEM Cache-
   -- Eintrag neu aufbauen, nicht bei jedem "ist gerade angeschlossen"-Check.
+  kind = normalize_kind(kind)
   ctx.capability_cache[kind] = ctx.capability_cache[kind] or {}
   if not ctx.capability_cache[kind][name] then
     ctx.capability_cache[kind][name] = build_capabilities(name)

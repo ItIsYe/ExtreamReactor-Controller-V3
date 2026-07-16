@@ -44,6 +44,7 @@ local semantic_ctx = {
   set_active_startup = function() end,
   get_network_id = function() return 'RT-TEST' end,
   get_current_state = function() return 'MASTER' end,
+  set_current_state = function() end,
   get_node_state_machine = function()
     return {
       state = function() return constants.node_states.RUNNING end,

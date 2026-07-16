@@ -7,7 +7,6 @@ energy_heartbeat_decoupling_regression_test.py # STALE_API (erwartet woertliche 
 energy_persistent_topology_regression_test.py # STALE_API (erwartet woertliche Funktion reconcile_matrix_groups)
 energy_scope_regression_test.py # STALE_API (erwartet woertliches "local master_peer_state")
 manifest_entrypoint_require_coverage_test.py # CONTENT_DRIFT (mehrere Master-Runtime-Fingerprint-Marker fehlen/abweichend)
-manifest_hash_size_guard_test.py # DUPLICATE_MANIFEST_PATH (core/bootstrap.lua doppelt in xreactor/manifest.lua)
 manifest_role_scope_guard_test.py # CONTENT_DRIFT (required_for-Rollenlisten weichen von Entrypoint-Ableitung ab)
 master_rt_dashboard_ui_contract_test.py # STALE_API (erwartet Textfragment "RT-Flotte")
 release_manifest_rt_guard_test.py # STALE_STRUCTURE (erwartet nicht existierende Datei xreactor/installer_main.lua)

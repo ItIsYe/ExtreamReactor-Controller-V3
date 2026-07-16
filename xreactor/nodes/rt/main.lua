@@ -394,6 +394,48 @@ local function discover()
   devices.last_scan_ts = os.epoch("utc")
 end
 
+-- Fix (2026-07-15): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
+-- 2026-07-12.md Abschnitt 6, "stabilen Discovery-Default nach erfolgreichem
+-- Boot verlangsamen"). discover() lief bisher fest alle config.scan_interval
+-- (10s), fuer immer, unabhaengig davon ob sich die gebundenen Geraete seit
+-- Ewigkeiten nicht mehr geaendert haben -- jeder Lauf scannt peripheral.
+-- getNames() plus getMethods()/getType()/adapter.inspect() fuer jedes
+-- sichtbare Geraet. Nutzt den bestehenden should_discover-Erweiterungspunkt
+-- von services/discovery_service.lua (KEINE Aenderung am geteilten Service
+-- noetig, der auch von WATER/FUEL/etc. genutzt wird): nach
+-- DISCOVERY_STABLE_STREAK unveraenderten Scans in Folge (binding_signature
+-- bleibt gleich) wird nur noch jeder DISCOVERY_SLOW_MULTIPLIER-te faellige
+-- Scan tatsaechlich ausgefuehrt -- eine echte Aenderung (Attach/Detach)
+-- setzt den Zaehler sofort zurueck auf die normale 10s-Kadenz.
+local DISCOVERY_STABLE_STREAK    = 3
+local DISCOVERY_SLOW_MULTIPLIER  = 6
+local discovery_stable_count = 0
+local discovery_slow_skip_count = 0
+
+local function should_discover(_, _, _, due)
+  if not due then return false end
+  if discovery_stable_count < DISCOVERY_STABLE_STREAK then
+    return true
+  end
+  discovery_slow_skip_count = discovery_slow_skip_count + 1
+  if discovery_slow_skip_count < DISCOVERY_SLOW_MULTIPLIER then
+    return false
+  end
+  discovery_slow_skip_count = 0
+  return true
+end
+
+local function discover_with_stability_tracking()
+  local signature_before = devices.binding_signature
+  discover()
+  if devices.binding_signature == signature_before then
+    discovery_stable_count = discovery_stable_count + 1
+  else
+    discovery_stable_count = 0
+    discovery_slow_skip_count = 0
+  end
+end
+
 -- ── Status-Payload ───────────────────────────────────────────────────────────
 
 local function build_status_payload(status_level)
@@ -632,7 +674,8 @@ local function init()
 
   services:add(discovery_service.new({
     registry = registry,
-    discover = discover,
+    discover = discover_with_stability_tracking,
+    should_discover = should_discover,
     interval = config.scan_interval or config.heartbeat_interval,
     managed_registry = false,
     update_health = function(ok) devices.discovery_failed = not ok end,
@@ -744,7 +787,6 @@ local function init()
     targets           = ctx and ctx.targets or {},
     TARGET_RPM        = CONFIG.TARGET_RPM,
     -- Zustands-Accessoren
-    is_master_connected    = is_master_connected,
     get_current_state      = current_state,
     set_current_state      = function(v) current_state_value = v end,
     get_node_state_machine = function() return node_state_machine end,
@@ -803,6 +845,16 @@ local function init()
       module_lifecycle.set_turbines_active(lctx, active, reason)
     end,
   }
+  -- Fix (2026-07-15): expliziter Guard + Diagnose-Log fuer is_master_connected,
+  -- bevor state_handlers.build() dessen eigenen generischen (aber weniger
+  -- aussagekraeftigen) assert_fn-Guard auswertet -- gibt Operatoren beim RT-
+  -- Boot eine eindeutige Bestaetigung, dass der sicherheitskritische Master-
+  -- Failover-Check verdrahtet ist.
+  state_ctx.is_master_connected = is_master_connected
+  if type(state_ctx.is_master_connected) ~= "function" then
+    error("rt state context missing required function: is_master_connected", 0)
+  end
+  log("INFO", "State context ready (is_master_connected=true)")
   states_table = state_handlers.build(state_ctx)
   node_state_machine = machine.new(states_table, constants.node_states.OFF)
 

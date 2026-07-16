@@ -46,7 +46,8 @@ local handlers = state_handlers.build({
   get_active_startup = function() return nil end,
   set_active_startup = function() end,
   get_current_state = function() return 'MASTER' end,
-  get_node_state_machine = function() return machine end
+  get_node_state_machine = function() return machine end,
+  is_master_connected = function() return true end
 })
 
 local control = control_service.new({

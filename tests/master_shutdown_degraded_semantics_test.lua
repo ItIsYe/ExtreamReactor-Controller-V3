@@ -12,6 +12,7 @@ local h = handlers.new({
   comms = function() return { get_peers = function() return {} end } end,
   sequencer = { enqueue=function() end, notify_stable=function() end, notify_ack=function() end },
   sync_rt_node = function() end,
+  mark_rt_sync_dirty = function() end,
   add_alarm = function() end,
   master_time_label = function() return 't' end,
   log = function() end
