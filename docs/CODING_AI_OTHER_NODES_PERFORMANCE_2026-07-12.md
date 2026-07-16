@@ -38,7 +38,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
 | MASTER | **TEILWEISE UMGESETZT** | Sequencer-Aufrufsyntax und echter MASTER→RT-Modulstart behoben (Abschnitt 3); Einzelnode-/ACK-UI (Abschnitt 15) weiterhin offen |
 | RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
-| ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
+| ENERGY | **WEITGEHEND UMGESETZT** | Scheduler-/Heartbeat-Trennung behoben (Abschnitt 13) |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
 | FUEL | **WEITGEHEND UMGESETZT** | Startabsturz, Export-vor-Ventilbestätigung, Async-Lifecycle und ungültiges Routing→Direktexport behoben (Abschnitt 6/7/8/9); gemeinsamer Ventilkanal (VALVE, Abschnitt 12) ebenfalls behoben |
 | REPROCESSOR | **WEITGEHEND UMGESETZT** | unvollständige Installation, Export-vor-Ventilbestätigung und Export trotz Standby behoben (Abschnitt 8/10/11) |
@@ -687,6 +687,21 @@ Command-ID erst nach erfolgreichem Apply als abgeschlossen markieren. Fehlgeschl
 
 ## Status
 
+**BEHOBEN (2026-07-16)**
+
+`nodes/energy/matrix.lua` (der explizit blockieren darf, Peripherie-Calls dokumentiert 1-4s) tickte über `ctx.services:tick()` die VOLLSTÄNDIGE Service-Liste (COMMS/DISCOVERY/STORAGE_SAMPLE/MATRIX_SAMPLE/TELEMETRY/UI) — ein langsamer Matrix-Peripherie-Call verzögerte dadurch im selben sequentiellen Aufruf auch COMMS/Discovery/Telemetry/UI, obwohl der eigentliche Sinn der zwei getrennten Coroutinen (`heartbeat.lua` + `matrix.lua` via `parallel.waitForAny`) genau das verhindern sollte. Zusätzlich rief `matrix.lua` nach jedem Loop-Durchlauf (~alle 0,5s) `ctx.send_heartbeat(ctx.now_ms())` komplett ungegatet auf — deutlich mehr Heartbeats als das konfigurierte Intervall.
+
+Fix:
+
+- Neue, zweite `service_manager`-Instanz `matrix_services` in `nodes/energy/main.lua`, ausschließlich für `STORAGE_SAMPLE`/`MATRIX_SAMPLE` — nur diese wird aus dem Matrix-Thread geticked (`ctx.services` in `matrix.lua`s Kontext zeigt jetzt darauf).
+- `services` (COMMS/DISCOVERY/TELEMETRY/UI) wird jetzt periodisch aus dem (garantiert nie blockierenden) Heartbeat-Thread geticked — `heartbeat.lua` unterhält dafür einen eigenen, unabhängigen Timer (`tick_interval_s`, Standard `CONFIG.RECEIVE_TIMEOUT`) neben dem bestehenden Heartbeat-Intervall-Timer, statt die Nicht-Matrix-Services ausschließlich vom Matrix-Thread abhängig zu machen.
+- `send_heartbeat_if_due(now)` als einzige zentrale „sende Heartbeat, falls fällig“-Quelle in `main.lua` — ersetzt drei zuvor unabhängig voneinander duplizierte Intervallprüfungen (`inter_service_hook`, `matrix_runtime`s `heartbeat_pump`-Option, und den ungegateten Aufruf in `matrix.lua`). Der `inter_service_hook` selbst wurde komplett entfernt (redundant geworden).
+- `matrix.lua` ruft jetzt `ctx.send_heartbeat_if_due(ctx.now_ms())` statt eines rohen `send_heartbeat`.
+
+Pflicht-Test: `tests/energy_matrix_thread_scheduler_isolation_test.lua` (neu) — treibt die echten, jetzt seiteneffektfreien Module `nodes/energy/matrix.lua` und `nodes/energy/heartbeat.lua` direkt: ein künstlich fehlschlagender/„langsamer“ Matrix-Tick verhindert die Heartbeat-Nachholprüfung nicht; `matrix.lua` ruft ausschließlich die gegatete `send_heartbeat_if_due`-Variante auf; `heartbeat.lua` tickt `ctx.services` über einen eigenen Timer, unabhängig vom Heartbeat-Sendeintervall; ergänzt um eine strukturelle Prüfung von `main.lua`s Verdrahtung (Boot-Skript mit Seiteneffekten, nicht direkt instanziierbar). Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
+
+## Status (vor dem Fix)
+
 **KRITISCH OFFEN**
 
 `nodes/energy/matrix.lua` ruft weiterhin:
@@ -940,7 +955,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 5. ~~FUEL Async-Lifecycle und Statistik.~~ BEHOBEN (2026-07-16, siehe Abschnitt 7): `tests/fuel_logistics_async_delivery_lifecycle_test.lua`.
 6. ~~VALVE Failed-Write-Retry.~~ BEHOBEN (2026-07-16, siehe Abschnitt 12): `tests/valve_failed_write_retry_test.lua`.
 7. ~~REPROCESSOR Standby-Cancel.~~ BEHOBEN (2026-07-16, siehe Abschnitt 11): `tests/reprocessor_standby_cancels_transaction_test.lua`.
-8. ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.
+8. ~~ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13): `tests/energy_matrix_thread_scheduler_isolation_test.lua`.
 9. RT Discovery mit Fake-Clock und realem Schedulerintervall.
 10. RT Altconfig-Migration.
 11. Installer ein SHA + CRC.
@@ -958,7 +973,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 6. ~~**Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.~~ BEHOBEN (2026-07-16, siehe Abschnitt 9). REPROCESSOR (`feed_router.lua`) hatte den Bug nicht (kein separater `route_count()`-Vorab-Check).
 7. ~~**VALVE Failed-Write-Retry** und Fail-Safe-Zeitstempel.~~ BEHOBEN (2026-07-16, siehe Abschnitt 12).
 8. ~~**REPROCESSOR Standby-Cancel**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 11).
-9. **ENERGY Scheduler-/Heartbeat-Trennung**.
+9. ~~**ENERGY Scheduler-/Heartbeat-Trennung**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13).
 10. **RT Discovery-Deadline korrekt umsetzen**.
 11. **RT Altconfig-Migration und Controlmetriken**.
 12. **Installer ein SHA + CRC-Verifikation**.
