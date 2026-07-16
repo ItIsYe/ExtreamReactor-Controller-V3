@@ -37,7 +37,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | Manifest / Rollen-Scope | **TEILWEISE UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes behoben (Abschnitt 10/17); `optional/speaker_alarm.lua` weiterhin ohne `required_for` |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
 | MASTER | **TEILWEISE UMGESETZT** | Sequencer-Aufrufsyntax und echter MASTER→RT-Modulstart behoben (Abschnitt 3); Einzelnode-/ACK-UI (Abschnitt 15) weiterhin offen |
-| RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
+| RT | **TEILWEISE UMGESETZT** | Discovery-Deadline behoben (Abschnitt 4); Altconfig-Migration (Abschnitt 5) weiterhin offen |
 | ENERGY | **WEITGEHEND UMGESETZT** | Scheduler-/Heartbeat-Trennung behoben (Abschnitt 13) |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
 | FUEL | **WEITGEHEND UMGESETZT** | Startabsturz, Export-vor-Ventilbestätigung, Async-Lifecycle und ungültiges Routing→Direktexport behoben (Abschnitt 6/7/8/9); gemeinsamer Ventilkanal (VALVE, Abschnitt 12) ebenfalls behoben |
@@ -225,6 +225,16 @@ Ein End-to-End-Test mit echten Produktionsmodulen muss mindestens prüfen:
 # 4. RT-P0 – Discovery-Slowdown funktioniert nicht wie dokumentiert
 
 ## Status
+
+**BEHOBEN (2026-07-16)**
+
+`services/discovery_service.lua`s `tick()` aktualisiert `self.last_scan` nur bei einem tatsächlich ausgeführten Scan — ein übersprungener fälliger Scan lässt `last_scan` unverändert, wodurch `due` (`ts - last_scan >= interval*1000`) ab diesem Zeitpunkt bei **jedem** folgenden RT-Schedulertick (~alle 0,1s) wahr blieb. `nodes/rt/main.lua`s alter Zähler (`discovery_slow_skip_count += 1` pro `should_discover()`-Aufruf) zählte dadurch Scheduler-Ticks statt echter 10s-Scanintervalle — erreichte `DISCOVERY_SLOW_MULTIPLIER=6` bereits nach ~0,6s statt der beabsichtigten ~60s. Empirisch am tatsächlichen Verhalten bestätigt (kein Konstrukt).
+
+Fix: `should_discover()` verwendet jetzt eine echte Wanduhr-Deadline (`discovery_next_slow_scan_at`, in ms) statt eines Aufruf-Zählers — bekommt den Discovery-Service selbst als ersten Parameter (`service.interval` für die tatsächlich konfigurierte Basisrate) und vergleicht direkt gegen die aktuelle Zeit. Eine weit in der Zukunft liegende Deadline wird bei Erreichen genau einmal ausgeführt und von diesem Zeitpunkt aus neu gesetzt — kein Scanburst durch mehrere „verpasste“ Zwischenschritte. Die zuvor zu stark formulierte Attach-/Detach-Aussage („setzt den Zähler sofort zurück“) wurde auf die ehrliche Beschreibung korrigiert (Erkennung erst beim nächsten fälligen Scan, danach sofortige Rücksetzung auf normale Kadenz) — kein eventgetriebener Discovery-Trigger eingeführt, da RT-Discovery bewusst nicht `wants_events` nutzt (Performance).
+
+Pflicht-Test: `tests/rt_discovery_stable_slowdown_test.lua` (komplett neu geschrieben, ersetzt den vom Audit als Testlücke identifizierten alten Test) — treibt die echten `should_discover()`/`discover_with_stability_tracking()`-Funktionen über eine Fake-Clock mit 100ms-Scheduler-Tick und einer `discovery_service.lua`-äquivalenten `due`/`last_scan`-Simulation (nicht nur direkte `should_discover(..., due=true)`-Aufrufe): 190 Sekunden stabile Hardware zeigen tatsächliche ~60s-Scanabstände ohne Burst; eine Bindungsänderung kurz nach einem Scan wird innerhalb der dokumentierten maximalen Erkennungszeit (~60s im Slow-Modus) erkannt und setzt sofort auf die normale ~10s-Kadenz zurück. Verifiziert per `git stash`, dass der Test (durch die Extraktion der jetzt geänderten Quelltext-Marker) mit dem alten Code fehlschlägt.
+
+## Status (vor dem Fix)
 
 **KRITISCHER PERFORMANCE-/VERHALTENSFEHLER**
 
@@ -956,7 +966,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 6. ~~VALVE Failed-Write-Retry.~~ BEHOBEN (2026-07-16, siehe Abschnitt 12): `tests/valve_failed_write_retry_test.lua`.
 7. ~~REPROCESSOR Standby-Cancel.~~ BEHOBEN (2026-07-16, siehe Abschnitt 11): `tests/reprocessor_standby_cancels_transaction_test.lua`.
 8. ~~ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13): `tests/energy_matrix_thread_scheduler_isolation_test.lua`.
-9. RT Discovery mit Fake-Clock und realem Schedulerintervall.
+9. ~~RT Discovery mit Fake-Clock und realem Schedulerintervall.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4): `tests/rt_discovery_stable_slowdown_test.lua`.
 10. RT Altconfig-Migration.
 11. Installer ein SHA + CRC.
 12. LOG-/Installer-Datenerhalt bei Full-/Probe-Fehlern.
@@ -974,7 +984,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 7. ~~**VALVE Failed-Write-Retry** und Fail-Safe-Zeitstempel.~~ BEHOBEN (2026-07-16, siehe Abschnitt 12).
 8. ~~**REPROCESSOR Standby-Cancel**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 11).
 9. ~~**ENERGY Scheduler-/Heartbeat-Trennung**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 13).
-10. **RT Discovery-Deadline korrekt umsetzen**.
+10. ~~**RT Discovery-Deadline korrekt umsetzen**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4).
 11. **RT Altconfig-Migration und Controlmetriken**.
 12. **Installer ein SHA + CRC-Verifikation**.
 13. **keine automatische Log-Löschung** in Installer und LOG Collector.

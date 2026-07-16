@@ -446,25 +446,46 @@ end
 -- von services/discovery_service.lua (KEINE Aenderung am geteilten Service
 -- noetig, der auch von WATER/FUEL/etc. genutzt wird): nach
 -- DISCOVERY_STABLE_STREAK unveraenderten Scans in Folge (binding_signature
--- bleibt gleich) wird nur noch jeder DISCOVERY_SLOW_MULTIPLIER-te faellige
--- Scan tatsaechlich ausgefuehrt -- eine echte Aenderung (Attach/Detach)
--- setzt den Zaehler sofort zurueck auf die normale 10s-Kadenz.
+-- bleibt gleich) wird nur noch alle DISCOVERY_SLOW_MULTIPLIER * scan_interval
+-- Sekunden tatsaechlich gescannt -- eine echte Aenderung (Attach/Detach)
+-- wird beim naechsten faelligen Scan erkannt und setzt sofort wieder auf
+-- die normale 10s-Kadenz zurueck.
+--
+-- Fix (2026-07-16): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 4). discovery_service.lua's tick()
+-- aktualisiert self.last_scan NUR bei einem tatsaechlich ausgefuehrten Scan
+-- (Zeile "if not should_scan then return end" laeuft VOR "self.last_scan =
+-- ts"). Ein uebersprungener faelliger Scan veraendert last_scan also NICHT
+-- -- "due" (ts - last_scan >= interval*1000) bleibt ab diesem Zeitpunkt bei
+-- JEDEM folgenden RT-Schedulertick (~alle 0.1s) wahr. Der alte Zaehler
+-- (discovery_slow_skip_count += 1 pro should_discover()-Aufruf) zaehlte
+-- deshalb Scheduler-TICKS, nicht echte 10s-Scanintervalle -- erreichte
+-- DISCOVERY_SLOW_MULTIPLIER=6 schon nach ~0.6s statt nach den beabsichtigten
+-- ~60s. Jetzt: eine echte Wanduhr-Deadline (discovery_next_slow_scan_at,
+-- naechster ZULAESSIGER Scan-Zeitpunkt in ms) statt eines Aufruf-Zaehlers --
+-- should_discover() bekommt den Discovery-Service selbst als ersten
+-- Parameter (service.interval fuer die tatsaechlich konfigurierte
+-- Basis-Rate) und vergleicht direkt gegen die aktuelle Zeit. Ein weit in
+-- der Zukunft liegender naechster Scan wird bei Erreichen GENAU EINMAL
+-- ausgefuehrt und die Deadline von diesem Zeitpunkt aus neu gesetzt (kein
+-- Scanburst durch mehrere "verpasste" Zwischenschritte).
 local DISCOVERY_STABLE_STREAK    = 3
 local DISCOVERY_SLOW_MULTIPLIER  = 6
 local discovery_stable_count = 0
-local discovery_slow_skip_count = 0
+local discovery_next_slow_scan_at = 0
 
-local function should_discover(_, _, _, due)
+local function should_discover(service, ts, _event, due)
   if not due then return false end
   if discovery_stable_count < DISCOVERY_STABLE_STREAK then
     return true
   end
-  discovery_slow_skip_count = discovery_slow_skip_count + 1
-  if discovery_slow_skip_count < DISCOVERY_SLOW_MULTIPLIER then
-    return false
+  local interval_ms = (tonumber(service and service.interval) or 10) * 1000
+  local slow_period_ms = DISCOVERY_SLOW_MULTIPLIER * interval_ms
+  if discovery_next_slow_scan_at == 0 or ts >= discovery_next_slow_scan_at then
+    discovery_next_slow_scan_at = ts + slow_period_ms
+    return true
   end
-  discovery_slow_skip_count = 0
-  return true
+  return false
 end
 
 local function discover_with_stability_tracking()
@@ -474,7 +495,7 @@ local function discover_with_stability_tracking()
     discovery_stable_count = discovery_stable_count + 1
   else
     discovery_stable_count = 0
-    discovery_slow_skip_count = 0
+    discovery_next_slow_scan_at = 0
   end
 end
 
