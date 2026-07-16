@@ -16,11 +16,23 @@ local function free_space()
   return nil
 end
 
+-- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
+-- "/xreactor_logs" wurde hier bisher unconditional rekursiv geloescht,
+-- sobald waehrend einer Installation zu wenig freier Speicher uebrig war
+-- -- das ist aber KEIN installer-eigenes Zwischenverzeichnis, sondern der
+-- tatsaechliche lokale Log-Speicherort (core/logger.lua's DEFAULT_LOG_DIR,
+-- genutzt von jeder Rolle als lokaler Fallback bzw. von einer LOG_
+-- COLLECTOR-Rolle auf demselben Computer). Ein Platzmangel WAEHREND einer
+-- Installation durfte niemals als Erlaubnis gelten, vorhandene Logs zu
+-- vernichten. Jetzt werden nur noch echte, installer-eigene, jederzeit
+-- regenerierbare Zwischenverzeichnisse entfernt; reicht das nicht, gibt
+-- M.write() (und damit letztlich M.install()) einen klaren Fehler zurueck
+-- und die Installation bricht kontrolliert ab, statt Nutzerdaten zu
+-- opfern.
 local function reclaim(needed)
   local free = free_space()
   if free and free >= needed then return true end
-  if fs.exists("/xreactor_logs")       then pcall(fs.delete, "/xreactor_logs") end
-  pcall(fs.makeDir, "/xreactor_logs")
   if fs.exists("/xreactor_backup_prev") then pcall(fs.delete, "/xreactor_backup_prev") end
   if fs.exists("/xreactor_stage")       then pcall(fs.delete, "/xreactor_stage") end
   free = free_space()

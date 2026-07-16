@@ -21,11 +21,19 @@ local ROLE_ENTRY = {
 
 local function p(msg) pcall(print, tostring(msg)) end
 
+-- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
+-- Bei knappem Speicher wurde hier bei JEDEM Boot "/xreactor_logs"
+-- unconditional rekursiv geloescht -- das ist aber KEIN startup-eigenes
+-- Zwischenverzeichnis, sondern der tatsaechliche lokale Log-Speicherort
+-- (core/logger.lua's DEFAULT_LOG_DIR). Ein knapper Speicherstand durfte
+-- niemals als Erlaubnis gelten, vorhandene Logs bei jedem Neustart zu
+-- vernichten. Jetzt werden nur noch echte, installer-eigene, jederzeit
+-- regenerierbare Zwischenverzeichnisse entfernt.
 local function cleanup_space()
   if not fs.getFreeSpace then return end
   local ok, free = pcall(fs.getFreeSpace, "/")
   if ok and type(free) == "number" and free < 4096 then
-    pcall(fs.delete, "/xreactor_logs");      pcall(fs.makeDir, "/xreactor_logs")
     pcall(fs.delete, "/xreactor_stage")
     pcall(fs.delete, "/xreactor_backup_prev")
     p("STARTUP: Speicher bereinigt")

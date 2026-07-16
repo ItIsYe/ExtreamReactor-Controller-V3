@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 451,
-  manifest_id = "manifest-v451",
+  manifest_version = 452,
+  manifest_id = "manifest-v452",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -10,12 +10,12 @@ return {
   { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6" },
   { path = "installer/http.lua", size_bytes = 3948, hash = "96b3ae8a", always=true },
   { path = "installer/manifest.lua", size_bytes = 5021, hash = "e168db3f", always=true },
-  { path = "installer/stage.lua", size_bytes = 7545, hash = "eeece4d6", always=true },
+  { path = "installer/stage.lua", size_bytes = 8358, hash = "82adbf99", always=true },
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
-  { path = "installer/auto_update.lua", size_bytes = 14277, hash = "3686efb2", always=true },
+  { path = "installer/auto_update.lua", size_bytes = 14745, hash = "dc801ba2", always=true },
   { path = "installer/init.lua", size_bytes = 19921, hash = "7126d4cd", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "d7ace6c9", always=true },
-  { path = "start.lua", size_bytes = 5054, hash = "67454cc2", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "38393521", always=true },
+  { path = "start.lua", size_bytes = 5574, hash = "7c62ecb0", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
     { path = "core/mockup_ui.lua", size_bytes = 11146, hash = "3b1f768a", always=true },
@@ -189,7 +189,7 @@ return {
     { path = "nodes/valve/main.lua", size_bytes = 16462, hash = "7b504292", required_for={"VALVE"} },
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 54354, hash = "79945ea4", required_for={"LOG"} },
+    { path = "nodes/log_collector/main.lua", size_bytes = 57110, hash = "cfc94887", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_main.lua", size_bytes = 1820, hash = "93f3bf36", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_ui.lua", size_bytes = 6190, hash = "75b0732e", required_for={"LOG"} },
     { path = "nodes/log_collector/default_ui.lua", size_bytes = 4481, hash = "adeb5fa4", required_for={"LOG"} },

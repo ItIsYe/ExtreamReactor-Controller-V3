@@ -162,12 +162,23 @@ local function run_update(sha)
 
   -- Fix (2026-07-07): der manuelle Installer (installer/stage.lua) hat
   -- schon eine reclaim()-Funktion, die vor jedem Schreibvorgang bei
-  -- Platzmangel /xreactor_logs, /xreactor_backup_prev und /xreactor_stage
-  -- aufraeumt — auto_update.lua nutzte das bisher NIE, sondern schrieb die
-  -- Temp-Datei direkt ohne jeden Reclaim-Versuch. Der lokale Log-Puffer
-  -- kann bis zu 200 KB einnehmen (core/logger.lua MAX_BYTES) und wurde nie
-  -- automatisch vom Auto-Updater entfernt — wahrscheinlicher Hauptgrund
-  -- fuer "Speicher voll". Gleiche Logik jetzt hier nachgebaut.
+  -- Platzmangel aufraeumt — auto_update.lua nutzte das bisher NIE, sondern
+  -- schrieb die Temp-Datei direkt ohne jeden Reclaim-Versuch. Gleiche
+  -- Logik jetzt hier nachgebaut.
+  --
+  -- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
+  -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
+  -- Der Fix vom 2026-07-07 loeschte hier "/xreactor_logs" unconditional
+  -- als Platz-Reclaim-Massnahme, mit der (falschen) Begruendung, das sei
+  -- nur ein bis zu 200 KB grosser, jederzeit regenerierbarer Log-Puffer.
+  -- Tatsaechlich ist "/xreactor_logs" core/logger.lua's DEFAULT_LOG_DIR --
+  -- der echte lokale Log-Speicherort jeder Rolle (bzw. einer LOG_
+  -- COLLECTOR-Rolle auf demselben Computer). Ein Platzmangel durfte
+  -- niemals als Erlaubnis gelten, vorhandene Logs zu vernichten. Jetzt
+  -- werden nur noch echte, installer-eigene, jederzeit regenerierbare
+  -- Zwischenverzeichnisse entfernt; reicht das nicht, schlaegt der
+  -- Schreibversuch kontrolliert fehl (siehe run_update()'s bestehende
+  -- Fehlerbehandlung), statt Nutzerdaten zu opfern.
   local function free_space_root()
     if not (fs and type(fs.getFreeSpace) == "function") then return nil end
     local ok, v = pcall(fs.getFreeSpace, "/")
@@ -184,10 +195,6 @@ local function run_update(sha)
     local free = free_space_root()
     if free and free >= needed then return true end
     local reclaimed = {}
-    if fs.exists("/xreactor_logs") then
-      pcall(fs.delete, "/xreactor_logs"); reclaimed[#reclaimed+1] = "/xreactor_logs"
-    end
-    pcall(fs.makeDir, "/xreactor_logs")
     if fs.exists("/xreactor_backup_prev") then
       pcall(fs.delete, "/xreactor_backup_prev"); reclaimed[#reclaimed+1] = "/xreactor_backup_prev"
     end

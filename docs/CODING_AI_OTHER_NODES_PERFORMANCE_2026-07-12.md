@@ -33,7 +33,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Benutzerconfig | **TEILWEISE UMGESETZT** | einheitlicher SHA für Manifest und Dateien (Abschnitt 14) und CRC beim Write (Abschnitt 15) behoben; keine pauschale Log-Löschung weiterhin offen |
+| Installer / Benutzerconfig | **WEITGEHEND UMGESETZT** | einheitlicher SHA für Manifest und Dateien (Abschnitt 14), CRC beim Write (Abschnitt 15) und keine pauschale Log-Löschung (Abschnitt 16) behoben |
 | Manifest / Rollen-Scope | **TEILWEISE UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes behoben (Abschnitt 10/17); `optional/speaker_alarm.lua` weiterhin ohne `required_for` |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
 | MASTER | **TEILWEISE UMGESETZT** | Sequencer-Aufrufsyntax und echter MASTER→RT-Modulstart behoben (Abschnitt 3); Einzelnode-/ACK-UI (Abschnitt 15) weiterhin offen |
@@ -43,7 +43,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | FUEL | **WEITGEHEND UMGESETZT** | Startabsturz, Export-vor-Ventilbestätigung, Async-Lifecycle und ungültiges Routing→Direktexport behoben (Abschnitt 6/7/8/9); gemeinsamer Ventilkanal (VALVE, Abschnitt 12) ebenfalls behoben |
 | REPROCESSOR | **WEITGEHEND UMGESETZT** | unvollständige Installation, Export-vor-Ventilbestätigung und Export trotz Standby behoben (Abschnitt 8/10/11) |
 | VALVE | **WEITGEHEND UMGESETZT** | Failed-Write-Retry und Fail-Safe-Zeitstempel behoben (Abschnitt 12) |
-| LOG Collector | **KRITISCH TEILWEISE** | Probe-Fehler kann komplettes Logarchiv löschen |
+| LOG Collector | **WEITGEHEND UMGESETZT** | Probe-Fehler löscht kein Logarchiv mehr behoben (Abschnitt 16); explizite FULL/READ_ONLY/UNAVAILABLE/IO_ERROR-Zustände weiterhin offen |
 | Tests / CI | **TEILWEISE UMGESETZT** | 66 Lua- und 6 Python-Tests bleiben ausgeschlossen; kein grüner Head-Check nachgewiesen |
 | Dokumentation | **AKTUELL** | diese Datei ist die einzige aktuelle allgemeine Auditquelle |
 
@@ -810,27 +810,27 @@ Pflicht-Test: `tests/installer_write_verifies_crc32_test.lua` — treibt die ech
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-16)**
 
-## Installer
+Bestätigt in insgesamt fünf Codepfaden, nicht nur den beiden ursprünglich benannten:
 
-`installer/stage.lua` löscht bei zu wenig freiem Speicher pauschal:
+- `installer/stage.lua`s `reclaim()` löschte bei zu wenig freiem Speicher pauschal den kompletten Ordner `/xreactor_logs` — das ist aber **kein** installer-eigenes Zwischenverzeichnis, sondern `core/logger.lua`s `DEFAULT_LOG_DIR`, also der tatsächliche lokale Log-Speicherort jeder Rolle.
+- `installer/auto_update.lua`s eigene `reclaim()`-Kopie (im periodischen Auto-Update-Loop) hatte denselben Fehler, mit einem sogar explizit falschen Begründungskommentar ("das ist nur ein bis zu 200 KB großer, regenerierbarer Log-Puffer").
+- `start.lua`s `cleanup_space()` löschte `/xreactor_logs` zusätzlich bei **jedem einzelnen Boot**, sobald der freie Speicher unter 4096 Bytes fiel — nicht nur während einer Installation.
+- `nodes/log_collector/main.lua`s `probe_disk()` leerte bei einem einzigen fehlgeschlagenen Schreibversuch den gesamten Rollen-Logordner der Disk, bevor überhaupt ein zweiter Versuch unternommen wurde.
+- Dieselbe Datei nutzte `wipe_disk()` (kompletter Ordner in einem Schritt) außerdem als Reaktion auf echten Platzmangel — sowohl präventiv vor jedem Log-Write als auch retroaktiv nach einem "out of space"-Schreibfehler.
 
-```text
-/xreactor_logs
-```
-
-bevor erneut geprüft wird.
-
-## LOG Collector
-
-Schlägt `probe_disk()` einmal fehl, wird der gesamte Rollen-Logordner rekursiv geleert und danach erneut probiert.
-
-## Folgen
-
-Temporäre Mount-, Full-, I/O- oder Race-Fehler können vorhandene Logs vollständig vernichten.
+Temporäre Mount-, Full-, I/O- oder Race-Fehler konnten dadurch an fünf unabhängigen Stellen vorhandene Logs vollständig vernichten.
 
 ## Fix
+
+`/xreactor_logs` wird an keiner der fünf Stellen mehr automatisch gelöscht. `installer/stage.lua`, `installer/auto_update.lua` und `start.lua` räumen bei Platzmangel nur noch echte, installer-eigene, jederzeit regenerierbare Zwischenverzeichnisse auf (`/xreactor_backup_prev`, `/xreactor_stage`); reicht das nicht, schlägt der jeweilige Schreibversuch kontrolliert fehl, statt Logs zu opfern. `nodes/log_collector/main.lua`s `probe_disk()` fasst bei einem Fehlschlag nur noch seine eigene `.probe`-Testdatei an und meldet die Disk für den aktuellen Zyklus schlicht als nicht schreibbar (erneuter Versuch beim nächsten `DISK_REFRESH_S`-Zyklus) — kein destruktiver "Reparaturversuch". Die vormalige `wipe_disk()` wurde vollständig durch `reclaim_oldest()` ersetzt: eine ausschließlich alters-basierte Teilbereinigung, die die jeweils ältesten Dateien (nach Änderungszeitstempel via `fs.attributes().modified`) einzeln entfernt, bis genug Platz frei ist oder nichts mehr zum Entfernen übrig ist — niemals den gesamten Ordner auf einmal. Identisch angewendet auf modularen und monolithischen Installer (`installer/stage.lua`/`auto_update.lua` sowie die eingebetteten `stage_src`/`au_src`-Blöcke in `/installer`).
+
+Die explizite `FULL`/`READ_ONLY`/`UNAVAILABLE`/`IO_ERROR`-Zustandsmaschine für die Disk-Auswahl-UI wurde **nicht** umgesetzt (verbleibende Beobachtbarkeits-Verbesserung, kein Datenverlustrisiko mehr) — `probe_disk()` meldet Fehlschläge bereits jetzt als einfaches `false` an `discover_disks()`, das die Disk für den Zyklus überspringt.
+
+Pflicht-Test: `tests/log_collector_no_blanket_wipe_test.lua` — extrahiert `probe_disk()`/`reclaim_oldest()`/`list_files_recursive()` per Marker+`load()` aus dem echten Quelltext (schwere Boot-Zeit-Seiteneffekte in `main.lua` verhindern `require()`) und treibt sie über ein In-Memory-`fs`-Mock: (1) ein fehlschlagender Write-Probe darf vorhandene Logdateien nicht anfassen; (2) `reclaim_oldest()` entfernt nachweislich zuerst die älteste Datei und stoppt, sobald genug Platz frei ist, statt alles zu entfernen. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt (der fehlgeschlagene Probe löschte die vorhandenen Logdateien).
+
+## Fix (ursprünglich gefordert)
 
 - niemals komplette Logs als automatische Fehlerbehandlung löschen,
 - nur eigene Temp-/Probe-Dateien entfernen,
@@ -976,7 +976,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 9. ~~RT Discovery mit Fake-Clock und realem Schedulerintervall.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4): `tests/rt_discovery_stable_slowdown_test.lua`.
 10. ~~RT Altconfig-Migration.~~ BEHOBEN (2026-07-16, siehe Abschnitt 5): `tests/rt_config_interval_schema_migration_test.lua`. Controlmetriken (Abschnitt 5, „Pflicht-Metriken“) weiterhin offen.
 11. ~~Installer ein SHA für Manifest und Dateien.~~ BEHOBEN (2026-07-16, siehe Abschnitt 14): `tests/installer_manifest_files_same_ref_test.lua`. ~~CRC-Verifikation beim Write.~~ BEHOBEN (2026-07-16, siehe Abschnitt 15): `tests/installer_write_verifies_crc32_test.lua`.
-12. LOG-/Installer-Datenerhalt bei Full-/Probe-Fehlern.
+12. ~~LOG-/Installer-Datenerhalt bei Full-/Probe-Fehlern.~~ BEHOBEN (2026-07-16, siehe Abschnitt 16): `tests/log_collector_no_blanket_wipe_test.lua`.
 
 ---
 
@@ -994,7 +994,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 10. ~~**RT Discovery-Deadline korrekt umsetzen**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 4).
 11. **RT Altconfig-Migration und Controlmetriken**. Altconfig-Migration BEHOBEN (2026-07-16, siehe Abschnitt 5); Controlmetriken weiterhin offen.
 12. ~~**Installer ein SHA + CRC-Verifikation**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 14 [SHA] und Abschnitt 15 [CRC]).
-13. **keine automatische Log-Löschung** in Installer und LOG Collector.
+13. ~~**keine automatische Log-Löschung** in Installer und LOG Collector.~~ BEHOBEN (2026-07-16, siehe Abschnitt 16).
 14. **Manifest optionale Features/Rollenscope**.
 15. **MASTER Einzelnode-/ACK-UI**.
 16. **Ausschlusslisten Test für Test abbauen**.
