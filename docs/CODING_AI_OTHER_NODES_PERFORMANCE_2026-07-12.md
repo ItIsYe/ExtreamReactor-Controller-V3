@@ -34,7 +34,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
 | Installer / Benutzerconfig | **WEITGEHEND UMGESETZT** | einheitlicher SHA für Manifest und Dateien (Abschnitt 14), CRC beim Write (Abschnitt 15) und keine pauschale Log-Löschung (Abschnitt 16) behoben |
-| Manifest / Rollen-Scope | **TEILWEISE UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes behoben (Abschnitt 10/17); `optional/speaker_alarm.lua` weiterhin ohne `required_for` |
+| Manifest / Rollen-Scope | **WEITGEHEND UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes (Abschnitt 10) und `optional/speaker_alarm.lua`-Rollenscope (Abschnitt 17) behoben |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
 | MASTER | **TEILWEISE UMGESETZT** | Sequencer-Aufrufsyntax und echter MASTER→RT-Modulstart behoben (Abschnitt 3); Einzelnode-/ACK-UI (Abschnitt 15) weiterhin offen |
 | RT | **WEITGEHEND UMGESETZT** | Discovery-Deadline und Altconfig-Migration behoben (Abschnitt 4/5); Controlmetriken (Jitter/Ticklücke, siehe Abschnitt 5 „Zusätzlich offen“) weiterhin offen |
@@ -844,7 +844,7 @@ Pflicht-Test: `tests/log_collector_no_blanket_wipe_test.lua` — extrahiert `pro
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-16)**
 
 Bestätigt:
 
@@ -853,10 +853,15 @@ Bestätigt:
 - `nodes/fuel/redstone_router.lua` hat jetzt zusätzlich `"WATER"` (BEHOBEN — `nodes/water/main.lua` benötigt es direkt).
 - `nodes/support/ui_pages.lua` hat `"MASTER"` nicht mehr zu Unrecht in `required_for` (BEHOBEN — kein Pfad von MASTER dorthin).
 - `tests/manifest_role_scope_guard_test.py` und `tests/manifest_entrypoint_require_coverage_test.py` laufen jetzt grün (BEHOBEN, transitive `dofile()`-fähige Neufassung, siehe Abschnitt 10) und wurden aus der Ausschlussliste entfernt.
-- `optional/speaker_alarm.lua` hat weiterhin kein `required_for` und kann trotz auswählbarem Feature aus der tatsächlichen Rollen-Dateiliste fallen.
-- Manifestkopf kommentiert weiterhin eine alte Versionsbezeichnung, obwohl die tatsächlichen Felder v439 sind; funktional gering, aber verwirrend.
+- `optional/speaker_alarm.lua` hatte kein `required_for` — behoben (siehe unten).
 
-## Pflicht-Test
+`optional/speaker_alarm.lua` fehlte `required_for` komplett. `installer/manifest.lua`s `M.files_for_role()` fügt einen `roles.*`-Eintrag nur hinzu, wenn entweder `always=true` gesetzt ist oder `required_for` die gewählte Rolle enthält — ohne `required_for` wurde die Datei für **keine** Rolle jemals installiert, selbst wenn der Nutzer das Feature interaktiv ausgewählt hatte. Schlimmer noch: `installer/init.lua`s `matches_role()` (für die interaktive "Feature installieren?"-Abfrage) interpretiert ein fehlendes `required_for` als "passt zu jeder Rolle" — das Feature wurde also für **jede** Rolle angeboten (auch VALVE, wo es nie genutzt wird), aber nach einer Zusage nie tatsächlich installiert. Fix: `required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG","MASTER"}`, abgeleitet aus den tatsächlichen `require("optional.speaker_alarm")`-Aufrufstellen (`nodes/rt/main.lua`, `nodes/rt/monitor_ui.lua`, `nodes/energy/main.lua`, `nodes/water/main.lua`, `nodes/fuel/main.lua`, `nodes/reprocessor/main.lua`, `nodes/log_collector/main.lua`) sowie `services/alert_service.lua` (dort per Default **aktiv**, "opt-out via `enable_speaker_alarm=false`"), das über `master/init_runtime.lua` auch von MASTER instanziiert wird — anders als `optional/ampel.lua`, das für MASTER ein eigenes getrenntes `master_ampel`-Feature hat, gibt es für `speaker_alarm` keine MASTER-spezifische Variante. `nodes/valve/main.lua` nutzt weder `speaker_alarm` noch `alert_service` — VALVE bewusst nicht in der Liste.
+
+Manifestkopf-Kommentar mit veralteter Versionsbezeichnung bleibt ein rein kosmetischer Restpunkt (funktional ohne Auswirkung, nicht Teil dieses Fixes).
+
+Pflicht-Test: `tests/manifest_speaker_alarm_role_scope_test.lua` — ruft `installer/manifest.lua`s echte `M.files_for_role()` gegen das echte `xreactor/manifest.lua` für jede der sieben betroffenen Rollen mit `selected_features={speaker_alarm=true}` auf und prüft, dass die Datei tatsächlich in der erwarteten Dateiliste landet; prüft zusätzlich, dass VALVE sie nicht bekommt und dass sie ohne Auswahl des Features (opt-in) für keine Rolle installiert wird. Verifiziert per `git stash`, dass der Test mit dem alten Manifest fehlschlägt.
+
+## Pflicht-Test (ursprünglich gefordert)
 
 Für jede installierbare Rolle:
 
@@ -995,7 +1000,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 11. **RT Altconfig-Migration und Controlmetriken**. Altconfig-Migration BEHOBEN (2026-07-16, siehe Abschnitt 5); Controlmetriken weiterhin offen.
 12. ~~**Installer ein SHA + CRC-Verifikation**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 14 [SHA] und Abschnitt 15 [CRC]).
 13. ~~**keine automatische Log-Löschung** in Installer und LOG Collector.~~ BEHOBEN (2026-07-16, siehe Abschnitt 16).
-14. **Manifest optionale Features/Rollenscope**.
+14. ~~**Manifest optionale Features/Rollenscope**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 17): `tests/manifest_speaker_alarm_role_scope_test.lua`.
 15. **MASTER Einzelnode-/ACK-UI**.
 16. **Ausschlusslisten Test für Test abbauen**.
 17. danach vollständige Ingame-Last-, Reconnect-, Reboot- und Update-Tests.

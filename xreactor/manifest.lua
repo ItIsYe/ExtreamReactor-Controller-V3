@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 452,
-  manifest_id = "manifest-v452",
+  manifest_version = 453,
+  manifest_id = "manifest-v453",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14745, hash = "dc801ba2", always=true },
   { path = "installer/init.lua", size_bytes = 19921, hash = "7126d4cd", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "38393521", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "62b58479", always=true },
   { path = "start.lua", size_bytes = 5574, hash = "7c62ecb0", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -90,7 +90,27 @@ return {
     { path = "master/ui/system_map.lua", size_bytes = 6136, hash = "c62cf990", required_for={"MASTER"} },
     { path = "master/ui/config_editor.lua", size_bytes = 4177, hash = "770b16f8", required_for={"MASTER"} },
     { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
-    { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "44a8e65d", optional=true, feature="speaker_alarm" },
+    -- Fix (2026-07-16): CRITICAL. MANIFEST-P1 aus
+    -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 17).
+    -- Fehlte bisher ganz -- files_for_role() fuegt einen roles.*-Eintrag
+    -- nur hinzu, wenn "always=true" ODER "required_for" die gewaehlte
+    -- Rolle enthaelt (siehe installer/manifest.lua). Ohne required_for
+    -- wurde diese Datei fuer KEINE Rolle jemals installiert, selbst wenn
+    -- der Nutzer das Feature interaktiv ausgewaehlt hatte (der Prompt
+    -- erschien sogar faelschlich fuer JEDE Rolle, da matches_role() in
+    -- installer/init.lua ein fehlendes required_for als "passt immer"
+    -- interpretiert). Rollen entsprechen den tatsaechlichen
+    -- require("optional.speaker_alarm")-Aufrufstellen: nodes/rt/main.lua,
+    -- nodes/rt/monitor_ui.lua, nodes/energy/main.lua, nodes/water/main.lua,
+    -- nodes/fuel/main.lua, nodes/reprocessor/main.lua,
+    -- nodes/log_collector/main.lua, sowie services/alert_service.lua
+    -- (dort per Default AKTIV, "opt-out via enable_speaker_alarm=false"),
+    -- das ueber master/init_runtime.lua auch von MASTER instanziiert wird
+    -- -- anders als "ampel", das fuer MASTER ein eigenes getrenntes
+    -- "master_ampel"-Feature hat, gibt es fuer speaker_alarm keine
+    -- MASTER-spezifische Variante. nodes/valve/main.lua nutzt weder
+    -- speaker_alarm noch alert_service -- VALVE bewusst nicht enthalten.
+    { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "44a8e65d", optional=true, feature="speaker_alarm", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG","MASTER"} },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "abe22b63", optional=true, feature="pocket_query", required_for={"MASTER"} },
     -- Feature (2026-07-09): eigenstaendiges Pocket-Computer-Client-Skript.
     -- Bewusst OHNE Auto-Installation -- Pocket Computer ist kein waehlbarer
