@@ -158,7 +158,20 @@ local function feed_one(self, cfg)
       self.warn_once("feed_fail:" .. tostring(target.label),
         "FeedRouter: feed failed for " .. tostring(target.label) .. ": " .. tostring(err))
     end
-  end, cfg.valve_open_ms)
+  end, cfg.valve_open_ms, {
+    -- Fix (2026-07-16): CRITICAL (FUEL-P0-Folgefix, siehe docs/CODING_AI_
+    -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 7). Bricht die
+    -- Transaktion VOR dem Export ab (z.B. Ventil-ACK-Fehler oder Phasen-
+    -- Timeout), lief bisher weder der Erfolgs- noch ein Fehlerpfad --
+    -- last_error blieb stumm auf dem letzten (moeglicherweise laengst
+    -- veralteten) Wert stehen, obwohl diese Befuellung tatsaechlich
+    -- gescheitert ist.
+    on_error = function(reason)
+      self._state.last_error = "routing_failed:" .. tostring(reason)
+      self.warn_once("feed_route_fail:" .. tostring(target.label),
+        "FeedRouter: Routing-Transaktion fuer " .. tostring(target.label) .. " abgebrochen (" .. tostring(reason) .. ")")
+    end,
+  })
   if not started then
     self.warn_once("router_busy:" .. tostring(reason),
       "FeedRouter: Befuellung fuer " .. tostring(target.label) .. " uebersprungen (" .. tostring(reason) .. ")")

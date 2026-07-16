@@ -40,7 +40,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
 | ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
-| FUEL | **KRITISCH FEHLERHAFT** | Startabsturz und Export-vor-Ventilbestätigung behoben (Abschnitt 6/8); Async-Lifecycle (Abschnitt 7) und ungültiges Routing→Direktexport (Abschnitt 9) weiterhin offen |
+| FUEL | **KRITISCH FEHLERHAFT** | Startabsturz, Export-vor-Ventilbestätigung und Async-Lifecycle behoben (Abschnitt 6/8/7); ungültiges Routing→Direktexport (Abschnitt 9) weiterhin offen |
 | REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation und Export-vor-Ventilbestätigung behoben (Abschnitt 10/8, geteilter Router mit FUEL); Export trotz Standby weiterhin möglich (Abschnitt 11) |
 | VALVE | **KRITISCH TEILWEISE** | fehlgeschlagener Write wird bei Retry nicht erneut ausgeführt |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Fehler kann komplettes Logarchiv löschen |
@@ -400,6 +400,21 @@ Funktionaler Test `tests/fuel_config_normalizer_logistics_fields_test.lua` (läd
 # 7. FUEL-P0 – Async-Lieferung verliert Request und Ergebnis
 
 ## Status
+
+**BEHOBEN (2026-07-16)**
+
+`nodes/fuel/logistics_router.lua`'s `_run_supply()` setzte `current_request` direkt nach `rs:begin_transaction()` wieder auf `nil`, während der spätere, asynchrone `do_export()`-Callback (läuft erst, sobald `redstone_router.lua`'s Zustandsmaschine `WAIT_SETTLE` verlässt) `current_request.state` schrieb — Nil-Zugriff im Callback. Zusätzlich wurden `exported`/`errors`/`cycle_log` sofort nach dem *Start* der Transaktion ausgewertet, nicht nach ihrem tatsächlichen Abschluss.
+
+Fix:
+
+- `redstone_router.lua`'s `begin_transaction()` akzeptiert jetzt einen optionalen vierten Parameter `opts.on_error(reason)`, den `_fail_transaction()` immer aufruft, wenn eine Transaktion abbricht, BEVOR `action_fn` je lief (Ventil-ACK-Fehler, Phasen-Timeout) — der Aufrufer hat damit garantiert genau einen von zwei Abschluss-Pfaden.
+- `current_request` bleibt jetzt bis zum echten Abschluss bestehen (`do_export()` erfolgreich/fehlgeschlagen ODER `on_error()`), nicht mehr bis zum bloßen *Start* der Transaktion.
+- `total_exported`/`total_errors` und der Zykluslog-Eintrag (`last_cycle.moves`) werden jetzt ausschließlich im jeweiligen Abschluss-Callback geschrieben, direkt in `self._state` (nicht in den lokalen `exported`/`cycle_log`-Variablen des Start-Zyklus, da der Export ggf. erst in einem späteren Zyklus tatsächlich passiert).
+- Dieselbe `on_error`-Anbindung wurde auch in `nodes/reprocessor/feed_router.lua` ergänzt (setzt `last_error` bei einem vor dem Export abgebrochenen Transfer, statt ihn stumm zu verlieren).
+
+Pflicht-Test: `tests/fuel_logistics_async_delivery_lifecycle_test.lua` (neu) — treibt `logistics_router.lua` mit einem kontrollierbaren Mock-`rs_router` (isoliert von der in Abschnitt 8 separat getesteten `redstone_router.lua`-Zustandsmaschine) und beweist: erfolgreicher Async-Export, Callback-Fehler, Abbruch vor dem Export (ACK-Timeout-Äquivalent über `on_error`), Busy/Skip-Fall, korrekte Exportmenge, `current_request` bleibt bis zum Abschluss sichtbar. Verifiziert per `git stash`, dass der Test mit dem alten Verhalten fehlschlägt.
+
+## Status (vor dem Fix)
 
 **KRITISCH OFFEN**
 
@@ -884,7 +899,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 2. REPROCESSOR vollständige Installationsdateiliste.
 3. ~~MASTER→RT echter Startup-End-to-End-Pfad.~~ BEHOBEN (2026-07-16, siehe Abschnitt 3): `tests/rt_master_startup_end_to_end_test.lua`.
 4. Router wartet auf Ziel- und Nebenventil-ACKs.
-5. FUEL Async-Lifecycle und Statistik.
+5. ~~FUEL Async-Lifecycle und Statistik.~~ BEHOBEN (2026-07-16, siehe Abschnitt 7): `tests/fuel_logistics_async_delivery_lifecycle_test.lua`.
 6. VALVE Failed-Write-Retry.
 7. REPROCESSOR Standby-Cancel.
 8. ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.
@@ -901,7 +916,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 2. **REPROCESSOR Manifest-Scope** – `feed_router.lua` sicher installieren.
 3. ~~**MASTER→RT Startup-End-to-End** – echten `start_module`-Pfad verdrahten.~~ BEHOBEN (2026-07-16, siehe Abschnitt 3).
 4. ~~**Router Safety** – alle Ziel- und Nebenventile vor Export bestätigen.~~ BEHOBEN (2026-07-16, siehe Abschnitt 8).
-5. **FUEL Async-Lifecycle** – Request, Statistik und Abschluss korrigieren.
+5. ~~**FUEL Async-Lifecycle** – Request, Statistik und Abschluss korrigieren.~~ BEHOBEN (2026-07-16, siehe Abschnitt 7).
 6. **Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.
 7. **VALVE Failed-Write-Retry** und Fail-Safe-Zeitstempel.
 8. **REPROCESSOR Standby-Cancel**.

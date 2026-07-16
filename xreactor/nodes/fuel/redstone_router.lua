@@ -480,7 +480,7 @@ end
 -- (_fail_transaction()). Nach dem Export (HOLD_OPEN) wird ebenfalls
 -- versucht, das finale Blockieren zu bestaetigen (WAIT_FINAL_ACKS), bevor
 -- die Transaktion als abgeschlossen gilt.
-function M:begin_transaction(target_id, action_fn, valve_open_ms)
+function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
   if self._state.transaction then
     return false, "busy"
   end
@@ -527,6 +527,18 @@ function M:begin_transaction(target_id, action_fn, valve_open_ms)
   self._state.transaction = {
     target_id = target_id,
     action_fn = action_fn,
+    -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 7). Bisher gab es KEINE
+    -- Rueckmeldung an den Aufrufer, wenn eine Transaktion abbrach BEVOR sie
+    -- jemals action_fn erreichte (z.B. Ventil-ACK-Fehlschlag oder Phasen-
+    -- Timeout waehrend WAIT_BLOCK_ACKS/WAIT_OPEN_ACKS) -- ein vom Aufrufer
+    -- gehaltener "laufende Lieferung"-Kontext (siehe logistics_router.lua's
+    -- current_request) blieb dadurch fuer immer auf "aktiv" haengen, da nur
+    -- action_fn ihn je aufraeumen konnte. opts.on_error(reason) wird von
+    -- _fail_transaction() IMMER aufgerufen, wenn die Transaktion abbricht
+    -- ohne dass action_fn je lief -- damit hat der Aufrufer garantiert
+    -- genau einen von zwei Abschluss-Pfaden (action_fn ODER on_error).
+    on_error = opts and opts.on_error or nil,
     valve_open_ms = tonumber(valve_open_ms) or 2000,
     state = "WAIT_BLOCK_ACKS",
     pending = self:_request_valve_batch(block_entries),
@@ -548,6 +560,13 @@ function M:_fail_transaction(reason)
   self._state.active_target = nil
   self._state.active_path = nil
   self._state.transaction = nil
+  if tx and tx.on_error then
+    local ok, err = pcall(tx.on_error, reason)
+    if not ok then
+      self.warn_once("tx_on_error_failed:" .. tostring(tx.target_id),
+        "RedstoneRouter: on_error-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. tostring(err))
+    end
+  end
 end
 
 -- Maximale Wartezeit auf eine Ventil-Bestaetigungs-Phase (Block oder

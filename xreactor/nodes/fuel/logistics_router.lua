@@ -381,60 +381,93 @@ function M:_run_supply(cycle_log)
 
     do
       local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
-      local moved = 0
-      local exp_ok = false
-
-      local function do_export()
-        self._state.current_request.state = "delivering"
-        local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
-          { name = r.item, count = push }, r.inlet.name)
-        if not ok then
-          self.warn_once("exp_err:" .. r.inlet.name,
-            "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
-          errors = errors + 1
-        else
-          moved   = type(result) == "number" and result or 0
-          exp_ok  = true
-        end
-      end
+      local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
 
       if routed then
-        -- Redstone routing: Transaktion starten (asynchron, siehe oben).
-        -- Der eigentliche Export (und sein Log-Eintrag) passiert im
-        -- do_export()-Callback, sobald die Zustandsmaschine WAIT_SETTLE
-        -- verlaesst -- "moved"/"exp_ok" bleiben fuer den direkten
-        -- Log-Eintrag DIESES Zyklus daher 0/false im Normalfall.
-        local started, reason = rs:begin_transaction(r.label, do_export, valve_ms)
+        -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_
+        -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 7). Der Export laeuft
+        -- asynchron (do_export() feuert irgendwann spaeter, sobald rs:tick()
+        -- die Transaktion durch WAIT_SETTLE getrieben hat) -- current_
+        -- request wurde bisher SOFORT nach begin_transaction() wieder auf
+        -- nil gesetzt, WAEHREND do_export() spaeter versuchte, current_
+        -- request.state zu schreiben (Nil-Zugriff im Callback). Zusaetzlich
+        -- wurden exported/errors/cycle_log SOFORT ausgewertet, bevor der
+        -- eigentliche Export ueberhaupt stattfand -- moved/exp_ok waren zu
+        -- diesem Zeitpunkt immer noch 0/false.
+        --
+        -- Jetzt: current_request bleibt bis zum ECHTEN Abschluss bestehen
+        -- (do_export() erfolgreich/fehlgeschlagen ODER on_error(), falls
+        -- die Transaktion schon vorher abbricht, z.B. Ventil-ACK-Fehler
+        -- oder Phasen-Timeout) -- garantiert genau EIN Abschluss-Pfad.
+        -- Exportstatistik (total_exported/total_errors) und Zykluslog
+        -- werden AUSSCHLIESSLICH im jeweiligen Abschluss-Callback
+        -- geschrieben, direkt in self._state (nicht in den lokalen
+        -- exported/cycle_log-Variablen dieses Zyklus, da der Export
+        -- moeglicherweise erst in einem SPAETEREN Zyklus tatsaechlich
+        -- passiert).
+        local function do_export()
+          local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
+            { name = r.item, count = push }, r.inlet.name)
+          if not ok then
+            self.warn_once("exp_err:" .. r.inlet.name,
+              "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
+            self._state.total_errors = self._state.total_errors + 1
+          else
+            local moved = type(result) == "number" and result or 0
+            if moved > 0 then
+              self._state.total_exported = self._state.total_exported + moved
+              local entry = string.format("ME→[%s]%s %s x%d via %s",
+                r.label, pct_str, r.item, moved, r.inlet.name)
+              if self._state.last_cycle then
+                self._state.last_cycle.exported = (self._state.last_cycle.exported or 0) + moved
+                table.insert(self._state.last_cycle.moves, entry)
+              end
+            end
+          end
+          self._state.current_request = nil
+        end
+
+        local function on_transaction_error(reason)
+          self.warn_once("routing_failed:" .. tostring(r.label),
+            "Logistics: Routing-Transaktion fuer " .. r.label .. " abgebrochen (" .. tostring(reason) .. ")")
+          self._state.total_errors = self._state.total_errors + 1
+          self._state.current_request = nil
+        end
+
+        local started, reason = rs:begin_transaction(r.label, do_export, valve_ms, { on_error = on_transaction_error })
         if not started then
+          self._state.current_request = nil
           if reason == "busy" then
             self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — restliche Kandidaten diesen Zyklus uebersprungen")
-            self._state.current_request = nil
             return exported, errors
           end
           self.log("DEBUG", "Logistics: " .. r.label .. ": Routing nicht moeglich (" .. tostring(reason) .. ") — naechster Kandidat")
           goto continue
         end
-        if exp_ok and moved > 0 then
-          exported = exported + moved
-          local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
-          cycle_log[#cycle_log + 1] = string.format(
-            "ME→[%s]%s %s x%d via %s",
-            r.label, pct_str, r.item, moved, r.inlet.name)
-        end
-        -- Nur eine Lieferung wird pro Zyklus tatsaechlich gestartet.
-        self._state.current_request = nil
+        self._state.current_request.state = "delivering"
+        -- Nur eine Lieferung wird pro Zyklus tatsaechlich gestartet; ihr
+        -- Ergebnis zaehlt asynchron in self._state.total_exported/
+        -- total_errors, nicht in den hier zurueckgegebenen Werten.
         return exported, errors
       end
 
       -- No redstone routing configured: export directly, weiter zum
       -- naechsten Kandidaten (unveraendertes Verhalten, keine Blockierung).
-      do_export()
-      if exp_ok and moved > 0 then
-        exported = exported + moved
-        local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
-        cycle_log[#cycle_log + 1] = string.format(
-          "ME→[%s]%s %s x%d via %s",
-          r.label, pct_str, r.item, moved, r.inlet.name)
+      self._state.current_request.state = "delivering"
+      local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
+        { name = r.item, count = push }, r.inlet.name)
+      if not ok then
+        self.warn_once("exp_err:" .. r.inlet.name,
+          "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
+        errors = errors + 1
+      else
+        local moved = type(result) == "number" and result or 0
+        if moved > 0 then
+          exported = exported + moved
+          cycle_log[#cycle_log + 1] = string.format(
+            "ME→[%s]%s %s x%d via %s",
+            r.label, pct_str, r.item, moved, r.inlet.name)
+        end
       end
     end
 
