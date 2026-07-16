@@ -177,7 +177,7 @@ function M.start_module(ctx, module_id, module_type, ramp_profile)
   ))
   if module.type == "turbine" then
     local ctrl = ctx.get_turbine_ctrl(module.name)
-    ctrl.mode = ctx.TURBINE_MODE.RAMP
+    ctrl.mode = ctx.TURBINE_MODE_RAMP
   end
   return module, "Starting"
 end
@@ -593,7 +593,7 @@ function M.apply_safe_controls(ctx)
     end
     if caps.setFluidFlowRate or caps.setFluidFlowRateMax then
       local ctrl = ctx.get_turbine_ctrl(name)
-      ctrl.mode = ctx.TURBINE_MODE.RAMP
+      ctrl.mode = ctx.TURBINE_MODE_RAMP
       ctrl.requested_flow = ctx.clamp_turbine_flow(ctrl.requested_flow or ctrl.flow or ctx.START_FLOW)
       ctrl.flow = ctrl.requested_flow
       ctrl.pending_expected_flow = ctrl.requested_flow

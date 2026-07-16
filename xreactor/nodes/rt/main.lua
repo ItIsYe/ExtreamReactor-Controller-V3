@@ -916,7 +916,20 @@ local function init()
       -- CC:Tweaked CONFIG-Werte
       START_FLOW   = CONFIG.START_FLOW   or 100,
       RPM_TOL      = CONFIG.RPM_TOLERANCE or 15,
-      TURBINE_MODE = CONFIG.TURBINE_MODE_RAMP or "RAMP",
+      -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+      -- PERFORMANCE_2026-07-12.md Abschnitt 11). Hiess bisher "TURBINE_MODE"
+      -- und war ein reiner STRING (CONFIG.TURBINE_MODE_RAMP ist selbst ein
+      -- String, z.B. "RAMP") -- module_lifecycle.lua indizierte diesen Wert
+      -- aber als Tabelle (ctx.TURBINE_MODE.RAMP), was im echten Produktions-
+      -- Context zu "attempt to index a string value" fuehrte bzw. (falls
+      -- durch pcall/Fehlerpfad verdeckt) ctrl.mode nie zuverlaessig auf den
+      -- vorgesehenen Rampenmodus setzte. Konsistent mit turbine_control.lua's
+      -- eigener Konvention (ctx.CONFIG.TURBINE_MODE_RAMP, ueberall ein reiner
+      -- String -- siehe z.B. dessen Zeile mit "ctrl.mode = ctx.CONFIG.
+      -- TURBINE_MODE_RAMP or \"RAMP\"") umbenannt zu TURBINE_MODE_RAMP,
+      -- weiterhin ein String -- module_lifecycle.lua liest jetzt direkt
+      -- ctx.TURBINE_MODE_RAMP statt ctx.TURBINE_MODE.RAMP.
+      TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
       -- Diagnose-Stub (ramp_duration braucht discovery-Context)
       ramp_duration = function() return 30 end,
       warn_unsupported = function(name, reason)

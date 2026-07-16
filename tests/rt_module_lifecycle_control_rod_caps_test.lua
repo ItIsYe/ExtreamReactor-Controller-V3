@@ -11,7 +11,7 @@ local function make_ctx(module)
   return {
     modules = { [module.id] = module },
     config = { safety = { max_temperature = 2000 } },
-    TURBINE_MODE = { RAMP = 'RAMP' },
+    TURBINE_MODE_RAMP = 'RAMP',
     RPM_TOL = 20,
     comms = { network = { id = 'RT-1' } },
     set_active_startup = function(value) active = value end,

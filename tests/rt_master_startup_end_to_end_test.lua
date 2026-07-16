@@ -74,7 +74,7 @@ local lifecycle_ctx = {
   modules = modules_registry,
   comms = { network = { id = NODE_ID } },
   config = { safety = { max_temperature = 1200, temperature_hysteresis = 5, temperature_trip_samples = 1 } },
-  TURBINE_MODE = { RAMP = 'RAMP' },
+  TURBINE_MODE_RAMP = 'RAMP',
   RPM_TOL = 15,
   log = function() end,
   warn_once = function() end,

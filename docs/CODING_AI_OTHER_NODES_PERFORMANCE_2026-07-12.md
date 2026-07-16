@@ -37,7 +37,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **TEILWEISE OFFEN** | Config-Editor meldet Werte optimistisch als übernommen; kein Applied-ACK je Zielnode und keine Einzelnode-Auswahl |
-| RT | **KRITISCH TEILWEISE** | neuer Startup-Pfad besitzt reale Context-/Einheitenfehler; Modul-State-Update ist nicht verdrahtet |
+| RT | **KRITISCH TEILWEISE** | `TURBINE_MODE`-Context-Typfehler behoben (Abschnitt 11); Rampendauer-Einheitenfehler und fehlende Modul-State-Update-Verdrahtung weiterhin offen |
 | ENERGY | **TEILWEISE BEHOBEN** | Schedulergruppen getrennt, Heartbeat besitzt aber weiterhin zwei Zeitquellen |
 | WATER | **WEITGEHEND UMGESETZT** | Persistenzfehler werden geloggt, Command kann trotzdem als angewendet bestätigt werden |
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
@@ -55,7 +55,7 @@ Die kritischsten aktuellen Risiken sind:
 
 1. Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.
 2. Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.
-3. RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.
+3. ~~RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ~~ BEHOBEN (2026-07-17, siehe Abschnitt 11); behandelt `30` weiterhin als 30 Millisekunden (Abschnitt 12, weiterhin offen).
 4. `module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.
 5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
 6. ~~REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20).
@@ -364,47 +364,26 @@ MASTER speichert zwar eingehende `ACK_APPLIED`-Ergebnisse je Node, der Config-Ed
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-`module_lifecycle.start_module()` erwartet:
+Bestätigt: `module_lifecycle.lua` indizierte `ctx.TURBINE_MODE.RAMP` (zwei Stellen: `start_module()` und `apply_safe_controls()`), während `nodes/rt/main.lua`s echter `make_lifecycle_ctx()` nur `TURBINE_MODE = CONFIG.TURBINE_MODE_RAMP or "RAMP"` lieferte — einen String, keine Tabelle. `turbine_control.lua`s eigene, an vielen Stellen verwendete Konvention (`ctx.CONFIG.TURBINE_MODE_RAMP`, immer ein reiner String, z.B. `"RAMP"`, `"OVERSPEED_BRAKE"`, `"UP"`, `"DOWN"`) bestätigt: `ctrl.mode` ist im gesamten Produktionscode konsequent ein Skalar, niemals eine Tabelle — die Tabellenform in `module_lifecycle.lua` war der eigentliche Fehler, nicht der String in `main.lua`.
 
-```lua
-ctx.TURBINE_MODE.RAMP
-```
+Fix: `main.lua`s Feld wurde konsistent zu `TURBINE_MODE_RAMP` (weiterhin ein String) umbenannt — passend zur bereits etablierten Namenskonvention der übrigen flachen `make_lifecycle_ctx()`-Felder (`START_FLOW`, `RPM_TOL`). `module_lifecycle.lua` liest jetzt an beiden Stellen direkt `ctx.TURBINE_MODE_RAMP` statt `ctx.TURBINE_MODE.RAMP`. Die drei betroffenen Tests (`tests/rt_master_startup_end_to_end_test.lua`, `tests/rt_module_lifecycle_control_rod_caps_test.lua`, `tests/rt_module_lifecycle_safe_controls_test.lua`), die bisher jeweils einen eigenen, künstlichen Mock-Context mit der falschen Tabellenform (`TURBINE_MODE = { RAMP = 'RAMP' }`) bauten und die reale Produktionsabweichung dadurch nicht aufdeckten, wurden auf die korrekte Skalarform angepasst.
 
-Der echte Context aus `nodes/rt/main.lua` liefert jedoch:
+Pflicht-Test: `tests/rt_turbine_mode_context_shape_test.lua` — anders als die drei oben genannten (handgeschriebene Mock-Contexts, könnten erneut driften) prüft dieser neue Test strukturell direkt am echten Quelltext beider Dateien, dass `main.lua`s `make_lifecycle_ctx()` ein skalares `TURBINE_MODE_RAMP`-Feld definiert (und **kein** `TURBINE_MODE`-Tabellenfeld mehr reintroduziert) und dass `module_lifecycle.lua` an beiden Stellen exakt `ctx.TURBINE_MODE_RAMP` liest, nie `ctx.TURBINE_MODE.RAMP`. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
-```lua
-TURBINE_MODE = CONFIG.TURBINE_MODE_RAMP or "RAMP"
-```
+## Folge (vor dem Fix)
 
-also einen String, keine Tabelle. Der neue End-to-End-Test liefert dagegen künstlich:
+Beim echten Turbinenstart wurde `ctrl.mode` nicht zuverlässig auf den vorgesehenen Rampenmodus gesetzt.
+
+## Fix (umgesetzt)
 
 ```lua
-TURBINE_MODE = { RAMP = "RAMP" }
-```
-
-und deckt die Produktionsabweichung nicht auf.
-
-## Folge
-
-Beim echten Turbinenstart wird `ctrl.mode` nicht zuverlässig auf den vorgesehenen Rampenmodus gesetzt.
-
-## Fix
-
-Entweder:
-
-```lua
-TURBINE_MODE = { RAMP = CONFIG.TURBINE_MODE_RAMP }
-```
-
-oder Lifecyclecode verwendet direkt:
-
-```lua
+-- main.lua
+TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
+-- module_lifecycle.lua
 ctrl.mode = ctx.TURBINE_MODE_RAMP
 ```
-
-Der Integrationstest muss den echten `make_lifecycle_ctx()`-Shape verwenden.
 
 ---
 
@@ -785,7 +764,7 @@ Ein Test darf nur entfernt werden, wenn:
 
 1. Installer-Powerloss-Matrix und Completion-Marker.
 2. Update-Quiesce je Rolle.
-3. RT-Produktions-Context-Shape.
+3. ~~RT-Produktions-Context-Shape.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
 4. RT-Rampeneinheit mit Fake-Clock.
 5. produktive Verdrahtung von `update_module_states()`.
 6. ~~Router-ACK muss aktuelle Command-ID matchen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
@@ -841,7 +820,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 
 1. ~~**ROUTER-P0:** aktuellen ACK über Command-ID statt alten Confirmed-State beweisen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
 2. ~~**REPROCESSOR-P0:** COMMS-Peers an Wireless-Router verdrahten.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
-3. **RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.
+3. ~~**RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
 4. **RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.
 5. **RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.
 6. **INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.

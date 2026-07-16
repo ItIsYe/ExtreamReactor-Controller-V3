@@ -51,7 +51,7 @@ local function test_scram_safe_state_enforces_safe_controls_and_shutdown()
     update_inductor_for_rpm = function() return true, true end,
     get_turbine_ctrl = function() return ctrl end,
     clamp_turbine_flow = function(flow) return flow end,
-    TURBINE_MODE = { RAMP = 'RAMP' },
+    TURBINE_MODE_RAMP = 'RAMP',
     START_FLOW = 100,
     warn_once = function() end,
     warn_unsupported = function() end,
