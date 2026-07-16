@@ -40,9 +40,9 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
 | ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
-| FUEL | **TEILWEISE UMGESETZT** | Startabsturz, Export-vor-Ventilbestätigung, Async-Lifecycle und ungültiges Routing→Direktexport behoben (Abschnitt 6/7/8/9); abhängig vom noch offenen VALVE-Failed-Write-Retry (Abschnitt 12, gemeinsamer Ventilkanal) |
+| FUEL | **WEITGEHEND UMGESETZT** | Startabsturz, Export-vor-Ventilbestätigung, Async-Lifecycle und ungültiges Routing→Direktexport behoben (Abschnitt 6/7/8/9); gemeinsamer Ventilkanal (VALVE, Abschnitt 12) ebenfalls behoben |
 | REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation und Export-vor-Ventilbestätigung behoben (Abschnitt 10/8, geteilter Router mit FUEL); Export trotz Standby weiterhin möglich (Abschnitt 11) |
-| VALVE | **KRITISCH TEILWEISE** | fehlgeschlagener Write wird bei Retry nicht erneut ausgeführt |
+| VALVE | **WEITGEHEND UMGESETZT** | Failed-Write-Retry und Fail-Safe-Zeitstempel behoben (Abschnitt 12) |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Fehler kann komplettes Logarchiv löschen |
 | Tests / CI | **TEILWEISE UMGESETZT** | 66 Lua- und 6 Python-Tests bleiben ausgeschlossen; kein grüner Head-Check nachgewiesen |
 | Dokumentation | **AKTUELL** | diese Datei ist die einzige aktuelle allgemeine Auditquelle |
@@ -631,6 +631,20 @@ Danach kein Exportcallback mehr, Ventile bestmöglich blockieren und Transaktion
 
 ## Status
 
+**BEHOBEN (2026-07-16)**
+
+`nodes/valve/main.lua`'s `handle_valve_channel_event()` rief `remember_command(id)` VOR dem Ergebnis von `apply_valve()` auf — schlug der physische `redstone.setOutput()`-Write fehl, war die `command_id` trotzdem bereits als „gesehen“ markiert. Ein Retry mit derselben ID (genau das, was `redstone_router.lua`s `check_pending_acks()` bei ausbleibender Bestätigung tut) traf dadurch nur noch den Dedupe-Zweig (`applied = current_high == high`, ohne zweiten Schreibversuch) — Retry war beim eigentlichen Anwendungsfall (Schreibfehler) wirkungslos. Zusätzlich setzte `apply_valve()` `last_command_ts` unbedingt als allererste Anweisung, auch bei fehlgeschlagenem Write — ein fehlgeschlagenes BLOCK-Kommando (Ventil bleibt unsicher offen) verlängerte dadurch die Gnadenfrist des Fail-Safe-Watchdogs, statt sie zu verkürzen.
+
+Fix:
+
+- `remember_command(id)` wird nur noch nach einem **erfolgreichen** `apply_valve()` aufgerufen. Eine fehlgeschlagene ID bleibt „ungesehen“ und wird bei identischem Retry erneut wirklich geschrieben, solange bis sie tatsächlich übernommen wurde.
+- `last_command_ts` wird nur noch bei erfolgreichem Write (oder wenn ohnehin kein Write nötig war) aktualisiert — ein Fehlschlag lässt den Watchdog auf dem älteren Zeitstempel stehen, wodurch er eher, nicht später, erneut eingreift.
+- `last_command_ts` wird jetzt bereits bei der Deklaration mit einem echten Zeitstempel initialisiert (statt `nil`), damit der Fail-Safe-Watchdog auch dann irgendwann auslöst, wenn schon der allererste Boot-Write fehlschlägt und danach nie ein gültiges Kommando eintrifft.
+
+Pflicht-Test: `tests/valve_failed_write_retry_test.lua` (neu) — extrahiert den echten Quelltext von `apply_valve()`/`handle_valve_channel_event()` per String-Marker direkt aus `main.lua` und führt ihn per `load()` in einer isolierten, gemockten Umgebung aus (kein Nachbau der Logik). Beweist: ein fehlgeschlagener Write markiert die `command_id` nicht als gesehen und ein identischer Retry löst einen echten zweiten Schreibversuch aus; ein erfolgreicher Write wird weiterhin korrekt dedupliziert; `last_command_ts` wird durch einen fehlgeschlagenen sicherheitskritischen Write nicht verlängert. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
+
+## Status (vor dem Fix)
+
 **KRITISCH OFFEN**
 
 Die VALVE-Node speichert eine `command_id` vor dem Ergebnis von `apply_valve()`.
@@ -910,7 +924,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 3. ~~MASTER→RT echter Startup-End-to-End-Pfad.~~ BEHOBEN (2026-07-16, siehe Abschnitt 3): `tests/rt_master_startup_end_to_end_test.lua`.
 4. Router wartet auf Ziel- und Nebenventil-ACKs.
 5. ~~FUEL Async-Lifecycle und Statistik.~~ BEHOBEN (2026-07-16, siehe Abschnitt 7): `tests/fuel_logistics_async_delivery_lifecycle_test.lua`.
-6. VALVE Failed-Write-Retry.
+6. ~~VALVE Failed-Write-Retry.~~ BEHOBEN (2026-07-16, siehe Abschnitt 12): `tests/valve_failed_write_retry_test.lua`.
 7. REPROCESSOR Standby-Cancel.
 8. ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.
 9. RT Discovery mit Fake-Clock und realem Schedulerintervall.
@@ -928,7 +942,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 4. ~~**Router Safety** – alle Ziel- und Nebenventile vor Export bestätigen.~~ BEHOBEN (2026-07-16, siehe Abschnitt 8).
 5. ~~**FUEL Async-Lifecycle** – Request, Statistik und Abschluss korrigieren.~~ BEHOBEN (2026-07-16, siehe Abschnitt 7).
 6. ~~**Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.~~ BEHOBEN (2026-07-16, siehe Abschnitt 9). REPROCESSOR (`feed_router.lua`) hatte den Bug nicht (kein separater `route_count()`-Vorab-Check).
-7. **VALVE Failed-Write-Retry** und Fail-Safe-Zeitstempel.
+7. ~~**VALVE Failed-Write-Retry** und Fail-Safe-Zeitstempel.~~ BEHOBEN (2026-07-16, siehe Abschnitt 12).
 8. **REPROCESSOR Standby-Cancel**.
 9. **ENERGY Scheduler-/Heartbeat-Trennung**.
 10. **RT Discovery-Deadline korrekt umsetzen**.

@@ -98,7 +98,17 @@ local node_id = support_runtime.init_logging({
 })
 
 local valve_health = health.new({})
-local last_command_ts = nil
+-- Fix (2026-07-16): CRITICAL (VALVE-P0, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 12). Muss ab dem Boot einen echten
+-- Zeitstempel tragen (nicht nil) -- apply_valve() aktualisiert last_
+-- command_ts jetzt NUR NOCH bei Erfolg (siehe dort). Bliebe dieser Wert
+-- bis zum ersten erfolgreichen Kommando bei nil, wuerde der Fail-Safe-
+-- Watchdog unten (der explizit "if last_command_ts and ..." prueft)
+-- niemals auslösen, selbst wenn der allererste Boot-Write fehlschlaegt und
+-- die Node danach nie ein gueltiges SET_VALVE-Kommando erreicht -- ein
+-- moeglicherweise unsicher offenes Ventil bliebe dann fuer immer
+-- unbeaufsichtigt.
+local last_command_ts = os.epoch("utc")
 local current_high = config.default_blocked ~= false  -- true = blockiert (Fail-Safe-Default)
 
 local last_write_error = nil
@@ -113,19 +123,29 @@ local valve_initialized = false
 -- wird erst NACH erfolgreichem Write geaendert, ein Fehler wird in
 -- last_write_error festgehalten (fuer Telemetrie/Diagnose), identische
 -- Ziel-Zustaende werden nicht erneut geschrieben (kein unnoetiger
--- Redstone-Traffic) -- last_command_ts wird aber TROTZDEM aktualisiert,
--- damit der Fail-Safe-Timeout (siehe unten) korrekt weiss, dass gerade
--- ein gueltiges Kommando eingetroffen ist, auch wenn es keine Aenderung
--- war. valve_initialized stellt sicher, dass der PFLICHT-Boot-Write
--- (siehe apply_valve(current_high) weiter unten, noch bevor irgendeine
--- Verbindung steht) NICHT durch die Dedup-Pruefung uebersprungen wird,
--- nur weil der Zielwert zufaellig mit dem bereits gesetzten Default
--- uebereinstimmt -- ohne diesen expliziten Flag haette der allererste
--- Aufruf faelschlich als "schon im Zielzustand" gegolten und den
--- physischen Write nie ausgefuehrt.
+-- Redstone-Traffic). valve_initialized stellt sicher, dass der PFLICHT-
+-- Boot-Write (siehe apply_valve(current_high) weiter unten, noch bevor
+-- irgendeine Verbindung steht) NICHT durch die Dedup-Pruefung
+-- uebersprungen wird, nur weil der Zielwert zufaellig mit dem bereits
+-- gesetzten Default uebereinstimmt -- ohne diesen expliziten Flag haette
+-- der allererste Aufruf faelschlich als "schon im Zielzustand" gegolten
+-- und den physischen Write nie ausgefuehrt.
+--
+-- Fix (2026-07-16): CRITICAL (VALVE-P0, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 12). last_command_ts wurde bisher
+-- UNBEDINGT als allererste Anweisung gesetzt, auch wenn der Write weiter
+-- unten fehlschlug -- ein fehlgeschlagenes BLOCK-Kommando (Ventil bleibt
+-- unsicher OFFEN) setzte den Fail-Safe-Watchdog-Timer (siehe unten,
+-- "valve_failsafe") trotzdem auf "gerade eben" zurueck und verlaengerte
+-- dadurch, wie lange das Ventil unbemerkt offen bleiben konnte, obwohl
+-- der Schreibversuch nachweislich NICHT angekommen ist. Jetzt: last_
+-- command_ts wird nur noch bei einem tatsaechlich erfolgreichen Write
+-- (oder wenn ohnehin kein Write noetig war, da bereits im Zielzustand)
+-- aktualisiert -- ein Fehlschlag laesst den Watchdog auf dem AELTEREN
+-- Zeitstempel stehen, wodurch er eher (nicht spaeter) erneut eingreift.
 local function apply_valve(high)
-  last_command_ts = os.epoch("utc")
   if valve_initialized and high == current_high then
+    last_command_ts = os.epoch("utc")
     return true  -- bereits im Zielzustand, kein erneuter Write noetig
   end
   local ok, err = pcall(redstone.setOutput, config.side, high)
@@ -137,6 +157,7 @@ local function apply_valve(high)
   current_high = high
   valve_initialized = true
   last_write_error = nil
+  last_command_ts = os.epoch("utc")
   utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (%s) -> %s", config.side, high and "BLOCKIERT" or "OFFEN"), "INFO")
   return true
 end
@@ -235,12 +256,27 @@ local function handle_valve_channel_event(event)
   -- Fix (2026-07-13): VALVE-P1. Dedupe -- ein per Retry wiederholtes
   -- identisches Kommando (dieselbe command_id) loest keinen erneuten
   -- Redstone-Write/Log-Eintrag aus, wird aber trotzdem erneut bestaetigt.
+  --
+  -- Fix (2026-07-16): CRITICAL (VALVE-P0, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 12). remember_command() lief bisher
+  -- VOR dem Ergebnis von apply_valve() -- schlug der physische Write fehl,
+  -- war die command_id trotzdem bereits als "gesehen" markiert. Ein
+  -- Retry mit DERSELBEN ID (redstone_router.lua's check_pending_acks()
+  -- sendet bei ausbleibender Bestaetigung exakt dieselbe command_id erneut)
+  -- traf dadurch nur noch den Dedupe-Zweig (applied = current_high==high,
+  -- ohne einen zweiten Schreibversuch) -- Retry war beim eigentlichen
+  -- Anwendungsfall (Schreibfehler) also wirkungslos. Jetzt: nur ein
+  -- ERFOLGREICHER apply_valve() merkt sich die ID; eine fehlgeschlagene
+  -- ID bleibt "ungesehen" und wird bei identischem Retry erneut wirklich
+  -- geschrieben, so lange bis sie tatsaechlich uebernommen wurde.
   local applied
   if seen_command(message.command_id) then
     applied = (current_high == message.high)
   else
-    remember_command(message.command_id)
     applied = apply_valve(message.high)
+    if applied then
+      remember_command(message.command_id)
+    end
   end
   send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error)
 end
