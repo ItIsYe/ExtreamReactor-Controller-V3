@@ -178,6 +178,18 @@ local function feed_one(self, cfg)
   end
 end
 
+-- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). Bricht eine laufende
+-- Ventil-Transaktion sofort ab (z.B. beim Uebergang in Standby/MASTER-
+-- Timeout), statt sie ueber rs_router:tick() "sauber" zu Ende laufen zu
+-- lassen. redstone_router.lua's shutdown_now() ruft dabei tx.on_error()
+-- auf (derselbe Mechanismus wie bei einem echten Transaktionsfehler), was
+-- automatisch last_error auf dieser FeedRouter-Instanz setzt -- der
+-- Abbruch bleibt dadurch fuer Diagnose/UI sichtbar.
+function M:cancel(reason)
+  self.rs_router:shutdown_now(reason)
+end
+
 function M:tick()
   local cfg = self.config.feed or self.config or {}
   if cfg.enabled ~= true then return end

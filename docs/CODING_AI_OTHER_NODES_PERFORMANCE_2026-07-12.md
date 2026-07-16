@@ -41,7 +41,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
 | FUEL | **WEITGEHEND UMGESETZT** | Startabsturz, Export-vor-Ventilbestätigung, Async-Lifecycle und ungültiges Routing→Direktexport behoben (Abschnitt 6/7/8/9); gemeinsamer Ventilkanal (VALVE, Abschnitt 12) ebenfalls behoben |
-| REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation und Export-vor-Ventilbestätigung behoben (Abschnitt 10/8, geteilter Router mit FUEL); Export trotz Standby weiterhin möglich (Abschnitt 11) |
+| REPROCESSOR | **WEITGEHEND UMGESETZT** | unvollständige Installation, Export-vor-Ventilbestätigung und Export trotz Standby behoben (Abschnitt 8/10/11) |
 | VALVE | **WEITGEHEND UMGESETZT** | Failed-Write-Retry und Fail-Safe-Zeitstempel behoben (Abschnitt 12) |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Fehler kann komplettes Logarchiv löschen |
 | Tests / CI | **TEILWEISE UMGESETZT** | 66 Lua- und 6 Python-Tests bleiben ausgeschlossen; kein grüner Head-Check nachgewiesen |
@@ -603,6 +603,20 @@ Bei derselben Untersuchung zwei weitere, verwandte Manifest-Scope-Bugs gefunden 
 
 ## Status
 
+**BEHOBEN (2026-07-16)**
+
+`nodes/reprocessor/main.lua` liess `get_rs_router():tick()` bewusst unbedingt weiterlaufen, auch nach Eintritt in den Standby, mit der ausdrücklichen Absicht, eine laufende Transaktion „sauber“ zu Ende zu führen. Eine Transaktion in `WAIT_SETTLE`/`WAIT_OPEN_ACKS` konnte dadurch trotz frisch eingetretenem Standby (z. B. MASTER-Timeout mitten in einer Befüllung) noch den Exportcallback ausführen. `redstone_router.lua`s `shutdown_now()` existierte zwar bereits, war aber toter Code (nirgends aufgerufen) und rief zusätzlich keinerlei Abschluss-Callback auf.
+
+Fix:
+
+- `redstone_router.lua`s `shutdown_now(reason)` ruft jetzt, falls eine Transaktion aktiv war, deren `on_error(reason)` auf (derselbe Mechanismus wie beim FUEL-P0-Fix) — der Abbruch wird dadurch für den Aufrufer sichtbar, statt stillschweigend zu verschwinden.
+- `feed_router.lua` bekommt eine neue `cancel(reason)`-Methode, die direkt an `rs_router:shutdown_now(reason)` delegiert.
+- `nodes/reprocessor/main.lua` bekommt eine neue `enter_standby(reason)`-Funktion, die beim tatsächlichen Übergang `false→true` (nicht bei jedem Tick, solange schon im Standby) `feed_router:cancel(reason)` aufruft — verdrahtet an beiden bisherigen `standby = true`-Stellen (`MODE_OFF`-Kommando, `MASTER_STALE`-Timeout). `get_rs_router():tick()` bleibt unbedingt bestehen (treibt im Normalbetrieb weiterhin laufende Transaktionen voran), ist nach einem Standby-Übergang aber nur noch ein billiger No-Op, da die Transaktion bereits geleert wurde.
+
+Pflicht-Test: `tests/reprocessor_standby_cancels_transaction_test.lua` (neu) — treibt den echten `redstone_router.lua` und `feed_router.lua`: `shutdown_now()` bricht eine laufende Transaktion sofort ab, ruft den Export-Callback nie auf, meldet den Abbruch über `on_error(reason)`, und blockiert alle Ventile; `feed_router:cancel()` delegiert korrekt und macht den Abbruch über `last_error` sichtbar; `cancel()` ohne aktive Transaktion stürzt nicht ab. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
+
+## Status (vor dem Fix)
+
 **KRITISCH OFFEN**
 
 Bei MASTER-Timeout setzt REPROCESSOR zuerst `standby=true`. Danach gilt:
@@ -925,7 +939,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 4. Router wartet auf Ziel- und Nebenventil-ACKs.
 5. ~~FUEL Async-Lifecycle und Statistik.~~ BEHOBEN (2026-07-16, siehe Abschnitt 7): `tests/fuel_logistics_async_delivery_lifecycle_test.lua`.
 6. ~~VALVE Failed-Write-Retry.~~ BEHOBEN (2026-07-16, siehe Abschnitt 12): `tests/valve_failed_write_retry_test.lua`.
-7. REPROCESSOR Standby-Cancel.
+7. ~~REPROCESSOR Standby-Cancel.~~ BEHOBEN (2026-07-16, siehe Abschnitt 11): `tests/reprocessor_standby_cancels_transaction_test.lua`.
 8. ENERGY 4-s-Matrixcall bei laufendem COMMS/Heartbeat/UI.
 9. RT Discovery mit Fake-Clock und realem Schedulerintervall.
 10. RT Altconfig-Migration.
@@ -943,7 +957,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 5. ~~**FUEL Async-Lifecycle** – Request, Statistik und Abschluss korrigieren.~~ BEHOBEN (2026-07-16, siehe Abschnitt 7).
 6. ~~**Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.~~ BEHOBEN (2026-07-16, siehe Abschnitt 9). REPROCESSOR (`feed_router.lua`) hatte den Bug nicht (kein separater `route_count()`-Vorab-Check).
 7. ~~**VALVE Failed-Write-Retry** und Fail-Safe-Zeitstempel.~~ BEHOBEN (2026-07-16, siehe Abschnitt 12).
-8. **REPROCESSOR Standby-Cancel**.
+8. ~~**REPROCESSOR Standby-Cancel**.~~ BEHOBEN (2026-07-16, siehe Abschnitt 11).
 9. **ENERGY Scheduler-/Heartbeat-Trennung**.
 10. **RT Discovery-Deadline korrekt umsetzen**.
 11. **RT Altconfig-Migration und Controlmetriken**.

@@ -424,6 +424,28 @@ get_feed_router = function()
   return router
 end
 
+-- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). standby wurde bisher an
+-- beiden Stellen unten als reine Zuweisung ("standby = true") gesetzt --
+-- get_rs_router():tick() lief bewusst UNBEDINGT weiter (auch im Standby),
+-- damit eine laufende Transaktion "sauber" abgeschlossen wird. Genau das
+-- ist der Bug: eine Transaktion in WAIT_SETTLE/HOLD_OPEN konnte dadurch
+-- trotz frisch eingetretenem Standby (z.B. MASTER-Timeout mitten in einer
+-- Befuellung) noch den Exportcallback ausfuehren. enter_standby() bricht
+-- eine laufende Transaktion beim UEBERGANG in den Standby sofort ab
+-- (feed_router:cancel() -> redstone_router:shutdown_now(), blockiert alle
+-- Ventile, kein Exportcallback mehr) statt sie durchlaufen zu lassen --
+-- via tx.on_error() (siehe FUEL-P0-Fix) wird last_error auch sichtbar auf
+-- "abgebrochen" gesetzt. Nur beim tatsaechlichen UEBERGANG false->true
+-- aktiv (kein wiederholter shutdown_now() jeden Tick, solange schon im
+-- Standby).
+local function enter_standby(reason)
+  if standby then return end
+  standby = true
+  get_feed_router():cancel(reason)
+  utils.log("REPROC", "Standby aktiviert (" .. tostring(reason) .. ") -- laufende Ventil-Transaktion abgebrochen, alle Ventile blockiert", "WARN")
+end
+
 local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
@@ -457,7 +479,7 @@ local function handle_command(message)
   local cmd, parse_error = support_command_handler.parse_node_command(message, { protocol = protocol, comms = comms })
   if parse_error then return support_command_handler.finish_with_result(devices, parse_error) end
   if not cmd then return end
-  if cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.OFF then standby = true
+  if cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.OFF then enter_standby("MODE_OFF")
   elseif cmd.target == constants.command_targets.MODE and cmd.value == constants.node_states.RUNNING then standby = false
   else return support_command_handler.reject_unsupported(devices) end
   return support_command_handler.finish(devices, true)
@@ -536,14 +558,25 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   -- lief. Jetzt zuerst die Stale-Pruefung, danach erst Verarbeitung --
   -- ein abgelaufenes MASTER-Timeout wirkt dadurch sofort, ohne einen
   -- zusaetzlichen Zyklus durchrutschen zu lassen.
-  if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then standby = true end
+  if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then enter_standby("MASTER_STALE") end
   process_buffers()
   if not standby then get_feed_router():tick() end
   -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
   -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). get_rs_router():tick()
   -- treibt die asynchrone Ventil-Transaktion (begin_transaction() in
-  -- feed_router.lua) voran -- laeuft bewusst UNBEDINGT (auch im Standby),
-  -- damit eine bereits laufende Transaktion sauber abgeschlossen wird und
-  -- keine Ventile dauerhaft offen bleiben.
+  -- feed_router.lua) voran -- laeuft unbedingt jeden Zyklus.
+  --
+  -- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). Der urspruengliche
+  -- Kommentar hier ("laeuft bewusst UNBEDINGT auch im Standby, damit eine
+  -- bereits laufende Transaktion sauber abgeschlossen wird") beschrieb
+  -- genau den Bug: ein frisch eingetretener Standby liess eine Transaktion
+  -- in WAIT_SETTLE trotzdem noch den Exportcallback ausfuehren. enter_
+  -- standby() (siehe oben) bricht eine laufende Transaktion jetzt SOFORT
+  -- beim Uebergang in den Standby ab (shutdown_now()) -- dieser Aufruf hier
+  -- bleibt unbedingt bestehen, weil er im Normalbetrieb (nicht im Standby)
+  -- weiterhin jede laufende Transaktion voranbringen muss; waehrend/nach
+  -- Standby ist er wegen der bereits geleerten Transaktion nur noch ein
+  -- billiger No-Op (kein tx mehr vorhanden).
   get_rs_router():tick()
 end)

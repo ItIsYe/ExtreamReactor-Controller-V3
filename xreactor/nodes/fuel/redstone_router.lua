@@ -710,11 +710,35 @@ end
 
 -- Sofortiger Shutdown-Pfad: blockiert augenblicklich alle Ventile und
 -- verwirft eine laufende Transaktion, unabhaengig von deren Zustand.
-function M:shutdown_now()
+--
+-- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). War bisher toter Code
+-- (nirgends aufgerufen) und rief keinerlei Abschluss-Callback auf -- eine
+-- per shutdown_now() verworfene Transaktion war fuer den Aufrufer
+-- (logistics_router.lua/feed_router.lua) unsichtbar: weder action_fn noch
+-- ein Fehlerpfad liefen je, current_request/last_error blieben auf dem
+-- letzten Stand haengen statt sichtbar "abgebrochen" zu werden. Ruft jetzt
+-- (wie _fail_transaction()) tx.on_error(reason) auf, falls eine
+-- Transaktion aktiv war -- nutzt denselben Abschluss-Mechanismus wie beim
+-- FUEL-P0-Fix, kein zweiter Signalweg noetig.
+function M:shutdown_now(reason)
+  local tx = self._state.transaction
   self._state.transaction = nil
   self:block_all()
   self._state.active_target = nil
   self._state.active_path = nil
+  if tx then
+    self.log("WARN", string.format(
+      "RedstoneRouter: Transaktion zu %s durch shutdown_now() abgebrochen (%s)",
+      tostring(tx.target_id), tostring(reason or "shutdown")))
+    if tx.on_error then
+      local ok, err = pcall(tx.on_error, reason or "shutdown")
+      if not ok then
+        self.warn_once("tx_on_error_failed:" .. tostring(tx.target_id),
+          "RedstoneRouter: on_error-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. tostring(err))
+      end
+    end
+  end
 end
 
 -- Sichtbarkeit fuer UI/Diagnose: aktive Transaktion und ihr Zustand.
