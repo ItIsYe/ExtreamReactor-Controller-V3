@@ -40,8 +40,8 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
 | ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
-| FUEL | **KRITISCH FEHLERHAFT** | Startabsturz behoben (FUEL-P0, Abschnitt 6); Async-Lifecycle und Routing-/ACK-Safety weiterhin offen |
-| REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation behoben (Abschnitt 10); Export trotz Standby weiterhin möglich (Abschnitt 11) |
+| FUEL | **KRITISCH FEHLERHAFT** | Startabsturz und Export-vor-Ventilbestätigung behoben (Abschnitt 6/8); Async-Lifecycle (Abschnitt 7) und ungültiges Routing→Direktexport (Abschnitt 9) weiterhin offen |
+| REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation und Export-vor-Ventilbestätigung behoben (Abschnitt 10/8, geteilter Router mit FUEL); Export trotz Standby weiterhin möglich (Abschnitt 11) |
 | VALVE | **KRITISCH TEILWEISE** | fehlgeschlagener Write wird bei Retry nicht erneut ausgeführt |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Fehler kann komplettes Logarchiv löschen |
 | Tests / CI | **TEILWEISE UMGESETZT** | 66 Lua- und 6 Python-Tests bleiben ausgeschlossen; kein grüner Head-Check nachgewiesen |
@@ -438,6 +438,24 @@ Ein langlebiger Transaktionskontext muss bis `COMPLETE` oder `ERROR` bestehen bl
 # 8. ROUTER-P0 – Export vor vollständiger Ventilbestätigung
 
 ## Status
+
+**BEHOBEN (2026-07-16)**
+
+`nodes/fuel/redstone_router.lua`'s Transaktions-Zustandsmaschine (`begin_transaction`/`tick`) gate'te den Export über eine feste Settle-Zeit (`settle_until`) statt über echte Ventil-Bestätigung — ein noch `pending` ACK löste keinen Fehler aus, der Export lief nach Ablauf der Settle-Zeit trotzdem los. Zusätzlich enthielt `watched_keys` nur die Zielpfad-Ventile; ein fehlgeschlagenes Blockieren eines Nebenpfads (`open_path_to()`'s Rückgabewert dafür wurde nicht ausgewertet) verhinderte den Export nicht.
+
+Fix: `begin_transaction()`/`tick()` durch eine zweiphasige Zustandsmaschine ersetzt (`WAIT_BLOCK_ACKS` → `WAIT_OPEN_ACKS` → `WAIT_SETTLE` → `EXPORT` → `HOLD_OPEN` → `WAIT_FINAL_ACKS` → Abschluss), entlang der im Audit vorgegebenen Ziel-State-Machine:
+
+- Phase 1 blockiert und bestätigt **alle** bekannten Ventile (nicht nur Nebenpfade) als deterministischen Ausgangszustand.
+- Phase 2 öffnet erst danach den Zielpfad und wartet ebenfalls auf dessen vollständige Bestätigung.
+- Bestätigung heißt für Netzwerk-Ventile: ACK vorhanden, `applied == true`, bestätigtes `high` entspricht dem angeforderten Wert (neue Hilfsfunktionen `_request_valve_batch`/`_check_valve_batch`, wiederverwenden die bestehende `pending_valve_acks`/`confirmed_valve_state`-Nachverfolgung aus VALVE-P1). Für lokale/eingebaute Ventile ist der synchrone `_set_valve()`-Rückgabewert die Bestätigung.
+- `WAIT_SETTLE` ist jetzt nur noch eine zusätzliche physische Pufferzeit NACH bestätigtem Zustand, kein Ersatz mehr für die Bestätigung.
+- Jeder Fehlschlag oder ein Phasen-Timeout (`VALVE_PHASE_TIMEOUT_MS`, zusätzliches Sicherheitsnetz über das einzelne ACK-Timeout hinaus) bricht sofort über `_fail_transaction()` mit `block_all()` ab.
+- Nach dem Export wird zusätzlich versucht, das finale Blockieren zu bestätigen (`WAIT_FINAL_ACKS`), bevor die Transaktion als abgeschlossen gilt.
+- `open_path_to()` (Teil des ursprünglichen Bugs — wertete Nebenpfad-Blockierfehler gar nicht aus) wurde entfernt, da vollständig durch die neue Zustandsmaschine ersetzt.
+
+Pflicht-Test: `tests/redstone_router_valve_confirmation_gate_test.lua` (neu) — treibt die echte Zustandsmaschine mit einem Mock-Funkmodem: Export läuft nicht, solange irgendein Ventil (Zielpfad oder Nebenpfad) unbestätigt ist, egal wie viele Ticks/wie viel Zeit vergeht; ein fehlgeschlagenes Blockieren eines Nebenpfads bricht die Transaktion ab, bevor Export je läuft; ein dauerhaft unbeantwortetes Ventil löst den Phasen-Timeout aus statt endlos zu warten; vollständiger Zyklus inklusive `HOLD_OPEN`/`WAIT_FINAL_ACKS`. Verifiziert per `git stash`, dass der Test mit der alten Zustandsmaschine (direkter Sprung nach `WAIT_SETTLE` ohne Blockier-Bestätigungsphase) fehlschlägt.
+
+## Status (vor dem Fix)
 
 **KRITISCHER SAFETYFEHLER**
 
@@ -882,7 +900,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 1. **FUEL Config-Normalizer** – Startabsturz verhindern.
 2. **REPROCESSOR Manifest-Scope** – `feed_router.lua` sicher installieren.
 3. ~~**MASTER→RT Startup-End-to-End** – echten `start_module`-Pfad verdrahten.~~ BEHOBEN (2026-07-16, siehe Abschnitt 3).
-4. **Router Safety** – alle Ziel- und Nebenventile vor Export bestätigen.
+4. ~~**Router Safety** – alle Ziel- und Nebenventile vor Export bestätigen.~~ BEHOBEN (2026-07-16, siehe Abschnitt 8).
 5. **FUEL Async-Lifecycle** – Request, Statistik und Abschluss korrigieren.
 6. **Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.
 7. **VALVE Failed-Write-Retry** und Fail-Safe-Zeitstempel.
