@@ -34,17 +34,17 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
 | Installer / Benutzerconfig | **TEILWEISE UMGESETZT** | einheitlicher SHA für Manifest und Dateien, CRC beim Write, keine pauschale Log-Löschung |
-| Manifest / Rollen-Scope | **KRITISCH OFFEN** | REPROCESSOR-`feed_router.lua` wird weiterhin nicht rollenbezogen installiert |
+| Manifest / Rollen-Scope | **TEILWEISE UMGESETZT** | `feed_router.lua`/`redstone_router.lua`/`ui_pages.lua`-Scopes behoben (Abschnitt 10/17); `optional/speaker_alarm.lua` weiterhin ohne `required_for` |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | ENERGY umgeht die Trennung mit einem Volltick im Matrix-Thread |
 | MASTER | **KRITISCH TEILWEISE** | Sequencer-Aufrufsyntax behoben, echter MASTER→RT-Modulstart weiterhin nicht verdrahtet |
 | RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
 | ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
 | FUEL | **KRITISCH FEHLERHAFT** | Startabsturz behoben (FUEL-P0, Abschnitt 6); Async-Lifecycle und Routing-/ACK-Safety weiterhin offen |
-| REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation und Export trotz Standby möglich |
+| REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation behoben (Abschnitt 10); Export trotz Standby weiterhin möglich (Abschnitt 11) |
 | VALVE | **KRITISCH TEILWEISE** | fehlgeschlagener Write wird bei Retry nicht erneut ausgeführt |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Fehler kann komplettes Logarchiv löschen |
-| Tests / CI | **TEILWEISE UMGESETZT** | 66 Lua- und 8 Python-Tests bleiben ausgeschlossen; kein grüner Head-Check nachgewiesen |
+| Tests / CI | **TEILWEISE UMGESETZT** | 66 Lua- und 6 Python-Tests bleiben ausgeschlossen; kein grüner Head-Check nachgewiesen |
 | Dokumentation | **AKTUELL** | diese Datei ist die einzige aktuelle allgemeine Auditquelle |
 
 ## Produktionsurteil
@@ -465,7 +465,7 @@ Direkter Export nur bei ausdrücklich erlaubter ungerouteter Installation. Sobal
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-16)**
 
 `nodes/reprocessor/main.lua` benötigt:
 
@@ -485,19 +485,18 @@ Der aktuelle Manifest-Eintrag lautet weiterhin ohne `required_for`:
 
 Eine frische REPROCESSING-Installation oder ein Reinstall kann `main.lua`, aber nicht `feed_router.lua` installieren. Der Start endet am fehlenden Modul.
 
-## Fix
+## Umsetzung
 
-```lua
-required_for={"REPROCESSING"}
-```
+`xreactor/manifest.lua`s `feed_router.lua`-Eintrag hat jetzt `required_for={"REPROCESSING"}`. Der monolithische `/installer` lädt `manifest.lua` bei jeder Installation frisch von GitHub (kein eingebetteter Datenkopie-Pfad, nur generische, manifest-getriebene `files_for_role()`-Logik) — der einzelne Fix in `xreactor/manifest.lua` deckt daher beide Installationswege ab.
 
-in:
+Bei derselben Untersuchung zwei weitere, verwandte Manifest-Scope-Bugs gefunden und behoben (siehe Abschnitt 17):
 
-- `xreactor/manifest.lua`,
-- Generator-/Stampingquelle,
-- eingebetteter Manifestlogik des monolithischen `/installer`, soweit dort relevant.
+- `nodes/fuel/redstone_router.lua` fehlte `"WATER"` in `required_for`, obwohl `nodes/water/main.lua` es direkt per `require("nodes.fuel.redstone_router")` benötigt — derselbe Fehlerklasse wie `feed_router.lua`, nur unentdeckt weil die betroffene Rolle (WATER) nicht die Rolle war, die die Datei "besitzt" (FUEL).
+- `nodes/support/ui_pages.lua` hatte umgekehrt `"MASTER"` zu Unrecht in `required_for`, obwohl kein Pfad von `master/main.lua` (auch nicht transitiv über `dofile()`) dorthin führt — ein zu breiter, nicht zu enger Scope, aber dieselbe Bug-Familie.
 
-Zusätzlich transitiver Entrypoint-Require-Test pro Rolle.
+## Pflicht-Test
+
+`tests/manifest_role_scope_guard_test.py` und `tests/manifest_entrypoint_require_coverage_test.py` (beide zuvor als `CONTENT_DRIFT` ausgeschlossen) erkannten diese Fehler bereits korrekt, verglichen aber nur direkte, nicht-transitive `require()`-Aufrufe und kannten `dofile()` überhaupt nicht — dadurch lieferten sie für einige Dateien (z. B. `nodes/support/runtime.lua`, das MASTER nur über `master/runtime_loop.lua`s `dofile("/xreactor/nodes/support/runtime.lua")` erreicht) falsch-positive Abweichungen. Beide Tests wurden auf transitive BFS mit `dofile()`-Erkennung umgestellt (identische Methodik in beiden Dateien); `manifest_entrypoint_require_coverage_test.py`s zusätzliche, nie implementierte „Master-Runtime-Fingerprint“-Markerprüfung (vier wörtliche Log-Strings ohne jede Spur einer echten Implementierung, siehe `git log -S`) wurde entfernt. Beide Tests laufen jetzt grün und aus der Ausschlussliste entfernt.
 
 ---
 
@@ -691,10 +690,12 @@ Temporäre Mount-, Full-, I/O- oder Race-Fehler können vorhandene Logs vollstä
 Bestätigt:
 
 - `core/bootstrap.lua` ist nicht mehr doppelt enthalten.
-- `nodes/reprocessor/feed_router.lua` hat weiterhin keinen Rollen-Scope.
+- `nodes/reprocessor/feed_router.lua` hat jetzt `required_for={"REPROCESSING"}` (BEHOBEN, siehe Abschnitt 10).
+- `nodes/fuel/redstone_router.lua` hat jetzt zusätzlich `"WATER"` (BEHOBEN — `nodes/water/main.lua` benötigt es direkt).
+- `nodes/support/ui_pages.lua` hat `"MASTER"` nicht mehr zu Unrecht in `required_for` (BEHOBEN — kein Pfad von MASTER dorthin).
+- `tests/manifest_role_scope_guard_test.py` und `tests/manifest_entrypoint_require_coverage_test.py` laufen jetzt grün (BEHOBEN, transitive `dofile()`-fähige Neufassung, siehe Abschnitt 10) und wurden aus der Ausschlussliste entfernt.
 - `optional/speaker_alarm.lua` hat weiterhin kein `required_for` und kann trotz auswählbarem Feature aus der tatsächlichen Rollen-Dateiliste fallen.
-- mehrere Manifest-Scope-Tests bleiben ausgeschlossen.
-- Manifestkopf kommentiert weiterhin eine alte Versionsbezeichnung, obwohl die tatsächlichen Felder v438 sind; funktional gering, aber verwirrend.
+- Manifestkopf kommentiert weiterhin eine alte Versionsbezeichnung, obwohl die tatsächlichen Felder v439 sind; funktional gering, aber verwirrend.
 
 ## Pflicht-Test
 
@@ -774,18 +775,18 @@ Das Senden an alle FUEL-/WATER-Nodes einer Rolle ist umgesetzt. Weiter offen:
 
 ---
 
-# 21. TEST/CI-P0 – 74 Tests weiterhin ausgeschlossen
+# 21. TEST/CI-P0 – 72 Tests weiterhin ausgeschlossen
 
 ## Status
 
 **KRITISCH TEILWEISE**
 
-Aktueller Stand:
+Aktueller Stand (nach Behebung von `manifest_role_scope_guard_test.py`/`manifest_entrypoint_require_coverage_test.py`, siehe Abschnitt 10):
 
 ```text
 66 ausgeschlossene Lua-Tests
-8 ausgeschlossene Python-Tests
-74 insgesamt
+6 ausgeschlossene Python-Tests
+72 insgesamt
 ```
 
 Die Liste enthält weiterhin:
