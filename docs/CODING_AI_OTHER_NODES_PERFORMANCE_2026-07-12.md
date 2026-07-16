@@ -40,7 +40,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
 | ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
-| FUEL | **KRITISCH FEHLERHAFT** | Startabsturz, Async-Lifecycle, Routing-/ACK-Safety |
+| FUEL | **KRITISCH FEHLERHAFT** | Startabsturz behoben (FUEL-P0, Abschnitt 6); Async-Lifecycle und Routing-/ACK-Safety weiterhin offen |
 | REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation und Export trotz Standby möglich |
 | VALVE | **KRITISCH TEILWEISE** | fehlgeschlagener Write wird bei Retry nicht erneut ausgeführt |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Fehler kann komplettes Logarchiv löschen |
@@ -284,7 +284,7 @@ Bestehende persistierte Werte wie `5.0` und `1.0` bleiben jedoch gültige Zahlen
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-16)**
 
 `nodes/fuel/config_normalizer.lua` initialisiert:
 
@@ -323,13 +323,21 @@ lg.destinations = type(lg.destinations) == "table" and lg.destinations or {}
 lg.routes = type(lg.routes) == "table" and lg.routes or {}
 ```
 
+## Umsetzung
+
+`nodes/fuel/config_normalizer.lua` normalisiert jetzt auch `lg.destinations`, `lg.sources` und `lg.routes` auf Tabellen (analog zum bereits vorhandenen Muster für `lg.reactors`/`lg.waste`), bevor der Destination-Validierungsloop `ipairs(lg.destinations)` läuft.
+
 ## Pflicht-Test
 
-- leere Config,
-- aktuelle Defaultconfig,
-- `logistics={}`,
-- ungültige `logistics`-Typen,
-- Start bis `Node ready`.
+Funktionaler Test `tests/fuel_config_normalizer_logistics_fields_test.lua` (lädt das echte Modul und die echte FUEL-Defaultconfig, kein Mock der Normalisierungslogik selbst):
+
+- leere Config — vorher: Crash bei `ipairs(nil)`, jetzt: ok,
+- aktuelle Defaultconfig (`nodes/fuel/config.lua`) als Benutzerconfig — vorher: Crash, jetzt: ok,
+- `logistics={}` — vorher: Crash, jetzt: ok, alle drei Felder leere Tabellen,
+- ungültige Typen (`destinations="not-a-table"`, `sources=42`, `routes=false`) — vorher: Crash mit anderem `ipairs`-Fehlertext, jetzt: alle drei werden durch leere Tabellen ersetzt,
+- Regressionstest verifiziert zusätzlich per `git stash`, dass der Test ohne den Fix tatsächlich mit exakt dem im Audit beschriebenen Fehler fehlschlägt.
+
+`Start bis Node ready` (voller RT-Boot mit Mock-Peripherals) ist nicht Teil dieses Tests — das ist ein Ingame-/Integrationstest, kein isolierter Modultest.
 
 ---
 
