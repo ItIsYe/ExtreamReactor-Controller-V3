@@ -40,7 +40,7 @@ Commitmeldungen und bestehende Audit-Aussagen wurden nicht als Beweis übernomme
 | RT | **TEILWEISE UMGESETZT** | Discovery-Slowdown funktioniert zeitlich nicht wie behauptet; Altconfig-Migration fehlt |
 | ENERGY | **KRITISCH TEILWEISE** | Matrix-Thread tickt alle Services und sendet ungefilterte Heartbeats |
 | WATER | **WEITGEHEND UMGESETZT** | Ingame-, Neustart- und Update-Regressionsnachweis |
-| FUEL | **KRITISCH FEHLERHAFT** | Startabsturz, Export-vor-Ventilbestätigung und Async-Lifecycle behoben (Abschnitt 6/8/7); ungültiges Routing→Direktexport (Abschnitt 9) weiterhin offen |
+| FUEL | **TEILWEISE UMGESETZT** | Startabsturz, Export-vor-Ventilbestätigung, Async-Lifecycle und ungültiges Routing→Direktexport behoben (Abschnitt 6/7/8/9); abhängig vom noch offenen VALVE-Failed-Write-Retry (Abschnitt 12, gemeinsamer Ventilkanal) |
 | REPROCESSOR | **KRITISCH FEHLERHAFT** | unvollständige Installation und Export-vor-Ventilbestätigung behoben (Abschnitt 10/8, geteilter Router mit FUEL); Export trotz Standby weiterhin möglich (Abschnitt 11) |
 | VALVE | **KRITISCH TEILWEISE** | fehlgeschlagener Write wird bei Retry nicht erneut ausgeführt |
 | LOG Collector | **KRITISCH TEILWEISE** | Probe-Fehler kann komplettes Logarchiv löschen |
@@ -523,6 +523,16 @@ Jeder NACK, Timeout, Offlinezustand, State-Mismatch oder Cancel muss vor Export 
 
 ## Status
 
+**BEHOBEN (2026-07-16)**
+
+`nodes/fuel/logistics_router.lua` entschied über `local routed = rs and rs:route_count() > 0` — ein struktureller Walk über das **rohe** `cfg.redstone_tree`, unabhängig vom in `rs:refresh()` ermittelten Validierungszustand (`tree_configured`/`tree_valid`/`all_valves`). Ein Baum, der konfiguriert, aber strukturell ungültig war (z. B. ein Ventil-Knoten ohne `reactor`-Ziel und ohne `children`, ein „dead_end“), fand beim strukturellen Walk KEINEN Reaktor-Endpunkt und lieferte deshalb ebenfalls `route_count() == 0` — identisch zum Fall „nie konfiguriert“. `begin_transaction()` (mit seiner eigenen `invalid_tree`-Absicherung, siehe Abschnitt 8) wurde dadurch NIE aufgerufen; FUEL fiel direkt in den ungeschützten Direkt-Export-Pfad, obwohl `refresh()` den Baum bereits als ungültig erkannt und `block_all()` ausgeführt hatte. Empirisch am echten Vor-Fix-Code bestätigt: `tree_configured=true`, `tree_valid=false`, aber `route_count()==0` → alte `routed`-Entscheidung `false`.
+
+Fix: `redstone_router.lua` bekommt eine neue, einzige Autorität für diese Entscheidung, `get_routing_state()`, mit den im Audit vorgegebenen vier Zuständen (`ROUTING_NOT_CONFIGURED`/`ROUTING_VALID`/`ROUTING_INVALID`/`ROUTING_REQUIRED_BUT_EMPTY`), basierend auf dem echten Validierungszustand statt auf einem erneuten rohen Baum-Walk. `logistics_router.lua` nutzt jetzt ausschließlich diesen Zustand: bei `ROUTING_INVALID`/`ROUTING_REQUIRED_BUT_EMPTY` wird die Belieferung diesen Zyklus komplett blockiert (kein Routing-Versuch, aber auch kein Direktexport-Fallback); nur bei `ROUTING_NOT_CONFIGURED` bleibt der bisherige, sichere Direkt-Export-Pfad aktiv. `nodes/reprocessor/feed_router.lua` hatte diesen Bug nicht (kein separater `route_count()`-Vorab-Check — ruft `begin_transaction()` immer direkt auf, dessen eigene interne Prüfung beide Fälle bereits korrekt abfing), keine Änderung dort nötig.
+
+Pflicht-Test: `tests/fuel_routing_invalid_tree_blocks_direct_export_test.lua` (neu) — treibt den echten `redstone_router.lua` mit einem konfigurierten-aber-kaputten Baum (`dead_end`) und beweist: `get_routing_state()` klassifiziert korrekt als `ROUTING_INVALID`, `logistics_router.lua` exportiert dabei NIE ungeschützt; ebenso für `ROUTING_REQUIRED_BUT_EMPTY` (gültiger Baum ohne jedes Ventil); Regressionsschutz für den legitimen `ROUTING_NOT_CONFIGURED`-Fall (Direktexport funktioniert weiterhin). Verifiziert per `git stash`, dass der Test ohne den Fix fehlschlägt, sowie per direktem Vergleich gegen den alten Code, dass die alte `routed`-Entscheidung tatsächlich `false` für den Exploit-Baum liefert.
+
+## Status (vor dem Fix)
+
 **KRITISCH OFFEN**
 
 Der Redstone-Router selbst verweigert `begin_transaction()` bei einem konfigurierten, aber ungültigen Baum.
@@ -917,7 +927,7 @@ Ein Test darf nur entfernt werden, wenn die Anforderung nicht mehr gilt oder gle
 3. ~~**MASTER→RT Startup-End-to-End** – echten `start_module`-Pfad verdrahten.~~ BEHOBEN (2026-07-16, siehe Abschnitt 3).
 4. ~~**Router Safety** – alle Ziel- und Nebenventile vor Export bestätigen.~~ BEHOBEN (2026-07-16, siehe Abschnitt 8).
 5. ~~**FUEL Async-Lifecycle** – Request, Statistik und Abschluss korrigieren.~~ BEHOBEN (2026-07-16, siehe Abschnitt 7).
-6. **Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.
+6. ~~**Invalid-Routing-Hardblock** für FUEL und REPROCESSOR.~~ BEHOBEN (2026-07-16, siehe Abschnitt 9). REPROCESSOR (`feed_router.lua`) hatte den Bug nicht (kein separater `route_count()`-Vorab-Check).
 7. **VALVE Failed-Write-Retry** und Fail-Safe-Zeitstempel.
 8. **REPROCESSOR Standby-Cancel**.
 9. **ENERGY Scheduler-/Heartbeat-Trennung**.

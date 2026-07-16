@@ -353,7 +353,28 @@ function M:_run_supply(cycle_log)
   -- (Direkt-Export ist synchron und schnell, keine Serialisierung noetig).
   local cfg_l = self.config.logistics or self.config or {}
   local rs = self._state.rs_router
-  local routed = rs and rs:route_count() > 0
+
+  -- Fix (2026-07-16): CRITICAL (ROUTER-P0.9, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 9). War bisher "rs:route_
+  -- count() > 0" -- ein struktureller Walk ueber das ROHE cfg.redstone_
+  -- tree, unabhaengig vom in rs:refresh() ermittelten Validierungszustand.
+  -- Ein konfigurierter, aber kaputter Baum, der strukturell auf 0
+  -- erkennbare Routen fiel, wurde dadurch identisch zu "nie konfiguriert"
+  -- behandelt -- "routed" wurde false, begin_transaction() (mit seiner
+  -- eigenen invalid_tree-Absicherung) wurde dadurch NIE aufgerufen, und
+  -- FUEL fiel direkt in den ungeschuetzten Direkt-Export-Pfad, obwohl
+  -- rs:refresh() den Baum bereits als ungueltig erkannt und block_all()
+  -- ausgefuehrt hatte. get_routing_state() ist jetzt die einzige
+  -- Autoritaet fuer diese Entscheidung; ROUTING_INVALID/ROUTING_REQUIRED_
+  -- BUT_EMPTY blockieren die Belieferung diesen Zyklus komplett (kein
+  -- Routing-Versuch, aber auch KEIN Direkt-Export-Fallback).
+  local routing_state = rs and rs:get_routing_state() or "ROUTING_NOT_CONFIGURED"
+  if routing_state == "ROUTING_INVALID" or routing_state == "ROUTING_REQUIRED_BUT_EMPTY" then
+    self.warn_once("routing_blocked:" .. routing_state,
+      "Logistics: Routing " .. routing_state .. " -- Belieferung diesen Zyklus komplett blockiert, kein ungeschuetzter Direktexport")
+    return exported, errors
+  end
+  local routed = routing_state == "ROUTING_VALID"
 
   for _, cand in ipairs(candidates) do
     local r, fuel_pct = cand.r, cand.fuel_pct

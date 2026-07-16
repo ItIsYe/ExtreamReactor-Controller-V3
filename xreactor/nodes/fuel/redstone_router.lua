@@ -209,21 +209,33 @@ function M:refresh()
   -- Feature (2026-07-08): strukturelle Validierung VOR jeder Aktivierung.
   -- Bei einem ungueltigen Baum: alle Ventile blockieren (Fail-Safe-
   -- Grundzustand, kein Fuel-Transfer moeglich), all_valves/integrators
-  -- NICHT aus dem fehlerhaften Baum laden (route_count() bleibt 0, damit
-  -- logistics_router.lua sauber auf den ungerouteten Direkt-Export-Pfad
-  -- zurueckfaellt statt mit einer kaputten Struktur zu arbeiten), und der
-  -- Fehler wird geloggt (landet damit auch im Log-Collector-System) sowie
-  -- ueber get_validation() fuer UI/zukuenftige Master-Alerts bereitgestellt.
+  -- NICHT aus dem fehlerhaften Baum laden, und der Fehler wird geloggt
+  -- (landet damit auch im Log-Collector-System) sowie ueber get_
+  -- validation() fuer UI/zukuenftige Master-Alerts bereitgestellt.
   --
-  -- Fix (2026-07-13): CRITICAL. Der urspruengliche Kommentar hier ("route_
-  -- count() bleibt 0, damit ... auf den ungerouteten Direkt-Export-Pfad
-  -- zurueckfaellt") widersprach sich selbst mit der Absicht "block_all(),
-  -- kein Fuel-Transfer moeglich" wenige Zeilen weiter unten -- route_and_
-  -- act() sah bei einem UNGUELTIGEN (aber tatsaechlich konfigurierten)
-  -- Baum ebenfalls all_valves==0 und fuehrte die Aktion trotzdem UNGE-
-  -- SCHUETZT direkt aus, exakt entgegen der block_all()-Absicht. Jetzt
-  -- unterschieden ueber tree_configured (siehe oben): ein Baum, der
-  -- KONFIGURIERT war aber ungueltig ist, blockiert jetzt tatsaechlich.
+  -- Fix (2026-07-13): CRITICAL. tree_configured (siehe oben) unterscheidet
+  -- "Routing war nie gewollt" (sicher, Direkt-Export ok) von "Routing war
+  -- konfiguriert, aber kaputt/leer geworden" (GEFAEHRLICH, muss
+  -- blockieren) -- ein Baum, der KONFIGURIERT war aber ungueltig ist,
+  -- blockiert tatsaechlich (siehe begin_transaction()).
+  --
+  -- Fix (2026-07-16): CRITICAL (ROUTER-P0.9, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 9). Die vorherige Fassung
+  -- dieses Kommentars empfahl, dass "route_count() bleibt 0, damit
+  -- logistics_router.lua sauber auf den ungerouteten Direkt-Export-Pfad
+  -- zurueckfaellt" -- das war GENAU der Bug: route_count()/get_routing_
+  -- table() liest strukturell aus dem ROHEN cfg.redstone_tree (unabhaengig
+  -- von tree_valid/tree_configured hier) und kann bei einem kaputten Baum,
+  -- der GAR KEINE 'side'-Ventil-Eintraege mehr strukturell findet, selbst
+  -- 0 zurueckgeben, obwohl der Baum tatsaechlich KONFIGURIERT war (nur
+  -- kaputt). logistics_router.lua nutzte genau dieses 0 als Signal fuer
+  -- "nie konfiguriert" und fiel ungeschuetzt auf Direkt-Export zurueck --
+  -- exakt der Bug, den block_all()/begin_transaction()'s eigene "invalid_
+  -- tree"-Pruefung eigentlich verhindern sollte, aber NIE erreicht wurde,
+  -- weil logistics_router.lua begin_transaction() in diesem Fall gar nicht
+  -- erst aufrief. get_routing_state() (siehe unten) ist jetzt die einzige
+  -- Autoritaet fuer diese Entscheidung -- basiert auf tree_configured/
+  -- tree_valid/all_valves statt auf einem strukturellen Baum-Walk.
   local validation = M.validate_tree(tree)
   self._state.tree_valid = validation.ok
   self._state.tree_errors = validation.errors
@@ -852,6 +864,42 @@ end
 
 function M:route_count()
   return #self:get_routing_table()
+end
+
+-- Fix (2026-07-16): CRITICAL (ROUTER-P0.9, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md Abschnitt 9). Einzige Autoritaet fuer
+-- die Frage "soll FUEL/REPROCESSOR ueberhaupt ungeroutet direkt
+-- exportieren, oder muss geroutet (oder hart blockiert) werden?" --
+-- ersetzt den vorherigen strukturellen route_count()>0-Check (siehe
+-- refresh()-Kommentar oben), der bei einem KONFIGURIERTEN aber kaputten
+-- Baum faelschlich 0 zurueckgeben und damit den ungeschuetzten Direkt-
+-- Export-Pfad ausloesen konnte. Basiert ausschliesslich auf dem in
+-- refresh() ermittelten Validierungszustand (tree_configured/tree_valid/
+-- all_valves), nicht auf einem erneuten rohen Baum-Walk.
+--   ROUTING_NOT_CONFIGURED    -- kein redstone_tree in der Config: Direkt-
+--                                export ist ausdruecklich sicher.
+--   ROUTING_INVALID           -- redstone_tree konfiguriert, aber
+--                                strukturell ungueltig (validate_tree()).
+--   ROUTING_REQUIRED_BUT_EMPTY -- redstone_tree konfiguriert und
+--                                strukturell gueltig, aber ohne ein
+--                                einziges tatsaechliches Ventil (side) --
+--                                Routing ist offensichtlich beabsichtigt,
+--                                kann aber nichts absichern.
+--   ROUTING_VALID             -- redstone_tree konfiguriert, gueltig, und
+--                                enthaelt mindestens ein Ventil.
+-- Fuer beide INVALID/EMPTY-Faelle gilt: hart blockieren, NIEMALS
+-- ungeschuetzter Direkt-Export.
+function M:get_routing_state()
+  if not self._state.tree_configured then
+    return "ROUTING_NOT_CONFIGURED"
+  end
+  if not self._state.tree_valid then
+    return "ROUTING_INVALID"
+  end
+  if #self._state.all_valves == 0 then
+    return "ROUTING_REQUIRED_BUT_EMPTY"
+  end
+  return "ROUTING_VALID"
 end
 
 function M:get_tree()

@@ -29,6 +29,7 @@ end
 local function make_fake_rs_router()
   local fake = { calls = {}, next_started = true, next_reason = 'started' }
   function fake:route_count() return 1 end
+  function fake:get_routing_state() return 'ROUTING_VALID' end
   function fake:refresh() end
   function fake:begin_transaction(target_id, action_fn, valve_open_ms, opts)
     table.insert(self.calls, { target_id = target_id, action_fn = action_fn, valve_open_ms = valve_open_ms, opts = opts })
