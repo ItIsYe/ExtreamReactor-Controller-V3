@@ -606,8 +606,23 @@ end
 -- Fix (2026-07-13): LOG-P1. Vorwaertsdeklaration, da write_log() weiter
 -- unten flush_bucket() bereits aufruft (ERROR/CRITICAL-Sofort-Flush),
 -- flush_bucket() selbst aber erst danach definiert wird.
+--
+-- Fix (2026-07-17): CRITICAL (LOG-P0). send_ack fehlte in dieser
+-- Vorwaertsdeklaration -- flush_bucket() (als Funktionsliteral hier oben
+-- KOMPILIERT, noch bevor "local function send_ack(...)" weiter unten im
+-- Chunk ueberhaupt existierte) rief send_ack(payload, "written") auf. Lua
+-- loest freie Variablen beim Kompilieren des Funktionsliterals anhand des
+-- zu diesem Zeitpunkt sichtbaren Scopes auf, nicht beim spaeteren Ausfuehren
+-- -- ohne eine bereits sichtbare lokale "send_ack" fiel dieser Aufruf auf
+-- eine GLOBALE Variable dieses Namens zurueck, die nie gesetzt wurde. Jeder
+-- einzelne erfolgreiche flush_bucket()-Durchlauf stuerzte dadurch
+-- deterministisch mit "attempt to call global 'send_ack' (a nil value)" ab
+-- (beobachtet in xreactor_logs/log_collector/*.log: "loop crashed on
+-- event=timer" im Sekundentakt) -- kurz nach dem Start, sobald der erste
+-- Log-Puffer tatsaechlich geflusht wurde.
 local flush_bucket
 local flush_due
+local send_ack
 local FLUSH_LINES = 8
 local FLUSH_INTERVAL_MS = 200
 local MAX_PENDING_LINES_PER_PATH = 128
@@ -886,7 +901,7 @@ local function refresh_modems(force)
   stats.modem_refreshes = stats.modem_refreshes + 1
 end
 
-local function send_ack(payload, status)
+send_ack = function(payload, status)
   if not payload.ack or not payload.event_id then return end
   local ack = {
     type = "LOG_ACK",

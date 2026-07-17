@@ -43,7 +43,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
 | REPROCESSOR | **WEITGEHEND UMGESETZT** | Standby-Cancel und Wireless-VALVE-Discovery behoben (Abschnitt 20) |
 | VALVE | **WEITGEHEND UMGESETZT** | Retry, Senderbindung (Auto-Pairing) und Sorter-Reconnect behoben (Abschnitt 21); Statusfelder (`actuator_online` etc.) bleiben als Observability-Erweiterung offen |
-| LOG Collector | **WEITGEHEND UMGESETZT** | Probe-Wipe (Abschnitt 16) und stale Free-Space-Cache im Reclaim (Abschnitt 22) behoben; Rotation/Datenhaltungsregeln (Abschnitt 23) weiterhin offen |
+| LOG Collector | **WEITGEHEND UMGESETZT** | Probe-Wipe (Abschnitt 16), stale Free-Space-Cache im Reclaim und `send_ack`-Absturz bei jedem Flush (beide Abschnitt 22) behoben; Rotation/Datenhaltungsregeln (Abschnitt 23) weiterhin offen |
 | Tests / CI | **KRITISCH TEILWEISE** | 63 Lua- und 6 Python-Tests ausgeschlossen (drei echte Fehler/Testbugs am 2026-07-17 behoben, siehe Abschnitt 24); aktueller Head ohne nachgewiesenen grünen Lauf |
 | Dokumentation | **AKTUELL** | diese Datei ist die einzige aktuelle allgemeine Auditquelle |
 
@@ -683,6 +683,22 @@ free_space_cache[mount] = nil
 ```
 
 plus `exclude_path`-Schutz der offenen Zieldatei und `RECLAIM_MAX_FILES_PER_RUN`-Obergrenze.
+
+## Zusatzfund (2026-07-17, BEHOBEN): `send_ack` als globale Variable aufgelöst — LOG_COLLECTOR stürzt bei JEDEM erfolgreichen Flush ab
+
+Vom Nutzer per echten `xreactor_logs/log_collector/*.log`-Auszug (Disk-Backup-ZIP, datiert 2026-07-16) gemeldet als "die Node stürzt kurz nach dem Start wegen eines nil value ab" (zunächst der FUEL-Node zugeschrieben — die tatsächlich betroffene Rolle war LOG_COLLECTOR). Log-Auszug:
+
+```text
+[2026-07-16 21:58:51] LOG_COLLECTOR | LOG | ERROR | loop crashed on event=timer: ...log_collector/main.lua:674: attempt to call global 'send_ack' (a nil value)
+```
+
+Diese Zeile wiederholte sich im Sekundentakt, deterministisch bei praktisch jedem Timer-Tick.
+
+**Ursache:** `nodes/log_collector/main.lua` deklariert `flush_bucket`/`flush_due` bewusst als Vorwärtsdeklaration (`local flush_bucket` / `local flush_due`, siehe Kommentar dort), weil `write_log()` (weiter oben im Chunk) sie bereits referenziert, bevor sie definiert werden. `flush_bucket = function(path) ... end` selbst ruft `send_ack(payload, "written")` auf — `send_ack` war aber NICHT in dieser Vorwärtsdeklaration enthalten, sondern erst weiter unten im selben Chunk als `local function send_ack(payload, status)` deklariert. Lua löst freie Variablen beim KOMPILIEREN eines Funktionsliterals anhand des zu diesem Zeitpunkt sichtbaren lexikalischen Scopes auf, nicht beim späteren Ausführen — der `flush_bucket`-Funktionsliteral wurde kompiliert, als im Chunk-Scope noch keine lokale `send_ack` existierte, der Aufruf fiel deshalb auf eine GLOBALE Variable dieses Namens zurück, die nirgends gesetzt wird. Ergebnis: **jeder einzige erfolgreiche Log-Flush** (persistierte Zeilen tatsächlich geschrieben) stürzte beim anschließenden ACK-Versand ab — der äußere `xpcall` der Event-Loop fängt das zwar ab ("loop crashed on event=timer", kein Reboot), aber `send_ack()` läuft dadurch NIE, absendende Nodes erhalten nie ein `LOG_ACK`, und der Fehler wird bei laufendem Betrieb minütlich wiederholt geloggt.
+
+**Fix:** `send_ack` in dieselbe Vorwärtsdeklaration wie `flush_bucket`/`flush_due` aufgenommen (`local send_ack` VOR der `flush_bucket`-Definition); die spätere Definition wurde von `local function send_ack(...)` auf `send_ack = function(...)` umgestellt (identisches Muster wie bereits bei `flush_bucket`/`flush_due`).
+
+**Pflicht-Test:** `tests/log_collector_flush_bucket_send_ack_forward_decl_test.lua` — extrahiert per Marker den echten Quelltext (Vorwärtsdeklarationsblock, die echte `flush_bucket()`-Definition, die echte `send_ack()`-Definition, in genau dieser Kompilierreihenfolge) aus `nodes/log_collector/main.lua`, treibt einen echten gepufferten Log-Eintrag durch `flush_bucket()` und beweist: kein Absturz, `stats.written` erhöht sich, UND `send_ack()` sendet tatsächlich ein `LOG_ACK` mit korrektem `event_id`/`status`. Verifiziert per `git stash`, dass der Test gegen den alten Code nicht einmal extrahierbar ist (die vorwärtsdeklarierte `send_ack`-Zeile existiert dort nicht) — exakter Nachweis, dass die Fix-Logik zuvor fehlte.
 
 ---
 
