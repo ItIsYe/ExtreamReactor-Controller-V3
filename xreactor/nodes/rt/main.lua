@@ -1212,11 +1212,20 @@ init()
 -- Pfad und trug nichts zur Selbstkorrektur bei, verursachte aber
 -- unnoetige doppelte volle Discovery-Durchlaeufe.
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
+-- Quiesce-Handler. Der Audit listet RT nicht unter den Rollen mit
+-- pflichtiger physischer Sicherzustandsbestaetigung (nur FUEL/
+-- REPROCESSOR/VALVE/WATER) -- RT bestaetigt hier nur, dass es die
+-- Hauptschleife kontrolliert verlaesst, ohne eigene neue Aktorlogik
+-- einzufuehren. Getrennt davon bleibt der bestehende, MASTER-getriggerte
+-- pending_remote_update-Pfad (oben) unveraendert: der blockiert die
+-- Steuerschleife bereits synchron waehrend des Installerlaufs.
+local quiesce_handshake = _G.__xreactor_update_handshake
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   if pending_remote_update then
     pending_remote_update = false
     log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
     require("core.remote_update").run(log)
   end
-end)
+end, quiesce_handshake and { handshake = quiesce_handshake } or nil)
 

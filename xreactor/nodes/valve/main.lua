@@ -416,4 +416,14 @@ services:add(telemetry_service.new({
 
 utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: side=" .. config.side .. " node_id=" .. tostring(node_id), "INFO")
 
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() end)
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
+-- Quiesce-Handler. VALVE ist die einzige der vier sicherheitskritischen
+-- Rollen mit einer echten, SYNCHRONEN Erfolgsbestaetigung (apply_valve()
+-- liefert true/false) -- dieselbe bereits vorhandene, im Fail-Safe-
+-- Watchdog (siehe oben) bewaehrte Funktion wird hier wiederverwendet.
+-- run_event_loop() ruft on_quiesce() bei Bedarf mehrfach auf (einmal pro
+-- Zyklus), bis sie true liefert -- kein neuer Aktor-Code, keine Annahme
+-- ungeprueften Erfolgs.
+local quiesce_handshake = _G.__xreactor_update_handshake
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() end,
+  quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function() return apply_valve(true) end } or nil)

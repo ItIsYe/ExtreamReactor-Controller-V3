@@ -3,6 +3,8 @@
 
 local M = {}
 
+local update_handshake = require("core.update_handshake")
+
 local REDSTONE_SIDES = { "top", "bottom", "left", "right", "front", "back" }
 
 local function make_redstone_handler(runtime, log, constants)
@@ -42,6 +44,13 @@ end
 function M.run(runtime, constants)
   local log = runtime.log
   local check_redstone = make_redstone_handler(runtime, log, constants)
+  -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md (Abschnitt 4). MASTER hat keine eigenen
+  -- physischen Aktoren zu quiescen (nur Koordination) -- der Handler
+  -- bestaetigt daher sofort einen sicheren Zustand, verlaesst aber
+  -- kontrolliert die Schleife, statt (wie bisher) unbegrenzt weiterzulaufen,
+  -- waehrend ein Auto-Update MASTERs eigene Dateien ersetzt.
+  local quiesce_handshake = _G.__xreactor_update_handshake
   log("Entering event loop", "INFO")
   while true do
     local timer = os.startTimer(0.5)
@@ -60,6 +69,12 @@ function M.run(runtime, constants)
     end
     if runtime.refs.services then
       pcall(runtime.refs.services.tick, runtime.refs.services)
+    end
+    if quiesce_handshake and update_handshake.is_quiesce_requested(quiesce_handshake) then
+      update_handshake.mark_safe_outputs_applied(quiesce_handshake)
+      update_handshake.mark_runtime_stopped(quiesce_handshake)
+      log("Quiesce angefordert -- Event-Loop wird kontrolliert beendet", "WARN")
+      return
     end
     -- MASTER-Gesamtampel (Feature, 2026-07-02): siehe
     -- xreactor/optional/master_ampel.lua. Eigenes Rate-Limiting (alle ~3s),

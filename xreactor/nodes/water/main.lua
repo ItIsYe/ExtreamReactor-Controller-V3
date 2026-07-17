@@ -538,5 +538,32 @@ local function init()
   utils.log("WATER", "Node ready: " .. comms.network.id)
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
+-- Quiesce-Handler. Nutzt dieselbe bereits vorhandene, getestete
+-- set_rs_output()-Funktion (liefert echtes true/false pro Write, siehe
+-- Fix-Kommentar dort) fuer JEDEN konfigurierten Cluster -- kein neuer
+-- Aktor-Code. Bestaetigt sicher nur, wenn ALLE Fill-/Drain-Ausgaenge
+-- aller Cluster nachweislich abgeschaltet wurden.
+local function quiesce_all_clusters()
+  local clusters = config.clusters or {}
+  local all_ok = true
+  for _, cluster in ipairs(clusters) do
+    local name = cluster.name or "?"
+    local fill_side, drain_side, integrator = cluster.fill_side, cluster.drain_side, cluster.integrator
+    local ok_f = not fill_side or set_rs_output(fill_side, false, integrator)
+    local ok_d = not drain_side or set_rs_output(drain_side, false, integrator)
+    if ok_f and ok_d then
+      cluster_states[name] = cluster_states[name] or {}
+      cluster_states[name].filling = false
+      cluster_states[name].draining = false
+    else
+      all_ok = false
+    end
+  end
+  return all_ok
+end
+
 init()
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() balance_loop(); manage_clusters() end)
+local quiesce_handshake = _G.__xreactor_update_handshake
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() balance_loop(); manage_clusters() end,
+  quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = quiesce_all_clusters } or nil)

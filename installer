@@ -756,6 +756,35 @@ local function fetch_remote_version(sha)
   return nil
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 4). Bevor der Installer tatsaechlich
+-- Dateien ersetzt, muss die Rollen-Coroutine erst nachweislich in einen
+-- sicheren Zustand gefahren worden sein und ihre Hauptschleife verlassen
+-- haben (siehe core/update_handshake.lua und die run_event_loop()-
+-- Integration in nodes/support/runtime.lua sowie master/loop.lua und
+-- nodes/energy/heartbeat.lua). Ohne bestaetigten RUNTIME_STOPPED-Zustand
+-- wird die Installation NICHT gestartet -- lieber ein verzoegertes Update
+-- als ein Dateiersatz waehrend eine Rolle noch Hardware steuert.
+local function request_and_await_quiesce(handshake)
+  if not handshake then return true end
+  -- auto_update.lua laeuft OHNE Bootstrap (siehe Kopfkommentar) -- kein
+  -- require() verfuegbar, daher dofile() statt require("core.update_handshake").
+  local ok_uh, update_handshake = pcall(dofile, "/xreactor/core/update_handshake.lua")
+  if not ok_uh then
+    log("WARN: core/update_handshake.lua konnte nicht geladen werden -- Quiesce uebersprungen: " .. tostring(update_handshake))
+    return false
+  end
+  update_handshake.request_quiesce(handshake)
+  log("Quiesce angefordert -- warte auf RUNTIME_STOPPED...")
+  local confirmed = update_handshake.wait_for_runtime_stopped(handshake, 20)
+  if confirmed then
+    log("Quiesce bestaetigt (RUNTIME_STOPPED)")
+  else
+    log("WARN: Quiesce-Timeout -- Rolle hat RUNTIME_STOPPED nicht rechtzeitig bestaetigt")
+  end
+  return confirmed
+end
+
 local function run_update(sha)
   local urls = sha and {
     GITHUB_RAW .. sha .. "/installer",
@@ -883,7 +912,7 @@ local function run_update(sha)
 end
 
 -- Führt einen einzelnen Versions-Check durch.
-local function do_check()
+local function do_check(handshake)
   local cfg = arming()
   if not cfg then log("nicht armed — skip"); return end
   if cfg.auto_update ~= true then log("auto_update=false — skip"); return end
@@ -901,6 +930,18 @@ local function do_check()
     log("Aktuell (v" .. local_v .. ")")
   else
     log("NEU: v" .. local_v .. " -> v" .. remote_v .. " — Update startet")
+    -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4). Quiesce wird
+    -- HIER, EINMAL pro Update-Erkennung, angefordert -- NICHT innerhalb
+    -- jedes einzelnen run_update()-Downloadversuchs. Die Rollen-Coroutine
+    -- verlaesst nach bestaetigtem Quiesce ihre Hauptschleife dauerhaft
+    -- (siehe run_event_loop()); ein erneuter request_quiesce()-Aufruf pro
+    -- Downloadversuch haette ab dem zweiten Versuch fuer immer auf eine
+    -- Rolle gewartet, die bereits beendet ist.
+    local quiesced = request_and_await_quiesce(handshake)
+    if not quiesced then
+      log("Update verschoben (Quiesce nicht bestaetigt) — naechster Versuch beim naechsten Intervall")
+      return
+    end
     local success = false
     for attempt = 1, 3 do
       log("Versuch " .. attempt .. "/3")
@@ -910,13 +951,25 @@ local function do_check()
       if attempt < 3 then os.sleep(5) end
     end
     if not success then
+      if handshake then
+        -- Die Rollen-Coroutine wurde bereits sauber beendet (Quiesce
+        -- bestaetigt), der eigentliche Installationsversuch ist aber
+        -- gescheitert (z.B. Netzwerk) -- OHNE Neustart bliebe die Rolle
+        -- dauerhaft gestoppt, obwohl gar kein Update installiert wurde.
+        -- Ein Reboot startet dieselbe (unveraenderte) alte Installation
+        -- wieder sauber -- sicher, da run_update() bei einem Fehlschlag
+        -- keine Dateien ersetzt hat.
+        log("Alle Versuche fehlgeschlagen nach bestaetigtem Quiesce — Neustart zur Wiederherstellung der Rolle")
+        os.sleep(2)
+        os.reboot()
+      end
       log("Alle Versuche fehlgeschlagen — Pause 60s")
       os.sleep(60)
     end
   end
 end
 
-function M.make_loop(interval_s)
+function M.make_loop(interval_s, handshake)
   interval_s = tonumber(interval_s) or 120
   -- Fix (2026-07-07): CRITICAL — vermutlich der eigentliche Absturzort.
   -- do_check() lief bisher komplett ungeschuetzt in dieser Loop. Da
@@ -930,7 +983,7 @@ function M.make_loop(interval_s)
   -- pcall-isoliert, ein Fehler wird geloggt, die Loop laeuft beim
   -- naechsten Intervall normal weiter statt den ganzen Node zu toeten.
   local function safe_check()
-    local ok, err = pcall(do_check)
+    local ok, err = pcall(do_check, handshake)
     if not ok then
       log("do_check() Fehler abgefangen: " .. tostring(err):sub(1, 120))
     end

@@ -33,7 +33,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Auto-Update | **TEILWEISE** | kritische FS-Ergebnisse werden geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5 behoben); transaktionales Installationsjournal mit Boot-Recovery-Guard vorhanden (Abschnitt 3 behoben); Runtime läuft beim Reinstall weiter (Abschnitt 4, weiterhin offen) |
+| Installer / Auto-Update | **WEITGEHEND BEHOBEN** | kritische FS-Ergebnisse werden geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5); transaktionales Installationsjournal mit Boot-Recovery-Guard (Abschnitt 3); rollenübergreifender Quiesce-Handshake vor jedem Reinstall (Abschnitt 4); vollständige Planvalidierung und doppelte Installer-Implementierung bleiben offen (Abschnitt 7) |
 | Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **WEITGEHEND UMGESETZT** | Config-Editor: Einzelnode-/Alle-Auswahl, `require_applied` und Applied-ACK-Tracking je Ziel behoben (Abschnitt 10) |
@@ -54,7 +54,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 Die kritischsten aktuellen Risiken sind:
 
 1. ~~Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.~~ BEHOBEN (2026-07-17, siehe Abschnitt 3): transaktionales Installationsjournal, release.lua zuletzt committet, Boot-Guard verhindert Rollenstart bei unvollständigem Journal.
-2. Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.
+2. ~~Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.~~ BEHOBEN (2026-07-17, siehe Abschnitt 4): rollenübergreifender Quiesce-Handshake, `parallel.waitForAll` statt `waitForAny`, physische Sicherzustandsbestätigung für FUEL/REPROCESSOR/VALVE/WATER vor jedem Reinstall.
 3. ~~RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11 und Abschnitt 12).
 4. ~~`module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13).
 5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
@@ -74,6 +74,7 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 - `installer/stage.lua` prüft nach jedem Write Größe und CRC32.
 - `installer/stage.lua`s `M.write()` löscht die alte Datei nicht mehr ungeprüft, wenn der Backup-Move fehlschlägt; alle kritischen FS-Operationen in `installer/init.lua` und im tatsächlich ausgeführten Live-Installflow von `/installer` brechen bei Fehlschlag jetzt kontrolliert ab (Abschnitt 5).
 - transaktionales Installationsjournal (`installer/journal.lua`, PREPARED→INSTALLING→VERIFYING→COMMITTED), `release.lua` wird zuletzt committet, `xreactor/start.lua` verhindert bei jedem Boot den Start der Rolle, solange das Journal nicht COMMITTED ist (Abschnitt 3).
+- rollenübergreifender Update-Handshake (`core/update_handshake.lua`) stoppt jede Rolle kontrolliert und bestätigt für FUEL/REPROCESSOR/VALVE/WATER den sicheren physischen Ausgangszustand, bevor der Installer Dateien ersetzt (Abschnitt 4).
 - automatische Speicherbereinigung löscht nicht mehr pauschal `/xreactor_logs`.
 - REPROCESSOR-`feed_router.lua` besitzt jetzt den Rollen-Scope `REPROCESSING`.
 - `optional/speaker_alarm.lua` besitzt einen Rollen-Scope.
@@ -183,42 +184,42 @@ Die geforderte Fehlerinjektion "nach jedem einzelnen Dateischritt" als vollstän
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-`start.lua` startet Rollenruntime und Auto-Updater mit `parallel.waitForAny`. Der Updater führt den Installer direkt aus, während die Rollenruntime weiterhin:
+Bestätigt: `start.lua` startete Rollenruntime und Auto-Updater mit `parallel.waitForAny` — die Rollenruntime konnte während eines laufenden Auto-Updates unverändert weiter Hardware regeln, Ventile schalten, Configs persistieren usw., während der Installer bereits Dateien ersetzte.
 
-- Hardware regeln,
-- Ventile schalten,
-- Logs schreiben,
-- Configs persistieren,
-- Module laden,
-- Netzwerkcommands verarbeiten
+Fix — neues Modul `core/update_handshake.lua` implementiert die im Audit vorgeschlagene Zustandsfolge (`UPDATE_REQUESTED → QUIESCE_REQUESTED → SAFE_OUTPUTS_APPLIED → RUNTIME_STOPPED`; die verbleibenden Stationen `INSTALLING`/`VERIFIED`/`COMMITTED`/`REBOOT` deckt bereits das Installationsjournal aus Abschnitt 3 ab) und wird als globaler Wert (`_G.__xreactor_update_handshake`, gleiches Muster wie `_G.__xreactor_remote_update`) zwischen der Rollen-Coroutine und dem Auto-Update-Loop geteilt:
 
-kann.
+- `start.lua`: erstellt den Handshake, reicht ihn an `auto_update.lua`s `make_loop()` durch, und wechselt von `parallel.waitForAny` zu `parallel.waitForAll` — sonst hätte ein sauberer Quiesce-Exit der Rollen-Coroutine den Auto-Update-Loop sofort mit abgewürgt, noch bevor der Installer überhaupt laufen konnte.
+- `installer/auto_update.lua`: fordert Quiesce EINMAL pro erkanntem Update an (nicht pro Downloadversuch — die Rollen-Coroutine ist nach bestätigtem Quiesce bereits beendet, ein erneutes Anfordern pro Retry hätte für immer auf eine bereits beendete Rolle gewartet) und wartet bis zu 20s auf `RUNTIME_STOPPED`, BEVOR überhaupt ein Installer-Download versucht wird. Bleibt die Bestätigung aus, wird die Installation für diesen Zyklus verschoben (nächster Versuch beim nächsten Intervall) — niemals ein Install ohne bestätigten sicheren Zustand. Schlägt der Installationsversuch NACH bestätigtem Quiesce aus anderen Gründen (z.B. Netzwerk) fehl, rebootet der Node explizit, um die (unveränderte) alte Rolle sauber neu zu starten, statt dauerhaft ohne laufende Rolle stehen zu bleiben.
+- Gemeinsamer Hook-Punkt für RT/VALVE/FUEL/REPROCESSOR/WATER: `nodes/support/runtime.lua`s `run_event_loop()` erhält einen optionalen 5. Parameter (`quiesce_opts = { handshake, on_quiesce }`, rückwärtskompatibel — bestehende 4-Parameter-Aufrufer verhalten sich unverändert). `on_quiesce()` liefert `true`/`false`/`nil` zurück und wird bei Bedarf JEDEN Zyklus erneut versucht, bis es einen sicheren Zustand bestätigt — erst dann verlässt die Schleife sich sauber (kein Crash, kein `crash_screen`).
+- MASTER (`master/loop.lua`) und ENERGY (`nodes/energy/heartbeat.lua`) haben eigene, separate Event-Loops (nicht über `run_event_loop()`) und bekamen denselben Quiesce-Check direkt eingebaut. LOG_COLLECTOR (`nodes/log_collector/main.lua`) ebenso, per `dofile()` statt `require()` (dieses Modul läuft historisch ohne `bootstrap.setup()`).
+- **Für FUEL/REPROCESSOR/VALVE/WATER wird bewusst KEIN neuer Aktor-Code eingeführt** — `on_quiesce` ruft jeweils die bereits vorhandene, bereits auditierte Standby-Funktion auf:
+  - `VALVE`: `apply_valve(true)` — einzige der vier mit echter, synchroner Erfolgsbestätigung (liefert `true`/`false`, bereits vom Fail-Safe-Watchdog verwendet); wird bei `false` im nächsten Zyklus automatisch erneut versucht.
+  - `WATER`: neue kleine `quiesce_all_clusters()`-Funktion iteriert `config.clusters` und ruft für jeden Cluster die bereits vorhandene `set_rs_output(side, false, integrator)` auf (liefert ebenfalls echtes `true`/`false` pro Write); bestätigt nur, wenn ALLE Cluster-Writes erfolgreich waren.
+  - `FUEL`: `redstone_router:shutdown_now("UPDATE_QUIESCE")` (blockiert alle bekannten Ventile, bricht eine laufende Transaktion ab) — dieselbe Funktion, die REPROCESSOR bereits für MASTER-Staleness nutzt; Bestätigung über `get_active_transaction() == nil` (wird synchron beim Aufruf gelöscht).
+  - `REPROCESSOR`: `enter_standby("UPDATE_QUIESCE")` — bereits idempotent, bereits produktiv für MASTER-Staleness im Einsatz; Bestätigung über das bereits vorhandene `standby`-Flag.
+  - FUEL/REPROCESSOR sind dabei fire-and-forget (keine Rückgabe, kein echter Hardware-Bestätigungswert für WIRELESS-Ventile — dieselbe Bestätigungsqualität, die diese Funktionen bereits vorher für ihren jeweils eigenen Zweck hatten, keine Verschlechterung, aber auch keine neue, härtere Garantie).
+  - RT ist im Audit nicht unter den vier Rollen mit Pflicht zur physischen Bestätigung gelistet und bekam daher einen trivialen (sofort bestätigten) Handler — RTs bereits bestehender, MASTER-getriggerter `pending_remote_update`-Pfad (synchroner `core.remote_update.run()`-Aufruf direkt im eigenen Thread) bleibt unverändert und blockiert für diese Dauer ohnehin bereits die eigene Steuerschleife.
 
-## Folge
+Pflicht-Tests:
+- `tests/core_update_handshake_test.lua` — treibt das Handshake-Modul direkt: korrekte Zustandsfolge, `mark_safe_outputs_applied()` wirkt nur aus `QUIESCE_REQUESTED` (kein Überspringen), `wait_for_runtime_stopped()` Erfolg/Timeout, `reset()`.
+- `tests/support_runtime_quiesce_test.lua` — treibt die echte `run_event_loop()`-Funktion mit gemocktem `os.pullEvent`/`os.startTimer`: `on_quiesce()` wird wiederholt versucht bis `true`, danach sauberer Exit mit `RUNTIME_STOPPED`; ohne `quiesce_opts` bleibt das bisherige Verhalten unverändert (harte Zyklusgrenze mit klarer Fehlermeldung statt Endlosschleife bei einer Regression).
+- `tests/energy_heartbeat_quiesce_test.lua` — treibt das echte `heartbeat.lua`-Modul: mit gesetztem `QUIESCE_REQUESTED` beendet sich der Thread beim nächsten `svc_timer`-Tick sauber mit `RUNTIME_STOPPED`; ohne Handshake unverändertes Verhalten.
+- `tests/install_p0_2_quiesce_wiring_test.lua` — strukturelle Prüfung direkt am Quelltext aller acht Rollen sowie `start.lua`/`installer/auto_update.lua`, dass die erwartete Verdrahtung (insbesondere: welche bestehende Funktion pro sicherheitskritischer Rolle wiederverwendet wird, und dass Quiesce VOR dem Install-Retry-Loop anfordert wird) tatsächlich vorhanden ist.
 
-- Dateien werden ersetzt, während alter Code weiterläuft.
-- Rollenlogik kann Configrestore oder Installerwrites überschreiben.
-- Safety-Aktoren besitzen keinen definierten Quiesce-Zustand.
-- ein Updatefehler kann Runtime und Installationsbaum gleichzeitig inkonsistent hinterlassen.
+Alle vier Tests wurden per `git stash` gegen den Vorfix-Code verifiziert (schlagen dort fehl bzw. laufen — bei `support_runtime_quiesce_test.lua` — kontrolliert in eine harte Zyklusgrenze statt in eine echte Endlosschleife).
 
-## Verbindlicher Fix
+## Folge (vor dem Fix)
 
-Ein rollenübergreifender Update-Handshake:
+- Dateien wurden ersetzt, während alter Code weiterlief.
+- Rollenlogik konnte Configrestore oder Installerwrites überschreiben.
+- Safety-Aktoren besaßen keinen definierten Quiesce-Zustand.
+- ein Updatefehler konnte Runtime und Installationsbaum gleichzeitig inkonsistent hinterlassen.
 
-```text
-UPDATE_REQUESTED
-QUIESCE_REQUESTED
-SAFE_OUTPUTS_APPLIED
-RUNTIME_STOPPED
-INSTALLING
-VERIFIED
-COMMITTED
-REBOOT
-```
+## Verbindlicher Fix (umgesetzt)
 
-Jede Rolle benötigt einen expliziten Quiesce-Handler. Für FUEL/REPROCESSOR/VALVE/WATER muss der sichere physische Ausgangszustand bestätigt sein, bevor der Installer Dateien ersetzt.
+Ein rollenübergreifender Update-Handshake (`UPDATE_REQUESTED → QUIESCE_REQUESTED → SAFE_OUTPUTS_APPLIED → RUNTIME_STOPPED`, die verbleibenden Stationen `INSTALLING`/`VERIFIED`/`COMMITTED`/`REBOOT` deckt das Installationsjournal aus Abschnitt 3 ab) ist umgesetzt. Jede Rolle hat einen expliziten Quiesce-Handler; für FUEL/REPROCESSOR/VALVE/WATER ist der sichere physische Ausgangszustand bestätigt (VALVE/WATER: echte synchrone Schreibbestätigung; FUEL/REPROCESSOR: dieselbe Bestätigungsqualität, die ihre jeweils bereits vorhandene Standby-Funktion schon vorher hatte), bevor der Installer Dateien ersetzt.
 
 ---
 
@@ -838,7 +839,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 4. ~~**RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
 5. ~~**RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
 6. ~~**INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.~~ BEHOBEN (2026-07-17, siehe Abschnitt 3): `tests/installer_journal_state_machine_test.lua`, `tests/installer_journal_ordering_and_release_last_test.lua`, `tests/start_lua_incomplete_install_blocks_role_test.lua`.
-7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
+7. ~~**INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.~~ BEHOBEN (2026-07-17, siehe Abschnitt 4): `tests/core_update_handshake_test.lua`, `tests/support_runtime_quiesce_test.lua`, `tests/energy_heartbeat_quiesce_test.lua`, `tests/install_p0_2_quiesce_wiring_test.lua`.
 8. ~~**INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 5): `tests/installer_stage_write_backup_failure_test.lua`, `tests/installer_init_critical_write_abort_test.lua`, `tests/installer_monolith_critical_write_abort_test.lua`.
 9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. ~~**MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.~~ BEHOBEN (2026-07-17, siehe Abschnitt 10): `tests/master_config_edits_test.lua`, `tests/master_config_edit_ack_wiring_test.lua`, `tests/master_ui_controller_config_edit_action_test.lua`.

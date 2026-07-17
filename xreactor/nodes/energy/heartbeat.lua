@@ -86,6 +86,16 @@ function M.run(ctx)
   local hb_timer = os.startTimer(ctx.heartbeat_interval_ms() / 1000)
   local svc_timer = os.startTimer(tick_interval_s)
 
+  -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md (Abschnitt 4). ENERGY hat keine eigenen
+  -- physischen Aktoren zu quiescen -- der Handler bestaetigt sofort einen
+  -- sicheren Zustand, verlaesst aber kontrolliert diesen Thread (ueber
+  -- parallel.waitForAny() in main.lua beendet das auch den Matrix-Thread),
+  -- statt wie bisher unbegrenzt weiterzulaufen, waehrend ein Auto-Update
+  -- ENERGYs eigene Dateien ersetzt.
+  local update_handshake = require("core.update_handshake")
+  local quiesce_handshake = _G.__xreactor_update_handshake
+
   while true do
     local event = { os.pullEventRaw() }
     local ev = event[1]
@@ -112,6 +122,12 @@ function M.run(ctx)
       hb_timer = os.startTimer(ctx.heartbeat_interval_ms() / 1000)
     elseif ev == "timer" and event[2] == svc_timer then
       tick_services()
+      if quiesce_handshake and update_handshake.is_quiesce_requested(quiesce_handshake) then
+        update_handshake.mark_safe_outputs_applied(quiesce_handshake)
+        update_handshake.mark_runtime_stopped(quiesce_handshake)
+        ctx.log("Quiesce angefordert -- Heartbeat-Thread wird kontrolliert beendet", "WARN")
+        return "quiesced"
+      end
       svc_timer = os.startTimer(tick_interval_s)
     end
   end

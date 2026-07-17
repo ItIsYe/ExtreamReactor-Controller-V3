@@ -151,6 +151,18 @@ if delay > 0 then
   for i = delay, 1, -1 do p("  Start in " .. i .. "s..."); os.sleep(1) end
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 4). Das Rollen-Handshake-Objekt
+-- (core/update_handshake.lua) wird als GLOBALER Wert bereitgestellt --
+-- derselbe etablierte Musterzugriff wie _G.__xreactor_remote_update --
+-- damit sowohl die Rollen-Coroutine (dofile(entry), prueft/meldet ueber
+-- diesen Handshake) als auch der Auto-Update-Loop (fordert Quiesce an,
+-- wartet auf Bestaetigung) dasselbe Objekt sehen, ohne dofile() Argumente
+-- uebergeben zu muessen.
+local update_handshake_lib = dofile("/xreactor/core/update_handshake.lua")
+local update_handshake = update_handshake_lib.new()
+_G.__xreactor_update_handshake = update_handshake
+
 local auto_loop = nil
 local auto_path = INSTALL_ROOT .. "/installer/auto_update.lua"
 if fs.exists(auto_path) then
@@ -168,7 +180,7 @@ if fs.exists(auto_path) then
         end
       end
     end
-    auto_loop = auto_mod.make_loop(interval)
+    auto_loop = auto_mod.make_loop(interval, update_handshake)
     p("[BOOT] Auto-Update Loop bereit (" .. interval .. "s)")
   else
     p("[BOOT] WARN: auto_update.lua Fehler: " .. tostring(auto_mod))
@@ -177,9 +189,21 @@ else
   p("[BOOT] WARN: installer/auto_update.lua fehlt")
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2. parallel.waitForAny() beendete
+-- BEIDE Coroutinen, sobald EINE von ihnen zurueckkehrte -- ein sauberer
+-- Quiesce-Exit der Rollen-Coroutine (siehe unten) haette dadurch den
+-- Auto-Update-Loop VOR dem eigentlichen Installerlauf abgewuergt, statt
+-- ihm die Chance zu geben, fortzufahren. parallel.waitForAll() wartet auf
+-- BEIDE: die Rollen-Coroutine kann jetzt sauber enden (nach bestaetigtem
+-- Quiesce), waehrend der Auto-Update-Loop unbeeinflusst weiterlaeuft und
+-- danach den Installer startet (der bei Erfolg ohnehin selbst rebootet).
+-- Ein unabgefangener Fehler in irgendeiner Coroutine wird von parallel.*
+-- weiterhin sofort nach oben durchgereicht (identisches Verhalten wie
+-- vorher bei waitForAny) -- das bestehende pcall(run)-Fehlerhandling
+-- unten bleibt unveraendert wirksam.
 local function run()
   if auto_loop then
-    parallel.waitForAny(function() dofile(entry) end, auto_loop)
+    parallel.waitForAll(function() dofile(entry) end, auto_loop)
   else
     dofile(entry)
   end
