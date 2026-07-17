@@ -1,9 +1,11 @@
 -- tests/installer_journal_ordering_and_release_last_test.lua
 --
 -- Regression test fuer INSTALL-P0.1 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 3, Fix-Punkte 3+5): sowohl der
--- modulare Installer (installer/init.lua) als auch der tatsaechlich
--- ausgefuehrte Live-Installflow im Monolithen (/installer) muessen:
+-- PERFORMANCE_2026-07-12.md Abschnitt 3, Fix-Punkte 3+5): installer/
+-- init.lua (seit INSTALL-P1/Abschnitt 8 die EINZIGE Stelle mit
+-- tatsaechlicher Installationslogik -- /installer ist nur noch ein
+-- duenner Bootstrap, der diese Datei herunterlaedt und ausfuehrt, siehe
+-- installer_bootstrap_test.lua) muss:
 --  1) release.lua aus der Hauptinstallationsschleife ausschliessen und erst
 --     als eigenen, letzten Schritt installieren,
 --  2) das Installationsjournal in der Reihenfolge PREPARED -> INSTALLING ->
@@ -60,15 +62,5 @@ end
 local repo_root = os.getenv("REPO_ROOT") or "."
 
 check_ordering(read_file(repo_root .. "/xreactor/installer/init.lua"), "installer/init.lua")
-
--- /installer embeds a full-text COPY of init.lua (init_src, used only for
--- later on-disk deployment, never executed live -- see comment in the file
--- itself) BEFORE its own actually-executed live install flow. Anchor the
--- search past that embedded copy via a marker that only exists in the live
--- flow (the box-drawing "── ... ──" heading, not present in the plain-text
--- embedded copy), so this test verifies the code path that really runs.
-local mono_src = read_file(repo_root .. "/installer")
-local live_flow_start = pos(mono_src, "beim manuellen/direkten Aufruf von /installer")
-check_ordering(mono_src, "/installer (live flow)", live_flow_start)
 
 print("installer_journal_ordering_and_release_last_test.lua: ok")

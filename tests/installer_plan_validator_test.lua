@@ -172,8 +172,8 @@ do
   end
 end
 
--- 12. Verdrahtung: sowohl installer/init.lua als auch der tatsaechlich
---     ausgefuehrte Live-Installflow in /installer muessen
+-- 12. Verdrahtung: installer/init.lua (seit INSTALL-P1/Abschnitt 8 die
+--     EINZIGE Stelle mit tatsaechlicher Installationslogik) muss
 --     plan_validator_mod.validate() aufrufen, und zwar VOR dem ersten
 --     destruktiven Schritt ("Alte Installation loeschen").
 do
@@ -194,11 +194,6 @@ do
   end
 
   check_ordering(read(repo_root .. '/xreactor/installer/init.lua'), 'installer/init.lua')
-
-  local mono_src = read(repo_root .. '/installer')
-  local live_flow_start = mono_src:find('beim manuellen/direkten Aufruf von /installer', 1, true)
-  assert_true(live_flow_start ~= nil, '/installer: live-flow marker not found')
-  check_ordering(mono_src, '/installer (live flow)', live_flow_start)
 end
 
 print('installer_plan_validator_test.lua: ok')

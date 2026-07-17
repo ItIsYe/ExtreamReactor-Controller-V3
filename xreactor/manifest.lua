@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 471,
-  manifest_id = "manifest-v471",
+  manifest_version = 472,
+  manifest_id = "manifest-v472",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -13,10 +13,10 @@ return {
   { path = "installer/stage.lua", size_bytes = 9164, hash = "b067f20b", always=true },
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 17674, hash = "8c7a115a", always=true },
-  { path = "installer/init.lua", size_bytes = 26951, hash = "b484f2e6", always=true },
+  { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always=true },
   { path = "installer/journal.lua", size_bytes = 4300, hash = "140883d3", always=true },
   { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "1c784c27", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "f3ed9fcf", always=true },
   { path = "start.lua", size_bytes = 10982, hash = "7e210760", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },

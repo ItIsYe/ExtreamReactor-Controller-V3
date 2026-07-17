@@ -1,12 +1,32 @@
 -- installer/init.lua
--- Einstiegspunkt. Wird von /installer via dofile aufgerufen.
+-- Einstiegspunkt der eigentlichen Installationslogik.
+--
+-- Fix (2026-07-17): CRITICAL. INSTALL-P1 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 8, "Zwei unabhaengige Installer-
+-- implementierungen"). Vorher lud diese Datei ihre Abhaengigkeiten selbst
+-- per dofile() von festen /xreactor/installer/*.lua-Pfaden -- eine
+-- Annahme, die nur zutrifft, wenn /xreactor bereits existiert. Der
+-- monolithische Root-Installer (/installer) musste deshalb fuer die
+-- Erstinstallation eine KOMPLETTE, eigenstaendige Kopie dieser gesamten
+-- Datei als eingebettetes Textliteral mitfuehren, mit allen Folgen
+-- doppelter Pflege (siehe Git-Historie: mehrfache manuelle Resynchronisation
+-- bei jedem Fix). Jetzt nimmt diese Datei ihre Abhaengigkeiten als
+-- Parameter entgegen (dependency injection statt hartkodierter dofile()-
+-- Pfade) -- ob die uebergebenen Module von der lokalen Festplatte
+-- (dofile()) oder aus frisch heruntergeladenem Text (load()) stammen, ist
+-- fuer die eigentliche Installationslogik hier unten unveraendert
+-- irrelevant. /installer ist dadurch auf einen kleinen, stabilen Bootstrap
+-- reduziert, der genau einen Ref aufloest, die kanonischen Installermodule
+-- dieses Refs herunterlaedt und ausschliesslich DIESE Funktion hier
+-- ausfuehrt -- keine zweite, separat gepflegte Installationslogik mehr.
+return function(deps)
 
-local http_mod     = dofile("/xreactor/installer/http.lua")
-local manifest_mod = dofile("/xreactor/installer/manifest.lua")
-local stage_mod    = dofile("/xreactor/installer/stage.lua")
-local ui_mod       = dofile("/xreactor/installer/ui.lua")
-local journal_mod  = dofile("/xreactor/installer/journal.lua")
-local plan_validator_mod = dofile("/xreactor/installer/plan_validator.lua")
+local http_mod     = deps.http_mod
+local manifest_mod = deps.manifest_mod
+local stage_mod    = deps.stage_mod
+local ui_mod       = deps.ui_mod
+local journal_mod  = deps.journal_mod
+local plan_validator_mod = deps.plan_validator_mod
 
 local INSTALL_ROOT    = "/xreactor"
 local STARTUP_PATH    = "/startup.lua"
@@ -136,19 +156,22 @@ end
 -- verschiedenen Commits stammen (Manifest von "beta"-HEAD zum Zeitpunkt X,
 -- einzelne Dateien vom frueher aufgeloesten, moeglicherweise AELTEREN
 -- SHA) -- dieselbe Bugklasse wie zuvor, nur mit vertauschten Rollen.
--- Jetzt wird EIN einziger Referenzpunkt ("ref": entweder die aufgeloeste
--- SHA, oder bei Aufloesungsfehler explizit der String "beta") fuer den
--- GESAMTEN Lauf bestimmt und sowohl fuers Manifest als auch fuer jede
--- einzelne Datei verwendet -- http_mod.download_file() hat dafuer seinen
--- eigenstaendigen Pro-Datei-Fallback verloren (siehe dortiger
--- Fix-Kommentar). Schlaegt der gesamte Lauf fehl, bricht er komplett ab
--- statt Quellen zu mischen; ein erneuter Versuch (manueller Neustart, oder
--- auto_update.lua's Retry-Loop, der /installer bei jedem Versuch frisch
--- herunterlaedt und dabei zwangslaeufig eine komplett neue SHA aufloest)
--- beginnt konsistent von vorn.
-local sha = http_mod.resolve_sha()
-local ref = sha or "beta"
-p(sha and ("SHA-PIN: " .. sha:sub(1,10)) or "WARN: SHA nicht auflösbar -- gesamter Lauf verwendet 'beta'")
+--
+-- Fix (2026-07-17): CRITICAL. INSTALL-P1 (Abschnitt 8). "ref" wird jetzt
+-- vom Aufrufer (deps.ref, siehe /installer) uebergeben statt hier per
+-- eigenem http_mod.resolve_sha()-Aufruf ERNEUT aufgeloest zu werden --
+-- /installer hat bereits VOR dem Download dieser Datei selbst genau EINEN
+-- Ref aufgeloest, um zu wissen, welche Version von installer/http.lua,
+-- installer/manifest.lua usw. es ueberhaupt herunterladen soll. Eine
+-- zweite, unabhaengige Aufloesung hier haette dieselbe Bugklasse erneut
+-- einfuehren koennen (GitHub-HEAD bewegt sich zwischen den beiden
+-- Aufloesungen), diesmal zwischen den Installermodulen selbst und dem
+-- Rest der Installation.
+local ref = deps.ref
+if type(ref) ~= "string" or ref == "" then
+  error("installer/init.lua: deps.ref fehlt oder ungueltig -- Aufrufer muss einen aufgeloesten Ref uebergeben", 0)
+end
+p(("ref: " .. ref))
 
 local manifest_url = GITHUB_RAW .. ref .. "/xreactor/manifest.lua"
 local manifest, merr = manifest_mod.load_remote(manifest_url, http_mod)
@@ -582,3 +605,5 @@ journal_mod.clear()
 ui_mod.ok("Installation abgeschlossen: " .. role.label)
 _G.__xreactor_installer_completed = true
 _G.__xreactor_installer_role = role.label
+
+end
