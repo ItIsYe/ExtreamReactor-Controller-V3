@@ -38,7 +38,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **TEILWEISE OFFEN** | Config-Editor meldet Werte optimistisch als übernommen; kein Applied-ACK je Zielnode und keine Einzelnode-Auswahl |
 | RT | **WEITGEHEND UMGESETZT** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11), Rampendauer-Einheitenfehler (Abschnitt 12) und fehlende `update_module_states()`-Verdrahtung (Abschnitt 13) behoben; Persistenz-/Observability-Restpunkte (Abschnitt 14) weiterhin offen |
-| ENERGY | **TEILWEISE BEHOBEN** | Schedulergruppen getrennt, Heartbeat besitzt aber weiterhin zwei Zeitquellen |
+| ENERGY | **WEITGEHEND UMGESETZT** | Schedulergruppen getrennt, Heartbeat-Zeitquelle konsolidiert (Abschnitt 15 behoben) |
 | WATER | **WEITGEHEND UMGESETZT** | Persistenzfehler werden geloggt, Command kann trotzdem als angewendet bestätigt werden |
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
 | REPROCESSOR | **WEITGEHEND UMGESETZT** | Standby-Cancel und Wireless-VALVE-Discovery behoben (Abschnitt 20) |
@@ -463,29 +463,29 @@ Pflicht-Test: `tests/rt_control_tick_wires_update_module_states_test.lua` — pr
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Die Schedulertrennung ist real umgesetzt. Die Heartbeatlogik ist aber nicht vollständig zentral:
+Die Schedulertrennung war real umgesetzt, die Heartbeatlogik jedoch nicht vollständig zentral:
 
-- `main.lua` besitzt `hb_state.last_ts` und `send_heartbeat_if_due()`.
-- der Matrix-Thread verwendet diese Quelle.
-- `heartbeat.lua` besitzt zusätzlich `ctx.last_heartbeat_ts`, aktualisiert diesen separat und sendet auf seinem Heartbeat-Timer unbedingt über `ctx.send_heartbeat()`.
+- `main.lua` besaß `hb_state.last_ts` und `send_heartbeat_if_due()`.
+- der Matrix-Thread verwendete bereits diese Quelle (korrekt, unverändert).
+- `heartbeat.lua` besaß zusätzlich `ctx.last_heartbeat_ts` (im `ctx` von `make_hb_ctx()` mit `0` initialisiert), aktualisierte diesen separat in `do_heartbeat()` und sendete auf seinem Heartbeat-Timer unbedingt über `ctx.send_heartbeat()` — ohne jede Fälligkeitsprüfung gegen die geteilte Quelle.
 
-Ein Matrixabschluss und der Heartbeat-Timer können dadurch zeitlich nah nacheinander senden. Direkt nach dem initialen Heartbeat kann ein frühes Modemevent wegen des privaten `last_heartbeat_ts=0` ebenfalls einen zusätzlichen Send auslösen.
+Konkretes Fehlerszenario: `main.lua` sendet bereits vor `parallel.waitForAny()` einen initialen Heartbeat und setzt dabei `hb_state.last_ts`. Die private Kopie in `heartbeat.lua`s `ctx` blieb davon unberührt bei `0`. Ein kurz danach eintreffendes `modem_message`-Event wertete `now - 0 >= interval` sofort als fällig und löste einen unnötigen Zusatz-Send aus, obwohl gerade erst gesendet worden war. Zusätzlich sendete der Timer-Pfad in `heartbeat.lua` immer unbedingt, selbst wenn der Matrix-Thread kurz zuvor bereits über `send_heartbeat_if_due()` gesendet hatte.
 
 ## Fix
 
-Alle Threads verwenden ausschließlich:
+`nodes/energy/main.lua`:
+- neue `get_last_heartbeat_ts()`-Funktion, liest `hb_state.last_ts` (dieselbe Quelle, die auch `send_heartbeat_if_due()` prüft/aktualisiert).
+- `make_hb_ctx()` verdrahtet jetzt `send_heartbeat_if_due = send_heartbeat_if_due` und `get_last_heartbeat_ts = get_last_heartbeat_ts` in den Heartbeat-Thread-Context, statt eines bei `0` initialisierten privaten `last_heartbeat_ts`-Felds und des rohen, ungegateten `send_heartbeat`.
 
-```lua
-heartbeat:send_if_due(now)
-```
-
-mit genau einer geteilten `last_sent_ts`-Quelle. Der Heartbeat-Timer darf keinen ungeprüften Send ausführen.
+`nodes/energy/heartbeat.lua`:
+- `should_send()`/`do_heartbeat()` (private Zählerlogik) ersetzt durch `maybe_heartbeat()`, das jeden Sendeversuch — sowohl vom `hb_timer` als auch vom `modem_message`-Event ausgelöst — ausschließlich über `ctx.send_heartbeat_if_due(now)` gated (dieselbe Funktion, dieselbe geteilte `hb_state.last_ts`-Quelle wie der Matrix-Thread). Die Verzögerungs-Warnung liest den letzten tatsächlichen Sendezeitpunkt jetzt über `ctx.get_last_heartbeat_ts()` statt über eine eigene Kopie.
+- kein privater `ctx.last_heartbeat_ts`-Zustand mehr vorhanden — eine geteilte `last_sent_ts`-Quelle (`hb_state.last_ts`) für alle Aufrufer.
 
 ## Pflicht-Test
 
-Fake-Scheduler mit gleichzeitigem Matrixabschluss, Modemevent und Heartbeat-Timer. In jedem konfigurierten Intervall maximal ein Präsenzheartbeat, abgesehen von explizit dokumentierter Startmeldung.
+`tests/energy_heartbeat_shared_last_ts_test.lua` (neu): treibt das echte `nodes/energy/heartbeat.lua` mit einem Fake-Ctx, der main.lua's geteilte `hb_state`-Semantik nachbildet, und beweist (1) ein `modem_message`-Event 50ms nach einem vorherigen Send (2000ms-Intervall) löst keinen Zusatz-Send aus, (2) der `hb_timer` 200ms nach einem vorherigen Send (über eine andere Quelle) sendet nicht unbedingt nach, (3) strukturelle Prüfung, dass `heartbeat.lua` keinen privaten `ctx.last_heartbeat_ts`-Zähler mehr referenziert und `main.lua`s `make_hb_ctx()` die geteilte Quelle verdrahtet. Ergänzend angepasst: `tests/energy_matrix_thread_scheduler_isolation_test.lua` (Block 3) auf den neuen `ctx`-Vertrag (`get_last_heartbeat_ts`/`send_heartbeat_if_due` statt `last_heartbeat_ts`/`send_heartbeat`) aktualisiert.
 
 ---
 
@@ -737,7 +737,7 @@ Ein Test darf nur entfernt werden, wenn:
 5. ~~produktive Verdrahtung von `update_module_states()`.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
 6. ~~Router-ACK muss aktuelle Command-ID matchen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
 7. ~~REPROCESSOR Wireless-VALVE-Discovery.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
-8. ENERGY exakt eine Heartbeat-Zeitquelle.
+8. ~~ENERGY exakt eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
 9. ~~LOG-Reclaim mit Cacheinvalidierung.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. MASTER Config-Editor Applied-ACK je Zielnode.
 
@@ -796,7 +796,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 8. **INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.
 9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. **MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.
-11. **ENERGY-P1:** genau eine Heartbeat-Zeitquelle.
+11. ~~**ENERGY-P1:** genau eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
 12. **WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.
 13. **VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.
 14. **INSTALL/MANIFEST-P1:** vollständige Planvalidierung und nur eine Installerimplementierung.

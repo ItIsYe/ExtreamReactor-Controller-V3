@@ -176,6 +176,18 @@ local function send_heartbeat_if_due(now)
   return false
 end
 
+-- Fix (2026-07-17): CRITICAL (ENERGY-P1, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 15). heartbeat.lua fuehrte bisher
+-- eine EIGENE, private "last_heartbeat_ts"-Kopie im hb-Ctx (initialisiert
+-- mit 0, unabhaengig von hb_state.last_ts), um seinen eigenen Timer- und
+-- Modem-Event-Pfad zu gaten. Dieser Getter macht hb_state.last_ts (die
+-- einzige, tatsaechlich geteilte Quelle, die auch send_heartbeat_if_due()
+-- und damit der Matrix-Thread verwenden) fuer heartbeat.lua lesbar, ohne
+-- eine zweite, driftende Kopie einzufuehren.
+local function get_last_heartbeat_ts()
+  return hb_state.last_ts
+end
+
 -- ── Handle Remote-Update Command ─────────────────────────────────────────────
 local function handle_command(message)
   local payload = type(message) == "table" and message.payload or nil
@@ -437,9 +449,10 @@ local function make_hb_ctx()
     comms = comms, config = config, devices = devices,
     ui_state = ui_state, ui_pages = ui_pages, services = services,
     now_ms = now_ms, log = log,
-    last_heartbeat_ts = 0, last_heartbeat_warn_ts = 0,
+    last_heartbeat_warn_ts = 0,
     heartbeat_interval_ms = heartbeat_interval_ms,
-    send_heartbeat = send_heartbeat,
+    send_heartbeat_if_due = send_heartbeat_if_due,
+    get_last_heartbeat_ts = get_last_heartbeat_ts,
     tick_interval_s = CONFIG.RECEIVE_TIMEOUT,
   }
 end

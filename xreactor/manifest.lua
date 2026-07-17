@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 461,
-  manifest_id = "manifest-v461",
+  manifest_version = 462,
+  manifest_id = "manifest-v462",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14745, hash = "dc801ba2", always=true },
   { path = "installer/init.lua", size_bytes = 19921, hash = "7126d4cd", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "79921950", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "9607cab8", always=true },
   { path = "start.lua", size_bytes = 5574, hash = "7c62ecb0", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -156,7 +156,7 @@ return {
     { path = "nodes/rt/status_snapshot.lua", size_bytes = 6460, hash = "a5787f60", required_for={"RT"} },
     },
     energy = {
-    { path = "nodes/energy/heartbeat.lua", size_bytes = 3946, hash = "451939ac", required_for={"ENERGY"} },
+    { path = "nodes/energy/heartbeat.lua", size_bytes = 5711, hash = "9b6663fb", required_for={"ENERGY"} },
     { path = "nodes/energy/matrix.lua", size_bytes = 1964, hash = "be7074b3", required_for={"ENERGY"} },
     { path = "adapters/energy_storage.lua", size_bytes = 3648, hash = "fd2dc2e5", required_for={"ENERGY"} },
     { path = "adapters/induction_matrix.lua", size_bytes = 15124, hash = "c3006e4d", required_for={"ENERGY"} },
@@ -166,7 +166,7 @@ return {
     { path = "nodes/energy/config_normalizer.lua", size_bytes = 6260, hash = "0f3e5f0e", required_for={"ENERGY"} },
     { path = "nodes/energy/discovery_log.lua", size_bytes = 2433, hash = "4f723e27", required_for={"ENERGY"} },
     { path = "nodes/energy/discovery_runtime.lua", size_bytes = 17168, hash = "4d225311", required_for={"ENERGY"} },
-    { path = "nodes/energy/main.lua", size_bytes = 25093, hash = "0b16b78c", required_for={"ENERGY"} },
+    { path = "nodes/energy/main.lua", size_bytes = 25770, hash = "2c0e27fb", required_for={"ENERGY"} },
     { path = "nodes/energy/matrix_snapshot_runtime.lua", size_bytes = 17943, hash = "9b8b5405", required_for={"ENERGY"} },
     { path = "nodes/energy/matrix_topology_cache.lua", size_bytes = 2052, hash = "54dc9081", required_for={"ENERGY"} },
     { path = "nodes/energy/runtime_context.lua", size_bytes = 2098, hash = "c352f2d4", required_for={"ENERGY"} },
