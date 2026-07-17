@@ -36,7 +36,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | Installer / Auto-Update | **KRITISCH TEILWEISE** | kein transaktionaler Completion-Marker, Runtime läuft beim Reinstall weiter, kritische FS-Fehler werden teilweise ignoriert |
 | Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
-| MASTER | **TEILWEISE OFFEN** | Config-Editor meldet Werte optimistisch als übernommen; kein Applied-ACK je Zielnode und keine Einzelnode-Auswahl |
+| MASTER | **WEITGEHEND UMGESETZT** | Config-Editor: Einzelnode-/Alle-Auswahl, `require_applied` und Applied-ACK-Tracking je Ziel behoben (Abschnitt 10) |
 | RT | **WEITGEHEND UMGESETZT** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11), Rampendauer-Einheitenfehler (Abschnitt 12) und fehlende `update_module_states()`-Verdrahtung (Abschnitt 13) behoben; Persistenz-/Observability-Restpunkte (Abschnitt 14) weiterhin offen |
 | ENERGY | **WEITGEHEND UMGESETZT** | Schedulergruppen getrennt, Heartbeat-Zeitquelle konsolidiert (Abschnitt 15 behoben) |
 | WATER | **WEITGEHEND UMGESETZT** | Persistenzresultat wird jetzt ehrlich im Command-Ergebnis abgebildet (Abschnitt 16 behoben) |
@@ -336,27 +336,26 @@ Nodes prüfen nach ähnlichem Startdelay und danach in festen Intervallen. Ein d
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)** — auf explizite Nutzerfreigabe umgesetzt, nachdem dieser Punkt zuvor bewusst zurückgestellt worden war.
 
-Der Config-Editor ändert die lokal angezeigten Werte sofort nach dem Senden. Die Broadcastfunktionen senden FUEL-/WATER-/RT-Commands an alle Nodes, fordern aber kein `require_applied` an und warten nicht auf ein Ergebnis pro Zielnode.
+Bestätigt: Der Config-Editor änderte die lokal angezeigten Werte (`c.state.fuel_reserve_pct`/`water_target_pct`/`reactor_fill_target_pct`) sofort beim Touch, unabhängig vom tatsächlichen Ergebnis. Die drei Setter (`runtime_loop.lua`) sendeten IMMER an ALLE Nodes der jeweiligen Rolle, forderten kein `require_applied` an und die ausgehende `message_id` wurde nirgends festgehalten. `ACK_DELIVERED` war im gesamten Nachrichten-Dispatch (`message_handlers.lua`) unbehandelt und löste bei JEDEM gesendeten Command (nicht nur Config-Editor-Edits) einen falschen „Unknown message type ACK_DELIVERED“-Alarm aus. `ACK_APPLIED` aktualisierte zwar `nodes[id].last_command_result`, aber ausschließlich als EIN generischer Slot pro Node (von jedem Commandtyp geteilt, ohne Zuordnung zu einem konkreten Edit) — keine Aggregation über mehrere angeschriebene Ziele, kein Timeout-Pfad in die UI.
 
-MASTER speichert zwar eingehende `ACK_APPLIED`-Ergebnisse je Node, der Config-Editor verknüpft sie aber nicht mit dem gerade ausgelösten Edit.
+## Fix
 
-## Folge
+Neues, reines Datenmodul `master/config_edits.lua` ist jetzt die einzige Autorität für alle drei editierbaren Fernwerte (FUEL-Reserve, WATER-Target, RT-Fülstandsziel):
 
-- UI zeigt einen neuen Wert, obwohl ein Ziel ihn abgelehnt hat.
-- Teilfehler bei mehreren Nodes erscheinen als Gesamterfolg.
-- Offline-/stale Nodes werden nicht separat ausgewiesen.
-- keine eindeutige Command-ID-/Zielzuordnung im Editor.
+- **Zielauswahl:** `ALLE` oder eine konkrete Node-ID, per Touch auf das Zielfeld zyklisch umschaltbar (`cycle_target()`), persistiert in der bereits geschützten `/xreactor/config/master.lua` (überlebt Neustarts/Auto-Updates, über denselben Mechanismus wie PEAK/IDLE-Schwellwerte).
+- **`require_applied=true`** wird jetzt bei jedem Config-Editor-Command angefordert (`send_edit()`).
+- **Message-ID-Tracking je Ziel:** die von `comms:send_command()` zurückgegebene `message_id` wird pro angeschriebenem Node in `pending.targets[node_id]` festgehalten.
+- **Status pro Ziel:** `QUEUED` → `DELIVERED` (jetzt per explizit behandeltem `ACK_DELIVERED` statt des vorherigen spurious-WARN-Zweigs) → `APPLIED`/`REJECTED` (per `ACK_APPLIED`, korreliert über `message.ack_for` gegen die gespeicherte `message_id`) oder `TIMEOUT` (per `housekeeping.lua`s bereits bestehendem `consume_timeouts()`-Konsumenten, jetzt zusätzlich in `config_edits.handle_timeout()` gespeist).
+- **Angezeigter Wert:** `confirmed_value` wird ERST übernommen, wenn ALLE angeschriebenen Ziele `APPLIED` melden; bis dahin bleibt der alte bestätigte Wert sichtbar, ein laufender Edit erscheint als `PENDING`-Fortschritt (`x/y angewendet`) direkt in der WERT-Zeile der Karte. Ein Fehlschlag bei mindestens einem Ziel (`REJECTED`/`TIMEOUT`/Sendefehler) hält den alten Wert unverändert und markiert den Edit sichtbar als fehlgeschlagen (`FEHLER x/y`), statt ihn stillschweigend als Erfolg auszuweisen.
+- **Persistenz:** Zielauswahl UND zuletzt bestätigter Wert werden bei jeder Änderung in `/xreactor/config/master.lua` geschrieben und beim nächsten Boot wiederhergestellt.
 
-## Verbindlicher Fix
+Verdrahtung: `master/runtime_loop.lua` (Setter delegieren vollständig an `config_edits.send_edit()`, neue `cycle_config_edit_target()`/`get_config_edit_model()`-Calc-Funktionen), `master/message_handlers.lua` (neuer `ACK_DELIVERED`-Zweig, `ACK_APPLIED`-Zweig ruft zusätzlich `config_edits.handle_ack_applied()`), `master/housekeeping.lua` (`handle_command_timeouts()` ruft zusätzlich `config_edits.handle_timeout()`), `master/ui_controller.lua` (`config_editor_model` liest jetzt ausschließlich aus `get_config_edit_model()`, keine optimistische `c.state.*_pct`-Mutation mehr, neue `config_edit_target_cycle`-Action), `master/ui/config_editor.lua` (Zielname + Pending-Fortschritt in der bestehenden WERT-Zeile, kein Eingriff in das Karten-/Spaltenraster).
 
-- Auswahl `ALLE` oder konkrete Node-ID,
-- Command mit `requires_applied=true`,
-- ausgehende Message-/Command-ID speichern,
-- Status pro Ziel: `QUEUED`, `DELIVERED`, `APPLIED`, `REJECTED`, `TIMEOUT`,
-- lokalen angezeigten Sollwert erst nach Applied-ACK übernehmen oder klar als `PENDING` markieren,
-- Auswahl und letzter bestätigter Wert persistent speichern.
+## Pflicht-Test
+
+Vier neue Testdateien: `tests/master_config_edits_test.lua` (reine Logik von `config_edits.lua`: Zielzyklus, Senden an ALLE/einen konkreten/einen verschwundenen Node, Applied-/Rejected-/Timeout-Auflösung, Wertübernahme erst nach vollständiger Bestätigung), `tests/master_config_edit_ack_wiring_test.lua` (echte `message_handlers.lua`/`housekeeping.lua`-Verdrahtung: kein spurious-Alarm mehr bei `ACK_DELIVERED`, korrekte Korrelation über `ack_for`/`message_id`), `tests/master_ui_controller_config_edit_action_test.lua` (echtes `handle_action()`: liest den aktuellen Wert aus `get_config_edit_model()`, schreibt `c.state.*_pct` nicht mehr), sowie die aktualisierte `tests/master_runtime_loop_multi_node_reserve_target_test.lua` (bestehendes Broadcast-an-ALLE-Verhalten bleibt für die `ALL`-Zielauswahl erhalten). Verifiziert per `git stash`, dass alle vier Tests gegen den alten Code fehlschlagen.
 
 ---
 
@@ -826,7 +825,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
 8. **INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.
 9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
-10. **MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.
+10. ~~**MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.~~ BEHOBEN (2026-07-17, siehe Abschnitt 10): `tests/master_config_edits_test.lua`, `tests/master_config_edit_ack_wiring_test.lua`, `tests/master_ui_controller_config_edit_action_test.lua`.
 11. ~~**ENERGY-P1:** genau eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
 12. ~~**WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 16): `tests/water_rt_persistence_ack_honesty_test.lua`.
 13. ~~**VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.~~ BEHOBEN (2026-07-17, siehe Abschnitt 21): `tests/valve_sender_pairing_and_sorter_reconnect_test.lua`.

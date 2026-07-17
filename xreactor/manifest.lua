@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 466,
-  manifest_id = "manifest-v466",
+  manifest_version = 467,
+  manifest_id = "manifest-v467",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14745, hash = "dc801ba2", always=true },
   { path = "installer/init.lua", size_bytes = 19921, hash = "7126d4cd", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "27440999", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "7dc8b8c1", always=true },
   { path = "start.lua", size_bytes = 5574, hash = "7c62ecb0", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -56,21 +56,22 @@ return {
 
   roles = {
     master = {
+    { path = "master/config_edits.lua", size_bytes = 8683, hash = "a685c2a6", required_for={"MASTER"} },
     { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c", required_for={"MASTER"} },
     { path = "master/loop.lua", size_bytes = 3134, hash = "a9ad48b4", required_for={"MASTER"} },
     { path = "core/alert_rules.lua", size_bytes = 17159, hash = "f436f415", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 7111, hash = "2cb175fc", required_for={"MASTER"} },
-    { path = "master/housekeeping.lua", size_bytes = 3022, hash = "568c36b9", required_for={"MASTER"} },
+    { path = "master/housekeeping.lua", size_bytes = 3850, hash = "b3d24c21", required_for={"MASTER"} },
     { path = "master/fuel_relay.lua", size_bytes = 4291, hash = "ff7ae504", required_for={"MASTER"} },
-    { path = "master/init_runtime.lua", size_bytes = 8192, hash = "2524e342", required_for={"MASTER"} },
+    { path = "master/init_runtime.lua", size_bytes = 8295, hash = "50e5b461", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
-    { path = "master/message_handlers.lua", size_bytes = 27268, hash = "adae1217", required_for={"MASTER"} },
+    { path = "master/message_handlers.lua", size_bytes = 28938, hash = "31bb36af", required_for={"MASTER"} },
     { path = "master/monitor_sessions.lua", size_bytes = 10746, hash = "8918bb8f", required_for={"MASTER"} },
     { path = "master/profiles.lua", size_bytes = 283, hash = "16f8e038", required_for={"MASTER"} },
     { path = "master/rt_sync.lua", size_bytes = 19025, hash = "bfaff89a", required_for={"MASTER"} },
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"} },
     { path = "master/runtime_context.lua", size_bytes = 5758, hash = "0c0c5c9c", required_for={"MASTER"} },
-    { path = "master/runtime_loop.lua", size_bytes = 16926, hash = "cc3af4f3", required_for={"MASTER"} },
+    { path = "master/runtime_loop.lua", size_bytes = 18185, hash = "1d9a0442", required_for={"MASTER"} },
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"} },
     { path = "master/runtime_ops_profile.lua", size_bytes = 15968, hash = "85af1ef9", required_for={"MASTER"} },
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"} },
@@ -88,7 +89,7 @@ return {
     { path = "master/ui/maintenance.lua", size_bytes = 4360, hash = "17833cc1", required_for={"MASTER"} },
     { path = "master/ui/updates.lua", size_bytes = 4914, hash = "577f9890", required_for={"MASTER"} },
     { path = "master/ui/system_map.lua", size_bytes = 6136, hash = "c62cf990", required_for={"MASTER"} },
-    { path = "master/ui/config_editor.lua", size_bytes = 4177, hash = "770b16f8", required_for={"MASTER"} },
+    { path = "master/ui/config_editor.lua", size_bytes = 6749, hash = "682b50a4", required_for={"MASTER"} },
     { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     -- Fix (2026-07-16): CRITICAL. MANIFEST-P1 aus
     -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 17).
@@ -124,7 +125,7 @@ return {
     -- die Datei gezielt manuell heruntergeladen wird.
     { path = "optional/pocket_client.lua", size_bytes = 10846, hash = "10601ed6", optional=true, feature="pocket_client", required_for={} },
     { path = "optional/master_ampel.lua", size_bytes = 6373, hash = "f3d68ef7", optional=true, feature="master_ampel", required_for={"MASTER"} },
-    { path = "master/ui_controller.lua", size_bytes = 49927, hash = "326fbb4e", required_for={"MASTER"} },
+    { path = "master/ui_controller.lua", size_bytes = 52976, hash = "bd210ff0", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
     rt = {

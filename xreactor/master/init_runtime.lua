@@ -106,7 +106,9 @@ function M.run(ctx)
     mark_rt_sync_dirty = ctx.mark_rt_sync_dirty,
     add_alarm = ctx.add_alarm,
     master_time_label = ctx.master_time_label,
-    log = function(message, level) ctx.utils.log("MASTER", message, level or "INFO") end
+    log = function(message, level) ctx.utils.log("MASTER", message, level or "INFO") end,
+    config_edits_state = ctx.config_edits_state,
+    on_config_edit_change = ctx.persist_config_edits
   })
   ctx.refs.ui_controller = ctx.ui_controller_lib.new({
     constants = ctx.constants,
