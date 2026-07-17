@@ -603,17 +603,42 @@ function M.new(opts)
 
     -- Config-Editor am Monitor (Feature, 2026-07-02): zentrale Seite fuer
     -- Werte, die vorher nur ueber Config-Dateien direkt bearbeitbar waren.
+    --
+    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 10). Die angezeigten Werte
+    -- kommen jetzt ausschliesslich aus master/config_edits.lua (get_
+    -- config_edit_model) statt aus c.state.*_pct -- der angezeigte Wert
+    -- ist damit der zuletzt tatsaechlich BESTAETIGTE (Applied-ACK aller
+    -- angeschriebenen Ziele), nicht der zuletzt EINGEGEBENE. target/
+    -- pending werden durchgereicht, damit ui/config_editor.lua die
+    -- aktuelle Zielauswahl und einen laufenden/fehlgeschlagenen Edit
+    -- sichtbar machen kann.
+    local function edit_model(key, fallback)
+      if c.calc.get_config_edit_model then return c.calc.get_config_edit_model(key, fallback) end
+      return { target = "ALL", confirmed_value = fallback, pending = nil }
+    end
+    local fuel_reserve_edit = edit_model("fuel_reserve", 2000)
+    local water_target_edit = edit_model("water_target", 0)
+    local reactor_fill_edit = edit_model("reactor_fill_target", 0.5)
     local config_editor_model = {
       peak_threshold_pct = tonumber(c.state.peak_threshold_pct) or 30,
       idle_threshold_pct = tonumber(c.state.idle_threshold_pct) or 90,
       rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold,
-      fuel_reserve_pct = tonumber(c.state.fuel_reserve_pct) or 2000,
-      water_target_pct = tonumber(c.state.water_target_pct) or 0,
+      fuel_reserve_pct = tonumber(fuel_reserve_edit.confirmed_value) or 2000,
+      fuel_reserve_target = fuel_reserve_edit.target,
+      fuel_reserve_pending = fuel_reserve_edit.pending,
+      water_target_pct = tonumber(water_target_edit.confirmed_value) or 0,
+      water_target_target = water_target_edit.target,
+      water_target_pending = water_target_edit.pending,
       auto_update_enabled = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled(),
       -- Feature (2026-07-06): Zielwert fuer individuelle Pro-Reaktor-
       -- Regelung, als Prozent (0-100) fuer die UI; wird beim Senden durch
       -- 100 geteilt (siehe handle_action "reactor_fill_target_adjust").
-      reactor_fill_target_pct = tonumber(c.state.reactor_fill_target_pct) or 50,
+      -- config_edits speichert den ROHEN, tatsaechlich gesendeten Wert
+      -- (0.0-1.0) -- hier zurueck in Prozent umgerechnet.
+      reactor_fill_target_pct = math.floor((tonumber(reactor_fill_edit.confirmed_value) or 0.5) * 100 + 0.5),
+      reactor_fill_target_target = reactor_fill_edit.target,
+      reactor_fill_target_pending = reactor_fill_edit.pending,
     }
 
     return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model, config_editor = config_editor_model }
@@ -739,10 +764,18 @@ function M.new(opts)
     end
     -- Config-Editor am Monitor (Feature, 2026-07-02): Fuel-Reserve/
     -- Water-Target in festen Schritten anpassen, Auto-Update umschalten.
+    --
+    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 10). Der neue Wert wird NICHT
+    -- mehr optimistisch in c.state.*_pct geschrieben -- der angezeigte
+    -- Wert (config_editor_model) kommt jetzt ausschliesslich aus
+    -- get_config_edit_model() und aktualisiert sich erst, wenn ALLE
+    -- angeschriebenen Ziele APPLIED gemeldet haben. Die Deltaberechnung
+    -- liest den aktuellen (bestaetigten) Wert deshalb ebenfalls von dort,
+    -- nicht mehr aus dem inzwischen ungenutzten c.state-Feld.
     if action.type == "fuel_reserve_adjust" and action.delta and c.calc.set_fuel_reserve then
-      local cur = tonumber(c.state.fuel_reserve_pct) or 2000
+      local cur = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("fuel_reserve", 2000).confirmed_value) or 2000
       local new_val = math.max(0, cur + action.delta)
-      c.state.fuel_reserve_pct = new_val
       local ok, err = c.calc.set_fuel_reserve(new_val)
       if not ok and c.calc.add_alarm then
         c.calc.add_alarm("MASTER", "WARN", "Fuel-Reserve-Anpassung fehlgeschlagen: " .. tostring(err))
@@ -754,20 +787,26 @@ function M.new(opts)
     -- 5%), das RT-Command SET_REACTOR_FILL_TARGET erwartet aber 0.0-1.0 —
     -- Umrechnung hier vor dem Senden.
     if action.type == "reactor_fill_target_adjust" and action.delta and c.calc.set_reactor_fill_target then
-      local cur = tonumber(c.state.reactor_fill_target_pct) or 50
-      local new_val = math.max(0, math.min(100, cur + action.delta))
-      c.state.reactor_fill_target_pct = new_val
-      c.calc.set_reactor_fill_target(new_val / 100)
+      local cur_ratio = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("reactor_fill_target", 0.5).confirmed_value) or 0.5
+      local cur_pct = cur_ratio * 100
+      local new_pct = math.max(0, math.min(100, cur_pct + action.delta))
+      c.calc.set_reactor_fill_target(new_pct / 100)
       return true
     end
     if action.type == "water_target_adjust" and action.delta and c.calc.set_water_target then
-      local cur = tonumber(c.state.water_target_pct) or 0
+      local cur = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("water_target", 0).confirmed_value) or 0
       local new_val = math.max(0, cur + action.delta)
-      c.state.water_target_pct = new_val
       local ok, err = c.calc.set_water_target(new_val)
       if not ok and c.calc.add_alarm then
         c.calc.add_alarm("MASTER", "WARN", "Water-Target-Anpassung fehlgeschlagen: " .. tostring(err))
       end
+      return true
+    end
+    -- Fix (2026-07-17): MASTER-P1. Zielauswahl (ALLE -> konkrete Node-ID
+    -- -> ... -> ALLE) je Config-Editor-Einstellung, per Touch auf das
+    -- Zielfeld (siehe ui/config_editor.lua).
+    if action.type == "config_edit_target_cycle" and action.key and c.calc.cycle_config_edit_target then
+      c.calc.cycle_config_edit_target(action.key)
       return true
     end
     if action.type == "auto_update_toggle" and c.calc.set_auto_update_enabled then
@@ -808,5 +847,13 @@ function M.new(opts)
   end
   return controller
 end
+
+-- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 10). Exportiert, damit runtime_loop.
+-- lua Config-Editor-Zielauswahl/bestaetigte Werte ueber denselben,
+-- bereits geschuetzten Persistenzmechanismus wie PEAK/IDLE-Schwellwerte
+-- und AUTO-UPDATE ablegen kann, ohne eine zweite, abweichende
+-- Schreiblogik einzufuehren.
+M.persist_master_settings = persist_master_settings
 
 return M

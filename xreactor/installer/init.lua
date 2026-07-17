@@ -322,11 +322,25 @@ if term and term.setCursorPos and not _G.__xreactor_remote_update then
   end
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.3 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5). Die
+-- Ergebnisse von fs.delete/fs.makeDir hier sowie von jedem stage_mod.write()
+-- weiter unten wurden bisher verworfen -- ein Fehlschlag (z.B. kein Platz,
+-- schreibgeschuetzter Datentraeger) blieb unbemerkt und die Installation
+-- lief mit einer teilweise/nicht angelegten Zielstruktur bzw. ohne Rolle
+-- weiter, statt sofort kontrolliert abzubrechen.
 -- Alte Installation löschen
 if fs.exists(INSTALL_ROOT) then
-  p("Entferne alte Installation..."); pcall(fs.delete, INSTALL_ROOT)
+  p("Entferne alte Installation...")
+  pcall(fs.delete, INSTALL_ROOT)
+  if fs.exists(INSTALL_ROOT) then
+    error("Alte Installation konnte nicht entfernt werden: " .. INSTALL_ROOT, 0)
+  end
 end
 pcall(fs.makeDir, INSTALL_ROOT)
+if not fs.exists(INSTALL_ROOT) then
+  error("Installationsverzeichnis konnte nicht angelegt werden: " .. INSTALL_ROOT, 0)
+end
 
 -- Minimal-Restore sofort nach Neuanlage des Roots: bricht die
 -- Installation danach ab (Downloadfehler, Stromausfall), bleiben Rolle
@@ -334,7 +348,12 @@ pcall(fs.makeDir, INSTALL_ROOT)
 -- kein unbeabsichtigtes Re-Arm mit unsicheren Defaults.
 for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
   local content = config_backup[rel]
-  if content then stage_mod.write(CONFIG_DIR .. "/" .. rel, content) end
+  if content then
+    local ok_mr, err_mr = stage_mod.write(CONFIG_DIR .. "/" .. rel, content)
+    if not ok_mr then
+      error("Minimal-Restore fehlgeschlagen: " .. rel .. " — " .. tostring(err_mr), 0)
+    end
+  end
 end
 
 -- Dateien installieren
@@ -402,12 +421,20 @@ do
     end
   end
   parts[#parts + 1] = "}\n"
-  stage_mod.write(INSTALL_ROOT .. "/config/optional_features.lua", table.concat(parts))
+  local ok_of, err_of = stage_mod.write(INSTALL_ROOT .. "/config/optional_features.lua", table.concat(parts))
+  if not ok_of then
+    error("optional_features.lua konnte nicht geschrieben werden: " .. tostring(err_of), 0)
+  end
 end
 
 -- Rolle konfigurieren
-stage_mod.write(INSTALL_ROOT .. "/config/role.lua",
-  string.format("return { role = %q }\n", role.label))
+do
+  local ok_role, err_role = stage_mod.write(INSTALL_ROOT .. "/config/role.lua",
+    string.format("return { role = %q }\n", role.label))
+  if not ok_role then
+    error("role.lua konnte nicht geschrieben werden: " .. tostring(err_role), 0)
+  end
+end
 
 -- startup.lua
 local existing_startup = nil
@@ -418,7 +445,11 @@ local is_xreactor = existing_startup and (
   existing_startup:find("/xreactor/start.lua", 1, true) or
   existing_startup:find("XReactor", 1, true))
 if not existing_startup or is_xreactor then
-  stage_mod.write(STARTUP_PATH, STARTUP_CONTENT); p("startup.lua konfiguriert")
+  local ok_su, err_su = stage_mod.write(STARTUP_PATH, STARTUP_CONTENT)
+  if not ok_su then
+    error("startup.lua konnte nicht geschrieben werden: " .. tostring(err_su), 0)
+  end
+  p("startup.lua konfiguriert")
 else
   p("WARN: startup.lua nicht von XReactor — unverändert")
 end
@@ -426,8 +457,11 @@ end
 -- Auto-Update Config
 local auto_cfg = INSTALL_ROOT .. "/config/remote_update.lua"
 if not fs.exists(auto_cfg) then
-  stage_mod.write(auto_cfg,
+  local ok_au, err_au = stage_mod.write(auto_cfg,
     "return {\n  enabled = true,\n  auto_update = true,\n  check_interval_s = 120,\n}\n")
+  if not ok_au then
+    error("remote_update.lua konnte nicht geschrieben werden: " .. tostring(err_au), 0)
+  end
   p("Auto-Update Config angelegt")
 end
 

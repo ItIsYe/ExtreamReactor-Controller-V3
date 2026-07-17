@@ -481,11 +481,19 @@ local function handle_command(message)
         utils.log("WATER", "SET_TARGET: Persistierung fehlgeschlagen (" .. tostring(werr) .. ") -- Wert gilt nur bis zum naechsten Neustart", "WARN")
       end
       utils.log("WATER", "Target volume updated to " .. tostring(new_target))
+      -- Fix (2026-07-17): WATER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+      -- PERFORMANCE_2026-07-12.md Abschnitt 16). Der Command wurde bisher
+      -- IMMER mit ok=true ohne jedes Persistenzsignal quittiert, selbst
+      -- wenn der obige write_config() gerade fehlgeschlagen war -- MASTER
+      -- konnte ein ACK_APPLIED erhalten, obwohl der Wert nach einem
+      -- Neustart wieder verloren geht. `ok=true` bleibt korrekt (der
+      -- RAM-Wert wurde tatsaechlich uebernommen), aber `persisted` macht
+      -- das Ergebnis jetzt ehrlich ueberpruefbar.
+      return support_command_handler.finish(devices, true, { persisted = ok_write == true })
     else
       utils.log("WATER", "SET_TARGET rejected: invalid value=" .. tostring(command.value), "WARN")
       return support_command_handler.finish_with_result(devices, { ok = false, error = "invalid target value", reason_code = "INVALID_VALUE" })
     end
-    return support_command_handler.finish(devices, true)
   end
   return support_command_handler.reject_unsupported(devices)
 end

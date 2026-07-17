@@ -63,22 +63,37 @@ function M.write(path, content)
   -- (die Zieldatei existiert also durchgehend, entweder als alte oder als
   -- neue Version), das eigentliche Ersetzen ist nur noch der finale Move-
   -- Schritt, und bei einem Fehlschlag wird das Backup zurueckgeschoben.
+  -- Fix (2026-07-17): CRITICAL. INSTALL-P0.3 aus
+  -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5). Wenn
+  -- der Backup-Move fehlschlug (z.B. kein Platz), wurde die alte Datei
+  -- bisher als "letzter Ausweg" trotzdem geloescht und die Funktion lief
+  -- weiter, so als waere alles in Ordnung — schlug danach auch noch der
+  -- finale tmp->path Move fehl, war die alte Datei unwiderruflich weg UND
+  -- kein Backup vorhanden, aus dem "path" haette zurueckgeholt werden
+  -- koennen. Jetzt wird die alte Datei NUR geloescht, wenn sie tatsaechlich
+  -- am Backup-Pfad wiederzufinden ist (per fs.exists verifiziert, nicht nur
+  -- am pcall-Erfolg von fs.move) -- schlaegt das Backup fehl, bricht
+  -- M.write() sofort mit klarem Fehler ab, die alte Datei bleibt an ihrem
+  -- Platz unangetastet.
   local backup = path .. ".xr_prev"
   local had_old = fs.exists(path)
   if had_old then
-    if fs.exists(backup) then pcall(fs.delete, backup) end
-    local ok_bak = pcall(fs.move, path, backup)
-    if not ok_bak then
-      -- Backup fehlgeschlagen (z.B. kein Platz) — als letzter Ausweg alten
-      -- Weg nehmen, lieber ein winziges Risiko-Fenster als der Verlust der
-      -- neuen Datei durch einen fehlgeschlagenen Move ueber eine
-      -- existierende Datei.
-      pcall(fs.delete, path)
+    if fs.exists(backup) then
+      pcall(fs.delete, backup)
+      if fs.exists(backup) then
+        pcall(fs.delete, tmp)
+        return false, "could not clear stale backup: " .. backup
+      end
+    end
+    pcall(fs.move, path, backup)
+    if not fs.exists(backup) then
+      pcall(fs.delete, tmp)
+      return false, "backup move failed: " .. path .. " -> " .. backup
     end
   end
 
   local ok2, mv_err = pcall(fs.move, tmp, path)
-  if not ok2 then
+  if not ok2 or not fs.exists(path) then
     pcall(fs.delete, tmp)
     -- Neue Datei konnte nicht an ihren Platz — altes Backup zurueckholen,
     -- damit "path" nicht dauerhaft fehlt.

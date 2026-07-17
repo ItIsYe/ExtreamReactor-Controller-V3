@@ -111,9 +111,10 @@ do
     services = { tick = function() tick_calls = tick_calls + 1 end },
     now_ms = function() return 0 end,
     log = function() end,
-    last_heartbeat_ts = 0, last_heartbeat_warn_ts = 0,
+    last_heartbeat_warn_ts = 0,
     heartbeat_interval_ms = function() return 2000 end,
-    send_heartbeat = function() heartbeat_calls = heartbeat_calls + 1 end,
+    get_last_heartbeat_ts = function() return 0 end,
+    send_heartbeat_if_due = function() heartbeat_calls = heartbeat_calls + 1; return true end,
     tick_interval_s = 0.5,
   }
 
@@ -123,7 +124,7 @@ do
 
   assert_eq(result, 'terminate', 'the loop should exit cleanly on a terminate event')
   assert_eq(tick_calls, 2, 'ctx.services must be ticked periodically via its own timer, independent of the heartbeat timer')
-  assert_eq(heartbeat_calls, 1, 'do_heartbeat should fire once for the single hb_timer event')
+  assert_eq(heartbeat_calls, 1, 'maybe_heartbeat should fire once for the single hb_timer event, gated via send_heartbeat_if_due')
 end
 
 -- 4. Strukturelle Verdrahtungspruefung fuer nodes/energy/main.lua (Boot-

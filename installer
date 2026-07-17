@@ -411,22 +411,37 @@ function M.write(path, content)
   -- (die Zieldatei existiert also durchgehend, entweder als alte oder als
   -- neue Version), das eigentliche Ersetzen ist nur noch der finale Move-
   -- Schritt, und bei einem Fehlschlag wird das Backup zurueckgeschoben.
+  -- Fix (2026-07-17): CRITICAL. INSTALL-P0.3 aus
+  -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5). Wenn
+  -- der Backup-Move fehlschlug (z.B. kein Platz), wurde die alte Datei
+  -- bisher als "letzter Ausweg" trotzdem geloescht und die Funktion lief
+  -- weiter, so als waere alles in Ordnung — schlug danach auch noch der
+  -- finale tmp->path Move fehl, war die alte Datei unwiderruflich weg UND
+  -- kein Backup vorhanden, aus dem "path" haette zurueckgeholt werden
+  -- koennen. Jetzt wird die alte Datei NUR geloescht, wenn sie tatsaechlich
+  -- am Backup-Pfad wiederzufinden ist (per fs.exists verifiziert, nicht nur
+  -- am pcall-Erfolg von fs.move) -- schlaegt das Backup fehl, bricht
+  -- M.write() sofort mit klarem Fehler ab, die alte Datei bleibt an ihrem
+  -- Platz unangetastet.
   local backup = path .. ".xr_prev"
   local had_old = fs.exists(path)
   if had_old then
-    if fs.exists(backup) then pcall(fs.delete, backup) end
-    local ok_bak = pcall(fs.move, path, backup)
-    if not ok_bak then
-      -- Backup fehlgeschlagen (z.B. kein Platz) — als letzter Ausweg alten
-      -- Weg nehmen, lieber ein winziges Risiko-Fenster als der Verlust der
-      -- neuen Datei durch einen fehlgeschlagenen Move ueber eine
-      -- existierende Datei.
-      pcall(fs.delete, path)
+    if fs.exists(backup) then
+      pcall(fs.delete, backup)
+      if fs.exists(backup) then
+        pcall(fs.delete, tmp)
+        return false, "could not clear stale backup: " .. backup
+      end
+    end
+    pcall(fs.move, path, backup)
+    if not fs.exists(backup) then
+      pcall(fs.delete, tmp)
+      return false, "backup move failed: " .. path .. " -> " .. backup
     end
   end
 
   local ok2, mv_err = pcall(fs.move, tmp, path)
-  if not ok2 then
+  if not ok2 or not fs.exists(path) then
     pcall(fs.delete, tmp)
     -- Neue Datei konnte nicht an ihren Platz — altes Backup zurueckholen,
     -- damit "path" nicht dauerhaft fehlt.
@@ -1263,11 +1278,25 @@ if term and term.setCursorPos and not _G.__xreactor_remote_update then
   end
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.3 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5). Die
+-- Ergebnisse von fs.delete/fs.makeDir hier sowie von jedem stage_mod.write()
+-- weiter unten wurden bisher verworfen -- ein Fehlschlag (z.B. kein Platz,
+-- schreibgeschuetzter Datentraeger) blieb unbemerkt und die Installation
+-- lief mit einer teilweise/nicht angelegten Zielstruktur bzw. ohne Rolle
+-- weiter, statt sofort kontrolliert abzubrechen.
 -- Alte Installation löschen
 if fs.exists(INSTALL_ROOT) then
-  p("Entferne alte Installation..."); pcall(fs.delete, INSTALL_ROOT)
+  p("Entferne alte Installation...")
+  pcall(fs.delete, INSTALL_ROOT)
+  if fs.exists(INSTALL_ROOT) then
+    error("Alte Installation konnte nicht entfernt werden: " .. INSTALL_ROOT, 0)
+  end
 end
 pcall(fs.makeDir, INSTALL_ROOT)
+if not fs.exists(INSTALL_ROOT) then
+  error("Installationsverzeichnis konnte nicht angelegt werden: " .. INSTALL_ROOT, 0)
+end
 
 -- Minimal-Restore sofort nach Neuanlage des Roots: bricht die
 -- Installation danach ab (Downloadfehler, Stromausfall), bleiben Rolle
@@ -1275,7 +1304,12 @@ pcall(fs.makeDir, INSTALL_ROOT)
 -- kein unbeabsichtigtes Re-Arm mit unsicheren Defaults.
 for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
   local content = config_backup[rel]
-  if content then stage_mod.write(CONFIG_DIR .. "/" .. rel, content) end
+  if content then
+    local ok_mr, err_mr = stage_mod.write(CONFIG_DIR .. "/" .. rel, content)
+    if not ok_mr then
+      error("Minimal-Restore fehlgeschlagen: " .. rel .. " — " .. tostring(err_mr), 0)
+    end
+  end
 end
 
 -- Dateien installieren
@@ -1343,12 +1377,20 @@ do
     end
   end
   parts[#parts + 1] = "}\n"
-  stage_mod.write(INSTALL_ROOT .. "/config/optional_features.lua", table.concat(parts))
+  local ok_of, err_of = stage_mod.write(INSTALL_ROOT .. "/config/optional_features.lua", table.concat(parts))
+  if not ok_of then
+    error("optional_features.lua konnte nicht geschrieben werden: " .. tostring(err_of), 0)
+  end
 end
 
 -- Rolle konfigurieren
-stage_mod.write(INSTALL_ROOT .. "/config/role.lua",
-  string.format("return { role = %q }\n", role.label))
+do
+  local ok_role, err_role = stage_mod.write(INSTALL_ROOT .. "/config/role.lua",
+    string.format("return { role = %q }\n", role.label))
+  if not ok_role then
+    error("role.lua konnte nicht geschrieben werden: " .. tostring(err_role), 0)
+  end
+end
 
 -- startup.lua
 local existing_startup = nil
@@ -1359,7 +1401,11 @@ local is_xreactor = existing_startup and (
   existing_startup:find("/xreactor/start.lua", 1, true) or
   existing_startup:find("XReactor", 1, true))
 if not existing_startup or is_xreactor then
-  stage_mod.write(STARTUP_PATH, STARTUP_CONTENT); p("startup.lua konfiguriert")
+  local ok_su, err_su = stage_mod.write(STARTUP_PATH, STARTUP_CONTENT)
+  if not ok_su then
+    error("startup.lua konnte nicht geschrieben werden: " .. tostring(err_su), 0)
+  end
+  p("startup.lua konfiguriert")
 else
   p("WARN: startup.lua nicht von XReactor — unverändert")
 end
@@ -1367,8 +1413,11 @@ end
 -- Auto-Update Config
 local auto_cfg = INSTALL_ROOT .. "/config/remote_update.lua"
 if not fs.exists(auto_cfg) then
-  stage_mod.write(auto_cfg,
+  local ok_au, err_au = stage_mod.write(auto_cfg,
     "return {\n  enabled = true,\n  auto_update = true,\n  check_interval_s = 120,\n}\n")
+  if not ok_au then
+    error("remote_update.lua konnte nicht geschrieben werden: " .. tostring(err_au), 0)
+  end
   p("Auto-Update Config angelegt")
 end
 
@@ -1619,18 +1668,34 @@ if not _G.__xreactor_remote_update and term and term.setCursorPos then
   end
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.3 aus
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5). Siehe
+-- Fix-Kommentar bei der identischen Stelle in installer/init.lua -- dies
+-- ist der Codepfad, der beim manuellen/direkten Aufruf von /installer
+-- TATSAECHLICH laeuft (init_src weiter oben ist nur eingebetteter Text).
 -- ── Alte Installation löschen ────────────────────────────────────────────────
 if fs.exists(INSTALL_ROOT) then
   p("Entferne alte Installation...")
   pcall(fs.delete, INSTALL_ROOT)
+  if fs.exists(INSTALL_ROOT) then
+    error("Alte Installation konnte nicht entfernt werden: "..INSTALL_ROOT, 0)
+  end
 end
 pcall(fs.makeDir, INSTALL_ROOT)
+if not fs.exists(INSTALL_ROOT) then
+  error("Installationsverzeichnis konnte nicht angelegt werden: "..INSTALL_ROOT, 0)
+end
 
 -- Minimal-Restore sofort nach Neuanlage des Roots: bricht die Installation
 -- danach ab, bleiben Rolle und Remote-Update-Arming trotzdem erhalten.
 for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
   local content = config_backup[rel]
-  if content then stage_mod.write(CONFIG_DIR.."/"..rel, content) end
+  if content then
+    local ok_mr, err_mr = stage_mod.write(CONFIG_DIR.."/"..rel, content)
+    if not ok_mr then
+      error("Minimal-Restore fehlgeschlagen: "..rel.." — "..tostring(err_mr), 0)
+    end
+  end
 end
 
 -- ── Eingebettete Module zuerst schreiben ─────────────────────────────────────
@@ -1705,13 +1770,21 @@ do
 end
 
 -- ── Rolle + Config ───────────────────────────────────────────────────────────
-stage_mod.write(INSTALL_ROOT.."/config/role.lua",
-  string.format("return { role = %q }\n", role.label))
+do
+  local ok_role, err_role = stage_mod.write(INSTALL_ROOT.."/config/role.lua",
+    string.format("return { role = %q }\n", role.label))
+  if not ok_role then
+    error("role.lua konnte nicht geschrieben werden: "..tostring(err_role), 0)
+  end
+end
 
 local auto_cfg = INSTALL_ROOT.."/config/remote_update.lua"
 if not fs.exists(auto_cfg) then
-  stage_mod.write(auto_cfg,
+  local ok_au, err_au = stage_mod.write(auto_cfg,
     "return {\n  enabled = true,\n  auto_update = true,\n  check_interval_s = 120,\n}\n")
+  if not ok_au then
+    error("remote_update.lua konnte nicht geschrieben werden: "..tostring(err_au), 0)
+  end
 end
 
 local startup_path = "/startup.lua"
@@ -1721,7 +1794,10 @@ if fs.exists(startup_path) then
   local f = fs.open(startup_path, "r"); if f then existing=f.readAll(); f.close() end
 end
 if not existing or existing:find("/xreactor/start.lua", 1, true) then
-  stage_mod.write(startup_path, startup_content)
+  local ok_su, err_su = stage_mod.write(startup_path, startup_content)
+  if not ok_su then
+    error("startup.lua konnte nicht geschrieben werden: "..tostring(err_su), 0)
+  end
   p("startup.lua konfiguriert")
 end
 

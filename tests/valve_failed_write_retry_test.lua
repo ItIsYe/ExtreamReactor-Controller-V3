@@ -27,14 +27,19 @@ local function extract(content, start_marker, end_marker)
 end
 
 local SOURCE = read_file('xreactor/nodes/valve/main.lua')
--- Zwei getrennte Bloecke: apply_valve() (Block A) und die Dedupe-Helfer +
--- send_valve_ack() + handle_valve_channel_event() (Block B) -- dazwischen
--- liegen der Boot-Write-Aufruf und die Modem-Kanal-Oeffnung (echte
--- Seiteneffekte, peripheral.find()), die fuer diesen Test nicht gebraucht
--- und nicht extrahiert werden.
-local BLOCK_A = extract(SOURCE, 'local function apply_valve(high)', '\nend\n')
+-- Zwei getrennte Bloecke: get_sorter()/write_actuator()/apply_valve()
+-- (Block A) und die Dedupe-Helfer + send_valve_ack() +
+-- handle_valve_channel_event() (Block B) -- dazwischen liegen der
+-- Boot-Write-Aufruf und die Modem-Kanal-Oeffnung (echte Seiteneffekte,
+-- peripheral.find()), die fuer diesen Test nicht gebraucht und nicht
+-- extrahiert werden. apply_valve() ruft seit der Sorter-Aktor-Erweiterung
+-- write_actuator() auf statt redstone.setOutput() direkt -- Block A muss
+-- deshalb bei get_sorter()/write_actuator() beginnen, nicht erst bei
+-- apply_valve() selbst.
+local BLOCK_A = extract(SOURCE, 'local sorter_device = nil',
+  'BLOCKIERT" or "OFFEN"), "INFO")\n  return true\nend')
 local BLOCK_B = extract(SOURCE, 'local SEEN_COMMAND_LIMIT = 16',
-  'send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error)\nend')
+  'send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error, message.src)\nend')
 local EXTRACTED = BLOCK_A .. '\n' .. BLOCK_B
 
 local function assert_eq(actual, expected, message)
@@ -61,7 +66,11 @@ local current_high = ]] .. tostring(opts.default_blocked ~= false) .. [[
 local valve_initialized = false
 local last_write_error = nil
 local last_command_ts = os.epoch("utc")
-local config = { side = "top", trusted_source = nil }
+-- trusted_source pre-set (not nil) so the VALVE-P1 auto-pairing logic
+-- (added 2026-07-17, see valve_sender_pairing_and_sorter_reconnect_test.lua
+-- for its dedicated coverage) does not interfere with this test's
+-- write-retry-focused assertions.
+local config = { side = "top", trusted_source = "FUEL-1" }
 local CONFIG = { LOG_PREFIX = "VALVE" }
 local node_id = "VALVE-1"
 ]]
@@ -113,7 +122,7 @@ do
   local write_ok = false
   local inst = make_instance(function() return write_ok end, { default_blocked = false })
 
-  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', command_id = 'CMD-1', high = true } }
+  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-1', high = true } }
 
   inst.handle_valve_channel_event(event)
   assert_eq(inst.get_current_high(), false, 'a failed write must not change current_high (still open/default)')
@@ -132,7 +141,7 @@ end
 do
   local inst = make_instance(function() return true end)
   local write_count = 0
-  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', command_id = 'CMD-2', high = true } }
+  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-2', high = true } }
 
   inst.handle_valve_channel_event(event)
   assert_true(inst.seen_command_ids['CMD-2'] == true, 'a successful command should be remembered')
@@ -154,7 +163,7 @@ do
 
   inst.set_clock(baseline_ts + 1000)
   write_ok = false
-  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', command_id = 'CMD-3', high = true } }
+  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-3', high = true } }
   inst.handle_valve_channel_event(event)
 
   assert_eq(inst.get_current_high(), false, 'the failed block attempt must not change current_high')

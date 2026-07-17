@@ -3,9 +3,29 @@
 -- siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 9.
 -- Extrahiert die exakten Funktionen aus der echten Datei und prueft, dass
 -- ALLE Nodes einer Rolle das Command erhalten (statt nur des ersten
--- gefundenen, nicht-deterministisch per pairs()-Reihenfolge).
+-- gefundenen, nicht-deterministisch per pairs()-Reihenfolge), wenn die
+-- Zielauswahl (siehe master/config_edits.lua, MASTER-P1-Folgefix
+-- 2026-07-17, Abschnitt 10) auf "ALL" steht -- dem Default fuer eine
+-- frische runtime.state.config_edits-Tabelle wie hier.
+--
+-- Fix (2026-07-17): set_fuel_reserve/set_water_target delegieren jetzt
+-- vollstaendig an das echte, require()-bare master/config_edits.lua
+-- (require_applied=true, message_id-Tracking je Ziel) statt Command-
+-- Versand direkt selbst zu implementieren -- dieser Test extrahiert
+-- weiterhin den echten Funktionsliteral, treibt ihn aber jetzt gegen das
+-- echte config_edits-Modul statt einer inline nachgebauten Schleife.
 
 local REPO = os.getenv("REPO_ROOT") or "."
+package.path = table.concat({ REPO .. "/xreactor/?.lua", REPO .. "/xreactor/?/init.lua", package.path }, ";")
+local config_edits = require("master.config_edits")
+-- Die extrahierten Funktionsliterale (siehe fuel_src/water_src unten)
+-- referenzieren "config_edits" als freie Variable -- load() ohne
+-- expliziten env-Parameter loest das ueber die globale Umgebung auf, nicht
+-- ueber lokale Variablen dieser Datei.
+_G.config_edits = config_edits
+-- Ebenso referenziert der extrahierte Funktionsliteral "log" (das lokale
+-- log() aus runtime_loop.lua) als freie Variable.
+_G.log = function() end
 
 local function read_file(p)
   local f = assert(io.open(p, "r"))
@@ -44,14 +64,17 @@ local constants = {
 local function make_runtime(nodes)
   local sent = {}
   local runtime = {
-    state = { nodes = nodes },
+    state = { nodes = nodes, config_edits = {} },
     refs = {
       comms = {
-        send_command = function(self, id, payload)
-          table.insert(sent, { id = id, payload = payload })
+        send_command = function(self, id, payload, opts)
+          local msg_id = "MSG-" .. (#sent + 1)
+          table.insert(sent, { id = id, payload = payload, opts = opts })
+          return { message = { message_id = msg_id } }
         end,
       },
     },
+    log = function() end,
   }
   return runtime, sent
 end
@@ -99,7 +122,7 @@ do
 
   local ok, err = wrapper.set_fuel_reserve(1000)
   check(ok == false, "set_fuel_reserve should fail when no FUEL node exists")
-  check(err == "kein FUEL-Node gefunden", "error message should match (got " .. tostring(err) .. ")")
+  check(err == "kein Node mit Rolle FUEL-NODE gefunden", "error message should match (got " .. tostring(err) .. ")")
   check(#sent == 0, "no send_command call expected")
 end
 
@@ -146,7 +169,7 @@ do
 
   local ok, err = wrapper.set_water_target(50)
   check(ok == false, "set_water_target should fail when no WATER node exists")
-  check(err == "kein WATER-Node gefunden", "error message should match (got " .. tostring(err) .. ")")
+  check(err == "kein Node mit Rolle WATER-NODE gefunden", "error message should match (got " .. tostring(err) .. ")")
   check(#sent == 0, "no send_command call expected")
 end
 

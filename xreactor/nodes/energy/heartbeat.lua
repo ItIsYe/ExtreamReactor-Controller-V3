@@ -12,6 +12,25 @@
 -- sie mitverzoegerte. "COMMS/UI/Telemetry/Discovery bleiben in getrennten
 -- Schedulergruppen" -- dieser (garantiert nie blockierende) Thread ist
 -- jetzt ihre alleinige periodische Tick-Quelle.
+--
+-- Fix (2026-07-17): CRITICAL (ENERGY-P1, Abschnitt 15). Dieser Thread
+-- pflegte bisher eine EIGENE, private "last_heartbeat_ts"-Kopie im ctx
+-- (per make_hb_ctx() mit 0 initialisiert), komplett unabhaengig von
+-- hb_state.last_ts in nodes/energy/main.lua (der Quelle, die auch der
+-- Matrix-Thread ueber send_heartbeat_if_due() prueft). Zwei getrennte
+-- Zeitquellen fuer denselben Zweck driften zwangslaeufig auseinander --
+-- z.B. sofort nach dem Start: main.lua sendet bereits VOR dem Betreten
+-- von parallel.waitForAny() einen initialen Heartbeat (setzt hb_state.
+-- last_ts), aber die private Kopie hier startete unveraendert bei 0 --
+-- ein frueh eintreffendes modem_message-Event wertete "now - 0 >=
+-- interval" sofort als faellig und loeste einen unnoetigen Zusatz-Send
+-- aus, obwohl gerade erst gesendet worden war. Ausserdem sendete der
+-- Timer-Pfad bisher UNBEDINGT (ohne jede Faelligkeitspruefung), selbst
+-- wenn der Matrix-Thread kurz zuvor bereits ueber send_heartbeat_if_due()
+-- gesendet hatte. Jetzt: kein privater Zaehler mehr -- ctx.send_heartbeat_
+-- if_due() (dieselbe Funktion, dieselbe hb_state.last_ts-Quelle wie der
+-- Matrix-Thread) gated JEDEN Sendeversuch aus diesem Thread, egal ob
+-- Timer- oder Event-ausgeloest.
 
 local M = {}
 
@@ -26,29 +45,33 @@ local M = {}
 --                             wird periodisch UND bei UI-/Key-Events geticked)
 --   ctx.now_ms()           — aktuelle Zeit in ms
 --   ctx.heartbeat_interval_ms() — Intervall in ms
---   ctx.send_heartbeat()   — sendet Heartbeat (unbedingt)
+--   ctx.send_heartbeat_if_due(now) — sendet Heartbeat NUR wenn faellig
+--                             (geteilte last_ts-Quelle, siehe main.lua)
+--   ctx.get_last_heartbeat_ts() — letzter tatsaechlicher Sendezeitpunkt
+--                             (geteilte Quelle, nur fuer die Verzoegerungs-
+--                             Warnung gelesen -- keine eigene Kopie)
 --   ctx.tick_interval_s    — periodisches services:tick()-Intervall (Sekunden)
 function M.run(ctx)
-  local function should_send()
+  -- Sendet den Heartbeat nur, wenn er gemaess der GETEILTEN last_ts-Quelle
+  -- tatsaechlich faellig ist (siehe ctx.send_heartbeat_if_due()) -- egal ob
+  -- vom Timer oder von einem modem_message-Event ausgeloest. Kein eigener,
+  -- privater Faelligkeits-/Zeitstempel-Zustand mehr in diesem Thread.
+  local function maybe_heartbeat()
     local now = ctx.now_ms()
     local interval = ctx.heartbeat_interval_ms()
-    return (now - (ctx.last_heartbeat_ts or 0)) >= interval
-  end
-
-  local function do_heartbeat()
-    local now = ctx.now_ms()
-    local interval = ctx.heartbeat_interval_ms()
-    -- Verzögerungs-Warnung
-    if (ctx.last_heartbeat_ts or 0) > 0 then
-      local delayed = now - ctx.last_heartbeat_ts
+    -- Verzögerungs-Warnung (gegen den letzten TATSAECHLICHEN Send, nicht
+    -- gegen eine private Kopie)
+    local last = ctx.get_last_heartbeat_ts()
+    if last > 0 then
+      local delayed = now - last
       if delayed > interval * 2 and (now - (ctx.last_heartbeat_warn_ts or 0)) >= interval * 2 then
         ctx.log("Heartbeat tick delayed by " .. delayed .. "ms (interval=" .. interval .. "ms)", "WARN")
         ctx.last_heartbeat_warn_ts = now
       end
     end
-    ctx.send_heartbeat(now)
-    if ctx.comms then pcall(ctx.comms.tick, ctx.comms, now) end
-    ctx.last_heartbeat_ts = now
+    local sent = ctx.send_heartbeat_if_due(now)
+    if sent and ctx.comms then pcall(ctx.comms.tick, ctx.comms, now) end
+    return sent
   end
 
   local function tick_services()
@@ -71,7 +94,7 @@ function M.run(ctx)
       return "terminate"
     elseif ev == "modem_message" then
       ctx.comms:handle_event(event)
-      if should_send() then do_heartbeat() end
+      maybe_heartbeat()
     elseif ev == "monitor_touch" or ev == "mouse_click" then
       -- UI-Touch weiterleiten
       if ctx.devices and ctx.devices.monitor and ctx.ui_state and ctx.ui_state.router then
@@ -85,7 +108,7 @@ function M.run(ctx)
     elseif ev == "key" then
       ctx.services:tick(nil, event)
     elseif ev == "timer" and event[2] == hb_timer then
-      do_heartbeat()
+      maybe_heartbeat()
       hb_timer = os.startTimer(ctx.heartbeat_interval_ms() / 1000)
     elseif ev == "timer" and event[2] == svc_timer then
       tick_services()

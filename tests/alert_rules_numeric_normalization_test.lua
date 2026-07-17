@@ -17,7 +17,7 @@ local ok, alerts_or_err = pcall(function()
     nodes = {
       {
         id = 'RT-1',
-        role = 'RT_NODE',
+        role = require('shared.constants').roles.RT_NODE,
         steam = '10000',
         reactors = {
           { id = 'BigReactors-Reactor_4', steam_production = '7500', rods_level = 70 },

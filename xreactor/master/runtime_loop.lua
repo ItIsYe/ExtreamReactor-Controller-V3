@@ -74,6 +74,7 @@ local function run_master()
   local updates_ui          = require("master.ui.updates")
   local system_map_ui       = require("master.ui.system_map")
   local config_editor_ui    = require("master.ui.config_editor")
+  local config_edits        = require("master.config_edits")
   local multiview_ui        = require("master.ui.multiview")
   local ui_controller_lib   = require("master.ui_controller")
   local ui_diagnostics      = require("master.ui_diagnostics")
@@ -119,11 +120,39 @@ local function run_master()
   runtime.mark_rt_sync_dirty  = mark_rt_sync_dirty
   runtime.flush_rt_sync_queue = flush_rt_sync_queue
 
+  -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 10). Zielauswahl und zuletzt
+  -- bestaetigter Wert je Config-Editor-Einstellung werden in der bereits
+  -- geschuetzten Nutzerconfig (/xreactor/config/master.lua, siehe
+  -- GLOBAL-P0-Fix oben) abgelegt -- ueberlebt Neustarts und Auto-Updates,
+  -- analog zu PEAK/IDLE-Schwellwerten weiter unten.
+  runtime.state.config_edits = {}
+  for key in pairs(config_edits.SETTINGS) do
+    local target = config["config_edit_target_" .. key]
+    local confirmed = config["config_edit_confirmed_" .. key]
+    runtime.state.config_edits[key] = {
+      target = type(target) == "string" and target or "ALL",
+      confirmed_value = confirmed,
+    }
+  end
+  local function persist_config_edits()
+    local fields = {}
+    for key, st in pairs(runtime.state.config_edits) do
+      fields["config_edit_target_" .. key] = st.target
+      if st.confirmed_value ~= nil then
+        fields["config_edit_confirmed_" .. key] = st.confirmed_value
+      end
+    end
+    ui_controller_lib.persist_master_settings(fields)
+  end
+  runtime.persist_config_edits = persist_config_edits
+
   -- Init
   local recovery_status = bootstrap.get_recovery_status and bootstrap.get_recovery_status() or nil
   init_runtime.run({
     config = config, utils = utils, constants = constants, health = health,
     node_id = node_id, layout_config_path = runtime.tuning.layout_config_path,
+    config_edits_state = runtime.state.config_edits, persist_config_edits = persist_config_edits,
     monitor_manager = monitor_manager, multiview_ui = multiview_ui,
     overview_ui = overview_ui, energy_ui = energy_ui, rt_ui = rt_ui,
     resources_ui = resources_ui, alerts_ui = alerts_ui, alarms_ui = alarms_ui,
@@ -159,52 +188,43 @@ local function run_master()
     get_critical_blink_until = function() return runtime.state.critical_blink_until end,
     get_rt_global_off_hold   = function() return runtime.state.rt_global_off_hold end,
     set_rt_global_off_hold   = function(v) profile_ops.set_rt_global_hold(runtime, v) end,
-    -- Feature (2026-07-02): Config-Editor am Monitor. Sendet SET_RESERVE/
-    -- SET_TARGET Commands an ALLE FUEL/WATER-Nodes (analog zu
-    -- set_reactor_fill_target unten) — bei mehreren Nodes derselben Rolle
-    -- erhalten alle denselben Wert statt nur ein nicht-deterministisch
-    -- ausgewaehlter erster Node. runtime.state.auto_update_enabled ist rein
-    -- lokal (kein Command noetig, jeder Node liest sein eigenes
-    -- config/remote_update.lua — echtes Verteilen dieser Einstellung an
-    -- alle Nodes ist eine spaetere Erweiterung).
+    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 10). Vorher sendeten diese drei
+    -- Setter IMMER an ALLE Nodes der Rolle, forderten kein
+    -- require_applied an und der Config-Editor uebernahm den neuen Wert
+    -- sofort optisch, unabhaengig vom tatsaechlichen Ergebnis. Delegiert
+    -- jetzt vollstaendig an master/config_edits.lua: ALLE oder eine
+    -- konkrete, dort ausgewaehlte Node-ID, mit Applied-ACK-Tracking je
+    -- Ziel; der angezeigte Wert (siehe get_config_edit_model unten)
+    -- uebernimmt den neuen Wert erst, wenn ALLE angeschriebenen Ziele
+    -- APPLIED gemeldet haben.
     set_fuel_reserve = function(amount)
-      local sent_count = 0
-      for id, node in pairs(runtime.state.nodes or {}) do
-        if node.role == constants.roles.FUEL_NODE then
-          runtime.refs.comms:send_command(id, { target = constants.command_targets.SET_RESERVE, value = amount })
-          sent_count = sent_count + 1
-        end
-      end
-      if sent_count == 0 then return false, "kein FUEL-Node gefunden" end
-      return true, sent_count
+      return config_edits.send_edit(runtime.state.config_edits, "fuel_reserve", amount,
+        { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
     end,
     set_water_target = function(amount)
-      local sent_count = 0
-      for id, node in pairs(runtime.state.nodes or {}) do
-        if node.role == constants.roles.WATER_NODE then
-          runtime.refs.comms:send_command(id, { target = constants.command_targets.SET_TARGET, value = amount })
-          sent_count = sent_count + 1
-        end
-      end
-      if sent_count == 0 then return false, "kein WATER-Node gefunden" end
-      return true, sent_count
+      return config_edits.send_edit(runtime.state.config_edits, "water_target", amount,
+        { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
     end,
     -- Feature (2026-07-06): Zielwert (0.0-1.0) fuer den internen Dampf-
-    -- Fuellstand bei individueller Pro-Reaktor-Regelung. Wie
-    -- set_fuel_reserve/set_water_target oben wird dieser Wert an ALLE
-    -- passenden Nodes gesendet — es koennen mehrere unabhaengige
-    -- RT-Nodes existieren, von denen mehrere jeweils >1 Reaktor haben
-    -- koennten, und alle sollen denselben Zielwert nutzen.
+    -- Fuellstand bei individueller Pro-Reaktor-Regelung.
     set_reactor_fill_target = function(value)
-      local sent_count = 0
-      for id, node in pairs(runtime.state.nodes or {}) do
-        if node.role == constants.roles.RT_NODE then
-          runtime.refs.comms:send_command(id, { target = "SET_REACTOR_FILL_TARGET", value = value })
-          sent_count = sent_count + 1
-        end
-      end
-      if sent_count == 0 then return false, "kein RT-Node gefunden" end
-      return true, sent_count
+      return config_edits.send_edit(runtime.state.config_edits, "reactor_fill_target", value,
+        { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
+    end,
+    -- Fix (2026-07-17): MASTER-P1. Zielauswahl (ALLE -> Node1 -> ... ->
+    -- ALLE) je Einstellung, per Touch im Config-Editor ausloesbar (siehe
+    -- ui/config_editor.lua). Persistiert sofort, damit die Auswahl einen
+    -- Neustart uebersteht.
+    cycle_config_edit_target = function(key)
+      local new_target = config_edits.cycle_target(runtime.state.config_edits, key, runtime.state.nodes, constants)
+      persist_config_edits()
+      return new_target
+    end,
+    -- Liefert das UI-Modell (bestaetigter Wert/Zielauswahl/laufender
+    -- Edit-Fortschritt) fuer eine Config-Editor-Einstellung.
+    get_config_edit_model = function(key, fallback_value)
+      return config_edits.model_for(runtime.state.config_edits, key, fallback_value)
     end,
     get_auto_update_enabled = function() return runtime.state.auto_update_enabled ~= false end,
     set_auto_update_enabled = function(v) runtime.state.auto_update_enabled = v end,

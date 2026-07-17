@@ -1,6 +1,7 @@
 local M = {}
 local rt_sync = require("master.rt_sync")
 local support_status = require("master.support_status")
+local config_edits_lib = require("master.config_edits")
 
 function M.new(opts)
   local constants = assert(opts.constants, "constants required")
@@ -13,6 +14,12 @@ function M.new(opts)
   local add_alarm = assert(opts.add_alarm, "add_alarm required")
   local master_time_label = assert(opts.master_time_label, "master_time_label required")
   local log = assert(opts.log, "log required")
+  -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 10). Optional -- nur gesetzt vom
+  -- echten Master-Boot (runtime_loop.lua), damit Tests, die M.new() ohne
+  -- Config-Editor-Belange aufrufen, unveraendert funktionieren.
+  local config_edits_state = opts.config_edits_state
+  local on_config_edit_change = opts.on_config_edit_change
 
 
   local function format_reasons(reason_set)
@@ -480,6 +487,18 @@ function M.new(opts)
         end
       end
       mark_rt_sync_dirty(nodes[id], "status")
+    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 10). ACK_DELIVERED fiel bisher
+    -- komplett durch diese Kette in den "else"-Zweig und loeste bei JEDEM
+    -- gesendeten Command (nicht nur Config-Editor-Edits) einen falschen
+    -- "Unknown message type ACK_DELIVERED"-WARN-Alarm aus. Jetzt explizit
+    -- behandelt: markiert einen laufenden Config-Editor-Edit-Ziel-Eintrag
+    -- als DELIVERED (siehe master/config_edits.lua), sonst No-Op.
+    elseif message.type == constants.message_types.ACK_DELIVERED then
+      if config_edits_state then
+        local changed = config_edits_lib.handle_ack_delivered(config_edits_state, message)
+        if changed and on_config_edit_change then on_config_edit_change() end
+      end
     elseif message.type == constants.message_types.ACK_APPLIED then
       local result = message.payload and message.payload.result or {}
       local redundant_setpoint_ack = ack_matches_last_setpoints(nodes[id], result)
@@ -517,6 +536,13 @@ function M.new(opts)
         mark_rt_sync_dirty(nodes[id], "ack_applied")
       else
         log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
+      end
+      -- Fix (2026-07-17): MASTER-P1 (Abschnitt 10). Korreliert dieses
+      -- ACK_APPLIED zusaetzlich gegen einen evtl. laufenden Config-Editor-
+      -- Edit (per message_id/ack_for) -- siehe master/config_edits.lua.
+      if config_edits_state then
+        local changed = config_edits_lib.handle_ack_applied(config_edits_state, message)
+        if changed and on_config_edit_change then on_config_edit_change() end
       end
     elseif message.type == constants.message_types.ALERT_SUMMARY then
       -- Alert summary payload can be routed to the alert service in later iterations.

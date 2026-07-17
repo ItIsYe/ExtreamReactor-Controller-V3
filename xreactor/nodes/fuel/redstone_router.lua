@@ -345,7 +345,7 @@ function M:_set_valve(valve, high)
         command_id = command_id, dst = w.node_id, side = side, high = high,
         integrator = valve.integrator, sent_ts = message.ts, retries = 0,
       }
-      return true
+      return true, command_id
     end
     if w and w.wrapped then
       local ok = safe_call(w.wrapped, "setOutput", side, high)
@@ -405,10 +405,10 @@ function M:_request_valve_batch(entries)
     local key = valve_key(entry.integrator, entry.side)
     local w = entry.integrator and self._state.integrators[entry.integrator] or nil
     local needs_ack = w and w.network == true
-    local ok = self:_set_valve({ side = entry.side, integrator = entry.integrator }, entry.high)
+    local ok, command_id = self:_set_valve({ side = entry.side, integrator = entry.integrator }, entry.high)
     pending[key] = {
       integrator = entry.integrator, side = entry.side, high = entry.high,
-      needs_ack = needs_ack, sync_ok = ok,
+      needs_ack = needs_ack, sync_ok = ok, command_id = command_id,
     }
   end
   return pending
@@ -426,6 +426,25 @@ end
 -- acks() loescht es dann aus pending_valve_acks OHNE confirmed_valve_
 -- state zu setzen, was hier als "nicht pending UND nicht bestaetigt"
 -- erkannt wird).
+--
+-- Fix (2026-07-17): KRITISCHER SAFETYFEHLER (ROUTER-P0, siehe docs/CODING_
+-- AI_OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 17). confirmed_valve_
+-- state[key] wird NIE geloescht und ueberlebt beliebig viele nachfolgende
+-- Transaktionen fuer denselben Ventilschluessel. Vorher pruefte dieser
+-- Check nur noch "confirmed.applied==true and confirmed.high==entry.high"
+-- OHNE zu wissen, zu WELCHEM Kommando dieser Bestaetigungszustand gehoerte.
+-- Szenario: ein Ventil wurde frueher fuer ein AELTERES Kommando bestaetigt
+-- BLOCKED; ein NEUES BLOCKED-Kommando (z.B. Phase-1 der naechsten
+-- Transaktion) wird gesendet, aber ALLE seine ACKs gehen verloren --
+-- check_pending_acks() gibt nach VALVE_ACK_MAX_RETRIES auf und loescht den
+-- pending-Eintrag OHNE confirmed_valve_state zu aktualisieren. Der alte,
+-- zufaellig passende Bestaetigungszustand blieb dann als (falscher) Beweis
+-- fuer das NEUE Kommando stehen -- die Transaktion konnte faelschlich als
+-- bestaetigt gelten und exportieren, obwohl das aktuelle Kommando nie
+-- bestaetigt wurde. Jetzt wird zusaetzlich verlangt, dass der bestaetigte
+-- Zustand zur AKTUELL angeforderten command_id gehoert -- ein alter
+-- Bestaetigungszustand (andere/keine command_id) zaehlt nicht mehr als
+-- Beweis fuer ein neues Kommando.
 function M:_check_valve_batch(pending)
   local waiting = false
   for key, entry in pairs(pending) do
@@ -434,7 +453,8 @@ function M:_check_valve_batch(pending)
       local confirmed = self._state.confirmed_valve_state and self._state.confirmed_valve_state[key]
       if still_pending then
         waiting = true
-      elseif not (confirmed and confirmed.applied == true and confirmed.high == entry.high) then
+      elseif not (confirmed and confirmed.applied == true and confirmed.high == entry.high
+          and entry.command_id ~= nil and confirmed.command_id == entry.command_id) then
         return "failed", key
       end
     elseif not entry.sync_ok then
@@ -782,6 +802,7 @@ function M:handle_valve_ack(message)
       pending[key] = nil
       self._state.confirmed_valve_state = self._state.confirmed_valve_state or {}
       self._state.confirmed_valve_state[key] = {
+        command_id = message.command_id,
         applied = message.applied == true,
         high = message.high,
         error = message.error,

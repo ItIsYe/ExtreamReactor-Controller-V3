@@ -296,14 +296,41 @@ end
 -- muss (dieselbe Marge, die disk_for_role() bereits als "gesund" ansieht).
 local RECLAIM_TARGET_BYTES = MIN_FREE_BYTES * 4
 
-local function reclaim_oldest(root, mount, needed)
+-- Fix (2026-07-17): CRITICAL (LOG-P0, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 22). free_space() cached ihren
+-- Rueckgabewert pro Mount fuer FREE_SPACE_CACHE_TTL (2s, siehe dortiger
+-- Kommentar). Diese Schleife prueft vor JEDER Loeschung denselben
+-- gecachten Wert, ohne ihn nach einer erfolgreichen Loeschung zu
+-- invalidieren -- laeuft der gesamte Reclaim-Lauf (mehrere synchron
+-- aufeinanderfolgende Loeschungen) innerhalb der Cache-TTL ab (in der
+-- Praxis praktisch immer, da hier keine echte I/O-Wartezeit zwischen den
+-- Loeschungen liegt), sieht die Schleife bei JEDER Iteration weiterhin
+-- den ALTEN, niedrigen Free-Space-Wert und loescht munter weiter, obwohl
+-- nach der ersten Loeschung bereits genug Platz frei sein kann. Die
+-- vorherige pauschale Komplettloeschung wurde zwar entfernt (siehe
+-- wipe_disk()-Fix-Kommentar oben), aber im Extremfall konnte diese
+-- Schleife trotzdem ALLE aufgelisteten Dateien entfernen. Jetzt wird der
+-- Cache-Eintrag fuer "mount" nach jeder Loeschung explizit invalidiert,
+-- damit die naechste free_space()-Abfrage tatsaechlich neu misst.
+-- Zusaetzlich: "exclude_path" schuetzt die gerade tatsaechlich offene
+-- Zieldatei (der Log-Collector darf nie die Datei loeschen, die er im
+-- selben Schreibversuch gerade befuellen will) und ein hartes Limit pro
+-- Lauf begrenzt den maximalen Schaden, selbst wenn die Free-Space-Messung
+-- aus einem anderen Grund weiterhin falsch waere.
+local RECLAIM_MAX_FILES_PER_RUN = 64
+
+local function reclaim_oldest(root, mount, needed, exclude_path)
   local files = list_files_recursive(root)
   table.sort(files, function(a, b) return file_mtime(a) < file_mtime(b) end)
   local removed = 0
   for _, path in ipairs(files) do
     if free_space(mount) >= needed then break end
-    safe_delete(path)
-    removed = removed + 1
+    if removed >= RECLAIM_MAX_FILES_PER_RUN then break end
+    if path ~= exclude_path then
+      safe_delete(path)
+      free_space_cache[mount] = nil
+      removed = removed + 1
+    end
   end
   stats.wiped = stats.wiped + removed
   return removed
@@ -579,8 +606,23 @@ end
 -- Fix (2026-07-13): LOG-P1. Vorwaertsdeklaration, da write_log() weiter
 -- unten flush_bucket() bereits aufruft (ERROR/CRITICAL-Sofort-Flush),
 -- flush_bucket() selbst aber erst danach definiert wird.
+--
+-- Fix (2026-07-17): CRITICAL (LOG-P0). send_ack fehlte in dieser
+-- Vorwaertsdeklaration -- flush_bucket() (als Funktionsliteral hier oben
+-- KOMPILIERT, noch bevor "local function send_ack(...)" weiter unten im
+-- Chunk ueberhaupt existierte) rief send_ack(payload, "written") auf. Lua
+-- loest freie Variablen beim Kompilieren des Funktionsliterals anhand des
+-- zu diesem Zeitpunkt sichtbaren Scopes auf, nicht beim spaeteren Ausfuehren
+-- -- ohne eine bereits sichtbare lokale "send_ack" fiel dieser Aufruf auf
+-- eine GLOBALE Variable dieses Namens zurueck, die nie gesetzt wurde. Jeder
+-- einzelne erfolgreiche flush_bucket()-Durchlauf stuerzte dadurch
+-- deterministisch mit "attempt to call global 'send_ack' (a nil value)" ab
+-- (beobachtet in xreactor_logs/log_collector/*.log: "loop crashed on
+-- event=timer" im Sekundentakt) -- kurz nach dem Start, sobald der erste
+-- Log-Puffer tatsaechlich geflusht wurde.
 local flush_bucket
 local flush_due
+local send_ack
 local FLUSH_LINES = 8
 local FLUSH_INTERVAL_MS = 200
 local MAX_PENDING_LINES_PER_PATH = 128
@@ -636,7 +678,7 @@ local function write_log(payload)
   end
 
   if free_space(disk.mount) < MIN_FREE_BYTES then
-    local removed = reclaim_oldest(disk.root, disk.mount, RECLAIM_TARGET_BYTES)
+    local removed = reclaim_oldest(disk.root, disk.mount, RECLAIM_TARGET_BYTES, path)
     if removed > 0 then
       diag("disk full: removed " .. tostring(removed) .. " oldest log file(s) on " .. tostring(disk.mount))
     end
@@ -701,7 +743,7 @@ flush_bucket = function(path)
     if lower:find("out of space", 1, true) or lower:find("no space", 1, true) then
       local root  = bucket.disk and bucket.disk.root or fs.getDir(path)
       local mount = bucket.disk and bucket.disk.mount or root
-      local removed = reclaim_oldest(root, mount, RECLAIM_TARGET_BYTES)
+      local removed = reclaim_oldest(root, mount, RECLAIM_TARGET_BYTES, path)
       diag("write out-of-space: removed " .. tostring(removed) .. " oldest log file(s), retry")
       ok, err = pcall(function()
         local handle = fs.open(path, "a")
@@ -859,7 +901,7 @@ local function refresh_modems(force)
   stats.modem_refreshes = stats.modem_refreshes + 1
 end
 
-local function send_ack(payload, status)
+send_ack = function(payload, status)
   if not payload.ack or not payload.event_id then return end
   local ack = {
     type = "LOG_ACK",

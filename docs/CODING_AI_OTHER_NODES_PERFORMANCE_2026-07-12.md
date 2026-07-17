@@ -33,18 +33,18 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Auto-Update | **KRITISCH TEILWEISE** | kein transaktionaler Completion-Marker, Runtime läuft beim Reinstall weiter, kritische FS-Fehler werden teilweise ignoriert |
+| Installer / Auto-Update | **KRITISCH TEILWEISE** | kritische FS-Ergebnisse werden jetzt geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5 behoben); kein transaktionaler Completion-Marker, Runtime läuft beim Reinstall weiter |
 | Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
-| MASTER | **TEILWEISE OFFEN** | Config-Editor meldet Werte optimistisch als übernommen; kein Applied-ACK je Zielnode und keine Einzelnode-Auswahl |
-| RT | **KRITISCH TEILWEISE** | neuer Startup-Pfad besitzt reale Context-/Einheitenfehler; Modul-State-Update ist nicht verdrahtet |
-| ENERGY | **TEILWEISE BEHOBEN** | Schedulergruppen getrennt, Heartbeat besitzt aber weiterhin zwei Zeitquellen |
-| WATER | **WEITGEHEND UMGESETZT** | Persistenzfehler werden geloggt, Command kann trotzdem als angewendet bestätigt werden |
-| FUEL | **KRITISCH TEILWEISE** | Config/Async-Lifecycle behoben; Router kann aktuellen ACK mit altem bestätigten Zustand verwechseln |
-| REPROCESSOR | **KRITISCH TEILWEISE** | Standby-Cancel behoben; Wireless-VALVE-Discovery ist nicht verdrahtet |
-| VALVE | **TEILWEISE BEHOBEN** | Retry behoben; Senderbindung standardmäßig aus und Sorter-Reconnect unvollständig |
-| LOG Collector | **KRITISCH TEILWEISE** | Probe-Wipe behoben; Reclaim kann wegen stale Free-Space-Cache zu viele Dateien löschen |
-| Tests / CI | **KRITISCH TEILWEISE** | 66 Lua- und 6 Python-Tests ausgeschlossen; aktueller Head ohne nachgewiesenen grünen Lauf |
+| MASTER | **WEITGEHEND UMGESETZT** | Config-Editor: Einzelnode-/Alle-Auswahl, `require_applied` und Applied-ACK-Tracking je Ziel behoben (Abschnitt 10) |
+| RT | **WEITGEHEND UMGESETZT** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11), Rampendauer-Einheitenfehler (Abschnitt 12) und fehlende `update_module_states()`-Verdrahtung (Abschnitt 13) behoben; Persistenz-/Observability-Restpunkte (Abschnitt 14) weiterhin offen |
+| ENERGY | **WEITGEHEND UMGESETZT** | Schedulergruppen getrennt, Heartbeat-Zeitquelle konsolidiert (Abschnitt 15 behoben) |
+| WATER | **WEITGEHEND UMGESETZT** | Persistenzresultat wird jetzt ehrlich im Command-Ergebnis abgebildet (Abschnitt 16 behoben) |
+| FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
+| REPROCESSOR | **WEITGEHEND UMGESETZT** | Standby-Cancel und Wireless-VALVE-Discovery behoben (Abschnitt 20) |
+| VALVE | **WEITGEHEND UMGESETZT** | Retry, Senderbindung (Auto-Pairing) und Sorter-Reconnect behoben (Abschnitt 21); Statusfelder (`actuator_online` etc.) bleiben als Observability-Erweiterung offen |
+| LOG Collector | **WEITGEHEND UMGESETZT** | Probe-Wipe (Abschnitt 16), stale Free-Space-Cache im Reclaim und `send_ack`-Absturz bei jedem Flush (beide Abschnitt 22) behoben; Rotation/Datenhaltungsregeln (Abschnitt 23) weiterhin offen |
+| Tests / CI | **KRITISCH TEILWEISE** | 63 Lua- und 6 Python-Tests ausgeschlossen (drei echte Fehler/Testbugs am 2026-07-17 behoben, siehe Abschnitt 24); aktueller Head ohne nachgewiesenen grünen Lauf |
 | Dokumentation | **AKTUELL** | diese Datei ist die einzige aktuelle allgemeine Auditquelle |
 
 ## Produktionsurteil
@@ -55,12 +55,12 @@ Die kritischsten aktuellen Risiken sind:
 
 1. Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.
 2. Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.
-3. RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.
-4. `module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.
-5. Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.
-6. REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.
-7. LOG-Reclaim prüft nach Löschungen einen gecachten Free-Space-Wert und kann unnötig viele Dateien entfernen.
-8. 72 Tests bleiben ausgeschlossen; ein grüner Lauf des geprüften Heads ist nicht nachgewiesen.
+3. ~~RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11 und Abschnitt 12).
+4. ~~`module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13).
+5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
+6. ~~REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20).
+7. ~~LOG-Reclaim prüft nach Löschungen einen gecachten Free-Space-Wert und kann unnötig viele Dateien entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22).
+8. 69 Tests bleiben ausgeschlossen (drei am 2026-07-17 behoben, siehe Abschnitt 24); ein grüner Lauf des geprüften Heads ist nicht nachgewiesen.
 
 ---
 
@@ -72,6 +72,7 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 
 - Manifest und heruntergeladene Dateien verwenden im modularen Installer denselben aufgelösten Source-Ref.
 - `installer/stage.lua` prüft nach jedem Write Größe und CRC32.
+- `installer/stage.lua`s `M.write()` löscht die alte Datei nicht mehr ungeprüft, wenn der Backup-Move fehlschlägt; alle kritischen FS-Operationen in `installer/init.lua` und im tatsächlich ausgeführten Live-Installflow von `/installer` brechen bei Fehlschlag jetzt kontrolliert ab (Abschnitt 5).
 - automatische Speicherbereinigung löscht nicht mehr pauschal `/xreactor_logs`.
 - REPROCESSOR-`feed_router.lua` besitzt jetzt den Rollen-Scope `REPROCESSING`.
 - `optional/speaker_alarm.lua` besitzt einen Rollen-Scope.
@@ -221,28 +222,39 @@ Jede Rolle benötigt einen expliziten Quiesce-Handler. Für FUEL/REPROCESSOR/VAL
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)** — mit Ausnahme des letzten Punkts ("Fehlerpfad muss Journal/Recoverymarker aktualisieren"), der zu #42 (transaktionales Installjournal) gehört und dort behandelt wird.
 
-Mehrere kritische Operationen sind weiterhin als `pcall(...)` ohne anschließende Ergebnisprüfung ausgeführt, unter anderem:
+Bestätigt in allen drei Codepfaden: `xreactor/installer/stage.lua`s `M.write()`, `xreactor/installer/init.lua` und dem eingebetteten `stage_src`/`init_src`-Text sowie dem tatsächlich ausgeführten Live-Installflow von `/installer` (der Monolith enthält KEINE zwei redundant ausgeführten Installflows, wie zunächst vermutet — nur der Block ab `-- ── Alte Installation löschen` gegen Zeilenende läuft wirklich; der scheinbar identische frühere Block ist Teil des nur als Text eingebetteten `init_src`, das lediglich für die spätere On-Disk-Ablage von `xreactor/installer/init.lua` verwendet wird).
 
-- Löschen beziehungsweise Erzeugen des Installationsroots,
-- Teile des Minimal-Restores,
-- Schreiben von Rollen-/Feature-/Updaterconfig,
-- Schreiben des Startupwrappers.
+Zwei Fehlerklassen wurden bestätigt:
 
-Zusätzlich besitzt `stage.write()` noch einen unsicheren Fallback: Schlägt das Verschieben der alten Datei nach `.xr_prev` fehl, wird die alte Zieldatei gelöscht und der Lauf versucht trotzdem weiterzumachen.
+1. **Unsicherer Fallback in `stage.write()`**: Schlug das Verschieben der alten Datei nach `.xr_prev` fehl (`pcall(fs.move, ...)` lieferte `false`), wurde die alte Zieldatei trotzdem gelöscht ("als letzter Ausweg") und der Lauf machte weiter, als sei nichts geschehen. Schlug danach auch noch der finale `tmp -> path`-Move fehl, war die alte Datei unwiderruflich weg UND kein Backup vorhanden, aus dem `path` hätte zurückgeholt werden können — echter, irreversibler Datenverlust.
+2. **Ignorierte Rückgabewerte an 8+ Aufrufstellen**: `INSTALL_ROOT` löschen/neu anlegen, der Minimal-Restore-Loop (role.lua/remote_update.lua/node_id.txt), sowie die Schreibvorgänge für `optional_features.lua`, `role.lua`, `startup.lua` und `remote_update.lua` — jeweils als `pcall(...)` bzw. `stage_mod.write(...)` ohne Prüfung des Rückgabewerts. Ein Fehlschlag (z.B. kein Speicherplatz, schreibgeschützter Datenträger) blieb unbemerkt; die Installation lief mit einer teilweise/nicht angelegten Zielstruktur bzw. ganz ohne Rolle weiter.
 
-## Folge
+Fix:
 
-Der Installer kann nach einem fehlgeschlagenen Lösch-, Move-, Mkdir- oder Restore-Schritt fortfahren und später einen scheinbar erfolgreichen, aber unvollständigen Stand hinterlassen.
+- `stage.lua`s `M.write()`: die alte Datei wird nur noch gelöscht, wenn `fs.exists(backup)` nach dem Move tatsächlich bestätigt, dass sie am Backup-Pfad liegt (nicht mehr nur am `pcall`-Erfolg von `fs.move`). Schlägt der Backup-Move fehl, bricht `M.write()` sofort mit klarem Fehler ab, `path` bleibt unangetastet. Ebenso wird nach dem finalen `tmp -> path`-Move zusätzlich `fs.exists(path)` verifiziert, nicht nur der `pcall`-Erfolg.
+- `installer/init.lua` und der tatsächlich ausgeführte Installflow in `/installer`: alle 8 identifizierten Aufrufstellen prüfen jetzt das Ergebnis explizit und brechen bei Fehlschlag mit `error(..., 0)` ab (gleiches Muster wie das bereits vorhandene `stage_mod.install()`-Ergebnis-Check).
+- Die eingebetteten `stage_src`/`init_src`-Textkopien in `/installer` wurden identisch mitgezogen, damit sie nicht erneut von den echten `xreactor/installer/*.lua`-Dateien abdriften.
 
-## Verbindlicher Fix
+Pflicht-Tests:
+- `tests/installer_stage_write_backup_failure_test.lua` — treibt `stage.write()` mit einem gemockten `fs`, dessen `fs.move` beim Backup-Move (Ziel endet auf `.xr_prev`) einen Fehler wirft; bestätigt, dass die alte Datei erhalten bleibt, kein `.xr_tmp` zurückbleibt und ein klarer Fehler zurückkommt. Zusätzlich ein Sanity-Check, dass normale Writes weiterhin funktionieren.
+- `tests/installer_init_critical_write_abort_test.lua` — extrahiert die role.lua-Schreib- und INSTALL_ROOT-Neuanlage-Blöcke direkt per Marker aus dem echten `installer/init.lua`-Quelltext und führt sie isoliert mit gemocktem `stage_mod`/`fs` aus; bestätigt, dass ein Fehlschlag zum Abbruch führt.
+- `tests/installer_monolith_critical_write_abort_test.lua` — dieselbe Technik für den tatsächlich ausgeführten Live-Codepfad in `/installer`.
 
-- jede kritische FS-Operation muss explizit geprüft werden,
-- bei Fehler sofort abbrechen,
-- alte Datei niemals löschen, wenn das Backup nicht bestätigt vorhanden ist,
-- Restorewrites einzeln verifizieren,
-- Fehlerpfad muss Journal/Recoverymarker aktualisieren.
+Alle drei Tests wurden per `git stash` gegen den Vorfix-Code verifiziert (schlagen dort fehl, da der extrahierte/aufgerufene Code aus der jeweils aktuellen Datei kommt).
+
+## Folge (vor dem Fix)
+
+Der Installer konnte nach einem fehlgeschlagenen Lösch-, Move-, Mkdir- oder Restore-Schritt fortfahren und später einen scheinbar erfolgreichen, aber unvollständigen oder sogar datenverlustbehafteten Stand hinterlassen.
+
+## Verbindlicher Fix (umgesetzt, bis auf Journal-Punkt)
+
+- jede kritische FS-Operation muss explizit geprüft werden — **umgesetzt**,
+- bei Fehler sofort abbrechen — **umgesetzt**,
+- alte Datei niemals löschen, wenn das Backup nicht bestätigt vorhanden ist — **umgesetzt**,
+- Restorewrites einzeln verifizieren — **umgesetzt** (Minimal-Restore-Loop bricht jetzt pro Datei ab; der vollständige Config-Restore nach der Installation verifizierte bereits vorher byte-genau),
+- Fehlerpfad muss Journal/Recoverymarker aktualisieren — **nicht Teil dieses Fixes**, gehört zu #42.
 
 ---
 
@@ -336,27 +348,26 @@ Nodes prüfen nach ähnlichem Startdelay und danach in festen Intervallen. Ein d
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)** — auf explizite Nutzerfreigabe umgesetzt, nachdem dieser Punkt zuvor bewusst zurückgestellt worden war.
 
-Der Config-Editor ändert die lokal angezeigten Werte sofort nach dem Senden. Die Broadcastfunktionen senden FUEL-/WATER-/RT-Commands an alle Nodes, fordern aber kein `require_applied` an und warten nicht auf ein Ergebnis pro Zielnode.
+Bestätigt: Der Config-Editor änderte die lokal angezeigten Werte (`c.state.fuel_reserve_pct`/`water_target_pct`/`reactor_fill_target_pct`) sofort beim Touch, unabhängig vom tatsächlichen Ergebnis. Die drei Setter (`runtime_loop.lua`) sendeten IMMER an ALLE Nodes der jeweiligen Rolle, forderten kein `require_applied` an und die ausgehende `message_id` wurde nirgends festgehalten. `ACK_DELIVERED` war im gesamten Nachrichten-Dispatch (`message_handlers.lua`) unbehandelt und löste bei JEDEM gesendeten Command (nicht nur Config-Editor-Edits) einen falschen „Unknown message type ACK_DELIVERED“-Alarm aus. `ACK_APPLIED` aktualisierte zwar `nodes[id].last_command_result`, aber ausschließlich als EIN generischer Slot pro Node (von jedem Commandtyp geteilt, ohne Zuordnung zu einem konkreten Edit) — keine Aggregation über mehrere angeschriebene Ziele, kein Timeout-Pfad in die UI.
 
-MASTER speichert zwar eingehende `ACK_APPLIED`-Ergebnisse je Node, der Config-Editor verknüpft sie aber nicht mit dem gerade ausgelösten Edit.
+## Fix
 
-## Folge
+Neues, reines Datenmodul `master/config_edits.lua` ist jetzt die einzige Autorität für alle drei editierbaren Fernwerte (FUEL-Reserve, WATER-Target, RT-Fülstandsziel):
 
-- UI zeigt einen neuen Wert, obwohl ein Ziel ihn abgelehnt hat.
-- Teilfehler bei mehreren Nodes erscheinen als Gesamterfolg.
-- Offline-/stale Nodes werden nicht separat ausgewiesen.
-- keine eindeutige Command-ID-/Zielzuordnung im Editor.
+- **Zielauswahl:** `ALLE` oder eine konkrete Node-ID, per Touch auf das Zielfeld zyklisch umschaltbar (`cycle_target()`), persistiert in der bereits geschützten `/xreactor/config/master.lua` (überlebt Neustarts/Auto-Updates, über denselben Mechanismus wie PEAK/IDLE-Schwellwerte).
+- **`require_applied=true`** wird jetzt bei jedem Config-Editor-Command angefordert (`send_edit()`).
+- **Message-ID-Tracking je Ziel:** die von `comms:send_command()` zurückgegebene `message_id` wird pro angeschriebenem Node in `pending.targets[node_id]` festgehalten.
+- **Status pro Ziel:** `QUEUED` → `DELIVERED` (jetzt per explizit behandeltem `ACK_DELIVERED` statt des vorherigen spurious-WARN-Zweigs) → `APPLIED`/`REJECTED` (per `ACK_APPLIED`, korreliert über `message.ack_for` gegen die gespeicherte `message_id`) oder `TIMEOUT` (per `housekeeping.lua`s bereits bestehendem `consume_timeouts()`-Konsumenten, jetzt zusätzlich in `config_edits.handle_timeout()` gespeist).
+- **Angezeigter Wert:** `confirmed_value` wird ERST übernommen, wenn ALLE angeschriebenen Ziele `APPLIED` melden; bis dahin bleibt der alte bestätigte Wert sichtbar, ein laufender Edit erscheint als `PENDING`-Fortschritt (`x/y angewendet`) direkt in der WERT-Zeile der Karte. Ein Fehlschlag bei mindestens einem Ziel (`REJECTED`/`TIMEOUT`/Sendefehler) hält den alten Wert unverändert und markiert den Edit sichtbar als fehlgeschlagen (`FEHLER x/y`), statt ihn stillschweigend als Erfolg auszuweisen.
+- **Persistenz:** Zielauswahl UND zuletzt bestätigter Wert werden bei jeder Änderung in `/xreactor/config/master.lua` geschrieben und beim nächsten Boot wiederhergestellt.
 
-## Verbindlicher Fix
+Verdrahtung: `master/runtime_loop.lua` (Setter delegieren vollständig an `config_edits.send_edit()`, neue `cycle_config_edit_target()`/`get_config_edit_model()`-Calc-Funktionen), `master/message_handlers.lua` (neuer `ACK_DELIVERED`-Zweig, `ACK_APPLIED`-Zweig ruft zusätzlich `config_edits.handle_ack_applied()`), `master/housekeeping.lua` (`handle_command_timeouts()` ruft zusätzlich `config_edits.handle_timeout()`), `master/ui_controller.lua` (`config_editor_model` liest jetzt ausschließlich aus `get_config_edit_model()`, keine optimistische `c.state.*_pct`-Mutation mehr, neue `config_edit_target_cycle`-Action), `master/ui/config_editor.lua` (Zielname + Pending-Fortschritt in der bestehenden WERT-Zeile, kein Eingriff in das Karten-/Spaltenraster).
 
-- Auswahl `ALLE` oder konkrete Node-ID,
-- Command mit `requires_applied=true`,
-- ausgehende Message-/Command-ID speichern,
-- Status pro Ziel: `QUEUED`, `DELIVERED`, `APPLIED`, `REJECTED`, `TIMEOUT`,
-- lokalen angezeigten Sollwert erst nach Applied-ACK übernehmen oder klar als `PENDING` markieren,
-- Auswahl und letzter bestätigter Wert persistent speichern.
+## Pflicht-Test
+
+Vier neue Testdateien: `tests/master_config_edits_test.lua` (reine Logik von `config_edits.lua`: Zielzyklus, Senden an ALLE/einen konkreten/einen verschwundenen Node, Applied-/Rejected-/Timeout-Auflösung, Wertübernahme erst nach vollständiger Bestätigung), `tests/master_config_edit_ack_wiring_test.lua` (echte `message_handlers.lua`/`housekeeping.lua`-Verdrahtung: kein spurious-Alarm mehr bei `ACK_DELIVERED`, korrekte Korrelation über `ack_for`/`message_id`), `tests/master_ui_controller_config_edit_action_test.lua` (echtes `handle_action()`: liest den aktuellen Wert aus `get_config_edit_model()`, schreibt `c.state.*_pct` nicht mehr), sowie die aktualisierte `tests/master_runtime_loop_multi_node_reserve_target_test.lua` (bestehendes Broadcast-an-ALLE-Verhalten bleibt für die `ALL`-Zielauswahl erhalten). Verifiziert per `git stash`, dass alle vier Tests gegen den alten Code fehlschlagen.
 
 ---
 
@@ -364,47 +375,26 @@ MASTER speichert zwar eingehende `ACK_APPLIED`-Ergebnisse je Node, der Config-Ed
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-`module_lifecycle.start_module()` erwartet:
+Bestätigt: `module_lifecycle.lua` indizierte `ctx.TURBINE_MODE.RAMP` (zwei Stellen: `start_module()` und `apply_safe_controls()`), während `nodes/rt/main.lua`s echter `make_lifecycle_ctx()` nur `TURBINE_MODE = CONFIG.TURBINE_MODE_RAMP or "RAMP"` lieferte — einen String, keine Tabelle. `turbine_control.lua`s eigene, an vielen Stellen verwendete Konvention (`ctx.CONFIG.TURBINE_MODE_RAMP`, immer ein reiner String, z.B. `"RAMP"`, `"OVERSPEED_BRAKE"`, `"UP"`, `"DOWN"`) bestätigt: `ctrl.mode` ist im gesamten Produktionscode konsequent ein Skalar, niemals eine Tabelle — die Tabellenform in `module_lifecycle.lua` war der eigentliche Fehler, nicht der String in `main.lua`.
 
-```lua
-ctx.TURBINE_MODE.RAMP
-```
+Fix: `main.lua`s Feld wurde konsistent zu `TURBINE_MODE_RAMP` (weiterhin ein String) umbenannt — passend zur bereits etablierten Namenskonvention der übrigen flachen `make_lifecycle_ctx()`-Felder (`START_FLOW`, `RPM_TOL`). `module_lifecycle.lua` liest jetzt an beiden Stellen direkt `ctx.TURBINE_MODE_RAMP` statt `ctx.TURBINE_MODE.RAMP`. Die drei betroffenen Tests (`tests/rt_master_startup_end_to_end_test.lua`, `tests/rt_module_lifecycle_control_rod_caps_test.lua`, `tests/rt_module_lifecycle_safe_controls_test.lua`), die bisher jeweils einen eigenen, künstlichen Mock-Context mit der falschen Tabellenform (`TURBINE_MODE = { RAMP = 'RAMP' }`) bauten und die reale Produktionsabweichung dadurch nicht aufdeckten, wurden auf die korrekte Skalarform angepasst.
 
-Der echte Context aus `nodes/rt/main.lua` liefert jedoch:
+Pflicht-Test: `tests/rt_turbine_mode_context_shape_test.lua` — anders als die drei oben genannten (handgeschriebene Mock-Contexts, könnten erneut driften) prüft dieser neue Test strukturell direkt am echten Quelltext beider Dateien, dass `main.lua`s `make_lifecycle_ctx()` ein skalares `TURBINE_MODE_RAMP`-Feld definiert (und **kein** `TURBINE_MODE`-Tabellenfeld mehr reintroduziert) und dass `module_lifecycle.lua` an beiden Stellen exakt `ctx.TURBINE_MODE_RAMP` liest, nie `ctx.TURBINE_MODE.RAMP`. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
-```lua
-TURBINE_MODE = CONFIG.TURBINE_MODE_RAMP or "RAMP"
-```
+## Folge (vor dem Fix)
 
-also einen String, keine Tabelle. Der neue End-to-End-Test liefert dagegen künstlich:
+Beim echten Turbinenstart wurde `ctrl.mode` nicht zuverlässig auf den vorgesehenen Rampenmodus gesetzt.
+
+## Fix (umgesetzt)
 
 ```lua
-TURBINE_MODE = { RAMP = "RAMP" }
-```
-
-und deckt die Produktionsabweichung nicht auf.
-
-## Folge
-
-Beim echten Turbinenstart wird `ctrl.mode` nicht zuverlässig auf den vorgesehenen Rampenmodus gesetzt.
-
-## Fix
-
-Entweder:
-
-```lua
-TURBINE_MODE = { RAMP = CONFIG.TURBINE_MODE_RAMP }
-```
-
-oder Lifecyclecode verwendet direkt:
-
-```lua
+-- main.lua
+TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
+-- module_lifecycle.lua
 ctrl.mode = ctx.TURBINE_MODE_RAMP
 ```
-
-Der Integrationstest muss den echten `make_lifecycle_ctx()`-Shape verwenden.
 
 ---
 
@@ -412,42 +402,28 @@ Der Integrationstest muss den echten `make_lifecycle_ctx()`-Shape verwenden.
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Produktionscode liefert:
+Bestätigt: Produktionscode lieferte `ramp_duration = function() return 30 end`, während `module_lifecycle.process_startup()` mit `os.epoch("utc")` in Millisekunden rechnet (`progress = (now - module.start_time) / duration`) — die Reaktorrampe erreichte dadurch bereits nach ungefähr 30 Millisekunden 100 Prozent statt der beabsichtigten 30 Sekunden, ein deutlicher Widerspruch zum 60-s-Startup-Stage-Timeout und zur fachlichen Bedeutung einer Rampe. Der bisherige End-to-End-Test bestätigte dieses (falsche) Verhalten sogar ausdrücklich, indem er die Fake-Clock nur um 100 ms erhöhte.
 
-```lua
-ramp_duration = function() return 30 end
-```
+Fix: die Einheit ist jetzt explizit im Namen — `ramp_duration_ms(profile)` liefert garantiert Millisekunden (`STARTUP_RAMP_DURATION_S * 1000`, kein unbenannter Zahlenkonstante mehr). `module_lifecycle.lua` liest den Wert als `duration_ms` und dividiert korrekt Millisekunden durch Millisekunden. Der bisherige End-to-End-Test wurde auf die reale Dauer (30000 statt 100 ms Fake-Clock-Vorlauf) korrigiert.
 
-`module_lifecycle.process_startup()` rechnet jedoch mit `os.epoch("utc")` in Millisekunden:
+Pflicht-Test: `tests/rt_ramp_duration_units_test.lua` — treibt die echte `process_startup()`-Funktion mit einer Fake-Clock über die tatsächlichen Produktionswerte (30000 ms): (1) nach 100 ms ist die Rampe nachweislich NICHT fertig (`progress < 1`, Modul bleibt `STARTING`); (2) Fortschritt steigt monoton (100 ms → 15 s); (3) bei Erreichen der konfigurierten Dauer wird das Modul `STABLE`; (4) weit nach der Deadline bleibt `progress` bei exakt `1` geklammert (kein Überschreiten), demonstriert an einem zweiten Modul, dessen Temperatur-Gate absichtlich nie erfüllt ist, damit die Rampen-Fortschrittsberechnung isoliert von der `STABLE`-Transition wiederholt geprüft werden kann. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt (die alte `module_lifecycle.lua` erwartet noch das alte `ramp_duration`-Feld, nicht `ramp_duration_ms` — ein direkter Beweis für die inkompatible Schnittstelle).
 
-```lua
-progress = (now - module.start_time) / duration
-```
+Beim Schreiben dieses Tests wurde zusätzlich ein separater, vorbestehender Bug in `update_module_limits()`s Coolant-Check entdeckt (`skip_coolant and nil or ctx.evaluate_reactor_coolant(...)` — der klassische Lua-`and/or`-Fallstrick: die `or`-Seite läuft immer, wenn die `and`-Seite `nil` ist, unabhängig von `skip_coolant`). Dieser Bug ist NICHT Teil dieses Fixes (eigenständiges Problem, bereits durch die vorbestehende Testausschlussliste als `NEEDS_MOCK` markiert) und wurde hier nur umgangen (echter `evaluate_reactor_coolant`-Stub im neuen Test), nicht behoben.
 
-Damit erreicht die Reaktorrampe nach ungefähr 30 Millisekunden bereits 100 Prozent. Der neue Test bestätigt dieses Verhalten ausdrücklich, indem er die Fake-Clock nur um 100 ms erhöht.
-
-Das steht außerdem in deutlichem Widerspruch zum 60-s-Startup-Stage-Timeout und zur fachlichen Bedeutung einer Rampe.
-
-## Verbindlicher Fix
-
-Einheit explizit machen:
+## Fix (umgesetzt)
 
 ```lua
-ramp_duration_ms(profile)
+-- main.lua
+ramp_duration_ms = function(_ramp_profile)
+  local STARTUP_RAMP_DURATION_S = 30
+  return STARTUP_RAMP_DURATION_S * 1000
+end,
+-- module_lifecycle.lua
+local duration_ms = ctx.ramp_duration_ms(module.ramp_profile)
+local progress = safety.clamp((now - module.start_time) / duration_ms, 0, 1)
 ```
-
-und konfigurierte Sekunden einmalig in Millisekunden umrechnen. Keine unbenannten Zahlenkonstanten.
-
-## Pflicht-Test
-
-Fake-Clock mit echten Produktionswerten:
-
-- nach 100 ms nicht fertig,
-- monotone Progression,
-- gewünschte Dauer je Profil,
-- Timeout vor/bei/kurz nach der Deadline.
 
 ---
 
@@ -455,23 +431,17 @@ Fake-Clock mit echten Produktionswerten:
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Die Funktion existiert in `nodes/rt/module_lifecycle.lua`, wird im Produktivcode aber nicht aufgerufen. Die einzige weitere Fundstelle liegt in einem Test.
+Bestätigt: `update_module_states()` existierte bereits in `nodes/rt/module_lifecycle.lua` und war bereits funktional getestet (`tests/rt_coolant_low_confirm_delay_test.lua`), wurde aber im Produktivcode nirgends aufgerufen — die einzige weitere Fundstelle war ein Test. `control_tick()` rief bisher nur `process_startup()`, Reactor-Control und Turbine-Control auf. Ohne `update_module_states()` waren unter anderem nicht regelmäßig aktiv: `STABLE -> RUNNING`, laufende Modul-Limitbewertung, Modulstate `LIMITED`, modulbezogene Temperatur-/Coolant-Transitionen außerhalb eines aktiven Startups.
 
-Damit sind unter anderem nicht regelmäßig aktiv:
+Fix: `module_lifecycle.update_module_states(make_lifecycle_ctx())` wird jetzt in `control_tick()` aufgerufen — dieselbe `make_lifecycle_ctx()`, die `process_startup()` bereits erfolgreich verwendet, liefert bereits alle von `update_module_states()` benötigten Felder (`log`, `current_state`, `STATE`, `setState`, `node_state_machine`, `constants`, `evaluate_reactor_coolant`, `get_effective_regulator_rod_caps`, `read_current_rods`, `config.safety.*`, `get_target_rpm`) — keine neuen Ctx-Felder nötig. Reihenfolge bewusst sicherheitserst dokumentiert und getestet: `update_module_states()` (erkennt/reagiert auf neue Gefahrenzustände über alle Module) läuft VOR `process_startup()` (treibt nur das aktuell startende Modul voran) und VOR `reactor_control`/`turbine_control` (die Regelung darf nicht auf einem in diesem Tick bereits veralteten Sicherheitszustand aufbauen).
 
-- `STABLE -> RUNNING`,
-- laufende Modul-Limitbewertung,
-- Modulstate `LIMITED`,
-- modulbezogene Temperatur-/Coolant-Transitionen,
-- Teile der Safety-Causality- und Zustandsdiagnose.
+Pflicht-Test: `tests/rt_control_tick_wires_update_module_states_test.lua` — prüft strukturell an `control_tick()`s echtem Quelltext, dass `update_module_states()` tatsächlich aufgerufen wird UND in der dokumentierten Reihenfolge vor `process_startup()`, `reactor_control.updateReactorControl()` und `turbine_control.updateControl()` steht. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
-`control_tick()` ruft aktuell nur `process_startup()`, Reactor-Control und Turbine-Control auf.
+## Fix (umgesetzt)
 
-## Fix
-
-`module_lifecycle.update_module_states(make_lifecycle_ctx())` in einen eindeutig definierten Control-/Safety-Tick aufnehmen. Reihenfolge zu `process_startup()`, Reactor-Control und Turbine-Control dokumentieren und testen.
+`module_lifecycle.update_module_states(make_lifecycle_ctx())` in `control_tick()` aufgenommen, sicherheitserst vor `process_startup()`, Reactor-Control und Turbine-Control.
 
 ---
 
@@ -479,10 +449,10 @@ Damit sind unter anderem nicht regelmäßig aktiv:
 
 ## Status
 
-**OFFEN**
+**TEILWEISE OFFEN**
 
 - Schema-Migration schreibt per ignoriertem `pcall`; Fehlschlag wird nicht sichtbar behandelt.
-- `SET_REACTOR_FILL_TARGET` loggt Erfolg, obwohl `utils.write_config()` in einem ignorierten `pcall` scheitern kann.
+- ~~`SET_REACTOR_FILL_TARGET` loggt Erfolg, obwohl `utils.write_config()` in einem ignorierten `pcall` scheitern kann.~~ BEHOBEN (2026-07-17, siehe Abschnitt 16): `set_reactor_fill_target()` wertet den Rückgabewert jetzt aus, loggt WARN bei Fehlschlag statt eines unbedingten INFO, und `SET_REACTOR_FILL_TARGET` im Command-Handler meldet ein ehrliches `persisted`-Feld statt eines blinden `{ ok = true }`. `tests/water_rt_persistence_ack_honesty_test.lua`.
 - `build_discovery_context().build_capabilities()` verwendet unabhängig vom tatsächlichen Gerät zunächst den Turbinen-Key.
 - UI und Telemetrie bauen weiterhin getrennte vollständige Gerätesnapshots.
 - es fehlen echte Control-Tick-/Jitter-/Deadline-Metriken.
@@ -504,29 +474,29 @@ Damit sind unter anderem nicht regelmäßig aktiv:
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Die Schedulertrennung ist real umgesetzt. Die Heartbeatlogik ist aber nicht vollständig zentral:
+Die Schedulertrennung war real umgesetzt, die Heartbeatlogik jedoch nicht vollständig zentral:
 
-- `main.lua` besitzt `hb_state.last_ts` und `send_heartbeat_if_due()`.
-- der Matrix-Thread verwendet diese Quelle.
-- `heartbeat.lua` besitzt zusätzlich `ctx.last_heartbeat_ts`, aktualisiert diesen separat und sendet auf seinem Heartbeat-Timer unbedingt über `ctx.send_heartbeat()`.
+- `main.lua` besaß `hb_state.last_ts` und `send_heartbeat_if_due()`.
+- der Matrix-Thread verwendete bereits diese Quelle (korrekt, unverändert).
+- `heartbeat.lua` besaß zusätzlich `ctx.last_heartbeat_ts` (im `ctx` von `make_hb_ctx()` mit `0` initialisiert), aktualisierte diesen separat in `do_heartbeat()` und sendete auf seinem Heartbeat-Timer unbedingt über `ctx.send_heartbeat()` — ohne jede Fälligkeitsprüfung gegen die geteilte Quelle.
 
-Ein Matrixabschluss und der Heartbeat-Timer können dadurch zeitlich nah nacheinander senden. Direkt nach dem initialen Heartbeat kann ein frühes Modemevent wegen des privaten `last_heartbeat_ts=0` ebenfalls einen zusätzlichen Send auslösen.
+Konkretes Fehlerszenario: `main.lua` sendet bereits vor `parallel.waitForAny()` einen initialen Heartbeat und setzt dabei `hb_state.last_ts`. Die private Kopie in `heartbeat.lua`s `ctx` blieb davon unberührt bei `0`. Ein kurz danach eintreffendes `modem_message`-Event wertete `now - 0 >= interval` sofort als fällig und löste einen unnötigen Zusatz-Send aus, obwohl gerade erst gesendet worden war. Zusätzlich sendete der Timer-Pfad in `heartbeat.lua` immer unbedingt, selbst wenn der Matrix-Thread kurz zuvor bereits über `send_heartbeat_if_due()` gesendet hatte.
 
 ## Fix
 
-Alle Threads verwenden ausschließlich:
+`nodes/energy/main.lua`:
+- neue `get_last_heartbeat_ts()`-Funktion, liest `hb_state.last_ts` (dieselbe Quelle, die auch `send_heartbeat_if_due()` prüft/aktualisiert).
+- `make_hb_ctx()` verdrahtet jetzt `send_heartbeat_if_due = send_heartbeat_if_due` und `get_last_heartbeat_ts = get_last_heartbeat_ts` in den Heartbeat-Thread-Context, statt eines bei `0` initialisierten privaten `last_heartbeat_ts`-Felds und des rohen, ungegateten `send_heartbeat`.
 
-```lua
-heartbeat:send_if_due(now)
-```
-
-mit genau einer geteilten `last_sent_ts`-Quelle. Der Heartbeat-Timer darf keinen ungeprüften Send ausführen.
+`nodes/energy/heartbeat.lua`:
+- `should_send()`/`do_heartbeat()` (private Zählerlogik) ersetzt durch `maybe_heartbeat()`, das jeden Sendeversuch — sowohl vom `hb_timer` als auch vom `modem_message`-Event ausgelöst — ausschließlich über `ctx.send_heartbeat_if_due(now)` gated (dieselbe Funktion, dieselbe geteilte `hb_state.last_ts`-Quelle wie der Matrix-Thread). Die Verzögerungs-Warnung liest den letzten tatsächlichen Sendezeitpunkt jetzt über `ctx.get_last_heartbeat_ts()` statt über eine eigene Kopie.
+- kein privater `ctx.last_heartbeat_ts`-Zustand mehr vorhanden — eine geteilte `last_sent_ts`-Quelle (`hb_state.last_ts`) für alle Aufrufer.
 
 ## Pflicht-Test
 
-Fake-Scheduler mit gleichzeitigem Matrixabschluss, Modemevent und Heartbeat-Timer. In jedem konfigurierten Intervall maximal ein Präsenzheartbeat, abgesehen von explizit dokumentierter Startmeldung.
+`tests/energy_heartbeat_shared_last_ts_test.lua` (neu): treibt das echte `nodes/energy/heartbeat.lua` mit einem Fake-Ctx, der main.lua's geteilte `hb_state`-Semantik nachbildet, und beweist (1) ein `modem_message`-Event 50ms nach einem vorherigen Send (2000ms-Intervall) löst keinen Zusatz-Send aus, (2) der `hb_timer` 200ms nach einem vorherigen Send (über eine andere Quelle) sendet nicht unbedingt nach, (3) strukturelle Prüfung, dass `heartbeat.lua` keinen privaten `ctx.last_heartbeat_ts`-Zähler mehr referenziert und `main.lua`s `make_hb_ctx()` die geteilte Quelle verdrahtet. Ergänzend angepasst: `tests/energy_matrix_thread_scheduler_isolation_test.lua` (Block 3) auf den neuen `ctx`-Vertrag (`get_last_heartbeat_ts`/`send_heartbeat_if_due` statt `last_heartbeat_ts`/`send_heartbeat`) aktualisiert.
 
 ---
 
@@ -534,25 +504,28 @@ Fake-Scheduler mit gleichzeitigem Matrixabschluss, Modemevent und Heartbeat-Time
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)**
 
-`SET_TARGET` ändert den RAM-Wert, versucht die Config zu schreiben und loggt einen Persistenzfehler. Anschließend wird der Command trotzdem mit Erfolg abgeschlossen.
+`SET_TARGET` änderte den RAM-Wert, versuchte die Config zu schreiben und loggte einen Persistenzfehler als WARN — anschließend wurde der Command aber unbedingt mit `support_command_handler.finish(devices, true)` (also immer `{ ok = true }`, ohne jedes Persistenzsignal) abgeschlossen. Derselbe Fehlerschatten fand sich bei RT's `SET_REACTOR_FILL_TARGET` (siehe Abschnitt 14): der Rückgabewert von `utils.write_config()` wurde dort sogar komplett verworfen (`pcall(utils.write_config, ...)` ohne jede Auswertung), und `command_handler.lua`s Handler gab bei Erfolg unbedingt `nil` zurück, was der äußere Dispatcher automatisch als `{ ok = true }` interpretierte.
 
-## Folge
+## Folge (vor dem Fix)
 
-MASTER kann `ACK_APPLIED` erhalten, obwohl der Wert nach einem Neustart verloren geht.
+MASTER konnte `ACK_APPLIED` erhalten, obwohl der Wert nach einem Neustart verloren geht.
 
 ## Fix
 
-Commandresultat muss unterscheiden:
+Gewählt wurde die im Audit selbst genannte Alternative — `ok=true` bleibt korrekt (der RAM-Wert wird sofort wirksam übernommen), aber das Ergebnis trägt jetzt explizit ein `persisted`-Feld:
 
-```text
-APPLIED_VOLATILE
-APPLIED_PERSISTED
-REJECTED_PERSISTENCE
-```
+- `nodes/support/command_handler.lua`: `finish(devices, ok, extra)` akzeptiert jetzt ein optionales drittes Argument, dessen Felder in das Ergebnis gemerged werden (rückwärtskompatibel — bestehende 2-Argument-Aufrufer unverändert).
+- `nodes/water/main.lua`: `SET_TARGET` gibt jetzt `finish(devices, true, { persisted = ok_write == true })` zurück statt eines blinden `finish(devices, true)`.
+- `nodes/rt/main.lua`: `set_reactor_fill_target(value)` wertet `utils.write_config()`s Rückgabewert jetzt tatsächlich aus (statt eines unausgewerteten `pcall(...)`), loggt bei Fehlschlag WARN statt eines unbedingten INFO, und gibt den Erfolg als Boolean zurück.
+- `nodes/rt/command_handler.lua`: `SET_REACTOR_FILL_TARGET` gibt jetzt `{ ok = true, persisted = <Rückgabewert von ctx.set_reactor_fill_target()> }` zurück statt unbedingt `nil`.
 
-Für dauerhaft konfigurierte Sollwerte gilt `ok=true` erst nach erfolgreicher Persistierung oder der ACK muss explizit `persisted=false` tragen.
+Eine vollständige `APPLIED_VOLATILE`/`APPLIED_PERSISTED`/`REJECTED_PERSISTENCE`-Statusunterscheidung wäre ein größerer, MASTER-seitig konsumierender Umbau (Config-Editor-UI, ACK-Auswertung) und wurde bewusst nicht mitgemacht — das explizite `persisted`-Feld macht das Ergebnis bereits ehrlich abfragbar und ist die im Audit selbst als gleichwertig genannte Alternative.
+
+## Pflicht-Test
+
+`tests/water_rt_persistence_ack_honesty_test.lua` (neu): vier Blöcke — (1) `support_command_handler.finish()`s neues `extra`-Argument inkl. Rückwärtskompatibilität, (2) WATER's echter `SET_TARGET`-Zweig (Marker-extrahiert aus dem Boot-Skript) mit `persisted=true` bei erfolgreichem und `persisted=false` bei fehlgeschlagenem `write_config()`, (3) RT's echtes `nodes/rt/command_handler.lua` (direkt require()-bar) mit derselben Unterscheidung, (4) RT's `set_reactor_fill_target`-Callback (Marker-extrahiert aus `nodes/rt/main.lua`) beweist, dass der frühere unausgewertete `pcall(...)` jetzt durch eine echte Erfolgsauswertung ersetzt ist. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
 ## Weiterer Nachweis
 
@@ -564,19 +537,15 @@ WATER bleibt statisch ansonsten weitgehend sauber. Notwendig sind Ingame-Tests f
 
 ## Status
 
-**KRITISCHER SAFETYFEHLER**
+**BEHOBEN (2026-07-17)**
 
-Die neue Batchlogik speichert pro Ventil:
+Bestätigt in `xreactor/nodes/fuel/redstone_router.lua`: die Batchlogik speicherte pro Ventil angefordertes `high`, ob ein ACK benötigt wird und das synchrone Ergebnis, aber NICHT die `command_id` des aktuellen Ventilkommandos. `handle_valve_ack()` legte im bestätigten Zustand (`confirmed_valve_state[key]`) ebenfalls keine Command-ID ab — dieser Zustand wird pro Ventilschlüssel nie gelöscht und überlebt beliebig viele nachfolgende Transaktionen. Wurde ein aktuelles Kommando nach allen Retries aus `pending_valve_acks` entfernt (verlorene ACKs), prüfte `_check_valve_batch()` nur noch, ob irgendein FRÜHER bestätigter Zustand für denselben Ventilschlüssel `applied=true` und denselben `high`-Wert besitzt — exakt der Fall bei der WAIT_FINAL_ACKS-Phase einer Transaktion, deren nächster Delivery-Zyklus in WAIT_BLOCK_ACKS erneut denselben `high=true`-Wert für dieselben Ventile anfordert.
 
-- angefordertes `high`,
-- ob ein ACK benötigt wird,
-- synchrones Ergebnis.
+Fix: `_set_valve()` gibt die erzeugte `command_id` als zweiten Rückgabewert zurück; `_request_valve_batch()` speichert sie in jedem Batcheintrag; `handle_valve_ack()` speichert `command_id` zusätzlich im Confirmed-State; `_check_valve_batch()` akzeptiert einen Confirmed-State nur noch, wenn dessen `command_id` exakt mit der `command_id` des AKTUELL angeforderten Kommandos übereinstimmt (zusätzlich zu `applied==true` und passendem `high`). Ein alter, zufällig passender Confirmed-State (andere oder fehlende `command_id`) zählt damit nicht mehr als Beweis für ein neues Kommando — das schließt automatisch auch den letzten Fix-Punkt ("vor einem neuen Command alten Confirmed-State nicht als aktuellen Beweis verwenden") mit ein, da jedes Kommando eine neue, aus Zeitstempel+Sequenznummer gebildete `command_id` erhält. Die zusätzlich vorgeschlagene Prüfung von "Bestätigungsalter und Peerstatus" wurde als durch die Command-ID-Bindung bereits abgedeckt bewertet: eine Bestätigung mit korrekter `command_id` kann per Konstruktion nicht älter sein als die aktuelle Anfrage (eindeutige ID pro Anfrage), und `VALVE_PHASE_TIMEOUT_MS` begrenzt ohnehin, wie lange eine Phase auf eine Bestätigung wartet.
 
-Sie speichert jedoch nicht die `command_id` des aktuellen Ventilkommandos. `handle_valve_ack()` legt im bestätigten Zustand ebenfalls keine Command-ID ab.
+Pflicht-Test: `tests/redstone_router_stale_confirmed_state_test.lua` — treibt die echte `begin_transaction()`/`tick()`-Zustandsmaschine über zwei aufeinanderfolgende Transaktionen: die erste läuft vollständig durch und hinterlässt in `confirmed_valve_state` für beide Ventile einen bestätigten `BLOCKED`-Zustand (`high=true`) aus ihrer WAIT_FINAL_ACKS-Phase; die zweite Transaktion sendet in ihrer eigenen WAIT_BLOCK_ACKS-Phase erneut `BLOCKED` (`high=true`) für dieselben Ventile — mit neuen, nachweislich anderen `command_id`s —, aber alle ihre ACKs gehen verloren (`check_pending_acks()` gibt nach `VALVE_ACK_MAX_RETRIES` auf). Beweist: die zweite Transaktion bricht sicherheitshalber ab (`transaction == nil`), ihr `action_fn` (Export) läuft niemals. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt (der beschriebene Bug reproduziert sich exakt wie im Audit beschrieben).
 
-Wenn ein aktuelles Kommando nach allen Retries aus `pending_valve_acks` entfernt wird, prüft `_check_valve_batch()` nur noch, ob irgendein früher bestätigter Zustand für denselben Ventilschlüssel `applied=true` und denselben `high`-Wert besitzt.
-
-## Beispiel
+## Beispiel (ursprünglich beobachtet)
 
 1. Ventil wurde früher bestätigt `BLOCKED`.
 2. neuer `BLOCKED`-Befehl wird gesendet.
@@ -585,18 +554,13 @@ Wenn ein aktuelles Kommando nach allen Retries aus `pending_valve_acks` entfernt
 5. alter bestätigter `BLOCKED`-Eintrag passt weiterhin.
 6. aktueller Batch kann fälschlich als bestätigt gelten.
 
-## Verbindlicher Fix
+## Verbindlicher Fix (umgesetzt)
 
 - `_set_valve()` gibt die erzeugte `command_id` zurück.
 - Batchentry speichert diese ID.
 - `handle_valve_ack()` speichert `command_id` im Confirmed-State.
 - `_check_valve_batch()` akzeptiert ausschließlich exakt dieselbe ID.
-- zusätzlich Bestätigungsalter und Peerstatus prüfen.
-- vor einem neuen Command alten Confirmed-State für denselben Schlüssel nicht als aktuellen Beweis verwenden.
-
-## Pflicht-Test
-
-Alter passender Confirmed-State + verlorene aktuelle ACKs muss zuverlässig zu `failed/timeout` und **keinem Export** führen.
+- vor einem neuen Command alten Confirmed-State für denselben Schlüssel nicht als aktuellen Beweis verwenden — durch die Command-ID-Bindung automatisch erfüllt.
 
 ---
 
@@ -663,27 +627,18 @@ Zyklusstatistik referenziert diese ID und wird nicht über ein global austauschb
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-FUEL erzeugt den Redstone-Router mit:
+Bestätigt in `xreactor/nodes/reprocessor/main.lua`: FUEL erzeugt den Redstone-Router mit `comms = comms`, REPROCESSORs `get_rs_router()` erzeugte denselben Router dagegen komplett ohne `comms`. `redstone_router:refresh()` verwendet `self.comms:get_peers()`, um einen konfigurierten Integrator als erreichbaren Wireless-VALVE-Node zu erkennen — ohne COMMS-Referenz bleibt die Peer-Liste leer, danach wird nur noch nach einem lokalen Peripheral gleichen Namens gesucht.
 
-```lua
-comms = comms
-```
+Fix: `comms = comms` wird jetzt auch in REPROCESSORs `get_rs_router()` an `redstone_router_lib.new()` übergeben — identisch zu FUEL. `get_rs_router()` ist ein Lazy-Singleton, der erst zur Laufzeit (aus Event-Handlern/Tick-Loop) aufgerufen wird, zu diesem Zeitpunkt ist die vorwärtsdeklarierte `comms`-Upvalue bereits per `comms_service.new(...)` zugewiesen — keine zusätzliche nachträgliche Injektion nötig, die bestehende Konstruktionsreihenfolge reicht bereits aus.
 
-REPROCESSOR erzeugt denselben Router dagegen ohne `comms`.
+Pflicht-Test: `tests/reprocessor_wireless_valve_comms_wiring_test.lua` — prüft strukturell, dass `get_rs_router()`s Konstruktoraufruf tatsächlich `comms = comms` enthält, und demonstriert zusätzlich funktional mit dem echten `redstone_router.lua`-Modul den beobachtbaren Unterschied: ohne `comms` wird ein konfigurierter Wireless-Integrator gar nicht erkannt (`self._state.integrators[name] == nil`), mit `comms` wird er korrekt als `network=true` erkannt. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
-`redstone_router:refresh()` verwendet `self.comms:get_peers()`, um einen konfigurierten Integrator als erreichbaren Wireless-VALVE-Node zu erkennen. Ohne COMMS-Referenz bleibt die Peer-Liste leer. Danach wird nur noch nach einem lokalen Peripheral gleichen Namens gesucht.
+## Fix (umgesetzt)
 
-## Folge
-
-Der vorgesehene drahtlose VALVE-Pfad funktioniert für REPROCESSOR nicht zuverlässig. Ein Routerbaum mit Wireless-VALVE-Nodes kann als nicht schaltbar enden, obwohl die Nodes im Netzwerk online sind.
-
-## Fix
-
-- `get_rs_router()` nach initialisiertem COMMS erstellen oder COMMS nachträglich sicher injizieren.
 - `comms = comms` an `redstone_router_lib.new()` übergeben.
-- Reconnect-/Peer-Down-/Peer-Up-Test ergänzen.
+- Reconnect-/Peer-Down-/Peer-Up-Test bleibt als weiterführender Ingame-Nachweis offen (kein neuer statischer Fund).
 
 ---
 
@@ -691,25 +646,31 @@ Der vorgesehene drahtlose VALVE-Pfad funktioniert für REPROCESSOR nicht zuverl�
 
 ## Status
 
-**OFFEN**
+**WEITGEHEND BEHOBEN (2026-07-17)**
 
 ## Senderbindung
 
-`trusted_source` ist optional. Ohne dieses Feld akzeptiert die VALVE-Node jedes korrekt adressierte `SET_VALVE` auf dem dedizierten Kanal. ACKs besitzen ebenfalls keine authentisierte Senderidentität.
+`trusted_source` war rein optional. Ohne dieses Feld akzeptierte die VALVE-Node auf Dauer jedes korrekt adressierte `SET_VALVE` auf dem dedizierten Kanal, von jedem beliebigen Sender.
 
-Für einen Safety-Aktor sollte die erlaubte Steuerquelle verpflichtend oder über einen installierten Pairingzustand gebunden sein.
+Fix: automatisches Pairing beim ERSTEN akzeptierten `SET_VALVE` nach einer frischen Installation — `config.trusted_source` wird auf den Absender dieses ersten Kommandos gesetzt und über `utils.write_config()` in die geschützte Nutzerconfig persistiert (überlebt Neustarts, WARN bei Persistenzfehler, analog zu Abschnitt 16). Jeder SPÄTERE Sender mit abweichender `src` wird verworfen (WARN geloggt, kein Write, kein Dedupe-Eintrag). Bleibt dadurch abwärtskompatibel — kein manuelles Vorab-Pairing nötig, funktioniert "out of the box" — schließt aber die Lücke "akzeptiert dauerhaft jeden Sender". `VALVE_ACK` trägt jetzt zusätzlich `src` (die eigene Node-ID) und `dst` (der ursprüngliche Absender, aus `message.src` gespiegelt) — die eigentliche ACK-Zuordnung auf FUEL-Seite läuft bereits ausschließlich über die (per ROUTER-P0 command-id-gebundene) `command_id`, `src`/`dst` verbessern aber Logging/Diagnose.
 
 ## Sorter-Reconnect
 
-`get_sorter()` cached den einmal gewrappten Sorter dauerhaft. Schlägt ein späterer Call wegen Detach/Reattach oder ersetztetem Peripheral fehl, wird `sorter_device` nicht verworfen und neu gebunden.
+`get_sorter()` cachte den einmal gewrappten Sorter dauerhaft. Schlug ein späterer Call wegen Detach/Reattach oder ersetztem Peripheral fehl, wurde `sorter_device` nicht verworfen und neu gebunden — jeder weitere Versuch traf denselben kaputten Handle erneut.
 
-## Fix
+Fix: bei einem Callfehler (`pcall(sorter.setAutoMode, ...)` schlägt fehl) wird `sorter_device = nil` gesetzt; der nächste `get_sorter()`-Aufruf (nächster Retry) wrappt das Peripheral frisch über `peripheral.wrap()`.
 
-- verpflichtendes Pairing beziehungsweise `trusted_source`,
-- ACK mit `src`, `dst` und aktuellem Commandbezug,
-- bei Sorter-Callfehler Cache leeren,
-- beim nächsten Retry neu wrappen,
-- Statusfelder für `actuator_online`, `last_apply_ts`, `last_error_ts`.
+## Fix (umgesetzt)
+
+- ~~verpflichtendes Pairing beziehungsweise `trusted_source`~~ — als automatisches Erstsender-Pairing umgesetzt (siehe oben).
+- ~~ACK mit `src`, `dst` und aktuellem Commandbezug~~ — umgesetzt (`command_id` war bereits vorhanden, `src`/`dst` ergänzt).
+- ~~bei Sorter-Callfehler Cache leeren~~ — umgesetzt.
+- ~~beim nächsten Retry neu wrappen~~ — umgesetzt (Konsequenz aus dem geleerten Cache).
+- Statusfelder für `actuator_online`, `last_apply_ts`, `last_error_ts` — NICHT Teil dieses Fixes (reine Observability-Erweiterung, keine Korrektheits-/Sicherheitslücke); bleibt als VALVE-P2-Weiterentwicklung offen.
+
+## Pflicht-Test
+
+`tests/valve_sender_pairing_and_sorter_reconnect_test.lua` (neu) — treibt die echten, per Marker aus `nodes/valve/main.lua` extrahierten Funktionen (`get_sorter()`/`write_actuator()`/`apply_valve()` sowie `handle_valve_channel_event()`). Vier Senderbindungs-Fälle (Erstsender wird automatisch gepaart und persistiert; abweichender Sender nach Pairing wird verworfen; bereits gepaarter Sender läuft ohne erneuten Persistenzversuch normal weiter; ein Persistenzfehler beim Pairing wirkt sofort im RAM, aber mit WARN) und zwei Sorter-Reconnect-Fälle (fehlgeschlagener Call gefolgt von einem erfolgreichen Retry beweist einen zweiten, frischen `peripheral.wrap()`-Aufruf statt eines wiederverwendeten kaputten Handles). Ergänzend angepasst: `tests/valve_failed_write_retry_test.lua` (vorbelegtes `trusted_source`/`src`, damit die neue Pairing-Logik die bestehenden Retry-Assertions nicht verfälscht). Verifiziert per `git stash`, dass der neue Test gegen den alten Code nicht einmal extrahierbar ist (die Fix-Logik existiert dort schlicht nicht).
 
 ---
 
@@ -717,34 +678,38 @@ Für einen Safety-Aktor sollte die erlaubte Steuerquelle verpflichtend oder übe
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-`free_space()` cached Werte zwei Sekunden pro Mount. `reclaim_oldest()` prüft vor jeder Löschung denselben gecachten Wert, löscht eine Datei, invalidiert den Cache aber nicht.
+Bestätigt: `free_space()` cached Werte für `FREE_SPACE_CACHE_TTL` (2 echte Sekunden, per `os.clock()`) pro Mount. `reclaim_oldest()` prüfte vor jeder Löschung denselben gecachten Wert, löschte eine Datei, invalidierte den Cache aber nicht. Da mehrere aufeinanderfolgende Löschungen innerhalb eines einzigen, synchronen Reclaim-Laufs praktisch keine messbare Zeit verbrauchen, blieb der Cache-Eintrag über den gesamten Lauf "frisch" — die Schleife sah bei jeder Iteration weiterhin den alten, niedrigen Free-Space-Wert und entfernte munter weiter, obwohl bereits nach der ersten Löschung genug Platz frei sein konnte. Die frühere pauschale Komplettlöschung war zwar bereits entfernt (siehe Abschnitt 16), aber diese Schleife konnte im Extremfall trotzdem alle aufgelisteten Dateien löschen.
 
-Laufen die Löschungen innerhalb der Cache-TTL ab, sieht die Schleife weiterhin den alten niedrigen Free-Space-Wert und entfernt weiter Dateien, obwohl bereits genug Platz frei sein kann.
+Fix: `free_space_cache[mount] = nil` direkt nach jeder erfolgreichen Löschung, damit die nächste `free_space()`-Abfrage tatsächlich neu misst. Zusätzlich umgesetzt: `reclaim_oldest()` erhält einen `exclude_path`-Parameter, der die gerade tatsächlich offene Zieldatei (die der LOG Collector im selben Schreibversuch befüllen will) niemals löscht — beide Aufrufstellen (`write_log()`s Vorab-Check, `flush_bucket()`s Out-of-Space-Retry) übergeben jetzt den betroffenen Zielpfad. Ein hartes `RECLAIM_MAX_FILES_PER_RUN`-Limit (64) begrenzt zusätzlich den maximalen Schaden pro Lauf, selbst falls die Free-Space-Messung aus einem anderen Grund weiterhin falsch wäre. Die Punkte "Mindestanzahl/Mindestalter geschützter Dateien" und "UI zeigt Retention-/Reclaimereignisse" aus dem ursprünglichen Fix-Vorschlag bleiben als LOG-P1-Weiterentwicklung offen (siehe Abschnitt 23) — kein Datenverlustrisiko mehr durch DIESEN Bug, da die Kernursache (stale Cache) behoben ist.
 
-## Folge
+Pflicht-Test: `tests/log_collector_reclaim_cache_invalidation_test.lua` — treibt die echte `reclaim_oldest()`-Funktion mit einer Fake-Disk aus drei gleich großen Dateien und einem `os.clock()`, der über den GESAMTEN Testlauf einen konstanten Wert liefert (simuliert exakt die reale Bedingung: synchrone Löschungen verbrauchen keine messbare Zeit). Fake-Free-Space steigt nach der ersten Löschung über das angeforderte Ziel — beweist, dass exakt eine Datei entfernt wird (nicht alle drei) und dass `fs.getFreeSpace()` nach der Löschung tatsächlich erneut aufgerufen wird. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt (entfernt dort nachweislich alle drei Dateien statt einer).
 
-Die frühere pauschale Komplettlöschung wurde zwar entfernt, die neue Schleife kann im Extrem trotzdem alle aufgelisteten Dateien löschen.
-
-## Verbindlicher Fix
-
-Nach jeder erfolgreichen Löschung:
+## Fix (umgesetzt)
 
 ```lua
+-- nach jeder erfolgreichen Loeschung:
 free_space_cache[mount] = nil
 ```
 
-oder ungecachte Messung innerhalb des Reclaimpfads verwenden. Zusätzlich:
+plus `exclude_path`-Schutz der offenen Zieldatei und `RECLAIM_MAX_FILES_PER_RUN`-Obergrenze.
 
-- Mindestanzahl/Mindestalter geschützter Dateien,
-- maximale Löschanzahl pro Reclaimlauf,
-- niemals die aktuell geöffnete Zieldatei löschen,
-- Retentiongrund und gelöschte Pfade protokollieren.
+## Zusatzfund (2026-07-17, BEHOBEN): `send_ack` als globale Variable aufgelöst — LOG_COLLECTOR stürzt bei JEDEM erfolgreichen Flush ab
 
-## Pflicht-Test
+Vom Nutzer per echten `xreactor_logs/log_collector/*.log`-Auszug (Disk-Backup-ZIP, datiert 2026-07-16) gemeldet als "die Node stürzt kurz nach dem Start wegen eines nil value ab" (zunächst der FUEL-Node zugeschrieben — die tatsächlich betroffene Rolle war LOG_COLLECTOR). Log-Auszug:
 
-Fake-Free-Space steigt nach der ersten Löschung über das Ziel. Es darf exakt eine Datei entfernt werden.
+```text
+[2026-07-16 21:58:51] LOG_COLLECTOR | LOG | ERROR | loop crashed on event=timer: ...log_collector/main.lua:674: attempt to call global 'send_ack' (a nil value)
+```
+
+Diese Zeile wiederholte sich im Sekundentakt, deterministisch bei praktisch jedem Timer-Tick.
+
+**Ursache:** `nodes/log_collector/main.lua` deklariert `flush_bucket`/`flush_due` bewusst als Vorwärtsdeklaration (`local flush_bucket` / `local flush_due`, siehe Kommentar dort), weil `write_log()` (weiter oben im Chunk) sie bereits referenziert, bevor sie definiert werden. `flush_bucket = function(path) ... end` selbst ruft `send_ack(payload, "written")` auf — `send_ack` war aber NICHT in dieser Vorwärtsdeklaration enthalten, sondern erst weiter unten im selben Chunk als `local function send_ack(payload, status)` deklariert. Lua löst freie Variablen beim KOMPILIEREN eines Funktionsliterals anhand des zu diesem Zeitpunkt sichtbaren lexikalischen Scopes auf, nicht beim späteren Ausführen — der `flush_bucket`-Funktionsliteral wurde kompiliert, als im Chunk-Scope noch keine lokale `send_ack` existierte, der Aufruf fiel deshalb auf eine GLOBALE Variable dieses Namens zurück, die nirgends gesetzt wird. Ergebnis: **jeder einzige erfolgreiche Log-Flush** (persistierte Zeilen tatsächlich geschrieben) stürzte beim anschließenden ACK-Versand ab — der äußere `xpcall` der Event-Loop fängt das zwar ab ("loop crashed on event=timer", kein Reboot), aber `send_ack()` läuft dadurch NIE, absendende Nodes erhalten nie ein `LOG_ACK`, und der Fehler wird bei laufendem Betrieb minütlich wiederholt geloggt.
+
+**Fix:** `send_ack` in dieselbe Vorwärtsdeklaration wie `flush_bucket`/`flush_due` aufgenommen (`local send_ack` VOR der `flush_bucket`-Definition); die spätere Definition wurde von `local function send_ack(...)` auf `send_ack = function(...)` umgestellt (identisches Muster wie bereits bei `flush_bucket`/`flush_due`).
+
+**Pflicht-Test:** `tests/log_collector_flush_bucket_send_ack_forward_decl_test.lua` — extrahiert per Marker den echten Quelltext (Vorwärtsdeklarationsblock, die echte `flush_bucket()`-Definition, die echte `send_ack()`-Definition, in genau dieser Kompilierreihenfolge) aus `nodes/log_collector/main.lua`, treibt einen echten gepufferten Log-Eintrag durch `flush_bucket()` und beweist: kein Absturz, `stats.written` erhöht sich, UND `send_ack()` sendet tatsächlich ein `LOG_ACK` mit korrektem `event_id`/`status`. Verifiziert per `git stash`, dass der Test gegen den alten Code nicht einmal extrahierbar ist (die vorwärtsdeklarierte `send_ack`-Zeile existiert dort nicht) — exakter Nachweis, dass die Fix-Logik zuvor fehlte.
 
 ---
 
@@ -770,14 +735,14 @@ Eine einzelne Node-Logdatei wird bei Überschreiten von `MAX_LOG_BYTES` gelösch
 
 ## Status
 
-**KRITISCH TEILWEISE**
+**KRITISCH TEILWEISE** (Ausschlussliste schrumpft, siehe unten)
 
 Aktuelle Ausschlusslisten:
 
 ```text
-66 Lua-Tests
+63 Lua-Tests
 6 Python-Tests
-72 insgesamt
+69 insgesamt
 ```
 
 Darunter befinden sich weiterhin echte Verhaltenskategorien wie:
@@ -785,10 +750,16 @@ Darunter befinden sich weiterhin echte Verhaltenskategorien wie:
 - ENERGY-Architektur und Payloadcache,
 - MASTER-ACK-/Shutdown-Semantik,
 - RT-Control, Safety, Startup und Sync,
-- Logger-/Registry-Runtime,
-- Comms-Hysterese.
+- Logger-/Registry-Runtime.
 
 Der neue RT-Startup-Test zeigt außerdem ein strukturelles Problem des Testansatzes: Er behauptet, den Produktions-Context zu spiegeln, liefert aber einen anderen `TURBINE_MODE`-Typ und kodiert die 30-ms-Rampensemantik als erwartet.
+
+## Triage-Ergebnis 2026-07-17 (drei Eintraege aus der Ausschlussliste entfernt)
+
+- `comms_peer_state_hysteresis_test.lua` und `comms_peer_down_observation_debounce_test.lua` (beide zuvor `CONTENT_DRIFT`): **echter Produktionsfehler**, nicht veraltete Erwartung. `core/comms.lua`s `update_peer_timeouts()` liess `peer.down` so lange `nil` stehen, bis die Down-Transition einmal tatsaechlich ausgeloest wurde -- also fuer JEDEN frisch gesehenen Peer und weiterhin waehrend der gesamten Down-Grace-/Beobachtungs-Periode. `get_peer_state()` behandelt ein `nil`-`down`-Feld aber als "noch nie von der Hysterese ausgewertet" und berechnete stattdessen einen ROHEN `delta > peer_timeout_s`-Wert OHNE Gnadenfrist oder Mindestbeobachtungen -- das unterlief die komplette Hysterese-Logik extern sichtbar (Peer erschien sofort als `down`, sobald das reine Timeout ueberschritten war, unabhaengig von `peer_down_grace_s`/`peer_down_min_observations`). Fix: `update_peer_timeouts()` initialisiert `peer.down` jetzt explizit auf `false`, sobald ein Peer zum ersten Mal ausgewertet wird -- der `nil`-Fallback in `get_peer_state()` greift danach nur noch fuer Peers, die diese Funktion tatsaechlich noch nie erreicht hat. Beide Tests sind jetzt gruen ohne Testaenderung (nur der Produktionscode wurde korrigiert) und aus der Ausschlussliste entfernt.
+- `alert_rules_numeric_normalization_test.lua` (zuvor `CONTENT_DRIFT`): **veraltete/fehlerhafte Testerwartung**, kein Produktionsfehler. Der Test setzte `role = 'RT_NODE'` (Unterstrich) als Node-Rolle, aber `constants.roles.RT_NODE` ist tatsaechlich `"RT-NODE"` (Bindestrich) -- der Rollenvergleich in `core/alert_rules.lua` schlug dadurch fehl, der gesamte RT-Node-Alarmzweig (inkl. der zu testenden Steam-Deficit-Logik) wurde nie erreicht. Testfix: verwendet jetzt `require('shared.constants').roles.RT_NODE` statt eines hartcodierten falschen Strings. Aus der Ausschlussliste entfernt.
+
+Weiterhin ausgeschlossen bleibt `comms_peer_retention_cleanup_test.lua` (`NEEDS_MOCK`, anderer Fehlschlag -- Logger-Backend meldet degraded ohne echtes Dateisystem-Mock, unabhaengig vom obigen Hysterese-Fix).
 
 ## Regel
 
@@ -803,13 +774,13 @@ Ein Test darf nur entfernt werden, wenn:
 
 1. Installer-Powerloss-Matrix und Completion-Marker.
 2. Update-Quiesce je Rolle.
-3. RT-Produktions-Context-Shape.
-4. RT-Rampeneinheit mit Fake-Clock.
-5. produktive Verdrahtung von `update_module_states()`.
-6. Router-ACK muss aktuelle Command-ID matchen.
-7. REPROCESSOR Wireless-VALVE-Discovery.
-8. ENERGY exakt eine Heartbeat-Zeitquelle.
-9. LOG-Reclaim mit Cacheinvalidierung.
+3. ~~RT-Produktions-Context-Shape.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
+4. ~~RT-Rampeneinheit mit Fake-Clock.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
+5. ~~produktive Verdrahtung von `update_module_states()`.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
+6. ~~Router-ACK muss aktuelle Command-ID matchen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
+7. ~~REPROCESSOR Wireless-VALVE-Discovery.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
+8. ~~ENERGY exakt eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
+9. ~~LOG-Reclaim mit Cacheinvalidierung.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. MASTER Config-Editor Applied-ACK je Zielnode.
 
 ---
@@ -857,19 +828,19 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 
 # 27. Verbindliche Bearbeitungsreihenfolge
 
-1. **ROUTER-P0:** aktuellen ACK über Command-ID statt alten Confirmed-State beweisen.
-2. **REPROCESSOR-P0:** COMMS-Peers an Wireless-Router verdrahten.
-3. **RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.
-4. **RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.
-5. **RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.
+1. ~~**ROUTER-P0:** aktuellen ACK über Command-ID statt alten Confirmed-State beweisen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
+2. ~~**REPROCESSOR-P0:** COMMS-Peers an Wireless-Router verdrahten.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
+3. ~~**RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
+4. ~~**RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
+5. ~~**RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
 6. **INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.
 7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
-8. **INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.
-9. **LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.
-10. **MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.
-11. **ENERGY-P1:** genau eine Heartbeat-Zeitquelle.
-12. **WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.
-13. **VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.
+8. ~~**INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 5): `tests/installer_stage_write_backup_failure_test.lua`, `tests/installer_init_critical_write_abort_test.lua`, `tests/installer_monolith_critical_write_abort_test.lua`.
+9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
+10. ~~**MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.~~ BEHOBEN (2026-07-17, siehe Abschnitt 10): `tests/master_config_edits_test.lua`, `tests/master_config_edit_ack_wiring_test.lua`, `tests/master_ui_controller_config_edit_action_test.lua`.
+11. ~~**ENERGY-P1:** genau eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
+12. ~~**WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 16): `tests/water_rt_persistence_ack_honesty_test.lua`.
+13. ~~**VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.~~ BEHOBEN (2026-07-17, siehe Abschnitt 21): `tests/valve_sender_pairing_and_sorter_reconnect_test.lua`.
 14. **INSTALL/MANIFEST-P1:** vollständige Planvalidierung und nur eine Installerimplementierung.
 15. **TEST-P0:** Ausschlusslisten Test für Test abbauen.
 16. Danach Ingame-Last-, Funkverlust-, Reconnect-, Reboot-, Stromausfall- und Updateabnahme.

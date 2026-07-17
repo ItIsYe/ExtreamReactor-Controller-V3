@@ -676,6 +676,23 @@ local function control_tick()
   -- wie oft der Control-Tick lief. process_startup() ist ein billiger No-Op
   -- (frueher Return), solange kein Startup aktiv ist (ctx.get_active_
   -- startup() == nil), daher unbedenklich jeden Tick aufzurufen.
+  --
+  -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 13). module_lifecycle.update_
+  -- module_states() existierte bereits, war aber im gesamten Projekt
+  -- nirgends verdrahtet -- die einzige Fundstelle war ein Test. Ohne sie
+  -- liefen STABLE->RUNNING-Uebergaenge, laufende Modul-Limitbewertung
+  -- (TEMP/WATER-Grenzwerte, die module.state=ERROR + SAFE/EMERGENCY
+  -- ausloesen), der Modulstate LIMITED sowie modulbezogene Temperatur-/
+  -- Coolant-Transitionen NIE ausser waehrend eines aktiven Startups (dort
+  -- deckt check_interlocks() innerhalb process_startup() nur EINEN Teil
+  -- derselben Pruefung ab). Reihenfolge bewusst SICHERHEITSERST: update_
+  -- module_states() (erkennt/reagiert auf neue Gefahrenzustaende ueber
+  -- ALLE Module) laeuft VOR process_startup() (treibt nur das aktuell
+  -- startende Modul voran) und VOR reactor_control/turbine_control (die
+  -- eigentliche Regelung darf nicht auf einem in diesem Tick bereits
+  -- veralteten Sicherheitszustand aufbauen).
+  module_lifecycle.update_module_states(make_lifecycle_ctx())
   module_lifecycle.process_startup(make_lifecycle_ctx())
   -- Reaktor-Regelung
   reactor_control.updateReactorControl(ctx)
@@ -745,11 +762,26 @@ local function build_command_ctx()
     -- Skalierung. Wirkt sich erst beim naechsten Regelzyklus aus (reactor_
     -- control.lua liest ctx.config.rails.reactor_fill_target jeden Tick
     -- frisch, kein Cache noetig).
+    -- Fix (2026-07-17): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 14). write_config()'s Ergebnis
+    -- wurde bisher komplett verworfen (`pcall(...)` ohne jede Auswertung
+    -- des Rueckgabewerts) und "changed"/INFO wurde IMMER geloggt, selbst
+    -- bei einem fehlgeschlagenen Schreibversuch -- das Command wurde ueber
+    -- command_handler.lua's Rueckgabe von `nil` (-> `{ ok = true }`) auch
+    -- gegenueber MASTER als vollstaendig angewendet quittiert. Gibt jetzt
+    -- das echte Persistenzresultat zurueck, damit der Aufrufer (siehe
+    -- SET_REACTOR_FILL_TARGET in command_handler.lua) ein ehrliches
+    -- `persisted`-Feld ins ACK_APPLIED-Ergebnis aufnehmen kann.
     set_reactor_fill_target = function(value)
       config.rails = config.rails or {}
       config.rails.reactor_fill_target = value
-      pcall(utils.write_config, CONFIG.CONFIG_PATH, config)
-      log("INFO", ("Reactor fill target changed to %.0f%%"):format(value * 100))
+      local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
+      if not ok_write then
+        log("WARN", ("SET_REACTOR_FILL_TARGET: Persistierung fehlgeschlagen (%s) -- Wert gilt nur bis zum naechsten Neustart"):format(tostring(werr)))
+      else
+        log("INFO", ("Reactor fill target changed to %.0f%%"):format(value * 100))
+      end
+      return ok_write == true
     end,
     log = log,
     capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state,
@@ -916,9 +948,37 @@ local function init()
       -- CC:Tweaked CONFIG-Werte
       START_FLOW   = CONFIG.START_FLOW   or 100,
       RPM_TOL      = CONFIG.RPM_TOLERANCE or 15,
-      TURBINE_MODE = CONFIG.TURBINE_MODE_RAMP or "RAMP",
-      -- Diagnose-Stub (ramp_duration braucht discovery-Context)
-      ramp_duration = function() return 30 end,
+      -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+      -- PERFORMANCE_2026-07-12.md Abschnitt 11). Hiess bisher "TURBINE_MODE"
+      -- und war ein reiner STRING (CONFIG.TURBINE_MODE_RAMP ist selbst ein
+      -- String, z.B. "RAMP") -- module_lifecycle.lua indizierte diesen Wert
+      -- aber als Tabelle (ctx.TURBINE_MODE.RAMP), was im echten Produktions-
+      -- Context zu "attempt to index a string value" fuehrte bzw. (falls
+      -- durch pcall/Fehlerpfad verdeckt) ctrl.mode nie zuverlaessig auf den
+      -- vorgesehenen Rampenmodus setzte. Konsistent mit turbine_control.lua's
+      -- eigener Konvention (ctx.CONFIG.TURBINE_MODE_RAMP, ueberall ein reiner
+      -- String -- siehe z.B. dessen Zeile mit "ctrl.mode = ctx.CONFIG.
+      -- TURBINE_MODE_RAMP or \"RAMP\"") umbenannt zu TURBINE_MODE_RAMP,
+      -- weiterhin ein String -- module_lifecycle.lua liest jetzt direkt
+      -- ctx.TURBINE_MODE_RAMP statt ctx.TURBINE_MODE.RAMP.
+      TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
+      -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+      -- PERFORMANCE_2026-07-12.md Abschnitt 12). Dieser Diagnose-Stub gab
+      -- bisher "30" zurueck, benannt als "ramp_duration" -- ohne jede
+      -- Einheit im Namen. module_lifecycle.lua's process_startup() rechnet
+      -- aber mit "(now - module.start_time) / duration", wobei "now" und
+      -- "start_time" beide os.epoch("utc") in MILLISEKUNDEN sind -- die
+      -- Reaktorrampe erreichte dadurch bereits nach ~30 Millisekunden 100%
+      -- Fortschritt statt der beabsichtigten 30 SEKUNDEN, ein klarer
+      -- Widerspruch zum 60s-Startup-Stage-Timeout (siehe VALVE_PHASE_
+      -- TIMEOUT_MS-aehnliche Deadlines) und zur fachlichen Bedeutung einer
+      -- Rampe. Jetzt explizit als Sekunden benannt und einmalig in
+      -- Millisekunden umgerechnet -- "ramp_duration_ms" liefert garantiert
+      -- Millisekunden, keine unbenannte Zahlenkonstante mehr.
+      ramp_duration_ms = function(_ramp_profile)
+        local STARTUP_RAMP_DURATION_S = 30
+        return STARTUP_RAMP_DURATION_S * 1000
+      end,
       warn_unsupported = function(name, reason)
         warn_once("unsupported:" .. tostring(name),
           "Device unsupported: " .. tostring(name) .. " (" .. tostring(reason or "") .. ")")

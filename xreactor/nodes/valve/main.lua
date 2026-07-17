@@ -181,7 +181,19 @@ local function write_actuator(high)
     end
     -- high=true (BLOCKIERT) -> Auto-Modus AUS; high=false (OFFEN) -> AN.
     local ok, err = pcall(sorter.setAutoMode, not high)
-    if not ok then return false, tostring(err) end
+    if not ok then
+      -- Fix (2026-07-17): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
+      -- PERFORMANCE_2026-07-12.md Abschnitt 21). get_sorter() cachte den
+      -- einmal gewrappten Sorter bisher DAUERHAFT -- scheiterte ein
+      -- spaeterer Call (Detach/Reattach, ersetztes Peripheral, Chunk-
+      -- Entladen), blieb sorter_device trotzdem gesetzt und jeder weitere
+      -- Versuch traf denselben kaputten Handle erneut, ohne je neu zu
+      -- wrappen. Jetzt: bei einem Callfehler wird der Cache geleert, der
+      -- naechste get_sorter()-Aufruf (naechster Retry) wrappt das
+      -- Peripheral frisch.
+      sorter_device = nil
+      return false, tostring(err)
+    end
     return true
   end
   -- Standard: Redstone (unveraendertes Verhalten wie bisher).
@@ -256,12 +268,19 @@ local function remember_command(id)
   end
 end
 
-local function send_valve_ack(reply_side, command_id, applied, high, err)
+-- Fix (2026-07-17): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
+-- 2026-07-12.md Abschnitt 21). Ergaenzt um `src`/`dst` -- die eigentliche
+-- ACK-Zuordnung auf FUEL-Seite laeuft bereits ausschliesslich ueber die
+-- (per ROUTER-P0 command-id-gebundene) `command_id`, aber `src`/`dst`
+-- machen den ACK auch fuer Logging/Diagnose eindeutig einem Sender/
+-- Empfaenger zuordenbar, statt nur "irgendein VALVE_ACK auf Kanal 6504".
+local function send_valve_ack(reply_side, command_id, applied, high, err, dst)
   if not command_id or not reply_side then return end
   local ok, modem = pcall(peripheral.wrap, reply_side)
   if not ok or not modem or type(modem.transmit) ~= "function" then return end
   pcall(modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
     type = "VALVE_ACK", command_id = command_id, applied = applied == true, high = high, error = err,
+    src = node_id, dst = dst,
   })
 end
 
@@ -286,15 +305,32 @@ local function handle_valve_channel_event(event)
   if message.dst ~= node_id then return end  -- nicht fuer diese Node bestimmt
   -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md). "fremder Sender auf Kanal 6504 kann
-  -- passende Kommandos senden" -- optionale, ABWAERTSKOMPATIBLE Pruefung:
-  -- falls config.trusted_source gesetzt ist, werden Kommandos von einem
-  -- ANDEREN src stillschweigend verworfen. Standardmaessig (Feld nicht
-  -- gesetzt) bleibt das Verhalten unveraendert (jeder Sender akzeptiert)
-  -- -- eine erzwungene Pflichtkonfiguration wuerde bestehende
-  -- Installationen ohne dieses Feld sofort funktionsunfaehig machen.
-  if config.trusted_source and message.src ~= config.trusted_source then
-    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE von nicht vertrauenswuerdiger Quelle ignoriert: " .. tostring(message.src), "WARN")
-    return
+  -- passende Kommandos senden".
+  --
+  -- Fix (2026-07-17): VALVE-P1 (Abschnitt 21). Vorher war die Pruefung rein
+  -- OPTIONAL -- ohne manuell gesetztes config.trusted_source akzeptierte
+  -- die Node auf Dauer JEDEN Sender, der ein korrekt adressiertes SET_VALVE
+  -- auf Kanal 6504 sendet. Fuer einen Safety-Aktor (Ventil) sollte die
+  -- erlaubte Steuerquelle stattdessen ueber einen Pairingzustand gebunden
+  -- sein. Jetzt: automatisches Pairing beim ERSTEN akzeptierten SET_VALVE
+  -- nach einer frischen Installation -- config.trusted_source wird auf den
+  -- Absender dieses ersten Kommandos gesetzt und in der geschuetzten
+  -- Nutzerconfig persistiert (ueberlebt Neustarts). Jeder SPAETERE Sender
+  -- mit abweichender src wird verworfen. Bleibt dadurch abwaertskompatibel
+  -- (kein manuelles Vorab-Pairing noetig, funktioniert "out of the box"),
+  -- schliesst aber die Luecke "akzeptiert dauerhaft jeden Sender".
+  if config.trusted_source then
+    if message.src ~= config.trusted_source then
+      utils.log(CONFIG.LOG_PREFIX, "SET_VALVE von nicht vertrauenswuerdiger Quelle ignoriert: " .. tostring(message.src), "WARN")
+      return
+    end
+  else
+    config.trusted_source = message.src
+    local ok_pair, perr = utils.write_config(CONFIG.CONFIG_PATH, config)
+    if not ok_pair then
+      utils.log(CONFIG.LOG_PREFIX, "trusted_source-Pairing konnte nicht persistiert werden (" .. tostring(perr) .. ") -- gilt nur bis zum naechsten Neustart", "WARN")
+    end
+    utils.log(CONFIG.LOG_PREFIX, "trusted_source automatisch an " .. tostring(message.src) .. " gebunden (Erstkommando)", "INFO")
   end
   if type(message.high) ~= "boolean" then
     utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltiges 'high' ignoriert", "WARN")
@@ -325,7 +361,7 @@ local function handle_valve_channel_event(event)
       remember_command(message.command_id)
     end
   end
-  send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error)
+  send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error, message.src)
 end
 
 local comms = comms_service.new({
