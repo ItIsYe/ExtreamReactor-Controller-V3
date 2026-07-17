@@ -33,7 +33,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Auto-Update | **KRITISCH TEILWEISE** | kein transaktionaler Completion-Marker, Runtime läuft beim Reinstall weiter, kritische FS-Fehler werden teilweise ignoriert |
+| Installer / Auto-Update | **KRITISCH TEILWEISE** | kritische FS-Ergebnisse werden jetzt geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5 behoben); kein transaktionaler Completion-Marker, Runtime läuft beim Reinstall weiter |
 | Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **WEITGEHEND UMGESETZT** | Config-Editor: Einzelnode-/Alle-Auswahl, `require_applied` und Applied-ACK-Tracking je Ziel behoben (Abschnitt 10) |
@@ -72,6 +72,7 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 
 - Manifest und heruntergeladene Dateien verwenden im modularen Installer denselben aufgelösten Source-Ref.
 - `installer/stage.lua` prüft nach jedem Write Größe und CRC32.
+- `installer/stage.lua`s `M.write()` löscht die alte Datei nicht mehr ungeprüft, wenn der Backup-Move fehlschlägt; alle kritischen FS-Operationen in `installer/init.lua` und im tatsächlich ausgeführten Live-Installflow von `/installer` brechen bei Fehlschlag jetzt kontrolliert ab (Abschnitt 5).
 - automatische Speicherbereinigung löscht nicht mehr pauschal `/xreactor_logs`.
 - REPROCESSOR-`feed_router.lua` besitzt jetzt den Rollen-Scope `REPROCESSING`.
 - `optional/speaker_alarm.lua` besitzt einen Rollen-Scope.
@@ -221,28 +222,39 @@ Jede Rolle benötigt einen expliziten Quiesce-Handler. Für FUEL/REPROCESSOR/VAL
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)** — mit Ausnahme des letzten Punkts ("Fehlerpfad muss Journal/Recoverymarker aktualisieren"), der zu #42 (transaktionales Installjournal) gehört und dort behandelt wird.
 
-Mehrere kritische Operationen sind weiterhin als `pcall(...)` ohne anschließende Ergebnisprüfung ausgeführt, unter anderem:
+Bestätigt in allen drei Codepfaden: `xreactor/installer/stage.lua`s `M.write()`, `xreactor/installer/init.lua` und dem eingebetteten `stage_src`/`init_src`-Text sowie dem tatsächlich ausgeführten Live-Installflow von `/installer` (der Monolith enthält KEINE zwei redundant ausgeführten Installflows, wie zunächst vermutet — nur der Block ab `-- ── Alte Installation löschen` gegen Zeilenende läuft wirklich; der scheinbar identische frühere Block ist Teil des nur als Text eingebetteten `init_src`, das lediglich für die spätere On-Disk-Ablage von `xreactor/installer/init.lua` verwendet wird).
 
-- Löschen beziehungsweise Erzeugen des Installationsroots,
-- Teile des Minimal-Restores,
-- Schreiben von Rollen-/Feature-/Updaterconfig,
-- Schreiben des Startupwrappers.
+Zwei Fehlerklassen wurden bestätigt:
 
-Zusätzlich besitzt `stage.write()` noch einen unsicheren Fallback: Schlägt das Verschieben der alten Datei nach `.xr_prev` fehl, wird die alte Zieldatei gelöscht und der Lauf versucht trotzdem weiterzumachen.
+1. **Unsicherer Fallback in `stage.write()`**: Schlug das Verschieben der alten Datei nach `.xr_prev` fehl (`pcall(fs.move, ...)` lieferte `false`), wurde die alte Zieldatei trotzdem gelöscht ("als letzter Ausweg") und der Lauf machte weiter, als sei nichts geschehen. Schlug danach auch noch der finale `tmp -> path`-Move fehl, war die alte Datei unwiderruflich weg UND kein Backup vorhanden, aus dem `path` hätte zurückgeholt werden können — echter, irreversibler Datenverlust.
+2. **Ignorierte Rückgabewerte an 8+ Aufrufstellen**: `INSTALL_ROOT` löschen/neu anlegen, der Minimal-Restore-Loop (role.lua/remote_update.lua/node_id.txt), sowie die Schreibvorgänge für `optional_features.lua`, `role.lua`, `startup.lua` und `remote_update.lua` — jeweils als `pcall(...)` bzw. `stage_mod.write(...)` ohne Prüfung des Rückgabewerts. Ein Fehlschlag (z.B. kein Speicherplatz, schreibgeschützter Datenträger) blieb unbemerkt; die Installation lief mit einer teilweise/nicht angelegten Zielstruktur bzw. ganz ohne Rolle weiter.
 
-## Folge
+Fix:
 
-Der Installer kann nach einem fehlgeschlagenen Lösch-, Move-, Mkdir- oder Restore-Schritt fortfahren und später einen scheinbar erfolgreichen, aber unvollständigen Stand hinterlassen.
+- `stage.lua`s `M.write()`: die alte Datei wird nur noch gelöscht, wenn `fs.exists(backup)` nach dem Move tatsächlich bestätigt, dass sie am Backup-Pfad liegt (nicht mehr nur am `pcall`-Erfolg von `fs.move`). Schlägt der Backup-Move fehl, bricht `M.write()` sofort mit klarem Fehler ab, `path` bleibt unangetastet. Ebenso wird nach dem finalen `tmp -> path`-Move zusätzlich `fs.exists(path)` verifiziert, nicht nur der `pcall`-Erfolg.
+- `installer/init.lua` und der tatsächlich ausgeführte Installflow in `/installer`: alle 8 identifizierten Aufrufstellen prüfen jetzt das Ergebnis explizit und brechen bei Fehlschlag mit `error(..., 0)` ab (gleiches Muster wie das bereits vorhandene `stage_mod.install()`-Ergebnis-Check).
+- Die eingebetteten `stage_src`/`init_src`-Textkopien in `/installer` wurden identisch mitgezogen, damit sie nicht erneut von den echten `xreactor/installer/*.lua`-Dateien abdriften.
 
-## Verbindlicher Fix
+Pflicht-Tests:
+- `tests/installer_stage_write_backup_failure_test.lua` — treibt `stage.write()` mit einem gemockten `fs`, dessen `fs.move` beim Backup-Move (Ziel endet auf `.xr_prev`) einen Fehler wirft; bestätigt, dass die alte Datei erhalten bleibt, kein `.xr_tmp` zurückbleibt und ein klarer Fehler zurückkommt. Zusätzlich ein Sanity-Check, dass normale Writes weiterhin funktionieren.
+- `tests/installer_init_critical_write_abort_test.lua` — extrahiert die role.lua-Schreib- und INSTALL_ROOT-Neuanlage-Blöcke direkt per Marker aus dem echten `installer/init.lua`-Quelltext und führt sie isoliert mit gemocktem `stage_mod`/`fs` aus; bestätigt, dass ein Fehlschlag zum Abbruch führt.
+- `tests/installer_monolith_critical_write_abort_test.lua` — dieselbe Technik für den tatsächlich ausgeführten Live-Codepfad in `/installer`.
 
-- jede kritische FS-Operation muss explizit geprüft werden,
-- bei Fehler sofort abbrechen,
-- alte Datei niemals löschen, wenn das Backup nicht bestätigt vorhanden ist,
-- Restorewrites einzeln verifizieren,
-- Fehlerpfad muss Journal/Recoverymarker aktualisieren.
+Alle drei Tests wurden per `git stash` gegen den Vorfix-Code verifiziert (schlagen dort fehl, da der extrahierte/aufgerufene Code aus der jeweils aktuellen Datei kommt).
+
+## Folge (vor dem Fix)
+
+Der Installer konnte nach einem fehlgeschlagenen Lösch-, Move-, Mkdir- oder Restore-Schritt fortfahren und später einen scheinbar erfolgreichen, aber unvollständigen oder sogar datenverlustbehafteten Stand hinterlassen.
+
+## Verbindlicher Fix (umgesetzt, bis auf Journal-Punkt)
+
+- jede kritische FS-Operation muss explizit geprüft werden — **umgesetzt**,
+- bei Fehler sofort abbrechen — **umgesetzt**,
+- alte Datei niemals löschen, wenn das Backup nicht bestätigt vorhanden ist — **umgesetzt**,
+- Restorewrites einzeln verifizieren — **umgesetzt** (Minimal-Restore-Loop bricht jetzt pro Datei ab; der vollständige Config-Restore nach der Installation verifizierte bereits vorher byte-genau),
+- Fehlerpfad muss Journal/Recoverymarker aktualisieren — **nicht Teil dieses Fixes**, gehört zu #42.
 
 ---
 
@@ -823,7 +835,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 5. ~~**RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
 6. **INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.
 7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
-8. **INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.
+8. ~~**INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 5): `tests/installer_stage_write_backup_failure_test.lua`, `tests/installer_init_critical_write_abort_test.lua`, `tests/installer_monolith_critical_write_abort_test.lua`.
 9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. ~~**MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.~~ BEHOBEN (2026-07-17, siehe Abschnitt 10): `tests/master_config_edits_test.lua`, `tests/master_config_edit_ack_wiring_test.lua`, `tests/master_ui_controller_config_edit_action_test.lua`.
 11. ~~**ENERGY-P1:** genau eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
