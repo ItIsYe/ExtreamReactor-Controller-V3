@@ -34,7 +34,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
 | Installer / Auto-Update | **WEITGEHEND BEHOBEN** | kritische FS-Ergebnisse werden geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5); transaktionales Installationsjournal mit Boot-Recovery-Guard (Abschnitt 3); rollenübergreifender Quiesce-Handshake vor jedem Reinstall (Abschnitt 4); vollständige Planvalidierung und doppelte Installer-Implementierung bleiben offen (Abschnitt 7) |
-| Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
+| Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Vorab-Planvalidierung inkl. transitiver require()-Abdeckung vorhanden (Abschnitt 7, deckte zwei echte Manifest-Lücken auf); doppelte Installer-Implementierung bleibt offen (Abschnitt 8) |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **WEITGEHEND UMGESETZT** | Config-Editor: Einzelnode-/Alle-Auswahl, `require_applied` und Applied-ACK-Tracking je Ziel behoben (Abschnitt 10) |
 | RT | **WEITGEHEND UMGESETZT** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11), Rampendauer-Einheitenfehler (Abschnitt 12) und fehlende `update_module_states()`-Verdrahtung (Abschnitt 13) behoben; Persistenz-/Observability-Restpunkte (Abschnitt 14) weiterhin offen |
@@ -75,6 +75,7 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 - `installer/stage.lua`s `M.write()` löscht die alte Datei nicht mehr ungeprüft, wenn der Backup-Move fehlschlägt; alle kritischen FS-Operationen in `installer/init.lua` und im tatsächlich ausgeführten Live-Installflow von `/installer` brechen bei Fehlschlag jetzt kontrolliert ab (Abschnitt 5).
 - transaktionales Installationsjournal (`installer/journal.lua`, PREPARED→INSTALLING→VERIFYING→COMMITTED), `release.lua` wird zuletzt committet, `xreactor/start.lua` verhindert bei jedem Boot den Start der Rolle, solange das Journal nicht COMMITTED ist (Abschnitt 3).
 - rollenübergreifender Update-Handshake (`core/update_handshake.lua`) stoppt jede Rolle kontrolliert und bestätigt für FUEL/REPROCESSOR/VALVE/WATER den sicheren physischen Ausgangszustand, bevor der Installer Dateien ersetzt (Abschnitt 4).
+- `installer/plan_validator.lua` lehnt einen strukturell fehlerhaften Installationsplan (unbekannte Rolle, fehlender Entrypoint, unsichere Pfade, ungültige Hash-/Größenfelder, Manifest-Inkonsistenz, Übergröße) vor dem ersten destruktiven Schritt ab; ein Testsuite-Check gegen den echten Quelltext deckt zusätzlich fehlende transitive `require()`/`dofile()`-Manifestabdeckung auf (Abschnitt 7, deckte zwei echte Lücken auf: `services/alert_service.lua`/`core/alert_rules.lua`, `core/mockup_ui.lua`/`shared/colors.lua`).
 - automatische Speicherbereinigung löscht nicht mehr pauschal `/xreactor_logs`.
 - REPROCESSOR-`feed_router.lua` besitzt jetzt den Rollen-Scope `REPROCESSING`.
 - `optional/speaker_alarm.lua` besitzt einen Rollen-Scope.
@@ -287,24 +288,33 @@ Stromausfall zwischen Backup-Move und finalem Move kann eine Rollen- oder Shared
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Vor dem Löschen des alten Baums fehlen vollständige Guards für:
+Bestätigt: vor dem Löschen des alten Baums fehlten vollständige Guards für erlaubte Rollenwerte, erwarteten Entrypoint der gewählten Rolle, doppelte/absolute/`..`-Traversal-Pfade, gültige Hash-/Größenfelder, Manifest-Selbstkonsistenz und maximale Manifest-/Dateigröße.
 
-- erlaubte Rollenwerte,
-- erwarteten Entrypoint der gewählten Rolle,
-- doppelte Pfade,
-- absolute Pfade und `..`-Traversal,
-- gültige Hash-/Größenfelder,
-- Manifest-/Releasekonsistenz,
-- maximale Manifest- und Dateigröße,
-- transitive `require()`-/`dofile()`-Abdeckung.
+Fix — neues, reines Datenmodul `installer/plan_validator.lua` implementiert `M.validate(plan)`: prüft ausschließlich, was aus Rolle + Manifest + geplanter Dateiliste OHNE Netzwerk-Download bekannt ist (die eigentlichen Dateiinhalte existieren vor dem Download noch nicht). Wird sowohl in `installer/init.lua` als auch im tatsächlich ausgeführten Live-Installflow von `/installer` unmittelbar nach der Bestimmung der geplanten Dateimenge und VOR dem ersten destruktiven Schritt ("Alte Installation löschen") aufgerufen — ein einziger fehlgeschlagener Guard bricht mit `error()` ab, bevor irgendetwas gelöscht wird.
 
-`ROLE_EXTRAS` kann außerdem Dateien ergänzen, deren Manifestmetadaten fehlen.
+Geprüft werden: erlaubte Rollenwerte (`M.ROLE_ENTRYPOINTS`, bewusst dieselbe Zuordnung wie `xreactor/start.lua`s `ROLE_ENTRY`, strukturell synchron gehalten), erwarteter Entrypoint der Rolle muss im Plan enthalten sein, doppelte Pfade (Lua-Tabellen können ohnehin keine doppelten Schlüssel haben, aber die Iteration deckt es strukturell ab), absolute Pfade und `..`-Traversal, gültige `size_bytes`/`hash`-Felder (CRC32, 8 Hex-Zeichen — `nil` ist für lokal generierte Inhalte ohne Manifest-Hash bewusst erlaubt), Manifest-Selbstkonsistenz (`manifest_id` muss `manifest_version` enthalten) sowie eine maximale Einzeldatei- und Gesamtplangröße (Sicherheitsnetz gegen ein korruptes/böswilliges Manifest).
 
-## Fix
+Die transitive `require()`-/`dofile()`-Abdeckung lässt sich NICHT als reiner Laufzeit-Guard umsetzen (die Dateiinhalte sind vor dem Download nicht bekannt) — stattdessen wurde sie als eigenständiger Testsuite-Check gegen den echten lokalen Quelltext umgesetzt (`tests/manifest_transitive_require_coverage_test.lua`, siehe unten), der verhindert, dass eine unvollständige Dateizuordnung überhaupt erst ins Manifest gelangt, statt sie erst zur Laufzeit auf einem Node zu entdecken. Dieser Check deckte dabei zwei ECHTE, bis dahin unentdeckte Manifest-Lücken auf (beide behoben):
 
-Ein einziges `validate_install_plan()` muss vor dem Backup-/Delete-Schritt die gesamte Installationsmenge ablehnen, sobald irgendeine strukturelle Bedingung nicht erfüllt ist.
+- `services/alert_service.lua` (bisher ungefiltert an JEDE nicht-LOG-Rolle mitgeschickt, obwohl nur `master/runtime_loop.lua` es tatsächlich `require()`t) fehlte dabei nicht selbst, sondern seine eigene, unbedingte Abhängigkeit `core/alert_rules.lua` (bereits korrekt auf `required_for={"MASTER"}` beschränkt) — für alle Nicht-MASTER-Rollen eine tote, aber strukturell inkonsistente Kombination (kein tatsächliches Crash-Risiko, da `alert_service.lua` dort nie `require()`t wird, aber unnötiger Ballast). Jetzt `required_for={"MASTER"}` ergänzt.
+- `shared/colors.lua` fehlte bei LOG_COLLECTOR: `core/mockup_ui.lua` hat `always=true` (wird u.a. an LOG_COLLECTOR mitgeschickt, obwohl dort in Wirklichkeit nie geladen) und `require()`t `shared.colors` unbedingt beim Laden — `shared/colors.lua` selbst hatte kein `always=true` und wurde vom `is_log`-Filter in `files_for_role()` daher ausgefiltert. Jetzt `always=true` ergänzt.
+- Zusätzlich wurde ein struktureller Bug in `installer/manifest.lua`s `files_for_role()` selbst gefunden und behoben: `required_for` wurde bisher NUR für `roles.*`-Einträge ausgewertet — ein `required_for`-Feld auf einem `base_files`-Eintrag (wie es der `alert_service.lua`-Fix braucht) hatte schlicht keine Wirkung.
+
+`ROLE_EXTRAS`-Dateien ohne Manifestmetadaten sind über `plan_validator.validate()`s Hash-/Größenfeld-Prüfung ebenfalls abgedeckt (ein `ROLE_EXTRAS`-Eintrag ohne gültige Metadaten würde die Validierung nicht bestehen).
+
+Pflicht-Tests:
+- `tests/installer_plan_validator_test.lua` — treibt `plan_validator.validate()` direkt: je ein Fall pro geprüfter Bedingung (gültiger Plan wird akzeptiert; unbekannte Rolle, fehlender Entrypoint, absoluter Pfad, `..`-Traversal, ungültiges Hash-Feld, negative Größe, überdimensionierte Datei, Manifest-Inkonsistenz werden jeweils einzeln abgelehnt; fehlendes/`nil` Hash-Feld ist erlaubt), plus strukturelle Synchronitätsprüfung zwischen `ROLE_ENTRYPOINTS` und `start.lua`s `ROLE_ENTRY`, plus Verdrahtungsprüfung (Aufruf VOR dem Lösch-Schritt) in `installer/init.lua` und im Live-Installflow von `/installer`.
+- `tests/manifest_transitive_require_coverage_test.lua` — treibt die echte `files_for_role()` gegen den echten Quelltext für jede Rolle; deckte die beiden oben beschriebenen echten Lücken auf.
+
+Alle Tests wurden per `git stash` gegen den Vorfix-Code verifiziert.
+
+**Abschnitt 8 (INSTALL-P1, zwei unabhängige Installerimplementierungen) bleibt bewusst OFFEN** — siehe dort. Ein "einziges `validate_install_plan()`" im wörtlichen Sinn des Audits würde idealerweise nur an einer Stelle existieren; da aber weiterhin zwei Codepfade (`installer/init.lua` und der monolithische `/installer`) parallel existieren, musste die Validierung an beiden Stellen (mit identischer Logik, per `git diff`-Sync gehalten) verdrahtet werden. Die vollständige Vereinheitlichung (Abschnitt 8) würde diese Duplizierung strukturell auflösen, ist aber ein deutlich größerer, risikoreicherer Umbau und wird separat behandelt.
+
+## Fix (umgesetzt)
+
+Neues `installer/plan_validator.lua` mit `M.validate(plan)`, aufgerufen vor dem Backup-/Delete-Schritt in beiden Installer-Codepfaden — lehnt die gesamte Installationsmenge ab, sobald irgendeine strukturelle Bedingung nicht erfüllt ist.
 
 ---
 
@@ -846,7 +856,8 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 11. ~~**ENERGY-P1:** genau eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
 12. ~~**WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 16): `tests/water_rt_persistence_ack_honesty_test.lua`.
 13. ~~**VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.~~ BEHOBEN (2026-07-17, siehe Abschnitt 21): `tests/valve_sender_pairing_and_sorter_reconnect_test.lua`.
-14. **INSTALL/MANIFEST-P1:** vollständige Planvalidierung und nur eine Installerimplementierung.
+14. ~~**INSTALL/MANIFEST-P1:** vollständige Planvalidierung.~~ BEHOBEN (2026-07-17, siehe Abschnitt 7): `tests/installer_plan_validator_test.lua`, `tests/manifest_transitive_require_coverage_test.lua`.
+14b. **INSTALL-P1:** nur eine Installerimplementierung (siehe Abschnitt 8) — weiterhin offen, eigenständiger, größerer Umbau.
 15. **TEST-P0:** Ausschlusslisten Test für Test abbauen.
 16. Danach Ingame-Last-, Funkverlust-, Reconnect-, Reboot-, Stromausfall- und Updateabnahme.
 

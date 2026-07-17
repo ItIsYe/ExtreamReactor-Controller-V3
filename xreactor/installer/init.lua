@@ -6,6 +6,7 @@ local manifest_mod = dofile("/xreactor/installer/manifest.lua")
 local stage_mod    = dofile("/xreactor/installer/stage.lua")
 local ui_mod       = dofile("/xreactor/installer/ui.lua")
 local journal_mod  = dofile("/xreactor/installer/journal.lua")
+local plan_validator_mod = dofile("/xreactor/installer/plan_validator.lua")
 
 local INSTALL_ROOT    = "/xreactor"
 local STARTUP_PATH    = "/startup.lua"
@@ -337,6 +338,20 @@ local expected = manifest_mod.files_for_role(manifest, role.label, selected_feat
 local expected_paths = {}
 for rel in pairs(expected) do expected_paths[#expected_paths + 1] = rel end
 table.sort(expected_paths)
+
+-- Fix (2026-07-17): CRITICAL. INSTALL/MANIFEST-P1 aus docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md (Abschnitt 7). Vor diesem Fix fehlten
+-- vollstaendige Guards fuer die geplante Installationsmenge (erlaubte
+-- Rollenwerte, erwarteter Entrypoint, doppelte/unsichere Pfade, gueltige
+-- Hash-/Groessenfelder, Manifest-Selbstkonsistenz, maximale Groesse) --
+-- ein strukturell fehlerhafter Plan wurde erst waehrend/nach dem Loeschen
+-- des alten Baums entdeckt (oder gar nicht). plan_validator.validate()
+-- lehnt die GESAMTE Installation ab, sobald irgendeine Bedingung verletzt
+-- ist, NOCH VOR dem ersten destruktiven Schritt.
+local ok_plan, err_plan = plan_validator_mod.validate({ role = role, manifest = manifest, files = expected })
+if not ok_plan then
+  error("Installationsplan ungueltig: " .. tostring(err_plan), 0)
+end
 
 local ok_journal, err_journal = journal_mod.write({
   state = journal_mod.STATE.PREPARED,

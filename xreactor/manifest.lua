@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 470,
-  manifest_id = "manifest-v470",
+  manifest_version = 471,
+  manifest_id = "manifest-v471",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -9,13 +9,14 @@ return {
   { path = "services/heartbeat_service.lua", size_bytes = 3938, hash = "6b908df2" },
   { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6" },
   { path = "installer/http.lua", size_bytes = 3948, hash = "96b3ae8a", always=true },
-  { path = "installer/manifest.lua", size_bytes = 5021, hash = "e168db3f", always=true },
+  { path = "installer/manifest.lua", size_bytes = 5794, hash = "faaa98fa", always=true },
   { path = "installer/stage.lua", size_bytes = 9164, hash = "b067f20b", always=true },
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 17674, hash = "8c7a115a", always=true },
-  { path = "installer/init.lua", size_bytes = 26034, hash = "c82a50bf", always=true },
+  { path = "installer/init.lua", size_bytes = 26951, hash = "b484f2e6", always=true },
   { path = "installer/journal.lua", size_bytes = 4300, hash = "140883d3", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "46f4fd7f", always=true },
+  { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "1c784c27", always=true },
   { path = "start.lua", size_bytes = 10982, hash = "7e210760", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -44,14 +45,28 @@ return {
   { path = "core/auto_update.lua", size_bytes = 5174, hash = "332b3250" },
   { path = "core/remote_update.lua", size_bytes = 13576, hash = "ac163240" },
   { path = "core/alerts.lua", size_bytes = 11048, hash = "7c28803c" },
-  { path = "services/alert_service.lua", size_bytes = 14551, hash = "be4bfdf2" },
+  -- Fix (2026-07-17): INSTALL/MANIFEST-P1 aus docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md (Abschnitt 7, transitive require()-Abdeckung,
+  -- siehe tests/manifest_transitive_require_coverage_test.lua). Ohne
+  -- required_for wurde diese Datei bisher an JEDE nicht-LOG-Rolle
+  -- mitgeschickt (unnoetiger Ballast -- nur master/runtime_loop.lua
+  -- require()t sie tatsaechlich), UND ihre eigene, unbedingte Abhaengigkeit
+  -- core/alert_rules.lua ist bereits korrekt auf required_for={"MASTER"}
+  -- beschraenkt -- eine faktisch tote, aber strukturell inkonsistente
+  -- Kombination.
+  { path = "services/alert_service.lua", size_bytes = 14551, hash = "be4bfdf2", required_for={"MASTER"} },
   { path = "services/comms_service.lua", size_bytes = 8807, hash = "b7133824" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4" },
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },
   { path = "services/service_manager.lua", size_bytes = 7459, hash = "6cb63793" },
   { path = "services/telemetry_service.lua", size_bytes = 5651, hash = "1bdb3693" },
   { path = "services/ui_service.lua", size_bytes = 5595, hash = "fcc90306" },
-  { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece" },
+  -- Fix (2026-07-17): INSTALL/MANIFEST-P1 (Abschnitt 7). core/mockup_ui.lua
+  -- hat always=true (wird u.a. an LOG_COLLECTOR mitgeschickt) und
+  -- require()t shared.colors unbedingt beim Laden -- ohne always=true hier
+  -- fehlte shared/colors.lua bei LOG_COLLECTOR (is_log-Filter in
+  -- files_for_role() liess ausschliesslich always=true Basisdateien durch).
+  { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece", always=true },
   { path = "shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
   { path = "shared/telemetry_schema.lua", size_bytes = 938, hash = "9567b224" },
   },
