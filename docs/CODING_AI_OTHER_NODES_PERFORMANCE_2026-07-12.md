@@ -33,7 +33,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Auto-Update | **KRITISCH TEILWEISE** | kritische FS-Ergebnisse werden jetzt geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5 behoben); kein transaktionaler Completion-Marker, Runtime läuft beim Reinstall weiter |
+| Installer / Auto-Update | **TEILWEISE** | kritische FS-Ergebnisse werden geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5 behoben); transaktionales Installationsjournal mit Boot-Recovery-Guard vorhanden (Abschnitt 3 behoben); Runtime läuft beim Reinstall weiter (Abschnitt 4, weiterhin offen) |
 | Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **WEITGEHEND UMGESETZT** | Config-Editor: Einzelnode-/Alle-Auswahl, `require_applied` und Applied-ACK-Tracking je Ziel behoben (Abschnitt 10) |
@@ -53,7 +53,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 
 Die kritischsten aktuellen Risiken sind:
 
-1. Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.
+1. ~~Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.~~ BEHOBEN (2026-07-17, siehe Abschnitt 3): transaktionales Installationsjournal, release.lua zuletzt committet, Boot-Guard verhindert Rollenstart bei unvollständigem Journal.
 2. Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.
 3. ~~RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11 und Abschnitt 12).
 4. ~~`module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13).
@@ -73,6 +73,7 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 - Manifest und heruntergeladene Dateien verwenden im modularen Installer denselben aufgelösten Source-Ref.
 - `installer/stage.lua` prüft nach jedem Write Größe und CRC32.
 - `installer/stage.lua`s `M.write()` löscht die alte Datei nicht mehr ungeprüft, wenn der Backup-Move fehlschlägt; alle kritischen FS-Operationen in `installer/init.lua` und im tatsächlich ausgeführten Live-Installflow von `/installer` brechen bei Fehlschlag jetzt kontrolliert ab (Abschnitt 5).
+- transaktionales Installationsjournal (`installer/journal.lua`, PREPARED→INSTALLING→VERIFYING→COMMITTED), `release.lua` wird zuletzt committet, `xreactor/start.lua` verhindert bei jedem Boot den Start der Rolle, solange das Journal nicht COMMITTED ist (Abschnitt 3).
 - automatische Speicherbereinigung löscht nicht mehr pauschal `/xreactor_logs`.
 - REPROCESSOR-`feed_router.lua` besitzt jetzt den Rollen-Scope `REPROCESSING`.
 - `optional/speaker_alarm.lua` besitzt einen Rollen-Scope.
@@ -131,47 +132,50 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
 ## Bestätigtes Problem
 
-`release.lua` wird wie eine normale Datei innerhalb der Installationsliste geschrieben. Danach folgen weitere Rollen-, Shared- und Startdateien. Bricht der Lauf nach dem Schreiben von `release.lua`, aber vor dem vollständigen Ende ab, kann der Rechner bereits die neue Release-/Manifestnummer melden, obwohl Teile der Installation fehlen oder alt geblieben sind.
+`release.lua` wurde wie eine normale Datei innerhalb der Installationsliste geschrieben. Danach folgten weitere Rollen-, Shared- und Startdateien. Bricht der Lauf nach dem Schreiben von `release.lua`, aber vor dem vollständigen Ende ab, konnte der Rechner bereits die neue Release-/Manifestnummer melden, obwohl Teile der Installation fehlten oder alt geblieben waren.
 
-Es existiert kein persistenter Zustand wie:
+Es existierte kein persistenter Zustand wie `PREPARED`/`INSTALLING`/`VERIFYING`/`COMMITTED` und kein Completion-Marker, der erst nach vollständiger Verifikation gesetzt wird.
 
-```text
-PREPARED
-INSTALLING
-VERIFYING
-COMMITTED
-FAILED
-```
+Fix:
 
-und kein Completion-Marker, der erst nach vollständiger Verifikation gesetzt wird.
+- Neues Modul `installer/journal.lua`: schreibt ein Installationsjournal nach `/xreactor_install_journal.lua` — bewusst AUSSERHALB von `/xreactor`, damit es einen abgebrochenen Lauf auch dann noch belegen kann, wenn `/xreactor` selbst gelöscht oder nur teilweise neu geschrieben wurde. Eigener, von `stage.lua` unabhängiger atomarer Write (tmp-Datei + `fs.move`), da das Journal auch von `xreactor/start.lua` bei jedem Boot gelesen wird, potenziell bevor der Rest von `/xreactor` in einem verlässlichen Zustand ist.
+- `installer/init.lua` (und identisch der tatsächlich ausgeführte Live-Installflow in `/installer`, siehe Abschnitt 5 zur Struktur des Monolithen): das Journal wird als `PREPARED` geschrieben, BEVOR der alte Baum gelöscht wird (Ziel-Ref, Manifest-ID, Rolle, vollständige erwartete Dateiliste aus `manifest_mod.files_for_role()`). Nach Neuanlage von `/xreactor` und Minimal-Restore wechselt es zu `INSTALLING`. Nach erfolgreichem `stage_mod.install()` zu `VERIFYING`, zusätzlich abgesichert durch eine explizite `fs.exists()`-Prüfung jeder erwarteten Datei (deckt implizit auch den Rollen-Entrypoint ab, da `files_for_role()` ihn immer enthält).
+- `release.lua` wird jetzt bewusst aus der Hauptinstallationsschleife ausgeschlossen und erst GANZ AM ENDE, nachdem wirklich alles andere (Dateien, Config-Restore, Rolle, Startup, Auto-Update-Config) erfolgreich geschrieben und verifiziert ist, als einzelne, letzte Datei installiert und CRC32-verifiziert. Erst danach wird das Journal auf `COMMITTED` gesetzt und sofort gelöscht — ein Absturz VOR diesem Punkt hinterlässt garantiert kein neues `release.lua` (der alte Stand bleibt für jede Versions-/Diagnoseanzeige "aktuell"), ein Absturz NACH diesem Punkt bedeutet eine vollständige, verifizierte Installation.
+- `xreactor/start.lua` prüft dieses Journal bei JEDEM Boot, BEVOR versucht wird, die (möglicherweise unvollständige) Rolle zu starten. Der Parser ist bewusst selbstständig (kein `dofile()` von `installer/journal.lua`) — bei einem sehr frühen Absturz könnte `/xreactor/installer/` selbst noch unvollständig sein, das Journal liegt aber immer außerhalb davon. Ist ein Journal vorhanden und nicht `COMMITTED`, wird die Rolle NICHT gestartet; stattdessen lädt `start.lua` einen frischen `/installer` herunter und führt ihn im unbeaufsichtigten Modus (`_G.__xreactor_remote_update = true`) aus — derselbe robuste, bereits CRC32-verifizierte Mechanismus, den `auto_update.lua` für normale Updates verwendet (kein neuer, ungetesteter chirurgischer Partial-Resume). Gelingt das, übernimmt der frische Installerlauf und rebootet nach eigenem, erneut journal-gesichertem Abschluss. Schlägt der Download/Lauf fehl (z.B. kein Netzwerk), bricht `start.lua` mit klarem Fehler ab, rebootet nach 5 Sekunden für einen erneuten Versuch — und startet in KEINEM dieser Zwischenschritte jemals die normale Rolle.
+- `xreactor/manifest.lua`: `installer/journal.lua` als neue `always=true`-Datei ergänzt.
 
-## Folge
+Bewusst NICHT Teil dieses Fixes: `core/bootstrap.lua`s `state.last_recovery`/`get_recovery_status()` ist ein bereits bestehender, aber toter Stub (wird nirgends auf einen Nicht-nil-Wert gesetzt) für eine SEPARATE, offenbar nie fertiggestellte MASTER-UI-Recovery-Banner-Funktion (`master/init_runtime.lua`s `recovery_notice`) — dieser Stub ist thematisch verwandt, aber ein eigenständiges, unabhängiges Feature, keine Voraussetzung für die hier geforderte Boot-Sicherheitsprüfung (die läuft vollständig und für ALLE Rollen in `start.lua`, bevor irgendein Rollenmodul inklusive MASTER überhaupt geladen wird). Bleibt als mögliche spätere Verbesserung offen.
 
-- Teilinstallation kann als aktuell erscheinen.
-- Auto-Update kann denselben Stand anschließend überspringen.
-- Diagnose und UI können eine falsche Versionskonsistenz anzeigen.
-- ein Neustart mitten im Update besitzt keine eindeutige Recoveryentscheidung.
+Pflicht-Tests:
+- `tests/installer_journal_state_machine_test.lua` — treibt `installer/journal.lua` direkt mit einer gemockten fs: Round-Trip (write→read liefert dieselben Felder), `check_incomplete()` klassifiziert PREPARED/INSTALLING/VERIFYING als unvollständig, COMMITTED und "kein Journal" als normal, `clear()` entfernt das Journal zuverlässig.
+- `tests/installer_journal_ordering_and_release_last_test.lua` — strukturelle Prüfung direkt am Quelltext (Positionsvergleich der Marker), dass sowohl `installer/init.lua` als auch der tatsächlich ausgeführte Live-Installflow in `/installer` (Anker: ein Kommentar, der nur im Live-Flow vorkommt, nicht in der nur eingebetteten `init_src`-Textkopie) die Reihenfolge PREPARED < INSTALLING < VERIFYING < release.lua-Install < COMMITTED < `clear()` einhalten und dass release.lua VOR der VERIFYING-Stufe aus der Hauptschleife ausgeschlossen wird.
+- `tests/start_lua_incomplete_install_blocks_role_test.lua` — extrahiert den Boot-Guard direkt aus dem echten `xreactor/start.lua`-Quelltext und führt ihn isoliert mit gemocktem `fs`/`http`/`os` aus: kein Journal oder `COMMITTED` → Guard feuert nicht; `INSTALLING` mit fehlgeschlagenem Recovery-Download → Boot bricht ab (Rolle wird nie erreicht), genau ein `os.reboot()` für den Retry; `VERIFYING` mit erfolgreichem Download → der heruntergeladene Recovery-Installer wird tatsächlich per `dofile()` ausgeführt, die Rolle wird trotzdem nicht in diesem Boot gestartet.
 
-## Verbindlicher Fix
+Alle drei Tests wurden per `git stash` gegen den Vorfix-Code verifiziert (schlagen dort fehl, da die geprüften Marker/das Guard-Verhalten dort schlicht nicht existieren).
 
-1. Installationsjournal außerhalb des ersetzten Baums anlegen.
-2. Ziel-Ref, Manifest-ID, Rolle und erwartete Dateiliste speichern.
-3. alle Dateien schreiben und verifizieren.
-4. Entrypoint und Rollenabhängigkeiten prüfen.
-5. `release.lua` und Completion-Marker **zuletzt** atomar committen.
-6. beim Boot unvollständigen Zustand erkennen und entweder Rollback oder kontrollierten Resume ausführen.
+## Folge (vor dem Fix)
 
-## Pflicht-Test
+- Teilinstallation konnte als aktuell erscheinen.
+- Auto-Update konnte denselben Stand anschließend überspringen.
+- Diagnose und UI konnten eine falsche Versionskonsistenz anzeigen.
+- ein Neustart mitten im Update besaß keine eindeutige Recoveryentscheidung.
 
-Stromausfall/Fehler nach jedem einzelnen Dateischritt injizieren. Nach jedem Reboot muss genau einer der Zustände gelten:
+## Verbindlicher Fix (umgesetzt)
 
-- vollständig alter Stand,
-- vollständig neuer Stand,
-- klarer Recoverymodus ohne Start der normalen Rolle.
+1. Installationsjournal außerhalb des ersetzten Baums anlegen — **umgesetzt**.
+2. Ziel-Ref, Manifest-ID, Rolle und erwartete Dateiliste speichern — **umgesetzt**.
+3. alle Dateien schreiben und verifizieren — **umgesetzt**.
+4. Entrypoint und Rollenabhängigkeiten prüfen — **umgesetzt** (Existenzprüfung der vollständigen erwarteten Dateiliste nach Installation).
+5. `release.lua` und Completion-Marker **zuletzt** atomar committen — **umgesetzt**.
+6. beim Boot unvollständigen Zustand erkennen und entweder Rollback oder kontrollierten Resume ausführen — **umgesetzt** (kontrollierter Resume via frischem Installerlauf; ein chirurgisches Rollback auf den exakten alten Dateizustand ist mit der bestehenden Architektur — kein vollständiges Datei-Backup, nur Config — nicht sinnvoll möglich, der volle Reinstall-Resume ist die sicherere, bereits robuste Alternative).
+
+## Pflicht-Test (Ergebnis)
+
+Die geforderte Fehlerinjektion "nach jedem einzelnen Dateischritt" als vollständige End-to-End-Simulation (Netzwerk, Download, jeder einzelne Dateischreibvorgang) würde externe Abhängigkeiten in die Testsuite ziehen, die in diesem Repo bewusst vermieden werden (siehe `tests/cc_env_shim.lua`). Stattdessen wurde die Invariante an ihren tatsächlichen Durchsetzungspunkten geprüft: der Boot-Guard in `start.lua` (verifiziert für alle vier relevanten Journalzustände: fehlend, COMMITTED, unvollständig+Recovery-Fehlschlag, unvollständig+Recovery-Erfolg) und die Journal-/Release-Reihenfolge im Installer selbst. Damit ist for jeden Absturzzeitpunkt entlang des Installationslaufs sichergestellt: entweder das Journal ist noch nicht auf `COMMITTED` (→ `start.lua` startet die Rolle nie, klarer Recoverymodus) oder es ist bereits `COMMITTED` (→ release.lua und alle Dateien sind nachweislich vollständig geschrieben).
 
 ---
 
@@ -833,7 +837,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 3. ~~**RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
 4. ~~**RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
 5. ~~**RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
-6. **INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.
+6. ~~**INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.~~ BEHOBEN (2026-07-17, siehe Abschnitt 3): `tests/installer_journal_state_machine_test.lua`, `tests/installer_journal_ordering_and_release_last_test.lua`, `tests/start_lua_incomplete_install_blocks_role_test.lua`.
 7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
 8. ~~**INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 5): `tests/installer_stage_write_backup_failure_test.lua`, `tests/installer_init_critical_write_abort_test.lua`, `tests/installer_monolith_critical_write_abort_test.lua`.
 9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.

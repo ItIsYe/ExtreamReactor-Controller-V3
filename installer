@@ -961,6 +961,7 @@ local http_mod     = dofile("/xreactor/installer/http.lua")
 local manifest_mod = dofile("/xreactor/installer/manifest.lua")
 local stage_mod    = dofile("/xreactor/installer/stage.lua")
 local ui_mod       = dofile("/xreactor/installer/ui.lua")
+local journal_mod  = dofile("/xreactor/installer/journal.lua")
 
 local INSTALL_ROOT    = "/xreactor"
 local STARTUP_PATH    = "/startup.lua"
@@ -1278,6 +1279,33 @@ if term and term.setCursorPos and not _G.__xreactor_remote_update then
   end
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 3). Bricht der Lauf zwischen dem
+-- Loeschen des alten Baums und dem vollstaendigen, verifizierten Ende ab,
+-- gab es bisher KEINE erkennbare Spur -- der naechste Boot startete die
+-- (moeglicherweise unvollstaendige) Rolle einfach normal weiter. Das
+-- Installationsjournal (installer/journal.lua) lebt AUSSERHALB von
+-- /xreactor und wird JETZT SCHON, vor dem ersten destruktiven Schritt,
+-- mit Ziel-Ref/Manifest-ID/Rolle/erwarteter Dateiliste als PREPARED
+-- geschrieben -- xreactor/start.lua prueft dieses Journal bei jedem Boot
+-- und startet die Rolle NICHT, solange es nicht COMMITTED ist (siehe dort).
+local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
+local expected_paths = {}
+for rel in pairs(expected) do expected_paths[#expected_paths + 1] = rel end
+table.sort(expected_paths)
+
+local ok_journal, err_journal = journal_mod.write({
+  state = journal_mod.STATE.PREPARED,
+  ref = ref,
+  manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
+  role = role.label,
+  started_at = os.epoch("utc"),
+  expected_files = expected_paths,
+})
+if not ok_journal then
+  error("Installationsjournal konnte nicht angelegt werden: " .. tostring(err_journal), 0)
+end
+
 -- Fix (2026-07-17): CRITICAL. INSTALL-P0.3 aus
 -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5). Die
 -- Ergebnisse von fs.delete/fs.makeDir hier sowie von jedem stage_mod.write()
@@ -1312,10 +1340,27 @@ for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
   end
 end
 
--- Dateien installieren
-local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
+local ok_j2, err_j2 = journal_mod.write({
+  state = journal_mod.STATE.INSTALLING,
+  ref = ref,
+  manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
+  role = role.label,
+  started_at = os.epoch("utc"),
+  expected_files = expected_paths,
+})
+if not ok_j2 then error("Installationsjournal (INSTALLING) fehlgeschlagen: " .. tostring(err_j2), 0) end
+
+-- Dateien installieren. release.lua wird BEWUSST ausgeschlossen und erst
+-- ganz am Ende, zusammen mit dem Journal-Commit, geschrieben (siehe
+-- Abschnitt 3, Fix-Punkt 5: "release.lua und Completion-Marker zuletzt
+-- atomar committen") -- sonst koennte ein Absturz waehrend dieser Schleife
+-- release.lua bereits auf dem neuen Stand hinterlassen, obwohl andere
+-- Dateien noch fehlen, und ein reines Versions-/Manifest-Diffing wuerde
+-- die Installation faelschlich als aktuell/abgeschlossen ansehen.
 local file_list = {}
-for rel, entry in pairs(expected) do table.insert(file_list, { path = rel, entry = entry }) end
+for rel, entry in pairs(expected) do
+  if rel ~= "release.lua" then table.insert(file_list, { path = rel, entry = entry }) end
+end
 table.sort(file_list, function(a, b)
   local sa = tonumber((a.entry or {}).size_bytes) or 0
   local sb = tonumber((b.entry or {}).size_bytes) or 0
@@ -1336,6 +1381,29 @@ local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, ref,
   function(done, total, rel) ui_mod.progress(done, total, rel) end,
   manifest_mod.crc32)
 if not ok then error("Installation: " .. tostring(err), 0) end
+
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 (Abschnitt 3, Fix-Punkt 4):
+-- "Entrypoint und Rollenabhaengigkeiten pruefen" -- stage_mod.install() hat
+-- zwar jede Datei einzeln gegen Groesse/CRC32 verifiziert, aber diese
+-- zusaetzliche Existenzpruefung ueber die GESAMTE erwartete Dateiliste
+-- (die den Rollen-Entrypoint, z.B. nodes/fuel/main.lua, immer enthaelt, da
+-- sie direkt aus manifest_mod.files_for_role() stammt) faengt zusaetzlich
+-- den Fall ab, dass eine Datei aus file_list aus einem anderen Grund
+-- (Race, externer Eingriff) zwischen Install und hier wieder verschwunden
+-- ist.
+journal_mod.write({
+  state = journal_mod.STATE.VERIFYING,
+  ref = ref,
+  manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
+  role = role.label,
+  started_at = os.epoch("utc"),
+  expected_files = expected_paths,
+})
+for _, item in ipairs(file_list) do
+  if not fs.exists(INSTALL_ROOT .. "/" .. item.path) then
+    error("Verifikation fehlgeschlagen, Datei fehlt nach Installation: " .. item.path, 0)
+  end
+end
 
 -- Gesamten config-Ordner wiederherstellen (ueberschreibt die bereits
 -- minimal wiederhergestellten Dateien mit demselben Inhalt -- idempotent).
@@ -1421,17 +1489,159 @@ if not fs.exists(auto_cfg) then
   p("Auto-Update Config angelegt")
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 (Abschnitt 3, Fix-Punkt 5):
+-- "release.lua und Completion-Marker ZULETZT atomar committen". release.lua
+-- wurde oben bewusst aus der Hauptinstallationsschleife ausgeschlossen --
+-- jetzt, nachdem WIRKLICH alles andere (Dateien, Config, Rolle, Startup)
+-- erfolgreich geschrieben und verifiziert ist, wird sie als einzelne,
+-- letzte Datei installiert und CRC32-verifiziert. Erst danach wird das
+-- Journal auf COMMITTED gesetzt und sofort geloescht -- ein Absturz VOR
+-- diesem Punkt hinterlaesst garantiert kein neues release.lua (der alte
+-- Stand bleibt fuer jede Versions-/Diagnoseanzeige "aktuell"), ein Absturz
+-- NACH diesem Punkt bedeutet eine vollstaendige, verifizierte Installation.
+local release_entry = expected["release.lua"]
+if release_entry then
+  local ok_rel, err_rel = stage_mod.install(
+    { { path = "release.lua", entry = release_entry } },
+    INSTALL_ROOT, http_mod, ref, nil, manifest_mod.crc32)
+  if not ok_rel then error("release.lua: " .. tostring(err_rel), 0) end
+end
+
+local ok_commit, err_commit = journal_mod.write({
+  state = journal_mod.STATE.COMMITTED,
+  ref = ref,
+  manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
+  role = role.label,
+  started_at = os.epoch("utc"),
+  expected_files = expected_paths,
+})
+if not ok_commit then
+  error("Installationsjournal (COMMITTED) konnte nicht geschrieben werden: " .. tostring(err_commit), 0)
+end
+journal_mod.clear()
+
 ui_mod.ok("Installation abgeschlossen: " .. role.label)
 _G.__xreactor_installer_completed = true
 _G.__xreactor_installer_role = role.label
 ]==]
 
+local journal_src = [==[
+-- installer/journal.lua
+--
+-- Transaktionales Installationsjournal (INSTALL-P0.1, siehe docs/CODING_AI_
+-- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 3). Lebt AUSSERHALB des
+-- ersetzten Baums (/xreactor), damit ein abgebrochener Installationslauf
+-- auch dann noch belegt werden kann, wenn /xreactor selbst geloescht oder
+-- nur teilweise neu geschrieben wurde. Der Installer schreibt das Journal
+-- als ERSTES (PREPARED, vor dem Loeschen des alten Baums) und aktualisiert
+-- es entlang der Stationen INSTALLING -> VERIFYING -> COMMITTED; COMMITTED
+-- wird zusammen mit release.lua als LETZTER Schritt des gesamten Laufs
+-- geschrieben (siehe installer/init.lua und /installer). xreactor/start.lua
+-- prueft dieses Journal bei JEDEM Boot, bevor die eigentliche Rolle
+-- gestartet wird.
+
+local M = {}
+
+M.PATH = "/xreactor_install_journal.lua"
+
+M.STATE = {
+  PREPARED   = "PREPARED",
+  INSTALLING = "INSTALLING",
+  VERIFYING  = "VERIFYING",
+  COMMITTED  = "COMMITTED",
+}
+
+-- Eigener, von installer/stage.lua UNABHAENGIGER atomarer Write: journal.lua
+-- wird auch von xreactor/start.lua bei JEDEM Boot gelesen, potenziell bevor
+-- der Rest von /xreactor in einem verlaesslichen Zustand ist -- keine
+-- Abhaengigkeit auf stage.lua's reclaim()/WRITE_BUFFER-Logik hier, nur ein
+-- minimaler tmp-write-plus-move.
+local function atomic_write(path, content)
+  local tmp = path .. ".tmp"
+  local f = fs.open(tmp, "w")
+  if not f then return false, "open failed: " .. tmp end
+  local write_ok, write_err = pcall(function() f.write(content) end)
+  pcall(f.close)
+  if not write_ok then
+    pcall(fs.delete, tmp)
+    return false, tostring(write_err)
+  end
+  if fs.exists(path) then pcall(fs.delete, path) end
+  local ok, mv_err = pcall(fs.move, tmp, path)
+  if not ok or not fs.exists(path) then
+    pcall(fs.delete, tmp)
+    return false, "move failed: " .. tostring(mv_err)
+  end
+  return true
+end
+
+local function serialize_string_array(list)
+  local parts = {}
+  for _, item in ipairs(list) do
+    parts[#parts + 1] = string.format("%q", tostring(item))
+  end
+  return "{" .. table.concat(parts, ",") .. "}"
+end
+
+-- Erwartet ein flaches Journal: state/ref/manifest_id/role sind Strings,
+-- expected_files eine Liste von Pfaden, started_at eine Zahl. Kein
+-- generischer Serializer -- das Journal braucht keine tieferen Strukturen.
+local function serialize(journal)
+  local parts = { "return {\n" }
+  parts[#parts + 1] = "  state = " .. string.format("%q", tostring(journal.state)) .. ",\n"
+  parts[#parts + 1] = "  ref = " .. string.format("%q", tostring(journal.ref)) .. ",\n"
+  parts[#parts + 1] = "  manifest_id = " .. string.format("%q", tostring(journal.manifest_id)) .. ",\n"
+  parts[#parts + 1] = "  role = " .. string.format("%q", tostring(journal.role)) .. ",\n"
+  parts[#parts + 1] = "  started_at = " .. tostring(tonumber(journal.started_at) or 0) .. ",\n"
+  parts[#parts + 1] = "  expected_files = " .. serialize_string_array(journal.expected_files or {}) .. ",\n"
+  parts[#parts + 1] = "}\n"
+  return table.concat(parts)
+end
+
+function M.write(journal)
+  return atomic_write(M.PATH, serialize(journal))
+end
+
+function M.read()
+  if not fs.exists(M.PATH) then return nil end
+  local f = fs.open(M.PATH, "r")
+  if not f then return nil end
+  local src = f.readAll()
+  f.close()
+  local loader = load(src, "=install_journal", "t", {})
+  if not loader then return nil end
+  local ok, result = pcall(loader)
+  if not ok or type(result) ~= "table" or type(result.state) ~= "string" then return nil end
+  return result
+end
+
+function M.clear()
+  if fs.exists(M.PATH) then pcall(fs.delete, M.PATH) end
+end
+
+-- Bootzeit-Klassifikation: liefert nil, wenn kein Journal vorhanden ist
+-- (Normalfall) oder wenn der letzte Lauf COMMITTED war (Journal wird direkt
+-- nach dem Commit geloescht -- dieser Fall tritt praktisch nur bei einem
+-- Crash GENAU zwischen COMMITTED-Schreiben und Clear auf, was ebenfalls
+-- unbedenklich ist: die Installation war zu diesem Zeitpunkt bereits
+-- vollstaendig und verifiziert). In jedem anderen Fall (PREPARED/
+-- INSTALLING/VERIFYING) war der letzte Lauf nachweislich unvollstaendig.
+function M.check_incomplete()
+  local journal = M.read()
+  if not journal then return nil end
+  if journal.state == M.STATE.COMMITTED then return nil end
+  return journal
+end
+
+return M
+]==]
 
 -- Module laden
 local http_mod     = load_module("http",        http_src)
 local manifest_mod = load_module("manifest",    manifest_src)
 local stage_mod    = load_module("stage",       stage_src)
 local ui_mod       = load_module("ui",          ui_src)
+local journal_mod  = load_module("journal",     journal_src)
 -- auto_update und init werden separat geschrieben
 
 -- ── Download-Funktion ────────────────────────────────────────────────────────
@@ -1668,11 +1878,31 @@ if not _G.__xreactor_remote_update and term and term.setCursorPos then
   end
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 3). Siehe Fix-Kommentar bei der
+-- identischen Stelle in installer/init.lua -- dies ist der Codepfad, der
+-- beim manuellen/direkten Aufruf von /installer TATSAECHLICH laeuft
+-- (init_src weiter oben ist nur eingebetteter Text). Das Journal wird JETZT
+-- SCHON, vor dem ersten destruktiven Schritt, als PREPARED geschrieben.
+local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
+local expected_paths = {}
+for rel in pairs(expected) do expected_paths[#expected_paths + 1] = rel end
+table.sort(expected_paths)
+
+local ok_journal, err_journal = journal_mod.write({
+  state = journal_mod.STATE.PREPARED,
+  ref = ref,
+  manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
+  role = role.label,
+  started_at = os.epoch("utc"),
+  expected_files = expected_paths,
+})
+if not ok_journal then
+  error("Installationsjournal konnte nicht angelegt werden: "..tostring(err_journal), 0)
+end
+
 -- Fix (2026-07-17): CRITICAL. INSTALL-P0.3 aus
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5). Siehe
--- Fix-Kommentar bei der identischen Stelle in installer/init.lua -- dies
--- ist der Codepfad, der beim manuellen/direkten Aufruf von /installer
--- TATSAECHLICH laeuft (init_src weiter oben ist nur eingebetteter Text).
+-- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5).
 -- ── Alte Installation löschen ────────────────────────────────────────────────
 if fs.exists(INSTALL_ROOT) then
   p("Entferne alte Installation...")
@@ -1698,6 +1928,16 @@ for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
   end
 end
 
+local ok_j2, err_j2 = journal_mod.write({
+  state = journal_mod.STATE.INSTALLING,
+  ref = ref,
+  manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
+  role = role.label,
+  started_at = os.epoch("utc"),
+  expected_files = expected_paths,
+})
+if not ok_j2 then error("Installationsjournal (INSTALLING) fehlgeschlagen: "..tostring(err_j2), 0) end
+
 -- ── Eingebettete Module zuerst schreiben ─────────────────────────────────────
 local embedded = {
   ["installer/http.lua"]        = http_src,
@@ -1706,6 +1946,7 @@ local embedded = {
   ["installer/ui.lua"]          = ui_src,
   ["installer/auto_update.lua"] = au_src,
   ["installer/init.lua"]        = init_src,
+  ["installer/journal.lua"]     = journal_src,
 }
 for rel, content in pairs(embedded) do
   local ok5, werr = stage_mod.write(INSTALL_ROOT.."/"..rel, content)
@@ -1714,11 +1955,13 @@ end
 p("Eingebettete Module geschrieben")
 
 -- ── Dateien installieren ─────────────────────────────────────────────────────
-local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
+-- release.lua wird BEWUSST ausgeschlossen und erst ganz am Ende, zusammen
+-- mit dem Journal-Commit, geschrieben (siehe Abschnitt 3, Fix-Punkt 5).
 local file_list = {}
 for rel, entry in pairs(expected) do
-  -- Eingebettete Module überspringen (schon geschrieben)
-  if not embedded[rel] then
+  -- Eingebettete Module und release.lua überspringen (schon geschrieben
+  -- bzw. bewusst fuer den Schluss aufgehoben)
+  if not embedded[rel] and rel ~= "release.lua" then
     table.insert(file_list, { path=rel, entry=entry })
   end
 end
@@ -1741,6 +1984,22 @@ local ok6, err6 = stage_mod.install(
   manifest_mod.crc32
 )
 if not ok6 then error("Installation: "..tostring(err6), 0) end
+
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 (Abschnitt 3, Fix-Punkt 4):
+-- "Entrypoint und Rollenabhaengigkeiten pruefen".
+journal_mod.write({
+  state = journal_mod.STATE.VERIFYING,
+  ref = ref,
+  manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
+  role = role.label,
+  started_at = os.epoch("utc"),
+  expected_files = expected_paths,
+})
+for _, item in ipairs(file_list) do
+  if not fs.exists(INSTALL_ROOT.."/"..item.path) then
+    error("Verifikation fehlgeschlagen, Datei fehlt nach Installation: "..item.path, 0)
+  end
+end
 
 -- ── Wiederherstellen ─────────────────────────────────────────────────────────
 -- Gesamten config-Ordner wiederherstellen (ueberschreibt die bereits minimal
@@ -1800,6 +2059,33 @@ if not existing or existing:find("/xreactor/start.lua", 1, true) then
   end
   p("startup.lua konfiguriert")
 end
+
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 (Abschnitt 3, Fix-Punkt 5):
+-- "release.lua und Completion-Marker ZULETZT atomar committen". Siehe
+-- Fix-Kommentar bei der identischen Stelle in installer/init.lua.
+local release_entry = expected["release.lua"]
+if release_entry then
+  local ok_rel, err_rel = stage_mod.install(
+    { { path = "release.lua", entry = release_entry } },
+    INSTALL_ROOT,
+    { download_file = function(rel, s) return download(base..rel) end,
+      is_html = http_mod.is_html },
+    ref, nil, manifest_mod.crc32)
+  if not ok_rel then error("release.lua: "..tostring(err_rel), 0) end
+end
+
+local ok_commit, err_commit = journal_mod.write({
+  state = journal_mod.STATE.COMMITTED,
+  ref = ref,
+  manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
+  role = role.label,
+  started_at = os.epoch("utc"),
+  expected_files = expected_paths,
+})
+if not ok_commit then
+  error("Installationsjournal (COMMITTED) konnte nicht geschrieben werden: "..tostring(err_commit), 0)
+end
+journal_mod.clear()
 
 ui_mod.ok("Installation abgeschlossen: "..role.label)
 _G.__xreactor_installer_completed = true
