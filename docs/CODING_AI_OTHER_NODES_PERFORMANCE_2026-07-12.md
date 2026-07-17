@@ -43,7 +43,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
 | REPROCESSOR | **WEITGEHEND UMGESETZT** | Standby-Cancel und Wireless-VALVE-Discovery behoben (Abschnitt 20) |
 | VALVE | **TEILWEISE BEHOBEN** | Retry behoben; Senderbindung standardmäßig aus und Sorter-Reconnect unvollständig |
-| LOG Collector | **KRITISCH TEILWEISE** | Probe-Wipe behoben; Reclaim kann wegen stale Free-Space-Cache zu viele Dateien löschen |
+| LOG Collector | **WEITGEHEND UMGESETZT** | Probe-Wipe (Abschnitt 16) und stale Free-Space-Cache im Reclaim (Abschnitt 22) behoben; Rotation/Datenhaltungsregeln (Abschnitt 23) weiterhin offen |
 | Tests / CI | **KRITISCH TEILWEISE** | 66 Lua- und 6 Python-Tests ausgeschlossen; aktueller Head ohne nachgewiesenen grünen Lauf |
 | Dokumentation | **AKTUELL** | diese Datei ist die einzige aktuelle allgemeine Auditquelle |
 
@@ -59,7 +59,7 @@ Die kritischsten aktuellen Risiken sind:
 4. ~~`module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13).
 5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
 6. ~~REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20).
-7. LOG-Reclaim prüft nach Löschungen einen gecachten Free-Space-Wert und kann unnötig viele Dateien entfernen.
+7. ~~LOG-Reclaim prüft nach Löschungen einen gecachten Free-Space-Wert und kann unnötig viele Dateien entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22).
 8. 72 Tests bleiben ausgeschlossen; ein grüner Lauf des geprüften Heads ist nicht nachgewiesen.
 
 ---
@@ -658,34 +658,22 @@ Für einen Safety-Aktor sollte die erlaubte Steuerquelle verpflichtend oder übe
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-`free_space()` cached Werte zwei Sekunden pro Mount. `reclaim_oldest()` prüft vor jeder Löschung denselben gecachten Wert, löscht eine Datei, invalidiert den Cache aber nicht.
+Bestätigt: `free_space()` cached Werte für `FREE_SPACE_CACHE_TTL` (2 echte Sekunden, per `os.clock()`) pro Mount. `reclaim_oldest()` prüfte vor jeder Löschung denselben gecachten Wert, löschte eine Datei, invalidierte den Cache aber nicht. Da mehrere aufeinanderfolgende Löschungen innerhalb eines einzigen, synchronen Reclaim-Laufs praktisch keine messbare Zeit verbrauchen, blieb der Cache-Eintrag über den gesamten Lauf "frisch" — die Schleife sah bei jeder Iteration weiterhin den alten, niedrigen Free-Space-Wert und entfernte munter weiter, obwohl bereits nach der ersten Löschung genug Platz frei sein konnte. Die frühere pauschale Komplettlöschung war zwar bereits entfernt (siehe Abschnitt 16), aber diese Schleife konnte im Extremfall trotzdem alle aufgelisteten Dateien löschen.
 
-Laufen die Löschungen innerhalb der Cache-TTL ab, sieht die Schleife weiterhin den alten niedrigen Free-Space-Wert und entfernt weiter Dateien, obwohl bereits genug Platz frei sein kann.
+Fix: `free_space_cache[mount] = nil` direkt nach jeder erfolgreichen Löschung, damit die nächste `free_space()`-Abfrage tatsächlich neu misst. Zusätzlich umgesetzt: `reclaim_oldest()` erhält einen `exclude_path`-Parameter, der die gerade tatsächlich offene Zieldatei (die der LOG Collector im selben Schreibversuch befüllen will) niemals löscht — beide Aufrufstellen (`write_log()`s Vorab-Check, `flush_bucket()`s Out-of-Space-Retry) übergeben jetzt den betroffenen Zielpfad. Ein hartes `RECLAIM_MAX_FILES_PER_RUN`-Limit (64) begrenzt zusätzlich den maximalen Schaden pro Lauf, selbst falls die Free-Space-Messung aus einem anderen Grund weiterhin falsch wäre. Die Punkte "Mindestanzahl/Mindestalter geschützter Dateien" und "UI zeigt Retention-/Reclaimereignisse" aus dem ursprünglichen Fix-Vorschlag bleiben als LOG-P1-Weiterentwicklung offen (siehe Abschnitt 23) — kein Datenverlustrisiko mehr durch DIESEN Bug, da die Kernursache (stale Cache) behoben ist.
 
-## Folge
+Pflicht-Test: `tests/log_collector_reclaim_cache_invalidation_test.lua` — treibt die echte `reclaim_oldest()`-Funktion mit einer Fake-Disk aus drei gleich großen Dateien und einem `os.clock()`, der über den GESAMTEN Testlauf einen konstanten Wert liefert (simuliert exakt die reale Bedingung: synchrone Löschungen verbrauchen keine messbare Zeit). Fake-Free-Space steigt nach der ersten Löschung über das angeforderte Ziel — beweist, dass exakt eine Datei entfernt wird (nicht alle drei) und dass `fs.getFreeSpace()` nach der Löschung tatsächlich erneut aufgerufen wird. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt (entfernt dort nachweislich alle drei Dateien statt einer).
 
-Die frühere pauschale Komplettlöschung wurde zwar entfernt, die neue Schleife kann im Extrem trotzdem alle aufgelisteten Dateien löschen.
-
-## Verbindlicher Fix
-
-Nach jeder erfolgreichen Löschung:
+## Fix (umgesetzt)
 
 ```lua
+-- nach jeder erfolgreichen Loeschung:
 free_space_cache[mount] = nil
 ```
 
-oder ungecachte Messung innerhalb des Reclaimpfads verwenden. Zusätzlich:
-
-- Mindestanzahl/Mindestalter geschützter Dateien,
-- maximale Löschanzahl pro Reclaimlauf,
-- niemals die aktuell geöffnete Zieldatei löschen,
-- Retentiongrund und gelöschte Pfade protokollieren.
-
-## Pflicht-Test
-
-Fake-Free-Space steigt nach der ersten Löschung über das Ziel. Es darf exakt eine Datei entfernt werden.
+plus `exclude_path`-Schutz der offenen Zieldatei und `RECLAIM_MAX_FILES_PER_RUN`-Obergrenze.
 
 ---
 
@@ -750,7 +738,7 @@ Ein Test darf nur entfernt werden, wenn:
 6. ~~Router-ACK muss aktuelle Command-ID matchen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
 7. ~~REPROCESSOR Wireless-VALVE-Discovery.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
 8. ENERGY exakt eine Heartbeat-Zeitquelle.
-9. LOG-Reclaim mit Cacheinvalidierung.
+9. ~~LOG-Reclaim mit Cacheinvalidierung.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. MASTER Config-Editor Applied-ACK je Zielnode.
 
 ---
@@ -806,7 +794,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 6. **INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.
 7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
 8. **INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.
-9. **LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.
+9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. **MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.
 11. **ENERGY-P1:** genau eine Heartbeat-Zeitquelle.
 12. **WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.
