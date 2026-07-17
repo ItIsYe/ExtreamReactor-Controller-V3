@@ -42,7 +42,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | WATER | **WEITGEHEND UMGESETZT** | Persistenzresultat wird jetzt ehrlich im Command-Ergebnis abgebildet (Abschnitt 16 behoben) |
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
 | REPROCESSOR | **WEITGEHEND UMGESETZT** | Standby-Cancel und Wireless-VALVE-Discovery behoben (Abschnitt 20) |
-| VALVE | **TEILWEISE BEHOBEN** | Retry behoben; Senderbindung standardmäßig aus und Sorter-Reconnect unvollständig |
+| VALVE | **WEITGEHEND UMGESETZT** | Retry, Senderbindung (Auto-Pairing) und Sorter-Reconnect behoben (Abschnitt 21); Statusfelder (`actuator_online` etc.) bleiben als Observability-Erweiterung offen |
 | LOG Collector | **WEITGEHEND UMGESETZT** | Probe-Wipe (Abschnitt 16) und stale Free-Space-Cache im Reclaim (Abschnitt 22) behoben; Rotation/Datenhaltungsregeln (Abschnitt 23) weiterhin offen |
 | Tests / CI | **KRITISCH TEILWEISE** | 66 Lua- und 6 Python-Tests ausgeschlossen; aktueller Head ohne nachgewiesenen grünen Lauf |
 | Dokumentation | **AKTUELL** | diese Datei ist die einzige aktuelle allgemeine Auditquelle |
@@ -635,25 +635,31 @@ Pflicht-Test: `tests/reprocessor_wireless_valve_comms_wiring_test.lua` — prüf
 
 ## Status
 
-**OFFEN**
+**WEITGEHEND BEHOBEN (2026-07-17)**
 
 ## Senderbindung
 
-`trusted_source` ist optional. Ohne dieses Feld akzeptiert die VALVE-Node jedes korrekt adressierte `SET_VALVE` auf dem dedizierten Kanal. ACKs besitzen ebenfalls keine authentisierte Senderidentität.
+`trusted_source` war rein optional. Ohne dieses Feld akzeptierte die VALVE-Node auf Dauer jedes korrekt adressierte `SET_VALVE` auf dem dedizierten Kanal, von jedem beliebigen Sender.
 
-Für einen Safety-Aktor sollte die erlaubte Steuerquelle verpflichtend oder über einen installierten Pairingzustand gebunden sein.
+Fix: automatisches Pairing beim ERSTEN akzeptierten `SET_VALVE` nach einer frischen Installation — `config.trusted_source` wird auf den Absender dieses ersten Kommandos gesetzt und über `utils.write_config()` in die geschützte Nutzerconfig persistiert (überlebt Neustarts, WARN bei Persistenzfehler, analog zu Abschnitt 16). Jeder SPÄTERE Sender mit abweichender `src` wird verworfen (WARN geloggt, kein Write, kein Dedupe-Eintrag). Bleibt dadurch abwärtskompatibel — kein manuelles Vorab-Pairing nötig, funktioniert "out of the box" — schließt aber die Lücke "akzeptiert dauerhaft jeden Sender". `VALVE_ACK` trägt jetzt zusätzlich `src` (die eigene Node-ID) und `dst` (der ursprüngliche Absender, aus `message.src` gespiegelt) — die eigentliche ACK-Zuordnung auf FUEL-Seite läuft bereits ausschließlich über die (per ROUTER-P0 command-id-gebundene) `command_id`, `src`/`dst` verbessern aber Logging/Diagnose.
 
 ## Sorter-Reconnect
 
-`get_sorter()` cached den einmal gewrappten Sorter dauerhaft. Schlägt ein späterer Call wegen Detach/Reattach oder ersetztetem Peripheral fehl, wird `sorter_device` nicht verworfen und neu gebunden.
+`get_sorter()` cachte den einmal gewrappten Sorter dauerhaft. Schlug ein späterer Call wegen Detach/Reattach oder ersetztem Peripheral fehl, wurde `sorter_device` nicht verworfen und neu gebunden — jeder weitere Versuch traf denselben kaputten Handle erneut.
 
-## Fix
+Fix: bei einem Callfehler (`pcall(sorter.setAutoMode, ...)` schlägt fehl) wird `sorter_device = nil` gesetzt; der nächste `get_sorter()`-Aufruf (nächster Retry) wrappt das Peripheral frisch über `peripheral.wrap()`.
 
-- verpflichtendes Pairing beziehungsweise `trusted_source`,
-- ACK mit `src`, `dst` und aktuellem Commandbezug,
-- bei Sorter-Callfehler Cache leeren,
-- beim nächsten Retry neu wrappen,
-- Statusfelder für `actuator_online`, `last_apply_ts`, `last_error_ts`.
+## Fix (umgesetzt)
+
+- ~~verpflichtendes Pairing beziehungsweise `trusted_source`~~ — als automatisches Erstsender-Pairing umgesetzt (siehe oben).
+- ~~ACK mit `src`, `dst` und aktuellem Commandbezug~~ — umgesetzt (`command_id` war bereits vorhanden, `src`/`dst` ergänzt).
+- ~~bei Sorter-Callfehler Cache leeren~~ — umgesetzt.
+- ~~beim nächsten Retry neu wrappen~~ — umgesetzt (Konsequenz aus dem geleerten Cache).
+- Statusfelder für `actuator_online`, `last_apply_ts`, `last_error_ts` — NICHT Teil dieses Fixes (reine Observability-Erweiterung, keine Korrektheits-/Sicherheitslücke); bleibt als VALVE-P2-Weiterentwicklung offen.
+
+## Pflicht-Test
+
+`tests/valve_sender_pairing_and_sorter_reconnect_test.lua` (neu) — treibt die echten, per Marker aus `nodes/valve/main.lua` extrahierten Funktionen (`get_sorter()`/`write_actuator()`/`apply_valve()` sowie `handle_valve_channel_event()`). Vier Senderbindungs-Fälle (Erstsender wird automatisch gepaart und persistiert; abweichender Sender nach Pairing wird verworfen; bereits gepaarter Sender läuft ohne erneuten Persistenzversuch normal weiter; ein Persistenzfehler beim Pairing wirkt sofort im RAM, aber mit WARN) und zwei Sorter-Reconnect-Fälle (fehlgeschlagener Call gefolgt von einem erfolgreichen Retry beweist einen zweiten, frischen `peripheral.wrap()`-Aufruf statt eines wiederverwendeten kaputten Handles). Ergänzend angepasst: `tests/valve_failed_write_retry_test.lua` (vorbelegtes `trusted_source`/`src`, damit die neue Pairing-Logik die bestehenden Retry-Assertions nicht verfälscht). Verifiziert per `git stash`, dass der neue Test gegen den alten Code nicht einmal extrahierbar ist (die Fix-Logik existiert dort schlicht nicht).
 
 ---
 
@@ -801,7 +807,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 10. **MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.
 11. ~~**ENERGY-P1:** genau eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
 12. ~~**WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 16): `tests/water_rt_persistence_ack_honesty_test.lua`.
-13. **VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.
+13. ~~**VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.~~ BEHOBEN (2026-07-17, siehe Abschnitt 21): `tests/valve_sender_pairing_and_sorter_reconnect_test.lua`.
 14. **INSTALL/MANIFEST-P1:** vollständige Planvalidierung und nur eine Installerimplementierung.
 15. **TEST-P0:** Ausschlusslisten Test für Test abbauen.
 16. Danach Ingame-Last-, Funkverlust-, Reconnect-, Reboot-, Stromausfall- und Updateabnahme.
