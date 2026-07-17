@@ -16,7 +16,7 @@ local function make_ctx(module)
     comms = { network = { id = 'RT-1' } },
     set_active_startup = function(value) active = value end,
     get_active_startup = function() return active end,
-    ramp_duration = function() return 1 end,
+    ramp_duration_ms = function() return 1 end,
     setReactorActive = function() return true end,
     setTurbineActive = function() return true end,
     setTurbineFlow = function() return true end,

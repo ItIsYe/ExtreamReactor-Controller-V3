@@ -82,7 +82,7 @@ local lifecycle_ctx = {
   add_alarm = function() end,
   get_active_startup = function() return active_startup_id end,
   set_active_startup = function(id) active_startup_id = id end,
-  ramp_duration = function() return 30 end,
+  ramp_duration_ms = function() return 30000 end,
   get_target_rpm = function() return 900 end,
   get_turbine_ctrl = function(name)
     turbine_ctrls[name] = turbine_ctrls[name] or { flow = 0 }
@@ -173,7 +173,7 @@ local reactor_result = handle_command(startup_message('reactor:R1', 'reactor'))
 assert_eq(reactor_result.ok, true, 'reactor start_module should be accepted once turbine is stable')
 assert_eq(modules_registry['reactor:R1'].state, 'STARTING', 'reactor should transition to STARTING')
 
-clock = clock + 100 -- > ramp_duration(30ms) damit progress auf 1 clamped
+clock = clock + 31000 -- > ramp_duration_ms(30000ms) damit progress auf 1 clamped
 module_lifecycle.process_startup(lifecycle_ctx)
 assert_eq(modules_registry['reactor:R1'].state, 'STABLE', 'reactor should reach STABLE after ramp completes')
 assert_true(#applied_rod_calls > 0, 'reactor rod control should have been applied during ramp')

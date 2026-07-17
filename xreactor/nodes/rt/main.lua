@@ -930,8 +930,23 @@ local function init()
       -- weiterhin ein String -- module_lifecycle.lua liest jetzt direkt
       -- ctx.TURBINE_MODE_RAMP statt ctx.TURBINE_MODE.RAMP.
       TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
-      -- Diagnose-Stub (ramp_duration braucht discovery-Context)
-      ramp_duration = function() return 30 end,
+      -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+      -- PERFORMANCE_2026-07-12.md Abschnitt 12). Dieser Diagnose-Stub gab
+      -- bisher "30" zurueck, benannt als "ramp_duration" -- ohne jede
+      -- Einheit im Namen. module_lifecycle.lua's process_startup() rechnet
+      -- aber mit "(now - module.start_time) / duration", wobei "now" und
+      -- "start_time" beide os.epoch("utc") in MILLISEKUNDEN sind -- die
+      -- Reaktorrampe erreichte dadurch bereits nach ~30 Millisekunden 100%
+      -- Fortschritt statt der beabsichtigten 30 SEKUNDEN, ein klarer
+      -- Widerspruch zum 60s-Startup-Stage-Timeout (siehe VALVE_PHASE_
+      -- TIMEOUT_MS-aehnliche Deadlines) und zur fachlichen Bedeutung einer
+      -- Rampe. Jetzt explizit als Sekunden benannt und einmalig in
+      -- Millisekunden umgerechnet -- "ramp_duration_ms" liefert garantiert
+      -- Millisekunden, keine unbenannte Zahlenkonstante mehr.
+      ramp_duration_ms = function(_ramp_profile)
+        local STARTUP_RAMP_DURATION_S = 30
+        return STARTUP_RAMP_DURATION_S * 1000
+      end,
       warn_unsupported = function(name, reason)
         warn_once("unsupported:" .. tostring(name),
           "Device unsupported: " .. tostring(name) .. " (" .. tostring(reason or "") .. ")")

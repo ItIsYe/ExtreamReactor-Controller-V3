@@ -37,7 +37,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **TEILWEISE OFFEN** | Config-Editor meldet Werte optimistisch als übernommen; kein Applied-ACK je Zielnode und keine Einzelnode-Auswahl |
-| RT | **KRITISCH TEILWEISE** | `TURBINE_MODE`-Context-Typfehler behoben (Abschnitt 11); Rampendauer-Einheitenfehler und fehlende Modul-State-Update-Verdrahtung weiterhin offen |
+| RT | **TEILWEISE OFFEN** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11) und Rampendauer-Einheitenfehler (Abschnitt 12) behoben; fehlende Modul-State-Update-Verdrahtung weiterhin offen |
 | ENERGY | **TEILWEISE BEHOBEN** | Schedulergruppen getrennt, Heartbeat besitzt aber weiterhin zwei Zeitquellen |
 | WATER | **WEITGEHEND UMGESETZT** | Persistenzfehler werden geloggt, Command kann trotzdem als angewendet bestätigt werden |
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
@@ -55,7 +55,7 @@ Die kritischsten aktuellen Risiken sind:
 
 1. Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.
 2. Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.
-3. ~~RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ~~ BEHOBEN (2026-07-17, siehe Abschnitt 11); behandelt `30` weiterhin als 30 Millisekunden (Abschnitt 12, weiterhin offen).
+3. ~~RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11 und Abschnitt 12).
 4. `module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.
 5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
 6. ~~REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20).
@@ -391,42 +391,28 @@ ctrl.mode = ctx.TURBINE_MODE_RAMP
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Produktionscode liefert:
+Bestätigt: Produktionscode lieferte `ramp_duration = function() return 30 end`, während `module_lifecycle.process_startup()` mit `os.epoch("utc")` in Millisekunden rechnet (`progress = (now - module.start_time) / duration`) — die Reaktorrampe erreichte dadurch bereits nach ungefähr 30 Millisekunden 100 Prozent statt der beabsichtigten 30 Sekunden, ein deutlicher Widerspruch zum 60-s-Startup-Stage-Timeout und zur fachlichen Bedeutung einer Rampe. Der bisherige End-to-End-Test bestätigte dieses (falsche) Verhalten sogar ausdrücklich, indem er die Fake-Clock nur um 100 ms erhöhte.
 
-```lua
-ramp_duration = function() return 30 end
-```
+Fix: die Einheit ist jetzt explizit im Namen — `ramp_duration_ms(profile)` liefert garantiert Millisekunden (`STARTUP_RAMP_DURATION_S * 1000`, kein unbenannter Zahlenkonstante mehr). `module_lifecycle.lua` liest den Wert als `duration_ms` und dividiert korrekt Millisekunden durch Millisekunden. Der bisherige End-to-End-Test wurde auf die reale Dauer (30000 statt 100 ms Fake-Clock-Vorlauf) korrigiert.
 
-`module_lifecycle.process_startup()` rechnet jedoch mit `os.epoch("utc")` in Millisekunden:
+Pflicht-Test: `tests/rt_ramp_duration_units_test.lua` — treibt die echte `process_startup()`-Funktion mit einer Fake-Clock über die tatsächlichen Produktionswerte (30000 ms): (1) nach 100 ms ist die Rampe nachweislich NICHT fertig (`progress < 1`, Modul bleibt `STARTING`); (2) Fortschritt steigt monoton (100 ms → 15 s); (3) bei Erreichen der konfigurierten Dauer wird das Modul `STABLE`; (4) weit nach der Deadline bleibt `progress` bei exakt `1` geklammert (kein Überschreiten), demonstriert an einem zweiten Modul, dessen Temperatur-Gate absichtlich nie erfüllt ist, damit die Rampen-Fortschrittsberechnung isoliert von der `STABLE`-Transition wiederholt geprüft werden kann. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt (die alte `module_lifecycle.lua` erwartet noch das alte `ramp_duration`-Feld, nicht `ramp_duration_ms` — ein direkter Beweis für die inkompatible Schnittstelle).
 
-```lua
-progress = (now - module.start_time) / duration
-```
+Beim Schreiben dieses Tests wurde zusätzlich ein separater, vorbestehender Bug in `update_module_limits()`s Coolant-Check entdeckt (`skip_coolant and nil or ctx.evaluate_reactor_coolant(...)` — der klassische Lua-`and/or`-Fallstrick: die `or`-Seite läuft immer, wenn die `and`-Seite `nil` ist, unabhängig von `skip_coolant`). Dieser Bug ist NICHT Teil dieses Fixes (eigenständiges Problem, bereits durch die vorbestehende Testausschlussliste als `NEEDS_MOCK` markiert) und wurde hier nur umgangen (echter `evaluate_reactor_coolant`-Stub im neuen Test), nicht behoben.
 
-Damit erreicht die Reaktorrampe nach ungefähr 30 Millisekunden bereits 100 Prozent. Der neue Test bestätigt dieses Verhalten ausdrücklich, indem er die Fake-Clock nur um 100 ms erhöht.
-
-Das steht außerdem in deutlichem Widerspruch zum 60-s-Startup-Stage-Timeout und zur fachlichen Bedeutung einer Rampe.
-
-## Verbindlicher Fix
-
-Einheit explizit machen:
+## Fix (umgesetzt)
 
 ```lua
-ramp_duration_ms(profile)
+-- main.lua
+ramp_duration_ms = function(_ramp_profile)
+  local STARTUP_RAMP_DURATION_S = 30
+  return STARTUP_RAMP_DURATION_S * 1000
+end,
+-- module_lifecycle.lua
+local duration_ms = ctx.ramp_duration_ms(module.ramp_profile)
+local progress = safety.clamp((now - module.start_time) / duration_ms, 0, 1)
 ```
-
-und konfigurierte Sekunden einmalig in Millisekunden umrechnen. Keine unbenannten Zahlenkonstanten.
-
-## Pflicht-Test
-
-Fake-Clock mit echten Produktionswerten:
-
-- nach 100 ms nicht fertig,
-- monotone Progression,
-- gewünschte Dauer je Profil,
-- Timeout vor/bei/kurz nach der Deadline.
 
 ---
 
@@ -765,7 +751,7 @@ Ein Test darf nur entfernt werden, wenn:
 1. Installer-Powerloss-Matrix und Completion-Marker.
 2. Update-Quiesce je Rolle.
 3. ~~RT-Produktions-Context-Shape.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
-4. RT-Rampeneinheit mit Fake-Clock.
+4. ~~RT-Rampeneinheit mit Fake-Clock.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
 5. produktive Verdrahtung von `update_module_states()`.
 6. ~~Router-ACK muss aktuelle Command-ID matchen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
 7. ~~REPROCESSOR Wireless-VALVE-Discovery.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
@@ -821,7 +807,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 1. ~~**ROUTER-P0:** aktuellen ACK über Command-ID statt alten Confirmed-State beweisen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
 2. ~~**REPROCESSOR-P0:** COMMS-Peers an Wireless-Router verdrahten.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
 3. ~~**RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
-4. **RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.
+4. ~~**RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
 5. **RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.
 6. **INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.
 7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
