@@ -187,6 +187,14 @@ local function make_dispatch()
     -- Feature (2026-07-06): Zielwert fuer den internen Dampf-Fuellstand
     -- bei individueller Pro-Reaktor-Regelung, per Master-Config-Editor
     -- fernsteuerbar (analog zu SET_RESERVE bei FUEL, SET_TARGET bei WATER).
+    -- Fix (2026-07-17): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 14). Gab bisher unbedingt `nil`
+    -- zurueck, was der aeussere Dispatcher (new(), weiter unten in dieser
+    -- Datei) als `{ ok = true }` behandelt -- unabhaengig davon, ob
+    -- ctx.set_reactor_fill_target() den Wert tatsaechlich persistieren
+    -- konnte. `ok=true` bleibt korrekt (der RAM-Wert wird sofort
+    -- uebernommen), aber `persisted` macht das Ergebnis jetzt ehrlich
+    -- ueberpruefbar, analog zu WATER's SET_TARGET.
     ["SET_REACTOR_FILL_TARGET"] = function(command, ctx)
       local value = tonumber(command.value)
       if type(value) ~= "number" or value < 0 or value > 1 then
@@ -195,10 +203,11 @@ local function make_dispatch()
         end
         return nil
       end
+      local persisted = true
       if type(ctx.set_reactor_fill_target) == "function" then
-        ctx.set_reactor_fill_target(value)
+        persisted = ctx.set_reactor_fill_target(value) == true
       end
-      return nil
+      return { ok = true, persisted = persisted }
     end,
     -- REMOTE_UPDATE: Nicht direkt ausfuehren — Flag setzen fuer den
     -- Haupt-Thread. CC:Tweaked http.get() ist async und sendet http_success/

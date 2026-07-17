@@ -39,7 +39,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | MASTER | **TEILWEISE OFFEN** | Config-Editor meldet Werte optimistisch als übernommen; kein Applied-ACK je Zielnode und keine Einzelnode-Auswahl |
 | RT | **WEITGEHEND UMGESETZT** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11), Rampendauer-Einheitenfehler (Abschnitt 12) und fehlende `update_module_states()`-Verdrahtung (Abschnitt 13) behoben; Persistenz-/Observability-Restpunkte (Abschnitt 14) weiterhin offen |
 | ENERGY | **WEITGEHEND UMGESETZT** | Schedulergruppen getrennt, Heartbeat-Zeitquelle konsolidiert (Abschnitt 15 behoben) |
-| WATER | **WEITGEHEND UMGESETZT** | Persistenzfehler werden geloggt, Command kann trotzdem als angewendet bestätigt werden |
+| WATER | **WEITGEHEND UMGESETZT** | Persistenzresultat wird jetzt ehrlich im Command-Ergebnis abgebildet (Abschnitt 16 behoben) |
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
 | REPROCESSOR | **WEITGEHEND UMGESETZT** | Standby-Cancel und Wireless-VALVE-Discovery behoben (Abschnitt 20) |
 | VALVE | **TEILWEISE BEHOBEN** | Retry behoben; Senderbindung standardmäßig aus und Sorter-Reconnect unvollständig |
@@ -438,10 +438,10 @@ Pflicht-Test: `tests/rt_control_tick_wires_update_module_states_test.lua` — pr
 
 ## Status
 
-**OFFEN**
+**TEILWEISE OFFEN**
 
 - Schema-Migration schreibt per ignoriertem `pcall`; Fehlschlag wird nicht sichtbar behandelt.
-- `SET_REACTOR_FILL_TARGET` loggt Erfolg, obwohl `utils.write_config()` in einem ignorierten `pcall` scheitern kann.
+- ~~`SET_REACTOR_FILL_TARGET` loggt Erfolg, obwohl `utils.write_config()` in einem ignorierten `pcall` scheitern kann.~~ BEHOBEN (2026-07-17, siehe Abschnitt 16): `set_reactor_fill_target()` wertet den Rückgabewert jetzt aus, loggt WARN bei Fehlschlag statt eines unbedingten INFO, und `SET_REACTOR_FILL_TARGET` im Command-Handler meldet ein ehrliches `persisted`-Feld statt eines blinden `{ ok = true }`. `tests/water_rt_persistence_ack_honesty_test.lua`.
 - `build_discovery_context().build_capabilities()` verwendet unabhängig vom tatsächlichen Gerät zunächst den Turbinen-Key.
 - UI und Telemetrie bauen weiterhin getrennte vollständige Gerätesnapshots.
 - es fehlen echte Control-Tick-/Jitter-/Deadline-Metriken.
@@ -493,25 +493,28 @@ Konkretes Fehlerszenario: `main.lua` sendet bereits vor `parallel.waitForAny()` 
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)**
 
-`SET_TARGET` ändert den RAM-Wert, versucht die Config zu schreiben und loggt einen Persistenzfehler. Anschließend wird der Command trotzdem mit Erfolg abgeschlossen.
+`SET_TARGET` änderte den RAM-Wert, versuchte die Config zu schreiben und loggte einen Persistenzfehler als WARN — anschließend wurde der Command aber unbedingt mit `support_command_handler.finish(devices, true)` (also immer `{ ok = true }`, ohne jedes Persistenzsignal) abgeschlossen. Derselbe Fehlerschatten fand sich bei RT's `SET_REACTOR_FILL_TARGET` (siehe Abschnitt 14): der Rückgabewert von `utils.write_config()` wurde dort sogar komplett verworfen (`pcall(utils.write_config, ...)` ohne jede Auswertung), und `command_handler.lua`s Handler gab bei Erfolg unbedingt `nil` zurück, was der äußere Dispatcher automatisch als `{ ok = true }` interpretierte.
 
-## Folge
+## Folge (vor dem Fix)
 
-MASTER kann `ACK_APPLIED` erhalten, obwohl der Wert nach einem Neustart verloren geht.
+MASTER konnte `ACK_APPLIED` erhalten, obwohl der Wert nach einem Neustart verloren geht.
 
 ## Fix
 
-Commandresultat muss unterscheiden:
+Gewählt wurde die im Audit selbst genannte Alternative — `ok=true` bleibt korrekt (der RAM-Wert wird sofort wirksam übernommen), aber das Ergebnis trägt jetzt explizit ein `persisted`-Feld:
 
-```text
-APPLIED_VOLATILE
-APPLIED_PERSISTED
-REJECTED_PERSISTENCE
-```
+- `nodes/support/command_handler.lua`: `finish(devices, ok, extra)` akzeptiert jetzt ein optionales drittes Argument, dessen Felder in das Ergebnis gemerged werden (rückwärtskompatibel — bestehende 2-Argument-Aufrufer unverändert).
+- `nodes/water/main.lua`: `SET_TARGET` gibt jetzt `finish(devices, true, { persisted = ok_write == true })` zurück statt eines blinden `finish(devices, true)`.
+- `nodes/rt/main.lua`: `set_reactor_fill_target(value)` wertet `utils.write_config()`s Rückgabewert jetzt tatsächlich aus (statt eines unausgewerteten `pcall(...)`), loggt bei Fehlschlag WARN statt eines unbedingten INFO, und gibt den Erfolg als Boolean zurück.
+- `nodes/rt/command_handler.lua`: `SET_REACTOR_FILL_TARGET` gibt jetzt `{ ok = true, persisted = <Rückgabewert von ctx.set_reactor_fill_target()> }` zurück statt unbedingt `nil`.
 
-Für dauerhaft konfigurierte Sollwerte gilt `ok=true` erst nach erfolgreicher Persistierung oder der ACK muss explizit `persisted=false` tragen.
+Eine vollständige `APPLIED_VOLATILE`/`APPLIED_PERSISTED`/`REJECTED_PERSISTENCE`-Statusunterscheidung wäre ein größerer, MASTER-seitig konsumierender Umbau (Config-Editor-UI, ACK-Auswertung) und wurde bewusst nicht mitgemacht — das explizite `persisted`-Feld macht das Ergebnis bereits ehrlich abfragbar und ist die im Audit selbst als gleichwertig genannte Alternative.
+
+## Pflicht-Test
+
+`tests/water_rt_persistence_ack_honesty_test.lua` (neu): vier Blöcke — (1) `support_command_handler.finish()`s neues `extra`-Argument inkl. Rückwärtskompatibilität, (2) WATER's echter `SET_TARGET`-Zweig (Marker-extrahiert aus dem Boot-Skript) mit `persisted=true` bei erfolgreichem und `persisted=false` bei fehlgeschlagenem `write_config()`, (3) RT's echtes `nodes/rt/command_handler.lua` (direkt require()-bar) mit derselben Unterscheidung, (4) RT's `set_reactor_fill_target`-Callback (Marker-extrahiert aus `nodes/rt/main.lua`) beweist, dass der frühere unausgewertete `pcall(...)` jetzt durch eine echte Erfolgsauswertung ersetzt ist. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
 ## Weiterer Nachweis
 
@@ -797,7 +800,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. **MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.
 11. ~~**ENERGY-P1:** genau eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
-12. **WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.
+12. ~~**WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 16): `tests/water_rt_persistence_ack_honesty_test.lua`.
 13. **VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.
 14. **INSTALL/MANIFEST-P1:** vollständige Planvalidierung und nur eine Installerimplementierung.
 15. **TEST-P0:** Ausschlusslisten Test für Test abbauen.

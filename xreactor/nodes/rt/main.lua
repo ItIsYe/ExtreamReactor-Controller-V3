@@ -762,11 +762,26 @@ local function build_command_ctx()
     -- Skalierung. Wirkt sich erst beim naechsten Regelzyklus aus (reactor_
     -- control.lua liest ctx.config.rails.reactor_fill_target jeden Tick
     -- frisch, kein Cache noetig).
+    -- Fix (2026-07-17): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 14). write_config()'s Ergebnis
+    -- wurde bisher komplett verworfen (`pcall(...)` ohne jede Auswertung
+    -- des Rueckgabewerts) und "changed"/INFO wurde IMMER geloggt, selbst
+    -- bei einem fehlgeschlagenen Schreibversuch -- das Command wurde ueber
+    -- command_handler.lua's Rueckgabe von `nil` (-> `{ ok = true }`) auch
+    -- gegenueber MASTER als vollstaendig angewendet quittiert. Gibt jetzt
+    -- das echte Persistenzresultat zurueck, damit der Aufrufer (siehe
+    -- SET_REACTOR_FILL_TARGET in command_handler.lua) ein ehrliches
+    -- `persisted`-Feld ins ACK_APPLIED-Ergebnis aufnehmen kann.
     set_reactor_fill_target = function(value)
       config.rails = config.rails or {}
       config.rails.reactor_fill_target = value
-      pcall(utils.write_config, CONFIG.CONFIG_PATH, config)
-      log("INFO", ("Reactor fill target changed to %.0f%%"):format(value * 100))
+      local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
+      if not ok_write then
+        log("WARN", ("SET_REACTOR_FILL_TARGET: Persistierung fehlgeschlagen (%s) -- Wert gilt nur bis zum naechsten Neustart"):format(tostring(werr)))
+      else
+        log("INFO", ("Reactor fill target changed to %.0f%%"):format(value * 100))
+      end
+      return ok_write == true
     end,
     log = log,
     capacity_learning = ctx and ctx.capacity_learning or capacity_learning_state,

@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 462,
-  manifest_id = "manifest-v462",
+  manifest_version = 463,
+  manifest_id = "manifest-v463",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14745, hash = "dc801ba2", always=true },
   { path = "installer/init.lua", size_bytes = 19921, hash = "7126d4cd", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "9607cab8", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "cc8b7be0", always=true },
   { path = "start.lua", size_bytes = 5574, hash = "7c62ecb0", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -135,7 +135,7 @@ return {
     { path = "core/turbine_ctrl.lua", size_bytes = 2663, hash = "d1b27731", required_for={"RT"} },
     { path = "core/turbine_regulator.lua", size_bytes = 17134, hash = "50ce7402", required_for={"RT"} },
     { path = "nodes/rt/binding.lua", size_bytes = 3507, hash = "87255444", required_for={"RT"} },
-    { path = "nodes/rt/command_handler.lua", size_bytes = 11461, hash = "9224810b", required_for={"RT"} },
+    { path = "nodes/rt/command_handler.lua", size_bytes = 12089, hash = "d2d2f705", required_for={"RT"} },
     { path = "nodes/rt/reactor_control.lua", size_bytes = 36127, hash = "377016c4", required_for={"RT"} },
     { path = "nodes/rt/turbine_control.lua", size_bytes = 48274, hash = "a19b4b96", required_for={"RT"} },
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 3983, hash = "0dee3a0d", required_for={"RT"} },
@@ -146,7 +146,7 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 13926, hash = "98be547a", required_for={"RT"} },
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 6519, hash = "2e07b58d", required_for={"RT"} },
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
-    { path = "nodes/rt/main.lua", size_bytes = 59186, hash = "1eaebd30", required_for={"RT"} },
+    { path = "nodes/rt/main.lua", size_bytes = 60152, hash = "0c567b48", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27809, hash = "1b235e40", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 16319, hash = "92da8da4", required_for={"RT"} },
     { path = "nodes/rt/mockup_pages.lua", size_bytes = 17793, hash = "f0390938", required_for={"RT"} },
@@ -178,7 +178,7 @@ return {
     water = {
     { path = "nodes/water/config.lua", size_bytes = 4789, hash = "961b224e", required_for={"WATER"} },
     { path = "nodes/water/config_normalizer.lua", size_bytes = 989, hash = "09141fba", required_for={"WATER"} },
-    { path = "nodes/water/main.lua", size_bytes = 26672, hash = "43e031e1", required_for={"WATER"} },
+    { path = "nodes/water/main.lua", size_bytes = 27266, hash = "b095dae9", required_for={"WATER"} },
     { path = "nodes/water/ui_pages.lua", size_bytes = 10862, hash = "cfbbd586", required_for={"WATER"} },
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
     },
@@ -215,7 +215,7 @@ return {
     { path = "nodes/log_collector/default_ui.lua", size_bytes = 4481, hash = "adeb5fa4", required_for={"LOG"} },
     },
     shared_support = {
-    { path = "nodes/support/command_handler.lua", size_bytes = 5102, hash = "8aeba298", required_for={"WATER", "FUEL", "REPROCESSING"} },
+    { path = "nodes/support/command_handler.lua", size_bytes = 5643, hash = "7b6b4fac", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY", "WATER", "FUEL", "REPROCESSING", "RT"} },
     { path = "nodes/support/runtime.lua", size_bytes = 7269, hash = "9df1e5ca", required_for={"WATER", "FUEL", "REPROCESSING", "RT", "ENERGY", "MASTER", "VALVE"} },
