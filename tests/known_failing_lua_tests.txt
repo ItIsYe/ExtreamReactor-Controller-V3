@@ -28,10 +28,7 @@
 #   SYNTAX_ERROR   - die Testdatei selbst ist kein gueltiges Lua (nicht das
 #                    getestete Produktivmodul).
 
-alert_rules_numeric_normalization_test.lua # CONTENT_DRIFT
-comms_peer_down_observation_debounce_test.lua # CONTENT_DRIFT
 comms_peer_retention_cleanup_test.lua # NEEDS_MOCK (Logger-Backend meldet degraded ohne echtes Dateisystem)
-comms_peer_state_hysteresis_test.lua # CONTENT_DRIFT
 comms_stability_defaults_regression_test.lua # STALE_API (DEFAULT_COMMS_PEER_DOWN_GRACE existiert unter diesem Namen nicht mehr)
 energy_architecture_stability_regression_test.lua # CONTENT_DRIFT
 energy_discovery_hot_path_gating_test.lua # CONTENT_DRIFT

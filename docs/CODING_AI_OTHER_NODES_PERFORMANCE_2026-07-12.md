@@ -44,7 +44,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | REPROCESSOR | **WEITGEHEND UMGESETZT** | Standby-Cancel und Wireless-VALVE-Discovery behoben (Abschnitt 20) |
 | VALVE | **WEITGEHEND UMGESETZT** | Retry, Senderbindung (Auto-Pairing) und Sorter-Reconnect behoben (Abschnitt 21); Statusfelder (`actuator_online` etc.) bleiben als Observability-Erweiterung offen |
 | LOG Collector | **WEITGEHEND UMGESETZT** | Probe-Wipe (Abschnitt 16) und stale Free-Space-Cache im Reclaim (Abschnitt 22) behoben; Rotation/Datenhaltungsregeln (Abschnitt 23) weiterhin offen |
-| Tests / CI | **KRITISCH TEILWEISE** | 66 Lua- und 6 Python-Tests ausgeschlossen; aktueller Head ohne nachgewiesenen grünen Lauf |
+| Tests / CI | **KRITISCH TEILWEISE** | 63 Lua- und 6 Python-Tests ausgeschlossen (drei echte Fehler/Testbugs am 2026-07-17 behoben, siehe Abschnitt 24); aktueller Head ohne nachgewiesenen grünen Lauf |
 | Dokumentation | **AKTUELL** | diese Datei ist die einzige aktuelle allgemeine Auditquelle |
 
 ## Produktionsurteil
@@ -60,7 +60,7 @@ Die kritischsten aktuellen Risiken sind:
 5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
 6. ~~REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20).
 7. ~~LOG-Reclaim prüft nach Löschungen einen gecachten Free-Space-Wert und kann unnötig viele Dateien entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22).
-8. 72 Tests bleiben ausgeschlossen; ein grüner Lauf des geprüften Heads ist nicht nachgewiesen.
+8. 69 Tests bleiben ausgeschlossen (drei am 2026-07-17 behoben, siehe Abschnitt 24); ein grüner Lauf des geprüften Heads ist nicht nachgewiesen.
 
 ---
 
@@ -708,14 +708,14 @@ Eine einzelne Node-Logdatei wird bei Überschreiten von `MAX_LOG_BYTES` gelösch
 
 ## Status
 
-**KRITISCH TEILWEISE**
+**KRITISCH TEILWEISE** (Ausschlussliste schrumpft, siehe unten)
 
 Aktuelle Ausschlusslisten:
 
 ```text
-66 Lua-Tests
+63 Lua-Tests
 6 Python-Tests
-72 insgesamt
+69 insgesamt
 ```
 
 Darunter befinden sich weiterhin echte Verhaltenskategorien wie:
@@ -723,10 +723,16 @@ Darunter befinden sich weiterhin echte Verhaltenskategorien wie:
 - ENERGY-Architektur und Payloadcache,
 - MASTER-ACK-/Shutdown-Semantik,
 - RT-Control, Safety, Startup und Sync,
-- Logger-/Registry-Runtime,
-- Comms-Hysterese.
+- Logger-/Registry-Runtime.
 
 Der neue RT-Startup-Test zeigt außerdem ein strukturelles Problem des Testansatzes: Er behauptet, den Produktions-Context zu spiegeln, liefert aber einen anderen `TURBINE_MODE`-Typ und kodiert die 30-ms-Rampensemantik als erwartet.
+
+## Triage-Ergebnis 2026-07-17 (drei Eintraege aus der Ausschlussliste entfernt)
+
+- `comms_peer_state_hysteresis_test.lua` und `comms_peer_down_observation_debounce_test.lua` (beide zuvor `CONTENT_DRIFT`): **echter Produktionsfehler**, nicht veraltete Erwartung. `core/comms.lua`s `update_peer_timeouts()` liess `peer.down` so lange `nil` stehen, bis die Down-Transition einmal tatsaechlich ausgeloest wurde -- also fuer JEDEN frisch gesehenen Peer und weiterhin waehrend der gesamten Down-Grace-/Beobachtungs-Periode. `get_peer_state()` behandelt ein `nil`-`down`-Feld aber als "noch nie von der Hysterese ausgewertet" und berechnete stattdessen einen ROHEN `delta > peer_timeout_s`-Wert OHNE Gnadenfrist oder Mindestbeobachtungen -- das unterlief die komplette Hysterese-Logik extern sichtbar (Peer erschien sofort als `down`, sobald das reine Timeout ueberschritten war, unabhaengig von `peer_down_grace_s`/`peer_down_min_observations`). Fix: `update_peer_timeouts()` initialisiert `peer.down` jetzt explizit auf `false`, sobald ein Peer zum ersten Mal ausgewertet wird -- der `nil`-Fallback in `get_peer_state()` greift danach nur noch fuer Peers, die diese Funktion tatsaechlich noch nie erreicht hat. Beide Tests sind jetzt gruen ohne Testaenderung (nur der Produktionscode wurde korrigiert) und aus der Ausschlussliste entfernt.
+- `alert_rules_numeric_normalization_test.lua` (zuvor `CONTENT_DRIFT`): **veraltete/fehlerhafte Testerwartung**, kein Produktionsfehler. Der Test setzte `role = 'RT_NODE'` (Unterstrich) als Node-Rolle, aber `constants.roles.RT_NODE` ist tatsaechlich `"RT-NODE"` (Bindestrich) -- der Rollenvergleich in `core/alert_rules.lua` schlug dadurch fehl, der gesamte RT-Node-Alarmzweig (inkl. der zu testenden Steam-Deficit-Logik) wurde nie erreicht. Testfix: verwendet jetzt `require('shared.constants').roles.RT_NODE` statt eines hartcodierten falschen Strings. Aus der Ausschlussliste entfernt.
+
+Weiterhin ausgeschlossen bleibt `comms_peer_retention_cleanup_test.lua` (`NEEDS_MOCK`, anderer Fehlschlag -- Logger-Backend meldet degraded ohne echtes Dateisystem-Mock, unabhaengig vom obigen Hysterese-Fix).
 
 ## Regel
 

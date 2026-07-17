@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 464,
-  manifest_id = "manifest-v464",
+  manifest_version = 465,
+  manifest_id = "manifest-v465",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,14 +14,14 @@ return {
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
   { path = "installer/auto_update.lua", size_bytes = 14745, hash = "dc801ba2", always=true },
   { path = "installer/init.lua", size_bytes = 19921, hash = "7126d4cd", always=true },
-  { path = "release.lua", size_bytes = 273, hash = "925d6b29", always=true },
+  { path = "release.lua", size_bytes = 273, hash = "c8d1da71", always=true },
   { path = "start.lua", size_bytes = 5574, hash = "7c62ecb0", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
     { path = "core/mockup_ui.lua", size_bytes = 11146, hash = "3b1f768a", always=true },
   { path = "adapters/monitor.lua", size_bytes = 7979, hash = "9948fe5c" },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", always=true },
-  { path = "core/comms.lua", size_bytes = 24518, hash = "4f174212" },
+  { path = "core/comms.lua", size_bytes = 25765, hash = "ea0be60e" },
   { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
   { path = "core/logger.lua", size_bytes = 32590, hash = "088f5e4b" },
   { path = "core/monitor_manager.lua", size_bytes = 10306, hash = "db7fc423" },
