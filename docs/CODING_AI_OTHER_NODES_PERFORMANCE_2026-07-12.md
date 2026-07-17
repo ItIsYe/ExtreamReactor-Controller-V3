@@ -37,7 +37,7 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 | Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **TEILWEISE OFFEN** | Config-Editor meldet Werte optimistisch als übernommen; kein Applied-ACK je Zielnode und keine Einzelnode-Auswahl |
-| RT | **TEILWEISE OFFEN** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11) und Rampendauer-Einheitenfehler (Abschnitt 12) behoben; fehlende Modul-State-Update-Verdrahtung weiterhin offen |
+| RT | **WEITGEHEND UMGESETZT** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11), Rampendauer-Einheitenfehler (Abschnitt 12) und fehlende `update_module_states()`-Verdrahtung (Abschnitt 13) behoben; Persistenz-/Observability-Restpunkte (Abschnitt 14) weiterhin offen |
 | ENERGY | **TEILWEISE BEHOBEN** | Schedulergruppen getrennt, Heartbeat besitzt aber weiterhin zwei Zeitquellen |
 | WATER | **WEITGEHEND UMGESETZT** | Persistenzfehler werden geloggt, Command kann trotzdem als angewendet bestätigt werden |
 | FUEL | **TEILWEISE OFFEN** | Config/Async-Lifecycle und Router-ACK-Command-ID-Bindung behoben (Abschnitt 17); Async-Ergebnis noch nicht sauber an seinen Lieferzyklus gebunden (Abschnitt 19) |
@@ -56,7 +56,7 @@ Die kritischsten aktuellen Risiken sind:
 1. Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.
 2. Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.
 3. ~~RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11 und Abschnitt 12).
-4. `module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.
+4. ~~`module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13).
 5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
 6. ~~REPROCESSOR übergibt dem Router keine COMMS-Peerquelle und erkennt Wireless-VALVE-Nodes dadurch nicht.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20).
 7. LOG-Reclaim prüft nach Löschungen einen gecachten Free-Space-Wert und kann unnötig viele Dateien entfernen.
@@ -420,23 +420,17 @@ local progress = safety.clamp((now - module.start_time) / duration_ms, 0, 1)
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Die Funktion existiert in `nodes/rt/module_lifecycle.lua`, wird im Produktivcode aber nicht aufgerufen. Die einzige weitere Fundstelle liegt in einem Test.
+Bestätigt: `update_module_states()` existierte bereits in `nodes/rt/module_lifecycle.lua` und war bereits funktional getestet (`tests/rt_coolant_low_confirm_delay_test.lua`), wurde aber im Produktivcode nirgends aufgerufen — die einzige weitere Fundstelle war ein Test. `control_tick()` rief bisher nur `process_startup()`, Reactor-Control und Turbine-Control auf. Ohne `update_module_states()` waren unter anderem nicht regelmäßig aktiv: `STABLE -> RUNNING`, laufende Modul-Limitbewertung, Modulstate `LIMITED`, modulbezogene Temperatur-/Coolant-Transitionen außerhalb eines aktiven Startups.
 
-Damit sind unter anderem nicht regelmäßig aktiv:
+Fix: `module_lifecycle.update_module_states(make_lifecycle_ctx())` wird jetzt in `control_tick()` aufgerufen — dieselbe `make_lifecycle_ctx()`, die `process_startup()` bereits erfolgreich verwendet, liefert bereits alle von `update_module_states()` benötigten Felder (`log`, `current_state`, `STATE`, `setState`, `node_state_machine`, `constants`, `evaluate_reactor_coolant`, `get_effective_regulator_rod_caps`, `read_current_rods`, `config.safety.*`, `get_target_rpm`) — keine neuen Ctx-Felder nötig. Reihenfolge bewusst sicherheitserst dokumentiert und getestet: `update_module_states()` (erkennt/reagiert auf neue Gefahrenzustände über alle Module) läuft VOR `process_startup()` (treibt nur das aktuell startende Modul voran) und VOR `reactor_control`/`turbine_control` (die Regelung darf nicht auf einem in diesem Tick bereits veralteten Sicherheitszustand aufbauen).
 
-- `STABLE -> RUNNING`,
-- laufende Modul-Limitbewertung,
-- Modulstate `LIMITED`,
-- modulbezogene Temperatur-/Coolant-Transitionen,
-- Teile der Safety-Causality- und Zustandsdiagnose.
+Pflicht-Test: `tests/rt_control_tick_wires_update_module_states_test.lua` — prüft strukturell an `control_tick()`s echtem Quelltext, dass `update_module_states()` tatsächlich aufgerufen wird UND in der dokumentierten Reihenfolge vor `process_startup()`, `reactor_control.updateReactorControl()` und `turbine_control.updateControl()` steht. Verifiziert per `git stash`, dass der Test mit dem alten Code fehlschlägt.
 
-`control_tick()` ruft aktuell nur `process_startup()`, Reactor-Control und Turbine-Control auf.
+## Fix (umgesetzt)
 
-## Fix
-
-`module_lifecycle.update_module_states(make_lifecycle_ctx())` in einen eindeutig definierten Control-/Safety-Tick aufnehmen. Reihenfolge zu `process_startup()`, Reactor-Control und Turbine-Control dokumentieren und testen.
+`module_lifecycle.update_module_states(make_lifecycle_ctx())` in `control_tick()` aufgenommen, sicherheitserst vor `process_startup()`, Reactor-Control und Turbine-Control.
 
 ---
 
@@ -752,7 +746,7 @@ Ein Test darf nur entfernt werden, wenn:
 2. Update-Quiesce je Rolle.
 3. ~~RT-Produktions-Context-Shape.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
 4. ~~RT-Rampeneinheit mit Fake-Clock.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
-5. produktive Verdrahtung von `update_module_states()`.
+5. ~~produktive Verdrahtung von `update_module_states()`.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
 6. ~~Router-ACK muss aktuelle Command-ID matchen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17): `tests/redstone_router_stale_confirmed_state_test.lua`.
 7. ~~REPROCESSOR Wireless-VALVE-Discovery.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
 8. ENERGY exakt eine Heartbeat-Zeitquelle.
@@ -808,7 +802,7 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 2. ~~**REPROCESSOR-P0:** COMMS-Peers an Wireless-Router verdrahten.~~ BEHOBEN (2026-07-17, siehe Abschnitt 20): `tests/reprocessor_wireless_valve_comms_wiring_test.lua`.
 3. ~~**RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
 4. ~~**RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
-5. **RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.
+5. ~~**RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
 6. **INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.
 7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
 8. **INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.

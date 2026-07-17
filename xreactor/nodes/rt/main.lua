@@ -676,6 +676,23 @@ local function control_tick()
   -- wie oft der Control-Tick lief. process_startup() ist ein billiger No-Op
   -- (frueher Return), solange kein Startup aktiv ist (ctx.get_active_
   -- startup() == nil), daher unbedenklich jeden Tick aufzurufen.
+  --
+  -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 13). module_lifecycle.update_
+  -- module_states() existierte bereits, war aber im gesamten Projekt
+  -- nirgends verdrahtet -- die einzige Fundstelle war ein Test. Ohne sie
+  -- liefen STABLE->RUNNING-Uebergaenge, laufende Modul-Limitbewertung
+  -- (TEMP/WATER-Grenzwerte, die module.state=ERROR + SAFE/EMERGENCY
+  -- ausloesen), der Modulstate LIMITED sowie modulbezogene Temperatur-/
+  -- Coolant-Transitionen NIE ausser waehrend eines aktiven Startups (dort
+  -- deckt check_interlocks() innerhalb process_startup() nur EINEN Teil
+  -- derselben Pruefung ab). Reihenfolge bewusst SICHERHEITSERST: update_
+  -- module_states() (erkennt/reagiert auf neue Gefahrenzustaende ueber
+  -- ALLE Module) laeuft VOR process_startup() (treibt nur das aktuell
+  -- startende Modul voran) und VOR reactor_control/turbine_control (die
+  -- eigentliche Regelung darf nicht auf einem in diesem Tick bereits
+  -- veralteten Sicherheitszustand aufbauen).
+  module_lifecycle.update_module_states(make_lifecycle_ctx())
   module_lifecycle.process_startup(make_lifecycle_ctx())
   -- Reaktor-Regelung
   reactor_control.updateReactorControl(ctx)
