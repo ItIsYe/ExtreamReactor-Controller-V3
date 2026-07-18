@@ -41,6 +41,79 @@ local function cleanup_space()
 end
 cleanup_space()
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 3, Fix-Punkt 6): "beim Boot
+-- unvollstaendigen Zustand erkennen und entweder Rollback oder
+-- kontrollierten Resume ausfuehren". installer/journal.lua schreibt bei
+-- jedem Installationslauf ein Journal AUSSERHALB von /xreactor, das erst
+-- als LETZTER Schritt (zusammen mit release.lua, siehe dortiger Fix-
+-- Kommentar) auf COMMITTED gesetzt und sofort geloescht wird. Ein Absturz
+-- irgendwo zwischen "alter Baum geloescht" und "COMMITTED" hinterlaesst
+-- also ein Journal in einem anderen Zustand (PREPARED/INSTALLING/
+-- VERIFYING) -- genau das wird hier bei JEDEM Boot geprueft, BEVOR
+-- ueberhaupt versucht wird, eine (moeglicherweise unvollstaendige) Rolle
+-- zu starten. Der Parser ist bewusst selbststaendig (kein dofile() von
+-- installer/journal.lua) -- bei einem sehr fruehen Absturz koennte
+-- /xreactor/installer/ selbst noch unvollstaendig sein, das Journal liegt
+-- aber immer ausserhalb davon.
+local INSTALL_JOURNAL_PATH = "/xreactor_install_journal.lua"
+
+local function read_install_journal()
+  if not fs.exists(INSTALL_JOURNAL_PATH) then return nil end
+  local f = fs.open(INSTALL_JOURNAL_PATH, "r")
+  if not f then return nil end
+  local src = f.readAll(); f.close()
+  local loader = load(src, "=install_journal", "t", {})
+  if not loader then return nil end
+  local ok, result = pcall(loader)
+  if not ok or type(result) ~= "table" or type(result.state) ~= "string" then return nil end
+  return result
+end
+
+-- Kontrollierter Resume: statt zu versuchen, chirurgisch nur die fehlenden
+-- Dateien nachzuinstallieren (fehleranfaellig, kaum verlaesslich testbar),
+-- wird der komplette, bereits robuste (SHA-Pinning, CRC32-Verifikation,
+-- Config-Backup/Restore, siehe installer/init.lua) Installationslauf per
+-- frisch heruntergeladenem /installer erneut ausgefuehrt -- exakt derselbe
+-- Mechanismus, den auto_update.lua fuer normale Updates bereits verwendet.
+-- Das garantiert nach Abschluss entweder einen vollstaendigen, COMMITTED
+-- neuen Stand (der Installer rebootet danach selbst), oder -- falls dieser
+-- Versuch seinerseits fehlschlaegt (z.B. kein Netzwerk) -- ein erneut
+-- unvollstaendiges Journal, das den naechsten Boot wieder in genau diesen
+-- Recoverypfad schickt, statt jemals die (unvollstaendige) Rolle zu
+-- starten.
+local function attempt_recovery_resume()
+  local body
+  local ok_http, r = pcall(http.get, "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer")
+  if ok_http and r then
+    local ok2, b = pcall(r.readAll); pcall(r.close)
+    if ok2 and type(b) == "string" and #b > 0 then body = b end
+  end
+  if not body then error("Recovery-Installer-Download fehlgeschlagen", 0) end
+  local tmp = "/xreactor_recovery_installer.tmp"
+  local f = fs.open(tmp, "w")
+  if not f then error("Kann Recovery-Installer nicht schreiben: " .. tmp, 0) end
+  local ok_w = pcall(function() f.write(body) end)
+  pcall(f.close)
+  if not ok_w then error("Kann Recovery-Installer nicht schreiben: " .. tmp, 0) end
+  _G.__xreactor_remote_update = true
+  dofile(tmp)
+end
+
+local install_journal = read_install_journal()
+if install_journal and install_journal.state ~= "COMMITTED" then
+  p("[BOOT] WARN: unvollstaendige Installation erkannt (Zustand: " .. tostring(install_journal.state) .. ")")
+  p("[BOOT] Rolle wird NICHT gestartet -- kontrollierter Recovery-Resume...")
+  local ok_resume, resume_err = pcall(attempt_recovery_resume)
+  if not ok_resume then
+    p("[BOOT] FEHLER: Recovery-Resume fehlgeschlagen: " .. tostring(resume_err))
+  end
+  p("[BOOT] Neustart in 5 Sekunden fuer erneuten Recovery-Versuch...")
+  os.sleep(5)
+  if os and os.reboot then os.reboot() end
+  error("Recovery-Resume nicht abgeschlossen -- Rolle wird nicht gestartet", 0)
+end
+
 local function read_role()
   if not fs.exists(ROLE_PATH) then return nil, "Role config fehlt" end
   local f = fs.open(ROLE_PATH, "r"); if not f then return nil, "Kann role.lua nicht lesen" end
@@ -78,6 +151,18 @@ if delay > 0 then
   for i = delay, 1, -1 do p("  Start in " .. i .. "s..."); os.sleep(1) end
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 4). Das Rollen-Handshake-Objekt
+-- (core/update_handshake.lua) wird als GLOBALER Wert bereitgestellt --
+-- derselbe etablierte Musterzugriff wie _G.__xreactor_remote_update --
+-- damit sowohl die Rollen-Coroutine (dofile(entry), prueft/meldet ueber
+-- diesen Handshake) als auch der Auto-Update-Loop (fordert Quiesce an,
+-- wartet auf Bestaetigung) dasselbe Objekt sehen, ohne dofile() Argumente
+-- uebergeben zu muessen.
+local update_handshake_lib = dofile("/xreactor/core/update_handshake.lua")
+local update_handshake = update_handshake_lib.new()
+_G.__xreactor_update_handshake = update_handshake
+
 local auto_loop = nil
 local auto_path = INSTALL_ROOT .. "/installer/auto_update.lua"
 if fs.exists(auto_path) then
@@ -95,7 +180,7 @@ if fs.exists(auto_path) then
         end
       end
     end
-    auto_loop = auto_mod.make_loop(interval)
+    auto_loop = auto_mod.make_loop(interval, update_handshake)
     p("[BOOT] Auto-Update Loop bereit (" .. interval .. "s)")
   else
     p("[BOOT] WARN: auto_update.lua Fehler: " .. tostring(auto_mod))
@@ -104,9 +189,21 @@ else
   p("[BOOT] WARN: installer/auto_update.lua fehlt")
 end
 
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2. parallel.waitForAny() beendete
+-- BEIDE Coroutinen, sobald EINE von ihnen zurueckkehrte -- ein sauberer
+-- Quiesce-Exit der Rollen-Coroutine (siehe unten) haette dadurch den
+-- Auto-Update-Loop VOR dem eigentlichen Installerlauf abgewuergt, statt
+-- ihm die Chance zu geben, fortzufahren. parallel.waitForAll() wartet auf
+-- BEIDE: die Rollen-Coroutine kann jetzt sauber enden (nach bestaetigtem
+-- Quiesce), waehrend der Auto-Update-Loop unbeeinflusst weiterlaeuft und
+-- danach den Installer startet (der bei Erfolg ohnehin selbst rebootet).
+-- Ein unabgefangener Fehler in irgendeiner Coroutine wird von parallel.*
+-- weiterhin sofort nach oben durchgereicht (identisches Verhalten wie
+-- vorher bei waitForAny) -- das bestehende pcall(run)-Fehlerhandling
+-- unten bleibt unveraendert wirksam.
 local function run()
   if auto_loop then
-    parallel.waitForAny(function() dofile(entry) end, auto_loop)
+    parallel.waitForAll(function() dofile(entry) end, auto_loop)
   else
     dofile(entry)
   end

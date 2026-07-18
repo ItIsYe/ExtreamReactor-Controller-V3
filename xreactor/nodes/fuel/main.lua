@@ -448,7 +448,21 @@ init()
 -- logistics_router.lua) voran -- muss unabhaengig vom 5s-Logistics-
 -- Zyklus regelmaessig laufen, sonst wuerde eine laufende Transaktion nie
 -- ueber WAIT_SETTLE/HOLD_OPEN hinauskommen.
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
+-- Quiesce-Handler. Nutzt dieselbe bereits vorhandene, getestete
+-- shutdown_now()-Funktion, die REPROCESSOR ueber cancel() schon fuer
+-- MASTER-Staleness verwendet (blockiert alle bekannten Ventile -- lokal
+-- UND wireless -- und bricht eine laufende Transaktion sofort ab).
+-- shutdown_now() ist fire-and-forget (kein Rueckgabewert), daher wird der
+-- sichere Zustand ueber get_active_transaction()==nil bestaetigt (danach
+-- synchron geloescht) -- dieselbe Bestaetigungsqualitaet, die REPROCESSORs
+-- eigener standby-Mechanismus fuer denselben Zweck bereits hat.
+local quiesce_handshake = _G.__xreactor_update_handshake
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   get_router():tick()
   get_rs_router():tick()
-end)
+end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
+  local rs_router = get_rs_router()
+  rs_router:shutdown_now("UPDATE_QUIESCE")
+  return rs_router:get_active_transaction() == nil
+end } or nil)

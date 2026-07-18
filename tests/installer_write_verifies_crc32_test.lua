@@ -126,9 +126,12 @@ do
 end
 
 -- ---------------------------------------------------------------------
--- 3) Wiring: installer/init.lua and the monolithic /installer must both
---    pass manifest_mod.crc32 into stage_mod.install() so M.verify()
---    actually receives a crc32_fn in production.
+-- 3) Wiring: installer/init.lua (seit INSTALL-P1/Abschnitt 8 die EINZIGE
+--    Stelle mit tatsaechlicher Installationslogik -- /installer ist nur
+--    noch ein duenner Bootstrap ohne eigene stage_mod.install()-Aufrufe,
+--    siehe installer_bootstrap_test.lua) muss manifest_mod.crc32 in
+--    stage_mod.install() durchreichen, damit M.verify() tatsaechlich
+--    einen crc32_fn erhaelt.
 -- ---------------------------------------------------------------------
 do
   local init_src = read("xreactor/installer/init.lua")
@@ -136,18 +139,6 @@ do
     "installer/init.lua must still call stage_mod.install with ref")
   assert(init_src:find("manifest_mod.crc32)", 1, true),
     "installer/init.lua must pass manifest_mod.crc32 into stage_mod.install()")
-
-  local mono = read("installer")
-  local count = 0
-  local pos = 1
-  while true do
-    local s = mono:find("manifest_mod.crc32", pos, true)
-    if not s then break end
-    count = count + 1
-    pos = s + 1
-  end
-  assert(count >= 2,
-    "monolithischer Installer muss manifest_mod.crc32 an BEIDE stage_mod.install()-Aufrufstellen durchreichen (init_src-Block und eigenstaendiger Bootstrap-Wrapper), gefunden: " .. count)
 end
 
 print("installer_write_verifies_crc32_test.lua: ok")

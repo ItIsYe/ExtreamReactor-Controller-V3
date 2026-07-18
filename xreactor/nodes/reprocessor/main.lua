@@ -566,6 +566,11 @@ local function init()
 end
 
 init()
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
+-- Quiesce-Handler. Nutzt dieselbe bereits vorhandene, getestete
+-- enter_standby()-Funktion (bereits idempotent, bereits fuer MASTER-
+-- Staleness verwendet) -- kein neuer Aktor-Code.
+local quiesce_handshake = _G.__xreactor_update_handshake
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   -- Fix (2026-07-13): REPROC-P0.4. Die Stale-Pruefung lief bisher NACH
   -- process_buffers()/feed-Arbeit -- ein gerade erst abgelaufenes MASTER-
@@ -595,4 +600,7 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   -- Standby ist er wegen der bereits geleerten Transaktion nur noch ein
   -- billiger No-Op (kein tx mehr vorhanden).
   get_rs_router():tick()
-end)
+end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
+  enter_standby("UPDATE_QUIESCE")
+  return standby == true
+end } or nil)

@@ -107,8 +107,24 @@ function M.files_for_role(manifest, role_label, selected_features)
     expected[entry.path] = entry
   end
 
+  -- Fix (2026-07-17): INSTALL/MANIFEST-P1 aus docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md (Abschnitt 7). required_for wurde bisher NUR
+  -- fuer roles.*-Eintraege ausgewertet -- ein required_for-Feld auf einem
+  -- base_files-Eintrag hatte schlicht keine Wirkung, die Datei ging trotzdem
+  -- an jede nicht-LOG-Rolle (siehe services/alert_service.lua, die nur von
+  -- MASTER tatsaechlich require()t wird, siehe tests/manifest_transitive_
+  -- require_coverage_test.lua).
+  local function base_role_matches(entry)
+    local rf = entry.required_for
+    if type(rf) ~= "table" then return true end
+    for _, v in ipairs(rf) do
+      if tostring(v):upper() == role_label:upper() then return true end
+    end
+    return false
+  end
+
   for _, e in ipairs(manifest.base_files or {}) do
-    if not is_log or e.always == true then add(e) end
+    if (not is_log or e.always == true) and base_role_matches(e) then add(e) end
   end
 
   for rkey, rentries in pairs(manifest.roles or {}) do

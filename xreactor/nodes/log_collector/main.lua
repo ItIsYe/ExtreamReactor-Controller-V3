@@ -1323,6 +1323,7 @@ local function run()
   draw()
 
   local timer = os.startTimer and os.startTimer(1)
+  local quiesced = false
   while true do
     local event = { os.pullEvent() }
     local name = event[1]
@@ -1379,9 +1380,29 @@ local function run()
         check_log_freshness()
         flush_due()
         if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
-        timer = os.startTimer and os.startTimer(1)
+        -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_
+        -- NODES_PERFORMANCE_2026-07-12.md (Abschnitt 4). LOG_COLLECTOR hat
+        -- keine eigenen physischen Aktoren zu quiescen -- der Handler
+        -- bestaetigt sofort einen sicheren Zustand, verlaesst aber
+        -- kontrolliert die Schleife, statt (wie bisher) unbegrenzt
+        -- weiterzulaufen, waehrend ein Auto-Update LOG_COLLECTORs eigene
+        -- Dateien ersetzt.
+        local quiesce_handshake = _G.__xreactor_update_handshake
+        if quiesce_handshake then
+          local ok_uh, update_handshake = pcall(dofile, "/xreactor/core/update_handshake.lua")
+          if ok_uh and update_handshake.is_quiesce_requested(quiesce_handshake) then
+            update_handshake.mark_safe_outputs_applied(quiesce_handshake)
+            update_handshake.mark_runtime_stopped(quiesce_handshake)
+            self_log("Quiesce angefordert -- Event-Loop wird kontrolliert beendet", "WARN")
+            quiesced = true
+          end
+        end
+        if not quiesced then
+          timer = os.startTimer and os.startTimer(1)
+        end
       end
     end)
+    if quiesced then return end
     if not branch_ok then
       stats.last_error = "loop crashed on event=" .. tostring(name) .. ": " .. tostring(branch_err):sub(1, 80)
       diag(stats.last_error)

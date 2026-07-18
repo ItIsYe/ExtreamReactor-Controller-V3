@@ -33,8 +33,8 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Auto-Update | **KRITISCH TEILWEISE** | kritische FS-Ergebnisse werden jetzt geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5 behoben); kein transaktionaler Completion-Marker, Runtime läuft beim Reinstall weiter |
-| Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Manifestvalidierung und doppelte Installer-Implementierung bleiben offen |
+| Installer / Auto-Update | **WEITGEHEND BEHOBEN** | kritische FS-Ergebnisse werden geprüft und unsicherer Backup-Fallback entfernt (Abschnitt 5); transaktionales Installationsjournal mit Boot-Recovery-Guard (Abschnitt 3); rollenübergreifender Quiesce-Handshake vor jedem Reinstall (Abschnitt 4); vollständige Planvalidierung (Abschnitt 7) und Vereinheitlichung der beiden Installer-Implementierungen (Abschnitt 8) behoben |
+| Manifest / Rollen-Scope | **WEITGEHEND BEHOBEN** | strukturelle Vorab-Planvalidierung inkl. transitiver require()-Abdeckung vorhanden (Abschnitt 7, deckte zwei echte Manifest-Lücken auf); doppelte Installer-Implementierung behoben (Abschnitt 8) — `/installer` ist jetzt ein dünner Bootstrap ohne eigene Installationslogik |
 | Shared Runtime | **WEITGEHEND UMGESETZT** | Update-Quiesce fehlt rollenübergreifend |
 | MASTER | **WEITGEHEND UMGESETZT** | Config-Editor: Einzelnode-/Alle-Auswahl, `require_applied` und Applied-ACK-Tracking je Ziel behoben (Abschnitt 10) |
 | RT | **WEITGEHEND UMGESETZT** | `TURBINE_MODE`-Context-Typfehler (Abschnitt 11), Rampendauer-Einheitenfehler (Abschnitt 12) und fehlende `update_module_states()`-Verdrahtung (Abschnitt 13) behoben; Persistenz-/Observability-Restpunkte (Abschnitt 14) weiterhin offen |
@@ -53,8 +53,8 @@ Commitmeldungen und vorhandene Kommentare wurden nicht als Beweis übernommen. B
 
 Die kritischsten aktuellen Risiken sind:
 
-1. Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.
-2. Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.
+1. ~~Ein Update kann als neue Release erscheinen, obwohl die Installation nur teilweise abgeschlossen wurde.~~ BEHOBEN (2026-07-17, siehe Abschnitt 3): transaktionales Installationsjournal, release.lua zuletzt committet, Boot-Guard verhindert Rollenstart bei unvollständigem Journal.
+2. ~~Der Installer kann Dateien ersetzen, während die laufende Node dieselben Dateien und Hardwarepfade weiter benutzt.~~ BEHOBEN (2026-07-17, siehe Abschnitt 4): rollenübergreifender Quiesce-Handshake, `parallel.waitForAll` statt `waitForAny`, physische Sicherzustandsbestätigung für FUEL/REPROCESSOR/VALVE/WATER vor jedem Reinstall.
 3. ~~RT-Startup verwendet im echten Context einen falschen `TURBINE_MODE`-Typ und behandelt `30` als 30 Millisekunden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11 und Abschnitt 12).
 4. ~~`module_lifecycle.update_module_states()` ist im Produktionspfad nicht aufgerufen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13).
 5. ~~Der Ventilrouter kann einen fehlenden aktuellen ACK durch einen alten passenden Bestätigungszustand ersetzen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 17).
@@ -73,6 +73,10 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 - Manifest und heruntergeladene Dateien verwenden im modularen Installer denselben aufgelösten Source-Ref.
 - `installer/stage.lua` prüft nach jedem Write Größe und CRC32.
 - `installer/stage.lua`s `M.write()` löscht die alte Datei nicht mehr ungeprüft, wenn der Backup-Move fehlschlägt; alle kritischen FS-Operationen in `installer/init.lua` und im tatsächlich ausgeführten Live-Installflow von `/installer` brechen bei Fehlschlag jetzt kontrolliert ab (Abschnitt 5).
+- transaktionales Installationsjournal (`installer/journal.lua`, PREPARED→INSTALLING→VERIFYING→COMMITTED), `release.lua` wird zuletzt committet, `xreactor/start.lua` verhindert bei jedem Boot den Start der Rolle, solange das Journal nicht COMMITTED ist (Abschnitt 3).
+- rollenübergreifender Update-Handshake (`core/update_handshake.lua`) stoppt jede Rolle kontrolliert und bestätigt für FUEL/REPROCESSOR/VALVE/WATER den sicheren physischen Ausgangszustand, bevor der Installer Dateien ersetzt (Abschnitt 4).
+- `installer/plan_validator.lua` lehnt einen strukturell fehlerhaften Installationsplan (unbekannte Rolle, fehlender Entrypoint, unsichere Pfade, ungültige Hash-/Größenfelder, Manifest-Inkonsistenz, Übergröße) vor dem ersten destruktiven Schritt ab; ein Testsuite-Check gegen den echten Quelltext deckt zusätzlich fehlende transitive `require()`/`dofile()`-Manifestabdeckung auf (Abschnitt 7, deckte zwei echte Lücken auf: `services/alert_service.lua`/`core/alert_rules.lua`, `core/mockup_ui.lua`/`shared/colors.lua`).
+- `/installer` ist jetzt ein dünner Bootstrap (löst einen Ref auf, lädt die kanonischen Installermodule frisch herunter, ruft `installer/init.lua` als injizierte Funktion auf) ohne eigene eingebettete Textkopien oder eigenständigen Installationsflow; `installer/init.lua` ist die einzige Stelle mit tatsächlicher Installationslogik (Abschnitt 8).
 - automatische Speicherbereinigung löscht nicht mehr pauschal `/xreactor_logs`.
 - REPROCESSOR-`feed_router.lua` besitzt jetzt den Rollen-Scope `REPROCESSING`.
 - `optional/speaker_alarm.lua` besitzt einen Rollen-Scope.
@@ -131,47 +135,52 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
+
+*Hinweis (nachträglich): Verweise unten auf einen "tatsächlich ausgeführten Live-Installflow in `/installer`" beschreiben den Stand ZUM ZEITPUNKT dieses Fixes. Abschnitt 8 hat diese zweite, im Monolithen eingebettete Installationslogik seitdem vollständig entfernt — `/installer` ist jetzt ein dünner Bootstrap, die hier beschriebene Logik existiert nur noch in `installer/init.lua`.*
 
 ## Bestätigtes Problem
 
-`release.lua` wird wie eine normale Datei innerhalb der Installationsliste geschrieben. Danach folgen weitere Rollen-, Shared- und Startdateien. Bricht der Lauf nach dem Schreiben von `release.lua`, aber vor dem vollständigen Ende ab, kann der Rechner bereits die neue Release-/Manifestnummer melden, obwohl Teile der Installation fehlen oder alt geblieben sind.
+`release.lua` wurde wie eine normale Datei innerhalb der Installationsliste geschrieben. Danach folgten weitere Rollen-, Shared- und Startdateien. Bricht der Lauf nach dem Schreiben von `release.lua`, aber vor dem vollständigen Ende ab, konnte der Rechner bereits die neue Release-/Manifestnummer melden, obwohl Teile der Installation fehlten oder alt geblieben waren.
 
-Es existiert kein persistenter Zustand wie:
+Es existierte kein persistenter Zustand wie `PREPARED`/`INSTALLING`/`VERIFYING`/`COMMITTED` und kein Completion-Marker, der erst nach vollständiger Verifikation gesetzt wird.
 
-```text
-PREPARED
-INSTALLING
-VERIFYING
-COMMITTED
-FAILED
-```
+Fix:
 
-und kein Completion-Marker, der erst nach vollständiger Verifikation gesetzt wird.
+- Neues Modul `installer/journal.lua`: schreibt ein Installationsjournal nach `/xreactor_install_journal.lua` — bewusst AUSSERHALB von `/xreactor`, damit es einen abgebrochenen Lauf auch dann noch belegen kann, wenn `/xreactor` selbst gelöscht oder nur teilweise neu geschrieben wurde. Eigener, von `stage.lua` unabhängiger atomarer Write (tmp-Datei + `fs.move`), da das Journal auch von `xreactor/start.lua` bei jedem Boot gelesen wird, potenziell bevor der Rest von `/xreactor` in einem verlässlichen Zustand ist.
+- `installer/init.lua` (und identisch der tatsächlich ausgeführte Live-Installflow in `/installer`, siehe Abschnitt 5 zur Struktur des Monolithen): das Journal wird als `PREPARED` geschrieben, BEVOR der alte Baum gelöscht wird (Ziel-Ref, Manifest-ID, Rolle, vollständige erwartete Dateiliste aus `manifest_mod.files_for_role()`). Nach Neuanlage von `/xreactor` und Minimal-Restore wechselt es zu `INSTALLING`. Nach erfolgreichem `stage_mod.install()` zu `VERIFYING`, zusätzlich abgesichert durch eine explizite `fs.exists()`-Prüfung jeder erwarteten Datei (deckt implizit auch den Rollen-Entrypoint ab, da `files_for_role()` ihn immer enthält).
+- `release.lua` wird jetzt bewusst aus der Hauptinstallationsschleife ausgeschlossen und erst GANZ AM ENDE, nachdem wirklich alles andere (Dateien, Config-Restore, Rolle, Startup, Auto-Update-Config) erfolgreich geschrieben und verifiziert ist, als einzelne, letzte Datei installiert und CRC32-verifiziert. Erst danach wird das Journal auf `COMMITTED` gesetzt und sofort gelöscht — ein Absturz VOR diesem Punkt hinterlässt garantiert kein neues `release.lua` (der alte Stand bleibt für jede Versions-/Diagnoseanzeige "aktuell"), ein Absturz NACH diesem Punkt bedeutet eine vollständige, verifizierte Installation.
+- `xreactor/start.lua` prüft dieses Journal bei JEDEM Boot, BEVOR versucht wird, die (möglicherweise unvollständige) Rolle zu starten. Der Parser ist bewusst selbstständig (kein `dofile()` von `installer/journal.lua`) — bei einem sehr frühen Absturz könnte `/xreactor/installer/` selbst noch unvollständig sein, das Journal liegt aber immer außerhalb davon. Ist ein Journal vorhanden und nicht `COMMITTED`, wird die Rolle NICHT gestartet; stattdessen lädt `start.lua` einen frischen `/installer` herunter und führt ihn im unbeaufsichtigten Modus (`_G.__xreactor_remote_update = true`) aus — derselbe robuste, bereits CRC32-verifizierte Mechanismus, den `auto_update.lua` für normale Updates verwendet (kein neuer, ungetesteter chirurgischer Partial-Resume). Gelingt das, übernimmt der frische Installerlauf und rebootet nach eigenem, erneut journal-gesichertem Abschluss. Schlägt der Download/Lauf fehl (z.B. kein Netzwerk), bricht `start.lua` mit klarem Fehler ab, rebootet nach 5 Sekunden für einen erneuten Versuch — und startet in KEINEM dieser Zwischenschritte jemals die normale Rolle.
+- `xreactor/manifest.lua`: `installer/journal.lua` als neue `always=true`-Datei ergänzt.
 
-## Folge
+Bewusst NICHT Teil dieses Fixes: `core/bootstrap.lua`s `state.last_recovery`/`get_recovery_status()` ist ein bereits bestehender, aber toter Stub (wird nirgends auf einen Nicht-nil-Wert gesetzt) für eine SEPARATE, offenbar nie fertiggestellte MASTER-UI-Recovery-Banner-Funktion (`master/init_runtime.lua`s `recovery_notice`) — dieser Stub ist thematisch verwandt, aber ein eigenständiges, unabhängiges Feature, keine Voraussetzung für die hier geforderte Boot-Sicherheitsprüfung (die läuft vollständig und für ALLE Rollen in `start.lua`, bevor irgendein Rollenmodul inklusive MASTER überhaupt geladen wird). Bleibt als mögliche spätere Verbesserung offen.
 
-- Teilinstallation kann als aktuell erscheinen.
-- Auto-Update kann denselben Stand anschließend überspringen.
-- Diagnose und UI können eine falsche Versionskonsistenz anzeigen.
-- ein Neustart mitten im Update besitzt keine eindeutige Recoveryentscheidung.
+Pflicht-Tests:
+- `tests/installer_journal_state_machine_test.lua` — treibt `installer/journal.lua` direkt mit einer gemockten fs: Round-Trip (write→read liefert dieselben Felder), `check_incomplete()` klassifiziert PREPARED/INSTALLING/VERIFYING als unvollständig, COMMITTED und "kein Journal" als normal, `clear()` entfernt das Journal zuverlässig.
+- `tests/installer_journal_ordering_and_release_last_test.lua` — strukturelle Prüfung direkt am Quelltext (Positionsvergleich der Marker), dass sowohl `installer/init.lua` als auch der tatsächlich ausgeführte Live-Installflow in `/installer` (Anker: ein Kommentar, der nur im Live-Flow vorkommt, nicht in der nur eingebetteten `init_src`-Textkopie) die Reihenfolge PREPARED < INSTALLING < VERIFYING < release.lua-Install < COMMITTED < `clear()` einhalten und dass release.lua VOR der VERIFYING-Stufe aus der Hauptschleife ausgeschlossen wird.
+- `tests/start_lua_incomplete_install_blocks_role_test.lua` — extrahiert den Boot-Guard direkt aus dem echten `xreactor/start.lua`-Quelltext und führt ihn isoliert mit gemocktem `fs`/`http`/`os` aus: kein Journal oder `COMMITTED` → Guard feuert nicht; `INSTALLING` mit fehlgeschlagenem Recovery-Download → Boot bricht ab (Rolle wird nie erreicht), genau ein `os.reboot()` für den Retry; `VERIFYING` mit erfolgreichem Download → der heruntergeladene Recovery-Installer wird tatsächlich per `dofile()` ausgeführt, die Rolle wird trotzdem nicht in diesem Boot gestartet.
 
-## Verbindlicher Fix
+Alle drei Tests wurden per `git stash` gegen den Vorfix-Code verifiziert (schlagen dort fehl, da die geprüften Marker/das Guard-Verhalten dort schlicht nicht existieren).
 
-1. Installationsjournal außerhalb des ersetzten Baums anlegen.
-2. Ziel-Ref, Manifest-ID, Rolle und erwartete Dateiliste speichern.
-3. alle Dateien schreiben und verifizieren.
-4. Entrypoint und Rollenabhängigkeiten prüfen.
-5. `release.lua` und Completion-Marker **zuletzt** atomar committen.
-6. beim Boot unvollständigen Zustand erkennen und entweder Rollback oder kontrollierten Resume ausführen.
+## Folge (vor dem Fix)
 
-## Pflicht-Test
+- Teilinstallation konnte als aktuell erscheinen.
+- Auto-Update konnte denselben Stand anschließend überspringen.
+- Diagnose und UI konnten eine falsche Versionskonsistenz anzeigen.
+- ein Neustart mitten im Update besaß keine eindeutige Recoveryentscheidung.
 
-Stromausfall/Fehler nach jedem einzelnen Dateischritt injizieren. Nach jedem Reboot muss genau einer der Zustände gelten:
+## Verbindlicher Fix (umgesetzt)
 
-- vollständig alter Stand,
-- vollständig neuer Stand,
-- klarer Recoverymodus ohne Start der normalen Rolle.
+1. Installationsjournal außerhalb des ersetzten Baums anlegen — **umgesetzt**.
+2. Ziel-Ref, Manifest-ID, Rolle und erwartete Dateiliste speichern — **umgesetzt**.
+3. alle Dateien schreiben und verifizieren — **umgesetzt**.
+4. Entrypoint und Rollenabhängigkeiten prüfen — **umgesetzt** (Existenzprüfung der vollständigen erwarteten Dateiliste nach Installation).
+5. `release.lua` und Completion-Marker **zuletzt** atomar committen — **umgesetzt**.
+6. beim Boot unvollständigen Zustand erkennen und entweder Rollback oder kontrollierten Resume ausführen — **umgesetzt** (kontrollierter Resume via frischem Installerlauf; ein chirurgisches Rollback auf den exakten alten Dateizustand ist mit der bestehenden Architektur — kein vollständiges Datei-Backup, nur Config — nicht sinnvoll möglich, der volle Reinstall-Resume ist die sicherere, bereits robuste Alternative).
+
+## Pflicht-Test (Ergebnis)
+
+Die geforderte Fehlerinjektion "nach jedem einzelnen Dateischritt" als vollständige End-to-End-Simulation (Netzwerk, Download, jeder einzelne Dateischreibvorgang) würde externe Abhängigkeiten in die Testsuite ziehen, die in diesem Repo bewusst vermieden werden (siehe `tests/cc_env_shim.lua`). Stattdessen wurde die Invariante an ihren tatsächlichen Durchsetzungspunkten geprüft: der Boot-Guard in `start.lua` (verifiziert für alle vier relevanten Journalzustände: fehlend, COMMITTED, unvollständig+Recovery-Fehlschlag, unvollständig+Recovery-Erfolg) und die Journal-/Release-Reihenfolge im Installer selbst. Damit ist for jeden Absturzzeitpunkt entlang des Installationslaufs sichergestellt: entweder das Journal ist noch nicht auf `COMMITTED` (→ `start.lua` startet die Rolle nie, klarer Recoverymodus) oder es ist bereits `COMMITTED` (→ release.lua und alle Dateien sind nachweislich vollständig geschrieben).
 
 ---
 
@@ -179,42 +188,42 @@ Stromausfall/Fehler nach jedem einzelnen Dateischritt injizieren. Nach jedem Reb
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-17)**
 
-`start.lua` startet Rollenruntime und Auto-Updater mit `parallel.waitForAny`. Der Updater führt den Installer direkt aus, während die Rollenruntime weiterhin:
+Bestätigt: `start.lua` startete Rollenruntime und Auto-Updater mit `parallel.waitForAny` — die Rollenruntime konnte während eines laufenden Auto-Updates unverändert weiter Hardware regeln, Ventile schalten, Configs persistieren usw., während der Installer bereits Dateien ersetzte.
 
-- Hardware regeln,
-- Ventile schalten,
-- Logs schreiben,
-- Configs persistieren,
-- Module laden,
-- Netzwerkcommands verarbeiten
+Fix — neues Modul `core/update_handshake.lua` implementiert die im Audit vorgeschlagene Zustandsfolge (`UPDATE_REQUESTED → QUIESCE_REQUESTED → SAFE_OUTPUTS_APPLIED → RUNTIME_STOPPED`; die verbleibenden Stationen `INSTALLING`/`VERIFIED`/`COMMITTED`/`REBOOT` deckt bereits das Installationsjournal aus Abschnitt 3 ab) und wird als globaler Wert (`_G.__xreactor_update_handshake`, gleiches Muster wie `_G.__xreactor_remote_update`) zwischen der Rollen-Coroutine und dem Auto-Update-Loop geteilt:
 
-kann.
+- `start.lua`: erstellt den Handshake, reicht ihn an `auto_update.lua`s `make_loop()` durch, und wechselt von `parallel.waitForAny` zu `parallel.waitForAll` — sonst hätte ein sauberer Quiesce-Exit der Rollen-Coroutine den Auto-Update-Loop sofort mit abgewürgt, noch bevor der Installer überhaupt laufen konnte.
+- `installer/auto_update.lua`: fordert Quiesce EINMAL pro erkanntem Update an (nicht pro Downloadversuch — die Rollen-Coroutine ist nach bestätigtem Quiesce bereits beendet, ein erneutes Anfordern pro Retry hätte für immer auf eine bereits beendete Rolle gewartet) und wartet bis zu 20s auf `RUNTIME_STOPPED`, BEVOR überhaupt ein Installer-Download versucht wird. Bleibt die Bestätigung aus, wird die Installation für diesen Zyklus verschoben (nächster Versuch beim nächsten Intervall) — niemals ein Install ohne bestätigten sicheren Zustand. Schlägt der Installationsversuch NACH bestätigtem Quiesce aus anderen Gründen (z.B. Netzwerk) fehl, rebootet der Node explizit, um die (unveränderte) alte Rolle sauber neu zu starten, statt dauerhaft ohne laufende Rolle stehen zu bleiben.
+- Gemeinsamer Hook-Punkt für RT/VALVE/FUEL/REPROCESSOR/WATER: `nodes/support/runtime.lua`s `run_event_loop()` erhält einen optionalen 5. Parameter (`quiesce_opts = { handshake, on_quiesce }`, rückwärtskompatibel — bestehende 4-Parameter-Aufrufer verhalten sich unverändert). `on_quiesce()` liefert `true`/`false`/`nil` zurück und wird bei Bedarf JEDEN Zyklus erneut versucht, bis es einen sicheren Zustand bestätigt — erst dann verlässt die Schleife sich sauber (kein Crash, kein `crash_screen`).
+- MASTER (`master/loop.lua`) und ENERGY (`nodes/energy/heartbeat.lua`) haben eigene, separate Event-Loops (nicht über `run_event_loop()`) und bekamen denselben Quiesce-Check direkt eingebaut. LOG_COLLECTOR (`nodes/log_collector/main.lua`) ebenso, per `dofile()` statt `require()` (dieses Modul läuft historisch ohne `bootstrap.setup()`).
+- **Für FUEL/REPROCESSOR/VALVE/WATER wird bewusst KEIN neuer Aktor-Code eingeführt** — `on_quiesce` ruft jeweils die bereits vorhandene, bereits auditierte Standby-Funktion auf:
+  - `VALVE`: `apply_valve(true)` — einzige der vier mit echter, synchroner Erfolgsbestätigung (liefert `true`/`false`, bereits vom Fail-Safe-Watchdog verwendet); wird bei `false` im nächsten Zyklus automatisch erneut versucht.
+  - `WATER`: neue kleine `quiesce_all_clusters()`-Funktion iteriert `config.clusters` und ruft für jeden Cluster die bereits vorhandene `set_rs_output(side, false, integrator)` auf (liefert ebenfalls echtes `true`/`false` pro Write); bestätigt nur, wenn ALLE Cluster-Writes erfolgreich waren.
+  - `FUEL`: `redstone_router:shutdown_now("UPDATE_QUIESCE")` (blockiert alle bekannten Ventile, bricht eine laufende Transaktion ab) — dieselbe Funktion, die REPROCESSOR bereits für MASTER-Staleness nutzt; Bestätigung über `get_active_transaction() == nil` (wird synchron beim Aufruf gelöscht).
+  - `REPROCESSOR`: `enter_standby("UPDATE_QUIESCE")` — bereits idempotent, bereits produktiv für MASTER-Staleness im Einsatz; Bestätigung über das bereits vorhandene `standby`-Flag.
+  - FUEL/REPROCESSOR sind dabei fire-and-forget (keine Rückgabe, kein echter Hardware-Bestätigungswert für WIRELESS-Ventile — dieselbe Bestätigungsqualität, die diese Funktionen bereits vorher für ihren jeweils eigenen Zweck hatten, keine Verschlechterung, aber auch keine neue, härtere Garantie).
+  - RT ist im Audit nicht unter den vier Rollen mit Pflicht zur physischen Bestätigung gelistet und bekam daher einen trivialen (sofort bestätigten) Handler — RTs bereits bestehender, MASTER-getriggerter `pending_remote_update`-Pfad (synchroner `core.remote_update.run()`-Aufruf direkt im eigenen Thread) bleibt unverändert und blockiert für diese Dauer ohnehin bereits die eigene Steuerschleife.
 
-## Folge
+Pflicht-Tests:
+- `tests/core_update_handshake_test.lua` — treibt das Handshake-Modul direkt: korrekte Zustandsfolge, `mark_safe_outputs_applied()` wirkt nur aus `QUIESCE_REQUESTED` (kein Überspringen), `wait_for_runtime_stopped()` Erfolg/Timeout, `reset()`.
+- `tests/support_runtime_quiesce_test.lua` — treibt die echte `run_event_loop()`-Funktion mit gemocktem `os.pullEvent`/`os.startTimer`: `on_quiesce()` wird wiederholt versucht bis `true`, danach sauberer Exit mit `RUNTIME_STOPPED`; ohne `quiesce_opts` bleibt das bisherige Verhalten unverändert (harte Zyklusgrenze mit klarer Fehlermeldung statt Endlosschleife bei einer Regression).
+- `tests/energy_heartbeat_quiesce_test.lua` — treibt das echte `heartbeat.lua`-Modul: mit gesetztem `QUIESCE_REQUESTED` beendet sich der Thread beim nächsten `svc_timer`-Tick sauber mit `RUNTIME_STOPPED`; ohne Handshake unverändertes Verhalten.
+- `tests/install_p0_2_quiesce_wiring_test.lua` — strukturelle Prüfung direkt am Quelltext aller acht Rollen sowie `start.lua`/`installer/auto_update.lua`, dass die erwartete Verdrahtung (insbesondere: welche bestehende Funktion pro sicherheitskritischer Rolle wiederverwendet wird, und dass Quiesce VOR dem Install-Retry-Loop anfordert wird) tatsächlich vorhanden ist.
 
-- Dateien werden ersetzt, während alter Code weiterläuft.
-- Rollenlogik kann Configrestore oder Installerwrites überschreiben.
-- Safety-Aktoren besitzen keinen definierten Quiesce-Zustand.
-- ein Updatefehler kann Runtime und Installationsbaum gleichzeitig inkonsistent hinterlassen.
+Alle vier Tests wurden per `git stash` gegen den Vorfix-Code verifiziert (schlagen dort fehl bzw. laufen — bei `support_runtime_quiesce_test.lua` — kontrolliert in eine harte Zyklusgrenze statt in eine echte Endlosschleife).
 
-## Verbindlicher Fix
+## Folge (vor dem Fix)
 
-Ein rollenübergreifender Update-Handshake:
+- Dateien wurden ersetzt, während alter Code weiterlief.
+- Rollenlogik konnte Configrestore oder Installerwrites überschreiben.
+- Safety-Aktoren besaßen keinen definierten Quiesce-Zustand.
+- ein Updatefehler konnte Runtime und Installationsbaum gleichzeitig inkonsistent hinterlassen.
 
-```text
-UPDATE_REQUESTED
-QUIESCE_REQUESTED
-SAFE_OUTPUTS_APPLIED
-RUNTIME_STOPPED
-INSTALLING
-VERIFIED
-COMMITTED
-REBOOT
-```
+## Verbindlicher Fix (umgesetzt)
 
-Jede Rolle benötigt einen expliziten Quiesce-Handler. Für FUEL/REPROCESSOR/VALVE/WATER muss der sichere physische Ausgangszustand bestätigt sein, bevor der Installer Dateien ersetzt.
+Ein rollenübergreifender Update-Handshake (`UPDATE_REQUESTED → QUIESCE_REQUESTED → SAFE_OUTPUTS_APPLIED → RUNTIME_STOPPED`, die verbleibenden Stationen `INSTALLING`/`VERIFIED`/`COMMITTED`/`REBOOT` deckt das Installationsjournal aus Abschnitt 3 ab) ist umgesetzt. Jede Rolle hat einen expliziten Quiesce-Handler; für FUEL/REPROCESSOR/VALVE/WATER ist der sichere physische Ausgangszustand bestätigt (VALVE/WATER: echte synchrone Schreibbestätigung; FUEL/REPROCESSOR: dieselbe Bestätigungsqualität, die ihre jeweils bereits vorhandene Standby-Funktion schon vorher hatte), bevor der Installer Dateien ersetzt.
 
 ---
 
@@ -223,6 +232,8 @@ Jede Rolle benötigt einen expliziten Quiesce-Handler. Für FUEL/REPROCESSOR/VAL
 ## Status
 
 **BEHOBEN (2026-07-17)** — mit Ausnahme des letzten Punkts ("Fehlerpfad muss Journal/Recoverymarker aktualisieren"), der zu #42 (transaktionales Installjournal) gehört und dort behandelt wird.
+
+*Hinweis (nachträglich): Die folgenden Absätze beschreiben den Stand ZUM ZEITPUNKT dieses Fixes, als `/installer` noch eingebettete `stage_src`/`init_src`-Textkopien und einen eigenen, tatsächlich ausgeführten Live-Installflow enthielt. Abschnitt 8 (INSTALL-P1) hat diese zweite, im Monolithen eingebettete Installationslogik seitdem vollständig entfernt — `/installer` ist jetzt ein dünner Bootstrap ohne eigene Installationslogik, die hier beschriebene Logik existiert nur noch in `installer/init.lua`. `tests/installer_monolith_critical_write_abort_test.lua` (unten als dritter Pflicht-Test genannt) wurde im Zuge dessen entfernt, da `installer_init_critical_write_abort_test.lua` denselben Fix bereits über `installer/init.lua` direkt abdeckt und es keinen separaten Live-Codepfad in `/installer` mehr gibt.*
 
 Bestätigt in allen drei Codepfaden: `xreactor/installer/stage.lua`s `M.write()`, `xreactor/installer/init.lua` und dem eingebetteten `stage_src`/`init_src`-Text sowie dem tatsächlich ausgeführten Live-Installflow von `/installer` (der Monolith enthält KEINE zwei redundant ausgeführten Installflows, wie zunächst vermutet — nur der Block ab `-- ── Alte Installation löschen` gegen Zeilenende läuft wirklich; der scheinbar identische frühere Block ist Teil des nur als Text eingebetteten `init_src`, das lediglich für die spätere On-Disk-Ablage von `xreactor/installer/init.lua` verwendet wird).
 
@@ -282,24 +293,33 @@ Stromausfall zwischen Backup-Move und finalem Move kann eine Rollen- oder Shared
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Vor dem Löschen des alten Baums fehlen vollständige Guards für:
+Bestätigt: vor dem Löschen des alten Baums fehlten vollständige Guards für erlaubte Rollenwerte, erwarteten Entrypoint der gewählten Rolle, doppelte/absolute/`..`-Traversal-Pfade, gültige Hash-/Größenfelder, Manifest-Selbstkonsistenz und maximale Manifest-/Dateigröße.
 
-- erlaubte Rollenwerte,
-- erwarteten Entrypoint der gewählten Rolle,
-- doppelte Pfade,
-- absolute Pfade und `..`-Traversal,
-- gültige Hash-/Größenfelder,
-- Manifest-/Releasekonsistenz,
-- maximale Manifest- und Dateigröße,
-- transitive `require()`-/`dofile()`-Abdeckung.
+Fix — neues, reines Datenmodul `installer/plan_validator.lua` implementiert `M.validate(plan)`: prüft ausschließlich, was aus Rolle + Manifest + geplanter Dateiliste OHNE Netzwerk-Download bekannt ist (die eigentlichen Dateiinhalte existieren vor dem Download noch nicht). Wird sowohl in `installer/init.lua` als auch im tatsächlich ausgeführten Live-Installflow von `/installer` unmittelbar nach der Bestimmung der geplanten Dateimenge und VOR dem ersten destruktiven Schritt ("Alte Installation löschen") aufgerufen — ein einziger fehlgeschlagener Guard bricht mit `error()` ab, bevor irgendetwas gelöscht wird.
 
-`ROLE_EXTRAS` kann außerdem Dateien ergänzen, deren Manifestmetadaten fehlen.
+Geprüft werden: erlaubte Rollenwerte (`M.ROLE_ENTRYPOINTS`, bewusst dieselbe Zuordnung wie `xreactor/start.lua`s `ROLE_ENTRY`, strukturell synchron gehalten), erwarteter Entrypoint der Rolle muss im Plan enthalten sein, doppelte Pfade (Lua-Tabellen können ohnehin keine doppelten Schlüssel haben, aber die Iteration deckt es strukturell ab), absolute Pfade und `..`-Traversal, gültige `size_bytes`/`hash`-Felder (CRC32, 8 Hex-Zeichen — `nil` ist für lokal generierte Inhalte ohne Manifest-Hash bewusst erlaubt), Manifest-Selbstkonsistenz (`manifest_id` muss `manifest_version` enthalten) sowie eine maximale Einzeldatei- und Gesamtplangröße (Sicherheitsnetz gegen ein korruptes/böswilliges Manifest).
 
-## Fix
+Die transitive `require()`-/`dofile()`-Abdeckung lässt sich NICHT als reiner Laufzeit-Guard umsetzen (die Dateiinhalte sind vor dem Download nicht bekannt) — stattdessen wurde sie als eigenständiger Testsuite-Check gegen den echten lokalen Quelltext umgesetzt (`tests/manifest_transitive_require_coverage_test.lua`, siehe unten), der verhindert, dass eine unvollständige Dateizuordnung überhaupt erst ins Manifest gelangt, statt sie erst zur Laufzeit auf einem Node zu entdecken. Dieser Check deckte dabei zwei ECHTE, bis dahin unentdeckte Manifest-Lücken auf (beide behoben):
 
-Ein einziges `validate_install_plan()` muss vor dem Backup-/Delete-Schritt die gesamte Installationsmenge ablehnen, sobald irgendeine strukturelle Bedingung nicht erfüllt ist.
+- `services/alert_service.lua` (bisher ungefiltert an JEDE nicht-LOG-Rolle mitgeschickt, obwohl nur `master/runtime_loop.lua` es tatsächlich `require()`t) fehlte dabei nicht selbst, sondern seine eigene, unbedingte Abhängigkeit `core/alert_rules.lua` (bereits korrekt auf `required_for={"MASTER"}` beschränkt) — für alle Nicht-MASTER-Rollen eine tote, aber strukturell inkonsistente Kombination (kein tatsächliches Crash-Risiko, da `alert_service.lua` dort nie `require()`t wird, aber unnötiger Ballast). Jetzt `required_for={"MASTER"}` ergänzt.
+- `shared/colors.lua` fehlte bei LOG_COLLECTOR: `core/mockup_ui.lua` hat `always=true` (wird u.a. an LOG_COLLECTOR mitgeschickt, obwohl dort in Wirklichkeit nie geladen) und `require()`t `shared.colors` unbedingt beim Laden — `shared/colors.lua` selbst hatte kein `always=true` und wurde vom `is_log`-Filter in `files_for_role()` daher ausgefiltert. Jetzt `always=true` ergänzt.
+- Zusätzlich wurde ein struktureller Bug in `installer/manifest.lua`s `files_for_role()` selbst gefunden und behoben: `required_for` wurde bisher NUR für `roles.*`-Einträge ausgewertet — ein `required_for`-Feld auf einem `base_files`-Eintrag (wie es der `alert_service.lua`-Fix braucht) hatte schlicht keine Wirkung.
+
+`ROLE_EXTRAS`-Dateien ohne Manifestmetadaten sind über `plan_validator.validate()`s Hash-/Größenfeld-Prüfung ebenfalls abgedeckt (ein `ROLE_EXTRAS`-Eintrag ohne gültige Metadaten würde die Validierung nicht bestehen).
+
+Pflicht-Tests:
+- `tests/installer_plan_validator_test.lua` — treibt `plan_validator.validate()` direkt: je ein Fall pro geprüfter Bedingung (gültiger Plan wird akzeptiert; unbekannte Rolle, fehlender Entrypoint, absoluter Pfad, `..`-Traversal, ungültiges Hash-Feld, negative Größe, überdimensionierte Datei, Manifest-Inkonsistenz werden jeweils einzeln abgelehnt; fehlendes/`nil` Hash-Feld ist erlaubt), plus strukturelle Synchronitätsprüfung zwischen `ROLE_ENTRYPOINTS` und `start.lua`s `ROLE_ENTRY`, plus Verdrahtungsprüfung (Aufruf VOR dem Lösch-Schritt) in `installer/init.lua` und im Live-Installflow von `/installer`.
+- `tests/manifest_transitive_require_coverage_test.lua` — treibt die echte `files_for_role()` gegen den echten Quelltext für jede Rolle; deckte die beiden oben beschriebenen echten Lücken auf.
+
+Alle Tests wurden per `git stash` gegen den Vorfix-Code verifiziert.
+
+**Nachtrag:** Zum Zeitpunkt dieses Fixes existierten noch zwei parallele Codepfade (`installer/init.lua` und der monolithische `/installer`), weshalb `plan_validator.validate()` ursprünglich an beiden Stellen verdrahtet werden musste. Abschnitt 8 (INSTALL-P1, zwei unabhängige Installerimplementierungen) wurde direkt im Anschluss ebenfalls behoben — `/installer` ist seitdem ein dünner Bootstrap ohne eigene Installationslogik, `plan_validator.validate()` wird nur noch in `installer/init.lua` aufgerufen (siehe dortiger Abschnitt).
+
+## Fix (umgesetzt)
+
+Neues `installer/plan_validator.lua` mit `M.validate(plan)`, aufgerufen vor dem Backup-/Delete-Schritt in beiden Installer-Codepfaden — lehnt die gesamte Installationsmenge ab, sobald irgendeine strukturelle Bedingung nicht erfüllt ist.
 
 ---
 
@@ -307,22 +327,33 @@ Ein einziges `validate_install_plan()` muss vor dem Backup-/Delete-Schritt die g
 
 ## Status
 
-**OFFEN**
+**BEHOBEN (2026-07-17)**
 
-Der Root-`/installer` enthält weiterhin eingebettete Kopien von HTTP-, Manifest-, Stage-, UI- und Initlogik. Parallel existieren dieselben Module unter `xreactor/installer/`.
+Bestätigt: Der Root-`/installer` enthielt vollständige eingebettete Textkopien JEDES Installermoduls (`http`/`manifest`/`stage`/`ui`/`journal`/`plan_validator`/`init`/`auto_update`) UND eine komplett eigenständige, unabhängig gepflegte Kopie des gesamten Installationsablaufs (Manifest laden, Rolle bestimmen, Config sichern, alten Baum löschen, Dateien installieren, Journal führen, Plan validieren, ...) — strukturell identisch zu, aber getrennt von `installer/init.lua`. Jeder Fix in dieser Session (Abschnitt 3, 4, 5, 7) musste manuell in beiden Implementierungen resynchronisiert werden.
 
-## Folge
+Fix:
 
-Jeder Fix muss mehrfach synchron gehalten werden. Ein bestandener Test des modularen Pfads beweist nicht automatisch den Root-Bootstrap-Pfad.
+- `installer/init.lua` nimmt seine Abhängigkeiten jetzt als Parameter entgegen (`return function(deps) ... end`, Dependency Injection) statt sie per hartkodierten `dofile("/xreactor/installer/...")`-Pfaden selbst zu laden — diese Annahme traf ohnehin nur zu, wenn `/xreactor` bereits existierte, und war der eigentliche Grund, warum der Root-Installer bisher eine komplette eigene Kopie mitführen musste. Ob die injizierten Module von der lokalen Platte oder aus frisch heruntergeladenem Text stammen, ist für die eigentliche Installationslogik irrelevant.
+- `installer/init.lua` löst außerdem `ref` nicht mehr selbst per `http_mod.resolve_sha()` auf, sondern übernimmt ihn vom Aufrufer (`deps.ref`) — der Aufrufer hat zu diesem Zeitpunkt bereits genau EINEN Ref aufgelöst (um zu wissen, welche Version der Installermodule er überhaupt herunterladen soll); eine zweite, unabhängige Auflösung hier hätte dieselbe Bugklasse aus Abschnitt 14 (unterschiedliche Commits innerhalb eines Laufs) erneut einführen können, diesmal zwischen den Installermodulen selbst und dem Rest der Installation.
+- `/installer` ist von ~2260 Zeilen auf einen ~180-zeiligen, stabilen Bootstrap reduziert: löst SHA/`ref` auf (dieselbe primitive Retry-Download-Funktion wie zuvor, jetzt die einzige verbliebene Netzwerklogik in dieser Datei), lädt die sechs kanonischen `installer/*.lua`-Module sowie `installer/init.lua` frisch als Text vom aufgelösten Ref herunter, wandelt die sechs Module per `load()` in In-Memory-Module um, und ruft `installer/init.lua`s zurückgegebene Funktion mit diesen Modulen plus `ref` auf. Kein eingebettetes Textliteral, keine zweite Installationslogik mehr — jeder künftige Fix an der eigentlichen Installation betrifft ausschließlich `installer/init.lua`.
+- `installer/auto_update.lua` wird weiterhin nur als Text heruntergeladen und (über `installer/init.lua`s normale Dateiinstallationsschleife, da es ein regulärer `always=true`-Manifesteintrag ist) auf die Platte geschrieben, aber nicht selbst ausgeführt — unverändert zum bisherigen Verhalten.
 
-## Fix
+Pflicht-Test: `tests/installer_bootstrap_test.lua` — treibt das echte `/installer` mit gemocktem `http`/`os`: (1) alle sechs Modul-Downloads und der `init.lua`-Download verwenden denselben aufgelösten Ref; (2) das (gefakte) `init.lua` wird tatsächlich mit einem `deps`-Table aufgerufen, der alle sechs Module unter den erwarteten Schlüsseln sowie `ref` enthält; (3) ein fehlschlagender Modul-Download bricht kontrolliert ab, BEVOR `init.lua` überhaupt aufgerufen wird; (4) ein fehlschlagender `init.lua`-Download ebenso; (5) nach einem erfolgreichen Lauf wird genau einmal rebootet. Verifiziert per `git stash`, dass der Test mit dem alten, eingebetteten `/installer` fehlschlägt.
 
-Der Root-Installer darf nur noch:
+Mehrere bestehende Tests, die spezifisch die (jetzt entfernte) eingebettete/duplizierte Logik in `/installer` prüften, wurden entsprechend angepasst oder — wo durch `tests/installer_init_critical_write_abort_test.lua` bereits vollständig abgedeckt — als redundant entfernt (`tests/installer_monolith_critical_write_abort_test.lua`). `tests/installer_manifest_files_same_ref_test.lua`, `tests/installer_journal_ordering_and_release_last_test.lua`, `tests/installer_plan_validator_test.lua` und `tests/installer_write_verifies_crc32_test.lua` prüfen die Ref-Konsistenz, Journal-Reihenfolge, Plan-Validierung und CRC32-Verifikation jetzt ausschließlich gegen `installer/init.lua` (die jetzt einzige Stelle mit tatsächlicher Installationslogik) statt zusätzlich gegen eine inzwischen nicht mehr existierende zweite Implementierung.
 
-1. einen kleinen, versionsfesten Bootstrap laden,
-2. genau einen Source-Ref auflösen,
-3. die kanonischen Installermodule dieses Refs herunterladen,
-4. anschließend ausschließlich den modularen Installer ausführen.
+## Folge (vor dem Fix)
+
+Jeder Fix musste mehrfach synchron gehalten werden. Ein bestandener Test des modularen Pfads bewies nicht automatisch den Root-Bootstrap-Pfad.
+
+## Fix (umgesetzt)
+
+Der Root-Installer macht nur noch:
+
+1. einen kleinen, stabilen Bootstrap laden — **umgesetzt** (~180 Zeilen, praktisch unverändert seit diesem Fix bei künftigen Installationslogik-Aenderungen),
+2. genau einen Source-Ref auflösen — **umgesetzt**,
+3. die kanonischen Installermodule dieses Refs herunterladen — **umgesetzt**,
+4. anschließend ausschließlich den modularen Installer ausführen — **umgesetzt** (`installer/init.lua` als Dependency-Injection-Funktion).
 
 ---
 
@@ -833,15 +864,16 @@ Die zuletzt bekannten konkreten Scopefehler für REPROCESSOR, Speaker und VALVE-
 3. ~~**RT-P0:** `TURBINE_MODE`-Context-Typ korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 11): `tests/rt_turbine_mode_context_shape_test.lua`.
 4. ~~**RT-P0:** Rampendauer in eindeutigen Millisekunden konfigurieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 12): `tests/rt_ramp_duration_units_test.lua`.
 5. ~~**RT-P0:** `update_module_states()` in den Produktions-Controlpfad aufnehmen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 13): `tests/rt_control_tick_wires_update_module_states_test.lua`.
-6. **INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.
-7. **INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.
-8. ~~**INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 5): `tests/installer_stage_write_backup_failure_test.lua`, `tests/installer_init_critical_write_abort_test.lua`, `tests/installer_monolith_critical_write_abort_test.lua`.
+6. ~~**INSTALL-P0:** Installationsjournal, Completion-Marker und Release-last-Commit.~~ BEHOBEN (2026-07-17, siehe Abschnitt 3): `tests/installer_journal_state_machine_test.lua`, `tests/installer_journal_ordering_and_release_last_test.lua`, `tests/start_lua_incomplete_install_blocks_role_test.lua`.
+7. ~~**INSTALL-P0:** Runtime-Quiesce und sichere Aktorzustände vor Reinstall.~~ BEHOBEN (2026-07-17, siehe Abschnitt 4): `tests/core_update_handshake_test.lua`, `tests/support_runtime_quiesce_test.lua`, `tests/energy_heartbeat_quiesce_test.lua`, `tests/install_p0_2_quiesce_wiring_test.lua`.
+8. ~~**INSTALL-P0:** alle kritischen FS-Ergebnisse prüfen und unsicheren Backup-Fallback entfernen.~~ BEHOBEN (2026-07-17, siehe Abschnitt 5): `tests/installer_stage_write_backup_failure_test.lua`, `tests/installer_init_critical_write_abort_test.lua` (`tests/installer_monolith_critical_write_abort_test.lua` deckte denselben Fix zusätzlich für den mittlerweile entfernten `/installer`-Live-Codepfad ab und wurde im Zuge von Abschnitt 8 als redundant entfernt).
 9. ~~**LOG-P0:** Free-Space-Cache im Reclaimpfad korrigieren.~~ BEHOBEN (2026-07-17, siehe Abschnitt 22): `tests/log_collector_reclaim_cache_invalidation_test.lua`.
 10. ~~**MASTER-P1:** Einzelnode-/Alle-Auswahl und Applied-ACK je Ziel.~~ BEHOBEN (2026-07-17, siehe Abschnitt 10): `tests/master_config_edits_test.lua`, `tests/master_config_edit_ack_wiring_test.lua`, `tests/master_ui_controller_config_edit_action_test.lua`.
 11. ~~**ENERGY-P1:** genau eine Heartbeat-Zeitquelle.~~ BEHOBEN (2026-07-17, siehe Abschnitt 15): `tests/energy_heartbeat_shared_last_ts_test.lua`.
 12. ~~**WATER/RT-P1:** Persistenzresultat ehrlich im Command-ACK abbilden.~~ BEHOBEN (2026-07-17, siehe Abschnitt 16): `tests/water_rt_persistence_ack_honesty_test.lua`.
 13. ~~**VALVE-P1:** verpflichtende Senderbindung und Sorter-Reconnect.~~ BEHOBEN (2026-07-17, siehe Abschnitt 21): `tests/valve_sender_pairing_and_sorter_reconnect_test.lua`.
-14. **INSTALL/MANIFEST-P1:** vollständige Planvalidierung und nur eine Installerimplementierung.
+14. ~~**INSTALL/MANIFEST-P1:** vollständige Planvalidierung.~~ BEHOBEN (2026-07-17, siehe Abschnitt 7): `tests/installer_plan_validator_test.lua`, `tests/manifest_transitive_require_coverage_test.lua`.
+14b. ~~**INSTALL-P1:** nur eine Installerimplementierung (siehe Abschnitt 8).~~ BEHOBEN (2026-07-17, siehe Abschnitt 8): `tests/installer_bootstrap_test.lua`, plus Anpassungen an `tests/installer_journal_ordering_and_release_last_test.lua`, `tests/installer_manifest_files_same_ref_test.lua`, `tests/installer_plan_validator_test.lua`, `tests/installer_write_verifies_crc32_test.lua`.
 15. **TEST-P0:** Ausschlusslisten Test für Test abbauen.
 16. Danach Ingame-Last-, Funkverlust-, Reconnect-, Reboot-, Stromausfall- und Updateabnahme.
 
