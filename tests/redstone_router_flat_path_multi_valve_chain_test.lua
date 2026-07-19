@@ -1,27 +1,25 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Regression test: ein Reaktor-Pfad kann aus MEHREREN Ventilen in Serie
--- bestehen (ein gemeinsames Trunk-Ventil plus ein reaktor-eigenes
--- Zweigventil), und ein Baum kann mehr als 1-2 Reaktoren versorgen.
+-- Regression test fuer das NEUE, primaere Konfigurationsformat (Fix
+-- 2026-07-19, siehe nodes/fuel/redstone_router.lua): statt eines
+-- verschachtelten Baums (children=...) ist jede Route jetzt ein flacher
+-- Eintrag mit einer geordneten Ventilliste direkt am Reaktor ("path").
+-- Ein gemeinsames Ventil auf dem Weg zu mehreren Reaktoren wird einfach
+-- als IDENTISCHE {side=,integrator=}-Kombination in mehreren Routen-Pfaden
+-- wiederholt -- keine Tabellen-Verschachtelung mehr noetig. Dieser Test
+-- treibt exakt dasselbe Szenario wie tests/redstone_router_nested_multi_
+-- valve_chain_test.lua (dort im alten, automatisch konvertierten
+-- children-Format) im NEUEN Format durch, um zu beweisen: beide Formen
+-- fuehren zu identischem Laufzeitverhalten.
 --
--- Fix (2026-07-19): das PRIMAERE Konfigurationsformat ist seitdem die
--- flache Routenliste mit 'path' (siehe tests/redstone_router_flat_path_
--- multi_valve_chain_test.lua fuer denselben Testfall im NEUEN Format).
--- Dieser Test bleibt bestehen, um die automatische Ruecken-Konvertierung
--- des ALTEN, verschachtelten 'children'-Baumformats (normalize_with_
--- errors() in nodes/fuel/redstone_router.lua) dauerhaft abzusichern --
--- bereits bestehende Configs duerfen nicht kaputtgehen.
+-- Routen:
+--   Reactor1: path = [ back ]
+--   Reactor2: path = [ back, left@VALVE-B ]   -- ZWEI Ventile in Serie
+--   Reactor3: path = [ back, front ]
 --
--- Baum (Legacy-Format):
---   back (Trunk-Ventil, lokal an FUEL)
---     ├─ right                        -> Reactor1
---     ├─ left  @VALVE-B (Funk-Node)   -> Reactor2
---     └─ front                        -> Reactor3
---
--- Liefert an Reactor2: der Pfad ist [back, left@VALVE-B] -- ZWEI Ventile
--- in Serie, eines davon per Funk mit ACK-Pflicht. Waehrend der Lieferung
--- muessen right/front (die Nebenaeste zu Reactor1/Reactor3) blockiert
--- bleiben.
+-- "back" ist hier ein gemeinsames Trunk-Ventil, das einfach in ALLEN DREI
+-- Pfaden wiederholt wird -- genau das ist der neue, einfachere Weg,
+-- mehrere Reaktoren ueber ein gemeinsames Ventil zu fuehren.
 
 local clock = 1000000
 os.epoch = function() return clock end
@@ -70,32 +68,30 @@ local function ack(router, integrator, side, applied, high)
   })
 end
 
-local tree = {
-  {
-    side = 'back',
-    children = {
-      { side = 'right', reactor = 'R1', label = 'Reactor1' },
-      { side = 'left', integrator = 'VALVE-B', reactor = 'R2', label = 'Reactor2' },
-      { side = 'front', reactor = 'R3', label = 'Reactor3' },
-    },
-  },
+local routes = {
+  { reactor = 'R1', label = 'Reactor1', path = { { side = 'back' }, { side = 'right' } } },
+  { reactor = 'R2', label = 'Reactor2', path = { { side = 'back' }, { side = 'left', integrator = 'VALVE-B' } } },
+  { reactor = 'R3', label = 'Reactor3', path = { { side = 'back' }, { side = 'front' } } },
 }
 
 local router = redstone_router.new({
-  config = { logistics = { redstone_tree = tree } },
+  config = { logistics = { redstone_tree = routes } },
   comms = { get_peers = function() return { ['VALVE-B'] = { down = false } } end },
   log = function() end,
   warn_once = function() end,
 })
 router:refresh()
 
--- Struktur-Sanity: 4 Ventile insgesamt (1 Trunk + 3 Zweige), Pfad zu R2
--- besteht aus GENAU 2 Ventilen (Trunk + eigener Zweig).
-assert_eq(router:valve_count(), 4, 'tree should expose 4 valves total (1 trunk + 3 branches)')
+-- Struktur-Sanity: 4 einzigartige Ventile (back ist in allen 3 Routen
+-- identisch und wird dedupliziert), Pfad zu R2 besteht aus 2 Ventilen.
+assert_eq(router:valve_count(), 4, 'the shared trunk valve must be deduplicated across all 3 routes (back+right+left+front = 4 unique valves)')
 local path_to_r2 = router:get_path_to('R2')
 assert_eq(#path_to_r2, 2, 'the route to R2 must consist of exactly 2 valves in series (trunk + branch)')
 assert_eq(path_to_r2[1], 'back', 'first hop must be the shared trunk valve')
 assert_eq(path_to_r2[2], 'left', 'second hop must be R2 own branch valve')
+
+local table_summary = router:get_routing_table()
+assert_eq(#table_summary, 3, 'get_routing_table must report all 3 configured reactors')
 
 -- refresh() blockiert bereits beim Laden alles.
 assert_eq(redstone_state['back'], true, 'trunk must start blocked')
@@ -152,4 +148,4 @@ assert_eq(redstone_state['back'], true, 'trunk must end blocked')
 assert_eq(redstone_state['right'], true, 'Reactor1 branch must end blocked')
 assert_eq(redstone_state['front'], true, 'Reactor3 branch must end blocked')
 
-print("redstone_router_nested_multi_valve_chain_test.lua: ok")
+print("redstone_router_flat_path_multi_valve_chain_test.lua: ok")

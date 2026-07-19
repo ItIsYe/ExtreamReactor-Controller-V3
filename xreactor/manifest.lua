@@ -201,7 +201,7 @@ return {
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
     },
     fuel = {
-    { path = "nodes/fuel/config.lua", size_bytes = 8872, hash = "1f704ed8", required_for={"FUEL"} },
+    { path = "nodes/fuel/config.lua", size_bytes = 10035, hash = "8f10ce36", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 5080, hash = "85140bc8", required_for={"FUEL"} },
     { path = "nodes/fuel/main.lua", size_bytes = 22751, hash = "a3df4635", required_for={"FUEL"} },
     { path = "nodes/fuel/status_snapshot.lua", size_bytes = 5027, hash = "2a145d2b", required_for={"FUEL"} },
@@ -212,11 +212,11 @@ return {
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 19965, hash = "bb635523", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 29802, hash = "9d423ec4", required_for={"FUEL","REPROCESSING"} },
-    { path = "nodes/fuel/redstone_router.lua", size_bytes = 44580, hash = "6dc6a9dd", required_for={"FUEL","REPROCESSING","WATER"} },
-    { path = "nodes/fuel/router_ui.lua", size_bytes = 32898, hash = "4179e35b", required_for={"FUEL","REPROCESSING"} },
+    { path = "nodes/fuel/redstone_router.lua", size_bytes = 48894, hash = "c72567e2", required_for={"FUEL","REPROCESSING","WATER"} },
+    { path = "nodes/fuel/router_ui.lua", size_bytes = 33569, hash = "9e7e1c37", required_for={"FUEL","REPROCESSING"} },
     },
     reprocessing = {
-    { path = "nodes/reprocessor/config.lua", size_bytes = 4731, hash = "a3a6f606", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/config.lua", size_bytes = 5028, hash = "3b53b47d", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 2097, hash = "7b4dd612", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/feed_router.lua", size_bytes = 10658, hash = "fdad2b01", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/main.lua", size_bytes = 31812, hash = "10dc8857", required_for={"REPROCESSING"} },

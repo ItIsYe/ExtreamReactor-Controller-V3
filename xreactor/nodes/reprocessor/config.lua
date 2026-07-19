@@ -82,13 +82,16 @@ local CONFIG = {
     -- { label = "Reprocessor A", inlet = "mekanism:transporter_2" },
     targets            = {},
     --
-    -- redstone_tree: gleiche Baum-Topologie wie bei der Fuel-Node.
-    -- Mekanism Pipes müssen auf "High Redstone = Interrupt" stehen.
-    -- { side="right", label="Arm A", children={
-    --     { side="top",    label="Reprocessor A", reactor="Reprocessor A" },
-    --     { side="bottom", label="Reprocessor B", reactor="Reprocessor B" },
-    --   }
-    -- }
+    -- redstone_tree: gleiches Format wie bei der Fuel-Node (siehe
+    -- nodes/fuel/config.lua) -- eine flache Route pro Ziel mit geordnetem
+    -- 'path'. Mekanism Pipes müssen auf "High Redstone = Interrupt" stehen.
+    -- { reactor = "Reprocessor A", label = "Reprocessor A",
+    --   path = { { side = "right" }, { side = "top" } } },
+    -- { reactor = "Reprocessor B", label = "Reprocessor B",
+    --   path = { { side = "right" }, { side = "bottom" } } },
+    --   -- ^ "right" ist hier ein gemeinsames Trunk-Ventil ("Arm A") vor
+    --   -- beiden Reprocessor-Zweigen -- einfach in beiden Pfaden
+    --   -- wiederholt, keine Verschachtelung noetig.
     -- Hinweis: "reactor"-Feld referenziert hier den target.label.
     redstone_tree      = {},
   },

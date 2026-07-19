@@ -119,14 +119,28 @@ local CONFIG = {
     -- { name = "Reaktor A Waste", outlet = "mekanism:ultimate_logistical_transporter_2" },
     waste              = {},
     --
-    -- redstone_routes: map redstone outputs to reactors for pipe valve control.
-    -- Pipe must be configured: "High Redstone = Interrupt" in Mekanism.
-    -- CC sets ALL outputs HIGH (blocked), then opens ONLY the target's output.
+    -- redstone_tree: one route per reactor, each with an ORDERED list of
+    -- valves ("path") that must be blocked/opened together for that
+    -- reactor's export. Pipe must be configured: "High Redstone =
+    -- Interrupt" in Mekanism. CC blocks ALL known valves, then opens ONLY
+    -- the target reactor's own path.
     --
-    -- side: built-in CC side (top/bottom/left/right/front/back) -- this is
-    --   the side on the FUEL computer itself (direct redstone) OR, if
-    --   'integrator' is set, the side on THAT integrator/VALVE node.
-    -- integrator (optional): identifies a separate valve controller.
+    -- Fix (2026-07-19): this used to be a NESTED tree (side/children) --
+    -- the only way to express multiple valves in series (e.g. one shared
+    -- trunk valve before several reactor-specific branch valves) was to
+    -- nest a valve's 'children'. That is still understood automatically
+    -- (see nodes/fuel/redstone_router.lua's normalize_tree()), but the
+    -- CURRENT, simpler format is a flat list: repeat the SAME
+    -- {side=,integrator=} step in more than one reactor's path to express
+    -- a shared valve -- no nesting needed. The in-game Router page (4/4,
+    -- EDIT tab) builds exactly this format: pick a reactor, then tap
+    -- valves one at a time to build its chain.
+    --
+    -- path[i].side: built-in CC side (top/bottom/left/right/front/back) --
+    --   this is the side on the FUEL computer itself (direct redstone) OR,
+    --   if 'integrator' is set, the side on THAT integrator/VALVE node.
+    -- path[i].integrator (optional): identifies a separate valve
+    --   controller.
     --   Fix (2026-07-09): in this setup the "integrator" is itself a small
     --   standalone CC:Tweaked computer sitting at the valve (role VALVE,
     --   see nodes/valve/main.lua) -- it has no Wired Modem to FUEL, only
@@ -139,11 +153,15 @@ local CONFIG = {
     --   doesn't match a known VALVE node_id.
     -- valve_open_ms: how long to keep valve open after export (default 2000ms)
     --
-    -- { reactor = "RT-1", label = "Reaktor A", side = "right" },
-    -- { reactor = "RT-2", label = "Reaktor B", side = "left"  },
-    -- { reactor = "RT-3", label = "Reaktor C", side = "front",
-    --   integrator = "VALVE-1" },
-    redstone_routes    = {},
+    -- { reactor = "RT-1", label = "Reaktor A", path = { { side = "right" } } },
+    -- { reactor = "RT-2", label = "Reaktor B", path = { { side = "left" } } },
+    -- { reactor = "RT-3", label = "Reaktor C",
+    --   path = { { side = "back" }, { side = "front", integrator = "VALVE-1" } } },
+    --   -- ^ two valves in series: a shared trunk valve ("back", local to
+    --   -- FUEL) plus Reaktor C's own branch valve on VALVE-1. Repeating
+    --   -- { side = "back" } as the first step of another reactor's path
+    --   -- means that reactor shares the same trunk valve.
+    redstone_tree      = {},
     valve_open_ms      = 2000,
   },
 }
