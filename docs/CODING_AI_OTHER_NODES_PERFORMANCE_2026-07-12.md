@@ -33,7 +33,7 @@ Commitmeldungen und Kommentare wurden nicht als Beweis übernommen. Ein lokaler 
 
 | Bereich | Tatsächlicher Status | Wichtigster Restpunkt |
 |---|---|---|
-| Installer / Auto-Update | **KRITISCH TEILWEISE** | Journal-Replace besitzt ein Crashfenster; beschädigtes/fehlendes Journal wird als Normalfall behandelt; Configbackup kann Lesefehler still überspringen |
+| Installer / Auto-Update | **KRITISCH TEILWEISE** | Journal-Replace ist seit 2026-07-19 generationenbasiert/fail-closed (siehe Abschnitt 3+4); Configbackup kann Lesefehler weiterhin still überspringen |
 | Manifest / Rollen-Scope | **WEITGEHEND UMGESETZT** | Release-Metadaten enthalten weiterhin keinen unveränderlichen Installations-SHA; statischer Kommentar im Manifest ist veraltet |
 | Shared Runtime / Quiesce | **KRITISCH TEILWEISE** | FUEL/REPROCESSOR warten beim Quiesce nicht auf Wireless-VALVE-ACKs; RT beendet Safety/Regelung ohne sicheren Hardwarezustand |
 | MASTER | **TEILWEISE OFFEN** | `persisted=false` wird weiterhin als vollständig `APPLIED` gewertet |
@@ -53,8 +53,8 @@ Commitmeldungen und Kommentare wurden nicht als Beweis übernommen. Ein lokaler 
 
 Die größten aktuellen Risiken sind:
 
-1. Ein Stromausfall beim Aktualisieren des Installationsjournals kann das einzige unvollständige Installationssignal entfernen.
-2. Ein beschädigtes oder nicht lesbares Journal wird beim Boot wie „kein Journal vorhanden“ behandelt.
+1. ~~Ein Stromausfall beim Aktualisieren des Installationsjournals kann das einzige unvollständige Installationssignal entfernen.~~ BEHOBEN 2026-07-19, siehe Abschnitt 3.
+2. ~~Ein beschädigtes oder nicht lesbares Journal wird beim Boot wie „kein Journal vorhanden“ behandelt.~~ BEHOBEN 2026-07-19, siehe Abschnitt 4.
 3. FUEL und REPROCESSOR melden `RUNTIME_STOPPED`, bevor drahtlose Ventile ihren sicheren BLOCKED-Zustand bestätigt haben.
 4. RT beendet seine Regel- und Safety-Schleife für ein Update ohne vorherigen SCRAM oder bestätigten sicheren Reaktor-/Turbinenzustand.
 5. VALVE kann durch ein ungültiges erstes Paket dauerhaft an den falschen Sender gekoppelt werden.
@@ -82,6 +82,8 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 - der Bootpfad verhindert den Rollenstart, wenn ein lesbares Journal einen unvollständigen Zustand meldet.
 - Manifest-Scope-Lücken für REPROCESSOR, VALVE, Speaker, Alert-Service und Shared Colors wurden behoben.
 - der frühere doppelte Manifestpfad für `core/bootstrap.lua` wurde entfernt.
+- das Installationsjournal ist generationenbasiert (zwei alternierende Slots) und stromausfallsicher: kein Schreibvorgang kann die zuletzt bestätigte Generation zerstören (INSTALL-P0.1).
+- Journalklassifikation unterscheidet fail-closed `ABSENT`/`VALID_COMMITTED`/`VALID_INCOMPLETE`/`CORRUPT`/`UNREADABLE`; nur `ABSENT`/`VALID_COMMITTED` erlauben normalen Rollenstart (INSTALL-P0.2).
 
 ## Shared Runtime und Rollen
 
@@ -112,7 +114,15 @@ Die folgenden Punkte sind im aktuellen Code nachvollziehbar umgesetzt. Sie dürf
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-19)**
+
+`installer/journal.lua` verwendet jetzt zwei fest benannte Generationsslots (`SLOT_A`/`SLOT_B`) mit einer im Journalinhalt selbst monoton steigenden `generation`-Zahl statt eines einzelnen Delete-vor-Move-Pfads. Jeder `M.write()`-Aufruf schreibt ausschließlich in den Slot mit der niedrigeren Generation ("stale" Slot); der jeweils andere Slot (aktuell höchste gültige Generation) bleibt dabei unangetastet. Nach dem Schreiben liest `M.write()` den Zielslot zurück und vergleicht Zustand/Generation, bevor der Write als erfolgreich gilt. `xreactor/start.lua` enthält dieselbe Klassifikationslogik dupliziert (bewusst kein `dofile()` von `installer/journal.lua`, siehe dortiger Kommentar) und wählt beim Booten den Slot mit der höchsten gültigen Generation. Ein Crash an jedem Punkt eines Schreibvorgangs lässt damit den zuvor bestätigten Generationsstand im jeweils anderen Slot unverändert und lesbar zurück.
+
+Regressionstests: `tests/installer_journal_state_machine_test.lua` (Crashsimulation nach dem tmp-Write, nach dem Move und bei fehlgeschlagener Rückverifikation; Rundlauf über PREPARED→INSTALLING→VERIFYING→COMMITTED mit alternierenden Slots) und `tests/start_lua_incomplete_install_blocks_role_test.lua` (Bootguard folgt der höheren Generation unabhängig davon, welcher Slot sie trägt).
+
+## Ursprünglicher, jetzt behobener Fehler
+
+(Nachfolgend unverändert als Regressionsreferenz erhalten – bei erneuter Änderung an `installer/journal.lua`/`xreactor/start.lua` MUSS mindestens obiger Testsatz weiterhin grün bleiben.)
 
 ## Bestätigter Fehler
 
@@ -176,7 +186,15 @@ Crashsimulation nach jedem einzelnen FS-Schritt von `PREPARED`, `INSTALLING`, `V
 
 ## Status
 
-**KRITISCH OFFEN**
+**BEHOBEN (2026-07-19)**
+
+`installer/journal.lua` (Funktion `slot_read()`/`classify()`) und die dazu bewusst duplizierte, eigenständige Klassifikationslogik in `xreactor/start.lua` unterscheiden jetzt explizit `ABSENT` / `VALID_COMMITTED` / `VALID_INCOMPLETE` / `CORRUPT` / `UNREADABLE`. Nur `ABSENT` (beide Slots existieren nicht – echter Erststart) oder `VALID_COMMITTED` (höchste gültige Generation ist COMMITTED) erlauben einen normalen Rollenstart; `CORRUPT`, `UNREADABLE` und `VALID_INCOMPLETE` lösen alle denselben Recovery-Resume-Pfad aus. Ein Slot, der existiert, sich aber nicht öffnen/lesen/parsen lässt oder kein gültiges Journaltable mit bekanntem `state` und numerischer `generation` liefert, zählt NICHT als „kein Journal vorhanden“.
+
+Regressionstests: `tests/installer_journal_state_machine_test.lua` (ungültige Lua-Syntax, leere Datei, unbekannter `state`-Wert, fehlende `generation` → jeweils CORRUPT/UNREADABLE statt ABSENT; ein korrupter stale Slot darf einen gültigen, höher-generierten COMMITTED-Slot nicht verdrängen) und `tests/start_lua_incomplete_install_blocks_role_test.lua` (Fälle 7+8: kaputte Syntax bzw. leere Datei blockieren den Bootguard).
+
+## Ursprünglicher, jetzt behobener Fehler
+
+(Nachfolgend unverändert als Regressionsreferenz erhalten.)
 
 ## Bestätigter Fehler
 
@@ -675,8 +693,8 @@ Darunter befinden sich zahlreiche `CONTENT_DRIFT`-Einträge in MASTER-, RT- und 
 
 ## Verbindliche Reihenfolge
 
-1. Update-Journal-Crashmatrix,
-2. corrupt-journal Boot-Fail-Closed,
+1. ~~Update-Journal-Crashmatrix~~ BEHOBEN 2026-07-19 (`tests/installer_journal_state_machine_test.lua`),
+2. ~~corrupt-journal Boot-Fail-Closed~~ BEHOBEN 2026-07-19 (`tests/installer_journal_state_machine_test.lua`, `tests/start_lua_incomplete_install_blocks_role_test.lua`),
 3. Configbackup-Lesefehler,
 4. FUEL/REPROCESSOR Quiesce-ACK-Safety,
 5. RT-Quiesce-SCRAM,
@@ -696,8 +714,8 @@ Für den geprüften ausführbaren Head wurde über die verfügbare GitHub-Schnit
 
 # 20. Verbindliche Bearbeitungsreihenfolge
 
-1. Journal fail-closed und generationensicher machen.
-2. Beschädigtes/unlesbares Journal als Recoveryzustand behandeln.
+1. ~~Journal fail-closed und generationensicher machen.~~ BEHOBEN 2026-07-19.
+2. ~~Beschädigtes/unlesbares Journal als Recoveryzustand behandeln.~~ BEHOBEN 2026-07-19.
 3. Configbackup bei jedem Listing-/Readfehler abbrechen.
 4. FUEL/REPROCESSOR Quiesce bis zu bestätigten Wireless-BLOCK-ACKs weiterlaufen lassen.
 5. RT vor Runtime-Stopp in einen bestätigten sicheren Hardwarezustand fahren.
