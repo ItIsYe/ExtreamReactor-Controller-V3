@@ -40,7 +40,7 @@ return {
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
   { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e" },
-  { path = "core/ui_router.lua", size_bytes = 19342, hash = "74bf12b0" },
+  { path = "core/ui_router.lua", size_bytes = 20847, hash = "d9c9c7a8" },
   { path = "core/utils.lua", size_bytes = 24602, hash = "96cdaaaf" },
   { path = "core/auto_update.lua", size_bytes = 5174, hash = "332b3250" },
   { path = "core/remote_update.lua", size_bytes = 13576, hash = "ac163240" },
