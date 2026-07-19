@@ -154,19 +154,58 @@ end
 
 -- ---- peripheral discovery --------------------------------------------------
 
+-- Fix (2026-07-19): CRITICAL. Der Default-Name "me_bridge" ist reine
+-- Konvention dieser Config -- das tatsaechliche CC:Tweaked-Peripheral (der
+-- Advanced-Peripherals-"ME Bridge"-Block) heisst automatisch vergeben z.B.
+-- "meBridge_0" (oder eine andere Seiten-/Netzwerkbezeichnung) und wurde
+-- ueber peripheral.isPresent("me_bridge") NIEMALS gefunden, solange
+-- config.logistics.me_bridge nicht manuell exakt auf den tatsaechlichen
+-- Namen gesetzt wurde -- meldete sich dauerhaft als "absent", obwohl eine
+-- korrekt verkabelte ME Bridge vorhanden war. Analog zum bereits
+-- bestehenden Muster fuer storage_bus (nodes/support/discovery.lua's
+-- collect_devices_by_methods -- Erkennung ueber tatsaechlich vorhandene
+-- Methoden statt festen Namen) wird jetzt zusaetzlich per Methodensignatur
+-- gesucht (getItem + exportItemToPeripheral + importItemFromPeripheral --
+-- genau die drei ME-Bridge-Methoden, die diese Datei tatsaechlich
+-- aufruft), sobald der konfigurierte/Default-Name nicht direkt gefunden
+-- wird.
+local function find_me_bridge_by_methods()
+  for _, name in ipairs(peripheral.getNames() or {}) do
+    local ok, methods = pcall(peripheral.getMethods, name)
+    if ok and type(methods) == "table" then
+      local set = {}
+      for _, m in ipairs(methods) do set[m] = true end
+      if set.getItem and set.exportItemToPeripheral and set.importItemFromPeripheral then
+        return name
+      end
+    end
+  end
+  return nil
+end
+
 function M:refresh_peripherals()
   local cfg = self.config.logistics or self.config or {}
 
   -- ME Bridge
   local bridge_name = cfg.me_bridge or "me_bridge"
   self._state.bridge = nil
+  local bridge_found_name = nil
   if peripheral.isPresent(bridge_name) then
-    local ok, w = pcall(peripheral.wrap, bridge_name)
+    bridge_found_name = bridge_name
+  elseif not cfg.me_bridge then
+    -- Nur automatisch per Methodensignatur suchen, wenn KEIN expliziter
+    -- Name konfiguriert ist -- ein manuell gesetzter, aber (noch) nicht
+    -- angeschlossener Name soll weiterhin klar als "absent" gemeldet
+    -- werden, statt stillschweigend eine andere ME Bridge zu binden.
+    bridge_found_name = find_me_bridge_by_methods()
+  end
+  if bridge_found_name then
+    local ok, w = pcall(peripheral.wrap, bridge_found_name)
     if ok and w then
-      self._state.bridge = { name = bridge_name, wrapped = w }
-      self.log("DEBUG", "Logistics: ME Bridge: " .. bridge_name)
+      self._state.bridge = { name = bridge_found_name, wrapped = w }
+      self.log("DEBUG", "Logistics: ME Bridge: " .. bridge_found_name)
     else
-      self.warn_once("bridge_wrap", "Logistics: ME Bridge wrap failed: " .. bridge_name)
+      self.warn_once("bridge_wrap", "Logistics: ME Bridge wrap failed: " .. bridge_found_name)
     end
   else
     self.warn_once("bridge_absent", "Logistics: ME Bridge absent: " .. bridge_name)

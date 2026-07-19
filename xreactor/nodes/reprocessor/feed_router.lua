@@ -72,16 +72,45 @@ end
 
 -- ---- peripheral discovery --------------------------------------------------
 
+-- Fix (2026-07-19): CRITICAL. Derselbe Fehler wie in nodes/fuel/logistics_
+-- router.lua (siehe dortiger Fix-Kommentar): der Default-Name "me_bridge"
+-- ist reine Konvention dieser Config, das tatsaechliche Advanced-
+-- Peripherals-Peripheral heisst automatisch vergeben z.B. "meBridge_0" --
+-- ohne manuell exakt gesetzten config.feed.me_bridge-Namen meldete sich
+-- eine korrekt verkabelte ME Bridge dauerhaft als "absent". Faellt jetzt,
+-- sofern kein expliziter Name konfiguriert ist, auf eine Methodensignatur-
+-- Suche zurueck (getItem + exportItemToPeripheral -- genau die zwei
+-- Methoden, die diese Datei tatsaechlich aufruft).
+local function find_me_bridge_by_methods()
+  for _, name in ipairs(peripheral.getNames() or {}) do
+    local ok, methods = pcall(peripheral.getMethods, name)
+    if ok and type(methods) == "table" then
+      local set = {}
+      for _, m in ipairs(methods) do set[m] = true end
+      if set.getItem and set.exportItemToPeripheral then
+        return name
+      end
+    end
+  end
+  return nil
+end
+
 function M:refresh_peripherals()
   local cfg = self.config.feed or {}
   local name = cfg.me_bridge or "me_bridge"
+  local found_name = nil
   if peripheral.isPresent(name) then
-    local ok, w = pcall(peripheral.wrap, name)
+    found_name = name
+  elseif not cfg.me_bridge then
+    found_name = find_me_bridge_by_methods()
+  end
+  if found_name then
+    local ok, w = pcall(peripheral.wrap, found_name)
     if ok and w then
       self._state.bridge = w
-      self._state.bridge_name = name
+      self._state.bridge_name = found_name
     else
-      self.warn_once("bridge_wrap", "FeedRouter: ME-Bridge wrap failed: " .. name)
+      self.warn_once("bridge_wrap", "FeedRouter: ME-Bridge wrap failed: " .. found_name)
       self._state.bridge = nil
     end
   else

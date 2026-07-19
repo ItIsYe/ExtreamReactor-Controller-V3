@@ -459,8 +459,21 @@ function utils.write_config(path, tbl)
     pcall(print, "WARN: write_config serialize failed: " .. tostring(err))
     return false, "serialize_failed:" .. tostring(err)
   end
-  file.write(serialized)
-  file.close()
+  -- Fix (2026-07-19): CRITICAL. file.write()/file.close() konnten werfen
+  -- (z.B. Datentraeger voll/schreibgeschuetzt) -- ungeschuetzt widersprach
+  -- das direkt dem Kommentar oben ("Do NOT call error() here... Log and
+  -- return a boolean") fuer genau diesen Funktionsteil: ein Fehlschlag hier
+  -- crashte den aufrufenden Node trotzdem hart (z.B. VALVE beim ersten
+  -- SET_VALVE nach dem Boot, wenn das automatische trusted_source-Pairing
+  -- versucht, die geschuetzte Config zu persistieren -- der Node stuerzte
+  -- dadurch bei jedem eingehenden Kommando erneut ab, sobald der Schreib-
+  -- vorgang aus Umgebungsgruenden fehlschlug).
+  local ok_write, write_err = pcall(function() file.write(serialized) end)
+  pcall(file.close)
+  if not ok_write then
+    pcall(print, "WARN: write_config failed to write " .. tostring(path) .. ": " .. tostring(write_err))
+    return false, "write_failed:" .. tostring(write_err)
+  end
   return true
 end
 
