@@ -68,7 +68,7 @@ local current_high = true
 local valve_initialized = false
 local last_write_error = nil
 local last_command_ts = os.epoch("utc")
-local config = { side = "top", trusted_source = ]] .. (opts.initial_trusted_source and ('"' .. opts.initial_trusted_source .. '"') or 'nil') .. [[ }
+local config = { sorter_name = "logisticalSorter_1", trusted_source = ]] .. (opts.initial_trusted_source and ('"' .. opts.initial_trusted_source .. '"') or 'nil') .. [[ }
 local CONFIG = { LOG_PREFIX = "VALVE", CONFIG_PATH = "/xreactor/config/valve.lua" }
 local node_id = "VALVE-1"
 ]]
@@ -87,8 +87,7 @@ return {
 
   local env = {
     os = { epoch = function() return 1000000 end },
-    redstone = { setOutput = function() end },
-    peripheral = { wrap = function() return nil end },
+    peripheral = { wrap = function() return { setAutoMode = function() end } end },
     constants = { channels = { VALVE = 6504 } },
     utils = {
       log = function(_prefix, msg, level) log_lines[#log_lines + 1] = { msg = msg, level = level } end,
@@ -180,7 +179,7 @@ local current_high = false
 local valve_initialized = false
 local last_write_error = nil
 local last_command_ts = os.epoch("utc")
-local config = { side = "top", trusted_source = "FUEL-1", actuator_type = "sorter", sorter_name = "logisticalSorter_1" }
+local config = { sorter_name = "logisticalSorter_1", trusted_source = "FUEL-1" }
 local CONFIG = { LOG_PREFIX = "VALVE", CONFIG_PATH = "/xreactor/config/valve.lua" }
 local node_id = "VALVE-1"
 ]]

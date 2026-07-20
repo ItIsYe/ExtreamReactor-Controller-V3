@@ -223,8 +223,8 @@ return {
     { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 11071, hash = "25d5ebdf", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
-    { path = "nodes/valve/config.lua", size_bytes = 2045, hash = "bb999c19", required_for={"VALVE"} },
-    { path = "nodes/valve/main.lua", size_bytes = 21725, hash = "d764c3c3", required_for={"VALVE"} },
+    { path = "nodes/valve/config.lua", size_bytes = 1763, hash = "20c46d9a", required_for={"VALVE"} },
+    { path = "nodes/valve/main.lua", size_bytes = 21328, hash = "5d6d9d30", required_for={"VALVE"} },
     },
     log = {
     { path = "nodes/log_collector/main.lua", size_bytes = 60851, hash = "d401680c", required_for={"LOG"} },

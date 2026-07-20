@@ -1,6 +1,7 @@
 -- nodes/valve/main.lua
 --
--- Minimaler eigenstaendiger Redstone-Valve-Controller.
+-- Minimaler eigenstaendiger Valve-Controller fuer einen Mekanism
+-- Logistical Sorter.
 --
 -- Hintergrund (2026-07-09): der "Integrator" an diesem Pipe-Netz ist bei
 -- diesem Setup selbst ein CC:Tweaked-Computer -- kein direkt am FUEL-
@@ -13,6 +14,13 @@
 -- jeder andere Node, damit FUEL/Master es automatisch als online
 -- erkennen (Auto-Discovery ueber die ohnehin vorhandene Peer-Verwaltung,
 -- kein separates Protokoll noetig).
+--
+-- Fix (2026-07-20): der urspruengliche Redstone-Aktor (config.actuator_
+-- type = "redstone", direktes redstone.setOutput()) ist in der aktuellen
+-- Aufstellung nicht mehr im Einsatz und wurde komplett entfernt -- jede
+-- VALVE-Node steuert ausschliesslich einen Mekanism Logistical Sorter
+-- (setAutoMode()) per CC:Tweaked-Peripherie. Kein "actuator_type"-Feld
+-- und keine Redstone-Seite mehr in der Config noetig.
 --
 -- Fail-Safe: bootet mit dem Ventil im konfigurierten default_blocked-
 -- Zustand (Standard: blockiert) und faellt bei Verbindungsverlust zu
@@ -50,13 +58,11 @@ local DEFAULT_CONFIG = {
   debug_logging = false,
   reset_log_on_start = true,
   wireless_modem = nil,
-  side = "front",
   -- Feature (2026-07-14): siehe config.lua fuer die ausfuehrliche
   -- Begruendung -- hier zusaetzlich in DEFAULT_CONFIG, damit merge_
   -- defaults() dieses Feld auch bei bereits migrierten/geschuetzten
   -- Config-Dateien (siehe GLOBAL-P0) automatisch nachtraegt, nicht nur
   -- bei einer komplett frischen Installation.
-  actuator_type = "redstone",
   sorter_name = "logisticalSorter_1",
   default_blocked = true,
   heartbeat_interval = 2,
@@ -94,9 +100,9 @@ CONFIG.CONFIG_PATH = VALVE_USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
-if type(config.side) ~= "string" or not ({top=1,bottom=1,left=1,right=1,front=1,back=1})[config.side] then
-  add_config_warning("side ungueltig/fehlt, verwende 'front'")
-  config.side = "front"
+if type(config.sorter_name) ~= "string" or config.sorter_name == "" then
+  add_config_warning("sorter_name ungueltig/fehlt, verwende 'logisticalSorter_1'")
+  config.sorter_name = "logisticalSorter_1"
 end
 
 local node_id = support_runtime.init_logging({
@@ -150,21 +156,16 @@ local valve_initialized = false
 -- (oder wenn ohnehin kein Write noetig war, da bereits im Zielzustand)
 -- aktualisiert -- ein Fehlschlag laesst den Watchdog auf dem AELTEREN
 -- Zeitstempel stehen, wodurch er eher (nicht spaeter) erneut eingreift.
--- Feature (2026-07-14): Aktor-Abstraktion -- neben dem urspruenglichen
--- Redstone-Ventil wird jetzt auch ein Mekanism Logistical Sorter als
--- Aktor unterstuetzt (config.actuator_type = "sorter"). Hintergrund: bei
--- reinem Item-Brennstofftransport (keine Fluid-/Gas-Leitung) gibt es kein
--- klassisches Redstone-Ventil -- stattdessen wird der Sorter direkt per
--- CC:Tweaked gesteuert (setAutoMode), Redstone wird dabei komplett
--- umgangen. Der Sorter hat einen "Auto"-Modus, der -- wenn aktiv -- Items
--- automatisch herauspumpt, UNABHAENGIG von jedem Redstone-Signal (siehe
--- Mekanism-Wiki) -- genau das wird hier als Auf/Zu-Schalter genutzt.
+-- Feature (2026-07-14): Aktor ist ein Mekanism Logistical Sorter, gesteuert
+-- per CC:Tweaked (setAutoMode). Der Sorter hat einen "Auto"-Modus, der --
+-- wenn aktiv -- Items automatisch herauspumpt (siehe Mekanism-Wiki) --
+-- genau das wird hier als Auf/Zu-Schalter genutzt: high=true bedeutet
+-- BLOCKIERT (Fail-Safe-Grundzustand, Auto-Modus AUS), high=false bedeutet
+-- OFFEN (Auto-Modus AN).
 --
--- Beide Aktoren teilen sich dieselbe abstrakte Semantik wie das restliche
--- Ventil-Protokoll: high=true bedeutet BLOCKIERT (Fail-Safe-Grundzustand),
--- high=false bedeutet OFFEN -- die Uebersetzung in die aktortyp-
--- spezifische physische Aktion passiert ausschliesslich hier, der Rest
--- des Nodes (apply_valve, Fail-Safe, Dedupe, ACK) bleibt unveraendert.
+-- Fix (2026-07-20): der urspruengliche Redstone-Aktor (config.actuator_
+-- type = "redstone") ist entfernt -- jede VALVE-Node steuert ausschliesslich
+-- einen Sorter, kein config.side/actuator_type mehr noetig.
 local sorter_device = nil
 local function get_sorter()
   if sorter_device then return sorter_device end
@@ -174,31 +175,25 @@ local function get_sorter()
 end
 
 local function write_actuator(high)
-  if config.actuator_type == "sorter" then
-    local sorter = get_sorter()
-    if not sorter then
-      return false, "Sorter '" .. tostring(config.sorter_name) .. "' nicht gefunden"
-    end
-    -- high=true (BLOCKIERT) -> Auto-Modus AUS; high=false (OFFEN) -> AN.
-    local ok, err = pcall(sorter.setAutoMode, not high)
-    if not ok then
-      -- Fix (2026-07-17): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md Abschnitt 21). get_sorter() cachte den
-      -- einmal gewrappten Sorter bisher DAUERHAFT -- scheiterte ein
-      -- spaeterer Call (Detach/Reattach, ersetztes Peripheral, Chunk-
-      -- Entladen), blieb sorter_device trotzdem gesetzt und jeder weitere
-      -- Versuch traf denselben kaputten Handle erneut, ohne je neu zu
-      -- wrappen. Jetzt: bei einem Callfehler wird der Cache geleert, der
-      -- naechste get_sorter()-Aufruf (naechster Retry) wrappt das
-      -- Peripheral frisch.
-      sorter_device = nil
-      return false, tostring(err)
-    end
-    return true
+  local sorter = get_sorter()
+  if not sorter then
+    return false, "Sorter '" .. tostring(config.sorter_name) .. "' nicht gefunden"
   end
-  -- Standard: Redstone (unveraendertes Verhalten wie bisher).
-  local ok, err = pcall(redstone.setOutput, config.side, high)
-  if not ok then return false, tostring(err) end
+  -- high=true (BLOCKIERT) -> Auto-Modus AUS; high=false (OFFEN) -> AN.
+  local ok, err = pcall(sorter.setAutoMode, not high)
+  if not ok then
+    -- Fix (2026-07-17): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 21). get_sorter() cachte den
+    -- einmal gewrappten Sorter bisher DAUERHAFT -- scheiterte ein
+    -- spaeterer Call (Detach/Reattach, ersetztes Peripheral, Chunk-
+    -- Entladen), blieb sorter_device trotzdem gesetzt und jeder weitere
+    -- Versuch traf denselben kaputten Handle erneut, ohne je neu zu
+    -- wrappen. Jetzt: bei einem Callfehler wird der Cache geleert, der
+    -- naechste get_sorter()-Aufruf (naechster Retry) wrappt das
+    -- Peripheral frisch.
+    sorter_device = nil
+    return false, tostring(err)
+  end
   return true
 end
 
@@ -210,14 +205,14 @@ local function apply_valve(high)
   local ok, err = write_actuator(high)
   if not ok then
     last_write_error = tostring(err)
-    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (" .. tostring(config.actuator_type or "redstone") .. "): " .. tostring(err), "ERROR")
+    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (Sorter " .. tostring(config.sorter_name) .. "): " .. tostring(err), "ERROR")
     return false
   end
   current_high = high
   valve_initialized = true
   last_write_error = nil
   last_command_ts = os.epoch("utc")
-  utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (%s) -> %s", tostring(config.actuator_type or "redstone"), high and "BLOCKIERT" or "OFFEN"), "INFO")
+  utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (Sorter %s) -> %s", tostring(config.sorter_name), high and "BLOCKIERT" or "OFFEN"), "INFO")
   return true
 end
 
@@ -408,13 +403,12 @@ services:add(telemetry_service.new({
   heartbeat_interval = config.heartbeat_interval,
   build_payload = build_status_payload,
   heartbeat_state = function() return {
-    side = config.side, blocked = current_high, write_error = last_write_error,
-    actuator_type = config.actuator_type or "redstone",
-    actuator_name = config.actuator_type == "sorter" and config.sorter_name or config.side,
+    blocked = current_high, write_error = last_write_error,
+    actuator_name = config.sorter_name,
   } end,
 }))
 
-utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: side=" .. config.side .. " node_id=" .. tostring(node_id), "INFO")
+utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: sorter=" .. tostring(config.sorter_name) .. " node_id=" .. tostring(node_id), "INFO")
 
 -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
 -- Quiesce-Handler. VALVE ist die einzige der vier sicherheitskritischen

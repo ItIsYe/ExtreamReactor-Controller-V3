@@ -7,9 +7,9 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- Event-Loop am Ende) -- kein require()-bares Modul. Dieser Test extrahiert
 -- deshalb den echten Quelltext von apply_valve()/handle_valve_channel_
 -- event() per String-Marker direkt aus main.lua und fuehrt ihn per load()
--- in einer isolierten, gemockten Umgebung aus (redstone.setOutput steuerbar
--- fehlschlagend), um zu beweisen, dass die reale Fix-Logik (nicht nur eine
--- Nachbildung) sich korrekt verhaelt.
+-- in einer isolierten, gemockten Umgebung aus (Sorter setAutoMode()
+-- steuerbar fehlschlagend), um zu beweisen, dass die reale Fix-Logik
+-- (nicht nur eine Nachbildung) sich korrekt verhaelt.
 
 local function read_file(path)
   local f = assert(io.open(path, 'r'))
@@ -53,7 +53,7 @@ local function assert_true(value, message)
 end
 
 -- Baut eine frische, isolierte Instanz der extrahierten Logik.
--- write_ok_ref: Funktion, die pro Aufruf steuert ob redstone.setOutput
+-- write_ok_ref: Funktion, die pro Aufruf steuert ob der Sorter-Call
 -- gerade "erfolgreich" oder "fehlschlagend" simuliert wird.
 local function make_instance(write_ok_ref, opts)
   opts = opts or {}
@@ -70,7 +70,7 @@ local last_command_ts = os.epoch("utc")
 -- (added 2026-07-17, see valve_sender_pairing_and_sorter_reconnect_test.lua
 -- for its dedicated coverage) does not interfere with this test's
 -- write-retry-focused assertions.
-local config = { side = "top", trusted_source = "FUEL-1" }
+local config = { sorter_name = "logisticalSorter_1", trusted_source = "FUEL-1" }
 local CONFIG = { LOG_PREFIX = "VALVE" }
 local node_id = "VALVE-1"
 ]]
@@ -92,14 +92,17 @@ return {
 
   local env = {
     os = { epoch = function() return clock end },
-    redstone = {
-      setOutput = function(_side, _high)
-        if not write_ok_ref() then
-          error('simulated redstone write failure')
-        end
+    peripheral = {
+      wrap = function(_name)
+        return {
+          setAutoMode = function(_auto)
+            if not write_ok_ref() then
+              error('simulated sorter write failure')
+            end
+          end,
+        }
       end,
     },
-    peripheral = { wrap = function() return nil end },
     constants = { channels = { VALVE = 6504 } },
     utils = { log = function(_prefix, msg, level) table.insert(log_lines, { msg = msg, level = level }) end },
     string = string, table = table, tostring = tostring, tonumber = tonumber, type = type, pcall = pcall,
