@@ -920,6 +920,28 @@ function M:check_pending_acks()
   end
 end
 
+-- Feature (2026-07-20): "Weg 3"-Idee des Melders (Identify/Locate-Hilfe
+-- fuer die Router-UI-Pfadbearbeitung, siehe nodes/fuel/router_ui.lua
+-- get_identify_targets() und die periodische Aktualisierung in nodes/fuel/
+-- main.lua) -- KEIN automatisches Teach-in (wurde ausdruecklich abgelehnt),
+-- rein kosmetisch: waehrend ein Reaktor-Pfad in der UI bearbeitet wird,
+-- sendet FUEL periodisch SET_IDENTIFY an jede betroffene VALVE-Node --
+-- diese zieht ALLE eingebauten Redstone-Seiten gleichzeitig high (Seite
+-- bewusst egal, siehe nodes/valve/main.lua apply_identify()), z.B. fuer
+-- eine angeschlossene Redstone-Lampe, damit das physische Ventil im Netz
+-- wiederzufinden ist. Bewusst OHNE ACK-Tracking wie SET_VALVE -- rein
+-- fire-and-forget (ein verlorenes SET_IDENTIFY korrigiert sich beim
+-- naechsten periodischen Refresh von selbst), die VALVE-Node schaltet sich
+-- ausserdem ueber ihren eigenen Watchdog automatisch ab, falls der Refresh
+-- ganz ausbleibt (UI verlassen, FUEL abgestuerzt, Funk verloren).
+function M:set_identify(node_id, on)
+  if not self.valve_modem or not node_id then return false end
+  local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+    type = "SET_IDENTIFY", src = self.config.node_id, dst = node_id, on = on and true or false,
+  })
+  return ok == true
+end
+
 function M:get_valve_status()
   local requested = self._state.valve_requested or {}
   local peers = self.comms and self.comms:get_peers() or {}

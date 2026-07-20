@@ -539,6 +539,30 @@ local function init()
     last_valve_retry_check_ms = now
     get_rs_router():check_pending_acks()
   end })
+  -- Feature (2026-07-20): "Weg 3"-Idee des Melders (Identify/Locate-Hilfe)
+  -- -- identisch zu nodes/fuel/main.lua's Verdrahtung (siehe dortiger
+  -- Kommentar), da router_ui.lua/redstone_router.lua zwischen FUEL und
+  -- REPROCESSOR geteilt werden.
+  local identify_prev_targets = {}
+  local last_identify_refresh_ms = 0
+  local IDENTIFY_REFRESH_INTERVAL_MS = 1500
+  services:add({ name = "valve_identify_refresh", tick = function()
+    if not router_ui_instance then return end
+    local ok, targets = pcall(router_ui_instance.get_identify_targets, router_ui_instance)
+    if not ok or type(targets) ~= "table" then targets = {} end
+    local current = {}
+    for _, id in ipairs(targets) do current[id] = true end
+    local rs = get_rs_router()
+    for id in pairs(identify_prev_targets) do
+      if not current[id] then rs:set_identify(id, false) end
+    end
+    local now = os.epoch and os.epoch("utc") or 0
+    if next(current) and (now - last_identify_refresh_ms) >= IDENTIFY_REFRESH_INTERVAL_MS then
+      for id in pairs(current) do rs:set_identify(id, true) end
+      last_identify_refresh_ms = now
+    end
+    identify_prev_targets = current
+  end })
   services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
   services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { standby = standby } end }))
   services:add(ui_service.new({

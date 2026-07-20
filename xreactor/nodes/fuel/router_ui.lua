@@ -749,4 +749,25 @@ function M:get_routes()
   return self._ui.routes
 end
 
+-- Feature (2026-07-20): "Weg 3"-Idee (Identify/Locate-Hilfe, siehe
+-- redstone_router.lua's set_identify()) -- liefert die eindeutigen
+-- VALVE-Node-IDs, die GERADE JETZT physisch "aufleuchten" sollen: nur
+-- waehrend tatsaechlich eine Ventilkette bearbeitet wird (u.edit_view ==
+-- "path", u.editing gesetzt), sonst leer. nodes/fuel/main.lua ruft dies
+-- periodisch ab und sendet SET_IDENTIFY an jede zurueckgegebene ID (und
+-- explizit "aus" an jede ID, die seit dem letzten Abruf aus der Liste
+-- gefallen ist -- Reaktor gewechselt, Schritt entfernt, Editor verlassen).
+function M:get_identify_targets()
+  local u = self._ui
+  if u.mode ~= "edit" or u.edit_view ~= "path" or not u.editing then return {} end
+  local seen, out = {}, {}
+  for _, step in ipairs(u.editing.path or {}) do
+    if step.integrator and not seen[step.integrator] then
+      seen[step.integrator] = true
+      out[#out + 1] = step.integrator
+    end
+  end
+  return out
+end
+
 return M

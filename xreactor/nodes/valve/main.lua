@@ -37,6 +37,12 @@
 -- immer Teil der Installation, kein Installer-Prompt. Ist physisch kein
 -- Monitor angeschlossen, passiert schlicht nichts (voll pcall-isoliert).
 --
+-- Feature (2026-07-20): SET_IDENTIFY -- rein kosmetische Identify/Locate-
+-- Hilfe fuer die Router-UI-Pfadbearbeitung auf FUEL-Seite (siehe
+-- apply_identify() weiter unten): pulst ALLE eingebauten Redstone-Seiten
+-- gleichzeitig, komplett unabhaengig von der Sorter-Steuerung. KEIN
+-- automatisches Teach-in.
+--
 -- Fail-Safe: bootet mit dem Ventil im konfigurierten default_blocked-
 -- Zustand (Standard: blockiert) und faellt bei Verbindungsverlust zu
 -- FUEL/Master (kein SET_VALVE-Kommando mehr seit laengerer Zeit) auf
@@ -300,6 +306,35 @@ local function apply_valve(high)
   return true
 end
 
+-- Feature (2026-07-20): "Weg 3"-Idee des Melders (Identify/Locate-Hilfe
+-- fuer die Router-UI-Pfadbearbeitung, siehe nodes/fuel/router_ui.lua
+-- get_identify_targets() und nodes/fuel/redstone_router.lua set_identify())
+-- -- KEIN automatisches Teach-in (wurde ausdruecklich abgelehnt), rein
+-- kosmetisch und voellig unabhaengig von der eigentlichen Sorter-Steuerung
+-- (apply_valve()/current_high): solange FUEL diese Node als Teil der
+-- gerade in der UI bearbeiteten Ventilkette periodisch per SET_IDENTIFY
+-- meldet, ziehen ALLE eingebauten Redstone-Seiten dieses Computers
+-- gleichzeitig high (Seite ist bewusst egal -- z.B. eine Redstone-Lampe an
+-- irgendeiner Blockseite genuegt, um das physische Ventil im Netz
+-- wiederzufinden). Bleibt der periodische Refresh aus (UI verlassen, FUEL
+-- abgestuerzt, Funk verloren), schaltet der Watchdog weiter unten
+-- ("identify_failsafe") nach IDENTIFY_STALE_S Sekunden automatisch wieder
+-- ab, damit keine Lampe dauerhaft brennen bleibt.
+local identify_active = false
+local last_identify_ts = nil
+
+local function apply_identify(on)
+  if on then last_identify_ts = os.epoch("utc") end
+  if identify_active == on then return end
+  local ok, sides = pcall(redstone.getSides)
+  if ok and type(sides) == "table" then
+    for _, side in ipairs(sides) do
+      pcall(redstone.setOutput, side, on)
+    end
+  end
+  identify_active = on
+end
+
 -- Fail-Safe-Grundzustand direkt beim Boot setzen, bevor irgendeine
 -- Verbindung zu FUEL/Master ueberhaupt steht.
 apply_valve(current_high)
@@ -380,8 +415,26 @@ local function handle_valve_channel_event(event)
   -- unten) griff dadurch dauerhaft, nicht nur bei echtem Verbindungsverlust.
   local reply_side, channel, message = event[2], event[3], event[5]
   if channel ~= constants.channels.VALVE then return end
-  if type(message) ~= "table" or message.type ~= "SET_VALVE" then return end
+  if type(message) ~= "table" then return end
   if message.dst ~= node_id then return end  -- nicht fuer diese Node bestimmt
+
+  -- Feature (2026-07-20): SET_IDENTIFY (siehe apply_identify() oben) --
+  -- bewusst NICHT derselbe Trust-Gate-Codepfad wie SET_VALVE (kein
+  -- automatisches Pairing durch einen Identify-Befehl): ist bereits ein
+  -- trusted_source gepaart, muss ein Identify-Befehl trotzdem von
+  -- DERSELBEN Quelle stammen (kein fremder Sender kann die Lampe eines
+  -- bereits gepaarten Ventils fernsteuern); ist noch KEIN trusted_source
+  -- gepaart (frische Installation, noch nie ein SET_VALVE empfangen), wird
+  -- ein Identify-Befehl trotzdem angenommen -- rein kosmetisch,
+  -- ungefaehrlich, und gerade beim ALLERERSTEN Aufbau einer Ventilkette
+  -- (vor jedem echten SET_VALVE) am nuetzlichsten.
+  if message.type == "SET_IDENTIFY" then
+    if config.trusted_source and message.src ~= config.trusted_source then return end
+    apply_identify(message.on == true)
+    return
+  end
+
+  if message.type ~= "SET_VALVE" then return end
   -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md). "fremder Sender auf Kanal 6504 kann
   -- passende Kommandos senden".
@@ -466,6 +519,23 @@ services:add({ name = "valve_failsafe", tick = function()
       utils.log(CONFIG.LOG_PREFIX, string.format(
         "Kein SET_VALVE seit %.0fs — Fail-Safe: Ventil wird blockiert", age_s), "WARN")
       apply_valve(true)
+    end
+  end
+end })
+
+-- Feature (2026-07-20): Watchdog fuer den Identify/Locate-Signal (siehe
+-- apply_identify() oben) -- deutlich kuerzeres Timeout als valve_failsafe
+-- oben, da dieses Signal rein durch aktive UI-Bearbeitung am Leben
+-- gehalten wird (FUEL-seitiger Refresh alle ~1.5s, siehe redstone_router.
+-- lua set_identify()/nodes/fuel/main.lua) -- bleibt der Refresh aus (UI
+-- verlassen, FUEL abgestuerzt, Funk verloren), soll die Lampe zuegig
+-- wieder ausgehen statt dauerhaft zu brennen.
+local IDENTIFY_STALE_S = 6
+services:add({ name = "identify_failsafe", tick = function()
+  if identify_active and last_identify_ts then
+    local age_s = (os.epoch("utc") - last_identify_ts) / 1000
+    if age_s > IDENTIFY_STALE_S then
+      apply_identify(false)
     end
   end
 end })
