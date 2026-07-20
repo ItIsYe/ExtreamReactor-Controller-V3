@@ -17,10 +17,14 @@
 -- mehr. sorter_name (der Peripherie-Name des Logistical Sorters) wird bei
 -- nil automatisch per Methodensignatur erkannt, genau wie wireless_modem
 -- -- nur bei mehreren Sortern am selben Computer explizit setzen (z.B.
--- "logisticalSorter_1"). Ein optionaler 1x3-Ampel-Statusmonitor (gruen=
--- offen, rot=blockiert, siehe xreactor/optional/ampel.lua) wird ebenfalls
--- automatisch erkannt, falls einer angeschlossen ist -- kein Config-Feld
--- dafuer noetig.
+-- "logisticalSorter_1").
+--
+-- Fix (2026-07-20): fest eingebauter (NICHT optionaler, NICHT ueber das
+-- Installer-Feature "ampel" gesteuerter) 1x1-Statusmonitor: gruen=offen,
+-- rot=blockiert. Wird automatisch erkannt, falls einer angeschlossen ist --
+-- kein Config-Feld dafuer noetig, kein Formcheck (anders als das gemeinsame
+-- xreactor/optional/ampel.lua-Modul mit seiner 1x3-Turmform, das andere
+-- Rollen weiterhin optional nutzen).
 return {
   role            = "VALVE-NODE",
   node_id         = "VALVE-1",

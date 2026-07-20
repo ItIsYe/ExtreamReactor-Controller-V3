@@ -27,11 +27,15 @@
 -- das Modem wurde schon vorher unabhaengig von "side" per peripheral.
 -- find() gesucht, der Sorter wird jetzt genauso per Methodensignatur
 -- (setAutoMode) gesucht, sobald config.sorter_name nicht explizit gesetzt
--- ist (siehe get_sorter() unten). Zusaetzlich ein rein optionaler 1x3-
--- Ampel-Statusmonitor (xreactor/optional/ampel.lua, derselbe bereits an
--- RT/ENERGY/FUEL bewaehrte, vollstaendig fehlerisolierte Mechanismus):
--- gruen=offen, rot=blockiert. Ohne angeschlossenen Monitor passiert
--- schlicht nichts -- kein Fehler, keine Voraussetzung.
+-- ist (siehe get_sorter() unten).
+--
+-- Zusaetzlich ein fest eingebauter (NICHT optionaler) Statusmonitor:
+-- gruen=offen, rot=blockiert. Bewusst NICHT das gemeinsame optional/
+-- ampel.lua-Modul (das verlangt eine 1x3-Block-Turmform, 7x17-21 Zeichen
+-- bei Skala 1, und ist ein per Installer-Feature abwaehlbares Extra) --
+-- VALVEs Statusmonitor ist ein einzelner 1x1-Block ohne Formpruefung und
+-- immer Teil der Installation, kein Installer-Prompt. Ist physisch kein
+-- Monitor angeschlossen, passiert schlicht nichts (voll pcall-isoliert).
 --
 -- Fail-Safe: bootet mit dem Ventil im konfigurierten default_blocked-
 -- Zustand (Standard: blockiert) und faellt bei Verbindungsverlust zu
@@ -62,13 +66,6 @@ local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local support_runtime = require("nodes.support.runtime")
 local role_descriptor = require("nodes.valve.role_descriptor")
-
--- Feature (2026-07-20): optionaler 1x3-Ampel-Statusmonitor, siehe
--- Fix-Kommentar oben. Wie bei FUEL/RT/ENERGY: pcall-geschuetzt geladen,
--- ampel_instance bleibt nil (render_ampel() wird dann zum No-Op), falls
--- das optionale Modul aus irgendeinem Grund nicht ladbar ist.
-local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
-local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 
 local DEFAULT_CONFIG = {
   role = constants.roles.VALVE_NODE,
@@ -251,20 +248,41 @@ local function write_actuator(high)
   return true
 end
 
--- Feature (2026-07-20): optionaler Ampel-Statusmonitor -- gruen=offen,
--- rot=blockiert (siehe optional/ampel.lua und Fix-Kommentar am Dateianfang).
--- "EMERGENCY" ist hier rein die Farb-Auswahl (rot), nicht als tatsaechliche
--- Notfall-Einstufung gemeint -- der Ampel-Modul kennt keine eigenen
--- Status-Keys, nur die vier festen COLORS-Eintraege.
-local function render_ampel()
-  if not ampel_instance then return end
-  ampel_instance.render(nil, current_high and "EMERGENCY" or "OK")
+-- Feature (2026-07-20): fest eingebauter 1x1-Statusmonitor -- gruen=offen,
+-- rot=blockiert. Kein Formcheck (anders als optional/ampel.lua's 1x3-
+-- Turmform), einfach der erste gefundene Monitor. Cache wird bei jedem
+-- Fehlschlag (Detach/Reattach) verworfen, damit der naechste Aufruf neu
+-- sucht -- dasselbe Muster wie get_sorter().
+local status_monitor = nil
+local status_monitor_last_color = nil
+local function get_status_monitor()
+  if status_monitor then return status_monitor end
+  local ok, mon = pcall(peripheral.find, "monitor")
+  if ok and mon then status_monitor = mon end
+  return status_monitor
+end
+
+local function render_status_monitor()
+  local mon = get_status_monitor()
+  if not mon then return end
+  local color = current_high and colors.red or colors.green
+  if status_monitor_last_color == color then return end
+  local ok = pcall(function()
+    mon.setBackgroundColor(color)
+    mon.clear()
+  end)
+  if ok then
+    status_monitor_last_color = color
+  else
+    status_monitor = nil
+    status_monitor_last_color = nil
+  end
 end
 
 local function apply_valve(high)
   if valve_initialized and high == current_high then
     last_command_ts = os.epoch("utc")
-    render_ampel()
+    render_status_monitor()
     return true  -- bereits im Zielzustand, kein erneuter Write noetig
   end
   local ok, err = write_actuator(high)
@@ -277,7 +295,7 @@ local function apply_valve(high)
   valve_initialized = true
   last_write_error = nil
   last_command_ts = os.epoch("utc")
-  render_ampel()
+  render_status_monitor()
   utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (Sorter %s) -> %s", tostring(sorter_resolved_name or config.sorter_name or "?"), high and "BLOCKIERT" or "OFFEN"), "INFO")
   return true
 end
@@ -452,15 +470,14 @@ services:add({ name = "valve_failsafe", tick = function()
   end
 end })
 
--- Feature (2026-07-20): periodischer Ampel-Refresh (analog zu FUEL's
--- eigenem "ampel_render"-Service) -- render_ampel() wird bereits bei
--- jeder tatsaechlichen Zustandsaenderung in apply_valve() aufgerufen,
--- dieser periodische Tick faengt zusaetzlich einen erst NACH dem letzten
--- Zustandswechsel angeschlossenen/wiederangeschlossenen Monitor ab, ohne
--- auf das naechste SET_VALVE warten zu muessen. ampel.render() ist selbst
--- bereits guenstig (Farb-/Namens-Diff-Cache, 30s-Sondierungsdrossel), kein
+-- Feature (2026-07-20): periodischer Statusmonitor-Refresh -- render_
+-- status_monitor() wird bereits bei jeder tatsaechlichen Zustands-
+-- aenderung in apply_valve() aufgerufen, dieser periodische Tick faengt
+-- zusaetzlich einen erst NACH dem letzten Zustandswechsel angeschlossenen/
+-- wiederangeschlossenen Monitor ab, ohne auf das naechste SET_VALVE warten
+-- zu muessen. Guenstig durch den Farb-Diff-Cache (siehe oben), kein
 -- zusaetzlicher Akkumulator noetig.
-services:add({ name = "ampel_render", tick = function() render_ampel() end })
+services:add({ name = "status_monitor_render", tick = function() render_status_monitor() end })
 
 local function build_status_payload()
   valve_health.status = comms:is_master_reachable() and health.status.OK or health.status.DEGRADED

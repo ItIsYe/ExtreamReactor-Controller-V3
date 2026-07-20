@@ -107,7 +107,12 @@ return {
     { path = "master/ui/updates.lua", size_bytes = 4914, hash = "577f9890", required_for={"MASTER"} },
     { path = "master/ui/system_map.lua", size_bytes = 6136, hash = "c62cf990", required_for={"MASTER"} },
     { path = "master/ui/config_editor.lua", size_bytes = 6749, hash = "682b50a4", required_for={"MASTER"} },
-    { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG","VALVE"} },
+    -- Fix (2026-07-20): VALVE NICHT (mehr) in required_for -- die VALVE-Node
+    -- hat einen eigenen, fest eingebauten (nicht optionalen, nicht ueber
+    -- dieses Feature gesteuerten) 1x1-Statusmonitor direkt in nodes/valve/
+    -- main.lua (render_status_monitor()), unabhaengig vom hier verwalteten
+    -- 1x3-Turm-Ampel-Modul mit Shape-Check. Siehe dortiger Kommentar.
+    { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     -- Fix (2026-07-16): CRITICAL. MANIFEST-P1 aus
     -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 17).
     -- Fehlte bisher ganz -- files_for_role() fuegt einen roles.*-Eintrag
@@ -223,8 +228,8 @@ return {
     { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 11071, hash = "25d5ebdf", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
-    { path = "nodes/valve/config.lua", size_bytes = 2131, hash = "c56c600c", required_for={"VALVE"} },
-    { path = "nodes/valve/main.lua", size_bytes = 25342, hash = "b6103cd8", required_for={"VALVE"} },
+    { path = "nodes/valve/config.lua", size_bytes = 2332, hash = "a571ceaf", required_for={"VALVE"} },
+    { path = "nodes/valve/main.lua", size_bytes = 25592, hash = "d37acb63", required_for={"VALVE"} },
     },
     log = {
     { path = "nodes/log_collector/main.lua", size_bytes = 60851, hash = "d401680c", required_for={"LOG"} },
