@@ -22,6 +22,17 @@
 -- (setAutoMode()) per CC:Tweaked-Peripherie. Kein "actuator_type"-Feld
 -- und keine Redstone-Seite mehr in der Config noetig.
 --
+-- Feature (2026-07-20): sowohl das Wireless Modem als auch der Sorter
+-- werden jetzt automatisch erkannt (kein Config-Eintrag mehr noetig) --
+-- das Modem wurde schon vorher unabhaengig von "side" per peripheral.
+-- find() gesucht, der Sorter wird jetzt genauso per Methodensignatur
+-- (setAutoMode) gesucht, sobald config.sorter_name nicht explizit gesetzt
+-- ist (siehe get_sorter() unten). Zusaetzlich ein rein optionaler 1x3-
+-- Ampel-Statusmonitor (xreactor/optional/ampel.lua, derselbe bereits an
+-- RT/ENERGY/FUEL bewaehrte, vollstaendig fehlerisolierte Mechanismus):
+-- gruen=offen, rot=blockiert. Ohne angeschlossenen Monitor passiert
+-- schlicht nichts -- kein Fehler, keine Voraussetzung.
+--
 -- Fail-Safe: bootet mit dem Ventil im konfigurierten default_blocked-
 -- Zustand (Standard: blockiert) und faellt bei Verbindungsverlust zu
 -- FUEL/Master (kein SET_VALVE-Kommando mehr seit laengerer Zeit) auf
@@ -52,6 +63,13 @@ local telemetry_service = require("services.telemetry_service")
 local support_runtime = require("nodes.support.runtime")
 local role_descriptor = require("nodes.valve.role_descriptor")
 
+-- Feature (2026-07-20): optionaler 1x3-Ampel-Statusmonitor, siehe
+-- Fix-Kommentar oben. Wie bei FUEL/RT/ENERGY: pcall-geschuetzt geladen,
+-- ampel_instance bleibt nil (render_ampel() wird dann zum No-Op), falls
+-- das optionale Modul aus irgendeinem Grund nicht ladbar ist.
+local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
+local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
+
 local DEFAULT_CONFIG = {
   role = constants.roles.VALVE_NODE,
   node_id = "VALVE-1",
@@ -63,7 +81,11 @@ local DEFAULT_CONFIG = {
   -- defaults() dieses Feld auch bei bereits migrierten/geschuetzten
   -- Config-Dateien (siehe GLOBAL-P0) automatisch nachtraegt, nicht nur
   -- bei einer komplett frischen Installation.
-  sorter_name = "logisticalSorter_1",
+  -- Fix (2026-07-20): nil = automatisch per Methodensignatur erkennen
+  -- (siehe get_sorter() unten), analog zu wireless_modem oben. Nur bei
+  -- mehreren Sortern am selben Computer noetig, einen bestimmten Namen
+  -- explizit zu setzen.
+  sorter_name = nil,
   default_blocked = true,
   heartbeat_interval = 2,
   status_interval = 5,
@@ -100,9 +122,13 @@ CONFIG.CONFIG_PATH = VALVE_USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
-if type(config.sorter_name) ~= "string" or config.sorter_name == "" then
-  add_config_warning("sorter_name ungueltig/fehlt, verwende 'logisticalSorter_1'")
-  config.sorter_name = "logisticalSorter_1"
+-- Fix (2026-07-20): nil bedeutet jetzt bewusst "automatisch erkennen"
+-- (siehe get_sorter()) -- nur ein tatsaechlich ungueltiger, nicht-nil-Wert
+-- (z.B. eine Zahl oder ein leerer String durch einen Tippfehler) wird
+-- hier korrigiert.
+if config.sorter_name ~= nil and (type(config.sorter_name) ~= "string" or config.sorter_name == "") then
+  add_config_warning("sorter_name ungueltig, wird ignoriert (automatische Suche)")
+  config.sorter_name = nil
 end
 
 local node_id = support_runtime.init_logging({
@@ -167,17 +193,45 @@ local valve_initialized = false
 -- type = "redstone") ist entfernt -- jede VALVE-Node steuert ausschliesslich
 -- einen Sorter, kein config.side/actuator_type mehr noetig.
 local sorter_device = nil
+local sorter_resolved_name = nil
+-- Fix (2026-07-20): automatische Sorter-Erkennung per Methodensignatur
+-- (setAutoMode), analog zum bereits vorhandenen Muster fuer die ME Bridge
+-- (nodes/fuel/logistics_router.lua) -- greift nur, wenn config.sorter_name
+-- NICHT explizit gesetzt ist (nil), ein explizit konfigurierter, aber
+-- gerade nicht angeschlossener Name wird weiterhin klar als "nicht
+-- gefunden" gemeldet statt stillschweigend einen anderen Sorter zu binden.
+local function find_sorter_by_capability()
+  for _, name in ipairs(peripheral.getNames() or {}) do
+    local ok, methods = pcall(peripheral.getMethods, name)
+    if ok and type(methods) == "table" then
+      local set = {}
+      for _, m in ipairs(methods) do set[m] = true end
+      if set.setAutoMode then return name end
+    end
+  end
+  return nil
+end
+
 local function get_sorter()
   if sorter_device then return sorter_device end
-  local ok, dev = pcall(peripheral.wrap, config.sorter_name)
-  if ok and dev then sorter_device = dev end
+  local name = config.sorter_name
+  if name == nil then
+    name = find_sorter_by_capability()
+    if not name then return nil end
+  end
+  local ok, dev = pcall(peripheral.wrap, name)
+  if ok and dev then
+    sorter_device = dev
+    sorter_resolved_name = name
+  end
   return sorter_device
 end
 
 local function write_actuator(high)
   local sorter = get_sorter()
   if not sorter then
-    return false, "Sorter '" .. tostring(config.sorter_name) .. "' nicht gefunden"
+    local label = config.sorter_name and ("'" .. tostring(config.sorter_name) .. "'") or "automatische Suche erfolglos"
+    return false, "Sorter nicht gefunden (" .. label .. ")"
   end
   -- high=true (BLOCKIERT) -> Auto-Modus AUS; high=false (OFFEN) -> AN.
   local ok, err = pcall(sorter.setAutoMode, not high)
@@ -197,22 +251,34 @@ local function write_actuator(high)
   return true
 end
 
+-- Feature (2026-07-20): optionaler Ampel-Statusmonitor -- gruen=offen,
+-- rot=blockiert (siehe optional/ampel.lua und Fix-Kommentar am Dateianfang).
+-- "EMERGENCY" ist hier rein die Farb-Auswahl (rot), nicht als tatsaechliche
+-- Notfall-Einstufung gemeint -- der Ampel-Modul kennt keine eigenen
+-- Status-Keys, nur die vier festen COLORS-Eintraege.
+local function render_ampel()
+  if not ampel_instance then return end
+  ampel_instance.render(nil, current_high and "EMERGENCY" or "OK")
+end
+
 local function apply_valve(high)
   if valve_initialized and high == current_high then
     last_command_ts = os.epoch("utc")
+    render_ampel()
     return true  -- bereits im Zielzustand, kein erneuter Write noetig
   end
   local ok, err = write_actuator(high)
   if not ok then
     last_write_error = tostring(err)
-    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (Sorter " .. tostring(config.sorter_name) .. "): " .. tostring(err), "ERROR")
+    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (Sorter " .. tostring(sorter_resolved_name or config.sorter_name or "?") .. "): " .. tostring(err), "ERROR")
     return false
   end
   current_high = high
   valve_initialized = true
   last_write_error = nil
   last_command_ts = os.epoch("utc")
-  utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (Sorter %s) -> %s", tostring(config.sorter_name), high and "BLOCKIERT" or "OFFEN"), "INFO")
+  render_ampel()
+  utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (Sorter %s) -> %s", tostring(sorter_resolved_name or config.sorter_name or "?"), high and "BLOCKIERT" or "OFFEN"), "INFO")
   return true
 end
 
@@ -386,6 +452,16 @@ services:add({ name = "valve_failsafe", tick = function()
   end
 end })
 
+-- Feature (2026-07-20): periodischer Ampel-Refresh (analog zu FUEL's
+-- eigenem "ampel_render"-Service) -- render_ampel() wird bereits bei
+-- jeder tatsaechlichen Zustandsaenderung in apply_valve() aufgerufen,
+-- dieser periodische Tick faengt zusaetzlich einen erst NACH dem letzten
+-- Zustandswechsel angeschlossenen/wiederangeschlossenen Monitor ab, ohne
+-- auf das naechste SET_VALVE warten zu muessen. ampel.render() ist selbst
+-- bereits guenstig (Farb-/Namens-Diff-Cache, 30s-Sondierungsdrossel), kein
+-- zusaetzlicher Akkumulator noetig.
+services:add({ name = "ampel_render", tick = function() render_ampel() end })
+
 local function build_status_payload()
   valve_health.status = comms:is_master_reachable() and health.status.OK or health.status.DEGRADED
   valve_health.reasons = comms:is_master_reachable() and {} or { [health.reasons.COMMS_DOWN] = true }
@@ -404,11 +480,11 @@ services:add(telemetry_service.new({
   build_payload = build_status_payload,
   heartbeat_state = function() return {
     blocked = current_high, write_error = last_write_error,
-    actuator_name = config.sorter_name,
+    actuator_name = sorter_resolved_name or config.sorter_name,
   } end,
 }))
 
-utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: sorter=" .. tostring(config.sorter_name) .. " node_id=" .. tostring(node_id), "INFO")
+utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: sorter=" .. tostring(sorter_resolved_name or config.sorter_name or "auto") .. " node_id=" .. tostring(node_id), "INFO")
 
 -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
 -- Quiesce-Handler. VALVE ist die einzige der vier sicherheitskritischen

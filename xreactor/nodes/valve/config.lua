@@ -14,15 +14,20 @@
 -- "redstone", direktes redstone.setOutput() ueber "side") ist entfernt --
 -- jede VALVE-Node steuert ausschliesslich einen Mekanism Logistical
 -- Sorter per CC:Tweaked (setAutoMode()). Kein "side"/"actuator_type"-Feld
--- mehr, nur noch "sorter_name" (der Peripherie-Name des Logistical
--- Sorters, z.B. "logisticalSorter_1").
+-- mehr. sorter_name (der Peripherie-Name des Logistical Sorters) wird bei
+-- nil automatisch per Methodensignatur erkannt, genau wie wireless_modem
+-- -- nur bei mehreren Sortern am selben Computer explizit setzen (z.B.
+-- "logisticalSorter_1"). Ein optionaler 1x3-Ampel-Statusmonitor (gruen=
+-- offen, rot=blockiert, siehe xreactor/optional/ampel.lua) wird ebenfalls
+-- automatisch erkannt, falls einer angeschlossen ist -- kein Config-Feld
+-- dafuer noetig.
 return {
   role            = "VALVE-NODE",
   node_id         = "VALVE-1",
   debug_logging   = false,
   reset_log_on_start = true,
   wireless_modem  = nil,   -- nil = automatisch erkennen
-  sorter_name     = "logisticalSorter_1",
+  sorter_name     = nil,   -- nil = automatisch erkennen
   -- Fail-Safe-Grundzustand beim Boot/bei Verbindungsverlust: Ventil
   -- geschlossen (high=true -> Sorter-Auto-Modus AUS, siehe main.lua
   -- write_actuator()).
