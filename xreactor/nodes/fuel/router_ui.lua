@@ -214,6 +214,12 @@ function M.new(opts)
       pending_side = nil,     -- Seite antippen -> Integrator waehlen -> anfuegen
       step_btns = {}, side_btns = {}, integrator_btns = {},
       done_btn = nil, cancel_btn = nil, clear_btn = nil,
+      -- Feature (2026-07-20): "Weg 3"-Teach-in (siehe handle_teach_pulse()
+      -- unten) -- per Button in _render_path umschaltbar, wird beim
+      -- Verlassen des Pfad-Editors (FERTIG/ABBRECHEN) automatisch
+      -- zurueckgesetzt, damit ein spaeter eintreffender Puls nicht
+      -- versehentlich eine andere/neue Bearbeitung beeinflusst.
+      teaching = false, teach_btn = nil,
       -- Feature (2026-07-11): UI-P0.8 (siehe docs/CODING_AI_FUEL_UI_
       -- PRIORITY_FIX_2026-07-12.md). Expliziter Save-Zustand statt nur
       -- eines einzelnen "dirty"-Flags -- die Seite kann dadurch klar
@@ -480,6 +486,15 @@ function M:_render_path(target, ui, w, h)
 
   mux.banner(target, 2, 3, w - 3, "VENTILKETTE: " .. tostring(editing.label or editing.reactor), "LIMITED", "reactor")
 
+  -- Feature (2026-07-20): "Weg 3"-Teach-in-Umschalter (siehe
+  -- handle_teach_pulse() unten) -- solange aktiv, haengt jeder per Hebel
+  -- am physischen Ventil ausgeloeste ROUTE_TEACH_PULSE die meldende
+  -- VALVE-Node automatisch als naechsten Schritt an diese Kette an.
+  local teach_lbl = u.teaching and "[ EINLERNEN: AN ]" or "[ EINLERNEN: AUS ]"
+  local teach_hint = u.teaching and "Hebel am Ventil umlegen, um es anzuhaengen" or "Antippen zum Aktivieren"
+  mux.data_row(target, 2, 4, w - 3, { label = teach_lbl, value = teach_hint, status = u.teaching and "OK" or "muted", icon = "network" })
+  u.teach_btn = { x1 = 2, x2 = 2 + #teach_lbl + 1, y = 4 }
+
   mux.card(target, 2, 5, w - 3, math.max(4, math.min(8, #editing.path + 2)), { title = "AKTUELLE KETTE -- ANTIPPEN ZUM ENTFERNEN", status = #editing.path > 0 and "OK" or "LIMITED", icon = "network" })
   local step_btns = {}
   local sy = 7
@@ -591,9 +606,14 @@ function M:handle_touch(x, y)
   end
 
   if u.edit_view == "path" then
+    if hit(u.teach_btn) then
+      u.teaching = not u.teaching
+      return true
+    end
     if hit(u.cancel_btn) then
       u.editing = nil
       u.pending_side = nil
+      u.teaching = false
       u.edit_view = "list"
       return true
     end
@@ -609,6 +629,7 @@ function M:handle_touch(x, y)
       end
       u.editing = nil
       u.pending_side = nil
+      u.teaching = false
       u.edit_view = "list"
       return true
     end
@@ -749,25 +770,29 @@ function M:get_routes()
   return self._ui.routes
 end
 
--- Feature (2026-07-20): "Weg 3"-Idee (Identify/Locate-Hilfe, siehe
--- redstone_router.lua's set_identify()) -- liefert die eindeutigen
--- VALVE-Node-IDs, die GERADE JETZT physisch "aufleuchten" sollen: nur
--- waehrend tatsaechlich eine Ventilkette bearbeitet wird (u.edit_view ==
--- "path", u.editing gesetzt), sonst leer. nodes/fuel/main.lua ruft dies
--- periodisch ab und sendet SET_IDENTIFY an jede zurueckgegebene ID (und
--- explizit "aus" an jede ID, die seit dem letzten Abruf aus der Liste
--- gefallen ist -- Reaktor gewechselt, Schritt entfernt, Editor verlassen).
-function M:get_identify_targets()
+-- Feature (2026-07-20): "Weg 3" -- Route-Teach-in per manuellem Redstone-
+-- Input an der jeweiligen VALVE-Node (siehe nodes/valve/main.lua's
+-- check_teach_input()/ROUTE_TEACH_PULSE): der Spieler laeuft die
+-- physische Rohrleitung ab und legt an jedem Ventil kurz einen Hebel um --
+-- FUEL/REPROCESSOR (siehe nodes/fuel/main.lua's raw modem_message-
+-- Listener fuer ROUTE_TEACH_PULSE) haengt die gemeldete Node in GENAU
+-- DIESER Reihenfolge an die gerade bearbeitete Kette an, solange der
+-- Teach-Modus (u.teaching, per Button in _render_path umschaltbar) aktiv
+-- ist. "side" ist fuer eine per Funk adressierte VALVE-Node ohnehin nur
+-- ein von normalize_tree()/validate_tree() verlangter Schluessel-
+-- Bestandteil, physisch bedeutungslos (VALVE ignoriert message.side
+-- komplett, siehe redstone_router.lua's _set_valve()) -- ein fester
+-- Platzhalter genuegt.
+local TEACH_PLACEHOLDER_SIDE = "back"
+
+function M:handle_teach_pulse(node_id)
   local u = self._ui
-  if u.mode ~= "edit" or u.edit_view ~= "path" or not u.editing then return {} end
-  local seen, out = {}, {}
-  for _, step in ipairs(u.editing.path or {}) do
-    if step.integrator and not seen[step.integrator] then
-      seen[step.integrator] = true
-      out[#out + 1] = step.integrator
-    end
-  end
-  return out
+  if not node_id then return false end
+  if u.mode ~= "edit" or u.edit_view ~= "path" or not u.editing or not u.teaching then return false end
+  local last = u.editing.path[#u.editing.path]
+  if last and last.integrator == node_id then return false end  -- Doppel-Puls/Prellen ignorieren
+  u.editing.path[#u.editing.path + 1] = { side = TEACH_PLACEHOLDER_SIDE, integrator = node_id }
+  return true
 end
 
 return M

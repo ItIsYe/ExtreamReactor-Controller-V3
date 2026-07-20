@@ -37,11 +37,12 @@
 -- immer Teil der Installation, kein Installer-Prompt. Ist physisch kein
 -- Monitor angeschlossen, passiert schlicht nichts (voll pcall-isoliert).
 --
--- Feature (2026-07-20): SET_IDENTIFY -- rein kosmetische Identify/Locate-
--- Hilfe fuer die Router-UI-Pfadbearbeitung auf FUEL-Seite (siehe
--- apply_identify() weiter unten): pulst ALLE eingebauten Redstone-Seiten
--- gleichzeitig, komplett unabhaengig von der Sorter-Steuerung. KEIN
--- automatisches Teach-in.
+-- Feature (2026-07-20): ROUTE_TEACH_PULSE -- Route-Teach-in per manuellem
+-- Redstone-INPUT (nicht Output!): der Spieler legt vor Ort einen Hebel/
+-- Knopf an dieser Node um, waehrend er im FUEL/REPROCESSOR-Router-Editor
+-- einen Reaktor-Pfad einlernt (siehe check_teach_input() weiter unten) --
+-- die Node meldet die steigende Flanke per Funk, die UI haengt den
+-- gemeldeten Knoten an die gerade bearbeitete Ventilkette an.
 --
 -- Fail-Safe: bootet mit dem Ventil im konfigurierten default_blocked-
 -- Zustand (Standard: blockiert) und faellt bei Verbindungsverlust zu
@@ -306,35 +307,6 @@ local function apply_valve(high)
   return true
 end
 
--- Feature (2026-07-20): "Weg 3"-Idee des Melders (Identify/Locate-Hilfe
--- fuer die Router-UI-Pfadbearbeitung, siehe nodes/fuel/router_ui.lua
--- get_identify_targets() und nodes/fuel/redstone_router.lua set_identify())
--- -- KEIN automatisches Teach-in (wurde ausdruecklich abgelehnt), rein
--- kosmetisch und voellig unabhaengig von der eigentlichen Sorter-Steuerung
--- (apply_valve()/current_high): solange FUEL diese Node als Teil der
--- gerade in der UI bearbeiteten Ventilkette periodisch per SET_IDENTIFY
--- meldet, ziehen ALLE eingebauten Redstone-Seiten dieses Computers
--- gleichzeitig high (Seite ist bewusst egal -- z.B. eine Redstone-Lampe an
--- irgendeiner Blockseite genuegt, um das physische Ventil im Netz
--- wiederzufinden). Bleibt der periodische Refresh aus (UI verlassen, FUEL
--- abgestuerzt, Funk verloren), schaltet der Watchdog weiter unten
--- ("identify_failsafe") nach IDENTIFY_STALE_S Sekunden automatisch wieder
--- ab, damit keine Lampe dauerhaft brennen bleibt.
-local identify_active = false
-local last_identify_ts = nil
-
-local function apply_identify(on)
-  if on then last_identify_ts = os.epoch("utc") end
-  if identify_active == on then return end
-  local ok, sides = pcall(redstone.getSides)
-  if ok and type(sides) == "table" then
-    for _, side in ipairs(sides) do
-      pcall(redstone.setOutput, side, on)
-    end
-  end
-  identify_active = on
-end
-
 -- Fail-Safe-Grundzustand direkt beim Boot setzen, bevor irgendeine
 -- Verbindung zu FUEL/Master ueberhaupt steht.
 apply_valve(current_high)
@@ -357,6 +329,39 @@ if valve_modem then
   end
 else
   utils.log(CONFIG.LOG_PREFIX, "Kein Wireless Modem gefunden — Ventil-Kanal inaktiv", "ERROR")
+end
+
+-- Feature (2026-07-20): "Weg 3" -- Route-Teach-in per manuellem Redstone-
+-- INPUT (siehe Header-Kommentar oben): der Spieler legt vor Ort einen
+-- Hebel/Knopf an einer beliebigen der 6 eingebauten Redstone-Seiten dieser
+-- Node um -- Seite ist bewusst egal, nur "irgendein Input gerade an"
+-- zaehlt. Erkennt eine STEIGENDE Flanke (vorher ueberall aus, jetzt
+-- irgendwo an) und sendet dann genau EINMAL einen ROUTE_TEACH_PULSE-
+-- Broadcast (kein "dst" -- FUEL/REPROCESSOR werten "src" aus, siehe
+-- nodes/fuel/router_ui.lua's Teach-Modus; ein lauschender Node, der sich
+-- gerade nicht im Teach-Modus befindet, ignoriert die Nachricht einfach).
+-- Re-arm erst, sobald der Input wieder ueberall auf "aus" faellt --
+-- dieselbe simple "an, dann wieder aus"-Hebel-Geste re-armt sich dadurch
+-- von selbst, kein zusaetzlicher Debounce-Timer noetig. Rein informativ,
+-- KEINE Trust-Pruefung (der Spieler steht physisch am Block) und KEINE
+-- Auswirkung auf apply_valve()/current_high -- komplett unabhaengig von
+-- der eigentlichen Sorter-Steuerung.
+local teach_input_state = false
+local function check_teach_input()
+  local any_high = false
+  local ok, sides = pcall(redstone.getSides)
+  if ok and type(sides) == "table" then
+    for _, side in ipairs(sides) do
+      local iok, input = pcall(redstone.getInput, side)
+      if iok and input then any_high = true; break end
+    end
+  end
+  if any_high and not teach_input_state and valve_modem then
+    pcall(valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+      type = "ROUTE_TEACH_PULSE", src = node_id,
+    })
+  end
+  teach_input_state = any_high
 end
 
 -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
@@ -415,26 +420,8 @@ local function handle_valve_channel_event(event)
   -- unten) griff dadurch dauerhaft, nicht nur bei echtem Verbindungsverlust.
   local reply_side, channel, message = event[2], event[3], event[5]
   if channel ~= constants.channels.VALVE then return end
-  if type(message) ~= "table" then return end
+  if type(message) ~= "table" or message.type ~= "SET_VALVE" then return end
   if message.dst ~= node_id then return end  -- nicht fuer diese Node bestimmt
-
-  -- Feature (2026-07-20): SET_IDENTIFY (siehe apply_identify() oben) --
-  -- bewusst NICHT derselbe Trust-Gate-Codepfad wie SET_VALVE (kein
-  -- automatisches Pairing durch einen Identify-Befehl): ist bereits ein
-  -- trusted_source gepaart, muss ein Identify-Befehl trotzdem von
-  -- DERSELBEN Quelle stammen (kein fremder Sender kann die Lampe eines
-  -- bereits gepaarten Ventils fernsteuern); ist noch KEIN trusted_source
-  -- gepaart (frische Installation, noch nie ein SET_VALVE empfangen), wird
-  -- ein Identify-Befehl trotzdem angenommen -- rein kosmetisch,
-  -- ungefaehrlich, und gerade beim ALLERERSTEN Aufbau einer Ventilkette
-  -- (vor jedem echten SET_VALVE) am nuetzlichsten.
-  if message.type == "SET_IDENTIFY" then
-    if config.trusted_source and message.src ~= config.trusted_source then return end
-    apply_identify(message.on == true)
-    return
-  end
-
-  if message.type ~= "SET_VALVE" then return end
   -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md). "fremder Sender auf Kanal 6504 kann
   -- passende Kommandos senden".
@@ -523,22 +510,10 @@ services:add({ name = "valve_failsafe", tick = function()
   end
 end })
 
--- Feature (2026-07-20): Watchdog fuer den Identify/Locate-Signal (siehe
--- apply_identify() oben) -- deutlich kuerzeres Timeout als valve_failsafe
--- oben, da dieses Signal rein durch aktive UI-Bearbeitung am Leben
--- gehalten wird (FUEL-seitiger Refresh alle ~1.5s, siehe redstone_router.
--- lua set_identify()/nodes/fuel/main.lua) -- bleibt der Refresh aus (UI
--- verlassen, FUEL abgestuerzt, Funk verloren), soll die Lampe zuegig
--- wieder ausgehen statt dauerhaft zu brennen.
-local IDENTIFY_STALE_S = 6
-services:add({ name = "identify_failsafe", tick = function()
-  if identify_active and last_identify_ts then
-    local age_s = (os.epoch("utc") - last_identify_ts) / 1000
-    if age_s > IDENTIFY_STALE_S then
-      apply_identify(false)
-    end
-  end
-end })
+-- Feature (2026-07-20): periodisches Polling fuer den Route-Teach-in-Input
+-- (siehe check_teach_input() oben) -- jeder Tick prueft, ob gerade ein
+-- Hebel/Knopf an dieser Node umgelegt wurde.
+services:add({ name = "teach_input_poll", tick = function() check_teach_input() end })
 
 -- Feature (2026-07-20): periodischer Statusmonitor-Refresh -- render_
 -- status_monitor() wird bereits bei jeder tatsaechlichen Zustands-
