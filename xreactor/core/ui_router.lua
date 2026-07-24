@@ -192,17 +192,44 @@ function router:prev()
   self:set(prev_index)
 end
 
+-- Fix (2026-07-19): CRITICAL. Weder Tasten- noch Touch-Navigation hatten
+-- bisher irgendeine Entprellung -- CC:Tweaked feuert bei gehaltener Taste
+-- (Tastatur-Wiederholung) mehrere "key"-Events in schneller Folge, und ein
+-- etwas laenger gehaltener/leicht zittriger Touch auf einem Advanced
+-- Monitor kann ebenfalls mehr als ein "monitor_touch"-Event fuer denselben
+-- gefuehlt EINEN Tastendruck/Tipp erzeugen. Jeder dieser Events rief
+-- self:next()/self:prev() unabhaengig auf -- ein einziger, aus Nutzersicht
+-- einmaliger "WEITER"-Druck konnte dadurch den Seitenindex um 2 oder mehr
+-- statt um 1 erhoehen (gemeldetes Symptom: "Seite 2 wird uebersprungen",
+-- der Wechsel von Seite 1 landet direkt auf Seite 3). Jetzt: eine
+-- Seitennavigation (Taste ODER Footer-Touch, NICHT die separate Listen-
+-- Navigation) wird innerhalb von NAV_DEBOUNCE_MS nach der letzten
+-- tatsaechlich ausgefuehrten Navigation ignoriert -- der Touch/Tastendruck
+-- gilt weiterhin als konsumiert (return true), nur die zweite (und jede
+-- weitere) schnelle Wiederholung bewirkt keinen zusaetzlichen Seitenwechsel
+-- mehr.
+local NAV_DEBOUNCE_MS = 350
+
+local function nav_debounced(self)
+  local now = os.epoch and os.epoch("utc") or 0
+  if self.last_nav_ts and (now - self.last_nav_ts) < NAV_DEBOUNCE_MS then
+    return true
+  end
+  self.last_nav_ts = now
+  return false
+end
+
 function router:handle_input(event)
   if not event then return end
   local kind = event[1]
   if kind == "key" then
     local key = event[2]
     if self.key_prev and self.key_prev[key] then
-      self:prev()
+      if not nav_debounced(self) then self:prev() end
       return true
     end
     if self.key_next and self.key_next[key] then
-      self:next()
+      if not nav_debounced(self) then self:next() end
       return true
     end
     local list = self.list_controls
@@ -220,12 +247,12 @@ function router:handle_input(event)
     local x, y = event[3], event[4]
     local prev = self.footer.prev
     if prev and y == prev.y and x >= prev.x1 and x <= prev.x2 then
-      self:prev()
+      if not nav_debounced(self) then self:prev() end
       return true
     end
     local next_btn = self.footer.next
     if next_btn and y == next_btn.y and x >= next_btn.x1 and x <= next_btn.x2 then
-      self:next()
+      if not nav_debounced(self) then self:next() end
       return true
     end
     local list = self.list_controls

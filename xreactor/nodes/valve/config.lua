@@ -1,6 +1,6 @@
 -- nodes/valve/config.lua
 --
--- Feature (2026-07-09): eigenstaendiger Redstone-Valve-Controller.
+-- Feature (2026-07-09): eigenstaendiger Valve-Controller.
 -- Physischer Hintergrund: der "Integrator" an diesem Pipe-Netz ist selbst
 -- ein CC:Tweaked-Computer (nicht ein direkt am FUEL-Computer gewrapptes
 -- Mekanism-Peripheral) -- er sitzt direkt am Ventil/an der Pipe, hat KEIN
@@ -10,26 +10,31 @@
 -- Node ueber seine node_id (config.logistics.redstone_tree Eintraege mit
 -- integrator = "<diese node_id>").
 --
--- side: welche Redstone-Seite DIESES Computers am Ventil haengt.
--- Erlaubt: top / bottom / left / right / front / back
+-- Fix (2026-07-20): der urspruengliche Redstone-Aktor (actuator_type =
+-- "redstone", direktes redstone.setOutput() ueber "side") ist entfernt --
+-- jede VALVE-Node steuert ausschliesslich einen Mekanism Logistical
+-- Sorter per CC:Tweaked (setAutoMode()). Kein "side"/"actuator_type"-Feld
+-- mehr. sorter_name (der Peripherie-Name des Logistical Sorters) wird bei
+-- nil automatisch per Methodensignatur erkannt, genau wie wireless_modem
+-- -- nur bei mehreren Sortern am selben Computer explizit setzen (z.B.
+-- "logisticalSorter_1").
+--
+-- Fix (2026-07-20): fest eingebauter (NICHT optionaler, NICHT ueber das
+-- Installer-Feature "ampel" gesteuerter) 1x1-Statusmonitor: gruen=offen,
+-- rot=blockiert. Wird automatisch erkannt, falls einer angeschlossen ist --
+-- kein Config-Feld dafuer noetig, kein Formcheck (anders als das gemeinsame
+-- xreactor/optional/ampel.lua-Modul mit seiner 1x3-Turmform, das andere
+-- Rollen weiterhin optional nutzen).
 return {
   role            = "VALVE-NODE",
   node_id         = "VALVE-1",
   debug_logging   = false,
   reset_log_on_start = true,
   wireless_modem  = nil,   -- nil = automatisch erkennen
-  side            = "front",
-  -- Feature (2026-07-14): Aktor-Typ -- "redstone" (Standard, unveraendertes
-  -- Verhalten) oder "sorter" (Mekanism Logistical Sorter, gesteuert per
-  -- CC:Tweaked-Peripherie statt Redstone -- fuer Item-Brennstofftransport,
-  -- bei dem kein klassisches Redstone-Ventil existiert). Bei "sorter" wird
-  -- "side" oben ignoriert, stattdessen "sorter_name" (der Peripherie-Name
-  -- des Logistical Sorters, z.B. "logisticalSorter_1") verwendet.
-  actuator_type   = "redstone",
-  sorter_name     = "logisticalSorter_1",
+  sorter_name     = nil,   -- nil = automatisch erkennen
   -- Fail-Safe-Grundzustand beim Boot/bei Verbindungsverlust: Ventil
-  -- geschlossen (high=true blockiert bei Mekanism "High Redstone =
-  -- Interrupt"-Konfiguration -- siehe redstone_router.lua Kommentar).
+  -- geschlossen (high=true -> Sorter-Auto-Modus AUS, siehe main.lua
+  -- write_actuator()).
   default_blocked = true,
   heartbeat_interval = 2,
   status_interval    = 5,

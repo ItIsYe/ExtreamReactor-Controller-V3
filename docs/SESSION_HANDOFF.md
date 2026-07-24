@@ -28,10 +28,9 @@ Release: `beta-v454` / `manifest-v454`
 - WATER-Snapshot und Cluster-Failsafe,
 - REPROCESSOR-Bufferbudget und Payloadcache,
 - VALVE ACK/Retry/Dedupe/Auth,
-- VALVE unterstützt jetzt wahlweise Redstone ODER einen Mekanism Logistical
-  Sorter als Aktor (`config.actuator_type = "redstone" | "sorter"`) — für
-  Item-Brennstofftransport ohne klassisches Redstone-Ventil, umgeht dabei
-  bewusst Mekanisms Auto-Eject-Verhalten, das Redstone sonst überstimmt,
+- VALVE steuert ausschließlich einen Mekanism Logistical Sorter als Aktor
+  (`sorter_name`, siehe nodes/valve/config.lua) — der ursprüngliche
+  Redstone-Aktor wurde am 2026-07-20 entfernt, da nicht mehr im Einsatz,
 - FUEL-UI-Eingabe- und Renderpfad,
 - MASTER-Persistenz, Terminal-Maus und stale Fuel-Relay,
 - LOG-Batching, O(1)-Dedupe und einzelner ACK-Sendeweg,

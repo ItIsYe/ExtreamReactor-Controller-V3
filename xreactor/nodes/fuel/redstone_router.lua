@@ -1,5 +1,35 @@
 -- nodes/fuel/redstone_router.lua
--- Tree-topology redstone valve routing for Mekanism pipe networks.
+-- Per-reactor valve-path routing for Mekanism pipe networks.
+--
+-- Fix (2026-07-19): CRITICAL usability finding. Bis hierher war
+-- config.logistics.redstone_tree ein VERSCHACHTELTER Baum (side/children),
+-- damit mehrere Ventile in Serie (ein gemeinsames Trunk-Ventil vor mehreren
+-- Reaktor-Zweigen) und ein per Reaktor eindeutiger Pfad abbildbar waren.
+-- Das ist technisch maechtig, aber nur von Hand als Lua-Tabelle editierbar
+-- -- die Touch-UI (router_ui.lua) konnte pro Reaktor immer nur GENAU EIN
+-- Ventil zuweisen und schaltete sich bei einem bereits verschachtelten Baum
+-- sogar komplett auf "nur lesen", um ihn nicht versehentlich platt zu
+-- machen.
+--
+-- Jetzt ist die Config eine FLACHE Liste von Routen, eine pro Reaktor, mit
+-- einer geordneten Ventilliste ("path") direkt am Reaktor:
+--   { reactor = "<id>", label = "<Anzeigename>",
+--     path = { { side = "back" }, { side = "left", integrator = "VALVE-1" } } }
+-- Ein gemeinsames Ventil auf dem Weg zu mehreren Reaktoren wird einfach
+-- ALS DERSELBE {side=,integrator=}-Kombination in mehreren Routen-Pfaden
+-- wiederholt -- keine Tabellen-Verschachtelung mehr noetig, damit ist die
+-- Struktur sowohl von Hand als auch (siehe router_ui.lua) durch einen
+-- mehrstufigen Touch-Editor (Reaktor waehlen -> Ventil fuer Ventil
+-- antippen) direkt konfigurierbar.
+--
+-- normalize_tree() unten akzeptiert weiterhin (gemischt, auch in derselben
+-- Liste) alle drei historischen Formen ohne manuelle Migration:
+--   1. NEUES Format (path=...), wie oben.
+--   2. Alte FLACHE Form (die bisher einzige, die die Touch-UI erzeugen
+--      konnte): { side=, integrator=, reactor=, label= } -- genau ein
+--      Ventil pro Reaktor.
+--   3. Alte VERSCHACHTELTE Baum-Form (children=...) -- wird rekursiv zu
+--      path=<gesamter Ast von der Wurzel bis zum Reaktor-Blatt> aufgeloest.
 
 local constants = require("shared.constants")
 
@@ -16,62 +46,74 @@ local function safe_call(obj, method, ...)
   return r, nil
 end
 
-local function collect_all_valves(tree, out)
-  out = out or {}
-  for _, node in ipairs(tree or {}) do
-    if node.side then out[#out + 1] = { side = node.side, integrator = node.integrator } end
-    collect_all_valves(node.children or {}, out)
+-- Liefert eine flache, deduplizierte Liste JEDES Ventils, das in
+-- irgendeiner Route vorkommt (side+integrator identisch => dasselbe
+-- physische Ventil, unabhaengig davon, in wie vielen Routen es auftaucht).
+local function collect_all_valves(routes)
+  local seen, out = {}, {}
+  for _, route in ipairs(routes or {}) do
+    for _, step in ipairs(route.path or {}) do
+      local key = tostring(step.side) .. "|" .. tostring(step.integrator or "")
+      if not seen[key] then
+        seen[key] = true
+        out[#out + 1] = { side = step.side, integrator = step.integrator }
+      end
+    end
   end
   return out
 end
 
-local function find_path(tree, target_id, path)
-  path = path or {}
-  for _, node in ipairs(tree or {}) do
-    local valve = node.side and { side = node.side, integrator = node.integrator } or nil
-    local next_path = valve and (function()
-      local p = {}
-      for _, v in ipairs(path) do p[#p + 1] = v end
-      p[#p + 1] = valve
-      return p
-    end)() or path
-    if node.reactor == target_id or node.label == target_id then return next_path end
-    local found = find_path(node.children or {}, target_id, next_path)
-    if found then return found end
+local function find_route(routes, target_id)
+  for _, route in ipairs(routes or {}) do
+    if route.reactor == target_id or route.label == target_id then return route end
   end
   return nil
 end
 
--- Feature (2026-07-08): strukturelle Baum-Validierung vor Aktivierung.
--- Rein statisch (keine Peripherie-Pruefung -- Integratoren koennen online
--- kommen/gehen, das gehoert nicht in eine Struktur-Validierung, sondern
--- bleibt Aufgabe von M:refresh()'s Laufzeit-Warnungen).
--- Rueckgabe: { ok=bool, errors={ {code=..., message=...}, ... } }
+local function find_path(routes, target_id)
+  local route = find_route(routes, target_id)
+  if not route then return nil end
+  local copy = {}
+  for i, step in ipairs(route.path or {}) do copy[i] = { side = step.side, integrator = step.integrator } end
+  return copy
+end
+
 local function path_key(path)
   local parts = {}
-  for _, v in ipairs(path) do
+  for _, v in ipairs(path or {}) do
     parts[#parts + 1] = tostring(v.side) .. ":" .. tostring(v.integrator or "")
   end
   return table.concat(parts, ">")
 end
 
-function M.validate_tree(tree)
-  local errors = {}
-  local function err(code, message)
-    errors[#errors + 1] = { code = code, message = message }
-  end
+-- Normalisiert die rohe Config (siehe Formen 1-3 oben) in eine flache
+-- Routenliste. Sammelt strukturelle Fehler dabei im selben Durchlauf ein
+-- (Rueckgabe: routes, errors) -- normalize_tree() (oeffentlich, nur
+-- Routen) und M.validate_tree() (oeffentlich, Validierungsergebnis) sind
+-- beides duenne Wrapper darum, damit M:refresh() nur EINMAL pro Zyklus
+-- laufen muss, statt Normalisierung und Validierung getrennt zu wiederholen.
+local function normalize_with_errors(raw)
+  local routes, errors = {}, {}
+  local function err(code, message) errors[#errors + 1] = { code = code, message = message } end
 
-  if type(tree) ~= "table" then
+  if type(raw) ~= "table" then
     err("tree_not_table", "redstone_tree ist keine Tabelle (nil oder falscher Typ)")
-    return { ok = false, errors = errors }
+    return routes, errors
   end
 
-  local seen_reactors = {}
-  local seen_valve_positions = {}  -- side:integrator -> Pfad-Praefix, an dem es zuerst auftrat
-  local reactor_paths = {}         -- reactor_id -> path_key
-  local visiting = setmetatable({}, { __mode = "k" })  -- Zyklen-Schutz (Tabellen-Identitaet)
+  local function emit(reactor, label, path, source_desc)
+    if not reactor and not label then
+      err("missing_target", "Route ohne 'reactor' und ohne 'label' (" .. tostring(source_desc) .. ") -- nicht adressierbar")
+      return
+    end
+    local copy = {}
+    for _, step in ipairs(path or {}) do copy[#copy + 1] = { side = step.side, integrator = step.integrator } end
+    routes[#routes + 1] = { reactor = reactor, label = label or reactor, path = copy }
+  end
 
-  local function walk(nodes, path, depth)
+  local visiting = setmetatable({}, { __mode = "k" })  -- Zyklen-Schutz fuer verschachtelte Legacy-Baeume
+
+  local function walk(nodes, ancestor_path, depth)
     if visiting[nodes] then
       err("cycle_detected", "Zyklische Struktur erkannt (Tabelle verweist auf sich selbst)")
       return
@@ -85,68 +127,61 @@ function M.validate_tree(tree)
 
     for i, node in ipairs(nodes or {}) do
       if type(node) ~= "table" then
-        err("invalid_node", "Knoten #" .. i .. " auf Tiefe " .. depth .. " ist keine Tabelle")
+        err("invalid_node", "Eintrag #" .. i .. " auf Tiefe " .. depth .. " ist keine Tabelle")
         goto next_node
       end
 
-      -- fehlende side
-      if not node.side and not node.reactor then
-        err("missing_side", "Knoten ohne 'side' und ohne 'reactor' (Tiefe " .. depth .. ", Index " .. i .. ")")
+      -- Form 1: neues Format, eigenstaendige Route mit 'path'.
+      if node.path ~= nil then
+        if type(node.path) ~= "table" then
+          err("invalid_path", "Route '" .. tostring(node.reactor or node.label or ("#" .. i)) .. "' hat ein 'path'-Feld, das keine Tabelle ist")
+          goto next_node
+        end
+        for step_i, step in ipairs(node.path) do
+          if type(step) ~= "table" then
+            err("invalid_path_step", "Route '" .. tostring(node.reactor or node.label or ("#" .. i)) .. "', Schritt #" .. step_i .. " ist keine Tabelle")
+          elseif step.side and not BUILTIN_SIDES[step.side] then
+            err("invalid_side", "Route '" .. tostring(node.reactor or node.label or ("#" .. i)) .. "', Schritt #" .. step_i
+              .. ": ungueltige Redstone-Seite '" .. tostring(step.side) .. "' (erlaubt: top/bottom/left/right/front/back)")
+          elseif not step.side then
+            err("invalid_path_step", "Route '" .. tostring(node.reactor or node.label or ("#" .. i)) .. "', Schritt #" .. step_i .. " hat keine 'side'")
+          end
+        end
+        emit(node.reactor, node.label, node.path, "Index " .. i)
+        goto next_node
       end
-      -- ungueltige side
+
+      -- Formen 2+3: Legacy-Knoten mit eigenem 'side' und/oder 'children'.
+      if not node.side and not node.reactor and (type(node.children) ~= "table" or #node.children == 0) then
+        err("missing_side", "Knoten ohne 'side', 'reactor', 'children' oder 'path' (Tiefe " .. depth .. ", Index " .. i .. ")")
+      end
       if node.side and not BUILTIN_SIDES[node.side] then
         err("invalid_side", "Ungueltige Redstone-Seite '" .. tostring(node.side)
           .. "' (erlaubt: top/bottom/left/right/front/back)")
       end
 
-      local valve = node.side and { side = node.side, integrator = node.integrator } or nil
-      local next_path = path
-      if valve then
+      local step = node.side and { side = node.side, integrator = node.integrator } or nil
+      local next_path = ancestor_path
+      if step then
         next_path = {}
-        for _, v in ipairs(path) do next_path[#next_path + 1] = v end
-        next_path[#next_path + 1] = valve
-
-        -- gleiches Ventil an widerspruechlichen Stellen: dieselbe
-        -- side+integrator-Kombination taucht an einer STRUKTURELL
-        -- ANDEREN Position im Baum auf (anderer Pfad-Praefix davor).
-        local pos_key = tostring(node.side) .. ":" .. tostring(node.integrator or "")
-        local prefix_key = path_key(path)
-        if seen_valve_positions[pos_key] and seen_valve_positions[pos_key] ~= prefix_key then
-          err("conflicting_valve_reuse", "Ventil '" .. pos_key
-            .. "' erscheint an mehreren widerspruechlichen Baumpositionen")
-        end
-        seen_valve_positions[pos_key] = prefix_key
+        for _, v in ipairs(ancestor_path) do next_path[#next_path + 1] = v end
+        next_path[#next_path + 1] = step
       end
 
-      -- Reaktor-Endpunkt
       if node.reactor then
-        if seen_reactors[node.reactor] then
-          err("duplicate_reactor", "Reaktor-Ziel '" .. tostring(node.reactor) .. "' mehrfach im Baum")
-        end
-        seen_reactors[node.reactor] = true
-
-        local pk = path_key(next_path)
-        for other_id, other_pk in pairs(reactor_paths) do
-          if other_pk == pk then
-            err("identical_paths", "Reaktoren '" .. tostring(node.reactor) .. "' und '"
-              .. tostring(other_id) .. "' haben identische Ventil-Pfade — nicht unterscheidbar")
-          end
-        end
-        reactor_paths[node.reactor] = pk
-
         if type(node.children) == "table" and #node.children > 0 then
           err("reactor_with_children", "Reaktor '" .. tostring(node.reactor)
             .. "' hat zusaetzlich 'children' — ein Reaktor-Endpunkt darf keine weiteren Aeste haben")
         end
-      end
-
-      -- toter Ast: weder reactor noch children
-      if not node.reactor and (type(node.children) ~= "table" or #node.children == 0) then
+        emit(node.reactor, node.label, next_path, "Index " .. i)
+      elseif not node.side and not (type(node.children) == "table" and #node.children > 0) then
+        -- bereits oben als missing_side gemeldet, hier nichts weiter tun
+      elseif not (type(node.children) == "table" and #node.children > 0) then
         err("dead_end", "Knoten '" .. tostring(node.side or node.label or ("#" .. i))
           .. "' fuehrt nirgendwohin (kein 'reactor', keine 'children')")
       end
 
-      if type(node.children) == "table" then
+      if type(node.children) == "table" and #node.children > 0 then
         walk(node.children, next_path, depth + 1)
       end
 
@@ -155,7 +190,45 @@ function M.validate_tree(tree)
     visiting[nodes] = nil
   end
 
-  walk(tree, {}, 1)
+  walk(raw, {}, 1)
+
+  -- Reaktor-Duplikate und identische (nicht unterscheidbare) Pfade ueber
+  -- die fertig aufgeloeste Routenliste, nicht ueber die rohe Struktur --
+  -- funktioniert dadurch identisch fuer alle drei Eingabeformen.
+  local seen_reactors, seen_paths = {}, {}
+  for _, route in ipairs(routes) do
+    if route.reactor then
+      if seen_reactors[route.reactor] then
+        err("duplicate_reactor", "Reaktor-Ziel '" .. tostring(route.reactor) .. "' mehrfach konfiguriert")
+      end
+      seen_reactors[route.reactor] = true
+    end
+    local pk = path_key(route.path)
+    if seen_paths[pk] then
+      err("identical_paths", "Routen '" .. tostring(route.reactor or route.label) .. "' und '"
+        .. tostring(seen_paths[pk]) .. "' haben identische Ventil-Pfade — nicht unterscheidbar")
+    end
+    seen_paths[pk] = route.reactor or route.label
+  end
+
+  return routes, errors
+end
+
+-- Oeffentlich: nur die normalisierten Routen, ohne Validierungsergebnis --
+-- fuer router_ui.lua (Editor-Ansicht direkt aus der echten Config bauen,
+-- garantiert identisch zu dem, was M:refresh() tatsaechlich verwendet).
+function M.normalize_tree(raw)
+  local routes = normalize_with_errors(raw)
+  return routes
+end
+
+-- Feature (2026-07-08): strukturelle Validierung vor Aktivierung. Rein
+-- statisch (keine Peripherie-Pruefung -- Integratoren koennen online
+-- kommen/gehen, das gehoert nicht in eine Struktur-Validierung, sondern
+-- bleibt Aufgabe von M:refresh()'s Laufzeit-Warnungen).
+-- Rueckgabe: { ok=bool, errors={ {code=..., message=...}, ... } }
+function M.validate_tree(raw)
+  local _, errors = normalize_with_errors(raw)
   return { ok = #errors == 0, errors = errors }
 end
 
@@ -181,6 +254,7 @@ function M.new(opts)
     _state = {
       all_valves = {},
       integrators = {},
+      routes = {},
       active_target = nil,
       active_path = nil,
       last_target = nil,
@@ -236,12 +310,19 @@ function M:refresh()
   -- erst aufrief. get_routing_state() (siehe unten) ist jetzt die einzige
   -- Autoritaet fuer diese Entscheidung -- basiert auf tree_configured/
   -- tree_valid/all_valves statt auf einem strukturellen Baum-Walk.
-  local validation = M.validate_tree(tree)
-  self._state.tree_valid = validation.ok
-  self._state.tree_errors = validation.errors
+  -- Fix (2026-07-19): normalize_with_errors() laeuft hier nur noch EINMAL
+  -- pro Zyklus (statt einer separaten M.validate_tree()-Normalisierung und
+  -- eines zweiten collect_all_valves()-Baumdurchlaufs) und liefert direkt
+  -- die fertigen Routen -- self._state.routes ist ab hier die alleinige,
+  -- gecachte Grundlage fuer begin_transaction()/get_tree()/get_path_to()/
+  -- get_routing_table()/get_valve_status(), bis zum naechsten refresh().
+  local routes, errors = normalize_with_errors(tree)
+  self._state.routes = routes
+  self._state.tree_valid = #errors == 0
+  self._state.tree_errors = errors
 
-  if not validation.ok then
-    for _, e in ipairs(validation.errors) do
+  if #errors > 0 then
+    for _, e in ipairs(errors) do
       self.warn_once("tree_invalid:" .. e.code, "RedstoneRouter: UNGUELTIGER BAUM [" .. e.code .. "] " .. e.message)
     end
     self._state.all_valves = {}
@@ -249,11 +330,11 @@ function M:refresh()
     self:block_all()
     self.log("ERROR", string.format(
       "RedstoneRouter: redstone_tree ungueltig (%d Fehler) — alle Ventile blockiert, kein Routing aktiv",
-      #validation.errors))
+      #errors))
     return
   end
 
-  local all = collect_all_valves(tree)
+  local all = collect_all_valves(routes)
   self._state.all_valves = all
 
   local int_names = {}
@@ -539,9 +620,7 @@ function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
     return false, "invalid_tree"
   end
 
-  local cfg = self.config.logistics or self.config or {}
-  local tree = cfg.redstone_tree or {}
-  local path = find_path(tree, target_id)
+  local path = find_path(self._state.routes, target_id)
   if not path then
     self.log("WARN", "RedstoneRouter: no path found for target: " .. tostring(target_id))
     self:block_all()
@@ -842,33 +921,26 @@ function M:check_pending_acks()
 end
 
 function M:get_valve_status()
-  local cfg = self.config.logistics or self.config or {}
-  local tree = cfg.redstone_tree or {}
   local requested = self._state.valve_requested or {}
   local peers = self.comms and self.comms:get_peers() or {}
 
-  -- Reaktor-Zuordnung: fuer jeden Reaktor-Endpunkt den Pfad ermitteln,
-  -- jedes Ventil auf diesem Pfad bekommt den Reaktor-Label zugeordnet.
+  -- Reaktor-Zuordnung: jedes Ventil auf dem Pfad einer Route bekommt deren
+  -- Reaktor-Label zugeordnet -- ein Ventil, das in MEHREREN Routen
+  -- vorkommt (gemeinsames Trunk-Ventil), sammelt entsprechend mehrere
+  -- Labels.
   local affected = {}
-  local function walk(nodes)
-    for _, node in ipairs(nodes or {}) do
-      if node.reactor then
-        local path = find_path(tree, node.reactor) or {}
-        for _, v in ipairs(path) do
-          if v.integrator then
-            affected[v.integrator] = affected[v.integrator] or {}
-            local list = affected[v.integrator]
-            local label = node.label or node.reactor
-            local already = false
-            for _, existing in ipairs(list) do if existing == label then already = true end end
-            if not already then list[#list + 1] = label end
-          end
-        end
+  for _, route in ipairs(self._state.routes or {}) do
+    local label = route.label or route.reactor
+    for _, v in ipairs(route.path or {}) do
+      if v.integrator then
+        affected[v.integrator] = affected[v.integrator] or {}
+        local list = affected[v.integrator]
+        local already = false
+        for _, existing in ipairs(list) do if existing == label then already = true end end
+        if not already then list[#list + 1] = label end
       end
-      if node.children then walk(node.children) end
     end
   end
-  walk(tree)
 
   local seen_names, out = {}, {}
   for _, v in ipairs(self._state.all_valves) do
@@ -947,14 +1019,16 @@ function M:get_routing_state()
   return "ROUTING_VALID"
 end
 
+-- Liefert die normalisierten Routen (siehe self._state.routes, von
+-- M:refresh() gecacht) -- router_ui.lua's TREE-Ansicht und der Pfad-Editor
+-- bauen direkt darauf auf, garantiert identisch zu dem, was der Router
+-- selbst fuer begin_transaction()/collect_all_valves() verwendet.
 function M:get_tree()
-  local cfg = self.config.logistics or self.config or {}
-  return cfg.redstone_tree or {}
+  return self._state.routes or {}
 end
 
 function M:get_path_to(target_id)
-  local cfg = self.config.logistics or self.config or {}
-  local path = find_path(cfg.redstone_tree or {}, target_id) or {}
+  local path = find_path(self._state.routes, target_id) or {}
   local sides = {}
   for _, v in ipairs(path) do sides[#sides + 1] = v.side end
   return sides
@@ -977,25 +1051,12 @@ function M:get_validation()
 end
 
 function M:get_routing_table()
-  local cfg = self.config.logistics or self.config or {}
-  local tree = cfg.redstone_tree or {}
   local result = {}
-  local function walk(nodes)
-    for _, node in ipairs(nodes) do
-      if node.reactor then
-        local path = find_path(tree, node.reactor) or {}
-        local sides = {}
-        for _, v in ipairs(path) do sides[#sides + 1] = v.side end
-        result[#result + 1] = {
-          reactor = node.reactor,
-          label = node.label or node.reactor,
-          path = sides,
-        }
-      end
-      walk(node.children or {})
-    end
+  for _, route in ipairs(self._state.routes or {}) do
+    local sides = {}
+    for _, v in ipairs(route.path or {}) do sides[#sides + 1] = v.side end
+    result[#result + 1] = { reactor = route.reactor, label = route.label or route.reactor, path = sides }
   end
-  walk(tree)
   return result
 end
 

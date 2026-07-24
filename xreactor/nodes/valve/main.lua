@@ -1,6 +1,7 @@
 -- nodes/valve/main.lua
 --
--- Minimaler eigenstaendiger Redstone-Valve-Controller.
+-- Minimaler eigenstaendiger Valve-Controller fuer einen Mekanism
+-- Logistical Sorter.
 --
 -- Hintergrund (2026-07-09): der "Integrator" an diesem Pipe-Netz ist bei
 -- diesem Setup selbst ein CC:Tweaked-Computer -- kein direkt am FUEL-
@@ -13,6 +14,35 @@
 -- jeder andere Node, damit FUEL/Master es automatisch als online
 -- erkennen (Auto-Discovery ueber die ohnehin vorhandene Peer-Verwaltung,
 -- kein separates Protokoll noetig).
+--
+-- Fix (2026-07-20): der urspruengliche Redstone-Aktor (config.actuator_
+-- type = "redstone", direktes redstone.setOutput()) ist in der aktuellen
+-- Aufstellung nicht mehr im Einsatz und wurde komplett entfernt -- jede
+-- VALVE-Node steuert ausschliesslich einen Mekanism Logistical Sorter
+-- (setAutoMode()) per CC:Tweaked-Peripherie. Kein "actuator_type"-Feld
+-- und keine Redstone-Seite mehr in der Config noetig.
+--
+-- Feature (2026-07-20): sowohl das Wireless Modem als auch der Sorter
+-- werden jetzt automatisch erkannt (kein Config-Eintrag mehr noetig) --
+-- das Modem wurde schon vorher unabhaengig von "side" per peripheral.
+-- find() gesucht, der Sorter wird jetzt genauso per Methodensignatur
+-- (setAutoMode) gesucht, sobald config.sorter_name nicht explizit gesetzt
+-- ist (siehe get_sorter() unten).
+--
+-- Zusaetzlich ein fest eingebauter (NICHT optionaler) Statusmonitor:
+-- gruen=offen, rot=blockiert. Bewusst NICHT das gemeinsame optional/
+-- ampel.lua-Modul (das verlangt eine 1x3-Block-Turmform, 7x17-21 Zeichen
+-- bei Skala 1, und ist ein per Installer-Feature abwaehlbares Extra) --
+-- VALVEs Statusmonitor ist ein einzelner 1x1-Block ohne Formpruefung und
+-- immer Teil der Installation, kein Installer-Prompt. Ist physisch kein
+-- Monitor angeschlossen, passiert schlicht nichts (voll pcall-isoliert).
+--
+-- Feature (2026-07-20): ROUTE_TEACH_PULSE -- Route-Teach-in per manuellem
+-- Redstone-INPUT (nicht Output!): der Spieler legt vor Ort einen Hebel/
+-- Knopf an dieser Node um, waehrend er im FUEL/REPROCESSOR-Router-Editor
+-- einen Reaktor-Pfad einlernt (siehe check_teach_input() weiter unten) --
+-- die Node meldet die steigende Flanke per Funk, die UI haengt den
+-- gemeldeten Knoten an die gerade bearbeitete Ventilkette an.
 --
 -- Fail-Safe: bootet mit dem Ventil im konfigurierten default_blocked-
 -- Zustand (Standard: blockiert) und faellt bei Verbindungsverlust zu
@@ -50,14 +80,16 @@ local DEFAULT_CONFIG = {
   debug_logging = false,
   reset_log_on_start = true,
   wireless_modem = nil,
-  side = "front",
   -- Feature (2026-07-14): siehe config.lua fuer die ausfuehrliche
   -- Begruendung -- hier zusaetzlich in DEFAULT_CONFIG, damit merge_
   -- defaults() dieses Feld auch bei bereits migrierten/geschuetzten
   -- Config-Dateien (siehe GLOBAL-P0) automatisch nachtraegt, nicht nur
   -- bei einer komplett frischen Installation.
-  actuator_type = "redstone",
-  sorter_name = "logisticalSorter_1",
+  -- Fix (2026-07-20): nil = automatisch per Methodensignatur erkennen
+  -- (siehe get_sorter() unten), analog zu wireless_modem oben. Nur bei
+  -- mehreren Sortern am selben Computer noetig, einen bestimmten Namen
+  -- explizit zu setzen.
+  sorter_name = nil,
   default_blocked = true,
   heartbeat_interval = 2,
   status_interval = 5,
@@ -94,9 +126,13 @@ CONFIG.CONFIG_PATH = VALVE_USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
-if type(config.side) ~= "string" or not ({top=1,bottom=1,left=1,right=1,front=1,back=1})[config.side] then
-  add_config_warning("side ungueltig/fehlt, verwende 'front'")
-  config.side = "front"
+-- Fix (2026-07-20): nil bedeutet jetzt bewusst "automatisch erkennen"
+-- (siehe get_sorter()) -- nur ein tatsaechlich ungueltiger, nicht-nil-Wert
+-- (z.B. eine Zahl oder ein leerer String durch einen Tippfehler) wird
+-- hier korrigiert.
+if config.sorter_name ~= nil and (type(config.sorter_name) ~= "string" or config.sorter_name == "") then
+  add_config_warning("sorter_name ungueltig, wird ignoriert (automatische Suche)")
+  config.sorter_name = nil
 end
 
 local node_id = support_runtime.init_logging({
@@ -150,74 +186,124 @@ local valve_initialized = false
 -- (oder wenn ohnehin kein Write noetig war, da bereits im Zielzustand)
 -- aktualisiert -- ein Fehlschlag laesst den Watchdog auf dem AELTEREN
 -- Zeitstempel stehen, wodurch er eher (nicht spaeter) erneut eingreift.
--- Feature (2026-07-14): Aktor-Abstraktion -- neben dem urspruenglichen
--- Redstone-Ventil wird jetzt auch ein Mekanism Logistical Sorter als
--- Aktor unterstuetzt (config.actuator_type = "sorter"). Hintergrund: bei
--- reinem Item-Brennstofftransport (keine Fluid-/Gas-Leitung) gibt es kein
--- klassisches Redstone-Ventil -- stattdessen wird der Sorter direkt per
--- CC:Tweaked gesteuert (setAutoMode), Redstone wird dabei komplett
--- umgangen. Der Sorter hat einen "Auto"-Modus, der -- wenn aktiv -- Items
--- automatisch herauspumpt, UNABHAENGIG von jedem Redstone-Signal (siehe
--- Mekanism-Wiki) -- genau das wird hier als Auf/Zu-Schalter genutzt.
+-- Feature (2026-07-14): Aktor ist ein Mekanism Logistical Sorter, gesteuert
+-- per CC:Tweaked (setAutoMode). Der Sorter hat einen "Auto"-Modus, der --
+-- wenn aktiv -- Items automatisch herauspumpt (siehe Mekanism-Wiki) --
+-- genau das wird hier als Auf/Zu-Schalter genutzt: high=true bedeutet
+-- BLOCKIERT (Fail-Safe-Grundzustand, Auto-Modus AUS), high=false bedeutet
+-- OFFEN (Auto-Modus AN).
 --
--- Beide Aktoren teilen sich dieselbe abstrakte Semantik wie das restliche
--- Ventil-Protokoll: high=true bedeutet BLOCKIERT (Fail-Safe-Grundzustand),
--- high=false bedeutet OFFEN -- die Uebersetzung in die aktortyp-
--- spezifische physische Aktion passiert ausschliesslich hier, der Rest
--- des Nodes (apply_valve, Fail-Safe, Dedupe, ACK) bleibt unveraendert.
+-- Fix (2026-07-20): der urspruengliche Redstone-Aktor (config.actuator_
+-- type = "redstone") ist entfernt -- jede VALVE-Node steuert ausschliesslich
+-- einen Sorter, kein config.side/actuator_type mehr noetig.
 local sorter_device = nil
+local sorter_resolved_name = nil
+-- Fix (2026-07-20): automatische Sorter-Erkennung per Methodensignatur
+-- (setAutoMode), analog zum bereits vorhandenen Muster fuer die ME Bridge
+-- (nodes/fuel/logistics_router.lua) -- greift nur, wenn config.sorter_name
+-- NICHT explizit gesetzt ist (nil), ein explizit konfigurierter, aber
+-- gerade nicht angeschlossener Name wird weiterhin klar als "nicht
+-- gefunden" gemeldet statt stillschweigend einen anderen Sorter zu binden.
+local function find_sorter_by_capability()
+  for _, name in ipairs(peripheral.getNames() or {}) do
+    local ok, methods = pcall(peripheral.getMethods, name)
+    if ok and type(methods) == "table" then
+      local set = {}
+      for _, m in ipairs(methods) do set[m] = true end
+      if set.setAutoMode then return name end
+    end
+  end
+  return nil
+end
+
 local function get_sorter()
   if sorter_device then return sorter_device end
-  local ok, dev = pcall(peripheral.wrap, config.sorter_name)
-  if ok and dev then sorter_device = dev end
+  local name = config.sorter_name
+  if name == nil then
+    name = find_sorter_by_capability()
+    if not name then return nil end
+  end
+  local ok, dev = pcall(peripheral.wrap, name)
+  if ok and dev then
+    sorter_device = dev
+    sorter_resolved_name = name
+  end
   return sorter_device
 end
 
 local function write_actuator(high)
-  if config.actuator_type == "sorter" then
-    local sorter = get_sorter()
-    if not sorter then
-      return false, "Sorter '" .. tostring(config.sorter_name) .. "' nicht gefunden"
-    end
-    -- high=true (BLOCKIERT) -> Auto-Modus AUS; high=false (OFFEN) -> AN.
-    local ok, err = pcall(sorter.setAutoMode, not high)
-    if not ok then
-      -- Fix (2026-07-17): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md Abschnitt 21). get_sorter() cachte den
-      -- einmal gewrappten Sorter bisher DAUERHAFT -- scheiterte ein
-      -- spaeterer Call (Detach/Reattach, ersetztes Peripheral, Chunk-
-      -- Entladen), blieb sorter_device trotzdem gesetzt und jeder weitere
-      -- Versuch traf denselben kaputten Handle erneut, ohne je neu zu
-      -- wrappen. Jetzt: bei einem Callfehler wird der Cache geleert, der
-      -- naechste get_sorter()-Aufruf (naechster Retry) wrappt das
-      -- Peripheral frisch.
-      sorter_device = nil
-      return false, tostring(err)
-    end
-    return true
+  local sorter = get_sorter()
+  if not sorter then
+    local label = config.sorter_name and ("'" .. tostring(config.sorter_name) .. "'") or "automatische Suche erfolglos"
+    return false, "Sorter nicht gefunden (" .. label .. ")"
   end
-  -- Standard: Redstone (unveraendertes Verhalten wie bisher).
-  local ok, err = pcall(redstone.setOutput, config.side, high)
-  if not ok then return false, tostring(err) end
+  -- high=true (BLOCKIERT) -> Auto-Modus AUS; high=false (OFFEN) -> AN.
+  local ok, err = pcall(sorter.setAutoMode, not high)
+  if not ok then
+    -- Fix (2026-07-17): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 21). get_sorter() cachte den
+    -- einmal gewrappten Sorter bisher DAUERHAFT -- scheiterte ein
+    -- spaeterer Call (Detach/Reattach, ersetztes Peripheral, Chunk-
+    -- Entladen), blieb sorter_device trotzdem gesetzt und jeder weitere
+    -- Versuch traf denselben kaputten Handle erneut, ohne je neu zu
+    -- wrappen. Jetzt: bei einem Callfehler wird der Cache geleert, der
+    -- naechste get_sorter()-Aufruf (naechster Retry) wrappt das
+    -- Peripheral frisch.
+    sorter_device = nil
+    return false, tostring(err)
+  end
   return true
+end
+
+-- Feature (2026-07-20): fest eingebauter 1x1-Statusmonitor -- gruen=offen,
+-- rot=blockiert. Kein Formcheck (anders als optional/ampel.lua's 1x3-
+-- Turmform), einfach der erste gefundene Monitor. Cache wird bei jedem
+-- Fehlschlag (Detach/Reattach) verworfen, damit der naechste Aufruf neu
+-- sucht -- dasselbe Muster wie get_sorter().
+local status_monitor = nil
+local status_monitor_last_color = nil
+local function get_status_monitor()
+  if status_monitor then return status_monitor end
+  local ok, mon = pcall(peripheral.find, "monitor")
+  if ok and mon then status_monitor = mon end
+  return status_monitor
+end
+
+local function render_status_monitor()
+  local mon = get_status_monitor()
+  if not mon then return end
+  local color = current_high and colors.red or colors.green
+  if status_monitor_last_color == color then return end
+  local ok = pcall(function()
+    mon.setBackgroundColor(color)
+    mon.clear()
+  end)
+  if ok then
+    status_monitor_last_color = color
+  else
+    status_monitor = nil
+    status_monitor_last_color = nil
+  end
 end
 
 local function apply_valve(high)
   if valve_initialized and high == current_high then
     last_command_ts = os.epoch("utc")
+    render_status_monitor()
     return true  -- bereits im Zielzustand, kein erneuter Write noetig
   end
   local ok, err = write_actuator(high)
   if not ok then
     last_write_error = tostring(err)
-    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (" .. tostring(config.actuator_type or "redstone") .. "): " .. tostring(err), "ERROR")
+    utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (Sorter " .. tostring(sorter_resolved_name or config.sorter_name or "?") .. "): " .. tostring(err), "ERROR")
     return false
   end
   current_high = high
   valve_initialized = true
   last_write_error = nil
   last_command_ts = os.epoch("utc")
-  utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (%s) -> %s", tostring(config.actuator_type or "redstone"), high and "BLOCKIERT" or "OFFEN"), "INFO")
+  render_status_monitor()
+  utils.log(CONFIG.LOG_PREFIX, string.format("Ventil (Sorter %s) -> %s", tostring(sorter_resolved_name or config.sorter_name or "?"), high and "BLOCKIERT" or "OFFEN"), "INFO")
   return true
 end
 
@@ -243,6 +329,39 @@ if valve_modem then
   end
 else
   utils.log(CONFIG.LOG_PREFIX, "Kein Wireless Modem gefunden — Ventil-Kanal inaktiv", "ERROR")
+end
+
+-- Feature (2026-07-20): "Weg 3" -- Route-Teach-in per manuellem Redstone-
+-- INPUT (siehe Header-Kommentar oben): der Spieler legt vor Ort einen
+-- Hebel/Knopf an einer beliebigen der 6 eingebauten Redstone-Seiten dieser
+-- Node um -- Seite ist bewusst egal, nur "irgendein Input gerade an"
+-- zaehlt. Erkennt eine STEIGENDE Flanke (vorher ueberall aus, jetzt
+-- irgendwo an) und sendet dann genau EINMAL einen ROUTE_TEACH_PULSE-
+-- Broadcast (kein "dst" -- FUEL/REPROCESSOR werten "src" aus, siehe
+-- nodes/fuel/router_ui.lua's Teach-Modus; ein lauschender Node, der sich
+-- gerade nicht im Teach-Modus befindet, ignoriert die Nachricht einfach).
+-- Re-arm erst, sobald der Input wieder ueberall auf "aus" faellt --
+-- dieselbe simple "an, dann wieder aus"-Hebel-Geste re-armt sich dadurch
+-- von selbst, kein zusaetzlicher Debounce-Timer noetig. Rein informativ,
+-- KEINE Trust-Pruefung (der Spieler steht physisch am Block) und KEINE
+-- Auswirkung auf apply_valve()/current_high -- komplett unabhaengig von
+-- der eigentlichen Sorter-Steuerung.
+local teach_input_state = false
+local function check_teach_input()
+  local any_high = false
+  local ok, sides = pcall(redstone.getSides)
+  if ok and type(sides) == "table" then
+    for _, side in ipairs(sides) do
+      local iok, input = pcall(redstone.getInput, side)
+      if iok and input then any_high = true; break end
+    end
+  end
+  if any_high and not teach_input_state and valve_modem then
+    pcall(valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+      type = "ROUTE_TEACH_PULSE", src = node_id,
+    })
+  end
+  teach_input_state = any_high
 end
 
 -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
@@ -391,6 +510,20 @@ services:add({ name = "valve_failsafe", tick = function()
   end
 end })
 
+-- Feature (2026-07-20): periodisches Polling fuer den Route-Teach-in-Input
+-- (siehe check_teach_input() oben) -- jeder Tick prueft, ob gerade ein
+-- Hebel/Knopf an dieser Node umgelegt wurde.
+services:add({ name = "teach_input_poll", tick = function() check_teach_input() end })
+
+-- Feature (2026-07-20): periodischer Statusmonitor-Refresh -- render_
+-- status_monitor() wird bereits bei jeder tatsaechlichen Zustands-
+-- aenderung in apply_valve() aufgerufen, dieser periodische Tick faengt
+-- zusaetzlich einen erst NACH dem letzten Zustandswechsel angeschlossenen/
+-- wiederangeschlossenen Monitor ab, ohne auf das naechste SET_VALVE warten
+-- zu muessen. Guenstig durch den Farb-Diff-Cache (siehe oben), kein
+-- zusaetzlicher Akkumulator noetig.
+services:add({ name = "status_monitor_render", tick = function() render_status_monitor() end })
+
 local function build_status_payload()
   valve_health.status = comms:is_master_reachable() and health.status.OK or health.status.DEGRADED
   valve_health.reasons = comms:is_master_reachable() and {} or { [health.reasons.COMMS_DOWN] = true }
@@ -408,13 +541,12 @@ services:add(telemetry_service.new({
   heartbeat_interval = config.heartbeat_interval,
   build_payload = build_status_payload,
   heartbeat_state = function() return {
-    side = config.side, blocked = current_high, write_error = last_write_error,
-    actuator_type = config.actuator_type or "redstone",
-    actuator_name = config.actuator_type == "sorter" and config.sorter_name or config.side,
+    blocked = current_high, write_error = last_write_error,
+    actuator_name = sorter_resolved_name or config.sorter_name,
   } end,
 }))
 
-utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: side=" .. config.side .. " node_id=" .. tostring(node_id), "INFO")
+utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: sorter=" .. tostring(sorter_resolved_name or config.sorter_name or "auto") .. " node_id=" .. tostring(node_id), "INFO")
 
 -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
 -- Quiesce-Handler. VALVE ist die einzige der vier sicherheitskritischen

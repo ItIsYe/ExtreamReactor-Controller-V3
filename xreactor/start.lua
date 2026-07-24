@@ -47,27 +47,86 @@ cleanup_space()
 -- kontrollierten Resume ausfuehren". installer/journal.lua schreibt bei
 -- jedem Installationslauf ein Journal AUSSERHALB von /xreactor, das erst
 -- als LETZTER Schritt (zusammen mit release.lua, siehe dortiger Fix-
--- Kommentar) auf COMMITTED gesetzt und sofort geloescht wird. Ein Absturz
--- irgendwo zwischen "alter Baum geloescht" und "COMMITTED" hinterlaesst
--- also ein Journal in einem anderen Zustand (PREPARED/INSTALLING/
--- VERIFYING) -- genau das wird hier bei JEDEM Boot geprueft, BEVOR
--- ueberhaupt versucht wird, eine (moeglicherweise unvollstaendige) Rolle
--- zu starten. Der Parser ist bewusst selbststaendig (kein dofile() von
--- installer/journal.lua) -- bei einem sehr fruehen Absturz koennte
--- /xreactor/installer/ selbst noch unvollstaendig sein, das Journal liegt
--- aber immer ausserhalb davon.
-local INSTALL_JOURNAL_PATH = "/xreactor_install_journal.lua"
+-- Kommentar) auf COMMITTED gesetzt wird. Ein Absturz irgendwo zwischen
+-- "alter Baum geloescht" und "COMMITTED" hinterlaesst also ein Journal in
+-- einem anderen Zustand (PREPARED/INSTALLING/VERIFYING) -- genau das wird
+-- hier bei JEDEM Boot geprueft, BEVOR ueberhaupt versucht wird, eine
+-- (moeglicherweise unvollstaendige) Rolle zu starten. Der Parser ist
+-- bewusst selbststaendig (kein dofile() von installer/journal.lua) -- bei
+-- einem sehr fruehen Absturz koennte /xreactor/installer/ selbst noch
+-- unvollstaendig sein, das Journal liegt aber immer ausserhalb davon.
+--
+-- Fix (2026-07-19): CRITICAL. INSTALL-P0.1/P0.2. Die vorherige Fassung
+-- hatte zwei Luecken: (1) genau EINE Journaldatei wurde per
+-- Delete-dann-Move geschrieben -- ein Crash in diesem kurzen Fenster
+-- hinterliess KEIN lesbares Journal, was Boot faelschlich als "keine
+-- unvollstaendige Installation" wertete; (2) JEDER Parse-/Lesefehler
+-- (kaputte Syntax, leere/abgeschnittene Datei, kein Table) wurde hier
+-- identisch zu "Datei existiert nicht" behandelt -- ein beschaedigtes
+-- Journal waehrend eines abgebrochenen Updates fuehrte damit zum
+-- normalen, ungeschuetzten Rollenstart statt zu Fail-Closed-Recovery.
+-- Jetzt: zwei Generationsslots (siehe installer/journal.lua fuer die
+-- ausfuehrliche Begruendung -- dieselbe Klassifikationslogik ist hier
+-- bewusst dupliziert, nicht dofile()'d) plus eine explizite
+-- Statusklassifikation ABSENT/VALID_COMMITTED/VALID_INCOMPLETE/CORRUPT/
+-- UNREADABLE. Nur ABSENT (nie ein Installationslauf begonnen) oder
+-- VALID_COMMITTED erlauben einen normalen Rollenstart; CORRUPT und
+-- UNREADABLE loesen denselben Recovery-Resume aus wie VALID_INCOMPLETE.
+local INSTALL_JOURNAL_SLOT_A = "/xreactor_install_journal.a.lua"
+local INSTALL_JOURNAL_SLOT_B = "/xreactor_install_journal.b.lua"
 
-local function read_install_journal()
-  if not fs.exists(INSTALL_JOURNAL_PATH) then return nil end
-  local f = fs.open(INSTALL_JOURNAL_PATH, "r")
-  if not f then return nil end
-  local src = f.readAll(); f.close()
+local JOURNAL_STATUS = {
+  ABSENT           = "ABSENT",
+  VALID_COMMITTED  = "VALID_COMMITTED",
+  VALID_INCOMPLETE = "VALID_INCOMPLETE",
+  CORRUPT          = "CORRUPT",
+  UNREADABLE       = "UNREADABLE",
+}
+
+local function read_journal_slot(path)
+  if not fs.exists(path) then return JOURNAL_STATUS.ABSENT, nil end
+  local f = fs.open(path, "r")
+  if not f then return JOURNAL_STATUS.UNREADABLE, nil end
+  local ok_read, src = pcall(f.readAll)
+  pcall(f.close)
+  if not ok_read or type(src) ~= "string" or #src == 0 then
+    return JOURNAL_STATUS.UNREADABLE, nil
+  end
   local loader = load(src, "=install_journal", "t", {})
-  if not loader then return nil end
+  if not loader then return JOURNAL_STATUS.CORRUPT, nil end
   local ok, result = pcall(loader)
-  if not ok or type(result) ~= "table" or type(result.state) ~= "string" then return nil end
-  return result
+  if not ok or type(result) ~= "table" or type(result.state) ~= "string" then
+    return JOURNAL_STATUS.CORRUPT, nil
+  end
+  if type(result.generation) ~= "number" then return JOURNAL_STATUS.CORRUPT, nil end
+  if result.state == "COMMITTED" then return JOURNAL_STATUS.VALID_COMMITTED, result end
+  return JOURNAL_STATUS.VALID_INCOMPLETE, result
+end
+
+local function classify_install_journal()
+  local status_a, journal_a = read_journal_slot(INSTALL_JOURNAL_SLOT_A)
+  local status_b, journal_b = read_journal_slot(INSTALL_JOURNAL_SLOT_B)
+
+  local function generation_of(status, journal)
+    if status == JOURNAL_STATUS.VALID_COMMITTED or status == JOURNAL_STATUS.VALID_INCOMPLETE then
+      return journal.generation
+    end
+    return -1
+  end
+
+  local gen_a, gen_b = generation_of(status_a, journal_a), generation_of(status_b, journal_b)
+  if gen_a < 0 and gen_b < 0 then
+    if status_a == JOURNAL_STATUS.ABSENT and status_b == JOURNAL_STATUS.ABSENT then
+      return JOURNAL_STATUS.ABSENT, nil
+    end
+    if status_a == JOURNAL_STATUS.UNREADABLE or status_b == JOURNAL_STATUS.UNREADABLE then
+      return JOURNAL_STATUS.UNREADABLE, nil
+    end
+    return JOURNAL_STATUS.CORRUPT, nil
+  end
+
+  if gen_a >= gen_b then return status_a, journal_a end
+  return status_b, journal_b
 end
 
 -- Kontrollierter Resume: statt zu versuchen, chirurgisch nur die fehlenden
@@ -100,9 +159,11 @@ local function attempt_recovery_resume()
   dofile(tmp)
 end
 
-local install_journal = read_install_journal()
-if install_journal and install_journal.state ~= "COMMITTED" then
-  p("[BOOT] WARN: unvollstaendige Installation erkannt (Zustand: " .. tostring(install_journal.state) .. ")")
+local journal_status, install_journal = classify_install_journal()
+if journal_status ~= JOURNAL_STATUS.ABSENT and journal_status ~= JOURNAL_STATUS.VALID_COMMITTED then
+  local detail = (journal_status == JOURNAL_STATUS.VALID_INCOMPLETE)
+    and tostring(install_journal.state) or journal_status
+  p("[BOOT] WARN: unvollstaendige Installation erkannt (Zustand: " .. detail .. ")")
   p("[BOOT] Rolle wird NICHT gestartet -- kontrollierter Recovery-Resume...")
   local ok_resume, resume_err = pcall(attempt_recovery_resume)
   if not ok_resume then

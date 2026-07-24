@@ -390,6 +390,23 @@ local function init()
     last_valve_retry_check_ms = now
     get_rs_router():check_pending_acks()
   end })
+  -- Feature (2026-07-20): "Weg 3" -- Route-Teach-in per manuellem Redstone-
+  -- Input an der jeweiligen VALVE-Node (siehe nodes/valve/main.lua's
+  -- check_teach_input()/ROUTE_TEACH_PULSE). Roher Event-Listener wie
+  -- valve_ack_listener oben -- referenziert router_ui_instance direkt
+  -- (nicht ueber get_router_ui(), das die Seite beim ersten Aufruf erst
+  -- erzeugen wuerde); vor dem ersten Besuch der Router-Seite existiert kein
+  -- Pfad-Editor, der einen Puls entgegennehmen koennte. router_ui.lua's
+  -- handle_teach_pulse() filtert selbst, ob der Teach-Modus gerade aktiv
+  -- ist -- ein Puls ausserhalb davon wird dort schlicht ignoriert.
+  services:add({ name = "valve_teach_listener", wants_events = true, tick = function(_self, dt, event)
+    if not event or event[1] ~= "modem_message" then return end
+    local channel, message = event[3], event[5]
+    if channel ~= constants.channels.VALVE then return end
+    if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance then
+      router_ui_instance:handle_teach_pulse(message.src)
+    end
+  end })
   services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
   services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { reserve = reserve } end }))
   services:add(ui_service.new({
