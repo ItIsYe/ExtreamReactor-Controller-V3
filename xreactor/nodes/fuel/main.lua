@@ -210,16 +210,32 @@ local function get_router_ui()
       get_reactors = function()
         local list, seen = {}, {}
         local lg = config.logistics or {}
+        -- 1. Manuell konfigurierte Reaktoren aus logistics.reactors
         for _, entry in ipairs(lg.reactors or {}) do
           local label = entry.name or entry.label or entry.reactor_id or entry.reactor_port or "?"
           local id = entry.label or entry.name or label
           if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
         end
-        if #list == 0 then
-          for _, name in ipairs(peripheral.getNames() or {}) do
-            local ptype = tostring(peripheral.getType(name) or ""):lower()
-            if ptype:find("reactor") or name:lower():find("reactor") then
-              if not seen[name] then seen[name] = true; list[#list + 1] = { id = name, label = name } end
+        -- 2. Aus redstone_tree (bereits konfigurierte Router-Routen)
+        for _, route in ipairs((lg.redstone_tree or {})) do
+          local id = route.reactor or route.label
+          local label = route.label or route.reactor or id or "?"
+          if id and not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
+        end
+        -- 3. RT-Nodes aus fuel_status_cache (haben Fuel-Anfragen gesendet)
+        if type(fuel_status_cache) == "table" then
+          for node_id, status in pairs(fuel_status_cache) do
+            if type(status) == "table" then
+              local label = status.node_label or status.reactor_label or node_id
+              if not seen[node_id] then seen[node_id] = true; list[#list + 1] = { id = node_id, label = label } end
+            end
+          end
+        end
+        -- 4. Fallback: bekannte RT-Peers aus Netzwerk
+        if #list == 0 and comms and type(comms.get_peers) == "function" then
+          for _, peer in ipairs(comms:get_peers()) do
+            if peer.role == "RT" then
+              if not seen[peer.id] then seen[peer.id] = true; list[#list + 1] = { id = peer.id, label = peer.id } end
             end
           end
         end
