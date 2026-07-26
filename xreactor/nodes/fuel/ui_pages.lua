@@ -97,7 +97,7 @@ function M.new(opts)
     -- bei jedem Aufruf neu (Titelleiste bleibt dadurch immer aktuell),
     -- und status_dot()/die restlichen hier verwendeten mux-Funktionen
     -- ueberschreiben ihre jeweilige Flaeche bereits vollstaendig selbst.
-    if should_clear ~= false then mux.clear(mon) end
+    if should_clear == true then mux.clear(mon) end
     mux.header(mon, { title = title, node_id = model.node_id or "FU-?", page = page, status = status, icon = icon or "fuel" })
     local w = ({ mon.getSize() })[1]
     if w >= 42 then
