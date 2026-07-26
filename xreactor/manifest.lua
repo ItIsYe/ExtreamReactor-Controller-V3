@@ -55,7 +55,7 @@ return {
   -- beschraenkt -- eine faktisch tote, aber strukturell inkonsistente
   -- Kombination.
   { path = "services/alert_service.lua", size_bytes = 14551, hash = "be4bfdf2", required_for={"MASTER"} },
-  { path = "services/comms_service.lua", size_bytes = 8807, hash = "b7133824" },
+  { path = "services/comms_service.lua", size_bytes = 9910, hash = "7ab0adba" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4" },
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },
   { path = "services/service_manager.lua", size_bytes = 7459, hash = "6cb63793" },
@@ -229,7 +229,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 2332, hash = "a571ceaf", required_for={"VALVE"} },
-    { path = "nodes/valve/main.lua", size_bytes = 27937, hash = "428d5d9c", required_for={"VALVE"} },
+    { path = "nodes/valve/main.lua", size_bytes = 29057, hash = "bc4f5040", required_for={"VALVE"} },
     },
     log = {
     { path = "nodes/log_collector/main.lua", size_bytes = 60851, hash = "d401680c", required_for={"LOG"} },
