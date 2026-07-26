@@ -222,14 +222,20 @@ local function get_router_ui()
           local label = route.label or route.reactor or id or "?"
           if id and not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
         end
-        -- 3. RT-Nodes aus fuel_status_cache (haben Fuel-Anfragen gesendet)
+        -- 3. Reactor-IDs aus fuel_status_cache
+        --    Cache-Format: { master_relay={[reactor_id]={...}}, direct_heard={[reactor_id]={...}} }
         if type(fuel_status_cache) == "table" then
-          for node_id, status in pairs(fuel_status_cache) do
-            if type(status) == "table" then
-              local label = status.node_label or status.reactor_label or node_id
-              if not seen[node_id] then seen[node_id] = true; list[#list + 1] = { id = node_id, label = label } end
+          local function add_from_cache(sub)
+            if type(sub) ~= "table" then return end
+            for reactor_id, entry in pairs(sub) do
+              if type(entry) == "table" and not seen[reactor_id] then
+                seen[reactor_id] = true
+                list[#list + 1] = { id = reactor_id, label = reactor_id }
+              end
             end
           end
+          add_from_cache(fuel_status_cache.master_relay)
+          add_from_cache(fuel_status_cache.direct_heard)
         end
         -- 4. Fallback: bekannte RT-Peers aus Netzwerk
         if #list == 0 and comms and type(comms.get_peers) == "function" then
