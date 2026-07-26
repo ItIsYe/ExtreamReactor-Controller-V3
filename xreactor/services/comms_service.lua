@@ -234,7 +234,22 @@ function comms_service:send_hello(capabilities)
   })
 end
 
+-- Fix (2026-07-27): CRITICAL. Reported node-crash ("attempt to index field
+-- 'comms' (a nil value)" at this call site): self.comms is only set by
+-- init() (see above), but some callers (e.g. nodes/support/runtime.lua's
+-- run_event_loop()) invoke handle_event()/tick() directly, outside of
+-- service_manager's own init-before-tick guard. If a role forgets to call
+-- services:init() before entering its event loop (as VALVE did until this
+-- fix, see nodes/valve/main.lua), the very first modem_message received --
+-- entirely plausible as literally the first event on a server with any
+-- radio traffic at all, not limited to messages addressed to this node --
+-- crashed the whole node before init() ever got a chance to run. Guarded
+-- here as defense-in-depth (the actual fix is calling services:init()
+-- before the event loop starts, restoring intended behavior instead of
+-- silently dropping early messages) -- a future role that makes the same
+-- ordering mistake now fails safe (drops the event) instead of crashing.
 function comms_service:handle_event(event)
+  if not self.comms then return end
   if event[1] == "modem_message" then
     local _, _, _, _, message = table.unpack(event)
     if utils.handle_remote_log_message and utils.handle_remote_log_message(message) then
@@ -245,6 +260,7 @@ function comms_service:handle_event(event)
 end
 
 function comms_service:tick(now)
+  if not self.comms then return end
   if utils.flush_remote_logs then utils.flush_remote_logs() end
   self.comms.tick(now)
 end

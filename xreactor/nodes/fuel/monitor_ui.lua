@@ -137,7 +137,21 @@ function M.render_monitor(ctx, model)
         { name = "Details", render = ctx.fuel_ui.render_details },
         { name = "Diagnostics", render = ctx.fuel_ui.render_diagnostics,
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        { name = "Router", render = function(target, model, should_clear) ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
+        -- Fix (2026-07-26): CRITICAL. Diese Closure gab bisher NICHTS
+        -- zurueck -- ui_router.lua's render() erhaelt dadurch page_footer
+        -- == nil und zeichnet seinen eigenen generischen "< Page 4/4 >"-
+        -- Indikator MIT EIGENER Touch-Zone an einer Position, die nicht
+        -- zu den tatsaechlich sichtbaren ZURUECK/WEITER-Buttons passt, die
+        -- router_ui.lua:render() selbst per mux.footer_nav() bereits in
+        -- dieselbe Zeile gezeichnet hat (siehe M:render()'s "return mux.
+        -- footer_nav(...)" dort). Ein Tap auf den sichtbaren ZURUECK-
+        -- Button traf dadurch nie die tatsaechlich registrierte Touch-Zone
+        -- -- der Button sah klickbar aus, tat aber nichts. Alle anderen
+        -- Seiten (Overview/Details/Diagnostics) sind direkt als page.render
+        -- zugewiesen und geben ihr footer_nav()-Ergebnis bereits korrekt
+        -- zurueck (siehe Fix-Kommentar 2026-07-10 oben) -- die Router-Seite
+        -- war durch ihre Wrapper-Closure die einzige Ausnahme.
+        { name = "Router", render = function(target, model, should_clear) return ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
           handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [ctx.keys.left] = true, [ctx.keys.pageUp] = true },

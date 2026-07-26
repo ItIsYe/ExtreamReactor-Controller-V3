@@ -313,7 +313,14 @@ local function render_monitor()
         { name = "Details", render = reproc_ui.render_details },
         { name = "Diagnostics", render = reproc_ui.render_diagnostics,
           handle_touch = function(x, y) return reproc_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        { name = "Router", render = function(target, m, should_clear) get_router_ui():render(target, ui, colors, should_clear) end,
+        -- Fix (2026-07-26): CRITICAL, identisch zu nodes/fuel/monitor_ui.lua
+        -- (siehe dortiger Fix-Kommentar). Diese Closure gab bisher NICHTS
+        -- zurueck -- ui_router.lua's render() zeichnete dadurch seinen
+        -- eigenen generischen "< Page 4/4 >"-Indikator MIT EIGENER,
+        -- falsch positionierter Touch-Zone ueber den tatsaechlich sichtbaren
+        -- ZURUECK/WEITER-Buttons von router_ui.lua -- ein Tap auf den
+        -- sichtbaren ZURUECK-Button tat nichts.
+        { name = "Router", render = function(target, m, should_clear) return get_router_ui():render(target, ui, colors, should_clear) end,
           handle_touch = function(x, y) return get_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [keys.left] = true, [keys.pageUp] = true },

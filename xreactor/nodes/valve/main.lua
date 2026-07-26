@@ -546,6 +546,24 @@ services:add(telemetry_service.new({
   } end,
 }))
 
+-- Fix (2026-07-27): CRITICAL. Alle anderen Rollen, die denselben Event-
+-- Loop nutzen (RT/FUEL/REPROCESSOR/WATER), rufen services:init() explizit
+-- auf, BEVOR run_event_loop() betreten wird -- comms_service:init() setzt
+-- dabei self.comms (siehe services/comms_service.lua), das handle_event()
+-- fuer JEDE modem_message-Verarbeitung braucht. VALVE fehlte dieser
+-- Aufruf komplett: ohne ihn bleibt self.comms bis zum ERSTEN services:
+-- tick()-Aufruf nil, und run_event_loop() ruft bei einem modem_message-
+-- Event comms:handle_event(event) NOCH VOR dem ersten services:tick()
+-- auf (siehe nodes/support/runtime.lua). War das allererste Event nach
+-- dem Boot zufaellig ein modem_message (auf einem Server mit beliebigem
+-- Funkverkehr sehr wahrscheinlich, nicht auf SET_VALVE-Nachrichten fuer
+-- diese Node beschraenkt -- handle_event() liest jede Nachricht auf jedem
+-- Kanal), stuerzte die Node sofort mit "attempt to index field 'comms'
+-- (a nil value)" ab -- und da ein Funkpaket direkt nach dem automatischen
+-- Neustart erneut sehr wahrscheinlich ist, potenziell in einer Crash-
+-- Loop.
+services:init()
+
 utils.log(CONFIG.LOG_PREFIX, "VALVE-Node gestartet: sorter=" .. tostring(sorter_resolved_name or config.sorter_name or "auto") .. " node_id=" .. tostring(node_id), "INFO")
 
 -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
