@@ -553,7 +553,9 @@ end
 -- (core/ui_router.lua -> hier durchgereicht) uebergibt den echten
 -- should_clear-Wert und kann das Clearing dadurch gezielt unterdruecken.
 function M:render(target, ui, colors, should_clear)
-  if should_clear == nil then should_clear = true end
+  -- Fix: Default false -- ui_router setzt should_clear korrekt;
+  -- true nur bei Transition. Default true verursacht Flackern.
+  if should_clear == nil then should_clear = false end
   local w, h = ui.getSize(target)
   if not w or not h then return end
   local u = self._ui
