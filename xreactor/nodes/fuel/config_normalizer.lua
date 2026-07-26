@@ -45,8 +45,12 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.max_per_cycle) ~= "number" or lg.max_per_cycle <= 0 then
     lg.max_per_cycle = (defaults.logistics and defaults.logistics.max_per_cycle) or 64
   end
-  if type(lg.reactors)     ~= "table" then lg.reactors     = {} end
-  if type(lg.waste)        ~= "table" then lg.waste        = {} end
+  if type(lg.reactors)      ~= "table" then lg.reactors      = {} end
+  if type(lg.waste)         ~= "table" then lg.waste         = {} end
+  if type(lg.redstone_tree) ~= "table" then lg.redstone_tree = {} end
+  if type(lg.valve_open_ms) ~= "number" or lg.valve_open_ms <= 0 then
+    lg.valve_open_ms = (defaults.logistics and defaults.logistics.valve_open_ms) or 2000
+  end
   -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md). destinations/sources/routes wurden bisher
   -- NIE normalisiert -- weder DEFAULT_LOGISTICS noch eine leere
