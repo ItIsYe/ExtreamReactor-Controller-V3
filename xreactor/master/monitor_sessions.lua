@@ -10,14 +10,31 @@ local function resolve_role(index)
   return is_primary_index(index) and PRIMARY_ROLE_MAP[index] or "aux"
 end
 
+-- Fix: aux-Monitore (4.+) sollen ein fest dediziertes Error/Warning-Display
+-- sein, nicht durch Touch umschaltbar — daher ebenfalls "locked" wie die
+-- 3 primären Monitore, nur eben auf AUX_DEFAULT_VIEW statt einer der
+-- primären Rollen.
 local function resolve_locked(index)
+  -- Primäre Monitore (1-3) sind fest locked.
+  -- AUX-Monitore (4+) sind umschaltbar per Touch.
   return is_primary_index(index)
 end
+
+-- TEMPORÄR/dauerhaft: 4. physischer Monitor (und jeder weitere "aux"-Monitor)
+-- wird automatisch fest auf die Fehler/Warnungs-Anzeige ("alarms") gepinnt,
+-- statt die normale Default-View (Overview) zu zeigen. Dient ausschließlich
+-- als dediziertes Error/Warning-Display, unabhängig von den 3 primären
+-- Monitoren (overview/rt/energy), die davon NICHT betroffen sind.
+-- Fallback-Liste falls self.view_order nicht gesetzt ist (sollte in der
+-- Praxis nicht vorkommen, master/init_runtime.lua übergibt immer eine
+-- vollständige Liste über bind_or_update()).
+local AUX_VIEWS_FALLBACK = { "alarms", "overview", "rt", "energy", "alerts" }
 
 local function default_view(index, view_order)
   local role = resolve_role(index)
   if role ~= "aux" then return role end
-  return (view_order and view_order[1]) or "overview"
+  local views = view_order or AUX_VIEWS_FALLBACK
+  return views[1] or "overview"
 end
 
 local function copy_hit(hit)
@@ -33,6 +50,49 @@ local function normalize_payload(payload)
   for k, v in pairs(payload) do out[k] = v end
   if payload.hit then out.hit = copy_hit(payload.hit) end
   return out
+end
+
+-- Schaltet einen AUX-Monitor auf die nächste View im Zyklus.
+-- Gibt den neuen view_key zurück.
+-- Fix (2026-07-02): diese Funktion hatte zwei Bugs gleichzeitig.
+-- 1. Signatur war function M.cycle_aux_view(session) — beim Aufruf
+--    self.sessions:cycle_aux_view(session) (Methodensyntax) bekam der
+--    EINZIGE Parameter tatsaechlich `self` (das Sessions-Objekt), das
+--    eigentliche `session`-Argument wurde stillschweigend verworfen.
+--    Der Code funktionierte nur zufaellig, weil session.view_key/.locked
+--    auf dem falschen Objekt (self) meist nil/falsy waren und so ein
+--    Verhalten erzeugten, das oberflaechlich wie ein Zyklus aussah.
+-- 2. Die View-Liste war eine hartcodierte Modul-Konstante (AUX_VIEWS),
+--    unabhaengig von der view_order, die master/init_runtime.lua beim
+--    Boot tatsaechlich uebergibt — neue Views (maintenance/updates/
+--    system_map/config_editor) tauchten im AUX-Zyklus nie auf, egal wie
+--    view_order konfiguriert war.
+-- Feature (2026-07-06): direction-Parameter ergaenzt (1 = vorwaerts,
+-- -1 = rueckwaerts), damit sichtbare [<]/[>]-Buttons am AUX-Monitor beide
+-- Richtungen unterstuetzen koennen statt nur "immer weiter" bei jedem
+-- beliebigen Touch irgendwo auf dem Bildschirm (das bisherige Verhalten,
+-- ohne sichtbare Buttons dafuer).
+function M:cycle_aux_view(session, direction)
+  if not session or session.locked then return end
+  local views = self.view_order or AUX_VIEWS_FALLBACK
+  if #views == 0 then return end
+  direction = (direction == -1) and -1 or 1
+  local current = session.view_key or views[1]
+  local current_index = 1
+  for i, v in ipairs(views) do
+    if v == current then current_index = i break end
+  end
+  local next_index = ((current_index - 1 + direction) % #views) + 1
+  local next_view = views[next_index]
+  session.view_key = next_view
+  session.dirty    = true
+  session.dirty_reason = "user-cycle"
+  return next_view
+end
+
+-- Gibt die AUX-View-Liste zurück (für Badge-Anzeige etc.)
+function M:get_aux_views()
+  return self.view_order or AUX_VIEWS_FALLBACK
 end
 
 function M.new(opts)
@@ -52,7 +112,11 @@ function M:bind_primary_role(session, index)
   if not session then return end
   session.role = resolve_role(index)
   session.locked = resolve_locked(index)
-  if session.locked then session.view_key = session.role end
+  -- Fix: dieselbe Korrektur wie in resolve_binding() — "aux" ist kein
+  -- gültiger view_key, muss über default_view() aufgelöst werden.
+  if session.locked then
+    session.view_key = (session.role ~= "aux") and session.role or default_view(index, self.view_order)
+  end
 end
 
 function M:resolve_view_key(session, index)
@@ -65,7 +129,38 @@ function M:resolve_binding(index, prior)
   local prior_session = prior or {}
   local role = resolve_role(index)
   local locked = resolve_locked(index)
-  local view_key = locked and role or (prior_session.view_key or default_view(index, self.view_order))
+  -- Fix: "locked and role" setzte den view_key für aux-Monitore fälschlich
+  -- auf den ROLLENNAMEN "aux" — eine View mit diesem Namen existiert nicht
+  -- ("view-missing-or-no-render"). Nur PRIMÄRE Rollen (overview/rt/energy)
+  -- haben einen view_key, der direkt dem Rollennamen entspricht; aux-Monitore
+  -- müssen immer über default_view() aufgelöst werden (das liefert
+  -- AUX_DEFAULT_VIEW = "alarms").
+  local view_key
+  if locked and role ~= "aux" then
+    view_key = role
+  else
+    -- Fix (2026-07-08): CRITICAL. `prior` wurde entgegengenommen, aber nie
+    -- gelesen — bind_or_update() ruft resolve_binding() bei JEDEM
+    -- render()-Tick (alle ~0.5-1s) auf, wodurch der view_key eines
+    -- AUX-Monitors bei jedem einzelnen Tick auf default_view() (immer
+    -- views[1], typischerweise "overview") zurueckgesetzt wurde. Per Touch
+    -- per cycle_aux_view() umgeschaltete Views ("< ZURUECK"/"WEITER >")
+    -- wurden dadurch binnen der naechsten Render-Runde sofort wieder
+    -- verworfen — der Touch selbst funktionierte (direction wurde korrekt
+    -- erkannt, view_key kurzzeitig korrekt gesetzt), aber sichtbar blieb
+    -- davon nichts. Jetzt: ein bereits vorhandener, gueltiger
+    -- prior_session.view_key wird beibehalten; nur beim allerersten
+    -- Binden (kein prior vorhanden) wird auf default_view() zurueckgegriffen.
+    local prior_view = prior_session.view_key
+    local prior_valid = false
+    if prior_view then
+      local views = self.view_order or AUX_VIEWS_FALLBACK
+      for _, v in ipairs(views) do
+        if v == prior_view then prior_valid = true break end
+      end
+    end
+    view_key = prior_valid and prior_view or default_view(index, self.view_order)
+  end
   return role, locked, view_key
 end
 

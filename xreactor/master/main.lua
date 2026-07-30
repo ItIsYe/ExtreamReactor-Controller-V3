@@ -6,6 +6,5 @@ bootstrap.setup({
 })
 
 local require = bootstrap.require
-local runtime_loop = require('master.runtime_loop')
-
+local runtime_loop  = require('master.runtime_loop')
 runtime_loop.run()

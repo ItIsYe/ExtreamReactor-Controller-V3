@@ -23,34 +23,24 @@ local function get_learning(ctx)
   return ctx.capacity_learning
 end
 
+-- Prüft ob das Capacity-Learning eine gültige Messung hat.
+-- Erst dann darf der Master Prozentvorgaben senden (sonst wäre
+-- power_percent relativ zu einer unbekannten Kapazität sinnlos).
 local function capacity_learning_locked(ctx)
   local learning = get_learning(ctx)
-  return type(learning) == "table" and learning.locked == true and number_or_nil(learning.max_output) and number_or_nil(learning.max_output) > 0
-end
-
-local function current_capacity(ctx)
-  local learning = get_learning(ctx)
-  if type(learning) == "table" and learning.locked == true then
-    local max_output = number_or_nil(learning.max_output)
-    if max_output and max_output > 0 then return max_output, "learned" end
-  end
-  local targets = ctx.targets or {}
-  local previous = number_or_nil(targets.capacity_max)
-  if previous and previous > 0 then return previous, "target-cache" end
-  return nil, "unavailable"
+  return type(learning) == "table"
+    and learning.ready == true
+    and number_or_nil(learning.max_output)
+    and number_or_nil(learning.max_output) > 0
 end
 
 local function value_summary(value)
   if type(value) == "table" then
     local parts = {}
-    if value.target_rpm ~= nil then parts[#parts + 1] = "target_rpm=" .. tostring(value.target_rpm) end
-    if value.power_target_percent ~= nil then parts[#parts + 1] = "power_target_percent=" .. tostring(value.power_target_percent) end
-    if value.power_target ~= nil then parts[#parts + 1] = "power_target=" .. tostring(value.power_target) end
-    if value.steam_target ~= nil then parts[#parts + 1] = "steam_target=" .. tostring(value.steam_target) end
-    if value.enable_reactors ~= nil then parts[#parts + 1] = "enable_reactors=" .. tostring(value.enable_reactors) end
-    if value.enable_turbines ~= nil then parts[#parts + 1] = "enable_turbines=" .. tostring(value.enable_turbines) end
-    if value.assignment_state ~= nil then parts[#parts + 1] = "assignment_state=" .. tostring(value.assignment_state) end
-    if value.desired_node_state ~= nil then parts[#parts + 1] = "desired_node_state=" .. tostring(value.desired_node_state) end
+    if value.power_target_percent ~= nil then parts[#parts + 1] = "pct=" .. tostring(value.power_target_percent) end
+    if value.assignment_state    ~= nil then parts[#parts + 1] = "state=" .. tostring(value.assignment_state) end
+    if value.desired_node_state  ~= nil then parts[#parts + 1] = "node_state=" .. tostring(value.desired_node_state) end
+    if value.shutdown_stage      ~= nil then parts[#parts + 1] = "shutdown=" .. tostring(value.shutdown_stage) end
     if #parts > 0 then return table.concat(parts, ",") end
     return "table"
   end
@@ -71,53 +61,27 @@ local function set_setpoints(command, ctx, record)
       reason_code = "CAPACITY_LEARNING",
       capacity_ready = false,
       capacity_source = learning.reason or "LEARNING",
-      capacity_stable_samples = learning.stable_samples or 0,
+      capacity_stable_samples = learning.at_target or 0,
       command_value = value
     })
   end
 
+  -- Master sendet nur den Prozentwert — RT berechnet Flow, Coil,
+  -- Reaktor-Stab vollständig autonom daraus.
   local targets = ctx.targets
-  if type(value.target_rpm) == "number" then
-    targets.rpm = value.target_rpm
-  end
   local pct = number_or_nil(value.power_target_percent)
   if pct then
     pct = math.max(0, math.min(100, pct))
     targets.power_percent = pct
-    local capacity, source = current_capacity(ctx)
-    if capacity and capacity > 0 then
-      targets.power = capacity * (pct / 100)
-      targets.capacity_max = capacity
-      targets.capacity_source = source
-      log_command(ctx, "INFO", ("Percent setpoint applied percent=%.1f capacity=%.2f source=%s local_power=%.2f"):format(pct, capacity, tostring(source), targets.power))
-    elseif type(value.power_target) == "number" then
-      targets.power = value.power_target
-      targets.capacity_source = "fallback-absolute"
-      log_command(ctx, "WARN", ("Percent setpoint capacity unavailable; using absolute fallback power=%.2f percent=%.1f"):format(targets.power, pct))
-    else
-      targets.power = 0
-      targets.capacity_source = "unavailable"
-      log_command(ctx, "WARN", ("Percent setpoint capacity unavailable; target forced to 0 percent=%.1f"):format(pct))
+    -- targets.power aus capacity_max berechnen damit UI "soll" korrekt anzeigt
+    local cap = ctx.capacity_learning and ctx.capacity_learning.max_output or 0
+    if cap > 0 then
+      targets.power = cap * pct / 100
     end
-  elseif type(value.power_target) == "number" then
-    targets.power = value.power_target
-    targets.power_percent = nil
-    targets.capacity_source = "absolute"
+    log_command(ctx, "INFO", string.format(
+      "SET_SETPOINTS pct=%.1f%% state=%s power=%.0f",
+      pct, tostring(value.assignment_state or "?"), targets.power or 0))
   end
-  if type(value.steam_target) == "number" then
-    targets.steam = value.steam_target
-  end
-  if value.enable_reactors ~= nil then
-    targets.enable_reactors = value.enable_reactors and true or false
-  end
-  if value.enable_turbines ~= nil then
-    targets.enable_turbines = value.enable_turbines and true or false
-  end
-  -- Fix: assignment_state wurde vom Master gesendet und nur fürs Logging
-  -- ausgewertet (value_summary), aber nie tatsächlich in targets gespeichert.
-  -- Die UI (monitor_ui.lua render_overview) liest model.assignment_state
-  -- für den STANDBY-Indikator (z.B. "shutdown"/"unavailable") — ohne diese
-  -- Zeile war das Feld immer nil und der Indikator faktisch unerreichbar.
   if value.assignment_state ~= nil then
     targets.assignment_state = tostring(value.assignment_state)
   end
@@ -150,7 +114,10 @@ local function set_setpoints(command, ctx, record)
     })
   end
   ctx.request_startup_if_needed("SET_SETPOINTS")
-  return nil
+  -- command_value mitsenden damit ack_matches_setpoints() auf Master-Seite
+  -- greifen kann (ACK_MATCH Dedup). Ohne command_value würde der Master jede
+  -- Sekunde ein neues Paket senden (should_debounce_resend = 1000ms Fenster).
+  return record({ ok = true, command_value = value })
 end
 
 local function set_scalar_target(command, ctx, key, fallback)
@@ -217,12 +184,49 @@ local function make_dispatch()
       ctx.apply_mode(ctx.STATE.SAFE)
       return nil
     end,
-    -- TEMPORÄR: Remote-Update — siehe core/remote_update.lua. Kann später
-    -- wieder entfernt werden, sobald die aktive Entwicklungsphase vorbei ist.
+    -- Feature (2026-07-06): Zielwert fuer den internen Dampf-Fuellstand
+    -- bei individueller Pro-Reaktor-Regelung, per Master-Config-Editor
+    -- fernsteuerbar (analog zu SET_RESERVE bei FUEL, SET_TARGET bei WATER).
+    -- Fix (2026-07-17): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 14). Gab bisher unbedingt `nil`
+    -- zurueck, was der aeussere Dispatcher (new(), weiter unten in dieser
+    -- Datei) als `{ ok = true }` behandelt -- unabhaengig davon, ob
+    -- ctx.set_reactor_fill_target() den Wert tatsaechlich persistieren
+    -- konnte. `ok=true` bleibt korrekt (der RAM-Wert wird sofort
+    -- uebernommen), aber `persisted` macht das Ergebnis jetzt ehrlich
+    -- ueberpruefbar, analog zu WATER's SET_TARGET.
+    ["SET_REACTOR_FILL_TARGET"] = function(command, ctx)
+      local value = tonumber(command.value)
+      if type(value) ~= "number" or value < 0 or value > 1 then
+        if type(ctx.log) == "function" then
+          ctx.log("WARN", "SET_REACTOR_FILL_TARGET rejected: invalid value=" .. tostring(command.value))
+        end
+        return nil
+      end
+      local persisted = true
+      if type(ctx.set_reactor_fill_target) == "function" then
+        persisted = ctx.set_reactor_fill_target(value) == true
+      end
+      return { ok = true, persisted = persisted }
+    end,
+    -- REMOTE_UPDATE: Nicht direkt ausfuehren — Flag setzen fuer den
+    -- Haupt-Thread. CC:Tweaked http.get() ist async und sendet http_success/
+    -- http_failure Events. Diese koennen nicht ankommen wenn wir uns bereits
+    -- in einem os.pullEvent-Handler (modem_message) befinden — der Installer
+    -- wuerde ewig blockieren. Deferred-Ausfuehrung nach dem aktuellen Tick
+    -- im Haupt-Thread loest das Problem.
     ["REMOTE_UPDATE"] = function(_, ctx)
-      ctx.log("WARN", "Remote-Update command received, starting installer...")
-      local remote_update = require("core.remote_update")
-      remote_update.run(function(level, text) ctx.log(level, text) end)
+      if type(ctx.set_pending_remote_update) == "function" then
+        ctx.set_pending_remote_update()
+        if type(ctx.log) == "function" then
+          ctx.log("WARN", "Remote-Update: Command empfangen, starte nach aktuellem Tick...")
+        end
+      else
+        -- Fallback fuer aeltere ctx-Versionen ohne deferred support
+        require("core.remote_update").handle_command({
+          log_fn = type(ctx.log) == "function" and ctx.log or nil,
+        })
+      end
       return nil
     end
   }

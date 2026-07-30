@@ -341,4 +341,6 @@ function ui.table(mon, x, y, w, headers, rows, opts)
   end, "ui.table")
 end
 
+-- state_for als Methode exportieren damit externe Module sie nutzen können
+ui.state_for = state_for
 return ui

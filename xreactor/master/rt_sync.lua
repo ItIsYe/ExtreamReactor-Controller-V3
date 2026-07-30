@@ -41,37 +41,38 @@ local function node_capacity_ready(node)
   return false
 end
 
-local function node_capacity(node, fallback)
-  local capacity = number_or(node and node.capacity_max, nil)
-    or number_or(node and node.rt and node.rt.capacity_max, nil)
-    or number_or(node and node.measured_capacity_max, nil)
-  if capacity and capacity > 0 and node_capacity_ready(node) then
-    return capacity, "measured"
-  end
-  -- Node hat noch nicht eingelernt → 0 als Kapazität.
-  -- Master weist 0% zu; Node lehnt Setpoints sowieso ab bis Learning fertig.
+local function node_capacity(node)
+  -- Kein Fallback: Kapazität kommt ausschliesslich vom Capacity-Learning
+  -- der RT-Node. Solange noch nicht eingelernt gilt capacity=0 und die
+  -- Node wird nicht zugeteilt. Ein fixer Fallback-Wert (z.B. 3000 RF/t)
+  -- wäre bei realen Reaktoren (5-50 MRF/t) um Grössenordnungen falsch und
+  -- würde die Prozent-Berechnung komplett verfälschen.
   if not node_capacity_ready(node) then
     return 0, "learning"
   end
-  return math.max(1, number_or(fallback, 3000)), "fallback"
+  local capacity = number_or(node and node.capacity_max, nil)
+    or number_or(node and node.rt and node.rt.capacity_max, nil)
+    or number_or(node and node.measured_capacity_max, nil)
+  if capacity and capacity > 0 then
+    return capacity, "measured"
+  end
+  return 0, "learning"
 end
 
+-- Nur steuerungsrelevante Felder — RT-Node regelt Flow, Coil, Reaktor-Stab
+-- vollständig autonom aus power_target_percent. Redundante Felder entfernt:
+--   target_rpm      → RT nutzt immer CONFIG.TARGET_RPM (900)
+--   steam_target    → Reaktor regelt autonom über Steam-Margin-Regler
+--   power_target    → RT nutzt nur den Prozentwert, nicht den absoluten RF/t
+--   enable_reactors/turbines → folgen aus assignment_state via State-Machine
+--   assignment_reason/source/rank/controllable → reine Diagnose-Felder
 function M.normalize_setpoints(setpoints)
   local payload = setpoints or {}
   return {
-    target_rpm = payload.target_rpm,
-    power_target = payload.power_target,
     power_target_percent = payload.power_target_percent,
-    steam_target = payload.steam_target,
-    enable_reactors = payload.enable_reactors,
-    enable_turbines = payload.enable_turbines,
-    assignment_reason = payload.assignment_reason,
-    assignment_source = payload.assignment_source,
-    assignment_rank = payload.assignment_rank,
-    assignment_state = payload.assignment_state,
-    controllable = payload.controllable,
-    shutdown_stage = payload.shutdown_stage,
-    desired_node_state = payload.desired_node_state
+    assignment_state     = payload.assignment_state,
+    shutdown_stage       = payload.shutdown_stage,
+    desired_node_state   = payload.desired_node_state,
   }
 end
 
@@ -102,65 +103,10 @@ end
 -- eine Änderung dort soll kein neues Paket auslösen.
 function M.same_setpoints(a, b)
   if not a or not b then return false end
-  return a.target_rpm           == b.target_rpm
-     and a.power_target         == b.power_target
-     and a.power_target_percent == b.power_target_percent
-     and a.steam_target         == b.steam_target
-     and a.enable_reactors      == b.enable_reactors
-     and a.enable_turbines      == b.enable_turbines
+  return a.power_target_percent == b.power_target_percent
      and a.assignment_state     == b.assignment_state
-     and a.controllable         == b.controllable
      and a.shutdown_stage       == b.shutdown_stage
      and a.desired_node_state   == b.desired_node_state
-end
-
-local function same_shutdown_intent(a, b)
-  if not a or not b then return false end
-  local state_a = a.assignment_state
-  local state_b = b.assignment_state
-  local shutdown_like_a = state_a == "shutdown" or state_a == "shed" or state_a == "standby"
-  local shutdown_like_b = state_b == "shutdown" or state_b == "shed" or state_b == "standby"
-  if not shutdown_like_a or not shutdown_like_b then return false end
-  return a.desired_node_state == b.desired_node_state and
-      a.shutdown_stage == b.shutdown_stage and
-      (tonumber(a.power_target) or 0) == (tonumber(b.power_target) or 0) and
-      (tonumber(a.power_target_percent) or 0) == (tonumber(b.power_target_percent) or 0) and
-      (tonumber(a.steam_target) or 0) == (tonumber(b.steam_target) or 0) and
-      a.enable_reactors == b.enable_reactors and
-      a.enable_turbines == b.enable_turbines
-end
-
-local function should_debounce_resend(node, desired, now)
-  local min_gap_ms = 1000
-  local last_ts = tonumber(node.last_setpoints_ts) or 0
-  if last_ts <= 0 then return false end
-  if not M.same_setpoints(node.last_setpoints, desired) then return false end
-  local last_result = node.last_command_result
-  if type(last_result) == "table" and last_result.ok == false then
-    return false
-  end
-  if (now - last_ts) > min_gap_ms then return false end
-  return true
-end
-
-local function ack_matches_setpoints(node, ack, desired)
-  if type(ack) ~= "table" then return false end
-  if ack.ok == false then return false end
-  local setpoints_target = constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET
-  local legacy_target = constants.command_targets.POWER_TARGET
-  if ack.command_target ~= setpoints_target and ack.command_target ~= legacy_target then
-    return false
-  end
-  local ack_value = ack.command_value
-  if type(ack_value) ~= "table" then return false end
-  local ack_matches_desired = M.same_setpoints(M.normalize_setpoints(ack_value), desired)
-  if not ack_matches_desired then return false end
-  local ack_at = tonumber(ack.at) or 0
-  local last_setpoints_ts = tonumber(node and node.last_setpoints_ts) or 0
-  if last_setpoints_ts > 0 and ack_at > 0 and ack_at < last_setpoints_ts then
-    return false
-  end
-  return true
 end
 
 function M.set_default_mode(ctx, node)
@@ -200,6 +146,17 @@ function M.evaluate_rt_node(node, opts)
   local state = node and node.state or constants.node_states.OFF
   -- Fix #4: actual_output kanonisch, power_actual + output Fallback
   local output = node and (number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0)) or 0
+  -- Wartungsmodus: node-spezifischer, manuell gesetzter Ausschluss aus der
+  -- Zuweisungslogik, unabhängig vom globalen RT-HOLD. Wird ueber
+  -- node.maintenance_mode gesetzt (persistiert auf dem Node-Objekt im
+  -- Master, z. B. per UI-Toggle) — der Node bleibt online/sichtbar, wird
+  -- aber vom Sequencer/rt_sync nie als aktiv/pending_startup betrachtet,
+  -- unterscheidet sich damit klar von OFFLINE (Node antwortet ja weiterhin)
+  -- und von SHED (das ist eine automatische, kapazitaetsgetriebene
+  -- Master-Entscheidung, kein manueller Ausschluss).
+  if node and node.maintenance_mode == true then
+    return { controllable = false, reason = "MAINTENANCE", mode = mode, status = status, state = state, output = output }
+  end
   if hold then
     return { controllable = false, reason = "GLOBAL_HOLD", mode = mode, status = status, state = state, output = output }
   end
@@ -227,14 +184,13 @@ function M.build_node_setpoint_plan(ctx)
   local now = os.epoch("utc")
   local plan = {}
   local active, pending_startup = {}, {}
-  local fallback_capacity = math.max(1, number_or(base.power_per_node_capacity, 3000))
-  local startup_margin = math.max(0, number_or(base.startup_margin_power, fallback_capacity * 0.2))
+  local startup_margin = math.max(0, number_or(base.startup_margin_power, 0))
 
   for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE then
       local eval = M.evaluate_rt_node(node, { rt_global_off = hold })
       local shutdown = node and node.shutdown_workflow or {}
-      local capacity, capacity_source = node_capacity(node, fallback_capacity)
+      local capacity, capacity_source = node_capacity(node)
       local entry = {
         node = node,
         eval = eval,
@@ -284,38 +240,76 @@ function M.build_node_setpoint_plan(ctx)
       end
     end
   end
-  local keep_count = math.min(#active, needed_nodes)
-  remaining = global_target
+  -- Proportionale Zuweisung: nur die benötigten Nodes werden aktiviert,
+  -- und diese bekommen alle denselben Prozentsatz.
+  --
+  -- Ablauf:
+  --   1. Sortiere nach Kapazität (grösste zuerst) — damit werden immer die
+  --      leistungsstärksten Nodes bevorzugt, nicht zufällig die mit dem
+  --      aktuell höchsten Output.
+  --   2. Zähle wie viele Nodes für global_target nötig sind (greedy).
+  --   3. Verteile global_target gleichmässig NUR auf die benötigten Nodes:
+  --        uniform_pct = global_target / sum(benötigte Kapazitäten) × 100
+  --   4. Nicht benötigte Nodes: SHED/standby.
+  --
+  -- Vorteile:
+  --   - Gleichmässige Auslastung (kein Reaktor dauerhaft auf 100%)
+  --   - Kein Yo-Yo-Effekt
+  --   - Bei 1 Node: identisches Ergebnis wie vorher
+  --   - Skaliert korrekt auf N Nodes mit unterschiedlichen Kapazitäten
 
+  -- Nodes nach Kapazität sortieren (grösste zuerst)
+  table.sort(active, function(a, b)
+    if a.capacity ~= b.capacity then return a.capacity > b.capacity end
+    return (a.id or "") < (b.id or "")
+  end)
+
+  -- Summe der Kapazitäten der benötigten Nodes
+  local needed_capacity = 0
+  for i = 1, needed_nodes do
+    if active[i] then needed_capacity = needed_capacity + active[i].capacity end
+  end
+  local uniform_pct = needed_capacity > 0
+    and math.min(100, global_target / needed_capacity * 100)
+    or 0
+
+  local keep_count = math.min(#active, needed_nodes)
+
+  -- Fix (2026-06-30): assigned_power/assigned_percent existierten bisher nur
+  -- lokal auf entry (verworfen nach dieser Funktion) — node.assigned_power
+  -- wurde nie persistiert. Das UI (rt_dashboard.lua rt_target()) zeigte
+  -- daher rt.power_target an, ein veraltetes Konzept aus der Zeit vor dem
+  -- SCADA-Rewrite (RT bekommt nur noch power_target_percent, berechnet
+  -- seinen RF/t-Output selbst) — das Feld wird von RT nie mehr gesendet und
+  -- zeigte dauerhaft 0 im UI, obwohl der Master intern korrekt einen
+  -- Soll-Wert berechnet hatte. Jetzt: zusaetzlich auf node persistieren.
   for idx, entry in ipairs(active) do
+    entry.assignment_rank = idx
     if idx <= keep_count then
-      local assign = math.min(entry.capacity, remaining)
-      if idx == keep_count then assign = math.min(entry.capacity, remaining) end
-      assign = math.max(0, assign)
-      entry.assigned_power = assign
-      entry.assigned_percent = entry.capacity > 0 and math.min(100, (assign / entry.capacity) * 100) or 0
-      entry.assignment_rank = idx
-      entry.assignment_state = "active"
-      entry.assignment_reason = idx == 1 and "PRIMARY_ACTIVE" or "DEMAND_ACTIVE"
-      remaining = math.max(0, remaining - assign)
+      entry.assigned_percent = uniform_pct
+      entry.assigned_power   = entry.capacity * uniform_pct / 100
+      entry.assignment_state  = "active"
+      entry.assignment_reason = "PROPORTIONAL_ACTIVE"
     else
-      entry.assigned_power = 0
-      entry.assigned_percent = 0
-      entry.assignment_rank = idx
+      entry.assigned_power    = 0
+      entry.assigned_percent  = 0
+      entry.assignment_rank   = idx
       if idx == keep_count + 1 then
         local ready_at = entry.shutdown_ready_at or 0
         local requested_at = entry.shutdown_requested_at or now
         local ramp_ms = math.max(1000, number_or(base.shutdown_ramp_ms, 6000))
-        if ready_at <= 0 then
-          ready_at = requested_at + ramp_ms
-        end
+        if ready_at <= 0 then ready_at = requested_at + ramp_ms end
         local shutdown_ready = now >= ready_at
-        entry.assignment_state = shutdown_ready and "shutdown" or "shed"
+        entry.assignment_state  = shutdown_ready and "shutdown" or "shed"
         entry.assignment_reason = shutdown_ready and "SHUTDOWN_READY" or "SHED_EXCESS_CAPACITY"
       else
-        entry.assignment_state = "standby"
+        entry.assignment_state  = "standby"
         entry.assignment_reason = "STANDBY"
       end
+    end
+    if type(entry.node) == "table" then
+      entry.node.assigned_power = entry.assigned_power
+      entry.node.assigned_percent = entry.assigned_percent
     end
   end
 
@@ -334,6 +328,10 @@ function M.build_node_setpoint_plan(ctx)
       entry.assignment_state = "standby"
       entry.assigned_power = 0
       entry.assigned_percent = 0
+      if type(entry.node) == "table" then
+        entry.node.assigned_power = 0
+        entry.node.assigned_percent = 0
+      end
     end
   end
 
@@ -354,19 +352,11 @@ function M.build_node_setpoint_plan(ctx)
       desired_node_state = constants.node_states.LIMITED
     end
     entry.setpoints = M.normalize_setpoints({
-      target_rpm = base.target_rpm,
-      steam_target = enabled and base.steam_target or 0,
-      power_target = enabled and entry.assigned_power or 0,
       power_target_percent = enabled and entry.assigned_percent or 0,
-      enable_reactors = enabled and (base.enable_reactors == true) or false,
-      enable_turbines = enabled and (base.enable_turbines == true) or false,
-      assignment_reason = entry.assignment_reason,
-      assignment_source = "master.rt_sync.plan.capacity",
-      assignment_state = entry.assignment_state,
-      assignment_rank = entry.assignment_rank,
-      controllable = entry.controllable,
-      shutdown_stage = entry.assignment_state == "shutdown" and "REQUEST_OFF" or (entry.assignment_state == "shed" and "RAMPDOWN" or nil),
-      desired_node_state = desired_node_state
+      assignment_state     = entry.assignment_state,
+      shutdown_stage       = entry.assignment_state == "shutdown" and "REQUEST_OFF"
+                             or (entry.assignment_state == "shed" and "RAMPDOWN" or nil),
+      desired_node_state   = desired_node_state,
     })
   end
 
@@ -418,6 +408,19 @@ function M.sync_rt_node(ctx, node)
   if not assigned then return end
   local desired = assigned.setpoints
   local trigger = tostring(ctx.trigger or "unknown")
+
+  -- Fix: assignment_state wurde NUR geschrieben, wenn ein neues Funk-Command
+  -- tatsächlich gesendet wurde (siehe send_rt_setpoints -> node.last_setpoints).
+  -- Bei ACK_MATCH/Dedup (der HÄUFIGSTE Fall im Normalbetrieb — kein neues
+  -- Command nötig weil die Node schon den richtigen Wert hat) blieb
+  -- node.assignment_state für die UI dauerhaft leer/UNASSIGNED, obwohl der
+  -- Master intern längst korrekt "active"/ASSIGNED plant. Jetzt: der Plan-
+  -- Wert wird bei JEDEM sync_rt_node()-Lauf in node geschrieben, unabhängig
+  -- vom Dedup-Pfad — Dedup spart nur den Funkversand, nicht die UI-Daten.
+  node.assignment_state = assigned.assignment_state
+  node.assignment_reason = assigned.assignment_reason
+  node.control_source = assigned.mode
+  node.capacity_source = assigned.capacity_source
   if ctx.log then
     ctx.log(("RT plan node=%s trigger=%s state=%s controllable=%s reason=%s assigned=%.2f percent=%.1f capacity=%.2f source=%s mode=%s status=%s"):format(
       tostring(node_id), trigger, tostring(desired.assignment_state), tostring(assigned.controllable), tostring(assigned.assignment_reason), tonumber(desired.power_target) or 0,
@@ -425,61 +428,15 @@ function M.sync_rt_node(ctx, node)
       tostring(assigned.mode), tostring(assigned.status)
     ), assigned.controllable and "INFO" or "WARN")
   end
-  if should_debounce_resend(node, desired, now) then
-    if ctx.log then
-      ctx.log(("RT setpoints deduped node=%s trigger=%s state=%s reason=%s age_ms=%d"):format(
-        tostring(node_id), trigger, tostring(desired.assignment_state), tostring(desired.assignment_reason), now - (node.last_setpoints_ts or now)
-      ))
-    end
-    return
+  -- Setpoint immer senden.
+  if ctx.log then
+    ctx.log(("RT setpoints send node=%s trigger=%s pct=%.1f state=%s"):format(
+      tostring(node_id), trigger,
+      tonumber(desired.power_target_percent) or 0,
+      tostring(desired.assignment_state)
+    ), "INFO")
   end
-
-  local workflow = node.shutdown_workflow or {}
-  if workflow.stage == "REQUESTED" or workflow.stage == "WAITING_STATE" then
-    if ctx.log then
-      ctx.log(("RT setpoints deduped node=%s trigger=%s reason=SHUTDOWN_WORKFLOW_%s"):format(tostring(node_id), trigger, tostring(workflow.stage)))
-    end
-    return
-  end
-
-  local ack = node.last_command_result
-  if ack_matches_setpoints(node, ack, desired) then
-    if ctx.log then
-      ctx.log(("RT setpoints deduped node=%s trigger=%s reason=ACK_MATCH"):format(tostring(node_id), trigger))
-    end
-    return
-  end
-
-  local shutdown_target = desired.desired_node_state == constants.node_states.OFF and desired.assignment_state == "shutdown"
-  if shutdown_target and ack and ack.ok ~= false and ack.command_target == (constants.command_targets.SET_SETPOINTS or constants.command_targets.POWER_TARGET) then
-    local ack_state = ack.desired_node_state or (ack.command_value and ack.command_value.desired_node_state)
-    local ack_transition = ack.transition or (ack.command_value and ack.command_value.transition)
-    if ack_state == constants.node_states.OFF and (ack_transition == "REQUESTED" or ack_transition == "ALREADY_IN_STATE") then
-      if ctx.log then
-        ctx.log(("RT shutdown resend skipped node=%s trigger=%s ack_transition=%s"):format(tostring(node_id), trigger, tostring(ack_transition)))
-      end
-      return
-    end
-  end
-
-  local last_result = node.last_command_result
-  local last_failed = type(last_result) == "table" and last_result.ok == false
-  if not last_failed and same_shutdown_intent(node.last_setpoints, desired) then
-    if ctx.log then
-      ctx.log(("RT shutdown setpoints deduped node=%s trigger=%s stage=%s target=%s"):format(
-        tostring(node_id), trigger, tostring(desired.shutdown_stage), tostring(desired.desired_node_state)
-      ))
-    end
-    return
-  end
-  if not M.same_setpoints(node.last_setpoints, desired) then
-    if ctx.log then
-      ctx.log(("RT command send node=%s trigger=%s state=%s reason=%s"):format(
-        tostring(node_id), trigger, tostring(desired.assignment_state), tostring(desired.assignment_reason)
-      ), "INFO")
-    end
-    M.send_rt_setpoints(ctx.comms, node, desired)
-  end
+  M.send_rt_setpoints(ctx.comms, node, desired)
 end
 
 return M

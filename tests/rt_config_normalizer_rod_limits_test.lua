@@ -1,6 +1,5 @@
-package.path = package.path .. ";/workspace/ExtreamReactor-Controller-V3/?.lua"
 
-local normalizer = dofile("/workspace/ExtreamReactor-Controller-V3/xreactor/nodes/rt/config_normalizer.lua")
+local normalizer = dofile("xreactor/nodes/rt/config_normalizer.lua")
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then

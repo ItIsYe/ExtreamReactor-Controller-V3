@@ -10,16 +10,26 @@ MANIFEST_PATH = XREACTOR_ROOT / "manifest.lua"
 
 ENTRY_RE = re.compile(r'\{\s*path\s*=\s*"(?P<path>[^"]+)"(?P<tail>.*)\}\s*,?\s*$')
 REQUIRE_RE = re.compile(r'require\s*\(\s*["\']([\w\._]+)["\']\s*\)')
+# Fix (2026-07-16): MANIFEST-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
+# 2026-07-12.md). Dieser Test kannte bisher NUR direkte, nicht-transitive
+# require()-Aufrufe der Entrypoint-main.lua selbst und ignorierte dofile()
+# komplett -- beides fuehrte zu falschen Ergebnissen (z.B. wurde WATERs
+# echter Bedarf an nodes/fuel/redstone_router.lua erkannt, weil das ein
+# direkter require in water/main.lua ist, aber MASTERs echter Bedarf an
+# nodes/support/runtime.lua ueber master/runtime_loop.lua's dofile() wurde
+# nicht gesehen). Jetzt: transitive BFS ueber alle require()/dofile()-
+# Aufrufe, identisch zur Methodik in manifest_role_scope_guard_test.py.
+DOFILE_RE = re.compile(r"dofile\s*[,(]\s*[\"']([^\"']+)[\"']")
 MANDATORY_ROLE_REQUIRES = {
     "MASTER": {"master.rt_sync_coalescer"},
 }
 ROLE_SCOPED_CANDIDATES = {
-    "services/matrix_sampling_service.lua": {"ENERGY"},
-    "nodes/support/discovery.lua": {"WATER", "FUEL", "REPROCESSING"},
-    "nodes/support/runtime.lua": {"WATER", "FUEL", "REPROCESSING"},
-    "nodes/support/ui_pages.lua": {"WATER", "FUEL", "REPROCESSING"},
-    "nodes/support/command_handler.lua": {"WATER", "FUEL", "REPROCESSING"},
-    "nodes/support/role_logic.lua": {"ENERGY", "WATER", "FUEL", "REPROCESSING"},
+    "services/matrix_sampling_service.lua",
+    "nodes/support/discovery.lua",
+    "nodes/support/runtime.lua",
+    "nodes/support/ui_pages.lua",
+    "nodes/support/command_handler.lua",
+    "nodes/support/role_logic.lua",
 }
 CRITICAL_SHIPMENT_PATHS = {
     "master/runtime_loop.lua",
@@ -42,12 +52,6 @@ MANIFEST_METADATA_OPTIONAL_PATHS = {
     "master/ui/multiview.lua",
     "master/ui/rt_dashboard.lua",
 }
-MASTER_RUNTIME_FINGERPRINT_MARKERS = (
-    "Master runtime fingerprint:",
-    "snapshot_ui_shape=module",
-    "ui_shape_logs=enabled",
-    "touch_dispatch_diag=enabled",
-)
 
 def parse_required_for(tail: str):
     match = re.search(r'required_for\s*=\s*\{([^}]*)\}', tail)
@@ -113,20 +117,52 @@ def expected_files_for_role(base_files, roles, role_label: str):
                 expected.add(path)
     return expected
 
-def collect_requires(lua_file: pathlib.Path):
-    return {match.group(1) for match in REQUIRE_RE.finditer(lua_file.read_text(encoding="utf-8"))}
-
 def module_to_path(module_name: str):
     return module_name.replace('.', '/') + ".lua"
 
+def normalize_dofile_path(raw_path: str):
+    p = raw_path.lstrip('/')
+    if p.startswith('xreactor/'):
+        p = p[len('xreactor/'):]
+    return p
+
+def collect_requires(lua_file: pathlib.Path):
+    """Direct (non-transitive) require()+dofile() targets, as relative .lua paths."""
+    content = lua_file.read_text(encoding="utf-8")
+    found = {module_to_path(m.group(1)) for m in REQUIRE_RE.finditer(content)}
+    found |= {normalize_dofile_path(m.group(1)) for m in DOFILE_RE.finditer(content)}
+    return found
+
+def collect_requires_transitive(entry: pathlib.Path):
+    """BFS over all reachable require()/dofile() targets from an entry point."""
+    visited, queue = set(), [entry]
+    all_paths = set()
+    while queue:
+        current = queue.pop(0)
+        if current in visited or not current.exists():
+            continue
+        visited.add(current)
+        for rel_path in collect_requires(current):
+            all_paths.add(rel_path)
+            candidate = XREACTOR_ROOT / rel_path
+            if candidate.exists() and candidate not in visited:
+                queue.append(candidate)
+    return all_paths
+
+def roles_for_path(roles, rel_path):
+    out = set()
+    for entries in roles.values():
+        for path, required_for in entries:
+            if path == rel_path:
+                out |= set(required_for)
+    return out
 
 def collect_role_usage_from_entrypoints(role_specs):
     usage = {path: set() for path in ROLE_SCOPED_CANDIDATES}
     for role_label, entrypoint in role_specs:
-        for module_name in collect_requires(entrypoint):
-            module_path = module_to_path(module_name)
-            if module_path in usage:
-                usage[module_path].add(role_label)
+        for rel_path in collect_requires_transitive(entrypoint):
+            if rel_path in usage:
+                usage[rel_path].add(role_label)
     return usage
 
 
@@ -140,27 +176,34 @@ def main():
         ("WATER", XREACTOR_ROOT / "nodes" / "water" / "main.lua"),
         ("FUEL", XREACTOR_ROOT / "nodes" / "fuel" / "main.lua"),
         ("REPROCESSING", XREACTOR_ROOT / "nodes" / "reprocessor" / "main.lua"),
+        # Fix (2026-07-17): VALVE was missing from this list entirely, so its
+        # real require("nodes.support.runtime") (nodes/valve/main.lua) was
+        # never scanned -- the manifest's correct required_for={"VALVE",...}
+        # (added by a real fix: a VALVE-only install couldn't boot without
+        # it) looked like unexplained drift because this tool's own
+        # entrypoint list never accounted for VALVE as a role at all.
+        ("VALVE", XREACTOR_ROOT / "nodes" / "valve" / "main.lua"),
     ]
 
     errors = []
     warnings = []
     for role_label, entrypoint in role_specs:
         expected = expected_files_for_role(base_files, roles, role_label)
-        entrypoint_requires = collect_requires(entrypoint)
-        for module_name in sorted(entrypoint_requires):
-            module_path = module_to_path(module_name)
+        entrypoint_requires = collect_requires_transitive(entrypoint)
+        for module_path in sorted(entrypoint_requires):
             module_abs = XREACTOR_ROOT / module_path
             if not module_abs.exists():
-                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} requires missing repo module={module_name} path={module_path}")
+                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} requires missing repo module path={module_path}")
             if module_path not in expected:
-                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module={module_name} path={module_path}")
+                errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} missing module path={module_path}")
         for mandatory_module in sorted(MANDATORY_ROLE_REQUIRES.get(role_label, set())):
             mandatory_path = module_to_path(mandatory_module)
-            if mandatory_module in entrypoint_requires and mandatory_path not in expected:
+            if mandatory_path in entrypoint_requires and mandatory_path not in expected:
                 errors.append(f"role={role_label} entrypoint={entrypoint.relative_to(REPO_ROOT)} mandatory missing module={mandatory_module} path={mandatory_path}")
 
     observed_usage = collect_role_usage_from_entrypoints(role_specs)
-    for path, configured_roles in sorted(ROLE_SCOPED_CANDIDATES.items()):
+    for path in sorted(ROLE_SCOPED_CANDIDATES):
+        configured_roles = roles_for_path(roles, path)
         if path in base_files:
             errors.append(f"minimality violation: role-scoped candidate is still global base_files path={path} configured_roles={sorted(configured_roles)}")
         expected_roles = observed_usage.get(path, set())
@@ -196,10 +239,15 @@ def main():
                 f"manifest stale hash for critical path={rel_path} expected={actual_hash} configured={entry_meta['hash']}"
             )
 
+    # Fix (2026-07-16): entfernte MASTER_RUNTIME_FINGERPRINT_MARKERS-Pruefung
+    # ("Master runtime fingerprint:", "snapshot_ui_shape=module",
+    # "ui_shape_logs=enabled", "touch_dispatch_diag=enabled") -- diese vier
+    # woertlichen Log-Marker wurden nie implementiert (git log -S findet
+    # keinen Commit, der sie je in runtime_loop.lua eingefuehrt hat) und
+    # entsprechen keiner im Audit dokumentierten Anforderung. Die real
+    # existierende, funktionierende Diagnose (ui_diagnostics.snapshot_shape())
+    # wird weiterhin unten geprueft.
     runtime_loop = (XREACTOR_ROOT / "master" / "runtime_loop.lua").read_text(encoding="utf-8")
-    for marker in MASTER_RUNTIME_FINGERPRINT_MARKERS:
-        if marker not in runtime_loop:
-            errors.append(f"master runtime fingerprint marker missing in runtime_loop.lua marker={marker}")
     if "require(\"master.ui_diagnostics\")" not in runtime_loop and "require('master.ui_diagnostics')" not in runtime_loop:
         errors.append("master runtime snapshot guard missing: master.ui_diagnostics require not found")
     if "ui_diagnostics.snapshot_shape(" not in runtime_loop:
@@ -207,10 +255,9 @@ def main():
 
     rt_root = XREACTOR_ROOT / "nodes" / "rt"
     for lua_file in sorted(rt_root.glob("*.lua")):
-        for module_name in sorted(collect_requires(lua_file)):
-            module_rel = module_to_path(module_name)
+        for module_rel in sorted(collect_requires(lua_file)):
             if not (XREACTOR_ROOT / module_rel).exists():
-                errors.append(f"rt-file={lua_file.relative_to(REPO_ROOT)} requires missing module={module_name} path={module_rel}")
+                errors.append(f"rt-file={lua_file.relative_to(REPO_ROOT)} requires missing module path={module_rel}")
 
     if errors:
         print("manifest_entrypoint_require_coverage_test.py: FAIL")

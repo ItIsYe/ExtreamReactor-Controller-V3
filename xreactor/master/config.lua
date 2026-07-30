@@ -38,13 +38,13 @@ local CONFIG = {
   DEFAULT_COMMS_BACKOFF_CAP = 6.0,
   DEFAULT_COMMS_DEDUPE_TTL = 30,
   DEFAULT_COMMS_DEDUPE_LIMIT = 200,
-  DEFAULT_COMMS_PEER_TIMEOUT = 12.0,
+  DEFAULT_COMMS_PEER_TIMEOUT = 30.0,
   DEFAULT_NODE_OFFLINE_PURGE_AFTER_S = 120,    -- Sekunden bis ein offline Node aus dem managed-Set entfernt wird.
   DEFAULT_SEQUENCER_SCRAM_TEMPERATURE = 950,   -- °C ab der Sequencer-Timeout als EMERGENCY gilt
-  DEFAULT_COMMS_PEER_DOWN_GRACE = 3.0,
+  DEFAULT_COMMS_PEER_DOWN_GRACE = 5.0,
   DEFAULT_COMMS_PEER_DOWN_MIN_OBSERVATIONS = 2,
-  DEFAULT_COMMS_PEER_UP_DEBOUNCE = 2.5,
-  DEFAULT_COMMS_PEER_UP_MIN_OBSERVATIONS = 3,
+  DEFAULT_COMMS_PEER_UP_DEBOUNCE = 1.5,
+  DEFAULT_COMMS_PEER_UP_MIN_OBSERVATIONS = 2,
   DEFAULT_COMMS_QUEUE_LIMIT = 200,
   DEFAULT_COMMS_DROP_SIMULATION = 0,
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
@@ -103,8 +103,21 @@ return {
   startup_ramp = CONFIG.DEFAULT_STARTUP_RAMP,
   startup_stage_timeout_s = CONFIG.DEFAULT_STARTUP_STAGE_TIMEOUT,
   rt_default_mode = CONFIG.DEFAULT_RT_MODE,
-  monitor_scale = 1.0,
-  ui_scale_default = 1.0,
+  -- Fix (2026-07-07): CRITICAL. monitor_scale/ui_scale_default waren beide
+  -- fest auf 1.0 gesetzt. Laut compute_auto_scale()-Doku in
+  -- core/monitor_manager.lua ist die automatische, groessenabhaengige
+  -- Skalierung (v328) NUR aktiv "wenn KEINE feste Skala explizit
+  -- uebergeben wurde" — init_runtime.lua reicht aber IMMER einen Wert
+  -- durch (erst monitor_scale, sonst ui_scale_default als Fallback), und
+  -- beide waren nie nil. Das bedeutet: die Auto-Skalierung war seit v328
+  -- fuer JEDEN Master standardmaessig komplett deaktiviert, jeder Monitor
+  -- (auch kleine 1-Block-AUX-Displays) bekam pauschal Skala 1.0 — zu grobe
+  -- Schrift, Inhalte wurden auf kleinen Monitoren abgeschnitten ("~").
+  -- Jetzt nil, damit compute_auto_scale() tatsaechlich greift; wer eine
+  -- feste Skala will, kann sie weiterhin explizit in der eigenen
+  -- config/master.lua setzen.
+  monitor_scale = nil,
+  ui_scale_default = nil,
   master_min_monitor_width = CONFIG.DEFAULT_MASTER_MIN_MONITOR_WIDTH,
   master_min_monitor_height = CONFIG.DEFAULT_MASTER_MIN_MONITOR_HEIGHT,
   debug_logging = CONFIG.DEFAULT_DEBUG_LOGGING,

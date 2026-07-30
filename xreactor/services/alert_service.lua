@@ -77,6 +77,20 @@ function alert_service.new(opts)
       state.mutes.nodes[key] = nil
     end
   end
+  -- Optionale akustische Alarmierung (Feature, 2026-07-01): standardmaessig
+  -- aktiv (opt-out via config.enable_speaker_alarm = false statt opt-in),
+  -- da das Modul selbst komplett harmlos ist wenn kein Speaker angeschlossen
+  -- ist (findet einfach keinen und tut nichts). require() ist pcall-
+  -- geschuetzt fuer den Fall, dass optional/speaker_alarm.lua auf einem
+  -- Node fehlt (z.B. altes Manifest vor diesem Feature).
+  local speaker_alarm = nil
+  if config.enable_speaker_alarm ~= false then
+    local ok_spk_mod, spk_mod = pcall(require, "optional.speaker_alarm")
+    if ok_spk_mod then
+      local ok_spk_inst, spk_inst = pcall(spk_mod.new, {})
+      if ok_spk_inst then speaker_alarm = spk_inst end
+    end
+  end
   local self = {
     log_prefix = opts.log_prefix or "ALERT",
     config = config,
@@ -91,7 +105,8 @@ function alert_service.new(opts)
     clear_pending = {},
     last_eval_duration_ms = 0,
     last_eval_ts = 0,
-    muted_last = 0
+    muted_last = 0,
+    speaker_alarm = speaker_alarm
   }
   return setmetatable(self, { __index = alert_service })
 end
@@ -244,14 +259,68 @@ function alert_service:tick()
   self.muted_last = muted_count
   self.last_eval_duration_ms = now_ms() - eval_start
   self.last_eval_ts = eval_start
+
+  -- Optionale akustische Alarmierung (Feature, 2026-07-01, erweitert
+  -- 2026-07-02 um Entwarnungs-Ton + zusaetzliche Ereignis-Sounds): siehe
+  -- xreactor/optional/speaker_alarm.lua. Vollstaendig fehlerisoliert —
+  -- fehlt der Speaker oder ist opts.speaker_alarm nicht gesetzt, passiert
+  -- hier einfach nichts.
+  if self.speaker_alarm then
+    local counts = self:get_counts_by_severity()
+    local critical_active = (counts.CRITICAL or 0) > 0
+    if critical_active then
+      pcall(self.speaker_alarm.play, "alarm")
+    elseif self.last_critical_active == true then
+      -- Uebergang von "war aktiv" zu "jetzt nicht mehr aktiv" — Entwarnung
+      -- nur EINMAL beim Uebergang spielen, nicht dauerhaft solange kein
+      -- Alarm aktiv ist (das waere sinnlos haeufig).
+      pcall(self.speaker_alarm.play, "clear")
+    end
+    self.last_critical_active = critical_active
+
+    -- node_offline / safe_mode: nur beim NEUEN Auftreten eines konkreten
+    -- Alerts spielen, nicht bei jedem tick() solange er noch aktiv ist —
+    -- verfolgt dafuer die zuletzt gesehenen aktiven Alert-IDs pro Code.
+    self.seen_offline_ids = self.seen_offline_ids or {}
+    self.seen_safe_ids = self.seen_safe_ids or {}
+    local active = self.alerts:get_active()
+    local still_offline, still_safe = {}, {}
+    for _, alert in ipairs(active) do
+      if alert.code == "NODE_COMMS_DOWN" then
+        still_offline[alert.id] = true
+        if not self.seen_offline_ids[alert.id] then
+          pcall(self.speaker_alarm.play, "node_offline")
+        end
+      elseif alert.code == "RT_SAFE_MODE" or alert.code == "RT_EMERGENCY" then
+        still_safe[alert.id] = true
+        if not self.seen_safe_ids[alert.id] then
+          pcall(self.speaker_alarm.play, "safe_mode")
+        end
+      end
+    end
+    self.seen_offline_ids = still_offline
+    self.seen_safe_ids = still_safe
+  end
 end
 
 function alert_service:get_active()
-  return self.alerts:get_active()
+  local active = self.alerts:get_active()
+  -- Feature 2026-07-02 (Alarm-Lifecycle): lifecycle_state direkt an jeden
+  -- Alert anhaengen, damit UI-Views es einfach als alert.lifecycle_state
+  -- lesen koennen, ohne selbst Zugriff auf das interne alerts-Objekt oder
+  -- dessen History zu brauchen.
+  for _, alert in ipairs(active) do
+    alert.lifecycle_state = self.alerts:lifecycle_state(alert)
+  end
+  return active
 end
 
 function alert_service:get_history()
   return self.alerts:get_history()
+end
+
+function alert_service:get_history_filtered(opts)
+  return self.alerts:get_history_filtered(opts)
 end
 
 function alert_service:get_counts()

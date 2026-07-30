@@ -177,7 +177,7 @@ function M.start_module(ctx, module_id, module_type, ramp_profile)
   ))
   if module.type == "turbine" then
     local ctrl = ctx.get_turbine_ctrl(module.name)
-    ctrl.mode = ctx.TURBINE_MODE.RAMP
+    ctrl.mode = ctx.TURBINE_MODE_RAMP
   end
   return module, "Starting"
 end
@@ -212,8 +212,14 @@ function M.process_startup(ctx)
     return
   end
   local now = os.epoch("utc")
-  local duration = ctx.ramp_duration(module.ramp_profile)
-  local progress = safety.clamp((now - module.start_time) / duration, 0, 1)
+  -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 12). "now" und "module.start_time"
+  -- sind beide os.epoch("utc") in Millisekunden -- die Rampendauer muss
+  -- deshalb ebenfalls in Millisekunden vorliegen, sonst erreicht der
+  -- Fortschritt fast sofort 100% (siehe ctx.ramp_duration_ms's Fix-
+  -- Kommentar in main.lua fuer die vollstaendige Herleitung).
+  local duration_ms = ctx.ramp_duration_ms(module.ramp_profile)
+  local progress = safety.clamp((now - module.start_time) / duration_ms, 0, 1)
   module.progress = progress
   if module.type == "turbine" then
     if module.caps then
@@ -593,7 +599,7 @@ function M.apply_safe_controls(ctx)
     end
     if caps.setFluidFlowRate or caps.setFluidFlowRateMax then
       local ctrl = ctx.get_turbine_ctrl(name)
-      ctrl.mode = ctx.TURBINE_MODE.RAMP
+      ctrl.mode = ctx.TURBINE_MODE_RAMP
       ctrl.requested_flow = ctx.clamp_turbine_flow(ctrl.requested_flow or ctrl.flow or ctx.START_FLOW)
       ctrl.flow = ctrl.requested_flow
       ctrl.pending_expected_flow = ctrl.requested_flow

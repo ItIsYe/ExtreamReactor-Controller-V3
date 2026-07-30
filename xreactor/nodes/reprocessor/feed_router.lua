@@ -72,16 +72,45 @@ end
 
 -- ---- peripheral discovery --------------------------------------------------
 
+-- Fix (2026-07-19): CRITICAL. Derselbe Fehler wie in nodes/fuel/logistics_
+-- router.lua (siehe dortiger Fix-Kommentar): der Default-Name "me_bridge"
+-- ist reine Konvention dieser Config, das tatsaechliche Advanced-
+-- Peripherals-Peripheral heisst automatisch vergeben z.B. "meBridge_0" --
+-- ohne manuell exakt gesetzten config.feed.me_bridge-Namen meldete sich
+-- eine korrekt verkabelte ME Bridge dauerhaft als "absent". Faellt jetzt,
+-- sofern kein expliziter Name konfiguriert ist, auf eine Methodensignatur-
+-- Suche zurueck (getItem + exportItemToPeripheral -- genau die zwei
+-- Methoden, die diese Datei tatsaechlich aufruft).
+local function find_me_bridge_by_methods()
+  for _, name in ipairs(peripheral.getNames() or {}) do
+    local ok, methods = pcall(peripheral.getMethods, name)
+    if ok and type(methods) == "table" then
+      local set = {}
+      for _, m in ipairs(methods) do set[m] = true end
+      if set.getItem and set.exportItemToPeripheral then
+        return name
+      end
+    end
+  end
+  return nil
+end
+
 function M:refresh_peripherals()
   local cfg = self.config.feed or {}
   local name = cfg.me_bridge or "me_bridge"
+  local found_name = nil
   if peripheral.isPresent(name) then
-    local ok, w = pcall(peripheral.wrap, name)
+    found_name = name
+  elseif not cfg.me_bridge then
+    found_name = find_me_bridge_by_methods()
+  end
+  if found_name then
+    local ok, w = pcall(peripheral.wrap, found_name)
     if ok and w then
       self._state.bridge = w
-      self._state.bridge_name = name
+      self._state.bridge_name = found_name
     else
-      self.warn_once("bridge_wrap", "FeedRouter: ME-Bridge wrap failed: " .. name)
+      self.warn_once("bridge_wrap", "FeedRouter: ME-Bridge wrap failed: " .. found_name)
       self._state.bridge = nil
     end
   else
@@ -131,8 +160,19 @@ local function feed_one(self, cfg)
     return
   end
 
-  -- Pfad zum Ziel-Reprocessor öffnen, Item exportieren, Pfad wieder schließen.
-  self.rs_router:route_and_act(target.label, function()
+  -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
+  -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). route_and_act()
+  -- blockierte bisher ~2.05-2.4s pro Befuellung -- ersetzt durch die
+  -- asynchrone Zustandsmaschine in redstone_router.lua (begin_transaction()
+  -- + tick(), von M:tick() weiter unten regelmaessig aufgerufen). "busy"
+  -- kann hier praktisch nur auftreten, wenn eine vorherige Befuellung
+  -- (Settle/Hold-Phase) noch nicht abgeschlossen ist -- bei einem
+  -- Zufallsintervall von mindestens einigen Sekunden zwischen zwei
+  -- feed_one()-Aufrufen und einer Transaktionsdauer von wenigen Sekunden
+  -- ein seltener Randfall. In diesem Fall wird die Befuellung schlicht
+  -- uebersprungen; das naechste zufaellige Intervall (siehe M:tick())
+  -- versucht es erneut, kein Datenverlust, kein haengender Zustand.
+  local started, reason = self.rs_router:begin_transaction(target.label, function()
     local result, err = safe_call(bridge, "exportItemToPeripheral", { name = item, count = amount }, target.inlet)
     local exported = type(result) == "table" and (result.amount or 0) or (type(result) == "number" and result or 0)
     if exported and exported > 0 then
@@ -147,7 +187,36 @@ local function feed_one(self, cfg)
       self.warn_once("feed_fail:" .. tostring(target.label),
         "FeedRouter: feed failed for " .. tostring(target.label) .. ": " .. tostring(err))
     end
-  end, cfg.valve_open_ms)
+  end, cfg.valve_open_ms, {
+    -- Fix (2026-07-16): CRITICAL (FUEL-P0-Folgefix, siehe docs/CODING_AI_
+    -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 7). Bricht die
+    -- Transaktion VOR dem Export ab (z.B. Ventil-ACK-Fehler oder Phasen-
+    -- Timeout), lief bisher weder der Erfolgs- noch ein Fehlerpfad --
+    -- last_error blieb stumm auf dem letzten (moeglicherweise laengst
+    -- veralteten) Wert stehen, obwohl diese Befuellung tatsaechlich
+    -- gescheitert ist.
+    on_error = function(reason)
+      self._state.last_error = "routing_failed:" .. tostring(reason)
+      self.warn_once("feed_route_fail:" .. tostring(target.label),
+        "FeedRouter: Routing-Transaktion fuer " .. tostring(target.label) .. " abgebrochen (" .. tostring(reason) .. ")")
+    end,
+  })
+  if not started then
+    self.warn_once("router_busy:" .. tostring(reason),
+      "FeedRouter: Befuellung fuer " .. tostring(target.label) .. " uebersprungen (" .. tostring(reason) .. ")")
+  end
+end
+
+-- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). Bricht eine laufende
+-- Ventil-Transaktion sofort ab (z.B. beim Uebergang in Standby/MASTER-
+-- Timeout), statt sie ueber rs_router:tick() "sauber" zu Ende laufen zu
+-- lassen. redstone_router.lua's shutdown_now() ruft dabei tx.on_error()
+-- auf (derselbe Mechanismus wie bei einem echten Transaktionsfehler), was
+-- automatisch last_error auf dieser FeedRouter-Instanz setzt -- der
+-- Abbruch bleibt dadurch fuer Diagnose/UI sichtbar.
+function M:cancel(reason)
+  self.rs_router:shutdown_now(reason)
 end
 
 function M:tick()

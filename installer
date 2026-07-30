@@ -1,305 +1,153 @@
-local constants = {
-  INSTALL_ROOT = "/xreactor",
-  STAGE_ROOT = "/xreactor_stage",
-  BACKUP_ROOT = "/xreactor_backup_prev",
-  LOG_DIR = "/xreactor_logs",
-  LOG_PATH = "/xreactor_logs/installer_bootstrap.log",
-  STARTUP_PATH = "/startup",
-  STARTUP_CONTENT = "-- XReactor startup\nshell.run(\"/xreactor/start.lua\")\n",
-  REPO = "ItIsYe/ExtreamReactor-Controller-V3",
-  BRANCH = "beta",
-  BRANCH_API_URL = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta",
-  BASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/",
-  MANIFEST_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/manifest.lua",
-  RELEASE_URL = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/release.lua",
-  DOWNLOAD_RETRIES = 3,
-  DOWNLOAD_RETRY_DELAY_SECONDS = 0.5,
-  INCLUDE_DEV_FILES = false,
-  STORAGE_BUFFER_BYTES = 24576,
-  STORAGE_PERCENT_BUFFER = 0.03,
-  STORAGE_UPDATE_BUFFER_BYTES = 8192,
-  STORAGE_MIN_REQUIRED_BYTES = 4096
-}
+-- /installer -- duenner Bootstrap.
+--
+-- Fix (2026-07-17): CRITICAL. INSTALL-P1 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 8, "Zwei unabhaengige Installer-
+-- implementierungen"). Diese Datei enthielt bisher vollstaendige
+-- eingebettete Textkopien JEDES Installermoduls UND eine komplett
+-- eigenstaendige, unabhaengig gepflegte Kopie des gesamten Installations-
+-- ablaufs (Manifest laden, Rolle bestimmen, Config sichern, alten Baum
+-- loeschen, Dateien installieren, Journal fuehren, Plan validieren, ...) --
+-- strukturell identisch zu, aber getrennt von installer/init.lua. Jeder
+-- Fix musste doppelt gepflegt und manuell resynchronisiert werden (siehe
+-- Git-Historie dieser Datei -- mehrfach in dieser Session).
+--
+-- Jetzt macht /installer NUR NOCH:
+--   1. einen einzigen Source-Ref aufloesen (SHA oder "beta"),
+--   2. die kanonischen Installermodule GENAU dieses Refs frisch
+--      herunterladen (nicht eingebettet, nicht potenziell veraltet),
+--   3. sie per load() in Module umwandeln,
+--   4. installer/init.lua (als Funktion mit injizierten Abhaengigkeiten,
+--      siehe dortiger Fix-Kommentar) damit aufrufen.
+-- installer/init.lua ist ab jetzt die EINZIGE Stelle mit tatsaechlicher
+-- Installationslogik -- ob ihre Abhaengigkeiten von der lokalen Platte
+-- (dofile(), praktisch ungenutzt) oder aus frisch heruntergeladenem Text
+-- (load(), dieser Bootstrap hier) stammen, ist fuer sie irrelevant.
 
--- Fix: ein zwischengeschalteter Cache (CDN oder Modpack-HTTP-Proxy) lieferte
--- konsequent eine veraltete Version aus, obwohl der Query-Cache-Bust-Parameter
--- gesetzt war — manche Proxies normalisieren/ignorieren Query-Strings.
--- Robusterer Ansatz: den aktuellen Commit-SHA des beta-Branches per API
--- abfragen und DAMIT statt mit dem Branch-Namen "beta" die Datei-URLs bauen.
--- SHA-basierte raw.githubusercontent.com URLs sind inhärent unveränderlich
--- (ein SHA referenziert genau einen Snapshot) — ein Cache kann hier nicht
--- "stale" sein, weil sich der Inhalt unter dieser URL nie ändert.
-local function resolve_branch_sha()
-  if not http or type(http.get) ~= "function" then return nil end
-  local ok, response = pcall(http.get, constants.BRANCH_API_URL)
-  if not ok or not response then return nil end
-  local ok_read, body = pcall(response.readAll)
-  pcall(response.close)
-  if not ok_read or type(body) ~= "string" then return nil end
-  local sha = body:match('"sha"%s*:%s*"(%x+)"')
-  return sha
+local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
+local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
+
+local function p(msg) pcall(print, tostring(msg)) end
+
+if not http then error("HTTP nicht verfuegbar! Bitte HTTP in CC-Config aktivieren.", 0) end
+
+local function looks_like_html(body)
+  local s = body:sub(1, 200):lower()
+  return s:find("<html", 1, true) ~= nil or s:find("<!doctype", 1, true) ~= nil
 end
 
-local branch_sha = resolve_branch_sha()
-if branch_sha then
-  local sha_base = "https://raw.githubusercontent.com/" .. constants.REPO .. "/" .. branch_sha .. "/xreactor/"
-  constants.BASE_URL = sha_base
-  constants.MANIFEST_URL = sha_base .. "manifest.lua"
-  constants.RELEASE_URL = sha_base .. "release.lua"
-  constants.RESOLVED_SHA = branch_sha  -- an installer_main.lua weiterreichen
-  print("Installer nutzt SHA-Pin: " .. branch_sha:sub(1, 10) .. " (Cache-sicher)")
-else
-  print("WARN: Branch-SHA nicht aufloesbar, nutze Branch-Pfad (evtl. Cache-Risiko)")
-end
-
-local function is_html_content(content)
-  if type(content) ~= "string" then
-    return false
-  end
-  local snippet = content:sub(1, 200):lower()
-  return snippet:find("<html", 1, true) or snippet:find("<!doctype", 1, true)
-end
-
-local function read_file(path)
-  if not fs.exists(path) then
-    return nil
-  end
-  local handle = fs.open(path, "r")
-  if not handle then
-    return nil
-  end
-  local content = handle.readAll()
-  handle.close()
-  return content
-end
-
-local function write_file(path, content)
-  local dir = fs.getDir(path)
-  if dir and dir ~= "" and not fs.exists(dir) then
-    fs.makeDir(dir)
-  end
-  local handle = fs.open(path, "w")
-  if not handle then
-    return false
-  end
-  handle.write(content)
-  handle.close()
-  return true
-end
-
-local function reset_log_directory()
-  local log_dir = constants.LOG_DIR
-  if type(log_dir) ~= "string" or log_dir == "" then
-    return true
-  end
-  if fs.exists(log_dir) then
-    print("Installer bereinigt Log-Verzeichnis: " .. tostring(log_dir))
-    local ok_delete, delete_err = pcall(fs.delete, log_dir)
-    if not ok_delete then
-      return false, "log cleanup failed (" .. tostring(delete_err) .. ")"
-    end
-  end
-  local ok_make, make_err = pcall(fs.makeDir, log_dir)
-  if not ok_make then
-    return false, "log dir recreate failed (" .. tostring(make_err) .. ")"
-  end
-  return true
-end
-
-local function append_query_param(url, key, value)
-  local sep = tostring(url or ""):find("?", 1, true) and "&" or "?"
-  return tostring(url or "") .. sep .. tostring(key or "q") .. "=" .. tostring(value or "")
-end
-
-local function bootstrap_cache_bust_token(rel, attempt)
-  local time_token = "0"
-  if os and type(os.epoch) == "function" then
-    local ok, value = pcall(os.epoch, "utc")
-    if ok and value then time_token = tostring(value) end
-  elseif os and type(os.time) == "function" then
-    local ok, value = pcall(os.time)
-    if ok and value then time_token = tostring(value) end
-  end
-  local rel_token = tostring(rel or "bootstrap"):gsub("[^%w_%-%.]+", "_")
-  return table.concat({ "bootstrap", rel_token, tostring(attempt or 1), time_token }, "-")
-end
-
-local function cache_busted_url(url, rel, attempt)
-  return append_query_param(url, "xr_cb", bootstrap_cache_bust_token(rel, attempt))
-end
-
-local function download_url(url, rel)
-  if not http or type(http.get) ~= "function" then
-    return nil, "HTTP API unavailable"
-  end
-  if type(url) ~= "string" or url == "" then
-    return nil, "invalid url"
-  end
-  local retries = tonumber(constants.DOWNLOAD_RETRIES) or 1
-  local delay = tonumber(constants.DOWNLOAD_RETRY_DELAY_SECONDS) or 0
-  local last_error = nil
-  for attempt = 1, retries do
-    local attempt_url = cache_busted_url(url, rel or url, attempt)
-    local ok, response = pcall(http.get, attempt_url)
-    if ok and response then
-      local ok_read, body = pcall(response.readAll)
-      pcall(response.close)
-      if ok_read and type(body) == "string" then
-        return body, attempt_url
+-- Fix (2026-07-06): diese primitive Bootstrap-Download-Funktion (genutzt,
+-- bevor irgendein Installermodul geladen ist -- also auch vor http_mod.
+-- download()s eingebautem Retry) hatte urspruenglich KEINEN Retry-
+-- Mechanismus -- ein einzelner transienter http.get()-Fehlschlag liess
+-- die komplette Erstinstallation sofort abbrechen. Jetzt mit 4 Versuchen
+-- und steigender Wartezeit.
+local function download(url)
+  local last_err
+  for attempt = 1, 4 do
+    local ok, r = pcall(http.get, url)
+    if ok and r then
+      local ok2, body = pcall(r.readAll); pcall(r.close)
+      if ok2 and type(body) == "string" and #body > 0 then
+        if looks_like_html(body) then
+          last_err = "HTML-Antwort (CDN)"
+        else
+          return body
+        end
+      else
+        last_err = "readAll fehlgeschlagen"
       end
-      last_error = "read failed"
     else
-      last_error = "download failed"
+      last_err = type(r) == "string" and r or "http.get fehlgeschlagen"
     end
-    if attempt < retries and os and type(os.sleep) == "function" and delay > 0 then
-      os.sleep(delay)
-    end
-  end
-  return nil, tostring(last_error or "download failed")
-end
-
-local function load_lua_body(body, chunk_name)
-  if type(body) ~= "string" or body == "" then
-    return nil, "empty body"
-  end
-  if is_html_content(body) then
-    return nil, "unexpected HTML"
-  end
-  local loader, load_err = load(body, "=" .. tostring(chunk_name or "download"), "t", {})
-  if not loader then
-    return nil, tostring(load_err)
-  end
-  local ok, result = pcall(loader)
-  if not ok then
-    return nil, tostring(result)
-  end
-  if type(result) ~= "table" then
-    return nil, "download did not return a table"
-  end
-  return result
-end
-
-local function verify_release_manifest_pair()
-  print("Installer bootstrap prueft Release/Manifest...")
-  local release_body, release_url_or_err = download_url(constants.RELEASE_URL, "release.lua")
-  if not release_body then
-    return false, "release download failed (" .. tostring(release_url_or_err) .. ")"
-  end
-  local release, release_err = load_lua_body(release_body, "release.lua")
-  if not release then
-    return false, "release invalid (" .. tostring(release_err) .. ")"
-  end
-
-  local manifest_body, manifest_url_or_err = download_url(constants.MANIFEST_URL, "manifest.lua")
-  if not manifest_body then
-    return false, "manifest download failed (" .. tostring(manifest_url_or_err) .. ")"
-  end
-  local manifest, manifest_err = load_lua_body(manifest_body, "manifest.lua")
-  if not manifest then
-    return false, "manifest invalid (" .. tostring(manifest_err) .. ")"
-  end
-
-  local release_id = tostring(release.release_id or "unknown")
-  local release_manifest_id = tostring(release.manifest_id or "unknown")
-  local release_manifest_version = tonumber(release.manifest_version)
-  local manifest_id = tostring(manifest.manifest_id or "unknown")
-  local manifest_version = tonumber(manifest.manifest_version)
-  print(string.format(
-    "Installer bootstrap source=beta release=%s release_manifest=%s/%s manifest=%s/%s",
-    release_id,
-    release_manifest_id,
-    tostring(release_manifest_version or "?"),
-    manifest_id,
-    tostring(manifest_version or "?")
-  ))
-
-  if tostring(release.source_ref or "beta") ~= "beta" or tostring(manifest.source_ref or "beta") ~= "beta" then
-    return false, "source_ref mismatch release=" .. tostring(release.source_ref) .. " manifest=" .. tostring(manifest.source_ref)
-  end
-  if release_manifest_id ~= manifest_id then
-    print("WARN: beta release/manifest id mismatch ignored release=" .. release_manifest_id .. " manifest=" .. manifest_id)
-  end
-  if release_manifest_version and manifest_version and release_manifest_version ~= manifest_version then
-    print("WARN: beta release/manifest version mismatch ignored release=" .. tostring(release_manifest_version) .. " manifest=" .. tostring(manifest_version))
-  end
-  constants.__BOOTSTRAP_RELEASE_ID = release_id
-  constants.__BOOTSTRAP_MANIFEST_ID = manifest_id
-  constants.__BOOTSTRAP_MANIFEST_VERSION = manifest_version
-  return true
-end
-
-local function ensure_installer_runtime()
-  if (type(constants.RELEASE_URL) ~= "string" or constants.RELEASE_URL == "")
-    and type(constants.BASE_URL) == "string" and constants.BASE_URL ~= "" then
-    constants.RELEASE_URL = constants.BASE_URL .. "release.lua"
-    print("WARN: RELEASE_URL missing, derived fallback " .. tostring(constants.RELEASE_URL))
-  end
-  if (type(constants.MANIFEST_URL) ~= "string" or constants.MANIFEST_URL == "")
-    and type(constants.BASE_URL) == "string" and constants.BASE_URL ~= "" then
-    constants.MANIFEST_URL = constants.BASE_URL .. "manifest.lua"
-    print("WARN: MANIFEST_URL missing, derived fallback " .. tostring(constants.MANIFEST_URL))
-  end
-
-  print("Installer source fixed to beta branch")
-
-  local preflight_ok, preflight_err = verify_release_manifest_pair()
-  if not preflight_ok then
-    return false, "release/manifest verification failed: " .. tostring(preflight_err)
-  end
-
-  local required = {
-    "installer_main.lua",
-    "installer_http.lua",
-    "installer_manifest.lua",
-    "installer_stage.lua",
-    "installer_startup.lua",
-    "installer_storage.lua"
-  }
-
-  print("Installer bootstrap aktualisiert Laufzeit-Module...")
-  for _, rel in ipairs(required) do
-    local path = constants.INSTALL_ROOT .. "/" .. rel
-    local url = constants.BASE_URL .. rel
-    local body, resolved_url_or_err = download_url(url, rel)
-    if not body then
-      return false, "download failed for " .. rel .. " (" .. tostring(resolved_url_or_err) .. ")"
-    end
-    if is_html_content(body) then
-      return false, "unexpected HTML for " .. rel .. " (url=" .. tostring(resolved_url_or_err) .. ")"
-    end
-    if rel:sub(-4) == ".lua" then
-      local loader, parse_err = load(body, "=" .. rel, "t", {})
-      if not loader then
-        return false, "lua parse error for " .. rel .. " (" .. tostring(parse_err) .. ")"
-      end
-    end
-    local existing = read_file(path)
-    if existing ~= body then
-      if not write_file(path, body) then
-        return false, "write failed for " .. rel
-      end
+    if attempt < 4 then
+      p("  Download-Versuch " .. attempt .. " fehlgeschlagen (" .. tostring(last_err) .. "), erneut in " .. (attempt * 2) .. "s ...")
+      os.sleep(attempt * 2)
     end
   end
-  return true
+  return nil, last_err
 end
 
-local ok, err = ensure_installer_runtime()
-if not ok then
-  error("Installer bootstrap fehlgeschlagen: " .. tostring(err), 0)
+-- SHA aufloesen
+local sha = nil
+local ok_sha, r_sha = pcall(http.get, GITHUB_API)
+if ok_sha and r_sha then
+  local ok2, body = pcall(r_sha.readAll); pcall(r_sha.close)
+  if ok2 and type(body) == "string" then
+    sha = body:match('"sha"%s*:%s*"(%x+)"')
+  end
+end
+p(sha and ("SHA: " .. sha:sub(1, 12)) or "WARN: SHA nicht aufloesbar")
+
+-- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md (Abschnitt 14). EIN einziger Referenzpunkt
+-- ("ref": entweder die aufgeloeste SHA, oder bei Aufloesungsfehler
+-- explizit "beta") fuer den GESAMTEN Lauf -- sowohl fuer die hier
+-- heruntergeladenen Installermodule als auch (via deps.ref) fuer
+-- installer/init.lua's eigenen Download aller uebrigen Dateien.
+local ref = sha or "beta"
+local base = GITHUB_RAW..ref.."/xreactor/"
+
+-- ── Kanonische Installermodule herunterladen ─────────────────────────────────
+-- Dieselben Dateien, die auch ein bereits installierter Node unter
+-- /xreactor/installer/*.lua liegen hat -- hier frisch vom aufgeloesten Ref,
+-- da /xreactor bei der Erstinstallation noch nicht existiert.
+local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator" }
+local module_src = {}
+for _, name in ipairs(MODULE_NAMES) do
+  local url = base.."installer/"..name..".lua"
+  local body, err = download(url)
+  if not body then
+    error("Installermodul '"..name.."' konnte nicht heruntergeladen werden: "..tostring(err), 0)
+  end
+  module_src[name] = body
 end
 
-local logs_ok, logs_err = reset_log_directory()
-if not logs_ok then
-  error("Installer log cleanup fehlgeschlagen: " .. tostring(logs_err), 0)
+local init_src, init_dl_err = download(base.."installer/init.lua")
+if not init_src then
+  error("installer/init.lua konnte nicht heruntergeladen werden: "..tostring(init_dl_err), 0)
 end
 
-_G.__xreactor_installer_completed = false
-_G.__xreactor_installer_role = nil
-print("Installer bootstrap bereit. Release/Manifest ok.")
-local main = dofile(constants.INSTALL_ROOT .. "/installer_main.lua")
-main.run(constants)
-if _G.__xreactor_installer_completed == true then
-  print("Install complete; rebooting...")
-  if os and type(os.sleep) == "function" then os.sleep(1) end
-  if os and type(os.reboot) == "function" then os.reboot() end
+local function load_module(name, src)
+  local fn, err = load(src, "="..name, "t", _ENV)
+  if not fn then error("Modul "..name.." Syntaxfehler: "..tostring(err), 0) end
+  local ok, mod = pcall(fn)
+  if not ok then error("Modul "..name.." Ladefehler: "..tostring(mod), 0) end
+  return mod
 end
+
+local http_mod           = load_module("http",           module_src.http)
+local manifest_mod       = load_module("manifest",       module_src.manifest)
+local stage_mod          = load_module("stage",           module_src.stage)
+local ui_mod             = load_module("ui",               module_src.ui)
+local journal_mod        = load_module("journal",         module_src.journal)
+local plan_validator_mod = load_module("plan_validator",  module_src.plan_validator)
+
+local init_fn, init_syntax_err = load(init_src, "=init", "t", _ENV)
+if not init_fn then
+  error("installer/init.lua Syntaxfehler: "..tostring(init_syntax_err), 0)
+end
+local ok_init, init_body = pcall(init_fn)
+if not ok_init then
+  error("installer/init.lua Ladefehler: "..tostring(init_body), 0)
+end
+if type(init_body) ~= "function" then
+  error("installer/init.lua muss eine Funktion zurueckgeben (return function(deps) ... end)", 0)
+end
+
+-- Fuehrt die tatsaechliche Installation aus -- alle Rollenauswahl-,
+-- Backup-, Lösch-, Download-, Journal- und Validierungslogik lebt
+-- ausschliesslich in installer/init.lua (siehe dortiger Fix-Kommentar).
+init_body({
+  http_mod = http_mod,
+  manifest_mod = manifest_mod,
+  stage_mod = stage_mod,
+  ui_mod = ui_mod,
+  journal_mod = journal_mod,
+  plan_validator_mod = plan_validator_mod,
+  ref = ref,
+})
+
+-- Neustart
+p("Neustart in 2 Sekunden...")
+os.sleep(2)
+os.reboot()

@@ -1,6 +1,7 @@
 local M = {}
 local rt_sync = require("master.rt_sync")
 local support_status = require("master.support_status")
+local config_edits_lib = require("master.config_edits")
 
 function M.new(opts)
   local constants = assert(opts.constants, "constants required")
@@ -13,6 +14,12 @@ function M.new(opts)
   local add_alarm = assert(opts.add_alarm, "add_alarm required")
   local master_time_label = assert(opts.master_time_label, "master_time_label required")
   local log = assert(opts.log, "log required")
+  -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 10). Optional -- nur gesetzt vom
+  -- echten Master-Boot (runtime_loop.lua), damit Tests, die M.new() ohne
+  -- Config-Editor-Belange aufrufen, unveraendert funktionieren.
+  local config_edits_state = opts.config_edits_state
+  local on_config_edit_change = opts.on_config_edit_change
 
 
   local function format_reasons(reason_set)
@@ -72,6 +79,7 @@ function M.new(opts)
     if value == "FUEL" or value == "FUEL-NODE" or value == "FUELNODE" then return constants.roles.FUEL_NODE end
     if value == "WATER" or value == "WATER-NODE" or value == "WATERNODE" then return constants.roles.WATER_NODE end
     if value == "REPROCESSING" or value == "REPROCESSOR" or value == "REPROCESSOR-NODE" or value == "REPROCESSING-NODE" then return constants.roles.REPROCESSOR_NODE end
+    if value == "VALVE" or value == "FUEL-VALVE" or value == "VALVE-NODE" or value == "FUELVALVE" then return constants.roles.VALVE_NODE end
     return raw
   end
 
@@ -143,8 +151,20 @@ function M.new(opts)
   -- Aliase (output, power_actual, target_output) werden einmalig am Ende gesetzt.
   local function populate_rt_status(node, payload)
     if type(node) ~= "table" or type(payload) ~= "table" then return end
-    node.rt = payload.rt or node.rt or {}
+    -- Fix (2026-06-30): node.rt = payload.rt or node.rt or {} ERSETZTE die
+    -- bisherige node.rt-Tabelle bei jedem STATUS-Tick komplett durch eine
+    -- neue Tabelle aus dem Netzwerk-Payload. Das verwarf persistente Felder,
+    -- die NICHT von RT selbst gesendet werden, sondern vom Master/UI-
+    -- Controller in node.rt geschrieben wurden (z.B. assignment_state aus
+    -- ui_controller.normalize_rt_display() — siehe infer_assignment_state()
+    -- Fix daneben). Jetzt: bestehende node.rt-Tabelle wiederverwenden und
+    -- payload.rt-Felder hineinmergen, statt die Referenz zu ersetzen.
     if type(node.rt) ~= "table" then node.rt = {} end
+    if type(payload.rt) == "table" then
+      for k, v in pairs(payload.rt) do
+        node.rt[k] = v
+      end
+    end
     local rt = node.rt
 
     -- Kanonische Werte berechnen
@@ -203,8 +223,36 @@ function M.new(opts)
     end
 
     -- node-Felder: kanonisch + Aliase einmalig
-    node.actual_output = rt.actual_output
-    node.power_target  = rt.power_target
+    node.actual_output  = rt.actual_output
+    node.power_target   = rt.power_target
+    -- Fix (2026-06-30): rt.capacity_max/rt.capacity_ready aus dem aktuellen
+    -- payload MUESSEN vor der Ableitung von node.capacity_max/node.capacity_ready
+    -- aktualisiert werden. Vorher stand dieser Block hier unten (nach der
+    -- node.*-Ableitung), wodurch node.capacity_max/node.capacity_ready immer
+    -- den Wert aus dem VORHERIGEN STATUS-Zyklus widerspiegelten (off-by-one
+    -- payload) statt des gerade eingetroffenen — das fuehrte dazu, dass
+    -- rt_sync.node_capacity() veraltete/fehlende Kapazitaetswerte sah und der
+    -- Master falsche oder gar keine Setpoints zuteilte.
+    rt.capacity_max     = number_or_nil(payload.capacity_max) or rt.capacity_max
+    if payload.capacity_ready == true then rt.capacity_ready = true end
+    rt.capacity_source  = payload.capacity_source or rt.capacity_source
+    rt.capacity_stable_turbines  = number_or_nil(payload.capacity_stable_turbines) or rt.capacity_stable_turbines
+    rt.capacity_total_turbines   = number_or_nil(payload.capacity_total_turbines) or rt.capacity_total_turbines
+    if rt.capacity_ready == true then node.capacity_ready = true end
+    node.capacity_max   = rt.capacity_max or node.capacity_max
+    -- Sobald capacity_max bekannt: Profile-Retry ausloesen wenn power_target=0
+    -- runtime ist nicht im direkten Scope — nutze _G.xreactor_runtime
+    if (rt.capacity_max or 0) > 0 then
+      -- Nutze direkten runtime-Kontext (kein _G-Hack)
+      local rt_ref = M._runtime or _G.xreactor_runtime
+      if type(rt_ref) == "table" and type(rt_ref.state) == "table"
+         and (tonumber(rt_ref.state.power_target) or 0) == 0
+         and type(rt_ref.libs) == "table"
+         and type(rt_ref.libs.profile_ops) == "table"
+         and type(rt_ref.libs.profile_ops.retry_pending_profile) == "function" then
+        rt_ref.libs.profile_ops.retry_pending_profile(rt_ref)
+      end
+    end
     -- Abwärtskompatible Aliase
     node.output        = node.actual_output
     node.power_actual  = node.actual_output
@@ -212,10 +260,93 @@ function M.new(opts)
     rt.power_actual    = rt.actual_output
     rt.output          = rt.actual_output
     rt.target_output   = rt.power_target
-    rt.capacity_max    = number_or_nil(payload.capacity_max) or rt.capacity_max
+  end
+
+  -- Optionale Pocket-Computer-Fernabfrage (Feature, 2026-07-01): siehe
+  -- xreactor/optional/pocket_query_handler.lua. pcall(require, ...) sorgt
+  -- dafuer, dass bei fehlendem Modul (Feature nicht installiert) einfach
+  -- nichts passiert und der normale Dispatch unveraendert weiterlaeuft.
+  local ok_pocket_mod, pocket_mod = pcall(require, "optional.pocket_query_handler")
+  local pocket_handler = ok_pocket_mod and pocket_mod or nil
+
+  local function build_pocket_snapshot()
+    -- Minimaler, robuster Snapshot fuer die Pocket-Antwort — greift nur auf
+    -- bereits vorhandene, einfache Zaehlwerte zu, keine teuren Neuberechnungen.
+    local rt_active, rt_total = 0, 0
+    for _, n in pairs(nodes) do
+      if n.role == constants.roles.RT_NODE then
+        rt_total = rt_total + 1
+        if tostring(n.assignment_state or "") == "active" then rt_active = rt_active + 1 end
+      end
+    end
+    return {
+      rt_active = rt_active,
+      rt_total = rt_total,
+    }
+  end
+
+  -- Feature (2026-07-02): Pocket-Command-Token. Ein 6-stelliges, alle 5
+  -- Minuten rotierendes Token wird am Master-Overview angezeigt (siehe
+  -- ui_controller.lua). Der Nutzer muss es manuell am Pocket Computer
+  -- eingeben — verhindert versehentliche/automatisierte Steuerbefehle ohne
+  -- physischen Zugriff auf den Master-Monitor.
+  local pocket_token_state = { token = nil, generated_at = 0 }
+  local POCKET_TOKEN_TTL_MS = 5 * 60 * 1000
+  local function current_pocket_token()
+    local now = os.epoch and os.epoch("utc") or 0
+    if not pocket_token_state.token or (now - pocket_token_state.generated_at) >= POCKET_TOKEN_TTL_MS then
+      math.randomseed(now)
+      pocket_token_state.token = tostring(math.random(100000, 999999))
+      pocket_token_state.generated_at = now
+    end
+    return pocket_token_state.token
+  end
+  -- Für die UI zugänglich machen (Overview zeigt das aktuelle Token an).
+  M.get_pocket_token = current_pocket_token
+
+  -- execute_command(action, params): fuehrt die eigentliche Fernsteuerungs-
+  -- Aktion aus. Bewusst eine begrenzte, feste Liste erlaubter Aktionen
+  -- (kein generischer "eval"-Mechanismus) — jede neue Aktion muss hier
+  -- explizit ergaenzt werden.
+  local function execute_command(action, params)
+    local rt_ref = M._runtime or _G.xreactor_runtime
+    if type(rt_ref) ~= "table" or type(rt_ref.state) ~= "table" then
+      return false, "Runtime nicht verfuegbar"
+    end
+    params = params or {}
+    if action == "rt_hold_toggle" then
+      rt_ref.state.rt_global_off_hold = not (rt_ref.state.rt_global_off_hold == true)
+      return true, "RT-Hold jetzt " .. (rt_ref.state.rt_global_off_hold and "AN" or "AUS")
+    elseif action == "profile_set" then
+      local target = tostring(params.profile or ""):upper()
+      if target ~= "BASELOAD" and target ~= "PEAK" and target ~= "IDLE" then
+        return false, "Ungueltiges Profil: " .. tostring(params.profile)
+      end
+      rt_ref.state.active_profile = target
+      rt_ref.state.power_target = 0 -- erzwingt Neuberechnung im naechsten sample_trends()-Zyklus
+      return true, "Profil gesetzt: " .. target
+    elseif action == "maintenance_toggle" then
+      local node_id = params.node_id
+      local node = node_id and nodes[node_id]
+      if not node then return false, "Node nicht gefunden: " .. tostring(node_id) end
+      node.maintenance_mode = not (node.maintenance_mode == true)
+      return true, ("Maintenance %s fuer %s"):format(node.maintenance_mode and "AN" or "AUS", tostring(node_id))
+    end
+    return false, "Unbekannte Aktion: " .. tostring(action)
   end
 
   local function update_node(message)
+    if pocket_handler then
+      local ok_handled, handled = pcall(pocket_handler.handle, message, {
+        comms = comms(),
+        constants = constants,
+        log = log,
+        build_snapshot = build_pocket_snapshot,
+        current_token = current_pocket_token(),
+        execute_command = execute_command,
+      })
+      if ok_handled and handled then return end
+    end
     if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
       local mismatch_id = utils.normalize_node_id(message.src)
       if mismatch_id ~= "UNKNOWN" then
@@ -286,6 +417,14 @@ function M.new(opts)
       nodes[id].stale = false
       nodes[id].managed = true
       nodes[id].recovering = false
+      -- Feature (2026-07-02): manifest_version pro Node speichern, damit
+      -- die AUX-Monitor "Updates"-Seite sehen kann, ob alle Nodes dieselbe
+      -- Version haben. Wird von services/heartbeat_service.lua automatisch
+      -- an jeden Heartbeat-Payload angehaengt.
+      if message.payload.manifest_version ~= nil then
+        nodes[id].manifest_version = tonumber(message.payload.manifest_version)
+        nodes[id].manifest_version_seen_ts = message.ts or (os.epoch and os.epoch("utc")) or 0
+      end
       if nodes[id].health and nodes[id].health.reasons and nodes[id].health.reasons[health.reasons.COMMS_DOWN] then
         nodes[id].health.reasons[health.reasons.COMMS_DOWN] = nil
         log(("Node %s reason removed: %s (heartbeat)"):format(id, health.reasons.COMMS_DOWN))
@@ -348,6 +487,18 @@ function M.new(opts)
         end
       end
       mark_rt_sync_dirty(nodes[id], "status")
+    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 10). ACK_DELIVERED fiel bisher
+    -- komplett durch diese Kette in den "else"-Zweig und loeste bei JEDEM
+    -- gesendeten Command (nicht nur Config-Editor-Edits) einen falschen
+    -- "Unknown message type ACK_DELIVERED"-WARN-Alarm aus. Jetzt explizit
+    -- behandelt: markiert einen laufenden Config-Editor-Edit-Ziel-Eintrag
+    -- als DELIVERED (siehe master/config_edits.lua), sonst No-Op.
+    elseif message.type == constants.message_types.ACK_DELIVERED then
+      if config_edits_state then
+        local changed = config_edits_lib.handle_ack_delivered(config_edits_state, message)
+        if changed and on_config_edit_change then on_config_edit_change() end
+      end
     elseif message.type == constants.message_types.ACK_APPLIED then
       local result = message.payload and message.payload.result or {}
       local redundant_setpoint_ack = ack_matches_last_setpoints(nodes[id], result)
@@ -365,7 +516,15 @@ function M.new(opts)
         shutdown_stage = result.shutdown_stage
       }
       nodes[id].last_command_error = result.ok == false and (result.error or "unknown") or nil
-      if result.ok == false then log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN") end
+      if result.ok == false then
+        local reason_code = result.reason_code or ""
+        -- CAPACITY_LEARNING ist kein Fehler sondern temporärer Zustand — kein WARN
+        if reason_code == "CAPACITY_LEARNING" then
+          log(("Command skipped on %s: %s (capacity learning in progress)"):format(id, result.error or ""), "INFO")
+        else
+          log(("Command failed on %s: %s"):format(id, result.error or "unknown"), "WARN")
+        end
+      end
       sequencer:notify_ack(id, result.module_id)
       local workflow_stage = nodes[id].shutdown_workflow and nodes[id].shutdown_workflow.stage or nil
       local workflow_waiting = workflow_stage == "REQUEST_STATE" or workflow_stage == "REQUESTED" or workflow_stage == "WAITING_STATE"
@@ -378,6 +537,13 @@ function M.new(opts)
       else
         log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
       end
+      -- Fix (2026-07-17): MASTER-P1 (Abschnitt 10). Korreliert dieses
+      -- ACK_APPLIED zusaetzlich gegen einen evtl. laufenden Config-Editor-
+      -- Edit (per message_id/ack_for) -- siehe master/config_edits.lua.
+      if config_edits_state then
+        local changed = config_edits_lib.handle_ack_applied(config_edits_state, message)
+        if changed and on_config_edit_change then on_config_edit_change() end
+      end
     elseif message.type == constants.message_types.ALERT_SUMMARY then
       -- Alert summary payload can be routed to the alert service in later iterations.
     else
@@ -386,6 +552,11 @@ function M.new(opts)
   end
 
   return { update_node = update_node }
+end
+
+-- set_runtime: direkten runtime-Zugriff ermöglichen ohne _G
+function M.set_runtime(runtime)
+  M._runtime = runtime
 end
 
 return M

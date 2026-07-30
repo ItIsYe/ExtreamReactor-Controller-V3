@@ -5,13 +5,13 @@ local CONFIG = {
   ROLE_CONFIG_PATH = "/xreactor/config/role.lua",
   LOG_NAME_SEPARATOR = "_",
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
-  REMOTE_LOG_CHANNEL = 6502,
-  REMOTE_LOG_PENDING_LIMIT = 64,
-  REMOTE_LOG_RETRY_EVERY = 30,  -- was 4→8→16→30: still 66% dup rate at 16s.
+  REMOTE_LOG_CHANNEL = 6503,  -- muss mit shared/constants.lua channels.LOG uebereinstimmen
+  REMOTE_LOG_PENDING_LIMIT = 16,  -- reduziert: weniger Retry-Last wenn Collector haengt
+  REMOTE_LOG_RETRY_EVERY = 60,   -- seltener retrien: weniger Modem-Traffic bei Collector-Problemen
                                 -- node-52/55 with 25 turbines each + 7 nodes =
                                 -- very congested channel. Longer window reduces
                                 -- resends before ACK arrives.
-  REMOTE_LOG_MAX_SENDS = 3,    -- was 6: fewer resend attempts, total retry
+  REMOTE_LOG_MAX_SENDS = 2,    -- schneller aufgeben: Log-Retries blockieren nicht den Control-Loop
                                 -- window = 90s (3×30s) is still acceptable.
   REMOTE_LOG_MODEM_REFRESH_SECONDS = 10
 }
@@ -143,31 +143,48 @@ local function make_boot_id(node_id)
   return tostring(node_id or "node") .. ":boot:" .. tostring(computer) .. ":" .. tostring(epoch) .. ":" .. random_part
 end
 
+-- Erkennt ob ein Modem ein Ender-Modem (unbegrenzte Reichweite) ist.
+-- Ender-Modem: getRange() → math.huge; normales Wireless: getRange() → ~64.
+local function is_ender_modem(modem)
+  if type(modem.getRange) ~= "function" then return false end
+  local ok, range = pcall(modem.getRange)
+  if not ok or type(range) ~= "number" then return false end
+  return range >= 65536  -- math.huge oder sehr grosser Wert = Ender-Modem
+end
+
 local function discover_log_modems()
+  -- Sammelt ALLE wireless Modems alphabetisch sortiert.
+  -- network.lua nimmt immer das ERSTE (alphabetisch) fuer Control/Status.
+  -- Dieses Modul gibt das ZWEITE (oder spaetere) zurueck fuer Logs.
+  -- Bei nur einem Modem: dasselbe als Fallback damit Logs nicht komplett ausfallen.
   local list = {}
   if not peripheral or type(peripheral.getNames) ~= "function" then return list end
   local ok, names = pcall(peripheral.getNames)
   if not ok or type(names) ~= "table" then return list end
   table.sort(names)
-  local wired = {}
-  local wireless = {}
+  local all_wireless = {}
   for _, name in ipairs(names) do
     local type_ok, ptype = pcall(peripheral.getType, name)
     if type_ok and ptype == "modem" then
       local wrap_ok, modem = pcall(peripheral.wrap, name)
       if wrap_ok and modem and type(modem.transmit) == "function" then
-        local is_wireless = false
-        if type(modem.isWireless) == "function" then
-          local wireless_ok, result = pcall(modem.isWireless)
-          is_wireless = wireless_ok and result == true
+        local is_wireless = type(modem.isWireless) == "function" and
+                            (function() local ok2, r = pcall(modem.isWireless); return ok2 and r == true end)()
+        if is_wireless then
+          all_wireless[#all_wireless + 1] = { name = name, modem = modem }
         end
-        local entry = { name = name, modem = modem, wireless = is_wireless }
-        if is_wireless then wireless[#wireless + 1] = entry else wired[#wired + 1] = entry end
       end
     end
   end
-  for _, entry in ipairs(wireless) do list[#list + 1] = entry end
-  for _, entry in ipairs(wired) do list[#list + 1] = entry end
+  if #all_wireless == 0 then return list end
+  -- Zweites Modem fuer Logs (Index 2+), erstes nur als Fallback
+  for i = 2, #all_wireless do
+    list[#list + 1] = all_wireless[i]
+  end
+  if #list == 0 then
+    -- Nur ein Modem vorhanden: dasselbe fuer Logs (geteilter Kanal)
+    list[1] = all_wireless[1]
+  end
   return list
 end
 
@@ -442,8 +459,21 @@ function utils.write_config(path, tbl)
     pcall(print, "WARN: write_config serialize failed: " .. tostring(err))
     return false, "serialize_failed:" .. tostring(err)
   end
-  file.write(serialized)
-  file.close()
+  -- Fix (2026-07-19): CRITICAL. file.write()/file.close() konnten werfen
+  -- (z.B. Datentraeger voll/schreibgeschuetzt) -- ungeschuetzt widersprach
+  -- das direkt dem Kommentar oben ("Do NOT call error() here... Log and
+  -- return a boolean") fuer genau diesen Funktionsteil: ein Fehlschlag hier
+  -- crashte den aufrufenden Node trotzdem hart (z.B. VALVE beim ersten
+  -- SET_VALVE nach dem Boot, wenn das automatische trusted_source-Pairing
+  -- versucht, die geschuetzte Config zu persistieren -- der Node stuerzte
+  -- dadurch bei jedem eingehenden Kommando erneut ab, sobald der Schreib-
+  -- vorgang aus Umgebungsgruenden fehlschlug).
+  local ok_write, write_err = pcall(function() file.write(serialized) end)
+  pcall(file.close)
+  if not ok_write then
+    pcall(print, "WARN: write_config failed to write " .. tostring(path) .. ": " .. tostring(write_err))
+    return false, "write_failed:" .. tostring(write_err)
+  end
   return true
 end
 

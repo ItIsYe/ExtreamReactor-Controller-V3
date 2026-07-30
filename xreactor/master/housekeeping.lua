@@ -1,4 +1,5 @@
 local M = {}
+local config_edits_lib = require("master.config_edits")
 
 function M.handle_command_timeouts(opts)
   local constants = opts.constants
@@ -6,6 +7,13 @@ function M.handle_command_timeouts(opts)
   local comms = opts.comms
   local nodes = opts.nodes
   local log = opts.log
+  -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 10). Optional -- nur gesetzt vom
+  -- echten Master-Boot, damit ein liegengebliebenes Config-Editor-Edit-
+  -- Ziel (nie ein ACK erhalten, max_retries erschoepft) als TIMEOUT statt
+  -- unbegrenzt als "pending" angezeigt wird.
+  local config_edits_state = opts.config_edits_state
+  local on_config_edit_change = opts.on_config_edit_change
   local timeouts = comms:consume_timeouts() or {}
   for _, entry in ipairs(timeouts) do
     local msg = entry.message or {}
@@ -25,6 +33,10 @@ function M.handle_command_timeouts(opts)
         }
         nodes[node_id].last_command_error = "ack timeout"
         log(("Command timeout for %s (%s)"):format(tostring(node_id), tostring(command.target or "unknown")), "WARN")
+      end
+      if config_edits_state then
+        local changed = config_edits_lib.handle_timeout(config_edits_state, msg.message_id)
+        if changed and on_config_edit_change then on_config_edit_change() end
       end
     end
   end
@@ -56,7 +68,9 @@ function M.tick(runtime)
     utils = runtime.libs.utils,
     comms = runtime.refs.comms,
     nodes = runtime.state.nodes,
-    log = runtime.log
+    log = runtime.log,
+    config_edits_state = runtime.state.config_edits,
+    on_config_edit_change = runtime.persist_config_edits
   })
   if runtime.refs.sequencer then
     runtime.refs.sequencer:tick(runtime.state.nodes)
@@ -72,6 +86,12 @@ function M.tick(runtime)
   local profile_ops = runtime.libs.profile_ops
   if profile_ops then
     profile_ops.sample_trends(runtime)
+  end
+  -- Feature (2026-07-08): Reaktor-Fuellstand periodisch an FUEL-Nodes
+  -- weiterleiten (siehe master/fuel_relay.lua).
+  local fuel_relay = runtime.libs.fuel_relay
+  if fuel_relay then
+    fuel_relay.tick(runtime)
   end
 end
 

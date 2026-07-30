@@ -1,6 +1,5 @@
-package.path = package.path .. ";/workspace/ExtreamReactor-Controller-V3/?.lua"
 
-local normalizer = dofile("/workspace/ExtreamReactor-Controller-V3/xreactor/nodes/rt/config_normalizer.lua")
+local normalizer = dofile("xreactor/nodes/rt/config_normalizer.lua")
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -25,7 +24,7 @@ local function deep_copy(value)
   return out
 end
 
-local defaults = dofile("/workspace/ExtreamReactor-Controller-V3/xreactor/nodes/rt/config.lua")
+local defaults = dofile("xreactor/nodes/rt/config.lua")
 
 local cfg = {
   autonom = { steam_reserve = 5000, steam_deficit = 5000 },

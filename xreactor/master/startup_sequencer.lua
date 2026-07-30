@@ -1,5 +1,4 @@
 local constants = require("shared.constants")
-local protocol = require("core.protocol")
 local safety = require("core.safety")
 local utils = require("core.utils")
 
@@ -135,7 +134,32 @@ function sequencer.new(comms, ramp_profile, opts)
     stage_started_ms = nil
   }
 
-  function self.enqueue(node_id, reason)
+  -- Fix (2026-07-15): war als self.enqueue(...) (Punkt-Syntax) definiert,
+  -- wurde aber ueberall im Code als sequencer:enqueue(...) (Doppelpunkt-
+  -- Syntax) aufgerufen. Ein Doppelpunkt-Aufruf uebergibt das Objekt selbst
+  -- automatisch als erstes Argument -- ohne self als deklarierten Parameter
+  -- landete dieses Objekt in node_id, wodurch die Typpruefung unten IMMER
+  -- fehlschlug und enqueue() jeden echten Aufruf still verworfen hat (siehe
+  -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md, TEST-P0-Folgearbeit
+  -- zum is_master_connected-Testmuster, das diesen Bug aufgedeckt hat).
+  function self:enqueue(node_id, reason)
+    -- Fix (2026-06-30): node_id wurde an utils.normalize_node_id() weiter-
+    -- gereicht, OHNE vorher zu prüfen ob es ueberhaupt ein String/Number ist.
+    -- normalize_node_id() ruft intern tostring(value) auf — wird also
+    -- versehentlich ein ganzes node-Objekt (Tabelle) statt node.id uebergeben,
+    -- entsteht ein syntaktisch gueltiger, aber inhaltlich kaputter String wie
+    -- "table:_0x59c40aab", der dann unbemerkt durchs ganze System lief und
+    -- im UI als "RT-table:_0x..." auftauchte (siehe rt_dashboard.lua
+    -- safe_text()-Fix, der das nicht mehr abfangen kann, weil zu diesem
+    -- Zeitpunkt bereits ein valider String vorliegt). Hier wird die Eingabe
+    -- jetzt VOR der Normalisierung typgeprueft.
+    if type(node_id) ~= "string" and type(node_id) ~= "number" then
+      if utils.log then
+        utils.log("SEQ", ("enqueue() called with non-string node_id (type=%s) reason=%s — ignored"):format(
+          type(node_id), tostring(reason or "unknown")), "WARN")
+      end
+      return
+    end
     local normalized = utils.normalize_node_id(node_id)
     for _, entry in ipairs(self.queue) do
       if entry.node_id == normalized and not entry.module_id then
@@ -160,7 +184,11 @@ function sequencer.new(comms, ramp_profile, opts)
     self.queue = expanded
   end
 
-  function self.tick(nodes)
+  -- Fix (2026-07-15): dieselbe Punkt-/Doppelpunkt-Diskrepanz wie enqueue()
+  -- oben -- housekeeping.lua ruft ausschliesslich sequencer:tick(nodes) auf,
+  -- wodurch der echte node-Registry-Parameter bisher durch das sequencer-
+  -- Objekt selbst ersetzt wurde.
+  function self:tick(nodes)
     if self.state == states.idle and #self.queue > 0 then
       -- Fix 3: skip_until_ts respektieren (Backoff bei nicht-startbaren Nodes)
       local front = self.queue[1]
@@ -217,7 +245,9 @@ function sequencer.new(comms, ramp_profile, opts)
     end
   end
 
-  function self.notify_ack(node_id, module_id)
+  -- Fix (2026-07-15): dieselbe Punkt-/Doppelpunkt-Diskrepanz -- message_
+  -- handlers.lua ruft ausschliesslich sequencer:notify_ack(...) auf.
+  function self:notify_ack(node_id, module_id)
     local safe_node_id = utils.normalize_node_id(node_id)
     if self.active and self.active.node_id == safe_node_id and self.active.module_id == module_id then
       self.state = states.waiting_stable
@@ -225,7 +255,9 @@ function sequencer.new(comms, ramp_profile, opts)
     end
   end
 
-  function self.notify_stable(node_id, module_id, state)
+  -- Fix (2026-07-15): dieselbe Punkt-/Doppelpunkt-Diskrepanz -- message_
+  -- handlers.lua ruft ausschliesslich sequencer:notify_stable(...) auf.
+  function self:notify_stable(node_id, module_id, state)
     local safe_node_id = utils.normalize_node_id(node_id)
     if self.active and self.active.node_id == safe_node_id and self.active.module_id == module_id then
       utils.log("SEQ", ("Startup step complete: %s (%s)"):format(module_id, state or "UNKNOWN"))
@@ -235,7 +267,9 @@ function sequencer.new(comms, ramp_profile, opts)
     end
   end
 
-  function self.handle_timeout(nodes, stage, elapsed_ms)
+  -- Fix (2026-07-15): dieselbe Punkt-/Doppelpunkt-Diskrepanz -- tick() ruft
+  -- intern bereits self:handle_timeout(...) auf (Doppelpunkt).
+  function self:handle_timeout(nodes, stage, elapsed_ms)
     local active = self.active or {}
     local safe_node_id = utils.normalize_node_id(active.node_id)
     local node = nodes and safe_node_id and nodes[safe_node_id] or nil

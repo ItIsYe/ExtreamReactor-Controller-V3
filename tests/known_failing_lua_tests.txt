@@ -1,0 +1,93 @@
+# Bekannte, aktuell fehlschlagende tests/*.lua-Dateien, mit Begruendung.
+#
+# TEST-P0 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md):
+# CI fuehrt jetzt tools/run_lua_tests.sh aus, das ALLE tests/*.lua-Dateien
+# laedt (mit tests/cc_env_shim.lua fuer os.epoch/colors/package.path).
+# Diese Datei ist eine EXPLIZITE Ausschlussliste (kein stiller Skip) --
+# jede Zeile "<pfad> # <grund>" wird uebersprungen, alles andere MUSS
+# gruen sein, sonst schlaegt der CI-Schritt fehl.
+#
+# Format: relativer Pfad ab tests/, gefolgt von "#" und einer kurzen
+# Begruendungskategorie. Diese Liste wurde am 2026-07-14 durch tatsaechliches
+# Ausfuehren aller Tests unter lua5.2 (identisch zur CI-Umgebung) erstellt --
+# jeder Eintrag ist ein vorbestehender, von dieser Aenderung unabhaengiger
+# Fehlschlag, kein neu eingefuehrter Regressionsschutz-Umgehungsversuch.
+#
+# Kategorien:
+#   STALE_API      - referenziert eine Funktion/Konstante, die laut Code-
+#                    kommentaren nachweislich bewusst entfernt/umbenannt
+#                    wurde; Test wurde nie nachgezogen.
+#   STALE_STRUCTURE - erwartet eine Dateiaufteilung/Modulstruktur, die es
+#                    im aktuellen Code nie gab (z.B. Alt-Architektur-Annahme).
+#   NEEDS_MOCK     - benoetigt ein CC:Tweaked-Peripheral/fs/Registry-Mock,
+#                    das der Test nicht selbst mitbringt; kein pauschaler
+#                    Shim ohne Kenntnis der erwarteten Testdaten moeglich.
+#   CONTENT_DRIFT  - echte Assertion gegen aktuelles Verhalten, Ursache noch
+#                    nicht einzeln verifiziert (Regression ODER veraltete
+#                    Erwartung -- noch zu klaeren, siehe TEST-P0-Folgearbeit).
+#   SYNTAX_ERROR   - die Testdatei selbst ist kein gueltiges Lua (nicht das
+#                    getestete Produktivmodul).
+
+comms_peer_retention_cleanup_test.lua # NEEDS_MOCK (Logger-Backend meldet degraded ohne echtes Dateisystem)
+comms_stability_defaults_regression_test.lua # STALE_API (DEFAULT_COMMS_PEER_DOWN_GRACE existiert unter diesem Namen nicht mehr)
+energy_architecture_stability_regression_test.lua # CONTENT_DRIFT
+energy_discovery_hot_path_gating_test.lua # CONTENT_DRIFT
+energy_master_connection_scope_regression_test.lua # STALE_API (master_peer_state Forward-Declaration erwartet)
+energy_matrix_component_logging_regression_test.lua # CONTENT_DRIFT
+energy_matrix_payload_cache_regression_test.lua # CONTENT_DRIFT
+energy_matrix_single_group_budget_regression_test.lua # CONTENT_DRIFT
+installer_standalone_bootstrap_test.lua # STALE_STRUCTURE (erwartet ensure_installer_runtime/installer_main.lua-Aufteilung, die es nie gab)
+lifecycle_logging_contract_guard_test.lua # STALE_API (erwartet woertlichen "Startup"-Log-Token in master/main.lua)
+logger_runtime_degraded_nonfatal_test.lua # NEEDS_MOCK
+logger_startup_policy_test.lua # CONTENT_DRIFT
+master_energy_ui_contract_test.lua # NEEDS_MOCK (widgets.lua braucht echtes monitor:clearRegion)
+master_heartbeat_recovery_from_down_test.lua # CONTENT_DRIFT
+master_multiview_three_monitor_layout_test.lua # NEEDS_MOCK (ui/multiview.lua braucht echtes colors.panel-Setup)
+master_overview_ui_contract_test.lua # NEEDS_MOCK (ui/overview.lua braucht echtes monitor:rightText)
+master_regression_guards_test.lua # CONTENT_DRIFT (monitor_states nil)
+master_rt_ack_dedupe_semantic_test.lua # CONTENT_DRIFT
+master_rt_dashboard_ui_contract_test.lua # NEEDS_MOCK (ui/rt_dashboard.lua braucht echtes monitor:getSize)
+master_rt_shutdown_candidate_stability_semantic_test.lua # CONTENT_DRIFT
+master_rt_shutdown_oscillation_guard_test.lua # STALE_API (shutdown_restart_cooldown_ms Token erwartet)
+master_rt_shutdown_workflow_semantic_guards_test.lua # STALE_API (workflow.stage = "REQUESTED" Token erwartet)
+master_rt_shutdown_workflow_semantics_guard_test.lua # STALE_API (RAMPDOWN Token erwartet)
+master_rt_sync_idle_window_semantics_test.lua # CONTENT_DRIFT
+master_shutdown_cooldown_stability_semantics_test.lua # CONTENT_DRIFT
+master_timeout_grace_guard_test.lua # STALE_API (erwartet woertlichen down_grace_ms-Ausdruck)
+master_ui_shutdown_field_consistency_guard_test.lua # STALE_API (shutdown_workflow_stage Token erwartet)
+master_ui_shutdown_field_semantic_contract_test.lua # CONTENT_DRIFT
+network_modem_detection_test.lua # NEEDS_MOCK (peripheral-Autodetect ohne echtes Peripheral-Mock)
+reactor_control_rods_regression_test.lua # CONTENT_DRIFT
+reactor_rod_config_clamp_regression_test.lua # STALE_API (regulator_min_rods laut config.lua-Kommentar bewusst entfernt)
+release_metadata_consistency_test.lua # STALE_API (installer_core_hash wird nur bei stamp_release_metadata.py-Releases gesetzt, nicht im bewegten beta-Branch)
+rt_command_shutdown_ack_semantics_test.lua # CONTENT_DRIFT
+rt_command_shutdown_semantics_regression_test.lua # CONTENT_DRIFT
+rt_command_shutdown_transition_test.lua # CONTENT_DRIFT
+rt_command_shutdown_workflow_semantics_test.lua # CONTENT_DRIFT
+rt_config_normalizer_rod_limits_test.lua # CONTENT_DRIFT (haengt vermutlich mit reactor_rod_config_clamp_regression_test.lua zusammen)
+rt_config_normalizer_steam_guard_test.lua # CONTENT_DRIFT
+rt_control_tick_wiring_regression_test.lua # STALE_API (adjust_turbines-Funktion existiert nicht mehr unter diesem Namen)
+rt_dashboard_shutdown_verdict_semantics_test.lua # STALE_API (verdict = "REQUESTED" Token erwartet)
+rt_flow_apply_helpers_readback_lag_regression_test.lua # CONTENT_DRIFT
+rt_module_lifecycle_control_rod_caps_test.lua # NEEDS_MOCK (evaluate_reactor_coolant im Test-Stub nicht bereitgestellt)
+rt_monitor_ui_adapter_snapshot_test.lua # NEEDS_MOCK (echtes peripheral-Global erwartet)
+rt_monitor_ui_init_regression_test.lua # CONTENT_DRIFT
+rt_safety_causality_logging_test.lua # CONTENT_DRIFT
+rt_schema_ctx_guard_test.lua # CONTENT_DRIFT
+rt_startup_diagnostics_timeout_test.lua # NEEDS_MOCK (set_active_startup im Test-Stub nicht bereitgestellt)
+rt_sync_ack_applied_no_resend_semantics_test.lua # CONTENT_DRIFT
+rt_sync_ack_dedupe_regression_test.lua # CONTENT_DRIFT
+rt_sync_dedupe_ack_guard_test.lua # CONTENT_DRIFT
+rt_sync_demand_sequencing_test.lua # CONTENT_DRIFT
+rt_sync_global_off_hold_test.lua # CONTENT_DRIFT
+rt_sync_multi_reason_dedupe_semantics_test.lua # CONTENT_DRIFT
+rt_sync_per_node_distribution_test.lua # CONTENT_DRIFT
+rt_sync_shutdown_startup_state_test.lua # CONTENT_DRIFT
+rt_turbine_api_warning_regression_test.lua # CONTENT_DRIFT
+rt_turbine_flow_range_config_regression_test.lua # CONTENT_DRIFT
+rt_turbine_readback_source_regression_test.lua # STALE_API (read_turbine_flow-Funktion existiert unter anderem Namen/Pfad)
+rt_turbine_regulator_regression_test.lua # CONTENT_DRIFT
+rt_turbine_tick_coverage_regression_test.lua # STALE_API (TurbineTick-Logzeile wurde entfernt/geaendert, siehe LOG-P1-Historie)
+runtime_identity_logging_test.lua # CONTENT_DRIFT
+startup_logger_nonfatal_test.lua # NEEDS_MOCK
+wrapped_peripheral_guard_test.lua # NEEDS_MOCK (core/registry.lua braucht echtes fs-Global)

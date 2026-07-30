@@ -1,4 +1,50 @@
 local M = {}
+local utils = require("core.utils")
+
+-- Fix (2026-07-13): CRITICAL (MASTER-P1.1, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md). PEAK-/IDLE-Schwellwert und der
+-- lokale AUTO-UPDATE-Schalter aenderten bisher nur runtime.state im
+-- Arbeitsspeicher -- nach einem Neustart waren sie wieder auf den
+-- Standardwert zurueckgesetzt. Schreibt die betroffenen Felder gezielt
+-- in die per GLOBAL-P0 bereits geschuetzte Nutzerdatei (/xreactor/config/
+-- master.lua, kein Manifest-Eintrag, uebersteht Auto-Updates), OHNE den
+-- Rest des Live-State-Objekts (Funktionsreferenzen, transiente Node-
+-- Daten etc.) mit anzufassen -- liest die evtl. bereits vorhandene Datei
+-- zuerst ein und aktualisiert nur die konkret betroffenen Schluessel.
+local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
+-- Fix (2026-07-13): CRITICAL Folgefund waehrend MASTER-P1.1. Der AUTO-
+-- UPDATE-Schalter aenderte bisher nur runtime.state.auto_update_enabled
+-- -- das hatte KEINERLEI Wirkung auf den tatsaechlichen Update-
+-- Mechanismus (installer/auto_update.lua liest ausschliesslich
+-- /xreactor/config/remote_update.lua's "enabled"/"auto_update"-Felder,
+-- eine KOMPLETT SEPARATE Datei, die dieser Schalter nie beruehrte). Der
+-- Schalter war dadurch rein kosmetisch, ohne jede tatsaechliche Wirkung
+-- -- weder lokal auf MASTER selbst noch (wie im Dokument als
+-- "nodeuebergreifend" gefordert) auf andere Rollen. Jetzt schreibt der
+-- Schalter zusaetzlich in remote_update.lua -- das stellt zumindest
+-- MASTERs EIGENES Update-Verhalten korrekt her. Das per Funk an ALLE
+-- anderen Rollen propagieren ("nodeuebergreifend") ist ein eigenstaendiges,
+-- deutlich groesseres Feature (neuer Kommandotyp, ACK-Tracking pro Node)
+-- und bewusst NICHT Teil dieses Fixes.
+local REMOTE_UPDATE_ARMING_PATH = "/xreactor/config/remote_update.lua"
+local function set_local_auto_update_enabled(enabled)
+  local existing = {}
+  local ok, loaded = pcall(utils.load_config, REMOTE_UPDATE_ARMING_PATH, { enabled = true, auto_update = true, check_interval_s = 120 })
+  if ok and type(loaded) == "table" then existing = loaded end
+  existing.enabled = enabled
+  existing.auto_update = enabled
+  return pcall(utils.write_config, REMOTE_UPDATE_ARMING_PATH, existing) == true
+end
+local function persist_master_settings(fields)
+  local existing = {}
+  if utils.load_config then
+    local ok, loaded = pcall(utils.load_config, MASTER_USER_CONFIG_PATH, {})
+    if ok and type(loaded) == "table" then existing = loaded end
+  end
+  for k, v in pairs(fields) do existing[k] = v end
+  local ok_write = pcall(utils.write_config, MASTER_USER_CONFIG_PATH, existing)
+  return ok_write == true
+end
 
 local function normalize_status(raw)
   local s = tostring(raw or "OFFLINE"):upper()
@@ -53,9 +99,23 @@ function M.new(opts)
     return map[key] or raw:upper()
   end
   local function infer_assignment_state(rt_node, node)
+    -- Fix (2026-06-30): node.assignment_state (vom Master-RT-Sync in
+    -- rt_sync.lua gesetzt, stabil über STATUS-Ticks hinweg) muss VOR
+    -- rt_node.assignment_state geprüft werden. Grund: rt_node ist bei
+    -- vorhandenem node.rt eine direkte Referenz auf node.rt — und
+    -- message_handlers.populate_rt_status() ersetzt node.rt bei JEDEM
+    -- STATUS-Tick komplett durch das frische payload.rt (node.rt = payload.rt
+    -- or node.rt or {}), statt es zu mergen. Ein zuvor vom UI gesetztes
+    -- rt_node.assignment_state="ASSIGNED" (siehe normalize_rt_display(), das
+    -- direkt in rt_node mutiert) geht dadurch bei der naechsten STATUS-
+    -- Nachricht sofort wieder verloren — RT selbst sendet ohnehin nie ein
+    -- eigenes assignment_state-Feld im Payload. Je nach Timing zwischen
+    -- STATUS-Empfang und naechstem UI-Render zeigte das zufaellig fuer manche
+    -- Nodes UNASSIGNED, fuer andere (gleicher Code!) ASSIGNED — reines
+    -- Zufallstiming, kein Unterschied im Verhalten der RT-Node selbst.
     local raw = first_nonempty(
-      rt_node.assignment_state,
       node.assignment_state,
+      rt_node.assignment_state,
       node.bindings_state,
       node.bindings and node.bindings.assignment_state,
       node.last_setpoints and node.last_setpoints.assignment_state
@@ -138,14 +198,29 @@ function M.new(opts)
     local top = c.alert_service and c.alert_service:get_top_critical(3) or {}
     local summary = c.alert_service and c.alert_service:get_summary() or 'Keine aktiven Meldungen'
 
-    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '', ops_hints = {}, peer_summary = 'Peers live=0 stale=0 rt=0 energy-matrix=0 src=0', rt_summary = 'RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0', controls_summary = 'Profile=- | AUTO=AUS | RT-HOLD=AUS', nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Normalbetrieb", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" }
+    local pocket_token = (c.node_message_handler and type(c.node_message_handler.get_pocket_token) == "function") and c.node_message_handler.get_pocket_token() or nil
+    local overview = { system_status = 'OK', profile_list = { 'BASELOAD', 'PEAK', 'IDLE' }, active_profile = c.calc.get_active_profile and c.calc.get_active_profile() or c.state.active_profile, auto_profile = c.calc.get_auto_profile and c.calc.get_auto_profile() or c.state.auto_profile, rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold, power_target = c.calc.get_power_target and c.calc.get_power_target() or c.state.power_target, peak_threshold_pct = tonumber(c.state.peak_threshold_pct) or 30, idle_threshold_pct = tonumber(c.state.idle_threshold_pct) or 90, pocket_token = pocket_token, nodes = {}, alert_rows = {}, alert_summary = summary, alert_counts = counts, energy_overview = { percent = 0, status = 'OFFLINE', trend = 'Trend stabil' }, rt_online = 0, power_actual = 0, clock_label = '', ops_hints = {}, peer_summary = 'Peers live=0 stale=0 rt=0 energy-matrix=0 src=0', rt_summary = 'RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0', controls_summary = 'Profile=- | AUTO=AUS | RT-HOLD=AUS', nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Normalbetrieb", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" }
     if (counts.CRITICAL or 0) > 0 then overview.system_status = 'EMERGENCY' elseif (counts.WARN or 0) > 0 then overview.system_status = 'WARNING' end
     for i, a in ipairs(top) do if i > 4 then break end overview.alert_rows[#overview.alert_rows+1] = { title = tostring(a.title or a.code or 'Alert'), text = tostring(a.message or a.detail or 'Keine Details'), status = normalize_status(a.severity or 'WARNING') } end
 
     local rt = { rt_nodes = {}, queue = c.sequencer.queue or {}, ramp_profile = c.sequencer.ramp_profile, sequence_state = c.sequencer.state, rt_global_off_hold = overview.rt_global_off_hold, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, unavailable = 0, local_control = 0, master_control = 0, assignment_state = 'UNASSIGNED', assignment_reason = '-', control_source = 'LOCAL', display_mode = 'RT-Fleet aktiv', fleet_summary = '-', queue_summary = '-' }
     local energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = 'OFFLINE', aggregate_percent = 0, mode = '-', energy_summary = 'Energy 0.0% | Stored 0.0/0.0 | In 0.0 Out 0.0 | Mode - | Matrices 0', matrix_count = 0, matrix_sources = 0, support_online = 0, support_stale = 0, matrix_only = false }
 
+    -- Fix: jede Node-Iteration einzeln pcall-geschützt. Vorher: ein Fehler
+    -- bei der Verarbeitung EINER Node (egal ob RT/Energy/Fuel/etc.) crashte
+    -- den ganzen Loop und damit ALLE 3 Models (overview/rt/energy)
+    -- gleichzeitig — auch wenn nur eine einzelne Node kaputte/unerwartete
+    -- Payload-Felder hatte (klassisches Boot-Race-Condition-Szenario, siehe
+    -- v99 build_models_safe()-Fix). Eine komplette Aufteilung in 3 getrennte
+    -- Funktionen würde den gemeinsamen Node-Loop verdreifachen (die 3 Models
+    -- werden bewusst in EINEM Durchlauf gemeinsam befüllt) — das wäre ein
+    -- größerer strukturelles Rewrite. Pro-Node-pcall erreicht das eigentliche
+    -- Ziel (Fehlerisolierung) mit minimalem Risiko: eine kaputte Node wird
+    -- übersprungen und geloggt, alle anderen Nodes tragen weiter normal zu
+    -- allen 3 Models bei.
+    local node_errors = 0
     for _, node in pairs(c.nodes or {}) do
+      local ok_node, node_err = pcall(function()
       local age = node.last_seen_age or (node.last_seen and math.max(0, math.floor((now - node.last_seen) / 1000)) or -1)
       local stale = age >= 0 and age > 15
       local freshness_note = stale and 'stale' or 'live'
@@ -165,15 +240,45 @@ function M.new(opts)
         rt_node.node_mode = first_nonempty(rt_node.node_mode, rt_node.mode, node_mode, "-")
         rt_node.mode = rt_node.node_mode
         rt_node.assignment_state = infer_assignment_state(rt_node, node)
-        rt_node.control_source = rt_node.control_source or node.control_source or (node.last_setpoints and node.last_setpoints.control_source) or (node.bindings and node.bindings.control_source)
+        -- Fix (2026-06-30): dieselbe Sticky-Falle wie bei assignment_state
+        -- (siehe infer_assignment_state()) — rt_node ist bei vorhandenem
+        -- node.rt eine direkte Referenz darauf. normalize_rt_display()
+        -- schreibt control_source DIREKT in rt_node (Zeile ~110:
+        -- rt_node.control_source = control). Beim naechsten Aufruf hier
+        -- gewann "rt_node.control_source or ..." dann IMMER den zuvor
+        -- (ggf. falsch auf "LOCAL" normalisierten) Wert, noch bevor der
+        -- stabile, vom Master-RT-Sync gesetzte node.control_source ueberhaupt
+        -- geprueft wurde — node.control_source kam nie mehr zum Zug, sobald
+        -- rt_node.control_source einmal "LOCAL" geworden war. Jetzt:
+        -- node.control_source zuerst pruefen.
+        rt_node.control_source = node.control_source or (node.last_setpoints and node.last_setpoints.control_source) or (node.bindings and node.bindings.control_source) or rt_node.control_source
+        rt_node.maintenance_mode = node.maintenance_mode == true
+        rt_node.id = rt_node.id or node.id
+        -- Fix (2026-06-30): "Soll"-Anzeige im UI zeigte dauerhaft 0, weil
+        -- rt_target() (rt_dashboard.lua) auf rt.power_target zurueckfiel —
+        -- ein Feld, das RT seit dem SCADA-Rewrite nie mehr sendet (RT bekommt
+        -- nur noch power_target_percent, berechnet seinen Output selbst).
+        -- node.assigned_power (jetzt von rt_sync.lua persistiert) ist der
+        -- tatsaechliche, vom Master berechnete RF/t-Sollwert pro Node.
+        rt_node.target = node.assigned_power or rt_node.target
         rt_node.assignment_reason = normalize_assignment_reason(
           rt_node.assignment_reason or node.assignment_reason or (node.last_setpoints and node.last_setpoints.assignment_reason) or node.bindings_summary,
           rt_node.assignment_state,
           rt_node.node_mode,
           stale
         )
-        rt_node.queue_state = rt_node.queue_state or node.queue_state or node.state or "idle"
-        rt_node.queue_step = rt_node.queue_step or node.queue_step or (node.last_command_result and node.last_command_result.transition) or "-"
+        -- Fix (2026-06-30): defensiv gegen Tabellenwerte absichern — eine
+        -- der Quellen hier (rt_node.queue_state, node.queue_state, node.state)
+        -- lieferte in der Praxis vereinzelt eine Tabelle statt eines Strings,
+        -- was im UI als "table: 0x..." auftauchte (siehe rt_dashboard.lua
+        -- safe_text()). Ursache nicht abschliessend geklärt; hier zusaetzlich
+        -- an der Quelle abgesichert, nicht nur im Rendering.
+        local function string_or_nil(v)
+          if type(v) == "string" or type(v) == "number" then return tostring(v) end
+          return nil
+        end
+        rt_node.queue_state = string_or_nil(rt_node.queue_state) or string_or_nil(node.queue_state) or string_or_nil(node.state) or "idle"
+        rt_node.queue_step = string_or_nil(rt_node.queue_step) or string_or_nil(node.queue_step) or string_or_nil(node.last_command_result and node.last_command_result.transition) or "-"
         -- Capacity-Learning Status aus dem Node-Payload lesen
         local rt_data = node.rt or {}
         rt_node.capacity_ready          = rt_data.capacity_ready == true or node.capacity_ready == true
@@ -243,6 +348,16 @@ function M.new(opts)
       if node.role == c.constants.roles.FUEL_NODE then energy.resources.fuel_total = (energy.resources.fuel_total or 0) + ((node.fuel and node.fuel.amount) or 0); energy.resources.fuel_sources = (energy.resources.fuel_sources or 0) + 1 end
       if node.role == c.constants.roles.WATER_NODE then energy.resources.water_total = (energy.resources.water_total or 0) + ((node.water and node.water.total) or 0) end
       if node.role == c.constants.roles.REPROCESSOR_NODE then energy.resources.reprocessing_state = (node.reprocessor and (node.reprocessor.state or node.reprocessor.mode)) or '-' end
+      end)
+      if not ok_node then
+        node_errors = node_errors + 1
+        if c.log then
+          c.log("build_models: error processing node " .. tostring(node and node.id or "?") .. ": " .. tostring(node_err), "ERROR")
+        end
+      end
+    end
+    if node_errors > 0 then
+      overview.ops_hints[#overview.ops_hints + 1] = string.format("%d Node(s) bei der Modell-Berechnung uebersprungen (siehe Logs)", node_errors)
     end
     if (overview.power_target or 0) <= 0 and (overview.power_actual or 0) > 0 then
       overview.power_target = overview.power_actual * profile_target_factor(overview.active_profile)
@@ -302,12 +417,264 @@ function M.new(opts)
     energy.resource_summary = string.format("Fuel %.1f | Water %.1f | Reproc %s", energy.resources.fuel_total or 0, energy.resources.water_total or 0, tostring(energy.resources.reprocessing_state or "-"))
     overview.clock_label = os.date('!%H:%M UTC')
     rt.rt_global_off_hold = overview.rt_global_off_hold
-    return { overview = overview, rt = rt, energy = energy, resources = {} }
+
+    -- Fix (2026-06-30): "alerts"-Model fehlte in data_map komplett — weder die
+    -- "Alerts"-View noch der AUX-Monitor-Badge (multiview.lua) bekamen je die
+    -- echten alert_service-Daten (active alerts mit severity/title/message),
+    -- nur die manuell geloggten add_alarm()-Events landeten auf dem "Logs"-
+    -- View. Folge: AUX-Monitor blieb dauerhaft grün/"Keine aktiven Alarme"
+    -- trotz aktiver CRITICAL/WARN-Alerts aus dem alert_service. Hier wird das
+    -- vollstaendige Model gebaut, das alerts.lua's render() erwartet
+    -- (model.counts, model.summary, model.active).
+    local alerts_active = c.alert_service and c.alert_service:get_active() or {}
+    -- Feature (2026-07-01): Zeitstempel-Filter fuer die Alarm-Historie.
+    -- c.state.history_window_key ("1h"/"24h"/"all") wird per Touch in
+    -- alarms.lua umgeschaltet (siehe history_window_cycle Action unten).
+    -- Default "all" entspricht dem alten, ungefilterten Verhalten.
+    local history_window_key = tostring(c.state.history_window_key or "all")
+    local history_windows_ms = { ["1h"] = 3600000, ["24h"] = 86400000 }
+    local since_ms = nil
+    if history_windows_ms[history_window_key] then
+      since_ms = now - history_windows_ms[history_window_key]
+    end
+    local alerts_history = c.alert_service
+      and (type(c.alert_service.get_history_filtered) == "function"
+        and c.alert_service:get_history_filtered({ since_ms = since_ms })
+        or c.alert_service:get_history())
+      or {}
+    local alert_svc = c.alert_service
+    local function on_ack(id)
+      if alert_svc and type(alert_svc.ack) == "function" then
+        alert_svc:ack(id)
+      end
+    end
+    local alerts_model = {
+      counts = counts,
+      summary = summary,
+      active = alerts_active,
+      history = alerts_history,
+      history_window_key = history_window_key,
+      mutes = (c.alert_service and c.alert_service.state and c.alert_service.state.mutes) or { rules = {}, nodes = {} },
+      now_ms = now,
+      config = c.config or {},
+      on_ack = on_ack,
+    }
+
+    -- Fix (2026-06-30): "alarms"-Model ("Logs"-View, AUX-Monitor) zeigte
+    -- bisher NUR die manuell via add_alarm() geloggten Events (Startup
+    -- rejected, Emergency stop active, ...), niemals die automatisch vom
+    -- alert_service erkannten Bedingungen (z.B. niedriger Energiespeicher-
+    -- stand). Jetzt werden beide Quellen kombiniert: aktive alert_service-
+    -- Alerts zuerst (sie sind die dringendsten), danach die manuellen Events.
+    -- Severity wird von CRITICAL/WARN/INFO auf das von alarms.lua erwartete
+    -- Schema EMERGENCY/WARNING/OK gemappt.
+    local function map_alert_severity(sev)
+      local s = tostring(sev or ""):upper()
+      if s == "CRITICAL" then return "EMERGENCY" end
+      if s == "WARN" or s == "WARNING" then return "WARNING" end
+      return "LIMITED"
+    end
+    local combined_alarms = {}
+    for _, a in ipairs(alerts_active) do
+      combined_alarms[#combined_alarms + 1] = {
+        severity = map_alert_severity(a.severity),
+        message = tostring(a.title or a.message or a.code or "Alert"),
+        detail = tostring(a.message or a.detail or a.source or ""),
+        timestamp = a.timestamp or overview.clock_label,
+      }
+    end
+    for _, a in ipairs(c.alarms or {}) do
+      combined_alarms[#combined_alarms + 1] = {
+        severity = a.severity,
+        message = a.message,
+        detail = a.sender_id,
+        timestamp = a.timestamp,
+      }
+    end
+    local alarms_model = {
+      active = alerts_active,
+      header_blink = (counts.CRITICAL or 0) > 0,
+      on_ack = on_ack,
+    }
+
+    -- UI-Redesign Schritt 2 (2026-07-01): Kompakte RT-Fleet-Zusammenfassung
+    -- für die Overview-Seite, damit man den RT-Status sieht ohne extra
+    -- auf die RT-View wechseln zu müssen.
+    local rt_total = #(rt.rt_nodes or {})
+    local rt_active_count = rt.rt_active or 0
+    local rt_fleet_status = "OK"
+    if rt_total > 0 and rt_active_count == 0 then rt_fleet_status = "WARNING" end
+    if rt_total == 0 then rt_fleet_status = "OFFLINE" end
+    overview.rt_fleet_summary = {
+      active = rt_active_count,
+      total = rt_total,
+      assignment = rt.assignment_state or "-",
+      status = rt_fleet_status,
+    }
+
+    -- Wartungsmodus-Übersichtsseite (Feature, 2026-07-02): alle Nodes
+    -- über alle Rollen hinweg mit AUTO/MAINTENANCE-Status, unabhängig vom
+    -- rollenspezifischen rt-Modell oben (das nur RT-Nodes enthält). LOG
+    -- wird bewusst als "nicht kritisch" markiert — Wartung am Log-Collector
+    -- soll keine Anlagenstörung auslösen, nur den Node selbst betreffen.
+    local maintenance_nodes = {}
+    for id, node in pairs(c.nodes or {}) do
+      local role = tostring(node.role or "?")
+      local in_maintenance = node.maintenance_mode == true
+      local status = "OK"
+      if in_maintenance then
+        status = (role == c.constants.roles.LOG_COLLECTOR) and "LIMITED" or "WARNING"
+      end
+      maintenance_nodes[#maintenance_nodes + 1] = {
+        id = id,
+        role = role,
+        maintenance_mode = in_maintenance,
+        status = status,
+        last_seen_age = node.last_seen_age,
+        -- Fix (2026-07-02): master/ui/maintenance.lua prueft node.offline/
+        -- node.stale fuer die OFFLINE-Statusanzeige (siehe dort:
+        -- "if node.offline or node.stale then return 'muted' end" und die
+        -- ONLINE/MAINT/OFFLINE-Ableitung), aber diese Felder wurden hier nie
+        -- gesetzt — ein tatsaechlich offline gegangener Node erschien
+        -- faelschlich immer als ONLINE oder MAINT, nie als OFFLINE.
+        offline = node.offline == true,
+        stale = node.stale == true,
+      }
+    end
+    table.sort(maintenance_nodes, function(a, b)
+      if a.role ~= b.role then return a.role < b.role end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local maintenance_model = { nodes = maintenance_nodes }
+
+    -- AUX-Seite "Updates" (Feature, 2026-07-02): Node-Version-Übersicht.
+    -- node.manifest_version wird von message_handlers.lua aus dem
+    -- HEARTBEAT-Payload gespeichert (siehe dort, "Feature 2026-07-02").
+    local update_nodes = {}
+    for id, node in pairs(c.nodes or {}) do
+      update_nodes[#update_nodes + 1] = {
+        id = id,
+        role = tostring(node.role or "?"),
+        manifest_version = node.manifest_version,
+        offline = node.offline == true,
+        stale = node.stale == true,
+      }
+    end
+    table.sort(update_nodes, function(a, b)
+      if a.role ~= b.role then return a.role < b.role end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local updates_model = { nodes = update_nodes }
+
+    -- AUX-Seite "System Map" (Feature, 2026-07-02): Zustand pro Rolle
+    -- aggregiert (nicht pro einzelnem Node) fuer die grafische
+    -- Anlagenuebersicht. Prioritaet je Rolle: der schlechteste Einzelzustand
+    -- gewinnt (analog zur MASTER-Gesamtampel-Logik) — z.B. wenn 1 von 3
+    -- RT-Nodes im SAFE-Zustand ist, zeigt der gesamte RT-Block Rot.
+    local function severity_rank(status)
+      local ranks = { EMERGENCY = 5, red = 5, WARNING = 4, orange = 4, LIMITED = 3, yellow = 3, OK = 1, green = 1, OFFLINE = 0, muted = 0 }
+      return ranks[tostring(status or "")] or 2
+    end
+    local role_status = {}
+    local role_counts = {}
+    for id, node in pairs(c.nodes or {}) do
+      local role = tostring(node.role or "?")
+      role_counts[role] = (role_counts[role] or 0) + 1
+      local this_status = "OK"
+      if node.offline or node.stale then
+        this_status = "OFFLINE"
+      elseif node.maintenance_mode == true then
+        this_status = "LIMITED"
+      elseif role == c.constants.roles.RT_NODE then
+        local node_state = tostring(node.state or "")
+        if node_state == "SAFE" or node_state == "EMERGENCY" then this_status = "EMERGENCY"
+        elseif node.capacity_ready ~= true then this_status = "LIMITED" end
+      end
+      local prev = role_status[role]
+      if not prev or severity_rank(this_status) > severity_rank(prev) then
+        role_status[role] = this_status
+      end
+    end
+    local system_map_model = {
+      role_status = role_status,
+      role_counts = role_counts,
+      alert_counts = counts,
+    }
+
+    -- Config-Editor am Monitor (Feature, 2026-07-02): zentrale Seite fuer
+    -- Werte, die vorher nur ueber Config-Dateien direkt bearbeitbar waren.
+    --
+    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 10). Die angezeigten Werte
+    -- kommen jetzt ausschliesslich aus master/config_edits.lua (get_
+    -- config_edit_model) statt aus c.state.*_pct -- der angezeigte Wert
+    -- ist damit der zuletzt tatsaechlich BESTAETIGTE (Applied-ACK aller
+    -- angeschriebenen Ziele), nicht der zuletzt EINGEGEBENE. target/
+    -- pending werden durchgereicht, damit ui/config_editor.lua die
+    -- aktuelle Zielauswahl und einen laufenden/fehlgeschlagenen Edit
+    -- sichtbar machen kann.
+    local function edit_model(key, fallback)
+      if c.calc.get_config_edit_model then return c.calc.get_config_edit_model(key, fallback) end
+      return { target = "ALL", confirmed_value = fallback, pending = nil }
+    end
+    local fuel_reserve_edit = edit_model("fuel_reserve", 2000)
+    local water_target_edit = edit_model("water_target", 0)
+    local reactor_fill_edit = edit_model("reactor_fill_target", 0.5)
+    local config_editor_model = {
+      peak_threshold_pct = tonumber(c.state.peak_threshold_pct) or 30,
+      idle_threshold_pct = tonumber(c.state.idle_threshold_pct) or 90,
+      rt_global_off_hold = c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold() or c.state.rt_global_off_hold,
+      fuel_reserve_pct = tonumber(fuel_reserve_edit.confirmed_value) or 2000,
+      fuel_reserve_target = fuel_reserve_edit.target,
+      fuel_reserve_pending = fuel_reserve_edit.pending,
+      water_target_pct = tonumber(water_target_edit.confirmed_value) or 0,
+      water_target_target = water_target_edit.target,
+      water_target_pending = water_target_edit.pending,
+      auto_update_enabled = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled(),
+      -- Feature (2026-07-06): Zielwert fuer individuelle Pro-Reaktor-
+      -- Regelung, als Prozent (0-100) fuer die UI; wird beim Senden durch
+      -- 100 geteilt (siehe handle_action "reactor_fill_target_adjust").
+      -- config_edits speichert den ROHEN, tatsaechlich gesendeten Wert
+      -- (0.0-1.0) -- hier zurueck in Prozent umgerechnet.
+      reactor_fill_target_pct = math.floor((tonumber(reactor_fill_edit.confirmed_value) or 0.5) * 100 + 0.5),
+      reactor_fill_target_target = reactor_fill_edit.target,
+      reactor_fill_target_pending = reactor_fill_edit.pending,
+    }
+
+    return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model, config_editor = config_editor_model }
+  end
+
+  -- Fix: build_models() lief völlig ungeschützt. Ein Fehler dort (z.B. weil
+  -- eine gerade erst registrierte Node noch unvollständige/ungewöhnlich
+  -- geformte Payload-Felder hat — klassisches Race-Condition-Szenario beim
+  -- Boot, wenn der Master schneller online ist als z.B. eine Energy-Node)
+  -- crashte den GESAMTEN draw()-Aufruf, BEVOR das pcall() in multiview.lua
+  -- greifen konnte (das schützt nur render(), nicht den Model-Aufbau davor).
+  -- Folge: die UI blieb in einem kaputten Zustand hängen, ohne dass die
+  -- bestehende RENDER ERROR/VIEW ERROR Anzeige je zum Zug kam — nur ein
+  -- manueller Reboot half, weil dann genug Zeit für vollständige Node-Daten
+  -- verging. Jetzt: build_models() ist selbst abgesichert; bei Fehlschlag
+  -- werden sichere leere Default-Modelle verwendet und der Fehler geloggt,
+  -- sodass die UI weiterläuft statt hängen zu bleiben.
+  local function build_models_safe()
+    local ok, models = pcall(build_models)
+    if ok and type(models) == "table" then return models end
+    if c.log then
+      c.log("build_models() failed, using safe defaults: " .. tostring(models), "ERROR")
+    end
+    return {
+      overview = { system_status = "WARNING", profile_list = { "BASELOAD", "PEAK", "IDLE" }, nodes = {}, alert_rows = {}, alert_summary = "Modellfehler — siehe Logs", alert_counts = { INFO = 0, WARN = 1, CRITICAL = 0 }, energy_overview = { percent = 0, status = "OFFLINE", trend = "Trend stabil" }, rt_online = 0, power_actual = 0, clock_label = os.date("!%H:%M UTC"), ops_hints = { "Modellaufbau fehlgeschlagen, Daten folgen in Kürze" }, peer_summary = "Peers live=0 stale=0 rt=0 energy-matrix=0 src=0", rt_summary = "RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0", controls_summary = "Profile=- | AUTO=AUS | RT-HOLD=AUS", nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Initialisierung...", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" },
+      rt = { rt_nodes = {}, queue = {}, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, unavailable = 0, local_control = 0, master_control = 0, assignment_state = "UNASSIGNED", assignment_reason = "-", control_source = "LOCAL", display_mode = "RT-Fleet aktiv", fleet_summary = "-", queue_summary = "-" },
+      energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = "OFFLINE", aggregate_percent = 0, mode = "-", energy_summary = "Energy 0.0% | Stored 0.0/0.0 | In 0.0 Out 0.0 | Mode - | Matrices 0", matrix_count = 0, matrix_sources = 0, support_online = 0, support_stale = 0, matrix_only = false },
+      resources = {},
+      alerts = { counts = { INFO = 0, WARN = 0, CRITICAL = 0 }, summary = "Keine aktiven Meldungen", active = {}, history = {}, mutes = { rules = {}, nodes = {} }, now_ms = os.epoch('utc'), config = {} },
+      alarms = { alarms = {}, header_blink = false }
+    }
   end
 
   local controller = {}
   controller.draw = function()
-      local models = build_models()
+      local models = build_models_safe()
       controller._last_models = models
       local monitors = c.state.monitor_cache.list or {}
       local rendered = c.view_manager:render(monitors, models) or {}
@@ -332,16 +699,30 @@ function M.new(opts)
         end
       end
 
+      -- Fix (2026-07-13): MASTER-P2 (siehe docs/CODING_AI_OTHER_NODES_
+      -- PERFORMANCE_2026-07-12.md). Vorher erzeugte JEDER erfolgreiche
+      -- Monitor-Render eine EIGENE formatierte DEBUG-Zeile (string.format()
+      -- lief dabei IMMER, unabhaengig davon, ob DEBUG-Logging ueberhaupt
+      -- aktiv ist bzw. die Zeile am Ende tatsaechlich geschrieben wird).
+      -- Jetzt: Erfolge werden zu EINER zusammengefassten Zeile aggregiert
+      -- (guenstig zu bauen -- nur Zaehler, keine Pro-Monitor-Formatierung).
+      -- Fehlschlaege bleiben bewusst EINZELN und sofort sichtbar -- das
+      -- sind seltene, wichtige Diagnosedaten, keine Routine-Information.
+      local ok_count, fail_count = 0, 0
       for _, r in ipairs(rendered) do
-        if c.log then
-          if r.ok then
-            c.log(("UI render ok view=%s monitor=%s role=%s"):format(tostring(r.view), tostring(r.monitor), tostring(r.role)), "DEBUG")
-          else
+        if r.ok then
+          ok_count = ok_count + 1
+        else
+          fail_count = fail_count + 1
+          if c.log then
             c.log(("UI render failed view=%s monitor=%s role=%s error=%s"):format(
               tostring(r.view), tostring(r.monitor), tostring(r.role), tostring(r.error)
             ), "ERROR")
           end
         end
+      end
+      if c.log and ok_count > 0 and c.config and c.config.debug_logging then
+        c.log(("UI render ok: %d monitor(s)%s"):format(ok_count, fail_count > 0 and (", " .. fail_count .. " failed") or ""), "DEBUG")
       end
   end
   controller.handle_action = function(action)
@@ -349,6 +730,112 @@ function M.new(opts)
     if action.type == "profile" and action.name and c.calc.apply_profile then c.calc.apply_profile(action.name); return true end
     if action.type == "auto" and c.calc.set_auto_profile then c.calc.set_auto_profile(not (c.calc.get_auto_profile and c.calc.get_auto_profile())); return true end
     if action.type == "rt_hold" and c.calc.set_rt_global_off_hold then c.calc.set_rt_global_off_hold(not (c.calc.get_rt_global_off_hold and c.calc.get_rt_global_off_hold())); return true end
+    -- Wartungsmodus pro Node (Feature, 2026-07-01): togglet node.maintenance_mode
+    -- direkt auf dem Node-Objekt im Registry. rt_sync.evaluate_rt_node() liest
+    -- dieses Feld und schliesst den Node dann aus der Zuweisung aus, unabhaengig
+    -- vom globalen RT-Hold. Der Node bleibt online/sichtbar (im Unterschied zu
+    -- OFFLINE) und wird nicht automatisch von rt_sync neu bewertet wie bei SHED.
+    if action.type == "maintenance_toggle" and action.node_id and c.nodes then
+      local node = c.nodes[action.node_id]
+      if node then
+        node.maintenance_mode = not (node.maintenance_mode == true)
+        if c.log then
+          c.log(("Maintenance mode %s for node=%s"):format(
+            node.maintenance_mode and "ENABLED" or "disabled", tostring(action.node_id)), "INFO")
+        end
+        return true
+      end
+    end
+    -- PEAK/IDLE-Schwellwerte anpassen (Feature, 2026-07-01): waren vorher
+    -- fest 90%/30% im Code (runtime_ops_profile.lua). Touch auf +/- Buttons
+    -- im Overview aendert sie in 5%-Schritten. c.state ist dieselbe Tabelle
+    -- wie runtime.state, daher direkte Zuweisung ohne separaten Setter.
+    if action.type == "peak_threshold_adjust" and action.delta and c.state then
+      local cur = tonumber(c.state.peak_threshold_pct) or 30
+      c.state.peak_threshold_pct = math.max(5, math.min(80, cur + action.delta))
+      persist_master_settings({ peak_threshold_pct = c.state.peak_threshold_pct })
+      return true
+    end
+    if action.type == "idle_threshold_adjust" and action.delta and c.state then
+      local cur = tonumber(c.state.idle_threshold_pct) or 90
+      c.state.idle_threshold_pct = math.max(20, math.min(99, cur + action.delta))
+      persist_master_settings({ idle_threshold_pct = c.state.idle_threshold_pct })
+      return true
+    end
+    -- Config-Editor am Monitor (Feature, 2026-07-02): Fuel-Reserve/
+    -- Water-Target in festen Schritten anpassen, Auto-Update umschalten.
+    --
+    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 10). Der neue Wert wird NICHT
+    -- mehr optimistisch in c.state.*_pct geschrieben -- der angezeigte
+    -- Wert (config_editor_model) kommt jetzt ausschliesslich aus
+    -- get_config_edit_model() und aktualisiert sich erst, wenn ALLE
+    -- angeschriebenen Ziele APPLIED gemeldet haben. Die Deltaberechnung
+    -- liest den aktuellen (bestaetigten) Wert deshalb ebenfalls von dort,
+    -- nicht mehr aus dem inzwischen ungenutzten c.state-Feld.
+    if action.type == "fuel_reserve_adjust" and action.delta and c.calc.set_fuel_reserve then
+      local cur = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("fuel_reserve", 2000).confirmed_value) or 2000
+      local new_val = math.max(0, cur + action.delta)
+      local ok, err = c.calc.set_fuel_reserve(new_val)
+      if not ok and c.calc.add_alarm then
+        c.calc.add_alarm("MASTER", "WARN", "Fuel-Reserve-Anpassung fehlgeschlagen: " .. tostring(err))
+      end
+      return true
+    end
+    -- Feature (2026-07-06): Zielwert fuer individuelle Pro-Reaktor-
+    -- Regelung. UI arbeitet in Prozent (0-100, Schritte typischerweise
+    -- 5%), das RT-Command SET_REACTOR_FILL_TARGET erwartet aber 0.0-1.0 —
+    -- Umrechnung hier vor dem Senden.
+    if action.type == "reactor_fill_target_adjust" and action.delta and c.calc.set_reactor_fill_target then
+      local cur_ratio = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("reactor_fill_target", 0.5).confirmed_value) or 0.5
+      local cur_pct = cur_ratio * 100
+      local new_pct = math.max(0, math.min(100, cur_pct + action.delta))
+      c.calc.set_reactor_fill_target(new_pct / 100)
+      return true
+    end
+    if action.type == "water_target_adjust" and action.delta and c.calc.set_water_target then
+      local cur = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("water_target", 0).confirmed_value) or 0
+      local new_val = math.max(0, cur + action.delta)
+      local ok, err = c.calc.set_water_target(new_val)
+      if not ok and c.calc.add_alarm then
+        c.calc.add_alarm("MASTER", "WARN", "Water-Target-Anpassung fehlgeschlagen: " .. tostring(err))
+      end
+      return true
+    end
+    -- Fix (2026-07-17): MASTER-P1. Zielauswahl (ALLE -> konkrete Node-ID
+    -- -> ... -> ALLE) je Config-Editor-Einstellung, per Touch auf das
+    -- Zielfeld (siehe ui/config_editor.lua).
+    if action.type == "config_edit_target_cycle" and action.key and c.calc.cycle_config_edit_target then
+      c.calc.cycle_config_edit_target(action.key)
+      return true
+    end
+    if action.type == "auto_update_toggle" and c.calc.set_auto_update_enabled then
+      local cur = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled()
+      local new_val = not cur
+      c.calc.set_auto_update_enabled(new_val)
+      persist_master_settings({ auto_update_enabled = new_val })
+      set_local_auto_update_enabled(new_val)
+      return true
+    end
+    -- Alarm-Historie Zeitfenster (Feature, 2026-07-01): zyklisch zwischen
+    -- "1h" -> "24h" -> "all" -> "1h" ... umschalten, per Touch in alarms.lua.
+    if action.type == "history_window_cycle" and c.state then
+      local cur = tostring(c.state.history_window_key or "all")
+      local order = { ["1h"] = "24h", ["24h"] = "all", ["all"] = "1h" }
+      c.state.history_window_key = order[cur] or "1h"
+      return true
+    end
+    -- Fix (2026-07-01): alarms.lua.handle_input gab frueher direkt via
+    -- model.on_ack(id) einen Callback aus — das funktionierte nur, wenn die
+    -- (falsche) handle_input-Signatur (event, model) je aufgerufen worden
+    -- waere, was aufgrund des Signatur-Mismatches mit multiview.lua's
+    -- Aufrufmuster (mon, x, y) nie der Fall war. Jetzt: handle_input gibt ein
+    -- normales Action-Table zurueck, hier zentral behandelt wie alle anderen
+    -- Actions.
+    if action.type == "alarm_ack" and action.alarm_id and c.alert_service and type(c.alert_service.ack) == "function" then
+      c.alert_service:ack(action.alarm_id)
+      return true
+    end
     return false
   end
   controller.handle_input = function(event)
@@ -360,5 +847,13 @@ function M.new(opts)
   end
   return controller
 end
+
+-- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 10). Exportiert, damit runtime_loop.
+-- lua Config-Editor-Zielauswahl/bestaetigte Werte ueber denselben,
+-- bereits geschuetzten Persistenzmechanismus wie PEAK/IDLE-Schwellwerte
+-- und AUTO-UPDATE ablegen kann, ohne eine zweite, abweichende
+-- Schreiblogik einzufuehren.
+M.persist_master_settings = persist_master_settings
 
 return M

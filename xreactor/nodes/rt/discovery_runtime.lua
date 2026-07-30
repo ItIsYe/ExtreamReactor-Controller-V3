@@ -28,17 +28,41 @@ local function normalize_bound_names(ctx, kind, names)
   return normalized
 end
 
+-- Fix (2026-07-15): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
+-- 2026-07-12.md Abschnitt 6, "Capability-Cache exakt einmal pro Discovery-
+-- generation" / "gezielte Invalidierung bei Attach/Detach"). M.cache() lief
+-- bisher nur bei einer echten Bindungs-Aenderung (siehe refresh_bindings()s
+-- binding_signature-Vergleich), rechnete dabei aber IMMER build_capabilities()
+-- fuer JEDES aktuell gebundene Geraet neu -- bei z.B. 25 Turbinen und dem
+-- Attach/Detach EINER einzigen davon wurden alle 25 peripheral.getMethods()-
+-- Aufrufe erneut ausgefuehrt. Ausserdem blieben Cache-Eintraege abgehaengter
+-- (detachter) Geraete fuer immer im Cache stehen (unbegrenztes Wachstum bei
+-- haeufig umgestecker Hardware). Jetzt: nur wirklich neue Namen bekommen
+-- einen frischen build_capabilities()-Aufruf, bereits gecachte Namen bleiben
+-- unangetastet, nicht mehr gebundene Namen werden aus dem Cache entfernt.
+local function refresh_capability_cache(ctx, kind, names)
+  local cache = ctx.capability_cache[kind]
+  local still_bound = {}
+  for _, name in ipairs(names) do
+    still_bound[name] = true
+    if not cache[name] then
+      cache[name] = ctx.build_capabilities(name)
+    end
+  end
+  for name in pairs(cache) do
+    if not still_bound[name] then
+      cache[name] = nil
+    end
+  end
+end
+
 function M.cache(ctx)
   ctx.config.reactors = normalize_bound_names(ctx, "reactor", ctx.config.reactors or {})
   ctx.config.turbines = normalize_bound_names(ctx, "turbine", ctx.config.turbines or {})
   ctx.peripherals.reactors = ctx.utils.cache_peripherals(ctx.config.reactors) or {}
   ctx.peripherals.turbines = ctx.utils.cache_peripherals(ctx.config.turbines) or {}
-  for _, name in ipairs(ctx.config.reactors) do
-    ctx.capability_cache.reactors[name] = ctx.build_capabilities(name)
-  end
-  for _, name in ipairs(ctx.config.turbines) do
-    ctx.capability_cache.turbines[name] = ctx.build_capabilities(name)
-  end
+  refresh_capability_cache(ctx, "reactors", ctx.config.reactors)
+  refresh_capability_cache(ctx, "turbines", ctx.config.turbines)
 end
 
 function M.build_binding_signature(reactors, turbines)
@@ -53,10 +77,87 @@ function M.build_binding_signature(reactors, turbines)
   return table.concat(ids, "|")
 end
 
+local function method_sample_for(name, limit)
+  local ok, methods = pcall(peripheral.getMethods, name)
+  if not ok or type(methods) ~= "table" then
+    return "methods unavailable"
+  end
+  table.sort(methods)
+  local out = {}
+  local max_methods = math.min(#methods, limit or 10)
+  for i = 1, max_methods do
+    out[#out + 1] = tostring(methods[i])
+  end
+  if #methods > max_methods then
+    out[#out + 1] = "...+" .. tostring(#methods - max_methods)
+  end
+  if #out == 0 then
+    return "no methods"
+  end
+  return table.concat(out, ",")
+end
+
+local function zero_visible_diagnostic_signature(names)
+  local parts = {}
+  for _, name in ipairs(names or {}) do
+    local ok_type, type_name = pcall(peripheral.getType, name)
+    parts[#parts + 1] = table.concat({
+      tostring(name),
+      ok_type and tostring(type_name or "n/a") or "type unavailable",
+      method_sample_for(name, 10)
+    }, "|")
+  end
+  table.sort(parts)
+  return table.concat(parts, "\n")
+end
+
+local function log_zero_visible_diagnostics(ctx, names)
+  ctx.log("WARN", string.format(
+    "RT discovery found zero reactor/turbine peripherals; peripheral_count=%d config_path=/xreactor/config/rt.lua",
+    #(names or {})
+  ))
+  ctx.log("WARN", "RT discovery note: empty reactors/turbines lists mean auto-discovery; zero visible means no supported peripheral signature was detected")
+  if #(names or {}) == 0 then
+    ctx.log("WARN", "RT discovery: peripheral.getNames() returned no peripherals for this computer")
+    return
+  end
+  local max_lines = math.min(#names, 16)
+  for i = 1, max_lines do
+    local name = names[i]
+    local ok_type, type_name = pcall(peripheral.getType, name)
+    ctx.log("INFO", string.format(
+      "RT discovery peripheral name=%s type=%s methods=%s",
+      tostring(name),
+      ok_type and tostring(type_name or "n/a") or "type unavailable",
+      method_sample_for(name, 10)
+    ))
+  end
+  if #names > max_lines then
+    ctx.log("INFO", "RT discovery peripheral list truncated; remaining=" .. tostring(#names - max_lines))
+  end
+end
+
 function M.refresh_bindings(ctx)
   local reactors = ctx.registry:get_bound_devices("reactor")
   local turbines = ctx.registry:get_bound_devices("turbine")
   local signature = M.build_binding_signature(reactors, turbines)
+  -- Fix (2026-07-06): CRITICAL. ctx.devices.reactors/turbines wurden bisher
+  -- NUR gesetzt, wenn sich die binding_signature seit dem letzten Aufruf
+  -- geaendert hat — bei unveraenderter Signatur (der Normalfall bei jedem
+  -- Tick, da sich die Bindung ja selten aendert) lief ein sofortiges
+  -- return VOR der Zuweisung. Sollte devices.reactors/turbines aus
+  -- irgendeinem Grund (Race-Condition beim allerersten Boot-Discover,
+  -- oder schlicht weil binding_signature initial schon zufaellig
+  -- uebereinstimmte) einmal leer geblieben sein, blieb es das FUER IMMER,
+  -- da jeder folgende Aufruf denselben Skip nahm — beobachtet im Log als
+  -- "Discovery unchanged ... bound reactors=1 turbines=25" GEFOLGT von
+  -- "Re-Discovery: reactors=0 turbines=0" (das eigene Log direkt danach,
+  -- das den tatsaechlichen, leeren Zustand von ctx.devices zeigte).
+  -- Jetzt: reactors/turbines werden IMMER zugewiesen, der Signatur-
+  -- Vergleich entscheidet nur noch ob die teuren Nebenoperationen
+  -- (Cache-Schreiben, Modul-Neuaufbau) noetig sind.
+  ctx.devices.reactors = reactors
+  ctx.devices.turbines = turbines
   if ctx.devices.binding_signature == signature then
     return
   end
@@ -71,8 +172,6 @@ function M.refresh_bindings(ctx)
   end
   ctx.config.reactors = reactor_names
   ctx.config.turbines = turbine_names
-  ctx.devices.reactors = reactors
-  ctx.devices.turbines = turbines
   M.cache(ctx)
   ctx.build_modules()
   ctx.refresh_module_peripherals()
@@ -186,6 +285,15 @@ function M.discover(ctx)
   local discovery_signature = ctx.discovery_log.build_signature(summary, binding_decisions)
   local log_details = ctx.discovery_log.should_log_details(ctx.devices.discovery_log_signature, discovery_signature, discovery_had_errors)
   ctx.devices.discovery_log_signature = discovery_signature
+  local zero_visible = visible_counts.reactor == 0 and visible_counts.turbine == 0
+  local zero_diag_signature = zero_visible and zero_visible_diagnostic_signature(names) or nil
+  local log_zero_diag = zero_visible and ctx.devices.zero_visible_diag_signature ~= zero_diag_signature
+  if zero_visible then
+    ctx.devices.zero_visible_diag_signature = zero_diag_signature
+  else
+    ctx.devices.zero_visible_diag_signature = nil
+  end
+
   if log_details then
     for _, decision in ipairs(binding_decisions) do
       local action = decision.bound and "bound" or "rejected"
@@ -213,6 +321,10 @@ function M.discover(ctx)
       bound_counts.reactor,
       bound_counts.turbine
     ))
+  end
+
+  if log_zero_diag then
+    log_zero_visible_diagnostics(ctx, names)
   end
 
   ctx.registry:sync(registry_devices)

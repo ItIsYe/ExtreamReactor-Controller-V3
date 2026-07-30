@@ -37,12 +37,16 @@ function M.run(ctx)
     views = {
       overview = { label = "Overview", render = ctx.overview_ui.render, hit_test = ctx.overview_ui.hit_test, interval = 0.5 },
       energy = { label = "Energy", render = ctx.energy_ui.render, interval = 1.0 },
-      rt = { label = "RT", render = ctx.rt_ui.render, interval = 1.0 },
+      rt = { label = "RT", render = ctx.rt_ui.render, hit_test = ctx.rt_ui.hit_test, interval = 1.0 },
       resources = { label = "Resources", render = ctx.resources_ui.render, interval = 2.0 },
       alerts = { label = "Alerts", render = ctx.alerts_ui.render, hit_test = ctx.alerts_ui.hit_test, interval = 0.5 },
       alarms = { label = "Logs", render = ctx.alarms_ui.render, hit_test = ctx.alarms_ui.handle_input, interval = 1.0 },
+      maintenance = { label = "Maintenance", render = ctx.maintenance_ui.render, hit_test = ctx.maintenance_ui.hit_test, interval = 1.0 },
+      updates = { label = "Updates", render = ctx.updates_ui.render, interval = 2.0 },
+      system_map = { label = "System Map", render = ctx.system_map_ui.render, interval = 2.0 },
+      config_editor = { label = "Config", render = ctx.config_editor_ui.render, hit_test = ctx.config_editor_ui.hit_test, interval = 1.0 },
     },
-    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms" },
+    view_order = { "overview", "rt", "energy", "resources", "alerts", "alarms", "maintenance", "updates", "system_map", "config_editor" },
     on_action = function(action)
       if ctx.refs.ui_controller then
         return ctx.refs.ui_controller.handle_action(action)
@@ -102,7 +106,9 @@ function M.run(ctx)
     mark_rt_sync_dirty = ctx.mark_rt_sync_dirty,
     add_alarm = ctx.add_alarm,
     master_time_label = ctx.master_time_label,
-    log = function(message, level) ctx.utils.log("MASTER", message, level or "INFO") end
+    log = function(message, level) ctx.utils.log("MASTER", message, level or "INFO") end,
+    config_edits_state = ctx.config_edits_state,
+    on_config_edit_change = ctx.persist_config_edits
   })
   ctx.refs.ui_controller = ctx.ui_controller_lib.new({
     constants = ctx.constants,
@@ -116,6 +122,7 @@ function M.run(ctx)
     view_manager = ctx.refs.view_manager,
     trends = ctx.trends,
     trend_cache = ctx.trend_cache,
+    node_message_handler = ctx.refs.node_message_handler,
     state = {
       monitor_cache = ctx.monitor_cache,
       last_draw = ctx.last_draw,
@@ -134,7 +141,12 @@ function M.run(ctx)
       get_power_target = ctx.get_power_target,
       get_critical_blink_until = ctx.get_critical_blink_until,
       get_rt_global_off_hold = ctx.get_rt_global_off_hold,
-      set_rt_global_off_hold = ctx.set_rt_global_off_hold
+      set_rt_global_off_hold = ctx.set_rt_global_off_hold,
+      set_fuel_reserve = ctx.set_fuel_reserve,
+      set_water_target = ctx.set_water_target,
+      set_reactor_fill_target = ctx.set_reactor_fill_target,
+      get_auto_update_enabled = ctx.get_auto_update_enabled,
+      set_auto_update_enabled = ctx.set_auto_update_enabled
     }
   })
   ctx.utils.log("MASTER", ("UI wiring ready: monitors=%d view_manager=%s ui_controller=%s"):format(

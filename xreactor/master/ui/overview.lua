@@ -127,6 +127,47 @@ local function render(mon, model)
     ui.text(mon, box.x, box.y + 5, widgets.fit("Profil " .. tostring(model.active_profile or "-") .. " | " .. tostring(model.controls_summary or "-"), box.w), colors.get("text"), colors.get("background"))
     ui.text(mon, box.x, box.y + 6, widgets.fit(string.format("Soll %.1f | Ist %.1f MRF/t", model.power_target or 0, model.power_actual or 0), box.w), colors.get("muted"), colors.get("background"))
     ui.text(mon, box.x, box.y + 7, widgets.fit(string.format("Nodes %d live / %d stale | RT %d online", model.nodes_live or 0, model.nodes_stale or 0, model.rt_online or 0), box.w), colors.get("text"), colors.get("background"))
+    -- PEAK/IDLE-Schwellwerte (Feature, 2026-07-01): waren vorher fest 90/30%
+    -- im Code, jetzt per Touch in 5%-Schritten anpassbar. Nur anzeigen wenn
+    -- noch Platz in der Box ist (kompakte Layouts lassen diese Zeile weg).
+    if box.h >= 9 then
+      local thr_y = box.y + 8
+      local peak_pct = tonumber(model.peak_threshold_pct) or 30
+      local idle_pct = tonumber(model.idle_threshold_pct) or 90
+      -- Robuster als Format-String-Positions-Parsing: jedes Segment einzeln
+      -- rendern und die x-Position dabei mitfuehren, damit Touch-Zonen und
+      -- Text garantiert uebereinstimmen statt ueber Zeichen-Offsets geraten
+      -- zu werden.
+      local cx = box.x
+      local function put(text, color_key)
+        local t = tostring(text)
+        ui.text(mon, cx, thr_y, t, colors.get(color_key or "muted"), colors.get("background"))
+        local start_x = cx
+        cx = cx + #t
+        return start_x, cx - 1
+      end
+      put(string.format("PEAK<%d%% ", peak_pct))
+      local pm1, pm2 = put("[-]")
+      put(" ")
+      local pp1, pp2 = put("[+]")
+      put("  ")
+      put(string.format("IDLE>%d%% ", idle_pct))
+      local im1, im2 = put("[-]")
+      put(" ")
+      local ip1, ip2 = put("[+]")
+      hits[#hits + 1] = { type = "peak_threshold_adjust", delta = -5, x1 = pm1, x2 = pm2, y1 = thr_y, y2 = thr_y }
+      hits[#hits + 1] = { type = "peak_threshold_adjust", delta = 5, x1 = pp1, x2 = pp2, y1 = thr_y, y2 = thr_y }
+      hits[#hits + 1] = { type = "idle_threshold_adjust", delta = -5, x1 = im1, x2 = im2, y1 = thr_y, y2 = thr_y }
+      hits[#hits + 1] = { type = "idle_threshold_adjust", delta = 5, x1 = ip1, x2 = ip2, y1 = thr_y, y2 = thr_y }
+      -- Pocket-Command-Token (Feature, 2026-07-02): rotierendes 6-stelliges
+      -- Token, das am Pocket-Client eingegeben werden muss um
+      -- Fernsteuerungsbefehle (RT-Hold, Profilwechsel, Wartungsmodus)
+      -- auszufuehren. Nur anzeigen wenn box.h Platz fuer eine weitere
+      -- Zeile hat (kompakte Layouts lassen es weg wie die Schwellwerte).
+      if model.pocket_token and box.h >= 10 then
+        ui.text(mon, box.x, thr_y + 1, widgets.fit("Pocket-Token: " .. tostring(model.pocket_token), box.w), colors.get("muted"), colors.get("background"))
+      end
+    end
   end, function(title, err) section_errors[#section_errors + 1] = title .. ": " .. tostring(err) end)
 
   safe_section(mon, 2 + left_w + 1, content_top, "Meldungen", function()
@@ -150,8 +191,19 @@ local function render(mon, model)
     widgets.stat_card(mon, box.x, box.y, box.w, "Leistung", string.format("Soll %.1f", model.power_target or 0), string.format("Ist %.1f MRF/t", model.power_actual or 0), "LIMITED", (model.power_target or 0) > 0 and math.min(100, ((model.power_actual or 0) / model.power_target) * 100) or 0)
     local energy = model.energy_overview or {}
     widgets.stat_card(mon, box.x, box.y + 6, box.w, "Energie", string.format("%.1f %%", energy.percent or 0), tostring(energy.trend or "Trend stabil"), energy.status or "OFFLINE", energy.percent or 0)
+    -- UI-Redesign Schritt 2 (2026-07-01): RT-Fleet-Kurzstatus ergänzt, damit
+    -- die Overview-Seite wirklich alles zeigt, ohne auf die RT-View wechseln
+    -- zu müssen. Zeigt nur die Zusammenfassung (aktiv/gesamt, Zuweisung),
+    -- Details bleiben weiterhin auf der RT-Seite.
+    local rt_fleet = model.rt_fleet_summary or {}
+    ui.text(mon, box.x, box.y + 12, widgets.fit(
+      string.format("RT-Fleet: %d/%d aktiv | %s",
+        rt_fleet.active or 0, rt_fleet.total or 0, tostring(rt_fleet.assignment or "-")),
+      box.w), colors.get(rt_fleet.status or "text"), colors.get("background"))
     local fresh_status = (model.nodes_stale or 0) > 0 and "WARNING" or "OK"
-    widgets.stat_card(mon, box.x, box.y + 12, box.w, "Node Freshness", tostring(model.nodes_live or 0) .. " live", tostring(model.nodes_stale or 0) .. " stale", fresh_status)
+    ui.text(mon, box.x, box.y + 13, widgets.fit(
+      string.format("Freshness: %d live / %d stale", model.nodes_live or 0, model.nodes_stale or 0),
+      box.w), colors.get(fresh_status), colors.get("background"))
     local hints = model.ops_hints or {}
     if hints[1] then
       ui.text(mon, box.x, box.y + math.max(0, box.h - 2), widgets.fit("Hinweis: " .. tostring(hints[1]), box.w), colors.get("muted"), colors.get("background"))

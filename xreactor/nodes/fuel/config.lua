@@ -62,13 +62,20 @@ local CONFIG = {
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
   -- Logistics routing for the FUEL node.
   --
-  -- Each reactor has its OWN entry. The FUEL node reads fuel levels DIRECTLY
-  -- from the reactor's ER2 Computer Port via Wired Modem and only exports
-  -- fuel to the reactor that is actually requesting it.
+  -- Each reactor has its OWN entry. Fix (2026-07-08): FUEL has NO Wired
+  -- Modem link to the reactors themselves, only to the ME system — fuel
+  -- levels come via network (Master relay, with a direct-overhear
+  -- fallback if Master is down; see nodes/fuel/logistics_router.lua and
+  -- master/fuel_relay.lua). Only exports fuel to the reactor that is
+  -- actually requesting it, prioritized by lowest fuel level first when
+  -- multiple reactors request simultaneously.
   --
   -- Hardware (FUEL computer must have):
-  --   Wired Modem → ER2 Reactor Computer Ports + dedicated inlet transporter/chest
-  --   Wireless Modem → MASTER communication
+  --   Wired Modem → ME Bridge + each reactor's dedicated inlet transporter/chest
+  --   Wireless Modem → MASTER communication + reactor fuel-level relay
+  --   (Redstone valve control, if used: see nodes/valve/main.lua — those
+  --   are separate standalone computers on their own dedicated channel,
+  --   not wired to this computer at all.)
   --
   DEFAULT_LOGISTICS = {
     enabled            = false,
@@ -77,7 +84,13 @@ local CONFIG = {
     me_bridge          = "me_bridge",   -- AP 1.21.1+; "meBridge" on older
     --
     -- reactors: one entry per reactor.
-    --   reactor_port  = peripheral name of the ER2 Reactor Computer Port (Wired Modem)
+    --   reactor_id    = ID of the reactor as reported by its RT node's status
+    --                   (Fix 2026-07-08: FUEL has no Wired Modem link to the
+    --                   reactor itself, only to the ME system — fuel level
+    --                   comes via network relay from Master, see
+    --                   master/fuel_relay.lua, not a local peripheral read.
+    --                   Check the RT node's own log/dashboard for the exact
+    --                   reactor id string it reports.)
     --   inlet         = where to deliver fuel (transporter or chest — must be dedicated
     --                   to THIS reactor; no shared pipes for targeted delivery)
     --   item          = fuel item name
@@ -85,16 +98,16 @@ local CONFIG = {
     --   fill_amount   = how many items to export per resupply event
     --   min_in_me     = minimum ME stock to maintain (never export below this)
     --
-    -- Example (two reactors on Wired Modem network):
+    -- Example (two reactors, RT-reported fuel level, ME-connected delivery):
     -- { name          = "Reaktor A",
-    --   reactor_port  = "BigReactors-Reactor_0",
+    --   reactor_id    = "node-52-reactor-0",
     --   inlet         = "mekanism:ultimate_logistical_transporter_0",
     --   item          = "bigreactors:yellorium_ingot",
     --   request_below = 0.25,
     --   fill_amount   = 64,
     --   min_in_me     = 128 },
     -- { name          = "Reaktor B",
-    --   reactor_port  = "BigReactors-Reactor_1",
+    --   reactor_id    = "node-52-reactor-1",
     --   inlet         = "mekanism:ultimate_logistical_transporter_1",
     --   item          = "bigreactors:yellorium_ingot",
     --   request_below = 0.25,
@@ -106,22 +119,76 @@ local CONFIG = {
     -- { name = "Reaktor A Waste", outlet = "mekanism:ultimate_logistical_transporter_2" },
     waste              = {},
     --
-    -- redstone_routes: map redstone outputs to reactors for pipe valve control.
-    -- Pipe must be configured: "High Redstone = Interrupt" in Mekanism.
-    -- CC sets ALL outputs HIGH (blocked), then opens ONLY the target's output.
+    -- redstone_tree: one route per reactor, each with an ORDERED list of
+    -- valves ("path") that must be blocked/opened together for that
+    -- reactor's export. Pipe must be configured: "High Redstone =
+    -- Interrupt" in Mekanism. CC blocks ALL known valves, then opens ONLY
+    -- the target reactor's own path.
     --
-    -- side: built-in CC side (top/bottom/left/right/front/back)
-    --   OR: integrator output name (if using Redstone Integrator peripheral)
-    -- integrator: Redstone Integrator peripheral name (optional)
+    -- Fix (2026-07-19): this used to be a NESTED tree (side/children) --
+    -- the only way to express multiple valves in series (e.g. one shared
+    -- trunk valve before several reactor-specific branch valves) was to
+    -- nest a valve's 'children'. That is still understood automatically
+    -- (see nodes/fuel/redstone_router.lua's normalize_tree()), but the
+    -- CURRENT, simpler format is a flat list: repeat the SAME
+    -- {side=,integrator=} step in more than one reactor's path to express
+    -- a shared valve -- no nesting needed. The in-game Router page (4/4,
+    -- EDIT tab) builds exactly this format: pick a reactor, then tap
+    -- valves one at a time to build its chain.
+    --
+    -- path[i].side: built-in CC side (top/bottom/left/right/front/back) --
+    --   this is the side on the FUEL computer itself (direct redstone) OR,
+    --   if 'integrator' is set, the side on THAT integrator/VALVE node.
+    -- path[i].integrator (optional): identifies a separate valve
+    --   controller.
+    --   Fix (2026-07-09): in this setup the "integrator" is itself a small
+    --   standalone CC:Tweaked computer sitting at the valve (role VALVE,
+    --   see nodes/valve/main.lua) -- it has no Wired Modem to FUEL, only
+    --   a Wireless Modem, and is addressed by its node_id (auto-discovered
+    --   once it's online and broadcasting, see redstone_router.lua
+    --   refresh()). Set integrator = "<valve node_id>" here, e.g.
+    --   "VALVE-1" (check the VALVE node's own boot log for its assigned
+    --   node_id). A local Mekanism Redstone Integrator peripheral (wired
+    --   directly to FUEL) also still works as a fallback if the name
+    --   doesn't match a known VALVE node_id.
     -- valve_open_ms: how long to keep valve open after export (default 2000ms)
     --
-    -- { reactor = "RT-1", label = "Reaktor A", side = "right" },
-    -- { reactor = "RT-2", label = "Reaktor B", side = "left"  },
-    -- { reactor = "RT-3", label = "Reaktor C", side = "top",
-    --   integrator = "redstone_integrator_0" },
-    redstone_routes    = {},
+    -- { reactor = "RT-1", label = "Reaktor A", path = { { side = "right" } } },
+    -- { reactor = "RT-2", label = "Reaktor B", path = { { side = "left" } } },
+    -- { reactor = "RT-3", label = "Reaktor C",
+    --   path = { { side = "back" }, { side = "front", integrator = "VALVE-1" } } },
+    --   -- ^ two valves in series: a shared trunk valve ("back", local to
+    --   -- FUEL) plus Reaktor C's own branch valve on VALVE-1. Repeating
+    --   -- { side = "back" } as the first step of another reactor's path
+    --   -- means that reactor shares the same trunk valve.
+    redstone_tree      = {},
     valve_open_ms      = 2000,
   },
-  rails     = CONFIG.DEFAULT_RAILS,
-  logistics = CONFIG.DEFAULT_LOGISTICS
 }
+-- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md, Punkt 28.1). "rails = CONFIG.DEFAULT_RAILS"
+-- und "logistics = CONFIG.DEFAULT_LOGISTICS" standen bisher INNERHALB
+-- von CONFIG's eigenem Tabellenkonstruktor -- zu diesem Zeitpunkt ist
+-- die lokale Variable "CONFIG" noch nicht zugewiesen (klassische Lua-
+-- Falle: die Zuweisung passiert erst, wenn der GESAMTE rechte Ausdruck
+-- fertig ausgewertet ist), ein Zugriff darauf waere ein Laufzeitfehler
+-- ("attempt to index a nil value") gewesen, sobald diese Datei je
+-- tatsaechlich ausgefuehrt wurde. Da bisher zusaetzlich kein "return"
+-- existierte (siehe Fix weiter unten), wurde dieser Fehler nie sichtbar
+-- -- niemand hat diese Datei je erfolgreich geladen. Jetzt als separate
+-- Zuweisungen NACH dem Tabellenkonstruktor, wenn CONFIG bereits
+-- existiert.
+CONFIG.rails     = CONFIG.DEFAULT_RAILS
+CONFIG.logistics = CONFIG.DEFAULT_LOGISTICS
+-- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md, Punkt 28.1). Diese Datei hatte bisher
+-- UEBERHAUPT KEIN "return" -- dofile()/require() darauf lieferte
+-- dadurch immer nil statt der Config-Tabelle zurueck. utils.load_config()
+-- faellt in diesem Fall (data ist kein table) still auf DEFAULT_CONFIG
+-- zurueck -- diese ganze Datei war dadurch WIRKUNGSLOS, egal was
+-- hineingeschrieben wurde. Betraf auch die GLOBAL-P0-Migration (siehe
+-- main.lua): die kopiert den ROHEN TEXT dieser Datei unveraendert in die
+-- neue geschuetzte Nutzerdatei -- ohne dieses "return" waere auch die
+-- MIGRIERTE Datei dauerhaft wirkungslos geblieben, trotz korrekt
+-- geschuetztem Pfad.
+return CONFIG

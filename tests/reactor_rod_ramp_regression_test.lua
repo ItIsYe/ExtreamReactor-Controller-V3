@@ -1,6 +1,5 @@
-package.path = package.path .. ";/workspace/ExtreamReactor-Controller-V3/?.lua"
 
-local rails = dofile("/workspace/ExtreamReactor-Controller-V3/xreactor/core/control_rails.lua")
+local rails = dofile("xreactor/core/control_rails.lua")
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then

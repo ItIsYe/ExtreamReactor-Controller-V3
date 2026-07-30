@@ -1,661 +1,502 @@
--- CONFIG
+-- nodes/energy/main.lua
+-- Energy-Node Bootstrap und Orchestrierung.
+-- Fachlogik in separaten Modulen:
+--   heartbeat.lua  — Heartbeat-Thread (nie blockierend)
+--   matrix.lua     — Matrix-Polling-Thread (darf blockieren)
+--   discovery_runtime.lua — Peripheral-Discovery
+--   status_payload.lua    — Telemetrie-Payload
+--   command_handler.lua   — Eingehende Commands
+
 local CONFIG = {
-  LOG_NAME = "energy", -- Log file name for this node.
-  LOG_PREFIX = "ENERGY", -- Default log prefix for energy events.
-  DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
-  BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
-  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor_logs/loader_energy.log).
-  NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
-  CONFIG_PATH = "/xreactor/nodes/energy/config.lua", -- Config file path.
-  RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
+  LOG_NAME              = "energy",
+  LOG_PREFIX            = "ENERGY",
+  BOOTSTRAP_LOG_ENABLED = false,
+  NODE_ID_PATH          = "/xreactor/config/node_id.txt",
+  CONFIG_PATH           = "/xreactor/nodes/energy/config.lua",
+  RECEIVE_TIMEOUT       = 0.5,
 }
 
+-- ── Bootstrap ────────────────────────────────────────────────────────────────
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup({
-  role = "energy",
-  log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
-  log_path = CONFIG.BOOTSTRAP_LOG_PATH
-})
+bootstrap.setup({ role = "energy", log_enabled = false })
 local require = bootstrap.require
-local constants = require("shared.constants")
-local protocol = require("core.protocol")
-local utils = require("core.utils")
-local health = require("core.health")
-local ui = require("core.ui")
-local ui_router = require("core.ui_router")
-local colors = require("shared.colors")
-local registry_lib = require("core.registry")
-local storage_adapter = require("adapters.energy_storage")
-local matrix_adapter = require("adapters.induction_matrix")
-local monitor_adapter = require("adapters.monitor")
-local service_manager = require("services.service_manager")
-local comms_service = require("services.comms_service")
-local discovery_service = require("services.discovery_service")
-local telemetry_service = require("services.telemetry_service")
-local ui_service = require("services.ui_service")
-local control_service = require("services.control_service")
-local matrix_sampling_service = require("services.matrix_sampling_service")
-local discovery_log = require("nodes.energy.discovery_log")
-local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
-local matrix_topology_cache = require("nodes.energy.matrix_topology_cache")
-local config_normalizer = require("nodes.energy.config_normalizer")
-local message_handler_lib = require("nodes.energy.command_handler")
-local status_payload_runtime = require("nodes.energy.status_payload")
-local ui_model_runtime = require("nodes.energy.ui_model")
-local energy_ui_pages = require("nodes.energy.ui_pages")
-local runtime_context = require("nodes.energy.runtime_context")
-local discovery_runtime = require("nodes.energy.discovery_runtime")
-local storage_snapshot_runtime = require("nodes.energy.storage_snapshot_runtime")
-local role_logic = require("nodes.support.role_logic")
 
+-- ── Requires ─────────────────────────────────────────────────────────────────
+local constants              = require("shared.constants")
+local utils                  = require("core.utils")
+local health                 = require("core.health")
+local ui                     = require("core.ui")
+local ui_router              = require("core.ui_router")
+local colors                 = require("shared.colors")
+local registry_lib           = require("core.registry")
+local storage_adapter        = require("adapters.energy_storage")
+local matrix_adapter         = require("adapters.induction_matrix")
+local monitor_adapter        = require("adapters.monitor")
+local service_manager        = require("services.service_manager")
+local comms_service          = require("services.comms_service")
+local discovery_service      = require("services.discovery_service")
+local telemetry_service      = require("services.telemetry_service")
+local ui_service             = require("services.ui_service")
+local matrix_sampling_service = require("services.matrix_sampling_service")
+local discovery_log          = require("nodes.energy.discovery_log")
+local matrix_snapshot_runtime = require("nodes.energy.matrix_snapshot_runtime")
+local matrix_topology_cache  = require("nodes.energy.matrix_topology_cache")
+local config_normalizer      = require("nodes.energy.config_normalizer")
+local support_runtime        = require("nodes.support.runtime")
+local message_handler_lib    = require("nodes.energy.command_handler")
+local status_payload_runtime = require("nodes.energy.status_payload")
+local ui_model_runtime       = require("nodes.energy.ui_model")
+local energy_ui_pages        = require("nodes.energy.ui_pages")
+local runtime_context        = require("nodes.energy.runtime_context")
+local discovery_runtime      = require("nodes.energy.discovery_runtime")
+local storage_snapshot_runtime = require("nodes.energy.storage_snapshot_runtime")
+local role_logic             = require("nodes.support.role_logic")
+-- Phase-2 Rewrite: neue Thread-Module
+local heartbeat_mod          = require("nodes.energy.heartbeat")
+local matrix_mod             = require("nodes.energy.matrix")
+
+-- ── Config ───────────────────────────────────────────────────────────────────
 local DEFAULT_CONFIG = {
-  role = constants.roles.ENERGY_NODE, -- Node role identifier.
-  node_id = "ENERGY-1", -- Default node_id used if none is set.
-  debug_logging = true, -- Keep ENERGY logging enabled by default for field diagnostics and terminate/shutdown traces.
-  reset_log_on_start = true, -- Truncate runtime log at startup to keep disk usage bounded.
-  wireless_modem = nil, -- Autodetect wireless modem unless explicitly configured.
-  wired_modem = nil, -- Optional wired modem side.
-  matrix = nil, -- Optional induction matrix peripheral name (legacy override).
-  matrix_names = {}, -- Optional list of matrix peripheral names (legacy override).
-  matrix_aliases = {}, -- Optional mapping of matrix peripheral name -> display label.
-  cubes = {}, -- Optional list of energy cube names (legacy override).
-  scan_interval = 2, -- Seconds between lightweight discovery checks (heavy discovery runs only on topology change/forced interval).
-  discovery_force_rescan_interval = 300, -- Defensive full discovery interval (seconds) even without observed topology changes.
-  matrix_metric_poll_interval = 3.0, -- Seconds between expensive matrix energy metric reads (stored/capacity/input/output).
-  matrix_metric_call_budget = 6, -- Max expensive matrix metric peripheral calls per payload build to avoid long blocking ticks.
-  matrix_metric_time_budget_ms = 2000, -- Max cumulative time spent on expensive matrix metric calls per payload build.
-  matrix_metric_slow_call_ms = 400, -- Calls above this duration are treated as expensive outliers and polled less frequently.
-  matrix_metric_slow_poll_multiplier = 4.0, -- Extra cadence multiplier for expensive outlier matrix metric calls.
-  matrix_metric_per_matrix_budget = 1, -- Max expensive matrix metric calls per matrix/per payload build so one port cannot dominate a tick.
-  matrix_sample_min_tick_spacing_ms = 400, -- Lower bound between matrix sampling ticks to reduce bursty load under heavy service loops.
-  matrix_component_poll_interval = 30, -- Seconds between matrix component count reads (cells/providers/ports).
-  matrix_component_call_budget = 2, -- Max matrix component count calls per sampling tick to avoid periodic spikes.
-  matrix_component_time_budget_ms = 2000, -- Max Zeit-Budget pro Tick für Matrix-Komponenten-Abfragen.
-  ui_refresh_interval = 1.0, -- Seconds between monitor UI refreshes.
-  ui_scale = 0.5, -- Monitor text scale for the ENERGY node UI.
-  monitor = {
-    preferred_name = nil, -- Optional monitor name to pin (overrides auto-selection).
-    strategy = "largest" -- "largest" or "first" when choosing among multiple monitors.
-  },
-  storage_filters = {
-    include_names = nil, -- Optional allow-list; when set only these names are considered.
-    exclude_names = {}, -- Optional deny-list of peripheral names to ignore.
-    prefer_names = {} -- Optional names to prioritize in selection order.
-  },
-  heartbeat_interval = 2, -- Seconds between status heartbeats.
-  status_interval = 5, -- Seconds between status payloads.
-  channels = {
-    control = constants.channels.CONTROL, -- Control channel for MASTER commands.
-    status = constants.channels.STATUS -- Status channel for telemetry.
-  },
+  role = constants.roles.ENERGY_NODE, node_id = "ENERGY-1",
+  debug_logging = true, reset_log_on_start = true,
+  wireless_modem = nil, wired_modem = nil, matrix = nil,
+  matrix_names = {}, matrix_aliases = {}, cubes = {},
+  scan_interval = 2, discovery_force_rescan_interval = 300,
+  matrix_metric_poll_interval = 3.0, matrix_metric_call_budget = 6,
+  matrix_metric_time_budget_ms = 2000, matrix_metric_slow_call_ms = 400,
+  matrix_metric_slow_poll_multiplier = 4.0, matrix_metric_per_matrix_budget = 1,
+  matrix_sample_min_tick_spacing_ms = 400,
+  matrix_component_poll_interval = 30, matrix_component_call_budget = 2,
+  matrix_component_time_budget_ms = 2000,
+  ui_refresh_interval = 1.0, ui_scale = 0.5,
+  monitor = { preferred_name = nil, strategy = "largest" },
+  storage_filters = { include_names = nil, exclude_names = {}, prefer_names = {} },
+  heartbeat_interval = 2, status_interval = 5,
+  channels = { control = constants.channels.CONTROL, status = constants.channels.STATUS },
   comms = {
-    ack_timeout_s = 3.0, -- Seconds before retrying a command.
-    max_retries = 4, -- Maximum retries per message.
-    backoff_base_s = 0.6, -- Base backoff seconds.
-    backoff_cap_s = 6.0, -- Max backoff seconds.
-    dedupe_ttl_s = 30, -- Seconds to keep dedupe entries.
-    dedupe_limit = 200, -- Max dedupe entries per peer.
-    peer_timeout_s = 12.0, -- Seconds before marking peer down.
-    peer_down_grace_s = 3.0, -- Extra stale window before logging peer down.
-    peer_down_min_observations = 2, -- Consecutive stale checks required before logging peer down.
-    peer_up_debounce_s = 2.5, -- Stable visibility window before logging peer up after down.
-    peer_up_min_observations = 3, -- Fresh peer messages required before logging peer up after down.
-    queue_limit = 200, -- Max queued outbound messages.
-    drop_simulation = 0 -- Drop rate (0-1) for testing comms.
+    ack_timeout_s = 3.0, max_retries = 4, backoff_base_s = 0.6, backoff_cap_s = 6.0,
+    dedupe_ttl_s = 30, dedupe_limit = 200, peer_timeout_s = 45.0,
+    peer_down_grace_s = 10.0, peer_down_min_observations = 3,
+    peer_up_debounce_s = 3.0, peer_up_min_observations = 3,
+    queue_limit = 200, drop_simulation = 0
   }
 }
 
-local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
-
-local function add_config_warning(message)
-  table.insert(config_warnings, message)
+-- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md). Wie bei FUEL bereits behoben: die
+-- urspruenglich hier hart codierte Quelldatei ist Teil des Manifests und
+-- wird bei jedem Auto-Update ueberschrieben -- jede manuelle Config-
+-- Bearbeitung ging dadurch spaetestens beim naechsten Update-Zyklus
+-- verloren.
+local ENERGY_SOURCE_CONFIG_PATH = CONFIG.CONFIG_PATH
+local ENERGY_USER_CONFIG_PATH = "/xreactor/config/energy.lua"
+if not fs.exists(ENERGY_USER_CONFIG_PATH) and fs.exists(ENERGY_SOURCE_CONFIG_PATH) then
+  local ok_read, handle = pcall(fs.open, ENERGY_SOURCE_CONFIG_PATH, "r")
+  if ok_read and handle then
+    local content = handle.readAll()
+    handle.close()
+    local dir = fs.getDir(ENERGY_USER_CONFIG_PATH)
+    if dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+    local ok_write, out = pcall(fs.open, ENERGY_USER_CONFIG_PATH, "w")
+    if ok_write and out then
+      out.write(content)
+      out.close()
+      utils.log(CONFIG.LOG_PREFIX or "ENERGY", "Config-Migration: " .. ENERGY_SOURCE_CONFIG_PATH .. " -> " .. ENERGY_USER_CONFIG_PATH, "INFO")
+    end
+  end
 end
+CONFIG.CONFIG_PATH = ENERGY_USER_CONFIG_PATH
+local config = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
+config_normalizer.normalize(config, DEFAULT_CONFIG, utils, function(w) table.insert(config_warnings, w) end)
 
-local function validate_config(config_values, defaults)
-  return config_normalizer.normalize(config_values, defaults, utils, add_config_warning)
-end
-
-validate_config(config, DEFAULT_CONFIG)
-
--- Initialize file logging early to capture startup events.
+-- ── Logger ────────────────────────────────────────────────────────────────────
 local node_id = utils.read_node_id(CONFIG.NODE_ID_PATH)
 local log_name = utils.build_log_name(CONFIG.LOG_NAME, node_id)
-local debug_enabled = config.debug_logging
-if CONFIG.DEBUG_LOG_ENABLED ~= nil then
-  debug_enabled = CONFIG.DEBUG_LOG_ENABLED
-end
-if (config_meta and config_meta.reason) or #config_warnings > 0 then
-  debug_enabled = true
-end
-local log_status = utils.init_logger({
-  log_name = log_name,
-  prefix = CONFIG.LOG_PREFIX,
-  enabled = debug_enabled,
-  truncate = config.reset_log_on_start == true
-})
-if log_status and log_status.enabled then
-  utils.log(CONFIG.LOG_PREFIX, string.format("Logfile %s (startup=%s)", tostring(log_status.log_path), tostring(log_status.startup_action)), "INFO")
-end
+utils.init_logger({ log_name = log_name, prefix = CONFIG.LOG_PREFIX,
+  enabled = config.debug_logging, truncate = config.reset_log_on_start == true })
 utils.log(CONFIG.LOG_PREFIX, "Startup", "INFO")
-if config_meta and config_meta.reason then
-  utils.log(CONFIG.LOG_PREFIX, "Config issue (" .. tostring(config_meta.reason) .. ") at " .. tostring(config_meta.path) .. "; using defaults where needed.", "WARN")
-end
-for _, warning in ipairs(config_warnings) do
-  utils.log(CONFIG.LOG_PREFIX, warning, "WARN")
-end
+for _, w in ipairs(config_warnings) do utils.log(CONFIG.LOG_PREFIX, w, "WARN") end
 
-local registry = registry_lib.new({
-  node_id = node_id,
-  role = "energy",
-  log_prefix = CONFIG.LOG_PREFIX,
-  aliases = config.matrix_aliases or {}
-})
+local function log(msg, level) utils.log(CONFIG.LOG_PREFIX, msg, level or "INFO") end
 
-local comms
-local services
-local matrix_runtime
-local topology_cache
+-- ── State ─────────────────────────────────────────────────────────────────────
+local registry = registry_lib.new({ node_id = node_id, role = "energy",
+  log_prefix = CONFIG.LOG_PREFIX, aliases = config.matrix_aliases or {} })
 local energy_health = health.new({})
 local runtime = runtime_context.new({ config = config, role = "energy" })
 local devices = runtime.devices
 local ui_state = runtime.ui_state
-local status_payload_cache = runtime.status_payload_cache
-local ui_model_cache = runtime.ui_model_cache
-local master_peer_state
-local is_master_connected
-local discover
+local now_ms   = runtime.now_ms
 
-local now_ms = runtime.now_ms
+-- Fix (2026-07-16): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 13). "services" enthielt bisher ALLE
+-- Services (COMMS/DISCOVERY/STORAGE_SAMPLE/MATRIX_SAMPLE/TELEMETRY/UI) und
+-- wurde ausschliesslich aus dem Matrix-Thread (nodes/energy/matrix.lua)
+-- heraus per services:tick() periodisch geticked -- ein langsamer Matrix-
+-- Peripherie-Call (dokumentiert 1-4s) verzoegerte dadurch im selben
+-- sequentiellen tick()-Aufruf auch COMMS/Discovery/Telemetry/UI, obwohl
+-- der eigentliche Sinn der zwei getrennten Coroutinen (heartbeat.lua +
+-- matrix.lua via parallel.waitForAny) genau das verhindern sollte.
+-- Jetzt: "matrix_services" ist eine EIGENE, zweite service_manager-Instanz
+-- nur fuer die beiden potenziell blockierenden Peripherie-Poll-Services
+-- (STORAGE_SAMPLE/MATRIX_SAMPLE) -- ausschliesslich aus dem Matrix-Thread
+-- geticked. "services" enthaelt nur noch COMMS/DISCOVERY/TELEMETRY/UI und
+-- wird jetzt aus dem (nie blockierenden) Heartbeat-Thread periodisch
+-- geticked (siehe heartbeat.lua), komplett entkoppelt von Matrix-Polling.
+local comms, services, matrix_services, matrix_runtime, topology_cache
+local status_payload_builder, ui_model_builder, ui_pages
+
+-- Heartbeat-State (geteilt zwischen Threads)
+local hb_state = { last_ts = 0, last_warn_ts = 0 }
 
 local function heartbeat_interval_ms()
   return runtime_context.heartbeat_interval_ms(config)
 end
 
-local function minimal_presence_state(ts_ms)
-  return runtime_context.make_presence(config, comms, ts_ms)
+local function send_heartbeat(ts)
+  ts = ts or now_ms()
+  local state = runtime_context.make_presence(config, comms, ts)
+  comms:send_heartbeat(state)
+  hb_state.last_ts = ts
 end
 
-local function send_presence_heartbeat(ts_ms)
-  ts_ms = ts_ms or now_ms()
-  local interval_ms = heartbeat_interval_ms()
-  if runtime.last_heartbeat > 0 then
-    local delayed_by = ts_ms - runtime.last_heartbeat
-    local warn_threshold = interval_ms * 2
-    if delayed_by > warn_threshold and (ts_ms - runtime.last_heartbeat_warn) >= warn_threshold then
-      utils.log(
-        "ENERGY",
-        ("Heartbeat tick delayed by %dms (interval=%dms)"):format(delayed_by, interval_ms),
-        "WARN"
-      )
-      runtime.last_heartbeat_warn = ts_ms
-    end
+-- Fix (2026-07-16): CRITICAL (ENERGY-P0). Einzige zentrale "sende
+-- Heartbeat, falls faellig"-Quelle -- ersetzt die zuvor an drei Stellen
+-- unabhaengig voneinander dupliziert Intervallpruefung (inter_service_hook
+-- unten, matrix_runtime's heartbeat_pump-Option, und einen komplett
+-- UNGEGATETEN Aufruf in matrix.lua, der bei jedem ~0.5s-Loop-Durchlauf
+-- bedingungslos sendete -- deutlich mehr Heartbeats als konfiguriert).
+local function send_heartbeat_if_due(now)
+  now = now or now_ms()
+  if (now - hb_state.last_ts) >= heartbeat_interval_ms() then
+    send_heartbeat(now)
+    return true
   end
-  comms:send_heartbeat(minimal_presence_state(ts_ms))
-  -- Flush heartbeat immediately on its own lightweight path so liveness does
-  -- not wait for a heavy status/UI service manager tick.
-  comms:tick(ts_ms)
-  runtime.last_heartbeat = ts_ms
+  return false
 end
 
-local function run_heartbeat_pump(ts_ms)
-  ts_ms = ts_ms or now_ms()
-  if ts_ms - runtime.last_heartbeat >= heartbeat_interval_ms() then
-    send_presence_heartbeat(ts_ms)
-  end
+-- Fix (2026-07-17): CRITICAL (ENERGY-P1, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 15). heartbeat.lua fuehrte bisher
+-- eine EIGENE, private "last_heartbeat_ts"-Kopie im hb-Ctx (initialisiert
+-- mit 0, unabhaengig von hb_state.last_ts), um seinen eigenen Timer- und
+-- Modem-Event-Pfad zu gaten. Dieser Getter macht hb_state.last_ts (die
+-- einzige, tatsaechlich geteilte Quelle, die auch send_heartbeat_if_due()
+-- und damit der Matrix-Thread verwenden) fuer heartbeat.lua lesbar, ohne
+-- eine zweite, driftende Kopie einzufuehren.
+local function get_last_heartbeat_ts()
+  return hb_state.last_ts
 end
 
--- Storage sampling is kept off the telemetry/UI path: both layers consume this
--- cached snapshot only, so heavy peripheral reads cannot block rendering/comms.
-local storage_runtime
-local sample_storage_stats
-local read_storage_stats
-
-local function read_matrix_stats(opts)
-  opts = opts or {}
-  local snapshot_max_age_ms = tonumber(opts.max_age_ms) or math.max(3000, math.floor((tonumber(config.status_interval) or 5) * 1000))
-  if not matrix_runtime then
-    return {
-      matrices = {},
-      total = { stored = 0, capacity = 0, percent = 0, input = nil, output = nil },
-      diag = { metric_calls = {}, metric_totals = {}, throttled = nil },
-      stale = true
-    }
-  end
-  local snapshot = matrix_runtime:get_snapshot(snapshot_max_age_ms)
-  return {
-    matrices = snapshot.matrices or {},
-    total = snapshot.total or { stored = 0, capacity = 0, percent = 0, input = nil, output = nil },
-    diag = snapshot.diag or { metric_calls = {}, metric_totals = {}, throttled = nil },
-    stale = snapshot.stale,
-    freshness_ms = snapshot.freshness_ms
-  }
-end
-
-local status_payload_builder
-local ui_model_builder
-local ui_pages
-
-local function build_status_payload_uncached(opts)
-  return status_payload_builder.build_status_payload_uncached(opts)
-end
-
-local function build_status_payload(opts)
-  return status_payload_builder.build_status_payload(opts)
-end
-
-local function build_ui_model(opts)
-  return ui_model_builder.build_ui_model(opts)
-end
-
-local function build_snapshot_key(model)
-  return ui_model_builder.build_snapshot_key(model)
-end
-
-local function get_ui_snapshot_key(opts)
-  return ui_model_builder.get_ui_snapshot_key(opts)
-end
-
-local function render_overview(mon, model)
-  return ui_pages.render_overview(mon, model)
-end
-
-local function render_matrices(mon, model)
-  return ui_pages.render_matrices(mon, model)
-end
-
-local function render_storages(mon, model)
-  return ui_pages.render_storages(mon, model)
-end
-
-local function render_diagnostics(mon, model)
-  return ui_pages.render_diagnostics(mon, model)
-end
-
-local function render_monitor()
-  if not devices.monitor then
-    return
-  end
-  local model = build_ui_model({
-    max_age_ms = math.max(
-      math.floor((tonumber(config.ui_refresh_interval) or 1.0) * 1000),
-      math.floor((tonumber(config.status_interval) or 5) * 1000)
-    )
-  })
-  ui_state.model = model
-  local expected_pages = 3 + (#model.storages > 0 and 1 or 0)
-  if not ui_state.router or ui_state.router:count() ~= expected_pages then
-    local pages = {
-      { name = "Overview", render = function(target, view)
-        render_overview(target, view.data or view)
-      end },
-      { name = "Matrices", render = function(target, view)
-        render_matrices(target, view.data or view)
-      end }
-    }
-    if #model.storages > 0 then
-      table.insert(pages, { name = "Storages", render = function(target, view)
-        render_storages(target, view.data or view)
-      end })
-    end
-    table.insert(pages, { name = "Diagnostics", render = function(target, view)
-      render_diagnostics(target, view.data or view)
-    end })
-    ui_state.router = ui_router.new(devices.monitor, {
-      title = "ENERGY",
-      pages = pages,
-      interval = config.ui_refresh_interval,
-      key_prev = { [keys.left] = true, [keys.pageUp] = true },
-      key_next = { [keys.right] = true, [keys.pageDown] = true }
-    })
-  end
-  local snapshot = ui_model_cache.key or build_snapshot_key(model)
-  ui_state.router:render(devices.monitor, {
-    snapshot = {
-      data = snapshot,
-      matrix_page = ui_state.matrix_page,
-      storage_page = ui_state.storage_page
-    },
-    data = model
-  })
-end
-
-local function warn_once(key, message)
-  runtime_context.warn_once(runtime, function(msg, level)
-    utils.log("ENERGY", msg, level)
-  end, key, message)
-end
-
-master_peer_state = function()
-  return role_logic.master_peer_state(comms, constants.roles.MASTER)
-end
-
-is_master_connected = function()
-  return role_logic.is_master_connected({
-    comms = comms,
-    master_role = constants.roles.MASTER,
-    last_seen_ts = runtime.master_seen_ts,
-    heartbeat_interval = config.heartbeat_interval
-  })
-end
-
-local message_handler = nil
-
-local function handle_message(message)
-  return message_handler and message_handler.handle_message(message)
-end
-
--- TEMPORÄR: Energy-Node empfängt sonst keine Commands vom Master (nur
--- sendend) — REMOTE_UPDATE ist die einzige Ausnahme, damit auch diese Node
--- per Funk aktualisiert werden kann. Siehe core/remote_update.lua.
+-- ── Handle Remote-Update Command ─────────────────────────────────────────────
 local function handle_command(message)
   local payload = type(message) == "table" and message.payload or nil
   local command = payload and payload.command
   if type(command) == "table" and command.target == "REMOTE_UPDATE" then
-    if comms then comms:send_ack(message, true, { updating = true }) end
-    utils.log("ENERGY", "Remote-Update command received, starting installer...", "WARN")
-    local remote_update = require("core.remote_update")
-    remote_update.run(function(level, text) utils.log("ENERGY", text, level) end)
+    require("core.remote_update").handle_command({
+      log_prefix = "ENERGY", utils = utils,
+      send_ack = comms and function() comms:send_ack(message, true, { updating = true }) end or nil,
+    })
     return { ok = true }
   end
   return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
 end
 
+-- ── Matrix-Stats lesen (aus Snapshot) ────────────────────────────────────────
+local function read_matrix_stats(opts)
+  opts = opts or {}
+  local max_age = tonumber(opts.max_age_ms) or math.max(3000, math.floor((tonumber(config.status_interval) or 5) * 1000))
+  if not matrix_runtime then
+    return { matrices = {}, total = { stored=0, capacity=0, percent=0 }, diag = {}, stale = true }
+  end
+  local snap = matrix_runtime:get_snapshot(max_age)
+  return { matrices = snap.matrices or {}, total = snap.total or { stored=0, capacity=0, percent=0 },
+    diag = snap.diag or {}, stale = snap.stale, freshness_ms = snap.freshness_ms }
+end
+
+-- ── Init ─────────────────────────────────────────────────────────────────────
 local function init()
-  utils.log("ENERGY", "Initializing services (comms, discovery, telemetry, ui)", "INFO")
-  message_handler = message_handler_lib.new({
+  log("Initializing...", "INFO")
+
+  local msg_handler = message_handler_lib.new({
     constants = constants,
     mark_master_seen = function() runtime.master_seen_ts = os.epoch("utc") end,
-    on_master_alerts = function(alerts) runtime.master_alerts = alerts end,
+    on_master_alerts = function(a) runtime.master_alerts = a end,
     on_proto_mismatch = function() devices.proto_mismatch = true end
   })
+
   comms = comms_service.new({
-    name = "COMMS",
-    config = config,
-    log_prefix = "ENERGY",
-    on_message = handle_message,
+    name = "COMMS", config = config, log_prefix = "ENERGY",
+    on_message = function(m) return msg_handler.handle_message(m) end,
     on_command = handle_command
   })
-  services = service_manager.new({
-    log_prefix = "ENERGY",
-    inter_service_hook = function(_, _, phase)
-      if phase == "before_service" or phase == "after_service" then
-        run_heartbeat_pump(now_ms())
-      end
+
+  -- Fix (2026-07-16): CRITICAL (ENERGY-P0). "services" tickt jetzt nur noch
+  -- COMMS/DISCOVERY/TELEMETRY/UI, periodisch aus dem Heartbeat-Thread
+  -- (siehe heartbeat.lua) -- kein inter_service_hook mehr noetig, da
+  -- send_heartbeat_if_due() jetzt die alleinige, zentrale Heartbeat-Quelle
+  -- ist (siehe oben).
+  services = service_manager.new({ log_prefix = "ENERGY" })
+  -- Zweite, unabhaengige Service-Gruppe nur fuer die beiden potenziell
+  -- blockierenden Peripherie-Poll-Services (STORAGE_SAMPLE/MATRIX_SAMPLE,
+  -- siehe services:add() weiter unten) -- ausschliesslich aus dem Matrix-
+  -- Thread geticked, komplett getrennt von COMMS/DISCOVERY/TELEMETRY/UI.
+  matrix_services = service_manager.new({ log_prefix = "ENERGY_MATRIX" })
+
+  matrix_runtime = matrix_snapshot_runtime.new({
+    log_prefix = "ENERGY", config = config, debug_enabled = config.debug_logging,
+    get_groups = function() return devices.matrix_groups or {} end,
+    -- Fix (2026-07-13): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_
+    -- NODES_PERFORMANCE_2026-07-12.md). heartbeat_pump() rief send_
+    -- heartbeat() bisher UNGEFILTERT bei jedem Matrix-Sample-Zyklus auf
+    -- (~alle 0.5s), unabhaengig vom eigentlich konfigurierten Heartbeat-
+    -- Intervall (Standard 2s) -- ein Heartbeat-Ziel muss nur SOOFT wie
+    -- konfiguriert bedient werden, nicht bei jeder Gelegenheit, bei der
+    -- der Aufrufer gerade "vorbeikommt".
+    -- Fix (2026-07-16): CRITICAL (ENERGY-P0, Abschnitt 13). Nutzt jetzt die
+    -- zentrale send_heartbeat_if_due()-Quelle statt einer eigenen, dritten
+    -- Kopie derselben Intervallpruefung.
+    heartbeat_pump = function()
+      send_heartbeat_if_due(now_ms())
+    end,
+    record_error = function(scope, err)
+      devices.last_error = tostring(scope) .. ": " .. tostring(err)
     end
   })
-  matrix_runtime = matrix_snapshot_runtime.new({
-    log_prefix = "ENERGY",
-    config = config,
-    debug_enabled = debug_enabled,
-    get_groups = function()
-      return devices.matrix_groups or {}
-    end,
-    heartbeat_pump = run_heartbeat_pump,
-    record_error = record_error
-  })
+
   topology_cache = matrix_topology_cache.new({
-    log_prefix = "ENERGY",
-    forced_rescan_interval_s = config.discovery_force_rescan_interval
+    log_prefix = "ENERGY", forced_rescan_interval_s = config.discovery_force_rescan_interval
   })
+
+  local storage_runtime = storage_snapshot_runtime.new({
+    now_ms = now_ms, config = config, devices = devices, utils = utils,
+    record_error = function(scope, err) devices.last_error = tostring(scope) .. ": " .. tostring(err) end
+  })
+
   local discovery_runner = discovery_runtime.new({
-    config = config,
-    debug_enabled = debug_enabled,
-    utils = utils,
-    peripheral = peripheral,
-    monitor_adapter = monitor_adapter,
-    matrix_adapter = matrix_adapter,
-    storage_adapter = storage_adapter,
-    discovery_log = discovery_log,
-    registry = registry,
-    devices = devices,
-    topology_cache = topology_cache,
-    matrix_runtime = matrix_runtime,
-    record_error = record_error,
+    config = config, debug_enabled = config.debug_logging, utils = utils,
+    peripheral = peripheral, monitor_adapter = monitor_adapter,
+    matrix_adapter = matrix_adapter, storage_adapter = storage_adapter,
+    discovery_log = discovery_log, registry = registry, devices = devices,
+    topology_cache = topology_cache, matrix_runtime = matrix_runtime,
+    record_error = function(scope, err) devices.last_error = tostring(scope) .. ": " .. tostring(err) end,
     on_topology_changed = function()
-      -- compatibility guard: if topology_changed then invalidate payload/ui caches.
-      status_payload_cache.ts = 0
-      status_payload_cache.payload = nil
-      ui_model_cache.ts = 0
-      ui_model_cache.model = nil
-      ui_model_cache.key = nil
+      runtime.status_payload_cache.ts = 0; runtime.status_payload_cache.payload = nil
+      runtime.ui_model_cache.ts = 0; runtime.ui_model_cache.model = nil; runtime.ui_model_cache.key = nil
     end,
-    log = function(message, level) utils.log("ENERGY", message, level or "INFO") end
+    log = log
   })
-  -- discovery_runtime keeps reconcile_matrix_groups behavior centralized.
-  discover = discovery_runner.discover
-  storage_runtime = storage_snapshot_runtime.new({
-    now_ms = now_ms,
-    config = config,
-    devices = devices,
-    utils = utils,
-    record_error = record_error
-  })
-  sample_storage_stats = storage_runtime.sample_storage_stats
-  read_storage_stats = storage_runtime.read_storage_stats
+
   status_payload_builder = status_payload_runtime.new({
-    now_ms = now_ms,
-    config = config,
-    utils = utils,
-    health = health,
-    registry = registry,
-    devices = devices,
-    energy_health = energy_health,
-    read_storage_stats = read_storage_stats,
+    now_ms = now_ms, config = config, utils = utils, health = health,
+    registry = registry, devices = devices, energy_health = energy_health,
+    read_storage_stats = storage_runtime.read_storage_stats,
     read_matrix_stats = read_matrix_stats,
-    is_master_connected = function() return is_master_connected() end,
-    status_payload_cache = status_payload_cache,
-    log = function(message, level) utils.log("ENERGY", message, level or "INFO") end
+    is_master_connected = function()
+      return role_logic.is_master_connected({
+        comms = comms, master_role = constants.roles.MASTER,
+        last_seen_ts = runtime.master_seen_ts, heartbeat_interval = config.heartbeat_interval
+      })
+    end,
+    status_payload_cache = runtime.status_payload_cache,
+    log = log
   })
-  ui_pages = energy_ui_pages.new({
-    ui = ui,
-    colors = colors,
-    ui_router = ui_router,
-    ui_state = ui_state,
-    utils = utils
-  })
+
+  ui_pages = energy_ui_pages.new({ ui = ui, colors = colors, ui_router = ui_router,
+    ui_state = ui_state, utils = utils })
+
   ui_model_builder = ui_model_runtime.new({
-    now_ms = now_ms,
-    config = config,
-    utils = utils,
-    health = health,
-    registry = registry,
-    comms = comms,
-    devices = devices,
-    master_peer_state = function() return master_peer_state() end,
+    now_ms = now_ms, config = config, utils = utils, health = health,
+    registry = registry, comms = comms, devices = devices,
+    master_peer_state = function() return role_logic.master_peer_state(comms, constants.roles.MASTER) end,
     master_alerts = function() return runtime.master_alerts end,
-    build_status_payload = function(args) return build_status_payload(args) end,
-    ui_model_cache = ui_model_cache
+    build_status_payload = function(a) return status_payload_builder.build_status_payload(a) end,
+    ui_model_cache = runtime.ui_model_cache
   })
+
+  -- Services registrieren
   services:add(comms)
   services:add(discovery_service.new({
-    name = "DISCOVERY",
-    log_prefix = "DISCOVERY",
-    registry = registry,
-    discover = discover,
-    interval = config.scan_interval,
-    -- Discovery must stay out of the hot path: we only execute full discovery
-    -- when topology changed (peripheral attach/detach/signature drift) or when
-    -- a defensive forced-rescan interval elapsed.
+    name = "DISCOVERY", log_prefix = "DISCOVERY", registry = registry,
+    discover = discovery_runner.discover, interval = config.scan_interval,
     should_discover = function(_, ts, event, due)
-      if not topology_cache then
-        return due
-      end
-      return topology_cache:should_discover(ts, event, due)
+      return topology_cache and topology_cache:should_discover(ts, event, due) or due
     end,
     managed_registry = false,
-    update_health = function(ok, reason)
-      devices.discovery_failed = not ok
-    end
+    update_health = function(ok) devices.discovery_failed = not ok end
   }))
-  services:add(matrix_sampling_service.new({
-    name = "STORAGE_SAMPLE",
-    interval = 0.5,
-    start_delay = 0.10,
-    runtime = {
-      tick = function(_, ts)
-        sample_storage_stats(ts or now_ms())
-      end
-    }
+  -- Fix (2026-07-16): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md Abschnitt 13). STORAGE_SAMPLE/MATRIX_SAMPLE
+  -- laufen jetzt in matrix_services (eigene, nur aus dem Matrix-Thread
+  -- geticke Gruppe), NICHT mehr in "services" (COMMS/DISCOVERY/TELEMETRY/
+  -- UI, aus dem Heartbeat-Thread geticke) -- ein langsamer Peripherie-Call
+  -- in einem der beiden Sample-Services verzoegert dadurch nicht mehr
+  -- COMMS/Discovery/Telemetry/UI im selben sequentiellen tick()-Aufruf.
+  matrix_services:add(matrix_sampling_service.new({
+    name = "STORAGE_SAMPLE", interval = 0.5, start_delay = 0.10,
+    runtime = { tick = function(_, ts) storage_runtime.sample_storage_stats(ts or now_ms()) end }
   }))
-  services:add(matrix_sampling_service.new({
-    name = "MATRIX_SAMPLE",
-    interval = 0.75,
-    start_delay = 0.20,
+  matrix_services:add(matrix_sampling_service.new({
+    name = "MATRIX_SAMPLE", interval = 0.75, start_delay = 0.20,
     runtime = matrix_runtime
   }))
-  -- Fix #2: status_max_age_ms war hardcodiert 1000ms → Cache wurde fast nie
-  -- genutzt weil der Telemetry-Service alle status_interval Sekunden sendet.
-  -- Neu: 90% des Send-Intervalls → Cache ist effektiv für aufeinanderfolgende Aufrufe.
-  local telemetry_status_interval_ms = math.max(1000,
-    math.floor((tonumber(config.status_interval) or 5) * 1000))
-  local telemetry_max_age_ms = math.floor(telemetry_status_interval_ms * 0.9)
+  local status_interval_ms = math.max(1000, math.floor((tonumber(config.status_interval) or 5) * 1000))
   services:add(telemetry_service.new({
-    name = "TELEMETRY",
-    log_prefix = "TELEMETRY",
-    comms = comms,
+    name = "TELEMETRY", log_prefix = "TELEMETRY", comms = comms,
     status_interval = config.status_interval or config.heartbeat_interval,
-    heartbeat_interval = config.heartbeat_interval,
-    enable_heartbeat = false,
-    status_max_age_ms = telemetry_max_age_ms,
-    build_payload = build_status_payload
+    heartbeat_interval = config.heartbeat_interval, enable_heartbeat = false,
+    status_max_age_ms = math.floor(status_interval_ms * 0.9),
+    build_payload = function(o) return status_payload_builder.build_status_payload(o) end
   }))
   services:add(ui_service.new({
-    name = "UI",
-    interval = config.ui_refresh_interval,
+    name = "UI", interval = config.ui_refresh_interval,
     snapshot = function()
-      return {
-        page = ui_state.router and ui_state.router.index or 1,
-        matrix_page = ui_state.matrix_page,
-        storage_page = ui_state.storage_page,
-        data = get_ui_snapshot_key({
-          max_age_ms = math.max(1000, math.floor((tonumber(config.status_interval) or 5) * 1000))
-        })
+      local model = ui_model_builder.build_ui_model({
+        max_age_ms = math.max(1000, math.floor((tonumber(config.status_interval) or 5) * 1000))
+      })
+      ui_state.model = model
+      local pages = {
+        -- Fix (2026-07-06): diese Wrapper gaben den Rueckgabewert von
+        -- ui_pages.render_xxx() (die footer_nav()-Touch-Koordinaten fuer
+        -- ZURUECK/WEITER) bisher nicht zurueck — der Router bekam immer
+        -- nil und konnte seine Touch-Zonen nie auf die sichtbaren Buttons
+        -- legen. Derselbe Bug wie zuvor bei RT (dort direkt behoben durch
+        -- return-Statements in mockup_pages.lua selbst), hier zusaetzlich
+        -- durch diese anonyme Wrapper-Schicht verursacht.
+        { name = "Overview",     render = function(t, v) return ui_pages.render_overview(t, v.data or v) end },
+        { name = "Matrices",     render = function(t, v) return ui_pages.render_matrices(t, v.data or v) end },
       }
-    end,
-    render = render_monitor,
-    handle_input = function(event)
-      if ui_state.router then
-        ui_state.router:handle_input(event)
+      if #(model.storages or {}) > 0 then
+        table.insert(pages, { name = "Storages", render = function(t, v) return ui_pages.render_storages(t, v.data or v) end })
       end
+      table.insert(pages, { name = "Diagnostics", render = function(t, v) return ui_pages.render_diagnostics(t, v.data or v) end })
+      if not ui_state.router or ui_state.router:count() ~= #pages then
+        ui_state.router = ui_router.new(devices.monitor, {
+          title = "ENERGY", pages = pages, interval = config.ui_refresh_interval,
+          key_prev = { [keys.left] = true, [keys.pageUp] = true },
+          key_next = { [keys.right] = true, [keys.pageDown] = true }
+        })
+      end
+      return { page = ui_state.router and ui_state.router.index or 1, data = model }
+    end,
+    render = function()
+      if not devices.monitor then return end
+      local model = ui_state.model or ui_model_builder.build_ui_model({ max_age_ms = 5000 })
+      if ui_state.router then
+        ui_state.router:render(devices.monitor, { data = model })
+      end
+      -- Ampel-Statusmonitor: komplett fehlerisoliert, kann den Hauptmonitor
+      -- oberhalb nicht beeinflussen selbst wenn render_ampel intern scheitert.
+      pcall(function()
+        if type(ui_pages.render_ampel) == "function" then
+          ui_pages.render_ampel(devices.monitor_name, model)
+        end
+      end)
+    end,
+    handle_input = function(event)
+      if ui_state.router then ui_state.router:handle_input(event) end
     end
   }))
+
   services:init()
-  sample_storage_stats(now_ms())
+  matrix_services:init()
+  storage_runtime.sample_storage_stats(now_ms())
+
   local summary = registry:get_summary()
   comms:send_hello({
     storages = summary.kinds.storage and summary.kinds.storage.bound or 0,
-    matrices = summary.kinds.matrix and summary.kinds.matrix.bound or 0,
-    monitor = devices.monitor and 1 or 0
+    matrices  = summary.kinds.matrix  and summary.kinds.matrix.bound  or 0,
+    monitor   = devices.monitor and 1 or 0
   })
-  utils.log("ENERGY", "Node ready: " .. comms.network.id)
+
+  -- Startup-Diagnose-Report (Kernfunktion, 2026-07-01): siehe
+  -- xreactor/core/startup_report.lua.
+  local report_mod = require("core.startup_report")
+  pcall(function()
+    local checks = { report_mod.check_wireless_modem() }
+    local kinds = summary.kinds or {}
+    local matrices = kinds.matrix or {}
+    local storages = kinds.storage or {}
+    checks[#checks + 1] = { name = "Matrix/Storage erkannt", ok = (matrices.bound or 0) > 0 or (storages.bound or 0) > 0,
+      detail = string.format("matrix=%d storage=%d", matrices.bound or 0, storages.bound or 0) }
+    checks[#checks + 1] = { name = "Monitor gefunden", ok = devices.monitor ~= nil }
+    local ok_spk, spk_mod = pcall(require, "optional.speaker_alarm")
+    local speaker = ok_spk and spk_mod.new() or nil
+    report_mod.run(checks, { log = log, speaker = speaker })
+  end)
+
+  log("Node ready: " .. comms.network.id)
 end
 
-local function is_terminate_error(err)
-  local message = tostring(err or ""):lower()
-  return message:find("terminate", 1, true) ~= nil
-end
-
+-- ── Main ─────────────────────────────────────────────────────────────────────
 local function shutdown(reason)
-  local shutdown_reason = tostring(reason or "requested")
-  if shutdown_reason:lower():find("terminate", 1, true) then
-    utils.log("ENERGY", "terminate received", "WARN")
-  else
-    utils.log("ENERGY", "shutdown requested: " .. shutdown_reason, "WARN")
-  end
-  utils.log("ENERGY", "shutting down services", "INFO")
-  if services then
-    local ok, err = pcall(function()
-      services:stop()
-    end)
-    if not ok and not is_terminate_error(err) then
-      utils.log("ENERGY", "service shutdown error: " .. tostring(err), "ERROR")
-    end
-  end
-  utils.log("ENERGY", "shutdown complete", "INFO")
+  log("Shutdown: " .. tostring(reason or "requested"), "WARN")
+  if services then pcall(function() services:stop() end) end
+  log("Shutdown complete")
 end
 
-local function main_loop()
-  utils.log("ENERGY", "Entering event loop", "INFO")
-  local hb_interval_ms = heartbeat_interval_ms()
-  local heartbeat_timer = os.startTimer(hb_interval_ms / 1000)
-  local function rearm_heartbeat_timer()
-    heartbeat_timer = os.startTimer(hb_interval_ms / 1000)
-  end
-  while true do
-    local timer = os.startTimer(CONFIG.RECEIVE_TIMEOUT)
-    while true do
-      local event = { os.pullEventRaw() }
-      if event[1] == "terminate" then
-        return "terminate received"
-      end
-      if event[1] == "modem_message" then
-        comms:handle_event(event)
-        run_heartbeat_pump(now_ms())
-      elseif event[1] == "monitor_touch" or event[1] == "mouse_click" then
-        -- Log mode buttons on the Diagnostics page
-        if devices.monitor and ui_state.router and ui_state.router.current
-            and ui_state.router:current() and ui_state.router:current().name == "Diagnostics" then
-          ui_pages.handle_diagnostics_touch(devices.monitor, event[3], event[4])
-        end
-        -- Still forward to services (ui_service handles page navigation)
-        services:tick(nil, event)
-      elseif event[1] == "key" then
-        services:tick(nil, event)
-      elseif event[1] == "timer" and event[2] == heartbeat_timer then
-        run_heartbeat_pump(now_ms())
-        rearm_heartbeat_timer()
-      elseif event[1] == "timer" and event[2] == timer then
-        break
-      end
-    end
-    -- C4: heartbeat_pump nur noch einmal nach services:tick() —
-    -- timer-basiertes Pumpen übernimmt die regelmäßige Sendung.
-    services:tick()
-    run_heartbeat_pump(now_ms())
-  end
+local function is_terminate(err)
+  return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
 end
 
-local ok, result_or_err = xpcall(function()
+-- Heartbeat-Context für heartbeat.lua
+-- Fix (2026-07-16): CRITICAL (ENERGY-P0). services = die "schnelle" Gruppe
+-- (COMMS/DISCOVERY/TELEMETRY/UI) -- heartbeat.lua tickt sie jetzt
+-- periodisch (siehe dort, tick_interval_s), zusaetzlich zum bisherigen
+-- Event-getriebenen Weiterreichen (monitor_touch/mouse_click/key).
+local function make_hb_ctx()
+  return {
+    comms = comms, config = config, devices = devices,
+    ui_state = ui_state, ui_pages = ui_pages, services = services,
+    now_ms = now_ms, log = log,
+    last_heartbeat_warn_ts = 0,
+    heartbeat_interval_ms = heartbeat_interval_ms,
+    send_heartbeat_if_due = send_heartbeat_if_due,
+    get_last_heartbeat_ts = get_last_heartbeat_ts,
+    tick_interval_s = CONFIG.RECEIVE_TIMEOUT,
+  }
+end
+
+-- Matrix-Context für matrix.lua
+-- Fix (2026-07-16): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md Abschnitt 13). services = jetzt matrix_
+-- services (NUR STORAGE_SAMPLE/MATRIX_SAMPLE, siehe oben) statt der
+-- vollstaendigen Service-Liste -- "Matrix-Thread tickt ausschliesslich
+-- einen dedizierten Matrixservice". send_heartbeat_if_due statt des rohen,
+-- ungegateten send_heartbeat -- war zuvor die Quelle der ungefilterten
+-- Heartbeat-Flut (jeder ~0.5s-Loop-Durchlauf sendete bedingungslos).
+local function make_mx_ctx()
+  return {
+    services = matrix_services, now_ms = now_ms,
+    receive_timeout_s = CONFIG.RECEIVE_TIMEOUT,
+    send_heartbeat_if_due = send_heartbeat_if_due, log = log,
+  }
+end
+
+local ok, result = xpcall(function()
   init()
-  send_presence_heartbeat(now_ms())
-  return main_loop()
-end, function(err)
-  return err
-end)
+  send_heartbeat(now_ms())
+  log("Entering parallel event loop (heartbeat + matrix threads)", "INFO")
+  parallel.waitForAny(
+    function() heartbeat_mod.run(make_hb_ctx()) end,
+    function() matrix_mod.run(make_mx_ctx()) end
+  )
+  return "loop ended"
+end, function(err) return err end)
 
 if ok then
-  shutdown(result_or_err)
+  shutdown(result)
+elseif is_terminate(result) then
+  shutdown("terminate received")
 else
-  if is_terminate_error(result_or_err) then
-    shutdown("terminate received")
-  else
-    -- Fix #4: Fehler anzeigen, auf Bestätigung warten, dann sauber neu starten.
-    -- Kein blindes re-throw das einen roten Crash-Screen ohne Kontrolle erzeugt.
-    shutdown("runtime error: " .. tostring(result_or_err))
-    -- Crash-Screen: Fehler klar anzeigen
-    if term and term.setBackgroundColor and term.setTextColor and colors then
-      term.setBackgroundColor(colors.black)
-      term.setTextColor(colors.red)
-      term.clear()
-      term.setCursorPos(1, 1)
-      print("=== ENERGY NODE CRASH ===")
-      term.setTextColor(colors.white)
-      print("")
-      print(tostring(result_or_err))
-      print("")
-      term.setTextColor(colors.yellow)
-      print("Druecke eine Taste um neu zu starten...")
-      term.setTextColor(colors.white)
-    else
-      print("ENERGY NODE CRASH: " .. tostring(result_or_err))
-      print("Druecke eine Taste um neu zu starten...")
-    end
-    -- Auf Bestätigung warten
-    pcall(os.pullEvent, "key")
-    -- Sauberer Neustart via /startup
-    if os.reboot then
-      os.reboot()
-    end
-  end
+  shutdown("runtime error: " .. tostring(result))
+  -- Fix (2026-07-13): CRITICAL (SHARED-P0.2, siehe docs/CODING_AI_OTHER_
+  -- NODES_PERFORMANCE_2026-07-12.md). Vorher eigener, dupliziertes
+  -- Crash-Handling hier, das UNBEGRENZT auf einen physischen Tastendruck
+  -- wartete (pcall(os.pullEvent,"key")), bevor ueberhaupt rebootet wurde
+  -- -- ohne physische Anwesenheit blieb ENERGY bei einem Fehler fuer
+  -- immer haengen. Jetzt: dieselbe bereits fuer FUEL/WATER/REPROCESSOR/
+  -- RT/LOG_COLLECTOR bewaehrte Logik (begrenzte Wartezeit, automatischer
+  -- Reboot, Crash-Loop-Erkennung) wiederverwendet statt dupliziert.
+  support_runtime.crash_screen("runtime error: " .. tostring(result))
 end

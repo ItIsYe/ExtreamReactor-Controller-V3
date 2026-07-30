@@ -1,0 +1,11 @@
+# Bekannte, aktuell fehlschlagende tests/*.py-Dateien, mit Begruendung.
+# Siehe tests/known_failing_lua_tests.txt fuer Format/Kategorien-Erklaerung
+# und den zugehoerigen TEST-P0-Abschnitt in
+# docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md.
+
+energy_heartbeat_decoupling_regression_test.py # STALE_API (erwartet woertliche Funktion send_presence_heartbeat)
+energy_persistent_topology_regression_test.py # STALE_API (erwartet woertliche Funktion reconcile_matrix_groups)
+energy_scope_regression_test.py # STALE_API (erwartet woertliches "local master_peer_state")
+master_rt_dashboard_ui_contract_test.py # STALE_API (erwartet Textfragment "RT-Flotte")
+release_manifest_rt_guard_test.py # STALE_STRUCTURE (erwartet nicht existierende Datei xreactor/installer_main.lua)
+rt_main_structure_guard_test.py # CONTENT_DRIFT (rt/main.lua hat aktuell eine Funktion mit 347 statt max. 250 Zeilen -- moeglicher echter Aufraeum-Kandidat fuer RT-P1-Folgearbeit)

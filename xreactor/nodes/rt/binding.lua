@@ -1,5 +1,7 @@
 local binding = {}
 
+local RT_CONFIG_PATH = "/xreactor/config/rt.lua"
+
 local function normalize_names(list)
   local normalized = {}
   if type(list) ~= "table" then
@@ -93,16 +95,18 @@ function binding.missing_devices_message(kind, policy)
   local noun = kind == "reactor" and "reactors" or "turbines"
   if binding.mode_label(kind, policy) == "auto-discovery" then
     return string.format(
-      "No %s are currently bound. RT auto-discovery is active; attach local %s peripherals or add explicit names in /xreactor/nodes/rt/config.lua.",
+      "No %s are currently bound. RT auto-discovery is active; attach local %s peripherals or add explicit names in %s.",
       noun,
-      noun
+      noun,
+      RT_CONFIG_PATH
     )
   end
   local configured = kind == "reactor" and policy.reactors or policy.turbines
   return string.format(
-    "No %s are currently bound. RT is restricted to explicit names: %s. Update /xreactor/nodes/rt/config.lua or clear the list to enable auto-discovery.",
+    "No %s are currently bound. RT is restricted to explicit names: %s. Update %s or clear the list to enable auto-discovery.",
     noun,
-    table.concat(configured, ", ")
+    table.concat(configured, ", "),
+    RT_CONFIG_PATH
   )
 end
 

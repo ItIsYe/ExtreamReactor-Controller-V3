@@ -45,8 +45,33 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.max_per_cycle) ~= "number" or lg.max_per_cycle <= 0 then
     lg.max_per_cycle = (defaults.logistics and defaults.logistics.max_per_cycle) or 64
   end
-  if type(lg.reactors)     ~= "table" then lg.reactors     = {} end
-  if type(lg.waste)        ~= "table" then lg.waste        = {} end
+  if type(lg.reactors)      ~= "table" then lg.reactors      = {} end
+  if type(lg.waste)         ~= "table" then lg.waste         = {} end
+  if type(lg.redstone_tree) ~= "table" then lg.redstone_tree = {} end
+  if type(lg.valve_open_ms) ~= "number" or lg.valve_open_ms <= 0 then
+    lg.valve_open_ms = (defaults.logistics and defaults.logistics.valve_open_ms) or 2000
+  end
+  -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md). destinations/sources/routes wurden bisher
+  -- NIE normalisiert -- weder DEFAULT_LOGISTICS noch eine leere
+  -- "logistics={}"-Benutzerconfig enthalten ein "destinations"-Feld. Der
+  -- Destination-Validierungsloop weiter unten ruft aber unbedingt
+  -- ipairs(lg.destinations) auf, was bei einer frischen oder teilweisen
+  -- Config sofort mit "bad argument #1 to 'ipairs' (table expected, got
+  -- nil)" abstuerzte, noch bevor die Node betriebsbereit war.
+  if type(lg.destinations) ~= "table" then lg.destinations = {} end
+  if type(lg.sources)      ~= "table" then lg.sources      = {} end
+  if type(lg.routes)       ~= "table" then lg.routes       = {} end
+  -- Fix (2026-07-09): kein Hinweis existierte bisher, wenn Reaktoren
+  -- konfiguriert sind, "enabled" aber noch false ist -- ein leicht zu
+  -- uebersehender Zustand, in dem alle Reaktor-Eintraege fehlerfrei
+  -- validieren, aber M:tick() trotzdem sofort zurueckkehrt (keine
+  -- Belieferung passiert), ohne dass irgendwo eine Meldung erscheint.
+  if lg.enabled == false and #lg.reactors > 0 then
+    add_warning(string.format(
+      "logistics.enabled=false trotz %d konfigurierter Reaktoren — es wird KEIN Fuel exportiert, bis enabled=true gesetzt wird",
+      #lg.reactors))
+  end
   if type(lg.me_bridge)    ~= "string" then
     lg.me_bridge = (defaults.logistics and defaults.logistics.me_bridge) or "me_bridge"
   end

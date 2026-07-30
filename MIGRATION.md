@@ -1,42 +1,39 @@
-# Migration Guide (aktueller Repo-Stand)
+# Migration Guide (aktueller Repo-Stand — v358)
 
 ## Ziel
-Diese Migration beschreibt den **aktuellen Installer- und Repo-Stand** für ExtreamReactor-Controller-V3 auf dem `beta`-Branch.
+Diese Migration beschreibt den **aktuellen Installer- und Repo-Stand** für ExtreamReactor-Controller-V3 auf dem `beta`-Branch, Stand Phase-1-bis-4-Rewrite + Auto-Update-Härtung + UI-Redesign (2026-07-07).
 
 Wichtig:
 - Der normale Installer-Lauf ist **beta-only**.
-- Der Installer arbeitet mit **remote geladenen Metadaten** (`release.lua`, `manifest.lua`) vom `beta`-Branch und mit **lokaler Stage/Activate-Logik** auf dem Zielsystem.
+- Der Installer ist **ein einziges monolithisches Skript** (`/installer` im Repo-Root), das die `installer/`-Module als eingebettete Lua-Long-Strings enthält. Es gibt keine separate `installer_main.lua` mehr.
+- Der Installer lädt Metadaten (`release.lua`, `manifest.lua`) live vom `beta`-Branch.
 - Commit-Pinning ist im normalen `beta`-Installerpfad **nicht erlaubt**.
 
 ---
 
 ## Aktueller Install-/Update-Flow
 
-### Neuinstallation
-1. Root-Installer `installer` lokal starten.
-2. Rolle wählen.
-3. Der Installer lädt:
-   - `release.lua` vom `beta`-Branch
-   - danach `manifest.lua` vom `beta`-Branch
-4. Danach werden die erwarteten Dateien nach `/xreactor_stage` geladen.
-5. Die Stage wird validiert.
-6. Aktivierung/Commit:
-   - aktives `/xreactor` -> `/xreactor_backup_prev`
-   - `/xreactor_stage` -> `/xreactor`
-   - Backup wird nach erfolgreichem Commit gelöscht
-7. Optional `reboot`, damit alle Dienste sauber neu starten.
+### Neuinstallation / Reinstallation (identischer Flow)
+1. `installer` lokal starten (`wget .../beta/installer` + ausführen).
+2. Rolle wählen (bei Reinstall: bestehende Rolle wird automatisch erkannt und vorgeschlagen).
+3. Der Installer lädt `manifest.lua` vom `beta`-Branch und ermittelt über `files_for_role()` die für die gewählte Rolle nötigen Dateien.
+4. **Vor dem Löschen** wird `/xreactor/config/role.lua` eingelesen und im Speicher zwischengespeichert.
+5. `/xreactor` wird komplett gelöscht (`fs.delete`) und neu angelegt — **kein** separates Stage/Backup-Verzeichnis mehr. Das verhindert verwaiste Altdateien und Speicherplatzprobleme bei großen Rollen (MASTER, RT).
+6. `role.lua` wird sofort wiederhergestellt, damit ein Neustart des Installers (z. B. nach Abbruch) die Rolle weiterhin kennt.
+7. Die eingebetteten `installer/*.lua`-Module werden nach `/xreactor/installer/` geschrieben.
+8. Die erwarteten Node-Dateien werden direkt von GitHub (`raw.githubusercontent.com`) heruntergeladen und in `/xreactor` geschrieben (größte Dateien zuerst).
+9. `/xreactor/config/remote_update.lua` wird geschrieben (`enabled=true, auto_update=true, check_interval_s=120`).
+10. `/startup` wird geschrieben.
+11. `os.reboot()`.
 
-### Update
-1. Root-Installer `installer` lokal starten.
-2. `Update` wählen.
-3. Rolle wird aus bestehender Konfiguration gelesen.
-4. Der Installer lädt:
-   - `release.lua` vom `beta`-Branch
-   - `manifest.lua` vom `beta`-Branch
-5. Dateien werden nach `/xreactor_stage` geladen und validiert.
-6. Bestehende Config aus `/xreactor/config` wird ins Stage übernommen.
-7. Aktivierung/Commit wie oben.
-8. Optional `reboot`.
+### Auto-Update (kein manueller Trigger nötig)
+Jeder Node startet nach dem Boot `parallel.waitForAny(node_thread, auto_update_loop)`. Der Auto-Update-Loop:
+
+1. Wartet 30s nach Boot, danach alle 120s.
+2. Liest lokale `manifest_version` aus `/xreactor/release.lua`.
+3. Holt `xreactor/release.lua` direkt von `raw.githubusercontent.com/.../beta/...` (kein `api.github.com`-Umweg mehr, siehe unten).
+4. Ist die Remote-Version höher, lädt er den aktuellen `/installer` herunter, führt ihn via `dofile()` aus (nicht `shell.run()` — `shell` ist in `parallel`-Coroutinen nicht verfügbar) und rebootet bei Erfolg.
+5. Bis zu 3 Versuche mit Backoff, danach 60s Pause vor dem nächsten regulären Zyklus.
 
 ---
 
@@ -47,147 +44,49 @@ Im normalen Installerlauf gilt:
 
 - `release.lua.commit_sha` darf **kein echter Commit-SHA** sein
 - `release.lua.source_ref` muss zu `beta` passen
-- `manifest.lua.source_ref` muss zu `beta` passen
-
-Wenn `release.lua` einen echten Commit-Pin enthält, ist das ein Fehler im Repo-Stand und der Installer **soll hart abbrechen**.
+- `manifest.lua.source_ref` (falls vorhanden) muss zu `beta` passen
 
 ### 2. Remote-Metadaten, lokaler Commit
-Der Installer ist **nicht lokal-only** im Sinne der Quelle:
-- Metadaten und Dateien werden vom `beta`-Branch geladen
-- Stage/Backup/Activate passieren lokal auf dem Zielsystem
-
-Die lokale Aktivierung bleibt absichtlich getrennt von der Remote-Beschaffung.
+Metadaten und Dateien werden vom `beta`-Branch geladen; das Schreiben nach `/xreactor` passiert lokal auf dem Zielsystem. Es gibt **keine** Stage/Backup/Activate-Trennung mehr (siehe oben) — der alte dreistufige Ansatz mit `/xreactor_stage` und `/xreactor_backup_prev` wurde durch Delete+Reinstall-mit-role.lua-Erhalt ersetzt.
 
 ### 3. Manifest ist verbindlich
-Alle shipped Dateien im Installerpfad werden gegen `manifest.lua` validiert:
-- `size_bytes`
-- `hash`
+Alle Dateien im Installerpfad werden über `manifest.lua` (Pfad, `size_bytes`) referenziert. **Jede Versions-Bumps muss `manifest_version` in `manifest.lua` UND `release.lua` erhöhen, sonst erkennt der Auto-Updater die neue Version nicht.**
 
-Wenn eine Datei im Repo geändert wird, **muss** der passende Manifesteintrag nachgezogen werden.
+### 4. CC:Tweaked Parallel-Coroutine-Regeln (siehe auch README.md)
+Hart erarbeitete Einschränkungen, die beim Schreiben von Installer-/Auto-Update-Code beachtet werden müssen:
+- `shell` nicht verfügbar in `parallel`-Coroutinen → `dofile()` statt `shell.run()`.
+- `http.get()` ohne brauchbares Timeout in diesem Kontext → async `http.request` + `http_success`/`http_failure` Events.
+- Keine zusätzlichen abhängigen HTTP-Roundtrips im Update-Check-Pfad (z. B. SHA-Auflösung über `api.github.com`) — jeder zusätzliche externe Call ist ein weiterer Punkt, an dem der async Event-Wait auf event-intensiven Nodes (z. B. RT) hängen bleiben kann. Direkt `raw.githubusercontent.com/.../beta/...` fetchen.
+- `os.pullEvent()` in parallelen Threads ungefiltert lassen, damit Geschwister-Coroutinen ihre Events weiterhin bekommen.
+- `f.write(content)` direkt aufrufen, nicht über `pcall(f.write, f, content)`.
+
+### 5. Log-Transport-Kanal ist 6503, nicht 6502
+War lange ein realer Bug: der Sender (`core/remote_log.lua`) nutzte fest `6502`, während `shared/constants.lua` den LOG-Kanal als `6503` definiert (bewusst getrennt von Control/Status 6500/6501). Der LOG-Collector empfing dadurch über einen längeren Zeitraum nichts (`Recv 0`), obwohl alles andere korrekt konfiguriert war. Fixed 2026-06-30 — beide Seiten nutzen jetzt `6503`.
 
 ---
 
-## Was beim Update erhalten bleibt
-- Rolle (`/xreactor/config/role.lua`)
-- bestehende Runtime-Config in `/xreactor/config/*`
-- persistierte Node-ID (`/xreactor/config/node_id.txt`)
-- `/startup`, sofern ein nicht-XReactor-Startup absichtlich geschützt ist
+## Was beim Update/Reinstall erhalten bleibt
+- Rolle (`/xreactor/config/role.lua`) — explizit gesichert und wiederhergestellt vor/nach dem Löschen von `/xreactor`.
+- `/startup`, sofern ein nicht-XReactor-Startup absichtlich geschützt ist.
+
+**Nicht mehr automatisch erhalten** (da `/xreactor` komplett gelöscht wird): sonstige Runtime-Configs unter `/xreactor/config/*` außer den explizit in `PRESERVE` gelisteten Dateien.
+
+**In `PRESERVE` gesichert (seit 2026-07-07, v235):** `config/node_id.txt`, `config/capacity_cache.lua`, `config/role.lua` — alle drei überleben Reinstalls und Auto-Updates in beiden Installer-Codepfaden.
 
 ---
 
 ## Aktueller RT-Hinweis
-RT ist **nicht** mehr als „unverändert/frozen“ zu betrachten.
-
-Der aktuelle Repo-Stand enthält bereits RT-Kompatibilitäts- und Migrationslogik, z. B. für Legacy-Konfigpfade:
-- `runtime_ctx.monitor`
-- `runtime_ctx.mon`
-- Migration auf `monitor`
-
-Das bedeutet:
-- RT ist ein aktiver Stabilisierungsbereich
-- RT-bezogene Änderungen müssen immer gegen aktuellen Bootpfad, Config-Schema und `ctx`-Contracts geprüft werden
-- Änderungen an `xreactor/nodes/rt/*` brauchen besondere Vorsicht, weil Folgeblocker oft erst zur Laufzeit sichtbar werden
+RT ist **nicht** mehr „unverändert/frozen“. Das Modul wurde im Rahmen der SCADA-Rewrite vollständig in Submodule aufgeteilt (siehe README.md → RT Node). RT-bezogene Änderungen müssen immer gegen aktuellen Bootpfad, Config-Schema und `ctx`-Contracts geprüft werden.
 
 ---
 
+## Historisch gelöste Probleme (Kontext für zukünftiges Debugging)
 
-## Shutdown-Workflow (MASTER <-> RT) – aktueller Ist-Stand
-Der aktuelle Repo-Stand enthält einen deutlich weiter ausgebauten Shutdown-Workflow als in älteren Doku-Ständen:
+Diese Punkte waren zeitweise offen, sind aber inzwischen gefixt — hier gelistet, damit nicht erneut Zeit in bereits geschlossene Themen investiert wird:
 
-- MASTER führt pro RT-Knoten einen `shutdown_workflow` mit Stufen wie `RAMPDOWN`, `REQUEST_STATE`, `WAITING_STATE`, `COMPLETED`, `FAILED`, `CANCELLED_DEMAND_RECOVERED`.
-- Der Soll-Zustand wird als `desired_node_state` in den RT-Setpoints übertragen.
-- RT verarbeitet `desired_node_state` im Command-Handler und führt bei gültigem Zustand die Zustandsmaschine entsprechend in Richtung Zielzustand.
-- MASTER pflegt dazu Workflow-Metadaten inkl. `outcome`, `final_reason`, `completed_at`, `state_reached_at` sowie Request-/Ack-Zeitstempeln.
-
-Wichtig zur Einordnung:
-- Die vorhandenen Guards sind nützlich, aber der Shutdown-Guard-Block ist derzeit gemischt:
-  - **Primär:** erste verhaltensnahe Semantikprüfungen (z. B. REQUESTED vs. ALREADY_IN_STATE, INVALID_STATE, SAFE_MODE).
-  - **Sekundär:** weiterhin text-/tokenbasierte Präsenzchecks auf Stages/Felder/Reason-Tokens.
-- Das ist **kein** Endzustand „vollständig semantisch abgesichert“. Dieser Ausbaupunkt bleibt offen.
-
-## UI-/Workflow-Diagnose (MASTER)
-Die MASTER-UI kann Shutdown-Workflow-Diagnose je RT-Knoten bereits sichtbar machen, u. a.:
-
-- Shutdown-Stage und Workflow-Reason
-- Workflow-Outcome und Workflow-Error
-- Request-/Accept-/State-Reached-/Completed-Zeitstempel
-
-Zweck ist operative Diagnose im Live-Betrieb; die Anzeige ersetzt keine verhaltensbasierte End-to-End-Validierung.
-
-## Aktuelle Config-/Schema-Regeln (RT)
-Für RT gilt aktuell:
-
-- Monitor-Konfiguration soll über den **aktuellen gültigen Config-Pfad** laufen
-- alte verschachtelte Legacy-Pfade dürfen nur noch als Kompatibilitätsmigration behandelt werden
-- `config_normalizer.lua` ist der zentrale Ort für Legacy-Mapping und Default-/Clamp-Logik
-- `main.lua` darf sich nicht auf alte Felder verlassen, die weder in `config.lua` noch im Normalizer garantiert werden
-
----
-
-## Manifest-/Release-Disziplin
-Ab diesem Stand gilt verbindlich:
-
-1. Datei geändert -> Manifest prüfen
-2. Dateiinhalt geändert -> `size_bytes` und `hash` nachziehen
-3. `release.lua`, `manifest.lua` und `installer_main.lua` dürfen sich strategisch nicht widersprechen
-4. Beta-only-Policy darf nicht durch Release-Metadaten ausgehebelt werden
-5. Ein grüner Text-/Snippet-Test reicht nicht; verhaltensbasierte semantische Guards bleiben das Zielbild und sind im Shutdown-Bereich noch nicht vollständig ausgebaut
-
----
-
-## Codex-Arbeitsregeln für dieses Repo
-Hinweis:
-Dieser Abschnitt ist als **Repo-Arbeitsregel zur Fehlervermeidung** formuliert. Er ist **kein wörtliches Zitat offizieller OpenAI-Dokumentation**.
-
-Bei Codex-/Agentenläufen in diesem Repo gilt:
-
-1. **Dokumentation immer gegen echten Code-/Teststand abgleichen (nicht gegen alte Annahmen)**
-   - betroffene Dateien zuerst vollständig lesen
-   - bei Installer-/Manifest-Themen immer zusammen prüfen:
-     - `installer`
-     - `xreactor/installer_main.lua`
-     - `xreactor/release.lua`
-     - `xreactor/manifest.lua`
-
-2. **Kleine, gezielte Änderungen statt breiter Refactors**
-   - nur den konkreten Blocker und direkt angrenzende Schutzmechanismen anfassen
-   - keine unnötigen Umbenennungen
-   - keine Architekturänderungen auf Verdacht
-
-3. **Nach jeder shipped Datei Manifest-Konsistenz prüfen**
-   - wenn eine manifestierte Datei geändert wurde:
-     - Größe neu prüfen
-     - Hash neu prüfen
-     - Manifest aktualisieren
-
-4. **Text-/Token-Guards nie als Endzustand verkaufen**
-   - textbasierte Checks sind Sekundärschutz
-   - bei Shutdown-/Workflow-Themen verhaltensbasierte Semantikprüfungen bevorzugen
-   - keine Aussage „voll semantisch abgesichert“, solange nur Token-Guards große Teile abdecken
-   - nicht nur prüfen, ob eine Fehlermeldung als String existiert
-   - echte Inhalte prüfen:
-     - lädt `release.lua` als Tabelle?
-     - passt `manifest.lua` zu echten Dateien?
-     - existieren benötigte Modulpfade wirklich?
-     - sind erwartete `ctx`-Felder/Funktionen wirklich vorhanden?
-
-5. **Legacy-Migrationen zentral halten**
-   - Altpfade nicht an vielen Stellen flicken
-   - zentrale Migration im Normalizer/kompatiblen Adapter
-   - Aufrufer danach auf das aktuelle Schema umstellen
-
-6. **Bootpfad komplett denken**
-   - nicht nur den ersten sichtbaren Crash reparieren
-   - immer den direkt nächsten offensichtlichen Folgeblocker mitprüfen:
-     - Require-Pfade
-     - Config-Schema
-     - `ctx`-Contract
-     - Manifest-Coverage
-     - Release-/Installer-Policy
-
-7. **Beta-only wirklich durchhalten**
-   - keine verdeckten Commit-Pins
-   - keine Mischstrategie aus Branch und festen Commits im normalen Installerlauf
+- **Setpoint-Übertragung/-Berechnung MASTER ↔ Nodes** (offen bis 2026-06-30/07-01): zwei getrennte reale Bugs — ein Feld-Reihenfolge-Fehler in `populate_rt_status()` (message_handlers.lua) ließ `node.capacity_max`/`capacity_ready` immer einen Zyklus veraltet erscheinen, und `estimate_base_power()` bevorzugte den aktuell gemessenen (ggf. gedrosselten) Output statt der gelernten Maximalkapazität für das PEAK-Profil. Beide gefixt, siehe RUNTIME_STATUS_2026-06-03.md.
+- **LOG-Collector empfängt nichts** (Recv 0): Kanal-Mismatch 6502 vs. 6503, siehe oben.
+- **role.lua ging bei jedem Auto-Update verloren**: nur im manuellen Installer-Codepfad geschützt, nicht im (weit häufiger durchlaufenen) Auto-Update-Reinstall-Pfad. Gefixt 2026-07-07, beide Pfade nutzen jetzt dieselbe `PRESERVE`-Liste.
 
 ---
 
@@ -195,39 +94,30 @@ Bei Codex-/Agentenläufen in diesem Repo gilt:
 
 ### Installer-relevant
 - Install root: `/xreactor`
-- Stage root: `/xreactor_stage`
-- Backup root: `/xreactor_backup_prev`
-- Installer-Logs:
-  - `/xreactor_logs/installer_bootstrap.log`
-  - `/xreactor_logs/installer_<role>.log`
+- Installer-Source intern: `/xreactor/installer/*.lua` (aus dem monolithischen Installer geschrieben)
+- Auto-Update Arming-Config: `/xreactor/config/remote_update.lua`
+- Temporäre Auto-Update-Installerdatei: `/xreactor_auto_update_installer.lua` (wird nach Ausführung gelöscht)
 
 ### Runtime-/Logging-Pfade
-- Runtime-Logs unter `/xreactor_logs`
 - Rollen-/Knoten-bezogene Runtime-Dateien unter `/xreactor/config/*`
+- LOG-Collector-Logs: dateibasiert auf angeschlossenen Disk-Laufwerken, ein Eintrag pro Node (`<role>.log`)
 
 ---
 
 ## Verbindliche Prüfliste vor Freigabe
-Vor jedem als „fertig“ betrachteten Repo-Stand:
 
-1. `release.lua` passt zur beta-only-Strategie
-2. `manifest.lua.source_ref` passt zu `beta`
-3. Installer-Policy, Release-Metadaten und Manifest widersprechen sich nicht
-4. alle geänderten manifestierten Dateien haben korrekte `size_bytes` und `hash`
-5. RT-Bootpfad wurde auf offensichtliche Folgeblocker mitgeprüft
-6. vorhandene Guards/Tests decken den Stand ab, enthalten aber im Shutdown-Bereich weiterhin einen relevanten Anteil text-/tokenbasierter Sekundärguards
-7. Installer-Logs bleiben klar nach Rolle benannt
+1. `release.lua` und `manifest.lua` haben identische `manifest_version` und passende `manifest_id`/`release_id`.
+2. `release.lua.source_ref` / Branch-Bezug passt zu `beta`, kein Commit-Pin.
+3. Jede Code-Änderung am Installer/Auto-Updater wurde mit einem Versions-Bump gepusht — sonst zieht kein Node das Update.
+4. Neue/role-spezifische Dateien sind korrekt in `manifest.lua` unter `roles.<role>` mit passendem `required_for` eingetragen.
+5. Bei Änderungen an `installer/auto_update.lua` oder `start.lua`: gegen die Parallel-Coroutine-Constraints oben prüfen (`shell`, `http.get` Timeout, `os.pullEvent`).
+6. RT-Bootpfad wurde auf offensichtliche Folgeblocker mitgeprüft.
+7. Neue/geänderte Datei-Größen (`size_bytes`) in `manifest.lua` wurden für JEDE geänderte Datei nachgezogen — ein Mismatch bricht die Installation für jeden Node ab, der diese Datei braucht.
 
 ---
 
 ## Abschlussbewertung dieses Dokuments
-Dieses Dokument beschreibt:
-- den aktuellen beta-only-Installeransatz
-- die lokale Stage/Activate-Logik
-- die aktuelle Manifest-/Release-Disziplin
-- die aktuellen Repo-Arbeitsregeln zur Fehlervermeidung
+Dieses Dokument beschreibt den **Ist-Stand nach dem Phase-1–4-Rewrite, der Auto-Update-Härtung und dem UI-Redesign** (v358). Es ersetzt den älteren Stage/Backup/Activate-Ansatz vollständig — dieser existiert im aktuellen Installer-Code nicht mehr.
 
-Es ersetzt ältere Annahmen wie:
-- „lokal-only“ als Beschaffungsmodell
-- „RT bleibt unverändert“
-- rein textbasierte Schutztests als alleinige Absicherung
+Offen/nicht abgeschlossen:
+- Vollständige Migration der historischen Shutdown-Workflow-Guards von text-/tokenbasierten Prüfungen zu rein verhaltensbasierten Semantikprüfungen — dieser Punkt war bereits in einer früheren Version dieses Dokuments offen und wurde bislang nicht angefasst.

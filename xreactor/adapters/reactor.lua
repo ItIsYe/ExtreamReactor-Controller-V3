@@ -219,15 +219,22 @@ function reactor.inspect(name, log_prefix)
   if energy == nil then
     energy = read_first_number(name, method_set, { "getEnergyStored", "getEnergyProducedLastTick" }, log_prefix)
   end
+  local fuel_max
   if has_method(method_set, "getFuelStats") then
     local fstats = safe_call(name, "getFuelStats", log_prefix)
     if type(fstats) == "table" then
       fuel = type(fstats.fuelAmount) == "number" and fstats.fuelAmount or nil
       waste = type(fstats.wasteAmount) == "number" and fstats.wasteAmount or nil
+      -- Feature (2026-07-08): Fuel-Kapazitaet mitlesen (fuer FUEL-Node-
+      -- Bedarfsermittlung -- vorher wurde hier nur die Menge, nie die
+      -- Kapazitaet gelesen, obwohl getFuelStats() sie im selben Aufruf
+      -- mitliefert).
+      fuel_max = type(fstats.fuelCapacity) == "number" and fstats.fuelCapacity or nil
     end
   end
   if fuel == nil then fuel = read_number(name, "getFuelAmount", log_prefix) end
   if waste == nil then waste = read_number(name, "getWasteAmount", log_prefix) end
+  if fuel_max == nil then fuel_max = read_number(name, "getFuelAmountMax", log_prefix) end
   local rods = reactor.read_control_rods(name, log_prefix)
   local steam = read_number(
     name,
@@ -281,6 +288,7 @@ function reactor.inspect(name, log_prefix)
       active = "boolean",
       temperature = "number",
       fuel = "number",
+      fuel_max = "number",
       waste = "number",
       energy_stored = "number",
       energy_output = "number",
@@ -297,6 +305,7 @@ function reactor.inspect(name, log_prefix)
     active = active,
     temperature = temp,
     fuel = fuel,
+    fuel_max = fuel_max,
     waste = waste,
     energy_stored = energy,
     energy_output = energy_output_from_stats or read_number(name, "getEnergyProducedLastTick", log_prefix),

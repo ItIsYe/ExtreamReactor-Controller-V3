@@ -259,6 +259,12 @@ function M.check_timeouts(runtime)
     elseif node.health and node.health.reasons then
       node.health.reasons[runtime.libs.health.reasons.COMMS_DOWN] = nil
       node.down_since = nil; node.down_pending_since = nil; node.offline = false; node.stale = false; node.recovering = false; node.managed = true
+      -- Alert clearen wenn Node wieder online kommt
+      if runtime.refs and runtime.refs.alert_service then
+        local down_key = string.format("NODE_COMMS_DOWN|%s", tostring(node.id))
+        pcall(function() runtime.refs.alert_service:_clear_alert(down_key, os.epoch("utc")) end)
+        runtime.log(("Node %s reconnected — COMMS_DOWN alert cleared"):format(tostring(node.id)), "INFO")
+      end
     end
   end
   for _, node_id in ipairs(stale_nodes) do

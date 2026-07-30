@@ -82,16 +82,30 @@ local CONFIG = {
     -- { label = "Reprocessor A", inlet = "mekanism:transporter_2" },
     targets            = {},
     --
-    -- redstone_tree: gleiche Baum-Topologie wie bei der Fuel-Node.
-    -- Mekanism Pipes müssen auf "High Redstone = Interrupt" stehen.
-    -- { side="right", label="Arm A", children={
-    --     { side="top",    label="Reprocessor A", reactor="Reprocessor A" },
-    --     { side="bottom", label="Reprocessor B", reactor="Reprocessor B" },
-    --   }
-    -- }
+    -- redstone_tree: gleiches Format wie bei der Fuel-Node (siehe
+    -- nodes/fuel/config.lua) -- eine flache Route pro Ziel mit geordnetem
+    -- 'path'. Mekanism Pipes müssen auf "High Redstone = Interrupt" stehen.
+    -- { reactor = "Reprocessor A", label = "Reprocessor A",
+    --   path = { { side = "right" }, { side = "top" } } },
+    -- { reactor = "Reprocessor B", label = "Reprocessor B",
+    --   path = { { side = "right" }, { side = "bottom" } } },
+    --   -- ^ "right" ist hier ein gemeinsames Trunk-Ventil ("Arm A") vor
+    --   -- beiden Reprocessor-Zweigen -- einfach in beiden Pfaden
+    --   -- wiederholt, keine Verschachtelung noetig.
     -- Hinweis: "reactor"-Feld referenziert hier den target.label.
     redstone_tree      = {},
   },
-  rails = CONFIG.DEFAULT_RAILS,
-  feed  = CONFIG.DEFAULT_FEED
 }
+-- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
+-- PERFORMANCE_2026-07-12.md, Punkt 28.1, identischer Fund wie bei
+-- nodes/fuel/config.lua). "rails = CONFIG.DEFAULT_RAILS" und
+-- "feed = CONFIG.DEFAULT_FEED" standen bisher INNERHALB von CONFIG's
+-- eigenem Tabellenkonstruktor -- CONFIG war zu diesem Zeitpunkt noch
+-- nicht zugewiesen, ein Zugriff darauf waere ein Laufzeitfehler
+-- gewesen. Zusaetzlich fehlte "return" komplett -- diese Datei war
+-- dadurch, wie bei FUEL, vollstaendig wirkungslos, egal was
+-- hineingeschrieben wurde. Jetzt als separate Zuweisungen nach dem
+-- Tabellenkonstruktor, plus "return CONFIG" am Ende.
+CONFIG.rails = CONFIG.DEFAULT_RAILS
+CONFIG.feed  = CONFIG.DEFAULT_FEED
+return CONFIG

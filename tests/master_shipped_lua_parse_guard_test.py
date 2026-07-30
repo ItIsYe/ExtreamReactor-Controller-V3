@@ -13,7 +13,7 @@ PARSE_FILES = [
     'xreactor/master/ui_controller.lua',
     'xreactor/master/main.lua',
     'xreactor/master/message_handlers.lua',
-    'xreactor/installer_manifest.lua',
+    'xreactor/installer/manifest.lua',
 ]
 
 cmd = [

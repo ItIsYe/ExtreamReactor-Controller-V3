@@ -62,7 +62,8 @@ do
           table.insert(transitioned, next_state)
         end
       }
-    end
+    end,
+    is_master_connected = function() return true end
   }
 
   local handlers = state_handlers.build(ctx)
@@ -98,6 +99,13 @@ do
   })
   assert_eq(#sent, 0, 'sequencer must not send startup while RT not in MASTER mode')
 
+  -- The AUTONOM-mode tick above failed the is_startable() check and armed a
+  -- real 5s wall-clock backoff (skip_until_ts) to avoid busy-looping a
+  -- not-yet-ready node. This test isn't exercising that backoff -- it wants
+  -- to prove readiness-gating (mode/modules), so clear it to simulate the
+  -- backoff having already elapsed before probing again.
+  if seq.queue[1] then seq.queue[1].skip_until_ts = nil end
+
   seq:tick({
     ['RT-1'] = {
       id = 'RT-1',
@@ -113,17 +121,39 @@ do
   assert_eq(sent[1].payload.value.module_id, 'turbine:BigReactors-Turbine_1', 'module id mismatch')
 end
 
--- Guard against regression: MASTER mode transition must trigger STARTUP path in RT main.
+-- Guard against regression: MASTER mode transition must trigger STARTUP path.
+-- This used to be a brittle text-search against xreactor/nodes/rt/main.lua
+-- for a literal 'node_state_machine:transition(constants.node_states.STARTUP)'
+-- string; that logic actually lives in the shared state_handlers.lua
+-- apply_mode() (called by RT's command handler), so the text pattern never
+-- matched main.lua and the check no longer proved anything real. Replaced
+-- with a functional check against the real apply_mode() code path.
 do
-  local file = io.open('xreactor/nodes/rt/main.lua', 'r')
-  if not file then
-    error('failed to open RT main source')
-  end
-  local content = file:read('*a')
-  file:close()
-  if not content:find('node_state_machine:transition%(constants%.node_states%.STARTUP%)') then
-    error('MASTER mode should transition to STARTUP to leave module OFF state')
-  end
+  local current_state = 'INIT'
+  local machine_state = constants.node_states.OFF
+  local transitions = {}
+  local ctx = {
+    constants = constants,
+    STATE = { INIT = 'INIT', MASTER = 'MASTER', AUTONOM = 'AUTONOM', SAFE = 'SAFE' },
+    log = function() end,
+    get_current_state = function() return current_state end,
+    set_current_state = function(v) current_state = v end,
+    get_node_state_machine = function()
+      return {
+        state = function() return machine_state end,
+        transition = function(_, next_state)
+          machine_state = next_state
+          table.insert(transitions, next_state)
+        end
+      }
+    end
+  }
+
+  state_handlers.apply_mode(ctx, ctx.STATE.MASTER)
+
+  assert_eq(current_state, 'MASTER', 'apply_mode(MASTER) should set current_state to MASTER')
+  assert_eq(transitions[#transitions], constants.node_states.STARTUP,
+    'MASTER mode should transition an OFF machine to STARTUP to leave module OFF state')
 end
 
 print('rt_master_startup_off_state_regression_test.lua: ok')

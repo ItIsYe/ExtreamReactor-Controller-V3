@@ -1,5 +1,179 @@
 # XReactor Runtime Status — 2026-06-03
 
+## Update 2026-07-06 (v274 → v318 — Mockup-Toolkit-Rollout, kritische Datenpipeline-Bugs, individuelle Reaktor-Regelung)
+
+**Externe Vorarbeit (nicht in dieser Chat-Session, aber Grundlage der folgenden Fixes):**
+Eine parallele Bearbeitung (andere KI-Session, vom Nutzer beauftragt) rollte ein neues, einheitliches "Mockup Dashboard Toolkit" (`core/mockup_ui.lua`) über fast alle Seiten aus: RT-Node-Displays (`nodes/rt/mockup_pages.lua`), Energy/Water/Fuel/Reprocessor-Displays, LOG-Collector (`nodes/log_collector/mockup_main.lua` + `mockup_ui.lua`, per Text-Patch-Mechanismus über das bestehende `main.lua`), und alle AUX-Master-Seiten. Master-`overview.lua`/`rt_dashboard.lua` wurden ebenfalls zunächst umgestellt.
+
+**Vom Nutzer gewünschte Korrektur:** `master/ui/overview.lua` auf das klassische Panel-Design zurückgesetzt (Toolkit-Stil war für die primären Master-Monitore nicht gewünscht); `master/ui/rt_dashboard.lua` behält bewusst den neuen Stil.
+
+**Kritische, in dieser Session gefundene und behobene Bugs (chronologisch):**
+
+1. **AUX-Monitor-Zyklus komplett kaputt** (v285): `cycle_aux_view()` hatte einen fehlenden `self`-Parameter (Methodenaufruf bekam das Sessions-Objekt statt der Session selbst) UND nutzte eine hartcodierte 5-Elemente-Liste statt der tatsächlichen `view_order` — neue Seiten tauchten nie im AUX-Zyklus auf, unabhängig von der Konfiguration.
+
+2. **Manifest-Datei-Zuordnung nach Toolkit-Rollout** (v288-v293): 15+ `size_bytes`-Drift-Fälle, dann 6 komplett fehlende Manifest-Einträge (`core/mockup_ui.lua` — das zentrale, von JEDER Seite benötigte Toolkit — plus `nodes/rt/mockup_pages.lua`, `nodes/fuel/water/reprocessor/ui_pages.lua`). Ohne diese Eintraege haette praktisch jeder Node-Typ mit UI einen `require()`-Fehler bekommen.
+
+3. **LOG-Collector-Absturz** (v299/v300): `nodes/log_collector/main.lua` ruft historisch nie `bootstrap.setup()` auf (im Gegensatz zu allen anderen Rollen) — `require()` war fuer den vom Mockup-Toolkit benoetigten `require("nodes.log_collector.mockup_ui")`-Aufruf nicht funktional, `"attempt to call a nil value"`-Crash bei jedem Boot. Fix: `mockup_main.lua` ruft `bootstrap.setup()` selbst auf, bevor `main.lua` eingelesen/gepatcht wird; `core/bootstrap.lua` fehlte zusaetzlich im `roles.log`-Manifest-Block.
+
+4. **RT-Overview zeigte IST=0.0, Balken=0%, RPM=-** (v308/v309, ueber mehrere Iterationen gefunden): `build_turbine_status_details()`/`collect_turbine_rpm_stats()` lasen `entry.peripheral`, das in der Registry-Struktur NIE existiert (nur `id`/`name`/`type`/`signature`), UND riefen `get_device_caps("turbine", entry.id)` mit der falschen ID auf (`get_device_caps` braucht den echten Peripheral-Namen fuer `peripheral.isPresent()`, nicht die interne Registry-ID). Beide Fehler mussten behoben werden, bevor ueberhaupt echte Daten flossen.
+
+5. **Root Cause fuer "Overview zeigt korrekte Zahlen, Detailseiten zeigen 0"** (v311, **gefunden durch vom Nutzer bereitgestelltes Log-File** statt weiterem Raten): `discovery_runtime.M.refresh_bindings()` hatte einen Early-Return VOR der Zuweisung `ctx.devices.reactors/turbines = ...`, wenn sich die Bindungssignatur seit dem letzten Aufruf nicht geaendert hatte (der Normalfall bei jedem Tick). War `devices.turbines` einmal (z.B. durch Boot-Race-Condition) leer geblieben, blieb es das FUER IMMER — auch der eigene periodische Re-Discovery-Fix (v305) aenderte daran nichts, da er denselben Skip nahm. Log-Beweis: `"Discovery unchanged ... bound reactors=1 turbines=25"` direkt gefolgt von `"Re-Discovery: reactors=0 turbines=0"`. Dieser einzelne Fix behob rueckwirkend ALLE 4 RT-Node-Seiten gleichzeitig (Overview/Turbinen/Reaktoren/Diagnostics), da sie alle auf dieselben `devices.turbines/reactors` zugreifen.
+
+6. **ZURUECK/WEITER-Navigation auf RT- und Energy-Node-Displays nicht klickbar** (v302/v312): `mux.footer_nav()` zeichnete sichtbare Buttons, gab aber nie ihre Touch-Koordinaten zurueck; der `ui_router.lua` zeichnete stattdessen einen eigenen, unsichtbar ueberschriebenen `"< Page X/Y >"`-Indikator und registrierte nur DESSEN Touch-Zone. Bei RT direkt in `mockup_pages.lua` behoben (fehlende `return`-Statements). Bei ENERGY zusaetzlich durch eine anonyme Wrapper-Schicht in `energy/main.lua`'s `pages`-Tabelle verursacht, die den Rueckgabewert der Renderer-Funktionen stillschweigend verschluckte.
+
+7. **1x3-Ampel-Monitor konnte als Hauptmonitor gewaehlt werden** (v317): `adapters/monitor.lua` hatte KEINE Groessenpruefung — weder beim `preferred_name`-Schnellpfad noch bei der `strategy="first"`-Sortierung (rein alphabetisch nach Peripheral-Name). Wenn der 1x3-Monitor zufaellig alphabetisch zuerst kam, landete die komplette Haupt-UI darauf. Fix: `is_too_small_for_main()`-Guard lehnt jeden 1-breiten/≤3-hohen Monitor als Hauptmonitor-Kandidat ab; Suchstrategie von `"first"` auf `"largest"` umgestellt.
+
+8. **Installer konnte keine optionalen Features mehr zur Auswahl anbieten** (v316): `collect_optional_feature_names()` durchsuchte nur `manifest.base_files` — aber alle 4 optionalen Features waren im Zuge eines fruehreren Fixes (siehe Punkt 9) in die `roles`-Sub-Bloecke verschoben worden. Seitdem fand die interaktive "installieren? [j/N]"-Abfrage beim manuellen Installer-Lauf keine einzige Option mehr. Fix durchsucht jetzt beide Bereiche.
+
+9. **Manifest-Rollenisolation** (v294-v296): `nodes/energy/heartbeat.lua`/`matrix.lua` und `master/context.lua`/`master/loop.lua` lagen in `base_files` OHNE `always=true` — der `installer` ignoriert `required_for` bei `base_files`-Eintraegen komplett (nur bei `roles`-Sub-Bloecken ausgewertet), wodurch jede Rolle (RT/WATER/FUEL/REPROCESSING) diese eigentlich rollen-spezifischen Dateien bedingungslos installierte. Erster Versuch (nur `required_for` ergaenzen) war wirkungslos (No-Op), da `base_files` das Feld gar nicht prueft — echter Fix verschob die Dateien in die passenden `roles`-Sub-Bloecke.
+
+**Feature: Individuelle Pro-Reaktor-Regelung** (v313-v315, auf Nutzeranfrage — zwei Reaktoren an einem RT-Node mit gemeinsamem 50-Turbinen-Pool bekamen bisher identische Rod-Werte trotz unterschiedlichem Leistungsbedarf):
+- `reactor_control.lua`: neue `M.controlReactorsIndividually()`, aktiv bei >1 konfiguriertem Reaktor, regelt jeden Reaktor anhand seines EIGENEN internen Dampf-Fuellstands (keine Turbinen-zu-Reaktor-Zuordnung im System vorhanden, aber jeder Reaktor hat einen eigenen internen Tank).
+- **Kritischer Vorzeichenfehler** im ersten Wurf: `fill_margin = (fill_target - fill_ratio) * capacity` war bei LEEREM Tank POSITIV, was laut `rails.step()`-Konvention die Rods auf 100% (0% Leistung) trieb statt runter — exakt umgekehrtes Verhalten. Korrigiert zu `(fill_ratio - fill_target)`.
+- **Trägheit nach Vorzeichenfix**: die geteilte `reactor_rods`-Rampen-Config (cooldown 1.5s, max_step 8) war fuer einen ueber viele Turbinen gemittelten, langsam wechselnden Wert kalibriert — fuer den volatileren individuellen Tank-Fuellstand zu behaebig. Eigene, schnellere Defaults ergaenzt (cooldown 0.5s, max_step 20) plus kuerzeres aeusseres Tick-Intervall (1.0s statt 5.0s) bei Mehrfach-Reaktor-Nodes.
+- Zielwert (`reactor_fill_target`, Default 50%) ist ueber die Master Config-Editor-Seite per Touch aenderbar (10-90%, 5%-Schritte), wird per neuem `SET_REACTOR_FILL_TARGET`-Command an ALLE RT-Nodes gesendet und in `config/rt.lua` persistiert.
+- Bei genau einem Reaktor pro Node bleibt die alte, gemeinsame Regelung unveraendert — kein Verhaltenswechsel fuer die Mehrheit der Setups.
+
+**Feature: Monitor-Skalierung per Touch** (v306/v307): neue `[-]`/`[+]`-Buttons auf der RT-Diagnostics-Seite aendern `monitor_scale` live (ohne den Seiten-Router zurueckzusetzen) und persistieren sie in `config/rt.lua`. Erster Push war unvollstaendig (nur das Model-Feld kam an, der Touch-Handler und `M.set_scale()`-Export fehlten komplett im tatsaechlichen Commit) — beim naechsten Push explizit verifiziert, dass der Inhalt wirklich ankam.
+
+**Fix: Render-Skip-System** (v298, v316): `multiview.lua` ruft `view.render()` jetzt nur noch auf, wenn sich das Model tatsaechlich geaendert hat, Touch-Interaktion stattfand, oder das deklarierte Intervall abgelaufen ist — vorher lief bei jedem Tick ein kompletter Redraw aller 10 Views auf allen Monitoren, unabhaengig davon ob irgendwo im System auch nur eine einzelne Zahl sich geaendert hatte. Ein Folgefehler (state.last_draw/last_force wurden nie aktualisiert) wurde in v316 nachtraeglich gefunden und behoben.
+
+**Vollstaendige Versionsliste:** v274 → v275 (Master-Ampel) → v276 (Maintenance-Seite) → v277 (Updates-Seite) → v278 (System-Map) → v279 (Shed-Automatikstufe) → v280 (Alarm-Lifecycle) → v281 (Pocket-Command-Token) → v282 (erweiterte Speaker-Events) → v283 (Config-Editor) → v284 (Speaker-Sound Installer-Bug) → v285 (AUX-Zyklus-Fix) → v286-v293 (Manifest-Nacharbeit nach Toolkit-Rollout) → v294-v296 (Rollenisolation) → v297 (Maintenance offline/stale) → v298 (Render-Skip) → v299-v300 (LOG-Crash) → v301 (Overview-Revert) → v302 (Footer-Nav Touch-Zonen) → v303 (RT-Overview Skalierung) → v304 (Diagnostics TX/RX Feldnamen) → v305 (Re-Discovery periodisch) → v306-v307 (Monitor-Scale-Touch) → v308-v311 (RT-Datenpipeline, IST/RPM/Balken) → v312 (Energy-Footer-Nav) → v313-v315 (individuelle Reaktor-Regelung) → v316 (Render-Skip Nachbesserung, Installer-Feature-Liste) → v317 (1x3-Monitor-Ausschluss) → v318 (Reactor Fill Target UI).
+
+---
+
+## Update 2026-07-02 (v262 → v274 — Neue optionale Peripherie-Features + Kernfeatures)
+
+**Neue optionale Peripherie-Features (`xreactor/optional/`, opt-in per Installer, siehe `config/optional_features.lua`):**
+- **Ampel-Monitor auf ENERGY erweitert** (v263): vorher nur RT, jetzt auch für Energy-Matrix-Nodes nutzbar. Code aus RT extrahiert und als gemeinsames Modul `optional/ampel.lua` konsolidiert (v268), um Duplikation zu vermeiden — beide Nodes rufen dasselbe `ampel.new()` auf.
+- **Speaker-Alarm generalisiert** (v267 initial nur MASTER/CRITICAL, v274 auf alle Node-Typen erweitert): `optional/speaker_alarm.lua` bietet jetzt eine generische, ereignisbasierte `play(event_name, overrides)`-API mit Presets (`alarm`, `clear`, `warning`, `startup`) statt nur eines binären "CRITICAL an/aus"-Interfaces. Jeder Node-Typ (RT/ENERGY/FUEL/WATER/REPROCESSOR/LOG/MASTER) kann eine eigene Instanz erstellen. Neu: "clear"-Ton bei Entwarnung (Übergang CRITICAL-aktiv → inaktiv), Startup-Ton auf jedem Node beim Boot.
+- **Pocket-Computer-Fernabfrage** (v270/271): neue Message-Typen `POCKET_QUERY`/`POCKET_STATUS`. `optional/pocket_query_handler.lua` (Master-seitig, opt-in Feature `pocket_query`) beantwortet Anfragen mit kompakter Statuszusammenfassung. `optional/pocket_client.lua` ist ein eigenständiges, manuell zu installierendes Skript für den Pocket Computer selbst (kein Teil des Rollen-Installers, da Pocket Computer sich bewusst nicht als Node registrieren).
+- **Echter Opt-in-Mechanismus im Installer** (v269/270): `optional=true`-Manifest-Einträge werden standardmäßig NICHT installiert. Der Installer fragt bei manuellem Lauf interaktiv nach jedem per Manifest erkannten Feature (`collect_optional_feature_names()`, dynamisch, keine hartcodierte Liste), speichert die Auswahl in `/xreactor/config/optional_features.lua`, die über Reinstalls/Auto-Updates erhalten bleibt ohne erneut zu fragen.
+
+**Neue Kernfeatures (kein Opt-in, Teil des Standard-Rollouts):**
+- **Startup-Diagnose-Report** (`core/startup_report.lua`, v272/273): zunächst versehentlich als optionales Feature gebaut, auf Korrektur hin in `core/` verschoben und als `always=true` markiert — ist Kernfunktion. Auf allen 7 Node-Typen eingebunden (RT/ENERGY/MASTER/FUEL/WATER/REPROCESSOR/LOG), jeweils mit rollenspezifischen Checks. Gibt am Boot-Ende eine einzige `=== Startup-Diagnose ===`-Zusammenfassung aus statt verstreuter Log-Zeilen.
+- **RT-Redundanz-Warnung** (`core/alert_rules.lua`, v264): neue Regel `RT_NO_REDUNDANCY` — warnt (WARN-Level), wenn nur ein RT-Node aktiv zugewiesen ist UND die verbleibende Kapazität aller anderen Nodes den globalen Bedarf bei dessen Ausfall nicht decken würde. Proaktiv, mit 60s Cooldown.
+- **Wartungsmodus pro Node** (v265): Touch auf den Kartentitel einer RT-Node im Master-UI togglet `node.maintenance_mode`. Höchste Priorität in `rt_sync.evaluate_rt_node()`, noch vor globalem RT-Hold — Node bleibt online/sichtbar, wird aber komplett aus der Zuweisung genommen. Erforderte eine zuvor fehlende `hit_test`-Verdrahtung für die RT-View (`init_runtime.lua` hatte sie nie registriert, obwohl `overview`/`alerts` sie hatten).
+- **Konfigurierbare PEAK/IDLE-Schwellwerte** (v266): vorher fest 90%/30% im Code, jetzt per `[-]`/`[+]`-Touch im Overview in 5%-Schritten änderbar, mit Sicherheits-Clamp (IDLE muss über PEAK bleiben).
+- **Konfigurierbare Ampel-Schwellen für ENERGY** (v272): vorher fest 15/30/95%, jetzt optional über `/xreactor/config/ampel_thresholds.lua` anpassbar (liest per `fs.open`/`load()`, nicht `require()` — Konfigurationsdateien sind kein Teil des Lua-Modulsystems).
+
+**Wichtige Korrektur während der Session:** Startup-Diagnose wurde zunächst fälschlich als `optional/`-Feature (Opt-in) gebaut. Auf Nutzerhinweis korrigiert — es ist Kernfunktion und soll auf jedem Node ohne Auswahl installiert sein. Datei von `optional/startup_report.lua` nach `core/startup_report.lua` verschoben, Manifest-Eintrag von `optional=true` auf `always=true` geändert, alle 7 Boot-Einbindungen von `pcall(require, "optional.startup_report")` (defensiv, könnte fehlen) auf direktes `require("core.startup_report")` (MASTER/RT) bzw. weiterhin defensivem `pcall(require, "core.startup_report")` (restliche Rollen, zur Sicherheit) umgestellt.
+
+**Vollständige Nachverifikation (auf Nutzerwunsch):** Manifest-Konsistenz erneut komplett geprüft (143 Einträge, 0 Mismatches), Klammerbalance aller 25 relevanten Dateien geprüft (alle sauber), Speaker-/Ampel-/Pocket-Query-Verdrahtung in allen Aufrufern verifiziert (korrekt, initial fälschlich als "fehlend" markiert durch zu einfaches Suchmuster, das `pcall(require, ...)` nicht erfasste), keine verwaisten Referenzen auf den alten `optional/startup_report.lua`-Pfad gefunden, `last_critical_active`-Zustand für den neuen "clear"-Ton auf korrektes Verhalten beim allerersten Boot-Tick geprüft (kein Fehlton).
+
+**Versionsverlauf:** v262 (Hygiene-Ausgangspunkt) → v263 (Ampel für ENERGY) → v264 (RT-Redundanz-Warnung) → v265 (Wartungsmodus) → v266 (konfigurierbare PEAK/IDLE-Schwellen) → v267–v268 (Speaker-Alarm v1, Ampel-Konsolidierung) → v269–v270 (echter Opt-in-Mechanismus) → v271 (Pocket-Query) → v272–v273 (Startup-Report zunächst optional, dann als Kernfunktion korrigiert) → v274 (Speaker generalisiert auf alle Node-Typen, Entwarnungs-Ton).
+
+---
+
+## Update 2026-07-01 (Fortsetzung 2, v261 → v262 — Repo-Hygiene)
+
+**Gelöscht (verifiziert unreferenziert/tot):**
+- 6 lose `installer_*.lua`-Dateien im Repo-Root (`installer_http.lua`, `installer_main.lua`, `installer_manifest.lua`, `installer_stage.lua`, `installer_startup.lua`, `installer_storage.lua`, zusammen ~55KB) — seit dem Umbau auf den monolithischen `installer` von keinem aktiven Code mehr `require()`'d oder `dofile()`'d, nur noch als tote `always=true`-Einträge im Manifest, wurden auf jedem Node unnötig mitinstalliert.
+- `xreactor/xreactor/nodes/rt/main.lua` + `state_handlers.lua` — verwaistes Duplikat-Verzeichnis, bereits seit mindestens v134 im historischen Handoff-Dokument als "vermutlich versehentlich" vermerkt, aber nie entfernt.
+- `docs/handoff/2026-06-23-v136-*.md` (3 Dateien) — vollständig überholter Zwischenstand (v136), Inhalt längst in `SESSION_HANDOFF.md`/`RUNTIME_STATUS_2026-06-03.md` konsolidiert.
+- 9 Tests, die den mittlerweile ersetzten Stage-basierten Installer-Mechanismus prüften und dabei direkt vom Dateisystem `xreactor/installer_stage.lua` etc. lasen.
+
+**Gefunden und korrigiert (Kollateralschäden der Löschung, durch systematische Nachprüfung entdeckt):**
+- `tests/master_shipped_lua_parse_guard_test.py` referenzierte `xreactor/installer_manifest.lua` — auf die tatsächlich aktuelle Datei `xreactor/installer/manifest.lua` umgebogen statt gelöscht, da der Test selbst (genereller Parse-/Patch-Artefakt-Guard) weiterhin wertvoll ist.
+- `tools/offline_validate.lua` — läuft bei **jedem Push auf `beta`** via `.github/workflows/offline-tests.yml` — hatte einen `required`-Dateien-Check, der die 6 gelöschten Dateien weiterhin als Pflicht voraussetzte. Wäre ohne diesen Fix bei jedem folgenden CI-Lauf fehlgeschlagen. Gefunden erst in einer zweiten, gründlicheren Verifikationsrunde nach der ersten (unvollständigen) Hygiene-Runde — Lehre: nach jeder Lösch-Aktion alle verbleibenden Dateien (nicht nur `tests/`) auf Referenzen zu den gelöschten Pfaden durchsuchen, nicht nur die offensichtlichsten Kandidaten.
+
+**Manifest:** `manifest_file_count` 145 → 139 (die 6 toten Einträge entfernt). Vollständige Konsistenzprüfung nach der Runde: alle 139 Manifest-Einträge existieren im Repo, alle `size_bytes` stimmen, keine Waisen außer `manifest.lua` selbst (erwartungsgemäß).
+
+**Doku:** `docs/PROJECT_DOCUMENTATION.md` war eine parallel gepflegte, unabhängige Kopie der Architektur-Doku aus README.md und war dabei zeitweise vom echten Code abgewichen (dokumentierte die `power_target`-Prioritätsreihenfolge invertiert — genau der Bug-Zustand vor dem eigentlichen Fix). Auf einen schlanken Verweis reduziert, technische Details (Multi-Node-Zuweisungsformel, Setpoint-Feldtabelle) nach README.md konsolidiert, um diese Art Drift strukturell zu vermeiden. `docs/README.md`-Index entsprechend neu sortiert (README.md jetzt als Hauptreferenz zuerst gelistet).
+
+**Versionsverlauf:** v261 → v262 (Manifest-Cleanup).
+
+---
+
+## Update 2026-07-01 (Fortsetzung, v242 → v261 — Turbine-Log, UI-Redesign, Manifest-Integrity)
+
+Fortsetzung der Session unten (v236→v242) auf demselben Tag. Deckt teilweise ähnliche Themen ab (Setpoint/UI-Fixes wurden parallel/nacheinander in zwei Arbeitsabschnitten bearbeitet) — beide Abschnitte bleiben hier stehen für vollständige Nachvollziehbarkeit.
+
+**Turbine-Log-Spam:**
+- "Overspeed brake pending"-Warnung in `turbine_control.lua` loggte ungedrosselt bei jedem Tick, solange der Overspeed-Bremszustand anhielt — flutete den 1000-Zeilen-Log-Ringpuffer innerhalb weniger Sekunden und verdrängte alle anderen Log-Einträge (SET_SETPOINTS, ReactorCtrl-Änderungen waren dadurch kaum noch sichtbar). Jetzt rate-limitiert auf max. 1x/5s pro Turbine (`ctrl.last_overspeed_log_ms`).
+- Root Cause der eigentlichen Overspeed-Meldung war eine physisch übersättigte Turbine (in-game bestätigt und behoben) — kein Software-Bug, aber das Logging-Verhalten dabei war ein echter Bug.
+
+**UI-Redesign (4 Schritte, auf expliziten Wunsch nach wiederholten Badge-Überlappungen/fehlenden-doppelten-Werten):**
+1. **`master/ui/layout.lua`** (neu): zentrales Badge-Layout-System. `layout.badge_row()` kennt die Monitorbreite vorher und degradiert gestuft (volle Labels → Kurzformen → niedrigste Priorität entfernen), statt live zu raten und im Zweifel zu überlappen. In `multiview.lua` als erster Anwendungsfall eingebaut.
+2. **Overview-Summary erweitert**: `overview.rt_fleet_summary` (aktiv/gesamt Nodes, Zuweisungsstatus) und Freshness-Zeile ergänzt, damit die Overview-Seite wirklich "alles auf einen Blick" zeigt statt nur einen Teil.
+3. **Model-Konsistenz verifiziert**: alle von `rt_dashboard.lua`/`energy.lua` erwarteten `model.*`-Felder wurden gegen `ui_controller.build_models()` abgeglichen — keine strukturell fehlenden Felder gefunden; die konkreten "fehlt/doppelt"-Symptome waren bereits durch gezielte Bugfixes behoben (Sticky-Referenzen, Feld-Reihenfolge), nicht durch fehlendes Schema.
+4. **Ampel-Status-Monitor** (1x3, optional, RT-Node): zweiter, sorgfältigerer Versuch nach einem fehlgeschlagenen ersten Anlauf am selben Tag (siehe unten). Zeigt reine Statusfarbe (grün/gelb/orange/rot/grau) ohne Text, automatisch erkannt über Größe (1 breit × 3 hoch). Vollständig `pcall`-isoliert auf jeder Ebene; Hauptmonitor wird per tatsächlich aufgelöstem Namen (`M.main_monitor_name`, von `M.init()` gesetzt) ausgeschlossen — eine Zwischenversion hatte fälschlich ein nicht-existentes `ctx.config.monitor_name`-Feld referenziert.
+
+**Ampel-Monitor — fehlgeschlagener erster Versuch (wichtig für zukünftiges Debugging):**
+Der allererste Ampel-Patch am 2026-07-01 verursachte einen kompletten Ausfall der RT-Turbinen-/Reaktor-Erkennung auf der Anzeige (nicht der tatsächlichen Steuerung — die lief laut Log unbeeinflusst weiter). Nach mehreren fehlgeschlagenen Rollback-Versuchen (jeweils mit neuen `size_bytes`-Mismatches, da das Nachziehen der Manifest-Größe vergessen wurde) wurde der bekannt funktionierende v242-Stand von `monitor_ui.lua` wiederhergestellt und der Ampel-Support von Grund auf neu, mit vollständiger Fehlerisolierung, gebaut. Lehre: bei mehrfachen Rollback-Versuchen IMMER `size_bytes` nach jedem Push verifizieren, nicht nur beim ersten.
+
+**Manifest-Integritätsprüfung (Audit, kein Bugfix):**
+Vollständige Prüfung aller 145 manifestierten Dateien: `size_bytes` gegen echte Repo-Dateigröße abgeglichen. Zwei echte Abweichungen gefunden und behoben (`master/ui/multiview.lua`, `nodes/rt/monitor_ui.lua` — beide nach einem Zwischenpatch nicht nachgezogen). `manifest_file_count` in `release.lua` war veraltet (144 statt tatsächlich 145 Einträgen), korrigiert. `release_id`/`manifest_id`/`manifest_version` zwischen `manifest.lua` und `release.lua` konsistent verifiziert.
+
+**Versionsverlauf dieses Abschnitts:** v242 (Ausgangspunkt) → v243 (RT-Monitor HERUNTERFAHREN-Status statt LIEFERT-ZU-WENIG bei SHED) → v244 (kürzere Badges) → v245 (Ampel v1, fehlerhaft) → v246–v247 (size_bytes-Fixes) → v248 (doppelte Turbinen-Zeile bei Learning behoben) → v249–v254 (mehrere Rollback-Versuche wegen Ampel-v1-Ausfall) → v255 (Overspeed-Log-Rate-Limit) → v256–v259 (UI-Redesign Schritte 1–4) → v260 (Manifest-Integritätsfix) → v261 (Ampel main-monitor-name-Bugfix).
+
+---
+
+## Update 2026-07-01 (v236 → v242 — Full System Hardening + UI Overhaul)
+
+Diese Session hat das System von v236 auf v242 gebracht. Alle bekannten offenen Punkte aus früheren Dokumenten wurden behoben.
+
+**Auto-Updater & Installer:**
+- `role.lua` jetzt in BEIDEN Installer-Codepfaden (manuell + Auto-Update-Reinstall) in der PRESERVE-Liste — zuvor ging die Rollenzuordnung bei jedem Auto-Update verloren (Node bootete ohne Rolle → `No such program`).
+- `installer/auto_update.lua`: `resolve_sha()` entfernt (api.github.com-Call verursachte Hänger auf RT), nur noch direkte `raw.githubusercontent.com/beta/...`-Fetches.
+- `enqueue()` im Sequencer verwirft jetzt Tabellen-Objekte als `node_id` statt sie durch `normalize_node_id()` in kaputte Strings zu verwandeln (`RT-table:_0x...`-Anzeigefehler behoben).
+
+**Master — Setpoint/Kapazitäts-Fixes:**
+- `message_handlers.populate_rt_status()`: `rt.capacity_max`/`rt.capacity_ready` werden jetzt VOR der Ableitung von `node.capacity_max`/`node.capacity_ready` aus dem Payload gesetzt (Off-by-one-Zyklus-Bug — brach Setpoint-Zuteilung für alle RT-Nodes).
+- `node.rt` wird jetzt gemergt statt komplett ersetzt bei STATUS-Ticks (verhindert Verlust von UI-gesetzten Feldern).
+- `node.assigned_power`/`node.assigned_percent` werden jetzt persistent auf `node` geschrieben (waren vorher nur lokal in `entry` — daher zeigte Master-UI immer `Soll 0.0` für RT-Nodes).
+- `runtime_ops_profile.estimate_base_power()`: gelernte Maximalkapazität wird jetzt bevorzugt gegenüber dem aktuell gemessenen (möglicherweise gedrosselten) Output — verhindert dauerhaftes Einfrieren von `power_target` auf altem BASELOAD-Snapshot nach PEAK-Wechsel.
+- Periodisches `power_target`-Nachziehen alle 30s wenn gelernte Kapazität >5% über aktuellem Soll.
+
+**Master — UI-Fixes:**
+- `control_source` (Source: LOCAL/MASTER) hatte denselben Sticky-Bug wie `assignment_state` — jetzt korrigierte Priorität.
+- `infer_assignment_state()`: `node.assignment_state` (Master-Sync) hat jetzt Vorrang vor `rt_node.assignment_state` (instabil, durch STATUS-Ticks zurückgesetzt).
+- AUX-Monitor-Badge: hardkodiertes `OK`/`LIMITED` durch echten Alert-Service-Status ersetzt.
+- AUX-Alarmview komplett überarbeitet: Live-Alarmliste aus `alert_service`, Farben nach Severity (CRITICAL=rot, WARN=gelb), Timestamp pro Eintrag, Touch-to-ACK.
+- `alerts`/`alarms`-Model fehlte in `build_models()` — Views bekamen nie echte `alert_service`-Daten.
+- `multiview.lua`: Alarmtext der dringendsten Meldung wird jetzt unter dem Badge angezeigt.
+
+**RT-Node:**
+- `target_power`/`target_percent` fehlten im `monitor_ui.update()`-Model — RT-UI zeigte dauerhaft `Soll 0.0` und `WARTET AUF AUFTRAG` auch unter aktiver Master-Steuerung.
+- `manifest_id`/`release_id` werden jetzt dynamisch aus `/xreactor/release.lua` geladen statt hartkodiert `v158`.
+- RT-Kommafehler in `monitor_ui.update()` (fehlende Komma nach `build_health_payload`) behoben.
+
+**Energy-Node:**
+- `NO_STORAGE`-Health-Alert feuerte dauerhaft auf Matrix-only Nodes (kein separater Storage-Adapter) — jetzt nur noch wenn weder Matrix noch Storage vorhanden.
+
+**LOG-Collector:**
+- Kanal-Mismatch behoben: `core/remote_log.lua` sendete auf 6502, `shared/constants.lua` definiert `channels.LOG = 6503` — LOG empfing dauerhaft nichts (`Recv 0`). Beide Seiten jetzt auf 6503.
+- Wireless-Modem-Erkennung ergänzt (zeigt `*` im Modem-Status für Ender-Modems).
+
+**Sonstiges:**
+- `core/remote_update.lua`: `handle_command()` reicht jetzt `opts` (inkl. Token) an `M.run()` weiter.
+- Manifest: alle 143 Einträge mit korrekten `size_bytes` + CRC32-Hashes regeneriert, `hash_algo = "crc32"` wiederhergestellt (war seit Rewrite auf `"none"`).
+- `xreactor/xreactor/nodes/` (verwaistes Duplikat-Verzeichnis) — bekannt, noch nicht aufgeräumt, dokumentiert für nächste Doku-Runde.
+
+**Versionsverlauf dieser Session:** v220 (Sessionstart) → v242 (Abschluss). Alle Blocker aus `NODE_START_BLOCKERS_2026-06-25.md` und `PROJECT_DOCUMENTATION.md` Abschnitt 9 behoben.
+
+---
+
+## Update 2026-06-30 (Installer / Auto-Update Härtung, v220 → v225)
+
+Diese Sektion dokumentiert die Arbeit vom 2026-06-30 zusätzlich zum darunterliegenden, unveränderten Audit-Stand vom 2026-06-03/04-22.
+
+**Behoben:**
+- ENERGY Auto-Update brach mit `attempt to index global 'shell' (a nil value)` ab (`installer/auto_update.lua:130`) — `shell.run` ist in `parallel`-Coroutinen nicht verfügbar. Fix: `dofile()` statt `shell.run()`.
+- LOG-Boot brach mit `No such program` ab — `start.lua` rief `shell.run(entry)` mit einem absoluten Pfad auf, nicht einem Programmnamen. Fix: `dofile(entry)`.
+- Installer brach mit `size mismatch /xreactor/start.lua: got 3817 expected 3823` ab — `manifest.lua`-`size_bytes` für `start.lua` war nach dem `dofile`-Fix nicht nachgezogen worden.
+- LOG erhielt nach erfolgreicher Installation trotzdem `File not found` bei `/xreactor/nodes/log_collector/main.lua` — der Installer hatte für die LOG-Rolle nie `manifest.roles.log` ausgewertet (`if not is_log then` blockierte den gesamten Role-Files-Block für LOG). Fix: Role-Files werden jetzt für alle Rollen ausgewertet, base_files bleiben für LOG weiterhin auf `always=true` beschränkt. LOG-Dateianzahl stieg dadurch von 11 auf 12 (korrekt).
+- RT Auto-Update hing nach `Versuch 1/3` ohne weitere Log-Ausgabe — `resolve_sha()` rief zusätzlich `api.github.com` auf; auf dem event-intensiven RT-Node konnte der async HTTP-Wait dadurch stecken bleiben. Fix: `resolve_sha()` entfernt, Auto-Updater fetcht `release.lua` und `installer` direkt über `raw.githubusercontent.com/.../beta/...` ohne SHA-Auflösung.
+- Installer löschte beim Reinstall `/xreactor/config/role.lua` mit, bevor neu installiert wurde — bei einem fehlgeschlagenen/abgebrochenen Reinstall (relevant bei großen Rollen wie MASTER/RT, da `/xreactor` komplett gelöscht statt über Stage/Backup gewechselt wird) ging die Rollenzuordnung verloren. Fix: `role.lua` wird vor dem Löschen gelesen und sofort nach dem Neuanlegen von `/xreactor` wiederhergestellt — in beiden Installer-Codepfaden (Erstinstallation und Auto-Update-Reinstall).
+
+**Versionsverlauf dieser Session:** v218 (Sessionstart) → v220 (LOG `dofile`-Test) → v221 (`start.lua` `dofile`-Fix) → v222 (LOG-Manifest-Fix) → v223 (Auto-Updater-Rollout-Test alle Nodes) → v224 (RT Auto-Update-Hang-Fix, kein `api.github.com` mehr) → v225 (role.lua-Erhalt im Installer).
+
+**Bestätigt funktionierend:** Auto-Updater läuft jetzt stabil auf ENERGY, LOG, MASTER, RT (nach manuellem einmaligem Installer-Lauf je Node zum Nachziehen der gefixten Installer-Logik).
+
+**Offenes Problem (nicht behoben, neu aufgefallen):** Setpoint-Übertragung/-Berechnung zwischen MASTER und Nodes funktioniert aktuell nicht zuverlässig. Root Cause noch nicht untersucht — nächster Arbeitspunkt.
+
+---
+
 ## Scope
 
 This document tracks the current code-reading and cleanup status of the `beta` branch after the 2026-06-03 runtime audit.
@@ -9,6 +183,7 @@ Boundaries:
 - No full regression run is claimed here.
 - This file must stay current with every cleanup change.
 - MASTER UI code is currently considered working and must not be changed for the logging issue.
+- As of 2026-06-25, no ingame test, ingame install, or ingame remote-update execution was performed for the LOG collector rewrite work described below.
 
 ## Latest uploaded logs
 
@@ -67,6 +242,50 @@ Interpretation:
 - Follow-up fix: LOG collector advances the next write disk after every successful write, making disk rotation visible instead of staying on disk 1 until a failure.
 - Follow-up fix: LOG collector pruning no longer deletes active `.log` files; it prunes only rotated/old/backup files.
 - Updated `tests/log_collector_ui_disk_pause_test.py` to guard visible disk rotation, collector modem refresh, and active-log preservation.
+- 2026-06-25: Completed the LOG collector v2 rewrite in `xreactor/nodes/log_collector/main.lua` after a partial rewrite left undefined UI helpers (`buf_line`/`flush_buf`) in the draw path.
+- 2026-06-25: Replaced the LOG collector UI with an incremental segment renderer; normal redraws now queue UI segments and only write changed or removed segments instead of clearing/redrawing the whole screen.
+- 2026-06-25: Bumped `xreactor/manifest.lua` to `manifest-v156` and `hash_algo = "none"` so stale size/CRC metadata no longer blocks the rewritten LOG collector during beta installs/updates.
+- 2026-06-25: Bumped `xreactor/release.lua` to `beta-v156` so release metadata matches `manifest-v156`.
+
+## 2026-06-25 LOG collector rewrite handoff
+
+Files changed in this pass:
+
+- `xreactor/nodes/log_collector/main.lua`
+- `xreactor/manifest.lua`
+- `xreactor/release.lua`
+- `RUNTIME_STATUS_2026-06-03.md`
+
+Commits:
+
+- `717b1051e5437618e6db2eda446f91f4229c5dae` — `fix(log_collector): complete stable v2 rewrite`
+- `e5773eba0c289454976f903ebe7aff616ab966ed` — `perf(log_collector): render only changed UI segments`
+- `5bf5d84de8cd5e0b3cd50e6f41dd4b2e318f3362` — `chore(manifest): bump to v156 for log collector rewrite`
+- `4279a588a561c2a9e2c26b4d2383b5f21ad62755` — `chore(release): bump beta release to v156`
+
+Current LOG collector behavior after the rewrite:
+
+- Receives `LOG_EVENT` packets on the configured LOG channel.
+- Opens the LOG channel on every detected modem and refreshes modem discovery periodically.
+- Writes collected logs to external disks only; there is no PC fallback for collected node logs.
+- Uses fixed role-to-disk ordering: `/disk=RT`, `/disk1=MASTER`, `/disk2=ENERGY`, `/disk3=WATER`, `/disk4=FUEL`, `/disk5=REPROCESSING`, `/disk6=LOG`.
+- Writes per-role/per-node files under `<disk>/xreactor_logs/<role>/<node>.log`.
+- Deduplicates by `event_id` and ACKs successful or duplicate events.
+- While paused, incoming logs are not written and are not ACKed, so senders can retry after resume.
+- Provides a crash screen and reboots after a key press on non-terminate errors.
+- UI supports a configured monitor, local monitor discovery, and terminal fallback.
+- UI now uses an incremental render buffer: `begin_frame()` starts a frame, UI widgets enqueue segments, and `flush_ui()` only writes changed segments or erases removed segments. `term.clear()` is restricted to first render or display-size changes.
+
+Important verification boundary:
+
+- This was a static/repository update only.
+- No ingame install, no ingame run, and no remote-update test was performed.
+- A later real checkout should still run Lua parse checks and any repo-local manifest/tooling checks before an ingame rollout.
+
+Known follow-up after this pass:
+
+- `hash_algo = "none"` is intentional for the moving `beta` branch after the LOG rewrite because exact regenerated CRC metadata was not available through the connector. A real repository checkout should later run the manifest metadata generator and restore full `size_bytes`/CRC metadata if desired.
+- Existing non-LOG node blockers found in static review are not fixed by this LOG collector pass: RT parse issue, WATER/FUEL/REPROCESSING Lua-scope issues, and FUEL missing `redstone_router_lib` require still need separate fixes.
 
 ## Ingame test finding
 
@@ -135,6 +354,7 @@ LOG collector UI:
 - A pause/resume button is shown on the LOG UI. While paused, incoming log events are not written to disk and are counted as paused drops so disks can be safely copied/downloaded.
 - Pause/resume input works through monitor touch, terminal mouse click, `p`, or space.
 - The LOG UI now shows duplicate and ACK counters.
+- After the 2026-06-25 rewrite, normal LOG UI updates are incremental. The draw path queues render segments and `flush_ui()` only writes changed segments or erases removed segments. Full `term.clear()` should happen only on first render or display-size change.
 
 ## Connector/write limits observed
 
@@ -175,6 +395,8 @@ Completed:
 - LOG collector UI always shows the active/last-written disk and supports disk-write pause/resume.
 - LOG collector rotates the next write disk after each successful write and preserves active `.log` files during pruning.
 - LOG transport now includes reboot-safe event IDs, dedupe, ACKs, cadence-limited retries, post-start modem refresh, and multiple-wireless-modem support.
+- LOG collector v2 rewrite is now complete enough to remove the previous undefined UI helper issue (`buf_line`/`flush_buf`).
+- LOG collector UI now uses incremental segment rendering instead of full redraws during normal operation.
 
 Expected LOG role installed files:
 
@@ -192,13 +414,20 @@ Expected LOG role installed files:
 
 ## Manifest metadata status
 
+Current beta state after 2026-06-25 LOG rewrite:
+
+- `xreactor/manifest.lua` is now `manifest-v156`.
+- `xreactor/release.lua` is now `beta-v156`.
+- `hash_algo = "none"` is currently intentional for beta because the LOG collector file was rewritten through the connector and exact regenerated CRC metadata was not available from a real checkout during this pass.
+
 Still open:
 
 - Run `python3 tools/regenerate_manifest_metadata.py` from a real repository checkout.
 - Commit the resulting full `xreactor/manifest.lua` metadata refresh.
+- Restore `hash_algo = "crc32"` if/when the regenerated metadata is complete and verified.
 - Remove temporary metadata exceptions from `tests/manifest_entrypoint_require_coverage_test.py` when manifest metadata is complete.
 
-Reason: several manifest entries still lack `size_bytes` and CRC32 `hash`, so installer storage preflight and integrity reporting remain less precise for those files.
+Reason: several manifest entries previously lacked or could now lack exact `size_bytes` and CRC32 `hash`, so installer storage preflight and integrity reporting remain less precise for those files while `hash_algo = "none"` is active.
 
 ## Release/build identity status
 
@@ -217,26 +446,3 @@ Resolved:
 - `tests/message_type_reference_guard_test.py` will catch future undefined `constants.message_types.*` references.
 
 ## ENERGY config defaults
-
-Current documented ownership:
-
-- `nodes/energy/main.lua` is the authoritative runtime-default source.
-- `nodes/energy/config.lua` is the installable/user-facing template.
-- User-facing ENERGY default changes must update both files until a shared defaults module exists.
-- `nodes/energy/config_normalizer.lua` must be updated when validation, migration, clamping, or compatibility behavior is needed.
-
-Recommended future cleanup:
-
-- Introduce a shared ENERGY defaults module and have both runtime and template use it.
-
-## Recommended next order
-
-1. Reinstall/update LOG collector and all nodes that should use reliable remote logging, especially ENERGY.
-2. Optional: set `xreactor.log_monitor` to the desired monitor name or `<remote>@<modem>` before starting LOG collector.
-3. Start LOG collector and verify the dashboard appears on the modem-attached monitor.
-4. Verify the UI shows `Writing Disk #...`, the `*` marker in the disk ring, duplicate count, ACK count, `ModemRefresh`, and that `Next Disk #...` advances after writes.
-5. Then start/update ENERGY and verify `energy/...log` appears.
-6. Check sender `utils.remote_log_status()` locally if needed: pending should decrease as ACKs arrive and `modem_refreshes` should increase over time.
-7. Run full manifest metadata regeneration locally.
-8. Remove manifest-metadata exceptions from the guard test.
-9. Later: refactor ENERGY defaults into one shared module with tests.

@@ -1,28 +1,23 @@
--- CONFIG
 local CONFIG = {
-  LOG_NAME = "fuel", -- Log file name for this node.
-  LOG_PREFIX = "FUEL", -- Default log prefix for fuel events.
-  DEBUG_LOG_ENABLED = nil, -- Override debug logging (nil uses config value).
-  BOOTSTRAP_LOG_ENABLED = false, -- Enable bootstrap loader debug log.
-  BOOTSTRAP_LOG_PATH = nil, -- Optional override for loader log file (default: /xreactor_logs/loader_fuel.log).
-  NODE_ID_PATH = "/xreactor/config/node_id.txt", -- Node ID storage path.
-  CONFIG_PATH = nil, -- Config file path (provided by role descriptor).
-  RECEIVE_TIMEOUT = 0.5 -- Network receive timeout (seconds).
+  LOG_NAME = "fuel",
+  LOG_PREFIX = "FUEL",
+  DEBUG_LOG_ENABLED = nil,
+  BOOTSTRAP_LOG_ENABLED = false,
+  BOOTSTRAP_LOG_PATH = nil,
+  NODE_ID_PATH = "/xreactor/config/node_id.txt",
+  CONFIG_PATH = nil,
+  RECEIVE_TIMEOUT = 0.5
 }
 
 local bootstrap = dofile("/xreactor/core/bootstrap.lua")
-bootstrap.setup({
-  role = "fuel",
-  log_enabled = CONFIG.BOOTSTRAP_LOG_ENABLED,
-  log_path = CONFIG.BOOTSTRAP_LOG_PATH
-})
+bootstrap.setup({ role = "fuel", log_enabled = false, log_path = nil })
 local require = bootstrap.require
 local constants = require("shared.constants")
 local protocol = require("core.protocol")
 local utils = require("core.utils")
 local health = require("core.health")
 local ui = require("core.ui")
-local ui_router = require("core.ui_router")
+local core_ui_router = require("core.ui_router")
 local colors = require("shared.colors")
 local registry_lib = require("core.registry")
 local monitor_adapter = require("adapters.monitor")
@@ -41,106 +36,152 @@ local support_command_handler = require("nodes.support.command_handler")
 local role_descriptor = require("nodes.fuel.role_descriptor")
 local config_normalizer = require("nodes.fuel.config_normalizer")
 local logistics_router = require("nodes.fuel.logistics_router")
-local router_ui_lib     = require("nodes.fuel.router_ui")
+local redstone_router_lib = require("nodes.fuel.redstone_router")
+local router_ui_lib = require("nodes.fuel.router_ui")
+local fuel_ui_pages = require("nodes.fuel.ui_pages")
+
+-- Feature (2026-07-09): Modularisierungs-Rewrite. main.lua ist jetzt nur
+-- noch Orchestrierung (Wiring von Config/Services/Event-Loop) -- die
+-- eigentliche Logik lebt in eigenstaendigen Modulen, analog zu nodes/rt/:
+--   status_snapshot.lua      Status-Payload-Aufbau
+--   command_handler.lua      Kommando-Parsing/Dispatch
+--   fuel_status_network.lua  Netzwerkbasierter Reaktor-Fuellstand-Cache
+--   monitor_ui.lua           Hauptmonitor + Ampel
+--   storage.lua              Fluessig-Reserve-Tracking (storage_bus)
+local status_snapshot_lib = require("nodes.fuel.status_snapshot")
+local fuel_command_handler = require("nodes.fuel.command_handler")
+local fuel_status_network = require("nodes.fuel.fuel_status_network")
+local fuel_monitor_ui = require("nodes.fuel.monitor_ui")
+local fuel_storage = require("nodes.fuel.storage")
 
 local DEFAULT_CONFIG = {
-  role = constants.roles.FUEL_NODE, -- Node role identifier.
-  node_id = "FUEL-1", -- Default node_id used if none is set.
-  debug_logging = false, -- Enable debug logging to /xreactor_logs/fuel.log.
-  reset_log_on_start = true, -- Truncate runtime log at startup to keep disk usage bounded.
-  wireless_modem = nil, -- Autodetect wireless modem unless explicitly configured.
-  wired_modem = nil, -- Optional wired modem side.
-  storage_bus = "meBridge_0", -- Default storage bus peripheral name.
-  target = 2000, -- Default fuel reserve target.
-  minimum_reserve = 2000, -- Minimum reserve used for safety.
-  heartbeat_interval = 2, -- Seconds between status heartbeats.
-  discovery_interval = 15, -- Seconds between peripheral rescans.
-  status_interval = 5, -- Seconds between status payloads.
-  channels = {
-    control = constants.channels.CONTROL, -- Control channel for MASTER commands.
-    status = constants.channels.STATUS -- Status channel for telemetry.
-  },
+  role = constants.roles.FUEL_NODE,
+  node_id = "FUEL-1",
+  debug_logging = false,
+  reset_log_on_start = true,
+  wireless_modem = nil,
+  wired_modem = nil,
+  storage_bus = "meBridge_0",
+  target = 2000,
+  minimum_reserve = 2000,
+  heartbeat_interval = 2,
+  discovery_interval = 15,
+  status_interval = 5,
+  channels = { control = constants.channels.CONTROL, status = constants.channels.STATUS },
   comms = {
-    ack_timeout_s = 3.0, -- Seconds before retrying a command.
-    max_retries = 4, -- Maximum retries per message.
-    backoff_base_s = 0.6, -- Base backoff seconds.
-    backoff_cap_s = 6.0, -- Max backoff seconds.
-    dedupe_ttl_s = 30, -- Seconds to keep dedupe entries.
-    dedupe_limit = 200, -- Max dedupe entries per peer.
-    peer_timeout_s = 12.0, -- Seconds before marking peer down.
-    queue_limit = 200, -- Max queued outbound messages.
-    drop_simulation = 0 -- Drop rate (0-1) for testing comms.
+    ack_timeout_s = 3.0, max_retries = 4, backoff_base_s = 0.6, backoff_cap_s = 6.0,
+    dedupe_ttl_s = 30, dedupe_limit = 200, peer_timeout_s = 12.0, queue_limit = 200, drop_simulation = 0
   }
 }
 
-CONFIG.CONFIG_PATH = role_descriptor.config_path
+-- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
+-- NODES_PERFORMANCE_2026-07-12.md). role_descriptor.config_path zeigte
+-- bisher auf "/xreactor/nodes/fuel/config.lua" -- genau die Quelldatei,
+-- die Teil des Manifests ist und bei JEDEM Auto-Update (alle ~120s)
+-- frisch von GitHub heruntergeladen und ueberschrieben wird. Jede
+-- manuelle Bearbeitung dieser Datei (z.B. logistics.reactors eintragen,
+-- logistics.enabled=true setzen -- exakt die Config-Anleitung dieser
+-- ganzen Session) ging spaetestens beim naechsten Update-Zyklus wieder
+-- verloren, ohne jede Warnung. Jetzt: kanonische Nutzer-Config an einem
+-- vom Manifest komplett unberuehrten Pfad, mit einmaliger Migration
+-- eines eventuell bereits vorhandenen Standes aus der alten Quelldatei
+-- (rettet zumindest den Stand, der GENAU JETZT noch da ist -- Bearbeitungen,
+-- die bereits von einem frueheren Auto-Update-Zyklus ueberschrieben
+-- wurden, sind technisch nicht mehr rekonstruierbar).
+local USER_CONFIG_PATH = "/xreactor/config/fuel.lua"
+if not fs.exists(USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
+  local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
+  if ok_read and handle then
+    local content = handle.readAll()
+    handle.close()
+    local dir = fs.getDir(USER_CONFIG_PATH)
+    if dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+    local ok_write, out = pcall(fs.open, USER_CONFIG_PATH, "w")
+    if ok_write and out then
+      out.write(content)
+      out.close()
+      utils.log(CONFIG.LOG_PREFIX, "Config-Migration: " .. role_descriptor.config_path .. " -> " .. USER_CONFIG_PATH .. " (einmalig, schuetzt vor Auto-Update-Verlust)", "INFO")
+    end
+  end
+end
+CONFIG.CONFIG_PATH = USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
-
-local function add_config_warning(message)
-  table.insert(config_warnings, message)
-end
-
+local function add_config_warning(message) table.insert(config_warnings, message) end
 config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- Initialize file logging early to capture startup events.
+-- Fix (2026-07-12): REST-P0.1 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
+-- FIX_2026-07-12.md). /xreactor/config/fuel_routes.lua (die vom Router-
+-- Editor per atomarem Schreibvorgang geschriebene, kanonische
+-- Routenquelle) wurde beim normalen FUEL-Start bisher NIE geladen --
+-- gespeicherte Routen gingen bei JEDEM Neustart verloren, da der
+-- operative Router immer nur aus der unveraenderten FUEL-Konfiguration
+-- erzeugt wurde (der Editor haette zwar innerhalb derselben Laufzeit
+-- "GESPEICHERT=AKTIV" gezeigt, aber ohne jede Wirkung nach einem
+-- Neustart). Jetzt: VOR der allerersten Router-Erzeugung wird die Datei
+-- geladen und vollstaendig mit derselben validate_tree()-Funktion
+-- geprueft, die der Router selbst verwendet -- NUR bei Erfolg wird das
+-- Ergebnis nach config.logistics.redstone_tree uebernommen. Bei
+-- fehlender oder ungueltiger Datei bleibt redstone_tree unveraendert
+-- (kein Fuel-Export ohne gueltige Routen moeglich) und routing_load_
+-- status haelt den exakten Fehler fuer die Router-/Diagnostics-Seite fest.
+local routing_load_status = { ok = true, source = "config" }
+do
+  local routes_path = "/xreactor/config/fuel_routes.lua"
+  if fs.exists(routes_path) then
+    local ok_load, content = pcall(dofile, routes_path)
+    if not ok_load or type(content) ~= "table" then
+      routing_load_status = { ok = false, code = "ROUTES_FILE_UNREADABLE", message = tostring(content), source = routes_path }
+      add_config_warning("fuel_routes.lua konnte nicht geladen werden, Routing bleibt INVALID: " .. tostring(content))
+    else
+      local validation = redstone_router_lib.validate_tree(content)
+      if not validation.ok then
+        local fe = validation.errors[1]
+        routing_load_status = { ok = false, code = fe and fe.code or "INVALID", message = fe and fe.message or "Validierung fehlgeschlagen", source = routes_path }
+        add_config_warning("fuel_routes.lua ungueltig, Routing bleibt INVALID: " .. tostring(routing_load_status.message))
+      else
+        config.logistics = config.logistics or {}
+        config.logistics.redstone_tree = content
+        routing_load_status = { ok = true, source = routes_path }
+      end
+    end
+  end
+end
+
 local node_id = support_runtime.init_logging({
-  utils = utils,
-  config = config,
-  runtime_config = CONFIG,
-  config_meta = config_meta,
-  config_warnings = config_warnings
+  utils = utils, config = config, runtime_config = CONFIG,
+  config_meta = config_meta, config_warnings = config_warnings
 })
 
 local comms
 local services
 local registry = registry_lib.new({ node_id = node_id, role = role_descriptor.role_key, log_prefix = CONFIG.LOG_PREFIX })
 local fuel_health = health.new({})
-local storage
 local router
 local rs_router_instance
 local router_ui_instance
+local fuel_status_cache = fuel_status_network.new()
 local devices = {
-  monitor = nil,
-  monitor_name = nil,
-  storage_name = nil,
-  discovery_failed = false,
-  registry_summary = nil,
-  registry_load_error = nil,
-  proto_mismatch = false,
-  last_scan_ts = nil,
-  last_command = nil,
-  last_command_ts = nil
+  monitor = nil, monitor_name = nil, storage_name = nil, discovery_failed = false,
+  registry_summary = nil, registry_load_error = nil, proto_mismatch = false,
+  last_scan_ts = nil, last_command = nil, last_command_ts = nil
 }
 local master_alerts = {}
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
-local monitor_router = nil
+local fuel_ui = fuel_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
 
 local function warn_once(key, message)
-  support_runtime.warn_once(devices, function(msg, level)
-    utils.log(CONFIG.LOG_PREFIX, msg, level)
-  end, key, message)
-end
-
-local function cache()
-  storage = nil
-  if devices.storage_name and peripheral.isPresent(devices.storage_name) then
-    local wrapped, err = utils.safe_wrap(devices.storage_name)
-    if wrapped then
-      storage = wrapped
-    else
-      utils.log("FUEL", "WARN: storage bus wrap failed: " .. tostring(err))
-    end
-  end
+  support_runtime.warn_once(devices, function(msg, level) utils.log(CONFIG.LOG_PREFIX, msg, level) end, key, message)
 end
 
 local function get_rs_router()
   if not rs_router_instance then
     rs_router_instance = redstone_router_lib.new({
-      config    = config,
-      log       = function(level, msg) utils.log("FUEL", msg, level) end,
+      config = config,
+      log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
+      comms = comms,
     })
   end
   return rs_router_instance
@@ -149,10 +190,11 @@ end
 local function get_router()
   if not router then
     router = logistics_router.new({
-      config    = config,
-      log       = function(level, msg) utils.log("FUEL", msg, level) end,
+      config = config,
+      log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
-      rs_router = get_rs_router(),  -- share rs_router with router_ui
+      rs_router = get_rs_router(),
+      fuel_status = fuel_status_cache,
     })
   end
   return router
@@ -162,31 +204,44 @@ local function get_router_ui()
   if not router_ui_instance then
     router_ui_instance = router_ui_lib.new({
       redstone_router = get_rs_router(),
-      config_path     = "/xreactor/config/fuel_routes.lua",
-      log             = function(level, msg) utils.log("FUEL", msg, level) end,
-      get_reactors    = function()
-        -- Primary source: reactors configured in config.logistics.reactors
-        -- (these are the actual peripheral names already set up by the user)
-        local list = {}
-        local seen = {}
+      config_path = "/xreactor/config/fuel_routes.lua",
+      log = function(level, msg) utils.log("FUEL", msg, level) end,
+      routing_load_status = routing_load_status,
+      get_reactors = function()
+        local list, seen = {}, {}
         local lg = config.logistics or {}
+        -- 1. Manuell konfigurierte Reaktoren aus logistics.reactors
         for _, entry in ipairs(lg.reactors or {}) do
-          local label = entry.name or entry.label or entry.reactor_port or "?"
-          local id    = entry.label or entry.name or label
-          if not seen[id] then
-            seen[id] = true
-            list[#list + 1] = { id = id, label = label }
-          end
+          local label = entry.name or entry.label or entry.reactor_id or entry.reactor_port or "?"
+          local id = entry.label or entry.name or label
+          if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
         end
-        -- Fallback: scan wired-modem peripherals for ER2 reactor computer ports
-        if #list == 0 then
-          for _, name in ipairs(peripheral.getNames() or {}) do
-            local ptype = tostring(peripheral.getType(name) or ""):lower()
-            if ptype:find("reactor") or name:lower():find("reactor") then
-              if not seen[name] then
-                seen[name] = true
-                list[#list + 1] = { id = name, label = name }
+        -- 2. Aus redstone_tree (bereits konfigurierte Router-Routen)
+        for _, route in ipairs((lg.redstone_tree or {})) do
+          local id = route.reactor or route.label
+          local label = route.label or route.reactor or id or "?"
+          if id and not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
+        end
+        -- 3. Reactor-IDs aus fuel_status_cache
+        --    Cache-Format: { master_relay={[reactor_id]={...}}, direct_heard={[reactor_id]={...}} }
+        if type(fuel_status_cache) == "table" then
+          local function add_from_cache(sub)
+            if type(sub) ~= "table" then return end
+            for reactor_id, entry in pairs(sub) do
+              if type(entry) == "table" and not seen[reactor_id] then
+                seen[reactor_id] = true
+                list[#list + 1] = { id = reactor_id, label = reactor_id }
               end
+            end
+          end
+          add_from_cache(fuel_status_cache.master_relay)
+          add_from_cache(fuel_status_cache.direct_heard)
+        end
+        -- 4. Fallback: bekannte RT-Peers aus Netzwerk
+        if #list == 0 and comms and type(comms.get_peers) == "function" then
+          for _, peer in ipairs(comms:get_peers()) do
+            if peer.role == "RT" then
+              if not seen[peer.id] then seen[peer.id] = true; list[#list + 1] = { id = peer.id, label = peer.id } end
             end
           end
         end
@@ -204,348 +259,249 @@ local function discover()
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
-  -- Fallback: if no external monitor peripheral is attached, render to the
-  -- computer's own terminal so Diagnostics/Router pages (including the
-  -- log mode buttons) are visible on the PC console.
   if not devices.monitor and term and type(term.current) == "function" then
-    devices.monitor = term.current()
-    devices.monitor_name = devices.monitor_name or "term"
-    devices.monitor_is_term = true
+    devices.monitor = term.current(); devices.monitor_name = devices.monitor_name or "term"; devices.monitor_is_term = true
   end
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
   local storage_devices = support_discovery.collect_devices_by_methods(names, {
     kind = "storage",
-    allow_name = function(name)
-      return not config.storage_bus or name == config.storage_bus
-    end,
-    match = function(method_set)
-      return method_set.tanks or method_set.getFluidAmount
-    end
+    allow_name = function(name) return not config.storage_bus or name == config.storage_bus end,
+    match = function(method_set) return method_set.tanks or method_set.getFluidAmount end
   })
-  for _, entry in ipairs(storage_devices) do
-    table.insert(registry_devices, entry)
-  end
+  for _, entry in ipairs(storage_devices) do table.insert(registry_devices, entry) end
   registry:sync(registry_devices)
   devices.registry_summary = registry:get_summary()
   devices.registry_load_error = registry.state.load_error
   devices.last_scan_ts = os.epoch("utc")
   local bound = registry:get_bound_devices("storage")
   devices.storage_name = bound[1] and bound[1].name or nil
-  cache()
+  fuel_storage.refresh(devices, utils)
 end
 
-local function hello()
-  comms:send_hello({ reserve = reserve })
-end
+local function hello() comms:send_hello({ reserve = reserve }) end
 
-local function read_fuel()
-  if storage and storage.tanks then
-    local ok, tank_data = support_runtime.safe_wrapped_call(storage, "tanks")
-    if ok and type(tank_data) == "table" then
-      local total = 0
-      for _, tank in pairs(tank_data) do
-        if type(tank) == "table" and type(tank.amount) == "number" then
-          total = total + tank.amount
-        end
-      end
-      return total
-    elseif not ok then
-      warn_once("storage_read", "Storage tanks read failed: " .. tostring(tank_data))
-    end
-  end
-  if storage and storage.getFluidAmount then
-    local ok, value = support_runtime.safe_wrapped_call(storage, "getFluidAmount")
-    if ok and type(value) == "number" then
-      return value
-    end
-    if not ok then
-      warn_once("storage_read_legacy", "Storage read failed: " .. tostring(value))
-    end
-  end
-  return 0
-end
+local is_master_connected
+local master_peer_state
 
-local function enforce_reserve(current)
-  local adjusted, changed = safety.with_reserve(current, reserve)
-  if changed then
-    utils.log("FUEL", "Reserve enforced at " .. adjusted)
-  end
-  return adjusted
-end
+-- Feature (2026-07-11): build_status_payload() macht echte, nicht ganz
+-- billige Arbeit (Peripherie-Lesen, Registry-/Logistik-Zusammenfassung)
+-- und wurde bisher UNABHAENGIG voneinander sowohl von render_monitor()
+-- als auch von render_ampel() aufgerufen -- beide laufen ungefaehr im
+-- selben ~1s-Rhythmus, faktisch also zweimal dieselbe Arbeit pro Zyklus.
+-- Kurzlebiger Cache (300ms, deutlich unter dem 1s-Renderintervall) haelt
+-- diese beiden Aufrufe innerhalb desselben Zyklus zusammen, ohne die
+-- Aktualitaet spuerbar zu beeintraechtigen.
+local payload_cache, payload_cache_ts = nil, 0
+local PAYLOAD_CACHE_TTL_MS = 300
 
 local function build_status_payload()
-  local amount = enforce_reserve(read_fuel())
-  local has_storage = storage ~= nil
-  local reasons = {}
-  if not has_storage then
-    reasons[health.reasons.NO_STORAGE] = true
-  end
-  if devices.discovery_failed or devices.registry_load_error then
-    reasons[health.reasons.DISCOVERY_FAILED] = true
-  end
-  if devices.proto_mismatch then
-    reasons[health.reasons.PROTO_MISMATCH] = true
-  end
-  local master_ok = is_master_connected()
-  if not master_ok then
-    reasons[health.reasons.COMMS_DOWN] = true
-  end
-  fuel_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
-  fuel_health.reasons = reasons
-  fuel_health.last_seen_ts = os.epoch("utc")
-  fuel_health.bindings = { storage = has_storage and 1 or 0 }
-  fuel_health.capabilities = { storage = config.storage_bus ~= nil }
-  local payload = non_rt_payload.build_base({
-    ts = os.epoch("utc"),
-    role = config.role,
-    node_id = config.node_id,
-    health = {
-      status = fuel_health.status,
-      reasons = health.reasons_list(fuel_health),
-      last_seen_ts = fuel_health.last_seen_ts,
-      bindings = fuel_health.bindings,
-      capabilities = fuel_health.capabilities
-    },
-    discovery_failed = devices.discovery_failed,
-    master_connected = master_ok,
-    master_seen_s = master_seen_ts and math.max(0, math.floor((os.epoch("utc") - master_seen_ts) / 1000)) or nil,
-    queue = comms and comms:queue_depth() or 0,
-    peers = comms and comms.peer_state and comms.peer_state.peers or nil,
-    alerts = master_alerts,
-    protocol_mismatch = devices.proto_mismatch,
-    last_command = devices.last_command,
-    last_command_ts = devices.last_command_ts,
-    registry = {
-      summary = devices.registry_summary or registry:get_summary(),
-      devices = registry:get_devices_by_kind(),
-      diagnostics = registry:get_diagnostics()
-    }
-  })
-  payload.reserve = amount
-  payload.minimum_reserve = reserve
-  payload.sources = { { id = devices.storage_name or "unknown", amount = amount } }
-  payload.logistics = get_router():get_summary()
-  payload.bindings = fuel_health.bindings
-  payload.bindings_summary = health.summarize_bindings(fuel_health.bindings)
-  return payload
-end
-
-local function render_monitor()
-  if not devices.monitor then
-    return
-  end
-  local mon = devices.monitor
-  local payload = build_status_payload()
-  local comms_diag = comms and comms:get_diagnostics() or {}
-  local peer = master_peer_state()
-  local summary = payload.registry and payload.registry.summary or registry:get_summary()
   local now = os.epoch("utc")
-  local node_id = comms and comms.network and comms.network.id or config.node_id
-  local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
-  local local_alerts = alert_payload and alert_payload.top or {}
-  local local_critical = alert_payload and alert_payload.critical or 0
-  local model = support_ui_pages.build_common_model({
-    payload = payload,
-    summary = summary,
-    comms_diag = comms_diag,
-    master_peer = peer,
-    now = now,
-    last_scan_ts = devices.last_scan_ts,
-    last_command = devices.last_command,
-    last_command_ts = devices.last_command_ts,
-    local_alerts = local_alerts,
-    local_alerts_critical = local_critical,
-    node_id = node_id
-  })
-  if not monitor_router then
-    monitor_router = ui_router.new({
-      pages = {
-        { name = "Overview", render = function(target)
-          local w, h = ui.getSize(target)
-          if not w or not h then
-            return
-          end
-          ui.panel(target, 1, 1, w, h, "FUEL NODE", model.status)
-          support_ui_pages.render_alert_banner(target, ui, model)
-          ui.text(target, 2, 2, ("ID: %s"):format(model.node_id or "UNKNOWN"), colors.get("text"), colors.get("background"))
-          ui.badge(target, w - 6, 2, model.status, model.status)
-          ui.text(target, 2, 4, ("Reserve: %.0f"):format(model.payload.reserve or 0), colors.get("text"), colors.get("background"))
-          ui.text(target, 2, 5, ("Minimum: %.0f"):format(model.payload.minimum_reserve or 0), colors.get("text"), colors.get("background"))
-          ui.text(target, 2, 6, ("Storage: %s"):format(devices.storage_name or "none"), colors.get("text"), colors.get("background"))
-          ui.text(target, 2, 8, ("Master link: %s age:%s"):format(model.master_state, model.master_age), colors.get("text"), colors.get("background"))
-        end },
-        { name = "Details", render = function(target)
-          local w, h = ui.getSize(target)
-          if not w or not h then
-            return
-          end
-          ui.panel(target, 1, 1, w, h, "FUEL DETAILS", model.status)
-          support_ui_pages.render_alert_banner(target, ui, model)
-          local rows = {
-            { text = ("Registry total:%d bound:%d missing:%d"):format(model.summary.total or 0, model.summary.bound or 0, model.summary.missing or 0) },
-            { text = ("Last scan: %s"):format(model.last_scan) },
-            { text = ("Storage: %s"):format(devices.storage_name or "none") }
-          }
-          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 4 })
-        end },
-        { name = "Diagnostics", render = function(target)
-          local w, h = ui.getSize(target)
-          if not w or not h then
-            return
-          end
-          ui.panel(target, 1, 1, w, h, "FUEL DIAGNOSTICS", model.status)
-          support_ui_pages.render_alert_banner(target, ui, model)
-          local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
-          support_ui_pages.append_local_alert_rows(rows, model.local_alerts)
-          ui.list(target, 2, 3, w - 2, rows, { max_rows = h - 5 })
-          -- Log mode buttons on bottom line
-          support_ui_pages.render_log_mode_button(target, utils, 1, h - 1, w - 2)
-        end,
-        handle_touch = function(x, y)
-          local w2, h2 = ui.getSize(mon)
-          return support_ui_pages.handle_log_mode_touch(x, y, (h2 or 20) - 1, utils, 1)
-        end },
-        { name = "Router", render = function(target)
-          get_router_ui():render(target, ui, colors)
-        end,
-        handle_touch = function(x, y)
-          return get_router_ui():handle_touch(x, y)
-        end }
-      },
-      key_prev = { [keys.left] = true, [keys.pageUp] = true },
-      key_next = { [keys.right] = true, [keys.pageDown] = true }
-    })
+  if payload_cache and (now - payload_cache_ts) < PAYLOAD_CACHE_TTL_MS then
+    return payload_cache
   end
-  monitor_router:render(mon, model)
+  payload_cache = status_snapshot_lib.build_status_payload({
+    config = config, devices = devices, fuel_health = fuel_health,
+    comms = comms, registry = registry, health = health,
+    non_rt_payload = non_rt_payload, master_alerts = master_alerts,
+    master_seen_ts = master_seen_ts, reserve = reserve, storage = fuel_storage.get(),
+    read_fuel = function() return fuel_storage.read_fuel(warn_once, support_runtime) end,
+    enforce_reserve = function(current) return fuel_storage.enforce_reserve(current, reserve, safety, utils) end,
+    is_master_connected = is_master_connected, get_router = get_router,
+    routing_load_status = routing_load_status, get_rs_router = get_rs_router,
+  })
+  payload_cache_ts = now
+  return payload_cache
 end
 
-local function handle_monitor_touch(x, y)
-  -- Forward touch to current page if it handles touch
-  local page = monitor_router and monitor_router:current()
-  if page and type(page.handle_touch) == "function" then
-    return page.handle_touch(x, y)
-  end
+-- Feature (2026-07-11): UI-P0.4. Ein zentraler ctx-Aufbau fuer sowohl
+-- Model-Bau als auch Zeichnung -- vermeidet, dass beide Stellen leicht
+-- unterschiedliche ctx-Felder verwenden.
+local function fuel_ui_ctx()
+  return {
+    devices = devices, build_status_payload = build_status_payload, comms = comms,
+    master_peer_state = master_peer_state, registry = registry, config = config,
+    master_alerts = master_alerts, support_ui_pages = support_ui_pages,
+    ui_router = core_ui_router, fuel_ui = fuel_ui, get_router_ui = get_router_ui,
+    ui = ui, colors = colors, keys = keys,
+    -- Feature (2026-07-12): REST-P1.1. Garantiertes Logging eines
+    -- Renderfehlers -- vorher behauptete die Fallback-Seite nur "Details
+    -- im LOG_COLLECTOR-Export", ohne dass irgendein Codepfad das
+    -- tatsaechlich sichergestellt haette.
+    on_render_error = function(error_info)
+      utils.log("FUEL", string.format(
+        "UI-Renderfehler auf Seite '%s' [%s]: %s",
+        tostring(error_info.page), tostring(error_info.code), tostring(error_info.message)
+      ), "ERROR")
+    end,
+  }
+end
+
+local function build_fuel_model(event)
+  return fuel_monitor_ui.build_model(fuel_ui_ctx())
+end
+
+local function render_monitor(model, event)
+  fuel_monitor_ui.render_monitor(fuel_ui_ctx(), model)
+end
+
+local function render_ampel()
+  fuel_monitor_ui.render_ampel({
+    build_status_payload = build_status_payload, master_peer_state = master_peer_state, devices = devices,
+    fuel_ui = fuel_ui,
+  })
 end
 
 local function handle_command(message)
-  local command, parse_error = support_command_handler.parse_node_command(message, {
-    protocol = protocol,
-    comms = comms
+  return fuel_command_handler.handle(message, {
+    support_command_handler = support_command_handler, constants = constants,
+    devices = devices, protocol = protocol, comms = comms, utils = utils,
+    set_reserve = function(v) reserve = v end,
+    on_fuel_status = function(value) fuel_status_network.ingest_master_relay(fuel_status_cache, value) end,
   })
-  if parse_error then
-    return support_command_handler.finish_with_result(devices, parse_error)
-  end
-  if not command then
-    return
-  end
-  if command.target == constants.command_targets.SET_RESERVE then
-    local new_reserve = tonumber(command.value)
-    if type(new_reserve) == "number" and new_reserve >= 0 then
-      reserve = new_reserve
-      utils.log("FUEL", "Reserve updated to " .. tostring(reserve))
-    else
-      utils.log("FUEL", "SET_RESERVE rejected: invalid value=" .. tostring(command.value), "WARN")
-      return support_command_handler.finish_with_result(devices,
-        { ok = false, error = "invalid reserve value", reason_code = "INVALID_VALUE" })
-    end
-  elseif command.target == constants.command_targets.MODE and command.value == constants.node_states.MANUAL then
-    -- manual mode acknowledged but not changing behavior
-  else
-    return support_command_handler.reject_unsupported(devices)
-  end
-  return support_command_handler.finish(devices, true)
 end
 
-local function master_peer_state()
-  return role_logic.master_peer_state(comms, constants.roles.MASTER)
-end
-
-local function is_master_connected()
-  return role_logic.is_master_connected({
-    comms = comms,
-    master_role = constants.roles.MASTER,
-    last_seen_ts = master_seen_ts,
-    heartbeat_interval = config.heartbeat_interval
-  })
+master_peer_state = function() return role_logic.master_peer_state(comms, constants.roles.MASTER) end
+is_master_connected = function()
+  return role_logic.is_master_connected({ comms = comms, master_role = constants.roles.MASTER, last_seen_ts = master_seen_ts, heartbeat_interval = config.heartbeat_interval })
 end
 
 local function init()
+  -- Fix (2026-07-09): sofortige, direkte Monitor-Ersterkennung hier
+  -- (synchron, vor dem Event-Loop) -- discover() aktualisiert/bestaetigt
+  -- das danach weiter periodisch.
+  local mon_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  devices.monitor = mon_entry and mon_entry.mon or nil
+  devices.monitor_name = mon_entry and mon_entry.name or nil
+  if not devices.monitor and term and type(term.current) == "function" then
+    devices.monitor = term.current(); devices.monitor_name = devices.monitor_name or "term"; devices.monitor_is_term = true
+  end
+  utils.log(CONFIG.LOG_PREFIX, "Monitor-Erstinit: " .. tostring(devices.monitor_name)
+    .. (devices.monitor and "" or " (KEIN Monitor gefunden!)"), devices.monitor and "INFO" or "WARN")
+
   services = service_manager.new({ log_prefix = "FUEL" })
   comms = comms_service.new({
-    config = config,
-    log_prefix = "FUEL",
-    on_command = handle_command,
+    config = config, log_prefix = "FUEL", on_command = handle_command,
     on_message = function(message)
-      if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
-        devices.proto_mismatch = true
-        return
-      end
+      if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then devices.proto_mismatch = true; return end
       if message.role == constants.roles.MASTER then
         master_seen_ts = os.epoch("utc")
-        if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then
-          master_alerts = message.payload.alerts
-        end
+        if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then master_alerts = message.payload.alerts end
       end
     end
   })
   services:add(comms)
-  services:add(discovery_service.new({
-    registry = registry,
-    discover = discover,
-    interval = config.discovery_interval or config.heartbeat_interval,
-    managed_registry = false,
-    update_health = function(ok)
-      devices.discovery_failed = not ok
+  -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md). Der dedizierte Ventilkanal (6504) laeuft
+  -- komplett AUSSERHALB von comms_service (siehe redstone_router.lua) --
+  -- eine VALVE_ACK-Antwort erreicht daher NIE den normalen on_message-
+  -- Handler oben. Analog zu VALVE-Nodes' eigenem "valve_channel"-Service:
+  -- roher Event-Listener, der modem_message auf Kanal 6504 direkt an
+  -- redstone_router.lua's handle_valve_ack() weiterreicht.
+  services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
+    if not event or event[1] ~= "modem_message" then return end
+    local channel, message = event[3], event[5]
+    if channel ~= constants.channels.VALVE then return end
+    if type(message) == "table" and message.type == "VALVE_ACK" then
+      get_rs_router():handle_valve_ack(message)
     end
-  }))
-  services:add(telemetry_service.new({
-    comms = comms,
-    status_interval = config.status_interval or config.heartbeat_interval,
-    heartbeat_interval = config.heartbeat_interval,
-    build_payload = build_status_payload,
-    heartbeat_state = function() return { reserve = reserve } end
-  }))
+  end })
+  local last_valve_retry_check_ms = 0
+  services:add({ name = "valve_ack_retry", tick = function()
+    local now = os.epoch and os.epoch("utc") or 0
+    if now - last_valve_retry_check_ms < 1000 then return end
+    last_valve_retry_check_ms = now
+    get_rs_router():check_pending_acks()
+  end })
+  -- Feature (2026-07-20): "Weg 3" -- Route-Teach-in per manuellem Redstone-
+  -- Input an der jeweiligen VALVE-Node (siehe nodes/valve/main.lua's
+  -- check_teach_input()/ROUTE_TEACH_PULSE). Roher Event-Listener wie
+  -- valve_ack_listener oben -- referenziert router_ui_instance direkt
+  -- (nicht ueber get_router_ui(), das die Seite beim ersten Aufruf erst
+  -- erzeugen wuerde); vor dem ersten Besuch der Router-Seite existiert kein
+  -- Pfad-Editor, der einen Puls entgegennehmen koennte. router_ui.lua's
+  -- handle_teach_pulse() filtert selbst, ob der Teach-Modus gerade aktiv
+  -- ist -- ein Puls ausserhalb davon wird dort schlicht ignoriert.
+  services:add({ name = "valve_teach_listener", wants_events = true, tick = function(_self, dt, event)
+    if not event or event[1] ~= "modem_message" then return end
+    local channel, message = event[3], event[5]
+    if channel ~= constants.channels.VALVE then return end
+    if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance then
+      router_ui_instance:handle_teach_pulse(message.src)
+    end
+  end })
+  services:add(discovery_service.new({ registry = registry, discover = discover, interval = config.discovery_interval or config.heartbeat_interval, managed_registry = false, update_health = function(ok) devices.discovery_failed = not ok end }))
+  services:add(telemetry_service.new({ comms = comms, status_interval = config.status_interval or config.heartbeat_interval, heartbeat_interval = config.heartbeat_interval, build_payload = build_status_payload, heartbeat_state = function() return { reserve = reserve } end }))
   services:add(ui_service.new({
     interval = 1,
-    snapshot = function()
-      local payload = build_status_payload()
-      local peer = master_peer_state()
-      local node_id = comms and comms.network and comms.network.id or config.node_id
-      local alert_payload = master_alerts and master_alerts.by_node and master_alerts.by_node[node_id] or nil
-      return {
-        page = monitor_router and monitor_router.index or 1,
-        payload = payload,
-        master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN",
-        alerts = alert_payload and alert_payload.critical or 0,
-        last_command = devices.last_command,
-        last_command_ts = devices.last_command_ts
-      }
-    end,
+    build_model = build_fuel_model,
     render = render_monitor,
-    handle_input = function(event)
-      if monitor_router then
-        monitor_router:handle_input(event)
-      end
-    end
+    on_error = function(error_info)
+      utils.log("FUEL", string.format(
+        "UI-%s-Fehler: %s", tostring(error_info.stage), tostring(error_info.message)
+      ), "ERROR")
+    end,
+    handle_input = function(event) fuel_monitor_ui.handle_input(event) end
   }))
+  -- Fix (2026-07-09): eigener, von der Haupt-UI unabhaengiger Tick fuer
+  -- die Ampel -- laeuft auch wenn (noch) kein Hauptmonitor gefunden
+  -- wurde.
+  local ampel_tick_acc = 0
+  services:add({ name = "ampel_render", tick = function(_self, dt)
+    ampel_tick_acc = ampel_tick_acc + (tonumber(dt) or 0.5)
+    if ampel_tick_acc < 1 then return end
+    ampel_tick_acc = 0
+    render_ampel()
+  end })
+  -- Fix (2026-07-11): CRITICAL (UI-P0.1, siehe docs/CODING_AI_FUEL_UI_
+  -- PRIORITY_FIX_2026-07-12.md). Dieser Service verarbeitete JEDEN
+  -- monitor_touch/mouse_click EIN ZWEITES MAL zusaetzlich zu ui_service's
+  -- eigenem handle_input-Pfad (der bereits fuel_monitor_ui.handle_input()
+  -- fuer jedes Event aufruft) -- derselbe physische Touch erreichte die
+  -- aktuelle Seite dadurch mindestens zweimal. Sichtbare Folge z.B. bei
+  -- Toggle-Buttons (Router-Seite: Ausgang auswaehlen): erster Aufruf
+  -- setzt den Zustand, zweiter Aufruf mit denselben Koordinaten hebt ihn
+  -- sofort wieder auf -- "Auswahl blinkt kurz auf und verschwindet
+  -- wieder". Jetzt entfernt: es gibt nur noch EINEN zentralen Input-Pfad
+  -- (ui_service -> fuel_monitor_ui.handle_input), jeder physische Touch
+  -- wird dadurch garantiert genau einmal verarbeitet.
+  services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants))
   services:init()
   hello()
+  local ok_report_mod, report_mod = pcall(require, "core.startup_report")
+  if ok_report_mod then
+    pcall(function()
+      local checks = { report_mod.check_wireless_modem() }
+      checks[#checks + 1] = { name = "Storage-Bus gefunden", ok = fuel_storage.get() ~= nil }
+      local ok_spk, spk_mod = pcall(require, "optional.speaker_alarm")
+      local speaker = ok_spk and spk_mod.new() or nil
+      report_mod.run(checks, { log = function(_, msg) utils.log("FUEL", msg, "INFO") end, speaker = speaker })
+    end)
+  end
   utils.log("FUEL", "Node ready: " .. comms.network.id)
 end
 
 init()
--- Add touch handler as a lightweight service entry
-services:add({
-  name = "router_touch",
-  tick = function(dt, event)
-    -- monitor_touch: external Monitor peripheral touch
-    -- mouse_click: Advanced Computer's own terminal (when monitor falls back to term)
-    if event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then
-      handle_monitor_touch(event[3], event[4])
-    end
-  end
-})
-
+-- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
+-- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). get_rs_router():tick()
+-- treibt die asynchrone Ventil-Transaktion (begin_transaction() in
+-- logistics_router.lua) voran -- muss unabhaengig vom 5s-Logistics-
+-- Zyklus regelmaessig laufen, sonst wuerde eine laufende Transaktion nie
+-- ueber WAIT_SETTLE/HOLD_OPEN hinauskommen.
+-- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
+-- Quiesce-Handler. Nutzt dieselbe bereits vorhandene, getestete
+-- shutdown_now()-Funktion, die REPROCESSOR ueber cancel() schon fuer
+-- MASTER-Staleness verwendet (blockiert alle bekannten Ventile -- lokal
+-- UND wireless -- und bricht eine laufende Transaktion sofort ab).
+-- shutdown_now() ist fire-and-forget (kein Rueckgabewert), daher wird der
+-- sichere Zustand ueber get_active_transaction()==nil bestaetigt (danach
+-- synchron geloescht) -- dieselbe Bestaetigungsqualitaet, die REPROCESSORs
+-- eigener standby-Mechanismus fuer denselben Zweck bereits hat.
+local quiesce_handshake = _G.__xreactor_update_handshake
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   get_router():tick()
-end)
+  get_rs_router():tick()
+end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
+  local rs_router = get_rs_router()
+  rs_router:shutdown_now("UPDATE_QUIESCE")
+  return rs_router:get_active_transaction() == nil
+end } or nil)

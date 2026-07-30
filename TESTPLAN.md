@@ -1,19 +1,21 @@
-# Testplan (aktueller Stand)
+# Testplan (aktueller Stand — v358)
 
-## Install/Update
-1. **Fresh Install (lokal)**: `installer` starten, Rolle wählen, Abschluss prüfen (`Installation complete` im Installer-Log).
-   - Standalone-Fall prüfen: nur Root-`installer` vorhanden, `/xreactor/installer_*.lua` fehlt initial, Installer bootstrappt Module selbst und läuft anschließend durch.
-2. **Update (lokal)**: `installer` -> `Update`; Rolle wird aus `/xreactor/config/role.lua` übernommen.
-3. **Storage-Preflight**: im Installer-Log müssen Free/Payload/Growth/Stage-Peak/Buffer-Werte protokolliert werden; bei Low-Space sauberer Abbruch mit konkreter Meldung.
-4. **Stage/Backup/Activation/Commit**:
-   - Stage-Aufbau in `/xreactor_stage`
-   - Aktivbestand nach `/xreactor_backup_prev`
-   - Activate: Stage-Aktivierung auf `/xreactor`
-   - Backup-Entfernung nach erfolgreichem Commit.
-5. **Startup-Verhalten**: `/startup` wird nur überschrieben, wenn es als XReactor-Startup erkannt wird; fremde Startups bleiben erhalten.
-6. **Config-Erhalt beim Update**: bestehende `/xreactor/config/*` bleibt wirksam (durch Copy nach Stage).
-7. **`fs.getFreeSpace()` Sonderfall**: Preflight akzeptiert `number` sowie `"unlimited"` robust (kein Typfehler/Abbruch durch Stringwert).
-8. **Manifest/Remote-Konsistenz vor Rollout**:
+## Install/Update (aktualisiert: monolithischer Installer, Delete+Reinstall statt Stage/Backup)
+1. **Fresh Install (lokal)**: `wget .../beta/installer` + `installer` starten, Rolle wählen, Abschluss prüfen (Dateianzahl + Reboot im Installer-Log).
+   - Der Installer ist ein einziges Root-Skript; es bootstrappt die `installer/*.lua`-Module selbst aus eingebetteten Long-Strings — kein separates `installer_main.lua` mehr nötig.
+2. **Reinstall (lokal)**: `installer` erneut starten; Rolle wird aus `/xreactor/config/role.lua` erkannt und vorgeschlagen.
+3. **role.lua-Erhalt bei Reinstall** *(neu, 2026-06-30)*: vor dem Löschen von `/xreactor` muss `role.lua` zwischengespeichert und danach sofort wiederhergestellt werden — auch wenn der restliche Install-Vorgang danach fehlschlägt/abgebrochen wird, muss ein erneuter Installer-Lauf die Rolle noch kennen.
+4. **Delete+Reinstall statt Stage/Backup** *(geändert, 2026-06-30)*: der alte Stage/Backup/Activate-Mechanismus (`/xreactor_stage`, `/xreactor_backup_prev`) existiert nicht mehr. `/xreactor` wird komplett gelöscht und direkt neu beschrieben. Test: bei großen Rollen (MASTER, RT) darf während der Installation kein doppelter Speicherplatzbedarf (alt+neu gleichzeitig) entstehen.
+5. **Startup-Verhalten**: `/startup` wird vom Installer geschrieben (XReactor-Boot-Eintrag).
+6. **Manifest-Vollständigkeit pro Rolle** *(neu, 2026-06-30)*: für jede Rolle inkl. LOG/LOG_COLLECTOR muss `files_for_role()` alle tatsächlich benötigten Dateien liefern — Regressionsfall: LOG erhielt durch eine fehlerhafte Bedingung (`if not is_log then`) lange Zeit nur ~11 Dateien ohne sein eigenes `nodes/log_collector/main.lua`. Bei jeder Änderung an `files_for_role()` Dateianzahl pro Rolle gegenprüfen.
+7. **size_bytes-Konsistenz im Manifest** *(neu, 2026-06-30)*: Installer bricht mit `size mismatch` ab, wenn `manifest.lua`-`size_bytes` nicht zur tatsächlichen Dateigröße auf GitHub passt. Bei jeder Änderung einer manifestierten Datei muss `size_bytes` mitgezogen werden, sonst schlägt die Installation für alle Nodes fehl, die diese Datei brauchen.
+8. **Auto-Update-Loop** *(neu, 2026-06-30)*:
+   - Läuft als zweiter Thread in `parallel.waitForAny(node_thread, auto_update_loop)` auf jedem Node, inkl. RT.
+   - Erster Check nach 30s, danach alle 120s.
+   - Versions-Bump in `manifest.lua`+`release.lua` muss innerhalb des nächsten Intervalls einen automatischen Download+Reinstall+Reboot auf allen betroffenen Nodes auslösen.
+   - **Regressionsfall RT**: `resolve_sha()` (Zusatz-Call gegen `api.github.com`) konnte den Async-HTTP-Wait in `parallel`-Coroutinen auf event-intensiven Nodes (RT) zum Hängen bringen (`Versuch 1/3` ohne Folge-Log). Fix: kein `api.github.com`-Call mehr im Update-Check-Pfad, nur noch direkte `raw.githubusercontent.com/.../beta/...`-Fetches. Bei jeder Änderung an `auto_update.lua` erneut auf allen Rollen (insb. RT) gegentesten, nicht nur auf ENERGY/LOG.
+   - `shell.run()` darf in `auto_update.lua` und im `dofile(entry)`-Aufruf in `start.lua` nicht verwendet werden (nicht verfügbar in `parallel`-Coroutinen) — Regressionsfall führte zu `attempt to index global 'shell' (a nil value)` bzw. `No such program`.
+9. **Manifest/Remote-Konsistenz vor Rollout**:
    - `python3 scripts/manifest_sync.py` muss `Consistency: OK` liefern.
    - Nach Publish muss `python3 scripts/verify_remote_manifest.py --base-url <published-xreactor-url> --check-local --expected-manifest xreactor/manifest.lua --require-path shared/build_info.lua` grün sein.
    - Damit werden sowohl Dateiinhalte (hash/size) als auch der veröffentlichte Manifest-Stand gegen den lokalen Release-Kandidaten geprüft.
@@ -105,6 +107,26 @@
    - `python3 tests/rt_main_parse_guard_test.py`
 4. **Optional lokal mit Lua-Interpreter**: ausgewählte `.lua`-Regressionen für Installer/MASTER/ENERGY/Support ergänzend ausführen.
 5. **Wichtig**: `tests/rt_main_structure_guard_test.py` ist ein RT-Größen-Guard und gehört in einen separaten RT-Audit-Track (kein Non-RT-Abschlusskriterium).
+
+## Setpoint-Fluss (gelöst, 2026-06-30/07-01 — jetzt aktiv testen statt als unzuverlässig zu behandeln)
+Zwei reale Bugs (siehe MIGRATION.md → "Historisch gelöste Probleme") wurden gefunden und behoben:
+1. **capacity_max/capacity_ready Feld-Reihenfolge** in `populate_rt_status()` — Test: nach STATUS-Empfang muss `node.capacity_max`/`capacity_ready` den Stand aus dem GERADE eingetroffenen Payload zeigen, nicht den vorherigen.
+2. **PEAK-Profil Basisleistung** — bei PEAK muss `estimate_base_power()` `learned_capacity_total` bevorzugen, nicht den aktuell gemessenen (ggf. gedrosselten) Output. Test: `power_target` soll nach einem Wechsel auf PEAK innerhalb der nächsten periodischen Neuberechnung (alle ~30s) Richtung gelernter Maximalkapazität steigen, nicht auf dem Stand zum Zeitpunkt des Profilwechsels einfrieren.
+
+Bis ein dedizierter Regressionstest existiert, gilt: manuelle Verifikation über Master-Overview (`Soll` vs. `Ist` RF/t, sollten sich bei PEAK und ausreichender Kapazität annähern) nach jeder Änderung an `rt_sync.lua` oder `runtime_ops_profile.lua`.
+
+## UI-Redesign (2026-07-07)
+1. **layout.badge_row()** (`master/ui/layout.lua`): bei beliebig vielen/langen Badges darf die Gesamtbreite NIE die Monitorbreite überschreiten. Test: künstlich viele/lange Badge-Labels übergeben, prüfen dass Kürzung/Priorisierung greift statt Überlappung.
+2. **Overview RT-Fleet-Summary**: `overview.rt_fleet_summary` muss `active`/`total`/`assignment`/`status` konsistent mit der echten RT-View zeigen (kein separater, potenziell abweichender Berechnungspfad).
+3. **Ampel-Monitor Isolation**: absichtlicher Fehlertest — Ampel-Monitor abklemmen/entfernen während RT läuft, Hauptmonitor darf davon UNBEEINFLUSST bleiben (keine eingefrorene/verzerrte Anzeige). Ein früherer, ungetesteter erster Versuch dieses Features hatte genau das nicht sichergestellt und legte beim Fehlschlagen die komplette RT-Anzeige lahm.
+4. **node.rt Merge statt Replace**: bei jedem STATUS-Tick müssen bereits vom UI-Layer in `node.rt` geschriebene Felder (z. B. `assignment_state`) erhalten bleiben, dürfen nicht durch das frische Payload komplett überschrieben werden.
+5. **assigned_power/assigned_percent Persistenz**: `node.assigned_power` muss nach jedem `rt_sync.lua`-Durchlauf gesetzt sein für jeden Node im `active`-Array — Regressionsfall zeigte 0.0 auf jeder RT-Card trotz korrektem globalen Soll.
+
+## Turbinen-Log-Rate-Limiting (2026-07-07)
+"Overspeed brake pending" darf max. 1x pro 5s pro Turbine geloggt werden (`ctrl.last_overspeed_log_ms`). Regressionsfall: ungedrosselte Warnung flutete den Log-Ringpuffer (nur 1000 Zeilen) komplett innerhalb weniger Sekunden und verdrängte andere, wichtigere Log-Einträge (SET_SETPOINTS, ReactorCtrl-Änderungen).
+
+## Repo-Hygiene (2026-07-07)
+9 Tests für den mittlerweile ersetzten Stage-basierten Installer-Mechanismus (`tests/installer_stage_install_behavior_test.lua` und weitere, die direkt `xreactor/installer_main.lua`/`installer_stage.lua`/etc. vom Dateisystem lasen) wurden zusammen mit den referenzierten toten Dateien gelöscht. `tests/master_shipped_lua_parse_guard_test.py` hatte eine tote Referenz auf `xreactor/installer_manifest.lua` und wurde auf die aktuelle Datei `xreactor/installer/manifest.lua` korrigiert statt gelöscht (der Test selbst — ein generischer Parse-/Patch-Artefakt-Guard über das gesamte `xreactor/`-Verzeichnis — bleibt wertvoll). `tools/offline_validate.lua` (läuft in der CI bei jedem Push) hatte einen `required`-Dateien-Check, der die 6 gelöschten Dateien weiterhin als Pflicht voraussetzte und bei jedem folgenden Lauf fehlgeschlagen wäre — korrigiert.
 
 ## Audit-Protokoll (2026-04-27)
 
