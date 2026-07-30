@@ -1,4 +1,4 @@
-name: Offline Lua Checks
+name: Offline CI
 
 on:
   push:
@@ -7,22 +7,161 @@ on:
     branches: [ main, beta ]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
 jobs:
-  offline-checks:
+  # ── Job 1: Repository-Integrität ──────────────────────────────────────────
+  repository-integrity:
+    name: Repository-Integrität
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Install Lua 5.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Pflichtdateien prüfen
         run: |
-          sudo apt-get update
-          sudo apt-get install -y lua5.2
-      - name: Run offline validator
+          required=(
+            "installer"
+            "xreactor/start.lua"
+            "xreactor/manifest.lua"
+            "xreactor/release.lua"
+            "xreactor/installer/auto_update.lua"
+            "xreactor/installer/http.lua"
+            "xreactor/installer/init.lua"
+            "tests/known_failing_lua_tests.txt"
+            "tests/known_failing_python_tests.txt"
+            "tests/skip_budget.txt"
+            "CI_MASTER_PLAN.md"
+            "AGENTS.md"
+          )
+          fail=0
+          for f in "${required[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "FEHLT: $f" >&2
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "Alle Pflichtdateien vorhanden."
+          exit $fail
+
+      - name: Keine Merge-Konfliktmarker
         run: |
-          lua5.2 tools/offline_validate.lua
-      - name: Run functional Lua tests
+          if grep -rn "^<<<<<<< " --include="*.lua" --include="*.py" --include="*.md" --include="*.yml" .; then
+            echo "Merge-Konfliktmarker gefunden!" >&2; exit 1
+          fi
+          echo "Keine Konfliktmarker."
+
+      - name: Shell-Skripte syntaktisch prüfen
         run: |
-          bash tools/run_lua_tests.sh lua5.2
-      - name: Run functional Python tests
+          fail=0
+          for f in tools/*.sh; do
+            bash -n "$f" || { echo "FEHLER in $f" >&2; fail=1; }
+          done
+          exit $fail
+
+      - name: Python-Dateien kompilieren
+        run: python3 -m compileall tools/ scripts/ tests/*.py -q
+
+  # ── Job 2: Lua-Syntax ─────────────────────────────────────────────────────
+  lua-syntax:
+    name: Lua-Syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Lua 5.2 installieren
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.2
+
+      - name: Alle Lua-Dateien parsen
+        run: lua5.2 tools/offline_validate.lua
+
+  # ── Job 3: Manifest- und Release-Integrität ───────────────────────────────
+  manifest-integrity:
+    name: Manifest & Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Manifest-Hashes prüfen
+        run: python3 scripts/manifest_sync.py --check
+
+      - name: Changed-Files-Guard
         run: |
-          bash tools/run_python_tests.sh python3
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          HEAD="${{ github.sha }}"
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ]; then
+            python3 tests/manifest_changed_files_guard_test.py --base "$BASE" --head "$HEAD" || exit 1
+          else
+            echo "Kein Basis-Commit verfuegbar — Pruefung uebersprungen."
+          fi
+
+  # ── Job 4: Skip-Policy ────────────────────────────────────────────────────
+  skip-policy:
+    name: Skip-Policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Testinventar erzeugen
+        run: python3 tools/list_tests.py
+
+      - name: Skip-Listen validieren
+        run: python3 tools/validate_skip_lists.py
+
+      - name: Inventory als Artefakt speichern
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549e0f5d4ced429  # v4.6.0
+        if: always()
+        with:
+          name: test-inventory
+          path: test-inventory.json
+
+  # ── Job 5: Lua-Tests ──────────────────────────────────────────────────────
+  lua-tests:
+    name: Lua-Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [lua-syntax]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Lua 5.2 installieren
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.2
+
+      - name: Lua-Tests ausführen
+        run: bash tools/run_lua_tests.sh lua5.2
+
+  # ── Job 6: Python-Tests ───────────────────────────────────────────────────
+  python-tests:
+    name: Python-Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [repository-integrity]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Python-Tests ausführen
+        run: bash tools/run_python_tests.sh python3
