@@ -1,5 +1,23 @@
 # AGENTS.md
 
+## Verbindliche CI-Unterlagen
+
+Bei jeder Arbeit an CI, Tests, Simulator, Installer, Manifest, Release oder Deployment müssen vor der Änderung vollständig gelesen werden:
+
+- [`CI_MASTER_PLAN.md`](CI_MASTER_PLAN.md) — kanonisches Zielbild, Sicherheitsregeln, Testarchitektur und Quellen
+- [`CI_IMPLEMENTATION_BACKLOG.md`](CI_IMPLEMENTATION_BACKLOG.md) — verbindliche Reihenfolge und Definition-of-Done
+- [`TESTPLAN.md`](TESTPLAN.md) — bestehende fachliche Regressionen und manuelle Szenarien
+
+Für Coding-Agenten gilt zusätzlich:
+
+- keine spätere Backlog-Phase vorziehen, wenn dadurch ein paralleler oder toter Testpfad entsteht
+- keine Produktivlogik im Simulator kopieren; der Simulator stellt nur Umgebung und Peripherien bereit
+- kein kritischer Skip ohne klar dokumentierten bekannten Fehler und Release-Blockade
+- kein Abschlussstatus ohne tatsächlich ausgeführte Prüfungen
+- CI-Härtung, Syntax-, Manifest- und Releasechecks bleiben erhalten; Game-Simulation ist eine zusätzliche Schicht
+
+---
+
 ## Projektprinzipien
 
 ### 1. Verhalten und Stabilität zuerst
@@ -93,6 +111,8 @@ Wenn der Codezustand oder der Abschlussstatus verändert wird, müssen bei Bedar
 - `README.md`
 - `MIGRATION.md`
 - `TESTPLAN.md`
+- `CI_MASTER_PLAN.md`
+- `CI_IMPLEMENTATION_BACKLOG.md`
 - projektspezifische Closeout- oder Statusdokumente
 
 Dokumentation darf nur echten Stand abbilden.
