@@ -59,7 +59,6 @@ master_ui_shutdown_field_semantic_contract_test.lua # CONTENT_DRIFT
 network_modem_detection_test.lua # NEEDS_MOCK (peripheral-Autodetect ohne echtes Peripheral-Mock)
 reactor_control_rods_regression_test.lua # CONTENT_DRIFT
 reactor_rod_config_clamp_regression_test.lua # STALE_API (regulator_min_rods laut config.lua-Kommentar bewusst entfernt)
-release_metadata_consistency_test.lua # STALE_API (installer_core_hash wird nur bei stamp_release_metadata.py-Releases gesetzt, nicht im bewegten beta-Branch)
 rt_command_shutdown_ack_semantics_test.lua # CONTENT_DRIFT
 rt_command_shutdown_semantics_regression_test.lua # CONTENT_DRIFT
 rt_command_shutdown_transition_test.lua # CONTENT_DRIFT
