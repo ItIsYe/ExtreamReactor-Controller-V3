@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 480,
-  manifest_id = "manifest-v480",
+  manifest_version = 481,
+  manifest_id = "manifest-v481",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always=true },
   { path = "installer/journal.lua", size_bytes = 11987, hash = "ae694c83", always=true },
   { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always=true },
-  { path = "release.lua", size_bytes = 345, hash = "c164fd5b", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true},
+  { path = "release.lua", size_bytes = 345, hash = "2041a2dc", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
   { path = "start.lua", size_bytes = 13840, hash = "11e88196", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -164,7 +164,7 @@ return {
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 3983, hash = "0dee3a0d", required_for={"RT"} },
     { path = "nodes/rt/capacity_cache.lua", size_bytes = 2657, hash = "c51d7bd1", required_for={"RT"} },
     { path = "nodes/rt/config.lua", size_bytes = 5675, hash = "b4adbfb4", required_for={"RT"} },
-    { path = "nodes/rt/config_normalizer.lua", size_bytes = 27015, hash = "5452b394", required_for={"RT"} },
+    { path = "nodes/rt/config_normalizer.lua", size_bytes = 27009, hash = "be5c4de6", required_for={"RT"} },
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"} },
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 13926, hash = "98be547a", required_for={"RT"} },
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 6519, hash = "2e07b58d", required_for={"RT"} },
