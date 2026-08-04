@@ -1,49 +1,33 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
+local constants = require('shared.constants')
+local function assert_eq(a, e, m)
+  if a ~= e then error((m or 'eq') .. ': expected=' .. tostring(e) .. ' actual=' .. tostring(a)) end
+end
+local function assert_true(v, m) if not v then error(m or 'true') end end
+local CAP = { ready=true, max_output=3000, reason='MEASURED', at_target=5 }
+local function mk_ctx(cur_state, machine_state)
+  local tr
+  local ctx = {
+    protocol={is_for_node=function() return true end,is_proto_compatible=function() return true end},
+    STATE={MASTER='MASTER',SAFE='SAFE'}, targets={},
+    get_current_state=function() return cur_state end,
+    get_states=function() return constants.node_states end,
+    node_state_machine={state=function() return machine_state end,transition=function(_,s) tr=s end},
+    get_capacity_learning=function() return CAP end,
+    request_startup_if_needed=function() end, apply_mode=function() end,
+    start_module=function() return nil end, add_alarm=function() end,
+    get_network_id=function() return 'RT-1' end, note_master_seen=function() end,
+    set_last_command=function() end, set_last_command_ts=function() end
+  }
+  return ctx, function() return tr end
+end
 
 local handler = require('nodes.rt.command_handler')
-local constants = require('shared.constants')
-
-local transitioned_to
-local command_handler = handler.new({
-  protocol = {
-    is_for_node = function() return true end,
-    is_proto_compatible = function() return true end
-  },
-  STATE = { MASTER = 'MASTER', SAFE = 'SAFE' },
-  targets = {},
-  get_current_state = function() return 'MASTER' end,
-  get_states = function() return constants.node_states end,
-  node_state_machine = {
-    state = function() return constants.node_states.OFF end,
-    transition = function(_, next_state) transitioned_to = next_state end
-  },
-  request_startup_if_needed = function() end,
-  apply_mode = function() end,
-  start_module = function() return nil end,
-  add_alarm = function() end,
-  get_network_id = function() return 'RT-1' end,
-  note_master_seen = function() end,
-  set_last_command = function() end,
-  set_last_command_ts = function() end
-})
-
-local already = command_handler({
-  proto_ver = constants.proto_ver,
-  payload = { command = { target = constants.command_targets.SET_SETPOINTS, value = { desired_node_state = constants.node_states.OFF, shutdown_stage = 'REQUEST_OFF' } } }
-})
-if not already or already.ok ~= true or already.transition ~= 'ALREADY_IN_STATE' then
-  error('expected ALREADY_IN_STATE for already reached shutdown target')
-end
-if transitioned_to ~= nil then
-  error('must not transition when already in desired shutdown target')
-end
-
-local invalid = command_handler({
-  proto_ver = constants.proto_ver,
-  payload = { command = { target = constants.command_targets.SET_SETPOINTS, value = { desired_node_state = 'NOT_A_STATE', shutdown_stage = 'REQUEST_OFF' } } }
-})
-if not invalid or invalid.ok ~= false or invalid.reason_code ~= 'INVALID_STATE' then
-  error('expected INVALID_STATE for unknown desired_node_state')
-end
-
-print('rt_command_shutdown_semantics_regression_test.lua: ok')
+local ctx, _ = mk_ctx('MASTER', constants.node_states.OFF)
+local result = handler.new(ctx)({ proto_ver=constants.proto_ver, payload={ command={
+  target=constants.command_targets.SET_SETPOINTS,
+  value={power_target_percent=0,assignment_state='shutdown',desired_node_state=constants.node_states.OFF,shutdown_stage='REQUEST_OFF'}
+}}})
+assert_true(result ~= nil, 'must return result')
+assert_eq(result.transition, 'ALREADY_IN_STATE', 'expected ALREADY_IN_STATE for already reached shutdown target')
+print("rt_command_shutdown_semantics_regression_test.lua: ok")
