@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 481,
-  manifest_id = "manifest-v481",
+  manifest_version = 482,
+  manifest_id = "manifest-v482",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always=true },
   { path = "installer/journal.lua", size_bytes = 11987, hash = "ae694c83", always=true },
   { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always=true },
-  { path = "release.lua", size_bytes = 345, hash = "2041a2dc", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
+  { path = "release.lua", size_bytes = 345, hash = "d85f4414", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
   { path = "start.lua", size_bytes = 13840, hash = "11e88196", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -167,7 +167,7 @@ return {
     { path = "nodes/rt/config_normalizer.lua", size_bytes = 27009, hash = "be5c4de6", required_for={"RT"} },
     { path = "nodes/rt/discovery_log.lua", size_bytes = 1080, hash = "7d9ceb62", required_for={"RT"} },
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 13926, hash = "98be547a", required_for={"RT"} },
-    { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 6519, hash = "2e07b58d", required_for={"RT"} },
+    { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 6878, hash = "b1b73ffe", required_for={"RT"} },
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
     { path = "nodes/rt/main.lua", size_bytes = 60817, hash = "b86ab270", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27809, hash = "1b235e40", required_for={"RT"} },
