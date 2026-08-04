@@ -63,8 +63,6 @@ rt_command_shutdown_ack_semantics_test.lua # CONTENT_DRIFT
 rt_command_shutdown_semantics_regression_test.lua # CONTENT_DRIFT
 rt_command_shutdown_transition_test.lua # CONTENT_DRIFT
 rt_command_shutdown_workflow_semantics_test.lua # CONTENT_DRIFT
-rt_config_normalizer_rod_limits_test.lua # CONTENT_DRIFT (haengt vermutlich mit reactor_rod_config_clamp_regression_test.lua zusammen)
-rt_config_normalizer_steam_guard_test.lua # CONTENT_DRIFT
 rt_control_tick_wiring_regression_test.lua # STALE_API (adjust_turbines-Funktion existiert nicht mehr unter diesem Namen)
 rt_dashboard_shutdown_verdict_semantics_test.lua # STALE_API (verdict = "REQUESTED" Token erwartet)
 rt_flow_apply_helpers_readback_lag_regression_test.lua # CONTENT_DRIFT
