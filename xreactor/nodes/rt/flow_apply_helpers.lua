@@ -97,30 +97,36 @@ function M.update_turbine_flow_tracking(ctrl, requested_flow, confirmed_flow, fl
   if type(previous_requested) ~= "number" then
     previous_requested = ctrl.last_requested_flow
   end
-  local pending_settled = turbine_regulator.flows_match(ctrl.pending_expected_flow, confirmed_flow, flow_tolerance)
   local write_accepted = write_state == "WRITE_ACCEPTED"
-  if write_accepted and previous_requested ~= requested_flow then
-    ctrl.pending_flow_since = now_ts
+  local new_write = write_accepted and previous_requested ~= requested_flow
+  if new_write then
+    -- Neuer Zielwert: Tracking reset, pending_settled gegen neuen Zielwert prüfen
+    ctrl.pending_flow_since   = now_ts
     ctrl.pending_expected_flow = requested_flow
-    ctrl.pending_retries = 0
-    ctrl.pending_retry_stage = 0
-  elseif not pending_settled then
+    ctrl.pending_retries      = 0
+    ctrl.pending_retry_stage  = 0
+  end
+  -- pending_settled nach möglichem Reset berechnen
+  local pending_settled = turbine_regulator.flows_match(ctrl.pending_expected_flow, confirmed_flow, flow_tolerance)
+  if pending_settled and not new_write then
+    -- Zielwert bestätigt: Tracking bereinigen
+    ctrl.pending_retries      = 0
+    ctrl.pending_retry_stage  = 0
+    ctrl.pending_flow_since   = 0
+    ctrl.pending_expected_flow = requested_flow
+  elseif not pending_settled and not new_write then
+    -- Noch ausstehend: Timeout-Stages hochzählen
     local settle_timeout_s = tonumber(rail_cfg and rail_cfg.settle_timeout_s) or 0
-    local pending_since = tonumber(ctrl.pending_flow_since) or now_ts
-    local pending_age = math.max(0, now_ts - pending_since)
+    local pending_since    = tonumber(ctrl.pending_flow_since) or now_ts
+    local pending_age      = math.max(0, now_ts - pending_since)
     if settle_timeout_s > 0 then
       local retry_stage = math.floor(pending_age / settle_timeout_s)
       ctrl.pending_retry_stage = retry_stage
-      ctrl.pending_retries = retry_stage
+      ctrl.pending_retries     = retry_stage
     elseif write_accepted then
-      ctrl.pending_retries = (ctrl.pending_retries or 0) + 1
+      ctrl.pending_retries     = (ctrl.pending_retries or 0) + 1
       ctrl.pending_retry_stage = ctrl.pending_retries
     end
-  else
-    ctrl.pending_retries = 0
-    ctrl.pending_retry_stage = 0
-    ctrl.pending_flow_since = 0
-    ctrl.pending_expected_flow = requested_flow
   end
 
   local effective_min_samples = rail_cfg.effective_min_samples or 3
