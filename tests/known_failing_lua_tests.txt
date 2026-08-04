@@ -59,10 +59,6 @@ master_ui_shutdown_field_semantic_contract_test.lua # CONTENT_DRIFT
 network_modem_detection_test.lua # NEEDS_MOCK (peripheral-Autodetect ohne echtes Peripheral-Mock)
 reactor_control_rods_regression_test.lua # CONTENT_DRIFT
 reactor_rod_config_clamp_regression_test.lua # STALE_API (regulator_min_rods laut config.lua-Kommentar bewusst entfernt)
-rt_command_shutdown_ack_semantics_test.lua # CONTENT_DRIFT
-rt_command_shutdown_semantics_regression_test.lua # CONTENT_DRIFT
-rt_command_shutdown_transition_test.lua # CONTENT_DRIFT
-rt_command_shutdown_workflow_semantics_test.lua # CONTENT_DRIFT
 rt_control_tick_wiring_regression_test.lua # STALE_API (adjust_turbines-Funktion existiert nicht mehr unter diesem Namen)
 rt_dashboard_shutdown_verdict_semantics_test.lua # STALE_API (verdict = "REQUESTED" Token erwartet)
 rt_module_lifecycle_control_rod_caps_test.lua # NEEDS_MOCK (evaluate_reactor_coolant im Test-Stub nicht bereitgestellt)
@@ -71,12 +67,12 @@ rt_monitor_ui_init_regression_test.lua # CONTENT_DRIFT
 rt_safety_causality_logging_test.lua # CONTENT_DRIFT
 rt_schema_ctx_guard_test.lua # CONTENT_DRIFT
 rt_startup_diagnostics_timeout_test.lua # NEEDS_MOCK (set_active_startup im Test-Stub nicht bereitgestellt)
-rt_sync_ack_applied_no_resend_semantics_test.lua # CONTENT_DRIFT
-rt_sync_ack_dedupe_regression_test.lua # CONTENT_DRIFT
-rt_sync_dedupe_ack_guard_test.lua # CONTENT_DRIFT
-rt_sync_demand_sequencing_test.lua # CONTENT_DRIFT
+rt_sync_ack_applied_no_resend_semantics_test.lua # STALE_STRUCTURE
+rt_sync_ack_dedupe_regression_test.lua # STALE_STRUCTURE
+rt_sync_dedupe_ack_guard_test.lua # STALE_STRUCTURE
+rt_sync_demand_sequencing_test.lua # STALE_STRUCTURE
 rt_sync_global_off_hold_test.lua # CONTENT_DRIFT
-rt_sync_multi_reason_dedupe_semantics_test.lua # CONTENT_DRIFT
+rt_sync_multi_reason_dedupe_semantics_test.lua # STALE_STRUCTURE
 rt_sync_per_node_distribution_test.lua # CONTENT_DRIFT
 rt_sync_shutdown_startup_state_test.lua # CONTENT_DRIFT
 rt_turbine_readback_source_regression_test.lua # STALE_API (read_turbine_flow-Funktion existiert unter anderem Namen/Pfad)
