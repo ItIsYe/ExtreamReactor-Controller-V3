@@ -1,0 +1,16 @@
+local M=dofile("tests/sim/models/turbine.lua")
+local function A(a,e,m) if a~=e then error((m or"eq")..": exp="..tostring(e).." act="..tostring(a)) end end
+local function T(v,m) if not v then error(m or"true") end end
+local t=M.new({initial_rpm=0,initial_flow=0}); A(t.getRotorSpeed(),0,"rpm 0"); T(t.getActive(),"active")
+local t2=M.new({initial_rpm=500}); t2.setActive(false); t2.tick();t2.tick();t2.tick()
+T(t2.getRotorSpeed()<500,"rpm falls")
+local t3=M.new({initial_rpm=0}); t3.setFluidFlowRateTarget(2000)
+for _=1,100 do t3.tick() end; T(t3.getRotorSpeed()>0,"rpm rises"); T(t3.getFluidFlowRate()>0,"flow")
+local t4=M.new({initial_rpm=0,coil_engage_rpm=100,target_rpm=200}); t4.setFluidFlowRateTarget(2000)
+for _=1,200 do t4.tick() end; T(t4.isCoilEngaged() or t4.getRotorSpeed()>=100,"coil")
+local t5=M.new({initial_rpm=900}); t5.setCoilEngaged(true); T(t5.getEnergyProduced()>0,"energy")
+t5.setCoilEngaged(false); A(t5.getEnergyProduced(),0,"no energy")
+t5.setActive(false); A(t5.getActive(),false); t5.setActive(true); A(t5.getActive(),true)
+local t7=M.new(); t7.setFluidFlowRateTarget(99999); A(t7.getFluidFlowRateTarget(),t7.getFluidFlowRateMax(),"clamp max")
+t7.setFluidFlowRateTarget(-100); A(t7.getFluidFlowRateTarget(),0,"clamp 0")
+print("sim_turbine_model_test.lua: ok")
