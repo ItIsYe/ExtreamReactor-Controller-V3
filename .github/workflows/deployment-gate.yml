@@ -2,9 +2,9 @@ name: deployment-gate
 
 on:
   push:
-    branches: [main, "release/**"]
+    branches: [beta, main, "release/**"]
   pull_request:
-    branches: [main]
+    branches: [beta, main]
   workflow_dispatch:
     inputs:
       target_ref:
