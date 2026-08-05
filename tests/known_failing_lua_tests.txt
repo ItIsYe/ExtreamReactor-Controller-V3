@@ -64,19 +64,14 @@ rt_dashboard_shutdown_verdict_semantics_test.lua # STALE_API (verdict = "REQUEST
 rt_module_lifecycle_control_rod_caps_test.lua # NEEDS_MOCK (evaluate_reactor_coolant im Test-Stub nicht bereitgestellt)
 rt_monitor_ui_adapter_snapshot_test.lua # NEEDS_MOCK (echtes peripheral-Global erwartet)
 rt_monitor_ui_init_regression_test.lua # CONTENT_DRIFT
-rt_safety_causality_logging_test.lua # CONTENT_DRIFT
-rt_schema_ctx_guard_test.lua # CONTENT_DRIFT
+rt_schema_ctx_guard_test.lua # STALE_STRUCTURE
 rt_startup_diagnostics_timeout_test.lua # NEEDS_MOCK (set_active_startup im Test-Stub nicht bereitgestellt)
 rt_sync_ack_applied_no_resend_semantics_test.lua # STALE_STRUCTURE
 rt_sync_ack_dedupe_regression_test.lua # STALE_STRUCTURE
 rt_sync_dedupe_ack_guard_test.lua # STALE_STRUCTURE
 rt_sync_demand_sequencing_test.lua # STALE_STRUCTURE
-rt_sync_global_off_hold_test.lua # CONTENT_DRIFT
 rt_sync_multi_reason_dedupe_semantics_test.lua # STALE_STRUCTURE
-rt_sync_per_node_distribution_test.lua # CONTENT_DRIFT
-rt_sync_shutdown_startup_state_test.lua # CONTENT_DRIFT
 rt_turbine_readback_source_regression_test.lua # STALE_API (read_turbine_flow-Funktion existiert unter anderem Namen/Pfad)
 rt_turbine_tick_coverage_regression_test.lua # STALE_API (TurbineTick-Logzeile wurde entfernt/geaendert, siehe LOG-P1-Historie)
-runtime_identity_logging_test.lua # CONTENT_DRIFT
 startup_logger_nonfatal_test.lua # NEEDS_MOCK
 wrapped_peripheral_guard_test.lua # NEEDS_MOCK (core/registry.lua braucht echtes fs-Global)
