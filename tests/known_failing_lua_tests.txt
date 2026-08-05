@@ -64,7 +64,6 @@ rt_dashboard_shutdown_verdict_semantics_test.lua # STALE_API (verdict = "REQUEST
 rt_module_lifecycle_control_rod_caps_test.lua # NEEDS_MOCK (evaluate_reactor_coolant im Test-Stub nicht bereitgestellt)
 rt_monitor_ui_adapter_snapshot_test.lua # NEEDS_MOCK (echtes peripheral-Global erwartet)
 rt_monitor_ui_init_regression_test.lua # CONTENT_DRIFT
-rt_schema_ctx_guard_test.lua # STALE_STRUCTURE
 rt_startup_diagnostics_timeout_test.lua # NEEDS_MOCK (set_active_startup im Test-Stub nicht bereitgestellt)
 rt_sync_ack_applied_no_resend_semantics_test.lua # STALE_STRUCTURE
 rt_sync_ack_dedupe_regression_test.lua # STALE_STRUCTURE
