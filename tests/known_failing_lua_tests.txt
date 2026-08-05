@@ -30,15 +30,9 @@
 
 comms_peer_retention_cleanup_test.lua # NEEDS_MOCK (Logger-Backend meldet degraded ohne echtes Dateisystem)
 comms_stability_defaults_regression_test.lua # STALE_API (DEFAULT_COMMS_PEER_DOWN_GRACE existiert unter diesem Namen nicht mehr)
-energy_architecture_stability_regression_test.lua # STALE_STRUCTURE  -- Energy-Node matrix runtime invalidation Logic geaendert
-energy_discovery_hot_path_gating_test.lua # STALE_STRUCTURE  -- services.discovery_service Gating-Logik geaendert
 energy_master_connection_scope_regression_test.lua # STALE_API (master_peer_state Forward-Declaration erwartet)
-energy_matrix_component_logging_regression_test.lua # STALE_STRUCTURE  -- matrix_snapshot_runtime component-cache API geaendert
-energy_matrix_payload_cache_regression_test.lua # STALE_STRUCTURE  -- matrix grouping/payload-cache API geaendert
-energy_matrix_single_group_budget_regression_test.lua # STALE_STRUCTURE  -- matrix_snapshot_runtime single-group budget API geaendert
 lifecycle_logging_contract_guard_test.lua # STALE_API (erwartet woertlichen "Startup"-Log-Token in master/main.lua)
 logger_runtime_degraded_nonfatal_test.lua # NEEDS_MOCK
-logger_startup_policy_test.lua # STALE_STRUCTURE  -- core.logger startup_action API geaendert
 master_energy_ui_contract_test.lua # NEEDS_MOCK (widgets.lua braucht echtes monitor:clearRegion)
 master_heartbeat_recovery_from_down_test.lua # STALE_STRUCTURE  -- message_handlers API geaendert (health/status Flow)
 master_multiview_three_monitor_layout_test.lua # NEEDS_MOCK (ui/multiview.lua braucht echtes colors.panel-Setup)
@@ -54,7 +48,6 @@ master_rt_sync_idle_window_semantics_test.lua # STALE_STRUCTURE  -- rt_sync_coal
 master_shutdown_cooldown_stability_semantics_test.lua # STALE_STRUCTURE  -- shutdown cooldown Stabilitaetsfenster geaendert
 master_timeout_grace_guard_test.lua # STALE_API (erwartet woertlichen down_grace_ms-Ausdruck)
 master_ui_shutdown_field_consistency_guard_test.lua # STALE_API (shutdown_workflow_stage Token erwartet)
-master_ui_shutdown_field_semantic_contract_test.lua # STALE_STRUCTURE  -- ui_controller shutdown projection API geaendert
 network_modem_detection_test.lua # NEEDS_MOCK (peripheral-Autodetect ohne echtes Peripheral-Mock)
 reactor_rod_config_clamp_regression_test.lua # STALE_API (regulator_min_rods laut config.lua-Kommentar bewusst entfernt)
 rt_control_tick_wiring_regression_test.lua # STALE_API (adjust_turbines-Funktion existiert nicht mehr unter diesem Namen)
