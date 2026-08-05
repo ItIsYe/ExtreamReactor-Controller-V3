@@ -30,40 +30,40 @@
 
 comms_peer_retention_cleanup_test.lua # NEEDS_MOCK (Logger-Backend meldet degraded ohne echtes Dateisystem)
 comms_stability_defaults_regression_test.lua # STALE_API (DEFAULT_COMMS_PEER_DOWN_GRACE existiert unter diesem Namen nicht mehr)
-energy_architecture_stability_regression_test.lua # CONTENT_DRIFT
-energy_discovery_hot_path_gating_test.lua # CONTENT_DRIFT
+energy_architecture_stability_regression_test.lua # STALE_STRUCTURE  -- Energy-Node matrix runtime invalidation Logic geaendert
+energy_discovery_hot_path_gating_test.lua # STALE_STRUCTURE  -- services.discovery_service Gating-Logik geaendert
 energy_master_connection_scope_regression_test.lua # STALE_API (master_peer_state Forward-Declaration erwartet)
-energy_matrix_component_logging_regression_test.lua # CONTENT_DRIFT
-energy_matrix_payload_cache_regression_test.lua # CONTENT_DRIFT
-energy_matrix_single_group_budget_regression_test.lua # CONTENT_DRIFT
+energy_matrix_component_logging_regression_test.lua # STALE_STRUCTURE  -- matrix_snapshot_runtime component-cache API geaendert
+energy_matrix_payload_cache_regression_test.lua # STALE_STRUCTURE  -- matrix grouping/payload-cache API geaendert
+energy_matrix_single_group_budget_regression_test.lua # STALE_STRUCTURE  -- matrix_snapshot_runtime single-group budget API geaendert
 installer_standalone_bootstrap_test.lua # STALE_STRUCTURE (erwartet ensure_installer_runtime/installer_main.lua-Aufteilung, die es nie gab)
 lifecycle_logging_contract_guard_test.lua # STALE_API (erwartet woertlichen "Startup"-Log-Token in master/main.lua)
 logger_runtime_degraded_nonfatal_test.lua # NEEDS_MOCK
-logger_startup_policy_test.lua # CONTENT_DRIFT
+logger_startup_policy_test.lua # STALE_STRUCTURE  -- core.logger startup_action API geaendert
 master_energy_ui_contract_test.lua # NEEDS_MOCK (widgets.lua braucht echtes monitor:clearRegion)
-master_heartbeat_recovery_from_down_test.lua # CONTENT_DRIFT
+master_heartbeat_recovery_from_down_test.lua # STALE_STRUCTURE  -- message_handlers API geaendert (health/status Flow)
 master_multiview_three_monitor_layout_test.lua # NEEDS_MOCK (ui/multiview.lua braucht echtes colors.panel-Setup)
 master_overview_ui_contract_test.lua # NEEDS_MOCK (ui/overview.lua braucht echtes monitor:rightText)
-master_regression_guards_test.lua # CONTENT_DRIFT (monitor_states nil)
-master_rt_ack_dedupe_semantic_test.lua # CONTENT_DRIFT
+master_regression_guards_test.lua # STALE_STRUCTURE  -- multiview.monitor_states nicht mehr direkt exponiert
+master_rt_ack_dedupe_semantic_test.lua # STALE_STRUCTURE  -- rt_sync.sync_rt_node sendet immer (kein Client-Dedupe)
 master_rt_dashboard_ui_contract_test.lua # NEEDS_MOCK (ui/rt_dashboard.lua braucht echtes monitor:getSize)
-master_rt_shutdown_candidate_stability_semantic_test.lua # CONTENT_DRIFT
+master_rt_shutdown_candidate_stability_semantic_test.lua # STALE_STRUCTURE  -- rt_sync_coalescer API geaendert
 master_rt_shutdown_oscillation_guard_test.lua # STALE_API (shutdown_restart_cooldown_ms Token erwartet)
 master_rt_shutdown_workflow_semantic_guards_test.lua # STALE_API (workflow.stage = "REQUESTED" Token erwartet)
 master_rt_shutdown_workflow_semantics_guard_test.lua # STALE_API (RAMPDOWN Token erwartet)
-master_rt_sync_idle_window_semantics_test.lua # CONTENT_DRIFT
-master_shutdown_cooldown_stability_semantics_test.lua # CONTENT_DRIFT
+master_rt_sync_idle_window_semantics_test.lua # STALE_STRUCTURE  -- rt_sync_coalescer idle-window Semantik geaendert
+master_shutdown_cooldown_stability_semantics_test.lua # STALE_STRUCTURE  -- shutdown cooldown Stabilitaetsfenster geaendert
 master_timeout_grace_guard_test.lua # STALE_API (erwartet woertlichen down_grace_ms-Ausdruck)
 master_ui_shutdown_field_consistency_guard_test.lua # STALE_API (shutdown_workflow_stage Token erwartet)
-master_ui_shutdown_field_semantic_contract_test.lua # CONTENT_DRIFT
+master_ui_shutdown_field_semantic_contract_test.lua # STALE_STRUCTURE  -- ui_controller shutdown projection API geaendert
 network_modem_detection_test.lua # NEEDS_MOCK (peripheral-Autodetect ohne echtes Peripheral-Mock)
-reactor_control_rods_regression_test.lua # CONTENT_DRIFT
+reactor_control_rods_regression_test.lua # STALE_STRUCTURE  -- setControlRodsLevels API geaendert (map-Format vs. Index)
 reactor_rod_config_clamp_regression_test.lua # STALE_API (regulator_min_rods laut config.lua-Kommentar bewusst entfernt)
 rt_control_tick_wiring_regression_test.lua # STALE_API (adjust_turbines-Funktion existiert nicht mehr unter diesem Namen)
 rt_dashboard_shutdown_verdict_semantics_test.lua # STALE_API (verdict = "REQUESTED" Token erwartet)
 rt_module_lifecycle_control_rod_caps_test.lua # NEEDS_MOCK (evaluate_reactor_coolant im Test-Stub nicht bereitgestellt)
 rt_monitor_ui_adapter_snapshot_test.lua # NEEDS_MOCK (echtes peripheral-Global erwartet)
-rt_monitor_ui_init_regression_test.lua # CONTENT_DRIFT
+rt_monitor_ui_init_regression_test.lua # STALE_STRUCTURE  -- monitor_ui.init Signatur geaendert (adapter.wrap nicht mehr noetig)
 rt_startup_diagnostics_timeout_test.lua # NEEDS_MOCK (set_active_startup im Test-Stub nicht bereitgestellt)
 rt_sync_ack_applied_no_resend_semantics_test.lua # STALE_STRUCTURE
 rt_sync_ack_dedupe_regression_test.lua # STALE_STRUCTURE
