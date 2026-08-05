@@ -1,0 +1,84 @@
+name: deployment-gate
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Ref to promote (branch/tag/SHA)"
+        required: true
+        default: "beta"
+
+concurrency:
+  group: deployment-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  manifest-release-gate:
+    name: manifest / release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.inputs.target_ref || github.sha }}
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.11"
+      - name: Manifest integrity (strict)
+        run: python3 tools/validate_manifest.py --strict
+
+  promotion-gate:
+    name: promotion gate
+    runs-on: ubuntu-latest
+    needs: [manifest-release-gate]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.inputs.target_ref || github.sha }}
+      - name: Install Lua
+        run: sudo apt-get install -y lua5.4
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.11"
+      - name: Lua syntax check
+        run: |
+          find xreactor -name "*.lua" | while read f; do
+            lua5.4 -e "if not loadfile('$f') then os.exit(1) end" || { echo "SYNTAX: $f"; exit 1; }
+          done
+      - name: Scenario suite
+        run: lua5.4 tests/sim_scenarios_suite_test.lua
+      - name: Property tests
+        run: |
+          lua5.4 tests/sim_reactor_property_test.lua
+          lua5.4 tests/sim_turbine_property_test.lua
+          lua5.4 tests/sim_energy_property_test.lua
+      - name: Chaos + mutation tests
+        run: |
+          lua5.4 tests/sim_chaos_test.lua
+          lua5.4 tests/sim_mutation_test.lua
+      - name: Skip budget check
+        run: python3 tools/validate_skip_lists.py
+
+  rollback-guard:
+    name: rollback guard (version monotone)
+    runs-on: ubuntu-latest
+    needs: [manifest-release-gate]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 2
+          ref: ${{ github.event.inputs.target_ref || github.sha }}
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.11"
+      - name: Version monotonicity
+        run: python3 tools/check_version_bump.py --no-bump-required
