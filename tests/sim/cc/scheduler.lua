@@ -1,144 +1,54 @@
--- tests/sim/cc/scheduler.lua
--- Coroutine-Scheduler für parallel.waitForAny / parallel.waitForAll (Phase 4.4)
--- Jede Coroutine bekommt eine eigene Kopie jedes Events (wie CC:Tweaked).
-
-local scheduler = {}
-scheduler.__index = scheduler
-
-function scheduler.new(kernel, event_queue_cls)
-  return setmetatable({
-    _kernel      = kernel,
-    _eq_cls      = event_queue_cls,
-    _coroutines  = {},   -- { co, queue, name, dead, result }
-  }, scheduler)
+local M={}; M.__index=M
+function M.new(k,eq) return setmetatable({_k=k,_eq=eq,_cos={}},M) end
+function M:add(fn,name)
+  local co=coroutine.create(fn); local q=self._eq.new()
+  self._cos[#self._cos+1]={co=co,q=q,name=name or("co"..#self._cos),dead=false,err=nil}
 end
-
--- Coroutine registrieren
-function scheduler:add(fn, name)
-  local co = coroutine.create(fn)
-  local queue = self._eq_cls.new()
-  self._coroutines[#self._coroutines + 1] = {
-    co = co, queue = queue, name = name or "co"..#self._coroutines,
-    dead = false, result = nil, err = nil
-  }
-  return #self._coroutines
+function M:broadcast(...)
+  local a={...}
+  for _,e in ipairs(self._cos) do if not e.dead then e.q:push(table.unpack(a)) end end
 end
-
--- Event an alle lebenden Coroutinen verteilen
-function scheduler:broadcast(...)
-  for _, entry in ipairs(self._coroutines) do
-    if not entry.dead then
-      entry.queue:push(...)
-    end
+function M:step()
+  local any=false
+  for _,e in ipairs(self._cos) do
+    if e.dead then goto c end
+    local ev={e.q:pop()}; if not ev[1] then goto c end
+    local ok,val=coroutine.resume(e.co,table.unpack(ev))
+    if not ok then e.dead=true;e.err=val;any=true
+    elseif coroutine.status(e.co)=="dead" then e.dead=true;e.result=val;any=true end
+    ::c::
   end
+  return {any=any,all=self:_all_dead()}
 end
-
--- Eine Tick-Runde: jeden lebenden Coroutine einmal resumieren
--- Gibt { done=bool, any=bool, results={...} } zurück
-function scheduler:step()
-  local any_finished = false
-  local all_finished = true
-
-  for _, entry in ipairs(self._coroutines) do
-    if entry.dead then goto continue end
-
-    all_finished = false
-    -- Nächstes Event aus eigener Queue
-    local ev = entry.queue:pop()
-    if ev == nil then goto continue end  -- Kein Event → überspringen
-
-    local ok, val = coroutine.resume(entry.co, table.unpack(type(ev)=="table" and ev or {ev}))
-    if not ok then
-      entry.dead  = true
-      entry.err   = val
-      any_finished = true
-    elseif coroutine.status(entry.co) == "dead" then
-      entry.dead   = true
-      entry.result = val
-      any_finished = true
-    end
-
-    ::continue::
-  end
-
-  return {
-    any = any_finished,
-    all = all_finished or self:_all_dead(),
-  }
-end
-
-function scheduler:_all_dead()
-  for _, e in ipairs(self._coroutines) do
-    if not e.dead then return false end
-  end
+function M:_all_dead()
+  for _,e in ipairs(self._cos) do if not e.dead then return false end end
   return true
 end
-
--- parallel.waitForAny(fn1, fn2, ...): kehrt zurück wenn erste fertig
-function scheduler.wait_for_any(kernel, event_queue_lib, fns, shared_queue, max_ticks)
-  local sch = scheduler.new(kernel, event_queue_lib)
-  for i, fn in ipairs(fns) do sch:add(fn, "fn"..i) end
-
-  max_ticks = max_ticks or kernel.MAX_TICKS
-  local ticks = 0
-  -- Ersten Resume ohne Event (Coroutine startet)
-  for _, entry in ipairs(sch._coroutines) do
-    coroutine.resume(entry.co)
-  end
-
-  while ticks < max_ticks do
-    -- Events aus shared_queue an alle Coroutinen verteilen
-    while not shared_queue:empty() do
-      local args = shared_queue:peek()
-      if args then
-        shared_queue:pop()
-        sch:broadcast(table.unpack(type(args)=="table" and args or {args}))
-      end
-    end
-    local status = sch:step()
-    if status.any then break end
-    ticks = ticks + 1
-    kernel.tick()
-  end
-
-  -- Fehler sammeln
-  local errors = {}
-  for _, e in ipairs(sch._coroutines) do
-    if e.err then errors[#errors+1] = e.name..": "..tostring(e.err) end
-  end
-  if #errors > 0 then error(table.concat(errors, "; "), 2) end
+function M:errors()
+  local r={}
+  for _,e in ipairs(self._cos) do if e.err then r[#r+1]=e.name..": "..tostring(e.err) end end
+  return r
 end
-
--- parallel.waitForAll(fn1, fn2, ...): kehrt zurück wenn alle fertig
-function scheduler.wait_for_all(kernel, event_queue_lib, fns, shared_queue, max_ticks)
-  local sch = scheduler.new(kernel, event_queue_lib)
-  for i, fn in ipairs(fns) do sch:add(fn, "fn"..i) end
-
-  max_ticks = max_ticks or kernel.MAX_TICKS
-  local ticks = 0
-  for _, entry in ipairs(sch._coroutines) do
-    coroutine.resume(entry.co)
-  end
-
-  while ticks < max_ticks do
-    while not shared_queue:empty() do
-      local args = shared_queue:peek()
-      if args then
-        shared_queue:pop()
-        sch:broadcast(table.unpack(type(args)=="table" and args or {args}))
-      end
+local function run(k,eq,fns,sq,max,stop_any)
+  local sch=M.new(k,eq)
+  for i,fn in ipairs(fns) do sch:add(fn,"fn"..i) end
+  for _,e in ipairs(sch._cos) do
+    if coroutine.status(e.co)~="dead" then
+      local ok,val=coroutine.resume(e.co)
+      if not ok then e.dead=true;e.err=val end
     end
-    local status = sch:step()
-    if status.all then break end
-    ticks = ticks + 1
-    kernel.tick()
   end
-
-  local errors = {}
-  for _, e in ipairs(sch._coroutines) do
-    if e.err then errors[#errors+1] = e.name..": "..tostring(e.err) end
+  local t=0
+  while t<(max or k.MAX_TICKS) do
+    while not sq:empty() do local a={sq:pop()};if a[1] then sch:broadcast(table.unpack(a)) end end
+    local st=sch:step()
+    if stop_any and st.any then break end
+    if st.all then break end
+    t=t+1; k.tick()
   end
-  if #errors > 0 then error(table.concat(errors, "; "), 2) end
+  local errs=sch:errors()
+  if #errs>0 then error(table.concat(errs,"; "),0) end
 end
-
-return scheduler
+function M.wait_for_any(k,eq,fns,q,n) run(k,eq,fns,q,n,true) end
+function M.wait_for_all(k,eq,fns,q,n) run(k,eq,fns,q,n,false) end
+return M
