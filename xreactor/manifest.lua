@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 499,
-  manifest_id = "manifest-v499",
+  manifest_version = 500,
+  manifest_id = "manifest-v500",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always=true },
   { path = "installer/journal.lua", size_bytes = 11987, hash = "ae694c83", always=true },
   { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always=true },
-  { path = "release.lua", size_bytes = 345, hash = "3792743c", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
+  { path = "release.lua", size_bytes = 345, hash = "6179ccf5", always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true, always=true },
   { path = "start.lua", size_bytes = 13840, hash = "11e88196", always=true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
@@ -27,7 +27,7 @@ return {
   { path = "core/comms.lua", size_bytes = 25765, hash = "ea0be60e" },
   { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
   { path = "core/logger.lua", size_bytes = 32590, hash = "088f5e4b" },
-  { path = "core/monitor_manager.lua", size_bytes = 10306, hash = "db7fc423" },
+  { path = "core/monitor_manager.lua", size_bytes = 10463, hash = "9a28afa3"  },
   { path = "core/network.lua", size_bytes = 15309, hash = "7504d3dd" },
   { path = "core/non_rt_config.lua", size_bytes = 4183, hash = "6f5bf45f" },
   { path = "core/non_rt_payload.lua", size_bytes = 558, hash = "b9c0175d" },
