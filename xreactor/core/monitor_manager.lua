@@ -207,8 +207,12 @@ function manager:scan()
       local width = ok and w or 0
       local height = ok and h or 0
       if below_min_size(self, width, height) then
-        self.disabled[entry.name] = min_size_message(self, entry.name, width, height)
-        utils.log(self.log_prefix, "Disabling monitor during scan: " .. self.disabled[entry.name], "ERROR")
+        local msg = min_size_message(self, entry.name, width, height)
+        -- Fix: nur einmal loggen wenn sich der Grund nicht geändert hat (kein ERROR-Spam)
+        if self.disabled[entry.name] ~= msg then
+          utils.log(self.log_prefix, "Disabling monitor during scan: " .. msg, "ERROR")
+        end
+        self.disabled[entry.name] = msg
         goto continue
       end
       local size_tag = classify_size(width, height, self.thresholds)
