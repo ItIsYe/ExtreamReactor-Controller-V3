@@ -8,22 +8,22 @@ return {
   base_files = {
   { path = "services/heartbeat_service.lua", size_bytes = 3938, hash = "6b908df2" },
   { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6" },
-  { path = "installer/http.lua", size_bytes = 3948, hash = "96b3ae8a", always=true },
-  { path = "installer/manifest.lua", size_bytes = 5794, hash = "faaa98fa", always=true },
-  { path = "installer/stage.lua", size_bytes = 9164, hash = "b067f20b", always=true },
-  { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always=true },
-  { path = "installer/auto_update.lua", size_bytes = 17674, hash = "8c7a115a", always=true },
-  { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always=true },
-  { path = "installer/journal.lua", size_bytes = 11987, hash = "ae694c83", always=true },
-  { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always=true },
-  { path = "release.lua", size_bytes = 345, hash = "6179ccf5", always=true },
-  { path = "start.lua", size_bytes = 13840, hash = "11e88196", always=true },
-  { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always=true },
-  { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always=true },
-  { path = "core/mockup_ui.lua", size_bytes = 11146, hash = "3b1f768a", always=true },
+  { path = "installer/http.lua", size_bytes = 3948, hash = "96b3ae8a", always = true },
+  { path = "installer/manifest.lua", size_bytes = 5794, hash = "faaa98fa", always = true },
+  { path = "installer/stage.lua", size_bytes = 9164, hash = "b067f20b", always = true },
+  { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always = true },
+  { path = "installer/auto_update.lua", size_bytes = 17674, hash = "8c7a115a", always = true },
+  { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always = true },
+  { path = "installer/journal.lua", size_bytes = 11987, hash = "ae694c83", always = true },
+  { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "6179ccf5", always = true },
+  { path = "start.lua", size_bytes = 13840, hash = "11e88196", always = true },
+  { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
+  { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
+  { path = "core/mockup_ui.lua", size_bytes = 11146, hash = "3b1f768a", always = true },
   { path = "adapters/monitor.lua", size_bytes = 7979, hash = "9948fe5c" },
-  { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", always=true },
-  { path = "core/update_handshake.lua", size_bytes = 3464, hash = "015539af", always=true },
+  { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", always = true },
+  { path = "core/update_handshake.lua", size_bytes = 3464, hash = "015539af", always = true },
   { path = "core/comms.lua", size_bytes = 25765, hash = "ea0be60e" },
   { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
   { path = "core/logger.lua", size_bytes = 32590, hash = "088f5e4b" },
@@ -36,7 +36,7 @@ return {
   { path = "core/remote_log.lua", size_bytes = 4698, hash = "7e6f3647" },
   { path = "core/safety.lua", size_bytes = 7851, hash = "3d0160cc" },
   { path = "core/state_machine.lua", size_bytes = 842, hash = "4ae6c19c" },
-  { path = "core/startup_report.lua", size_bytes = 4090, hash = "d3ecd622", always=true },
+  { path = "core/startup_report.lua", size_bytes = 4090, hash = "d3ecd622", always = true },
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
   { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e" },
@@ -62,11 +62,11 @@ return {
   { path = "services/telemetry_service.lua", size_bytes = 5651, hash = "1bdb3693" },
   { path = "services/ui_service.lua", size_bytes = 5595, hash = "fcc90306" },
   -- Fix (2026-07-17): INSTALL/MANIFEST-P1 (Abschnitt 7). core/mockup_ui.lua
-  -- hat always=true (wird u.a. an LOG_COLLECTOR mitgeschickt) und
-  -- require()t shared.colors unbedingt beim Laden -- ohne always=true hier
+  -- hat always = true (wird u.a. an LOG_COLLECTOR mitgeschickt) und
+  -- require()t shared.colors unbedingt beim Laden -- ohne always = true hier
   -- fehlte shared/colors.lua bei LOG_COLLECTOR (is_log-Filter in
-  -- files_for_role() liess ausschliesslich always=true Basisdateien durch).
-  { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece", always=true },
+  -- files_for_role() liess ausschliesslich always = true Basisdateien durch).
+  { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece", always = true },
   { path = "shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
   { path = "shared/telemetry_schema.lua", size_bytes = 938, hash = "9567b224" },
   },
@@ -116,7 +116,7 @@ return {
     -- Fix (2026-07-16): CRITICAL. MANIFEST-P1 aus
     -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 17).
     -- Fehlte bisher ganz -- files_for_role() fuegt einen roles.*-Eintrag
-    -- nur hinzu, wenn "always=true" ODER "required_for" die gewaehlte
+    -- nur hinzu, wenn "always = true" ODER "required_for" die gewaehlte
     -- Rolle enthaelt (siehe installer/manifest.lua). Ohne required_for
     -- wurde diese Datei fuer KEINE Rolle jemals installiert, selbst wenn
     -- der Nutzer das Feature interaktiv ausgewaehlt hatte (der Prompt
