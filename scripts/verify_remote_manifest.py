@@ -149,6 +149,9 @@ def verify_remote_manifest_matches_expected(remote_entries, remote_metadata, exp
 def main():
     parser = argparse.ArgumentParser(description="Verify published xreactor files against published manifest")
     parser.add_argument("--base-url", required=False, default=None, help="Published xreactor base URL ending at /xreactor (optional; skips remote check if omitted)")
+    parser.add_argument("--ref", default=None, help="Git ref (ignored, for CI compatibility)")
+    parser.add_argument("--repo", default=None, help="Repo slug (ignored, for CI compatibility)")
+    parser.add_argument("--report", default=None, help="Output report path (ignored if not used)")
     parser.add_argument(
         "--check-local",
         action="store_true",
