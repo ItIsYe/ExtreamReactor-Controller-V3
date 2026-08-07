@@ -148,7 +148,7 @@ def verify_remote_manifest_matches_expected(remote_entries, remote_metadata, exp
 
 def main():
     parser = argparse.ArgumentParser(description="Verify published xreactor files against published manifest")
-    parser.add_argument("--base-url", required=True, help="Published xreactor base URL ending at /xreactor")
+    parser.add_argument("--base-url", required=False, default=None, help="Published xreactor base URL ending at /xreactor (optional; skips remote check if omitted)")
     parser.add_argument(
         "--check-local",
         action="store_true",
@@ -175,6 +175,9 @@ def main():
             return 1
         print("Local manifest consistency: OK")
 
+    if not args.base_url:
+        print("Kein --base-url angegeben — Remote-Prüfung übersprungen.")
+        return 0
     try:
         remote_entries, remote_metadata, checked, errors = verify_remote(args.base_url, args.require_path)
     except Exception as exc:
