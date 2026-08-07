@@ -151,7 +151,7 @@ jobs:
         run: python3 tools/validate_skip_lists.py
 
       - name: Inventory als Artefakt speichern
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549e0f5d4ced429  # v4.6.0
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-inventory
