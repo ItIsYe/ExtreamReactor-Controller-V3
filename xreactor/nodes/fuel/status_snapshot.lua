@@ -41,7 +41,7 @@ function M.build_status_payload(ctx)
   fuel_health.capabilities = { storage = config.storage_bus ~= nil }
 
   local payload = non_rt_payload.build_base({
-    ts = os.epoch("utc"), role = config.role, node_id = config.node_id,
+    ts = os.epoch("utc"), role = config.role, node_id = ctx.node_id or config.node_id,
     health = { status = fuel_health.status, reasons = health.reasons_list(fuel_health), last_seen_ts = fuel_health.last_seen_ts, bindings = fuel_health.bindings, capabilities = fuel_health.capabilities },
     discovery_failed = devices.discovery_failed, master_connected = master_ok,
     master_seen_s = ctx.master_seen_ts and math.max(0, math.floor((os.epoch("utc") - ctx.master_seen_ts) / 1000)) or nil,
