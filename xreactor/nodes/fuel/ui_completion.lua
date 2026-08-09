@@ -1,7 +1,9 @@
 -- nodes/fuel/ui_completion.lua
--- Completes the active FUEL monitor presentation without duplicating delivery
--- logic. All per-reactor truth is consumed from payload.logistics as projected
--- by operational_summary.lua.
+-- Active FUEL Overview/Details completion layer.
+--
+-- This module is presentation-only. Per-reactor freshness, routing readiness
+-- and operational state come from operational_summary.lua in the status
+-- payload; no delivery/safety decision is reimplemented here.
 
 local M = {}
 local mux = require("core.mockup_ui")
@@ -18,6 +20,11 @@ local function severity_for_reactor(reactor)
   local state = reactor.delivery_state or reactor.operational_state or "MISSING"
   if state == "READY" then return "OK" end
   if state == "DELIVERING" or state == "REQUESTING" then return "LIMITED" end
+  return "WARNING"
+end
+
+local function route_severity(route_state)
+  if route_state == "DIRECT" or route_state == "ROUTE_READY" then return "OK" end
   return "WARNING"
 end
 
@@ -124,6 +131,7 @@ function M.attach(instance, opts)
   if instance._document_completion_attached then return instance end
   instance._document_completion_attached = true
   opts = opts or {}
+  local devices = opts.devices or {}
   local state = { details_index = 1, details_prev = nil, details_next = nil }
 
   instance.compute_view_state = M.compute_view_state
@@ -144,6 +152,8 @@ function M.attach(instance, opts)
 
     local y = 7
     y = data_row(mon, w, h, y, { label = "ME BRIDGE", value = tostring(logistics.bridge or "MISSING"), status = logistics.bridge and "OK" or "WARNING", icon = "storage" })
+    y = data_row(mon, w, h, y, { label = "RESERVE STORAGE", value = tostring(devices.storage_name or "MISSING"), status = devices.storage_name and "OK" or "WARNING", icon = "storage" })
+    y = data_row(mon, w, h, y, { label = "MASTER", value = tostring(model.master_state or (payload.master_connected == false and "OFFLINE" or "ONLINE")), status = payload.master_connected == false and "WARNING" or "OK", icon = "master" })
     y = data_row(mon, w, h, y, {
       label = "RT DATA",
       value = string.format("F%d S%d M%d", tonumber(fuel_counts.fresh) or 0, tonumber(fuel_counts.stale) or 0, tonumber(fuel_counts.missing) or 0),
@@ -167,9 +177,6 @@ function M.attach(instance, opts)
       })
     end
 
-    -- Reactor rows are a primary Overview element on normal 20-line
-    -- monitors. Keep at least one separator/status row before them and stop
-    -- strictly above the footer.
     if #reactors > 0 and y < h - 1 then
       local counts = logistics.operational_counts or {}
       y = data_row(mon, w, h, y, {
@@ -196,7 +203,7 @@ function M.attach(instance, opts)
   end
 
   instance.render_details = function(mon, model, should_clear)
-    local w, h, view = render_header(mon, model, "FUEL DETAILS", "2/4", should_clear)
+    local w, h = render_header(mon, model, "FUEL DETAILS", "2/4", should_clear)
     local logistics = (model.payload or {}).logistics or {}
     local reactors = logistics.reactors or {}
     if #reactors == 0 then
@@ -250,7 +257,7 @@ function M.attach(instance, opts)
       y = data_row(mon, w, h, y, { label = "FUEL DATA", value = tostring(reactor.fuel_data_state or "MISSING"), status = reactor.fuel_data_state == "FRESH" and "OK" or "WARNING", icon = "network" })
       y = data_row(mon, w, h, y, { label = "DATA AGE", value = age .. " / " .. tostring(reactor.fuel_source or "-"), status = reactor.fuel_data_state == "FRESH" and "OK" or "WARNING", icon = "network" })
       y = data_row(mon, w, h, y, { label = "STATE", value = delivery, status = severity_for_reactor(reactor), icon = "reactor" })
-      y = data_row(mon, w, h, y, { label = "ROUTING", value = routing, status = routing == "DIRECT" or routing == "ROUTE_READY" and "OK" or "WARNING", icon = "network" })
+      y = data_row(mon, w, h, y, { label = "ROUTING", value = routing, status = route_severity(routing), icon = "network" })
       y = data_row(mon, w, h, y, { label = "INLET", value = inlet, status = reactor.connected == true and "text" or "WARNING", icon = "storage" })
       y = data_row(mon, w, h, y, { label = "ITEM", value = item, status = "text", icon = "fuel" })
       y = data_row(mon, w, h, y, { label = "REQUEST BELOW", value = request, status = "text", icon = "config" })
