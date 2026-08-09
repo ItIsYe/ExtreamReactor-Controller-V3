@@ -79,6 +79,7 @@ local function render_list(self, target, ui, w, h)
   local first_y = body_top + 2
   local control_y = body_top + body_h - 1
   local visible = math.max(1, control_y - first_y)
+  local max_scroll
   u.list_scroll, max_scroll = clamp_scroll(u.list_scroll, #reactors, visible)
 
   local reactor_btns = {}
@@ -142,6 +143,7 @@ local function render_path(self, target, ui, w, h)
 
   mux.card(target, 2, content_top, w - 3, chain_h, { title = "AKTUELLE KETTE", status = #editing.path > 0 and "OK" or "LIMITED", icon = "network" })
   local visible_steps = math.max(1, chain_h - 1)
+  local path_max_scroll
   u.path_scroll, path_max_scroll = clamp_scroll(u.path_scroll, #editing.path, visible_steps)
   u.path_scroll_up, u.path_scroll_down = paging_badges(target, ui, w - 2, content_top, u.path_scroll, path_max_scroll)
 
@@ -172,12 +174,13 @@ local function render_path(self, target, ui, w, h)
   end
 
   local visible_picker = math.max(1, picker_h - 1)
+  local picker_max_scroll
   u.picker_scroll, picker_max_scroll = clamp_scroll(u.picker_scroll, #items, visible_picker)
   u.picker_scroll_up, u.picker_scroll_down = paging_badges(target, ui, w - 2, picker_top, u.picker_scroll, picker_max_scroll)
   local py = picker_top + 1
   for i = u.picker_scroll + 1, math.min(#items, u.picker_scroll + visible_picker) do
     local item = items[i]
-    mux.data_row(target, 4, py, w - 6, { label = item.label, value = item.value, status = item.integrator ~= nil or item.side ~= nil and "OK" or "OK", icon = item.integrator and "network" or "output" })
+    mux.data_row(target, 4, py, w - 6, { label = item.label, value = item.value, status = "OK", icon = item.integrator and "network" or "output" })
     if u.pending_side then
       integrator_btns[#integrator_btns + 1] = { x1 = 4, x2 = w - 3, y = py, integrator = item.integrator }
     else
