@@ -207,7 +207,7 @@ function M.new(opts)
       routes = {},
       dirty = false,
       reactor_btns = {}, save_btn = nil, reset_btn = nil,
-      tree_btn = nil, edit_btn = nil,
+      tree_btn = nil, edit_btn = nil, empty_edit_btn = nil,
       scroll = 0, scroll_up = nil, scroll_down = nil,
       -- Pfad-Editor-Zustand (nur waehrend edit_view=="path").
       editing = nil,          -- { reactor=, label=, path = {...} }, Arbeitskopie
@@ -383,7 +383,17 @@ function M:_render_tree(target, ui, w, h)
   end
 
   if #rows == 0 then
-    mux.warning_box(target, 4, first_y, left_w - 4, { "Keine Reaktor-Routen konfiguriert", "Auf Seite EDIT anlegen" }, "WARNING")
+    mux.warning_box(target, 4, first_y, left_w - 4, { "Keine Reaktor-Routen konfiguriert", "EDIT oeffnen und Reaktor-Ziel waehlen" }, "WARNING")
+    u.empty_edit_btn = nil
+    local edit_y = first_y + 4
+    if edit_y <= body_top + body_h - 2 then
+      local targets = self.get_reactors()
+      local hint = #targets > 0 and "ROUTEN JETZT BEARBEITEN" or "RT ONLINE / REAKTOR KONFIGURIEREN"
+      mux.data_row(target, 4, edit_y, left_w - 4, { label = "[ EDIT ROUTEN ]", value = hint, status = "LIMITED", icon = "config" })
+      u.empty_edit_btn = { x1 = 4, x2 = math.max(4, left_w - 1), y = edit_y }
+    end
+  else
+    u.empty_edit_btn = nil
   end
 
   if max_scroll > 0 then
@@ -562,7 +572,6 @@ function M:render(target, ui, colors, should_clear)
   local page_status = u.save.state == "FAILED" and "WARNING" or (u.mode == "edit" and u.dirty and "LIMITED" or "OK")
   if should_clear then mux.clear(target) end
   mux.header(target, { title = "REDSTONE ROUTING", node_id = "FUEL NODE", page = "4/4", status = page_status, icon = "network" })
-  self:_render_mode_tabs(target, ui, w)
   local footer_center
   if u.mode == "edit" then
     if u.edit_view == "path" then
@@ -576,7 +585,10 @@ function M:render(target, ui, colors, should_clear)
     self:_render_tree(target, ui, w, h)
     footer_center = "ROUTING TREE"
   end
-  return mux.footer_nav(target, h, w, { center = footer_center })
+  -- TREE/EDIT must be the final writer on row 3. Tree/list status rows also
+  -- use row 3 and previously covered the visible EDIT control.
+  self:_render_mode_tabs(target, ui, w)
+  return mux.footer_nav(target, h, w, { center = footer_center, inset = 3 })
 end
 
 function M:handle_touch(x, y)
@@ -587,7 +599,7 @@ function M:handle_touch(x, y)
     u.mode = "tree"
     return true
   end
-  if hit(u.edit_btn) then
+  if hit(u.edit_btn) or hit(u.empty_edit_btn) then
     u.mode = "edit"
     u.edit_view = "list"
     u.editing = nil

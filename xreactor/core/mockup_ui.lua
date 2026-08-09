@@ -242,17 +242,19 @@ function M.footer_nav(mon, y, w, opts)
   local left = opts.left or "< ZURUECK"
   local center = opts.center or ""
   local right = opts.right or "WEITER >"
+  local inset = math.max(1, math.floor(tonumber(opts.inset) or 1))
   local left_text = fit(left, math.floor(w / 3) - 1)
-  write(mon, 2, y, left_text, colors.get("text"), colors.get("OFFLINE"))
+  local lx = math.min(math.max(2, inset + 1), math.max(2, w - #left_text - 1))
+  write(mon, lx, y, left_text, colors.get("text"), colors.get("OFFLINE"))
   if center ~= "" then
     local cx = math.max(2, math.floor((w - #center) / 2))
     write(mon, cx, y, fit(center, math.floor(w / 3)), colors.get("muted"), colors.get("OFFLINE"))
   end
   local right_text = fit(right, math.floor(w / 3))
-  local rx = math.max(2, w - #right_text - 1)
+  local rx = math.max(2, w - #right_text - inset)
   write(mon, rx, y, right_text, colors.get("text"), colors.get("OFFLINE"))
   return {
-    left = { x1 = 2, x2 = 2 + #left_text - 1, y = y },
+    left = { x1 = lx, x2 = lx + #left_text - 1, y = y },
     right = { x1 = rx, x2 = rx + #right_text - 1, y = y },
   }
 end

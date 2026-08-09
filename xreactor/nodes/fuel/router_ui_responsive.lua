@@ -95,7 +95,7 @@ local function render_list(self, target, ui, w, h)
   u.reactor_btns = reactor_btns
 
   if #reactors == 0 and first_y <= control_y then
-    mux.warning_box(target, 4, first_y, w - 6, { "Keine Ziele gefunden", "Discovery pruefen" }, "WARNING")
+    mux.warning_box(target, 4, first_y, w - 6, { "Keine Reaktor-Ziele gefunden", "RT-Nodes online oder logistics.reactors konfigurieren" }, "WARNING")
   end
 
   if max_scroll > 0 then
