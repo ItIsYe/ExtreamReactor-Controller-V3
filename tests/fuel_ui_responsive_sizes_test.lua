@@ -19,7 +19,7 @@ end
 mux.header = function(mon) bounds(1, 1, width, math.min(3, height), 'header') end
 mux.status_dot = function(mon, x, y, label, status, w) bounds(x, y, math.max(1, math.min(tonumber(w) or #tostring(label), width - x + 1)), 1, 'status_dot') end
 mux.banner = function(mon, x, y, w) bounds(x, y, w, 1, 'banner') end
-mux.metric_card = function(mon, x, y, w, h, item) bounds(x, y, w, h, 'metric_card') end
+mux.metric_card = function(mon, x, y, w, h) bounds(x, y, w, h, 'metric_card') end
 mux.kpi_strip = function(mon, x, y, w) bounds(x, y, w, 1, 'kpi_strip') end
 mux.section = function(mon, x, y, w) bounds(x, y, w, 1, 'section') end
 mux.card = function(mon, x, y, w, h) bounds(x, y, w, h, 'card') end
@@ -29,12 +29,18 @@ mux.data_row = function(mon, x, y, w, item)
 end
 mux.footer_nav = function(mon, h, w, opts)
   bounds(1, h, w, 1, 'footer')
-  return { center = opts and opts.center }
+  return {
+    left = { x1 = 1, x2 = math.min(8, w), y = h },
+    right = { x1 = math.max(1, w - 7), x2 = w, y = h },
+    center = opts and opts.center,
+  }
 end
 package.loaded['core.mockup_ui'] = mux
 package.loaded['nodes.fuel.ui_pages'] = nil
+package.loaded['nodes.fuel.ui_completion'] = nil
 
 local ui_pages = require('nodes.fuel.ui_pages')
+local completion = require('nodes.fuel.ui_completion')
 
 local ui_stub = { getSize = function(mon) return mon.getSize() end }
 local support = {
@@ -45,31 +51,38 @@ local support = {
   format_age = function() return '0s' end,
 }
 local devices = { last_scan_ts = 1, storage_name = 'tank_0', discovery_failed = false }
-local config = {
-  logistics = {
-    reactors = {
-      { name = 'R1', reactor_id = 'rid-1', inlet = 'inlet_1', item = 'bigreactors:yellorium_ingot', request_below = 0.25, fill_amount = 64, min_in_me = 32 },
-      { name = 'R2', reactor_id = 'rid-2', inlet = 'inlet_2', item = 'bigreactors:yellorium_ingot', request_below = 0.30, fill_amount = 32, min_in_me = 16 },
-    }
-  }
-}
+local config = { logistics = { reactors = {} } }
 local pages = ui_pages.new({ ui = ui_stub, support_ui_pages = support, devices = devices, config = config })
+completion.attach(pages, { devices = devices })
 local mon = { getSize = function() return width, height end }
 
+local reactors = {
+  {
+    label = 'R1', reactor_id = 'rid-1', inlet = 'inlet_1', configured_inlet = 'inlet_1', connected = true,
+    item = 'bigreactors:yellorium_ingot', request_below = 0.25, fill_amount = 64, min_in_me = 32,
+    fuel_pct = 60, fuel_data_state = 'FRESH', fuel_age_s = 2, fuel_source = 'MASTER',
+    route_state = 'ROUTE_READY', operational_state = 'READY', delivery_state = 'READY',
+  },
+  {
+    label = 'R2', reactor_id = 'rid-2', inlet = 'inlet_2', configured_inlet = 'inlet_2', connected = true,
+    item = 'bigreactors:yellorium_ingot', request_below = 0.30, fill_amount = 32, min_in_me = 16,
+    fuel_pct = 20, fuel_data_state = 'FRESH', fuel_age_s = 3, fuel_source = 'DIRECT',
+    route_state = 'ROUTE_READY', operational_state = 'READY', delivery_state = 'REQUESTING',
+  },
+}
 local payload = {
   reserve = 4000,
   minimum_reserve = 2000,
   master_connected = true,
   bindings = { storage = 1 },
   routing_load_status = { ok = true },
-  valve_summary = { total = 0, offline = 0 },
+  valve_summary = { total = 2, offline = 0, stale = 0 },
   logistics = {
     enabled = true,
     bridge = 'meBridge_0',
-    reactors = {
-      { label = 'R1', reactor_id = 'rid-1', inlet = 'inlet_1', connected = true, fuel_pct = 60 },
-      { label = 'R2', reactor_id = 'rid-2', inlet = 'inlet_2', connected = true, fuel_pct = 20 },
-    },
+    reactors = reactors,
+    fuel_data_summary = { fresh = 2, stale = 0, missing = 0 },
+    operational_counts = { configured = 2, ready = 2, blocked = 0, stale = 0, missing = 0 },
   },
 }
 local model = {
@@ -101,17 +114,44 @@ for _, size in ipairs(sizes) do
   if not ok then error(string.format('%dx%d: %s', width, height, tostring(err))) end
 end
 
--- On a sufficiently large monitor the details page must expose real reactor
--- delivery configuration rather than generic route counters.
+-- Overview must expose reactor demand on a normal 20-line monitor, not only
+-- on very tall displays.
+width, height = 80, 20
+rows = {}
+pages.render_overview(mon, model, true)
+local overview_text = {}
+for _, row in ipairs(rows) do overview_text[#overview_text + 1] = row.label .. ' ' .. row.value end
+overview_text = table.concat(overview_text, '\n')
+assert(overview_text:find('R1', 1, true), '20-line overview must show reactor rows')
+assert(overview_text:find('R2', 1, true), '20-line overview must show requesting reactor')
+assert(overview_text:find('REQUESTING', 1, true), 'overview must show current reactor demand')
+assert(overview_text:find('ME BRIDGE', 1, true) and overview_text:find('RT DATA', 1, true), 'overview must show core infrastructure truth')
+
+-- Large Details must expose every field required by the uploaded document.
 width, height = 100, 30
 rows = {}
 pages.render_details(mon, model, true)
-local combined = {}
-for _, row in ipairs(rows) do combined[#combined + 1] = row.label .. ' ' .. row.value end
-local text = table.concat(combined, '\n')
-assert(text:find('inlet_1', 1, true), 'reactor details must include configured inlet')
-assert(text:find('yellorium_ingot', 1, true), 'reactor details must include configured fuel item')
-assert(text:find('REQ<25%', 1, true), 'reactor details must include request threshold')
-assert(text:find('F64', 1, true) and text:find('ME32', 1, true), 'reactor details must include fill/min-ME policy')
+local detail_text = {}
+for _, row in ipairs(rows) do detail_text[#detail_text + 1] = row.label .. ' ' .. row.value end
+detail_text = table.concat(detail_text, '\n')
+assert(detail_text:find('rid-1', 1, true), 'details must include reactor_id')
+assert(detail_text:find('DATA AGE', 1, true) and detail_text:find('2s', 1, true), 'details must include fuel data age')
+assert(detail_text:find('ROUTING', 1, true) and detail_text:find('ROUTE_READY', 1, true), 'details must include routing state')
+assert(detail_text:find('inlet_1', 1, true), 'details must include inlet')
+assert(detail_text:find('yellorium_ingot', 1, true), 'details must include fuel item')
+assert(detail_text:find('25%', 1, true), 'details must include request threshold')
+assert(detail_text:find('64', 1, true) and detail_text:find('32', 1, true), 'details must include fill/min-ME policy')
+
+-- Every reactor must be reachable from the Details page without leaving it.
+local completion_state = pages.get_completion_state()
+assert(completion_state.details_next, 'first reactor must expose next-reactor touch zone')
+assert(pages.handle_details_touch(completion_state.details_next.x1, completion_state.details_next.y) == true)
+rows = {}
+pages.render_details(mon, model, false)
+local second_text = {}
+for _, row in ipairs(rows) do second_text[#second_text + 1] = row.label .. ' ' .. row.value end
+second_text = table.concat(second_text, '\n')
+assert(second_text:find('rid-2', 1, true), 'details paging must reach the second reactor')
+assert(second_text:find('REQUESTING', 1, true), 'details must expose current delivery/request state')
 
 print('fuel_ui_responsive_sizes_test.lua: ok')
