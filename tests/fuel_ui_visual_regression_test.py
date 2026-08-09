@@ -1,5 +1,7 @@
 from pathlib import Path
 
+# Regression coverage for the four in-game FUEL screenshots: readable scale,
+# actionable empty states, visible EDIT routing entry, and uncluttered diagnostics.
 repo = Path(__file__).resolve().parents[1]
 main = (repo / "xreactor/nodes/fuel/main.lua").read_text(encoding="utf-8")
 monitor_ui = (repo / "xreactor/nodes/fuel/monitor_ui.lua").read_text(encoding="utf-8")
