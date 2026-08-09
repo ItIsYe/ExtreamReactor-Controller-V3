@@ -26,9 +26,14 @@ local page = {
   end,
 }
 local router = ui_router.new({ pages = { page } })
+local visibility_calls = 0
 local mon = {
   getSize = function() return 30, 10 end,
   getTextScale = function() return 0.5 end,
+  -- Physical CC:Tweaked monitors do not provide this method. The sentinel
+  -- exists only to prove the shared router no longer contains the obsolete
+  -- monitor-setVisible buffering hack.
+  setVisible = function() visibility_calls = visibility_calls + 1 end,
 }
 
 router:render(mon, { snapshot = { fuel = 40 } })
@@ -50,6 +55,7 @@ assert(clears[1] == true, 'first render must be a transition/full-clear frame')
 assert(clears[2] == false, 'normal Fuel data update must not request a full clear')
 assert(changed.full_clears == 1, 'normal model update must not increment full_clears')
 assert(changed.transition_count == 1, 'normal model update must not create a monitor transition')
+assert(visibility_calls == 0, 'shared ui_router must never call setVisible on the render target')
 
 _G.textutils = nil
 print('ui_router_normal_update_no_full_clear_test.lua: ok')
