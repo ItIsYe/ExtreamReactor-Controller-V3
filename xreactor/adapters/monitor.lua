@@ -147,6 +147,13 @@ local function is_too_small_for_main(mon, name)
 end
 
 function monitor.find(preferred_name, strategy, scale, log_prefix)
+  -- Keep cache lifetime tied to the physical peripheral inventory. This is
+  -- deliberately done once per discovery call: a periodic scan reuses the
+  -- same wrapper/shape result while a real detach removes all name-scoped
+  -- cache state before a later reconnect with the same peripheral name.
+  local names = peripheral.getNames() or {}
+  monitor.sync_names(names)
+
   if preferred_name and peripheral.getType(preferred_name) == "monitor" then
     local mon = wrap_monitor(preferred_name, log_prefix)
     local too_small = mon and is_too_small_for_main(mon, preferred_name)
@@ -160,7 +167,7 @@ function monitor.find(preferred_name, strategy, scale, log_prefix)
     end
   end
   local candidates = {}
-  for _, name in ipairs(peripheral.getNames() or {}) do
+  for _, name in ipairs(names) do
     if peripheral.getType(name) == "monitor" then
       local mon = wrap_monitor(name, log_prefix)
       if mon and not is_too_small_for_main(mon, name) then
