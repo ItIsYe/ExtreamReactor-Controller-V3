@@ -21,6 +21,10 @@ local monitor_router = nil
 local current_mon = nil
 local render_buffer = { parent = nil, name = nil, width = nil, height = nil, target = nil }
 
+local function reset_render_buffer()
+  render_buffer = { parent = nil, name = nil, width = nil, height = nil, target = nil }
+end
+
 local function get_render_target(mon, monitor_name)
   if not mon or type(mon.getSize) ~= "function" then return mon end
   if type(window) ~= "table" or type(window.create) ~= "function" then return mon end
@@ -34,13 +38,14 @@ local function get_render_target(mon, monitor_name)
       and render_buffer.parent == mon
       and render_buffer.name == monitor_name
       and render_buffer.width == w
-      and render_buffer.height == h then
+      and render_buffer.height == h
+      and type(render_buffer.target.setVisible) == "function" then
     return render_buffer.target
   end
 
   local ok_window, target = pcall(window.create, mon, 1, 1, w, h, false)
-  if not ok_window or not target then
-    render_buffer = { parent = nil, name = nil, width = nil, height = nil, target = nil }
+  if not ok_window or not target or type(target.setVisible) ~= "function" then
+    reset_render_buffer()
     return mon
   end
 
@@ -53,6 +58,21 @@ local function get_render_target(mon, monitor_name)
   }
   return target
 end
+
+local function render_frame(router, target, physical_mon, model)
+  local buffered = target ~= physical_mon and type(target.setVisible) == "function"
+  if buffered then
+    -- A CC:Tweaked window created with visible=false is a real off-screen
+    -- buffer: hide it before every frame, render the complete frame, then
+    -- publish it in one step. Never call setVisible on the physical monitor.
+    pcall(target.setVisible, false)
+  end
+  router:render(target, model)
+  if buffered then
+    pcall(target.setVisible, true)
+  end
+end
+
 -- Feature (2026-07-12): REST-P1.4. Zaehler, die AUSSERHALB des Routers
 -- entstehen -- werden in M.get_diagnostics() mit dem Router-eigenen
 -- Zustand zusammengefuehrt.
@@ -193,7 +213,7 @@ function M.render_monitor(ctx, model)
       key_next = { [ctx.keys.right] = true, [ctx.keys.pageDown] = true }
     })
   end
-  monitor_router:render(render_target, model)
+  render_frame(monitor_router, render_target, mon, model)
 end
 
 -- Fix (2026-07-09): CRITICAL. Beim Modularisierungs-Refactor wurde hier
