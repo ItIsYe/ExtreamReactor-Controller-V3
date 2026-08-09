@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 502,
-  manifest_id = "manifest-v502",
+  manifest_version = 503,
+  manifest_id = "manifest-v503",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,12 +16,12 @@ return {
   { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always = true },
   { path = "installer/journal.lua", size_bytes = 11987, hash = "ae694c83", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "784275ba", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "00000000", always = true },
   { path = "start.lua", size_bytes = 13840, hash = "11e88196", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
   { path = "core/mockup_ui.lua", size_bytes = 11146, hash = "3b1f768a", always = true },
-  { path = "adapters/monitor.lua", size_bytes = 8772, hash = "3925e53e" },
+  { path = "adapters/monitor.lua", size_bytes = 9122, hash = "00000000" },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", always = true },
   { path = "core/update_handshake.lua", size_bytes = 3464, hash = "015539af", always = true },
   { path = "core/comms.lua", size_bytes = 25765, hash = "ea0be60e" },
@@ -45,15 +45,6 @@ return {
   { path = "core/auto_update.lua", size_bytes = 5174, hash = "332b3250" },
   { path = "core/remote_update.lua", size_bytes = 13576, hash = "ac163240" },
   { path = "core/alerts.lua", size_bytes = 11048, hash = "7c28803c" },
-  -- Fix (2026-07-17): INSTALL/MANIFEST-P1 aus docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md (Abschnitt 7, transitive require()-Abdeckung,
-  -- siehe tests/manifest_transitive_require_coverage_test.lua). Ohne
-  -- required_for wurde diese Datei bisher an JEDE nicht-LOG-Rolle
-  -- mitgeschickt (unnoetiger Ballast -- nur master/runtime_loop.lua
-  -- require()t sie tatsaechlich), UND ihre eigene, unbedingte Abhaengigkeit
-  -- core/alert_rules.lua ist bereits korrekt auf required_for={"MASTER"}
-  -- beschraenkt -- eine faktisch tote, aber strukturell inkonsistente
-  -- Kombination.
   { path = "services/alert_service.lua", size_bytes = 14551, hash = "be4bfdf2", required_for={"MASTER"} },
   { path = "services/comms_service.lua", size_bytes = 9910, hash = "7ab0adba" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4" },
@@ -61,11 +52,6 @@ return {
   { path = "services/service_manager.lua", size_bytes = 7459, hash = "6cb63793" },
   { path = "services/telemetry_service.lua", size_bytes = 5651, hash = "1bdb3693" },
   { path = "services/ui_service.lua", size_bytes = 5595, hash = "fcc90306" },
-  -- Fix (2026-07-17): INSTALL/MANIFEST-P1 (Abschnitt 7). core/mockup_ui.lua
-  -- hat always = true (wird u.a. an LOG_COLLECTOR mitgeschickt) und
-  -- require()t shared.colors unbedingt beim Laden -- ohne always = true hier
-  -- fehlte shared/colors.lua bei LOG_COLLECTOR (is_log-Filter in
-  -- files_for_role() liess ausschliesslich always = true Basisdateien durch).
   { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece", always = true },
   { path = "shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
   { path = "shared/telemetry_schema.lua", size_bytes = 938, hash = "9567b224" },
@@ -107,44 +93,9 @@ return {
     { path = "master/ui/updates.lua", size_bytes = 4914, hash = "577f9890", required_for={"MASTER"} },
     { path = "master/ui/system_map.lua", size_bytes = 6136, hash = "c62cf990", required_for={"MASTER"} },
     { path = "master/ui/config_editor.lua", size_bytes = 6749, hash = "682b50a4", required_for={"MASTER"} },
-    -- Fix (2026-07-20): VALVE NICHT (mehr) in required_for -- die VALVE-Node
-    -- hat einen eigenen, fest eingebauten (nicht optionalen, nicht ueber
-    -- dieses Feature gesteuerten) 1x1-Statusmonitor direkt in nodes/valve/
-    -- main.lua (render_status_monitor()), unabhaengig vom hier verwalteten
-    -- 1x3-Turm-Ampel-Modul mit Shape-Check. Siehe dortiger Kommentar.
     { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
-    -- Fix (2026-07-16): CRITICAL. MANIFEST-P1 aus
-    -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 17).
-    -- Fehlte bisher ganz -- files_for_role() fuegt einen roles.*-Eintrag
-    -- nur hinzu, wenn "always = true" ODER "required_for" die gewaehlte
-    -- Rolle enthaelt (siehe installer/manifest.lua). Ohne required_for
-    -- wurde diese Datei fuer KEINE Rolle jemals installiert, selbst wenn
-    -- der Nutzer das Feature interaktiv ausgewaehlt hatte (der Prompt
-    -- erschien sogar faelschlich fuer JEDE Rolle, da matches_role() in
-    -- installer/init.lua ein fehlendes required_for als "passt immer"
-    -- interpretiert). Rollen entsprechen den tatsaechlichen
-    -- require("optional.speaker_alarm")-Aufrufstellen: nodes/rt/main.lua,
-    -- nodes/rt/monitor_ui.lua, nodes/energy/main.lua, nodes/water/main.lua,
-    -- nodes/fuel/main.lua, nodes/reprocessor/main.lua,
-    -- nodes/log_collector/main.lua, sowie services/alert_service.lua
-    -- (dort per Default AKTIV, "opt-out via enable_speaker_alarm=false"),
-    -- das ueber master/init_runtime.lua auch von MASTER instanziiert wird
-    -- -- anders als "ampel", das fuer MASTER ein eigenes getrenntes
-    -- "master_ampel"-Feature hat, gibt es fuer speaker_alarm keine
-    -- MASTER-spezifische Variante. nodes/valve/main.lua nutzt weder
-    -- speaker_alarm noch alert_service -- VALVE bewusst nicht enthalten.
     { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "44a8e65d", optional=true, feature="speaker_alarm", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG","MASTER"} },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "abe22b63", optional=true, feature="pocket_query", required_for={"MASTER"} },
-    -- Feature (2026-07-09): eigenstaendiges Pocket-Computer-Client-Skript.
-    -- Bewusst OHNE Auto-Installation -- Pocket Computer ist kein waehlbarer
-    -- Rollen-Typ im Installer, laeuft daher nie automatisch bei irgendeiner
-    -- Rollen-Installation mit ("manual install only", siehe Commit-Historie
-    -- der Datei). optional=true + leeres required_for={} sorgt dafuer,
-    -- dass es weder automatisch installiert noch als Auswahl-Prompt bei
-    -- IRGENDEINER Rolle auftaucht (siehe collect_optional_feature_names()
-    -- in installer/init.lua: required_for={} matched keine Rolle). Trotzdem
-    -- im Manifest gefuehrt, damit Groesse/Hash verifizierbar sind, falls
-    -- die Datei gezielt manuell heruntergeladen wird.
     { path = "optional/pocket_client.lua", size_bytes = 10846, hash = "10601ed6", optional=true, feature="pocket_client", required_for={} },
     { path = "optional/master_ampel.lua", size_bytes = 6373, hash = "f3d68ef7", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 52976, hash = "bd210ff0", required_for={"MASTER"} },
@@ -212,13 +163,14 @@ return {
     { path = "nodes/fuel/status_snapshot.lua", size_bytes = 5042, hash = "c589c001", required_for={"FUEL"} },
     { path = "nodes/fuel/command_handler.lua", size_bytes = 2096, hash = "369baea1", required_for={"FUEL"} },
     { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 4052, hash = "d18e34ba", required_for={"FUEL"} },
-    { path = "nodes/fuel/monitor_ui.lua", size_bytes = 13710, hash = "d838895d", required_for={"FUEL"} },
+    { path = "nodes/fuel/monitor_ui.lua", size_bytes = 12407, hash = "00000000", required_for={"FUEL"} },
     { path = "nodes/fuel/storage.lua", size_bytes = 2379, hash = "31ad81f2", required_for={"FUEL"} },
-    { path = "nodes/fuel/ui_pages.lua", size_bytes = 23048, hash = "2398172a", required_for={"FUEL"}},
+    { path = "nodes/fuel/ui_pages.lua", size_bytes = 22964, hash = "00000000", required_for={"FUEL"}},
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 29802, hash = "9d423ec4", required_for={"FUEL","REPROCESSING"} },
     { path = "nodes/fuel/redstone_router.lua", size_bytes = 48894, hash = "c72567e2", required_for={"FUEL","REPROCESSING","WATER"} },
     { path = "nodes/fuel/router_ui.lua", size_bytes = 36257, hash = "1b90edb0", required_for={"FUEL","REPROCESSING"}},
+    { path = "nodes/fuel/router_ui_responsive.lua", size_bytes = 11436, hash = "00000000", required_for={"FUEL"} },
     },
     reprocessing = {
     { path = "nodes/reprocessor/config.lua", size_bytes = 5028, hash = "3b53b47d", required_for={"REPROCESSING"} },
