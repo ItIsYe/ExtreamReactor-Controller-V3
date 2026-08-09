@@ -2,6 +2,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 local calls = { wrap = 0, set_scale = 0 }
 local current_scale = 0.5
+local present = true
 
 local mon = {
   getTextScale = function() return current_scale end,
@@ -16,9 +17,9 @@ local mon = {
 }
 
 _G.peripheral = {
-  isPresent = function(name) return name == 'monitor_0' end,
-  getType = function(name) return name == 'monitor_0' and 'monitor' or nil end,
-  getNames = function() return { 'monitor_0' } end,
+  isPresent = function(name) return present and name == 'monitor_0' end,
+  getType = function(name) return present and name == 'monitor_0' and 'monitor' or nil end,
+  getNames = function() return present and { 'monitor_0' } or {} end,
 }
 
 package.loaded['core.utils'] = {
@@ -45,10 +46,13 @@ assert(second.mon == first.mon, 'same physical monitor must keep a stable wrappe
 assert(calls.wrap == wrap_after_first, 'periodic discovery must not wrap the same monitor again')
 assert(calls.set_scale == scale_after_first, 'periodic discovery must not probe/modify monitor text scale again')
 
-adapter.invalidate_name('monitor_0')
+present = false
+assert(adapter.find(nil, 'first', 0.5, 'TEST') == nil, 'detached monitor must disappear from discovery')
+
+present = true
 local third = assert(adapter.find(nil, 'first', 0.5, 'TEST'))
 assert(third.mon == mon)
-assert(calls.wrap == wrap_after_first + 1, 'explicit invalidation must allow a fresh wrap')
-assert(calls.set_scale > scale_after_first, 'explicit invalidation must allow a fresh shape probe')
+assert(calls.wrap == wrap_after_first + 1, 'detach/reconnect must create a fresh wrapper')
+assert(calls.set_scale > scale_after_first, 'detach/reconnect must allow a fresh shape/scale probe')
 
 print('monitor_adapter_discovery_stability_test.lua: ok')
