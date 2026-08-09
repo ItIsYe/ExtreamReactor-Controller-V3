@@ -380,7 +380,9 @@ function router:render(mon, model)
   self.ui_diag.frames_committed = self.ui_diag.frames_committed + 1
   local render_start_ms = os.epoch and os.epoch("utc") or nil
   self.last_snapshot = snapshot
-  self.list_controls = nil
+  -- Fix: list_controls nur bei Transition (Seiten-/Monitor-Wechsel) zurücksetzen,
+  -- nicht bei normalem Inhalt-Redraw — sonst verschwinden Touch-Zonen kurz
+  if is_transition then self.list_controls = nil end
 
   -- Feature (2026-07-11): UI-P0.6. should_clear ist true bei Erstrender,
   -- Seitenwechsel, Monitorwechsel oder Groessen-/Skalenaenderung -- bei
