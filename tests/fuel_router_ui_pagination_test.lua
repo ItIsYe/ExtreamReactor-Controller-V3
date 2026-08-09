@@ -44,13 +44,49 @@ local ui_stub = {
   getSize = function(target) return target.getSize() end,
 }
 
+local function assert_button_bounds(button, label)
+  if not button then return end
+  assert(type(button.x1) == 'number' and type(button.x2) == 'number' and type(button.y) == 'number', label .. ' must have numeric touch geometry')
+  assert(button.x1 >= 1, label .. ' x1 before monitor')
+  assert(button.x2 >= button.x1, label .. ' inverted x range')
+  assert(button.x2 <= width, string.format('%s x2=%d outside width=%d', label, button.x2, width))
+  assert(button.y >= 1 and button.y <= height, string.format('%s y=%d outside height=%d', label, button.y, height))
+end
+
+local function assert_touch_bounds()
+  local u = page._ui
+  local lists = {
+    reactor_btns = u.reactor_btns,
+    step_btns = u.step_btns,
+    side_btns = u.side_btns,
+    integrator_btns = u.integrator_btns,
+  }
+  for name, list in pairs(lists) do
+    for i, button in ipairs(list or {}) do assert_button_bounds(button, name .. '[' .. i .. ']') end
+  end
+  local singles = {
+    'save_btn', 'reset_btn', 'teach_btn', 'done_btn', 'clear_btn', 'cancel_btn',
+    'list_scroll_up', 'list_scroll_down', 'path_scroll_up', 'path_scroll_down',
+    'picker_scroll_up', 'picker_scroll_down',
+  }
+  for _, name in ipairs(singles) do assert_button_bounds(u[name], name) end
+end
+
 local function render(label)
-  local ok, err = pcall(function() page:render(mon, ui_stub, nil, true) end)
+  local footer
+  local ok, err = pcall(function() footer = page:render(mon, ui_stub, nil, true) end)
   if not ok then error(label .. ': ' .. tostring(err)) end
+  assert_touch_bounds()
+  if type(footer) == 'table' then
+    assert_button_bounds(footer.left, label .. ' footer.left')
+    assert_button_bounds(footer.right, label .. ' footer.right')
+  end
+  return footer
 end
 
 local function tap(button)
   assert(button, 'expected paging button')
+  assert_button_bounds(button, 'tap target')
   assert(page:handle_touch(button.x1, button.y) == true, 'paging touch must be consumed')
 end
 
@@ -64,7 +100,8 @@ end
 -- 20 reactors must remain reachable on a short monitor.
 page._ui.mode = 'edit'
 page._ui.edit_view = 'list'
-render('reactor list initial')
+local list_footer = render('reactor list initial')
+assert(list_footer, 'router page must render a visible footer')
 assert(#page._ui.reactor_btns < #reactors, 'short monitor should paginate the reactor list')
 assert(page._ui.list_scroll_down, 'reactor list must expose a down pager')
 for _ = 1, 40 do
@@ -114,7 +151,8 @@ for _ = 1, 40 do
 end
 assert(any_button(page._ui.integrator_btns, 'integrator', 'VALVE-20'), 'last VALVE node must be reachable')
 
--- Render all key states across the requested monitor-size matrix.
+-- Render all key states across the requested monitor-size matrix. Every render
+-- also validates all currently active touch zones and footer zones.
 local sizes = { {30, 12}, {40, 16}, {51, 19}, {80, 20}, {100, 30} }
 for _, size in ipairs(sizes) do
   width, height = size[1], size[2]
