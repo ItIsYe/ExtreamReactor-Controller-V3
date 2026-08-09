@@ -26,12 +26,13 @@ jobs:
 
           def text(path): return Path(path).read_text(encoding='utf-8')
           def write(path, value): Path(path).write_text(value, encoding='utf-8')
-          def replace_once(path, old, new):
-              s = text(path)
-              n = s.count(old)
-              if n != 1:
-                  raise SystemExit(f'{path}: expected one occurrence, got {n}: {old[:100]!r}')
-              write(path, s.replace(old, new, 1))
+          def lines(path): return text(path).splitlines()
+          def save_lines(path, value): write(path, '\n'.join(value) + '\n')
+          def first_stripped(value, target, start=0):
+              for i in range(start, len(value)):
+                  if value[i].strip() == target:
+                      return i
+              raise SystemExit(f'missing structural marker: {target!r}')
 
           router = 'xreactor/nodes/fuel/redstone_router.lua'
           r = text(router)
@@ -54,54 +55,59 @@ jobs:
           r = r.replace(old, 'source_node_id = resolve_source_node_id(opts, router_config),', 1)
           write(router, r)
 
-          replace_once('xreactor/nodes/fuel/main.lua',
-          '''    rs_router_instance = redstone_router_lib.new({
-              config = config,
-              log = function(level, msg) utils.log("FUEL", msg, level) end,''',
-          '''    rs_router_instance = redstone_router_lib.new({
-              config = config,
-              node_id = node_id,
-              log = function(level, msg) utils.log("FUEL", msg, level) end,''')
+          # FUEL already owns the resolved runtime node_id; inject it explicitly.
+          p = 'xreactor/nodes/fuel/main.lua'
+          ls = lines(p)
+          ctor = first_stripped(ls, 'rs_router_instance = redstone_router_lib.new({')
+          cfg = first_stripped(ls, 'config = config,', ctor + 1)
+          if any(x.strip() == 'node_id = node_id,' for x in ls[ctor:cfg+4]):
+              raise SystemExit('fuel node_id injection already present unexpectedly')
+          indent = ls[cfg][:len(ls[cfg]) - len(ls[cfg].lstrip())]
+          ls.insert(cfg + 1, indent + 'node_id = node_id,')
+          save_lines(p, ls)
 
-          replace_once('xreactor/nodes/reprocessor/main.lua',
-          '''    rs_router = redstone_router_lib.new({ config = config.feed or {}, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })''',
-          '''    rs_router = redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })''')
+          # REPROCESSOR builds the shared router from config.feed, so root node_id
+          # is not available inside config and must be injected as an explicit option.
+          p = 'xreactor/nodes/reprocessor/main.lua'
+          s = text(p)
+          old = 'redstone_router_lib.new({ config = config.feed or {}, log ='
+          new = 'redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log ='
+          if s.count(old) != 1: raise SystemExit(f'reprocessor constructor anchor mismatch: {s.count(old)}')
+          write(p, s.replace(old, new, 1))
 
           # Existing router ACK tests now model the complete identity-bearing protocol.
-          for path in [
+          for p in [
               'tests/redstone_router_flat_path_multi_valve_chain_test.lua',
               'tests/redstone_router_nested_multi_valve_chain_test.lua',
               'tests/redstone_router_stale_confirmed_state_test.lua',
               'tests/redstone_router_valve_confirmation_gate_test.lua',
           ]:
-              s = text(path)
+              s = text(p)
               old = "    type = 'VALVE_ACK', command_id = entry.command_id,\n    applied = applied, high = (high == nil) and entry.high or high,"
               new = "    type = 'VALVE_ACK', command_id = entry.command_id,\n    src = entry.dst, dst = entry.src,\n    applied = applied, high = (high == nil) and entry.high or high,"
-              if s.count(old) != 1:
-                  raise SystemExit(f'{path}: ACK helper anchor mismatch, count={s.count(old)}')
-              write(path, s.replace(old, new, 1))
+              if s.count(old) != 1: raise SystemExit(f'{p}: ACK helper anchor mismatch, count={s.count(old)}')
+              write(p, s.replace(old, new, 1))
 
-          # New identity test exercises explicit runtime-id injection, not hidden filesystem lookup.
+          # New identity test exercises explicit runtime-id injection, not hidden fs lookup.
           p = 'tests/redstone_router_valve_identity_test.lua'
-          s = text(p)
-          fs_block = "_G.fs={exists=function(p) return p=='/xreactor/config/node_id.txt' end,open=function() return {readAll=function() return 'node-77\\n' end,close=function() end} end}\n"
-          if s.count(fs_block) != 1: raise SystemExit('identity test fs block mismatch')
-          s = s.replace(fs_block, '', 1)
-          old_ctor = "local router=lib.new({config={node_id='ROLE-DEFAULT',logistics={redstone_tree={{reactor='R1',path={{side='left',integrator='VALVE-1'}}}}}},comms={get_peers=function() return {['VALVE-1']={down=false}} end},log=function() end,warn_once=function() end})"
-          new_ctor = "local router=lib.new({node_id='node-77',config={node_id='ROLE-DEFAULT',logistics={redstone_tree={{reactor='R1',path={{side='left',integrator='VALVE-1'}}}}}},comms={get_peers=function() return {['VALVE-1']={down=false}} end},log=function() end,warn_once=function() end})"
-          if s.count(old_ctor) != 1: raise SystemExit('identity test constructor mismatch')
-          s = s.replace(old_ctor, new_ctor, 1)
-          write(p, s)
+          ls = lines(p)
+          fs_hits = [i for i, line in enumerate(ls) if line.strip().startswith('_G.fs=')]
+          if len(fs_hits) != 1: raise SystemExit(f'identity test fs marker mismatch: {len(fs_hits)}')
+          del ls[fs_hits[0]]
+          ctor_hits = [i for i, line in enumerate(ls) if line.strip().startswith('local router=lib.new({config=')]
+          if len(ctor_hits) != 1: raise SystemExit(f'identity test constructor mismatch: {len(ctor_hits)}')
+          i = ctor_hits[0]
+          ls[i] = ls[i].replace('local router=lib.new({config=', "local router=lib.new({node_id='node-77',config=", 1)
+          save_lines(p, ls)
 
           p = 'tests/valve_safety_regression_test.py'
           s = text(p)
-          old_assert = "assert 'source_node_id = opts.node_id or resolve_source_node_id(router_config)' in router"
-          new_assert = "assert 'source_node_id = resolve_source_node_id(opts, router_config)' in router\nassert 'node_id = node_id' in (repo/'xreactor/nodes/fuel/main.lua').read_text(encoding='utf-8')\nassert 'node_id = node_id' in (repo/'xreactor/nodes/reprocessor/main.lua').read_text(encoding='utf-8')"
-          if s.count(old_assert) != 1: raise SystemExit('python regression source-id assertion mismatch')
-          s = s.replace(old_assert, new_assert, 1)
-          write(p, s)
+          old = "assert 'source_node_id = opts.node_id or resolve_source_node_id(router_config)' in router"
+          new = "assert 'source_node_id = resolve_source_node_id(opts, router_config)' in router\nassert 'node_id = node_id' in (repo/'xreactor/nodes/fuel/main.lua').read_text(encoding='utf-8')\nassert 'node_id = node_id' in (repo/'xreactor/nodes/reprocessor/main.lua').read_text(encoding='utf-8')"
+          if s.count(old) != 1: raise SystemExit('python regression source-id assertion mismatch')
+          write(p, s.replace(old, new, 1))
 
-          # Refresh runtime manifest hashes/sizes for every changed manifest-managed file.
+          # Refresh manifest hashes/sizes for changed runtime files.
           manifest = Path('xreactor/manifest.lua')
           ms = manifest.read_text(encoding='utf-8')
           for rel in ['nodes/fuel/redstone_router.lua', 'nodes/fuel/main.lua', 'nodes/reprocessor/main.lua']:
