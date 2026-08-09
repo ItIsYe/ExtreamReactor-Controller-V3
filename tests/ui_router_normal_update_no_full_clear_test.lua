@@ -9,6 +9,12 @@ package.loaded['core.ui'] = {
   text = function() end,
 }
 package.loaded['shared.colors'] = { get = function() return 1 end }
+_G.textutils = {
+  serialize = function(payload)
+    local fuel = payload.snapshot and payload.snapshot.fuel or ''
+    return tostring(payload.page) .. ':' .. tostring(fuel)
+  end,
+}
 
 local ui_router = require('core.ui_router')
 local clears = {}
@@ -25,14 +31,25 @@ local mon = {
   getTextScale = function() return 0.5 end,
 }
 
-router:render(mon, { snapshot = { fuel = 50 } })
-router:render(mon, { snapshot = { fuel = 49 } })
+router:render(mon, { snapshot = { fuel = 40 } })
+local initial = router:get_diagnostics()
+assert(initial.full_clears == 1 and initial.transition_count == 1)
 
-assert(#clears == 2, 'changed Fuel model must commit a second frame')
+for _ = 1, 10 do
+  router:render(mon, { snapshot = { fuel = 40 } })
+end
+local stable = router:get_diagnostics()
+assert(stable.full_clears == 1, '10 unchanged cycles must not increment full_clears')
+assert(stable.transition_count == 1, '10 unchanged cycles must not create monitor transitions')
+assert(stable.frames_skipped >= 10, 'unchanged cycles must be skipped by snapshot comparison')
+
+router:render(mon, { snapshot = { fuel = 39 } })
+local changed = router:get_diagnostics()
+assert(#clears == 2, 'Fuel 40 -> 39 must commit exactly one additional frame')
 assert(clears[1] == true, 'first render must be a transition/full-clear frame')
 assert(clears[2] == false, 'normal Fuel data update must not request a full clear')
-local diag = router:get_diagnostics()
-assert(diag.full_clears == 1, 'normal model update must not increment full_clears')
-assert(diag.transition_count == 1, 'normal model update must not create a monitor transition')
+assert(changed.full_clears == 1, 'normal model update must not increment full_clears')
+assert(changed.transition_count == 1, 'normal model update must not create a monitor transition')
 
+_G.textutils = nil
 print('ui_router_normal_update_no_full_clear_test.lua: ok')
