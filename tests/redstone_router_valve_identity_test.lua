@@ -5,6 +5,7 @@ _G.peripheral={find=function(k,f) if k=='modem' and (not f or f('right',modem)) 
 _G.redstone={setOutput=function() end}
 package.loaded['nodes.fuel.redstone_router']=nil
 local lib=require('nodes.fuel.redstone_router')
+-- Production callers inject the already-resolved runtime node_id explicitly.
 local router=lib.new({node_id='node-77',config={node_id='ROLE-DEFAULT',logistics={redstone_tree={{reactor='R1',path={{side='left',integrator='VALVE-1'}}}}}},comms={get_peers=function() return {['VALVE-1']={down=false}} end},log=function() end,warn_once=function() end})
 router:refresh(); assert(#tx>=1); local sent=tx[#tx]; assert(sent.src=='node-77'); assert(sent.command_id:match('^node%-77%-'))
 local key='VALVE-1|left'; local pending=assert(router._state.pending_valve_acks[key]); assert(pending.src=='node-77')
