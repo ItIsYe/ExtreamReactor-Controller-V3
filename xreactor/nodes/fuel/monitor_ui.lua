@@ -15,6 +15,7 @@
 local M = {}
 local router_ui_responsive = require("nodes.fuel.router_ui_responsive")
 local ui_completion = require("nodes.fuel.ui_completion")
+local ui_diagnostics_overlay = require("nodes.fuel.ui_diagnostics_overlay")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
@@ -87,7 +88,10 @@ local function render_frame(router, target, physical_mon, model)
 end
 
 local function ensure_completion(ctx)
-  if ctx and ctx.fuel_ui then ui_completion.attach(ctx.fuel_ui, { devices = ctx.devices }) end
+  if ctx and ctx.fuel_ui then
+    ui_completion.attach(ctx.fuel_ui, { devices = ctx.devices })
+    ui_diagnostics_overlay.attach(ctx.fuel_ui)
+  end
 end
 
 -- Feature (2026-07-12): REST-P1.4. Zaehler, die AUSSERHALB des Routers
