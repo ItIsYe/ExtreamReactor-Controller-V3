@@ -13,6 +13,7 @@
 -- eigenstaendige Funktion aufgebaut.
 
 local M = {}
+local router_ui_responsive = require("nodes.fuel.router_ui_responsive")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
@@ -164,26 +165,13 @@ function M.render_monitor(ctx, model)
   local devices = ctx.devices
   if not devices.monitor then return end
   local mon = devices.monitor
-  -- Fix (2026-07-10): CRITICAL. Die Seiten wurden bisher mit Closures wie
-  -- "function(target) return fuel_ui.render_overview(target, model) end"
-  -- gebaut -- das faengt "model" (und bei Diagnostics auch "mon") beim
-  -- ALLERERSTEN Aufruf ein und friert es fuer immer ein, da monitor_router
-  -- nur EINMAL (lazy init) gebaut wird, waehrend render_monitor() bei
-  -- jedem Tick ein NEUES model erzeugt. Jede Seite zeigte dadurch dauerhaft
-  -- den Stand vom allerersten Render, egal was sich seitdem geaendert hat
-  -- -- exakt das gemeldete "immer hartes Rendern"-Symptom (der Diff-Check
-  -- in ui_router.lua vergleicht zwar korrekt das FRISCHE model, aber die
-  -- tatsaechlich gezeichnete Seite nutzte trotzdem immer die eingefrorene
-  -- Kopie), und vermutlich auch Ursache dafuer, dass manche Seiten (mit
-  -- noch unvollstaendigen Daten beim allerersten Aufruf) dauerhaft leer/
-  -- fehlerhaft blieben. Jetzt wie bei RT: render_overview/render_details/
-  -- render_diagnostics werden DIREKT als page.render zugewiesen -- ihre
-  -- Signatur ist bereits exakt (mon, model), passt 1:1 zu dem, was
-  -- router:render(mon, model) tatsaechlich an page.render() durchreicht.
   current_mon = mon
   local render_target = get_render_target(mon, devices.monitor_name)
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
+    local function responsive_router_ui()
+      return router_ui_responsive.attach(ctx.get_router_ui())
+    end
     monitor_router = ctx.ui_router.new({
       error_title = "FUEL UI ERROR",
       on_render_error = ctx.on_render_error,
@@ -192,22 +180,8 @@ function M.render_monitor(ctx, model)
         { name = "Details", render = ctx.fuel_ui.render_details },
         { name = "Diagnostics", render = ctx.fuel_ui.render_diagnostics,
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        -- Fix (2026-07-26): CRITICAL. Diese Closure gab bisher NICHTS
-        -- zurueck -- ui_router.lua's render() erhaelt dadurch page_footer
-        -- == nil und zeichnet seinen eigenen generischen "< Page 4/4 >"-
-        -- Indikator MIT EIGENER Touch-Zone an einer Position, die nicht
-        -- zu den tatsaechlich sichtbaren ZURUECK/WEITER-Buttons passt, die
-        -- router_ui.lua:render() selbst per mux.footer_nav() bereits in
-        -- dieselbe Zeile gezeichnet hat (siehe M:render()'s "return mux.
-        -- footer_nav(...)" dort). Ein Tap auf den sichtbaren ZURUECK-
-        -- Button traf dadurch nie die tatsaechlich registrierte Touch-Zone
-        -- -- der Button sah klickbar aus, tat aber nichts. Alle anderen
-        -- Seiten (Overview/Details/Diagnostics) sind direkt als page.render
-        -- zugewiesen und geben ihr footer_nav()-Ergebnis bereits korrekt
-        -- zurueck (siehe Fix-Kommentar 2026-07-10 oben) -- die Router-Seite
-        -- war durch ihre Wrapper-Closure die einzige Ausnahme.
-        { name = "Router", render = function(target, model, should_clear) return ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
-          handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }
+        { name = "Router", render = function(target, model, should_clear) return responsive_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
+          handle_touch = function(x, y) return responsive_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [ctx.keys.left] = true, [ctx.keys.pageUp] = true },
       key_next = { [ctx.keys.right] = true, [ctx.keys.pageDown] = true }
