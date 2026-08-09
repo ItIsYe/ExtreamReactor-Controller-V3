@@ -19,6 +19,40 @@ local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampe
 
 local monitor_router = nil
 local current_mon = nil
+local render_buffer = { parent = nil, name = nil, width = nil, height = nil, target = nil }
+
+local function get_render_target(mon, monitor_name)
+  if not mon or type(mon.getSize) ~= "function" then return mon end
+  if type(window) ~= "table" or type(window.create) ~= "function" then return mon end
+
+  local ok_size, w, h = pcall(mon.getSize)
+  if not ok_size or type(w) ~= "number" or type(h) ~= "number" or w < 1 or h < 1 then
+    return mon
+  end
+
+  if render_buffer.target
+      and render_buffer.parent == mon
+      and render_buffer.name == monitor_name
+      and render_buffer.width == w
+      and render_buffer.height == h then
+    return render_buffer.target
+  end
+
+  local ok_window, target = pcall(window.create, mon, 1, 1, w, h, false)
+  if not ok_window or not target then
+    render_buffer = { parent = nil, name = nil, width = nil, height = nil, target = nil }
+    return mon
+  end
+
+  render_buffer = {
+    parent = mon,
+    name = monitor_name,
+    width = w,
+    height = h,
+    target = target,
+  }
+  return target
+end
 -- Feature (2026-07-12): REST-P1.4. Zaehler, die AUSSERHALB des Routers
 -- entstehen -- werden in M.get_diagnostics() mit dem Router-eigenen
 -- Zustand zusammengefuehrt.
@@ -127,6 +161,7 @@ function M.render_monitor(ctx, model)
   -- Signatur ist bereits exakt (mon, model), passt 1:1 zu dem, was
   -- router:render(mon, model) tatsaechlich an page.render() durchreicht.
   current_mon = mon
+  local render_target = get_render_target(mon, devices.monitor_name)
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
     monitor_router = ctx.ui_router.new({
@@ -158,7 +193,7 @@ function M.render_monitor(ctx, model)
       key_next = { [ctx.keys.right] = true, [ctx.keys.pageDown] = true }
     })
   end
-  monitor_router:render(mon, model)
+  monitor_router:render(render_target, model)
 end
 
 -- Fix (2026-07-09): CRITICAL. Beim Modularisierungs-Refactor wurde hier
