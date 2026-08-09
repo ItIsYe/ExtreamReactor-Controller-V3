@@ -29,6 +29,16 @@ local base = {
 
 assert(state(base).code == 'READY')
 
+base.logistics.bridge = nil
+assert(state(base).code == 'NO_ME_BRIDGE', 'missing ME Bridge must block READY')
+base.logistics.bridge = 'meBridge_0'
+
+base.logistics.reactors[2].connected = false
+local blocked = state(base)
+assert(blocked.code == 'LOGISTICS_BLOCKED', 'missing reactor inlet/identity must block READY')
+assert(blocked.detail:find('R2', 1, true))
+base.logistics.reactors[2].connected = true
+
 base.logistics.reactors[2].fuel_pct = nil
 local stale = state(base)
 assert(stale.code == 'NO_FRESH_RT_DATA', 'missing/stale per-reactor fuel data must block READY')
