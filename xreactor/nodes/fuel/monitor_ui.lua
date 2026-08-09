@@ -21,10 +21,10 @@ local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampe
 
 local monitor_router = nil
 local current_mon = nil
-local render_buffer = { parent = nil, name = nil, width = nil, height = nil, scale = nil, target = nil }
+local render_buffer = { parent = nil, name = nil, width = nil, height = nil, scale = nil, target = nil, rebuilt = false }
 
 local function reset_render_buffer()
-  render_buffer = { parent = nil, name = nil, width = nil, height = nil, scale = nil, target = nil }
+  render_buffer = { parent = nil, name = nil, width = nil, height = nil, scale = nil, target = nil, rebuilt = false }
 end
 
 local function monitor_scale(mon)
@@ -66,6 +66,7 @@ local function get_render_target(mon, monitor_name)
     height = h,
     scale = scale,
     target = target,
+    rebuilt = true,
   }
   return target
 end
@@ -172,6 +173,11 @@ function M.render_monitor(ctx, model)
       key_prev = { [ctx.keys.left] = true, [ctx.keys.pageUp] = true },
       key_next = { [ctx.keys.right] = true, [ctx.keys.pageDown] = true }
     })
+  end
+  -- Fix: render_buffer Rebuild (Scale/Grössenänderung) darf keine Transition triggern
+  if render_buffer.rebuilt and monitor_router then
+    monitor_router.last_render_mon = render_target
+    render_buffer.rebuilt = false
   end
   render_frame(monitor_router, render_target, mon, model)
 end
