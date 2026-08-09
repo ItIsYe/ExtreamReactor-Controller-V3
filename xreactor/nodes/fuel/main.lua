@@ -170,6 +170,7 @@ local master_alerts = {}
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
 local fuel_ui = fuel_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
+local FUEL_MONITOR_SCALE = 1.0
 
 local function warn_once(key, message)
   support_runtime.warn_once(devices, function(msg, level) utils.log(CONFIG.LOG_PREFIX, msg, level) end, key, message)
@@ -179,6 +180,7 @@ local function get_rs_router()
   if not rs_router_instance then
     rs_router_instance = redstone_router_lib.new({
       config = config,
+      node_id = node_id,
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
       comms = comms,
@@ -239,9 +241,10 @@ local function get_router_ui()
         end
         -- 4. Fallback: bekannte RT-Peers aus Netzwerk
         if #list == 0 and comms and type(comms.get_peers) == "function" then
-          for _, peer in ipairs(comms:get_peers()) do
-            if peer.role == "RT" then
-              if not seen[peer.id] then seen[peer.id] = true; list[#list + 1] = { id = peer.id, label = peer.id } end
+          for peer_id, peer in pairs(comms:get_peers() or {}) do
+            if type(peer) == "table" and peer.role == constants.roles.RT_NODE and peer.down ~= true then
+              local id = tostring(peer_id)
+              if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = id } end
             end
           end
         end
@@ -255,7 +258,7 @@ end
 local function discover()
   local names
   local registry_devices
-  local monitor_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  local monitor_entry = monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
@@ -369,7 +372,7 @@ local function init()
   -- Fix (2026-07-09): sofortige, direkte Monitor-Ersterkennung hier
   -- (synchron, vor dem Event-Loop) -- discover() aktualisiert/bestaetigt
   -- das danach weiter periodisch.
-  local mon_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  local mon_entry = monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)
   devices.monitor = mon_entry and mon_entry.mon or nil
   devices.monitor_name = mon_entry and mon_entry.name or nil
   if not devices.monitor and term and type(term.current) == "function" then

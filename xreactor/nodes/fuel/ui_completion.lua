@@ -123,7 +123,7 @@ local function fuel_text(reactor)
 end
 
 local function footer(mon, h, w, center)
-  return mux.footer_nav(mon, h, w, { center = center })
+  return mux.footer_nav(mon, h, w, { center = center, inset = 3 })
 end
 
 function M.attach(instance, opts)
@@ -177,6 +177,13 @@ function M.attach(instance, opts)
       })
     end
 
+    if #reactors == 0 and y < h - 1 then
+      y = data_row(mon, w, h, y, {
+        label = "NAECHSTER SCHRITT", value = "ROUTER > EDIT / RT-NODE ONLINE",
+        status = "LIMITED", icon = "config"
+      })
+    end
+
     if #reactors > 0 and y < h - 1 then
       local counts = logistics.operational_counts or {}
       y = data_row(mon, w, h, y, {
@@ -210,6 +217,19 @@ function M.attach(instance, opts)
     local reactors = logistics.reactors or {}
     if #reactors == 0 then
       if h >= 5 then mux.banner(mon, 2, 5, math.max(1, w - 3), "KEINE REAKTOREN KONFIGURIERT", "WARNING", nil) end
+      if h >= 14 then
+        mux.warning_box(mon, 2, 7, math.max(1, w - 3), {
+          "Noch keine Reaktor-Ziele vorhanden",
+          "RT-Nodes online bringen oder logistics.reactors konfigurieren",
+          "Danach Seite 4 ROUTER oeffnen und EDIT waehlen",
+          "Dort Reaktor antippen und Ventilkette festlegen",
+        }, "WARNING")
+      elseif h >= 8 then
+        mux.data_row(mon, 2, 7, math.max(1, w - 3), {
+          label = "NAECHSTER SCHRITT", value = "ROUTER > EDIT",
+          status = "LIMITED", icon = "config"
+        })
+      end
       state.details_prev, state.details_next = nil, nil
       return footer(mon, h, w, "FUEL DETAILS")
     end
