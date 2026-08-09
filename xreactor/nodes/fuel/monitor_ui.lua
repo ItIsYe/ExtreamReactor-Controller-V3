@@ -169,9 +169,9 @@ function M.render_monitor(ctx, model)
   local render_target = get_render_target(mon, devices.monitor_name)
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
-    local function responsive_router_ui()
-      return router_ui_responsive.attach(ctx.get_router_ui())
-    end
+    -- Attach only presentation paging to the already-cached Router UI.
+    -- Save/validation/teach-in/valve behavior stays in router_ui.lua.
+    router_ui_responsive.attach(ctx.get_router_ui())
     monitor_router = ctx.ui_router.new({
       error_title = "FUEL UI ERROR",
       on_render_error = ctx.on_render_error,
@@ -180,8 +180,8 @@ function M.render_monitor(ctx, model)
         { name = "Details", render = ctx.fuel_ui.render_details },
         { name = "Diagnostics", render = ctx.fuel_ui.render_diagnostics,
           handle_touch = function(x, y) return fuel_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        { name = "Router", render = function(target, model, should_clear) return responsive_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
-          handle_touch = function(x, y) return responsive_router_ui():handle_touch(x, y) end }
+        { name = "Router", render = function(target, model, should_clear) return ctx.get_router_ui():render(target, ctx.ui, ctx.colors, should_clear) end,
+          handle_touch = function(x, y) return ctx.get_router_ui():handle_touch(x, y) end }
       },
       key_prev = { [ctx.keys.left] = true, [ctx.keys.pageUp] = true },
       key_next = { [ctx.keys.right] = true, [ctx.keys.pageDown] = true }
