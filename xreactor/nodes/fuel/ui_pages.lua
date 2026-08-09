@@ -56,6 +56,22 @@ function M.compute_view_state(model, devices, reserve, minimum)
   if logistics.enabled == false then
     return { code = "LOGISTICS_DISABLED", severity = "LIMITED", title = "Logistik deaktiviert", detail = "logistics.enabled = false", action = "logistics.enabled auf true setzen, sobald bereit" }
   end
+  if logistics.bridge == nil then
+    return { code = "NO_ME_BRIDGE", severity = "WARNING", title = "ME Bridge fehlt", detail = "Keine betriebsbereite ME Bridge erkannt", action = "ME Bridge und Wired Modem pruefen" }
+  end
+  local blocked_reactors = {}
+  for _, reactor in ipairs(logistics.reactors or {}) do
+    if type(reactor) == "table" and reactor.connected ~= true then
+      blocked_reactors[#blocked_reactors + 1] = tostring(reactor.label or reactor.reactor_id or "?")
+    end
+  end
+  if #blocked_reactors > 0 then
+    return {
+      code = "LOGISTICS_BLOCKED", severity = "WARNING", title = "Lieferweg blockiert",
+      detail = table.concat(blocked_reactors, ", "),
+      action = "reactor_id und Inlet-Peripheral pruefen"
+    }
+  end
   local missing_fuel_data = {}
   for _, reactor in ipairs(logistics.reactors or {}) do
     if type(reactor) == "table" and type(reactor.fuel_pct) ~= "number" then
