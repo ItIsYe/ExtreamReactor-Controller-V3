@@ -331,9 +331,10 @@ function router:render(mon, model)
     return
   end
   ui.begin_frame(mon)
-  -- Fix: setVisible(false) vor dem Render verhindert Flackern
-  -- (CC:Tweaked Double-Buffering: Monitor erst nach vollem Neuzeichnen sichtbar)
-  if mon.setVisible then pcall(mon.setVisible, false) end
+  -- Visibility buffering deliberately does not belong in the shared router.
+  -- A physical CC:Tweaked monitor has no setVisible() method. Roles that need
+  -- buffering must provide an actual Window target and own its lifecycle
+  -- outside this renderer (FUEL does this in nodes/fuel/monitor_ui.lua).
   -- Fix (2026-07-11): UI-P0.5 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
   -- FIX_2026-07-12.md). Diese Funktion hatte bisher eine EIGENE,
   -- unabhaengige Zeit-Drossel (self.interval/self.last_draw) zusaetzlich
@@ -461,8 +462,6 @@ function router:render(mon, model)
   if render_start_ms then
     self.ui_diag.last_render_ms = (os.epoch and os.epoch("utc") or render_start_ms) - render_start_ms
   end
-  -- Fix: setVisible(true) nach dem Render
-  if mon.setVisible then pcall(mon.setVisible, true) end
   local w, h = ui.getSize(mon)
   if not w or not h then
     return
