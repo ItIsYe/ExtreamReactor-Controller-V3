@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 504,
-  manifest_id = "manifest-v504",
+  manifest_version = 505,
+  manifest_id = "manifest-v505",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always = true },
   { path = "installer/journal.lua", size_bytes = 11987, hash = "ae694c83", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "050e658f", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "e42b3a08", always = true },
   { path = "start.lua", size_bytes = 13840, hash = "11e88196", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -40,7 +40,7 @@ return {
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
   { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e" },
-  { path = "core/ui_router.lua", size_bytes = 21150, hash = "186f209c" },
+  { path = "core/ui_router.lua", size_bytes = 21151, hash = "eb2713a0" },
   { path = "core/utils.lua", size_bytes = 24602, hash = "96cdaaaf" },
   { path = "core/auto_update.lua", size_bytes = 5174, hash = "332b3250" },
   { path = "core/remote_update.lua", size_bytes = 13576, hash = "ac163240" },
@@ -96,7 +96,7 @@ return {
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"} },
     { path = "master/ui/alarms.lua", size_bytes = 7996, hash = "93b8a349", required_for={"MASTER"} },
     { path = "master/ui/alerts.lua", size_bytes = 28137, hash = "4bf57a50", required_for={"MASTER"} },
-    { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"} },
+    { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38b057f0", required_for={"MASTER"} },
     { path = "master/ui/multiview.lua", size_bytes = 20300, hash = "cd241353", required_for={"MASTER"} },
     { path = "master/ui/overview.lua", size_bytes = 13792, hash = "33054a4f", required_for={"MASTER"} },
     { path = "master/ui/resources.lua", size_bytes = 6215, hash = "2137ffd1", required_for={"MASTER"} },
@@ -107,44 +107,9 @@ return {
     { path = "master/ui/updates.lua", size_bytes = 4914, hash = "577f9890", required_for={"MASTER"} },
     { path = "master/ui/system_map.lua", size_bytes = 6136, hash = "c62cf990", required_for={"MASTER"} },
     { path = "master/ui/config_editor.lua", size_bytes = 6749, hash = "682b50a4", required_for={"MASTER"} },
-    -- Fix (2026-07-20): VALVE NICHT (mehr) in required_for -- die VALVE-Node
-    -- hat einen eigenen, fest eingebauten (nicht optionalen, nicht ueber
-    -- dieses Feature gesteuerten) 1x1-Statusmonitor direkt in nodes/valve/
-    -- main.lua (render_status_monitor()), unabhaengig vom hier verwalteten
-    -- 1x3-Turm-Ampel-Modul mit Shape-Check. Siehe dortiger Kommentar.
     { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
-    -- Fix (2026-07-16): CRITICAL. MANIFEST-P1 aus
-    -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 17).
-    -- Fehlte bisher ganz -- files_for_role() fuegt einen roles.*-Eintrag
-    -- nur hinzu, wenn "always = true" ODER "required_for" die gewaehlte
-    -- Rolle enthaelt (siehe installer/manifest.lua). Ohne required_for
-    -- wurde diese Datei fuer KEINE Rolle jemals installiert, selbst wenn
-    -- der Nutzer das Feature interaktiv ausgewaehlt hatte (der Prompt
-    -- erschien sogar faelschlich fuer JEDE Rolle, da matches_role() in
-    -- installer/init.lua ein fehlendes required_for als "passt immer"
-    -- interpretiert). Rollen entsprechen den tatsaechlichen
-    -- require("optional.speaker_alarm")-Aufrufstellen: nodes/rt/main.lua,
-    -- nodes/rt/monitor_ui.lua, nodes/energy/main.lua, nodes/water/main.lua,
-    -- nodes/fuel/main.lua, nodes/reprocessor/main.lua,
-    -- nodes/log_collector/main.lua, sowie services/alert_service.lua
-    -- (dort per Default AKTIV, "opt-out via enable_speaker_alarm=false"),
-    -- das ueber master/init_runtime.lua auch von MASTER instanziiert wird
-    -- -- anders als "ampel", das fuer MASTER ein eigenes getrenntes
-    -- "master_ampel"-Feature hat, gibt es fuer speaker_alarm keine
-    -- MASTER-spezifische Variante. nodes/valve/main.lua nutzt weder
-    -- speaker_alarm noch alert_service -- VALVE bewusst nicht enthalten.
     { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "44a8e65d", optional=true, feature="speaker_alarm", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG","MASTER"} },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "abe22b63", optional=true, feature="pocket_query", required_for={"MASTER"} },
-    -- Feature (2026-07-09): eigenstaendiges Pocket-Computer-Client-Skript.
-    -- Bewusst OHNE Auto-Installation -- Pocket Computer ist kein waehlbarer
-    -- Rollen-Typ im Installer, laeuft daher nie automatisch bei irgendeiner
-    -- Rollen-Installation mit ("manual install only", siehe Commit-Historie
-    -- der Datei). optional=true + leeres required_for={} sorgt dafuer,
-    -- dass es weder automatisch installiert noch als Auswahl-Prompt bei
-    -- IRGENDEINER Rolle auftaucht (siehe collect_optional_feature_names()
-    -- in installer/init.lua: required_for={} matched keine Rolle). Trotzdem
-    -- im Manifest gefuehrt, damit Groesse/Hash verifizierbar sind, falls
-    -- die Datei gezielt manuell heruntergeladen wird.
     { path = "optional/pocket_client.lua", size_bytes = 10846, hash = "10601ed6", optional=true, feature="pocket_client", required_for={} },
     { path = "optional/master_ampel.lua", size_bytes = 6373, hash = "f3d68ef7", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 52976, hash = "bd210ff0", required_for={"MASTER"} },
@@ -152,7 +117,7 @@ return {
     },
     rt = {
     { path = "adapters/reactor.lua", size_bytes = 19150, hash = "27d9025b", required_for={"RT"} },
-    { path = "adapters/turbine.lua", size_bytes = 3871, hash = "a9e924f3", required_for={"RT"} },
+    { path = "adapters/turbine.lua", size_bytes = 3871, hash = "a9c924f3", required_for={"RT"} },
     { path = "core/control_rails.lua", size_bytes = 8017, hash = "01c1a770", required_for={"RT"} },
     { path = "core/fluid.lua", size_bytes = 5017, hash = "9a5c0bea", required_for={"RT"} },
     { path = "core/turbine_ctrl.lua", size_bytes = 2663, hash = "d1b27731", required_for={"RT"} },
@@ -214,7 +179,7 @@ return {
     { path = "nodes/fuel/command_handler.lua", size_bytes = 2096, hash = "369baea1", required_for={"FUEL"} },
     { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 4052, hash = "d18e34ba", required_for={"FUEL"} },
     { path = "nodes/fuel/monitor_ui.lua", size_bytes = 9541, hash = "f0e96df9", required_for={"FUEL"} },
-    { path = "nodes/fuel/ui_completion.lua", size_bytes = 17071, hash = "582e3446", required_for={"FUEL"} },
+    { path = "nodes/fuel/ui_completion.lua", size_bytes = 0, hash = "00000000", required_for={"FUEL"} },
     { path = "nodes/fuel/ui_diagnostics_overlay.lua", size_bytes = 2066, hash = "6dd3243f", required_for={"FUEL"} },
     { path = "nodes/fuel/storage.lua", size_bytes = 2379, hash = "31ad81f2", required_for={"FUEL"} },
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 24089, hash = "27e2283a", required_for={"FUEL"}},
@@ -242,7 +207,7 @@ return {
     { path = "nodes/log_collector/default_ui.lua", size_bytes = 4481, hash = "adeb5fa4", required_for={"LOG"} },
     },
     shared_support = {
-    { path = "nodes/support/command_handler.lua", size_bytes = 5643, hash = "7b6b4fac", required_for={"WATER", "FUEL", "REPROCESSING"} },
+    { path = "nodes/support/command_handler.lua", size_bytes = 5643, hash = "7b6b4bcf", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY", "WATER", "FUEL", "REPROCESSING", "RT"} },
     { path = "nodes/support/runtime.lua", size_bytes = 9247, hash = "556b690a", required_for={"WATER", "FUEL", "REPROCESSING", "RT", "ENERGY", "MASTER", "VALVE"} },
