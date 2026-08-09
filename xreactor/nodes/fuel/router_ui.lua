@@ -567,7 +567,12 @@ function M:render(target, ui, colors, should_clear)
   -- true nur bei Transition. Default true verursacht Flackern.
   if should_clear == nil then should_clear = false end
   local w, h = ui.getSize(target)
-  if not w or not h then return end
+  -- Fix: ui.getSize schlägt bei Window-Targets manchmal fehl (safe_monitor_call)
+  -- Direkt-Fallback über pcall damit render nicht abbricht und edit_btn nil bleibt
+  if not w or not h then
+    local ok, fw, fh = pcall(function() return target.getSize() end)
+    if ok and fw and fh then w, h = fw, fh else return end
+  end
   local u = self._ui
   local page_status = u.save.state == "FAILED" and "WARNING" or (u.mode == "edit" and u.dirty and "LIMITED" or "OK")
   if should_clear then mux.clear(target) end
