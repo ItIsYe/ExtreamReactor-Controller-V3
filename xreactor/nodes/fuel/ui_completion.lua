@@ -181,7 +181,9 @@ function M.attach(instance, opts)
       local counts = logistics.operational_counts or {}
       y = data_row(mon, w, h, y, {
         label = "REAKTOREN",
-        value = string.format("READY %d/%d", tonumber(counts.ready) or 0, tonumber(counts.configured) or #reactors),
+        value = string.format("C%d R%d B%d S%d M%d",
+          tonumber(counts.configured) or #reactors, tonumber(counts.ready) or 0,
+          tonumber(counts.blocked) or 0, tonumber(counts.stale) or 0, tonumber(counts.missing) or 0),
         status = (tonumber(counts.ready) or 0) == #reactors and "OK" or "WARNING", icon = "reactor"
       })
       local shown = 0
