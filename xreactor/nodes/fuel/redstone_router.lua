@@ -46,6 +46,51 @@ local function safe_call(obj, method, ...)
   return r, nil
 end
 
+local NODE_ID_PATH = "/xreactor/config/node_id.txt"
+
+local function read_runtime_node_id()
+  if type(fs) ~= "table" or type(fs.exists) ~= "function" or type(fs.open) ~= "function" then return nil end
+  local ok_exists, exists = pcall(fs.exists, NODE_ID_PATH)
+  if not ok_exists or not exists then return nil end
+  local ok_open, handle = pcall(fs.open, NODE_ID_PATH, "r")
+  if not ok_open or not handle then return nil end
+  local ok_read, value = pcall(handle.readAll)
+  pcall(handle.close)
+  if not ok_read or type(value) ~= "string" then return nil end
+  value = value:match("^%s*(.-)%s*$")
+  if value == "" then return nil end
+  return value
+end
+
+local function resolve_source_node_id(config)
+  local persisted = read_runtime_node_id()
+  if persisted then return persisted end
+  local configured = config and config.node_id
+  if type(configured) == "string" and configured ~= "" then return configured end
+  if os and type(os.getComputerID) == "function" then return "node-" .. tostring(os.getComputerID()) end
+  return nil
+end
+
+local function find_wireless_modem(config)
+  local configured = config and type(config.wireless_modem) == "string" and config.wireless_modem or nil
+  if configured and configured ~= "" then
+    local present_ok, present = pcall(peripheral.isPresent, configured)
+    if not present_ok or not present then return nil end
+    local wrap_ok, modem = pcall(peripheral.wrap, configured)
+    if not wrap_ok or not modem or type(modem.isWireless) ~= "function" then return nil end
+    local wireless_ok, wireless = pcall(modem.isWireless)
+    if wireless_ok and wireless == true then return modem end
+    return nil
+  end
+  local ok_find, modem = pcall(peripheral.find, "modem", function(_, mm)
+    if not mm or type(mm.isWireless) ~= "function" then return false end
+    local wireless_ok, wireless = pcall(mm.isWireless)
+    return wireless_ok and wireless == true
+  end)
+  if ok_find then return modem end
+  return nil
+end
+
 -- Liefert eine flache, deduplizierte Liste JEDES Ventils, das in
 -- irgendeiner Route vorkommt (side+integrator identisch => dasselbe
 -- physische Ventil, unabhaengig davon, in wie vielen Routen es auftaucht).
@@ -238,14 +283,12 @@ function M.new(opts)
   -- (constants.channels.VALVE = 6504), bewusst getrennt von der normalen
   -- comms_service-Pipeline (kein CONTROL/STATUS-Traffic) -- roh per
   -- modem.transmit, kein Ack/Retry-Overhead.
-  local valve_modem = nil
-  local ok_find, m = pcall(peripheral.find, "modem", function(_, mm) return mm.isWireless and mm.isWireless() end)
-  if ok_find and m then
-    valve_modem = m
-    pcall(valve_modem.open, constants.channels.VALVE)
-  end
+  local router_config = opts.config or {}
+  local valve_modem = find_wireless_modem(router_config)
+  if valve_modem then pcall(valve_modem.open, constants.channels.VALVE) end
   local self = {
-    config = opts.config or {},
+    config = router_config,
+    source_node_id = opts.node_id or resolve_source_node_id(router_config),
     log = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
     -- Fuer Auto-Discovery erreichbarer VALVE-Nodes (siehe refresh()).
@@ -408,11 +451,16 @@ function M:_set_valve(valve, high)
         self.warn_once("no_valve_modem", "RedstoneRouter: kein Wireless Modem fuer den Ventil-Kanal gefunden")
         return false
       end
+      local source_node_id = self.source_node_id
+      if type(source_node_id) ~= "string" or source_node_id == "" then
+        self.warn_once("missing_valve_source_id", "RedstoneRouter: keine gueltige Runtime-Node-ID fuer SET_VALVE; Netzwerkschaltung verweigert")
+        return false
+      end
       self._state.command_seq = (self._state.command_seq or 0) + 1
-      local command_id = tostring(self.config.node_id or "FUEL") .. "-" .. tostring(os.epoch and os.epoch("utc") or 0) .. "-" .. tostring(self._state.command_seq)
+      local command_id = source_node_id .. "-" .. tostring(os.epoch and os.epoch("utc") or 0) .. "-" .. tostring(self._state.command_seq)
       local key = valve.integrator .. "|" .. tostring(side)
       local message = {
-        type = "SET_VALVE", src = self.config.node_id, dst = w.node_id,
+        type = "SET_VALVE", src = source_node_id, dst = w.node_id,
         command_id = command_id, side = side, high = high, ts = os.epoch and os.epoch("utc") or 0,
       }
       local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
@@ -423,7 +471,7 @@ function M:_set_valve(valve, high)
       end
       self._state.pending_valve_acks = self._state.pending_valve_acks or {}
       self._state.pending_valve_acks[key] = {
-        command_id = command_id, dst = w.node_id, side = side, high = high,
+        command_id = command_id, src = source_node_id, dst = w.node_id, side = side, high = high,
         integrator = valve.integrator, sent_ts = message.ts, retries = 0,
       }
       return true, command_id
@@ -878,6 +926,11 @@ function M:handle_valve_ack(message)
   if not pending then return end
   for key, entry in pairs(pending) do
     if entry.command_id == message.command_id then
+      if message.src ~= entry.dst or message.dst ~= entry.src then
+        self.warn_once("valve_ack_identity:" .. tostring(key) .. ":" .. tostring(message.command_id),
+          "RedstoneRouter: VALVE_ACK mit unpassender src/dst-Identitaet ignoriert")
+        return
+      end
       pending[key] = nil
       self._state.confirmed_valve_state = self._state.confirmed_valve_state or {}
       self._state.confirmed_valve_state[key] = {
@@ -912,7 +965,7 @@ function M:check_pending_acks()
         entry.retries = entry.retries + 1
         entry.sent_ts = now
         pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
-          type = "SET_VALVE", src = self.config.node_id, dst = entry.dst,
+          type = "SET_VALVE", src = entry.src, dst = entry.dst,
           command_id = entry.command_id, side = entry.side, high = entry.high, ts = now,
         })
       end

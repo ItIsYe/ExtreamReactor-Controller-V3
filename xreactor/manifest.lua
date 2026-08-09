@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 505,
-  manifest_id = "manifest-v505",
+  manifest_version = 506,
+  manifest_id = "manifest-v506",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/init.lua", size_bytes = 28141, hash = "0defdf4f", always = true },
   { path = "installer/journal.lua", size_bytes = 11987, hash = "ae694c83", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5768, hash = "0189a978", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "e42b3a08", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "1c35dcc0", always = true },
   { path = "start.lua", size_bytes = 13840, hash = "11e88196", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -220,7 +220,7 @@ return {
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 24089, hash = "27e2283a", required_for={"FUEL"}},
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 29802, hash = "9d423ec4", required_for={"FUEL","REPROCESSING"} },
-    { path = "nodes/fuel/redstone_router.lua", size_bytes = 48894, hash = "c72567e2", required_for={"FUEL","REPROCESSING","WATER"} },
+    { path = "nodes/fuel/redstone_router.lua", size_bytes = 51404, hash = "94cdb288", required_for={"FUEL","REPROCESSING","WATER"} },
     { path = "nodes/fuel/router_ui.lua", size_bytes = 36257, hash = "1b90edb0", required_for={"FUEL","REPROCESSING"}},
     { path = "nodes/fuel/router_ui_responsive.lua", size_bytes = 11436, hash = "8ccea220", required_for={"FUEL"} },
     },
@@ -233,7 +233,7 @@ return {
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 2332, hash = "a571ceaf", required_for={"VALVE"} },
-    { path = "nodes/valve/main.lua", size_bytes = 29057, hash = "bc4f5040", required_for={"VALVE"} },
+    { path = "nodes/valve/main.lua", size_bytes = 31756, hash = "aac9f47d", required_for={"VALVE"} },
     },
     log = {
     { path = "nodes/log_collector/main.lua", size_bytes = 60851, hash = "d401680c", required_for={"LOG"} },

@@ -152,7 +152,8 @@ local valve_health = health.new({})
 -- moeglicherweise unsicher offenes Ventil bliebe dann fuer immer
 -- unbeaufsichtigt.
 local last_command_ts = os.epoch("utc")
-local current_high = config.default_blocked ~= false  -- true = blockiert (Fail-Safe-Default)
+local desired_high = config.default_blocked ~= false
+local current_high = nil  -- nil = physischer Zustand noch nicht erfolgreich bestaetigt
 
 local last_write_error = nil
 local valve_initialized = false
@@ -272,7 +273,12 @@ end
 local function render_status_monitor()
   local mon = get_status_monitor()
   if not mon then return end
-  local color = current_high and colors.red or colors.green
+  local color
+  if not valve_initialized or last_write_error then
+    color = colors.orange
+  else
+    color = current_high and colors.red or colors.green
+  end
   if status_monitor_last_color == color then return end
   local ok = pcall(function()
     mon.setBackgroundColor(color)
@@ -288,6 +294,7 @@ end
 
 local function apply_valve(high)
   if valve_initialized and high == current_high then
+    last_write_error = nil
     last_command_ts = os.epoch("utc")
     render_status_monitor()
     return true  -- bereits im Zielzustand, kein erneuter Write noetig
@@ -295,6 +302,7 @@ local function apply_valve(high)
   local ok, err = write_actuator(high)
   if not ok then
     last_write_error = tostring(err)
+    render_status_monitor()
     utils.log(CONFIG.LOG_PREFIX, "Ventil-Write fehlgeschlagen (Sorter " .. tostring(sorter_resolved_name or config.sorter_name or "?") .. "): " .. tostring(err), "ERROR")
     return false
   end
@@ -309,7 +317,7 @@ end
 
 -- Fail-Safe-Grundzustand direkt beim Boot setzen, bevor irgendeine
 -- Verbindung zu FUEL/Master ueberhaupt steht.
-apply_valve(current_high)
+apply_valve(desired_high)
 
 -- Feature (2026-07-09): FUEL<->VALVE Ventil-Kommandos laufen ueber einen
 -- EIGENEN, dedizierten Kanal (constants.channels.VALVE = 6504) -- explizit
@@ -319,16 +327,40 @@ apply_valve(current_high)
 -- Auto-Discovery durch FUEL) laufen weiterhin normal ueber comms_service/
 -- CONTROL+STATUS wie bei jedem anderen Node -- nur die eigentlichen
 -- Ventil-Kommandos sind isoliert.
-local valve_modem = peripheral.find("modem", function(_, m) return m.isWireless and m.isWireless() end)
+local function find_valve_modem()
+  local configured = type(config.wireless_modem) == "string" and config.wireless_modem or nil
+  if configured and configured ~= "" then
+    local present_ok, present = pcall(peripheral.isPresent, configured)
+    if present_ok and present then
+      local wrap_ok, modem = pcall(peripheral.wrap, configured)
+      if wrap_ok and modem and type(modem.isWireless) == "function" then
+        local wireless_ok, wireless = pcall(modem.isWireless)
+        if wireless_ok and wireless == true then return modem, configured, nil end
+      end
+    end
+    return nil, configured, "konfiguriertes Wireless Modem nicht verfuegbar oder nicht wireless"
+  end
+  local resolved_name = nil
+  local ok_find, modem = pcall(peripheral.find, "modem", function(name, m)
+    if not m or type(m.isWireless) ~= "function" then return false end
+    local wireless_ok, wireless = pcall(m.isWireless)
+    if wireless_ok and wireless == true then resolved_name = name; return true end
+    return false
+  end)
+  if ok_find and modem then return modem, resolved_name, nil end
+  return nil, nil, "kein Wireless Modem gefunden"
+end
+
+local valve_modem, valve_modem_name, valve_modem_error = find_valve_modem()
 if valve_modem then
   local ok_open = pcall(valve_modem.open, constants.channels.VALVE)
   if ok_open then
-    utils.log(CONFIG.LOG_PREFIX, "Eigener Ventil-Kanal " .. constants.channels.VALVE .. " geoeffnet", "INFO")
+    utils.log(CONFIG.LOG_PREFIX, "Eigener Ventil-Kanal " .. constants.channels.VALVE .. " geoeffnet via " .. tostring(valve_modem_name or "auto"), "INFO")
   else
     utils.log(CONFIG.LOG_PREFIX, "Ventil-Kanal " .. constants.channels.VALVE .. " konnte nicht geoeffnet werden", "ERROR")
   end
 else
-  utils.log(CONFIG.LOG_PREFIX, "Kein Wireless Modem gefunden — Ventil-Kanal inaktiv", "ERROR")
+  utils.log(CONFIG.LOG_PREFIX, "Ventil-Kanal inaktiv: " .. tostring(valve_modem_error or "kein Wireless Modem"), "ERROR")
 end
 
 -- Feature (2026-07-20): "Weg 3" -- Route-Teach-in per manuellem Redstone-
@@ -422,6 +454,18 @@ local function handle_valve_channel_event(event)
   if channel ~= constants.channels.VALVE then return end
   if type(message) ~= "table" or message.type ~= "SET_VALVE" then return end
   if message.dst ~= node_id then return end  -- nicht fuer diese Node bestimmt
+  if type(message.src) ~= "string" or message.src == "" then
+    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltige 'src' ignoriert", "WARN")
+    return
+  end
+  if type(message.command_id) ~= "string" or message.command_id == "" then
+    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltige 'command_id' ignoriert", "WARN")
+    return
+  end
+  if type(message.high) ~= "boolean" then
+    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltiges 'high' ignoriert", "WARN")
+    return
+  end
   -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md). "fremder Sender auf Kanal 6504 kann
   -- passende Kommandos senden".
@@ -451,10 +495,6 @@ local function handle_valve_channel_event(event)
     end
     utils.log(CONFIG.LOG_PREFIX, "trusted_source automatisch an " .. tostring(message.src) .. " gebunden (Erstkommando)", "INFO")
   end
-  if type(message.high) ~= "boolean" then
-    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltiges 'high' ignoriert", "WARN")
-    return
-  end
   -- Fix (2026-07-13): VALVE-P1. Dedupe -- ein per Retry wiederholtes
   -- identisches Kommando (dieselbe command_id) loest keinen erneuten
   -- Redstone-Write/Log-Eintrag aus, wird aber trotzdem erneut bestaetigt.
@@ -473,7 +513,7 @@ local function handle_valve_channel_event(event)
   -- geschrieben, so lange bis sie tatsaechlich uebernommen wurde.
   local applied
   if seen_command(message.command_id) then
-    applied = (current_high == message.high)
+    applied = valve_initialized and (current_high == message.high)
   else
     applied = apply_valve(message.high)
     if applied then
@@ -499,14 +539,21 @@ end })
 -- dauerhaft offen zu lassen (z.B. FUEL-Node abgestuerzt mitten im
 -- Export).
 local STALE_COMMAND_S = 20
+local FAILSAFE_RETRY_MS = 2000
+local last_failsafe_attempt_ts = 0
 services:add({ name = "valve_failsafe", tick = function()
-  if last_command_ts and not current_high then
-    local age_s = (os.epoch("utc") - last_command_ts) / 1000
-    if age_s > STALE_COMMAND_S then
-      utils.log(CONFIG.LOG_PREFIX, string.format(
-        "Kein SET_VALVE seit %.0fs — Fail-Safe: Ventil wird blockiert", age_s), "WARN")
-      apply_valve(true)
+  local now_ms = os.epoch("utc")
+  local age_s = last_command_ts and ((now_ms - last_command_ts) / 1000) or math.huge
+  local needs_block = (not valve_initialized) or current_high ~= true
+  local should_retry = (not valve_initialized) or age_s > STALE_COMMAND_S
+  if needs_block and should_retry and (now_ms - last_failsafe_attempt_ts) >= FAILSAFE_RETRY_MS then
+    last_failsafe_attempt_ts = now_ms
+    if not valve_initialized then
+      utils.log(CONFIG.LOG_PREFIX, "Aktorzustand unbestaetigt — Fail-Safe: BLOCKIERT wird erneut geschrieben", "WARN")
+    else
+      utils.log(CONFIG.LOG_PREFIX, string.format("Kein SET_VALVE seit %.0fs — Fail-Safe: Ventil wird blockiert", age_s), "WARN")
     end
+    apply_valve(true)
   end
 end })
 
@@ -525,13 +572,17 @@ services:add({ name = "teach_input_poll", tick = function() check_teach_input() 
 services:add({ name = "status_monitor_render", tick = function() render_status_monitor() end })
 
 local function build_status_payload()
-  valve_health.status = comms:is_master_reachable() and health.status.OK or health.status.DEGRADED
-  valve_health.reasons = comms:is_master_reachable() and {} or { [health.reasons.COMMS_DOWN] = true }
+  local master_reachable = comms:is_master_reachable()
+  local actuator_ready = valve_initialized and last_write_error == nil
+  valve_health.status = (master_reachable and actuator_ready) and health.status.OK or health.status.DEGRADED
+  valve_health.reasons = {}
+  if not master_reachable then valve_health.reasons[health.reasons.COMMS_DOWN] = true end
+  if not actuator_ready then valve_health.reasons[health.reasons.CONTROL_DEGRADED] = true end
   valve_health.last_seen_ts = os.epoch("utc")
   return non_rt_payload.build_base({
     ts = os.epoch("utc"), role = config.role, node_id = node_id,
     health = { status = valve_health.status, reasons = health.reasons_list(valve_health), last_seen_ts = valve_health.last_seen_ts },
-    master_connected = comms:is_master_reachable(),
+    master_connected = master_reachable,
     queue = comms and comms:get_diagnostics().queue_depth or 0,
   })
 end
@@ -540,10 +591,17 @@ services:add(telemetry_service.new({
   status_interval = config.status_interval or config.heartbeat_interval,
   heartbeat_interval = config.heartbeat_interval,
   build_payload = build_status_payload,
-  heartbeat_state = function() return {
-    blocked = current_high, write_error = last_write_error,
-    actuator_name = sorter_resolved_name or config.sorter_name,
-  } end,
+  heartbeat_state = function()
+    local confirmed_blocked = nil
+    if valve_initialized then confirmed_blocked = current_high end
+    return {
+      blocked = confirmed_blocked,
+      actuator_initialized = valve_initialized,
+      actuator_ready = valve_initialized and last_write_error == nil,
+      write_error = last_write_error,
+      actuator_name = sorter_resolved_name or config.sorter_name,
+    }
+  end,
 }))
 
 -- Fix (2026-07-27): CRITICAL. Alle anderen Rollen, die denselben Event-
