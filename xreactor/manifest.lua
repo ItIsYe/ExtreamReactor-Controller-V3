@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 511,
-  manifest_id = "manifest-v511",
+  manifest_version = 512,
+  manifest_id = "manifest-v512",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -32,7 +32,7 @@ return {
   { path = "core/non_rt_config.lua", size_bytes = 4183, hash = "6f5bf45f"  },
   { path = "core/non_rt_payload.lua", size_bytes = 558, hash = "b9c0175d"  },
   { path = "core/protocol.lua", size_bytes = 6423, hash = "6c324af5"  },
-  { path = "core/registry.lua", size_bytes = 12481, hash = "f36ffed9"  },
+  { path = "core/registry.lua"   },
   { path = "core/remote_log.lua", size_bytes = 4698, hash = "7e6f3647"  },
   { path = "core/safety.lua", size_bytes = 7851, hash = "3d0160cc"  },
   { path = "core/state_machine.lua", size_bytes = 842, hash = "4ae6c19c"  },
