@@ -97,10 +97,15 @@ function M.validate(plan)
     end
 
     entry = entry or {}
+    -- Fix: Eintraege ohne hash (z.B. manifest.lua, release.lua, start.lua
+    -- die vom Installer selbst hinzugefuegt werden) haben kein size_bytes --
+    -- diese Eintraege werden nur heruntergeladen, nicht gegen Hash geprueft.
+    local has_hash = type(entry.hash) == "string" and entry.hash ~= ""
     local size = tonumber(entry.size_bytes)
-    if size == nil or size < 0 then
+    if has_hash and (size == nil or size < 0) then
       return false, "ungueltiges size_bytes-Feld fuer: " .. path
     end
+    size = size or 0
     if size > M.MAX_FILE_SIZE_BYTES then
       return false, "Datei zu gross (" .. size .. " Bytes, max " .. M.MAX_FILE_SIZE_BYTES .. "): " .. path
     end
