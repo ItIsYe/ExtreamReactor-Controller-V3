@@ -38,9 +38,11 @@ end
 package.loaded['core.mockup_ui'] = mux
 package.loaded['nodes.fuel.ui_pages'] = nil
 package.loaded['nodes.fuel.ui_completion'] = nil
+package.loaded['nodes.fuel.ui_diagnostics_overlay'] = nil
 
 local ui_pages = require('nodes.fuel.ui_pages')
 local completion = require('nodes.fuel.ui_completion')
+local diagnostics_overlay = require('nodes.fuel.ui_diagnostics_overlay')
 
 local ui_stub = { getSize = function(mon) return mon.getSize() end }
 local support = {
@@ -54,6 +56,7 @@ local devices = { last_scan_ts = 1, storage_name = 'tank_0', discovery_failed = 
 local config = { logistics = { reactors = {} } }
 local pages = ui_pages.new({ ui = ui_stub, support_ui_pages = support, devices = devices, config = config })
 completion.attach(pages, { devices = devices })
+diagnostics_overlay.attach(pages)
 local mon = { getSize = function() return width, height end }
 
 local reactors = {
@@ -98,7 +101,7 @@ local model = {
   ui_diagnostics = {
     frames_committed = 2, frames_skipped = 3, frames_requested = 5,
     full_clears = 1, transition_count = 1, pointer_events_received = 0,
-    model_builds = 4, last_render_ms = 1, error_count = 0,
+    model_builds = 4, last_render_ms = 1, render_errors = 0, error_count = 0,
   },
 }
 
@@ -115,7 +118,7 @@ for _, size in ipairs(sizes) do
 end
 
 -- Overview must expose reactor demand on a normal 20-line monitor, not only
--- on very tall displays.
+-- on very tall displays, and infrastructure components must remain distinct.
 width, height = 80, 20
 rows = {}
 pages.render_overview(mon, model, true)
@@ -125,7 +128,10 @@ overview_text = table.concat(overview_text, '\n')
 assert(overview_text:find('R1', 1, true), '20-line overview must show reactor rows')
 assert(overview_text:find('R2', 1, true), '20-line overview must show requesting reactor')
 assert(overview_text:find('REQUESTING', 1, true), 'overview must show current reactor demand')
-assert(overview_text:find('ME BRIDGE', 1, true) and overview_text:find('RT DATA', 1, true), 'overview must show core infrastructure truth')
+assert(overview_text:find('ME BRIDGE', 1, true), 'overview must show ME Bridge')
+assert(overview_text:find('RESERVE STORAGE', 1, true), 'overview must show reserve storage separately')
+assert(overview_text:find('MASTER', 1, true) and overview_text:find('RT DATA', 1, true), 'overview must show MASTER and RT data separately')
+assert(overview_text:find('VALVES', 1, true) and overview_text:find('LOGISTICS', 1, true), 'overview must show VALVES and logistics state')
 
 -- Large Details must expose every field required by the uploaded document.
 width, height = 100, 30
@@ -142,9 +148,12 @@ assert(detail_text:find('yellorium_ingot', 1, true), 'details must include fuel 
 assert(detail_text:find('25%', 1, true), 'details must include request threshold')
 assert(detail_text:find('64', 1, true) and detail_text:find('32', 1, true), 'details must include fill/min-ME policy')
 
--- Every reactor must be reachable from the Details page without leaving it.
+-- Every reactor must be reachable from the Details page without leaving it,
+-- and its pager touch zones must stay inside the visible monitor.
 local completion_state = pages.get_completion_state()
 assert(completion_state.details_next, 'first reactor must expose next-reactor touch zone')
+assert(completion_state.details_next.x1 >= 1 and completion_state.details_next.x2 <= width)
+assert(completion_state.details_next.y >= 1 and completion_state.details_next.y <= height)
 assert(pages.handle_details_touch(completion_state.details_next.x1, completion_state.details_next.y) == true)
 rows = {}
 pages.render_details(mon, model, false)
@@ -153,5 +162,22 @@ for _, row in ipairs(rows) do second_text[#second_text + 1] = row.label .. ' ' .
 second_text = table.concat(second_text, '\n')
 assert(second_text:find('rid-2', 1, true), 'details paging must reach the second reactor')
 assert(second_text:find('REQUESTING', 1, true), 'details must expose current delivery/request state')
+
+-- Diagnostics must expose every lifecycle counter requested by the document,
+-- including render_errors even when it is zero.
+rows = {}
+pages.render_diagnostics(mon, model, true)
+local diagnostic_text = {}
+for _, row in ipairs(rows) do diagnostic_text[#diagnostic_text + 1] = row.label .. ' ' .. row.value end
+diagnostic_text = table.concat(diagnostic_text, '\n')
+assert(diagnostic_text:find('REQ5', 1, true), 'diagnostics must expose frames_requested')
+assert(diagnostic_text:find('COM2', 1, true), 'diagnostics must expose frames_committed')
+assert(diagnostic_text:find('SKIP3', 1, true), 'diagnostics must expose frames_skipped')
+assert(diagnostic_text:find('CLR1', 1, true), 'diagnostics must expose full_clears')
+assert(diagnostic_text:find('TR1', 1, true), 'diagnostics must expose transition_count')
+assert(diagnostic_text:find('ERR0', 1, true), 'diagnostics must expose render_errors even at zero')
+assert(diagnostic_text:find('1ms', 1, true), 'diagnostics must expose last_render_ms')
+assert(diagnostic_text:find('PTR0', 1, true), 'diagnostics must expose pointer_events')
+assert(diagnostic_text:find('MOD4', 1, true), 'diagnostics must expose model_builds')
 
 print('fuel_ui_responsive_sizes_test.lua: ok')
