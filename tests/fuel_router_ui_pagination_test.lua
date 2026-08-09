@@ -75,8 +75,9 @@ end
 assert(any_button(page._ui.reactor_btns, 'id', 'R20'), 'last configured reactor must be reachable')
 
 -- A 12-step valve chain must not overflow the card and the last step must be reachable.
+local sides = { 'top', 'bottom', 'left', 'right', 'front', 'back' }
 local long_path = {}
-for i = 1, 12 do long_path[i] = { side = BUILTIN_SIDES and BUILTIN_SIDES[((i - 1) % 6) + 1] or 'back' } end
+for i = 1, 12 do long_path[i] = { side = sides[((i - 1) % #sides) + 1] } end
 page._ui.edit_view = 'path'
 page._ui.editing = { reactor = 'R01', label = 'Reactor 1', path = long_path }
 page._ui.pending_side = nil
