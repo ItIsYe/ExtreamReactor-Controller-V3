@@ -56,6 +56,19 @@ function M.compute_view_state(model, devices, reserve, minimum)
   if logistics.enabled == false then
     return { code = "LOGISTICS_DISABLED", severity = "LIMITED", title = "Logistik deaktiviert", detail = "logistics.enabled = false", action = "logistics.enabled auf true setzen, sobald bereit" }
   end
+  local missing_fuel_data = {}
+  for _, reactor in ipairs(logistics.reactors or {}) do
+    if type(reactor) == "table" and type(reactor.fuel_pct) ~= "number" then
+      missing_fuel_data[#missing_fuel_data + 1] = tostring(reactor.label or reactor.reactor_id or "?")
+    end
+  end
+  if #missing_fuel_data > 0 then
+    return {
+      code = "NO_FRESH_RT_DATA", severity = "WARNING", title = "Reaktordaten fehlen",
+      detail = table.concat(missing_fuel_data, ", "),
+      action = "MASTER-/RT-Status und reactor_id pruefen"
+    }
+  end
   -- Feature (2026-07-12): im Dokument nicht explizit in der Prioritaetsliste
   -- genannt, aber operativ wichtig genug (war der urspruengliche
   -- Haupt-Check, bevor LOGISTICS_DISABLED ergaenzt wurde) -- rangiert
@@ -65,7 +78,9 @@ function M.compute_view_state(model, devices, reserve, minimum)
     return { code = "RESERVE_LOW", severity = "WARNING", title = "Reserve niedrig", detail = tostring(reserve) .. " < " .. tostring(minimum), action = "Nachschub sicherstellen" }
   end
   if logistics.current_request then
-    return { code = "DELIVERING", severity = "LIMITED", title = "Lieferung aktiv", detail = tostring(logistics.current_request), action = nil }
+    local req = logistics.current_request
+    local detail = type(req) == "table" and tostring(req.label or req.reactor_id or req.state or "aktiv") or tostring(req)
+    return { code = "DELIVERING", severity = "LIMITED", title = "Lieferung aktiv", detail = detail, action = nil }
   end
   return { code = "READY", severity = "OK", title = "Bereit", detail = nil, action = nil }
 end
@@ -79,6 +94,22 @@ local function short(value, suffix)
   return string.format("%.0f%s", n, suffix or "")
 end
 
+local function logistics_counts(logistics)
+  local total, ready, stale, blocked = 0, 0, 0, 0
+  local bridge_ok = logistics and logistics.bridge ~= nil
+  for _, reactor in ipairs((logistics or {}).reactors or {}) do
+    total = total + 1
+    if not bridge_ok or reactor.connected ~= true then
+      blocked = blocked + 1
+    elseif type(reactor.fuel_pct) ~= "number" then
+      stale = stale + 1
+    else
+      ready = ready + 1
+    end
+  end
+  return { total = total, ready = ready, stale = stale, blocked = blocked, bridge_ok = bridge_ok }
+end
+
 function M.new(opts)
   local ui = assert(opts.ui, "ui required")
   local support_ui_pages = assert(opts.support_ui_pages, "support_ui_pages required")
@@ -86,7 +117,9 @@ function M.new(opts)
   local devices = opts.devices or {}
 
   local function header(mon, model, title, page, icon, should_clear)
-    local status = model.status or "OK"
+    local view_state = model.view_state
+    local status = view_state and view_state.severity or model.status or "OK"
+    local status_label = view_state and view_state.code or model.status or "OK"
     -- Fix (2026-07-11): UI-P0.6 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
     -- FIX_2026-07-12.md). mux.clear() loescht den KOMPLETTEN Monitor und
     -- wurde bisher bei JEDEM Render aufgerufen, auch fuer eine reine
@@ -100,10 +133,15 @@ function M.new(opts)
     if should_clear == true then mux.clear(mon) end
     mux.header(mon, { title = title, node_id = model.node_id or "FU-?", page = page, status = status, icon = icon or "fuel" })
     local w = ({ mon.getSize() })[1]
-    if w >= 42 then
-      mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING", 20)
-      mux.status_dot(mon, math.floor(w * 0.38), 3, tostring(model.status or "OK"), status, 20)
-      mux.status_dot(mon, math.floor(w * 0.70), 3, "FUEL LINK", status, 16)
+    if w >= 66 then
+      local cell = math.floor((w - 3) / 3)
+      mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING", cell)
+      mux.status_dot(mon, 2 + cell, 3, tostring(status_label), status, cell)
+      mux.status_dot(mon, 2 + cell * 2, 3, "FUEL LINK", status, math.max(1, w - (2 + cell * 2)))
+    elseif w >= 42 then
+      local cell = math.floor((w - 3) / 2)
+      mux.status_dot(mon, 2, 3, "MASTER " .. tostring(model.master_state or "?"), model.master_state == "OK" and "OK" or "WARNING", cell)
+      mux.status_dot(mon, 2 + cell, 3, tostring(status_label), status, math.max(1, w - (2 + cell)))
     end
     return mon.getSize()
   end
@@ -129,11 +167,8 @@ function M.new(opts)
     local p = model.payload or {}
     local reserve = tonumber(p.reserve) or 0
     local minimum = tonumber(p.minimum_reserve) or 0
-    local target = math.max(minimum, reserve, 1)
-    local ratio = math.max(0, math.min(1, reserve / target))
     local logistics = p.logistics or {}
-    local routes_active = tonumber(logistics.active_routes or logistics.active or logistics.routes_active) or 0
-    local routes_total = tonumber(logistics.total_routes or logistics.total or logistics.routes_total) or 0
+    local counts = logistics_counts(logistics)
     local banner, key = fuel_state(model, reserve, minimum)
 
     mux.banner(mon, 2, 5, w - 3, "> " .. banner, key, nil)
@@ -153,16 +188,19 @@ function M.new(opts)
     end
 
     section_arrow(mon, 2, 12, w - 3, "FUEL RESERVE", key, "fuel")
-    mux.outlined_progress(mon, 2, 14, w - 3, ratio, key, string.format("%.0f%%", ratio * 100))
-    mux.data_row(mon, 2, 15, w - 3, { label = short(reserve, "mB") .. " / MIN " .. short(minimum, "mB"), value = "RESERVE", status = "text", icon = "storage" })
+    local margin = reserve - minimum
+    mux.data_row(mon, 2, 14, w - 3, { label = "RESERVE", value = short(reserve, "mB"), status = key, icon = "fuel" })
+    mux.data_row(mon, 2, 15, w - 3, { label = "MINIMUM", value = short(minimum, "mB"), status = "LIMITED", icon = "storage" })
+    mux.data_row(mon, 2, 16, w - 3, { label = "MARGIN", value = (margin >= 0 and "+" or "") .. short(margin, "mB"), status = margin >= 0 and "OK" or "WARNING", icon = "fuel" })
 
-    if h >= 20 then
+    if h >= 21 then
       local cw = math.floor((w - 5 - 3) / 4)
+      local logistics_enabled = logistics.enabled == true
       local items = {
-        { label = "ROUTEN", value = string.format("%d/%d", routes_active, routes_total), status = routes_active > 0 and "OK" or "LIMITED", icon = "network" },
-        { label = "STORAGE", value = devices.storage_name and "ONLINE" or "MISSING", status = devices.storage_name and "OK" or "WARNING", icon = "storage" },
-        { label = "MODE", value = "AUTO", status = "OK", icon = "config" },
-        { label = "SOURCE", value = tostring(#(p.sources or {})), status = #(p.sources or {}) > 0 and "OK" or "WARNING", icon = "fuel" },
+        { label = "READY", value = string.format("%d/%d", counts.ready, counts.total), status = counts.total > 0 and counts.ready == counts.total and "OK" or "WARNING", icon = "reactor" },
+        { label = "ME BRIDGE", value = counts.bridge_ok and "ONLINE" or "MISSING", status = counts.bridge_ok and "OK" or "WARNING", icon = "storage" },
+        { label = "LOGISTICS", value = logistics_enabled and "ACTIVE" or "DISABLED", status = logistics_enabled and "OK" or "LIMITED", icon = "config" },
+        { label = "RT DATA", value = counts.stale == 0 and "FRESH" or (tostring(counts.stale) .. " STALE"), status = counts.stale == 0 and "OK" or "WARNING", icon = "network" },
       }
       for i, item in ipairs(items) do mux.metric_card(mon, 2 + (i - 1) * (cw + 1), 17, cw, 4, item) end
     end
@@ -184,6 +222,7 @@ function M.new(opts)
     local reserve = tonumber(p.reserve) or 0
     local minimum = tonumber(p.minimum_reserve) or 0
     local _, reserve_key = fuel_state(model, reserve, minimum)
+    local counts = logistics_counts(logistics)
 
     local top = {
       { label = "RESERVE", value = short(reserve, "mB"), status = reserve_key, icon = "fuel" },
@@ -206,22 +245,22 @@ function M.new(opts)
       local right_x = 3 + left_w
       local right_w = w - right_x - 1
 
-      mux.card(mon, 2, 12, left_w, math.max(9, h - 13), { title = "STORAGE", status = devices.storage_name and "OK" or "WARNING", icon = "storage" })
-      mux.data_row(mon, 4, 14, left_w - 4, { label = "NAME", value = tostring(devices.storage_name or "none"), status = devices.storage_name and "OK" or "WARNING", icon = "storage" })
-      mux.data_row(mon, 4, 15, left_w - 4, { label = "RESERVE", value = short(reserve, "mB"), status = reserve_key, icon = "fuel" })
-      mux.data_row(mon, 4, 16, left_w - 4, { label = "MINIMUM", value = short(minimum, "mB"), status = "LIMITED", icon = "storage" })
+      mux.card(mon, 2, 12, left_w, math.max(9, h - 13), { title = "INFRASTRUCTURE", status = counts.bridge_ok and "OK" or "WARNING", icon = "storage" })
+      mux.data_row(mon, 4, 14, left_w - 4, { label = "ME BRIDGE", value = tostring(logistics.bridge or "none"), status = counts.bridge_ok and "OK" or "WARNING", icon = "storage" })
+      mux.data_row(mon, 4, 15, left_w - 4, { label = "STORAGE", value = tostring(devices.storage_name or "none"), status = devices.storage_name and "OK" or "WARNING", icon = "storage" })
+      mux.data_row(mon, 4, 16, left_w - 4, { label = "RESERVE", value = short(reserve, "mB"), status = reserve_key, icon = "fuel" })
       mux.data_row(mon, 4, 17, left_w - 4, { label = "LAST SCAN", value = tostring(model.last_scan or "-"), status = "text", icon = "network" })
 
-      mux.card(mon, right_x, 12, right_w, math.max(9, h - 13), { title = "ROUTER SUMMARY", status = "LIMITED", icon = "network" })
-      mux.data_row(mon, right_x + 2, 14, right_w - 4, { label = "ACTIVE", value = tostring(logistics.active_routes or logistics.active or "n/a"), status = "OK", icon = "network" })
-      mux.data_row(mon, right_x + 2, 15, right_w - 4, { label = "TOTAL", value = tostring(logistics.total_routes or logistics.total or "n/a"), status = "text", icon = "network" })
-      mux.data_row(mon, right_x + 2, 16, right_w - 4, { label = "MODE", value = "AUTO", status = "OK", icon = "config" })
+      mux.card(mon, right_x, 12, right_w, math.max(9, h - 13), { title = "LOGISTICS", status = counts.blocked == 0 and counts.stale == 0 and "OK" or "WARNING", icon = "network" })
+      mux.data_row(mon, right_x + 2, 14, right_w - 4, { label = "READY", value = string.format("%d/%d", counts.ready, counts.total), status = counts.ready == counts.total and counts.total > 0 and "OK" or "WARNING", icon = "reactor" })
+      mux.data_row(mon, right_x + 2, 15, right_w - 4, { label = "STALE/BLOCKED", value = string.format("%d/%d", counts.stale, counts.blocked), status = (counts.stale + counts.blocked) > 0 and "WARNING" or "OK", icon = "warning" })
+      mux.data_row(mon, right_x + 2, 16, right_w - 4, { label = "MODE", value = logistics.enabled == true and "ACTIVE" or "DISABLED", status = logistics.enabled == true and "OK" or "LIMITED", icon = "config" })
       mux.data_row(mon, right_x + 2, 17, right_w - 4, { label = "MASTER", value = tostring(model.master_state or "?"), status = model.master_state == "OK" and "OK" or "WARNING", icon = "master" })
     else
-      mux.data_row(mon, 2, 12, w - 3, { label = "Storage", value = tostring(devices.storage_name or "none"), status = devices.storage_name and "OK" or "WARNING", icon = "storage" })
-      mux.data_row(mon, 2, 13, w - 3, { label = "Active routes", value = tostring(logistics.active_routes or logistics.active or "n/a"), status = "OK", icon = "network" })
-      mux.data_row(mon, 2, 14, w - 3, { label = "Total routes", value = tostring(logistics.total_routes or logistics.total or "n/a"), status = "text", icon = "network" })
-      mux.data_row(mon, 2, 15, w - 3, { label = "Last scan", value = tostring(model.last_scan or "-"), status = "LIMITED", icon = "network" })
+      mux.data_row(mon, 2, 12, w - 3, { label = "ME Bridge", value = tostring(logistics.bridge or "none"), status = counts.bridge_ok and "OK" or "WARNING", icon = "storage" })
+      mux.data_row(mon, 2, 13, w - 3, { label = "Ready", value = string.format("%d/%d", counts.ready, counts.total), status = counts.ready == counts.total and counts.total > 0 and "OK" or "WARNING", icon = "reactor" })
+      mux.data_row(mon, 2, 14, w - 3, { label = "Stale/Blocked", value = string.format("%d/%d", counts.stale, counts.blocked), status = (counts.stale + counts.blocked) > 0 and "WARNING" or "OK", icon = "warning" })
+      mux.data_row(mon, 2, 15, w - 3, { label = "Logistics", value = logistics.enabled == true and "ACTIVE" or "DISABLED", status = logistics.enabled == true and "OK" or "LIMITED", icon = "config" })
     end
 
     return mux.footer_nav(mon, h, w, { center = "FUEL DETAILS" })
@@ -247,6 +286,7 @@ function M.new(opts)
 
     local rows = support_ui_pages.common_diagnostic_rows(model, devices.discovery_failed)
     support_ui_pages.append_local_alert_rows(rows, alerts)
+    local uidiag = model.ui_diagnostics
     -- Feature (2026-07-12): REST-P1.3. Derselbe view_state, der auch
     -- Header/Banner/Ampel steuert, jetzt auch explizit als eigene
     -- Diagnostics-Zeile sichtbar.
@@ -262,9 +302,9 @@ function M.new(opts)
     -- Zeile selbst keine Endlos-Neuzeichenschleife erzeugt.
     if uidiag then
       rows[#rows + 1] = {
-        text = string.format("UI: frames %d/%d/%d clears=%d ptr=%d model=%d %dms",
+        text = string.format("UI: frames %d/%d/%d clears=%d trans=%d ptr=%d %dms",
           uidiag.frames_committed or 0, uidiag.frames_skipped or 0, uidiag.frames_requested or 0,
-          uidiag.full_clears or 0, uidiag.pointer_events_received or 0, uidiag.model_builds or 0,
+          uidiag.full_clears or 0, uidiag.transition_count or 0, uidiag.pointer_events_received or 0,
           uidiag.last_render_ms or 0),
         status = "text",
       }
@@ -273,7 +313,6 @@ function M.new(opts)
     -- last_error, vom shared ui_router ueber build_model() ins Model
     -- uebernommen) waren bisher nirgends auf der Diagnostics-Seite
     -- sichtbar, obwohl sie intern schon korrekt verfolgt wurden.
-    local uidiag = model.ui_diagnostics
     if uidiag and (uidiag.error_count or 0) > 0 then
       local le = uidiag.last_error or {}
       local age_txt = le.ts and support_ui_pages.format_age(le.ts, os.epoch("utc")) or "?"
