@@ -12,7 +12,9 @@ b=valve.index('if type(message.command_id) ~= "string" or message.command_id == 
 c=valve.index('if type(message.high) ~= "boolean" then')
 p=valve.index('config.trusted_source = message.src')
 assert a<p and b<p and c<p
-assert 'source_node_id = opts.node_id or resolve_source_node_id(router_config)' in router
+assert 'source_node_id = resolve_source_node_id(opts, router_config)' in router
+assert 'node_id = node_id' in (repo/'xreactor/nodes/fuel/main.lua').read_text(encoding='utf-8')
+assert 'node_id = node_id' in (repo/'xreactor/nodes/reprocessor/main.lua').read_text(encoding='utf-8')
 assert 'message.src ~= entry.dst or message.dst ~= entry.src' in router
 assert 'type = "SET_VALVE", src = entry.src, dst = entry.dst' in router
 print('valve_safety_regression_test.py: ok')

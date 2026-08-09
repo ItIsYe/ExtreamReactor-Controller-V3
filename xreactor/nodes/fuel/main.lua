@@ -179,6 +179,7 @@ local function get_rs_router()
   if not rs_router_instance then
     rs_router_instance = redstone_router_lib.new({
       config = config,
+      node_id = node_id,
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
       comms = comms,

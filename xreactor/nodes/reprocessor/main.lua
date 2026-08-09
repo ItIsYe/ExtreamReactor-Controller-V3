@@ -435,7 +435,7 @@ local function get_rs_router()
     -- "comms" (weiter oben vorwaertsdeklariert, unten per comms_service.
     -- new(...) zugewiesen) als Upvalue bereits gesetzt -- kein
     -- nachtraeglicher Injektionspfad noetig.
-    rs_router = redstone_router_lib.new({ config = config.feed or {}, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
+    rs_router = redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
   end
   return rs_router
 end

@@ -46,29 +46,14 @@ local function safe_call(obj, method, ...)
   return r, nil
 end
 
-local NODE_ID_PATH = "/xreactor/config/node_id.txt"
-
-local function read_runtime_node_id()
-  if type(fs) ~= "table" or type(fs.exists) ~= "function" or type(fs.open) ~= "function" then return nil end
-  local ok_exists, exists = pcall(fs.exists, NODE_ID_PATH)
-  if not ok_exists or not exists then return nil end
-  local ok_open, handle = pcall(fs.open, NODE_ID_PATH, "r")
-  if not ok_open or not handle then return nil end
-  local ok_read, value = pcall(handle.readAll)
-  pcall(handle.close)
-  if not ok_read or type(value) ~= "string" then return nil end
-  value = value:match("^%s*(.-)%s*$")
-  if value == "" then return nil end
-  return value
-end
-
-local function resolve_source_node_id(config)
-  local persisted = read_runtime_node_id()
-  if persisted then return persisted end
+local function resolve_source_node_id(opts, config)
+  local explicit = opts and opts.node_id
+  if type(explicit) == "string" and explicit ~= "" then return explicit end
   local configured = config and config.node_id
   if type(configured) == "string" and configured ~= "" then return configured end
-  if os and type(os.getComputerID) == "function" then return "node-" .. tostring(os.getComputerID()) end
-  return nil
+  -- Backward-compatible fallback for direct library users/tests.
+  -- Production FUEL/REPROCESSOR inject their resolved runtime node_id.
+  return "FUEL"
 end
 
 local function find_wireless_modem(config)
@@ -288,7 +273,7 @@ function M.new(opts)
   if valve_modem then pcall(valve_modem.open, constants.channels.VALVE) end
   local self = {
     config = router_config,
-    source_node_id = opts.node_id or resolve_source_node_id(router_config),
+    source_node_id = resolve_source_node_id(opts, router_config),
     log = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
     -- Fuer Auto-Discovery erreichbarer VALVE-Nodes (siehe refresh()).
