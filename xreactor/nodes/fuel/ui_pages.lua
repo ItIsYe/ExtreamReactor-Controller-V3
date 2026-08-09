@@ -313,13 +313,37 @@ function M.new(opts)
       local max_y = 12 + card_h - 1
       for _, reactor in ipairs(logistics.reactors or {}) do
         if y > max_y then break end
-        local _, status = reactor_state(reactor, logistics)
+        local state, status = reactor_state(reactor, logistics)
+        local rcfg = reactor_config_for(reactor)
+        local fuel = type(reactor.fuel_pct) == "number" and (tostring(reactor.fuel_pct) .. "%") or "--"
+        local inlet = tostring(reactor.inlet or rcfg.inlet or "no-inlet")
+        local item = tostring(rcfg.item or "?")
+        local threshold = tonumber(rcfg.request_below)
+        local fill = tonumber(rcfg.fill_amount)
+        local min_me = tonumber(rcfg.min_in_me)
+        local policy = string.format("REQ<%s F%s ME%s",
+          threshold and tostring(math.floor(threshold * 100 + 0.5)) .. "%" or "?",
+          fill and tostring(fill) or "?", min_me and tostring(min_me) or "?")
+
         mux.data_row(mon, right_x + 2, y, right_w - 4, {
           label = tostring(reactor.label or reactor.reactor_id or "?"),
-          value = mux.fit(reactor_value(reactor, logistics, true), math.max(1, right_w - 8)),
-          status = status, icon = "reactor"
+          value = fuel .. " " .. state, status = status, icon = "reactor"
         })
         y = y + 1
+        if y <= max_y then
+          mux.data_row(mon, right_x + 2, y, right_w - 4, {
+            label = "IN/ITEM",
+            value = mux.fit(inlet .. " / " .. item, math.max(1, right_w - 12)),
+            status = reactor.connected == true and "text" or "WARNING", icon = "storage"
+          })
+          y = y + 1
+        end
+        if y <= max_y then
+          mux.data_row(mon, right_x + 2, y, right_w - 4, {
+            label = "POLICY", value = policy, status = "text", icon = "config"
+          })
+          y = y + 1
+        end
       end
     else
       mux.data_row(mon, 2, 12, w - 3, { label = "ME Bridge", value = tostring(logistics.bridge or "none"), status = counts.bridge_ok and "OK" or "WARNING", icon = "storage" })
