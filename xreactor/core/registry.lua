@@ -187,6 +187,13 @@ function registry.new(opts)
   self._last_saved = textutils.serialize(build_persisted_snapshot(self.state))
   self._dirty = false
   self._persist_dirty = false
+  -- Fix: Datei beim ersten Start anlegen damit CC:Tweaked sie kennt
+  -- und spätere write_config()-Aufrufe nicht fehlschlagen.
+  if not fs.exists(self.path) then
+    local ok_dir = pcall(fs.makeDir, fs.getDir(self.path))
+    local f = fs.open(self.path, "w")
+    if f then f.write("return {}") f.close() end
+  end
   return setmetatable(self, { __index = registry })
 end
 
