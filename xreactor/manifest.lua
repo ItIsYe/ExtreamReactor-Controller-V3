@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v287
 return {
-  manifest_version = 501,
-  manifest_id = "manifest-v501",
+  manifest_version = 502,
+  manifest_id = "manifest-v502",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -21,7 +21,7 @@ return {
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
   { path = "core/mockup_ui.lua", size_bytes = 11146, hash = "3b1f768a", always = true },
-  { path = "adapters/monitor.lua", size_bytes = 7979, hash = "9948fe5c" },
+  { path = "adapters/monitor.lua", size_bytes = 8772, hash = "3925e53e" },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", always = true },
   { path = "core/update_handshake.lua", size_bytes = 3464, hash = "015539af", always = true },
   { path = "core/comms.lua", size_bytes = 25765, hash = "ea0be60e" },
@@ -212,9 +212,9 @@ return {
     { path = "nodes/fuel/status_snapshot.lua", size_bytes = 5027, hash = "2a145d2b", required_for={"FUEL"} },
     { path = "nodes/fuel/command_handler.lua", size_bytes = 2096, hash = "369baea1", required_for={"FUEL"} },
     { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 4052, hash = "d18e34ba", required_for={"FUEL"} },
-    { path = "nodes/fuel/monitor_ui.lua", size_bytes = 12594, hash = "20557fdf", required_for={"FUEL"} },
+    { path = "nodes/fuel/monitor_ui.lua", size_bytes = 13710, hash = "d838895d", required_for={"FUEL"} },
     { path = "nodes/fuel/storage.lua", size_bytes = 2275, hash = "370bf2fa", required_for={"FUEL"} },
-    { path = "nodes/fuel/ui_pages.lua", size_bytes = 19964, hash = "ef15d921", required_for={"FUEL"}},
+    { path = "nodes/fuel/ui_pages.lua", size_bytes = 23048, hash = "2398172a", required_for={"FUEL"}},
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
     { path = "nodes/fuel/logistics_router.lua", size_bytes = 29802, hash = "9d423ec4", required_for={"FUEL","REPROCESSING"} },
     { path = "nodes/fuel/redstone_router.lua", size_bytes = 48894, hash = "c72567e2", required_for={"FUEL","REPROCESSING","WATER"} },
