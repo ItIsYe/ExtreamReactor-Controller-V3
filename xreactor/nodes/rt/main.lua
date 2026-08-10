@@ -796,6 +796,234 @@ end
 
 -- ── Init ─────────────────────────────────────────────────────────────────────
 
+local function configure_lifecycle_context()
+make_lifecycle_ctx = function()
+  return {
+    -- State
+    STATE             = STATE,
+    log               = log,
+    warn_once         = warn_once,
+    config            = config,
+    constants         = constants,
+    comms             = comms,
+    modules           = modules_registry,
+    peripherals       = devices,
+    configured_reactors = runtime_config.configured_reactors,
+    configured_turbines = runtime_config.configured_turbines,
+    binding           = require("nodes.rt.binding"),
+    -- State-Machine
+    get_current_state    = current_state,
+    current_state        = current_state,
+    node_state_machine   = node_state_machine,
+    setState             = function(s) current_state_value = s end,
+    -- Targets
+    targets           = ctx and ctx.targets or {},
+    -- Turbinen/Reaktor-Funktionen (aus den neuen Modulen)
+    get_turbine_ctrl  = function(name) return turbine_control.get_turbine_ctrl(ctx, name) end,
+    get_device_caps   = function(k,n) return turbine_control.get_device_caps(ctx, k, n) end,
+    get_target_rpm    = function() return turbine_control.get_target_rpm(ctx) end,
+    clamp_turbine_flow = function(r) return turbine_control.clamp_turbine_flow(ctx, r) end,
+    setTurbineFlow    = function(t,c,r) return turbine_control.setTurbineFlow and
+                         turbine_control.setTurbineFlow(ctx,t,c,r) end,
+    setTurbineActive  = function(t,c,a) return turbine_control.setTurbineActive(ctx,t,c,a) end,
+    update_inductor_for_rpm = function(n,t,c,r,tr)
+      return turbine_control.update_inductor_for_rpm(ctx,n,t,c,r,tr) end,
+    update_turbine_flow_state = function(r,tr,ctrl)
+      return turbine_control.update_turbine_flow_state(ctx,r,tr,ctrl) end,
+    ensure_reactor_ctrl = function(n) return reactor_control.ensure_reactor_ctrl(ctx,n) end,
+    get_effective_regulator_rod_caps = function()
+      return reactor_control.get_effective_regulator_rod_caps(ctx) end,
+    applyReactorRods  = function(t,o,s) return reactor_control.applyReactorRods(ctx,t,o,s) end,
+    setReactorActive  = function(r,c,a) return reactor_control.setReactorActive(ctx,r,c,a) end,
+    read_current_rods = function() return reactor_control.read_current_rods(ctx) end,
+    evaluate_reactor_coolant = function(r,s)
+      return reactor_control.evaluate_reactor_coolant(ctx,r,s) end,
+    ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
+    -- Fix (2026-07-16): CRITICAL (MASTER-P0). Waren bisher No-Ops -- echte
+    -- Closures auf die modul-globalen Startup-State-Variablen (siehe oben
+    -- "local active_startup_id" etc.), damit start_module()/process_
+    -- startup() Zustand tatsaechlich lesen/schreiben koennen.
+    get_active_startup           = function() return active_startup_id end,
+    set_active_startup           = function(id) active_startup_id = id end,
+    get_startup_queue            = function() return startup_queue_list end,
+    set_startup_queue            = function(q) startup_queue_list = q or {} end,
+    get_startup_started_ms       = function() return startup_started_ms_value end,
+    set_startup_started_ms       = function(ms) startup_started_ms_value = ms end,
+    get_startup_watchdog_tripped = function() return startup_watchdog_tripped_value end,
+    set_startup_watchdog_tripped = function(v) startup_watchdog_tripped_value = v end,
+    add_alarm    = function(_, sev, msg) if comms then comms:send_alert(sev, msg) end end,
+    -- CC:Tweaked CONFIG-Werte
+    START_FLOW   = CONFIG.START_FLOW   or 100,
+    RPM_TOL      = CONFIG.RPM_TOLERANCE or 15,
+    -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 11). Hiess bisher "TURBINE_MODE"
+    -- und war ein reiner STRING (CONFIG.TURBINE_MODE_RAMP ist selbst ein
+    -- String, z.B. "RAMP") -- module_lifecycle.lua indizierte diesen Wert
+    -- aber als Tabelle (ctx.TURBINE_MODE.RAMP), was im echten Produktions-
+    -- Context zu "attempt to index a string value" fuehrte bzw. (falls
+    -- durch pcall/Fehlerpfad verdeckt) ctrl.mode nie zuverlaessig auf den
+    -- vorgesehenen Rampenmodus setzte. Konsistent mit turbine_control.lua's
+    -- eigener Konvention (ctx.CONFIG.TURBINE_MODE_RAMP, ueberall ein reiner
+    -- String -- siehe z.B. dessen Zeile mit "ctrl.mode = ctx.CONFIG.
+    -- TURBINE_MODE_RAMP or \"RAMP\"") umbenannt zu TURBINE_MODE_RAMP,
+    -- weiterhin ein String -- module_lifecycle.lua liest jetzt direkt
+    -- ctx.TURBINE_MODE_RAMP statt ctx.TURBINE_MODE.RAMP.
+    TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
+    -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
+    -- PERFORMANCE_2026-07-12.md Abschnitt 12). Dieser Diagnose-Stub gab
+    -- bisher "30" zurueck, benannt als "ramp_duration" -- ohne jede
+    -- Einheit im Namen. module_lifecycle.lua's process_startup() rechnet
+    -- aber mit "(now - module.start_time) / duration", wobei "now" und
+    -- "start_time" beide os.epoch("utc") in MILLISEKUNDEN sind -- die
+    -- Reaktorrampe erreichte dadurch bereits nach ~30 Millisekunden 100%
+    -- Fortschritt statt der beabsichtigten 30 SEKUNDEN, ein klarer
+    -- Widerspruch zum 60s-Startup-Stage-Timeout (siehe VALVE_PHASE_
+    -- TIMEOUT_MS-aehnliche Deadlines) und zur fachlichen Bedeutung einer
+    -- Rampe. Jetzt explizit als Sekunden benannt und einmalig in
+    -- Millisekunden umgerechnet -- "ramp_duration_ms" liefert garantiert
+    -- Millisekunden, keine unbenannte Zahlenkonstante mehr.
+    ramp_duration_ms = function(_ramp_profile)
+      local STARTUP_RAMP_DURATION_S = 30
+      return STARTUP_RAMP_DURATION_S * 1000
+    end,
+    warn_unsupported = function(name, reason)
+      warn_once("unsupported:" .. tostring(name),
+        "Device unsupported: " .. tostring(name) .. " (" .. tostring(reason or "") .. ")")
+    end,
+  }
+end
+
+end
+
+local function configure_state_machine()
+local state_ctx = {
+  -- Basis
+  STATE             = STATE,
+  config            = config,
+  constants         = constants,
+  log               = log,
+  comms             = comms,
+  devices           = devices,
+  modules           = modules_registry,
+  targets           = ctx and ctx.targets or {},
+  TARGET_RPM        = CONFIG.TARGET_RPM,
+  -- Zustands-Accessoren
+  get_current_state      = current_state,
+  set_current_state      = function(v) current_state_value = v end,
+  get_node_state_machine = function() return node_state_machine end,
+  allowed_transitions    = nil,
+  -- Regelungs-Callbacks
+  adjust_turbines   = function() turbine_control.updateControl(ctx) end,
+  adjust_reactors   = function() reactor_control.updateReactorControl(ctx) end,
+  get_target_rpm    = function() return turbine_control.get_target_rpm(ctx) end,
+  ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
+  clamp_autonom_targets = function()
+    if ctx and ctx.targets then
+      local t = ctx.targets
+      t.power   = math.max(0, t.power   or 0)
+      t.steam   = math.max(0, t.steam   or 0)
+      t.rpm     = math.max(0, t.rpm     or CONFIG.TARGET_RPM)
+    end
+  end,
+  -- Master-Monitoring
+  monitor_master = function()
+    if not is_master_connected() then
+      if current_state() == STATE.MASTER then
+        log("WARN", "Master disconnected — switching to AUTONOM")
+        current_state_value = STATE.AUTONOM
+      end
+    end
+  end,
+  -- Alarm
+  add_alarm = function(_, sev, msg)
+    if comms then comms:send_alert(sev, msg) end
+  end,
+  -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
+  -- PERFORMANCE_2026-07-12.md). Waren bisher No-Ops ("RT-Node hat keine
+  -- Modul-Startup-Sequenz") -- dadurch blieb der STARTUP-State (siehe
+  -- state_handlers.lua startup_on_enter/startup_on_tick) permanent
+  -- funktionslos: die Warteschlange wurde zwar befuellt, aber start_module()
+  -- tat nichts, also blieb jedes Modul fuer immer OFF und der Node kam nie
+  -- nach RUNNING. Echte Closures auf die modul-globalen Startup-State-
+  -- Variablen (siehe "local active_startup_id" etc. oben).
+  get_active_startup           = function() return active_startup_id end,
+  set_active_startup           = function(id) active_startup_id = id end,
+  get_startup_queue            = function() return startup_queue_list end,
+  set_startup_queue            = function(q) startup_queue_list = q or {} end,
+  get_startup_started_ms       = function() return startup_started_ms_value end,
+  set_startup_started_ms       = function(ms) startup_started_ms_value = ms end,
+  get_startup_watchdog_tripped = function() return startup_watchdog_tripped_value end,
+  set_startup_watchdog_tripped = function(v) startup_watchdog_tripped_value = v end,
+  reset_startup_watchdog       = function()
+    startup_watchdog_tripped_value = false
+    startup_started_ms_value = nil
+  end,
+  -- handle_startup_timeout() erwartet direkte Felder (nicht Getter/Setter)
+  -- fuer startup_watchdog_tripped/startup_started_ms, siehe startup_
+  -- diagnostics.lua -- baut deshalb einen eigenen kleinen Snapshot-Context
+  -- statt make_lifecycle_ctx()/state_ctx direkt wiederzuverwenden. node_
+  -- state_machine ist eine Tabellen-Referenz (mutiert von state_machine.lua
+  -- direkt) -- kein manueller Rueckschreib-Sync fuer die state()/transition()-
+  -- Aufrufe darin noetig, nur fuer den tripped-Flag (einfacher Boolean-Wert,
+  -- kein Referenztyp).
+  handle_startup_timeout = function()
+    local diag_ctx = {
+      startup_watchdog_tripped = startup_watchdog_tripped_value,
+      startup_started_ms       = startup_started_ms_value,
+      comms                    = comms,
+      config                   = config,
+      devices                  = devices,
+      registry                 = registry,
+      log                      = log,
+      update_status_snapshot   = update_status_snapshot,
+      constants                = constants,
+      broadcast_status         = broadcast_status,
+      node_state_machine       = node_state_machine,
+      set_active_startup       = function(id) active_startup_id = id end,
+      set_startup_queue        = function(q) startup_queue_list = q or {} end,
+    }
+    local tripped = startup_diagnostics.handle_startup_timeout(diag_ctx)
+    if tripped then
+      startup_watchdog_tripped_value = true
+    end
+  end,
+  start_module = function(module_id, module_type, ramp_profile)
+    return module_lifecycle.start_module(make_lifecycle_ctx(), module_id, module_type, ramp_profile)
+  end,
+  -- Lifecycle-Funktionen (delegieren an module_lifecycle mit vollem Context)
+  scram = function()
+    module_lifecycle.scram(make_lifecycle_ctx())
+  end,
+  apply_safe_controls = function()
+    module_lifecycle.apply_safe_controls(make_lifecycle_ctx())
+  end,
+  set_reactors_active = function(active, reason)
+    local lctx = make_lifecycle_ctx()
+    module_lifecycle.set_reactors_active(lctx, active, reason)
+  end,
+  set_turbines_active = function(active, reason)
+    local lctx = make_lifecycle_ctx()
+    module_lifecycle.set_turbines_active(lctx, active, reason)
+  end,
+}
+-- Fix (2026-07-15): expliziter Guard + Diagnose-Log fuer is_master_connected,
+-- bevor state_handlers.build() dessen eigenen generischen (aber weniger
+-- aussagekraeftigen) assert_fn-Guard auswertet -- gibt Operatoren beim RT-
+-- Boot eine eindeutige Bestaetigung, dass der sicherheitskritische Master-
+-- Failover-Check verdrahtet ist.
+state_ctx.is_master_connected = is_master_connected
+if type(state_ctx.is_master_connected) ~= "function" then
+  error("rt state context missing required function: is_master_connected", 0)
+end
+log("INFO", "State context ready (is_master_connected=true)")
+states_table = state_handlers.build(state_ctx)
+node_state_machine = machine.new(states_table, constants.node_states.OFF)
+
+-- Initiale Mode: AUTONOM
+current_state_value = STATE.AUTONOM
+node_state_machine:transition(constants.node_states.RUNNING)
+end
+
 local function init()
   log("INFO", "RT-Node starting (SCADA rewrite)")
 
@@ -896,228 +1124,9 @@ local function init()
   -- Zuweisung (nicht "local function") -- make_lifecycle_ctx ist oben als
   -- "local make_lifecycle_ctx" vorwaertsdeklariert, damit build_command_ctx()
   -- (vor init() definiert) denselben Funktionswert als Upvalue sehen kann.
-  make_lifecycle_ctx = function()
-    return {
-      -- State
-      STATE             = STATE,
-      log               = log,
-      warn_once         = warn_once,
-      config            = config,
-      constants         = constants,
-      comms             = comms,
-      modules           = modules_registry,
-      peripherals       = devices,
-      configured_reactors = runtime_config.configured_reactors,
-      configured_turbines = runtime_config.configured_turbines,
-      binding           = require("nodes.rt.binding"),
-      -- State-Machine
-      get_current_state    = current_state,
-      current_state        = current_state,
-      node_state_machine   = node_state_machine,
-      setState             = function(s) current_state_value = s end,
-      -- Targets
-      targets           = ctx and ctx.targets or {},
-      -- Turbinen/Reaktor-Funktionen (aus den neuen Modulen)
-      get_turbine_ctrl  = function(name) return turbine_control.get_turbine_ctrl(ctx, name) end,
-      get_device_caps   = function(k,n) return turbine_control.get_device_caps(ctx, k, n) end,
-      get_target_rpm    = function() return turbine_control.get_target_rpm(ctx) end,
-      clamp_turbine_flow = function(r) return turbine_control.clamp_turbine_flow(ctx, r) end,
-      setTurbineFlow    = function(t,c,r) return turbine_control.setTurbineFlow and
-                           turbine_control.setTurbineFlow(ctx,t,c,r) end,
-      setTurbineActive  = function(t,c,a) return turbine_control.setTurbineActive(ctx,t,c,a) end,
-      update_inductor_for_rpm = function(n,t,c,r,tr)
-        return turbine_control.update_inductor_for_rpm(ctx,n,t,c,r,tr) end,
-      update_turbine_flow_state = function(r,tr,ctrl)
-        return turbine_control.update_turbine_flow_state(ctx,r,tr,ctrl) end,
-      ensure_reactor_ctrl = function(n) return reactor_control.ensure_reactor_ctrl(ctx,n) end,
-      get_effective_regulator_rod_caps = function()
-        return reactor_control.get_effective_regulator_rod_caps(ctx) end,
-      applyReactorRods  = function(t,o,s) return reactor_control.applyReactorRods(ctx,t,o,s) end,
-      setReactorActive  = function(r,c,a) return reactor_control.setReactorActive(ctx,r,c,a) end,
-      read_current_rods = function() return reactor_control.read_current_rods(ctx) end,
-      evaluate_reactor_coolant = function(r,s)
-        return reactor_control.evaluate_reactor_coolant(ctx,r,s) end,
-      ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
-      -- Fix (2026-07-16): CRITICAL (MASTER-P0). Waren bisher No-Ops -- echte
-      -- Closures auf die modul-globalen Startup-State-Variablen (siehe oben
-      -- "local active_startup_id" etc.), damit start_module()/process_
-      -- startup() Zustand tatsaechlich lesen/schreiben koennen.
-      get_active_startup           = function() return active_startup_id end,
-      set_active_startup           = function(id) active_startup_id = id end,
-      get_startup_queue            = function() return startup_queue_list end,
-      set_startup_queue            = function(q) startup_queue_list = q or {} end,
-      get_startup_started_ms       = function() return startup_started_ms_value end,
-      set_startup_started_ms       = function(ms) startup_started_ms_value = ms end,
-      get_startup_watchdog_tripped = function() return startup_watchdog_tripped_value end,
-      set_startup_watchdog_tripped = function(v) startup_watchdog_tripped_value = v end,
-      add_alarm    = function(_, sev, msg) if comms then comms:send_alert(sev, msg) end end,
-      -- CC:Tweaked CONFIG-Werte
-      START_FLOW   = CONFIG.START_FLOW   or 100,
-      RPM_TOL      = CONFIG.RPM_TOLERANCE or 15,
-      -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md Abschnitt 11). Hiess bisher "TURBINE_MODE"
-      -- und war ein reiner STRING (CONFIG.TURBINE_MODE_RAMP ist selbst ein
-      -- String, z.B. "RAMP") -- module_lifecycle.lua indizierte diesen Wert
-      -- aber als Tabelle (ctx.TURBINE_MODE.RAMP), was im echten Produktions-
-      -- Context zu "attempt to index a string value" fuehrte bzw. (falls
-      -- durch pcall/Fehlerpfad verdeckt) ctrl.mode nie zuverlaessig auf den
-      -- vorgesehenen Rampenmodus setzte. Konsistent mit turbine_control.lua's
-      -- eigener Konvention (ctx.CONFIG.TURBINE_MODE_RAMP, ueberall ein reiner
-      -- String -- siehe z.B. dessen Zeile mit "ctrl.mode = ctx.CONFIG.
-      -- TURBINE_MODE_RAMP or \"RAMP\"") umbenannt zu TURBINE_MODE_RAMP,
-      -- weiterhin ein String -- module_lifecycle.lua liest jetzt direkt
-      -- ctx.TURBINE_MODE_RAMP statt ctx.TURBINE_MODE.RAMP.
-      TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
-      -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md Abschnitt 12). Dieser Diagnose-Stub gab
-      -- bisher "30" zurueck, benannt als "ramp_duration" -- ohne jede
-      -- Einheit im Namen. module_lifecycle.lua's process_startup() rechnet
-      -- aber mit "(now - module.start_time) / duration", wobei "now" und
-      -- "start_time" beide os.epoch("utc") in MILLISEKUNDEN sind -- die
-      -- Reaktorrampe erreichte dadurch bereits nach ~30 Millisekunden 100%
-      -- Fortschritt statt der beabsichtigten 30 SEKUNDEN, ein klarer
-      -- Widerspruch zum 60s-Startup-Stage-Timeout (siehe VALVE_PHASE_
-      -- TIMEOUT_MS-aehnliche Deadlines) und zur fachlichen Bedeutung einer
-      -- Rampe. Jetzt explizit als Sekunden benannt und einmalig in
-      -- Millisekunden umgerechnet -- "ramp_duration_ms" liefert garantiert
-      -- Millisekunden, keine unbenannte Zahlenkonstante mehr.
-      ramp_duration_ms = function(_ramp_profile)
-        local STARTUP_RAMP_DURATION_S = 30
-        return STARTUP_RAMP_DURATION_S * 1000
-      end,
-      warn_unsupported = function(name, reason)
-        warn_once("unsupported:" .. tostring(name),
-          "Device unsupported: " .. tostring(name) .. " (" .. tostring(reason or "") .. ")")
-      end,
-    }
-  end
+  configure_lifecycle_context()
+  configure_state_machine()
 
-  local state_ctx = {
-    -- Basis
-    STATE             = STATE,
-    config            = config,
-    constants         = constants,
-    log               = log,
-    comms             = comms,
-    devices           = devices,
-    modules           = modules_registry,
-    targets           = ctx and ctx.targets or {},
-    TARGET_RPM        = CONFIG.TARGET_RPM,
-    -- Zustands-Accessoren
-    get_current_state      = current_state,
-    set_current_state      = function(v) current_state_value = v end,
-    get_node_state_machine = function() return node_state_machine end,
-    allowed_transitions    = nil,
-    -- Regelungs-Callbacks
-    adjust_turbines   = function() turbine_control.updateControl(ctx) end,
-    adjust_reactors   = function() reactor_control.updateReactorControl(ctx) end,
-    get_target_rpm    = function() return turbine_control.get_target_rpm(ctx) end,
-    ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
-    clamp_autonom_targets = function()
-      if ctx and ctx.targets then
-        local t = ctx.targets
-        t.power   = math.max(0, t.power   or 0)
-        t.steam   = math.max(0, t.steam   or 0)
-        t.rpm     = math.max(0, t.rpm     or CONFIG.TARGET_RPM)
-      end
-    end,
-    -- Master-Monitoring
-    monitor_master = function()
-      if not is_master_connected() then
-        if current_state() == STATE.MASTER then
-          log("WARN", "Master disconnected — switching to AUTONOM")
-          current_state_value = STATE.AUTONOM
-        end
-      end
-    end,
-    -- Alarm
-    add_alarm = function(_, sev, msg)
-      if comms then comms:send_alert(sev, msg) end
-    end,
-    -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md). Waren bisher No-Ops ("RT-Node hat keine
-    -- Modul-Startup-Sequenz") -- dadurch blieb der STARTUP-State (siehe
-    -- state_handlers.lua startup_on_enter/startup_on_tick) permanent
-    -- funktionslos: die Warteschlange wurde zwar befuellt, aber start_module()
-    -- tat nichts, also blieb jedes Modul fuer immer OFF und der Node kam nie
-    -- nach RUNNING. Echte Closures auf die modul-globalen Startup-State-
-    -- Variablen (siehe "local active_startup_id" etc. oben).
-    get_active_startup           = function() return active_startup_id end,
-    set_active_startup           = function(id) active_startup_id = id end,
-    get_startup_queue            = function() return startup_queue_list end,
-    set_startup_queue            = function(q) startup_queue_list = q or {} end,
-    get_startup_started_ms       = function() return startup_started_ms_value end,
-    set_startup_started_ms       = function(ms) startup_started_ms_value = ms end,
-    get_startup_watchdog_tripped = function() return startup_watchdog_tripped_value end,
-    set_startup_watchdog_tripped = function(v) startup_watchdog_tripped_value = v end,
-    reset_startup_watchdog       = function()
-      startup_watchdog_tripped_value = false
-      startup_started_ms_value = nil
-    end,
-    -- handle_startup_timeout() erwartet direkte Felder (nicht Getter/Setter)
-    -- fuer startup_watchdog_tripped/startup_started_ms, siehe startup_
-    -- diagnostics.lua -- baut deshalb einen eigenen kleinen Snapshot-Context
-    -- statt make_lifecycle_ctx()/state_ctx direkt wiederzuverwenden. node_
-    -- state_machine ist eine Tabellen-Referenz (mutiert von state_machine.lua
-    -- direkt) -- kein manueller Rueckschreib-Sync fuer die state()/transition()-
-    -- Aufrufe darin noetig, nur fuer den tripped-Flag (einfacher Boolean-Wert,
-    -- kein Referenztyp).
-    handle_startup_timeout = function()
-      local diag_ctx = {
-        startup_watchdog_tripped = startup_watchdog_tripped_value,
-        startup_started_ms       = startup_started_ms_value,
-        comms                    = comms,
-        config                   = config,
-        devices                  = devices,
-        registry                 = registry,
-        log                      = log,
-        update_status_snapshot   = update_status_snapshot,
-        constants                = constants,
-        broadcast_status         = broadcast_status,
-        node_state_machine       = node_state_machine,
-        set_active_startup       = function(id) active_startup_id = id end,
-        set_startup_queue        = function(q) startup_queue_list = q or {} end,
-      }
-      local tripped = startup_diagnostics.handle_startup_timeout(diag_ctx)
-      if tripped then
-        startup_watchdog_tripped_value = true
-      end
-    end,
-    start_module = function(module_id, module_type, ramp_profile)
-      return module_lifecycle.start_module(make_lifecycle_ctx(), module_id, module_type, ramp_profile)
-    end,
-    -- Lifecycle-Funktionen (delegieren an module_lifecycle mit vollem Context)
-    scram = function()
-      module_lifecycle.scram(make_lifecycle_ctx())
-    end,
-    apply_safe_controls = function()
-      module_lifecycle.apply_safe_controls(make_lifecycle_ctx())
-    end,
-    set_reactors_active = function(active, reason)
-      local lctx = make_lifecycle_ctx()
-      module_lifecycle.set_reactors_active(lctx, active, reason)
-    end,
-    set_turbines_active = function(active, reason)
-      local lctx = make_lifecycle_ctx()
-      module_lifecycle.set_turbines_active(lctx, active, reason)
-    end,
-  }
-  -- Fix (2026-07-15): expliziter Guard + Diagnose-Log fuer is_master_connected,
-  -- bevor state_handlers.build() dessen eigenen generischen (aber weniger
-  -- aussagekraeftigen) assert_fn-Guard auswertet -- gibt Operatoren beim RT-
-  -- Boot eine eindeutige Bestaetigung, dass der sicherheitskritische Master-
-  -- Failover-Check verdrahtet ist.
-  state_ctx.is_master_connected = is_master_connected
-  if type(state_ctx.is_master_connected) ~= "function" then
-    error("rt state context missing required function: is_master_connected", 0)
-  end
-  log("INFO", "State context ready (is_master_connected=true)")
-  states_table = state_handlers.build(state_ctx)
-  node_state_machine = machine.new(states_table, constants.node_states.OFF)
-
-  -- Initiale Mode: AUTONOM
-  current_state_value = STATE.AUTONOM
-  node_state_machine:transition(constants.node_states.RUNNING)
 
   -- Monitor initialisieren
   local mon_entry = adapters.monitor.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)

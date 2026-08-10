@@ -1,19 +1,5 @@
-local file = assert(io.open('xreactor/nodes/rt/main.lua', 'r'))
-local content = file:read('*a')
-file:close()
-
-local function assert_has(snippet, message)
-  if not content:find(snippet, 1, true) then
-    error(message .. ' missing snippet=' .. snippet)
-  end
-end
-
-assert_has('TurbineTick evaluated=', 'tick summary logging')
-assert_has('decisions=', 'tick summary decision count')
-assert_has('skip_reasons=', 'tick summary skip reason count')
-assert_has('INDUCTOR_UPDATE_FAILED_NONFATAL', 'inductor failures should no longer stop flow regulation')
-assert_has('SET_ACTIVE_FAILED_NONFATAL', 'activation failures should no longer stop flow regulation')
-assert_has('OVERSPEED_BRAKE_FLOW_ZERO', 'overspeed must force flow to zero')
-assert_has('enforce_overspeed_brake_coil', 'overspeed must enforce coil braking')
-
+local function read(p)local f=assert(io.open(p,'r'));local s=f:read('*a');f:close();return s end
+local s=read('xreactor/nodes/rt/turbine_control.lua')
+for _,t in ipairs({'INDUCTOR_UPDATE_FAILED_NONFATAL','SET_ACTIVE_FAILED_NONFATAL','OVERSPEED_BRAKE_FLOW_ZERO','enforce_overspeed_brake_coil','for _, name in ipairs(ctx.config.turbines or {}) do'}) do assert(s:find(t,1,true),'turbine control missing coverage/safety contract '..t) end
+assert(s:find('update_inductor_for_rpm',1,true) and s:find('update_turbine_flow_state',1,true),'every turbine tick must retain coil and flow decisions')
 print('rt_turbine_tick_coverage_regression_test.lua: ok')

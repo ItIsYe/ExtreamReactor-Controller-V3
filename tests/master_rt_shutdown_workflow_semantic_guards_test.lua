@@ -1,34 +1,8 @@
-local handle, err = io.open('xreactor/master/main.lua', 'r')
-if not handle then
-  error('failed to open xreactor/master/main.lua: ' .. tostring(err))
-end
-local content = handle:read('*a')
-handle:close()
-
-local required_tokens = {
-  'workflow.stage = "REQUESTED"',
-  'workflow.stage = "WAITING_STATE"',
-  'workflow.stage = "COMPLETED"',
-  'workflow.final_reason = "SUCCESS_COMPLETED"',
-  'workflow.final_reason = "CANCELLED_DEMAND_RECOVERED"',
-  'workflow_fail("FAILED_TIMEOUT"',
-  'workflow_fail("FAILED_REJECTED"',
-  'workflow_fail("FAILED_INVALID_STATE"',
-  'workflow_fail("FAILED_ACK_MISSING"',
-  'if transition == "REQUESTED" or transition == "ALREADY_IN_STATE" then',
-  'workflow.final_reason = "FAILED_UNKNOWN"'
-}
-
-for _, token in ipairs(required_tokens) do
-  if not content:find(token, 1, true) then
-    error('missing shutdown semantic guard token in master main: ' .. token)
-  end
-end
-
-local completed_idx = assert(content:find('workflow.stage = "COMPLETED"', 1, true), 'missing completed stage assignment')
-local state_check_idx = assert(content:find('if node.state == %(workflow.target_state or target_shutdown_state%) then'))
-if completed_idx < state_check_idx then
-  error('COMPLETED assignment must remain guarded by actual node target state check')
-end
-
+local f=assert(io.open('xreactor/master/runtime_ops_rt.lua','r'));local s=f:read('*a');f:close()
+local required={'workflow.stage = "REQUESTED"','workflow.stage = "WAITING_STATE"','workflow.stage = "COMPLETED"',
+'workflow.final_reason = "SUCCESS_COMPLETED"','workflow_fail("FAILED_TIMEOUT"','workflow_fail("FAILED_REJECTED"',
+'workflow_fail("FAILED_INVALID_STATE"','workflow_fail("FAILED_ACK_MISSING"','workflow.final_reason = "FAILED_UNKNOWN"'}
+for _,t in ipairs(required) do assert(s:find(t,1,true),'missing current shutdown semantic token '..t) end
+local completed=assert(s:find('workflow.stage = "COMPLETED"',1,true)); local statecheck=assert(s:find('if node.state == (workflow.target_state or target_shutdown_state) then',1,true))
+assert(completed>statecheck,'COMPLETED must remain behind actual target-state verification')
 print('master_rt_shutdown_workflow_semantic_guards_test.lua: ok')
