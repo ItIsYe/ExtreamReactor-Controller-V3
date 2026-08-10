@@ -55,9 +55,15 @@ end
 
 local function command_token(opts)
   local message = opts and opts.message or nil
+  if type(message) == "table" then
+    if message.token ~= nil then return message.token end
+    if type(message.command) == "table" and message.command.token ~= nil then
+      return message.command.token
+    end
+  end
   local payload = type(message) == "table" and message.payload or nil
   local command = type(payload) == "table" and payload.command or nil
-  if type(command) == "table" then return command.token end
+  if type(command) == "table" and command.token ~= nil then return command.token end
   return opts and opts.token or nil
 end
 
@@ -198,10 +204,15 @@ function M.run(log_fn, opts)
 
   local ok_run, run_err
   if type(shell) == "table" and type(shell.run) == "function" then
-    ok_run, run_err = pcall(shell.run, path)
+    local ok_call, result = pcall(shell.run, path)
+    ok_run = ok_call and result ~= false
+    run_err = ok_call and (result == false and "installer returned false" or nil) or result
   else
     ok_run, run_err = pcall(dofile, path)
   end
+
+  -- Unattended mode must never leak into later manual installer runs.
+  _G.__xreactor_remote_update = nil
 
   -- Aufräumen
   pcall(fs.delete, path)

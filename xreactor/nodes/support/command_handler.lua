@@ -44,6 +44,8 @@ function M.handle_common(ctx, msg)
     require("core.remote_update").handle_command({
       log_prefix = (ctx and ctx.log_prefix) or "SUPPORT",
       utils = ctx and ctx.utils,
+      message = msg,
+      token = msg.token,
       send_ack = (ctx and ctx.comms) and function() ctx.comms:send_ack(msg, true, { updating = true }) end or nil,
     })
     return true

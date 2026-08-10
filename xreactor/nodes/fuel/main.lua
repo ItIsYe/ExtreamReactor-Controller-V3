@@ -170,7 +170,7 @@ local master_alerts = {}
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
 local fuel_ui = fuel_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
-local FUEL_MONITOR_SCALE = 0.5
+local FUEL_MONITOR_SCALE = 1.0
 
 local function warn_once(key, message)
   support_runtime.warn_once(devices, function(msg, level) utils.log(CONFIG.LOG_PREFIX, msg, level) end, key, message)

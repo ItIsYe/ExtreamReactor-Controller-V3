@@ -67,24 +67,31 @@ local function download(url)
   return nil, last_err
 end
 
--- SHA aufloesen
+-- SHA aufloesen. Ohne unveraenderlichen Commit-Ref wird NICHT auf den
+-- beweglichen beta-Branch zurueckgefallen: sonst koennen Installermodule
+-- und Nutzdateien innerhalb desselben Laufs aus verschiedenen Commits stammen.
 local sha = nil
-local ok_sha, r_sha = pcall(http.get, GITHUB_API)
-if ok_sha and r_sha then
-  local ok2, body = pcall(r_sha.readAll); pcall(r_sha.close)
-  if ok2 and type(body) == "string" then
-    sha = body:match('"sha"%s*:%s*"(%x+)"')
+for attempt = 1, 4 do
+  local ok_sha, r_sha = pcall(http.get, GITHUB_API)
+  if ok_sha and r_sha then
+    local ok2, body = pcall(r_sha.readAll); pcall(r_sha.close)
+    if ok2 and type(body) == "string" then
+      sha = body:match('"sha"%s*:%s*"(%x+)"')
+      if sha then break end
+    end
+  end
+  if attempt < 4 then
+    p("  Branch-SHA nicht aufloesbar, erneut in " .. (attempt * 2) .. "s ...")
+    os.sleep(attempt * 2)
   end
 end
-p(sha and ("SHA: " .. sha:sub(1, 12)) or "WARN: SHA nicht aufloesbar")
+if not sha then
+  error("GitHub Branch-SHA konnte nicht aufgeloest werden. Installation aus Sicherheitsgruenden abgebrochen; bitte spaeter erneut versuchen.", 0)
+end
+p("SHA: " .. sha:sub(1, 12))
 
--- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md (Abschnitt 14). EIN einziger Referenzpunkt
--- ("ref": entweder die aufgeloeste SHA, oder bei Aufloesungsfehler
--- explizit "beta") fuer den GESAMTEN Lauf -- sowohl fuer die hier
--- heruntergeladenen Installermodule als auch (via deps.ref) fuer
--- installer/init.lua's eigenen Download aller uebrigen Dateien.
-local ref = sha or "beta"
+-- Der gesamte Lauf ist an exakt diesen Commit gebunden.
+local ref = sha
 local base = GITHUB_RAW..ref.."/xreactor/"
 
 -- ── Kanonische Installermodule herunterladen ─────────────────────────────────

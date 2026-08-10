@@ -145,6 +145,19 @@ local function backup_config_dir()
   return files_map
 end
 
+local function load_recovery_config_backup()
+  if not fs.exists(RECOVERY_CONFIG_BACKUP) then return nil, "missing" end
+  local src = stage_mod.read(RECOVERY_CONFIG_BACKUP)
+  if type(src) ~= "string" or src == "" then return nil, "unreadable" end
+  local loader, lerr = load(src, "=config_backup", "t", {})
+  if not loader then return nil, "parse: " .. tostring(lerr) end
+  local ok, result = pcall(loader)
+  if not ok or type(result) ~= "table" then
+    return nil, "invalid: " .. tostring(result)
+  end
+  return result
+end
+
 -- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
 -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 14). Der
 -- vorherige Fix (2026-07-08, siehe Git-Historie) loeste das damals
@@ -230,11 +243,35 @@ ui_mod.header("Installiere " .. role.label)
 -- sofort zurueckgelesen und byte-genau verifiziert, BEVOR /xreactor
 -- geloescht werden darf -- ein defektes Backup darf niemals als
 -- Sicherheitsnetz fuer das bevorstehende Loeschen gelten.
-local config_backup = backup_config_dir()
+local config_backup
+local using_existing_recovery_backup = false
+do
+  local status = nil
+  if type(journal_mod.classify) == "function" then
+    local ok_status, classified = pcall(function()
+      return select(1, journal_mod.classify())
+    end)
+    if ok_status then status = classified end
+  end
+
+  if status == journal_mod.STATUS.VALID_INCOMPLETE then
+    local recovered, rerr = load_recovery_config_backup()
+    if not recovered then
+      error("Vorherige Installation ist unvollstaendig, aber das originale Config-Recovery-Backup ist nicht lesbar (" ..
+        tostring(rerr) .. "). Abbruch bevor Daten erneut geloescht werden.", 0)
+    end
+    config_backup = recovered
+    using_existing_recovery_backup = true
+    p("Unvollstaendige vorherige Installation erkannt: verwende unveraendert das bestehende Recovery-Backup.")
+  else
+    config_backup = backup_config_dir()
+  end
+end
+
 do
   local backup_count = 0
   for _ in pairs(config_backup) do backup_count = backup_count + 1 end
-  if backup_count > 0 then
+  if backup_count > 0 and not using_existing_recovery_backup then
     pcall(fs.makeDir, RECOVERY_DIR)
     local serialized = serialize_config_backup(config_backup)
     local ok_bak, bak_err = stage_mod.write(RECOVERY_CONFIG_BACKUP, serialized)
@@ -510,6 +547,7 @@ do
   if #failed > 0 then
     p("WARN: Config-Wiederherstellung unvollstaendig: " .. table.concat(failed, ", "))
     p("WARN: Recovery-Backup bleibt erhalten: " .. RECOVERY_CONFIG_BACKUP)
+    error("Config-Wiederherstellung unvollstaendig -- Installation wird NICHT als COMMITTED markiert.", 0)
   else
     pcall(fs.delete, RECOVERY_CONFIG_BACKUP)
   end
