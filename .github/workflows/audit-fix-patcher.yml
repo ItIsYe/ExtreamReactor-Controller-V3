@@ -17,7 +17,17 @@ jobs:
           ref: agent/repo-safety-audit-fixes
           fetch-depth: 0
       - name: Apply guarded fixes
-        run: python3 .github/audit_fix.py
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("xreactor/nodes/fuel/main.lua")
+          text = path.read_text(encoding="utf-8")
+          old = "local FUEL_MONITOR_SCALE = 0.5"
+          if text.count(old) != 1:
+              raise SystemExit("FUEL monitor scale guard failed")
+          path.write_text(text.replace(old, "local FUEL_MONITOR_SCALE = 1.0", 1), encoding="utf-8")
+          PY
+          python3 .github/audit_fix.py
       - name: Install Lua
         run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.2
       - name: Validate syntax and manifests
