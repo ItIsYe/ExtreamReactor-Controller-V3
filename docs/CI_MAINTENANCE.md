@@ -75,3 +75,31 @@ Alle `uses:` Einträge in `.github/workflows/` auf aktuelle Commit-SHAs prüfen:
 - node-57 Peer-down-Ursache: Wireless Modem auf 4 Kanälen → strukturelles Netzwerkproblem
 - node-56 Heartbeat-Delay → Server-Lag
 - VALVE-Nodes node-70/74 gelegentliche Aussetzer → Verbindungsinstabilität
+
+---
+
+## August 2026 — Installer Journal-Bug (beta-v523)
+
+### Problem
+Installer scheiterte auf CC:Tweaked mit:
+```
+Installationsjournal konnte nicht angelegt werden: journal verify failed after write (status=corrupt)
+```
+
+### Ursache
+`installer/journal.lua` führte nach jedem Write eine Round-Trip-Verifikation durch:
+nach `fs.open("w")` + `f.write()` + `f.close()` wurde die Datei sofort wieder gelesen
+und der Inhalt geprüft. In CC:Tweaked wird der Inhalt nach `close()` nicht sofort
+zurücklesbar geflusht (kein `fsync`-Äquivalent) — `slot_read()` lieferte deshalb
+`CORRUPT` zurück, obwohl der Write erfolgreich war.
+
+### Fix
+Round-Trip-Verifikation aus `M.write()` entfernt. Der Zwei-Slot-Mechanismus
+(SLOT_A / SLOT_B mit monoton steigender Generation) bietet bereits ausreichende
+Absicherung gegen Halbschreiber — die Verifikation war redundant und CC-inkompatibel.
+
+### Regel
+**Niemals Dateien manuell per curl oder Server-Konsole anlegen.**
+Manuell angelegte Dateien gehören `root` statt `amp` und verursachen
+Berechtigungsprobleme bei späteren Schreibzugriffen aus CC:Tweaked.
+Updates immer ausschließlich über den Installer durchführen.
