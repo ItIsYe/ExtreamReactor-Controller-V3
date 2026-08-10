@@ -129,6 +129,93 @@ local function classify_install_journal()
   return status_b, journal_b
 end
 
+local function crc32_hex(content)
+  if not bit32 then return nil end
+  local crc = 0xFFFFFFFF
+  for i = 1, #content do
+    crc = bit32.bxor(crc, content:byte(i))
+    for _ = 1, 8 do
+      local mask = -(bit32.band(crc, 1))
+      crc = bit32.bxor(bit32.rshift(crc, 1), bit32.band(0xEDB88320, mask))
+    end
+  end
+  return string.format("%08x", bit32.bxor(crc, 0xFFFFFFFF))
+end
+
+local function read_recovery_file(path)
+  local ok_open, handle = pcall(fs.open, path, "r")
+  if not ok_open or not handle then return nil, "open failed" end
+  local ok_read, content = pcall(handle.readAll)
+  local ok_close = pcall(handle.close)
+  if not ok_read or type(content) ~= "string" or not ok_close then return nil, "read/close failed" end
+  return content
+end
+
+local function valid_lua_if_needed(path, content)
+  if path:sub(-4) ~= ".lua" then return true end
+  return load(content, "=recovery:" .. path, "t", {}) ~= nil
+end
+
+local function expected_file_valid(path, meta)
+  local content = read_recovery_file(path)
+  if not content then return false end
+  if meta then
+    if type(meta.size_bytes) ~= "number" or type(meta.hash) ~= "string" then return false end
+    if #content ~= meta.size_bytes or crc32_hex(content) ~= meta.hash then return false end
+  end
+  return valid_lua_if_needed(path, content)
+end
+
+local function previous_file_valid(path)
+  local content = read_recovery_file(path)
+  return content ~= nil and valid_lua_if_needed(path, content)
+end
+
+local function ensure_parent(path)
+  if not fs.getDir or not fs.makeDir then return end
+  local dir = fs.getDir(path)
+  if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+end
+
+local function recover_staged_files(journal)
+  if type(journal) ~= "table" or type(journal.expected_files) ~= "table" then
+    return false, { "journal has no expected file list" }
+  end
+  local errors = {}
+  local meta_map = type(journal.expected_meta) == "table" and journal.expected_meta or {}
+  for _, rel in ipairs(journal.expected_files) do
+    local target = INSTALL_ROOT .. "/" .. rel
+    if not fs.exists(target) then
+      local tmp, prev = target .. ".xr_tmp", target .. ".xr_prev"
+      local promoted = false
+      if fs.exists(tmp) and meta_map[rel] and expected_file_valid(tmp, meta_map[rel]) then
+        ensure_parent(target)
+        local ok_move = pcall(fs.move, tmp, target)
+        promoted = ok_move and fs.exists(target) and expected_file_valid(target, meta_map[rel])
+      end
+      if not promoted and fs.exists(prev) and previous_file_valid(prev) then
+        ensure_parent(target)
+        local ok_move = pcall(fs.move, prev, target)
+        promoted = ok_move and fs.exists(target)
+      end
+      if not promoted then errors[#errors + 1] = "missing/unrecoverable: " .. rel end
+    end
+  end
+
+  for _, rel in ipairs(journal.expected_files) do
+    local target = INSTALL_ROOT .. "/" .. rel
+    local meta = meta_map[rel]
+    if not fs.exists(target) or not expected_file_valid(target, meta) then
+      errors[#errors + 1] = "not current/verified: " .. rel
+    end
+  end
+  return #errors == 0, errors
+end
+
+local function valid_commit_sha(value)
+  return type(value) == "string" and #value == 40 and value:match("^%x+$") ~= nil
+end
+
 -- Kontrollierter Resume: statt zu versuchen, chirurgisch nur die fehlenden
 -- Dateien nachzuinstallieren (fehleranfaellig, kaum verlaesslich testbar),
 -- wird der komplette, bereits robuste (SHA-Pinning, CRC32-Verifikation,
@@ -141,9 +228,24 @@ end
 -- unvollstaendiges Journal, das den naechsten Boot wieder in genau diesen
 -- Recoverypfad schickt, statt jemals die (unvollstaendige) Rolle zu
 -- starten.
-local function attempt_recovery_resume()
+local function attempt_recovery_resume(journal, journal_status)
+  local recovery_ref = journal and journal.ref or nil
+  local url
+  if valid_commit_sha(recovery_ref) then
+    url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. recovery_ref .. "/installer"
+    p("[BOOT] Recovery an originalen Commit gebunden: " .. recovery_ref:sub(1, 12))
+  else
+    -- Bei CORRUPT/UNREADABLE existiert kein vertrauenswuerdiger Original-Ref.
+    -- Fail-safe Datenhaltung bleibt durch das externe Recovery-Backup erhalten;
+    -- der Bootstrap darf dann einen NEU aufgeloesten beta-SHA verwenden, aber
+    -- niemals Dateien eines beweglichen Branches mit einem alten Journal-SHA mischen.
+    url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer"
+    p("[BOOT] WARN: Original-Ref nicht rekonstruierbar (" .. tostring(journal_status)
+      .. ") -- starte dokumentierten, neu SHA-gepinnten Recovery-Lauf vom aktuellen beta-Head.")
+  end
+
   local body
-  local ok_http, r = pcall(http.get, "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer")
+  local ok_http, r = pcall(http.get, url)
   if ok_http and r then
     local ok2, b = pcall(r.readAll); pcall(r.close)
     if ok2 and type(b) == "string" and #b > 0 then body = b end
@@ -156,6 +258,9 @@ local function attempt_recovery_resume()
   pcall(f.close)
   if not ok_w then error("Kann Recovery-Installer nicht schreiben: " .. tmp, 0) end
   _G.__xreactor_remote_update = true
+  _G.__xreactor_forced_ref = valid_commit_sha(recovery_ref) and recovery_ref or nil
+  _G.__xreactor_recovery_origin_ref = valid_commit_sha(recovery_ref)
+    and recovery_ref or ("UNKNOWN_" .. tostring(journal_status))
   dofile(tmp)
 end
 
@@ -165,7 +270,12 @@ if journal_status ~= JOURNAL_STATUS.ABSENT and journal_status ~= JOURNAL_STATUS.
     and tostring(install_journal.state) or journal_status
   p("[BOOT] WARN: unvollstaendige Installation erkannt (Zustand: " .. detail .. ")")
   p("[BOOT] Rolle wird NICHT gestartet -- kontrollierter Recovery-Resume...")
-  local ok_resume, resume_err = pcall(attempt_recovery_resume)
+  if install_journal then
+    local recovered_current, recovery_errors = recover_staged_files(install_journal)
+    p("[BOOT] Stage-Recovery: " .. (recovered_current and "vollstaendig verifiziert" or
+      ("unvollstaendig (" .. tostring(#recovery_errors) .. " Restpunkt(e)); Installer-Resume erforderlich")))
+  end
+  local ok_resume, resume_err = pcall(attempt_recovery_resume, install_journal, journal_status)
   if not ok_resume then
     p("[BOOT] FEHLER: Recovery-Resume fehlgeschlagen: " .. tostring(resume_err))
   end
@@ -202,7 +312,16 @@ if fs.exists(RELEASE_PATH) then
     if v then rel_v = v end
   end
 end
-p("[BOOT] XReactor " .. role .. " | " .. rel_v)
+local installed_sha = nil
+local install_meta_path = INSTALL_ROOT .. "/install_meta.lua"
+if fs.exists(install_meta_path) then
+  local ok_meta, meta = pcall(dofile, install_meta_path)
+  if ok_meta and type(meta) == "table" and valid_commit_sha(meta.resolved_commit_sha) then
+    installed_sha = meta.resolved_commit_sha
+  end
+end
+p("[BOOT] XReactor " .. role .. " | " .. rel_v
+  .. (installed_sha and (" | " .. installed_sha:sub(1, 12)) or ""))
 
 local DELAYS = { LOG = 0, LOG_COLLECTOR = 0, MASTER = 2 }
 local delay = DELAYS[role] or 8

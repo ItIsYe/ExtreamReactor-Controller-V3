@@ -1,13 +1,13 @@
 return {
-  release_id = "beta-v514",
+  release_id = "beta-v515",
   commit_sha = "beta",
   source_ref = "beta",
-  manifest_id = "manifest-v514",
-  manifest_version = 514,
+  manifest_id = "manifest-v515",
+  manifest_version = 515,
   manifest_file_count = 174,
   hash_algo = "crc32",
   manifest_path = "xreactor/manifest.lua",
   installer_core_version = "3.2",
-  installer_core_hash = "331ec671",
-  installer_core_size_bytes = 6684,
+  installer_core_hash = "41064aa8",
+  installer_core_size_bytes = 7155,
 }

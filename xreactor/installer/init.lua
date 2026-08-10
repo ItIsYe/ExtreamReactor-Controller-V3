@@ -103,59 +103,153 @@ local function config_restore_denied(rel)
   return false
 end
 
-local function list_files_recursive(dir, prefix, out)
+local function sorted_keys(map)
+  local keys = {}
+  for key in pairs(map or {}) do keys[#keys + 1] = key end
+  table.sort(keys)
+  return keys
+end
+
+local function list_files_recursive(dir, prefix, out, errors)
   prefix = prefix or ""
   out = out or {}
-  if not fs.exists(dir) or not fs.isDir(dir) then return out end
-  local ok, entries = pcall(fs.list, dir)
-  if not ok or not entries then return out end
+  errors = errors or {}
+  local ok_exists, exists = pcall(fs.exists, dir)
+  if not ok_exists then
+    errors[#errors + 1] = "exists failed: " .. tostring(dir) .. " (" .. tostring(exists) .. ")"
+    return out, errors
+  end
+  if not exists then return out, errors end
+  local ok_isdir, is_dir = pcall(fs.isDir, dir)
+  if not ok_isdir or not is_dir then
+    errors[#errors + 1] = "not readable directory: " .. tostring(dir)
+    return out, errors
+  end
+  local ok_list, entries = pcall(fs.list, dir)
+  if not ok_list or type(entries) ~= "table" then
+    errors[#errors + 1] = "list failed: " .. tostring(dir) .. " (" .. tostring(entries) .. ")"
+    return out, errors
+  end
+  table.sort(entries)
   for _, name in ipairs(entries) do
     local full = dir .. "/" .. name
     local rel = (prefix == "" and name or (prefix .. "/" .. name))
-    if fs.isDir(full) then
-      list_files_recursive(full, rel, out)
+    local ok_child_dir, child_is_dir = pcall(fs.isDir, full)
+    if not ok_child_dir then
+      errors[#errors + 1] = "isDir failed: " .. tostring(full)
+    elseif child_is_dir then
+      list_files_recursive(full, rel, out, errors)
     else
       out[#out + 1] = rel
     end
   end
-  return out
+  return out, errors
 end
 
-local function serialize_config_backup(files_map)
-  local parts = { "return {\n" }
-  for rel, content in pairs(files_map) do
-    parts[#parts + 1] = "  [" .. string.format("%q", rel) .. "] = " .. string.format("%q", content) .. ",\n"
+local function make_backup_bundle(files_map, expected_paths)
+  expected_paths = expected_paths or sorted_keys(files_map)
+  return { version = 2, count = #expected_paths, expected_paths = expected_paths, files = files_map or {} }
+end
+
+local function normalize_backup_bundle(value)
+  if type(value) ~= "table" then return nil, "backup is not a table" end
+  if value.version == 2 then
+    if type(value.files) ~= "table" or type(value.expected_paths) ~= "table" or type(value.count) ~= "number" then
+      return nil, "v2 backup shape invalid"
+    end
+    local seen = {}
+    if value.count ~= #value.expected_paths then return nil, "v2 backup count mismatch" end
+    for _, rel in ipairs(value.expected_paths) do
+      if type(rel) ~= "string" or rel == "" or seen[rel] then return nil, "v2 backup path list invalid" end
+      seen[rel] = true
+      if type(value.files[rel]) ~= "string" then return nil, "v2 backup missing content for " .. tostring(rel) end
+    end
+    for rel, content in pairs(value.files) do
+      if not seen[rel] or type(content) ~= "string" then return nil, "v2 backup contains unexpected file " .. tostring(rel) end
+    end
+    return make_backup_bundle(value.files, value.expected_paths)
   end
-  parts[#parts + 1] = "}\n"
+
+  -- Backward compatibility for a recovery file written by pre-v515 code.
+  local files = {}
+  for rel, content in pairs(value) do
+    if type(rel) ~= "string" or type(content) ~= "string" then
+      return nil, "legacy backup entry invalid"
+    end
+    files[rel] = content
+  end
+  return make_backup_bundle(files, sorted_keys(files))
+end
+
+local function serialize_config_backup(bundle)
+  local parts = { "return {\n", "  version = 2,\n",
+    "  count = " .. tostring(bundle.count or 0) .. ",\n", "  expected_paths = {\n" }
+  for _, rel in ipairs(bundle.expected_paths or {}) do
+    parts[#parts + 1] = "    " .. string.format("%q", rel) .. ",\n"
+  end
+  parts[#parts + 1] = "  },\n  files = {\n"
+  for _, rel in ipairs(bundle.expected_paths or {}) do
+    parts[#parts + 1] = "    [" .. string.format("%q", rel) .. "] = "
+      .. string.format("%q", bundle.files[rel]) .. ",\n"
+  end
+  parts[#parts + 1] = "  },\n}\n"
   return table.concat(parts)
 end
 
+local function decode_config_backup(src)
+  if type(src) ~= "string" or src == "" then return nil, "unreadable" end
+  local loader, lerr = load(src, "=config_backup", "t", {})
+  if not loader then return nil, "parse: " .. tostring(lerr) end
+  local ok, result = pcall(loader)
+  if not ok then return nil, "invalid: " .. tostring(result) end
+  return normalize_backup_bundle(result)
+end
+
 local function backup_config_dir()
-  local files_map = {}
-  if not fs.exists(CONFIG_DIR) then return files_map end
-  for _, rel in ipairs(list_files_recursive(CONFIG_DIR)) do
+  local files_map, errors = {}, {}
+  local ok_exists, exists = pcall(fs.exists, CONFIG_DIR)
+  if not ok_exists then return make_backup_bundle({}, {}), { "exists failed: " .. tostring(CONFIG_DIR) } end
+  if not exists then return make_backup_bundle({}, {}), errors end
+
+  local files
+  files, errors = list_files_recursive(CONFIG_DIR, "", {}, errors)
+  local expected_paths = {}
+  for _, rel in ipairs(files) do
     if not config_restore_denied(rel) then
-      local f = fs.open(CONFIG_DIR .. "/" .. rel, "r")
-      if f then
-        files_map[rel] = f.readAll()
-        f.close()
+      expected_paths[#expected_paths + 1] = rel
+      local path = CONFIG_DIR .. "/" .. rel
+      local ok_open, handle = pcall(fs.open, path, "r")
+      if not ok_open or not handle then
+        errors[#errors + 1] = "open failed: " .. path .. " (" .. tostring(handle) .. ")"
+      else
+        local ok_read, content = pcall(handle.readAll)
+        local ok_close, close_err = pcall(handle.close)
+        if not ok_read or type(content) ~= "string" then
+          errors[#errors + 1] = "read failed: " .. path .. " (" .. tostring(content) .. ")"
+        end
+        if not ok_close then
+          errors[#errors + 1] = "close failed: " .. path .. " (" .. tostring(close_err) .. ")"
+        end
+        if ok_read and type(content) == "string" and ok_close then files_map[rel] = content end
       end
     end
   end
-  return files_map
+  table.sort(expected_paths)
+  return make_backup_bundle(files_map, expected_paths), errors
 end
 
 local function load_recovery_config_backup()
   if not fs.exists(RECOVERY_CONFIG_BACKUP) then return nil, "missing" end
   local src = stage_mod.read(RECOVERY_CONFIG_BACKUP)
-  if type(src) ~= "string" or src == "" then return nil, "unreadable" end
-  local loader, lerr = load(src, "=config_backup", "t", {})
-  if not loader then return nil, "parse: " .. tostring(lerr) end
-  local ok, result = pcall(loader)
-  if not ok or type(result) ~= "table" then
-    return nil, "invalid: " .. tostring(result)
+  return decode_config_backup(src)
+end
+
+local function backup_bundles_equal(a, b)
+  if not a or not b or a.count ~= b.count or #a.expected_paths ~= #b.expected_paths then return false end
+  for i, rel in ipairs(a.expected_paths) do
+    if b.expected_paths[i] ~= rel or b.files[rel] ~= a.files[rel] then return false end
   end
-  return result
+  return true
 end
 
 -- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
@@ -243,57 +337,52 @@ ui_mod.header("Installiere " .. role.label)
 -- sofort zurueckgelesen und byte-genau verifiziert, BEVOR /xreactor
 -- geloescht werden darf -- ein defektes Backup darf niemals als
 -- Sicherheitsnetz fuer das bevorstehende Loeschen gelten.
+local config_backup_bundle
 local config_backup
+local config_backup_paths
 local using_existing_recovery_backup = false
 do
   local status = nil
   if type(journal_mod.classify) == "function" then
-    local ok_status, classified = pcall(function()
-      return select(1, journal_mod.classify())
-    end)
+    local ok_status, classified = pcall(function() return select(1, journal_mod.classify()) end)
     if ok_status then status = classified end
   end
 
-  if status == journal_mod.STATUS.VALID_INCOMPLETE then
+  local interrupted = status == journal_mod.STATUS.VALID_INCOMPLETE
+    or status == journal_mod.STATUS.CORRUPT or status == journal_mod.STATUS.UNREADABLE
+  if interrupted then
     local recovered, rerr = load_recovery_config_backup()
     if not recovered then
-      error("Vorherige Installation ist unvollstaendig, aber das originale Config-Recovery-Backup ist nicht lesbar (" ..
-        tostring(rerr) .. "). Abbruch bevor Daten erneut geloescht werden.", 0)
+      error("Vorherige Installation ist nicht sicher abgeschlossen, aber das originale Config-Recovery-Backup ist nicht lesbar ("
+        .. tostring(rerr) .. "). Abbruch bevor Daten erneut geloescht werden.", 0)
     end
-    config_backup = recovered
+    config_backup_bundle = recovered
     using_existing_recovery_backup = true
     p("Unvollstaendige vorherige Installation erkannt: verwende unveraendert das bestehende Recovery-Backup.")
   else
-    config_backup = backup_config_dir()
+    local errors
+    config_backup_bundle, errors = backup_config_dir()
+    if #errors > 0 then
+      error("Config-Backup unvollstaendig -- Abbruch VOR dem ersten destruktiven Schritt: " .. table.concat(errors, "; "), 0)
+    end
   end
+
+  config_backup = config_backup_bundle.files
+  config_backup_paths = config_backup_bundle.expected_paths
 end
 
 do
-  local backup_count = 0
-  for _ in pairs(config_backup) do backup_count = backup_count + 1 end
-  if backup_count > 0 and not using_existing_recovery_backup then
+  local backup_count = config_backup_bundle.count or 0
+  if not using_existing_recovery_backup then
     pcall(fs.makeDir, RECOVERY_DIR)
-    local serialized = serialize_config_backup(config_backup)
+    local serialized = serialize_config_backup(config_backup_bundle)
     local ok_bak, bak_err = stage_mod.write(RECOVERY_CONFIG_BACKUP, serialized)
     if not ok_bak then
       error("Config-Backup fehlgeschlagen, breche vor Loeschen ab: " .. tostring(bak_err), 0)
     end
-    local reread = stage_mod.read(RECOVERY_CONFIG_BACKUP)
-    local restored_map
-    if reread then
-      local loader = load(reread, "=config_backup", "t", {})
-      if loader then
-        local ok_call, result = pcall(loader)
-        if ok_call and type(result) == "table" then restored_map = result end
-      end
-    end
-    if not restored_map then
-      error("Config-Backup-Verifikation fehlgeschlagen (nicht lesbar) -- breche vor Loeschen ab.", 0)
-    end
-    for rel, content in pairs(config_backup) do
-      if restored_map[rel] ~= content then
-        error("Config-Backup-Verifikation fehlgeschlagen (Mismatch bei " .. rel .. ") -- breche vor Loeschen ab.", 0)
-      end
+    local restored_bundle, verr = load_recovery_config_backup()
+    if not restored_bundle or not backup_bundles_equal(config_backup_bundle, restored_bundle) then
+      error("Config-Backup-Verifikation fehlgeschlagen (" .. tostring(verr or "Dateimenge/Inhalt weicht ab") .. ") -- breche vor Loeschen ab.", 0)
     end
     p("Config gesichert: " .. backup_count .. " Datei(en) -> " .. RECOVERY_CONFIG_BACKUP)
   end
@@ -396,7 +485,11 @@ end
 -- und startet die Rolle NICHT, solange es nicht COMMITTED ist (siehe dort).
 local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
 local expected_paths = {}
-for rel in pairs(expected) do expected_paths[#expected_paths + 1] = rel end
+local expected_meta = {}
+for rel, entry in pairs(expected) do
+  expected_paths[#expected_paths + 1] = rel
+  expected_meta[rel] = { size_bytes = tonumber(entry.size_bytes) or 0, hash = tostring(entry.hash or "") }
+end
 table.sort(expected_paths)
 
 -- Fix (2026-07-17): CRITICAL. INSTALL/MANIFEST-P1 aus docs/CODING_AI_OTHER_
@@ -420,6 +513,7 @@ local ok_journal, err_journal = journal_mod.write({
   role = role.label,
   started_at = os.epoch("utc"),
   expected_files = expected_paths,
+  expected_meta = expected_meta,
 })
 if not ok_journal then
   error("Installationsjournal konnte nicht angelegt werden: " .. tostring(err_journal), 0)
@@ -466,6 +560,7 @@ local ok_j2, err_j2 = journal_mod.write({
   role = role.label,
   started_at = os.epoch("utc"),
   expected_files = expected_paths,
+  expected_meta = expected_meta,
 })
 if not ok_j2 then error("Installationsjournal (INSTALLING) fehlgeschlagen: " .. tostring(err_j2), 0) end
 
@@ -517,6 +612,7 @@ journal_mod.write({
   role = role.label,
   started_at = os.epoch("utc"),
   expected_files = expected_paths,
+  expected_meta = expected_meta,
 })
 for _, item in ipairs(file_list) do
   if not fs.exists(INSTALL_ROOT .. "/" .. item.path) then
@@ -532,7 +628,8 @@ end
 -- weiterhin moeglich ist.
 do
   local restored, failed = 0, {}
-  for rel, content in pairs(config_backup) do
+  for _, rel in ipairs(config_backup_paths) do
+    local content = config_backup[rel]
     local dst = CONFIG_DIR .. "/" .. rel
     local ok_w, err_w = stage_mod.write(dst, content)
     if not ok_w then
@@ -543,15 +640,20 @@ do
       restored = restored + 1
     end
   end
+  if restored ~= #config_backup_paths then
+    failed[#failed + 1] = "restore count mismatch expected=" .. tostring(#config_backup_paths) .. " actual=" .. tostring(restored)
+  end
   if restored > 0 then p("Config wiederhergestellt: " .. restored .. " Datei(en)") end
   if #failed > 0 then
     p("WARN: Config-Wiederherstellung unvollstaendig: " .. table.concat(failed, ", "))
     p("WARN: Recovery-Backup bleibt erhalten: " .. RECOVERY_CONFIG_BACKUP)
     error("Config-Wiederherstellung unvollstaendig -- Installation wird NICHT als COMMITTED markiert.", 0)
-  else
-    pcall(fs.delete, RECOVERY_CONFIG_BACKUP)
   end
 end
+
+-- Recovery-Backup bleibt bis NACH dem bestaetigten COMMITTED-Journal erhalten.
+-- So kann ein Fehler in role/startup/release/install_meta nach erfolgreichem
+-- Config-Restore das originale Sicherheitsnetz nicht vorzeitig vernichten.
 
 -- Feature (2026-07-01): aktuelle (ggf. gerade interaktiv geaenderte) Auswahl
 -- optionaler Features persistieren — ueberschreibt das reine PRESERVE-
@@ -609,6 +711,29 @@ if not fs.exists(auto_cfg) then
   p("Auto-Update Config angelegt")
 end
 
+-- Lokale, nicht manifestverwaltete Installationsmetadaten: release.lua ist
+-- Quellmetadatum und darf weiterhin source_ref="beta" tragen; diese Datei
+-- dokumentiert dagegen den tatsaechlich aufgeloesten, unveraenderlichen SHA.
+do
+  local meta_path = INSTALL_ROOT .. "/install_meta.lua"
+  local installed_at = os.epoch and os.epoch("utc") or 0
+  local recovery_origin = deps.recovery_origin_ref
+  local meta_src = table.concat({
+    "return {\n",
+    "  resolved_commit_sha = " .. string.format("%q", ref) .. ",\n",
+    "  installed_at = " .. tostring(installed_at) .. ",\n",
+    "  manifest_id = " .. string.format("%q", tostring(manifest.manifest_id or manifest.manifest_version)) .. ",\n",
+    "  installer_ref = " .. string.format("%q", ref) .. ",\n",
+    "  recovery_origin_ref = " .. (recovery_origin and string.format("%q", tostring(recovery_origin)) or "nil") .. ",\n",
+    "  role = " .. string.format("%q", role.label) .. ",\n",
+    "}\n",
+  })
+  local ok_meta, err_meta = stage_mod.write(meta_path, meta_src)
+  if not ok_meta or stage_mod.read(meta_path) ~= meta_src then
+    error("install_meta.lua konnte nicht sicher geschrieben/verifiziert werden: " .. tostring(err_meta), 0)
+  end
+end
+
 -- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 (Abschnitt 3, Fix-Punkt 5):
 -- "release.lua und Completion-Marker ZULETZT atomar committen". release.lua
 -- wurde oben bewusst aus der Hauptinstallationsschleife ausgeschlossen --
@@ -634,10 +759,12 @@ local ok_commit, err_commit = journal_mod.write({
   role = role.label,
   started_at = os.epoch("utc"),
   expected_files = expected_paths,
+  expected_meta = expected_meta,
 })
 if not ok_commit then
   error("Installationsjournal (COMMITTED) konnte nicht geschrieben werden: " .. tostring(err_commit), 0)
 end
+pcall(fs.delete, RECOVERY_CONFIG_BACKUP)
 journal_mod.clear()
 
 ui_mod.ok("Installation abgeschlossen: " .. role.label)
