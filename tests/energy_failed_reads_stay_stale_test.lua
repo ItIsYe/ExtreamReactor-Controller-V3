@@ -6,6 +6,9 @@ local utils = require('core.utils')
 local function assert_true(v, m) if not v then error(m or 'assert_true failed') end end
 
 local now = 1000
+local old_epoch = os.epoch
+os.epoch = function() return now end
+
 local matrix_fail = false
 local adapter = {
   getStored = function() if matrix_fail then return nil, 'stored failed' end; return 100 end,
@@ -78,4 +81,5 @@ assert_true(storage_failed.stale == true,
 assert_true(storage_failed.stores[1].ok == false,
   'capacity read failure must mark individual storage degraded')
 
+os.epoch = old_epoch
 print('energy_failed_reads_stay_stale_test.lua: ok')
