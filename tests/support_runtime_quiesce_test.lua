@@ -9,11 +9,10 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 --
 -- Dieser Test treibt die ECHTE run_event_loop()-Funktion mit einer
 -- gemockten os.pullEvent/os.startTimer-Eventquelle und einem echten core/
--- update_handshake.lua-Objekt: (1) ohne quiesce_opts aendert sich am
--- bisherigen Verhalten nichts (Schleife laeuft weiter, bis ein Fehler die
--- Sequenz beendet), (2) mit QUIESCE_REQUESTED wird on_quiesce() bei jedem
--- Zyklus erneut versucht, bis es true liefert, und ERST DANN endet die
--- Schleife sauber mit RUNTIME_STOPPED.
+-- update_handshake.lua-Objekt: (1) mit QUIESCE_REQUESTED wird on_quiesce()
+-- bei jedem Zyklus erneut versucht, bis es EXPLIZIT true liefert, (2) nil
+-- bleibt fail-closed, (3) ein fehlender Callback bleibt fail-closed, und
+-- (4) ohne quiesce_opts aendert sich am bisherigen Verhalten nichts.
 
 local support_runtime = require('nodes.support.runtime')
 local update_handshake = require('core.update_handshake')
@@ -33,91 +32,100 @@ local function fresh_services()
   return { tick = function() ticks = ticks + 1 end }, function() return ticks end
 end
 
--- 1. on_quiesce() wird wiederholt versucht, bis es true liefert; erst dann
---    endet die Schleife sauber (kein crash_screen, keine Endlosschleife) und
---    der Handshake landet bei RUNTIME_STOPPED.
-do
+local function with_timer_event_source(limit, fn)
   local os_start_timer = os.startTimer
   local os_pull_event = os.pullEvent
   local timer_id = 0
-  os.startTimer = function() timer_id = timer_id + 1; return timer_id end
-
-  -- Jeder "Zyklus" besteht aus genau einem Timer-Event (schliesst die innere
-  -- Warteschleife sofort), damit services:tick() und die Quiesce-Pruefung
-  -- bei jedem Aufruf von run_event_loop() einmal durchlaufen. Harte Grenze
-  -- (statt einer unbegrenzten Schleife): schlaegt der Quiesce-Exit fehl
-  -- (Regression auf den Vorfix-Code, der quiesce_opts komplett ignoriert),
-  -- soll dieser Test SCHNELL und mit klarer Fehlermeldung fehlschlagen,
-  -- statt die gesamte Testsuite per Endlosschleife aufzuhaengen.
   local pulls = 0
+  os.startTimer = function() timer_id = timer_id + 1; return timer_id end
   os.pullEvent = function()
     pulls = pulls + 1
-    if pulls > 50 then
-      -- "terminate" im Text sorgt dafuer, dass run_event_loop() sauber
-      -- zurueckkehrt (is_terminate()-Pfad) statt crash_screen() zu betreten
-      -- (das seinerseits ueber denselben gemockten os.pullEvent laeuft) --
-      -- die folgenden Assertions greifen dann mit einer klaren Meldung.
-      error('terminate: run_event_loop() did not exit after 50 cycles -- quiesce_opts is being ignored (regression)')
+    if pulls > limit then
+      error('terminate: test boundary')
     end
     return 'timer', timer_id
   end
+  local ok, err = pcall(fn, function() return pulls end)
+  os.startTimer = os_start_timer
+  os.pullEvent = os_pull_event
+  if not ok then error(err, 0) end
+end
 
+-- 1. on_quiesce() wird wiederholt versucht, bis es true liefert; erst dann
+--    endet die Schleife sauber und der Handshake landet bei RUNTIME_STOPPED.
+do
   local services, get_ticks = fresh_services()
   local comms = { handle_event = function() end }
   local handshake = update_handshake.new()
   update_handshake.request_quiesce(handshake)
-
   local quiesce_attempts = 0
-  local quiesce_opts = {
-    handshake = handshake,
-    on_quiesce = function()
-      quiesce_attempts = quiesce_attempts + 1
-      return quiesce_attempts >= 3  -- erst beim dritten Versuch "sicher"
-    end,
-  }
 
-  support_runtime.run_event_loop(1, services, comms, nil, quiesce_opts)
+  with_timer_event_source(50, function()
+    support_runtime.run_event_loop(1, services, comms, nil, {
+      handshake = handshake,
+      on_quiesce = function()
+        quiesce_attempts = quiesce_attempts + 1
+        return quiesce_attempts >= 3
+      end,
+    })
+  end)
 
-  os.startTimer = os_start_timer
-  os.pullEvent = os_pull_event
-
-  assert_eq(quiesce_attempts, 3, 'on_quiesce must be retried until it confirms a safe state')
+  assert_eq(quiesce_attempts, 3, 'on_quiesce must be retried until it explicitly confirms a safe state')
   assert_eq(handshake.state, update_handshake.STATE.RUNTIME_STOPPED,
     'the handshake must reach RUNTIME_STOPPED once on_quiesce confirms safety')
   assert_true(get_ticks() >= 3, 'services:tick() must keep running normally during the quiesce retries')
 end
 
--- 2. Ohne quiesce_opts (bestehende Aufrufer wie z.B. Tests, die die 4-Arg-
---    Form nutzen) darf sich am Verhalten nichts aendern: die Schleife laeuft
---    weiter, bis sie durch einen Fehler (hier: absichtlich nach N Zyklen
---    geworfen, um den Test zu beenden) verlassen wird -- KEIN stiller
---    Quiesce-Exit ohne konfigurierten Handshake.
+-- 2. nil is NOT a confirmation. The old implementation used
+--    `result3 ~= false`, which made an omitted return value silently safe.
 do
-  local os_start_timer = os.startTimer
-  local os_pull_event = os.pullEvent
-  local timer_id = 0
-  os.startTimer = function() timer_id = timer_id + 1; return timer_id end
-
-  local cycles = 0
-  os.pullEvent = function()
-    cycles = cycles + 1
-    if cycles > 3 then error('terminate: test boundary') end
-    return 'timer', timer_id
-  end
-
   local services = { tick = function() end }
   local comms = { handle_event = function() end }
+  local handshake = update_handshake.new()
+  update_handshake.request_quiesce(handshake)
+  local attempts = 0
 
-  -- run_event_loop() faengt den Fehler intern per xpcall und ruft bei einem
-  -- Nicht-"terminate"-Fehler crash_screen() auf -- hier absichtlich mit
-  -- "terminate" im Fehlertext, damit die Funktion sauber (ohne crash_screen-
-  -- Interaktion) zurueckkehrt, sobald die Testgrenze erreicht ist.
-  support_runtime.run_event_loop(1, services, comms, nil, nil)
+  with_timer_event_source(4, function()
+    support_runtime.run_event_loop(1, services, comms, nil, {
+      handshake = handshake,
+      on_quiesce = function()
+        attempts = attempts + 1
+        return nil
+      end,
+    })
+  end)
 
-  os.startTimer = os_start_timer
-  os.pullEvent = os_pull_event
+  assert_true(attempts >= 1, 'nil-returning quiesce callback must be attempted')
+  assert_eq(handshake.state, update_handshake.STATE.QUIESCE_REQUESTED,
+    'nil quiesce result must remain fail-closed at QUIESCE_REQUESTED')
+end
 
-  assert_true(cycles > 3, 'without quiesce_opts the loop must keep running normally (no silent early exit)')
+-- 3. A handshake without an actuator callback is ambiguous and must not
+--    automatically advance to RUNTIME_STOPPED.
+do
+  local services = { tick = function() end }
+  local comms = { handle_event = function() end }
+  local handshake = update_handshake.new()
+  update_handshake.request_quiesce(handshake)
+
+  with_timer_event_source(4, function()
+    support_runtime.run_event_loop(1, services, comms, nil, { handshake = handshake })
+  end)
+
+  assert_eq(handshake.state, update_handshake.STATE.QUIESCE_REQUESTED,
+    'missing on_quiesce callback must remain fail-closed')
+end
+
+-- 4. Ohne quiesce_opts darf sich am Verhalten nichts aendern: die Schleife
+--    laeuft bis zur Testgrenze weiter, ohne stillen Quiesce-Exit.
+do
+  local cycles = 0
+  with_timer_event_source(3, function(get_pulls)
+    local services = { tick = function() cycles = get_pulls() end }
+    local comms = { handle_event = function() end }
+    support_runtime.run_event_loop(1, services, comms, nil, nil)
+  end)
+  assert_true(cycles >= 1, 'without quiesce_opts the loop must keep running normally')
 end
 
 print('support_runtime_quiesce_test.lua: ok')
