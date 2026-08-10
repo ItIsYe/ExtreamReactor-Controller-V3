@@ -6,7 +6,7 @@ on:
       - agent/repo-safety-audit-fixes
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   audit:
@@ -15,5 +15,28 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/repo-safety-audit-fixes
-      - name: Diagnose RT main function scopes
-        run: python3 .github/rt_structure_diag.py
+          fetch-depth: 0
+      - name: Apply zero-exclusion semantic guard fixes
+        run: |
+          python3 .github/audit_fix_phase6b.py
+          git checkout -- .github/workflows/audit-excluded-tests.yml
+      - name: Install Lua
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.2
+      - name: Validate manifest and syntax
+        run: |
+          lua5.2 tools/offline_validate.lua
+          python3 tools/validate_manifest.py --strict
+          python3 scripts/manifest_sync.py --check
+      - name: Run complete suites with zero exclusions
+        run: |
+          bash tools/run_lua_tests.sh lua5.2
+          bash tools/run_python_tests.sh python3
+      - name: Commit phase 6b
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/audit_fix_phase6b.py .github/rt_structure_diag.py
+          git add -A
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "fix: eliminate stale regression exclusions"
+          git push origin HEAD:agent/repo-safety-audit-fixes
