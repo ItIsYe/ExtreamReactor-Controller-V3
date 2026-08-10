@@ -24,7 +24,7 @@
 -- (load(), dieser Bootstrap hier) stammen, ist fuer sie irrelevant.
 
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
+local GITHUB_RAW_RELEASE = GITHUB_RAW .. "beta/xreactor/release.lua"
 
 local function p(msg) pcall(print, tostring(msg)) end
 
