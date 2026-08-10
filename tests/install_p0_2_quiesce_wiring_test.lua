@@ -12,8 +12,9 @@
 -- Sicherzustandsbestaetigung ueber die jeweils BEREITS VORHANDENE, bereits
 -- auditierte Standby-Funktion laeuft (kein neuer Aktor-Code):
 --   VALVE:        apply_valve(true)               (echtes true/false)
---   FUEL:         redstone_router:shutdown_now()    + get_active_transaction()
---   REPROCESSOR:  enter_standby()                    (bereits idempotent)
+--   FUEL:         redstone_router:begin_quiesce() + poll_quiesce() bis alle
+--                 aktuellen Netzwerk-/lokalen Ventile BLOCKED bestaetigen
+--   REPROCESSOR:  enter_standby() + derselbe bestaetigte Router-Quiesce
 --   WATER:        set_rs_output(..., false, ...)     (echtes true/false, pro Cluster)
 -- sowie dass start.lua/auto_update.lua/master/loop.lua/log_collector/
 -- main.lua/rt/main.lua tatsaechlich verdrahtet sind. Faellt automatisch
@@ -49,20 +50,21 @@ do
   assert_contains(src, "on_quiesce = function() return apply_valve(true) end", "valve/main.lua")
 end
 
--- ── FUEL: shutdown_now() + get_active_transaction()-Bestaetigung ───────────
+-- ── FUEL: Runtime darf erst nach bestaetigtem all-BLOCKED stoppen ─────────
 do
   local src = read("nodes/fuel/main.lua")
   assert_contains(src, "_G.__xreactor_update_handshake", "fuel/main.lua")
-  assert_contains(src, 'rs_router:shutdown_now("UPDATE_QUIESCE")', "fuel/main.lua")
-  assert_contains(src, "rs_router:get_active_transaction() == nil", "fuel/main.lua")
+  assert_contains(src, 'rs_router:begin_quiesce("UPDATE_QUIESCE")', "fuel/main.lua")
+  assert_contains(src, "return rs_router:poll_quiesce()", "fuel/main.lua")
 end
 
--- ── REPROCESSOR: enter_standby() ist bereits idempotent, wiederverwendet ───
+-- ── REPROCESSOR: Standby plus bestaetigter all-BLOCKED Router-Quiesce ──────
 do
   local src = read("nodes/reprocessor/main.lua")
   assert_contains(src, "_G.__xreactor_update_handshake", "reprocessor/main.lua")
   assert_contains(src, 'enter_standby("UPDATE_QUIESCE")', "reprocessor/main.lua")
-  assert_contains(src, "return standby == true", "reprocessor/main.lua")
+  assert_contains(src, 'rs_router:begin_quiesce("UPDATE_QUIESCE")', "reprocessor/main.lua")
+  assert_contains(src, "return standby == true and rs_router:poll_quiesce()", "reprocessor/main.lua")
 end
 
 -- ── WATER: alle Cluster ueber set_rs_output() erzwungen aus, echtes true/false

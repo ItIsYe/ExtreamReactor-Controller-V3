@@ -58,8 +58,22 @@ router:tick(clock)
 assert(exported == false, 'export must not run after route peer becomes stale')
 assert(router._state.transaction == nil, 'stale route must abort transaction')
 
--- Next idle tick applies the deferred discovery refresh safely.
+-- Abbruch allein ist noch KEIN sicher bestaetigter Endzustand. Der neue
+-- Safety-Latch muss sowohl neue Lieferungen ALS AUCH den deferred refresh
+-- sperren, bis ein frisches BLOCKED-Kommando wirklich bestaetigt wurde.
 router:tick(clock + 1)
-assert(router._state.refresh_deferred == false, 'deferred refresh must be consumed after transaction')
+assert(router:get_safety_latch() ~= nil, 'aborted route must stay safety-latched until fresh BLOCKED confirmation')
+assert(router._state.refresh_deferred == true, 'deferred refresh must not rebuild bindings while final safety is unconfirmed')
+local ok_new, why_new = router:begin_transaction('R1', function() end, 500)
+assert(ok_new == false and why_new == 'safety_latched', 'new delivery must stay blocked while latch is unresolved')
+
+-- Peer kommt wieder und bestaetigt das aktuell vom Latch angeforderte BLOCKED.
+peers['VALVE-A'] = { down = false, stale = false }
+ack_current(true)
+router:tick(clock + 2)
+assert(router:get_safety_latch() == nil, 'fresh BLOCKED confirmation should clear safety latch')
+-- Der Refresh wird im selben Tick erst nach erfolgreicher Latch-Aufhebung
+-- konsumiert; damit existiert kein Fenster mit unbestaetigter Safety.
+assert(router._state.refresh_deferred == false, 'deferred refresh must be consumed only after safety latch clears')
 
 print('redstone_router_refresh_transaction_race_test.lua: ok')

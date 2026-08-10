@@ -292,6 +292,10 @@ function M.new(opts)
       tree_errors = {},
       tree_configured = false,
       refresh_deferred = false,
+      transaction_seq = 0,
+      last_transaction = nil,
+      safety_latch = nil,
+      quiesce = nil,
     },
   }
   return setmetatable(self, { __index = M })
@@ -302,9 +306,9 @@ function M:refresh()
   -- and the export callback. Rebuilding integrator wrappers or block_all() in
   -- that window races the transaction state machine. Defer the refresh until
   -- the transaction has reached a terminal state instead.
-  if self._state.transaction then
+  if self._state.transaction or self._state.quiesce then
     self._state.refresh_deferred = true
-    self.log("DEBUG", "RedstoneRouter: refresh deferred while transaction is active")
+    self.log("DEBUG", "RedstoneRouter: refresh deferred while transaction/quiesce is active")
     return false, "busy"
   end
   self._state.refresh_deferred = false
@@ -638,31 +642,206 @@ end
 -- (_fail_transaction()). Nach dem Export (HOLD_OPEN) wird ebenfalls
 -- versucht, das finale Blockieren zu bestaetigen (WAIT_FINAL_ACKS), bevor
 -- die Transaktion als abgeschlossen gilt.
-function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
-  if self._state.transaction then
-    return false, "busy"
+local SAFETY_CONFIRM_TIMEOUT_MS = 15000
+local SAFETY_RETRY_MS = 1000
+
+local function phase_for_state(state)
+  local map = {
+    WAIT_BLOCK_ACKS = "BLOCKING",
+    WAIT_OPEN_ACKS = "OPENING",
+    WAIT_SETTLE = "SETTLING",
+    HOLD_OPEN = "HOLDING",
+    WAIT_FINAL_ACKS = "FINAL_BLOCK",
+  }
+  return map[state] or state
+end
+
+function M:_next_transaction_id(target_id)
+  self._state.transaction_seq = (self._state.transaction_seq or 0) + 1
+  local now = os.epoch and os.epoch("utc") or 0
+  return table.concat({ tostring(self.source_node_id or "ROUTER"), tostring(now),
+    tostring(self._state.transaction_seq), tostring(target_id or "?") }, ":")
+end
+
+function M:_all_block_entries()
+  local entries = {}
+  for _, v in ipairs(self._state.all_valves or {}) do
+    entries[#entries + 1] = { integrator = v.integrator, side = v.side, high = true }
   end
-  -- Fix (2026-07-13): CRITICAL (Sicherheitsregel, siehe docs/CODING_AI_
-  -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Vorher fiel JEDES "all_valves
-  -- == 0" ungeschuetzt in den Direkt-Export-Pfad -- das betraf nicht nur
-  -- den beabsichtigten Fall "kein Routing konfiguriert" (harmlos, wie ein
-  -- Einzel-Setup ohne Ventile), sondern GENAUSO den Fall "Routing WAR
-  -- konfiguriert, ist aber ungueltig/kaputt" (refresh() ruft in diesem
-  -- Fall bereits block_all() auf, in der ausdruecklichen Absicht "kein
-  -- Fuel-Transfer moeglich" -- diese Absicht wurde hier bisher durch den
-  -- Direkt-Export-Fallback wieder aufgehoben). Jetzt: nur wenn der Baum
-  -- GENUIN NIE konfiguriert war (tree_configured==false), gilt der
-  -- unagierte Direkt-Export als sicher. War ein Baum konfiguriert, aber
-  -- resultierte in 0 Ventilen (ungueltig oder anderweitig kaputt), wird
-  -- die Aktion jetzt hart verweigert statt ungeschuetzt ausgefuehrt.
+  return entries
+end
+
+function M:_record_terminal(tx, state_name, reason, notify_complete)
+  if not tx then return end
+  local now = os.epoch and os.epoch("utc") or 0
+  local info = {
+    id = tx.id,
+    transaction_id = tx.id,
+    target_id = tx.target_id,
+    state = state_name,
+    phase = state_name,
+    reason = reason,
+    started_ts = tx.started_ts,
+    finished_ts = now,
+  }
+  self._state.last_transaction = info
+  if notify_complete and tx.on_complete then
+    local ok, err = pcall(tx.on_complete, info)
+    if not ok then
+      self.warn_once("tx_on_complete_failed:" .. tostring(tx.target_id),
+        "RedstoneRouter: on_complete-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. tostring(err))
+    end
+  end
+end
+
+function M:_start_final_block(tx, now_ms)
+  tx.pending = self:_request_valve_batch(self:_all_block_entries())
+  tx.state = "WAIT_FINAL_ACKS"
+  tx.phase = "FINAL_BLOCK"
+  tx.phase_started_ms = now_ms
+end
+
+function M:_set_safety_latch(tx, reason, now_ms)
+  now_ms = now_ms or (os.epoch and os.epoch("utc") or 0)
+  local latch = {
+    state = "FINAL_BLOCK_UNCONFIRMED",
+    transaction_id = tx and tx.id or nil,
+    target_id = tx and tx.target_id or nil,
+    reason = reason,
+    since = now_ms,
+    phase_started_ms = now_ms,
+    attempts = 1,
+  }
+  if #self._state.all_valves > 0 then
+    latch.pending = self:_request_valve_batch(self:_all_block_entries())
+  end
+  self._state.safety_latch = latch
+  self.log("ERROR", "RedstoneRouter: Safety-Latch gesetzt -- neue Lieferungen gesperrt bis BLOCKED erneut bestaetigt ist (" .. tostring(reason) .. ")")
+end
+
+function M:_tick_safety_latch(now_ms)
+  local latch = self._state.safety_latch
+  if not latch then return true end
+  if #self._state.all_valves == 0 then return false end
+  if not latch.pending then
+    latch.pending = self:_request_valve_batch(self:_all_block_entries())
+    latch.phase_started_ms = now_ms
+    latch.attempts = (latch.attempts or 0) + 1
+    return false
+  end
+  local status = self:_check_valve_batch(latch.pending)
+  if status == "ok" then
+    self.log("INFO", "RedstoneRouter: Safety-Latch aufgehoben -- alle Ventile erneut BLOCKED bestaetigt")
+    self._state.safety_latch = nil
+    return true
+  end
+  if status == "waiting" and now_ms - (latch.phase_started_ms or now_ms) < SAFETY_CONFIRM_TIMEOUT_MS then
+    return false
+  end
+  if now_ms - (latch.phase_started_ms or 0) >= SAFETY_RETRY_MS then
+    latch.pending = self:_request_valve_batch(self:_all_block_entries())
+    latch.phase_started_ms = now_ms
+    latch.attempts = (latch.attempts or 0) + 1
+  end
+  return false
+end
+
+function M:get_safety_latch()
+  local latch = self._state.safety_latch
+  if not latch then return nil end
+  return {
+    state = latch.state, transaction_id = latch.transaction_id, target_id = latch.target_id,
+    reason = latch.reason, since = latch.since, attempts = latch.attempts,
+  }
+end
+
+function M:get_last_transaction()
+  return self._state.last_transaction
+end
+
+-- Update-Quiesce has a stricter contract than shutdown_now(): runtime may only
+-- stop after every currently known wireless/local valve is confirmed BLOCKED.
+function M:begin_quiesce(reason)
+  if self._state.quiesce then return self._state.quiesce.state == "CONFIRMED" end
+  if self._state.transaction then
+    self:shutdown_now(reason or "UPDATE_QUIESCE", { skip_latch = true })
+  end
+  local q = {
+    reason = reason or "UPDATE_QUIESCE", state = "BLOCKING",
+    started_ts = os.epoch and os.epoch("utc") or 0,
+    phase_started_ms = os.epoch and os.epoch("utc") or 0,
+    attempts = 1,
+  }
+  self._state.quiesce = q
+  if not self._state.tree_configured then
+    q.state = "CONFIRMED"
+    return true
+  end
+  if #self._state.all_valves == 0 then
+    q.state = "UNCONFIRMED_NO_VALVES"
+    self.log("ERROR", "RedstoneRouter: Quiesce kann Routing-Sicherheit nicht bestaetigen -- Baum konfiguriert, aber keine Ventile bekannt")
+    return false
+  end
+  q.pending = self:_request_valve_batch(self:_all_block_entries())
+  return false
+end
+
+function M:poll_quiesce(now_ms)
+  now_ms = now_ms or (os.epoch and os.epoch("utc") or 0)
+  if not self._state.quiesce then
+    local ready = self:begin_quiesce("UPDATE_QUIESCE")
+    if ready then return true end
+  end
+  local q = self._state.quiesce
+  if q.state == "CONFIRMED" then return true end
+  if #self._state.all_valves == 0 then return false end
+  if not q.pending then
+    q.pending = self:_request_valve_batch(self:_all_block_entries())
+    q.phase_started_ms = now_ms
+    q.attempts = (q.attempts or 0) + 1
+    return false
+  end
+  local status = self:_check_valve_batch(q.pending)
+  if status == "ok" then
+    q.state = "CONFIRMED"
+    self._state.safety_latch = nil
+    self.log("INFO", "RedstoneRouter: Update-Quiesce bestaetigt -- alle Ventile BLOCKED")
+    return true
+  end
+  if status == "waiting" and now_ms - (q.phase_started_ms or now_ms) < SAFETY_CONFIRM_TIMEOUT_MS then
+    return false
+  end
+  q.pending = self:_request_valve_batch(self:_all_block_entries())
+  q.phase_started_ms = now_ms
+  q.attempts = (q.attempts or 0) + 1
+  self.log("WARN", "RedstoneRouter: Quiesce-BLOCKED noch nicht bestaetigt -- sichere Anforderung wird erneut gesendet")
+  return false
+end
+
+function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
+  opts = opts or {}
+  if self._state.quiesce then return false, "quiescing" end
+  if self._state.safety_latch then return false, "safety_latched" end
+  if self._state.transaction then return false, "busy" end
+
+  local tx_id = opts.transaction_id or self:_next_transaction_id(target_id)
+  local now_ms = os.epoch and os.epoch("utc") or 0
   if #self._state.all_valves == 0 then
     if not self._state.tree_configured then
-      if action_fn then action_fn() end
-      return true, "direct_export"
+      local pseudo = { id = tx_id, target_id = target_id, started_ts = now_ms, on_complete = opts.on_complete }
+      local ok, result, detail = true, nil, nil
+      if action_fn then ok, result, detail = pcall(action_fn) end
+      if not ok or result == false then
+        local reason = not ok and tostring(result) or tostring(detail or "action returned false")
+        self:_record_terminal(pseudo, "EXPORT_FAILED", reason, true)
+        return false, "action_failed", tx_id
+      end
+      self:_record_terminal(pseudo, "COMPLETE_SAFE", nil, true)
+      return true, "direct_export", tx_id
     end
-    self.log("ERROR", "RedstoneRouter: begin_transaction() verweigert -- Routing war konfiguriert, aber 0 Ventile bekannt (ungueltiger/kaputter Baum). Kein ungeschuetzter Direkt-Export.")
+    self.log("ERROR", "RedstoneRouter: begin_transaction() verweigert -- Routing war konfiguriert, aber 0 Ventile bekannt. Kein ungeschuetzter Direkt-Export.")
     self:block_all()
-    return false, "invalid_tree"
+    return false, "invalid_tree", tx_id
   end
 
   local path = find_path(self._state.routes, target_id)
@@ -671,51 +850,42 @@ function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
     self:block_all()
     self._state.active_target = nil
     self._state.active_path = nil
-    return false, "no_path"
+    return false, "no_path", tx_id
   end
 
-  local block_entries = {}
-  for _, v in ipairs(self._state.all_valves) do
-    block_entries[#block_entries + 1] = { integrator = v.integrator, side = v.side, high = true }
-  end
-
-  local now_ms = os.epoch and os.epoch("utc") or 0
   self._state.transaction = {
+    id = tx_id,
     target_id = target_id,
     action_fn = action_fn,
-    -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md Abschnitt 7). Bisher gab es KEINE
-    -- Rueckmeldung an den Aufrufer, wenn eine Transaktion abbrach BEVOR sie
-    -- jemals action_fn erreichte (z.B. Ventil-ACK-Fehlschlag oder Phasen-
-    -- Timeout waehrend WAIT_BLOCK_ACKS/WAIT_OPEN_ACKS) -- ein vom Aufrufer
-    -- gehaltener "laufende Lieferung"-Kontext (siehe logistics_router.lua's
-    -- current_request) blieb dadurch fuer immer auf "aktiv" haengen, da nur
-    -- action_fn ihn je aufraeumen konnte. opts.on_error(reason) wird von
-    -- _fail_transaction() IMMER aufgerufen, wenn die Transaktion abbricht
-    -- ohne dass action_fn je lief -- damit hat der Aufrufer garantiert
-    -- genau einen von zwei Abschluss-Pfaden (action_fn ODER on_error).
-    on_error = opts and opts.on_error or nil,
+    on_error = opts.on_error,
+    on_complete = opts.on_complete,
     valve_open_ms = tonumber(valve_open_ms) or 2000,
     state = "WAIT_BLOCK_ACKS",
-    pending = self:_request_valve_batch(block_entries),
+    phase = "BLOCKING",
+    pending = self:_request_valve_batch(self:_all_block_entries()),
     path = path,
     phase_started_ms = now_ms,
     settle_until = nil,
     hold_until = nil,
     started_ts = now_ms,
   }
-  return true, "started"
+  return true, "started", tx_id
 end
 
 function M:_fail_transaction(reason)
   local tx = self._state.transaction
   self.log("ERROR", string.format(
-    "RedstoneRouter: Transaktion zu %s abgebrochen (%s) -- blockiere sicherheitshalber alles",
-    tostring(tx and tx.target_id), tostring(reason)))
-  self:block_all()
+    "RedstoneRouter: Transaktion %s zu %s abgebrochen (%s) -- sichere BLOCKED-Bestaetigung wird gelatcht",
+    tostring(tx and tx.id), tostring(tx and tx.target_id), tostring(reason)))
   self._state.active_target = nil
   self._state.active_path = nil
   self._state.transaction = nil
+  if tx then
+    self:_record_terminal(tx, "CANCELLED", reason, false)
+    if #self._state.all_valves > 0 then self:_set_safety_latch(tx, "cancelled:" .. tostring(reason)) else self:block_all() end
+  else
+    self:block_all()
+  end
   if tx and tx.on_error then
     local ok, err = pcall(tx.on_error, reason)
     if not ok then
@@ -770,7 +940,8 @@ function M:tick(now_ms)
   now_ms = now_ms or (os.epoch and os.epoch("utc") or 0)
   local tx = self._state.transaction
   if not tx then
-    if self._state.refresh_deferred then
+    if self._state.safety_latch then self:_tick_safety_latch(now_ms) end
+    if self._state.refresh_deferred and not self._state.quiesce and not self._state.safety_latch then
       self._state.refresh_deferred = false
       self:refresh()
     end
@@ -779,20 +950,12 @@ function M:tick(now_ms)
 
   if tx.state == "WAIT_BLOCK_ACKS" then
     local status, failed_key = self:_check_valve_batch(tx.pending)
-    if status == "failed" then
-      self:_fail_transaction("block_ack_failed:" .. tostring(failed_key))
-      return
-    end
+    if status == "failed" then self:_fail_transaction("block_ack_failed:" .. tostring(failed_key)); return end
     if status == "waiting" then
-      if now_ms - tx.phase_started_ms >= VALVE_PHASE_TIMEOUT_MS then
-        self:_fail_transaction("block_ack_timeout")
-      end
+      if now_ms - tx.phase_started_ms >= VALVE_PHASE_TIMEOUT_MS then self:_fail_transaction("block_ack_timeout") end
       return
     end
-    -- Alle bekannten Ventile nachweislich blockiert -- jetzt den Zielpfad
-    -- oeffnen (Phase 2).
-    local uses_network = false
-    local open_entries = {}
+    local uses_network, open_entries = false, {}
     for _, v in ipairs(tx.path) do
       open_entries[#open_entries + 1] = { integrator = v.integrator, side = v.side, high = false }
       local w = v.integrator and self._state.integrators[v.integrator]
@@ -801,26 +964,18 @@ function M:tick(now_ms)
     tx.pending = self:_request_valve_batch(open_entries)
     tx.uses_network = uses_network
     tx.state = "WAIT_OPEN_ACKS"
+    tx.phase = "OPENING"
     tx.phase_started_ms = now_ms
     return
   end
 
   if tx.state == "WAIT_OPEN_ACKS" then
     local status, failed_key = self:_check_valve_batch(tx.pending)
-    if status == "failed" then
-      self:_fail_transaction("open_ack_failed:" .. tostring(failed_key))
-      return
-    end
+    if status == "failed" then self:_fail_transaction("open_ack_failed:" .. tostring(failed_key)); return end
     if status == "waiting" then
-      if now_ms - tx.phase_started_ms >= VALVE_PHASE_TIMEOUT_MS then
-        self:_fail_transaction("open_ack_timeout")
-      end
+      if now_ms - tx.phase_started_ms >= VALVE_PHASE_TIMEOUT_MS then self:_fail_transaction("open_ack_timeout") end
       return
     end
-    -- Zielpfad bestaetigt offen UND alle Nebenpfade bestaetigt blockiert
-    -- (Phase 1 lief bereits durch) -- ab hier ist die Sicherheitsregel
-    -- erfuellt. WAIT_SETTLE ist nur noch eine zusaetzliche physische
-    -- Pufferzeit (Mekanism-Rohrnetz-Ausgleich), kein Bestaetigungs-Ersatz.
     local sides = {}
     for _, v in ipairs(tx.path) do sides[#sides + 1] = v.side end
     self._state.active_target = tx.target_id
@@ -831,64 +986,60 @@ function M:tick(now_ms)
     local settle_s = tx.uses_network and 0.4 or 0.05
     tx.settle_until = now_ms + math.floor(settle_s * 1000)
     tx.state = "WAIT_SETTLE"
+    tx.phase = "SETTLING"
     return
   end
 
   if tx.state == "WAIT_SETTLE" then
-    if now_ms >= tx.settle_until then
-      -- The OPEN ACK proves the valve state at ACK time, not indefinitely.
-      -- Re-check that every runtime binding in the selected path is still
-      -- present/fresh immediately before moving material.
-      local ready, readiness_error = self:_path_runtime_ready(tx.path)
-      if not ready then
-        self:_fail_transaction("path_not_ready:" .. tostring(readiness_error))
-        return
-      end
-      if tx.action_fn then
-        local ok, err = pcall(tx.action_fn)
-        if not ok then
-          self.warn_once("transaction_action_error:" .. tostring(tx.target_id),
-            "RedstoneRouter: Aktions-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. tostring(err))
-        end
-      end
-      tx.state = "HOLD_OPEN"
-      tx.hold_until = now_ms + tx.valve_open_ms
+    if now_ms < tx.settle_until then return end
+    local ready, readiness_error = self:_path_runtime_ready(tx.path)
+    if not ready then self:_fail_transaction("path_not_ready:" .. tostring(readiness_error)); return end
+
+    tx.phase = "EXPORTING"
+    local action_ok, result, detail = true, nil, nil
+    if tx.action_fn then action_ok, result, detail = pcall(tx.action_fn) end
+    if not action_ok or result == false then
+      local reason = not action_ok and tostring(result) or tostring(detail or "action returned false")
+      tx.terminal_after_block = "EXPORT_FAILED"
+      tx.terminal_reason = reason
+      self.warn_once("transaction_action_error:" .. tostring(tx.target_id),
+        "RedstoneRouter: Export/Aktions-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. reason)
+      self:_start_final_block(tx, now_ms)
+      return
     end
+
+    tx.state = "HOLD_OPEN"
+    tx.phase = "HOLDING"
+    tx.hold_until = now_ms + tx.valve_open_ms
     return
   end
 
   if tx.state == "HOLD_OPEN" then
     if now_ms >= tx.hold_until then
-      local final_entries = {}
-      for _, v in ipairs(self._state.all_valves) do
-        final_entries[#final_entries + 1] = { integrator = v.integrator, side = v.side, high = true }
-      end
-      tx.pending = self:_request_valve_batch(final_entries)
-      tx.state = "WAIT_FINAL_ACKS"
-      tx.phase_started_ms = now_ms
+      tx.terminal_after_block = tx.terminal_after_block or "COMPLETE_SAFE"
+      self:_start_final_block(tx, now_ms)
     end
     return
   end
 
   if tx.state == "WAIT_FINAL_ACKS" then
-    -- Export ist bereits gelaufen (EXPORT-Phase oben) -- ein nicht
-    -- bestaetigtes finales Blockieren macht die bereits erfolgte
-    -- Lieferung nicht rueckgaengig, erzwingt aber trotzdem block_all()
-    -- als Fail-Safe statt die Transaktion endlos in WAIT_FINAL_ACKS zu
-    -- belassen.
-    local status = self:_check_valve_batch(tx.pending)
+    local status, failed_key = self:_check_valve_batch(tx.pending)
     local timed_out = (now_ms - tx.phase_started_ms) >= VALVE_PHASE_TIMEOUT_MS
-    if status == "failed" then
-      self.log("ERROR", "RedstoneRouter: finale Ventil-Blockierung nach Export fehlgeschlagen -- erzwinge block_all()")
-    elseif status == "waiting" and not timed_out then
-      return
-    elseif status == "waiting" then
-      self.log("WARN", "RedstoneRouter: finale Ventil-Blockierung nach Export nicht rechtzeitig bestaetigt -- erzwinge block_all()")
-    end
-    self:block_all()
+    if status == "waiting" and not timed_out then return end
+
     self._state.active_target = nil
     self._state.active_path = nil
     self._state.transaction = nil
+    if status == "ok" then
+      local terminal = tx.terminal_after_block or "COMPLETE_SAFE"
+      self:_record_terminal(tx, terminal, tx.terminal_reason, true)
+      return
+    end
+
+    local reason = status == "failed"
+      and ("final_block_failed:" .. tostring(failed_key)) or "final_block_timeout"
+    self:_set_safety_latch(tx, reason, now_ms)
+    self:_record_terminal(tx, "FINAL_BLOCK_UNCONFIRMED", reason, true)
     return
   end
 end
@@ -906,16 +1057,22 @@ end
 -- (wie _fail_transaction()) tx.on_error(reason) auf, falls eine
 -- Transaktion aktiv war -- nutzt denselben Abschluss-Mechanismus wie beim
 -- FUEL-P0-Fix, kein zweiter Signalweg noetig.
-function M:shutdown_now(reason)
+function M:shutdown_now(reason, opts)
+  opts = opts or {}
   local tx = self._state.transaction
   self._state.transaction = nil
-  self:block_all()
   self._state.active_target = nil
   self._state.active_path = nil
   if tx then
     self.log("WARN", string.format(
-      "RedstoneRouter: Transaktion zu %s durch shutdown_now() abgebrochen (%s)",
-      tostring(tx.target_id), tostring(reason or "shutdown")))
+      "RedstoneRouter: Transaktion %s zu %s durch shutdown_now() abgebrochen (%s)",
+      tostring(tx.id), tostring(tx.target_id), tostring(reason or "shutdown")))
+    self:_record_terminal(tx, "CANCELLED", reason or "shutdown", false)
+    if not opts.skip_latch and #self._state.all_valves > 0 then
+      self:_set_safety_latch(tx, "shutdown:" .. tostring(reason or "shutdown"))
+    else
+      self:block_all()
+    end
     if tx.on_error then
       local ok, err = pcall(tx.on_error, reason or "shutdown")
       if not ok then
@@ -923,6 +1080,8 @@ function M:shutdown_now(reason)
           "RedstoneRouter: on_error-Callback fuer " .. tostring(tx.target_id) .. " fehlgeschlagen: " .. tostring(err))
       end
     end
+  else
+    self:block_all()
   end
 end
 
@@ -930,7 +1089,10 @@ end
 function M:get_active_transaction()
   local tx = self._state.transaction
   if not tx then return nil end
-  return { target_id = tx.target_id, state = tx.state, started_ts = tx.started_ts }
+  return {
+    id = tx.id, transaction_id = tx.id, target_id = tx.target_id,
+    state = tx.state, phase = tx.phase or phase_for_state(tx.state), started_ts = tx.started_ts,
+  }
 end
 
 function M:valve_count()

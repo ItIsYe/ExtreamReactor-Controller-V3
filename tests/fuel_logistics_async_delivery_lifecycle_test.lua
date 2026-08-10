@@ -27,14 +27,20 @@ local function assert_true(value, message)
 end
 
 local function make_fake_rs_router()
-  local fake = { calls = {}, next_started = true, next_reason = 'started' }
+  local fake = { calls = {}, next_started = true, next_reason = 'started', active_phase = 'BLOCKING' }
   function fake:route_count() return 1 end
   function fake:get_routing_state() return 'ROUTING_VALID' end
   function fake:refresh() end
   function fake:begin_transaction(target_id, action_fn, valve_open_ms, opts)
-    table.insert(self.calls, { target_id = target_id, action_fn = action_fn, valve_open_ms = valve_open_ms, opts = opts })
-    return self.next_started, self.next_reason
+    local id = opts and opts.transaction_id or 'tx-missing'
+    table.insert(self.calls, { target_id = target_id, action_fn = action_fn, valve_open_ms = valve_open_ms, opts = opts, id = id })
+    return self.next_started, self.next_reason, id
   end
+  function fake:get_active_transaction()
+    if #self.calls == 0 then return nil end
+    return { transaction_id = self.calls[#self.calls].id, phase = self.active_phase, state = 'WAIT_BLOCK_ACKS' }
+  end
+  function fake:get_safety_latch() return nil end
   return fake
 end
 
@@ -62,79 +68,71 @@ local function make_router(fake_rs, export_result_fn)
   return router
 end
 
--- 1. Erfolgreicher Async-Export: current_request bleibt bis zum Abschluss
---    sichtbar, korrekte Exportmenge landet erst NACH dem Abschluss-Callback
---    in total_exported/last_cycle.
+-- 1. Erfolgreicher Async-Export: action_fn bewegt Material, aber die
+-- Transaktion bleibt bis zur bestaetigten FINAL_BLOCK-Completion sichtbar.
 do
   local fake_rs = make_fake_rs_router()
   local router = make_router(fake_rs, function() return 64 end)
-
   local result = router:run_cycle()
-  assert_eq(result.exported, 0, 'run_cycle should report 0 exported synchronously (delivery is still async)')
-  assert_true(router._state.current_request ~= nil, 'current_request must stay set while the transaction is in flight (Request bleibt bis Abschluss sichtbar)')
-  assert_eq(router._state.current_request.label, 'Reactor A', 'current_request should identify the in-flight reactor')
-  assert_eq(router._state.current_request.state, 'delivering', 'current_request.state should be delivering once the transaction started')
-  assert_eq(#fake_rs.calls, 1, 'exactly one delivery should be started per cycle')
+  assert_eq(result.exported, 0, 'async cycle must not claim export synchronously')
+  local req = router._state.current_request
+  assert_true(req ~= nil and req.transaction_id ~= nil, 'in-flight request needs a stable transaction id')
+  assert_eq(req.phase, 'BLOCKING', 'initial router phase must be exposed')
+  assert_eq(#fake_rs.calls, 1)
+  assert_eq(fake_rs.calls[1].opts.transaction_id, req.transaction_id, 'router and logistics must share the same transaction id')
 
-  -- Simuliert redstone_router.lua's spaeteren Abschluss-Callback.
-  fake_rs.calls[1].action_fn()
+  fake_rs.active_phase = 'OPENING'
+  assert_eq(router:get_summary().current_request.phase, 'OPENING', 'summary must track router phase for same transaction')
+  local action_ok = fake_rs.calls[1].action_fn()
+  assert_true(action_ok == true, 'export callback should report success explicitly')
+  assert_true(router._state.current_request ~= nil, 'export is not terminal until final block is confirmed')
+  assert_eq(router._state.total_exported, 64)
+  assert_eq(result.exported, 0, 'async callback must not mutate a potentially replaced last_cycle')
+  assert_eq(#result.moves, 0, 'async callback must not append into cycle-owned moves table')
 
-  assert_eq(router._state.current_request, nil, 'current_request must clear once delivery completes (no nil-access crash)')
-  assert_eq(router._state.total_exported, 64, 'total_exported should reflect the real delivered amount (korrekte Exportmenge)')
-  assert_eq(result.exported, 64, 'last_cycle (same table reference) should be updated in place once delivery completes')
-  assert_eq(result.moves[1], 'ME→[Reactor A] bigreactors:yellorium_ingot x64 via transporter_1', 'cycle log entry should be written on completion, not on start')
+  fake_rs.calls[1].opts.on_complete({ state='COMPLETE_SAFE', transaction_id=req.transaction_id })
+  assert_eq(router._state.current_request, nil, 'request clears only at terminal router completion')
+  assert_eq(router._state.last_delivery.transaction_id, req.transaction_id)
+  assert_eq(router._state.last_delivery.terminal_state, 'COMPLETE_SAFE')
 end
 
--- 2. Callback-Fehler: exportItemToPeripheral wirft einen Fehler -- darf
---    weder den Node abstuerzen noch current_request haengen lassen.
+-- 2. Exportfehler bleibt bis zur sicheren finalen Blockierung sichtbar.
 do
   local fake_rs = make_fake_rs_router()
   local router = make_router(fake_rs, function() error('bridge offline') end)
-
   router:run_cycle()
-  assert_true(router._state.current_request ~= nil, 'current_request should still be set before the callback runs')
-
-  fake_rs.calls[1].action_fn()
-
-  assert_eq(router._state.current_request, nil, 'current_request must clear even when the export callback errors')
-  assert_eq(router._state.total_exported, 0, 'a failed export must not be credited')
-  assert_eq(router._state.total_errors, 1, 'a failed export must be counted as an error')
+  local call = fake_rs.calls[1]
+  local ok, err = call.action_fn()
+  assert_eq(ok, false, 'callback must report hardware/export failure to router')
+  assert_true(router._state.current_request ~= nil, 'failed export still needs final-block completion')
+  assert_eq(router._state.total_errors, 1)
+  call.opts.on_complete({ state='EXPORT_FAILED', reason=err, transaction_id=call.id })
+  assert_eq(router._state.current_request, nil)
+  assert_eq(router._state.last_delivery.terminal_state, 'EXPORT_FAILED')
+  assert_eq(router._state.total_errors, 1, 'same export failure must not be double-counted')
 end
 
--- 3. ACK-Timeout / Transaktionsabbruch VOR dem Export (redstone_router.lua's
---    on_error-Pfad, z.B. Ventil-ACK-Timeout oder -Fehlschlag): darf
---    current_request nicht fuer immer auf "aktiv" haengen lassen, obwohl
---    nie exportiert wurde.
+-- 3. Abbruch VOR Export uses on_error and terminates the request immediately.
 do
   local fake_rs = make_fake_rs_router()
   local export_called = false
-  local router = make_router(fake_rs, function() export_called = true; return 64 end)
-
+  local router = make_router(fake_rs, function() export_called=true; return 64 end)
   router:run_cycle()
-  assert_true(router._state.current_request ~= nil)
   local call = fake_rs.calls[1]
-  assert_true(type(call.opts) == 'table' and type(call.opts.on_error) == 'function', 'begin_transaction must receive an on_error callback')
-
   call.opts.on_error('ack_timeout:VALVE-A|top')
-
-  assert_true(not export_called, 'the export itself must never run once the transaction aborted before EXPORT')
-  assert_eq(router._state.current_request, nil, 'current_request must clear once the transaction aborts, not just once it succeeds')
-  assert_eq(router._state.total_exported, 0, 'an aborted transaction must not be credited as exported')
-  assert_eq(router._state.total_errors, 1, 'an aborted transaction must be counted as an error')
+  assert_true(not export_called)
+  assert_eq(router._state.current_request, nil)
+  assert_eq(router._state.last_delivery.terminal_state, 'CANCELLED')
+  assert_eq(router._state.total_errors, 1)
 end
 
--- 4. "Shutdown"/busy-Fall: kein Transport-Handle konnte gestartet werden --
---    current_request darf nicht haengen bleiben, kein Crash.
+-- 4. Busy: no transaction started and no hanging request.
 do
-  local fake_rs = make_fake_rs_router()
-  fake_rs.next_started = false
-  fake_rs.next_reason = 'busy'
+  local fake_rs = make_fake_rs_router(); fake_rs.next_started=false; fake_rs.next_reason='busy'
   local router = make_router(fake_rs, function() return 64 end)
-
   local result = router:run_cycle()
-  assert_eq(router._state.current_request, nil, 'current_request must not remain set when begin_transaction never started')
+  assert_eq(router._state.current_request, nil)
   assert_eq(result.exported, 0)
-  assert_eq(router._state.total_exported, 0)
 end
 
 print('fuel_logistics_async_delivery_lifecycle_test.lua: ok')

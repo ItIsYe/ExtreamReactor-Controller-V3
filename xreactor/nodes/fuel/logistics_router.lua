@@ -146,10 +146,38 @@ function M.new(opts)
       -- Lieferzyklus fuer den Reaktor, der gerade aktiv beliefert wird.
       -- Fachlich eindeutige Grundlage fuer die externe UI-Hervorhebung
       -- (siehe get_current_request()).
-      current_request = nil,  -- { reactor_id, label, state="requesting"|"delivering"|nil }
+      current_request = nil,  -- { transaction_id, reactor_id, label, state, phase }
+      last_delivery = nil,
+      delivery_seq = 0,
     },
   }
   return setmetatable(self, { __index = M })
+end
+
+local function next_delivery_id(self, label)
+  self._state.delivery_seq = (self._state.delivery_seq or 0) + 1
+  local now = os.epoch and os.epoch("utc") or 0
+  return table.concat({ "FUEL", tostring(now), tostring(self._state.delivery_seq), tostring(label or "?") }, ":")
+end
+
+local function finish_delivery(self, request, phase, terminal_state, err)
+  if not request then return end
+  request.phase = phase
+  request.terminal_state = terminal_state
+  request.error = err or request.error
+  request.finished_ts = os.epoch and os.epoch("utc") or 0
+  self._state.last_delivery = {
+    transaction_id = request.transaction_id,
+    reactor_id = request.reactor_id,
+    label = request.label,
+    phase = request.phase,
+    terminal_state = request.terminal_state,
+    moved = request.moved or 0,
+    error = request.error,
+    started_ts = request.started_ts,
+    finished_ts = request.finished_ts,
+  }
+  if self._state.current_request == request then self._state.current_request = nil end
 end
 
 -- ---- peripheral discovery --------------------------------------------------
@@ -423,7 +451,8 @@ function M:_run_supply(cycle_log)
     -- kompletten Entscheidungs- bis Lieferzyklus ab, fachlich eindeutige
     -- Grundlage fuer die UI-Hervorhebung (siehe get_summary()).
     self._state.current_request = {
-      reactor_id = r.reactor_id, label = r.label, state = "requesting",
+      reactor_id = r.reactor_id, label = r.label, state = "requesting", phase = "REQUESTING",
+      started_ts = os.epoch and os.epoch("utc") or 0,
     }
 
     -- Check ME availability
@@ -442,92 +471,106 @@ function M:_run_supply(cycle_log)
     do
       local valve_ms = tonumber(cfg_l.valve_open_ms) or 2000
       local pct_str = fuel_pct and string.format(" (%.0f%%)", fuel_pct * 100) or ""
+      local request = self._state.current_request
+      request.transaction_id = request.transaction_id or next_delivery_id(self, r.label)
 
       if routed then
-        -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_
-        -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 7). Der Export laeuft
-        -- asynchron (do_export() feuert irgendwann spaeter, sobald rs:tick()
-        -- die Transaktion durch WAIT_SETTLE getrieben hat) -- current_
-        -- request wurde bisher SOFORT nach begin_transaction() wieder auf
-        -- nil gesetzt, WAEHREND do_export() spaeter versuchte, current_
-        -- request.state zu schreiben (Nil-Zugriff im Callback). Zusaetzlich
-        -- wurden exported/errors/cycle_log SOFORT ausgewertet, bevor der
-        -- eigentliche Export ueberhaupt stattfand -- moved/exp_ok waren zu
-        -- diesem Zeitpunkt immer noch 0/false.
-        --
-        -- Jetzt: current_request bleibt bis zum ECHTEN Abschluss bestehen
-        -- (do_export() erfolgreich/fehlgeschlagen ODER on_error(), falls
-        -- die Transaktion schon vorher abbricht, z.B. Ventil-ACK-Fehler
-        -- oder Phasen-Timeout) -- garantiert genau EIN Abschluss-Pfad.
-        -- Exportstatistik (total_exported/total_errors) und Zykluslog
-        -- werden AUSSCHLIESSLICH im jeweiligen Abschluss-Callback
-        -- geschrieben, direkt in self._state (nicht in den lokalen
-        -- exported/cycle_log-Variablen dieses Zyklus, da der Export
-        -- moeglicherweise erst in einem SPAETEREN Zyklus tatsaechlich
-        -- passiert).
         local function do_export()
+          request.phase = "EXPORTING"
+          request.state = "delivering"
           local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
             { name = r.item, count = push }, r.inlet.name)
           if not ok then
+            local err = tostring(result)
             self.warn_once("exp_err:" .. r.inlet.name,
-              "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
+              "exportItemToPeripheral → " .. r.inlet.name .. ": " .. err)
             self._state.total_errors = self._state.total_errors + 1
-          else
-            local moved = type(result) == "number" and result or 0
-            if moved > 0 then
-              self._state.total_exported = self._state.total_exported + moved
-              local entry = string.format("ME→[%s]%s %s x%d via %s",
-                r.label, pct_str, r.item, moved, r.inlet.name)
-              if self._state.last_cycle then
-                self._state.last_cycle.exported = (self._state.last_cycle.exported or 0) + moved
-                table.insert(self._state.last_cycle.moves, entry)
-              end
-            end
+            request.error_counted = true
+            request.error = err
+            return false, err
           end
-          self._state.current_request = nil
+          local moved = type(result) == "number" and result or 0
+          request.moved = moved
+          request.exported_at = os.epoch and os.epoch("utc") or 0
+          if moved > 0 then
+            self._state.total_exported = self._state.total_exported + moved
+            self.log("INFO", string.format("ME→[%s]%s %s x%d via %s [tx=%s]",
+              r.label, pct_str, r.item, moved, r.inlet.name, tostring(request.transaction_id)))
+          end
+          return true, moved
         end
 
         local function on_transaction_error(reason)
           self.warn_once("routing_failed:" .. tostring(r.label),
             "Logistics: Routing-Transaktion fuer " .. r.label .. " abgebrochen (" .. tostring(reason) .. ")")
-          self._state.total_errors = self._state.total_errors + 1
-          self._state.current_request = nil
+          if not request.error_counted then
+            self._state.total_errors = self._state.total_errors + 1
+            request.error_counted = true
+          end
+          finish_delivery(self, request, "ERROR", "CANCELLED", tostring(reason))
         end
 
-        local started, reason = rs:begin_transaction(r.label, do_export, valve_ms, { on_error = on_transaction_error })
+        local function on_transaction_complete(info)
+          local terminal = type(info) == "table" and info.state or "ERROR"
+          if terminal == "COMPLETE_SAFE" then
+            finish_delivery(self, request, "COMPLETE", terminal, nil)
+          else
+            if not request.error_counted then
+              self._state.total_errors = self._state.total_errors + 1
+              request.error_counted = true
+            end
+            finish_delivery(self, request, "ERROR", terminal,
+              type(info) == "table" and info.reason or "transaction failed")
+          end
+        end
+
+        local started, reason, router_tx_id = rs:begin_transaction(r.label, do_export, valve_ms, {
+          on_error = on_transaction_error,
+          on_complete = on_transaction_complete,
+          transaction_id = request.transaction_id,
+        })
         if not started then
           self._state.current_request = nil
           if reason == "busy" then
             self.log("DEBUG", "Logistics: Router beschaeftigt (aktive Transaktion) — restliche Kandidaten diesen Zyklus uebersprungen")
             return exported, errors
           end
+          if reason == "safety_latched" or reason == "quiescing" then
+            self.log("WARN", "Logistics: Router sicherheitsgesperrt (" .. tostring(reason) .. ") — keine weitere Lieferung")
+            return exported, errors
+          end
           self.log("DEBUG", "Logistics: " .. r.label .. ": Routing nicht moeglich (" .. tostring(reason) .. ") — naechster Kandidat")
           goto continue
         end
-        self._state.current_request.state = "delivering"
-        -- Nur eine Lieferung wird pro Zyklus tatsaechlich gestartet; ihr
-        -- Ergebnis zaehlt asynchron in self._state.total_exported/
-        -- total_errors, nicht in den hier zurueckgegebenen Werten.
+        request.transaction_id = router_tx_id or request.transaction_id
+        request.state = "delivering"
+        local active = type(rs.get_active_transaction) == "function" and rs:get_active_transaction() or nil
+        request.phase = active and active.phase or "BLOCKING"
         return exported, errors
       end
 
-      -- No redstone routing configured: export directly, weiter zum
-      -- naechsten Kandidaten (unveraendertes Verhalten, keine Blockierung).
-      self._state.current_request.state = "delivering"
+      -- No redstone routing configured: synchronous export with the same
+      -- stable transaction identity/terminal semantics.
+      request.state = "delivering"
+      request.phase = "EXPORTING"
       local ok, result = pcall(bridge.wrapped.exportItemToPeripheral,
         { name = r.item, count = push }, r.inlet.name)
       if not ok then
+        local err = tostring(result)
         self.warn_once("exp_err:" .. r.inlet.name,
-          "exportItemToPeripheral → " .. r.inlet.name .. ": " .. tostring(result))
+          "exportItemToPeripheral → " .. r.inlet.name .. ": " .. err)
         errors = errors + 1
+        request.error_counted = true
+        finish_delivery(self, request, "ERROR", "EXPORT_FAILED", err)
       else
         local moved = type(result) == "number" and result or 0
+        request.moved = moved
         if moved > 0 then
           exported = exported + moved
           cycle_log[#cycle_log + 1] = string.format(
-            "ME→[%s]%s %s x%d via %s",
-            r.label, pct_str, r.item, moved, r.inlet.name)
+            "ME→[%s]%s %s x%d via %s", r.label, pct_str, r.item, moved, r.inlet.name)
         end
+        finish_delivery(self, request, "COMPLETE", "COMPLETE_SAFE", nil)
       end
     end
 
@@ -658,6 +701,15 @@ function M:get_summary()
     total_routes = total_routes + 1
     if r.connected then active_routes = active_routes + 1 end
   end
+  local active_tx = s.rs_router and type(s.rs_router.get_active_transaction) == "function"
+    and s.rs_router:get_active_transaction() or nil
+  if s.current_request and active_tx
+      and (not s.current_request.transaction_id or s.current_request.transaction_id == active_tx.transaction_id) then
+    s.current_request.transaction_id = active_tx.transaction_id or s.current_request.transaction_id
+    s.current_request.phase = active_tx.phase or s.current_request.phase
+  end
+  local safety_latch = s.rs_router and type(s.rs_router.get_safety_latch) == "function"
+    and s.rs_router:get_safety_latch() or nil
   return {
     enabled        = cfg.enabled == true,
     bridge         = s.bridge and s.bridge.name or nil,
@@ -674,6 +726,8 @@ function M:get_summary()
     -- Ventil-Fenster (das bleibt separat ueber rs_router:get_active_route()
     -- verfuegbar, falls Redstone-Routing konfiguriert ist).
     current_request = s.current_request,
+    last_delivery  = s.last_delivery,
+    router_safety_latch = safety_latch,
     total_exported = s.total_exported,
     total_imported = s.total_imported,
     total_errors   = s.total_errors,
