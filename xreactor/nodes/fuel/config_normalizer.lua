@@ -2,6 +2,10 @@ local non_rt_config = require("core.non_rt_config")
 
 local M = {}
 
+local function nonempty_string(value)
+  return type(value) == "string" and value:match("%S") ~= nil
+end
+
 function M.normalize(config_values, defaults, add_warning, utils)
   non_rt_config.apply_common(config_values, defaults, add_warning, utils)
 
@@ -22,7 +26,6 @@ function M.normalize(config_values, defaults, add_warning, utils)
     add_warning("target missing/invalid; defaulting to " .. tostring(defaults.target))
   end
 
-  -- Normalize logistics config block.
   if config_values.logistics == nil then
     config_values.logistics = utils.deep_copy and utils.deep_copy(defaults.logistics)
       or { enabled = false, interval = 10, discovery_interval = 60,
@@ -34,7 +37,6 @@ function M.normalize(config_values, defaults, add_warning, utils)
     config_values.logistics = lg
     add_warning("logistics config invalid; using defaults")
   end
-  -- enabled must be explicit boolean true to activate
   if lg.enabled ~= true then lg.enabled = false end
   if type(lg.interval) ~= "number" or lg.interval <= 0 then
     lg.interval = (defaults.logistics and defaults.logistics.interval) or 10
@@ -45,61 +47,86 @@ function M.normalize(config_values, defaults, add_warning, utils)
   if type(lg.max_per_cycle) ~= "number" or lg.max_per_cycle <= 0 then
     lg.max_per_cycle = (defaults.logistics and defaults.logistics.max_per_cycle) or 64
   end
-  if type(lg.reactors)      ~= "table" then lg.reactors      = {} end
-  if type(lg.waste)         ~= "table" then lg.waste         = {} end
+  if type(lg.reactors) ~= "table" then lg.reactors = {} end
+  if type(lg.waste) ~= "table" then lg.waste = {} end
   if type(lg.redstone_tree) ~= "table" then lg.redstone_tree = {} end
   if type(lg.valve_open_ms) ~= "number" or lg.valve_open_ms <= 0 then
     lg.valve_open_ms = (defaults.logistics and defaults.logistics.valve_open_ms) or 2000
   end
-  -- Fix (2026-07-16): CRITICAL (FUEL-P0, siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md). destinations/sources/routes wurden bisher
-  -- NIE normalisiert -- weder DEFAULT_LOGISTICS noch eine leere
-  -- "logistics={}"-Benutzerconfig enthalten ein "destinations"-Feld. Der
-  -- Destination-Validierungsloop weiter unten ruft aber unbedingt
-  -- ipairs(lg.destinations) auf, was bei einer frischen oder teilweisen
-  -- Config sofort mit "bad argument #1 to 'ipairs' (table expected, got
-  -- nil)" abstuerzte, noch bevor die Node betriebsbereit war.
   if type(lg.destinations) ~= "table" then lg.destinations = {} end
-  if type(lg.sources)      ~= "table" then lg.sources      = {} end
-  if type(lg.routes)       ~= "table" then lg.routes       = {} end
-  -- Fix (2026-07-09): kein Hinweis existierte bisher, wenn Reaktoren
-  -- konfiguriert sind, "enabled" aber noch false ist -- ein leicht zu
-  -- uebersehender Zustand, in dem alle Reaktor-Eintraege fehlerfrei
-  -- validieren, aber M:tick() trotzdem sofort zurueckkehrt (keine
-  -- Belieferung passiert), ohne dass irgendwo eine Meldung erscheint.
-  if lg.enabled == false and #lg.reactors > 0 then
-    add_warning(string.format(
-      "logistics.enabled=false trotz %d konfigurierter Reaktoren — es wird KEIN Fuel exportiert, bis enabled=true gesetzt wird",
-      #lg.reactors))
-  end
-  if type(lg.me_bridge)    ~= "string" then
+  if type(lg.sources) ~= "table" then lg.sources = {} end
+  if type(lg.routes) ~= "table" then lg.routes = {} end
+  if type(lg.me_bridge) ~= "string" then
     lg.me_bridge = (defaults.logistics and defaults.logistics.me_bridge) or "me_bridge"
   end
-  if type(lg.interval) ~= "number" or lg.interval <= 0 then
-    lg.interval = (defaults.logistics and defaults.logistics.interval) or 5
-  end
-  -- Validate each reactor entry
+
+  -- A configured reactor is an actuator route. Invalid demand identity or
+  -- amounts must disable logistics as a whole instead of falling into the
+  -- historical "always supply" path. Keep the original entries in memory so
+  -- UI/config editors can still show and repair them; only runtime activation
+  -- is fail-closed.
+  local unsafe_reactor_config = false
   for i, r in ipairs(lg.reactors) do
-    if not r.inlet then
-      add_warning(string.format("logistics.reactors[%d] missing inlet peripheral", i))
-    end
-    if not r.item then
-      add_warning(string.format("logistics.reactors[%d] missing item name", i))
-    end
-    if r.request_below and (tonumber(r.request_below) or 0) > 1.0 then
-      add_warning(string.format(
-        "logistics.reactors[%d].request_below=%s should be 0.0-1.0 (ratio, not %%)",
-        i, tostring(r.request_below)))
+    if type(r) ~= "table" then
+      add_warning(string.format("logistics.reactors[%d] invalid entry", i))
+      unsafe_reactor_config = true
+    else
+      local reactor_id = r.reactor_id or r.reactor_port -- legacy alias
+      if not nonempty_string(reactor_id) then
+        add_warning(string.format("logistics.reactors[%d] missing reactor_id; unsafe always-supply fallback is disabled", i))
+        unsafe_reactor_config = true
+      end
+      if not nonempty_string(r.inlet) then
+        add_warning(string.format("logistics.reactors[%d] missing inlet peripheral", i))
+        unsafe_reactor_config = true
+      end
+      if not nonempty_string(r.item) then
+        add_warning(string.format("logistics.reactors[%d] missing item name", i))
+        unsafe_reactor_config = true
+      end
+      if r.request_below ~= nil then
+        local threshold = tonumber(r.request_below)
+        if threshold == nil or threshold < 0 or threshold > 1 then
+          add_warning(string.format(
+            "logistics.reactors[%d].request_below=%s invalid; expected ratio 0.0-1.0",
+            i, tostring(r.request_below)))
+          unsafe_reactor_config = true
+        end
+      end
+      if r.fill_amount ~= nil then
+        local amount = tonumber(r.fill_amount)
+        if amount == nil or amount <= 0 then
+          add_warning(string.format("logistics.reactors[%d].fill_amount=%s invalid; must be > 0", i, tostring(r.fill_amount)))
+          unsafe_reactor_config = true
+        end
+      end
+      if r.min_in_me ~= nil then
+        local reserve = tonumber(r.min_in_me)
+        if reserve == nil or reserve < 0 then
+          add_warning(string.format("logistics.reactors[%d].min_in_me=%s invalid; must be >= 0", i, tostring(r.min_in_me)))
+          unsafe_reactor_config = true
+        end
+      end
     end
   end
-  -- Validate destination tags
-  local valid_tags = { reactor_injector = true, reprocessor = true, fuel_storage = true, me = true, reactor_output = true, generic = true }
+  if unsafe_reactor_config and lg.enabled then
+    lg.enabled = false
+    add_warning("logistics disabled: at least one reactor route is unsafe/invalid; fix config before fuel export can resume")
+  elseif lg.enabled == false and #lg.reactors > 0 then
+    add_warning(string.format(
+      "logistics.enabled=false despite %d configured reactors; no fuel will be exported",
+      #lg.reactors))
+  end
+
+  local valid_tags = {
+    reactor_injector = true, reprocessor = true, fuel_storage = true,
+    me = true, reactor_output = true, generic = true
+  }
   for i, dest in ipairs(lg.destinations) do
     if type(dest) == "table" and dest.tag and not valid_tags[dest.tag] then
       add_warning(string.format(
-        "logistics.destinations[%d].tag '%s' unknown; valid: reactor_injector, reprocessor, generic",
-        i, tostring(dest.tag)
-      ))
+        "logistics.destinations[%d].tag '%s' unknown; valid: reactor_injector, reprocessor, fuel_storage, me, reactor_output, generic",
+        i, tostring(dest.tag)))
     end
   end
 end
