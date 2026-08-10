@@ -33,9 +33,9 @@ local M = {}
 -- gehoert. role_key wird gegen constants.roles nachgeschlagen (das Modul
 -- haelt selbst keine Abhaengigkeit zu core/comms.lua o.ae.).
 M.SETTINGS = {
-  fuel_reserve = { role_key = "FUEL_NODE", command_target = "SET_RESERVE" },
-  water_target = { role_key = "WATER_NODE", command_target = "SET_TARGET" },
-  reactor_fill_target = { role_key = "RT_NODE", command_target = "SET_REACTOR_FILL_TARGET" },
+  fuel_reserve = { role_key = "FUEL_NODE", command_target = "SET_RESERVE", requires_persistence = true },
+  water_target = { role_key = "WATER_NODE", command_target = "SET_TARGET", requires_persistence = true },
+  reactor_fill_target = { role_key = "RT_NODE", command_target = "SET_REACTOR_FILL_TARGET", requires_persistence = true },
 }
 
 local function ensure_setting_state(edits_state, key)
@@ -138,9 +138,9 @@ local function all_terminal(pending)
   return true
 end
 
-local function all_applied(pending)
+local function all_persisted(pending)
   for _, t in pairs(pending.targets) do
-    if t.status ~= "APPLIED" then return false end
+    if t.status ~= "APPLIED_PERSISTED" then return false end
   end
   return true
 end
@@ -153,7 +153,7 @@ end
 -- einen neuen Edit ausloest.
 local function resolve_if_terminal(st)
   if not st.pending or not all_terminal(st.pending) then return end
-  if all_applied(st.pending) then
+  if all_persisted(st.pending) then
     st.confirmed_value = st.pending.value
     st.pending = nil
   else
@@ -169,14 +169,22 @@ function M.handle_ack_delivered(edits_state, message)
 end
 
 function M.handle_ack_applied(edits_state, message)
-  local _, st, _, t = find_pending(edits_state, message and message.ack_for)
+  local key, st, _, t = find_pending(edits_state, message and message.ack_for)
   if not t then return false end
   local result = message.payload and message.payload.result or {}
+  local def = key and M.SETTINGS[key] or nil
   if result.ok == false then
     t.status = "REJECTED"
     t.error = result.error or result.reason_code
+  elseif def and def.requires_persistence then
+    if result.persisted == true then
+      t.status = "APPLIED_PERSISTED"
+    else
+      t.status = "APPLIED_VOLATILE"
+      t.error = result.persistence_error or result.error or "Wert nur im RAM angewendet; Persistierung nicht bestaetigt"
+    end
   else
-    t.status = "APPLIED"
+    t.status = "APPLIED_PERSISTED"
   end
   resolve_if_terminal(st)
   return true
@@ -201,18 +209,20 @@ function M.model_for(edits_state, key, fallback_value)
   end
   local pending_summary = nil
   if st.pending then
-    local applied, total, failed_ids = 0, 0, {}
+    local applied, total, failed_ids, volatile_ids = 0, 0, {}, {}
     for id, t in pairs(st.pending.targets) do
       total = total + 1
-      if t.status == "APPLIED" then
+      if t.status == "APPLIED_PERSISTED" then
         applied = applied + 1
+      elseif t.status == "APPLIED_VOLATILE" then
+        volatile_ids[#volatile_ids + 1] = id
       elseif t.status == "REJECTED" or t.status == "TIMEOUT" or t.status == "SEND_FAILED" then
         failed_ids[#failed_ids + 1] = id
       end
     end
     pending_summary = {
       value = st.pending.value, applied = applied, total = total,
-      failed = failed_ids, resolved = st.pending.resolved == true,
+      failed = failed_ids, volatile = volatile_ids, resolved = st.pending.resolved == true,
     }
   end
   return {

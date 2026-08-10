@@ -358,7 +358,15 @@ local function handle_command(message)
   return fuel_command_handler.handle(message, {
     support_command_handler = support_command_handler, constants = constants,
     devices = devices, protocol = protocol, comms = comms, utils = utils,
-    set_reserve = function(v) reserve = v end,
+    set_reserve = function(v)
+      reserve = v
+      config.minimum_reserve = v
+      local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
+      if not ok_write then
+        utils.log("FUEL", "SET_RESERVE angewendet, aber Persistierung fehlgeschlagen: " .. tostring(werr), "WARN")
+      end
+      return { ok = true, persisted = ok_write == true, persistence_error = ok_write and nil or tostring(werr) }
+    end,
     on_fuel_status = function(value) fuel_status_network.ingest_master_relay(fuel_status_cache, value) end,
   })
 end

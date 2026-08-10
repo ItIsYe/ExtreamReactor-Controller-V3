@@ -76,11 +76,14 @@ do
   assert_contains(src, "set_rs_output(drain_side, false, integrator)", "water/main.lua")
 end
 
--- ── RT: trivialer Handler (Audit verlangt hier keine physische Bestaetigung) ─
+-- ── RT: Control freeze + physische Safe-Readback-Bestaetigung ─────────────
 do
   local src = read("nodes/rt/main.lua")
   assert_contains(src, "_G.__xreactor_update_handshake", "rt/main.lua")
-  assert_contains(src, "quiesce_handshake and { handshake = quiesce_handshake } or nil", "rt/main.lua")
+  assert_contains(src, "if rt_update_quiescing then return end", "rt/main.lua")
+  assert_contains(src, "reactor_control.apply_update_quiesce(ctx)", "rt/main.lua")
+  assert_contains(src, "turbine_control.apply_update_quiesce(ctx)", "rt/main.lua")
+  assert_contains(src, "on_quiesce = update_quiesce_safe", "rt/main.lua")
 end
 
 -- ── MASTER: eigener Loop (kein run_event_loop), eigener Quiesce-Check ──────

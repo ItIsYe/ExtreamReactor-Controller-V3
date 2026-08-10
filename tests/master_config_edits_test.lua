@@ -144,14 +144,14 @@ do
   config_edits.handle_ack_delivered(edits_state, { ack_for = id1 })
   assert_eq(edits_state.fuel_reserve.pending.targets['FUEL-1'].status, 'DELIVERED', 'ACK_DELIVERED must move a QUEUED target to DELIVERED')
 
-  config_edits.handle_ack_applied(edits_state, { ack_for = id1, payload = { result = { ok = true } } })
+  config_edits.handle_ack_applied(edits_state, { ack_for = id1, payload = { result = { ok = true, persisted = true } } })
   local model_mid = config_edits.model_for(edits_state, 'fuel_reserve', 2000)
   assert_eq(model_mid.confirmed_value, 2000,
     'confirmed_value must NOT update after only ONE of two targets applied -- this is the exact bug being fixed: ' ..
     'the old code showed the new value as soon as it was typed, regardless of any ACK')
   assert_eq(model_mid.pending.applied, 1, 'exactly one target has applied so far')
 
-  config_edits.handle_ack_applied(edits_state, { ack_for = id2, payload = { result = { ok = true } } })
+  config_edits.handle_ack_applied(edits_state, { ack_for = id2, payload = { result = { ok = true, persisted = true } } })
   local model_after = config_edits.model_for(edits_state, 'fuel_reserve', 2000)
   assert_eq(model_after.confirmed_value, 3000, 'confirmed_value must update once ALL targets have applied')
   assert_true(model_after.pending == nil, 'a fully-applied edit must clear the pending state')
@@ -169,7 +169,7 @@ do
   config_edits.send_edit(edits_state, 'fuel_reserve', 3000, { nodes = nodes, comms = comms, constants = constants })
   local id1, id2 = comms.sent[1].message_id, comms.sent[2].message_id
 
-  config_edits.handle_ack_applied(edits_state, { ack_for = id1, payload = { result = { ok = true } } })
+  config_edits.handle_ack_applied(edits_state, { ack_for = id1, payload = { result = { ok = true, persisted = true } } })
   config_edits.handle_ack_applied(edits_state, { ack_for = id2, payload = { result = { ok = false, error = 'invalid value' } } })
 
   local model = config_edits.model_for(edits_state, 'fuel_reserve', 2000)
@@ -193,6 +193,23 @@ do
   assert_eq(model.confirmed_value, 2000, 'a timed-out target must not promote the confirmed value')
   assert_true(model.pending.resolved == true, 'a timed-out single-target edit must resolve immediately')
   assert_eq(edits_state.fuel_reserve.pending.targets['FUEL-1'].status, 'TIMEOUT', 'the target status must be TIMEOUT')
+end
+
+
+-- 9. Persistent setting applied only in RAM is terminal but NOT confirmed.
+do
+  local nodes = { ['FUEL-1'] = { role = constants.roles.FUEL_NODE } }
+  local comms = make_comms()
+  local edits_state = {}
+  config_edits.send_edit(edits_state, 'fuel_reserve', 3500, { nodes = nodes, comms = comms, constants = constants })
+  local id1 = comms.sent[1].message_id
+  config_edits.handle_ack_applied(edits_state, { ack_for = id1,
+    payload = { result = { ok = true, persisted = false, persistence_error = 'disk full' } } })
+  local model = config_edits.model_for(edits_state, 'fuel_reserve', 2000)
+  assert_eq(model.confirmed_value, 2000, 'volatile-only application must never become the persisted confirmed value')
+  assert_true(model.pending and model.pending.resolved == true, 'volatile result is terminal and must remain visible')
+  assert_eq(#model.pending.volatile, 1, 'volatile target must be surfaced separately from reject/timeout')
+  assert_eq(edits_state.fuel_reserve.pending.targets['FUEL-1'].status, 'APPLIED_VOLATILE')
 end
 
 print('master_config_edits_test.lua: ok')

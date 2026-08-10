@@ -39,7 +39,10 @@ local SOURCE = read_file('xreactor/nodes/valve/main.lua')
 local BLOCK_A = extract(SOURCE, 'local sorter_device = nil',
   'BLOCKIERT" or "OFFEN"), "INFO")\n  return true\nend')
 local BLOCK_B = extract(SOURCE, 'local SEEN_COMMAND_LIMIT = 16',
-  'send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error, message.src)\nend')
+  '\nlocal comms = comms_service.new({')
+-- Drop the boundary marker itself; the extracted chunk only needs the helper
+-- declarations and handle_valve_channel_event().
+BLOCK_B = BLOCK_B:sub(1, #BLOCK_B - #'\nlocal comms = comms_service.new({')
 local EXTRACTED = BLOCK_A .. '\n' .. BLOCK_B
 
 local function assert_eq(actual, expected, message)

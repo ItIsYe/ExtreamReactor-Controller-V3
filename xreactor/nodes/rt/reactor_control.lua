@@ -434,6 +434,56 @@ function M.applyReactorRods(ctx, target, allow_overmax, source)
   return true
 end
 
+-- Update quiesce is stricter than normal SAFE control: every configured
+-- reactor must have a successful 100%-rod write followed by a fresh readback.
+-- setActive(false) is also applied/verified when that API exists. The caller
+-- retries this function while the update handshake remains requested.
+function M.apply_update_quiesce(ctx)
+  local result = { ok = true, reactors = {} }
+  for _, name in ipairs(ctx.config.reactors or {}) do
+    local item = { name = name }
+    local write_ok, write_err = ctx.adapters.reactor.apply_rod_level(name, 100, ctx.CONFIG.LOG_PREFIX)
+    item.rod_write = write_ok == true
+    item.rod_error = write_err
+    local rods = ctx.adapters.reactor.read_control_rods(name, ctx.CONFIG.LOG_PREFIX)
+    item.rods = rods
+    item.rods_safe = type(rods) == "number" and rods >= 99.5
+
+    local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name] or nil
+    if not reactor and ctx.utils and type(ctx.utils.safe_wrap) == "function" then
+      reactor = select(1, ctx.utils.safe_wrap(name))
+    end
+    item.present = reactor ~= nil
+    item.active_safe = true
+    if reactor and type(reactor.setActive) == "function" then
+      local ok_set, set_result = pcall(reactor.setActive, false)
+      item.active_write = ok_set and set_result ~= false
+      if type(reactor.getActive) == "function" then
+        local ok_read, active = pcall(reactor.getActive)
+        item.active_readback = ok_read and type(active) == "boolean"
+        item.active = active
+        item.active_safe = ok_read and active == false
+      else
+        item.active_safe = item.active_write
+      end
+    elseif not reactor then
+      item.active_safe = false
+    end
+
+    item.ok = item.present and item.rod_write and item.rods_safe and item.active_safe
+    if item.ok then
+      local ctrl = M.ensure_reactor_ctrl(ctx, name)
+      ctrl.last_applied = 100
+      ctrl.last_known_rods = rods
+      ctrl.active_state = false
+    else
+      result.ok = false
+    end
+    result.reactors[#result.reactors + 1] = item
+  end
+  return result.ok, result
+end
+
 function M.apply_initial_reactor_rods(ctx)
   for name, ctrl in pairs(ctx.reactor_ctrl) do
     ctrl.last_applied = nil

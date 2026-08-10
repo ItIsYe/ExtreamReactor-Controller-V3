@@ -406,6 +406,8 @@ end
 local SEEN_COMMAND_LIMIT = 16
 local seen_command_ids = {}
 local seen_command_order = {}
+local pairing_persisted = config.trusted_source ~= nil
+local last_pairing_error = nil
 local function seen_command(id)
   return id ~= nil and seen_command_ids[id] == true
 end
@@ -425,13 +427,13 @@ end
 -- (per ROUTER-P0 command-id-gebundene) `command_id`, aber `src`/`dst`
 -- machen den ACK auch fuer Logging/Diagnose eindeutig einem Sender/
 -- Empfaenger zuordenbar, statt nur "irgendein VALVE_ACK auf Kanal 6504".
-local function send_valve_ack(reply_side, command_id, applied, high, err, dst)
+local function send_valve_ack(reply_side, command_id, applied, high, err, dst, persisted)
   if not command_id or not reply_side then return end
   local ok, modem = pcall(peripheral.wrap, reply_side)
   if not ok or not modem or type(modem.transmit) ~= "function" then return end
   pcall(modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
     type = "VALVE_ACK", command_id = command_id, applied = applied == true, high = high, error = err,
-    src = node_id, dst = dst,
+    src = node_id, dst = dst, persisted = persisted,
   })
 end
 
@@ -482,45 +484,52 @@ local function handle_valve_channel_event(event)
   -- mit abweichender src wird verworfen. Bleibt dadurch abwaertskompatibel
   -- (kein manuelles Vorab-Pairing noetig, funktioniert "out of the box"),
   -- schliesst aber die Luecke "akzeptiert dauerhaft jeden Sender".
-  if config.trusted_source then
-    if message.src ~= config.trusted_source then
-      utils.log(CONFIG.LOG_PREFIX, "SET_VALVE von nicht vertrauenswuerdiger Quelle ignoriert: " .. tostring(message.src), "WARN")
-      return
-    end
-  else
+  if config.trusted_source and message.src ~= config.trusted_source then
+    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE von nicht vertrauenswuerdiger Quelle ignoriert: " .. tostring(message.src), "WARN")
+    return
+  end
+
+  -- Dedupe is safe only for an already paired source. An unpaired command has
+  -- to pass the physical apply and durable trust write before its ID is saved.
+  if config.trusted_source and seen_command(message.command_id) then
+    local applied = valve_initialized and (current_high == message.high)
+    send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error,
+      message.src, pairing_persisted)
+    return
+  end
+
+  local applied = apply_valve(message.high)
+  if not applied then
+    send_valve_ack(reply_side, message.command_id, false, current_high, last_write_error,
+      message.src, config.trusted_source ~= nil and pairing_persisted or false)
+    return
+  end
+
+  if not config.trusted_source then
+    -- Pair only AFTER the fully validated command was physically applied.
+    -- If persistence fails, fail closed again before answering: a transient,
+    -- unauthenticated first packet must never leave the sorter open.
     config.trusted_source = message.src
     local ok_pair, perr = utils.write_config(CONFIG.CONFIG_PATH, config)
     if not ok_pair then
-      utils.log(CONFIG.LOG_PREFIX, "trusted_source-Pairing konnte nicht persistiert werden (" .. tostring(perr) .. ") -- gilt nur bis zum naechsten Neustart", "WARN")
+      config.trusted_source = nil
+      pairing_persisted = false
+      last_pairing_error = tostring(perr or "write_config failed")
+      local blocked_ok = apply_valve(true)
+      utils.log(CONFIG.LOG_PREFIX, "trusted_source-Pairing NICHT dauerhaft gespeichert ("
+        .. last_pairing_error .. ") -- Fail-Safe BLOCKED=" .. tostring(blocked_ok), "ERROR")
+      send_valve_ack(reply_side, message.command_id, false, current_high,
+        "PAIRING_PERSIST_FAILED:" .. last_pairing_error, message.src, false)
+      return
     end
-    utils.log(CONFIG.LOG_PREFIX, "trusted_source automatisch an " .. tostring(message.src) .. " gebunden (Erstkommando)", "INFO")
+    pairing_persisted = true
+    last_pairing_error = nil
+    utils.log(CONFIG.LOG_PREFIX, "trusted_source nach erfolgreichem Apply dauerhaft an "
+      .. tostring(message.src) .. " gebunden", "INFO")
   end
-  -- Fix (2026-07-13): VALVE-P1. Dedupe -- ein per Retry wiederholtes
-  -- identisches Kommando (dieselbe command_id) loest keinen erneuten
-  -- Redstone-Write/Log-Eintrag aus, wird aber trotzdem erneut bestaetigt.
-  --
-  -- Fix (2026-07-16): CRITICAL (VALVE-P0, siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md Abschnitt 12). remember_command() lief bisher
-  -- VOR dem Ergebnis von apply_valve() -- schlug der physische Write fehl,
-  -- war die command_id trotzdem bereits als "gesehen" markiert. Ein
-  -- Retry mit DERSELBEN ID (redstone_router.lua's check_pending_acks()
-  -- sendet bei ausbleibender Bestaetigung exakt dieselbe command_id erneut)
-  -- traf dadurch nur noch den Dedupe-Zweig (applied = current_high==high,
-  -- ohne einen zweiten Schreibversuch) -- Retry war beim eigentlichen
-  -- Anwendungsfall (Schreibfehler) also wirkungslos. Jetzt: nur ein
-  -- ERFOLGREICHER apply_valve() merkt sich die ID; eine fehlgeschlagene
-  -- ID bleibt "ungesehen" und wird bei identischem Retry erneut wirklich
-  -- geschrieben, so lange bis sie tatsaechlich uebernommen wurde.
-  local applied
-  if seen_command(message.command_id) then
-    applied = valve_initialized and (current_high == message.high)
-  else
-    applied = apply_valve(message.high)
-    if applied then
-      remember_command(message.command_id)
-    end
-  end
-  send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error, message.src)
+
+  remember_command(message.command_id)
+  send_valve_ack(reply_side, message.command_id, true, current_high, nil, message.src, pairing_persisted)
 end
 
 local comms = comms_service.new({
@@ -600,6 +609,9 @@ services:add(telemetry_service.new({
       actuator_ready = valve_initialized and last_write_error == nil,
       write_error = last_write_error,
       actuator_name = sorter_resolved_name or config.sorter_name,
+      trusted_source = config.trusted_source,
+      pairing_persisted = pairing_persisted,
+      pairing_error = last_pairing_error,
     }
   end,
 }))

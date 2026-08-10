@@ -42,7 +42,10 @@ local SOURCE = read_file('xreactor/nodes/valve/main.lua')
 local BLOCK_A = extract(SOURCE, 'local sorter_device = nil',
   'BLOCKIERT" or "OFFEN"), "INFO")\n  return true\nend')
 local BLOCK_B = extract(SOURCE, 'local SEEN_COMMAND_LIMIT = 16',
-  'send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error, message.src)\nend')
+  '\nlocal comms = comms_service.new({')
+-- Drop the boundary marker itself; the extracted chunk only needs the helper
+-- declarations and handle_valve_channel_event().
+BLOCK_B = BLOCK_B:sub(1, #BLOCK_B - #'\nlocal comms = comms_service.new({')
 local EXTRACTED = BLOCK_A .. '\n' .. BLOCK_B
 
 local function assert_eq(actual, expected, message)
@@ -150,20 +153,22 @@ do
   assert_eq(#inst.write_config_calls, 0, 'an already-paired sender must not trigger a repeated pairing write')
 end
 
--- 1d. Persistenzfehler waehrend des Pairings: das Pairing gilt trotzdem
---     sofort im RAM (Command wird verarbeitet), aber ein WARN macht die
---     fehlende Dauerhaftigkeit sichtbar (analog zu WATER/RT-P1).
+-- 1d. Persistenzfehler waehrend des Pairings: kein RAM-Trust darf
+--     zurueckbleiben. Der Safety-Aktor wird wieder BLOCKED gesetzt und die
+--     command_id gilt NICHT als erfolgreich verarbeitet.
 do
   local inst = make_pairing_instance({ write_config_ok = false })
-  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-4', high = true } }
+  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-4', high = false } }
   inst.handle_valve_channel_event(event)
 
-  assert_eq(inst.get_trusted_source(), 'FUEL-1', 'pairing must still take effect in RAM even if persistence fails')
-  local found_warn = false
+  assert_eq(inst.get_trusted_source(), nil, 'failed durable pairing must undo RAM trust')
+  assert_eq(inst.get_current_high(), true, 'failed pairing persistence must force the sorter back to BLOCKED')
+  assert_true(not inst.seen_command_ids['CMD-4'], 'failed pairing must not dedupe a future retry as successful')
+  local found_error = false
   for _, entry in ipairs(inst.log_lines) do
-    if entry.level == 'WARN' and tostring(entry.msg):find('konnte nicht persistiert', 1, true) then found_warn = true end
+    if entry.level == 'ERROR' and tostring(entry.msg):find('NICHT dauerhaft gespeichert', 1, true) then found_error = true end
   end
-  assert_true(found_warn, 'a failed pairing persistence must be logged as WARN')
+  assert_true(found_error, 'failed durable pairing must be surfaced as ERROR')
 end
 
 -- ─────────────────────────────────────────────────────────────────────────

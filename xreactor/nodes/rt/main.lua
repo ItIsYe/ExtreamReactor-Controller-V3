@@ -667,7 +667,13 @@ end
 
 -- ── Control-Tick ──────────────────────────────────────────────────────────────
 
+local rt_update_quiescing = false
+
 local function control_tick()
+  -- Once update quiesce starts, ordinary regulation/startup must never write
+  -- over the dedicated safe-state commands. Network/telemetry services keep
+  -- running in support_runtime until the safety readbacks are confirmed.
+  if rt_update_quiescing then return end
   -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md). module_lifecycle.process_startup() war im
   -- gesamten Projekt nirgends verdrahtet (toter Code) -- start_module()
@@ -1212,20 +1218,48 @@ init()
 -- Pfad und trug nichts zur Selbstkorrektur bei, verursachte aber
 -- unnoetige doppelte volle Discovery-Durchlaeufe.
 
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
--- Quiesce-Handler. Der Audit listet RT nicht unter den Rollen mit
--- pflichtiger physischer Sicherzustandsbestaetigung (nur FUEL/
--- REPROCESSOR/VALVE/WATER) -- RT bestaetigt hier nur, dass es die
--- Hauptschleife kontrolliert verlaesst, ohne eigene neue Aktorlogik
--- einzufuehren. Getrennt davon bleibt der bestehende, MASTER-getriggerte
--- pending_remote_update-Pfad (oben) unveraendert: der blockiert die
--- Steuerschleife bereits synchron waehrend des Installerlaufs.
+-- Update quiesce: ordinary control is frozen, every startup action is
+-- cancelled, then reactor/turbine safe outputs are re-applied on every
+-- handshake cycle until fresh hardware readback confirms the safe state.
 local quiesce_handshake = _G.__xreactor_update_handshake
+local function update_quiesce_safe()
+  rt_update_quiescing = true
+  active_startup_id = nil
+  startup_queue_list = {}
+  startup_started_ms_value = nil
+  startup_watchdog_tripped_value = false
+  current_state_value = STATE.SAFE
+  if ctx and ctx.targets then
+    ctx.targets.power = 0
+    ctx.targets.power_percent = 0
+    ctx.targets.steam = 0
+    ctx.targets.enable_reactors = false
+    ctx.targets.enable_turbines = false
+  end
+  for _, module in pairs(modules_registry or {}) do
+    if type(module) == "table" and module.state == "STARTING" then
+      module.state = "OFF"
+      module.progress = 0
+    end
+  end
+
+  local reactors_ok, reactor_diag = reactor_control.apply_update_quiesce(ctx)
+  local turbines_ok, turbine_diag = turbine_control.apply_update_quiesce(ctx)
+  if not reactors_ok or not turbines_ok then
+    log("WARN", "UPDATE_QUIESCE wartet auf bestaetigte RT-Safe-Readbacks"
+      .. " reactors=" .. tostring(reactors_ok) .. " turbines=" .. tostring(turbines_ok))
+    return false
+  end
+  writeback_ctx()
+  log("INFO", "UPDATE_QUIESCE SAFE_OUTPUTS_APPLIED: rods=100%, turbine_flow=0, inactive/coil readbacks bestaetigt")
+  return true
+end
+
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   if pending_remote_update then
     pending_remote_update = false
     log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
     require("core.remote_update").run(log)
   end
-end, quiesce_handshake and { handshake = quiesce_handshake } or nil)
+end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = update_quiesce_safe } or nil)
 
