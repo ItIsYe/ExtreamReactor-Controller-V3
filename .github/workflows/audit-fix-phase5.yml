@@ -19,6 +19,7 @@ jobs:
       - name: Apply guarded RT/persistence fixes
         run: |
           python3 .github/audit_fix_phase5.py
+          python3 .github/audit_fix_phase5_followup.py
           git checkout -- .github/workflows/audit-fix-phase5.yml
       - name: Install Lua
         run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.2
@@ -35,7 +36,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/audit_fix_phase5.py
+          git rm .github/audit_fix_phase5.py .github/audit_fix_phase5_followup.py
           git add -A
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "fix: confirm RT safe quiesce and persistent config state"
