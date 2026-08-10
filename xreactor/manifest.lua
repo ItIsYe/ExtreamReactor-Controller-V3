@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v521
 return {
-  manifest_version = 521,
-  manifest_id = "manifest-v521",
+  manifest_version = 522,
+  manifest_id = "manifest-v522",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,7 +14,7 @@ return {
     { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always = true },
     { path = "installer/auto_update.lua", size_bytes = 12514, hash = "e94d70eb", always = true },
     { path = "installer/init.lua", size_bytes = 35757, hash = "207598f1", always = true },
-    { path = "installer/journal.lua", size_bytes = 13209, hash = "636019f4", always = true },
+    { path = "installer/journal.lua", always = true  },
     { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
     { path = "release.lua", always = true, size_bytes = 345, hash = "6f93a60a" },
     { path = "start.lua", size_bytes = 18876, hash = "483a917b", always = true },
