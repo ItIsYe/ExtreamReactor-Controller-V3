@@ -75,21 +75,15 @@ M.LEGACY_PATH = "/xreactor_install_journal.lua"
 -- "stale" Slot (siehe M.write()) -- der jeweils andere, gerade gueltige
 -- Slot wird von dieser Funktion nie beruehrt.
 local function atomic_write(path, content)
-  local tmp = path .. ".tmp"
-  local f = fs.open(tmp, "w")
-  if not f then return false, "open failed: " .. tmp end
+  -- Fix: fs.move in CC:Tweaked ist nach einem Delete/Create nicht zuverlaessig
+  -- (Verify liest danach CORRUPT zurueck). Direktes Schreiben in die Zieldatei
+  -- ist fuer das Journal ausreichend -- das Zwei-Slot-System in M.write() bietet
+  -- selbst schon die noetige Absicherung gegen Halbschreiber.
+  local f = fs.open(path, "w")
+  if not f then return false, "open failed: " .. path end
   local write_ok, write_err = pcall(function() f.write(content) end)
   pcall(f.close)
-  if not write_ok then
-    pcall(fs.delete, tmp)
-    return false, tostring(write_err)
-  end
-  if fs.exists(path) then pcall(fs.delete, path) end
-  local ok, mv_err = pcall(fs.move, tmp, path)
-  if not ok or not fs.exists(path) then
-    pcall(fs.delete, tmp)
-    return false, "move failed: " .. tostring(mv_err)
-  end
+  if not write_ok then return false, tostring(write_err) end
   return true
 end
 
