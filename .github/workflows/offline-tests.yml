@@ -43,8 +43,6 @@ jobs:
             "tests/known_failing_lua_tests.txt"
             "tests/known_failing_python_tests.txt"
             "tests/skip_budget.txt"
-            "CI_MASTER_PLAN.md"
-            "AGENTS.md"
           )
           fail=0
           for f in "${required[@]}"; do
