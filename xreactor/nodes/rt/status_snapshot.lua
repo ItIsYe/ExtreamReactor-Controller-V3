@@ -4,10 +4,7 @@ local M = {}
 
 local function numeric_value(value)
   if type(value) == "number" then return value end
-  if type(value) == "string" then
-    local n = tonumber(value)
-    if n then return n end
-  end
+  if type(value) == "string" then local n = tonumber(value); if n then return n end end
   return nil
 end
 
@@ -16,17 +13,23 @@ local function bool_or_nil(value)
   return nil
 end
 
+local function global_device_id(registry, local_id)
+  local node_id = registry and registry.node_id
+  if node_id ~= nil and local_id ~= nil then
+    return tostring(node_id) .. ":" .. tostring(local_id)
+  end
+  return local_id
+end
+
 function M.build_module_payload(modules)
   local snapshot = {}
   for id, module in pairs(modules or {}) do
     snapshot[id] = {
-      state    = module.state,
+      state = module.state,
       progress = module.progress,
-      limits   = module.limits,
-      -- Fix: module.type mitschicken damit Master plan_modules()
-      -- den Typ korrekt bestimmen kann (statt fragiles name:find())
-      type     = module.type,
-      name     = module.name or id
+      limits = module.limits,
+      type = module.type,
+      name = module.name or id
     }
   end
   return snapshot
@@ -42,6 +45,8 @@ function M.build_turbine_snapshots(registry, turbine_adapter, modules, log_prefi
     if energy then total_output = total_output + energy end
     table.insert(list, {
       id = entry.id,
+      local_id = entry.id,
+      global_id = global_device_id(registry, entry.id),
       name = entry.name,
       alias = entry.alias,
       rpm = info and info.rpm or nil,
@@ -62,7 +67,13 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
     local info = reactor_adapter.inspect(entry.name, log_prefix)
     local module = modules[entry.id]
     table.insert(list, {
+      -- Keep the historical local id for compatibility, but additionally
+      -- publish a cluster-unique identity. Local peripheral names and API
+      -- signatures can legitimately be identical on two RT computers, so a
+      -- local registry id is not globally safe as a routing key.
       id = entry.id,
+      local_id = entry.id,
+      global_id = global_device_id(registry, entry.id),
       name = entry.name,
       alias = entry.alias,
       rods_level = info and info.control_rod_level or nil,
@@ -73,12 +84,6 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
       coolant_filled_percentage = info and info.coolant_filled_percentage or nil,
       coolant_ratio = info and info.coolant_ratio or nil,
       coolant_ratio_source = info and info.coolant_ratio_source or nil,
-      -- Feature (2026-07-08): Fuel-Fuellstand mit in den Reaktor-Snapshot
-      -- aufnehmen, den RT sowieso schon regelmaessig an Master schickt.
-      -- Vorher wurde fuel/fuel_max von adapters/reactor.lua zwar lokal
-      -- gelesen, aber nie weitergegeben — die FUEL-Node hatte dadurch
-      -- keine Moeglichkeit, den Fuellstand ohne eigenen (nicht vorhandenen)
-      -- Wired-Modem-Zugriff auf den Reaktor zu erfahren.
       fuel_amount = info and info.fuel or nil,
       fuel_capacity = info and info.fuel_max or nil,
       state = module and module.state or nil
@@ -87,23 +92,16 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
   return list
 end
 
--- Capacity-Learning ausgelagert nach nodes/rt/capacity_learning.lua
 local capacity_learning_lib = require("nodes.rt.capacity_learning")
 
 function M.build_status_payload(ctx)
   local health_payload = ctx.build_health_payload()
-  local turbines, actual_output = M.build_turbine_snapshots(ctx.registry, ctx.turbine_adapter, ctx.modules, ctx.log_prefix, ctx.targets)
-  local reactors = M.build_reactor_snapshots(ctx.registry, ctx.reactor_adapter, ctx.modules, ctx.log_prefix)
+  local turbines, actual_output = M.build_turbine_snapshots(
+    ctx.registry, ctx.turbine_adapter, ctx.modules, ctx.log_prefix, ctx.targets)
+  local reactors = M.build_reactor_snapshots(
+    ctx.registry, ctx.reactor_adapter, ctx.modules, ctx.log_prefix)
   local capacity = capacity_learning_lib.update(ctx, turbines)
   local capacity_max = capacity and capacity.max_output or 0
-  -- Hinweis: capacity_stable_samples/capacity_stable_turbines/
-  -- capacity_required_stable_turbines sind Alt-Feldnamen aus der vorherigen
-  -- Lock-basierten Learning-Logik — UI (monitor_ui.lua) und Master
-  -- (ui_controller.lua) lesen sie noch für die Fortschritts-Anzeige. Die
-  -- neue, einfachere Learning-Logik kennt kein "Sample-Fenster" mehr,
-  -- daher hier sinnvoll auf die neuen Konzepte gemappt: stable_turbines =
-  -- Turbinen aktuell am 900-RPM-Ziel, stable_samples = 1 sobald ready
-  -- (kein Lock-Fortschritt mehr nötig, die UI zeigt einfach "fertig").
   return {
     status = ctx.status_level,
     state = ctx.node_state_machine:state(),
