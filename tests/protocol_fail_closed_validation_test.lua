@@ -2,6 +2,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 local constants = require('shared.constants')
 local protocol = require('core.protocol')
 
+-- Final audit gate: malformed reliable-control envelopes must fail closed.
 local function base(t)
   return {
     type = t, message_id = 'm-1', sender_id = 'RT-1', src = 'RT-1', role = 'RT-NODE',
