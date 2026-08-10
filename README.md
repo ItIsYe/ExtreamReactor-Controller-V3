@@ -3,8 +3,8 @@
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
 > **Branch:** `beta` — active development.
-> **Manifest / Release:** `manifest-v358` / `beta-v358` · ATM10 (MC 1.21.1)
-> **Status:** Phase 1–4 rewrite complete. Since v274: a new shared "Mockup Dashboard Toolkit" (`core/mockup_ui.lua`) was rolled out across most node-local displays and 4 new AUX pages (Maintenance, Updates, System Map, Config Editor); several critical data-pipeline bugs were found and fixed (see RUNTIME_STATUS_2026-06-03.md for full details, including a `refresh_bindings()` early-return bug that silently left `devices.turbines`/`devices.reactors` empty forever once triggered); and RT nodes with more than one reactor now regulate each reactor independently based on its own internal steam fill ratio (configurable target, default 50%, editable live via the Config Editor).
+> **Manifest / Release:** `manifest-v521` / `beta-v521` · ATM10 (MC 1.21.1)
+> **Status:** Repo-Safety-Audit codeseitig abgeschlossen; Ingame-/Hardware-Abnahme vor Merge ausstehend. Siehe [`docs/REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md`](docs/REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md).
 > See [REWRITE_SPEC.md](REWRITE_SPEC.md) for the full rewrite reference and [RUNTIME_STATUS_2026-06-03.md](RUNTIME_STATUS_2026-06-03.md) for session history.
 
 ---
@@ -20,9 +20,9 @@ installer
 
 The installer downloads the manifest, lets you pick a role, stages all required files, writes `/startup.lua`, and reboots automatically.
 
-**Update / reinstall:** Run `installer` again. The installer preserves `/xreactor/config/role.lua`, `/xreactor/config/node_id.txt`, and `/xreactor/config/capacity_cache.lua` across reinstalls — the existing role and learned data are detected and restored even though `/xreactor` is fully deleted and rebuilt to avoid stale/orphaned files and disk space issues on large roles (MASTER, RT). This applies to **both** the manual installer path and the automatic auto-update reinstall path — earlier this preservation only worked in one of the two paths, which caused nodes to lose their role assignment on every auto-update until it was fixed.
+**Update / reinstall:** Run `installer` again. The installer preserves the complete `/xreactor/config` tree, including role, node identity, learned capacity, routing and pairing data. Backup listing/read/close errors abort before the existing installation is deleted; the recovery backup is verified byte-for-byte and kept until the new installation is committed.
 
-**Auto-Update (built-in, no manual trigger needed):** Every node runs an `auto_update_service` loop alongside its normal logic (`parallel.waitForAny`). First check 30s after boot, then every 120s. If the local `manifest_version` is behind the `beta` branch, the node downloads the current installer via `raw.githubusercontent.com`, re-runs it non-interactively (role preserved), and reboots.
+**Auto-Update (built-in, no manual trigger needed):** Every node runs a managed updater alongside its normal logic. First check is 30s after boot, then every 120s. If the local `manifest_version` is behind, the updater resolves one immutable commit SHA, drives the role through its confirmed safe quiesce state, installs exclusively from that SHA, and reboots. Remote/manual update commands use the same managed path and require local arming/token validation.
 
 Bump the version to trigger a rollout:
 

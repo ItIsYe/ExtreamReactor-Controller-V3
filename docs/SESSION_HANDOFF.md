@@ -1,27 +1,23 @@
 # Session Handoff – XReactor Controller V3
 
-Stand: 2026-07-16  
-Branch: `beta`  
-Geprüfter Code-Stand: `ef37d74419c7e37ab3a099b43e7cf039d8427dca`  
-Release: `beta-v454` / `manifest-v454`
+Stand: 2026-08-10
+
+Branch: `agent/repo-safety-audit-fixes` → `beta`
+
+Geprüfter Runtime-Code-Stand: `0cc0efd575aab082a361a4cf96f600aa6086f46f`
+
+Release: `beta-v521` / `manifest-v521`
 
 ## Einstieg für neue Arbeit
 
-1. [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md) lesen. Dort stehen ausschließlich die aktuellen Restpunkte und Prioritäten.
+1. [`REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md`](REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md) lesen. Dort stehen die Audit-Traceability und die noch offenen Ingame-Abnahmen.
 2. Für RT-Regelzeiten zusätzlich [`CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md`](CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md) verwenden.
 3. Für Installer-/Auto-Update-Arbeiten zusätzlich [`CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md`](CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md) verwenden.
 4. Für historische FUEL-UI-Kennungen die kurze Referenz [`CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md`](CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md) verwenden.
 
 ## Wichtigste offene Punkte
 
-1. Der Installer muss den vollständigen Benutzer-Configbestand updatesicher erhalten.
-2. Event- und Timerpfade der gemeinsamen Runtime müssen getrennt werden.
-3. Der RT-Controlpfad benötigt eine echte deterministische 10-Hz-Cadence.
-4. GitHub Actions muss die funktionalen Lua- und Python-Tests wirklich ausführen.
-5. ENERGY benötigt echte Schedulergruppen-Isolation.
-6. FUEL-/REPROCESSOR-Routing muss ohne blockierende `os.sleep()`-Phasen arbeiten.
-7. MASTER benötigt eine eindeutige Zielauswahl für mehrere FUEL-/WATER-Nodes.
-8. Der LOG-Renderer soll ohne Quelltext-Patching geladen werden.
+Die codeseitigen Repo-Safety-Audit-Findings sind im Draft umgesetzt und automatisiert abgedeckt. Vor dem Merge fehlen ausschließlich die im Abschlussnachweis aufgeführten Hardware-/Ingame-Abnahmen und ein unabhängiges Review.
 
 ## Bereits wesentlich verbessert
 

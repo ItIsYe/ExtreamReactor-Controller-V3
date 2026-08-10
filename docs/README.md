@@ -1,13 +1,13 @@
 # XReactor-Dokumentationsindex
 
-Stand: 2026-07-14  
+Stand: 2026-08-10
 Branch: `beta`  
-Geprüfte Release: `beta-v427` / `manifest-v427`
+Geprüfter PR-Stand: `beta-v521` / `manifest-v521`
 
 ## Zuerst lesen
 
-1. [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md)  
-   Aktueller Gesamt-Audit mit ausschließlich offenen beziehungsweise teilweise umgesetzten Punkten, Prioritäten und Definition of Done.
+1. [`REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md`](REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md)
+   Aktueller Abschlussnachweis für Draft-PR #504: Finding, Fix, Regressionstest und noch offene Ingame-Abnahme.
 
 2. [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md)  
    Kurzer Einstieg für eine neue Entwicklungs- oder Analyse-Sitzung.
@@ -30,6 +30,7 @@ Geprüfte Release: `beta-v427` / `manifest-v427`
 
 Diese Dateien bleiben bestehen, weil ältere Links beziehungsweise die historische Änderungschronik darauf verweisen. Sie enthalten keine eigenständige aktuelle Aufgabenliste mehr:
 
+- [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md) — Gesamt-Audit des historischen Stands `beta-v472`
 - [`PROJECT_DOCUMENTATION.md`](PROJECT_DOCUMENTATION.md)
 - [`CODING_AI_IMPLEMENTATION_TASKS_2026-07-12.md`](CODING_AI_IMPLEMENTATION_TASKS_2026-07-12.md)
 - [`CODING_AI_PERFORMANCE_TASKS_2026-07-12.md`](CODING_AI_PERFORMANCE_TASKS_2026-07-12.md)
@@ -50,7 +51,7 @@ Historische Detailchronik:
 
 ## Dokumentationsregeln
 
-- Aktuelle Aufgaben werden nur im Gesamt-Audit geführt.
+- Aktuelle Audit-Restpunkte werden nur im Abschlussnachweis geführt.
 - Spezialdokumente enthalten ausschließlich dauerhaft relevante technische Vorgaben.
 - Historische Dateinamen dürfen als kurze Weiterleitung bestehen bleiben, wenn externe oder alte interne Links darauf zeigen.
 - Keine parallele vollständige Architekturkopie pflegen.
