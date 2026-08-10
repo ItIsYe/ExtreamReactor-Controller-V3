@@ -103,3 +103,28 @@ Absicherung gegen Halbschreiber — die Verifikation war redundant und CC-inkomp
 Manuell angelegte Dateien gehören `root` statt `amp` und verursachen
 Berechtigungsprobleme bei späteren Schreibzugriffen aus CC:Tweaked.
 Updates immer ausschließlich über den Installer durchführen.
+
+---
+
+## August 2026 — Installer SHA-Auflösung (beta-v527)
+
+### Problem
+Installer scheiterte mit:
+```
+GitHub Branch-SHA konnte nicht aufgelöst werden. Installation aus Sicherheitsgründen abgebrochen.
+```
+
+### Ursache
+Der Installer rief `api.github.com/repos/.../branches/beta` auf um den aktuellen Commit-SHA
+aufzulösen. Diese API hat ein Rate-Limit von 60 Requests/Stunde ohne Auth-Token — bei mehreren
+Computern die gleichzeitig updaten wird das Limit schnell erreicht.
+
+### Fix
+SHA-Auflösung komplett entfernt. Der Installer verwendet jetzt direkt `"beta"` als Ref für
+`raw.githubusercontent.com` — Branch-Namen funktionieren dort genauso wie Commit-SHAs,
+ohne Rate-Limit.
+
+### Installer-Update-Befehl (in CC:Tweaked)
+```
+wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer
+```
