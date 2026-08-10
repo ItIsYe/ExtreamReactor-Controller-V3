@@ -19,7 +19,7 @@ def replace_once(path, old, new):
 
 def regex_once(path, pattern, replacement, flags=0):
     text = read(path)
-    new, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+    new, count = re.subn(pattern, lambda _m: replacement, text, count=1, flags=flags)
     if count != 1:
         raise SystemExit(f'{path}: regex anchor count={count}: {pattern[:120]!r}')
     write(path, new)
