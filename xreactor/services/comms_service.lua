@@ -94,20 +94,15 @@ end
 
 function comms_service:_authorize_command(message)
   local local_role = normalize_role(self.network and self.network.role or self.role or self.config.role)
-  if local_role == normalize_role(constants.roles.MASTER) then
-    return true
-  end
-
-  -- In the project architecture normal COMMAND envelopes are Master -> node.
-  -- Previously every addressed peer could drive RT/FUEL/WATER/... commands;
-  -- RT even refreshed its master-seen timestamp after that weak check.
+  if local_role == normalize_role(constants.roles.MASTER) then return true end
   if normalize_role(message and message.role) ~= normalize_role(constants.roles.MASTER) then
     return false, "command sender is not MASTER"
   end
 
-  local expected = self.config.trusted_master_id
-    or self.config.master_node_id
-    or (type(self.config.comms) == "table" and self.config.comms.trusted_master_id)
+  local expected = self.config.trusted_master_id or self.config.master_node_id
+  if expected == nil and type(self.config.comms) == "table" then
+    expected = self.config.comms.trusted_master_id
+  end
   if expected ~= nil then
     local actual = utils.normalize_node_id(message.src or message.sender_id or message.node_id)
     if actual ~= utils.normalize_node_id(expected) then
@@ -139,12 +134,10 @@ function comms_service:init()
     self:trace_master_rx(message)
     if self.on_status then self.on_status(message) elseif self.on_message then self.on_message(message) end
   end)
-
   self.comms.on(constants.message_types.HEARTBEAT, function(message)
     self:trace_master_rx(message)
     if self.on_heartbeat then self.on_heartbeat(message) elseif self.on_message then self.on_message(message) end
   end)
-
   self.comms.on(constants.message_types.COMMAND, function(message)
     local authorized, reason = self:_authorize_command(message)
     if not authorized then
@@ -155,52 +148,36 @@ function comms_service:init()
           .. " target=" .. tostring(command_target(message) or "?"), "WARN")
       return { ok = false, error = reason, reason_code = "UNAUTHORIZED_COMMAND_SOURCE" }
     end
-
-    -- REMOTE_UPDATE is a shared runtime operation, not role business logic.
-    -- Queue it into the start.lua update handshake so the installer can only
-    -- run after the role has quiesced and exited. This also makes behavior
-    -- consistent across RT/ENERGY/FUEL/WATER/REPROCESSOR/VALVE.
     if command_target(message) == constants.command_targets.REMOTE_UPDATE then
       local remote_update = require("core.remote_update")
       if type(remote_update.queue_command) ~= "function" then
         return { ok = false, error = "safe remote update queue unavailable", reason_code = "UPDATE_QUEUE_UNAVAILABLE" }
       end
-      return remote_update.queue_command({
-        message = message,
-        log_prefix = self.log_prefix,
-        utils = utils,
-      })
+      return remote_update.queue_command({ message = message, log_prefix = self.log_prefix, utils = utils })
     end
-
     if self.on_command then return self.on_command(message) end
     return { ok = false, error = "command handler missing" }
   end)
-
   self.comms.on(constants.message_types.ALERT, function(message)
     self:trace_master_rx(message)
     if self.on_alert then self.on_alert(message) elseif self.on_message then self.on_message(message) end
   end)
-
   self.comms.on(constants.message_types.ERROR, function(message)
     self:trace_master_rx(message)
     if self.on_error then self.on_error(message) elseif self.on_message then self.on_message(message) end
   end)
-
   self.comms.on(constants.message_types.ACK_DELIVERED, function(message)
     self:trace_master_rx(message)
     if self.on_message then self.on_message(message) end
   end)
-
   self.comms.on(constants.message_types.ACK_APPLIED, function(message)
     self:trace_master_rx(message)
     if self.on_message then self.on_message(message) end
   end)
-
   self.comms.on(constants.message_types.HELLO, function(message)
     self:trace_master_rx(message)
     if self.on_message then self.on_message(message) end
   end)
-
   self.comms.on(constants.message_types.REGISTER, function(message)
     self:trace_master_rx(message)
     if self.on_message then self.on_message(message) end
@@ -210,35 +187,27 @@ end
 function comms_service:send_command(target, command, opts)
   local payload = { target = target, command = command }
   return self.comms.send(target, constants.message_types.COMMAND, payload, {
-    priority = 1,
-    require_ack = true,
+    priority = 1, require_ack = true,
     require_applied = opts and (opts.requires_applied or opts.require_applied) or false,
     channel = control_channel(self.config)
   })
 end
 
 function comms_service:publish_status(payload, opts)
-  return self.comms.send(nil, constants.message_types.STATUS, payload, {
-    priority = 2, require_ack = false, channel = status_channel(self.config)
-  })
+  return self.comms.send(nil, constants.message_types.STATUS, payload,
+    { priority = 2, require_ack = false, channel = status_channel(self.config) })
 end
-
 function comms_service:send_heartbeat(state)
-  return self.comms.send(nil, constants.message_types.HEARTBEAT, { state = state }, {
-    priority = 3, require_ack = false, channel = status_channel(self.config)
-  })
+  return self.comms.send(nil, constants.message_types.HEARTBEAT, { state = state },
+    { priority = 3, require_ack = false, channel = status_channel(self.config) })
 end
-
 function comms_service:send_alert(severity, message)
-  return self.comms.send(nil, constants.message_types.ALERT, { severity = severity, message = message }, {
-    priority = 1, require_ack = false, channel = status_channel(self.config)
-  })
+  return self.comms.send(nil, constants.message_types.ALERT, { severity = severity, message = message },
+    { priority = 1, require_ack = false, channel = status_channel(self.config) })
 end
-
 function comms_service:send_hello(capabilities)
-  return self.comms.send(nil, constants.message_types.HELLO, { capabilities = capabilities or {} }, {
-    priority = 2, require_ack = false, channel = control_channel(self.config)
-  })
+  return self.comms.send(nil, constants.message_types.HELLO, { capabilities = capabilities or {} },
+    { priority = 2, require_ack = false, channel = control_channel(self.config) })
 end
 
 function comms_service:handle_event(event)
@@ -249,30 +218,17 @@ function comms_service:handle_event(event)
     self.comms.receive(message)
   end
 end
-
 function comms_service:tick(now)
   if not self.comms then return end
   if utils.flush_remote_logs then utils.flush_remote_logs() end
   self.comms.tick(now)
 end
-
-function comms_service:get_peers()
-  return self.comms.get_peer_state()
-end
-
-function comms_service:get_diagnostics()
-  return self.comms.get_diagnostics()
-end
-
-function comms_service:consume_timeouts()
-  return self.comms.consume_timeouts()
-end
-
+function comms_service:get_peers() return self.comms.get_peer_state() end
+function comms_service:get_diagnostics() return self.comms.get_diagnostics() end
+function comms_service:consume_timeouts() return self.comms.consume_timeouts() end
 function comms_service:is_master_reachable()
   local peers = self:get_peers() or {}
-  for _, data in pairs(peers) do
-    if data.role == constants.roles.MASTER then return not data.down end
-  end
+  for _, data in pairs(peers) do if data.role == constants.roles.MASTER then return not data.down end end
   return false
 end
 
