@@ -1,87 +1,101 @@
 -- nodes/fuel/fuel_status_network.lua
---
--- Feature (2026-07-09): Modularisierungs-Rewrite. Buendelt alles rund um
--- den netzwerkbasierten Reaktor-Fuellstand (siehe Kommentar-Historie in
--- logistics_router.lua: FUEL hat keinen Wired-Modem-Zugriff auf die
--- Reaktoren, nur aufs ME-System) an einer Stelle:
---   1. Der Cache selbst (master_relay + direct_heard, je [reactor_id] = {..}).
---   2. Ingestion von Master-Relay-Daten (via FUEL_STATUS-Kommando, siehe
---      command_handler.lua's on_fuel_status-Callback).
---   3. Der Fallback-Listener-Service, der RT->Master Status-Broadcasts
---      direkt mithoert (falls Master laengere Zeit nicht relayed hat).
---
--- logistics_router.lua konsumiert den Cache weiterhin selbst (liest
--- master_relay/direct_heard direkt, waehlt die juengere Quelle) -- dieses
--- Modul ist nur fuer die BEFUELLUNG des Caches zustaendig, nicht fuer den
--- Lesezugriff beim Beliefern.
+-- Network-backed reactor fuel-level cache for the FUEL node.
 
+local protocol = require("core.protocol")
 local M = {}
 
 function M.new()
   return {
-    master_relay = {},   -- [reactor_id] = { fuel_amount, fuel_capacity, ts }
-    direct_heard = {},   -- [reactor_id] = { fuel_amount, fuel_capacity, ts }
+    master_relay = {},
+    direct_heard = {},
+    -- Legacy local reactor IDs are accepted only while one RT source owns
+    -- them. Once two sources collide, that alias remains blocked for the
+    -- current boot and only node-scoped global IDs are usable.
+    direct_legacy_source = {},
+    direct_collisions = {},
   }
 end
 
--- Wird vom command_handler.lua aufgerufen, wenn ein FUEL_STATUS-Kommando
--- von Master ankommt (siehe master/fuel_relay.lua fuer die Gegenseite).
--- value = { [reactor_id] = { fuel_amount, fuel_capacity, label, source_node, ts, source_age_ms } }
 function M.ingest_master_relay(cache, value)
   if type(value) ~= "table" then return end
   local now = os.epoch("utc")
   for reactor_id, entry in pairs(value) do
     if type(entry) == "table" then
-      -- Fix (2026-07-13): CRITICAL (MASTER-P1.2, siehe docs/CODING_AI_
-      -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Bisher wurde hier IMMER
-      -- die lokale Empfangszeit als ts verwendet -- das schuetzte zwar
-      -- vor Uhrenabweichungen zwischen den Computern, ignorierte aber
-      -- komplett, WIE ALT die zugrunde liegende RT-Messung tatsaechlich
-      -- war (Master hat das bisher selbst falsch gemeldet, siehe
-      -- master/fuel_relay.lua-Fix vom selben Datum). Jetzt: Master sendet
-      -- source_age_ms (eine reine ZEITSPANNE, komplett auf Masters
-      -- eigener Uhr berechnet, kein Abgleich zweier absoluter Uhren
-      -- noetig) -- ts wird daraus lokal verankert ("now - source_age_ms"),
-      -- damit ein laengst ausgefallener RT-Node NICHT mehr beliebig lange
-      -- als "gerade frisch gemessen" erscheint, waehrend der urspruengliche
-      -- Schutz vor Uhrenabweichungen (kein direkter Vergleich von Masters
-      -- absolutem Zeitstempel gegen FUELs eigene Uhr) vollstaendig erhalten
-      -- bleibt.
-      local age_ms = tonumber(entry.source_age_ms) or 0
+      local age_ms = math.max(0, tonumber(entry.source_age_ms) or 0)
       cache.master_relay[reactor_id] = {
         fuel_amount = entry.fuel_amount,
         fuel_capacity = entry.fuel_capacity,
         ts = now - age_ms,
+        source_node = entry.source_node,
+        local_reactor_id = entry.local_reactor_id,
+        global_reactor_id = entry.global_reactor_id,
       }
     end
   end
 end
 
--- Fallback-Pfad: RT->Master Status-Broadcasts direkt mithoeren, falls
--- Master laengere Zeit nicht relayed hat (z.B. Master-Ausfall). Der
--- STATUS-Kanal ist auf jedem Node ohnehin schon geoeffnet (siehe
--- core/network.lua open_modem()) — hier wird er zusaetzlich passiv
--- mitgehoert, ohne selbst etwas zu senden.
+local function store_direct(cache, message, reactor, now)
+  local source = message.src or message.sender_id or message.node_id
+  if type(source) ~= "string" or source == "" then return end
+  local local_id = reactor.local_id or reactor.id
+  if local_id == nil then return end
+  local_id = tostring(local_id)
+  local global_id = reactor.global_id
+  if type(global_id) ~= "string" or global_id == "" then
+    global_id = source .. ":" .. local_id
+  end
+  local entry = {
+    fuel_amount = reactor.fuel_amount,
+    fuel_capacity = reactor.fuel_capacity,
+    ts = now,
+    source_node = source,
+    local_reactor_id = local_id,
+    global_reactor_id = global_id,
+  }
+  cache.direct_heard[global_id] = entry
+
+  if cache.direct_collisions[local_id] then return end
+  local previous_source = cache.direct_legacy_source[local_id]
+  if previous_source == nil or previous_source == source then
+    cache.direct_legacy_source[local_id] = source
+    cache.direct_heard[local_id] = entry
+    return
+  end
+
+  cache.direct_collisions[local_id] = true
+  cache.direct_heard[local_id] = nil
+end
+
 function M.make_overhear_service(cache, constants)
-  return { name = "fuel_status_overhear", wants_events = true, tick = function(_self, dt, event)
-    if not (event and event[1] == "modem_message") then return end
-    local message = event[5]
-    if type(message) ~= "table" then return end
-    if message.type ~= constants.message_types.STATUS then return end
-    if message.role ~= constants.roles.RT_NODE then return end
-    local reactors = message.payload and message.payload.reactors
-    if type(reactors) ~= "table" then return end
-    local now = os.epoch("utc")
-    for _, r in ipairs(reactors) do
-      if type(r) == "table" and r.id and (r.fuel_amount ~= nil or r.fuel_capacity ~= nil) then
-        cache.direct_heard[r.id] = {
-          fuel_amount = r.fuel_amount,
-          fuel_capacity = r.fuel_capacity,
-          ts = now,
-        }
+  return {
+    name = "fuel_status_overhear",
+    wants_events = true,
+    tick = function(_self, dt, event)
+      if not (event and event[1] == "modem_message") then return end
+      local raw = event[5]
+      if type(raw) ~= "table" then return end
+
+      -- This fallback runs outside comms_service, so it must perform the
+      -- same envelope validation explicitly. Previously type/role strings
+      -- alone were enough to inject fuel values into a delivery decision.
+      local message = protocol.sanitize_message(raw)
+      local valid = message and select(1, protocol.validate(message))
+      if valid ~= true then return end
+      if message.type ~= constants.message_types.STATUS then return end
+      if message.role ~= constants.roles.RT_NODE then return end
+      local source = message.src or message.sender_id or message.node_id
+      if type(source) ~= "string" or source == "" then return end
+
+      local reactors = message.payload and message.payload.reactors
+      if type(reactors) ~= "table" then return end
+      local now = os.epoch("utc")
+      for _, r in ipairs(reactors) do
+        if type(r) == "table" and r.id and (r.fuel_amount ~= nil or r.fuel_capacity ~= nil) then
+          store_direct(cache, message, r, now)
+        end
       end
     end
-  end }
+  }
 end
 
 return M
