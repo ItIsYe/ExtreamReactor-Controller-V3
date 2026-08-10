@@ -82,6 +82,7 @@ replace_once(p,
 p='tests/wrapped_peripheral_guard_test.lua'
 replace_once(p,
 '''local monitor_adapter = require('adapters.monitor')
+local ui = require('core.ui')
 local monitor_manager = require('core.monitor_manager')
 ''',
 '''_G.fs = _G.fs or {
@@ -91,6 +92,7 @@ local monitor_manager = require('core.monitor_manager')
   makeDir = function() end,
 }
 local monitor_adapter = require('adapters.monitor')
+local ui = require('core.ui')
 local monitor_manager = require('core.monitor_manager')
 ''')
 
