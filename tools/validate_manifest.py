@@ -56,15 +56,35 @@ def main():
             errors.append(f"MISSING: {full}")
             continue
 
-        if hash_str:
+        if not hash_str:
+            errors.append(f"HASH_MISSING: {path}")
+        else:
             actual = crc32_hex(full)
             if actual != hash_str:
                 errors.append(f"HASH_MISMATCH: {path}  expected={hash_str}  actual={actual}")
 
-        if size_str:
+        if not size_str:
+            errors.append(f"SIZE_MISSING: {path}")
+        else:
             actual_sz = os.path.getsize(full)
             if actual_sz != int(size_str):
                 errors.append(f"SIZE_MISMATCH: {path}  expected={size_str}  actual={actual_sz}")
+
+    # Jede produktive Lua-Datei unter xreactor muss manifestiert sein. Das
+    # Manifest selbst ist die einzige Ausnahme, da es sich nicht selbst stabil
+    # hashen kann.
+    source_files = set()
+    for root, _dirs, files in os.walk("xreactor"):
+        for filename in files:
+            if not filename.endswith(".lua"):
+                continue
+            rel = os.path.relpath(os.path.join(root, filename), "xreactor").replace(os.sep, "/")
+            if rel != "manifest.lua":
+                source_files.add(rel)
+    for path in sorted(source_files - seen):
+        errors.append(f"UNLISTED_SOURCE: {path}")
+    for path in sorted(seen - source_files):
+        errors.append(f"NON_SOURCE_ENTRY: {path}")
 
     # release.lua Versionskonsistenz
     release_path = "xreactor/release.lua"
@@ -72,10 +92,16 @@ def main():
         with open(release_path, encoding="utf-8") as f:
             rel_src = f.read()
         rel_ver = re.search(r'manifest_version\s*=\s*(\d+)', rel_src)
+        rel_count = re.search(r'manifest_file_count\s*=\s*(\d+)', rel_src)
         if manifest_ver and rel_ver and manifest_ver.group(1) != rel_ver.group(1):
             errors.append(
                 f"VERSION_MISMATCH: manifest={manifest_ver.group(1)}"
                 f" release={rel_ver.group(1)}")
+        if not rel_count:
+            errors.append("RELEASE_COUNT_MISSING: manifest_file_count")
+        elif int(rel_count.group(1)) != count:
+            errors.append(
+                f"RELEASE_COUNT_MISMATCH: release={rel_count.group(1)} manifest={count}")
 
     if errors:
         print(f"ERRORS ({len(errors)}):", file=sys.stderr)

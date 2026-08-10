@@ -1,24 +1,31 @@
 -- installer/http.lua
--- Download-Modul: SHA-PIN, Retries, HTML-Check
--- CC:Tweaked kompatibel: http.get(url) ohne timeout-Parameter
+-- Download-Modul: SHA-PIN, Retries, HTML-Check, harter Request-Timeout
 
 local M = {}
 
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
+local GITHUB_COMMITS_ATOM = "https://github.com/ItIsYe/ExtreamReactor-Controller-V3/commits/beta.atom"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
+local DEFAULT_TIMEOUT_S = 20
 
--- SHA auflösen (3 Versuche)
+local function extract_feed_sha(body)
+  if type(body) ~= "string" then return nil end
+  local sha = body:match("Grit::Commit/([0-9a-fA-F]+)")
+    or body:match("/commit/([0-9a-fA-F]+)")
+  if type(sha) == "string" and #sha == 40 and sha:match("^%x+$") then
+    return sha:lower()
+  end
+  return nil
+end
+
+-- SHA ohne rate-limitierte GitHub-API aus dem oeffentlichen Commit-Feed
+-- aufloesen. Der Bootstrap uebergibt den Ref normalerweise bereits; diese
+-- Funktion bleibt fuer Diagnose/Legacy-Aufrufer konsistent erhalten.
 function M.resolve_sha()
-  if not http or type(http.get) ~= "function" then return nil end
+  if not http then return nil end
   for attempt = 1, 3 do
-    local ok, r = pcall(http.get, GITHUB_API)
-    if ok and r then
-      local ok2, body = pcall(r.readAll); pcall(r.close)
-      if ok2 and type(body) == "string" then
-        local sha = body:match('"sha"%s*:%s*"(%x+)"')
-        if sha then return sha end
-      end
-    end
+    local body = M.download(GITHUB_COMMITS_ATOM, { retries = 1 })
+    local sha = extract_feed_sha(body)
+    if sha then return sha end
     if attempt < 3 then os.sleep(3) end
   end
   return nil
@@ -33,22 +40,50 @@ end
 
 -- Einfacher synchroner Download einer URL.
 -- Gibt body oder nil, err zurück.
-local function try_once(url)
-  if not http or type(http.get) ~= "function" then return nil, "no http" end
-  local ok, r = pcall(http.get, url)
-  if not ok or not r then return nil, "http.get failed" end
+local function read_response(r)
   -- Response-Code prüfen wenn verfügbar
   if type(r.getResponseCode) == "function" then
-    local code = r.getResponseCode()
-    if code ~= 200 then pcall(r.close); return nil, "HTTP " .. tostring(code) end
+    local ok_code, code = pcall(r.getResponseCode)
+    if ok_code and tonumber(code) ~= 200 then pcall(r.close); return nil, "HTTP " .. tostring(code) end
   end
   local ok2, body = pcall(r.readAll); pcall(r.close)
   if not ok2 or type(body) ~= "string" then return nil, "read failed" end
   return body
 end
 
+local function try_once(url, timeout_s)
+  if not http then return nil, "no http" end
+  timeout_s = tonumber(timeout_s) or DEFAULT_TIMEOUT_S
+
+  if type(http.request) == "function" and os and type(os.startTimer) == "function"
+      and type(os.pullEvent) == "function" then
+    local call_ok, request_ok, request_err = pcall(http.request, url)
+    if not call_ok or request_ok == false then
+      return nil, tostring(request_err or request_ok or "http.request failed")
+    end
+    local timer_id = os.startTimer(timeout_s)
+    while true do
+      local event, p1, p2, p3 = os.pullEvent()
+      if event == "http_success" and p1 == url then
+        return read_response(p2)
+      elseif event == "http_failure" and p1 == url then
+        if p3 then pcall(p3.close) end
+        return nil, tostring(p2 or "http_failure")
+      elseif event == "timer" and p1 == timer_id then
+        if type(http.cancel) == "function" then pcall(http.cancel, url) end
+        return nil, "timeout after " .. tostring(timeout_s) .. "s"
+      end
+    end
+  end
+
+  if type(http.get) ~= "function" then return nil, "no http.get" end
+  local ok, r = pcall(http.get, url)
+  if not ok or not r then return nil, "http.get failed" end
+  return read_response(r)
+end
+
 -- Download mit Retries und Cache-Busting.
--- opts: { retries=4, delays={2,5,10,20} }
+-- opts: { retries=4, delays={2,5,10,20}, timeout_s=20 }
 function M.download(url, opts)
   opts = opts or {}
   local retries = opts.retries or 4
@@ -59,7 +94,7 @@ function M.download(url, opts)
     local sep = url:find("?", 1, true) and "&" or "?"
     local t   = tostring(os.epoch and os.epoch("utc") or os.time())
     local u   = url .. sep .. "xr_cb=" .. attempt .. "_" .. t
-    local body, err = try_once(u)
+    local body, err = try_once(u, opts.timeout_s)
     if body then
       if M.is_html(body) then
         last_err = "unexpected HTML (CDN error)"

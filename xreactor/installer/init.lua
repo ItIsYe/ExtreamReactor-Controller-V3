@@ -461,7 +461,16 @@ if term and term.setCursorPos and not _G.__xreactor_remote_update then
     p("Optionale Peripherie-Erweiterungen (nur installieren wenn Hardware vorhanden ist):")
     for _, fname in ipairs(feature_names) do
       local already = selected_features[fname] == true
-      io.write("  " .. fname .. " installieren? [j/N" .. (already and ", bereits aktiv" or "") .. "]: ")
+      local prompt = "  " .. fname .. " installieren? [j/N" .. (already and ", bereits aktiv" or "") .. "]: "
+      -- io.write kann je nach CC-/Terminal-Umgebung gepuffert bleiben. Dann
+      -- wartet read() sichtbar scheinbar "haengend" auf eine unsichtbare
+      -- Frage. write() zeichnet direkt auf das aktive Terminal.
+      if type(write) == "function" then
+        local shown = pcall(write, prompt)
+        if not shown then p(prompt) end
+      else
+        p(prompt)
+      end
       local answer = read and read() or ""
       if tostring(answer):lower() == "j" or tostring(answer):lower() == "y" then
         selected_features[fname] = true

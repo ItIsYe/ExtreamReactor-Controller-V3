@@ -8,7 +8,9 @@ import zlib
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPO_ROOT / "xreactor" / "manifest.lua"
 
-ENTRY_RE = re.compile(r'\{\s*path\s*=\s*"(?P<path>[^"]+)",\s*size_bytes\s*=\s*(?P<size>\d+),\s*hash\s*=\s*"(?P<hash>[0-9a-f]+)"(?P<tail>.*)\}\s*,?\s*$')
+ENTRY_RE = re.compile(r'^\{\s*path\s*=\s*"(?P<path>[^"]+)"(?P<tail>.*)\}\s*,?\s*$')
+SIZE_RE = re.compile(r'\bsize_bytes\s*=\s*(\d+)')
+HASH_RE = re.compile(r'\bhash\s*=\s*"([0-9a-fA-F]+)"')
 KV_RE = re.compile(r'^\s*(manifest_version|manifest_id|source_ref|hash_algo)\s*=\s*(.+?),\s*$')
 
 
@@ -18,8 +20,13 @@ def crc32_hex(content: bytes) -> str:
 
 def parse_flags(tail: str):
     flags = {}
-    if "always = true" in tail:
+    if re.search(r'\balways\s*=\s*true\b', tail):
         flags["always"] = True
+    if re.search(r'\boptional\s*=\s*true\b', tail):
+        flags["optional"] = True
+    feature_match = re.search(r'\bfeature\s*=\s*"([^"]+)"', tail)
+    if feature_match:
+        flags["feature"] = feature_match.group(1)
     req_match = re.search(r'required_for\s*=\s*\{([^}]*)\}', tail)
     if req_match:
         values = [v.strip().strip('"') for v in req_match.group(1).split(',') if v.strip()]
@@ -63,11 +70,19 @@ def parse_manifest(path: pathlib.Path):
         if not entry_match:
             continue
 
+        tail = entry_match.group("tail") or ""
+        size_match = SIZE_RE.search(tail)
+        hash_match = HASH_RE.search(tail)
+        if not size_match or not hash_match:
+            raise RuntimeError(
+                f'manifest entry requires size_bytes and hash: {entry_match.group("path")}'
+            )
+
         item = {
             "path": entry_match.group("path"),
-            "size_bytes": int(entry_match.group("size")),
-            "hash": entry_match.group("hash"),
-            "flags": parse_flags(entry_match.group("tail") or ""),
+            "size_bytes": int(size_match.group(1)),
+            "hash": hash_match.group(1).lower(),
+            "flags": parse_flags(tail),
         }
         if section == "base":
             base_files.append(item)
@@ -118,6 +133,11 @@ def format_entry(entry):
     flags = entry.get("flags", {})
     if flags.get("always"):
         extras.append("always = true")
+    if flags.get("optional"):
+        extras.append("optional = true")
+    feature = flags.get("feature")
+    if feature:
+        extras.append(f'feature = "{feature}"')
     req = flags.get("required_for")
     if req:
         joined = ", ".join(f'"{value}"' for value in req)
@@ -133,7 +153,8 @@ def write_manifest(top, base_files, dev_files, roles):
     manifest_id = top.get("manifest_id", '"manifest-v6"')
     source_ref = top.get("source_ref", '"beta"')
     hash_algo = top.get("hash_algo", '"crc32"')
-    lines = ["return {"]
+    manifest_label = str(manifest_id).strip('"')
+    lines = [f"-- xreactor/manifest.lua -- {manifest_label}", "return {"]
     lines.append(f"  manifest_version = {manifest_version},")
     lines.append(f"  manifest_id = {manifest_id},")
     lines.append(f"  source_ref = {source_ref},")

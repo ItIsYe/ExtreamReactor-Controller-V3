@@ -28,8 +28,8 @@ end
 local repo_root = os.getenv("REPO_ROOT") or "."
 local installer_src = read_file(repo_root .. "/installer")
 
-local FAKE_SHA = "abc123def4567890abc123def4567890abc123d"
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
+local FAKE_SHA = "abc123def4567890abc123def4567890abc123de"
+local GITHUB_ATOM = "https://github.com/ItIsYe/ExtreamReactor-Controller-V3/commits/beta.atom"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
 
 local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator" }
@@ -56,12 +56,15 @@ local function run_bootstrap(opts)
   local sleep_calls = 0
 
   _G.__captured_deps = nil
+  _G.__xreactor_forced_ref = opts.forced_ref
   _G.http = {
     get = function(url)
       requested_urls[#requested_urls + 1] = url
-      if url == GITHUB_API then
+      if url == GITHUB_ATOM then
         return {
-          readAll = function() return '{"sha":"' .. FAKE_SHA .. '"}' end,
+          readAll = function()
+            return '<entry><id>tag:github.com,2008:Grit::Commit/' .. FAKE_SHA .. '</id></entry>'
+          end,
           close = function() end,
         }
       end
@@ -98,6 +101,7 @@ local function run_bootstrap(opts)
   if not chunk then error("installer failed to parse: " .. tostring(lerr)) end
   local ok, err = pcall(chunk)
   _G.print = orig_print
+  _G.__xreactor_forced_ref = nil
 
   return ok, err, requested_urls, reboot_calls, sleep_calls
 end
@@ -163,6 +167,29 @@ do
   end
   if not tostring(err):find("init", 1, true) then
     error("expected the error to mention init.lua, got: " .. tostring(err))
+  end
+end
+
+-- 4. Ein manipulierter/ungueltiger Recovery-Ref darf nie auf beta oder den
+-- Commit-Feed zurueckfallen. Recovery muss exakt auf dem journalisierten SHA
+-- bleiben oder kontrolliert abbrechen.
+do
+  local ok, err, urls = run_bootstrap({ forced_ref = "beta" })
+  if ok then error("CRITICAL: bootstrap accepted a non-SHA forced recovery ref") end
+  if not tostring(err):find("Erzwungener Recovery%-Ref") then
+    error("expected a clear forced-ref validation error, got: " .. tostring(err))
+  end
+  if #urls ~= 0 then
+    error("invalid forced recovery ref must fail before any HTTP request")
+  end
+end
+
+-- Der echte Timeoutpfad liegt sowohl im Bootstrap als auch im danach
+-- geladenen HTTP-Modul. Diese Tokens verhindern, dass ein spaeterer Rewrite
+-- versehentlich wieder auf unbegrenzt blockierendes http.get zurueckfaellt.
+for _, token in ipairs({ "HTTP_TIMEOUT_S", "os.startTimer", "http_failure", "http.cancel" }) do
+  if not installer_src:find(token, 1, true) then
+    error("bootstrap hard-timeout contract missing token: " .. token)
   end
 end
 

@@ -45,7 +45,6 @@ def sync_release_metadata(write: bool):
     release = parse_release(RELEASE_PATH)
     manifest = parse_manifest_metadata(MANIFEST_PATH)
     installer = INSTALLER_PATH.read_bytes()
-    commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
     expected_hash = crc32_hex(installer)
     expected_size = len(installer)
 
@@ -57,7 +56,10 @@ def sync_release_metadata(write: bool):
         "manifest_file_count": manifest.get("manifest_file_count", "0"),
         "hash_algo": manifest.get("hash_algo", '"crc32"'),
         "manifest_path": manifest.get("manifest_path", '"xreactor/manifest.lua"'),
-        "commit_sha": f'"{commit_sha}"',
+        # Moving beta installs resolve and persist their concrete SHA locally in
+        # install_meta.lua. release.lua intentionally describes the beta source
+        # strategy and therefore keeps commit_sha="beta".
+        "commit_sha": '"beta"',
     }
 
     mismatches = {}

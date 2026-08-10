@@ -176,6 +176,7 @@ function M.install(files, install_root, http_mod, ref, progress_fn, crc32_fn)
       if not ok2 then return false, verr end
     else
       local success = false
+      if progress_fn then progress_fn(i - 1, total, rel .. " (Download startet...)") end
       for attempt = 1, VERIFY_MAX_ATTEMPTS do
         local body, err = http_mod.download_file(rel, ref)
         if not body then

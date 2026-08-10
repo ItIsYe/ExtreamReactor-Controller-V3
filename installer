@@ -24,7 +24,8 @@
 -- (load(), dieser Bootstrap hier) stammen, ist fuer sie irrelevant.
 
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
-local GITHUB_RAW_RELEASE = GITHUB_RAW .. "beta/xreactor/release.lua"
+local GITHUB_COMMITS_ATOM = "https://github.com/ItIsYe/ExtreamReactor-Controller-V3/commits/beta.atom"
+local HTTP_TIMEOUT_S = 20
 
 local function p(msg) pcall(print, tostring(msg)) end
 
@@ -41,24 +42,63 @@ end
 -- Mechanismus -- ein einzelner transienter http.get()-Fehlschlag liess
 -- die komplette Erstinstallation sofort abbrechen. Jetzt mit 4 Versuchen
 -- und steigender Wartezeit.
+local function read_response(response)
+  if type(response.getResponseCode) == "function" then
+    local ok_code, code = pcall(response.getResponseCode)
+    if ok_code and tonumber(code) ~= 200 then
+      pcall(response.close)
+      return nil, "HTTP " .. tostring(code)
+    end
+  end
+  local ok_body, body = pcall(response.readAll)
+  pcall(response.close)
+  if not ok_body or type(body) ~= "string" or #body == 0 then
+    return nil, "readAll fehlgeschlagen"
+  end
+  if looks_like_html(body) then return nil, "HTML-Antwort (CDN)" end
+  return body
+end
+
+-- http.get() kann auf einzelnen MASTER-Downloads ohne sichtbaren Fortschritt
+-- sehr lange blockieren. Bevorzugt deshalb die Event-API mit einem echten
+-- Timer. Der synchrone Fallback bleibt fuer aeltere CC:Tweaked-Versionen und
+-- fuer die Offline-Tests erhalten.
+local function download_once(url, timeout_s)
+  timeout_s = tonumber(timeout_s) or HTTP_TIMEOUT_S
+  if type(http.request) == "function" and os and type(os.startTimer) == "function"
+      and type(os.pullEvent) == "function" then
+    local call_ok, request_ok, request_err = pcall(http.request, url)
+    if not call_ok or request_ok == false then
+      return nil, tostring(request_err or request_ok or "http.request fehlgeschlagen")
+    end
+    local timer_id = os.startTimer(timeout_s)
+    while true do
+      local event, p1, p2, p3 = os.pullEvent()
+      if event == "http_success" and p1 == url then
+        return read_response(p2)
+      elseif event == "http_failure" and p1 == url then
+        if p3 then pcall(p3.close) end
+        return nil, tostring(p2 or "http_failure")
+      elseif event == "timer" and p1 == timer_id then
+        if type(http.cancel) == "function" then pcall(http.cancel, url) end
+        return nil, "Timeout nach " .. tostring(timeout_s) .. "s"
+      end
+    end
+  end
+
+  local ok, response = pcall(http.get, url)
+  if not ok or not response then
+    return nil, type(response) == "string" and response or "http.get fehlgeschlagen"
+  end
+  return read_response(response)
+end
+
 local function download(url)
   local last_err
   for attempt = 1, 4 do
-    local ok, r = pcall(http.get, url)
-    if ok and r then
-      local ok2, body = pcall(r.readAll); pcall(r.close)
-      if ok2 and type(body) == "string" and #body > 0 then
-        if looks_like_html(body) then
-          last_err = "HTML-Antwort (CDN)"
-        else
-          return body
-        end
-      else
-        last_err = "readAll fehlgeschlagen"
-      end
-    else
-      last_err = type(r) == "string" and r or "http.get fehlgeschlagen"
-    end
+    local body, err = download_once(url, HTTP_TIMEOUT_S)
+    if body then return body end
+    last_err = err
     if attempt < 4 then
       p("  Download-Versuch " .. attempt .. " fehlgeschlagen (" .. tostring(last_err) .. "), erneut in " .. (attempt * 2) .. "s ...")
       os.sleep(attempt * 2)
@@ -67,11 +107,30 @@ local function download(url)
   return nil, last_err
 end
 
--- Fix: direkt "beta" als Ref verwenden -- kein API-Call nötig,
--- kein Rate-Limit. raw.githubusercontent.com akzeptiert Branch-Namen.
+-- Die GitHub-API ist ohne Token stark rate-limitiert. Der oeffentliche
+-- Commit-Feed liefert denselben aktuellen beta-Head ohne API-Limit. Danach
+-- bleibt der GESAMTE Lauf auf genau diesem unveraenderlichen Commit gepinnt.
 local forced_ref = rawget(_G, "__xreactor_forced_ref")
-local sha = (forced_ref ~= nil) and tostring(forced_ref) or "beta"
-p("Ref: " .. tostring(sha))
+local sha
+if forced_ref ~= nil then
+  if type(forced_ref) ~= "string" or #forced_ref ~= 40 or not forced_ref:match("^%x+$") then
+    error("Erzwungener Recovery-Ref ist kein gueltiger 40-stelliger Commit-SHA", 0)
+  end
+  sha = forced_ref:lower()
+  p("Recovery-SHA: " .. sha:sub(1, 12) .. " (aus Installationsjournal)")
+else
+  local feed, feed_err = download(GITHUB_COMMITS_ATOM)
+  if not feed then
+    error("GitHub beta-SHA konnte nicht aus dem Commit-Feed aufgeloest werden: " .. tostring(feed_err), 0)
+  end
+  sha = feed:match("Grit::Commit/([0-9a-fA-F]+)")
+    or feed:match("/commit/([0-9a-fA-F]+)")
+  if type(sha) ~= "string" or #sha ~= 40 or not sha:match("^%x+$") then
+    error("GitHub Commit-Feed enthaelt keinen gueltigen 40-stelligen beta-SHA", 0)
+  end
+  sha = sha:lower()
+  p("SHA: " .. sha:sub(1, 12) .. " (GitHub Commit-Feed)")
+end
 
 -- Der gesamte Lauf ist an exakt diesen Commit gebunden.
 local ref = sha
@@ -84,6 +143,7 @@ local base = GITHUB_RAW..ref.."/xreactor/"
 local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator" }
 local module_src = {}
 for _, name in ipairs(MODULE_NAMES) do
+  p("Lade Installermodul: " .. name .. ".lua")
   local url = base.."installer/"..name..".lua"
   local body, err = download(url)
   if not body then
@@ -92,6 +152,7 @@ for _, name in ipairs(MODULE_NAMES) do
   module_src[name] = body
 end
 
+p("Lade Installermodul: init.lua")
 local init_src, init_dl_err = download(base.."installer/init.lua")
 if not init_src then
   error("installer/init.lua konnte nicht heruntergeladen werden: "..tostring(init_dl_err), 0)
