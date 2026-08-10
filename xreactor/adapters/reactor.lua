@@ -23,10 +23,7 @@ end
 local function read_number(name, method, log_prefix)
   local value = safe_call(name, method, log_prefix)
   if type(value) == "number" then return value end
-  if type(value) == "string" then
-    local parsed = tonumber(value)
-    if parsed then return parsed end
-  end
+  if type(value) == "string" then local parsed = tonumber(value); if parsed then return parsed end end
   if value ~= nil then
     log_once(log_prefix, tostring(name) .. ":" .. tostring(method) .. ":type",
       "Reactor metric type mismatch peripheral=" .. tostring(name) .. " method=" .. tostring(method)
@@ -35,9 +32,7 @@ local function read_number(name, method, log_prefix)
   return "n/a"
 end
 
-local function has_method(set, key)
-  return set and set[key] == true
-end
+local function has_method(set, key) return set and set[key] == true end
 
 local function safe_wrapped_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then return false, "missing method" end
@@ -119,8 +114,7 @@ local function count_rods(name, method_set)
   if has_method(method_set, "getControlRodsLevels") then
     local levels = utils.safe_peripheral_call(name, "getControlRodsLevels")
     if type(levels) == "table" then
-      local count = 0
-      for _ in pairs(levels) do count = count + 1 end
+      local count = 0; for _ in pairs(levels) do count = count + 1 end
       if count > 0 then return count end
     end
   end
@@ -131,8 +125,7 @@ local function count_rods(name, method_set)
   if has_method(method_set, "getControlRods") then
     local rods = utils.safe_peripheral_call(name, "getControlRods")
     if type(rods) == "table" then
-      local count = 0
-      for _ in pairs(rods) do count = count + 1 end
+      local count = 0; for _ in pairs(rods) do count = count + 1 end
       if count > 0 then return count end
     end
   end
@@ -146,7 +139,6 @@ function reactor.inspect(name, log_prefix)
   local active = read_active(name, method_set, log_prefix)
   local temp = read_first_number(name, method_set,
     { "getFuelTemperature", "getTemperature", "getCasingTemperature" }, log_prefix)
-
   local energy, energy_output_from_stats, fuel, waste
   if has_method(method_set, "getEnergyStats") then
     local stats = safe_call(name, "getEnergyStats", log_prefix)
@@ -155,9 +147,7 @@ function reactor.inspect(name, log_prefix)
       energy_output_from_stats = type(stats.energyProducedLastTick) == "number" and stats.energyProducedLastTick or nil
     end
   end
-  if energy == nil then
-    energy = read_first_number(name, method_set, { "getEnergyStored", "getEnergyProducedLastTick" }, log_prefix)
-  end
+  if energy == nil then energy = read_first_number(name, method_set, { "getEnergyStored", "getEnergyProducedLastTick" }, log_prefix) end
   local fuel_max
   if has_method(method_set, "getFuelStats") then
     local fstats = safe_call(name, "getFuelStats", log_prefix)
@@ -181,165 +171,48 @@ function reactor.inspect(name, log_prefix)
       or has_method(method_set, "getHotFluidCapacity") and "getHotFluidCapacity"
       or has_method(method_set, "getSteamCapacity") and "getSteamCapacity", log_prefix)
   local steam_fill_ratio = nil
-  if type(steam) == "number" and type(steam_max) == "number" and steam_max > 0 then
-    steam_fill_ratio = steam / steam_max
-  end
-  local coolant_amount = read_number(name,
-    has_method(method_set, "getCoolantAmount") and "getCoolantAmount" or nil, log_prefix)
-  local coolant_amount_max = read_number(name,
-    has_method(method_set, "getCoolantAmountMax") and "getCoolantAmountMax" or nil, log_prefix)
+  if type(steam) == "number" and type(steam_max) == "number" and steam_max > 0 then steam_fill_ratio = steam / steam_max end
+  local coolant_amount = read_number(name, has_method(method_set, "getCoolantAmount") and "getCoolantAmount" or nil, log_prefix)
+  local coolant_amount_max = read_number(name, has_method(method_set, "getCoolantAmountMax") and "getCoolantAmountMax" or nil, log_prefix)
   local coolant_filled_percentage = read_number(name,
     has_method(method_set, "getCoolantFilledPercentage") and "getCoolantFilledPercentage" or nil, log_prefix)
-  local coolant_ratio, coolant_ratio_source = fluid.resolve_ratio(
-    coolant_amount, coolant_amount_max, coolant_filled_percentage)
+  local coolant_ratio, coolant_ratio_source = fluid.resolve_ratio(coolant_amount, coolant_amount_max, coolant_filled_percentage)
   return {
     name = name, type = type_name, adapter = "reactor",
     features = {
       active = has_method(method_set, "getStatus") or has_method(method_set, "getActive"),
       temperature = has_method(method_set, "getFuelTemperature") or has_method(method_set, "getTemperature"),
-      fuel = has_method(method_set, "getFuelAmount"),
-      waste = has_method(method_set, "getWasteAmount"),
+      fuel = has_method(method_set, "getFuelAmount"), waste = has_method(method_set, "getWasteAmount"),
       energy_stored = has_method(method_set, "getEnergyStored"),
       energy_output = has_method(method_set, "getEnergyProducedLastTick"),
       actively_cooled = has_method(method_set, "isActivelyCooled"),
-      rods = has_method(method_set, "getControlRodLevel")
-        or has_method(method_set, "getControlRodLevels")
-        or has_method(method_set, "getControlRodsLevels")
-        or has_method(method_set, "getControlRods"),
+      rods = has_method(method_set, "getControlRodLevel") or has_method(method_set, "getControlRodLevels")
+        or has_method(method_set, "getControlRodsLevels") or has_method(method_set, "getControlRods"),
       steam = has_method(method_set, "getHotFluidAmount") or has_method(method_set, "getSteamAmount") or has_method(method_set, "getSteam"),
-      steam_capacity = has_method(method_set, "getHotFluidAmountMax")
-        or has_method(method_set, "getSteamAmountMax")
-        or has_method(method_set, "getHotFluidCapacity")
-        or has_method(method_set, "getSteamCapacity"),
-      coolant = has_method(method_set, "getCoolantAmount")
-        or has_method(method_set, "getCoolantAmountMax")
+      steam_capacity = has_method(method_set, "getHotFluidAmountMax") or has_method(method_set, "getSteamAmountMax")
+        or has_method(method_set, "getHotFluidCapacity") or has_method(method_set, "getSteamCapacity"),
+      coolant = has_method(method_set, "getCoolantAmount") or has_method(method_set, "getCoolantAmountMax")
         or has_method(method_set, "getCoolantFilledPercentage")
     },
     schema = {
       active = "boolean", temperature = "number", fuel = "number", fuel_max = "number",
-      waste = "number", energy_stored = "number", energy_output = "number",
-      is_actively_cooled = "boolean", control_rod_level = "number", steam = "number",
-      steam_amount_max = "number", steam_fill_ratio = "number", coolant_amount = "number",
-      coolant_amount_max = "number", coolant_filled_percentage = "number", coolant_ratio = "number"
+      waste = "number", energy_stored = "number", energy_output = "number", is_actively_cooled = "boolean",
+      control_rod_level = "number", steam = "number", steam_amount_max = "number", steam_fill_ratio = "number",
+      coolant_amount = "number", coolant_amount_max = "number", coolant_filled_percentage = "number", coolant_ratio = "number"
     },
     active = active, temperature = temp, fuel = fuel, fuel_max = fuel_max, waste = waste,
     energy_stored = energy,
     energy_output = energy_output_from_stats or read_number(name, "getEnergyProducedLastTick", log_prefix),
-    is_actively_cooled = has_method(method_set, "isActivelyCooled")
-      and (safe_call(name, "isActivelyCooled", log_prefix) == true) or false,
-    control_rod_level = rods, steam = steam, steam_amount_max = steam_max,
-    steam_fill_ratio = steam_fill_ratio, coolant_amount = coolant_amount,
-    coolant_amount_max = coolant_amount_max,
-    coolant_filled_percentage = coolant_filled_percentage,
-    coolant_ratio = coolant_ratio, coolant_ratio_source = coolant_ratio_source,
-    methods = methods
+    is_actively_cooled = has_method(method_set, "isActivelyCooled") and (safe_call(name, "isActivelyCooled", log_prefix) == true) or false,
+    control_rod_level = rods, steam = steam, steam_amount_max = steam_max, steam_fill_ratio = steam_fill_ratio,
+    coolant_amount = coolant_amount, coolant_amount_max = coolant_amount_max,
+    coolant_filled_percentage = coolant_filled_percentage, coolant_ratio = coolant_ratio,
+    coolant_ratio_source = coolant_ratio_source, methods = methods
   }
 end
 
-function reactor.apply_rod_level(name, level, log_prefix)
-  if not name or level == nil then return nil, "missing data" end
-  local normalized_level = normalize_write_level(level)
-  if normalized_level == nil then
-    local detail = "invalid level " .. tostring(level)
-    log_rod_error(log_prefix, name, "setControlRodLevel", detail)
-    return nil, detail
-  end
-  local methods, method_set = build_method_set(name)
-
-  if has_method(method_set, "setAllControlRodLevels") then
-    local ok, err = utils.safe_peripheral_call(name, "setAllControlRodLevels", normalized_level)
-    if err or ok == false then
-      local detail = err or "returned false"
-      log_rod_error(log_prefix, name, "setAllControlRodLevels", detail)
-      return nil, detail
-    end
-    log_rod_path(log_prefix, name, "setAllControlRodLevels", "level=" .. tostring(normalized_level))
-    return true
-  end
-
-  if has_method(method_set, "setControlRodsLevels") then
-    local rod_count = count_rods(name, method_set)
-    if not rod_count or rod_count < 1 then
-      log_rod_error(log_prefix, name, "setControlRodsLevels", "unable to resolve rod count")
-      return nil, "unable to resolve rod count"
-    end
-    local levels = {}
-    for index = 1, rod_count do levels[index] = normalized_level end
-    local ok, err = utils.safe_peripheral_call(name, "setControlRodsLevels", levels)
-    if err or ok == false then
-      local detail = err or "returned false"
-      log_rod_error(log_prefix, name, "setControlRodsLevels", detail)
-      return nil, detail
-    end
-    log_rod_path(log_prefix, name, "setControlRodsLevels",
-      "count=" .. tostring(rod_count) .. " level=" .. tostring(normalized_level))
-    return true
-  end
-
-  if has_method(method_set, "setControlRodLevel") then
-    local rod_count = count_rods(name, method_set)
-    if not rod_count or rod_count < 1 then
-      -- The singular indexed setter cannot prove a complete multi-rod write
-      -- without a count source. Keep normal control conservative instead of
-      -- turning one successful index into a whole-reactor success.
-      local detail = "unable to resolve rod count for indexed setter"
-      log_rod_error(log_prefix, name, "setControlRodLevel", detail)
-      return nil, detail
-    end
-    local changed, last_err = 0, nil
-    for index = 0, rod_count - 1 do
-      local ok, err = utils.safe_peripheral_call(name, "setControlRodLevel", index, normalized_level)
-      if err then last_err = err
-      elseif ok == false then last_err = "returned false"
-      else changed = changed + 1 end
-    end
-    if changed == rod_count then
-      log_rod_path(log_prefix, name, "setControlRodLevel",
-        "count=" .. tostring(changed) .. " level=" .. tostring(normalized_level))
-      return true
-    end
-    local detail = string.format("partial rod write %d/%d: %s", changed, rod_count, tostring(last_err or "unknown"))
-    log_rod_error(log_prefix, name, "setControlRodLevel", detail)
-    return nil, detail
-  end
-
-  if has_method(method_set, "getControlRods") then
-    local rods, rods_err = utils.safe_peripheral_call(name, "getControlRods")
-    if type(rods) ~= "table" then
-      local detail = rods_err or ("unexpected value " .. summarize_value(rods))
-      log_rod_error(log_prefix, name, "getControlRods", detail)
-      return nil, detail
-    end
-    local total, writable, changed, last_err = 0, 0, 0, nil
-    for _, rod in pairs(rods) do
-      total = total + 1
-      if rod and type(rod.setLevel) == "function" then
-        writable = writable + 1
-        local ok_set, set_err = safe_wrapped_call(rod, "setLevel", normalized_level)
-        if ok_set then changed = changed + 1 else last_err = set_err end
-      end
-    end
-    if total > 0 and writable == total and changed == total then
-      log_rod_path(log_prefix, name, "getControlRods.setLevel",
-        "changed=" .. tostring(changed) .. " level=" .. tostring(normalized_level))
-      return true
-    end
-    local detail = string.format("partial rod write changed=%d writable=%d total=%d err=%s",
-      changed, writable, total, tostring(last_err or "none"))
-    log_rod_error(log_prefix, name, "getControlRods", detail)
-    return nil, detail
-  end
-
-  local detail = "unsupported methods"
-  log_rod_error(log_prefix, name,
-    "setControlRodsLevels|setAllControlRodLevels|getControlRods|setControlRodLevel",
-    detail .. " available=" .. tostring(#methods))
-  return nil, detail
-end
-
--- Returns an aggregate plus completeness data. Safety callers must use this
--- instead of the average-only API: a 99.5 average can hide one substantially
--- open rod in a large reactor.
+-- Returns aggregate and completeness data. Safety callers must use minimum +
+-- complete, not only average insertion.
 function reactor.read_control_rods_detail(name, log_prefix)
   if not name then return nil, "missing peripheral" end
   local _, method_set = build_method_set(name)
@@ -349,18 +222,14 @@ function reactor.read_control_rods_detail(name, log_prefix)
     for _, value in pairs(levels or {}) do
       local level = normalize_rod_level(value)
       if type(level) == "number" then
-        sum = sum + level
-        count = count + 1
+        sum = sum + level; count = count + 1
         min_level = min_level == nil and level or math.min(min_level, level)
         max_level = max_level == nil and level or math.max(max_level, level)
       end
     end
     if count < 1 then return nil end
     return {
-      average = sum / count,
-      min = min_level,
-      max = max_level,
-      count = count,
+      average = sum / count, min = min_level, max = max_level, count = count,
       expected_count = expected_count,
       complete = type(expected_count) == "number" and expected_count > 0 and count == expected_count,
       source = source,
@@ -370,14 +239,12 @@ function reactor.read_control_rods_detail(name, log_prefix)
   if has_method(method_set, "getControlRodsLevels") then
     local levels, err = utils.safe_peripheral_call(name, "getControlRodsLevels")
     if type(levels) == "table" then
-      local expected = 0
-      for _ in pairs(levels) do expected = expected + 1 end
+      local expected = 0; for _ in pairs(levels) do expected = expected + 1 end
       local detail = summarize(levels, expected, "getControlRodsLevels")
       if detail then return detail end
     end
     log_rod_error(log_prefix, name, "getControlRodsLevels", err or ("unexpected value " .. summarize_value(levels)))
   end
-
   if has_method(method_set, "getControlRodLevels") then
     local levels, err = utils.safe_peripheral_call(name, "getControlRodLevels")
     if type(levels) == "table" and #levels > 0 then
@@ -386,7 +253,6 @@ function reactor.read_control_rods_detail(name, log_prefix)
     end
     log_rod_error(log_prefix, name, "getControlRodLevels", err or ("unexpected value " .. summarize_value(levels)))
   end
-
   if has_method(method_set, "getControlRods") then
     local rods, err = utils.safe_peripheral_call(name, "getControlRods")
     if type(rods) == "table" then
@@ -402,27 +268,103 @@ function reactor.read_control_rods_detail(name, log_prefix)
       end
       local detail = summarize(levels, total, "getControlRods")
       if detail then return detail end
-      log_rod_error(log_prefix, name, "getControlRods", "empty or unreadable rods")
       return nil, "empty or unreadable rods"
     end
-    log_rod_error(log_prefix, name, "getControlRods", err or ("unexpected value " .. summarize_value(rods)))
     return nil, err or "unexpected getControlRods result"
   end
-
-  -- A single indexed read cannot prove how many rods exist. It remains
-  -- useful for normal regulation but is deliberately marked incomplete.
   if has_method(method_set, "getControlRodLevel") then
     local level, err = utils.safe_peripheral_call(name, "getControlRodLevel", 0)
     if type(level) == "number" then
       return { average = level, min = level, max = level, count = 1,
         expected_count = nil, complete = false, source = "getControlRodLevel" }
     end
-    log_rod_error(log_prefix, name, "getControlRodLevel", err or ("unexpected value " .. summarize_value(level)))
+    return nil, err or "unreadable control rod"
+  end
+  return nil, "unsupported methods"
+end
+
+local function confirm_safe_full_insertion(name, normalized_level, log_prefix)
+  if normalized_level < 100 then return true end
+  local detail, err = reactor.read_control_rods_detail(name, log_prefix)
+  if not detail then return nil, "safe readback failed: " .. tostring(err) end
+  if detail.complete ~= true then
+    return nil, "safe readback incomplete count=" .. tostring(detail.count)
+      .. " expected=" .. tostring(detail.expected_count)
+  end
+  if type(detail.min) ~= "number" or detail.min < 99.5 then
+    return nil, "safe readback minimum rod=" .. tostring(detail.min)
+  end
+  return true
+end
+
+function reactor.apply_rod_level(name, level, log_prefix)
+  if not name or level == nil then return nil, "missing data" end
+  local normalized_level = normalize_write_level(level)
+  if normalized_level == nil then return nil, "invalid level " .. tostring(level) end
+  local methods, method_set = build_method_set(name)
+
+  local function confirmed_success(method, detail)
+    local safe, safe_err = confirm_safe_full_insertion(name, normalized_level, log_prefix)
+    if safe ~= true then
+      log_rod_error(log_prefix, name, method, safe_err)
+      return nil, safe_err
+    end
+    log_rod_path(log_prefix, name, method, detail)
+    return true
   end
 
-  log_rod_error(log_prefix, name,
-    "getControlRodLevel|getControlRodLevels|getControlRodsLevels|getControlRods", "unsupported methods")
-  return nil, "unsupported methods"
+  if has_method(method_set, "setAllControlRodLevels") then
+    local ok, err = utils.safe_peripheral_call(name, "setAllControlRodLevels", normalized_level)
+    if err or ok == false then return nil, err or "returned false" end
+    return confirmed_success("setAllControlRodLevels", "level=" .. tostring(normalized_level))
+  end
+
+  if has_method(method_set, "setControlRodsLevels") then
+    local rod_count = count_rods(name, method_set)
+    if not rod_count or rod_count < 1 then return nil, "unable to resolve rod count" end
+    local levels = {}; for index = 1, rod_count do levels[index] = normalized_level end
+    local ok, err = utils.safe_peripheral_call(name, "setControlRodsLevels", levels)
+    if err or ok == false then return nil, err or "returned false" end
+    return confirmed_success("setControlRodsLevels",
+      "count=" .. tostring(rod_count) .. " level=" .. tostring(normalized_level))
+  end
+
+  if has_method(method_set, "setControlRodLevel") then
+    local rod_count = count_rods(name, method_set)
+    if not rod_count or rod_count < 1 then return nil, "unable to resolve rod count for indexed setter" end
+    local changed, last_err = 0, nil
+    for index = 0, rod_count - 1 do
+      local ok, err = utils.safe_peripheral_call(name, "setControlRodLevel", index, normalized_level)
+      if err then last_err = err elseif ok == false then last_err = "returned false" else changed = changed + 1 end
+    end
+    if changed ~= rod_count then
+      return nil, string.format("partial rod write %d/%d: %s", changed, rod_count, tostring(last_err or "unknown"))
+    end
+    return confirmed_success("setControlRodLevel",
+      "count=" .. tostring(changed) .. " level=" .. tostring(normalized_level))
+  end
+
+  if has_method(method_set, "getControlRods") then
+    local rods, rods_err = utils.safe_peripheral_call(name, "getControlRods")
+    if type(rods) ~= "table" then return nil, rods_err or "unexpected rods result" end
+    local total, writable, changed, last_err = 0, 0, 0, nil
+    for _, rod in pairs(rods) do
+      total = total + 1
+      if rod and type(rod.setLevel) == "function" then
+        writable = writable + 1
+        local ok_set, set_err = safe_wrapped_call(rod, "setLevel", normalized_level)
+        if ok_set then changed = changed + 1 else last_err = set_err end
+      end
+    end
+    if total < 1 or writable ~= total or changed ~= total then
+      return nil, string.format("partial rod write changed=%d writable=%d total=%d err=%s",
+        changed, writable, total, tostring(last_err or "none"))
+    end
+    return confirmed_success("getControlRods.setLevel",
+      "changed=" .. tostring(changed) .. " level=" .. tostring(normalized_level))
+  end
+
+  return nil, "unsupported methods (available=" .. tostring(#methods) .. ")"
 end
 
 function reactor.read_control_rods(name, log_prefix)
