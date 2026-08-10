@@ -1,0 +1,50 @@
+name: temporary excluded-test audit
+
+on:
+  push:
+    branches:
+      - agent/repo-safety-audit-fixes
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/repo-safety-audit-fixes
+      - name: Install Lua
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.2
+      - name: Run every excluded Lua test individually
+        shell: bash
+        run: |
+          set +e
+          root="$PWD"
+          pass=0; fail=0
+          while IFS= read -r raw; do
+            name="${raw%%#*}"; name="$(echo "$name" | xargs)"
+            [ -z "$name" ] && continue
+            echo "===== LUA $name ====="
+            REPO_ROOT="$root" lua5.2 -e "dofile('tests/cc_env_shim.lua')" "tests/$name" > /tmp/excluded.out 2>&1
+            rc=$?
+            if [ $rc -eq 0 ]; then echo "RESULT: PASS"; pass=$((pass+1)); else echo "RESULT: FAIL rc=$rc"; sed 's/^/  /' /tmp/excluded.out; fail=$((fail+1)); fi
+          done < tests/known_failing_lua_tests.txt
+          echo "EXCLUDED LUA SUMMARY pass=$pass fail=$fail"
+          exit 0
+      - name: Run every excluded Python test individually
+        shell: bash
+        run: |
+          set +e
+          pass=0; fail=0
+          while IFS= read -r raw; do
+            name="${raw%%#*}"; name="$(echo "$name" | xargs)"
+            [ -z "$name" ] && continue
+            echo "===== PY $name ====="
+            python3 "tests/$name" > /tmp/excluded-py.out 2>&1
+            rc=$?
+            if [ $rc -eq 0 ]; then echo "RESULT: PASS"; pass=$((pass+1)); else echo "RESULT: FAIL rc=$rc"; sed 's/^/  /' /tmp/excluded-py.out; fail=$((fail+1)); fi
+          done < tests/known_failing_python_tests.txt
+          echo "EXCLUDED PY SUMMARY pass=$pass fail=$fail"
+          exit 0
