@@ -67,40 +67,11 @@ local function download(url)
   return nil, last_err
 end
 
--- SHA aufloesen. Ohne unveraenderlichen Commit-Ref wird NICHT auf den
--- beweglichen beta-Branch zurueckgefallen: sonst koennen Installermodule
--- und Nutzdateien innerhalb desselben Laufs aus verschiedenen Commits stammen.
+-- Fix: direkt "beta" als Ref verwenden -- kein API-Call nötig,
+-- kein Rate-Limit. raw.githubusercontent.com akzeptiert Branch-Namen.
 local forced_ref = rawget(_G, "__xreactor_forced_ref")
-local sha = nil
-if forced_ref ~= nil then
-  if type(forced_ref) ~= "string" or #forced_ref ~= 40 or not forced_ref:match("^%x+$") then
-    error("Erzwungener Recovery-Ref ist kein gueltiger 40-stelliger Commit-SHA", 0)
-  end
-  sha = forced_ref
-  p("Recovery-SHA: " .. sha:sub(1, 12) .. " (aus Installationsjournal)")
-else
-  -- Fix: SHA aus release.lua lesen statt GitHub API (Rate-Limit 60/h ohne Token)
-  for attempt = 1, 4 do
-    local ok_sha, r_sha = pcall(http.get, GITHUB_RAW_RELEASE)
-    if ok_sha and r_sha then
-      local ok2, body = pcall(r_sha.readAll); pcall(r_sha.close)
-      if ok2 and type(body) == "string" and #body > 0 then
-        local commit_sha = body:match('commit_sha%s*=%s*"(%x+)"')
-        if commit_sha and #commit_sha == 40 then sha = commit_sha; break end
-        local source_ref = body:match('source_ref%s*=%s*"([^"]+)"')
-        if source_ref then sha = source_ref; break end
-      end
-    end
-    if attempt < 4 then
-      p("  Branch-SHA nicht aufloesbar, erneut in " .. (attempt * 2) .. "s ...")
-      os.sleep(attempt * 2)
-    end
-  end
-  if not sha then
-    error("GitHub Branch-SHA konnte nicht aufgeloest werden. Installation aus Sicherheitsgruenden abgebrochen; bitte spaeter erneut versuchen.", 0)
-  end
-  p("SHA: " .. tostring(sha):sub(1, 12))
-end
+local sha = (forced_ref ~= nil) and tostring(forced_ref) or "beta"
+p("Ref: " .. tostring(sha))
 
 -- Der gesamte Lauf ist an exakt diesen Commit gebunden.
 local ref = sha
