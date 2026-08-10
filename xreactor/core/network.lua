@@ -161,6 +161,9 @@ local function discover_modems()
           wireless = wireless,
           wrapped = wrapped
         }
+        for _, candidate in ipairs(discovered.modem_like) do
+          if candidate.name == name then candidate.wireless = wireless end
+        end
         discovered.all[#discovered.all + 1] = entry
         if wireless == true then
           discovered.wireless[#discovered.wireless + 1] = entry

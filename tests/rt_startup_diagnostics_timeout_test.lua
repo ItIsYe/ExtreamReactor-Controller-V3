@@ -32,6 +32,8 @@ local function make_ctx(snapshot)
     active_startup = 'module-1',
     startup_queue = { 'module-1', 'module-2' }
   }
+  ctx.set_active_startup = function(value) ctx.active_startup = value end
+  ctx.set_startup_queue = function(value) ctx.startup_queue = value end
   return ctx, transitions, published
 end
 

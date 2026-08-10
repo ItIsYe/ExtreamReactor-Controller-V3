@@ -1,7 +1,7 @@
--- xreactor/manifest.lua -- manifest-v517
+-- xreactor/manifest.lua -- manifest-v518
 return {
-  manifest_version = 517,
-  manifest_id = "manifest-v517",
+  manifest_version = 518,
+  manifest_id = "manifest-v518",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
   { path = "installer/init.lua", size_bytes = 35757, hash = "207598f1", always = true  },
   { path = "installer/journal.lua", size_bytes = 13209, hash = "636019f4", always = true  },
   { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true   },
-  { path = "release.lua" , always = true, size_bytes = 345, hash = "d19839bf" },
+  { path = "release.lua" , always = true, size_bytes = 345, hash = "7f1f48d5" },
   { path = "start.lua", size_bytes = 18876, hash = "483a917b", always = true  },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true  },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true  },
@@ -26,9 +26,9 @@ return {
   { path = "core/update_handshake.lua", size_bytes = 3464, hash = "015539af", always = true  },
   { path = "core/comms.lua", size_bytes = 26744, hash = "5e86a232"  },
   { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f"  },
-  { path = "core/logger.lua", size_bytes = 32590, hash = "088f5e4b"  },
+  { path = "core/logger.lua", size_bytes = 32101, hash = "406a0914"  },
   { path = "core/monitor_manager.lua", size_bytes = 10463, hash = "9a28afa3"  },
-  { path = "core/network.lua", size_bytes = 15309, hash = "7504d3dd"  },
+  { path = "core/network.lua", size_bytes = 15457, hash = "732d98cc"  },
   { path = "core/non_rt_config.lua", size_bytes = 4183, hash = "6f5bf45f"  },
   { path = "core/non_rt_payload.lua", size_bytes = 558, hash = "b9c0175d"  },
   { path = "core/protocol.lua", size_bytes = 6423, hash = "6c324af5"  },
@@ -171,7 +171,7 @@ return {
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
     { path = "nodes/rt/main.lua", size_bytes = 61985, hash = "d2e96658", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27809, hash = "1b235e40", required_for={"RT"} },
-    { path = "nodes/rt/monitor_ui.lua", size_bytes = 16319, hash = "92da8da4", required_for={"RT"} },
+    { path = "nodes/rt/monitor_ui.lua", size_bytes = 15609, hash = "1762eae7", required_for={"RT"} },
     { path = "nodes/rt/mockup_pages.lua", size_bytes = 17793, hash = "f0390938", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"} },

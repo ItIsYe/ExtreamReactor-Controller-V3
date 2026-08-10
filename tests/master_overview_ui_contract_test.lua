@@ -9,13 +9,14 @@ package.loaded['core.ui'] = {
   progress = function() end,
   getSize = function() return 80, 32 end,
 }
+setmetatable(package.loaded['core.ui'], { __index = function() return function() end end })
 package.loaded['shared.colors'] = { get = function() return 1 end }
 package.loaded['core.utils'] = { safe_serialize = function() return tostring(math.random()) end }
 
 local overview = require('master.ui.overview')
 overview.render({}, { profile_list={'BASELOAD'}, nodes={}, alert_rows={}, energy_overview={percent=50,status='OK'} })
 
-local required = { 'Systemstatus', 'Globale Steuerung', 'Aktive Meldungen', 'KPI', 'Node-Status' }
+local required = { 'OVERVIEW', 'Systemlage', 'Steuerung', 'Meldungen', 'Kennzahlen', 'Top-Nodes' }
 for _, section in ipairs(required) do
   local seen = false
   for _, title in ipairs(calls.panels) do if title == section then seen = true break end end
