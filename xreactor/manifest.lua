@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v521
 return {
-  manifest_version = 524,
-  manifest_id = "manifest-v524",
+  manifest_version = 525,
+  manifest_id = "manifest-v525",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,7 +16,7 @@ return {
     { path = "installer/init.lua", size_bytes = 35757, hash = "207598f1", always = true },
     { path = "installer/journal.lua", always = true  },
     { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-    { path = "release.lua", always = true, size_bytes = 345, hash = "bcc18b13" },
+    { path = "release.lua", always = true, size_bytes = 381, hash = "7953fb63" },
     { path = "start.lua", size_bytes = 18876, hash = "483a917b", always = true },
     { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
     { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
