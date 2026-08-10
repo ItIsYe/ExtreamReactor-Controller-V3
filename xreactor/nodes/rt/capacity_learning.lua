@@ -65,9 +65,21 @@ local function measure(turbines)
   return math.floor((at_target_output / at_target) * total), at_target, total
 end
 
+local function topology_signature(turbines)
+  local ids = {}
+  for index, turbine in ipairs(type(turbines) == "table" and turbines or {}) do
+    ids[#ids + 1] = tostring(turbine.id or turbine.name or ("#" .. tostring(index)))
+  end
+  table.sort(ids)
+  return table.concat(ids, "|")
+end
+
 -- Leerer Initialzustand.
 function M.new_state()
-  return { ready = false, max_output = 0, at_target = 0, total_turbines = 0, reason = "INIT" }
+  return {
+    ready = false, max_output = 0, at_target = 0, total_turbines = 0, reason = "INIT",
+    topology_signature = nil, topology_generation = 0, topology_changed_at = nil,
+  }
 end
 
 -- Haupt-Update — wird bei jedem Status-Tick aufgerufen.
@@ -78,6 +90,25 @@ function M.update(ctx, turbines)
   end
   local learning = ctx.capacity_learning
   local log = type(ctx.log) == "function" and ctx.log or function() end
+
+  local signature = topology_signature(turbines)
+  if learning.topology_signature ~= signature then
+    local had_learned_value = learning.ready == true or (tonumber(learning.max_output) or 0) > 0
+    local previous = learning.topology_signature
+    learning.topology_signature = signature
+    learning.topology_generation = (tonumber(learning.topology_generation) or 0) + 1
+    learning.topology_changed_at = os and os.epoch and os.epoch("utc") or nil
+    if previous ~= nil or had_learned_value then
+      learning.ready = false
+      learning.max_output = 0
+      learning.reason = "TOPOLOGY_CHANGED"
+      pcall(log, "WARN", string.format(
+        "RT capacity topology changed generation=%d old=%s new=%s; learned maximum invalidated",
+        learning.topology_generation, tostring(previous), tostring(signature)))
+    else
+      learning.reason = "TOPOLOGY_INIT"
+    end
+  end
 
   local measured, at_target, total = measure(turbines)
   learning.at_target      = at_target

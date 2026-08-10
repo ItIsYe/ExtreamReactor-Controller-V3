@@ -109,6 +109,7 @@ function router.new(mon_or_opts, opts)
     -- echten Groessenaenderung und wurde dadurch nicht zuverlaessig als
     -- eigene Transition erkannt.
     last_render_scale = nil,
+    shared_backbuffer = nil,
     footer = {
       prev = nil,
       next = nil,
@@ -272,6 +273,43 @@ function router:handle_input(event)
   return false
 end
 
+local function prepare_render_target(self, mon, width, height)
+  -- Existing Window targets (notably FUEL) own their visibility lifecycle.
+  -- Physical CC:Tweaked monitors do not expose setVisible().
+  if type(mon) ~= "table" or type(mon.setVisible) == "function" then
+    return mon, false, false
+  end
+  if type(window) ~= "table" or type(window.create) ~= "function"
+      or type(width) ~= "number" or type(height) ~= "number"
+      or width < 1 or height < 1 then
+    self.shared_backbuffer = nil
+    return mon, false, false
+  end
+
+  local cached = self.shared_backbuffer
+  local created = false
+  if not cached or cached.parent ~= mon or cached.width ~= width or cached.height ~= height
+      or type(cached.target) ~= "table" then
+    local ok, target = pcall(window.create, mon, 1, 1, width, height, false)
+    if not ok or not target then
+      self.shared_backbuffer = nil
+      return mon, false, false
+    end
+    cached = { parent = mon, width = width, height = height, target = target }
+    self.shared_backbuffer = cached
+    created = true
+    ui.invalidate(target)
+  end
+  pcall(cached.target.setVisible, false)
+  return cached.target, true, created
+end
+
+local function publish_render_target(target, buffered)
+  if not buffered or not target then return end
+  pcall(target.setVisible, true)
+  if type(target.redraw) == "function" then pcall(target.redraw) end
+end
+
 local function build_snapshot(page_name, model)
   local payload
   if model and model.snapshot ~= nil then
@@ -328,13 +366,11 @@ function router:render(mon, model)
     self.footer.prev, self.footer.next, self.footer.indicator = nil, nil, nil
     self.list_controls = nil
     self.last_render_mon = nil
+    self.shared_backbuffer = nil
     return
   end
-  ui.begin_frame(mon)
-  -- Visibility buffering deliberately does not belong in the shared router.
-  -- A physical CC:Tweaked monitor has no setVisible() method. Roles that need
-  -- buffering must provide an actual Window target and own its lifecycle
-  -- outside this renderer (FUEL does this in nodes/fuel/monitor_ui.lua).
+  -- Shared physical-monitor buffering is established only after transition
+  -- detection below. Existing Window targets are deliberately not wrapped.
   -- Fix (2026-07-11): UI-P0.5 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
   -- FIX_2026-07-12.md). Diese Funktion hatte bisher eine EIGENE,
   -- unabhaengige Zeit-Drossel (self.interval/self.last_draw) zusaetzlich
@@ -410,6 +446,17 @@ function router:render(mon, model)
     self.ui_diag.full_clears = self.ui_diag.full_clears + 1
   end
 
+  local render_target, buffered, buffer_created = prepare_render_target(self, mon, cur_w, cur_h)
+  if buffer_created and not should_clear then
+    -- A newly-created hidden window starts without a trustworthy frame even if
+    -- the physical monitor/model itself did not transition. Force one complete
+    -- render into the new buffer before publishing it.
+    should_clear = true
+    self.ui_diag.full_clears = self.ui_diag.full_clears + 1
+  end
+  mon = render_target
+  ui.begin_frame(mon)
+
   -- Feature (2026-07-11): UI-P1.1. Ein Fehler in page.render() wurde
   -- bisher entweder gar nicht abgefangen (Absturz bis zum aeusseren
   -- service_manager-pcall, der Bildschirm blieb dann auf dem letzten
@@ -466,6 +513,7 @@ function router:render(mon, model)
   end
   local w, h = ui.getSize(mon)
   if not w or not h then
+    publish_render_target(mon, buffered)
     return
   end
   -- Fix (2026-07-05): wenn die Seite selbst schon einen sichtbaren Footer
@@ -481,6 +529,7 @@ function router:render(mon, model)
     self.footer.prev = { x1 = page_footer.left.x1, x2 = page_footer.left.x2, y = page_footer.left.y }
     self.footer.next = { x1 = page_footer.right.x1, x2 = page_footer.right.x2, y = page_footer.right.y }
     self.footer.indicator = nil
+    publish_render_target(mon, buffered)
     return
   end
   local page_count = math.max(1, #self.pages)
@@ -490,6 +539,7 @@ function router:render(mon, model)
   self.footer.prev = { x1 = start, x2 = start + 1, y = h }
   self.footer.next = { x1 = start + #indicator - 1, x2 = start + #indicator - 1, y = h }
   self.footer.indicator = { x1 = start, x2 = start + #indicator, y = h }
+  publish_render_target(mon, buffered)
 end
 
 return router

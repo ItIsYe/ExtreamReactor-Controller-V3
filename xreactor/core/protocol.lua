@@ -2,6 +2,7 @@ local constants = require("shared.constants")
 local utils = require("core.utils")
 
 local protocol = {}
+local protocol_sequence = 0
 
 local function normalize_proto(ver)
   if type(ver) == "table" then
@@ -22,12 +23,15 @@ local function normalize_proto(ver)
   elseif type(ver) == "number" then
     return { major = ver, minor = 0 }
   end
-  return { major = constants.proto_ver.major, minor = constants.proto_ver.minor }
+  return nil
 end
 
 local function is_proto_compatible(ver)
   local current = normalize_proto(constants.proto_ver)
   local incoming = normalize_proto(ver)
+  if not incoming then
+    return false, "missing/invalid proto_ver"
+  end
   if incoming.major ~= current.major then
     return false, "proto_ver mismatch"
   end
@@ -60,13 +64,15 @@ end
 
 local function base_message(msg_type, sender_id, role, payload)
   local ts = os.epoch("utc")
+  local normalized_sender = utils.normalize_node_id(sender_id)
+  protocol_sequence = protocol_sequence + 1
   return {
     type = msg_type,
-    message_id = nil,
-    sender_id = utils.normalize_node_id(sender_id),
-    src = utils.normalize_node_id(sender_id),
+    message_id = string.format("%s-%d-%d", tostring(normalized_sender), ts, protocol_sequence),
+    sender_id = normalized_sender,
+    src = normalized_sender,
     dst = nil,
-    node_id = utils.normalize_node_id(sender_id),
+    node_id = normalized_sender,
     role = role,
     ts = ts,
     timestamp = ts,
@@ -155,6 +161,19 @@ function protocol.validateMessage(message)
     return false, "missing timestamp"
   end
   if type(message.payload) ~= "table" then return false, "missing payload" end
+  if message.type == constants.message_types.COMMAND then
+    if type(message.message_id) ~= "string" or message.message_id == "" then
+      return false, "missing message_id"
+    end
+  elseif message.type == constants.message_types.ACK_DELIVERED
+      or message.type == constants.message_types.ACK_APPLIED then
+    if type(message.message_id) ~= "string" or message.message_id == "" then
+      return false, "missing message_id"
+    end
+    if type(message.ack_for) ~= "string" or message.ack_for == "" then
+      return false, "missing ack_for"
+    end
+  end
   local ok, err = is_proto_compatible(message.proto_ver)
   if not ok then return false, err end
   return true

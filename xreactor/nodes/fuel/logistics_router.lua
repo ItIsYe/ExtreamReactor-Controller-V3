@@ -220,11 +220,13 @@ function M:refresh_peripherals()
   local bridge_found_name = nil
   if peripheral.isPresent(bridge_name) then
     bridge_found_name = bridge_name
-  elseif not cfg.me_bridge then
-    -- Nur automatisch per Methodensignatur suchen, wenn KEIN expliziter
-    -- Name konfiguriert ist -- ein manuell gesetzter, aber (noch) nicht
-    -- angeschlossener Name soll weiterhin klar als "absent" gemeldet
-    -- werden, statt stillschweigend eine andere ME Bridge zu binden.
+  elseif cfg.me_bridge == nil or cfg.me_bridge == ""
+      or cfg.me_bridge == "me_bridge" or cfg.me_bridge == "meBridge" then
+    -- "me_bridge"/"meBridge" are shipped convention defaults, not proof of
+    -- an intentional strict peripheral binding. Advanced Peripherals normally
+    -- exposes generated names such as meBridge_0, so fall back to the method
+    -- signature for those default values. A genuinely custom configured name
+    -- remains strict and is never silently replaced by another bridge.
     bridge_found_name = find_me_bridge_by_methods()
   end
   if bridge_found_name then
