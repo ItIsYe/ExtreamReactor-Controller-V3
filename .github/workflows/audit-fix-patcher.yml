@@ -28,6 +28,9 @@ jobs:
           path.write_text(text.replace(old, "local FUEL_MONITOR_SCALE = 1.0", 1), encoding="utf-8")
           PY
           python3 .github/audit_fix.py
+          # The Actions token may not update workflow files. Keep them unchanged
+          # in this bot commit; they are updated separately through GitHub.
+          git checkout -- .github/workflows/offline-tests.yml .github/workflows/audit-fix-patcher.yml
       - name: Install Lua
         run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.2
       - name: Validate syntax and manifests
