@@ -38,7 +38,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/audit_fix_phase6b.py .github/audit_fix_phase6b_bootstrap.py .github/audit_fix_phase6b_followup.py .github/audit_fix_phase6b_python_followup.py .github/rt_structure_diag.py
+          git rm -f .github/audit_fix_phase6b.py .github/audit_fix_phase6b_bootstrap.py .github/audit_fix_phase6b_followup.py .github/audit_fix_phase6b_python_followup.py .github/rt_structure_diag.py
           git add -A
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "fix: eliminate stale regression exclusions"
