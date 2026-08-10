@@ -38,6 +38,7 @@ function M.new(opts)
     local now = ts or runtime.now_ms()
     local total, capacity, input, output = 0, 0, 0, 0
     local stores = {}
+    local any_stale = false
     for _, storage in ipairs(runtime.devices.storages or {}) do
       local adapter = storage.adapter
       local key = storage.id or storage.name
@@ -55,6 +56,9 @@ function M.new(opts)
         st.skip_remaining = st.skip_remaining - 1
         stored, in_rate, out_rate = st.last_good.stored, st.last_good.input, st.last_good.output
         cap = st.cached_capacity
+        -- Backoff means we are deliberately serving cached last-good values
+        -- after repeated failures; those values must remain visibly stale.
+        had_error = (st.fail_count or 0) > 0
       else
         local function read_metric(label, fn)
           if not fn then return 0, false end
@@ -108,6 +112,7 @@ function M.new(opts)
       cap = tonumber(cap) or stored
       in_rate = tonumber(in_rate) or 0
       out_rate = tonumber(out_rate) or 0
+      if had_error then any_stale = true end
       total = total + stored
       capacity = capacity + cap
       input = input + in_rate
@@ -126,7 +131,7 @@ function M.new(opts)
     end
     runtime.snapshot = {
       ts = ts or runtime.now_ms(),
-      stale = false,
+      stale = any_stale,
       stores = stores,
       total = { stored = total, capacity = capacity, input = input, output = output }
     }
@@ -157,7 +162,7 @@ function M.new(opts)
       output = tonumber(snapshot.total and snapshot.total.output) or 0,
       stores = runtime.utils.deep_copy(snapshot.stores or {}),
       freshness_ms = age,
-      stale = (snapshot.ts or 0) <= 0 or (max_age_ms > 0 and age > max_age_ms)
+      stale = snapshot.stale == true or (snapshot.ts or 0) <= 0 or (max_age_ms > 0 and age > max_age_ms)
     }
   end
 

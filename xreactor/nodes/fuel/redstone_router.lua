@@ -291,12 +291,24 @@ function M.new(opts)
       tree_valid = nil,
       tree_errors = {},
       tree_configured = false,
+      refresh_deferred = false,
     },
   }
   return setmetatable(self, { __index = M })
 end
 
 function M:refresh()
+  -- Discovery may fire while a valve transaction is between confirmed OPEN
+  -- and the export callback. Rebuilding integrator wrappers or block_all() in
+  -- that window races the transaction state machine. Defer the refresh until
+  -- the transaction has reached a terminal state instead.
+  if self._state.transaction then
+    self._state.refresh_deferred = true
+    self.log("DEBUG", "RedstoneRouter: refresh deferred while transaction is active")
+    return false, "busy"
+  end
+  self._state.refresh_deferred = false
+
   local cfg = self.config.logistics or self.config or {}
   local tree = cfg.redstone_tree or {}
   -- Feature (2026-07-13): CRITICAL Sicherheitsfund (siehe docs/CODING_AI_
@@ -720,6 +732,33 @@ end
 -- nach VALVE_ACK_MAX_RETRIES aufgibt -- diese Phasen-Deadline ist nur ein
 -- zusaetzliches Sicherheitsnetz, falls ein Ventil dauerhaft "pending"
 -- haengen bleibt, ohne dass check_pending_acks() es je aufgibt.
+function M:_path_runtime_ready(path)
+  local peers = self.comms and self.comms:get_peers() or {}
+  for _, valve in ipairs(path or {}) do
+    if valve.integrator then
+      local binding = self._state.integrators[valve.integrator]
+      if not binding then
+        return false, "integrator_missing:" .. tostring(valve.integrator)
+      end
+      if binding.network then
+        local peer = peers[valve.integrator]
+        if not peer then
+          return false, "peer_missing:" .. tostring(valve.integrator)
+        end
+        if peer.down == true or peer.stale == true then
+          return false, "peer_stale:" .. tostring(valve.integrator)
+        end
+      else
+        if not peripheral or type(peripheral.isPresent) ~= "function"
+            or not peripheral.isPresent(valve.integrator) then
+          return false, "peripheral_missing:" .. tostring(valve.integrator)
+        end
+      end
+    end
+  end
+  return true
+end
+
 local VALVE_PHASE_TIMEOUT_MS = 15000
 
 -- Muss regelmaessig (z.B. alle 0.5s aus dem Haupt-Event-Loop der
@@ -730,7 +769,13 @@ local VALVE_PHASE_TIMEOUT_MS = 15000
 function M:tick(now_ms)
   now_ms = now_ms or (os.epoch and os.epoch("utc") or 0)
   local tx = self._state.transaction
-  if not tx then return end
+  if not tx then
+    if self._state.refresh_deferred then
+      self._state.refresh_deferred = false
+      self:refresh()
+    end
+    return
+  end
 
   if tx.state == "WAIT_BLOCK_ACKS" then
     local status, failed_key = self:_check_valve_batch(tx.pending)
@@ -791,6 +836,14 @@ function M:tick(now_ms)
 
   if tx.state == "WAIT_SETTLE" then
     if now_ms >= tx.settle_until then
+      -- The OPEN ACK proves the valve state at ACK time, not indefinitely.
+      -- Re-check that every runtime binding in the selected path is still
+      -- present/fresh immediately before moving material.
+      local ready, readiness_error = self:_path_runtime_ready(tx.path)
+      if not ready then
+        self:_fail_transaction("path_not_ready:" .. tostring(readiness_error))
+        return
+      end
       if tx.action_fn then
         local ok, err = pcall(tx.action_fn)
         if not ok then

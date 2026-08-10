@@ -409,14 +409,15 @@ function M.update_inductor_for_rpm(ctx, name, turbine, caps, rpm, target_rpm)
 
   if engaged == ctrl.inductor_engaged then return true, true, measured_api end
   if not caps.setInductorEngaged then
-    ctrl.inductor_engaged = engaged
-    return true, true, "inductor-write-unavailable"
+    -- Desired state is not a confirmed hardware state. Keep the last
+    -- confirmed/read-back value so the next control tick continues trying.
+    return false, false, "inductor-write-unavailable"
   end
 
-  ctrl.inductor_engaged = engaged
-  state.last_change_ts = now
   local ok, applied = pcall(setInductor, turbine, caps, engaged)
   if ok and applied then
+    ctrl.inductor_engaged = engaged
+    state.last_change_ts = now
     local reason = is_overspeed and "OVERSPEED_BRAKE" or "TARGET_TRACKING"
     if ctrl.mode == "OVERSPEED_BRAKE" then reason = "OVERSPEED_BRAKE" end
     ctrl.last_coil_reason = reason
@@ -432,7 +433,7 @@ local function enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, deci
   end
   if ctrl.inductor_engaged == true then return true, "already-engaged" end
   if not (caps and caps.setInductorEngaged) then
-    ctrl.inductor_engaged = true
+    -- Do not mark the brake as engaged without a successful actuator write.
     return false, "inductor-write-unavailable"
   end
   local ok, applied = pcall(setInductor, turbine, caps, true)

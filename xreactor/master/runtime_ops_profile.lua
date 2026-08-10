@@ -188,12 +188,17 @@ function M.sample_trends(runtime)
   if now - runtime.state.last_trend_sample < 1000 then return end
   runtime.state.last_trend_sample = now
   local power, stored, capacity, water_total = 0, 0, 0, 0
+  local seen_energy_nodes, fresh_energy_nodes = 0, 0
   for _, node in pairs(runtime.state.nodes) do
     if node.role == runtime.libs.constants.roles.RT_NODE then
       power = power + (number_or(node.actual_output, nil) or number_or(node.power_actual, nil) or number_or(node.output, 0))  -- actual_output kanonisch
     elseif node.role == runtime.libs.constants.roles.ENERGY_NODE then
-      stored = stored + (node.stored or 0)
-      capacity = capacity + (node.capacity or 0)
+      seen_energy_nodes = seen_energy_nodes + 1
+      if node.data_stale ~= true then
+        fresh_energy_nodes = fresh_energy_nodes + 1
+        stored = stored + (node.stored or 0)
+        capacity = capacity + (node.capacity or 0)
+      end
     elseif node.role == runtime.libs.constants.roles.WATER_NODE then
       water_total = node.total_water or water_total
     end
@@ -212,7 +217,8 @@ function M.sample_trends(runtime)
     else runtime.state.trend_cache.energy_arrow = "→" end
   end
   runtime.refs.trends:push("water", water_total)
-  if runtime.state.auto_profile then
+  local auto_profile_has_trustworthy_energy = not (seen_energy_nodes > 0 and fresh_energy_nodes == 0)
+  if runtime.state.auto_profile and auto_profile_has_trustworthy_energy then
     -- Feature (2026-07-01): PEAK/IDLE-Schwellwerte konfigurierbar statt fest
     -- 90/30 codiert. runtime.state.idle_threshold_pct/peak_threshold_pct
     -- koennen zur Laufzeit ueber das Master-UI gesetzt werden (siehe
