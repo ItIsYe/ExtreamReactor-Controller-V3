@@ -101,6 +101,21 @@ local function serialize_string_array(list)
   return "{" .. table.concat(parts, ",") .. "}"
 end
 
+local function serialize_expected_meta(meta)
+  local keys = {}
+  for path in pairs(meta or {}) do keys[#keys + 1] = path end
+  table.sort(keys)
+  local parts = { "{" }
+  for _, path in ipairs(keys) do
+    local entry = meta[path] or {}
+    parts[#parts + 1] = "[" .. string.format("%q", tostring(path)) .. "]={size_bytes="
+      .. tostring(tonumber(entry.size_bytes) or 0) .. ",hash="
+      .. string.format("%q", tostring(entry.hash or "")) .. "},"
+  end
+  parts[#parts + 1] = "}"
+  return table.concat(parts)
+end
+
 -- Erwartet ein flaches Journal: state/ref/manifest_id/role sind Strings,
 -- expected_files eine Liste von Pfaden, started_at/generation Zahlen. Kein
 -- generischer Serializer -- das Journal braucht keine tieferen Strukturen.
@@ -113,6 +128,7 @@ local function serialize(journal)
   parts[#parts + 1] = "  role = " .. string.format("%q", tostring(journal.role)) .. ",\n"
   parts[#parts + 1] = "  started_at = " .. tostring(tonumber(journal.started_at) or 0) .. ",\n"
   parts[#parts + 1] = "  expected_files = " .. serialize_string_array(journal.expected_files or {}) .. ",\n"
+  parts[#parts + 1] = "  expected_meta = " .. serialize_expected_meta(journal.expected_meta or {}) .. ",\n"
   parts[#parts + 1] = "}\n"
   return table.concat(parts)
 end
@@ -138,6 +154,15 @@ local function slot_read(path)
     return M.STATUS.CORRUPT, nil
   end
   if type(result.generation) ~= "number" then return M.STATUS.CORRUPT, nil end
+  if result.expected_files ~= nil and type(result.expected_files) ~= "table" then return M.STATUS.CORRUPT, nil end
+  if result.expected_meta ~= nil and type(result.expected_meta) ~= "table" then return M.STATUS.CORRUPT, nil end
+  for _, rel in ipairs(result.expected_files or {}) do
+    local meta = result.expected_meta and result.expected_meta[rel] or nil
+    if meta ~= nil and (type(meta) ~= "table" or type(meta.size_bytes) ~= "number"
+        or type(meta.hash) ~= "string" or not meta.hash:match("^[0-9a-f]+$")) then
+      return M.STATUS.CORRUPT, nil
+    end
+  end
   if result.state == M.STATE.COMMITTED then
     return M.STATUS.VALID_COMMITTED, result
   end
@@ -255,6 +280,7 @@ function M.check_incomplete()
     role = nil,
     started_at = 0,
     expected_files = {},
+    expected_meta = {},
   }
 end
 

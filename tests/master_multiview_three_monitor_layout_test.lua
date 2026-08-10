@@ -6,7 +6,8 @@ package.loaded['core.ui'] = {
   text = function() end,
   getSize = function() return 80, 24 end,
 }
-package.loaded['master.ui.widgets'] = { layout_button = function() end }
+setmetatable(package.loaded['core.ui'], { __index = function() return function() end end })
+package.loaded['master.ui.widgets'] = { layout_button = function() end, fit = function(text) return tostring(text or '') end }
 
 local multiview = require('master.ui.multiview')
 local calls = {}
@@ -28,9 +29,10 @@ local monitors = {
 
 m:render(monitors, { overview={}, rt={}, energy={} })
 
-if m.layout.monitors.M1.view ~= 'overview' or not m.layout.monitors.M1.locked then error('M1 must be locked overview') end
-if m.layout.monitors.M2.view ~= 'rt' or not m.layout.monitors.M2.locked then error('M2 must be locked rt') end
-if m.layout.monitors.M3.view ~= 'energy' or not m.layout.monitors.M3.locked then error('M3 must be locked energy') end
-if m.layout.monitors.M4.locked then error('M4 must stay operator-cyclable') end
+local sessions = m.sessions:get_sessions()
+if sessions[1].view_key ~= 'overview' or not sessions[1].locked then error('M1 must be locked overview') end
+if sessions[2].view_key ~= 'rt' or not sessions[2].locked then error('M2 must be locked rt') end
+if sessions[3].view_key ~= 'energy' or not sessions[3].locked then error('M3 must be locked energy') end
+if sessions[4].locked then error('M4 must stay operator-cyclable') end
 
 print('master_multiview_three_monitor_layout_test.lua: ok')

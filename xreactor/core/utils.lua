@@ -5,27 +5,16 @@ local CONFIG = {
   ROLE_CONFIG_PATH = "/xreactor/config/role.lua",
   LOG_NAME_SEPARATOR = "_",
   DEFAULT_LOG_DIR = "/disk/xreactor_logs",
-  REMOTE_LOG_CHANNEL = 6503,  -- muss mit shared/constants.lua channels.LOG uebereinstimmen
-  REMOTE_LOG_PENDING_LIMIT = 16,  -- reduziert: weniger Retry-Last wenn Collector haengt
-  REMOTE_LOG_RETRY_EVERY = 60,   -- seltener retrien: weniger Modem-Traffic bei Collector-Problemen
-                                -- node-52/55 with 25 turbines each + 7 nodes =
-                                -- very congested channel. Longer window reduces
-                                -- resends before ACK arrives.
-  REMOTE_LOG_MAX_SENDS = 2,    -- schneller aufgeben: Log-Retries blockieren nicht den Control-Loop
-                                -- window = 90s (3×30s) is still acceptable.
+  REMOTE_LOG_CHANNEL = 6503,
+  REMOTE_LOG_PENDING_LIMIT = 16,
+  REMOTE_LOG_RETRY_EVERY = 60,
+  REMOTE_LOG_MAX_SENDS = 2,
   REMOTE_LOG_MODEM_REFRESH_SECONDS = 10
 }
 
 local utils = {}
-
 local logger = require("core.logger")
 
--- Log mode: controls where log output goes.
--- "all"      (default) disk + remote LOG_COLLECTOR
--- "disk"     disk only, no remote
--- "remote"   remote LOG_COLLECTOR only, no disk writes
--- "terminal" print to terminal only (no disk, no remote)
--- "none"     no logging at all (silent)
 local current_log_mode = "all"
 
 function utils.set_log_mode(mode)
@@ -39,9 +28,7 @@ function utils.set_log_mode(mode)
   return true
 end
 
-function utils.get_log_mode()
-  return current_log_mode
-end
+function utils.get_log_mode() return current_log_mode end
 
 local function load_log_mode()
   if settings and type(settings.get) == "function" then
@@ -75,13 +62,9 @@ local remote_log_state = {
 }
 
 local function read_file(path)
-  if not path or not fs.exists(path) then
-    return nil
-  end
+  if not path or not fs.exists(path) then return nil end
   local file = fs.open(path, "r")
-  if not file then
-    return nil
-  end
+  if not file then return nil end
   local content = file.readAll()
   file.close()
   return content
@@ -97,18 +80,14 @@ local function read_role_config_value()
   local loader = load(content, "=role", "t", {})
   if not loader then return "UNKNOWN" end
   local ok, result = pcall(loader)
-  if ok and type(result) == "table" and type(result.role) == "string" then
-    return result.role
-  end
+  if ok and type(result) == "table" and type(result.role) == "string" then return result.role end
   return "UNKNOWN"
 end
 
 local function resolve_node_id()
   local value = trim_text(read_file(CONFIG.NODE_ID_PATH) or "")
   if value ~= "" then return value end
-  if os and type(os.getComputerID) == "function" then
-    return "pc-" .. tostring(os.getComputerID())
-  end
+  if os and type(os.getComputerID) == "function" then return "pc-" .. tostring(os.getComputerID()) end
   return "unknown-node"
 end
 
@@ -143,20 +122,14 @@ local function make_boot_id(node_id)
   return tostring(node_id or "node") .. ":boot:" .. tostring(computer) .. ":" .. tostring(epoch) .. ":" .. random_part
 end
 
--- Erkennt ob ein Modem ein Ender-Modem (unbegrenzte Reichweite) ist.
--- Ender-Modem: getRange() → math.huge; normales Wireless: getRange() → ~64.
 local function is_ender_modem(modem)
   if type(modem.getRange) ~= "function" then return false end
   local ok, range = pcall(modem.getRange)
   if not ok or type(range) ~= "number" then return false end
-  return range >= 65536  -- math.huge oder sehr grosser Wert = Ender-Modem
+  return range >= 65536
 end
 
 local function discover_log_modems()
-  -- Sammelt ALLE wireless Modems alphabetisch sortiert.
-  -- network.lua nimmt immer das ERSTE (alphabetisch) fuer Control/Status.
-  -- Dieses Modul gibt das ZWEITE (oder spaetere) zurueck fuer Logs.
-  -- Bei nur einem Modem: dasselbe als Fallback damit Logs nicht komplett ausfallen.
   local list = {}
   if not peripheral or type(peripheral.getNames) ~= "function" then return list end
   local ok, names = pcall(peripheral.getNames)
@@ -169,22 +142,14 @@ local function discover_log_modems()
       local wrap_ok, modem = pcall(peripheral.wrap, name)
       if wrap_ok and modem and type(modem.transmit) == "function" then
         local is_wireless = type(modem.isWireless) == "function" and
-                            (function() local ok2, r = pcall(modem.isWireless); return ok2 and r == true end)()
-        if is_wireless then
-          all_wireless[#all_wireless + 1] = { name = name, modem = modem }
-        end
+          (function() local ok2, r = pcall(modem.isWireless); return ok2 and r == true end)()
+        if is_wireless then all_wireless[#all_wireless + 1] = { name = name, modem = modem } end
       end
     end
   end
   if #all_wireless == 0 then return list end
-  -- Zweites Modem fuer Logs (Index 2+), erstes nur als Fallback
-  for i = 2, #all_wireless do
-    list[#list + 1] = all_wireless[i]
-  end
-  if #list == 0 then
-    -- Nur ein Modem vorhanden: dasselbe fuer Logs (geteilter Kanal)
-    list[1] = all_wireless[1]
-  end
+  for i = 2, #all_wireless do list[#list + 1] = all_wireless[i] end
+  if #list == 0 then list[1] = all_wireless[1] end
   return list
 end
 
@@ -198,9 +163,7 @@ local function refresh_log_modems(force)
   remote_log_state.modem_names = {}
   for _, entry in ipairs(remote_log_state.modems) do
     remote_log_state.modem_names[#remote_log_state.modem_names + 1] = entry.name
-    if type(entry.modem.open) == "function" then
-      pcall(entry.modem.open, CONFIG.REMOTE_LOG_CHANNEL)
-    end
+    if type(entry.modem.open) == "function" then pcall(entry.modem.open, CONFIG.REMOTE_LOG_CHANNEL) end
   end
   remote_log_state.modem_refreshes = (remote_log_state.modem_refreshes or 0) + 1
 end
@@ -217,9 +180,7 @@ local function init_remote_log(opts)
   opts = opts or {}
   if remote_log_state.initialized then return end
   remote_log_state.enabled = opts.remote_logging
-  if remote_log_state.enabled == nil then
-    remote_log_state.enabled = settings_bool("xreactor.remote_logging", true)
-  end
+  if remote_log_state.enabled == nil then remote_log_state.enabled = settings_bool("xreactor.remote_logging", true) end
   remote_log_state.node_id = opts.node_id or resolve_node_id()
   remote_log_state.role = opts.prefix or read_role_config_value()
   remote_log_state.boot_id = make_boot_id(remote_log_state.node_id)
@@ -229,9 +190,7 @@ end
 
 local function transmit_payload(payload)
   refresh_log_modems(false)
-  if not remote_log_state.enabled or #remote_log_state.modems == 0 then
-    return 0
-  end
+  if not remote_log_state.enabled or #remote_log_state.modems == 0 then return 0 end
   local delivered = 0
   for _, entry in ipairs(remote_log_state.modems) do
     local sent_ok = pcall(function()
@@ -297,12 +256,8 @@ end
 local function send_remote_log(prefix, level, message)
   local ok = pcall(function()
     if not remote_log_state.initialized then init_remote_log({ prefix = prefix }) end
-    -- ACKs are processed via comms_service.handle_event -> handle_remote_log_message,
-    -- not here (message is a log text string, not an ACK packet).
     retry_pending(false)
-    if not remote_log_state.enabled or #remote_log_state.modems == 0 then
-      refresh_log_modems(true)
-    end
+    if not remote_log_state.enabled or #remote_log_state.modems == 0 then refresh_log_modems(true) end
     if not remote_log_state.enabled or #remote_log_state.modems == 0 then
       remote_log_state.dropped = remote_log_state.dropped + 1
       return
@@ -312,26 +267,15 @@ local function send_remote_log(prefix, level, message)
     local boot_id = remote_log_state.boot_id or make_boot_id(node_id)
     remote_log_state.boot_id = boot_id
     local payload = {
-      type = "LOG_EVENT",
-      proto = "xreactor-log-v2",
-      node_id = node_id,
-      role = remote_log_state.role or read_role_config_value(),
-      prefix = tostring(prefix or "LOG"),
-      level = tostring(level or "INFO"),
-      message = tostring(message or ""),
-      seq = remote_log_state.seq,
-      boot_id = boot_id,
-      event_id = tostring(boot_id) .. ":" .. tostring(remote_log_state.seq),
-      ts = os and os.epoch and os.epoch("utc") or nil,
-      ack = true
+      type = "LOG_EVENT", proto = "xreactor-log-v2", node_id = node_id,
+      role = remote_log_state.role or read_role_config_value(), prefix = tostring(prefix or "LOG"),
+      level = tostring(level or "INFO"), message = tostring(message or ""), seq = remote_log_state.seq,
+      boot_id = boot_id, event_id = tostring(boot_id) .. ":" .. tostring(remote_log_state.seq),
+      ts = os and os.epoch and os.epoch("utc") or nil, ack = true
     }
     local delivered = transmit_payload(payload)
-    if delivered > 0 then
-      remote_log_state.sent = remote_log_state.sent + 1
-      add_pending(payload)
-    else
-      remote_log_state.dropped = remote_log_state.dropped + 1
-    end
+    if delivered > 0 then remote_log_state.sent = remote_log_state.sent + 1; add_pending(payload)
+    else remote_log_state.dropped = remote_log_state.dropped + 1 end
   end)
   if not ok then remote_log_state.dropped = remote_log_state.dropped + 1 end
 end
@@ -346,7 +290,6 @@ local function sanitize_snapshot(value, active)
   local out = {}
   for key, val in next, value do
     local key_type = type(key)
-    -- Lua 5.4: for-loop variables are const; use safe_key instead of reassigning key
     local safe_key = (key_type ~= "string" and key_type ~= "number" and key_type ~= "boolean") and tostring(key) or key
     out[safe_key] = sanitize_snapshot(val, active)
   end
@@ -402,9 +345,12 @@ local function migrate_config(path, data, defaults, meta)
   local loaded_version = type(data.version) == "number" and data.version or 1
   if data.version == nil or loaded_version < target_version then data.version = target_version; changed = true end
   if not changed then return data end
-  local ok, err = pcall(utils.write_config, path, data)
-  if ok then meta.migrated = true; return data end
-  meta.migration_error = err
+  local call_ok, persisted, persist_err = pcall(utils.write_config, path, data)
+  if call_ok and persisted == true then
+    meta.migrated = true
+    return data
+  end
+  meta.migration_error = call_ok and (persist_err or "write_config returned false") or persisted
   utils.log("CONFIG", "Config migration failed at " .. tostring(path) .. "; using existing config.", "WARN")
   return original
 end
@@ -423,7 +369,7 @@ function utils.load_config(path, defaults)
       local migrated = migrate_config(path, data, defaults, meta)
       if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then utils.merge_defaults(data, defaults) end
       meta.source = "lua"
-      return migrated
+      return migrated, meta
     end
     if not ok then err = data end
   end
@@ -440,40 +386,78 @@ function utils.load_config(path, defaults)
   return fallback
 end
 
+local function restore_config_backup(path, backup)
+  if fs.exists(path) then pcall(fs.delete, path) end
+  if backup and fs.exists(backup) then
+    local ok_restore, restore_result = pcall(fs.move, backup, path)
+    return ok_restore and restore_result ~= false and fs.exists(path)
+  end
+  return not fs.exists(path)
+end
+
 function utils.write_config(path, tbl)
+  if type(path) ~= "string" or path == "" then return false, "invalid_path" end
+
+  -- Serialize completely before touching the destination. A cyclic/invalid
+  -- value can therefore never truncate the previously valid config.
+  local serialized, serialize_err = safe_serialize(tbl)
+  if not serialized then
+    pcall(print, "WARN: write_config serialize failed: " .. tostring(serialize_err))
+    return false, "serialize_failed:" .. tostring(serialize_err)
+  end
+
   local dir = fs.getDir(path)
-  if dir ~= "" then utils.ensure_dir(dir) end
-  local file = fs.open(path, "w")
+  if dir ~= "" then
+    local ok_dir, dir_err = pcall(utils.ensure_dir, dir)
+    if not ok_dir then return false, "mkdir_failed:" .. tostring(dir_err) end
+  end
+
+  local tmp = path .. ".xr_tmp"
+  local backup = path .. ".xr_prev"
+  if fs.exists(tmp) then pcall(fs.delete, tmp) end
+  local file = fs.open(tmp, "w")
   if not file then
-    -- Do NOT call error() here: write_config is called from registry saves
-    -- and capacity cache saves. A hard error() would propagate as a runtime
-    -- error and crash the node (observed: RT crashed on registry save when
-    -- /xreactor/config/ dir was temporarily unavailable).
-    -- Log and return a boolean so callers can decide how to handle it.
-    pcall(print, "WARN: write_config failed to open " .. tostring(path))
+    pcall(print, "WARN: write_config failed to open temp " .. tostring(tmp))
     return false, "open_failed"
   end
-  local serialized, err = safe_serialize(tbl)
-  if not serialized then
-    pcall(file.close)
-    pcall(print, "WARN: write_config serialize failed: " .. tostring(err))
-    return false, "serialize_failed:" .. tostring(err)
-  end
-  -- Fix (2026-07-19): CRITICAL. file.write()/file.close() konnten werfen
-  -- (z.B. Datentraeger voll/schreibgeschuetzt) -- ungeschuetzt widersprach
-  -- das direkt dem Kommentar oben ("Do NOT call error() here... Log and
-  -- return a boolean") fuer genau diesen Funktionsteil: ein Fehlschlag hier
-  -- crashte den aufrufenden Node trotzdem hart (z.B. VALVE beim ersten
-  -- SET_VALVE nach dem Boot, wenn das automatische trusted_source-Pairing
-  -- versucht, die geschuetzte Config zu persistieren -- der Node stuerzte
-  -- dadurch bei jedem eingehenden Kommando erneut ab, sobald der Schreib-
-  -- vorgang aus Umgebungsgruenden fehlschlug).
   local ok_write, write_err = pcall(function() file.write(serialized) end)
-  pcall(file.close)
-  if not ok_write then
-    pcall(print, "WARN: write_config failed to write " .. tostring(path) .. ": " .. tostring(write_err))
-    return false, "write_failed:" .. tostring(write_err)
+  local ok_close, close_err = pcall(file.close)
+  if not ok_write or not ok_close then
+    pcall(fs.delete, tmp)
+    return false, "write_failed:" .. tostring(write_err or close_err)
   end
+
+  if read_file(tmp) ~= serialized then
+    pcall(fs.delete, tmp)
+    return false, "verify_failed"
+  end
+
+  local had_old = fs.exists(path)
+  if had_old then
+    if fs.exists(backup) then
+      pcall(fs.delete, backup)
+      if fs.exists(backup) then pcall(fs.delete, tmp); return false, "stale_backup_delete_failed" end
+    end
+    local ok_backup, backup_result = pcall(fs.move, path, backup)
+    if not ok_backup or backup_result == false or not fs.exists(backup) then
+      pcall(fs.delete, tmp)
+      return false, "backup_move_failed"
+    end
+  end
+
+  local ok_commit, commit_result = pcall(fs.move, tmp, path)
+  if not ok_commit or commit_result == false or not fs.exists(path) then
+    pcall(fs.delete, tmp)
+    restore_config_backup(path, had_old and backup or nil)
+    return false, "commit_move_failed"
+  end
+
+  if read_file(path) ~= serialized then
+    restore_config_backup(path, had_old and backup or nil)
+    return false, "commit_verify_failed"
+  end
+
+  if had_old and fs.exists(backup) then pcall(fs.delete, backup) end
   return true
 end
 
@@ -499,9 +483,7 @@ function utils.log(prefix, message, level)
     pcall(print, string.format("[%s] %s", resolved_prefix, tostring(message)))
     return
   end
-  if mode == "all" or mode == "remote" then
-    send_remote_log(resolved_prefix, level or "INFO", message)
-  end
+  if mode == "all" or mode == "remote" then send_remote_log(resolved_prefix, level or "INFO", message) end
   if mode == "all" or mode == "disk" then
     local ok = pcall(logger.log, resolved_prefix, message, level)
     if not ok then pcall(print, "WARN: logging suppressed due to non-fatal logger failure") end
@@ -586,36 +568,28 @@ function utils.build_log_name(base, node_id)
   return prefix .. CONFIG.LOG_NAME_SEPARATOR .. sanitized
 end
 
-function utils.init_role_logger(role, node_id, opts)
-  opts = opts or {}
-  opts.prefix = role or opts.prefix
-  opts.node_id = node_id or opts.node_id
-  opts.log_name = opts.log_name or utils.build_log_name(role, node_id)
-  -- Fix P4: number_or_nil zentral in utils -- war 3x dupliziert in
--- message_handlers.lua, rt_sync.lua (als number_or), command_handler.lua
 function utils.number_or_nil(value)
   if type(value) == "number" then return value end
-  if type(value) == "string" then
-    local n = tonumber(value)
-    if n then return n end
-  end
+  if type(value) == "string" then local n = tonumber(value); if n then return n end end
   return nil
 end
 
--- Fix P3: payload_looks_rt war in message_handlers.lua UND rt_sync_coalescer.lua
--- dupliziert (leicht divergiert). Kanonische Version hier mit allen Bedingungen.
 function utils.payload_looks_rt(payload)
   if type(payload) ~= "table" then return false end
   if type(payload.rt) == "table" then return true end
   if type(payload.turbines) == "table" or type(payload.reactors) == "table" or type(payload.modules) == "table" then return true end
   if payload.turbine_rpm ~= nil or payload.steam ~= nil or payload.ramp_state ~= nil then return true end
-  -- message_handlers-Variante: mode+output+capabilities/bindings
   if payload.mode ~= nil and (payload.output ~= nil or payload.state ~= nil)
       and (payload.capabilities ~= nil or payload.bindings ~= nil) then return true end
   return false
 end
 
-return utils.init_logger(opts)
+function utils.init_role_logger(role, node_id, opts)
+  opts = opts or {}
+  opts.prefix = role or opts.prefix
+  opts.node_id = node_id or opts.node_id
+  opts.log_name = opts.log_name or utils.build_log_name(role, node_id)
+  return utils.init_logger(opts)
 end
 
 function utils.remote_log_status()

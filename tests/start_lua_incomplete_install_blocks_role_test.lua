@@ -53,6 +53,7 @@ local function run_guard(journal_files, http_should_succeed)
   local reboot_calls = 0
   local sleep_calls = 0
   local dofile_calls = {}
+  local requested_urls = {}
 
   _G.fs = {
     exists = function(p) return fs_files[p] ~= nil end,
@@ -73,7 +74,8 @@ local function run_guard(journal_files, http_should_succeed)
     delete = function() end,
   }
   _G.http = {
-    get = function()
+    get = function(url)
+      requested_urls[#requested_urls + 1] = url
       if http_should_succeed then
         return { readAll = function() return "-- fake installer body" end, close = function() end }
       end
@@ -92,13 +94,14 @@ local function run_guard(journal_files, http_should_succeed)
   if not chunk then error("snippet failed to parse: " .. tostring(lerr) .. "\n---\n" .. guard_snippet) end
   local ok, err = pcall(chunk)
   _G.print = orig_print
-  return ok, err, reboot_calls, sleep_calls, dofile_calls
+  return ok, err, reboot_calls, sleep_calls, dofile_calls, requested_urls
 end
 
+local TEST_SHA = string.rep("a", 40)
 local function journal(state, generation)
   return string.format(
-    'return { state = %q, generation = %d, ref = "x", manifest_id = "m", role = "RT-NODE", started_at = 1, expected_files = {} }\n',
-    state, generation or 0)
+    'return { state = %q, generation = %d, ref = %q, manifest_id = "m", role = "RT-NODE", started_at = 1, expected_files = {}, expected_meta = {} }\n',
+    state, generation or 0, TEST_SHA)
 end
 
 -- ── Fall 1: kein Journal vorhanden (beide Slots ABSENT) -- Guard darf ──────
@@ -139,13 +142,16 @@ end
 -- rebootet nach Abschluss selbst), aber der Recovery-Installer muss
 -- tatsaechlich ausgefuehrt worden sein.
 do
-  local ok, err, reboot_calls, sleep_calls, dofile_calls = run_guard(
+  local ok, err, reboot_calls, sleep_calls, dofile_calls, requested_urls = run_guard(
     { [SLOT_A] = journal("VERIFYING", 1) }, true)
   if ok then
     error("CRITICAL: guard did not abort boot for an incomplete (VERIFYING) journal even though recovery ran")
   end
   if #dofile_calls ~= 1 then
     error("expected the downloaded recovery installer to be dofile()'d exactly once, got " .. #dofile_calls)
+  end
+  if #requested_urls ~= 1 or not requested_urls[1]:find(TEST_SHA, 1, true) then
+    error("recovery must download installer from the exact journal SHA")
   end
 end
 

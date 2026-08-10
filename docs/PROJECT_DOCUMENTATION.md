@@ -1,7 +1,7 @@
 # XReactor Controller V3 – Dokumentations-Einstieg
 
-Stand: 2026-07-14  
-Releasebezug: `beta-v427`
+Stand: 2026-08-10
+Releasebezug: Draft-PR #504, `beta-v521`
 
 Diese Datei bleibt als stabiler Link für ältere Verweise erhalten. Die frühere parallele Kopie der technischen Dokumentation wurde bewusst entfernt, damit Architektur und aktueller Aufgabenstand nicht an mehreren Stellen auseinanderlaufen.
 
@@ -13,7 +13,8 @@ Diese Datei bleibt als stabiler Link für ältere Verweise erhalten. Die früher
 
 ## Aktueller Entwicklungsstand
 
-- [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md) — aktueller Gesamt-Audit und Restaufgaben.
+- [`REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md`](REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md) — aktueller Audit-Abschlussnachweis und offene Ingame-Abnahmen.
+- [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md) — historische Audit- und Regressionsreferenz für `beta-v472`.
 - [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) — kompakter Einstieg für neue Sitzungen.
 - [`README.md`](README.md) — Index des bereinigten `docs`-Ordners.
 

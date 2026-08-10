@@ -59,7 +59,7 @@ local function build_modem(opts)
         error('wrapped modem transmit missing arguments')
       end
     end,
-    isWireless = opts.isWireless and function(extra)
+    isWireless = opts.isWireless ~= nil and function(extra)
       if extra ~= nil then
         error('wrapped modem isWireless must not receive implicit self argument')
       end
@@ -99,8 +99,10 @@ local function test_autodetect_wireless_and_wired()
   if net.selected_modems.wired.name ~= 'back' then
     error('expected wired modem back, got ' .. tostring(net.selected_modems.wired.name))
   end
-  if #opened ~= 2 then
-    error('expected 2 modem.open calls for channels')
+  local seen = {}
+  for _, channel in ipairs(opened) do seen[channel] = true end
+  if not seen[6500] or not seen[6501] then
+    error('expected both configured modem channels 6500/6501 to be opened')
   end
 end
 

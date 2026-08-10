@@ -69,7 +69,23 @@ do
   assert_eq(router._state.bridge.name, 'meBridge_0', 'discovered bridge name should be the actual peripheral name')
 end
 
--- 2. Der konfigurierte Default-Name "me_bridge" ist direkt vorhanden --
+-- 2. Der AUSGELIEFERTE Config-Default setzt me_bridge="me_bridge". Wenn
+--    genau dieser Konventionsname nicht existiert, muss trotzdem meBridge_0
+--    per Methodensignatur gefunden werden; sonst blockiert der Default selbst
+--    den Autodiscovery-Fallback.
+do
+  set_peripheral_mock({
+    ["meBridge_0"] = { getItem = true, exportItemToPeripheral = true, importItemFromPeripheral = true },
+  }, {})
+
+  local router = logistics_router.new({ config = { logistics = { enabled = true, reactors = {}, me_bridge = "me_bridge" } } })
+  router:refresh_peripherals()
+
+  assert_true(router._state.bridge ~= nil, 'shipped me_bridge default must still allow method-signature fallback')
+  assert_eq(router._state.bridge.name, 'meBridge_0', 'default fallback should bind the actual generated peripheral name')
+end
+
+-- 3. Der konfigurierte Default-Name "me_bridge" ist direkt vorhanden --
 --    weiterhin der bevorzugte, schnelle Pfad (kein Scan noetig).
 do
   set_peripheral_mock({
@@ -83,7 +99,7 @@ do
   assert_eq(router._state.bridge.name, 'me_bridge', 'discovered bridge name should be the configured name')
 end
 
--- 3. Ein EXPLIZIT konfigurierter me_bridge-Name, der (noch) nicht
+-- 4. Ein EXPLIZIT konfigurierter me_bridge-Name, der (noch) nicht
 --    angeschlossen ist, darf NICHT stillschweigend durch eine andere im
 --    Netzwerk gefundene ME Bridge ersetzt werden -- klar als absent
 --    melden, damit Fehlkonfigurationen sichtbar bleiben.
@@ -98,7 +114,7 @@ do
   assert_true(router._state.bridge == nil, 'an explicitly configured but absent me_bridge name must not silently bind a different bridge')
 end
 
--- 4. Kein passendes Peripheral im Netzwerk -- bridge bleibt nil, kein
+-- 5. Kein passendes Peripheral im Netzwerk -- bridge bleibt nil, kein
 --    Absturz.
 do
   set_peripheral_mock({

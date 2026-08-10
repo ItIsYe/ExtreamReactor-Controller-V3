@@ -1,18 +1,9 @@
-local handle = assert(io.open('xreactor/master/main.lua', 'r'))
-local content = handle:read('*a')
-handle:close()
-
-local required = {
-  'shutdown_restart_cooldown_ms',
-  'workflow.cancelled_at',
-  'CANCEL_RECOVERY_COOLDOWN',
-  'workflow.requested_at = nil'
-}
-
-for _, token in ipairs(required) do
-  if not content:find(token, 1, true) then
-    error('missing shutdown oscillation guard token: ' .. token)
-  end
+local function read(p)local f=assert(io.open(p,'r'));local s=f:read('*a');f:close();return s end
+local ops=read('xreactor/master/runtime_ops_rt.lua')
+local coalescer=read('xreactor/master/rt_sync_coalescer.lua')
+for _,t in ipairs({'shutdown_candidate_stability_ms','shutdown_restart_cooldown_ms','advance_shutdown_candidate','CANCELLED_DEMAND_RECOVERED'}) do
+  assert((ops..coalescer):find(t,1,true),'missing shutdown anti-oscillation contract '..t)
 end
-
+assert(coalescer:find('workflow.cancelled_at',1,true),'cancel timestamp required for restart cooldown')
+assert(coalescer:find('debounce_stability',1,true) and coalescer:find('debounce_cooldown',1,true),'both stability and cooldown gates required')
 print('master_rt_shutdown_oscillation_guard_test.lua: ok')

@@ -208,17 +208,23 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
       end
       services:tick()
       if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
-        local confirmed = true
+        -- Fail closed: the contract is explicit true == hardware-safe.
+        -- false, nil, a missing callback, or a callback error all mean
+        -- "not safe yet" and must never advance the shared handshake.
+        local confirmed = false
         if type(quiesce_opts.on_quiesce) == "function" then
           local ok3, result3 = pcall(quiesce_opts.on_quiesce)
           if ok3 then
-            confirmed = result3 ~= false
+            confirmed = result3 == true
           else
-            confirmed = false
             pcall(function()
               require("core.utils").log("RUNTIME", "on_quiesce error: " .. tostring(result3), "ERROR")
             end)
           end
+        else
+          pcall(function()
+            require("core.utils").log("RUNTIME", "Quiesce requested without on_quiesce callback; refusing RUNTIME_STOPPED", "ERROR")
+          end)
         end
         if confirmed then
           handshake_lib.mark_safe_outputs_applied(quiesce_opts.handshake)

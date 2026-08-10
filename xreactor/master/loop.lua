@@ -1,13 +1,25 @@
 -- master/loop.lua
--- Event-Loop des Masters. Sauber getrennt von Bootstrap/Init.
+-- Event loop for MASTER.
 
 local M = {}
-
 local update_handshake = require("core.update_handshake")
 
 local REDSTONE_SIDES = { "top", "bottom", "left", "right", "front", "back" }
+local REMOTE_UPDATE_CONFIG = "/xreactor/config/remote_update.lua"
 
-local function make_redstone_handler(runtime, log, constants)
+local function local_update_token()
+  if not (fs and fs.exists and fs.exists(REMOTE_UPDATE_CONFIG)) then return nil end
+  local h = fs.open(REMOTE_UPDATE_CONFIG, "r")
+  if not h then return nil end
+  local src = h.readAll(); h.close()
+  local loader = load(src, "=master_remote_update", "t", {})
+  if not loader then return nil end
+  local ok, cfg = pcall(loader)
+  if ok and type(cfg) == "table" then return cfg.token end
+  return nil
+end
+
+local function make_redstone_handler(runtime, log, constants, quiesce_handshake)
   local last = {}
   for _, s in ipairs(REDSTONE_SIDES) do last[s] = false end
   return function()
@@ -15,24 +27,37 @@ local function make_redstone_handler(runtime, log, constants)
     for _, side in ipairs(REDSTONE_SIDES) do
       local ok, current = pcall(redstone.getInput, side)
       if ok and current and not last[side] then
-        log("Redstone-Trigger: broadcasting REMOTE_UPDATE", "WARN")
+        local token = local_update_token()
+        log("Redstone-Trigger: broadcasting managed REMOTE_UPDATE", "WARN")
         local nodes = runtime.state.nodes or {}
         local count = 0; for _ in pairs(nodes) do count = count + 1 end
-        if count == 0 then
-          log("Remote-Update: KEINE Nodes bekannt", "ERROR")
-        end
+        if count == 0 then log("Remote-Update: KEINE Nodes bekannt", "ERROR") end
         local sent = 0
         for node_id in pairs(nodes) do
           local ok2 = pcall(function()
-            runtime.refs.comms:send_command(node_id, { target = constants.command_targets.REMOTE_UPDATE })
+            runtime.refs.comms:send_command(node_id, {
+              target = constants.command_targets.REMOTE_UPDATE,
+              token = token,
+            })
           end)
           if ok2 then sent = sent + 1 end
         end
         log(("Broadcast: sent=%d known=%d"):format(sent, count), "WARN")
         for _ = 1, 10 do runtime.refs.services:tick(); os.sleep(0.05) end
-        log("Master aktualisiert sich selbst...", "WARN")
-        local remote_update = require("core.remote_update")
-        remote_update.run(function(level, text) log(text, level) end)
+
+        -- MASTER itself must use the exact same managed queue as every node.
+        -- No installer is allowed to start inside the redstone event handler.
+        local result = require("core.remote_update").queue_command({
+          token = token,
+          trigger = "LOCAL_REDSTONE",
+          log_prefix = "MASTER",
+          utils = runtime.libs and runtime.libs.utils,
+        })
+        if result and result.ok then
+          log("Master-Update sicher gequeued; Quiesce erfolgt ueber Auto-Updater", "WARN")
+        else
+          log("Master-Update nicht gequeued: " .. tostring(result and result.error or "unknown"), "ERROR")
+        end
         for _, s2 in ipairs(REDSTONE_SIDES) do last[s2] = true end
         return
       end
@@ -43,14 +68,8 @@ end
 
 function M.run(runtime, constants)
   local log = runtime.log
-  local check_redstone = make_redstone_handler(runtime, log, constants)
-  -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md (Abschnitt 4). MASTER hat keine eigenen
-  -- physischen Aktoren zu quiescen (nur Koordination) -- der Handler
-  -- bestaetigt daher sofort einen sicheren Zustand, verlaesst aber
-  -- kontrolliert die Schleife, statt (wie bisher) unbegrenzt weiterzulaufen,
-  -- waehrend ein Auto-Update MASTERs eigene Dateien ersetzt.
   local quiesce_handshake = _G.__xreactor_update_handshake
+  local check_redstone = make_redstone_handler(runtime, log, constants, quiesce_handshake)
   log("Entering event loop", "INFO")
   while true do
     local timer = os.startTimer(0.5)
@@ -67,28 +86,21 @@ function M.run(runtime, constants)
         break
       end
     end
-    if runtime.refs.services then
-      pcall(runtime.refs.services.tick, runtime.refs.services)
-    end
+    if runtime.refs.services then pcall(runtime.refs.services.tick, runtime.refs.services) end
     if quiesce_handshake and update_handshake.is_quiesce_requested(quiesce_handshake) then
       update_handshake.mark_safe_outputs_applied(quiesce_handshake)
       update_handshake.mark_runtime_stopped(quiesce_handshake)
       log("Quiesce angefordert -- Event-Loop wird kontrolliert beendet", "WARN")
       return
     end
-    -- MASTER-Gesamtampel (Feature, 2026-07-02): siehe
-    -- xreactor/optional/master_ampel.lua. Eigenes Rate-Limiting (alle ~3s),
-    -- nicht bei jedem 0.5s-Loop-Tick neu rechnen. Vollstaendig
-    -- fehlerisoliert wie alle optional/-Module.
+
     runtime.state.last_master_ampel_check = runtime.state.last_master_ampel_check or 0
     local now_ampel = os.epoch and os.epoch("utc") or 0
     if now_ampel - runtime.state.last_master_ampel_check >= 3000 then
       runtime.state.last_master_ampel_check = now_ampel
       pcall(function()
         local ok_mod, mod = pcall(require, "optional.master_ampel")
-        if ok_mod then
-          mod.update(runtime, constants)
-        end
+        if ok_mod then mod.update(runtime, constants) end
       end)
     end
   end

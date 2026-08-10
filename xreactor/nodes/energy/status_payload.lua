@@ -49,6 +49,8 @@ function M.new(opts)
     energy.storages_count = effective_storage_count
     energy.storage_snapshot_freshness_ms = energy.freshness_ms
     energy.storage_snapshot_stale = energy.stale == true
+    energy.data_stale = (effective_storage_count > 0 and energy.storage_snapshot_stale)
+      or (effective_matrix_count > 0 and energy.matrix_snapshot_stale)
     energy.aggregate_stored = total_stored
     energy.aggregate_capacity = total_capacity
     energy.aggregate_input = total_input
@@ -103,6 +105,10 @@ function M.new(opts)
     if runtime.devices.proto_mismatch then
       reasons[runtime.health.reasons.PROTO_MISMATCH] = true
       degrade_reasons[runtime.health.reasons.PROTO_MISMATCH] = true
+    end
+    if energy.data_stale then
+      reasons[runtime.health.reasons.STALE_DATA] = true
+      degrade_reasons[runtime.health.reasons.STALE_DATA] = true
     end
     if not runtime.is_master_connected() then
       reasons[runtime.health.reasons.COMMS_DOWN] = true

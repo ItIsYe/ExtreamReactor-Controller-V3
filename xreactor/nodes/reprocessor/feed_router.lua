@@ -101,7 +101,10 @@ function M:refresh_peripherals()
   local found_name = nil
   if peripheral.isPresent(name) then
     found_name = name
-  elseif not cfg.me_bridge then
+  elseif cfg.me_bridge == nil or cfg.me_bridge == ""
+      or cfg.me_bridge == "me_bridge" or cfg.me_bridge == "meBridge" then
+    -- Shipped convention defaults are eligible for capability fallback; only
+    -- genuinely custom names are strict bindings.
     found_name = find_me_bridge_by_methods()
   end
   if found_name then

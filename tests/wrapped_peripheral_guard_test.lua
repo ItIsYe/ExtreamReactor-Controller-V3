@@ -5,6 +5,16 @@ package.loaded['adapters.monitor'] = nil
 package.loaded['core.ui'] = nil
 package.loaded['core.monitor_manager'] = nil
 
+_G.fs = _G.fs or {
+  exists = function() return false end,
+  open = function() return nil end,
+  getDir = function() return '' end,
+  makeDir = function() end,
+}
+_G.textutils = _G.textutils or {
+  serialize = function() return '{}' end,
+  unserialize = function() return nil end,
+}
 local monitor_adapter = require('adapters.monitor')
 local ui = require('core.ui')
 local monitor_manager = require('core.monitor_manager')
@@ -33,7 +43,7 @@ local function test_monitor_adapter_find_calls_wrapped_getSize_safely()
             error('wrapped monitor getSize must not receive implicit self argument')
           end
           calls = calls + 1
-          return 10, 5
+          return 80, 24
         end,
         setTextScale = function(value, extra)
           if extra ~= nil then

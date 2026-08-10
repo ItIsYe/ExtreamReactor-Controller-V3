@@ -18,10 +18,14 @@ def get_version(ref="HEAD"):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-bump-required", action="store_true")
+    parser.add_argument("--base", default=None, help="base git ref/sha to compare")
+    parser.add_argument("--head", default=None, help="head git ref/sha to compare")
     args = parser.parse_args()
 
-    cur = get_version("HEAD")
-    prev = get_version("HEAD~1")
+    head_ref = args.head or "HEAD"
+    base_ref = args.base or "HEAD~1"
+    cur = get_version(head_ref)
+    prev = get_version(base_ref)
 
     if cur is None:
         print("WARN: cannot read current manifest_version")

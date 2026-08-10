@@ -1,4 +1,6 @@
-# Aktueller Gesamt-Audit – XReactor Controller V3
+# Historischer Gesamt-Audit – XReactor Controller V3
+
+> **Historischer Auditstand:** Diese Datei beschreibt den geprüften Stand `beta-v472` und bleibt als Befund- und Regressionsreferenz erhalten. Sie ist keine aktuelle Restpunktliste mehr. Der codeseitige Abschlussnachweis für Draft-PR #504 (`beta-v521`) steht in [`REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md`](REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md). Dort sind auch die noch offenen Ingame-Abnahmen aufgeführt.
 
 Stand: 2026-07-18  
 Branch: `beta`  

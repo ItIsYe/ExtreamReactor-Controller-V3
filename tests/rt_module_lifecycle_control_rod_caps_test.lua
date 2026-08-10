@@ -30,6 +30,9 @@ local function make_ctx(module)
       last_apply_source = source
     end,
     reactor_low_water = function() return false end,
+    evaluate_reactor_coolant = function()
+      return { triggered = false, condition = 'OK', measurement_valid = true, source = 'test' }
+    end,
     add_alarm = function() end,
     log = function() end,
     warn_once = function() end,

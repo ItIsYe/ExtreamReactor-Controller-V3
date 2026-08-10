@@ -439,6 +439,26 @@ local function handle_ack(message)
   if not ack_for then return end
   local entry = state.inflight[ack_for]
   if not entry then return end
+
+  -- ACK identity is part of the delivery proof. A matching ack_for alone is
+  -- insufficient: another peer must never be able to complete this inflight
+  -- command. Broadcast messages have no unique expected source, so source
+  -- matching is only enforceable for addressed messages.
+  local expected_src = entry.message and entry.message.dst or nil
+  local actual_src = message.src or message.sender_id
+  if expected_src ~= nil
+      and utils.normalize_node_id(actual_src) ~= utils.normalize_node_id(expected_src) then
+    log(("Ignoring ACK %s from unexpected source %s (expected %s)"):format(
+      tostring(ack_for), tostring(actual_src), tostring(expected_src)), "WARN")
+    return
+  end
+  if message.dst ~= nil
+      and utils.normalize_node_id(message.dst) ~= utils.normalize_node_id(state.node_id) then
+    log(("Ignoring ACK %s addressed to %s (local %s)"):format(
+      tostring(ack_for), tostring(message.dst), tostring(state.node_id)), "WARN")
+    return
+  end
+
   if message.type == constants.message_types.ACK_DELIVERED then
     entry.delivered = true
     entry.sent_ts = now_ms()

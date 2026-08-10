@@ -1,23 +1,12 @@
-local function read(path)
-  local file = assert(io.open(path, "r"))
-  local content = file:read("*a")
-  file:close()
-  return content
+local f=assert(io.open('xreactor/master/runtime_ops_rt.lua','r'));local s=f:read('*a');f:close()
+for _,token in ipairs({'FAILED_ACK_MISSING','FAILED_TIMEOUT','WAITING_STATE','workflow.request_command_at','workflow.command_ack_at'}) do
+  assert(s:find(token,1,true),'missing timeout workflow contract '..token)
 end
-
-local source = read("xreactor/master/main.lua")
-
-local required = {
-  "local down_grace_ms = (config.comms and config.comms.peer_down_grace_s or 0) * 1000",
-  "should_mark_down = last_seen and (now - last_seen > (timeout_ms + down_grace_ms))",
-  "node.health.reasons = node.health.reasons or {}",
-  "node.health.reasons[health.reasons.COMMS_DOWN] = true"
-}
-
-for _, snippet in ipairs(required) do
-  if not source:find(snippet, 1, true) then
-    error("missing master timeout grace guard snippet: " .. tostring(snippet))
-  end
-end
-
-print("master_timeout_grace_guard_test.lua: ok")
+local ack_deadline='if not workflow.request_ack_at and workflow.request_command_at and now - workflow.request_command_at > 15000 then'
+local state_deadline='if workflow.command_ack_at and now - workflow.command_ack_at > 15000 then'
+assert(s:find(ack_deadline,1,true),'ACK-missing timeout must remain explicit 15s from request command')
+assert(s:find(state_deadline,1,true),'state-transition timeout must remain explicit 15s from accepted command ACK')
+local waiting=assert(s:find('elseif workflow.stage == "WAITING_STATE" then',1,true))
+local state_fail=assert(s:find('workflow_fail("FAILED_TIMEOUT"',waiting,true))
+assert(state_fail>waiting,'state timeout must be scoped to WAITING_STATE')
+print('master_timeout_grace_guard_test.lua: ok')

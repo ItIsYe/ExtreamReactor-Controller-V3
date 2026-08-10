@@ -409,19 +409,92 @@ function M.update_inductor_for_rpm(ctx, name, turbine, caps, rpm, target_rpm)
 
   if engaged == ctrl.inductor_engaged then return true, true, measured_api end
   if not caps.setInductorEngaged then
-    ctrl.inductor_engaged = engaged
-    return true, true, "inductor-write-unavailable"
+    -- Desired state is not a confirmed hardware state. Keep the last
+    -- confirmed/read-back value so the next control tick continues trying.
+    return false, false, "inductor-write-unavailable"
   end
 
-  ctrl.inductor_engaged = engaged
-  state.last_change_ts = now
   local ok, applied = pcall(setInductor, turbine, caps, engaged)
   if ok and applied then
+    ctrl.inductor_engaged = engaged
+    state.last_change_ts = now
     local reason = is_overspeed and "OVERSPEED_BRAKE" or "TARGET_TRACKING"
     if ctrl.mode == "OVERSPEED_BRAKE" then reason = "OVERSPEED_BRAKE" end
     ctrl.last_coil_reason = reason
   end
   return ok, applied, measured_api
+end
+
+-- Explicit update-safe turbine state: flow limit 0, inactive, and coil
+-- engaged where supported. A fresh flow readback is mandatory; optional
+-- active/inductor readbacks are mandatory when the corresponding getter exists.
+function M.apply_update_quiesce(ctx)
+  local result = { ok = true, turbines = {} }
+  for _, name in ipairs(ctx.config.turbines or {}) do
+    local item = { name = name }
+    local turbine = ctx.peripherals and ctx.peripherals.turbines and ctx.peripherals.turbines[name] or nil
+    if not turbine and ctx.utils and type(ctx.utils.safe_wrap) == "function" then
+      turbine = select(1, ctx.utils.safe_wrap(name))
+    end
+    item.present = turbine ~= nil
+    if not turbine then
+      item.ok = false
+      result.ok = false
+      result.turbines[#result.turbines + 1] = item
+      goto continue
+    end
+
+    local caps = M.get_device_caps(ctx, "turbines", name)
+    local ok_flow, flow_applied = pcall(setTurbineFlow, ctx, turbine, caps, 0)
+    item.flow_write = ok_flow and flow_applied == true
+    local flow, flow_source = M.read_turbine_flow(ctx, turbine, caps)
+    item.flow = flow
+    item.flow_source = flow_source
+    item.flow_safe = type(flow) == "number" and math.abs(flow) <= 0.01
+
+    item.active_safe = true
+    if type(turbine.setActive) == "function" then
+      local ok_set, set_result = pcall(turbine.setActive, false)
+      item.active_write = ok_set and set_result ~= false
+      if type(turbine.getActive) == "function" then
+        local ok_read, active = pcall(turbine.getActive)
+        item.active_readback = ok_read and type(active) == "boolean"
+        item.active = active
+        item.active_safe = ok_read and active == false
+      else
+        item.active_safe = item.active_write
+      end
+    end
+
+    item.inductor_safe = true
+    if type(turbine.setInductorEngaged) == "function" then
+      local ok_set, set_result = pcall(turbine.setInductorEngaged, true)
+      item.inductor_write = ok_set and set_result ~= false
+      if type(turbine.getInductorEngaged) == "function" then
+        local ok_read, engaged = pcall(turbine.getInductorEngaged)
+        item.inductor_readback = ok_read and type(engaged) == "boolean"
+        item.inductor_engaged = engaged
+        item.inductor_safe = ok_read and engaged == true
+      else
+        item.inductor_safe = item.inductor_write
+      end
+    end
+
+    item.ok = item.flow_write and item.flow_safe and item.active_safe and item.inductor_safe
+    if item.ok then
+      local ctrl = get_turbine_ctrl(ctx, name)
+      ctrl.flow = 0
+      ctrl.requested_flow = 0
+      ctrl.confirmed_flow = 0
+      ctrl.active_state = false
+      if item.inductor_write then ctrl.inductor_engaged = true end
+    else
+      result.ok = false
+    end
+    result.turbines[#result.turbines + 1] = item
+    ::continue::
+  end
+  return result.ok, result
 end
 
 -- ── Overspeed-Brake-Coil ────────────────────────────────────────────────────
@@ -432,7 +505,7 @@ local function enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, deci
   end
   if ctrl.inductor_engaged == true then return true, "already-engaged" end
   if not (caps and caps.setInductorEngaged) then
-    ctrl.inductor_engaged = true
+    -- Do not mark the brake as engaged without a successful actuator write.
     return false, "inductor-write-unavailable"
   end
   local ok, applied = pcall(setInductor, turbine, caps, true)

@@ -7,11 +7,6 @@ function M.handle_command_timeouts(opts)
   local comms = opts.comms
   local nodes = opts.nodes
   local log = opts.log
-  -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md Abschnitt 10). Optional -- nur gesetzt vom
-  -- echten Master-Boot, damit ein liegengebliebenes Config-Editor-Edit-
-  -- Ziel (nie ein ACK erhalten, max_retries erschoepft) als TIMEOUT statt
-  -- unbegrenzt als "pending" angezeigt wird.
   local config_edits_state = opts.config_edits_state
   local on_config_edit_change = opts.on_config_edit_change
   local timeouts = comms:consume_timeouts() or {}
@@ -60,8 +55,29 @@ function M.build_master_alert_payload(alert_service, config)
   return { alerts = { ts = os.epoch("utc"), by_node = by_node } }
 end
 
--- Fix P6: housekeeping_tick war ein unlesbares inline-Lambda in runtime_loop.lua.
--- Jetzt saubere Funktion hier, runtime_loop ruft housekeeping.tick(runtime) auf.
+local function normalize_rt_capacity_truth(runtime)
+  local constants = runtime.libs.constants
+  for _, node in pairs(runtime.state.nodes or {}) do
+    if node.role == constants.roles.RT_NODE then
+      local rt = type(node.rt) == "table" and node.rt or nil
+      local cap = tonumber(node.capacity_max)
+        or tonumber(rt and rt.capacity_max)
+        or 0
+      -- message_handlers historically only ever set capacity_ready to true.
+      -- RT explicitly publishes max=0 whenever learning is invalidated, so
+      -- that state is authoritative proof that "ready" must be false too.
+      -- Clearing both mirrors prevents UI/diagnostics from advertising a
+      -- remembered ready state after topology invalidation.
+      if cap <= 0 then
+        node.capacity_ready = false
+        if rt then rt.capacity_ready = false end
+      elseif rt and rt.capacity_ready == false then
+        node.capacity_ready = false
+      end
+    end
+  end
+end
+
 function M.tick(runtime)
   M.handle_command_timeouts({
     constants = runtime.libs.constants,
@@ -72,27 +88,15 @@ function M.tick(runtime)
     config_edits_state = runtime.state.config_edits,
     on_config_edit_change = runtime.persist_config_edits
   })
-  if runtime.refs.sequencer then
-    runtime.refs.sequencer:tick(runtime.state.nodes)
-  end
-  -- M1: flush über den kanonischen runtime-Wrapper, nicht direkt auf Coalescer
-  if runtime.flush_rt_sync_queue then
-    runtime.flush_rt_sync_queue()
-  end
+  normalize_rt_capacity_truth(runtime)
+  if runtime.refs.sequencer then runtime.refs.sequencer:tick(runtime.state.nodes) end
+  if runtime.flush_rt_sync_queue then runtime.flush_rt_sync_queue() end
   local rt_ops = runtime.libs.rt_ops
-  if rt_ops then
-    rt_ops.check_timeouts(runtime)
-  end
+  if rt_ops then rt_ops.check_timeouts(runtime) end
   local profile_ops = runtime.libs.profile_ops
-  if profile_ops then
-    profile_ops.sample_trends(runtime)
-  end
-  -- Feature (2026-07-08): Reaktor-Fuellstand periodisch an FUEL-Nodes
-  -- weiterleiten (siehe master/fuel_relay.lua).
+  if profile_ops then profile_ops.sample_trends(runtime) end
   local fuel_relay = runtime.libs.fuel_relay
-  if fuel_relay then
-    fuel_relay.tick(runtime)
-  end
+  if fuel_relay then fuel_relay.tick(runtime) end
 end
 
 return M
