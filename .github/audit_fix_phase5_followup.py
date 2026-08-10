@@ -18,13 +18,6 @@ replace_once(p,
 ''',
 '''    payload = { result = { ok = true, persisted = true } },
 ''')
-replace_once(p,
-'''--     and laesst master/config_edits.lua ueber APPLIED/REJECTED
---     entscheiden.
-''',
-'''--     and laesst master/config_edits.lua ueber APPLIED_PERSISTED /
---     APPLIED_VOLATILE / REJECTED entscheiden.
-''')
 
 # RT mock: Lua locals are not visible inside their own RHS table initializer.
 p = 'tests/rt_update_quiesce_hardware_confirmation_test.lua'
