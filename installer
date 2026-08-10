@@ -79,13 +79,16 @@ if forced_ref ~= nil then
   sha = forced_ref
   p("Recovery-SHA: " .. sha:sub(1, 12) .. " (aus Installationsjournal)")
 else
+  -- Fix: SHA aus release.lua lesen statt GitHub API (Rate-Limit 60/h ohne Token)
   for attempt = 1, 4 do
-    local ok_sha, r_sha = pcall(http.get, GITHUB_API)
+    local ok_sha, r_sha = pcall(http.get, GITHUB_RAW_RELEASE)
     if ok_sha and r_sha then
       local ok2, body = pcall(r_sha.readAll); pcall(r_sha.close)
-      if ok2 and type(body) == "string" then
-        sha = body:match('"sha"%s*:%s*"(%x+)"')
-        if sha then break end
+      if ok2 and type(body) == "string" and #body > 0 then
+        local commit_sha = body:match('commit_sha%s*=%s*"(%x+)"')
+        if commit_sha and #commit_sha == 40 then sha = commit_sha; break end
+        local source_ref = body:match('source_ref%s*=%s*"([^"]+)"')
+        if source_ref then sha = source_ref; break end
       end
     end
     if attempt < 4 then
@@ -96,7 +99,7 @@ else
   if not sha then
     error("GitHub Branch-SHA konnte nicht aufgeloest werden. Installation aus Sicherheitsgruenden abgebrochen; bitte spaeter erneut versuchen.", 0)
   end
-  p("SHA: " .. sha:sub(1, 12))
+  p("SHA: " .. tostring(sha):sub(1, 12))
 end
 
 -- Der gesamte Lauf ist an exakt diesen Commit gebunden.
