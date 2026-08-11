@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v533
 return {
-  manifest_version = 533,
-  manifest_id = "manifest-v533",
+  manifest_version = 534,
+  manifest_id = "manifest-v534",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -13,11 +13,11 @@ return {
     { path = "installer/stage.lua", size_bytes = 9164, hash = "b067f20b", always = true },
     { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always = true },
     { path = "installer/auto_update.lua", size_bytes = 11590, hash = "86e64cdf", always = true },
-    { path = "installer/init.lua", size_bytes = 38497, hash = "b0a1fcc1", always = true },
+    { path = "installer/init.lua", always = true  },
     { path = "installer/journal.lua", size_bytes = 12547, hash = "613d29f8", always = true },
     { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
     { path = "installer/reactor_naming.lua", size_bytes = 12107, hash = "9d65c13f", always = true },
-    { path = "release.lua", size_bytes = 345, hash = "75036fc5", always = true },
+    { path = "release.lua" , always = true },
     { path = "start.lua", size_bytes = 18876, hash = "09a6af1a", always = true },
     { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
     { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
