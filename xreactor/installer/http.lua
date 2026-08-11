@@ -1,14 +1,9 @@
 -- installer/http.lua
--- Download-Modul: SHA-PIN, Retries, HTML-Check
--- CC:Tweaked kompatibel: http.get(url) ohne timeout-Parameter
+-- Download-Modul: einheitlicher Source-Ref, Retries, Timeout, HTML-Check
 
 local M = {}
 
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
-
--- resolve_sha() entfernt -- Installer verwendet direkt "beta" als Ref (kein API-Call)
-function M.resolve_sha() return "beta" end
 
 -- HTML-Erkennung (CDN-Fehlerseiten)
 function M.is_html(body)
@@ -65,7 +60,7 @@ end
 -- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
 -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 14).
 -- Diese Funktion wich bisher bei einem Fehlschlag der SHA-gepinnten URL
--- automatisch, pro Datei einzeln, auf den ungepinnten "beta"-Branch-Pfad
+-- automatisch, pro Datei einzeln, auf einen anderen "beta"-Branch-Pfad
 -- aus -- waehrend installer/init.lua das Manifest entweder ausschliesslich
 -- SHA-gepinnt ODER ausschliesslich von "beta" laedt. In jeder Kombination
 -- konnten so Manifest und einzelne Dateien aus zwei verschiedenen Commits
@@ -75,7 +70,7 @@ end
 -- (installer/init.lua) legt "ref" fuer den GESAMTEN Lauf einmal fest und
 -- verwendet ihn sowohl fuers Manifest als auch fuer jede Datei; schlaegt
 -- der Lauf komplett fehl, muss ein erneuter, komplett frischer Versuch
--- (mit neu aufgeloester SHA) gestartet werden, statt Quellen zu mischen.
+-- gestartet werden, statt Quellen innerhalb eines Laufs zu mischen.
 function M.download_file(rel_path, ref, opts)
   local url
   if ref and ref ~= "beta" then

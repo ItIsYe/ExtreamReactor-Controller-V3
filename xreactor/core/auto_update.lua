@@ -13,7 +13,6 @@
 local M = {}
 
 local RELEASE_URL_TEMPLATE = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/release.lua"
-local BRANCH_API_URL        = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 local LOCAL_RELEASE_PATH    = "/xreactor/release.lua"
 local ARMING_PATH           = "/xreactor/config/remote_update.lua"
 local DEFAULT_INTERVAL_S    = 300  -- 5 Minuten
@@ -28,24 +27,10 @@ local function get_local_version()
   return v and tonumber(v) or nil
 end
 
--- Branch-SHA auflösen (Cache-sicher)
-local function resolve_sha()
-  if not http or type(http.get) ~= "function" then return nil end
-  local ok, resp = pcall(http.get, BRANCH_API_URL, nil, { timeout = 10 })
-  if not ok or not resp then return nil end
-  local ok2, body = pcall(resp.readAll); pcall(resp.close)
-  if not ok2 or type(body) ~= "string" then return nil end
-  return body:match('"sha"%s*:%s*"(%x+)"')
-end
-
--- Remote Versionsnummer lesen (immer frisch per SHA)
+-- Remote Versionsnummer direkt vom dokumentierten beta-Ref lesen.
 local function get_remote_version(log)
   if not http or type(http.get) ~= "function" then return nil end
-  local sha = resolve_sha()
-  local url = sha
-    and ("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/" .. sha .. "/xreactor/release.lua")
-    or  RELEASE_URL_TEMPLATE
-  local ok, resp = pcall(http.get, url, nil, { timeout = 10 })
+  local ok, resp = pcall(http.get, RELEASE_URL_TEMPLATE, nil, { timeout = 10 })
   if not ok or not resp then
     log("WARN", "AutoUpdate: release.lua Download fehlgeschlagen")
     return nil

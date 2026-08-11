@@ -32,8 +32,8 @@ local function now()
 end
 
 local function is_terminate_error(err)
-  local message = tostring(err or ""):lower()
-  return message:find("terminate", 1, true) ~= nil
+  local message = tostring(err or ""):match("^%s*(.-)%s*$"):lower()
+  return message == "terminate" or message == "terminated"
 end
 
 local function count_table(value)

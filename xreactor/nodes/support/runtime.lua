@@ -69,7 +69,8 @@ function M.safe_wrapped_call(obj, method, ...)
 end
 
 local function is_terminate(err)
-  return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
+  local message = tostring(err or ""):match("^%s*(.-)%s*$"):lower()
+  return message == "terminate" or message == "terminated"
 end
 
 -- Feature (2026-07-13): SHARED-P0.2 (siehe docs/CODING_AI_OTHER_NODES_

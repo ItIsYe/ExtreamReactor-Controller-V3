@@ -95,6 +95,11 @@ end
 function comms_service:_authorize_command(message)
   local local_role = normalize_role(self.network and self.network.role or self.role or self.config.role)
   if local_role == normalize_role(constants.roles.MASTER) then return true end
+  local command_auth_required = type(self.config.comms) ~= "table"
+    or self.config.comms.require_command_auth ~= false
+  if command_auth_required and (type(message) ~= "table" or message.auth_verified ~= true) then
+    return false, "command authentication missing"
+  end
   if normalize_role(message and message.role) ~= normalize_role(constants.roles.MASTER) then
     return false, "command sender is not MASTER"
   end

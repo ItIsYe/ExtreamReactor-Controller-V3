@@ -20,7 +20,11 @@ local DEFAULT_CONFIG = {
   queue_limit = 200,
   drop_simulation = 0,
   volatile_ttl_s = 15.0,
-  peer_retention_s = 180.0
+  peer_retention_s = 180.0,
+  require_command_auth = true,
+  command_max_age_s = 30.0,
+  auth_config_path = "/xreactor/config/network_auth.lua",
+  replay_state_path = "/xreactor/state/command_replay.lua"
 }
 
 local state = {
@@ -34,6 +38,9 @@ local state = {
   log_prefix = "COMMS",
   logger = nil,
   drop_simulation = 0,
+  auth_secret = nil,
+  command_highwater = {},
+  last_command_ts = 0,
   handlers = {},
   any_handlers = {},
   queue = {},
@@ -68,6 +75,9 @@ local function reset_runtime_state()
   state.log_prefix = "COMMS"
   state.logger = nil
   state.drop_simulation = 0
+  state.auth_secret = nil
+  state.command_highwater = {}
+  state.last_command_ts = 0
   state.handlers = {}
   state.any_handlers = {}
   state.queue = {}
@@ -140,7 +150,65 @@ local function sanitize_config(config)
   merged.drop_simulation = clamp_number(merged.drop_simulation, DEFAULT_CONFIG.drop_simulation, 0, 0.9)
   merged.volatile_ttl_s = clamp_number(merged.volatile_ttl_s, DEFAULT_CONFIG.volatile_ttl_s, 1.0, 300.0)
   merged.peer_retention_s = clamp_number(merged.peer_retention_s, DEFAULT_CONFIG.peer_retention_s, 10.0, 3600.0)
+  merged.require_command_auth = merged.require_command_auth ~= false
+  merged.command_max_age_s = clamp_number(merged.command_max_age_s, DEFAULT_CONFIG.command_max_age_s, 2.0, 300.0)
+  if type(merged.auth_config_path) ~= "string" or merged.auth_config_path == "" then
+    merged.auth_config_path = DEFAULT_CONFIG.auth_config_path
+  end
+  if type(merged.replay_state_path) ~= "string" or merged.replay_state_path == "" then
+    merged.replay_state_path = DEFAULT_CONFIG.replay_state_path
+  end
   return merged
+end
+
+local function nonempty_secret(value)
+  if type(value) ~= "string" then return nil end
+  local trimmed = value:match("^%s*(.-)%s*$") or ""
+  if #trimmed < 16 then return nil end
+  return value
+end
+
+local function load_auth_secret(config)
+  local direct = nonempty_secret(config.auth_secret)
+  if direct then return direct end
+  local path = config.auth_config_path
+  if fs and type(fs.exists) == "function" and fs.exists(path) then
+    local loaded = utils.load_config(path, {})
+    if type(loaded) == "table" then
+      local from_file = nonempty_secret(loaded.secret or loaded.auth_secret)
+      if from_file then return from_file end
+    end
+  end
+  -- Existing installations may already use one shared remote-update token.
+  -- Reusing it avoids a second secret while still requiring explicit provisioning.
+  local remote_path = "/xreactor/config/remote_update.lua"
+  if fs and type(fs.exists) == "function" and fs.exists(remote_path) then
+    local loaded = utils.load_config(remote_path, {})
+    if type(loaded) == "table" then
+      local from_remote = nonempty_secret(loaded.token)
+      if from_remote then return from_remote end
+    end
+  end
+  return nil
+end
+
+local function protected_message_type(msg_type)
+  return msg_type == constants.message_types.COMMAND
+    or msg_type == constants.message_types.ACK_DELIVERED
+    or msg_type == constants.message_types.ACK_APPLIED
+end
+
+local function load_command_highwater(path)
+  if not (fs and type(fs.exists) == "function" and fs.exists(path)) then return {} end
+  local loaded = utils.load_config(path, {})
+  if type(loaded) ~= "table" then return {} end
+  local clean = {}
+  for sender, timestamp in pairs(loaded) do
+    if type(sender) == "string" and type(timestamp) == "number" and timestamp >= 0 then
+      clean[sender] = timestamp
+    end
+  end
+  return clean
 end
 
 local function log(message, level)
@@ -180,7 +248,7 @@ local function prune_dedupe()
         table.insert(trimmed, entry)
       end
     end
-    state.dedupe[sender] = trimmed
+    if #trimmed > 0 then state.dedupe[sender] = trimmed else state.dedupe[sender] = nil end
   end
 end
 
@@ -225,6 +293,11 @@ local function should_drop()
 end
 
 local function build_message(dst, msg_type, payload)
+  local timestamp = now_ms()
+  if msg_type == constants.message_types.COMMAND and timestamp <= state.last_command_ts then
+    timestamp = state.last_command_ts + 1
+  end
+  if msg_type == constants.message_types.COMMAND then state.last_command_ts = timestamp end
   return {
     type = msg_type,
     message_id = build_id(),
@@ -233,8 +306,8 @@ local function build_message(dst, msg_type, payload)
     node_id = state.node_id,
     dst = dst,
     role = state.role,
-    ts = now_ms(),
-    timestamp = now_ms(),
+    ts = timestamp,
+    timestamp = timestamp,
     proto_ver = state.proto_ver,
     payload = payload or {}
   }
@@ -257,6 +330,20 @@ local function send_raw(channel, message)
     log("Invalid outbound message dropped", "WARN")
     state.metrics.dropped = state.metrics.dropped + 1
     return false, "invalid payload"
+  end
+  if protected_message_type(sanitized.type) and state.config.require_command_auth then
+    if not state.auth_secret then
+      log("Protected message blocked: network auth secret is not provisioned", "ERROR")
+      state.metrics.dropped = state.metrics.dropped + 1
+      return false, "command_auth_unavailable"
+    end
+    local signed, sign_err = protocol.sign_message(sanitized, state.auth_secret)
+    if not signed then
+      log("Protected message signing failed: " .. tostring(sign_err), "ERROR")
+      state.metrics.dropped = state.metrics.dropped + 1
+      return false, "command_auth_failed"
+    end
+    message.auth = sanitized.auth
   end
   if should_drop() then
     log("Drop simulation: outbound message dropped", "WARN")
@@ -482,6 +569,21 @@ local function handle_ack(message)
   end
 end
 
+local function accept_new_command(message)
+  local sender = message.src or message.sender_id
+  local timestamp = message.ts or message.timestamp
+  if type(sender) ~= "string" or type(timestamp) ~= "number" then return false, "invalid replay identity" end
+  local previous = state.command_highwater[sender]
+  if type(previous) == "number" and timestamp <= previous then return false, "stale or replayed command" end
+  local updated = {}
+  for key, value in pairs(state.command_highwater) do updated[key] = value end
+  updated[sender] = timestamp
+  local ok, err = utils.write_config(state.config.replay_state_path, updated)
+  if not ok then return false, "replay watermark persistence failed: " .. tostring(err) end
+  state.command_highwater = updated
+  return true
+end
+
 local function handle_message(message)
   update_peer(message)
   if message.dst and message.dst ~= state.node_id then
@@ -501,6 +603,16 @@ local function handle_message(message)
           send_ack(message, constants.message_types.ACK_APPLIED, { result = dup.applied })
         end
       end
+      return
+    end
+  end
+
+  if message.type == constants.message_types.COMMAND and state.config.require_command_auth then
+    local accepted, replay_err = accept_new_command(message)
+    if not accepted then
+      local rejected = { ok = false, error = replay_err, reason_code = "COMMAND_REPLAY_REJECTED" }
+      send_ack(message, constants.message_types.ACK_APPLIED, { result = rejected })
+      add_dedupe(message.src, message.message_id, rejected)
       return
     end
   end
@@ -636,6 +748,12 @@ function comms.init(opts)
   state.log_prefix = opts.log_prefix or "COMMS"
   state.logger = opts.logger
   state.drop_simulation = opts.drop_simulation or state.config.drop_simulation
+  state.auth_secret = load_auth_secret(state.config)
+  state.command_highwater = load_command_highwater(state.config.replay_state_path)
+  if state.config.require_command_auth and not state.auth_secret then
+    log("Command transport is fail-closed until a >=16 character shared secret is configured in "
+      .. tostring(state.config.auth_config_path) .. " or remote_update.lua token", "ERROR")
+  end
   state.initialized = true
   return comms
 end
@@ -653,6 +771,10 @@ end
 function comms.send(dst, msg_type, payload, opts)
   if not state.initialized then
     error("comms not initialized")
+  end
+  if protected_message_type(msg_type) and state.config.require_command_auth and not state.auth_secret then
+    log("Protected message rejected before queueing: network auth secret is not provisioned", "ERROR")
+    return nil, "command_auth_unavailable"
   end
   local message = build_message(dst, msg_type, payload)
   if opts and opts.message_id then
@@ -692,6 +814,19 @@ function comms.tick(now)
   for _, raw in ipairs(queue) do
     local message = protocol.sanitize_message(raw)
     local ok, err = protocol.validate(message)
+    if ok and protected_message_type(message.type) and state.config.require_command_auth then
+      if not state.auth_secret then
+        ok, err = false, "command auth unavailable"
+      else
+        ok, err = protocol.verify_message_auth(message, state.auth_secret)
+        local timestamp = message and (message.ts or message.timestamp) or nil
+        if ok and (type(timestamp) ~= "number"
+            or math.abs(now_ms() - timestamp) > state.config.command_max_age_s * 1000) then
+          ok, err = false, "authenticated message outside freshness window"
+        end
+        if ok then message.auth_verified = true end
+      end
+    end
     if not ok then
       log("Invalid message ignored: " .. tostring(err), "WARN")
       if err == "proto_ver mismatch" then

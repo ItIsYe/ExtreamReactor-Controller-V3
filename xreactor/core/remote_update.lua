@@ -5,8 +5,7 @@ local M = {}
 
 local ARMING_CONFIG_PATH = "/xreactor/config/remote_update.lua"
 local INSTALLER_URL_BRANCH = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer"
-local INSTALLER_API_URL = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
-local INSTALLER_REPO = "ItIsYe/ExtreamReactor-Controller-V3"
+local RELEASE_URL_BRANCH = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/release.lua"
 
 local function make_log(opts)
   opts = opts or {}
@@ -105,41 +104,17 @@ local function is_html(body)
   return s:find("<html", 1, true) ~= nil or s:find("<!doctype", 1, true) ~= nil
 end
 
-local function resolve_installer_sha(log)
-  if not http or type(http.get) ~= "function" then return nil end
-  local ok, r = pcall(http.get, INSTALLER_API_URL, nil, { timeout = 10 })
-  if not ok or not r then
-    log("WARN", "Remote-Update: Branch-SHA nicht auflösbar")
-    return nil
-  end
-  local ok2, body = pcall(r.readAll); pcall(r.close)
-  if not ok2 or type(body) ~= "string" then return nil end
-  local sha = body:match('"sha"%s*:%s*"(%x+)"')
-  if sha then log("INFO", "Remote-Update: SHA-PIN " .. sha:sub(1, 10)) end
-  return sha
-end
-
 local function download_installer(log)
-  local sha = resolve_installer_sha(log)
-  local urls = {}
-  if sha then
-    urls[1] = "https://raw.githubusercontent.com/" .. INSTALLER_REPO .. "/" .. sha .. "/installer"
-    urls[2] = INSTALLER_URL_BRANCH
-  else
-    urls[1] = INSTALLER_URL_BRANCH
-  end
   local delays = { 2, 5, 10, 20 }
-  for _, url in ipairs(urls) do
-    for attempt = 1, 4 do
-      local ok, r = pcall(http.get, url, nil, { timeout = 20 })
-      if ok and r then
-        local ok2, body = pcall(r.readAll); pcall(r.close)
-        if ok2 and type(body) == "string" and #body > 100 and not is_html(body) then
-          return body, url
-        end
+  for attempt = 1, 4 do
+    local ok, r = pcall(http.get, INSTALLER_URL_BRANCH, nil, { timeout = 20 })
+    if ok and r then
+      local ok2, body = pcall(r.readAll); pcall(r.close)
+      if ok2 and type(body) == "string" and #body > 100 and not is_html(body) then
+        return body, INSTALLER_URL_BRANCH
       end
-      if attempt < 4 and os and type(os.sleep) == "function" then os.sleep(delays[attempt] or 20) end
     end
+    if attempt < 4 and os and type(os.sleep) == "function" then os.sleep(delays[attempt] or 20) end
   end
   return nil, "all installer downloads failed"
 end
@@ -195,36 +170,17 @@ end
 function M.check_version(log)
   log = log or function() end
   if not http or type(http.get) ~= "function" then return nil end
-  local sha = nil
+  local remote_v = nil
   for attempt = 1, 3 do
-    local ok, r = pcall(http.get, INSTALLER_API_URL, nil, { timeout = 10 })
+    local ok, r = pcall(http.get, RELEASE_URL_BRANCH, nil, { timeout = 10 })
     if ok and r then
       local ok2, body = pcall(r.readAll); pcall(r.close)
-      if ok2 and type(body) == "string" then
-        sha = body:match('"sha"%s*:%s*"(%x+)"')
-        if sha then break end
+      if ok2 and type(body) == "string" and not is_html(body) then
+        remote_v = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
+        if remote_v then break end
       end
     end
     if attempt < 3 and os and type(os.sleep) == "function" then os.sleep(3) end
-  end
-  local urls = sha and {
-    "https://raw.githubusercontent.com/" .. INSTALLER_REPO .. "/" .. sha .. "/xreactor/release.lua",
-    "https://raw.githubusercontent.com/" .. INSTALLER_REPO .. "/beta/xreactor/release.lua",
-  } or { "https://raw.githubusercontent.com/" .. INSTALLER_REPO .. "/beta/xreactor/release.lua" }
-  local remote_v = nil
-  for _, url in ipairs(urls) do
-    for attempt = 1, 3 do
-      local ok, r = pcall(http.get, url, nil, { timeout = 10 })
-      if ok and r then
-        local ok2, body = pcall(r.readAll); pcall(r.close)
-        if ok2 and type(body) == "string" and not is_html(body) then
-          remote_v = tonumber(body:match("manifest_version%s*=%s*(%d+)"))
-          if remote_v then break end
-        end
-      end
-      if attempt < 3 and os and type(os.sleep) == "function" then os.sleep(3) end
-    end
-    if remote_v then break end
   end
   if not remote_v then return nil end
   local local_v = nil

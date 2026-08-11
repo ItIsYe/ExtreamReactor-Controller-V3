@@ -12,7 +12,7 @@
 -- Git-Historie dieser Datei -- mehrfach in dieser Session).
 --
 -- Jetzt macht /installer NUR NOCH:
---   1. einen einzigen Source-Ref aufloesen (SHA oder "beta"),
+--   1. einen einzigen Source-Ref festlegen (Recovery-SHA oder "beta"),
 --   2. die kanonischen Installermodule GENAU dieses Refs frisch
 --      herunterladen (nicht eingebettet, nicht potenziell veraltet),
 --   3. sie per load() in Module umwandeln,
@@ -73,7 +73,9 @@ local forced_ref = rawget(_G, "__xreactor_forced_ref")
 local sha = (forced_ref ~= nil) and tostring(forced_ref) or "beta"
 p("Ref: " .. tostring(sha))
 
--- Der gesamte Lauf ist an exakt diesen Commit gebunden.
+-- Der gesamte Lauf verwendet denselben Ref. Bei "beta" verhindern die
+-- Manifest-Hashes, dass Dateien aus unterschiedlichen Branch-Staenden
+-- unbemerkt gemeinsam installiert werden.
 local ref = sha
 local base = GITHUB_RAW..ref.."/xreactor/"
 

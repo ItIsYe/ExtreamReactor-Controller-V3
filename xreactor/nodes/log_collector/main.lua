@@ -1419,7 +1419,8 @@ end
 -- ── Crash screen ────────────────────────────────────────────────────────────
 local ok, err = xpcall(run, function(e) return e end)
 if ok then return end
-if tostring(err or ""):lower():find("terminate", 1, true) then return end
+local terminate_message = tostring(err or ""):match("^%s*(.-)%s*$"):lower()
+if terminate_message == "terminate" or terminate_message == "terminated" then return end
 
 local is_loop, crash_count = record_crash_and_check_loop()
 
