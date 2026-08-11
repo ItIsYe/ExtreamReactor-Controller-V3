@@ -138,7 +138,15 @@ function M.render_monitor(ctx, model)
     monitor_router:set_monitor_name(devices.monitor_name)
   end
   if render_buffer.rebuilt and monitor_router then
-    monitor_router.last_render_mon = render_target
+    if type(monitor_router.invalidate_layout) == "function" then
+      monitor_router:invalidate_layout()
+    else
+      -- Compatibility for injected routers used by installations which
+      -- update modules independently: a replacement buffer must receive a
+      -- complete first frame even when the model snapshot is unchanged.
+      monitor_router.last_snapshot = nil
+      monitor_router.last_render_mon = nil
+    end
     render_buffer.rebuilt = false
   end
   render_frame(monitor_router, render_target, mon, model)
@@ -150,6 +158,10 @@ function M.handle_input(event)
     ui_diag_extra.pointer_events_received = ui_diag_extra.pointer_events_received + 1
   end
   if monitor_router and monitor_router:handle_input(event) then return true end
+  -- Page handlers are coordinate-based touch handlers.  Passing key, char or
+  -- resize events into them produced nil/boolean pseudo-coordinates and made
+  -- the input pipeline depend on every page being accidentally nil-safe.
+  if kind ~= "monitor_touch" and kind ~= "mouse_click" then return false end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
     local x, y = event and event[3], event and event[4]

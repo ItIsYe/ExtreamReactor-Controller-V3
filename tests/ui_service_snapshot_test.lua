@@ -52,4 +52,23 @@ if renders ~= 3 then
   error("interactive events should remain responsive")
 end
 
+-- A resize changes geometry even when the data snapshot is identical. It
+-- must bypass both the regular interval and snapshot suppression so footer
+-- text and touch zones are rebuilt together.
+local resize_renders = 0
+local resize_service = ui_service.new({
+  interval = 100,
+  force_interval = 100,
+  snapshot = function() return "same" end,
+  render = function() resize_renders = resize_renders + 1 end,
+})
+resize_service:tick(nil, { "monitor_resize", "monitor_0" })
+if resize_renders ~= 1 then
+  error("monitor_resize must force an immediate geometry redraw")
+end
+resize_service:tick(nil, { "term_resize" })
+if resize_renders ~= 2 then
+  error("term_resize must force an immediate geometry redraw")
+end
+
 print("ui_service_snapshot_test.lua: ok")

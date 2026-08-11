@@ -62,6 +62,21 @@ function router:set_monitor_name(name)
   return true
 end
 
+-- Force the next frame to rebuild all geometry derived from the render
+-- target. This is required when an owner replaces a window backbuffer (for
+-- example after a monitor resize or text-scale change): the model snapshot
+-- may still be identical even though the new target has never been drawn.
+function router:invalidate_layout()
+  self.last_snapshot = nil
+  self.last_render_mon = nil
+  self.last_render_mon_name = nil
+  self.last_render_page_index = nil
+  self.last_render_w, self.last_render_h, self.last_render_scale = nil, nil, nil
+  self.footer = { prev = nil, next = nil, indicator = nil }
+  self.list_controls = nil
+  self.shared_backbuffer = nil
+end
+
 function router:get_diagnostics()
   return {
     error_count = self.error_count or 0, last_error = self.last_error,
@@ -166,6 +181,20 @@ local function build_snapshot(page_name, model)
   return tostring(payload)
 end
 
+local function page_footer_zones(width, height, page_footer)
+  local w, h = tonumber(width), tonumber(height)
+  if not w or not h or w < 1 or h < 1 then return nil, nil end
+  local y = h
+  if type(page_footer) == "table" and type(page_footer.left) == "table"
+      and type(page_footer.right) == "table"
+      and tonumber(page_footer.left.y) == tonumber(page_footer.right.y) then
+    y = clamp(tonumber(page_footer.left.y) or h, 1, h)
+  end
+  local left_end = math.max(1, math.floor(w / 3))
+  local right_start = math.min(w, math.floor((w * 2) / 3) + 1)
+  return { x1 = 1, x2 = left_end, y = y }, { x1 = right_start, x2 = w, y = y }
+end
+
 function router:render_list_controls(mon, opts)
   if not mon then return end
   opts = opts or {}
@@ -236,16 +265,14 @@ function router:render(mon, model)
   if render_start_ms then self.ui_diag.last_render_ms = (os.epoch and os.epoch("utc") or render_start_ms) - render_start_ms end
   local w, h = ui.getSize(mon); if not w or not h then publish_render_target(mon, buffered); return end
   if type(page_footer) == "table" and page_footer.left and page_footer.right then
-    self.footer.prev = { x1 = page_footer.left.x1, x2 = page_footer.left.x2, y = page_footer.left.y }
-    self.footer.next = { x1 = page_footer.right.x1, x2 = page_footer.right.x2, y = page_footer.right.y }
+    self.footer.prev, self.footer.next = page_footer_zones(w, h, page_footer)
     self.footer.indicator = nil; publish_render_target(mon, buffered); return
   end
   local page_count = math.max(1, #self.pages)
   local indicator = ("< Page %d/%d >"):format(self.index, page_count)
   ui.rightText(mon, 2, h, w - 2, indicator, colors.get("text"), colors.get("background"))
   local start = 2 + math.max(0, (w - 2) - #indicator)
-  self.footer.prev = { x1 = start, x2 = start + 1, y = h }
-  self.footer.next = { x1 = start + #indicator - 1, x2 = start + #indicator - 1, y = h }
+  self.footer.prev, self.footer.next = page_footer_zones(w, h)
   self.footer.indicator = { x1 = start, x2 = start + #indicator, y = h }
   publish_render_target(mon, buffered)
 end

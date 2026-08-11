@@ -55,7 +55,10 @@ end
 
 local function touch(button)
   local hitbox = assert(router.footer[button], 'missing footer button ' .. button)
-  local consumed = router:handle_input({ 'monitor_touch', 'monitor_0', hitbox.x1, hitbox.y })
+  -- Use the outer edge of the whole navigation column. This intentionally
+  -- lies outside the old text-only hitbox on wide monitors.
+  local x = button == 'prev' and hitbox.x1 or hitbox.x2
+  local consumed = router:handle_input({ 'monitor_touch', 'monitor_0', x, hitbox.y })
   assert(consumed == true, 'footer touch must be consumed')
 end
 

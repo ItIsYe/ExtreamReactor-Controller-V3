@@ -54,7 +54,9 @@ function ui:tick(_, event)
     self.handle_input(event)
   end
   local ts = now()
-  local interactive = event and (event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key" or event[1] == "char")
+  local interactive = event and (event[1] == "monitor_touch" or event[1] == "mouse_click"
+    or event[1] == "key" or event[1] == "char")
+  local layout_changed = event and (event[1] == "monitor_resize" or event[1] == "term_resize")
   local due = ts - self.last_draw >= self.interval * 1000
   -- Fix (2026-07-11): CRITICAL. Nach dem v380-Performance-Fix (due-Check
   -- vor dem teuren snapshot()) galt "due" weiterhin fuer JEDE Art von
@@ -71,7 +73,7 @@ function ui:tick(_, event)
   -- waehrend passive Netzwerk-Events (modem_message) weiterhin gedrosselt
   -- bleiben -- der Performance-Gewinn von v380 bleibt fuer den haeufigen
   -- Fall (Netzwerk-Traffic) vollstaendig erhalten.
-  if not due and not interactive then return end
+  if not due and not interactive and not layout_changed then return end
   local force_due = ts - self.last_force_draw >= self.force_interval * 1000
 
   if self.build_model then
@@ -97,7 +99,7 @@ function ui:tick(_, event)
     end
     local current_snapshot = snapshot_value(model and model.snapshot)
     local snapshot_changed = current_snapshot ~= self.last_snapshot
-    if not interactive and not snapshot_changed and not force_due then
+    if not interactive and not layout_changed and not snapshot_changed and not force_due then
       return
     end
     self.last_draw = ts
@@ -117,7 +119,7 @@ function ui:tick(_, event)
     current_snapshot = snapshot_value(self.snapshot(event))
     snapshot_changed = current_snapshot ~= self.last_snapshot
   end
-  if not interactive and not snapshot_changed and not force_due then
+  if not interactive and not layout_changed and not snapshot_changed and not force_due then
     return
   end
   self.last_draw = ts
