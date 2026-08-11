@@ -55,6 +55,19 @@ end
 function M.fit(text, width) return fit(text, width) end
 function M.icon(name) return ICONS[name] or "*" end
 
+-- Public direct-write primitives for renderers which also use this module's
+-- fill/card/header helpers. Mixing those direct clears with core.ui's dirty
+-- cache can otherwise suppress an unchanged control after its pixels were
+-- overwritten by a later frame.
+function M.text(mon, x, y, text, fg, bg)
+  write(mon, x, y, text, fg, bg)
+end
+
+function M.badge(mon, x, y, text, status)
+  local color = colors.get(status) or colors.get("OK")
+  write(mon, x, y, " " .. tostring(text or "") .. " ", colors.get("background"), color)
+end
+
 function M.clear(mon)
   local w, h = mon.getSize()
   fill(mon, 1, 1, w, h, colors.get("background"))

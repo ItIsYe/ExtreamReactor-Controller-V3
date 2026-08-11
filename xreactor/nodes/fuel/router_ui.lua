@@ -283,9 +283,9 @@ end
 function M:_render_mode_tabs(target, ui, w)
   local u = self._ui
   local tx = math.max(2, w - 20)
-  ui.badge(target, tx, 3, "TREE", u.mode == "tree" and "OK" or "OFFLINE")
+  mux.badge(target, tx, 3, "TREE", u.mode == "tree" and "OK" or "OFFLINE")
   u.tree_btn = { x1 = tx, x2 = tx + 5, y = 3 }
-  ui.badge(target, tx + 7, 3, "EDIT", u.mode == "edit" and "LIMITED" or "OFFLINE")
+  mux.badge(target, tx + 7, 3, "EDIT", u.mode == "edit" and "LIMITED" or "OFFLINE")
   u.edit_btn = { x1 = tx + 7, x2 = tx + 12, y = 3 }
 end
 
@@ -399,9 +399,9 @@ function M:_render_tree(target, ui, w, h)
   if max_scroll > 0 then
     local sy = body_top + body_h - 1
     local info = string.format("%d-%d/%d", u.scroll + 1, math.min(#rows, u.scroll + visible), #rows)
-    ui.text(target, 4, sy, info, colorset.get("muted"), colorset.get("background"))
-    ui.badge(target, math.max(4, left_w - 12), sy, "UP", u.scroll > 0 and "LIMITED" or "OFFLINE")
-    ui.badge(target, math.max(10, left_w - 6), sy, "DN", u.scroll < max_scroll and "LIMITED" or "OFFLINE")
+    mux.text(target, 4, sy, info, colorset.get("muted"), colorset.get("background"))
+    mux.badge(target, math.max(4, left_w - 12), sy, "UP", u.scroll > 0 and "LIMITED" or "OFFLINE")
+    mux.badge(target, math.max(10, left_w - 6), sy, "DN", u.scroll < max_scroll and "LIMITED" or "OFFLINE")
     u.scroll_up = u.scroll > 0 and { x1 = math.max(4, left_w - 12), x2 = math.max(4, left_w - 12) + 3, y = sy } or nil
     u.scroll_down = u.scroll < max_scroll and { x1 = math.max(10, left_w - 6), x2 = math.max(10, left_w - 6) + 3, y = sy } or nil
   else
@@ -514,7 +514,7 @@ function M:_render_path(target, ui, w, h)
     sy = sy + 1
   end
   if #editing.path == 0 then
-    ui.text(target, 4, sy, "(noch kein Ventil -- unten antippen zum Anfuegen)", colorset.get("muted"), colorset.get("background"))
+    mux.text(target, 4, sy, "(noch kein Ventil -- unten antippen zum Anfuegen)", colorset.get("muted"), colorset.get("background"))
   end
   u.step_btns = step_btns
 

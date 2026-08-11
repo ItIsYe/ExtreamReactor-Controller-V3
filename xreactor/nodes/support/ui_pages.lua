@@ -28,7 +28,10 @@ function M.render_alert_banner(target, ui, model)
     local w = select(1, ui.getSize(target))
     if not w then return end
     local label = "CRIT " .. tostring(model.local_alerts_critical)
-    ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
+    -- Status pages use the direct mockup renderer. Keep the overlay on the
+    -- same write path so a preceding direct header clear cannot leave a
+    -- stale core.ui dirty-cache entry hiding this banner.
+    mux.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
   end
 end
 
