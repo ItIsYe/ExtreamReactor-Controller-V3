@@ -2,6 +2,7 @@ local M = {}
 local rt_sync = require("master.rt_sync")
 local support_status = require("master.support_status")
 local config_edits_lib = require("master.config_edits")
+local protocol = require("core.protocol")
 
 function M.new(opts)
   local constants = assert(opts.constants, "constants required")
@@ -316,11 +317,23 @@ function M.new(opts)
   -- physischen Zugriff auf den Master-Monitor.
   local pocket_token_state = { token = nil, generated_at = 0 }
   local POCKET_TOKEN_TTL_MS = 5 * 60 * 1000
+  local pocket_token_counter = 0
+  local pocket_auth_secret = protocol.resolve_auth_secret((opts.config and opts.config.comms) or opts.config or {})
   local function current_pocket_token()
     local now = os.epoch and os.epoch("utc") or 0
     if not pocket_token_state.token or (now - pocket_token_state.generated_at) >= POCKET_TOKEN_TTL_MS then
-      math.randomseed(now)
-      pocket_token_state.token = tostring(math.random(100000, 999999))
+      pocket_token_counter = pocket_token_counter + 1
+      local mac = pocket_auth_secret and protocol.sign_value({
+        purpose = "pocket-token", ts = now, counter = pocket_token_counter,
+        computer_id = os.getComputerID and os.getComputerID() or 0,
+      }, pocket_auth_secret) or nil
+      local value = mac and tonumber(mac:sub(1, 8), 16) or nil
+      if not value then
+        -- The command transport itself remains fail-closed without a secret.
+        -- This fallback is only a UI placeholder and is never an authority.
+        value = (now + pocket_token_counter * 7919) % 900000
+      end
+      pocket_token_state.token = string.format("%06d", 100000 + (value % 900000))
       pocket_token_state.generated_at = now
     end
     return pocket_token_state.token

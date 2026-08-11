@@ -272,9 +272,18 @@ local function check_teach_input()
     end
   end
   if any_high and not teach_input_state and valve_modem then
-    pcall(valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+    local message = {
       type = "ROUTE_TEACH_PULSE", src = node_id,
-    })
+      ts = os.epoch and os.epoch("utc") or 0,
+    }
+    local mac = valve_auth_secret
+      and protocol.sign_value(protocol.valve_auth_value(message), valve_auth_secret) or nil
+    if mac then
+      message.auth = { algorithm = "HMAC-SHA256", mac = mac }
+      pcall(valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
+    else
+      utils.log(CONFIG.LOG_PREFIX, "Teach-Pulse verworfen: Netzwerk-Secret fehlt", "WARN")
+    end
   end
   teach_input_state = any_high
 end

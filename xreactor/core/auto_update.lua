@@ -30,7 +30,7 @@ end
 -- Remote Versionsnummer direkt vom dokumentierten beta-Ref lesen.
 local function get_remote_version(log)
   if not http or type(http.get) ~= "function" then return nil end
-  local ok, resp = pcall(http.get, RELEASE_URL_TEMPLATE, nil, { timeout = 10 })
+  local ok, resp = pcall(http.get, RELEASE_URL_TEMPLATE, nil, { timeout = 15 })
   if not ok or not resp then
     log("WARN", "AutoUpdate: release.lua Download fehlgeschlagen")
     return nil

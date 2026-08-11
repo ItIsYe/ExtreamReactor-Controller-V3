@@ -20,40 +20,67 @@ end
 
 p("=== XReactor POCKET-Client Installer ===")
 p("")
-p("Lade optional/pocket_client.lua ...")
+local BASE = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/"
+local files = {
+  { remote = "optional/pocket_client.lua", target = "/startup.lua" },
+  { remote = "core/protocol.lua", target = "/xreactor/core/protocol.lua" },
+  { remote = "core/utils.lua", target = "/xreactor/core/utils.lua" },
+  { remote = "core/logger.lua", target = "/xreactor/core/logger.lua" },
+  { remote = "shared/constants.lua", target = "/xreactor/shared/constants.lua" },
+}
 
-local url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/optional/pocket_client.lua"
-
-local content, last_err
-for attempt = 1, 4 do
-  local ok_req, response = pcall(http.get, url)
-  if ok_req and response then
-    local ok_read, body = pcall(response.readAll)
-    pcall(response.close)
-    if ok_read and type(body) == "string" and #body > 0 then
-      content = body
-      break
+local function download(remote)
+  local last_err
+  for attempt = 1, 4 do
+    local ok_req, response = pcall(http.get, BASE .. remote, nil, { timeout = 15 })
+    if ok_req and response then
+      local ok_read, body = pcall(response.readAll)
+      pcall(response.close)
+      if ok_read and type(body) == "string" and #body > 0 then return body end
+      last_err = "readAll fehlgeschlagen"
+    else
+      last_err = type(response) == "string" and response or "http.get fehlgeschlagen"
     end
-    last_err = "readAll fehlgeschlagen"
-  else
-    last_err = type(response) == "string" and response or "http.get fehlgeschlagen"
+    if attempt < 4 then
+      p("  Download-Versuch " .. attempt .. " fehlgeschlagen (" .. tostring(last_err)
+        .. "), erneut in " .. (attempt * 2) .. "s ...")
+      os.sleep(attempt * 2)
+    end
   end
-  if attempt < 4 then
-    p("  Download-Versuch " .. attempt .. " fehlgeschlagen (" .. tostring(last_err) .. "), erneut in " .. (attempt * 2) .. "s ...")
-    os.sleep(attempt * 2)
-  end
+  return nil, last_err
 end
 
-if not content then
-  error("POCKET-Client Download fehlgeschlagen nach 4 Versuchen: " .. tostring(last_err), 0)
+for _, entry in ipairs(files) do
+  p("Lade " .. entry.remote .. " ...")
+  local content, err = download(entry.remote)
+  if not content then error("POCKET-Download fehlgeschlagen: " .. tostring(err), 0) end
+  local dir = fs.getDir(entry.target)
+  if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
+  local handle = fs.open(entry.target, "w")
+  if not handle then error("Konnte " .. entry.target .. " nicht schreiben", 0) end
+  handle.write(content)
+  handle.close()
 end
 
-local f = fs.open("/startup.lua", "w")
-if not f then
-  error("Konnte /startup.lua nicht schreiben", 0)
+local auth_path = "/xreactor/config/network_auth.lua"
+if not fs.exists(auth_path) then
+  p("")
+  p("Gemeinsames Netzwerk-Secret eingeben (mindestens 16 Zeichen; identisch zum MASTER):")
+  local secret = read and read() or ""
+  if #secret < 16 then error("Netzwerk-Secret ist zu kurz; Installation abgebrochen", 0) end
+  local dir = fs.getDir(auth_path)
+  if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
+  local auth = fs.open(auth_path, "w")
+  if not auth then error("Konnte Netzwerk-Secret nicht speichern", 0) end
+  auth.write("return { secret = " .. string.format("%q", secret) .. " }\n")
+  auth.close()
+else
+  p("Vorhandenes Netzwerk-Secret wird weiterverwendet.")
 end
-f.write(content)
-f.close()
+
+if not fs.exists("/startup.lua") then
+  error("POCKET-Client wurde nicht vollstaendig installiert", 0)
+end
 
 p("POCKET-Client installiert als /startup.lua.")
 p("Neustart in 2 Sekunden ...")

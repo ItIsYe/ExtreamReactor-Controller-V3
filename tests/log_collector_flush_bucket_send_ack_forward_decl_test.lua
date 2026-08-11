@@ -91,6 +91,12 @@ local env = setmetatable({
   now_s = function() return 5 end,
   computer_node_id = function() return "LOG-1" end,
   CHANNEL = 6503,
+  MAX_TRACKED_NODES = 256,
+  LOG_AUTH_SECRET = "test-secret",
+  protocol = {
+    log_auth_value = function(message) return message end,
+    sign_value = function() return "signed-ack" end,
+  },
 }, { __index = _G })
 
 local fn = assert(load(chunk_src, "=log_collector_flush_bucket_send_ack_test", "t", env))
@@ -113,6 +119,7 @@ assert(env.stats.written == 1, "a successful flush must increment stats.written"
 assert(#ack_transmits == 1, "flush_bucket() must actually call the real send_ack() and transmit exactly one LOG_ACK")
 assert(ack_transmits[1].event_id == "RT-1:42", "the transmitted ACK must reference the correct event_id")
 assert(ack_transmits[1].status == "written", "the transmitted ACK must report status=written")
+assert(ack_transmits[1].auth.mac == "signed-ack", "collector ACK must be authenticated")
 assert(written_files["/disk1/xreactor_logs/RT/RT-1.log"] == "[log line 1]\n", "the buffered line must actually be written to disk")
 
 print("log_collector_flush_bucket_send_ack_forward_decl_test.lua: ok")

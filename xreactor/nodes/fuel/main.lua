@@ -185,6 +185,7 @@ local function get_rs_router()
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
       comms = comms,
+      routing_load_status = routing_load_status,
     })
   end
   return rs_router_instance
@@ -399,7 +400,8 @@ local function init()
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
     if channel ~= constants.channels.VALVE then return end
-    if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance then
+    if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance
+        and get_rs_router():verify_teach_pulse(message) then
       router_ui_instance:handle_teach_pulse(message.src)
     end
   end })
@@ -438,7 +440,7 @@ local function init()
   -- wieder". Jetzt entfernt: es gibt nur noch EINEN zentralen Input-Pfad
   -- (ui_service -> fuel_monitor_ui.handle_input), jeder physische Touch
   -- wird dadurch garantiert genau einmal verarbeitet.
-  services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants))
+  services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants, { config = config }))
   services:init()
   hello()
   local ok_report_mod, report_mod = pcall(require, "core.startup_report")

@@ -47,9 +47,11 @@ local function make_instance(inputs, has_modem)
 
   local preamble = has_modem and [[
 local node_id = "VALVE-1"
+local valve_auth_secret = "test-secret"
 local valve_modem = { transmit = function(_channel, _reply, message) __record(message) end }
 ]] or [[
 local node_id = "VALVE-1"
+local valve_auth_secret = "test-secret"
 local valve_modem = nil
 ]]
 
@@ -68,6 +70,11 @@ return {
       getInput = function(side) return inputs[side] == true end,
     },
     constants = { channels = { VALVE = 6504 } },
+    protocol = {
+      valve_auth_value = function(message) return message end,
+      sign_value = function() return 'signed-teach-pulse' end,
+    },
+    os = { epoch = function() return 123456 end },
     __record = function(message) transmitted[#transmitted + 1] = message end,
     pcall = pcall, ipairs = ipairs, type = type,
   }
@@ -97,6 +104,8 @@ do
   assert_eq(#inst.transmitted, 1, 'a rising edge must send exactly one pulse')
   assert_eq(inst.transmitted[1].type, 'ROUTE_TEACH_PULSE')
   assert_eq(inst.transmitted[1].src, 'VALVE-1')
+  assert_eq(inst.transmitted[1].ts, 123456)
+  assert_eq(inst.transmitted[1].auth.mac, 'signed-teach-pulse', 'teach pulse must carry authentication')
   assert_eq(inst.transmitted[1].dst, nil, 'a teach pulse must be a broadcast, not addressed to a specific dst')
 end
 

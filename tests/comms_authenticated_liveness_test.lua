@@ -53,4 +53,25 @@ comms.tick()
 assert(comms.get_peer_state()['MASTER-STALE'] == nil,
   'authenticated but stale heartbeat must not update liveness')
 
+local pocket_handled = 0
+comms.on(constants.message_types.POCKET_QUERY, function(message)
+  assert(message.auth_verified == true, 'Pocket handler may only receive authenticated traffic')
+  pocket_handled = pocket_handled + 1
+end)
+local function pocket_query()
+  return {
+    type = constants.message_types.POCKET_QUERY,
+    message_id = 'pocket-query-1', src = 'POCKET-1', sender_id = 'POCKET-1', node_id = 'POCKET-1',
+    role = 'POCKET', ts = now, timestamp = now, proto_ver = constants.proto_ver, payload = {},
+  }
+end
+comms.receive(pocket_query())
+comms.tick()
+assert(pocket_handled == 0, 'unsigned Pocket query must be rejected')
+local authenticated_query = pocket_query()
+assert(protocol.sign_message(authenticated_query, secret))
+comms.receive(authenticated_query)
+comms.tick()
+assert(pocket_handled == 1, 'signed Pocket query must reach its handler')
+
 print('comms_authenticated_liveness_test.lua: ok')

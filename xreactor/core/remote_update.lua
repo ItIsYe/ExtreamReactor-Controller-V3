@@ -107,7 +107,7 @@ end
 local function download_installer(log)
   local delays = { 2, 5, 10, 20 }
   for attempt = 1, 4 do
-    local ok, r = pcall(http.get, INSTALLER_URL_BRANCH, nil, { timeout = 20 })
+    local ok, r = pcall(http.get, INSTALLER_URL_BRANCH, nil, { timeout = 15 })
     if ok and r then
       local ok2, body = pcall(r.readAll); pcall(r.close)
       if ok2 and type(body) == "string" and #body > 100 and not is_html(body) then
@@ -172,7 +172,7 @@ function M.check_version(log)
   if not http or type(http.get) ~= "function" then return nil end
   local remote_v = nil
   for attempt = 1, 3 do
-    local ok, r = pcall(http.get, RELEASE_URL_BRANCH, nil, { timeout = 10 })
+    local ok, r = pcall(http.get, RELEASE_URL_BRANCH, nil, { timeout = 15 })
     if ok and r then
       local ok2, body = pcall(r.readAll); pcall(r.close)
       if ok2 and type(body) == "string" and not is_html(body) then

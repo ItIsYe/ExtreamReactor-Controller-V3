@@ -20,9 +20,12 @@ _G.peripheral = {
   isPresent = function() return false end,
   wrap = function() return nil end,
 }
+_G.redstone = { setOutput = function() end }
 
 local redstone_router_lib = require('nodes.fuel.redstone_router')
 local logistics_router = require('nodes.fuel.logistics_router')
+local protocol = require('core.protocol')
+local constants = require('shared.constants')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -82,6 +85,58 @@ do
   assert_eq(#calls, 0, 'exportItemToPeripheral must never be called')
   assert_eq(result.exported, 0, 'nothing should be reported as exported')
   assert_eq(logistics._state.total_exported, 0)
+end
+
+-- 6. Alte, alias-basierte Routen bleiben auffindbar, obwohl die Lieferung
+--    primaer die kollisionssichere globale Reaktor-ID verwendet.
+do
+  local rs = redstone_router_lib.new({
+    config = { logistics = { redstone_tree = {
+      { reactor = 'Reactor A', label = 'Reactor A', path = { { side = 'top' } } },
+    } } },
+    log = function() end, warn_once = function() end,
+  })
+  rs:refresh()
+  local path = rs:get_path_to('RT-1:REACTOR-a', { 'Reactor A' })
+  assert_eq(path[1], 'top', 'legacy alias route must resolve as fallback for global identity')
+end
+
+-- 4. Eine vorhandene, aber nicht lesbare/ungueltige Routendatei darf nicht
+--    still auf einen gueltigen Config-Fallback zurueckfallen.
+do
+  local action_called = false
+  local rs = redstone_router_lib.new({
+    config = { logistics = { redstone_tree = { { reactor = 'R1', label = 'Reactor 1' } } } },
+    routing_load_status = { ok = false, code = 'ROUTES_FILE_UNREADABLE', message = 'read failed' },
+    log = function() end, warn_once = function() end,
+  })
+  local refreshed, reason = rs:refresh()
+  assert_eq(refreshed, false)
+  assert_eq(reason, 'routing_load_invalid')
+  assert_eq(rs:get_routing_state(), 'ROUTING_INVALID')
+  local started, start_reason = rs:begin_transaction('R1', function() action_called = true end, 500)
+  assert_eq(started, false)
+  assert_eq(start_reason, 'invalid_tree')
+  assert_true(not action_called, 'invalid route-file load must never execute direct export')
+end
+
+-- 5. Teach-Pulse werden nur signiert, frisch und von einem bekannten
+--    online VALVE-Peer akzeptiert.
+do
+  local secret = 'teach-pulse-test-secret-123456'
+  local rs = redstone_router_lib.new({
+    config = { auth_secret = secret },
+    comms = { get_peers = function() return {
+      ['VALVE-1'] = { role = constants.roles.VALVE_NODE, down = false },
+    } end },
+    log = function() end, warn_once = function() end,
+  })
+  local pulse = { type = 'ROUTE_TEACH_PULSE', src = 'VALVE-1', ts = os.epoch('utc') }
+  local mac = assert(protocol.sign_value(protocol.valve_auth_value(pulse), secret))
+  pulse.auth = { algorithm = 'HMAC-SHA256', mac = mac }
+  assert_true(rs:verify_teach_pulse(pulse), 'known signed VALVE peer must be accepted')
+  pulse.src = 'VALVE-2'
+  assert_true(not rs:verify_teach_pulse(pulse), 'tampered/unknown teach sender must be rejected')
 end
 
 -- 2. Ein gueltiger, aber ventil-loser Baum (Routing ist erkennbar

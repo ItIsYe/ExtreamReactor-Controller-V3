@@ -94,15 +94,17 @@ local function collect_all_valves(routes)
   return out
 end
 
-local function find_route(routes, target_id)
+local function find_route(routes, target_id, target_aliases)
+  local accepted = { [tostring(target_id)] = true }
+  for _, alias in ipairs(target_aliases or {}) do accepted[tostring(alias)] = true end
   for _, route in ipairs(routes or {}) do
-    if route.reactor == target_id or route.label == target_id then return route end
+    if accepted[tostring(route.reactor)] or accepted[tostring(route.label)] then return route end
   end
   return nil
 end
 
-local function find_path(routes, target_id)
-  local route = find_route(routes, target_id)
+local function find_path(routes, target_id, target_aliases)
+  local route = find_route(routes, target_id, target_aliases)
   if not route then return nil end
   local copy = {}
   for i, step in ipairs(route.path or {}) do copy[i] = { side = step.side, integrator = step.integrator } end
@@ -281,6 +283,7 @@ function M.new(opts)
     comms = opts.comms or nil,
     valve_modem = valve_modem,
     auth_secret = protocol.resolve_auth_secret(router_config.comms or router_config),
+    routing_load_status = opts.routing_load_status,
     _state = {
       all_valves = {},
       integrators = {},
@@ -317,6 +320,13 @@ function M:refresh()
 
   local cfg = self.config.logistics or self.config or {}
   local tree = cfg.redstone_tree or {}
+  local routing_load_error
+  if self.routing_load_status and self.routing_load_status.ok == false then
+    routing_load_error = {
+      code = self.routing_load_status.code or "ROUTES_FILE_INVALID",
+      message = self.routing_load_status.message or "Routing-Datei konnte nicht sicher geladen werden",
+    }
+  end
   -- Feature (2026-07-13): CRITICAL Sicherheitsfund (siehe docs/CODING_AI_
   -- OTHER_NODES_PERFORMANCE_2026-07-12.md, Sicherheitsregel zu REPROC-P0.3).
   -- tree_configured haelt fest, ob ueberhaupt ein Baum in der Config
@@ -324,7 +334,7 @@ function M:refresh()
   -- Unterscheidung in route_and_act() weiter unten zwischen "Routing war
   -- nie gewollt" (sicher, Direkt-Export ok) und "Routing war konfiguriert,
   -- aber kaputt/leer geworden" (GEFAEHRLICH, muss blockieren).
-  self._state.tree_configured = #tree > 0
+  self._state.tree_configured = #tree > 0 or routing_load_error ~= nil
 
   -- Feature (2026-07-08): strukturelle Validierung VOR jeder Aktivierung.
   -- Bei einem ungueltigen Baum: alle Ventile blockieren (Fail-Safe-
@@ -368,6 +378,8 @@ function M:refresh()
   self._state.tree_errors = errors
 
   if #errors > 0 then
+    if routing_load_error then errors[#errors + 1] = routing_load_error end
+    self._state.tree_errors = errors
     for _, e in ipairs(errors) do
       self.warn_once("tree_invalid:" .. e.code, "RedstoneRouter: UNGUELTIGER BAUM [" .. e.code .. "] " .. e.message)
     end
@@ -377,6 +389,7 @@ function M:refresh()
     self.log("ERROR", string.format(
       "RedstoneRouter: redstone_tree ungueltig (%d Fehler) — alle Ventile blockiert, kein Routing aktiv",
       #errors))
+    if routing_load_error then return false, "routing_load_invalid" end
     return
   end
 
@@ -410,6 +423,13 @@ function M:refresh()
   end
   self._state.integrators = integrators
   self:block_all()
+  if routing_load_error then
+    self._state.routes = {}
+    self._state.tree_valid = false
+    self._state.tree_errors = { routing_load_error }
+    self.log("ERROR", "RedstoneRouter: Routing-Datei ungueltig -- bekannte Ventile blockiert, Direkt-Export fail-closed gesperrt")
+    return false, "routing_load_invalid"
+  end
   self.log("DEBUG", string.format("RedstoneRouter: tree loaded, %d total valves", #all))
 end
 
@@ -767,6 +787,27 @@ function M:get_safety_latch()
   }
 end
 
+function M:verify_teach_pulse(message)
+  if type(message) ~= "table" or message.type ~= "ROUTE_TEACH_PULSE"
+      or type(message.src) ~= "string" or message.src == "" or not self.auth_secret then
+    return false, "invalid_teach_pulse"
+  end
+  local timestamp = tonumber(message.ts)
+  if not timestamp or math.abs((os.epoch and os.epoch("utc") or 0) - timestamp) > 30 * 1000 then
+    return false, "stale_teach_pulse"
+  end
+  local auth = message.auth
+  local auth_ok = type(auth) == "table" and auth.algorithm == "HMAC-SHA256"
+    and protocol.verify_value(protocol.valve_auth_value(message), self.auth_secret, auth.mac)
+  if not auth_ok then return false, "unauthenticated_teach_pulse" end
+  if not self.comms or type(self.comms.get_peers) ~= "function" then return false, "peer_registry_unavailable" end
+  local peer = (self.comms:get_peers() or {})[message.src]
+  if type(peer) ~= "table" or peer.role ~= constants.roles.VALVE_NODE or peer.down == true then
+    return false, "unknown_valve_peer"
+  end
+  return true
+end
+
 function M:get_last_transaction()
   return self._state.last_transaction
 end
@@ -836,6 +877,11 @@ function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
   if self._state.safety_latch then return false, "safety_latched" end
   if self._state.transaction then return false, "busy" end
 
+  if self._state.tree_configured and self._state.tree_valid == false then
+    self:block_all()
+    return false, "invalid_tree"
+  end
+
   local tx_id = opts.transaction_id or self:_next_transaction_id(target_id)
   local now_ms = os.epoch and os.epoch("utc") or 0
   if #self._state.all_valves == 0 then
@@ -856,7 +902,7 @@ function M:begin_transaction(target_id, action_fn, valve_open_ms, opts)
     return false, "invalid_tree", tx_id
   end
 
-  local path = find_path(self._state.routes, target_id)
+  local path = find_path(self._state.routes, target_id, opts.target_aliases)
   if not path then
     self.log("WARN", "RedstoneRouter: no path found for target: " .. tostring(target_id))
     self:block_all()
@@ -1311,8 +1357,8 @@ function M:get_tree()
   return self._state.routes or {}
 end
 
-function M:get_path_to(target_id)
-  local path = find_path(self._state.routes, target_id) or {}
+function M:get_path_to(target_id, target_aliases)
+  local path = find_path(self._state.routes, target_id, target_aliases) or {}
   local sides = {}
   for _, v in ipairs(path) do sides[#sides + 1] = v.side end
   return sides

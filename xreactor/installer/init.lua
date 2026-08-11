@@ -357,6 +357,9 @@ if role.label == "RT" then
     p("Reaktornamen gespeichert; dieser Schritt wird bei Reinstallationen nicht erneut angezeigt.")
   elseif naming_state == "no_reactors_detected" and not _G.__xreactor_remote_update then
     p("WARN: Keine Reaktoren erkannt; Namensschritt bleibt fuer eine spaetere manuelle Installation offen.")
+  elseif naming_state == "already_completed_topology_changed" and not _G.__xreactor_remote_update then
+    p("WARN: Reaktor-Topologie hat sich seit der Benennung geaendert. Die Installation fragt absichtlich nicht erneut.")
+    p("      Fuer eine bewusste Neuzuordnung config/reactor_names.lua entfernen und den RT-Installer erneut starten.")
   end
 end
 

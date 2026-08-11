@@ -19,6 +19,8 @@ local state = {
   modem_name = nil,
   node_id = nil,
   role = nil,
+  boot_id = nil,
+  seq = 0,
   dropped = 0,
   sent = 0
 }
@@ -105,6 +107,9 @@ function M.init(opts)
   state.channel = tonumber(opts.channel) or settings_number("xreactor.remote_log_channel", DEFAULT_CHANNEL)
   state.node_id = opts.node_id or read_node_id()
   state.role = opts.role or read_role()
+  state.boot_id = tostring(state.node_id) .. ":boot:"
+    .. tostring(os and os.getComputerID and os.getComputerID() or "unknown") .. ":"
+    .. tostring(os and os.epoch and os.epoch("utc") or 0)
   state.modem_name, state.modem = find_wireless_modem()
   state.initialized = true
   return M.describe()
@@ -117,17 +122,27 @@ function M.send(prefix, level, message, line)
       state.dropped = state.dropped + 1
       return
     end
+    state.seq = state.seq + 1
     local payload = {
       type = "LOG_EVENT",
-      proto = "xreactor-log-v1",
+      proto = "xreactor-log-v2",
       node_id = state.node_id or read_node_id(),
       role = state.role or read_role(),
       prefix = tostring(prefix or "LOG"),
       level = tostring(level or "INFO"),
       message = tostring(message or ""),
       line = tostring(line or ""),
+      seq = state.seq,
+      boot_id = state.boot_id,
+      event_id = state.boot_id .. ":" .. tostring(state.seq),
+      ack = false,
       ts = os and os.epoch and os.epoch("utc") or nil
     }
+    local ok_protocol, protocol = pcall(require, "core.protocol")
+    local secret = ok_protocol and protocol.resolve_auth_secret({}) or nil
+    local mac = secret and protocol.sign_value(protocol.log_auth_value(payload), secret) or nil
+    if not mac then state.dropped = state.dropped + 1; return end
+    payload.auth = { algorithm = "HMAC-SHA256", mac = mac }
     state.modem.transmit(state.channel, state.channel, payload)
     state.sent = state.sent + 1
   end)

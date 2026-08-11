@@ -203,6 +203,10 @@ local function protected_message_type(msg_type)
     or msg_type == constants.message_types.STATUS
     or msg_type == constants.message_types.ALERT
     or msg_type == constants.message_types.ERROR
+    or msg_type == constants.message_types.POCKET_QUERY
+    or msg_type == constants.message_types.POCKET_STATUS
+    or msg_type == constants.message_types.POCKET_COMMAND
+    or msg_type == constants.message_types.POCKET_COMMAND_RESULT
 end
 
 local function load_command_highwater(path)
