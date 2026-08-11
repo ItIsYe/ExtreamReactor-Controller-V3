@@ -14,10 +14,12 @@ local fake_fs = {
 }
 
 local methods = {
-  reactor_a = { "getControlRodLevel", "getFuelAmount" },
-  reactor_b = { "getControlRods", "getFuelStats" },
+  reactor_a = { "getActive", "getControlRodLevel", "getFuelAmount" },
+  reactor_b = { "getActive", "getControlRods", "getFuelStats" },
   turbine_a = { "getRotorSpeed", "setFluidFlowRate" },
 }
+local active = { reactor_a = false, reactor_b = true }
+local peripheral_calls = {}
 local fake_peripheral = {
   getNames = function() return { "turbine_a", "reactor_b", "reactor_a" } end,
   getMethods = function(name) return methods[name] end,
@@ -25,25 +27,45 @@ local fake_peripheral = {
     if name == "turbine_a" then return "biggerreactors_turbine" end
     return "biggerreactors_reactor"
   end,
+  call = function(name, method)
+    peripheral_calls[#peripheral_calls + 1] = { name = name, method = method }
+    assert(method == "getActive", "live identification must only read the active state")
+    return active[name]
+  end,
 }
 
 local detected = naming.detect(fake_peripheral)
 assert(#detected == 2 and detected[1] == "reactor_a" and detected[2] == "reactor_b",
   "only reactors must be detected in stable order")
 
-local answers = { "Nord", "Nord", "Sued" }
 local reads = 0
+local outputs = {}
 local ok, state, saved = naming.run({
   fs = fake_fs,
   peripheral = fake_peripheral,
-  output = function() end,
-  input = function() reads = reads + 1; return answers[reads] end,
+  output = function(message) outputs[#outputs + 1] = message end,
+  input = function()
+    reads = reads + 1
+    if reads == 1 then active.reactor_a = true; return "" end -- operator toggles one reactor
+    if reads == 2 then active.reactor_a = false; return "" end -- operator restores original state
+    if reads == 3 then return "Nord" end
+    if reads == 4 then return "Nord" end -- duplicate label for the final reactor
+    if reads == 5 then return "Sued" end
+    error("unexpected installer input read " .. tostring(reads))
+  end,
   write = function(path, content) files[path] = content; return true end,
 })
 assert(ok == true and state == "saved", "fresh RT naming must be persisted")
-assert(reads == 3, "duplicate labels must be rejected and asked again")
+assert(reads == 5, "live identification, restoration and duplicate labels must all be confirmed")
 assert(saved.aliases.reactor_a == "Nord" and saved.aliases.reactor_b == "Sued",
   "entered display names must stay attached to peripheral identities")
+assert(active.reactor_a == false and active.reactor_b == true,
+  "live identification must require the original reactor state to be restored")
+for _, call in ipairs(peripheral_calls) do
+  assert(call.method ~= "setActive", "installer must never switch reactor state itself")
+end
+assert(table.concat(outputs, "\n"):find("Erkannt: reactor_a", 1, true),
+  "operator must be told which technical peripheral changed")
 
 local loaded = naming.load(fake_fs)
 assert(loaded and loaded.completed == true, "saved completion marker must load")

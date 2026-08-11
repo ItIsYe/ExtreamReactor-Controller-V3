@@ -16,7 +16,7 @@ return {
     { path = "installer/init.lua", size_bytes = 38154, hash = "e5817e58", always = true },
     { path = "installer/journal.lua", size_bytes = 12547, hash = "613d29f8", always = true },
     { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-    { path = "installer/reactor_naming.lua", size_bytes = 4983, hash = "5119799d", always = true },
+    { path = "installer/reactor_naming.lua", size_bytes = 10061, hash = "3ce9d03a", always = true },
     { path = "release.lua", size_bytes = 345, hash = "94263042", always = true },
     { path = "start.lua", size_bytes = 18876, hash = "09a6af1a", always = true },
     { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
