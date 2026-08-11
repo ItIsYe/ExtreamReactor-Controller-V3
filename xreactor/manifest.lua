@@ -1,14 +1,14 @@
 -- xreactor/manifest.lua -- manifest-v521
 return {
-  manifest_version = 528,
-  manifest_id = "manifest-v528",
+  manifest_version = 529,
+  manifest_id = "manifest-v529",
   source_ref = "beta",
   hash_algo = "crc32",
 
   base_files = {
     { path = "services/heartbeat_service.lua", size_bytes = 3938, hash = "6b908df2" },
     { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6" },
-    { path = "installer/http.lua", size_bytes = 3948, hash = "96b3ae8a", always = true },
+    { path = "installer/http.lua", always = true  },
     { path = "installer/manifest.lua", size_bytes = 5794, hash = "faaa98fa", always = true },
     { path = "installer/stage.lua", size_bytes = 9164, hash = "b067f20b", always = true },
     { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always = true },
