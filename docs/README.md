@@ -1,59 +1,18 @@
 # XReactor-Dokumentationsindex
 
-Stand: 2026-08-10
-Branch: `beta`  
-Geprüfter PR-Stand: `beta-v521` / `manifest-v521`
+## Aktuelle Dokumentation
 
-## Zuerst lesen
+| Datei | Inhalt |
+|---|---|
+| [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) | Aktueller Projektstatus, offene Punkte, Regeln |
+| [`CI_MAINTENANCE.md`](CI_MAINTENANCE.md) | CI-Bugs, Fixes, Wartungshinweise |
+| [`REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md`](REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md) | Safety-Audit Abschluss August 2026 |
 
-1. [`REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md`](REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md)
-   Aktueller Abschlussnachweis für Draft-PR #504: Finding, Fix, Regressionstest und noch offene Ingame-Abnahme.
+## Historische Referenz (Implementierungs-Vorgaben)
 
-2. [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md)  
-   Kurzer Einstieg für eine neue Entwicklungs- oder Analyse-Sitzung.
-
-3. [`../README.md`](../README.md)  
-   Allgemeine Architektur, Rollen und Bedienung.
-
-## Verbindliche Spezialdokumente
-
-- [`CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md`](CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md)  
-  Verbindliche RT-Scheduler-, Control-, Readback- und Safety-Zeiten. Diese Datei hat für den schnellen RT-Regelkreis Vorrang vor allgemeinen Performanceempfehlungen.
-
-- [`CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md`](CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md)  
-  Detaillierter Installer-/Auto-Update-Audit. Der aktuelle Gesamt-Audit entscheidet, welche Punkte noch offen sind.
-
-- [`CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md`](CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md)  
-  Stabile Referenz für Aufgabenkennungen, auf die bestehende FUEL-UI-Codekommentare verweisen.
-
-## Kompatibilitäts- und Historien-Einstiege
-
-Diese Dateien bleiben bestehen, weil ältere Links beziehungsweise die historische Änderungschronik darauf verweisen. Sie enthalten keine eigenständige aktuelle Aufgabenliste mehr:
-
-- [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md) — Gesamt-Audit des historischen Stands `beta-v472`
-- [`PROJECT_DOCUMENTATION.md`](PROJECT_DOCUMENTATION.md)
-- [`CODING_AI_IMPLEMENTATION_TASKS_2026-07-12.md`](CODING_AI_IMPLEMENTATION_TASKS_2026-07-12.md)
-- [`CODING_AI_PERFORMANCE_TASKS_2026-07-12.md`](CODING_AI_PERFORMANCE_TASKS_2026-07-12.md)
-- [`NODE_START_BLOCKERS_2026-06-25.md`](NODE_START_BLOCKERS_2026-06-25.md)
-
-Historische Detailchronik:
-
-- [`../RUNTIME_STATUS_2026-06-03.md`](../RUNTIME_STATUS_2026-06-03.md)
-- [`../REWRITE_SPEC.md`](../REWRITE_SPEC.md)
-
-## Entfernte veraltete Dokumente
-
-- `CODING_AI_FUEL_NODE_DEEP_AUDIT_2026-07-12.md`  
-  Vollständig durch den aktuellen Gesamt-Audit und die FUEL-UI-Referenz ersetzt.
-
-- `NODE_OVERVIEW.md`  
-  Technische Duplikatdokumentation auf altem Stand; die aktuelle Architektur wird zentral im Root-README und im aktuellen Audit gepflegt.
-
-## Dokumentationsregeln
-
-- Aktuelle Audit-Restpunkte werden nur im Abschlussnachweis geführt.
-- Spezialdokumente enthalten ausschließlich dauerhaft relevante technische Vorgaben.
-- Historische Dateinamen dürfen als kurze Weiterleitung bestehen bleiben, wenn externe oder alte interne Links darauf zeigen.
-- Keine parallele vollständige Architekturkopie pflegen.
-- Eine Datei erst löschen, wenn Code-, Manifest-, Installer-, Workflow-, Test- und Dokumentreferenzen geprüft wurden.
-- Statische Dokumentation ersetzt keinen Ingame-Test.
+| Datei | Inhalt |
+|---|---|
+| [`CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md`](CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md) | FUEL-UI Aufgabenkennungen |
+| [`CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md`](CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md) | Installer/Auto-Update Audit |
+| [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md) | Historischer Gesamt-Audit |
+| [`CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md`](CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md) | RT-Regelung Vorgaben |
