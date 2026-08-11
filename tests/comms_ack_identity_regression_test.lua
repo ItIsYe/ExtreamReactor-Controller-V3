@@ -21,7 +21,7 @@ comms.init({
   network = network,
   node_id = "MASTER-1",
   role = constants.roles.MASTER,
-  config = { ack_timeout_s = 3, max_retries = 1 },
+  config = { ack_timeout_s = 3, max_retries = 1, require_command_auth = false },
   logger = function() end,
 })
 

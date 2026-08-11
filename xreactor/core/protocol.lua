@@ -168,15 +168,29 @@ local function is_proto_compatible(ver)
   return true
 end
 
+local MAX_VALUE_DEPTH = 6
+local MAX_TABLE_ENTRIES = 256
+local MAX_STRING_LENGTH = 4096
+local MAX_ID_LENGTH = 128
+
 local function sanitize_value(value, depth)
-  if depth > 6 then return nil end
+  if depth > MAX_VALUE_DEPTH then return nil end
   local value_type = type(value)
-  if value_type == "string" or value_type == "number" or value_type == "boolean" then return value end
+  if value_type == "string" then return value:sub(1, MAX_STRING_LENGTH) end
+  if value_type == "number" then
+    if value ~= value or value == math.huge or value == -math.huge then return nil end
+    return value
+  end
+  if value_type == "boolean" then return value end
   if value_type ~= "table" then return nil end
   local out = {}
+  local count = 0
   for k, v in pairs(value) do
+    count = count + 1
+    if count > MAX_TABLE_ENTRIES then break end
     local key_type = type(k)
     if key_type == "string" or key_type == "number" then
+      if key_type == "string" then k = k:sub(1, MAX_STRING_LENGTH) end
       local sanitized = sanitize_value(v, depth + 1)
       if sanitized ~= nil then out[k] = sanitized end
     end
@@ -293,7 +307,11 @@ function protocol.validateMessage(message)
   if type(message.type) ~= "string" then return false, "missing type" end
   local sender_id = normalize_remote_id(message.sender_id or message.src)
   if sender_id == nil then return false, "missing sender_id" end
+  if #sender_id > MAX_ID_LENGTH then return false, "sender_id too long" end
   if type(message.role) ~= "string" or message.role == "" then return false, "missing role" end
+  if #message.role > MAX_ID_LENGTH then return false, "role too long" end
+  if type(message.type) == "string" and #message.type > MAX_ID_LENGTH then return false, "type too long" end
+  if type(message.message_id) == "string" and #message.message_id > MAX_ID_LENGTH then return false, "message_id too long" end
   if type(message.ts) ~= "number" and type(message.timestamp) ~= "number" then
     return false, "missing timestamp"
   end

@@ -109,22 +109,23 @@ do
   assert_contains(src, "auto_mod.make_loop(interval, update_handshake)", "start.lua")
 end
 
--- The managed updater must pin one immutable SHA, then quiesce before any
--- installer execution. Timeout/error recovery must not leave a latent stopped
--- role with no updater waiting for it.
+-- The managed updater uses the documented beta ref directly, then quiesces
+-- before any installer execution. Manifest hashes provide the per-file trust
+-- boundary without a rate-limited GitHub API lookup.
 do
   local src = read("installer/auto_update.lua")
   assert_contains(src, "function M.make_loop(interval_s, handshake)", "installer/auto_update.lua")
   assert_contains(src, "local quiesced, qerr = request_and_await_quiesce(handshake)", "installer/auto_update.lua")
   assert_contains(src, 'update_handshake.wait_for_runtime_stopped(handshake, 20)', "installer/auto_update.lua")
-  assert_contains(src, 'local sha, sha_err = resolve_sha()', "installer/auto_update.lua")
-  assert_contains(src, 'if not valid_sha(sha) then return false, "immutable sha required" end', "installer/auto_update.lua")
+  assert_contains(src, 'local SOURCE_REF = "beta"', "installer/auto_update.lua")
+  assert_not_contains(src, "resolve_sha", "installer/auto_update.lua")
+  assert_not_contains(src, "api.github.com", "installer/auto_update.lua")
   assert_contains(src, "recover_after_quiesced_failure", "installer/auto_update.lua")
   assert_contains(src, "update_handshake.reset(handshake)", "installer/auto_update.lua")
 
   local perform_pos = assert(src:find("local function perform_update", 1, true))
   local quiesce_pos = assert(src:find("request_and_await_quiesce(handshake)", perform_pos, true))
-  local run_pos = assert(src:find("run_update(sha)", quiesce_pos, true))
+  local run_pos = assert(src:find("run_update(ref)", quiesce_pos, true))
   if quiesce_pos >= run_pos then
     error("installer/auto_update.lua: quiesce must complete BEFORE run_update")
   end

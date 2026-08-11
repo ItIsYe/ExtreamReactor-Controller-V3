@@ -137,8 +137,7 @@ do
   end
 end
 
--- ── INSTALL-P0.1: Crash WAEHREND des naechsten Schreibvorgangs darf die ─────
--- ── zuletzt bestaetigte (COMMITTED) Generation nicht gefaehrden ─────────────
+-- ── INSTALL-P0.1: Direkter alternierender Slot-Write, kein fs.move ───────────
 reset()
 do
   -- Erster Installationslauf: sauber bis COMMITTED durch (landet in SLOT_A,
@@ -148,10 +147,8 @@ do
   local committed_slot = fs.exists(journal.SLOT_A) and journal.SLOT_A or journal.SLOT_B
   local other_slot = (committed_slot == journal.SLOT_A) and journal.SLOT_B or journal.SLOT_A
 
-  -- Naechster Installationslauf beginnt (PREPARED) -- write() zielt auf
-  -- den anderen (stale) Slot. Simuliere einen Crash GENAU nach dem
-  -- tmp-Write, aber VOR dem finalen Move: der Zielslot bleibt in diesem
-  -- Fall unveraendert (leer), nur die .tmp-Datei existiert.
+  -- Ein fs.move-Hook darf nicht erreicht werden: CC:Tweaked hat diesen Pfad
+  -- in der Praxis unzuverlaessig behandelt, daher schreibt das Journal direkt.
   local real_move = fs.move
   local crashed = false
   fs.move = function(src, dst)
@@ -163,21 +160,19 @@ do
   end
   local ok_w = journal.write({ state = journal.STATE.PREPARED, ref = "run2", manifest_id = "m2", role = "RT-NODE", started_at = 2, expected_files = {} })
   fs.move = real_move
-  if ok_w then error("expected the simulated crash to abort journal.write()") end
+  if not ok_w then error("direct slot write unexpectedly failed") end
+  if crashed then error("journal.write must not use fs.move") end
 
-  -- Trotz Crash: der vorherige COMMITTED-Stand muss weiterhin die alleinige,
-  -- gueltige Quelle sein -- kein Rollenstart-Blocker, kein Datenverlust.
+  -- Die neuere PREPARED-Generation gewinnt und blockiert fail-closed.
   local status, j = journal.classify()
-  if status ~= journal.STATUS.VALID_COMMITTED then
-    error("crash during next write must not disturb the previous COMMITTED generation, got " .. tostring(status))
+  if status ~= journal.STATUS.VALID_INCOMPLETE then
+    error("new PREPARED generation must classify as incomplete, got " .. tostring(status))
   end
-  if j.ref ~= "run1" then error("expected the untouched previous COMMITTED journal (run1), got ref=" .. tostring(j.ref)) end
-  if journal.check_incomplete() ~= nil then
-    error("a crash while writing the NEXT generation must not mark the previous COMMITTED run as incomplete")
-  end
+  if j.ref ~= "run2" then error("expected latest PREPARED generation run2, got ref=" .. tostring(j.ref)) end
+  if journal.check_incomplete() == nil then error("PREPARED generation must block role start") end
 end
 
--- ── INSTALL-P0.1: Crash WAEHREND des tmp-Writes selbst (vor dem Move) ───────
+-- ── INSTALL-P0.1: Es darf keine .tmp-Datei geoeffnet werden ──────────────────
 reset()
 do
   journal.write({ state = journal.STATE.COMMITTED, ref = "run1", manifest_id = "m1", role = "RT-NODE", started_at = 1, expected_files = {} })
@@ -193,18 +188,15 @@ do
   end
   local ok_w = journal.write({ state = journal.STATE.PREPARED, ref = "run2", manifest_id = "m2", role = "RT-NODE", started_at = 2, expected_files = {} })
   fs.open = real_open
-  if ok_w then error("expected the simulated tmp-write crash to abort journal.write()") end
+  if not ok_w then error("direct slot write unexpectedly failed") end
 
   local status, j = journal.classify()
-  if status ~= journal.STATUS.VALID_COMMITTED or j.ref ~= "run1" then
-    error("crash during tmp-write must leave the previous COMMITTED generation fully intact")
+  if status ~= journal.STATUS.VALID_INCOMPLETE or j.ref ~= "run2" then
+    error("journal must bypass .tmp and write PREPARED to the alternate slot")
   end
 end
 
--- ── INSTALL-P0.1: Move meldet Erfolg, aber der Zielslot ist danach nicht ────
--- ── rund-trip-verifizierbar (z.B. durch parallele Beschaedigung) -- der ────
--- ── Write MUSS trotzdem als fehlgeschlagen gelten und darf den Gesamt- ─────
--- ── zustand nicht auf einen unverifizierten Stand umschalten. ──────────────
+-- ── INSTALL-P0.1: Kein post-write move/verify-Pfad ───────────────────────────
 reset()
 do
   journal.write({ state = journal.STATE.COMMITTED, ref = "run1", manifest_id = "m1", role = "RT-NODE", started_at = 1, expected_files = {} })
@@ -218,11 +210,11 @@ do
   end
   local ok_w = journal.write({ state = journal.STATE.PREPARED, ref = "run2", manifest_id = "m2", role = "RT-NODE", started_at = 2, expected_files = {} })
   fs.move = real_move
-  if ok_w then error("expected the post-move verify step to catch corrupted target content and fail the write") end
+  if not ok_w then error("direct slot write unexpectedly failed") end
 
   local status, j = journal.classify()
-  if status ~= journal.STATUS.VALID_COMMITTED or j.ref ~= "run1" then
-    error("a failed verify-after-write must not shadow the previous COMMITTED generation")
+  if status ~= journal.STATUS.VALID_INCOMPLETE or j.ref ~= "run2" then
+    error("journal must not enter the removed move/post-write-verify path")
   end
 end
 

@@ -714,13 +714,14 @@ end
 -- Gemeinsames Secret fuer COMMAND/ACK- und VALVE-Nachrichten. Der Installer
 -- erfindet bewusst keinen pro Computer unterschiedlichen Wert: Alle Nodes
 -- muessen dasselbe, vom Betreiber gesetzte Secret verwenden. Bis dahin ist
--- der schreibende Funkverkehr fail-closed; Telemetrie bleibt lesbar.
+-- der gesamte Steuerungs- und Telemetrieverkehr fail-closed.
 local network_auth_cfg = INSTALL_ROOT .. "/config/network_auth.lua"
 if not fs.exists(network_auth_cfg) then
   local ok_na, err_na = stage_mod.write(network_auth_cfg, table.concat({
     "-- Auf ALLEN XReactor-Computern dasselbe Secret mit mindestens 16 Zeichen setzen.\n",
+    "-- Optional trusted_master_id = \"node-53\" setzen (ID aus node_id.txt des MASTER).\n",
     "-- Ausschliesslich im CC:Tweaked-Dateisystem bearbeiten, nicht per Server-Konsole.\n",
-    "return {\n  secret = \"\",\n}\n",
+    "return {\n  secret = \"\",\n  trusted_master_id = nil,\n}\n",
   }))
   if not ok_na then
     error("network_auth.lua konnte nicht geschrieben werden: " .. tostring(err_na), 0)

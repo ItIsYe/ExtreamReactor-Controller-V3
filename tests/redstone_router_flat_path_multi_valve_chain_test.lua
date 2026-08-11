@@ -25,6 +25,8 @@ local clock = 1000000
 os.epoch = function() return clock end
 
 local redstone_router = require('nodes.fuel.redstone_router')
+local protocol = require('core.protocol')
+local SECRET = 'router-test-secret-1234'
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -62,11 +64,14 @@ local function ack(router, integrator, side, applied, high)
   local key = valve_key(integrator, side)
   local entry = router._state.pending_valve_acks and router._state.pending_valve_acks[key]
   if not entry then error('no pending command for ' .. key) end
-  router:handle_valve_ack({
+  local message = {
     type = 'VALVE_ACK', command_id = entry.command_id,
     src = entry.dst, dst = entry.src,
-    applied = applied, high = (high == nil) and entry.high or high,
-  })
+    applied = applied, high = (high == nil) and entry.high or high, ts = clock,
+  }
+  message.auth = { algorithm = 'HMAC-SHA256',
+    mac = assert(protocol.sign_value(protocol.valve_auth_value(message), SECRET)) }
+  router:handle_valve_ack(message)
 end
 
 local routes = {
@@ -76,7 +81,7 @@ local routes = {
 }
 
 local router = redstone_router.new({
-  config = { logistics = { redstone_tree = routes } },
+  config = { auth_secret = SECRET, logistics = { redstone_tree = routes } },
   comms = { get_peers = function() return { ['VALVE-B'] = { down = false } } end },
   log = function() end,
   warn_once = function() end,

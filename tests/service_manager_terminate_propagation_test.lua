@@ -10,7 +10,10 @@ local manager = service_manager.new({ log_prefix = "TEST" })
 manager:add({
   name = "terminate-on-tick",
   tick = function()
-    error("Terminated")
+    -- CC:Tweaked raises the system terminate sentinel without a source/line
+    -- prefix. Application errors merely containing the word must not be
+    -- mistaken for that sentinel.
+    error("Terminated", 0)
   end
 })
 

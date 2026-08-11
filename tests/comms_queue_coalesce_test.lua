@@ -55,7 +55,8 @@ local comms = comms_lib.init({
   network = net,
   node_id = "NODE-1",
   role = "TEST",
-  config = { queue_limit = 20, volatile_ttl_s = 2, ack_timeout_s = 1, max_retries = 1 }
+  config = { queue_limit = 20, volatile_ttl_s = 2, ack_timeout_s = 1,
+    max_retries = 1, require_command_auth = false }
 })
 
 for i = 1, 5 do

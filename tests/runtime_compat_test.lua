@@ -49,7 +49,8 @@ local net = {
   end,
 }
 
-local comms = comms_lib.init({ network = net, node_id = 'NODE-1', role = 'TEST', config = { ack_timeout_s = 1, max_retries = 1 } })
+local comms = comms_lib.init({ network = net, node_id = 'NODE-1', role = 'TEST',
+  config = { ack_timeout_s = 1, max_retries = 1, require_command_auth = false } })
 comms.send(nil, constants.message_types.STATUS, { ok = true }, { require_ack = true, channel = 88 })
 comms.tick()
 local diag = comms.get_diagnostics()

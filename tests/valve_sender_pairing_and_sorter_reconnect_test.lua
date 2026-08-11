@@ -47,6 +47,7 @@ local last_command_ts = os.epoch("utc")
 local config = { sorter_name = "logisticalSorter_1", trusted_source = ]] .. (opts.initial_trusted_source and ('"' .. opts.initial_trusted_source .. '"') or 'nil') .. [[ }
 local CONFIG = { LOG_PREFIX = "VALVE", CONFIG_PATH = "/xreactor/config/valve.lua" }
 local node_id = "VALVE-1"
+local valve_auth_secret = "test-secret-123456"
 ]]
   local footer = [[
 return {
@@ -64,11 +65,19 @@ return {
       log = function(_prefix, msg, level) log_lines[#log_lines + 1] = { msg = msg, level = level } end,
       write_config = function(path, cfg)
         write_config_calls[#write_config_calls + 1] = { path = path, trusted_source = cfg.trusted_source }
-        if opts.write_config_ok == false then return false, 'simulated persist failure' end
+        if opts.write_config_ok == false and path == '/xreactor/config/valve.lua' then
+          return false, 'simulated persist failure'
+        end
         return true
       end,
+      load_config = function() return {} end,
     },
-    string = string, table = table, tostring = tostring, tonumber = tonumber, type = type,
+    protocol = {
+      valve_auth_value = function(message) return message end,
+      verify_value = function() return true end,
+      sign_value = function() return "test-mac" end,
+    },
+    string = string, table = table, math = math, tostring = tostring, tonumber = tonumber, type = type,
     pcall = pcall, error = error, ipairs = ipairs, pairs = pairs, select = select,
   }
   env._G = env
@@ -84,11 +93,12 @@ end
 do
   local inst = make_pairing_instance()
   local event = { 'modem_message', 'left', 6504, 6504,
-    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-1', high = true } }
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-1',
+      high = true, ts = 1000000, auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
   inst.handle_valve_channel_event(event)
   assert_eq(inst.get_trusted_source(), 'FUEL-1', 'first accepted sender must become trusted_source')
-  assert_eq(#inst.write_config_calls, 1, 'pairing must be persisted once')
-  assert_eq(inst.write_config_calls[1].trusted_source, 'FUEL-1', 'persisted config must carry trusted source')
+  assert_eq(#inst.write_config_calls, 2, 'replay watermark and pairing must both be persisted')
+  assert_eq(inst.write_config_calls[2].trusted_source, 'FUEL-1', 'persisted config must carry trusted source')
   assert_true(inst.seen_command_ids['CMD-1'] == true, 'successfully paired command must be remembered')
 end
 
@@ -96,7 +106,8 @@ end
 do
   local inst = make_pairing_instance({ initial_trusted_source = 'FUEL-1' })
   local event = { 'modem_message', 'left', 6504, 6504,
-    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'INTRUDER-1', command_id = 'CMD-2', high = false } }
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'INTRUDER-1', command_id = 'CMD-2',
+      high = false, ts = 1000000, auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
   inst.handle_valve_channel_event(event)
   assert_true(not inst.seen_command_ids['CMD-2'], 'untrusted sender must never be applied/remembered')
   assert_eq(inst.get_current_high(), true, 'untrusted command must not change valve state')
@@ -111,10 +122,11 @@ end
 do
   local inst = make_pairing_instance({ initial_trusted_source = 'FUEL-1' })
   local event = { 'modem_message', 'left', 6504, 6504,
-    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-3', high = false } }
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-3',
+      high = false, ts = 1000000, auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
   inst.handle_valve_channel_event(event)
   assert_true(inst.seen_command_ids['CMD-3'] == true, 'trusted sender must be applied')
-  assert_eq(#inst.write_config_calls, 0, 'existing pairing must not be re-persisted')
+  assert_eq(#inst.write_config_calls, 1, 'existing pairing must not be re-persisted beyond replay watermark')
 end
 
 -- Pairing persistence failure clears RAM trust, forces BLOCKED physically and
@@ -122,7 +134,8 @@ end
 do
   local inst = make_pairing_instance({ write_config_ok = false })
   local event = { 'modem_message', 'left', 6504, 6504,
-    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-4', high = false } }
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-4',
+      high = false, ts = 1000000, auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
   inst.handle_valve_channel_event(event)
   assert_eq(inst.get_trusted_source(), nil, 'failed durable pairing must undo RAM trust')
   assert_eq(inst.get_current_high(), true, 'failed pairing persistence must force BLOCKED')

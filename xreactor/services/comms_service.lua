@@ -58,10 +58,50 @@ function comms_service.new(opts)
     on_error = opts.on_error,
     network = nil,
     comms = nil,
+    trusted_master_id = nil,
+    network_auth_master_id = nil,
+    trusted_master_state_path = nil,
     rx_diag_seen = {},
+    rx_diag_order = {},
+    rx_diag_limit = math.max(16, math.floor(tonumber(opts.rx_diag_limit) or 256)),
     wants_events = true
   }
   return setmetatable(self, { __index = comms_service })
+end
+
+function comms_service:_configured_master_id()
+  local expected = self.config.trusted_master_id or self.config.master_node_id
+  if expected == nil and type(self.config.comms) == "table" then
+    expected = self.config.comms.trusted_master_id
+  end
+  return expected or self.network_auth_master_id
+end
+
+function comms_service:_accept_master_identity(message, allow_pairing)
+  if type(message) ~= "table" or message.auth_verified ~= true then
+    return false, "master authentication missing"
+  end
+  if normalize_role(message.role) ~= normalize_role(constants.roles.MASTER) then
+    return false, "message sender is not MASTER"
+  end
+  local actual = utils.normalize_node_id(message.src or message.sender_id or message.node_id)
+  local expected = self:_configured_master_id() or self.trusted_master_id
+  if expected ~= nil then
+    if actual ~= utils.normalize_node_id(expected) then
+      return false, "message sender does not match trusted master id"
+    end
+    return true
+  end
+  if not allow_pairing then return false, "trusted master id unavailable" end
+
+  local state_path = self.trusted_master_state_path or "/xreactor/state/trusted_master.lua"
+  local saved, save_err = utils.write_config(state_path, { node_id = actual })
+  if not saved then
+    return false, "trusted master id persistence failed: " .. tostring(save_err)
+  end
+  self.trusted_master_id = actual
+  utils.log(self.log_prefix, "Paired authenticated MASTER identity: " .. tostring(actual), "INFO")
+  return true
 end
 
 function comms_service:trace_master_rx(message)
@@ -77,6 +117,11 @@ function comms_service:trace_master_rx(message)
     .. ":" .. tostring(payload.role or "-") .. ":" .. tostring(meta_role or "-")
   if self.rx_diag_seen[key] then return end
   self.rx_diag_seen[key] = true
+  self.rx_diag_order[#self.rx_diag_order + 1] = key
+  while #self.rx_diag_order > self.rx_diag_limit do
+    local expired = table.remove(self.rx_diag_order, 1)
+    self.rx_diag_seen[expired] = nil
+  end
   utils.log(self.log_prefix,
     ("RX diag node=%s type=%s sender=%s role=%s payload_role=%s meta_role=%s keys=%d mode=%s state=%s output=%s turbines=%s reactors=%s modules=%s"):format(
       tostring(node_id), tostring(message.type or "?"), tostring(message.sender_id or message.src or "?"),
@@ -94,27 +139,18 @@ end
 
 function comms_service:_authorize_command(message)
   local local_role = normalize_role(self.network and self.network.role or self.role or self.config.role)
-  if local_role == normalize_role(constants.roles.MASTER) then return true end
   local command_auth_required = type(self.config.comms) ~= "table"
     or self.config.comms.require_command_auth ~= false
   if command_auth_required and (type(message) ~= "table" or message.auth_verified ~= true) then
     return false, "command authentication missing"
   end
-  if normalize_role(message and message.role) ~= normalize_role(constants.roles.MASTER) then
-    return false, "command sender is not MASTER"
-  end
-
-  local expected = self.config.trusted_master_id or self.config.master_node_id
-  if expected == nil and type(self.config.comms) == "table" then
-    expected = self.config.comms.trusted_master_id
-  end
-  if expected ~= nil then
+  if local_role == normalize_role(constants.roles.MASTER) then
     local actual = utils.normalize_node_id(message.src or message.sender_id or message.node_id)
-    if actual ~= utils.normalize_node_id(expected) then
-      return false, "command sender does not match trusted master id"
-    end
+    local local_id = utils.normalize_node_id(self.network and self.network.id or self.node_id)
+    if actual ~= local_id then return false, "MASTER rejects commands from another network identity" end
+    return true
   end
-  return true
+  return self:_accept_master_identity(message, true)
 end
 
 function comms_service:init()
@@ -126,6 +162,27 @@ function comms_service:init()
     utils.log(self.log_prefix, "WARN: normalized node_id to string", "WARN")
     self.network.id = normalized_id
   end
+  self.trusted_master_state_path = (self.config.comms and self.config.comms.trusted_master_state_path)
+    or "/xreactor/state/trusted_master.lua"
+  local auth_config_path = self.config.comms and self.config.comms.auth_config_path
+  if type(auth_config_path) == "string" and auth_config_path ~= "" then
+    local auth_config = utils.load_config(auth_config_path, {})
+    if type(auth_config) == "table" then
+      self.network_auth_master_id = auth_config.trusted_master_id
+    end
+  end
+  local configured_master = self:_configured_master_id()
+  if configured_master ~= nil then
+    self.trusted_master_id = utils.normalize_node_id(configured_master)
+  else
+    local stored = utils.load_config(self.trusted_master_state_path, {})
+    if type(stored) == "table" and stored.node_id ~= nil then
+      self.trusted_master_id = utils.normalize_node_id(stored.node_id)
+    end
+  end
+  if normalize_role(self.network.role) == normalize_role(constants.roles.MASTER) then
+    self.trusted_master_id = utils.normalize_node_id(self.network.id)
+  end
   self.comms = comms_lib.init({
     network = self.network,
     node_id = self.network.id,
@@ -135,11 +192,23 @@ function comms_service:init()
     config = self.config.comms or {}
   })
 
+  local function accept_role_message(message)
+    if normalize_role(message and message.role) ~= normalize_role(constants.roles.MASTER) then return true end
+    local accepted, reason = self:_accept_master_identity(message, true)
+    if not accepted then
+      utils.log(self.log_prefix, "Untrusted MASTER message ignored: " .. tostring(reason), "WARN")
+      return false
+    end
+    return true
+  end
+
   self.comms.on(constants.message_types.STATUS, function(message)
+    if not accept_role_message(message) then return end
     self:trace_master_rx(message)
     if self.on_status then self.on_status(message) elseif self.on_message then self.on_message(message) end
   end)
   self.comms.on(constants.message_types.HEARTBEAT, function(message)
+    if not accept_role_message(message) then return end
     self:trace_master_rx(message)
     if self.on_heartbeat then self.on_heartbeat(message) elseif self.on_message then self.on_message(message) end
   end)
@@ -164,10 +233,12 @@ function comms_service:init()
     return { ok = false, error = "command handler missing" }
   end)
   self.comms.on(constants.message_types.ALERT, function(message)
+    if not accept_role_message(message) then return end
     self:trace_master_rx(message)
     if self.on_alert then self.on_alert(message) elseif self.on_message then self.on_message(message) end
   end)
   self.comms.on(constants.message_types.ERROR, function(message)
+    if not accept_role_message(message) then return end
     self:trace_master_rx(message)
     if self.on_error then self.on_error(message) elseif self.on_message then self.on_message(message) end
   end)
@@ -180,10 +251,12 @@ function comms_service:init()
     if self.on_message then self.on_message(message) end
   end)
   self.comms.on(constants.message_types.HELLO, function(message)
+    if not accept_role_message(message) then return end
     self:trace_master_rx(message)
     if self.on_message then self.on_message(message) end
   end)
   self.comms.on(constants.message_types.REGISTER, function(message)
+    if not accept_role_message(message) then return end
     self:trace_master_rx(message)
     if self.on_message then self.on_message(message) end
   end)
