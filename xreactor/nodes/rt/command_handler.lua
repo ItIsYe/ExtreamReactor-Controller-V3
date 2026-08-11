@@ -15,6 +15,12 @@ local number_or_nil = utils.number_or_nil or function(v)
   return nil
 end
 
+local function finite_number(value)
+  local number = number_or_nil(value)
+  if type(number) ~= "number" or number ~= number or number == math.huge or number == -math.huge then return nil end
+  return number
+end
+
 local function get_learning(ctx)
   -- Support both direct field (status_snapshot ctx) and getter (command ctx).
   if ctx.get_capacity_learning then
@@ -28,10 +34,11 @@ end
 -- power_percent relativ zu einer unbekannten Kapazität sinnlos).
 local function capacity_learning_locked(ctx)
   local learning = get_learning(ctx)
+  local max_output = type(learning) == "table" and finite_number(learning.max_output) or nil
   return type(learning) == "table"
     and learning.ready == true
-    and number_or_nil(learning.max_output)
-    and number_or_nil(learning.max_output) > 0
+    and max_output ~= nil
+    and max_output > 0
 end
 
 local function value_summary(value)
@@ -52,7 +59,10 @@ local function set_setpoints(command, ctx, record)
     return record({ ok = false, error = "autonom: ignoring setpoints", reason_code = "INVALID_STATE" })
   end
 
-  local value = command.value or {}
+  if type(command.value) ~= "table" then
+    return record({ ok = false, error = "invalid setpoints payload", reason_code = "INVALID_VALUE" })
+  end
+  local value = command.value
   if not capacity_learning_locked(ctx) then
     local learning = ctx.capacity_learning or {}
     return record({
@@ -69,7 +79,10 @@ local function set_setpoints(command, ctx, record)
   -- Master sendet nur den Prozentwert — RT berechnet Flow, Coil,
   -- Reaktor-Stab vollständig autonom daraus.
   local targets = ctx.targets
-  local pct = number_or_nil(value.power_target_percent)
+  local pct = finite_number(value.power_target_percent)
+  if value.power_target_percent ~= nil and pct == nil then
+    return record({ ok = false, error = "invalid power target percent", reason_code = "INVALID_VALUE" })
+  end
   if pct then
     pct = math.max(0, math.min(100, pct))
     targets.power_percent = pct
@@ -120,15 +133,18 @@ local function set_setpoints(command, ctx, record)
   return record({ ok = true, command_value = value })
 end
 
-local function set_scalar_target(command, ctx, key, fallback)
+local function set_scalar_target(command, ctx, key, fallback, record)
   if ctx.get_current_state() ~= ctx.STATE.MASTER then
-    return
+    return record({ ok = false, error = "autonom: ignoring target", reason_code = "INVALID_STATE" })
   end
-  if fallback ~= nil then
-    ctx.targets[key] = command.value or fallback
-  else
-    ctx.targets[key] = command.value
+  local raw_value = command.value
+  if raw_value == nil and fallback ~= nil then raw_value = fallback end
+  local value = finite_number(raw_value)
+  if value == nil then
+    return record({ ok = false, error = "invalid numeric target", reason_code = "INVALID_VALUE" })
   end
+  ctx.targets[key] = value
+  return record({ ok = true, command_value = value })
 end
 
 local function transition_mode(command, ctx)
@@ -146,7 +162,10 @@ local function startup_stage(command, ctx, record)
     return record({ ok = false, error = "autonom: ignoring startup", reason_code = "INVALID_STATE" })
   end
 
-  local value = command.value or {}
+  if type(command.value) ~= "table" then
+    return record({ ok = false, error = "invalid startup payload", reason_code = "INVALID_VALUE" })
+  end
+  local value = command.value
   local module, detail = ctx.start_module(value.module_id, value.module_type, value.ramp_profile)
   if not module then
     ctx.add_alarm(ctx.get_network_id(), "WARNING", "Startup rejected: " .. (detail or "unknown"))
@@ -162,17 +181,14 @@ local function make_dispatch()
       return nil
     end,
     ["SET_SETPOINTS"] = set_setpoints,
-    ["POWER_TARGET"] = function(command, ctx)
-      set_scalar_target(command, ctx, "power")
-      return nil
+    ["POWER_TARGET"] = function(command, ctx, record)
+      return set_scalar_target(command, ctx, "power", nil, record)
     end,
-    ["STEAM_TARGET"] = function(command, ctx)
-      set_scalar_target(command, ctx, "steam")
-      return nil
+    ["STEAM_TARGET"] = function(command, ctx, record)
+      return set_scalar_target(command, ctx, "steam", nil, record)
     end,
-    ["TURBINE_RPM"] = function(command, ctx)
-      set_scalar_target(command, ctx, "rpm", ctx.TARGET_RPM)
-      return nil
+    ["TURBINE_RPM"] = function(command, ctx, record)
+      return set_scalar_target(command, ctx, "rpm", ctx.TARGET_RPM, record)
     end,
     ["MODE"] = function(command, ctx)
       transition_mode(command, ctx)
@@ -196,12 +212,12 @@ local function make_dispatch()
     -- uebernommen), aber `persisted` macht das Ergebnis jetzt ehrlich
     -- ueberpruefbar, analog zu WATER's SET_TARGET.
     ["SET_REACTOR_FILL_TARGET"] = function(command, ctx)
-      local value = tonumber(command.value)
-      if type(value) ~= "number" or value < 0 or value > 1 then
+      local value = finite_number(command.value)
+      if value == nil or value < 0 or value > 1 then
         if type(ctx.log) == "function" then
           ctx.log("WARN", "SET_REACTOR_FILL_TARGET rejected: invalid value=" .. tostring(command.value))
         end
-        return nil
+        return { ok = false, error = "invalid reactor fill target", reason_code = "INVALID_VALUE" }
       end
       local persisted = true
       if type(ctx.set_reactor_fill_target) == "function" then

@@ -237,15 +237,15 @@ local function attempt_recovery_resume(journal, journal_status)
   else
     -- Bei CORRUPT/UNREADABLE existiert kein vertrauenswuerdiger Original-Ref.
     -- Fail-safe Datenhaltung bleibt durch das externe Recovery-Backup erhalten;
-    -- der Bootstrap darf dann einen NEU aufgeloesten beta-SHA verwenden, aber
-    -- niemals Dateien eines beweglichen Branches mit einem alten Journal-SHA mischen.
+    -- der Bootstrap verwendet dann den dokumentierten beta-Ref fuer einen
+    -- vollstaendig neuen Lauf und mischt ihn nicht mit einem alten Journal-Ref.
     url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer"
     p("[BOOT] WARN: Original-Ref nicht rekonstruierbar (" .. tostring(journal_status)
-      .. ") -- starte dokumentierten, neu SHA-gepinnten Recovery-Lauf vom aktuellen beta-Head.")
+      .. ") -- starte dokumentierten neuen Recovery-Lauf vom aktuellen beta-Head.")
   end
 
   local body
-  local ok_http, r = pcall(http.get, url)
+  local ok_http, r = pcall(http.get, url, nil, { timeout = 15 })
   if ok_http and r then
     local ok2, b = pcall(r.readAll); pcall(r.close)
     if ok2 and type(b) == "string" and #b > 0 then body = b end

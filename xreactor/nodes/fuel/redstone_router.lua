@@ -32,6 +32,7 @@
 --      path=<gesamter Ast von der Wurzel bis zum Reaktor-Blatt> aufgeloest.
 
 local constants = require("shared.constants")
+local protocol = require("core.protocol")
 
 local M = {}
 
@@ -279,6 +280,7 @@ function M.new(opts)
     -- Fuer Auto-Discovery erreichbarer VALVE-Nodes (siehe refresh()).
     comms = opts.comms or nil,
     valve_modem = valve_modem,
+    auth_secret = protocol.resolve_auth_secret(router_config.comms or router_config),
     _state = {
       all_valves = {},
       integrators = {},
@@ -452,6 +454,10 @@ function M:_set_valve(valve, high)
         self.warn_once("no_valve_modem", "RedstoneRouter: kein Wireless Modem fuer den Ventil-Kanal gefunden")
         return false
       end
+      if not self.auth_secret then
+        self.warn_once("missing_valve_auth", "RedstoneRouter: Ventil-Schaltung verweigert -- gemeinsames Netzwerk-Secret fehlt")
+        return false
+      end
       local source_node_id = self.source_node_id
       if type(source_node_id) ~= "string" or source_node_id == "" then
         self.warn_once("missing_valve_source_id", "RedstoneRouter: keine gueltige Runtime-Node-ID fuer SET_VALVE; Netzwerkschaltung verweigert")
@@ -464,6 +470,12 @@ function M:_set_valve(valve, high)
         type = "SET_VALVE", src = source_node_id, dst = w.node_id,
         command_id = command_id, side = side, high = high, ts = os.epoch and os.epoch("utc") or 0,
       }
+      local mac, auth_err = protocol.sign_value(protocol.valve_auth_value(message), self.auth_secret)
+      if not mac then
+        self.warn_once("valve_auth_sign", "RedstoneRouter: SET_VALVE konnte nicht authentisiert werden: " .. tostring(auth_err))
+        return false
+      end
+      message.auth = { algorithm = "HMAC-SHA256", mac = mac }
       local ok = pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
       if not ok then
         self.warn_once("valve_net_fail:" .. valve.integrator,
@@ -1122,6 +1134,16 @@ end
 -- Gegensatz zu "requested_state") ehrlich moeglich.
 function M:handle_valve_ack(message)
   if type(message) ~= "table" or message.type ~= "VALVE_ACK" or not message.command_id then return end
+  if not self.auth_secret then return end
+  local auth = message.auth
+  local authenticated = type(auth) == "table" and auth.algorithm == "HMAC-SHA256"
+    and protocol.verify_value(protocol.valve_auth_value(message), self.auth_secret, auth.mac)
+  local now = os.epoch and os.epoch("utc") or 0
+  if not authenticated or type(message.ts) ~= "number" or math.abs(now - message.ts) > 30000 then
+    self.warn_once("valve_ack_auth:" .. tostring(message.command_id),
+      "RedstoneRouter: unauthentisierte oder veraltete VALVE_ACK ignoriert")
+    return
+  end
   local pending = self._state.pending_valve_acks
   if not pending then return end
   for key, entry in pairs(pending) do
@@ -1164,10 +1186,19 @@ function M:check_pending_acks()
       else
         entry.retries = entry.retries + 1
         entry.sent_ts = now
-        pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+        local message = {
           type = "SET_VALVE", src = entry.src, dst = entry.dst,
           command_id = entry.command_id, side = entry.side, high = entry.high, ts = now,
-        })
+        }
+        local mac = self.auth_secret and protocol.sign_value(protocol.valve_auth_value(message), self.auth_secret) or nil
+        if mac then
+          message.auth = { algorithm = "HMAC-SHA256", mac = mac }
+          pcall(self.valve_modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
+        else
+          self.warn_once("valve_retry_auth:" .. key,
+            "RedstoneRouter: SET_VALVE-Retry verweigert -- Authentisierung nicht verfuegbar")
+          self._state.pending_valve_acks[key] = nil
+        end
       end
     end
   end

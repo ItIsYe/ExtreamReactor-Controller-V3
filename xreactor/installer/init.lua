@@ -266,7 +266,7 @@ end
 --
 -- Fix (2026-07-17): CRITICAL. INSTALL-P1 (Abschnitt 8). "ref" wird jetzt
 -- vom Aufrufer (deps.ref, siehe /installer) uebergeben statt hier per
--- eigenem http_mod.resolve_sha()-Aufruf ERNEUT aufgeloest zu werden --
+-- eigenem API-Aufruf ERNEUT bestimmt zu werden --
 -- /installer hat bereits VOR dem Download dieser Datei selbst genau EINEN
 -- Ref aufgeloest, um zu wissen, welche Version von installer/http.lua,
 -- installer/manifest.lua usw. es ueberhaupt herunterladen soll. Eine
@@ -276,7 +276,7 @@ end
 -- Rest der Installation.
 local ref = deps.ref
 if type(ref) ~= "string" or ref == "" then
-  error("installer/init.lua: deps.ref fehlt oder ungueltig -- Aufrufer muss einen aufgeloesten Ref uebergeben", 0)
+  error("installer/init.lua: deps.ref fehlt oder ungueltig -- Aufrufer muss einen festen Ref uebergeben", 0)
 end
 p(("ref: " .. ref))
 
@@ -711,9 +711,26 @@ if not fs.exists(auto_cfg) then
   p("Auto-Update Config angelegt")
 end
 
+-- Gemeinsames Secret fuer COMMAND/ACK- und VALVE-Nachrichten. Der Installer
+-- erfindet bewusst keinen pro Computer unterschiedlichen Wert: Alle Nodes
+-- muessen dasselbe, vom Betreiber gesetzte Secret verwenden. Bis dahin ist
+-- der schreibende Funkverkehr fail-closed; Telemetrie bleibt lesbar.
+local network_auth_cfg = INSTALL_ROOT .. "/config/network_auth.lua"
+if not fs.exists(network_auth_cfg) then
+  local ok_na, err_na = stage_mod.write(network_auth_cfg, table.concat({
+    "-- Auf ALLEN XReactor-Computern dasselbe Secret mit mindestens 16 Zeichen setzen.\n",
+    "-- Ausschliesslich im CC:Tweaked-Dateisystem bearbeiten, nicht per Server-Konsole.\n",
+    "return {\n  secret = \"\",\n}\n",
+  }))
+  if not ok_na then
+    error("network_auth.lua konnte nicht geschrieben werden: " .. tostring(err_na), 0)
+  end
+  p("WARN: Netzwerk-Authentisierung ist fail-closed, bis network_auth.lua ein gemeinsames Secret enthaelt")
+end
+
 -- Lokale, nicht manifestverwaltete Installationsmetadaten: release.lua ist
 -- Quellmetadatum und darf weiterhin source_ref="beta" tragen; diese Datei
--- dokumentiert dagegen den tatsaechlich aufgeloesten, unveraenderlichen SHA.
+-- dokumentiert dagegen den fuer diesen Lauf verwendeten Ref.
 do
   local meta_path = INSTALL_ROOT .. "/install_meta.lua"
   local installed_at = os.epoch and os.epoch("utc") or 0

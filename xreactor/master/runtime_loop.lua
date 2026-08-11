@@ -300,7 +300,8 @@ local function run_master()
 end
 
 local function is_terminate(err)
-  return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
+  local message = tostring(err or ""):match("^%s*(.-)%s*$"):lower()
+  return message == "terminate" or message == "terminated"
 end
 
 function M.run()

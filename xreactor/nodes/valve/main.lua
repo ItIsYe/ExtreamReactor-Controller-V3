@@ -16,6 +16,7 @@ local bootstrap = dofile("/xreactor/core/bootstrap.lua")
 bootstrap.setup({ role = "valve", log_enabled = false, log_path = nil })
 local require = bootstrap.require
 local constants = require("shared.constants")
+local protocol = require("core.protocol")
 local utils = require("core.utils")
 local health = require("core.health")
 local non_rt_payload = require("core.non_rt_payload")
@@ -63,6 +64,7 @@ end
 CONFIG.CONFIG_PATH = VALVE_USER_CONFIG_PATH
 
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
+local valve_auth_secret = protocol.resolve_auth_secret(config.comms or config)
 local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
 if config.sorter_name ~= nil and (type(config.sorter_name) ~= "string" or config.sorter_name == "") then
@@ -278,10 +280,13 @@ local function check_teach_input()
 end
 
 local SEEN_COMMAND_LIMIT = 16
+local VALVE_REPLAY_PATH = "/xreactor/state/valve_command_replay.lua"
 local seen_command_ids = {}
 local seen_command_order = {}
 local pairing_persisted = config.trusted_source ~= nil
 local last_pairing_error = nil
+local valve_highwater = utils.load_config(VALVE_REPLAY_PATH, {})
+if type(valve_highwater) ~= "table" then valve_highwater = {} end
 
 local function seen_command(id)
   return id ~= nil and seen_command_ids[id] == true
@@ -301,10 +306,16 @@ local function send_valve_ack(reply_side, command_id, applied, high, err, dst, p
   if not command_id or not reply_side then return end
   local ok, modem = pcall(peripheral.wrap, reply_side)
   if not ok or not modem or type(modem.transmit) ~= "function" then return end
-  pcall(modem.transmit, constants.channels.VALVE, constants.channels.VALVE, {
+  if not valve_auth_secret then return end
+  local message = {
     type = "VALVE_ACK", command_id = command_id, applied = applied == true,
     high = high, error = err, src = node_id, dst = dst, persisted = persisted,
-  })
+    ts = os.epoch and os.epoch("utc") or 0,
+  }
+  local mac = protocol.sign_value(protocol.valve_auth_value(message), valve_auth_secret)
+  if not mac then return end
+  message.auth = { algorithm = "HMAC-SHA256", mac = mac }
+  pcall(modem.transmit, constants.channels.VALVE, constants.channels.VALVE, message)
 end
 
 local function handle_valve_channel_event(event)
@@ -325,6 +336,18 @@ local function handle_valve_channel_event(event)
     utils.log(CONFIG.LOG_PREFIX, "SET_VALVE ohne gueltiges 'high' ignoriert", "WARN")
     return
   end
+  if not valve_auth_secret then
+    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE verweigert: gemeinsames Netzwerk-Secret fehlt", "ERROR")
+    return
+  end
+  local auth = message.auth
+  local authenticated = type(auth) == "table" and auth.algorithm == "HMAC-SHA256"
+    and protocol.verify_value(protocol.valve_auth_value(message), valve_auth_secret, auth.mac)
+  local now = os.epoch and os.epoch("utc") or 0
+  if not authenticated or type(message.ts) ~= "number" or math.abs(now - message.ts) > 30000 then
+    utils.log(CONFIG.LOG_PREFIX, "SET_VALVE unauthentisiert oder veraltet -- ignoriert", "WARN")
+    return
+  end
   if config.trusted_source and message.src ~= config.trusted_source then
     utils.log(CONFIG.LOG_PREFIX,
       "SET_VALVE von nicht vertrauenswuerdiger Quelle ignoriert: " .. tostring(message.src), "WARN")
@@ -339,6 +362,34 @@ local function handle_valve_channel_event(event)
     send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error,
       message.src, pairing_persisted)
     return
+  end
+
+  local previous_record = valve_highwater[message.src]
+  local previous_ts = type(previous_record) == "table"
+    and tonumber(previous_record.ts) or tonumber(previous_record)
+  local same_transaction = type(previous_record) == "table"
+    and previous_record.command_id == message.command_id
+
+  -- A persisted transaction may legitimately be retried after an actuator
+  -- or pairing write failed. Re-applying the same authenticated desired state
+  -- is idempotent; accepting a different command at an old timestamp is not.
+  if previous_ts and message.ts <= previous_ts and not same_transaction then
+    send_valve_ack(reply_side, message.command_id, false, current_high,
+      "REPLAYED_VALVE_COMMAND", message.src, pairing_persisted)
+    return
+  end
+  if not same_transaction or (previous_ts and message.ts > previous_ts) then
+    local updated_highwater = {}
+    for source, timestamp in pairs(valve_highwater) do updated_highwater[source] = timestamp end
+    updated_highwater[message.src] = { ts = message.ts, command_id = message.command_id }
+    local replay_saved, replay_err = utils.write_config(VALVE_REPLAY_PATH, updated_highwater)
+    if not replay_saved then
+      utils.log(CONFIG.LOG_PREFIX, "SET_VALVE Replay-Schutz nicht persistierbar: " .. tostring(replay_err), "ERROR")
+      send_valve_ack(reply_side, message.command_id, false, current_high,
+        "REPLAY_STATE_PERSIST_FAILED", message.src, pairing_persisted)
+      return
+    end
+    valve_highwater = updated_highwater
   end
 
   local applied = apply_valve(message.high, false)

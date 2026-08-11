@@ -5,8 +5,8 @@ local M = {}
 
 local ARMING_PATH = "/xreactor/config/remote_update.lua"
 local RELEASE_PATH = "/xreactor/release.lua"
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
+local SOURCE_REF = "beta"
 local UPDATE_EVENT = "xreactor_remote_update_requested"
 
 local function log(msg) pcall(print, "[AUTO] " .. tostring(msg)) end
@@ -19,7 +19,8 @@ end
 
 local function http_get_async(url)
   if not http or type(http.request) ~= "function" then
-    local ok, r = pcall(http.get, url)
+    if not http or type(http.get) ~= "function" then return nil, "http unavailable" end
+    local ok, r = pcall(http.get, url, nil, { timeout = 15 })
     if not ok or not r then return nil, "http.get failed" end
     local ok2, body = pcall(r.readAll); pcall(r.close)
     if ok2 and type(body) == "string" then return body end
@@ -63,21 +64,6 @@ local function cache_bust(url, attempt)
   return url .. sep .. "xr_cb=" .. tostring(attempt or 1) .. "_" .. t
 end
 
-local function valid_sha(sha)
-  return type(sha) == "string" and #sha == 40 and sha:match("^[0-9a-fA-F]+$") ~= nil
-end
-
--- Updates are installed only from one immutable commit. A moving beta ref is
--- never used as an install fallback: version metadata and installer must be
--- from the same source snapshot.
-local function resolve_sha()
-  local body, err = http_get_async(cache_bust(GITHUB_API, 1))
-  if not body then return nil, err or "branch resolution failed" end
-  local sha = body:match('"sha"%s*:%s*"(%x+)"')
-  if not valid_sha(sha) then return nil, "branch response has no valid commit sha" end
-  return sha
-end
-
 local function read_version(path)
   if not fs or not fs.exists(path) then return nil end
   local f = fs.open(path, "r"); if not f then return nil end
@@ -85,9 +71,8 @@ local function read_version(path)
   return tonumber(src:match("manifest_version%s*=%s*(%d+)"))
 end
 
-local function fetch_remote_version(sha)
-  if not valid_sha(sha) then return nil, "immutable sha required" end
-  local url = GITHUB_RAW .. sha .. "/xreactor/release.lua"
+local function fetch_remote_version(ref)
+  local url = GITHUB_RAW .. tostring(ref or SOURCE_REF) .. "/xreactor/release.lua"
   for attempt = 1, 3 do
     local body, err = http_get_async(cache_bust(url, attempt))
     if body then
@@ -152,9 +137,9 @@ local function reclaim(needed)
   return free == nil or free >= needed
 end
 
-local function run_update(sha)
-  if not valid_sha(sha) then return false, "immutable sha required" end
-  local url = GITHUB_RAW .. sha .. "/installer"
+local function run_update(ref)
+  ref = tostring(ref or SOURCE_REF)
+  local url = GITHUB_RAW .. ref .. "/installer"
   local last_err = "unknown"
   local tmp = "/xreactor_auto_update_installer.lua"
   if fs.exists(tmp) then pcall(fs.delete, tmp) end
@@ -178,9 +163,12 @@ local function run_update(sha)
             last_err = "temp write failed: " .. tostring(write_err)
             pcall(fs.delete, tmp)
           else
+            local previous_forced_ref = rawget(_G, "__xreactor_forced_ref")
             _G.__xreactor_remote_update = true
+            _G.__xreactor_forced_ref = ref
             local ok_call, result = pcall(dofile, tmp)
             _G.__xreactor_remote_update = nil
+            _G.__xreactor_forced_ref = previous_forced_ref
             pcall(fs.delete, tmp)
             if ok_call and result ~= false then
               log("Update OK -- Neustart")
@@ -210,7 +198,7 @@ local function recover_after_quiesced_failure(handshake, reason)
   end
 end
 
-local function perform_update(handshake, sha, consume_remote)
+local function perform_update(handshake, ref, consume_remote)
   local quiesced, qerr = request_and_await_quiesce(handshake)
   if not quiesced then return false, qerr end
 
@@ -221,7 +209,7 @@ local function perform_update(handshake, sha, consume_remote)
 
   local success, last_err = false, nil
   for attempt = 1, 3 do
-    local ok_u, err_u = run_update(sha)
+    local ok_u, err_u = run_update(ref)
     if ok_u then success = true; break end
     last_err = err_u
     if attempt < 3 then os.sleep(5) end
@@ -235,16 +223,14 @@ local function do_periodic_check(handshake)
   if not cfg then log("Auto-Update skip: " .. tostring(arm_err)); return end
   if cfg.auto_update ~= true then return end
 
-  local sha, sha_err = resolve_sha()
-  if not sha then log("Auto-Update: kein immutable SHA -- skip: " .. tostring(sha_err)); return end
-  local remote_v, remote_err = fetch_remote_version(sha)
+  local remote_v, remote_err = fetch_remote_version(SOURCE_REF)
   local local_v = read_version(RELEASE_PATH)
   if not remote_v then log("Remote-Version nicht abrufbar: " .. tostring(remote_err)); return end
   if not local_v then log("Lokale Version unbekannt"); return end
   if remote_v <= local_v then return end
 
-  log("NEU: v" .. local_v .. " -> v" .. remote_v .. " @ " .. sha:sub(1, 10))
-  perform_update(handshake, sha, false)
+  log("NEU: v" .. local_v .. " -> v" .. remote_v .. " @ " .. SOURCE_REF)
+  perform_update(handshake, SOURCE_REF, false)
 end
 
 local function do_remote_request(handshake)
@@ -260,16 +246,9 @@ local function do_remote_request(handshake)
     return
   end
 
-  local sha, sha_err = resolve_sha()
-  if not sha then
-    -- Keep the request queued. The loop checks it again on the next timer;
-    -- transient GitHub/API failures do not silently lose an accepted command.
-    log("Queued Remote-Update wartet: SHA nicht aufloesbar: " .. tostring(sha_err))
-    return
-  end
-  log("Queued Remote-Update startet @ " .. sha:sub(1, 10)
+  log("Queued Remote-Update startet @ " .. SOURCE_REF
     .. " trigger=" .. tostring(meta.trigger or "?"))
-  perform_update(handshake, sha, true)
+  perform_update(handshake, SOURCE_REF, true)
 end
 
 local function recover_unexpected(handshake, label, err)

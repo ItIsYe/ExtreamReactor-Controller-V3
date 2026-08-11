@@ -3,8 +3,8 @@ local utils = require("core.utils")
 local manager = {}
 
 local function is_terminate_error(err)
-  local message = tostring(err or ""):lower()
-  return message:find("terminate", 1, true) ~= nil
+  local message = tostring(err or ""):match("^%s*(.-)%s*$"):lower()
+  return message == "terminate" or message == "terminated"
 end
 
 local function rethrow_terminate(err)
