@@ -1,7 +1,7 @@
--- xreactor/manifest.lua -- manifest-v530
+-- xreactor/manifest.lua -- manifest-v531
 return {
-  manifest_version = 530,
-  manifest_id = "manifest-v530",
+  manifest_version = 531,
+  manifest_id = "manifest-v531",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -16,11 +16,11 @@ return {
     { path = "installer/init.lua", size_bytes = 36647, hash = "0ea5ca89", always = true },
     { path = "installer/journal.lua", size_bytes = 12547, hash = "613d29f8", always = true },
     { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-    { path = "release.lua", size_bytes = 345, hash = "9e605b45", always = true },
+    { path = "release.lua", size_bytes = 345, hash = "7f4504c2", always = true },
     { path = "start.lua", size_bytes = 18876, hash = "09a6af1a", always = true },
     { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
     { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
-    { path = "core/mockup_ui.lua", size_bytes = 11299, hash = "52d2ecd4", always = true },
+    { path = "core/mockup_ui.lua", size_bytes = 11830, hash = "de0536b4", always = true },
     { path = "adapters/monitor.lua", size_bytes = 9122, hash = "e1f359a2" },
     { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", always = true },
     { path = "core/update_handshake.lua", size_bytes = 3780, hash = "beafb163", always = true },
@@ -81,7 +81,7 @@ return {
       { path = "master/startup_sequencer.lua", size_bytes = 12914, hash = "40c9d982", required_for={"MASTER"} },
       { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"} },
       { path = "master/ui/alarms.lua", size_bytes = 7996, hash = "93b8a349", required_for={"MASTER"} },
-      { path = "master/ui/alerts.lua", size_bytes = 28137, hash = "4bf57a50", required_for={"MASTER"} },
+      { path = "master/ui/alerts.lua", size_bytes = 28529, hash = "9c51c3bd", required_for={"MASTER"} },
       { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"} },
       { path = "master/ui/multiview.lua", size_bytes = 20300, hash = "cd241353", required_for={"MASTER"} },
       { path = "master/ui/overview.lua", size_bytes = 13792, hash = "33054a4f", required_for={"MASTER"} },
@@ -176,8 +176,8 @@ return {
       { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
       { path = "nodes/fuel/logistics_router.lua", size_bytes = 31971, hash = "5d6738f6", required_for={"FUEL","REPROCESSING"} },
       { path = "nodes/fuel/redstone_router.lua", size_bytes = 59645, hash = "91eea9f5", required_for={"FUEL","REPROCESSING","WATER"} },
-      { path = "nodes/fuel/router_ui.lua", size_bytes = 37259, hash = "747e448a", required_for={"FUEL","REPROCESSING"} },
-      { path = "nodes/fuel/router_ui_responsive.lua", size_bytes = 11480, hash = "24b2e924", required_for={"FUEL"} },
+      { path = "nodes/fuel/router_ui.lua", size_bytes = 37265, hash = "bb2990ec", required_for={"FUEL","REPROCESSING"} },
+      { path = "nodes/fuel/router_ui_responsive.lua", size_bytes = 11484, hash = "678bb227", required_for={"FUEL"} },
     },
 
     reprocessing = {
@@ -204,7 +204,7 @@ return {
       { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER", "FUEL", "REPROCESSING"} },
       { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY", "WATER", "FUEL", "REPROCESSING", "RT"} },
       { path = "nodes/support/runtime.lua", size_bytes = 9676, hash = "81a269fe", required_for={"WATER", "FUEL", "REPROCESSING", "RT", "ENERGY", "MASTER", "VALVE"} },
-      { path = "nodes/support/ui_pages.lua", size_bytes = 7695, hash = "10a158cd", required_for={"WATER", "FUEL", "REPROCESSING", "ENERGY", "RT"} },
+      { path = "nodes/support/ui_pages.lua", size_bytes = 7904, hash = "43238a5a", required_for={"WATER", "FUEL", "REPROCESSING", "ENERGY", "RT"} },
     },
   },
 

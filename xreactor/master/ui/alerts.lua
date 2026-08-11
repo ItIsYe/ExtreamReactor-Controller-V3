@@ -254,6 +254,12 @@ local function render(mon, model)
   local page_status = crit > 0 and "EMERGENCY" or warn > 0 and "WARNING" or "OK"
 
   mux.clear(mon)
+  -- mux.clear/card write directly to the monitor, outside core.ui's dirty
+  -- cache. This page intentionally performs a complete redraw whenever its
+  -- own model snapshot changes, so invalidate the cached widgets as part of
+  -- that redraw. Otherwise unchanged filter/action labels disappear after
+  -- the direct clear while ui.text/ui.badge incorrectly skip them.
+  ui.invalidate(mon)
   mux.header(mon, { title = "AUX ALERTS", node_id = "MASTER AUX", page = "ALERTS", status = page_status, icon = "warning" })
   if w >= 58 then
     local cw = math.floor((w - 8) / 4)
