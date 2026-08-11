@@ -16,7 +16,7 @@ end
 -- Gibt body oder nil, err zurück.
 local function try_once(url)
   if not http or type(http.get) ~= "function" then return nil, "no http" end
-  local ok, r = pcall(http.get, url, nil, { timeout = 15 })
+  local ok, r = pcall(http.get, url)
   if not ok or not r then return nil, "http.get failed" end
   -- Response-Code prüfen wenn verfügbar
   if type(r.getResponseCode) == "function" then
