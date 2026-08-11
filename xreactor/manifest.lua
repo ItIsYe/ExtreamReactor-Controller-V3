@@ -1,7 +1,7 @@
--- xreactor/manifest.lua -- manifest-v531
+-- xreactor/manifest.lua -- manifest-v532
 return {
-  manifest_version = 531,
-  manifest_id = "manifest-v531",
+  manifest_version = 532,
+  manifest_id = "manifest-v532",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -13,10 +13,11 @@ return {
     { path = "installer/stage.lua", size_bytes = 9164, hash = "b067f20b", always = true },
     { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always = true },
     { path = "installer/auto_update.lua", size_bytes = 11590, hash = "86e64cdf", always = true },
-    { path = "installer/init.lua", size_bytes = 36760, hash = "e4fef715", always = true },
+    { path = "installer/init.lua", size_bytes = 38154, hash = "e5817e58", always = true },
     { path = "installer/journal.lua", size_bytes = 12547, hash = "613d29f8", always = true },
     { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-    { path = "release.lua", size_bytes = 345, hash = "7f4504c2", always = true },
+    { path = "installer/reactor_naming.lua", size_bytes = 4983, hash = "5119799d", always = true },
+    { path = "release.lua", size_bytes = 345, hash = "94263042", always = true },
     { path = "start.lua", size_bytes = 18876, hash = "09a6af1a", always = true },
     { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
     { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -121,7 +122,7 @@ return {
       { path = "nodes/rt/discovery_runtime.lua", size_bytes = 13926, hash = "98be547a", required_for={"RT"} },
       { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 6878, hash = "b1b73ffe", required_for={"RT"} },
       { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
-      { path = "nodes/rt/main.lua", size_bytes = 61702, hash = "62c2828e", required_for={"RT"} },
+      { path = "nodes/rt/main.lua", size_bytes = 62026, hash = "87269ac6", required_for={"RT"} },
       { path = "nodes/rt/module_lifecycle.lua", size_bytes = 27809, hash = "1b235e40", required_for={"RT"} },
       { path = "nodes/rt/monitor_ui.lua", size_bytes = 15609, hash = "1762eae7", required_for={"RT"} },
       { path = "nodes/rt/mockup_pages.lua", size_bytes = 17793, hash = "f0390938", required_for={"RT"} },
@@ -163,11 +164,12 @@ return {
     fuel = {
       { path = "nodes/fuel/config.lua", size_bytes = 10035, hash = "8f10ce36", required_for={"FUEL"} },
       { path = "nodes/fuel/config_normalizer.lua", size_bytes = 6065, hash = "8eaa6398", required_for={"FUEL"} },
-      { path = "nodes/fuel/main.lua", size_bytes = 25540, hash = "db88732c", required_for={"FUEL"} },
+      { path = "nodes/fuel/main.lua", size_bytes = 23651, hash = "0db006df", required_for={"FUEL"} },
       { path = "nodes/fuel/status_snapshot.lua", size_bytes = 5779, hash = "7e6f2625", required_for={"FUEL"} },
       { path = "nodes/fuel/operational_summary.lua", size_bytes = 7915, hash = "0e2fd9d7", required_for={"FUEL"} },
       { path = "nodes/fuel/command_handler.lua", size_bytes = 2305, hash = "24c8f3c7", required_for={"FUEL"} },
-      { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 3531, hash = "d2722a80", required_for={"FUEL"} },
+      { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 3616, hash = "2086b4ed", required_for={"FUEL"} },
+      { path = "nodes/fuel/reactor_targets.lua", size_bytes = 2196, hash = "64804728", required_for={"FUEL"} },
       { path = "nodes/fuel/monitor_ui.lua", size_bytes = 8460, hash = "b40b6c78", required_for={"FUEL"} },
       { path = "nodes/fuel/ui_completion.lua", size_bytes = 17973, hash = "fba02cac", required_for={"FUEL"} },
       { path = "nodes/fuel/ui_diagnostics_overlay.lua", size_bytes = 2066, hash = "6dd3243f", required_for={"FUEL"} },

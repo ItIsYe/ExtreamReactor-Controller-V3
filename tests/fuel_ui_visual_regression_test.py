@@ -4,6 +4,7 @@ from pathlib import Path
 # actionable empty states, visible EDIT routing entry, and uncluttered diagnostics.
 repo = Path(__file__).resolve().parents[1]
 main = (repo / "xreactor/nodes/fuel/main.lua").read_text(encoding="utf-8")
+reactor_targets = (repo / "xreactor/nodes/fuel/reactor_targets.lua").read_text(encoding="utf-8")
 monitor_ui = (repo / "xreactor/nodes/fuel/monitor_ui.lua").read_text(encoding="utf-8")
 ui_pages = (repo / "xreactor/nodes/fuel/ui_pages.lua").read_text(encoding="utf-8")
 ui_completion = (repo / "xreactor/nodes/fuel/ui_completion.lua").read_text(encoding="utf-8")
@@ -13,8 +14,9 @@ mockup = (repo / "xreactor/core/mockup_ui.lua").read_text(encoding="utf-8")
 
 assert "local FUEL_MONITOR_SCALE = 0.5" in main
 assert main.count('monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)') == 2
-assert "for peer_id, peer in pairs(comms:get_peers() or {}) do" in main
-assert "peer.role == constants.roles.RT_NODE" in main
+assert 'require("nodes.fuel.reactor_targets")' in main
+assert "for peer_id, peer in pairs(peers) do" in reactor_targets
+assert "peer.role == constants.roles.RT_NODE" in reactor_targets
 assert "for _, peer in ipairs(comms:get_peers())" not in main
 
 assert "ui_diagnostics_overlay.attach" not in monitor_ui

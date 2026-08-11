@@ -27,6 +27,7 @@ local stage_mod    = deps.stage_mod
 local ui_mod       = deps.ui_mod
 local journal_mod  = deps.journal_mod
 local plan_validator_mod = deps.plan_validator_mod
+local reactor_naming_mod = deps.reactor_naming_mod
 
 local INSTALL_ROOT    = "/xreactor"
 local STARTUP_PATH    = "/startup.lua"
@@ -332,6 +333,32 @@ if not role then
 end
 
 ui_mod.header("Installiere " .. role.label)
+
+-- Beim ersten manuellen RT-Installationslauf werden alle aktuell sichtbaren
+-- Reaktoren genau einmal benannt. Die eigene Configdatei liegt unter config/
+-- und wird dadurch von der unmittelbar folgenden vollstaendigen Config-
+-- Sicherung bei Reinstallationen erhalten. Ein abgeschlossenes Naming wird
+-- nicht erneut abgefragt; Auto-Updates duerfen niemals interaktiv warten.
+if role.label == "RT" then
+  if type(reactor_naming_mod) ~= "table" or type(reactor_naming_mod.run) ~= "function" then
+    error("RT-Reaktornamensmodul fehlt oder ist ungueltig", 0)
+  end
+  local naming_ok, naming_state = reactor_naming_mod.run({
+    fs = fs,
+    peripheral = peripheral,
+    remote_update = _G.__xreactor_remote_update == true,
+    output = p,
+    input = function() return read and read() or "" end,
+    write = function(path, content) return stage_mod.write(path, content) end,
+  })
+  if not naming_ok then
+    error("Reaktornamen konnten nicht gespeichert werden: " .. tostring(naming_state), 0)
+  elseif naming_state == "saved" then
+    p("Reaktornamen gespeichert; dieser Schritt wird bei Reinstallationen nicht erneut angezeigt.")
+  elseif naming_state == "no_reactors_detected" and not _G.__xreactor_remote_update then
+    p("WARN: Keine Reaktoren erkannt; Namensschritt bleibt fuer eine spaetere manuelle Installation offen.")
+  end
+end
 
 -- Gesamten config-Ordner sichern (siehe Fix-Kommentar oben). Backup wird
 -- sofort zurueckgelesen und byte-genau verifiziert, BEVOR /xreactor

@@ -25,6 +25,7 @@ function M.ingest_master_relay(cache, value)
       cache.master_relay[reactor_id] = {
         fuel_amount = entry.fuel_amount,
         fuel_capacity = entry.fuel_capacity,
+        label = entry.label,
         ts = now - age_ms,
         source_node = entry.source_node,
         local_reactor_id = entry.local_reactor_id,
@@ -47,6 +48,7 @@ local function store_direct(cache, message, reactor, now)
   local entry = {
     fuel_amount = reactor.fuel_amount,
     fuel_capacity = reactor.fuel_capacity,
+    label = reactor.alias or reactor.name or global_id,
     ts = now,
     source_node = source,
     local_reactor_id = local_id,

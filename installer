@@ -83,7 +83,7 @@ local base = GITHUB_RAW..ref.."/xreactor/"
 -- Dieselben Dateien, die auch ein bereits installierter Node unter
 -- /xreactor/installer/*.lua liegen hat -- hier frisch vom aufgeloesten Ref,
 -- da /xreactor bei der Erstinstallation noch nicht existiert.
-local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator" }
+local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator", "reactor_naming" }
 local module_src = {}
 for _, name in ipairs(MODULE_NAMES) do
   local url = base.."installer/"..name..".lua"
@@ -113,6 +113,7 @@ local stage_mod          = load_module("stage",           module_src.stage)
 local ui_mod             = load_module("ui",               module_src.ui)
 local journal_mod        = load_module("journal",         module_src.journal)
 local plan_validator_mod = load_module("plan_validator",  module_src.plan_validator)
+local reactor_naming_mod = load_module("reactor_naming",  module_src.reactor_naming)
 
 local init_fn, init_syntax_err = load(init_src, "=init", "t", _ENV)
 if not init_fn then
@@ -136,6 +137,7 @@ init_body({
   ui_mod = ui_mod,
   journal_mod = journal_mod,
   plan_validator_mod = plan_validator_mod,
+  reactor_naming_mod = reactor_naming_mod,
   ref = ref,
   recovery_origin_ref = rawget(_G, "__xreactor_recovery_origin_ref"),
 })
