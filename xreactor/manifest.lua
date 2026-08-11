@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v533
 return {
-  manifest_version = 537,
-  manifest_id = "manifest-v537",
+  manifest_version = 538,
+  manifest_id = "manifest-v538",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -41,7 +41,7 @@ return {
     { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
     { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
     { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e" },
-    { path = "core/ui_router.lua", size_bytes = 12855, hash = "27d8461d" },
+    { path = "core/ui_router.lua"  },
     { path = "core/utils.lua", size_bytes = 24309, hash = "86947395" },
     { path = "core/auto_update.lua", size_bytes = 4483, hash = "e08d6916" },
     { path = "core/remote_update.lua", size_bytes = 9024, hash = "e00399f1" },
