@@ -84,12 +84,13 @@ end
 function router:next() local total = math.max(1, #self.pages); local n = self.index + 1; if n > total then n = 1 end; self:set(n) end
 function router:prev() local total = math.max(1, #self.pages); local n = self.index - 1; if n < 1 then n = total end; self:set(n) end
 
-local NAV_DEBOUNCE_MS = 350
-local function nav_debounced(self)
-  local now = os.epoch and os.epoch("utc") or 0
-  if self.last_nav_ts and (now - self.last_nav_ts) < NAV_DEBOUNCE_MS then return true end
-  self.last_nav_ts = now
-  return false
+-- CC:Tweaked already marks keyboard auto-repeat in the third `key` event
+-- field (`is_held`).  A time-based debounce cannot distinguish that from
+-- separate, intentional inputs: it also swallowed quick monitor taps and a
+-- deliberate direction change (for example NEXT followed by PREV).  Only
+-- suppress the event type which can actually be an automatic repeat.
+local function key_is_repeat(event)
+  return event and event[3] == true
 end
 
 local function monitor_touch_matches(self, event)
@@ -111,8 +112,8 @@ function router:handle_input(event)
   end
   if kind == "key" then
     local key = event[2]
-    if self.key_prev and self.key_prev[key] then if not nav_debounced(self) then self:prev() end; return true end
-    if self.key_next and self.key_next[key] then if not nav_debounced(self) then self:next() end; return true end
+    if self.key_prev and self.key_prev[key] then if not key_is_repeat(event) then self:prev() end; return true end
+    if self.key_next and self.key_next[key] then if not key_is_repeat(event) then self:next() end; return true end
     local list = self.list_controls
     if list then
       if self.list_key_prev and self.list_key_prev[key] and list.on_prev then list.on_prev(); return true end
@@ -121,9 +122,9 @@ function router:handle_input(event)
   elseif kind == "monitor_touch" or kind == "mouse_click" then
     local x, y = event[3], event[4]
     local prev = self.footer.prev
-    if prev and y == prev.y and x >= prev.x1 and x <= prev.x2 then if not nav_debounced(self) then self:prev() end; return true end
+    if prev and y == prev.y and x >= prev.x1 and x <= prev.x2 then self:prev(); return true end
     local next_btn = self.footer.next
-    if next_btn and y == next_btn.y and x >= next_btn.x1 and x <= next_btn.x2 then if not nav_debounced(self) then self:next() end; return true end
+    if next_btn and y == next_btn.y and x >= next_btn.x1 and x <= next_btn.x2 then self:next(); return true end
     local list = self.list_controls
     if list then
       local list_prev = list.prev
