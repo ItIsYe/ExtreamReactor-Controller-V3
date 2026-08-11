@@ -58,7 +58,8 @@ local remote_log_state = {
   pending = {},
   pending_order = {},
   next_retry_at = 0,
-  next_modem_refresh_at = 0
+  next_modem_refresh_at = 0,
+  auth_secret = nil,
 }
 
 local function read_file(path)
@@ -184,6 +185,8 @@ local function init_remote_log(opts)
   remote_log_state.node_id = opts.node_id or resolve_node_id()
   remote_log_state.role = opts.prefix or read_role_config_value()
   remote_log_state.boot_id = make_boot_id(remote_log_state.node_id)
+  local ok_protocol, protocol = pcall(require, "core.protocol")
+  remote_log_state.auth_secret = ok_protocol and protocol.resolve_auth_secret({}) or nil
   remote_log_state.initialized = true
   refresh_log_modems(true)
 end
@@ -248,6 +251,13 @@ end
 local function handle_remote_ack(message)
   if type(message) ~= "table" or message.type ~= "LOG_ACK" then return false end
   if not remote_log_state.initialized then return true end
+  local ok_protocol, protocol = pcall(require, "core.protocol")
+  local secret = remote_log_state.auth_secret
+  local auth_ok = secret and type(message.auth) == "table" and message.auth.algorithm == "HMAC-SHA256"
+    and select(1, protocol.verify_value(protocol.log_auth_value(message), secret, message.auth.mac))
+  local ts = tonumber(message.ts)
+  local fresh = ts and math.abs((os.epoch and os.epoch("utc") or 0) - ts) <= 60 * 1000
+  if not auth_ok or not fresh then return true end
   if message.to_node and tostring(message.to_node) ~= tostring(remote_log_state.node_id or resolve_node_id()) then return true end
   if message.event_id and forget_pending(message.event_id) then remote_log_state.acked = remote_log_state.acked + 1 end
   return true
@@ -273,6 +283,14 @@ local function send_remote_log(prefix, level, message)
       boot_id = boot_id, event_id = tostring(boot_id) .. ":" .. tostring(remote_log_state.seq),
       ts = os and os.epoch and os.epoch("utc") or nil, ack = true
     }
+    local ok_protocol, protocol = pcall(require, "core.protocol")
+    local secret = remote_log_state.auth_secret
+    local mac = secret and protocol.sign_value(protocol.log_auth_value(payload), secret) or nil
+    if not mac then
+      remote_log_state.dropped = remote_log_state.dropped + 1
+      return
+    end
+    payload.auth = { algorithm = "HMAC-SHA256", mac = mac }
     local delivered = transmit_payload(payload)
     if delivered > 0 then remote_log_state.sent = remote_log_state.sent + 1; add_pending(payload)
     else remote_log_state.dropped = remote_log_state.dropped + 1 end

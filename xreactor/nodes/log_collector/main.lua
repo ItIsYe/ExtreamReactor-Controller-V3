@@ -25,6 +25,8 @@ if not ok_const or type(constants) ~= "table" then
   -- (6503) passen, sonst driftet der Fallback-Pfad vom Normalfall ab.
   constants = { channels = { LOG = 6503 } }
 end
+local ok_protocol, protocol = pcall(require, "core.protocol")
+if not ok_protocol or type(protocol) ~= "table" then protocol = nil end
 
 -- ── Configuration ───────────────────────────────────────────────────────────
 local CHANNEL          = constants.channels and constants.channels.LOG or 6503
@@ -46,6 +48,8 @@ local MONITOR_CFG_FILE = "/xreactor/config/log_monitor.txt"
 -- innerhalb einer Rollen-Gruppe).
 local DISKS_PER_ROLE   = 4
 local ROLE_ORDER       = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
+local LOG_AUTH_SECRET  = protocol and protocol.resolve_auth_secret({}) or nil
+local MAX_TRACKED_NODES = 256
 
 -- ── Runtime state ───────────────────────────────────────────────────────────
 local stats = {
@@ -765,6 +769,16 @@ flush_bucket = function(path)
     stats.written = stats.written + 1
     send_ack(payload, "written")
     stats.node_last_written = stats.node_last_written or {}
+    local tracked = 0
+    local oldest_id, oldest_ts = nil, math.huge
+    for tracked_id, info in pairs(stats.node_last_written) do
+      tracked = tracked + 1
+      if (tonumber(info.ts) or 0) < oldest_ts then oldest_id, oldest_ts = tracked_id, tonumber(info.ts) or 0 end
+    end
+    if not stats.node_last_written[tostring(payload.node_id or "?")]
+        and tracked >= MAX_TRACKED_NODES and oldest_id then
+      stats.node_last_written[oldest_id] = nil
+    end
     stats.node_last_written[tostring(payload.node_id or "?")] = { ts = now_s(), role = tostring(payload.role or "?") }
   end
   if bucket.disk then
@@ -912,6 +926,9 @@ send_ack = function(payload, status)
     status = status or "written",
     ts = now_ms(),
   }
+  local mac = LOG_AUTH_SECRET and protocol.sign_value(protocol.log_auth_value(ack), LOG_AUTH_SECRET) or nil
+  if not mac then return end
+  ack.auth = { algorithm = "HMAC-SHA256", mac = mac }
   -- Fix (2026-07-13): CRITICAL (LOG-P1.2, siehe docs/CODING_AI_OTHER_
   -- NODES_PERFORMANCE_2026-07-12.md). Vorher wurde dasselbe ACK ueber
   -- JEDES gefundene Modem gesendet -- bei Wireless+Wired gleichzeitig
@@ -1199,7 +1216,22 @@ end
 
 -- ── Packet handling ─────────────────────────────────────────────────────────
 local function valid_log_event(message)
-  return type(message) == "table" and message.type == "LOG_EVENT"
+  if type(message) ~= "table" or message.type ~= "LOG_EVENT" or not LOG_AUTH_SECRET then return false end
+  if message.proto ~= "xreactor-log-v2" or type(message.auth) ~= "table"
+      or message.auth.algorithm ~= "HMAC-SHA256" then return false end
+  local ts = tonumber(message.ts)
+  if not ts or math.abs(now_ms() - ts) > 60 * 1000 then return false end
+  local auth_ok = protocol.verify_value(protocol.log_auth_value(message), LOG_AUTH_SECRET, message.auth.mac)
+  if not auth_ok then return false end
+  local limits = { node_id = 128, role = 32, prefix = 64, level = 16,
+    message = 2048, line = 512, event_id = 160, boot_id = 160 }
+  for field, limit in pairs(limits) do
+    if message[field] ~= nil then
+      if type(message[field]) ~= "string" or #message[field] > limit then return false end
+    end
+  end
+  return type(message.node_id) == "string" and message.node_id ~= ""
+    and type(message.event_id) == "string" and message.event_id ~= ""
 end
 
 local function handle_log_event(message)

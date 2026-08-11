@@ -410,6 +410,18 @@ function protocol.valve_auth_value(message)
   }
 end
 
+function protocol.log_auth_value(message)
+  if type(message) ~= "table" then return nil end
+  return {
+    type = message.type, proto = message.proto, event_id = message.event_id,
+    node_id = message.node_id, role = message.role, prefix = message.prefix,
+    level = message.level, message = message.message, line = message.line,
+    seq = message.seq, boot_id = message.boot_id, ack = message.ack,
+    to_node = message.to_node, collector_node = message.collector_node,
+    status = message.status, ts = message.ts,
+  }
+end
+
 function protocol.is_for_node(message, node_id)
   local normalized_node = utils.normalize_node_id(node_id)
   local normalized_dst = normalize_remote_id(message.dst)

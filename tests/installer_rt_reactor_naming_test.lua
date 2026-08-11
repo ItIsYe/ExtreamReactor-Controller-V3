@@ -20,8 +20,9 @@ local methods = {
 }
 local active = { reactor_a = false, reactor_b = true }
 local peripheral_calls = {}
+local peripheral_names = { "turbine_a", "reactor_b", "reactor_a" }
 local fake_peripheral = {
-  getNames = function() return { "turbine_a", "reactor_b", "reactor_a" } end,
+  getNames = function() return peripheral_names end,
   getMethods = function(name) return methods[name] end,
   getType = function(name)
     if name == "turbine_a" then return "biggerreactors_turbine" end
@@ -84,6 +85,21 @@ assert(ok_second == true and second_state == "already_completed",
   "completed naming must be skipped on later installations")
 assert(second_reads == 0, "completed naming must never prompt again")
 
+methods.reactor_c = { "getActive", "getFuelAmount" }
+active.reactor_c = false
+peripheral_names = { "reactor_a", "reactor_b", "reactor_c" }
+local changed_reads = 0
+local ok_changed, changed_state, changed_info = naming.run({
+  fs = fake_fs, peripheral = fake_peripheral, output = function() end,
+  input = function() changed_reads = changed_reads + 1; return "unexpected" end,
+  write = function() error("topology warning must not rewrite completed naming") end,
+})
+assert(ok_changed == true and changed_state == "already_completed_topology_changed")
+assert(changed_info.topology_changed == true and changed_reads == 0,
+  "changed topology must warn without reopening the installer dialog")
+
+peripheral_names = { "reactor_a", "reactor_b" }
+
 files[naming.CONFIG_PATH] = nil
 local remote_reads = 0
 local ok_remote, remote_state = naming.run({
@@ -95,5 +111,30 @@ local ok_remote, remote_state = naming.run({
 })
 assert(ok_remote == true and remote_state == "remote_update_skipped" and remote_reads == 0,
   "unattended updates must never enter the naming prompt")
+
+local abort_ok, abort_state = naming.run({
+  fs = fake_fs, peripheral = fake_peripheral, output = function() end,
+  input = function() return "Q" end,
+  write = function() error("aborted naming must not persist completion") end,
+})
+assert(abort_ok == false and abort_state == "operator_aborted",
+  "operator must be able to abort naming without creating a completion marker")
+
+active.reactor_a, active.reactor_b = false, true
+local failure_reads = 0
+local restore_ok, restore_state = naming.run({
+  fs = fake_fs, peripheral = fake_peripheral, output = function() end,
+  input = function()
+    failure_reads = failure_reads + 1
+    if failure_reads == 1 then active.reactor_a = true
+    elseif failure_reads == 2 then active.reactor_a = nil end
+    return ""
+  end,
+  write = function() error("unreadable restore state must not persist completion") end,
+})
+assert(restore_ok == false and restore_state == "reactor_restore_timeout",
+  "detached/unreadable reactor during restoration must fail in bounded time")
+assert(failure_reads <= naming.MAX_RESTORE_ATTEMPTS + 1,
+  "restore failure must never loop forever")
 
 print("installer_rt_reactor_naming_test.lua: ok")

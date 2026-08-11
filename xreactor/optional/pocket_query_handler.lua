@@ -19,8 +19,29 @@ local M = {}
 local command_attempts = {}
 local COMMAND_WINDOW_MS = 60 * 1000
 local COMMAND_MAX_ATTEMPTS = 5
+local MAX_TRACKED_SENDERS = 64
+local global_attempts = { window_started = 0, count = 0 }
+
+local function prune_attempts(now)
+  local count, oldest_key, oldest = 0, nil, math.huge
+  for key, entry in pairs(command_attempts) do
+    if now - (entry.window_started or 0) >= COMMAND_WINDOW_MS * 2 then
+      command_attempts[key] = nil
+    else
+      count = count + 1
+      if (entry.window_started or 0) < oldest then oldest_key, oldest = key, entry.window_started or 0 end
+    end
+  end
+  if count >= MAX_TRACKED_SENDERS and oldest_key then command_attempts[oldest_key] = nil end
+end
 
 local function command_rate_allowed(sender, now)
+  prune_attempts(now)
+  if now - global_attempts.window_started >= COMMAND_WINDOW_MS then
+    global_attempts = { window_started = now, count = 0 }
+  end
+  global_attempts.count = global_attempts.count + 1
+  if global_attempts.count > COMMAND_MAX_ATTEMPTS * MAX_TRACKED_SENDERS then return false end
   local key = tostring(sender or "UNKNOWN")
   local entry = command_attempts[key]
   if not entry or now - entry.window_started >= COMMAND_WINDOW_MS then

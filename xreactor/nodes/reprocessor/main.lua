@@ -435,7 +435,7 @@ local function get_rs_router()
     -- "comms" (weiter oben vorwaertsdeklariert, unten per comms_service.
     -- new(...) zugewiesen) als Upvalue bereits gesetzt -- kein
     -- nachtraeglicher Injektionspfad noetig.
-    rs_router = redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
+    rs_router = redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms, routing_load_status = routing_load_status })
   end
   return rs_router
 end
@@ -554,7 +554,8 @@ local function init()
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
     if channel ~= constants.channels.VALVE then return end
-    if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance then
+    if type(message) == "table" and message.type == "ROUTE_TEACH_PULSE" and router_ui_instance
+        and get_rs_router():verify_teach_pulse(message) then
       router_ui_instance:handle_teach_pulse(message.src)
     end
   end })

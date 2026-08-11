@@ -526,7 +526,9 @@ function M:_run_supply(cycle_log)
           end
         end
 
-        local started, reason, router_tx_id = rs:begin_transaction(r.label, do_export, valve_ms, {
+        local route_target = r.reactor_id or r.label
+        local started, reason, router_tx_id = rs:begin_transaction(route_target, do_export, valve_ms, {
+          target_aliases = r.label and { r.label } or nil,
           on_error = on_transaction_error,
           on_complete = on_transaction_complete,
           transaction_id = request.transaction_id,

@@ -1,9 +1,15 @@
+if type(package) == "table" and type(package.path) == "string"
+    and not package.path:find("/xreactor/%?%.lua") then
+  package.path = package.path .. ";/xreactor/?.lua;/xreactor/?/init.lua"
+end
+
 local CHANNEL = 6501
 local QUERY_INTERVAL_S = 5
 local RESPONSE_TIMEOUT_S = 3
 local MY_ID = "POCKET_" .. tostring(os.getComputerID and os.getComputerID() or "?")
-local PROTO_VER = { major = 1, minor = 0 }
 local POCKET_ROLE = "POCKET"
+local protocol = require("core.protocol")
+local AUTH_SECRET = protocol.resolve_auth_secret({})
 
 local CC = colors or {
   white = 1, orange = 2, yellow = 16, lime = 32, gray = 128,
@@ -132,17 +138,19 @@ local function draw(status_line, summary_text, err_text)
   footer()
 end
 
+local function build_signed_message(message_type, payload)
+  if not AUTH_SECRET then return nil, "Netzwerk-Secret fehlt" end
+  local message = protocol.status(MY_ID, POCKET_ROLE, payload or {})
+  message.type = message_type
+  message.dst = nil
+  local ok, err = protocol.sign_message(message, AUTH_SECRET)
+  if not ok then return nil, err end
+  return message
+end
+
 local function send_query(modem)
-  local message = {
-    type = "POCKET_QUERY",
-    sender_id = MY_ID,
-    src = MY_ID,
-    role = POCKET_ROLE,
-    proto_ver = PROTO_VER,
-    ts = os.epoch and os.epoch("utc") or 0,
-    payload = {}
-  }
-  pcall(modem.transmit, CHANNEL, CHANNEL, message)
+  local message = build_signed_message("POCKET_QUERY", {})
+  if message then pcall(modem.transmit, CHANNEL, CHANNEL, message) end
 end
 
 local function wait_for_response(modem, timeout_s, expected_type)
@@ -151,8 +159,16 @@ local function wait_for_response(modem, timeout_s, expected_type)
     local timer_id = os.startTimer(math.max(0.1, deadline - os.clock()))
     local event, p1, p2, p3, p4 = os.pullEvent()
     if event == "modem_message" then
-      local message = p4
-      if type(message) == "table" and message.type == expected_type then
+      local message = protocol.sanitize_message(p4)
+      local valid = p3 == CHANNEL and message and select(1, protocol.validate(message))
+      local auth_ok = valid and AUTH_SECRET
+        and select(1, protocol.verify_message_auth(message, AUTH_SECRET))
+      local timestamp = message and (message.ts or message.timestamp)
+      local fresh = type(timestamp) == "number"
+        and math.abs((os.epoch and os.epoch("utc") or 0) - timestamp) <= 30 * 1000
+      local for_me = message and message.dst == MY_ID
+      local from_master = message and message.role == "MASTER"
+      if auth_ok and fresh and for_me and from_master and message.type == expected_type then
         os.cancelTimer(timer_id)
         return message
       end
@@ -201,15 +217,13 @@ local function prompt_command_menu(modem)
     return
   end
 
-  local message = {
-    type = "POCKET_COMMAND",
-    sender_id = MY_ID,
-    src = MY_ID,
-    role = POCKET_ROLE,
-    proto_ver = PROTO_VER,
-    ts = os.epoch and os.epoch("utc") or 0,
-    payload = { action = action, params = params, token = token }
-  }
+  local message, sign_err = build_signed_message("POCKET_COMMAND",
+    { action = action, params = params, token = token })
+  if not message then
+    draw("BEFEHL ABGELEHNT", nil, tostring(sign_err))
+    os.sleep(1.5)
+    return
+  end
   pcall(modem.transmit, CHANNEL, CHANNEL, message)
 
   draw("WARTE AUF BESTAETIGUNG", nil, nil)
@@ -233,6 +247,10 @@ local function prompt_command_menu(modem)
 end
 
 local function main()
+  if not AUTH_SECRET then
+    draw("FEHLER", nil, "Netzwerk-Secret fehlt in network_auth.lua")
+    return
+  end
   -- Fix (2026-07-06): bekannter CC:Tweaked-Bug — frisch gecraftete Pocket
   -- Computer mit eingebautem Wireless-Modem registrieren das Peripheral
   -- manchmal nicht sofort (siehe cc-tweaked/CC-Tweaked#1888). Ein kurzer

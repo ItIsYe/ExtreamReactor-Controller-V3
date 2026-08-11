@@ -4,6 +4,8 @@ local M = {}
 
 M.CONFIG_PATH = "/xreactor/config/reactor_names.lua"
 M.MAX_LABEL_LENGTH = 32
+M.MAX_INPUT_ATTEMPTS = 20
+M.MAX_RESTORE_ATTEMPTS = 10
 
 local function trim(value)
   return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -27,15 +29,27 @@ function M.load(fs_api, path)
   if not ok or type(data) ~= "table" or data.completed ~= true or type(data.aliases) ~= "table" then
     return nil
   end
-  local aliases = {}
+  local aliases, used = {}, {}
   for peripheral_name, label in pairs(data.aliases) do
     local normalized = trim(label)
     if type(peripheral_name) == "string" and peripheral_name ~= ""
-        and normalized ~= "" and #normalized <= M.MAX_LABEL_LENGTH then
+        and normalized ~= "" and #normalized <= M.MAX_LABEL_LENGTH
+        and not used[normalized:lower()] then
       aliases[peripheral_name] = normalized
+      used[normalized:lower()] = true
     end
   end
-  return { version = 1, completed = true, aliases = aliases }
+  local reactors = {}
+  if type(data.reactors) == "table" then
+    for _, name in ipairs(data.reactors) do
+      if type(name) == "string" and name ~= "" then reactors[#reactors + 1] = name end
+    end
+  else
+    for name in pairs(aliases) do reactors[#reactors + 1] = name end
+  end
+  table.sort(reactors)
+  return { version = tonumber(data.version) or 1, completed = true, aliases = aliases,
+    reactors = reactors, topology_fingerprint = table.concat(reactors, "|") }
 end
 
 local function method_set(peripheral_api, name)
@@ -123,7 +137,7 @@ local function active_label(value)
 end
 
 local function wait_for_restore(peripheral_api, reactors, baseline, output, input)
-  while true do
+  for _ = 1, M.MAX_RESTORE_ATTEMPTS do
     local current = capture_active(peripheral_api, reactors)
     local pending = {}
     for _, name in ipairs(reactors) do
@@ -131,10 +145,11 @@ local function wait_for_restore(peripheral_api, reactors, baseline, output, inpu
         pending[#pending + 1] = name
       end
     end
-    if #pending == 0 then return end
+    if #pending == 0 then return true end
     output("  Bitte " .. table.concat(pending, ", ") .. " wieder auf den Ausgangszustand schalten und ENTER druecken.")
     input()
   end
+  return false, "reactor_restore_timeout"
 end
 
 local function identify_next(peripheral_api, reactors, output, input)
@@ -152,7 +167,7 @@ local function identify_next(peripheral_api, reactors, output, input)
     output(string.format("  %d) %s  Status=%s", index, name, active_label(baseline[name])))
   end
 
-  while true do
+  for _ = 1, M.MAX_INPUT_ATTEMPTS do
     if readable > 0 then
       output("Genau EINEN noch unbenannten Reaktor manuell AN/AUS schalten, dann ENTER druecken.")
     else
@@ -160,6 +175,9 @@ local function identify_next(peripheral_api, reactors, output, input)
     end
     output("Alternativ kann jederzeit die Nummer aus der Liste eingegeben werden.")
     local answer = trim(input())
+    if answer:upper() == "Q" or answer:upper() == "ABBRUCH" then
+      return nil, "operator_aborted"
+    end
     local manual_index = tonumber(answer)
     if manual_index and manual_index == math.floor(manual_index)
         and manual_index >= 1 and manual_index <= #reactors then
@@ -170,7 +188,10 @@ local function identify_next(peripheral_api, reactors, output, input)
           changed[#changed + 1] = name
         end
       end
-      if #changed > 0 then wait_for_restore(peripheral_api, changed, baseline, output, input) end
+      if #changed > 0 then
+        local restored, restore_err = wait_for_restore(peripheral_api, changed, baseline, output, input)
+        if not restored then return nil, restore_err end
+      end
       output("  Manuell gewaehlt: " .. reactors[manual_index])
       return reactors[manual_index]
     end
@@ -187,24 +208,28 @@ local function identify_next(peripheral_api, reactors, output, input)
       local identified = changed[1]
       output("  Erkannt: " .. identified .. " (" .. active_label(baseline[identified])
         .. " -> " .. active_label(current[identified]) .. ")")
-      wait_for_restore(peripheral_api, { identified }, baseline, output, input)
+      local restored, restore_err = wait_for_restore(peripheral_api, { identified }, baseline, output, input)
+      if not restored then return nil, restore_err end
       output("  Ausgangszustand wiederhergestellt.")
       return identified
     end
 
     if #changed > 1 then
       output("  Mehrere Reaktoren wurden geaendert; Zuordnung ist nicht eindeutig.")
-      wait_for_restore(peripheral_api, changed, baseline, output, input)
+      local restored, restore_err = wait_for_restore(peripheral_api, changed, baseline, output, input)
+      if not restored then return nil, restore_err end
     else
       output("  Keine eindeutige Zustandsaenderung erkannt. Bitte erneut versuchen.")
     end
   end
+  return nil, "reactor_identification_attempts_exhausted"
 end
 
 local function ask_label(peripheral_name, default, used, output, input)
-  while true do
+  for _ = 1, M.MAX_INPUT_ATTEMPTS do
     output(string.format("  Name fuer %s [%s]:", peripheral_name, default))
     local label = trim(input())
+    if label:upper() == "Q" or label:upper() == "ABBRUCH" then return nil, "operator_aborted" end
     if label == "" then label = default end
     local key = label:lower()
     if #label > M.MAX_LABEL_LENGTH then
@@ -216,12 +241,13 @@ local function ask_label(peripheral_name, default, used, output, input)
       return label
     end
   end
+  return nil, "reactor_label_attempts_exhausted"
 end
 
-function M.serialize(aliases)
+function M.serialize(aliases, reactors)
   local parts = {
     "-- RT reactor display names -- generated once by the installer\n",
-    "return {\n  version = 1,\n  completed = true,\n  aliases = {\n",
+    "return {\n  version = 2,\n  completed = true,\n  aliases = {\n",
   }
   local names = {}
   for name in pairs(aliases or {}) do names[#names + 1] = name end
@@ -229,6 +255,10 @@ function M.serialize(aliases)
   for _, name in ipairs(names) do
     parts[#parts + 1] = "    [" .. string.format("%q", name) .. "] = "
       .. string.format("%q", aliases[name]) .. ",\n"
+  end
+  parts[#parts + 1] = "  },\n  reactors = {\n"
+  for _, name in ipairs(reactors or names) do
+    parts[#parts + 1] = "    " .. string.format("%q", name) .. ",\n"
   end
   parts[#parts + 1] = "  },\n}\n"
   return table.concat(parts)
@@ -238,7 +268,16 @@ function M.run(opts)
   opts = opts or {}
   local path = opts.path or M.CONFIG_PATH
   local existing = M.load(opts.fs or fs, path)
-  if existing then return true, "already_completed", existing end
+  if existing and opts.force ~= true then
+    local current = M.detect(opts.peripheral or peripheral)
+    local current_fingerprint = table.concat(current, "|")
+    if current_fingerprint ~= existing.topology_fingerprint then
+      existing.current_reactors = current
+      existing.topology_changed = true
+      return true, "already_completed_topology_changed", existing
+    end
+    return true, "already_completed", existing
+  end
   if opts.remote_update == true then return true, "remote_update_skipped" end
 
   local reactors = M.detect(opts.peripheral or peripheral)
@@ -254,9 +293,12 @@ function M.run(opts)
   for _, name in ipairs(reactors) do remaining[#remaining + 1] = name end
   local assigned = 0
   while #remaining > 0 do
-    local peripheral_name = identify_next(opts.peripheral or peripheral, remaining, output, input)
+    local peripheral_name, identify_err = identify_next(opts.peripheral or peripheral, remaining, output, input)
+    if not peripheral_name then return false, identify_err end
     assigned = assigned + 1
-    aliases[peripheral_name] = ask_label(peripheral_name, "Reaktor " .. tostring(assigned), used, output, input)
+    local label, label_err = ask_label(peripheral_name, "Reaktor " .. tostring(assigned), used, output, input)
+    if not label then return false, label_err end
+    aliases[peripheral_name] = label
     for index, name in ipairs(remaining) do
       if name == peripheral_name then table.remove(remaining, index); break end
     end
@@ -264,9 +306,10 @@ function M.run(opts)
 
   local write = opts.write
   if type(write) ~= "function" then return false, "write_function_missing" end
-  local ok, err = write(path, M.serialize(aliases))
+  local ok, err = write(path, M.serialize(aliases, reactors))
   if ok ~= true then return false, err or "write_failed" end
-  return true, "saved", { version = 1, completed = true, aliases = aliases }
+  return true, "saved", { version = 2, completed = true, aliases = aliases,
+    reactors = reactors, topology_fingerprint = table.concat(reactors, "|") }
 end
 
 return M

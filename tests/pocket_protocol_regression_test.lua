@@ -6,8 +6,16 @@ local handler = require('optional.pocket_query_handler')
 
 local f = assert(io.open('xreactor/optional/pocket_client.lua', 'r'))
 local client = f:read('*a'); f:close()
-assert(client:find('role = POCKET_ROLE', 1, true), 'pocket client must send a role')
-assert(client:find('proto_ver = PROTO_VER', 1, true), 'pocket client must send proto_ver')
+assert(client:find('protocol.status(MY_ID, POCKET_ROLE', 1, true), 'pocket client must send a role')
+assert(client:find('protocol.sign_message(message, AUTH_SECRET)', 1, true), 'pocket client must authenticate outgoing packets')
+assert(client:find('protocol.verify_message_auth(message, AUTH_SECRET)', 1, true), 'pocket client must authenticate responses')
+
+local comms_file = assert(io.open('xreactor/core/comms.lua', 'r'))
+local comms_source = comms_file:read('*a'); comms_file:close()
+for _, message_type in ipairs({ 'POCKET_QUERY', 'POCKET_STATUS', 'POCKET_COMMAND', 'POCKET_COMMAND_RESULT' }) do
+  assert(comms_source:find('constants.message_types.' .. message_type, 1, true),
+    message_type .. ' must use the protected comms transport')
+end
 
 local valid = {
   type = constants.message_types.POCKET_QUERY,

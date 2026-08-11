@@ -59,10 +59,13 @@ local function make_router(fake_rs, export_result_fn)
   }
   router._state.reactors = {
     {
-      label = 'Reactor A', reactor_id = nil, item = 'bigreactors:yellorium_ingot',
+      label = 'Reactor A', reactor_id = 'RT-1:REACTOR-a', item = 'bigreactors:yellorium_ingot',
       inlet = { name = 'transporter_1' },
       request_below = 0.25, fill_amount = 64, min_in_me = 32, cfg = {},
     },
+  }
+  router.fuel_status.direct_heard['RT-1:REACTOR-a'] = {
+    fuel_amount = 100, fuel_capacity = 1000, ts = os.epoch('utc'),
   }
   router._state.rs_router = fake_rs
   return router
@@ -79,6 +82,8 @@ do
   assert_true(req ~= nil and req.transaction_id ~= nil, 'in-flight request needs a stable transaction id')
   assert_eq(req.phase, 'BLOCKING', 'initial router phase must be exposed')
   assert_eq(#fake_rs.calls, 1)
+  assert_eq(fake_rs.calls[1].target_id, 'RT-1:REACTOR-a', 'global reactor identity must be the primary route target')
+  assert_eq(fake_rs.calls[1].opts.target_aliases[1], 'Reactor A', 'display alias must remain a compatibility fallback')
   assert_eq(fake_rs.calls[1].opts.transaction_id, req.transaction_id, 'router and logistics must share the same transaction id')
 
   fake_rs.active_phase = 'OPENING'
