@@ -193,7 +193,11 @@ function router:render(mon, model)
     or self.last_render_w ~= cur_w or self.last_render_h ~= cur_h or self.last_render_scale ~= cur_scale
     or self.last_render_mon_name ~= resolved_name
   local snapshot = build_snapshot(page and page.name, model)
-  if not is_transition and snapshot == self.last_snapshot then self.ui_diag.frames_skipped = self.ui_diag.frames_skipped + 1; return end
+  -- Fix: Skip nur wenn footer bereits gesetzt (sonst fehlen Touch-Zonen nach Transition)
+  if not is_transition and snapshot == self.last_snapshot
+    and self.footer.prev ~= nil then
+    self.ui_diag.frames_skipped = self.ui_diag.frames_skipped + 1; return
+  end
   self.ui_diag.frames_committed = self.ui_diag.frames_committed + 1
   local render_start_ms = os.epoch and os.epoch("utc") or nil
   self.last_snapshot = snapshot
