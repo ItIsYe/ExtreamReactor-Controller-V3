@@ -106,16 +106,11 @@ function M.run(ctx)
       ctx.comms:handle_event(event)
       maybe_heartbeat()
     elseif ev == "monitor_touch" or ev == "mouse_click" then
-      -- UI-Touch weiterleiten
-      if ctx.devices and ctx.devices.monitor and ctx.ui_state and ctx.ui_state.router then
-        local current = ctx.ui_state.router:current()
-        if current and current.name == "Diagnostics" then
-          pcall(ctx.ui_pages.handle_diagnostics_touch,
-            ctx.devices.monitor, event[3], event[4])
-        end
-      end
+      -- One central input path in ui_service handles router navigation first
+      -- and only then page-specific controls. Pre-dispatching Diagnostics
+      -- here made one physical touch act on two different pages.
       if ctx.services then ctx.services:tick(nil, event) end
-    elseif ev == "key" then
+    elseif ev == "key" or ev == "char" or ev == "monitor_resize" or ev == "term_resize" then
       ctx.services:tick(nil, event)
     elseif ev == "timer" and event[2] == hb_timer then
       maybe_heartbeat()

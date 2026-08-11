@@ -325,7 +325,10 @@ function M.update(monitor, ctx)
 end
 
 function M.handle_input(event)
-  if M.monitor_router then M.monitor_router:handle_input(event) end
+  if M.monitor_router then
+    local handled, result = M.monitor_router:handle_input(event)
+    if handled then return true, result end
+  end
   if utils and event and (event[1] == "monitor_touch" or event[1] == "mouse_click") then
     local page = M.monitor_router and M.monitor_router:current()
     if page and page.name == "Diagnostics" and M.last_monitor then
@@ -344,12 +347,15 @@ function M.handle_input(event)
         end
         if in_zone(hits.minus) and type(M.on_scale_change) == "function" then
           M.on_scale_change(-0.5)
+          return true, "scale_change"
         elseif in_zone(hits.plus) and type(M.on_scale_change) == "function" then
           M.on_scale_change(0.5)
+          return true, "scale_change"
         end
       end
     end
   end
+  return false
 end
 
 return M

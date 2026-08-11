@@ -157,7 +157,10 @@ function M.handle_input(event)
   if kind == "monitor_touch" or kind == "mouse_click" or kind == "key" or kind == "char" then
     ui_diag_extra.pointer_events_received = ui_diag_extra.pointer_events_received + 1
   end
-  if monitor_router and monitor_router:handle_input(event) then return true end
+  if monitor_router then
+    local handled, result = monitor_router:handle_input(event)
+    if handled then return true, result end
+  end
   -- Page handlers are coordinate-based touch handlers.  Passing key, char or
   -- resize events into them produced nil/boolean pseudo-coordinates and made
   -- the input pipeline depend on every page being accidentally nil-safe.

@@ -394,7 +394,17 @@ local function init()
       end)
     end,
     handle_input = function(event)
-      if ui_state.router then ui_state.router:handle_input(event) end
+      if ui_state.router then
+        local handled, result = ui_state.router:handle_input(event)
+        if handled then return true, result end
+        local kind = event and event[1]
+        local current = ui_state.router:current()
+        if (kind == "monitor_touch" or kind == "mouse_click") and current
+            and current.name == "Diagnostics" and devices.monitor then
+          return ui_pages.handle_diagnostics_touch(devices.monitor, event[3], event[4]) == true, "page_action"
+        end
+      end
+      return false
     end
   }))
 

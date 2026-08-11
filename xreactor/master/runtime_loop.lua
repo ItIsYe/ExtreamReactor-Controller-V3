@@ -258,7 +258,8 @@ local function run_master()
       end
     end,
     ui_handle_input = function(event)
-      if runtime.refs.ui_controller then runtime.refs.ui_controller.handle_input(event) end
+      if runtime.refs.ui_controller then return runtime.refs.ui_controller.handle_input(event) end
+      return false
     end,
   })
 

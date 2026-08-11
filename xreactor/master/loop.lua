@@ -78,7 +78,8 @@ function M.run(runtime, constants)
       local ev = event[1]
       if ev == "modem_message" then
         runtime.refs.comms:handle_event(event)
-      elseif ev == "monitor_touch" or ev == "mouse_click" or ev == "key" or ev == "char" then
+      elseif ev == "monitor_touch" or ev == "mouse_click" or ev == "key" or ev == "char"
+          or ev == "monitor_resize" or ev == "term_resize" then
         runtime.refs.services:tick(nil, event)
       elseif ev == "redstone" then
         check_redstone()

@@ -1121,7 +1121,7 @@ local function init()
   services:add(ui_service.new({
     interval = 0.5,
     render   = update_monitor,
-    handle_input = function(event) monitor_ui.handle_input(event) end,
+    handle_input = function(event) return monitor_ui.handle_input(event) end,
   }))
 
   services:init()

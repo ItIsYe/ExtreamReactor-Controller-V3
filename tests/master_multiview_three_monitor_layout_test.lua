@@ -35,4 +35,12 @@ if sessions[2].view_key ~= 'rt' or not sessions[2].locked then error('M2 must be
 if sessions[3].view_key ~= 'energy' or not sessions[3].locked then error('M3 must be locked energy') end
 if sessions[4].locked then error('M4 must stay operator-cyclable') end
 
+local before = sessions[4].view_key
+local hitbox = assert(m.aux_nav_hitboxes.monitor_4.next, 'AUX next hitbox must exist')
+local handled, result = m:handle_input({ 'monitor_touch', 'monitor_4', hitbox.x1, hitbox.y })
+if handled ~= true or result ~= 'page_navigation_redrawn' then
+  error('MASTER AUX navigation must redraw before returning from input handling')
+end
+if sessions[4].view_key == before then error('M4 must advance to another view') end
+
 print('master_multiview_three_monitor_layout_test.lua: ok')

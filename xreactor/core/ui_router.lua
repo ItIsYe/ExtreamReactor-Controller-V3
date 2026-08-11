@@ -48,6 +48,7 @@ function router.new(mon_or_opts, opts)
     error_title = opts.error_title or "UI RENDER ERROR", on_render_error = opts.on_render_error,
     monitor_name = opts.monitor_name,
     last_render_page_index = nil, last_render_mon = nil, last_render_mon_name = nil,
+    last_render_model = nil,
     last_render_w = nil, last_render_h = nil, last_render_scale = nil,
     shared_backbuffer = nil, footer = { prev = nil, next = nil, indicator = nil },
     list_controls = nil, key_prev = opts.key_prev, key_next = opts.key_next,
@@ -99,6 +100,29 @@ end
 function router:next() local total = math.max(1, #self.pages); local n = self.index + 1; if n > total then n = 1 end; self:set(n) end
 function router:prev() local total = math.max(1, #self.pages); local n = self.index - 1; if n < 1 then n = total end; self:set(n) end
 
+-- Navigation must never wait behind a fresh role model, registry scan or
+-- peripheral sample. Redraw the newly selected page from the last committed
+-- model immediately; the UI service will refresh the data on its next normal
+-- tick. Window targets are hidden for the short redraw to avoid tearing.
+function router:redraw_cached()
+  local mon = self.last_render_mon
+  if not mon then return false end
+  local buffered = type(mon.setVisible) == "function"
+  if buffered then pcall(mon.setVisible, false) end
+  local ok = pcall(self.render, self, mon, self.last_render_model)
+  if buffered then
+    pcall(mon.setVisible, true)
+    if type(mon.redraw) == "function" then pcall(mon.redraw) end
+  end
+  return ok
+end
+
+local function navigate_and_redraw(self, direction)
+  if direction == "prev" then self:prev() else self:next() end
+  local redrawn = self:redraw_cached()
+  return true, redrawn and "page_navigation_redrawn" or "page_navigation"
+end
+
 -- CC:Tweaked already marks keyboard auto-repeat in the third `key` event
 -- field (`is_held`).  A time-based debounce cannot distinguish that from
 -- separate, intentional inputs: it also swallowed quick monitor taps and a
@@ -127,8 +151,14 @@ function router:handle_input(event)
   end
   if kind == "key" then
     local key = event[2]
-    if self.key_prev and self.key_prev[key] then if not key_is_repeat(event) then self:prev() end; return true end
-    if self.key_next and self.key_next[key] then if not key_is_repeat(event) then self:next() end; return true end
+    if self.key_prev and self.key_prev[key] then
+      if key_is_repeat(event) then return true, "key_repeat" end
+      return navigate_and_redraw(self, "prev")
+    end
+    if self.key_next and self.key_next[key] then
+      if key_is_repeat(event) then return true, "key_repeat" end
+      return navigate_and_redraw(self, "next")
+    end
     local list = self.list_controls
     if list then
       if self.list_key_prev and self.list_key_prev[key] and list.on_prev then list.on_prev(); return true end
@@ -137,9 +167,9 @@ function router:handle_input(event)
   elseif kind == "monitor_touch" or kind == "mouse_click" then
     local x, y = event[3], event[4]
     local prev = self.footer.prev
-    if prev and y == prev.y and x >= prev.x1 and x <= prev.x2 then self:prev(); return true end
+    if prev and y == prev.y and x >= prev.x1 and x <= prev.x2 then return navigate_and_redraw(self, "prev") end
     local next_btn = self.footer.next
-    if next_btn and y == next_btn.y and x >= next_btn.x1 and x <= next_btn.x2 then self:next(); return true end
+    if next_btn and y == next_btn.y and x >= next_btn.x1 and x <= next_btn.x2 then return navigate_and_redraw(self, "next") end
     local list = self.list_controls
     if list then
       local list_prev = list.prev
@@ -212,9 +242,11 @@ function router:render(mon, model)
   self.ui_diag.frames_requested = self.ui_diag.frames_requested + 1
   if not mon then
     self.footer.prev, self.footer.next, self.footer.indicator = nil, nil, nil
-    self.list_controls = nil; self.last_render_mon = nil; self.last_render_mon_name = nil; self.shared_backbuffer = nil
+    self.list_controls = nil; self.last_render_mon = nil; self.last_render_mon_name = nil
+    self.last_render_model = nil; self.shared_backbuffer = nil
     return
   end
+  self.last_render_model = model
   local page = self:current()
   local cur_w, cur_h = ui.getSize(mon)
   local scale_ok, cur_scale = pcall(mon.getTextScale); if not scale_ok then cur_scale = nil end

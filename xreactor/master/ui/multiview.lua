@@ -191,6 +191,8 @@ end
 
 function M:render(monitors, data_map)
   data_map = data_map or {}
+  self.last_monitors = monitors
+  self.last_data_map = data_map
   -- Fix (2026-07-13): MASTER-P2. Cache gilt nur INNERHALB eines einzelnen
   -- render()-Durchlaufs -- am Anfang jedes Aufrufs geleert, damit er nicht
   -- unbegrenzt waechst und immer den aktuellen model_ref korrekt widerspiegelt.
@@ -404,7 +406,14 @@ function M:handle_input(monitor_name, x, y)
     }
     self.last_input = payload
     self.sessions:note_input(session, payload)
-    return
+    -- The models from the last committed MASTER frame are sufficient for a
+    -- page transition. Render the dirty AUX session now instead of waiting
+    -- for the UI service to rebuild all MASTER models first.
+    local redrawn = false
+    if self.last_monitors and self.last_data_map then
+      redrawn = pcall(self.render, self, self.last_monitors, self.last_data_map)
+    end
+    return true, redrawn and "page_navigation_redrawn" or "page_navigation"
   end
 
   local view = self.views[view_key]
@@ -438,6 +447,7 @@ function M:handle_input(monitor_name, x, y)
 
   self.last_input = payload
   self.sessions:note_input(session, payload)
+  return payload.handled == true, "action"
 end
 
 return M

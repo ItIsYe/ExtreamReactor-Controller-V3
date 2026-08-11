@@ -416,7 +416,7 @@ local function init()
         "UI-%s-Fehler: %s", tostring(error_info.stage), tostring(error_info.message)
       ), "ERROR")
     end,
-    handle_input = function(event) fuel_monitor_ui.handle_input(event) end
+    handle_input = function(event) return fuel_monitor_ui.handle_input(event) end
   }))
   -- Fix (2026-07-09): eigener, von der Haupt-UI unabhaengiger Tick fuer
   -- die Ampel -- laeuft auch wenn (noch) kein Hauptmonitor gefunden

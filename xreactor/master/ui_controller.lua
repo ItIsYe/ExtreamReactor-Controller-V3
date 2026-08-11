@@ -848,8 +848,11 @@ function M.new(opts)
   end
   controller.handle_input = function(event)
     if c.view_manager and c.view_manager.handle_input then
-      local hit = c.view_manager:handle_input(event)
-      if hit then return controller.handle_action(hit) end
+      -- multiview dispatches primary actions through its on_action callback
+      -- and handles AUX page cycling itself. Propagate its consumption and
+      -- redraw result; dispatching the returned boolean as another action
+      -- would either lose the result or execute the input twice.
+      return c.view_manager:handle_input(event)
     end
     return false
   end

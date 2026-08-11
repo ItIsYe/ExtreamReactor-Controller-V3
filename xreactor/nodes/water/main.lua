@@ -445,9 +445,12 @@ end
 -- NEU geoeffneten Seite mit denselben Koordinaten (exakt der von FUEL
 -- schon gefundene "Auswahl blinkt auf und verschwindet wieder"-Bug).
 local function handle_monitor_touch(event)
-  if monitor_router and monitor_router:handle_input(event) then
-    return true
+  if monitor_router then
+    local handled, result = monitor_router:handle_input(event)
+    if handled then return true, result end
   end
+  local kind = event and event[1]
+  if kind ~= "monitor_touch" and kind ~= "mouse_click" then return false end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
     local x, y = event and event[3], event and event[4]
@@ -521,7 +524,7 @@ local function init()
       return { page = monitor_router and monitor_router.index or 1, payload = payload, master_state = peer and (peer.down and "DOWN" or "OK") or "UNKNOWN", alerts = alert_payload and alert_payload.critical or 0, last_command = devices.last_command, last_command_ts = devices.last_command_ts }
     end,
     render = render_monitor,
-    handle_input = function(event) handle_monitor_touch(event) end
+    handle_input = function(event) return handle_monitor_touch(event) end
   }))
   services:init()
   hello()

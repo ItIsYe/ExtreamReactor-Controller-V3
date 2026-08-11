@@ -50,8 +50,16 @@ local function now()
 end
 
 function ui:tick(_, event)
+  local input_result, input_kind = nil, nil
   if event and self.handle_input then
-    self.handle_input(event)
+    input_result, input_kind = self.handle_input(event)
+  end
+  -- The shared router has already committed this page transition from its
+  -- last valid model. Do not block the event loop by rebuilding registry,
+  -- network and peripheral data a second time in the same input event.
+  -- The next regular service tick refreshes the model normally.
+  if input_result == true and input_kind == "page_navigation_redrawn" then
+    return
   end
   local ts = now()
   local interactive = event and (event[1] == "monitor_touch" or event[1] == "mouse_click"

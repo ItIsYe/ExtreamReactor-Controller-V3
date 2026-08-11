@@ -71,4 +71,31 @@ if resize_renders ~= 2 then
   error("term_resize must force an immediate geometry redraw")
 end
 
+-- A router-completed navigation has already drawn from its cached model.
+-- Rebuilding expensive role/peripheral data in the same event would keep
+-- the event loop blocked and delay the following touch.
+local model_builds, navigation_renders, inputs = 0, 0, 0
+local navigation_service = ui_service.new({
+  interval = 0,
+  force_interval = 0,
+  build_model = function()
+    model_builds = model_builds + 1
+    return { snapshot = "stable" }
+  end,
+  render = function() navigation_renders = navigation_renders + 1 end,
+  handle_input = function()
+    inputs = inputs + 1
+    return true, "page_navigation_redrawn"
+  end,
+})
+navigation_service:tick()
+if model_builds ~= 1 or navigation_renders ~= 1 then
+  error("navigation service must establish one initial model")
+end
+navigation_service:tick(nil, { "monitor_touch", "monitor_0", 40, 20 })
+if inputs ~= 1 then error("navigation input must be delivered exactly once") end
+if model_builds ~= 1 or navigation_renders ~= 1 then
+  error("completed navigation must not synchronously rebuild the role model")
+end
+
 print("ui_service_snapshot_test.lua: ok")
