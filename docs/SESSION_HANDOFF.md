@@ -53,10 +53,11 @@
 - **Fix:** Direkt `"beta"` als Ref verwenden — raw.githubusercontent.com akzeptiert Branch-Namen
 - **Nicht wieder einbauen:** Keinen API-Call zur SHA-Auflösung, kein `GITHUB_API` Variable
 
-### http.get ohne Timeout
-- **Problem:** `http.get(url)` ohne Timeout-Parameter hängt unbegrenzt bei Netzwerkproblemen
-- **Fix:** Immer `{ timeout = 15 }` als dritten Parameter übergeben
-- **Nicht wieder einbauen:** `pcall(http.get, url)` ohne Timeout-Tabelle
+### http.get ohne Timeout / mit Options-Tabelle
+- **Problem 1:** `http.get(url)` ohne Timeout hängt unbegrenzt bei Netzwerkproblemen
+- **Problem 2:** `http.get(url, nil, { timeout = 15 })` — CC:Tweaked erwartet als dritten Parameter ein boolean (HTTPS), keine Tabelle → "bad argument #3 (boolean expected, got table)"
+- **Fix:** Kein Timeout-Parameter — CC:Tweaked unterstützt keine Timeout-Option in dieser API-Version
+- **Nicht wieder einbauen:** `{ timeout = N }` als dritten Parameter bei http.get
 
 ### Dateien manuell per Server-Konsole anlegen
 - **Problem:** Manuell angelegte Dateien gehören `root` statt `amp` → CC:Tweaked kann nicht schreiben
