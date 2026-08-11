@@ -44,7 +44,7 @@ end
 local function download(url)
   local last_err
   for attempt = 1, 4 do
-    local ok, r = pcall(http.get, url, nil, { timeout = 15 })
+    local ok, r = pcall(http.get, url)
     if ok and r then
       local ok2, body = pcall(r.readAll); pcall(r.close)
       if ok2 and type(body) == "string" and #body > 0 then
