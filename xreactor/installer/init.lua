@@ -741,12 +741,6 @@ if not fs.exists(auto_cfg) then
   p("Auto-Update Config angelegt")
 end
 
--- Gemeinsames Secret fuer COMMAND/ACK- und VALVE-Nachrichten. Der Installer
--- erfindet bewusst keinen pro Computer unterschiedlichen Wert: Alle Nodes
--- muessen dasselbe, vom Betreiber gesetzte Secret verwenden. Bis dahin ist
--- der gesamte Steuerungs- und Telemetrieverkehr fail-closed.
-local network_auth_cfg = INSTALL_ROOT .. "/config/network_auth.lua"
-end
 
 -- Lokale, nicht manifestverwaltete Installationsmetadaten: release.lua ist
 -- Quellmetadatum und darf weiterhin source_ref="beta" tragen; diese Datei
