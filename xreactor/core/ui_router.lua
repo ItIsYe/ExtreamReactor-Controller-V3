@@ -193,10 +193,12 @@ function router:render(mon, model)
     or self.last_render_w ~= cur_w or self.last_render_h ~= cur_h or self.last_render_scale ~= cur_scale
     or self.last_render_mon_name ~= resolved_name
   local snapshot = build_snapshot(page and page.name, model)
-  -- Fix: Skip nur wenn footer bereits gesetzt (sonst fehlen Touch-Zonen nach Transition)
-  if not is_transition and snapshot == self.last_snapshot
-    and self.footer.prev ~= nil then
-    self.ui_diag.frames_skipped = self.ui_diag.frames_skipped + 1; return
+  -- Snapshot-Skip: nur überspringen wenn footer bereits gesetzt
+  if not is_transition and snapshot == self.last_snapshot then
+    if self.footer.prev ~= nil then
+      self.ui_diag.frames_skipped = self.ui_diag.frames_skipped + 1; return
+    end
+    -- footer noch nicht gesetzt (z.B. nach Transition) → trotzdem rendern
   end
   self.ui_diag.frames_committed = self.ui_diag.frames_committed + 1
   local render_start_ms = os.epoch and os.epoch("utc") or nil
@@ -206,7 +208,8 @@ function router:render(mon, model)
   self.last_render_mon, self.last_render_mon_name = mon, resolved_name
   self.last_render_page_index, self.last_render_w, self.last_render_h, self.last_render_scale = self.index, cur_w, cur_h, cur_scale
   if is_transition then
-    self.footer.prev, self.footer.next, self.footer.indicator = nil, nil, nil; self.list_controls = nil
+    -- footer NICHT auf nil setzen — bleibt gültig bis neuer Render sie überschreibt
+    self.list_controls = nil
     self.transition_count = (self.transition_count or 0) + 1; self.ui_diag.full_clears = self.ui_diag.full_clears + 1
   end
   local render_target, buffered, buffer_created = prepare_render_target(self, mon, cur_w, cur_h)
