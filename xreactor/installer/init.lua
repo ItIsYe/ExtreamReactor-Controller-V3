@@ -751,7 +751,7 @@ if not fs.exists(network_auth_cfg) then
     "-- Auf ALLEN XReactor-Computern dasselbe Secret mit mindestens 16 Zeichen setzen.\n",
     "-- Optional trusted_master_id = \"node-53\" setzen (ID aus node_id.txt des MASTER).\n",
     "-- Ausschliesslich im CC:Tweaked-Dateisystem bearbeiten, nicht per Server-Konsole.\n",
-    "return {\n  secret = \"\",\n  trusted_master_id = nil,\n}\n",
+    "return {\n  secret = \"a1e040aaf1f9acf1b7f2f9f4810daea7eb124f5f97245420fe29c0a033873744\",\n  trusted_master_id = nil,\n}\n",
   }))
   if not ok_na then
     error("network_auth.lua konnte nicht geschrieben werden: " .. tostring(err_na), 0)
