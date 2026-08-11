@@ -7,22 +7,8 @@ local M = {}
 local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
 
--- SHA auflösen (3 Versuche)
-function M.resolve_sha()
-  if not http or type(http.get) ~= "function" then return nil end
-  for attempt = 1, 3 do
-    local ok, r = pcall(http.get, GITHUB_API)
-    if ok and r then
-      local ok2, body = pcall(r.readAll); pcall(r.close)
-      if ok2 and type(body) == "string" then
-        local sha = body:match('"sha"%s*:%s*"(%x+)"')
-        if sha then return sha end
-      end
-    end
-    if attempt < 3 then os.sleep(3) end
-  end
-  return nil
-end
+-- resolve_sha() entfernt -- Installer verwendet direkt "beta" als Ref (kein API-Call)
+function M.resolve_sha() return "beta" end
 
 -- HTML-Erkennung (CDN-Fehlerseiten)
 function M.is_html(body)
@@ -35,7 +21,7 @@ end
 -- Gibt body oder nil, err zurück.
 local function try_once(url)
   if not http or type(http.get) ~= "function" then return nil, "no http" end
-  local ok, r = pcall(http.get, url)
+  local ok, r = pcall(http.get, url, nil, { timeout = 15 })
   if not ok or not r then return nil, "http.get failed" end
   -- Response-Code prüfen wenn verfügbar
   if type(r.getResponseCode) == "function" then
