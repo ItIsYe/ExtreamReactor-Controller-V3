@@ -1,43 +1,43 @@
-# Session Handoff – XReactor Controller V3
+# Session Handoff — XReactor Controller V3
 
-Stand: 2026-08-10
+**Stand: August 2026 | beta-v529**
 
-Branch: `agent/repo-safety-audit-fixes` → `beta`
+## System-Überblick
+- Repo: `ItIsYe/ExtreamReactor-Controller-V3`, Branch: `beta`
+- Stack: CC:Tweaked · Lua 5.2/LuaJ · Extreme Reactors 2 · ATM10 (MC 1.21.1)
+- Server: Hetzner VPS, AMP Panel, 39 CC:Tweaked Computer (IDs 52–96)
+- MASTER=53, FUEL=64, LOG=62, ENERGY=54/56/57/58
 
-Geprüfter Runtime-Code-Stand: `0cc0efd575aab082a361a4cf96f600aa6086f46f`
+## Aktueller Stand (beta-v529)
+- Installer läuft stabil: Journal-Verify-Bug (v523) und SHA-Rate-Limit-Bug (v527) behoben
+- http.get Timeout 15s in Installer und http.lua (v528/v529) — kein unbegrenztes Hängen mehr
+- Monitor-Flackern FUEL-Node: behoben via setVisible Double-Buffering (v500)
+- FUEL-Node Skala: 0.5 (v508)
+- registry.lua: Datei beim ersten Start anlegen (v512)
+- plan_validator.lua: size_bytes nur prüfen wenn hash vorhanden (v511)
 
-Release: `beta-v521` / `manifest-v521`
+## Offene Punkte
+- Edit-Button auf Seite 4 (Router) verschwindet nach ~1s — noch nicht vollständig gefixt
+- Installer hängt beim Master bei 1% — Timeout-Fix deployed, noch nicht getestet
+- monitor_45 am MASTER zu klein → im Spiel vergrößern oder entfernen
 
-## Einstieg für neue Arbeit
+## Wichtige Regeln
+- **NIEMALS** Dateien manuell per curl/Server-Konsole anlegen — immer über den Installer
+- Manuell angelegte Dateien → root-Ownership → Berechtigungsprobleme
+- Installer-Update: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer`
+- Branch Protection: nur deletion + non_fast_forward (keine Required Checks — CI hängt sich auf)
 
-1. [`REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md`](REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md) lesen. Dort stehen die Audit-Traceability und die noch offenen Ingame-Abnahmen.
-2. Für RT-Regelzeiten zusätzlich [`CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md`](CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md) verwenden.
-3. Für Installer-/Auto-Update-Arbeiten zusätzlich [`CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md`](CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md) verwenden.
-4. Für historische FUEL-UI-Kennungen die kurze Referenz [`CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md`](CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md) verwenden.
+## Node-Rollen
+| Computer | Rolle | Nodes |
+|---|---|---|
+| 53 | MASTER | Zentrale Steuerung |
+| 54,56,57,58 | ENERGY | Induction Matrix |
+| 62 | LOG | Log-Collector |
+| 64 | FUEL | Fuel-Node |
+| 52+ | RT | Reaktor-Nodes |
+| 70,74 | VALVE | Ventil-Nodes (instabil) |
 
-## Wichtigste offene Punkte
-
-Die codeseitigen Repo-Safety-Audit-Findings sind im Draft umgesetzt und automatisiert abgedeckt. Vor dem Merge fehlen ausschließlich die im Abschlussnachweis aufgeführten Hardware-/Ingame-Abnahmen und ein unabhängiges Review.
-
-## Bereits wesentlich verbessert
-
-- WATER-Snapshot und Cluster-Failsafe,
-- REPROCESSOR-Bufferbudget und Payloadcache,
-- VALVE ACK/Retry/Dedupe/Auth,
-- VALVE steuert ausschließlich einen Mekanism Logistical Sorter als Aktor
-  (`sorter_name`, siehe nodes/valve/config.lua) — der ursprüngliche
-  Redstone-Aktor wurde am 2026-07-20 entfernt, da nicht mehr im Einsatz,
-- FUEL-UI-Eingabe- und Renderpfad,
-- MASTER-Persistenz, Terminal-Maus und stale Fuel-Relay,
-- LOG-Batching, O(1)-Dedupe und einzelner ACK-Sendeweg,
-- ENERGY-Heartbeat und gestaffeltes Storage-Sampling,
-- mehrere RT-Hotpath- und Diagnosefehler.
-
-## Arbeitsregeln
-
-- Keine Produktionsänderung ausschließlich anhand alter Auditdateien durchführen.
-- Jede manifestierte Datei benötigt passende Manifest-/Release-Metadaten.
-- Safety-Pfade nie zugunsten geringerer Last verlangsamen.
-- Benutzerconfigs und Routingdateien vor Installeränderungen besonders schützen.
-- Erst Referenzen und Tests prüfen, dann Dateien löschen.
-- Statische Prüfung ersetzt keinen Ingame-Test.
+## Doku-Index
+- `docs/CI_MAINTENANCE.md` — CI-Bugs und Fixes
+- `docs/REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md` — Safety-Audit August 2026
+- `docs/CODING_AI_*.md` — Historische Implementierungs-Vorgaben (Referenz)
