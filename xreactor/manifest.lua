@@ -1,23 +1,23 @@
--- xreactor/manifest.lua -- manifest-v533
+-- xreactor/manifest.lua -- manifest-v541
 return {
-  manifest_version = 540,
-  manifest_id = "manifest-v540",
+  manifest_version = 541,
+  manifest_id = "manifest-v541",
   source_ref = "beta",
   hash_algo = "crc32",
 
   base_files = {
     { path = "services/heartbeat_service.lua", size_bytes = 3938, hash = "6b908df2" },
     { path = "services/auto_update_service.lua", size_bytes = 1688, hash = "1d9fcbc6" },
-    { path = "installer/http.lua", always = true  },
+    { path = "installer/http.lua", size_bytes = 3319, hash = "a9af1690", always = true },
     { path = "installer/manifest.lua", size_bytes = 5794, hash = "faaa98fa", always = true },
     { path = "installer/stage.lua", size_bytes = 9164, hash = "b067f20b", always = true },
     { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always = true },
     { path = "installer/auto_update.lua", size_bytes = 11590, hash = "86e64cdf", always = true },
-    { path = "installer/init.lua", always = true  },
+    { path = "installer/init.lua", size_bytes = 37711, hash = "fa225c0b", always = true },
     { path = "installer/journal.lua", size_bytes = 12547, hash = "613d29f8", always = true },
     { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
     { path = "installer/reactor_naming.lua", size_bytes = 12107, hash = "9d65c13f", always = true },
-    { path = "release.lua" , always = true },
+    { path = "release.lua", size_bytes = 345, hash = "2b4c2b7b", always = true },
     { path = "start.lua", size_bytes = 18876, hash = "09a6af1a", always = true },
     { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
     { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -41,7 +41,7 @@ return {
     { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d" },
     { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948" },
     { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e" },
-    { path = "core/ui_router.lua"  },
+    { path = "core/ui_router.lua", size_bytes = 13193, hash = "6dbf285c" },
     { path = "core/utils.lua", size_bytes = 24309, hash = "86947395" },
     { path = "core/auto_update.lua", size_bytes = 4483, hash = "e08d6916" },
     { path = "core/remote_update.lua", size_bytes = 9024, hash = "e00399f1" },
