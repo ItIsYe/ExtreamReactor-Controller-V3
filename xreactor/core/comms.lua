@@ -196,6 +196,13 @@ local function protected_message_type(msg_type)
   return msg_type == constants.message_types.COMMAND
     or msg_type == constants.message_types.ACK_DELIVERED
     or msg_type == constants.message_types.ACK_APPLIED
+    or msg_type == constants.message_types.ACK
+    or msg_type == constants.message_types.HELLO
+    or msg_type == constants.message_types.REGISTER
+    or msg_type == constants.message_types.HEARTBEAT
+    or msg_type == constants.message_types.STATUS
+    or msg_type == constants.message_types.ALERT
+    or msg_type == constants.message_types.ERROR
 end
 
 local function load_command_highwater(path)
@@ -585,7 +592,13 @@ local function accept_new_command(message)
 end
 
 local function handle_message(message)
-  update_peer(message)
+  -- Peer/liveness state is a control input. Optional untrusted protocols such
+  -- as POCKET_QUERY may be dispatched, but they must never create or refresh
+  -- a MASTER peer. When network authentication is enabled, only verified
+  -- traffic participates in peer tracking.
+  if not state.config.require_command_auth or message.auth_verified == true then
+    update_peer(message)
+  end
   if message.dst and message.dst ~= state.node_id then
     return
   end
@@ -800,6 +813,11 @@ end
 
 function comms.receive(raw_message)
   if not raw_message then return end
+  if #state.incoming >= state.config.queue_limit then
+    state.metrics.dropped = state.metrics.dropped + 1
+    log("Incoming queue full; dropping message", "WARN")
+    return
+  end
   table.insert(state.incoming, raw_message)
 end
 
@@ -814,22 +832,32 @@ function comms.tick(now)
   for _, raw in ipairs(queue) do
     local message = protocol.sanitize_message(raw)
     local ok, err = protocol.validate(message)
-    if ok and protected_message_type(message.type) and state.config.require_command_auth then
+    local validation_err = err
+    if message and protected_message_type(message.type) and state.config.require_command_auth then
       if not state.auth_secret then
         ok, err = false, "command auth unavailable"
       else
-        ok, err = protocol.verify_message_auth(message, state.auth_secret)
+        local auth_ok, auth_err = protocol.verify_message_auth(message, state.auth_secret)
         local timestamp = message and (message.ts or message.timestamp) or nil
-        if ok and (type(timestamp) ~= "number"
+        if auth_ok and (type(timestamp) ~= "number"
             or math.abs(now_ms() - timestamp) > state.config.command_max_age_s * 1000) then
-          ok, err = false, "authenticated message outside freshness window"
+          auth_ok, auth_err = false, "authenticated message outside freshness window"
         end
-        if ok then message.auth_verified = true end
+        if auth_ok then
+          message.auth_verified = true
+          -- Preserve structural/protocol validation failures after proving the
+          -- sender. This permits a safe PROTO_MISMATCH diagnostic without
+          -- accepting the message itself.
+          ok, err = validation_err == nil, validation_err
+        else
+          ok, err = false, auth_err
+        end
       end
     end
     if not ok then
       log("Invalid message ignored: " .. tostring(err), "WARN")
-      if err == "proto_ver mismatch" then
+      if err == "proto_ver mismatch"
+          and (not state.config.require_command_auth or (message and message.auth_verified == true)) then
         local error_msg = {
           type = constants.message_types.ERROR,
           src = message and (message.src or message.sender_id) or nil,
@@ -839,6 +867,7 @@ function comms.tick(now)
           timestamp = now_ms(),
           proto_ver = message and message.proto_ver or constants.proto_ver
         }
+        error_msg.auth_verified = message and message.auth_verified == true or false
         dispatch_handlers(error_msg)
         if message and message.type == constants.message_types.COMMAND
           and protocol.is_for_node(message, state.node_id)

@@ -335,14 +335,31 @@ end
 -- Writes, ruecklaufkompatibel ohne ctrl fuer andere Aufrufer
 -- (module_lifecycle.lua's Start-Rampe).
 function M.setTurbineActive(ctx, turbine, caps, active, ctrl)
-  if ctrl and ctrl.active_state == active then return true end
-  if caps.setActive then
-    turbine.setActive(active)
-    if ctrl then ctrl.active_state = active end
+  -- A cached value is not a live hardware observation. Reconcile getActive()
+  -- first so an externally stopped/reset turbine is actively restored.
+  if caps.getActive and type(turbine.getActive) == "function" then
+    local ok_read, actual = pcall(turbine.getActive)
+    if ok_read and type(actual) == "boolean" then
+      if ctrl then ctrl.active_state = actual end
+      if actual == active then return true end
+    end
+  elseif ctrl and ctrl.active_state == active then
     return true
   end
-  if ctrl then ctrl.active_state = active end
-  return true  -- keine API = trotzdem weitermachen
+  if caps.setActive then
+    local result = turbine.setActive(active)
+    if result == false then return false end
+    if ctrl then ctrl.active_state = active end
+    if caps.getActive and type(turbine.getActive) == "function" then
+      local ok_read, actual = pcall(turbine.getActive)
+      if not ok_read or type(actual) ~= "boolean" or actual ~= active then
+        if ctrl and ok_read and type(actual) == "boolean" then ctrl.active_state = actual end
+        return false
+      end
+    end
+    return true
+  end
+  return false
 end
 
 local function warn_unsupported(ctx, name, reason)

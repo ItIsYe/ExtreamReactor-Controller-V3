@@ -54,6 +54,7 @@ local comms = comms_lib.init({
   node_id = "ENERGY-1",
   role = constants.roles.ENERGY_NODE,
   config = {
+    require_command_auth = false,
     peer_timeout_s = 10,
     peer_down_grace_s = 3,
     peer_up_debounce_s = 2,

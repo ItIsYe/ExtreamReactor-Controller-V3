@@ -293,10 +293,29 @@ end
 -- bereits bei Rod- und Flow-Writes -- ruecklaufkompatibel: ohne ctrl
 -- (z.B. module_lifecycle.lua's Start-Rampe) unveraendertes Verhalten.
 function M.setReactorActive(ctx, reactor, caps, active, ctrl)
-  if ctrl and ctrl.active_state == active then return true end
+  -- Reconcile the cache with hardware before suppressing a write. Reactors
+  -- can be stopped outside XReactor (manual UI, chunk reload, peripheral
+  -- reset), in which case the old RAM value is not proof of the live state.
+  if caps.getActive and type(reactor.getActive) == "function" then
+    local ok_read, actual = pcall(reactor.getActive)
+    if ok_read and type(actual) == "boolean" then
+      if ctrl then ctrl.active_state = actual end
+      if actual == active then return true end
+    end
+  elseif ctrl and ctrl.active_state == active then
+    return true
+  end
   if caps.setActive then
-    reactor.setActive(active)
+    local result = reactor.setActive(active)
+    if result == false then return false end
     if ctrl then ctrl.active_state = active end
+    if caps.getActive and type(reactor.getActive) == "function" then
+      local ok_read, actual = pcall(reactor.getActive)
+      if not ok_read or type(actual) ~= "boolean" or actual ~= active then
+        if ctrl and ok_read and type(actual) == "boolean" then ctrl.active_state = actual end
+        return false
+      end
+    end
     return true
   end
   return false

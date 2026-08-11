@@ -29,8 +29,10 @@ for module in require_pattern.findall(rt):
     if (root / 'xreactor' / rel).exists():
         assert rel in paths, f'RT require missing from manifest: {rel}'
 
-for token in ['__xreactor_forced_ref', 'Erzwungener Recovery-Ref', 'recovery_origin_ref']:
-    assert token in installer or token in init, f'installer immutable-ref contract missing {token}'
+assert '__xreactor_forced_ref' in installer
+assert 'local sha = (forced_ref ~= nil) and tostring(forced_ref) or "beta"' in installer
+assert 'api.github.com' not in installer
+assert 'recovery_origin_ref' in init
 for token in ['resolved_commit_sha', 'installed_at', 'manifest_id', 'installer_ref']:
     assert token in init, f'installed commit metadata missing {token}'
 

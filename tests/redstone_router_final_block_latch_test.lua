@@ -1,15 +1,17 @@
 package.path = table.concat({'./xreactor/?.lua','./xreactor/?/init.lua',package.path}, ';')
 local clock=2000000; os.epoch=function() return clock end
 local rr=require('nodes.fuel.redstone_router')
+local protocol=require('core.protocol'); local SECRET='router-test-secret-1234'
 local modem={isWireless=function() return true end,open=function() end,transmit=function() return true end}
 _G.peripheral={find=function(k) if k=='modem' then return modem end end,isPresent=function() return false end,wrap=function() return nil end}
 local peers={V1={down=false,stale=false},V2={down=false,stale=false}}
-local r=rr.new({config={logistics={redstone_tree={{side='top',integrator='V1',reactor='R1'},{side='bottom',integrator='V2',reactor='R2'}}}},
+local r=rr.new({config={auth_secret=SECRET,logistics={redstone_tree={{side='top',integrator='V1',reactor='R1'},{side='bottom',integrator='V2',reactor='R2'}}}},
   comms={get_peers=function() return peers end},log=function() end,warn_once=function() end})
 r:refresh()
 local function ack(id,side,applied,high)
   local key=id..'|'..side; local e=assert(r._state.pending_valve_acks[key], 'pending '..key)
-  r:handle_valve_ack({type='VALVE_ACK',command_id=e.command_id,src=e.dst,dst=e.src,applied=applied~=false,high=high==nil and e.high or high})
+  local m={type='VALVE_ACK',command_id=e.command_id,src=e.dst,dst=e.src,applied=applied~=false,high=high==nil and e.high or high,ts=clock}
+  m.auth={algorithm='HMAC-SHA256',mac=assert(protocol.sign_value(protocol.valve_auth_value(m),SECRET))}; r:handle_valve_ack(m)
 end
 local completed
 local ok,reason,txid=r:begin_transaction('R1',function() return true end,100,{on_complete=function(i) completed=i end})

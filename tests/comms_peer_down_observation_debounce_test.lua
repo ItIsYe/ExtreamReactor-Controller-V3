@@ -54,6 +54,7 @@ local comms = comms_lib.init({
   node_id = "MASTER-1",
   role = constants.roles.MASTER,
   config = {
+    require_command_auth = false,
     peer_timeout_s = 6,
     peer_down_grace_s = 0,
     peer_down_min_observations = 2,

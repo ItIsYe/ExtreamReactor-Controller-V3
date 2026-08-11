@@ -28,8 +28,7 @@ end
 local repo_root = os.getenv("REPO_ROOT") or "."
 local installer_src = read_file(repo_root .. "/installer")
 
-local FAKE_SHA = "abc123def4567890abc123def4567890abc123d"
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
+local SOURCE_REF = "beta"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
 
 local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator" }
@@ -57,15 +56,9 @@ local function run_bootstrap(opts)
 
   _G.__captured_deps = nil
   _G.http = {
-    get = function(url)
+    get = function(url, _headers, _options)
       requested_urls[#requested_urls + 1] = url
-      if url == GITHUB_API then
-        return {
-          readAll = function() return '{"sha":"' .. FAKE_SHA .. '"}' end,
-          close = function() end,
-        }
-      end
-      local base = GITHUB_RAW .. FAKE_SHA .. "/xreactor/"
+      local base = GITHUB_RAW .. SOURCE_REF .. "/xreactor/"
       for _, name in ipairs(MODULE_NAMES) do
         if url == base .. "installer/" .. name .. ".lua" then
           if opts.fail_module == name then
@@ -109,7 +102,7 @@ do
   local ok, err, urls, reboot_calls = run_bootstrap()
   if not ok then error("expected the bootstrap to succeed, got error: " .. tostring(err)) end
 
-  local base = GITHUB_RAW .. FAKE_SHA .. "/xreactor/"
+  local base = GITHUB_RAW .. SOURCE_REF .. "/xreactor/"
   for _, name in ipairs(MODULE_NAMES) do
     local expected_url = base .. "installer/" .. name .. ".lua"
     local found = false
@@ -121,8 +114,8 @@ do
 
   local deps = _G.__captured_deps
   if not deps then error("installer/init.lua (fake) was never invoked") end
-  if deps.ref ~= FAKE_SHA then
-    error("expected deps.ref to be the resolved SHA, got: " .. tostring(deps.ref))
+  if deps.ref ~= SOURCE_REF then
+    error("expected deps.ref to use the direct beta ref, got: " .. tostring(deps.ref))
   end
   for _, name in ipairs(MODULE_NAMES) do
     local dep_key = name .. "_mod"

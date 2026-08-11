@@ -10,7 +10,7 @@ local discovery = discovery_service.new({
   start_delay = 0,
   interval = 0,
   discover = function()
-    error("terminated by user")
+    error("Terminated", 0)
   end
 })
 local ok_discovery, err_discovery = pcall(function()
@@ -32,7 +32,7 @@ local telemetry = telemetry_service.new({
     network = { role = "ENERGY-NODE", id = "ENERGY-1" }
   },
   build_payload = function()
-    error("terminate requested")
+    error("Terminated", 0)
   end
 })
 local ok_telemetry, err_telemetry = pcall(function()

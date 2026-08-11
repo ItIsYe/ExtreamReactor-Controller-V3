@@ -144,6 +144,7 @@ def analyze(path: Path):
 
 
 def real_parse(path: Path, parser_mode: str):
+    lua_failure = None
     luajit = shutil.which("luajit")
     if luajit and parser_mode in ("any", "luajit"):
         proc = subprocess.run([luajit, "-b", str(path), "/dev/null"], capture_output=True, text=True)
@@ -164,6 +165,7 @@ def real_parse(path: Path, parser_mode: str):
         # (don't return here so 'any' mode can still try luac).
         if parser_mode == "lua":
             return False, f"lua:{lua}", (proc.stderr or proc.stdout or "").strip()
+        lua_failure = (f"lua:{lua}", (proc.stderr or proc.stdout or "").strip())
 
     luac = shutil.which("luac") or shutil.which("luac5.1") or shutil.which("luac5.2") or shutil.which("luac5.3") or shutil.which("luac5.4")
     if luac and parser_mode in ("any", "luac"):
@@ -190,6 +192,8 @@ def real_parse(path: Path, parser_mode: str):
         return None, "none", "lua parser unavailable"
     if parser_mode == "luac":
         return None, "none", "luac parser unavailable"
+    if lua_failure is not None:
+        return False, lua_failure[0], lua_failure[1]
     return None, "none", "no luajit/lua/luac/lupa parser available"
 
 

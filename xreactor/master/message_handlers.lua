@@ -20,6 +20,30 @@ function M.new(opts)
   -- Config-Editor-Belange aufrufen, unveraendert funktionieren.
   local config_edits_state = opts.config_edits_state
   local on_config_edit_change = opts.on_config_edit_change
+  local max_tracked_nodes = math.max(16, math.floor(tonumber(opts.max_tracked_nodes) or 128))
+
+  local function ensure_node_capacity(id)
+    if nodes[id] then return true end
+    local count, eviction_id, eviction_seen = 0, nil, math.huge
+    for existing_id, node in pairs(nodes) do
+      count = count + 1
+      if node.offline == true or node.stale == true or node.managed == false then
+        local seen = tonumber(node.last_seen) or 0
+        if seen < eviction_seen then
+          eviction_id, eviction_seen = existing_id, seen
+        end
+      end
+    end
+    if count < max_tracked_nodes then return true end
+    if eviction_id then
+      nodes[eviction_id] = nil
+      log(("Node table capacity: evicted stale node %s"):format(tostring(eviction_id)), "WARN")
+      return true
+    end
+    log(("Node table capacity reached (%d); rejected new node %s"):format(
+      max_tracked_nodes, tostring(id)), "WARN")
+    return false
+  end
 
 
   local function format_reasons(reason_set)
@@ -349,7 +373,7 @@ function M.new(opts)
     end
     if message.type == constants.message_types.ERROR and message.payload and message.payload.code == "PROTO_MISMATCH" then
       local mismatch_id = utils.normalize_node_id(message.src)
-      if mismatch_id ~= "UNKNOWN" then
+      if mismatch_id ~= "UNKNOWN" and ensure_node_capacity(mismatch_id) then
         nodes[mismatch_id] = nodes[mismatch_id] or { id = mismatch_id, role = "UNKNOWN" }
         nodes[mismatch_id].health = nodes[mismatch_id].health or health.new({})
         nodes[mismatch_id].health.status = health.status.DEGRADED
@@ -372,6 +396,7 @@ function M.new(opts)
       nodes[id] = nodes[id] or legacy
       log(("Node identity remapped: %s -> %s"):format(tostring(sender_id), tostring(id)))
     end
+    if not ensure_node_capacity(id) then return end
     -- Detect duplicate node_id: same ID, same role, but different sender (different computer)
     local existing = nodes[id]
     if existing and existing.sender_id and sender_id ~= "UNKNOWN"
@@ -434,6 +459,11 @@ function M.new(opts)
     elseif message.type == constants.message_types.STATUS then
       local previous_mode = nodes[id].mode
       nodes[id] = utils.merge(nodes[id], message.payload)
+      -- Network payloads may describe state, never replace the transport
+      -- identity selected above.
+      nodes[id].id = id
+      if reported_id ~= "UNKNOWN" then nodes[id].node_id = reported_id end
+      if sender_id ~= "UNKNOWN" then nodes[id].sender_id = sender_id end
       apply_role_hint(nodes[id], role_hint or (payload_looks_rt(message.payload) and constants.roles.RT_NODE or nil), "status")
       nodes[id].payload = message.payload
       if nodes[id].role == constants.roles.ENERGY_NODE then

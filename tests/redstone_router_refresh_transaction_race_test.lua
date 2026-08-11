@@ -3,6 +3,8 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 local clock = 1000000
 os.epoch = function() return clock end
 local redstone_router = require('nodes.fuel.redstone_router')
+local protocol = require('core.protocol')
+local SECRET = 'router-test-secret-1234'
 
 local transmitted = {}
 local modem = {
@@ -18,7 +20,7 @@ _G.peripheral = {
 
 local peers = { ['VALVE-A'] = { down = false, stale = false } }
 local router = redstone_router.new({
-  config = { logistics = { redstone_tree = {
+  config = { auth_secret = SECRET, logistics = { redstone_tree = {
     { side = 'top', integrator = 'VALVE-A', reactor = 'R1', label = 'R1' },
   } } },
   comms = { get_peers = function() return peers end },
@@ -30,10 +32,13 @@ router:refresh()
 local function ack_current(high)
   local key = 'VALVE-A|top'
   local entry = assert(router._state.pending_valve_acks[key], 'pending valve command required')
-  router:handle_valve_ack({
+  local message = {
     type = 'VALVE_ACK', command_id = entry.command_id,
-    src = entry.dst, dst = entry.src, applied = true, high = high,
-  })
+    src = entry.dst, dst = entry.src, applied = true, high = high, ts = clock,
+  }
+  message.auth = { algorithm = 'HMAC-SHA256',
+    mac = assert(protocol.sign_value(protocol.valve_auth_value(message), SECRET)) }
+  router:handle_valve_ack(message)
 end
 
 local exported = false

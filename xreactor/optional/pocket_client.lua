@@ -2,6 +2,8 @@ local CHANNEL = 6501
 local QUERY_INTERVAL_S = 5
 local RESPONSE_TIMEOUT_S = 3
 local MY_ID = "POCKET_" .. tostring(os.getComputerID and os.getComputerID() or "?")
+local PROTO_VER = { major = 1, minor = 0 }
+local POCKET_ROLE = "POCKET"
 
 local CC = colors or {
   white = 1, orange = 2, yellow = 16, lime = 32, gray = 128,
@@ -135,6 +137,8 @@ local function send_query(modem)
     type = "POCKET_QUERY",
     sender_id = MY_ID,
     src = MY_ID,
+    role = POCKET_ROLE,
+    proto_ver = PROTO_VER,
     ts = os.epoch and os.epoch("utc") or 0,
     payload = {}
   }
@@ -201,6 +205,8 @@ local function prompt_command_menu(modem)
     type = "POCKET_COMMAND",
     sender_id = MY_ID,
     src = MY_ID,
+    role = POCKET_ROLE,
+    proto_ver = PROTO_VER,
     ts = os.epoch and os.epoch("utc") or 0,
     payload = { action = action, params = params, token = token }
   }

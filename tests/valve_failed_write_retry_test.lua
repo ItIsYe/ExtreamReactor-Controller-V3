@@ -50,6 +50,7 @@ local last_command_ts = os.epoch("utc")
 local config = { sorter_name = "logisticalSorter_1", trusted_source = "FUEL-1" }
 local CONFIG = { LOG_PREFIX = "VALVE", CONFIG_PATH = "/xreactor/config/valve.lua" }
 local node_id = "VALVE-1"
+local valve_auth_secret = "test-secret-123456"
 ]]
 
   local footer = [[
@@ -80,9 +81,15 @@ return {
     utils = {
       log = function(_prefix, msg, level) table.insert(log_lines, { msg = msg, level = level }) end,
       write_config = function() return true end,
+      load_config = function() return {} end,
+    },
+    protocol = {
+      valve_auth_value = function(message) return message end,
+      verify_value = function() return true end,
+      sign_value = function() return "test-mac" end,
     },
     colors = { orange = 1, red = 2, green = 3 },
-    string = string, table = table, tostring = tostring, tonumber = tonumber, type = type,
+    string = string, table = table, math = math, tostring = tostring, tonumber = tonumber, type = type,
     pcall = pcall, error = error, ipairs = ipairs, pairs = pairs, select = select,
   }
   env._G = env
@@ -100,7 +107,8 @@ do
   local write_ok = false
   local inst = make_instance(function() return write_ok end, { default_blocked = false })
   local event = { 'modem_message', 'left', 6504, 6504,
-    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-1', high = true } }
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-1',
+      high = true, ts = 1000000, auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
 
   inst.handle_valve_channel_event(event)
   assert_eq(inst.get_current_high(), false, 'failed write must not change current_high')
@@ -119,7 +127,8 @@ end
 do
   local inst = make_instance(function() return true end)
   local event = { 'modem_message', 'left', 6504, 6504,
-    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-2', high = true } }
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-2',
+      high = true, ts = 1000000, auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
 
   inst.handle_valve_channel_event(event)
   assert_true(inst.seen_command_ids['CMD-2'] == true, 'successful command should be remembered')
@@ -127,6 +136,7 @@ do
   local first_ts = inst.get_last_command_ts()
 
   inst.set_clock(first_ts + 5000)
+  event[5].ts = first_ts + 5000
   inst.handle_valve_channel_event(event)
   assert_eq(inst.get_write_count(), 2,
     'duplicate successful command must force fresh physical proof before re-ACK')
@@ -134,7 +144,26 @@ do
     'successful physical reproof refreshes last confirmed command timestamp')
 end
 
--- 3. Failed safety-critical write must not extend the grace period.
+-- 3. A new transaction requesting the same logical state must also prove the
+-- hardware again; its new ACK gates a different router transaction.
+do
+  local inst = make_instance(function() return true end)
+  local first = { 'modem_message', 'left', 6504, 6504,
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-NEW-1',
+      high = true, ts = 1000000, auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
+  inst.handle_valve_channel_event(first)
+  assert_eq(inst.get_write_count(), 1, 'first transaction must physically write')
+
+  inst.set_clock(1001000)
+  local second = { 'modem_message', 'left', 6504, 6504,
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-NEW-2',
+      high = true, ts = 1001000, auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
+  inst.handle_valve_channel_event(second)
+  assert_eq(inst.get_write_count(), 2,
+    'new command-id with unchanged desired state must force fresh physical proof')
+end
+
+-- 4. Failed safety-critical write must not extend the grace period.
 do
   local write_ok = true
   local inst = make_instance(function() return write_ok end, { default_blocked = false })
@@ -142,7 +171,9 @@ do
   inst.set_clock(baseline_ts + 1000)
   write_ok = false
   local event = { 'modem_message', 'left', 6504, 6504,
-    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-3', high = true } }
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-3',
+      high = true, ts = baseline_ts + 1000,
+      auth = { algorithm = 'HMAC-SHA256', mac = 'test-mac' } } }
   inst.handle_valve_channel_event(event)
   assert_eq(inst.get_current_high(), false, 'failed block attempt must not change current_high')
   assert_eq(inst.get_last_command_ts(), baseline_ts, 'failed write must not reset last_command_ts')

@@ -16,6 +16,20 @@
 -- fehlerisoliert, kann den normalen Message-Dispatch nicht beeinflussen.
 
 local M = {}
+local command_attempts = {}
+local COMMAND_WINDOW_MS = 60 * 1000
+local COMMAND_MAX_ATTEMPTS = 5
+
+local function command_rate_allowed(sender, now)
+  local key = tostring(sender or "UNKNOWN")
+  local entry = command_attempts[key]
+  if not entry or now - entry.window_started >= COMMAND_WINDOW_MS then
+    entry = { window_started = now, count = 0 }
+    command_attempts[key] = entry
+  end
+  entry.count = entry.count + 1
+  return entry.count <= COMMAND_MAX_ATTEMPTS
+end
 
 -- build_summary(runtime_snapshot): runtime_snapshot ist eine einfache
 -- Tabelle mit den Werten, die der Aufrufer (message_handlers.lua) bereits
@@ -83,6 +97,19 @@ function M.handle(message, ctx)
       local send_opts = channel and { channel = channel } or nil
       local result_type = ctx.constants.message_types.POCKET_COMMAND_RESULT
 
+      local now = os.epoch and os.epoch("utc") or 0
+      if not command_rate_allowed(message.sender_id or message.src, now) then
+        if ctx.comms and type(ctx.comms.send) == "function" then
+          ctx.comms.send(message.sender_id, result_type,
+            { ok = false, reason = "Zu viele Versuche — bitte eine Minute warten" }, send_opts)
+        end
+        if ctx.log then
+          ctx.log(("Pocket command RATE_LIMITED sender=%s"):format(
+            tostring(message.sender_id or message.src)), "WARN")
+        end
+        return
+      end
+
       local provided_token = tostring(payload.token or "")
       local expected_token = tostring(ctx.current_token or "")
       if expected_token == "" or provided_token ~= expected_token then
@@ -97,19 +124,25 @@ function M.handle(message, ctx)
         return
       end
 
-      local ok_exec, exec_result = false, "Keine execute_command-Funktion bereitgestellt"
+      local result_ok, result_reason = false, "Keine execute_command-Funktion bereitgestellt"
       if type(ctx.execute_command) == "function" then
-        ok_exec, exec_result = pcall(ctx.execute_command, payload.action, payload.params)
-        if not ok_exec then exec_result = tostring(exec_result) end
+        local call_ok, action_ok, action_reason = pcall(
+          ctx.execute_command, payload.action, payload.params)
+        if not call_ok then
+          result_ok, result_reason = false, tostring(action_ok)
+        else
+          result_ok = action_ok ~= false
+          result_reason = action_reason or (result_ok and "OK" or "Befehl abgelehnt")
+        end
       end
 
       if ctx.comms and type(ctx.comms.send) == "function" then
         ctx.comms.send(message.sender_id, result_type,
-          { ok = ok_exec == true or ok_exec == nil, reason = tostring(exec_result or "OK") }, send_opts)
+          { ok = result_ok, reason = tostring(result_reason or "OK") }, send_opts)
       end
       if ctx.log then
         ctx.log(("Pocket command action=%s ok=%s sender=%s"):format(
-          tostring(payload.action), tostring(ok_exec), tostring(message.sender_id)), "INFO")
+          tostring(payload.action), tostring(result_ok), tostring(message.sender_id)), "INFO")
       end
     end)
     return true

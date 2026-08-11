@@ -270,9 +270,8 @@ function M.check_timeouts(runtime)
   for _, node_id in ipairs(stale_nodes) do
     local node = runtime.state.nodes[node_id]
     if node and node.status == runtime.libs.health.status.DOWN then
-      runtime.log(("Node stale purged from managed set: %s"):format(tostring(node_id)), "INFO")
-      node.managed = false
-      node.active = false
+      runtime.log(("Node stale removed after retention: %s"):format(tostring(node_id)), "INFO")
+      runtime.state.nodes[node_id] = nil
     end
   end
 end

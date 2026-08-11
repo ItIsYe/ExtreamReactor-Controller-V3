@@ -392,7 +392,11 @@ local function handle_valve_channel_event(event)
     valve_highwater = updated_highwater
   end
 
-  local applied = apply_valve(message.high, false)
+  -- Every newly accepted transaction must freshly prove the physical sorter
+  -- state before VALVE_ACK can be used as a routing gate.  A matching RAM
+  -- cache only describes the last successful write; the sorter may have been
+  -- changed or reset externally since then.
+  local applied = apply_valve(message.high, true)
   if not applied then
     send_valve_ack(reply_side, message.command_id, false, current_high, last_write_error,
       message.src, config.trusted_source ~= nil and pairing_persisted or false)
