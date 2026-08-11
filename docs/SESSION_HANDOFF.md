@@ -41,3 +41,34 @@
 - `docs/CI_MAINTENANCE.md` — CI-Bugs und Fixes
 - `docs/REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md` — Safety-Audit August 2026
 - `docs/CODING_AI_*.md` — Historische Implementierungs-Vorgaben (Referenz)
+## ⛔ Nicht nochmal einbauen — gescheiterte Ansätze
+
+### Installer: atomic_write mit tmp + fs.move (journal.lua)
+- **Problem:** `fs.move` in CC:Tweaked ist nach Delete/Create nicht zuverlässig — Round-Trip-Verify las CORRUPT zurück
+- **Fix:** Direkt in Zieldatei schreiben, keine tmp-Datei, keine Verifikation
+- **Nicht wieder einbauen:** Jede Form von tmp+move oder post-write verify im Journal
+
+### Installer: GitHub API für SHA-Auflösung (installer + http.lua)
+- **Problem:** `api.github.com/repos/.../branches/beta` hat Rate-Limit 60/h ohne Token — schlägt bei mehreren Computern fehl
+- **Fix:** Direkt `"beta"` als Ref verwenden — raw.githubusercontent.com akzeptiert Branch-Namen
+- **Nicht wieder einbauen:** Keinen API-Call zur SHA-Auflösung, kein `GITHUB_API` Variable
+
+### http.get ohne Timeout
+- **Problem:** `http.get(url)` ohne Timeout-Parameter hängt unbegrenzt bei Netzwerkproblemen
+- **Fix:** Immer `{ timeout = 15 }` als dritten Parameter übergeben
+- **Nicht wieder einbauen:** `pcall(http.get, url)` ohne Timeout-Tabelle
+
+### Dateien manuell per Server-Konsole anlegen
+- **Problem:** Manuell angelegte Dateien gehören `root` statt `amp` → CC:Tweaked kann nicht schreiben
+- **Fix:** Ausschließlich über den Installer — niemals curl/cp/cat auf dem Server
+- **Nicht wieder einbauen:** Direktes Anlegen von CC:Tweaked Dateien über die Server-Konsole
+
+### Monitor-Skala 1.0 für FUEL-Node
+- **Problem:** Zu groß für den Monitor
+- **Fix:** `FUEL_MONITOR_SCALE = 0.5` in `nodes/fuel/main.lua`
+- **Nicht wieder einbauen:** Skala auf 1.0 zurücksetzen
+
+### ui_router: list_controls bei jedem Frame zurücksetzen
+- **Problem:** Touch-Zonen (Edit-Button) verschwinden nach jedem Snapshot-Wechsel
+- **Fix:** `list_controls` nur bei `is_transition = true` zurücksetzen
+- **Nicht wieder einbauen:** `self.list_controls = nil` außerhalb des Transition-Blocks
