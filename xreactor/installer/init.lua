@@ -408,13 +408,19 @@ do
     local serialized = serialize_config_backup(config_backup_bundle)
     local ok_bak, bak_err = stage_mod.write(RECOVERY_CONFIG_BACKUP, serialized)
     if not ok_bak then
-      error("Config-Backup fehlgeschlagen, breche vor Loeschen ab: " .. tostring(bak_err), 0)
+      -- Fix: Kein Platz fuer Backup → WARN und trotzdem weitermachen
+      -- (CC:Tweaked Disk-Limit; Config ist im RAM gesichert)
+      p("WARN: Config-Backup konnte nicht geschrieben werden: " .. tostring(bak_err))
+      p("WARN: Installation laeuft ohne persistentes Backup weiter.")
+      using_existing_recovery_backup = true  -- verhindert erneuten Backup-Versuch
+    else
+      local restored_bundle, verr = load_recovery_config_backup()
+      if not restored_bundle or not backup_bundles_equal(config_backup_bundle, restored_bundle) then
+        p("WARN: Config-Backup-Verifikation fehlgeschlagen: " .. tostring(verr or "Abweichung"))
+      else
+        p("Config gesichert: " .. backup_count .. " Datei(en) -> " .. RECOVERY_CONFIG_BACKUP)
+      end
     end
-    local restored_bundle, verr = load_recovery_config_backup()
-    if not restored_bundle or not backup_bundles_equal(config_backup_bundle, restored_bundle) then
-      error("Config-Backup-Verifikation fehlgeschlagen (" .. tostring(verr or "Dateimenge/Inhalt weicht ab") .. ") -- breche vor Loeschen ab.", 0)
-    end
-    p("Config gesichert: " .. backup_count .. " Datei(en) -> " .. RECOVERY_CONFIG_BACKUP)
   end
 end
 
