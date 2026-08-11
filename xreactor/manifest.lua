@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua -- manifest-v533
 return {
-  manifest_version = 534,
-  manifest_id = "manifest-v534",
+  manifest_version = 535,
+  manifest_id = "manifest-v535",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -53,7 +53,8 @@ return {
     { path = "services/service_manager.lua", size_bytes = 7489, hash = "13908228" },
     { path = "services/telemetry_service.lua", size_bytes = 5681, hash = "ea3eec98" },
     { path = "services/ui_service.lua", size_bytes = 5595, hash = "fcc90306" },
-    { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece", always = true },
+    { path = "config/network_auth.lua", size_bytes = 338, hash = "88a3eeca", always = true },
+  { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece", always = true },
     { path = "shared/health_codes.lua", size_bytes = 365, hash = "7783661a" },
     { path = "shared/telemetry_schema.lua", size_bytes = 938, hash = "9567b224" },
   },
