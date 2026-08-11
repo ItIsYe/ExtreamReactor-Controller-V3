@@ -256,19 +256,35 @@ function M.footer_nav(mon, y, w, opts)
   local center = opts.center or ""
   local right = opts.right or "WEITER >"
   local inset = math.max(1, math.floor(tonumber(opts.inset) or 1))
-  local left_text = fit(left, math.floor(w / 3) - 1)
-  local lx = math.min(math.max(2, inset + 1), math.max(2, w - #left_text - 1))
-  write(mon, lx, y, left_text, colors.get("text"), colors.get("OFFLINE"))
-  if center ~= "" then
-    local cx = math.max(2, math.floor((w - #center) / 2))
-    write(mon, cx, y, fit(center, math.floor(w / 3)), colors.get("muted"), colors.get("OFFLINE"))
+  -- Three fixed, non-overlapping columns.  The old global centering used the
+  -- *unclipped* center label to calculate its x position, then drew a clipped
+  -- string from there.  On ordinary compact monitors this overwrote parts of
+  -- ZURUECK/WEITER while their hitboxes still described the old text.
+  local left_end = math.max(1, math.floor(w / 3))
+  local right_start = math.min(w, math.floor((w * 2) / 3) + 1)
+  local middle_start = math.min(w + 1, left_end + 1)
+  local middle_end = math.max(middle_start - 1, right_start - 1)
+
+  local left_start = math.min(left_end, math.max(1, inset + 1))
+  local left_text = fit(left, math.max(0, left_end - left_start + 1))
+  write(mon, left_start, y, left_text, colors.get("text"), colors.get("OFFLINE"))
+
+  if center ~= "" and middle_end >= middle_start then
+    local middle_w = middle_end - middle_start + 1
+    local center_text = fit(center, middle_w)
+    local cx = middle_start + math.max(0, math.floor((middle_w - #center_text) / 2))
+    write(mon, cx, y, center_text, colors.get("muted"), colors.get("OFFLINE"))
   end
-  local right_text = fit(right, math.floor(w / 3))
-  local rx = math.max(2, w - #right_text - inset)
+
+  local right_end = math.max(right_start, math.min(w, w - inset))
+  local right_text = fit(right, math.max(0, right_end - right_start + 1))
+  local rx = math.max(right_start, right_end - #right_text + 1)
   write(mon, rx, y, right_text, colors.get("text"), colors.get("OFFLINE"))
   return {
-    left = { x1 = lx, x2 = lx + #left_text - 1, y = y },
-    right = { x1 = rx, x2 = rx + #right_text - 1, y = y },
+    -- The whole visual column is interactive.  A user no longer has to hit
+    -- one exact glyph on a scaled in-world monitor.
+    left = { x1 = 1, x2 = left_end, y = y },
+    right = { x1 = right_start, x2 = w, y = y },
   }
 end
 
