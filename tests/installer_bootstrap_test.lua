@@ -8,13 +8,13 @@
 -- herunter, und fuehrt AUSSCHLIESSLICH installer/init.lua (als Funktion
 -- mit injizierten Abhaengigkeiten) damit aus.
 --
--- Treibt das echte /installer mit einem gemockten http/os: jede der 6
+-- Treibt das echte /installer mit einem gemockten http/os: jede der 7
 -- Modul-Downloads und der init.lua-Download werden ueber einen Fake-
 -- HTTP-Server aus demselben aufgeloesten Ref bedient; das (ebenfalls
 -- gefakte) init.lua zeichnet auf, mit welchem deps-Table es aufgerufen
 -- wurde, statt eine echte Installation durchzufuehren. Verifiziert: (1)
 -- alle Downloads verwenden denselben aufgeloesten Ref, (2) deps enthaelt
--- alle sechs erwarteten Module plus ref, (3) ein fehlgeschlagener Modul-
+-- alle sieben erwarteten Module plus ref, (3) ein fehlgeschlagener Modul-
 -- Download bricht VOR jedem init.lua-Aufruf kontrolliert ab, (4) nach
 -- erfolgreichem init.lua-Aufruf wird rebootet.
 
@@ -31,7 +31,7 @@ local installer_src = read_file(repo_root .. "/installer")
 local SOURCE_REF = "beta"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
 
-local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator" }
+local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator", "reactor_naming" }
 
 -- Liefert fuer jedes Modul einen minimalen, aber gueltigen Modul-Body
 -- (return { name = "..." }), damit load_module() es tatsaechlich laden
@@ -96,7 +96,7 @@ local function run_bootstrap(opts)
 end
 
 -- 1. Erfolgreicher Lauf: alle Downloads verwenden denselben aufgeloesten
---    Ref, deps enthaelt alle sechs Module plus ref, init.lua wird
+--    Ref, deps enthaelt alle sieben Module plus ref, init.lua wird
 --    tatsaechlich mit diesen deps aufgerufen, danach wird rebootet.
 do
   local ok, err, urls, reboot_calls = run_bootstrap()
