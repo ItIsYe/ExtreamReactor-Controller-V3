@@ -46,16 +46,6 @@ local CONFIG = {
   DEFAULT_COMMS_PEER_UP_MIN_OBSERVATIONS = 3, -- Fresh peer messages required before peer-up transition.
   DEFAULT_COMMS_QUEUE_LIMIT = 200, -- Max queued outbound messages.
   DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
-  -- Control rails: ramp_profiles fuer gemeinsame Ramp-Logik.
-  -- turbine_flow, reactor_rods, coil sind RT-spezifisch und gehoeren
-  -- ausschliesslich in die RT-Node Config (nodes/rt/config.lua).
-  DEFAULT_RAILS = {
-    ramp_profiles = {
-      NORMAL = { up = 1.0, down = 1.0 },
-      SLOW   = { up = 0.5, down = 0.5 },
-      FAST   = { up = 1.5, down = 1.5 }
-    }
-  },
   DEFAULT_DEBUG_LOGGING = true, -- Enabled by default so ENERGY diagnostics are always available.
   DEFAULT_RESET_LOG_ON_START = true -- Truncate runtime log at startup to keep disk usage bounded.
 }
@@ -114,6 +104,5 @@ return {
     peer_up_min_observations = CONFIG.DEFAULT_COMMS_PEER_UP_MIN_OBSERVATIONS,
     queue_limit = CONFIG.DEFAULT_COMMS_QUEUE_LIMIT,
     drop_simulation = CONFIG.DEFAULT_COMMS_DROP_SIMULATION
-  },
-  rails = CONFIG.DEFAULT_RAILS
+  }
 }

@@ -9,7 +9,6 @@ _G.redstone = { setOutput = function() end }
 
 local redstone_router = require('nodes.fuel.redstone_router')
 local router_ui = require('nodes.fuel.router_ui')
-local responsive = require('nodes.fuel.router_ui_responsive')
 
 local peers = {}
 for i = 1, 20 do
@@ -30,11 +29,11 @@ local rs = redstone_router.new({
 })
 rs:refresh()
 
-local page = responsive.attach(router_ui.new({
+local page = router_ui.new({
   redstone_router = rs,
   get_reactors = function() return reactors end,
   log = function() end,
-}))
+})
 
 local width, height = 30, 12
 local mon = { getSize = function() return width, height end }

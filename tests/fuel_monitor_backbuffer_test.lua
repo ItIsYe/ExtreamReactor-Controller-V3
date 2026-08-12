@@ -2,7 +2,6 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 
 package.loaded['nodes.fuel.monitor_ui'] = nil
 package.loaded['optional.ampel'] = nil
-package.loaded['nodes.fuel.router_ui_responsive'] = { attach = function(value) return value end }
 package.loaded['nodes.fuel.ui_completion'] = { attach = function(value) return value end }
 
 local width, height, scale = 60, 20, 0.5

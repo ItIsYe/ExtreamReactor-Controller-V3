@@ -12,7 +12,7 @@ if line_count > max_lines:
     raise SystemExit(f'rt main too large: {line_count} lines > {max_lines}')
 
 if '_G.turbine_ctrl =' in text:
-    raise SystemExit('rt main must not mutate _G.turbine_ctrl directly; use core.turbine_ctrl helper path')
+    raise SystemExit('rt main must not mutate _G.turbine_ctrl directly; use nodes.rt.turbine_control context state')
 
 fn_starts = []
 for i, line in enumerate(text.splitlines(), start=1):

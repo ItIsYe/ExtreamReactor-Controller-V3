@@ -13,7 +13,6 @@ _G.peripheral = {
 _G.redstone = { setOutput = function() end }
 
 local router_ui = require('nodes.fuel.router_ui')
-local responsive = require('nodes.fuel.router_ui_responsive')
 
 local cursor_x, cursor_y = 1, 1
 local cells = {}
@@ -63,7 +62,6 @@ local page = router_ui.new({
   get_reactors = function() return { { id = 'RT-1', label = 'Reactor 1' } } end,
   log = function() end,
 })
-responsive.attach(page)
 page:render(mon, ui, nil, true)
 
 local row3 = row_text(3)

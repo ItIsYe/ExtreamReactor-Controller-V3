@@ -8,7 +8,6 @@ monitor_ui = (repo / "xreactor/nodes/fuel/monitor_ui.lua").read_text(encoding="u
 ui_pages = (repo / "xreactor/nodes/fuel/ui_pages.lua").read_text(encoding="utf-8")
 ui_completion = (repo / "xreactor/nodes/fuel/ui_completion.lua").read_text(encoding="utf-8")
 router = (repo / "xreactor/nodes/fuel/router_ui.lua").read_text(encoding="utf-8")
-responsive = (repo / "xreactor/nodes/fuel/router_ui_responsive.lua").read_text(encoding="utf-8")
 mockup = (repo / "xreactor/core/mockup_ui.lua").read_text(encoding="utf-8")
 
 assert "local FUEL_MONITOR_SCALE = 0.5" in main
@@ -20,7 +19,7 @@ assert "for _, peer in ipairs(comms:get_peers())" not in main
 
 assert "ui_diagnostics_overlay.attach" not in monitor_ui
 assert 'require("nodes.fuel.ui_diagnostics_overlay")' not in monitor_ui
-assert "err=%d" in ui_pages
+assert "ERR%d" in ui_pages
 assert "NAECHSTER SCHRITT" in ui_completion
 assert "ROUTER > EDIT" in ui_completion
 assert "inset = 3" in ui_completion
@@ -33,6 +32,6 @@ assert "empty_edit_btn" in router
 assert "[ EDIT ROUTEN ]" in router
 assert "if hit(u.edit_btn) or hit(u.empty_edit_btn) then" in router
 assert "inset = 3" in render_body
-assert "Keine Reaktor-Ziele gefunden" in responsive
+assert "Keine Reaktor-Ziele gefunden" in router
 assert "opts.inset" in mockup
 print("fuel_ui_visual_regression_test.py: ok")

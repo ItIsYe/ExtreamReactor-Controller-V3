@@ -13,7 +13,6 @@
 -- eigenstaendige Funktion aufgebaut.
 
 local M = {}
-local router_ui_responsive = require("nodes.fuel.router_ui_responsive")
 local ui_completion = require("nodes.fuel.ui_completion")
 local window_buffer = require("core.window_buffer")
 
@@ -101,7 +100,6 @@ function M.render_monitor(ctx, model)
   current_mon = mon
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
-    router_ui_responsive.attach(ctx.get_router_ui())
     monitor_router = ctx.ui_router.new({
       error_title = "FUEL UI ERROR",
       on_render_error = ctx.on_render_error,

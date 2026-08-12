@@ -38,11 +38,9 @@ end
 package.loaded['core.mockup_ui'] = mux
 package.loaded['nodes.fuel.ui_pages'] = nil
 package.loaded['nodes.fuel.ui_completion'] = nil
-package.loaded['nodes.fuel.ui_diagnostics_overlay'] = nil
 
 local ui_pages = require('nodes.fuel.ui_pages')
 local completion = require('nodes.fuel.ui_completion')
-local diagnostics_overlay = require('nodes.fuel.ui_diagnostics_overlay')
 
 local ui_stub = { getSize = function(mon) return mon.getSize() end }
 local support = {
@@ -56,7 +54,6 @@ local devices = { last_scan_ts = 1, storage_name = 'tank_0', discovery_failed = 
 local config = { logistics = { reactors = {} } }
 local pages = ui_pages.new({ ui = ui_stub, support_ui_pages = support, devices = devices, config = config })
 completion.attach(pages, { devices = devices })
-diagnostics_overlay.attach(pages)
 local mon = { getSize = function() return width, height end }
 
 local reactors = {

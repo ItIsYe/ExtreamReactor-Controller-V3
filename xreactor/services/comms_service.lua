@@ -2,6 +2,7 @@ local constants = require("shared.constants")
 local comms_lib = require("core.comms")
 local network_lib = require("core.network")
 local utils = require("core.utils")
+local build_info = require("shared.build_info")
 
 local comms_service = {}
 
@@ -211,7 +212,12 @@ function comms_service:publish_status(payload, opts)
 end
 
 function comms_service:send_heartbeat(state)
-  return self.comms.send(nil, constants.message_types.HEARTBEAT, { state = state }, {
+  local payload = { state = state }
+  local build = build_info.get()
+  if type(build) == "table" and build.manifest_version ~= nil then
+    payload.manifest_version = build.manifest_version
+  end
+  return self.comms.send(nil, constants.message_types.HEARTBEAT, payload, {
     priority = 3,
     require_ack = false,
     channel = status_channel(self.config)

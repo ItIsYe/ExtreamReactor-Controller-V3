@@ -19,8 +19,7 @@ local SKIP = {
 local ROLE_EXTRAS = {
   RT = {
     "adapters/reactor.lua", "adapters/turbine.lua",
-    "core/control_rails.lua", "core/fluid.lua",
-    "core/turbine_ctrl.lua", "core/turbine_regulator.lua",
+    "core/control_rails.lua", "core/fluid.lua", "core/turbine_regulator.lua",
     "nodes/rt/command_handler.lua", "nodes/rt/config_normalizer.lua",
     "nodes/rt/discovery_log.lua", "nodes/rt/discovery_runtime.lua",
     "nodes/rt/flow_apply_helpers.lua", "nodes/rt/health_payload.lua",

@@ -384,10 +384,11 @@ function M.new(opts)
     end
     if uidiag then
       rows[#rows + 1] = {
-        text = string.format("UI: frames %d/%d/%d clears=%d trans=%d err=%d ptr=%d model=%d %dms",
-          uidiag.frames_committed or 0, uidiag.frames_skipped or 0, uidiag.frames_requested or 0,
-          uidiag.full_clears or 0, uidiag.transition_count or 0, uidiag.render_errors or uidiag.error_count or 0,
-          uidiag.pointer_events_received or 0, uidiag.model_builds or 0, uidiag.last_render_ms or 0),
+        text = string.format("UI: REQ%d COM%d SKIP%d CLR%d TR%d ERR%d %dms PTR%d MOD%d",
+          uidiag.frames_requested or 0, uidiag.frames_committed or 0, uidiag.frames_skipped or 0,
+          uidiag.full_clears or 0, uidiag.transition_count or 0,
+          uidiag.render_errors or uidiag.error_count or 0, uidiag.last_render_ms or 0,
+          uidiag.pointer_events_received or 0, uidiag.model_builds or 0),
         status = "text",
       }
     end

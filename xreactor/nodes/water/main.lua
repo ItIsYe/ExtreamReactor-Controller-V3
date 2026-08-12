@@ -25,7 +25,6 @@ local service_manager = require("services.service_manager")
 local comms_service = require("services.comms_service")
 local telemetry_service = require("services.telemetry_service")
 local discovery_service = require("services.discovery_service")
-local redstone_router_lib = require("nodes.fuel.redstone_router")
 local ui_service = require("services.ui_service")
 local safety = require("core.safety")
 local non_rt_payload = require("core.non_rt_payload")
@@ -83,7 +82,6 @@ CONFIG.CONFIG_PATH = WATER_USER_CONFIG_PATH
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
 local config_warnings = {}
 local balance_log_state = { last_action = "ok", last_log_ts = 0 }
-local cluster_rs_router = nil
 local cluster_states = {}
 
 local function add_config_warning(message) table.insert(config_warnings, message) end

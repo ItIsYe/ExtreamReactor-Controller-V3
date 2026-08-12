@@ -28,6 +28,7 @@
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 
 local M = {}
+local peripheral_discovery = require("nodes.support.discovery")
 
 local function safe_call(obj, method, ...)
   if not obj or type(obj[method]) ~= "function" then return nil, "no_method" end
@@ -81,38 +82,20 @@ end
 -- sofern kein expliziter Name konfiguriert ist, auf eine Methodensignatur-
 -- Suche zurueck (getItem + exportItemToPeripheral -- genau die zwei
 -- Methoden, die diese Datei tatsaechlich aufruft).
-local function find_me_bridge_by_methods()
-  for _, name in ipairs(peripheral.getNames() or {}) do
-    local ok, methods = pcall(peripheral.getMethods, name)
-    if ok and type(methods) == "table" then
-      local set = {}
-      for _, m in ipairs(methods) do set[m] = true end
-      if set.getItem and set.exportItemToPeripheral then
-        return name
-      end
-    end
-  end
-  return nil
-end
-
 function M:refresh_peripherals()
   local cfg = self.config.feed or {}
   local name = cfg.me_bridge or "me_bridge"
-  local found_name = nil
-  if peripheral.isPresent(name) then
-    found_name = name
-  elseif not cfg.me_bridge then
-    found_name = find_me_bridge_by_methods()
-  end
-  if found_name then
-    local ok, w = pcall(peripheral.wrap, found_name)
-    if ok and w then
-      self._state.bridge = w
-      self._state.bridge_name = found_name
-    else
-      self.warn_once("bridge_wrap", "FeedRouter: ME-Bridge wrap failed: " .. found_name)
-      self._state.bridge = nil
-    end
+  local found_name, wrapped, resolve_error = peripheral_discovery.resolve_by_methods({
+    configured_name = cfg.me_bridge,
+    default_name = "me_bridge",
+    required_methods = { "getItem", "exportItemToPeripheral" },
+  })
+  if wrapped then
+    self._state.bridge = wrapped
+    self._state.bridge_name = found_name
+  elseif resolve_error == "wrap_failed" then
+    self.warn_once("bridge_wrap", "FeedRouter: ME-Bridge wrap failed: " .. tostring(found_name))
+    self._state.bridge = nil
   else
     self.warn_once("bridge_abs", "FeedRouter: ME-Bridge absent: " .. name)
     self._state.bridge = nil

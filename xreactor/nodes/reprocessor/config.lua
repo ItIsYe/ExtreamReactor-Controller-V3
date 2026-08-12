@@ -18,44 +18,6 @@ local CONFIG = {
   DEFAULT_COMMS_PEER_TIMEOUT = 12.0, -- Seconds before marking peer down.
   DEFAULT_COMMS_QUEUE_LIMIT = 200, -- Max queued outbound messages.
   DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
-  -- Control rails tuning (shared defaults for RT nodes).
-  DEFAULT_RAILS = {
-    ramp_profiles = {
-      NORMAL = { up = 1.0, down = 1.0 },
-      SLOW = { up = 0.5, down = 0.5 },
-      FAST = { up = 1.5, down = 1.5 }
-    },
-    turbine_flow = {
-      deadband_up = 20,
-      deadband_down = 20,
-      hysteresis_up = 10,
-      hysteresis_down = 10,
-      max_step_up = 50,
-      max_step_down = 50,
-      cooldown_s = 1.0,
-      min = 200,
-      max = 1900,
-      ema_alpha = 0.2
-    },
-    reactor_rods = {
-      deadband_up = 5000,
-      deadband_down = 5000,
-      hysteresis_up = 500,
-      hysteresis_down = 500,
-      max_step_up = 5,
-      max_step_down = 5,
-      cooldown_s = 1.5,
-      min = 0,
-      max = 98,
-      ema_alpha = 0.25
-    },
-    coil = {
-      engage_rpm = 850,
-      disengage_rpm = 750,
-      cooldown_s = 1.0,
-      ema_alpha = 0.2
-    }
-  },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/reprocessor.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
   -- Feed-Logik für die REPROCESSOR-Node.
@@ -98,14 +60,12 @@ local CONFIG = {
 }
 -- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
 -- PERFORMANCE_2026-07-12.md, Punkt 28.1, identischer Fund wie bei
--- nodes/fuel/config.lua). "rails = CONFIG.DEFAULT_RAILS" und
--- "feed = CONFIG.DEFAULT_FEED" standen bisher INNERHALB von CONFIG's
+-- nodes/fuel/config.lua). "feed = CONFIG.DEFAULT_FEED" stand bisher INNERHALB von CONFIG's
 -- eigenem Tabellenkonstruktor -- CONFIG war zu diesem Zeitpunkt noch
 -- nicht zugewiesen, ein Zugriff darauf waere ein Laufzeitfehler
 -- gewesen. Zusaetzlich fehlte "return" komplett -- diese Datei war
 -- dadurch, wie bei FUEL, vollstaendig wirkungslos, egal was
 -- hineingeschrieben wurde. Jetzt als separate Zuweisungen nach dem
 -- Tabellenkonstruktor, plus "return CONFIG" am Ende.
-CONFIG.rails = CONFIG.DEFAULT_RAILS
 CONFIG.feed  = CONFIG.DEFAULT_FEED
 return CONFIG

@@ -57,6 +57,7 @@
 --   },
 
 local M = {}
+local peripheral_discovery = require("nodes.support.discovery")
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 
 local WASTE_PATTERNS = { "cyanite", "magentite", "rossinite", "waste" }
@@ -169,44 +170,22 @@ end
 -- genau die drei ME-Bridge-Methoden, die diese Datei tatsaechlich
 -- aufruft), sobald der konfigurierte/Default-Name nicht direkt gefunden
 -- wird.
-local function find_me_bridge_by_methods()
-  for _, name in ipairs(peripheral.getNames() or {}) do
-    local ok, methods = pcall(peripheral.getMethods, name)
-    if ok and type(methods) == "table" then
-      local set = {}
-      for _, m in ipairs(methods) do set[m] = true end
-      if set.getItem and set.exportItemToPeripheral and set.importItemFromPeripheral then
-        return name
-      end
-    end
-  end
-  return nil
-end
-
 function M:refresh_peripherals()
   local cfg = self.config.logistics or self.config or {}
 
   -- ME Bridge
   local bridge_name = cfg.me_bridge or "me_bridge"
   self._state.bridge = nil
-  local bridge_found_name = nil
-  if peripheral.isPresent(bridge_name) then
-    bridge_found_name = bridge_name
-  elseif not cfg.me_bridge then
-    -- Nur automatisch per Methodensignatur suchen, wenn KEIN expliziter
-    -- Name konfiguriert ist -- ein manuell gesetzter, aber (noch) nicht
-    -- angeschlossener Name soll weiterhin klar als "absent" gemeldet
-    -- werden, statt stillschweigend eine andere ME Bridge zu binden.
-    bridge_found_name = find_me_bridge_by_methods()
-  end
-  if bridge_found_name then
-    local ok, w = pcall(peripheral.wrap, bridge_found_name)
-    if ok and w then
-      self._state.bridge = { name = bridge_found_name, wrapped = w }
-      self.log("DEBUG", "Logistics: ME Bridge: " .. bridge_found_name)
-    else
-      self.warn_once("bridge_wrap", "Logistics: ME Bridge wrap failed: " .. bridge_found_name)
-    end
+  local bridge_found_name, wrapped, resolve_error = peripheral_discovery.resolve_by_methods({
+    configured_name = cfg.me_bridge,
+    default_name = "me_bridge",
+    required_methods = { "getItem", "exportItemToPeripheral", "importItemFromPeripheral" },
+  })
+  if wrapped then
+    self._state.bridge = { name = bridge_found_name, wrapped = wrapped }
+    self.log("DEBUG", "Logistics: ME Bridge: " .. bridge_found_name)
+  elseif resolve_error == "wrap_failed" then
+    self.warn_once("bridge_wrap", "Logistics: ME Bridge wrap failed: " .. tostring(bridge_found_name))
   else
     self.warn_once("bridge_absent", "Logistics: ME Bridge absent: " .. bridge_name)
   end
