@@ -7,7 +7,8 @@ local update_handshake = require("core.update_handshake")
 
 local REDSTONE_SIDES = { "top", "bottom", "left", "right", "front", "back" }
 
-local function make_redstone_handler(runtime, log, constants)
+local function make_redstone_handler(runtime, log)
+  local remote_update = require("core.remote_update")
   local last = {}
   for _, s in ipairs(REDSTONE_SIDES) do last[s] = false end
   return function()
@@ -15,6 +16,12 @@ local function make_redstone_handler(runtime, log, constants)
     for _, side in ipairs(REDSTONE_SIDES) do
       local ok, current = pcall(redstone.getInput, side)
       if ok and current and not last[side] then
+        local update_command, command_err = remote_update.build_command()
+        if not update_command then
+          log("Remote-Update blockiert: " .. tostring(command_err), "ERROR")
+          for _, s2 in ipairs(REDSTONE_SIDES) do last[s2] = true end
+          return
+        end
         log("Redstone-Trigger: broadcasting REMOTE_UPDATE", "WARN")
         local nodes = runtime.state.nodes or {}
         local count = 0; for _ in pairs(nodes) do count = count + 1 end
@@ -23,16 +30,20 @@ local function make_redstone_handler(runtime, log, constants)
         end
         local sent = 0
         for node_id in pairs(nodes) do
-          local ok2 = pcall(function()
-            runtime.refs.comms:send_command(node_id, { target = constants.command_targets.REMOTE_UPDATE })
-          end)
-          if ok2 then sent = sent + 1 end
+          local ok2, entry = pcall(runtime.refs.comms.send_command, runtime.refs.comms,
+            node_id, update_command)
+          if ok2 and entry then sent = sent + 1 end
         end
         log(("Broadcast: sent=%d known=%d"):format(sent, count), "WARN")
         for _ = 1, 10 do runtime.refs.services:tick(); os.sleep(0.05) end
-        log("Master aktualisiert sich selbst...", "WARN")
-        local remote_update = require("core.remote_update")
-        remote_update.run(function(level, text) log(text, level) end)
+        local queued = remote_update.queue_local({
+          log_fn = function(level, text) log(text, level) end,
+          trigger = "REDSTONE",
+          source = runtime.refs.comms.network and runtime.refs.comms.network.id or "MASTER",
+        })
+        if queued.ok ~= true then
+          log("Master-Update konnte nicht vorgemerkt werden: " .. tostring(queued.error), "ERROR")
+        end
         for _, s2 in ipairs(REDSTONE_SIDES) do last[s2] = true end
         return
       end
@@ -43,7 +54,7 @@ end
 
 function M.run(runtime, constants)
   local log = runtime.log
-  local check_redstone = make_redstone_handler(runtime, log, constants)
+  local check_redstone = make_redstone_handler(runtime, log)
   -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md (Abschnitt 4). MASTER hat keine eigenen
   -- physischen Aktoren zu quiescen (nur Koordination) -- der Handler

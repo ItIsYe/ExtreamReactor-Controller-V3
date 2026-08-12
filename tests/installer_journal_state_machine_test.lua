@@ -8,9 +8,8 @@
 --  - PREPARED/INSTALLING/VERIFYING/COMMITTED-Alternierung zwischen den
 --    beiden Generationsslots (jeder write() ruehrt NUR den jeweils
 --    "stale" Slot an, der andere bleibt unangetastet),
---  - check_incomplete() klassifiziert PREPARED/INSTALLING/VERIFYING als
---    unvollstaendig, COMMITTED und "kein Journal vorhanden" als
---    vollstaendig/normal,
+--  - classify() trennt PREPARED/INSTALLING/VERIFYING von COMMITTED und
+--    "kein Journal vorhanden",
 --  - Crashsimulation: ein Abbruch WAEHREND des Schreibens eines neuen
 --    Slots darf die zuletzt bestaetigte Generation im jeweils anderen
 --    Slot nicht gefaehrden (INSTALL-P0.1),
@@ -55,9 +54,6 @@ do
   local status, j = journal.classify()
   if status ~= journal.STATUS.ABSENT or j ~= nil then
     error("expected ABSENT/nil for a fresh filesystem, got " .. tostring(status))
-  end
-  if journal.check_incomplete() ~= nil then
-    error("expected check_incomplete() to be nil when no journal file exists")
   end
 end
 
@@ -120,11 +116,11 @@ reset()
 for _, state in ipairs({ journal.STATE.PREPARED, journal.STATE.INSTALLING, journal.STATE.VERIFYING }) do
   reset()
   journal.write({ state = state, ref = "x", manifest_id = "m", role = "RT-NODE", started_at = 1, expected_files = {} })
-  local incomplete = journal.check_incomplete()
-  if not incomplete then
-    error("expected check_incomplete() to report an incomplete journal for state=" .. state)
+  local status, incomplete = journal.classify()
+  if status ~= journal.STATUS.VALID_INCOMPLETE or not incomplete then
+    error("expected classify() to report an incomplete journal for state=" .. state)
   end
-  if incomplete.state ~= state then error("check_incomplete() state mismatch for " .. state) end
+  if incomplete.state ~= state then error("classify() state mismatch for " .. state) end
 end
 
 -- ── COMMITTED gilt als abgeschlossen, kein Recovery ──────────────────────────
@@ -132,13 +128,12 @@ reset()
 do
   journal.write({ state = journal.STATE.PREPARED, ref = "x", manifest_id = "m", role = "RT-NODE", started_at = 1, expected_files = {} })
   journal.write({ state = journal.STATE.COMMITTED, ref = "x", manifest_id = "m", role = "RT-NODE", started_at = 1, expected_files = {} })
-  if journal.check_incomplete() ~= nil then
-    error("expected check_incomplete() to be nil for a COMMITTED journal")
-  end
+  local status = journal.classify()
+  if status ~= journal.STATUS.VALID_COMMITTED then error("expected VALID_COMMITTED journal") end
 end
 
--- ── INSTALL-P0.1: Crash WAEHREND des naechsten Schreibvorgangs darf die ─────
--- ── zuletzt bestaetigte (COMMITTED) Generation nicht gefaehrden ─────────────
+-- ── INSTALL-P0.1: Ein fehlgeschlagener direkter Write in den stale Slot ─────
+-- ── darf die zuletzt bestaetigte Generation nicht gefaehrden ────────────────
 reset()
 do
   -- Erster Installationslauf: sauber bis COMMITTED durch (landet in SLOT_A,
@@ -149,20 +144,15 @@ do
   local other_slot = (committed_slot == journal.SLOT_A) and journal.SLOT_B or journal.SLOT_A
 
   -- Naechster Installationslauf beginnt (PREPARED) -- write() zielt auf
-  -- den anderen (stale) Slot. Simuliere einen Crash GENAU nach dem
-  -- tmp-Write, aber VOR dem finalen Move: der Zielslot bleibt in diesem
-  -- Fall unveraendert (leer), nur die .tmp-Datei existiert.
-  local real_move = fs.move
-  local crashed = false
-  fs.move = function(src, dst)
-    if not crashed and dst == other_slot then
-      crashed = true
-      error("simulated crash before move() completes", 0)
-    end
-    return real_move(src, dst)
+  -- den anderen (stale) Slot. Simuliere einen Fehler beim Oeffnen dieses
+  -- Slots. Der gueltige COMMITTED-Slot wird nicht angefasst.
+  local real_open = fs.open
+  fs.open = function(p, mode)
+    if mode == "w" and p == other_slot then return nil end
+    return real_open(p, mode)
   end
   local ok_w = journal.write({ state = journal.STATE.PREPARED, ref = "run2", manifest_id = "m2", role = "RT-NODE", started_at = 2, expected_files = {} })
-  fs.move = real_move
+  fs.open = real_open
   if ok_w then error("expected the simulated crash to abort journal.write()") end
 
   -- Trotz Crash: der vorherige COMMITTED-Stand muss weiterhin die alleinige,
@@ -172,12 +162,9 @@ do
     error("crash during next write must not disturb the previous COMMITTED generation, got " .. tostring(status))
   end
   if j.ref ~= "run1" then error("expected the untouched previous COMMITTED journal (run1), got ref=" .. tostring(j.ref)) end
-  if journal.check_incomplete() ~= nil then
-    error("a crash while writing the NEXT generation must not mark the previous COMMITTED run as incomplete")
-  end
 end
 
--- ── INSTALL-P0.1: Crash WAEHREND des tmp-Writes selbst (vor dem Move) ───────
+-- ── INSTALL-P0.1: Abgeschnittener stale Slot faellt auf COMMITTED zurueck ───
 reset()
 do
   journal.write({ state = journal.STATE.COMMITTED, ref = "run1", manifest_id = "m1", role = "RT-NODE", started_at = 1, expected_files = {} })
@@ -186,8 +173,11 @@ do
 
   local real_open = fs.open
   fs.open = function(p, mode)
-    if mode == "w" and p == other_slot .. ".tmp" then
-      return nil -- fs.open() liefert bei einem Fehlschlag nil, wirft nicht
+    if mode == "w" and p == other_slot then
+      return {
+        write = function() error("simulated interrupted stale-slot write") end,
+        close = function() files[p] = "" end,
+      }
     end
     return real_open(p, mode)
   end
@@ -197,33 +187,17 @@ do
 
   local status, j = journal.classify()
   if status ~= journal.STATUS.VALID_COMMITTED or j.ref ~= "run1" then
-    error("crash during tmp-write must leave the previous COMMITTED generation fully intact")
+    error("interrupted stale-slot write must leave the previous COMMITTED generation fully intact")
   end
 end
 
--- ── INSTALL-P0.1: Move meldet Erfolg, aber der Zielslot ist danach nicht ────
--- ── rund-trip-verifizierbar (z.B. durch parallele Beschaedigung) -- der ────
--- ── Write MUSS trotzdem als fehlgeschlagen gelten und darf den Gesamt- ─────
--- ── zustand nicht auf einen unverifizierten Stand umschalten. ──────────────
+-- ── Journal writes must not use tmp files or fs.move. The two-slot design ───
+-- ── itself supplies recovery; extra move steps add CC failure modes. ────────
 reset()
 do
-  journal.write({ state = journal.STATE.COMMITTED, ref = "run1", manifest_id = "m1", role = "RT-NODE", started_at = 1, expected_files = {} })
-  local committed_slot = fs.exists(journal.SLOT_A) and journal.SLOT_A or journal.SLOT_B
-  local other_slot = (committed_slot == journal.SLOT_A) and journal.SLOT_B or journal.SLOT_A
-
-  local real_move = fs.move
-  fs.move = function(src, dst)
-    real_move(src, dst)
-    if dst == other_slot then files[dst] = "not valid { lua syntax !!" end
-  end
-  local ok_w = journal.write({ state = journal.STATE.PREPARED, ref = "run2", manifest_id = "m2", role = "RT-NODE", started_at = 2, expected_files = {} })
-  fs.move = real_move
-  if ok_w then error("expected the post-move verify step to catch corrupted target content and fail the write") end
-
-  local status, j = journal.classify()
-  if status ~= journal.STATUS.VALID_COMMITTED or j.ref ~= "run1" then
-    error("a failed verify-after-write must not shadow the previous COMMITTED generation")
-  end
+  local source = assert(io.open("xreactor/installer/journal.lua", "r")):read("*a")
+  if source:find("fs" .. ".move", 1, true) then error("journal must not use move-based writes") end
+  if source:find(".tmp", 1, true) then error("journal must not create tmp slots") end
 end
 
 -- ── INSTALL-P0.2: beschaedigtes/unlesbares Journal ist fail-closed, ─────────
@@ -234,9 +208,6 @@ do
   local status, j = journal.classify()
   if status ~= journal.STATUS.CORRUPT then error("expected CORRUPT for invalid lua syntax, got " .. tostring(status)) end
   if j ~= nil then error("CORRUPT classification must not return a journal table") end
-  if journal.check_incomplete() == nil then
-    error("CORRUPT journal must force recovery (check_incomplete() must not be nil)")
-  end
 end
 
 reset()
@@ -244,9 +215,6 @@ do
   files[journal.SLOT_A] = "" -- leer/abgeschnitten
   local status = journal.classify()
   if status ~= journal.STATUS.UNREADABLE then error("expected UNREADABLE for an empty journal file, got " .. tostring(status)) end
-  if journal.check_incomplete() == nil then
-    error("UNREADABLE journal must force recovery (check_incomplete() must not be nil)")
-  end
 end
 
 reset()

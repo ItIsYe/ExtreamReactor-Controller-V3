@@ -1,4 +1,5 @@
 local health = require("core.health")
+local reactor_identity = require("core.reactor_identity")
 
 local M = {}
 
@@ -61,8 +62,11 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
   for _, entry in ipairs(registry:get_bound_devices("reactor")) do
     local info = reactor_adapter.inspect(entry.name, log_prefix)
     local module = modules[entry.id]
+    local global_id = reactor_identity.compose(registry and registry.node_id, entry.id)
     table.insert(list, {
       id = entry.id,
+      local_id = entry.id,
+      global_id = global_id,
       name = entry.name,
       alias = entry.alias,
       rods_level = info and info.control_rod_level or nil,

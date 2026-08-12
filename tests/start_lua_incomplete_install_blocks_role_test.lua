@@ -33,7 +33,9 @@ end
 local repo_root = os.getenv("REPO_ROOT") or "."
 local src = read_file(repo_root .. "/xreactor/start.lua")
 
-local guard_snippet = extract(src, "local function p(msg)", "\nlocal function read_role()")
+local guard_snippet = 'local INSTALL_ROOT = "/xreactor"\n'
+  .. 'local ROLE_PATH = INSTALL_ROOT .. "/config/role.lua"\n'
+  .. extract(src, "local function p(msg)", "\nlocal function read_role()")
 
 -- Sanity: the extraction must actually contain the guard, not just p().
 if not guard_snippet:find("Rolle wird NICHT gestartet", 1, true) then
@@ -54,6 +56,13 @@ local function run_guard(journal_files, http_should_succeed)
   local sleep_calls = 0
   local dofile_calls = {}
 
+  -- A real interrupted update has the verified external config backup used
+  -- by start.lua to restore role identity before unattended recovery.
+  if journal_files then
+    fs_files['/xreactor_recovery/config_backup.lua'] =
+      'return { ["role.lua"] = "return { role = \\\"RT\\\" }\\n" }\n'
+  end
+
   _G.fs = {
     exists = function(p) return fs_files[p] ~= nil end,
     open = function(p, mode)
@@ -64,12 +73,17 @@ local function run_guard(journal_files, http_should_succeed)
         local buf = {}
         return {
           write = function(content) buf[#buf + 1] = content end,
-          close = function() written[p] = table.concat(buf) end,
+          close = function()
+            written[p] = table.concat(buf)
+            fs_files[p] = written[p]
+          end,
         }
       end
       return nil
     end,
     getFreeSpace = function() return 1024 * 1024 end,
+    getDir = function(path) return path:match('^(.*)/[^/]+$') or '' end,
+    makeDir = function(path) fs_files[path] = fs_files[path] or true end,
     delete = function() end,
   }
   _G.http = {

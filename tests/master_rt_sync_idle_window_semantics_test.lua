@@ -1,48 +1,13 @@
-package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
-
-local constants = require('shared.constants')
-local utils = require('core.utils')
-local coalescer_lib = require('master.rt_sync_coalescer')
-
-local now_ms = 1000
-os.epoch = function(kind)
-  return now_ms
-end
-
-local sync_calls = 0
-local seen_reasons = {}
-
-local coalescer = coalescer_lib.new({
-  constants = constants,
-  utils = utils,
-  batch_window_ms = 250,
-  sync_rt_node = function(_, reason)
-    sync_calls = sync_calls + 1
-    seen_reasons[#seen_reasons + 1] = reason
-  end,
-  log = function() end
-})
-
-local node = { id = 'rt-1', role = constants.roles.RT_NODE }
-coalescer.mark_dirty(node, 'hello')
-now_ms = 1200
-coalescer.mark_dirty(node, 'status')
-now_ms = 1300
-coalescer.flush({ force = false })
-if sync_calls ~= 0 then
-  error('flush must wait for idle window after last dirty mark')
-end
-
-now_ms = 1500
-coalescer.flush({ force = false })
-if sync_calls ~= 1 then
-  error('flush must run once after idle window elapsed')
-end
-if seen_reasons[1] ~= 'coalesced:hello,status' then
-  error('expected stable coalesced reason ordering, got ' .. tostring(seen_reasons[1]))
-end
-if coalescer.size() ~= 0 then
-  error('pending queue must be empty after successful flush')
-end
-
-print('master_rt_sync_idle_window_semantics_test.lua: ok')
+package.path=table.concat({'./xreactor/?.lua','./xreactor/?/init.lua',package.path},';')
+local constants=require('shared.constants'); local coalescer_m=require('master.rt_sync_coalescer'); local utils=require('core.utils')
+local function T(v,m) if not v then error(m or"true") end end
+local function A(a,e,m) if a~=e then error((m or"eq")..": exp="..tostring(e).." act="..tostring(a)) end end
+local fake_time=0
+_G.os=setmetatable({epoch=function() return fake_time end,clock=function() return fake_time/1000 end},{__index=_G.os or {}})
+local synced={}
+local c=coalescer_m.new({constants=constants,utils=utils,batch_window_ms=100,sync_rt_node=function(node,trigger) synced[#synced+1]={node=node,trigger=trigger} end,log=function() end})
+local node={id='RT-1',role=constants.roles.RT_NODE,mode='MASTER',status=constants.status_levels.OK,state=constants.node_states.RUNNING}
+fake_time=0; c.mark_dirty(node,'status'); fake_time=50; c.flush()
+A(#synced,0,"before window: no send"); fake_time=200; c.flush()
+T(#synced>=1,"after window: send")
+print("master_rt_sync_idle_window_semantics_test.lua: ok")

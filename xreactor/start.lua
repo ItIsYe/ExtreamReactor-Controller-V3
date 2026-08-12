@@ -155,6 +155,44 @@ local function attempt_recovery_resume()
   local ok_w = pcall(function() f.write(body) end)
   pcall(f.close)
   if not ok_w then error("Kann Recovery-Installer nicht schreiben: " .. tmp, 0) end
+  -- A crash may have happened before the installer restored role.lua into
+  -- the new /xreactor tree. The verified recovery backup is outside that
+  -- tree; restore the minimal unattended-install identity before rerunning
+  -- /installer so it never falls into an interactive role prompt.
+  local backup_path = "/xreactor_recovery/config_backup.lua"
+  if (not fs.exists(ROLE_PATH)) and fs.exists(backup_path) then
+    local backup_file = fs.open(backup_path, "r")
+    if not backup_file then error("Recovery-Config-Backup nicht lesbar", 0) end
+    local ok_read, backup_source = pcall(backup_file.readAll)
+    pcall(backup_file.close)
+    if not ok_read or type(backup_source) ~= "string" then
+      error("Recovery-Config-Backup nicht lesbar", 0)
+    end
+    local loader, load_err = load(backup_source, "=recovery_config_backup", "t", {})
+    if not loader then error("Recovery-Config-Backup ungueltig: " .. tostring(load_err), 0) end
+    local ok_backup, backup = pcall(loader)
+    if not ok_backup or type(backup) ~= "table" then
+      error("Recovery-Config-Backup ungueltig", 0)
+    end
+    for _, rel in ipairs({ "role.lua", "remote_update.lua", "node_id.txt" }) do
+      local content = backup[rel]
+      if type(content) == "string" then
+        local dst = INSTALL_ROOT .. "/config/" .. rel
+        local dir = fs.getDir(dst)
+        if dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
+        local out = fs.open(dst, "w")
+        if not out then error("Recovery-Minimal-Config nicht schreibbar: " .. rel, 0) end
+        local ok_restore, restore_err = pcall(function() out.write(content) end)
+        pcall(out.close)
+        if not ok_restore then
+          error("Recovery-Minimal-Config fehlgeschlagen: " .. rel .. " (" .. tostring(restore_err) .. ")", 0)
+        end
+      end
+    end
+  end
+  if not fs.exists(ROLE_PATH) then
+    error("Recovery kann Rolle nicht bestimmen: role.lua und Backup fehlen", 0)
+  end
   _G.__xreactor_remote_update = true
   dofile(tmp)
 end

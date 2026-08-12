@@ -293,10 +293,29 @@ end
 -- bereits bei Rod- und Flow-Writes -- ruecklaufkompatibel: ohne ctrl
 -- (z.B. module_lifecycle.lua's Start-Rampe) unveraendertes Verhalten.
 function M.setReactorActive(ctx, reactor, caps, active, ctrl)
-  if ctrl and ctrl.active_state == active then return true end
+  -- Reconcile the cache with hardware before suppressing a write. Reactors
+  -- can be stopped outside XReactor (manual UI, chunk reload, peripheral
+  -- reset), in which case the old RAM value is not proof of the live state.
+  if caps.getActive and type(reactor.getActive) == "function" then
+    local ok_read, actual = pcall(reactor.getActive)
+    if ok_read and type(actual) == "boolean" then
+      if ctrl then ctrl.active_state = actual end
+      if actual == active then return true end
+    end
+  elseif ctrl and ctrl.active_state == active then
+    return true
+  end
   if caps.setActive then
-    reactor.setActive(active)
+    local result = reactor.setActive(active)
+    if result == false then return false end
     if ctrl then ctrl.active_state = active end
+    if caps.getActive and type(reactor.getActive) == "function" then
+      local ok_read, actual = pcall(reactor.getActive)
+      if not ok_read or type(actual) ~= "boolean" or actual ~= active then
+        if ctrl and ok_read and type(actual) == "boolean" then ctrl.active_state = actual end
+        return false
+      end
+    end
     return true
   end
   return false
@@ -432,6 +451,56 @@ function M.applyReactorRods(ctx, target, allow_overmax, source)
   end
   ctx.autonom_state.pending_rod_direction = nil
   return true
+end
+
+-- Update quiesce is stricter than normal SAFE control: every configured
+-- reactor must have a successful 100%-rod write followed by a fresh readback.
+-- setActive(false) is also applied/verified when that API exists. The caller
+-- retries this function while the update handshake remains requested.
+function M.apply_update_quiesce(ctx)
+  local result = { ok = true, reactors = {} }
+  for _, name in ipairs(ctx.config.reactors or {}) do
+    local item = { name = name }
+    local write_ok, write_err = ctx.adapters.reactor.apply_rod_level(name, 100, ctx.CONFIG.LOG_PREFIX)
+    item.rod_write = write_ok == true
+    item.rod_error = write_err
+    local rods = ctx.adapters.reactor.read_control_rods(name, ctx.CONFIG.LOG_PREFIX)
+    item.rods = rods
+    item.rods_safe = type(rods) == "number" and rods >= 99.5
+
+    local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name] or nil
+    if not reactor and ctx.utils and type(ctx.utils.safe_wrap) == "function" then
+      reactor = select(1, ctx.utils.safe_wrap(name))
+    end
+    item.present = reactor ~= nil
+    item.active_safe = true
+    if reactor and type(reactor.setActive) == "function" then
+      local ok_set, set_result = pcall(reactor.setActive, false)
+      item.active_write = ok_set and set_result ~= false
+      if type(reactor.getActive) == "function" then
+        local ok_read, active = pcall(reactor.getActive)
+        item.active_readback = ok_read and type(active) == "boolean"
+        item.active = active
+        item.active_safe = ok_read and active == false
+      else
+        item.active_safe = item.active_write
+      end
+    elseif not reactor then
+      item.active_safe = false
+    end
+
+    item.ok = item.present and item.rod_write and item.rods_safe and item.active_safe
+    if item.ok then
+      local ctrl = M.ensure_reactor_ctrl(ctx, name)
+      ctrl.last_applied = 100
+      ctrl.last_known_rods = rods
+      ctrl.active_state = false
+    else
+      result.ok = false
+    end
+    result.reactors[#result.reactors + 1] = item
+  end
+  return result.ok, result
 end
 
 function M.apply_initial_reactor_rods(ctx)

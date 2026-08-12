@@ -19,8 +19,7 @@ local SKIP = {
 local ROLE_EXTRAS = {
   RT = {
     "adapters/reactor.lua", "adapters/turbine.lua",
-    "core/control_rails.lua", "core/fluid.lua",
-    "core/turbine_ctrl.lua", "core/turbine_regulator.lua",
+    "core/control_rails.lua", "core/fluid.lua", "core/turbine_regulator.lua",
     "nodes/rt/command_handler.lua", "nodes/rt/config_normalizer.lua",
     "nodes/rt/discovery_log.lua", "nodes/rt/discovery_runtime.lua",
     "nodes/rt/flow_apply_helpers.lua", "nodes/rt/health_payload.lua",
@@ -30,44 +29,61 @@ local ROLE_EXTRAS = {
   }
 }
 
-local function crc32(content)
-  local CRC = {}
-  for i = 0, 255 do
-    local c = i
-    for _ = 1, 8 do
-      if bit32.band(c, 1) == 1 then
-        c = bit32.bxor(bit32.rshift(c, 1), 0xEDB88320)
-      else
-        c = bit32.rshift(c, 1)
-      end
+-- Lookup-Tabelle nur einmal beim Laden dieses Moduls aufbauen, nicht bei
+-- jedem crc32()-Aufruf neu (M.install() ruft crc32() fuer JEDE Datei auf).
+local CRC_TABLE = {}
+for i = 0, 255 do
+  local c = i
+  for _ = 1, 8 do
+    if bit32.band(c, 1) == 1 then
+      c = bit32.bxor(bit32.rshift(c, 1), 0xEDB88320)
+    else
+      c = bit32.rshift(c, 1)
     end
-    CRC[i] = c
   end
+  CRC_TABLE[i] = c
+end
+
+-- Fix: bei groesseren Dateien im Manifest (FUEL-Rolle bringt mit Abstand die
+-- groessten Einzeldateien im gesamten Manifest mit, z.B. redstone_router.lua
+-- ~58KB, router_ui.lua ~40KB) konnte diese Byte-fuer-Byte-Schleife ohne
+-- jeden Yield auf einem ausgelasteten Server CC:Tweaked's Watchdog-Limit
+-- ("too long without yielding") ueberschreiten -- der Installer blieb dann
+-- mitten im Fortschrittsbalken haengen, OHNE Fehlermeldung (der Watchdog
+-- killt die Coroutine hart, statt einen catchbaren Fehler zu werfen).
+--
+-- Ein erster Versuch mit os.sleep(0) alle 4096 Bytes reichte unter Server-
+-- last nicht: os.sleep() wartet selbst im 0-Fall mindestens einen echten
+-- Server-Tick (und unter genau der Last, vor der wir uns schuetzen wollen,
+-- dauert ein Tick laenger) -- das haette bei sehr kleiner Yield-Distanz
+-- die Installation spuerbar verlangsamt, war bei 4096 Bytes aber trotzdem
+-- noch zu selten (naechster beobachteter Haenger bei einer kleineren,
+-- aber nicht winzigen 18KB-Datei). os.queueEvent()+os.pullEvent() auf ein
+-- selbst gewaehltes, garantiert ungenutztes Event yieldet die Coroutine
+-- genauso wirksam (setzt den Watchdog zurueck) OHNE auf den naechsten Tick
+-- zu warten -- das Event wird noch in derselben Tick-Verarbeitung wieder
+-- zugestellt. Dadurch kann CRC_YIELD_EVERY deutlich kleiner sein, ohne die
+-- Installation spuerbar zu verlangsamen. os/os.queueEvent existieren in
+-- Offline-Tests (Host-Lua) nicht, daher der type()-Check.
+local CRC_YIELD_EVERY = 512
+local CRC_YIELD_EVENT = "__xr_crc32_yield"
+
+local function crc32(content)
+  local can_yield = type(os) == "table"
+    and type(os.queueEvent) == "function" and type(os.pullEvent) == "function"
   local crc = 0xFFFFFFFF
-  for i = 1, #content do
+  local len = #content
+  for i = 1, len do
     local idx = bit32.band(bit32.bxor(crc, string.byte(content, i)), 0xFF)
-    crc = bit32.bxor(bit32.rshift(crc, 8), CRC[idx])
+    crc = bit32.bxor(bit32.rshift(crc, 8), CRC_TABLE[idx])
+    if can_yield and i % CRC_YIELD_EVERY == 0 then
+      os.queueEvent(CRC_YIELD_EVENT)
+      os.pullEvent(CRC_YIELD_EVENT)
+    end
   end
   return string.format("%08x", bit32.bxor(crc, 0xFFFFFFFF))
 end
 M.crc32 = crc32
-
-function M.is_current(path, entry)
-  if not fs.exists(path) then return false, "missing" end
-  local f = fs.open(path, "r")
-  if not f then return false, "unreadable" end
-  local content = f.readAll(); f.close()
-  if entry.size_bytes and #content ~= entry.size_bytes then
-    return false, "size_mismatch"
-  end
-  if entry.hash and entry.hash ~= "" then
-    local actual = crc32(content)
-    if actual:lower() ~= entry.hash:lower() then
-      return false, "hash_mismatch"
-    end
-  end
-  return true
-end
 
 function M.load_remote(url, http_mod)
   local body, err = http_mod.download(url)

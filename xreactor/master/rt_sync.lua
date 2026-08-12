@@ -109,11 +109,6 @@ function M.same_setpoints(a, b)
      and a.desired_node_state   == b.desired_node_state
 end
 
-function M.set_default_mode(ctx, node)
-  local mode = node.desired_mode or ctx.config.rt_default_mode or "MASTER"
-  M.send_rt_mode(ctx.comms, node, mode)
-end
-
 local function mode_sync_action(ctx, node, now)
   local desired = node and (node.desired_mode or (ctx.config and ctx.config.rt_default_mode) or "MASTER") or "MASTER"
   if desired == nil or tostring(desired) == "" then return nil, nil, "NO_DESIRED_MODE" end

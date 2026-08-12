@@ -435,7 +435,7 @@ local function get_rs_router()
     -- "comms" (weiter oben vorwaertsdeklariert, unten per comms_service.
     -- new(...) zugewiesen) als Upvalue bereits gesetzt -- kein
     -- nachtraeglicher Injektionspfad noetig.
-    rs_router = redstone_router_lib.new({ config = config.feed or {}, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
+    rs_router = redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
   end
   return rs_router
 end
@@ -621,5 +621,7 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   get_rs_router():tick()
 end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
   enter_standby("UPDATE_QUIESCE")
-  return standby == true
+  local rs_router = get_rs_router()
+  rs_router:begin_quiesce("UPDATE_QUIESCE")
+  return standby == true and rs_router:poll_quiesce()
 end } or nil)

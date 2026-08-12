@@ -188,17 +188,7 @@ local function get_last_heartbeat_ts()
   return hb_state.last_ts
 end
 
--- ── Handle Remote-Update Command ─────────────────────────────────────────────
-local function handle_command(message)
-  local payload = type(message) == "table" and message.payload or nil
-  local command = payload and payload.command
-  if type(command) == "table" and command.target == "REMOTE_UPDATE" then
-    require("core.remote_update").handle_command({
-      log_prefix = "ENERGY", utils = utils,
-      send_ack = comms and function() comms:send_ack(message, true, { updating = true }) end or nil,
-    })
-    return { ok = true }
-  end
+local function handle_command()
   return { ok = false, error = "unsupported command", reason_code = "UNSUPPORTED_COMMAND" }
 end
 

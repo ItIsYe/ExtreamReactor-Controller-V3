@@ -11,6 +11,7 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- Schreibvorgang aus Umgebungsgruenden fehlschlug.
 
 local files = {}
+local dirs = { ['/xreactor'] = true, ['/xreactor/config'] = true }
 
 _G.textutils = {
   serialize = function(value)
@@ -28,12 +29,12 @@ _G.textutils = {
 }
 
 _G.fs = {
-  exists = function(p) return files[p] ~= nil end,
+  exists = function(p) return files[p] ~= nil or dirs[p] == true end,
   getDir = function(p)
     local dir = p:match("^(.*)/[^/]+$")
     return dir or ""
   end,
-  makeDir = function() end,
+  makeDir = function(p) dirs[p] = true end,
   open = function(p, mode)
     if mode == "w" then
       return {

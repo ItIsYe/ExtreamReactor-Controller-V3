@@ -143,15 +143,6 @@ local function make_boot_id(node_id)
   return tostring(node_id or "node") .. ":boot:" .. tostring(computer) .. ":" .. tostring(epoch) .. ":" .. random_part
 end
 
--- Erkennt ob ein Modem ein Ender-Modem (unbegrenzte Reichweite) ist.
--- Ender-Modem: getRange() → math.huge; normales Wireless: getRange() → ~64.
-local function is_ender_modem(modem)
-  if type(modem.getRange) ~= "function" then return false end
-  local ok, range = pcall(modem.getRange)
-  if not ok or type(range) ~= "number" then return false end
-  return range >= 65536  -- math.huge oder sehr grosser Wert = Ender-Modem
-end
-
 local function discover_log_modems()
   -- Sammelt ALLE wireless Modems alphabetisch sortiert.
   -- network.lua nimmt immer das ERSTE (alphabetisch) fuer Control/Status.
@@ -402,9 +393,12 @@ local function migrate_config(path, data, defaults, meta)
   local loaded_version = type(data.version) == "number" and data.version or 1
   if data.version == nil or loaded_version < target_version then data.version = target_version; changed = true end
   if not changed then return data end
-  local ok, err = pcall(utils.write_config, path, data)
-  if ok then meta.migrated = true; return data end
-  meta.migration_error = err
+  local call_ok, persisted, persist_err = pcall(utils.write_config, path, data)
+  if call_ok and persisted == true then
+    meta.migrated = true
+    return data
+  end
+  meta.migration_error = call_ok and (persist_err or "write_config returned false") or persisted
   utils.log("CONFIG", "Config migration failed at " .. tostring(path) .. "; using existing config.", "WARN")
   return original
 end
@@ -423,7 +417,7 @@ function utils.load_config(path, defaults)
       local migrated = migrate_config(path, data, defaults, meta)
       if migrated == data and type(defaults) == "table" and type(defaults.version) ~= "number" then utils.merge_defaults(data, defaults) end
       meta.source = "lua"
-      return migrated
+      return migrated, meta
     end
     if not ok then err = data end
   end
@@ -437,43 +431,71 @@ function utils.load_config(path, defaults)
     end
   end
   meta.reason = err or "invalid"
-  return fallback
+  return fallback, meta
+end
+
+local function write_exact(path, content)
+  local file = fs.open(path, "w")
+  if not file then return false, "open_failed" end
+  local write_ok, write_err = pcall(function() file.write(content) end)
+  local close_ok, close_err = pcall(file.close)
+  if not write_ok or not close_ok then
+    return false, "write_failed:" .. tostring(write_err or close_err)
+  end
+  if read_file(path) ~= content then return false, "verify_failed" end
+  return true
 end
 
 function utils.write_config(path, tbl)
-  local dir = fs.getDir(path)
-  if dir ~= "" then utils.ensure_dir(dir) end
-  local file = fs.open(path, "w")
-  if not file then
-    -- Do NOT call error() here: write_config is called from registry saves
-    -- and capacity cache saves. A hard error() would propagate as a runtime
-    -- error and crash the node (observed: RT crashed on registry save when
-    -- /xreactor/config/ dir was temporarily unavailable).
-    -- Log and return a boolean so callers can decide how to handle it.
-    pcall(print, "WARN: write_config failed to open " .. tostring(path))
-    return false, "open_failed"
-  end
-  local serialized, err = safe_serialize(tbl)
+  if type(path) ~= "string" or path == "" then return false, "invalid_path" end
+
+  -- Serialize before opening any file. Invalid/cyclic data must never
+  -- truncate the last valid configuration.
+  local serialized, serialize_err = safe_serialize(tbl)
   if not serialized then
-    pcall(file.close)
-    pcall(print, "WARN: write_config serialize failed: " .. tostring(err))
-    return false, "serialize_failed:" .. tostring(err)
+    return false, "serialize_failed:" .. tostring(serialize_err)
   end
-  -- Fix (2026-07-19): CRITICAL. file.write()/file.close() konnten werfen
-  -- (z.B. Datentraeger voll/schreibgeschuetzt) -- ungeschuetzt widersprach
-  -- das direkt dem Kommentar oben ("Do NOT call error() here... Log and
-  -- return a boolean") fuer genau diesen Funktionsteil: ein Fehlschlag hier
-  -- crashte den aufrufenden Node trotzdem hart (z.B. VALVE beim ersten
-  -- SET_VALVE nach dem Boot, wenn das automatische trusted_source-Pairing
-  -- versucht, die geschuetzte Config zu persistieren -- der Node stuerzte
-  -- dadurch bei jedem eingehenden Kommando erneut ab, sobald der Schreib-
-  -- vorgang aus Umgebungsgruenden fehlschlug).
-  local ok_write, write_err = pcall(function() file.write(serialized) end)
-  pcall(file.close)
-  if not ok_write then
-    pcall(print, "WARN: write_config failed to write " .. tostring(path) .. ": " .. tostring(write_err))
-    return false, "write_failed:" .. tostring(write_err)
+
+  local dir = fs.getDir(path)
+  if dir ~= "" then
+    local dir_ok, dir_err = pcall(utils.ensure_dir, dir)
+    if not dir_ok or not fs.exists(dir) then
+      return false, "mkdir_failed:" .. tostring(dir_err or "missing_after_create")
+    end
   end
+
+  local temp_path = path .. ".xr_tmp"
+  local backup_path = path .. ".xr_prev"
+  if fs.exists(temp_path) then pcall(fs.delete, temp_path) end
+
+  local staged, stage_err = write_exact(temp_path, serialized)
+  if not staged then
+    pcall(fs.delete, temp_path)
+    return false, "stage_" .. tostring(stage_err)
+  end
+
+  local previous = read_file(path)
+  if previous ~= nil then
+    local backed_up, backup_err = write_exact(backup_path, previous)
+    if not backed_up then
+      pcall(fs.delete, temp_path)
+      return false, "backup_" .. tostring(backup_err)
+    end
+  end
+
+  local committed, commit_err = write_exact(path, serialized)
+  if not committed then
+    if previous ~= nil then
+      write_exact(path, previous)
+    elseif fs.exists(path) then
+      pcall(fs.delete, path)
+    end
+    pcall(fs.delete, temp_path)
+    return false, "commit_" .. tostring(commit_err)
+  end
+
+  pcall(fs.delete, temp_path)
+  if previous ~= nil and fs.exists(backup_path) then pcall(fs.delete, backup_path) end
   return true
 end
 
@@ -586,13 +608,6 @@ function utils.build_log_name(base, node_id)
   return prefix .. CONFIG.LOG_NAME_SEPARATOR .. sanitized
 end
 
-function utils.init_role_logger(role, node_id, opts)
-  opts = opts or {}
-  opts.prefix = role or opts.prefix
-  opts.node_id = node_id or opts.node_id
-  opts.log_name = opts.log_name or utils.build_log_name(role, node_id)
-  -- Fix P4: number_or_nil zentral in utils -- war 3x dupliziert in
--- message_handlers.lua, rt_sync.lua (als number_or), command_handler.lua
 function utils.number_or_nil(value)
   if type(value) == "number" then return value end
   if type(value) == "string" then
@@ -602,8 +617,6 @@ function utils.number_or_nil(value)
   return nil
 end
 
--- Fix P3: payload_looks_rt war in message_handlers.lua UND rt_sync_coalescer.lua
--- dupliziert (leicht divergiert). Kanonische Version hier mit allen Bedingungen.
 function utils.payload_looks_rt(payload)
   if type(payload) ~= "table" then return false end
   if type(payload.rt) == "table" then return true end
@@ -615,7 +628,12 @@ function utils.payload_looks_rt(payload)
   return false
 end
 
-return utils.init_logger(opts)
+function utils.init_role_logger(role, node_id, opts)
+  opts = opts or {}
+  opts.prefix = role or opts.prefix
+  opts.node_id = node_id or opts.node_id
+  opts.log_name = opts.log_name or utils.build_log_name(role, node_id)
+  return utils.init_logger(opts)
 end
 
 function utils.remote_log_status()

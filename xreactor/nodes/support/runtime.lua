@@ -193,7 +193,8 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
           services:tick(nil, event)
         elseif event[1] == "timer" and event[2] == timer then
           break
-        elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key" then
+        elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key"
+            or event[1] == "monitor_resize" or event[1] == "term_resize" then
           services:tick(nil, event)
         end
       end
@@ -208,11 +209,14 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
       end
       services:tick()
       if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
-        local confirmed = true
+        handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
+        local confirmed = quiesce_opts.no_actuators == true
         if type(quiesce_opts.on_quiesce) == "function" then
           local ok3, result3 = pcall(quiesce_opts.on_quiesce)
           if ok3 then
-            confirmed = result3 ~= false
+            -- Safety acknowledgement is fail-closed: nil/omitted results are
+            -- not proof that physical outputs reached their safe state.
+            confirmed = result3 == true
           else
             confirmed = false
             pcall(function()

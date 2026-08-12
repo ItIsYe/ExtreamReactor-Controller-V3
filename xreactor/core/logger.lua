@@ -55,17 +55,6 @@ local function safe_print(message)
   end
 end
 
-local function summarize_startup_action(action)
-  if type(action) ~= "string" then
-    return tostring(action)
-  end
-  local marker = action:find("%(", 1, true)
-  if marker and marker > 1 then
-    return action:sub(1, marker - 1)
-  end
-  return action
-end
-
 local function now_stamp()
   return os.date("!%H:%M:%S")
 end
@@ -477,33 +466,31 @@ local function flush_buffer_to_dir(target_dir)
   local path = string.format("%s/%s.log", target_dir, state.log_name or "xreactor")
   local dir_ok, dir_reason = ensure_dir(target_dir)
   if not dir_ok then
-    -- Cannot create log dir: degrade to memory-only, do not crash.
     state.disk_error = "ensure_dir:" .. tostring(dir_reason)
-    return
+    return false, state.disk_error
   end
+
   local pending_bytes = estimate_buffer_bytes()
   local preflight_ok, preflight_reason = preflight_write(target_dir, path, pending_bytes)
   if not preflight_ok then
-    -- Preflight failed: degrade to memory-only, do not crash.
     state.disk_error = "preflight:" .. tostring(preflight_reason)
-    return
+    return false, state.disk_error
   end
+
   local rotate_ok, rotate_reason = rotate_log_if_needed(path, target_dir)
   if not rotate_ok then
-    -- Rotation failed: continue writing to existing file, do not crash.
+    -- Rotation failure alone does not forbid appending to the current file.
+    -- Keep the diagnostic but continue with the write attempt.
     state.disk_error = "rotate:" .. tostring(rotate_reason)
   end
+
   local file
   local open_ok, open_result = pcall(fs.open, path, "a")
-  if open_ok then
-    file = open_result
-  end
+  if open_ok then file = open_result end
   if not file then
-    local cleanup = cleanup_log_workspace(target_dir, state.log_name and (state.log_name .. ".log") or nil, true)
+    cleanup_log_workspace(target_dir, state.log_name and (state.log_name .. ".log") or nil, true)
     local retry_ok, retry_result = pcall(fs.open, path, "a")
-    if retry_ok then
-      file = retry_result
-    end
+    if retry_ok then file = retry_result end
     if not file then
       local _, free_now = get_free_space(target_dir)
       local failure = open_ok and "open-returned-nil" or ("open-error:" .. summarize_error(open_result))
@@ -512,47 +499,79 @@ local function flush_buffer_to_dir(target_dir)
       elseif not retry_result then
         failure = failure .. "|retry-returned-nil"
       end
-      -- File open failed: degrade to memory-only mode, DO NOT crash.
       state.disk_error = "open:" .. failure
       state.disk_error_free = free_now
       state.disk_writes_suppressed = (state.disk_writes_suppressed or 0) + #state.buffer
-      return
+      return false, state.disk_error
     end
   end
+
   for index, line in ipairs(state.buffer) do
     local write_ok, write_err = pcall(file.write, line .. "\n")
     if not write_ok then
       local _, free_now = get_free_space(target_dir)
       pcall(file.close)
-      -- Disk full or write error: degrade to memory-only mode, DO NOT crash.
       state.disk_error = "write:" .. summarize_error(write_err)
       state.disk_error_free = free_now
       state.disk_writes_suppressed = (state.disk_writes_suppressed or 0) + (#state.buffer - index + 1)
-      -- Drop remaining lines from this flush to avoid partial writes.
-      return
+      return false, state.disk_error
     end
   end
+
   local close_ok, close_err = pcall(file.close)
   if not close_ok then
     local _, free_now = get_free_space(target_dir)
-    -- Close failure: record but do not crash.
     state.disk_error = "close:" .. summarize_error(close_err)
     state.disk_error_free = free_now
+    return false, state.disk_error
   end
-  -- Success: clear any previous disk error so recovery is visible in status.
+
   state.disk_error = nil
   state.disk_error_free = nil
   state.log_dir = target_dir
   state.log_path = path
+  return true
+end
+
+local function call_flush_buffer_to_dir(target_dir)
+  local call_ok, flushed, reason = pcall(flush_buffer_to_dir, target_dir)
+  if not call_ok then return false, tostring(flushed) end
+  if flushed ~= true then return false, tostring(reason or state.disk_error or "flush failed") end
+  return true
+end
+
+local function enter_emergency_buffer(reason)
+  if not state.warn_once then
+    state.warn_once = true
+    safe_print("WARN: LOGGING_DISABLED_NONFATAL mode=EMERGENCY_BUFFER_ONLY")
+  end
+  state.degraded_mode = "EMERGENCY_BUFFER_ONLY"
+  state.degraded_reason = tostring(reason or "write unavailable")
+  state.emergency_drop = false
+  while #state.buffer > (state.emergency_buffer_limit or 32) do
+    table.remove(state.buffer, 1)
+  end
+  state.last_flush = os.clock()
+  return true
+end
+
+local function accept_local_fallback(reason)
+  state.log_source = "runtime-fallback-local"
+  state.degraded_mode = "LOCAL_FALLBACK"
+  state.degraded_reason = tostring(reason or "primary target unavailable")
+  state.emergency_drop = false
+  state.buffer = {}
+  state.last_flush = os.clock()
+  if not state.warn_once then
+    state.warn_once = true
+    safe_print("WARN: LOGGER_DEGRADED mode=LOCAL_FALLBACK_NONFATAL")
+  end
+  return true
 end
 
 local function flush_if_needed(force)
-  if not state.enabled then
-    return true
-  end
-  if #state.buffer == 0 then
-    return true
-  end
+  if not state.enabled then return true end
+  if #state.buffer == 0 then return true end
   local elapsed = os.clock() - (state.last_flush or 0)
   if not force and #state.buffer < CONFIG.FLUSH_LINES and elapsed < CONFIG.FLUSH_INTERVAL then
     return true
@@ -565,69 +584,29 @@ local function flush_if_needed(force)
     if not target_ok then
       local recovered_ok, recovered_reason = runtime_recover_space(state.log_dir, path, pending)
       if not recovered_ok then
-        local fallback_ok, fallback_err = pcall(flush_buffer_to_dir, DEFAULT_LOG_DIR)
+        local fallback_ok, fallback_reason = call_flush_buffer_to_dir(DEFAULT_LOG_DIR)
         if fallback_ok then
-          if not state.warn_once then
-            state.warn_once = true
-            safe_print("WARN: LOGGER_DEGRADED mode=LOCAL_FALLBACK_NONFATAL")
-          end
-          state.log_source = "runtime-fallback-local"
-          state.buffer = {}
-          state.last_flush = os.clock()
-          state.degraded_mode = "LOCAL_FALLBACK"
-          state.degraded_reason = tostring(target_reason) .. " | " .. tostring(recovered_reason)
-          return true
+          return accept_local_fallback(tostring(target_reason) .. " | " .. tostring(recovered_reason))
         end
-        if not state.warn_once then
-          state.warn_once = true
-          safe_print("WARN: LOGGING_DISABLED_NONFATAL mode=EMERGENCY_BUFFER_ONLY")
-        end
-        state.degraded_mode = "EMERGENCY_BUFFER_ONLY"
-        state.degraded_reason = tostring(target_reason) .. " | recover=" .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_err)
-        safe_print("WARN: logger degraded; disk unavailable; local fallback failed; emergency logging only")
-        while #state.buffer > (state.emergency_buffer_limit or 32) do
-          table.remove(state.buffer, 1)
-        end
-        state.last_flush = os.clock()
-        return true
+        return enter_emergency_buffer(tostring(target_reason) .. " | recover="
+          .. tostring(recovered_reason) .. " | fallback=" .. tostring(fallback_reason))
       end
     end
   end
 
-  local ok, err = pcall(flush_buffer_to_dir, state.log_dir or CONFIG.LOG_DIR)
-  if not ok and (state.log_dir ~= DEFAULT_LOG_DIR) then
-    local fallback_ok, fallback_err = pcall(flush_buffer_to_dir, DEFAULT_LOG_DIR)
-      if fallback_ok then
-        if not state.warn_once then
-          state.warn_once = true
-          safe_print("WARN: LOGGER_DEGRADED mode=LOCAL_FALLBACK_NONFATAL")
-        end
-        state.log_source = "runtime-fallback-local"
-        state.degraded_mode = "LOCAL_FALLBACK"
-        state.degraded_reason = tostring(err)
-      ok = true
-    else
-      err = tostring(err) .. " | fallback=" .. tostring(fallback_err)
-    end
+  local ok, err = call_flush_buffer_to_dir(state.log_dir or CONFIG.LOG_DIR)
+  if not ok and state.log_dir ~= DEFAULT_LOG_DIR then
+    local fallback_ok, fallback_err = call_flush_buffer_to_dir(DEFAULT_LOG_DIR)
+    if fallback_ok then return accept_local_fallback(err) end
+    err = tostring(err) .. " | fallback=" .. tostring(fallback_err)
   end
+
+  if not ok then return enter_emergency_buffer(err) end
 
   state.buffer = {}
   state.last_flush = os.clock()
-  if not ok and not state.warn_once then
-    state.warn_once = true
-    safe_print("WARN: LOGGING_DISABLED_NONFATAL mode=EMERGENCY_DROP")
-  end
-  if not ok then
-    state.degraded_mode = "LOGGING_DISABLED_NONFATAL"
-    state.degraded_reason = tostring(err)
-    state.emergency_drop = true
-    safe_print("WARN: logger degraded; emergency logging only")
-    return true
-  end
-  if state.degraded_mode ~= "DISK_OK" then
-    state.degraded_mode = "DISK_OK"
-    state.degraded_reason = nil
-  end
+  state.degraded_mode = "DISK_OK"
+  state.degraded_reason = nil
   state.emergency_drop = false
   return true
 end
@@ -772,6 +751,9 @@ function logger.init(opts)
     state.buffer = {}
     state.startup_action = "none"
     state.emergency_drop = false
+    state.degraded_mode = "DISK_OK"
+    state.degraded_reason = nil
+    state.warn_once = false
     if state.enabled then
       local startup_mode = CONFIG.STARTUP_MODE
       if opts.truncate ~= nil then

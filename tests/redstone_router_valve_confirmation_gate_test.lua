@@ -56,6 +56,7 @@ local function ack(router, integrator, side, applied, high)
   if not entry then error('no pending command for ' .. key) end
   router:handle_valve_ack({
     type = 'VALVE_ACK', command_id = entry.command_id,
+    src = entry.dst, dst = entry.src,
     applied = applied, high = (high == nil) and entry.high or high,
   })
 end

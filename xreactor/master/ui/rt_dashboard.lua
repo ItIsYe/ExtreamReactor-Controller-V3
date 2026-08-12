@@ -1,5 +1,4 @@
 local mux = require("core.mockup_ui")
-local colors = require("shared.colors")
 
 local function status_weight(status)
   local s = tostring(status or "OFFLINE"):upper()
@@ -126,6 +125,24 @@ local function safe_text(value, fallback)
   return fallback or "-"
 end
 
+local function shutdown_verdict(rt)
+  local stage = tostring(first_text(rt and rt.shutdown_stage))
+  local outcome = tostring(first_text(rt and rt.shutdown_outcome))
+  local reason = tostring(first_text(rt and rt.shutdown_reason))
+  if outcome == "SUCCESS" or stage == "COMPLETED" or reason == "SUCCESS_COMPLETED" then
+    return "SD:OK"
+  end
+  if outcome == "FAILED" or stage == "FAILED" or reason:find("FAILED_", 1, true) == 1 then
+    local detail = reason ~= "-" and reason or (stage ~= "-" and stage or outcome)
+    return "SD:FAIL " .. safe_text(detail, "?"):sub(1, 18)
+  end
+  if outcome == "CANCELLED" or stage == "CANCELLED_DEMAND_RECOVERED" or reason == "CANCELLED_DEMAND_RECOVERED" then
+    return "SD:CANCELLED"
+  end
+  if stage ~= "-" then return "SD:" .. safe_text(stage, "-"):sub(1, 18) end
+  return "SD:-"
+end
+
 local function render_rt_card(mon, x, y, w, rt, hits)
   local node_id = safe_text(rt.id or rt.node_id, "UNKNOWN")
   local maintenance = rt.maintenance_mode == true
@@ -146,7 +163,7 @@ local function render_rt_card(mon, x, y, w, rt, hits)
   mux.data_row(mon, bx, by + 3, bw, { label = "RUN", value = rt_runtime_summary(rt), status = "text" })
   mux.data_row(mon, bx, by + 4, bw, { label = "SEEN", value = tostring(rt.last_seen_age or "-") .. "s | " .. safe_text(rt.assignment_state, "-"), status = "muted" })
   mux.data_row(mon, bx, by + 5, bw, { label = "SRC", value = safe_text(rt.control_source, "-") .. " | " .. safe_text(rt.display_mode, "-"), status = "muted" })
-  mux.data_row(mon, bx, by + 6, bw, { label = "QUEUE", value = safe_text(rt.queue_state, "idle") .. " | " .. safe_text(rt.queue_step, "-"), status = "muted" })
+  mux.data_row(mon, bx, by + 6, bw, { label = "QUEUE / SD", value = safe_text(rt.queue_state, "idle") .. " | " .. safe_text(rt.queue_step, "-") .. " | " .. shutdown_verdict(rt), status = "muted" })
   mux.outlined_progress(mon, bx, by + 7, bw, math.max(0, math.min(100, actual)) / 100, status_key, nil)
 end
 

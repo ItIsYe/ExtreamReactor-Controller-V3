@@ -209,26 +209,6 @@ local function make_dispatch()
       end
       return { ok = true, persisted = persisted }
     end,
-    -- REMOTE_UPDATE: Nicht direkt ausfuehren — Flag setzen fuer den
-    -- Haupt-Thread. CC:Tweaked http.get() ist async und sendet http_success/
-    -- http_failure Events. Diese koennen nicht ankommen wenn wir uns bereits
-    -- in einem os.pullEvent-Handler (modem_message) befinden — der Installer
-    -- wuerde ewig blockieren. Deferred-Ausfuehrung nach dem aktuellen Tick
-    -- im Haupt-Thread loest das Problem.
-    ["REMOTE_UPDATE"] = function(_, ctx)
-      if type(ctx.set_pending_remote_update) == "function" then
-        ctx.set_pending_remote_update()
-        if type(ctx.log) == "function" then
-          ctx.log("WARN", "Remote-Update: Command empfangen, starte nach aktuellem Tick...")
-        end
-      else
-        -- Fallback fuer aeltere ctx-Versionen ohne deferred support
-        require("core.remote_update").handle_command({
-          log_fn = type(ctx.log) == "function" and ctx.log or nil,
-        })
-      end
-      return nil
-    end
   }
 end
 
@@ -274,14 +254,6 @@ local function new(ctx)
       log_result("UNKNOWN", result)
       return result
     end
-    -- REMOTE_UPDATE darf auch im SAFE-Mode laufen (Update könnte genau den
-    -- Bug beheben, der zum SAFE-Mode geführt hat).
-    if command.target == "REMOTE_UPDATE" then
-      local handler = dispatch_by_target["REMOTE_UPDATE"]
-      handler(command, ctx)
-      return record({ ok = true })
-    end
-
     if ctx.get_current_state() == ctx.STATE.SAFE then
       local result = record({ ok = false, error = "safe: ignoring commands", reason_code = "SAFE_MODE" })
       log_result(command.target or "UNKNOWN", result)

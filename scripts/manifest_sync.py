@@ -169,6 +169,7 @@ def all_entries(base_files, dev_files, roles):
 def main():
     parser = argparse.ArgumentParser(description="Validate/sync xreactor manifest entries")
     parser.add_argument("--write", action="store_true", help="Rewrite manifest with current file size/hash values")
+    parser.add_argument("--check", action="store_true", help="Check-only mode (default: check without writing)")
     args = parser.parse_args()
 
     top, base_files, dev_files, roles = parse_manifest(MANIFEST_PATH)

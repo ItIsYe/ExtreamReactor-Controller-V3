@@ -20,44 +20,6 @@ local CONFIG = {
   DEFAULT_COMMS_PEER_TIMEOUT = 12.0, -- Seconds before marking peer down.
   DEFAULT_COMMS_QUEUE_LIMIT = 200, -- Max queued outbound messages.
   DEFAULT_COMMS_DROP_SIMULATION = 0, -- Drop rate (0-1) for testing comms.
-  -- Control rails tuning (shared defaults for RT nodes).
-  DEFAULT_RAILS = {
-    ramp_profiles = {
-      NORMAL = { up = 1.0, down = 1.0 },
-      SLOW = { up = 0.5, down = 0.5 },
-      FAST = { up = 1.5, down = 1.5 }
-    },
-    turbine_flow = {
-      deadband_up = 20,
-      deadband_down = 20,
-      hysteresis_up = 10,
-      hysteresis_down = 10,
-      max_step_up = 50,
-      max_step_down = 50,
-      cooldown_s = 1.0,
-      min = 200,
-      max = 1900,
-      ema_alpha = 0.2
-    },
-    reactor_rods = {
-      deadband_up = 5000,
-      deadband_down = 5000,
-      hysteresis_up = 500,
-      hysteresis_down = 500,
-      max_step_up = 5,
-      max_step_down = 5,
-      cooldown_s = 1.5,
-      min = 0,
-      max = 98,
-      ema_alpha = 0.25
-    },
-    coil = {
-      engage_rpm = 850,
-      disengage_rpm = 750,
-      cooldown_s = 1.0,
-      ema_alpha = 0.2
-    }
-  },
   DEFAULT_DEBUG_LOGGING = false, -- Enable debug logging to /xreactor_logs/fuel.log.
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
   -- Logistics routing for the FUEL node.
@@ -166,8 +128,7 @@ local CONFIG = {
   },
 }
 -- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md, Punkt 28.1). "rails = CONFIG.DEFAULT_RAILS"
--- und "logistics = CONFIG.DEFAULT_LOGISTICS" standen bisher INNERHALB
+-- PERFORMANCE_2026-07-12.md, Punkt 28.1). "logistics = CONFIG.DEFAULT_LOGISTICS" stand bisher INNERHALB
 -- von CONFIG's eigenem Tabellenkonstruktor -- zu diesem Zeitpunkt ist
 -- die lokale Variable "CONFIG" noch nicht zugewiesen (klassische Lua-
 -- Falle: die Zuweisung passiert erst, wenn der GESAMTE rechte Ausdruck
@@ -178,7 +139,6 @@ local CONFIG = {
 -- -- niemand hat diese Datei je erfolgreich geladen. Jetzt als separate
 -- Zuweisungen NACH dem Tabellenkonstruktor, wenn CONFIG bereits
 -- existiert.
-CONFIG.rails     = CONFIG.DEFAULT_RAILS
 CONFIG.logistics = CONFIG.DEFAULT_LOGISTICS
 -- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
 -- PERFORMANCE_2026-07-12.md, Punkt 28.1). Diese Datei hatte bisher

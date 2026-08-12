@@ -3,9 +3,9 @@
 Distributed CC:Tweaked controller for **Extreme Reactors 2** (reactors + turbines), **Mekanism Induction Matrices**, and supporting infrastructure. One MASTER computer coordinates state, setpoints, telemetry, alerts, and UI. Hardware control stays strictly local to the node that owns the peripherals.
 
 > **Branch:** `beta` — active development.
-> **Manifest / Release:** `manifest-v358` / `beta-v358` · ATM10 (MC 1.21.1)
-> **Status:** Phase 1–4 rewrite complete. Since v274: a new shared "Mockup Dashboard Toolkit" (`core/mockup_ui.lua`) was rolled out across most node-local displays and 4 new AUX pages (Maintenance, Updates, System Map, Config Editor); several critical data-pipeline bugs were found and fixed (see RUNTIME_STATUS_2026-06-03.md for full details, including a `refresh_bindings()` early-return bug that silently left `devices.turbines`/`devices.reactors` empty forever once triggered); and RT nodes with more than one reactor now regulate each reactor independently based on its own internal steam fill ratio (configurable target, default 50%, editable live via the Config Editor).
-> See [REWRITE_SPEC.md](REWRITE_SPEC.md) for the full rewrite reference and [RUNTIME_STATUS_2026-06-03.md](RUNTIME_STATUS_2026-06-03.md) for session history.
+> **Manifest / Release:** `manifest-v548` / `beta-v548` · ATM10 (MC 1.21.1)
+> **Status:** Phase 1–4 rewrite complete. Since v274: a new shared "Mockup Dashboard Toolkit" (`core/mockup_ui.lua`) was rolled out across most node-local displays and 4 new AUX pages (Maintenance, Updates, System Map, Config Editor); several critical data-pipeline bugs were found and fixed, including a `refresh_bindings()` early-return bug that silently left `devices.turbines`/`devices.reactors` empty forever once triggered; and RT nodes with more than one reactor now regulate each reactor independently based on its own internal steam fill ratio (configurable target, default 50%, editable live via the Config Editor).
+> See [docs/README.md](docs/README.md) for the current documentation index (the original `REWRITE_SPEC.md`/`RUNTIME_STATUS_2026-06-03.md` session-history files have since been removed as outdated; see git history for their content).
 
 ---
 
@@ -264,4 +264,4 @@ These were real bugs found and fixed during the 2026-06-30/07-01 hardening sessi
 
 ## Known Open Issues
 
-One open item: AUX:ALERTS page is being reworked further by another collaborator (state at v356) — see docs/SESSION_HANDOFF.md. If something else regresses, see RUNTIME_STATUS_2026-06-03.md for the full, dated session log.
+See docs/SESSION_HANDOFF.md and docs/README.md for the current list of open items and documentation index. Older dated session logs referenced here previously (`RUNTIME_STATUS_2026-06-03.md`, `REWRITE_SPEC.md`) have been removed from the repo; use `git log` for that history if needed.

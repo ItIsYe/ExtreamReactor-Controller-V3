@@ -60,8 +60,7 @@ local function load_module(path, env)
 end
 
 local function load_manifest_mod()
-  -- manifest.lua only needs fs for M.is_current(), which this test never
-  -- calls -- M.crc32 is pure and needs no CC:Tweaked globals at all.
+  -- M.crc32 is pure and needs no CC:Tweaked globals at all.
   local env = setmetatable({}, { __index = _G })
   return load_module("xreactor/installer/manifest.lua", env)
 end

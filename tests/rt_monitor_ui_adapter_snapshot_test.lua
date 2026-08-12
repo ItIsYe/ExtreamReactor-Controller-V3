@@ -9,13 +9,13 @@ end
 
 local function reset_modules()
   package.loaded['nodes.rt.monitor_ui'] = nil
-  package.loaded['core.ui'] = {
+  package.loaded['core.ui'] = setmetatable({
     getSize = function() return 20, 10 end,
     panel = function() end,
     badge = function() end,
     text = function() end,
     list = function() end,
-  }
+  }, { __index = function() return function() end end })
   package.loaded['core.ui_router'] = {
     new = function(opts)
       return {

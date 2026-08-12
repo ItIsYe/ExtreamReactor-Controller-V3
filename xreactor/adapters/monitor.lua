@@ -4,6 +4,8 @@ local monitor = {}
 local warned = {}
 local scale_cache = setmetatable({}, { __mode = "k" })
 local scale_cache_by_name = {}
+local wrapper_cache_by_name = {}
+local shape_cache_by_name = {}
 local known_monitor_names = {}
 
 local function log_once(prefix, key, message)
@@ -16,11 +18,19 @@ end
 
 local function wrap_monitor(name, log_prefix)
   if not name or not peripheral.isPresent(name) then
+    if name then wrapper_cache_by_name[tostring(name)] = nil end
     return nil
   end
+  local cache_name = tostring(name)
+  if wrapper_cache_by_name[cache_name] then
+    return wrapper_cache_by_name[cache_name]
+  end
   local mon, err = utils.safe_wrap(name)
-  if not mon and err then
-    log_once(log_prefix, "wrap:" .. tostring(name), "Monitor wrap failed for " .. tostring(name) .. ": " .. tostring(err))
+  if mon then
+    wrapper_cache_by_name[cache_name] = mon
+    known_monitor_names[cache_name] = true
+  elseif err then
+    log_once(log_prefix, "wrap:" .. cache_name, "Monitor wrap failed for " .. cache_name .. ": " .. tostring(err))
   end
   return mon, err
 end
@@ -85,6 +95,8 @@ local function clear_name_cache(name)
     return
   end
   scale_cache_by_name[cache_name] = nil
+  wrapper_cache_by_name[cache_name] = nil
+  shape_cache_by_name[cache_name] = nil
   known_monitor_names[cache_name] = nil
 end
 
@@ -98,7 +110,11 @@ end
 -- Mindestgroesse: mehr als 3 Zeilen ODER mehr als 1 Spalte QUALIFIZIERT
 -- einen Monitor als potenziellen Hauptmonitor; ein reiner 1x3 (oder noch
 -- kleinerer) wird hier abgelehnt, auch wenn er preferred_name entspricht.
-local function is_too_small_for_main(mon)
+local function is_too_small_for_main(mon, name)
+  local cache_name = tostring(name or "")
+  if cache_name ~= "" and shape_cache_by_name[cache_name] ~= nil then
+    return shape_cache_by_name[cache_name]
+  end
   -- Fix (2026-07-09): CRITICAL. Diese Funktion mass bisher bei der
   -- AKTUELLEN Skala des Monitors -- Monitore merken sich ihre Skala aber
   -- als PHYSISCHE Block-Eigenschaft, unabhaengig von Software-Neuinstalls.
@@ -122,26 +138,39 @@ local function is_too_small_for_main(mon)
   -- Verifizierte Formel (siehe optional/ampel.lua): 1 Block breit x 3
   -- Bloecke hoch bei Skala 1 = exakt 7x19 Zeichen. Kleine Toleranz fuer
   -- Hoehe (17-21), falls die tatsaechliche Bauhoehe leicht abweicht.
-  return w == 7 and h >= 17 and h <= 21
+  local too_small = w == 7 and h >= 17 and h <= 21
+  if cache_name ~= "" then
+    shape_cache_by_name[cache_name] = too_small
+    known_monitor_names[cache_name] = true
+  end
+  return too_small
 end
 
 function monitor.find(preferred_name, strategy, scale, log_prefix)
+  -- Keep cache lifetime tied to the physical peripheral inventory. This is
+  -- deliberately done once per discovery call: a periodic scan reuses the
+  -- same wrapper/shape result while a real detach removes all name-scoped
+  -- cache state before a later reconnect with the same peripheral name.
+  local names = peripheral.getNames() or {}
+  monitor.sync_names(names)
+
   if preferred_name and peripheral.getType(preferred_name) == "monitor" then
     local mon = wrap_monitor(preferred_name, log_prefix)
-    if mon and not is_too_small_for_main(mon) then
+    local too_small = mon and is_too_small_for_main(mon, preferred_name)
+    if mon and not too_small then
       maybe_set_scale(mon, preferred_name, scale, log_prefix)
       return { name = preferred_name, mon = mon }
     end
-    if mon and is_too_small_for_main(mon) then
+    if mon and too_small then
       log_once(log_prefix, "preferred_too_small:" .. tostring(preferred_name),
         "Configured monitor " .. tostring(preferred_name) .. " is 1x3 (Ampel-sized) - refusing to use it as the main monitor, searching for another one")
     end
   end
   local candidates = {}
-  for _, name in ipairs(peripheral.getNames() or {}) do
+  for _, name in ipairs(names) do
     if peripheral.getType(name) == "monitor" then
       local mon = wrap_monitor(name, log_prefix)
-      if mon and not is_too_small_for_main(mon) then
+      if mon and not is_too_small_for_main(mon, name) then
         table.insert(candidates, { name = name, mon = mon })
       end
     end

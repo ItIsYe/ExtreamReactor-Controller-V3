@@ -18,6 +18,7 @@
 --   get_router = function() -> logistics_router-Instanz (fuer get_summary()),
 
 local M = {}
+local operational_summary = require("nodes.fuel.operational_summary")
 
 function M.build_status_payload(ctx)
   local health = ctx.health
@@ -41,7 +42,7 @@ function M.build_status_payload(ctx)
   fuel_health.capabilities = { storage = config.storage_bus ~= nil }
 
   local payload = non_rt_payload.build_base({
-    ts = os.epoch("utc"), role = config.role, node_id = config.node_id,
+    ts = os.epoch("utc"), role = config.role, node_id = ctx.node_id or config.node_id,
     health = { status = fuel_health.status, reasons = health.reasons_list(fuel_health), last_seen_ts = fuel_health.last_seen_ts, bindings = fuel_health.bindings, capabilities = fuel_health.capabilities },
     discovery_failed = devices.discovery_failed, master_connected = master_ok,
     master_seen_s = ctx.master_seen_ts and math.max(0, math.floor((os.epoch("utc") - ctx.master_seen_ts) / 1000)) or nil,
@@ -64,7 +65,24 @@ function M.build_status_payload(ctx)
   payload.reserve = amount
   payload.minimum_reserve = ctx.reserve
   payload.sources = { { id = devices.storage_name or "unknown", amount = amount } }
-  payload.logistics = ctx.get_router():get_summary()
+
+  -- The Logistics router remains the authority for whether a fuel sample is
+  -- actually fresh enough to use. operational_summary only projects that
+  -- existing truth together with cache age and Redstone-router readiness for
+  -- UI/diagnostics; it never makes or changes a delivery decision.
+  local logistics_router = ctx.get_router()
+  local logistics = logistics_router:get_summary()
+  local rs_router = nil
+  if ctx.get_rs_router then
+    local ok_rs, value = pcall(ctx.get_rs_router)
+    if ok_rs then rs_router = value end
+  end
+  payload.logistics = operational_summary.enrich(logistics, {
+    config = config,
+    fuel_status = logistics_router.fuel_status,
+    rs_router = rs_router,
+  })
+
   payload.bindings = fuel_health.bindings
   payload.bindings_summary = health.summarize_bindings(fuel_health.bindings)
   -- Feature (2026-07-12): REST-P1.3 (siehe docs/CODING_AI_FUEL_UI_
@@ -74,15 +92,15 @@ function M.build_status_payload(ctx)
   -- werden jetzt Teil des Payloads, damit sowohl Header/Banner/Ampel als
   -- auch Diagnostics dieselbe zugrunde liegende Wahrheit verwenden.
   payload.routing_load_status = ctx.routing_load_status
-  if ctx.get_rs_router then
-    local ok_rs, rs = pcall(ctx.get_rs_router)
-    if ok_rs and rs and rs.get_valve_status then
-      local ok_vs, valve_status = pcall(rs.get_valve_status, rs)
-      if ok_vs then
-        local offline = 0
-        for _, vs in ipairs(valve_status) do if vs.online == false then offline = offline + 1 end end
-        payload.valve_summary = { total = #valve_status, offline = offline }
+  if rs_router and rs_router.get_valve_status then
+    local ok_vs, valve_status = pcall(rs_router.get_valve_status, rs_router)
+    if ok_vs then
+      local offline, stale = 0, 0
+      for _, vs in ipairs(valve_status) do
+        if vs.online == false then offline = offline + 1
+        elseif vs.stale == true then stale = stale + 1 end
       end
+      payload.valve_summary = { total = #valve_status, offline = offline, stale = stale }
     end
   end
   return payload

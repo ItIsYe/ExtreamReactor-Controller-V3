@@ -335,14 +335,31 @@ end
 -- Writes, ruecklaufkompatibel ohne ctrl fuer andere Aufrufer
 -- (module_lifecycle.lua's Start-Rampe).
 function M.setTurbineActive(ctx, turbine, caps, active, ctrl)
-  if ctrl and ctrl.active_state == active then return true end
-  if caps.setActive then
-    turbine.setActive(active)
-    if ctrl then ctrl.active_state = active end
+  -- A cached value is not a live hardware observation. Reconcile getActive()
+  -- first so an externally stopped/reset turbine is actively restored.
+  if caps.getActive and type(turbine.getActive) == "function" then
+    local ok_read, actual = pcall(turbine.getActive)
+    if ok_read and type(actual) == "boolean" then
+      if ctrl then ctrl.active_state = actual end
+      if actual == active then return true end
+    end
+  elseif ctrl and ctrl.active_state == active then
     return true
   end
-  if ctrl then ctrl.active_state = active end
-  return true  -- keine API = trotzdem weitermachen
+  if caps.setActive then
+    local result = turbine.setActive(active)
+    if result == false then return false end
+    if ctrl then ctrl.active_state = active end
+    if caps.getActive and type(turbine.getActive) == "function" then
+      local ok_read, actual = pcall(turbine.getActive)
+      if not ok_read or type(actual) ~= "boolean" or actual ~= active then
+        if ctrl and ok_read and type(actual) == "boolean" then ctrl.active_state = actual end
+        return false
+      end
+    end
+    return true
+  end
+  return false
 end
 
 local function warn_unsupported(ctx, name, reason)
@@ -409,19 +426,92 @@ function M.update_inductor_for_rpm(ctx, name, turbine, caps, rpm, target_rpm)
 
   if engaged == ctrl.inductor_engaged then return true, true, measured_api end
   if not caps.setInductorEngaged then
-    ctrl.inductor_engaged = engaged
-    return true, true, "inductor-write-unavailable"
+    -- Desired state is not a confirmed hardware state. Keep the last
+    -- confirmed/read-back value so the next control tick continues trying.
+    return false, false, "inductor-write-unavailable"
   end
 
-  ctrl.inductor_engaged = engaged
-  state.last_change_ts = now
   local ok, applied = pcall(setInductor, turbine, caps, engaged)
   if ok and applied then
+    ctrl.inductor_engaged = engaged
+    state.last_change_ts = now
     local reason = is_overspeed and "OVERSPEED_BRAKE" or "TARGET_TRACKING"
     if ctrl.mode == "OVERSPEED_BRAKE" then reason = "OVERSPEED_BRAKE" end
     ctrl.last_coil_reason = reason
   end
   return ok, applied, measured_api
+end
+
+-- Explicit update-safe turbine state: flow limit 0, inactive, and coil
+-- engaged where supported. A fresh flow readback is mandatory; optional
+-- active/inductor readbacks are mandatory when the corresponding getter exists.
+function M.apply_update_quiesce(ctx)
+  local result = { ok = true, turbines = {} }
+  for _, name in ipairs(ctx.config.turbines or {}) do
+    local item = { name = name }
+    local turbine = ctx.peripherals and ctx.peripherals.turbines and ctx.peripherals.turbines[name] or nil
+    if not turbine and ctx.utils and type(ctx.utils.safe_wrap) == "function" then
+      turbine = select(1, ctx.utils.safe_wrap(name))
+    end
+    item.present = turbine ~= nil
+    if not turbine then
+      item.ok = false
+      result.ok = false
+      result.turbines[#result.turbines + 1] = item
+      goto continue
+    end
+
+    local caps = M.get_device_caps(ctx, "turbines", name)
+    local ok_flow, flow_applied = pcall(setTurbineFlow, ctx, turbine, caps, 0)
+    item.flow_write = ok_flow and flow_applied == true
+    local flow, flow_source = M.read_turbine_flow(ctx, turbine, caps)
+    item.flow = flow
+    item.flow_source = flow_source
+    item.flow_safe = type(flow) == "number" and math.abs(flow) <= 0.01
+
+    item.active_safe = true
+    if type(turbine.setActive) == "function" then
+      local ok_set, set_result = pcall(turbine.setActive, false)
+      item.active_write = ok_set and set_result ~= false
+      if type(turbine.getActive) == "function" then
+        local ok_read, active = pcall(turbine.getActive)
+        item.active_readback = ok_read and type(active) == "boolean"
+        item.active = active
+        item.active_safe = ok_read and active == false
+      else
+        item.active_safe = item.active_write
+      end
+    end
+
+    item.inductor_safe = true
+    if type(turbine.setInductorEngaged) == "function" then
+      local ok_set, set_result = pcall(turbine.setInductorEngaged, true)
+      item.inductor_write = ok_set and set_result ~= false
+      if type(turbine.getInductorEngaged) == "function" then
+        local ok_read, engaged = pcall(turbine.getInductorEngaged)
+        item.inductor_readback = ok_read and type(engaged) == "boolean"
+        item.inductor_engaged = engaged
+        item.inductor_safe = ok_read and engaged == true
+      else
+        item.inductor_safe = item.inductor_write
+      end
+    end
+
+    item.ok = item.flow_write and item.flow_safe and item.active_safe and item.inductor_safe
+    if item.ok then
+      local ctrl = get_turbine_ctrl(ctx, name)
+      ctrl.flow = 0
+      ctrl.requested_flow = 0
+      ctrl.confirmed_flow = 0
+      ctrl.active_state = false
+      if item.inductor_write then ctrl.inductor_engaged = true end
+    else
+      result.ok = false
+    end
+    result.turbines[#result.turbines + 1] = item
+    ::continue::
+  end
+  return result.ok, result
 end
 
 -- ── Overspeed-Brake-Coil ────────────────────────────────────────────────────
@@ -432,7 +522,7 @@ local function enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, deci
   end
   if ctrl.inductor_engaged == true then return true, "already-engaged" end
   if not (caps and caps.setInductorEngaged) then
-    ctrl.inductor_engaged = true
+    -- Do not mark the brake as engaged without a successful actuator write.
     return false, "inductor-write-unavailable"
   end
   local ok, applied = pcall(setInductor, turbine, caps, true)
@@ -617,40 +707,6 @@ end
 
 -- ── Flow-Apply ───────────────────────────────────────────────────────────────
 
-local function resolve_turbine_target_state(ctx, ctrl, decision, reason, readback_state)
-  local target_action = ctx.flow_apply_helpers.resolve_target_action(reason, decision)
-  if ctrl.target_holding_active then
-    target_action = "TARGET_HOLD_STABLE"
-  elseif ctrl.target_trim_active then
-    target_action = decision and decision.target_band_mode or target_action
-  end
-  local active_trim = ctrl.target_trim_active
-    or target_action == "TARGET_TRIM_UP" or target_action == "TARGET_TRIM_DOWN"
-  local hold_active = ctrl.target_holding_active and target_action == "TARGET_HOLD_STABLE"
-  if active_trim and readback_state == "READBACK_LAG" then
-    target_action = "ACTIVE_TRIM_WITH_READBACK_LAG"
-  elseif active_trim and readback_state == "PENDING_MISMATCH" then
-    target_action = "TRIM_PENDING_CONFIRMATION"
-  elseif hold_active and readback_state == "CONFIRMED_MATCH" then
-    target_action = "HOLD_CONFIRMED"
-  end
-  local down_limited = tostring(reason):find("MIN_LIMIT_OVERSPEED", 1, true) ~= nil
-  local up_limited   = tostring(reason):find("MAX_LIMIT_UNDERSPEED", 1, true) ~= nil
-  ctrl.target_trim_state = active_trim
-    and (decision and decision.target_band_mode or "ACTIVE_TRIM") or "NONE"
-  if down_limited or (decision and decision.target_band_at_min_limit) then
-    ctrl.flow_limit_state = "MIN_LIMIT"
-  elseif up_limited or (decision and decision.target_band_at_max_limit) then
-    ctrl.flow_limit_state = "MAX_LIMIT"
-  else
-    ctrl.flow_limit_state = "NONE"
-  end
-  return {
-    target_action = target_action, active_trim = active_trim,
-    hold_active = hold_active, down_limited = down_limited, up_limited = up_limited
-  }
-end
-
 local function apply_turbine_flow_write(ctx, turbine, caps, requested_flow)
   local ok, applied, setter = pcall(setTurbineFlow, ctx, turbine, caps, requested_flow)
   local write_state  = ok and applied and "WRITE_ACCEPTED"
@@ -661,101 +717,20 @@ local function apply_turbine_flow_write(ctx, turbine, caps, requested_flow)
   }
 end
 
-local function finalize_turbine_flow_apply(ctx, name, ctrl, ap)
-  local pending_age_s = 0
-  if type(ctrl.pending_flow_since) == "number" and ctrl.pending_flow_since > 0 then
-    pending_age_s = math.max(0, ap.now_ts - ctrl.pending_flow_since)
-  end
-  local target_zone_state = ctrl.in_target_band and "IN_TARGET_BAND" or "OUTSIDE_TARGET_BAND"
-  local at_max_limit = ap.requested_flow == (ctrl.effective_max_flow or ctx.CONFIG.MAX_FLOW)
-  local at_min_limit = type(ap.applied_min) == "number"
-    and ap.requested_flow <= ap.applied_min
-  local target_state = resolve_turbine_target_state(
-    ctx, ctrl, ap.decision, ap.reason, ap.readback_state)
-  local bottleneck, bottleneck_detail = ctx.turbine_regulator.classify_bottleneck({
-    requested_flow = ap.requested_flow, confirmed_flow = ap.confirmed_flow,
-    rpm = ap.rpm, target_rpm = ap.target_rpm, min_flow = ap.applied_min,
-    max_flow = ctrl.effective_max_flow or ctx.CONFIG.MAX_FLOW,
-    inductor_engaged = ctrl.inductor_engaged, steam_input = ap.steam_input,
-    readback_state = ap.readback_state, write_state = ap.write.write_state
-  })
-  ctx.flow_apply_helpers.log_turbine_control_metrics({
-    name = name, rpm = ap.rpm, smoothed_rpm = ap.smoothed_rpm,
-    target_rpm = ap.target_rpm, old_flow = ap.old_flow,
-    requested_flow = ap.requested_flow, confirmed_flow = ap.confirmed_flow,
-    direction = ap.mode, reason = ap.reason, step = ap.step,
-    applied_min = ap.applied_min, applied_max = ap.applied_max,
-    setter = ap.write.setter,
-    set_called = ap.write.ok and ap.write.applied, set_ok = ap.write.ok,
-    write_state = ap.write.write_state, write_detail = ap.write.write_detail,
-    observed_flow = ap.observed_flow, flow_reader = ap.flow_reader,
-    attempt = ap.attempt, flow_settled = ap.flow_settled,
-    pending_settled = ap.pending_settled,
-    pending_retries = ctrl.pending_retries,
-    pending_retry_stage = ctrl.pending_retry_stage,
-    pending_age_s = pending_age_s,
-    settle_timeout_s = ap.rail_cfg.settle_timeout_s or 0,
-    pending_flow_since = ctrl.pending_flow_since,
-    pending_expected_flow = ctrl.pending_expected_flow,
-    cooldown_deferred = ap.decision and ap.decision.defer_cooldown or false,
-    cooldown_defer_reason = ap.decision and ap.decision.defer_reason or "n/a",
-    effective_min_flow = ap.effective_min_flow,
-    effective_min_applied = type(ap.effective_min_flow) == "number"
-      and ap.requested_flow == ap.effective_min_flow and ap.requested_flow > 0,
-    mode = ap.mode, target_action = target_state.target_action,
-    target_zone_state = target_zone_state,
-    target_holding_active = ctrl.target_holding_active,
-    target_band_status = ctrl.target_band_status,
-    target_band_reason = ap.decision and ap.decision.target_band_mode or "n/a",
-    target_band_error = ap.decision and ap.decision.target_band_error or "n/a",
-    target_band_live_error = ap.decision and ap.decision.target_band_live_error or "n/a",
-    target_band_smoothed_error = ap.decision and ap.decision.target_band_smoothed_error or "n/a",
-    hold_active = target_state.hold_active, active_trim = target_state.active_trim,
-    flow_trim_direction = target_state.active_trim
-      and (target_state.target_action == "TARGET_TRIM_UP" and "UP" or "DOWN") or "NONE",
-    inductor_engaged = ctrl.inductor_engaged,
-    inductor_state_api = ctrl.inductor_state_api or "n/a",
-    overspeed_brake = ap.decision and ap.decision.overspeed_brake or false,
-    overspeed_rpm = ap.decision and ap.decision.overspeed_rpm or "n/a",
-    overspeed_threshold_rpm = ap.decision and ap.decision.overspeed_threshold_rpm or "n/a",
-    overspeed_coil_ok = ap.overspeed_coil_ok,
-    overspeed_coil_reason = ap.overspeed_coil_reason,
-    overspeed_floor_hits = ctrl.overspeed_floor_hits or 0,
-    readback_state = ap.readback_state, readback_detail = ap.readback_detail,
-    steam_input = ap.steam_input, active_state = ap.active_state,
-    max_flow_limit = ctrl.effective_max_flow or ctx.CONFIG.MAX_FLOW,
-    at_max_limit = at_max_limit, at_min_limit = at_min_limit,
-    down_regulation_limited = target_state.down_limited
-      or (ap.decision and ap.decision.target_band_at_min_limit) or false,
-    up_regulation_limited = target_state.up_limited
-      or (ap.decision and ap.decision.target_band_at_max_limit) or false,
-    flow_limit_state = ctrl.flow_limit_state,
-    bottleneck = bottleneck, bottleneck_detail = bottleneck_detail
-  }, ctx.log)
-
-  if not ctrl.logged then
-    ctrl.logged = true
-  end
-  if ap.requested_flow == 0 and type(ap.effective_min_flow) == "number"
-      and ap.effective_min_changed then
-  end
-  if ap.decision and ap.decision.overspeed_brake and ap.requested_flow == 0
-      and type(ap.confirmed_flow) == "number"
-      and ap.confirmed_flow > (ap.flow_tolerance or 0) then
-    -- Fix (2026-07-01): diese Warnung feuerte bei JEDEM Tick ohne Drosselung,
-    -- solange der Overspeed-Bremszustand anhielt (mehrmals pro Sekunde) —
-    -- das flutete den Log-Ringpuffer komplett und verdrängte alle anderen,
-    -- moeglicherweise wichtigeren Log-Eintraege (SET_SETPOINTS, ReactorCtrl
-    -- etc. waren im Ringpuffer kaum noch sichtbar). Jetzt: max. 1x alle 5s
-    -- pro Turbine.
+local function finalize_turbine_flow_apply(ctx, name, ctrl, requested_flow,
+    decision, confirmed_flow, flow_tolerance, readback_state, readback_detail)
+  if not ctrl.logged then ctrl.logged = true end
+  if decision and decision.overspeed_brake and requested_flow == 0
+      and type(confirmed_flow) == "number"
+      and confirmed_flow > (flow_tolerance or 0) then
     local now_ms = os.epoch and os.epoch("utc") or (os.clock() * 1000)
     local last_log = ctrl.last_overspeed_log_ms or 0
     if (now_ms - last_log) >= 5000 then
       ctrl.last_overspeed_log_ms = now_ms
       ctx.log("WARN", ("Overspeed brake pending name=%s requested_flow=0"
         .. " confirmed_flow=%s readback_state=%s detail=%s retries=%s"):format(
-        tostring(name), tostring(ap.confirmed_flow), tostring(ap.readback_state),
-        tostring(ap.readback_detail), tostring(ctrl.pending_retries)))
+        tostring(name), tostring(confirmed_flow), tostring(readback_state),
+        tostring(readback_detail), tostring(ctrl.pending_retries)))
     end
   end
 end
@@ -774,7 +749,7 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
     end
   end
 
-  local startup_observed_flow, startup_reader = M.read_turbine_flow(ctx, turbine, caps)
+  local startup_observed_flow = M.read_turbine_flow(ctx, turbine, caps)
   if type(startup_observed_flow) == "number" then
     local synced = M.clamp_turbine_flow(ctx, startup_observed_flow)
     ctrl.confirmed_flow = synced
@@ -784,13 +759,8 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
     end
   end
 
-  local old_flow = ctrl.confirmed_flow or ctrl.requested_flow or ctrl.flow
-  local requested_flow, mode, decision, smoothed_rpm =
+  local requested_flow, _, decision =
     M.update_turbine_flow_state(ctx, rpm, target_rpm, ctrl)
-  local steam_input, active_state =
-    ctx.flow_apply_helpers.sample_turbine_runtime_metrics(
-      turbine, caps, ctx.safe_wrapped_call)
-  if false then ctx.flow_apply_helpers.log_turbine_control_metrics({}) end
 
   local now_ts = os.clock()
   -- Fix (2026-07-14): CRITICAL. RT-P0/RT-P1 (siehe docs/CODING_AI_OTHER_
@@ -818,45 +788,23 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
       ctrl.last_write_setter = write.setter
     end
   end
-  local overspeed_coil_ok, overspeed_coil_reason =
-    enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, decision)
+  enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, decision)
 
   local rail_cfg = ctx.config.rails and ctx.config.rails.turbine_flow or {}
-  local observed_flow, flow_reader, attempt, flow_tolerance =
-    ctx.flow_apply_helpers.capture_turbine_flow_readback(
-      turbine, caps, ctrl, requested_flow, rail_cfg,
-      function(t, c) return M.read_turbine_flow(ctx, t, c) end,
-      function(r) return M.clamp_turbine_flow(ctx, r) end)
+  local flow_tolerance = ctx.flow_apply_helpers.capture_turbine_flow_readback(
+    turbine, caps, ctrl, requested_flow, rail_cfg,
+    function(t, c) return M.read_turbine_flow(ctx, t, c) end,
+    function(rate) return M.clamp_turbine_flow(ctx, rate) end)
 
   local confirmed_flow = ctrl.confirmed_flow
-  local flow_settled = ctx.turbine_regulator.flows_match(
-    requested_flow, confirmed_flow, flow_tolerance)
-  local pending_settled, effective_min_flow, effective_min_changed,
-    readback_state, readback_detail =
+  local _, readback_state, readback_detail =
     ctx.flow_apply_helpers.update_turbine_flow_tracking(
       ctrl, requested_flow, confirmed_flow, flow_tolerance,
       rail_cfg, now_ts, decision, write.write_state, ctx.turbine_regulator)
 
   ctrl.last_requested_flow = requested_flow
-  local reason     = decision and decision.reason or "NONE"
-  local step       = decision and decision.step or "nil"
-  local applied_min = decision and decision.min or rail_cfg.min
-  local applied_max = decision and decision.max or rail_cfg.max
-
-  finalize_turbine_flow_apply(ctx, name, ctrl, {
-    rpm = rpm, smoothed_rpm = smoothed_rpm, target_rpm = target_rpm,
-    old_flow = old_flow, requested_flow = requested_flow,
-    confirmed_flow = confirmed_flow, mode = mode, decision = decision,
-    reason = reason, step = step, applied_min = applied_min, applied_max = applied_max,
-    write = write, observed_flow = observed_flow, flow_reader = flow_reader,
-    attempt = attempt, flow_settled = flow_settled, pending_settled = pending_settled,
-    effective_min_flow = effective_min_flow, effective_min_changed = effective_min_changed,
-    readback_state = readback_state, readback_detail = readback_detail,
-    steam_input = steam_input, active_state = active_state,
-    rail_cfg = rail_cfg, flow_tolerance = flow_tolerance,
-    overspeed_coil_ok = overspeed_coil_ok, overspeed_coil_reason = overspeed_coil_reason,
-    now_ts = now_ts
-  })
+  finalize_turbine_flow_apply(ctx, name, ctrl, requested_flow, decision,
+    confirmed_flow, flow_tolerance, readback_state, readback_detail)
 
   if not write.ok then return false, write.applied, write.setter, "FLOW_SET_CALL_FAILED" end
   if not write.applied then return true, false, write.setter, "FLOW_SET_SKIPPED" end

@@ -38,6 +38,7 @@ local config_normalizer = require("nodes.fuel.config_normalizer")
 local logistics_router = require("nodes.fuel.logistics_router")
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 local router_ui_lib = require("nodes.fuel.router_ui")
+local reactor_targets = require("nodes.fuel.reactor_targets")
 local fuel_ui_pages = require("nodes.fuel.ui_pages")
 
 -- Feature (2026-07-09): Modularisierungs-Rewrite. main.lua ist jetzt nur
@@ -170,6 +171,7 @@ local master_alerts = {}
 local reserve = config.minimum_reserve
 local master_seen_ts = nil
 local fuel_ui = fuel_ui_pages.new({ ui = ui, colors = colors, support_ui_pages = support_ui_pages, utils = utils, config = config, devices = devices })
+local FUEL_MONITOR_SCALE = 0.5
 
 local function warn_once(key, message)
   support_runtime.warn_once(devices, function(msg, level) utils.log(CONFIG.LOG_PREFIX, msg, level) end, key, message)
@@ -179,6 +181,7 @@ local function get_rs_router()
   if not rs_router_instance then
     rs_router_instance = redstone_router_lib.new({
       config = config,
+      node_id = node_id,
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       warn_once = function(key, msg) warn_once(key, msg) end,
       comms = comms,
@@ -208,44 +211,7 @@ local function get_router_ui()
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       routing_load_status = routing_load_status,
       get_reactors = function()
-        local list, seen = {}, {}
-        local lg = config.logistics or {}
-        -- 1. Manuell konfigurierte Reaktoren aus logistics.reactors
-        for _, entry in ipairs(lg.reactors or {}) do
-          local label = entry.name or entry.label or entry.reactor_id or entry.reactor_port or "?"
-          local id = entry.label or entry.name or label
-          if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
-        end
-        -- 2. Aus redstone_tree (bereits konfigurierte Router-Routen)
-        for _, route in ipairs((lg.redstone_tree or {})) do
-          local id = route.reactor or route.label
-          local label = route.label or route.reactor or id or "?"
-          if id and not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
-        end
-        -- 3. Reactor-IDs aus fuel_status_cache
-        --    Cache-Format: { master_relay={[reactor_id]={...}}, direct_heard={[reactor_id]={...}} }
-        if type(fuel_status_cache) == "table" then
-          local function add_from_cache(sub)
-            if type(sub) ~= "table" then return end
-            for reactor_id, entry in pairs(sub) do
-              if type(entry) == "table" and not seen[reactor_id] then
-                seen[reactor_id] = true
-                list[#list + 1] = { id = reactor_id, label = reactor_id }
-              end
-            end
-          end
-          add_from_cache(fuel_status_cache.master_relay)
-          add_from_cache(fuel_status_cache.direct_heard)
-        end
-        -- 4. Fallback: bekannte RT-Peers aus Netzwerk
-        if #list == 0 and comms and type(comms.get_peers) == "function" then
-          for _, peer in ipairs(comms:get_peers()) do
-            if peer.role == "RT" then
-              if not seen[peer.id] then seen[peer.id] = true; list[#list + 1] = { id = peer.id, label = peer.id } end
-            end
-          end
-        end
-        return list
+        return reactor_targets.collect(config, fuel_status_cache)
       end,
     })
   end
@@ -255,7 +221,7 @@ end
 local function discover()
   local names
   local registry_devices
-  local monitor_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  local monitor_entry = monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)
   local monitor_name = monitor_entry and monitor_entry.name or nil
   devices.monitor = monitor_entry and monitor_entry.mon or nil
   devices.monitor_name = monitor_name
@@ -355,7 +321,20 @@ local function handle_command(message)
   return fuel_command_handler.handle(message, {
     support_command_handler = support_command_handler, constants = constants,
     devices = devices, protocol = protocol, comms = comms, utils = utils,
-    set_reserve = function(v) reserve = v end,
+    set_reserve = function(value)
+      reserve = value
+      config.minimum_reserve = value
+      local persisted, persist_err = utils.write_config(CONFIG.CONFIG_PATH, config)
+      if not persisted then
+        utils.log("FUEL", "SET_RESERVE angewendet, aber Persistierung fehlgeschlagen: "
+          .. tostring(persist_err), "WARN")
+      end
+      return {
+        ok = true,
+        persisted = persisted == true,
+        persistence_error = persisted and nil or tostring(persist_err),
+      }
+    end,
     on_fuel_status = function(value) fuel_status_network.ingest_master_relay(fuel_status_cache, value) end,
   })
 end
@@ -369,7 +348,7 @@ local function init()
   -- Fix (2026-07-09): sofortige, direkte Monitor-Ersterkennung hier
   -- (synchron, vor dem Event-Loop) -- discover() aktualisiert/bestaetigt
   -- das danach weiter periodisch.
-  local mon_entry = monitor_adapter.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
+  local mon_entry = monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)
   devices.monitor = mon_entry and mon_entry.mon or nil
   devices.monitor_name = mon_entry and mon_entry.name or nil
   if not devices.monitor and term and type(term.current) == "function" then
@@ -502,6 +481,6 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   get_rs_router():tick()
 end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
   local rs_router = get_rs_router()
-  rs_router:shutdown_now("UPDATE_QUIESCE")
-  return rs_router:get_active_transaction() == nil
+  rs_router:begin_quiesce("UPDATE_QUIESCE")
+  return rs_router:poll_quiesce()
 end } or nil)

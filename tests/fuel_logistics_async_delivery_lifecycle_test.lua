@@ -76,13 +76,26 @@ do
   assert_eq(router._state.current_request.state, 'delivering', 'current_request.state should be delivering once the transaction started')
   assert_eq(#fake_rs.calls, 1, 'exactly one delivery should be started per cycle')
 
-  -- Simuliert redstone_router.lua's spaeteren Abschluss-Callback.
+  local active_request = router._state.current_request
+  router:run_cycle()
+  assert_eq(#fake_rs.calls, 1, 'a later supply cycle must not overwrite/start over an in-flight delivery')
+  assert_true(router._state.current_request == active_request,
+    'current_request must remain the same object until the router reaches a terminal state')
+
+  -- Simuliert redstone_router.lua's spaeteren EXPORT-Schritt. Die Lieferung
+  -- bleibt bis zur finalen BLOCKED-Bestaetigung sichtbar.
   fake_rs.calls[1].action_fn()
 
-  assert_eq(router._state.current_request, nil, 'current_request must clear once delivery completes (no nil-access crash)')
+  assert_true(router._state.current_request ~= nil,
+    'current_request must remain visible until final BLOCKED confirmation')
   assert_eq(router._state.total_exported, 64, 'total_exported should reflect the real delivered amount (korrekte Exportmenge)')
   assert_eq(result.exported, 64, 'last_cycle (same table reference) should be updated in place once delivery completes')
   assert_eq(result.moves[1], 'ME→[Reactor A] bigreactors:yellorium_ingot x64 via transporter_1', 'cycle log entry should be written on completion, not on start')
+
+  fake_rs.calls[1].opts.on_complete({ state = 'COMPLETE_SAFE' })
+  assert_eq(router._state.current_request, nil,
+    'current_request must clear after final BLOCKED confirmation')
+  assert_eq(router._state.last_delivery.terminal_state, 'COMPLETE_SAFE')
 end
 
 -- 2. Callback-Fehler: exportItemToPeripheral wirft einen Fehler -- darf
@@ -94,9 +107,14 @@ do
   router:run_cycle()
   assert_true(router._state.current_request ~= nil, 'current_request should still be set before the callback runs')
 
-  fake_rs.calls[1].action_fn()
+  local ok = fake_rs.calls[1].action_fn()
+  assert_true(ok == false, 'export failure must be returned to the router state machine')
 
-  assert_eq(router._state.current_request, nil, 'current_request must clear even when the export callback errors')
+  assert_true(router._state.current_request ~= nil,
+    'failed export remains active while the router restores BLOCKED state')
+  fake_rs.calls[1].opts.on_complete({ state = 'EXPORT_FAILED', reason = 'bridge offline' })
+
+  assert_eq(router._state.current_request, nil, 'current_request must clear after failed export reaches a safe terminal state')
   assert_eq(router._state.total_exported, 0, 'a failed export must not be credited')
   assert_eq(router._state.total_errors, 1, 'a failed export must be counted as an error')
 end

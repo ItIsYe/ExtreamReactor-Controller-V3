@@ -55,6 +55,18 @@ end
 function M.fit(text, width) return fit(text, width) end
 function M.icon(name) return ICONS[name] or "*" end
 
+-- These primitives deliberately bypass core.ui's dirty cache. Mockup
+-- components such as header() repaint whole rows, so controls written on
+-- those rows must always be restored during the same frame.
+function M.text(mon, x, y, text, fg, bg)
+  write(mon, x, y, text, fg, bg)
+end
+
+function M.badge(mon, x, y, text, status)
+  write(mon, x, y, " " .. tostring(text or "") .. " ",
+    colors.get("background"), colors.get(status or "OK"))
+end
+
 function M.clear(mon)
   local w, h = mon.getSize()
   fill(mon, 1, 1, w, h, colors.get("background"))
@@ -132,23 +144,6 @@ function M.metric_card(mon, x, y, w, h, opts)
   local icon = opts.icon and ("[" .. M.icon(opts.icon) .. "] ") or ""
   write(mon, x + 2, y + 1, fit(icon .. label, math.max(1, w - 4)), colors.get("muted"), colors.get("background"))
   if h >= 4 then write(mon, x + 2, y + 2, fit(value .. unit, math.max(1, w - 4)), colors.get(key), colors.get("background")) end
-end
-
-function M.segmented_bar(mon, x, y, w, percent, status, opts)
-  opts = opts or {}
-  local pct = math.max(0, math.min(1, tonumber(percent) or 0))
-  local segments = math.max(1, tonumber(opts.segments) or math.floor(w / 2))
-  local seg_w = math.max(1, math.floor(w / segments))
-  local active = math.floor((pct * segments) + 0.5)
-  local key = status or "OK"
-  for i = 1, segments do
-    local sx = x + (i - 1) * seg_w
-    if sx > x + w - 1 then break end
-    local width = math.min(seg_w - (seg_w > 1 and 1 or 0), x + w - sx)
-    if width < 1 then width = 1 end
-    local bg = i <= active and colors.get(key) or colors.get("OFFLINE")
-    write(mon, sx, y, string.rep(" ", width), colors.get("background"), bg)
-  end
 end
 
 function M.outlined_progress(mon, x, y, w, percent, status, label)
@@ -242,17 +237,19 @@ function M.footer_nav(mon, y, w, opts)
   local left = opts.left or "< ZURUECK"
   local center = opts.center or ""
   local right = opts.right or "WEITER >"
+  local inset = math.max(1, math.floor(tonumber(opts.inset) or 1))
   local left_text = fit(left, math.floor(w / 3) - 1)
-  write(mon, 2, y, left_text, colors.get("text"), colors.get("OFFLINE"))
+  local lx = math.min(math.max(2, inset + 1), math.max(2, w - #left_text - 1))
+  write(mon, lx, y, left_text, colors.get("text"), colors.get("OFFLINE"))
   if center ~= "" then
     local cx = math.max(2, math.floor((w - #center) / 2))
     write(mon, cx, y, fit(center, math.floor(w / 3)), colors.get("muted"), colors.get("OFFLINE"))
   end
   local right_text = fit(right, math.floor(w / 3))
-  local rx = math.max(2, w - #right_text - 1)
+  local rx = math.max(2, w - #right_text - inset)
   write(mon, rx, y, right_text, colors.get("text"), colors.get("OFFLINE"))
   return {
-    left = { x1 = 2, x2 = 2 + #left_text - 1, y = y },
+    left = { x1 = lx, x2 = lx + #left_text - 1, y = y },
     right = { x1 = rx, x2 = rx + #right_text - 1, y = y },
   }
 end

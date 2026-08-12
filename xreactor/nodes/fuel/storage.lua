@@ -53,9 +53,13 @@ function M.read_fuel(warn_once, support_runtime)
   return 0
 end
 
+local _last_enforced = nil
 function M.enforce_reserve(current, reserve, safety, utils)
   local adjusted, changed = safety.with_reserve(current, reserve)
-  if changed then utils.log("FUEL", "Reserve enforced at " .. adjusted) end
+  if changed and adjusted ~= _last_enforced then
+    utils.log("FUEL", "Reserve enforced at " .. tostring(adjusted))
+    _last_enforced = adjusted
+  end
   return adjusted
 end
 

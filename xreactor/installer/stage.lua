@@ -15,6 +15,26 @@ local function free_space()
   if type(v) == "number" then return v < 0 and math.huge or v end
   return nil
 end
+M.free_space = free_space
+
+-- Recursive size, used only for the space-shortage diagnostic below --
+-- never for a decision to delete anything.
+local function dir_size(path)
+  if not fs.exists(path) then return 0 end
+  local ok_is_dir, is_dir = pcall(fs.isDir, path)
+  if not ok_is_dir then return 0 end
+  if not is_dir then
+    local ok_size, size = pcall(fs.getSize, path)
+    return (ok_size and type(size) == "number") and size or 0
+  end
+  local ok_list, entries = pcall(fs.list, path)
+  if not ok_list or type(entries) ~= "table" then return 0 end
+  local total = 0
+  for _, name in ipairs(entries) do
+    total = total + dir_size(path .. "/" .. name)
+  end
+  return total
+end
 
 -- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
 -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
@@ -24,26 +44,75 @@ end
 -- tatsaechliche lokale Log-Speicherort (core/logger.lua's DEFAULT_LOG_DIR,
 -- genutzt von jeder Rolle als lokaler Fallback bzw. von einer LOG_
 -- COLLECTOR-Rolle auf demselben Computer). Ein Platzmangel WAEHREND einer
--- Installation durfte niemals als Erlaubnis gelten, vorhandene Logs zu
--- vernichten. Jetzt werden nur noch echte, installer-eigene, jederzeit
--- regenerierbare Zwischenverzeichnisse entfernt; reicht das nicht, gibt
--- M.write() (und damit letztlich M.install()) einen klaren Fehler zurueck
--- und die Installation bricht kontrolliert ab, statt Nutzerdaten zu
--- opfern.
+-- Installation durfte niemals als Erlaubnis gelten, vorhandene Logs
+-- STILLSCHWEIGEND zu vernichten -- reichte das Freiraeumen der echten
+-- installer-eigenen Zwischenverzeichnisse nicht, gab M.write() einen
+-- klaren Fehler zurueck und die Installation brach kontrolliert ab.
+--
+-- Fix (2026-08-12): auf ausdruecklichen Nutzerwunsch (wiederholte "out of
+-- space"-Abbrueche bei MASTER, dessen Rollen-Dateiset auf sehr knapp
+-- bemessenen Computern kaum noch Puffer neben angesammelten Logs laesst)
+-- ist "/xreactor_logs" jetzt wieder ein LETZTER Ausweg in reclaim() --
+-- aber bewusst anders als vor dem 2026-07-16-Fix: nur wenn die
+-- installer-eigenen Zwischenverzeichnisse allein nicht reichen, nur genau
+-- dieser eine Pfad (kein /disk/xreactor_logs, keine anderen Nutzerdaten),
+-- und jede tatsaechliche Loeschung wird laut ueber print() gemeldet statt
+-- still zu passieren. Reicht selbst das nicht, bleibt reclaim() weiterhin
+-- fail-closed mit demselben klaren Diagnosefehler wie zuvor.
+local function reclaim_logs(needed_after)
+  local logs_bytes = dir_size("/xreactor_logs")
+  if logs_bytes <= 0 or not fs.exists("/xreactor_logs") then return false end
+  pcall(fs.delete, "/xreactor_logs")
+  local cleared = not fs.exists("/xreactor_logs")
+  if cleared then
+    pcall(print, string.format(
+      "[INSTALL] /xreactor_logs geloescht (%d bytes) -- Speicher war sonst nicht ausreichend (benoetigt: %d bytes)",
+      logs_bytes, needed_after))
+  end
+  return cleared
+end
+
+-- Shared with installer/init.lua: any early fs write (e.g. makeDir() for the
+-- recovery directory, BEFORE /xreactor is deleted) can hit the exact same
+-- space shortage as M.write() below, with no "needed" byte count of its own
+-- to report -- callers that only know they're low on space, not how much
+-- they were trying to write, pass needed=nil.
+function M.space_diagnostic(free, needed)
+  local diag = needed and string.format("free=%d needed=%d", free, needed)
+    or string.format("free=%d", free)
+  local logs_bytes = dir_size("/xreactor_logs")
+  if logs_bytes > 0 then
+    diag = diag .. string.format(" -- /xreactor_logs still uses %d bytes", logs_bytes)
+  end
+  return diag
+end
+
 local function reclaim(needed)
   local free = free_space()
   if free and free >= needed then return true end
   if fs.exists("/xreactor_backup_prev") then pcall(fs.delete, "/xreactor_backup_prev") end
   if fs.exists("/xreactor_stage")       then pcall(fs.delete, "/xreactor_stage") end
   free = free_space()
-  return free == nil or free >= needed
+  if free == nil or free >= needed then return true end
+  local logs_were_cleared = reclaim_logs(needed)
+  if logs_were_cleared then
+    free = free_space()
+    if free == nil or free >= needed then return true end
+  end
+  local diag = M.space_diagnostic(free, needed)
+  if logs_were_cleared then
+    diag = diag .. " -- /xreactor_logs was already cleared and it still wasn't enough"
+  end
+  return false, diag
 end
+M.reclaim = reclaim
 
 function M.write(path, content)
   local dir = fs.getDir(path)
   if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
-  if not reclaim(#content + WRITE_BUFFER) then
-    return false, "not enough space for " .. path
+  local reclaimed, reclaim_diag = reclaim(#content + WRITE_BUFFER)
+  if not reclaimed then
+    return false, "not enough space for " .. path .. " (" .. tostring(reclaim_diag) .. ")"
   end
   local tmp = path .. ".xr_tmp"
   local f = fs.open(tmp, "w")

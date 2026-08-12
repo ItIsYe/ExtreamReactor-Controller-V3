@@ -1,0 +1,57 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"  # 02:00 UTC täglich
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-simulation-suite:
+    name: vollständige Szenariomatrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: beta
+      - name: Install Lua
+        run: sudo apt-get install -y lua5.4
+      - name: Sim-Vertragstests
+        run: |
+          for f in tests/sim_*_contract_test.lua tests/sim_*_model_test.lua; do
+            echo "--- $f ---"; lua5.4 "$f"
+          done
+      - name: Szenarien
+        run: lua5.4 tests/sim_scenarios_suite_test.lua
+      - name: Property-Tests (mehr Trials)
+        run: |
+          lua5.4 tests/sim_reactor_property_test.lua
+          lua5.4 tests/sim_turbine_property_test.lua
+          lua5.4 tests/sim_energy_property_test.lua
+      - name: Chaos-Tests
+        run: lua5.4 tests/sim_chaos_test.lua
+      - name: Mutations-Tests
+        run: lua5.4 tests/sim_mutation_test.lua
+      - name: Trace-Replay (synthetische Fixture)
+        run: lua5.4 tests/sim_fixture_replay_test.lua
+      - name: Lua-Syntax alle Module
+        run: |
+          find xreactor -name "*.lua" | while read f; do
+            lua5.4 -e "if not loadfile('$f') then os.exit(1) end" || { echo "SYNTAX: $f"; exit 1; }
+          done
+
+  manifest-check:
+    name: Manifest-Integrität
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: beta
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.11"
+      - run: python3 tools/validate_manifest.py --strict

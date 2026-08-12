@@ -315,10 +315,8 @@ function M.validate_config(config_values, defaults, add_warning, utils)
 end
 
 local function clamp_nonneg(value, fallback)
-  if type(value) ~= "number" or value < 0 then
-    return fallback
-  end
-  return value
+  if type(value) ~= "number" then return fallback end
+  return math.max(0, value)
 end
 
 function M.normalize_rails(config, defaults, utils, safety, min_flow, max_flow)

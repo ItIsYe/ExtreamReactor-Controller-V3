@@ -72,7 +72,7 @@ do
   handler.update_node({
     type = constants.message_types.ACK_APPLIED, ack_for = 'MSG-1',
     src = 'FUEL-1', sender_id = 'FUEL-1', node_id = 'FUEL-1', role = constants.roles.FUEL_NODE,
-    payload = { result = { ok = true } },
+    payload = { result = { ok = true, persisted = true } },
   })
   assert_eq(#alarms, 0, 'a successful ACK_APPLIED must not raise an alarm')
   local model = config_edits.model_for(edits_state, 'fuel_reserve', 2000)
