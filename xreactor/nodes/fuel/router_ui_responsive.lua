@@ -42,8 +42,8 @@ local function paging_badges(target, ui, w, y, scroll, max_scroll)
   if max_scroll <= 0 then return nil, nil end
   local up_x = math.max(2, w - 11)
   local dn_x = math.max(7, w - 5)
-  ui.badge(target, up_x, y, "UP", scroll > 0 and "LIMITED" or "OFFLINE")
-  ui.badge(target, dn_x, y, "DN", scroll < max_scroll and "LIMITED" or "OFFLINE")
+  mux.badge(target, up_x, y, "UP", scroll > 0 and "LIMITED" or "OFFLINE")
+  mux.badge(target, dn_x, y, "DN", scroll < max_scroll and "LIMITED" or "OFFLINE")
   local up = scroll > 0 and { x1 = up_x, x2 = up_x + 3, y = y } or nil
   local down = scroll < max_scroll and { x1 = dn_x, x2 = dn_x + 3, y = y } or nil
   return up, down
@@ -99,7 +99,7 @@ local function render_list(self, target, ui, w, h)
   end
 
   if max_scroll > 0 then
-    ui.text(target, 4, control_y, string.format("%d-%d/%d", u.list_scroll + 1, math.min(#reactors, u.list_scroll + visible), #reactors), colorset.get("muted"), colorset.get("background"))
+    mux.text(target, 4, control_y, string.format("%d-%d/%d", u.list_scroll + 1, math.min(#reactors, u.list_scroll + visible), #reactors), colorset.get("muted"), colorset.get("background"))
     u.list_scroll_up, u.list_scroll_down = paging_badges(target, ui, w - 2, control_y, u.list_scroll, max_scroll)
   else
     u.list_scroll_up, u.list_scroll_down = nil, nil
@@ -156,7 +156,7 @@ local function render_path(self, target, ui, w, h)
     sy = sy + 1
   end
   if #editing.path == 0 and sy <= content_top + chain_h - 1 then
-    ui.text(target, 4, sy, mux.fit("(noch kein Ventil)", math.max(1, w - 7)), colorset.get("muted"), colorset.get("background"))
+    mux.text(target, 4, sy, mux.fit("(noch kein Ventil)", math.max(1, w - 7)), colorset.get("muted"), colorset.get("background"))
   end
   u.step_btns = step_btns
 

@@ -11,7 +11,8 @@ router = (repo / "xreactor/nodes/fuel/router_ui.lua").read_text(encoding="utf-8"
 responsive = (repo / "xreactor/nodes/fuel/router_ui_responsive.lua").read_text(encoding="utf-8")
 mockup = (repo / "xreactor/core/mockup_ui.lua").read_text(encoding="utf-8")
 
-assert "local FUEL_MONITOR_SCALE = 1.0" in main
+assert "local FUEL_MONITOR_SCALE = 0.5" in main
+assert "local FUEL_MONITOR_SCALE = 1.0" not in main
 assert main.count('monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)') == 2
 assert "for peer_id, peer in pairs(comms:get_peers() or {}) do" in main
 assert "peer.role == constants.roles.RT_NODE" in main

@@ -84,6 +84,7 @@ function router.new(mon_or_opts, opts)
     ui_diag = {
       frames_requested = 0, frames_committed = 0, frames_skipped = 0,
       full_clears = 0, render_errors = 0, last_render_ms = 0,
+      ignored_monitor_events = 0,
     },
     error_title = opts.error_title or "UI RENDER ERROR",
     on_render_error = opts.on_render_error,
@@ -118,7 +119,9 @@ function router.new(mon_or_opts, opts)
     key_prev = opts.key_prev,
     key_next = opts.key_next,
     list_key_prev = list_key_prev,
-    list_key_next = list_key_next
+    list_key_next = list_key_next,
+    monitor_name = opts.monitor_name,
+    layout_invalidated = false,
   }
   return setmetatable(self, { __index = router })
 end
@@ -146,6 +149,7 @@ function router:get_diagnostics()
     full_clears = self.ui_diag.full_clears,
     render_errors = self.ui_diag.render_errors,
     last_render_ms = self.ui_diag.last_render_ms,
+    ignored_monitor_events = self.ui_diag.ignored_monitor_events,
   }
 end
 
@@ -155,6 +159,26 @@ end
 
 function router:current()
   return self.pages[self.index]
+end
+
+function router:set_monitor_name(name)
+  if self.monitor_name ~= name then
+    self.monitor_name = name
+    self:invalidate_layout()
+  end
+end
+
+function router:monitor_touch_matches(event)
+  if not event or event[1] ~= "monitor_touch" then return true end
+  return self.monitor_name == nil or event[2] == self.monitor_name
+end
+
+function router:invalidate_layout()
+  self.layout_invalidated = true
+end
+
+function router:invalidate_content()
+  self.last_snapshot = nil
 end
 
 function router:set(index)
@@ -170,7 +194,7 @@ function router:set(index)
     -- last_snapshot allein reicht jetzt aus, damit render()s
     -- Inhalts-Vergleich den Seitenwechsel garantiert als "geaendert"
     -- erkennt und sofort neu zeichnet.
-    self.last_snapshot = nil
+    self:invalidate_content()
   end
 end
 
@@ -192,54 +216,32 @@ function router:prev()
   self:set(prev_index)
 end
 
--- Fix (2026-07-19): CRITICAL. Weder Tasten- noch Touch-Navigation hatten
--- bisher irgendeine Entprellung -- CC:Tweaked feuert bei gehaltener Taste
--- (Tastatur-Wiederholung) mehrere "key"-Events in schneller Folge, und ein
--- etwas laenger gehaltener/leicht zittriger Touch auf einem Advanced
--- Monitor kann ebenfalls mehr als ein "monitor_touch"-Event fuer denselben
--- gefuehlt EINEN Tastendruck/Tipp erzeugen. Jeder dieser Events rief
--- self:next()/self:prev() unabhaengig auf -- ein einziger, aus Nutzersicht
--- einmaliger "WEITER"-Druck konnte dadurch den Seitenindex um 2 oder mehr
--- statt um 1 erhoehen (gemeldetes Symptom: "Seite 2 wird uebersprungen",
--- der Wechsel von Seite 1 landet direkt auf Seite 3). Jetzt: eine
--- Seitennavigation (Taste ODER Footer-Touch, NICHT die separate Listen-
--- Navigation) wird innerhalb von NAV_DEBOUNCE_MS nach der letzten
--- tatsaechlich ausgefuehrten Navigation ignoriert -- der Touch/Tastendruck
--- gilt weiterhin als konsumiert (return true), nur die zweite (und jede
--- weitere) schnelle Wiederholung bewirkt keinen zusaetzlichen Seitenwechsel
--- mehr.
-local NAV_DEBOUNCE_MS = 350
-
-local function nav_debounced(self)
-  local now = os.epoch and os.epoch("utc") or 0
-  if self.last_nav_ts and (now - self.last_nav_ts) < NAV_DEBOUNCE_MS then
-    return true
-  end
-  self.last_nav_ts = now
-  return false
-end
-
 function router:handle_input(event)
   if not event then return end
   local kind = event[1]
+  if kind == "monitor_touch" and not self:monitor_touch_matches(event) then
+    self.ui_diag.ignored_monitor_events = self.ui_diag.ignored_monitor_events + 1
+    return true
+  end
   if kind == "key" then
     local key = event[2]
+    local is_held = event[3] == true
     if self.key_prev and self.key_prev[key] then
-      if not nav_debounced(self) then self:prev() end
+      if not is_held then self:prev() end
       return true
     end
     if self.key_next and self.key_next[key] then
-      if not nav_debounced(self) then self:next() end
+      if not is_held then self:next() end
       return true
     end
     local list = self.list_controls
     if list then
       if self.list_key_prev and self.list_key_prev[key] and list.on_prev then
-        list.on_prev()
+        if not is_held then list.on_prev() end
         return true
       end
       if self.list_key_next and self.list_key_next[key] and list.on_next then
-        list.on_next()
+        if not is_held then list.on_next() end
         return true
       end
     end
@@ -247,12 +249,12 @@ function router:handle_input(event)
     local x, y = event[3], event[4]
     local prev = self.footer.prev
     if prev and y == prev.y and x >= prev.x1 and x <= prev.x2 then
-      if not nav_debounced(self) then self:prev() end
+      self:prev()
       return true
     end
     local next_btn = self.footer.next
     if next_btn and y == next_btn.y and x >= next_btn.x1 and x <= next_btn.x2 then
-      if not nav_debounced(self) then self:next() end
+      self:next()
       return true
     end
     local list = self.list_controls
@@ -286,6 +288,31 @@ local function build_snapshot(page_name, model)
     end
   end
   return tostring(payload)
+end
+
+local function inspect_frame(self, mon, model)
+  local page = self:current()
+  local width, height = ui.getSize(mon)
+  local scale = nil
+  if mon and type(mon.getTextScale) == "function" then
+    local ok, value = pcall(mon.getTextScale)
+    if ok then scale = value end
+  end
+  local transition = self.layout_invalidated == true
+    or self.last_render_mon ~= mon
+    or self.last_render_page_index ~= self.index
+    or self.last_render_w ~= width
+    or self.last_render_h ~= height
+    or self.last_render_scale ~= scale
+  local snapshot = build_snapshot(page and page.name, model)
+  local navigation_missing = self.footer.prev == nil or self.footer.next == nil
+  return transition, snapshot, width, height, scale, navigation_missing
+end
+
+function router:needs_render(mon, model)
+  if not mon then return false end
+  local transition, snapshot, _, _, _, navigation_missing = inspect_frame(self, mon, model)
+  return transition or navigation_missing or snapshot ~= self.last_snapshot
 end
 
 function router:render_list_controls(mon, opts)
@@ -328,7 +355,13 @@ function router:render(mon, model)
     self.footer.prev, self.footer.next, self.footer.indicator = nil, nil, nil
     self.list_controls = nil
     self.last_render_mon = nil
-    return
+    self.last_render_page_index = nil
+    self.last_render_w = nil
+    self.last_render_h = nil
+    self.last_render_scale = nil
+    self.last_snapshot = nil
+    self.layout_invalidated = true
+    return false
   end
   ui.begin_frame(mon)
   -- Visibility buffering deliberately does not belong in the shared router.
@@ -359,23 +392,10 @@ function router:render(mon, model)
   -- uebersprungen, der neue Monitor waere NIE tatsaechlich gezeichnet
   -- worden und die alten Touch-Zonen (footer.prev/next) haetten
   -- faelschlich weiter auf den alten Monitor gezeigt.
-  local cur_w, cur_h = ui.getSize(mon)
-  -- Feature (2026-07-12): REST-P1.2. getTextScale() ist nicht auf jedem
-  -- Monitor-Wrapper garantiert vorhanden (z.B. term.current() im
-  -- Terminal-Fallback) -- pcall-abgesichert, nil bei fehlender Methode
-  -- oder Fehlschlag zaehlt einfach nicht als eigene Transition-Quelle.
-  local scale_ok, cur_scale = pcall(mon.getTextScale)
-  if not scale_ok then cur_scale = nil end
-  local is_transition = (self.last_render_mon ~= mon)
-    or (self.last_render_page_index ~= self.index)
-    or (self.last_render_w ~= cur_w)
-    or (self.last_render_h ~= cur_h)
-    or (self.last_render_scale ~= cur_scale)
-
-  local snapshot = build_snapshot(page and page.name, model)
-  if not is_transition and snapshot == self.last_snapshot then
+  local is_transition, snapshot, cur_w, cur_h, cur_scale, navigation_missing = inspect_frame(self, mon, model)
+  if not is_transition and not navigation_missing and snapshot == self.last_snapshot then
     self.ui_diag.frames_skipped = self.ui_diag.frames_skipped + 1
-    return
+    return false
   end
   self.ui_diag.frames_committed = self.ui_diag.frames_committed + 1
   local render_start_ms = os.epoch and os.epoch("utc") or nil
@@ -396,6 +416,7 @@ function router:render(mon, model)
   self.last_render_w = cur_w
   self.last_render_h = cur_h
   self.last_render_scale = cur_scale
+  self.layout_invalidated = false
   if is_transition then
     -- Feature (2026-07-12): REST-P1.2. Nach JEDER Transition (Monitor/
     -- Seite/Groesse/Skala) muessen die Footer- und Listen-Touchzonen
@@ -466,7 +487,7 @@ function router:render(mon, model)
   end
   local w, h = ui.getSize(mon)
   if not w or not h then
-    return
+    return true
   end
   -- Fix (2026-07-05): wenn die Seite selbst schon einen sichtbaren Footer
   -- mit ZURUECK/WEITER-Buttons gezeichnet hat (mux.footer_nav(), gibt
@@ -481,7 +502,7 @@ function router:render(mon, model)
     self.footer.prev = { x1 = page_footer.left.x1, x2 = page_footer.left.x2, y = page_footer.left.y }
     self.footer.next = { x1 = page_footer.right.x1, x2 = page_footer.right.x2, y = page_footer.right.y }
     self.footer.indicator = nil
-    return
+    return true
   end
   local page_count = math.max(1, #self.pages)
   local indicator = ("< Page %d/%d >"):format(self.index, page_count)
@@ -490,6 +511,7 @@ function router:render(mon, model)
   self.footer.prev = { x1 = start, x2 = start + 1, y = h }
   self.footer.next = { x1 = start + #indicator - 1, x2 = start + #indicator - 1, y = h }
   self.footer.indicator = { x1 = start, x2 = start + #indicator, y = h }
+  return true
 end
 
 return router

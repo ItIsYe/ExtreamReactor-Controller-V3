@@ -52,4 +52,20 @@ if renders ~= 3 then
   error("interactive events should remain responsive")
 end
 
+local resize_renders = 0
+local resize_service = ui_service.new({
+  interval = 100,
+  force_interval = 100,
+  snapshot = function() return "same" end,
+  render = function() resize_renders = resize_renders + 1 end,
+})
+resize_service:tick(nil, { "monitor_resize", "monitor_0" })
+if resize_renders ~= 1 then
+  error("monitor_resize must force an immediate geometry redraw")
+end
+resize_service:tick(nil, { "term_resize" })
+if resize_renders ~= 2 then
+  error("term_resize must force an immediate geometry redraw")
+end
+
 print("ui_service_snapshot_test.lua: ok")

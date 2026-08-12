@@ -15,77 +15,14 @@
 local M = {}
 local router_ui_responsive = require("nodes.fuel.router_ui_responsive")
 local ui_completion = require("nodes.fuel.ui_completion")
+local window_buffer = require("core.window_buffer")
 
 local ok_ampel_mod, ampel_mod = pcall(require, "optional.ampel")
 local ampel_instance = ok_ampel_mod and type(ampel_mod) == "table" and type(ampel_mod.new) == "function" and ampel_mod.new() or nil
 
 local monitor_router = nil
 local current_mon = nil
-local render_buffer = { parent = nil, name = nil, width = nil, height = nil, scale = nil, target = nil, rebuilt = false }
-
-local function reset_render_buffer()
-  render_buffer = { parent = nil, name = nil, width = nil, height = nil, scale = nil, target = nil, rebuilt = false }
-end
-
-local function monitor_scale(mon)
-  if not mon or type(mon.getTextScale) ~= "function" then return nil end
-  local ok, value = pcall(mon.getTextScale)
-  return ok and value or nil
-end
-
-local function get_render_target(mon, monitor_name)
-  if not mon or type(mon.getSize) ~= "function" then return mon end
-  if type(window) ~= "table" or type(window.create) ~= "function" then return mon end
-
-  local ok_size, w, h = pcall(mon.getSize)
-  if not ok_size or type(w) ~= "number" or type(h) ~= "number" or w < 1 or h < 1 then
-    return mon
-  end
-  local scale = monitor_scale(mon)
-
-  if render_buffer.target
-      and render_buffer.parent == mon
-      and render_buffer.name == monitor_name
-      and render_buffer.width == w
-      and render_buffer.height == h
-      and render_buffer.scale == scale
-      and type(render_buffer.target.setVisible) == "function" then
-    return render_buffer.target
-  end
-
-  local ok_window, target = pcall(window.create, mon, 1, 1, w, h, false)
-  if not ok_window or not target or type(target.setVisible) ~= "function" then
-    reset_render_buffer()
-    return mon
-  end
-
-  render_buffer = {
-    parent = mon,
-    name = monitor_name,
-    width = w,
-    height = h,
-    scale = scale,
-    target = target,
-    rebuilt = true,
-  }
-  return target
-end
-
-local function render_frame(router, target, physical_mon, model)
-  local buffered = target ~= physical_mon and type(target.setVisible) == "function"
-  if buffered then
-    pcall(target.setVisible, false)
-  end
-  local ok, result = pcall(router.render, router, target, model)
-  -- Always publish/recover visibility even if an unexpected error escapes
-  -- the shared UI router. page.render() errors are normally handled there,
-  -- but this protects the outer backbuffer lifecycle as a final guard.
-  if buffered then
-    pcall(target.setVisible, true)
-  end
-  if not ok then error(result) end
-  return result
-end
+local render_surface = window_buffer.new()
 
 local function ensure_completion(ctx)
   if ctx and ctx.fuel_ui then
@@ -150,11 +87,18 @@ end
 
 function M.render_monitor(ctx, model)
   local devices = ctx.devices
-  if not devices.monitor then return end
+  if not devices.monitor then
+    current_mon = nil
+    render_surface:bind(nil, nil)
+    if monitor_router then
+      if monitor_router.set_monitor_name then monitor_router:set_monitor_name(nil) end
+      monitor_router:render(nil, model)
+    end
+    return false
+  end
   ensure_completion(ctx)
   local mon = devices.monitor
   current_mon = mon
-  local render_target = get_render_target(mon, devices.monitor_name)
   if not monitor_router then
     local fuel_ui = ctx.fuel_ui
     router_ui_responsive.attach(ctx.get_router_ui())
@@ -174,12 +118,24 @@ function M.render_monitor(ctx, model)
       key_next = { [ctx.keys.right] = true, [ctx.keys.pageDown] = true }
     })
   end
-  -- Fix: render_buffer Rebuild (Scale/Grössenänderung) darf keine Transition triggern
-  if render_buffer.rebuilt and monitor_router then
-    monitor_router.last_render_mon = render_target
-    render_buffer.rebuilt = false
+  if monitor_router.set_monitor_name then
+    monitor_router:set_monitor_name(devices.monitor_name)
   end
-  render_frame(monitor_router, render_target, mon, model)
+  local render_target, binding_changed = render_surface:bind(mon, devices.monitor_name)
+  if binding_changed and monitor_router.invalidate_layout then
+    monitor_router:invalidate_layout()
+  end
+  if monitor_router.needs_render and not monitor_router:needs_render(render_target, model) then
+    return false
+  end
+  local ok, result = pcall(render_surface.render, render_surface, function(target)
+    return monitor_router:render(target, model)
+  end)
+  if not ok then
+    if monitor_router.invalidate_layout then monitor_router:invalidate_layout() end
+    error(result, 0)
+  end
+  return result
 end
 
 function M.handle_input(event)
@@ -190,6 +146,9 @@ function M.handle_input(event)
   if monitor_router and monitor_router:handle_input(event) then
     return true
   end
+  if kind ~= "monitor_touch" and kind ~= "mouse_click" then
+    return false
+  end
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
     local x, y = event and event[3], event and event[4]
@@ -199,7 +158,11 @@ function M.handle_input(event)
       -- Page-local state (details pagination / router editor) is not part of
       -- the telemetry model snapshot. Force exactly one following redraw so
       -- the visible UI follows the consumed touch.
-      monitor_router.last_snapshot = nil
+      if monitor_router.invalidate_content then
+        monitor_router:invalidate_content()
+      else
+        monitor_router.last_snapshot = nil
+      end
     end
     return consumed
   end
@@ -210,7 +173,9 @@ function M.handle_touch(x, y)
   local page = monitor_router and monitor_router:current()
   if page and type(page.handle_touch) == "function" then
     local consumed = page.handle_touch(x, y) == true
-    if consumed and monitor_router then monitor_router.last_snapshot = nil end
+    if consumed and monitor_router then
+      if monitor_router.invalidate_content then monitor_router:invalidate_content() else monitor_router.last_snapshot = nil end
+    end
     return consumed
   end
   return false

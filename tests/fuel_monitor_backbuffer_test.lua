@@ -31,9 +31,22 @@ _G.window = {
 
 local rendered = {}
 local fake_router = {
+  dirty = true,
+  monitor_names = {},
+  set_monitor_name = function(self, name)
+    self.monitor_names[#self.monitor_names + 1] = name
+  end,
+  invalidate_layout = function(self)
+    self.dirty = true
+  end,
+  needs_render = function(self)
+    return self.dirty
+  end,
   render = function(self, target, model)
     assert(target.visible == false, 'window must stay hidden while a frame is rendered')
     rendered[#rendered + 1] = target
+    self.dirty = false
+    return true
   end,
   get_diagnostics = function() return { error_count = 0 } end,
   handle_input = function() return false end,
@@ -65,19 +78,21 @@ local ctx = {
 
 module.render_monitor(ctx, {})
 assert(created[1].visible == true, 'completed first frame must be made visible')
-assert(created[1].visibility[1] == false and created[1].visibility[2] == true,
-  'first frame must follow hidden -> visible lifecycle')
+assert(created[1].visibility[#created[1].visibility] == true,
+  'first complete frame must be published')
 
+local stable_visibility_events = #created[1].visibility
 module.render_monitor(ctx, {})
 assert(#created == 1, 'stable monitor, size and scale must reuse one window backbuffer')
-assert(rendered[1] == created[1] and rendered[2] == created[1], 'router must render into the window backbuffer')
-assert(created[1].visibility[3] == false and created[1].visibility[4] == true,
-  'reused buffer must be hidden while rendering and shown only after completion')
+assert(#rendered == 1 and rendered[1] == created[1],
+  'an unchanged forced refresh must not redraw the router')
+assert(#created[1].visibility == stable_visibility_events,
+  'an unchanged forced refresh must not toggle buffer visibility')
 
 width = 70
 module.render_monitor(ctx, {})
 assert(#created == 2, 'monitor resize must recreate the backbuffer')
-assert(rendered[3] == created[2])
+assert(rendered[2] == created[2])
 assert(created[2].visible == true, 'replacement backbuffer must be shown after its first complete frame')
 
 -- A text-scale transition must recreate the buffer even if a mock reports
@@ -86,7 +101,7 @@ assert(created[2].visible == true, 'replacement backbuffer must be shown after i
 scale = 1
 module.render_monitor(ctx, {})
 assert(#created == 3, 'text-scale change must recreate the backbuffer')
-assert(rendered[4] == created[3])
+assert(rendered[3] == created[3])
 
 -- A physically different monitor must also create a new buffer and publish
 -- a complete first frame.
@@ -100,8 +115,10 @@ ctx.devices.monitor = physical2
 ctx.devices.monitor_name = 'monitor_1'
 module.render_monitor(ctx, {})
 assert(#created == 4, 'physical monitor change must create a new backbuffer')
-assert(rendered[5] == created[4])
+assert(rendered[4] == created[4])
 assert(created[4].visible == true, 'new monitor buffer must be visible only after its first complete frame')
+assert(fake_router.monitor_names[#fake_router.monitor_names] == 'monitor_1',
+  'router input ownership must follow the physical monitor name')
 
 _G.window = nil
 print('fuel_monitor_backbuffer_test.lua: ok')

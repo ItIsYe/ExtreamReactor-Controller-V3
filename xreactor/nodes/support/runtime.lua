@@ -193,7 +193,8 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
           services:tick(nil, event)
         elseif event[1] == "timer" and event[2] == timer then
           break
-        elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key" then
+        elseif event[1] == "monitor_touch" or event[1] == "mouse_click" or event[1] == "key"
+            or event[1] == "monitor_resize" or event[1] == "term_resize" then
           services:tick(nil, event)
         end
       end

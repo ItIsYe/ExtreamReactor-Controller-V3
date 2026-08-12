@@ -55,6 +55,18 @@ end
 function M.fit(text, width) return fit(text, width) end
 function M.icon(name) return ICONS[name] or "*" end
 
+-- These primitives deliberately bypass core.ui's dirty cache. Mockup
+-- components such as header() repaint whole rows, so controls written on
+-- those rows must always be restored during the same frame.
+function M.text(mon, x, y, text, fg, bg)
+  write(mon, x, y, text, fg, bg)
+end
+
+function M.badge(mon, x, y, text, status)
+  write(mon, x, y, " " .. tostring(text or "") .. " ",
+    colors.get("background"), colors.get(status or "OK"))
+end
+
 function M.clear(mon)
   local w, h = mon.getSize()
   fill(mon, 1, 1, w, h, colors.get("background"))
