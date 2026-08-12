@@ -1,8 +1,15 @@
 # XReactor-Dokumentationsindex
 
-Stand: 2026-07-14  
+Stand: 2026-08-12  
 Branch: `beta`  
-Geprüfte Release: `beta-v427` / `manifest-v427`
+Geprüfte Release: `beta-v548` / `manifest-v548`
+
+> **Hinweis (2026-08-12):** `beta` wurde auf den bereinigten Stand aus `agent/clean-recovery`
+> zurückgesetzt (der vorherige `beta`-Stand liegt jetzt unter `beta-funktoniet-nicht`). Die
+> Versionsnummerierung (`manifest-v548`) ist daher **kein** nahtloser Fortsatz der früher in
+> diesem Index referenzierten `beta-v3xx`/`v4xx`/`v5xx`-Stände — Detaildaten aus den unten
+> verlinkten historischen Auditdateien können daher lokal abweichen und sollten vor Nutzung
+> gegen den aktuellen Code geprüft werden.
 
 ## Zuerst lesen
 
@@ -35,11 +42,6 @@ Diese Dateien bleiben bestehen, weil ältere Links beziehungsweise die historisc
 - [`CODING_AI_PERFORMANCE_TASKS_2026-07-12.md`](CODING_AI_PERFORMANCE_TASKS_2026-07-12.md)
 - [`NODE_START_BLOCKERS_2026-06-25.md`](NODE_START_BLOCKERS_2026-06-25.md)
 
-Historische Detailchronik:
-
-- [`../RUNTIME_STATUS_2026-06-03.md`](../RUNTIME_STATUS_2026-06-03.md)
-- [`../REWRITE_SPEC.md`](../REWRITE_SPEC.md)
-
 ## Entfernte veraltete Dokumente
 
 - `CODING_AI_FUEL_NODE_DEEP_AUDIT_2026-07-12.md`  
@@ -47,6 +49,9 @@ Historische Detailchronik:
 
 - `NODE_OVERVIEW.md`  
   Technische Duplikatdokumentation auf altem Stand; die aktuelle Architektur wird zentral im Root-README und im aktuellen Audit gepflegt.
+
+- `../RUNTIME_STATUS_2026-06-03.md` und `../REWRITE_SPEC.md`  
+  Historische Session-/Rewrite-Dokumente, entfernt (siehe Git-Historie: Commits `99ebb717` bzw. `b74a01b6`). Frühere Links auf diese beiden Dateien im Root-README und in `PROJECT_DOCUMENTATION.md`/`NODE_START_BLOCKERS_2026-06-25.md` wurden entsprechend bereinigt.
 
 ## Dokumentationsregeln
 

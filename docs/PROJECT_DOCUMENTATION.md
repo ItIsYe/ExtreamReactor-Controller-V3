@@ -8,8 +8,8 @@ Diese Datei bleibt als stabiler Link für ältere Verweise erhalten. Die früher
 ## Technische Referenz
 
 - [`../README.md`](../README.md) — Architektur, Rollen und allgemeine Bedienung.
-- [`../REWRITE_SPEC.md`](../REWRITE_SPEC.md) — ursprüngliche SCADA-Rewrite-Spezifikation.
-- [`../RUNTIME_STATUS_2026-06-03.md`](../RUNTIME_STATUS_2026-06-03.md) — historische Änderungschronik.
+- `../REWRITE_SPEC.md` und `../RUNTIME_STATUS_2026-06-03.md` wurden entfernt (siehe `README.md`
+  im `docs`-Ordner, Abschnitt „Entfernte veraltete Dokumente“, bzw. Git-Historie).
 
 ## Aktueller Entwicklungsstand
 
