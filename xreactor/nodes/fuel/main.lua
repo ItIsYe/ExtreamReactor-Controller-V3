@@ -38,6 +38,7 @@ local config_normalizer = require("nodes.fuel.config_normalizer")
 local logistics_router = require("nodes.fuel.logistics_router")
 local redstone_router_lib = require("nodes.fuel.redstone_router")
 local router_ui_lib = require("nodes.fuel.router_ui")
+local reactor_targets = require("nodes.fuel.reactor_targets")
 local fuel_ui_pages = require("nodes.fuel.ui_pages")
 
 -- Feature (2026-07-09): Modularisierungs-Rewrite. main.lua ist jetzt nur
@@ -210,45 +211,7 @@ local function get_router_ui()
       log = function(level, msg) utils.log("FUEL", msg, level) end,
       routing_load_status = routing_load_status,
       get_reactors = function()
-        local list, seen = {}, {}
-        local lg = config.logistics or {}
-        -- 1. Manuell konfigurierte Reaktoren aus logistics.reactors
-        for _, entry in ipairs(lg.reactors or {}) do
-          local label = entry.name or entry.label or entry.reactor_id or entry.reactor_port or "?"
-          local id = entry.label or entry.name or label
-          if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
-        end
-        -- 2. Aus redstone_tree (bereits konfigurierte Router-Routen)
-        for _, route in ipairs((lg.redstone_tree or {})) do
-          local id = route.reactor or route.label
-          local label = route.label or route.reactor or id or "?"
-          if id and not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = label } end
-        end
-        -- 3. Reactor-IDs aus fuel_status_cache
-        --    Cache-Format: { master_relay={[reactor_id]={...}}, direct_heard={[reactor_id]={...}} }
-        if type(fuel_status_cache) == "table" then
-          local function add_from_cache(sub)
-            if type(sub) ~= "table" then return end
-            for reactor_id, entry in pairs(sub) do
-              if type(entry) == "table" and not seen[reactor_id] then
-                seen[reactor_id] = true
-                list[#list + 1] = { id = reactor_id, label = reactor_id }
-              end
-            end
-          end
-          add_from_cache(fuel_status_cache.master_relay)
-          add_from_cache(fuel_status_cache.direct_heard)
-        end
-        -- 4. Fallback: bekannte RT-Peers aus Netzwerk
-        if #list == 0 and comms and type(comms.get_peers) == "function" then
-          for peer_id, peer in pairs(comms:get_peers() or {}) do
-            if type(peer) == "table" and peer.role == constants.roles.RT_NODE and peer.down ~= true then
-              local id = tostring(peer_id)
-              if not seen[id] then seen[id] = true; list[#list + 1] = { id = id, label = id } end
-            end
-          end
-        end
-        return list
+        return reactor_targets.collect(config, fuel_status_cache)
       end,
     })
   end

@@ -8,13 +8,13 @@
 -- herunter, und fuehrt AUSSCHLIESSLICH installer/init.lua (als Funktion
 -- mit injizierten Abhaengigkeiten) damit aus.
 --
--- Treibt das echte /installer mit einem gemockten http/os: jede der 6
+-- Treibt das echte /installer mit einem gemockten http/os: alle kanonischen
 -- Modul-Downloads und der init.lua-Download werden ueber einen Fake-
--- HTTP-Server aus demselben aufgeloesten Ref bedient; das (ebenfalls
+-- HTTP-Server aus demselben Ref bedient; das (ebenfalls
 -- gefakte) init.lua zeichnet auf, mit welchem deps-Table es aufgerufen
 -- wurde, statt eine echte Installation durchzufuehren. Verifiziert: (1)
 -- alle Downloads verwenden denselben aufgeloesten Ref, (2) deps enthaelt
--- alle sechs erwarteten Module plus ref, (3) ein fehlgeschlagener Modul-
+-- alle erwarteten Module plus ref, (3) ein fehlgeschlagener Modul-
 -- Download bricht VOR jedem init.lua-Aufruf kontrolliert ab, (4) nach
 -- erfolgreichem init.lua-Aufruf wird rebootet.
 
@@ -28,11 +28,12 @@ end
 local repo_root = os.getenv("REPO_ROOT") or "."
 local installer_src = read_file(repo_root .. "/installer")
 
-local FAKE_SHA = "abc123def4567890abc123def4567890abc123d"
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
 
-local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator" }
+local MODULE_NAMES = {
+  "http", "manifest", "stage", "ui", "journal", "plan_validator",
+  "reactor_naming",
+}
 
 -- Liefert fuer jedes Modul einen minimalen, aber gueltigen Modul-Body
 -- (return { name = "..." }), damit load_module() es tatsaechlich laden
@@ -56,16 +57,11 @@ local function run_bootstrap(opts)
   local sleep_calls = 0
 
   _G.__captured_deps = nil
+  _G.__xreactor_forced_ref = opts.ref
   _G.http = {
     get = function(url)
       requested_urls[#requested_urls + 1] = url
-      if url == GITHUB_API then
-        return {
-          readAll = function() return '{"sha":"' .. FAKE_SHA .. '"}' end,
-          close = function() end,
-        }
-      end
-      local base = GITHUB_RAW .. FAKE_SHA .. "/xreactor/"
+      local base = GITHUB_RAW .. (opts.ref or "beta") .. "/xreactor/"
       for _, name in ipairs(MODULE_NAMES) do
         if url == base .. "installer/" .. name .. ".lua" then
           if opts.fail_module == name then
@@ -98,18 +94,19 @@ local function run_bootstrap(opts)
   if not chunk then error("installer failed to parse: " .. tostring(lerr)) end
   local ok, err = pcall(chunk)
   _G.print = orig_print
+  _G.__xreactor_forced_ref = nil
 
   return ok, err, requested_urls, reboot_calls, sleep_calls
 end
 
--- 1. Erfolgreicher Lauf: alle Downloads verwenden denselben aufgeloesten
---    Ref, deps enthaelt alle sechs Module plus ref, init.lua wird
+-- 1. Erfolgreicher Lauf: alle Downloads verwenden denselben Ref ohne einen
+--    GitHub-API-Aufruf, deps enthaelt alle Module plus ref, init.lua wird
 --    tatsaechlich mit diesen deps aufgerufen, danach wird rebootet.
 do
   local ok, err, urls, reboot_calls = run_bootstrap()
   if not ok then error("expected the bootstrap to succeed, got error: " .. tostring(err)) end
 
-  local base = GITHUB_RAW .. FAKE_SHA .. "/xreactor/"
+  local base = GITHUB_RAW .. "beta/xreactor/"
   for _, name in ipairs(MODULE_NAMES) do
     local expected_url = base .. "installer/" .. name .. ".lua"
     local found = false
@@ -121,8 +118,8 @@ do
 
   local deps = _G.__captured_deps
   if not deps then error("installer/init.lua (fake) was never invoked") end
-  if deps.ref ~= FAKE_SHA then
-    error("expected deps.ref to be the resolved SHA, got: " .. tostring(deps.ref))
+  if deps.ref ~= "beta" then
+    error("expected deps.ref to be beta, got: " .. tostring(deps.ref))
   end
   for _, name in ipairs(MODULE_NAMES) do
     local dep_key = name .. "_mod"
@@ -135,10 +132,29 @@ do
   if reboot_calls ~= 1 then
     error("expected exactly one os.reboot() call after a successful install, got " .. reboot_calls)
   end
+  for _, url in ipairs(urls) do
+    if url:find("api.github.com", 1, true) then
+      error("bootstrap must not use GitHub's rate-limited branch API: " .. url)
+    end
+  end
   _G.__captured_deps = nil
 end
 
--- 2. Ein fehlschlagender Modul-Download muss den Bootstrap kontrolliert
+-- 2. Recovery may explicitly pin one known commit and every download must
+--    use that same ref.
+do
+  local pinned = "abc123def4567890abc123def4567890abc123d"
+  local ok, err, urls = run_bootstrap({ ref = pinned })
+  if not ok then error("expected pinned bootstrap to succeed: " .. tostring(err)) end
+  local prefix = GITHUB_RAW .. pinned .. "/xreactor/"
+  for _, url in ipairs(urls) do
+    if url:sub(1, #prefix) ~= prefix then
+      error("pinned bootstrap mixed source refs: " .. tostring(url))
+    end
+  end
+end
+
+-- 3. Ein fehlschlagender Modul-Download muss den Bootstrap kontrolliert
 --    abbrechen, BEVOR init.lua ueberhaupt aufgerufen wird -- niemals eine
 --    Installation mit einem fehlenden Kernmodul versuchen.
 do
@@ -154,7 +170,7 @@ do
   end
 end
 
--- 3. Ein fehlschlagender init.lua-Download muss ebenfalls kontrolliert
+-- 4. Ein fehlschlagender init.lua-Download muss ebenfalls kontrolliert
 --    abbrechen.
 do
   local ok, err = run_bootstrap({ fail_init = true })

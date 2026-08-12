@@ -101,6 +101,13 @@ local rt_default_config = require("nodes.rt.config")
 CONFIG.CONFIG_PATH = "/xreactor/config/rt.lua"
 local DEFAULT_CONFIG = utils.deep_copy(rt_default_config)
 local config, config_meta = utils.load_config(CONFIG.CONFIG_PATH, DEFAULT_CONFIG)
+local reactor_names = utils.load_config("/xreactor/config/reactor_names.lua", {
+  version = 2, completed = false, aliases = {}, reactors = {},
+})
+if type(reactor_names) ~= "table" or reactor_names.completed ~= true
+    or type(reactor_names.aliases) ~= "table" then
+  reactor_names = { aliases = {} }
+end
 local config_warnings = {}
 local function add_config_warning(msg) table.insert(config_warnings, msg) end
 config_normalizer.migrate_legacy_paths(config, add_config_warning)
@@ -161,7 +168,8 @@ runtime_config.configured_caps = {
 }
 
 local registry = registry_lib.new({
-  node_id = node_id, role = "rt", log_prefix = CONFIG.LOG_PREFIX
+  node_id = node_id, role = "rt", log_prefix = CONFIG.LOG_PREFIX,
+  aliases = reactor_names.aliases,
 })
 local rt_health = health.new({})
 local devices = {
@@ -1228,4 +1236,3 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
     require("core.remote_update").run(log)
   end
 end, quiesce_handshake and { handshake = quiesce_handshake } or nil)
-

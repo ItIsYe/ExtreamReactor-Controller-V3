@@ -8,14 +8,16 @@ monitor_ui = (repo / "xreactor/nodes/fuel/monitor_ui.lua").read_text(encoding="u
 ui_pages = (repo / "xreactor/nodes/fuel/ui_pages.lua").read_text(encoding="utf-8")
 ui_completion = (repo / "xreactor/nodes/fuel/ui_completion.lua").read_text(encoding="utf-8")
 router = (repo / "xreactor/nodes/fuel/router_ui.lua").read_text(encoding="utf-8")
+reactor_targets = (repo / "xreactor/nodes/fuel/reactor_targets.lua").read_text(encoding="utf-8")
 mockup = (repo / "xreactor/core/mockup_ui.lua").read_text(encoding="utf-8")
 
 assert "local FUEL_MONITOR_SCALE = 0.5" in main
 assert "local FUEL_MONITOR_SCALE = 1.0" not in main
 assert main.count('monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)') == 2
-assert "for peer_id, peer in pairs(comms:get_peers() or {}) do" in main
-assert "peer.role == constants.roles.RT_NODE" in main
-assert "for _, peer in ipairs(comms:get_peers())" not in main
+assert 'require("nodes.fuel.reactor_targets")' in main
+assert "reactor_targets.collect(config, fuel_status_cache)" in main
+assert "get_peers" not in reactor_targets  # An RT peer is not a routable reactor.
+assert "global_reactor_id" in reactor_targets
 
 assert "ui_diagnostics_overlay.attach" not in monitor_ui
 assert 'require("nodes.fuel.ui_diagnostics_overlay")' not in monitor_ui

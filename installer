@@ -24,7 +24,6 @@
 -- (load(), dieser Bootstrap hier) stammen, ist fuer sie irrelevant.
 
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 
 local function p(msg) pcall(print, tostring(msg)) end
 
@@ -67,31 +66,23 @@ local function download(url)
   return nil, last_err
 end
 
--- SHA aufloesen
-local sha = nil
-local ok_sha, r_sha = pcall(http.get, GITHUB_API)
-if ok_sha and r_sha then
-  local ok2, body = pcall(r_sha.readAll); pcall(r_sha.close)
-  if ok2 and type(body) == "string" then
-    sha = body:match('"sha"%s*:%s*"(%x+)"')
-  end
-end
-p(sha and ("SHA: " .. sha:sub(1, 12)) or "WARN: SHA nicht aufloesbar")
-
--- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md (Abschnitt 14). EIN einziger Referenzpunkt
--- ("ref": entweder die aufgeloeste SHA, oder bei Aufloesungsfehler
--- explizit "beta") fuer den GESAMTEN Lauf -- sowohl fuer die hier
--- heruntergeladenen Installermodule als auch (via deps.ref) fuer
--- installer/init.lua's eigenen Download aller uebrigen Dateien.
-local ref = sha or "beta"
+-- Use one source ref for the whole run without GitHub's rate-limited branch
+-- API. A recovery caller may pin a known commit; ordinary installations use
+-- the beta branch and still verify every downloaded file against its manifest
+-- hash before committing the installation.
+local forced_ref = rawget(_G, "__xreactor_forced_ref")
+local ref = forced_ref ~= nil and tostring(forced_ref) or "beta"
+p("Ref: " .. ref)
 local base = GITHUB_RAW..ref.."/xreactor/"
 
 -- ── Kanonische Installermodule herunterladen ─────────────────────────────────
 -- Dieselben Dateien, die auch ein bereits installierter Node unter
 -- /xreactor/installer/*.lua liegen hat -- hier frisch vom aufgeloesten Ref,
 -- da /xreactor bei der Erstinstallation noch nicht existiert.
-local MODULE_NAMES = { "http", "manifest", "stage", "ui", "journal", "plan_validator" }
+local MODULE_NAMES = {
+  "http", "manifest", "stage", "ui", "journal", "plan_validator",
+  "reactor_naming",
+}
 local module_src = {}
 for _, name in ipairs(MODULE_NAMES) do
   local url = base.."installer/"..name..".lua"
@@ -121,6 +112,7 @@ local stage_mod          = load_module("stage",           module_src.stage)
 local ui_mod             = load_module("ui",               module_src.ui)
 local journal_mod        = load_module("journal",         module_src.journal)
 local plan_validator_mod = load_module("plan_validator",  module_src.plan_validator)
+local reactor_naming_mod = load_module("reactor_naming",  module_src.reactor_naming)
 
 local init_fn, init_syntax_err = load(init_src, "=init", "t", _ENV)
 if not init_fn then
@@ -144,6 +136,7 @@ init_body({
   ui_mod = ui_mod,
   journal_mod = journal_mod,
   plan_validator_mod = plan_validator_mod,
+  reactor_naming_mod = reactor_naming_mod,
   ref = ref,
 })
 
