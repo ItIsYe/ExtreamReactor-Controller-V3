@@ -282,7 +282,11 @@ function M:tick_failsafe(stale_command_s, retry_ms)
   local age_s = self.last_command_ts and ((now - self.last_command_ts) / 1000) or math.huge
   local stale = age_s > (tonumber(stale_command_s) or 20)
   local uncertain = not self.initialized or self.last_write_error ~= nil
-  if not (uncertain or stale) or (now - self.last_failsafe_attempt_ts) < (tonumber(retry_ms) or 2000) then
+  -- A confirmed BLOCKED actuator with no pending error needs no retry no
+  -- matter how long it has been idle: staleness alone must not force a
+  -- physical write on an already-safe valve.
+  local needs_block = uncertain or self.current_high ~= true
+  if not (needs_block and (uncertain or stale)) or (now - self.last_failsafe_attempt_ts) < (tonumber(retry_ms) or 2000) then
     return false
   end
   self.last_failsafe_attempt_ts = now

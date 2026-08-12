@@ -330,12 +330,20 @@ function reactor.apply_rod_level(name, level, log_prefix)
   end
 
   if has_method(method_set, "setControlRodLevel") then
-    local rod_count = count_rods(name, method_set)
-    if not rod_count or rod_count < 1 then return nil, "unable to resolve rod count for indexed setter" end
+    -- count_rods() only recognises bulk getters; peripherals exposing solely
+    -- the indexed setControlRodLevel/getControlRodLevel pair (no bulk method)
+    -- resolve to nil here and default to a single rod at index 0/1.
+    local rod_count = count_rods(name, method_set) or 1
     local changed, last_err = 0, nil
     for index = 0, rod_count - 1 do
       local ok, err = utils.safe_peripheral_call(name, "setControlRodLevel", index, normalized_level)
-      if err then last_err = err elseif ok == false then last_err = "returned false" else changed = changed + 1 end
+      if err and index == 0 and rod_count == 1 then
+        -- Some peripherals are 1-indexed; retry index 1 before giving up.
+        local ok_one, err_one = utils.safe_peripheral_call(name, "setControlRodLevel", 1, normalized_level)
+        if not err_one and ok_one ~= false then changed = changed + 1 else last_err = err_one or "returned false" end
+      elseif err then last_err = err
+      elseif ok == false then last_err = "returned false"
+      else changed = changed + 1 end
     end
     if changed ~= rod_count then
       return nil, string.format("partial rod write %d/%d: %s", changed, rod_count, tostring(last_err or "unknown"))
