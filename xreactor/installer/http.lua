@@ -34,36 +34,50 @@ end
 -- single request just never gets a response), the installer could sit on
 -- one file forever: no crash, no retry message, still interruptible via
 -- Ctrl+T (it's genuinely waiting, not looping) since it's not tied to file
--- size at all. installer/auto_update.lua's own http_get_async() already
--- solved exactly this with an explicit os.startTimer() ceiling -- mirrored
--- here so every one of M.download()'s retry attempts is itself bounded,
--- regardless of server http.timeout config.
+-- size at all.
+--
+-- First attempt mirrored installer/auto_update.lua's http_get_async()
+-- (http.request() + os.startTimer() + a manually filtered event loop
+-- matching http_success/http_failure/timer by url/timer id). Reported in
+-- the field: still hung well past the 15s ceiling with zero retry output
+-- -- the manual event matching has more moving parts (event names, timer
+-- id equality, url equality against a cache-busted query string) than it
+-- needs, and something in that chain wasn't firing reliably even though
+-- the structurally identical code in auto_update.lua worked for smaller,
+-- unbusted single-file requests.
+--
+-- Rebuilt on parallel.waitForAny() instead: race the already-proven
+-- synchronous http.get() against a plain os.sleep() timeout. CC:Tweaked's
+-- parallel.* returns as soon as either coroutine finishes -- no event name
+-- or id matching of our own, no dependency on http.request()'s specific
+-- success/failure event semantics. If http.get() itself never yields at
+-- all (shouldn't happen -- it's fully synchronous sugar over the same
+-- event wait), the sleep-timer coroutine still lets waitForAny return, and
+-- the abandoned http.get() coroutine is simply dropped.
 local function try_once(url)
-  if http and type(http.request) == "function" and type(os.startTimer) == "function" then
-    local ok_call, started, request_err = pcall(http.request, url)
-    if not ok_call or started ~= true then
-      return nil, tostring(request_err or started or "http.request failed")
-    end
-    local timer = os.startTimer(REQUEST_TIMEOUT_S)
-    while true do
-      local event, p1, p2, p3 = os.pullEvent()
-      if event == "http_success" and p1 == url then
-        if os.cancelTimer then pcall(os.cancelTimer, timer) end
-        return read_response(p2)
-      elseif event == "http_failure" and p1 == url then
-        if os.cancelTimer then pcall(os.cancelTimer, timer) end
-        pcall(function() if p3 then p3.close() end end)
-        return nil, tostring(p2 or "http_failure")
-      elseif event == "timer" and p1 == timer then
-        return nil, "timeout"
-      end
-    end
+  if not http or type(http.get) ~= "function" then return nil, "no http" end
+  if type(parallel) ~= "table" or type(parallel.waitForAny) ~= "function" then
+    local ok, r = pcall(http.get, url)
+    if not ok or not r then return nil, "http.get failed" end
+    return read_response(r)
   end
 
-  if not http or type(http.get) ~= "function" then return nil, "no http" end
-  local ok, r = pcall(http.get, url)
-  if not ok or not r then return nil, "http.get failed" end
-  return read_response(r)
+  local body, err, done = nil, nil, false
+  local ok_race, race_err = pcall(parallel.waitForAny,
+    function()
+      local ok, r = pcall(http.get, url)
+      if ok and r then
+        body, err = read_response(r)
+      else
+        err = "http.get failed"
+      end
+      done = true
+    end,
+    function() os.sleep(REQUEST_TIMEOUT_S) end)
+
+  if not ok_race then return nil, "request failed: " .. tostring(race_err) end
+  if not done then return nil, "timeout" end
+  return body, err
 end
 
 -- Download mit Retries und Cache-Busting.
