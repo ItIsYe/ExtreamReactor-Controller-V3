@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 555,
-  manifest_id = "manifest-v555",
+  manifest_version = 556,
+  manifest_id = "manifest-v556",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 10079, hash = "5d1a2617", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "e18511a5", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "199bf76d", always = true },
   { path = "start.lua", size_bytes = 15787, hash = "b2746ca4", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
