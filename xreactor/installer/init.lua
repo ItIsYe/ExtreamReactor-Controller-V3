@@ -266,6 +266,13 @@ do
     -- failure right here can still report an accurate "needed" byte count,
     -- not just "out of space" with nothing to act on.
     local serialized = serialize_config_backup(config_backup)
+    -- Proactively reclaim space (incl. /xreactor_logs as a last resort,
+    -- see stage.lua's reclaim()) BEFORE attempting the directory create,
+    -- not just after it fails -- a plain fs.makeDir() error message alone
+    -- gives no chance to recover first.
+    if type(stage_mod.reclaim) == "function" then
+      pcall(stage_mod.reclaim, #serialized + 4096)
+    end
     local ok_dir, dir_err = pcall(fs.makeDir, RECOVERY_DIR)
     if not ok_dir or not fs.exists(RECOVERY_DIR) then
       local free = stage_mod.free_space and stage_mod.free_space()
