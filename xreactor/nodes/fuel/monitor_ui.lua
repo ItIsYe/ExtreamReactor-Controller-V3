@@ -179,10 +179,6 @@ function M.handle_touch(x, y)
   return false
 end
 
-function M.current_page_index()
-  return monitor_router and monitor_router.index or 1
-end
-
 function M.get_diagnostics()
   local base = monitor_router and monitor_router.get_diagnostics and monitor_router:get_diagnostics() or { error_count = 0, last_error = nil }
   base.pointer_events_received = ui_diag_extra.pointer_events_received

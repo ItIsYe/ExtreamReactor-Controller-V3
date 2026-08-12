@@ -621,5 +621,7 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   get_rs_router():tick()
 end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
   enter_standby("UPDATE_QUIESCE")
-  return standby == true
+  local rs_router = get_rs_router()
+  rs_router:begin_quiesce("UPDATE_QUIESCE")
+  return standby == true and rs_router:poll_quiesce()
 end } or nil)

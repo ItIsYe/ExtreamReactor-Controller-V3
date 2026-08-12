@@ -1,28 +1,10 @@
 -- installer/http.lua
--- Download-Modul: SHA-PIN, Retries, HTML-Check
+-- Download-Modul: ein vom Aufrufer gewaehlter Ref, Retries, HTML-Check
 -- CC:Tweaked kompatibel: http.get(url) ohne timeout-Parameter
 
 local M = {}
 
-local GITHUB_API = "https://api.github.com/repos/ItIsYe/ExtreamReactor-Controller-V3/branches/beta"
 local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/"
-
--- SHA auflösen (3 Versuche)
-function M.resolve_sha()
-  if not http or type(http.get) ~= "function" then return nil end
-  for attempt = 1, 3 do
-    local ok, r = pcall(http.get, GITHUB_API)
-    if ok and r then
-      local ok2, body = pcall(r.readAll); pcall(r.close)
-      if ok2 and type(body) == "string" then
-        local sha = body:match('"sha"%s*:%s*"(%x+)"')
-        if sha then return sha end
-      end
-    end
-    if attempt < 3 then os.sleep(3) end
-  end
-  return nil
-end
 
 -- HTML-Erkennung (CDN-Fehlerseiten)
 function M.is_html(body)
@@ -76,20 +58,8 @@ function M.download(url, opts)
   return nil, tostring(last_err or "download failed after " .. retries .. " retries")
 end
 
--- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 14).
--- Diese Funktion wich bisher bei einem Fehlschlag der SHA-gepinnten URL
--- automatisch, pro Datei einzeln, auf den ungepinnten "beta"-Branch-Pfad
--- aus -- waehrend installer/init.lua das Manifest entweder ausschliesslich
--- SHA-gepinnt ODER ausschliesslich von "beta" laedt. In jeder Kombination
--- konnten so Manifest und einzelne Dateien aus zwei verschiedenen Commits
--- stammen. Jetzt wird EIN einziger, bereits vom Aufrufer entschiedener
--- Referenzpunkt ("ref": entweder eine SHA oder explizit der String
--- "beta") verwendet -- ohne eigenstaendigen Fallback hier. Der Aufrufer
--- (installer/init.lua) legt "ref" fuer den GESAMTEN Lauf einmal fest und
--- verwendet ihn sowohl fuers Manifest als auch fuer jede Datei; schlaegt
--- der Lauf komplett fehl, muss ein erneuter, komplett frischer Versuch
--- (mit neu aufgeloester SHA) gestartet werden, statt Quellen zu mischen.
+-- Verwendet ausschliesslich den vom Bootstrap gewaehlten Ref. Ein einzelner
+-- Dateidownload darf nie still auf einen anderen Branch oder Commit fallen.
 function M.download_file(rel_path, ref, opts)
   local url
   if ref and ref ~= "beta" then

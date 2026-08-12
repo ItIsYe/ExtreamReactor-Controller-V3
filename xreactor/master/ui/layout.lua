@@ -21,7 +21,6 @@
 -- weil die Breitenrechnung zentral und immer gleich passiert.
 
 local ui = require("core.ui")
-local colors = require("shared.colors")
 
 local layout = {}
 
@@ -34,14 +33,6 @@ local function clamp_int(value, min_v, max_v, fallback)
   if min_v and n < min_v then n = min_v end
   if max_v and n > max_v then n = max_v end
   return n
-end
-
-local function fit(text, width)
-  local raw = tostring(text or "")
-  local w = clamp_int(width, 1, 512, #raw)
-  if #raw <= w then return raw end
-  if w <= 1 then return string.sub(raw, 1, w) end
-  return string.sub(raw, 1, w - 1) .. "~"
 end
 
 -- ── Badge-Leiste mit garantierter Passform ────────────────────────────────

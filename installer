@@ -12,7 +12,7 @@
 -- Git-Historie dieser Datei -- mehrfach in dieser Session).
 --
 -- Jetzt macht /installer NUR NOCH:
---   1. einen einzigen Source-Ref aufloesen (SHA oder "beta"),
+--   1. einen einzigen Source-Ref fuer den gesamten Lauf auswaehlen,
 --   2. die kanonischen Installermodule GENAU dieses Refs frisch
 --      herunterladen (nicht eingebettet, nicht potenziell veraltet),
 --   3. sie per load() in Module umwandeln,

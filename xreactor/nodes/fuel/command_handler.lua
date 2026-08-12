@@ -27,8 +27,12 @@ function M.handle(message, ctx)
   if command.target == constants.command_targets.SET_RESERVE then
     local new_reserve = tonumber(command.value)
     if type(new_reserve) == "number" and new_reserve >= 0 then
-      ctx.set_reserve(new_reserve)
-      ctx.utils.log("FUEL", "Reserve updated to " .. tostring(new_reserve))
+      local result = ctx.set_reserve(new_reserve)
+      ctx.utils.log("FUEL", "Reserve updated to " .. tostring(new_reserve)
+        .. " persisted=" .. tostring(type(result) == "table" and result.persisted == true))
+      if type(result) == "table" then
+        return sch.finish_with_result(devices, result)
+      end
     else
       ctx.utils.log("FUEL", "SET_RESERVE rejected: invalid value=" .. tostring(command.value), "WARN")
       return sch.finish_with_result(devices, { ok = false, error = "invalid reserve value", reason_code = "INVALID_VALUE" })

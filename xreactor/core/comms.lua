@@ -439,6 +439,23 @@ local function handle_ack(message)
   if not ack_for then return end
   local entry = state.inflight[ack_for]
   if not entry then return end
+
+  -- The ACK source is part of the delivery proof. A peer cannot complete a
+  -- command merely by guessing/observing its message ID.
+  local expected_source = entry.message and entry.message.dst or nil
+  local actual_source = message.src or message.sender_id
+  if expected_source ~= nil
+      and utils.normalize_node_id(actual_source) ~= utils.normalize_node_id(expected_source) then
+    log(("Ignoring ACK %s from unexpected source %s (expected %s)"):format(
+      tostring(ack_for), tostring(actual_source), tostring(expected_source)), "WARN")
+    return
+  end
+  if message.dst ~= nil
+      and utils.normalize_node_id(message.dst) ~= utils.normalize_node_id(state.node_id) then
+    log(("Ignoring ACK %s addressed to %s (local %s)"):format(
+      tostring(ack_for), tostring(message.dst), tostring(state.node_id)), "WARN")
+    return
+  end
   if message.type == constants.message_types.ACK_DELIVERED then
     entry.delivered = true
     entry.sent_ts = now_ms()
@@ -661,7 +678,7 @@ function comms.receive(raw_message)
   table.insert(state.incoming, raw_message)
 end
 
-function comms.tick(now)
+function comms.tick()
   if not state.initialized then return end
   prune_dedupe()
   flush_queue()

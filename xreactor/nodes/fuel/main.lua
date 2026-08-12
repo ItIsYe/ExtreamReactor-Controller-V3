@@ -321,7 +321,20 @@ local function handle_command(message)
   return fuel_command_handler.handle(message, {
     support_command_handler = support_command_handler, constants = constants,
     devices = devices, protocol = protocol, comms = comms, utils = utils,
-    set_reserve = function(v) reserve = v end,
+    set_reserve = function(value)
+      reserve = value
+      config.minimum_reserve = value
+      local persisted, persist_err = utils.write_config(CONFIG.CONFIG_PATH, config)
+      if not persisted then
+        utils.log("FUEL", "SET_RESERVE angewendet, aber Persistierung fehlgeschlagen: "
+          .. tostring(persist_err), "WARN")
+      end
+      return {
+        ok = true,
+        persisted = persisted == true,
+        persistence_error = persisted and nil or tostring(persist_err),
+      }
+    end,
     on_fuel_status = function(value) fuel_status_network.ingest_master_relay(fuel_status_cache, value) end,
   })
 end
@@ -468,6 +481,6 @@ support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function
   get_rs_router():tick()
 end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
   local rs_router = get_rs_router()
-  rs_router:shutdown_now("UPDATE_QUIESCE")
-  return rs_router:get_active_transaction() == nil
+  rs_router:begin_quiesce("UPDATE_QUIESCE")
+  return rs_router:poll_quiesce()
 end } or nil)

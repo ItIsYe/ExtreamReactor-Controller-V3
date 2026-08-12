@@ -28,7 +28,7 @@
 -- der (strikt) niedrigeren Generation ("stale" Slot); der jeweils andere
 -- Slot -- der Slot mit der aktuell hoechsten gueltigen Generation --
 -- bleibt dabei voellig unangetastet. Ein Crash an JEDEM Punkt dieses
--- Schreibvorgangs (Tmp-Write, Delete des alten Slotinhalts, Move)
+-- Schreibvorgangs im stale Slot
 -- hinterlaesst den anderen Slot weiterhin vollstaendig und mit seiner
 -- zuletzt bestaetigten Generation lesbar -- boot-seitige Klassifikation
 -- (M.classify()) waehlt danach einfach wieder den hoechsten GUELTIGEN
@@ -67,29 +67,25 @@ M.SLOT_B = "/xreactor_install_journal.b.lua"
 -- dieses Codes noch auf der Platte liegt.
 M.LEGACY_PATH = "/xreactor_install_journal.lua"
 
--- Eigener, von installer/stage.lua UNABHAENGIGER atomarer Write: journal.lua
+-- Eigener, von installer/stage.lua UNABHAENGIGER Slot-Write: journal.lua
 -- wird auch von xreactor/start.lua bei JEDEM Boot gelesen, potenziell bevor
 -- der Rest von /xreactor in einem verlaesslichen Zustand ist -- keine
 -- Abhaengigkeit auf stage.lua's reclaim()/WRITE_BUFFER-Logik hier, nur ein
--- minimaler tmp-write-plus-move. Zielpfad ist hier IMMER der aktuell
--- "stale" Slot (siehe M.write()) -- der jeweils andere, gerade gueltige
--- Slot wird von dieser Funktion nie beruehrt.
-local function atomic_write(path, content)
-  local tmp = path .. ".tmp"
-  local f = fs.open(tmp, "w")
-  if not f then return false, "open failed: " .. tmp end
+-- direkter Write. Zielpfad ist IMMER der aktuell "stale" Slot (siehe
+-- M.write()); der jeweils andere, gerade gueltige Slot wird nie beruehrt.
+-- Es gibt bewusst weder temporaere Verschiebung noch eine Post-Write-Nachlese. Diese
+-- zusaetzlichen Schritte sind auf CC:Tweaked keine staerkere Atomizitaet und
+-- vergroessern nur die Fehleroberflaeche. Ein abgebrochener Write beschaedigt
+-- hoechstens den stale Slot; classify() faellt auf den anderen Slot zurueck.
+local function write_stale_slot(path, content)
+  local f = fs.open(path, "w")
+  if not f then return false, "open failed: " .. path end
   local write_ok, write_err = pcall(function() f.write(content) end)
-  pcall(f.close)
+  local close_ok, close_err = pcall(f.close)
   if not write_ok then
-    pcall(fs.delete, tmp)
     return false, tostring(write_err)
   end
-  if fs.exists(path) then pcall(fs.delete, path) end
-  local ok, mv_err = pcall(fs.move, tmp, path)
-  if not ok or not fs.exists(path) then
-    pcall(fs.delete, tmp)
-    return false, "move failed: " .. tostring(mv_err)
-  end
+  if not close_ok then return false, "close failed: " .. tostring(close_err) end
   return true
 end
 
@@ -196,25 +192,8 @@ function M.write(journal)
   to_write.generation = new_generation
 
   local content = serialize(to_write)
-  local ok, err = atomic_write(target_path, content)
+  local ok, err = write_stale_slot(target_path, content)
   if not ok then return false, err end
-
-  -- Round-Trip-Verifikation: erst NACH erfolgreichem Zuruecklesen und
-  -- Abgleich gilt dieser Write als abgeschlossen (Vorgabe des Fixes:
-  -- "neue Generation vollstaendig schreiben und zuruecklesen, Inhalt/State
-  -- validieren, erst danach aktive Generation umschalten" -- das
-  -- "Umschalten" ist hier implizit: solange die Verifikation fehlschlaegt,
-  -- bleibt die hoehere Generation ja weiterhin im JEWEILS ANDEREN Slot).
-  local verify_status, verify_journal = slot_read(target_path)
-  local expected_status = (to_write.state == M.STATE.COMMITTED)
-    and M.STATUS.VALID_COMMITTED or M.STATUS.VALID_INCOMPLETE
-  if verify_status ~= expected_status
-    or not verify_journal
-    or verify_journal.generation ~= new_generation
-    or verify_journal.state ~= to_write.state then
-    return false, "journal verify failed after write (status=" .. tostring(verify_status) .. ")"
-  end
-
   return true
 end
 
@@ -227,35 +206,6 @@ function M.read()
     return journal
   end
   return nil
-end
-
--- Bootzeit-Klassifikation (Kompatibilitaets-API): liefert nil, wenn ein
--- normaler Rollenstart zulaessig ist (ABSENT oder VALID_COMMITTED), sonst
--- ein Journaltable. Bei CORRUPT/UNREADABLE -- wo kein echter Journalinhalt
--- existiert -- wird ein synthetisches, erkennbar als solches markiertes
--- Ersatzjournal geliefert, damit Aufrufer trotzdem fail-closed reagieren
--- koennen, ohne selbst zwischen "kein Journal" und "unlesbares Journal"
--- unterscheiden zu muessen.
-function M.check_incomplete()
-  local status, journal = M.classify()
-  if status == M.STATUS.ABSENT or status == M.STATUS.VALID_COMMITTED then
-    return nil
-  end
-  if status == M.STATUS.VALID_INCOMPLETE then
-    return journal
-  end
-  -- CORRUPT oder UNREADABLE: kein gueltiger Inhalt vorhanden, aber
-  -- mindestens ein Slot existiert und ist nicht als abgeschlossen
-  -- verifizierbar -- fail-closed als unvollstaendig behandeln.
-  return {
-    state = "UNKNOWN_" .. tostring(status),
-    generation = -1,
-    ref = nil,
-    manifest_id = nil,
-    role = nil,
-    started_at = 0,
-    expected_files = {},
-  }
 end
 
 -- Raeumt ausschliesslich den veralteten Einzeldatei-Pfad (M.LEGACY_PATH)

@@ -1,49 +1,6 @@
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
--- Pflicht-Test fuer VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
--- 2026-07-12.md, Abschnitt 21 "Senderbindung und Sorter-Reconnect").
---
--- Zwei getrennte Bugs, beide in nodes/valve/main.lua behoben:
---
--- 1. Senderbindung: ohne manuell gesetztes config.trusted_source akzeptierte
---    die Node auf Dauer JEDEN Sender, der ein korrekt adressiertes SET_VALVE
---    auf Kanal 6504 sendet. Fix: automatisches Pairing an den ERSTEN
---    akzeptierten Sender, persistiert in der Nutzerconfig; jeder SPAETERE
---    abweichende Sender wird verworfen.
--- 2. Sorter-Reconnect: get_sorter() cachte den einmal gewrappten Sorter
---    dauerhaft -- ein spaeterer Callfehler (Detach/Reattach, ersetztes
---    Peripheral) liess den kaputten Handle fuer immer im Cache stehen.
---    Fix: bei einem Callfehler wird der Cache geleert, der naechste
---    get_sorter()-Aufruf wrappt neu.
---
--- nodes/valve/main.lua ist ein eigenstaendiges Top-Level-Node-Skript mit
--- Boot-Seiteneffekten -- dieser Test extrahiert deshalb (wie tests/
--- valve_failed_write_retry_test.lua) den echten Quelltext von get_sorter()/
--- write_actuator()/apply_valve() und handle_valve_channel_event() per
--- String-Marker direkt aus main.lua und fuehrt ihn per load() in einer
--- isolierten, gemockten Umgebung aus.
-
-local function read_file(path)
-  local f = assert(io.open(path, 'r'))
-  local content = f:read('*a')
-  f:close()
-  return content
-end
-
-local function extract(content, start_marker, end_marker)
-  local s = content:find(start_marker, 1, true)
-  assert(s, 'start marker not found: ' .. start_marker)
-  local e = content:find(end_marker, s, true)
-  assert(e, 'end marker not found: ' .. end_marker)
-  return content:sub(s, e + #end_marker - 1)
-end
-
-local SOURCE = read_file('xreactor/nodes/valve/main.lua')
-local BLOCK_A = extract(SOURCE, 'local sorter_device = nil',
-  'BLOCKIERT" or "OFFEN"), "INFO")\n  return true\nend')
-local BLOCK_B = extract(SOURCE, 'local SEEN_COMMAND_LIMIT = 16',
-  'send_valve_ack(reply_side, message.command_id, applied, current_high, last_write_error, message.src)\nend')
-local EXTRACTED = BLOCK_A .. '\n' .. BLOCK_B
+local controller_lib = require('nodes.valve.controller')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -55,194 +12,106 @@ local function assert_true(value, message)
   if not value then error(message or 'assert_true failed') end
 end
 
--- ─────────────────────────────────────────────────────────────────────────
--- Teil 1: Senderbindung (Auto-Pairing)
--- ─────────────────────────────────────────────────────────────────────────
-local function make_pairing_instance(opts)
+local function make_controller(opts)
   opts = opts or {}
-  local log_lines = {}
-  local write_config_calls = {}
-
-  local preamble = [[
-local current_high = true
-local valve_initialized = false
-local last_write_error = nil
-local last_command_ts = os.epoch("utc")
-local config = { sorter_name = "logisticalSorter_1", trusted_source = ]] .. (opts.initial_trusted_source and ('"' .. opts.initial_trusted_source .. '"') or 'nil') .. [[ }
-local CONFIG = { LOG_PREFIX = "VALVE", CONFIG_PATH = "/xreactor/config/valve.lua" }
-local node_id = "VALVE-1"
-]]
-
-  local footer = [[
-
-return {
-  handle_valve_channel_event = handle_valve_channel_event,
-  get_current_high = function() return current_high end,
-  get_trusted_source = function() return config.trusted_source end,
-  seen_command_ids = seen_command_ids,
-}
-]]
-
-  local chunk = preamble .. EXTRACTED .. footer
-
-  local env = {
-    os = { epoch = function() return 1000000 end },
-    peripheral = { wrap = function() return { setAutoMode = function() end } end },
+  local writes, persisted, logs, acks = {}, {}, {}, {}
+  local config = { sorter_name = 'logisticalSorter_1', trusted_source = opts.trusted_source }
+  local peripheral_api = {
+    find = function() return nil end,
+    wrap = function(name)
+      if name == 'left' then
+        return { transmit = function(_, _, message) acks[#acks + 1] = message end }
+      end
+      return { setAutoMode = function(value) writes[#writes + 1] = value end }
+    end,
+  }
+  local controller = controller_lib.new({
+    config = config, config_path = '/xreactor/config/valve.lua', node_id = 'VALVE-1',
     constants = { channels = { VALVE = 6504 } },
     utils = {
-      log = function(_prefix, msg, level) log_lines[#log_lines + 1] = { msg = msg, level = level } end,
-      write_config = function(path, cfg)
-        write_config_calls[#write_config_calls + 1] = { path = path, trusted_source = cfg.trusted_source }
-        if opts.write_config_ok == false then return false, 'simulated persist failure' end
+      log = function(_, message, level) logs[#logs + 1] = { message = message, level = level } end,
+      write_config = function(path, value)
+        persisted[#persisted + 1] = { path = path, trusted_source = value.trusted_source }
+        if opts.persist_ok == false then return false, 'simulated persistence failure' end
         return true
       end,
     },
-    string = string, table = table, tostring = tostring, tonumber = tonumber, type = type, pcall = pcall,
-    error = error, ipairs = ipairs, pairs = pairs, select = select,
-  }
-  env._G = env
-
-  local fn = assert(load(chunk, 'valve_pairing_test_chunk', 't', env))
-  local instance = fn()
-  instance.log_lines = log_lines
-  instance.write_config_calls = write_config_calls
-  return instance
+    peripheral_api = peripheral_api,
+    colors_api = { orange = 1, red = 2, green = 3 },
+    os_api = { epoch = function() return 1000000 end },
+  })
+  return controller, config, writes, persisted, logs, acks
 end
 
--- 1a. Frische Installation (trusted_source unset): das erste akzeptierte
---     SET_VALVE bindet die Node automatisch an dessen Sender und
---     persistiert das Pairing.
-do
-  local inst = make_pairing_instance()
-  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-1', high = true } }
-  inst.handle_valve_channel_event(event)
-
-  assert_eq(inst.get_trusted_source(), 'FUEL-1', 'the first accepted sender must be auto-paired as trusted_source')
-  assert_eq(#inst.write_config_calls, 1, 'the pairing must be persisted via write_config')
-  assert_eq(inst.write_config_calls[1].trusted_source, 'FUEL-1', 'the persisted config must carry the new trusted_source')
-  assert_true(inst.seen_command_ids['CMD-1'] == true, 'the first, now-trusted command must still be applied normally')
+local function command(src, id, high)
+  return { 'modem_message', 'left', 6504, 6504,
+    { type = 'SET_VALVE', dst = 'VALVE-1', src = src, command_id = id, high = high } }
 end
 
--- 1b. Nach dem Pairing: ein ANDERER Sender wird verworfen (kein Redstone-
---     Write, kein Dedupe-Eintrag), ein WARN wird geloggt.
+-- First successfully applied command persistently pairs an unconfigured node.
 do
-  local inst = make_pairing_instance({ initial_trusted_source = 'FUEL-1' })
-  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'INTRUDER-1', command_id = 'CMD-2', high = false } }
-  inst.handle_valve_channel_event(event)
+  local controller, _, _, persisted = make_controller()
+  assert_true(controller:handle_event(command('FUEL-1', 'CMD-1', true)))
+  local state = controller:get_state()
+  assert_eq(state.trusted_source, 'FUEL-1', 'first accepted sender must become trusted_source')
+  assert_true(state.pairing_persisted, 'successful pairing must be reported as persistent')
+  assert_eq(#persisted, 1, 'pairing must write the user config exactly once')
+  assert_eq(persisted[1].trusted_source, 'FUEL-1')
+end
 
-  assert_true(not inst.seen_command_ids['CMD-2'], 'a command from an untrusted sender must never be applied/remembered')
-  assert_eq(inst.get_current_high(), true, 'the valve state must be unaffected by an untrusted SET_VALVE')
-  local found_warn = false
-  for _, entry in ipairs(inst.log_lines) do
-    if entry.level == 'WARN' and tostring(entry.msg):find('nicht vertrauenswuerdiger', 1, true) then found_warn = true end
+-- Once paired, a different sender is rejected before any actuator write.
+do
+  local controller, _, writes, persisted, logs = make_controller({ trusted_source = 'FUEL-1' })
+  assert_true(not controller:handle_event(command('INTRUDER-1', 'CMD-2', false)))
+  assert_eq(#writes, 0, 'untrusted sender must never touch the sorter')
+  assert_eq(#persisted, 0, 'existing pairing must not be rewritten')
+  local warned = false
+  for _, entry in ipairs(logs) do
+    if entry.level == 'WARN' and entry.message:find('untrusted source', 1, true) then warned = true end
   end
-  assert_true(found_warn, 'an untrusted sender must be logged as WARN')
+  assert_true(warned, 'untrusted sender rejection must be visible in the log')
 end
 
--- 1c. Bereits gepaarter, korrekter Sender: normale Anwendung, KEIN
---     erneuter write_config-Aufruf (Pairing ist bereits abgeschlossen).
+-- Pairing is all-or-nothing. If persistence fails, roll back trust in RAM,
+-- physically return to BLOCKED and reject the command ACK.
 do
-  local inst = make_pairing_instance({ initial_trusted_source = 'FUEL-1' })
-  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-3', high = false } }
-  inst.handle_valve_channel_event(event)
-
-  assert_true(inst.seen_command_ids['CMD-3'] == true, 'a command from the already-trusted sender must be applied normally')
-  assert_eq(#inst.write_config_calls, 0, 'an already-paired sender must not trigger a repeated pairing write')
+  local controller, config, writes, persisted, _, acks = make_controller({ persist_ok = false })
+  assert_true(not controller:handle_event(command('FUEL-1', 'CMD-3', false)))
+  local state = controller:get_state()
+  assert_eq(config.trusted_source, nil, 'failed persistence must not leave a volatile trust binding')
+  assert_true(not state.pairing_persisted, 'failed persistence must be reported')
+  assert_true(state.pairing_error ~= nil, 'persistence error must be diagnosable')
+  assert_eq(writes[1], true, 'requested OPEN first enables sorter auto mode')
+  assert_eq(writes[#writes], false, 'rollback must physically disable auto mode (BLOCKED)')
+  assert_eq(state.current_high, true, 'rollback must leave the confirmed state BLOCKED')
+  assert_eq(#persisted, 1)
+  assert_true(acks[#acks].applied == false and acks[#acks].persisted == false,
+    'failed pairing must never emit a successful/persisted ACK')
 end
 
--- 1d. Persistenzfehler waehrend des Pairings: das Pairing gilt trotzdem
---     sofort im RAM (Command wird verarbeitet), aber ein WARN macht die
---     fehlende Dauerhaftigkeit sichtbar (analog zu WATER/RT-P1).
+-- A failed cached peripheral handle is discarded so the next attempt wraps a
+-- newly attached/replaced sorter.
 do
-  local inst = make_pairing_instance({ write_config_ok = false })
-  local event = { 'modem_message', 'left', 6504, 6504, { type = 'SET_VALVE', dst = 'VALVE-1', src = 'FUEL-1', command_id = 'CMD-4', high = true } }
-  inst.handle_valve_channel_event(event)
-
-  assert_eq(inst.get_trusted_source(), 'FUEL-1', 'pairing must still take effect in RAM even if persistence fails')
-  local found_warn = false
-  for _, entry in ipairs(inst.log_lines) do
-    if entry.level == 'WARN' and tostring(entry.msg):find('konnte nicht persistiert', 1, true) then found_warn = true end
-  end
-  assert_true(found_warn, 'a failed pairing persistence must be logged as WARN')
-end
-
--- ─────────────────────────────────────────────────────────────────────────
--- Teil 2: Sorter-Reconnect nach Callfehler
--- ─────────────────────────────────────────────────────────────────────────
-do
-  local wrap_calls = 0
-  local sorter_should_fail = true
-  local log_lines = {}
-
-  local preamble = [[
-local current_high = false
-local valve_initialized = false
-local last_write_error = nil
-local last_command_ts = os.epoch("utc")
-local config = { sorter_name = "logisticalSorter_1", trusted_source = "FUEL-1" }
-local CONFIG = { LOG_PREFIX = "VALVE", CONFIG_PATH = "/xreactor/config/valve.lua" }
-local node_id = "VALVE-1"
-]]
-
-  local footer = [[
-
-return {
-  apply_valve = apply_valve,
-  get_current_high = function() return current_high end,
-}
-]]
-
-  local chunk = preamble .. BLOCK_A .. footer
-
-  local env = {
-    os = { epoch = function() return 1000000 end },
-    peripheral = {
-      wrap = function(_name)
-        wrap_calls = wrap_calls + 1
-        -- Jeder Wrap liefert ein FRISCHES Sorter-Objekt (wie ein echtes
-        -- Detach/Reattach es tun wuerde) -- beweist, dass get_sorter()
-        -- tatsaechlich neu wrappt statt denselben (evtl. kaputten) alten
-        -- Handle weiterzureichen.
-        -- write_actuator() calls this as `pcall(sorter.setAutoMode, not high)`
-        -- (a plain field reference, NOT a colon-call) -- only `not high` is
-        -- passed, no implicit self. Mirror that exact calling convention here.
-        return {
-          setAutoMode = function(_auto)
-            if sorter_should_fail then error('simulated sorter call failure (detached peripheral)') end
-          end,
-        }
+  local wraps = 0
+  local controller = controller_lib.new({
+    config = { sorter_name = 'logisticalSorter_1', trusted_source = 'FUEL-1' },
+    config_path = '/xreactor/config/valve.lua', node_id = 'VALVE-1',
+    constants = { channels = { VALVE = 6504 } },
+    utils = { log = function() end, write_config = function() return true end },
+    peripheral_api = {
+      find = function() return nil end,
+      wrap = function()
+        wraps = wraps + 1
+        if wraps == 1 then return { setAutoMode = function() error('detached') end } end
+        return { setAutoMode = function() end }
       end,
     },
-    constants = { channels = { VALVE = 6504 } },
-    utils = { log = function(_prefix, msg, level) log_lines[#log_lines + 1] = { msg = msg, level = level } end },
-    string = string, table = table, tostring = tostring, tonumber = tonumber, type = type, pcall = pcall,
-    error = error, ipairs = ipairs, pairs = pairs, select = select,
-  }
-  env._G = env
-
-  local fn = assert(load(chunk, 'valve_sorter_reconnect_test_chunk', 't', env))
-  local inst = fn()
-
-  -- 2a. Erster Versuch schlaegt fehl (Sorter-Call wirft) -> current_high
-  --     bleibt unveraendert.
-  local ok1 = inst.apply_valve(true)
-  assert_eq(ok1, false, 'a failing sorter call must report failure')
-  assert_eq(inst.get_current_high(), false, 'a failed sorter write must not change current_high')
-  assert_eq(wrap_calls, 1, 'the first apply_valve attempt must wrap the sorter exactly once')
-
-  -- 2b. Zweiter Versuch (z.B. Retry ueber denselben Redstone-Router-
-  --     Mechanismus wie bei valve_failed_write_retry_test.lua): der Sorter
-  --     ist jetzt wieder erreichbar. Ohne den Fix wuerde get_sorter() den
-  --     Cache aus Versuch 1 weiterreichen (peripheral.wrap NICHT erneut
-  --     aufgerufen) -- mit dem Fix muss ein zweiter, frischer Wrap
-  --     stattfinden.
-  sorter_should_fail = false
-  local ok2 = inst.apply_valve(true)
-  assert_eq(ok2, true, 'a retry after the sorter becomes reachable again must succeed')
-  assert_eq(inst.get_current_high(), true, 'a successful retry must update current_high')
-  assert_eq(wrap_calls, 2,
-    'get_sorter() must re-wrap the peripheral after a call failure -- ' ..
-    'a stale cached handle would never be retried, only ever return the same broken device')
+    colors_api = { orange = 1, red = 2, green = 3 },
+    os_api = { epoch = function() return 1000000 end },
+  })
+  assert_true(not controller:apply_valve(true, true), 'detached cached handle must fail visibly')
+  assert_true(controller:apply_valve(true, true), 'next attempt must wrap and use the replacement sorter')
+  assert_eq(wraps, 2, 'failed handle must not remain cached')
 end
 
 print('valve_sender_pairing_and_sorter_reconnect_test.lua: ok')

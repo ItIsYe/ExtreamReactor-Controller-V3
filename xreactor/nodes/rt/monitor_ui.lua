@@ -87,16 +87,18 @@ function M.collect_reactor_temp_stats(devices, reactor_adapter, log_prefix)
   return min_temp, max_temp, count > 0 and (sum_temp / count) or nil
 end
 
-function M.collect_turbine_rpm_stats(devices, read_turbine_rpm, get_device_caps)
+function M.collect_turbine_rpm_stats(devices, turbine_adapter, read_turbine_rpm, get_device_caps, log_prefix)
   local min_rpm, max_rpm, sum_rpm, count = nil, nil, 0, 0
   for _, entry in ipairs(devices.turbines or {}) do
-    -- Fix (2026-07-06): derselbe doppelte Fehler wie in
-    -- build_turbine_status_details() — entry.peripheral existiert nie,
-    -- und get_device_caps braucht entry.name (echten Peripheral-Namen),
-    -- nicht entry.id (interne Registry-ID). Das war die direkte Ursache
-    -- fuer "RPM -" im Overview, da avg_rpm hier immer nil blieb.
-    local turbine = entry.name and peripheral.wrap(entry.name) or nil
-    local rpm = read_turbine_rpm(turbine, get_device_caps("turbine", entry.name))
+    local info = turbine_adapter and type(turbine_adapter.inspect) == "function"
+      and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
+    local rpm = type(info) == "table" and info.rpm or nil
+    if type(rpm) ~= "number" and entry and entry.name
+        and type(peripheral) == "table" and type(peripheral.wrap) == "function" then
+      local turbine = peripheral.wrap(entry.name)
+      local caps = get_device_caps and get_device_caps("turbine", entry.name) or {}
+      rpm = read_turbine_rpm and read_turbine_rpm(turbine, caps) or nil
+    end
     if type(rpm) == "number" then
       count = count + 1
       sum_rpm = sum_rpm + rpm
@@ -110,34 +112,24 @@ end
 function M.build_turbine_status_details(devices, turbine_adapter, read_turbine_rpm, read_turbine_flow, get_device_caps, log_prefix)
   local list, total_output = {}, 0
   for _, entry in ipairs(devices.turbines or {}) do
-    -- Fix (2026-07-06): entry.peripheral existiert NIE in der Registry-
-    -- Struktur (siehe core/registry.lua registry:register() — Eintraege
-    -- haben nur id/name/type/signature, kein gewrapptes Peripheral-
-    -- Objekt). read_turbine_rpm/read_turbine_flow brauchen aber das
-    -- echte, gewrappte Objekt (turbine.getRotorSpeed() etc.), nicht nur
-    -- den Namen — mit turbine=nil gaben sie immer nil/"-" zurueck. Das
-    -- war der eigentliche Grund fuer IST=0.0, Balken=0%, RPM=-, obwohl
-    -- die Registry selbst (fuer Overview-Zaehler) korrekt befuellt war.
-    local turbine = entry.name and peripheral.wrap(entry.name) or nil
-    -- Fix (2026-07-06): get_device_caps(ctx, kind, name) erwartet den
-    -- ECHTEN CC:Tweaked-Peripheral-Namen als drittes Argument (fuer
-    -- peripheral.isPresent(name)/build_capabilities(name) intern in
-    -- turbine_control.lua) — entry.id ist aber die interne, generierte
-    -- Registry-ID (z.B. "turbine:BigReactors-Turbine_5:1"), kein gueltiger
-    -- Peripheral-Name. Mit dem falschen Namen liefert peripheral.
-    -- isPresent() false, caps bleibt leer/nutzlos, wodurch read_turbine_
-    -- rpm/flow trotz jetzt korrekt gewrapptem turbine-Objekt weiterhin
-    -- keine funktionierenden Capability-Checks durchfuehren konnten.
-    local caps = get_device_caps("turbine", entry.name)
-    local info = turbine_adapter and type(turbine_adapter.inspect) == "function" and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
+    local info = turbine_adapter and type(turbine_adapter.inspect) == "function"
+      and entry and entry.name and turbine_adapter.inspect(entry.name, log_prefix) or nil
     if type(info) ~= "table" then info = {} end
+    local rpm, flow = info.rpm, info.flow
+    if (type(rpm) ~= "number" or type(flow) ~= "number") and entry and entry.name
+        and type(peripheral) == "table" and type(peripheral.wrap) == "function" then
+      local turbine = peripheral.wrap(entry.name)
+      local caps = get_device_caps and get_device_caps("turbine", entry.name) or {}
+      if type(rpm) ~= "number" and read_turbine_rpm then rpm = read_turbine_rpm(turbine, caps) end
+      if type(flow) ~= "number" and read_turbine_flow then flow = read_turbine_flow(turbine, caps) end
+    end
     local energy = num(info.energy, nil)
     if energy then total_output = total_output + energy end
     list[#list + 1] = {
       id = entry.id,
       bound = entry.bound ~= false,
-      rpm = info.rpm or read_turbine_rpm(turbine, caps),
-      flow = info.flow or read_turbine_flow(turbine, caps),
+      rpm = rpm,
+      flow = flow,
       energy = energy,
       active = info.active,
       inductor = info.coil_engaged,
@@ -178,7 +170,8 @@ end
 function M.update_status_snapshot(ctx)
   local summary = ctx.devices.registry_summary or ctx.registry:get_summary() or {}
   local min_temp, max_temp, avg_temp = M.collect_reactor_temp_stats(ctx.devices, ctx.reactor_adapter, ctx.log_prefix)
-  local min_rpm, max_rpm, avg_rpm = M.collect_turbine_rpm_stats(ctx.devices, ctx.read_turbine_rpm, ctx.get_device_caps)
+  local min_rpm, max_rpm, avg_rpm = M.collect_turbine_rpm_stats(
+    ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.get_device_caps, ctx.log_prefix)
   local turbines, actual_output = M.build_turbine_status_details(ctx.devices, ctx.turbine_adapter, ctx.read_turbine_rpm, ctx.read_turbine_flow, ctx.get_device_caps, ctx.log_prefix)
   local capacity = ctx.capacity_learning or {}
   ctx.last_status_snapshot = {

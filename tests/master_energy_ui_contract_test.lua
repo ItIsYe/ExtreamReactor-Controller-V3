@@ -6,12 +6,13 @@ package.loaded['core.ui'] = {
   badge = function() end, text = function() end, list = function() end, progress = function() end, bigNumber = function() end,
   getSize = function() return 80, 32 end,
 }
+setmetatable(package.loaded['core.ui'], { __index = function() return function() end end })
 package.loaded['shared.colors'] = { get = function() return 1 end }
 
 local energy = require('master.ui.energy')
 energy.render({}, { matrices = {}, resources = {}, support_nodes = {} })
 
-local required = { 'MONITOR 3 - ENERGY & RESSOURCEN', 'Energy', 'Matrix-/Storage-Details', 'Fuel', 'Water / Reprocessing', 'Verbundene Support-Nodes' }
+local required = { 'ENERGY', 'Energy Summary', 'Matrix / Storage', 'Ressourcen', 'Support-Nodes' }
 for _, section in ipairs(required) do
   local seen = false
   for _, title in ipairs(calls.panels) do if title == section then seen = true break end end

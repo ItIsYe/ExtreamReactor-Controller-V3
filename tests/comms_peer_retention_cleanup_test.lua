@@ -1,7 +1,5 @@
 local now = 0
-_G.os = {
-  epoch = function() return now end
-}
+os.epoch = function() return now end
 
 package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', package.path }, ';')
 
@@ -23,7 +21,7 @@ comms.init({
     peer_timeout_s = 2,
     peer_down_grace_s = 0,
     peer_down_min_observations = 1,
-    peer_retention_s = 3
+    peer_retention_s = 10
   }
 })
 
@@ -38,7 +36,7 @@ comms.receive({
 })
 comms.tick(now)
 
-now = 6000
+now = 11000
 comms.tick(now)
 
 local peers = comms.get_peer_state()

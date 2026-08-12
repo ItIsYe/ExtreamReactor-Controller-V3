@@ -103,6 +103,41 @@ function comms_service:trace_master_rx(message)
   ), "INFO")
 end
 
+local function command_target(message)
+  local payload = type(message) == "table" and message.payload or nil
+  local command = type(payload) == "table" and payload.command or nil
+  return type(command) == "table" and command.target or nil
+end
+
+function comms_service:_authorize_command(message)
+  if type(message) ~= "table" then return false, "invalid command envelope" end
+  local local_role = normalize_role(self.network and self.network.role or self.role or self.config.role)
+
+  -- The coordinator sends commands; it does not accept peer control commands.
+  -- Local Master actions (for example the redstone update trigger) use their
+  -- direct runtime APIs and never arrive through this handler.
+  if local_role == normalize_role(constants.roles.MASTER) then
+    return false, "MASTER does not accept network commands"
+  end
+  if normalize_role(message.role) ~= normalize_role(constants.roles.MASTER) then
+    return false, "command sender is not MASTER"
+  end
+
+  local sender = message.src or message.sender_id or message.node_id
+  if sender == nil or tostring(sender):match("^%s*$") then
+    return false, "command sender identity missing"
+  end
+  local expected = self.config.trusted_master_id or self.config.master_node_id
+  if expected == nil and type(self.config.comms) == "table" then
+    expected = self.config.comms.trusted_master_id
+  end
+  if expected ~= nil
+      and utils.normalize_node_id(sender) ~= utils.normalize_node_id(expected) then
+    return false, "command sender does not match trusted master id"
+  end
+  return true
+end
+
 function comms_service:init()
   sanitize_channels(self.config)
   self.config.comms = comms_lib.sanitize_config(self.config.comms or {})
@@ -140,6 +175,26 @@ function comms_service:init()
   end)
 
   self.comms.on(constants.message_types.COMMAND, function(message)
+    local authorized, reason = self:_authorize_command(message)
+    if not authorized then
+      utils.log(self.log_prefix,
+        "Command rejected before role handler: " .. tostring(reason)
+          .. " src=" .. tostring(message and (message.src or message.sender_id) or "?")
+          .. " role=" .. tostring(message and message.role or "?")
+          .. " target=" .. tostring(command_target(message) or "?"), "WARN")
+      return { ok = false, error = reason, reason_code = "UNAUTHORIZED_COMMAND_SOURCE" }
+    end
+
+    -- Remote updates are runtime infrastructure, not role-specific business
+    -- logic. Queue them for the single updater coroutine instead of executing
+    -- an installer from inside a modem event handler.
+    if command_target(message) == constants.command_targets.REMOTE_UPDATE then
+      return require("core.remote_update").queue_command({
+        message = message,
+        log_prefix = self.log_prefix,
+        utils = utils,
+      })
+    end
     if self.on_command then
       return self.on_command(message)
     end
@@ -265,10 +320,10 @@ function comms_service:handle_event(event)
   end
 end
 
-function comms_service:tick(now)
+function comms_service:tick()
   if not self.comms then return end
   if utils.flush_remote_logs then utils.flush_remote_logs() end
-  self.comms.tick(now)
+  self.comms.tick()
 end
 
 function comms_service:get_peers()

@@ -1,4 +1,3 @@
-local colors = require("shared.colors")
 local mux = require("core.mockup_ui")
 
 local M = {}

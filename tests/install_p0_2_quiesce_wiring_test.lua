@@ -9,11 +9,10 @@
 -- quiesce_test.lua). Dieser Test prueft strukturell direkt am Quelltext,
 -- dass JEDE der acht Rollen tatsaechlich an den Handshake angeschlossen ist
 -- -- fuer FUEL/REPROCESSOR/VALVE/WATER insbesondere, dass die physische
--- Sicherzustandsbestaetigung ueber die jeweils BEREITS VORHANDENE, bereits
--- auditierte Standby-Funktion laeuft (kein neuer Aktor-Code):
---   VALVE:        apply_valve(true)               (echtes true/false)
---   FUEL:         redstone_router:shutdown_now()    + get_active_transaction()
---   REPROCESSOR:  enter_standby()                    (bereits idempotent)
+-- Sicherzustandsbestaetigung ueber die jeweilige physische Aktor-API laeuft:
+--   VALVE:        controller:apply_valve(true, true) (frischer Sorter-Write)
+--   FUEL:         redstone_router:begin/poll_quiesce (BLOCKED-ACKs)
+--   REPROCESSOR:  enter_standby() + Router-BLOCKED-ACKs
 --   WATER:        set_rs_output(..., false, ...)     (echtes true/false, pro Cluster)
 -- sowie dass start.lua/auto_update.lua/master/loop.lua/log_collector/
 -- main.lua/rt/main.lua tatsaechlich verdrahtet sind. Faellt automatisch
@@ -42,19 +41,19 @@ end
 local repo_root = os.getenv("REPO_ROOT") or "."
 local function read(rel) return read_file(repo_root .. "/xreactor/" .. rel) end
 
--- ── VALVE: echte synchrone Bestaetigung ueber apply_valve(true) ────────────
+-- ── VALVE: frischer physischer Sorter-Write/Readback ───────────────────────
 do
   local src = read("nodes/valve/main.lua")
   assert_contains(src, "_G.__xreactor_update_handshake", "valve/main.lua")
-  assert_contains(src, "on_quiesce = function() return apply_valve(true) end", "valve/main.lua")
+  assert_contains(src, "on_quiesce = function() return controller:apply_valve(true, true) end", "valve/main.lua")
 end
 
--- ── FUEL: shutdown_now() + get_active_transaction()-Bestaetigung ───────────
+-- ── FUEL: alle konfigurierten Ventile per frischem BLOCKED-ACK bestaetigt ──
 do
   local src = read("nodes/fuel/main.lua")
   assert_contains(src, "_G.__xreactor_update_handshake", "fuel/main.lua")
-  assert_contains(src, 'rs_router:shutdown_now("UPDATE_QUIESCE")', "fuel/main.lua")
-  assert_contains(src, "rs_router:get_active_transaction() == nil", "fuel/main.lua")
+  assert_contains(src, 'rs_router:begin_quiesce("UPDATE_QUIESCE")', "fuel/main.lua")
+  assert_contains(src, "return rs_router:poll_quiesce()", "fuel/main.lua")
 end
 
 -- ── REPROCESSOR: enter_standby() ist bereits idempotent, wiederverwendet ───
@@ -62,7 +61,8 @@ do
   local src = read("nodes/reprocessor/main.lua")
   assert_contains(src, "_G.__xreactor_update_handshake", "reprocessor/main.lua")
   assert_contains(src, 'enter_standby("UPDATE_QUIESCE")', "reprocessor/main.lua")
-  assert_contains(src, "return standby == true", "reprocessor/main.lua")
+  assert_contains(src, 'rs_router:begin_quiesce("UPDATE_QUIESCE")', "reprocessor/main.lua")
+  assert_contains(src, "return standby == true and rs_router:poll_quiesce()", "reprocessor/main.lua")
 end
 
 -- ── WATER: alle Cluster ueber set_rs_output() erzwungen aus, echtes true/false
@@ -74,11 +74,13 @@ do
   assert_contains(src, "set_rs_output(drain_side, false, integrator)", "water/main.lua")
 end
 
--- ── RT: trivialer Handler (Audit verlangt hier keine physische Bestaetigung) ─
+-- ── RT: Reaktoren und Turbinen physisch sicher + frischer Readback ─────────
 do
   local src = read("nodes/rt/main.lua")
   assert_contains(src, "_G.__xreactor_update_handshake", "rt/main.lua")
-  assert_contains(src, "quiesce_handshake and { handshake = quiesce_handshake } or nil", "rt/main.lua")
+  assert_contains(src, "reactor_control.apply_update_quiesce(ctx)", "rt/main.lua")
+  assert_contains(src, "turbine_control.apply_update_quiesce(ctx)", "rt/main.lua")
+  assert_contains(src, "on_quiesce = update_quiesce_safe", "rt/main.lua")
 end
 
 -- ── MASTER: eigener Loop (kein run_event_loop), eigener Quiesce-Check ──────
@@ -125,12 +127,12 @@ end
 do
   local src = read("installer/auto_update.lua")
   assert_contains(src, "function M.make_loop(interval_s, handshake)", "installer/auto_update.lua")
-  assert_contains(src, "local quiesced = request_and_await_quiesce(handshake)", "installer/auto_update.lua")
+  assert_contains(src, "local quiesced, quiesce_err = request_and_await_quiesce(handshake)", "installer/auto_update.lua")
   assert_contains(src, 'update_handshake.wait_for_runtime_stopped(handshake, 20)', "installer/auto_update.lua")
   -- Muss VOR dem eigentlichen Download-/Installlauf entschieden werden
   -- (nicht zu verwechseln mit fetch_remote_version()'s eigener, frueherer
   -- "for attempt = 1, 3 do"-HTTP-Retry-Schleife).
-  local quiesce_pos = src:find("local quiesced = request_and_await_quiesce", 1, true)
+  local quiesce_pos = src:find("local quiesced, quiesce_err = request_and_await_quiesce", 1, true)
   local retry_loop_pos = src:find("for attempt = 1, 3 do", (quiesce_pos or 1) + 1, true)
   if not (quiesce_pos and retry_loop_pos and quiesce_pos < retry_loop_pos) then
     error("installer/auto_update.lua: quiesce must be requested BEFORE the install retry loop")

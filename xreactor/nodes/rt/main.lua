@@ -212,7 +212,6 @@ local warned = {}
 local last_command, last_command_ts
 local last_status_snapshot
 local capacity_learning_state  -- persistenter Learning-State
-local pending_remote_update = false  -- deferred: REMOTE_UPDATE ausserhalb Event-Handler ausfuehren
 
 -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
 -- PERFORMANCE_2026-07-12.md). Modul-Startup-Zustand (welches Modul gerade
@@ -263,15 +262,20 @@ end
 -- ── Capacity Cache ───────────────────────────────────────────────────────────
 
 local function load_capacity_cache()
+  local topology = {}
+  for _, name in ipairs(config.turbines or {}) do
+    topology[#topology + 1] = { name = name }
+  end
   return capacity_cache.load({
     path = CONFIG.CAPACITY_CACHE_PATH,
     turbine_count = #(config.turbines or {}),
+    topology_signature = capacity_learning.topology_signature(topology),
     log = log
   })
 end
 
 local function save_capacity_cache(learning)
-  capacity_cache.save(learning, {
+  return capacity_cache.save(learning, {
     path = CONFIG.CAPACITY_CACHE_PATH,
     turbine_count = #(config.turbines or {})
   })
@@ -392,11 +396,22 @@ local function writeback_ctx()
   if ctx.capacity_learning and ctx.capacity_learning.ready == true then
     local prev_max = capacity_learning_state
       and capacity_learning_state.max_output or 0
-    if ctx.capacity_learning.max_output > prev_max then
-      save_capacity_cache(ctx.capacity_learning)
-      log("INFO", string.format("Capacity cached: max_output=%.2f",
-        ctx.capacity_learning.max_output))
+    local topology_changed = not capacity_learning_state
+      or ctx.capacity_learning.topology_signature ~= capacity_learning_state.topology_signature
+    if ctx.capacity_learning.dirty == true
+        or topology_changed
+        or ctx.capacity_learning.max_output > prev_max then
+      local saved, save_err = save_capacity_cache(ctx.capacity_learning)
+      if saved then
+        ctx.capacity_learning.dirty = false
+        log("INFO", string.format("Capacity cached: max_output=%.2f",
+          ctx.capacity_learning.max_output))
+      else
+        log("WARN", "Capacity cache write failed: " .. tostring(save_err))
+      end
     end
+    capacity_learning_state = ctx.capacity_learning
+  elseif ctx.capacity_learning then
     capacity_learning_state = ctx.capacity_learning
   end
 end
@@ -675,7 +690,12 @@ end
 
 -- ── Control-Tick ──────────────────────────────────────────────────────────────
 
+local rt_update_quiescing = false
+
 local function control_tick()
+  -- A dedicated safe-state writer owns the hardware from the first update
+  -- quiesce attempt onward. Normal regulation/startup must not race it.
+  if rt_update_quiescing then return end
   -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
   -- PERFORMANCE_2026-07-12.md). module_lifecycle.process_startup() war im
   -- gesamten Projekt nirgends verdrahtet (toter Code) -- start_module()
@@ -757,13 +777,6 @@ local function build_command_ctx()
     get_capacity_learning = function()
       return ctx and ctx.capacity_learning or capacity_learning_state
     end,
-    -- REMOTE_UPDATE: Flag setzen statt direkt ausfuehren, damit http.get()
-    -- im Haupt-Thread laeuft und nicht im Event-Handler blockiert.
-    -- (CC:Tweaked http ist async -- http_success Event kann nicht ankommen
-    --  wenn wir uns bereits in einem os.pullEvent-Handler befinden)
-    set_pending_remote_update = function()
-      pending_remote_update = true
-    end,
     -- Feature (2026-07-06): Zielwert fuer die individuelle Pro-Reaktor-
     -- Regelung per Command aenderbar und persistent in config/rt.lua
     -- gespeichert, analog zum on_scale_change-Callback fuer die Monitor-
@@ -798,106 +811,7 @@ end
 
 -- ── Init ─────────────────────────────────────────────────────────────────────
 
-local function init()
-  log("INFO", "RT-Node starting (SCADA rewrite)")
-
-  -- ctx aufbauen
-  ctx = build_ctx()
-  ctx.targets = {
-    power = 0, steam = 0, rpm = CONFIG.TARGET_RPM,
-    enable_reactors = true, enable_turbines = true
-  }
-
-  -- Hardware-Discovery
-  discover()
-  log("INFO", string.format("Discovery: reactors=%d turbines=%d",
-    #devices.reactors, #devices.turbines))
-
-  -- Reaktor/Turbinen-State initialisieren
-  reactor_control.init_reactor_ctrl(ctx)
-  turbine_control.init_turbine_ctrl(ctx)
-
-  -- Capacity-Cache laden
-  local cached = load_capacity_cache()
-  if cached then
-    ctx.capacity_learning = cached
-    capacity_learning_state = cached
-    log("INFO", string.format("Capacity loaded from cache: max_output=%.2f",
-      cached.max_output))
-  end
-
-  -- Initiale Rod-Stellung
-  reactor_control.apply_initial_reactor_rods(ctx)
-
-  -- Services
-  services = service_manager.new({ log_prefix = "RT" })
-
-  handle_command = command_handler_lib.new(build_command_ctx())
-
-  comms = comms_service.new({
-    config = config, log_prefix = "RT",
-    on_command = handle_command,
-    on_message = function(message)
-      if message.type == constants.message_types.ERROR
-          and message.payload and message.payload.code == "PROTO_MISMATCH" then
-        devices.proto_mismatch = true; return
-      end
-      if message.role == constants.roles.MASTER then
-        local was_connected = master_seen_ts ~= nil
-        master_seen_ts = os.epoch("utc")
-        if message.type == constants.message_types.STATUS
-            and message.payload and message.payload.alerts then
-          master_alerts = message.payload.alerts
-        end
-        if not was_connected then
-          log("INFO", "Master connected: " .. tostring(message.role or "?"))
-        end
-      end
-    end
-  })
-  services:add(comms)
-
-  services:add(discovery_service.new({
-    registry = registry,
-    discover = discover_with_stability_tracking,
-    should_discover = should_discover,
-    interval = config.scan_interval or config.heartbeat_interval,
-    managed_registry = false,
-    update_health = function(ok) devices.discovery_failed = not ok end,
-  }))
-
-  -- Control-Service: läuft auf eigenem Intervall (nicht am Comms-Timeout gebunden)
-  services:add({
-    name = "control",
-    tick = function() control_tick() end,
-  })
-
-  services:add(telemetry_service.new({
-    comms = comms,
-    status_interval  = config.status_interval or config.heartbeat_interval,
-    heartbeat_interval = config.heartbeat_interval,
-    heartbeat_state  = function()
-      return { state = node_state_machine and node_state_machine.state() or "INIT" }
-    end,
-    build_payload = function()
-      return build_status_payload(constants.status_levels.OK)
-    end,
-  }))
-
-  services:add(ui_service.new({
-    interval = 0.5,
-    render   = update_monitor,
-    handle_input = function(event) monitor_ui.handle_input(event) end,
-  }))
-
-  services:init()
-
-  -- State Machine
-  -- lifecycle_ctx: Context für module_lifecycle Funktionen (scram, apply_safe_controls etc.)
-  -- Wird als Closure in state_ctx eingebaut damit state_handlers alles direkt aufrufen kann.
-  -- Zuweisung (nicht "local function") -- make_lifecycle_ctx ist oben als
-  -- "local make_lifecycle_ctx" vorwaertsdeklariert, damit build_command_ctx()
-  -- (vor init() definiert) denselben Funktionswert als Upvalue sehen kann.
+local function configure_lifecycle_context()
   make_lifecycle_ctx = function()
     return {
       -- State
@@ -993,7 +907,9 @@ local function init()
       end,
     }
   end
+end
 
+local function configure_state_machine()
   local state_ctx = {
     -- Basis
     STATE             = STATE,
@@ -1120,6 +1036,103 @@ local function init()
   -- Initiale Mode: AUTONOM
   current_state_value = STATE.AUTONOM
   node_state_machine:transition(constants.node_states.RUNNING)
+end
+local function init()
+  log("INFO", "RT-Node starting (SCADA rewrite)")
+
+  -- ctx aufbauen
+  ctx = build_ctx()
+  ctx.targets = {
+    power = 0, steam = 0, rpm = CONFIG.TARGET_RPM,
+    enable_reactors = true, enable_turbines = true
+  }
+
+  -- Hardware-Discovery
+  discover()
+  log("INFO", string.format("Discovery: reactors=%d turbines=%d",
+    #devices.reactors, #devices.turbines))
+
+  -- Reaktor/Turbinen-State initialisieren
+  reactor_control.init_reactor_ctrl(ctx)
+  turbine_control.init_turbine_ctrl(ctx)
+
+  -- Capacity-Cache laden
+  local cached = load_capacity_cache()
+  if cached then
+    ctx.capacity_learning = cached
+    capacity_learning_state = cached
+    log("INFO", string.format("Capacity loaded from cache: max_output=%.2f",
+      cached.max_output))
+  end
+
+  -- Initiale Rod-Stellung
+  reactor_control.apply_initial_reactor_rods(ctx)
+
+  -- Services
+  services = service_manager.new({ log_prefix = "RT" })
+
+  handle_command = command_handler_lib.new(build_command_ctx())
+
+  comms = comms_service.new({
+    config = config, log_prefix = "RT",
+    on_command = handle_command,
+    on_message = function(message)
+      if message.type == constants.message_types.ERROR
+          and message.payload and message.payload.code == "PROTO_MISMATCH" then
+        devices.proto_mismatch = true; return
+      end
+      if message.role == constants.roles.MASTER then
+        local was_connected = master_seen_ts ~= nil
+        master_seen_ts = os.epoch("utc")
+        if message.type == constants.message_types.STATUS
+            and message.payload and message.payload.alerts then
+          master_alerts = message.payload.alerts
+        end
+        if not was_connected then
+          log("INFO", "Master connected: " .. tostring(message.role or "?"))
+        end
+      end
+    end
+  })
+  services:add(comms)
+
+  services:add(discovery_service.new({
+    registry = registry,
+    discover = discover_with_stability_tracking,
+    should_discover = should_discover,
+    interval = config.scan_interval or config.heartbeat_interval,
+    managed_registry = false,
+    update_health = function(ok) devices.discovery_failed = not ok end,
+  }))
+
+  -- Control-Service: läuft auf eigenem Intervall (nicht am Comms-Timeout gebunden)
+  services:add({
+    name = "control",
+    tick = function() control_tick() end,
+  })
+
+  services:add(telemetry_service.new({
+    comms = comms,
+    status_interval  = config.status_interval or config.heartbeat_interval,
+    heartbeat_interval = config.heartbeat_interval,
+    heartbeat_state  = function()
+      return { state = node_state_machine and node_state_machine.state() or "INIT" }
+    end,
+    build_payload = function()
+      return build_status_payload(constants.status_levels.OK)
+    end,
+  }))
+
+  services:add(ui_service.new({
+    interval = 0.5,
+    render   = update_monitor,
+    handle_input = function(event) monitor_ui.handle_input(event) end,
+  }))
+
+  services:init()
+
+  configure_lifecycle_context()
+  configure_state_machine()
 
   -- Monitor initialisieren
   local mon_entry = adapters.monitor.find(nil, "first", 0.5, CONFIG.LOG_PREFIX)
@@ -1220,19 +1233,52 @@ init()
 -- Pfad und trug nichts zur Selbstkorrektur bei, verursachte aber
 -- unnoetige doppelte volle Discovery-Durchlaeufe.
 
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
--- Quiesce-Handler. Der Audit listet RT nicht unter den Rollen mit
--- pflichtiger physischer Sicherzustandsbestaetigung (nur FUEL/
--- REPROCESSOR/VALVE/WATER) -- RT bestaetigt hier nur, dass es die
--- Hauptschleife kontrolliert verlaesst, ohne eigene neue Aktorlogik
--- einzufuehren. Getrennt davon bleibt der bestehende, MASTER-getriggerte
--- pending_remote_update-Pfad (oben) unveraendert: der blockiert die
--- Steuerschleife bereits synchron waehrend des Installerlaufs.
 local quiesce_handshake = _G.__xreactor_update_handshake
-support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
-  if pending_remote_update then
-    pending_remote_update = false
-    log("WARN", "Remote-Update: starte Installer (deferred, Haupt-Thread)...")
-    require("core.remote_update").run(log)
+local last_quiesce_warning = 0
+
+local function update_quiesce_safe()
+  rt_update_quiescing = true
+  active_startup_id = nil
+  startup_queue_list = {}
+  startup_started_ms_value = nil
+  startup_watchdog_tripped_value = false
+  current_state_value = STATE.SAFE
+  if node_state_machine then pcall(node_state_machine.transition, node_state_machine, STATE.SAFE) end
+
+  if ctx and ctx.targets then
+    ctx.targets.power = 0
+    ctx.targets.power_percent = 0
+    ctx.targets.steam = 0
+    ctx.targets.enable_reactors = false
+    ctx.targets.enable_turbines = false
   end
-end, quiesce_handshake and { handshake = quiesce_handshake } or nil)
+  for _, module in pairs(modules_registry) do
+    if type(module) == "table" and module.state == "STARTING" then
+      module.state = "OFF"
+      module.progress = 0
+    end
+  end
+
+  local reactors_ok = select(1, reactor_control.apply_update_quiesce(ctx))
+  local turbines_ok = select(1, turbine_control.apply_update_quiesce(ctx))
+  if reactors_ok ~= true or turbines_ok ~= true then
+    local now = os.epoch("utc")
+    if now - last_quiesce_warning >= 2000 then
+      last_quiesce_warning = now
+      log("WARN", "UPDATE_QUIESCE wartet auf bestaetigte Hardware-Readbacks"
+        .. " reactors=" .. tostring(reactors_ok)
+        .. " turbines=" .. tostring(turbines_ok))
+    end
+    return false
+  end
+
+  writeback_ctx()
+  log("INFO", "UPDATE_QUIESCE bestaetigt: Rods voll eingefahren, Reaktoren aus, Turbinenflow 0")
+  return true
+end
+
+support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function() end,
+  quiesce_handshake and {
+    handshake = quiesce_handshake,
+    on_quiesce = update_quiesce_safe,
+  } or nil)

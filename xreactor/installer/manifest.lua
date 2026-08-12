@@ -51,23 +51,6 @@ local function crc32(content)
 end
 M.crc32 = crc32
 
-function M.is_current(path, entry)
-  if not fs.exists(path) then return false, "missing" end
-  local f = fs.open(path, "r")
-  if not f then return false, "unreadable" end
-  local content = f.readAll(); f.close()
-  if entry.size_bytes and #content ~= entry.size_bytes then
-    return false, "size_mismatch"
-  end
-  if entry.hash and entry.hash ~= "" then
-    local actual = crc32(content)
-    if actual:lower() ~= entry.hash:lower() then
-      return false, "hash_mismatch"
-    end
-  end
-  return true
-end
-
 function M.load_remote(url, http_mod)
   local body, err = http_mod.download(url)
   if not body then return nil, err end

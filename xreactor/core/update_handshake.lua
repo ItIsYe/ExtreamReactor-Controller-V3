@@ -1,75 +1,101 @@
--- core/update_handshake.lua
+-- Shared state between a role runtime and the single managed updater.
 --
--- Rollenübergreifender Update-Handshake (INSTALL-P0.2, siehe docs/CODING_AI_
--- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 4). start.lua startet die
--- Rollen-Hauptschleife und den Auto-Update-Loop als zwei Coroutinen unter
--- parallel.waitForAll(). Beide teilen sich EIN Handshake-Objekt (dieses
--- Modul, instanziiert per M.new()) ueber einen globalen Wert
--- (_G.__xreactor_update_handshake), damit der Auto-Updater eine Aktualisierung
--- anfordern kann, OHNE die Rollen-Coroutine gewaltsam zu unterbrechen: die
--- Rolle prueft den Handshake-Status selbst an einer sicheren Stelle in ihrer
--- eigenen Hauptschleife, faehrt Aktoren kontrolliert in einen sicheren
--- Zustand, meldet das zurueck und beendet sich dann selbst -- erst danach
--- faehrt der Installer fort.
+-- Safety order:
+--   IDLE -> QUIESCE_REQUESTED -> SAFE_OUTPUTS_APPLIED -> RUNTIME_STOPPED
 --
--- Zustandsfolge: UPDATE_REQUESTED -> QUIESCE_REQUESTED -> SAFE_OUTPUTS_APPLIED
--- -> RUNTIME_STOPPED (die verbleibenden Stationen INSTALLING/VERIFIED/
--- COMMITTED/REBOOT aus dem Audit-Vorschlag sind bereits durch das
--- Installationsjournal, installer/journal.lua, siehe Abschnitt 3, abgedeckt).
+-- A remote request is queued separately. Only installer/auto_update.lua may
+-- consume it and start an installation.
 
 local M = {}
 
+M.UPDATE_EVENT = "xreactor_remote_update_requested"
+
 M.STATE = {
-  IDLE                  = "IDLE",
-  UPDATE_REQUESTED      = "UPDATE_REQUESTED",
-  QUIESCE_REQUESTED     = "QUIESCE_REQUESTED",
-  SAFE_OUTPUTS_APPLIED  = "SAFE_OUTPUTS_APPLIED",
-  RUNTIME_STOPPED       = "RUNTIME_STOPPED",
+  IDLE                 = "IDLE",
+  UPDATE_REQUESTED     = "UPDATE_REQUESTED",
+  QUIESCE_REQUESTED    = "QUIESCE_REQUESTED",
+  SAFE_OUTPUTS_APPLIED = "SAFE_OUTPUTS_APPLIED",
+  RUNTIME_STOPPED      = "RUNTIME_STOPPED",
 }
 
-function M.new()
-  return { state = M.STATE.IDLE, requested_at = nil }
+local function now_ms()
+  if os and type(os.epoch) == "function" then return os.epoch("utc") end
+  return nil
 end
 
--- Vom Auto-Update-Loop aufgerufen, sobald ein Update tatsaechlich installiert
--- werden soll (nicht schon bei jedem Versions-Check).
+function M.new()
+  return {
+    state = M.STATE.IDLE,
+    requested_at = nil,
+    quiesce_attempted = false,
+    remote_update_pending = false,
+    remote_update_meta = nil,
+  }
+end
+
 function M.request_quiesce(handshake)
+  if type(handshake) ~= "table" then return false, "missing handshake" end
+
+  -- A concurrent/duplicate request must never rewind an already safe or
+  -- stopped runtime.
+  if handshake.state == M.STATE.SAFE_OUTPUTS_APPLIED
+      or handshake.state == M.STATE.RUNTIME_STOPPED then
+    return true, "already safe"
+  end
+  if handshake.state ~= M.STATE.IDLE
+      and handshake.state ~= M.STATE.UPDATE_REQUESTED
+      and handshake.state ~= M.STATE.QUIESCE_REQUESTED then
+    return false, "invalid handshake state"
+  end
+
+  if handshake.state == M.STATE.IDLE then handshake.quiesce_attempted = false end
   handshake.state = M.STATE.UPDATE_REQUESTED
   handshake.state = M.STATE.QUIESCE_REQUESTED
-  handshake.requested_at = os.epoch("utc")
+  handshake.requested_at = handshake.requested_at or now_ms()
+  return true, "quiesce requested"
+end
+
+function M.mark_quiesce_attempted(handshake)
+  if type(handshake) ~= "table"
+      or handshake.state ~= M.STATE.QUIESCE_REQUESTED then
+    return false
+  end
+  handshake.quiesce_attempted = true
+  return true
 end
 
 function M.is_quiesce_requested(handshake)
-  return handshake ~= nil and handshake.state == M.STATE.QUIESCE_REQUESTED
+  return type(handshake) == "table"
+    and handshake.state == M.STATE.QUIESCE_REQUESTED
 end
 
--- Von der Rolle aufgerufen, NACHDEM sie ihre Aktoren nachweislich in einen
--- sicheren Zustand gefahren hat (z.B. Ventil zu, Foerderung gestoppt,
--- laufende Transaktion abgebrochen).
 function M.mark_safe_outputs_applied(handshake)
-  if handshake and handshake.state == M.STATE.QUIESCE_REQUESTED then
-    handshake.state = M.STATE.SAFE_OUTPUTS_APPLIED
+  if type(handshake) ~= "table"
+      or handshake.state ~= M.STATE.QUIESCE_REQUESTED then
+    return false
   end
+  handshake.state = M.STATE.SAFE_OUTPUTS_APPLIED
+  return true
 end
 
--- Von der Rolle aufgerufen unmittelbar bevor sie ihre Hauptschleife
--- tatsaechlich verlaesst (danach darf keine weitere Aktorsteuerung mehr
--- passieren).
 function M.mark_runtime_stopped(handshake)
-  if handshake then handshake.state = M.STATE.RUNTIME_STOPPED end
+  if type(handshake) ~= "table"
+      or handshake.state ~= M.STATE.SAFE_OUTPUTS_APPLIED then
+    return false
+  end
+  handshake.state = M.STATE.RUNTIME_STOPPED
+  return true
 end
 
-function M.is_runtime_stopped(handshake)
-  return handshake ~= nil and handshake.state == M.STATE.RUNTIME_STOPPED
-end
-
--- Vom Auto-Update-Loop aufgerufen: wartet (per os.sleep, gibt also die
--- Kontrolle an die andere Coroutine ab) bis RUNTIME_STOPPED erreicht ist
--- oder das Timeout ablaeuft. Liefert false bei Timeout -- der Aufrufer MUSS
--- in diesem Fall den Installationsversuch abbrechen und es spaeter erneut
--- versuchen, NIEMALS ueber eine nicht bestaetigte Quiesce hinweg installieren.
 function M.wait_for_runtime_stopped(handshake, timeout_s)
-  if not handshake then return true end
+  -- Compatibility for callers which intentionally run without managed
+  -- updating. The managed updater itself rejects a missing handshake before
+  -- reaching this helper.
+  if handshake == nil then return true end
+  if type(handshake) ~= "table" then return false end
+  if not os or type(os.epoch) ~= "function" or type(os.sleep) ~= "function" then
+    return false
+  end
   local deadline = os.epoch("utc") + (tonumber(timeout_s) or 20) * 1000
   while handshake.state ~= M.STATE.RUNTIME_STOPPED do
     if os.epoch("utc") >= deadline then return false end
@@ -78,11 +104,52 @@ function M.wait_for_runtime_stopped(handshake, timeout_s)
   return true
 end
 
-function M.reset(handshake)
-  if handshake then
-    handshake.state = M.STATE.IDLE
-    handshake.requested_at = nil
+function M.request_remote_update(handshake, meta)
+  if type(handshake) ~= "table" then return false, "missing handshake" end
+  if handshake.remote_update_pending == true then return true, "already queued" end
+
+  local source = type(meta) == "table" and meta or {}
+  handshake.remote_update_pending = true
+  handshake.remote_update_meta = {
+    source = source.source,
+    message_id = source.message_id,
+    trigger = source.trigger,
+    queued_at = source.queued_at or now_ms(),
+  }
+  if os and type(os.queueEvent) == "function" then
+    pcall(os.queueEvent, M.UPDATE_EVENT)
   end
+  return true, "queued"
+end
+
+function M.peek_remote_update(handshake)
+  if type(handshake) ~= "table"
+      or handshake.remote_update_pending ~= true then
+    return nil
+  end
+  return handshake.remote_update_meta or {}
+end
+
+function M.consume_remote_update(handshake)
+  local meta = M.peek_remote_update(handshake)
+  if not meta then return nil end
+  handshake.remote_update_pending = false
+  handshake.remote_update_meta = nil
+  return meta
+end
+
+-- Only cancel a request while the role is still running. Once safe outputs
+-- were applied, recovery requires rebooting the stopped runtime.
+function M.reset(handshake)
+  if type(handshake) ~= "table" then return false end
+  if handshake.state == M.STATE.SAFE_OUTPUTS_APPLIED
+      or handshake.state == M.STATE.RUNTIME_STOPPED then
+    return false
+  end
+  handshake.state = M.STATE.IDLE
+  handshake.requested_at = nil
+  handshake.quiesce_attempted = false
+  return true
 end
 
 return M

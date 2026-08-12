@@ -107,13 +107,23 @@ end
 local function list_files_recursive(dir, prefix, out)
   prefix = prefix or ""
   out = out or {}
-  if not fs.exists(dir) or not fs.isDir(dir) then return out end
+  if not fs.exists(dir) then return out end
+  local ok_is_dir, is_dir = pcall(fs.isDir, dir)
+  if not ok_is_dir or not is_dir then
+    error("Config-Verzeichnis kann nicht sicher gelesen werden: " .. tostring(dir), 0)
+  end
   local ok, entries = pcall(fs.list, dir)
-  if not ok or not entries then return out end
+  if not ok or type(entries) ~= "table" then
+    error("Config-Verzeichnis kann nicht aufgelistet werden: " .. tostring(dir), 0)
+  end
   for _, name in ipairs(entries) do
     local full = dir .. "/" .. name
     local rel = (prefix == "" and name or (prefix .. "/" .. name))
-    if fs.isDir(full) then
+    local ok_child, child_is_dir = pcall(fs.isDir, full)
+    if not ok_child then
+      error("Config-Eintrag kann nicht geprueft werden: " .. tostring(full), 0)
+    end
+    if child_is_dir then
       list_files_recursive(full, rel, out)
     else
       out[#out + 1] = rel
@@ -137,40 +147,29 @@ local function backup_config_dir()
   for _, rel in ipairs(list_files_recursive(CONFIG_DIR)) do
     if not config_restore_denied(rel) then
       local f = fs.open(CONFIG_DIR .. "/" .. rel, "r")
-      if f then
-        files_map[rel] = f.readAll()
-        f.close()
+      if not f then error("Config-Datei kann nicht gesichert werden: " .. rel, 0) end
+      local ok_read, content = pcall(f.readAll)
+      local ok_close, close_err = pcall(f.close)
+      if not ok_read or type(content) ~= "string" then
+        error("Config-Datei kann nicht gelesen werden: " .. rel, 0)
       end
+      if not ok_close then
+        error("Config-Datei kann nicht geschlossen werden: " .. rel .. " (" .. tostring(close_err) .. ")", 0)
+      end
+      files_map[rel] = content
     end
   end
   return files_map
 end
 
--- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 14). Der
--- vorherige Fix (2026-07-08, siehe Git-Historie) loeste das damals
--- beschriebene Symptom, indem das Manifest immer vom ungepinnten
--- "beta"-Branch-Pfad geladen wurde -- WAEHREND http_mod.download_file()
--- fuer jede einzelne Datei weiterhin zuerst die SHA-gepinnte URL versuchte
--- und nur bei DEREN Fehlschlag auf "beta" zurueckfiel. Damit konnten
--- Manifest und Dateien innerhalb DESSELBEN Laufs weiterhin aus zwei
--- verschiedenen Commits stammen (Manifest von "beta"-HEAD zum Zeitpunkt X,
--- einzelne Dateien vom frueher aufgeloesten, moeglicherweise AELTEREN
--- SHA) -- dieselbe Bugklasse wie zuvor, nur mit vertauschten Rollen.
---
--- Fix (2026-07-17): CRITICAL. INSTALL-P1 (Abschnitt 8). "ref" wird jetzt
--- vom Aufrufer (deps.ref, siehe /installer) uebergeben statt hier per
--- eigenem http_mod.resolve_sha()-Aufruf ERNEUT aufgeloest zu werden --
--- /installer hat bereits VOR dem Download dieser Datei selbst genau EINEN
--- Ref aufgeloest, um zu wissen, welche Version von installer/http.lua,
--- installer/manifest.lua usw. es ueberhaupt herunterladen soll. Eine
--- zweite, unabhaengige Aufloesung hier haette dieselbe Bugklasse erneut
--- einfuehren koennen (GitHub-HEAD bewegt sich zwischen den beiden
--- Aufloesungen), diesmal zwischen den Installermodulen selbst und dem
--- Rest der Installation.
+-- Der Bootstrap waehlt genau einen Ref und reicht ihn fuer Manifest und
+-- saemtliche Dateien weiter. Es gibt hier weder eine zweite Aufloesung noch
+-- einen dateiweisen Fallback auf einen anderen Ref. Bewegt sich "beta"
+-- waehrend eines Laufs, verhindern die Manifest-Hashes einen gemischten
+-- Commit; der komplette Installationslauf muss dann neu gestartet werden.
 local ref = deps.ref
 if type(ref) ~= "string" or ref == "" then
-  error("installer/init.lua: deps.ref fehlt oder ungueltig -- Aufrufer muss einen aufgeloesten Ref uebergeben", 0)
+  error("installer/init.lua: deps.ref fehlt oder ungueltig", 0)
 end
 p(("ref: " .. ref))
 
@@ -263,7 +262,10 @@ do
   local backup_count = 0
   for _ in pairs(config_backup) do backup_count = backup_count + 1 end
   if backup_count > 0 then
-    pcall(fs.makeDir, RECOVERY_DIR)
+    local ok_dir, dir_err = pcall(fs.makeDir, RECOVERY_DIR)
+    if not ok_dir or not fs.exists(RECOVERY_DIR) then
+      error("Recovery-Verzeichnis konnte nicht angelegt werden: " .. tostring(dir_err), 0)
+    end
     local serialized = serialize_config_backup(config_backup)
     local ok_bak, bak_err = stage_mod.write(RECOVERY_CONFIG_BACKUP, serialized)
     if not ok_bak then
@@ -484,7 +486,7 @@ p("Installiere " .. #file_list .. " Dateien...")
 -- stage_mod.verify() prüfte bisher nur Existenz/Lesbarkeit/Größe/Syntax,
 -- nicht den CRC32-Hash aus dem Manifest -- eine Datei mit korrekter Größe
 -- und gültiger Lua-Syntax, aber verändertem Inhalt, konnte akzeptiert
--- werden. manifest_mod.crc32 (bereits vorhanden, siehe M.is_current())
+-- werden. manifest_mod.crc32 ist die gemeinsame Pruefsummenfunktion.
 -- wird jetzt durchgereicht, damit stage_mod.verify() jeden Write
 -- tatsächlich gegen den erwarteten Hash prüft.
 local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, ref,
@@ -501,7 +503,7 @@ if not ok then error("Installation: " .. tostring(err), 0) end
 -- den Fall ab, dass eine Datei aus file_list aus einem anderen Grund
 -- (Race, externer Eingriff) zwischen Install und hier wieder verschwunden
 -- ist.
-journal_mod.write({
+local ok_verify_journal, err_verify_journal = journal_mod.write({
   state = journal_mod.STATE.VERIFYING,
   ref = ref,
   manifest_id = tostring(manifest.manifest_id or manifest.manifest_version),
@@ -509,6 +511,9 @@ journal_mod.write({
   started_at = os.epoch("utc"),
   expected_files = expected_paths,
 })
+if not ok_verify_journal then
+  error("Installationsjournal (VERIFYING) fehlgeschlagen: " .. tostring(err_verify_journal), 0)
+end
 for _, item in ipairs(file_list) do
   if not fs.exists(INSTALL_ROOT .. "/" .. item.path) then
     error("Verifikation fehlgeschlagen, Datei fehlt nach Installation: " .. item.path, 0)
@@ -538,6 +543,7 @@ do
   if #failed > 0 then
     p("WARN: Config-Wiederherstellung unvollstaendig: " .. table.concat(failed, ", "))
     p("WARN: Recovery-Backup bleibt erhalten: " .. RECOVERY_CONFIG_BACKUP)
+    error("Config-Wiederherstellung unvollstaendig -- Installation bleibt fail-closed", 0)
   else
     pcall(fs.delete, RECOVERY_CONFIG_BACKUP)
   end

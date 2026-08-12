@@ -1054,11 +1054,6 @@ local function line_ui(x, y, text, fg, bg)
   queue_segment(x, y, fit(text, math.max(1, w - x + 1)), fg, bg)
 end
 
-local function fill_line(y, fg, bg)
-  local w = ({ display_size() })[1]
-  queue_segment(1, y, string.rep(" ", w), fg or color("white", 1), bg or color("black", 32768))
-end
-
 local function badge_ui(x, y, label, status)
   local bg = color("gray", 128)
   if status == "OK" then bg = color("lime", 32)

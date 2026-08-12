@@ -9,13 +9,6 @@ local function sanitize_number(value, fallback)
   return fallback
 end
 
--- should_regulate_module_state kept for backwards-compat but no longer used
--- by the main turbine regulation loop. Flow control always runs; the loop
--- adjusts target_rpm per state (OFF/ERROR→0, STARTING/ON→normal target).
-function regulator.should_regulate_module_state(module_state)
-  return true, "STATE_OK"
-end
-
 function regulator.startup_reached_target(rpm, target_rpm, tolerance)
   rpm = sanitize_number(rpm, 0)
   target_rpm = sanitize_number(target_rpm, 0)
@@ -156,48 +149,6 @@ function regulator.should_hold_readback_settle(input)
   return false, "DIRECTION_CHANGE_ALLOWED"
 end
 
-
-function regulator.classify_bottleneck(input)
-  local requested = sanitize_number(type(input) == "table" and input.requested_flow or nil, 0)
-  local confirmed = sanitize_number(type(input) == "table" and input.confirmed_flow or nil, requested)
-  local rotor = sanitize_number(type(input) == "table" and input.rpm or nil, -1)
-  local target = sanitize_number(type(input) == "table" and input.target_rpm or nil, 0)
-  local max = sanitize_number(type(input) == "table" and input.max_flow or nil, 0)
-  local inductor_engaged = type(input) == "table" and input.inductor_engaged or nil
-  local steam_input = sanitize_number(type(input) == "table" and input.steam_input or nil, -1)
-  local min_flow = sanitize_number(type(input) == "table" and input.min_flow or nil, 0)
-  local readback_state = type(input) == "table" and input.readback_state or nil
-  local write_state = type(input) == "table" and input.write_state or nil
-  local abs_error = target - rotor
-  if rotor < 0 then
-    return "RPM_UNAVAILABLE", "RPM_READ_FAILED"
-  end
-  if requested >= max and rotor < (target - 50) then
-    if inductor_engaged == true then
-      return "MAX_FLOW_LOW_RPM_WITH_COIL", "PLANT_OR_COIL_LIMIT"
-    end
-    if steam_input >= 0 and steam_input < math.max(0, confirmed - 25) then
-      return "MAX_FLOW_LOW_RPM_STEAM_LIMIT", "STEAM_INPUT_BELOW_FLOW"
-    end
-    return "MAX_FLOW_LOW_RPM_STEAM_LIMIT", "PLANT_LIMIT_AT_MAX_FLOW"
-  end
-  if requested <= (min_flow + 1) and rotor > (target + 50) then
-    if inductor_engaged == true then
-      return "MIN_LIMIT_OVERSPEED", "MIN_FLOW_WITH_COIL_ENGAGED_NO_FURTHER_DOWN"
-    end
-    return "MIN_LIMIT_OVERSPEED", "MIN_FLOW_LIMIT_REACHED_NO_FURTHER_DOWN"
-  end
-  if requested >= (max - 1) and abs_error > 0 then
-    return "MAX_LIMIT_UNDERSPEED", "MAX_FLOW_LIMIT_REACHED_NO_FURTHER_UP"
-  end
-  if math.abs(requested - confirmed) > 5 then
-    if readback_state == "READBACK_LAG" and write_state == "WRITE_ACCEPTED" then
-      return "FLOW_READBACK_LAG", "WRITE_ACCEPTED_READBACK_PENDING"
-    end
-    return "FLOW_READBACK_LAG", "API_READBACK_LAG"
-  end
-  return "NONE", "NO_LIMITER_DETECTED"
-end
 
 function regulator.classify_confirmation(input)
   local requested = sanitize_number(type(input) == "table" and input.requested_flow or nil, 0)

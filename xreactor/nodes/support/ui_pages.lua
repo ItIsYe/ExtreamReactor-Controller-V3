@@ -1,35 +1,8 @@
 local M = {}
-local mux = require("core.mockup_ui")
-
-function M.draw_status_page(target, ui, colors, title, lines)
-  local w, h = target.getSize()
-  mux.clear(target)
-  mux.header(target, { title = title or "STATUS", node_id = "LOCAL NODE", page = "STATUS", status = "OK", icon = "network" })
-  mux.section(target, 2, 5, w - 3, "> SYSTEM STATUS", "LIMITED", "network")
-  local y = 7
-  for _, line in ipairs(lines or {}) do
-    if y >= h then break end
-    mux.data_row(target, 2, y, w - 3, { label = tostring(line), value = "", status = "text", icon = "network" })
-    y = y + 1
-  end
-  if #(lines or {}) == 0 then
-    mux.warning_box(target, 2, 7, w - 3, { "Keine Statusdaten", "Warte auf Telemetrie" }, "LIMITED")
-  end
-  mux.footer_nav(target, h, w, { center = "SYSTEM STATUS" })
-end
 
 function M.format_age(ts, now)
   if not ts then return "n/a" end
   return ("%ds"):format(math.max(0, math.floor((now - ts) / 1000)))
-end
-
-function M.render_alert_banner(target, ui, model)
-  if model.local_alerts_critical and model.local_alerts_critical > 0 then
-    local w = select(1, ui.getSize(target))
-    if not w then return end
-    local label = "CRIT " .. tostring(model.local_alerts_critical)
-    ui.badge(target, w - (#label + 2), 1, label, "EMERGENCY")
-  end
 end
 
 function M.append_local_alert_rows(rows, alerts)

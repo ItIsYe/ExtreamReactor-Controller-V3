@@ -30,48 +30,6 @@ local function log_with_devices(devices, level, message)
   utils.log("SUPPORT", message, level or "INFO")
 end
 
-function M.handle_common(ctx, msg)
-  if type(msg) ~= "table" then
-    return false
-  end
-
-  local cmd = msg.cmd
-
-  -- TEMPORÄR: Remote-Update — installiert/aktualisiert die Node per Funk-
-  -- Befehl ohne dass jemand am PC den Installer manuell starten muss.
-  -- Kann später wieder entfernt werden.
-  if cmd == "REMOTE_UPDATE" then
-    require("core.remote_update").handle_command({
-      log_prefix = (ctx and ctx.log_prefix) or "SUPPORT",
-      utils = ctx and ctx.utils,
-      send_ack = (ctx and ctx.comms) and function() ctx.comms:send_ack(msg, true, { updating = true }) end or nil,
-    })
-    return true
-  end
-
-  if cmd == "PING" then
-    if ctx and ctx.comms then
-      ctx.comms:send_ack(msg, true, { pong = true })
-    end
-    return true
-  end
-
-  if cmd == "TERMINATE" or cmd == "SHUTDOWN" then
-    if ctx and ctx.utils then
-      ctx.utils.log(ctx.log_prefix, "Shutdown command received", "WARN")
-    end
-    if ctx and ctx.comms then
-      ctx.comms:send_ack(msg, true, { terminating = true })
-    end
-    if type(ctx.on_shutdown) == "function" then
-      ctx.on_shutdown(msg)
-    end
-    return true
-  end
-
-  return false
-end
-
 function M.parse_node_command(message, opts)
   if type(message) ~= "table" then
     return nil, { ok = false, error = "invalid message", reason_code = "INVALID_MESSAGE" }

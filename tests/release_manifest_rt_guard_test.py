@@ -1,111 +1,42 @@
 #!/usr/bin/env python3
-import pathlib
+from pathlib import Path
 import re
-import sys
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-RELEASE_PATH = REPO_ROOT / "xreactor" / "release.lua"
-MANIFEST_PATH = REPO_ROOT / "xreactor" / "manifest.lua"
-INSTALLER_BOOTSTRAP = REPO_ROOT / "installer"
-INSTALLER_MAIN = REPO_ROOT / "xreactor" / "installer_main.lua"
-RT_MAIN = REPO_ROOT / "xreactor" / "nodes" / "rt" / "main.lua"
-
-SOURCE_REF_RE = re.compile(r'source_ref\s*=\s*"([^"]+)"')
-COMMIT_RE = re.compile(r'commit_sha\s*=\s*"([^"]*)"')
-MANIFEST_PATH_RE = re.compile(r'path\s*=\s*"([^"]+)"')
-REQUIRE_RE = re.compile(r'require\s*\(\s*["\']([\w\._]+)["\']\s*\)')
+root = Path('.')
+release = (root / 'xreactor/release.lua').read_text(encoding='utf-8')
+manifest = (root / 'xreactor/manifest.lua').read_text(encoding='utf-8')
+installer = (root / 'installer').read_text(encoding='utf-8')
+installer_init = (root / 'xreactor/installer/init.lua').read_text(encoding='utf-8')
+installer_http = (root / 'xreactor/installer/http.lua').read_text(encoding='utf-8')
+rt = (root / 'xreactor/nodes/rt/main.lua').read_text(encoding='utf-8')
+paths = set(re.findall(r'path\s*=\s*"([^"]+)"', manifest))
 
 
-
-def read(path: pathlib.Path) -> str:
-    return path.read_text(encoding="utf-8")
-
-
-
-def module_to_path(module_name: str) -> str:
-    return module_name.replace('.', '/') + '.lua'
+def field(source, name):
+    match = re.search(rf'{name}\s*=\s*"([^"]*)"', source)
+    if not match:
+        raise AssertionError(f'missing {name}')
+    return match.group(1)
 
 
+assert field(release, 'source_ref') == 'beta'
+assert field(manifest, 'source_ref') == 'beta'
+assert field(release, 'commit_sha') in ('', 'beta')
 
-def parse_release_commit(text: str) -> str:
-    m = COMMIT_RE.search(text)
-    if not m:
-        raise AssertionError("release.lua commit_sha missing")
-    return m.group(1)
+for path in ['nodes/rt/discovery_runtime.lua', 'nodes/rt/health_payload.lua', 'nodes/rt/main.lua']:
+    assert path in paths, f'manifest missing RT runtime file {path}'
 
+require_pattern = re.compile(r"require\s*\(\s*['\"]([\w\._]+)['\"]\s*\)")
+for module in require_pattern.findall(rt):
+    rel = module.replace('.', '/') + '.lua'
+    if (root / 'xreactor' / rel).exists():
+        assert rel in paths, f'RT require missing from manifest: {rel}'
 
+assert '__xreactor_forced_ref' in installer
+assert 'or "beta"' in installer
+assert 'local ref = deps.ref' in installer_init
+assert 'manifest_mod.crc32' in installer_init
+assert 'resolve_sha' not in installer + installer_init + installer_http
+assert 'api.github.com' not in installer + installer_init + installer_http
 
-def parse_source_ref(text: str) -> str:
-    m = SOURCE_REF_RE.search(text)
-    if not m:
-        raise AssertionError("manifest.lua source_ref missing")
-    return m.group(1)
-
-
-
-def main() -> int:
-    release_text = read(RELEASE_PATH)
-    manifest_text = read(MANIFEST_PATH)
-    installer_bootstrap_text = read(INSTALLER_BOOTSTRAP)
-    installer_main_text = read(INSTALLER_MAIN)
-    rt_main_text = read(RT_MAIN)
-
-    release_commit = parse_release_commit(release_text)
-    source_ref = parse_source_ref(manifest_text)
-    release_source_ref = parse_source_ref(release_text)
-    manifest_paths = set(MANIFEST_PATH_RE.findall(manifest_text))
-
-    errors: list[str] = []
-
-    if release_commit not in ("", "beta"):
-        errors.append(
-            f"release commit pin not allowed in beta-only strategy: commit_sha={release_commit}"
-        )
-
-    if release_source_ref != "beta":
-        errors.append(f"release source_ref must be beta: {release_source_ref}")
-
-    if source_ref != "beta":
-        errors.append(f"manifest source_ref must be beta: {source_ref}")
-
-    if source_ref != release_source_ref:
-        errors.append(
-            f"release/manifest source_ref mismatch: release.source_ref={release_source_ref} manifest.source_ref={source_ref}"
-        )
-
-    mandatory_rt_paths = {
-        "nodes/rt/discovery_runtime.lua",
-        "nodes/rt/health_payload.lua",
-        "nodes/rt/main.lua",
-    }
-    for path in sorted(mandatory_rt_paths):
-        if path not in manifest_paths:
-            errors.append(f"manifest missing mandatory RT path: {path}")
-
-    for required_mod in sorted(set(REQUIRE_RE.findall(rt_main_text))):
-        required_path = module_to_path(required_mod)
-        if required_path.startswith("xreactor/"):
-            required_path = required_path[len("xreactor/"):]
-        if required_path in manifest_paths:
-            continue
-        candidate_file = REPO_ROOT / "xreactor" / required_path
-        if candidate_file.exists():
-            errors.append(
-                f"RT require is present on disk but missing in manifest: module={required_mod} path={required_path}"
-            )
-
-    if "installer_%s.log" not in installer_main_text:
-        errors.append("installer_main.lua no role log naming template installer_%s.log")
-
-    if errors:
-        print("release_manifest_rt_guard_test.py: FAIL")
-        for err in errors:
-            print(" -", err)
-        return 1
-
-    print("release_manifest_rt_guard_test.py: ok")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+print('release_manifest_rt_guard_test.py: ok')

@@ -26,7 +26,7 @@ do
   local h = update_handshake.new()
   assert_eq(h.state, update_handshake.STATE.IDLE, 'new handshake must start IDLE')
   assert_true(not update_handshake.is_quiesce_requested(h), 'fresh handshake must not report quiesce requested')
-  assert_true(not update_handshake.is_runtime_stopped(h), 'fresh handshake must not report runtime stopped')
+  assert_true(h.state ~= update_handshake.STATE.RUNTIME_STOPPED, 'fresh handshake must not report runtime stopped')
 end
 
 -- 2. request_quiesce() fuehrt zu QUIESCE_REQUESTED (durchlaeuft UPDATE_
@@ -54,15 +54,13 @@ do
     'mark_safe_outputs_applied() from QUIESCE_REQUESTED must transition to SAFE_OUTPUTS_APPLIED')
 end
 
--- 4. mark_runtime_stopped() setzt RUNTIME_STOPPED, is_runtime_stopped() wird
---    wahr.
+-- 4. mark_runtime_stopped() setzt RUNTIME_STOPPED.
 do
   local h = update_handshake.new()
   update_handshake.request_quiesce(h)
   update_handshake.mark_safe_outputs_applied(h)
   update_handshake.mark_runtime_stopped(h)
   assert_eq(h.state, update_handshake.STATE.RUNTIME_STOPPED, 'mark_runtime_stopped must set RUNTIME_STOPPED')
-  assert_true(update_handshake.is_runtime_stopped(h), 'is_runtime_stopped must be true after mark_runtime_stopped')
   assert_true(not update_handshake.is_quiesce_requested(h), 'is_quiesce_requested must be false once RUNTIME_STOPPED')
 end
 
@@ -110,15 +108,26 @@ do
   assert_true(update_handshake.wait_for_runtime_stopped(nil, 5), 'a nil handshake must not block the caller')
 end
 
--- 7. reset() bringt den Handshake zurueck auf IDLE, fuer den naechsten Zyklus.
+-- 7. Sobald Aktoren als sicher bestaetigt und die Runtime gestoppt ist, darf
+--    reset() sie nicht stillschweigend wieder freigeben. Die Recovery laeuft
+--    dann ausschliesslich ueber Installer/Reboot. Nur eine noch laufende,
+--    nicht sicherheitswirksame Anfrage darf abgebrochen werden.
 do
   local h = update_handshake.new()
   update_handshake.request_quiesce(h)
   update_handshake.mark_safe_outputs_applied(h)
   update_handshake.mark_runtime_stopped(h)
-  update_handshake.reset(h)
-  assert_eq(h.state, update_handshake.STATE.IDLE, 'reset() must return the handshake to IDLE')
-  assert_true(h.requested_at == nil, 'reset() must clear requested_at')
+  assert_true(not update_handshake.reset(h), 'reset() must reject a stopped runtime')
+  assert_eq(h.state, update_handshake.STATE.RUNTIME_STOPPED,
+    'reset() must never rewind a stopped runtime without reboot')
+end
+
+do
+  local h = update_handshake.new()
+  update_handshake.request_quiesce(h)
+  assert_true(update_handshake.reset(h), 'a pre-safety request may be cancelled')
+  assert_eq(h.state, update_handshake.STATE.IDLE, 'cancelled pre-safety request must return to IDLE')
+  assert_true(h.requested_at == nil, 'cancelled request must clear requested_at')
 end
 
 print('core_update_handshake_test.lua: ok')

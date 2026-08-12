@@ -146,23 +146,6 @@ function M.metric_card(mon, x, y, w, h, opts)
   if h >= 4 then write(mon, x + 2, y + 2, fit(value .. unit, math.max(1, w - 4)), colors.get(key), colors.get("background")) end
 end
 
-function M.segmented_bar(mon, x, y, w, percent, status, opts)
-  opts = opts or {}
-  local pct = math.max(0, math.min(1, tonumber(percent) or 0))
-  local segments = math.max(1, tonumber(opts.segments) or math.floor(w / 2))
-  local seg_w = math.max(1, math.floor(w / segments))
-  local active = math.floor((pct * segments) + 0.5)
-  local key = status or "OK"
-  for i = 1, segments do
-    local sx = x + (i - 1) * seg_w
-    if sx > x + w - 1 then break end
-    local width = math.min(seg_w - (seg_w > 1 and 1 or 0), x + w - sx)
-    if width < 1 then width = 1 end
-    local bg = i <= active and colors.get(key) or colors.get("OFFLINE")
-    write(mon, sx, y, string.rep(" ", width), colors.get("background"), bg)
-  end
-end
-
 function M.outlined_progress(mon, x, y, w, percent, status, label)
   if w < 5 then return end
   local pct = math.max(0, math.min(1, tonumber(percent) or 0))
