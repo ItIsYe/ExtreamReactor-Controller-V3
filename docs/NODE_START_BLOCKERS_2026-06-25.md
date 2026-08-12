@@ -22,4 +22,4 @@ Aktuelle offene Punkte stehen in:
 
 [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md)
 
-Historische Details bleiben über die Git-Historie und [`../RUNTIME_STATUS_2026-06-03.md`](../RUNTIME_STATUS_2026-06-03.md) nachvollziehbar.
+Historische Details bleiben über die Git-Historie nachvollziehbar (`../RUNTIME_STATUS_2026-06-03.md` wurde entfernt, siehe `docs/README.md`).
