@@ -192,6 +192,51 @@ local function has_temp_space(bytes_needed)
   return free >= bytes_needed
 end
 
+local LOG_DIR = "/xreactor_logs"
+
+local function dir_size(path)
+  if not fs.exists(path) then return 0 end
+  local ok_is_dir, is_dir = pcall(fs.isDir, path)
+  if not ok_is_dir then return 0 end
+  if not is_dir then
+    local ok_size, size = pcall(fs.getSize, path)
+    return (ok_size and type(size) == "number") and size or 0
+  end
+  local ok_list, entries = pcall(fs.list, path)
+  if not ok_list or type(entries) ~= "table" then return 0 end
+  local total = 0
+  for _, name in ipairs(entries) do
+    total = total + dir_size(path .. "/" .. name)
+  end
+  return total
+end
+
+-- Fix: same last-resort reclaim as installer/stage.lua's reclaim() (see
+-- there for the full history/rationale -- explicit user request after
+-- repeated "out of space" aborts). The managed auto-updater has its own,
+-- separate temp-space check here (writing the freshly downloaded
+-- installer bootstrap to TEMP_INSTALLER before dofile()-ing it) and
+-- didn't share that logic, so a node whose logs had re-accumulated could
+-- still fail every attempt with "insufficient space for temporary
+-- installer" even after the manual-install path was already fixed to
+-- self-heal. Mirrored here rather than requiring stage.lua: this file is
+-- deliberately self-contained (see header comment). Only /xreactor_logs,
+-- only as a last resort after the plain space check already failed, and
+-- every actual deletion is logged -- never silent.
+local function ensure_temp_space(bytes_needed)
+  if has_temp_space(bytes_needed) then return true end
+  if fs.exists(LOG_DIR) then
+    local logs_bytes = dir_size(LOG_DIR)
+    if logs_bytes > 0 then
+      pcall(fs.delete, LOG_DIR)
+      if not fs.exists(LOG_DIR) then
+        log(string.format("/xreactor_logs geloescht (%d bytes) -- Speicher war sonst nicht ausreichend", logs_bytes))
+      end
+    end
+  end
+  return has_temp_space(bytes_needed)
+end
+
 local function run_update()
   local base_url = GITHUB_RAW .. SOURCE_REF .. "/installer"
   local last_error = "installer unavailable"
@@ -200,7 +245,7 @@ local function run_update()
   for attempt = 1, 4 do
     local body, err = http_get_async(cache_bust(base_url, attempt))
     if body and #body > 100 and not is_html(body) then
-      if not has_temp_space(#body + 1024) then
+      if not ensure_temp_space(#body + 1024) then
         last_error = "insufficient space for temporary installer"
       else
         local handle = fs.open(TEMP_INSTALLER, "w")
