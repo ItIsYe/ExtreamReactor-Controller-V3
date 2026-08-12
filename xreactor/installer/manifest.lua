@@ -44,25 +44,41 @@ for i = 0, 255 do
   CRC_TABLE[i] = c
 end
 
--- Fix: bei den groessten Dateien im Manifest (FUEL-Rolle: redstone_router.lua
--- ~58KB, router_ui.lua ~40KB, ...) konnte diese Byte-fuer-Byte-Schleife ohne
+-- Fix: bei groesseren Dateien im Manifest (FUEL-Rolle bringt mit Abstand die
+-- groessten Einzeldateien im gesamten Manifest mit, z.B. redstone_router.lua
+-- ~58KB, router_ui.lua ~40KB) konnte diese Byte-fuer-Byte-Schleife ohne
 -- jeden Yield auf einem ausgelasteten Server CC:Tweaked's Watchdog-Limit
 -- ("too long without yielding") ueberschreiten -- der Installer blieb dann
--- mitten im Fortschrittsbalken haengen (beobachtet bei FUEL, das die
--- groessten Einzeldateien im gesamten Manifest mitbringt). os.sleep(0) alle
--- CRC_YIELD_EVERY Bytes gibt die Kontrolle regelmaessig an den Scheduler
--- zurueck; os existiert in Offline-Tests (Host-Lua) ohne .sleep, daher der
--- type()-Check.
-local CRC_YIELD_EVERY = 4096
+-- mitten im Fortschrittsbalken haengen, OHNE Fehlermeldung (der Watchdog
+-- killt die Coroutine hart, statt einen catchbaren Fehler zu werfen).
+--
+-- Ein erster Versuch mit os.sleep(0) alle 4096 Bytes reichte unter Server-
+-- last nicht: os.sleep() wartet selbst im 0-Fall mindestens einen echten
+-- Server-Tick (und unter genau der Last, vor der wir uns schuetzen wollen,
+-- dauert ein Tick laenger) -- das haette bei sehr kleiner Yield-Distanz
+-- die Installation spuerbar verlangsamt, war bei 4096 Bytes aber trotzdem
+-- noch zu selten (naechster beobachteter Haenger bei einer kleineren,
+-- aber nicht winzigen 18KB-Datei). os.queueEvent()+os.pullEvent() auf ein
+-- selbst gewaehltes, garantiert ungenutztes Event yieldet die Coroutine
+-- genauso wirksam (setzt den Watchdog zurueck) OHNE auf den naechsten Tick
+-- zu warten -- das Event wird noch in derselben Tick-Verarbeitung wieder
+-- zugestellt. Dadurch kann CRC_YIELD_EVERY deutlich kleiner sein, ohne die
+-- Installation spuerbar zu verlangsamen. os/os.queueEvent existieren in
+-- Offline-Tests (Host-Lua) nicht, daher der type()-Check.
+local CRC_YIELD_EVERY = 512
+local CRC_YIELD_EVENT = "__xr_crc32_yield"
 
 local function crc32(content)
+  local can_yield = type(os) == "table"
+    and type(os.queueEvent) == "function" and type(os.pullEvent) == "function"
   local crc = 0xFFFFFFFF
   local len = #content
   for i = 1, len do
     local idx = bit32.band(bit32.bxor(crc, string.byte(content, i)), 0xFF)
     crc = bit32.bxor(bit32.rshift(crc, 8), CRC_TABLE[idx])
-    if type(os) == "table" and type(os.sleep) == "function" and i % CRC_YIELD_EVERY == 0 then
-      os.sleep(0)
+    if can_yield and i % CRC_YIELD_EVERY == 0 then
+      os.queueEvent(CRC_YIELD_EVENT)
+      os.pullEvent(CRC_YIELD_EVENT)
     end
   end
   return string.format("%08x", bit32.bxor(crc, 0xFFFFFFFF))
