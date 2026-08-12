@@ -262,11 +262,16 @@ do
   local backup_count = 0
   for _ in pairs(config_backup) do backup_count = backup_count + 1 end
   if backup_count > 0 then
+    -- Computed before makeDir() (pure string work, no fs I/O) so a space
+    -- failure right here can still report an accurate "needed" byte count,
+    -- not just "out of space" with nothing to act on.
+    local serialized = serialize_config_backup(config_backup)
     local ok_dir, dir_err = pcall(fs.makeDir, RECOVERY_DIR)
     if not ok_dir or not fs.exists(RECOVERY_DIR) then
-      error("Recovery-Verzeichnis konnte nicht angelegt werden: " .. tostring(dir_err), 0)
+      local free = stage_mod.free_space and stage_mod.free_space()
+      local diag = free and stage_mod.space_diagnostic(free, #serialized) or tostring(dir_err)
+      error("Recovery-Verzeichnis konnte nicht angelegt werden: " .. tostring(dir_err) .. " (" .. diag .. ")", 0)
     end
-    local serialized = serialize_config_backup(config_backup)
     local ok_bak, bak_err = stage_mod.write(RECOVERY_CONFIG_BACKUP, serialized)
     if not ok_bak then
       error("Config-Backup fehlgeschlagen, breche vor Loeschen ab: " .. tostring(bak_err), 0)

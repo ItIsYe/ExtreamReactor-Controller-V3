@@ -15,6 +15,7 @@ local function free_space()
   if type(v) == "number" then return v < 0 and math.huge or v end
   return nil
 end
+M.free_space = free_space
 
 -- Recursive size, used only for the space-shortage diagnostic below --
 -- never for a decision to delete anything.
@@ -60,6 +61,23 @@ end
 -- measured size of /xreactor_logs whenever it can't free enough itself,
 -- so the user knows what to clear manually -- the installer still never
 -- deletes it itself.
+-- Shared with installer/init.lua: any early fs write (e.g. makeDir() for the
+-- recovery directory, BEFORE /xreactor is deleted) can hit the exact same
+-- space shortage as M.write() below, with no "needed" byte count of its own
+-- to report -- callers that only know they're low on space, not how much
+-- they were trying to write, pass needed=nil.
+function M.space_diagnostic(free, needed)
+  local diag = needed and string.format("free=%d needed=%d", free, needed)
+    or string.format("free=%d", free)
+  local logs_bytes = dir_size("/xreactor_logs")
+  if logs_bytes > 0 then
+    diag = diag .. string.format(
+      " -- /xreactor_logs currently uses %d bytes; safe to delete manually to free space (diagnostic data only, not restored by the installer)",
+      logs_bytes)
+  end
+  return diag
+end
+
 local function reclaim(needed)
   local free = free_space()
   if free and free >= needed then return true end
@@ -67,14 +85,7 @@ local function reclaim(needed)
   if fs.exists("/xreactor_stage")       then pcall(fs.delete, "/xreactor_stage") end
   free = free_space()
   if free == nil or free >= needed then return true end
-  local logs_bytes = dir_size("/xreactor_logs")
-  local diag = string.format("free=%d needed=%d", free, needed)
-  if logs_bytes > 0 then
-    diag = diag .. string.format(
-      " -- /xreactor_logs currently uses %d bytes; safe to delete manually to free space (diagnostic data only, not restored by the installer)",
-      logs_bytes)
-  end
-  return false, diag
+  return false, M.space_diagnostic(free, needed)
 end
 
 function M.write(path, content)
