@@ -2,6 +2,10 @@
 """Prueft dass manifest_version nie sinkt (Rollback-Guard).
 
 --no-bump-required   Fehler nur wenn Version kleiner als HEAD~1 wird.
+--base/--head        Optionale git refs/shas statt HEAD~1/HEAD (von der CI
+                      genutzt, die den echten PR-Base- bzw. Push-"before"-
+                      Commit kennt -- robuster als HEAD~1 bei Merge-Commits
+                      oder dem allerersten Commit eines Branches).
 """
 import sys, re, subprocess, argparse, os
 
@@ -18,10 +22,12 @@ def get_version(ref="HEAD"):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-bump-required", action="store_true")
+    parser.add_argument("--base", default=None, help="base git ref/sha to compare")
+    parser.add_argument("--head", default=None, help="head git ref/sha to compare")
     args = parser.parse_args()
 
-    cur = get_version("HEAD")
-    prev = get_version("HEAD~1")
+    cur = get_version(args.head or "HEAD")
+    prev = get_version(args.base or "HEAD~1")
 
     if cur is None:
         print("WARN: cannot read current manifest_version")
