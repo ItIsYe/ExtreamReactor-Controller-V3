@@ -16,6 +16,25 @@ local function free_space()
   return nil
 end
 
+-- Recursive size, used only for the space-shortage diagnostic below --
+-- never for a decision to delete anything.
+local function dir_size(path)
+  if not fs.exists(path) then return 0 end
+  local ok_is_dir, is_dir = pcall(fs.isDir, path)
+  if not ok_is_dir then return 0 end
+  if not is_dir then
+    local ok_size, size = pcall(fs.getSize, path)
+    return (ok_size and type(size) == "number") and size or 0
+  end
+  local ok_list, entries = pcall(fs.list, path)
+  if not ok_list or type(entries) ~= "table" then return 0 end
+  local total = 0
+  for _, name in ipairs(entries) do
+    total = total + dir_size(path .. "/" .. name)
+  end
+  return total
+end
+
 -- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
 -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
 -- "/xreactor_logs" wurde hier bisher unconditional rekursiv geloescht,
@@ -30,20 +49,40 @@ end
 -- M.write() (und damit letztlich M.install()) einen klaren Fehler zurueck
 -- und die Installation bricht kontrolliert ab, statt Nutzerdaten zu
 -- opfern.
+--
+-- Fix: "not enough space for <path>" alone left the user with nothing
+-- actionable on a reinstall of an already-running node -- /xreactor is
+-- deleted before new files are written (see installer/init.lua), so the
+-- shortfall is essentially always something OUTSIDE /xreactor, most
+-- commonly accumulated /xreactor_logs (core/logger.lua caps a single log
+-- file, but a long-running node still keeps one active + one rotated
+-- backup on disk). reclaim() now reports free/needed bytes plus the
+-- measured size of /xreactor_logs whenever it can't free enough itself,
+-- so the user knows what to clear manually -- the installer still never
+-- deletes it itself.
 local function reclaim(needed)
   local free = free_space()
   if free and free >= needed then return true end
   if fs.exists("/xreactor_backup_prev") then pcall(fs.delete, "/xreactor_backup_prev") end
   if fs.exists("/xreactor_stage")       then pcall(fs.delete, "/xreactor_stage") end
   free = free_space()
-  return free == nil or free >= needed
+  if free == nil or free >= needed then return true end
+  local logs_bytes = dir_size("/xreactor_logs")
+  local diag = string.format("free=%d needed=%d", free, needed)
+  if logs_bytes > 0 then
+    diag = diag .. string.format(
+      " -- /xreactor_logs currently uses %d bytes; safe to delete manually to free space (diagnostic data only, not restored by the installer)",
+      logs_bytes)
+  end
+  return false, diag
 end
 
 function M.write(path, content)
   local dir = fs.getDir(path)
   if dir and dir ~= "" and not fs.exists(dir) then pcall(fs.makeDir, dir) end
-  if not reclaim(#content + WRITE_BUFFER) then
-    return false, "not enough space for " .. path
+  local reclaimed, reclaim_diag = reclaim(#content + WRITE_BUFFER)
+  if not reclaimed then
+    return false, "not enough space for " .. path .. " (" .. tostring(reclaim_diag) .. ")"
   end
   local tmp = path .. ".xr_tmp"
   local f = fs.open(tmp, "w")
