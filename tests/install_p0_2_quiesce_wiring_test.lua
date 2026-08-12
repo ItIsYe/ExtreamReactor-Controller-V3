@@ -128,7 +128,7 @@ do
   local src = read("installer/auto_update.lua")
   assert_contains(src, "function M.make_loop(interval_s, handshake)", "installer/auto_update.lua")
   assert_contains(src, "local quiesced, quiesce_err = request_and_await_quiesce(handshake)", "installer/auto_update.lua")
-  assert_contains(src, 'update_handshake.wait_for_runtime_stopped(handshake, 20)', "installer/auto_update.lua")
+  assert_contains(src, 'update_handshake.wait_for_runtime_stopped(handshake, QUIESCE_TIMEOUT_S)', "installer/auto_update.lua")
   -- Muss VOR dem eigentlichen Download-/Installlauf entschieden werden
   -- (nicht zu verwechseln mit fetch_remote_version()'s eigener, frueherer
   -- "for attempt = 1, 3 do"-HTTP-Retry-Schleife).

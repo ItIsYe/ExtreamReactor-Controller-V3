@@ -10,6 +10,22 @@ local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Cont
 local SOURCE_REF = "beta"
 local UPDATE_EVENT = "xreactor_remote_update_requested"
 
+-- Fix: FUEL/REPROCESSOR quiesce via redstone_router.lua's begin_quiesce()/
+-- poll_quiesce() -- confirming EVERY known valve BLOCKED over a wireless
+-- ACK round trip, with its own SAFETY_CONFIRM_TIMEOUT_MS=15000ms budget PER
+-- confirmation attempt (see nodes/fuel/redstone_router.lua) before it
+-- re-requests a fresh batch. The previous 20s deadline here left barely any
+-- margin over a SINGLE 15s attempt -- any retry, ACK loss, or ongoing
+-- delivery competing for the same valves reliably blew the 20s budget. The
+-- role-side handshake state (core/update_handshake.lua) resets to IDLE on
+-- timeout, but the router's OWN quiesce progress (self._state.quiesce)
+-- survives untouched, so this doesn't need to be "instant" -- it only needs
+-- enough room for a few full confirmation rounds. 60s covers 4x the
+-- internal 15s budget. RT/VALVE/WATER/MASTER/LOG quiesce locally/
+-- synchronously and return via wait_for_runtime_stopped() as soon as they
+-- confirm, well before this ceiling -- raising it costs them nothing.
+local QUIESCE_TIMEOUT_S = 60
+
 local function log(message)
   pcall(print, "[AUTO] " .. tostring(message))
 end
@@ -140,7 +156,7 @@ local function request_and_await_quiesce(handshake)
   local requested, request_err = update_handshake.request_quiesce(handshake)
   if requested ~= true then return false, request_err or "quiesce request failed" end
   log("Quiesce angefordert -- warte auf RUNTIME_STOPPED...")
-  if update_handshake.wait_for_runtime_stopped(handshake, 20) then
+  if update_handshake.wait_for_runtime_stopped(handshake, QUIESCE_TIMEOUT_S) then
     log("Quiesce bestaetigt (RUNTIME_STOPPED)")
     return true
   end
