@@ -29,23 +29,41 @@ local ROLE_EXTRAS = {
   }
 }
 
-local function crc32(content)
-  local CRC = {}
-  for i = 0, 255 do
-    local c = i
-    for _ = 1, 8 do
-      if bit32.band(c, 1) == 1 then
-        c = bit32.bxor(bit32.rshift(c, 1), 0xEDB88320)
-      else
-        c = bit32.rshift(c, 1)
-      end
+-- Lookup-Tabelle nur einmal beim Laden dieses Moduls aufbauen, nicht bei
+-- jedem crc32()-Aufruf neu (M.install() ruft crc32() fuer JEDE Datei auf).
+local CRC_TABLE = {}
+for i = 0, 255 do
+  local c = i
+  for _ = 1, 8 do
+    if bit32.band(c, 1) == 1 then
+      c = bit32.bxor(bit32.rshift(c, 1), 0xEDB88320)
+    else
+      c = bit32.rshift(c, 1)
     end
-    CRC[i] = c
   end
+  CRC_TABLE[i] = c
+end
+
+-- Fix: bei den groessten Dateien im Manifest (FUEL-Rolle: redstone_router.lua
+-- ~58KB, router_ui.lua ~40KB, ...) konnte diese Byte-fuer-Byte-Schleife ohne
+-- jeden Yield auf einem ausgelasteten Server CC:Tweaked's Watchdog-Limit
+-- ("too long without yielding") ueberschreiten -- der Installer blieb dann
+-- mitten im Fortschrittsbalken haengen (beobachtet bei FUEL, das die
+-- groessten Einzeldateien im gesamten Manifest mitbringt). os.sleep(0) alle
+-- CRC_YIELD_EVERY Bytes gibt die Kontrolle regelmaessig an den Scheduler
+-- zurueck; os existiert in Offline-Tests (Host-Lua) ohne .sleep, daher der
+-- type()-Check.
+local CRC_YIELD_EVERY = 4096
+
+local function crc32(content)
   local crc = 0xFFFFFFFF
-  for i = 1, #content do
+  local len = #content
+  for i = 1, len do
     local idx = bit32.band(bit32.bxor(crc, string.byte(content, i)), 0xFF)
-    crc = bit32.bxor(bit32.rshift(crc, 8), CRC[idx])
+    crc = bit32.bxor(bit32.rshift(crc, 8), CRC_TABLE[idx])
+    if type(os) == "table" and type(os.sleep) == "function" and i % CRC_YIELD_EVERY == 0 then
+      os.sleep(0)
+    end
   end
   return string.format("%08x", bit32.bxor(crc, 0xFFFFFFFF))
 end
