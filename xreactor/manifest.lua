@@ -1,13 +1,13 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 577,
-  manifest_id = "manifest-v577",
+  manifest_version = 578,
+  manifest_id = "manifest-v578",
   source_ref = "beta",
   hash_algo = "crc32",
 
   base_files = {
   { path = "installer/http.lua", size_bytes = 4835, hash = "eb7b4d47", always = true },
-  { path = "installer/manifest.lua", size_bytes = 7223, hash = "272115ad", always = true },
+  { path = "installer/manifest.lua", size_bytes = 6436, hash = "e18844b4", always = true },
   { path = "installer/stage.lua", size_bytes = 9132, hash = "b87557db", always = true },
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always = true },
   { path = "installer/auto_update.lua", size_bytes = 15660, hash = "685150ed", always = true },
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "1ec4cf52", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "b043be38", always = true },
   { path = "start.lua", size_bytes = 12598, hash = "a5e5a4f2", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -90,9 +90,9 @@ return {
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"} },
     { path = "master/runtime_ops_profile.lua", size_bytes = 8994, hash = "1017c3d3", required_for={"MASTER"} },
     { path = "master/runtime_ops_rt.lua", size_bytes = 16692, hash = "45ba275f", required_for={"MASTER"} },
-    { path = "master/startup_sequencer.lua", size_bytes = 12914, hash = "40c9d982", required_for={"MASTER"} },
+    { path = "master/startup_sequencer.lua", size_bytes = 11394, hash = "d90e5035", required_for={"MASTER"} },
     { path = "master/support_status.lua", size_bytes = 1385, hash = "7e4a2f0e", required_for={"MASTER"} },
-    { path = "master/ui/alarms.lua", size_bytes = 7996, hash = "93b8a349", required_for={"MASTER"} },
+    { path = "master/ui/alarms.lua", size_bytes = 7730, hash = "50e520ed", required_for={"MASTER"} },
     { path = "master/ui/alerts.lua", size_bytes = 28137, hash = "4bf57a50", required_for={"MASTER"} },
     { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"} },
     { path = "master/ui/multiview.lua", size_bytes = 15645, hash = "10435e4c", required_for={"MASTER"} },
