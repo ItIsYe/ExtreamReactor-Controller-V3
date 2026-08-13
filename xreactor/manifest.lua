@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 573,
-  manifest_id = "manifest-v573",
+  manifest_version = 574,
+  manifest_id = "manifest-v574",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "2cb3bdcc", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "e6da299a", always = true },
   { path = "start.lua", size_bytes = 12598, hash = "a5e5a4f2", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -81,7 +81,7 @@ return {
     { path = "master/fuel_relay.lua", size_bytes = 3413, hash = "0b9f8c37", required_for={"MASTER"} },
     { path = "master/init_runtime.lua", size_bytes = 8295, hash = "50e5b461", required_for={"MASTER"} },
     { path = "master/main.lua", size_bytes = 244, hash = "227a851a", required_for={"MASTER"} },
-    { path = "master/message_handlers.lua", size_bytes = 28930, hash = "2fc1c9b2", required_for={"MASTER"} },
+    { path = "master/message_handlers.lua", size_bytes = 27578, hash = "8bb19469", required_for={"MASTER"} },
     { path = "master/monitor_sessions.lua", size_bytes = 10746, hash = "8918bb8f", required_for={"MASTER"} },
     { path = "master/profiles.lua", size_bytes = 275, hash = "59bdc157", required_for={"MASTER"} },
     { path = "master/rt_sync.lua", size_bytes = 18867, hash = "0aecf044", required_for={"MASTER"} },
@@ -223,7 +223,7 @@ return {
     reprocessing = {
     { path = "nodes/reprocessor/config.lua", size_bytes = 4079, hash = "1c3b0c7b", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 2097, hash = "7b4dd612", required_for={"REPROCESSING"} },
-    { path = "nodes/reprocessor/feed_router.lua", size_bytes = 10882, hash = "acf72d76", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/feed_router.lua", size_bytes = 9492, hash = "7ed963f3", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/main.lua", size_bytes = 27126, hash = "8698acc1", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 11071, hash = "25d5ebdf", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
