@@ -72,24 +72,17 @@ function router.new(mon_or_opts, opts)
     pages = opts.pages or {},
     index = opts.index or 1,
     last_snapshot = nil,
-    -- Feature (2026-07-12): REST-P1.1 (siehe docs/CODING_AI_FUEL_UI_
-    -- PRIORITY_FIX_2026-07-12.md). core/ui_router.lua wird von mehreren
-    -- Rollen gemeinsam genutzt (FUEL/WATER/REPROCESSOR/ENERGY/RT) --
-    -- der Fallback-Text bei einem Renderfehler war bisher fest "FUEL UI
-    -- ERROR" codiert, bei jeder anderen Rolle waere das inhaltlich
-    -- falsch. error_title jetzt konfigurierbar (Default bleibt neutral).
-    -- on_render_error(error_info) wird zusaetzlich zur internen error_
-    -- count/last_error-Verfolgung aufgerufen -- die aufrufende Rolle kann
-    -- darin garantiert loggen (siehe main.lua-Verdrahtung), statt sich
-    -- auf einen Text zu verlassen, der behauptet "steht im Log", es aber
-    -- durch diesen Pfad bisher nicht garantiert tat.
-    -- Feature (2026-07-12): REST-P1.4 (siehe docs/CODING_AI_FUEL_UI_
-    -- PRIORITY_FIX_2026-07-12.md). Rohe Zaehler fuer Input-/Model-/
-    -- Renderverhalten -- WICHTIG: diese Werte duerfen NIEMALS Teil des
-    -- normalen Seiten-Snapshots (last_snapshot) werden, da sie sich
-    -- staendig aendern und sonst permanent neue Redraws erzwingen wuerden
-    -- (die Diagnostics-Seite selbst wuerde sich sonst in eine Endlos-
-    -- Neuzeichenschleife bringen). get_diagnostics() liefert sie separat.
+    -- error_title konfigurierbar, da core/ui_router.lua von mehreren
+    -- Rollen geteilt wird (FUEL/WATER/REPROCESSOR/ENERGY/RT) -- ein fest
+    -- codierter Fallback-Text waere bei den meisten Rollen falsch.
+    -- on_render_error(error_info) laesst die aufrufende Rolle garantiert
+    -- loggen, statt sich auf einen Text zu verlassen, der nur behauptet
+    -- "steht im Log".
+    --
+    -- Rohe Zaehler fuer Input-/Model-/Renderverhalten -- duerfen NIEMALS
+    -- Teil des normalen Seiten-Snapshots (last_snapshot) werden, da sie
+    -- sich staendig aendern und sonst permanent neue Redraws erzwingen
+    -- wuerden. get_diagnostics() liefert sie separat.
     ui_diag = {
       frames_requested = 0, frames_committed = 0, frames_skipped = 0,
       full_clears = 0, render_errors = 0, last_render_ms = 0,
@@ -97,28 +90,20 @@ function router.new(mon_or_opts, opts)
     },
     error_title = opts.error_title or "UI RENDER ERROR",
     on_render_error = opts.on_render_error,
-    -- Feature (2026-07-11): UI-P0.6 (siehe docs/CODING_AI_FUEL_UI_
-    -- PRIORITY_FIX_2026-07-12.md), "Mindestloesung"-Variante. Statt eines
-    -- vollen Framebuffers: nur bei Boot, Seiten-, Monitor- oder Groessen-
-    -- wechsel wird der Bildschirm vollstaendig geloescht (mux.clear());
-    -- bei einer normalen Inhaltsaenderung (z.B. veraenderter Reservewert)
-    -- ueberschreiben die Seiten nur ihre eigenen Zeilen/Felder -- setzt
-    -- voraus, dass jede core/mockup_ui.lua-Zeichenfunktion ihre Flaeche
-    -- selbst vollstaendig neu schreibt (fuer die zwei ungeschuetzten
-    -- Faelle status_dot/kpi_strip wurde das vorab abgesichert, siehe
-    -- core/mockup_ui.lua Fix-Kommentare vom selben Datum).
+    -- Statt eines vollen Framebuffers: nur bei Boot-, Seiten-, Monitor-
+    -- oder Groessenwechsel wird der Bildschirm vollstaendig geloescht
+    -- (mux.clear()); bei normaler Inhaltsaenderung ueberschreiben die
+    -- Seiten nur ihre eigenen Zeilen/Felder -- setzt voraus, dass jede
+    -- core/mockup_ui.lua-Zeichenfunktion ihre Flaeche selbst vollstaendig
+    -- neu schreibt.
     last_render_page_index = nil,
     last_render_mon = nil,
     last_render_mon_name = nil,
     last_render_w = nil,
     last_render_h = nil,
-    -- Feature (2026-07-12): REST-P1.2 (siehe docs/CODING_AI_FUEL_UI_
-    -- PRIORITY_FIX_2026-07-12.md). Bisher wurde nur w/h ueberwacht -- eine
-    -- REINE Textskalierungsaenderung (getTextScale(), z.B. per Klick auf
-    -- den physischen Monitor selbst, ohne dass sich die BLOCK-Groesse
-    -- aendert) veraendert w/h NICHT zwangsweise identisch mit einer
-    -- echten Groessenaenderung und wurde dadurch nicht zuverlaessig als
-    -- eigene Transition erkannt.
+    -- Separat von w/h ueberwacht -- eine reine Textskalierungsaenderung
+    -- (getTextScale()) veraendert w/h nicht zwangsweise identisch mit einer
+    -- echten Groessenaenderung.
     last_render_scale = nil,
     footer = {
       prev = nil,
@@ -137,23 +122,19 @@ function router.new(mon_or_opts, opts)
   return setmetatable(self, { __index = router })
 end
 
--- Feature (2026-07-12): REST-P1.1. Oeffentliche Diagnose-Schnittstelle --
--- die rollenspezifische Diagnostics-Seite kann darueber Fehleranzahl,
--- betroffene Seite, Fehlercode/-meldung und Alter des letzten Fehlers
--- anzeigen, statt dass diese Werte nur intern im router bleiben.
+-- Oeffentliche Diagnose-Schnittstelle -- die rollenspezifische
+-- Diagnostics-Seite kann darueber Fehleranzahl, betroffene Seite,
+-- Fehlercode/-meldung und Alter des letzten Fehlers anzeigen.
 function router:get_diagnostics()
   return {
     error_count = self.error_count or 0,
     last_error = self.last_error,
-    -- Feature (2026-07-12): REST-P1.2. Einfacher Lifecycle-Diagnosewert --
-    -- zaehlt Monitor-/Seiten-/Groessen-/Skalenwechsel, damit z.B. ein
-    -- staendig flackernder physischer Monitor (Skala aendert sich
-    -- wiederholt) an einer steigenden Zahl erkennbar waere.
+    -- Zaehlt Monitor-/Seiten-/Groessen-/Skalenwechsel, damit z.B. ein
+    -- staendig flackernder physischer Monitor erkennbar waere.
     transition_count = self.transition_count or 0,
-    -- Feature (2026-07-12): REST-P1.4. Rohe Input-/Render-Zaehler --
     -- pointer_events_received/page_handler_calls/model_builds werden
-    -- ausserhalb des Routers gezaehlt (Input-Pfad bzw. build_model()) und
-    -- von der aufrufenden Rolle in dieses Ergebnis eingemischt.
+    -- ausserhalb des Routers gezaehlt und von der aufrufenden Rolle
+    -- in dieses Ergebnis eingemischt.
     frames_requested = self.ui_diag.frames_requested,
     frames_committed = self.ui_diag.frames_committed,
     frames_skipped = self.ui_diag.frames_skipped,
@@ -203,14 +184,9 @@ function router:set(index)
   local next_index = clamp(index, 1, total)
   if next_index ~= self.index then
     self.index = next_index
-    -- Fix (2026-07-11): Frueherer Kommentar hier (v381) beschrieb einen
-    -- last_draw-Reset, der noetig war um render()s eigene, SEPARATE
-    -- Zeit-Drossel zu umgehen -- diese Drossel wurde inzwischen (UI-P0.5,
-    -- siehe docs/CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md) komplett
-    -- entfernt, der Workaround ist dadurch obsolet. Ein Reset von
-    -- last_snapshot allein reicht jetzt aus, damit render()s
-    -- Inhalts-Vergleich den Seitenwechsel garantiert als "geaendert"
-    -- erkennt und sofort neu zeichnet.
+    -- Ein Reset von last_snapshot reicht aus, damit render()s
+    -- Inhalts-Vergleich den Seitenwechsel als "geaendert" erkennt und
+    -- sofort neu zeichnet.
     self:invalidate_content()
   end
 end
