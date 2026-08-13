@@ -4,13 +4,9 @@
 -- DARF blockieren — Peripheral-Calls können 1-4s dauern.
 -- Schreibt Ergebnisse nur in ctx.shared.matrix_data (atomic).
 --
--- Fix (2026-07-16): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 13). ctx.services zeigt jetzt auf
--- eine eigene, dedizierte Service-Gruppe (nur STORAGE_SAMPLE/MATRIX_SAMPLE,
--- siehe nodes/energy/main.lua), NICHT mehr auf die vollstaendige Liste
--- (COMMS/DISCOVERY/TELEMETRY/UI liefen bisher im selben blockierenden
--- Thread mit) -- ein langsamer Matrix-Peripherie-Call verzoegert dadurch
--- nur noch die beiden Sample-Services untereinander, nicht mehr COMMS/UI.
+-- ctx.services zeigt auf eine dedizierte Service-Gruppe (nur STORAGE_SAMPLE/
+-- MATRIX_SAMPLE), nicht die vollstaendige Liste -- ein langsamer Matrix-
+-- Peripherie-Call verzoegert dadurch nicht COMMS/DISCOVERY/TELEMETRY/UI.
 
 local M = {}
 

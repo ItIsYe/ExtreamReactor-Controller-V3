@@ -1,30 +1,19 @@
 -- nodes/valve/config.lua
 --
--- Feature (2026-07-09): eigenstaendiger Valve-Controller.
--- Physischer Hintergrund: der "Integrator" an diesem Pipe-Netz ist selbst
--- ein CC:Tweaked-Computer (nicht ein direkt am FUEL-Computer gewrapptes
--- Mekanism-Peripheral) -- er sitzt direkt am Ventil/an der Pipe, hat KEIN
--- Wired Modem zu FUEL, sondern wird per Wireless Modem ueber den normalen
--- CONTROL-Kanal angesprochen (siehe nodes/valve/main.lua, Kommando
--- SET_VALVE). redstone_router.lua auf der FUEL-Seite adressiert diesen
--- Node ueber seine node_id (config.logistics.redstone_tree Eintraege mit
--- integrator = "<diese node_id>").
+-- Eigenstaendiger Valve-Controller: der "Integrator" ist selbst ein
+-- CC:Tweaked-Computer direkt am Ventil, hat kein Wired Modem zu FUEL,
+-- wird per Wireless Modem ueber den CONTROL-Kanal angesprochen (siehe
+-- nodes/valve/main.lua, Kommando SET_VALVE). redstone_router.lua auf der
+-- FUEL-Seite adressiert diesen Node ueber seine node_id.
 --
--- Fix (2026-07-20): der urspruengliche Redstone-Aktor (actuator_type =
--- "redstone", direktes redstone.setOutput() ueber "side") ist entfernt --
--- jede VALVE-Node steuert ausschliesslich einen Mekanism Logistical
--- Sorter per CC:Tweaked (setAutoMode()). Kein "side"/"actuator_type"-Feld
--- mehr. sorter_name (der Peripherie-Name des Logistical Sorters) wird bei
--- nil automatisch per Methodensignatur erkannt, genau wie wireless_modem
--- -- nur bei mehreren Sortern am selben Computer explizit setzen (z.B.
--- "logisticalSorter_1").
+-- Steuert ausschliesslich einen Mekanism Logistical Sorter (setAutoMode()),
+-- kein Redstone-Aktor/"side"-Feld. sorter_name wird bei nil automatisch per
+-- Methodensignatur erkannt, wie wireless_modem -- nur bei mehreren Sortern
+-- am selben Computer explizit setzen.
 --
--- Fix (2026-07-20): fest eingebauter (NICHT optionaler, NICHT ueber das
--- Installer-Feature "ampel" gesteuerter) 1x1-Statusmonitor: gruen=offen,
--- rot=blockiert. Wird automatisch erkannt, falls einer angeschlossen ist --
--- kein Config-Feld dafuer noetig, kein Formcheck (anders als das gemeinsame
--- xreactor/optional/ampel.lua-Modul mit seiner 1x3-Turmform, das andere
--- Rollen weiterhin optional nutzen).
+-- Fest eingebauter 1x1-Statusmonitor (gruen=offen, rot=blockiert), wird
+-- automatisch erkannt -- kein Config-Feld noetig, anders als das geteilte
+-- xreactor/optional/ampel.lua-Modul mit seiner 1x3-Turmform.
 return {
   role            = "VALVE-NODE",
   node_id         = "VALVE-1",
