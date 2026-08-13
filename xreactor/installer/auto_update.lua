@@ -22,20 +22,42 @@ local QUIESCE_TIMEOUT_S = 60
 -- Many roles' own UI (e.g. nodes/log_collector/main.lua) draws directly
 -- onto the physical terminal, clearing it every redraw -- a plain print()
 -- from this coroutine gets overwritten almost immediately and is
--- effectively invisible in practice. Every log() call also overwrites a
--- small status file with the latest message and a timestamp, independent
--- of whatever is currently on screen -- lets anyone confirm the loop is
--- actually ticking by checking file modification time / content, not by
--- having to catch a print() at the exact right instant.
+-- effectively invisible in practice. Every log() call also appends to a
+-- small rolling status file (last STATUS_MAX_LINES lines), independent of
+-- whatever is currently on screen -- lets anyone confirm the loop is
+-- actually ticking, and see the sequence of events leading up to e.g. a
+-- safety reboot, by checking file content, not by having to catch a
+-- print() at the exact right instant. Overwriting with only the single
+-- latest line (the first version of this) lost exactly the kind of
+-- context needed to diagnose a failure right before a reboot -- a
+-- reboot's own first log line ("Loop gestartet") would silently erase
+-- whatever explained it.
 local STATUS_PATH = "/xreactor/config/auto_update_status.txt"
+local STATUS_MAX_LINES = 20
 
 local function write_status(message)
   pcall(function()
-    local handle = fs.open(STATUS_PATH, "w")
-    if not handle then return end
     local stamp = (os.date and os.date("!%H:%M:%S")) or tostring(os.epoch and os.epoch("utc") or "")
-    handle.write(stamp .. " " .. tostring(message))
-    handle.close()
+    local line = stamp .. " " .. tostring(message)
+    local lines = {}
+    if fs.exists(STATUS_PATH) then
+      local read_handle = fs.open(STATUS_PATH, "r")
+      if read_handle then
+        local content = read_handle.readAll()
+        read_handle.close()
+        for existing_line in tostring(content or ""):gmatch("[^\n]+") do
+          lines[#lines + 1] = existing_line
+        end
+      end
+    end
+    lines[#lines + 1] = line
+    while #lines > STATUS_MAX_LINES do
+      table.remove(lines, 1)
+    end
+    local write_handle = fs.open(STATUS_PATH, "w")
+    if not write_handle then return end
+    write_handle.write(table.concat(lines, "\n"))
+    write_handle.close()
   end)
 end
 
