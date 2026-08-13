@@ -28,11 +28,8 @@
 
 local M = {}
 
--- Fix (2026-07-06): CRITICAL, derselbe Bug wie in optional/ampel.lua —
--- rohe RGB-Hex-Werte statt echter colors.xxx Bitmask-Konstanten. mon.
--- setBackgroundColor() akzeptiert nur Zweierpotenzen aus der colors-API;
--- ein ungueltiger Wert wirft einen Fehler, der hier durch pcall()
--- verschluckt wurde — Bildschirm blieb dauerhaft schwarz.
+-- Muessen die echten colors-API-Bitmask-Konstanten sein, keine rohen
+-- RGB-Hex-Werte -- mon.setBackgroundColor() akzeptiert nur Zweierpotenzen.
 local COLORS = {
   green  = colors.green,
   yellow = colors.yellow,
@@ -53,13 +50,9 @@ local function find_ampel_monitor()
       local ok_w, mon = pcall(peripheral.wrap, name)
       if ok_w and mon then
         local ok_orig, orig_scale = pcall(mon.getTextScale)
-        -- Fix (2026-07-07) #2: gleiche Korrektur wie in optional/ampel.lua -
-        -- Skala 1 mit mathematisch hergeleiteter Erwartung statt geratener
-        -- Zahl. Laut offizieller Doku: einzelner Block bei Skala 1 = 7x5
-        -- Zeichen, 3x3-Cluster = 29x19 gesamt. Daraus verifiziert:
-        -- breite(N)=11N-4, hoehe(M)=7M-2. Fuer 1 breit x 3 hoch: w=7 (exakt,
-        -- unabhaengig von der Hoehe), h=19 (mit Toleranz 17-21 falls die
-        -- Bauhoehe leicht abweicht).
+        -- Geometrie bei Skala 1: einzelner Block = 7x5 Zeichen, 3x3-Cluster =
+        -- 29x19 -- daraus breite(N)=11N-4, hoehe(M)=7M-2. Fuer 1 breit x 3
+        -- hoch: w=7 (exakt), h=19 (Toleranz 17-21 fuer Bauabweichungen).
         local ok_scale = pcall(mon.setTextScale, 1)
         local ok_s, w, h = pcall(mon.getSize)
         local is_ampel_shape = ok_scale and ok_s and type(w) == "number" and type(h) == "number"

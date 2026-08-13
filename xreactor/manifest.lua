@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 576,
-  manifest_id = "manifest-v576",
+  manifest_version = 577,
+  manifest_id = "manifest-v577",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "ffe190d5", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "1ec4cf52", always = true },
   { path = "start.lua", size_bytes = 12598, hash = "a5e5a4f2", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -59,7 +59,7 @@ return {
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de" },
   { path = "services/service_manager.lua", size_bytes = 7459, hash = "6cb63793" },
   { path = "services/telemetry_service.lua", size_bytes = 5651, hash = "1bdb3693" },
-  { path = "services/ui_service.lua", size_bytes = 5764, hash = "91e1a922" },
+  { path = "services/ui_service.lua", size_bytes = 4071, hash = "5ffe2f33" },
   -- Fix (2026-07-17): INSTALL/MANIFEST-P1 (Abschnitt 7). core/mockup_ui.lua
   -- hat always = true (wird u.a. an LOG_COLLECTOR mitgeschickt) und
   -- require()t shared.colors unbedingt beim Laden -- ohne always = true hier
@@ -131,7 +131,7 @@ return {
     -- "master_ampel"-Feature hat, gibt es fuer speaker_alarm keine
     -- MASTER-spezifische Variante. nodes/valve/main.lua nutzt weder
     -- speaker_alarm noch alert_service -- VALVE bewusst nicht enthalten.
-    { path = "optional/speaker_alarm.lua", size_bytes = 5545, hash = "44a8e65d", optional=true, feature="speaker_alarm", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG","MASTER"} },
+    { path = "optional/speaker_alarm.lua", size_bytes = 5221, hash = "a0c7b007", optional=true, feature="speaker_alarm", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG","MASTER"} },
     { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "abe22b63", optional=true, feature="pocket_query", required_for={"MASTER"} },
     -- Feature (2026-07-09): eigenstaendiges Pocket-Computer-Client-Skript.
     -- Bewusst OHNE Auto-Installation -- Pocket Computer ist kein waehlbarer
@@ -144,7 +144,7 @@ return {
     -- im Manifest gefuehrt, damit Groesse/Hash verifizierbar sind, falls
     -- die Datei gezielt manuell heruntergeladen wird.
     { path = "optional/pocket_client.lua", size_bytes = 10846, hash = "10601ed6", optional=true, feature="pocket_client", required_for={} },
-    { path = "optional/master_ampel.lua", size_bytes = 6373, hash = "f3d68ef7", optional=true, feature="master_ampel", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 5915, hash = "58fc39eb", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 48151, hash = "0dd366c3", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
