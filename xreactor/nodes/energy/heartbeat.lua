@@ -3,34 +3,15 @@
 -- Läuft in einer eigenen Coroutine via parallel.waitForAny().
 -- NIEMALS blockierend — kein Matrix-Polling, keine langen Peripheral-Calls.
 --
--- Fix (2026-07-16): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 13). Tickt jetzt zusaetzlich
--- periodisch ctx.services (COMMS/DISCOVERY/TELEMETRY/UI, siehe
--- nodes/energy/main.lua) ueber einen eigenen, schnellen Timer -- vorher
--- liefen diese Services NUR aus dem potenziell blockierenden Matrix-Thread
--- (nodes/energy/matrix.lua), wodurch ein langsamer Matrix-Peripherie-Call
--- sie mitverzoegerte. "COMMS/UI/Telemetry/Discovery bleiben in getrennten
--- Schedulergruppen" -- dieser (garantiert nie blockierende) Thread ist
--- jetzt ihre alleinige periodische Tick-Quelle.
+-- Tickt periodisch ctx.services (COMMS/DISCOVERY/TELEMETRY/UI) ueber einen
+-- eigenen, garantiert nie blockierenden Timer -- nicht nur aus dem
+-- potenziell blockierenden Matrix-Thread (nodes/energy/matrix.lua).
 --
--- Fix (2026-07-17): CRITICAL (ENERGY-P1, Abschnitt 15). Dieser Thread
--- pflegte bisher eine EIGENE, private "last_heartbeat_ts"-Kopie im ctx
--- (per make_hb_ctx() mit 0 initialisiert), komplett unabhaengig von
--- hb_state.last_ts in nodes/energy/main.lua (der Quelle, die auch der
--- Matrix-Thread ueber send_heartbeat_if_due() prueft). Zwei getrennte
--- Zeitquellen fuer denselben Zweck driften zwangslaeufig auseinander --
--- z.B. sofort nach dem Start: main.lua sendet bereits VOR dem Betreten
--- von parallel.waitForAny() einen initialen Heartbeat (setzt hb_state.
--- last_ts), aber die private Kopie hier startete unveraendert bei 0 --
--- ein frueh eintreffendes modem_message-Event wertete "now - 0 >=
--- interval" sofort als faellig und loeste einen unnoetigen Zusatz-Send
--- aus, obwohl gerade erst gesendet worden war. Ausserdem sendete der
--- Timer-Pfad bisher UNBEDINGT (ohne jede Faelligkeitspruefung), selbst
--- wenn der Matrix-Thread kurz zuvor bereits ueber send_heartbeat_if_due()
--- gesendet hatte. Jetzt: kein privater Zaehler mehr -- ctx.send_heartbeat_
--- if_due() (dieselbe Funktion, dieselbe hb_state.last_ts-Quelle wie der
--- Matrix-Thread) gated JEDEN Sendeversuch aus diesem Thread, egal ob
--- Timer- oder Event-ausgeloest.
+-- Kein privater "last_heartbeat_ts"-Zaehler: ctx.send_heartbeat_if_due()
+-- (dieselbe hb_state.last_ts-Quelle wie der Matrix-Thread) gated jeden
+-- Sendeversuch aus diesem Thread, egal ob Timer- oder Event-ausgeloest --
+-- zwei getrennte Zeitquellen fuer denselben Zweck wuerden sonst
+-- auseinanderdriften.
 
 local M = {}
 
@@ -86,13 +67,10 @@ function M.run(ctx)
   local hb_timer = os.startTimer(ctx.heartbeat_interval_ms() / 1000)
   local svc_timer = os.startTimer(tick_interval_s)
 
-  -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md (Abschnitt 4). ENERGY hat keine eigenen
-  -- physischen Aktoren zu quiescen -- der Handler bestaetigt sofort einen
-  -- sicheren Zustand, verlaesst aber kontrolliert diesen Thread (ueber
-  -- parallel.waitForAny() in main.lua beendet das auch den Matrix-Thread),
-  -- statt wie bisher unbegrenzt weiterzulaufen, waehrend ein Auto-Update
-  -- ENERGYs eigene Dateien ersetzt.
+  -- ENERGY hat keine physischen Aktoren zu quiescen -- der Handler
+  -- bestaetigt sofort einen sicheren Zustand und verlaesst kontrolliert
+  -- diesen Thread (parallel.waitForAny() in main.lua beendet damit auch den
+  -- Matrix-Thread), statt waehrend eines Auto-Updates unbegrenzt weiterzulaufen.
   local update_handshake = require("core.update_handshake")
   local quiesce_handshake = _G.__xreactor_update_handshake
 

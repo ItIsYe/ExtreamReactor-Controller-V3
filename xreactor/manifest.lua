@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 568,
-  manifest_id = "manifest-v568",
+  manifest_version = 569,
+  manifest_id = "manifest-v569",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -13,9 +13,9 @@ return {
   { path = "installer/auto_update.lua", size_bytes = 15660, hash = "685150ed", always = true },
   { path = "installer/init.lua", size_bytes = 22827, hash = "20dd5066", always = true },
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
-  { path = "installer/journal.lua", size_bytes = 10079, hash = "5d1a2617", always = true },
+  { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "c37e8de4", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "225bd263", always = true },
   { path = "start.lua", size_bytes = 15787, hash = "b2746ca4", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -110,7 +110,7 @@ return {
     -- dieses Feature gesteuerten) 1x1-Statusmonitor direkt in nodes/valve/
     -- main.lua (render_status_monitor()), unabhaengig vom hier verwalteten
     -- 1x3-Turm-Ampel-Modul mit Shape-Check. Siehe dortiger Kommentar.
-    { path = "optional/ampel.lua", size_bytes = 7328, hash = "58b9f1d8", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
+    { path = "optional/ampel.lua", size_bytes = 5398, hash = "e02e967f", optional=true, feature="ampel", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG"} },
     -- Fix (2026-07-16): CRITICAL. MANIFEST-P1 aus
     -- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 17).
     -- Fehlte bisher ganz -- files_for_role() fuegt einen roles.*-Eintrag
@@ -176,7 +176,7 @@ return {
     { path = "nodes/rt/status_snapshot.lua", size_bytes = 6662, hash = "e05cae0b", required_for={"RT"} },
     },
     energy = {
-    { path = "nodes/energy/heartbeat.lua", size_bytes = 6671, hash = "9b84841c", required_for={"ENERGY"} },
+    { path = "nodes/energy/heartbeat.lua", size_bytes = 5131, hash = "84035306", required_for={"ENERGY"} },
     { path = "nodes/energy/matrix.lua", size_bytes = 1964, hash = "be7074b3", required_for={"ENERGY"} },
     { path = "adapters/energy_storage.lua", size_bytes = 3648, hash = "fd2dc2e5", required_for={"ENERGY"} },
     { path = "adapters/induction_matrix.lua", size_bytes = 15124, hash = "c3006e4d", required_for={"ENERGY"} },
@@ -203,7 +203,7 @@ return {
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
     },
     fuel = {
-    { path = "nodes/fuel/config.lua", size_bytes = 9082, hash = "c298ddd0", required_for={"FUEL"} },
+    { path = "nodes/fuel/config.lua", size_bytes = 7188, hash = "1a2722a9", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 6065, hash = "8eaa6398", required_for={"FUEL"} },
     { path = "nodes/fuel/main.lua", size_bytes = 23711, hash = "7440f389", required_for={"FUEL"} },
     { path = "nodes/fuel/status_snapshot.lua", size_bytes = 5779, hash = "7e6f2625", required_for={"FUEL"} },
