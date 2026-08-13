@@ -86,13 +86,9 @@ function M.render_overview(mon, model)
   local s = snapshot(model)
   local status_text, status_key = rt_status(model)
 
-  -- Fix (2026-07-05): alle Bloecke standen bisher auf festen Zeilen (5,
-  -- 7, 12, 14, 16, 21, 23), unabhaengig von der tatsaechlichen
-  -- Monitorhoehe h. Auf physisch grossen Monitoren (z.B. h=45+) blieb der
-  -- gesamte Bereich zwischen Zeile ~23 und dem Footer (an Zeile h) leer,
-  -- der Inhalt wirkte winzig und weit oben zusammengedraengt. Jetzt: die
-  -- verfuegbare Content-Hoehe (zwischen Header-Ende und Footer-Start)
-  -- wird ermittelt und die Bloecke proportional darauf verteilt.
+  -- Verfuegbare Content-Hoehe (zwischen Header-Ende und Footer-Start) wird
+  -- ermittelt und die Bloecke proportional darauf verteilt (statt fester
+  -- Zeilen, die auf grossen Monitoren viel Leerraum liessen).
   local content_top = 5
   local content_bottom = math.max(content_top + 18, h - 2)
   local content_h = content_bottom - content_top
@@ -143,12 +139,9 @@ function M.render_overview(mon, model)
   end
 
   if h >= 24 then
-    -- Fix (2026-07-02): zeigte bisher nur reactors[1].rods — bei einem RT-Node
-    -- mit mehreren baugleichen Reaktoren (z.B. 2 Reaktoren + gemeinsamer
-    -- Turbinen-Pool an einem Datenbus) wurde der zweite Reaktor hier
-    -- komplett ignoriert. Jetzt: Durchschnitt ueber alle gefundenen
-    -- Reaktoren, plus Anzeige der Reaktor-Anzahl damit sichtbar ist ob
-    -- ein Durchschnitt (>1) oder ein Einzelwert (1) gezeigt wird.
+    -- Durchschnitt ueber alle gefundenen Reaktoren (statt nur reactors[1]),
+    -- plus Anzeige der Reaktor-Anzahl damit sichtbar ist ob ein
+    -- Durchschnitt (>1) oder ein Einzelwert (1) gezeigt wird.
     local rods_sum, rods_n = 0, 0
     for _, r in ipairs(s.reactors or {}) do
       local v = tonumber(r.rods)
@@ -285,12 +278,9 @@ function M.render_diagnostics(mon, model)
   local retries = num(metrics.retries, 0)
   local net_key = dropped > 0 and "WARNING" or master_key(model)
 
-  -- Fix (2026-07-05): metrics.sent/metrics.received existieren nicht im
-  -- comms-Metrik-Objekt (siehe core/comms.lua state.metrics — die echten
-  -- Felder sind dropped/queue_dropped/retries/timeouts/dedupe_hits) — die
-  -- TX/RX-Anzeige zeigte deshalb immer konstant "0/0", unabhaengig vom
-  -- tatsaechlichen Netzwerkverkehr. Jetzt: Retries/Timeouts/Dedupe-Hits,
-  -- die tatsaechlich vorhanden sind und echte Diagnose-Aussagekraft haben.
+  -- Zeigt Retries/Timeouts/Dedupe-Hits (die tatsaechlichen Felder in
+  -- core/comms.lua state.metrics), nicht sent/received (existieren dort
+  -- nicht).
   local timeouts = num(metrics.timeouts, 0)
   local dedupe_hits = num(metrics.dedupe_hits, 0)
   local queue_dropped = num(metrics.queue_dropped, 0)
@@ -321,10 +311,9 @@ function M.render_diagnostics(mon, model)
   mux.data_row(mon, 2, 21, w - 3, { label = "QUEUE DROP / DEDUP", value = tostring(queue_dropped) .. " / " .. tostring(dedupe_hits), status = queue_dropped > 0 and "WARNING" or "OK", icon = "network" })
   mux.data_row(mon, 2, 22, w - 3, { label = "LAST COMMAND", value = tostring(model.last_command or "none") .. " / " .. tostring(model.last_command_ts or "-"), status = "text", icon = "config" })
 
-  -- Feature (2026-07-05): Monitor-Skalierung direkt am Bildschirm per
-  -- Touch einstellbar, statt nur ueber config/rt.lua von Hand editierbar.
-  -- Touch-Koordinaten werden in M.scale_hit_cache abgelegt (siehe unten,
-  -- vom Aufrufer in monitor_ui.lua per M.handle_input ausgewertet).
+  -- Monitor-Skalierung per Touch einstellbar; Touch-Koordinaten werden in
+  -- M.scale_hit_cache abgelegt (vom Aufrufer in monitor_ui.lua per
+  -- M.handle_input ausgewertet).
   do
     local cur_scale = tonumber(model.monitor_scale) or 0.5
     local row_y = 23

@@ -130,26 +130,14 @@ function manager:init()
   self.running = true
 end
 
--- Fix (2026-07-14): CRITICAL. SHARED-P0 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). Ein Event-getriebener Aufruf (event ~= nil --
--- z.B. bei JEDEM einzelnen Modem-/Monitor-/Maus-/Tastendruck-Event aus
--- nodes/support/runtime.lua's run_event_loop() bzw. den analogen Event-
--- Loops in ENERGY/MASTER) fuehrte bisher IMMER den kompletten Service-
--- Manager aus: Discovery, Telemetry, Alert, Matrix-Sampling und jeder rein
--- periodische Ad-hoc-Service (z.B. "ampel_render", "valve_ack_retry",
--- "valve_failsafe") bekam dadurch bei einer Flut von Netzwerkpaketen ein
--- Vielfaches seiner eigentlich konfigurierten Tick-Rate zugemutet -- 1.000
--- Modemevents erzeugten 1.000 Discovery-/Telemetry-/Control-Zyklen statt
--- der beabsichtigten periodischen Rate. Jetzt bekommt ein Service seinen
--- tick() bei einem Event-Aufruf nur dann ueberhaupt aufgerufen, wenn er
--- sich explizit ueber service.wants_events = true dafuer angemeldet hat
--- (comms_service und ui_service melden sich standardmaessig selbst an,
--- siehe dort; einzelne rollenspezifische Ad-hoc-Services wie
--- "valve_channel" oder "valve_ack_listener" melden sich gezielt selbst
--- an, da sie echte Event-Reaktivitaet brauchen). Der reine periodische
--- Tick (event == nil, aus dem Timer-Zweig jeder Event-Loop) bleibt fuer
--- ALLE Services unveraendert -- kein Service verliert seine periodische
--- Arbeit, sie laeuft nur nicht mehr zusaetzlich bei jedem einzelnen Event.
+-- Ein Service bekommt seinen tick() bei einem Event-Aufruf (event ~= nil)
+-- nur dann aufgerufen, wenn er sich explizit ueber
+-- service.wants_events = true angemeldet hat (comms_service/ui_service
+-- standardmaessig; einzelne rollenspezifische Ad-hoc-Services gezielt
+-- selbst) -- sonst wuerde jedes einzelne Modem-/Touch-/Tastendruck-Event
+-- den kompletten Service-Manager (Discovery, Telemetry, Alert, ...) ein
+-- Vielfaches seiner konfigurierten Tick-Rate ausfuehren lassen. Der reine
+-- periodische Tick (event == nil) bleibt fuer alle Services unveraendert.
 function manager:tick(dt, event)
   local tick_started = now_ms()
   run_inter_service_hook(self, dt, event, "tick_start")

@@ -72,16 +72,10 @@ function manager:get_wrapped_monitor(name)
   return self:new_wrapped_monitor(name)
 end
 
--- Feature (2026-07-06): Automatische, groessenabhaengige Skalierung statt
--- einer einzigen festen Skala fuer JEDEN Monitor. Vorher bekam z.B. ein
--- kleiner AUX-Monitor dieselbe Skala wie ein grosser Haupt-Monitor —
--- entweder zu grobe Schrift auf grossen Bildschirmen (viel ungenutzter
--- Platz) oder zu feine/gedraengte Darstellung auf kleinen. Ablauf: zuerst
--- Skala 0.5 setzen (feinste Stufe, damit getSize() die physische
--- Blockgroesse in Zeichen liefert), dann anhand der gemessenen Flaeche
--- eine passende finale Skala waehlen. Nur aktiv wenn KEINE feste Skala
--- (opts.scale) explizit uebergeben wurde — bestehende Konfigurationen mit
--- fest gesetzter monitor_scale bleiben unveraendert.
+-- Automatische, groessenabhaengige Skalierung: zuerst Skala 0.5 setzen
+-- (feinste Stufe, damit getSize() die physische Blockgroesse in Zeichen
+-- liefert), dann anhand der gemessenen Flaeche eine passende finale Skala
+-- waehlen. Nur aktiv wenn keine feste Skala (opts.scale) uebergeben wurde.
 local function compute_auto_scale(mon, log_prefix)
   local ok_probe, err_probe = monitor_adapter.safe_set_scale(mon, nil, 0.5, log_prefix)
   local ok_size, w, h = safe_wrapped_call(mon, "getSize")
@@ -173,11 +167,9 @@ function manager:scan()
           utils.log(self.log_prefix, "Monitor " .. tostring(entry.name) .. " text scale unchanged=" .. tostring(self.scale), "DEBUG")
         end
       elseif self.auto_scale ~= false then
-        -- Feature (2026-07-06): keine feste Skala konfiguriert -> pro
-        -- Monitor automatisch anhand der physischen Groesse berechnen.
-        -- Nur einmal pro Monitor-Name berechnen (gecached), nicht bei
-        -- jedem Scan-Durchlauf neu, da compute_auto_scale() selbst schon
-        -- einen setTextScale(0.5)-Sondierungsschritt braucht.
+        -- Keine feste Skala konfiguriert -> automatisch berechnen, nur
+        -- einmal pro Monitor-Name (gecached), da compute_auto_scale()
+        -- selbst schon einen setTextScale(0.5)-Sondierungsschritt braucht.
         local cached_scale = self.scale_cache[entry.name]
         if cached_scale == nil then
           local auto_scale = compute_auto_scale(mon, self.log_prefix)

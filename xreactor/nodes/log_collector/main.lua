@@ -33,7 +33,7 @@ local DEDUPE_LIMIT     = 512
 local MODEM_REFRESH_S  = 10
 local DISK_REFRESH_S   = 30
 local DRAW_INTERVAL_S  = 5
-local ACTIVE_DRAW_MIN_INTERVAL_S = 1  -- Fix (2026-07-13): LOG-P1.2
+local ACTIVE_DRAW_MIN_INTERVAL_S = 1
 local SELF_ROLE        = "LOG_COLLECTOR"
 local MONITOR_CFG_FILE = "/xreactor/config/log_monitor.txt"
 -- DISKS_PER_ROLE gruppiert die sortierten Mounts in Bloecken zu je 4 (statt

@@ -96,11 +96,8 @@ function M.status_dot(mon, x, y, label, status, width)
   local key = status or "OK"
   local dot = key == "OK" and "*" or "!"
   local text = dot .. " " .. tostring(label or key)
-  -- Fix (2026-07-11): UI-P0.6-Vorarbeit. Aktuell durch mux.header()s
-  -- eigenen Zeilen-Fill (Zeile 1-3) bereits abgesichert (jeder Aufrufer
-  -- ruft status_dot() direkt nach mux.header()), zusaetzlich hier optional
-  -- auf eine feste Breite aufgepolstert fuer den Fall, dass status_dot()
-  -- kuenftig auch ausserhalb dieses Kontexts verwendet wird.
+  -- Optional auf feste Breite aufgepolstert, falls ausserhalb des
+  -- mux.header()-Kontexts (der die Zeile selbst fuellt) verwendet.
   if width and width > #text then
     text = text .. string.rep(" ", width - #text)
   end
@@ -183,14 +180,10 @@ function M.kpi_strip(mon, x, y, w, items)
   for i, item in ipairs(items) do
     local cx = x + (i - 1) * (cell_w + 1)
     local icon = item.icon and ("[" .. M.icon(item.icon) .. "] ") or ""
-    -- Fix (2026-07-11): UI-P0.6-Vorarbeit (siehe docs/CODING_AI_FUEL_UI_
-    -- PRIORITY_FIX_2026-07-12.md). fit() kuerzt nur, polstert aber NICHT
-    -- auf die volle Feldbreite auf -- wenn ein Wert kuerzer wird als beim
-    -- vorherigen Aufruf, blieben alte Zeichen dahinter sichtbar stehen.
-    -- Jetzt explizit mit Leerzeichen auf cell_w aufgefuellt, damit dieser
-    -- Aufruf unabhaengig vom vorherigen Inhalt immer die komplette Zelle
-    -- ueberschreibt (Voraussetzung dafuer, aussen auf mux.clear() zu
-    -- verzichten).
+    -- fit() kuerzt nur, polstert aber nicht -- explizit mit Leerzeichen auf
+    -- cell_w aufgefuellt, damit dieser Aufruf unabhaengig vom vorherigen
+    -- Inhalt immer die komplette Zelle ueberschreibt (Voraussetzung dafuer,
+    -- aussen auf mux.clear() zu verzichten).
     local label_text = fit(icon .. tostring(item.label or ""), cell_w)
     write(mon, cx, y, label_text .. string.rep(" ", math.max(0, cell_w - #label_text)), colors.get("muted"), colors.get("background"))
     local value_text = fit(tostring(item.value or "-"), cell_w)
@@ -220,17 +213,9 @@ function M.table_header(mon, x, y, w, columns)
   write(mon, x, y + 1, string.rep("-", w), colors.get("OFFLINE"), colors.get("background"))
 end
 
--- Fix (2026-07-05): footer_nav() zeichnete bisher NUR Text ("< ZURUECK" /
--- "WEITER >"), gab aber nie Touch-Koordinaten zurueck. Der Router
--- (core/ui_router.lua) zeichnet danach an derselben Zeile seinen eigenen
--- "< Page X/Y >"-Indikator und registriert NUR dessen eigene, unsichtbar
--- gewordene Touch-Zonen (self.footer.prev/next) — die tatsaechlich
--- sichtbaren Mockup-Buttons hatten also nie eine funktionierende Touch-
--- Zone dahinter, obwohl sie wie klickbare Buttons aussahen. Jetzt gibt
--- diese Funktion { left = {x1,x2,y}, right = {x1,x2,y} } zurueck, das der
--- Aufrufer (ui_router.lua) nutzt um seine eigenen Touch-Zonen auf die
--- tatsaechlich sichtbaren Buttons zu legen statt auf seinen eigenen,
--- ueberschriebenen Footer-Text.
+-- Gibt { left = {x1,x2,y}, right = {x1,x2,y} } zurueck, das der Aufrufer
+-- (ui_router.lua) nutzt, um seine eigenen Touch-Zonen auf die tatsaechlich
+-- sichtbaren Buttons zu legen statt auf den eigenen Footer-Text.
 function M.footer_nav(mon, y, w, opts)
   opts = opts or {}
   write(mon, 1, y, string.rep(" ", w), colors.get("text"), colors.get("OFFLINE"))

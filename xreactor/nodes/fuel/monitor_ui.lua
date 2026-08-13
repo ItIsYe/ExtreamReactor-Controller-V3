@@ -1,16 +1,11 @@
 -- nodes/fuel/monitor_ui.lua
 --
--- Feature (2026-07-09): Modularisierungs-Rewrite. Buendelt alles rund um
--- den Haupt-Monitor und die Ampel an einer Stelle, analog zu nodes/rt/
--- monitor_ui.lua. Das Modul haelt seinen eigenen Lebenszyklus-State
--- (monitor_router, ampel_instance) -- main.lua ruft nur M.render_monitor(ctx)
--- / M.render_ampel(ctx) mit einer frischen ctx-Tabelle pro Aufruf auf.
---
--- Fix (2026-07-09): render_ampel() war urspruenglich hinter "if not
--- devices.monitor then return end" versteckt (in render_monitor()) --
--- lief also NIE, wenn (noch) kein Hauptmonitor gefunden wurde, obwohl die
--- Ampel-Erkennung selbst komplett unabhaengig ist. Hier von Anfang an als
--- eigenstaendige Funktion aufgebaut.
+-- Buendelt alles rund um den Haupt-Monitor und die Ampel an einer Stelle,
+-- analog zu nodes/rt/monitor_ui.lua. Das Modul haelt seinen eigenen
+-- Lebenszyklus-State (monitor_router, ampel_instance) -- main.lua ruft nur
+-- M.render_monitor(ctx) / M.render_ampel(ctx) mit einer frischen
+-- ctx-Tabelle pro Aufruf auf. render_ampel() ist eine eigenstaendige
+-- Funktion, unabhaengig vom Hauptmonitor-Status.
 
 local M = {}
 local ui_completion = require("nodes.fuel.ui_completion")
@@ -29,9 +24,8 @@ local function ensure_completion(ctx)
   end
 end
 
--- Feature (2026-07-12): REST-P1.4. Zaehler, die AUSSERHALB des Routers
--- entstehen -- werden in M.get_diagnostics() mit dem Router-eigenen
--- Zustand zusammengefuehrt.
+-- Zaehler, die ausserhalb des Routers entstehen, werden in
+-- M.get_diagnostics() mit dem Router-eigenen Zustand zusammengefuehrt.
 local ui_diag_extra = { pointer_events_received = 0, page_handler_calls = 0, model_builds = 0 }
 
 local VIEW_STATE_TO_AMPEL = {

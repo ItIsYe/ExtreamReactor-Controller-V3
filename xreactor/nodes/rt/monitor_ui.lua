@@ -211,11 +211,9 @@ function M.init(monitor_adapter, configured_monitor, monitor_scale)
   return monitor, name_or_err
 end
 
--- Feature (2026-07-05): Skalierung live aendern OHNE M.monitor_router
--- zurueckzusetzen — M.init() wuerde das tun (bewusst, fuer den normalen
--- Boot-Fall), was aber bei einer Touch-ausgeloesten Skalen-Aenderung den
--- Nutzer ungewollt von der aktuellen Seite (z.B. Diagnostics 4/4) zurueck
--- auf Overview werfen wuerde.
+-- Skalierung live aendern ohne M.monitor_router zurueckzusetzen (M.init()
+-- tut das fuer den Boot-Fall, wuerde aber bei Touch-ausgeloester
+-- Skalen-Aenderung den Nutzer ungewollt zurueck auf Overview werfen).
 function M.set_scale(monitor, scale)
   if not monitor then return end
   try_set_scale(monitor, scale)
@@ -279,9 +277,8 @@ function M.update(monitor, ctx)
     capacity_total_turbines = snapshot and snapshot.capacity_total_turbines or 0,
     binding = ctx.binding,
     build_label = ctx.build_label or ctx.manifest_id or ctx.release_id,
-    -- Feature (2026-07-05): Monitor-Skalierung per Touch auf der
-    -- Diagnostics-Seite einstellbar. ctx.monitor_scale wird von main.lua
-    -- gesetzt (der aktuell wirksame, ggf. per Touch geaenderte Wert).
+    -- ctx.monitor_scale wird von main.lua gesetzt (der aktuell wirksame,
+    -- ggf. per Touch geaenderte Wert).
     monitor_scale = ctx.monitor_scale,
   }
 
@@ -331,11 +328,6 @@ function M.handle_input(event)
     if page and page.name == "Diagnostics" and M.last_monitor then
       local _, h = ui.getSize(M.last_monitor)
       if h then support_ui_pages.handle_log_mode_touch(event[3], event[4], h, utils, 1) end
-      -- Feature (2026-07-05): Monitor-Skalierung per Touch. War im
-      -- vorherigen Commit (338a10d5fa) versehentlich nur teilweise
-      -- gepusht — nur das Model-Feld monitor_scale kam an, dieser
-      -- Handler-Block fehlte komplett, weshalb die Buttons visuell
-      -- sichtbar aber komplett funktionslos waren.
       local hits = mockup_pages.scale_hit_cache and mockup_pages.scale_hit_cache[M.last_monitor]
       if hits then
         local x, y = event[3], event[4]

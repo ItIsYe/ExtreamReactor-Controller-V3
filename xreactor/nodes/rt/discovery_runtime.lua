@@ -28,18 +28,10 @@ local function normalize_bound_names(ctx, kind, names)
   return normalized
 end
 
--- Fix (2026-07-15): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
--- 2026-07-12.md Abschnitt 6, "Capability-Cache exakt einmal pro Discovery-
--- generation" / "gezielte Invalidierung bei Attach/Detach"). M.cache() lief
--- bisher nur bei einer echten Bindungs-Aenderung (siehe refresh_bindings()s
--- binding_signature-Vergleich), rechnete dabei aber IMMER build_capabilities()
--- fuer JEDES aktuell gebundene Geraet neu -- bei z.B. 25 Turbinen und dem
--- Attach/Detach EINER einzigen davon wurden alle 25 peripheral.getMethods()-
--- Aufrufe erneut ausgefuehrt. Ausserdem blieben Cache-Eintraege abgehaengter
--- (detachter) Geraete fuer immer im Cache stehen (unbegrenztes Wachstum bei
--- haeufig umgestecker Hardware). Jetzt: nur wirklich neue Namen bekommen
--- einen frischen build_capabilities()-Aufruf, bereits gecachte Namen bleiben
--- unangetastet, nicht mehr gebundene Namen werden aus dem Cache entfernt.
+-- Nur wirklich neue Namen bekommen einen frischen build_capabilities()-
+-- Aufruf; bereits gecachte Namen bleiben unangetastet, nicht mehr
+-- gebundene Namen werden aus dem Cache entfernt (statt unbegrenzt
+-- zu wachsen bei haeufig umgesteckter Hardware).
 local function refresh_capability_cache(ctx, kind, names)
   local cache = ctx.capability_cache[kind]
   local still_bound = {}
@@ -141,21 +133,9 @@ function M.refresh_bindings(ctx)
   local reactors = ctx.registry:get_bound_devices("reactor")
   local turbines = ctx.registry:get_bound_devices("turbine")
   local signature = M.build_binding_signature(reactors, turbines)
-  -- Fix (2026-07-06): CRITICAL. ctx.devices.reactors/turbines wurden bisher
-  -- NUR gesetzt, wenn sich die binding_signature seit dem letzten Aufruf
-  -- geaendert hat — bei unveraenderter Signatur (der Normalfall bei jedem
-  -- Tick, da sich die Bindung ja selten aendert) lief ein sofortiges
-  -- return VOR der Zuweisung. Sollte devices.reactors/turbines aus
-  -- irgendeinem Grund (Race-Condition beim allerersten Boot-Discover,
-  -- oder schlicht weil binding_signature initial schon zufaellig
-  -- uebereinstimmte) einmal leer geblieben sein, blieb es das FUER IMMER,
-  -- da jeder folgende Aufruf denselben Skip nahm — beobachtet im Log als
-  -- "Discovery unchanged ... bound reactors=1 turbines=25" GEFOLGT von
-  -- "Re-Discovery: reactors=0 turbines=0" (das eigene Log direkt danach,
-  -- das den tatsaechlichen, leeren Zustand von ctx.devices zeigte).
-  -- Jetzt: reactors/turbines werden IMMER zugewiesen, der Signatur-
-  -- Vergleich entscheidet nur noch ob die teuren Nebenoperationen
-  -- (Cache-Schreiben, Modul-Neuaufbau) noetig sind.
+  -- reactors/turbines werden immer zugewiesen; der Signatur-Vergleich
+  -- entscheidet nur noch, ob die teuren Nebenoperationen (Cache-Schreiben,
+  -- Modul-Neuaufbau) noetig sind.
   ctx.devices.reactors = reactors
   ctx.devices.turbines = turbines
   if ctx.devices.binding_signature == signature then

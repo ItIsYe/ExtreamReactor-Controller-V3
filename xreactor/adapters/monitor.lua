@@ -100,34 +100,18 @@ local function clear_name_cache(name)
   known_monitor_names[cache_name] = nil
 end
 
--- Fix (2026-07-06): CRITICAL. Ein per Wired Modem angeschlossener 1x3-
--- Ampel-Monitor konnte bisher versehentlich als HAUPT-Monitor gewaehlt
--- werden — entweder weil preferred_name (aus der Node-Config) zufaellig
--- darauf zeigte, oder weil strategy="first" rein alphabetisch nach
--- Peripheral-Namen sortierte, OHNE jegliche Groessenpruefung. Ein 1x3-
--- Monitor ist fuer die Haupt-UI (mehrzeilige Karten, Tabellen etc.)
--- voellig ungeeignet und ausschliesslich fuer optional/ampel.lua gedacht.
--- Mindestgroesse: mehr als 3 Zeilen ODER mehr als 1 Spalte QUALIFIZIERT
--- einen Monitor als potenziellen Hauptmonitor; ein reiner 1x3 (oder noch
--- kleinerer) wird hier abgelehnt, auch wenn er preferred_name entspricht.
+-- Lehnt 1x3-Ampel-Monitore als Hauptmonitor ab: mehr als 3 Zeilen ODER
+-- mehr als 1 Spalte qualifiziert; ein reiner 1x3 (oder kleiner) wird
+-- abgelehnt, auch wenn preferred_name darauf zeigt.
 local function is_too_small_for_main(mon, name)
   local cache_name = tostring(name or "")
   if cache_name ~= "" and shape_cache_by_name[cache_name] ~= nil then
     return shape_cache_by_name[cache_name]
   end
-  -- Fix (2026-07-09): CRITICAL. Diese Funktion mass bisher bei der
-  -- AKTUELLEN Skala des Monitors -- Monitore merken sich ihre Skala aber
-  -- als PHYSISCHE Block-Eigenschaft, unabhaengig von Software-Neuinstalls.
-  -- Falls ein Monitor aus einer frueheren Session (z.B. durch den
-  -- inzwischen gefixten Ampel-Scale-Corruption-Bug, siehe optional/
-  -- ampel.lua Fix-Historie) noch bei einer extremen Skala wie 5 haengt,
-  -- misst getSize() dort faelschlich winzige Werte (z.B. 1x1) -- ein
-  -- eigentlich normal grosser Hauptmonitor wuerde dadurch faelschlich als
-  -- "Ampel-gross" abgelehnt. Jetzt: Skala wird VOR der Messung explizit
-  -- auf 1 gesetzt (der verifizierten Referenz-Skala fuer die 7x19-Formel
-  -- einer echten 1x3-Ampel, siehe optional/ampel.lua) und danach wieder
-  -- auf den Ursprungswert zurueckgesetzt, damit die Messung unabhaengig
-  -- von jeglichem Skalen-Altzustand ist.
+  -- Skala wird vor der Messung explizit auf 1 gesetzt (Referenz-Skala
+  -- fuer die 7x19-Formel einer 1x3-Ampel) und danach zurueckgesetzt --
+  -- ein Monitor, der bei einer alten Skala haengt, wuerde sonst
+  -- faelschlich winzige Werte messen und als Ampel gelten.
   local ok_orig, orig_scale = pcall(function() return mon.getTextScale() end)
   pcall(function() mon.setTextScale(1) end)
   local ok, w, h = pcall(function() return mon.getSize() end)

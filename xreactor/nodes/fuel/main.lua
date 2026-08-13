@@ -41,9 +41,8 @@ local router_ui_lib = require("nodes.fuel.router_ui")
 local reactor_targets = require("nodes.fuel.reactor_targets")
 local fuel_ui_pages = require("nodes.fuel.ui_pages")
 
--- Feature (2026-07-09): Modularisierungs-Rewrite. main.lua ist jetzt nur
--- noch Orchestrierung (Wiring von Config/Services/Event-Loop) -- die
--- eigentliche Logik lebt in eigenstaendigen Modulen, analog zu nodes/rt/:
+-- main.lua ist nur Orchestrierung (Wiring von Config/Services/Event-Loop)
+-- -- die eigentliche Logik lebt in eigenstaendigen Modulen:
 --   status_snapshot.lua      Status-Payload-Aufbau
 --   command_handler.lua      Kommando-Parsing/Dispatch
 --   fuel_status_network.lua  Netzwerkbasierter Reaktor-Fuellstand-Cache

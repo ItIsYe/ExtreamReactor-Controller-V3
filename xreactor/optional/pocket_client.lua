@@ -227,13 +227,10 @@ local function prompt_command_menu(modem)
 end
 
 local function main()
-  -- Fix (2026-07-06): bekannter CC:Tweaked-Bug — frisch gecraftete Pocket
-  -- Computer mit eingebautem Wireless-Modem registrieren das Peripheral
-  -- manchmal nicht sofort (siehe cc-tweaked/CC-Tweaked#1888). Ein kurzer
-  -- Retry mit Wartezeit behebt das in den meisten Faellen von selbst,
-  -- ohne dass der Nutzer den Computer manuell aus- und wieder einschalten
-  -- muss (der dokumentierte Workaround waere: Computer kurz ins Inventar/
-  -- eine Kiste legen, 5s warten, wieder herausnehmen).
+  -- Bekannter CC:Tweaked-Bug (cc-tweaked/CC-Tweaked#1888): frisch
+  -- gecraftete Pocket Computer registrieren ihr eingebautes Wireless-Modem
+  -- manchmal nicht sofort. Kurzer Retry mit Wartezeit behebt das meist
+  -- selbst, statt den Nutzer manuell aus-/einschalten zu lassen.
   local modem_name, modem
   for attempt = 1, 5 do
     modem_name, modem = find_modem()
@@ -270,11 +267,9 @@ local function main()
         prompt_command_menu(modem)
         break
       elseif event == "mouse_click" or event == "monitor_touch" then
-        -- Fix (2026-07-06): Pocket Computer haben keine physische
-        -- Tastatur — nur "key"-Events zu unterstuetzen waere fuer das
-        -- eingebaute Touch-Display unpraktisch. Footer zeigt bereits
-        -- "[Q] ENDE" links / "[C] BEFEHL" rechts; Touch auf die jeweilige
-        -- Bildschirmhaelfte in der Footer-Zeile loest dieselbe Aktion aus.
+        -- Pocket Computer haben keine physische Tastatur; Touch auf die
+        -- jeweilige Bildschirmhaelfte in der Footer-Zeile ("[Q] ENDE" /
+        -- "[C] BEFEHL") loest dieselbe Aktion wie die Taste aus.
         local touch_x = event == "monitor_touch" and p2 or p1
         local touch_y = event == "monitor_touch" and p3 or p2
         local w, h = term.getSize()

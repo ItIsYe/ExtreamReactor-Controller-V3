@@ -184,17 +184,12 @@ local function make_dispatch()
       ctx.apply_mode(ctx.STATE.SAFE)
       return nil
     end,
-    -- Feature (2026-07-06): Zielwert fuer den internen Dampf-Fuellstand
-    -- bei individueller Pro-Reaktor-Regelung, per Master-Config-Editor
-    -- fernsteuerbar (analog zu SET_RESERVE bei FUEL, SET_TARGET bei WATER).
-    -- Fix (2026-07-17): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md Abschnitt 14). Gab bisher unbedingt `nil`
-    -- zurueck, was der aeussere Dispatcher (new(), weiter unten in dieser
-    -- Datei) als `{ ok = true }` behandelt -- unabhaengig davon, ob
-    -- ctx.set_reactor_fill_target() den Wert tatsaechlich persistieren
-    -- konnte. `ok=true` bleibt korrekt (der RAM-Wert wird sofort
-    -- uebernommen), aber `persisted` macht das Ergebnis jetzt ehrlich
-    -- ueberpruefbar, analog zu WATER's SET_TARGET.
+    -- Zielwert fuer den internen Dampf-Fuellstand bei individueller
+    -- Pro-Reaktor-Regelung, per Master-Config-Editor fernsteuerbar (analog
+    -- zu SET_RESERVE bei FUEL, SET_TARGET bei WATER). `ok=true` heisst nur,
+    -- dass der RAM-Wert sofort uebernommen wurde; `persisted` zeigt
+    -- ehrlich an, ob ctx.set_reactor_fill_target() den Wert auch
+    -- persistieren konnte (analog zu WATER's SET_TARGET).
     ["SET_REACTOR_FILL_TARGET"] = function(command, ctx)
       local value = tonumber(command.value)
       if type(value) ~= "number" or value < 0 or value > 1 then

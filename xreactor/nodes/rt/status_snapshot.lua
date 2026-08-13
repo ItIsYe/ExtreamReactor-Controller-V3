@@ -77,12 +77,9 @@ function M.build_reactor_snapshots(registry, reactor_adapter, modules, log_prefi
       coolant_filled_percentage = info and info.coolant_filled_percentage or nil,
       coolant_ratio = info and info.coolant_ratio or nil,
       coolant_ratio_source = info and info.coolant_ratio_source or nil,
-      -- Feature (2026-07-08): Fuel-Fuellstand mit in den Reaktor-Snapshot
-      -- aufnehmen, den RT sowieso schon regelmaessig an Master schickt.
-      -- Vorher wurde fuel/fuel_max von adapters/reactor.lua zwar lokal
-      -- gelesen, aber nie weitergegeben — die FUEL-Node hatte dadurch
-      -- keine Moeglichkeit, den Fuellstand ohne eigenen (nicht vorhandenen)
-      -- Wired-Modem-Zugriff auf den Reaktor zu erfahren.
+      -- Fuel-Fuellstand im Reaktor-Snapshot, den RT sowieso regelmaessig
+      -- an Master schickt -- FUEL hat sonst keinen eigenen Wired-Modem-
+      -- Zugriff auf den Reaktor.
       fuel_amount = info and info.fuel or nil,
       fuel_capacity = info and info.fuel_max or nil,
       state = module and module.state or nil

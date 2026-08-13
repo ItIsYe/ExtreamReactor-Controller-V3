@@ -1,12 +1,8 @@
 -- nodes/fuel/command_handler.lua
 --
--- Feature (2026-07-09): Modularisierungs-Rewrite. Reine Kommando-Parsing/
--- Dispatch-Logik hier -- die eigentlichen Effekte (Reserve setzen,
--- Fuel-Status-Daten uebernehmen) laufen ueber Callback-Funktionen, die
--- main.lua bereitstellt. So bleibt dieses Modul unabhaengig von main.lua's
--- konkreter State-Verwaltung (reserve-Variable, fuel_status_cache, ...)
--- und laesst sich leicht um neue Kommandos erweitern, ohne main.lua
--- anfassen zu muessen.
+-- Reine Kommando-Parsing/Dispatch-Logik -- die eigentlichen Effekte
+-- (Reserve setzen, Fuel-Status-Daten uebernehmen) laufen ueber
+-- Callback-Funktionen, die main.lua bereitstellt.
 --
 -- Erwartete ctx-Felder:
 --   support_command_handler, protocol, comms, devices, constants, utils,

@@ -1,14 +1,9 @@
 local M = {}
 local mux = require("core.mockup_ui")
 
--- Feature (2026-07-12): REST-P1.3 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
--- FIX_2026-07-12.md). Bisher entschieden Header, Hauptbanner, Ampel und
--- Diagnostics JEWEILS UNABHAENGIG voneinander, welcher Zustand gerade
--- vorliegt (z.B. fuel_state() kannte nur RESERVE-bezogene Zustaende,
--- die Ampel kannte "LIMITED" fuer eine aktive Lieferung, Diagnostics
--- kannte wieder andere Werte) -- die Anzeigen konnten sich dadurch
--- inhaltlich widersprechen. Ab jetzt EINE priorisierte Funktion, deren
--- Ergebnis alle vier Stellen gemeinsam nutzen.
+-- Eine priorisierte Funktion, deren Ergebnis Header, Hauptbanner, Ampel
+-- und Diagnostics gemeinsam nutzen, damit sich die Anzeigen nicht mehr
+-- inhaltlich widersprechen koennen.
 --
 -- Prioritaet (hoechste zuerst -- ein sicherheitsrelevanter Zustand darf
 -- nie von einem niedrigeren verdeckt werden):

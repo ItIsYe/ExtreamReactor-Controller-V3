@@ -87,12 +87,10 @@ function M.reject_unsupported(devices)
   return result
 end
 
--- Fix (2026-07-17): P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
--- 2026-07-12.md Abschnitt 16). Optionales drittes `extra`-Argument, damit
--- Aufrufer wie WATER's SET_TARGET dem ACK_APPLIED-Ergebnis zusaetzliche,
--- ehrliche Felder mitgeben koennen (z.B. `persisted = false` nach einem
--- fehlgeschlagenen Config-Write) -- ohne `ok=true` selbst zu verfaelschen,
--- wenn der Wert im RAM trotzdem uebernommen wurde.
+-- Optionales drittes `extra`-Argument, damit Aufrufer wie WATER's
+-- SET_TARGET dem ACK_APPLIED-Ergebnis zusaetzliche, ehrliche Felder
+-- mitgeben koennen (z.B. `persisted = false` nach einem fehlgeschlagenen
+-- Config-Write) ohne `ok=true` zu verfaelschen.
 function M.finish(devices, ok, extra)
   stamp_result(devices, ok and "ok" or "failed")
   log_with_devices(devices, ok and "INFO" or "WARN", ("Command %s"):format(ok and "applied" or "failed"))
