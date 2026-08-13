@@ -303,10 +303,14 @@ local function perform_update(handshake, consume_remote)
   return false, last_error
 end
 
+-- Jeder Zweig loggt sichtbar, auch der Normalfall "nichts zu tun" -- ohne
+-- das war von aussen (Terminal/Log-Export) nicht unterscheidbar, ob der
+-- periodische Check ueberhaupt laeuft/durchkommt, oder ob der Loop
+-- irgendwo haengt (siehe auto_update_loop_cadence_test.lua).
 local function do_periodic_check(handshake)
   local config, arm_err = load_arming()
   if not config then log("Auto-Update uebersprungen: " .. tostring(arm_err)); return end
-  if config.auto_update ~= true then return end
+  if config.auto_update ~= true then log("Auto-Update deaktiviert (auto_update=false)"); return end
 
   local remote_version, remote_err = fetch_remote_version()
   local local_version = read_version(RELEASE_PATH)
@@ -317,6 +321,8 @@ local function do_periodic_check(handshake)
   elseif remote_version > local_version then
     log("Neue Version: v" .. local_version .. " -> v" .. remote_version .. " @ " .. SOURCE_REF)
     perform_update(handshake, false)
+  else
+    log("Update-Check ok: lokal v" .. local_version .. " aktuell (remote v" .. remote_version .. ")")
   end
 end
 
