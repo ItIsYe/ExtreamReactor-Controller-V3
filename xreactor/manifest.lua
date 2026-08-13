@@ -1,21 +1,21 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 572,
-  manifest_id = "manifest-v572",
+  manifest_version = 573,
+  manifest_id = "manifest-v573",
   source_ref = "beta",
   hash_algo = "crc32",
 
   base_files = {
   { path = "installer/http.lua", size_bytes = 4835, hash = "eb7b4d47", always = true },
   { path = "installer/manifest.lua", size_bytes = 7223, hash = "272115ad", always = true },
-  { path = "installer/stage.lua", size_bytes = 12124, hash = "837c3ab6", always = true },
+  { path = "installer/stage.lua", size_bytes = 9132, hash = "b87557db", always = true },
   { path = "installer/ui.lua", size_bytes = 2074, hash = "7bdd0eb9", always = true },
   { path = "installer/auto_update.lua", size_bytes = 15660, hash = "685150ed", always = true },
   { path = "installer/init.lua", size_bytes = 22827, hash = "20dd5066", always = true },
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "cd96e24b", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "2cb3bdcc", always = true },
   { path = "start.lua", size_bytes = 12598, hash = "a5e5a4f2", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 4181, hash = "08d98202", always = true },
@@ -198,7 +198,7 @@ return {
     water = {
     { path = "nodes/water/config.lua", size_bytes = 3884, hash = "1804d0e7", required_for={"WATER"} },
     { path = "nodes/water/config_normalizer.lua", size_bytes = 989, hash = "09141fba", required_for={"WATER"} },
-    { path = "nodes/water/main.lua", size_bytes = 28363, hash = "ca529bd1", required_for={"WATER"} },
+    { path = "nodes/water/main.lua", size_bytes = 25214, hash = "cc3ee93b", required_for={"WATER"} },
     { path = "nodes/water/ui_pages.lua", size_bytes = 10862, hash = "cfbbd586", required_for={"WATER"} },
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
     },

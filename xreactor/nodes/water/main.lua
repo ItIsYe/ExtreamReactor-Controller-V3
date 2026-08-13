@@ -56,11 +56,9 @@ local DEFAULT_CONFIG = {
   }
 }
 
--- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md). Wie bei FUEL bereits behoben: die
--- Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
--- ueberschrieben -- jede manuelle Config-Bearbeitung ging dadurch
--- spaetestens beim naechsten Update-Zyklus verloren.
+-- Die Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
+-- ueberschrieben -- Config muss in eine geschuetzte Nutzerdatei migriert
+-- werden.
 local WATER_USER_CONFIG_PATH = "/xreactor/config/water.lua"
 if not fs.exists(WATER_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
@@ -148,19 +146,11 @@ local function hello()
   comms:send_hello({ tanks = summary.kinds.tank and summary.kinds.tank.bound or 0 })
 end
 
--- Feature (2026-07-13): WATER-P0.3 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). Tankdaten wurden bisher mehrfach PRO ZYKLUS
--- unabhaengig voneinander gelesen: balance_loop() -> total_water(),
--- manage_clusters() -> read_tank_level() pro Cluster, build_status_
--- payload() -> total_water() UND erneut read_tank_level() pro Cluster --
--- bis zu mehrere Peripherie-Calls fuer DENSELBEN physischen Tank
--- innerhalb eines einzigen Zyklus. Jetzt: ein gemeinsamer, generations-
--- basierter Snapshot (water_snapshot), der alle bekannten Tanks in
--- EINEM Durchlauf liest -- total_water() und read_tank_level() greifen
--- beide darauf zu und lesen nur dann tatsaechlich erneut, wenn der
--- Snapshot aelter als WATER_SNAPSHOT_MAX_AGE_MS ist (kurz genug, um
--- innerhalb desselben/naechsten Zyklus wiederverwendet zu werden, lang
--- genug um echte doppelte Peripherie-Calls im selben Zyklus zu vermeiden).
+-- Gemeinsamer, generationsbasierter Snapshot (water_snapshot) liest alle
+-- bekannten Tanks in EINEM Durchlauf -- total_water() und read_tank_level()
+-- greifen beide darauf zu und lesen nur erneut, wenn der Snapshot aelter
+-- als WATER_SNAPSHOT_MAX_AGE_MS ist, statt denselben Tank mehrfach pro
+-- Zyklus unabhaengig voneinander zu lesen.
 local WATER_SNAPSHOT_MAX_AGE_MS = 250
 local water_snapshot = { generation = 0, ts = 0, total = 0, by_name = {} }
 
@@ -233,13 +223,8 @@ local function read_tank_level(tank_name)
 end
 
 local function set_rs_output(side, state, integrator)
-  -- Fix (2026-07-13): CRITICAL (WATER-P0.4, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). Vorher wurde das Ergebnis von
-  -- redstone.setOutput()/dev.setOutput() komplett verworfen -- der
-  -- Cluster-State (filling/draining) wurde unabhaengig davon geaendert,
-  -- ob der physische Write tatsaechlich erfolgreich war. Jetzt gibt
-  -- diese Funktion true/false zurueck, damit der Aufrufer den State nur
-  -- bei bestaetigtem Erfolg aktualisiert.
+  -- Gibt true/false zurueck, damit der Aufrufer den Cluster-State
+  -- (filling/draining) nur bei bestaetigtem Schreiberfolg aktualisiert.
   if integrator then
     local ok, dev = pcall(peripheral.wrap, integrator)
     if ok and dev and type(dev.setOutput) == "function" then
@@ -266,12 +251,9 @@ local function manage_clusters()
     cluster_states[name] = cluster_states[name] or { filling = false, draining = false, read_failed = false, write_error = nil }
     local state = cluster_states[name]
     if level == nil then
-      -- Fix (2026-07-13): CRITICAL (WATER-P0.4). Vorher bei einem
-      -- Lesefehler nur eine Warnung + "goto continue" -- bereits aktive
-      -- Fill-/Drain-Ausgaenge blieben UNVERAENDERT eingeschaltet, obwohl
-      -- der aktuelle Tankstand gar nicht mehr bekannt ist. Sicherheits-
-      -- Standard jetzt BLOCK_ALL: bei unbekanntem Tankstand werden beide
-      -- Ausgaenge explizit abgeschaltet, nicht einfach beibehalten.
+      -- Sicherheits-Standard bei unbekanntem Tankstand: BLOCK_ALL, beide
+      -- Ausgaenge explizit abschalten statt bereits aktive Fill-/Drain-
+      -- Ausgaenge unveraendert eingeschaltet zu lassen.
       warn_once("cluster_read:" .. name, "Cluster " .. name .. ": tank not found/read failed: " .. tostring(tank_name) .. " -- BLOCK_ALL (beide Ausgaenge aus)")
       state.read_failed = true
       local ok_f = not fill_side or set_rs_output(fill_side, false, integrator)
@@ -286,10 +268,9 @@ local function manage_clusters()
     end
     state.read_failed = false
     if level < min_vol and not state.filling then
-      -- Fix (2026-07-13): CRITICAL (WATER-P0.4). State wird jetzt erst
-      -- NACH bestaetigtem Erfolg BEIDER Writes aktualisiert -- bei
-      -- Teilfehler werden bestmoeglich beide Ausgaenge deaktiviert statt
-      -- einen widerspruechlichen halb-angewendeten Zustand zu melden.
+      -- State wird erst nach bestaetigtem Erfolg BEIDER Writes aktualisiert
+      -- -- bei Teilfehler werden bestmoeglich beide Ausgaenge deaktiviert
+      -- statt einen widerspruechlichen halb-angewendeten Zustand zu melden.
       local ok_fill = not fill_side or set_rs_output(fill_side, true, integrator)
       local ok_drain = not drain_side or set_rs_output(drain_side, false, integrator)
       if ok_fill and ok_drain then
@@ -403,20 +384,11 @@ local function render_monitor()
     local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = current_node_id
   })
-  -- Fix (2026-07-13): CRITICAL (WATER-P0.1, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). Die Seiten wurden bisher ueber
-  -- Closures gebaut ("function(target) return water_ui.render_overview(
-  -- target, model) end"), die "model" beim ALLERERSTEN Aufruf einfangen
-  -- und fuer immer einfrieren, da monitor_router nur EINMAL (Lazy-Init)
-  -- gebaut wird, waehrend render_monitor() bei jedem Tick ein NEUES model
-  -- erzeugt -- exakt derselbe Bug, der schon bei FUEL gefunden und
-  -- gefixt wurde (siehe dortiger v377-Fix). WATER zeigte dadurch
-  -- dauerhaft den Tankstand/MASTER-Status/Alerts/Clusterzustand vom
-  -- allerersten Render, egal was sich seitdem geaendert hatte. Jetzt wie
-  -- bei FUEL: render_overview/render_details/render_diagnostics haben
-  -- bereits die exakte Signatur (mon, model), die router:render(mon,
-  -- model) tatsaechlich an page.render() durchreicht -- direkt
-  -- zugewiesen statt in eine Closure verpackt.
+  -- render_overview/render_details/render_diagnostics haben bereits die
+  -- exakte Signatur (mon, model), die router:render(mon, model) an
+  -- page.render() durchreicht -- direkt zugewiesen statt in eine Closure
+  -- verpackt, die "model" beim allerersten Aufruf einfrieren wuerde
+  -- (monitor_router wird nur einmal per Lazy-Init gebaut).
   if not monitor_router then
     monitor_router = ui_router.new({
       pages = {
@@ -432,15 +404,10 @@ local function render_monitor()
   monitor_router:render(mon, model)
 end
 
--- Fix (2026-07-13): CRITICAL (WATER-P0.2). Zentraler, einziger Input-
--- Pfad -- der bisherige separate "router_touch"-Service (siehe main.lua
--- weiter unten, jetzt entfernt) verarbeitete JEDEN Touch ein ZWEITES
--- Mal zusaetzlich zu diesem hier, UND der Rueckgabewert von
--- monitor_router:handle_input() (true = bereits konsumiert, z.B.
--- Seitenwechsel) wurde bisher ignoriert -- ein Footer-Touch, der die
--- Seite wechselte, erreichte danach trotzdem noch den Touch-Handler der
--- NEU geoeffneten Seite mit denselben Koordinaten (exakt der von FUEL
--- schon gefundene "Auswahl blinkt auf und verschwindet wieder"-Bug).
+-- Zentraler, einziger Input-Pfad -- monitor_router:handle_input()'s
+-- Rueckgabewert (true = bereits konsumiert) muss respektiert werden, sonst
+-- erreicht ein Footer-Touch, der die Seite wechselt, danach trotzdem noch
+-- den Touch-Handler der neu geoeffneten Seite mit denselben Koordinaten.
 local function handle_monitor_touch(event)
   if monitor_router and monitor_router:handle_input(event) then
     return true
@@ -466,26 +433,17 @@ local function handle_command(message)
     local new_target = tonumber(command.value)
     if type(new_target) == "number" and new_target >= 0 then
       config.target_volume = new_target
-      -- Fix (2026-07-13): WATER-P0.4-Zusatz (siehe docs/CODING_AI_OTHER_
-      -- NODES_PERFORMANCE_2026-07-12.md). Vorher aenderte SET_TARGET nur
-      -- den Wert im Arbeitsspeicher -- beim naechsten Neustart war der
-      -- per Funk gesetzte Zielwert wieder weg. Jetzt wird die Aenderung
-      -- in die kanonische, geschuetzte WATER-Nutzerconfig geschrieben
-      -- (siehe GLOBAL-P0-Fix, CONFIG.CONFIG_PATH zeigt jetzt auf
-      -- /xreactor/config/water.lua statt der Manifest-Quelldatei).
+      -- Persistiert in die kanonische, geschuetzte WATER-Nutzerconfig,
+      -- sonst waere der per Funk gesetzte Zielwert nach einem Neustart weg.
       local ok_write, werr = utils.write_config(CONFIG.CONFIG_PATH, config)
       if not ok_write then
         utils.log("WATER", "SET_TARGET: Persistierung fehlgeschlagen (" .. tostring(werr) .. ") -- Wert gilt nur bis zum naechsten Neustart", "WARN")
       end
       utils.log("WATER", "Target volume updated to " .. tostring(new_target))
-      -- Fix (2026-07-17): WATER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md Abschnitt 16). Der Command wurde bisher
-      -- IMMER mit ok=true ohne jedes Persistenzsignal quittiert, selbst
-      -- wenn der obige write_config() gerade fehlgeschlagen war -- MASTER
-      -- konnte ein ACK_APPLIED erhalten, obwohl der Wert nach einem
-      -- Neustart wieder verloren geht. `ok=true` bleibt korrekt (der
-      -- RAM-Wert wurde tatsaechlich uebernommen), aber `persisted` macht
-      -- das Ergebnis jetzt ehrlich ueberpruefbar.
+      -- `ok=true` bleibt korrekt (der RAM-Wert wurde uebernommen), aber
+      -- `persisted` macht ehrlich ueberpruefbar, ob write_config() oben
+      -- tatsaechlich erfolgreich war -- MASTER soll kein ACK_APPLIED ohne
+      -- Persistenzsignal erhalten.
       return support_command_handler.finish(devices, true, { persisted = ok_write == true })
     else
       utils.log("WATER", "SET_TARGET rejected: invalid value=" .. tostring(command.value), "WARN")
@@ -535,12 +493,9 @@ local function init()
   utils.log("WATER", "Node ready: " .. comms.network.id)
 end
 
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
--- Quiesce-Handler. Nutzt dieselbe bereits vorhandene, getestete
--- set_rs_output()-Funktion (liefert echtes true/false pro Write, siehe
--- Fix-Kommentar dort) fuer JEDEN konfigurierten Cluster -- kein neuer
--- Aktor-Code. Bestaetigt sicher nur, wenn ALLE Fill-/Drain-Ausgaenge
--- aller Cluster nachweislich abgeschaltet wurden.
+-- Expliziter Quiesce-Handler: nutzt set_rs_output() (echtes true/false pro
+-- Write) fuer jeden konfigurierten Cluster, kein neuer Aktor-Code.
+-- Bestaetigt nur, wenn ALLE Fill-/Drain-Ausgaenge nachweislich aus sind.
 local function quiesce_all_clusters()
   local clusters = config.clusters or {}
   local all_ok = true
