@@ -189,8 +189,8 @@ local function run_master()
       return config_edits.send_edit(runtime.state.config_edits, "water_target", amount,
         { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
     end,
-    -- Feature (2026-07-06): Zielwert (0.0-1.0) fuer den internen Dampf-
-    -- Fuellstand bei individueller Pro-Reaktor-Regelung.
+    -- Zielwert (0.0-1.0) fuer den internen Dampf-Fuellstand bei
+    -- individueller Pro-Reaktor-Regelung.
     set_reactor_fill_target = function(value)
       return config_edits.send_edit(runtime.state.config_edits, "reactor_fill_target", value,
         { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
