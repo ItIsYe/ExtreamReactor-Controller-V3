@@ -27,21 +27,14 @@ function M.migrate_legacy_paths(config_values, add_warning)
   end
 end
 
--- Fix (2026-07-16): CRITICAL (RT-P1, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 5, "Altconfig-Migration und
--- Schedulernachweis"). Vor dem 10-Hz-Fix (2026-07-14) waren autonom.
--- reactor_adjust_interval=5.0 und ein impliziter reactor_adjust_interval_
--- individual-Fallback von 1.0 die Defaults -- beide sind gueltige Zahlen,
--- die generische "type(...) ~= 'number'"-Normalisierung in validate_config()
--- (siehe unten) fasst valide-aber-veraltete Werte deshalb NICHT an. Eine
--- bereits laufende, aktualisierte Installation behaelt dadurch dauerhaft
--- die alte, viel zu langsame Regelkadenz. Migriert GEZIELT nur die
--- historischen Default-WERTE (nicht jeden beliebigen numerischen Wert --
--- ein bewusst vom Nutzer gesetzter anderer Wert, z.B. 2.5, bleibt
--- unangetastet), gesteuert ueber das bestehende (bisher nirgends
--- ausgewertete) config.version-Feld -- laeuft dadurch garantiert nur
--- einmal pro Installation (main.lua persistiert das Ergebnis sofort nach
--- dieser Migration, siehe dort).
+-- Migriert gezielt nur die historischen Default-WERTE (autonom.
+-- reactor_adjust_interval=5.0 / _individual=1.0, aus der Zeit vor der
+-- 10-Hz-Cadence) -- ein bewusst vom Nutzer gesetzter anderer Wert bleibt
+-- unangetastet. Die generische type-Normalisierung in validate_config()
+-- fasst valide-aber-veraltete Zahlen sonst nicht an, eine bereits
+-- installierte Config behielte dadurch dauerhaft die alte, zu langsame
+-- Regelkadenz. Gesteuert ueber config.version, laeuft garantiert nur
+-- einmal pro Installation (main.lua persistiert das Ergebnis sofort danach).
 local RT_CONFIG_VERSION_INTERVAL_MIGRATION = 5
 local LEGACY_REACTOR_ADJUST_INTERVAL = 5.0
 local LEGACY_REACTOR_ADJUST_INTERVAL_INDIVIDUAL = 1.0
@@ -216,14 +209,9 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     config_values.autonom.reactor_adjust_interval = defaults.autonom.reactor_adjust_interval
     add_warning("autonom.reactor_adjust_interval missing/invalid; defaulting to " .. tostring(defaults.autonom.reactor_adjust_interval))
   end
-  -- Fix (2026-07-16): RT-P1. Fehlte hier bisher komplett -- reactor_control.lua
-  -- las den Wert nur ueber einen "or 0.10"-Fallback AN DER VERWENDUNGSSTELLE,
-  -- nie ueber die Config-Normalisierung selbst (im Gegensatz zu jedem
-  -- anderen autonom.*-Feld hier). Ein ungueltiger (nicht-numerischer,
-  -- absichtlich oder versehentlich gesetzter) Wert haette dadurch NICHT
-  -- hier, sondern erst implizit an der Nutzungsstelle abgefangen werden
-  -- koennen -- fuer Konsistenz jetzt genauso normalisiert wie reactor_
-  -- adjust_interval direkt darueber.
+  -- Normalisiert wie reactor_adjust_interval direkt darueber, statt nur
+  -- ueber einen "or 0.10"-Fallback an der Verwendungsstelle in
+  -- reactor_control.lua abgefangen zu werden.
   if type(config_values.autonom.reactor_adjust_interval_individual) ~= "number" then
     config_values.autonom.reactor_adjust_interval_individual = defaults.autonom.reactor_adjust_interval_individual
     add_warning("autonom.reactor_adjust_interval_individual missing/invalid; defaulting to " .. tostring(defaults.autonom.reactor_adjust_interval_individual))

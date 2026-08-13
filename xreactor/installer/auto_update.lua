@@ -10,20 +10,13 @@ local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Cont
 local SOURCE_REF = "beta"
 local UPDATE_EVENT = "xreactor_remote_update_requested"
 
--- Fix: FUEL/REPROCESSOR quiesce via redstone_router.lua's begin_quiesce()/
--- poll_quiesce() -- confirming EVERY known valve BLOCKED over a wireless
--- ACK round trip, with its own SAFETY_CONFIRM_TIMEOUT_MS=15000ms budget PER
--- confirmation attempt (see nodes/fuel/redstone_router.lua) before it
--- re-requests a fresh batch. The previous 20s deadline here left barely any
--- margin over a SINGLE 15s attempt -- any retry, ACK loss, or ongoing
--- delivery competing for the same valves reliably blew the 20s budget. The
--- role-side handshake state (core/update_handshake.lua) resets to IDLE on
--- timeout, but the router's OWN quiesce progress (self._state.quiesce)
--- survives untouched, so this doesn't need to be "instant" -- it only needs
--- enough room for a few full confirmation rounds. 60s covers 4x the
--- internal 15s budget. RT/VALVE/WATER/MASTER/LOG quiesce locally/
--- synchronously and return via wait_for_runtime_stopped() as soon as they
--- confirm, well before this ceiling -- raising it costs them nothing.
+-- FUEL/REPROCESSOR quiesce via redstone_router.lua's begin_quiesce()/
+-- poll_quiesce() has its own SAFETY_CONFIRM_TIMEOUT_MS=15000ms budget PER
+-- confirmation attempt -- 60s covers 4x that internal budget, enough room
+-- for a few full confirmation rounds (any retry/ACK loss could otherwise
+-- blow a tighter deadline). RT/VALVE/WATER/MASTER/LOG quiesce locally/
+-- synchronously and return well before this ceiling, so raising it costs
+-- them nothing.
 local QUIESCE_TIMEOUT_S = 60
 
 local function log(message)
@@ -211,18 +204,11 @@ local function dir_size(path)
   return total
 end
 
--- Fix: same last-resort reclaim as installer/stage.lua's reclaim() (see
--- there for the full history/rationale -- explicit user request after
--- repeated "out of space" aborts). The managed auto-updater has its own,
--- separate temp-space check here (writing the freshly downloaded
--- installer bootstrap to TEMP_INSTALLER before dofile()-ing it) and
--- didn't share that logic, so a node whose logs had re-accumulated could
--- still fail every attempt with "insufficient space for temporary
--- installer" even after the manual-install path was already fixed to
--- self-heal. Mirrored here rather than requiring stage.lua: this file is
--- deliberately self-contained (see header comment). Only /xreactor_logs,
--- only as a last resort after the plain space check already failed, and
--- every actual deletion is logged -- never silent.
+-- Same last-resort reclaim as installer/stage.lua's reclaim(), mirrored
+-- here rather than required (this file is deliberately self-contained) --
+-- the managed auto-updater has its own separate temp-space check for
+-- writing TEMP_INSTALLER. Only /xreactor_logs, only as a last resort after
+-- the plain space check already failed, and every deletion is logged.
 local function ensure_temp_space(bytes_needed)
   if has_temp_space(bytes_needed) then return true end
   if fs.exists(LOG_DIR) then
