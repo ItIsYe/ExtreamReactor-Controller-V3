@@ -50,39 +50,40 @@ local function read_response(response)
   return body
 end
 
--- http.request is event-driven and therefore safe inside parallel.waitForAll.
--- The synchronous fallback intentionally uses the documented CC:Tweaked
--- signature http.get(url), without an options table masquerading as the
--- binary flag.
+-- Was previously http.request()+os.startTimer()+a manually filtered event
+-- loop -- reported in the field to hang well past its 15s ceiling with no
+-- retry output. installer/http.lua's try_once() hit the identical failure
+-- mode and was rebuilt on parallel.waitForAny() instead: race the proven
+-- synchronous http.get() against a plain os.sleep() timeout, no event
+-- name/id matching of our own -- CC:Tweaked's scheduler decides the
+-- winner, the loser is simply abandoned. Mirrored here rather than
+-- required (this file is deliberately self-contained).
 local function http_get_async(url)
-  if http and type(http.request) == "function" then
-    local ok_call, started, request_err = pcall(http.request, url)
-    if not ok_call or started ~= true then
-      return nil, tostring(request_err or started or "http.request failed")
-    end
-
-    local timer = os.startTimer(15)
-    while true do
-      local event, p1, p2, p3 = os.pullEvent()
-      if event == "http_success" and p1 == url then
-        if os.cancelTimer then pcall(os.cancelTimer, timer) end
-        return read_response(p2)
-      elseif event == "http_failure" and p1 == url then
-        if os.cancelTimer then pcall(os.cancelTimer, timer) end
-        close_response(p3)
-        return nil, tostring(p2 or "http_failure")
-      elseif event == "timer" and p1 == timer then
-        return nil, "timeout"
-      end
-    end
-  end
-
   if not http or type(http.get) ~= "function" then
     return nil, "http unavailable"
   end
-  local ok, response = pcall(http.get, url)
-  if not ok or not response then return nil, tostring(response or "http.get failed") end
-  return read_response(response)
+  if type(parallel) ~= "table" or type(parallel.waitForAny) ~= "function" then
+    local ok, response = pcall(http.get, url)
+    if not ok or not response then return nil, tostring(response or "http.get failed") end
+    return read_response(response)
+  end
+
+  local body, err, done = nil, nil, false
+  local ok_race, race_err = pcall(parallel.waitForAny,
+    function()
+      local ok, response = pcall(http.get, url)
+      if ok and response then
+        body, err = read_response(response)
+      else
+        err = "http.get failed"
+      end
+      done = true
+    end,
+    function() os.sleep(15) end)
+
+  if not ok_race then return nil, "request failed: " .. tostring(race_err) end
+  if not done then return nil, "timeout" end
+  return body, err
 end
 
 local function load_arming()
