@@ -761,13 +761,24 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
       ctrl.last_write_setter = write.setter
     end
   end
-  enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, decision)
+  local _, brake_detail = enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, decision)
+
+  -- Nothing physically changed since startup_observed_flow was read above
+  -- (no flow write, no fresh brake actuation) -- reuse it below instead of
+  -- an identical fresh read.
+  local reuse_flow = nil
+  if write.write_state == "WRITE_SKIPPED_UNCHANGED"
+      and brake_detail ~= "overspeed-coil-engaged"
+      and type(startup_observed_flow) == "number" then
+    reuse_flow = startup_observed_flow
+  end
 
   local rail_cfg = ctx.config.rails and ctx.config.rails.turbine_flow or {}
   local flow_tolerance = ctx.flow_apply_helpers.capture_turbine_flow_readback(
     turbine, caps, ctrl, requested_flow, rail_cfg,
     function(t, c) return M.read_turbine_flow(ctx, t, c) end,
-    function(rate) return M.clamp_turbine_flow(ctx, rate) end)
+    function(rate) return M.clamp_turbine_flow(ctx, rate) end,
+    reuse_flow)
 
   local confirmed_flow = ctrl.confirmed_flow
   local _, readback_state, readback_detail =
