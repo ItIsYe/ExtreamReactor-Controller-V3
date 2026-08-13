@@ -1,31 +1,16 @@
 local M = {}
 local utils = require("core.utils")
 
--- Fix (2026-07-13): CRITICAL (MASTER-P1.1, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md). PEAK-/IDLE-Schwellwert und der
--- lokale AUTO-UPDATE-Schalter aenderten bisher nur runtime.state im
--- Arbeitsspeicher -- nach einem Neustart waren sie wieder auf den
--- Standardwert zurueckgesetzt. Schreibt die betroffenen Felder gezielt
--- in die per GLOBAL-P0 bereits geschuetzte Nutzerdatei (/xreactor/config/
--- master.lua, kein Manifest-Eintrag, uebersteht Auto-Updates), OHNE den
--- Rest des Live-State-Objekts (Funktionsreferenzen, transiente Node-
--- Daten etc.) mit anzufassen -- liest die evtl. bereits vorhandene Datei
--- zuerst ein und aktualisiert nur die konkret betroffenen Schluessel.
+-- PEAK-/IDLE-Schwellwert und der lokale AUTO-UPDATE-Schalter werden gezielt
+-- in die Nutzerdatei /xreactor/config/master.lua geschrieben (kein
+-- Manifest-Eintrag, uebersteht Auto-Updates), ohne den Rest des Live-State-
+-- Objekts anzufassen -- liest die evtl. vorhandene Datei zuerst ein und
+-- aktualisiert nur die betroffenen Schluessel.
 local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
--- Fix (2026-07-13): CRITICAL Folgefund waehrend MASTER-P1.1. Der AUTO-
--- UPDATE-Schalter aenderte bisher nur runtime.state.auto_update_enabled
--- -- das hatte KEINERLEI Wirkung auf den tatsaechlichen Update-
--- Mechanismus (installer/auto_update.lua liest ausschliesslich
--- /xreactor/config/remote_update.lua's "enabled"/"auto_update"-Felder,
--- eine KOMPLETT SEPARATE Datei, die dieser Schalter nie beruehrte). Der
--- Schalter war dadurch rein kosmetisch, ohne jede tatsaechliche Wirkung
--- -- weder lokal auf MASTER selbst noch (wie im Dokument als
--- "nodeuebergreifend" gefordert) auf andere Rollen. Jetzt schreibt der
--- Schalter zusaetzlich in remote_update.lua -- das stellt zumindest
--- MASTERs EIGENES Update-Verhalten korrekt her. Das per Funk an ALLE
--- anderen Rollen propagieren ("nodeuebergreifend") ist ein eigenstaendiges,
--- deutlich groesseres Feature (neuer Kommandotyp, ACK-Tracking pro Node)
--- und bewusst NICHT Teil dieses Fixes.
+-- Der AUTO-UPDATE-Schalter schreibt zusaetzlich in remote_update.lua (die
+-- Datei, die installer/auto_update.lua tatsaechlich liest) -- sonst haette
+-- er keine Wirkung auf MASTERs eigenes Update-Verhalten. Propagation an
+-- ANDERE Rollen ist bewusst nicht Teil hiervon (eigenstaendiges Feature).
 local REMOTE_UPDATE_ARMING_PATH = "/xreactor/config/remote_update.lua"
 local function set_local_auto_update_enabled(enabled)
   local existing = {}
@@ -99,20 +84,11 @@ function M.new(opts)
     return map[key] or raw:upper()
   end
   local function infer_assignment_state(rt_node, node)
-    -- Fix (2026-06-30): node.assignment_state (vom Master-RT-Sync in
-    -- rt_sync.lua gesetzt, stabil über STATUS-Ticks hinweg) muss VOR
-    -- rt_node.assignment_state geprüft werden. Grund: rt_node ist bei
-    -- vorhandenem node.rt eine direkte Referenz auf node.rt — und
-    -- message_handlers.populate_rt_status() ersetzt node.rt bei JEDEM
-    -- STATUS-Tick komplett durch das frische payload.rt (node.rt = payload.rt
-    -- or node.rt or {}), statt es zu mergen. Ein zuvor vom UI gesetztes
-    -- rt_node.assignment_state="ASSIGNED" (siehe normalize_rt_display(), das
-    -- direkt in rt_node mutiert) geht dadurch bei der naechsten STATUS-
-    -- Nachricht sofort wieder verloren — RT selbst sendet ohnehin nie ein
-    -- eigenes assignment_state-Feld im Payload. Je nach Timing zwischen
-    -- STATUS-Empfang und naechstem UI-Render zeigte das zufaellig fuer manche
-    -- Nodes UNASSIGNED, fuer andere (gleicher Code!) ASSIGNED — reines
-    -- Zufallstiming, kein Unterschied im Verhalten der RT-Node selbst.
+    -- node.assignment_state (stabil ueber STATUS-Ticks) muss VOR
+    -- rt_node.assignment_state geprueft werden: rt_node ist eine direkte
+    -- Referenz auf node.rt, das bei jedem STATUS-Tick komplett ersetzt
+    -- (nicht gemerged) wird -- ein zuvor vom UI gesetztes rt_node.
+    -- assignment_state ginge sonst bei der naechsten Nachricht verloren.
     local raw = first_nonempty(
       node.assignment_state,
       rt_node.assignment_state,
@@ -248,26 +224,15 @@ function M.new(opts)
         rt_node.node_mode = first_nonempty(rt_node.node_mode, rt_node.mode, node_mode, "-")
         rt_node.mode = rt_node.node_mode
         rt_node.assignment_state = infer_assignment_state(rt_node, node)
-        -- Fix (2026-06-30): dieselbe Sticky-Falle wie bei assignment_state
-        -- (siehe infer_assignment_state()) — rt_node ist bei vorhandenem
-        -- node.rt eine direkte Referenz darauf. normalize_rt_display()
-        -- schreibt control_source DIREKT in rt_node (Zeile ~110:
-        -- rt_node.control_source = control). Beim naechsten Aufruf hier
-        -- gewann "rt_node.control_source or ..." dann IMMER den zuvor
-        -- (ggf. falsch auf "LOCAL" normalisierten) Wert, noch bevor der
-        -- stabile, vom Master-RT-Sync gesetzte node.control_source ueberhaupt
-        -- geprueft wurde — node.control_source kam nie mehr zum Zug, sobald
-        -- rt_node.control_source einmal "LOCAL" geworden war. Jetzt:
-        -- node.control_source zuerst pruefen.
+        -- Dieselbe Sticky-Falle wie bei assignment_state: node.control_source
+        -- muss zuerst geprueft werden, sonst gewinnt ein zuvor von
+        -- normalize_rt_display() direkt in rt_node geschriebener Wert dauerhaft.
         rt_node.control_source = node.control_source or (node.last_setpoints and node.last_setpoints.control_source) or (node.bindings and node.bindings.control_source) or rt_node.control_source
         rt_node.maintenance_mode = node.maintenance_mode == true
         rt_node.id = rt_node.id or node.id
-        -- Fix (2026-06-30): "Soll"-Anzeige im UI zeigte dauerhaft 0, weil
-        -- rt_target() (rt_dashboard.lua) auf rt.power_target zurueckfiel —
-        -- ein Feld, das RT seit dem SCADA-Rewrite nie mehr sendet (RT bekommt
-        -- nur noch power_target_percent, berechnet seinen Output selbst).
-        -- node.assigned_power (jetzt von rt_sync.lua persistiert) ist der
-        -- tatsaechliche, vom Master berechnete RF/t-Sollwert pro Node.
+        -- node.assigned_power (von rt_sync.lua persistiert) ist der
+        -- tatsaechliche, vom Master berechnete RF/t-Sollwert -- rt.power_target
+        -- wird von RT seit dem SCADA-Rewrite nicht mehr gesendet.
         rt_node.target = node.assigned_power or rt_node.target
         rt_node.assignment_reason = normalize_assignment_reason(
           rt_node.assignment_reason or node.assignment_reason or (node.last_setpoints and node.last_setpoints.assignment_reason) or node.bindings_summary,
@@ -275,12 +240,8 @@ function M.new(opts)
           rt_node.node_mode,
           stale
         )
-        -- Fix (2026-06-30): defensiv gegen Tabellenwerte absichern — eine
-        -- der Quellen hier (rt_node.queue_state, node.queue_state, node.state)
-        -- lieferte in der Praxis vereinzelt eine Tabelle statt eines Strings,
-        -- was im UI als "table: 0x..." auftauchte (siehe rt_dashboard.lua
-        -- safe_text()). Ursache nicht abschliessend geklärt; hier zusaetzlich
-        -- an der Quelle abgesichert, nicht nur im Rendering.
+        -- Defensiv gegen Tabellenwerte: eine der Quellen lieferte vereinzelt
+        -- eine Tabelle statt eines Strings ("table: 0x..." im UI).
         local function string_or_nil(v)
           if type(v) == "string" or type(v) == "number" then return tostring(v) end
           return nil
@@ -426,19 +387,12 @@ function M.new(opts)
     overview.clock_label = os.date('!%H:%M UTC')
     rt.rt_global_off_hold = overview.rt_global_off_hold
 
-    -- Fix (2026-06-30): "alerts"-Model fehlte in data_map komplett — weder die
-    -- "Alerts"-View noch der AUX-Monitor-Badge (multiview.lua) bekamen je die
-    -- echten alert_service-Daten (active alerts mit severity/title/message),
-    -- nur die manuell geloggten add_alarm()-Events landeten auf dem "Logs"-
-    -- View. Folge: AUX-Monitor blieb dauerhaft grün/"Keine aktiven Alarme"
-    -- trotz aktiver CRITICAL/WARN-Alerts aus dem alert_service. Hier wird das
-    -- vollstaendige Model gebaut, das alerts.lua's render() erwartet
-    -- (model.counts, model.summary, model.active).
+    -- Vollstaendiges Model, das alerts.lua's render() erwartet (model.counts,
+    -- model.summary, model.active) -- ohne das bleibt der AUX-Monitor-Badge
+    -- gruen trotz aktiver alert_service-Alerts.
     local alerts_active = c.alert_service and c.alert_service:get_active() or {}
-    -- Feature (2026-07-01): Zeitstempel-Filter fuer die Alarm-Historie.
-    -- c.state.history_window_key ("1h"/"24h"/"all") wird per Touch in
-    -- alarms.lua umgeschaltet (siehe history_window_cycle Action unten).
-    -- Default "all" entspricht dem alten, ungefilterten Verhalten.
+    -- Zeitstempel-Filter fuer die Alarm-Historie; c.state.history_window_key
+    -- ("1h"/"24h"/"all") wird per Touch in alarms.lua umgeschaltet.
     local history_window_key = tostring(c.state.history_window_key or "all")
     local history_windows_ms = { ["1h"] = 3600000, ["24h"] = 86400000 }
     local since_ms = nil
@@ -468,14 +422,10 @@ function M.new(opts)
       on_ack = on_ack,
     }
 
-    -- Fix (2026-06-30): "alarms"-Model ("Logs"-View, AUX-Monitor) zeigte
-    -- bisher NUR die manuell via add_alarm() geloggten Events (Startup
-    -- rejected, Emergency stop active, ...), niemals die automatisch vom
-    -- alert_service erkannten Bedingungen (z.B. niedriger Energiespeicher-
-    -- stand). Jetzt werden beide Quellen kombiniert: aktive alert_service-
-    -- Alerts zuerst (sie sind die dringendsten), danach die manuellen Events.
-    -- Severity wird von CRITICAL/WARN/INFO auf das von alarms.lua erwartete
-    -- Schema EMERGENCY/WARNING/OK gemappt.
+    -- "alarms"-Model kombiniert beide Quellen: aktive alert_service-Alerts
+    -- zuerst (dringendste), danach die manuell via add_alarm() geloggten
+    -- Events. Severity wird auf das von alarms.lua erwartete Schema
+    -- EMERGENCY/WARNING/OK gemappt.
     local function map_alert_severity(sev)
       local s = tostring(sev or ""):upper()
       if s == "CRITICAL" then return "EMERGENCY" end
@@ -539,12 +489,8 @@ function M.new(opts)
         maintenance_mode = in_maintenance,
         status = status,
         last_seen_age = node.last_seen_age,
-        -- Fix (2026-07-02): master/ui/maintenance.lua prueft node.offline/
-        -- node.stale fuer die OFFLINE-Statusanzeige (siehe dort:
-        -- "if node.offline or node.stale then return 'muted' end" und die
-        -- ONLINE/MAINT/OFFLINE-Ableitung), aber diese Felder wurden hier nie
-        -- gesetzt — ein tatsaechlich offline gegangener Node erschien
-        -- faelschlich immer als ONLINE oder MAINT, nie als OFFLINE.
+        -- master/ui/maintenance.lua prueft node.offline/node.stale fuer die
+        -- OFFLINE-Statusanzeige -- muessen hier durchgereicht werden.
         offline = node.offline == true,
         stale = node.stale == true,
       }
@@ -609,18 +555,13 @@ function M.new(opts)
       alert_counts = counts,
     }
 
-    -- Config-Editor am Monitor (Feature, 2026-07-02): zentrale Seite fuer
-    -- Werte, die vorher nur ueber Config-Dateien direkt bearbeitbar waren.
-    --
-    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md Abschnitt 10). Die angezeigten Werte
-    -- kommen jetzt ausschliesslich aus master/config_edits.lua (get_
-    -- config_edit_model) statt aus c.state.*_pct -- der angezeigte Wert
-    -- ist damit der zuletzt tatsaechlich BESTAETIGTE (Applied-ACK aller
-    -- angeschriebenen Ziele), nicht der zuletzt EINGEGEBENE. target/
-    -- pending werden durchgereicht, damit ui/config_editor.lua die
-    -- aktuelle Zielauswahl und einen laufenden/fehlgeschlagenen Edit
-    -- sichtbar machen kann.
+    -- Config-Editor am Monitor: zentrale Seite fuer Werte, die vorher nur
+    -- ueber Config-Dateien direkt bearbeitbar waren. Werte kommen aus
+    -- master/config_edits.lua (get_config_edit_model) -- der angezeigte Wert
+    -- ist der zuletzt BESTAETIGTE (Applied-ACK), nicht der zuletzt
+    -- eingegebene. target/pending werden durchgereicht, damit ui/
+    -- config_editor.lua die aktuelle Zielauswahl und einen laufenden/
+    -- fehlgeschlagenen Edit sichtbar machen kann.
     local function edit_model(key, fallback)
       if c.calc.get_config_edit_model then return c.calc.get_config_edit_model(key, fallback) end
       return { target = "ALL", confirmed_value = fallback, pending = nil }
@@ -639,11 +580,9 @@ function M.new(opts)
       water_target_target = water_target_edit.target,
       water_target_pending = water_target_edit.pending,
       auto_update_enabled = c.calc.get_auto_update_enabled and c.calc.get_auto_update_enabled(),
-      -- Feature (2026-07-06): Zielwert fuer individuelle Pro-Reaktor-
-      -- Regelung, als Prozent (0-100) fuer die UI; wird beim Senden durch
-      -- 100 geteilt (siehe handle_action "reactor_fill_target_adjust").
-      -- config_edits speichert den ROHEN, tatsaechlich gesendeten Wert
-      -- (0.0-1.0) -- hier zurueck in Prozent umgerechnet.
+      -- Zielwert fuer Pro-Reaktor-Regelung, als Prozent (0-100) fuer die UI;
+      -- config_edits speichert den rohen Wert (0.0-1.0), hier zurueck in
+      -- Prozent umgerechnet (beim Senden wieder durch 100 geteilt).
       reactor_fill_target_pct = math.floor((tonumber(reactor_fill_edit.confirmed_value) or 0.5) * 100 + 0.5),
       reactor_fill_target_target = reactor_fill_edit.target,
       reactor_fill_target_pending = reactor_fill_edit.pending,
@@ -707,15 +646,9 @@ function M.new(opts)
         end
       end
 
-      -- Fix (2026-07-13): MASTER-P2 (siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md). Vorher erzeugte JEDER erfolgreiche
-      -- Monitor-Render eine EIGENE formatierte DEBUG-Zeile (string.format()
-      -- lief dabei IMMER, unabhaengig davon, ob DEBUG-Logging ueberhaupt
-      -- aktiv ist bzw. die Zeile am Ende tatsaechlich geschrieben wird).
-      -- Jetzt: Erfolge werden zu EINER zusammengefassten Zeile aggregiert
-      -- (guenstig zu bauen -- nur Zaehler, keine Pro-Monitor-Formatierung).
-      -- Fehlschlaege bleiben bewusst EINZELN und sofort sichtbar -- das
-      -- sind seltene, wichtige Diagnosedaten, keine Routine-Information.
+      -- Erfolge werden zu EINER zusammengefassten Zeile aggregiert (nur
+      -- Zaehler, keine Pro-Monitor-Formatierung bei jedem Render).
+      -- Fehlschlaege bleiben einzeln und sofort sichtbar.
       local ok_count, fail_count = 0, 0
       for _, r in ipairs(rendered) do
         if r.ok then
@@ -770,17 +703,12 @@ function M.new(opts)
       persist_master_settings({ idle_threshold_pct = c.state.idle_threshold_pct })
       return true
     end
-    -- Config-Editor am Monitor (Feature, 2026-07-02): Fuel-Reserve/
-    -- Water-Target in festen Schritten anpassen, Auto-Update umschalten.
-    --
-    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md Abschnitt 10). Der neue Wert wird NICHT
-    -- mehr optimistisch in c.state.*_pct geschrieben -- der angezeigte
-    -- Wert (config_editor_model) kommt jetzt ausschliesslich aus
-    -- get_config_edit_model() und aktualisiert sich erst, wenn ALLE
-    -- angeschriebenen Ziele APPLIED gemeldet haben. Die Deltaberechnung
-    -- liest den aktuellen (bestaetigten) Wert deshalb ebenfalls von dort,
-    -- nicht mehr aus dem inzwischen ungenutzten c.state-Feld.
+    -- Config-Editor am Monitor: Fuel-Reserve/Water-Target in festen
+    -- Schritten anpassen. Der neue Wert wird NICHT optimistisch in
+    -- c.state.*_pct geschrieben -- der angezeigte Wert kommt ausschliesslich
+    -- aus get_config_edit_model() und aktualisiert sich erst, wenn ALLE
+    -- angeschriebenen Ziele APPLIED gemeldet haben; die Deltaberechnung
+    -- liest den aktuellen (bestaetigten) Wert deshalb ebenfalls von dort.
     if action.type == "fuel_reserve_adjust" and action.delta and c.calc.set_fuel_reserve then
       local cur = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("fuel_reserve", 2000).confirmed_value) or 2000
       local new_val = math.max(0, cur + action.delta)
@@ -790,10 +718,8 @@ function M.new(opts)
       end
       return true
     end
-    -- Feature (2026-07-06): Zielwert fuer individuelle Pro-Reaktor-
-    -- Regelung. UI arbeitet in Prozent (0-100, Schritte typischerweise
-    -- 5%), das RT-Command SET_REACTOR_FILL_TARGET erwartet aber 0.0-1.0 —
-    -- Umrechnung hier vor dem Senden.
+    -- UI arbeitet in Prozent (0-100), SET_REACTOR_FILL_TARGET erwartet aber
+    -- 0.0-1.0 -- Umrechnung hier vor dem Senden.
     if action.type == "reactor_fill_target_adjust" and action.delta and c.calc.set_reactor_fill_target then
       local cur_ratio = tonumber(c.calc.get_config_edit_model and c.calc.get_config_edit_model("reactor_fill_target", 0.5).confirmed_value) or 0.5
       local cur_pct = cur_ratio * 100
@@ -810,9 +736,8 @@ function M.new(opts)
       end
       return true
     end
-    -- Fix (2026-07-17): MASTER-P1. Zielauswahl (ALLE -> konkrete Node-ID
-    -- -> ... -> ALLE) je Config-Editor-Einstellung, per Touch auf das
-    -- Zielfeld (siehe ui/config_editor.lua).
+    -- Zielauswahl (ALLE -> konkrete Node-ID -> ... -> ALLE) je Config-
+    -- Editor-Einstellung, per Touch auf das Zielfeld.
     if action.type == "config_edit_target_cycle" and action.key and c.calc.cycle_config_edit_target then
       c.calc.cycle_config_edit_target(action.key)
       return true
@@ -833,13 +758,9 @@ function M.new(opts)
       c.state.history_window_key = order[cur] or "1h"
       return true
     end
-    -- Fix (2026-07-01): alarms.lua.handle_input gab frueher direkt via
-    -- model.on_ack(id) einen Callback aus — das funktionierte nur, wenn die
-    -- (falsche) handle_input-Signatur (event, model) je aufgerufen worden
-    -- waere, was aufgrund des Signatur-Mismatches mit multiview.lua's
-    -- Aufrufmuster (mon, x, y) nie der Fall war. Jetzt: handle_input gibt ein
-    -- normales Action-Table zurueck, hier zentral behandelt wie alle anderen
-    -- Actions.
+    -- alarms.lua.handle_input gibt ein normales Action-Table zurueck (statt
+    -- eines direkten model.on_ack(id)-Callbacks), hier zentral behandelt wie
+    -- alle anderen Actions.
     if action.type == "alarm_ack" and action.alarm_id and c.alert_service and type(c.alert_service.ack) == "function" then
       c.alert_service:ack(action.alarm_id)
       return true
@@ -856,12 +777,8 @@ function M.new(opts)
   return controller
 end
 
--- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 10). Exportiert, damit runtime_loop.
--- lua Config-Editor-Zielauswahl/bestaetigte Werte ueber denselben,
--- bereits geschuetzten Persistenzmechanismus wie PEAK/IDLE-Schwellwerte
--- und AUTO-UPDATE ablegen kann, ohne eine zweite, abweichende
--- Schreiblogik einzufuehren.
+-- Exportiert, damit runtime_loop.lua denselben Persistenzmechanismus wie
+-- PEAK/IDLE-Schwellwerte und AUTO-UPDATE nutzen kann.
 M.persist_master_settings = persist_master_settings
 
 return M
