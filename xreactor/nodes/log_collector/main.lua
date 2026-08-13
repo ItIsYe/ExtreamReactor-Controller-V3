@@ -369,6 +369,16 @@ end
 -- Testdatei anfassen; bei einem Fehlschlag wird die Disk fuer diesen Zyklus
 -- als nicht schreibbar gemeldet und beim naechsten DISK_REFRESH_S-Zyklus
 -- erneut probiert -- kein destruktiver "Reparaturversuch".
+--
+-- Eine Disk, die noch mit Logs eines aelteren Codestands (vor Rotation/
+-- Reclaim) randvoll ist, darf dadurch aber nicht dauerhaft als "nicht
+-- schreibbar" gelten -- discover_disks() nimmt eine hier fehlgeschlagene
+-- Disk gar nicht erst in stats.disks auf, wodurch sie den regulaeren
+-- Schreibpfad-Reclaim (siehe flush_bucket()/write_log_entry() oben) nie
+-- erreicht und für immer uebersprungen bliebe. reclaim_oldest() ist bereits
+-- die dafuer etablierte, sichere Funktion (aeltestes zuerst, hart begrenzt,
+-- loescht nur soweit tatsaechlich noetig) -- genauso hier verwendet, dann
+-- ein einziger Retry.
 local function probe_disk(mount)
   local root = mount .. "/xreactor_logs"
   if not ensure_dir(root) then return false end
@@ -387,6 +397,12 @@ local function probe_disk(mount)
     -- Nur die eigene, evtl. haengengebliebene Probe-Datei aufraeumen --
     -- sonst nichts anfassen.
     pcall(function() if fs.exists(probe) then fs.delete(probe) end end)
+    if reclaim_oldest(root, mount, RECLAIM_TARGET_BYTES) > 0 then
+      ok = pcall(write_probe)
+      if not ok then
+        pcall(function() if fs.exists(probe) then fs.delete(probe) end end)
+      end
+    end
   end
   return ok
 end

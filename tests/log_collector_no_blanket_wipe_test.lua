@@ -81,6 +81,10 @@ local function make_fake_fs(capacity)
   fake.open = function(p, mode)
     if mode == "w" then
       if fail_probe_write and p:match("%.probe$") then return nil end
+      -- A genuinely full disk (zero bytes free) must also fail to open for
+      -- writing, mirroring real fs.open() behavior -- independent of the
+      -- fail_probe_write manual trigger above.
+      if total_used() >= capacity then return nil end
       local buf = {}
       return {
         write = function(s) buf[#buf + 1] = s end,
@@ -170,6 +174,34 @@ do
     "the oldest file (c.log, mtime=10) must be removed first")
   assert(files["/disk1/xreactor_logs/RT/newest.log"] ~= nil,
     "the most recently modified file must survive a partial reclaim")
+end
+
+-- ---------------------------------------------------------------------
+-- 3) probe_disk(): a disk genuinely full of logs from an older code state
+--    (before rotation/reclaim existed) must self-recover via
+--    reclaim_oldest() instead of being permanently skipped as "not
+--    writable" -- discover_disks() never adds a probe-failed disk to
+--    stats.disks, so without this the regular write-path reclaim (only
+--    reachable once a disk IS in stats.disks) would never get a chance
+--    to run and the disk would stay invisible forever.
+-- ---------------------------------------------------------------------
+do
+  local fake_fs, files, put_file = make_fake_fs(80000)
+  -- Oldest-to-newest: old (mtime=10), newer (mtime=20). Together they
+  -- exactly fill the disk (zero bytes free), so even the tiny ".probe"
+  -- write has no room until something is reclaimed.
+  put_file("/disk1/xreactor_logs/RT/old.log", string.rep("o", 40000), 10)
+  put_file("/disk1/xreactor_logs/RT/newer.log", string.rep("n", 40000), 20)
+
+  local mod = load_module(fake_fs)
+  local ok = mod.probe_disk("/disk1")
+
+  assert(ok == true,
+    "probe_disk() must self-recover a genuinely full disk via reclaim_oldest() instead of staying stuck")
+  assert(files["/disk1/xreactor_logs/RT/old.log"] == nil,
+    "the oldest file must be the one reclaimed to make room")
+  assert(files["/disk1/xreactor_logs/RT/newer.log"] ~= nil,
+    "reclaim must stop once enough space is free, not remove every file")
 end
 
 print("log_collector_no_blanket_wipe_test.lua: ok")
