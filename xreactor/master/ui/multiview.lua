@@ -38,25 +38,41 @@ end
 -- irgendeinem Grund haengenbleibt.
 local render_state = setmetatable({}, { __mode = "k" })
 
-local function serialize_model(model)
-  if utils and utils.safe_serialize then
-    return utils.safe_serialize(model) or tostring(model)
+-- Structural equality instead of serialize()+string-compare -- same fix as
+-- core/ui_router.lua's render-decision: walks both tables in parallel and
+-- bails out at the first difference, no string formatting/escaping ever.
+local function deep_equal(a, b)
+  if a == b then return true end
+  if type(a) ~= "table" or type(b) ~= "table" then return false end
+  for k, v in pairs(a) do
+    if not deep_equal(v, b[k]) then return false end
   end
-  local ok, serialized = pcall(textutils.serialize, model)
-  return ok and serialized or tostring(model)
+  for k in pairs(b) do
+    if a[k] == nil then return false end
+  end
+  return true
 end
 
+-- Anders als core/ui_router.lua's Models (dort immer frisch pro Tick
+-- gebaut) haengen manche Felder hier an persistenten, in-place mutierten
+-- Objekten (z.B. rt.queue = c.sequencer.queue, per table.insert/remove
+-- veraendert). Ein reiner Referenzvergleich wuerde eine echte Aenderung
+-- verpassen, sobald die Quelle zwischen zwei Ticks weitermutiert -- daher
+-- hier eine echte Kopie zum Vergleichszeitpunkt, dieselbe Unveraendlichkeits-
+-- Garantie wie die vorherige String-Serialisierung, nur ohne deren Format-/
+-- Escaping-Overhead.
+--
 -- Pro-Render-Durchlauf-Cache (am Anfang jedes M:render()-Aufrufs geleert):
 -- data_map[view_key] ist fuer alle Sessions derselben View dieselbe
--- Objektreferenz -- serialisiert sie deshalb nur einmal pro Durchlauf statt
--- pro Session unabhaengig.
+-- Objektreferenz -- kopiert sie deshalb nur einmal pro Durchlauf statt pro
+-- Session unabhaengig.
 local view_snapshot_cache = {}
-local function serialize_model_cached(view_key, model)
+local function snapshot_for_view_cached(view_key, model)
   local cached = view_snapshot_cache[view_key]
   if cached and cached.model_ref == model then
     return cached.snapshot
   end
-  local snapshot = serialize_model(model)
+  local snapshot = utils.deep_copy(model)
   view_snapshot_cache[view_key] = { model_ref = model, snapshot = snapshot }
   return snapshot
 end
@@ -88,8 +104,8 @@ local function should_render_view(session, view_key, view, model)
     return false, state, now
   end
 
-  local snapshot = serialize_model_cached(view_key, model)
-  local changed = snapshot ~= state.last_snapshot
+  local snapshot = snapshot_for_view_cached(view_key, model)
+  local changed = not deep_equal(snapshot, state.last_snapshot)
   state.last_snapshot = snapshot
   state.last_draw = now
 
