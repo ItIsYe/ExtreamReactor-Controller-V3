@@ -1,24 +1,10 @@
 -- installer/init.lua
 -- Einstiegspunkt der eigentlichen Installationslogik.
 --
--- Fix (2026-07-17): CRITICAL. INSTALL-P1 aus docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md (Abschnitt 8, "Zwei unabhaengige Installer-
--- implementierungen"). Vorher lud diese Datei ihre Abhaengigkeiten selbst
--- per dofile() von festen /xreactor/installer/*.lua-Pfaden -- eine
--- Annahme, die nur zutrifft, wenn /xreactor bereits existiert. Der
--- monolithische Root-Installer (/installer) musste deshalb fuer die
--- Erstinstallation eine KOMPLETTE, eigenstaendige Kopie dieser gesamten
--- Datei als eingebettetes Textliteral mitfuehren, mit allen Folgen
--- doppelter Pflege (siehe Git-Historie: mehrfache manuelle Resynchronisation
--- bei jedem Fix). Jetzt nimmt diese Datei ihre Abhaengigkeiten als
--- Parameter entgegen (dependency injection statt hartkodierter dofile()-
--- Pfade) -- ob die uebergebenen Module von der lokalen Festplatte
--- (dofile()) oder aus frisch heruntergeladenem Text (load()) stammen, ist
--- fuer die eigentliche Installationslogik hier unten unveraendert
--- irrelevant. /installer ist dadurch auf einen kleinen, stabilen Bootstrap
--- reduziert, der genau einen Ref aufloest, die kanonischen Installermodule
--- dieses Refs herunterlaedt und ausschliesslich DIESE Funktion hier
--- ausfuehrt -- keine zweite, separat gepflegte Installationslogik mehr.
+-- Dependencies kommen per Parameter (dependency injection), nicht per
+-- hartkodiertem dofile() -- egal ob sie von der lokalen Platte oder frisch
+-- heruntergeladen (load()) stammen. /installer bleibt dadurch ein kleiner
+-- Bootstrap, der nur einen Ref aufloest und diese Funktion hier ausfuehrt.
 return function(deps)
 
 local http_mod     = deps.http_mod
@@ -31,25 +17,11 @@ local reactor_naming_mod = deps.reactor_naming_mod
 
 local INSTALL_ROOT    = "/xreactor"
 local STARTUP_PATH    = "/startup.lua"
--- Fix (2026-07-10): CRITICAL. installer/stage.lua's atomarer Schreib-
--- vorgang (M.write()) hat zwar das lange Zeitfenster von frueher beseitigt
--- (siehe dortiger Fix-Kommentar vom 2026-07-07), aber es bleibt ein extrem
--- kurzes Restfenster zwischen "alte Datei -> Backup verschieben" und
--- "neue Datei -> Zielpfad verschieben" (zwei getrennte fs.move()-Aufrufe;
--- CC:Tweaked's fs.move() kann eine bereits existierende Zieldatei nicht
--- direkt ueberschreiben, ein echter Single-Step-Atomic-Replace ist damit
--- nicht moeglich). Bei GENUG Update-Durchlaeufen (LOG_COLLECTOR hat die
--- meisten Dateien zu aktualisieren, daher haeufiger betroffen) wird dieses
--- seltene Fenster irgendwann getroffen -- ein Absturz/Neustart/Chunk-
--- Unload GENAU in diesem Moment liess start.lua fehlen, CraftOS zeigte
--- "No such program" beim Boot, ohne jede Moeglichkeit zur Selbstheilung,
--- da /startup.lua bisher blind "shell.run(...)" aufrief. Jetzt prueft
--- /startup.lua selbst zuerst, ob die Zieldatei existiert -- falls nicht,
--- wird automatisch das ".xr_prev"-Backup (vom letzten erfolgreichen
--- Schreibvorgang) zurueckgeholt, BEVOR CraftOS ueberhaupt die Chance hat
--- "No such program" zu zeigen. Nur wenn WEDER Ziel NOCH Backup existieren
--- (z.B. beim allerersten Boot vor der Erstinstallation), erscheint eine
--- klare, hilfreiche Fehlermeldung statt der kryptischen CraftOS-Meldung.
+-- fs.move() can't overwrite an existing target in one step, leaving a brief
+-- window between "old file -> backup" and "new file -> target" during a
+-- write -- a crash exactly there could leave start.lua missing. This
+-- startup.lua checks for that and restores the .xr_prev backup itself
+-- before CraftOS ever shows "No such program".
 local STARTUP_CONTENT = [===[-- XReactor startup
 local target = "/xreactor/start.lua"
 if not fs.exists(target) then
@@ -71,30 +43,15 @@ local GITHUB_RAW      = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor
 
 local function p(msg) pcall(print, tostring(msg)) end
 
--- Fix (2026-07-14): CRITICAL. GLOBAL-P0 aus
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md. Vorher wurde nur
--- eine kleine feste Dateiliste (PRESERVE) vor dem Loeschen von /xreactor
--- gesichert. Rollenbezogene Configs (master.lua, rt.lua, energy.lua,
--- water.lua, fuel.lua, reprocessor.lua, valve.lua), Routingdateien
--- (fuel_routes.lua, reproc_routes.lua) und vor allem die Remote-Update-
--- Arming-Config (Token, deaktivierter Zustand, Intervall) stehen in
--- KEINEM Manifest -- sie werden ausschliesslich zur Laufzeit von den
--- jeweiligen Nodes angelegt. Ein Update/Reinstall loeschte sie bisher
--- ersatzlos; remote_update.lua wurde danach sogar automatisch mit
--- unsicheren Defaults (kein Token) neu angelegt. Jetzt wird der GESAMTE
--- Ordner /xreactor/config rekursiv gesichert (nicht nur eine Allowlist),
--- als eine kompakte Datei AUSSERHALB von /xreactor geschrieben, sofort
--- zurueckgelesen und byte-genau verifiziert -- ERST DANACH darf
--- /xreactor geloescht werden. Kein vollstaendiges Installationsbackup
--- (Speicherlimit von CC:Tweaked bleibt beachtet), nur der kleine
--- config-Ordner.
+-- The full /xreactor/config folder is backed up recursively (not an
+-- allowlist -- role configs, routing files and the remote-update arming
+-- config all live only here, in no manifest) to a compact file OUTSIDE
+-- /xreactor, read back and byte-verified, BEFORE /xreactor may be deleted.
 local CONFIG_DIR               = INSTALL_ROOT .. "/config"
 local RECOVERY_DIR             = "/xreactor_recovery"
 local RECOVERY_CONFIG_BACKUP   = RECOVERY_DIR .. "/config_backup.lua"
--- Denylist statt Allowlist: nur nachweislich regenerierbare Installer-
--- Zwischendateien werden ausgeschlossen. Alles andere in config/ bleibt
--- standardmaessig erhalten, auch zukuenftige, heute noch unbekannte
--- Configdateien.
+-- Denylist, not allowlist: only known-regenerable installer temp files are
+-- excluded, so future config files are preserved automatically too.
 local CONFIG_RESTORE_DENY_SUFFIX = { ".xr_tmp", ".xr_prev" }
 
 local function config_restore_denied(rel)
@@ -198,25 +155,11 @@ if fs.exists(role_path) then
   end
 end
 if not role then
-  -- Fix (2026-07-06): CRITICAL. Bei _G.__xreactor_remote_update==true
-  -- (unbeaufsichtigter automatischer Auto-Update-Lauf, KEIN Nutzer
-  -- anwesend) durfte hier NIEMALS auf eine interaktive Rollenauswahl
-  -- (read()) gewartet werden — falls config/role.lua aus irgendeinem
-  -- Grund fehlte, leer war, oder nicht geparst werden konnte, blieb der
-  -- gesamte Auto-Update-Prozess fuer immer haengen (kein Timeout, keine
-  -- Nutzereingabe kommt je), was sich als "haengt regelmaessig" aeusserte.
-  -- Jetzt: bei automatischem Lauf ohne gueltige Rolle sofort mit Fehler
-  -- abbrechen, statt endlos zu warten — der aufrufende auto_update.lua-
-  -- Loop faengt das als fehlgeschlagenen Versuch ab und pausiert/versucht
-  -- es spaeter erneut, anstatt den ganzen Computer einzufrieren.
-  --
-  -- Fix (2026-07-08): Dieser Schutz war zwischenzeitlich (seit dem
-  -- "Phase 1"-Rewrite von installer/manifest.lua, 2026-06-28) aus dieser
-  -- Quelldatei verschwunden — nur die eingebettete Kopie im monolithischen
-  -- /installer hatte ihn noch. Beim Neubau des eingebetteten init_src-
-  -- Blocks fuer den SHA-Pinning-Fix (v357) wurde dadurch versehentlich
-  -- auch diese Schutzfunktion mit ueberschrieben. Hier aus der Diff-
-  -- Historie wiederhergestellt.
+  -- Unattended auto-update runs (_G.__xreactor_remote_update) must never
+  -- wait on an interactive role prompt (read()) -- a missing/invalid
+  -- config/role.lua would otherwise hang the auto-update process forever.
+  -- Fail fast instead; the calling auto_update.lua loop treats it as a
+  -- failed attempt and retries later.
   if _G.__xreactor_remote_update then
     error("Automatisches Update abgebrochen: config/role.lua fehlt oder ist ungueltig — keine Rolle bekannt und keine interaktive Auswahl im unbeaufsichtigten Modus moeglich.", 0)
   end
@@ -304,17 +247,8 @@ do
   end
 end
 
--- Feature (2026-07-01): bestehende Auswahl optionaler Features laden (falls
--- vorhanden — z.B. bei einem Reinstall). Bei einer Erstinstallation ist das
--- leer und der Nutzer wird unten interaktiv gefragt.
---
--- Fix (2026-07-08): diese komplette optionale-Features-Auswahl (Laden,
--- interaktive Abfrage, Persistieren) war seit dem "Phase 1"-Rewrite aus
--- dieser Quelldatei verschwunden — nur der veraltete, separate Wrapper-
--- Codepfad im monolithischen /installer hatte sie noch. Ohne sie wurden
--- optionale Peripherie-Features (Ampel, Speaker-Alarm, Pocket-Query)
--- beim manuellen Installer-Lauf ungefragt IMMER mitinstalliert, sobald
--- die Rolle passte — keine Nutzerwahl mehr moeglich. Hier wiederhergestellt.
+-- Existing optional-feature selection (e.g. on a reinstall); empty on a
+-- fresh install, prompted for interactively below.
 local function load_selected_features()
   local raw = config_backup["optional_features.lua"]
   if not raw then return {} end
@@ -338,15 +272,10 @@ local selected_features = load_selected_features()
 local function collect_optional_feature_names(manifest_tbl, role_label)
   local seen, names = {}, {}
   local function matches_role(entry)
-    -- Fix (2026-07-06): CRITICAL. Diese Funktion listete bisher JEDES
-    -- optional=true Feature im gesamten Manifest auf, unabhaengig davon
-    -- ob dessen required_for die aktuell gewaehlte Rolle ueberhaupt
-    -- zulaesst — z.B. wurde "ampel installieren?" (required_for={"RT",
-    -- "ENERGY",...}, explizit OHNE "MASTER") trotzdem beim Installieren
-    -- von MASTER angezeigt, obwohl master_ampel das dafuer vorgesehene,
-    -- getrennte Feature ist. Jetzt: ein Feature erscheint nur, wenn es
-    -- entweder KEIN required_for hat (fuer jede Rolle gedacht) oder die
-    -- gewaehlte Rolle explizit in required_for auftaucht.
+    -- A feature only appears if it has no required_for (any role) or the
+    -- chosen role is explicitly listed -- otherwise e.g. "ampel" (RT/
+    -- ENERGY only) would also prompt for MASTER, which has its own
+    -- separate master_ampel feature.
     if type(entry.required_for) ~= "table" then return true end
     if not role_label then return true end
     for _, v in ipairs(entry.required_for) do
@@ -389,30 +318,20 @@ if term and term.setCursorPos and not _G.__xreactor_remote_update then
   end
 end
 
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 aus docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md (Abschnitt 3). Bricht der Lauf zwischen dem
--- Loeschen des alten Baums und dem vollstaendigen, verifizierten Ende ab,
--- gab es bisher KEINE erkennbare Spur -- der naechste Boot startete die
--- (moeglicherweise unvollstaendige) Rolle einfach normal weiter. Das
--- Installationsjournal (installer/journal.lua) lebt AUSSERHALB von
--- /xreactor und wird JETZT SCHON, vor dem ersten destruktiven Schritt,
--- mit Ziel-Ref/Manifest-ID/Rolle/erwarteter Dateiliste als PREPARED
--- geschrieben -- xreactor/start.lua prueft dieses Journal bei jedem Boot
--- und startet die Rolle NICHT, solange es nicht COMMITTED ist (siehe dort).
+-- The install journal (installer/journal.lua) lives OUTSIDE /xreactor and
+-- is written as PREPARED before the first destructive step -- start.lua
+-- checks it on every boot and refuses to start the role until COMMITTED,
+-- so an abort mid-install leaves a detectable trace instead of silently
+-- booting into a possibly-incomplete tree.
 local expected = manifest_mod.files_for_role(manifest, role.label, selected_features)
 local expected_paths = {}
 for rel in pairs(expected) do expected_paths[#expected_paths + 1] = rel end
 table.sort(expected_paths)
 
--- Fix (2026-07-17): CRITICAL. INSTALL/MANIFEST-P1 aus docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md (Abschnitt 7). Vor diesem Fix fehlten
--- vollstaendige Guards fuer die geplante Installationsmenge (erlaubte
--- Rollenwerte, erwarteter Entrypoint, doppelte/unsichere Pfade, gueltige
--- Hash-/Groessenfelder, Manifest-Selbstkonsistenz, maximale Groesse) --
--- ein strukturell fehlerhafter Plan wurde erst waehrend/nach dem Loeschen
--- des alten Baums entdeckt (oder gar nicht). plan_validator.validate()
--- lehnt die GESAMTE Installation ab, sobald irgendeine Bedingung verletzt
--- ist, NOCH VOR dem ersten destruktiven Schritt.
+-- Validate the full planned install (role, entrypoint, paths, hash/size
+-- fields, manifest self-consistency, max size) and reject the WHOLE
+-- installation before the first destructive step, rather than discovering
+-- a structurally broken plan during/after deleting the old tree.
 local ok_plan, err_plan = plan_validator_mod.validate({ role = role, manifest = manifest, files = expected })
 if not ok_plan then
   error("Installationsplan ungueltig: " .. tostring(err_plan), 0)
@@ -430,13 +349,9 @@ if not ok_journal then
   error("Installationsjournal konnte nicht angelegt werden: " .. tostring(err_journal), 0)
 end
 
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.3 aus
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 5). Die
--- Ergebnisse von fs.delete/fs.makeDir hier sowie von jedem stage_mod.write()
--- weiter unten wurden bisher verworfen -- ein Fehlschlag (z.B. kein Platz,
--- schreibgeschuetzter Datentraeger) blieb unbemerkt und die Installation
--- lief mit einer teilweise/nicht angelegten Zielstruktur bzw. ohne Rolle
--- weiter, statt sofort kontrolliert abzubrechen.
+-- fs.delete/fs.makeDir results (here and every stage_mod.write() below)
+-- must be checked -- an unnoticed failure (no space, read-only) must abort
+-- immediately, not continue with a partial/missing target tree.
 -- Alte Installation löschen
 if fs.exists(INSTALL_ROOT) then
   p("Entferne alte Installation...")
@@ -474,13 +389,10 @@ local ok_j2, err_j2 = journal_mod.write({
 })
 if not ok_j2 then error("Installationsjournal (INSTALLING) fehlgeschlagen: " .. tostring(err_j2), 0) end
 
--- Dateien installieren. release.lua wird BEWUSST ausgeschlossen und erst
--- ganz am Ende, zusammen mit dem Journal-Commit, geschrieben (siehe
--- Abschnitt 3, Fix-Punkt 5: "release.lua und Completion-Marker zuletzt
--- atomar committen") -- sonst koennte ein Absturz waehrend dieser Schleife
--- release.lua bereits auf dem neuen Stand hinterlassen, obwohl andere
--- Dateien noch fehlen, und ein reines Versions-/Manifest-Diffing wuerde
--- die Installation faelschlich als aktuell/abgeschlossen ansehen.
+-- release.lua is deliberately excluded here and written last, together
+-- with the journal commit -- otherwise a crash mid-loop could leave
+-- release.lua on the new version while other files are still missing,
+-- making a version-only diff wrongly look complete.
 local file_list = {}
 for rel, entry in pairs(expected) do
   if rel ~= "release.lua" then table.insert(file_list, { path = rel, entry = entry }) end
@@ -493,28 +405,17 @@ table.sort(file_list, function(a, b)
 end)
 
 p("Installiere " .. #file_list .. " Dateien...")
--- Fix (2026-07-16): CRITICAL. INSTALL-P0 aus
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 15).
--- stage_mod.verify() prüfte bisher nur Existenz/Lesbarkeit/Größe/Syntax,
--- nicht den CRC32-Hash aus dem Manifest -- eine Datei mit korrekter Größe
--- und gültiger Lua-Syntax, aber verändertem Inhalt, konnte akzeptiert
--- werden. manifest_mod.crc32 ist die gemeinsame Pruefsummenfunktion.
--- wird jetzt durchgereicht, damit stage_mod.verify() jeden Write
--- tatsächlich gegen den erwarteten Hash prüft.
+-- manifest_mod.crc32 is passed through so stage_mod.verify() checks each
+-- write against the manifest's hash, not just existence/size/syntax.
 local ok, err = stage_mod.install(file_list, INSTALL_ROOT, http_mod, ref,
   function(done, total, rel) ui_mod.progress(done, total, rel) end,
   manifest_mod.crc32)
 if not ok then error("Installation: " .. tostring(err), 0) end
 
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 (Abschnitt 3, Fix-Punkt 4):
--- "Entrypoint und Rollenabhaengigkeiten pruefen" -- stage_mod.install() hat
--- zwar jede Datei einzeln gegen Groesse/CRC32 verifiziert, aber diese
--- zusaetzliche Existenzpruefung ueber die GESAMTE erwartete Dateiliste
--- (die den Rollen-Entrypoint, z.B. nodes/fuel/main.lua, immer enthaelt, da
--- sie direkt aus manifest_mod.files_for_role() stammt) faengt zusaetzlich
--- den Fall ab, dass eine Datei aus file_list aus einem anderen Grund
--- (Race, externer Eingriff) zwischen Install und hier wieder verschwunden
--- ist.
+-- Full existence check over the whole expected file list (always includes
+-- the role's entrypoint) -- catches a file that vanished between install
+-- and here for any other reason, on top of stage_mod.install()'s own
+-- per-file size/CRC32 verification.
 local ok_verify_journal, err_verify_journal = journal_mod.write({
   state = journal_mod.STATE.VERIFYING,
   ref = ref,
@@ -532,12 +433,9 @@ for _, item in ipairs(file_list) do
   end
 end
 
--- Gesamten config-Ordner wiederherstellen (ueberschreibt die bereits
--- minimal wiederhergestellten Dateien mit demselben Inhalt -- idempotent).
--- Jede Datei wird nach dem Schreiben erneut gelesen und byte-genau mit
--- dem Backup verglichen. Bleibt etwas fehlgeschlagen, wird das Recovery-
--- Backup NICHT geloescht, damit eine manuelle/spaetere Wiederherstellung
--- weiterhin moeglich ist.
+-- Restore the full config folder (idempotent over the minimal restore
+-- above), verifying each file byte-for-byte after writing. The recovery
+-- backup is kept on any failure, so manual recovery stays possible.
 do
   local restored, failed = 0, {}
   for rel, content in pairs(config_backup) do
@@ -561,10 +459,8 @@ do
   end
 end
 
--- Feature (2026-07-01): aktuelle (ggf. gerade interaktiv geaenderte) Auswahl
--- optionaler Features persistieren — ueberschreibt das reine PRESERVE-
--- Backup mit dem tatsaechlich aktuellen Stand, damit eine Aenderung bei
--- diesem Lauf auch beim naechsten Auto-Update-Reinstall erhalten bleibt.
+-- Persist the current (possibly just-changed) optional-feature selection
+-- so it survives the next auto-update reinstall.
 do
   local parts = { "return {\n" }
   for fname, enabled in pairs(selected_features) do
@@ -617,16 +513,10 @@ if not fs.exists(auto_cfg) then
   p("Auto-Update Config angelegt")
 end
 
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.1 (Abschnitt 3, Fix-Punkt 5):
--- "release.lua und Completion-Marker ZULETZT atomar committen". release.lua
--- wurde oben bewusst aus der Hauptinstallationsschleife ausgeschlossen --
--- jetzt, nachdem WIRKLICH alles andere (Dateien, Config, Rolle, Startup)
--- erfolgreich geschrieben und verifiziert ist, wird sie als einzelne,
--- letzte Datei installiert und CRC32-verifiziert. Erst danach wird das
--- Journal auf COMMITTED gesetzt und sofort geloescht -- ein Absturz VOR
--- diesem Punkt hinterlaesst garantiert kein neues release.lua (der alte
--- Stand bleibt fuer jede Versions-/Diagnoseanzeige "aktuell"), ein Absturz
--- NACH diesem Punkt bedeutet eine vollstaendige, verifizierte Installation.
+-- release.lua last, now that everything else is written and verified: a
+-- crash before this point leaves no new release.lua (old version stays
+-- "current" for any diagnostic), a crash after means a complete, verified
+-- install.
 local release_entry = expected["release.lua"]
 if release_entry then
   local ok_rel, err_rel = stage_mod.install(
