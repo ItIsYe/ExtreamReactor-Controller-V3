@@ -118,14 +118,56 @@ end
 -- unvollstaendiges Journal, das den naechsten Boot wieder in genau diesen
 -- Recoverypfad schickt, statt jemals die (unvollstaendige) Rolle zu
 -- starten.
-local function attempt_recovery_resume()
-  local body
-  local ok_http, r = pcall(http.get, "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer")
-  if ok_http and r then
-    local ok2, b = pcall(r.readAll); pcall(r.close)
-    if ok2 and type(b) == "string" and #b > 0 then body = b end
+-- Derselbe haengen-anfaellige, unbewachte pcall(http.get, url)-Musterfehler
+-- wie bereits in installer/http.lua, installer/auto_update.lua, /installer
+-- und /installer_pocket gefunden und behoben: ohne eigenes Timeout haengt
+-- ein blockierender http.get() hier den kompletten Boot fuer immer, noch
+-- bevor irgendein anderes Modul geladen ist. try_once() erneut nach
+-- demselben bewaehrten Muster: eine synchrone http.get()-Anfrage gegen ein
+-- einfaches os.sleep()-Timeout ueber parallel.waitForAny() racen.
+local RECOVERY_REQUEST_TIMEOUT_S = 15
+
+local function recovery_try_once(url)
+  if type(parallel) ~= "table" or type(parallel.waitForAny) ~= "function" then
+    local ok, r = pcall(http.get, url)
+    if not ok or not r then return nil, type(r) == "string" and r or "http.get fehlgeschlagen" end
+    local ok2, body = pcall(r.readAll); pcall(r.close)
+    if not ok2 or type(body) ~= "string" or #body == 0 then return nil, "readAll fehlgeschlagen" end
+    return body
   end
-  if not body then error("Recovery-Installer-Download fehlgeschlagen", 0) end
+
+  local body, err, done = nil, nil, false
+  local ok_race, race_err = pcall(parallel.waitForAny,
+    function()
+      local ok, r = pcall(http.get, url)
+      if ok and r then
+        local ok2, b = pcall(r.readAll); pcall(r.close)
+        if ok2 and type(b) == "string" and #b > 0 then
+          body = b
+        else
+          err = "readAll fehlgeschlagen"
+        end
+      else
+        err = type(r) == "string" and r or "http.get fehlgeschlagen"
+      end
+      done = true
+    end,
+    function() os.sleep(RECOVERY_REQUEST_TIMEOUT_S) end)
+
+  if not ok_race then return nil, "Anfrage fehlgeschlagen: " .. tostring(race_err) end
+  if not done then return nil, "timeout" end
+  return body, err
+end
+
+local function attempt_recovery_resume()
+  local body, last_err
+  for attempt = 1, 4 do
+    local b, err = recovery_try_once("https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer")
+    if b then body = b; break end
+    last_err = err
+    if attempt < 4 then os.sleep(attempt * 2) end
+  end
+  if not body then error("Recovery-Installer-Download fehlgeschlagen: " .. tostring(last_err), 0) end
   local tmp = "/xreactor_recovery_installer.tmp"
   local f = fs.open(tmp, "w")
   if not f then error("Kann Recovery-Installer nicht schreiben: " .. tmp, 0) end
