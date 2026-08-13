@@ -3,10 +3,6 @@ local widgets = require("master.ui.widgets")
 local layout = require("master.ui.layout")
 local sessions_lib = require("master.monitor_sessions")
 local utils = require("core.utils")
--- Fix (2026-07-07): siehe unten bei den ui.text()-Aufrufen — dieses Modul
--- nutzte bisher rohe 24-Bit-RGB-Hex-Werte statt echter colors.xxx
--- Bitmask-Konstanten (derselbe Bug wie der urspruengliche Ampel-Farbfehler,
--- v327 — nur hier nie mitgefixt, da in einer anderen Datei).
 local colors_palette = require("shared.colors")
 
 local M = {}
@@ -26,34 +22,20 @@ local function should_hard_clear(session)
   return session.rebind_pending == true or session.dirty_reason == "rebind"
 end
 
--- Fix (2026-07-02, Teil 2): Touch-ausgeloeste Zustandswechsel (z.B.
--- cycle_aux_view() nach Antippen eines AUX-Monitors, oder ein
--- maintenance_toggle/rt_hold/profile-Wechsel) setzen session.dirty = true.
--- Diese muessen IMMER sofort ein Redraw erzwingen, auch wenn das Model
--- zufaellig textuell identisch serialisiert wie beim letzten Mal (z.B.
--- Wechsel zurueck auf eine View, deren Daten sich seit dem letzten Besuch
--- nicht veraendert haben) — sonst wuerde ein Touch-Wechsel unsichtbar
--- bleiben, bis irgendein anderer Wert sich zufaellig aendert.
+-- Touch-ausgeloeste Zustandswechsel setzen session.dirty = true und muessen
+-- immer sofort ein Redraw erzwingen, auch wenn das Model textuell identisch
+-- zum letzten Mal serialisiert -- sonst bliebe ein Touch-Wechsel unsichtbar.
 local function should_force_redraw(session)
   return should_hard_clear(session) or session.dirty == true
 end
 
--- Fix (2026-07-02): view.render() wurde bisher bei JEDEM M:render()-Aufruf
--- unconditional ausgefuehrt — das deklarierte view.interval-Feld (aus
--- init_runtime.lua, z.B. 0.5/1.0/2.0s) wurde nirgends ausgewertet. In der
--- Praxis bedeutete das: sobald sich IRGENDWO im System eine einzelne Zahl
--- aenderte (z.B. RT-Leistung, die sich fast jeden Tick minimal aendert),
--- wurde mux.clear() + kompletter Re-Draw fuer ALLE 10 Views auf ALLEN
--- Monitoren ausgefuehrt, nicht nur fuer die tatsaechlich betroffene Seite.
--- Jetzt: pro (Monitor, View)-Kombination wird das jeweilige Model
--- serialisiert und mit dem letzten bekannten Stand verglichen. Nur bei
--- echter Aenderung, bei Touch-Interaktion, oder wenn view.interval
--- abgelaufen ist, wird tatsaechlich neu gezeichnet. Ein zusaetzliches
--- Force-Intervall (4x view.interval, min. 5s) erzwingt trotzdem ein
--- periodisches Redraw, damit die Anzeige nie "einfriert" falls der
--- Snapshot-Vergleich aus irgendeinem Grund (z.B. Zeitstempel-Feld, das
--- sich technisch aendert aber visuell nichts Neues zeigt) staendig
--- "geaendert" meldet, oder umgekehrt niemals als geaendert erkannt wird.
+-- Pro (Monitor, View)-Kombination wird das Model serialisiert und mit dem
+-- letzten bekannten Stand verglichen -- nur bei echter Aenderung, Touch-
+-- Interaktion oder abgelaufenem view.interval wird tatsaechlich neu
+-- gezeichnet, statt bei jedem M:render()-Aufruf alle Views auf allen
+-- Monitoren neu zu zeichnen. Ein Force-Intervall (4x view.interval, min. 5s)
+-- erzwingt trotzdem periodisches Redraw, falls der Snapshot-Vergleich aus
+-- irgendeinem Grund haengenbleibt.
 local render_state = setmetatable({}, { __mode = "k" })
 
 local function serialize_model(model)
@@ -64,16 +46,10 @@ local function serialize_model(model)
   return ok and serialized or tostring(model)
 end
 
--- Feature (2026-07-13): MASTER-P2 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). "Bei mehreren Monitoren derselben View
--- entstehen unnoetige wiederholte Serialisierungen" -- data_map[view_key]
--- ist fuer ALLE Sessions, die dieselbe View zeigen, DIESELBE Objekt-
--- referenz (siehe M:render() weiter unten: "local model = data_map[
--- view_key]"), wurde aber trotzdem pro Session unabhaengig serialisiert.
--- Pro-Render-Durchlauf-Cache (view_snapshot_cache, am Anfang jedes M:
--- render()-Aufrufs geleert): serialisiert eine gegebene Objektreferenz
--- innerhalb eines Durchlaufs nur EINMAL, alle Sessions mit derselben View
--- teilen sich das Ergebnis.
+-- Pro-Render-Durchlauf-Cache (am Anfang jedes M:render()-Aufrufs geleert):
+-- data_map[view_key] ist fuer alle Sessions derselben View dieselbe
+-- Objektreferenz -- serialisiert sie deshalb nur einmal pro Durchlauf statt
+-- pro Session unabhaengig.
 local view_snapshot_cache = {}
 local function serialize_model_cached(view_key, model)
   local cached = view_snapshot_cache[view_key]
@@ -100,15 +76,9 @@ local function should_render_view(session, view_key, view, model)
   local due = (now - state.last_draw) >= interval_ms
   local force_due = (now - state.last_force) >= force_interval_ms
 
-  -- Fix (2026-07-06): CRITICAL. state.last_draw/state.last_force wurden
-  -- bisher NIE aktualisiert (blieben dauerhaft bei ihrem Initialwert 0).
-  -- Praktische Folge: "due" war ab dem allerersten Tick fuer immer true
-  -- (now - 0 ist quasi immer >= interval_ms), das Intervall-Gating griff
-  -- also nie. Das haette eigentlich zu HAEUFIGEREM statt selteneren
-  -- Rendering fuehren muessen — der eigentliche, dazu passende Bug liegt
-  -- an anderer Stelle (separat behoben), aber dieser fehlende State-
-  -- Update ist trotzdem ein echter Bug im Rate-Limiting selbst und wird
-  -- hier korrigiert, damit view.interval tatsaechlich wirksam ist.
+  -- state.last_draw/last_force muessen bei jedem tatsaechlichen Redraw
+  -- aktualisiert werden, sonst bleibt "due" ab dem ersten Tick dauerhaft
+  -- true und das Intervall-Gating greift nie.
   if should_force_redraw(session) then
     state.last_draw = now
     state.last_force = now
@@ -159,23 +129,12 @@ function M.new(opts)
   return setmetatable(self, { __index = M })
 end
 
--- Feature (2026-07-08): AUX-Monitore zeigen abwechselnd verschiedene Views
--- (overview/rt/energy/...) im Zyklus, aber jeder View-Renderer berechnet
--- sein eigenes Layout unabhaengig ueber mon.getSize() — manche (z.B.
--- rt_dashboard.lua, dessen "SEQUENCER/QUEUE"-Sektion bis nah an die letzte
--- Zeile reicht) ueberlappen dadurch optisch mit dem "< ZURUECK"/"WEITER >"
--- Footer, den multiview.lua danach an der WIRKLICH letzten Zeile zeichnet.
--- Technisch funktionierten die Buttons bereits (Touch/Hitbox/Zyklus alle
--- korrekt), nur visuell kollidierten sie mit dichtem View-Inhalt.
---
--- Statt jeden View-Renderer einzeln anzupassen (fehleranfaellig, muesste
--- bei jedem neuen View wiederholt werden): ein duenner Proxy um mon, der
--- NUR getSize() faelscht (eine Zeile weniger) — der View-Renderer berechnet
--- sein komplettes Layout dadurch automatisch eine Zeile kuerzer und ruehrt
--- die echte letzte Zeile nie an. Alle anderen Methoden (write, setCursorPos,
--- setTextColor, clear, ...) werden unveraendert an den echten mon
--- durchgereicht. multiview.lua selbst nutzt weiterhin den echten mon fuer
--- Badge/Footer, die die volle Hoehe brauchen.
+-- Duenner Proxy um mon, der NUR getSize() faelscht (eine Zeile weniger) --
+-- der View-Renderer berechnet sein Layout dadurch automatisch kuerzer und
+-- ruehrt die echte letzte Zeile nie an, wo multiview.lua den "< ZURUECK"/
+-- "WEITER >"-Footer zeichnet. Alle anderen Methoden werden unveraendert an
+-- den echten mon durchgereicht. Guenstiger als jeden View-Renderer einzeln
+-- anzupassen.
 local function height_clamped_mon(mon, extra_rows)
   return setmetatable({}, { __index = function(_, k)
     if k == "getSize" then
@@ -191,9 +150,7 @@ end
 
 function M:render(monitors, data_map)
   data_map = data_map or {}
-  -- Fix (2026-07-13): MASTER-P2. Cache gilt nur INNERHALB eines einzelnen
-  -- render()-Durchlaufs -- am Anfang jedes Aufrufs geleert, damit er nicht
-  -- unbegrenzt waechst und immer den aktuellen model_ref korrekt widerspiegelt.
+  -- Cache gilt nur innerhalb eines einzelnen render()-Durchlaufs.
   view_snapshot_cache = {}
   self.sessions:bind_or_update(monitors or {}, nil, self.view_order)
   local rendered = {}
@@ -227,10 +184,8 @@ function M:render(monitors, data_map)
         if should_hard_clear(session) then ui.clear(session.mon) end
         local render_mon = session.mon
         if not self.sessions:is_primary(session) then
-          -- Feature (2026-07-08): 2 statt 1 reservierte Zeile — eine
-          -- fuer den Footer selbst, eine als sichtbare Luecke davor, damit
-          -- dichter View-Inhalt (z.B. rt_dashboard.lua's Queue-Sektion)
-          -- nicht direkt an den Buttons klebt.
+          -- 2 statt 1 reservierte Zeile: eine fuer den Footer, eine als
+          -- sichtbare Luecke davor.
           render_mon = height_clamped_mon(session.mon, 2)
         end
         view.render(render_mon, model)
@@ -253,13 +208,10 @@ function M:render(monitors, data_map)
 
     local badge_view = self.sessions:resolve_view_key(session)
     -- Badge-Status (oben links) muss den echten globalen Alarmstatus zeigen,
-    -- unabhängig davon welche View gerade auf diesem Monitor sichtbar ist —
-    -- vorher war der Status hier fest auf "OK"/"LIMITED" hartcodiert, sodass
-    -- der Monitor auch bei aktiven CRITICAL/WARN-Alarmen dauerhaft grün/gelb
-    -- blieb statt den Zustand widerzuspiegeln. Quelle: overview.alert_counts
-    -- (von ui_controller.build_models() aus alert_service:get_counts()),
-    -- das einzige Model das die globalen Zählwerte mitführt — ein eigenes
-    -- "alerts"-Model existiert in data_map nicht.
+    -- unabhaengig davon welche View gerade sichtbar ist. Quelle:
+    -- overview.alert_counts (von ui_controller.build_models() aus
+    -- alert_service:get_counts()) -- ein eigenes "alerts"-Model existiert in
+    -- data_map nicht.
     local overview_data = data_map.overview or {}
     local counts = overview_data.alert_counts or {}
     local crit_count = tonumber(counts.CRITICAL) or 0
@@ -272,10 +224,8 @@ function M:render(monitors, data_map)
     else
       badge_status = "OK"
     end
-    -- UI-Redesign Schritt 1 (2026-07-01): layout.badge_row() statt direktem
-    -- ui.badge() — garantiert, dass die Badge-Leiste NIE über die
-    -- Monitorbreite hinauslaeuft. Vorher fest verdrahteter Einzel-Badge, der
-    -- bei sehr schmalen Monitoren abgeschnitten werden konnte ohne Fallback.
+    -- layout.badge_row() garantiert, dass die Badge-Leiste nie ueber die
+    -- Monitorbreite hinauslaeuft.
     local wm, _ = ui.getSize(session.mon)
     wm = wm or 26
     if self.sessions:is_primary(session) then
@@ -289,11 +239,8 @@ function M:render(monitors, data_map)
       })
     end
 
-    -- Bei aktiven CRITICAL/WARN-Alarmen die dringendste Meldung als Text
-    -- unter dem Badge anzeigen, damit man sie sieht ohne erst manuell auf
-    -- die "alerts"-View umschalten zu müssen (Touch-Zyklus). Quelle ist
-    -- overview.alert_rows (bis zu 4 Einträge, sortiert nach Dringlichkeit
-    -- in ui_controller.build_models() über alert_service:get_top_critical()).
+    -- Bei aktiven Alarmen die dringendste Meldung als Text unter dem Badge
+    -- anzeigen, ohne erst manuell auf die "alerts"-View umschalten zu muessen.
     if badge_status ~= "OK" then
       local rows = overview_data.alert_rows or {}
       local top_row = rows[1]
@@ -306,13 +253,8 @@ function M:render(monitors, data_map)
         ui.text(session.mon, 2, 2, alert_text, colors_palette.get("text"), colors_palette.get("background"))
       end
     end
-    -- Feature (2026-07-06): sichtbare [<]/[>]-Navigations-Buttons am
-    -- unteren Bildschirmrand fuer AUX-Monitore. Vorher gab es UEBERHAUPT
-    -- KEINE sichtbaren Buttons — jeder Touch irgendwo auf dem Bildschirm
-    -- loeste einen Vorwaerts-Zyklus aus, ohne jegliche visuelle
-    -- Kennzeichnung dass das ueberhaupt moeglich ist. Jetzt: expliziter
-    -- Footer mit "< ZURUECK" links / "WEITER >" rechts, beide mit
-    -- funktionierenden Touch-Zonen, gespeichert in self.aux_nav_hitboxes.
+    -- Expliziter Footer mit "< ZURUECK" links / "WEITER >" rechts fuer
+    -- AUX-Monitore, Touch-Zonen gespeichert in self.aux_nav_hitboxes.
     if not self.sessions:is_primary(session) then
       local wm2, footer_h = ui.getSize(session.mon)
       wm2 = wm2 or 26
@@ -359,11 +301,9 @@ function M:handle_input(monitor_name, x, y)
 
   -- AUX-Monitor (nicht locked) → Touch auf [<]/[>]-Buttons wechselt View
   if not session.locked then
-    -- Fix (2026-07-06): vorher loeste JEDER Touch irgendwo auf dem
-    -- Bildschirm einen Vorwaerts-Zyklus aus, ohne dass sichtbare Buttons
-    -- existierten. Jetzt: nur Touch auf die tatsaechlich sichtbaren
-    -- [<]/[>]-Buttons (Koordinaten aus self.aux_nav_hitboxes, gesetzt beim
-    -- letzten Render) loest einen Wechsel aus, mit korrekter Richtung.
+    -- Nur Touch auf die sichtbaren [<]/[>]-Buttons (Koordinaten aus
+    -- self.aux_nav_hitboxes, gesetzt beim letzten Render) loest einen
+    -- Wechsel aus, nicht jeder Touch auf dem Bildschirm.
     local hitboxes = self.aux_nav_hitboxes and self.aux_nav_hitboxes[session.name]
     local direction = nil
     if hitboxes then
@@ -373,10 +313,8 @@ function M:handle_input(monitor_name, x, y)
         direction = 1
       end
     end
-    -- Fix (2026-07-07): Diagnose-Logging ueber das echte Log-System (nicht
-    -- nur print()), damit ein Touch-Fehlschlag im naechsten Log-Export
-    -- sichtbar ist — zeigt Touch-Koordinaten, gespeicherte Hitbox-Koordinaten
-    -- (falls vorhanden) und ob/warum kein Treffer erkannt wurde.
+    -- Diagnose-Logging ueber das echte Log-System, damit ein Touch-
+    -- Fehlschlag im naechsten Log-Export sichtbar ist.
     if utils and utils.log then
       local hb_desc = "none"
       if hitboxes then
