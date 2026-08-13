@@ -54,24 +54,10 @@ end
 
 -- Schaltet einen AUX-Monitor auf die nächste View im Zyklus.
 -- Gibt den neuen view_key zurück.
--- Fix (2026-07-02): diese Funktion hatte zwei Bugs gleichzeitig.
--- 1. Signatur war function M.cycle_aux_view(session) — beim Aufruf
---    self.sessions:cycle_aux_view(session) (Methodensyntax) bekam der
---    EINZIGE Parameter tatsaechlich `self` (das Sessions-Objekt), das
---    eigentliche `session`-Argument wurde stillschweigend verworfen.
---    Der Code funktionierte nur zufaellig, weil session.view_key/.locked
---    auf dem falschen Objekt (self) meist nil/falsy waren und so ein
---    Verhalten erzeugten, das oberflaechlich wie ein Zyklus aussah.
--- 2. Die View-Liste war eine hartcodierte Modul-Konstante (AUX_VIEWS),
---    unabhaengig von der view_order, die master/init_runtime.lua beim
---    Boot tatsaechlich uebergibt — neue Views (maintenance/updates/
---    system_map/config_editor) tauchten im AUX-Zyklus nie auf, egal wie
---    view_order konfiguriert war.
--- Feature (2026-07-06): direction-Parameter ergaenzt (1 = vorwaerts,
--- -1 = rueckwaerts), damit sichtbare [<]/[>]-Buttons am AUX-Monitor beide
--- Richtungen unterstuetzen koennen statt nur "immer weiter" bei jedem
--- beliebigen Touch irgendwo auf dem Bildschirm (das bisherige Verhalten,
--- ohne sichtbare Buttons dafuer).
+-- Nutzt self.view_order (von master/init_runtime.lua beim Boot uebergeben),
+-- nicht eine hartcodierte Modul-Konstante, damit neue Views im AUX-Zyklus
+-- erscheinen. direction (1 = vorwaerts, -1 = rueckwaerts) unterstuetzt
+-- sichtbare [<]/[>]-Buttons am AUX-Monitor.
 function M:cycle_aux_view(session, direction)
   if not session or session.locked then return end
   local views = self.view_order or AUX_VIEWS_FALLBACK
@@ -112,8 +98,8 @@ function M:bind_primary_role(session, index)
   if not session then return end
   session.role = resolve_role(index)
   session.locked = resolve_locked(index)
-  -- Fix: dieselbe Korrektur wie in resolve_binding() — "aux" ist kein
-  -- gültiger view_key, muss über default_view() aufgelöst werden.
+  -- Dieselbe Korrektur wie in resolve_binding(): "aux" ist kein gueltiger
+  -- view_key, muss ueber default_view() aufgeloest werden.
   if session.locked then
     session.view_key = (session.role ~= "aux") and session.role or default_view(index, self.view_order)
   end
@@ -129,28 +115,19 @@ function M:resolve_binding(index, prior)
   local prior_session = prior or {}
   local role = resolve_role(index)
   local locked = resolve_locked(index)
-  -- Fix: "locked and role" setzte den view_key für aux-Monitore fälschlich
-  -- auf den ROLLENNAMEN "aux" — eine View mit diesem Namen existiert nicht
-  -- ("view-missing-or-no-render"). Nur PRIMÄRE Rollen (overview/rt/energy)
-  -- haben einen view_key, der direkt dem Rollennamen entspricht; aux-Monitore
-  -- müssen immer über default_view() aufgelöst werden (das liefert
-  -- AUX_DEFAULT_VIEW = "alarms").
+  -- Nur PRIMAERE Rollen (overview/rt/energy) haben einen view_key, der
+  -- direkt dem Rollennamen entspricht; aux-Monitore muessen immer ueber
+  -- default_view() aufgeloest werden -- "aux" selbst ist kein gueltiger View.
   local view_key
   if locked and role ~= "aux" then
     view_key = role
   else
-    -- Fix (2026-07-08): CRITICAL. `prior` wurde entgegengenommen, aber nie
-    -- gelesen — bind_or_update() ruft resolve_binding() bei JEDEM
-    -- render()-Tick (alle ~0.5-1s) auf, wodurch der view_key eines
-    -- AUX-Monitors bei jedem einzelnen Tick auf default_view() (immer
-    -- views[1], typischerweise "overview") zurueckgesetzt wurde. Per Touch
-    -- per cycle_aux_view() umgeschaltete Views ("< ZURUECK"/"WEITER >")
-    -- wurden dadurch binnen der naechsten Render-Runde sofort wieder
-    -- verworfen — der Touch selbst funktionierte (direction wurde korrekt
-    -- erkannt, view_key kurzzeitig korrekt gesetzt), aber sichtbar blieb
-    -- davon nichts. Jetzt: ein bereits vorhandener, gueltiger
-    -- prior_session.view_key wird beibehalten; nur beim allerersten
-    -- Binden (kein prior vorhanden) wird auf default_view() zurueckgegriffen.
+    -- Ein bereits vorhandener, gueltiger prior_session.view_key wird
+    -- beibehalten; nur beim allerersten Binden (kein prior) wird auf
+    -- default_view() zurueckgegriffen -- bind_or_update() ruft
+    -- resolve_binding() bei JEDEM render()-Tick auf, das wuerde sonst eine
+    -- per Touch umgeschaltete AUX-View bei der naechsten Render-Runde
+    -- sofort wieder verwerfen.
     local prior_view = prior_session.view_key
     local prior_valid = false
     if prior_view then

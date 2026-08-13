@@ -14,17 +14,9 @@ local function run_master()
   local monitor_manager     = require("core.monitor_manager")
   local build_info          = require("shared.build_info")
   local config              = require("master.config")
-  -- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). MASTER hatte bisher UEBERHAUPT
-  -- KEINE Trennschicht zwischen Default- und Nutzerkonfiguration --
-  -- master/config.lua wurde direkt per require() geladen, ist Teil des
-  -- Manifests und wird bei jedem Auto-Update ueberschrieben. Jede
-  -- manuelle Bearbeitung (Schwellwerte, Monitorkonfiguration) ging
-  -- dadurch spaetestens beim naechsten Update-Zyklus verloren. Jetzt:
-  -- eine geschuetzte Nutzerdatei (kein Manifest-Eintrag) wird -- falls
-  -- vorhanden -- rekursiv ueber die Defaults gemergt. Einmalige
-  -- Migration eines eventuell noch vorhandenen Standes beim ersten
-  -- Boot mit diesem Fix.
+  -- Geschuetzte Nutzerdatei (kein Manifest-Eintrag, uebersteht Auto-Updates)
+  -- wird -- falls vorhanden -- rekursiv ueber die Defaults gemergt, statt
+  -- master/config.lua direkt zu require()n.
   local MASTER_USER_CONFIG_PATH = "/xreactor/config/master.lua"
   if not fs.exists(MASTER_USER_CONFIG_PATH) then
     local ok_read, handle = pcall(fs.open, "/xreactor/master/config.lua", "r")
@@ -120,12 +112,9 @@ local function run_master()
   runtime.mark_rt_sync_dirty  = mark_rt_sync_dirty
   runtime.flush_rt_sync_queue = flush_rt_sync_queue
 
-  -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md Abschnitt 10). Zielauswahl und zuletzt
-  -- bestaetigter Wert je Config-Editor-Einstellung werden in der bereits
-  -- geschuetzten Nutzerconfig (/xreactor/config/master.lua, siehe
-  -- GLOBAL-P0-Fix oben) abgelegt -- ueberlebt Neustarts und Auto-Updates,
-  -- analog zu PEAK/IDLE-Schwellwerten weiter unten.
+  -- Zielauswahl und zuletzt bestaetigter Wert je Config-Editor-Einstellung
+  -- werden in der geschuetzten Nutzerconfig abgelegt -- ueberlebt
+  -- Neustarts und Auto-Updates, analog zu PEAK/IDLE-Schwellwerten weiter unten.
   runtime.state.config_edits = {}
   for key in pairs(config_edits.SETTINGS) do
     local target = config["config_edit_target_" .. key]
@@ -188,16 +177,10 @@ local function run_master()
     get_critical_blink_until = function() return runtime.state.critical_blink_until end,
     get_rt_global_off_hold   = function() return runtime.state.rt_global_off_hold end,
     set_rt_global_off_hold   = function(v) profile_ops.set_rt_global_hold(runtime, v) end,
-    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md Abschnitt 10). Vorher sendeten diese drei
-    -- Setter IMMER an ALLE Nodes der Rolle, forderten kein
-    -- require_applied an und der Config-Editor uebernahm den neuen Wert
-    -- sofort optisch, unabhaengig vom tatsaechlichen Ergebnis. Delegiert
-    -- jetzt vollstaendig an master/config_edits.lua: ALLE oder eine
-    -- konkrete, dort ausgewaehlte Node-ID, mit Applied-ACK-Tracking je
-    -- Ziel; der angezeigte Wert (siehe get_config_edit_model unten)
-    -- uebernimmt den neuen Wert erst, wenn ALLE angeschriebenen Ziele
-    -- APPLIED gemeldet haben.
+    -- Delegiert vollstaendig an master/config_edits.lua: ALLE oder eine
+    -- konkrete, dort ausgewaehlte Node-ID, mit Applied-ACK-Tracking je Ziel;
+    -- der angezeigte Wert (get_config_edit_model unten) uebernimmt den
+    -- neuen Wert erst, wenn ALLE angeschriebenen Ziele APPLIED gemeldet haben.
     set_fuel_reserve = function(amount)
       return config_edits.send_edit(runtime.state.config_edits, "fuel_reserve", amount,
         { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
@@ -212,10 +195,9 @@ local function run_master()
       return config_edits.send_edit(runtime.state.config_edits, "reactor_fill_target", value,
         { nodes = runtime.state.nodes, comms = runtime.refs.comms, constants = constants, log = log })
     end,
-    -- Fix (2026-07-17): MASTER-P1. Zielauswahl (ALLE -> Node1 -> ... ->
-    -- ALLE) je Einstellung, per Touch im Config-Editor ausloesbar (siehe
-    -- ui/config_editor.lua). Persistiert sofort, damit die Auswahl einen
-    -- Neustart uebersteht.
+    -- Zielauswahl (ALLE -> Node1 -> ... -> ALLE) je Einstellung, per Touch
+    -- im Config-Editor ausloesbar. Persistiert sofort, damit die Auswahl
+    -- einen Neustart uebersteht.
     cycle_config_edit_target = function(key)
       local new_target = config_edits.cycle_target(runtime.state.config_edits, key, runtime.state.nodes, constants)
       persist_config_edits()
@@ -306,15 +288,10 @@ end
 function M.run()
   local ok, err = xpcall(run_master, function(e) return e end)
   if ok or is_terminate(err) then return end
-  -- Fix (2026-07-13): CRITICAL (SHARED-P0.2, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). Vorher eigenes, dupliziertes
-  -- Crash-Handling hier, das UNBEGRENZT auf einen physischen Tastendruck
-  -- wartete, bevor ueberhaupt rebootet wurde. Jetzt: dieselbe bereits
-  -- fuer FUEL/WATER/REPROCESSOR/RT/ENERGY/LOG_COLLECTOR bewaehrte Logik
-  -- (begrenzte Wartezeit, automatischer Reboot, Crash-Loop-Erkennung)
-  -- wiederverwendet. dofile() statt require(), da die Bootstrap-
-  -- konfigurierte require-Funktion nur innerhalb von run_master()
-  -- lokal verfuegbar ist, nicht hier auf M.run()-Ebene.
+  -- Gemeinsame Crash-Screen-Logik wie FUEL/WATER/REPROCESSOR/RT/ENERGY/
+  -- LOG_COLLECTOR (begrenzte Wartezeit, automatischer Reboot, Crash-Loop-
+  -- Erkennung). dofile() statt require(), da die Bootstrap-konfigurierte
+  -- require-Funktion nur innerhalb von run_master() lokal verfuegbar ist.
   local ok_mod, support_runtime = pcall(dofile, "/xreactor/nodes/support/runtime.lua")
   if ok_mod and support_runtime and support_runtime.crash_screen then
     support_runtime.crash_screen(err)
