@@ -170,17 +170,27 @@ local function add_dedupe(sender, msg_id, applied_result)
   end
 end
 
+-- prune_dedupe() runs on every comms.tick(), which fires on every network/
+-- touch/key event (wants_events=true), not just the periodic timer tick --
+-- so it must be cheap in the common case where nothing has expired yet.
+-- add_dedupe() only ever table.insert()s at the end, so each peer's
+-- entries are always in non-decreasing ts order; checking just the oldest
+-- entry lets most calls skip the rebuild (and its table allocation)
+-- entirely instead of always re-copying every entry for every peer.
 local function prune_dedupe()
   local ttl_ms = state.config.dedupe_ttl_s * 1000
   local cutoff = now_ms() - ttl_ms
   for sender, entries in pairs(state.dedupe) do
-    local trimmed = {}
-    for _, entry in ipairs(entries) do
-      if entry.ts >= cutoff then
-        table.insert(trimmed, entry)
+    local first = entries[1]
+    if first and first.ts < cutoff then
+      local trimmed = {}
+      for _, entry in ipairs(entries) do
+        if entry.ts >= cutoff then
+          table.insert(trimmed, entry)
+        end
       end
+      state.dedupe[sender] = trimmed
     end
-    state.dedupe[sender] = trimmed
   end
 end
 

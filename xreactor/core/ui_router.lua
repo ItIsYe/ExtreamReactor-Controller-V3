@@ -267,20 +267,30 @@ function router:handle_input(event)
   return false
 end
 
+-- Structural equality instead of textutils.serialize()+string-compare: a
+-- full recursive serialize (walk + Lua-literal formatting + string build)
+-- ran on every render() attempt, every UI tick, purely to answer "did
+-- anything change" -- deep_equal() answers the same question by walking
+-- the two tables in parallel and bailing out at the first difference,
+-- with no string allocation at all in the common case where something
+-- near the top of the model actually changed.
+local function deep_equal(a, b)
+  if a == b then return true end
+  if type(a) ~= "table" or type(b) ~= "table" then return false end
+  for k, v in pairs(a) do
+    if not deep_equal(v, b[k]) then return false end
+  end
+  for k in pairs(b) do
+    if a[k] == nil then return false end
+  end
+  return true
+end
+
 local function build_snapshot(page_name, model)
-  local payload
   if model and model.snapshot ~= nil then
-    payload = { page = page_name or "", snapshot = model.snapshot }
-  else
-    payload = { page = page_name or "", model = model or {} }
+    return { page = page_name or "", snapshot = model.snapshot }
   end
-  if textutils and textutils.serialize then
-    local ok, result = pcall(textutils.serialize, payload)
-    if ok then
-      return result
-    end
-  end
-  return tostring(payload)
+  return { page = page_name or "", model = model or {} }
 end
 
 local function inspect_frame(self, mon, model)
@@ -307,7 +317,7 @@ end
 function router:needs_render(mon, model)
   if not mon then return false end
   local transition, snapshot, _, _, _, navigation_missing = inspect_frame(self, mon, model)
-  return transition or navigation_missing or snapshot ~= self.last_snapshot
+  return transition or navigation_missing or not deep_equal(snapshot, self.last_snapshot)
 end
 
 function router:render_list_controls(mon, opts)
@@ -356,7 +366,7 @@ function router:render(mon, model)
   local page = self:current()
   local is_transition, snapshot, cur_w, cur_h, cur_scale,
     navigation_missing, resolved_name = inspect_frame(self, mon, model)
-  if not is_transition and not navigation_missing and snapshot == self.last_snapshot then
+  if not is_transition and not navigation_missing and deep_equal(snapshot, self.last_snapshot) then
     self.ui_diag.frames_skipped = self.ui_diag.frames_skipped + 1
     return false
   end

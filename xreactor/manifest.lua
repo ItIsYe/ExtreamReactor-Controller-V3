@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 587,
-  manifest_id = "manifest-v587",
+  manifest_version = 588,
+  manifest_id = "manifest-v588",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "b30dc065", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "1d8ab10f", always = true },
   { path = "start.lua", size_bytes = 12598, hash = "a5e5a4f2", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -23,7 +23,7 @@ return {
   { path = "adapters/monitor.lua", size_bytes = 7953, hash = "a3b79bd4", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/bootstrap.lua", size_bytes = 11202, hash = "e54f2a38", always = true },
   { path = "core/update_handshake.lua", size_bytes = 4701, hash = "94353b43", always = true },
-  { path = "core/comms.lua", size_bytes = 25700, hash = "39494221" },
+  { path = "core/comms.lua", size_bytes = 26298, hash = "5b58cee3" },
   { path = "core/health.lua", size_bytes = 1918, hash = "48d5bd7f" },
   { path = "core/logger.lua", size_bytes = 31349, hash = "7c76bc52" },
   { path = "core/monitor_manager.lua", size_bytes = 9919, hash = "3f982d0b", required_for={"MASTER"} },
@@ -39,7 +39,7 @@ return {
   { path = "core/time.lua", size_bytes = 454, hash = "52e5eb5d", required_for={"MASTER"} },
   { path = "core/trends.lua", size_bytes = 1791, hash = "d01a6948", required_for={"MASTER"} },
   { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
-  { path = "core/ui_router.lua", size_bytes = 16842, hash = "50cd5b0c", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
+  { path = "core/ui_router.lua", size_bytes = 17445, hash = "f9e51f26", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/window_buffer.lua", size_bytes = 3681, hash = "1743677d", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/utils.lua", size_bytes = 24296, hash = "f9cf839e" },
   { path = "core/remote_update.lua", size_bytes = 4347, hash = "13acf7b4" },
