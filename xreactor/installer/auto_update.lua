@@ -19,8 +19,29 @@ local UPDATE_EVENT = "xreactor_remote_update_requested"
 -- them nothing.
 local QUIESCE_TIMEOUT_S = 60
 
+-- Many roles' own UI (e.g. nodes/log_collector/main.lua) draws directly
+-- onto the physical terminal, clearing it every redraw -- a plain print()
+-- from this coroutine gets overwritten almost immediately and is
+-- effectively invisible in practice. Every log() call also overwrites a
+-- small status file with the latest message and a timestamp, independent
+-- of whatever is currently on screen -- lets anyone confirm the loop is
+-- actually ticking by checking file modification time / content, not by
+-- having to catch a print() at the exact right instant.
+local STATUS_PATH = "/xreactor/config/auto_update_status.txt"
+
+local function write_status(message)
+  pcall(function()
+    local handle = fs.open(STATUS_PATH, "w")
+    if not handle then return end
+    local stamp = (os.date and os.date("!%H:%M:%S")) or tostring(os.epoch and os.epoch("utc") or "")
+    handle.write(stamp .. " " .. tostring(message))
+    handle.close()
+  end)
+end
+
 local function log(message)
   pcall(print, "[AUTO] " .. tostring(message))
+  write_status(message)
 end
 
 local function load_handshake_lib()

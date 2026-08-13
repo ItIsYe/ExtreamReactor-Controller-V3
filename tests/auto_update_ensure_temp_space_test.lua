@@ -32,7 +32,7 @@ end
 
 local root = os.getenv("REPO_ROOT") or "."
 local source = read_file(root .. "/xreactor/installer/auto_update.lua")
-local helpers = extract(source, "local function log(message)", "local function run_update()")
+local helpers = extract(source, "local STATUS_PATH = ", "local function run_update()")
 
 local function load_helpers(fs_impl)
   _G.fs = fs_impl
