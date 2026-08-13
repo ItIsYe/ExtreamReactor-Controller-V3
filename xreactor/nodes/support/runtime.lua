@@ -72,21 +72,11 @@ local function is_terminate(err)
   return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
 end
 
--- Feature (2026-07-13): SHARED-P0.2 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). Dieser Crash-Screen wird von FUEL/WATER/
--- REPROCESSOR/ENERGY/VALVE gemeinsam genutzt (ueber M.run_event_loop()) --
--- wartete bisher UNBEGRENZT auf einen physischen Tastendruck, bevor
--- ueberhaupt rebootet wurde. Das widerspricht unbeaufsichtigtem Betrieb
--- komplett: ein Rollenprozess, der seinen eigenen Fehler abfaengt (genau
--- dieser Pfad hier, xpcall in run_event_loop), blieb OHNE physische
--- Anwesenheit fuer immer auf diesem Screen haengen -- start.lua's eigener
--- automatischer Reboot-Pfad fuer ungefangene Fehler wird NICHT erreicht,
--- weil der Fehler ja bereits HIER gefangen wurde. Derselbe Fix wie schon
--- beim LOG_COLLECTOR (2026-07-07 fuer den Basis-Timeout, 2026-07-11 fuer
--- die Crash-Loop-Erkennung): begrenzte Wartezeit + automatischer Reboot,
--- plus persistente Crash-Historie, die bei wiederholten Abstuerzen in
--- kurzer Folge die Wartezeit deutlich verlaengert statt den Server im
--- Sekundentakt mit Reboots zu belasten.
+-- Gemeinsamer Crash-Screen fuer FUEL/WATER/REPROCESSOR/ENERGY/VALVE (ueber
+-- M.run_event_loop()): begrenzte Wartezeit statt unbegrenztem Warten auf
+-- einen Tastendruck, danach automatischer Reboot. Persistente Crash-
+-- Historie verlaengert die Wartezeit bei wiederholten Abstuerzen in
+-- kurzer Folge, statt den Server im Sekundentakt mit Reboots zu belasten.
 local CRASH_HISTORY_PATH = "/xreactor_role_crash_history.txt"
 local CRASH_LOOP_WINDOW_S = 120
 local CRASH_LOOP_THRESHOLD = 3
@@ -165,22 +155,15 @@ local function crash_screen(err)
   if os.reboot then os.reboot() end
 end
 
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md (Abschnitt 4). Bisher gab es HIER (dem
--- gemeinsamen Event-Loop von RT/VALVE/FUEL/REPROCESSOR/WATER) ueberhaupt
--- keinen kontrollierten Weg, die Schleife zu verlassen -- nur ein Absturz
--- oder ein "terminate"-Event konnten sie beenden. Ein Auto-Update konnte
--- also Dateien ersetzen, WAEHREND die Rolle weiter Hardware steuerte. Der
--- optionale fuenfte Parameter "quiesce_opts" (Tabelle mit "handshake"
--- [core/update_handshake.lua-Objekt] und optional "on_quiesce"
--- [Rueckgabewert true=bestaetigt sicher, false/nil=noch nicht]) wird am
--- Ende jedes Zyklus geprueft: ist QUIESCE_REQUESTED gesetzt, wird
--- on_quiesce() aufgerufen (rollenspezifische Aktorlogik, z.B. Ventil
--- schliessen/Foerderung stoppen); bestaetigt sie einen sicheren Zustand,
--- markiert diese Funktion SAFE_OUTPUTS_APPLIED+RUNTIME_STOPPED und die
--- Schleife endet SAUBER (kein Fehler, kein Crash) -- bestaetigt sie noch
--- nichts, wird im naechsten Zyklus erneut versucht. Ohne quiesce_opts
--- (bestehende Aufrufer) aendert sich nichts am bisherigen Verhalten.
+-- Optionaler fuenfter Parameter "quiesce_opts" (Tabelle mit "handshake"
+-- [core/update_handshake.lua-Objekt] und optional "on_quiesce" [Rueckgabe
+-- true=bestaetigt sicher]) wird am Ende jedes Zyklus geprueft: ist
+-- QUIESCE_REQUESTED gesetzt, wird on_quiesce() aufgerufen (rollenspezifische
+-- Aktorlogik); bestaetigt sie einen sicheren Zustand, markiert diese
+-- Funktion SAFE_OUTPUTS_APPLIED+RUNTIME_STOPPED und die Schleife endet
+-- sauber, statt (wie vor diesem Parameter) nur durch Absturz oder
+-- "terminate"-Event beendbar zu sein. Ohne quiesce_opts unveraendertes
+-- Verhalten.
 function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce_opts)
   local handshake_lib = quiesce_opts and require("core.update_handshake") or nil
   local ok, err = xpcall(function()
@@ -237,10 +220,8 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
   crash_screen(err)
 end
 
--- Feature (2026-07-13): SHARED-P0.2. Als M.crash_screen exportiert, damit
--- ENERGY und MASTER (die ihre eigenen, separaten Crash-Handling-
--- Einstiegspunkte haben, nicht ueber M.run_event_loop() laufen) dieselbe
--- Logik wiederverwenden koennen, statt sie zu duplizieren.
+-- Exportiert, damit ENERGY und MASTER (eigene Crash-Handling-Einstiegspunkte,
+-- nicht ueber M.run_event_loop()) dieselbe Logik wiederverwenden koennen.
 M.crash_screen = crash_screen
 
 return M

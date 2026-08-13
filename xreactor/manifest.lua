@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 579,
-  manifest_id = "manifest-v579",
+  manifest_version = 580,
+  manifest_id = "manifest-v580",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -14,8 +14,8 @@ return {
   { path = "installer/init.lua", size_bytes = 22827, hash = "20dd5066", always = true },
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
-  { path = "installer/plan_validator.lua", size_bytes = 6106, hash = "7ea9244c", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "5166e1bf", always = true },
+  { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "79645433", always = true },
   { path = "start.lua", size_bytes = 12598, hash = "a5e5a4f2", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -132,7 +132,7 @@ return {
     -- MASTER-spezifische Variante. nodes/valve/main.lua nutzt weder
     -- speaker_alarm noch alert_service -- VALVE bewusst nicht enthalten.
     { path = "optional/speaker_alarm.lua", size_bytes = 5221, hash = "a0c7b007", optional=true, feature="speaker_alarm", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING","LOG","MASTER"} },
-    { path = "optional/pocket_query_handler.lua", size_bytes = 5939, hash = "abe22b63", optional=true, feature="pocket_query", required_for={"MASTER"} },
+    { path = "optional/pocket_query_handler.lua", size_bytes = 5751, hash = "4b81ecb2", optional=true, feature="pocket_query", required_for={"MASTER"} },
     -- Feature (2026-07-09): eigenstaendiges Pocket-Computer-Client-Skript.
     -- Bewusst OHNE Auto-Installation -- Pocket Computer ist kein waehlbarer
     -- Rollen-Typ im Installer, laeuft daher nie automatisch bei irgendeiner
@@ -206,7 +206,7 @@ return {
     { path = "nodes/fuel/config.lua", size_bytes = 7188, hash = "1a2722a9", required_for={"FUEL"} },
     { path = "nodes/fuel/config_normalizer.lua", size_bytes = 6065, hash = "8eaa6398", required_for={"FUEL"} },
     { path = "nodes/fuel/main.lua", size_bytes = 19847, hash = "bcd31fef", required_for={"FUEL"} },
-    { path = "nodes/fuel/status_snapshot.lua", size_bytes = 5779, hash = "7e6f2625", required_for={"FUEL"} },
+    { path = "nodes/fuel/status_snapshot.lua", size_bytes = 4662, hash = "cc71fd01", required_for={"FUEL"} },
     { path = "nodes/fuel/operational_summary.lua", size_bytes = 7915, hash = "0e2fd9d7", required_for={"FUEL"} },
     { path = "nodes/fuel/command_handler.lua", size_bytes = 2305, hash = "24c8f3c7", required_for={"FUEL"} },
     { path = "nodes/fuel/fuel_status_network.lua", size_bytes = 7887, hash = "dc4f4529", required_for={"FUEL"} },
@@ -242,7 +242,7 @@ return {
     { path = "nodes/support/command_handler.lua", size_bytes = 4496, hash = "50077b45", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY", "WATER", "FUEL", "REPROCESSING", "RT"} },
-    { path = "nodes/support/runtime.lua", size_bytes = 9568, hash = "2abf3216", required_for={"WATER", "FUEL", "REPROCESSING", "RT", "ENERGY", "MASTER", "VALVE"} },
+    { path = "nodes/support/runtime.lua", size_bytes = 8193, hash = "f348860e", required_for={"WATER", "FUEL", "REPROCESSING", "RT", "ENERGY", "MASTER", "VALVE"} },
     { path = "nodes/support/ui_pages.lua", size_bytes = 6585, hash = "2b86c102", required_for={"WATER", "FUEL", "REPROCESSING", "ENERGY", "RT"} },
     },
   },

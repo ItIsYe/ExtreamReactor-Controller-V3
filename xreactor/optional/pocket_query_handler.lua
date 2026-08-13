@@ -69,13 +69,10 @@ function M.handle(message, ctx)
     return true
   end
 
-  -- Feature (2026-07-02): POCKET_COMMAND — Fernsteuerung mit
-  -- Token-Absicherung. ctx.current_token muss vom Aufrufer bereitgestellt
-  -- werden (rotierendes Token, am Master-Overview sichtbar). Nur exakt
-  -- passendes Token wird ausgefuehrt, sonst REJECTED-Antwort ohne
-  -- Seiteneffekt. ctx.execute_command(action, params) fuehrt die
-  -- eigentliche Aktion aus (vom Aufrufer bereitgestellt, damit dieses
-  -- Modul selbst keine Kenntnis von rt_sync/alert_service etc. braucht).
+  -- POCKET_COMMAND: ctx.current_token (rotierendes Token, am Master-Overview
+  -- sichtbar) muss exakt passen, sonst REJECTED ohne Seiteneffekt.
+  -- ctx.execute_command(action, params) fuehrt die eigentliche Aktion aus,
+  -- damit dieses Modul keine Kenntnis von rt_sync/alert_service etc. braucht.
   if message.type == (ctx.constants and ctx.constants.message_types and ctx.constants.message_types.POCKET_COMMAND) then
     pcall(function()
       local payload = message.payload or {}
