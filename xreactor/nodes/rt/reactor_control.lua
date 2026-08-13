@@ -502,21 +502,6 @@ function M.apply_initial_reactor_rods(ctx)
   M.applyReactorRods(ctx, ctx.CONFIG.INITIAL_ROD_LEVEL, false, "STARTUP_INIT")
 end
 
--- ── Diagnose-Logging ────────────────────────────────────────────────────────
-
-function M.log_reactor_control_state(ctx)
-  local now = os.clock()
-  if now - ctx.last_reactor_debug_log < 5 then return end
-  ctx.last_reactor_debug_log = now
-  local sample_rods = M.read_current_rods(ctx) or ctx.last_applied_rods or "n/a"
-  local tick_age = now - ctx.last_reactor_tick
-end
-
-function M.log_reactor_control_tick(ctx)
-  local sample_demand = ctx.last_reactor_demand
-  local age = os.clock() - ctx.last_rod_change_ts
-end
-
 -- ── Kernregler: Steam-Margin → Rod-Niveau ───────────────────────────────────
 
 -- ── Individuelle Pro-Reaktor-Regelung (Feature, 2026-07-06) ─────────────────
@@ -814,7 +799,6 @@ function M.updateReactorControl(ctx)
     return
   end
   ctx.last_reactor_tick = now
-  M.log_reactor_control_state(ctx)
   -- Bei genau einem Reaktor bleibt die global-gemeinsame Regelung
   -- (M.controlReactor) aktiv; bei mehreren wird jeder Reaktor individuell
   -- anhand seines eigenen internen Dampf-Fuellstands geregelt.
@@ -823,7 +807,6 @@ function M.updateReactorControl(ctx)
   else
     M.controlReactor(ctx)
   end
-  M.log_reactor_control_tick(ctx)
 end
 
 return M

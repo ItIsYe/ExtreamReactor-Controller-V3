@@ -1,7 +1,7 @@
 -- xreactor/manifest.lua
 return {
-  manifest_version = 585,
-  manifest_id = "manifest-v585",
+  manifest_version = 586,
+  manifest_id = "manifest-v586",
   source_ref = "beta",
   hash_algo = "crc32",
 
@@ -15,7 +15,7 @@ return {
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
   { path = "installer/plan_validator.lua", size_bytes = 5738, hash = "8c854740", always = true },
-  { path = "release.lua", size_bytes = 345, hash = "aa36792a", always = true },
+  { path = "release.lua", size_bytes = 345, hash = "52289fe2", always = true },
   { path = "start.lua", size_bytes = 12598, hash = "a5e5a4f2", always = true },
   { path = "shared/build_info.lua", size_bytes = 1312, hash = "328286a9", always = true },
   { path = "shared/constants.lua", size_bytes = 2963, hash = "d5ed0967", always = true },
@@ -125,7 +125,7 @@ return {
     { path = "core/turbine_regulator.lua", size_bytes = 14688, hash = "cc80eb87", required_for={"RT"} },
     { path = "nodes/rt/binding.lua", size_bytes = 3507, hash = "87255444", required_for={"RT"} },
     { path = "nodes/rt/command_handler.lua", size_bytes = 10464, hash = "e2509d86", required_for={"RT"} },
-    { path = "nodes/rt/reactor_control.lua", size_bytes = 35938, hash = "f2b4a3af", required_for={"RT"} },
+    { path = "nodes/rt/reactor_control.lua", size_bytes = 35235, hash = "3f74f505", required_for={"RT"} },
     { path = "nodes/rt/turbine_control.lua", size_bytes = 41356, hash = "f35bfb85", required_for={"RT"} },
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 3907, hash = "4f56566d", required_for={"RT"} },
     { path = "nodes/rt/capacity_cache.lua", size_bytes = 1556, hash = "86f9a268", required_for={"RT"} },
