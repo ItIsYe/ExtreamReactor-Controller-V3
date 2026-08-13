@@ -24,20 +24,51 @@ p("Lade optional/pocket_client.lua ...")
 
 local url = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/xreactor/optional/pocket_client.lua"
 
+-- Plain http.get(url) has no timeout of its own -- races it against a
+-- plain os.sleep() timeout via parallel.waitForAny() instead, same fix as
+-- installer/http.lua's try_once() (see its history for the field-reported
+-- hang this avoids).
+local REQUEST_TIMEOUT_S = 15
+local function try_once(u)
+  if type(parallel) ~= "table" or type(parallel.waitForAny) ~= "function" then
+    local ok_req, response = pcall(http.get, u)
+    if not ok_req or not response then return nil, type(response) == "string" and response or "http.get fehlgeschlagen" end
+    local ok_read, body = pcall(response.readAll); pcall(response.close)
+    if not ok_read or type(body) ~= "string" or #body == 0 then return nil, "readAll fehlgeschlagen" end
+    return body
+  end
+
+  local body, err, done = nil, nil, false
+  local ok_race, race_err = pcall(parallel.waitForAny,
+    function()
+      local ok_req, response = pcall(http.get, u)
+      if ok_req and response then
+        local ok_read, b = pcall(response.readAll); pcall(response.close)
+        if ok_read and type(b) == "string" and #b > 0 then
+          body = b
+        else
+          err = "readAll fehlgeschlagen"
+        end
+      else
+        err = type(response) == "string" and response or "http.get fehlgeschlagen"
+      end
+      done = true
+    end,
+    function() os.sleep(REQUEST_TIMEOUT_S) end)
+
+  if not ok_race then return nil, "Anfrage fehlgeschlagen: " .. tostring(race_err) end
+  if not done then return nil, "timeout" end
+  return body, err
+end
+
 local content, last_err
 for attempt = 1, 4 do
-  local ok_req, response = pcall(http.get, url)
-  if ok_req and response then
-    local ok_read, body = pcall(response.readAll)
-    pcall(response.close)
-    if ok_read and type(body) == "string" and #body > 0 then
-      content = body
-      break
-    end
-    last_err = "readAll fehlgeschlagen"
-  else
-    last_err = type(response) == "string" and response or "http.get fehlgeschlagen"
+  local body, err = try_once(url)
+  if body then
+    content = body
+    break
   end
+  last_err = err
   if attempt < 4 then
     p("  Download-Versuch " .. attempt .. " fehlgeschlagen (" .. tostring(last_err) .. "), erneut in " .. (attempt * 2) .. "s ...")
     os.sleep(attempt * 2)
