@@ -1,47 +1,81 @@
-# Session Handoff – XReactor Controller V3
+# Session Handoff — XReactor Controller V3
 
-Stand: 2026-07-16  
-Branch: `beta`  
-Geprüfter Code-Stand: `ef37d74419c7e37ab3a099b43e7cf039d8427dca`  
-Release: `beta-v454` / `manifest-v454`
+**Stand: 2026-08-11 | beta-v545 (INSTABIL)**
 
-## Einstieg für neue Arbeit
+---
 
-1. [`CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md`](CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md) lesen. Dort stehen ausschließlich die aktuellen Restpunkte und Prioritäten.
-2. Für RT-Regelzeiten zusätzlich [`CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md`](CODING_AI_RT_CONTROL_CADENCE_2026-07-12.md) verwenden.
-3. Für Installer-/Auto-Update-Arbeiten zusätzlich [`CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md`](CODING_AI_INSTALLER_AUTO_UPDATE_AUDIT_2026-07-12.md) verwenden.
-4. Für historische FUEL-UI-Kennungen die kurze Referenz [`CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md`](CODING_AI_FUEL_UI_PRIORITY_FIX_2026-07-12.md) verwenden.
+## ⚠️ KRITISCH — Aktueller Zustand
 
-## Wichtigste offene Punkte
+**beta ist aktuell INSTABIL.** Durch Agent-Audit-PRs (#503-#513) sind mehrere Kernfunktionen kaputt gegangen:
 
-1. Der Installer muss den vollständigen Benutzer-Configbestand updatesicher erhalten.
-2. Event- und Timerpfade der gemeinsamen Runtime müssen getrennt werden.
-3. Der RT-Controlpfad benötigt eine echte deterministische 10-Hz-Cadence.
-4. GitHub Actions muss die funktionalen Lua- und Python-Tests wirklich ausführen.
-5. ENERGY benötigt echte Schedulergruppen-Isolation.
-6. FUEL-/REPROCESSOR-Routing muss ohne blockierende `os.sleep()`-Phasen arbeiten.
-7. MASTER benötigt eine eindeutige Zielauswahl für mehrere FUEL-/WATER-Nodes.
-8. Der LOG-Renderer soll ohne Quelltext-Patching geladen werden.
+- **ui_router.lua Touch-Verarbeitung kaputt** — Seitenwechsel auf allen Nodes funktioniert nicht
+- **Master erkennt Nodes nicht** / Nodes gehen ständig offline
+- **Installer zweiter Durchlauf** schlägt fehl (Disk-Space für Config-Backup)
 
-## Bereits wesentlich verbessert
+## Stabiler Rollback-Punkt
 
-- WATER-Snapshot und Cluster-Failsafe,
-- REPROCESSOR-Bufferbudget und Payloadcache,
-- VALVE ACK/Retry/Dedupe/Auth,
-- VALVE steuert ausschließlich einen Mekanism Logistical Sorter als Aktor
-  (`sorter_name`, siehe nodes/valve/config.lua) — der ursprüngliche
-  Redstone-Aktor wurde am 2026-07-20 entfernt, da nicht mehr im Einsatz,
-- FUEL-UI-Eingabe- und Renderpfad,
-- MASTER-Persistenz, Terminal-Maus und stale Fuel-Relay,
-- LOG-Batching, O(1)-Dedupe und einzelner ACK-Sendeweg,
-- ENERGY-Heartbeat und gestaffeltes Storage-Sampling,
-- mehrere RT-Hotpath- und Diagnosefehler.
+```
+Branch: beckup-vor-audit
+SHA:    fd26894cd744f93cf66d333de7e5bd44ec24c2be
+Stand:  2026-08-09 20:15 (beta-v512)
+```
 
-## Arbeitsregeln
+**Nächste Session:** beta auf `beckup-vor-audit` zurückrollen, dann sauber neu aufbauen.
 
-- Keine Produktionsänderung ausschließlich anhand alter Auditdateien durchführen.
-- Jede manifestierte Datei benötigt passende Manifest-/Release-Metadaten.
-- Safety-Pfade nie zugunsten geringerer Last verlangsamen.
-- Benutzerconfigs und Routingdateien vor Installeränderungen besonders schützen.
-- Erst Referenzen und Tests prüfen, dann Dateien löschen.
-- Statische Prüfung ersetzt keinen Ingame-Test.
+---
+
+## Was noch funktioniert (vor Agent-PRs)
+
+- Installer: Journal-Verify-Fix ✅, SHA-Rate-Limit-Fix ✅, Config-Backup WARN statt Abbruch ✅
+- `network_auth.lua` als Repo-Datei (`xreactor/config/network_auth.lua`) ✅
+- FUEL Monitor Skala 0.5 ✅
+
+## Node-Übersicht
+
+| Computer | Rolle | Status |
+|---|---|---|
+| 53 | MASTER | instabil (Node-Erkennung) |
+| 54,56,57,58 | ENERGY | läuft |
+| 62 | LOG | läuft |
+| 64 | FUEL | UI läuft, kein Seitenwechsel |
+| 52+ | RT | kein Seitenwechsel |
+| 70,74 | VALVE | gelegentliche Aussetzer |
+
+## Wichtige Regeln
+
+- **NIEMALS** Dateien manuell per curl/Server-Konsole anlegen — immer über den Installer
+- Manuell angelegte Dateien → root-Ownership → Berechtigungsprobleme
+- Installer-Update: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer`
+- Branches: `main` (stabil), `beta` (aktuell instabil), `beckup-vor-audit` (stabiler Rollback)
+
+## ⛔ Nicht nochmal einbauen — gescheiterte Ansätze
+
+### http.get mit Options-Tabelle
+- `http.get(url, nil, { timeout = 15 })` → "bad argument #3 (boolean expected, got table)"
+- CC:Tweaked unterstützt keine Options-Tabelle als dritten Parameter
+
+### atomic_write mit tmp + fs.move (journal.lua)
+- `fs.move` in CC:Tweaked nach Delete/Create nicht zuverlässig → CORRUPT
+- Fix: Direkt in Zieldatei schreiben
+
+### GitHub API für SHA-Auflösung
+- Rate-Limit 60/h ohne Token → schlägt bei mehreren Computern fehl
+- Fix: Direkt `"beta"` als Ref verwenden
+
+### navigate_and_redraw in ui_router
+- Funktion existierte nicht → handle_input brach silent ab → kein Seitenwechsel
+- Fix: Direkt `self:prev()` / `self:next()` aufrufen mit nav_debounced
+
+### footer/list_controls auf nil setzen bei Transition
+- Führt dazu dass Touch-Zonen nach Transition fehlen
+- Fix: Nur bei echtem Monitor-/Seitenwechsel nil setzen, nie vorher
+
+### Agent-Audit-PRs blind mergen
+- PRs #503-#513 wurden ohne ausreichende Verifikation gemergt
+- Viele PRs haben Abhängigkeiten auf nicht-existente Funktionen eingebaut
+- Fix: Jeden PR einzeln auf einem Test-Computer verifizieren bevor gemergt wird
+
+## Doku-Index
+- `docs/CI_MAINTENANCE.md` — CI-Bugs und Fixes
+- `docs/SESSION_HANDOFF.md` — dieser Handoff
+- `docs/REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md` — Safety-Audit August 2026
