@@ -58,7 +58,7 @@ return {
   -- require()t shared.colors unbedingt beim Laden.
   { path = "shared/colors.lua", size_bytes = 593, hash = "89e36ece", always = true },
   { path = "shared/health_codes.lua", size_bytes = 336, hash = "e1d7e466" },
-  { path = "shared/telemetry_schema.lua", size_bytes = 938, hash = "9567b224" },
+  { path = "shared/telemetry_schema.lua", size_bytes = 434, hash = "0f802851" },
   },
 
   roles = {
