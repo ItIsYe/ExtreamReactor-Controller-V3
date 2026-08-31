@@ -147,7 +147,7 @@ return {
     energy = {
     { path = "nodes/energy/heartbeat.lua", size_bytes = 5131, hash = "84035306", required_for={"ENERGY"} },
     { path = "nodes/energy/matrix.lua", size_bytes = 1672, hash = "6b957631", required_for={"ENERGY"} },
-    { path = "adapters/energy_storage.lua", size_bytes = 3648, hash = "fd2dc2e5", required_for={"ENERGY"} },
+    { path = "adapters/energy_storage.lua", size_bytes = 4023, hash = "444e8082", required_for={"ENERGY"} },
     { path = "adapters/induction_matrix.lua", size_bytes = 15124, hash = "c3006e4d", required_for={"ENERGY"} },
     { path = "services/matrix_sampling_service.lua", size_bytes = 867, hash = "fff32232", required_for={"ENERGY"} },
     { path = "nodes/energy/command_handler.lua", size_bytes = 1329, hash = "e6b074ac", required_for={"ENERGY"} },
