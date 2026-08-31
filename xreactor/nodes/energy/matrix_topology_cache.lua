@@ -1,5 +1,3 @@
-local utils = require("core.utils")
-
 local cache = {}
 
 local function now_ms()
@@ -36,13 +34,6 @@ function cache.new(opts)
     dirty = true
   }
   return setmetatable(self, { __index = cache })
-end
-
-function cache:mark_dirty(reason)
-  self.dirty = true
-  if reason then
-    utils.log(self.log_prefix, "Matrix topology marked dirty: " .. tostring(reason))
-  end
 end
 
 function cache:should_discover(ts, event, due)

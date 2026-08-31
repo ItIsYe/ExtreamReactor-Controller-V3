@@ -391,11 +391,7 @@ function M.applyReactorRods(ctx, target, allow_overmax, source)
     local cfg_min, cfg_max = M.get_effective_regulator_rod_caps(ctx)
     local cap_clamped, cap_reason = ctx.rails.clamp_with_reason(
       clamped, cfg_min, cfg_max)
-    if cap_reason == "MIN" then
-    elseif cap_reason == "MAX" then
-    end
     clamped = cap_clamped
-  elseif allow_overmax then
   end
 
   if ctx.last_applied_rods == clamped then
@@ -662,11 +658,8 @@ function M.controlReactor(ctx)
 
   do
     local cfg_min, cfg_max = M.get_effective_regulator_rod_caps(ctx)
-    local clamped_target, clamp_reason = ctx.rails.clamp_with_reason(
+    local clamped_target = ctx.rails.clamp_with_reason(
       target_rods, cfg_min, cfg_max)
-    if clamp_reason == "MIN" then
-    elseif clamp_reason == "MAX" then
-    end
     target_rods = clamped_target
   end
 
@@ -708,8 +701,6 @@ function M.controlReactor(ctx)
   applied_rods = ctx.safety.clamp(applied_rods, ctx.CONFIG.ROD_MIN, ctx.CONFIG.ROD_MAX)
 
   if applied_rods == current_rods then
-    if ramp_diag and ramp_diag.reason == "RAMP_APPLIED" then
-    end
     return
   end
 
@@ -744,15 +735,6 @@ function M.controlReactor(ctx)
       tostring(guard_diag and guard_diag.blocked_opening == true),
       tostring(guard_diag and guard_diag.forced_closing == true),
       tostring(guard_diag and guard_diag.unavailable == true)))
-
-    if limited then
-    end
-    if ramp_diag and ramp_diag.coolant_limited then
-    end
-    if guard_diag and guard_diag.blocked_opening then
-    end
-    if guard_diag and guard_diag.forced_closing then
-    end
   end
 end
 

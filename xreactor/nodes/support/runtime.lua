@@ -193,7 +193,9 @@ function M.run_event_loop(receive_timeout, services, comms, after_cycle, quiesce
       services:tick()
       if handshake_lib and handshake_lib.is_quiesce_requested(quiesce_opts.handshake) then
         handshake_lib.mark_quiesce_attempted(quiesce_opts.handshake)
-        local confirmed = quiesce_opts.no_actuators == true
+        -- Fail-closed default: ohne echtes on_quiesce-Ergebnis gilt der
+        -- Quiesce-Vorgang nicht als bestaetigt.
+        local confirmed = false
         if type(quiesce_opts.on_quiesce) == "function" then
           local ok3, result3 = pcall(quiesce_opts.on_quiesce)
           if ok3 then
