@@ -508,6 +508,18 @@ function M.update_module_states(ctx)
             ctx.node_state_machine:transition(ctx.constants.node_states.EMERGENCY)
           end
         end
+      elseif module.state == "ERROR" and ctx.current_state() ~= ctx.STATE.SAFE then
+        -- Weder TEMP- noch WATER-Limit ist mehr aktiv, und RT hat SAFE
+        -- bereits verlassen (ueber reactor_control.lua's eigene Exit-Logik,
+        -- inkl. Coolant-Trip-Eskalation) -- die zuvor sicherheitsbedingt
+        -- ERROR gesetzte Modul-Statusanzeige war sonst fuer immer stehen
+        -- geblieben, obwohl der Reaktor laengst wieder normal geregelt
+        -- wird (reactor_control.lua/turbine_control.lua pruefen
+        -- module.state ueberhaupt nicht, das Feld dient nur der Status-
+        -- Anzeige/dem Reporting an MASTER). Wie ein frischer Start durch
+        -- die STABLE-Debounce laufen lassen, statt direkt auf RUNNING zu
+        -- springen.
+        M.mark_stable(ctx, module, now)
       end
     end
     if module.state == "STABLE" and module.stable_since and (now - module.stable_since > 3000) then
