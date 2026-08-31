@@ -166,7 +166,7 @@ return {
     },
     water = {
     { path = "nodes/water/config.lua", size_bytes = 3884, hash = "1804d0e7", required_for={"WATER"} },
-    { path = "nodes/water/config_normalizer.lua", size_bytes = 989, hash = "09141fba", required_for={"WATER"} },
+    { path = "nodes/water/config_normalizer.lua", size_bytes = 2642, hash = "f7ad6214", required_for={"WATER"} },
     { path = "nodes/water/main.lua", size_bytes = 25214, hash = "cc3ee93b", required_for={"WATER"} },
     { path = "nodes/water/ui_pages.lua", size_bytes = 10862, hash = "cfbbd586", required_for={"WATER"} },
     { path = "nodes/water/role_descriptor.lua", size_bytes = 152, hash = "c76ee5e7", required_for={"WATER"} },
