@@ -2,6 +2,7 @@ local M = {}
 local rt_sync = require("master.rt_sync")
 local support_status = require("master.support_status")
 local config_edits_lib = require("master.config_edits")
+local profile_ops = require("master.runtime_ops_profile")
 
 function M.new(opts)
   local constants = assert(opts.constants, "constants required")
@@ -311,8 +312,16 @@ function M.new(opts)
       if target ~= "BASELOAD" and target ~= "PEAK" and target ~= "IDLE" then
         return false, "Ungueltiges Profil: " .. tostring(params.profile)
       end
-      rt_ref.state.active_profile = target
-      rt_ref.state.power_target = 0 -- erzwingt Neuberechnung im naechsten sample_trends()-Zyklus
+      -- Direkt ueber runtime_ops_profile.apply_profile() (derselbe Pfad wie
+      -- der "profile"-UI-Button in ui_controller.lua), statt power_target
+      -- nur auf 0 zu setzen und auf einen spaeteren sample_trends()-Zyklus
+      -- zu hoffen: dieser rechnet den neuen Sollwert nur im Auto-Profil-
+      -- Modus neu -- im manuellen Modus blieb power_target sonst dauerhaft
+      -- auf 0, bis ein Bediener manuell am physischen UI eingriff.
+      if rt_ref.state.rt_global_off_hold then
+        return false, "Profil-Wechsel ignoriert: RT-OFF-Hold ist aktiv"
+      end
+      profile_ops.apply_profile(rt_ref, target)
       return true, "Profil gesetzt: " .. target
     elseif action == "maintenance_toggle" then
       local node_id = params.node_id
