@@ -177,6 +177,14 @@ function M.validate_config(config_values, defaults, add_warning, utils)
     config_values.safety.coolant_invalid_grace_samples = defaults.safety.coolant_invalid_grace_samples
     add_warning("safety.coolant_invalid_grace_samples missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_invalid_grace_samples))
   end
+  if type(config_values.safety.coolant_trip_escalation_count) ~= "number" then
+    config_values.safety.coolant_trip_escalation_count = defaults.safety.coolant_trip_escalation_count
+    add_warning("safety.coolant_trip_escalation_count missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_trip_escalation_count))
+  end
+  if type(config_values.safety.coolant_trip_escalation_window_s) ~= "number" then
+    config_values.safety.coolant_trip_escalation_window_s = defaults.safety.coolant_trip_escalation_window_s
+    add_warning("safety.coolant_trip_escalation_window_s missing/invalid; defaulting to " .. tostring(defaults.safety.coolant_trip_escalation_window_s))
+  end
   if type(config_values.autonom) ~= "table" then
     config_values.autonom = utils.deep_copy(defaults.autonom)
     add_warning("autonom missing/invalid; defaulting to autonom defaults")
@@ -412,6 +420,8 @@ function M.apply_runtime_defaults(config, defaults, runtime)
   config.safety.coolant_hysteresis = config.safety.coolant_hysteresis or defaults.safety.coolant_hysteresis
   config.safety.coolant_trip_samples = config.safety.coolant_trip_samples or defaults.safety.coolant_trip_samples
   config.safety.coolant_invalid_grace_samples = config.safety.coolant_invalid_grace_samples or defaults.safety.coolant_invalid_grace_samples
+  config.safety.coolant_trip_escalation_count = config.safety.coolant_trip_escalation_count or defaults.safety.coolant_trip_escalation_count
+  config.safety.coolant_trip_escalation_window_s = config.safety.coolant_trip_escalation_window_s or defaults.safety.coolant_trip_escalation_window_s
   config.heartbeat_interval = config.heartbeat_interval or defaults.heartbeat_interval
   config.autonom = config.autonom or {}
 

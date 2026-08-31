@@ -480,6 +480,28 @@ function M.update_module_states(ctx)
               tostring(temp_diag.condition)
             ))
             ctx.log("ERROR", "Safety ownership=SAFETY subsystem=REACTOR_COOLANT action=ENTER_SAFE")
+
+            -- Eskalation: mehrfaches Kurzzeit-Antriggern (z.B. weil der
+            -- Wassernachfluss nicht mit dem Verbrauch mithaelt) soll nicht
+            -- ewig oszillieren duerfen. Wenn ein Reaktor innerhalb eines
+            -- Zeitfensters mehrfach wegen Kuehlmittel in SAFE geht, wird der
+            -- automatische SAFE-Exit fuer diesen Reaktor gesperrt -- ein
+            -- Bediener muss per SET_MODE=MASTER manuell bestaetigen, dass
+            -- wirklich wieder ausreichend Kuehlmittel vorhanden ist.
+            local esc_count  = tonumber(ctx.config.safety.coolant_trip_escalation_count) or 4
+            local esc_window_ms = (tonumber(ctx.config.safety.coolant_trip_escalation_window_s) or 600) * 1000
+            if not module.coolant_trip_window_start
+                or (now - module.coolant_trip_window_start) > esc_window_ms then
+              module.coolant_trip_window_start = now
+              module.coolant_trip_count = 0
+            end
+            module.coolant_trip_count = (module.coolant_trip_count or 0) + 1
+            if module.coolant_trip_count >= esc_count and not module.coolant_trip_locked then
+              module.coolant_trip_locked = true
+              ctx.log("ERROR", ("Safety escalation: module=%s coolant getrippt %d mal innerhalb %ds -> SAFE-Auto-Exit gesperrt, manueller Reset (SET_MODE=MASTER) erforderlich"):format(
+                tostring(module.id), module.coolant_trip_count, math.floor(esc_window_ms / 1000)))
+            end
+
             ctx.setState(ctx.STATE.SAFE, "SAFETY_COOLANT_LOW")
           end
           if ctx.node_state_machine:state() ~= ctx.constants.node_states.EMERGENCY then

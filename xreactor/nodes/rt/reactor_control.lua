@@ -770,8 +770,13 @@ function M.updateReactorControl(ctx)
     local hysteresis  = safe_cfg.temperature_hysteresis or 50
     local recover_at  = limit - hysteresis  -- z.B. 1950°C
     local all_cool    = true
+    local coolant_locked = false
     for _, name in ipairs(ctx.config.reactors or {}) do
       local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name]
+      local module  = ctx.modules and ctx.modules[name]
+      if module and module.coolant_trip_locked then
+        coolant_locked = true
+      end
       if reactor then
         local ok_f, fuel = pcall(function() return reactor.getFuelTemperature() end)
         local ok_c, cas  = pcall(function() return reactor.getCasingTemperature() end)
@@ -780,6 +785,16 @@ function M.updateReactorControl(ctx)
                   or recover_at + 1  -- unbekannt → sicher bleiben
         if temp >= recover_at then all_cool = false; break end
       end
+    end
+    -- Nach wiederholten Kuehlmittel-Trips (siehe module_lifecycle.lua) wird
+    -- der automatische Temperatur-basierte SAFE-Exit gesperrt: Temperatur
+    -- allein sagt nichts darueber aus, ob der Kuehlmitteltank tatsaechlich
+    -- wieder ausreichend gefuellt ist. Ein Bediener muss den Reaktor dann
+    -- manuell per SET_MODE=MASTER wieder freigeben.
+    if coolant_locked then
+      ctx.warn_once("safe_exit_coolant_locked",
+        "SAFE-Mode Auto-Exit gesperrt: wiederholte Kuehlmittel-Trips -- manueller Reset (SET_MODE=MASTER) erforderlich")
+      return
     end
     if all_cool and #(ctx.config.reactors or {}) > 0 then
       ctx.log("INFO", string.format(
