@@ -126,7 +126,7 @@ return {
     { path = "nodes/rt/binding.lua", size_bytes = 3507, hash = "87255444", required_for={"RT"} },
     { path = "nodes/rt/command_handler.lua", size_bytes = 10464, hash = "e2509d86", required_for={"RT"} },
     { path = "nodes/rt/reactor_control.lua", size_bytes = 37196, hash = "fc6df8cf", required_for={"RT"} },
-    { path = "nodes/rt/turbine_control.lua", size_bytes = 41806, hash = "c9c9fdde", required_for={"RT"} },
+    { path = "nodes/rt/turbine_control.lua", size_bytes = 40883, hash = "b21dc27e", required_for={"RT"} },
     { path = "nodes/rt/capacity_learning.lua", size_bytes = 3907, hash = "4f56566d", required_for={"RT"} },
     { path = "nodes/rt/capacity_cache.lua", size_bytes = 1556, hash = "86f9a268", required_for={"RT"} },
     { path = "nodes/rt/config.lua", size_bytes = 5433, hash = "db255dd7", required_for={"RT"} },
