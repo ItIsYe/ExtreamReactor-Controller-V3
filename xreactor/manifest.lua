@@ -138,7 +138,7 @@ return {
     { path = "nodes/rt/main.lua", size_bytes = 47730, hash = "d5f46b04", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 29930, hash = "62554c06", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 15073, hash = "033d7f12", required_for={"RT"} },
-    { path = "nodes/rt/mockup_pages.lua", size_bytes = 16836, hash = "870cb1ee", required_for={"RT"} },
+    { path = "nodes/rt/mockup_pages.lua", size_bytes = 16815, hash = "a497111e", required_for={"RT"} },
     { path = "nodes/rt/reactor_steam_guard.lua", size_bytes = 2613, hash = "2f2fa78c", required_for={"RT"} },
     { path = "nodes/rt/startup_diagnostics.lua", size_bytes = 2613, hash = "e5d63978", required_for={"RT"} },
     { path = "nodes/rt/state_handlers.lua", size_bytes = 9257, hash = "bb391437", required_for={"RT"} },
