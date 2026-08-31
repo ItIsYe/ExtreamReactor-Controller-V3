@@ -194,7 +194,7 @@ return {
     { path = "nodes/reprocessor/config_normalizer.lua", size_bytes = 2097, hash = "7b4dd612", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/feed_router.lua", size_bytes = 9492, hash = "7ed963f3", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/main.lua", size_bytes = 27126, hash = "8698acc1", required_for={"REPROCESSING"} },
-    { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 11071, hash = "25d5ebdf", required_for={"REPROCESSING"} },
+    { path = "nodes/reprocessor/ui_pages.lua", size_bytes = 11485, hash = "40f047a9", required_for={"REPROCESSING"} },
     { path = "nodes/reprocessor/role_descriptor.lua", size_bytes = 177, hash = "3a1d8dc9", required_for={"REPROCESSING"} },
     { path = "nodes/valve/role_descriptor.lua", size_bytes = 152, hash = "aca06242", required_for={"VALVE"} },
     { path = "nodes/valve/config.lua", size_bytes = 1597, hash = "27de8d69", required_for={"VALVE"} },
