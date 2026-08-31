@@ -765,6 +765,38 @@ function M.new(opts)
       c.alert_service:ack(action.alarm_id)
       return true
     end
+    -- Detaillierte Alerts-Ansicht (master/ui/alerts.lua, AUX-Monitor):
+    -- ACK/ACK VIS/ACK ALL/MUTE RULE/MUTE NODE erzeugen dieselben Action-
+    -- Tables wie alarm_ack oben, wurden hier aber bisher nicht behandelt --
+    -- die Buttons taten sichtbar nichts.
+    if action.type == "alert_ack" and action.id and c.alert_service and type(c.alert_service.ack) == "function" then
+      c.alert_service:ack(action.id)
+      return true
+    end
+    if action.type == "alert_ack_visible" and action.ids and c.alert_service and type(c.alert_service.ack_visible) == "function" then
+      c.alert_service:ack_visible(action.ids)
+      return true
+    end
+    if action.type == "alert_ack_all" and c.alert_service and type(c.alert_service.ack_all) == "function" then
+      c.alert_service:ack_all()
+      return true
+    end
+    if action.type == "alert_mute_rule" and action.code and c.alert_service and type(c.alert_service.mute_rule) == "function" then
+      c.alert_service:mute_rule(action.code, action.minutes)
+      return true
+    end
+    if action.type == "alert_unmute_rule" and action.code and c.alert_service and type(c.alert_service.unmute_rule) == "function" then
+      c.alert_service:unmute_rule(action.code)
+      return true
+    end
+    if action.type == "alert_mute_node" and action.node_id and c.alert_service and type(c.alert_service.mute_node) == "function" then
+      c.alert_service:mute_node(action.node_id, action.minutes)
+      return true
+    end
+    if action.type == "alert_unmute_node" and action.node_id and c.alert_service and type(c.alert_service.unmute_node) == "function" then
+      c.alert_service:unmute_node(action.node_id)
+      return true
+    end
     return false
   end
   controller.handle_input = function(event)

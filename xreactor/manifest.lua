@@ -114,7 +114,7 @@ return {
     -- Groesse/Hash bei gezieltem manuellem Download verifizierbar sind.
     { path = "optional/pocket_client.lua", size_bytes = 10477, hash = "bf1a75b4", optional=true, feature="pocket_client", required_for={} },
     { path = "optional/master_ampel.lua", size_bytes = 5891, hash = "13753910", optional=true, feature="master_ampel", required_for={"MASTER"} },
-    { path = "master/ui_controller.lua", size_bytes = 48151, hash = "0dd366c3", required_for={"MASTER"} },
+    { path = "master/ui_controller.lua", size_bytes = 49835, hash = "3176c4a6", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
     rt = {
