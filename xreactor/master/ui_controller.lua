@@ -588,6 +588,12 @@ function M.new(opts)
       reactor_fill_target_pending = reactor_fill_edit.pending,
     }
 
+    -- BEKANNTE LUECKE: resources bleibt bewusst {} -- ui/resources.lua
+    -- erwartet model.fuel/.water/.node_details/.comms, aber diese Aggregation
+    -- wurde nie implementiert (Fuel/Water-Summary lebt stattdessen unter
+    -- energy.resources mit einem viel schmaleren Feld-Layout, siehe oben).
+    -- ui/resources.lua zeigt bei leerem Model einen expliziten "keine Daten"-
+    -- Hinweis statt irrefuehrender Nullwerte/Fehlerbadges.
     return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model, config_editor = config_editor_model }
   end
 
@@ -613,6 +619,8 @@ function M.new(opts)
       overview = { system_status = "WARNING", profile_list = { "BASELOAD", "PEAK", "IDLE" }, nodes = {}, alert_rows = {}, alert_summary = "Modellfehler — siehe Logs", alert_counts = { INFO = 0, WARN = 1, CRITICAL = 0 }, energy_overview = { percent = 0, status = "OFFLINE", trend = "Trend stabil" }, rt_online = 0, power_actual = 0, clock_label = os.date("!%H:%M UTC"), ops_hints = { "Modellaufbau fehlgeschlagen, Daten folgen in Kürze" }, peer_summary = "Peers live=0 stale=0 rt=0 energy-matrix=0 src=0", rt_summary = "RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0", controls_summary = "Profile=- | AUTO=AUS | RT-HOLD=AUS", nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Initialisierung...", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" },
       rt = { rt_nodes = {}, queue = {}, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, unavailable = 0, local_control = 0, master_control = 0, assignment_state = "UNASSIGNED", assignment_reason = "-", control_source = "LOCAL", display_mode = "RT-Fleet aktiv", fleet_summary = "-", queue_summary = "-" },
       energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = "OFFLINE", aggregate_percent = 0, mode = "-", energy_summary = "Energy 0.0% | Stored 0.0/0.0 | In 0.0 Out 0.0 | Mode - | Matrices 0", matrix_count = 0, matrix_sources = 0, support_online = 0, support_stale = 0, matrix_only = false },
+      -- resources: siehe Kommentar in build_models() -- bekannte Luecke,
+      -- ui/resources.lua zeigt bei leerem Model einen "keine Daten"-Hinweis.
       resources = {},
       alerts = { counts = { INFO = 0, WARN = 0, CRITICAL = 0 }, summary = "Keine aktiven Meldungen", active = {}, history = {}, mutes = { rules = {}, nodes = {} }, now_ms = os.epoch('utc'), config = {} },
       alarms = { alarms = {}, header_blink = false }

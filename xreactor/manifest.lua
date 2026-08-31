@@ -88,7 +88,7 @@ return {
     { path = "master/ui/energy.lua", size_bytes = 9254, hash = "38fb057f", required_for={"MASTER"} },
     { path = "master/ui/multiview.lua", size_bytes = 16482, hash = "7e1c435e", required_for={"MASTER"} },
     { path = "master/ui/overview.lua", size_bytes = 13792, hash = "33054a4f", required_for={"MASTER"} },
-    { path = "master/ui/resources.lua", size_bytes = 5831, hash = "7bf23f33", required_for={"MASTER"} },
+    { path = "master/ui/resources.lua", size_bytes = 6869, hash = "a28f683a", required_for={"MASTER"} },
     { path = "master/ui/rt_dashboard.lua", size_bytes = 13157, hash = "391c3c5e", required_for={"MASTER"} },
     { path = "master/ui/widgets.lua", size_bytes = 7637, hash = "24de9664", required_for={"MASTER"} },
     { path = "master/ui/layout.lua", size_bytes = 5981, hash = "bbec1760", required_for={"MASTER"} },
@@ -114,7 +114,7 @@ return {
     -- Groesse/Hash bei gezieltem manuellem Download verifizierbar sind.
     { path = "optional/pocket_client.lua", size_bytes = 10477, hash = "bf1a75b4", optional=true, feature="pocket_client", required_for={} },
     { path = "optional/master_ampel.lua", size_bytes = 5891, hash = "13753910", optional=true, feature="master_ampel", required_for={"MASTER"} },
-    { path = "master/ui_controller.lua", size_bytes = 49835, hash = "3176c4a6", required_for={"MASTER"} },
+    { path = "master/ui_controller.lua", size_bytes = 50427, hash = "f85633c4", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
     rt = {
