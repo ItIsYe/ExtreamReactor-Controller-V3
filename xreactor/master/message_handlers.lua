@@ -80,6 +80,11 @@ function M.new(opts)
     if value == "WATER" or value == "WATER-NODE" or value == "WATERNODE" then return constants.roles.WATER_NODE end
     if value == "REPROCESSING" or value == "REPROCESSOR" or value == "REPROCESSOR-NODE" or value == "REPROCESSING-NODE" then return constants.roles.REPROCESSOR_NODE end
     if value == "VALVE" or value == "FUEL-VALVE" or value == "VALVE-NODE" or value == "FUELVALVE" then return constants.roles.VALVE_NODE end
+    -- LOG und LOG_COLLECTOR sind ueberall sonst (role_descriptor/start.lua's
+    -- ROLE_ENTRY) bereits gleichwertige Aliase desselben Node-Typs -- ohne
+    -- diesen Zweig fehlte hier als einziger Rolle die sonst ueberall
+    -- vorhandene Gross-/Trennzeichen-Toleranz.
+    if value == "LOG" or value == "LOG-COLLECTOR" or value == "LOGCOLLECTOR" then return constants.roles.LOG_COLLECTOR end
     return raw
   end
 
