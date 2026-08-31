@@ -185,7 +185,7 @@ return {
     { path = "nodes/fuel/storage.lua", size_bytes = 2167, hash = "a33a6a45", required_for={"FUEL"} },
     { path = "nodes/fuel/ui_pages.lua", size_bytes = 6466, hash = "1898ddc4", required_for={"FUEL"} },
     { path = "nodes/fuel/role_descriptor.lua", size_bytes = 147, hash = "1b38a051", required_for={"FUEL"} },
-    { path = "nodes/fuel/logistics_router.lua", size_bytes = 29184, hash = "7d70bcc1", required_for={"FUEL"} },
+    { path = "nodes/fuel/logistics_router.lua", size_bytes = 28865, hash = "4288c067", required_for={"FUEL"} },
     { path = "nodes/fuel/redstone_router.lua", size_bytes = 48683, hash = "12bdbf84", required_for={"FUEL","REPROCESSING"} },
     { path = "nodes/fuel/router_ui.lua", size_bytes = 36446, hash = "ceba2595", required_for={"FUEL","REPROCESSING"} },
     },
