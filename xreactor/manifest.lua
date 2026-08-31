@@ -202,7 +202,7 @@ return {
     { path = "nodes/valve/main.lua", size_bytes = 9036, hash = "5da83e2f", required_for={"VALVE"} },
     },
     log = {
-    { path = "nodes/log_collector/main.lua", size_bytes = 51814, hash = "f8768825", required_for={"LOG"} },
+    { path = "nodes/log_collector/main.lua", size_bytes = 52245, hash = "ebd2b2db", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_main.lua", size_bytes = 1143, hash = "50fcd8e4", required_for={"LOG"} },
     { path = "nodes/log_collector/mockup_ui.lua", size_bytes = 6190, hash = "75b0732e", required_for={"LOG"} },
     { path = "nodes/log_collector/default_ui.lua", size_bytes = 4481, hash = "adeb5fa4", required_for={"LOG"} },

@@ -499,9 +499,16 @@ local function disk_for_role(role)
   if #stats.disks == 0 then return nil end
   local idx = role_index(role)
   if not idx then
-    -- Unbekannte Rolle: wie zuvor Fallback auf irgendeine Disk, damit
-    -- nichts komplett verloren geht.
-    return stats.disks[stats.disk_index] or stats.disks[1]
+    -- Unbekannte Rolle: Fallback auf irgendeine Disk, damit nichts komplett
+    -- verloren geht. stats.disk_index rotiert nach jeder Zuweisung ueber
+    -- alle Disks (statt wie zuvor dauerhaft auf 1 stehenzubleiben) -- sonst
+    -- landen alle Logs unbekannter Rollen dauerhaft auf derselben Disk,
+    -- waehrend die anderen leer bleiben.
+    stats.disk_index = stats.disk_index or 1
+    if stats.disk_index > #stats.disks then stats.disk_index = 1 end
+    local disk = stats.disks[stats.disk_index] or stats.disks[1]
+    stats.disk_index = (stats.disk_index % #stats.disks) + 1
+    return disk
   end
 
   -- Round-Robin ueber alle Disks der Rolle (persistenter Cursor pro Rolle,
