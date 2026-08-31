@@ -6,7 +6,7 @@ return {
   hash_algo = "crc32",
 
   base_files = {
-  { path = "installer/http.lua", size_bytes = 3814, hash = "f712bdfb", always = true },
+  { path = "installer/http.lua", size_bytes = 4112, hash = "25ddced5", always = true },
   { path = "installer/manifest.lua", size_bytes = 6436, hash = "e18844b4", always = true },
   { path = "installer/stage.lua", size_bytes = 9132, hash = "b87557db", always = true },
   { path = "installer/ui.lua", size_bytes = 1971, hash = "02e204ae", always = true },
