@@ -47,7 +47,7 @@ return {
   -- required_for={"MASTER"}: nur master/runtime_loop.lua require()t
   -- diese Datei tatsaechlich (siehe auch core/alert_rules.lua, ihre
   -- Abhaengigkeit, ebenso auf MASTER beschraenkt).
-  { path = "services/alert_service.lua", size_bytes = 14551, hash = "be4bfdf2", required_for={"MASTER"} },
+  { path = "services/alert_service.lua", size_bytes = 14539, hash = "bdabdcb1", required_for={"MASTER"} },
   { path = "services/comms_service.lua", size_bytes = 11948, hash = "e822a614" },
   { path = "services/control_service.lua", size_bytes = 610, hash = "e09ee7b4", required_for={"MASTER"} },
   { path = "services/discovery_service.lua", size_bytes = 3157, hash = "600b94de", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
@@ -113,7 +113,7 @@ return {
     -- irgendeiner Rolle auftaucht; trotzdem im Manifest gefuehrt, damit
     -- Groesse/Hash bei gezieltem manuellem Download verifizierbar sind.
     { path = "optional/pocket_client.lua", size_bytes = 10477, hash = "bf1a75b4", optional=true, feature="pocket_client", required_for={} },
-    { path = "optional/master_ampel.lua", size_bytes = 5915, hash = "58fc39eb", optional=true, feature="master_ampel", required_for={"MASTER"} },
+    { path = "optional/master_ampel.lua", size_bytes = 5891, hash = "13753910", optional=true, feature="master_ampel", required_for={"MASTER"} },
     { path = "master/ui_controller.lua", size_bytes = 48151, hash = "0dd366c3", required_for={"MASTER"} },
     { path = "master/ui_diagnostics.lua", size_bytes = 830, hash = "d2a9d0fb", required_for={"MASTER"} },
     },
