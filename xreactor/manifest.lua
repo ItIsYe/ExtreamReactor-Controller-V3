@@ -162,7 +162,7 @@ return {
     { path = "nodes/energy/status_payload.lua", size_bytes = 9098, hash = "f01b2d8b", required_for={"ENERGY"} },
     { path = "nodes/energy/storage_snapshot_runtime.lua", size_bytes = 6118, hash = "04b90706", required_for={"ENERGY"} },
     { path = "nodes/energy/ui_model.lua", size_bytes = 4152, hash = "e44f676b", required_for={"ENERGY"} },
-    { path = "nodes/energy/ui_pages.lua", size_bytes = 18429, hash = "c0aa3582", required_for={"ENERGY"} },
+    { path = "nodes/energy/ui_pages.lua", size_bytes = 19004, hash = "4720b411", required_for={"ENERGY"} },
     },
     water = {
     { path = "nodes/water/config.lua", size_bytes = 3884, hash = "1804d0e7", required_for={"WATER"} },
