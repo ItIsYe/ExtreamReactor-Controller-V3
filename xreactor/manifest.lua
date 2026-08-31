@@ -75,7 +75,7 @@ return {
     { path = "master/message_handlers.lua", size_bytes = 28117, hash = "698fabfe", required_for={"MASTER"} },
     { path = "master/monitor_sessions.lua", size_bytes = 9123, hash = "69418ffa", required_for={"MASTER"} },
     { path = "master/profiles.lua", size_bytes = 275, hash = "59bdc157", required_for={"MASTER"} },
-    { path = "master/rt_sync.lua", size_bytes = 18155, hash = "b8ee55a2", required_for={"MASTER"} },
+    { path = "master/rt_sync.lua", size_bytes = 18531, hash = "0df418bc", required_for={"MASTER"} },
     { path = "master/rt_sync_coalescer.lua", size_bytes = 7676, hash = "9519c601", required_for={"MASTER"} },
     { path = "master/runtime_loop.lua", size_bytes = 16707, hash = "74936714", required_for={"MASTER"} },
     { path = "master/runtime_ops_monitor.lua", size_bytes = 2634, hash = "8454a2a2", required_for={"MASTER"} },
