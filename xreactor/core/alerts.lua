@@ -351,7 +351,11 @@ function alerts:get_history_filtered(opts)
   end
   local out = {}
   for _, entry in ipairs(self.history) do
-    local ts = tonumber(entry.ts) or 0
+    -- History-Eintraege haben nie ein "ts"-Feld (siehe _push_history/raise/
+    -- resolve/record_muted) -- nur ts_first/ts_last, plus resolved_ts fuer
+    -- einen Resolve-Snapshot. resolved_ts ist dann der eigentliche
+    -- Ereigniszeitpunkt (wann der Alert behoben wurde), sonst ts_last.
+    local ts = tonumber(entry.resolved_ts) or tonumber(entry.ts_last) or tonumber(entry.ts_first) or 0
     if (not since_ms or ts >= since_ms) and (not until_ms or ts <= until_ms) then
       out[#out + 1] = entry
     end

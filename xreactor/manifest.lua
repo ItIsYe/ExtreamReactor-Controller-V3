@@ -43,7 +43,7 @@ return {
   { path = "core/window_buffer.lua", size_bytes = 3681, hash = "1743677d", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/utils.lua", size_bytes = 24296, hash = "f9cf839e" },
   { path = "core/remote_update.lua", size_bytes = 4347, hash = "13acf7b4" },
-  { path = "core/alerts.lua", size_bytes = 10749, hash = "0178a37d", required_for={"MASTER"} },
+  { path = "core/alerts.lua", size_bytes = 11106, hash = "7ca6c61c", required_for={"MASTER"} },
   -- required_for={"MASTER"}: nur master/runtime_loop.lua require()t
   -- diese Datei tatsaechlich (siehe auch core/alert_rules.lua, ihre
   -- Abhaengigkeit, ebenso auf MASTER beschraenkt).
