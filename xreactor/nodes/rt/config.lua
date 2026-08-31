@@ -55,10 +55,13 @@ return {
     -- Eskalation: wenn ein Reaktor innerhalb von coolant_trip_escalation_window_s
     -- coolant_trip_escalation_count mal in SAFE getrippt ist (wiederholtes
     -- Auslösen statt einem einzelnen Ereignis), wird der automatische
-    -- SAFE-Exit für diesen Reaktor gesperrt -- ein Bediener muss manuell
-    -- per SET_MODE=MASTER bestätigen, dass wirklich wieder Kühlmittel da ist.
+    -- SAFE-Exit für diesen Reaktor gesperrt. Die Sperre löst sich von selbst
+    -- wieder, sobald der reale (nicht gefilterte) Kühlmittel-Messwert für
+    -- mindestens coolant_recovery_confirm_ms ununterbrochen über der
+    -- Recovery-Schwelle liegt -- kein manueller Eingriff nötig.
     coolant_trip_escalation_count = 4,
-    coolant_trip_escalation_window_s = 600
+    coolant_trip_escalation_window_s = 600,
+    coolant_recovery_confirm_ms = 4000
   },
 
   autonom = {

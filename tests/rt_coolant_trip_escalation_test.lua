@@ -4,12 +4,12 @@ package.path = table.concat({ './xreactor/?.lua', './xreactor/?/init.lua', packa
 -- Wassernachfluss dem Verbrauch kurzzeitig hinterherhinkt) soll nach einer
 -- konfigurierbaren Anzahl Trips innerhalb eines Zeitfensters den
 -- automatischen, temperatur-basierten SAFE-Exit sperren -- statt endlos zu
--- oszillieren, muss ein Bediener den Reaktor manuell per SET_MODE=MASTER
--- wieder freigeben.
+-- oszillieren. Die Sperre loest sich von selbst wieder, sobald der reale
+-- (nicht vom Zero-Glitch-Filter maskierte) Kuehlmittel-Messwert ununter-
+-- brochen ueber der Recovery-Schwelle liegt -- ohne manuellen Eingriff.
 
 local lifecycle = require('nodes.rt.module_lifecycle')
 local reactor_control = require('nodes.rt.reactor_control')
-local state_handlers = require('nodes.rt.state_handlers')
 
 local original_epoch = os.epoch
 local now_ms = 0
@@ -27,6 +27,17 @@ local function persistent_diag()
   }
 end
 
+local function recovered_diag()
+  return {
+    triggered = false, low_detected = false, condition = 'COOLANT_OK',
+    coolant_amount = 60000, coolant_amount_max = 200000, coolant_ratio = 0.3,
+    coolant_ratio_raw = 0.3, min_water = 0.2, recover_threshold = 0.25, hysteresis = 0.05,
+    source = 'x', source_method = 'x', measurement_state = 'FRESH', measurement_valid = true,
+    stale_fallback_used = false, low_ticks = 0, trip_samples = 3, invalid_ticks = 0,
+    invalid_grace_samples = 3, zero_glitch_pending = false, causality = 'COOLANT_PRIMARY',
+  }
+end
+
 local module = {
   id = 'R1', type = 'reactor', name = 'reactor_0', state = 'RUNNING', limits = {},
   peripheral = {}, safety_temp_state = {}, coolant_safety_state = {},
@@ -40,7 +51,7 @@ local ctx = {
     max_temperature = 2000, temperature_hysteresis = 50, temperature_trip_samples = 2,
     min_water = 0.2, coolant_hysteresis = 0.05, coolant_trip_samples = 3,
     coolant_invalid_grace_samples = 3, coolant_trip_escalation_count = 4,
-    coolant_trip_escalation_window_s = 600,
+    coolant_trip_escalation_window_s = 600, coolant_recovery_confirm_ms = 4000,
   }},
   evaluate_reactor_coolant = function() return table.remove(diag_queue, 1) end,
   get_target_rpm = function() return 1800 end,
@@ -80,12 +91,14 @@ trip_once(30000)
 if module.coolant_trip_count ~= 4 then error('expected trip_count=4, got ' .. tostring(module.coolant_trip_count)) end
 if not module.coolant_trip_locked then error('must be locked after 4th trip within escalation window') end
 
--- SAFE-Exit darf trotz guter Temperatur nicht auto-verlassen werden, solange gesperrt.
-current_state = 'SAFE'
+-- reactor_control-Kontext fuer den SAFE-Exit-Check (mit Reaktorliste, sonst
+-- laeuft die Pruefschleife nie und der Test wird sinnlos).
 local rc_ctx = {
   current_state = function() return current_state end,
   STATE = { SAFE = 'SAFE', MASTER = 'MASTER' },
-  config = { safety = { max_temperature = 2000, temperature_hysteresis = 50 } },
+  config = { safety = {
+    max_temperature = 2000, temperature_hysteresis = 50, coolant_recovery_confirm_ms = 4000,
+  }, reactors = { 'R1' } },
   modules = ctx.modules,
   peripherals = { reactors = {} },
   setState = function(next_state) current_state = next_state end,
@@ -94,27 +107,52 @@ local rc_ctx = {
   CONFIG = { ROD_MAX = 100 },
 }
 reactor_control.applyReactorRods = function() end
+
+-- Solange die Sperre aktiv ist und der Messwert weiterhin schlecht ist,
+-- darf SAFE trotz gutem all_cool (kein Peripheral -> Temperatur "unbekannt,
+-- sicher bleiben") nicht automatisch verlassen werden.
+current_state = 'SAFE'
+now_ms = 40000
+module.coolant_safety_diag = persistent_diag()
 reactor_control.updateReactorControl(rc_ctx)
 if current_state ~= 'SAFE' then
-  error('must stay SAFE while coolant_trip_locked, got ' .. tostring(current_state))
+  error('must stay SAFE while coolant still bad, got ' .. tostring(current_state))
 end
 
--- Manuelles SET_MODE=MASTER (Bediener bestaetigt Kuehlmittel wieder ok) hebt die Sperre auf.
-local sh_ctx = {
-  STATE = { MASTER = 'MASTER', AUTONOM = 'AUTONOM', SAFE = 'SAFE' },
-  modules = ctx.modules,
-  log = function() end,
-  is_master_connected = function() return true end,
-  get_current_state = function() return current_state end,
-  set_current_state = function(v) current_state = v end,
-  get_node_state_machine = function()
-    return { state = function() return 'EMERGENCY' end, transition = function() end }
-  end,
-  constants = { node_states = { OFF = 'OFF', AUTONOM = 'AUTONOM', STARTUP = 'STARTUP' } },
-}
-state_handlers.apply_mode(sh_ctx, sh_ctx.STATE.MASTER)
-if module.coolant_trip_locked ~= false then error('lock must clear after manual MASTER apply') end
-if module.coolant_trip_count ~= 0 then error('trip_count must reset after manual MASTER apply') end
+-- Kuehlmittel erholt sich jetzt real -- aber ein einzelner guter Tick reicht
+-- nicht: die Sperre bleibt, bis die Erholung sustained (>= coolant_recovery_confirm_ms) ist.
+now_ms = 40100
+module.coolant_safety_diag = recovered_diag()
+reactor_control.updateReactorControl(rc_ctx)
+if current_state ~= 'SAFE' then
+  error('must stay SAFE immediately after recovery starts (not yet sustained), got ' .. tostring(current_state))
+end
+if not module.coolant_trip_locked then
+  error('lock must not clear before the recovery confirm window elapsed')
+end
+
+now_ms = 40100 + 3000  -- noch innerhalb des 4000ms-Fensters
+module.coolant_safety_diag = recovered_diag()
+reactor_control.updateReactorControl(rc_ctx)
+if current_state ~= 'SAFE' then
+  error('must stay SAFE mid-way through the recovery confirm window, got ' .. tostring(current_state))
+end
+
+-- Nach sustained Erholung >= coolant_recovery_confirm_ms hebt sich die
+-- Sperre automatisch auf -- ohne jeden manuellen Befehl -- und der reguläre
+-- Temperatur-Exit (kein Peripheral -> als kuehl angenommen) greift sofort.
+now_ms = 40100 + 4000
+module.coolant_safety_diag = recovered_diag()
+reactor_control.updateReactorControl(rc_ctx)
+if module.coolant_trip_locked then
+  error('lock must clear automatically once coolant recovery is sustained')
+end
+if module.coolant_trip_count ~= 0 then
+  error('trip_count must reset once the lock clears automatically')
+end
+if current_state ~= 'MASTER' then
+  error('expected automatic SAFE-Exit to MASTER once unlocked and temperature is fine, got ' .. tostring(current_state))
+end
 
 os.epoch = original_epoch
 print('rt_coolant_trip_escalation_test.lua: ok')

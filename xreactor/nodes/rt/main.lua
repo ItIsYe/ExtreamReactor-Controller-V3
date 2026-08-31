@@ -627,7 +627,6 @@ local function build_command_ctx()
         get_current_state = current_state,
         set_current_state = function(v) current_state_value = v end,
         get_node_state_machine = function() return node_state_machine end,
-        modules = modules_registry,
       }, mode)
     end,
     -- MASTER-ausgeloeste STARTUP_STAGE/REQUEST_STARTUP_MODULE-Kommandos brauchen

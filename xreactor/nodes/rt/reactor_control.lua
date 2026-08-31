@@ -769,13 +769,41 @@ function M.updateReactorControl(ctx)
     local limit       = safe_cfg.max_temperature    or 2000
     local hysteresis  = safe_cfg.temperature_hysteresis or 50
     local recover_at  = limit - hysteresis  -- z.B. 1950°C
+    -- Sustained-Bestaetigung fuer den Auto-Reset nach einer Kuehlmittel-
+    -- Eskalationssperre: der rohe (nicht vom Zero-Glitch-Filter maskierte)
+    -- Messwert muss ueber recover_threshold liegen, und zwar ununterbrochen
+    -- fuer mindestens coolant_recovery_confirm_ms -- ein einzelner guter
+    -- Tick reicht nicht, um Mess-Rauschen an der Schwelle auszuschliessen.
+    local recovery_confirm_ms = tonumber(safe_cfg.coolant_recovery_confirm_ms) or 4000
+    local now_ms = os.epoch and os.epoch("utc") or (now * 1000)
     local all_cool    = true
     local coolant_locked = false
     for _, name in ipairs(ctx.config.reactors or {}) do
       local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name]
       local module  = ctx.modules and ctx.modules[name]
       if module and module.coolant_trip_locked then
-        coolant_locked = true
+        local diag = module.coolant_safety_diag
+        local recovered_now = diag
+          and diag.measurement_valid
+          and type(diag.coolant_ratio_raw) == "number"
+          and type(diag.recover_threshold) == "number"
+          and diag.coolant_ratio_raw >= diag.recover_threshold
+        if recovered_now then
+          module.coolant_recovery_since_ms = module.coolant_recovery_since_ms or now_ms
+          if (now_ms - module.coolant_recovery_since_ms) >= recovery_confirm_ms then
+            module.coolant_trip_locked = false
+            module.coolant_trip_count = 0
+            module.coolant_trip_window_start = nil
+            module.coolant_recovery_since_ms = nil
+            ctx.log("INFO", ("Coolant-Trip-Sperre automatisch aufgehoben module=%s: Kuehlmittel seit %dms nachweislich ueber recover_threshold=%.3f"):format(
+              tostring(module.id), recovery_confirm_ms, diag.recover_threshold))
+          else
+            coolant_locked = true
+          end
+        else
+          module.coolant_recovery_since_ms = nil
+          coolant_locked = true
+        end
       end
       if reactor then
         local ok_f, fuel = pcall(function() return reactor.getFuelTemperature() end)
@@ -789,11 +817,12 @@ function M.updateReactorControl(ctx)
     -- Nach wiederholten Kuehlmittel-Trips (siehe module_lifecycle.lua) wird
     -- der automatische Temperatur-basierte SAFE-Exit gesperrt: Temperatur
     -- allein sagt nichts darueber aus, ob der Kuehlmitteltank tatsaechlich
-    -- wieder ausreichend gefuellt ist. Ein Bediener muss den Reaktor dann
-    -- manuell per SET_MODE=MASTER wieder freigeben.
+    -- wieder ausreichend gefuellt ist. Die Sperre loest sich von selbst,
+    -- sobald der reale Kuehlmittelwert nachweislich (sustained) wieder ueber
+    -- der Recovery-Schwelle liegt -- kein manueller Eingriff noetig.
     if coolant_locked then
       ctx.warn_once("safe_exit_coolant_locked",
-        "SAFE-Mode Auto-Exit gesperrt: wiederholte Kuehlmittel-Trips -- manueller Reset (SET_MODE=MASTER) erforderlich")
+        "SAFE-Mode Auto-Exit gesperrt: wiederholte Kuehlmittel-Trips -- wartet auf nachgewiesene Kuehlmittel-Erholung")
       return
     end
     if all_cool and #(ctx.config.reactors or {}) > 0 then

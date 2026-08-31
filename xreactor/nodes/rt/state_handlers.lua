@@ -239,19 +239,6 @@ function M.apply_mode(ctx, mode)
     end
   elseif mode == ctx.STATE.MASTER then
     if M.set_state(ctx, ctx.STATE.MASTER, "MODE_APPLY") then
-      -- Manuelle Bediener-Bestaetigung (echtes SET_MODE=MASTER-Kommando, nicht
-      -- der automatische Temperatur-Exit) hebt eine Kuehlmittel-Trip-Sperre
-      -- auf -- der Bediener hat den Wasserstand geprueft/wiederhergestellt.
-      if type(ctx.modules) == "table" then
-        for _, module in pairs(ctx.modules) do
-          if module.type == "reactor" and module.coolant_trip_locked then
-            module.coolant_trip_locked = false
-            module.coolant_trip_count = 0
-            module.coolant_trip_window_start = nil
-            ctx.log("INFO", ("Coolant-Trip-Sperre manuell zurueckgesetzt module=%s reason=MODE_APPLY_MASTER"):format(tostring(module.id)))
-          end
-        end
-      end
       local current = ctx.get_node_state_machine():state()
       local ns = (ctx.constants or constants).node_states
       if current == ns.OFF or current == ns.AUTONOM then
