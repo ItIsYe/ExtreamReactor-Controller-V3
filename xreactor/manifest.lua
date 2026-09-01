@@ -10,7 +10,7 @@ return {
   { path = "installer/manifest.lua", size_bytes = 6436, hash = "e18844b4", always = true },
   { path = "installer/stage.lua", size_bytes = 9132, hash = "b87557db", always = true },
   { path = "installer/ui.lua", size_bytes = 1971, hash = "02e204ae", always = true },
-  { path = "installer/auto_update.lua", size_bytes = 17000, hash = "da923510", always = true },
+  { path = "installer/auto_update.lua", size_bytes = 19624, hash = "71dcf855", always = true },
   { path = "installer/init.lua", size_bytes = 22827, hash = "20dd5066", always = true },
   { path = "installer/reactor_naming.lua", size_bytes = 13072, hash = "dc01bce2", always = true },
   { path = "installer/journal.lua", size_bytes = 8650, hash = "18811651", always = true },
