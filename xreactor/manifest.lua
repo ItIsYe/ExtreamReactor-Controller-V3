@@ -42,7 +42,7 @@ return {
   { path = "core/ui.lua", size_bytes = 12977, hash = "b0274c0e", required_for={"MASTER","RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/ui_router.lua", size_bytes = 17445, hash = "f9e51f26", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
   { path = "core/window_buffer.lua", size_bytes = 3681, hash = "1743677d", required_for={"RT","ENERGY","WATER","FUEL","REPROCESSING"} },
-  { path = "core/utils.lua", size_bytes = 27336, hash = "89261974" },
+  { path = "core/utils.lua", size_bytes = 28408, hash = "58b40a43" },
   { path = "core/remote_update.lua", size_bytes = 4347, hash = "13acf7b4" },
   { path = "core/alerts.lua", size_bytes = 11106, hash = "7ca6c61c", required_for={"MASTER"} },
   -- required_for={"MASTER"}: nur master/runtime_loop.lua require()t
@@ -212,7 +212,7 @@ return {
     { path = "nodes/support/command_handler.lua", size_bytes = 4134, hash = "dbb9d0c1", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/discovery.lua", size_bytes = 1343, hash = "e8aa30c3", required_for={"WATER", "FUEL", "REPROCESSING"} },
     { path = "nodes/support/role_logic.lua", size_bytes = 571, hash = "a3d15a39", required_for={"ENERGY", "WATER", "FUEL", "REPROCESSING", "RT"} },
-    { path = "nodes/support/runtime.lua", size_bytes = 8287, hash = "ffee27f4", required_for={"WATER", "FUEL", "REPROCESSING", "RT", "ENERGY", "MASTER", "VALVE"} },
+    { path = "nodes/support/runtime.lua", size_bytes = 8299, hash = "ddf0d160", required_for={"WATER", "FUEL", "REPROCESSING", "RT", "ENERGY", "MASTER", "VALVE"} },
     { path = "nodes/support/ui_pages.lua", size_bytes = 5590, hash = "0f675170", required_for={"WATER", "FUEL", "REPROCESSING", "ENERGY", "RT"} },
     },
   },

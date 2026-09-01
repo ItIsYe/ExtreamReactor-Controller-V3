@@ -19,7 +19,7 @@ function M.init_logging(args)
   local config_meta = args.config_meta
   local config_warnings = args.config_warnings or {}
 
-  local node_id = utils.read_node_id(cfg.NODE_ID_PATH)
+  local node_id = utils.read_node_id_or_generate(cfg.NODE_ID_PATH)
   local log_name = utils.build_log_name(cfg.LOG_NAME, node_id)
   local debug_enabled = config.debug_logging
   if cfg.DEBUG_LOG_ENABLED ~= nil then
