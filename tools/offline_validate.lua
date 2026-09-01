@@ -65,8 +65,14 @@ end
 -- dofile()'d, nur noch tote Verweise im Manifest. Wurden geloescht. Diese
 -- required-Liste pruefte bisher ihre Existenz und wuerde das jetzt bewusst
 -- richtige Fehlen als Fehler melden — korrigiert.
+-- installer_pocket ist ein zweiter, eigenstaendiger Root-Bootstrap (fuer den
+-- Pocket-Client, siehe seine eigene Kopfkommentar-Historie) mit eigener
+-- Download-/Timeout-Logik, unabhaengig von `installer` und `xreactor/`. Er
+-- fehlte hier bislang komplett -- weder Existenz- noch Syntaxpruefung --
+-- weshalb ein Fehler darin unbemerkt geblieben waere.
 local required = {
   "installer",
+  "installer_pocket",
   "xreactor/start.lua",
   "xreactor/manifest.lua",
   "xreactor/release.lua",
@@ -77,6 +83,7 @@ for _, path in ipairs(required) do
 end
 
 check_parse("installer")
+check_parse("installer_pocket")
 for _, path in ipairs(shell_lines("find xreactor -type f -name '*.lua'")) do
   check_parse(path)
 end

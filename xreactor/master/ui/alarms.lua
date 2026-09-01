@@ -158,12 +158,9 @@ local function render(mon, model)
   end
 end
 
--- Fix (2026-07-01): Signatur war (event, model) — passt aber nicht zum
--- tatsaechlichen Aufrufmuster in multiview.lua (M:handle_input ruft
--- view.hit_test(session.mon, x, y) mit DREI Positionsargumenten auf, wie bei
--- allen anderen Views/hit_test-Funktionen im System). Jetzt konsistent zur
--- echten Aufrufsignatur: (mon, x, y), gibt bei Treffer direkt ein
--- Action-Table zurueck (ui_controller.handle_action behandelt beide Typen).
+-- Signatur (mon, x, y), konsistent zu allen anderen Views/hit_test-
+-- Funktionen -- multiview.lua ruft view.hit_test(session.mon, x, y) mit
+-- drei Positionsargumenten auf.
 local function handle_input(mon, x, y)
   if not y then return nil end
   if footer_hit_zone and y >= footer_hit_zone.y1 and y <= footer_hit_zone.y2 then

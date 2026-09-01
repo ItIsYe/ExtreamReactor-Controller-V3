@@ -34,6 +34,7 @@ jobs:
         run: |
           required=(
             "installer"
+            "installer_pocket"
             "xreactor/start.lua"
             "xreactor/manifest.lua"
             "xreactor/release.lua"

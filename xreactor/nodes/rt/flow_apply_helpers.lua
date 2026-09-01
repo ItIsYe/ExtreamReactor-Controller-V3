@@ -1,18 +1,28 @@
 local M = {}
 
-function M.capture_turbine_flow_readback(turbine, caps, ctrl, requested_flow, rail_cfg, read_turbine_flow, clamp_turbine_flow)
-  local observed_flow = read_turbine_flow(turbine, caps)
-  local fast_rereads = math.max(0, rail_cfg.readback_fast_rereads or 2)
+-- reuse_flow: caller already has a flow reading from this exact tick with
+-- no write/actuation in between (nothing physically could have changed) --
+-- reuse it instead of a guaranteed-identical fresh read, and skip the
+-- retry loop too (a reread would return the same value). Any tick with an
+-- actual write or brake actuation still gets the full fresh readback.
+function M.capture_turbine_flow_readback(turbine, caps, ctrl, requested_flow, rail_cfg, read_turbine_flow, clamp_turbine_flow, reuse_flow)
   local flow_tolerance = rail_cfg.confirm_tolerance or 1
-  local attempt = 0
-  while type(observed_flow) == "number"
-      and math.abs(requested_flow - observed_flow) > flow_tolerance
-      and attempt < fast_rereads do
-    local retry_flow = read_turbine_flow(turbine, caps)
-    if type(retry_flow) == "number" then
-      observed_flow = retry_flow
+  local observed_flow
+  if reuse_flow ~= nil then
+    observed_flow = reuse_flow
+  else
+    observed_flow = read_turbine_flow(turbine, caps)
+    local fast_rereads = math.max(0, rail_cfg.readback_fast_rereads or 2)
+    local attempt = 0
+    while type(observed_flow) == "number"
+        and math.abs(requested_flow - observed_flow) > flow_tolerance
+        and attempt < fast_rereads do
+      local retry_flow = read_turbine_flow(turbine, caps)
+      if type(retry_flow) == "number" then
+        observed_flow = retry_flow
+      end
+      attempt = attempt + 1
     end
-    attempt = attempt + 1
   end
   if type(observed_flow) == "number" then
     ctrl.confirmed_flow = clamp_turbine_flow(observed_flow)

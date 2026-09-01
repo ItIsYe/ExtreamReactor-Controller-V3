@@ -41,9 +41,8 @@ local router_ui_lib = require("nodes.fuel.router_ui")
 local reactor_targets = require("nodes.fuel.reactor_targets")
 local fuel_ui_pages = require("nodes.fuel.ui_pages")
 
--- Feature (2026-07-09): Modularisierungs-Rewrite. main.lua ist jetzt nur
--- noch Orchestrierung (Wiring von Config/Services/Event-Loop) -- die
--- eigentliche Logik lebt in eigenstaendigen Modulen, analog zu nodes/rt/:
+-- main.lua ist nur Orchestrierung (Wiring von Config/Services/Event-Loop)
+-- -- die eigentliche Logik lebt in eigenstaendigen Modulen:
 --   status_snapshot.lua      Status-Payload-Aufbau
 --   command_handler.lua      Kommando-Parsing/Dispatch
 --   fuel_status_network.lua  Netzwerkbasierter Reaktor-Fuellstand-Cache
@@ -75,20 +74,10 @@ local DEFAULT_CONFIG = {
   }
 }
 
--- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md). role_descriptor.config_path zeigte
--- bisher auf "/xreactor/nodes/fuel/config.lua" -- genau die Quelldatei,
--- die Teil des Manifests ist und bei JEDEM Auto-Update (alle ~120s)
--- frisch von GitHub heruntergeladen und ueberschrieben wird. Jede
--- manuelle Bearbeitung dieser Datei (z.B. logistics.reactors eintragen,
--- logistics.enabled=true setzen -- exakt die Config-Anleitung dieser
--- ganzen Session) ging spaetestens beim naechsten Update-Zyklus wieder
--- verloren, ohne jede Warnung. Jetzt: kanonische Nutzer-Config an einem
--- vom Manifest komplett unberuehrten Pfad, mit einmaliger Migration
--- eines eventuell bereits vorhandenen Standes aus der alten Quelldatei
--- (rettet zumindest den Stand, der GENAU JETZT noch da ist -- Bearbeitungen,
--- die bereits von einem frueheren Auto-Update-Zyklus ueberschrieben
--- wurden, sind technisch nicht mehr rekonstruierbar).
+-- role_descriptor.config_path zeigt auf die Manifest-Quelldatei, die bei
+-- jedem Auto-Update ueberschrieben wird -- kanonische Nutzer-Config an
+-- einem vom Manifest unberuehrten Pfad, mit einmaliger Migration eines
+-- eventuell bereits vorhandenen Standes aus der alten Quelldatei.
 local USER_CONFIG_PATH = "/xreactor/config/fuel.lua"
 if not fs.exists(USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
@@ -111,21 +100,12 @@ local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
 config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- Fix (2026-07-12): REST-P0.1 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
--- FIX_2026-07-12.md). /xreactor/config/fuel_routes.lua (die vom Router-
--- Editor per atomarem Schreibvorgang geschriebene, kanonische
--- Routenquelle) wurde beim normalen FUEL-Start bisher NIE geladen --
--- gespeicherte Routen gingen bei JEDEM Neustart verloren, da der
--- operative Router immer nur aus der unveraenderten FUEL-Konfiguration
--- erzeugt wurde (der Editor haette zwar innerhalb derselben Laufzeit
--- "GESPEICHERT=AKTIV" gezeigt, aber ohne jede Wirkung nach einem
--- Neustart). Jetzt: VOR der allerersten Router-Erzeugung wird die Datei
--- geladen und vollstaendig mit derselben validate_tree()-Funktion
--- geprueft, die der Router selbst verwendet -- NUR bei Erfolg wird das
--- Ergebnis nach config.logistics.redstone_tree uebernommen. Bei
--- fehlender oder ungueltiger Datei bleibt redstone_tree unveraendert
--- (kein Fuel-Export ohne gueltige Routen moeglich) und routing_load_
--- status haelt den exakten Fehler fuer die Router-/Diagnostics-Seite fest.
+-- /xreactor/config/fuel_routes.lua (vom Router-Editor atomar geschrieben)
+-- wird VOR der ersten Router-Erzeugung geladen und mit derselben
+-- validate_tree()-Funktion geprueft wie der Router selbst -- nur bei
+-- Erfolg wird das Ergebnis nach config.logistics.redstone_tree
+-- uebernommen. Bei fehlender/ungueltiger Datei bleibt redstone_tree
+-- unveraendert und routing_load_status haelt den Fehler fest.
 local routing_load_status = { ok = true, source = "config" }
 do
   local routes_path = "/xreactor/config/fuel_routes.lua"
@@ -249,14 +229,10 @@ local function hello() comms:send_hello({ reserve = reserve }) end
 local is_master_connected
 local master_peer_state
 
--- Feature (2026-07-11): build_status_payload() macht echte, nicht ganz
--- billige Arbeit (Peripherie-Lesen, Registry-/Logistik-Zusammenfassung)
--- und wurde bisher UNABHAENGIG voneinander sowohl von render_monitor()
--- als auch von render_ampel() aufgerufen -- beide laufen ungefaehr im
--- selben ~1s-Rhythmus, faktisch also zweimal dieselbe Arbeit pro Zyklus.
--- Kurzlebiger Cache (300ms, deutlich unter dem 1s-Renderintervall) haelt
--- diese beiden Aufrufe innerhalb desselben Zyklus zusammen, ohne die
--- Aktualitaet spuerbar zu beeintraechtigen.
+-- Kurzlebiger Cache (300ms, unter dem 1s-Renderintervall) haelt render_
+-- monitor() und render_ampel() (die beide etwa im selben Rhythmus laufen)
+-- innerhalb desselben Zyklus zusammen, statt build_status_payload()'s
+-- Peripherie-/Registry-Arbeit doppelt auszufuehren.
 local payload_cache, payload_cache_ts = nil, 0
 local PAYLOAD_CACHE_TTL_MS = 300
 
@@ -279,9 +255,8 @@ local function build_status_payload()
   return payload_cache
 end
 
--- Feature (2026-07-11): UI-P0.4. Ein zentraler ctx-Aufbau fuer sowohl
--- Model-Bau als auch Zeichnung -- vermeidet, dass beide Stellen leicht
--- unterschiedliche ctx-Felder verwenden.
+-- Zentraler ctx-Aufbau fuer sowohl Model-Bau als auch Zeichnung --
+-- vermeidet, dass beide Stellen leicht unterschiedliche ctx-Felder verwenden.
 local function fuel_ui_ctx()
   return {
     devices = devices, build_status_payload = build_status_payload, comms = comms,
@@ -289,10 +264,9 @@ local function fuel_ui_ctx()
     master_alerts = master_alerts, support_ui_pages = support_ui_pages,
     ui_router = core_ui_router, fuel_ui = fuel_ui, get_router_ui = get_router_ui,
     ui = ui, colors = colors, keys = keys,
-    -- Feature (2026-07-12): REST-P1.1. Garantiertes Logging eines
-    -- Renderfehlers -- vorher behauptete die Fallback-Seite nur "Details
-    -- im LOG_COLLECTOR-Export", ohne dass irgendein Codepfad das
-    -- tatsaechlich sichergestellt haette.
+    -- Garantiert, dass ein Renderfehler tatsaechlich geloggt wird -- die
+    -- Fallback-Seite verspricht sonst "Details im LOG_COLLECTOR-Export"
+    -- ohne dass etwas das sicherstellt.
     on_render_error = function(error_info)
       utils.log("FUEL", string.format(
         "UI-Renderfehler auf Seite '%s' [%s]: %s",
@@ -345,9 +319,8 @@ is_master_connected = function()
 end
 
 local function init()
-  -- Fix (2026-07-09): sofortige, direkte Monitor-Ersterkennung hier
-  -- (synchron, vor dem Event-Loop) -- discover() aktualisiert/bestaetigt
-  -- das danach weiter periodisch.
+  -- Sofortige, direkte Monitor-Ersterkennung (synchron, vor dem Event-Loop)
+  -- -- discover() aktualisiert/bestaetigt das danach weiter periodisch.
   local mon_entry = monitor_adapter.find(nil, "first", FUEL_MONITOR_SCALE, CONFIG.LOG_PREFIX)
   devices.monitor = mon_entry and mon_entry.mon or nil
   devices.monitor_name = mon_entry and mon_entry.name or nil
@@ -369,11 +342,7 @@ local function init()
     end
   })
   services:add(comms)
-  -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md). Der dedizierte Ventilkanal (6504) laeuft
-  -- komplett AUSSERHALB von comms_service (siehe redstone_router.lua) --
-  -- eine VALVE_ACK-Antwort erreicht daher NIE den normalen on_message-
-  -- Handler oben. Analog zu VALVE-Nodes' eigenem "valve_channel"-Service:
+  -- Der dedizierte Ventilkanal (6504) laeuft ausserhalb von comms_service --
   -- roher Event-Listener, der modem_message auf Kanal 6504 direkt an
   -- redstone_router.lua's handle_valve_ack() weiterreicht.
   services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
@@ -391,15 +360,10 @@ local function init()
     last_valve_retry_check_ms = now
     get_rs_router():check_pending_acks()
   end })
-  -- Feature (2026-07-20): "Weg 3" -- Route-Teach-in per manuellem Redstone-
-  -- Input an der jeweiligen VALVE-Node (siehe nodes/valve/main.lua's
-  -- check_teach_input()/ROUTE_TEACH_PULSE). Roher Event-Listener wie
-  -- valve_ack_listener oben -- referenziert router_ui_instance direkt
-  -- (nicht ueber get_router_ui(), das die Seite beim ersten Aufruf erst
-  -- erzeugen wuerde); vor dem ersten Besuch der Router-Seite existiert kein
-  -- Pfad-Editor, der einen Puls entgegennehmen koennte. router_ui.lua's
-  -- handle_teach_pulse() filtert selbst, ob der Teach-Modus gerade aktiv
-  -- ist -- ein Puls ausserhalb davon wird dort schlicht ignoriert.
+  -- "Weg 3"-Route-Teach-in: roher Event-Listener wie valve_ack_listener
+  -- oben, referenziert router_ui_instance direkt (nicht ueber
+  -- get_router_ui(), das die Seite erst beim ersten Aufruf erzeugen
+  -- wuerde). handle_teach_pulse() filtert selbst, ob der Teach-Modus aktiv ist.
   services:add({ name = "valve_teach_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
@@ -421,9 +385,8 @@ local function init()
     end,
     handle_input = function(event) fuel_monitor_ui.handle_input(event) end
   }))
-  -- Fix (2026-07-09): eigener, von der Haupt-UI unabhaengiger Tick fuer
-  -- die Ampel -- laeuft auch wenn (noch) kein Hauptmonitor gefunden
-  -- wurde.
+  -- Eigener, von der Haupt-UI unabhaengiger Tick fuer die Ampel -- laeuft
+  -- auch wenn noch kein Hauptmonitor gefunden wurde.
   local ampel_tick_acc = 0
   services:add({ name = "ampel_render", tick = function(_self, dt)
     ampel_tick_acc = ampel_tick_acc + (tonumber(dt) or 0.5)
@@ -431,18 +394,9 @@ local function init()
     ampel_tick_acc = 0
     render_ampel()
   end })
-  -- Fix (2026-07-11): CRITICAL (UI-P0.1, siehe docs/CODING_AI_FUEL_UI_
-  -- PRIORITY_FIX_2026-07-12.md). Dieser Service verarbeitete JEDEN
-  -- monitor_touch/mouse_click EIN ZWEITES MAL zusaetzlich zu ui_service's
-  -- eigenem handle_input-Pfad (der bereits fuel_monitor_ui.handle_input()
-  -- fuer jedes Event aufruft) -- derselbe physische Touch erreichte die
-  -- aktuelle Seite dadurch mindestens zweimal. Sichtbare Folge z.B. bei
-  -- Toggle-Buttons (Router-Seite: Ausgang auswaehlen): erster Aufruf
-  -- setzt den Zustand, zweiter Aufruf mit denselben Koordinaten hebt ihn
-  -- sofort wieder auf -- "Auswahl blinkt kurz auf und verschwindet
-  -- wieder". Jetzt entfernt: es gibt nur noch EINEN zentralen Input-Pfad
-  -- (ui_service -> fuel_monitor_ui.handle_input), jeder physische Touch
-  -- wird dadurch garantiert genau einmal verarbeitet.
+  -- Nur EIN zentraler Input-Pfad (ui_service -> fuel_monitor_ui.handle_input)
+  -- -- ein zweiter Handler wuerde jeden Touch doppelt verarbeiten (z.B.
+  -- Toggle-Buttons: setzt den Zustand, zweiter Aufruf hebt ihn sofort auf).
   services:add(fuel_status_network.make_overhear_service(fuel_status_cache, constants))
   services:init()
   hello()
@@ -460,21 +414,9 @@ local function init()
 end
 
 init()
--- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
--- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). get_rs_router():tick()
--- treibt die asynchrone Ventil-Transaktion (begin_transaction() in
--- logistics_router.lua) voran -- muss unabhaengig vom 5s-Logistics-
--- Zyklus regelmaessig laufen, sonst wuerde eine laufende Transaktion nie
--- ueber WAIT_SETTLE/HOLD_OPEN hinauskommen.
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
--- Quiesce-Handler. Nutzt dieselbe bereits vorhandene, getestete
--- shutdown_now()-Funktion, die REPROCESSOR ueber cancel() schon fuer
--- MASTER-Staleness verwendet (blockiert alle bekannten Ventile -- lokal
--- UND wireless -- und bricht eine laufende Transaktion sofort ab).
--- shutdown_now() ist fire-and-forget (kein Rueckgabewert), daher wird der
--- sichere Zustand ueber get_active_transaction()==nil bestaetigt (danach
--- synchron geloescht) -- dieselbe Bestaetigungsqualitaet, die REPROCESSORs
--- eigener standby-Mechanismus fuer denselben Zweck bereits hat.
+-- get_rs_router():tick() treibt die asynchrone Ventil-Transaktion voran --
+-- muss unabhaengig vom 5s-Logistics-Zyklus regelmaessig laufen, sonst
+-- kaeme eine laufende Transaktion nie ueber WAIT_SETTLE/HOLD_OPEN hinaus.
 local quiesce_handshake = _G.__xreactor_update_handshake
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
   get_router():tick()

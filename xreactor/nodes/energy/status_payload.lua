@@ -85,13 +85,8 @@ function M.new(opts)
     local degrade_reasons = {}
     if not energy.monitor_bound then reasons[runtime.health.reasons.NO_MONITOR] = true end
     if effective_storage_count == 0 and effective_matrix_count == 0 then
-      -- Fix (2026-07-01): NO_STORAGE wurde bisher immer gesetzt wenn kein
-      -- separater Storage-Adapter vorhanden ist — auch wenn eine Induction
-      -- Matrix vorhanden ist, die selbst den Speicher abdeckt. Da auf den
-      -- meisten Energy-Nodes nur eine Matrix (kein separater Storage) haengt,
-      -- feuerte dieser Alert dauerhaft faelschlich. NO_STORAGE ist nur
-      -- relevant wenn wirklich gar kein Energiespeicher erkannt wurde
-      -- (weder Matrix noch Storage).
+      -- NO_STORAGE nur wenn wirklich kein Energiespeicher erkannt wurde
+      -- (weder Matrix noch separater Storage-Adapter).
       reasons[runtime.health.reasons.NO_STORAGE] = true
     end
     if effective_matrix_count == 0 then

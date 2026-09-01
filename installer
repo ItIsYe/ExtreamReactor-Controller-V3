@@ -40,23 +40,63 @@ end
 -- Mechanismus -- ein einzelner transienter http.get()-Fehlschlag liess
 -- die komplette Erstinstallation sofort abbrechen. Jetzt mit 4 Versuchen
 -- und steigender Wartezeit.
+--
+-- Jeder einzelne Versuch nutzte bisher reines http.get(url) OHNE eigenes
+-- Timeout -- verlaesst sich komplett auf den serverseitig konfigurierten
+-- http.timeout. Genau das Muster, das installer/http.lua's try_once()
+-- (siehe dortige Historie) im Feld haengen liess, bevor es auf
+-- parallel.waitForAny() umgebaut wurde: die bewaehrte http.get() gegen
+-- ein simples os.sleep()-Timeout race lassen, kein eigenes Event-Matching.
+-- Da dieser Bootstrap bei JEDEM Auto-Update erneut heruntergeladen und
+-- ausgefuehrt wird (siehe installer/auto_update.lua's run_update()),
+-- haengt sonst der gesamte Update-Vorgang an genau dieser Stelle -- noch
+-- bevor das bereits gefixte installer/http.lua ueberhaupt geladen ist.
+local REQUEST_TIMEOUT_S = 15
+
+local function try_once(url)
+  if type(parallel) ~= "table" or type(parallel.waitForAny) ~= "function" then
+    local ok, r = pcall(http.get, url)
+    if not ok or not r then return nil, type(r) == "string" and r or "http.get fehlgeschlagen" end
+    local ok2, body = pcall(r.readAll); pcall(r.close)
+    if not ok2 or type(body) ~= "string" or #body == 0 then return nil, "readAll fehlgeschlagen" end
+    return body
+  end
+
+  local body, err, done = nil, nil, false
+  local ok_race, race_err = pcall(parallel.waitForAny,
+    function()
+      local ok, r = pcall(http.get, url)
+      if ok and r then
+        local ok2, b = pcall(r.readAll); pcall(r.close)
+        if ok2 and type(b) == "string" and #b > 0 then
+          body = b
+        else
+          err = "readAll fehlgeschlagen"
+        end
+      else
+        err = type(r) == "string" and r or "http.get fehlgeschlagen"
+      end
+      done = true
+    end,
+    function() os.sleep(REQUEST_TIMEOUT_S) end)
+
+  if not ok_race then return nil, "Anfrage fehlgeschlagen: " .. tostring(race_err) end
+  if not done then return nil, "timeout" end
+  return body, err
+end
+
 local function download(url)
   local last_err
   for attempt = 1, 4 do
-    local ok, r = pcall(http.get, url)
-    if ok and r then
-      local ok2, body = pcall(r.readAll); pcall(r.close)
-      if ok2 and type(body) == "string" and #body > 0 then
-        if looks_like_html(body) then
-          last_err = "HTML-Antwort (CDN)"
-        else
-          return body
-        end
+    local body, err = try_once(url)
+    if body then
+      if looks_like_html(body) then
+        last_err = "HTML-Antwort (CDN)"
       else
-        last_err = "readAll fehlgeschlagen"
+        return body
       end
     else
-      last_err = type(r) == "string" and r or "http.get fehlgeschlagen"
+      last_err = err
     end
     if attempt < 4 then
       p("  Download-Versuch " .. attempt .. " fehlgeschlagen (" .. tostring(last_err) .. "), erneut in " .. (attempt * 2) .. "s ...")

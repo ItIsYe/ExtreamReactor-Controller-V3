@@ -57,12 +57,9 @@ local DEFAULT_CONFIG = {
   }
 }
 
--- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md). Wie bei FUEL bereits behoben: die
--- Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
--- ueberschrieben -- jede manuelle Config-Bearbeitung (u.a. reproc_routes,
--- Feed-Routing) ging dadurch spaetestens beim naechsten Update-Zyklus
--- verloren.
+-- Die Quelldatei ist Teil des Manifests und wird bei jedem Auto-Update
+-- ueberschrieben -- Config muss in eine geschuetzte Nutzerdatei migriert
+-- werden, sonst geht jede manuelle Bearbeitung beim naechsten Update verloren.
 local REPROC_USER_CONFIG_PATH = "/xreactor/config/reprocessor.lua"
 if not fs.exists(REPROC_USER_CONFIG_PATH) and fs.exists(role_descriptor.config_path) then
   local ok_read, handle = pcall(fs.open, role_descriptor.config_path, "r")
@@ -85,12 +82,9 @@ local config_warnings = {}
 local function add_config_warning(message) table.insert(config_warnings, message) end
 config_normalizer.normalize(config, DEFAULT_CONFIG, add_config_warning, utils)
 
--- Fix (2026-07-13): CRITICAL (REPROC-P0.3 Folgefehler, siehe docs/
--- CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md). Wie bei FUEL (REST-
--- P0.1) bereits behoben: /xreactor/config/reproc_routes.lua (die vom
--- Router-Editor geschriebene kanonische Routenquelle) wurde beim
--- normalen REPROCESSOR-Start nie geladen -- gespeicherte Routen gingen
--- bei jedem Neustart verloren.
+-- /xreactor/config/reproc_routes.lua (die vom Router-Editor geschriebene
+-- kanonische Routenquelle) muss beim Start geladen werden, sonst gehen
+-- gespeicherte Routen bei jedem Neustart verloren.
 local routing_load_status = { ok = true, source = "config" }
 do
   local routes_path = "/xreactor/config/reproc_routes.lua"
@@ -230,11 +224,7 @@ local function build_status_payload_uncached()
   reproc_health.status = next(reasons) and health.status.DEGRADED or health.status.OK
   reproc_health.reasons = reasons
   reproc_health.last_seen_ts = os.epoch("utc")
-  -- Fix (2026-07-13): CRITICAL (REPROC-P0.2, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). read_buffers() wurde bisher ZWEIMAL
-  -- innerhalb DESSELBEN Payload-Aufbaus ausgefuehrt -- einmal nur fuer die
-  -- Anzahl (#read_buffers()), einmal erneut fuer den tatsaechlichen Inhalt.
-  -- Jetzt einmal gelesen, Ergebnis fuer beides wiederverwendet.
+  -- Einmal gelesen, Ergebnis fuer Anzahl UND Inhalt wiederverwendet.
   local buffers_snapshot = read_buffers()
   reproc_health.bindings = { buffers = #buffers_snapshot }
   reproc_health.capabilities = { buffers = #config.buffers }
@@ -258,15 +248,9 @@ local function build_status_payload_uncached()
   return payload
 end
 
--- Fix (2026-07-13): REPROC-P0.2 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). "Danach entstehen weitere Aufrufe durch UI-
--- Snapshot, Render und Telemetrie" -- build_status_payload() wurde bisher
--- unabhaengig von render_monitor(), dem ui_service-Snapshot UND dem
--- Telemetrie-Service jeweils komplett neu aufgebaut (jedes Mal read_
--- buffers(), Registry-Zusammenfassung, etc.). Gleiches kurze TTL-Caching
--- wie bereits bei FUEL (main.lua) etabliert -- innerhalb von 300ms wird
--- derselbe bereits gebaute Payload wiederverwendet, statt ihn fuer jeden
--- Konsumenten separat neu aufzubauen.
+-- Kurzes TTL-Caching (wie bei FUEL): innerhalb von 300ms wird derselbe
+-- bereits gebaute Payload fuer render_monitor()/ui_service-Snapshot/
+-- Telemetrie wiederverwendet, statt ihn pro Konsument neu aufzubauen.
 local payload_cache, payload_cache_ts = nil, 0
 local PAYLOAD_CACHE_TTL_MS = 300
 local function build_status_payload()
@@ -296,15 +280,8 @@ local function render_monitor()
     local_alerts = alert_payload and alert_payload.top or {}, local_alerts_critical = alert_payload and alert_payload.critical or 0,
     node_id = current_node_id
   })
-  -- Fix (2026-07-13): CRITICAL (REPROC-P0, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). Dieselben beiden Bugs, die schon
-  -- bei FUEL (v377/v386) und WATER gefixt wurden: Seiten-Closures froren
-  -- das Model vom allerersten Aufbau ein, statt das frische model-
-  -- Argument von router:render(mon, model) zu nutzen. Jetzt direkt
-  -- zugewiesen. Zusaetzlich: error_title/should_clear fuer die Router-
-  -- Seite ergaenzt -- der gemeinsam mit FUEL genutzte router_ui.lua zeigte
-  -- vorher immer "FUEL NODE" im Header, auch wenn er hier im REPROCESSOR
-  -- lief.
+  -- Seiten-Closures duerfen das Model NICHT vom ersten Aufbau einfrieren --
+  -- muessen das frische model-Argument von router:render(mon, model) nutzen.
   if not monitor_router then
     monitor_router = ui_router.new({
       error_title = "REPROC UI ERROR",
@@ -313,13 +290,10 @@ local function render_monitor()
         { name = "Details", render = reproc_ui.render_details },
         { name = "Diagnostics", render = reproc_ui.render_diagnostics,
           handle_touch = function(x, y) return reproc_ui.handle_diagnostics_touch(current_mon, x, y) end },
-        -- Fix (2026-07-26): CRITICAL, identisch zu nodes/fuel/monitor_ui.lua
-        -- (siehe dortiger Fix-Kommentar). Diese Closure gab bisher NICHTS
-        -- zurueck -- ui_router.lua's render() zeichnete dadurch seinen
-        -- eigenen generischen "< Page 4/4 >"-Indikator MIT EIGENER,
-        -- falsch positionierter Touch-Zone ueber den tatsaechlich sichtbaren
-        -- ZURUECK/WEITER-Buttons von router_ui.lua -- ein Tap auf den
-        -- sichtbaren ZURUECK-Button tat nichts.
+        -- Muss den Rueckgabewert von render() durchreichen (identisch zu
+        -- nodes/fuel/monitor_ui.lua) -- sonst zeichnet ui_router.lua seinen
+        -- eigenen generischen Page-Indikator ueber router_ui.lua's echten
+        -- ZURUECK/WEITER-Buttons, deren Tap dann ins Leere liefe.
         { name = "Router", render = function(target, m, should_clear) return get_router_ui():render(target, ui, colors, should_clear) end,
           handle_touch = function(x, y) return get_router_ui():handle_touch(x, y) end }
       },
@@ -330,8 +304,7 @@ local function render_monitor()
   monitor_router:render(mon, model)
 end
 
--- Fix (2026-07-13): CRITICAL (REPROC-P0.2. Wie bei WATER: zentraler,
--- einziger Input-Pfad, konsumierte Navigation stoppt die Weitergabe.
+-- Zentraler, einziger Input-Pfad -- konsumierte Navigation stoppt die Weitergabe.
 local function handle_monitor_touch(event)
   if monitor_router and monitor_router:handle_input(event) then
     return true
@@ -344,19 +317,12 @@ local function handle_monitor_touch(event)
   return false
 end
 
--- Feature (2026-07-13): CRITICAL (REPROC-P0.2, siehe docs/CODING_AI_
--- OTHER_NODES_PERFORMANCE_2026-07-12.md). process_buffers() rief bisher
--- bei JEDEM 0.5s-Hauptzyklus process() fuer ALLE Buffer nacheinander auf,
--- unbudgetiert -- bei vielen konfigurierten Buffern (oder einem
--- langsamen/haengenden Port) konnte das den Zyklus deutlich verlaengern.
--- Jetzt: Round-Robin-Cursor ueber eine deterministisch sortierte
--- Namensliste (hoechstens PROCESS_BUDGET_PER_CYCLE Buffer werden pro
--- Aufruf TATSAECHLICH verarbeitet, der Rest kommt beim naechsten Zyklus
--- automatisch dran -- kein Buffer wird dauerhaft ausgelassen), sowie
--- Backoff fuer durchgehend fehlschlagende Ports (nach mehreren Fehlschlagen
--- in Folge werden mehrere Zyklen uebersprungen, bevor erneut versucht wird
--- -- vermeidet, einen bereits als defekt bekannten Port jeden Zyklus
--- erneut anzusprechen).
+-- Round-Robin-Cursor ueber eine deterministisch sortierte Namensliste:
+-- hoechstens PROCESS_BUDGET_PER_CYCLE Buffer werden pro Aufruf verarbeitet
+-- (der Rest kommt naechsten Zyklus dran), statt unbudgetiert alle Buffer
+-- pro Zyklus zu durchlaufen. Backoff fuer durchgehend fehlschlagende Ports:
+-- nach mehreren Fehlschlaegen werden mehrere Zyklen uebersprungen, statt
+-- einen bekannt defekten Port jeden Zyklus erneut anzusprechen.
 local PROCESS_BUDGET_PER_CYCLE = 4
 local PROCESS_BACKOFF_THRESHOLD = 4
 local PROCESS_BACKOFF_SKIP_CYCLES = 8
@@ -406,35 +372,13 @@ end
 
 local function get_rs_router()
   if not rs_router then
-    -- Fix (2026-07-13): CRITICAL (REPROC-P0.3, siehe docs/CODING_AI_
-    -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Der gemeinsam mit FUEL
-    -- genutzte redstone_router.lua sucht ausschliesslich
-    -- "config.logistics.redstone_tree" oder "config.redstone_tree" --
-    -- REPROCESSOR definiert seine Route jedoch unter "config.feed.
-    -- redstone_tree". Bisher wurde die GESAMTE Root-Config uebergeben,
-    -- in der WEDER config.logistics NOCH ein Top-Level redstone_tree
-    -- existiert -- der Router sah dadurch im normalen Startpfad IMMER
-    -- einen leeren Baum, unabhaengig davon, was tatsaechlich
-    -- konfiguriert war. Route_and_act() fuehrte die Exportaktion bei
-    -- null bekannten Ventilen direkt OHNE Routing aus. Jetzt wird der
-    -- tatsaechliche Feed-Block uebergeben, in dem redstone_tree
-    -- tatsaechlich liegt.
-    --
-    -- Fix (2026-07-17): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_
-    -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 20). "comms" fehlte
-    -- hier komplett -- redstone_router.lua's refresh() nutzt self.comms:
-    -- get_peers(), um einen im Baum konfigurierten Integrator-Namen als
-    -- per Funk erreichbaren Wireless-VALVE-Node zu erkennen (siehe
-    -- FUEL's get_rs_router(), das comms=comms bereits uebergibt). Ohne
-    -- comms-Referenz blieb known_peers in refresh() immer leer, und ein
-    -- konfigurierter Integrator wurde nur noch als lokales lokales
-    -- Peripheral gesucht -- ein Wireless-VALVE-Routerbaum konnte fuer
-    -- REPROCESSOR dadurch als nicht schaltbar enden, obwohl der VALVE-
-    -- Node im Netzwerk online war. get_rs_router() wird erst zur
-    -- Laufzeit aufgerufen (lazy singleton), zu diesem Zeitpunkt ist
-    -- "comms" (weiter oben vorwaertsdeklariert, unten per comms_service.
-    -- new(...) zugewiesen) als Upvalue bereits gesetzt -- kein
-    -- nachtraeglicher Injektionspfad noetig.
+    -- config.feed (nicht die Root-Config) uebergeben, da REPROCESSOR seine
+    -- Route unter config.feed.redstone_tree definiert, nicht unter
+    -- config.logistics.redstone_tree/config.redstone_tree wie FUEL.
+    -- comms=comms ist noetig, damit refresh()'s self.comms:get_peers()
+    -- einen konfigurierten Integrator als erreichbaren Wireless-VALVE-Node
+    -- erkennen kann. get_rs_router() ist ein Lazy-Singleton -- "comms" ist
+    -- zur Laufzeit als Upvalue bereits gesetzt.
     rs_router = redstone_router_lib.new({ config = config.feed or {}, node_id = node_id, log = function(level, msg) utils.log("REPROC", msg, level) end, warn_once = function(key, msg) warn_once(key, msg) end, comms = comms })
   end
   return rs_router
@@ -447,21 +391,12 @@ get_feed_router = function()
   return router
 end
 
--- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). standby wurde bisher an
--- beiden Stellen unten als reine Zuweisung ("standby = true") gesetzt --
--- get_rs_router():tick() lief bewusst UNBEDINGT weiter (auch im Standby),
--- damit eine laufende Transaktion "sauber" abgeschlossen wird. Genau das
--- ist der Bug: eine Transaktion in WAIT_SETTLE/HOLD_OPEN konnte dadurch
--- trotz frisch eingetretenem Standby (z.B. MASTER-Timeout mitten in einer
--- Befuellung) noch den Exportcallback ausfuehren. enter_standby() bricht
--- eine laufende Transaktion beim UEBERGANG in den Standby sofort ab
+-- Bricht eine laufende Transaktion beim UEBERGANG in den Standby sofort ab
 -- (feed_router:cancel() -> redstone_router:shutdown_now(), blockiert alle
--- Ventile, kein Exportcallback mehr) statt sie durchlaufen zu lassen --
--- via tx.on_error() (siehe FUEL-P0-Fix) wird last_error auch sichtbar auf
--- "abgebrochen" gesetzt. Nur beim tatsaechlichen UEBERGANG false->true
--- aktiv (kein wiederholter shutdown_now() jeden Tick, solange schon im
--- Standby).
+-- Ventile) statt sie durchlaufen zu lassen -- sonst koennte eine Transaktion
+-- in WAIT_SETTLE/HOLD_OPEN trotz frisch eingetretenem Standby noch den
+-- Exportcallback ausfuehren. Nur beim tatsaechlichen Uebergang false->true
+-- aktiv (kein wiederholter shutdown_now() jeden Tick im Standby).
 local function enter_standby(reason)
   if standby then return end
   standby = true
@@ -517,20 +452,15 @@ local function init()
       if message.role == constants.roles.MASTER then
         master_seen = os.epoch("utc")
         if message.type == constants.message_types.STATUS and message.payload and message.payload.alerts then master_alerts = message.payload.alerts end
-        -- Fix (2026-07-13): REPROC-P0.4 (siehe docs/CODING_AI_OTHER_
-        -- NODES_PERFORMANCE_2026-07-12.md). Vorher stand dieser Check
-        -- AUSSERHALB der "message.role == MASTER"-Pruefung -- eine HELLO-
-        -- Nachricht von IRGENDEINER Node (RT/FUEL/WATER/...) hob den
-        -- Standby-Modus faelschlich auf. Jetzt nur noch bei bestaetigter
-        -- MASTER-Kommunikation.
+        -- Nur innerhalb der message.role==MASTER-Pruefung -- ein HELLO von
+        -- irgendeiner anderen Node darf den Standby nicht aufheben.
         if message.type == constants.message_types.HELLO then standby = false end
       end
     end
   })
   services:add(comms)
-  -- Feature (2026-07-13): VALVE-P1 (siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md). Gleiche Verdrahtung wie bei FUEL: der
-  -- dedizierte Ventilkanal (6504) laeuft ausserhalb von comms_service.
+  -- Gleiche Verdrahtung wie bei FUEL: der dedizierte Ventilkanal (6504)
+  -- laeuft ausserhalb von comms_service.
   services:add({ name = "valve_ack_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
@@ -546,10 +476,8 @@ local function init()
     last_valve_retry_check_ms = now
     get_rs_router():check_pending_acks()
   end })
-  -- Feature (2026-07-20): "Weg 3"-Route-Teach-in -- identisch zu
-  -- nodes/fuel/main.lua's Verdrahtung (siehe dortiger Kommentar), da
-  -- router_ui.lua/redstone_router.lua zwischen FUEL und REPROCESSOR
-  -- geteilt werden.
+  -- "Weg 3"-Route-Teach-in -- identisch zu nodes/fuel/main.lua's
+  -- Verdrahtung, da router_ui.lua/redstone_router.lua geteilt werden.
   services:add({ name = "valve_teach_listener", wants_events = true, tick = function(_self, dt, event)
     if not event or event[1] ~= "modem_message" then return end
     local channel, message = event[3], event[5]
@@ -585,39 +513,18 @@ local function init()
 end
 
 init()
--- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 (Abschnitt 4): expliziter
--- Quiesce-Handler. Nutzt dieselbe bereits vorhandene, getestete
--- enter_standby()-Funktion (bereits idempotent, bereits fuer MASTER-
--- Staleness verwendet) -- kein neuer Aktor-Code.
+-- Expliziter Quiesce-Handler, nutzt die bereits vorhandene, idempotente
+-- enter_standby()-Funktion -- kein neuer Aktor-Code.
 local quiesce_handshake = _G.__xreactor_update_handshake
 support_runtime.run_event_loop(CONFIG.RECEIVE_TIMEOUT, services, comms, function()
-  -- Fix (2026-07-13): REPROC-P0.4. Die Stale-Pruefung lief bisher NACH
-  -- process_buffers()/feed-Arbeit -- ein gerade erst abgelaufenes MASTER-
-  -- Timeout wirkte dadurch erst AB DEM NAECHSTEN Zyklus, waehrend genau
-  -- dieser Zyklus noch mit dem (bereits veralteten) alten standby-Wert
-  -- lief. Jetzt zuerst die Stale-Pruefung, danach erst Verarbeitung --
-  -- ein abgelaufenes MASTER-Timeout wirkt dadurch sofort, ohne einen
-  -- zusaetzlichen Zyklus durchrutschen zu lassen.
+  -- Stale-Pruefung VOR process_buffers()/feed-Arbeit, damit ein gerade
+  -- abgelaufenes MASTER-Timeout sofort wirkt statt erst ab dem naechsten Zyklus.
   if os.epoch("utc") - master_seen > config.heartbeat_interval * 6000 then enter_standby("MASTER_STALE") end
   process_buffers()
   if not standby then get_feed_router():tick() end
-  -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
-  -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). get_rs_router():tick()
-  -- treibt die asynchrone Ventil-Transaktion (begin_transaction() in
-  -- feed_router.lua) voran -- laeuft unbedingt jeden Zyklus.
-  --
-  -- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). Der urspruengliche
-  -- Kommentar hier ("laeuft bewusst UNBEDINGT auch im Standby, damit eine
-  -- bereits laufende Transaktion sauber abgeschlossen wird") beschrieb
-  -- genau den Bug: ein frisch eingetretener Standby liess eine Transaktion
-  -- in WAIT_SETTLE trotzdem noch den Exportcallback ausfuehren. enter_
-  -- standby() (siehe oben) bricht eine laufende Transaktion jetzt SOFORT
-  -- beim Uebergang in den Standby ab (shutdown_now()) -- dieser Aufruf hier
-  -- bleibt unbedingt bestehen, weil er im Normalbetrieb (nicht im Standby)
-  -- weiterhin jede laufende Transaktion voranbringen muss; waehrend/nach
-  -- Standby ist er wegen der bereits geleerten Transaktion nur noch ein
-  -- billiger No-Op (kein tx mehr vorhanden).
+  -- Treibt die asynchrone Ventil-Transaktion voran -- laeuft unbedingt jeden
+  -- Zyklus; im Standby ist es dank enter_standby()'s sofortigem shutdown_now()
+  -- nur noch ein billiger No-Op (keine Transaktion mehr vorhanden).
   get_rs_router():tick()
 end, quiesce_handshake and { handshake = quiesce_handshake, on_quiesce = function()
   enter_standby("UPDATE_QUIESCE")

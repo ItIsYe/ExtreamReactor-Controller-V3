@@ -83,12 +83,9 @@ local DEFAULT_CONFIG = {
 }
 
 local config_warnings = {}
--- Fix (2026-07-13): CRITICAL (GLOBAL-P0, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md). Wie bei FUEL bereits behoben: die
--- urspruenglich hier hart codierte Quelldatei ist Teil des Manifests und
--- wird bei jedem Auto-Update ueberschrieben -- jede manuelle Config-
--- Bearbeitung ging dadurch spaetestens beim naechsten Update-Zyklus
--- verloren.
+-- Die urspruengliche Quelldatei ist Teil des Manifests und wird bei jedem
+-- Auto-Update ueberschrieben -- Config muss in eine geschuetzte
+-- Nutzerdatei migriert werden.
 local ENERGY_SOURCE_CONFIG_PATH = CONFIG.CONFIG_PATH
 local ENERGY_USER_CONFIG_PATH = "/xreactor/config/energy.lua"
 if not fs.exists(ENERGY_USER_CONFIG_PATH) and fs.exists(ENERGY_SOURCE_CONFIG_PATH) then
@@ -129,21 +126,12 @@ local devices = runtime.devices
 local ui_state = runtime.ui_state
 local now_ms   = runtime.now_ms
 
--- Fix (2026-07-16): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 13). "services" enthielt bisher ALLE
--- Services (COMMS/DISCOVERY/STORAGE_SAMPLE/MATRIX_SAMPLE/TELEMETRY/UI) und
--- wurde ausschliesslich aus dem Matrix-Thread (nodes/energy/matrix.lua)
--- heraus per services:tick() periodisch geticked -- ein langsamer Matrix-
--- Peripherie-Call (dokumentiert 1-4s) verzoegerte dadurch im selben
--- sequentiellen tick()-Aufruf auch COMMS/Discovery/Telemetry/UI, obwohl
--- der eigentliche Sinn der zwei getrennten Coroutinen (heartbeat.lua +
--- matrix.lua via parallel.waitForAny) genau das verhindern sollte.
--- Jetzt: "matrix_services" ist eine EIGENE, zweite service_manager-Instanz
--- nur fuer die beiden potenziell blockierenden Peripherie-Poll-Services
--- (STORAGE_SAMPLE/MATRIX_SAMPLE) -- ausschliesslich aus dem Matrix-Thread
--- geticked. "services" enthaelt nur noch COMMS/DISCOVERY/TELEMETRY/UI und
--- wird jetzt aus dem (nie blockierenden) Heartbeat-Thread periodisch
--- geticked (siehe heartbeat.lua), komplett entkoppelt von Matrix-Polling.
+-- "matrix_services" ist eine eigene, zweite service_manager-Instanz nur fuer
+-- die beiden potenziell blockierenden Peripherie-Poll-Services (STORAGE_
+-- SAMPLE/MATRIX_SAMPLE), ausschliesslich aus dem Matrix-Thread geticked.
+-- "services" enthaelt COMMS/DISCOVERY/TELEMETRY/UI und wird aus dem nie
+-- blockierenden Heartbeat-Thread geticked (siehe heartbeat.lua) -- sonst
+-- wuerde ein langsamer Matrix-Peripherie-Call auch diese Services verzoegern.
 local comms, services, matrix_services, matrix_runtime, topology_cache
 local status_payload_builder, ui_model_builder, ui_pages
 
@@ -161,12 +149,10 @@ local function send_heartbeat(ts)
   hb_state.last_ts = ts
 end
 
--- Fix (2026-07-16): CRITICAL (ENERGY-P0). Einzige zentrale "sende
--- Heartbeat, falls faellig"-Quelle -- ersetzt die zuvor an drei Stellen
--- unabhaengig voneinander dupliziert Intervallpruefung (inter_service_hook
--- unten, matrix_runtime's heartbeat_pump-Option, und einen komplett
--- UNGEGATETEN Aufruf in matrix.lua, der bei jedem ~0.5s-Loop-Durchlauf
--- bedingungslos sendete -- deutlich mehr Heartbeats als konfiguriert).
+-- Einzige zentrale "sende Heartbeat, falls faellig"-Quelle -- gemeinsam
+-- genutzt von inter_service_hook, matrix_runtime's heartbeat_pump-Option
+-- und dem Heartbeat-Thread, damit keine Stelle unabhaengig oefter sendet
+-- als konfiguriert.
 local function send_heartbeat_if_due(now)
   now = now or now_ms()
   if (now - hb_state.last_ts) >= heartbeat_interval_ms() then
@@ -176,14 +162,9 @@ local function send_heartbeat_if_due(now)
   return false
 end
 
--- Fix (2026-07-17): CRITICAL (ENERGY-P1, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 15). heartbeat.lua fuehrte bisher
--- eine EIGENE, private "last_heartbeat_ts"-Kopie im hb-Ctx (initialisiert
--- mit 0, unabhaengig von hb_state.last_ts), um seinen eigenen Timer- und
--- Modem-Event-Pfad zu gaten. Dieser Getter macht hb_state.last_ts (die
--- einzige, tatsaechlich geteilte Quelle, die auch send_heartbeat_if_due()
--- und damit der Matrix-Thread verwenden) fuer heartbeat.lua lesbar, ohne
--- eine zweite, driftende Kopie einzufuehren.
+-- Macht hb_state.last_ts (die einzige geteilte Quelle, die auch
+-- send_heartbeat_if_due() verwendet) fuer heartbeat.lua lesbar, ohne eine
+-- zweite, driftende private Kopie einzufuehren.
 local function get_last_heartbeat_ts()
   return hb_state.last_ts
 end
@@ -221,11 +202,9 @@ local function init()
     on_command = handle_command
   })
 
-  -- Fix (2026-07-16): CRITICAL (ENERGY-P0). "services" tickt jetzt nur noch
-  -- COMMS/DISCOVERY/TELEMETRY/UI, periodisch aus dem Heartbeat-Thread
+  -- Tickt COMMS/DISCOVERY/TELEMETRY/UI periodisch aus dem Heartbeat-Thread
   -- (siehe heartbeat.lua) -- kein inter_service_hook mehr noetig, da
-  -- send_heartbeat_if_due() jetzt die alleinige, zentrale Heartbeat-Quelle
-  -- ist (siehe oben).
+  -- send_heartbeat_if_due() die alleinige zentrale Heartbeat-Quelle ist.
   services = service_manager.new({ log_prefix = "ENERGY" })
   -- Zweite, unabhaengige Service-Gruppe nur fuer die beiden potenziell
   -- blockierenden Peripherie-Poll-Services (STORAGE_SAMPLE/MATRIX_SAMPLE,
@@ -236,16 +215,9 @@ local function init()
   matrix_runtime = matrix_snapshot_runtime.new({
     log_prefix = "ENERGY", config = config, debug_enabled = config.debug_logging,
     get_groups = function() return devices.matrix_groups or {} end,
-    -- Fix (2026-07-13): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_
-    -- NODES_PERFORMANCE_2026-07-12.md). heartbeat_pump() rief send_
-    -- heartbeat() bisher UNGEFILTERT bei jedem Matrix-Sample-Zyklus auf
-    -- (~alle 0.5s), unabhaengig vom eigentlich konfigurierten Heartbeat-
-    -- Intervall (Standard 2s) -- ein Heartbeat-Ziel muss nur SOOFT wie
-    -- konfiguriert bedient werden, nicht bei jeder Gelegenheit, bei der
-    -- der Aufrufer gerade "vorbeikommt".
-    -- Fix (2026-07-16): CRITICAL (ENERGY-P0, Abschnitt 13). Nutzt jetzt die
-    -- zentrale send_heartbeat_if_due()-Quelle statt einer eigenen, dritten
-    -- Kopie derselben Intervallpruefung.
+    -- Nutzt die zentrale send_heartbeat_if_due()-Quelle statt bei jedem
+    -- Matrix-Sample-Zyklus (~0.5s) ungefiltert zu senden, unabhaengig vom
+    -- konfigurierten Heartbeat-Intervall.
     heartbeat_pump = function()
       send_heartbeat_if_due(now_ms())
     end,
@@ -315,13 +287,10 @@ local function init()
     managed_registry = false,
     update_health = function(ok) devices.discovery_failed = not ok end
   }))
-  -- Fix (2026-07-16): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md Abschnitt 13). STORAGE_SAMPLE/MATRIX_SAMPLE
-  -- laufen jetzt in matrix_services (eigene, nur aus dem Matrix-Thread
-  -- geticke Gruppe), NICHT mehr in "services" (COMMS/DISCOVERY/TELEMETRY/
-  -- UI, aus dem Heartbeat-Thread geticke) -- ein langsamer Peripherie-Call
-  -- in einem der beiden Sample-Services verzoegert dadurch nicht mehr
-  -- COMMS/Discovery/Telemetry/UI im selben sequentiellen tick()-Aufruf.
+  -- STORAGE_SAMPLE/MATRIX_SAMPLE laufen in matrix_services (eigene, nur aus
+  -- dem Matrix-Thread geticke Gruppe), nicht in "services" -- ein langsamer
+  -- Peripherie-Call hier verzoegert dadurch nicht COMMS/Discovery/
+  -- Telemetry/UI im selben sequentiellen tick()-Aufruf.
   matrix_services:add(matrix_sampling_service.new({
     name = "STORAGE_SAMPLE", interval = 0.5, start_delay = 0.10,
     runtime = { tick = function(_, ts) storage_runtime.sample_storage_stats(ts or now_ms()) end }
@@ -346,13 +315,9 @@ local function init()
       })
       ui_state.model = model
       local pages = {
-        -- Fix (2026-07-06): diese Wrapper gaben den Rueckgabewert von
-        -- ui_pages.render_xxx() (die footer_nav()-Touch-Koordinaten fuer
-        -- ZURUECK/WEITER) bisher nicht zurueck — der Router bekam immer
-        -- nil und konnte seine Touch-Zonen nie auf die sichtbaren Buttons
-        -- legen. Derselbe Bug wie zuvor bei RT (dort direkt behoben durch
-        -- return-Statements in mockup_pages.lua selbst), hier zusaetzlich
-        -- durch diese anonyme Wrapper-Schicht verursacht.
+        -- Wrapper muss den Rueckgabewert von ui_pages.render_xxx() (die
+        -- footer_nav()-Touch-Koordinaten) durchreichen, sonst kann der
+        -- Router seine Touch-Zonen nicht auf die sichtbaren Buttons legen.
         { name = "Overview",     render = function(t, v) return ui_pages.render_overview(t, v.data or v) end },
         { name = "Matrices",     render = function(t, v) return ui_pages.render_matrices(t, v.data or v) end },
       }
@@ -429,11 +394,10 @@ local function is_terminate(err)
   return tostring(err or ""):lower():find("terminate", 1, true) ~= nil
 end
 
--- Heartbeat-Context für heartbeat.lua
--- Fix (2026-07-16): CRITICAL (ENERGY-P0). services = die "schnelle" Gruppe
--- (COMMS/DISCOVERY/TELEMETRY/UI) -- heartbeat.lua tickt sie jetzt
--- periodisch (siehe dort, tick_interval_s), zusaetzlich zum bisherigen
--- Event-getriebenen Weiterreichen (monitor_touch/mouse_click/key).
+-- Heartbeat-Context für heartbeat.lua. services = die "schnelle" Gruppe
+-- (COMMS/DISCOVERY/TELEMETRY/UI) -- heartbeat.lua tickt sie periodisch
+-- (tick_interval_s), zusaetzlich zum Event-getriebenen Weiterreichen
+-- (monitor_touch/mouse_click/key).
 local function make_hb_ctx()
   return {
     comms = comms, config = config, devices = devices,
@@ -447,14 +411,10 @@ local function make_hb_ctx()
   }
 end
 
--- Matrix-Context für matrix.lua
--- Fix (2026-07-16): CRITICAL (ENERGY-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 13). services = jetzt matrix_
--- services (NUR STORAGE_SAMPLE/MATRIX_SAMPLE, siehe oben) statt der
--- vollstaendigen Service-Liste -- "Matrix-Thread tickt ausschliesslich
--- einen dedizierten Matrixservice". send_heartbeat_if_due statt des rohen,
--- ungegateten send_heartbeat -- war zuvor die Quelle der ungefilterten
--- Heartbeat-Flut (jeder ~0.5s-Loop-Durchlauf sendete bedingungslos).
+-- Matrix-Context für matrix.lua. services = matrix_services (nur STORAGE_
+-- SAMPLE/MATRIX_SAMPLE), nicht die vollstaendige Service-Liste --
+-- send_heartbeat_if_due gated den Aufruf, statt ungefiltert bei jedem
+-- ~0.5s-Loop-Durchlauf zu senden.
 local function make_mx_ctx()
   return {
     services = matrix_services, now_ms = now_ms,
@@ -480,13 +440,8 @@ elseif is_terminate(result) then
   shutdown("terminate received")
 else
   shutdown("runtime error: " .. tostring(result))
-  -- Fix (2026-07-13): CRITICAL (SHARED-P0.2, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). Vorher eigener, dupliziertes
-  -- Crash-Handling hier, das UNBEGRENZT auf einen physischen Tastendruck
-  -- wartete (pcall(os.pullEvent,"key")), bevor ueberhaupt rebootet wurde
-  -- -- ohne physische Anwesenheit blieb ENERGY bei einem Fehler fuer
-  -- immer haengen. Jetzt: dieselbe bereits fuer FUEL/WATER/REPROCESSOR/
-  -- RT/LOG_COLLECTOR bewaehrte Logik (begrenzte Wartezeit, automatischer
-  -- Reboot, Crash-Loop-Erkennung) wiederverwendet statt dupliziert.
+  -- Gemeinsame Crash-Screen-Logik (begrenzte Wartezeit, automatischer
+  -- Reboot, Crash-Loop-Erkennung) wie bei FUEL/WATER/REPROCESSOR/RT/
+  -- LOG_COLLECTOR -- kein unbegrenztes Warten auf einen Tastendruck.
   support_runtime.crash_screen("runtime error: " .. tostring(result))
 end

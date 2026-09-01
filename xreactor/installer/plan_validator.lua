@@ -1,24 +1,18 @@
 -- installer/plan_validator.lua
 --
--- Vorab-Validierung des Installationsplans (INSTALL/MANIFEST-P1, siehe
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 7). Muss
--- VOR dem ersten destruktiven Schritt (Config-Backup/Loeschen des alten
--- Baums) aufgerufen werden -- ein einziger fehlgeschlagener Guard lehnt die
--- GESAMTE geplante Installation ab, statt strukturelle Probleme erst
--- waehrend/nach dem Loeschen zu entdecken.
+-- Vorab-Validierung des Installationsplans. Muss VOR dem ersten
+-- destruktiven Schritt (Config-Backup/Loeschen des alten Baums) aufgerufen
+-- werden -- ein fehlgeschlagener Guard lehnt die gesamte geplante
+-- Installation ab, statt Probleme erst waehrend/nach dem Loeschen zu entdecken.
 --
 -- Prueft ausschliesslich, was aus Rolle + Manifest + geplanter Dateiliste
--- OHNE Netzwerk-Download bekannt ist: erlaubte Rollenwerte, erwarteter
+-- ohne Netzwerk-Download bekannt ist: erlaubte Rollenwerte, erwarteter
 -- Entrypoint der Rolle, doppelte Pfade, absolute Pfade/".."-Traversal,
 -- gueltige Hash-/Groessenfelder, Manifest-Selbstkonsistenz sowie maximale
--- Manifest-/Dateigroesse. Die im Audit zusaetzlich geforderte transitive
--- require()/dofile()-Abdeckung laesst sich nicht aus dem Plan allein
--- pruefen (die Dateiinhalte sind vor dem Download nicht bekannt) -- das
--- wird stattdessen als eigenstaendiger Testsuite-Check gegen den echten
--- Quelltext durchgefuehrt (siehe tests/manifest_transitive_require_
--- coverage_test.lua) und ersetzt hier keinen Laufzeit-Guard, sondern
--- verhindert, dass eine unvollstaendige Dateizuordnung ueberhaupt erst ins
--- Manifest gelangt.
+-- Manifest-/Dateigroesse. Transitive require()/dofile()-Abdeckung laesst
+-- sich nicht aus dem Plan allein pruefen (Dateiinhalte sind vor dem
+-- Download unbekannt) -- das laeuft als eigenstaendiger Testsuite-Check
+-- (siehe tests/manifest_transitive_require_coverage_test.lua).
 
 local M = {}
 

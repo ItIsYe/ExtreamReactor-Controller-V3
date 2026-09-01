@@ -58,14 +58,8 @@ local CONFIG = {
     redstone_tree      = {},
   },
 }
--- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md, Punkt 28.1, identischer Fund wie bei
--- nodes/fuel/config.lua). "feed = CONFIG.DEFAULT_FEED" stand bisher INNERHALB von CONFIG's
--- eigenem Tabellenkonstruktor -- CONFIG war zu diesem Zeitpunkt noch
--- nicht zugewiesen, ein Zugriff darauf waere ein Laufzeitfehler
--- gewesen. Zusaetzlich fehlte "return" komplett -- diese Datei war
--- dadurch, wie bei FUEL, vollstaendig wirkungslos, egal was
--- hineingeschrieben wurde. Jetzt als separate Zuweisungen nach dem
--- Tabellenkonstruktor, plus "return CONFIG" am Ende.
+-- "feed" muss als separate Zuweisung NACH dem CONFIG-Tabellenkonstruktor
+-- stehen (CONFIG ist innerhalb des Konstruktors selbst noch nicht
+-- zugewiesen).
 CONFIG.feed  = CONFIG.DEFAULT_FEED
 return CONFIG

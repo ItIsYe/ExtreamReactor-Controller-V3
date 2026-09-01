@@ -132,7 +132,11 @@ end
 -- Die Rolle darf NIEMALS gestartet werden -- der Guard muss abbrechen
 -- (error()), bevor der restliche start.lua-Code (der die Rolle startet)
 -- ueberhaupt erreicht wird, und muss einen Reboot fuer den naechsten
--- Recovery-Versuch ausloesen.
+-- Recovery-Versuch ausloesen. attempt_recovery_resume() selbst retried den
+-- Download jetzt bis zu 4x mit Backoff (derselbe haengen-sichere
+-- try_once()-Mechanismus wie in installer/http.lua, /installer und
+-- /installer_pocket) -- 3 Backoff-Sleeps (Versuche 1-3) plus 1 abschliessender
+-- Reboot-Delay-Sleep der aeusseren Guard-Logik ergeben 4 os.sleep()-Aufrufe.
 do
   local ok, err, reboot_calls, sleep_calls, dofile_calls = run_guard(
     { [SLOT_A] = journal("INSTALLING", 1) }, false)
@@ -143,7 +147,7 @@ do
     error("expected recovery-abort error, got: " .. tostring(err))
   end
   if reboot_calls ~= 1 then error("expected exactly one os.reboot() call for the retry loop, got " .. reboot_calls) end
-  if sleep_calls ~= 1 then error("expected exactly one os.sleep() call before the retry reboot, got " .. sleep_calls) end
+  if sleep_calls ~= 4 then error("expected 3 backoff sleeps + 1 reboot-delay sleep (4 total), got " .. sleep_calls) end
   if #dofile_calls ~= 0 then error("dofile(recovery installer) should not have run since http.get failed") end
 end
 

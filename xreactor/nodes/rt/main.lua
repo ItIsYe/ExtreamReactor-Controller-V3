@@ -17,16 +17,9 @@ local CONFIG = {
   NODE_ID_PATH       = "/xreactor/config/node_id.txt",
   CONFIG_PATH        = nil,          -- wird von role_descriptor befüllt
   CAPACITY_CACHE_PATH = "/xreactor/config/capacity_cache.lua",
-  -- Fix (2026-07-14): CRITICAL. RT-P0 (siehe docs/CODING_AI_RT_CONTROL_
-  -- CADENCE_2026-07-12.md). 0.5s hiess: der periodische Scheduler-Zweig
-  -- von support_runtime.run_event_loop() (der Reaktor-/Turbinen-Control-
-  -- Tick ausloest, siehe services:add({name="control", ...}) unten) lief
-  -- nur alle 0.5s (2 Hz) -- weit unter der verbindlichen 10-Hz-Vorgabe
-  -- (reactor_control_interval_s = turbine_control_interval_s = 0.10).
-  -- 0.1s bringt den gesamten Scheduler-Zyklus auf die geforderten 10 Hz.
-  -- Andere periodische Services (Discovery/Telemetry/UI) sind bereits
-  -- ueber ihre eigene interval-/due-Pruefung von dieser Aenderung
-  -- entkoppelt und behalten ihre konfigurierte Rate.
+  -- 0.1s so the scheduler cycle (which drives the reactor/turbine control
+  -- tick) meets the required 10Hz cadence; other periodic services gate on
+  -- their own interval and are unaffected.
   RECEIVE_TIMEOUT    = 0.1,
   -- Rod-Grenzen
   ROD_MIN            = 0,
@@ -111,15 +104,8 @@ end
 local config_warnings = {}
 local function add_config_warning(msg) table.insert(config_warnings, msg) end
 config_normalizer.migrate_legacy_paths(config, add_config_warning)
--- Fix (2026-07-16): CRITICAL (RT-P1, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 5). Migriert bekannte historische
--- Default-Werte (autonom.reactor_adjust_interval=5.0/reactor_adjust_
--- interval_individual=1.0, vor dem 10-Hz-Fix) gezielt auf die neuen 0.10-
--- Defaults, gesteuert ueber config.version -- laeuft NUR, wenn config.
--- version noch unter dem Migrations-Stand liegt, und wird SOFORT
--- persistiert, damit sie garantiert nur einmal ausgefuehrt wird (nicht bei
--- jedem Boot erneut, siehe migrate_schema_version()-Kommentar in
--- config_normalizer.lua fuer die genaue Begruendung).
+-- Migrates known historical default values (pre-10Hz-fix) to the current
+-- 0.10 defaults, gated on config.version so it runs and persists only once.
 if config_normalizer.migrate_schema_version(config, DEFAULT_CONFIG, add_config_warning) then
   pcall(utils.write_config, CONFIG.CONFIG_PATH, config)
 end
@@ -181,12 +167,8 @@ local devices = {
 local master_seen_ts = nil
 local master_alerts  = {}
 
--- Fix (2026-07-13): RT-P1.4 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). manifest_id/release_id wurden bisher bei
--- JEDEM Aufruf der Status-Snapshot-Funktion (Monitor-Hotpath, laeuft
--- periodisch) per require()/dofile() neu eingelesen -- unnoetiger
--- Datei-I/O in einem Pfad, der so oft wie moeglich schlank bleiben soll.
--- Einmalig beim Modul-Laden berechnet, danach nur noch referenziert.
+-- Computed once at module load instead of on every status-snapshot call
+-- (hot path) to avoid repeated require()/dofile() I/O.
 local RT_BUILD_INFO = (function()
   local ok, rel = pcall(require, "xreactor.release")
   if not ok or type(rel) ~= "table" then
@@ -213,21 +195,17 @@ local last_command, last_command_ts
 local last_status_snapshot
 local capacity_learning_state  -- persistenter Learning-State
 
--- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). Modul-Startup-Zustand (welches Modul gerade
--- hochfaehrt, die Warteschlange, der Watchdog) war bisher NUR als lokale
--- No-Op-Stubs vorhanden ("RT-Node hat keine Modul-Startup-Sequenz") -- echte,
--- persistente Zustandsvariablen hier, damit start_module()/process_startup()/
--- request_startup_if_needed() etc. tatsaechlich funktionieren koennen.
+-- Persistent module-startup state (which module is booting, queue,
+-- watchdog) backing start_module()/process_startup()/
+-- request_startup_if_needed().
 local modules_registry = {}
 local active_startup_id = nil
 local startup_queue_list = {}
 local startup_started_ms_value = nil
 local startup_watchdog_tripped_value = false
--- Forward-Deklaration nach demselben Muster wie "local ctx" oben: make_
--- lifecycle_ctx() wird erst in init() definiert (braucht comms/ctx/node_
--- state_machine als Upvalues), muss aber auch von build_command_ctx() (VOR
--- init() definiert) aus erreichbar sein.
+-- Forward declaration: make_lifecycle_ctx() is defined in init() (needs
+-- comms/ctx/node_state_machine as upvalues) but must be reachable from
+-- build_command_ctx(), which is defined before init().
 local make_lifecycle_ctx
 
 -- ── Hilfsfunktionen ──────────────────────────────────────────────────────────
@@ -341,32 +319,10 @@ local function build_ctx()
       return turbine_control.get_turbine_ctrl(ctx, name)
     end,
     warned            = {},   -- Dedup-Map für warn_once
-    -- Fix (2026-07-13): CRITICAL (RT-P0.2, siehe docs/CODING_AI_OTHER_
-    -- NODES_PERFORMANCE_2026-07-12.md). reactor_control.lua's SAFE-
-    -- Recovery-Pfad (updateReactorControl(), beim Abkuehlen aller
-    -- Reaktoren unter die Recovery-Schwelle) ruft ctx.setState(ctx.
-    -- STATE.MASTER, "SAFETY_TEMPERATURE_RECOVERED") auf -- dieser
-    -- Context (build_ctx()'s Ergebnis, tatsaechlich fuer updateReactor
-    -- Control() verwendet) hatte bisher UEBERHAUPT kein setState-Feld,
-    -- nicht einmal node_state_machine selbst. Sobald alle Reaktoren aus
-    -- SAFE ausreichend abgekuehlt waren, schlug der Control-Service mit
-    -- "attempt to call a nil value" fehl und ging in Service-Backoff --
-    -- ausgerechnet im sicherheitskritischsten Moment (Recovery aus einem
-    -- Notzustand). node_state_machine ist eine Modul-Ebene-Variable
-    -- (siehe "local node_state_machine" oben) -- wird hier als Upvalue
-    -- referenziert; Lua-Closures greifen bei jedem Aufruf auf den
-    -- AKTUELLEN Wert zu, nicht auf den zum Zeitpunkt der Funktions-
-    -- erstellung, daher ist es unproblematisch, dass node_state_machine
-    -- erst NACH build_ctx()'s Aufruf tatsaechlich zugewiesen wird (siehe
-    -- "node_state_machine = machine.new(...)" weiter unten) -- setState
-    -- wird sowieso erst viel spaeter, waehrend des normalen Regelbetriebs,
-    -- tatsaechlich aufgerufen. Nutzt die bereits im gesamten RT-Code
-    -- etablierte transition(target)-API (siehe z.B. command_handler.lua/
-    -- module_lifecycle.lua) statt ein neues, inkonsistentes Muster
-    -- einzufuehren -- der "reason"-Parameter wird zwar nicht an
-    -- transition() weitergereicht (kein anderer Aufrufer im Projekt
-    -- nutzt einen Context-Parameter dafuer), aber wie vom Dokument
-    -- gefordert trotzdem geloggt.
+    -- reactor_control.lua's SAFE-recovery path calls ctx.setState(...) --
+    -- this context needs the field. node_state_machine is a module-level
+    -- upvalue, assigned after build_ctx() runs but before setState is ever
+    -- actually called, so the closure sees the real value fine.
     setState = function(next_state, reason)
       log("INFO", "State-Uebergang: " .. tostring(next_state) .. (reason and (" (" .. tostring(reason) .. ")") or ""))
       if node_state_machine then
@@ -437,14 +393,8 @@ local function build_discovery_context()
     devices = devices,
     registry = registry,
     monitor_name = nil,
-    -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md). Waren bisher No-Ops -- das Modul-Register
-    -- (modules_registry) wurde dadurch NIE befuellt, wodurch start_module()/
-    -- process_startup() immer auf ein leeres ctx.modules trafen. M.refresh_
-    -- bindings() ruft beide Funktionen ohne Argumente und ohne Auswertung
-    -- des Rueckgabewerts auf (ctx.build_modules(); ctx.refresh_module_
-    -- peripherals()) -- die shared modules_registry-Tabelle muss deshalb IN
-    -- PLACE mutiert werden, nicht per Rueckgabewert ersetzt werden.
+    -- M.refresh_bindings() calls these without evaluating a return value,
+    -- so modules_registry must be mutated in place, not replaced.
     build_modules = function()
       local fresh = discovery_runtime.build_modules(devices)
       for id in pairs(modules_registry) do
@@ -471,39 +421,15 @@ local function discover()
   devices.last_scan_ts = os.epoch("utc")
 end
 
--- Fix (2026-07-15): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
--- 2026-07-12.md Abschnitt 6, "stabilen Discovery-Default nach erfolgreichem
--- Boot verlangsamen"). discover() lief bisher fest alle config.scan_interval
--- (10s), fuer immer, unabhaengig davon ob sich die gebundenen Geraete seit
--- Ewigkeiten nicht mehr geaendert haben -- jeder Lauf scannt peripheral.
--- getNames() plus getMethods()/getType()/adapter.inspect() fuer jedes
--- sichtbare Geraet. Nutzt den bestehenden should_discover-Erweiterungspunkt
--- von services/discovery_service.lua (KEINE Aenderung am geteilten Service
--- noetig, der auch von WATER/FUEL/etc. genutzt wird): nach
--- DISCOVERY_STABLE_STREAK unveraenderten Scans in Folge (binding_signature
--- bleibt gleich) wird nur noch alle DISCOVERY_SLOW_MULTIPLIER * scan_interval
--- Sekunden tatsaechlich gescannt -- eine echte Aenderung (Attach/Detach)
--- wird beim naechsten faelligen Scan erkannt und setzt sofort wieder auf
--- die normale 10s-Kadenz zurueck.
---
--- Fix (2026-07-16): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 4). discovery_service.lua's tick()
--- aktualisiert self.last_scan NUR bei einem tatsaechlich ausgefuehrten Scan
--- (Zeile "if not should_scan then return end" laeuft VOR "self.last_scan =
--- ts"). Ein uebersprungener faelliger Scan veraendert last_scan also NICHT
--- -- "due" (ts - last_scan >= interval*1000) bleibt ab diesem Zeitpunkt bei
--- JEDEM folgenden RT-Schedulertick (~alle 0.1s) wahr. Der alte Zaehler
--- (discovery_slow_skip_count += 1 pro should_discover()-Aufruf) zaehlte
--- deshalb Scheduler-TICKS, nicht echte 10s-Scanintervalle -- erreichte
--- DISCOVERY_SLOW_MULTIPLIER=6 schon nach ~0.6s statt nach den beabsichtigten
--- ~60s. Jetzt: eine echte Wanduhr-Deadline (discovery_next_slow_scan_at,
--- naechster ZULAESSIGER Scan-Zeitpunkt in ms) statt eines Aufruf-Zaehlers --
--- should_discover() bekommt den Discovery-Service selbst als ersten
--- Parameter (service.interval fuer die tatsaechlich konfigurierte
--- Basis-Rate) und vergleicht direkt gegen die aktuelle Zeit. Ein weit in
--- der Zukunft liegender naechster Scan wird bei Erreichen GENAU EINMAL
--- ausgefuehrt und die Deadline von diesem Zeitpunkt aus neu gesetzt (kein
--- Scanburst durch mehrere "verpasste" Zwischenschritte).
+-- After DISCOVERY_STABLE_STREAK unchanged scans in a row (binding_
+-- signature stable), scan only every DISCOVERY_SLOW_MULTIPLIER *
+-- scan_interval seconds instead of every scan_interval -- a real change
+-- (attach/detach) is caught at the next due scan and resets to the normal
+-- cadence immediately. Uses a wall-clock deadline
+-- (discovery_next_slow_scan_at), not a call counter, since
+-- discovery_service.lua only updates last_scan on an actually-executed
+-- scan -- a counter of should_discover() calls would count scheduler
+-- ticks (~every 0.1s), not real scan intervals.
 local DISCOVERY_STABLE_STREAK    = 3
 local DISCOVERY_SLOW_MULTIPLIER  = 6
 local discovery_stable_count = 0
@@ -551,12 +477,8 @@ local function build_status_payload(status_level)
         configured_reactors = runtime_config.configured_reactors,
         configured_turbines = runtime_config.configured_turbines,
         health = health, warn_once = warn_once,
-        -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_
-        -- NODES_PERFORMANCE_2026-07-12.md). War hart auf false verdrahtet --
-        -- MASTER konnte den vom Pflicht-Test geforderten degradierten
-        -- Zustand nach einem Startup-Watchdog-Timeout dadurch NIE ueber die
-        -- normale Health-Telemetrie sehen (CONTROL_DEGRADED-Reason blieb
-        -- immer unerreichbar).
+        -- Was hardcoded false, so MASTER could never see the required
+        -- degraded state (CONTROL_DEGRADED) after a startup watchdog timeout.
         startup_watchdog_tripped = startup_watchdog_tripped_value,
         rt_health = rt_health,
         configured_caps = runtime_config.configured_caps,
@@ -564,12 +486,8 @@ local function build_status_payload(status_level)
     end,
     devices              = devices,
     registry             = registry,
-    -- Fix (2026-07-16): CRITICAL (MASTER-P0). modules/active_startup/
-    -- startup_queue waren hart auf {}/nil/{} verdrahtet -- MASTER erhielt
-    -- dadurch NIE echten Modul-Fortschritt (ramp_state, STARTING/STABLE
-    -- etc.) per Telemetrie und konnte "erst nach passender Stable-
-    -- Telemetrie zum naechsten Modul wechseln" (Pflicht-Fix) gar nicht
-    -- erfuellen.
+    -- Were hardcoded {}/nil/{}, so MASTER never received real module
+    -- progress (ramp_state, STARTING/STABLE) via telemetry.
     modules              = modules_registry,
     active_startup       = active_startup_id,
     startup_queue        = startup_queue_list,
@@ -595,15 +513,9 @@ local function build_status_payload(status_level)
   return payload
 end
 
--- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). startup_diagnostics.M.handle_startup_timeout()
--- braucht einen Temperatur-/RPM-Schnappschuss (ctx.update_status_snapshot()
--- -> {max_temp, avg_rpm, turbines={...}}), um zu entscheiden ob der
--- Startup-Watchdog-Timeout ein EMERGENCY (zu heiss/zu schnell) oder nur ein
--- WARNING (schlicht zu langsam) ist. status_snapshot.build_status_payload()
--- liefert kein max_temp/avg_rpm, daher ein eigener, direkter Scan ueber die
--- gebundenen Peripheriegeraete (dieselben Adapter wie build_turbine_
--- snapshots/build_reactor_snapshots in status_snapshot.lua).
+-- Feeds startup_diagnostics.handle_startup_timeout()'s EMERGENCY-vs-WARNING
+-- decision (max_temp/avg_rpm), which status_snapshot.build_status_payload()
+-- doesn't provide -- scans bound peripherals directly instead.
 local function update_status_snapshot()
   local max_temp = nil
   for _, entry in ipairs(registry:get_bound_devices("reactor")) do
@@ -648,15 +560,7 @@ local function update_monitor()
     current_state = current_state_value,
     configured_reactors = runtime_config.configured_reactors,
     configured_turbines = runtime_config.configured_turbines,
-    -- Fix (2026-07-13): RT-P1.3 (siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md). get_target_rpm() liegt tatsaechlich in
-    -- turbine_control (siehe Zeile ~671/732 weiter unten, dort korrekt
-    -- verwendet), nicht in reactor_control -- reactor_control.get_
-    -- target_rpm existiert nicht, ist also immer nil, wodurch dieser
-    -- "and"-Ausdruck IMMER auf den statischen Default (ctx.CONFIG.
-    -- TARGET_RPM oder CONFIG.TARGET_RPM, z.B. 900) zurueckfiel, egal
-    -- welchen Sollwert MASTER tatsaechlich gerade vorgibt. Der Monitor
-    -- zeigte dadurch praktisch immer denselben statischen Wert an.
+    -- get_target_rpm() lives in turbine_control, not reactor_control.
     get_target_rpm = function() return turbine_control.get_target_rpm(ctx) end,
     binding = binding,
     build_health_payload = function() return build_status_payload() end,
@@ -671,12 +575,7 @@ local function update_monitor()
     capacity_learning    = ctx and ctx.capacity_learning or capacity_learning_state,
     constants            = constants,
     targets              = ctx and ctx.targets or {},
-    -- Fix (2026-07-01): target_power und target_percent fehlten im Model —
-    -- monitor_ui.lua liest model.target_power direkt, nicht model.targets.power.
-    -- Ohne diese Felder zeigte die RT-UI dauerhaft "Soll 0.0" und
-    -- "WARTET AUF AUFTRAG" obwohl der Node korrekt unter Master-Steuerung lief.
-    -- ctx.targets.power wird in command_handler.lua bei SET_SETPOINTS gesetzt:
-    -- targets.power = capacity * pct / 100 (absoluter RF/t-Sollwert).
+    -- monitor_ui.lua reads model.target_power directly, not model.targets.power.
     target_power         = ctx and ctx.targets and ctx.targets.power or 0,
     target_percent       = ctx and ctx.targets and ctx.targets.power_percent or 0,
     node_state_machine   = node_state_machine,
@@ -696,30 +595,11 @@ local function control_tick()
   -- A dedicated safe-state writer owns the hardware from the first update
   -- quiesce attempt onward. Normal regulation/startup must not race it.
   if rt_update_quiescing then return end
-  -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md). module_lifecycle.process_startup() war im
-  -- gesamten Projekt nirgends verdrahtet (toter Code) -- start_module()
-  -- setzte module.state="STARTING"/active_startup, aber ohne process_
-  -- startup() progressierte kein Modul jemals weiter Richtung STABLE, egal
-  -- wie oft der Control-Tick lief. process_startup() ist ein billiger No-Op
-  -- (frueher Return), solange kein Startup aktiv ist (ctx.get_active_
-  -- startup() == nil), daher unbedenklich jeden Tick aufzurufen.
-  --
-  -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md Abschnitt 13). module_lifecycle.update_
-  -- module_states() existierte bereits, war aber im gesamten Projekt
-  -- nirgends verdrahtet -- die einzige Fundstelle war ein Test. Ohne sie
-  -- liefen STABLE->RUNNING-Uebergaenge, laufende Modul-Limitbewertung
-  -- (TEMP/WATER-Grenzwerte, die module.state=ERROR + SAFE/EMERGENCY
-  -- ausloesen), der Modulstate LIMITED sowie modulbezogene Temperatur-/
-  -- Coolant-Transitionen NIE ausser waehrend eines aktiven Startups (dort
-  -- deckt check_interlocks() innerhalb process_startup() nur EINEN Teil
-  -- derselben Pruefung ab). Reihenfolge bewusst SICHERHEITSERST: update_
-  -- module_states() (erkennt/reagiert auf neue Gefahrenzustaende ueber
-  -- ALLE Module) laeuft VOR process_startup() (treibt nur das aktuell
-  -- startende Modul voran) und VOR reactor_control/turbine_control (die
-  -- eigentliche Regelung darf nicht auf einem in diesem Tick bereits
-  -- veralteten Sicherheitszustand aufbauen).
+  -- Safety-first order: update_module_states() (detects/reacts to danger
+  -- states across ALL modules, e.g. TEMP/WATER limits -> ERROR/SAFE/
+  -- EMERGENCY) runs BEFORE process_startup() (advances only the currently
+  -- starting module) and BEFORE reactor_control/turbine_control -- control
+  -- must never act on an already-stale safety state from this same tick.
   module_lifecycle.update_module_states(make_lifecycle_ctx())
   module_lifecycle.process_startup(make_lifecycle_ctx())
   -- Reaktor-Regelung
@@ -749,14 +629,8 @@ local function build_command_ctx()
         get_node_state_machine = function() return node_state_machine end,
       }, mode)
     end,
-    -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_
-    -- NODES_PERFORMANCE_2026-07-12.md). Waren bisher No-Ops -- MASTER-
-    -- ausgeloeste STARTUP_STAGE/REQUEST_STARTUP_MODULE-Kommandos (siehe
-    -- command_handler.lua startup_stage()) liefen dadurch immer ins Leere
-    -- (module=nil -> "Unknown module"-Fehlerpfad existierte nicht einmal,
-    -- der Aufruf tat schlicht nichts und meldete stillschweigend Erfolg).
-    -- make_lifecycle_ctx() liefert bereits ctx.modules=modules_registry und
-    -- die echten get_active_startup/set_active_startup-Closures.
+    -- MASTER-ausgeloeste STARTUP_STAGE/REQUEST_STARTUP_MODULE-Kommandos brauchen
+    -- echte Closures hier, sonst laufen sie stillschweigend ins Leere.
     request_startup_if_needed = function(reason)
       local lctx = make_lifecycle_ctx()
       lctx.get_node_state_machine = function() return node_state_machine end
@@ -777,22 +651,9 @@ local function build_command_ctx()
     get_capacity_learning = function()
       return ctx and ctx.capacity_learning or capacity_learning_state
     end,
-    -- Feature (2026-07-06): Zielwert fuer die individuelle Pro-Reaktor-
-    -- Regelung per Command aenderbar und persistent in config/rt.lua
-    -- gespeichert, analog zum on_scale_change-Callback fuer die Monitor-
-    -- Skalierung. Wirkt sich erst beim naechsten Regelzyklus aus (reactor_
-    -- control.lua liest ctx.config.rails.reactor_fill_target jeden Tick
-    -- frisch, kein Cache noetig).
-    -- Fix (2026-07-17): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md Abschnitt 14). write_config()'s Ergebnis
-    -- wurde bisher komplett verworfen (`pcall(...)` ohne jede Auswertung
-    -- des Rueckgabewerts) und "changed"/INFO wurde IMMER geloggt, selbst
-    -- bei einem fehlgeschlagenen Schreibversuch -- das Command wurde ueber
-    -- command_handler.lua's Rueckgabe von `nil` (-> `{ ok = true }`) auch
-    -- gegenueber MASTER als vollstaendig angewendet quittiert. Gibt jetzt
-    -- das echte Persistenzresultat zurueck, damit der Aufrufer (siehe
-    -- SET_REACTOR_FILL_TARGET in command_handler.lua) ein ehrliches
-    -- `persisted`-Feld ins ACK_APPLIED-Ergebnis aufnehmen kann.
+    -- Per Command aenderbar und persistent gespeichert; gibt das echte
+    -- Persistenzresultat zurueck (statt es zu verwerfen), damit der Aufrufer
+    -- ein ehrliches `persisted`-Feld ins ACK_APPLIED-Ergebnis aufnehmen kann.
     set_reactor_fill_target = function(value)
       config.rails = config.rails or {}
       config.rails.reactor_fill_target = value
@@ -854,10 +715,8 @@ local function configure_lifecycle_context()
       evaluate_reactor_coolant = function(r,s)
         return reactor_control.evaluate_reactor_coolant(ctx,r,s) end,
       ramp_towards      = function(c,t,s) return reactor_control.ramp_towards(c,t,s) end,
-      -- Fix (2026-07-16): CRITICAL (MASTER-P0). Waren bisher No-Ops -- echte
-      -- Closures auf die modul-globalen Startup-State-Variablen (siehe oben
-      -- "local active_startup_id" etc.), damit start_module()/process_
-      -- startup() Zustand tatsaechlich lesen/schreiben koennen.
+      -- Echte Closures auf die modul-globalen Startup-State-Variablen, damit
+      -- start_module()/process_startup() Zustand lesen/schreiben koennen.
       get_active_startup           = function() return active_startup_id end,
       set_active_startup           = function(id) active_startup_id = id end,
       get_startup_queue            = function() return startup_queue_list end,
@@ -870,33 +729,11 @@ local function configure_lifecycle_context()
       -- CC:Tweaked CONFIG-Werte
       START_FLOW   = CONFIG.START_FLOW   or 100,
       RPM_TOL      = CONFIG.RPM_TOLERANCE or 15,
-      -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md Abschnitt 11). Hiess bisher "TURBINE_MODE"
-      -- und war ein reiner STRING (CONFIG.TURBINE_MODE_RAMP ist selbst ein
-      -- String, z.B. "RAMP") -- module_lifecycle.lua indizierte diesen Wert
-      -- aber als Tabelle (ctx.TURBINE_MODE.RAMP), was im echten Produktions-
-      -- Context zu "attempt to index a string value" fuehrte bzw. (falls
-      -- durch pcall/Fehlerpfad verdeckt) ctrl.mode nie zuverlaessig auf den
-      -- vorgesehenen Rampenmodus setzte. Konsistent mit turbine_control.lua's
-      -- eigener Konvention (ctx.CONFIG.TURBINE_MODE_RAMP, ueberall ein reiner
-      -- String -- siehe z.B. dessen Zeile mit "ctrl.mode = ctx.CONFIG.
-      -- TURBINE_MODE_RAMP or \"RAMP\"") umbenannt zu TURBINE_MODE_RAMP,
-      -- weiterhin ein String -- module_lifecycle.lua liest jetzt direkt
-      -- ctx.TURBINE_MODE_RAMP statt ctx.TURBINE_MODE.RAMP.
+      -- Konsistent mit turbine_control.lua's eigener Konvention: reiner String,
+      -- module_lifecycle.lua liest ctx.TURBINE_MODE_RAMP (nicht als Tabelle).
       TURBINE_MODE_RAMP = CONFIG.TURBINE_MODE_RAMP or "RAMP",
-      -- Fix (2026-07-17): CRITICAL (RT-P0, siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md Abschnitt 12). Dieser Diagnose-Stub gab
-      -- bisher "30" zurueck, benannt als "ramp_duration" -- ohne jede
-      -- Einheit im Namen. module_lifecycle.lua's process_startup() rechnet
-      -- aber mit "(now - module.start_time) / duration", wobei "now" und
-      -- "start_time" beide os.epoch("utc") in MILLISEKUNDEN sind -- die
-      -- Reaktorrampe erreichte dadurch bereits nach ~30 Millisekunden 100%
-      -- Fortschritt statt der beabsichtigten 30 SEKUNDEN, ein klarer
-      -- Widerspruch zum 60s-Startup-Stage-Timeout (siehe VALVE_PHASE_
-      -- TIMEOUT_MS-aehnliche Deadlines) und zur fachlichen Bedeutung einer
-      -- Rampe. Jetzt explizit als Sekunden benannt und einmalig in
-      -- Millisekunden umgerechnet -- "ramp_duration_ms" liefert garantiert
-      -- Millisekunden, keine unbenannte Zahlenkonstante mehr.
+      -- Explizit in Sekunden benannt und einmalig in Millisekunden umgerechnet,
+      -- da process_startup() mit os.epoch("utc")-Millisekunden rechnet.
       ramp_duration_ms = function(_ramp_profile)
         local STARTUP_RAMP_DURATION_S = 30
         return STARTUP_RAMP_DURATION_S * 1000
@@ -952,14 +789,8 @@ local function configure_state_machine()
     add_alarm = function(_, sev, msg)
       if comms then comms:send_alert(sev, msg) end
     end,
-    -- Fix (2026-07-16): CRITICAL (MASTER-P0, siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md). Waren bisher No-Ops ("RT-Node hat keine
-    -- Modul-Startup-Sequenz") -- dadurch blieb der STARTUP-State (siehe
-    -- state_handlers.lua startup_on_enter/startup_on_tick) permanent
-    -- funktionslos: die Warteschlange wurde zwar befuellt, aber start_module()
-    -- tat nichts, also blieb jedes Modul fuer immer OFF und der Node kam nie
-    -- nach RUNNING. Echte Closures auf die modul-globalen Startup-State-
-    -- Variablen (siehe "local active_startup_id" etc. oben).
+    -- Echte Closures auf die modul-globalen Startup-State-Variablen -- ohne sie
+    -- bleibt der STARTUP-State funktionslos (start_module() taete nichts).
     get_active_startup           = function() return active_startup_id end,
     set_active_startup           = function(id) active_startup_id = id end,
     get_startup_queue            = function() return startup_queue_list end,
@@ -1020,11 +851,8 @@ local function configure_state_machine()
       module_lifecycle.set_turbines_active(lctx, active, reason)
     end,
   }
-  -- Fix (2026-07-15): expliziter Guard + Diagnose-Log fuer is_master_connected,
-  -- bevor state_handlers.build() dessen eigenen generischen (aber weniger
-  -- aussagekraeftigen) assert_fn-Guard auswertet -- gibt Operatoren beim RT-
-  -- Boot eine eindeutige Bestaetigung, dass der sicherheitskritische Master-
-  -- Failover-Check verdrahtet ist.
+  -- Explicit guard + log confirms the safety-critical master-failover
+  -- check is wired before state_handlers.build()'s own generic assert_fn.
   state_ctx.is_master_connected = is_master_connected
   if type(state_ctx.is_master_connected) ~= "function" then
     error("rt state context missing required function: is_master_connected", 0)
@@ -1142,14 +970,8 @@ local function init()
   end
   monitor_ui.init(devices.monitor, config.monitor, config.monitor_scale)
 
-  -- Feature (2026-07-05): Monitor-Skalierung per Touch auf der
-  -- Diagnostics-Seite einstellbar (statt nur ueber config/rt.lua von Hand
-  -- editierbar). ctx.monitor_scale wird von monitor_ui.lua ins Model
-  -- gelesen und angezeigt; dieser Callback wendet eine Aenderung sofort
-  -- live an (ui.setScale via monitor_adapter/try_set_scale-Pfad in
-  -- monitor_ui.lua selbst reagiert automatisch beim naechsten Render, da
-  -- M.init erneut aufgerufen wird) und persistiert sie in config/rt.lua,
-  -- damit sie einen Reboot ueberlebt.
+  -- Monitor scale adjustable by touch on the diagnostics page: applies
+  -- live and persists to config/rt.lua so it survives a reboot.
   ctx.monitor_scale = config.monitor_scale
   monitor_ui.on_scale_change = function(delta)
     local cur = tonumber(ctx.monitor_scale) or tonumber(config.monitor_scale) or 0.5
@@ -1190,16 +1012,9 @@ local function init()
     checks[#checks + 1] = { name = "Turbinen erkannt", ok = (turbines.bound or 0) > 0,
       detail = string.format("%d/%d gebunden", turbines.bound or 0, turbines.total or 0) }
     checks[#checks + 1] = { name = "Monitor gefunden", ok = devices.monitor ~= nil }
-    -- Fix (2026-07-13): RT-P1.2 (siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md). config.role ist immer "RT-NODE" (siehe
-    -- nodes/rt/config.lua), niemals das kurze "RT" -- dieser Vergleich
-    -- schlug dadurch IMMER fehl, selbst bei korrekt konfigurierter Rolle,
-    -- und zeigte "Rolle konfiguriert" faelschlich als Fehler im Startup-
-    -- Report an.
+    -- config.role ist immer "RT-NODE" (siehe nodes/rt/config.lua), niemals "RT".
     checks[#checks + 1] = { name = "Rolle konfiguriert", ok = tostring(config.role or "") == "RT-NODE" }
-    -- Speaker (Feature, 2026-07-02): optional, pcall(require, ...) da nicht
-    -- immer installiert. Der Speaker-Effekt gilt jetzt fuer JEDEN Node-Typ,
-    -- nicht nur MASTER (dort ursprungl. nur fuer CRITICAL-Alarme gedacht).
+    -- Speaker: optional, pcall da nicht immer installiert.
     local ok_spk, spk_mod = pcall(require, "optional.speaker_alarm")
     local speaker = ok_spk and spk_mod.new() or nil
     report_mod.run(checks, { log = log, speaker = speaker })
@@ -1212,26 +1027,9 @@ end
 
 init()
 
--- Fix (2026-07-05): discover() lief bisher NUR EINMAL beim Boot (in
--- init()). Falls beim allerersten Scan Peripherals noch nicht bereit
--- waren (Chunk laedt noch, Ender-Modem noch nicht stabil) oder aus
--- anderem Grund devices.reactors/turbines leer blieben, gab es NIE einen
--- zweiten Versuch — waehrend die Registry selbst (ctx.registry, von
--- Overview genutzt) unter Umstaenden ueber einen anderen Pfad dennoch
--- aktuelle Werte zeigte. Das erklaerte den beobachteten Widerspruch:
--- Overview zeigte "25 Turbinen", die Turbinen-Detailseite zeigte "0" —
--- beide lasen aus derselben Registry, aber devices.turbines/reactors
--- Fix (2026-07-13): CRITICAL (RT-P1.1, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md). Der 60s-Fallback hier war reine
--- Redundanz: discovery_service (siehe services:add(discovery_service.
--- new({...interval = config.scan_interval...})) weiter oben) ruft
--- DIESELBE discover()-Funktion bereits alle config.scan_interval (=10s)
--- Sekunden auf -- UNABHAENGIG vom Erfolg des vorherigen Versuchs (siehe
--- discovery_service.lua:tick(), retried bei jedem Intervall neu, kein
--- "stop nach erstem Erfolg"-Verhalten). Der zusaetzliche manuelle 60s-
--- Aufruf hier lief also strikt SELTENER als der ohnehin schon aktive
--- Pfad und trug nichts zur Selbstkorrektur bei, verursachte aber
--- unnoetige doppelte volle Discovery-Durchlaeufe.
+-- discover() re-runs periodically via discovery_service (see services:add
+-- above, interval = config.scan_interval) -- no separate fallback timer
+-- needed here.
 
 local quiesce_handshake = _G.__xreactor_update_handshake
 local last_quiesce_warning = 0

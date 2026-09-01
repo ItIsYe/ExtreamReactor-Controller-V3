@@ -1,13 +1,8 @@
 -- nodes/fuel/status_snapshot.lua
 --
--- Feature (2026-07-09): Modularisierungs-Rewrite. build_status_payload()
--- war bisher Teil von main.lua (zusammen mit Monitor-Setup, Kommando-
--- Verarbeitung, Service-Wiring in EINER Datei) — hier ausgelagert, analog
--- zu nodes/rt/status_snapshot.lua. Wird mit einer FRISCHEN ctx-Tabelle
--- pro Aufruf aufgerufen (main.lua baut ctx direkt vor jedem Aufruf neu
--- zusammen), damit veraenderliche Werte (reserve, master_seen_ts, ...)
--- immer aktuell sind, ohne dass dieses Modul main.lua's lokale Variablen
--- kennen muss.
+-- Wird mit einer frischen ctx-Tabelle pro Aufruf aufgerufen (main.lua baut
+-- ctx direkt vor jedem Aufruf neu zusammen), damit veraenderliche Werte
+-- immer aktuell sind, ohne main.lua's lokale Variablen zu kennen.
 --
 -- Erwartete ctx-Felder:
 --   config, devices, fuel_health, comms, registry, health, non_rt_payload,
@@ -46,16 +41,8 @@ function M.build_status_payload(ctx)
     health = { status = fuel_health.status, reasons = health.reasons_list(fuel_health), last_seen_ts = fuel_health.last_seen_ts, bindings = fuel_health.bindings, capabilities = fuel_health.capabilities },
     discovery_failed = devices.discovery_failed, master_connected = master_ok,
     master_seen_s = ctx.master_seen_ts and math.max(0, math.floor((os.epoch("utc") - ctx.master_seen_ts) / 1000)) or nil,
-    -- Fix (2026-07-09): CRITICAL, uralter Bug (existierte schon lange vor
-    -- dieser Session, nicht Teil des Modularisierungs-Refactors). comms:
-    -- queue_depth() existiert als Methode gar nicht -- comms_service hat
-    -- nur get_diagnostics(), das ein queue_depth-FELD zurueckgibt. Dieser
-    -- Aufruf warf bei JEDEM einzigen UI-Service-Tick einen Fehler ("attempt
-    -- to call method 'queue_depth' (a nil value)"), der vom Service-Manager
-    -- stillschweigend abgefangen wurde (siehe service_manager.lua pcall) --
-    -- render_monitor() wurde dadurch NIE erreicht. Das erklaert vermutlich
-    -- den kompletten "FUEL-Monitor bleibt schwarz"-Fall von Anfang an,
-    -- unabhaengig von allen anderen in dieser Session gefixten Themen.
+    -- comms:queue_depth() existiert nicht als Methode -- comms_service hat
+    -- nur get_diagnostics(), das ein queue_depth-FELD zurueckgibt.
     queue = ctx.comms and ctx.comms:get_diagnostics().queue_depth or 0,
     peers = ctx.comms and ctx.comms.peer_state and ctx.comms.peer_state.peers or nil,
     alerts = ctx.master_alerts, protocol_mismatch = devices.proto_mismatch,
@@ -85,12 +72,9 @@ function M.build_status_payload(ctx)
 
   payload.bindings = fuel_health.bindings
   payload.bindings_summary = health.summarize_bindings(fuel_health.bindings)
-  -- Feature (2026-07-12): REST-P1.3 (siehe docs/CODING_AI_FUEL_UI_
-  -- PRIORITY_FIX_2026-07-12.md). Grundlage fuer den einheitlichen
-  -- view_state: routing_load_status (Start-Ladevorgang, siehe REST-P0.1)
-  -- und eine kompakte VALVE-Offline-Zusammenfassung (siehe REST-P0.3)
-  -- werden jetzt Teil des Payloads, damit sowohl Header/Banner/Ampel als
-  -- auch Diagnostics dieselbe zugrunde liegende Wahrheit verwenden.
+  -- Grundlage fuer den einheitlichen view_state: routing_load_status und
+  -- eine kompakte VALVE-Offline-Zusammenfassung sind Teil des Payloads,
+  -- damit Header/Banner/Ampel und Diagnostics dieselbe Wahrheit verwenden.
   payload.routing_load_status = ctx.routing_load_status
   if rs_router and rs_router.get_valve_status then
     local ok_vs, valve_status = pcall(rs_router.get_valve_status, rs_router)

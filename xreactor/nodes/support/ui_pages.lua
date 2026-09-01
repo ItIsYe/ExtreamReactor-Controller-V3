@@ -17,28 +17,13 @@ function M.append_local_alert_rows(rows, alerts)
   return rows
 end
 
--- Fix (2026-07-09): CRITICAL. build_common_model() lieferte bisher KEIN
--- 'snapshot'-Feld -- core/ui_router.lua's Render-Diff-Pruefung
--- (build_snapshot() dort) faellt in diesem Fall auf eine Serialisierung
--- des KOMPLETTEN Models zurueck, inklusive roher Epoch-Zeitstempel
--- (payload.ts, payload.health.last_seen_ts, ...), die sich bei JEDEM
--- Aufruf aendern -- die Diff-Pruefung erkannte dadurch faelschlich IMMER
--- eine Aenderung und loeste ein hartes Voll-Neu-Rendern aus, selbst wenn
--- sich inhaltlich nichts geaendert hatte. RT (und andere Nodes, die ihr
--- eigenes model.snapshot bauen) waren davon nicht betroffen. Hier: ein
--- bereinigter Snapshot ohne die bekannten Rausch-Zeitstempel, aber mit
--- allem inhaltlich Relevanten (damit z.B. ein geaenderter Fuellstand
--- weiterhin korrekt ein Redraw ausloest).
--- Fix (2026-07-10): der erste Scrub-Versuch entfernte nur exakt "ts",
--- "last_seen_ts", "timestamp" -- master_seen_s (Alter der letzten
--- Master-Verbindung in SEKUNDEN, jeden Aufruf frisch berechnet) wurde
--- dabei uebersehen, weil der Feldname nicht exakt passte. Diese Art von
--- "tickt jede Sekunde hoch"-Feld poisoned den Snapshot-Vergleich genauso
--- wie ein roher Epoch-Zeitstempel -- nur eben sekundenweise statt
--- millisekundenweise, was optisch trotzdem wie staendiges Flackern
--- wirkt. Jetzt per Namensmuster erkannt (nicht nur exakte Treffer):
--- alles was auf "_ts", "_s", "_seen_s", "_age", "_age_s" endet, oder
--- "ts"/"age"/"elapsed" direkt heisst.
+-- build_common_model() muss ein bereinigtes 'snapshot'-Feld liefern (ohne
+-- staendig hochtickende Zeitstempel wie ts/last_seen_ts/master_seen_s),
+-- sonst faellt core/ui_router.lua's Render-Diff-Pruefung auf eine
+-- Serialisierung des kompletten Models zurueck und loest bei jedem
+-- Aufruf faelschlich ein hartes Voll-Neu-Rendern aus. Per Namensmuster
+-- erkannt (nicht nur exakte Treffer): alles was auf "_ts", "_s",
+-- "_seen_s", "_age", "_age_s" endet, oder "ts"/"age"/"elapsed" direkt heisst.
 local function is_noisy_field(key)
   if key == "ts" or key == "timestamp" or key == "age" or key == "elapsed" then return true end
   local k = tostring(key)

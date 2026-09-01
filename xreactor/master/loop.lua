@@ -55,12 +55,10 @@ end
 function M.run(runtime, constants)
   local log = runtime.log
   local check_redstone = make_redstone_handler(runtime, log)
-  -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md (Abschnitt 4). MASTER hat keine eigenen
-  -- physischen Aktoren zu quiescen (nur Koordination) -- der Handler
-  -- bestaetigt daher sofort einen sicheren Zustand, verlaesst aber
-  -- kontrolliert die Schleife, statt (wie bisher) unbegrenzt weiterzulaufen,
-  -- waehrend ein Auto-Update MASTERs eigene Dateien ersetzt.
+  -- MASTER hat keine physischen Aktoren zu quiescen (nur Koordination) --
+  -- der Handler bestaetigt sofort einen sicheren Zustand und verlaesst
+  -- kontrolliert die Schleife, statt waehrend eines Auto-Updates
+  -- unbegrenzt weiterzulaufen.
   local quiesce_handshake = _G.__xreactor_update_handshake
   log("Entering event loop", "INFO")
   while true do

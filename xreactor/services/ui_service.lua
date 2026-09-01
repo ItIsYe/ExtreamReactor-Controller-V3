@@ -19,27 +19,21 @@ function ui.new(opts)
     interval = opts.interval or 0.5,
     force_interval = opts.force_interval or math.max(opts.interval or 0.5, 2),
     snapshot = opts.snapshot,
-    -- Feature (2026-07-11): UI-P0.4 (siehe docs/CODING_AI_FUEL_UI_
-    -- PRIORITY_FIX_2026-07-12.md). Optionaler neuer Pfad: build_model(event)
-    -- baut das VOLLSTAENDIGE Model EINMAL pro Zyklus; render(model, event)
-    -- bekommt genau DIESES Objekt uebergeben, statt selbst nochmal einen
-    -- eigenen (moeglicherweise abweichenden) Payload/Model aufzubauen.
-    -- Bewusst als ZUSAETZLICHE, abwaertskompatible Option eingefuehrt --
-    -- wenn opts.build_model nicht gesetzt ist, verhaelt sich dieser Service
-    -- exakt wie vorher (opts.snapshot + parameterloses opts.render()),
-    -- unveraendert fuer alle anderen Rollen (WATER/REPROCESSOR/ENERGY/RT),
-    -- die diesen Service ebenfalls nutzen.
+    -- Optionaler Pfad: build_model(event) baut das vollstaendige Model
+    -- einmal pro Zyklus; render(model, event) bekommt genau dieses Objekt,
+    -- statt selbst einen eigenen Payload aufzubauen. Abwaertskompatibel --
+    -- ohne opts.build_model verhaelt sich der Service wie zuvor
+    -- (opts.snapshot + parameterloses opts.render()).
     build_model = opts.build_model,
-    -- Feature (2026-07-12): REST-P1.1. Optionaler Callback fuer garantiertes
-    -- Logging eines Fehlers, der VOR page.render() auftritt (aktuell:
-    -- build_model()-Fehler). Analog zu core/ui_router.lua's on_render_error.
+    -- Optionaler Callback fuer garantiertes Logging eines Fehlers, der vor
+    -- page.render() auftritt (build_model()-Fehler). Analog zu
+    -- core/ui_router.lua's on_render_error.
     on_error = opts.on_error,
     last_draw = 0,
     last_force_draw = 0,
     last_snapshot = nil,
-    -- Fix (2026-07-14): SHARED-P0 (siehe service_manager.lua). UI muss auf
-    -- monitor_touch/mouse_click/key sofort reagieren (handle_input +
-    -- interaktives Redraw), meldet sich daher immer fuer Event-Ticks an.
+    -- UI muss auf monitor_touch/mouse_click/key sofort reagieren, meldet
+    -- sich daher immer fuer Event-Ticks an.
     wants_events = true
   }
   return setmetatable(self, { __index = ui })
@@ -60,37 +54,19 @@ function ui:tick(_, event)
   local layout_change = event_kind == "monitor_resize" or event_kind == "term_resize"
   local immediate = interactive or layout_change
   local due = ts - self.last_draw >= self.interval * 1000
-  -- Fix (2026-07-11): CRITICAL. Nach dem v380-Performance-Fix (due-Check
-  -- vor dem teuren snapshot()) galt "due" weiterhin fuer JEDE Art von
-  -- Event, auch fuer direkte Nutzer-Interaktion (Touch/Taste) -- eine
-  -- Seitennavigation direkt nach einem Render konnte dadurch bis zu
-  -- "interval" Sekunden lang NICHT tatsaechlich neu zeichnen, obwohl
-  -- router:set() den Seitenindex sofort korrekt aendert. In dieser
-  -- Wartezeit blieben die Footer-Touch-Zonen (siehe core/ui_router.lua)
-  -- auf der alten Seite eingefroren -- mehrere schnelle Taps trafen
-  -- dadurch wiederholt dieselbe (alte) Zone, der Seitenindex sprang
-  -- mehrfach, aber sichtbar wurde nur das Endergebnis (oft Seite 1 oder
-  -- die letzte Seite, je nachdem welche Zone getroffen wurde). Jetzt:
-  -- interaktive Events umgehen die Zeit-Drossel (sofortige Reaktion),
-  -- waehrend passive Netzwerk-Events (modem_message) weiterhin gedrosselt
-  -- bleiben -- der Performance-Gewinn von v380 bleibt fuer den haeufigen
-  -- Fall (Netzwerk-Traffic) vollstaendig erhalten.
+  -- Interaktive Events (Touch/Taste) umgehen die Zeit-Drossel fuer sofortige
+  -- Reaktion, waehrend passive Netzwerk-Events (modem_message) weiterhin
+  -- gedrosselt bleiben -- sonst blieben die Footer-Touch-Zonen nach einem
+  -- Render bis zu "interval" Sekunden auf der alten Seite eingefroren.
   if not due and not immediate then return end
   local force_due = ts - self.last_force_draw >= self.force_interval * 1000
 
   if self.build_model then
-    -- Feature (2026-07-11): UI-P0.4. Genau EIN Model-Aufbau pro Zyklus --
-    -- render() bekommt DASSELBE Objekt uebergeben, das fuer den Snapshot-
-    -- Vergleich benutzt wurde, statt selbst nochmal unabhaengig einen
-    -- (potenziell abweichenden) Payload/Model aufzubauen.
-    -- Fix (2026-07-12): REST-P1.1. Ein Fehler HIER (vor jedem page.render())
-    -- wurde bisher gar nicht abgefangen -- er entkam bis zum aeusseren
-    -- service_manager-pcall (stiller Retry, Bildschirm blieb auf dem
-    -- letzten Stand haengen, kein sichtbarer/geloggter Hinweis). Jetzt
-    -- xpcall mit Traceback, optionaler on_error-Callback fuer garantiertes
-    -- Logging, und sauberer Abbruch dieses Zyklus (naechster Zyklus
-    -- versucht es automatisch erneut) statt eines unkontrollierten
-    -- Absturzes.
+    -- Genau EIN Model-Aufbau pro Zyklus -- render() bekommt dasselbe Objekt,
+    -- das fuer den Snapshot-Vergleich benutzt wurde. xpcall mit Traceback
+    -- und optionalem on_error-Callback, statt einen Fehler hier bis zum
+    -- aeusseren service_manager-pcall entkommen zu lassen (stiller Retry,
+    -- Bildschirm bliebe ohne Hinweis auf dem letzten Stand haengen).
     local ok, model = xpcall(self.build_model, function(err)
       if debug and debug.traceback then return debug.traceback(tostring(err), 2) end
       return tostring(err)

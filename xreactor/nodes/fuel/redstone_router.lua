@@ -1,35 +1,18 @@
 -- nodes/fuel/redstone_router.lua
 -- Per-reactor valve-path routing for Mekanism pipe networks.
 --
--- Fix (2026-07-19): CRITICAL usability finding. Bis hierher war
--- config.logistics.redstone_tree ein VERSCHACHTELTER Baum (side/children),
--- damit mehrere Ventile in Serie (ein gemeinsames Trunk-Ventil vor mehreren
--- Reaktor-Zweigen) und ein per Reaktor eindeutiger Pfad abbildbar waren.
--- Das ist technisch maechtig, aber nur von Hand als Lua-Tabelle editierbar
--- -- die Touch-UI (router_ui.lua) konnte pro Reaktor immer nur GENAU EIN
--- Ventil zuweisen und schaltete sich bei einem bereits verschachtelten Baum
--- sogar komplett auf "nur lesen", um ihn nicht versehentlich platt zu
--- machen.
---
--- Jetzt ist die Config eine FLACHE Liste von Routen, eine pro Reaktor, mit
--- einer geordneten Ventilliste ("path") direkt am Reaktor:
+-- config.logistics.redstone_tree ist eine FLACHE Liste von Routen, eine pro
+-- Reaktor, mit einer geordneten Ventilliste ("path") direkt am Reaktor:
 --   { reactor = "<id>", label = "<Anzeigename>",
 --     path = { { side = "back" }, { side = "left", integrator = "VALVE-1" } } }
--- Ein gemeinsames Ventil auf dem Weg zu mehreren Reaktoren wird einfach
--- ALS DERSELBE {side=,integrator=}-Kombination in mehreren Routen-Pfaden
--- wiederholt -- keine Tabellen-Verschachtelung mehr noetig, damit ist die
--- Struktur sowohl von Hand als auch (siehe router_ui.lua) durch einen
--- mehrstufigen Touch-Editor (Reaktor waehlen -> Ventil fuer Ventil
--- antippen) direkt konfigurierbar.
+-- Ein gemeinsames Ventil auf dem Weg zu mehreren Reaktoren wird als dieselbe
+-- {side=,integrator=}-Kombination in mehreren Routen-Pfaden wiederholt.
 --
--- normalize_tree() unten akzeptiert weiterhin (gemischt, auch in derselben
--- Liste) alle drei historischen Formen ohne manuelle Migration:
---   1. NEUES Format (path=...), wie oben.
---   2. Alte FLACHE Form (die bisher einzige, die die Touch-UI erzeugen
---      konnte): { side=, integrator=, reactor=, label= } -- genau ein
---      Ventil pro Reaktor.
---   3. Alte VERSCHACHTELTE Baum-Form (children=...) -- wird rekursiv zu
---      path=<gesamter Ast von der Wurzel bis zum Reaktor-Blatt> aufgeloest.
+-- normalize_tree() akzeptiert gemischt alle drei historischen Formen ohne
+-- manuelle Migration: 1. neues Format (path=..., siehe oben). 2. alte
+-- FLACHE Form { side=, integrator=, reactor=, label= } (genau ein Ventil
+-- pro Reaktor). 3. alte VERSCHACHTELTE Baum-Form (children=...), rekursiv
+-- zu path=<Ast von der Wurzel bis zum Reaktor-Blatt> aufgeloest.
 
 local constants = require("shared.constants")
 
@@ -252,10 +235,8 @@ function M.normalize_tree(raw)
   return routes
 end
 
--- Feature (2026-07-08): strukturelle Validierung vor Aktivierung. Rein
--- statisch (keine Peripherie-Pruefung -- Integratoren koennen online
--- kommen/gehen, das gehoert nicht in eine Struktur-Validierung, sondern
--- bleibt Aufgabe von M:refresh()'s Laufzeit-Warnungen).
+-- Rein statische Validierung (keine Peripherie-Pruefung -- das bleibt
+-- Aufgabe von M:refresh()'s Laufzeit-Warnungen).
 -- Rueckgabe: { ok=bool, errors={ {code=..., message=...}, ... } }
 function M.validate_tree(raw)
   local _, errors = normalize_with_errors(raw)
@@ -264,10 +245,8 @@ end
 
 function M.new(opts)
   opts = opts or {}
-  -- Feature (2026-07-09): eigener, dedizierter Funkkanal fuer SET_VALVE
-  -- (constants.channels.VALVE = 6504), bewusst getrennt von der normalen
-  -- comms_service-Pipeline (kein CONTROL/STATUS-Traffic) -- roh per
-  -- modem.transmit, kein Ack/Retry-Overhead.
+  -- Eigener Funkkanal fuer SET_VALVE (constants.channels.VALVE), getrennt
+  -- von comms_service -- roh per modem.transmit, kein Ack/Retry-Overhead.
   local router_config = opts.config or {}
   local valve_modem = find_wireless_modem(router_config)
   if valve_modem then pcall(valve_modem.open, constants.channels.VALVE) end
@@ -315,51 +294,28 @@ function M:refresh()
 
   local cfg = self.config.logistics or self.config or {}
   local tree = cfg.redstone_tree or {}
-  -- Feature (2026-07-13): CRITICAL Sicherheitsfund (siehe docs/CODING_AI_
-  -- OTHER_NODES_PERFORMANCE_2026-07-12.md, Sicherheitsregel zu REPROC-P0.3).
-  -- tree_configured haelt fest, ob ueberhaupt ein Baum in der Config
-  -- STAND (unabhaengig davon, ob er gueltig war) -- Grundlage fuer die
-  -- Unterscheidung in route_and_act() weiter unten zwischen "Routing war
-  -- nie gewollt" (sicher, Direkt-Export ok) und "Routing war konfiguriert,
-  -- aber kaputt/leer geworden" (GEFAEHRLICH, muss blockieren).
+  -- tree_configured haelt fest, ob ueberhaupt ein Baum in der Config STAND
+  -- (unabhaengig davon, ob er gueltig war) -- Grundlage fuer die Unterscheidung
+  -- zwischen "Routing war nie gewollt" (sicher, Direkt-Export ok) und
+  -- "Routing war konfiguriert, aber kaputt/leer geworden" (GEFAEHRLICH, muss
+  -- blockieren, siehe begin_transaction()).
   self._state.tree_configured = #tree > 0
 
-  -- Feature (2026-07-08): strukturelle Validierung VOR jeder Aktivierung.
-  -- Bei einem ungueltigen Baum: alle Ventile blockieren (Fail-Safe-
-  -- Grundzustand, kein Fuel-Transfer moeglich), all_valves/integrators
-  -- NICHT aus dem fehlerhaften Baum laden, und der Fehler wird geloggt
-  -- (landet damit auch im Log-Collector-System) sowie ueber get_
-  -- validation() fuer UI/zukuenftige Master-Alerts bereitgestellt.
+  -- Strukturelle Validierung VOR jeder Aktivierung. Bei einem ungueltigen
+  -- Baum: alle Ventile blockieren (Fail-Safe-Grundzustand), all_valves/
+  -- integrators NICHT aus dem fehlerhaften Baum laden, Fehler geloggt und
+  -- ueber get_validation() fuer UI/Alerts bereitgestellt.
   --
-  -- Fix (2026-07-13): CRITICAL. tree_configured (siehe oben) unterscheidet
-  -- "Routing war nie gewollt" (sicher, Direkt-Export ok) von "Routing war
-  -- konfiguriert, aber kaputt/leer geworden" (GEFAEHRLICH, muss
-  -- blockieren) -- ein Baum, der KONFIGURIERT war aber ungueltig ist,
-  -- blockiert tatsaechlich (siehe begin_transaction()).
+  -- get_routing_state() ist die einzige Autoritaet fuer "war konfiguriert"
+  -- vs. "nie konfiguriert" -- basiert auf tree_configured/tree_valid/
+  -- all_valves, NICHT auf route_count()/einem strukturellen Baum-Walk (ein
+  -- kaputter Baum kann strukturell 0 Ventile ergeben, obwohl er konfiguriert
+  -- war -- das darf nicht mit "nie konfiguriert" verwechselt werden).
   --
-  -- Fix (2026-07-16): CRITICAL (ROUTER-P0.9, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 9). Die vorherige Fassung
-  -- dieses Kommentars empfahl, dass "route_count() bleibt 0, damit
-  -- logistics_router.lua sauber auf den ungerouteten Direkt-Export-Pfad
-  -- zurueckfaellt" -- das war GENAU der Bug: route_count()/get_routing_
-  -- table() liest strukturell aus dem ROHEN cfg.redstone_tree (unabhaengig
-  -- von tree_valid/tree_configured hier) und kann bei einem kaputten Baum,
-  -- der GAR KEINE 'side'-Ventil-Eintraege mehr strukturell findet, selbst
-  -- 0 zurueckgeben, obwohl der Baum tatsaechlich KONFIGURIERT war (nur
-  -- kaputt). logistics_router.lua nutzte genau dieses 0 als Signal fuer
-  -- "nie konfiguriert" und fiel ungeschuetzt auf Direkt-Export zurueck --
-  -- exakt der Bug, den block_all()/begin_transaction()'s eigene "invalid_
-  -- tree"-Pruefung eigentlich verhindern sollte, aber NIE erreicht wurde,
-  -- weil logistics_router.lua begin_transaction() in diesem Fall gar nicht
-  -- erst aufrief. get_routing_state() (siehe unten) ist jetzt die einzige
-  -- Autoritaet fuer diese Entscheidung -- basiert auf tree_configured/
-  -- tree_valid/all_valves statt auf einem strukturellen Baum-Walk.
-  -- Fix (2026-07-19): normalize_with_errors() laeuft hier nur noch EINMAL
-  -- pro Zyklus (statt einer separaten M.validate_tree()-Normalisierung und
-  -- eines zweiten collect_all_valves()-Baumdurchlaufs) und liefert direkt
-  -- die fertigen Routen -- self._state.routes ist ab hier die alleinige,
-  -- gecachte Grundlage fuer begin_transaction()/get_tree()/get_path_to()/
-  -- get_routing_table()/get_valve_status(), bis zum naechsten refresh().
+  -- normalize_with_errors() laeuft hier nur EINMAL pro Zyklus; self._state.
+  -- routes ist ab hier die alleinige, gecachte Grundlage fuer begin_
+  -- transaction()/get_tree()/get_path_to()/get_routing_table()/get_valve_
+  -- status(), bis zum naechsten refresh().
   local routes, errors = normalize_with_errors(tree)
   self._state.routes = routes
   self._state.tree_valid = #errors == 0
@@ -387,10 +343,8 @@ function M:refresh()
   local known_peers = self.comms and self.comms:get_peers() or {}
   for name in pairs(int_names) do
     if known_peers[name] and not known_peers[name].down then
-      -- Feature (2026-07-09): Auto-Discovery -- der Integrator meldet
-      -- sich selbststaendig per HELLO/Heartbeat (wie jeder andere Node),
-      -- FUEL muss ihn nicht manuell als Peripheral konfigurieren. "name"
-      -- ist hier die node_id des VALVE-Node aus dem redstone_tree.
+      -- Auto-Discovery: der Integrator meldet sich per HELLO/Heartbeat wie
+      -- jeder andere Node. "name" ist die node_id des VALVE-Node.
       integrators[name] = { network = true, node_id = name }
       self.log("DEBUG", "RedstoneRouter: integrator " .. name .. " (VALVE-Node, per Funk erreichbar)")
     elseif peripheral.isPresent(name) then
@@ -413,21 +367,11 @@ end
 
 function M:_set_valve(valve, high)
   local side = valve.side
-  -- Feature (2026-07-12): REST-P0.3 (siehe docs/CODING_AI_FUEL_UI_
-  -- PRIORITY_FIX_2026-07-12.md). Angeforderten Zustand PRO INTEGRATOR
-  -- festhalten (unabhaengig davon, ob das Schalten tatsaechlich
-  -- erfolgreich war) -- Grundlage fuer die VALVE-Statusanzeige auf der
-  -- Router-Seite. Ehrlich benannt "requested", NICHT "confirmed": das
-  -- Funkprotokoll ist weiterhin fire-and-forget ohne ACK, ein
-  -- erfolgreicher modem.transmit() bestaetigt nicht, dass Redstone
-  -- tatsaechlich geschaltet wurde.
-  -- Fix (2026-07-13): CRITICAL (VALVE-P1, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). "Der gewuenschte Zustand wird
-  -- aktuell nur pro Integrator-ID gespeichert. Fuer Nodes mit mehreren
-  -- Seiten muss der Schluessel mindestens (integrator, side) enthalten."
-  -- -- vorher konnte bei EINEM VALVE-Node mit MEHREREN angeschlossenen
-  -- Seiten der zuletzt gesetzte Zustand einer Seite den einer ANDEREN
-  -- Seite am selben Integrator stillschweigend ueberschreiben.
+  -- Angeforderten Zustand PRO (integrator, side) festhalten (nicht nur
+  -- integrator -- sonst ueberschreiben mehrere Seiten am selben Integrator
+  -- sich gegenseitig). Ehrlich "requested" benannt, NICHT "confirmed": das
+  -- Funkprotokoll bleibt fire-and-forget, ein erfolgreicher modem.transmit()
+  -- bestaetigt nicht, dass Redstone tatsaechlich geschaltet wurde.
   if valve.integrator then
     self._state.valve_requested = self._state.valve_requested or {}
     self._state.valve_requested[valve.integrator .. "|" .. tostring(side)] = high and "BLOCKED" or "OPEN"
@@ -435,19 +379,12 @@ function M:_set_valve(valve, high)
   if valve.integrator then
     local w = self._state.integrators[valve.integrator]
     if w and w.network then
-      -- Fix (2026-07-13): CRITICAL (VALVE-P1, siehe docs/CODING_AI_OTHER_
-      -- NODES_PERFORMANCE_2026-07-12.md). Der Kanal war bisher komplett
-      -- fire-and-forget: kein ACK, kein Retry, keine Sequenznummer, kein
-      -- Dedupe. Das bestehende Fail-Safe-Verhalten (VALVE faellt nach 20s
-      -- ohne Kommando in BLOCKED) bleibt die LETZTE Verteidigungslinie,
-      -- ist aber kein Ersatz fuer eine tatsaechliche Zustellbestaetigung
-      -- -- ein verlorenes Kommando konnte bis zu 20s lang unbemerkt
-      -- bleiben. Jetzt: jedes Kommando bekommt eine eindeutige command_id,
-      -- wird als "pending" verfolgt (siehe check_pending_acks() weiter
-      -- unten, periodisch von der aufrufenden Rolle aufgerufen) und bei
-      -- fehlender Bestaetigung innerhalb eines Timeouts automatisch erneut
-      -- gesendet (begrenzte Anzahl Versuche). handle_valve_ack() verarbeitet
-      -- die Antwort und traegt den TATSAECHLICH bestaetigten Zustand ein.
+      -- Jedes Kommando bekommt eine eindeutige command_id, wird als "pending"
+      -- verfolgt (siehe check_pending_acks(), periodisch von der aufrufenden
+      -- Rolle aufgerufen) und bei fehlender Bestaetigung erneut gesendet
+      -- (begrenzte Versuche). handle_valve_ack() traegt den tatsaechlich
+      -- bestaetigten Zustand ein. Fail-Safe (VALVE faellt nach 20s ohne
+      -- Kommando in BLOCKED) bleibt die letzte Verteidigungslinie.
       if not self.valve_modem then
         self.warn_once("no_valve_modem", "RedstoneRouter: kein Wireless Modem fuer den Ventil-Kanal gefunden")
         return false
@@ -486,11 +423,8 @@ function M:_set_valve(valve, high)
       end
       return true
     end
-    -- Fix (2026-07-08): Integrator offline/nicht gewrapped — vorher
-    -- passierte hier STILLSCHWEIGEND gar nichts (kein Log, kein
-    -- Fehlerstatus). Ein Ventil, das nicht geschaltet werden kann, bleibt
-    -- in unbekanntem Zustand — sicherheitsrelevant genug fuer eine
-    -- explizite Warnung.
+    -- Integrator offline/nicht gewrapped: explizite Warnung statt stillem
+    -- Nichtstun -- ein nicht schaltbares Ventil ist sicherheitsrelevant.
     self.warn_once("int_offline:" .. valve.integrator,
       "RedstoneRouter: Integrator '" .. valve.integrator .. "' offline — Ventil (" .. tostring(side) .. ") nicht schaltbar")
     return false
@@ -520,8 +454,6 @@ local function valve_key(integrator, side)
   return tostring(integrator or "") .. "|" .. tostring(side)
 end
 
--- Fix (2026-07-16): CRITICAL (ROUTER-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 8, "Verbindliche Sicherheitsregel").
 -- Sendet SET_VALVE fuer eine Liste von {side=, integrator=, high=}-
 -- Eintraegen und baut eine Bestaetigungs-Erwartung PRO Ventil auf.
 -- Netzwerk-Ventile (VALVE-Node per Funk) brauchen ein asynchrones ACK
@@ -557,24 +489,12 @@ end
 -- state zu setzen, was hier als "nicht pending UND nicht bestaetigt"
 -- erkannt wird).
 --
--- Fix (2026-07-17): KRITISCHER SAFETYFEHLER (ROUTER-P0, siehe docs/CODING_
--- AI_OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 17). confirmed_valve_
--- state[key] wird NIE geloescht und ueberlebt beliebig viele nachfolgende
--- Transaktionen fuer denselben Ventilschluessel. Vorher pruefte dieser
--- Check nur noch "confirmed.applied==true and confirmed.high==entry.high"
--- OHNE zu wissen, zu WELCHEM Kommando dieser Bestaetigungszustand gehoerte.
--- Szenario: ein Ventil wurde frueher fuer ein AELTERES Kommando bestaetigt
--- BLOCKED; ein NEUES BLOCKED-Kommando (z.B. Phase-1 der naechsten
--- Transaktion) wird gesendet, aber ALLE seine ACKs gehen verloren --
--- check_pending_acks() gibt nach VALVE_ACK_MAX_RETRIES auf und loescht den
--- pending-Eintrag OHNE confirmed_valve_state zu aktualisieren. Der alte,
--- zufaellig passende Bestaetigungszustand blieb dann als (falscher) Beweis
--- fuer das NEUE Kommando stehen -- die Transaktion konnte faelschlich als
--- bestaetigt gelten und exportieren, obwohl das aktuelle Kommando nie
--- bestaetigt wurde. Jetzt wird zusaetzlich verlangt, dass der bestaetigte
--- Zustand zur AKTUELL angeforderten command_id gehoert -- ein alter
--- Bestaetigungszustand (andere/keine command_id) zaehlt nicht mehr als
--- Beweis fuer ein neues Kommando.
+-- confirmed_valve_state[key] wird NIE geloescht und ueberlebt beliebig viele
+-- Transaktionen fuer denselben Schluessel -- deshalb wird zusaetzlich
+-- verlangt, dass der bestaetigte Zustand zur AKTUELL angeforderten
+-- command_id gehoert. Sonst koennte ein alter Bestaetigungszustand als
+-- (falscher) Beweis fuer ein neues, tatsaechlich nie bestaetigtes Kommando
+-- durchgehen.
 function M:_check_valve_batch(pending)
   local waiting = false
   for key, entry in pairs(pending) do
@@ -595,53 +515,23 @@ function M:_check_valve_batch(pending)
   return "ok"
 end
 
--- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
--- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). route_and_act() war
--- eine synchrone Funktion mit ZWEI eingebetteten os.sleep()-Aufrufen
--- (Settle-Zeit vor dem Export, Offenhaltezeit danach) -- ueblicherweise
--- 2.05-2.4s blockierend PRO Lieferung, und die aufrufende Rolle (siehe
--- logistics_router.lua's Phase-2-Schleife) konnte das fuer MEHRERE
--- Ziel-Reaktoren nacheinander in einem einzigen Zyklus tun. Waehrend
--- dieser Zeit lief in FUEL/REPROCESSOR (kein parallel.waitForAny-Split
--- wie bei ENERGY/RT, nur eine einzige Coroutine) buchstaeblich GAR NICHTS
--- anderes -- Heartbeat, Commands, UI und das VALVE-Fail-Safe-Timing
--- waren fuer die gesamte Dauer eingefroren.
+-- begin_transaction() ist eine asynchrone Zustandsmaschine, die ausschliesslich
+-- ueber wiederholte tick(now_ms)-Aufrufe voranschreitet (kein os.sleep() im
+-- Routingpfad -- FUEL/REPROCESSOR laufen in nur einer Coroutine, ein
+-- blockierender sleep wuerde Heartbeat/Commands/UI/Fail-Safe-Timing komplett
+-- einfrieren). Nur eine Transaktion gleichzeitig; ein zweiter begin_
+-- transaction()-Aufruf waehrend eine laeuft wird mit "busy" abgelehnt.
 --
--- Jetzt: begin_transaction() startet eine asynchrone Zustandsmaschine, die
--- ausschliesslich ueber wiederholte tick(now_ms)-Aufrufe voranschreitet
--- (von der aufrufenden Rolle regelmaessig aus ihrem normalen Event-Loop-
--- Zyklus aufgerufen, siehe nodes/fuel/main.lua und nodes/reprocessor/
--- main.lua). Kein os.sleep() mehr im Routingpfad. Nur eine Transaktion
--- gleichzeitig -- ein zweiter begin_transaction()-Aufruf waehrend eine
--- laeuft wird mit "busy" abgelehnt, wodurch Lieferungen strukturell
--- serialisiert werden (der Aufrufer versucht es im naechsten Zyklus
--- erneut, statt mehrere Lieferungen zu ueberlappen).
---
--- Fix (2026-07-16): CRITICAL (ROUTER-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 8). Die alte Zustandsmaschine (IDLE
--- -> WAIT_SETTLE -> EXPORT -> HOLD_OPEN -> COMPLETE/ERROR, ueber open_
--- path_to() aufgebaut) hatte zwei bestaetigte Sicherheitsluecken:
--- (1) WAIT_SETTLE gate'te den Export ueber eine feste Settle-Zeit
---     (settle_until), NICHT ueber eine tatsaechliche Bestaetigung -- ein
---     noch "pending" ACK loeste KEINEN Fehler aus, der Export lief nach
---     Ablauf der Settle-Zeit trotzdem los, selbst wenn die Bestaetigung
---     fuer ein beobachtetes Ventil schlicht noch unterwegs war.
--- (2) watched_keys enthielt nur die Ziel-Pfad-Ventile (die geoeffnet
---     werden sollen) -- ein fehlgeschlagenes Blockieren eines NEBEN-
---     pfads (open_path_to()'s eigener Rueckgabewert wurde dafuer nicht
---     einmal ausgewertet) verhinderte den Export nicht.
--- Neue, zweiphasige Zustandsmaschine (siehe "Ziel-State-Machine" im
--- Audit-Dokument): Phase 1 (WAIT_BLOCK_ACKS) blockiert und bestaetigt
--- ALLE bekannten Ventile (nicht nur Nebenpfade) als deterministischen,
--- sicheren Ausgangszustand; erst wenn JEDES Ventil nachweislich blockiert
--- ist, oeffnet Phase 2 (WAIT_OPEN_ACKS) den Zielpfad und wartet ebenfalls
--- auf dessen vollstaendige Bestaetigung. WAIT_SETTLE ist danach nur noch
--- eine zusaetzliche physische Pufferzeit NACH bestaetigtem Zustand, kein
--- Ersatz mehr fuer die Bestaetigung selbst. Jeder Fehlschlag oder
--- Bestaetigungs-Timeout in beiden Phasen bricht sofort mit block_all() ab
--- (_fail_transaction()). Nach dem Export (HOLD_OPEN) wird ebenfalls
--- versucht, das finale Blockieren zu bestaetigen (WAIT_FINAL_ACKS), bevor
--- die Transaktion als abgeschlossen gilt.
+-- Zweiphasige Zustandsmaschine: Phase 1 (WAIT_BLOCK_ACKS) blockiert und
+-- bestaetigt ALLE bekannten Ventile (nicht nur Nebenpfade) als deterministischen
+-- Ausgangszustand; erst wenn jedes Ventil nachweislich blockiert ist, oeffnet
+-- Phase 2 (WAIT_OPEN_ACKS) den Zielpfad und wartet ebenfalls auf vollstaendige
+-- Bestaetigung. WAIT_SETTLE ist danach nur noch eine physische Pufferzeit NACH
+-- bestaetigtem Zustand, kein Ersatz fuer die Bestaetigung selbst. Jeder
+-- Fehlschlag/Timeout in beiden Phasen bricht sofort mit block_all() ab
+-- (_fail_transaction()). Nach dem Export (HOLD_OPEN) wird das finale
+-- Blockieren ebenfalls bestaetigt (WAIT_FINAL_ACKS), bevor die Transaktion
+-- als abgeschlossen gilt.
 local SAFETY_CONFIRM_TIMEOUT_MS = 15000
 local SAFETY_RETRY_MS = 1000
 
@@ -1047,16 +937,9 @@ end
 -- Sofortiger Shutdown-Pfad: blockiert augenblicklich alle Ventile und
 -- verwirft eine laufende Transaktion, unabhaengig von deren Zustand.
 --
--- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). War bisher toter Code
--- (nirgends aufgerufen) und rief keinerlei Abschluss-Callback auf -- eine
--- per shutdown_now() verworfene Transaktion war fuer den Aufrufer
--- (logistics_router.lua/feed_router.lua) unsichtbar: weder action_fn noch
--- ein Fehlerpfad liefen je, current_request/last_error blieben auf dem
--- letzten Stand haengen statt sichtbar "abgebrochen" zu werden. Ruft jetzt
--- (wie _fail_transaction()) tx.on_error(reason) auf, falls eine
--- Transaktion aktiv war -- nutzt denselben Abschluss-Mechanismus wie beim
--- FUEL-P0-Fix, kein zweiter Signalweg noetig.
+-- Ruft (wie _fail_transaction()) tx.on_error(reason) auf, falls eine
+-- Transaktion aktiv war -- sonst bliebe der Abbruch fuer den Aufrufer
+-- (logistics_router.lua/feed_router.lua) unsichtbar.
 function M:shutdown_now(reason, opts)
   opts = opts or {}
   local tx = self._state.transaction
@@ -1099,27 +982,17 @@ function M:valve_count()
   return #self._state.all_valves
 end
 
--- Feature (2026-07-12): REST-P0.3 (siehe docs/CODING_AI_FUEL_UI_
--- PRIORITY_FIX_2026-07-12.md). Fuehrt fuer jeden konfigurierten
--- Netzwerk-Integrator (VALVE-Node) zusammen: Live-Peer-Status (online/
--- stale/Alter, aus core/comms.lua's ohnehin schon vorhandener Peer-
--- Verfolgung), den zuletzt angeforderten Zustand (siehe _set_valve()),
--- und welche Reaktoren ueber diesen Integrator beliefert werden.
+-- Fuehrt fuer jeden Netzwerk-Integrator zusammen: Live-Peer-Status, zuletzt
+-- angeforderten Zustand (siehe _set_valve()), und beliefert Reaktoren.
 --
--- WICHTIG, ehrlich benannt: "confirmed_state"/"state_matches" sind
--- bewusst NICHT vorhanden -- das Funkprotokoll ist weiterhin fire-and-
--- forget ohne ACK (siehe Dokument), ein erfolgreich gesendetes Kommando
--- bestaetigt nicht, dass Redstone tatsaechlich geschaltet wurde. Diese
--- Funktion behauptet daher nur "requested_state" (was WIR zuletzt
--- angefordert haben), niemals einen bestaetigten Ist-Zustand, den es
--- technisch noch gar nicht geben kann.
--- Feature (2026-07-13): VALVE-P1. Verarbeitet eine eingehende VALVE_ACK-
--- Nachricht -- muss von der aufrufenden Rolle (FUEL/REPROCESSOR) aus
--- ihrem comms-Message-Handler heraus aufgerufen werden, wenn eine
--- Nachricht vom Typ "VALVE_ACK" ankommt. Loescht das zugehoerige pending-
--- Kommando (kein weiterer Retry noetig) und traegt den TATSAECHLICH
--- bestaetigten Zustand ein -- erst ab hier ist "confirmed_state" (im
--- Gegensatz zu "requested_state") ehrlich moeglich.
+-- "confirmed_state"/"state_matches" sind bewusst NICHT vorhanden -- nur
+-- "requested_state" (was WIR zuletzt angefordert haben), niemals ein
+-- bestaetigter Ist-Zustand.
+--
+-- Verarbeitet eine eingehende VALVE_ACK-Nachricht -- muss von der aufrufenden
+-- Rolle aus ihrem comms-Message-Handler aufgerufen werden. Loescht das
+-- zugehoerige pending-Kommando und traegt den tatsaechlich bestaetigten
+-- Zustand ein.
 function M:handle_valve_ack(message)
   if type(message) ~= "table" or message.type ~= "VALVE_ACK" or not message.command_id then return end
   local pending = self._state.pending_valve_acks
@@ -1145,11 +1018,9 @@ function M:handle_valve_ack(message)
   end
 end
 
--- Feature (2026-07-13): VALVE-P1. Von der aufrufenden Rolle periodisch
--- (z.B. einmal pro Sekunde aus dem Haupt-Event-Loop) aufzurufen -- prueft
--- alle noch unbestaetigten Kommandos gegen ein Timeout und sendet sie
--- erneut (begrenzte Anzahl Versuche, danach wird aufgegeben und auf das
--- bestehende 20s-Fail-Safe der VALVE-Node vertraut).
+-- Periodisch von der aufrufenden Rolle aufzurufen -- prueft unbestaetigte
+-- Kommandos gegen ein Timeout und sendet sie erneut (begrenzte Versuche,
+-- danach wird auf das 20s-Fail-Safe der VALVE-Node vertraut).
 local VALVE_ACK_TIMEOUT_MS = 3000
 local VALVE_ACK_MAX_RETRIES = 3
 function M:check_pending_acks()
@@ -1236,16 +1107,10 @@ function M:route_count()
   return #self:get_routing_table()
 end
 
--- Fix (2026-07-16): CRITICAL (ROUTER-P0.9, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md Abschnitt 9). Einzige Autoritaet fuer
--- die Frage "soll FUEL/REPROCESSOR ueberhaupt ungeroutet direkt
--- exportieren, oder muss geroutet (oder hart blockiert) werden?" --
--- ersetzt den vorherigen strukturellen route_count()>0-Check (siehe
--- refresh()-Kommentar oben), der bei einem KONFIGURIERTEN aber kaputten
--- Baum faelschlich 0 zurueckgeben und damit den ungeschuetzten Direkt-
--- Export-Pfad ausloesen konnte. Basiert ausschliesslich auf dem in
--- refresh() ermittelten Validierungszustand (tree_configured/tree_valid/
--- all_valves), nicht auf einem erneuten rohen Baum-Walk.
+-- Einzige Autoritaet fuer "soll ungeroutet direkt exportiert werden, oder
+-- muss geroutet (oder hart blockiert) werden?". Basiert ausschliesslich auf
+-- dem in refresh() ermittelten Validierungszustand (tree_configured/
+-- tree_valid/all_valves), nicht auf einem erneuten rohen Baum-Walk.
 --   ROUTING_NOT_CONFIGURED    -- kein redstone_tree in der Config: Direkt-
 --                                export ist ausdruecklich sicher.
 --   ROUTING_INVALID           -- redstone_tree konfiguriert, aber

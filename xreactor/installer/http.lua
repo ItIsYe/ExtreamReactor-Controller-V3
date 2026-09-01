@@ -28,32 +28,15 @@ local function read_response(response)
   return body
 end
 
--- Fix: this used the plain synchronous http.get(url), which has NO
--- explicit timeout of its own -- it relies entirely on the server's
--- configured CC:Tweaked http.timeout. If that's disabled/very high (or a
--- single request just never gets a response), the installer could sit on
--- one file forever: no crash, no retry message, still interruptible via
--- Ctrl+T (it's genuinely waiting, not looping) since it's not tied to file
--- size at all.
---
--- First attempt mirrored installer/auto_update.lua's http_get_async()
--- (http.request() + os.startTimer() + a manually filtered event loop
--- matching http_success/http_failure/timer by url/timer id). Reported in
--- the field: still hung well past the 15s ceiling with zero retry output
--- -- the manual event matching has more moving parts (event names, timer
--- id equality, url equality against a cache-busted query string) than it
--- needs, and something in that chain wasn't firing reliably even though
--- the structurally identical code in auto_update.lua worked for smaller,
--- unbusted single-file requests.
---
--- Rebuilt on parallel.waitForAny() instead: race the already-proven
--- synchronous http.get() against a plain os.sleep() timeout. CC:Tweaked's
--- parallel.* returns as soon as either coroutine finishes -- no event name
--- or id matching of our own, no dependency on http.request()'s specific
--- success/failure event semantics. If http.get() itself never yields at
--- all (shouldn't happen -- it's fully synchronous sugar over the same
--- event wait), the sleep-timer coroutine still lets waitForAny return, and
--- the abandoned http.get() coroutine is simply dropped.
+-- Plain http.get(url) has no timeout of its own -- relies entirely on the
+-- server's http.timeout config, so a stuck request could hang forever.
+-- Races the proven synchronous http.get() against a plain os.sleep()
+-- timeout via parallel.waitForAny() -- returns as soon as either coroutine
+-- finishes, no event name/id matching of our own (a manual http.request()+
+-- os.startTimer() event loop was tried first and hung unreliably in the
+-- field despite working elsewhere). If http.get() never yields, the
+-- sleep-timer coroutine still lets waitForAny return; the abandoned
+-- http.get() coroutine is simply dropped.
 local function try_once(url)
   if not http or type(http.get) ~= "function" then return nil, "no http" end
   if type(parallel) ~= "table" or type(parallel.waitForAny) ~= "function" then

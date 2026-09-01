@@ -8,22 +8,11 @@ local DEFAULT_ROUTE_CONFIG_PATH = "/xreactor/config/fuel_routes.lua"
 local BUILTIN_SIDES = { "top", "bottom", "left", "right", "front", "back" }
 local RECENT_HIGHLIGHT_MS = 5000
 
--- Fix (2026-07-19): CRITICAL usability finding. Der Editor auf dieser
--- Seite konnte bisher pro Reaktor immer nur GENAU EIN Ventil zuweisen
--- (side antippen -> Reaktor antippen) -- mehrere Ventile in Serie zu einem
--- Reaktor (z.B. ein gemeinsames Trunk-Ventil vor mehreren Reaktor-
--- Zweigen) mussten von Hand als verschachtelter Baum (children=...) in der
--- Config editiert werden, und dieser Editor schaltete sich sogar
--- vollstaendig schreibgeschuetzt, sobald ein solcher Baum bereits geladen
--- war (um ihn nicht versehentlich platt zu machen). Seit nodes/fuel/
--- redstone_router.lua's Umstellung auf eine flache Routenliste mit
--- geordnetem 'path' pro Reaktor (siehe dortiger Fix-Kommentar) kann dieser
--- Editor jetzt direkt eine ganze Ventilkette bauen: Reaktor waehlen ->
--- Ventil fuer Ventil antippen (optional mit einem bekannten VALVE-Node als
--- Ziel) -> FERTIG. Der bisherige Schreibschutz fuer verschachtelte Baeume
--- entfaellt komplett -- normalize_tree() liest ihn ohnehin schon in das
--- neue Format um, der Editor sieht also immer die tatsaechliche, aktuelle
--- Routenliste.
+-- Editor baut direkt eine ganze Ventilkette: Reaktor waehlen -> Ventil fuer
+-- Ventil antippen (optional mit einem bekannten VALVE-Node als Ziel) ->
+-- FERTIG. Nutzt die flache Routenliste mit geordnetem 'path' pro Reaktor
+-- (siehe redstone_router.lua) -- normalize_tree() liest alte verschachtelte
+-- Baeume automatisch in dieses Format um.
 --
 -- u.mode: "tree" | "edit" (Tab-Ebene, wie bisher).
 -- u.edit_view (nur relevant wenn u.mode=="edit"): "list" | "path".
@@ -63,13 +52,8 @@ local function write_routes_file(routes, path)
   return true
 end
 
--- Fix (2026-07-12): REST-P0.1 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_
--- FIX_2026-07-12.md). save_routes() schrieb bisher DIREKT auf den
--- Zielpfad (fs.open(path, "w")) -- ein Schreibabbruch (Chunk-Unload,
--- Absturz, Stromausfall im echten Leben) genau waehrend dieses einen
--- Schreibvorgangs haette die letzte gueltige Routendatei zerstoert bzw.
--- unvollstaendig hinterlassen, ohne jede Wiederherstellungsmoeglichkeit.
--- Jetzt der komplette, im Dokument vorgeschriebene atomare Ablauf:
+-- Atomarer Schreibablauf (statt direkt auf den Zielpfad zu schreiben, wo ein
+-- Schreibabbruch die letzte gueltige Routendatei zerstoeren koennte):
 --   1. Inhalt nach <path>.tmp schreiben
 --   2. .tmp erneut einlesen (bestaetigt: die Datei ist als Lua ladbar)
 --   3. .tmp-Inhalt validieren (validate_fn, z.B. validate_tree())
@@ -214,9 +198,7 @@ function M.new(opts)
     get_reactors = opts.get_reactors or function() return {} end,
     get_active_route = opts.get_active_route,
     config_path = opts.config_path or DEFAULT_ROUTE_CONFIG_PATH,
-    -- Feature (2026-07-12): REST-P0.1. Ergebnis des Start-Ladevorgangs
-    -- aus main.lua (fuel_routes.lua laden + validieren, VOR der Router-
-    -- Erzeugung) -- wird hier nur zur Anzeige durchgereicht.
+    -- Ergebnis des Start-Ladevorgangs aus main.lua, nur zur Anzeige durchgereicht.
     routing_load_status = opts.routing_load_status,
     _ui = {
       mode = "tree",
@@ -234,29 +216,20 @@ function M.new(opts)
       pending_side = nil,     -- Seite antippen -> Integrator waehlen -> anfuegen
       step_btns = {}, side_btns = {}, integrator_btns = {},
       done_btn = nil, cancel_btn = nil, clear_btn = nil,
-      -- Feature (2026-07-20): "Weg 3"-Teach-in (siehe handle_teach_pulse()
-      -- unten) -- per Button in _render_path umschaltbar, wird beim
-      -- Verlassen des Pfad-Editors (FERTIG/ABBRECHEN) automatisch
-      -- zurueckgesetzt, damit ein spaeter eintreffender Puls nicht
-      -- versehentlich eine andere/neue Bearbeitung beeinflusst.
+      -- "Weg 3"-Teach-in (siehe handle_teach_pulse()); wird beim Verlassen
+      -- des Pfad-Editors automatisch zurueckgesetzt, damit ein spaeter
+      -- eintreffender Puls nicht versehentlich eine andere Bearbeitung
+      -- beeinflusst.
       teaching = false, teach_btn = nil,
-      -- Feature (2026-07-11): UI-P0.8 (siehe docs/CODING_AI_FUEL_UI_
-      -- PRIORITY_FIX_2026-07-12.md). Expliziter Save-Zustand statt nur
-      -- eines einzelnen "dirty"-Flags -- die Seite kann dadurch klar
-      -- zwischen GESPEICHERT/WIRD GESPEICHERT/FEHLGESCHLAGEN unterscheiden
-      -- und den exakten Fehler anzeigen statt nur "hat nicht geklappt".
+      -- Expliziter Save-Zustand statt nur eines "dirty"-Flags -- klare
+      -- Unterscheidung GESPEICHERT/WIRD GESPEICHERT/FEHLGESCHLAGEN mit Fehlertext.
       save = { state = "IDLE", error = nil, saved_at = nil },
     },
   }
-  -- Fix (2026-07-11): CRITICAL, UI-P0.8. Vorher wurde beim Start aus der
-  -- SEPARATEN Datei fuel_routes.lua geladen (load_routes()) -- komplett
-  -- unabhaengig von config.logistics.redstone_tree, dem tatsaechlich
-  -- operativ genutzten Zustand (siehe redstone_router.lua). Die Seite
-  -- konnte dadurch etwas ANDERES anzeigen als das, was der Router
-  -- tatsaechlich verwendet. Jetzt: redstone_tree ist die alleinige
-  -- kanonische Quelle -- normalize_tree() (dieselbe Funktion, die auch
-  -- M:refresh() intern verwendet) liefert die Routenliste direkt aus der
-  -- echten, aktiven Config.
+  -- config.logistics.redstone_tree ist die alleinige kanonische Quelle --
+  -- normalize_tree() (dieselbe Funktion wie M:refresh()) liefert die
+  -- Routenliste direkt aus der echten, aktiven Config, statt aus der
+  -- separaten Datei fuel_routes.lua, die davon abweichen koennte.
   if self.redstone_router and self.redstone_router.config then
     local cfg = self.redstone_router.config
     local lg = cfg.logistics or cfg
@@ -285,20 +258,11 @@ function M:_active_route()
   return {}
 end
 
--- Fix (2026-07-11): UI-P0.7 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_FIX_
--- 2026-07-12.md). M:_redraw() rief render() bisher DIREKT und
--- SELBSTSTAENDIG auf, ausserhalb des zentralen ui_service -> monitor_ui
--- -> ui_router-Renderpfads -- das konnte mit einem regulaeren, zentral
--- ausgeloesten Render-Durchlauf kollidieren (zwei unabhaengige
--- Zeichenversuche fuer denselben Frame) und Snapshot-/Zustandsvergleiche
--- auseinanderlaufen lassen. Jetzt entfernt: handle_touch() aendert nur
--- noch den lokalen Zustand (u.mode, u.selected_side, ...) und gibt true
--- zurueck (Event konsumiert) -- da ein konsumierter Touch bereits laut
--- UI-P0.5 (services/ui_service.lua) als "interaktiv" GARANTIERT im
--- selben Eventzyklus einen zentralen Render-Durchlauf ausloest (die
--- Zeit-Drossel wird fuer interaktive Events umgangen), bleibt die
--- Aenderung trotzdem sofort sichtbar -- nur eben ueber den einen,
--- zentralen Pfad statt einem zweiten, parallelen.
+-- handle_touch() aendert nur lokalen Zustand und gibt true zurueck (Event
+-- konsumiert) -- kein eigener render()-Aufruf mehr hier, das wuerde mit dem
+-- zentralen ui_service-Renderpfad kollidieren. Ein konsumierter Touch loest
+-- laut services/ui_service.lua ohnehin garantiert im selben Eventzyklus
+-- einen zentralen Render-Durchlauf aus (Zeit-Drossel wird dafuer umgangen).
 
 function M:_render_mode_tabs(target, ui, w)
   local u = self._ui
@@ -366,11 +330,8 @@ function M:_render_tree(target, ui, w, h)
   local body_bottom = h - 2
   local body_h = math.max(6, body_bottom - body_top + 1)
 
-  -- Feature (2026-07-12): REST-P0.3. Vorher wurde eine Route rein anhand
-  -- von "ist sie gerade aktiv" als OK/LIMITED/muted eingestuft -- ein
-  -- benoetigtes Ventil konnte dabei offline oder stale sein, ohne dass das
-  -- sichtbar war. Jetzt: valve_status wird einmal geholt, jede Route deren
-  -- Pfad ein offline/stale Ventil enthaelt gilt NIE als vollstaendig "OK".
+  -- Eine Route mit offline/stale Ventil im Pfad gilt nie als vollstaendig
+  -- "OK", unabhaengig davon, ob sie gerade aktiv ist.
   local function route_has_bad_valve(route_label)
     for _, vs in ipairs(valve_status_summary) do
       for _, affected_label in ipairs(vs.affected_routes or {}) do
@@ -605,16 +566,8 @@ function M:_render_path(target, ui, w, h)
   u.clear_btn = { x1 = math.max(2, u.cancel_btn.x1 - #clear_lbl - 2), x2 = math.max(2, u.cancel_btn.x1 - 2), y = button_y }
 end
 
--- Fix (2026-07-11): UI-P0.6 (siehe docs/CODING_AI_FUEL_UI_PRIORITY_FIX_
--- 2026-07-12.md). should_clear ist optional und defaultet auf TRUE --
--- der direkte M:_redraw()-Aufrufpfad (nach einem lokalen Touch, siehe
--- Kommentar dort) ruft render() bisher mit nur 3 Argumenten auf und
--- bekommt dadurch weiterhin unveraendert bei JEDEM Touch ein volles
--- Clear+Redraw (bewusst so belassen -- durch echte Nutzerinteraktion
--- begrenzt, nicht durch Netzwerk-Spam wie beim aeusseren Render-Pfad,
--- daher fuer Phase 3 kein Problem). NUR der zentrale Render-Pfad
--- (core/ui_router.lua -> hier durchgereicht) uebergibt den echten
--- should_clear-Wert und kann das Clearing dadurch gezielt unterdruecken.
+-- Nur der zentrale Render-Pfad (core/ui_router.lua) uebergibt den echten
+-- should_clear-Wert und kann das Clearing gezielt unterdruecken.
 function M:render(target, ui, colors, should_clear)
   -- Fix: Default false -- ui_router setzt should_clear korrekt;
   -- true nur bei Transition. Default true verursacht Flackern.
@@ -782,16 +735,10 @@ function M:handle_touch(x, y)
   return false
 end
 
--- Fix (2026-07-11): CRITICAL, UI-P0.8. Kompletter Neuaufbau des Save-
--- Ablaufs. Vorher: in fuel_routes.lua UND (getrennt, ohne Validierung)
--- direkt in redstone_tree geschrieben, ohne jede Rueckversicherung dass
--- das Ergebnis tatsaechlich gueltig ist. Jetzt: 1) redstone_tree direkt
--- aus den Editor-Routes bauen (bereits im kanonischen Format, siehe
--- redstone_router.lua), 2) mit derselben validate_tree()-Funktion pruefen,
--- die auch der Router selbst beim naechsten refresh() verwenden wuerde,
--- 3) NUR bei gueltigem Ergebnis tatsaechlich committen + Router
--- aktualisieren, 4) expliziten Save-Zustand setzen (SAVED/FAILED mit
--- genauem Fehler), den die Seite anzeigen kann.
+-- Save-Ablauf: 1) redstone_tree direkt aus den Editor-Routes bauen, 2) mit
+-- derselben validate_tree()-Funktion pruefen wie der Router selbst, 3) nur
+-- bei gueltigem Ergebnis committen + Router aktualisieren, 4) expliziten
+-- Save-Zustand setzen (SAVED/FAILED mit genauem Fehler).
 function M:_do_save()
   local u = self._ui
   u.save.state = "SAVING"
@@ -832,9 +779,8 @@ function M:_do_save()
     local lg = cfg.logistics or cfg
     lg.redstone_tree = new_tree
     self.redstone_router:refresh()
-    -- Fix (2026-07-11): UI-P0.8. Nach dem Schreiben den operativen
-    -- Zustand ZURUECKLESEN statt blind anzunehmen, dass er dem gerade
-    -- Geschriebenen entspricht.
+    -- Operativen Zustand zurueckLesen statt blind anzunehmen, dass er dem
+    -- gerade Geschriebenen entspricht.
     local validation_state = self.redstone_router.get_validation and self.redstone_router:get_validation() or { ok = true }
     if not validation_state.ok then
       u.save.state = "FAILED"
@@ -858,19 +804,13 @@ function M:get_routes()
   return self._ui.routes
 end
 
--- Feature (2026-07-20): "Weg 3" -- Route-Teach-in per manuellem Redstone-
--- Input an der jeweiligen VALVE-Node (siehe nodes/valve/main.lua's
--- check_teach_input()/ROUTE_TEACH_PULSE): der Spieler laeuft die
--- physische Rohrleitung ab und legt an jedem Ventil kurz einen Hebel um --
--- FUEL/REPROCESSOR (siehe nodes/fuel/main.lua's raw modem_message-
--- Listener fuer ROUTE_TEACH_PULSE) haengt die gemeldete Node in GENAU
--- DIESER Reihenfolge an die gerade bearbeitete Kette an, solange der
--- Teach-Modus (u.teaching, per Button in _render_path umschaltbar) aktiv
--- ist. "side" ist fuer eine per Funk adressierte VALVE-Node ohnehin nur
--- ein von normalize_tree()/validate_tree() verlangter Schluessel-
--- Bestandteil, physisch bedeutungslos (VALVE ignoriert message.side
--- komplett, siehe redstone_router.lua's _set_valve()) -- ein fester
--- Platzhalter genuegt.
+-- "Weg 3"-Teach-in: der Spieler laeuft die physische Rohrleitung ab und legt
+-- an jedem Ventil kurz einen Hebel um (siehe nodes/valve/main.lua's
+-- check_teach_input()/ROUTE_TEACH_PULSE); die gemeldete Node wird in genau
+-- dieser Reihenfolge an die Kette angehaengt, waehrend der Teach-Modus aktiv
+-- ist. "side" ist fuer eine per Funk adressierte VALVE-Node physisch
+-- bedeutungslos (nur ein von normalize_tree()/validate_tree() verlangter
+-- Schluessel-Bestandteil) -- ein fester Platzhalter genuegt.
 local TEACH_PLACEHOLDER_SIDE = "back"
 
 function M:handle_teach_pulse(node_id)

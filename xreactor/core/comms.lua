@@ -170,17 +170,27 @@ local function add_dedupe(sender, msg_id, applied_result)
   end
 end
 
+-- prune_dedupe() runs on every comms.tick(), which fires on every network/
+-- touch/key event (wants_events=true), not just the periodic timer tick --
+-- so it must be cheap in the common case where nothing has expired yet.
+-- add_dedupe() only ever table.insert()s at the end, so each peer's
+-- entries are always in non-decreasing ts order; checking just the oldest
+-- entry lets most calls skip the rebuild (and its table allocation)
+-- entirely instead of always re-copying every entry for every peer.
 local function prune_dedupe()
   local ttl_ms = state.config.dedupe_ttl_s * 1000
   local cutoff = now_ms() - ttl_ms
   for sender, entries in pairs(state.dedupe) do
-    local trimmed = {}
-    for _, entry in ipairs(entries) do
-      if entry.ts >= cutoff then
-        table.insert(trimmed, entry)
+    local first = entries[1]
+    if first and first.ts < cutoff then
+      local trimmed = {}
+      for _, entry in ipairs(entries) do
+        if entry.ts >= cutoff then
+          table.insert(trimmed, entry)
+        end
       end
+      state.dedupe[sender] = trimmed
     end
-    state.dedupe[sender] = trimmed
   end
 end
 
@@ -537,23 +547,10 @@ local function update_peer_timeouts()
   local retention_ms = math.max(10000, (state.config.peer_retention_s or DEFAULT_CONFIG.peer_retention_s) * 1000)
   local stale_peers = {}
   for id, peer in pairs(state.peers) do
-    -- Fix (2026-07-17): P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
-    -- 2026-07-12.md, TEST-P0-Triage von comms_peer_state_hysteresis_test.
-    -- lua). peer.down blieb bisher `nil` (nicht explizit `false`), solange
-    -- ein Peer noch NIE die vollstaendige Down-Transition durchlaufen
-    -- hatte -- also fuer JEDEN frisch gesehenen Peer, und weiterhin
-    -- waehrend der gesamten Down-Grace-Periode (bevor stale_for_s/
-    -- stale_observations die Schwellwerte erreichen). get_peer_state()
-    -- behandelt ein `nil`-down-Feld aber als "noch nie ausgewertet" und
-    -- berechnet stattdessen einen ROHEN `delta > peer_timeout_s`-Wert OHNE
-    -- Gnadenfrist/Beobachtungsschwelle -- das unterlief die komplette
-    -- Hysterese fuer jeden Peer, der bereits ueber dem reinen Timeout lag,
-    -- aber noch innerhalb der Grace-Periode war (extern sichtbar als
-    -- sofortiges "down", nicht erst nach Ablauf der Gnadenfrist). Jetzt:
-    -- sobald ein Peer einmal von dieser Funktion ausgewertet wurde, ist
-    -- sein `down`-Feld immer explizit boolesch -- der nil-Fallback in
-    -- get_peer_state() greift dann nur noch fuer Peers, die diese Funktion
-    -- noch nie erreicht hat.
+    -- Sobald ein Peer einmal von dieser Funktion ausgewertet wurde, ist
+    -- sein `down`-Feld immer explizit boolesch -- get_peer_state()s
+    -- nil-Fallback (roher delta>peer_timeout_s ohne Hysterese) greift
+    -- dann nur noch fuer Peers, die diese Funktion noch nie erreicht hat.
     if peer.down == nil then peer.down = false end
     local last = peer.last_seen or 0
     local age_s = (now_ts - last) / 1000

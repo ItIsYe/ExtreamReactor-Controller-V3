@@ -22,10 +22,9 @@ local ROLES = {
   { key = "energy",       label = "ENERGY"       },
   { key = "water",        label = "WATER"        },
   { key = "fuel",         label = "FUEL"         },
-  -- Feature (2026-07-09): FUEL-Redstone-Valve-Controller — eigener,
-  -- sehr schlanker Node-Typ (separater Computer, per Wireless Modem
-  -- angesteuert, schaltet lokal redstone.setOutput()). Bewusst direkt
-  -- unter FUEL einsortiert, da er organisatorisch dazugehoert.
+  -- Schlanker Node-Typ (separater Computer, per Wireless Modem
+  -- angesteuert, schaltet lokal redstone.setOutput()); organisatorisch
+  -- direkt unter FUEL einsortiert.
   { key = "valve",        label = "VALVE"        },
   { key = "reprocessing", label = "REPROCESSING" },
   { key = "log",          label = "LOG"          },

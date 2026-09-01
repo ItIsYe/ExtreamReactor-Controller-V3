@@ -7,28 +7,18 @@
 -- einer einzigen Vollflaechenfarbe je nach Status gefuellt — kein Text,
 -- von weitem als Ampel lesbar.
 --
--- Wird von nodes/rt/monitor_ui.lua und nodes/energy/ui_pages.lua genutzt
--- (vorher als duplizierter Code in beiden Dateien, hierher extrahiert
--- 2026-07-01 im Rahmen der "optionale Peripherie"-Struktur).
+-- Wird von nodes/rt/monitor_ui.lua und nodes/energy/ui_pages.lua genutzt.
 --
--- Design-Prinzip (gilt für alle Module in xreactor/optional/): jede
+-- Design-Prinzip (gilt fuer alle Module in xreactor/optional/): jede
 -- Funktion ist selbst vollstaendig pcall-isoliert. Ein Fehler in einem
 -- optionalen Feature darf NIEMALS die Kernfunktion (Reaktorsteuerung,
--- Master-UI, etc.) beeinflussen koennen. Ein frueher, nicht ausreichend
--- isolierter erster Ampel-Versuch legte einmal kurzzeitig die komplette
--- RT-Hauptanzeige lahm — dieses Modul ist die daraus resultierende,
--- sorgfaeltig abgesicherte Neufassung.
+-- Master-UI, etc.) beeinflussen koennen.
 
 local M = {}
 
--- Fix (2026-07-06): CRITICAL. Diese Werte waren rohe 24-Bit-RGB-Hex-Zahlen
--- (0x00FF00 etc.) — aber mon.setBackgroundColor() erwartet die speziellen
--- colors.xxx Bitmask-Konstanten (Zweierpotenzen: colors.white=1, colors.
--- red=16384, ...), KEINE beliebigen RGB-Werte. Ein ungueltiger Farbwert
--- wirft laut CC:Tweaked-Doku einen Fehler ("Values outside the range of
--- a valid colour will error"), der hier durch pcall() verschluckt wurde
--- — der Ampel-Bildschirm blieb dadurch dauerhaft schwarz, ohne sichtbaren
--- Fehler. Jetzt mit den echten colors-API-Konstanten.
+-- Muessen die echten colors-API-Bitmask-Konstanten sein (Zweierpotenzen:
+-- colors.white=1, colors.red=16384, ...), keine rohen RGB-Hex-Werte --
+-- mon.setBackgroundColor() wirft sonst einen Fehler.
 M.COLORS = {
   OK        = colors.green,
   LIMITED   = colors.yellow,
@@ -45,18 +35,11 @@ M.COLORS = {
 function M.new()
   local self = { cache = { name = nil, last_color = nil, resolved = false, ampel_name = nil, next_probe = 0 } }
 
-  -- Fix (2026-07-07): CRITICAL REGRESSION. Der Scale-5-Fix (v337) probte
-  -- JEDEN Nicht-Haupt-Monitor bei JEDEM render()-Aufruf mit setTextScale(5),
-  -- um seine Groesse zu pruefen — aber wenn der Monitor NICHT die 1x3-Ampel
-  -- war (z.B. ein normales Overview/Fleet/Energy-Display), blieb die Skala
-  -- fuer immer bei 5 haengen, weil nie zurueckgesetzt wurde. Das ist genau
-  -- der Grund fuer "erst normale UI, dann kurz gruen, dann viel zu grosse
-  -- UI" — der allererste Ampel-Render-Durchlauf hat jeden anderen Monitor
-  -- auf dem Node dauerhaft kaputtskaliert. Jetzt: (1) die urspruengliche
-  -- Skala jedes Kandidaten wird VOR dem Probe gesichert und bei einem
-  -- Fehlschlag sofort wiederhergestellt, (2) das Ergebnis wird gecacht und
-  -- nur alle 30s neu geprueft statt bei jedem Tick, damit andere Monitore
-  -- gar nicht erst wiederholt angefasst werden.
+  -- Die urspruengliche Skala jedes Kandidaten wird VOR dem Groessen-Probe
+  -- gesichert und bei einem Fehlschlag sofort wiederhergestellt -- sonst
+  -- bleibt ein faelschlich sondierter Nicht-Ampel-Monitor dauerhaft auf der
+  -- Probe-Skala haengen. Das Ergebnis wird gecacht und nur alle 30s neu
+  -- geprueft statt bei jedem Tick.
   local function probe_interval_elapsed()
     local now = (os.clock and os.clock()) or 0
     return now >= self.cache.next_probe
@@ -73,19 +56,11 @@ function M.new()
           local ok_w, mon = pcall(peripheral.wrap, name)
           if ok_w and mon then
             local ok_orig, orig_scale = pcall(mon.getTextScale)
-            -- Fix (2026-07-07) #2: die vorherigen zwei Versuche (Skala 5
-            -- exakt 1x3, dann Skala 0.5 mit Groessen-Heuristik) waren beide
-            -- unbegruendete Vermutungen ueber die CC:Tweaked-Zeichenaufloesung
-            -- und haben die Ampel weiterhin nicht gefunden. Diesmal echte
-            -- Herleitung: laut offizieller Doku hat ein einzelner Monitorblock
-            -- bei Skala 1 exakt 7x5 Zeichen, ein 3x3-Cluster insgesamt 29x19.
-            -- Daraus folgt (verifiziert gegen beide Punkte): breite(N) =
-            -- 11*N-4, hoehe(M) = 7*M-2. Fuer einen 1 breit x 3 hoch Stack
-            -- (N=1, M=3): breite = 11*1-4 = 7 (exakt, unabhaengig von der
-            -- Hoehe, da nur 1 Spalte), hoehe = 7*3-2 = 19. w=7 wird exakt
-            -- verlangt (mathematisch sicher fuer N=1), h bekommt eine kleine
-            -- Toleranz (17-21) falls die tatsaechliche Bauhoehe leicht von 3
-            -- Bloecken abweicht oder die Formel um 1-2 daneben liegt.
+            -- Geometrie bei Skala 1: ein einzelner Monitorblock hat 7x5
+            -- Zeichen, ein 3x3-Cluster 29x19 -- daraus folgt breite(N) =
+            -- 11*N-4, hoehe(M) = 7*M-2. Fuer einen 1 breit x 3 hoch Stack:
+            -- breite = 7 (exakt), hoehe = 19 (Toleranz 17-21 fuer leichte
+            -- Bauabweichungen).
             local ok_scale = pcall(mon.setTextScale, 1)
             local ok_s, w, h = pcall(mon.getSize)
             local is_ampel_shape = ok_scale and ok_s and type(w) == "number" and type(h) == "number"

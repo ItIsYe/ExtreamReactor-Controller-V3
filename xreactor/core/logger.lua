@@ -817,18 +817,11 @@ function logger.log(prefix, message, level)
     if state.emergency_drop then
       return
     end
-    -- Feature (2026-07-07): periodischer Heartbeat-Eintrag. Vorher gab es
-    -- keine Garantie, dass ein Log-Export ueberhaupt einen halbwegs
-    -- aktuellen Zeitstempel enthaelt — bei einem abgestuerzten/haengenden
-    -- Node sah eine alte Log-Datei aeusserlich "normal" aus (viele
-    -- Eintraege), man merkte die Staleness erst am letzten Zeitstempel,
-    -- wenn man explizit danach suchte. Jetzt wird bei jedem logger.log()-
-    -- Aufruf geprueft, ob seit dem letzten Heartbeat mehr als
-    -- HEARTBEAT_INTERVAL_S vergangen ist — falls ja, wird zusaetzlich eine
-    -- "HEARTBEAT alive"-Zeile eingefuegt. Das garantiert einen frischen
-    -- Zeitstempel in jedem Log-Export, solange der Node ueberhaupt noch
-    -- irgendetwas tut (Piggyback auf normale Log-Aktivitaet statt einem
-    -- eigenen Timer, um keinen weiteren Call-Site-Umbau noetig zu machen).
+    -- Periodischer Heartbeat: bei jedem logger.log()-Aufruf wird geprueft,
+    -- ob seit dem letzten Heartbeat mehr als HEARTBEAT_INTERVAL_S vergangen
+    -- ist -- falls ja, zusaetzlich eine "HEARTBEAT alive"-Zeile einfuegen.
+    -- Garantiert einen frischen Zeitstempel in jedem Log-Export, solange
+    -- der Node ueberhaupt noch etwas tut (Piggyback statt eigenem Timer).
     local now_clock = os.clock and os.clock() or 0
     if now_clock - (state.last_heartbeat or 0) >= CONFIG.HEARTBEAT_INTERVAL_S then
       state.last_heartbeat = now_clock

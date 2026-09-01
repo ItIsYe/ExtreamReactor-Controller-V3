@@ -33,13 +33,10 @@
 --
 --   reactors = {
 --     { name              = "Reactor A",
---       -- Fix (2026-07-08): FUEL-Node hat keinen Wired-Modem-Zugriff auf
---       -- den Reaktor selbst (nur aufs ME-System via ME Bridge) -- der
---       -- Fuellstand kommt stattdessen per Netzwerk (Master-Relay, siehe
---       -- master/fuel_relay.lua, mit Fallback auf direktes Mithoeren der
---       -- RT-Status-Broadcasts). reactor_id muss der ID entsprechen, die
---       -- der zustaendige RT-Node fuer diesen Reaktor meldet (sichtbar
---       -- z.B. im RT-Node-Log/Dashboard).
+--       -- FUEL has no wired access to the reactor itself (only the ME
+--       -- system) -- fuel level comes via network (master/fuel_relay.lua,
+--       -- with a fallback on overhearing RT's status broadcasts). reactor_id
+--       -- must match the ID the owning RT node reports for this reactor.
 --       reactor_id        = "node-52-reactor-0",
 --       inlet             = "mekanism:ultimate_logistical_transporter_0",
 --       item              = "bigreactors:yellorium_ingot",
@@ -84,20 +81,13 @@ end
 
 -- ---- reactor fuel level reading (network-based) ----------------------------
 
--- Fix (2026-07-08): CRITICAL architecture correction. Diese Funktion las
--- bisher direkt von einem "reactor_port"-Peripheral -- die FUEL-Node hat
--- aber KEINEN Wired-Modem-Zugriff auf die Reaktoren, nur aufs ME-System.
--- Jede Nutzung dieser Funktion lief also faktisch immer in den Fallback
--- "kein reactor_port konfiguriert" -> Always-Supply-Modus, ohne dass das
--- je auffiel, weil FUEL bisher nie im Einsatz war (0 FUEL-Nodes in der
--- Flotte). Jetzt: Fuellstand kommt aus dem netzwerkbasierten Cache
--- (fuel_status_cache in nodes/fuel/main.lua), befuellt per Master-Relay
--- (primaer) oder direktem Mithoeren der RT-Status-Broadcasts (Fallback,
--- z.B. bei Master-Ausfall). Die juengere der beiden Quellen gewinnt; ist
--- keine von beiden innerhalb von MAX_AGE_MS aktuell, gilt der Fuellstand
--- als nicht lesbar (konservativ: Reaktor wird diesen Zyklus uebersprungen,
--- statt zu raten -- exakt dasselbe Verhalten wie zuvor bei einem
--- Peripherie-Lesefehler).
+-- Fuellstand kommt aus dem netzwerkbasierten Cache (fuel_status_cache in
+-- nodes/fuel/main.lua), befuellt per Master-Relay (primaer) oder direktem
+-- Mithoeren der RT-Status-Broadcasts (Fallback). Die juengere der beiden
+-- Quellen gewinnt; ist keine von beiden innerhalb von MAX_AGE_MS aktuell,
+-- gilt der Fuellstand als nicht lesbar (Reaktor wird diesen Zyklus
+-- uebersprungen statt zu raten) -- FUEL hat keinen Wired-Zugriff auf die
+-- Reaktoren selbst, nur aufs ME-System.
 local MAX_FUEL_DATA_AGE_MS = 30000
 
 local function read_reactor_fuel_from_network(fuel_status, reactor_id)
@@ -126,8 +116,7 @@ function M.new(opts)
     log       = opts.log or function() end,
     warn_once = opts.warn_once or function() end,
     external_rs_router = opts.rs_router or nil,  -- shared rs_router injected from main.lua
-    -- Feature (2026-07-08): netzwerkbasierter Fuellstand-Cache (siehe
-    -- read_reactor_fuel_from_network() oben), von main.lua injiziert.
+    -- Netzwerkbasierter Fuellstand-Cache (siehe read_reactor_fuel_from_network()).
     fuel_status = opts.fuel_status or { master_relay = {}, direct_heard = {} },
     _state = {
       bridge        = nil,
@@ -140,12 +129,9 @@ function M.new(opts)
       last_cycle    = nil,
       last_refresh  = 0,
       last_run_ts   = 0,
-      -- Feature (2026-07-08): current_request — anders als das kurze
-      -- Ventil-Fenster in redstone_router.lua (nur waehrend valve_open_ms
-      -- aktiv), umfasst dieser Status den GESAMTEN Entscheidungs- bis
-      -- Lieferzyklus fuer den Reaktor, der gerade aktiv beliefert wird.
-      -- Fachlich eindeutige Grundlage fuer die externe UI-Hervorhebung
-      -- (siehe get_current_request()).
+      -- current_request umfasst (anders als redstone_router.lua's kurzes
+      -- Ventil-Fenster) den gesamten Entscheidungs- bis Lieferzyklus fuer
+      -- den aktiv belieferten Reaktor -- Grundlage fuer get_current_request().
       current_request = nil,  -- { transaction_id, reactor_id, label, state, phase }
       last_delivery = nil,
       delivery_seq = 0,
@@ -200,21 +186,10 @@ end
 
 -- ---- peripheral discovery --------------------------------------------------
 
--- Fix (2026-07-19): CRITICAL. Der Default-Name "me_bridge" ist reine
--- Konvention dieser Config -- das tatsaechliche CC:Tweaked-Peripheral (der
--- Advanced-Peripherals-"ME Bridge"-Block) heisst automatisch vergeben z.B.
--- "meBridge_0" (oder eine andere Seiten-/Netzwerkbezeichnung) und wurde
--- ueber peripheral.isPresent("me_bridge") NIEMALS gefunden, solange
--- config.logistics.me_bridge nicht manuell exakt auf den tatsaechlichen
--- Namen gesetzt wurde -- meldete sich dauerhaft als "absent", obwohl eine
--- korrekt verkabelte ME Bridge vorhanden war. Analog zum bereits
--- bestehenden Muster fuer storage_bus (nodes/support/discovery.lua's
--- collect_devices_by_methods -- Erkennung ueber tatsaechlich vorhandene
--- Methoden statt festen Namen) wird jetzt zusaetzlich per Methodensignatur
--- gesucht (getItem + exportItemToPeripheral + importItemFromPeripheral --
--- genau die drei ME-Bridge-Methoden, die diese Datei tatsaechlich
--- aufruft), sobald der konfigurierte/Default-Name nicht direkt gefunden
--- wird.
+-- Sucht per Methodensignatur (getItem + exportItemToPeripheral +
+-- importItemFromPeripheral), sobald der konfigurierte/Default-Name nicht
+-- direkt gefunden wird -- Advanced Peripherals vergibt generierte Namen
+-- wie "meBridge_0", nicht den Konventions-Default "me_bridge".
 local function find_me_bridge_by_methods()
   for _, name in ipairs(peripheral.getNames() or {}) do
     local ok, methods = pcall(peripheral.getMethods, name)
@@ -264,13 +239,9 @@ function M:refresh_peripherals()
   for i, entry in ipairs(cfg.reactors or {}) do
     local label = entry.name or ("Reactor " .. i)
 
-    -- Fix (2026-07-08): kein Wired-Peripherie-Zugriff mehr auf den Reaktor
-    -- selbst -- nur noch die ID merken, unter der der zustaendige RT-Node
-    -- diesen Reaktor im Netzwerk meldet (siehe read_reactor_fuel_from_
-    -- network() oben). entry.reactor_port (alt) wird als Fallback-Alias
-    -- akzeptiert, falls jemand eine alte Config noch nicht umbenannt hat --
-    -- der Wert wird dann einfach als reactor_id interpretiert, es wird
-    -- aber KEIN Peripheral mehr gewrapped.
+    -- Kein Wired-Zugriff auf den Reaktor selbst -- nur die ID merken, unter
+    -- der der zustaendige RT-Node ihn im Netzwerk meldet. entry.reactor_port
+    -- (alt) wird als Fallback-Alias akzeptiert, aber kein Peripheral gewrapped.
     local reactor_id = entry.reactor_id or entry.reactor_port
 
     -- Inlet: dedicated transporter or chest for THIS reactor
@@ -365,17 +336,11 @@ function M:_run_supply(cycle_log)
   if self._state.current_request then return 0, 0 end
   local exported, errors = 0, 0
 
-  -- Fix (2026-07-08): Phase 1 -- ermitteln, WELCHE Reaktoren gerade Fuel
-  -- anfordern, OHNE sie schon zu beliefern. Vorher wurde stur in
-  -- Config-Reihenfolge beliefert; bei mehreren gleichzeitigen Requests
-  -- hatte einfach der zuerst in der Config stehende Reaktor Vorrang,
-  -- unabhaengig davon wie kritisch sein Fuellstand tatsaechlich war.
-  -- Jetzt: alle anfordernden Reaktoren sammeln, dann nach Prioritaet
-  -- sortieren (niedrigster Fuellstand zuerst -- passt zum "kein Reaktor
-  -- wird ausgehungert"-Grundprinzip). Reaktoren ohne reactor_id (Always-
-  -- Supply-Fallback, kein Fuellstand bekannt) werden NACH allen bekannten
-  -- Fuellstaenden eingeplant, in Config-Reihenfolge untereinander, da ihre
-  -- Dringlichkeit nicht vergleichbar ist.
+  -- Phase 1: ermitteln, WELCHE Reaktoren gerade Fuel anfordern, ohne sie
+  -- schon zu beliefern. Alle anfordernden Reaktoren sammeln, dann nach
+  -- Prioritaet sortieren (niedrigster Fuellstand zuerst). Reaktoren ohne
+  -- reactor_id (Always-Supply-Fallback) werden nach allen bekannten
+  -- Fuellstaenden eingeplant, da ihre Dringlichkeit nicht vergleichbar ist.
   local candidates = {}
   for _, r in ipairs(self._state.reactors) do
     if not r.inlet then
@@ -422,43 +387,21 @@ function M:_run_supply(cycle_log)
     return a.order < b.order  -- stabile Reihenfolge bei Gleichstand/beide unbekannt
   end)
 
-  -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
-  -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). Diese Schleife
-  -- belieferte bisher ALLE Kandidaten in einem Rutsch -- jeder Durchlauf
-  -- mit Redstone-Routing rief rs:route_and_act() auf, das (vor diesem Fix)
-  -- 2.05-2.4s PRO Reaktor blockierte. Bei mehreren gleichzeitig
-  -- anfordernden Reaktoren blockierte ein einziger Aufruf von
-  -- M:_run_supply() dadurch mehrere bis weit ueber zehn Sekunden --
-  -- deutlich laenger als das eigene 5s-Zyklusintervall.
-  --
-  -- redstone_router.lua's route_and_act() wurde durch eine asynchrone
-  -- Zustandsmaschine ersetzt (begin_transaction() + tick(), siehe dort) --
-  -- pro Router immer nur EINE aktive Transaktion. Ist Routing konfiguriert,
-  -- wird deshalb pro Zyklus hoechstens EINE Lieferung tatsaechlich
-  -- GESTARTET: Kandidaten mit unzureichendem ME-Bestand werden weiterhin
-  -- der Reihe nach uebersprungen (Kaskade bleibt erhalten), aber sobald
-  -- der Router "busy" meldet (eine Transaktion laeuft noch), lohnt kein
-  -- weiterer Versuch in diesem Zyklus -- kein anderer Kandidat koennte
-  -- ohnehin gleichzeitig durch denselben (einzigen) Ventilbaum beliefert
-  -- werden. Ohne konfiguriertes Routing bleibt das Verhalten unveraendert
-  -- (Direkt-Export ist synchron und schnell, keine Serialisierung noetig).
+  -- redstone_router.lua's route_and_act() ist eine asynchrone Zustandsmaschine
+  -- (begin_transaction() + tick()) mit immer nur EINER aktiven Transaktion pro
+  -- Router. Ist Routing konfiguriert, wird deshalb pro Zyklus hoechstens EINE
+  -- Lieferung tatsaechlich gestartet: Kandidaten mit unzureichendem ME-Bestand
+  -- werden weiter der Reihe nach uebersprungen, aber sobald der Router "busy"
+  -- meldet, lohnt kein weiterer Versuch in diesem Zyklus. Ohne konfiguriertes
+  -- Routing bleibt Direkt-Export synchron und schnell.
   local cfg_l = self.config.logistics or self.config or {}
   local rs = self._state.rs_router
 
-  -- Fix (2026-07-16): CRITICAL (ROUTER-P0.9, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md Abschnitt 9). War bisher "rs:route_
-  -- count() > 0" -- ein struktureller Walk ueber das ROHE cfg.redstone_
-  -- tree, unabhaengig vom in rs:refresh() ermittelten Validierungszustand.
-  -- Ein konfigurierter, aber kaputter Baum, der strukturell auf 0
-  -- erkennbare Routen fiel, wurde dadurch identisch zu "nie konfiguriert"
-  -- behandelt -- "routed" wurde false, begin_transaction() (mit seiner
-  -- eigenen invalid_tree-Absicherung) wurde dadurch NIE aufgerufen, und
-  -- FUEL fiel direkt in den ungeschuetzten Direkt-Export-Pfad, obwohl
-  -- rs:refresh() den Baum bereits als ungueltig erkannt und block_all()
-  -- ausgefuehrt hatte. get_routing_state() ist jetzt die einzige
-  -- Autoritaet fuer diese Entscheidung; ROUTING_INVALID/ROUTING_REQUIRED_
-  -- BUT_EMPTY blockieren die Belieferung diesen Zyklus komplett (kein
-  -- Routing-Versuch, aber auch KEIN Direkt-Export-Fallback).
+  -- get_routing_state() ist die einzige Autoritaet fuer "war konfiguriert"
+  -- (nicht ein struktureller Walk ueber das rohe cfg.redstone_tree, der bei
+  -- einem kaputten Baum faelschlich "nie konfiguriert" ergeben koennte).
+  -- ROUTING_INVALID/ROUTING_REQUIRED_BUT_EMPTY blockieren die Belieferung
+  -- komplett (kein Routing-Versuch, aber auch kein Direkt-Export-Fallback).
   local routing_state = rs and rs:get_routing_state() or "ROUTING_NOT_CONFIGURED"
   if routing_state == "ROUTING_INVALID" or routing_state == "ROUTING_REQUIRED_BUT_EMPTY" then
     self.warn_once("routing_blocked:" .. routing_state,
@@ -470,10 +413,9 @@ function M:_run_supply(cycle_log)
   for _, cand in ipairs(candidates) do
     local r, fuel_pct = cand.r, cand.fuel_pct
 
-    -- Feature (2026-07-08): current_request VOR dem eigentlichen Export
-    -- setzen (nicht erst waehrend des kurzen Ventil-Fensters) -- deckt den
-    -- kompletten Entscheidungs- bis Lieferzyklus ab, fachlich eindeutige
-    -- Grundlage fuer die UI-Hervorhebung (siehe get_summary()).
+    -- current_request VOR dem Export setzen (nicht erst waehrend des kurzen
+    -- Ventil-Fensters) -- deckt den gesamten Entscheidungs- bis
+    -- Lieferzyklus ab, Grundlage fuer die UI-Hervorhebung (get_summary()).
     self._state.current_request = {
       reactor_id = r.reactor_id, label = r.label, state = "requesting", phase = "REQUESTING",
       started_ts = os.epoch and os.epoch("utc") or 0,
@@ -751,16 +693,11 @@ function M:get_summary()
     bridge         = s.bridge and s.bridge.name or nil,
     reactors       = reactor_status,
     waste_outlets  = #s.waste_outlets,
-    -- Fix (2026-07-09): ui_pages.lua (Overview/Details-Seiten) las diese
-    -- beiden Felder schon immer aus, get_summary() hat sie aber nie
-    -- geliefert -- die "ROUTEN"-Anzeige zeigte dadurch immer 0/0, egal
-    -- wie viele Reaktoren tatsaechlich konfiguriert/verbunden waren.
+    -- ui_pages.lua's "ROUTEN"-Anzeige braucht beide Felder.
     total_routes   = total_routes,
     active_routes  = active_routes,
-    -- Feature (2026-07-08): current_request — siehe _run_supply() oben.
-    -- Deckt den ganzen Entscheidungs-/Lieferzyklus ab, nicht nur das kurze
-    -- Ventil-Fenster (das bleibt separat ueber rs_router:get_active_route()
-    -- verfuegbar, falls Redstone-Routing konfiguriert ist).
+    -- Deckt den ganzen Entscheidungs-/Lieferzyklus ab (das kurze Ventil-
+    -- Fenster bleibt separat ueber rs_router:get_active_route() verfuegbar).
     current_request = current_request,
     last_delivery  = s.last_delivery,
     router_safety_latch = safety_latch,

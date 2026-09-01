@@ -88,19 +88,12 @@ local function build_capabilities(name)
   }
 end
 
--- Fix (2026-07-15): RT-P1 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
--- 2026-07-12.md Abschnitt 6, "Singular-/Plural-Kind-Namen normalisieren").
--- Der Rest der RT-Discovery/Binding-Logik (binding.lua's detect_kind()/
--- should_bind_with_reason(), discovery_runtime.lua's Binding-Decisions,
--- module.type) verwendet durchgehend den SINGULAR ("reactor"/"turbine"),
--- waehrend ctx.capability_cache/get_device_caps() intern den PLURAL
--- ("reactors"/"turbines") als Cache-Schluessel erwarten. Bisher stimmten
--- alle bestehenden Aufrufstellen zufaellig ueberein, aber ein kuenftiger
--- Aufruf mit dem (im Rest des Codes ueblichen) Singular wuerde still einen
--- separaten, nie befuellten Cache-Namensraum erzeugen (kein Fehler, aber
--- der Cache griffe nie -- jeder Aufruf haette einen echten peripheral.
--- getMethods()-Scan zur Folge). normalize_kind() macht get_device_caps()
--- robust gegen beide Schreibweisen.
+-- Der Rest der RT-Discovery/Binding-Logik verwendet SINGULAR
+-- ("reactor"/"turbine"), waehrend ctx.capability_cache intern PLURAL
+-- ("reactors"/"turbines") als Cache-Schluessel erwartet -- normalize_kind()
+-- macht get_device_caps() robust gegen beide Schreibweisen, sonst wuerde
+-- ein Singular-Aufruf still einen separaten, nie befuellten Cache-
+-- Namensraum erzeugen.
 local KIND_TO_CACHE_KEY = {
   reactor = "reactors", reactors = "reactors",
   turbine = "turbines", turbines = "turbines",
@@ -111,18 +104,11 @@ local function normalize_kind(kind)
 end
 
 function M.get_device_caps(ctx, kind, name)
-  -- Fix (2026-07-13): CRITICAL (RT-P0.3, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). "or peripheral.isPresent(name)"
-  -- machte diese Bedingung im Normalbetrieb praktisch IMMER wahr (ein
-  -- angeschlossenes Peripheral IST fast immer "present") -- build_
-  -- capabilities() (ruft peripheral.getMethods() auf, ein echter
-  -- Peripherie-Methodenscan) lief dadurch bei praktisch JEDEM Aufruf im
-  -- Control-/UI-/Statuspfad erneut, statt nur einmal. discovery_runtime.
-  -- lua schreibt den Cache bereits separat und gezielt bei echten
-  -- Attach-/Detach-/Rebind-Ereignissen neu (siehe dortige capability_
-  -- cache[kind][name] = build_capabilities(name)-Aufrufe) -- diese
-  -- Funktion hier muss daher nur noch bei komplett FEHLENDEM Cache-
-  -- Eintrag neu aufbauen, nicht bei jedem "ist gerade angeschlossen"-Check.
+  -- Baut den Cache nur bei komplett fehlendem Eintrag neu auf --
+  -- discovery_runtime.lua schreibt ihn bereits gezielt bei echten
+  -- Attach-/Detach-/Rebind-Ereignissen neu, ein zusaetzlicher "ist gerade
+  -- angeschlossen"-Check hier wuerde peripheral.getMethods() unnoetig oft
+  -- erneut aufrufen.
   kind = normalize_kind(kind)
   ctx.capability_cache[kind] = ctx.capability_cache[kind] or {}
   if not ctx.capability_cache[kind][name] then
@@ -326,14 +312,10 @@ local function setInductor(turbine, caps, engaged)
   return false
 end
 
--- Fix (2026-07-14): CRITICAL. RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). Analog zu reactor_control.lua's
--- setReactorActive()-Fix: setActive() lief bisher unbedingt bei jedem
--- Control-Tick, obwohl der Aufrufer (updateControl() weiter unten) immer
--- denselben Zielwert "true" verlangt. Optionaler ctrl-Parameter
--- (turbine_ctrl_store[name]-Eintrag) unterdrueckt jetzt identische
--- Writes, ruecklaufkompatibel ohne ctrl fuer andere Aufrufer
--- (module_lifecycle.lua's Start-Rampe).
+-- Analog zu reactor_control.lua's setReactorActive(): optionaler ctrl-
+-- Parameter (turbine_ctrl_store[name]-Eintrag) unterdrueckt identische
+-- Writes statt setActive() bei jedem Tick redundant aufzurufen, ruecklauf-
+-- kompatibel ohne ctrl (module_lifecycle.lua's Start-Rampe).
 function M.setTurbineActive(ctx, turbine, caps, active, ctrl)
   -- A cached value is not a live hardware observation. Reconcile getActive()
   -- first so an externally stopped/reset turbine is actively restored.
@@ -763,20 +745,11 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
     M.update_turbine_flow_state(ctx, rpm, target_rpm, ctrl)
 
   local now_ts = os.clock()
-  -- Fix (2026-07-14): CRITICAL. RT-P0/RT-P1 (siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md und CODING_AI_RT_CONTROL_CADENCE_
-  -- 2026-07-12.md). setTurbineFlow() wurde bisher bei JEDEM Control-Tick
-  -- bedingungslos aufgerufen, selbst wenn sich requested_flow seit dem
-  -- letzten erfolgreichen Write nicht geaendert hatte -- ein echter,
-  -- unnoetiger Hardware-Write pro Tick. Analog zu reactor_control.lua's
-  -- bereits vorhandenem "ctrl.last_applied == clamped"-Schutz bei Rod-
-  -- Writes wird der eigentliche setFluidFlowRate()-Aufruf jetzt uebersprungen,
-  -- wenn requested_flow exakt dem zuletzt erfolgreich geschriebenen Wert
-  -- entspricht. Overspeed bleibt unveraendert sofort wirksam: der
-  -- Overspeed-Zielwert (0) fliesst bereits VOR dieser Stelle in
-  -- requested_flow ein (siehe update_turbine_flow_state()/overspeed_brake
-  -- oben) -- weicht er vom zuletzt geschriebenen Wert ab, wird trotzdem
-  -- sofort geschrieben, kein zusaetzliches Cooldown-Warten.
+  -- Analog zu reactor_control.lua's Rod-Write-Schutz: setFluidFlowRate()
+  -- wird uebersprungen, wenn requested_flow exakt dem zuletzt erfolgreich
+  -- geschriebenen Wert entspricht. Overspeed bleibt sofort wirksam, da der
+  -- Overspeed-Zielwert bereits VOR dieser Stelle in requested_flow einfliesst
+  -- (siehe update_turbine_flow_state()/overspeed_brake oben).
   local write
   if requested_flow == ctrl.last_written_flow then
     write = { ok = true, applied = true, setter = ctrl.last_write_setter,
@@ -788,13 +761,24 @@ function M.apply_turbine_flow(ctx, name, turbine, caps, rpm, target_rpm)
       ctrl.last_write_setter = write.setter
     end
   end
-  enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, decision)
+  local _, brake_detail = enforce_overspeed_brake_coil(ctx, name, turbine, caps, ctrl, decision)
+
+  -- Nothing physically changed since startup_observed_flow was read above
+  -- (no flow write, no fresh brake actuation) -- reuse it below instead of
+  -- an identical fresh read.
+  local reuse_flow = nil
+  if write.write_state == "WRITE_SKIPPED_UNCHANGED"
+      and brake_detail ~= "overspeed-coil-engaged"
+      and type(startup_observed_flow) == "number" then
+    reuse_flow = startup_observed_flow
+  end
 
   local rail_cfg = ctx.config.rails and ctx.config.rails.turbine_flow or {}
   local flow_tolerance = ctx.flow_apply_helpers.capture_turbine_flow_readback(
     turbine, caps, ctrl, requested_flow, rail_cfg,
     function(t, c) return M.read_turbine_flow(ctx, t, c) end,
-    function(rate) return M.clamp_turbine_flow(ctx, rate) end)
+    function(rate) return M.clamp_turbine_flow(ctx, rate) end,
+    reuse_flow)
 
   local confirmed_flow = ctrl.confirmed_flow
   local _, readback_state, readback_detail =
@@ -818,18 +802,10 @@ function M.updateControl(ctx)
 
   -- Reaktoren aktiv halten (delegiert an reactor_control)
   for _, name in ipairs(ctx.config.reactors or {}) do
-    -- Fix (2026-07-13): CRITICAL (RT-P0.4, siehe docs/CODING_AI_OTHER_
-    -- NODES_PERFORMANCE_2026-07-12.md). peripheral.wrap() wurde bisher
-    -- bei JEDEM Regelzyklus fuer JEDEN Reaktor erneut aufgerufen -- ein
-    -- echter Peripherie-Wrap ist teuer (Methodenintrospektion), und die
-    -- Discovery (discovery_runtime.lua) haelt bereits einen fertig
-    -- gewrappten Cache in ctx.peripherals.reactors[name] bereit, der bei
-    -- jedem Discovery-Refresh aktualisiert wird -- reactor_control.lua
-    -- nutzt genau diesen Cache bereits an mehreren Stellen, turbine_
-    -- control.lua's updateControl() alleine wrappte redundant neu. Fallback
-    -- auf einen direkten Wrap bleibt erhalten fuer den (seltenen) Fall,
-    -- dass ein Geraet aus irgendeinem Grund noch nicht im Discovery-Cache
-    -- steht.
+    -- Discovery-Cache verwenden statt peripheral.wrap() (teuer, Methoden-
+    -- introspektion) bei jedem Regelzyklus neu aufzurufen. Fallback auf
+    -- direkten Wrap bleibt fuer den Fall, dass ein Geraet noch nicht im
+    -- Discovery-Cache steht.
     local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name]
     local ok = reactor ~= nil
     if not ok then
@@ -874,8 +850,7 @@ function M.updateControl(ctx)
     turbine_index = turbine_index + 1
     eval_total = eval_total + 1
 
-    -- Fix (2026-07-13): RT-P0.4. Gleicher Fix wie oben bei Reaktoren --
-    -- Discovery-Cache verwenden statt bei jedem Zyklus neu zu wrappen.
+    -- Gleiches Discovery-Cache-Muster wie oben bei Reaktoren.
     local turbine = ctx.peripherals and ctx.peripherals.turbines and ctx.peripherals.turbines[name]
     local ok = turbine ~= nil
     if not ok then

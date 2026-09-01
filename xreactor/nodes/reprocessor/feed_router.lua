@@ -72,15 +72,10 @@ end
 
 -- ---- peripheral discovery --------------------------------------------------
 
--- Fix (2026-07-19): CRITICAL. Derselbe Fehler wie in nodes/fuel/logistics_
--- router.lua (siehe dortiger Fix-Kommentar): der Default-Name "me_bridge"
--- ist reine Konvention dieser Config, das tatsaechliche Advanced-
--- Peripherals-Peripheral heisst automatisch vergeben z.B. "meBridge_0" --
--- ohne manuell exakt gesetzten config.feed.me_bridge-Namen meldete sich
--- eine korrekt verkabelte ME Bridge dauerhaft als "absent". Faellt jetzt,
--- sofern kein expliziter Name konfiguriert ist, auf eine Methodensignatur-
--- Suche zurueck (getItem + exportItemToPeripheral -- genau die zwei
--- Methoden, die diese Datei tatsaechlich aufruft).
+-- Faellt, sofern kein expliziter Name konfiguriert ist, auf eine
+-- Methodensignatur-Suche zurueck (getItem + exportItemToPeripheral) --
+-- Advanced Peripherals vergibt generierte Namen wie "meBridge_0", nicht
+-- den Konventions-Default "me_bridge".
 local function find_me_bridge_by_methods()
   for _, name in ipairs(peripheral.getNames() or {}) do
     local ok, methods = pcall(peripheral.getMethods, name)
@@ -163,18 +158,11 @@ local function feed_one(self, cfg)
     return
   end
 
-  -- Fix (2026-07-14): CRITICAL. FUEL/REPROCESSOR-P0 (siehe docs/CODING_AI_
-  -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 8). route_and_act()
-  -- blockierte bisher ~2.05-2.4s pro Befuellung -- ersetzt durch die
-  -- asynchrone Zustandsmaschine in redstone_router.lua (begin_transaction()
-  -- + tick(), von M:tick() weiter unten regelmaessig aufgerufen). "busy"
-  -- kann hier praktisch nur auftreten, wenn eine vorherige Befuellung
-  -- (Settle/Hold-Phase) noch nicht abgeschlossen ist -- bei einem
-  -- Zufallsintervall von mindestens einigen Sekunden zwischen zwei
-  -- feed_one()-Aufrufen und einer Transaktionsdauer von wenigen Sekunden
-  -- ein seltener Randfall. In diesem Fall wird die Befuellung schlicht
-  -- uebersprungen; das naechste zufaellige Intervall (siehe M:tick())
-  -- versucht es erneut, kein Datenverlust, kein haengender Zustand.
+  -- Asynchrone Zustandsmaschine (begin_transaction() + tick() in
+  -- redstone_router.lua, von M:tick() regelmaessig aufgerufen) statt
+  -- blockierendem route_and_act(). "busy" tritt praktisch nur auf, wenn
+  -- eine vorherige Befuellung noch nicht abgeschlossen ist -- wird dann
+  -- einfach uebersprungen, das naechste Intervall versucht es erneut.
   local started, reason = self.rs_router:begin_transaction(target.label, function()
     local result, err = safe_call(bridge, "exportItemToPeripheral", { name = item, count = amount }, target.inlet)
     local exported = type(result) == "table" and (result.amount or 0) or (type(result) == "number" and result or 0)
@@ -191,13 +179,10 @@ local function feed_one(self, cfg)
         "FeedRouter: feed failed for " .. tostring(target.label) .. ": " .. tostring(err))
     end
   end, cfg.valve_open_ms, {
-    -- Fix (2026-07-16): CRITICAL (FUEL-P0-Folgefix, siehe docs/CODING_AI_
-    -- OTHER_NODES_PERFORMANCE_2026-07-12.md Abschnitt 7). Bricht die
-    -- Transaktion VOR dem Export ab (z.B. Ventil-ACK-Fehler oder Phasen-
-    -- Timeout), lief bisher weder der Erfolgs- noch ein Fehlerpfad --
-    -- last_error blieb stumm auf dem letzten (moeglicherweise laengst
-    -- veralteten) Wert stehen, obwohl diese Befuellung tatsaechlich
-    -- gescheitert ist.
+    -- Muss last_error explizit setzen, wenn die Transaktion VOR dem Export
+    -- abbricht (Ventil-ACK-Fehler, Phasen-Timeout) -- sonst bliebe
+    -- last_error stumm auf dem letzten, moeglicherweise veralteten Wert
+    -- stehen, obwohl diese Befuellung tatsaechlich gescheitert ist.
     on_error = function(reason)
       self._state.last_error = "routing_failed:" .. tostring(reason)
       self.warn_once("feed_route_fail:" .. tostring(target.label),
@@ -210,14 +195,9 @@ local function feed_one(self, cfg)
   end
 end
 
--- Fix (2026-07-16): CRITICAL (REPROCESSOR-P0, siehe docs/CODING_AI_OTHER_
--- NODES_PERFORMANCE_2026-07-12.md Abschnitt 11). Bricht eine laufende
--- Ventil-Transaktion sofort ab (z.B. beim Uebergang in Standby/MASTER-
--- Timeout), statt sie ueber rs_router:tick() "sauber" zu Ende laufen zu
--- lassen. redstone_router.lua's shutdown_now() ruft dabei tx.on_error()
--- auf (derselbe Mechanismus wie bei einem echten Transaktionsfehler), was
--- automatisch last_error auf dieser FeedRouter-Instanz setzt -- der
--- Abbruch bleibt dadurch fuer Diagnose/UI sichtbar.
+-- Bricht eine laufende Ventil-Transaktion sofort ab (z.B. beim Uebergang in
+-- Standby/MASTER-Timeout). shutdown_now() ruft dabei tx.on_error() auf,
+-- was automatisch last_error setzt -- der Abbruch bleibt fuer Diagnose/UI sichtbar.
 function M:cancel(reason)
   self.rs_router:shutdown_now(reason)
 end

@@ -10,24 +10,60 @@ local GITHUB_RAW = "https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Cont
 local SOURCE_REF = "beta"
 local UPDATE_EVENT = "xreactor_remote_update_requested"
 
--- Fix: FUEL/REPROCESSOR quiesce via redstone_router.lua's begin_quiesce()/
--- poll_quiesce() -- confirming EVERY known valve BLOCKED over a wireless
--- ACK round trip, with its own SAFETY_CONFIRM_TIMEOUT_MS=15000ms budget PER
--- confirmation attempt (see nodes/fuel/redstone_router.lua) before it
--- re-requests a fresh batch. The previous 20s deadline here left barely any
--- margin over a SINGLE 15s attempt -- any retry, ACK loss, or ongoing
--- delivery competing for the same valves reliably blew the 20s budget. The
--- role-side handshake state (core/update_handshake.lua) resets to IDLE on
--- timeout, but the router's OWN quiesce progress (self._state.quiesce)
--- survives untouched, so this doesn't need to be "instant" -- it only needs
--- enough room for a few full confirmation rounds. 60s covers 4x the
--- internal 15s budget. RT/VALVE/WATER/MASTER/LOG quiesce locally/
--- synchronously and return via wait_for_runtime_stopped() as soon as they
--- confirm, well before this ceiling -- raising it costs them nothing.
+-- FUEL/REPROCESSOR quiesce via redstone_router.lua's begin_quiesce()/
+-- poll_quiesce() has its own SAFETY_CONFIRM_TIMEOUT_MS=15000ms budget PER
+-- confirmation attempt -- 60s covers 4x that internal budget, enough room
+-- for a few full confirmation rounds (any retry/ACK loss could otherwise
+-- blow a tighter deadline). RT/VALVE/WATER/MASTER/LOG quiesce locally/
+-- synchronously and return well before this ceiling, so raising it costs
+-- them nothing.
 local QUIESCE_TIMEOUT_S = 60
+
+-- Many roles' own UI (e.g. nodes/log_collector/main.lua) draws directly
+-- onto the physical terminal, clearing it every redraw -- a plain print()
+-- from this coroutine gets overwritten almost immediately and is
+-- effectively invisible in practice. Every log() call also appends to a
+-- small rolling status file (last STATUS_MAX_LINES lines), independent of
+-- whatever is currently on screen -- lets anyone confirm the loop is
+-- actually ticking, and see the sequence of events leading up to e.g. a
+-- safety reboot, by checking file content, not by having to catch a
+-- print() at the exact right instant. Overwriting with only the single
+-- latest line (the first version of this) lost exactly the kind of
+-- context needed to diagnose a failure right before a reboot -- a
+-- reboot's own first log line ("Loop gestartet") would silently erase
+-- whatever explained it.
+local STATUS_PATH = "/xreactor/config/auto_update_status.txt"
+local STATUS_MAX_LINES = 20
+
+local function write_status(message)
+  pcall(function()
+    local stamp = (os.date and os.date("!%H:%M:%S")) or tostring(os.epoch and os.epoch("utc") or "")
+    local line = stamp .. " " .. tostring(message)
+    local lines = {}
+    if fs.exists(STATUS_PATH) then
+      local read_handle = fs.open(STATUS_PATH, "r")
+      if read_handle then
+        local content = read_handle.readAll()
+        read_handle.close()
+        for existing_line in tostring(content or ""):gmatch("[^\n]+") do
+          lines[#lines + 1] = existing_line
+        end
+      end
+    end
+    lines[#lines + 1] = line
+    while #lines > STATUS_MAX_LINES do
+      table.remove(lines, 1)
+    end
+    local write_handle = fs.open(STATUS_PATH, "w")
+    if not write_handle then return end
+    write_handle.write(table.concat(lines, "\n"))
+    write_handle.close()
+  end)
+end
 
 local function log(message)
   pcall(print, "[AUTO] " .. tostring(message))
+  write_status(message)
 end
 
 local function load_handshake_lib()
@@ -57,39 +93,40 @@ local function read_response(response)
   return body
 end
 
--- http.request is event-driven and therefore safe inside parallel.waitForAll.
--- The synchronous fallback intentionally uses the documented CC:Tweaked
--- signature http.get(url), without an options table masquerading as the
--- binary flag.
+-- Was previously http.request()+os.startTimer()+a manually filtered event
+-- loop -- reported in the field to hang well past its 15s ceiling with no
+-- retry output. installer/http.lua's try_once() hit the identical failure
+-- mode and was rebuilt on parallel.waitForAny() instead: race the proven
+-- synchronous http.get() against a plain os.sleep() timeout, no event
+-- name/id matching of our own -- CC:Tweaked's scheduler decides the
+-- winner, the loser is simply abandoned. Mirrored here rather than
+-- required (this file is deliberately self-contained).
 local function http_get_async(url)
-  if http and type(http.request) == "function" then
-    local ok_call, started, request_err = pcall(http.request, url)
-    if not ok_call or started ~= true then
-      return nil, tostring(request_err or started or "http.request failed")
-    end
-
-    local timer = os.startTimer(15)
-    while true do
-      local event, p1, p2, p3 = os.pullEvent()
-      if event == "http_success" and p1 == url then
-        if os.cancelTimer then pcall(os.cancelTimer, timer) end
-        return read_response(p2)
-      elseif event == "http_failure" and p1 == url then
-        if os.cancelTimer then pcall(os.cancelTimer, timer) end
-        close_response(p3)
-        return nil, tostring(p2 or "http_failure")
-      elseif event == "timer" and p1 == timer then
-        return nil, "timeout"
-      end
-    end
-  end
-
   if not http or type(http.get) ~= "function" then
     return nil, "http unavailable"
   end
-  local ok, response = pcall(http.get, url)
-  if not ok or not response then return nil, tostring(response or "http.get failed") end
-  return read_response(response)
+  if type(parallel) ~= "table" or type(parallel.waitForAny) ~= "function" then
+    local ok, response = pcall(http.get, url)
+    if not ok or not response then return nil, tostring(response or "http.get failed") end
+    return read_response(response)
+  end
+
+  local body, err, done = nil, nil, false
+  local ok_race, race_err = pcall(parallel.waitForAny,
+    function()
+      local ok, response = pcall(http.get, url)
+      if ok and response then
+        body, err = read_response(response)
+      else
+        err = "http.get failed"
+      end
+      done = true
+    end,
+    function() os.sleep(15) end)
+
+  if not ok_race then return nil, "request failed: " .. tostring(race_err) end
+  if not done then return nil, "timeout" end
+  return body, err
 end
 
 local function load_arming()
@@ -211,18 +248,11 @@ local function dir_size(path)
   return total
 end
 
--- Fix: same last-resort reclaim as installer/stage.lua's reclaim() (see
--- there for the full history/rationale -- explicit user request after
--- repeated "out of space" aborts). The managed auto-updater has its own,
--- separate temp-space check here (writing the freshly downloaded
--- installer bootstrap to TEMP_INSTALLER before dofile()-ing it) and
--- didn't share that logic, so a node whose logs had re-accumulated could
--- still fail every attempt with "insufficient space for temporary
--- installer" even after the manual-install path was already fixed to
--- self-heal. Mirrored here rather than requiring stage.lua: this file is
--- deliberately self-contained (see header comment). Only /xreactor_logs,
--- only as a last resort after the plain space check already failed, and
--- every actual deletion is logged -- never silent.
+-- Same last-resort reclaim as installer/stage.lua's reclaim(), mirrored
+-- here rather than required (this file is deliberately self-contained) --
+-- the managed auto-updater has its own separate temp-space check for
+-- writing TEMP_INSTALLER. Only /xreactor_logs, only as a last resort after
+-- the plain space check already failed, and every deletion is logged.
 local function ensure_temp_space(bytes_needed)
   if has_temp_space(bytes_needed) then return true end
   if fs.exists(LOG_DIR) then
@@ -316,10 +346,14 @@ local function perform_update(handshake, consume_remote)
   return false, last_error
 end
 
+-- Jeder Zweig loggt sichtbar, auch der Normalfall "nichts zu tun" -- ohne
+-- das war von aussen (Terminal/Log-Export) nicht unterscheidbar, ob der
+-- periodische Check ueberhaupt laeuft/durchkommt, oder ob der Loop
+-- irgendwo haengt (siehe auto_update_loop_cadence_test.lua).
 local function do_periodic_check(handshake)
   local config, arm_err = load_arming()
   if not config then log("Auto-Update uebersprungen: " .. tostring(arm_err)); return end
-  if config.auto_update ~= true then return end
+  if config.auto_update ~= true then log("Auto-Update deaktiviert (auto_update=false)"); return end
 
   local remote_version, remote_err = fetch_remote_version()
   local local_version = read_version(RELEASE_PATH)
@@ -330,6 +364,8 @@ local function do_periodic_check(handshake)
   elseif remote_version > local_version then
     log("Neue Version: v" .. local_version .. " -> v" .. remote_version .. " @ " .. SOURCE_REF)
     perform_update(handshake, false)
+  else
+    log("Update-Check ok: lokal v" .. local_version .. " aktuell (remote v" .. remote_version .. ")")
   end
 end
 

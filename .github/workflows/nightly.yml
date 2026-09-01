@@ -39,6 +39,9 @@ jobs:
         run: lua5.4 tests/sim_fixture_replay_test.lua
       - name: Lua-Syntax alle Module
         run: |
+          for f in installer installer_pocket; do
+            lua5.4 -e "if not loadfile('$f') then os.exit(1) end" || { echo "SYNTAX: $f"; exit 1; }
+          done
           find xreactor -name "*.lua" | while read f; do
             lua5.4 -e "if not loadfile('$f') then os.exit(1) end" || { echo "SYNTAX: $f"; exit 1; }
           done

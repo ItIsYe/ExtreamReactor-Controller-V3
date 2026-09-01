@@ -21,8 +21,7 @@ if not ok_utils or type(utils) ~= "table" then utils = nil end
 
 local ok_const, constants = pcall(require, "shared.constants")
 if not ok_const or type(constants) ~= "table" then
-  -- Fix (2026-06-30): Fallback war 6502, muss zu shared.constants.channels.LOG
-  -- (6503) passen, sonst driftet der Fallback-Pfad vom Normalfall ab.
+  -- Muss zu shared.constants.channels.LOG (6503) passen.
   constants = { channels = { LOG = 6503 } }
 end
 
@@ -34,15 +33,12 @@ local DEDUPE_LIMIT     = 512
 local MODEM_REFRESH_S  = 10
 local DISK_REFRESH_S   = 30
 local DRAW_INTERVAL_S  = 5
-local ACTIVE_DRAW_MIN_INTERVAL_S = 1  -- Fix (2026-07-13): LOG-P1.2
+local ACTIVE_DRAW_MIN_INTERVAL_S = 1
 local SELF_ROLE        = "LOG_COLLECTOR"
 local MONITOR_CFG_FILE = "/xreactor/config/log_monitor.txt"
--- Fix (2026-07-07): vorher exakt 1 Disk pro Rolle (positionsbasiert via
--- ROLE_ORDER[index]). User hat pro Rolle 3 weitere Disks ingame ergänzt
--- (jetzt 4 pro Rolle) — DISKS_PER_ROLE gruppiert die sortierten Mounts in
--- Blöcken zu je 4 statt 1:1 auf eine Rolle zu mappen. Feste physische
--- Steckreihenfolge vorausgesetzt: die ersten 4 Disks = RT, die naechsten 4 =
--- MASTER usw. (Variante B, siehe disk_for_role() fuer die Rotation
+-- DISKS_PER_ROLE gruppiert die sortierten Mounts in Bloecken zu je 4 (statt
+-- 1:1 pro Rolle). Feste physische Steckreihenfolge: die ersten 4 Disks = RT,
+-- die naechsten 4 = MASTER usw. (siehe disk_for_role() fuer die Rotation
 -- innerhalb einer Rollen-Gruppe).
 local DISKS_PER_ROLE   = 4
 local ROLE_ORDER       = { "RT", "MASTER", "ENERGY", "WATER", "FUEL", "REPROCESSING", "LOG" }
@@ -84,17 +80,9 @@ local stats = {
 
 local live_diag = {}
 
--- Feature (2026-07-11): Crash-Loop-Schutz. Der bestehende Absturz-
--- Bildschirm (siehe Dateiende) wartet bereits nur begrenzt (30s) und
--- rebootet dann automatisch -- das verhindert bereits "haengt fuer immer
--- fest ohne physische Anwesenheit". Was noch fehlte: wenn der Computer
--- bei JEDEM Neustart sofort wieder abstuerzt (z.B. durch einen dauerhaft
--- kaputten Zustand), wuerde er sich in einer Endlos-Neustart-Schleife
--- verfangen -- alle 30s ein Reboot, ohne dass sich je etwas bessert, und
--- ohne dass das irgendwo sichtbar wird. Persistente Absturz-Historie
--- (einfache Datei mit Zeitstempeln, ueberlebt Reboots) erkennt dieses
--- Muster und verlaengert die Wartezeit deutlich, statt den Server mit
--- Reboots im Sekundentakt zu belasten.
+-- Crash-Loop-Schutz: persistente Absturz-Historie (ueberlebt Reboots)
+-- erkennt wiederholte Soforts-Abstuerze und verlaengert die Wartezeit
+-- deutlich, statt den Server mit Reboots im Sekundentakt zu belasten.
 local CRASH_HISTORY_PATH = "/xreactor_crash_history.txt"
 local CRASH_LOOP_WINDOW_S = 120   -- Beobachtungsfenster: letzte 2 Minuten
 local CRASH_LOOP_THRESHOLD = 3    -- ab 3 Abstuerzen in diesem Fenster gilt es als Loop
@@ -253,17 +241,9 @@ local function role_index(role)
 end
 
 -- ── Disk handling ───────────────────────────────────────────────────────────
--- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16). Die
--- vorherige "wipe_disk()" loeschte bei JEDEM Platzmangel-Ereignis (und bei
--- jedem einzelnen fehlgeschlagenen probe_disk()-Aufruf, siehe dort) den
--- KOMPLETTEN Rollen-Logordner in einem Schritt -- ein voruebergehender
--- Full-/Mount-/Race-Fehler konnte so sämtliche bereits gesammelten Logs
--- einer Rolle vollstaendig vernichten. Ersetzt durch eine gezielte,
--- ausschliesslich alters-basierte Teilbereinigung: die JEWEILS aeltesten
--- Dateien (nach Aenderungszeitstempel) werden nacheinander entfernt, bis
--- genug Platz frei ist ODER nichts mehr zum Entfernen uebrig ist -- niemals
--- der gesamte Ordner auf einmal.
+-- Gezielte, ausschliesslich alters-basierte Teilbereinigung statt
+-- Komplett-Wipe: die jeweils aeltesten Dateien werden nacheinander entfernt,
+-- bis genug Platz frei ist -- niemals der gesamte Ordner auf einmal.
 local function list_files_recursive(dir, out)
   out = out or {}
   if not (fs and fs.exists and fs.isDir and fs.list) then return out end
@@ -296,27 +276,11 @@ end
 -- muss (dieselbe Marge, die disk_for_role() bereits als "gesund" ansieht).
 local RECLAIM_TARGET_BYTES = MIN_FREE_BYTES * 4
 
--- Fix (2026-07-17): CRITICAL (LOG-P0, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 22). free_space() cached ihren
--- Rueckgabewert pro Mount fuer FREE_SPACE_CACHE_TTL (2s, siehe dortiger
--- Kommentar). Diese Schleife prueft vor JEDER Loeschung denselben
--- gecachten Wert, ohne ihn nach einer erfolgreichen Loeschung zu
--- invalidieren -- laeuft der gesamte Reclaim-Lauf (mehrere synchron
--- aufeinanderfolgende Loeschungen) innerhalb der Cache-TTL ab (in der
--- Praxis praktisch immer, da hier keine echte I/O-Wartezeit zwischen den
--- Loeschungen liegt), sieht die Schleife bei JEDER Iteration weiterhin
--- den ALTEN, niedrigen Free-Space-Wert und loescht munter weiter, obwohl
--- nach der ersten Loeschung bereits genug Platz frei sein kann. Die
--- vorherige pauschale Komplettloeschung wurde zwar entfernt (siehe
--- wipe_disk()-Fix-Kommentar oben), aber im Extremfall konnte diese
--- Schleife trotzdem ALLE aufgelisteten Dateien entfernen. Jetzt wird der
--- Cache-Eintrag fuer "mount" nach jeder Loeschung explizit invalidiert,
--- damit die naechste free_space()-Abfrage tatsaechlich neu misst.
--- Zusaetzlich: "exclude_path" schuetzt die gerade tatsaechlich offene
--- Zieldatei (der Log-Collector darf nie die Datei loeschen, die er im
--- selben Schreibversuch gerade befuellen will) und ein hartes Limit pro
--- Lauf begrenzt den maximalen Schaden, selbst wenn die Free-Space-Messung
--- aus einem anderen Grund weiterhin falsch waere.
+-- free_space() cached pro Mount (FREE_SPACE_CACHE_TTL) -- der Cache-Eintrag
+-- wird nach jeder Loeschung explizit invalidiert, damit die naechste Abfrage
+-- tatsaechlich neu misst (sonst wuerde die Schleife auf dem alten Wert
+-- weiterloeschen). "exclude_path" schuetzt die gerade offene Zieldatei;
+-- RECLAIM_MAX_FILES_PER_RUN begrenzt den maximalen Schaden als harte Grenze.
 local RECLAIM_MAX_FILES_PER_RUN = 64
 
 local function reclaim_oldest(root, mount, needed, exclude_path)
@@ -347,13 +311,11 @@ local function is_drive_name(name)
   return tostring(ptype or ""):lower():find("drive", 1, true) ~= nil
 end
 
--- Fix (2026-07-07): echtes Disk-Labeling statt reiner Steckreihenfolge.
 -- LOG_LABEL_PATTERN erkennt persistente Rollen-Labels der Form
 -- "XR-<ROLE>-<slot>" (z.B. "XR-RT-1"), geschrieben via drive.setDiskLabel().
--- Eine bereits so gelabelte Disk behält ihre Rolle/ihren Slot dauerhaft —
--- unabhängig von Steckposition, Neustart oder Umstecken. Nur eine frische,
--- unbeschriftete Disk bekommt beim allerersten Erkennen ein neues Label
--- zugewiesen (nächster freier Slot der am wenigsten befüllten Rolle).
+-- Eine gelabelte Disk behaelt ihre Rolle/ihren Slot dauerhaft, unabhaengig
+-- von Steckposition/Neustart. Nur eine frische, unbeschriftete Disk
+-- bekommt beim ersten Erkennen ein neues Label (naechster freier Slot).
 local LOG_LABEL_PATTERN = "^XR%-([%u_]+)%-(%d+)$"
 
 local function make_label(role, slot)
@@ -403,18 +365,20 @@ local function find_drives()
   return found
 end
 
--- Fix (2026-07-16): CRITICAL. INSTALL/LOG-P0 aus
--- docs/CODING_AI_OTHER_NODES_PERFORMANCE_2026-07-12.md (Abschnitt 16).
--- Ein einzelner fehlgeschlagener Schreibversuch (z.B. voruebergehender
--- Mount-/IO-Fehler oder Race mit einer anderen Disk-Operation) loeschte
--- bisher den GESAMTEN Rollen-Logordner der Disk, bevor ueberhaupt ein
--- zweiter Versuch unternommen wurde -- die "Reparatur" vernichtete dabei
--- saemtliche bereits gesammelten Logs dieser Rolle. Ein fehlgeschlagener
--- Probe darf niemals mehr als die eigene ".probe"-Testdatei anfassen; bei
--- einem Fehlschlag wird die Disk fuer diesen Zyklus einfach als nicht
--- schreibbar gemeldet (discover_disks() ueberspringt sie dann) und beim
--- naechsten regulaeren DISK_REFRESH_S-Zyklus erneut probiert -- kein
--- destruktiver "Reparaturversuch".
+-- Ein fehlgeschlagener Probe darf niemals mehr als die eigene ".probe"-
+-- Testdatei anfassen; bei einem Fehlschlag wird die Disk fuer diesen Zyklus
+-- als nicht schreibbar gemeldet und beim naechsten DISK_REFRESH_S-Zyklus
+-- erneut probiert -- kein destruktiver "Reparaturversuch".
+--
+-- Eine Disk, die noch mit Logs eines aelteren Codestands (vor Rotation/
+-- Reclaim) randvoll ist, darf dadurch aber nicht dauerhaft als "nicht
+-- schreibbar" gelten -- discover_disks() nimmt eine hier fehlgeschlagene
+-- Disk gar nicht erst in stats.disks auf, wodurch sie den regulaeren
+-- Schreibpfad-Reclaim (siehe flush_bucket()/write_log_entry() oben) nie
+-- erreicht und für immer uebersprungen bliebe. reclaim_oldest() ist bereits
+-- die dafuer etablierte, sichere Funktion (aeltestes zuerst, hart begrenzt,
+-- loescht nur soweit tatsaechlich noetig) -- genauso hier verwendet, dann
+-- ein einziger Retry.
 local function probe_disk(mount)
   local root = mount .. "/xreactor_logs"
   if not ensure_dir(root) then return false end
@@ -433,6 +397,12 @@ local function probe_disk(mount)
     -- Nur die eigene, evtl. haengengebliebene Probe-Datei aufraeumen --
     -- sonst nichts anfassen.
     pcall(function() if fs.exists(probe) then fs.delete(probe) end end)
+    if reclaim_oldest(root, mount, RECLAIM_TARGET_BYTES) > 0 then
+      ok = pcall(write_probe)
+      if not ok then
+        pcall(function() if fs.exists(probe) then fs.delete(probe) end end)
+      end
+    end
   end
   return ok
 end
@@ -534,12 +504,9 @@ local function disk_for_role(role)
     return stats.disks[stats.disk_index] or stats.disks[1]
   end
 
-  -- Fix (2026-07-07): vorher wurde IMMER die erste zur Rolle passende Disk
-  -- zurückgegeben — bei jetzt DISKS_PER_ROLE=4 Disks pro Rolle blieben die
-  -- anderen 3 komplett ungenutzt, egal wie voll die erste war. Jetzt:
-  -- Round-Robin über alle Disks der Rolle, mit persistentem Cursor pro
-  -- Rolle (stats.role_cursor), und ein Health-Check überspringt Disks
-  -- unterhalb des Frei-Speicher-Schwellwerts.
+  -- Round-Robin ueber alle Disks der Rolle (persistenter Cursor pro Rolle,
+  -- stats.role_cursor); ein Health-Check ueberspringt Disks unterhalb des
+  -- Frei-Speicher-Schwellwerts.
   local group = {}
   for _, disk in ipairs(stats.disks) do
     if disk.role_group == idx or disk.role == tostring(role or ""):upper() then
@@ -576,14 +543,8 @@ local function disk_for_role(role)
   return best
 end
 
--- Fix (2026-07-07): Log-Zeilen speicherten bisher nur rohe Epoch-
--- Millisekunden ("[1783449311486]") — von Auge nicht lesbar, man musste sie
--- manuell umrechnen um zu sehen, wie alt ein Log-Export tatsächlich ist.
--- Das hat in dieser Session wiederholt dazu gefuehrt, dass ungewollt
--- derselbe alte Export mehrfach fuer "aktuell" gehalten wurde. Jetzt wird
--- zusaetzlich ein lesbares Datum+Uhrzeit (UTC) vor die rohe Millisekunden-
--- zahl gestellt — die Rohzahl bleibt erhalten (fuer exaktes Sortieren/
--- Parsen), das Datum kommt on top.
+-- Lesbares Datum+Uhrzeit (UTC) vor die rohe Millisekundenzahl gestellt; die
+-- Rohzahl bleibt erhalten (fuer exaktes Sortieren/Parsen).
 local function format_timestamp(ts)
   local ok, formatted = pcall(function()
     return os.date("!%Y-%m-%d %H:%M:%S", math.floor(tonumber(ts) / 1000))
@@ -603,23 +564,12 @@ local function format_log_line(payload)
     tostring(payload.message or payload.line or ""))
 end
 
--- Fix (2026-07-13): LOG-P1. Vorwaertsdeklaration, da write_log() weiter
--- unten flush_bucket() bereits aufruft (ERROR/CRITICAL-Sofort-Flush),
--- flush_bucket() selbst aber erst danach definiert wird.
---
--- Fix (2026-07-17): CRITICAL (LOG-P0). send_ack fehlte in dieser
--- Vorwaertsdeklaration -- flush_bucket() (als Funktionsliteral hier oben
--- KOMPILIERT, noch bevor "local function send_ack(...)" weiter unten im
--- Chunk ueberhaupt existierte) rief send_ack(payload, "written") auf. Lua
--- loest freie Variablen beim Kompilieren des Funktionsliterals anhand des
--- zu diesem Zeitpunkt sichtbaren Scopes auf, nicht beim spaeteren Ausfuehren
--- -- ohne eine bereits sichtbare lokale "send_ack" fiel dieser Aufruf auf
--- eine GLOBALE Variable dieses Namens zurueck, die nie gesetzt wurde. Jeder
--- einzelne erfolgreiche flush_bucket()-Durchlauf stuerzte dadurch
--- deterministisch mit "attempt to call global 'send_ack' (a nil value)" ab
--- (beobachtet in xreactor_logs/log_collector/*.log: "loop crashed on
--- event=timer" im Sekundentakt) -- kurz nach dem Start, sobald der erste
--- Log-Puffer tatsaechlich geflusht wurde.
+-- Vorwaertsdeklaration, da write_log() weiter unten flush_bucket() bereits
+-- aufruft. send_ack muss HIER bereits deklariert sein: flush_bucket()
+-- referenziert es als freie Variable beim Kompilieren (Lua loest das anhand
+-- des zu diesem Zeitpunkt sichtbaren Scopes auf, nicht beim Ausfuehren) --
+-- ohne diese Zeile faellt der Aufruf auf eine nie gesetzte globale Variable
+-- zurueck und crasht bei jedem Flush.
 local flush_bucket
 local flush_due
 local send_ack
@@ -642,19 +592,9 @@ local function write_log(payload)
   local disk = disk_for_role(payload.role)
   if not disk then
     stats.dropped = stats.dropped + 1
-    -- Fix (2026-07-11): CRITICAL. Vorher wurde hier nur der allgemeine
-    -- "Drop"-Zaehler in der Statuszeile hochgezaehlt -- ein Blick auf den
-    -- Monitor haette den Anstieg zeigen koennen, aber nichts wies aktiv
-    -- darauf hin, WARUM oder fuer WELCHE Rolle Logs verloren gehen. Bei
-    -- diesem Fehlerbild (komplette Diskgruppe einer Rolle leer, z.B. durch
-    -- verlorene/neu belegte Label) gingen dadurch tagelang unbemerkt ALLE
-    -- Logs einer ganzen Rolle verloren (beobachtet: RT und ENERGY), waehrend
-    -- andere Rollen mit intakter Diskgruppe ganz normal weiterliefen -- von
-    -- aussen sah es aus wie "die Nodes haben aufgehoert zu senden", dabei
-    -- kamen die Log-Zeilen durchaus an, wurden aber hier verworfen. Jetzt:
-    -- aktive, aber pro Rolle auf 1x alle 5 Minuten begrenzte Warnung direkt
-    -- auf dem Bildschirm (diag()), damit das binnen Minuten auffaellt statt
-    -- erst bei einer manuellen Log-Analyse Tage spaeter.
+    -- Aktive, aber pro Rolle auf 1x/5min begrenzte Warnung auf dem
+    -- Bildschirm (diag()), sonst faellt ein leeres Disk-Set einer Rolle
+    -- (z.B. durch verlorenes Label) nicht auf -- Logs gehen still verloren.
     local role_key = tostring(payload.role or "unknown"):upper()
     stats.no_disk_warned = stats.no_disk_warned or {}
     local last_warn = stats.no_disk_warned[role_key] or 0
@@ -685,25 +625,16 @@ local function write_log(payload)
   end
 
   local line = format_log_line(payload) .. "\n"
-  -- Fix (2026-07-13): CRITICAL (LOG-P1, siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md). Vorher wurde fuer JEDES einzelne Logevent
-  -- eine Datei geoeffnet, EINE Zeile geschrieben, wieder geschlossen --
-  -- teurer Datei-I/O pro Event. Jetzt: die Zeile wird nur noch in einen
-  -- kleinen Pro-Pfad-Puffer eingereiht (guenstige Tabellen-Operation), der
-  -- eigentliche Schreibvorgang passiert gebuendelt in flush_bucket() (siehe
-  -- unten), ausgeloest entweder durch flush_lines (8 Zeilen) oder
-  -- flush_interval_ms (200ms) oder sofort bei ERROR/CRITICAL. WICHTIG: das
-  -- ACK ("written") darf weiterhin erst nach TATSAECHLICH erfolgreicher
-  -- Persistierung gesendet werden -- das passiert deshalb nicht mehr hier,
-  -- sondern in flush_bucket() nach dem bestaetigten Schreiberfolg.
+  -- Zeile wird in einen Pro-Pfad-Puffer eingereiht statt sofort geschrieben;
+  -- der eigentliche Schreibvorgang passiert gebuendelt in flush_bucket()
+  -- (flush_lines/flush_interval_ms oder sofort bei ERROR/CRITICAL). Das ACK
+  -- ("written") wird dort erst nach tatsaechlich erfolgreicher Persistierung
+  -- gesendet, nicht hier.
   stats.pending_writes = stats.pending_writes or {}
   local bucket = stats.pending_writes[path]
   if not bucket then
-    -- Fix (2026-07-13): last_flush_attempt_ms muss bei der ERSTELLUNG
-    -- eines Puffers auf die AKTUELLE Zeit gesetzt werden, nicht auf 0 --
-    -- sonst wuerde die naechste flush_due()-Pruefung (now - 0 >= 200ms)
-    -- IMMER sofort "faellig" ergeben, egal wie kurz der Puffer gerade erst
-    -- angelegt wurde, und das Zeitintervall waere komplett wirkungslos.
+    -- last_flush_attempt_ms muss auf die AKTUELLE Zeit gesetzt werden, nicht
+    -- 0 -- sonst waere flush_due()'s Intervall-Pruefung sofort immer faellig.
     bucket = { lines = {}, payloads = {}, last_flush_attempt_ms = now_ms(), disk = disk }
     stats.pending_writes[path] = bucket
   end
@@ -790,17 +721,11 @@ flush_due = function()
 end
 
 -- ── Dedupe ─────────────────────────────────────────────────────────────────
--- Fix (2026-07-13): CRITICAL (LOG-P1.2, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). table.remove(stats.seen_order, 1) verschob
--- bisher bei JEDEM Ueberschreiten von DEDUPE_LIMIT (512) das GESAMTE
--- restliche Array um eine Position -- O(n) statt O(1), und das bei einem
--- Collector, der potenziell viele hundert Events pro Minute verarbeitet.
--- Jetzt: Kopf-/Ende-Index-Paar (seen_head/seen_tail) statt eines echten
--- Array-Shifts -- Entfernen ist nur noch "Kopf-Index um 1 erhoehen, alten
--- Slot auf nil setzen" (O(1)). Um ein unbegrenztes Wachsen der Indizes
--- selbst zu vermeiden, wird die Tabelle periodisch (alle 4096 entfernte
--- Eintraege) einmalig kompaktiert -- das haelt die Gesamtkosten amortisiert
--- O(1) pro Eintrag, weit seltener als vorher bei jedem einzelnen Event.
+-- Kopf-/Ende-Index-Paar (seen_head/seen_tail) statt eines echten
+-- table.remove(...,1)-Array-Shifts, das O(n) statt O(1) waere. Entfernen ist
+-- nur noch "Kopf-Index erhoehen, alten Slot auf nil setzen" (O(1)); die
+-- Tabelle wird periodisch (alle 4096 entfernte Eintraege) kompaktiert, um
+-- unbegrenztes Indexwachstum zu vermeiden.
 stats.seen_head = 1
 stats.seen_tail = 0
 local COMPACT_INTERVAL = 4096
@@ -854,19 +779,12 @@ local function refresh_modems(force)
   stats.next_modem_refresh = ts + MODEM_REFRESH_S
   stats.modems = {}
 
-  -- Fix (2026-06-30): LOG hat typischerweise sowohl ein Ender Modem
-  -- (wireless, fuer Funkempfang von RT/Energy/Master STATUS/LOG-Events) als
-  -- auch ein normales (wired) Modem fuer lokale Disk-/Monitor-Peripherals.
-  -- is_modem_name() filterte beide gleich und oeffnete CHANNEL auf JEDEM
-  -- gefundenen Modem — das fuehrte dazu, dass auf einem System mit beiden
-  -- Modem-Typen der Funkempfang dauerhaft leer blieb (Recv 0 ueber lange
-  -- Zeit), weil wired und wireless Modems in CC:Tweaked getrennte Funknetze
-  -- sind und nur das Ender Modem ueberhaupt Nachrichten von entfernten
-  -- Nodes (RT/Energy/Master) empfangen kann. Jetzt: wireless Modems werden
-  -- bevorzugt geoeffnet UND zusaetzlich, defensiv, weiterhin alle gefundenen
-  -- Modems geoeffnet (falls z.B. nur ein wired Modem vorhanden ist, soll das
-  -- Verhalten wie zuvor erhalten bleiben) — aber wireless wird zuerst geprueft
-  -- und separat geloggt, damit ein fehlendes Ender Modem sofort sichtbar ist.
+  -- LOG hat typischerweise ein Ender Modem (wireless, fuer Funkempfang von
+  -- RT/Energy/Master) UND ein wired Modem fuer lokale Disk-/Monitor-
+  -- Peripherals -- wired und wireless sind in CC:Tweaked getrennte Funknetze,
+  -- nur das Ender Modem empfaengt entfernte Nodes. Alle gefundenen Modems
+  -- werden geoeffnet, aber wireless wird separat erkannt/geloggt, damit ein
+  -- fehlendes Ender Modem sofort sichtbar ist.
   local names = {}
   local wireless_found = false
   if peripheral and type(peripheral.getNames) == "function" then
@@ -912,12 +830,9 @@ send_ack = function(payload, status)
     status = status or "written",
     ts = now_ms(),
   }
-  -- Fix (2026-07-13): CRITICAL (LOG-P1.2, siehe docs/CODING_AI_OTHER_
-  -- NODES_PERFORMANCE_2026-07-12.md). Vorher wurde dasselbe ACK ueber
-  -- JEDES gefundene Modem gesendet -- bei Wireless+Wired gleichzeitig
-  -- kamen beim Sender mehrere identische ACKs fuer dasselbe Event an.
-  -- Jetzt: bevorzugtes Wireless-Modem wird EINMAL versucht, weitere
-  -- Modems (Fallback) nur bei tatsaechlichem Sendefehler.
+  -- Bevorzugtes Wireless-Modem wird einmal versucht, weitere Modems
+  -- (Fallback) nur bei tatsaechlichem Sendefehler -- sonst kommen bei
+  -- Wireless+Wired mehrere identische ACKs beim Sender an.
   local entries = stats.modems or {}
   local ordered = {}
   for _, entry in ipairs(entries) do
@@ -1101,15 +1016,10 @@ local function button_hit(button, x, y)
   return button and x >= button.x and x < button.x + button.w and y >= button.y and y < button.y + button.h
 end
 
--- Fix (2026-07-15): LOG-P2 (siehe docs/CODING_AI_OTHER_NODES_PERFORMANCE_
--- 2026-07-12.md Abschnitt 10). draw() ruft jetzt ein normales Renderer-Modul
--- ueber require() auf (Standard: default_ui.lua, das dieselbe Anzeige wie
--- der bisherige inline-Code produziert). nodes/log_collector/mockup_main.lua
--- waehlt darueber die alternative mockup_ui.lua-Anzeige, indem es vor dem
--- dofile() dieser Datei den globalen Selektor XR_LOG_RENDERER_MODULE setzt —
--- ohne main.lua als Text einzulesen und zu patchen. Schlaegt der Renderer
--- fehl (fehlendes Modul, Laufzeitfehler), zeigt draw() einen sichtbaren,
--- garantiert funktionierenden Fallback statt abzustuerzen oder leer zu bleiben.
+-- draw() ruft ein Renderer-Modul ueber require() auf (Standard: default_ui.lua).
+-- mockup_main.lua waehlt darueber mockup_ui.lua, indem es vor dem dofile()
+-- dieser Datei den globalen Selektor XR_LOG_RENDERER_MODULE setzt. Schlaegt
+-- der Renderer fehl, zeigt draw() einen sichtbaren Fallback statt abzustuerzen.
 local RENDERER_MODULE = (type(_G) == "table" and _G.XR_LOG_RENDERER_MODULE) or "nodes.log_collector.default_ui"
 
 local function draw_fallback(renderer_name, reason)
@@ -1211,20 +1121,14 @@ local function handle_log_event(message)
 
   local ok, err = write_log(message)
   if ok then
-    -- Fix (2026-07-13): LOG-P1. write_log() liefert jetzt "queued" (nicht
-    -- mehr "true") -- die Zeile wurde erfolgreich in den Batch-Puffer
-    -- aufgenommen, aber NOCH NICHT geschrieben/geackt (das passiert
-    -- asynchron in flush_bucket()). remember() bleibt bewusst HIER (nicht
-    -- erst beim Flush) -- schuetzt weiterhin gegen einen schnellen Retry
-    -- desselben Event_id, der eintrifft, BEVOR der Batch tatsaechlich
-    -- geflusht wurde.
+    -- write_log() liefert "queued": in den Batch-Puffer aufgenommen, aber
+    -- noch nicht geschrieben/geackt. remember() bleibt bewusst HIER (nicht
+    -- erst beim Flush) -- schuetzt gegen einen schnellen Retry derselben
+    -- event_id vor dem eigentlichen Flush.
     remember(message.event_id)
-    -- Fix (2026-07-13): LOG-P1. Zusaetzlich zum periodischen 1s-Timer-Tick
-    -- (Sicherheitsnetz, siehe timer-Zweig weiter unten) wird nach JEDEM
-    -- Event direkt geprueft, ob ein Puffer bereits faellig ist -- sonst
-    -- koennte ein erreichtes flush_lines-Limit (8 Zeilen) bis zu 1s auf den
-    -- naechsten Timer-Tick warten muessen, obwohl das Intervall eigentlich
-    -- 200ms betragen soll.
+    -- Zusaetzlich zum periodischen 1s-Timer-Tick direkt nach jedem Event
+    -- pruefen, ob ein Puffer faellig ist -- sonst koennte ein erreichtes
+    -- flush_lines-Limit bis zu 1s statt der vorgesehenen 200ms warten.
     flush_due()
   else
     if err ~= "paused" then stats.last_error = err end
@@ -1255,14 +1159,10 @@ local function handle_touch(x, y)
 end
 
 -- ── Main loop ───────────────────────────────────────────────────────────────
--- Feature (2026-07-11): allgemeiner Frische-Watchdog. Ergaenzt die
--- spezifische "no disk for role"-Warnung (die nur EINE moegliche Ursache
--- abdeckt) um eine generelle Pruefung: hat eine BEKANNTE Node (die
--- mindestens einmal erfolgreich geschrieben hat) seit mehr als
--- STALE_THRESHOLD_S nichts Neues mehr geschrieben? Deckt damit auch
--- andere Ursachen ab (Node abgestuerzt, Netzwerkproblem, o.ae.), nicht
--- nur die Disk-Zuordnung. Rate-begrenzt pro Node, damit eine dauerhaft
--- stille Node nicht bei jedem Tick erneut warnt.
+-- Allgemeiner Frische-Watchdog: hat eine bekannte Node seit mehr als
+-- STALE_THRESHOLD_S nichts Neues geschrieben? Deckt auch andere Ursachen ab
+-- als "no disk for role" (Node abgestuerzt, Netzwerkproblem). Rate-begrenzt
+-- pro Node, damit eine dauerhaft stille Node nicht bei jedem Tick erneut warnt.
 local STALE_THRESHOLD_S = 300  -- 5 Minuten ohne neuen Log-Eintrag = auffaellig
 local STALE_REWARN_S = 300     -- danach hoechstens alle 5 Minuten erneut warnen
 stats.node_stale_warned = stats.node_stale_warned or {}
@@ -1323,15 +1223,9 @@ local function run()
     local event = { os.pullEvent() }
     local name = event[1]
 
-    -- Fix (2026-07-07): CRITICAL. Bisher war nur handle_log_event() per
-    -- pcall abgesichert — ein Fehler in draw()/refresh_disks()/
-    -- refresh_modems() (z.B. durch eine unerwartete Peripherie-Antwort)
-    -- toetete den GESAMTEN Loop. Das fuehrt zum Crash-Screen ganz unten,
-    -- der auf einen Tastendruck wartet — ohne physische Anwesenheit blieb
-    -- der Collector danach fuer immer haengen, obwohl "der Computer noch
-    -- lief". Jetzt ist jeder Event-Zweig einzeln pcall-isoliert: ein
-    -- Fehler wird geloggt, der Loop laeuft beim naechsten Event normal
-    -- weiter, statt den ganzen Node lahmzulegen.
+    -- Jeder Event-Zweig einzeln pcall-isoliert: ein Fehler wird geloggt, der
+    -- Loop laeuft beim naechsten Event weiter statt den ganzen Node zum
+    -- Crash-Screen zu fuehren.
     local branch_ok, branch_err = pcall(function()
       if name == "modem_message" then
         local channel = event[3]
@@ -1343,16 +1237,10 @@ local function run()
             stats.last_error = "handle crashed: " .. tostring(err):sub(1, 70)
             diag(stats.last_error)
           end
-          -- Fix (2026-07-13): CRITICAL (LOG-P1.2, siehe docs/CODING_AI_
-          -- OTHER_NODES_PERFORMANCE_2026-07-12.md). Vorher wurde ZUSAETZLICH
-          -- zum bereits vorhandenen Timer-Intervall (DRAW_INTERVAL_S=5s)
-          -- bei jedem 20. empfangenen Event sofort gezeichnet -- bei hoher
-          -- Last (viele Events/s) konnte das den Zeichenaufwand deutlich
-          -- oefter ausloesen als beabsichtigt. Jetzt: eigenes, kuerzeres
-          -- Mindestintervall (1s) fuer "aktive" Zwischen-Zeichnungen waehrend
-          -- Events eintreffen, statt eine reine Ereigniszaehlung. Ein echter
-          -- Fehler (not ok) zeichnet weiterhin sofort, unabhaengig vom
-          -- Intervall -- das ist wichtige Diagnoseinformation.
+          -- Eigenes, kurzes Mindestintervall (1s) fuer "aktive"
+          -- Zwischen-Zeichnungen waehrend Events eintreffen, statt bei
+          -- jedem N-ten Event zu zeichnen (skaliert schlecht bei hoher
+          -- Last). Ein echter Fehler zeichnet weiterhin sofort.
           local now_active = now_s()
           if not ok or (now_active - (stats.last_active_draw_s or 0)) >= ACTIVE_DRAW_MIN_INTERVAL_S then
             stats.last_active_draw_s = now_active
@@ -1375,13 +1263,10 @@ local function run()
         check_log_freshness()
         flush_due()
         if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
-        -- Fix (2026-07-17): CRITICAL. INSTALL-P0.2 aus docs/CODING_AI_OTHER_
-        -- NODES_PERFORMANCE_2026-07-12.md (Abschnitt 4). LOG_COLLECTOR hat
-        -- keine eigenen physischen Aktoren zu quiescen -- der Handler
-        -- bestaetigt sofort einen sicheren Zustand, verlaesst aber
-        -- kontrolliert die Schleife, statt (wie bisher) unbegrenzt
-        -- weiterzulaufen, waehrend ein Auto-Update LOG_COLLECTORs eigene
-        -- Dateien ersetzt.
+        -- LOG_COLLECTOR hat keine physischen Aktoren zu quiescen -- der
+        -- Handler bestaetigt sofort einen sicheren Zustand und verlaesst
+        -- kontrolliert die Schleife, statt waehrend eines Auto-Updates
+        -- unbegrenzt weiterzulaufen.
         local quiesce_handshake = _G.__xreactor_update_handshake
         if quiesce_handshake then
           local ok_uh, update_handshake = pcall(dofile, "/xreactor/core/update_handshake.lua")
@@ -1440,15 +1325,10 @@ if term then
   if term.setTextColor then term.setTextColor(color("yellow", 16)) end
   print("Taste druecken um neu zu starten...")
 end
--- Fix (2026-07-07): CRITICAL. Bisher wartete der Crash-Screen per
--- pcall(os.pullEvent, "key") UNBEGRENZT auf einen Tastendruck — ohne
--- physische Anwesenheit blieb der Node fuer immer auf diesem Screen
--- haengen (vermutlich die Erklaerung fuer "laeuft seit Stunden, loggt
--- aber seit dem Neustart nichts mehr"). Jetzt: max. 30s warten, danach
--- automatischer Reboot-Versuch, auch ohne Tastendruck.
--- Feature (2026-07-11): bei erkannter Crash-Loop (siehe oben) wird diese
--- Wartezeit auf CRASH_LOOP_WAIT_S (5 Minuten) verlaengert, statt weiter
--- alle 30s neu zu starten ohne dass sich je etwas bessert.
+-- Crash-Screen wartet max. 30s auf einen Tastendruck, danach automatischer
+-- Reboot-Versuch (statt unbegrenzt zu haengen ohne physische Anwesenheit).
+-- Bei erkannter Crash-Loop wird die Wartezeit auf CRASH_LOOP_WAIT_S
+-- (5 Minuten) verlaengert.
 local wait_s = is_loop and CRASH_LOOP_WAIT_S or 30
 local ok_wait = pcall(function()
   local timer_id = os.startTimer(wait_s)

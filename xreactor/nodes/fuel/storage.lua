@@ -1,12 +1,9 @@
 -- nodes/fuel/storage.lua
 --
--- Feature (2026-07-09): Modularisierungs-Rewrite. Buendelt die allgemeine
--- Fluessig-Reserve-Verfolgung (storage_bus) an einer Stelle -- bewusst
--- getrennt von der Item-Logistik (logistics_router.lua/ME Bridge), da es
--- sich um ein separates Peripheral fuer einen separaten Zweck handelt
--- (siehe config.lua Dokumentation). Haelt seinen eigenen State (der
--- gewrappte storage-Peripheral) -- main.lua ruft nur die Funktionen hier
--- auf, ohne den Wrap-Zustand selbst verwalten zu muessen.
+-- Buendelt die Fluessig-Reserve-Verfolgung (storage_bus), getrennt von
+-- der Item-Logistik (logistics_router.lua/ME Bridge) -- separates
+-- Peripheral fuer einen separaten Zweck. Haelt seinen eigenen State
+-- (gewrapptes storage-Peripheral); main.lua ruft nur die Funktionen auf.
 
 local M = {}
 

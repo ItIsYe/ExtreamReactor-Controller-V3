@@ -98,15 +98,8 @@ function M.load_remote(url, http_mod)
   return result
 end
 
--- Fix (2026-07-08): CRITICAL. Diese Funktion hatte seit dem "Phase 1"-
--- Rewrite (2026-06-28) keine Filterung fuer optional=true Eintraege mehr —
--- jeder passende Eintrag wurde unconditional aufgenommen, unabhaengig von
--- der Nutzerauswahl. Nur die eingebettete Kopie im monolithischen
--- /installer hatte die urspruengliche 3-Parameter-Version mit Feature-
--- Filterung noch (dort ueberlebt, weil der eingebettete Block seit dem
--- Rewrite nie neu gebaut wurde). Hier aus der eingebetteten Version
--- wiederhergestellt, damit installer/init.lua's interaktive Auswahl
--- (siehe dort) wieder tatsaechlich etwas bewirkt.
+-- Muss optional=true-Eintraege gegen selected_features filtern, sonst hat
+-- installer/init.lua's interaktive Auswahl keine Wirkung.
 function M.files_for_role(manifest, role_label, selected_features)
   local is_log = LOG_ROLES[role_label:upper()] == true
   selected_features = selected_features or {}
@@ -123,13 +116,9 @@ function M.files_for_role(manifest, role_label, selected_features)
     expected[entry.path] = entry
   end
 
-  -- Fix (2026-07-17): INSTALL/MANIFEST-P1 aus docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md (Abschnitt 7). required_for wurde bisher NUR
-  -- fuer roles.*-Eintraege ausgewertet -- ein required_for-Feld auf einem
-  -- base_files-Eintrag hatte schlicht keine Wirkung, die Datei ging trotzdem
-  -- an jede nicht-LOG-Rolle (siehe services/alert_service.lua, die nur von
-  -- MASTER tatsaechlich require()t wird, siehe tests/manifest_transitive_
-  -- require_coverage_test.lua).
+  -- required_for muss auch fuer base_files-Eintraege ausgewertet werden,
+  -- nicht nur fuer roles.*-Eintraege -- sonst ginge eine Datei trotz
+  -- required_for-Feld an jede nicht-LOG-Rolle.
   local function base_role_matches(entry)
     local rf = entry.required_for
     if type(rf) ~= "table" then return true end

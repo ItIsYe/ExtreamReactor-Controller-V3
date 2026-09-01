@@ -21,13 +21,8 @@ local function render(mon, model)
   end
   ui.panel(mon, 1, 1, w, h, "RESOURCES", "OK")
 
-  -- Fix (2026-07-08): CRITICAL. model.fuel/model.water wurden ungeprueft
-  -- indiziert (model.fuel.total, model.water.buffers, ...) — sobald keine
-  -- FUEL- oder WATER-Nodes in der Flotte existieren (hier: 0/0, siehe
-  -- System-Map), blieb das jeweilige Sub-Model nil und die gesamte AUX:
-  -- RESOURCES-Seite crashte mit "attempt to index field 'fuel'/'water'
-  -- (a nil value)". Jetzt defensiv auf leere Tabellen defaulten, damit die
-  -- Seite auch ohne FUEL/WATER-Nodes sauber (mit Nullwerten) rendert.
+  -- Defensiv auf leere Tabellen defaulten, damit die Seite auch ohne
+  -- FUEL/WATER-Nodes (Sub-Model sonst nil) sauber rendert.
   model.fuel = model.fuel or {}
   model.water = model.water or {}
 

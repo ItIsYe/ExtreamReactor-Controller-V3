@@ -50,13 +50,9 @@ function M.run(checks, opts)
         pcall(opts.log, "INFO", line)
       end
     end
-    -- Optionaler Startup-Sound (Feature, 2026-07-02): wird nur gespielt,
-    -- wenn der Aufrufer opts.speaker explizit als bereits erstellte
-    -- optional/speaker_alarm.lua-Instanz uebergibt — startup_report.lua
-    -- selbst haelt keine eigene require()-Abhaengigkeit auf speaker_alarm,
-    -- um die beiden optionalen Features unabhaengig voneinander zu halten
-    -- (Diagnose-Report soll auch ohne Speaker-Feature funktionieren, und
-    -- umgekehrt).
+    -- Nur gespielt, wenn der Aufrufer opts.speaker als bereits erstellte
+    -- Instanz uebergibt -- keine eigene require()-Abhaengigkeit auf
+    -- speaker_alarm.lua, damit beide Features unabhaengig funktionieren.
     if opts.speaker and type(opts.speaker.play) == "function" then
       pcall(opts.speaker.play, "startup")
     end

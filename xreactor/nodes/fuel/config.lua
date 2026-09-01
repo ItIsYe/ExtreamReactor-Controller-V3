@@ -24,13 +24,13 @@ local CONFIG = {
   DEFAULT_RESET_LOG_ON_START = true, -- Truncate runtime log at startup to keep disk usage bounded.
   -- Logistics routing for the FUEL node.
   --
-  -- Each reactor has its OWN entry. Fix (2026-07-08): FUEL has NO Wired
-  -- Modem link to the reactors themselves, only to the ME system — fuel
-  -- levels come via network (Master relay, with a direct-overhear
-  -- fallback if Master is down; see nodes/fuel/logistics_router.lua and
-  -- master/fuel_relay.lua). Only exports fuel to the reactor that is
-  -- actually requesting it, prioritized by lowest fuel level first when
-  -- multiple reactors request simultaneously.
+  -- Each reactor has its OWN entry. FUEL has NO Wired Modem link to the
+  -- reactors themselves, only to the ME system — fuel levels come via
+  -- network (Master relay, with a direct-overhear fallback if Master is
+  -- down; see nodes/fuel/logistics_router.lua and master/fuel_relay.lua).
+  -- Only exports fuel to the reactor that is actually requesting it,
+  -- prioritized by lowest fuel level first when multiple reactors request
+  -- simultaneously.
   --
   -- Hardware (FUEL computer must have):
   --   Wired Modem → ME Bridge + each reactor's dedicated inlet transporter/chest
@@ -47,9 +47,7 @@ local CONFIG = {
     --
     -- reactors: one entry per reactor.
     --   reactor_id    = ID of the reactor as reported by its RT node's status
-    --                   (Fix 2026-07-08: FUEL has no Wired Modem link to the
-    --                   reactor itself, only to the ME system — fuel level
-    --                   comes via network relay from Master, see
+    --                   (fuel level comes via network relay from Master, see
     --                   master/fuel_relay.lua, not a local peripheral read.
     --                   Check the RT node's own log/dashboard for the exact
     --                   reactor id string it reports.)
@@ -87,32 +85,27 @@ local CONFIG = {
     -- Interrupt" in Mekanism. CC blocks ALL known valves, then opens ONLY
     -- the target reactor's own path.
     --
-    -- Fix (2026-07-19): this used to be a NESTED tree (side/children) --
-    -- the only way to express multiple valves in series (e.g. one shared
-    -- trunk valve before several reactor-specific branch valves) was to
-    -- nest a valve's 'children'. That is still understood automatically
-    -- (see nodes/fuel/redstone_router.lua's normalize_tree()), but the
-    -- CURRENT, simpler format is a flat list: repeat the SAME
-    -- {side=,integrator=} step in more than one reactor's path to express
-    -- a shared valve -- no nesting needed. The in-game Router page (4/4,
-    -- EDIT tab) builds exactly this format: pick a reactor, then tap
-    -- valves one at a time to build its chain.
+    -- Flat list: repeat the SAME {side=,integrator=} step in more than one
+    -- reactor's path to express a shared valve -- no nesting needed. The
+    -- in-game Router page (4/4, EDIT tab) builds exactly this format: pick a
+    -- reactor, then tap valves one at a time to build its chain. Old NESTED
+    -- tree configs (side/children) are still understood automatically (see
+    -- nodes/fuel/redstone_router.lua's normalize_tree()).
     --
     -- path[i].side: built-in CC side (top/bottom/left/right/front/back) --
     --   this is the side on the FUEL computer itself (direct redstone) OR,
     --   if 'integrator' is set, the side on THAT integrator/VALVE node.
     -- path[i].integrator (optional): identifies a separate valve
     --   controller.
-    --   Fix (2026-07-09): in this setup the "integrator" is itself a small
-    --   standalone CC:Tweaked computer sitting at the valve (role VALVE,
-    --   see nodes/valve/main.lua) -- it has no Wired Modem to FUEL, only
-    --   a Wireless Modem, and is addressed by its node_id (auto-discovered
-    --   once it's online and broadcasting, see redstone_router.lua
-    --   refresh()). Set integrator = "<valve node_id>" here, e.g.
-    --   "VALVE-1" (check the VALVE node's own boot log for its assigned
-    --   node_id). A local Mekanism Redstone Integrator peripheral (wired
-    --   directly to FUEL) also still works as a fallback if the name
-    --   doesn't match a known VALVE node_id.
+    --   the "integrator" is itself a small standalone CC:Tweaked computer
+    --   sitting at the valve (role VALVE, see nodes/valve/main.lua) -- it
+    --   has no Wired Modem to FUEL, only Wireless, addressed by its node_id
+    --   (auto-discovered once online, see redstone_router.lua refresh()).
+    --   Set integrator = "<valve node_id>" here, e.g. "VALVE-1" (check the
+    --   VALVE node's own boot log for its assigned node_id). A local
+    --   Mekanism Redstone Integrator peripheral (wired directly to FUEL)
+    --   also still works as a fallback if the name doesn't match a known
+    --   VALVE node_id.
     -- valve_open_ms: how long to keep valve open after export (default 2000ms)
     --
     -- { reactor = "RT-1", label = "Reaktor A", path = { { side = "right" } } },
@@ -127,28 +120,7 @@ local CONFIG = {
     valve_open_ms      = 2000,
   },
 }
--- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md, Punkt 28.1). "logistics = CONFIG.DEFAULT_LOGISTICS" stand bisher INNERHALB
--- von CONFIG's eigenem Tabellenkonstruktor -- zu diesem Zeitpunkt ist
--- die lokale Variable "CONFIG" noch nicht zugewiesen (klassische Lua-
--- Falle: die Zuweisung passiert erst, wenn der GESAMTE rechte Ausdruck
--- fertig ausgewertet ist), ein Zugriff darauf waere ein Laufzeitfehler
--- ("attempt to index a nil value") gewesen, sobald diese Datei je
--- tatsaechlich ausgefuehrt wurde. Da bisher zusaetzlich kein "return"
--- existierte (siehe Fix weiter unten), wurde dieser Fehler nie sichtbar
--- -- niemand hat diese Datei je erfolgreich geladen. Jetzt als separate
--- Zuweisungen NACH dem Tabellenkonstruktor, wenn CONFIG bereits
--- existiert.
+-- Muss NACH dem Tabellenkonstruktor stehen -- CONFIG existiert innerhalb
+-- des eigenen Konstruktors noch nicht (klassische Lua-Falle).
 CONFIG.logistics = CONFIG.DEFAULT_LOGISTICS
--- Fix (2026-07-13): CRITICAL (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md, Punkt 28.1). Diese Datei hatte bisher
--- UEBERHAUPT KEIN "return" -- dofile()/require() darauf lieferte
--- dadurch immer nil statt der Config-Tabelle zurueck. utils.load_config()
--- faellt in diesem Fall (data ist kein table) still auf DEFAULT_CONFIG
--- zurueck -- diese ganze Datei war dadurch WIRKUNGSLOS, egal was
--- hineingeschrieben wurde. Betraf auch die GLOBAL-P0-Migration (siehe
--- main.lua): die kopiert den ROHEN TEXT dieser Datei unveraendert in die
--- neue geschuetzte Nutzerdatei -- ohne dieses "return" waere auch die
--- MIGRIERTE Datei dauerhaft wirkungslos geblieben, trotz korrekt
--- geschuetztem Pfad.
 return CONFIG

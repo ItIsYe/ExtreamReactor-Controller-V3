@@ -10,32 +10,16 @@
 -- -> COMMITTED. xreactor/start.lua prueft dieses Journal bei JEDEM Boot,
 -- bevor die eigentliche Rolle gestartet wird.
 --
--- Fix (2026-07-19): CRITICAL. Die vorherige Fassung schrieb GENAU EINE
--- Journaldatei per "tmp schreiben -> alte Datei loeschen -> tmp verschieben"
--- (siehe Git-Historie). Zwischen dem Loeschen der alten Datei und dem
--- erfolgreichen Verschieben existierte ein Fenster OHNE gueltiges
--- Hauptjournal -- ein Stromausfall/Chunk-Unload/Move-Fehler genau dort
--- hinterliess weder die alte noch die neue Generation lesbar (INSTALL-
--- P0.1). Ausserdem behandelten sowohl diese Datei als auch start.lua jeden
--- Parse-/Lesefehler identisch zu "kein Journal vorhanden" (INSTALL-P0.2) --
--- ein beschaedigtes Journal waehrend genau eines abgebrochenen Updates war
--- damit nicht von einem sauberen Erststart unterscheidbar.
---
--- Jetzt: zwei fest benannte Generationsslots (SLOT_A/SLOT_B) mit einer
--- monoton steigenden "generation"-Zahl im Journalinhalt selbst -- KEIN
--- separates Pointer-/Indexfile, das seinerseits ein Delete-vor-Move-Fenster
--- haette. Jeder M.write()-Aufruf schreibt AUSSCHLIESSLICH in den Slot mit
--- der (strikt) niedrigeren Generation ("stale" Slot); der jeweils andere
--- Slot -- der Slot mit der aktuell hoechsten gueltigen Generation --
--- bleibt dabei voellig unangetastet. Ein Crash an JEDEM Punkt dieses
--- Schreibvorgangs im stale Slot
--- hinterlaesst den anderen Slot weiterhin vollstaendig und mit seiner
--- zuletzt bestaetigten Generation lesbar -- boot-seitige Klassifikation
--- (M.classify()) waehlt danach einfach wieder den hoechsten GUELTIGEN
--- Generationsstand. Zusaetzlich unterscheidet die Klassifikation jetzt
--- ABSENT / VALID_COMMITTED / VALID_INCOMPLETE / CORRUPT / UNREADABLE statt
--- alles ausser einem gueltigen Ergebnis auf "kein Journal" abzubilden;
--- nur ABSENT (wirklich nie ein Journal geschrieben) oder VALID_COMMITTED
+-- Zwei fest benannte Generationsslots (SLOT_A/SLOT_B) mit einer monoton
+-- steigenden "generation"-Zahl im Journalinhalt selbst -- kein separates
+-- Pointer-/Indexfile, das ein Delete-vor-Move-Fenster haette. Jeder
+-- M.write()-Aufruf schreibt ausschliesslich in den Slot mit der (strikt)
+-- niedrigeren Generation ("stale" Slot); der andere Slot bleibt dabei
+-- voellig unangetastet. Ein Crash an jedem Punkt des Schreibvorgangs im
+-- stale Slot hinterlaesst den anderen Slot weiterhin vollstaendig lesbar --
+-- boot-seitige Klassifikation (M.classify()) waehlt den hoechsten gueltigen
+-- Generationsstand. Klassifikation unterscheidet ABSENT / VALID_COMMITTED /
+-- VALID_INCOMPLETE / CORRUPT / UNREADABLE; nur ABSENT oder VALID_COMMITTED
 -- erlauben im Bootpfad einen normalen Rollenstart.
 
 local M = {}
@@ -61,22 +45,18 @@ M.STATUS = {
 M.SLOT_A = "/xreactor_install_journal.a.lua"
 M.SLOT_B = "/xreactor_install_journal.b.lua"
 
--- Alter, vor diesem Fix verwendeter Einzeldatei-Pfad. Wird nicht mehr
--- geschrieben oder als Entscheidungsgrundlage gelesen -- nur M.clear()
--- raeumt ihn opportunistisch auf, falls er von einer aelteren Version
--- dieses Codes noch auf der Platte liegt.
+-- Alter Einzeldatei-Pfad, nicht mehr geschrieben/gelesen -- nur M.clear()
+-- raeumt ihn opportunistisch auf, falls er von einer aelteren Version noch
+-- auf der Platte liegt.
 M.LEGACY_PATH = "/xreactor_install_journal.lua"
 
--- Eigener, von installer/stage.lua UNABHAENGIGER Slot-Write: journal.lua
--- wird auch von xreactor/start.lua bei JEDEM Boot gelesen, potenziell bevor
--- der Rest von /xreactor in einem verlaesslichen Zustand ist -- keine
--- Abhaengigkeit auf stage.lua's reclaim()/WRITE_BUFFER-Logik hier, nur ein
--- direkter Write. Zielpfad ist IMMER der aktuell "stale" Slot (siehe
--- M.write()); der jeweils andere, gerade gueltige Slot wird nie beruehrt.
--- Es gibt bewusst weder temporaere Verschiebung noch eine Post-Write-Nachlese. Diese
--- zusaetzlichen Schritte sind auf CC:Tweaked keine staerkere Atomizitaet und
--- vergroessern nur die Fehleroberflaeche. Ein abgebrochener Write beschaedigt
--- hoechstens den stale Slot; classify() faellt auf den anderen Slot zurueck.
+-- Direkter Write (keine stage.lua-Abhaengigkeit), da journal.lua auch von
+-- start.lua bei jedem Boot gelesen wird, potenziell bevor /xreactor in
+-- verlaesslichem Zustand ist. Bewusst kein temporaeres Verschieben oder
+-- Post-Write-Nachlese -- das braechte auf CC:Tweaked keine staerkere
+-- Atomizitaet, nur mehr Fehleroberflaeche. Ein abgebrochener Write
+-- beschaedigt hoechstens den stale Slot; classify() faellt auf den anderen
+-- Slot zurueck.
 local function write_stale_slot(path, content)
   local f = fs.open(path, "w")
   if not f then return false, "open failed: " .. path end

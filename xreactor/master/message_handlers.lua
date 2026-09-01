@@ -14,10 +14,9 @@ function M.new(opts)
   local add_alarm = assert(opts.add_alarm, "add_alarm required")
   local master_time_label = assert(opts.master_time_label, "master_time_label required")
   local log = assert(opts.log, "log required")
-  -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-  -- PERFORMANCE_2026-07-12.md Abschnitt 10). Optional -- nur gesetzt vom
-  -- echten Master-Boot (runtime_loop.lua), damit Tests, die M.new() ohne
-  -- Config-Editor-Belange aufrufen, unveraendert funktionieren.
+  -- Optional -- nur vom echten Master-Boot (runtime_loop.lua) gesetzt,
+  -- damit Tests, die M.new() ohne Config-Editor-Belange aufrufen,
+  -- unveraendert funktionieren.
   local config_edits_state = opts.config_edits_state
   local on_config_edit_change = opts.on_config_edit_change
 
@@ -151,14 +150,10 @@ function M.new(opts)
   -- Aliase (output, power_actual, target_output) werden einmalig am Ende gesetzt.
   local function populate_rt_status(node, payload)
     if type(node) ~= "table" or type(payload) ~= "table" then return end
-    -- Fix (2026-06-30): node.rt = payload.rt or node.rt or {} ERSETZTE die
-    -- bisherige node.rt-Tabelle bei jedem STATUS-Tick komplett durch eine
-    -- neue Tabelle aus dem Netzwerk-Payload. Das verwarf persistente Felder,
-    -- die NICHT von RT selbst gesendet werden, sondern vom Master/UI-
-    -- Controller in node.rt geschrieben wurden (z.B. assignment_state aus
-    -- ui_controller.normalize_rt_display() — siehe infer_assignment_state()
-    -- Fix daneben). Jetzt: bestehende node.rt-Tabelle wiederverwenden und
-    -- payload.rt-Felder hineinmergen, statt die Referenz zu ersetzen.
+    -- Bestehende node.rt-Tabelle wiederverwenden und payload.rt-Felder
+    -- hineinmergen (nicht die Referenz ersetzen) -- sonst gingen Felder
+    -- verloren, die nicht von RT selbst gesendet, sondern vom Master/UI-
+    -- Controller in node.rt geschrieben werden (z.B. assignment_state).
     if type(node.rt) ~= "table" then node.rt = {} end
     if type(payload.rt) == "table" then
       for k, v in pairs(payload.rt) do
@@ -225,14 +220,10 @@ function M.new(opts)
     -- node-Felder: kanonisch + Aliase einmalig
     node.actual_output  = rt.actual_output
     node.power_target   = rt.power_target
-    -- Fix (2026-06-30): rt.capacity_max/rt.capacity_ready aus dem aktuellen
-    -- payload MUESSEN vor der Ableitung von node.capacity_max/node.capacity_ready
-    -- aktualisiert werden. Vorher stand dieser Block hier unten (nach der
-    -- node.*-Ableitung), wodurch node.capacity_max/node.capacity_ready immer
-    -- den Wert aus dem VORHERIGEN STATUS-Zyklus widerspiegelten (off-by-one
-    -- payload) statt des gerade eingetroffenen — das fuehrte dazu, dass
-    -- rt_sync.node_capacity() veraltete/fehlende Kapazitaetswerte sah und der
-    -- Master falsche oder gar keine Setpoints zuteilte.
+    -- Muss VOR der node.capacity_max/node.capacity_ready-Ableitung unten
+    -- aktualisiert werden -- sonst spiegeln die node.*-Werte den vorherigen
+    -- STATUS-Zyklus statt des gerade eingetroffenen wider (off-by-one),
+    -- und rt_sync.node_capacity() teilt falsche Setpoints zu.
     rt.capacity_max     = number_or_nil(payload.capacity_max) or rt.capacity_max
     if payload.capacity_ready == true then rt.capacity_ready = true end
     rt.capacity_source  = payload.capacity_source or rt.capacity_source
@@ -285,11 +276,9 @@ function M.new(opts)
     }
   end
 
-  -- Feature (2026-07-02): Pocket-Command-Token. Ein 6-stelliges, alle 5
-  -- Minuten rotierendes Token wird am Master-Overview angezeigt (siehe
-  -- ui_controller.lua). Der Nutzer muss es manuell am Pocket Computer
-  -- eingeben — verhindert versehentliche/automatisierte Steuerbefehle ohne
-  -- physischen Zugriff auf den Master-Monitor.
+  -- 6-stelliges, alle 5 Minuten rotierendes Token wird am Master-Overview
+  -- angezeigt; der Nutzer muss es manuell am Pocket Computer eingeben --
+  -- verhindert Steuerbefehle ohne physischen Zugriff auf den Master-Monitor.
   local pocket_token_state = { token = nil, generated_at = 0 }
   local POCKET_TOKEN_TTL_MS = 5 * 60 * 1000
   local function current_pocket_token()
@@ -417,10 +406,8 @@ function M.new(opts)
       nodes[id].stale = false
       nodes[id].managed = true
       nodes[id].recovering = false
-      -- Feature (2026-07-02): manifest_version pro Node speichern, damit
-      -- die AUX-Monitor "Updates"-Seite sehen kann, ob alle Nodes dieselbe
-      -- Version haben. Wird von services/comms_service.lua zentral an jeden
-      -- Heartbeat-Payload angehaengt.
+      -- manifest_version pro Node speichern, damit die AUX-Monitor
+      -- "Updates"-Seite sehen kann, ob alle Nodes dieselbe Version haben.
       if message.payload.manifest_version ~= nil then
         nodes[id].manifest_version = tonumber(message.payload.manifest_version)
         nodes[id].manifest_version_seen_ts = message.ts or (os.epoch and os.epoch("utc")) or 0
@@ -487,13 +474,9 @@ function M.new(opts)
         end
       end
       mark_rt_sync_dirty(nodes[id], "status")
-    -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-    -- PERFORMANCE_2026-07-12.md Abschnitt 10). ACK_DELIVERED fiel bisher
-    -- komplett durch diese Kette in den "else"-Zweig und loeste bei JEDEM
-    -- gesendeten Command (nicht nur Config-Editor-Edits) einen falschen
-    -- "Unknown message type ACK_DELIVERED"-WARN-Alarm aus. Jetzt explizit
-    -- behandelt: markiert einen laufenden Config-Editor-Edit-Ziel-Eintrag
-    -- als DELIVERED (siehe master/config_edits.lua), sonst No-Op.
+    -- Markiert einen laufenden Config-Editor-Edit-Ziel-Eintrag als
+    -- DELIVERED, sonst No-Op -- ohne diesen Zweig faellt ACK_DELIVERED in
+    -- den "else"-Zweig und loest einen falschen "Unknown message type"-WARN aus.
     elseif message.type == constants.message_types.ACK_DELIVERED then
       if config_edits_state then
         local changed = config_edits_lib.handle_ack_delivered(config_edits_state, message)
@@ -537,9 +520,8 @@ function M.new(opts)
       else
         log(("Node %s ACK_APPLIED deduped: unchanged setpoint ack does not re-dirty"):format(tostring(id)))
       end
-      -- Fix (2026-07-17): MASTER-P1 (Abschnitt 10). Korreliert dieses
-      -- ACK_APPLIED zusaetzlich gegen einen evtl. laufenden Config-Editor-
-      -- Edit (per message_id/ack_for) -- siehe master/config_edits.lua.
+      -- Korreliert dieses ACK_APPLIED gegen einen evtl. laufenden
+      -- Config-Editor-Edit (per message_id/ack_for).
       if config_edits_state then
         local changed = config_edits_lib.handle_ack_applied(config_edits_state, message)
         if changed and on_config_edit_change then on_config_edit_change() end

@@ -270,14 +270,9 @@ function M.build_node_setpoint_plan(ctx)
 
   local keep_count = math.min(#active, needed_nodes)
 
-  -- Fix (2026-06-30): assigned_power/assigned_percent existierten bisher nur
-  -- lokal auf entry (verworfen nach dieser Funktion) — node.assigned_power
-  -- wurde nie persistiert. Das UI (rt_dashboard.lua rt_target()) zeigte
-  -- daher rt.power_target an, ein veraltetes Konzept aus der Zeit vor dem
-  -- SCADA-Rewrite (RT bekommt nur noch power_target_percent, berechnet
-  -- seinen RF/t-Output selbst) — das Feld wird von RT nie mehr gesendet und
-  -- zeigte dauerhaft 0 im UI, obwohl der Master intern korrekt einen
-  -- Soll-Wert berechnet hatte. Jetzt: zusaetzlich auf node persistieren.
+  -- assigned_power/assigned_percent muessen zusaetzlich auf node persistiert
+  -- werden (nicht nur lokal auf entry) -- rt_dashboard.lua's rt_target()
+  -- liest node.assigned_power fuer die UI-Anzeige.
   for idx, entry in ipairs(active) do
     entry.assignment_rank = idx
     if idx <= keep_count then
@@ -404,14 +399,10 @@ function M.sync_rt_node(ctx, node)
   local desired = assigned.setpoints
   local trigger = tostring(ctx.trigger or "unknown")
 
-  -- Fix: assignment_state wurde NUR geschrieben, wenn ein neues Funk-Command
-  -- tatsächlich gesendet wurde (siehe send_rt_setpoints -> node.last_setpoints).
-  -- Bei ACK_MATCH/Dedup (der HÄUFIGSTE Fall im Normalbetrieb — kein neues
-  -- Command nötig weil die Node schon den richtigen Wert hat) blieb
-  -- node.assignment_state für die UI dauerhaft leer/UNASSIGNED, obwohl der
-  -- Master intern längst korrekt "active"/ASSIGNED plant. Jetzt: der Plan-
-  -- Wert wird bei JEDEM sync_rt_node()-Lauf in node geschrieben, unabhängig
-  -- vom Dedup-Pfad — Dedup spart nur den Funkversand, nicht die UI-Daten.
+  -- Der Plan-Wert wird bei JEDEM sync_rt_node()-Lauf in node geschrieben,
+  -- unabhaengig vom ACK_MATCH/Dedup-Pfad -- Dedup spart nur den Funkversand,
+  -- nicht die UI-Daten (sonst bliebe node.assignment_state im haeufigsten
+  -- Fall dauerhaft UNASSIGNED, obwohl der Master intern korrekt plant).
   node.assignment_state = assigned.assignment_state
   node.assignment_reason = assigned.assignment_reason
   node.control_source = assigned.mode

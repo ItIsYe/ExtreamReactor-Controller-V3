@@ -7,14 +7,11 @@ local function clamp01(v, min_v, max_v)
   return math.max(0, math.min(1, (n - min_v) / (max_v - min_v)))
 end
 
--- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 10). Zielauswahl (ALLE oder eine
--- konkrete Node-ID) und ein laufender/fehlgeschlagener Edit werden jetzt
--- direkt in die WERT-Zeile eingeblendet -- bewusst OHNE das Kartenlayout
--- (card_h, Spalten/Zeilen-Raster) zu aendern, um das bestehende, bereits
--- funktionierende Layout aller sieben Karten nicht zu gefaehrden. Der
--- Zielname belegt den rechten Teil derselben Zeile und ist gleichzeitig
--- die Touch-Flaeche zum Weiterschalten (siehe hits[] unten).
+-- Zielauswahl (ALLE oder eine konkrete Node-ID) und ein laufender/
+-- fehlgeschlagener Edit werden direkt in die WERT-Zeile eingeblendet,
+-- bewusst ohne das Kartenlayout zu aendern. Der Zielname belegt den
+-- rechten Teil derselben Zeile und ist gleichzeitig die Touch-Flaeche
+-- zum Weiterschalten (siehe hits[] unten).
 local function target_label(target)
   if target == "ALL" or target == nil then return "ALLE" end
   return tostring(target)
@@ -48,9 +45,8 @@ local function render(mon, model)
     { label = "PEAK THRESHOLD", value = model.peak_threshold_pct or 30, suffix = "%", min = 0, max = 100, delta = 5, type = "peak_threshold_adjust", status = "LIMITED", icon = "energy" },
     { label = "IDLE THRESHOLD", value = model.idle_threshold_pct or 90, suffix = "%", min = 0, max = 100, delta = 5, type = "idle_threshold_adjust", status = "LIMITED", icon = "energy" },
     { label = "RT GLOBAL HOLD", value = model.rt_global_off_hold and 1 or 0, display = model.rt_global_off_hold and "ON" or "OFF", min = 0, max = 1, type = "rt_hold", toggle = true, status = model.rt_global_off_hold and "WARNING" or "OK", icon = "reactor" },
-    -- Fix (2026-07-17): MASTER-P1. edit_key/target/pending gesetzt --
-    -- diese drei Karten unterstuetzen jetzt Zielauswahl (ALLE/Node-ID) und
-    -- Applied-ACK-Fortschrittsanzeige (siehe render() unten).
+    -- edit_key/target/pending: diese drei Karten unterstuetzen
+    -- Zielauswahl (ALLE/Node-ID) und Applied-ACK-Fortschritt (render()).
     { label = "FUEL RESERVE", value = model.fuel_reserve_pct or 2000, suffix = "", min = 0, max = 50000, delta = 250, type = "fuel_reserve_adjust", status = "LIMITED", icon = "fuel", edit_key = "fuel_reserve", target = model.fuel_reserve_target, pending = model.fuel_reserve_pending },
     { label = "WATER TARGET", value = model.water_target_pct or 0, suffix = "", min = 0, max = 500000, delta = 250, type = "water_target_adjust", status = "LIMITED", icon = "water", edit_key = "water_target", target = model.water_target_target, pending = model.water_target_pending },
     { label = "AUTO UPDATE", value = model.auto_update_enabled ~= false and 1 or 0, display = model.auto_update_enabled ~= false and "ON" or "OFF", min = 0, max = 1, type = "auto_update_toggle", toggle = true, status = model.auto_update_enabled ~= false and "OK" or "WARNING", icon = "network" },
@@ -72,14 +68,9 @@ local function render(mon, model)
     if y + card_h - 1 <= h - 2 then
       mux.card(mon, x, y, card_w, card_h, { title = s.label, status = s.status, icon = s.icon })
       local shown = s.display or (tostring(s.value) .. tostring(s.suffix or ""))
-      -- Fix (2026-07-17): MASTER-P1 (siehe docs/CODING_AI_OTHER_NODES_
-      -- PERFORMANCE_2026-07-12.md Abschnitt 10). Fuer Karten mit
-      -- Zielauswahl wird die WERT-Zeile um Ziel und (falls vorhanden)
-      -- einen laufenden/fehlgeschlagenen Edit-Fortschritt ergaenzt --
-      -- bewusst in derselben Zeile statt einer zusaetzlichen Kartenzeile,
-      -- um card_h/das Spalten-Raster fuer alle sieben Karten unveraendert
-      -- zu lassen. Dieselbe Zeile ist gleichzeitig die Touch-Flaeche zum
-      -- Weiterschalten der Zielauswahl.
+      -- Fuer Karten mit Zielauswahl wird die WERT-Zeile um Ziel und
+      -- Edit-Fortschritt ergaenzt statt einer zusaetzlichen Kartenzeile;
+      -- dieselbe Zeile ist gleichzeitig die Touch-Flaeche zum Weiterschalten.
       local row_status = s.status
       if s.edit_key then
         shown = shown .. " [" .. target_label(s.target) .. "]" .. pending_suffix(s.pending)

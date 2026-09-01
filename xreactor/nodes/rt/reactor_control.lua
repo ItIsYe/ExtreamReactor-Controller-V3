@@ -148,16 +148,10 @@ function M.read_reactor_internal_steam_fill_ratio(ctx)
   return nil, nil, nil
 end
 
--- Feature (2026-07-06): echte Pro-Reaktor-Variante fuer unabhaengige
--- Regelung mehrerer Reaktoren an einem RT-Node. Liest NUR den internen
--- Dampf-Fuellstand des angegebenen Reaktors, nicht die Summe aller.
--- Grund fuer diesen Ansatz statt Turbinen-Zuordnung: es gibt keine
--- explizite Turbinen-zu-Reaktor-Zuordnung im System (rein gemeinsamer
--- Datenbus), aber jeder Reaktor hat seinen EIGENEN internen Dampf-
--- Speicher, unabhaengig davon welche Turbinen tatsaechlich daran haengen.
--- Sinkt der Fuellstand eines Reaktors (er liefert weniger Dampf als seine
--- angeschlossenen Turbinen verbrauchen), muss dieser Reaktor individuell
--- hochgeregelt werden — unabhaengig vom Zustand des anderen Reaktors.
+-- Pro-Reaktor-Variante fuer unabhaengige Regelung mehrerer Reaktoren an
+-- einem RT-Node: liest NUR den internen Dampf-Fuellstand des angegebenen
+-- Reaktors (es gibt keine explizite Turbinen-zu-Reaktor-Zuordnung, aber
+-- jeder Reaktor hat seinen eigenen internen Dampfspeicher).
 function M.read_reactor_internal_steam_fill_ratio_for(ctx, name)
   local reactor = ctx.peripherals.reactors[name]
   if not reactor then
@@ -281,17 +275,10 @@ function M.has_reactor_rod_write_path(caps)
   ) and true or false
 end
 
--- Fix (2026-07-14): CRITICAL. RT-P1 (siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md). setActive() wurde bisher bei JEDEM
--- Control-Tick fuer JEDEN Reaktor unbedingt aufgerufen, obwohl der
--- Zielwert (immer "true", siehe Aufrufer in turbine_control.lua's
--- updateControl()) sich nach dem ersten erfolgreichen Write nie wieder
--- aendert -- ein echter, dauerhaft redundanter Hardware-Write pro Tick.
--- Seit der 10-Hz-Cadence (RT-P0) waere das 10 unnoetige Writes/Sekunde
--- statt vorher 2. Optionaler ctrl-Parameter (reactor_ctrl[name]-Eintrag)
--- erlaubt jetzt denselben "nur bei Aenderung schreiben"-Schutz wie
--- bereits bei Rod- und Flow-Writes -- ruecklaufkompatibel: ohne ctrl
--- (z.B. module_lifecycle.lua's Start-Rampe) unveraendertes Verhalten.
+-- Optionaler ctrl-Parameter (reactor_ctrl[name]-Eintrag) erlaubt denselben
+-- "nur bei Aenderung schreiben"-Schutz wie bei Rod-/Flow-Writes, statt
+-- setActive() bei jedem Tick redundant aufzurufen. Ohne ctrl (z.B.
+-- module_lifecycle.lua's Start-Rampe) unveraendertes Verhalten.
 function M.setReactorActive(ctx, reactor, caps, active, ctrl)
   -- Reconcile the cache with hardware before suppressing a write. Reactors
   -- can be stopped outside XReactor (manual UI, chunk reload, peripheral
@@ -338,10 +325,8 @@ function M.read_current_rods(ctx)
   return nil
 end
 
--- Feature (2026-07-06): Pro-Reaktor-Variante, liest NUR den Rod-Wert des
--- angegebenen Reaktors (nicht "irgendeinen ersten gefundenen" wie
--- M.read_current_rods oben, das fuer die individuelle Regelung mehrerer
--- Reaktoren ungeeignet ist).
+-- Pro-Reaktor-Variante: liest NUR den Rod-Wert des angegebenen Reaktors
+-- (nicht "irgendeinen ersten gefundenen" wie M.read_current_rods oben).
 function M.read_current_rods_for(ctx, name)
   local current_rods = ctx.adapters.reactor.read_control_rods(name, ctx.CONFIG.LOG_PREFIX)
   local ctrl = M.ensure_reactor_ctrl(ctx, name)
@@ -355,12 +340,10 @@ function M.read_current_rods_for(ctx, name)
   return nil
 end
 
--- Feature (2026-07-06): echte Pro-Reaktor-Variante fuer unabhaengige
--- Regelung. Nutzt EIGENES Rate-Limiting (ctrl.last_rod_apply_ts) statt des
--- globalen ctx.last_rod_apply_ts/ctx.last_applied_rods — sonst wuerde ein
--- Rod-Write auf Reaktor A das Rate-Limit fuer Reaktor B ebenfalls
--- auslösen, obwohl beide unabhaengig regeln sollen. Schreibt NUR auf den
--- angegebenen Reaktor, nicht auf alle in ctx.reactor_ctrl.
+-- Nutzt eigenes Rate-Limiting (ctrl.last_rod_apply_ts) statt des globalen
+-- ctx.last_rod_apply_ts -- sonst wuerde ein Rod-Write auf Reaktor A das
+-- Rate-Limit fuer Reaktor B ebenfalls ausloesen. Schreibt nur auf den
+-- angegebenen Reaktor.
 function M.applyReactorRodsFor(ctx, name, target, allow_overmax, source)
   local ctrl = M.ensure_reactor_ctrl(ctx, name)
   local now = os.clock()
@@ -519,21 +502,6 @@ function M.apply_initial_reactor_rods(ctx)
   M.applyReactorRods(ctx, ctx.CONFIG.INITIAL_ROD_LEVEL, false, "STARTUP_INIT")
 end
 
--- ── Diagnose-Logging ────────────────────────────────────────────────────────
-
-function M.log_reactor_control_state(ctx)
-  local now = os.clock()
-  if now - ctx.last_reactor_debug_log < 5 then return end
-  ctx.last_reactor_debug_log = now
-  local sample_rods = M.read_current_rods(ctx) or ctx.last_applied_rods or "n/a"
-  local tick_age = now - ctx.last_reactor_tick
-end
-
-function M.log_reactor_control_tick(ctx)
-  local sample_demand = ctx.last_reactor_demand
-  local age = os.clock() - ctx.last_rod_change_ts
-end
-
 -- ── Kernregler: Steam-Margin → Rod-Niveau ───────────────────────────────────
 
 -- ── Individuelle Pro-Reaktor-Regelung (Feature, 2026-07-06) ─────────────────
@@ -561,19 +529,10 @@ function M.controlReactorsIndividually(ctx)
   local reactors = ctx.config.reactors or {}
   if #reactors == 0 then return end
 
-  -- Fix (2026-07-06): die individuelle Pro-Reaktor-Regelung nutzte bisher
-  -- dieselbe rod_cfg wie die alte, globale Regelung (config.rails.
-  -- reactor_rods) — deren Werte (max_step=8, cooldown_s=1.5) waren fuer
-  -- einen GEMITTELTEN Wert ueber viele Turbinen kalibriert, der sich
-  -- naturgemaess langsam aendert. Der individuelle interne Tank-
-  -- Fuellstand EINES Reaktors kann sich aber viel schneller/staerker
-  -- veraendern (voller Turbinen-Pool zieht schnell Dampf ab) — mit den
-  -- alten Werten war die Reaktion trotz korrekt funktionierender
-  -- Unabhaengigkeit spuerbar zu traege (max. 8 Rod-Punkte alle 1.5s).
-  -- Eigene, deutlich reaktionsschnellere Defaults hier, ueberschreibbar
-  -- via config.rails.reactor_rods_individual falls jemand andere Werte
-  -- braucht; faellt sonst auf sinnvolle, aggressivere Defaults zurueck
-  -- statt die geteilte reactor_rods-Config zu uebernehmen.
+  -- Eigene, reaktionsschnellere Defaults statt der geteilten (globalen)
+  -- reactor_rods-Config: der individuelle interne Tank-Fuellstand EINES
+  -- Reaktors kann sich viel schneller aendern als ein ueber viele Turbinen
+  -- gemittelter Wert. Ueberschreibbar via config.rails.reactor_rods_individual.
   local individual_rod_cfg_override = ctx.config.rails and ctx.config.rails.reactor_rods_individual
   local base_rod_cfg = ctx.config.rails and ctx.config.rails.reactor_rods or {}
   local rod_cfg = individual_rod_cfg_override or {
@@ -615,20 +574,10 @@ function M.controlReactorsIndividually(ctx)
 
     -- Fuellstand UNTER dem Zielwert = positive Margin (mehr Leistung
     -- noetig, Rods sollen sinken); darueber = negative Margin (drosseln).
-    -- Fix (2026-07-06): KRITISCHER Vorzeichenfehler. rails.step() erhoeht
-    -- die Rods (= WENIGER Leistung) bei POSITIVEM error, und senkt sie
-    -- (= MEHR Leistung) bei NEGATIVEM error — siehe core/control_rails.lua
-    -- rails.step(): "next_value = current + direction * step" mit
-    -- direction=1 bei error>=deadband. Beim alten, globalen Regler war das
-    -- korrekt: steam_margin = available_steam - demand, also viel
-    -- UEBERSCHUSS (positiv) => Rods hoch/drosseln, WENIG Dampf (negativ)
-    -- => Rods runter/mehr Leistung. Meine urspruengliche Formel
-    -- (fill_target - fill_ratio) hatte das Vorzeichen VERTAUSCHT: bei
-    -- LEEREM Tank (fill_ratio klein) wurde das Ergebnis POSITIV, was Rods
-    -- HOCH (0% Leistung) statt RUNTER (mehr Leistung) ausloeste — exakt
-    -- das beobachtete Fehlverhalten. Korrekt: (fill_ratio - fill_target),
-    -- damit ein leerer Tank (fill_ratio klein) zu einem NEGATIVEN Wert
-    -- fuehrt, genau wie "wenig Dampf" beim alten Regler.
+    -- Vorzeichen ist wichtig: rails.step() erhoeht die Rods (weniger
+    -- Leistung) bei POSITIVEM error. Muss daher (fill_ratio - fill_target)
+    -- sein, NICHT umgekehrt -- ein leerer Tank (fill_ratio klein) muss zu
+    -- einem negativen Wert fuehren (= Rods runter, mehr Leistung).
     local fill_margin = (fill_ratio - fill_target) * (fill_capacity or 1)
 
     local smoothed_margin = ctx.rails.smooth(
@@ -840,13 +789,8 @@ function M.updateReactorControl(ctx)
     end
     return
   end
-  -- Fix (2026-07-14): CRITICAL. RT-P0 (siehe docs/CODING_AI_RT_CONTROL_
-  -- CADENCE_2026-07-12.md). Die frueheren Defaults (5.0s single-reactor,
-  -- 1.0s multi-reactor, siehe config.lua-Fix-Kommentar vom selben Datum)
-  -- widersprachen der verbindlichen 10-Hz-Vorgabe -- Stabilitaet kommt
-  -- ueber EMA/Deadband/Hysterese/Ramp-Limits, nicht ueber ein langsames
-  -- aeusseres Intervall. Inline-Fallback hier ebenfalls auf 0.10s
-  -- angepasst (nur relevant falls autonom-Config-Zweig komplett fehlt).
+  -- 10-Hz-Cadence: Stabilitaet kommt ueber EMA/Deadband/Hysterese/Ramp-Limits,
+  -- nicht ueber ein langsames aeusseres Intervall.
   local multi_reactor = #(ctx.config.reactors or {}) > 1
   local tick_interval = multi_reactor
     and ((ctx.config.autonom and ctx.config.autonom.reactor_adjust_interval_individual) or 0.10)
@@ -855,20 +799,14 @@ function M.updateReactorControl(ctx)
     return
   end
   ctx.last_reactor_tick = now
-  M.log_reactor_control_state(ctx)
-  -- Feature (2026-07-06): bei genau einem Reaktor bleibt die bisherige,
-  -- global-gemeinsame Regelung (M.controlReactor) unveraendert aktiv —
-  -- kein Verhaltenswechsel fuer die grosse Mehrheit der Setups mit nur
-  -- einem Reaktor pro RT-Node. Bei mehreren Reaktoren an einem Node (z.B.
-  -- 2 Reaktoren + gemeinsamer Turbinen-Pool) wird jeder Reaktor jetzt
-  -- individuell anhand seines EIGENEN internen Dampf-Fuellstands
-  -- geregelt, siehe M.controlReactorsIndividually().
+  -- Bei genau einem Reaktor bleibt die global-gemeinsame Regelung
+  -- (M.controlReactor) aktiv; bei mehreren wird jeder Reaktor individuell
+  -- anhand seines eigenen internen Dampf-Fuellstands geregelt.
   if #(ctx.config.reactors or {}) > 1 then
     M.controlReactorsIndividually(ctx)
   else
     M.controlReactor(ctx)
   end
-  M.log_reactor_control_tick(ctx)
 end
 
 return M

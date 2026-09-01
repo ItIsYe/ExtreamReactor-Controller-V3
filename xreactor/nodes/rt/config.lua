@@ -1,16 +1,9 @@
--- Fix (2026-07-16): CRITICAL (RT-P1, siehe docs/CODING_AI_OTHER_NODES_
--- PERFORMANCE_2026-07-12.md Abschnitt 5, "Altconfig-Migration und
--- Schedulernachweis"). "version"/CURRENT_VERSION existierte bereits, wurde
--- aber nirgends im Projekt tatsaechlich gelesen/verglichen -- ein reines
--- Deklarations-Feld ohne Wirkung. Erhoeht auf 5, um config_normalizer.lua's
--- neue migrate_schema_version() einen echten Ansatzpunkt zu geben: eine
--- bestehende, persistierte config/rt.lua mit dem historischen Default
--- autonom.reactor_adjust_interval=5.0 (bzw. reactor_adjust_interval_
--- individual=1.0, siehe dortiger Fix-Kommentar) wird beim naechsten Boot
--- GEZIELT auf den neuen 0.10-Default migriert (nicht blind ueberschrieben,
--- falls der Nutzer bewusst einen ANDEREN Wert gesetzt hat) und die
--- Migration wird als abgeschlossen persistiert (version=5), damit sie
--- garantiert nur einmal laeuft.
+-- CURRENT_VERSION gibt config_normalizer.lua's migrate_schema_version()
+-- einen Ansatzpunkt: eine persistierte config/rt.lua mit dem historischen
+-- reactor_adjust_interval-Default wird beim naechsten Boot gezielt auf
+-- den neuen Default migriert (nicht blind ueberschrieben, falls der
+-- Nutzer bewusst einen anderen Wert gesetzt hat), und die Migration wird
+-- als abgeschlossen persistiert, damit sie nur einmal laeuft.
 local CURRENT_VERSION = 5
 
 return {
@@ -72,16 +65,12 @@ return {
     ramp_step = 50,
     -- regulator_min_rods / regulator_max_rods: ENTFERNT.
     -- Kanonische Rod-Grenzen stehen jetzt ausschließlich in rails.reactor_rods.min/.max.
-    -- Fix (2026-07-14): CRITICAL. RT-P0 (siehe docs/CODING_AI_RT_CONTROL_
-    -- CADENCE_2026-07-12.md). 5.0s (bzw. 1.0s bei mehreren Reaktoren, siehe
-    -- reactor_adjust_interval_individual) widersprach der verbindlichen
-    -- 10-Hz-Vorgabe (reactor_control_interval_s = 0.10) fuer die Reaktor-
-    -- Fuel-Rod-Regelung -- Stabilitaet kommt ueber EMA/Deadband/Hysterese/
+    -- 0.10s entspricht der verbindlichen 10-Hz-Vorgabe fuer die
+    -- Fuel-Rod-Regelung; Stabilitaet kommt ueber EMA/Deadband/Hysterese/
     -- Ramp-Limits in core/control_rails.lua, nicht ueber ein langsames
-    -- aeusseres Intervall. Bereits bestehende, persistierte Configs
-    -- (config/rt.lua) behalten ihren alten Wert, bis manuell angepasst
-    -- oder neu installiert -- dieser Default gilt fuer Erstinstallationen
-    -- und fehlende/ungueltige Werte.
+    -- aeusseres Intervall. Gilt nur fuer Erstinstallationen und
+    -- fehlende/ungueltige Werte -- bestehende persistierte Configs
+    -- behalten ihren Wert bis manuell angepasst.
     reactor_adjust_interval = 0.10,
     reactor_adjust_interval_individual = 0.10,
     steam_reserve = 5000,
@@ -89,12 +78,10 @@ return {
   },
 
   rails = {
-    -- Feature (2026-07-06): Zielwert (0.0-1.0) fuer den internen Dampf-
-    -- Fuellstand bei individueller Pro-Reaktor-Regelung (nur relevant bei
-    -- >1 Reaktor pro RT-Node, siehe reactor_control.lua
-    -- controlReactorsIndividually()). Ueber die Config-Editor-Seite am
-    -- Master per Touch aenderbar und persistent in dieser Datei
-    -- gespeichert. Standardwert 50%.
+    -- Zielwert (0.0-1.0) fuer den internen Dampf-Fuellstand bei
+    -- individueller Pro-Reaktor-Regelung (>1 Reaktor pro RT-Node, siehe
+    -- reactor_control.lua controlReactorsIndividually()). Ueber den
+    -- Config-Editor am Master per Touch aenderbar und persistent.
     reactor_fill_target = 0.5,
     ramp_profiles = {
       NORMAL = { up = 1.0, down = 1.0 },
