@@ -665,6 +665,28 @@ function utils.read_node_id(path)
   return trimmed
 end
 
+-- Fix: on a genuinely fresh install, node_id.txt does not exist yet --
+-- core/network.lua's resolve_node_id() generates and persists a
+-- "node-<computer id>" fallback for it, but only once comms/network.new()
+-- actually runs. A node that needs its node_id EARLIER than that (e.g.
+-- nodes/valve/main.lua constructs its controller, which asserts on
+-- node_id, before comms is initialized) would see nil and crash at boot.
+-- Generates and persists the SAME "node-<id>" scheme here so a later
+-- network.lua call reads back the identical, already-written id instead
+-- of generating a second, different one.
+function utils.read_node_id_or_generate(path)
+  local target = path or CONFIG.NODE_ID_PATH
+  local existing = utils.read_node_id(target)
+  if existing then return existing end
+  local generated = ("node-%s"):format(tostring(os.getComputerID and os.getComputerID() or "unknown"))
+  if target then
+    utils.ensure_dir(fs.getDir(target))
+    local file = fs.open(target, "w")
+    if file then file.write(generated); file.close() end
+  end
+  return generated
+end
+
 function utils.build_log_name(base, node_id)
   local prefix = tostring(base or CONFIG.LOGGER_DEFAULT_PREFIX):lower()
   if not node_id or node_id == "" then return prefix end
