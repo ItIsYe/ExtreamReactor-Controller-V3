@@ -136,7 +136,7 @@ return {
     { path = "nodes/rt/discovery_runtime.lua", size_bytes = 12388, hash = "1594b2fc", required_for={"RT"} },
     { path = "nodes/rt/flow_apply_helpers.lua", size_bytes = 4274, hash = "ee801517", required_for={"RT"} },
     { path = "nodes/rt/health_payload.lua", size_bytes = 2723, hash = "7a3f83b2", required_for={"RT"} },
-    { path = "nodes/rt/main.lua", size_bytes = 48605, hash = "fab720ec", required_for={"RT"} },
+    { path = "nodes/rt/main.lua", size_bytes = 49636, hash = "208cb3de", required_for={"RT"} },
     { path = "nodes/rt/module_lifecycle.lua", size_bytes = 30245, hash = "fd2b9b6b", required_for={"RT"} },
     { path = "nodes/rt/monitor_ui.lua", size_bytes = 14178, hash = "afac43b4", required_for={"RT"} },
     { path = "nodes/rt/mockup_pages.lua", size_bytes = 16815, hash = "a497111e", required_for={"RT"} },

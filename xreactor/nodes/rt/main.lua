@@ -428,6 +428,24 @@ end
 local function discover()
   discovery_runtime.discover(build_discovery_context())
   devices.last_scan_ts = os.epoch("utc")
+  -- CC:Tweaked peripheral names are not guaranteed stable across a wired-
+  -- modem reconnect -- if one shifts, reactor_names.lua's name-keyed alias
+  -- silently stops matching and this reactor falls back to its technical
+  -- ID everywhere downstream (RT's own UI, Master, and FUEL's route
+  -- picker, which all read registry entry.alias off the SAME broadcast).
+  -- Surface that immediately as a visible warning instead of letting it
+  -- look like a name-propagation bug in FUEL/Master.
+  if reactor_names.completed == true then
+    for _, entry in ipairs(registry:get_bound_devices("reactor")) do
+      if not entry.alias then
+        warn_once("reactor_no_alias:" .. tostring(entry.name), string.format(
+          "Reaktor %s hat keinen zugewiesenen Namen (reactor_names.lua). Moeglich: " ..
+          "CC:Tweaked hat den Peripherie-Namen nach einem Reconnect geaendert. " ..
+          "Master/FUEL zeigen fuer diesen Reaktor die technische ID statt des Namens.",
+          tostring(entry.name)))
+      end
+    end
+  end
 end
 
 -- After DISCOVERY_STABLE_STREAK unchanged scans in a row (binding_
