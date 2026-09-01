@@ -230,7 +230,6 @@ end
 -- ── Turbinen-Initialisierung ─────────────────────────────────────────────────
 
 function M.init_turbine_ctrl(ctx)
-  ctx.flow_apply_helpers.reset_log_state()
   ctx.turbine_ctrl_store = {}
   ctx.autonom_state.turbines = {}
   local turbines = ctx.config.turbines or {}
