@@ -114,19 +114,36 @@ function M.new(opts)
     end
   end
 
+  -- node.health.status uses the health module's own OK/DEGRADED/DOWN enum;
+  -- node.status (read everywhere else -- rt_sync.lua's evaluate_rt_node()/
+  -- mode_sync_action(), startup_sequencer.lua, the master UI badges) expects
+  -- the separate constants.status_levels enum (OK/LIMITED/WARNING/EMERGENCY/
+  -- OFFLINE/MANUAL). Translate at this boundary instead of copying the raw
+  -- health.status value straight across: "DEGRADED"/"DOWN" matched none of
+  -- those consumers' checks, so a comms-degraded or fully offline node was
+  -- silently never recognized as OFFLINE/WARNING outside of node.health
+  -- itself (e.g. rt_sync.lua kept treating an offline RT node as
+  -- controllable and assignable, since its OFFLINE guard never matched).
+  local function health_status_to_level(status)
+    if status == health.status.DOWN then return constants.status_levels.OFFLINE end
+    if status == health.status.DEGRADED then return constants.status_levels.WARNING end
+    if status == health.status.OK then return constants.status_levels.OK end
+    return nil
+  end
+
   local function assign_node_status_from_health(node, origin)
     local previous_status = node.status
     local health_payload = node.health
     local computed = previous_status
     if health_payload and health_payload.status then
-      computed = health_payload.status
+      computed = health_status_to_level(health_payload.status) or previous_status or constants.status_levels.OK
     end
     local reasons = reasons_to_set(health_payload and health_payload.reasons)
     local shutdown_state = node.last_setpoints and node.last_setpoints.assignment_state
     local workflow_stage = node.shutdown_workflow and node.shutdown_workflow.stage or nil
     local controlled_shutdown = shutdown_state == "shutdown" or shutdown_state == "shed" or shutdown_state == "standby" or
         workflow_stage == "RAMPDOWN" or workflow_stage == "REQUEST_STATE" or workflow_stage == "REQUESTED" or workflow_stage == "WAITING_STATE"
-    if controlled_shutdown and computed == health.status.DEGRADED then
+    if controlled_shutdown and computed == constants.status_levels.WARNING then
       if reasons[health.reasons.COMMS_DOWN] ~= true and reasons[health.reasons.PROTO_MISMATCH] ~= true and reasons[health.reasons.DISCOVERY_FAILED] ~= true then
         computed = constants.status_levels.OK
         log(("Node %s suppresses degraded during controlled shutdown: state=%s assign=%s reasons=%s source=%s"):format(
@@ -357,7 +374,9 @@ function M.new(opts)
         nodes[mismatch_id].health = nodes[mismatch_id].health or health.new({})
         nodes[mismatch_id].health.status = health.status.DEGRADED
         nodes[mismatch_id].health.reasons = { [health.reasons.PROTO_MISMATCH] = true }
-        nodes[mismatch_id].status = health.status.DEGRADED
+        -- node.status uses constants.status_levels, not health.status --
+        -- see health_status_to_level()/assign_node_status_from_health() above.
+        nodes[mismatch_id].status = constants.status_levels.WARNING
         nodes[mismatch_id].last_seen = os.epoch("utc")
         nodes[mismatch_id].last_seen_str = master_time_label()
         nodes[mismatch_id].proto_ver = message.payload.proto_ver

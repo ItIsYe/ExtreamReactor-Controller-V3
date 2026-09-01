@@ -305,9 +305,14 @@ function M.new(opts)
 
   local function energy_status_key(model)
     local total = model and model.total or {}
-    local pct = tonumber(total.percent)
+    local ratio = tonumber(total.percent)
     if model and model.degraded then return "WARNING" end
-    if not pct then return "muted" end
+    if not ratio then return "muted" end
+    -- total.percent is a 0-1 ratio (see format_percent()/status_from_percent()
+    -- above); the emergency_below_pct/warning_below_pct/limited_above_pct
+    -- thresholds (defaults and the optional operator override file) are
+    -- authored on a 0-100 scale, so convert once before comparing.
+    local pct = ratio * 100
     local emergency_below, warning_below, limited_above = 15, 30, 95
     local cfg_path = "/xreactor/config/ampel_thresholds.lua"
     if fs and fs.exists and fs.exists(cfg_path) then

@@ -213,7 +213,9 @@ function rules:evaluate(context)
         table.insert(matrices, { matrix = matrix, node = node })
       end
       local node_reasons = node.health and node.health.reasons
-      local comms_down = has_reason(node_reasons, health.reasons.COMMS_DOWN) or node.status == health.status.DOWN or node.offline == true
+      -- node.status uses constants.status_levels (OFFLINE), not health.status
+      -- (DOWN) -- see message_handlers.lua's health_status_to_level().
+      local comms_down = has_reason(node_reasons, health.reasons.COMMS_DOWN) or node.status == constants.status_levels.OFFLINE or node.offline == true
       local matrix_missing = (not comms_down)
         and node.offline ~= true
         and node.stale ~= true
