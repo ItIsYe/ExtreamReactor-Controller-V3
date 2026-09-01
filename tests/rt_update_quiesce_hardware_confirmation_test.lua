@@ -18,7 +18,7 @@ local turbine={setFluidFlowRateMax=function(v) flow=v end,getFluidFlowRateMax=fu
   setInductorEngaged=function(v) coil=v end,getInductorEngaged=function() return coil end}
 local tctx={config={turbines={'T1'}},CONFIG={START_FLOW=100,TURBINE_MODE_RAMP='RAMP'},peripherals={turbines={T1=turbine}},utils={safe_wrap=function() return turbine end},
   capability_cache={turbines={}},turbine_ctrl_store={},autonom_state={turbines={}},binding={missing_devices_message=function() return '' end,build_policy=function() return {} end},
-  runtime_config={configured_reactors={},configured_turbines={}},flow_apply_helpers={reset_log_state=function() end},log=function() end,safe_wrapped_call=function(obj,m,...) return pcall(obj[m],...) end,
+  runtime_config={configured_reactors={},configured_turbines={}},log=function() end,safe_wrapped_call=function(obj,m,...) return pcall(obj[m],...) end,
   safety={clamp=function(v,a,b) return math.max(a,math.min(b,v)) end},CONFIG={START_FLOW=100,TURBINE_MODE_RAMP='RAMP',MIN_FLOW=0,MAX_FLOW=2000}}
 local tok=tc.apply_update_quiesce(tctx)
 assert(tok==true and flow==0 and active==false and coil==true,'turbine quiesce must confirm zero flow/inactive/coil')
