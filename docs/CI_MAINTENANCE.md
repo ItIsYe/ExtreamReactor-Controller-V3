@@ -75,3 +75,13 @@ Alle `uses:` Einträge in `.github/workflows/` auf aktuelle Commit-SHAs prüfen:
 - node-57 Peer-down-Ursache: Wireless Modem auf 4 Kanälen → strukturelles Netzwerkproblem
 - node-56 Heartbeat-Delay → Server-Lag
 - VALVE-Nodes node-70/74 gelegentliche Aussetzer → Verbindungsinstabilität
+
+## Stolperfalle: `scripts/package_release.py --sync`
+
+Läuft nach Manifest-Änderungen nötig (z.B. `manifest_file_count` in
+`xreactor/release.lua`), hat aber zwei Nebenwirkungen die vor dem Commit
+manuell korrigiert werden müssen:
+- setzt `commit_sha` in `xreactor/release.lua` auf den echten Git-SHA —
+  dieses Repo nutzt aber bewusst den festen Wert `"beta"`
+  (siehe `tests/release_metadata_consistency_test.lua`) → manuell zurücksetzen
+- erzeugt ein untracked `dist/xreactor-release.zip` → `rm -rf dist`

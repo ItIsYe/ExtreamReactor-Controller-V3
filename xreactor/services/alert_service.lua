@@ -266,7 +266,7 @@ function alert_service:tick()
   -- fehlt der Speaker oder ist opts.speaker_alarm nicht gesetzt, passiert
   -- hier einfach nichts.
   if self.speaker_alarm then
-    local counts = self:get_counts_by_severity()
+    local counts = self:get_counts()
     local critical_active = (counts.CRITICAL or 0) > 0
     if critical_active then
       pcall(self.speaker_alarm.play, "alarm")

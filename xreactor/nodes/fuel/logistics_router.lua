@@ -661,11 +661,6 @@ function M:get_summary()
       connected     = r.reactor_id ~= nil and r.inlet ~= nil,
     }
   end
-  local total_routes, active_routes = 0, 0
-  for _, r in ipairs(reactor_status) do
-    total_routes = total_routes + 1
-    if r.connected then active_routes = active_routes + 1 end
-  end
   local active_tx = s.rs_router and type(s.rs_router.get_active_transaction) == "function"
     and s.rs_router:get_active_transaction() or nil
   if s.current_request and active_tx
@@ -693,9 +688,6 @@ function M:get_summary()
     bridge         = s.bridge and s.bridge.name or nil,
     reactors       = reactor_status,
     waste_outlets  = #s.waste_outlets,
-    -- ui_pages.lua's "ROUTEN"-Anzeige braucht beide Felder.
-    total_routes   = total_routes,
-    active_routes  = active_routes,
     -- Deckt den ganzen Entscheidungs-/Lieferzyklus ab (das kurze Ventil-
     -- Fenster bleibt separat ueber rs_router:get_active_route() verfuegbar).
     current_request = current_request,

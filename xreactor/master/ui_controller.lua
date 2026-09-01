@@ -475,69 +475,62 @@ function M.new(opts)
     -- rollenspezifischen rt-Modell oben (das nur RT-Nodes enthält). LOG
     -- wird bewusst als "nicht kritisch" markiert — Wartung am Log-Collector
     -- soll keine Anlagenstörung auslösen, nur den Node selbst betreffen.
+    -- P-UICTL-LOOP: die AUX-Seiten "Maintenance"/"Updates"/"System Map"
+    -- lasen bisher je einen eigenen `for id, node in pairs(c.nodes) do`
+    -- Durchlauf -- keine der drei liest Werte, die eine der anderen
+    -- ableitet (nur rohe node.*-Felder, keine Abhaengigkeit vom grossen
+    -- Haupt-Loop oben), daher gefahrlos zu EINEM Durchlauf zusammengelegt.
+    -- Der grosse Haupt-Loop oben (RT/Energy/Fuel/... Modelle) bleibt
+    -- bewusst unangetastet -- siehe dessen eigener Kommentar oben zum
+    -- Rewrite-Risiko einer weiteren Aufspaltung.
+    local function severity_rank(status)
+      local ranks = { EMERGENCY = 5, red = 5, WARNING = 4, orange = 4, LIMITED = 3, yellow = 3, OK = 1, green = 1, OFFLINE = 0, muted = 0 }
+      return ranks[tostring(status or "")] or 2
+    end
     local maintenance_nodes = {}
+    local update_nodes = {}
+    local role_status = {}
+    local role_counts = {}
     for id, node in pairs(c.nodes or {}) do
       local role = tostring(node.role or "?")
+      local offline = node.offline == true
+      local stale = node.stale == true
       local in_maintenance = node.maintenance_mode == true
-      local status = "OK"
+
+      local maint_status = "OK"
       if in_maintenance then
-        status = (role == c.constants.roles.LOG_COLLECTOR) and "LIMITED" or "WARNING"
+        maint_status = (role == c.constants.roles.LOG_COLLECTOR) and "LIMITED" or "WARNING"
       end
       maintenance_nodes[#maintenance_nodes + 1] = {
         id = id,
         role = role,
         maintenance_mode = in_maintenance,
-        status = status,
+        status = maint_status,
         last_seen_age = node.last_seen_age,
         -- master/ui/maintenance.lua prueft node.offline/node.stale fuer die
         -- OFFLINE-Statusanzeige -- muessen hier durchgereicht werden.
-        offline = node.offline == true,
-        stale = node.stale == true,
+        offline = offline,
+        stale = stale,
       }
-    end
-    table.sort(maintenance_nodes, function(a, b)
-      if a.role ~= b.role then return a.role < b.role end
-      return tostring(a.id) < tostring(b.id)
-    end)
-    local maintenance_model = { nodes = maintenance_nodes }
 
-    -- AUX-Seite "Updates" (Feature, 2026-07-02): Node-Version-Übersicht.
-    -- node.manifest_version wird von message_handlers.lua aus dem
-    -- HEARTBEAT-Payload gespeichert (siehe dort, "Feature 2026-07-02").
-    local update_nodes = {}
-    for id, node in pairs(c.nodes or {}) do
       update_nodes[#update_nodes + 1] = {
         id = id,
-        role = tostring(node.role or "?"),
+        role = role,
         manifest_version = node.manifest_version,
-        offline = node.offline == true,
-        stale = node.stale == true,
+        offline = offline,
+        stale = stale,
       }
-    end
-    table.sort(update_nodes, function(a, b)
-      if a.role ~= b.role then return a.role < b.role end
-      return tostring(a.id) < tostring(b.id)
-    end)
-    local updates_model = { nodes = update_nodes }
 
-    -- AUX-Seite "System Map" (Feature, 2026-07-02): Zustand pro Rolle
-    -- aggregiert (nicht pro einzelnem Node) fuer die grafische
-    -- Anlagenuebersicht. Prioritaet je Rolle: der schlechteste Einzelzustand
-    -- gewinnt (analog zur MASTER-Gesamtampel-Logik) — z.B. wenn 1 von 3
-    -- RT-Nodes im SAFE-Zustand ist, zeigt der gesamte RT-Block Rot.
-    local function severity_rank(status)
-      local ranks = { EMERGENCY = 5, red = 5, WARNING = 4, orange = 4, LIMITED = 3, yellow = 3, OK = 1, green = 1, OFFLINE = 0, muted = 0 }
-      return ranks[tostring(status or "")] or 2
-    end
-    local role_status = {}
-    local role_counts = {}
-    for id, node in pairs(c.nodes or {}) do
-      local role = tostring(node.role or "?")
+      -- AUX-Seite "System Map": Zustand pro Rolle aggregiert (nicht pro
+      -- einzelnem Node) fuer die grafische Anlagenuebersicht. Prioritaet je
+      -- Rolle: der schlechteste Einzelzustand gewinnt (analog zur
+      -- MASTER-Gesamtampel-Logik) — z.B. wenn 1 von 3 RT-Nodes im
+      -- SAFE-Zustand ist, zeigt der gesamte RT-Block Rot.
       role_counts[role] = (role_counts[role] or 0) + 1
       local this_status = "OK"
-      if node.offline or node.stale then
+      if offline or stale then
         this_status = "OFFLINE"
-      elseif node.maintenance_mode == true then
+      elseif in_maintenance then
         this_status = "LIMITED"
       elseif role == c.constants.roles.RT_NODE then
         local node_state = tostring(node.state or "")
@@ -549,6 +542,18 @@ function M.new(opts)
         role_status[role] = this_status
       end
     end
+    table.sort(maintenance_nodes, function(a, b)
+      if a.role ~= b.role then return a.role < b.role end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local maintenance_model = { nodes = maintenance_nodes }
+
+    table.sort(update_nodes, function(a, b)
+      if a.role ~= b.role then return a.role < b.role end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local updates_model = { nodes = update_nodes }
+
     local system_map_model = {
       role_status = role_status,
       role_counts = role_counts,
@@ -588,6 +593,12 @@ function M.new(opts)
       reactor_fill_target_pending = reactor_fill_edit.pending,
     }
 
+    -- BEKANNTE LUECKE: resources bleibt bewusst {} -- ui/resources.lua
+    -- erwartet model.fuel/.water/.node_details/.comms, aber diese Aggregation
+    -- wurde nie implementiert (Fuel/Water-Summary lebt stattdessen unter
+    -- energy.resources mit einem viel schmaleren Feld-Layout, siehe oben).
+    -- ui/resources.lua zeigt bei leerem Model einen expliziten "keine Daten"-
+    -- Hinweis statt irrefuehrender Nullwerte/Fehlerbadges.
     return { overview = overview, rt = rt, energy = energy, resources = {}, alerts = alerts_model, alarms = alarms_model, maintenance = maintenance_model, updates = updates_model, system_map = system_map_model, config_editor = config_editor_model }
   end
 
@@ -613,6 +624,8 @@ function M.new(opts)
       overview = { system_status = "WARNING", profile_list = { "BASELOAD", "PEAK", "IDLE" }, nodes = {}, alert_rows = {}, alert_summary = "Modellfehler — siehe Logs", alert_counts = { INFO = 0, WARN = 1, CRITICAL = 0 }, energy_overview = { percent = 0, status = "OFFLINE", trend = "Trend stabil" }, rt_online = 0, power_actual = 0, clock_label = os.date("!%H:%M UTC"), ops_hints = { "Modellaufbau fehlgeschlagen, Daten folgen in Kürze" }, peer_summary = "Peers live=0 stale=0 rt=0 energy-matrix=0 src=0", rt_summary = "RT active=0 startup=0 shutdown=0 stale=0 assigned=0 unassigned=0 unavailable=0 master=0 local=0", controls_summary = "Profile=- | AUTO=AUS | RT-HOLD=AUS", nodes_total = 0, nodes_live = 0, nodes_stale = 0, system_status_line = "Initialisierung...", node_status_line = "Nodes live=0 stale=0", control_status_line = "AUTO aus | RT-Hold aus" },
       rt = { rt_nodes = {}, queue = {}, rt_active = 0, rt_startup = 0, rt_shutdown = 0, assigned = 0, unassigned = 0, unavailable = 0, local_control = 0, master_control = 0, assignment_state = "UNASSIGNED", assignment_reason = "-", control_source = "LOCAL", display_mode = "RT-Fleet aktiv", fleet_summary = "-", queue_summary = "-" },
       energy = { stored = 0, capacity = 0, input = 0, output = 0, matrices = {}, resources = {}, support_nodes = {}, status = "OFFLINE", aggregate_percent = 0, mode = "-", energy_summary = "Energy 0.0% | Stored 0.0/0.0 | In 0.0 Out 0.0 | Mode - | Matrices 0", matrix_count = 0, matrix_sources = 0, support_online = 0, support_stale = 0, matrix_only = false },
+      -- resources: siehe Kommentar in build_models() -- bekannte Luecke,
+      -- ui/resources.lua zeigt bei leerem Model einen "keine Daten"-Hinweis.
       resources = {},
       alerts = { counts = { INFO = 0, WARN = 0, CRITICAL = 0 }, summary = "Keine aktiven Meldungen", active = {}, history = {}, mutes = { rules = {}, nodes = {} }, now_ms = os.epoch('utc'), config = {} },
       alarms = { alarms = {}, header_blink = false }
@@ -763,6 +776,38 @@ function M.new(opts)
     -- alle anderen Actions.
     if action.type == "alarm_ack" and action.alarm_id and c.alert_service and type(c.alert_service.ack) == "function" then
       c.alert_service:ack(action.alarm_id)
+      return true
+    end
+    -- Detaillierte Alerts-Ansicht (master/ui/alerts.lua, AUX-Monitor):
+    -- ACK/ACK VIS/ACK ALL/MUTE RULE/MUTE NODE erzeugen dieselben Action-
+    -- Tables wie alarm_ack oben, wurden hier aber bisher nicht behandelt --
+    -- die Buttons taten sichtbar nichts.
+    if action.type == "alert_ack" and action.id and c.alert_service and type(c.alert_service.ack) == "function" then
+      c.alert_service:ack(action.id)
+      return true
+    end
+    if action.type == "alert_ack_visible" and action.ids and c.alert_service and type(c.alert_service.ack_visible) == "function" then
+      c.alert_service:ack_visible(action.ids)
+      return true
+    end
+    if action.type == "alert_ack_all" and c.alert_service and type(c.alert_service.ack_all) == "function" then
+      c.alert_service:ack_all()
+      return true
+    end
+    if action.type == "alert_mute_rule" and action.code and c.alert_service and type(c.alert_service.mute_rule) == "function" then
+      c.alert_service:mute_rule(action.code, action.minutes)
+      return true
+    end
+    if action.type == "alert_unmute_rule" and action.code and c.alert_service and type(c.alert_service.unmute_rule) == "function" then
+      c.alert_service:unmute_rule(action.code)
+      return true
+    end
+    if action.type == "alert_mute_node" and action.node_id and c.alert_service and type(c.alert_service.mute_node) == "function" then
+      c.alert_service:mute_node(action.node_id, action.minutes)
+      return true
+    end
+    if action.type == "alert_unmute_node" and action.node_id and c.alert_service and type(c.alert_service.unmute_node) == "function" then
+      c.alert_service:unmute_node(action.node_id)
       return true
     end
     return false

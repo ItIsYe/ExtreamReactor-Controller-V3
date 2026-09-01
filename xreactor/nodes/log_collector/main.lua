@@ -499,9 +499,16 @@ local function disk_for_role(role)
   if #stats.disks == 0 then return nil end
   local idx = role_index(role)
   if not idx then
-    -- Unbekannte Rolle: wie zuvor Fallback auf irgendeine Disk, damit
-    -- nichts komplett verloren geht.
-    return stats.disks[stats.disk_index] or stats.disks[1]
+    -- Unbekannte Rolle: Fallback auf irgendeine Disk, damit nichts komplett
+    -- verloren geht. stats.disk_index rotiert nach jeder Zuweisung ueber
+    -- alle Disks (statt wie zuvor dauerhaft auf 1 stehenzubleiben) -- sonst
+    -- landen alle Logs unbekannter Rollen dauerhaft auf derselben Disk,
+    -- waehrend die anderen leer bleiben.
+    stats.disk_index = stats.disk_index or 1
+    if stats.disk_index > #stats.disks then stats.disk_index = 1 end
+    local disk = stats.disks[stats.disk_index] or stats.disks[1]
+    stats.disk_index = (stats.disk_index % #stats.disks) + 1
+    return disk
   end
 
   -- Round-Robin ueber alle Disks der Rolle (persistenter Cursor pro Rolle,
@@ -1104,7 +1111,7 @@ end
 
 -- ── Packet handling ─────────────────────────────────────────────────────────
 local function valid_log_event(message)
-  return type(message) == "table" and message.type == "LOG_EVENT"
+  return type(message) == "table" and (message.type == "LOG_EVENT" or message.type == "LOG_EVENT_BATCH")
 end
 
 local function handle_log_event(message)
@@ -1132,6 +1139,27 @@ local function handle_log_event(message)
     flush_due()
   else
     if err ~= "paused" then stats.last_error = err end
+  end
+end
+
+-- Senders (core/utils.lua) coalesce several log lines emitted in quick
+-- succession into ONE modem.transmit() as { type="LOG_EVENT_BATCH",
+-- entries={payload1, payload2, ...} } instead of one transmission per
+-- line -- each entry is a self-contained payload with its own event_id, so
+-- it's processed exactly like a standalone LOG_EVENT (dedupe/ack/write all
+-- unchanged), just pcall-isolated per entry so one malformed entry can't
+-- drop the rest of the batch.
+local function handle_log_event_batch(message)
+  local entries = message.entries
+  if type(entries) ~= "table" then return end
+  for _, entry in ipairs(entries) do
+    if type(entry) == "table" then
+      local ok, err = pcall(handle_log_event, entry)
+      if not ok then
+        stats.dropped = stats.dropped + 1
+        stats.last_error = "batch entry crashed: " .. tostring(err):sub(1, 70)
+      end
+    end
   end
 end
 
@@ -1231,7 +1259,12 @@ local function run()
         local channel = event[3]
         local message = event[5]
         if channel == CHANNEL and valid_log_event(message) then
-          local ok, err = pcall(handle_log_event, message)
+          local ok, err
+          if message.type == "LOG_EVENT_BATCH" then
+            ok, err = pcall(handle_log_event_batch, message)
+          else
+            ok, err = pcall(handle_log_event, message)
+          end
           if not ok then
             stats.dropped = stats.dropped + 1
             stats.last_error = "handle crashed: " .. tostring(err):sub(1, 70)

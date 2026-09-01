@@ -37,8 +37,30 @@
 --   ctx.load_capacity_cache -- function() -> cache | nil
 --   ctx.current_state      -- function() -> STATE.*
 --   ctx.STATE      -- { INIT, AUTONOM, MASTER, SAFE }
+--   ctx.modules    -- optional: modules_registry (see cached_coolant_ratio())
 
 local M = {}
+
+-- module_lifecycle.update_module_states() always runs before
+-- updateReactorControl() in the same control_tick() (safety-first
+-- ordering, see main.lua), and unconditionally refreshes every reactor
+-- module's .coolant_safety_diag every tick -- so if a module for this
+-- reactor name exists, its diag is guaranteed fresh for THIS tick and can
+-- be reused instead of calling ctx.fluid.read_coolant_sample() a second
+-- time. Returns (ratio, true) when reused, or (nil, false) when no module
+-- was found (e.g. during early startup) -- callers must fall back to a
+-- direct read in that case, exactly like before this optimization existed.
+local function cached_coolant_ratio(ctx, name)
+  local modules = ctx.modules
+  if type(modules) ~= "table" then return nil, false end
+  for _, module in pairs(modules) do
+    if module.type == "reactor" and module.name == name then
+      local diag = module.coolant_safety_diag
+      return diag and diag.coolant_ratio or nil, true
+    end
+  end
+  return nil, false
+end
 
 -- ── Rod-Grenzen und Clamping ────────────────────────────────────────────────
 
@@ -391,11 +413,7 @@ function M.applyReactorRods(ctx, target, allow_overmax, source)
     local cfg_min, cfg_max = M.get_effective_regulator_rod_caps(ctx)
     local cap_clamped, cap_reason = ctx.rails.clamp_with_reason(
       clamped, cfg_min, cfg_max)
-    if cap_reason == "MIN" then
-    elseif cap_reason == "MAX" then
-    end
     clamped = cap_clamped
-  elseif allow_overmax then
   end
 
   if ctx.last_applied_rods == clamped then
@@ -600,8 +618,11 @@ function M.controlReactorsIndividually(ctx)
     end
 
     local reactor = ctx.peripherals.reactors[name]
-    local coolant_sample = reactor and ctx.fluid.read_coolant_sample(reactor, ctx.safe_wrapped_call) or nil
-    local coolant_ratio = coolant_sample and coolant_sample.coolant_ratio or nil
+    local coolant_ratio, coolant_ratio_cached = cached_coolant_ratio(ctx, name)
+    if not coolant_ratio_cached then
+      local coolant_sample = reactor and ctx.fluid.read_coolant_sample(reactor, ctx.safe_wrapped_call) or nil
+      coolant_ratio = coolant_sample and coolant_sample.coolant_ratio or nil
+    end
 
     local applied_rods, ramp_diag = ctx.rails.ramp_target(
       current_rods, target_rods, rod_cfg, {
@@ -662,11 +683,8 @@ function M.controlReactor(ctx)
 
   do
     local cfg_min, cfg_max = M.get_effective_regulator_rod_caps(ctx)
-    local clamped_target, clamp_reason = ctx.rails.clamp_with_reason(
+    local clamped_target = ctx.rails.clamp_with_reason(
       target_rods, cfg_min, cfg_max)
-    if clamp_reason == "MIN" then
-    elseif clamp_reason == "MAX" then
-    end
     target_rods = clamped_target
   end
 
@@ -689,10 +707,13 @@ function M.controlReactor(ctx)
 
   local min_coolant_ratio
   for _, name in ipairs(ctx.config.reactors or {}) do
-    local reactor = ctx.peripherals.reactors[name]
-    local sample = reactor and ctx.fluid.read_coolant_sample(
-      reactor, ctx.safe_wrapped_call) or nil
-    local ratio = sample and sample.coolant_ratio or nil
+    local ratio, ratio_cached = cached_coolant_ratio(ctx, name)
+    if not ratio_cached then
+      local reactor = ctx.peripherals.reactors[name]
+      local sample = reactor and ctx.fluid.read_coolant_sample(
+        reactor, ctx.safe_wrapped_call) or nil
+      ratio = sample and sample.coolant_ratio or nil
+    end
     if type(ratio) == "number" and (min_coolant_ratio == nil or ratio < min_coolant_ratio) then
       min_coolant_ratio = ratio
     end
@@ -708,8 +729,6 @@ function M.controlReactor(ctx)
   applied_rods = ctx.safety.clamp(applied_rods, ctx.CONFIG.ROD_MIN, ctx.CONFIG.ROD_MAX)
 
   if applied_rods == current_rods then
-    if ramp_diag and ramp_diag.reason == "RAMP_APPLIED" then
-    end
     return
   end
 
@@ -744,15 +763,6 @@ function M.controlReactor(ctx)
       tostring(guard_diag and guard_diag.blocked_opening == true),
       tostring(guard_diag and guard_diag.forced_closing == true),
       tostring(guard_diag and guard_diag.unavailable == true)))
-
-    if limited then
-    end
-    if ramp_diag and ramp_diag.coolant_limited then
-    end
-    if guard_diag and guard_diag.blocked_opening then
-    end
-    if guard_diag and guard_diag.forced_closing then
-    end
   end
 end
 
@@ -769,9 +779,42 @@ function M.updateReactorControl(ctx)
     local limit       = safe_cfg.max_temperature    or 2000
     local hysteresis  = safe_cfg.temperature_hysteresis or 50
     local recover_at  = limit - hysteresis  -- z.B. 1950°C
+    -- Sustained-Bestaetigung fuer den Auto-Reset nach einer Kuehlmittel-
+    -- Eskalationssperre: der rohe (nicht vom Zero-Glitch-Filter maskierte)
+    -- Messwert muss ueber recover_threshold liegen, und zwar ununterbrochen
+    -- fuer mindestens coolant_recovery_confirm_ms -- ein einzelner guter
+    -- Tick reicht nicht, um Mess-Rauschen an der Schwelle auszuschliessen.
+    local recovery_confirm_ms = tonumber(safe_cfg.coolant_recovery_confirm_ms) or 4000
+    local now_ms = os.epoch and os.epoch("utc") or (now * 1000)
     local all_cool    = true
+    local coolant_locked = false
     for _, name in ipairs(ctx.config.reactors or {}) do
       local reactor = ctx.peripherals and ctx.peripherals.reactors and ctx.peripherals.reactors[name]
+      local module  = ctx.modules and ctx.modules[name]
+      if module and module.coolant_trip_locked then
+        local diag = module.coolant_safety_diag
+        local recovered_now = diag
+          and diag.measurement_valid
+          and type(diag.coolant_ratio_raw) == "number"
+          and type(diag.recover_threshold) == "number"
+          and diag.coolant_ratio_raw >= diag.recover_threshold
+        if recovered_now then
+          module.coolant_recovery_since_ms = module.coolant_recovery_since_ms or now_ms
+          if (now_ms - module.coolant_recovery_since_ms) >= recovery_confirm_ms then
+            module.coolant_trip_locked = false
+            module.coolant_trip_count = 0
+            module.coolant_trip_window_start = nil
+            module.coolant_recovery_since_ms = nil
+            ctx.log("INFO", ("Coolant-Trip-Sperre automatisch aufgehoben module=%s: Kuehlmittel seit %dms nachweislich ueber recover_threshold=%.3f"):format(
+              tostring(module.id), recovery_confirm_ms, diag.recover_threshold))
+          else
+            coolant_locked = true
+          end
+        else
+          module.coolant_recovery_since_ms = nil
+          coolant_locked = true
+        end
+      end
       if reactor then
         local ok_f, fuel = pcall(function() return reactor.getFuelTemperature() end)
         local ok_c, cas  = pcall(function() return reactor.getCasingTemperature() end)
@@ -780,6 +823,17 @@ function M.updateReactorControl(ctx)
                   or recover_at + 1  -- unbekannt → sicher bleiben
         if temp >= recover_at then all_cool = false; break end
       end
+    end
+    -- Nach wiederholten Kuehlmittel-Trips (siehe module_lifecycle.lua) wird
+    -- der automatische Temperatur-basierte SAFE-Exit gesperrt: Temperatur
+    -- allein sagt nichts darueber aus, ob der Kuehlmitteltank tatsaechlich
+    -- wieder ausreichend gefuellt ist. Die Sperre loest sich von selbst,
+    -- sobald der reale Kuehlmittelwert nachweislich (sustained) wieder ueber
+    -- der Recovery-Schwelle liegt -- kein manueller Eingriff noetig.
+    if coolant_locked then
+      ctx.warn_once("safe_exit_coolant_locked",
+        "SAFE-Mode Auto-Exit gesperrt: wiederholte Kuehlmittel-Trips -- wartet auf nachgewiesene Kuehlmittel-Erholung")
+      return
     end
     if all_cool and #(ctx.config.reactors or {}) > 0 then
       ctx.log("INFO", string.format(

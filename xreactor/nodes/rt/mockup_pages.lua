@@ -228,10 +228,10 @@ function M.render_reactors(mon, model)
   local w, h = page_header(mon, model, "REAKTOREN", "3/4", "reactor")
   local s = snapshot(model)
   local reactors = s.reactors or {}
-  local count = math.min(2, #reactors)
+  local count = #reactors
 
   local top = {
-    { label = "GESAMT", value = tostring(count) .. "/2", status = count > 0 and "OK" or "WARNING", icon = "reactor" },
+    { label = "GESAMT", value = tostring(count), status = count > 0 and "OK" or "WARNING", icon = "reactor" },
     { label = "AVG TEMP", value = short(s.avg_temp, "C"), status = "OK", icon = "temperature" },
     { label = "DAMPF", value = short(s.steam_amount), status = "LIMITED", icon = "flow" },
     { label = "MASTER", value = tostring(model.master_state or "?"), status = master_key(model), icon = "master" },

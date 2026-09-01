@@ -281,8 +281,8 @@ local function init()
   services:add(discovery_service.new({
     name = "DISCOVERY", log_prefix = "DISCOVERY", registry = registry,
     discover = discovery_runner.discover, interval = config.scan_interval,
-    should_discover = function(_, ts, event, due)
-      return topology_cache and topology_cache:should_discover(ts, event, due) or due
+    should_discover = function(service, ts, event, due)
+      return topology_cache and topology_cache:should_discover(ts, event, due, service and service.interval) or due
     end,
     managed_registry = false,
     update_health = function(ok) devices.discovery_failed = not ok end

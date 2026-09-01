@@ -113,48 +113,40 @@ def validate_entries(entries, errors, seen):
     return checked
 
 
-def format_entry(entry):
-    extras = []
-    flags = entry.get("flags", {})
-    if flags.get("always"):
-        extras.append("always = true")
-    req = flags.get("required_for")
-    if req:
-        joined = ", ".join(f'"{value}"' for value in req)
-        extras.append(f"required_for = {{ {joined} }}")
-    suffix = ""
-    if extras:
-        suffix = ", " + ", ".join(extras)
-    return f'      {{ path = "{entry["path"]}", size_bytes = {entry["size_bytes"]}, hash = "{entry["hash"]}"{suffix} }},'
+SIZE_BYTES_RE = re.compile(r'size_bytes\s*=\s*\d+')
+HASH_RE = re.compile(r'hash\s*=\s*"[0-9a-f]+"')
 
 
-def write_manifest(top, base_files, dev_files, roles):
-    manifest_version = top.get("manifest_version", "6")
-    manifest_id = top.get("manifest_id", '"manifest-v6"')
-    source_ref = top.get("source_ref", '"beta"')
-    hash_algo = top.get("hash_algo", '"crc32"')
-    lines = ["return {"]
-    lines.append(f"  manifest_version = {manifest_version},")
-    lines.append(f"  manifest_id = {manifest_id},")
-    lines.append(f"  source_ref = {source_ref},")
-    lines.append(f"  hash_algo = {hash_algo},")
-    lines.append("  base_files = {")
-    for e in base_files:
-        lines.append(format_entry(e))
-    lines.append("  },")
-    lines.append("  dev_files = {")
-    for e in dev_files:
-        lines.append(format_entry(e))
-    lines.append("  },")
-    lines.append("  roles = {")
-    for role, entries in roles.items():
-        lines.append(f"    {role} = {{")
-        for e in entries:
-            lines.append(format_entry(e))
-        lines.append("    },")
-    lines.append("  }")
-    lines.append("}")
-    MANIFEST_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+def write_manifest_inplace(path: pathlib.Path, entries):
+    # Frueher hat write_manifest() die komplette Datei aus den geparsten
+    # Feldern neu zusammengesetzt (siehe format_entry()) -- geparst wurden
+    # dabei nur "always" und "required_for" (parse_flags()), sodass jedes
+    # "optional=true"/"feature=\"...\""-Flag beim Neuaufbau stillschweigend
+    # verloren ging, und JEDER Kommentar in der Datei (Zeilen wie die
+    # Erklaerung ueber optional/pocket_client.lua) mit weggeworfen wurde,
+    # weil die Regeneration nur strukturierte Eintraege kennt, keinen
+    # Freitext. Ersetzt jetzt stattdessen NUR size_bytes/hash direkt in der
+    # jeweiligen Original-Zeile (Regex-Substitution), der Rest der Datei --
+    # Kommentare, Flags, Formatierung, Reihenfolge -- bleibt byteidentisch
+    # zum Original erhalten.
+    text = path.read_text(encoding="utf-8")
+    by_path = {e["path"]: e for e in entries}
+    had_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    out_lines = []
+    for raw in lines:
+        entry_match = ENTRY_RE.match(raw.strip())
+        entry = entry_match and by_path.get(entry_match.group("path"))
+        if entry:
+            new_line = SIZE_BYTES_RE.sub(f'size_bytes = {entry["size_bytes"]}', raw, count=1)
+            new_line = HASH_RE.sub(f'hash = "{entry["hash"]}"', new_line, count=1)
+            out_lines.append(new_line)
+        else:
+            out_lines.append(raw)
+    new_text = "\n".join(out_lines)
+    if had_trailing_newline:
+        new_text += "\n"
+    path.write_text(new_text, encoding="utf-8")
 
 
 def all_entries(base_files, dev_files, roles):
@@ -178,7 +170,7 @@ def main():
     if args.write:
         for entry in entries:
             update_entry(entry)
-        write_manifest(top, base_files, dev_files, roles)
+        write_manifest_inplace(MANIFEST_PATH, entries)
 
     errors = []
     checked = 0

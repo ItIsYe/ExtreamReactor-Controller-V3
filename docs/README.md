@@ -1,11 +1,6 @@
 # XReactor-Dokumentationsindex
 
-**Stand: 2026-08-11**
-
-## ⚠️ Aktueller Zustand: beta ist instabil
-
-Siehe [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) für Details. Stabiler Rollback-Punkt:
-Branch `beckup-vor-audit` (SHA `fd26894c`, beta-v512, 2026-08-09).
+**Stand: 2026-09-01**
 
 ## Zuerst lesen
 
