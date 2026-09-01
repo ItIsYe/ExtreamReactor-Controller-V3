@@ -28,7 +28,18 @@ vollständig abgeschlossene Review-Durchgänge über den gesamten Code:
      (`core/discovery_stability.lua`) für WATER/FUEL/REPROCESSING, analog zum
      bestehenden RT-Muster.
 
-Beide Durchgänge wurden nach demselben Ablauf verifiziert: Syntax-Check
+3. **Installer/Auto-Update-Härtung** (Commit `d55711c6`): behebt in der Praxis
+   beobachtete Timeouts, wenn GitHub `raw.githubusercontent.com`-Anfragen der
+   Server-IP wegen zu vieler Anfragen blockiert/rate-limitet hat. Ursache:
+   alle Nodes prüften exakt im selben 120s-Takt, jede einzelne Prüfung hat den
+   CDN-Cache erzwungen umgangen (nicht nur bei Retries), und ein Fehlschlag
+   wurde im selben Takt für immer wiederholt. Fix in
+   `installer/auto_update.lua`: Cache-Bust nur noch bei Retries, ein
+   node-spezifischer Jitter (aus `os.getComputerID()`) verteilt die Checks
+   zeitlich, und wiederholte Fehlschläge verdoppeln die Wartezeit (Cap 30min)
+   statt im selben Takt weiterzuhämmern.
+
+Beide Audit-Durchgänge wurden nach demselben Ablauf verifiziert: Syntax-Check
 (`luac5.2`/`5.3 -p`) → Manifest-Resync (`scripts/manifest_sync.py --write`) →
 vollständige Lua-Testsuite (`tools/run_lua_tests.sh lua5.2`) → alle
 `tests/*_test.py` einzeln ausgeführt. Zusätzlich wurde die komplette Kette
