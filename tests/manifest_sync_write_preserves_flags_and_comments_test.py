@@ -96,21 +96,38 @@ with tempfile.TemporaryDirectory() as tmp:
         )
 
     # Jede andere, nicht veraenderte Eintragszeile muss byteidentisch bleiben.
+    # Ein echter Inhaltswechsel loest jetzt (siehe manifest_sync_write_bumps_
+    # version_test.py) zusaetzlich einen Versions-Bump aus -- das aendert
+    # neben der manipulierten Zeile auch manifest_version/manifest_id UND
+    # release.lua's eigenen Manifest-Eintrag (release.lua wird durch den
+    # Bump selbst neu geschrieben). Erwartet also genau diese 4 Zeilen,
+    # nicht mehr nur die eine manipulierte.
     original_lines = original_text.splitlines()
     new_lines = new_text.splitlines()
     if len(original_lines) != len(new_lines):
         raise SystemExit(
             f"BUG: --write changed the total line count ({len(original_lines)} -> {len(new_lines)}); "
-            "expected only the tampered entry's line to change"
+            "expected only the tampered entry's line (plus the version-bump lines) to change"
         )
     changed = [
         (i, a, b)
         for i, (a, b) in enumerate(zip(original_lines, new_lines))
         if a != b
     ]
-    if len(changed) != 1:
+    changed_prefixes = tuple(a.strip() for _, a, _ in changed)
+    expected_prefix_starts = ("manifest_version", "manifest_id", '{ path = "release.lua"')
+    unexpected = [
+        (i, a, b) for i, a, b in changed
+        if target_rel not in a and not a.strip().startswith(expected_prefix_starts)
+    ]
+    if unexpected:
         raise SystemExit(
-            f"BUG: expected exactly 1 changed line, got {len(changed)}: {changed}"
+            f"BUG: unexpected changed line(s) beyond the tampered entry and version bump: {unexpected}"
+        )
+    if len(changed) != 4:
+        raise SystemExit(
+            f"BUG: expected exactly 4 changed lines (tampered entry, manifest_version, "
+            f"manifest_id, release.lua's own entry), got {len(changed)}: {changed}"
         )
 
 print("manifest_sync_write_preserves_flags_and_comments_test.py: ok")
