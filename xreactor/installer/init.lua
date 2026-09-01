@@ -181,7 +181,10 @@ if role.label == "RT" then
     peripheral = peripheral,
     remote_update = _G.__xreactor_remote_update == true,
     output = p,
-    input = function() return read and read() or "" end,
+    -- "default" pre-fills CC:Tweaked's edit line via read()'s 4th
+    -- parameter (see reactor_naming.lua's ask_label()) so a suggested
+    -- reactor name is editable in place, not just an accept-or-retype hint.
+    input = function(default) return read and read(nil, nil, nil, default) or "" end,
     write = function(path, content) return stage_mod.write(path, content) end,
   })
   if not naming_ok then
