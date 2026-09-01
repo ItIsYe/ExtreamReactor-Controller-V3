@@ -67,7 +67,7 @@ return {
     { path = "master/config_edits.lua", size_bytes = 8693, hash = "f6e43664", required_for={"MASTER"} },
     { path = "master/context.lua", size_bytes = 5370, hash = "7e42349c", required_for={"MASTER"} },
     { path = "master/loop.lua", size_bytes = 4318, hash = "2b30d64b", required_for={"MASTER"} },
-    { path = "core/alert_rules.lua", size_bytes = 17684, hash = "c656d05c", required_for={"MASTER"} },
+    { path = "core/alert_rules.lua", size_bytes = 19847, hash = "a1322c5a", required_for={"MASTER"} },
     { path = "master/config.lua", size_bytes = 6441, hash = "eee9169b", required_for={"MASTER"} },
     { path = "master/housekeeping.lua", size_bytes = 4106, hash = "c43799c5", required_for={"MASTER"} },
     { path = "master/fuel_relay.lua", size_bytes = 3413, hash = "0b9f8c37", required_for={"MASTER"} },

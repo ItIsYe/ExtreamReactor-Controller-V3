@@ -160,6 +160,13 @@ function rules:evaluate(context)
   local matrices = {}
   local active_rt = {}
   local total_capacity = 0
+  -- Reactor names are only unique WITHIN one RT installer run
+  -- (reactor_naming.lua's own dedup) -- it has no visibility into names
+  -- already used by OTHER RT nodes. Master sees every RT node's reactor
+  -- list every cycle, so it is the only place that can actually catch a
+  -- name reused across nodes (case-insensitive, matching the installer's
+  -- own dedup rule).
+  local alias_seen = {}
   local demand = context.power_target and context.power_target > 0
   local warn_low = cfg.rpm_warn_low or 800
   local crit_high = cfg.rpm_crit_high or 1800
@@ -333,6 +340,21 @@ function rules:evaluate(context)
       local deficit = steam_target > 0 and steam_prod < steam_target * (cfg.steam_deficit_pct or 0.9)
       for _, reactor in ipairs(reactors) do
         local reactor_id = reactor.id or reactor.name
+
+        if type(reactor.alias) == "string" and reactor.alias ~= "" then
+          local alias_key = reactor.alias:lower()
+          local global_id = tostring(node.id) .. ":" .. tostring(reactor_id)
+          local occurrences = alias_seen[alias_key]
+          if not occurrences then occurrences = {}; alias_seen[alias_key] = occurrences end
+          local already_listed = false
+          for _, occ in ipairs(occurrences) do
+            if occ.global_id == global_id then already_listed = true break end
+          end
+          if not already_listed then
+            occurrences[#occurrences + 1] = { global_id = global_id, alias = reactor.alias }
+          end
+        end
+
         local rod_key = string.format("REACTOR_RODS_STUCK|%s|%s", tostring(node.id), tostring(reactor_id))
         local rod_state = rule_state(self, rod_key)
         local rods = reactor.rods_level
@@ -356,6 +378,29 @@ function rules:evaluate(context)
         end)
       end
     end
+  end
+
+  -- Emitted for every alias seen THIS cycle (not only currently-duplicate
+  -- ones) so a name that drops back to a single reactor (renamed on one
+  -- node) clears normally instead of leaving a stale active alert. An
+  -- alias that stops being sent by any node at all still leaves its state
+  -- entry un-cleared, same as this file's other per-device keys.
+  for alias_key, occurrences in pairs(alias_seen) do
+    local duplicate_key = "REACTOR_NAME_DUPLICATE|" .. alias_key
+    emit(duplicate_key, #occurrences > 1, base_opts, function()
+      local ids = {}
+      for _, occ in ipairs(occurrences) do ids[#ids + 1] = occ.global_id end
+      table.sort(ids)
+      return {
+        code = "REACTOR_NAME_DUPLICATE",
+        severity = "WARN",
+        scope = "SYSTEM",
+        source = { node_id = "MASTER", role = "MASTER" },
+        title = "Duplicate reactor name",
+        message = string.format("Name '%s' ist mehrfach vergeben: %s", occurrences[1].alias, table.concat(ids, ", ")),
+        details = { alias = occurrences[1].alias, reactors = ids }
+      }
+    end)
   end
 
   if capacity > 0 then
