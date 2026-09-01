@@ -1,52 +1,72 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-08-11 | beta-v545 (INSTABIL)**
+**Stand: 2026-09-01 | beta-v598**
 
 ---
 
-## ⚠️ KRITISCH — Aktueller Zustand
+## Aktueller Zustand: stabil
 
-**beta ist aktuell INSTABIL.** Durch Agent-Audit-PRs (#503-#513) sind mehrere Kernfunktionen kaputt gegangen:
+Der Vorfall aus 2026-08-11 (Agent-Audit-PRs #503–#513, Instabilität durch
+`ui_router.lua`-Touch-Handling, Node-Erkennung, Installer-Zweitdurchlauf) ist
+abgeschlossen. Diese PRs sind nicht mehr relevant — der Branch `beckup-vor-audit`
+wird nicht mehr als Rollback-Ziel benötigt.
 
-- **ui_router.lua Touch-Verarbeitung kaputt** — Seitenwechsel auf allen Nodes funktioniert nicht
-- **Master erkennt Nodes nicht** / Nodes gehen ständig offline
-- **Installer zweiter Durchlauf** schlägt fehl (Disk-Space für Config-Backup)
+**PR #521** (Branch `claude/code-review-bugs-gaps-ug5tff`) bündelt zwei
+vollständig abgeschlossene Review-Durchgänge über den gesamten Code:
 
-## Stabiler Rollback-Punkt
+1. **Bug-Audit** (Commit `079902fa`, 10 Findings, alle behoben, getestet, verifiziert)
+   - u.a. pcall-Mehrfachrückgabe-Bugs (`optional/pocket_query_handler.lua`,
+     `core/startup_report.lua`), Ratio/Prozent-Verwechslung in
+     `nodes/energy/ui_pages.lua`, Enum-Konflation zwischen
+     `shared/constants.status_levels` und `core/health.lua` in mehreren
+     Master-Dateien, RT-Capacity-Lock-Fix in `nodes/rt/command_handler.lua`.
+2. **Performance-Audit** (Commit `4f9121ff`, 16 Findings, alle behoben, getestet, verifiziert)
+   - u.a. Remote-Log-Batching (`core/utils.lua` + `nodes/log_collector/main.lua`),
+     redundante Peripherie-Abfragen pro Tick (RT-Reaktor/Turbinen-Cache),
+     `deep_equal()` statt `textutils.serialize()`-Vergleich in
+     `services/ui_service.lua`, generischer Discovery-Stability-Cache
+     (`core/discovery_stability.lua`) für WATER/FUEL/REPROCESSING, analog zum
+     bestehenden RT-Muster.
 
-```
-Branch: beckup-vor-audit
-SHA:    fd26894cd744f93cf66d333de7e5bd44ec24c2be
-Stand:  2026-08-09 20:15 (beta-v512)
-```
+Beide Durchgänge wurden nach demselben Ablauf verifiziert: Syntax-Check
+(`luac5.2`/`5.3 -p`) → Manifest-Resync (`scripts/manifest_sync.py --write`) →
+vollständige Lua-Testsuite (`tools/run_lua_tests.sh lua5.2`) → alle
+`tests/*_test.py` einzeln ausgeführt. Zusätzlich wurde die komplette Kette
+Installer → Manifest → Rollen-Dispatch → Node-Boot erneut end-to-end
+durchgeprüft (inkl. `manifest_transitive_require_coverage_test.lua`).
 
-**Nächste Session:** beta auf `beckup-vor-audit` zurückrollen, dann sauber neu aufbauen.
+CI ist grün, PR #521 ist mergefähig und wird per Scheduled-Check-in
+beobachtet. **Der Merge selbst ist eine offene, menschliche Entscheidung** —
+nicht Teil dieses Handoffs.
 
----
+## Bewusst zurückgestellt (nicht Bugs, sondern Abwägungen)
 
-## Was noch funktioniert (vor Agent-PRs)
-
-- Installer: Journal-Verify-Fix ✅, SHA-Rate-Limit-Fix ✅, Config-Backup WARN statt Abbruch ✅
-- `network_auth.lua` als Repo-Datei (`xreactor/config/network_auth.lua`) ✅
-- FUEL Monitor Skala 0.5 ✅
+- Log-Verbosity wurde NICHT reduziert — auf expliziten Wunsch werden weiterhin
+  alle Log-Level gesendet, nur technisch per Batching entschärft (siehe oben).
+- `master/ui_controller.lua`s große primäre RT/Energy/Fuel-Modell-Schleife
+  wurde bewusst nicht weiter aufgeteilt (Risiko > Nutzen, siehe Kommentar in
+  der Datei).
+- Ein paar kosmetische/vernachlässigbare Performance-Findings (LOW priority)
+  wurden bewusst nicht angefasst.
 
 ## Node-Übersicht
 
-| Computer | Rolle | Status |
-|---|---|---|
-| 53 | MASTER | instabil (Node-Erkennung) |
-| 54,56,57,58 | ENERGY | läuft |
-| 62 | LOG | läuft |
-| 64 | FUEL | UI läuft, kein Seitenwechsel |
-| 52+ | RT | kein Seitenwechsel |
-| 70,74 | VALVE | gelegentliche Aussetzer |
+Es liegt aktuell keine Live-Telemetrie aus einem laufenden Minecraft-Server
+vor, die diesen Handoff verifizieren könnte. Ein Node-Status-Tabelle wird
+daher hier nicht geführt, um keine veralteten oder erfundenen Werte zu
+hinterlassen — die Rollen-Übersicht steht im Root-`README.md`.
 
 ## Wichtige Regeln
 
 - **NIEMALS** Dateien manuell per curl/Server-Konsole anlegen — immer über den Installer
 - Manuell angelegte Dateien → root-Ownership → Berechtigungsprobleme
 - Installer-Update: `wget https://raw.githubusercontent.com/ItIsYe/ExtreamReactor-Controller-V3/beta/installer /installer`
-- Branches: `main` (stabil), `beta` (aktuell instabil), `beckup-vor-audit` (stabiler Rollback)
+- `xreactor/release.lua`'s `commit_sha` bleibt IMMER `"beta"` (nicht der echte Git-SHA) —
+  `scripts/package_release.py --sync` setzt ihn versehentlich auf den echten SHA;
+  nach jedem `--sync`-Lauf manuell zurück auf `"beta"` prüfen (siehe
+  `tests/release_metadata_consistency_test.lua`)
+- `scripts/package_release.py --sync` erzeugt zusätzlich ein untracked
+  `dist/xreactor-release.zip` — nach dem Lauf entfernen (`rm -rf dist`)
 
 ## ⛔ Nicht nochmal einbauen — gescheiterte Ansätze
 
@@ -78,4 +98,3 @@ Stand:  2026-08-09 20:15 (beta-v512)
 ## Doku-Index
 - `docs/CI_MAINTENANCE.md` — CI-Bugs und Fixes
 - `docs/SESSION_HANDOFF.md` — dieser Handoff
-- `docs/REPO_SAFETY_AUDIT_CLOSURE_2026-08-10.md` — Safety-Audit August 2026
