@@ -158,6 +158,49 @@ def all_entries(base_files, dev_files, roles):
     return entries
 
 
+MANIFEST_VERSION_RE = re.compile(r'(manifest_version\s*=\s*)(\d+)(,)')
+MANIFEST_ID_RE = re.compile(r'(manifest_id\s*=\s*")manifest-v(\d+)(",)')
+RELEASE_PATH = REPO_ROOT / "xreactor" / "release.lua"
+RELEASE_VERSION_RE = re.compile(r'(manifest_version\s*=\s*)(\d+)(,)')
+RELEASE_ID_RE = re.compile(r'(manifest_id\s*=\s*")manifest-v(\d+)(",)')
+RELEASE_FILE_COUNT_RE = re.compile(r'(manifest_file_count\s*=\s*)(\d+)(,)')
+RELEASE_ID_FIELD_RE = re.compile(r'(release_id\s*=\s*")beta-v(\d+)(",)')
+
+
+def bump_version(file_count: int) -> int:
+    """Bumps manifest_version/manifest_id in manifest.lua and mirrors
+    manifest_version/manifest_id/manifest_file_count/release_id into
+    release.lua. Returns the new version.
+
+    Without this, a content-only change (same file count, different hash)
+    left manifest_version unchanged: installer/auto_update.lua's periodic
+    check compares remote_version > local_version, so an already-deployed
+    node would see "no update" and never pull a real fix -- exactly what
+    happened across several merged beta commits before this was added.
+    """
+    text = MANIFEST_PATH.read_text(encoding="utf-8")
+    version_match = MANIFEST_VERSION_RE.search(text)
+    if not version_match:
+        raise RuntimeError("could not find manifest_version in manifest.lua")
+    old_version = int(version_match.group(2))
+    new_version = old_version + 1
+
+    bumped = MANIFEST_VERSION_RE.sub(rf'\g<1>{new_version}\3', text, count=1)
+    bumped = MANIFEST_ID_RE.sub(rf'\g<1>manifest-v{new_version}\3', bumped, count=1)
+    MANIFEST_PATH.write_text(bumped, encoding="utf-8")
+
+    if RELEASE_PATH.exists():
+        release_text = RELEASE_PATH.read_text(encoding="utf-8")
+        release_text = RELEASE_VERSION_RE.sub(rf'\g<1>{new_version}\3', release_text, count=1)
+        release_text = RELEASE_ID_RE.sub(rf'\g<1>manifest-v{new_version}\3', release_text, count=1)
+        release_text = RELEASE_FILE_COUNT_RE.sub(rf'\g<1>{file_count}\3', release_text, count=1)
+        release_text = RELEASE_ID_FIELD_RE.sub(rf'\g<1>beta-v{new_version}\3', release_text, count=1)
+        RELEASE_PATH.write_text(release_text, encoding="utf-8")
+
+    print(f"Version bump: {old_version} -> {new_version} (manifest.lua + release.lua)")
+    return new_version
+
+
 def main():
     parser = argparse.ArgumentParser(description="Validate/sync xreactor manifest entries")
     parser.add_argument("--write", action="store_true", help="Rewrite manifest with current file size/hash values")
@@ -168,9 +211,25 @@ def main():
     entries = all_entries(base_files, dev_files, roles)
 
     if args.write:
+        # release.lua is itself a manifest-tracked entry. It carries the
+        # version fields, so bumping the version below inherently changes
+        # release.lua's own bytes too -- excluded here so that natural,
+        # self-referential drift is never mistaken for a "real" content
+        # change and does not cause the bump to (re-)trigger itself.
+        changed_paths = []
         for entry in entries:
+            old_hash = entry["hash"]
             update_entry(entry)
+            if entry["hash"] != old_hash and entry["path"] != "release.lua":
+                changed_paths.append(entry["path"])
         write_manifest_inplace(MANIFEST_PATH, entries)
+
+        if changed_paths:
+            bump_version(len(entries))
+            release_entry = next((e for e in entries if e["path"] == "release.lua"), None)
+            if release_entry:
+                update_entry(release_entry)
+                write_manifest_inplace(MANIFEST_PATH, [release_entry])
 
     errors = []
     checked = 0
