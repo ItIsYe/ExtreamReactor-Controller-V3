@@ -1,12 +1,23 @@
+-- core/discovery_stability.lua
+--
+-- Generic peripheral-topology stability gate for services/discovery_service.lua's
+-- optional `should_discover(service, ts, event, due)` hook.
+--
+-- Why this exists: without it, a node scans EVERY peripheral (full
+-- peripheral.getNames() + getType() per name -- a real, non-trivial
+-- cross-mod cost) on every due discovery tick forever, even once the
+-- physical hardware topology has been stable for hours. This cache lets a
+-- node keep discovering promptly while topology is actually changing, then
+-- back off to a much slower verification cadence once it's been stable for
+-- a few checks in a row -- mirroring nodes/rt/main.lua's own discovery
+-- stable-streak slowdown (which predates this shared module) and
+-- nodes/energy/matrix_topology_cache.lua's per-node variant.
+--
+-- A "peripheral"/"peripheral_detach" CC:Tweaked event (real attach/detach)
+-- always forces an immediate, real recheck regardless of any backoff.
+
 local cache = {}
 
--- P-DISC-BACKOFF: after this many consecutive "stable" should_discover()
--- checks, the expensive peripheral_signature() scan (full getNames() +
--- getType() per name) backs off to once every SLOW_MULTIPLIER checks
--- instead of every single due-check -- same pattern as nodes/rt/main.lua's
--- discovery stable-streak slowdown. A "peripheral"/"peripheral_detach"
--- event (self.dirty) or the forced_rescan_interval_ms safety net still
--- force an immediate, real recheck regardless of this backoff.
 local STABLE_STREAK_LIMIT = 3
 local SLOW_MULTIPLIER = 6
 
@@ -33,13 +44,15 @@ local function peripheral_signature()
   return table.concat(parts, "|")
 end
 
+-- opts.forced_rescan_interval_s: safety-net full rescan even if the
+-- signature looks stable (default 300s) -- catches changes a signature
+-- comparison alone might miss (e.g. programmatic peripheral swaps that
+-- keep the same name/type).
 function cache.new(opts)
   opts = opts or {}
   local self = {
-    log_prefix = opts.log_prefix or "ENERGY",
     forced_rescan_interval_ms = math.max(1000, math.floor((tonumber(opts.forced_rescan_interval_s) or 300) * 1000)),
     watch_signature = nil,
-    topology_signature = nil,
     last_discovery_ts = 0,
     dirty = true,
     stable_streak = 0,
@@ -48,10 +61,16 @@ function cache.new(opts)
   return setmetatable(self, { __index = cache })
 end
 
--- interval_s is the caller's discovery interval (seconds), used only to
--- size the backoff window -- optional, defaults to 1s if omitted so a
--- caller that doesn't pass it just gets a (still correct, just more
--- conservative) 6s backoff window instead of no backoff at all.
+-- interval_s: caller's discovery interval (seconds), used only to size the
+-- backoff window -- optional, defaults to a conservative 1s if omitted.
+--
+-- Self-managing: services/discovery_service.lua's tick() always calls
+-- discover() right after should_discover() returns true, so this clears
+-- self.dirty and stamps last_discovery_ts itself on a "raise" decision --
+-- no separate record_discovery() call needed from the node's own discover()
+-- function (record_discovery() is still available for a caller that wants
+-- to report an actual outcome instead, e.g. only clearing dirty when the
+-- scan didn't error).
 function cache:should_discover(ts, event, due, interval_s)
   local event_name = type(event) == "table" and event[1] or nil
   if event_name == "peripheral" or event_name == "peripheral_detach" then
@@ -76,7 +95,9 @@ function cache:should_discover(ts, event, due, interval_s)
     self.watch_signature = signature
     self.stable_streak = 0
     self.next_slow_check_at = 0
-    return true, self.dirty and "dirty" or (signature_changed and "signature_changed" or "forced_interval")
+    self.dirty = false
+    self.last_discovery_ts = ts
+    return true, "rescan"
   end
 
   self.stable_streak = self.stable_streak + 1
@@ -87,9 +108,8 @@ function cache:should_discover(ts, event, due, interval_s)
   return false, "stable"
 end
 
-function cache:record_discovery(ts, topology_signature)
+function cache:record_discovery(ts)
   self.last_discovery_ts = ts or now_ms()
-  self.topology_signature = topology_signature or self.topology_signature
   self.dirty = false
 end
 

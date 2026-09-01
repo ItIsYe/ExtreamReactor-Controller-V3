@@ -145,6 +145,25 @@ function rules:evaluate(context)
     end
   end
 
+  -- P-ALERT-LOOP: was 5 separate `for _, node in pairs(nodes) do` passes
+  -- (all-nodes comms/degraded/proto; ENERGY_NODE-only matrix/aggregate;
+  -- RT_NODE-only turbine/reactor; RT_NODE-only redundancy tally; RT_NODE-
+  -- only SAFE-state) -- merged into one pass with role-gated branches.
+  -- Every individual check keeps its exact original condition, key,
+  -- options and builder; only the number of `pairs(nodes)` traversals per
+  -- evaluate() call changes (5 -> 1). Builders stay lazy (only invoked by
+  -- emit() on an actual "raise" transition), so this only saves the
+  -- redundant per-node/per-role loop overhead and the unconditional
+  -- key-string-format calls, not any alert semantics.
+  local stored = 0
+  local capacity = 0
+  local matrices = {}
+  local active_rt = {}
+  local total_capacity = 0
+  local demand = context.power_target and context.power_target > 0
+  local warn_low = cfg.rpm_warn_low or 800
+  local crit_high = cfg.rpm_crit_high or 1800
+
   for _, node in pairs(nodes) do
     local reasons = node.health and node.health.reasons
     local comms_down = node.health and node.health.status == health.status.DOWN
@@ -200,12 +219,7 @@ function rules:evaluate(context)
         details = { proto = version }
       }
     end)
-  end
 
-  local stored = 0
-  local capacity = 0
-  local matrices = {}
-  for _, node in pairs(nodes) do
     if node.role == constants.roles.ENERGY_NODE then
       stored = stored + (node.stored or 0)
       capacity = capacity + (node.capacity or 0)
@@ -215,8 +229,8 @@ function rules:evaluate(context)
       local node_reasons = node.health and node.health.reasons
       -- node.status uses constants.status_levels (OFFLINE), not health.status
       -- (DOWN) -- see message_handlers.lua's health_status_to_level().
-      local comms_down = has_reason(node_reasons, health.reasons.COMMS_DOWN) or node.status == constants.status_levels.OFFLINE or node.offline == true
-      local matrix_missing = (not comms_down)
+      local energy_comms_down = has_reason(node_reasons, health.reasons.COMMS_DOWN) or node.status == constants.status_levels.OFFLINE or node.offline == true
+      local matrix_missing = (not energy_comms_down)
         and node.offline ~= true
         and node.stale ~= true
         and node.recovering ~= true
@@ -238,55 +252,32 @@ function rules:evaluate(context)
         }
       end)
     end
-  end
 
-  if capacity > 0 then
-    local pct = (stored / capacity) * 100
-    local warn = cfg.energy_warn_pct or 25
-    local crit = cfg.energy_crit_pct or 10
-    local active = pct <= warn
-    local key = "ENERGY_LOW"
-    emit(key, active, base_opts, function()
-      local severity = pct <= crit and "CRITICAL" or "WARN"
-      return {
-        code = "ENERGY_LOW",
-        severity = severity,
-        scope = "SYSTEM",
-        source = { node_id = "MASTER", role = "MASTER" },
-        title = "Energy low",
-        message = string.format("Total energy %.1f%%", pct),
-        details = { percent = pct, warn = warn, crit = crit }
-      }
-    end)
-  end
-
-  local matrix_warn = cfg.matrix_warn_full_pct or 90
-  for _, entry in ipairs(matrices) do
-    local matrix = entry.matrix
-    local node = entry.node
-    local percent = (matrix.percent or 0) * 100
-    local active = percent >= matrix_warn
-    local matrix_id = matrix.id or matrix.name or matrix.label
-    local key = string.format("MATRIX_NEAR_FULL|%s|%s", tostring(node.id), tostring(matrix_id))
-    emit(key, active, base_opts, function()
-      return {
-        code = "MATRIX_NEAR_FULL",
-        severity = "WARN",
-        scope = "DEVICE",
-        source = build_source(node, matrix_id),
-        title = "Matrix near full",
-        message = string.format("%s %.1f%%", tostring(matrix.label or matrix_id or "matrix"), percent),
-        details = { percent = percent, threshold = matrix_warn }
-      }
-    end)
-  end
-
-  local demand = context.power_target and context.power_target > 0
-  for _, node in pairs(nodes) do
     if node.role == constants.roles.RT_NODE then
+      -- Redundanz-Tally (frueher eigene Schleife): Gesamtkapazitaet ueber
+      -- ALLE RT-Nodes, plus welche aktuell aktiv zugewiesen sind.
+      local assignment_state = tostring(node.assignment_state or "")
+      if assignment_state == "active" then
+        active_rt[#active_rt + 1] = node
+      end
+      total_capacity = total_capacity + number_or(node.capacity_max, 0)
+
+      local node_state = tostring(node.state or "")
+      local is_safe = node_state == "SAFE" or node_state == "EMERGENCY"
+      local safe_key = string.format("RT_SAFE_MODE|%s", tostring(node.id))
+      emit(safe_key, is_safe, base_opts, function()
+        return {
+          code = "RT_SAFE_MODE",
+          severity = "CRITICAL",
+          scope = "NODE",
+          source = build_source(node, nil),
+          title = "RT node in SAFE/EMERGENCY",
+          message = string.format("%s ist im Zustand %s", tostring(node.id), node_state),
+          details = { state = node_state }
+        }
+      end)
+
       local turbines = node.turbines or {}
-      local warn_low = cfg.rpm_warn_low or 800
-      local crit_high = cfg.rpm_crit_high or 1800
       for _, turbine in ipairs(turbines) do
         local rpm = turbine.rpm or 0
         local turbine_id = turbine.id or turbine.name
@@ -367,28 +358,55 @@ function rules:evaluate(context)
     end
   end
 
+  if capacity > 0 then
+    local pct = (stored / capacity) * 100
+    local warn = cfg.energy_warn_pct or 25
+    local crit = cfg.energy_crit_pct or 10
+    local active = pct <= warn
+    local key = "ENERGY_LOW"
+    emit(key, active, base_opts, function()
+      local severity = pct <= crit and "CRITICAL" or "WARN"
+      return {
+        code = "ENERGY_LOW",
+        severity = severity,
+        scope = "SYSTEM",
+        source = { node_id = "MASTER", role = "MASTER" },
+        title = "Energy low",
+        message = string.format("Total energy %.1f%%", pct),
+        details = { percent = pct, warn = warn, crit = crit }
+      }
+    end)
+  end
+
+  local matrix_warn = cfg.matrix_warn_full_pct or 90
+  for _, entry in ipairs(matrices) do
+    local matrix = entry.matrix
+    local node = entry.node
+    local percent = (matrix.percent or 0) * 100
+    local active = percent >= matrix_warn
+    local matrix_id = matrix.id or matrix.name or matrix.label
+    local key = string.format("MATRIX_NEAR_FULL|%s|%s", tostring(node.id), tostring(matrix_id))
+    emit(key, active, base_opts, function()
+      return {
+        code = "MATRIX_NEAR_FULL",
+        severity = "WARN",
+        scope = "DEVICE",
+        source = build_source(node, matrix_id),
+        title = "Matrix near full",
+        message = string.format("%s %.1f%%", tostring(matrix.label or matrix_id or "matrix"), percent),
+        details = { percent = percent, threshold = matrix_warn }
+      }
+    end)
+  end
+
   -- Redundanz-Warnung: wenn nur noch genau ein RT-Node aktiv zugewiesen ist,
   -- und dieser Node bei einem Ausfall den globalen Leistungsbedarf allein
   -- nicht mehr decken könnte, warnt der Master proaktiv — bevor der zweite
   -- Node tatsächlich ausfällt, nicht erst danach. Nutzt dieselben Felder
   -- (node.assignment_state, node.capacity_max, context.power_target) wie
-  -- die uebrige Setpoint-/Zuweisungslogik in rt_sync.lua.
+  -- die uebrige Setpoint-/Zuweisungslogik in rt_sync.lua. active_rt/
+  -- total_capacity wurden bereits im Hauptloop oben mitgezaehlt.
   do
-    local active_rt = {}
-    local total_capacity = 0
-    for _, node in pairs(nodes) do
-      if node.role == constants.roles.RT_NODE then
-        local state = tostring(node.assignment_state or "")
-        if state == "active" then
-          active_rt[#active_rt + 1] = node
-        end
-        -- Gesamtkapazität ueber ALLE RT-Nodes (nicht nur aktive) — das ist
-        -- die theoretisch verfuegbare Reserve, falls ein weiterer Node
-        -- online genommen werden koennte.
-        total_capacity = total_capacity + number_or(node.capacity_max, 0)
-      end
-    end
-
     local redundancy_active = false
     local sole_node = nil
     if #active_rt == 1 then
@@ -425,27 +443,7 @@ function rules:evaluate(context)
 
   -- RT-SAFE-Warnung (Feature 2026-07-02, fuer Speaker-Alarm-Event
   -- "safe_mode"): pro RT-Node ein eigener CRITICAL-Alert, wenn der Node im
-  -- SAFE- oder EMERGENCY-Zustand ist. Vorher gab es dafuer keinen expliziten
-  -- Alert-Code — der Zustand war zwar in node.state sichtbar, loeste aber
-  -- keinen eigenen Alarm aus.
-  for _, node in pairs(nodes) do
-    if node.role == constants.roles.RT_NODE then
-      local node_state = tostring(node.state or "")
-      local is_safe = node_state == "SAFE" or node_state == "EMERGENCY"
-      local safe_key = string.format("RT_SAFE_MODE|%s", tostring(node.id))
-      emit(safe_key, is_safe, base_opts, function()
-        return {
-          code = "RT_SAFE_MODE",
-          severity = "CRITICAL",
-          scope = "NODE",
-          source = build_source(node, nil),
-          title = "RT node in SAFE/EMERGENCY",
-          message = string.format("%s ist im Zustand %s", tostring(node.id), node_state),
-          details = { state = node_state }
-        }
-      end)
-    end
-  end
+  -- SAFE- oder EMERGENCY-Zustand ist -- bereits im Hauptloop oben emittiert.
 
   if context.recovery_notice then
     local recovery = context.recovery_notice

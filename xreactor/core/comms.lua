@@ -326,11 +326,16 @@ local function queue_entry(message, channel, opts)
     volatile_key = volatile_key
   }
   table.insert(state.queue, entry)
-  table.sort(state.queue, function(a, b) return a.priority < b.priority end)
   return entry
 end
 
 local function flush_queue()
+  -- Sorted once per flush instead of on every single queue_entry() insert
+  -- (previously re-sorted the whole queue on every enqueue) --
+  -- flush_queue() processes every entry in order every call regardless, so
+  -- sorting immediately before that single pass is equivalent and cheaper
+  -- under bursts of several sends between flushes.
+  table.sort(state.queue, function(a, b) return a.priority < b.priority end)
   local remaining = {}
   local now_ts = now_ms()
   local ttl_ms = (state.config.volatile_ttl_s or DEFAULT_CONFIG.volatile_ttl_s) * 1000

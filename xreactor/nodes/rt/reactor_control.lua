@@ -37,8 +37,30 @@
 --   ctx.load_capacity_cache -- function() -> cache | nil
 --   ctx.current_state      -- function() -> STATE.*
 --   ctx.STATE      -- { INIT, AUTONOM, MASTER, SAFE }
+--   ctx.modules    -- optional: modules_registry (see cached_coolant_ratio())
 
 local M = {}
+
+-- module_lifecycle.update_module_states() always runs before
+-- updateReactorControl() in the same control_tick() (safety-first
+-- ordering, see main.lua), and unconditionally refreshes every reactor
+-- module's .coolant_safety_diag every tick -- so if a module for this
+-- reactor name exists, its diag is guaranteed fresh for THIS tick and can
+-- be reused instead of calling ctx.fluid.read_coolant_sample() a second
+-- time. Returns (ratio, true) when reused, or (nil, false) when no module
+-- was found (e.g. during early startup) -- callers must fall back to a
+-- direct read in that case, exactly like before this optimization existed.
+local function cached_coolant_ratio(ctx, name)
+  local modules = ctx.modules
+  if type(modules) ~= "table" then return nil, false end
+  for _, module in pairs(modules) do
+    if module.type == "reactor" and module.name == name then
+      local diag = module.coolant_safety_diag
+      return diag and diag.coolant_ratio or nil, true
+    end
+  end
+  return nil, false
+end
 
 -- ── Rod-Grenzen und Clamping ────────────────────────────────────────────────
 
@@ -596,8 +618,11 @@ function M.controlReactorsIndividually(ctx)
     end
 
     local reactor = ctx.peripherals.reactors[name]
-    local coolant_sample = reactor and ctx.fluid.read_coolant_sample(reactor, ctx.safe_wrapped_call) or nil
-    local coolant_ratio = coolant_sample and coolant_sample.coolant_ratio or nil
+    local coolant_ratio, coolant_ratio_cached = cached_coolant_ratio(ctx, name)
+    if not coolant_ratio_cached then
+      local coolant_sample = reactor and ctx.fluid.read_coolant_sample(reactor, ctx.safe_wrapped_call) or nil
+      coolant_ratio = coolant_sample and coolant_sample.coolant_ratio or nil
+    end
 
     local applied_rods, ramp_diag = ctx.rails.ramp_target(
       current_rods, target_rods, rod_cfg, {
@@ -682,10 +707,13 @@ function M.controlReactor(ctx)
 
   local min_coolant_ratio
   for _, name in ipairs(ctx.config.reactors or {}) do
-    local reactor = ctx.peripherals.reactors[name]
-    local sample = reactor and ctx.fluid.read_coolant_sample(
-      reactor, ctx.safe_wrapped_call) or nil
-    local ratio = sample and sample.coolant_ratio or nil
+    local ratio, ratio_cached = cached_coolant_ratio(ctx, name)
+    if not ratio_cached then
+      local reactor = ctx.peripherals.reactors[name]
+      local sample = reactor and ctx.fluid.read_coolant_sample(
+        reactor, ctx.safe_wrapped_call) or nil
+      ratio = sample and sample.coolant_ratio or nil
+    end
     if type(ratio) == "number" and (min_coolant_ratio == nil or ratio < min_coolant_ratio) then
       min_coolant_ratio = ratio
     end

@@ -34,8 +34,28 @@
 --   ctx.safe_wrapped_call    -- function(obj, method, ...) -> ok, result
 --   ctx.reactor_control      -- reactor_control-Modul (für setReactorActive,
 --                               has_reactor_rod_write_path, ensure_reactor_ctrl)
+--   ctx.modules              -- optional: modules_registry (see cached_rotor_rpm())
 
 local M = {}
+
+-- module_lifecycle.update_module_states() always runs before updateControl()
+-- in the same control_tick() (safety-first ordering, see main.lua), and
+-- unconditionally refreshes every turbine module's .last_rotor_rpm every
+-- tick -- so if a module for this turbine name exists, its cached RPM is
+-- guaranteed fresh for THIS tick and can be reused instead of calling
+-- getRotorSpeed() a second time. Returns (rpm, true) when reused, or
+-- (nil, false) when no module was found -- callers fall back to a direct
+-- read in that case, exactly like before this optimization existed.
+local function cached_rotor_rpm(ctx, name)
+  local modules = ctx.modules
+  if type(modules) ~= "table" then return nil, false end
+  for _, module in pairs(modules) do
+    if module.type == "turbine" and module.name == name then
+      return module.last_rotor_rpm, true
+    end
+  end
+  return nil, false
+end
 
 -- ── Interne Turbinen-Ctrl-Verwaltung ────────────────────────────────────────
 -- Ersetzt ensure_turbine_ctrl (war ein Modul mit reset()-Methode).
@@ -874,10 +894,13 @@ function M.updateControl(ctx)
         "Turbine active API unavailable for " .. name .. " (continuing with flow control)")
     end
 
-    local rpm = nil
-    if turbine.getRotorSpeed then
-      local rpm_ok, value = ctx.safe_wrapped_call(turbine, "getRotorSpeed")
-      if rpm_ok and type(value) == "number" then rpm = value end
+    local rpm, rpm_cached = cached_rotor_rpm(ctx, name)
+    if not rpm_cached then
+      rpm = nil
+      if turbine.getRotorSpeed then
+        local rpm_ok, value = ctx.safe_wrapped_call(turbine, "getRotorSpeed")
+        if rpm_ok and type(value) == "number" then rpm = value end
+      end
     end
 
     local effective_target = M.get_turbine_target_rpm(ctx, turbine_index)

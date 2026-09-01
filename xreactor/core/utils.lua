@@ -13,7 +13,17 @@ local CONFIG = {
                                 -- resends before ACK arrives.
   REMOTE_LOG_MAX_SENDS = 2,    -- schneller aufgeben: Log-Retries blockieren nicht den Control-Loop
                                 -- window = 90s (3×30s) is still acceptable.
-  REMOTE_LOG_MODEM_REFRESH_SECONDS = 10
+  REMOTE_LOG_MODEM_REFRESH_SECONDS = 10,
+  -- P-BATCH: mehrere in kurzer Folge anfallende Log-Zeilen (z.B. mehrere
+  -- log()-Aufrufe innerhalb desselben Shutdown-Workflow-Uebergangs) werden
+  -- zu einem einzigen modem.transmit() zusammengefasst statt jede Zeile
+  -- sofort einzeln zu senden -- reduziert Funk-Pakete bei Log-Buendeln,
+  -- ohne Log-Zeilen zu verlieren oder zu verzoegern (Batch wird spaetestens
+  -- nach REMOTE_LOG_BATCH_MAX_AGE_MS oder REMOTE_LOG_BATCH_MAX Zeilen
+  -- geflusht). Ein einzelner Eintrag wird weiterhin als normales, simples
+  -- LOG_EVENT gesendet -- LOG_EVENT_BATCH nur wenn wirklich >1 Zeile ansteht.
+  REMOTE_LOG_BATCH_MAX = 8,
+  REMOTE_LOG_BATCH_MAX_AGE_MS = 250
 }
 
 local utils = {}
@@ -71,7 +81,9 @@ local remote_log_state = {
   pending = {},
   pending_order = {},
   next_retry_at = 0,
-  next_modem_refresh_at = 0
+  next_modem_refresh_at = 0,
+  batch = nil,
+  batch_started_at = nil
 }
 
 local function read_file(path)
@@ -253,8 +265,66 @@ local function add_pending(payload)
   remote_log_state.pending_order[#remote_log_state.pending_order + 1] = payload.event_id
 end
 
+-- Sends everything currently queued in remote_log_state.batch as ONE
+-- modem.transmit() -- a lone entry goes out as a plain LOG_EVENT (identical
+-- to the pre-batching wire format), 2+ entries go out wrapped as a single
+-- LOG_EVENT_BATCH (see nodes/log_collector/main.lua's handling). Each
+-- individual entry keeps its own event_id, so per-entry dedupe/ack/retry
+-- via remote_log_state.pending is unaffected by batching.
+local function flush_log_batch()
+  local batch = remote_log_state.batch
+  remote_log_state.batch = nil
+  remote_log_state.batch_started_at = nil
+  if not batch or #batch == 0 then return end
+  if #batch == 1 then
+    local delivered = transmit_payload(batch[1])
+    if delivered > 0 then
+      remote_log_state.sent = remote_log_state.sent + 1
+      add_pending(batch[1])
+    else
+      remote_log_state.dropped = remote_log_state.dropped + 1
+    end
+    return
+  end
+  local delivered = transmit_payload({ type = "LOG_EVENT_BATCH", entries = batch })
+  if delivered > 0 then
+    remote_log_state.sent = remote_log_state.sent + #batch
+    for _, entry in ipairs(batch) do add_pending(entry) end
+  else
+    remote_log_state.dropped = remote_log_state.dropped + #batch
+  end
+end
+
+local function queue_log_entry(payload)
+  remote_log_state.batch = remote_log_state.batch or {}
+  remote_log_state.batch[#remote_log_state.batch + 1] = payload
+  remote_log_state.batch_started_at = remote_log_state.batch_started_at or now_ticks()
+  if #remote_log_state.batch >= CONFIG.REMOTE_LOG_BATCH_MAX then
+    flush_log_batch()
+  end
+end
+
+-- Flushes the pending batch once it's old enough, even if it never reached
+-- REMOTE_LOG_BATCH_MAX entries -- called from both retry_pending() (i.e.
+-- every log() call) and comms_service's periodic tick() via
+-- utils.flush_remote_logs(), so a lone buffered entry never waits longer
+-- than REMOTE_LOG_BATCH_MAX_AGE_MS to actually go out.
+local function flush_log_batch_if_due()
+  if not remote_log_state.batch or not remote_log_state.batch_started_at then return end
+  local age_ticks = now_ticks() - remote_log_state.batch_started_at
+  if age_ticks * 1000 >= CONFIG.REMOTE_LOG_BATCH_MAX_AGE_MS then
+    flush_log_batch()
+  end
+end
+
 local function retry_pending(force)
   if not remote_log_state.initialized then return end
+  -- Runs on every retry_pending() call (i.e. every log() call, plus every
+  -- comms_service:tick() via utils.flush_remote_logs()) regardless of the
+  -- much coarser REMOTE_LOG_RETRY_EVERY throttle below -- a buffered batch
+  -- must not wait up to 60s just because the unrelated stale-pending-ACK
+  -- retry sweep is throttled.
+  flush_log_batch_if_due()
   refresh_log_modems(false)
   local now = now_ticks()
   if not force and now < (remote_log_state.next_retry_at or 0) then return end
@@ -316,13 +386,7 @@ local function send_remote_log(prefix, level, message)
       ts = os and os.epoch and os.epoch("utc") or nil,
       ack = true
     }
-    local delivered = transmit_payload(payload)
-    if delivered > 0 then
-      remote_log_state.sent = remote_log_state.sent + 1
-      add_pending(payload)
-    else
-      remote_log_state.dropped = remote_log_state.dropped + 1
-    end
+    queue_log_entry(payload)
   end)
   if not ok then remote_log_state.dropped = remote_log_state.dropped + 1 end
 end

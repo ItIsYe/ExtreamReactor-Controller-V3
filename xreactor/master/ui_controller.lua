@@ -475,69 +475,62 @@ function M.new(opts)
     -- rollenspezifischen rt-Modell oben (das nur RT-Nodes enthält). LOG
     -- wird bewusst als "nicht kritisch" markiert — Wartung am Log-Collector
     -- soll keine Anlagenstörung auslösen, nur den Node selbst betreffen.
+    -- P-UICTL-LOOP: die AUX-Seiten "Maintenance"/"Updates"/"System Map"
+    -- lasen bisher je einen eigenen `for id, node in pairs(c.nodes) do`
+    -- Durchlauf -- keine der drei liest Werte, die eine der anderen
+    -- ableitet (nur rohe node.*-Felder, keine Abhaengigkeit vom grossen
+    -- Haupt-Loop oben), daher gefahrlos zu EINEM Durchlauf zusammengelegt.
+    -- Der grosse Haupt-Loop oben (RT/Energy/Fuel/... Modelle) bleibt
+    -- bewusst unangetastet -- siehe dessen eigener Kommentar oben zum
+    -- Rewrite-Risiko einer weiteren Aufspaltung.
+    local function severity_rank(status)
+      local ranks = { EMERGENCY = 5, red = 5, WARNING = 4, orange = 4, LIMITED = 3, yellow = 3, OK = 1, green = 1, OFFLINE = 0, muted = 0 }
+      return ranks[tostring(status or "")] or 2
+    end
     local maintenance_nodes = {}
+    local update_nodes = {}
+    local role_status = {}
+    local role_counts = {}
     for id, node in pairs(c.nodes or {}) do
       local role = tostring(node.role or "?")
+      local offline = node.offline == true
+      local stale = node.stale == true
       local in_maintenance = node.maintenance_mode == true
-      local status = "OK"
+
+      local maint_status = "OK"
       if in_maintenance then
-        status = (role == c.constants.roles.LOG_COLLECTOR) and "LIMITED" or "WARNING"
+        maint_status = (role == c.constants.roles.LOG_COLLECTOR) and "LIMITED" or "WARNING"
       end
       maintenance_nodes[#maintenance_nodes + 1] = {
         id = id,
         role = role,
         maintenance_mode = in_maintenance,
-        status = status,
+        status = maint_status,
         last_seen_age = node.last_seen_age,
         -- master/ui/maintenance.lua prueft node.offline/node.stale fuer die
         -- OFFLINE-Statusanzeige -- muessen hier durchgereicht werden.
-        offline = node.offline == true,
-        stale = node.stale == true,
+        offline = offline,
+        stale = stale,
       }
-    end
-    table.sort(maintenance_nodes, function(a, b)
-      if a.role ~= b.role then return a.role < b.role end
-      return tostring(a.id) < tostring(b.id)
-    end)
-    local maintenance_model = { nodes = maintenance_nodes }
 
-    -- AUX-Seite "Updates" (Feature, 2026-07-02): Node-Version-Übersicht.
-    -- node.manifest_version wird von message_handlers.lua aus dem
-    -- HEARTBEAT-Payload gespeichert (siehe dort, "Feature 2026-07-02").
-    local update_nodes = {}
-    for id, node in pairs(c.nodes or {}) do
       update_nodes[#update_nodes + 1] = {
         id = id,
-        role = tostring(node.role or "?"),
+        role = role,
         manifest_version = node.manifest_version,
-        offline = node.offline == true,
-        stale = node.stale == true,
+        offline = offline,
+        stale = stale,
       }
-    end
-    table.sort(update_nodes, function(a, b)
-      if a.role ~= b.role then return a.role < b.role end
-      return tostring(a.id) < tostring(b.id)
-    end)
-    local updates_model = { nodes = update_nodes }
 
-    -- AUX-Seite "System Map" (Feature, 2026-07-02): Zustand pro Rolle
-    -- aggregiert (nicht pro einzelnem Node) fuer die grafische
-    -- Anlagenuebersicht. Prioritaet je Rolle: der schlechteste Einzelzustand
-    -- gewinnt (analog zur MASTER-Gesamtampel-Logik) — z.B. wenn 1 von 3
-    -- RT-Nodes im SAFE-Zustand ist, zeigt der gesamte RT-Block Rot.
-    local function severity_rank(status)
-      local ranks = { EMERGENCY = 5, red = 5, WARNING = 4, orange = 4, LIMITED = 3, yellow = 3, OK = 1, green = 1, OFFLINE = 0, muted = 0 }
-      return ranks[tostring(status or "")] or 2
-    end
-    local role_status = {}
-    local role_counts = {}
-    for id, node in pairs(c.nodes or {}) do
-      local role = tostring(node.role or "?")
+      -- AUX-Seite "System Map": Zustand pro Rolle aggregiert (nicht pro
+      -- einzelnem Node) fuer die grafische Anlagenuebersicht. Prioritaet je
+      -- Rolle: der schlechteste Einzelzustand gewinnt (analog zur
+      -- MASTER-Gesamtampel-Logik) — z.B. wenn 1 von 3 RT-Nodes im
+      -- SAFE-Zustand ist, zeigt der gesamte RT-Block Rot.
       role_counts[role] = (role_counts[role] or 0) + 1
       local this_status = "OK"
-      if node.offline or node.stale then
+      if offline or stale then
         this_status = "OFFLINE"
-      elseif node.maintenance_mode == true then
+      elseif in_maintenance then
         this_status = "LIMITED"
       elseif role == c.constants.roles.RT_NODE then
         local node_state = tostring(node.state or "")
@@ -549,6 +542,18 @@ function M.new(opts)
         role_status[role] = this_status
       end
     end
+    table.sort(maintenance_nodes, function(a, b)
+      if a.role ~= b.role then return a.role < b.role end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local maintenance_model = { nodes = maintenance_nodes }
+
+    table.sort(update_nodes, function(a, b)
+      if a.role ~= b.role then return a.role < b.role end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local updates_model = { nodes = update_nodes }
+
     local system_map_model = {
       role_status = role_status,
       role_counts = role_counts,

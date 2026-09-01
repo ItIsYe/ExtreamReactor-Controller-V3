@@ -277,6 +277,15 @@ local function build_ctx()
     reactor_steam_guard_state = state.reactor_steam_guard_state,
     -- Runtime-State (von runtime_ctx)
     peripherals               = devices,
+    -- Read-only reference so reactor_control.lua can reuse module_lifecycle's
+    -- already-fresh-this-tick module.coolant_safety_diag instead of calling
+    -- ctx.fluid.read_coolant_sample() a second time per reactor per tick --
+    -- module_lifecycle.update_module_states() always runs first in
+    -- control_tick() (safety-first ordering), so by the time
+    -- reactor_control.updateReactorControl() reads this, it's guaranteed
+    -- fresh for the current tick. See reactor_control.lua's
+    -- cached_coolant_ratio().
+    modules                   = modules_registry,
     reactor_ctrl              = {},   -- wird in init_reactor_ctrl befüllt
     turbine_ctrl_store        = {},   -- wird in init_turbine_ctrl befüllt
     autonom_state             = {
@@ -462,28 +471,35 @@ end
 
 -- ── Status-Payload ───────────────────────────────────────────────────────────
 
+-- Pure state/no peripheral calls (see nodes/rt/health_payload.lua) -- shared
+-- by build_status_payload() (telemetry) and update_monitor() (local UI) so
+-- the monitor doesn't have to run a full build_status_payload() sweep
+-- (which re-inspects every bound reactor/turbine) just to read out the
+-- small .health record.
+local function build_rt_health_payload()
+  return health_payload.build_health_payload({
+    comms = comms, constants = constants,
+    master_seen = master_seen_ts or os.epoch("utc"),
+    hb = config.heartbeat_interval,
+    devices = devices, registry = registry, binding = binding,
+    configured_reactors = runtime_config.configured_reactors,
+    configured_turbines = runtime_config.configured_turbines,
+    health = health, warn_once = warn_once,
+    -- Was hardcoded false, so MASTER could never see the required
+    -- degraded state (CONTROL_DEGRADED) after a startup watchdog timeout.
+    startup_watchdog_tripped = startup_watchdog_tripped_value,
+    rt_health = rt_health,
+    configured_caps = runtime_config.configured_caps,
+  })
+end
+
 local function build_status_payload(status_level)
   local ctx_snap = {
     status_level         = status_level or constants.status_levels.OK,
     node_state_machine   = node_state_machine,
     current_state        = current_state_value,
     targets              = ctx.targets,
-    build_health_payload = function()
-      return health_payload.build_health_payload({
-        comms = comms, constants = constants,
-        master_seen = master_seen_ts or os.epoch("utc"),
-        hb = config.heartbeat_interval,
-        devices = devices, registry = registry, binding = binding,
-        configured_reactors = runtime_config.configured_reactors,
-        configured_turbines = runtime_config.configured_turbines,
-        health = health, warn_once = warn_once,
-        -- Was hardcoded false, so MASTER could never see the required
-        -- degraded state (CONTROL_DEGRADED) after a startup watchdog timeout.
-        startup_watchdog_tripped = startup_watchdog_tripped_value,
-        rt_health = rt_health,
-        configured_caps = runtime_config.configured_caps,
-      })
-    end,
+    build_health_payload = build_rt_health_payload,
     devices              = devices,
     registry             = registry,
     -- Were hardcoded {}/nil/{}, so MASTER never received real module
@@ -563,7 +579,7 @@ local function update_monitor()
     -- get_target_rpm() lives in turbine_control, not reactor_control.
     get_target_rpm = function() return turbine_control.get_target_rpm(ctx) end,
     binding = binding,
-    build_health_payload = function() return build_status_payload() end,
+    build_health_payload = build_rt_health_payload,
     read_turbine_rpm = function(t, c) return turbine_control.read_turbine_rpm(ctx, t, c) end,
     read_turbine_flow = function(t, c) return turbine_control.read_turbine_flow(ctx, t, c) end,
     reactor_adapter = adapters.reactor,

@@ -31,6 +31,11 @@ function M.update_module_limits(ctx, module)
   local limits = {}
   if module.type == "turbine" then
     local _, rpm_value = safe_wrapped_call(module.peripheral, "getRotorSpeed")
+    -- Cached for turbine_control.lua's updateControl() (runs right after
+    -- this, same tick) to reuse instead of calling getRotorSpeed a second
+    -- time for the same turbine -- see turbine_control.lua's
+    -- cached_rotor_rpm().
+    module.last_rotor_rpm = type(rpm_value) == "number" and rpm_value or nil
     local rpm = type(rpm_value) == "number" and rpm_value or 0
     local target_rpm = ctx.get_target_rpm()
     if target_rpm > 0 and rpm > 0 and rpm < target_rpm * 0.7 then
