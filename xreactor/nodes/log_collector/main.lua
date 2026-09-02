@@ -32,6 +32,12 @@ local MIN_FREE_BYTES   = 8192    -- 8 KB; triggers wipe before disk fills comple
 local DEDUPE_LIMIT     = 512
 local MODEM_REFRESH_S  = 10
 local DISK_REFRESH_S   = 30
+-- Lightweight, unaddressed presence beacon (see core/utils.lua's
+-- logger_reachable()) so every node can passively confirm the collector is
+-- online without first having to send a real log line -- core/utils.lua
+-- treats it as provably offline after ~2x this interval with neither a
+-- ping nor an ACK heard.
+local LOG_PING_INTERVAL_S = 20
 local DRAW_INTERVAL_S  = 5
 local ACTIVE_DRAW_MIN_INTERVAL_S = 1
 local SELF_ROLE        = "LOG_COLLECTOR"
@@ -68,6 +74,8 @@ local stats = {
   disk_refreshes = 0,
   next_modem_refresh = 0,
   next_disk_refresh = 0,
+  next_ping = 0,
+  ping_sent = 0,
   display = nil,
   display_name = "term",
   paused = false,
@@ -857,6 +865,34 @@ send_ack = function(payload, status)
   end
 end
 
+-- Unaddressed presence beacon -- see core/utils.lua's logger_reachable().
+-- Deliberately NOT a LOG_ACK (those are per-event and directed at
+-- payload.node_id): this has no recipient and no event_id, so it can't be
+-- mistaken for one and never touches the dedupe/pending machinery.
+local function broadcast_ping()
+  local ping = {
+    type = "LOG_PING",
+    proto = "xreactor-log-v2",
+    collector_node = computer_node_id(),
+    ts = now_ms(),
+  }
+  local entries = stats.modems or {}
+  local ordered = {}
+  for _, entry in ipairs(entries) do
+    if entry.wireless then table.insert(ordered, 1, entry) else table.insert(ordered, entry) end
+  end
+  for _, entry in ipairs(ordered) do
+    local modem = entry.modem
+    if modem and type(modem.transmit) == "function" then
+      local ok = pcall(modem.transmit, CHANNEL, CHANNEL, ping)
+      if ok then
+        stats.ping_sent = stats.ping_sent + 1
+        return
+      end
+    end
+  end
+end
+
 -- ── Self log ────────────────────────────────────────────────────────────────
 local function self_log(message, level)
   local event_id = computer_node_id() .. ":self:" .. tostring(now_ms())
@@ -1293,6 +1329,10 @@ local function run()
       elseif name == "timer" and event[2] == timer then
         refresh_disks(false)
         refresh_modems(false)
+        if now_s() >= stats.next_ping then
+          stats.next_ping = now_s() + LOG_PING_INTERVAL_S
+          broadcast_ping()
+        end
         check_log_freshness()
         flush_due()
         if now_s() - stats.last_draw_s >= DRAW_INTERVAL_S then draw() end
