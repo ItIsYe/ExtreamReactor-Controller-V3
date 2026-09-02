@@ -19,8 +19,14 @@ _G.redstone = { setOutput = function() end }
 local redstone_router = require('nodes.fuel.redstone_router')
 local router_ui = require('nodes.fuel.router_ui')
 
+-- A deliberately very long label (installer/valve_naming.lua's clear VALVE
+-- names are truncated for display, see router_ui.lua's short_valve_label())
+-- must never crash the width math in the VENTILE card or the integrator
+-- picker (right_w/left_w minus the label length can otherwise go negative).
 local comms = {
-  get_peers = function() return { ['VALVE-1'] = { down = false, role = 'VALVE-NODE' } } end,
+  get_peers = function()
+    return { ['VALVE-1'] = { down = false, role = 'VALVE-NODE', label = 'VALVE-EIN-SEHR-LANGER-KLARNAME-999' } }
+  end,
 }
 
 local routes = {

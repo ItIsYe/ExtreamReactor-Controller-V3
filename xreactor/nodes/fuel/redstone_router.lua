@@ -1090,6 +1090,7 @@ function M:get_valve_status()
       end
       out[#out + 1] = {
         id = v.integrator,
+        label = (peer and peer.label) or v.integrator,
         configured = true,
         online = online,
         stale = stale,

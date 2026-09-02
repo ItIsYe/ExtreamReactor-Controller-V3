@@ -57,6 +57,7 @@ function comms_service.new(opts)
     log_prefix = opts.log_prefix or "COMMS",
     role = opts.role,
     node_id = opts.node_id,
+    label = opts.label,
     on_message = opts.on_message,
     on_command = opts.on_command,
     on_status = opts.on_status,
@@ -150,6 +151,7 @@ function comms_service:init()
     network = self.network,
     node_id = self.network.id,
     role = self.network.role,
+    label = self.label,
     proto_ver = constants.proto_ver,
     log_prefix = self.log_prefix,
     config = self.config.comms or {}

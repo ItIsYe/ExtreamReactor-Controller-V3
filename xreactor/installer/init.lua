@@ -14,6 +14,7 @@ local ui_mod       = deps.ui_mod
 local journal_mod  = deps.journal_mod
 local plan_validator_mod = deps.plan_validator_mod
 local reactor_naming_mod = deps.reactor_naming_mod
+local valve_naming_mod   = deps.valve_naming_mod
 
 local INSTALL_ROOT    = "/xreactor"
 -- Config lives OUTSIDE /xreactor entirely (sibling directory, like
@@ -147,6 +148,24 @@ if role.label == "RT" then
     p("WARN: Keine Reaktoren erkannt; Namensschritt bleibt fuer eine spaetere manuelle Installation offen.")
   elseif naming_state == "already_completed_topology_changed" then
     p("WARN: Reaktortopologie hat sich seit der Benennung geaendert. Vorhandene Namen bleiben unveraendert; neue Reaktoren erscheinen vorerst mit technischer ID.")
+  end
+end
+
+-- A VALVE node is exactly one computer, so unlike RT's reactor naming it
+-- needs no manual identification -- automatic, and (like reactor names)
+-- written once to CONFIG_DIR, so a reinstall/update never re-runs it.
+if role.label == "VALVE" then
+  if type(valve_naming_mod) ~= "table" or type(valve_naming_mod.run) ~= "function" then
+    error("VALVE-Namensmodul fehlt oder ist ungueltig", 0)
+  end
+  local valve_naming_ok, valve_naming_state = valve_naming_mod.run({
+    fs = fs,
+    os = os,
+    remote_update = _G.__xreactor_remote_update == true,
+    write = function(path, content) return stage_mod.write(path, content) end,
+  })
+  if not valve_naming_ok then
+    error("VALVE-Namensvergabe fehlgeschlagen: " .. tostring(valve_naming_state), 0)
   end
 end
 
