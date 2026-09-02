@@ -1,6 +1,6 @@
 # Session Handoff — XReactor Controller V3
 
-**Stand: 2026-09-02 | beta-v609**
+**Stand: 2026-09-02 | beta-v611**
 
 **Architekturänderung:** Die Config (`role.lua`, `node_id.txt`, `reactor_names.lua`,
 `*_routes.lua`, Registry-Dateien, etc.) liegt jetzt unter `/xreactor_config/`
@@ -43,6 +43,49 @@ einzeln verifiziert wie unten beschrieben):
   `LOG_PING`-Broadcast auf dem bestehenden Log-Kanal (6503, bewusst nicht
   auf dem ohnehin überlasteten Control-Kanal); "nachweislich offline" = 45s
   ohne PING/ACK gehört.
+
+Live-Vorfall (2026-09-02), gemeldet als "Kommunikation zwischen MASTER<->RT/
+FUEL/VALVE gestört", anhand zweier vom Nutzer hochgeladener Log-Dumps aus dem
+echten Server analysiert und behoben:
+
+- **Fix 1 (#533, `b0cdfaf9`):** `comms_service:handle_event()` erkannte in
+  `utils.handle_remote_log_message()` nur `LOG_ACK`/`LOG_PING` als
+  Log-Kanal-Rauschen. `LOG_EVENT`/`LOG_EVENT_BATCH` (bei JEDEM `utils.log()`
+  gesendet, systemweit) liefen bei gemeinsam genutztem Modem (Single-Modem-
+  Fall, siehe `discover_log_modems()`-Fallback) direkt in
+  `comms.receive()`/`validateMessage()` und wurden als "missing sender_id"
+  abgelehnt (LOG_EVENT-Payloads haben nie eine sender_id) — 20.324
+  Vorkommen in ~15 Minuten realem Spiel, quer über alle Rollen, auf demselben
+  Hot-Path wie STATUS/HEARTBEAT/COMMAND.
+- **Fix 2 (dieser Branch):** Nach Fix 1 meldete der Nutzer "besser aber es
+  klappt noch nicht alles" und schickte einen zweiten Log-Dump. Analyse
+  zeigte: die verbleibenden 17.261 "missing sender_id"-Treffer stammten
+  NICHT von einem unvollständigen Fix, sondern schlicht von Nodes, die zum
+  Aufnahmezeitpunkt noch nicht auf den neuen Manifest-Stand aktualisiert +
+  neu gestartet hatten (bewiesen an `valve/pc-68.log`: durchgehend "missing
+  sender_id" bis zum Reboot um 18:40:23, danach als `valve/node-68.log`
+  sauber). Der `pc-`- statt `node-`-Präfix in Log-Dateinamen ist rein
+  kosmetisch (siehe `core/utils.lua`s `resolve_node_id()`, nur für
+  Log-Tagging, bevor `node_id.txt` beim ersten Boot geschrieben wird) und
+  hat NIE die echte Netzwerk-Identität in `core/comms.lua`/`core/network.lua`
+  beeinflusst. ABER: ein zweiter, bis dahin unbekannter Bug wurde dabei
+  gefunden — 76 neue "missing role"-Treffer, ausschließlich auf VALVE-Nodes
+  und dem FUEL-Router. Ursache: `nodes/fuel/redstone_router.lua` sendet sein
+  eigenes rohes `SET_VALVE`/`VALVE_ACK`/`ROUTE_TEACH_PULSE`-Protokoll direkt
+  per `modem.transmit` auf `constants.channels.VALVE` (6504), komplett an
+  `comms_service` vorbei. `comms_service:handle_event()` prüfte den Kanal
+  eines `modem_message`-Events nie — bei gemeinsam genutztem Modem (Single-
+  Modem-Fall) landeten diese Nachrichten (haben `src`, aber kein `role`/
+  `payload`) ebenfalls in `comms.receive()` und wurden als "missing role"
+  verworfen. Die im zweiten Dump erstmals sichtbaren echten "Peer down"-
+  WARNs für VALVE/ENERGY-Nodes fielen zeitlich genau in dieses Update-
+  Rollout-Fenster (18:40–18:48 Uhr) — beide Bugs zusammen haben die
+  Tick-Zeit auf dem Comms-Hot-Path so weit belastet, dass Peer-Timeouts real
+  wurden. Fix: `comms_service:handle_event()` filtert modem_message-Events
+  jetzt nach Kanal (nur Control/Status erreichen `comms.receive()`) statt
+  nur nach Nachrichtentyp — generischer und deckt auch künftige
+  Sideband-Protokolle auf geteilten Modems ab, nicht nur den bekannten
+  LOG-Kanal-Fall.
 
 ---
 
