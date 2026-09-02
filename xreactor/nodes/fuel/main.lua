@@ -199,6 +199,18 @@ local function get_router_ui()
   return router_ui_instance
 end
 
+-- "meBridge_0" ist der Konventions-Default aus DEFAULT_CONFIG, keine
+-- Zusicherung ueber die tatsaechliche Peripherie: Advanced Peripherals
+-- vergibt generierte Namen wie "meBridge_0"/"meBridge_1" je nach
+-- Anschlussreihenfolge (siehe nodes/fuel/logistics_router.lua's und
+-- nodes/reprocessor/feed_router.lua's find_me_bridge_by_methods() fuer
+-- denselben, dort bereits behobenen Fall). Reale Logs (2026-09-02) zeigten
+-- FUEL-Nodes, deren Storage-Bus per exaktem Namensvergleich dauerhaft als
+-- "[FEHLT]" galt, obwohl eine ME Bridge tatsaechlich am Netz haengt --
+-- nur eben nicht unter Index 0. Ein wirklich individuell konfigurierter
+-- Name bleibt weiterhin eine strikte Bindung.
+local DEFAULT_STORAGE_BUS = "meBridge_0"
+
 local function discover()
   local names
   local registry_devices
@@ -212,7 +224,13 @@ local function discover()
   registry_devices, names = support_discovery.collect_monitor_device(utils, monitor_name)
   local storage_devices = support_discovery.collect_devices_by_methods(names, {
     kind = "storage",
-    allow_name = function(name) return not config.storage_bus or name == config.storage_bus end,
+    allow_name = function(name)
+      local configured = config.storage_bus
+      if configured == nil or configured == "" or configured == DEFAULT_STORAGE_BUS or configured == "meBridge" then
+        return true
+      end
+      return name == configured
+    end,
     match = function(method_set) return method_set.tanks or method_set.getFluidAmount end
   })
   for _, entry in ipairs(storage_devices) do table.insert(registry_devices, entry) end

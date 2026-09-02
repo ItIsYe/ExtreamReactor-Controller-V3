@@ -54,7 +54,19 @@ local function set_setpoints(command, ctx, record)
 
   local value = command.value or {}
   local capacity_ready = capacity_learning_locked(ctx)
-  local learning = ctx.capacity_learning or {}
+  -- Fix: get_learning(ctx) (ueber ctx.get_capacity_learning(), falls vorhanden)
+  -- statt ctx.capacity_learning direkt -- letzteres ist bei command_handler's
+  -- ctx ein einmalig bei build_command_ctx()/init() eingefrorener Schnappschuss
+  -- (siehe nodes/rt/main.lua), NIE aktualisiert. capacity_learning_locked()
+  -- oben nutzt bereits get_learning() und wird daher korrekt irgendwann true,
+  -- sobald echte Kapazitaet gemessen wurde -- aber ctx.capacity_learning blieb
+  -- dabei fuer die Restlaufzeit des Nodes auf dem Init-Zustand (meist leer/0)
+  -- eingefroren. Reale Logs (2026-09-02) zeigten dadurch "SET_SETPOINTS
+  -- pct=100.0% ... power=0" dauerhaft, auch lange nach erfolgreicher Kapazi-
+  -- taetsmessung -- targets.power (nur fuer die UI-"Soll"-Anzeige gedacht,
+  -- siehe unten) wurde nie ungleich 0, obwohl targets.power_percent (die
+  -- tatsaechliche Regelgroesse) korrekt uebernommen wurde.
+  local learning = get_learning(ctx) or {}
 
   -- Master sendet nur den Prozentwert — RT berechnet Flow, Coil,
   -- Reaktor-Stab vollständig autonom daraus. Ohne bekannte Kapazität ist
@@ -73,7 +85,7 @@ local function set_setpoints(command, ctx, record)
       pct = math.max(0, math.min(100, pct))
       targets.power_percent = pct
       -- targets.power aus capacity_max berechnen damit UI "soll" korrekt anzeigt
-      local cap = ctx.capacity_learning and ctx.capacity_learning.max_output or 0
+      local cap = number_or_nil(learning.max_output) or 0
       if cap > 0 then
         targets.power = cap * pct / 100
       end
