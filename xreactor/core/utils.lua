@@ -359,6 +359,20 @@ local function retry_pending(force)
   end
 end
 
+-- Real-world logs (2026-09-02, all roles) showed this module previously
+-- only recognized LOG_ACK: on any node whose log channel (6503) shares a
+-- modem with its normal control/status channels (the common case -- see
+-- discover_log_modems()'s single-modem fallback), every OTHER node's
+-- LOG_EVENT/LOG_EVENT_BATCH (sent on every single utils.log() call,
+-- system-wide, so frequently) leaked straight through comms_service:
+-- handle_event() into comms.receive() -- neither LOG_ACK nor LOG_PING --
+-- and got flagged "Invalid message ignored: missing sender_id" (LOG_EVENT
+-- payloads were never meant to carry one). 20k+ occurrences across every
+-- role in ~15 minutes of real play, competing for tick time with actual
+-- comms validation/processing on the very same hot path used for
+-- STATUS/HEARTBEAT/COMMAND -- the most likely cause of the reported
+-- MASTER<->RT/FUEL/VALVE comms instability. Now recognized and swallowed
+-- here too, same as LOG_ACK/LOG_PING always were.
 local function handle_remote_ack(message)
   if type(message) ~= "table" then return false end
   -- LOG_PING is a lightweight, unaddressed presence beacon the collector
@@ -368,6 +382,13 @@ local function handle_remote_ack(message)
   if message.type == "LOG_PING" then
     if not remote_log_state.initialized then init_remote_log({}) end
     remote_log_state.last_seen_logger_ticks = now_ticks()
+    return true
+  end
+  -- LOG_EVENT/LOG_EVENT_BATCH are someone else's outbound log traffic
+  -- overheard on a shared modem -- never addressed to this node, and
+  -- neither an ack nor a presence beacon. Just consumed here, same as an
+  -- unrelated LOG_ACK for a different node below.
+  if message.type == "LOG_EVENT" or message.type == "LOG_EVENT_BATCH" then
     return true
   end
   if message.type ~= "LOG_ACK" then return false end
