@@ -14,6 +14,13 @@ local CONFIG = {
   REMOTE_LOG_MAX_SENDS = 2,    -- schneller aufgeben: Log-Retries blockieren nicht den Control-Loop
                                 -- window = 90s (3×30s) is still acceptable.
   REMOTE_LOG_MODEM_REFRESH_SECONDS = 10,
+  -- How long without ANY sign of life from the LOG_COLLECTOR (a LOG_PING
+  -- it broadcasts periodically -- see nodes/log_collector/main.lua -- or a
+  -- LOG_ACK for something we sent) before it is treated as provably
+  -- offline and utils.log() falls back to writing locally. ~2x the
+  -- collector's own ping interval plus margin for CC:Tweaked event-loop
+  -- jitter, so one missed ping never falsely triggers the fallback.
+  LOG_ONLINE_TIMEOUT_S = 45,
   -- P-BATCH: mehrere in kurzer Folge anfallende Log-Zeilen (z.B. mehrere
   -- log()-Aufrufe innerhalb desselben Shutdown-Workflow-Uebergangs) werden
   -- zu einem einzigen modem.transmit() zusammengefasst statt jede Zeile
@@ -83,7 +90,11 @@ local remote_log_state = {
   next_retry_at = 0,
   next_modem_refresh_at = 0,
   batch = nil,
-  batch_started_at = nil
+  batch_started_at = nil,
+  -- Set at init time (grace period from boot, so a node never falls back
+  -- to local writes just because it hasn't heard the collector YET) and
+  -- refreshed on every LOG_PING/LOG_ACK -- see logger_reachable().
+  last_seen_logger_ticks = nil
 }
 
 local function read_file(path)
@@ -226,6 +237,7 @@ local function init_remote_log(opts)
   remote_log_state.node_id = opts.node_id or resolve_node_id()
   remote_log_state.role = opts.prefix or read_role_config_value()
   remote_log_state.boot_id = make_boot_id(remote_log_state.node_id)
+  remote_log_state.last_seen_logger_ticks = now_ticks()
   remote_log_state.initialized = true
   refresh_log_modems(true)
 end
@@ -348,11 +360,44 @@ local function retry_pending(force)
 end
 
 local function handle_remote_ack(message)
-  if type(message) ~= "table" or message.type ~= "LOG_ACK" then return false end
+  if type(message) ~= "table" then return false end
+  -- LOG_PING is a lightweight, unaddressed presence beacon the collector
+  -- broadcasts periodically (nodes/log_collector/main.lua) purely so every
+  -- node can passively confirm it's online, without first having to send a
+  -- real log line. Any actually-received LOG_ACK is equally valid proof.
+  if message.type == "LOG_PING" then
+    if not remote_log_state.initialized then init_remote_log({}) end
+    remote_log_state.last_seen_logger_ticks = now_ticks()
+    return true
+  end
+  if message.type ~= "LOG_ACK" then return false end
   if not remote_log_state.initialized then return true end
+  remote_log_state.last_seen_logger_ticks = now_ticks()
   if message.to_node and tostring(message.to_node) ~= tostring(remote_log_state.node_id or resolve_node_id()) then return true end
   if message.event_id and forget_pending(message.event_id) then remote_log_state.acked = remote_log_state.acked + 1 end
   return true
+end
+
+-- "Provably offline" per docs/SESSION_HANDOFF.md's logging rule: local
+-- disk writes are a fallback for when the LOG_COLLECTOR is confirmed
+-- unreachable, never a default. If remote logging itself is disabled
+-- (opts.remote_logging=false / settings), this node is never even trying
+-- to reach it, so it must always fall back -- waiting out a timeout that
+-- can never resolve would just silently lose every log line instead.
+local function logger_reachable()
+  -- Mirrors send_remote_log()'s own defensive pcall: resolve_node_id() (via
+  -- the lazy init below) touches fs, which isn't always present outside a
+  -- real CC:Tweaked runtime. Any failure here must fail toward writing
+  -- locally (return false), never toward silently losing the log line.
+  local ok, reachable = pcall(function()
+    if not remote_log_state.initialized then init_remote_log({}) end
+    if remote_log_state.enabled == false then return false end
+    local last_seen = remote_log_state.last_seen_logger_ticks
+    if not last_seen then return false end
+    return (now_ticks() - last_seen) < CONFIG.LOG_ONLINE_TIMEOUT_S
+  end)
+  if not ok then return false end
+  return reachable
 end
 
 local function send_remote_log(prefix, level, message)
@@ -572,7 +617,15 @@ local function normalize_logger_opts(opts)
 end
 
 function utils.init_logger(opts)
-  local result = logger.init(normalize_logger_opts(opts))
+  local logger_opts = normalize_logger_opts(opts)
+  -- The disk-logging subsystem must always be initialized and ready,
+  -- regardless of the caller's debug_logging setting -- it's now a
+  -- reachability fallback for utils.log() (see logger_reachable()), not a
+  -- static per-node toggle. A node with debug_logging=false must still be
+  -- able to fall back to local writes the moment the LOG_COLLECTOR goes
+  -- offline, instead of silently dropping every log line.
+  logger_opts.enabled = true
+  local result = logger.init(logger_opts)
   init_remote_log(opts or {})
   return result
 end
@@ -588,7 +641,12 @@ function utils.log(prefix, message, level)
   if mode == "all" or mode == "remote" then
     send_remote_log(resolved_prefix, level or "INFO", message)
   end
-  if mode == "all" or mode == "disk" then
+  -- "disk" is an explicit manual override (forced via utils.set_log_mode())
+  -- and always writes. Otherwise ("all", the default for every role) local
+  -- writes are strictly a fallback for a provably offline LOG_COLLECTOR --
+  -- never a default, no matter what debug_logging says.
+  local write_disk = mode == "disk" or (mode == "all" and not logger_reachable())
+  if write_disk then
     local ok = pcall(logger.log, resolved_prefix, message, level)
     if not ok then pcall(print, "WARN: logging suppressed due to non-fatal logger failure") end
   end
